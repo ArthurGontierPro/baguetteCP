@@ -29,6 +29,42 @@ type operand = Const of int | Var of int
    need no Boolean. [Int_abs] uses only [x_sign] and always has [y_ge = []]. *)
 type aux = { x_sign : int option; y_ge : (int * int) list }
 
+(* M7-T28 (D-0146). `baguette_regular(x, Q, smin, d, q0, F, s)`, the DFA of
+   mznlib/fzn_regular.mzn: the word [r_xs] (n letters) drives the automaton with states
+   [1..r_nq] from [r_q0]; [r_delta] is the transition table row-major over the symbol
+   range [r_smin .. r_smin + w - 1] (w = |r_delta| / r_nq), 0 meaning "fail", so a letter
+   outside that range or mapped to 0 fails; [r_final] are the accepting states. [r_flags]
+   are the (n + 1) * Q STATE FLAGS the library introduces, layer-major ([r_flags] at
+   [i * Q + q - 1] is "after i letters the automaton is in q"), and they are PART OF THE
+   RELATION: exactly the run's states are 1 (lib/core/prop/regular.ml's header). *)
+type regular = {
+  r_xs : operand list;
+  r_nq : int;
+  r_smin : int;
+  r_delta : int array;
+  r_q0 : int;
+  r_final : int array;
+  r_flags : operand list;
+}
+
+(* The run of [r] over the letters [word]: [Some states] (n + 1 of them, the start first)
+   when every transition is defined, [None] at the first failing one. The one place the
+   DFA's semantics is written on the front-end side; [check_assignment] grades a solution
+   with it. *)
+let regular_run r word =
+  let w = Array.length r.r_delta / r.r_nq in
+  let step q v =
+    let k = v - r.r_smin in
+    if k < 0 || k >= w then 0 else r.r_delta.(((q - 1) * w) + k)
+  in
+  let rec go q acc = function
+    | [] -> Some (List.rev acc)
+    | v :: rest ->
+        let q' = step q v in
+        if q' <= 0 || q' > r.r_nq then None else go q' (q' :: acc) rest
+  in
+  if r.r_q0 < 1 || r.r_q0 > r.r_nq then None else go r.r_q0 [ r.r_q0 ] word
+
 type cstr =
   | Int_lin_le of (int * int) list * int (* sum coeff*x_i <= rhs *)
   | Int_lin_eq of (int * int) list * int (* sum coeff*x_i  = rhs *)
@@ -145,6 +181,8 @@ type cstr =
      make the constraint vacuous, it makes it false. [check_assignment] below says so,
      which is what stops the decomposition from being graded against itself. *)
   | Array_int_element of operand * int array * operand
+  (* M7-T28 (D-0146): see [regular] above. *)
+  | Regular of regular
 
 type constr = { k : cstr; c_pos : Pos.t }
 
@@ -290,6 +328,11 @@ let string_of_cstr t = function
       Printf.sprintf "%s = [%s][%s]" (string_of_operand t c)
         (String.concat ", " (List.map string_of_int (Array.to_list vs)))
         (string_of_operand t i)
+  | Regular r ->
+      Printf.sprintf "regular([%s], Q = %d, from %d, F = [%s])"
+        (String.concat ", " (List.map (string_of_operand t) r.r_xs))
+        r.r_nq r.r_q0
+        (String.concat ", " (List.map string_of_int (Array.to_list r.r_final)))
 
 let to_string t =
   let b = Buffer.create 256 in
@@ -643,6 +686,20 @@ let check_assignment (t : t) (values : int array) : bool =
     | Array_int_element (i, vs, c) ->
         let k = value i in
         k >= 1 && k <= Array.length vs && vs.(k - 1) = value c
+    (* M7-T28, the relation over the word AND the flags: the run is defined and ends in
+       an accepting state, and exactly the run's states are set, one per layer. *)
+    | Regular r -> (
+        match regular_run r (List.map value r.r_xs) with
+        | None -> false
+        | Some states ->
+            Array.mem (List.nth states (List.length states - 1)) r.r_final
+            && List.for_all
+                 (fun ok -> ok)
+                 (List.mapi
+                    (fun k f ->
+                      let i = k / r.r_nq and q = (k mod r.r_nq) + 1 in
+                      value f = if List.nth states i = q then 1 else 0)
+                    r.r_flags))
   in
   let domains_ok =
     let ok = ref true in

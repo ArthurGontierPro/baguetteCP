@@ -653,7 +653,32 @@ let evaluate (m : M.t) (assign : int array) =
                    (fun a (s, d, r) -> if s <= t && t < s + d then a + r else a)
                    0 tasks
                  <= cap)
-               (if tasks = [] then [] else List.init (hi - lo) (fun k -> lo + k)))
+               (if tasks = [] then [] else List.init (hi - lo) (fun k -> lo + k))
+      (* M7-T28 (D-0146), written apart from [Model.check_assignment]: walk the table by
+         index, a letter outside the symbol range failing, and require each layer's
+         flags to sum to one with the run's state the one set. *)
+      | M.Regular r ->
+          let nq = r.M.r_nq in
+          let w = Array.length r.M.r_delta / nq in
+          let flags = Array.of_list (List.map operand r.M.r_flags) in
+          let layer_ok i q =
+            let sum = ref 0 in
+            for k = 0 to nq - 1 do
+              sum := !sum + flags.((i * nq) + k)
+            done;
+            !sum = 1 && flags.((i * nq) + q - 1) = 1
+          in
+          let q = ref r.M.r_q0 and ok = ref (layer_ok 0 r.M.r_q0) in
+          List.iteri
+            (fun i x ->
+              let k = operand x - r.M.r_smin in
+              if !ok then
+                if k < 0 || k >= w then ok := false
+                else (
+                  q := r.M.r_delta.(((!q - 1) * w) + k);
+                  ok := !q > 0 && layer_ok (i + 1) !q))
+            r.M.r_xs;
+          !ok && Array.exists (fun f -> f = !q) r.M.r_final)
     m.M.constraints
 
 (* Brute force over the declared box: the independent oracle for the expected answer.

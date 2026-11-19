@@ -19,10 +19,8 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
+| M7-T28 (continuation: regular's reasons, inverse) | `lib/core/prop/regular.ml`, a new `lib/core/prop/inverse.ml` (+ `docs/ARCHITECTURE.md` §1 and `CLAUDE.md`'s map), `lib/core/prop/alldiff.ml` (only the lemma-citation hook D-0146 §7 needs), `lib/flatzinc/compile.ml` (dispatch block), `mznlib/*.mzn`, `lib/proof/encoding.ml` (`add_root_lemma` only), their tests, new `test/models/*`, `docs/DECISIONS.md` (D-0151), `docs/SPEC.md` §2.1, `docs/ROADMAP.md` M7-T28 row | agent-globals2 (`wave51-globals2`) | 2026-11-19 |
 | M7-T31 and M6-T23 | `lib/core/search.ml` (the decision closure, `branch_assign`, the stopped path), `lib/core/learn.ml`, `lib/core/analysis.ml`, `lib/core/trace.ml`, `lib/core/retention.ml` and `lib/proof/writer.ml` (the finaliser only), their unit tests, new `test/models/*` + `test/expected/`, `test/unit/test_mutation.ml`, `docs/DECISIONS.md` (D-0148, D-0149), `docs/ROADMAP.md` M7-T31 and M6-T23 rows | agent-proofbugs (`wave50-proofbugs`) | 2026-11-19 |
-| M7-T28 (first steps) and M7-T29 (the gcc half) | `mznlib/*.mzn`, `lib/core/prop/gcc.ml`, a new `lib/core/prop/regular.ml` (+ `docs/ARCHITECTURE.md` §1 and `CLAUDE.md`'s map), `lib/flatzinc/compile.ml` (dispatch lines only, in one separated block: M11-T7 is optimising that file), new `test/models/*` + `test/expected/`, `test/unit/test_prop.ml`, `docs/DECISIONS.md` (D-0146 appended), `docs/SPEC.md` §2.1 (the builtins table), `docs/ROADMAP.md` M7-T28/T29 rows | agent-globals (`wave49-globals`) | 2026-11-18 |
-| M12-parity-T1 (spike, branch never merged except its record) | on the branch only: a new `lib/core/prop/parity.ml`, `mznlib/` routes, `lib/flatzinc/compile.ml`; on main only `docs/DECISIONS.md` (D-0147) and `docs/ROADMAP.md` M12 rows, merged by the orchestrator | agent-parity (`wave49-parity`) | 2026-11-18 |
-| M10-search-strategy-T4 | `lib/core/retention.ml`, `lib/core/learned.ml` (an LBD field if needed), `bin/main.ml` (the policy flag only), `test/unit/test_retention.ml`, `docs/DECISIONS.md` (D-0139 appended), `docs/ROADMAP.md` M10-T4 row | agent-retention (`wave45-retention`) | 2026-11-18 |
 
 ## Cross-session requests
 
@@ -308,6 +306,10 @@ artefacts are unchanged by every M6-T22 fix, so the numbers below are comparable
 | **The learned database costs O(n) per conflict, and it is now the largest share.** `Retention.reduce` (called after every learned constraint, `search.ml` ~L2112 and ~L2490) builds `live_entries t = List.rev t.live_rev`, n cells, even under `keep_all`, whose `p_evict` ignores it; `Retention.add` calls `holds`, a `List.exists` over `live_rev`. Self time on QR48 no-proof: `List.rev_append` 5.8 %, `List.exists` 5.4 %, `Retention.fun_1135` (the `holds` closure) 1.9 %: about 13 %, growing with the database. A scratch experiment on the node (not committed): `holds` through a `Hashtbl` of live cids kept by `add` and `retire`, and `reduce` returning `[]` at once when the policy is `keep_all`. On QR48 at 10 k nodes cycles fell 14 % (14.44 G to 12.42 G) and instructions 2.3 %; on QR72 cycles fell 10 %; nodes and runs identical. Since M10-T4 rewrites eviction, please keep the policy's view of the database free of a per-conflict O(n) copy (Glucose's `reduceDB` runs every k conflicts, not every one) | `lib/core/retention.ml` | agent-pernode | open, for agent-retention (M10-T4) |
 | Proof mode only: rendering a literal re-scans its variable's name for characters to sanitise on every call (`Lit.go`, `ident_char`, `render`, `sanitize`: 3.2 % of QR48's proof-mode self time; 1.29 M `rup` lines of about 16 literals). The names are fixed after compile, so a per-name memo of `sanitize` (or of the rendered `x_ge_` prefix) would remove the scan; byte identity is the test | `lib/proof/lit.ml` | agent-pernode | **done 2026-11-18** (agent-t3c, `wave46-t3`, D-0134 §12): a one-entry memo was measured useless on QR48 (clause lines over different variables) and dropped; `needs_sanitize` now scans through a 256-entry table, its self time 2.05 % -> 0.87 % at 10 000 nodes, proofs identical by md5 |
 | Setup only, small: `Engine.create` registers a watcher with `List.mem inst.id cur` over the variable's watcher list (`engine.ml` ~L558, polymorphic compare on ints), so building the engine is O(degree^2) per variable. On `2014_smelt_smelt_2` (variables in about 2 000 constraints) `compare_val`, `caml_compare` and `List.mem` are 16 % of the flat profile of the 3 s no-proof setup left after D-0143; the attribution to this loop is by reading the code, because `perf`'s unwinder gave no call chains there. A `Hashtbl` of (var, id) seen, or deduplicating each instance's `inst_vars` once, gives the same lists in the same order | `lib/core/engine.ml` | agent-setup (`wave48-setup`, D-0143) | DONE by M11-T3, D-0142 section 8b (`7f4420a`): the head of the list is the whole test, smelt_2 15.55 G to 12.50 G instructions before node 1 |
+| **M10-T4 / D-0139: route the learned instances through `Retention.gate`.** Since M2-L12 every learned clause and PB row is `cite`d for the whole search, so no retention policy can evict one: on the codes and the Challenge subset `lbd:N`/`fifo:N` evict nothing and only count refusals (D-0139 §1). `Retention.gate db store ~cid inst` returns the instance behind a switch a policy can turn off, and it is the identity under the default `keep_all`. The search side is two call sites, `register_learned`'s `Engine.add` of the `Learned_clause` pack and `register_learned_pb`'s `Engine.add`, each wrapped as `Engine.add engine (Retention.gate stats.db store ~cid <inst>)`. It is commit `c0c2c33` on `wave45-retention-hook` (measured there, 173/173 models verified under five eviction schedules). With it in, `BAGUETTE_RETENTION=tiered` is real | `lib/core/search.ml` | agent-retention (M10-T4) | open, for M10-T1..T3's owner or the orchestrator's merge |
+| **The learned database's O(n) per conflict (the M6-T22 row above) is taken in M10-T4.** `Retention.reduce` asks the policy's `due` first (O(1), so `keep_all` never builds the list), `holds` is a hash lookup, `size` a counter. Exactly-once deletion is still a property of `retire` alone, and test_retention's (a)/(b) lanes are unchanged and green. D-0139 §4 has the QR48 timing against main 23eb9d6 | `lib/core/retention.ml` | agent-retention (M10-T4) | DONE on `wave45-retention` |
+| **Pre-existing, found by M10-T4: `BAGUETTE_DEBUG=1` on `test/models/rup_level0_nogood_sat.fzn` raises `Not_at_fixpoint("I-P7: propagator #10 learned_clause declined the wake for a change of x7, but a run pruned 1 entr(y/ies)")`.** Main 23eb9d6 at the default policy shows it, and so does main before M6-T22 (`#8`, `x2`), so retention does not cause it. A learned clause's advisor declines a wake its run would act on. Without DEBUG the run is only late, never unsound, and the proof verifies | `lib/core/prop/clause.ml` (`Learned_clause.advise`/`rewatch`) | agent-retention (M10-T4) | open |
+| **Optional, for a PB-row LBD (RoundingSat).** A learned PB row is scored by the LBD of the conflict it came from (search.ml says why). A per-row LBD needs the levels of the row's literals out of `Pb_analysis`. D-0139 §3 counts the PB rows: under 0.5 % of learned except on `parity-learning` (9 062 of 80 816), so it is worth doing only if T5 retains PB rows on such instances | `lib/core/pb_analysis.ml` | agent-retention (M10-T4) | parked |
 
 ### 2026-11-18 — bug: `bool_xor(x, y, true)` reaches baguette unredefined (from the codes-cp side session)
 
@@ -330,6 +332,7 @@ artefacts are unchanged by every M6-T22 fix, so the numbers below are comparable
 
 |---|---|---|---|
 | `Alldiff.excl` cites one ladder rung per value through `Encoding.consistency_id`, which looks the variable up by NAME every time (`Encoding.find`, a string `Hashtbl`, `Encoding.hash`): 12.4 % of 2011_cyclic-rcpsp_easy_6's proof mode at 2 000 nodes and 2.6 % of rcpsp_11's at 10 000, measured with the frame-pointer switch at `910af19`. Look the variable up once per exclusion (its `ladder_base` and bounds) and compute the rung ids arithmetically, as `consistency_id` itself does; or give `Encoding` a lookup by variable index (D-0140 W7). Byte-neutral: the ids are the same. | `lib/core/prop/alldiff.ml`, `lib/proof/encoding.ml` | agent-batch5 (M11-T5) | open |
+| **Three gate findings on main at `e34e133`, not from M7-T32** (D-0150 section 7, measured on a fresh clone on fataepyc-06, each reproduced with main's own binary or clone): (1) `test/unit/test_prop.ml` is not formatted, so `make check` stops at `fmt-check` before building (one blank line missing before the M7-T28 `regular` banner, after `test_linear_scratch`); (2) `test_retention` fails 5 checks, `(a)` and `(c)` "deep shipped" (the policy that should evict nothing), presumably since `36c1312` routed the learned instances through `Retention.gate`; (3) `make diff --tier all` differs on 117 of 301 runs, `fifo` and `lbd` (counters moved by `36c1312`) and `restarts`, `activity`, `alternate` (no reference committed). The default configuration is equal everywhere. Each needs its owner's decision (D-0141's rule on re-recording) | `test/unit/test_prop.ml`, `test/unit/test_retention.ml`, `bench/diff/reference/` | agent-flags (M7-T32) | open |
 ### 2026-11-18 — three findings from the M10 measurements, for the owners of the code they point at (agent-strategy, `wave45-strategy`, D-0137 section 13)
 
 1. **A branch nogood veripb refuses, with D-0077's assignment decision in the tree** (search.ml,
@@ -367,6 +370,14 @@ artefacts are unchanged by every M6-T22 fix, so the numbers below are comparable
    printed, the proof truncated), and so were the strategy flags on those two and on
    `2020_hoist-benchmark-for-minizinc_PU_3_8_5`. The finaliser after the stop is the time.
 
+   **Addendum to point 1, 2026-11-19 (agent-strategy).** The assignment shape is NOT the cause.
+   On the fixed binary `46b0deaa` (phase saving never assigns), `--search alternate --restarts
+   luby --phase-saving` on the same instance is refused too (`reverse unit propagation`, line
+   983 748 of a 274 MB proof, 10 117 nodes, 20 restarts;
+   `out4/saltlubyps/2017_hrc_exp1-1-5670.proof.veripb`). Both refusals need restarts, phase
+   saving and a dynamic order together; every other combination verifies there. Open, owner
+   M10 (search.ml); D-0137 section 13 point 1 has what to try first.
+
 ## Completed
 
 | Task | Session | Date | Summary |
@@ -374,8 +385,10 @@ artefacts are unchanged by every M6-T22 fix, so the numbers below are comparable
 | M11-complexity-T4 (part 1: learning and PB analysis; T4 stays TODO) | agent-batch4a (`wave49-batch4a`) | 2026-11-18 | **D-0144.** L1 (`Learn.supports` through an int table and a reversed list), S5's `learn.ml` half (`minimise_with` one cell per slot behind a monomorphic table), J6's `learn.ml` part (no origin string for the null writer), P1 (`Pb_analysis.falsified_before` from the bound history through `Store.var_support`, O(log moves) instead of two trail walks), P2 (`step`'s accumulators reversed, `asserting_level` in one pass, `fat_memo`/`cited_ids` monomorphic, `Ladder.lift`'s multipliers in an int table, `round_to_one`'s postcondition reads the reduced row once). The old functions stay as `_reference`/`_scan` specifications with unit tests and a debug check. Instructions at 10 000 nodes: mspsp -3.48 %, QR48 -2.57 %, rcpsp_11 -1.04 %, cyclic -0.99 % without the proof. Lane 232/232 and debug pass 223/223 equal, gate rc 0 with 179 models identical to gate 50 |
 | M11-complexity-T3 | agent-batch3 (`wave48-batch3`) | 2026-11-18 | **D-0142.** Section 1 merged alone (`f9bf6c4`): the I-P7 alarm of the debug pass was two BAGUETTE_DEBUG checks (the advise check run on a queued clause, a stale `wp2` read by the index check), no search change. Then eight fixes byte-identical in stdout, SEARCH counters and proofs (lane `--tier all`: WORK counters only, wakes -26 %): E3 (a) the PB pass over a layout and its memory, E2 (a) one walk per learned-clause run, E1 the wake index by direction on every variable, E7, `Store.is_level_start` in one load, E8's range lists, `Engine.create` without `List.mem` (D-0143's request). At 40 000 nodes: rcpsp_11 -40 %, mspsp -23 %, QR72 -11 %, openshop -10 % instructions, scaling ratios 3.38 to 2.93, 1.98 to 1.87, 1.79 to 1.73, 2.55 to 2.27. Gate green (3 834 ok, 179 models, four artefacts identical to main's). E2 (b), E3 (b), E6 and the blocker left as decisions with measured gains. |
 | M11-complexity-T5 | agent-batch5 (`wave49-batch5`) | 2026-11-18 | **D-0145.** Batch 3: the `pol`/`rup`/`ia`/`del`/level/`sol` lines assembled in one writer buffer (W2, W4, W6), the per-line origins lazy and holding counts only (J6, W8), the writer's id tables monomorphic and `wipe_level` without a sort (W3, W5), the memo's hash an allocation-free mix computed once (J1), the claim index a `Hashtbl.Make` (J2), `resync` from the low-water mark and a level cursor (J3, J5), the trace history opt-in (J4). Proof mode at 10 000 nodes: QR48 -16 %, rcpsp_11 -36 %, mspsp -19 %, cyclic -46 % instructions, RSS down too; `.pbp`/`.opb`/stdout/counters identical, lane 232/232 at four commits. Profiler: opam switch `baguette-fp` (frame pointers) on fataepyc-06. |
+| M12-parity-T1 (spike) | agent-parity (`wave49-parity`, never merged) | 2026-11-19 | **D-0147.** A Gauss-Jordan parity propagator (`lib/core/prop/parity.ml`, root form computed once, per-wake elimination over the free bits only, reasons as data, no proof, refused without `--no-proof` twice) over the gathered `bool_xor`/`array_bool_xor`/`bool_eq`/`bool_not` rows, on top of the unchanged clause encoding. Under the user's searches it removes no node on golay24, QR48, QR72 (identical trees or 6 of 100 685) and finds nothing beyond unit propagation on them or QR104, because every row is a definition read forwards. On aut o7 `u1` it finds 458 of 2.9 M beyond UP and turns 172 nodes into a timeout. A search fixing `c` first gives it work but closes no QR code in 1 800 s. Recommendation: do not build T2 for these models |
 | M11-complexity-T7 | agent-setup (`wave48-setup`) | 2026-11-18 | **D-0143.** The setup before node 1 was the .opb name pipeline: every term of every linear row went through three lists, a rendered name hashed into a per-row table, and a per-term sanitise and hash for the header; with the proof, every piece of a row was its own channel call under the channel mutex. Eight fixes, one per commit, in `encoding.ml`, `opb.ml`, `lit.ml`: openshop_gp10-4 to node 1 723.5 G -> 0.36 G instructions (102 s -> 0.09 s) without the proof and 950.5 G -> 105.7 G (132 s -> 15 s) with it; cyclic-rcpsp_hard_2 902 s -> 7 s without. stdout, counters, .opb and .pbp identical on five instances, 179 models, diff lane 232/232; gate green |
 | M10-search-strategy-T1, T2, T3 | agent-strategy (`wave45-strategy`) | 2026-11-18 | **D-0137.** Restarts (`--restarts luby|geom|lbd|stable`), phase saving (`--phase-saving`), the activity order (`--search activity|alternate`, `--reuse-trail`), all opt-in; SPEC §3.4 amended. A restart is the node outcome `NRestart t` (a backjump to level `t` that re-enters the node), no new rule kind. New `restart.ml`, `phase.ml`, `activity.ml`, `test_search_strategy`, three `restart_*` models and their lane. Gate green, 179 models byte-identical to main without the flags. aut order 7 unannotated: timeout -> 62 s (`alternate+luby+phase`); the QR codes stay best with today's search |
+| M10-search-strategy-T4 | agent-retention (`wave45-retention`) | 2026-11-18 | **D-0139.** Today's `lbd:N`/`fifo:N` evicted NOTHING (every learned constraint cited since M2-L12; QR48 `lbd:2000`: 0 evicted, 46.9 M refusals, 27 % slower). Built in `retention.ml`: `Retention.gate` (a consumer behind a switch, identity under `keep_all`), the lock rule (trail entry's propagator + last gated conflict; the trail half reddens `colour_unsat` when removed), `tiered` (core/mid/local, Glucose schedule, CaDiCaL grace), `BAGUETTE_RETENTION=tiered[:...]`, `BAGUETTE_RETENTION_TRACE=N`, and `reduce`/`holds` O(1) (QR48 −22 % at the default). On the hook build: codes same search with far less propagation (QR72 proof 554 → 296 s), Challenge more conflicts but no answer changed, `bacp-22` 2.3× slower. Default stays `keep_all` (recommendation to T5). Gate green (179 byte-identical), `make diff` 168/168 |
 | M8-bits-encoding-T3 (continuation; T3 DONE) | agent-t3c (`wave46-t3`) | 2026-11-18 | **D-0134 §8-§15.** `int_eq_reif`/`int_ne_reif` released over bits (their two `Clause` pieces derived as `Ne`'s `Resolve` with the reifier as one more term, probed first); `bool2int` over a bits integer posted by `compile.ml` as two rows with a `Linear` each; ATSP was held by `int_eq_reif`, mapping and carpet-cutting by `int_times`'s split over its wide operand, now split over the narrower one (`builder.ml`); step 3 measured (PB analysis over mixed rows falls back; `--stats pb-whys`), the lift designed, not built; step 4 checked; step 5 designed and probed, not built. 179/179 verified at `W = none`, `0`, `8` (the 173 of gate 46 byte-identical with no flags; against gate 47's binary 178 of 179, the difference the new `arith_times_narrow_sat`); gate rc 0 on `e1b46dc` (26 s, 89.7 MB). The 177 at `W = 0`: 108 -> **162** complete `.opb` (+54, none lost: carpet-cutting 18, mapping 9, ATSP 6, flowshop-workers 5, yumi-dynamic 4, zephyrus 3, ...); 15 unfinished, 5 of them `arithmetic-target`. |
 | M6-T22 | agent-pernode (`wave45-pernode`) | 2026-11-18 | **D-0138.** The per-node cost on the XOR codes was the engine asking every learned clause about every variable it names (D-0104 kept the whole scope registered: 18 800 asks per node on QR48, 37 % of the cycles) plus `check_attribution`'s `List.mem` (15 %). A wake index of the two watched variables (`Propagator.advisor`, `Engine.dyn_ids`), the degree-1 shortcut in `Pb.propagate`, no per-node or per-conflict array of the database, an O(1) watch move, a heap seed, binary-searched level marks, `rup` without `Printf`. QR48 to UNSAT: 107.1 s to 24.3 s without proof, 125.0 s to 38.0 s with it (same 143 MB proof, byte for byte, VERIFIED); QR72 now UNSAT in 531 s without proof; same nodes, same runs, 165 models byte-identical, gate green (3 632 ok, 85 MB) |
 | M6-T21 | agent-timelimit (`wave44-timelimit`) | 2026-11-18 | **D-0136.** The `--time-limit` overshoot (+46 s at 600, +108 at 1 200) was `conclude_stopped`'s sweep: `Retention.retire` was O(k n), and the end-of-search sweep has k = n learned clauses. One pass now; 600 s stops at 600.3 s, 1 200 at 1 200.5, proofs VERIFIED NO CONCLUSION. The stop is also polled inside `Engine.propagate` after every 128 completed runs (`Engine.Stopped` -> `Limit_hit`, at a run boundary, nothing written by the node yet): +0.035 % instructions at a fixed node budget. `limit:` gains `at=` and `fired=`. Conflict analysis needed no poll. Gate of `d63f371` green (3 629 checks, 85 MB), 165 models byte-identical |
@@ -518,7 +531,91 @@ artefacts are unchanged by every M6-T22 fix, so the numbers below are comparable
 | M8-bits-encoding-T3 (steps 1, 2 partial; T3 stays WIP) | agent-t3 + agent-t3b (`wave44-t3`) | 2026-11-18 | **D-0134 §4-§7.** maxmin over a bits scope by selector rows + one `Resolve` `pol` per pruning, selectors listed in `sol`/`soli`; `int_ne`/`int_lin_ne` released (the A/B pair resolved); `Justify.is_bits_derivation` (a T2 latent). 173/173 verified at W none/0/8, 165 byte-identical at none; gate rc 0 on `20c324f`, 85 MB. The 177 at W = 0: 73 -> 108 complete `.opb`. Open: reified holds, steps 3-5 |
 | M11-complexity-T1 | agent-inventory (`wave47-inventory`) | 2026-11-18 | **D-0140.** The inventory, read-only: 48 items, each with what it grows with, how often it runs, its measured marginal share, the fix, the batch (T3/T4/T5), the byte risk and the reference. Six instances (QR48, QR72, rcpsp_11, mspsp_hard_01, cyclic-rcpsp_easy_6, openshop_gp10-4) at 1, 1k, 10k, 40k nodes, both modes; scratch patches S1 (`count_learned_activity`), S2 (retention), S3a-c measured byte-identical; outputs in `bench/perf/` |
 | M11-complexity-T2 | agent-lanes (`wave47-lanes`) | 2026-11-18 | **D-0141.** `make diff`: 25 instances (QR48, QR72, 19 Challenge in the fast tier, D-0140's six in the slow tier; 958 KB gz in `bench/diff/corpus/`) x 9 configurations (default, audit0, noproof, lbd, fifo, lbd-po, fifo-po, nopb, bits0), 232 runs at fixed BAGUETTE_NODE_LIMIT, stdout + rc + counters (SEARCH/WORK) + .opb/.pbp sha256 against `bench/diff/reference/` (e8354a74), plus a BAGUETTE_DEBUG pass (223 runs, f9bf6c4). Red binary: 198/232 differ while the 179 models show 0. `make scaling`: instructions:u per node, late over early, ratchet + 0.5 %, report-only until T6; teeth caught on 4 of 5 lines. Neither in `make check`; the gate runs both after it |
+| M7-T28 (first steps; the row stays IN PROGRESS) and M7-T29 (the gcc half) | agent-globals (`wave49-globals`) | 2026-11-18 | **D-0146.** `regular` native (`lib/core/prop/regular.ml`, DOMAIN, every pruning one `rup`, backward chains as root lemmas via `Encoding.add_root_lemma`, mznlib `fzn_regular`/`fzn_regular_set`, 3 mutation lanes, 4 models); the closed gcc forms pinned (std already routed them) with the implied sum; a repeated gcc variable copied by `Builder.split_gcc_repeats`; `inverse` design record and probes (§7). Gate: make check rc 0, 189 models, peak RSS 97 056 kB; diff lane 232/232; Challenge numbers in D-0146 §6 |
+| M7-T32 | agent-flags (`wave51-flags`) | 2026-11-19 | **D-0150.** `tools/baguette.msc` declares `-i -f -n -p -r -s -t -v` (and `--proof` as an extra flag); `bin/main.ml` maps them onto existing options: `-t` ms to `--time-limit`, `-s` = `--stats` plus one `%%%mzn-stat` block on stdout, `-f` = `--search alternate --restarts luby --phase-saving` (warned: not proof-safe until M7-T31), `-r`/`-p` accepted. Every improving solution was already printed with one `soli` each (verified through `minizinc`). Every solution of a satisfaction model (`-a`, `-n N > 1`) refused, exit 3. SPEC §2.2 amended; 30 checks in `test_endtoend`; default artefacts byte-identical on 192 models |
 ## Handoff notes
+## M7-T32 handoff, 2026-11-19 (agent-flags, `wave51-flags`): the MiniZinc standard flags, D-0150
+
+`minizinc --solver tools/baguette.msc` now passes baguette `-i -f -n -p -r -s -t -v` (measured
+with a fake solver: always before the `.fzn`; `-a` on an optimisation model arrives as `-i`; on a
+satisfaction model MiniZinc itself warns that all solutions are unsupported, because `-a` is not
+declared) and `--proof P` (extra flag). Nothing in `search.ml` changed: the CLI already printed
+every improving solution, each with its `soli`. Enumeration of a satisfaction model is REFUSED
+(exit 3) and D-0150 section 4 is the design to measure first (a preserved set over the output
+variables' order literals and `solx`). `-f` is D-0137's `saltlubyps`, so it inherits M7-T31's
+open refusal: do not pass `-f` to a proved Challenge category until M7-T31 is closed. Gate: main's
+own `test_prop.ml` formatting, 5 `test_retention` checks and 117 diff-lane runs fail identically
+with and without this branch (request filed); default artefacts byte-identical on 192 models.
+
+## Wave 45/49 merged on 2026-11-19, gate 53 green (orchestrator)
+
+Merged: `wave45-strategy` (`0b6f809`, docs `f93cd4f`), the parity spike's docs only (`a01a640`),
+`wave45-retention` (`a0b50da`) plus its hook cherry-picked (`36c1312`), `wave49-globals` (`b13ce94`). The
+lane gained three configurations (restarts, activity, alternate); their references were recorded by gate
+53 on `0b6f809` (`/scratch/arthur/gate53.status`): `make check` rc 0, 182 models identical to gate 52's
+binary, 69 plain and 66 debug references with every proof accepted, then 301/301 and 289/289 equal, the
+scaling lane ok and lower on every line (rcpsp_11 2.38 -> 2.14). The lane references re-recorded after
+M11-T3 are `a95634f` (openshop needs BAGUETTE_MEM_CAP_KB=32 GB at `--update`). Next gate: main with
+retention, the hook and globals. Open: M7-T31/M6-T23 (wave50-proofbugs), M7-T32 (wave51-flags), M7-T28
+continuation (wave51-globals2).
+## M7-T28 (first steps) and M7-T29 (gcc half) handoff, 2026-11-18 (agent-globals, `wave49-globals`): D-0146
+
+`regular` is native: `lib/core/prop/regular.ml`, DOMAIN consistent over the letters and `(n+1)*Q` state
+flags that `mznlib/fzn_regular.mzn` / `fzn_regular_set.mzn` introduce as `var bool` (a dead state is a
+flag at 0, an ordinary trail entry). The `.opb` holds only the DFA (exactly-one per layer, START, ACCEPT,
+forward clauses per symbol run); the backward chains are ROOT LEMMAS derived as `rup` by
+`Encoding.start_proof` from `Encoding.add_root_lemma` (a new appended block in `encoding.ml`; a model with
+none writes nothing). Every pruning is one `rup`, `Single_row`, no new `Explanation` constructor. The
+closed gcc forms were already on gcc.ml through std (the D-0122 census reads sources); mznlib now pins them
+and adds `sum(counts) = |x|`. A repeated gcc variable is copied by `Builder.split_gcc_repeats` (in the
+builder, not compile: `bin/main.ml` prints from `Model.vars`). Next session: the nonograms that still time
+out want smaller reasons (on letters, not flags; 1UIP clauses are 16+ literals); `inverse` has its design
+record and probes in D-0146 §7 (stage 1 channel filtering, stage 2 needs lemma ids alldiff can cite);
+`fplen` (M7-T29's other half) untouched. `test/unit/test_trace.ml` (one I-X10 row) and
+`test/unit/test_compile.ml` (one relation arm) were touched for the new constructor/module.
+**Measurement read 2026-11-19 (D-0146 §6, 160 of 160, grouped by the routes the flattened model takes):**
+`regular`-only instances 5 -> 18 complete of 65 (all VERIFIED), community-detection 0 -> 16 answers of 20
+(one OPT whose proof veripb could not check: out of memory under the cap on a 14M-wide objective), the
+closed-gcc instances unchanged (gbac's width wall). Nothing is pending on the node.
+
+## M10-search-strategy-T4 handoff, 2026-11-18 (agent-retention, `wave45-retention`): D-0139
+
+- **What changed.** `lib/core/retention.ml` gains `gate`, the lock rule (`locked_instances`),
+  `tiered` and an O(1) `reduce` when no policy is due. `bin/main.ml` parses
+  `BAGUETTE_RETENTION=tiered[:core=,mid=,first=,inc=,mid_every=]` and
+  `BAGUETTE_RETENTION_TRACE=N`. test_retention's section (d) is new, 146 checks. The default
+  (`keep_all`) is byte-identical: gate green, 179 models, and `make diff` 168/168.
+- **The one thing to know.** Without the search-side hook, NO policy can evict a learned
+  constraint, because every one is cited. The hook is two `Engine.add` sites in `search.ml`,
+  branch `wave45-retention-hook` commit `c0c2c33`, and it is filed as a cross-session request
+  for whoever owns `search.ml` (M10-T1..T3). Merge it before M10-T5 measures `tiered`.
+- **Verdict for T5.** `tiered` removes the learned base's per-node cost at an equal search
+  (QR72 with proof 554 → 296 s, the same conflicts). On the Challenge subset it buys conflicts
+  and no answer, about a third of them re-learned clauses, and `bacp-22` gets 2.3× slower.
+  Measure it with restarts before making it the default.
+- **The two late configurations were read on 2026-11-19 and are in D-0139 §3 and §6.** They
+  were `T500.np` and `lbd5000.np`, in `/scratch/arthur/wave45-retention-runs/step3/` on
+  fataepyc-06. `tiered:first=500` is the best on the codes (QR72 161 s without proof) and
+  proves `test-scheduling` optimal. It is the worst on `bacp-22` (4.6× slower) and gives a
+  worse `saeling` incumbent. `lbd:5000` loses two optima. The recommendation is unchanged:
+  `keep_all` stays the default, and T5 measures `tiered` at `first=500` and at the Glucose
+  default, with restarts.
+- **Pre-existing, not mine.** `BAGUETTE_DEBUG=1` on `rup_level0_nogood_sat` raises an I-P7
+  `Not_at_fixpoint` in `learned_clause` on main as well. Filed for `clause.ml`.
+
+## M12-parity-T1 handoff, 2026-11-19 (agent-parity, `wave49-parity`): the parity spike, D-0147
+
+- Only `docs/DECISIONS.md` (D-0147), `docs/ROADMAP.md` (the M12-T1 row) and this file come to
+  `main`. The code (`lib/core/prop/parity.ml`, the `bool_xor`/`array_bool_xor` builtins in
+  `builder.ml`/`model.ml`/`compile.ml`/`mznlib/redefinitions.mzn`, `--parity` in `bin/main.ml`,
+  `test/unit/test_parity.ml`) stays on the branch, which is never merged. It has no proof rendering.
+- The answer is no: under the user's searches the XOR system removes no node on the codes and
+  finds nothing unit propagation does not, and on aut `u1` it hurts. T2 is not recommended (D-0147
+  §7). If someone revisits it, the measurement to make is M10's activity search with this branch's
+  `--parity` and `BAGUETTE_PARITY_MODE=beyond`.
+- Runs, re-flattened `.fzn` and the spike `mznlib` are under `fataepyc-06:/scratch/arthur/wave49-parity-runs/`
+  (D-0147 §9). The node was unreachable overnight; nothing of mine is running there.
+
 ## M10-search-strategy-T1..T3 handoff, 2026-11-18 (agent-strategy, `wave45-strategy`): restarts, phase saving, the activity order (D-0137)
 
 All three behind flags, default unchanged: `--restarts luby[:U]|geom[:U[:F]]|lbd[:W[:K]]|stable[:U]`,
@@ -532,11 +629,10 @@ stdout, rc, `.opb` and `.pbp` byte-identical to main's `e8354a74` without the fl
 168 of 168 equal. D-0137 section 12 gives the three `bench/diff/configs.tsv` lines to add at merge.
 Phase saving branches `x <= s` at an interior saved value, not D-0077's `x = s`: with the assignment
 shape one Challenge proof was refused (D-0137 section 13, and the findings under `## Cross-session
-requests`). PENDING on fataepyc-06 when this was written: the subset re-measurement of the three
-phase-saving configurations on `46b0deaa`, `/scratch/arthur/wave45-strategy-runs/out4/{slubyps,
-saltlubyps,sactlubyps}/*.res` (driver PIDs in `c4.pid`; `c4.done` and `c4rev.done` when finished);
-merge it with `sbase` by `OUT=.../out5 python3 -I tables.py subset` after copying, and replace the
-strategy columns of D-0137 section 10.2 with it. Measured (D-0137 section 10): aut order 7 with no
+requests`). 2026-11-19: the subset re-measurement on `46b0deaa` finished (120 runs, `out4/`) and
+is now D-0137 section 10.2. It refused one more proof on the same Challenge instance, under
+`alternate+luby+phase`, so the assignment shape was not the cause: the refusal is OPEN and the
+strategy flags are not proof-safe on every instance until it is found (D-0137 section 13). Measured (D-0137 section 10): aut order 7 with no
 annotation goes from a 600 s timeout to 62 s (78 s with proof) under `--search alternate --restarts luby
 --phase-saving`; the QR codes are best with today's search, as Chuffed's are with its fixed one; `lbd`
 never fires on them. The twenty-instance Challenge subset is D-0137 section 10.2. Next: T5 picks defaults; the scoring of order literals (Chuffed's) is
@@ -576,7 +672,6 @@ its exactness rests on `Learn.minimise` (one literal per variable and polarity, 
 E3 (b), E6 and the blocker reorder runs and are left as decisions with their measured gains (section 9).
 T4 should take `Search.decision_entries` over the marks (S3). Its per-entry cost is now one load, but the
 walk itself still covers the whole trail at every conflict.
-
 ## M11-complexity-T2 handoff, 2026-11-18 (agent-lanes, `wave47-lanes`): the differential and scaling lanes, D-0141
 
 Two `make` targets, neither in `make check`. `make diff` runs 25 instances of `bench/diff/corpus/` (958 KB
@@ -680,7 +775,6 @@ what the T2 lanes must cover per batch, and what changes in the plan.
 - Lanes: pin `BAGUETTE_PROOF_AUDIT` (the end sweep's `del` depends on it), and count instructions.
 - Node: `/scratch/arthur/wave47-inventory-runs/` keeps the perf.data. The clones
   `/scratch/arthur/wave47-inventory-{s1,s2,s3,s3a,s3b,s3c,all}` can be deleted.
-
 ## M8-bits-encoding-T3 continuation merged and gated, 2026-11-18 (orchestrator)
 
 `wave46-t3` merged as `a8d2924` (no code conflict). Gate of `a8d2924` on fataepyc-06

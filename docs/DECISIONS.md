@@ -12715,8 +12715,13 @@ shape and no proof line. Flag: `--phase-saving`.
 branch nogood veripb refuses on `2017_hrc_exp1-1-5670` (section 13), and with the one-literal
 split the same run verifies. The split keeps `s` at the top of its first branch, so the next
 decision on `x` with the same phase is `x >= s` there and lands on `s`. Phase saving now never
-produces the assignment shape. The root cause is not found and is filed as a finding (section 13),
-because the shape is main's too (`indomain_median`).
+produces the assignment shape.
+
+**Second addendum, 2026-11-19: that was not the cause.** The subset re-measurement on the fixed
+binary `46b0deaa` refused another proof on the same instance, under `--search alternate
+--restarts luby --phase-saving` (section 13 point 1), with no assignment decision anywhere. The
+one-literal split stays, since it is a correct and simpler decision, but it fixes nothing, and the
+refusal is open.
 
 **Over an annotation it is a substitution of the value choice**, which SPEC §3.4 forbids done
 silently. The flag is the user asking for it, and section 6 says so in the SPEC.
@@ -12873,6 +12878,9 @@ not full restarts under another name.
   that wipes one level too many. That one would be checker-visible (the re-entered node's
   level-`t` trace lines gone), and is the lane to add if `--reuse-trail` is ever proposed as a
   default.
+- **The refused proofs of section 13 point 1** are open, and they come first: until they are
+  explained, a restart combined with phase saving and a dynamic order is not proof-safe on every
+  instance.
 - **The LBD policy's K** never fires on the codes (section 10, point 4). T5 should sweep it, or
   measure Glucose's newer EMA form, before calling `lbd` useless.
 
@@ -12985,92 +12993,92 @@ against `chuffed-free`). No SAT instance in the 1 to 300 s window shows a free a
 Chuffed runs solve them in seconds), so the five SAT ones are plain. The wave43 `.fzn` were
 deleted after solving, so all twenty were re-flattened with main's `mznlib`
 (`baguette-gate-20261118`, MiniZinc 2.10.1). The re-flattenings differ from wave43's by 6 to 21
-bytes. Time limit 300 s, veripb capped at 600 to 900 s per proof (a run whose check did not
-finish says `check-TO`).
+bytes. Time limit 300 s.
 
-Measured on `878ceb53` (the strategy rows) and `a9217430` (`sbase`), that is BEFORE the
-phase-saving fix of section 3's addendum, so every strategy column below still made assignment
-decisions at interior saved values. All twenty instances, both modes, are complete. Without the
-proof:
+**Binaries.** `sbase` is main's `a9217430`. The three strategy columns are **`46b0deaa`**
+(`48de0a3`, phase saving without the assignment shape), measured 2026-11-18 in
+`/scratch/arthur/wave45-strategy-runs/out4/`, all 120 runs complete (both drivers finished,
+`c4.done` and `c4rev.done` in the run directory). They replace a first measurement of the same
+three columns on `878ceb53` (`out3/`), whose one refused proof is section 13 point 1.
+`slubyps` = `--restarts luby --phase-saving`, `saltlubyps` = the same with `--search alternate`,
+`sactlubyps` = with `--search activity`.
+
+Without the proof:
 
 | instance | sbase | slubyps | saltlubyps | sactlubyps |
 |---|---|---|---|---|
-| 2012_ship-schedule_6ShipsMixed | OPT 77 s, 3335 n | OPT 66 s, 2222 n, 6 r | SAT 600 s, ? n | TO(300505) 312 s, 60 n |
-| 2014_amaze_2012-04-27 | SAT 10 s, 9427 n | SAT 13 s, 10720 n, 28 r | SAT 21 s, 14075 n, 30 r | SAT 6 s, 8715 n, 23 r |
-| 2014_fillomino_5x5_1 | SAT 20 s, 9646 n | SAT 26 s, 9714 n, 28 r | SAT 7 s, 5244 n, 14 r | SAT 10 s, 7054 n, 16 r |
-| 2014_openshop_gp10-4 | TO(1139) 300 s, 36374 n | TO(1139) 300 s, 31711 n, 60 r | TO(1079) 300 s, 42833 n, 62 r | TO(1077) 300 s, 47279 n, 64 r |
-| 2016_nfc_18_3_5 | OPT 88 s, 1033 n | TO(1338) 300 s, 1208 n, 4 r | OPT 105 s, 863 n, 2 r | OPT 29 s, 398 n, 1 r |
-| 2016_solbat_sb_15_15_7_3 | SAT 97 s, 13892 n | SAT 130 s, 14412 n, 30 r | SAT 57 s, 12132 n, 28 r | SAT 119 s, 19728 n, 31 r |
+| 2012_ship-schedule_6ShipsMixed | OPT 77 s, 3335 n | OPT 16 s, 2052 n, 5 r | TO(212945) 388 s, 480 n, 1 r | TO(300510) 310 s, 105 n |
+| 2014_amaze_2012-04-27 | SAT 10 s, 9427 n | SAT 9 s, 9856 n, 22 r | SAT 23 s, 16633 n, 30 r | SAT 2 s, 4910 n, 13 r |
+| 2014_fillomino_5x5_1 | SAT 20 s, 9646 n | SAT 18 s, 8974 n, 21 r | SAT 8 s, 6669 n, 14 r | SAT 7 s, 6434 n, 14 r |
+| 2014_openshop_gp10-4 | TO(1139) 300 s, 36374 n | TO(1101) 300 s, 48020 n, 62 r | TO(1078) 300 s, 42995 n, 62 r | TO(1078) 300 s, 46218 n, 62 r |
+| 2016_nfc_18_3_5 | OPT 88 s, 1033 n | OPT 36 s, 673 n, 2 r | OPT 228 s, 1335 n, 4 r | OPT 12 s, 246 n |
+| 2016_solbat_sb_15_15_7_3 | SAT 97 s, 13892 n | SAT 133 s, 16061 n, 30 r | SAT 162 s, 22191 n, 44 r | SAT 125 s, 21331 n, 36 r |
 | 2017_cargo_challenge01_0s_1913 | SAT 600 s, ? n | SAT 600 s, ? n | SAT 600 s, ? n | UNKNOWN 600 s, ? n |
-| 2017_hrc_exp1-1-5670 | OPT 19 s, 8343 n | OPT 22 s, 9134 n, 20 r | OPT 9 s, 5516 n, 13 r | OPT 19 s, 8683 n, 17 r |
-| 2019_amaze_2012-03-19 | SAT 62 s, 24465 n | SAT 51 s, 23279 n, 52 r | SAT 211 s, 35057 n, 62 r | SAT 1 s, 1741 n, 6 r |
-| 2019_rotating-workforce_Example1337 | TO 300 s, 11333 n | TO 300 s, 11734 n, 19 r | TO 300 s, 789 n, 2 r | TO 305 s, 303 n, 1 r |
-| 2020_cable_tree_wiring_R046 | TO(2826893) 323 s, 1446 n | TO(2826840) 308 s, 1139 n | TO(2826840) 307 s, 1139 n | TO(2835315) 301 s, 663 n, 1 r |
-| 2020_hoist-benchmark-for-minizinc_PU_3_8_5 | TO 312 s, 18 n | TO 312 s, 18 n | TO 318 s, 18 n | SAT 600 s, ? n |
-| 2021_perfect_square_92 | TO 300 s, 24924 n | TO 300 s, 18848 n, 45 r | TO 300 s, 69949 n, 124 r | TO 300 s, 61794 n, 109 r |
-| 2022_blocks-world_16-4-13 | TO 300 s, 25468 n | TO 300 s, 29156 n, 59 r | TO 300 s, 36379 n, 62 r | TO 300 s, 49998 n, 91 r |
-| 2023_kidney-exchange_3_20_0.15_3 | OPT 83 s, 1489 n | OPT 133 s, 2095 n, 5 r | OPT 299 s, 2624 n, 6 r | TO(608) 302 s, 612 n, 2 r |
-| 2023_test-scheduling_t30m20r3-20 | TO(2745) 300 s, 15099 n | TO(2745) 300 s, 11213 n, 29 r | TO(2745) 300 s, 11285 n, 27 r | TO(2763) 300 s, 18653 n, 29 r |
-| 2024_word-equations_word_equations_02_track_8-int | OPT 28 s, 2630 n | OPT 23 s, 2396 n, 6 r | OPT 9 s, 312 n, 1 r | OPT 4 s, 36 n |
-| 2025_EchoSched_15-15-0-1_3 | TO(18890) 300 s, 6034 n | TO(18871) 300 s, 4865 n, 5 r | TO(18864) 300 s, 5323 n, 5 r | SAT 600 s, ? n |
-| 2026_gbac_csplib12-gbac | TO 312 s, 1 n | TO 309 s, 1 n | TO 311 s, 1 n | TO 314 s, 1 n |
-| 2026_gcc-benchmark_instance-i24 | SAT 5 s, 363 n | SAT 5 s, 363 n | SAT 5 s, 363 n | TO 300 s, 23738 n |
+| 2017_hrc_exp1-1-5670 | OPT 19 s, 8343 n | OPT 28 s, 12751 n, 27 r | OPT 22 s, 10117 n, 20 r | OPT 5 s, 3115 n, 6 r |
+| 2019_amaze_2012-03-19 | SAT 62 s, 24465 n | SAT 67 s, 27381 n, 58 r | SAT 167 s, 38291 n, 62 r | SAT 0 s, 922 n, 2 r |
+| 2019_rotating-workforce_Example1337 | TO 300 s, 11333 n | TO 300 s, 12897 n, 20 r | TO 332 s, 647 n, 2 r | TO 319 s, 760 n, 2 r |
+| 2020_cable_tree_wiring_R046 | TO(2826893) 323 s, 1446 n | TO(2826840) 301 s, 1145 n | TO(2826840) 302 s, 1145 n | TO(2556804) 552 s, 850 n, 1 r |
+| 2020_hoist-benchmark-for-minizinc_PU_3_8_5 | TO 312 s, 18 n | TO 311 s, 18 n | TO 309 s, 18 n | SAT 600 s, ? n |
+| 2021_perfect_square_92 | TO 300 s, 24924 n | TO 300 s, 64643 n, 104 r | TO 300 s, 75278 n, 122 r | TO 300 s, 57782 n, 98 r |
+| 2022_blocks-world_16-4-13 | TO 300 s, 25468 n | TO 300 s, 29563 n, 55 r | TO 300 s, 42767 n, 62 r | TO 300 s, 58044 n, 78 r |
+| 2023_kidney-exchange_3_20_0.15_3 | OPT 83 s, 1489 n | OPT 128 s, 2110 n, 5 r | TO(793) 305 s, 2309 n, 5 r | TO(608) 301 s, 829 n, 2 r |
+| 2023_test-scheduling_t30m20r3-20 | TO(2745) 300 s, 15099 n | TO(2745) 300 s, 15063 n, 30 r | TO(2745) 300 s, 17362 n, 31 r | TO(2747) 300 s, 23222 n, 30 r |
+| 2024_word-equations_word_equations_02_track_8-int | OPT 28 s, 2630 n | OPT 26 s, 2351 n, 6 r | OPT 5 s, 302 n, 1 r | OPT 5 s, 57 n |
+| 2025_EchoSched_15-15-0-1_3 | TO(18890) 300 s, 6034 n | SAT 600 s, ? n | TO(18844) 300 s, 6898 n, 6 r | SAT 600 s, ? n |
+| 2026_gbac_csplib12-gbac | TO 312 s, 1 n | TO 300 s, 15527 n | TO 300 s, 18761 n | SAT 600 s, ? n |
+| 2026_gcc-benchmark_instance-i24 | SAT 5 s, 363 n | SAT 5 s, 363 n | SAT 5 s, 363 n | TO 300 s, 23077 n |
 
-With the proof (`check-TO`: veripb did not finish within its cap of 600 to 900 s; the `SAT 600
-s, ? n` cells with a syntax error are runs the 600 s wall killed after the stop, their proof
-truncated, section 13 point 3; the one `Checking error` is section 13 point 1):
+With the proof. veripb's cap was 900 s for `sbase` and 300 s for the strategy columns, so a
+`check-TO` there means "not checked in 300 s", not a refusal. The `SAT 600 s, ? n` cells are runs
+the 600 s wall killed after the stop had fired, their proof truncated, which is what the
+`Syntax_error` verdicts are (section 13 point 3, main's binary included). The one `Checking
+error` is a real refusal (section 13 point 1).
 
 | instance | sbase | slubyps | saltlubyps | sactlubyps |
 |---|---|---|---|---|
-| 2012_ship-schedule_6ShipsMixed | OPT 140 s, 3335 n, 2408 MB, check-TO 900.08 s | OPT 110 s, 2222 n, 6 r, 1315 MB, check-TO 600.06 s | SAT 600 s, ? n, 666 MB, check-TO 600.06 s | TO(300505) 343 s, 60 n, 135 MB, check-TO 600.05 s |
-| 2014_amaze_2012-04-27 | SAT 14 s, 9427 n, 84 MB, V 7.24 s | SAT 20 s, 10720 n, 28 r, 102 MB, V 9.78 s | SAT 33 s, 14075 n, 30 r, 115 MB, V 11.86 s | SAT 11 s, 8715 n, 23 r, 55 MB, V 5.07 s |
-| 2014_fillomino_5x5_1 | SAT 33 s, 9646 n, 197 MB, V 43.90 s | SAT 50 s, 9714 n, 28 r, 218 MB, V 59.18 s | SAT 13 s, 5244 n, 14 r, 94 MB, V 23.30 s | SAT 17 s, 7054 n, 16 r, 128 MB, V 26.38 s |
-| 2014_openshop_gp10-4 | TO(1139) 300 s, 29795 n, 1088 MB, check-TO 900.07 s | TO(1139) 300 s, 24599 n, 45 r, 1598 MB, check-TO 600.14 s | TO(1079) 300 s, 28121 n, 47 r, 2687 MB, check-TO 600.13 s | TO(1077) 300 s, 33620 n, 54 r, 1506 MB, check-TO 600.11 s |
-| 2016_nfc_18_3_5 | OPT 101 s, 1033 n, 450 MB, V 19.24 s | TO(1338) 300 s, 1137 n, 3 r, 750 MB, V 42.40 s | OPT 119 s, 863 n, 2 r, 401 MB, V 20.27 s | OPT 35 s, 398 n, 1 r, 189 MB, V 7.39 s |
-| 2016_solbat_sb_15_15_7_3 | SAT 187 s, 13892 n, 998 MB, V 184.17 s | SAT 201 s, 14412 n, 30 r, 1018 MB, V 196.69 s | SAT 118 s, 12132 n, 28 r, 591 MB, V 118.53 s | SAT 176 s, 19728 n, 31 r, 842 MB, V 144.90 s |
-| 2017_cargo_challenge01_0s_1913 | SAT 600 s, ? n, 33 MB, REJECTED:Error:_Syntax_error_while_parsing_proof_file! 610.42 s | SAT 600 s, ? n, 33 MB, REJECTED:Error:_Syntax_error_while_parsing_proof_file! 593.53 s | SAT 600 s, ? n, 33 MB, REJECTED:Error:_Syntax_error_while_parsing_proof_file! 585.83 s | UNKNOWN 600 s, ? n, 0 MB, REJECTED:Error:_Syntax_error_while_parsing_proof_file! 22.01 s |
-| 2017_hrc_exp1-1-5670 | OPT 46 s, 8343 n, 296 MB, V 26.59 s | OPT 43 s, 9134 n, 20 r, 280 MB, V 27.28 s | OPT 23 s, 5516 n, 13 r, 139 MB, V 13.56 s | OPT 40 s, 8683 n, 17 r, 213 MB, REJECTED:Error:_Checking_error_at_/scratch/arthur/wave45-strategy-runs/out3/sactlubyps/2017_hrc_exp1-1-5670.proof.pbp:620348 6.02 s |
-| 2019_amaze_2012-03-19 | SAT 71 s, 24465 n, 199 MB, V 18.51 s | SAT 70 s, 23279 n, 52 r, 193 MB, V 19.03 s | SAT 229 s, 35057 n, 62 r, 279 MB, V 33.38 s | SAT 1 s, 1741 n, 6 r, 8 MB, V 0.76 s |
-| 2019_rotating-workforce_Example1337 | TO 301 s, 9678 n, 691 MB, check-TO 900.04 s | TO 301 s, 9733 n, 14 r, 745 MB, check-TO 600.03 s | TO 314 s, 614 n, 2 r, 59 MB, V 36.88 s | TO 302 s, 223 n, 42 MB, V 14.50 s |
-| 2020_cable_tree_wiring_R046 | SAT 601 s, ? n, 916 MB, REJECTED:Error:_Syntax_error_while_parsing_proof_file! 108.30 s | SAT 601 s, ? n, 963 MB, REJECTED:Error:_Syntax_error_while_parsing_proof_file! 108.21 s | SAT 601 s, ? n, 968 MB, REJECTED:Error:_Syntax_error_while_parsing_proof_file! 116.72 s | SAT 601 s, ? n, 1835 MB, check-TO 600.10 s |
-| 2020_hoist-benchmark-for-minizinc_PU_3_8_5 | TO 326 s, 18 n, 0 MB, V 5.10 s | TO 320 s, 18 n, 0 MB, V 5.43 s | TO 330 s, 18 n, 0 MB, V 4.47 s | SAT 600 s, ? n, 35 MB, REJECTED:Error:_Syntax_error_while_parsing_proof_file! 71.72 s |
-| 2021_perfect_square_92 | TO 300 s, 22560 n, 336 MB, V 689.52 s | TO 300 s, 18690 n, 45 r, 492 MB, check-TO 600.02 s | TO 300 s, 62606 n, 108 r, 328 MB, check-TO 600.02 s | TO 300 s, 60084 n, 107 r, 221 MB, V 170.16 s |
-| 2022_blocks-world_16-4-13 | TO 300 s, 17706 n, 1578 MB, check-TO 900.05 s | TO 300 s, 20838 n, 40 r, 1686 MB, check-TO 600.07 s | TO 300 s, 24895 n, 48 r, 1816 MB, check-TO 600.03 s | TO 300 s, 37547 n, 62 r, 1479 MB, V 525.99 s |
-| 2023_kidney-exchange_3_20_0.15_3 | OPT 90 s, 1489 n, 34 MB, V 3.89 s | OPT 136 s, 2095 n, 5 r, 49 MB, V 5.01 s | TO(815) 300 s, 2571 n, 6 r, 73 MB, V 7.90 s | TO(608) 301 s, 612 n, 2 r, 27 MB, V 2.58 s |
-| 2023_test-scheduling_t30m20r3-20 | TO 330 s, 1 n, 0 MB, V 23.33 s | TO 323 s, 1 n, 0 MB, V 24.46 s | TO 326 s, 1 n, 0 MB, V 22.56 s | TO 323 s, 1 n, 0 MB, V 28.88 s |
-| 2024_word-equations_word_equations_02_track_8-int | OPT 58 s, 2630 n, 377 MB, V 323.04 s | OPT 54 s, 2396 n, 6 r, 384 MB, V 253.67 s | OPT 11 s, 312 n, 1 r, 14 MB, V 9.85 s | OPT 7 s, 36 n, 15 MB, V 8.62 s |
-| 2025_EchoSched_15-15-0-1_3 | TO(18890) 301 s, 5677 n, 960 MB, check-TO 600.08 s | TO(18875) 300 s, 3692 n, 3 r, 1981 MB, check-TO 600.08 s | TO(18875) 300 s, 3518 n, 3 r, 1941 MB, check-TO 600.08 s | SAT 600 s, ? n, 711 MB, check-TO 600.08 s |
-| 2026_gbac_csplib12-gbac | TO 416 s, 1 n, 0 MB, V 28.21 s | TO 424 s, 1 n, 0 MB, V 35.87 s | TO 398 s, 1 n, 0 MB, V 44.26 s | TO 406 s, 1 n, 0 MB, V 41.30 s |
-| 2026_gcc-benchmark_instance-i24 | SAT 6 s, 363 n, 0 MB, V 0.30 s | SAT 5 s, 363 n, 0 MB, V 0.29 s | SAT 6 s, 363 n, 0 MB, V 0.29 s | TO 300 s, 18515 n, 1035 MB, V 148.34 s |
+| 2012_ship-schedule_6ShipsMixed | OPT 140 s, 3335 n, 2408 MB, check-TO 900.08 s | OPT 37 s, 2052 n, 5 r, 1244 MB, check-TO 300.06 s | TO(212945) 407 s, 480 n, 1 r, 788 MB, V 120.12 s | TO(300510) 318 s, 105 n, 142 MB, V 17.71 s |
+| 2014_amaze_2012-04-27 | SAT 14 s, 9427 n, 84 MB, V 7.24 s | SAT 14 s, 9856 n, 22 r, 81 MB, V 7.30 s | SAT 34 s, 16633 n, 30 r, 119 MB, V 12.42 s | SAT 3 s, 4910 n, 13 r, 24 MB, V 2.02 s |
+| 2014_fillomino_5x5_1 | SAT 33 s, 9646 n, 197 MB, V 43.90 s | SAT 29 s, 8974 n, 21 r, 168 MB, V 35.30 s | SAT 15 s, 6669 n, 14 r, 102 MB, V 22.57 s | SAT 14 s, 6434 n, 14 r, 100 MB, V 20.41 s |
+| 2014_openshop_gp10-4 | TO(1139) 300 s, 29795 n, 1088 MB, check-TO 900.07 s | TO(1101) 300 s, 35216 n, 59 r, 2485 MB, check-TO 300.06 s | TO(1078) 300 s, 36154 n, 57 r, 1942 MB, check-TO 300.07 s | TO(1078) 300 s, 39570 n, 61 r, 1653 MB, check-TO 300.10 s |
+| 2016_nfc_18_3_5 | OPT 101 s, 1033 n, 450 MB, V 19.24 s | OPT 43 s, 673 n, 2 r, 218 MB, V 7.20 s | OPT 253 s, 1335 n, 4 r, 721 MB, V 56.51 s | OPT 14 s, 246 n, 68 MB, V 2.47 s |
+| 2016_solbat_sb_15_15_7_3 | SAT 187 s, 13892 n, 998 MB, V 184.17 s | SAT 208 s, 16061 n, 30 r, 1148 MB, V 184.59 s | SAT 269 s, 22191 n, 44 r, 1310 MB, V 289.42 s | SAT 208 s, 21331 n, 36 r, 1006 MB, V 189.51 s |
+| 2017_cargo_challenge01_0s_1913 | SAT 600 s, ? n, 33 MB, REJECTED:Error:_Syntax_error_while_parsing_proof_file! 610.42 s | SAT 600 s, ? n, 33 MB, check-TO 300.09 s | SAT 600 s, ? n, 33 MB, check-TO 300.08 s | UNKNOWN 600 s, ? n, 0 MB, REJECTED:Error:_Syntax_error_while_parsing_proof_file! 22.83 s |
+| 2017_hrc_exp1-1-5670 | OPT 46 s, 8343 n, 296 MB, V 26.59 s | OPT 62 s, 12751 n, 27 r, 387 MB, V 37.57 s | OPT 50 s, 10117 n, 20 r, 274 MB, REJECTED:Error:_Checking_error_at_/scratch/arthur/wave45-strategy-runs/out4/saltlubyps/2017_hrc_exp1-1-5670.proof.pbp:983748 9.08 s | OPT 11 s, 3115 n, 6 r, 75 MB, V 6.82 s |
+| 2019_amaze_2012-03-19 | SAT 71 s, 24465 n, 199 MB, V 18.51 s | SAT 91 s, 27381 n, 58 r, 204 MB, V 19.99 s | SAT 249 s, 38291 n, 62 r, 270 MB, V 30.67 s | SAT 1 s, 922 n, 2 r, 5 MB, V 0.39 s |
+| 2019_rotating-workforce_Example1337 | TO 301 s, 9678 n, 691 MB, check-TO 900.04 s | TO 301 s, 10983 n, 17 r, 820 MB, check-TO 300.02 s | TO 325 s, 647 n, 2 r, 58 MB, V 17.31 s | TO 360 s, 760 n, 2 r, 70 MB, V 21.33 s |
+| 2020_cable_tree_wiring_R046 | SAT 601 s, ? n, 916 MB, REJECTED:Error:_Syntax_error_while_parsing_proof_file! 108.30 s | SAT 601 s, ? n, 966 MB, REJECTED:Error:_Syntax_error_while_parsing_proof_file! 105.04 s | SAT 601 s, ? n, 946 MB, REJECTED:Error:_Syntax_error_while_parsing_proof_file! 106.03 s | SAT 601 s, ? n, 1926 MB, check-TO 300.08 s |
+| 2020_hoist-benchmark-for-minizinc_PU_3_8_5 | TO 326 s, 18 n, 0 MB, V 5.10 s | TO 320 s, 18 n, 0 MB, V 5.05 s | TO 324 s, 18 n, 0 MB, V 5.04 s | SAT 600 s, ? n, 31 MB, REJECTED:Error:_Syntax_error_while_parsing_proof_file! 50.74 s |
+| 2021_perfect_square_92 | TO 300 s, 22560 n, 336 MB, V 689.52 s | TO 300 s, 61059 n, 93 r, 427 MB, check-TO 300.02 s | TO 300 s, 71427 n, 113 r, 331 MB, check-TO 300.01 s | TO 300 s, 55533 n, 93 r, 201 MB, V 182.24 s |
+| 2022_blocks-world_16-4-13 | TO 300 s, 17706 n, 1578 MB, check-TO 900.05 s | TO 300 s, 20950 n, 37 r, 1658 MB, check-TO 300.02 s | TO 300 s, 27765 n, 48 r, 1811 MB, check-TO 300.02 s | TO 300 s, 45792 n, 62 r, 1424 MB, check-TO 300.02 s |
+| 2023_kidney-exchange_3_20_0.15_3 | OPT 90 s, 1489 n, 34 MB, V 3.89 s | OPT 130 s, 2110 n, 5 r, 49 MB, V 5.59 s | TO(793) 302 s, 2308 n, 5 r, 60 MB, V 6.15 s | TO(608) 301 s, 806 n, 2 r, 40 MB, V 4.64 s |
+| 2023_test-scheduling_t30m20r3-20 | TO 330 s, 1 n, 0 MB, V 23.33 s | TO(2745) 300 s, 1683 n, 5 r, 63 MB, check-TO 300.14 s | TO(2766) 300 s, 2557 n, 6 r, 136 MB, check-TO 300.15 s | TO(4709) 300 s, 2732 n, 115 MB, V 263.20 s |
+| 2024_word-equations_word_equations_02_track_8-int | OPT 58 s, 2630 n, 377 MB, V 323.04 s | OPT 51 s, 2351 n, 6 r, 378 MB, V 256.04 s | OPT 7 s, 302 n, 1 r, 14 MB, V 10.45 s | OPT 7 s, 57 n, 18 MB, V 9.89 s |
+| 2025_EchoSched_15-15-0-1_3 | TO(18890) 301 s, 5677 n, 960 MB, check-TO 600.08 s | TO(18867) 300 s, 6538 n, 5 r, 2309 MB, check-TO 300.08 s | TO(18844) 318 s, 6041 n, 4 r, 2373 MB, check-TO 300.08 s | SAT 600 s, ? n, 711 MB, check-TO 300.08 s |
+| 2026_gbac_csplib12-gbac | TO 416 s, 1 n, 0 MB, V 28.21 s | TO 361 s, 1 n, 0 MB, V 42.06 s | TO 357 s, 1 n, 0 MB, V 27.19 s | TO 362 s, 1 n, 0 MB, V 39.85 s |
+| 2026_gcc-benchmark_instance-i24 | SAT 6 s, 363 n, 0 MB, V 0.30 s | SAT 5 s, 363 n, 0 MB, V 0.31 s | SAT 5 s, 363 n, 0 MB, V 0.30 s | TO 300 s, 18616 n, 1027 MB, V 142.97 s |
 
-**The re-measurement on `46b0deaa`** (phase saving without the assignment shape) was running in
-`/scratch/arthur/wave45-strategy-runs/out4/{slubyps,saltlubyps,sactlubyps}/` when this was
-written, 58 of its 120 subset runs done. What it had shown by then: `2017_hrc_exp1-1-5670`
-under `sactlubyps` is now OPT in 5 s (3 115 nodes) and **VERIFIED** with the proof (11 s, 75 MB,
-checked in 7 s), where it was the refused proof above; no new refusal among the 58. The rest of
-`out4` is what a reader of this record should take as the subset's final strategy columns
-(`OUT=.../out5 python3 -I tables.py subset` merges it with `sbase`).
-
-**What the subset says**, on the complete table above:
+**What the subset says.**
 
 1. **The free search matters where Chuffed's free search matters, and it cuts both ways.** The
-   activity order with restarts and phase saving (`sactlubyps`) is the best column on
-   word-equations (OPT in 4 s, 36 nodes, against 28 s), nfc (OPT in 29 s against 88 s; Chuffed's
-   fixed search never proves it) and the two amaze instances (1 s and 6 s against 62 s and
-   10 s). It is the worst on ship-schedule (an incumbent at 300 s where `base` proves the
-   optimum in 77 s), kidney-exchange and the gcc benchmark (`base` 5 s, the activity order
-   times out). `alt+luby+ps` wins fillomino, solbat and hrc and loses the 2019 amaze. No column
-   dominates.
-2. **Restarts with phase saving and the annotation's order (`slubyps`) change little**: most rows
-   within a third of `base`, kidney-exchange 60 % slower, nfc lost (a timeout where `base`
-   proves the optimum).
-3. **The TIMEOUT instances without a solution stay without one** in every column (rotating
+   activity order with restarts and phase saving (`sactlubyps`) is the best column on nfc (OPT
+   in 12 s and 246 nodes against 88 s; Chuffed's fixed search never proves it), word-equations
+   (5 s against 28 s), hrc (5 s against 19 s), fillomino and both amaze (the 2019 one in under a
+   second against 62 s). It is the worst on ship-schedule and kidney-exchange (incumbents at
+   300 s where `base` proves the optimum) and on the gcc benchmark (`base` 5 s, the activity
+   order times out). On openshop and cable-tree its incumbent at the stop is better (1 078
+   against 1 139, Chuffed's free search proves 1 077; 2 556 804 against 2 826 893).
+2. **Restarts with phase saving and the annotation's order (`slubyps`) are never more than 55 %
+   slower than `base` where both answer, and faster on two**: ship-schedule OPT in 16 s against
+   77 s, nfc in 36 s against 88 s.
+3. **`saltlubyps` is best only on EchoSched's incumbent** (18 844 against 18 890) and ties on
+   word-equations and openshop. On nfc, solbat and the 2019 amaze it is the slowest column.
+4. **The TIMEOUT instances without a solution stay without one** in every column (rotating
    workforce, hoist, perfect square, blocks world, gbac), where Chuffed's free search solves
-   them. On two of them (hoist, gbac) the run makes 1 to 18 nodes in 300 s with the proof, so the
-   search is not what stops it there.
-4. **The proof follows the nodes**, as on the codes: where the free search takes fewer nodes the
+   them. On hoist and gbac the run makes 1 to 18 nodes in 300 s with the proof, so the search is
+   not what stops it there.
+5. **The proof follows the nodes**, as on the codes: where the free search takes fewer nodes the
    proof is smaller and checks faster (word-equations 377 MB and 323 s of checking for `base`,
-   15 MB and 9 s for `sactlubyps`).
+   18 MB and 10 s for `sactlubyps`; nfc 450 MB against 68 MB).
 
 ### 11. The gate
 
@@ -13133,18 +13141,32 @@ restarts), and `--search activity --restarts luby:1 --phase-saving` 182 of 182 (
 `28c4a51c`, before the fix, which does not touch it: `activity` with `--reuse-trail` 182 of 182
 (182 restarts, 539 levels kept).
 
+**Caution, 2026-11-19.** Section 13 point 1 is open: two proofs refused on one Challenge
+instance under restarts with phase saving and a dynamic order. `diff_lane.sh --update` runs the
+checker over every proof it records and refuses one it does not accept, so recording these three
+references is itself a check on the 21 lane instances, and a refusal there would be a second
+reproduction worth having.
+
 ### 13. Findings for other owners (filed in WORKLOG, `## Cross-session requests`, 2026-11-18)
 
-1. **A branch nogood veripb refuses, with D-0077's assignment decision in the tree.** On
-   `2017_hrc_exp1-1-5670` under `--search activity --restarts luby --phase-saving` (phase
-   saving then assigning interior saved values), the nogood of node 2801 keeps 34 of 50 decision
-   levels and is not RUP. The clause of all 50 is, and so is the nogood with the one decision of
-   level 26 added back, and no other single level does it. So `Learn.levels` misses a level the
-   trace needs, while every `BAGUETTE_DEBUG` check holds (M7-T27 (a3)'s memo-against-walk
-   cross-check included). Reproduced on the pre-M6-T22 code too. With phase saving branching
-   `x <= s` instead (section 3's addendum) the same run verifies, so the assignment shape is the
-   suspect. Main reaches that shape through `indomain_median`, which is why this is a finding
-   and not only a fix here.
+1. **A branch nogood veripb refuses, under restarts with phase saving and a dynamic order. OPEN.**
+   On `2017_hrc_exp1-1-5670`, twice. (a) Binary `28c4a51c`, `--search activity --restarts luby
+   --phase-saving`, phase saving then assigning interior saved values: the nogood of node 2801
+   keeps 34 of 50 decision levels and is not RUP. The clause of all 50 is, and so is the nogood
+   with the one decision of level 26 added back, and no other single level does it. So
+   `Learn.levels` misses a level the trace needs, while every `BAGUETTE_DEBUG` check holds (M7-T27
+   (a3)'s memo-against-walk cross-check included). Reproduced on the pre-M6-T22 code. (b) Binary
+   `46b0deaa`, phase saving branching `x <= s` (no assignment decision), `--search alternate
+   --restarts luby --phase-saving`: `reverse unit propagation` refused at line 983 748 of a
+   274 MB proof (10 117 nodes, 20 restarts). Not yet localised. On that instance every
+   configuration without restarts verifies (`ps`, `act`, `act+ps`), and so do `luby+ps` and
+   `act+luby` on both binaries, `act+luby+ps` on `46b0deaa` and `alt+luby+ps` on `878ceb53`. So
+   the refusals need restarts and phase saving and a dynamic order together, and depend on the
+   path. The 182 test models and the codes set never refused (every flag set measured). **Until
+   this is found, the strategy flags are not proof-safe on every instance**, and the default,
+   which is byte-identical to main, is unaffected. The first thing to try is (b) under the
+   instrumentation of (a) (`all`, `ng` and `ls` printed at the refused node), to see whether it
+   too is one missing level of the closure.
 2. **I-P7 fires on this instance at default flags**, on main's code and before M6-T22: a learned
    clause's advisor declines a wake for a change that, run, prunes. A missed pruning, not an
    unsound one.
@@ -15824,6 +15846,1167 @@ model tests passed, each a proof veripb accepted and a `--no-proof` run byte-ide
 `ac86699a`. Then every model of `test/models/` run with `--proof` and compared with gate 50's
 artefacts (`/scratch/arthur/gate50.art/new`, binary `5e6f653e`, which is `main` at `da9df69`):
 179 models, 0 differences in stdout, exit code, `.opb` and `.pbp`.
+## D-0147  M12-parity-T1: the parity spike. Gauss-Jordan over the XOR rows removes no node on the user's searches, because every row there is a definition read forwards, and applied eagerly it hurts aut order 7 by spoiling the learned clauses
+
+**Status**: **DONE** (a spike; building T2 is the user's decision). Recorded 2026-11-18 and
+completed 2026-11-19 by agent-parity on branch `wave49-parity` (the node was unreachable overnight,
+the detached runs finished without it and were read the next morning, §9). The branch is NEVER
+merged. Only this record, the M12 rows of ROADMAP and the WORKLOG release come to
+`main`. The contract is ROADMAP `## M12-parity`, row T1. Measured on `fataepyc-06` (load 55 to 75
+throughout, so a wall time is good to about a third, and the node counts are exact). Outputs are
+under `/scratch/arthur/wave49-parity-runs/`, with one line per run in `out/<tag>.res` and the full
+stderr in `out/<tag>.err`, the re-flattened files in `fzn/`, and the library they were flattened
+with in `mznlib-spike/` and `spike.msc`. Binaries: `bin/main.exe` is `wave49-parity` at `1e283d5`
+(md5 `7b305165…`), `bin/main2.exe` is `7c4bb41` (md5 `4b6cb737…`, the same plus §4's beyond mode).
+Every run is `--no-proof --stats --time-limit T`.
+
+### 1. What the spike is
+
+**The propagator** is `lib/core/prop/parity.ml` (branch only). There is one instance per connected
+component of the gathered XOR rows with two rows or more. It is posted on top of the clause
+encoding and after every other instance, so the clause path, the learning and the queue order of
+everything else are what a run without `--parity` has. Its level is GCS's, GAC on the PB relaxation
+of the system, which coincides with GAC on the conjunction because every atom is one `var bool`.
+It differs from GCS's `ParitySystem` in where the elimination happens.
+
+- **Once, at the root**, the rows are put in reduced row-echelon form over all atoms. This is cheap
+  because MiniZinc's `bool_xor(a, b, r) :: defines_var(r)` chains define almost every atom from
+  earlier ones. Pass 1 lets each row define the last atom it is the first to mention. Pass 2
+  expresses every defined atom over the never-defined ones (C). Pass 3 eliminates the remaining
+  constraint rows over C, which leaves the free atoms F. Pass 4 rewrites every expression over F.
+- **At each wake**, a root row whose pivot is assigned is an equation over the open free atoms, and
+  a root row whose pivot is open has a column of its own. So a conflict or an implied free atom can
+  only come from a Gauss-Jordan over the open columns of F (at most |F| pivots, rows of |F| bits),
+  and an open pivot is implied exactly when its row reduces to nothing on those columns. That is
+  the whole of GAC on the system, for O(rows x |F|^2 / 62) per wake where GCS's from-scratch
+  elimination costs O(rows^2 x atoms / 64).
+
+The reason of an inference or of a conflict is GCS's (Gocht and Nordström's §4.3) rho, the assigned
+atoms of the derived row's support. It is built as data, `Reason.because facts
+(Explanation.clause …)`, which is the shape `Pb` uses. The combination of root rows is tracked over
+the origins of the per-wake basis, at most |F| + 1 of them, which keeps it at two words. There is
+no proof rendering, and the module refuses to exist in a proved run in two places.
+`Compile.compile ?parity` takes a `Parity.licence`, which only `Parity.licence ~no_proof:true`
+returns. `bin/main.ml` refuses `--parity` without `--no-proof` with exit 2 (also when `--proof` is
+given, and also when no proof flag is given, since the default run writes a temporary proof), and
+once the writer exists it checks `Parity.posted` against `Writer.is_null`.
+
+**The gathering** (`lib/flatzinc/compile.ml`, behind `--parity`) takes `bool_xor(a, b, r)` as the
+row `a + b + r = 0`, `array_bool_xor(xs)` as `sum xs = 1`, and `bool_eq` and `bool_not` as two-atom
+rows, which GCS gathers too because they join components. Constants fold into the parity, a
+variable that occurs twice cancels, and an empty row is dropped (the donor's clauses refute `0 = 1`
+on their own). Point (1) of the brief, the ternary `bool_xor` that GCS's front end maps to a
+reified equality and never gathers, is the whole of what these models contain.
+
+**The front end.** The spike's `mznlib/redefinitions.mzn` keeps `bool_xor` and `array_bool_xor` as
+builtins. `compile.ml` posts for `bool_xor` exactly the four clauses the stock library wrote, in its
+order, and for `array_bool_xor` its `sum = 2k + 1` with a `k` the builder creates. QR48
+re-flattened this way gives 23 367 nodes and 11 684 learned clauses without `--parity`, which are
+the counts D-0138 measured on the user's own `.fzn`. No model contains `array_bool_xor`.
+
+**The tests**, `test/unit/test_parity.ml` (branch only), are green on the node (21 checks). They
+cover an inference three rows deep (`a+b+c = b+d+e = a+d+f = 0` with `c = 1` and `e = 0` gives
+`f = 1` with reason `{c, e}`, which the unit-propagation closure does not reach), a conflict only
+the system sees (`a+b+c = a+b+d = 0` with `c = 0` and `d = 1`), an odd cycle refuted at the root
+with the empty reason, and a brute force over 3 000 random systems of 4 to 9 atoms (4 099
+inferences of which 311 are beyond unit propagation, and 943 conflicts). The brute force checks that
+every reason clause and every conflict clause is implied by the rows and that every literal the
+rows imply is inferred, which is GAC. The refusal and the CLI are tested on a four-variable UNSAT
+model, which takes 1 node with `--parity` and 7 without.
+
+**The measurement counters.** `--parity` prints a `parity:` line on stderr. Under
+`BAGUETTE_PARITY_UP=1` every run also computes the closure of unit propagation over the gathered
+rows from the same assignment, which is what the clause encoding derives on its own, and counts the
+inferences and conflicts that closure does not reach (`beyond_inferred`, `beyond_conflicts`). The
+diagnostic changes nothing in the search.
+
+### 2. The systems
+
+| instance | rows | atoms | components | rank | free atoms F |
+|---|---|---|---|---|---|
+| golay24 L / R | 65 / 64 | 77 / 76 | 1 | 65 / 64 | 12 |
+| QR48 L / R | 248 / 257 | 272 / 281 | 1 | 248 / 257 | 24 |
+| QR72 L / R | 469 / 473 | 505 / 509 | 1 | 469 / 473 | 36 |
+| QR104 L | 1 177 | 1 229 | 1 | 1 177 | 52 |
+| aut order 7, k = 2 | 26 133 (24 866 ternary, 1 267 two-atom) | 26 370 | 18 | 26 085 | 285 |
+
+On `minweight.mzn` the free atoms are exactly the generator bits `u` (k of them) and every row is
+independent. On aut the largest component has 25 902 atoms, 25 842 rows, rank 25 794 and 108 free
+atoms, so 48 of its rows are consequences of the others.
+
+### 3. Nodes and time
+
+N is without `--parity`, P with it (the default mode, which applies everything Gauss-Jordan finds).
+Wall is seconds, `--no-proof`. Chuffed is the user's run (`/scratch/arthur/codes-bench/H_*_chuffed_*`,
+flattened with Chuffed's own library). `def` is no annotation, `u` and `u1` are the user's
+`bool_search(u, input_order, indomain_min / indomain_max)` (for aut, over `A0` then `M`).
+
+| instance | search | nodes N | nodes P | wall N | wall P | parity CPU | Chuffed nodes, solve time |
+|---|---|---|---|---|---|---|---|
+| golay24 L | def, u, u1 | 133 | 133 | 0.05 | 0.05 | 0.00 | def 170, 0.001 s |
+| golay24 R | def, u, u1 | 133 | 133 | 0.05 | 0.05 | 0.00 | def 156, 0.001 s |
+| QR48 L | def | 23 367 | 23 367 | 35.3 | 29.9 | 0.56 | 23 668, 0.44 s |
+| | u | 23 367 | 23 367 | 37.2 | 30.0 | 0.56 | 11 709, 0.20 s |
+| | u1 | 23 429 | 23 429 | 20.0 | 18.8 | 0.55 | 11 710, 0.14 s |
+| QR48 R | def | 23 375 | 23 375 | 27.2 | 27.0 | 0.57 | 27 868, 0.54 s |
+| | u | 23 375 | 23 375 | 27.5 | 24.9 | 0.57 | |
+| | u1 | 23 429 | 23 429 | 18.1 | 17.0 | 0.55 | |
+| QR72 L | def | 100 685 | 100 679 | 613 | 541 | 7.2 | 90 500, 2.8 s |
+| | u | 100 685 | 100 679 | 592 | 436 | 6.8 | 50 736, 1.7 s |
+| | u1 | 101 435 | 101 435 | 474 | 321 | 9.2 | 50 704, 1.0 s |
+| QR72 R | def | 100 677 | 100 675 | 641 | 503 | 6.9 | 91 824, 3.0 s |
+| aut o7 k2 | def | > 87 199 | > 91 841 | 1 800 (limit) | 1 800 (limit) | 187 | 11, 0.009 s |
+| | u | > 90 112 | > 93 364 | 1 800 (limit) | 1 800 (limit) | 192 | > 16 M (limit) |
+| | u1 | **172** | **> 60 435** | 2.3 | 1 800 (limit) | 105 | 140, 0.013 s |
+| QR104 L | def | > 187 954 | > 175 321 | 1 800 (limit) | 1 800 (limit) | 14.7 | > 101 M in 3 600 s (limit) |
+
+Learned clauses equal conflicts in every row (one per conflict, `keep_all`). The `def` and `u` trees
+are the same tree, because SPEC 3.4's first-fail ties are broken by declaration order and `u` is
+declared first.
+
+The beyond mode of §4 (`PB`) gives exactly the N tree wherever it applies nothing, and on these
+searches it applies nothing on every minimum-weight instance: QR48 `def` 23 367 nodes, QR48 `u1`
+23 429, QR72 `def` 100 685, each with 0 inferences applied, and QR104 `def` with 0 applied in
+1 800 s. On aut `def` and `u` it applies nothing either (60 580 and 66 388 nodes in 1 800 s, fewer
+than N because the unit-propagation closure over 26 133 rows runs at every wake).
+
+fzn-chuffed run on the re-flattened files visits exactly the user's node counts on all ten golay and
+QR rows above (170, 156, 23 668, 27 868, 11 709, 11 710, 90 500, 91 824, 50 736, 50 704), so keeping
+`bool_xor` whole changed nothing Chuffed sees. On aut it aborts (`arithmetic.cpp:668: Cannot handle
+non-sign-fixed vars`, on the `int_div` that baguette's library keeps whole), so aut's Chuffed column
+is the user's run.
+
+The wall times of the P arm are lower on every QR pair (by 1 to 32 %, on all ten pairs, with the
+same tree or one 6 nodes smaller). The parity instance fixes in one run the `c` and `acc` atoms that the chain clauses
+would fix one wake at a time. That is an engine effect and not what the spike asks about, and on a
+node at load 60 it is a direction rather than a measurement.
+
+### 4. What the system found that the clauses did not
+
+| run | parity runs | inferences | of them on free atoms | parity conflicts | beyond unit propagation |
+|---|---|---|---|---|---|
+| golay24 L def | 177 | 1 129 | 0 | 0 | 0 inferences, 0 conflicts |
+| QR48 L def | 30 914 | 457 344 | 0 | 0 | 0 inferences, 0 conflicts |
+| QR48 L u1 | 30 883 | 458 149 | 0 | 6 | 0 inferences, 0 conflicts |
+| QR48 R def | 30 931 | 448 720 | 0 | 0 | 0 inferences, 0 conflicts |
+| QR72 L def | 138 429 | 5 047 769 | 0 | 75 | 0 inferences, 0 conflicts |
+| QR72 L u1 | 138 064 | 5 064 436 | 0 | 156 | 0 inferences, 0 conflicts |
+| QR104 L def (beyond mode, 1 800 s) | 249 979 | 0 applied | | | 0 inferences, 0 conflicts |
+| aut o7 def, first 20 000 nodes | 194 192 | 537 973 | 13 520 | 1 513 | 0 inferences, 0 conflicts |
+| aut o7 u1 | 487 313 | 2 881 812 | 82 140 | 3 837 | **458** inferences (0.016 %), 0 conflicts |
+
+On the minimum-weight models, under the user's searches, the system never implied a generator bit,
+and every one of its inferences and conflicts is in reach of the chain clauses' unit propagation.
+That is about 20 inferences per node on QR48 and 50 on QR72, all of them the `c` and `acc` values
+the chains derive anyway. The parity conflicts (75 on QR72 `def`, 156 under `u1`) are conflicts the
+parity instance reported before a clause did, and they moved the tree by 6 nodes out of 100 685
+under `def` and by none under `u1`. On aut `def` the system does imply free atoms (13 520 in the
+first 20 000 nodes), and unit propagation reaches every one of them too.
+
+**On aut the default mode is harmful.** With `u1`, baguette proves UNSAT in 172 nodes without the
+system and does not finish in 1 800 s with it. Only 458 of the 2.9 M parity inferences are beyond
+unit propagation, so the system adds almost nothing, and what it changes is the REASONS. The FIFO
+engine runs the parity instance as soon as an atom moves, ahead of the chain clauses, and the
+reason it records is the support of a derived row where a two-literal clause would have been the
+reason. The learned clauses show it. Without parity, 12 of 65 learned clauses have 16 literals or
+more and 43 conflicts backjump. With parity, 30 018 of 30 180 have 16 literals or more, 23 464
+have an LBD of 16 or more, and 40 conflicts backjump.
+
+`BAGUETTE_PARITY_MODE=beyond` (`bin/main2.exe`) applies only what the unit-propagation closure does
+not reach and leaves every other inference to the clauses. On aut `u1` it applies exactly the 458
+beyond inferences (4 of them on free atoms) and still does not finish (14 441 nodes in 300 s), so
+on this instance even those 458 change the `u1` tree for the worse. They all come late. With node
+limits of 1, 60, 100 and 140 the beyond-mode run and the run without parity have the same node and
+conflict counts and the system applies nothing. The 458 inferences all come between node 141 and
+node 172, where the run without parity is one conflict from its UNSAT. Applied there, they reroute
+that last conflict and the proof does not close.
+
+### 5. Why the user's searches leave the system nothing to do
+
+On `minweight.mzn` every XOR row is a DEFINITION, `acc[t] = acc[t-1] xor u[R[t]]` and `c[j] =
+acc[r]`. In the root form the pivots are exactly the `acc` and `c` atoms and the free atoms are the
+generator bits, every root row reading `c_j = XOR of the u_i in column j`. Gauss-Jordan can say
+something unit propagation over the chains cannot only when a defined atom is fixed while an atom
+of its expression is still open, that is when information flows from `c` back to `u`. Under the
+user's searches it does not.
+
+- `def`, `u` and `u1` all branch on `u` alone.
+- A `c_j` is fixed by unit propagation once its whole column is fixed, which is the forward
+  direction.
+- `sum(u) <= HALF` fixes the remaining `u` to 0, forwards again.
+- `sum(u) + sum(c) <= Wmax` could fix an open `c` to 0 while `u` is open, but it fires only once
+  Wmax ones are fixed, and a `c` is 1 only once its whole column is. The columns of these codes
+  have weight about k/2, so by then nearly every `u` is fixed.
+- A learned clause can fix a defined atom early, and the diagnostic says that when it does, the
+  chains' own unit propagation already reaches whatever the system reaches.
+
+The extra search `c` shows the other case. It branches on `c ++ u` with `indomain_min`, which is
+not one of the user's searches (it is `minweight.mzn` with only the `solve` item changed,
+`models/minweight_c.mzn` in the run directory). Fixing `c_j = 0` is a parity equation over `u`, and
+a few of them pin `u`. There the system has real work to do.
+
+| search `c` | nodes N | nodes P | nodes P, beyond mode | inferences P (on `u`) | beyond unit propagation | Chuffed |
+|---|---|---|---|---|---|---|
+| golay24 L | 1 551 | 375 | 383 | 8 627 (1 527) | 8 214 (95 %), its 26 conflicts all within reach | 2 101 |
+| golay24 R | 1 590 | 399 | | 8 534 (1 545) | 8 213 | |
+| QR48 L | > 147 282 | > 142 500 | > 147 956 | 7 976 142 (737 693) | 94 % (7 278 925 of 7 704 964 in the diagnostic run; 30 of its 15 058 conflicts) | > 600 s |
+| QR48 R | > 159 379 | > 167 628 | | 9 811 573 (855 180) | | |
+| QR72 L | > 146 803 | > 192 726 | > 214 061 | 14 481 214 (1 275 094) | the beyond run applies 15 882 560 | > 600 s |
+| QR104 L | not run | > 99 920 | > 107 138 | 16 288 273 (694 722) | the beyond run applies 16 483 596 | |
+
+A `>` is a count at the 1 800 s limit. On golay24 the system cuts the tree by four, but that tree
+stays three times the 133 nodes of the user's search. On the QR codes no run closes under `c`, with
+or without the system, and Chuffed does not close QR48 or QR72 under `c` in 600 s either. The
+system infers about 55 (QR48) to 165 (QR104) literals per node there, nearly all of them beyond unit propagation, and a
+count of nodes at a time limit says nothing about the size of a tree no run finishes. So the one
+search under which the system has work to do is a search that is hopeless on these codes anyway.
+
+### 6. What the certified version (T2) would cost, per GCS's §2 to §4
+
+The `.opb` stays the clause encoding (the user's point, and GCS's), and everything parity-shaped is
+derived inside the proof.
+
+1. **The slack row of each donor, at level 0.** A ternary `bool_xor` is one step of GCS's
+   accumulator chain, `a + b + r = 2y` with a fresh `y`. It takes two `red` lines (witness `y -> 1`,
+   whose goal is RUP against the clause `~a \/ ~b \/ ~r`, and witness `y -> 0`, with a five-line
+   `pol` subproof whose three divisions are where the parity argument lives). That is about 7 lines
+   and one fresh variable per donor, with no telescoping since each donor is a single step. A
+   two-atom row is GCS's Boolean family, two plain `rup` lines and no variable. QR48 has 248 donors
+   (about 1 700 lines), QR72 469 (about 3 300), QR104 1 177 (about 8 200), and aut 24 866 ternary and
+   1 267 binary donors (about 177 000 lines and 24 866 fresh variables), all before node 1. Each of
+   those lines taxes every later unhinted `rup` (GCS's #666) unless the scaffolding is deleted once
+   the slack rows exist, which GCS has not implemented either.
+2. **The root form, optionally cached.** A root row is a sum of donor rows. Writing each one once at
+   level 0 costs one `pol` per direction per root row (QR48, 496 `pol` lines of about 12 donors
+   each; aut, about 51 600). Otherwise every inference sums the donors itself.
+3. **Each inference is one `pol` and one `rup`** (§4.3's fold, which sums the root rows of the
+   combination in both directions, adds one literal axiom per reason atom, divides by 2 and
+   multiplies by 2). The `pol` is as long as the combination plus the reason, and the reasons
+   average 11 atoms on QR48 (5 055 562 reason atoms for 457 344 inferences). A conflict costs the
+   same with an empty claim.
+4. **The engine side.** A parity inference is a trace entry whose clause is not RUP from the
+   database, so `Justify` would have to emit the `pol` before the trace line cites it, at the level
+   of the inference, and delete it with that level (I-X2). That needs a new `Explanation`
+   constructor, or a deferred one carrying the combination, and so a decision record before any
+   code.
+
+In the beyond mode only the beyond inferences would need items 3 and 4, and items 1 and 2 would
+still be paid in full before node 1.
+
+### 7. Recommendation for T2
+
+**Do not build T2 for these models.** Under `def`, `u` and `u1` the system removes no node on
+golay24, QR48 and QR72 (identical trees, or 6 nodes of 100 685) and finds nothing beyond unit
+propagation on QR104 either, because every XOR row there is a definition read forwards and the
+chain clauses already do that completely. On aut it finds 458 inferences beyond unit propagation
+out of 2.9 M, and applied eagerly it turns the 172-node `u1` proof into a timeout by spoiling the
+learned clauses. The QR runs under `c` were the open case of this recommendation, and they close
+it. That search is the only one where the system has work to do, and no QR code closes under it in
+1 800 s with or without the system. A certified version would pay §6's level-0 scaffolding (177 000
+lines on aut) and per-inference `pol`s to justify, on every run that closes, nothing the clauses do
+not already justify.
+
+The node counts that separate baguette from Chuffed are elsewhere. Chuffed visits about the same
+tree under `def` (23 668 against 23 367 on QR48) and half of it under `u` and `u1` (11 709 against
+23 367), and it is 80 times faster per node on QR48 and 200 times on QR72. On aut `def` it needs 11 nodes where baguette
+does not finish, and §4 shows that parity is not the difference there either.
+
+If the user wants T2 anyway, it should be built in the beyond shape, so that a parity reason exists
+only where no clause reason could, which also bounds the proof cost by the beyond inferences. The
+place to measure again before that is a search that fixes defined bits early AND still closes on
+these codes. Activity-based branching with restarts, once M10 lands, is the candidate, and this
+branch's `--parity` and beyond mode can be run against it as they stand.
+
+### 8. What a no-proof spike cannot tell
+
+- **That the reasons are right in the checker's sense.** They are implied by the rows (the brute
+  force checks that on 3 000 small systems, and every answer here agrees with the run without
+  `--parity` and with Chuffed), but no reason was derived in VeriPB. GCS's §4.3 fold is verified
+  there on 25 fixtures, not here.
+- **The proof's size and the checker's time.** §6 counts lines from the scheme. What a `pol` over a
+  combination of a hundred donor rows costs the checker, and what 177 000 lines of level-0
+  scaffolding cost on aut, is not measured.
+- **The tree under a proof.** `--no-proof` keeps every explanation, the learning and the search
+  (D-0135, stdout byte-identical in both modes), so these trees are the trees a proved run would
+  explore, provided T2's justifications do not change what is learned. They should not, since the
+  same reason clauses would be learned from, but that is not checked.
+- **Searches the user did not run.** Activity-based branching with restarts (Chuffed `-f`, M10 in
+  flight on `main`) may fix defined bits early the way the `c` variant does, and whether the system
+  pays there is open.
+
+### 9. The runs, and the night the node was away
+
+`fataepyc-06` was unreachable from 18:00 on 2026-11-18 to the next morning. Four detached batches
+were running and finished without supervision (`jobs1.txt`, `jobs2.txt`, `jobs3b.txt` and
+`jobs4.txt` in the run directory, each with its `.done` marker; `jobs3.txt` is the list `jobs3b.txt`
+was cut from and never ran). On 2026-11-19 their 90 `out/*.res` were read and §3
+to §5 filled from them. `bash run1.sh` used `bin/main.exe`, and the tags ending in `PB` used
+`bin/main2.exe` with `BAGUETTE_PARITY_MODE=beyond`. The tags ending in `PD` set
+`BAGUETTE_PARITY_UP=1`, and `o7k2_def_PD20k` also `BAGUETTE_NODE_LIMIT=20000`. The `ch_*` runs are
+fzn-chuffed `-s` on the re-flattened files (a first copy failed on a wrong flag and was rerun).
+The one read that the node's absence delayed, the place where the 458 beyond inferences occur on
+aut `u1`, was run on 2026-11-19 (`o7k2_u1_{PB,N}_n{1,60,100,140,171}`, a few seconds each). No QR104
+`c` run without `--parity` was made, since no `c` run closes on any QR code and the missing number
+would not change §7.
+## D-0139  M10-search-strategy-T4: retention re-measured, the learned database made evictable (`Retention.gate`, the lock rule, three LBD tiers), and why the default should stay `keep_all` until M10-T5
+
+**Status**: **ACCEPTED** as built, 2026-11-18, agent-retention (`wave45-retention`). The default
+is unchanged (`keep_all`). Whether `tiered` becomes the default is M10-T5's decision, and §6
+below is this row's recommendation for it. The eviction of a learned constraint that has a
+consumer needs a two-site change in `lib/core/search.ml`, which M10-T1..T3 have claimed. It is
+on branch `wave45-retention-hook` (commit `c0c2c33`) and filed under `## Cross-session requests`.
+Every measurement of `tiered` below ran on that hook build.
+
+Request: WORKLOG 2026-11-18 "codes-cp measurements", point 3 and the addendum's point 4.
+Governing records: D-0051 (`keep_all` by measurement, and its M2-L12 re-run), D-0045 (the
+lifetime finding), D-0136 §1 (`retire` in one pass), D-0138 (M6-T22, the engine this row's
+step 3 runs on).
+
+### Binaries, so that no two tables are read as one
+
+| table | binary (md5) | tree |
+|---|---|---|
+| §1 (step 1) | `e4631564` | `wave45-retention` at `5c55eea`: main `9f3ed78`, i.e. the engine BEFORE M6-T22, plus a stderr-only progress line |
+| §3 (step 3) | `fcb944a4` | `wave45-retention-hook` at `6771a23`: main `23eb9d6` (M6-T22) + this row + the hook |
+| §4 timing | `a9217430` (main 23eb9d6) against `fcb944a4` | |
+| gate, `make diff` | `eececf76` | `wave45-retention` at `0824b1d`: main `a8d2924` via `wave47-lanes` + this row, no hook |
+
+Every run: `--time-limit 1170`, `ulimit -v 16777216 -f 16000000`, `--max-heap-mb 8192`, one
+run per cell, 10 in parallel on fataepyc-06. A proof run is checked by VeriPB 3.0.2 (`d5644ca4`)
+with a 3 600 s limit. "learned/s start → end" is the number of learned constraints per CPU
+second over the first 2 000 and over the last 2 000 the run learned, read from
+`BAGUETTE_RETENTION_TRACE=500` (new, stderr only). In these models conflicts and learned
+clauses are one to one, nodes about two per conflict.
+
+The instances are the four codes models from `fataepyc-06:/scratch/arthur/codes-bench/` and
+fifteen Challenge instances. Those are the fifteen TIMEOUT rows of D-0133's archive with the
+most learned clauses, one per family, flattened again with `tools/baguette.msc`.
+
+### 1. Step 1: today's policies, on main's engine of the morning
+
+| instance | answer (proof) | conflicts (np) | learned/s start → end (np) | held at stop | `lbd:2000` conflicts (np) | conflicts, learned clauses not propagated | .pbp MB | check (s) |
+|---|---|---|---|---|---|---|---|---|
+| H_o7k2_u1 | UNSATISFIABLE | 58 | - → - | - | 58 | 84 | 1.6 | unsatisfiable 0.75 |
+| H_qr48_def | UNSATISFIABLE | 11684 | 401 → 55 | 11500 | 11684 | 11715 | 143.8 | unsatisfiable 6.75 |
+| H_qr48_u | UNSATISFIABLE | 11684 | 406 → 54 | 11500 | 11684 | 11715 | 143.8 | unsatisfiable 6.95 |
+| H_qr72_def | UNKNOWN/STOP | 30207 | 343 → 11 | 30207 | 28898 | 50718 | 609.7 | no conclusion 30.77 |
+| 2011_bacp_bacp-22 | UNKNOWN/STOP | 27624 | 319 → 11 | 27624 | 28968 | 116363 | 272.7 | no conclusion 41.53 |
+| 2011_cyclic-rcpsp_hard_11 | SAT/STOP:1290 | 24029 | 157 → 7 | 23940 | 24632 | - | 1467.2 | timeout 3600 |
+| 2011_roster_chicroster_dataset_large_18 | SAT/STOP:15 | 27557 | 111 → 15 | 27544 | 26482 | - | 976.8 | no conclusion 104.28 |
+| 2012_parity-learning_48_24_6.2 | UNKNOWN/STOP | 22463 | 260 → 11 | 24826 | 20505 | - | 436.1 | no conclusion 24.01 |
+| 2013_filters_dct_2_2 | SAT/STOP:18 | 32302 | 442 → 13 | 32301 | 30497 | 115361 | 280.3 | no conclusion 113.93 |
+| 2013_l2p_l2p2 | UNKNOWN/STOP | 34015 | 255 → 13 | 34015 | 29007 | 94003 | 1450.9 | timeout 3600 |
+| 2013_rcpsp_12 | SAT/STOP:39 | 25428 | 366 → 10 | 25425 | 25384 | - | 659.8 | no conclusion 100.34 |
+| 2015_grid-colouring_13_11 | SAT/STOP:7 | 28691 | 182 → 9 | 28686 | 27122 | 97372 | 828.2 | no conclusion 139.03 |
+| 2017_opd_small_bibd_08_28_14 | SAT/STOP:7 | 40410 | 273 → 14 | 41497 | 33765 | 91769 | 708.5 | no conclusion 67.46 |
+| 2019_fox-geese-corn_foxgeesecorn_54 | SAT/STOP:1426 | 25450 | 161 → 7 | 25390 | 22608 | - | 225.8 | no conclusion 204.50 |
+| 2021_perfect_square_102 | UNKNOWN/STOP | 30561 | 1081 → 8 | 30561 | 29134 | 128136 | 378.9 | no conclusion 579.57 |
+| 2021_steiner-systems_steiner_t2_k7_N21 | UNKNOWN/STOP | 31948 | 326 → 14 | 31948 | 29081 | 119679 | 592.9 | no conclusion 71.84 |
+| 2023_test-scheduling_t20m10r10-17 | SAT/STOP:1069 | 30976 | 30 → 14 | 30975 | 30684 | 106216 | 698.6 | timeout 3600 |
+| 2024_neighbours_neightbours-new-5 | UNKNOWN/STOP | 47225 | 96 → 19 | 47225 | 39819 | 79245 | 2848.5 | no conclusion 199.11 |
+| 2026_saeling_s021 | SAT/STOP:200 | 34011 | 180 → 16 | 34009 | 30328 | 100742 | 1784.9 | timeout 3600 |
+
+Three findings, and the third is the one the rest of this record is built on.
+
+1. **The slowdown the user saw is general.** On every instance that runs to the limit, the
+   learning rate at the end is 2 to 135 times lower than at the start, and the base holds
+   every learned clause (`keep_all`). QR48 goes from 401 to 55 learned/s, `perfect_square`
+   from 1 081 to 8.
+2. **Without propagation, the learned base costs nothing per node.** With
+   `BAGUETTE_PROPAGATE_LEARNED=off` (the M2-L4 build, every clause still on the page) QR48 is
+   UNSAT in 11 s instead of 111 s, at the same node count (23 429 against 23 367). QR72 is
+   UNSAT in 154 s instead of stopping at 1 170 s. The Challenge instances run 1.7 to 4.2 times more
+   conflicts. On the merged engine (§3's binary) the same build solves QR48 in 7.8 s and QR72 in
+   71 s, or 136 s with proof. That build loses elsewhere: `grid-colouring` ends on 8 instead of
+   7, and `saeling` without an incumbent. So the cost is in PROPAGATING the learned clauses,
+   not in holding them.
+3. **`lbd:N` and `fifo:N` evict nothing.** Since M2-L12 every learned clause and PB row has a
+   runtime consumer and is `cite`d for the whole search, and `reduce` refuses to evict a cited
+   constraint. On QR48 `lbd:2000` evicts 0 of 11 684 and counts **46 894 770** refused
+   proposals. It runs 27 % slower than `off` (141.6 s against 111.2 s), because before this row
+   it sorted the whole database on every conflict to propose evictions it then refused. D-0051's
+   M2-L12 re-run had seen the start of this ("the constraints that propagate are the ones a
+   policy may not evict"). At this scale it means that no policy in the tree could act at all.
+
+### 2. What was built
+
+All in `lib/core/retention.ml`; `bin/main.ml` parses the policy. Three pieces.
+
+**(a) `Retention.gate db store ~cid inst`.** The search hands a learned constraint's engine
+instance to the database before `Engine.add`. What comes back is the same instance behind a
+switch. While the switch is on it runs and advises as before, and it records whether a run
+propagated (the trail grew) or conflicted. That record is `e_used`, the activity `tiered` ranks
+on, and for a conflict it also records the instance id (`last_conflict`). When `reduce` evicts the
+constraint, the switch goes off. `run` then answers `Fixpoint` without calling the propagator,
+`advise` answers `false`, and the citation is released before `retire`, so `retire`'s `Cited`
+guard keeps its meaning. Under `keep_all` (`p_detaches = false`) `gate` returns the instance
+**physically unchanged**, so the default build runs the closures it ran before this record.
+
+**(b) The lock rule (`locked_instances`).** A gated constraint may be evicted unless its instance
+is (1) the propagator of a trail entry still on the trail, or (2) the most recent gated instance
+to return `Conflict`. Half (1) holds because `lib/core/trace.ml` is lazy. A branch writes its
+trace lines when it fails, by walking the trail, and the line for an entry a learned instance
+propagated is `rup` against that learned constraint. So the constraint has to stay on the page as
+long as the entry can still be traced, and that is as long as the entry is on the trail. This is
+Glucose's "locked" clause, extended from the reason of the current assignment to every entry.
+Half (2) holds because `reduce` runs inside conflict handling, after the learned clause is on
+the page and before `pb_at_conflict` resolves the conflicting instance's row. Every other
+reference to a learned id is either a line already written (VeriPB keeps derived constraints when
+their premises go) or a level-0 unit. A unit is cited without a gate, so no policy can evict it.
+
+**(c) `tiered`.** Core (LBD ≤ `core`, default 2) is never proposed. Mid (≤ `mid`, default 6)
+is demoted to local if it goes unused between two checks, and a check comes every `mid_every`
+(10 000) learned constraints. Local is halved at each reduction, with the worst ranked first:
+unused before used, then higher LBD, then older. The first reduction comes at `first` (2 000) and
+each later one `first + k·inc` (`inc` 300) after the previous one, which is Glucose's schedule. A
+new entry starts used, which is CaDiCaL's grace. Without it, the clause that a reduction's own
+`add` had just learned would rank first among the unused, because `reduce` runs before the
+search backtracks.
+Spelled `BAGUETTE_RETENTION=tiered` or `tiered:core=2,mid=6,first=2000,inc=300,mid_every=10000`.
+The schedule counts learned constraints, not conflicts, because `reduce` sees one call per
+`add`. The two counts differ by the PB rows (M2-L6), and those are measured below.
+
+**Also changed, with no change to what is evicted.** A policy is now a pair `due`/`evict` built
+per database. `reduce` used to materialise the whole live list on every learned constraint, under
+`keep_all` too, and `due` makes that call O(1). `holds` is now a hash lookup. It used to walk the
+list, which made `add` O(n). `fifo` and `lbd` evict exactly what they evicted before.
+
+### 3. Step 3: `tiered` (defaults) against `keep_all`, on the merged engine with the hook
+
+| instance | conflicts np, off → tiered | conflicts proof, off → tiered | evicted (proof) | held at end, off → tiered | answer off / tiered (proof) | .pbp MB off → tiered | check s off → tiered |
+|---|---|---|---|---|---|---|---|
+| H_o7k2_u1 | 58 → 58 (+0 %) | 58 → 58 (+0 %) | 0 | - → - | UNSAT 4.29 s / UNSAT 4.23 s | 1.6 → 1.6 | 0.76 → 0.72 |
+| H_qr48_def | 11684 → 11684 (+0 %) | 11684 → 11684 (+0 %) | 4357 | 11500 → 7143 | UNSAT 44.77 s / UNSAT 31.39 s | 143.8 → 143.8 | 7.12 → 6.94 |
+| H_qr48_u | 11684 → 11684 (+0 %) | 11684 → 11684 (+0 %) | 4357 | 11500 → 7143 | UNSAT 36.60 s / UNSAT 30.26 s | 143.8 → 143.8 | 7.14 → 6.84 |
+| H_qr72_def | 50343 → 50346 (+0 %) | 50343 → 50346 (+0 %) | 41758 | 50000 → 8242 | UNSAT 554.20 s / UNSAT 295.55 s | 1084.6 → 1084.9 | 57.11 → 56.49 |
+| 2011_bacp_bacp-22 | 54610 → 91671 (+68 %) | 54610 → 91671 (+68 %) | 81511 | 54500 → 9989 | OPT 358.27 s / OPT 818.76 s | 486.1 → 812.6 | 78.06 → 122.86 |
+| 2011_cyclic-rcpsp_hard_11 | 64775 → 79176 (+22 %) | 58287 → 61492 (+5 %) | 48884 | 58194 → 12481 | inc 1288 / inc 1288 | 3262.1 → 3354.2 | >3600 → >3600 |
+| 2011_roster_chicroster_dataset_large_18 | 63781 → 65588 (+3 %) | 54273 → 58412 (+8 %) | 49669 | 54260 → 8730 | inc 15 / inc 15 | 1924.6 → 2099.3 | 215.16 → 225.80 |
+| 2012_parity-learning_48_24_6.2 | 41365 → 88027 (+113 %) | 38607 → 80816 (+109 %) | 82199 | 42626 → 7679 | none / none | 720.2 → 1504.9 | 44.41 → 80.92 |
+| 2013_filters_dct_2_2 | 61096 → 67021 (+10 %) | 56402 → 61462 (+9 %) | 39712 | 56401 → 21749 | inc 18 / inc 18 | 437.5 → 475.8 | 175.86 → 205.73 |
+| 2013_l2p_l2p2 | 50712 → 55041 (+9 %) | 50712 → 55041 (+9 %) | 43834 | 50500 → 11166 | OPT 809.74 s / OPT 648.71 s | 2180.0 → 2289.5 | >3600 → >3600 |
+| 2013_rcpsp_12 | 46463 → 47494 (+2 %) | 46995 → 47298 (+1 %) | 25778 | 46992 → 21517 | inc 39 / inc 39 | 1237.4 → 1251.1 | 196.21 → 193.04 |
+| 2015_grid-colouring_13_11 | 52456 → 62729 (+20 %) | 48701 → 60810 (+25 %) | 48421 | 48690 → 12384 | inc 7 / inc 7 | 1737.8 → 2184.0 | 285.04 → 411.66 |
+| 2017_opd_small_bibd_08_28_14 | 107536 → 231872 (+116 %) | 99304 → 165839 (+67 %) | 149785 | 101731 → 16751 | inc 7 / inc 7 | 1664.5 → 2768.4 | 173.75 → 283.45 |
+| 2019_fox-geese-corn_foxgeesecorn_54 | 27337 → 27755 (+2 %) | 28152 → 28195 (+0 %) | 8787 | 28092 → 19348 | inc 1426 / inc 1426 | 260.8 → 261.2 | 295.62 → 271.39 |
+| 2021_perfect_square_102 | 61586 → 61648 (+0 %) | 56986 → 64207 (+13 %) | 49902 | 56986 → 14305 | none / none | 762.3 → 929.0 | 1505.23 → 1984.35 |
+| 2021_steiner-systems_steiner_t2_k7_N21 | 72037 → 105210 (+46 %) | 53924 → 90012 (+67 %) | 82149 | 53924 → 7863 | none / none | 969.8 → 1623.3 | 126.22 → 207.07 |
+| 2023_test-scheduling_t20m10r10-17 | 52143 → 56808 (+9 %) | 47978 → 43766 (-9 %) | 24481 | 47977 → 19284 | inc 1069 / inc 1069 | 1048.4 → 931.2 | >3600 → >3600 |
+| 2024_neighbours_neightbours-new-5 | 60677 → 62529 (+3 %) | 32665 → 33583 (+3 %) | 6531 | 32665 → 27052 | none / none | 3678.3 → 3614.3 | 245.41 → 244.55 |
+| 2026_saeling_s021 | 52957 → 43577 (-18 %) | 40203 → 38486 (-4 %) | 22067 | 40201 → 16417 | inc 198 / inc 198 | 2101.3 → 1880.3 | >3600 → >3600 |
+
+How to read it.
+
+- **The codes: same search, much less propagation, and the proof run gains most.** QR48 and
+  QR72 have the SAME conflict count under both policies (11 684, and 50 343 against 50 346).
+  The clauses `tiered` evicts were never needed again. On QR72 the learned clauses' runs per
+  node fall from 996 to 345 and all propagator runs from 1 523 to 872 per node. Wall to UNSAT
+  with proof: QR48 44.8 → 31.4 s and 36.6 → 30.3 s, QR72 **554 → 296 s** (−47 %). Without
+  proof: QR48 22.1 → 22.4 s and 24.8 → 24.1 s (unchanged), QR72 343 → 266 s (−22 %).
+- **The Challenge: more conflicts per second, partly hollow, and no better answer.** Within
+  the 1 170 s, 12 of the 13 runs that reach the limit run more conflicts under `tiered` (np), up to +116 % on `opd` and
+  +113 % on `parity-learning`. Every incumbent and every final status is identical between the
+  two policies, in both modes. Part of the gain is the solver learning the same clause again
+  after evicting it: the `duplicate` counter under `tiered` is 36 % of the learned clauses on
+  `bacp-22` (33 200 of 91 671), 41 % on `steiner`, 33 % on `cyclic-rcpsp` and 15 % on `opd`,
+  against 0 to 3 % under `keep_all`. A DFS without restarts walks back into the subtree an
+  evicted clause had closed.
+- **One clear regression: `bacp-22`.** It reaches OPT under both, but needs 54 610 → 91 671
+  conflicts and 358 → 819 s with proof (231 → 662 s without). `l2p2` goes the other way, with
+  9 % more conflicts but 810 → 649 s to OPT with proof (446 → 391 s without).
+- **The checker sees no smaller database.** At an equal search the check time does not move.
+  QR48 takes 7.1 → 6.9 s and QR72 57.1 → 56.5 s, on the same proof bytes (the `del` lines are
+  under 0.1 %). Elsewhere proof bytes and check time scale with the conflicts run, about
+  18 kB per conflict on `steiner` under both policies. So in this proof system "a deleted
+  clause is a smaller database for the checker" buys nothing measurable. VeriPB's unit
+  propagation does not walk the learned constraints a `rup` does not touch.
+- Every proof that finished checking was VERIFIED, and every one that did not ran out of the
+  3 600 s budget. No REJECTED in either column.
+- PB rows are a small share everywhere except one instance. `parity-learning` has 9 062 PB rows
+  out of 80 816 under `tiered`. Everywhere else it is under 0.5 % (`opd` 697 of 165 839). A
+  RoundingSat LBD for PB rows would therefore matter only on `parity-learning`. It is parked,
+  and the request row says what it needs.
+
+**Two more configurations, read on 2026-11-19** after the node came back (the driver ended
+`ALL DONE 2026-11-18T18:51`). Both ran without proof on the same binary `fcb944a4`.
+`T500` is `tiered:first=500,inc=100,mid_every=2500`, the aggressive schedule. `lbd:5000` is
+the cap policy, which evicts for the first time once the hook is in. "inc" is the incumbent
+at the stop. `fox-geese-corn` maximises and the others minimise.
+
+| instance | answer: off / tiered / T500 / lbd:5000 | conflicts: off / tiered / T500 / lbd:5000 | held at end: T500 / lbd:5000 |
+|---|---|---|---|
+| H_o7k2_u1 | UNSAT 3 s / UNSAT 4 s / UNSAT 3 s / UNSAT 3 s | 58 / 58 / 58 / 58 | - / - |
+| H_qr48_def | UNSAT 22 s / UNSAT 22 s / UNSAT 17 s / UNSAT 29 s | 11684 / 11684 / 11684 / 11684 | 3100 / 5001 |
+| H_qr48_u | UNSAT 25 s / UNSAT 24 s / UNSAT 16 s / UNSAT 31 s | 11684 / 11684 / 11684 / 11684 | 3100 / 5001 |
+| H_qr72_def | UNSAT 343 s / UNSAT 266 s / UNSAT 161 s / UNSAT 234 s | 50343 / 50346 / 50357 / 50347 | 4835 / 5001 |
+| 2011_bacp_bacp-22 | OPT 231 s / OPT 662 s / OPT 1057 s / none | 54610 / 91671 / 121869 / 91254 | 9816 / 5000 |
+| 2011_cyclic-rcpsp_hard_11 | inc 1288 / inc 1288 / inc 1288 / inc 1288 | 64775 / 79176 / 98041 / 79306 | 8490 / 5002 |
+| 2011_roster_chicroster_dataset_large_18 | inc 15 / inc 15 / inc 15 / inc 15 | 63781 / 65588 / 64275 / 61713 | 5688 / 5000 |
+| 2012_parity-learning_48_24_6.2 | none / none / none / none | 41365 / 88027 / 105114 / 114307 | 4796 / 5000 |
+| 2013_filters_dct_2_2 | inc 18 / inc 18 / inc 18 / inc 18 | 61096 / 67021 / 78336 / 72847 | 8288 / 5019 |
+| 2013_l2p_l2p2 | OPT 446 s / OPT 391 s / OPT 381 s / none | 50712 / 55041 / 55240 / 88301 | 6405 / 5000 |
+| 2013_rcpsp_12 | inc 39 / inc 39 / inc 39 / inc 39 | 46463 / 47494 / 53201 / 66924 | 7676 / 5000 |
+| 2015_grid-colouring_13_11 | inc 7 / inc 7 / inc 7 / inc 7 | 52456 / 62729 / 97306 / 53176 | 8893 / 5000 |
+| 2017_opd_small_bibd_08_28_14 | inc 7 / inc 7 / inc 7 / inc 7 | 107536 / 231872 / 256631 / 113481 | 9618 / 5003 |
+| 2019_fox-geese-corn_foxgeesecorn_54 | inc 1426 / inc 1426 / inc 1426 / inc 1494 | 27337 / 27755 / 37337 / 47703 | 7320 / 5002 |
+| 2021_perfect_square_102 | none / none / none / none | 61586 / 61648 / 69417 / 73855 | 9116 / 5056 |
+| 2021_steiner-systems_steiner_t2_k7_N21 | none / none / none / none | 72037 / 105210 / 119761 / 155183 | 7871 / 5001 |
+| 2023_test-scheduling_t20m10r10-17 | inc 1069 / inc 1069 / OPT 883 s / inc 1069 | 52143 / 56808 / 57578 / 66505 | 7348 / 5000 |
+| 2024_neighbours_neightbours-new-5 | none / none / none / none | 60677 / 62529 / 71431 / 114747 | 15240 / 5070 |
+| 2026_saeling_s021 | inc 190 / inc 190 / inc 198 / none | 52957 / 43577 / 52184 / 101478 | 7200 / 5069 |
+
+- **`T500` goes further in both directions.**
+  - On the codes it is the fastest policy at the same conflict count. QR72 is UNSAT in
+    161 s (`off` 343 s, `tiered` 266 s) and QR48 in 16 to 17 s (22 to 25 s).
+  - It is the only configuration of the four that changes an answer for the better.
+    `test-scheduling` is proved OPTIMAL at 1 069 in 883 s, where the other three stop at
+    the same incumbent unproved. `l2p2` reaches OPT a little faster (381 s).
+  - It also costs more. `bacp-22` needs 1 057 s to OPT (4.6 times `off`). `saeling` stops
+    on 198 where `off` and `tiered` stop on 190.
+- **`lbd:5000` is dominated.**
+  - It loses two optima the others prove (`bacp-22` and `l2p2` both stop unproved) and
+    loses `saeling`'s incumbent.
+  - It gains one incumbent (`fox-geese-corn` 1 494 against 1 426).
+  - On the codes it is slower than `off` on QR48 (29 to 31 s) and faster on QR72 (234 s).
+  - A cap that keeps no tier evicts the clauses the search needed. That is the evidence for
+    tiers over a cap on this solver.
+
+
+### 4. The learned database's O(n) per conflict (M6-T22's cross-session request), taken here
+
+`reduce` now asks the policy's `due` first, which is O(1), so `keep_all` never builds the live
+list. `holds` is a hash lookup and `size` a counter. QR48 (`H_qr48_bag_def`) without proof at
+the default policy, 3 runs each, sequential on fataepyc-06: main 23eb9d6 takes 26.9, 27.3 and
+25.5 s, this build 20.5, 20.5 and 21.3 s, **about −22 %**. The M6-T22 scratch patch had
+measured −14 % in cycles. Exactly-once deletion is still a property of `retire` alone, and
+test_retention's (a)/(b) lanes are unchanged and green.
+
+### 5. Soundness: what was run, what reddens
+
+- **Sweeps over the 173 test models on the hook build.** Every proof was put through the
+  checker under five schedules: `tiered:core=0,mid=0,first=1,inc=0,mid_every=1` (a reduction
+  per learned constraint, half the base each time), `tiered:first=20,inc=5,mid_every=50`,
+  `fifo:0`, `lbd:2` and `lbd:0` (on the pre-merge build). **173 of 173 VERIFIED under each.**
+  The aggressive schedule detaches 2 034 constraints, and the lock refuses 1 971 proposals.
+- **The lock rule is load-bearing.** Its trail half was removed and the same sweep run:
+  `colour_unsat` is REJECTED with *"Trying to access constraint with ID 175 that has already
+  been deleted"*, on the pre-merge and the merged build alike. Removing the last-conflict
+  half reddens nothing, under the aggressive schedule or under `fifo:0`. That half is argued
+  (§2) and pinned by a unit lane, but no model in the suite needs it. It is kept because its
+  failure would be a rejected proof and it costs one table entry per reduction.
+- **`BAGUETTE_DEBUG=1`** passes on 172 of 173. The exception is `rup_level0_nogood_sat`,
+  which raises an I-P7 `Not_at_fixpoint` in `learned_clause`. The same exception is raised
+  at the default policy on main 23eb9d6 and on main before M6-T22. It is not this row's, and
+  it is filed for `clause.ml`.
+- **Unit lanes**, test/unit/test_retention.ml section (d), 146 checks in all, green:
+  - the tiers on a worked schedule (a glue clause never evicted, the worst local half evicted
+    at `first` and at `first + k·inc`, every id deleted once, checker accepts);
+  - mid demotion after the grace;
+  - the gate (identity under `keep_all`, locked by the trail and by the last conflict, a
+    detached instance never runs and declines every wake, an unknown id refused, checker
+    accepts);
+  - `tiered` through a real search on both builds.
+- **Gate** (`make check` on a fresh clone of `0824b1d`): rc 0, 3 847 ok, 0 FAIL, 179 model
+  tests passed. All four artefacts are byte-identical to gate 48's binary `e8354a74` on 179 of
+  179 models (535 509 `.pbp` bytes both). **`make diff ARGS="-j 16"`** (M11-T2): 168 of 168
+  runs equal the reference, `lbd`/`fifo` configurations included, so the evictions under
+  those policies are unchanged. The first run of the lane reddened the 84 `lbd`/`fifo` runs
+  on the `retention` counter's TEXT alone, because the first draft appended three counters to
+  that line for every detaching policy. They are now appended under `tiered` only.
+
+### 6. The default question: a recommendation for M10-T5
+
+**Keep `keep_all` as the default for now. Merge the hook. Measure `tiered` again with restarts
+and the activity heuristic, as M10-T5 plans.**
+
+- **For `tiered`.** At an equal search it removes most of the per-node cost the learned base
+  adds, which is the user's complaint: QR72 with proof is 47 % faster with the same conflicts.
+  It never changed an answer or an incumbent on 19 instances, and every proof verified.
+- **Against making it the default today.**
+  - On the Challenge subset it buys conflicts, not answers. About a third of those conflicts
+    are clauses learned a second time.
+  - It costs `bacp-22` a 2.3× slower OPT.
+  - Its proof-side promise (a smaller database for the checker) measures as nothing.
+  - Glucose's reduction is designed together with restarts and an activity heuristic. Its
+    "used" signal is participation in conflict analysis, and its LBD is updated as clauses
+    are used. This row has neither. "Used" here means propagated or conflicted, and LBD is
+    the derivation's, because `analysis.ml` and `search.ml` are M10-T1..T3's.
+- **What would make it the default.** A run of M10-T5's sixteen editions in which `tiered` with
+  restarts improves the answer count without a `bacp`-style regression. The knob is
+  `BAGUETTE_RETENTION=tiered[:core=,mid=,first=,inc=,mid_every=]`. A middle ground worth
+  measuring there is a larger `first` or a larger `mid` bound, which keeps more of the base on
+  instances like `bacp`.
+- **The two later configurations (§3, read 2026-11-19) do not change this recommendation.**
+  They sharpen it.
+  - `tiered` with a short schedule (`first=500`) is the candidate to carry into M10-T5. It
+    is the best policy on the codes (QR72 343 → 161 s at the same conflicts), and it is the
+    only configuration that proved a new optimum (`test-scheduling`).
+  - It also has the worst `bacp-22` (4.6 times slower) and a worse `saeling` incumbent. One
+    answer gained against one lost or degraded is not a default.
+  - `lbd:N` is not a candidate, because it loses two optima and an incumbent.
+  - T5 should therefore measure `tiered` at `first=500` and at the Glucose default, with
+    restarts.
+
+### 7. What this row did not do, and where it went
+
+- **The hook in `search.ml`**: filed under `## Cross-session requests` (`c0c2c33`).
+- **An engine call that removes a detached instance from the wake index**: not needed after
+  M6-T22. A detached clause stays only in the index of its two watched variables, and there it
+  costs one closure call that returns `false`.
+- **The PB-row LBD (RoundingSat)**: parked, see §3.
+- **LBD updated on use (Glucose)**: needs a hook in `analysis.ml`, which M10-T1..T3 own.
+  Recorded, not approximated.
+- **Jamali and Mitchell's simplified reduction and CrystalBall**: not built. The first is a
+  different ranking inside the same `evict` (one function). The second needs features this
+  solver does not log yet. Neither is worth building before restarts exist.
+
+## D-0146  M7-T28 first steps and M7-T29's gcc half: the closed gcc forms were never decomposed, a repeated gcc variable is copied away in the model, and `regular` is a layered graph of state flags whose every pruning is one `rup` against its rows and its backward-chain lemmas
+
+**Status**: **DONE** (2026-11-19; opened 2026-11-18, agent-globals, `wave49-globals`). The contract
+is ROADMAP rows M7-T28 (the decomposed globals that kill the search, D-0122) and M7-T29 (the gcc
+refusal of D-0121). Sections 1 and 2 are done and measured; section 3 is the design of
+`regular`, written and checked on the checker BEFORE any solver code (section 4); section 5 is
+the implementation, section 6 the Challenge measurement (final, 160 of 160), section 7 the design
+record of `inverse`.
+
+### 1. `global_cardinality_closed` and `_low_up_closed`: the route already existed
+
+D-0122's census counts 30 instances using `global_cardinality_closed` (26 of them time out with
+no solution) and lists it as **not native**, with the note "gcc over a closed value set, one
+mznlib line each onto gcc.ml". The census reads the model SOURCE (`challenge_globals.py`:
+"an instance uses a global when its model ... calls it"); it does not look at the flattened
+`.fzn`. Flattened, the closed forms were already on `gcc.ml`:
+
+- MiniZinc 2.10.1's `std/fzn_global_cardinality_closed.mzn` is `forall(i)(xs[i] in cover) /\
+  global_cardinality(xs, cover, count)`, and `global_cardinality` reaches
+  `fzn_global_cardinality`, which `mznlib/fzn_global_cardinality.mzn` keeps whole (D-0078).
+- `std/fzn_global_cardinality_low_up_closed.mzn` is the same over
+  `global_cardinality_low_up`, which reaches mznlib's `fzn_global_cardinality_low_up.mzn`
+  (D-0087), plus the par check `|xs| in sum(lbound)..sum(ubound)`.
+
+**Measured** on 2.10.1 (node `fataepyc-06`): the four provenance sources
+`mznlib/test/gcc_{,low_up_}closed_src_{sat,unsat}.mzn`, flattened against `main`'s mznlib (the
+two new files removed), emit exactly one `baguette_global_cardinality` call each and no
+`int_eq_reif`; the domain restriction lands on the declarations. So the 26 empty time-outs are not
+a missing route, and nothing in this row changes how those instances reach `gcc.ml`.
+
+What the two new files (`mznlib/fzn_global_cardinality_closed.mzn`,
+`mznlib/fzn_global_cardinality_low_up_closed.mzn`) do instead:
+
+1. **They pin the route**, so a std that decomposed the closed form again would not change what
+   baguette receives without a line of this repository changing.
+2. **They state the implied row** `sum(counts) = |xs|`, the one consequence of a closed cover
+   `gcc.ml` does not derive (its rules are interval capacities and per-value tallies, never the
+   total). It is an `int_lin_eq`, carried by `Lin_eq` with its own `pol`. It holds only when
+   the cover has no repeated value, and the files guard on that (`card` of the cover as a set
+   against its length) rather than assume it. For `_low_up_closed` the counts are declared in
+   the file, on the bounds `fzn_global_cardinality_low_up.mzn` gives them, so the row has
+   something to sum.
+
+Flattened with the new files the same sources emit one `baguette_global_cardinality` and one
+`int_lin_eq`; all four solve as their names say with proofs VERIFIED by 3.0.2
+(`test/models/gcc_{,low_up_}closed_{sat,unsat}.fzn`, `test/expected/`). Whether the implied row
+changes anything on the 30 instances is section 6's measurement.
+
+### 2. M7-T29, the gcc half: a repeated variable is copied away in the model
+
+`fzn_global_cardinality` with the same variable twice was refused by
+`Compile.post_global_cardinality` (D-0121: nine instances, community-detection 2017, 2021 and
+2026). The cause is MiniZinc's unification: the model's must-link constraints `x[a] = x[b]` make two
+array cells one variable, and `global_cardinality_low_up(x, 1..k, 0, n)` then names it twice.
+Its tally contribution is its multiplicity, and every cancellation in `gcc.ml`'s derivations
+assumes one.
+
+**Two ways out, and the choice.** Teaching `gcc.ml` multiplicities means weighting rule A's
+`|H|`, rule (a)'s saturation test and rule C's tallies, and scaling every ALO and drop line in
+every derivation by the multiplicity: every rule and every proof shape of a 1 200-line module
+whose lines are each measured on the checker. **Normalising the repeat away** costs one pass over
+the model: every occurrence after the first is replaced by a fresh variable declared on the
+original's domain and tied to it by `int_eq`. `gcc.ml` never sees a repeat, the `.opb` is the
+original model with one defined variable per repeat (so it decides the same solutions, projected),
+and nothing in the proof machinery changes. The cost is propagation between the copies: `int_eq`
+is `Lin_eq`, bounds consistent, so a hole `gcc.ml` punches in a copy does not reach the original.
+On the instances that produce the shape the gcc is `low_up` with bounds `[0, n]`, which prunes
+nothing, so the trade costs them nothing measurable. **Chosen: normalise.**
+
+**Where.** `Builder.split_gcc_repeats`, applied by `Builder.finish`, not `Compile`. Measured: the
+first version lived in `compile.ml` and the solver then died printing the solution with "solver
+variable 2 is outside the model's 2 variables", because `bin/main.ml` maps the store back onto
+`Model.vars` and a variable the compiler added is a store variable the model does not have. In
+the builder the copy is a model variable like any other. A copy is named
+`X_INTRODUCED_gcc_copy_<k>` (the flattener's own convention; `check_name_collisions` refuses a
+clash), appended after every model variable so no index moves, and a model with no repeat comes
+back physically unchanged. The refusal in `post_global_cardinality` stays as a guard for a
+`Model.t` built by other means.
+
+`test/models/gcc_repeat_{sat,unsat}.fzn` (from `mznlib/test/gcc_repeat_src_*.mzn`): the SAT one
+has value 1 occurring once among `[a, a, b]`, so its only solution is `[2, 2, 1]` and a front
+end that counted the repeat once would also accept `[1, 1, 2]`; the UNSAT one asks each of 1 and
+2 once among three cells. Both VERIFIED.
+
+### 3. `regular`: the design
+
+`regular(x, Q, S, d, q0, F)`: the word `x[1..n]` drives the DFA with states `1..Q`, transition
+`d[q, v]` (0 = fail) and start `q0` to a state in `F`. MiniZinc 2.10.1's decomposition is
+`n + 1` state variables `a[i] in 1..Q` and `a[i+1] = d[a[i], x[i]]`, an `array_int_element` on a
+computed index per layer; D-0122 measured it at 0 complete of 94 attempted instances, 70 of them
+timing out with no solution.
+
+**3.1 The model rows.** The route is `baguette_regular(x, Q, smin, d, q0, F, s)`
+(`mznlib/fzn_regular.mzn`): `d` flattened row-major over the contiguous symbol range
+`smin..smin+W-1` (0 for a value outside the alphabet, which is how `fzn_regular_set`'s non-
+contiguous `S` is carried), `F` as an array, and `s` an array of `(n+1) * Q` **state flags**
+`var bool`, introduced by the mznlib `let`, `s[i, q]` meaning "after `i` letters the automaton is in
+`q`". The `.opb` holds, over order literals of `x` and the flags' own literals:
+
+- `ALO_i`: `sum_q s[i,q] >= 1` and `AMO_i`: `sum_q ~s[i,q] >= Q - 1`, for every layer `i = 0..n`;
+- `START`: `s[0,q0] >= 1`; `ACCEPT`: `sum_{f in F} s[n,f] >= 1`;
+- `FWD(i, q, R)`: `~s[i,q] \/ x_i notin R \/ s[i+1, t]` for every layer `i < n`, state `q`, and
+  **symbol run** `R = [a, b]`, where `t = d[q, R]` and the clause loses its last literal when
+  `t = 0`. `x_i notin R` is `~x_i_ge_a \/ x_i_ge_(b+1)` with a constant half dropped at a
+  declared bound. A run is a maximal stretch of consecutive values of `x_i`'s declared hull whose
+  COLUMNS of `d` are identical (every state goes to the same place on each of them), so the
+  values outside the alphabet are one run, and a run is exactly the granularity at which every
+  argument below holds.
+
+That is the DFA's own semantics (GCS writes the same rows, `dev_docs/regular.md` "OPB encoding"),
+and it is all the `.opb` says: nothing in it is a consequence the solver computed.
+
+**3.2 The root lemmas.** The forward rows cannot carry a FORWARD death (a state no live
+predecessor edge reaches): that argument is two-dimensional (every pair `(q, v)` of layer `i`
+misses `q'`), and unit propagation fixes neither `a` state nor a value of `x_i`. GCS's answer, and
+this one, is the **backward chain**, one per layer `i < n`, state `q'` and run `R`:
+
+    B(i, q', R):  ~s[i+1,q'] \/ x_i notin R \/ OR_{q : d[q,R] = q'} s[i,q]
+
+derived ONCE, at the start of the proof, as `rup`: negate it and `AMO_(i+1)` clears every other
+flag of layer `i+1`, every `FWD(i, q, R)` with `q` outside the disjunction then forces `~s[i,q]`,
+and `ALO_i` is empty. They are written by `Encoding.start_proof` from a list compile.ml fills
+(`Encoding.add_root_lemma`, one appended block in `encoding.ml`), after the direct encoding and
+before search, never deleted until the end-of-run sweep (search.ml retires every live id before
+the conclusion). Deriving them rather than putting them in the `.opb` is the point: the checker
+verifies each one, so a bug in the inversion of `d` is a REJECTED proof, not a stronger model with
+a verified wrong answer (section 4, probe p2).
+
+**3.3 The propagator** (`lib/core/prop/regular.ml`, new; the layered-graph filtering of Pesant
+2004). Its scope is `x` and the flags, and the flags ARE store variables -- that is what lets every
+state death be an ordinary trail entry with a reason, written by `Trace` like any other pruning,
+instead of a proof line the propagator would have to write itself (GCS's `~state[i][q]` cache).
+One call:
+
+1. **Fixed flags.** A flag fixed to 1 kills every other flag of its layer (`AMO_i`); two fixed
+   to 1 in one layer is a conflict. `START` and `ACCEPT` kill the flags of layer 0 other than
+   `q0` and the flags of layer `n` outside `F` (their reason is empty).
+2. **Forward.** Layer by layer from 0: `q'` at `i+1` is reached iff some reached `q` at `i` has
+   an edge `d[q, v] = q'` with `v in dom(x_i)`. Each unreached live flag is killed (P1).
+3. **Backward.** Layer by layer from `n - 1`: a reached `q` at `i` survives iff some edge leaves
+   it on a value of `dom(x_i)` into a live flag of `i+1`. Each other is killed (P2).
+4. **Values.** `v in dom(x_i)` survives iff some live `q` at `i` has `d[q, v]` live at `i+1`;
+   every other value is removed (P3), one value at a time, so a bound move is a one-value step.
+5. **Fixing.** A layer left with one live flag fixes it to 1 (P4, `ALO_i`). A layer left with
+   none is a conflict (`ALO_i`, the layer's dead flags as facts).
+
+**Consistency: DOMAIN** (SPEC 3.2), for a scope where no variable of `x` repeats: after one call
+every remaining value of every `x_i` lies on an accepting path through the current domains, and
+so does every remaining value of every flag (1 for a live state; 0 because its layer holds
+another live state, or the flag is fixed). That is the definition, over the joint scope. A
+repeated `x` variable couples two layers the graph treats as independent, so that instance is
+packed as `Regular.Aliased`, declared `Checking`, with the same code.
+
+**3.4 Reasons and explanations, as data.** Every pruning's reason is BOUND facts (D-0026):
+
+- P1, `s[i+1,q']` dies forward: per run `R` of `x_i` meeting `[lo, hi]` of `x_i`, either every
+  predecessor `q` of `q'` on `R` is dead (the facts `s[i,q] <= 0`), or every value of `R` in
+  `[lo, hi]` is a hole (the facts of each hole's remover, D-0075's technique, as `element.ml`
+  does); plus `x_i >= lo` and `x_i <= hi` where they are not the declared bounds.
+- P2, `s[i,q]` dies backward: the same per run, with the successor `d[q, R]` dead (or 0) in place
+  of the predecessors.
+- P3, `x_i <> v`: per state `q` with `d[q, v] > 0`, either `s[i,q] <= 0` or `s[i+1, d[q,v]] <= 0`;
+  plus the bound fact `x_i >= v` (resp. `<= v`) when `v` is the current lower (upper) bound, since
+  the claim is then the settled bound and its negation must pin `x_i` to `v`.
+- P4: the other flags of the layer dead. Conflicts: the facts of the pruning that would empty,
+  plus the fixed flag; or the layer's dead flags.
+
+The explanation is `Explanation.clause` of the claim and the negated facts, deferred: the trace
+line itself, which `Justify` memoises against it. **No new `Explanation` constructor** and no
+`deriving_ahead`: every line is RUP once its facts are assumed, against the `.opb` rows, the root
+lemmas and the earlier trace lines (a hole is cited through its remover, so its own line fires).
+Under I-X10 the family is **`Single_row`** in the sense the table already gives `element.ml`:
+one constraint, several rows, plus lines on the page before search -- I-X10's own wording is
+"RUP against the `.opb` plus the lines already on the page".
+
+**3.5 What it costs.** Rows: `(n+1)` ALO/AMO pairs, `n * Q * runs` forward rows and as many
+lemmas, `runs <= |dom x_i|`. A call is `O(n * E)` with `E` the automaton's non-failing edges
+(the transition table is scanned once per layer, per live state, over its out-edges). The flags are
+`(n+1) * Q` Booleans of the store, each one order literal. The decomposition it replaces was
+`n + 1` integer state variables plus an element per layer, so the width is comparable and the
+propagation is not.
+
+### 4. The proof story, checked before coding
+
+`bench/regular_spike/` (`gen_probe.py`, `probe_regular.sh`), run on `fataepyc-06` against VeriPB
+3.0.2 (`d5644ca4`) on 2026-11-18 before any solver code. Instance 1: `Q = 3`, alphabet `{1, 2}`,
+`x_i in 1..3` (3 is outside the alphabet), `q0 = 1`, `F = {3}`, `n = 3`, language `1* 2 1+`.
+Instance 2 is built so that a lemma is load-bearing (two live states in layer 1 and three values
+of `x_1` that unit propagation cannot fix).
+
+| probe | content | verdict |
+|---|---|---|
+| p1 | all 27 lemmas; root deaths by START/ACCEPT, a forward (P1) and a backward (P2) death, two top-bound value removals (P3); below a decision `x0 >= 2` a P1 with its fact and a P4; then `sol` with the flags and `conclusion SAT` | VERIFIED SATISFIABLE |
+| p2 | one lemma too strong (its predecessors dropped, at layer 1) | refused: "The constraint is not implied by reverse unit propagation (RUP)" |
+| p4 | the P1 below the decision with its fact dropped | refused, same wording |
+| p7 | a false bound move (`x1 >= 2` under `x0 >= 2`, where 1 is supported) | refused, same wording |
+| p8 | an interior hole `x1 <> 2` with its fact | VERIFIED |
+| p9 | `sol` naming only `x`, no flag | VERIFIED SATISFIABLE: the checker fills the flags by propagation (the solver lists them anyway, they are store variables) |
+| p10 | `sol` of a word the DFA rejects, with its honest state run | refused: "The given assignment falsifies the constraint with ID 13" |
+| p11 | `rup >= 1` on a satisfiable instance | refused, RUP wording |
+| q1 / q2 | instance 2: a forward death below the root with all lemmas / with the three it needs dropped | VERIFIED / refused, RUP wording |
+
+Measured facts that shaped the design, not only confirmed it: dropping ONE lemma is often not a
+negative (p3, and p5/p6, verify) because the sweep from the top fixes `x_i` and the forward rows
+finish the argument, and at layer 0 a "too strong" lemma is implied by `START` -- the negative
+controls had to be built where a layer holds two live states and a value range unit propagation
+cannot fix (q2).
+
+### 5. `regular` as built, and what checks it
+
+**Files.** `lib/core/prop/regular.ml` (new; its header is section 3 in the code's words);
+`lib/flatzinc/compile.ml`, one block `post_regular` plus its dispatch arm and its bits-hold arm
+(the letters stay on the order encoding: the rows are over their ladders); `Model.Regular` and
+its oracle arm (`Model.regular_run`), `Builder`'s `baguette_regular` arm; one appended block in
+`lib/proof/encoding.ml` (`add_root_lemma`, `emit_root_lemmas`, called last in `start_proof`);
+`mznlib/fzn_regular.mzn`, `mznlib/fzn_regular_set.mzn`. No `Explanation` constructor, no
+`deriving_ahead`, nothing in `justify.ml`, `trace.ml`, `search.ml`.
+
+**Three things the design did not say and the code had to.**
+
+1. **One value at a time.** A letter value removed at a bound is its own trail entry, so the
+   claim is the settled bound and its negation pins the letter to the ONE value whose edges
+   the forward rows refute; a multi-value bound move would leave the letter unpinned and the
+   line not RUP. The reason then carries the bound fact `x >= v` (or `<= v`) that pins it.
+2. **The tail's order.** Per-value facts first, the letter's bound facts last. Nothing in the
+   proof depends on it; it lets the `death-fact` mutation lane drop the last literal and hit
+   the decision fact instead of a root fact the page restores (GCS's trap 3).
+3. **A layer emptied, or a fixed flag killed, is reported by the propagator**, never by
+   `Store.apply`'s failing arm, whose derivation would be the one pruning's and not the
+   contradiction (element.ml's reason, the same rule).
+
+**Cost, measured.** On `2011_nonogram_non_med_1` (100 regulars, 72 369 flags) the first version
+spent a quarter of its time in the GC and in polymorphic hashing of reason facts; the call now
+allocates only the reasons it writes (predecessor table and scratch arrays at `make`, dead-flag
+facts deduplicated by a stamp). The proofs of the two versions are the same line for line (same
+facts, same order). The node rate stays about 140 nodes/s over its first 600 nodes and falls to 40/s over a minute
+as the learned database grows, most of it outside `regular.ml` (learned-clause instances,
+analysis), with 1UIP clauses of 16+ literals: a flag death's reason
+is every dead predecessor, and the cut lands on flags. Smaller reasons (on letters only) are the
+obvious next lever for the nonograms that time out (section 6); they are not in this row.
+
+**Tests.**
+
+- `test/unit/test_prop.ml`, brute force: 300 random automata (2 or 3 states, alphabet `1..2`,
+  letters declared `0..3` so two values fail everywhere) x 4 random narrowings (letter bounds and
+  holes, flags fixed either way): **I-P1** (no solution lost, no conflict where one exists),
+  **DOMAIN consistency over letters and flags** (every remaining value of every variable is in a
+  solution within the current domains), **I-P2** (a second call changes nothing). 1 200 scenes,
+  370 pruned, 830 conflicts, 0 violations.
+- `test/unit/test_prop.ml`, the checker: the root-lemma counts (`n * Q * runs`: 48 for
+  instance 2, 20 for the next), and a model whose first branch fails under a decision the root
+  does not see (no two consecutive 2s, letters summing to 8): its proof, 20 lemmas and 44 trace
+  and nogood lines, VERIFIED.
+- `test/unit/test_mutation.ml`, three lanes behind a control, each refused at the RUP wording
+  ("The constraint is not implied by reverse unit propagation (RUP) from core and derived
+  database."): `lemma-rhs` (one lemma's degree raised: the lemmas are checked), `death-fact` (the
+  forward death of `s2_4` under the split `x1 <= 2`, its decision fact dropped), `no-lemmas` (all
+  48 lemmas deleted, their labels taken out of the end-of-run `del`: that death has nothing left
+  to sweep `x1` with).
+- The M2-T10 oracle (`BAGUETTE_CONSISTENCY=1`) on the four regular models: `CHECKED: regular
+  (domain)` x8, x1, x3 (some instance-checks of `regular_opt` skipped over the tuple cap, stated
+  by the oracle), no violation; `BAGUETTE_DEBUG=1` and the I-X2 audit on, all four VERIFIED.
+- Models (`test/models/`, flattened from `mznlib/test/*_src*.mzn`, every proof VERIFIED):
+  `regular_sat` (4x4 nonogram by regular expressions), `regular_unsat` (3x3 with disagreeing
+  clues), `regular_set_sat` (alphabet `3..5`, the gap 4 failing), `regular_opt` (a roster
+  maximised to 13 with a bound proof); and section 1-2's six gcc models. `check_mznlib.sh`: 26
+  ok, 0 failed (every new source flattens to its route, none to the decomposition).
+- I-X10: `regular.ml` is classified `Single_row` in `test/unit/test_trace.ml`'s table.
+
+**Gate** (fresh clone of `wave49-globals` at `b8a7817` on `fataepyc-06`, binary `c1485cc6`,
+`make check` under `ulimit -v 4000000`): rc 0, model tests 189 passed, determinism 189 models
+identical, mutation 96 checks passed, peak RSS 97 056 kB. Every test model against `main`'s
+gate-52 binary (`307879fa`): 183
+of 189 byte-identical in `.out`, exit code, `.opb` and `.pbp`; the 6 that differ are the six the
+old binary cannot read (`regular_*` x4: `baguette_regular` is unknown to it; `gcc_repeat_*` x2:
+it refused the repeat). The closed-gcc models are identical under both (the route was std's).
+**Differential lane** (`origin/wave47-lanes` merged, `make diff ARGS="--tier all -j 24"`, at `abae541` and again at `b8a7817`): 232
+of 232 runs equal the reference.
+
+### 6. The Challenge instances, before and after
+
+**The run.** `scripts/compare_run.sh` over the 160 Challenge instances whose model source calls
+`regular`, a closed gcc, or is community-detection, selected from `bench/challenge/<Y>.lst` by
+`bench/regular_spike/select_globals.py` (list at `/scratch/arthur/wave49-globals-inst.lst`).
+Each instance re-flattened with THIS branch's mznlib (MiniZinc 2.10.1, `tools/baguette.msc`),
+baguette only, 300 s, proof on, `MEM_KB=16777216`, `PROOF_CAP_KB=16000000`, 10-way, every
+complete answer's proof checked by `veripb` 3.0.2; frozen clone
+`/scratch/arthur/wave49-globals-meas-src-after` at `bde7930`, binary `08361947` (before section
+5's tail reorder and allocation change: the same prunings and the same facts per line, the
+tail's literals in another order); output `/scratch/arthur/wave49-globals-meas-after/`, all 160
+done on 2026-11-18 18:43. **Before** is wave 43's run of the sixteen editions (D-0133's baseline,
+`/scratch/arthur/wave43run/<Y>/results.tsv`, binary `a6327dc6`, **1 200 s**): the old binary had
+four times the time.
+
+**Grouped by the routes the FLATTENED model takes**, not by the source.
+`bench/regular_spike/count_routes.sh` flattened all 160 with this library and counted the
+`baguette_regular` and `baguette_global_cardinality` calls (`/scratch/arthur/wave49-globals-routes.tsv`,
+160 OK). It matters: gbac names `regular` in its source and calls it zero times once flattened,
+so the source grouping put it in the wrong row. Read with
+`bench/regular_spike/join_globals.py <list> <wave43run> <after> <routes.tsv>`; a SAT answer to
+a satisfaction problem counts as complete, a time-out with a solution as an incumbent.
+
+| route reached | n | before: complete / incumbent / no answer | after: complete / incumbent / no answer |
+|---|---|---|---|
+| `regular` only | 65 | 5 / 16 / 44 (34 time-out, 9 refused, 1 capped) | **18 / 17 / 30** (28 time-out, 2 refused) |
+| `regular` and gcc | 45 | 0 / 5 / 40 (35 time-out, 5 refused) | 0 / 6 / 39 (38 time-out, 1 refused) |
+| gcc only (the closed forms) | 30 | 4 / 1 / 25 (8 capped, 9 refused, 7 time-out, 1 error) | 4 / 2 / 24 (9 capped, 8 refused, 6 time-out, 1 error) |
+| gcc with a repeated variable (community-detection) | 20 | 0 / 0 / 20 (all refused) | **1 / 15 / 4** (3 time-out, 1 refused) |
+
+**Every complete answer whose proof was checked is VERIFIED, none REJECTED: the 18 `regular`
+and the 4 gcc.** The one exception is the community-detection OPT
+(`2021_..._rnd_n100_e5000_s500_d300_c4_p50`, 2 484 055 in 45 s): `veripb` ran out of memory
+under the harness's cap ("memory allocation of 683697504 bytes failed") on a 2 GB `.opb` whose
+`objective` is declared 14 227 894 wide. That is a finding about width (D-0028), not about these
+routes, and the answer stands UNCHECKED: no re-run with a raised cap.
+
+What moved, by name:
+
+- **`regular`, 13 new complete answers** (10 time-outs, 3 refusals before): nonograms 2011
+  `non_fast_3`, `non_fast_6`, `non_med_1`, 2012 `non_awful_5`, `non_fast_4`, `non_fast_11`,
+  2013 `dom_08`; pentominoes 2011 `_02`, `_06`, 2013 `pentominoes-int_02`, `_06`, 2020 `_02`,
+  `_06`; in 33 to 270 s. D-0122 had counted `regular` at 0 complete of 94 attempted. One new
+  incumbent (2014 `traveling-tppv_circ14bnonbal`); five refusals became attempts that time out
+  (the `_04` pentominoes, two zayenz). One regression in kind, not in answer:
+  `2021_pentominoes-zayenz_size_20_tiles_15_seed_4711` was CAPPED (proof file) and is now
+  refused by the 8 GB heap budget at 182 s; neither run answered.
+- **`regular` with gcc** (elitserien handball, rotating-workforce, generalized peaceable queens, work-task-variation): one
+  refusal became an incumbent and three became time-outs; no new complete answer. These are
+  optimisation models where `regular` is one constraint among many.
+- **The closed gcc forms** (gbac, blocks-world, gcc-benchmark): no change in kind, as section 1 predicted -- the route was std's
+  already, and the implied row does not move these instances. gbac dominates the row: 8 CAPPED
+  and 8 REFUSED at the width wall or the heap budget before and after, its load variables
+  declared tens to hundreds of thousands wide. One refusal became an incumbent
+  (`2016_gbac_reduced_UD6`), and `2026_gbac_csplib12`, a time-out with no solution at 1 200 s,
+  now finds 2058 before the heap budget stops it at 186 s (the harness files it REFUSED).
+- **The repeated gcc variable**: all 20 community-detection instances were refused; 19 are now
+  attempted, 15 with an incumbent and one OPT. The remaining refusal is
+  `2024_community-detection_Polblogs`, whose `objective` is declared 125 096 898 wide.
+
+**Reading.** The reach this row bought is `regular` on satisfaction models (nonogram,
+pentominoes: 5 -> 18 complete of 65, all verified) and community-detection (0 -> 16 answers of
+20). The nonograms still timing out are section 5's per-node cost and wide learned clauses, the
+next lever; the gcc rows are held by width, not by gcc.
+
+### 7. `inverse`: the design record, before any code (step 5 of the row)
+
+D-0122: 70 instances, 44 of the 50 attempted time out with no solution. MiniZinc 2.10.1's
+`std/fzn_inverse.mzn` is `f[i] in index_set(invf) /\ invf[f[i]] = i` and the mirror, an
+`array_var_int_element` per position, which baguette's subset does not have, so it reaches the
+solver as std's further decomposition: `n^2` reified equalities and their clauses.
+
+**7.1 The model rows** (`baguette_inverse(f, fmin, g, gmin)` from a mznlib `fzn_inverse`, the
+offsets carrying the two index sets): std's semantics as CHANNEL clauses over the order
+literals, per pair `(i, j)` of declared values, both directions, each `x = v` split into its two
+order halves:
+
+    CH(i, j)    f_i <> j  \/  g_j >= i        f_i <> j  \/  g_j <= i
+    CH'(j, i)   g_j <> i  \/  f_i >= j        g_j <> i  \/  f_i <= j
+
+`4 n^2` rows of at most three literals, no auxiliary, no direct encoding: the decomposition std
+writes, minus its reifiers.
+
+**7.2 Stage 1, the propagator: channel filtering**, `j in dom(f_i) <=> i in dom(g_j)` both
+ways, the `element` shape twice. Consistency **Checking** honestly (arc consistent on each
+channel pair, which is not domain consistency of `inverse`: that needs `all_different`'s
+matching on `f`). Every pruning is one `rup` with its facts on the tail -- the bound or the hole
+remover of the other side -- so the family is `Single_row`. **Measured** (`bench/regular_spike/
+probe_inverse.sh`, `n = 3`, 3.0.2 on `fataepyc-06`): a bound prune under a fact (`i1`) and an
+interior hole (`i2`) VERIFY; a prune the facts do not support (`i3`) is refused at the RUP
+wording.
+
+**7.3 Stage 2, `all_different` strength, and the one open question.** Both arrays of an
+`inverse` are permutations, so `all_different(f)` is implied, and running `alldiff.ml` over `f`
+and over `g` gives the matching's pruning. Its derivations cite pairwise rows `f_i <> j \/ f_k
+<> j` which the `.opb` above does not state -- and must not post as model rows (an implied row
+posted is the trust section 3.2 refused). They are ROOT LEMMAS: **measured**, the pairwise row
+is `rup` from `CH(i,j)` and `CH(k,j)` at the root (`i4` VERIFIES). So stage 2 is section 3.2's
+mechanism with one addition: `Encoding.add_root_lemma` has to hand back an id `alldiff.ml` can
+cite in its `pol`, which the regular lemmas never needed (they are used by unit propagation
+only). That API, and whether alldiff's derivations survive citing proof lines instead of model
+rows, is what a stage-2 probe must settle first.
+
+A measured surprise worth keeping: a Hall prune (`f1, f2 in {1, 2}` so `f3 >= 3`, `i5`) is
+already RUP over the channel rows of `n = 3` -- the mirror side does the counting, `g_3` having
+one possible preimage left. It is the singleton complement that makes it so; with two values
+outside the Hall set unit propagation fixes nothing, and stage 2 is still needed.
+
+## D-0150  M7-T32: the MiniZinc standard flags. `tools/baguette.msc` declares `-i -f -n -p -r -s -t -v`, each maps onto an option the CLI already had, every improving solution was already printed with its `soli`, and enumerating a satisfaction model is refused until it has a proof shape
+
+**Status**: **DONE** (2026-11-19, agent-flags, `wave51-flags`). The contract is ROADMAP row
+M7-T32, opened from the user's remark that baguette should take the same options as the other
+entrants. `search.ml` was not touched (M7-T31 holds it): nothing here needed a new search hook.
+
+### 1. What MiniZinc passes a solver, measured
+
+The FlatZinc specification (docs.minizinc.dev, `fzn-spec`, "Solver configuration files" and
+"Statistics output") gives the meaning of each standard flag. `-a` reports all solutions of a
+satisfaction problem and intermediate solutions of an optimisation problem. `-i` prints
+intermediate solutions of an optimisation problem, and "should be supported rather than -a for
+solvers which only support printing of intermediate solutions". `-n i` stops after `i` solutions
+of a satisfaction problem. `-f` is free search (ignore the search annotations). `-s` prints
+statistics. `-v` logs to stderr. `-p i` runs `i` threads. `-r i` is the random seed. `-t ms` is a
+wall time limit in milliseconds. The page does not say which of `-a` and `-i` the driver passes,
+so that was measured: a fake solver that logs its argv, three `.msc` files (declaring `-a` and
+`-i`, `-a` only, `-i` only), MiniZinc 2.10.1 on `fataepyc-06`.
+
+- The flags always come BEFORE the `.fzn` path.
+- On an optimisation model `-a`, `-i`, `--all-solutions` and `--intermediate-solutions` all
+  reach the solver as `-i` when it declares `-i`, and as `-a` when it declares only `-a`.
+- On a satisfaction model `-a` reaches the solver as `-a` when it is declared. When only `-i`
+  is declared MiniZinc passes nothing and prints `WARNING: Solver does not support all
+  solutions for satisfaction problems.` `-i` on a satisfaction model is dropped.
+- `-n i` reaches the solver on a satisfaction model only, and `-n 1` never does.
+- `--time-limit 5000` reaches it as `-t 4888`, the flattening time taken off, and
+  `--solver-time-limit 5000` as `-t 5000`.
+- `-f`, `-s`, `-p 4`, `-r 7` reach it as given.
+
+The `.msc` of the bundle's Chuffed declares `-a -f -n -r -s -t -v --cp-profiler`, Gecode's
+`-a -f -n -p -r -s -t --cp-profiler`, CP-SAT's `-a -i -f -p -r -s -v`.
+
+### 2. The declaration and the mapping
+
+`"stdFlags": ["-i", "-f", "-n", "-p", "-r", "-s", "-t", "-v"]`, and `--proof` as an extra flag
+of type string, so that `minizinc --solver baguette --proof P` writes `P.opb` and `P.pbp` (SPEC
+§1: the proof is a primary output; `--fzn-flags "--proof P"` also works). `-a` is NOT declared,
+because baguette prints intermediate solutions but cannot enumerate those of a satisfaction
+model (section 4). Declared this way MiniZinc maps `-a` to `-i` on an optimisation model by
+itself, and on a satisfaction model it warns and runs the first solution, which is the
+specification's own answer for such a solver. The CLI still accepts `-a` for a direct caller.
+
+| flag | baguette |
+|---|---|
+| `-i` | Accepted, no change. Since M5-T1 every improving solution is printed as it is found, each followed by `----------`, and `==========` follows the last when the proof establishes it is optimal (SPEC §2.2). On a satisfaction model it has no effect. |
+| `-a`, `--all` | On an optimisation model, `-i`. On a satisfaction model, REFUSED, exit 3, after the model is read (before M7-T32 `--all` was refused on every model, before the parse). |
+| `-n N` | `N >= 1`. `N = 1` is the default behaviour. `N > 1` on a satisfaction model is REFUSED as `-a` is. On an optimisation model it is ignored, as the specification uses it for satisfaction only. |
+| `-f` | `--search alternate --restarts luby --phase-saving`, each only where `--search` or `--restarts` was not given explicitly, in either order on the line. Chuffed's free search is the alternation of the annotation with its activity order under restarts (D-0137 section 4), Luby on a unit of 100 conflicts is D-0137 section 0's reading of Chuffed's restart counts, and phase saving is what Chuffed's SAT layer does. See section 5 for the warning. |
+| `-t MS` | `--time-limit MS/1000`: the same stop (wall clock from process start, parse and compile inside it), the same `limit:` line and `conclusion NONE`. A later `-t` or `--time-limit` wins. |
+| `-r SEED` | Accepted and unused. Nothing on the CLI's path draws a random number (`Search.random_order` is the tests' fuzzer and has its own state). |
+| `-p N` | Accepted. The run uses one thread. |
+| `-s` | `--stats` (stderr, unchanged), plus ONE block on stdout after the run's last marker: `%%%mzn-stat:` lines `nodes`, `failures` (the search's conflicts), `restarts`, `peakDepth`, `nogoods` (learned clauses and PB rows), `propagations` (propagator runs), `objective` (when a solution was found on an optimisation model), `initTime` (wall seconds from process start to the search's entry), `solveTime` (wall seconds of the search), then `%%%mzn-stat-end`. No `nSolutions`: `solns2out` counts the solutions and prints that line itself. |
+| `-v` | One line on stderr naming the search, the restart policy, phase saving and the time limit the flags became. |
+
+A malformed argument (`-t abc`, `-t -5`, `-n 0`, `-p 0`, `-r x`, a flag with no argument) is a
+usage error, exit 2, as every other option's is. The notes for `-r` and `-p N > 1` and the
+warning for `-f` go to stderr under `--stats`, `-s` or `-v` only, so that a run that asked for
+none of these keeps the empty stderr M1-T49 requires.
+
+### 3. Intermediate solutions and the proof
+
+Nothing had to change. `Search.optimise` calls the CLI's `on_solution` at each improving
+solution (`Search.record_improving`), after the independent check I-S1 of that solution and
+before the `soli` line that logs it and yields the strictly-improving constraint
+(`Writer.improving`). So the solutions printed and the `soli` lines of the proof are in one to one
+correspondence, and the last printed solution is the one `conclusion BOUNDS` names when the
+search finishes. A stopped run prints the improving solutions it found and no `==========`, and
+its proof ends `conclusion NONE` (SPEC §2.2, M6-T9), with one `soli` per printed solution as well.
+
+Measured through `minizinc --solver tools/baguette.msc` on `fataepyc-06` (binary md5
+`3298a0cdc8a6b13d7fb045116e87e3ca`, commit `3fcafda`, MiniZinc 2.10.1, veripb 3.0.2), on three
+small MiniZinc models written for this (a 6-item knapsack maximising profit, 4 jobs on 2 machines
+minimising the makespan, an 8-mark Golomb ruler):
+
+| model, flags | printed solutions | last printed | proof | veripb |
+|---|---|---|---|---|
+| knapsack `-i` (and `-a`, none, `-i -f`) | 3 (profit 0, 11, 20) | 20, then `==========` | 3 `soli`, `conclusion BOUNDS -20` | `VERIFIED BOUNDS -20 <= obj <= -20` |
+| makespan `-i` (and `-a`, none, `-i -f`) | 3 (span 14, 9, 7) | 7, then `==========` | 3 `soli`, `conclusion BOUNDS 7` | `VERIFIED BOUNDS 7 <= obj <= 7` |
+| Golomb `-i -t 3000` | 6 (length 44, 41, 40, 39, 38, 36) | 36, no `==========` | 6 `soli`, `conclusion NONE` | `VERIFIED NO CONCLUSION` |
+| Golomb `-i -f -s -t 3000` | 6, same lengths | 36, then the `-s` block | 6 `soli`, `conclusion NONE` | `VERIFIED NO CONCLUSION` |
+| `a < b < c` over 1..4, satisfy, `-s -r 3 -p 4 -t 5000` | 1 | `----------`, then the `-s` block | `conclusion SAT` | `VERIFIED SATISFIABLE` |
+
+The knapsack's optimum 20 and the makespan's 7 are checked by hand (items 7 and 8, or 3, 4 and
+8, fill the capacity 15; the durations 3+4 and 2+5 split 14 evenly). On the satisfaction model
+`-a` gave MiniZinc's warning and one solution, `-n 1` one solution, and `-n 2` baguette's
+refusal (MiniZinc prints `=====ERROR=====`).
+
+### 4. Refused: every solution of a satisfaction model, and the design for later
+
+`-a`, `--all` and `-n N > 1` on a satisfaction model exit 3 with a message that names this
+record. Enumeration needs two things that do not exist.
+
+1. **A search that continues past a solution.** `Search.solve` returns the first. Continuing is
+   the branch-and-bound loop of `Search.optimise` with the improving constraint replaced by the
+   exclusion of the solution just found. That is `search.ml`, which M7-T31 holds this week, and
+   no request is filed for it because the second need decides its shape.
+2. **A proof shape for "no other solution".** `Writer.solution_excluding` writes `solx`, which
+   veripb 3.0.2 refuses outside a preserved set ("Logging and excluding a solution with 'solx'
+   is only possible if a preserved set is specified", M1, recorded at the function). The
+   exclusion of a solution is not implied by the model, so it cannot be a `rup` or a `pol` line,
+   and a `red` that adds it would be wrong. The shape to measure on the checker BEFORE any code
+   is a preserved set over the order literals of the OUTPUT variables, one `solx` per solution
+   (excluding the projection, so two solutions that differ only on non-output variables are one
+   solution, as `solns2out` prints them), the search refuting the rest under those exclusions,
+   and `conclusion UNSAT` after the last one with `==========` on stdout. Whether veripb 3.0.2's
+   preserved-set syntax takes the order literals of a variable as one unit, and what it then
+   checks of each `solx`, is the first measurement.
+
+Printing one solution and letting its `----------` stand for "the only one" would be a claim no
+proof makes, which is why the CLI refuses rather than degrading.
+
+### 5. `-f` is not proof-safe on every instance yet
+
+`-f` is exactly the combination `saltlubyps` of D-0137 section 10.2, and section 13 point 1 (b)
+records a branch nogood veripb refuses under it on `2017_hrc_exp1-1-5670`. That is open as
+M7-T31. Until it lands a `-f` run may print correct solutions with a proof the checker refuses,
+which SPEC §1 calls a failed run. So the CLI says it on stderr under `--stats`, `-s` or `-v`
+(`baguette: WARNING -f (free search) is ... NOT proof-safe on every instance yet ... M7-T31`), the
+usage text says it, and the Challenge harness must not pass `-f` for a proved category until
+M7-T31 is closed. The default (no `-f`) is byte-identical to main, which the gate checks.
+
+### 6. Tests
+
+`test/unit/test_endtoend.ml`, `test_m7t32_std_flags`, 30 checks through `bin/main.exe` on an
+optimisation model with two improving solutions and a satisfaction model: `-i`, `-a`, `--all`
+and `-n 3` on the optimisation model, `-i` and `-n 1` on the satisfaction model, `-t 600000` and
+`-r 7 -p 4` all leave stdout byte-identical to the plain run and stderr empty; `-i --proof` has
+one `soli` per printed solution and verifies at the printed optimum; `-f --proof` reaches the same
+optimum and verifies; `-s` keeps the plain stdout as a prefix and appends exactly one block that
+ends `%%%mzn-stat-end` and names `objective=2`; `-f -v` names `alternate`, `luby:100` and phase
+saving with the M7-T31 warning; an explicit `--search` and `--restarts` win over `-f` on either
+side of it; `-t 2500` is 2.5 s; enumeration on the satisfaction model exits 3 with stdout empty;
+six malformed arguments exit 2. MiniZinc's own handling (section 1) is not a unit lane, since
+the suite does not depend on a MiniZinc install; section 3's runs are the end-to-end evidence.
+
+### 7. The gate (fataepyc-06, fresh clone of `wave51-flags` at `362066a`, binary md5 `3298a0cdc8a6b13d7fb045116e87e3ca`)
+
+`/scratch/arthur/gate53.sh` without its two `--update` lines, so no lane reference was recorded.
+The commits after `362066a` are documentation only.
+
+- **`make check` stops at `fmt-check` on `test/unit/test_prop.ml`**, before building. That is
+  main's own debt: a clean clone of `e34e133` fails the same way on the same file (one blank
+  line missing before the M7-T28 banner). This branch's two `.ml` pass `ocamlformat --check`.
+  The rest of `check` was then run in its order, `make build lint determinism unlimit
+  selftests test`: build, lint, determinism, unlimit and selftests pass; `unit` fails on
+  **5 checks of `test_retention`** (`(a)` and `(c)` "deep shipped", the policy that should evict
+  nothing), and `test_retention.exe` built from `e34e133` fails the same 5. Every other unit
+  check passes (4 114 `ok`, the 30 of section 6 among them). `make models`, which `make` skipped
+  after the unit failure: **192 passed, 0 failed**. Peak RSS 41.8 MB (the targets above) and
+  38.7 MB (`make models`), under `ulimit -v 4000000`.
+- **The default is unchanged.** The 192 models run with `--proof` by the branch's binary and by
+  `e34e133`'s: `.out`, exit code, `.opb` and `.pbp` byte-identical on all 192.
+- **`make diff ARGS="--tier all -j 24"`**: 117 of 301 runs differ from the recorded references,
+  in five configurations only: `fifo` 24 and `lbd` 24 (counters moved by M10-search-strategy-T4's
+  `Retention.gate`, `36c1312`, recorded before it) and `restarts`, `activity`, `alternate` 23 each
+  (no reference recorded on main yet). Every run of every other configuration is equal. The same
+  lane with `--bin` set to `e34e133`'s binary prints **the identical 117 `DIFF` lines**, so the
+  branch adds no difference to main's. The three findings above are filed in WORKLOG,
+  `## Cross-session requests`.
 
 ## D-0148  M7-T31: a factless pruning that settled over a hole is not a root of the decision closure; the refused branch nogoods on hrc were that, not the assignment shape
 

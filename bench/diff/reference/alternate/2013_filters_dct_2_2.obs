@@ -1,0 +1,179 @@
+rc 0
+out objective = 71;
+out t = array1d(1..48, [47, 47, 23, 46, 1, 0, 0, 1, 48, 48, 23, 2, 2, 3, 49, 4, 48, 50, 49, 59, 57, 51, 28, 26, 55, 47, 53, 24, 10, 8, 6, 4, 62, 66, 61, 65, 64, 58, 63, 57, 70, 69, 68, 67, 27, 26, 10, 8]);
+out r = array1d(1..48, [1, 2, 1, 2, 2, 2, 1, 1, 1, 2, 2, 2, 1, 1, 1, 1, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]);
+out ----------
+out objective = 70;
+out t = array1d(1..48, [47, 47, 23, 46, 1, 0, 0, 1, 48, 48, 23, 2, 2, 3, 49, 4, 48, 50, 49, 59, 57, 51, 28, 26, 55, 47, 53, 24, 10, 8, 6, 4, 62, 66, 61, 65, 63, 58, 62, 57, 67, 69, 68, 67, 27, 26, 10, 8]);
+out r = array1d(1..48, [1, 2, 1, 2, 2, 2, 1, 1, 1, 2, 2, 2, 1, 1, 1, 1, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 1, 1, 1, 1, 2, 1, 1, 1, 1]);
+out ----------
+out objective = 69;
+out t = array1d(1..48, [47, 47, 23, 46, 1, 0, 0, 1, 48, 48, 23, 2, 2, 3, 49, 4, 48, 50, 49, 59, 57, 51, 28, 26, 55, 47, 53, 24, 10, 8, 6, 4, 62, 66, 61, 65, 63, 58, 62, 57, 67, 66, 68, 67, 27, 26, 10, 8]);
+out r = array1d(1..48, [1, 2, 1, 2, 2, 2, 1, 1, 1, 2, 2, 2, 1, 1, 1, 1, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 1, 1, 2, 1, 2, 1, 1, 1, 1]);
+out ----------
+out objective = 68;
+out t = array1d(1..48, [47, 47, 23, 46, 1, 0, 0, 1, 48, 48, 23, 2, 2, 3, 49, 4, 48, 50, 49, 59, 57, 51, 28, 26, 55, 47, 53, 24, 10, 8, 6, 4, 62, 66, 61, 65, 63, 58, 62, 57, 67, 66, 64, 67, 27, 26, 10, 8]);
+out r = array1d(1..48, [1, 2, 1, 2, 2, 2, 1, 1, 1, 2, 2, 2, 1, 1, 1, 1, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 1, 1, 2, 1, 2, 1, 1, 1, 1]);
+out ----------
+out objective = 67;
+out t = array1d(1..48, [47, 47, 23, 46, 1, 0, 0, 1, 48, 48, 23, 2, 2, 3, 49, 4, 48, 50, 49, 59, 57, 51, 28, 26, 55, 47, 53, 24, 10, 8, 6, 4, 62, 53, 61, 65, 59, 58, 62, 57, 63, 66, 64, 63, 27, 26, 10, 8]);
+out r = array1d(1..48, [1, 2, 1, 2, 2, 2, 1, 1, 1, 2, 2, 2, 1, 1, 1, 1, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 1, 2, 1, 1, 2, 1, 2, 1, 1, 1, 1]);
+out ----------
+out objective = 65;
+out t = array1d(1..48, [0, 1, 30, 30, 29, 2, 0, 1, 2, 32, 31, 31, 3, 4, 33, 32, 1, 50, 3, 59, 57, 34, 31, 38, 55, 47, 53, 36, 10, 37, 35, 5, 34, 53, 61, 42, 59, 58, 52, 57, 63, 62, 64, 63, 39, 38, 41, 40]);
+out r = array1d(1..48, [2, 1, 1, 2, 2, 1, 1, 2, 2, 2, 1, 2, 2, 1, 1, 1, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 1, 2, 1, 1, 1, 2, 1, 1, 1, 1, 2, 1, 2, 1, 1, 1, 1]);
+out ----------
+out objective = 63;
+out t = array1d(1..48, [2, 3, 30, 30, 0, 0, 2, 3, 4, 32, 1, 1, 4, 5, 33, 32, 4, 50, 6, 59, 32, 36, 31, 38, 33, 47, 34, 2, 10, 2, 35, 8, 34, 49, 61, 38, 38, 58, 52, 57, 50, 62, 59, 58, 39, 35, 41, 40]);
+out r = array1d(1..48, [2, 1, 1, 2, 2, 1, 1, 2, 2, 2, 1, 2, 1, 1, 1, 1, 1, 2, 1, 1, 1, 1, 2, 1, 2, 1, 1, 2, 1, 1, 2, 1, 2, 1, 1, 1, 2, 1, 1, 1, 1, 2, 1, 2, 1, 1, 1, 1]);
+out ----------
+out objective = 60;
+out t = array1d(1..48, [2, 3, 30, 30, 0, 0, 2, 3, 4, 32, 1, 1, 4, 5, 33, 32, 4, 50, 6, 4, 32, 36, 31, 38, 33, 47, 34, 2, 10, 2, 35, 8, 34, 49, 8, 39, 38, 58, 52, 57, 50, 40, 59, 58, 39, 35, 41, 40]);
+out r = array1d(1..48, [2, 1, 1, 2, 2, 1, 1, 2, 2, 2, 1, 2, 1, 1, 1, 1, 1, 2, 1, 2, 1, 1, 2, 1, 2, 1, 1, 2, 1, 1, 2, 1, 2, 2, 1, 1, 1, 1, 1, 1, 1, 2, 1, 2, 2, 1, 1, 1]);
+out ----------
+out objective = 59;
+out t = array1d(1..48, [2, 3, 30, 30, 0, 0, 2, 3, 4, 32, 1, 1, 4, 5, 33, 32, 4, 50, 6, 4, 32, 36, 31, 38, 33, 47, 34, 2, 10, 2, 35, 8, 34, 49, 8, 39, 38, 40, 52, 57, 50, 41, 42, 58, 39, 35, 41, 40]);
+out r = array1d(1..48, [2, 1, 1, 2, 2, 1, 1, 2, 2, 2, 1, 2, 1, 1, 1, 1, 1, 2, 1, 2, 1, 1, 2, 1, 2, 1, 1, 2, 1, 1, 2, 1, 2, 2, 1, 1, 1, 2, 1, 1, 1, 2, 1, 2, 2, 1, 1, 1]);
+out ----------
+out objective = 54;
+out t = array1d(1..48, [2, 3, 30, 30, 0, 0, 2, 3, 4, 32, 1, 1, 4, 5, 33, 32, 4, 50, 6, 4, 32, 36, 31, 38, 33, 47, 34, 2, 10, 2, 35, 8, 34, 49, 8, 39, 38, 40, 52, 36, 50, 41, 42, 53, 39, 35, 41, 40]);
+out r = array1d(1..48, [2, 1, 1, 2, 2, 1, 1, 2, 2, 2, 1, 2, 1, 1, 1, 1, 1, 2, 1, 2, 1, 1, 2, 1, 2, 1, 1, 2, 1, 1, 2, 1, 2, 2, 1, 1, 1, 2, 1, 1, 1, 2, 1, 2, 2, 1, 1, 1]);
+out ----------
+out objective = 51;
+out t = array1d(1..48, [2, 3, 30, 30, 17, 16, 1, 17, 4, 32, 19, 19, 18, 18, 33, 20, 4, 4, 6, 6, 32, 36, 31, 38, 33, 47, 34, 20, 19, 21, 22, 23, 34, 49, 8, 39, 38, 40, 38, 36, 50, 41, 42, 40, 39, 35, 41, 29]);
+out r = array1d(1..48, [2, 1, 1, 2, 1, 1, 1, 2, 2, 2, 1, 2, 2, 1, 1, 2, 2, 1, 1, 2, 1, 1, 2, 1, 2, 1, 1, 1, 2, 2, 1, 2, 2, 2, 1, 2, 1, 1, 2, 1, 1, 2, 1, 2, 1, 1, 1, 2]);
+out ----------
+out objective = 43;
+out t = array1d(1..48, [1, 3, 0, 0, 17, 16, 1, 17, 4, 2, 19, 19, 18, 18, 5, 20, 3, 2, 7, 4, 32, 7, 31, 38, 5, 33, 34, 20, 19, 21, 22, 23, 34, 40, 9, 39, 38, 40, 9, 36, 42, 41, 42, 37, 39, 35, 41, 25]);
+out r = array1d(1..48, [2, 1, 1, 2, 1, 1, 1, 2, 2, 2, 1, 2, 2, 1, 1, 2, 2, 1, 2, 1, 2, 1, 1, 1, 2, 1, 2, 1, 2, 2, 1, 2, 2, 1, 1, 2, 1, 2, 2, 1, 1, 2, 2, 2, 1, 1, 1, 2]);
+out ----------
+out objective = 42;
+out t = array1d(1..48, [1, 3, 0, 0, 17, 16, 1, 17, 4, 2, 19, 19, 18, 18, 5, 20, 3, 2, 7, 4, 32, 7, 31, 38, 5, 33, 34, 20, 19, 21, 22, 23, 34, 35, 9, 39, 38, 40, 9, 36, 41, 40, 41, 37, 39, 35, 24, 25]);
+out r = array1d(1..48, [2, 1, 1, 2, 1, 1, 1, 2, 2, 2, 1, 2, 2, 1, 1, 2, 2, 1, 2, 1, 2, 1, 1, 1, 2, 1, 2, 1, 2, 2, 1, 2, 2, 2, 1, 2, 1, 1, 2, 1, 2, 2, 1, 2, 1, 1, 1, 2]);
+out ----------
+out objective = 40;
+out t = array1d(1..48, [1, 3, 0, 0, 17, 16, 1, 17, 4, 2, 19, 19, 18, 18, 5, 20, 3, 2, 6, 4, 32, 7, 31, 1, 5, 33, 34, 20, 19, 21, 22, 23, 10, 35, 9, 33, 34, 7, 9, 36, 36, 34, 35, 37, 39, 33, 24, 25]);
+out r = array1d(1..48, [2, 1, 1, 2, 1, 1, 1, 2, 2, 2, 1, 2, 2, 1, 1, 2, 2, 1, 1, 1, 2, 2, 1, 2, 2, 1, 2, 1, 2, 2, 1, 2, 1, 2, 1, 2, 1, 1, 2, 1, 2, 2, 1, 2, 1, 1, 1, 2]);
+out ----------
+out objective = 38;
+out t = array1d(1..48, [1, 3, 0, 0, 17, 16, 1, 17, 4, 2, 19, 19, 18, 18, 5, 20, 3, 2, 6, 4, 32, 7, 31, 1, 5, 33, 34, 20, 19, 21, 22, 23, 10, 35, 9, 33, 34, 7, 9, 36, 36, 34, 35, 37, 22, 33, 24, 25]);
+out r = array1d(1..48, [2, 1, 1, 2, 1, 1, 1, 2, 2, 2, 1, 2, 2, 1, 1, 2, 2, 1, 1, 1, 2, 2, 1, 2, 2, 1, 2, 1, 2, 2, 1, 2, 1, 2, 1, 2, 1, 1, 2, 1, 2, 2, 1, 2, 1, 1, 1, 2]);
+out ----------
+out objective = 37;
+out t = array1d(1..48, [0, 1, 0, 1, 17, 16, 2, 17, 2, 3, 19, 19, 18, 18, 4, 20, 3, 2, 8, 6, 32, 7, 31, 1, 5, 33, 9, 20, 19, 21, 22, 23, 10, 35, 12, 33, 34, 7, 9, 11, 36, 34, 35, 12, 22, 33, 24, 25]);
+out r = array1d(1..48, [2, 2, 1, 1, 1, 1, 2, 2, 1, 1, 1, 2, 2, 1, 1, 2, 1, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 2, 2, 1, 2, 1, 2, 1, 2, 1, 1, 2, 1, 2, 2, 1, 2, 1, 1, 1, 2]);
+out ----------
+out objective = 36;
+out t = array1d(1..48, [0, 1, 0, 1, 17, 16, 2, 17, 2, 3, 19, 19, 18, 18, 4, 20, 3, 2, 8, 6, 32, 7, 31, 1, 5, 4, 9, 20, 19, 21, 22, 23, 10, 9, 10, 33, 34, 7, 9, 11, 11, 34, 35, 20, 22, 33, 24, 25]);
+out r = array1d(1..48, [2, 2, 1, 1, 1, 1, 2, 2, 1, 1, 1, 2, 2, 1, 1, 2, 2, 1, 1, 1, 2, 2, 1, 2, 2, 1, 2, 1, 2, 2, 1, 2, 1, 2, 2, 2, 1, 1, 1, 2, 1, 2, 1, 1, 1, 1, 1, 1]);
+out ----------
+out objective = 35;
+out t = array1d(1..48, [0, 1, 0, 1, 17, 16, 2, 17, 2, 3, 19, 19, 18, 18, 4, 20, 3, 2, 8, 6, 4, 7, 31, 1, 5, 10, 9, 20, 19, 21, 22, 23, 10, 12, 10, 33, 9, 7, 9, 11, 13, 34, 11, 20, 22, 33, 24, 25]);
+out r = array1d(1..48, [2, 2, 1, 1, 1, 1, 2, 2, 1, 1, 1, 2, 2, 1, 1, 2, 1, 2, 2, 2, 2, 1, 1, 1, 1, 2, 1, 1, 2, 2, 1, 2, 2, 2, 1, 2, 1, 1, 2, 2, 1, 2, 1, 1, 1, 1, 1, 1]);
+out ----------
+out objective = 34;
+out t = array1d(1..48, [0, 0, 1, 1, 17, 16, 2, 17, 2, 3, 19, 19, 18, 18, 4, 23, 1, 4, 3, 8, 2, 6, 9, 11, 5, 10, 7, 20, 19, 21, 24, 23, 20, 12, 21, 11, 20, 13, 21, 12, 25, 22, 24, 22, 23, 33, 26, 26]);
+out r = array1d(1..48, [2, 1, 2, 1, 1, 1, 2, 2, 1, 1, 1, 2, 2, 1, 1, 1, 1, 2, 1, 2, 2, 2, 1, 1, 1, 2, 1, 1, 2, 2, 1, 2, 2, 2, 1, 2, 1, 1, 2, 1, 2, 1, 2, 2, 2, 1, 1, 2]);
+out ----------
+out objective = 27;
+out t = array1d(1..48, [0, 0, 1, 1, 17, 16, 2, 17, 2, 3, 19, 19, 18, 18, 4, 23, 1, 4, 3, 8, 2, 6, 9, 11, 5, 10, 7, 20, 19, 21, 24, 23, 20, 12, 21, 11, 20, 13, 21, 12, 25, 22, 24, 22, 23, 25, 26, 26]);
+out r = array1d(1..48, [2, 1, 2, 1, 1, 1, 2, 2, 1, 1, 1, 2, 2, 1, 1, 1, 1, 2, 1, 2, 2, 2, 1, 1, 1, 2, 1, 1, 2, 2, 1, 2, 2, 2, 1, 2, 1, 1, 2, 1, 2, 2, 2, 1, 2, 1, 1, 2]);
+out ----------
+out objective = 26;
+out t = array1d(1..48, [0, 0, 1, 1, 17, 16, 2, 17, 2, 3, 19, 19, 18, 18, 4, 22, 3, 1, 5, 8, 2, 7, 9, 11, 6, 10, 4, 20, 19, 21, 23, 23, 20, 13, 10, 11, 20, 14, 11, 8, 24, 22, 24, 12, 23, 23, 25, 25]);
+out r = array1d(1..48, [2, 1, 2, 1, 1, 1, 2, 2, 1, 1, 1, 2, 2, 1, 1, 2, 2, 2, 2, 1, 1, 2, 2, 2, 1, 1, 1, 1, 2, 2, 2, 1, 2, 2, 1, 2, 1, 1, 1, 1, 2, 1, 1, 2, 1, 2, 1, 2]);
+out ----------
+search ladder/cls 6543 cls
+search opb/lines 12060 lines
+search direct/vals 0 vals
+search widest/wide 1000 wide
+search bits/vars 0 vars
+search bitsrows/lines 0 lines
+search choices/groups 0 groups
+search limit.nodes 12001
+search limit.decisions 11545
+search limit.conflicts 581
+search limit.learned 579
+search limit.pb-learned 0
+search limit.db 579
+search limit.maxdepth 292
+search limit.incumbent 26
+work limit.props 2487971
+work limit.eff 303595
+work limit.contra 560
+search limit.at node
+search nodes/nodes 12001 nodes
+search decisions/decs 11545 decs
+search conflicts/nodes 581 nodes
+search maxdepth/levels 292 levels
+work exhausted/bool 0 bool 1 if
+search skipped/nodes 3997 nodes
+search learned/cls 579 cls
+work later/asks 318935 asks
+work cites/memos 11904 memos
+search convertible/cls 235 cls
+search retention keep-all keep-all: 579 added, 0 evicted, 579 swept, 0 live, 2 duplicate, 558 cited, 0 pinned
+search lbd 1:23,2:5,3:40,4:140,5:219,6:82,7:39,8:18,9:3,10:6,11:3,13:1
+search width 1:23,4:7,5:49,6:15,7:370,8:37,9:20,10:13,11:17,12:15,13:3,14:3,15:4,16:3
+search globals/units 23 units
+search glob-prune/prunes 48 prunes
+search glob-confl/confl 21 confl
+search cls-inst/inst 556 inst
+search cls-decl/cls 0 cls
+search cls-prune/prunes 826 prunes
+search pb-inst/inst 0 inst
+search pb-inst-no/rows 0 rows
+search pb-prune/prunes 0 prunes
+search pb-confl/confl 0 confl
+search minimised/lits 0 lits
+search i-s4-cross/lines 2919 lines
+search pb-tried/confl 579 confl
+search pb-learned/rows 0 rows
+search pb-fallback/confl 579 confl
+search pb-why first fallback reason: no PB row for instance bool_clause
+work pb-whys/recd 64 recd 29 x
+search pb-steps/pivots 0 pivots
+search pb-convert/rows 0 rows
+search pb-stronger/rows 0 rows
+search pb-nondeg/rows 0 rows
+search pb-lifted/rows 0 rows
+search pb-rungs/rungs 0 rungs
+search lvl-cmp/confl 0 confl
+search lvl-same/confl 0 confl
+search lvl-narrow/confl 0 confl
+search lvl-wide/confl 0 confl
+search lvl-incomp/confl 0 confl
+search lvl-empty/confl 0 confl
+search lvl-assert/confl 0 confl
+search restarts/runs 126 runs
+search unexplored/nodes 7039 nodes
+search kept/levels 0 levels
+search activity/bumps 4065 bumps
+search phases/vals 272788 vals
+search phase-used/decs 10912 decs
+work int_lin_le_reif/inst 2368 inst 181.5 runs/node 22.07 eff/node
+work bool_clause/inst 592 inst 15.8 runs/node 0.26 eff/node
+work int_lin_le/inst 88 inst 8.6 runs/node 2.90 eff/node
+work learned_clause/inst 556 inst 1.1 runs/node 0.07 eff/node
+work array_int_maximum/inst 1 inst 0.4 runs/node 0.00 eff/node
+work props/runs 2487971 runs
+work eff/runs 303595 runs
+work contra/runs 560 runs
+work passes/snaps 0 snaps
+work deductions/chgs 0 chgs
+work wakes/wakes 2525201 wakes
+work masked/wakes 0 wakes
+work vetoed/wakes 34841 wakes
+work advised/wakes 23920 wakes
+work seeded/runs 910031 runs
+work skipped/slots 38835722 slots
+search rup/lines 307095 lines
+search pol/lines 0 lines
+search pol-tokens/tokens 0 tokens
+search atoms/atoms 0 atoms
+search atomlinks/lines 0 lines
+search bridges/pairs 0 pairs
+search boundlines/pairs 0 pairs
+search bitsprune/lines 0 lines
+opb 54be864a4556fd15b205431320b66a904b7f19b7b692ca818721606295750d48
+pbp 57d7d4c3803f97f635ed74b9bb9be11c71b734615892fd98c53e7c54534c8960

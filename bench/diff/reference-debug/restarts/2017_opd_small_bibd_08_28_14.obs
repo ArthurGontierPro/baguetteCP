@@ -1,0 +1,107 @@
+rc 0
+out objective = 14;
+out X_INTRODUCED_0_ = array1d(1..224, [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+out ----------
+out objective = 13;
+out X_INTRODUCED_0_ = array1d(1..224, [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0]);
+out ----------
+out objective = 12;
+out X_INTRODUCED_0_ = array1d(1..224, [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1]);
+out ----------
+search ladder/cls 21 cls
+search opb/lines 9981 lines
+search direct/vals 0 vals
+search widest/wide 22 wide
+search bits/vars 0 vars
+search bitsrows/lines 0 lines
+search choices/groups 0 groups
+search limit.nodes 1501
+search limit.decisions 1482
+search limit.conflicts 37
+search limit.learned 37
+search limit.pb-learned 5
+search limit.db 42
+search limit.maxdepth 113
+search limit.incumbent 12
+work limit.props 232396
+work limit.eff 41506
+work limit.contra 34
+search limit.at node
+search nodes/nodes 1501 nodes
+search decisions/decs 1482 decs
+search conflicts/nodes 37 nodes
+search maxdepth/levels 113 levels
+work exhausted/bool 0 bool 1 if
+search skipped/nodes 78 nodes
+search learned/cls 37 cls
+work later/asks 145185 asks
+work cites/memos 11131 memos
+search convertible/cls 23 cls
+search retention keep-all keep-all: 42 added, 0 evicted, 42 swept, 0 live, 0 duplicate, 39 cited, 0 pinned
+search lbd 1:3,3:20,4:1,6:1,7:1,13:1,15:5,16:5
+search width 1:3,15:20,16:14
+search globals/units 3 units
+search glob-prune/prunes 4 prunes
+search glob-confl/confl 3 confl
+search cls-inst/inst 34 inst
+search cls-decl/cls 0 cls
+search cls-prune/prunes 156 prunes
+search pb-inst/inst 5 inst
+search pb-inst-no/rows 0 rows
+search pb-prune/prunes 9 prunes
+search pb-confl/confl 1 confl
+search minimised/lits 0 lits
+search i-s4-cross/lines 691 lines
+search pb-tried/confl 37 confl
+search pb-learned/rows 5 rows
+search pb-fallback/confl 32 confl
+search pb-why first fallback reason: no PB row for instance <unknown>
+work pb-whys/recd 32 recd 23 x
+search pb-steps/pivots 5 pivots
+search pb-convert/rows 5 rows
+search pb-stronger/rows 5 rows
+search pb-nondeg/rows 5 rows
+search pb-lifted/rows 0 rows
+search pb-rungs/rungs 0 rungs
+search lvl-cmp/confl 5 confl
+search lvl-same/confl 0 confl
+search lvl-narrow/confl 5 confl
+search lvl-wide/confl 0 confl
+search lvl-incomp/confl 0 confl
+search lvl-empty/confl 0 confl
+search lvl-assert/confl 5 confl
+search lvl-why first disagreement: closure {86,85,84,83,82,81,80,79,78,77,76,75,74,72,71,70,69,68,67,66,65,64,63,62,61,60,59,58,57,56,55,54,53,52,51,50,49,48,47,46,45,44,43,42,41,40,39,38,37,36,35,34,33,32,31,30,29,28,27,26,25,24,23,22,21,20,19,18,17,16,15,14,13,12,11,10,9,8,7,6,5,4,3,2,1} vs pb {86,83,82,81,80,79,78,77,76,75,74,58} (pb asserts at 0)
+search restarts/runs 19 runs
+search unexplored/nodes 1367 nodes
+search kept/levels 0 levels
+search phases/vals 43732 vals
+search phase-used/decs 1369 decs
+work int_times/inst 5488 inst 81.4 runs/node 13.20 eff/node
+work bool_clause/inst 1066 inst 24.7 runs/node 3.34 eff/node
+work int_lin_le_reif/inst 756 inst 20.6 runs/node 5.97 eff/node
+work array_bool_and/inst 1032 inst 19.3 runs/node 4.74 eff/node
+work int_lin_le/inst 78 inst 8.5 runs/node 0.30 eff/node
+work learned_clause/inst 34 inst 0.2 runs/node 0.10 eff/node
+work learned_pb/inst 5 inst 0.2 runs/node 0.00 eff/node
+work props/runs 232396 runs
+work eff/runs 41506 runs
+work contra/runs 34 runs
+work passes/snaps 0 snaps
+work deductions/chgs 0 chgs
+work wakes/wakes 217855 wakes
+work masked/wakes 0 wakes
+work vetoed/wakes 12649 wakes
+work advised/wakes 0 wakes
+work seeded/runs 61224 runs
+work skipped/slots 12752020 slots
+search rup/lines 42446 lines
+search pol/lines 5 lines
+search pol-tokens/tokens 15 tokens
+search pol-widest/tokens 3 tokens
+search atoms/atoms 0 atoms
+search atomlinks/lines 0 lines
+search bridges/pairs 0 pairs
+search boundlines/pairs 0 pairs
+search bitsprune/lines 0 lines
+opb fd586246a58580458718ffd8ea9aec6cd6d897f2c2236d329b97d929a736d676
+pbp c3f3671697e541b6e432405e8b32187f76e8d8f3959282ca59a6a453470660fa
