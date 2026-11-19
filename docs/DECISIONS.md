@@ -15846,3 +15846,305 @@ model tests passed, each a proof veripb accepted and a `--no-proof` run byte-ide
 `ac86699a`. Then every model of `test/models/` run with `--proof` and compared with gate 50's
 artefacts (`/scratch/arthur/gate50.art/new`, binary `5e6f653e`, which is `main` at `da9df69`):
 179 models, 0 differences in stdout, exit code, `.opb` and `.pbp`.
+## D-0147  M12-parity-T1: the parity spike. Gauss-Jordan over the XOR rows removes no node on the user's searches, because every row there is a definition read forwards, and applied eagerly it hurts aut order 7 by spoiling the learned clauses
+
+**Status**: **DONE** (a spike; building T2 is the user's decision). Recorded 2026-11-18 and
+completed 2026-11-19 by agent-parity on branch `wave49-parity` (the node was unreachable overnight,
+the detached runs finished without it and were read the next morning, §9). The branch is NEVER
+merged. Only this record, the M12 rows of ROADMAP and the WORKLOG release come to
+`main`. The contract is ROADMAP `## M12-parity`, row T1. Measured on `fataepyc-06` (load 55 to 75
+throughout, so a wall time is good to about a third, and the node counts are exact). Outputs are
+under `/scratch/arthur/wave49-parity-runs/`, with one line per run in `out/<tag>.res` and the full
+stderr in `out/<tag>.err`, the re-flattened files in `fzn/`, and the library they were flattened
+with in `mznlib-spike/` and `spike.msc`. Binaries: `bin/main.exe` is `wave49-parity` at `1e283d5`
+(md5 `7b305165…`), `bin/main2.exe` is `7c4bb41` (md5 `4b6cb737…`, the same plus §4's beyond mode).
+Every run is `--no-proof --stats --time-limit T`.
+
+### 1. What the spike is
+
+**The propagator** is `lib/core/prop/parity.ml` (branch only). There is one instance per connected
+component of the gathered XOR rows with two rows or more. It is posted on top of the clause
+encoding and after every other instance, so the clause path, the learning and the queue order of
+everything else are what a run without `--parity` has. Its level is GCS's, GAC on the PB relaxation
+of the system, which coincides with GAC on the conjunction because every atom is one `var bool`.
+It differs from GCS's `ParitySystem` in where the elimination happens.
+
+- **Once, at the root**, the rows are put in reduced row-echelon form over all atoms. This is cheap
+  because MiniZinc's `bool_xor(a, b, r) :: defines_var(r)` chains define almost every atom from
+  earlier ones. Pass 1 lets each row define the last atom it is the first to mention. Pass 2
+  expresses every defined atom over the never-defined ones (C). Pass 3 eliminates the remaining
+  constraint rows over C, which leaves the free atoms F. Pass 4 rewrites every expression over F.
+- **At each wake**, a root row whose pivot is assigned is an equation over the open free atoms, and
+  a root row whose pivot is open has a column of its own. So a conflict or an implied free atom can
+  only come from a Gauss-Jordan over the open columns of F (at most |F| pivots, rows of |F| bits),
+  and an open pivot is implied exactly when its row reduces to nothing on those columns. That is
+  the whole of GAC on the system, for O(rows x |F|^2 / 62) per wake where GCS's from-scratch
+  elimination costs O(rows^2 x atoms / 64).
+
+The reason of an inference or of a conflict is GCS's (Gocht and Nordström's §4.3) rho, the assigned
+atoms of the derived row's support. It is built as data, `Reason.because facts
+(Explanation.clause …)`, which is the shape `Pb` uses. The combination of root rows is tracked over
+the origins of the per-wake basis, at most |F| + 1 of them, which keeps it at two words. There is
+no proof rendering, and the module refuses to exist in a proved run in two places.
+`Compile.compile ?parity` takes a `Parity.licence`, which only `Parity.licence ~no_proof:true`
+returns. `bin/main.ml` refuses `--parity` without `--no-proof` with exit 2 (also when `--proof` is
+given, and also when no proof flag is given, since the default run writes a temporary proof), and
+once the writer exists it checks `Parity.posted` against `Writer.is_null`.
+
+**The gathering** (`lib/flatzinc/compile.ml`, behind `--parity`) takes `bool_xor(a, b, r)` as the
+row `a + b + r = 0`, `array_bool_xor(xs)` as `sum xs = 1`, and `bool_eq` and `bool_not` as two-atom
+rows, which GCS gathers too because they join components. Constants fold into the parity, a
+variable that occurs twice cancels, and an empty row is dropped (the donor's clauses refute `0 = 1`
+on their own). Point (1) of the brief, the ternary `bool_xor` that GCS's front end maps to a
+reified equality and never gathers, is the whole of what these models contain.
+
+**The front end.** The spike's `mznlib/redefinitions.mzn` keeps `bool_xor` and `array_bool_xor` as
+builtins. `compile.ml` posts for `bool_xor` exactly the four clauses the stock library wrote, in its
+order, and for `array_bool_xor` its `sum = 2k + 1` with a `k` the builder creates. QR48
+re-flattened this way gives 23 367 nodes and 11 684 learned clauses without `--parity`, which are
+the counts D-0138 measured on the user's own `.fzn`. No model contains `array_bool_xor`.
+
+**The tests**, `test/unit/test_parity.ml` (branch only), are green on the node (21 checks). They
+cover an inference three rows deep (`a+b+c = b+d+e = a+d+f = 0` with `c = 1` and `e = 0` gives
+`f = 1` with reason `{c, e}`, which the unit-propagation closure does not reach), a conflict only
+the system sees (`a+b+c = a+b+d = 0` with `c = 0` and `d = 1`), an odd cycle refuted at the root
+with the empty reason, and a brute force over 3 000 random systems of 4 to 9 atoms (4 099
+inferences of which 311 are beyond unit propagation, and 943 conflicts). The brute force checks that
+every reason clause and every conflict clause is implied by the rows and that every literal the
+rows imply is inferred, which is GAC. The refusal and the CLI are tested on a four-variable UNSAT
+model, which takes 1 node with `--parity` and 7 without.
+
+**The measurement counters.** `--parity` prints a `parity:` line on stderr. Under
+`BAGUETTE_PARITY_UP=1` every run also computes the closure of unit propagation over the gathered
+rows from the same assignment, which is what the clause encoding derives on its own, and counts the
+inferences and conflicts that closure does not reach (`beyond_inferred`, `beyond_conflicts`). The
+diagnostic changes nothing in the search.
+
+### 2. The systems
+
+| instance | rows | atoms | components | rank | free atoms F |
+|---|---|---|---|---|---|
+| golay24 L / R | 65 / 64 | 77 / 76 | 1 | 65 / 64 | 12 |
+| QR48 L / R | 248 / 257 | 272 / 281 | 1 | 248 / 257 | 24 |
+| QR72 L / R | 469 / 473 | 505 / 509 | 1 | 469 / 473 | 36 |
+| QR104 L | 1 177 | 1 229 | 1 | 1 177 | 52 |
+| aut order 7, k = 2 | 26 133 (24 866 ternary, 1 267 two-atom) | 26 370 | 18 | 26 085 | 285 |
+
+On `minweight.mzn` the free atoms are exactly the generator bits `u` (k of them) and every row is
+independent. On aut the largest component has 25 902 atoms, 25 842 rows, rank 25 794 and 108 free
+atoms, so 48 of its rows are consequences of the others.
+
+### 3. Nodes and time
+
+N is without `--parity`, P with it (the default mode, which applies everything Gauss-Jordan finds).
+Wall is seconds, `--no-proof`. Chuffed is the user's run (`/scratch/arthur/codes-bench/H_*_chuffed_*`,
+flattened with Chuffed's own library). `def` is no annotation, `u` and `u1` are the user's
+`bool_search(u, input_order, indomain_min / indomain_max)` (for aut, over `A0` then `M`).
+
+| instance | search | nodes N | nodes P | wall N | wall P | parity CPU | Chuffed nodes, solve time |
+|---|---|---|---|---|---|---|---|
+| golay24 L | def, u, u1 | 133 | 133 | 0.05 | 0.05 | 0.00 | def 170, 0.001 s |
+| golay24 R | def, u, u1 | 133 | 133 | 0.05 | 0.05 | 0.00 | def 156, 0.001 s |
+| QR48 L | def | 23 367 | 23 367 | 35.3 | 29.9 | 0.56 | 23 668, 0.44 s |
+| | u | 23 367 | 23 367 | 37.2 | 30.0 | 0.56 | 11 709, 0.20 s |
+| | u1 | 23 429 | 23 429 | 20.0 | 18.8 | 0.55 | 11 710, 0.14 s |
+| QR48 R | def | 23 375 | 23 375 | 27.2 | 27.0 | 0.57 | 27 868, 0.54 s |
+| | u | 23 375 | 23 375 | 27.5 | 24.9 | 0.57 | |
+| | u1 | 23 429 | 23 429 | 18.1 | 17.0 | 0.55 | |
+| QR72 L | def | 100 685 | 100 679 | 613 | 541 | 7.2 | 90 500, 2.8 s |
+| | u | 100 685 | 100 679 | 592 | 436 | 6.8 | 50 736, 1.7 s |
+| | u1 | 101 435 | 101 435 | 474 | 321 | 9.2 | 50 704, 1.0 s |
+| QR72 R | def | 100 677 | 100 675 | 641 | 503 | 6.9 | 91 824, 3.0 s |
+| aut o7 k2 | def | > 87 199 | > 91 841 | 1 800 (limit) | 1 800 (limit) | 187 | 11, 0.009 s |
+| | u | > 90 112 | > 93 364 | 1 800 (limit) | 1 800 (limit) | 192 | > 16 M (limit) |
+| | u1 | **172** | **> 60 435** | 2.3 | 1 800 (limit) | 105 | 140, 0.013 s |
+| QR104 L | def | > 187 954 | > 175 321 | 1 800 (limit) | 1 800 (limit) | 14.7 | > 101 M in 3 600 s (limit) |
+
+Learned clauses equal conflicts in every row (one per conflict, `keep_all`). The `def` and `u` trees
+are the same tree, because SPEC 3.4's first-fail ties are broken by declaration order and `u` is
+declared first.
+
+The beyond mode of §4 (`PB`) gives exactly the N tree wherever it applies nothing, and on these
+searches it applies nothing on every minimum-weight instance: QR48 `def` 23 367 nodes, QR48 `u1`
+23 429, QR72 `def` 100 685, each with 0 inferences applied, and QR104 `def` with 0 applied in
+1 800 s. On aut `def` and `u` it applies nothing either (60 580 and 66 388 nodes in 1 800 s, fewer
+than N because the unit-propagation closure over 26 133 rows runs at every wake).
+
+fzn-chuffed run on the re-flattened files visits exactly the user's node counts on all ten golay and
+QR rows above (170, 156, 23 668, 27 868, 11 709, 11 710, 90 500, 91 824, 50 736, 50 704), so keeping
+`bool_xor` whole changed nothing Chuffed sees. On aut it aborts (`arithmetic.cpp:668: Cannot handle
+non-sign-fixed vars`, on the `int_div` that baguette's library keeps whole), so aut's Chuffed column
+is the user's run.
+
+The wall times of the P arm are lower on every QR pair (by 1 to 32 %, on all ten pairs, with the
+same tree or one 6 nodes smaller). The parity instance fixes in one run the `c` and `acc` atoms that the chain clauses
+would fix one wake at a time. That is an engine effect and not what the spike asks about, and on a
+node at load 60 it is a direction rather than a measurement.
+
+### 4. What the system found that the clauses did not
+
+| run | parity runs | inferences | of them on free atoms | parity conflicts | beyond unit propagation |
+|---|---|---|---|---|---|
+| golay24 L def | 177 | 1 129 | 0 | 0 | 0 inferences, 0 conflicts |
+| QR48 L def | 30 914 | 457 344 | 0 | 0 | 0 inferences, 0 conflicts |
+| QR48 L u1 | 30 883 | 458 149 | 0 | 6 | 0 inferences, 0 conflicts |
+| QR48 R def | 30 931 | 448 720 | 0 | 0 | 0 inferences, 0 conflicts |
+| QR72 L def | 138 429 | 5 047 769 | 0 | 75 | 0 inferences, 0 conflicts |
+| QR72 L u1 | 138 064 | 5 064 436 | 0 | 156 | 0 inferences, 0 conflicts |
+| QR104 L def (beyond mode, 1 800 s) | 249 979 | 0 applied | | | 0 inferences, 0 conflicts |
+| aut o7 def, first 20 000 nodes | 194 192 | 537 973 | 13 520 | 1 513 | 0 inferences, 0 conflicts |
+| aut o7 u1 | 487 313 | 2 881 812 | 82 140 | 3 837 | **458** inferences (0.016 %), 0 conflicts |
+
+On the minimum-weight models, under the user's searches, the system never implied a generator bit,
+and every one of its inferences and conflicts is in reach of the chain clauses' unit propagation.
+That is about 20 inferences per node on QR48 and 50 on QR72, all of them the `c` and `acc` values
+the chains derive anyway. The parity conflicts (75 on QR72 `def`, 156 under `u1`) are conflicts the
+parity instance reported before a clause did, and they moved the tree by 6 nodes out of 100 685
+under `def` and by none under `u1`. On aut `def` the system does imply free atoms (13 520 in the
+first 20 000 nodes), and unit propagation reaches every one of them too.
+
+**On aut the default mode is harmful.** With `u1`, baguette proves UNSAT in 172 nodes without the
+system and does not finish in 1 800 s with it. Only 458 of the 2.9 M parity inferences are beyond
+unit propagation, so the system adds almost nothing, and what it changes is the REASONS. The FIFO
+engine runs the parity instance as soon as an atom moves, ahead of the chain clauses, and the
+reason it records is the support of a derived row where a two-literal clause would have been the
+reason. The learned clauses show it. Without parity, 12 of 65 learned clauses have 16 literals or
+more and 43 conflicts backjump. With parity, 30 018 of 30 180 have 16 literals or more, 23 464
+have an LBD of 16 or more, and 40 conflicts backjump.
+
+`BAGUETTE_PARITY_MODE=beyond` (`bin/main2.exe`) applies only what the unit-propagation closure does
+not reach and leaves every other inference to the clauses. On aut `u1` it applies exactly the 458
+beyond inferences (4 of them on free atoms) and still does not finish (14 441 nodes in 300 s), so
+on this instance even those 458 change the `u1` tree for the worse. They all come late. With node
+limits of 1, 60, 100 and 140 the beyond-mode run and the run without parity have the same node and
+conflict counts and the system applies nothing. The 458 inferences all come between node 141 and
+node 172, where the run without parity is one conflict from its UNSAT. Applied there, they reroute
+that last conflict and the proof does not close.
+
+### 5. Why the user's searches leave the system nothing to do
+
+On `minweight.mzn` every XOR row is a DEFINITION, `acc[t] = acc[t-1] xor u[R[t]]` and `c[j] =
+acc[r]`. In the root form the pivots are exactly the `acc` and `c` atoms and the free atoms are the
+generator bits, every root row reading `c_j = XOR of the u_i in column j`. Gauss-Jordan can say
+something unit propagation over the chains cannot only when a defined atom is fixed while an atom
+of its expression is still open, that is when information flows from `c` back to `u`. Under the
+user's searches it does not.
+
+- `def`, `u` and `u1` all branch on `u` alone.
+- A `c_j` is fixed by unit propagation once its whole column is fixed, which is the forward
+  direction.
+- `sum(u) <= HALF` fixes the remaining `u` to 0, forwards again.
+- `sum(u) + sum(c) <= Wmax` could fix an open `c` to 0 while `u` is open, but it fires only once
+  Wmax ones are fixed, and a `c` is 1 only once its whole column is. The columns of these codes
+  have weight about k/2, so by then nearly every `u` is fixed.
+- A learned clause can fix a defined atom early, and the diagnostic says that when it does, the
+  chains' own unit propagation already reaches whatever the system reaches.
+
+The extra search `c` shows the other case. It branches on `c ++ u` with `indomain_min`, which is
+not one of the user's searches (it is `minweight.mzn` with only the `solve` item changed,
+`models/minweight_c.mzn` in the run directory). Fixing `c_j = 0` is a parity equation over `u`, and
+a few of them pin `u`. There the system has real work to do.
+
+| search `c` | nodes N | nodes P | nodes P, beyond mode | inferences P (on `u`) | beyond unit propagation | Chuffed |
+|---|---|---|---|---|---|---|
+| golay24 L | 1 551 | 375 | 383 | 8 627 (1 527) | 8 214 (95 %), its 26 conflicts all within reach | 2 101 |
+| golay24 R | 1 590 | 399 | | 8 534 (1 545) | 8 213 | |
+| QR48 L | > 147 282 | > 142 500 | > 147 956 | 7 976 142 (737 693) | 94 % (7 278 925 of 7 704 964 in the diagnostic run; 30 of its 15 058 conflicts) | > 600 s |
+| QR48 R | > 159 379 | > 167 628 | | 9 811 573 (855 180) | | |
+| QR72 L | > 146 803 | > 192 726 | > 214 061 | 14 481 214 (1 275 094) | the beyond run applies 15 882 560 | > 600 s |
+| QR104 L | not run | > 99 920 | > 107 138 | 16 288 273 (694 722) | the beyond run applies 16 483 596 | |
+
+A `>` is a count at the 1 800 s limit. On golay24 the system cuts the tree by four, but that tree
+stays three times the 133 nodes of the user's search. On the QR codes no run closes under `c`, with
+or without the system, and Chuffed does not close QR48 or QR72 under `c` in 600 s either. The
+system infers about 55 (QR48) to 165 (QR104) literals per node there, nearly all of them beyond unit propagation, and a
+count of nodes at a time limit says nothing about the size of a tree no run finishes. So the one
+search under which the system has work to do is a search that is hopeless on these codes anyway.
+
+### 6. What the certified version (T2) would cost, per GCS's §2 to §4
+
+The `.opb` stays the clause encoding (the user's point, and GCS's), and everything parity-shaped is
+derived inside the proof.
+
+1. **The slack row of each donor, at level 0.** A ternary `bool_xor` is one step of GCS's
+   accumulator chain, `a + b + r = 2y` with a fresh `y`. It takes two `red` lines (witness `y -> 1`,
+   whose goal is RUP against the clause `~a \/ ~b \/ ~r`, and witness `y -> 0`, with a five-line
+   `pol` subproof whose three divisions are where the parity argument lives). That is about 7 lines
+   and one fresh variable per donor, with no telescoping since each donor is a single step. A
+   two-atom row is GCS's Boolean family, two plain `rup` lines and no variable. QR48 has 248 donors
+   (about 1 700 lines), QR72 469 (about 3 300), QR104 1 177 (about 8 200), and aut 24 866 ternary and
+   1 267 binary donors (about 177 000 lines and 24 866 fresh variables), all before node 1. Each of
+   those lines taxes every later unhinted `rup` (GCS's #666) unless the scaffolding is deleted once
+   the slack rows exist, which GCS has not implemented either.
+2. **The root form, optionally cached.** A root row is a sum of donor rows. Writing each one once at
+   level 0 costs one `pol` per direction per root row (QR48, 496 `pol` lines of about 12 donors
+   each; aut, about 51 600). Otherwise every inference sums the donors itself.
+3. **Each inference is one `pol` and one `rup`** (§4.3's fold, which sums the root rows of the
+   combination in both directions, adds one literal axiom per reason atom, divides by 2 and
+   multiplies by 2). The `pol` is as long as the combination plus the reason, and the reasons
+   average 11 atoms on QR48 (5 055 562 reason atoms for 457 344 inferences). A conflict costs the
+   same with an empty claim.
+4. **The engine side.** A parity inference is a trace entry whose clause is not RUP from the
+   database, so `Justify` would have to emit the `pol` before the trace line cites it, at the level
+   of the inference, and delete it with that level (I-X2). That needs a new `Explanation`
+   constructor, or a deferred one carrying the combination, and so a decision record before any
+   code.
+
+In the beyond mode only the beyond inferences would need items 3 and 4, and items 1 and 2 would
+still be paid in full before node 1.
+
+### 7. Recommendation for T2
+
+**Do not build T2 for these models.** Under `def`, `u` and `u1` the system removes no node on
+golay24, QR48 and QR72 (identical trees, or 6 nodes of 100 685) and finds nothing beyond unit
+propagation on QR104 either, because every XOR row there is a definition read forwards and the
+chain clauses already do that completely. On aut it finds 458 inferences beyond unit propagation
+out of 2.9 M, and applied eagerly it turns the 172-node `u1` proof into a timeout by spoiling the
+learned clauses. The QR runs under `c` were the open case of this recommendation, and they close
+it. That search is the only one where the system has work to do, and no QR code closes under it in
+1 800 s with or without the system. A certified version would pay §6's level-0 scaffolding (177 000
+lines on aut) and per-inference `pol`s to justify, on every run that closes, nothing the clauses do
+not already justify.
+
+The node counts that separate baguette from Chuffed are elsewhere. Chuffed visits about the same
+tree under `def` (23 668 against 23 367 on QR48) and half of it under `u` and `u1` (11 709 against
+23 367), and it is 80 times faster per node on QR48 and 200 times on QR72. On aut `def` it needs 11 nodes where baguette
+does not finish, and §4 shows that parity is not the difference there either.
+
+If the user wants T2 anyway, it should be built in the beyond shape, so that a parity reason exists
+only where no clause reason could, which also bounds the proof cost by the beyond inferences. The
+place to measure again before that is a search that fixes defined bits early AND still closes on
+these codes. Activity-based branching with restarts, once M10 lands, is the candidate, and this
+branch's `--parity` and beyond mode can be run against it as they stand.
+
+### 8. What a no-proof spike cannot tell
+
+- **That the reasons are right in the checker's sense.** They are implied by the rows (the brute
+  force checks that on 3 000 small systems, and every answer here agrees with the run without
+  `--parity` and with Chuffed), but no reason was derived in VeriPB. GCS's §4.3 fold is verified
+  there on 25 fixtures, not here.
+- **The proof's size and the checker's time.** §6 counts lines from the scheme. What a `pol` over a
+  combination of a hundred donor rows costs the checker, and what 177 000 lines of level-0
+  scaffolding cost on aut, is not measured.
+- **The tree under a proof.** `--no-proof` keeps every explanation, the learning and the search
+  (D-0135, stdout byte-identical in both modes), so these trees are the trees a proved run would
+  explore, provided T2's justifications do not change what is learned. They should not, since the
+  same reason clauses would be learned from, but that is not checked.
+- **Searches the user did not run.** Activity-based branching with restarts (Chuffed `-f`, M10 in
+  flight on `main`) may fix defined bits early the way the `c` variant does, and whether the system
+  pays there is open.
+
+### 9. The runs, and the night the node was away
+
+`fataepyc-06` was unreachable from 18:00 on 2026-11-18 to the next morning. Four detached batches
+were running and finished without supervision (`jobs1.txt`, `jobs2.txt`, `jobs3b.txt` and
+`jobs4.txt` in the run directory, each with its `.done` marker; `jobs3.txt` is the list `jobs3b.txt`
+was cut from and never ran). On 2026-11-19 their 90 `out/*.res` were read and §3
+to §5 filled from them. `bash run1.sh` used `bin/main.exe`, and the tags ending in `PB` used
+`bin/main2.exe` with `BAGUETTE_PARITY_MODE=beyond`. The tags ending in `PD` set
+`BAGUETTE_PARITY_UP=1`, and `o7k2_def_PD20k` also `BAGUETTE_NODE_LIMIT=20000`. The `ch_*` runs are
+fzn-chuffed `-s` on the re-flattened files (a first copy failed on a wrong flag and was rerun).
+The one read that the node's absence delayed, the place where the 458 beyond inferences occur on
+aut `u1`, was run on 2026-11-19 (`o7k2_u1_{PB,N}_n{1,60,100,140,171}`, a few seconds each). No QR104
+`c` run without `--parity` was made, since no `c` run closes on any QR code and the missing number
+would not change §7.
