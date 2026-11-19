@@ -160,7 +160,7 @@ bench: build
 #
 #   make diff ARGS="--tier all -j 24"    # hard: fails on any difference
 #   make diff ARGS="--debug --tier all -j 24"   # BAGUETTE_DEBUG=1 at <= 1 500 nodes, ~7 min
-#   make scaling ARGS="-j 16"            # REPORT-ONLY until M11-complexity-T6 (--enforce)
+#   make scaling ARGS="-j 16"            # ENFORCING since M11-complexity-T6 (D-0160)
 #
 # `make diff` FAILS on any difference from bench/diff/reference/; the rule for
 # re-recording it (never to make it pass) is in D-0141 and in the script's header.
@@ -169,4 +169,4 @@ diff: build
 	$(CAP) ./scripts/diff_lane.sh $(ARGS)
 
 scaling: build
-	$(CAP) ./scripts/scaling_lane.sh $(ARGS)
+	$(CAP) ./scripts/scaling_lane.sh --enforce $(ARGS)
