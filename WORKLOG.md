@@ -333,7 +333,7 @@ artefacts are unchanged by every M6-T22 fix, so the numbers below are comparable
 ### 2026-11-18 — M11-complexity-T5 (D-0145): the largest proof-mode cost left on cyclic is in batch 1's and W7's files (agent-batch5, `wave49-batch5`)
 
 |---|---|---|---|
-| `Alldiff.excl` cites one ladder rung per value through `Encoding.consistency_id`, which looks the variable up by NAME every time (`Encoding.find`, a string `Hashtbl`, `Encoding.hash`): 12.4 % of 2011_cyclic-rcpsp_easy_6's proof mode at 2 000 nodes and 2.6 % of rcpsp_11's at 10 000, measured with the frame-pointer switch at `910af19`. Look the variable up once per exclusion (its `ladder_base` and bounds) and compute the rung ids arithmetically, as `consistency_id` itself does; or give `Encoding` a lookup by variable index (D-0140 W7). Byte-neutral: the ids are the same. | `lib/core/prop/alldiff.ml`, `lib/proof/encoding.ml` | agent-batch5 (M11-T5) | open |
+| `Alldiff.excl` cites one ladder rung per value through `Encoding.consistency_id`, which looks the variable up by NAME every time (`Encoding.find`, a string `Hashtbl`, `Encoding.hash`): 12.4 % of 2011_cyclic-rcpsp_easy_6's proof mode at 2 000 nodes and 2.6 % of rcpsp_11's at 10 000, measured with the frame-pointer switch at `910af19`. Look the variable up once per exclusion (its `ladder_base` and bounds) and compute the rung ids arithmetically, as `consistency_id` itself does; or give `Encoding` a lookup by variable index (D-0140 W7). Byte-neutral: the ids are the same. | `lib/core/prop/alldiff.ml`, `lib/proof/encoding.ml` | agent-batch5 (M11-T5) | DONE in `wave53-alldiff` (`b543817`, D-0156 section 5): -10.0 % of cyclic's proof-mode instructions, every byte the same |
 | **Three gate findings on main at `e34e133`, not from M7-T32** (D-0150 section 7, measured on a fresh clone on fataepyc-06, each reproduced with main's own binary or clone): (1) `test/unit/test_prop.ml` is not formatted, so `make check` stops at `fmt-check` before building (one blank line missing before the M7-T28 `regular` banner, after `test_linear_scratch`); (2) `test_retention` fails 5 checks, `(a)` and `(c)` "deep shipped" (the policy that should evict nothing), presumably since `36c1312` routed the learned instances through `Retention.gate`; (3) `make diff --tier all` differs on 117 of 301 runs, `fifo` and `lbd` (counters moved by `36c1312`) and `restarts`, `activity`, `alternate` (no reference committed). The default configuration is equal everywhere. Each needs its owner's decision (D-0141's rule on re-recording) | `test/unit/test_prop.ml`, `test/unit/test_retention.ml`, `bench/diff/reference/` | agent-flags (M7-T32) | open |
 ### 2026-11-18 — three findings from the M10 measurements, for the owners of the code they point at (agent-strategy, `wave45-strategy`, D-0137 section 13)
 
@@ -409,6 +409,8 @@ artefacts are unchanged by every M6-T22 fix, so the numbers below are comparable
    predicate is `Store.remover_scan`'s, which `Store.remover` is checked against under
    `BAGUETTE_DEBUG`). element.ml's two copies of the walk were replaced that way in D-0155,
    every artefact unchanged.
+   DONE in `wave53-alldiff` (`cc9d94d`, D-0156 section 5b): black-hole_10 52.2 G to 15.9 G,
+   black-hole_20 at 20 nodes 1 846 G to 175 G, every artefact the same.
 
 ## Completed
 
@@ -572,6 +574,38 @@ artefacts are unchanged by every M6-T22 fix, so the numbers below are comparable
 | M11-complexity-T8 | agent-element (`wave53-element`) | 2026-11-19 | **D-0155.** `Element.add_facts` hashed and linear (same list as the old fold, oracle-tested), the index-hole trail walks through `Store.remover`, live and carried-value membership through an int table, hole facts once per pass. black-hole_10 168 G to 52 G instructions; every model's artefacts equal to main |
 
 ## Handoff notes
+
+### PAUSED 2026-11-19 (agent-alldiff, wave53-alldiff)
+
+**Done and committed** (branch `wave53-alldiff`, pushed to node06 and origin): `b543817` part 2,
+`Alldiff.excl` through `Encoding.consistency_ids` (byte-identical); `4943f23` + `e3b7bc9` part 1,
+alldiff's two pigeonholes carry their facts under a decision (`push_conflict`), root unchanged,
+two SAT models + test_prop M7-T33 lanes (all green on the node); `cc9d94d` the orchestrator's
+addition, `hole_cite` through `Store.remover` (byte-identical); `328e631` merge of origin/main
+`c058ada`. Docs NOT written: the D-0156 draft (sections 1-3, 5, 5b filled; 4, 6, 7 TBD) is
+`/scratch/arthur/wave53-alldiff-runs/D-0156-draft.md`. Not yet done: append it to DECISIONS.md,
+ROADMAP row M7-T33 DONE, release the claim row, final handoff note.
+
+**Measured** (all under `/scratch/arthur/wave53-alldiff-runs/`): part 2 `m/*.sum` (cyclic
+646.22 -> 581.31 G, -10.0 %, .pbp md5 equal; rcpsp_11 equal). Gate on `b543817` alone
+(`gate/status`, "A" lines): check rc 0, 4243 ok, 0 FAIL, 198 models, 0 artefact diffs, lane
+301/301, debug 289/289. Gate on `4943f23` ("B" lines): check rc 0, 4275 ok, 0 FAIL, 200 models;
+artefact diffs only 4 alldiff `.pbp`; lane 18 DIFF (cyclic x6, lot-sizing x12), debug 6 (cyclic);
+scaling ok. bh (`final/status`): bh10 52.23 -> 15.92 G, bh20@20 1846 -> 174.5 G, artefacts equal.
+p1f_13: main TIMEOUT 0 learned -> UNSAT 19.5 s, 1877 learned, VERIFIED (`chal/results.tsv`).
+**FINDING**: lot-sizing [activity] dies at the lane's 4 GB cap (rc 134): main 3.44 GB RSS, branch
+4.35 GB, search-side (`--no-proof` 2.55 -> 3.49 GB, `mem/`), tracking learned 846 -> 1722
+(`repro/`). Do not raise the cap; it is the orchestrator's call.
+
+**Running** (detached, may finish alone): `final.sh`, pid in `final.pid`, writes `final/status`:
+the Challenge pairs main `643f44e9` vs tip `45b8a3c7` (`chal/`, `summ_pair.py chal/results.tsv
+main new`), then the tip gate in `gate-tip/` (logs `final/gate/`), then `--update` of both passes
+in that throwaway clone (verifies every proof; expect lot-sizing [activity] REFUSED).
+
+**Next**: read `final/status`; fill D-0156 sections 4 (chal summary), 6 (tip gate), 7 (re-record:
+cyclic@2000 x {default, audit0, lbd, nopb, bits0, noproof} both passes, lot-sizing x 12 configs,
+activity blocked by the cap finding); append D-0156 at the end of DECISIONS.md; ROADMAP DONE;
+remove the claim row; handoff note; report.
 
 ### 2026-11-19 (orchestrator): wave53-tooling merged, gate 62 green
 
