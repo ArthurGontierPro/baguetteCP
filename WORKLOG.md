@@ -22,6 +22,7 @@ of it to every session and stopping at a broken line before it even reached the 
 | M7-T33 (and `Alldiff.excl`'s proof cost, D-0145) | `lib/core/prop/alldiff.ml`, `lib/proof/encoding.ml` (additive only), new `test/models/`, `test/unit/test_prop.ml` (alldiff section) | agent-alldiff (`wave53-alldiff`) | 2026-11-19 |
 | M7-T28 (`member`) | new `lib/core/prop/member.ml`, `lib/flatzinc/compile.ml` (member dispatch), `mznlib/`, new `test/models/`, `test/unit/test_prop.ml` (member section) | agent-member (`wave53-member`) | 2026-11-19 |
 | D-0161 request 1 (`Alldiff.snap_of` builds derivation inputs at every snapshot) | `lib/core/prop/alldiff.ml` ON TOP OF `wave53-alldiff` (merges after it), `test/unit/test_prop.ml` (alldiff section) | agent-snap (`wave54-snap`) | 2026-11-19 |
+| M11-complexity-T12 (what a proved run keeps alive) | `lib/core/explanation.ml` (functions only, the type unchanged), `lib/core/justify.ml`, `lib/proof/writer.ml`, their unit tests | agent-live (`wave54-live`) | 2026-11-19 |
 
 ## Cross-session requests
 
