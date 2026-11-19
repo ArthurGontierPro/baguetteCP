@@ -1,0 +1,19 @@
+% M8-bits-encoding (D-0153): PB conflict analysis over MIXED rows -- an ORDER pivot (a
+% width-1 variable, which stays on the order encoding at every threshold) in a row whose
+% other term is on the bits encoding at --bits-above 0. Satisfiable (z = 3, b = 1, c = 1,
+% w = 7), so every atom's `red` pair is checked over a database that does not prove
+% everything.
+%
+% Nothing is decided at the root. The search takes z first, at its maximum: z = 7 pushes
+% b = 0 and c = 0 (each through a row z + 7b <= 10 with z on bits), and the third row then
+% needs w >= 10: a conflict. The pivots are b's and c's order literals; their reasons'
+% bits blocks are instantiated at z's lower bound (the atom z_ge_7), and the learned row is
+% over that atom. z = 6, 5, 4 conflict the same way; z = 3 leaves b free.
+var 0..7: z :: output_var;
+var 0..1: b :: output_var;
+var 0..1: c :: output_var;
+var 0..7: w :: output_var;
+constraint int_lin_le([1, 7], [z, b], 10);
+constraint int_lin_le([1, 7], [z, c], 10);
+constraint int_lin_le([-7, -7, -1], [b, c, w], -10);
+solve :: int_search([z, b, c, w], input_order, indomain_max, complete) satisfy;

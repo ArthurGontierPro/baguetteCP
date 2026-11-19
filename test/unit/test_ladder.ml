@@ -716,12 +716,278 @@ let test_coupling () =
 
 (* ------------------------------------------------------------------ main *)
 
+(* =================================================================== (e) *)
+
+(* M8-bits-encoding (D-0153): THE BITS ARM. A row with a term on the bits encoding is
+   instantiated through its atoms' bridges before PB analysis resolves on it
+   (lib/core/ladder.ml, "The bits arm"). Four lanes, each with what would show it wrong:
+
+     (e1) the arithmetic, on D-0153 section 1's probe scene, by hand: the instantiated
+          reason and conflict rows are the ones the checker accepted in probe p1, each is
+          ENTAILED by the rows it was built from at every 0-1 point (bits included), and
+          the reduction's postcondition holds on the reason.
+     (e2) a whole solve at --bits-above 0 (test/models/bits_pb_learn_sat.fzn, satisfiable,
+          so every `red` pair is checked over a database that does not prove everything,
+          D-0053): every conflict learns a PB row, through bridges, with no bit left in
+          any learned row, every row entailed by its premises, and veripb accepts.
+     (e3) the same for an ORDER pivot in a mixed row (bits_pb_order_pivot_sat.fzn).
+     (e4) the BREAKS: the conflict row's instantiation corrupted by the writer's own
+          mutation knobs (a citation swapped; the derivation truncated to the bare model
+          row), each refused at the `ia` of the learned row with the checker's judgement
+          on the `pol`, at full wording -- a lane that only saw the exit status could not
+          tell that from a parse error. *)
+
+let with_bits_above w f =
+  let saved = !Encoding.bits_above in
+  Encoding.bits_above := w;
+  Fun.protect ~finally:(fun () -> Encoding.bits_above := saved) f
+
+(* [run], at a threshold, in the model's own search order (D-0134 section 5.5: without it
+   the scene the model was written for is not the one searched), and through a mutated
+   writer when asked. *)
+let run_bits ?mutation src =
+  let c = with_bits_above (Some 0) (fun () -> compile src) in
+  let dir = Filename.temp_file "baguette_ladder_bits" "" in
+  Sys.remove dir;
+  Sys.mkdir dir 0o700;
+  let opb = Filename.concat dir "m.opb" and pbp = Filename.concat dir "m.pbp" in
+  let oc = open_out opb in
+  Encoding.write_opb ~comments:[ "D-0153" ] c.Compile.encoding oc;
+  close_out oc;
+  let oc = open_out pbp in
+  let writer =
+    match mutation with
+    | None -> Writer.create ~audit:true oc
+    | Some mutation -> Writer.create_mutated ~comments:false ~audit:true ~mutation oc
+  in
+  Encoding.start_proof c.Compile.encoding writer;
+  let ctx = Justify.create ~writer ~encoding:c.Compile.encoding in
+  let stats = Search.stats_create () in
+  (try
+     ignore
+       (Search.solve ~engine:c.Compile.engine ~store:c.Compile.store ~ctx
+          ~check:(fun _ -> true)
+          ~stats ?order:c.Compile.order ()
+         : Search.outcome)
+   with Writer.Audit_failed r ->
+     incr failures;
+     Printf.printf "FAIL the run raised Audit_failed: %s\n" r);
+  close_out oc;
+  ( { r_stats = stats; r_dir = dir; r_opb = opb; r_pbp = pbp },
+    Writer.mutation_fired writer,
+    c.Compile.encoding )
+
+(* test/models/bits_pb_learn_sat.fzn and bits_pb_order_pivot_sat.fzn, verbatim but for
+   their comments (the headers there say what each scene is). *)
+let learn_src =
+  "var 0..7: x :: output_var;\n\
+   var 0..7: y :: output_var;\n\
+   var 0..7: w :: output_var;\n\
+   var 0..7: z :: output_var;\n\
+   constraint int_lin_le([1, 1], [x, z], 7);\n\
+   constraint int_lin_le([1, 1], [y, z], 7);\n\
+   constraint int_lin_le([-1, -1, -1], [x, y, w], -15);\n\
+   solve :: int_search([z, x, y, w], input_order, indomain_max, complete) satisfy;\n"
+
+let order_pivot_src =
+  "var 0..7: z :: output_var;\n\
+   var 0..1: b :: output_var;\n\
+   var 0..1: c :: output_var;\n\
+   var 0..7: w :: output_var;\n\
+   constraint int_lin_le([1, 7], [z, b], 10);\n\
+   constraint int_lin_le([1, 7], [z, c], 10);\n\
+   constraint int_lin_le([-7, -7, -1], [b, c, w], -10);\n\
+   solve :: int_search([z, b, c, w], input_order, indomain_max, complete) satisfy;\n"
+
+let test_bits_arithmetic () =
+  print_endline "\n-- D-0153 (e1): the bits arm's arithmetic, on probe p1's scene";
+  let xb i = Lit.bit "x" i and yb i = Lit.bit "y" i and zg v = Lit.ge "z" v in
+  let r1 =
+    (* x + z <= 5: x on 3 bits (0..7), z on the ladder (0..3) *)
+    Learned.make
+      [ (-1, xb 0); (-2, xb 1); (-4, xb 2); (-1, zg 1); (-1, zg 2); (-1, zg 3) ]
+      (-5)
+  in
+  let r2 =
+    (* x + y >= 11, both on 3 bits *)
+    Learned.make [ (1, xb 0); (2, xb 1); (4, xb 2); (1, yb 0); (2, yb 1); (4, yb 2) ] 11
+  in
+  let bits =
+    {
+      Ladder.bits_var = (fun n -> if n = "x" || n = "y" then Some (0, 7, 3) else None);
+      bridge = (fun n v -> if n = "x" then (100 + v, 200 + v) else (110 + v, 210 + v));
+      bound_rows = (fun n -> if n = "x" then (300, 301) else (310, 311));
+    }
+  in
+  let x3 = Lit.ge "x" 3 in
+  (* Before the propagation: z = 3 (every ~z_ge_k falsified), x and y untouched. *)
+  let before (l : Lit.t) =
+    match l.Lit.v with Lit.Ge ("z", _) -> not l.Lit.positive | _ -> false
+  in
+  (* At the conflict: x <= 2 as well. *)
+  let at_conflict (l : Lit.t) =
+    before l
+    || match l.Lit.v with Lit.Ge ("x", k) -> l.Lit.positive && k >= 3 | _ -> false
+  in
+  (match
+     Ladder.instantiate ~bits ~row:r1 ~pivot:(Some (Lit.negate x3)) ~falsified:before
+   with
+  | Error m ->
+      incr failures;
+      Printf.printf "FAIL e1: the reason was not instantiated: %s\n" m
+  | Ok i -> (
+      let want =
+        Learned.make
+          [
+            (3, Lit.negate x3);
+            (1, Lit.negate (zg 1));
+            (1, Lit.negate (zg 2));
+            (1, Lit.negate (zg 3));
+          ]
+          1
+      in
+      check
+        "e1: the reason at the pivot's atom is 3 ~x_ge_3 + ~z_ge_1..3 >= 1 (probe p1's \
+         @i1)"
+        (Learned.terms i.Ladder.inst = Learned.terms want
+        && Learned.degree i.Ladder.inst = Learned.degree want);
+      check "e1: ...through B1 of x_ge_3 at multiplier 1, and nothing else"
+        (List.map (fun (m, cid, _) -> (m, cid)) i.Ladder.added = [ (1, 103) ]);
+      (match
+         counterexamples
+           ~premises:(r1 :: List.map (fun (_, _, r) -> r) i.Ladder.added)
+           ~conclusion:i.Ladder.inst
+       with
+      | None -> print_endline "     (oracle skipped: too many variables)"
+      | Some n ->
+          check_eq "e1: the reason's instantiation is entailed at every 0-1 point" n 0);
+      let v = { Reduce.row = i.Ladder.inst; pivot = Lit.negate x3; falsified = before } in
+      match Reduce.division.Reduce.reduce v with
+      | None ->
+          incr failures;
+          print_endline "FAIL e1: the division declined the instantiated reason"
+      | Some o -> (
+          check
+            "e1: the instantiated reason PB-propagates the pivot: the reduction's \
+             postcondition holds"
+            (Reduce.postcondition_holds Reduce.division v o);
+          match Ladder.instantiate ~bits ~row:r2 ~pivot:None ~falsified:at_conflict with
+          | Error m ->
+              incr failures;
+              Printf.printf "FAIL e1: the conflict row was not instantiated: %s\n" m
+          | Ok c ->
+              check
+                "e1: the conflict row at x <= 2 and y's declared high is 5 x_ge_3 >= 2 \
+                 (@i0)"
+                (Learned.terms c.Ladder.inst = Learned.terms (Learned.make [ (5, x3) ] 2)
+                && Learned.degree c.Ladder.inst = 2);
+              check "e1: ...through B2 of x_ge_3 and y's @ub"
+                (List.map (fun (m, cid, _) -> (m, cid)) c.Ladder.added
+                = [ (1, 203); (1, 311) ]);
+              (match
+                 counterexamples
+                   ~premises:(r2 :: List.map (fun (_, _, r) -> r) c.Ladder.added)
+                   ~conclusion:c.Ladder.inst
+               with
+              | None -> print_endline "     (oracle skipped: too many variables)"
+              | Some n ->
+                  check_eq
+                    "e1: the conflict row's instantiation is entailed at every 0-1 point"
+                    n 0);
+              let learned = Learned.combine c.Ladder.inst 1 o.Reduce.reduced 5 in
+              let want =
+                Learned.make
+                  [
+                    (5, Lit.negate (zg 1)); (5, Lit.negate (zg 2)); (5, Lit.negate (zg 3));
+                  ]
+                  2
+              in
+              check
+                "e1: the elimination learns 5 ~z_ge_1 + 5 ~z_ge_2 + 5 ~z_ge_3 >= 2, \
+                 probe p1's verified row"
+                (Learned.terms learned = Learned.terms want
+                && Learned.degree learned = Learned.degree want))));
+  (* A block the encoding does not know is an [Error], never a row with a bit left in it. *)
+  check "e1: with no bits information a mixed row is refused, not resolved"
+    (match
+       Ladder.instantiate ~bits:Ladder.no_bits ~row:r1 ~pivot:None ~falsified:before
+     with
+    | Error _ -> true
+    | Ok _ -> false)
+
+(* (e2)/(e3): a whole solve, and every learned row read back. *)
+let check_bits_solve ~title ~model ~src ~learned =
+  print_endline (Printf.sprintf "\n-- D-0153 (%s): %s at --bits-above 0" title model);
+  let r, _, enc = run_bits src in
+  let s = r.r_stats in
+  check (title ^ ": the model is on the bits encoding") (Encoding.n_bits_vars enc > 0);
+  check_eq (title ^ ": every conflict reaches PB analysis") s.Search.n_pb_attempts learned;
+  check_eq (title ^ ": ...and learns a PB row: no fallback") s.Search.n_pb_learned learned;
+  let rows = Search.stats_pb_rows s in
+  check (title ^ ": rows to inspect") (rows <> []);
+  check
+    (title ^ ": at least one learned row was reached through bits bridges")
+    (List.exists (fun (t : Pb.t) -> t.Pb.bits_bridges > 0) rows);
+  List.iteri
+    (fun i (t : Pb.t) ->
+      check
+        (Printf.sprintf "%s: row %d names no bit -- every block was instantiated" title i)
+        (not (List.exists (fun l -> Lit.is_bit l.Lit.v) (Learned.lits t.Pb.row)));
+      let ids = Pb.cited_ids t.Pb.derivation in
+      check
+        (Printf.sprintf
+           "%s: row %d cites only ids on the page (model rows and level-0 bridges)" title
+           i)
+        (List.for_all (fun id -> id >= 1) ids
+        && List.sort compare ids = List.sort compare t.Pb.antecedents);
+      check
+        (Printf.sprintf "%s: row %d lists one antecedent row per cited id" title i)
+        (List.length t.Pb.antecedent_rows = List.length t.Pb.antecedents);
+      match counterexamples ~premises:t.Pb.antecedent_rows ~conclusion:t.Pb.row with
+      | None -> print_endline "     (oracle skipped: too many variables)"
+      | Some n ->
+          check_eq
+            (Printf.sprintf
+               "%s: row %d is entailed by its premises (bridges included) at every 0-1 \
+                point"
+               title i)
+            n 0)
+    rows;
+  expect_checker ~title ~accepted:true r;
+  cleanup r
+
+let test_bits_solves () =
+  check_bits_solve ~title:"e2" ~model:"bits_pb_learn_sat" ~src:learn_src ~learned:3;
+  check_bits_solve ~title:"e3" ~model:"bits_pb_order_pivot_sat" ~src:order_pivot_src
+    ~learned:4
+
+(* (e4): the conflict row's instantiation is the first `pol` of four summands in this
+   model (the model row, @ub of w, B2 of x_ge_2, B2 of y_ge_2); the lane asserts the knob
+   FIRED, because a knob that found no site leaves a clean proof whose acceptance would
+   read as a pass. *)
+let test_bits_breaks () =
+  print_endline "\n-- D-0153 (e4): the instantiation is load-bearing -- two breaks";
+  List.iter
+    (fun (kind, label) ->
+      let mutation = Writer.Mutation.make ~site:"combine(4 summand(s), / 1)" kind in
+      let r, fired, _ = run_bits ~mutation learn_src in
+      check (Printf.sprintf "e4/%s: the knob fired on the instantiation" label) fired;
+      expect_checker ~title:("e4/" ^ label) ~accepted:false r;
+      cleanup r)
+    [
+      (Writer.Mutation.Swap_citation, "swap-citation");
+      (Writer.Mutation.Truncate_derivation, "truncate-derivation");
+    ]
+
 let () =
   test_worked_case ();
   test_nondegenerate_counter ();
   test_degenerate_control ();
   test_proof ();
   test_coupling ();
+  test_bits_arithmetic ();
+  test_bits_solves ();
+  test_bits_breaks ();
   if !failures > 0 then (
     Printf.printf "\n%d failure(s)\n" !failures;
     exit 1)
