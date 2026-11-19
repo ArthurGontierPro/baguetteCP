@@ -350,7 +350,7 @@ make check          # fmt-check + build + lint + determinism + test — the gate
 make fmt            # the explicit fixer. Rewrites files. Run it, then stage only YOURS
 make proof FZN=test/models/foo.fzn   # solve and verify one model's proof
 make bench ARGS="..."                # measurement only, never a commit gate
-make diff ARGS="--tier all -j 24"    # the DIFFERENTIAL lane (M11-T2, D-0141): real instances at a
+make diff ARGS="--tier all -j 16"    # the DIFFERENTIAL lane (M11-T2, D-0141): real instances at a
                                      # fixed node budget, stdout + counters + proof hashes against
                                      # bench/diff/reference; add --debug for the BAGUETTE_DEBUG pass.
                                      # Node only. Re-record (--update) only after a gated merge that
