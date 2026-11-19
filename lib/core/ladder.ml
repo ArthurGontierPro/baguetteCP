@@ -210,6 +210,8 @@ let path ~positive ~v ~k =
   else if v >= k then []
   else List.init (k - v) (fun i -> v + i)
 
+module Int_tbl = Hashtbl.Make (Int)
+
 (* [lift ~row ~pivot ~falsified ~ladder_id] strengthens [row] by the ladder chain that
    carries every NOT-falsified term entailing [pivot] onto [pivot] itself.
 
@@ -226,41 +228,56 @@ let path ~positive ~v ~k =
    Raises nothing: [Learned.combine] multiplies through [Checked] and may raise
    [Checked.Overflow], which is I-X8 / D-0029 and is the caller's to catch -- it is the
    same raise the caller already catches around its own [combine], and the answer to it
-   is to learn a clause instead, never to wrap. *)
-let lift ~(row : Learned.t) ~(pivot : Lit.t) ~(falsified : Lit.t -> bool)
-    ~(ladder_id : string -> int -> int option) : t option =
+   is to learn a clause instead, never to wrap.
+
+   M6-T23 (D-0149): [stop] is asked before every rung's [combine], and [Stopped] is
+   raised when it says yes. One lift on 2017_cargo_challenge01 folds thousands of rungs
+   into a row of thousands of terms, minutes of [combine] and its GC with nothing polling
+   the time limit, so the stop fired only after the analysis ended, long past the limit.
+   The default never says yes, so nothing changes without a limit, and a limit that fires
+   here abandons a lift whose row nothing has used yet. *)
+exception Stopped
+
+let lift ?(stop = fun () -> false) ~(row : Learned.t) ~(pivot : Lit.t)
+    ~(falsified : Lit.t -> bool) ~(ladder_id : string -> int -> int option) () : t option
+    =
   match pivot.Lit.v with
   | Lit.Eq _ -> None (* the direct encoding has no ladder: D-0019/D-0040 *)
   | Lit.Bit _ -> None (* a bits variable has no ladder either: D-0130 section 7.5 *)
   | Lit.Ge (name, k) ->
       let positive = pivot.Lit.positive in
-      (* Multipliers accumulated per ladder value. An association list keyed by the value,
-         so the result is a function of the SET of liftable terms and not of the order
-         [Learned.terms] happened to return them in. *)
-      let bump acc w m =
-        match List.assoc_opt w acc with
-        | Some m0 -> (w, m0 + m) :: List.remove_assoc w acc
-        | None -> (w, m) :: acc
+      (* Multipliers accumulated per ladder value, keyed by the value, so the result is a
+         function of the SET of liftable terms and not of the order [Learned.terms]
+         happened to return them in. M11-complexity-T4 (D-0140 P2, D-0144): a table keyed
+         by the value, where it was an association list with an [assoc] and a
+         [remove_assoc] per rung per term. The table is iterated once, into a list that
+         is then SORTED by the value, which is unique per entry, so its iteration order
+         reaches nothing: the same [(value, multiplier)] pairs come out in the same order
+         as before. *)
+      let tbl = Int_tbl.create 16 in
+      let bump w m =
+        match Int_tbl.find_opt tbl w with
+        | Some m0 -> Int_tbl.replace tbl w (m0 + m)
+        | None -> Int_tbl.add tbl w m
       in
-      let mults =
-        List.fold_left
-          (fun acc (tm : Learned.term) ->
-            let l = tm.Learned.lit in
-            match l.Lit.v with
-            | Lit.Ge (n, v)
-              when String.equal n name && l.Lit.positive = positive
-                   && (not (Lit.equal l pivot))
-                   && not (falsified l) -> (
-                match path ~positive ~v ~k with
-                | [] -> acc
-                | ws ->
-                    (* Either the whole chain is available or the term is not lifted. *)
-                    if List.for_all (fun w -> ladder_id name w <> None) ws then
-                      List.fold_left (fun acc w -> bump acc w tm.Learned.coeff) acc ws
-                    else acc)
-            | _ -> acc)
-          [] (Learned.terms row)
-      in
+      List.iter
+        (fun (tm : Learned.term) ->
+          let l = tm.Learned.lit in
+          match l.Lit.v with
+          | Lit.Ge (n, v)
+            when String.equal n name
+                 && Bool.equal l.Lit.positive positive
+                 && (not (Lit.equal l pivot))
+                 && not (falsified l) -> (
+              match path ~positive ~v ~k with
+              | [] -> ()
+              | ws ->
+                  (* Either the whole chain is available or the term is not lifted. *)
+                  if List.for_all (fun w -> Option.is_some (ladder_id name w)) ws then
+                    List.iter (fun w -> bump w tm.Learned.coeff) ws)
+          | _ -> ())
+        (Learned.terms row);
+      let mults = Int_tbl.fold (fun w m acc -> (w, m) :: acc) tbl [] in
       if mults = [] then None
       else
         (* Ascending for a negative pivot, descending for a positive one: the order in
@@ -270,7 +287,7 @@ let lift ~(row : Learned.t) ~(pivot : Lit.t) ~(falsified : Lit.t -> bool)
            order the argument makes them. *)
         let ordered =
           List.sort
-            (fun (a, _) (b, _) -> if positive then compare b a else compare a b)
+            (fun (a, _) (b, _) -> if positive then Int.compare b a else Int.compare a b)
             mults
         in
         let steps =
@@ -283,7 +300,9 @@ let lift ~(row : Learned.t) ~(pivot : Lit.t) ~(falsified : Lit.t -> bool)
         else
           let lifted =
             List.fold_left
-              (fun acc (w, m, _) -> Learned.combine acc 1 (ladder_row ~name w) m)
+              (fun acc (w, m, _) ->
+                if stop () then raise Stopped;
+                Learned.combine acc 1 (ladder_row ~name w) m)
               row steps
           in
           let rows = List.map (fun (w, _, cid) -> (cid, ladder_row ~name w)) steps in

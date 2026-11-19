@@ -540,13 +540,18 @@ let pass t store =
         add_part snaps.(idx) 1
     | Store.Unchanged -> ()
   in
-  (* The first overloaded point of [times], scanned in the given order. *)
-  let rec first_overloaded j = function
-    | [] -> None
-    | time :: rest -> (
-        match overloaded j time with
-        | Some row -> Some (time, row)
-        | None -> first_overloaded j rest)
+  (* The first overloaded point of the [n] times [a], [a + step], ..., scanned in that
+     order. M11-complexity-T3 (D-0142, E8): the times used to be built as a list per task
+     and direction on every pass ([range], and [List.rev] of it for the lower push); the
+     loop visits the same times in the same order and stops at the same one. *)
+  let first_overloaded j a step n =
+    let rec go k =
+      if k >= n then None
+      else
+        let time = a + (step * k) in
+        match overloaded j time with Some row -> Some (time, row) | None -> go (k + 1)
+    in
+    go 0
   in
   for idx = 0 to Array.length snaps - 1 do
     (* The LATEST overloaded point of the earliest run gives the strongest lower push,
@@ -555,11 +560,11 @@ let pass t store =
        bound. [j] is re-read between the two because a landed lower push refreshed it. *)
     let j = snaps.(idx) in
     let d = j.s_task.dur in
-    (match first_overloaded j (List.rev (range j.s_lo (j.s_lo + d - 1))) with
+    (match first_overloaded j (j.s_lo + d - 1) (-1) (Stdlib.max 0 d) with
     | Some (time, row) -> push idx j row ~lower:true (time + 1)
     | None -> ());
     let j = snaps.(idx) in
-    match first_overloaded j (range j.s_hi (j.s_hi + d - 1)) with
+    match first_overloaded j j.s_hi 1 (Stdlib.max 0 d) with
     | Some (time, row) -> push idx j row ~lower:false (time - d)
     | None -> ()
   done;

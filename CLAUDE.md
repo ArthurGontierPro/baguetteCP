@@ -250,7 +250,15 @@ lib/core/       Baguette_core
                             own, no name, so no sanitize table (M4-T0, D-0058)
   propagator.ml             the PROPAGATOR module type (51 lines — read it whole)
   engine.ml                 propagate-to-fixpoint loop and the queue (ARCH §5)
-  search.ml                 DFS, branching, backtracking, every step proof-logged
+  search.ml                 DFS, branching, backtracking, every step proof-logged.
+                            Restarts are opt-in (SPEC 3.4, D-0137): NRestart t unwinds
+                            to level t and re-enters that node, no new proof rule
+  restart.ml                WHEN to restart: Luby, geometric, Glucose's LBD average
+                            (with a Luby floor), the stable alternation (M10-T2)
+  phase.ml                  phase saving: the value a variable was last fixed at,
+                            read when its level is undone (M10-T2, D-0137)
+  activity.ml               the activity heuristic: VSIDS score per variable,
+                            learned-clause bumps, EVSIDS decay (M10-T3, D-0137)
   checked.ml                checked integer arithmetic + the overflow cap (M1-T23)
   interval.ml               interval arithmetic: mul, square, div of bounds (M4-T4a)
   debug.ml                  BAGUETTE_DEBUG-gated invariant checks
@@ -281,6 +289,11 @@ lib/core/       Baguette_core
                             over gcc's window indicators, one capacity row per time point,
                             CHECKING; the first Needs_derivation family whose CONFLICTS carry
                             facts, so they can be learned from (M4-T10, D-0096)
+    regular.ml              regular (DFA) through mznlib's baguette_regular, DOMAIN
+                            consistent over the letters and (n+1)*Q STATE FLAGS (store
+                            variables, so a dead state is a trail entry); every pruning one
+                            rup against its rows plus the backward-chain lemmas
+                            Encoding.start_proof derives (M7-T28, D-0146)
     linear.ml               int_lin_le. THE REFERENCE PROPAGATOR — copy this shape.
     lin_eq.ml               int_lin_eq (two model rows, see D-0011)
     ne.ml                   int_lin_ne and int_ne (VALUE consistency)
@@ -310,6 +323,7 @@ test/unit/                  22 binaries: test_core test_domain test_engine test_
                             test_compile test_endtoend test_matrix test_mutation
                             test_output test_random test_interval test_learned
                             test_learn test_analysis test_ladder test_retention test_clause test_pb test_consistency
+                            test_search_strategy (M10: restarts, phases, activity)
   mem_guard.ml              NOT a test binary: the shared Gc-alarm heap guard every
                             suite installs (M1-T53). All 22 announce arming under
                             BAGUETTE_TEST_HEAP_CAP_ANNOUNCE=1

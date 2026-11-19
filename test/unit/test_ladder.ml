@@ -300,7 +300,7 @@ let test_worked_case () =
       check_eq "a: ...its slack is 6 against a pivot coefficient of 3"
         (Reduce.slack row ~falsified) 6;
       let ladder_id = Encoding.consistency_id enc in
-      (match Ladder.lift ~row ~pivot ~falsified ~ladder_id with
+      (match Ladder.lift ~row ~pivot ~falsified ~ladder_id () with
       | None -> check "a: the ladder lift applies" false
       | Some lt -> (
           check "a: the ladder lift applies" true;
@@ -384,7 +384,7 @@ let test_worked_case () =
       (* Withhold the ladder ids. Nothing else changes: the same row, the same pivot, the
          same frozen predicate. If the chain were decoration the lift would still find
          something; it finds nothing, and the bare row still does not propagate. *)
-      match Ladder.lift ~row ~pivot ~falsified ~ladder_id:(fun _ _ -> None) with
+      match Ladder.lift ~row ~pivot ~falsified ~ladder_id:(fun _ _ -> None) () with
       | Some _ ->
           incr failures;
           print_endline

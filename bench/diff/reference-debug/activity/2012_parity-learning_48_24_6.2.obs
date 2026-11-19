@@ -1,0 +1,97 @@
+rc 0
+out =====UNKNOWN=====
+search ladder/cls 533 cls
+search opb/lines 1067 lines
+search direct/vals 0 vals
+search widest/wide 12 wide
+search bits/vars 0 vars
+search bitsrows/lines 0 lines
+search choices/groups 0 groups
+search limit.nodes 1501
+search limit.decisions 880
+search limit.conflicts 873
+search limit.learned 873
+search limit.pb-learned 122
+search limit.db 995
+search limit.maxdepth 24
+search limit.incumbent none
+work limit.props 365603
+work limit.eff 79612
+work limit.contra 873
+search limit.at node
+search nodes/nodes 1501 nodes
+search decisions/decs 880 decs
+search conflicts/nodes 873 nodes
+search maxdepth/levels 24 levels
+work exhausted/bool 0 bool 1 if
+search skipped/nodes 0 nodes
+search learned/cls 873 cls
+work later/asks 188131 asks
+work cites/memos 21991 memos
+search convertible/cls 29 cls
+search retention keep-all keep-all: 995 added, 0 evicted, 995 swept, 0 live, 12 duplicate, 995 cited, 0 pinned
+search lbd 3:1,4:4,5:10,6:21,7:27,8:18,9:7,10:7,11:17,12:18,13:22,14:27,15:36,16:658
+search width 8:9,9:2,10:12,11:22,12:12,13:18,14:12,15:17,16:769
+search globals/units 0 units
+search glob-prune/prunes 0 prunes
+search glob-confl/confl 0 confl
+search cls-inst/inst 873 inst
+search cls-decl/cls 0 cls
+search cls-prune/prunes 367 prunes
+search pb-inst/inst 122 inst
+search pb-inst-no/rows 0 rows
+search pb-prune/prunes 626 prunes
+search pb-confl/confl 92 confl
+search minimised/lits 0 lits
+search i-s4-cross/lines 5662 lines
+search pb-tried/confl 873 confl
+search pb-learned/rows 122 rows
+search pb-fallback/confl 751 confl
+search pb-why first fallback reason: no PB row for instance bool2int
+work pb-whys/recd 64 recd 57 x
+search pb-steps/pivots 160 pivots
+search pb-convert/rows 121 rows
+search pb-stronger/rows 117 rows
+search pb-nondeg/rows 122 rows
+search pb-lifted/rows 0 rows
+search pb-rungs/rungs 0 rungs
+search lvl-cmp/confl 122 confl
+search lvl-same/confl 0 confl
+search lvl-narrow/confl 122 confl
+search lvl-wide/confl 0 confl
+search lvl-incomp/confl 0 confl
+search lvl-empty/confl 0 confl
+search lvl-assert/confl 54 confl
+search lvl-why first disagreement: closure {22,21,20,19,18,17,16,15,14,13,12,11,10,9,8,7,6,5,4,3,2,1} vs pb {22,21,19,17,15,14,13,10,8,6,4,1} (pb asserts at 0)
+search restarts/runs 253 runs
+search unexplored/nodes 246 nodes
+search kept/levels 5062 levels
+search activity/bumps 19986 bumps
+work int_lin_le/inst 98 inst 63.2 runs/node 19.07 eff/node
+work learned_pb/inst 122 inst 53.8 runs/node 0.40 eff/node
+work learned_clause/inst 873 inst 44.8 runs/node 0.24 eff/node
+work bool2int/inst 120 inst 33.2 runs/node 18.37 eff/node
+work bool_not/inst 96 inst 31.7 runs/node 10.12 eff/node
+work bool_clause/inst 50 inst 16.8 runs/node 4.83 eff/node
+work props/runs 365603 runs
+work eff/runs 79612 runs
+work contra/runs 873 runs
+work passes/snaps 0 snaps
+work deductions/chgs 0 chgs
+work wakes/wakes 439022 wakes
+work masked/wakes 0 wakes
+work vetoed/wakes 40317 wakes
+work advised/wakes 2769 wakes
+work seeded/runs 148089 runs
+work skipped/slots 1325278 slots
+search rup/lines 94199 lines
+search pol/lines 257 lines
+search pol-tokens/tokens 2879 tokens
+search pol-widest/tokens 59 tokens
+search atoms/atoms 0 atoms
+search atomlinks/lines 0 lines
+search bridges/pairs 0 pairs
+search boundlines/pairs 0 pairs
+search bitsprune/lines 0 lines
+opb 595626bcf85609b773ac9bd1bf2cfab7c5bdf9ee6aeaf88b3407ffc5095b036b
+pbp a7a53c35b21ba940f8fd949d8f8bc52fef7fe920b4875b27cfcbb557f89c9ec1

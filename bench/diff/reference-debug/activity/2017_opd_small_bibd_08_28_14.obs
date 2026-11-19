@@ -1,0 +1,100 @@
+rc 0
+out objective = 14;
+out X_INTRODUCED_0_ = array1d(1..224, [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+out ----------
+search ladder/cls 21 cls
+search opb/lines 9981 lines
+search direct/vals 0 vals
+search widest/wide 22 wide
+search bits/vars 0 vars
+search bitsrows/lines 0 lines
+search choices/groups 0 groups
+search limit.nodes 1501
+search limit.decisions 1156
+search limit.conflicts 495
+search limit.learned 495
+search limit.pb-learned 105
+search limit.db 600
+search limit.maxdepth 113
+search limit.incumbent 14
+work limit.props 529819
+work limit.eff 93425
+work limit.contra 493
+search limit.at node
+search nodes/nodes 1501 nodes
+search decisions/decs 1156 decs
+search conflicts/nodes 495 nodes
+search maxdepth/levels 113 levels
+work exhausted/bool 0 bool 1 if
+search skipped/nodes 95 nodes
+search learned/cls 495 cls
+work later/asks 376590 asks
+work cites/memos 14074 memos
+search convertible/cls 126 cls
+search retention keep-all keep-all: 600 added, 0 evicted, 600 swept, 0 live, 16 duplicate, 598 cited, 0 pinned
+search lbd 1:5,2:6,3:24,4:49,5:57,6:59,7:49,8:39,9:26,10:39,11:31,12:29,13:25,14:20,15:15,16:22
+search width 1:5,2:1,3:3,4:4,5:4,6:3,8:2,9:1,10:17,11:22,12:11,13:10,14:6,15:65,16:341
+search globals/units 4 units
+search glob-prune/prunes 10 prunes
+search glob-confl/confl 2 confl
+search cls-inst/inst 490 inst
+search cls-decl/cls 0 cls
+search cls-prune/prunes 1041 prunes
+search pb-inst/inst 105 inst
+search pb-inst-no/rows 0 rows
+search pb-prune/prunes 1872 prunes
+search pb-confl/confl 106 confl
+search minimised/lits 0 lits
+search i-s4-cross/lines 10415 lines
+search pb-tried/confl 495 confl
+search pb-learned/rows 105 rows
+search pb-fallback/confl 390 confl
+search pb-why first fallback reason: no PB row for instance <unknown>
+work pb-whys/recd 64 recd 38 x
+search pb-steps/pivots 107 pivots
+search pb-convert/rows 105 rows
+search pb-stronger/rows 95 rows
+search pb-nondeg/rows 105 rows
+search pb-lifted/rows 0 rows
+search pb-rungs/rungs 0 rungs
+search lvl-cmp/confl 105 confl
+search lvl-same/confl 3 confl
+search lvl-narrow/confl 85 confl
+search lvl-wide/confl 1 confl
+search lvl-incomp/confl 16 confl
+search lvl-empty/confl 0 confl
+search lvl-assert/confl 88 confl
+search lvl-why first disagreement: closure {28,27,26,25,24,23,19,18,17,16,15,9,1} vs pb {28} (pb asserts at 0)
+search restarts/runs 151 runs
+search unexplored/nodes 712 nodes
+search kept/levels 2236 levels
+search activity/bumps 11947 bumps
+work int_times/inst 5488 inst 165.2 runs/node 29.21 eff/node
+work int_lin_le_reif/inst 756 inst 48.1 runs/node 17.35 eff/node
+work bool_clause/inst 1066 inst 44.5 runs/node 6.19 eff/node
+work array_bool_and/inst 1032 inst 34.4 runs/node 7.80 eff/node
+work learned_pb/inst 105 inst 33.5 runs/node 0.45 eff/node
+work int_lin_le/inst 78 inst 17.2 runs/node 0.54 eff/node
+work learned_clause/inst 490 inst 10.1 runs/node 0.69 eff/node
+work props/runs 529819 runs
+work eff/runs 93425 runs
+work contra/runs 493 runs
+work passes/snaps 0 snaps
+work deductions/chgs 0 chgs
+work wakes/wakes 660232 wakes
+work masked/wakes 0 wakes
+work vetoed/wakes 27404 wakes
+work advised/wakes 0 wakes
+work seeded/runs 80753 runs
+work skipped/slots 14220480 slots
+search rup/lines 98611 lines
+search pol/lines 107 lines
+search pol-tokens/tokens 327 tokens
+search pol-widest/tokens 5 tokens
+search atoms/atoms 0 atoms
+search atomlinks/lines 0 lines
+search bridges/pairs 0 pairs
+search boundlines/pairs 0 pairs
+search bitsprune/lines 0 lines
+opb fd586246a58580458718ffd8ea9aec6cd6d897f2c2236d329b97d929a736d676
+pbp 7e40abc7f92a85ab14279e624553c7f6c07d0861f70a555aa5381ac76e5cd433

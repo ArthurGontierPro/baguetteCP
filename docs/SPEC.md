@@ -83,6 +83,9 @@ no variable and needs no domain of its own.
 | M3 | reified forms: `int_lin_le_reif`, `int_eq_reif`, `int_le_reif`, `int_ne_reif` |
 | M4 | `all_different_int`, `int_abs`, `int_times`, `int_div`, `array_int_element`, `global_cardinality` (M7-T16), `array_int_maximum`, `array_int_minimum`, `int_max`, `int_min` (M4-T9) |
 | M5 | `int_lin_le` with an objective; `minimize` / `maximize` |
+| M7 | `regular` (M7-T28, D-0146: `fzn_regular` and `fzn_regular_set`, kept whole by mznlib as `baguette_regular(x, Q, smin, d, q0, F, s)` with the `(n+1)*Q` state flags `s` the library introduces); `global_cardinality_closed`, `global_cardinality_low_up_closed` (M7-T28, D-0146: mznlib onto `global_cardinality`, with the closed cover's implied `sum(counts) = |x|`) |
+
+A variable that occurs more than once in `global_cardinality`'s array is accepted *(amended 2026-11-18, M7-T29, D-0146)*: it counts once per occurrence, and the front end MUST NOT refuse it nor count it once. (The implementation copies each repeat into a fresh variable tied by `int_eq`.)
 
 Encountering a builtin outside the implemented set MUST produce a clear error naming the
 builtin and exit non-zero. It MUST NOT silently ignore the constraint. *(normative)*
@@ -161,6 +164,19 @@ The proof of a stopped run ends with `conclusion NONE` (§4.3) and must still be
 the checker; it proves every line it contains and nothing about the answer. A stopped run
 exits 0, and says what it was doing on stderr (`limit:`), which is how a harness tells it
 from a run killed from outside.
+
+**The MiniZinc standard flags** *(normative, M7-T32, D-0150, 2026-11-19)*.
+`tools/baguette.msc` declares `-i -f -n -p -r -s -t -v`, and the CLI accepts them and `-a`.
+On an optimisation model `-i` and `-a` change nothing on stdout, because every improving
+solution is already printed as above, each with its own `soli` line in the proof. On a
+satisfaction model `-a`, `--all` and `-n N` with `N > 1` MUST be refused with exit 3 and
+nothing on stdout, until enumerating solutions has a proof shape (D-0150 section 4).
+`-n 1`, `-t MS` (`--time-limit` in milliseconds), `-r SEED` (accepted and unused), `-p N`
+(accepted, one thread) and `-v` (a line on stderr) leave stdout as without them. `-f` is
+`--search alternate --restarts luby --phase-saving` for each of the three not given
+explicitly. `-s` is `--stats` and, alone among the flags, adds to stdout: one block of
+`%%%mzn-stat: name=value` lines ending `%%%mzn-stat-end`, after the run's last marker.
+`--stats` itself still leaves stdout byte-identical.
 
 **How a value is rendered** *(normative)*. Until now this section gave the line shape and
 the markers but never said what goes on the right of the `=`, so the rule lived only in
@@ -293,6 +309,20 @@ in this project is aimed at.
 
 **Default.** A model with no search annotation is searched by first-fail variable selection
 with min-value branching, depth-first, restarts disabled.
+
+**Restarts, phase saving and activity search are opt-in** (M10-search-strategy, D-0137). With
+none of `--restarts`, `--phase-saving` and `--search` given, the search is the default above
+or the annotation, and its output and proof are byte-identical to a build without these
+flags. `--restarts luby[:U] | geom[:U[:F]] | lbd[:W[:K]] | stable` restarts the depth-first
+search on a deterministic schedule of conflict counts, each with a cutoff unbounded over the
+run index, so the search stays complete. A restart is a backjump to level 0 that keeps every
+learned constraint, and every restart is reflected in the proof as the backtrack it is.
+`--phase-saving` replaces the value choice (an annotation's included) by the value the
+variable was last fixed at when that value is still in its domain. `--search activity` selects
+the unfixed variable with the highest conflict activity, and `--search alternate` alternates the
+annotation and the activity order at each restart. Each of these substitutes a strategy, and
+each is only ever the user's explicit request. Without the flag, the sentence under "Anything
+else MUST be refused" below stands as it is.
 
 **Annotations** *(normative; the honouring requirement predates M7-T2, which brought the
 implementation into compliance with it)*. `int_search` and `bool_search` with the variable

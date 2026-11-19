@@ -501,6 +501,9 @@ type t = {
      many. [assignment_lits] lists every group's selectors after the bindings. *)
   mutable choices_rev : choice list;
   mutable n_choices : int;
+  (* M7-T28 (D-0146 section 3.2): the ROOT LEMMAS a model-row family asked
+     [start_proof] to derive, newest first. See [add_root_lemma]. *)
+  mutable lemmas_rev : Opb.constr list;
 }
 
 (* One choice group: its selectors, and which one a solution picks, read from the
@@ -555,6 +558,7 @@ let create () =
     atoms_closed = false;
     choices_rev = [];
     n_choices = 0;
+    lemmas_rev = [];
   }
 
 let create () =
@@ -2006,13 +2010,50 @@ let write_opb ?(comments = []) t oc =
    the condition D-0053 says a `red` must be verified under. Nothing retires these ids
    in this module: lib/core/search.ml sweeps [Writer.live_ids] on both the SAT and the
    UNSAT arm, so I-X2 is discharged there with every other level-0 line. *)
+(* ---------------------------------------------------------------------------
+   M7-T28 (D-0146 section 3.2): ROOT LEMMAS
+   ---------------------------------------------------------------------------
+
+   A constraint the model rows ENTAIL but do not state, which a propagator family's
+   trace lines need on the page before search, derived here as one `rup` each, right
+   after the direct encoding and before the first search line. The first and so far only
+   producer is `regular`'s backward chain B(i, q', R) (lib/core/prop/regular.ml): its
+   forward rows cannot carry a death by a missing predecessor, because that argument is
+   two-dimensional and unit propagation fixes neither a state nor a letter.
+
+   WHY DERIVED AND NOT POSTED. Posting a lemma as a model row would cost nothing at
+   check time and would make the .opb say something the model does not: a mistake in
+   building one would be a STRONGER model, and a stronger model with a verified proof is
+   the wrong answer this project exists to rule out. Derived, each lemma is checked: a
+   wrong one is a refused `rup` (D-0146 section 4, probe p2).
+
+   The caller is responsible for the lemma being RUP against the model rows ALONE (and the
+   lemmas registered before it); [start_proof] writes them in registration order. The ids
+   are never handed out and nothing cites them -- a trace line uses them through unit
+   propagation -- so nothing deletes them mid-search; they are level 0 and the end-of-run
+   sweep in lib/core/search.ml, which deletes every id still live before the conclusion,
+   retires them with the rest (I-X2). A model with no lemma writes nothing here, so its
+   proof is byte-identical. *)
+let add_root_lemma t (c : Opb.constr) = t.lemmas_rev <- c :: t.lemmas_rev
+let n_root_lemmas t = List.length t.lemmas_rev
+
+let emit_root_lemmas t w =
+  match t.lemmas_rev with
+  | [] -> ()
+  | rev ->
+      Writer.comment w "root lemmas (D-0146): %d backward chains" (List.length rev);
+      List.iter
+        (fun c -> ignore (Writer.rup w ~origin:"root lemma (D-0146)" c : Writer.cid))
+        (List.rev rev)
+
 let start_proof t w =
   Writer.header w ~n_model_constraints:t.n;
   List.iter
     (fun x ->
       ignore (ensure_direct t w x);
       Hashtbl.replace t.alo x (derive_at_least_one t w x))
-    (direct_requested t)
+    (direct_requested t);
+  emit_root_lemmas t w
 
 (* ---------------------------------------------------------------------------
    M1-T7c: expanding an integer linear term into a PB row over the order

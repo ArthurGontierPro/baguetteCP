@@ -186,6 +186,11 @@ type t = {
   mutable trail_len : int;
   mutable marks : mark array;
   mutable n_levels : int;
+  mutable starts : int array;
+  (* M11-complexity-T3 (D-0142, S3's store half): trail position -> how many OPEN
+     level marks sit there (an empty level can share its position with the next).
+     Kept by [push_mark] and [backtrack], the only two places [n_levels] moves, so
+     [is_level_start] is one load instead of a binary search over the marks. *)
   (* The propagator instance currently running, or [no_prop]. Written only by
      [with_running], read only by [apply] and [conflict] to stamp what they build.
      M2-T7 replaced a [conflict_facts : (unit -> Lit.t list) option] one-shot slot here:
@@ -321,6 +326,7 @@ let create ~names ~domains =
     trail_len = 0;
     marks = Array.make 16 dummy_mark;
     n_levels = 0;
+    starts = Array.make 64 0;
     current_prop = no_prop;
     current_ahead = false;
     low_water = [||];
@@ -462,7 +468,13 @@ let push_mark t m =
     Array.blit t.marks 0 bigger 0 t.n_levels;
     t.marks <- bigger);
   t.marks.(t.n_levels) <- m;
-  t.n_levels <- t.n_levels + 1
+  t.n_levels <- t.n_levels + 1;
+  let p = m.trail_mark in
+  if p >= Array.length t.starts then (
+    let bigger = Array.make (Stdlib.max (p + 1) (2 * Array.length t.starts)) 0 in
+    Array.blit t.starts 0 bigger 0 (Array.length t.starts);
+    t.starts <- bigger);
+  t.starts.(p) <- t.starts.(p) + 1
 
 (* ----------------------------------------------------------------- mutation *)
 
@@ -913,6 +925,7 @@ let backtrack t =
   let m = t.marks.(t.n_levels - 1) in
   undo_to t m.trail_mark;
   Explanation.Arena.truncate t.reasons m.reason_mark;
+  t.starts.(m.trail_mark) <- t.starts.(m.trail_mark) - 1;
   t.n_levels <- t.n_levels - 1
 
 let backtrack_to t target_level =
@@ -1253,10 +1266,19 @@ let level_of_index t i = first_mark_above t i
 (* True when [i] is the first entry of some open level, i.e. the push that opened it.
    [Trace] skips these: a decision is not implied by the model and has no trace line.
    M6-T22: the marks at or below [i] are exactly the first [level_of_index t i], so [i]
-   is a level start iff the last of them equals it. *)
-let is_level_start t i =
+   is a level start iff the last of them equals it, which (the marks being monotone,
+   I-T2) is iff SOME open mark sits at [i].
+
+   M11-complexity-T3 (D-0142): that last form is what [t.starts] counts, so the answer is
+   one load. [Search.decision_entries] asks it for every trail entry at every conflict
+   (D-0140's S3), where the binary search was 8 % of mspsp's instructions at 10 000
+   nodes. [is_level_start_by_marks] is the old definition, kept as the specification
+   test_core.ml checks the count against. *)
+let is_level_start_by_marks t i =
   let k = first_mark_above t i in
   k > 0 && t.marks.(k - 1).trail_mark = i
+
+let is_level_start t i = i >= 0 && i < Array.length t.starts && t.starts.(i) > 0
 
 (* Debug-mode check of the trail invariants. Cheap enough to call after a backtrack in
    tests; linear in the trail, so not something the engine should call per propagation. *)

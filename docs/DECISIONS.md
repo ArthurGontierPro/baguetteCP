@@ -12551,6 +12551,630 @@ What it says, instance by instance and no further:
   `test_m9_discard_rows_mint_the_same_ids` already checks. (ii) The heap budget does not
   cover an address-space death in the compile phase. That shows as `ERROR rc 134` rather
   than `REFUSED rc 5`, and a census that reads statuses should know it.
+
+## D-0137  M10-search-strategy-T1: restarts, phase saving and an activity heuristic, behind flags -- a restart is the backjump this solver already writes, taken to a chosen level, and it adds no rule to the proof
+
+**Status**: DECIDED 2026-11-18 (agent-strategy, branch `wave45-strategy`). Answers D-0045's open
+question for the flags, not for the default. The default search, its stdout and its proof are
+unchanged, and SPEC §3.4 is amended to say so (section 6). The default itself is
+M10-search-strategy-T5's to decide by measurement. T2 and T3 landed the same day on the same
+branch: sections 7 and 8 are what was built, section 10 what it measures, section 11 the gate.
+
+### 0. Why, in the measured cases
+
+The user's requests of 2026-11-18 (WORKLOG, "codes-cp measurements" and its addendum) give
+three models where the search, not the proof, decides. On aut.mzn order 7 (`o7k2`) the value
+choice alone separates 158 nodes and 5.2 s (`indomain_max` on the generator bits) from more than
+1 800 s (`indomain_min`, or no annotation), in both solvers. Chuffed's `-f` (activity with
+restarts, alternating with the annotation) solves every variant. On the two QR codes Chuffed's
+fixed search is faster than its free one (QR48 0.4 s against 19.6 s, QR72 2.8 s against 125 s),
+so a heuristic is not a free win and has to be measured per model. Read off the `.log` files in
+`fataepyc-06:/scratch/arthur/codes-bench/`:
+
+| model | Chuffed def | Chuffed `-f` | Chuffed `u` (min) | Chuffed `u1` (max) | Chuffed `ufree` |
+|---|---|---|---|---|---|
+| QR48 | 23 668 nodes, 0 restarts, 0.44 s | 123 835 nodes, 269 restarts, 19.6 s | 11 709, 0.20 s | 11 710, 0.14 s | 16 939, 55 restarts, 0.37 s |
+| QR72 | 90 500, 0 restarts, 2.8 s | 752 668, 1 329 restarts, 125 s | 50 736, 1.7 s | 50 704, 1.0 s | 70 197, 159 restarts, 2.6 s |
+| o7k2 | 11 nodes, 0.01 s | 11 nodes, 0 restarts, 0.01 s | 16 M, > 1 800 s | 140, 0.01 s | 231, 2 restarts, 0.02 s |
+
+What Chuffed does on a model with no annotation is not recorded in these logs. On o7k2 it
+coincides with `-f` (11 nodes) and never restarts. The `-f` restart counts are of the order of
+Luby restarts on a unit of 100 conflicts (that schedule allows about 105 000 conflicts over 270
+runs on QR48 against 117 616 failures observed, and about 630 000 over 1 330 runs on QR72 against
+692 166), which is an inference from the counts and not a reading of Chuffed's source.
+
+### 1. What a restart is in this solver, written as the proof lines it produces
+
+**The claim D-0045 left open is verified in the code.** `Writer.wipe_level`
+(`lib/proof/writer.ml`, the `if l <= 0 then invalid_arg` at its top) refuses level 0.
+`Learned.introduce` and `Pb_analysis.introduce` emit inside `Justify.with_level ctx 0`
+(`learned.ml:305`, `pb_analysis.ml:893`), so every learned id is tagged 0, and the improving
+constraint of a branch-and-bound run is too (`Search.record_improving`). `Retention` is their only
+deleter (D-0051). So no backjump, however far, deletes a learned constraint, and a restart is a
+backjump.
+
+**On the trail**, a restart to level `t` undoes the levels above `t`, one `Store.backtrack` per
+level, which is the undo every backjump already performs. Level 0, and every level up to `t`, is
+kept.
+
+**In the search**, the depth-first search is a recursion with one frame per open level, and each
+frame owns its level's two closing lines. So a restart is not an exception that jumps to the top.
+It is a third node outcome, `NRestart t`, that each frame above `t` passes up after closing its
+own level exactly as the backjump arm does (`Writer.set_level (lvl - 1)`, then
+`Justify.wipe_level lvl`), with no nogood to keep. The frame whose node sits at level `t` then
+**re-enters its own node** with its decision stack unchanged. That re-entry is the move M5-T1
+(an improving solution) and M7-T12 (an assignment's sibling, D-0077) already make, and it is why
+no new mechanism is needed. A full restart is `t = 0` and the frame is the root.
+
+**In the writer**, the lines a restart writes are the `% level l` comment of each level it
+closes and the `del` lines of `wipe_level t+1`, which retire every id tagged above `t`, namely
+the trace lines, the conflict lines, the bridges, the branch nogoods filed above `t` and the
+assignment clauses filed above `t`. A full restart is `wipe_level 1`, never `wipe_level 0`.
+**No rule kind is new**, so there is no new line to hand-check on 3.0.2. What has to be checked
+is that the lines a later run cites are still live, and T2's lanes check that on emitted proofs
+(section 7).
+
+**The conflict that triggers it.** The restart is decided in `dfs`'s conflict arm, after
+learning. That arm writes the trace, the conflict line, the bridges and the learned constraint
+(level 0), and then, instead of the branch nogood, returns `NRestart t`. The nogood is not
+written, because nothing would cite it. It would be filed at a level the unwinding wipes. The
+learned constraint is what carries the conflict across the restart. A conflict at which learning
+declined (`Learn.at_conflict` returned `None`) never restarts, so every restart is preceded by a
+learned constraint on the page.
+
+**The trace** is per branch only in the sense that its lines carry their trail entry's level.
+`Trace.resync` finds the common prefix of the trail it has written and the live trail by physical
+identity (`trace.ml`, its header's last bullet), so after the unwinding it simply continues from
+the kept prefix. Its level-0 lines are in `Trace.permanent` and are deleted once, at the end, by
+`Search.retire_trace`. A restart therefore needs no call into `Trace`. What changes is how often
+level 0 grows. After a restart the root re-runs `Engine.propagate`, the learned instances that
+are unit there prune at level 0, and those prunings get permanent trace lines at the next
+conflict. That is the shape `close_root_conflict` already handles, since a root conflict after
+a restart is the ordinary root conflict.
+
+**The learned database, the globals and the engine** are untouched. Learned units stay in
+`stats.globals_rev` and are re-applied at the root's re-entry, where they now land at level 0 for
+good. Registered `Learned_clause` and `Learned_pb` instances stay in the engine.
+
+**Completeness (I-S2) and termination.** Soundness does not move: `=====UNSATISFIABLE=====`
+still requires the root's empty clause, derived in the last run. What a restart policy owes is
+termination, and every policy here owes it by the same argument. Every decision strictly narrows
+a finite domain (`check_decision_landed`), so a tree searched from the root has fewer than
+`B = 2^(D+1)` nodes, `D` the sum of the declared widths, whatever the learned database holds, and
+fewer than `B` conflicts. Each policy below has a cutoff (the number of conflicts a run may take
+before it may restart) that is **unbounded over the run index**. So some run gets a cutoff above
+`B` and completes. This is the textbook argument for Luby and it is the reason the LBD policy
+below carries a Luby floor. Without the floor, termination would rest on every learned clause
+being new, which holds only while retention keeps everything and every learned clause gets an
+instance, two things T4 (D-0139) and `BAGUETTE_PROPAGATE_LEARNED=off` can change.
+
+**Determinism.** Every schedule is a function of the conflict count and of the learned
+clauses' LBDs, both deterministic. No clock, no random draw. Two runs of one binary stay
+byte-identical, which `scripts/check_determinism.sh` requires.
+
+**Interaction with the statistics.** M1-T36's identity `nodes = 2 decisions + 1 - skipped -
+3 assigns` counts a split's second child as dispatched. A frame unwound by a restart during its
+first child never dispatches the second, so a counter `restart_unexplored` joins the identity.
+The root's re-entry is not a node, as M5-T1's is not.
+
+### 1.1 Partial restarts (van der Tak, Ramos, Heule, JSAT 2011)
+
+`NRestart t` with `t > 0` is a partial restart, and the proof side is the same at every `t`
+above. Any `t` in `[0, d)` is sound, so the criterion is a question of efficiency only. The trail
+reuse rule keeps the levels whose decisions the heuristic would take again. It is only defined
+for a dynamic heuristic. Under the activity order (section 4) the levels are kept from the root
+up while the level's decision variable scores strictly above the best score among the variables
+unfixed at the conflict, and the target is capped one below the conflict's level. The paper
+compares with the variable the heuristic would pick after the backjump. The conflict's state has
+fewer unfixed variables than that, so this rule can keep a level more than the paper would. That
+costs efficiency at worst, never soundness. Under a static order (an annotation, or SPEC §3.4's
+default) the order retakes the same prefix until a learned constraint changes a domain it reads,
+so the rule would keep nearly everything and is not offered (`--reuse-trail` is ignored outside
+`--search activity`). Status: the mechanism (`NRestart t`) landed in T2, the rule in T3
+(section 8).
+
+### 2. The policies and their parameters
+
+A policy lives in a new module `lib/core/restart.ml`, as data plus a small state machine
+(`on_conflict`, `due`, `on_restart`), pure and unit-testable. The flag is
+`--restarts POLICY`:
+
+| `--restarts` | rule | parameters | from |
+|---|---|---|---|
+| `none` (default) | never | | SPEC §3.4 |
+| `luby[:U]` | run `k` may take `U * luby(k)` conflicts | `U = 100` | Luby, Sinclair, Zuckerman, IPL 1993; the unit is Chuffed's, inferred above |
+| `geom[:U[:F]]` | run `k` may take `U * F^k` conflicts | `U = 100`, `F = 1.5` | Walsh, IJCAI 1999 |
+| `lbd[:W[:K]]` | restart when the last `W` learned LBDs average more than `1/K` times the run-wide average, and the run has taken at least `max(W, luby(k))` conflicts | `W = 50`, `K = 0.8` | Audemard and Simon, CP 2012 (Glucose's dynamic restarts) |
+| `stable` | alternate an `lbd` phase and a `luby:U` phase, each phase `L` conflicts long, `L` doubling at each switch from 1 000 | `U = 100` | the stabilising alternation of Oh (SAT 2015), used by CaDiCaL and Kissat |
+
+Not implemented, and recorded so the next session does not start blind: agility-based restarts
+(Biere, SAT 2008), which need the trail's polarity flips and so a hook in `Store`'s push path that
+is M6-T22's file; Glucose's blocking of a restart on a long trail (SAT 2012); and the
+stable mode's switch of the value heuristic to target phases. Biere and Fröhlich (POS 2015)
+compare the schemes on SAT benchmarks and find no single winner, which is the reason all of them
+sit behind one flag and T5 chooses by measurement.
+
+### 3. Phase saving over order literals (Pipatsrisawat and Darwiche, SAT 2007)
+
+A new module `lib/core/phase.ml` keeps one saved value per variable. **What is saved** is the
+value the variable was FIXED at when its level is undone. Before each `Store.backtrack` the
+search reads the entries of the level being undone and records, for each variable a fixed `now`
+domain names, that value. A variable that was only narrowed saves nothing. In SAT terms this is
+saving on unassignment, and for a Boolean it is exactly the saved polarity.
+
+**What it changes** is the value choice, never the variable choice. After the order (annotation,
+default, or activity) has picked a variable `v`, a saved value `s` still in `dom(v)` replaces the
+order's value choice. At `s = lo` that is the one-literal decision `x <= lo` first, at `s = hi`
+the one-literal decision `x >= hi` first, and strictly inside it is D-0077's assignment decision
+`x = s`, the shape `indomain_median` already uses and SPEC §3.4 already defines. A saved value
+that has left the domain falls back to the order's own choice. So phase saving adds no decision
+shape and no proof line. Flag: `--phase-saving`.
+
+**Addendum, same day, measured: strictly inside, phase saving branches `x <= s` first, not
+`x = s`.** With the assignment shape, `--search activity --restarts luby --phase-saving` wrote a
+branch nogood veripb refuses on `2017_hrc_exp1-1-5670` (section 13), and with the one-literal
+split the same run verifies. The split keeps `s` at the top of its first branch, so the next
+decision on `x` with the same phase is `x >= s` there and lands on `s`. Phase saving now never
+produces the assignment shape.
+
+**Second addendum, 2026-11-19: that was not the cause.** The subset re-measurement on the fixed
+binary `46b0deaa` refused another proof on the same instance, under `--search alternate
+--restarts luby --phase-saving` (section 13 point 1), with no assignment decision anywhere. The
+one-literal split stays, since it is a correct and simpler decision, but it fixes nothing, and the
+refusal is open.
+
+**Over an annotation it is a substitution of the value choice**, which SPEC §3.4 forbids done
+silently. The flag is the user asking for it, and section 6 says so in the SPEC.
+
+### 4. The activity heuristic for integer variables
+
+A new module `lib/core/activity.ml`, behind `--search activity` and `--search alternate`.
+
+- **What is scored** is the integer (or Boolean) VARIABLE, one float each, not the order
+  literal. A decision here picks a variable and then a value, and the literal follows from the
+  pair, so scoring literals would score something the search never chooses directly. Chuffed
+  scores the Boolean literal variables of its order encoding, which is the other reading,
+  recorded as the alternative.
+- **What is bumped** is every variable of the learned 1UIP clause, after minimisation (Chaff's
+  original VSIDS, Moskewicz et al., DAC 2001). MiniSat's EVSIDS bumps every variable seen during
+  the analysis as well, which needs the variables resolved over, and those are inside
+  `Analysis.analyse`'s walk. That variant is the hook this record would add to `analysis.ml`
+  (this session's file) if the clause variant measures badly, and `learn.ml` (another session's)
+  is not touched either way. A conflict that learned nothing bumps the variables of the
+  conflict's own reason facts, so a run with learning off still moves the scores (that is
+  dom/wdeg's signal, Boussemart et al., ECAI 2004, in its simplest form).
+- **Decay** is EVSIDS's, by growing the increment: `inc := inc / 0.95` after every conflict,
+  and every score and the increment are divided by `1e100` when a score passes `1e100`.
+- **Selection** is the unfixed variable with the highest score, ties broken by SPEC §3.4's
+  first-fail rule (smallest domain, then earliest), so that at the start, when every score is 0,
+  the activity order IS the default order. The scan is linear in the unfixed variables per
+  decision, as `unfixed` already is. A heap is the optimisation if the scan shows in a profile.
+- **The value** is the saved phase when `--phase-saving` is on and one is saved, otherwise the
+  value choice of the first annotation phase that names the variable, otherwise `indomain_min`.
+  The annotation's value choices are read from `Search.sequence`'s own record of its phases,
+  so `compile.ml` is not touched.
+- **Alternation with the annotation** (Chuffed's `-f`, Ohrimenko, Stuckey, Codish, Constraints
+  2009) is `--search alternate`. Run 0 uses the annotation (or SPEC §3.4's default when there is
+  none), run 1 the activity order, and so on, switching at each restart. Without `--restarts`
+  there is one run, so `alternate` alone is the annotation, and the CLI says so.
+
+Impact-based search (Refalo, CP 2004), activity-based search in the sense of Michel and Van
+Hentenryck (CPAIOR 2012, activity measured as domain reduction per propagation) and LRB/CHB
+(Liang et al., SAT 2016, AAAI 2016) are not built. They need a measurement per propagation, which
+is `Engine`'s hot loop and M6-T22's file this wave.
+
+### 5. Interaction with deletion (D-0139, M10-search-strategy-T4)
+
+Coordinated through this record, and `retention.ml` is not edited here.
+
+- Restarts change nothing about who deletes a learned id. They do change when a learned
+  instance prunes at level 0, which after a restart is routine. A level-0 line is written lazily
+  (at the next conflict) and is RUP only while the learned constraint it rests on is live. Once
+  written it stands alone. `Retention.cite` already pins a constraint that has a consumer, which
+  covers this. A policy that evicts must keep honouring it.
+- The LBD the `lbd` restart policy reads is `Learn.lbd`, the same number `Retention.add` is
+  given. T4's tiers and this policy read one quantity and neither owns it.
+- Termination under eviction rests on the cutoff schedule (section 1), never on the learned
+  database, so T4 may evict freely as far as this record is concerned.
+
+### 6. The SPEC §3.4 amendment
+
+The first paragraph of §3.4 keeps its sentence and gains one that names the flags. The text
+added, after the `**Default.**` paragraph:
+
+> **Restarts, phase saving and activity search are opt-in** (M10-search-strategy, D-0137). With
+> none of `--restarts`, `--phase-saving` and `--search` given, the search is the default above
+> or the annotation, and its output and proof are byte-identical to a build without these
+> flags. `--restarts luby[:U] | geom[:U[:F]] | lbd[:W[:K]] | stable` restarts the depth-first
+> search on a deterministic schedule of conflict counts, each with a cutoff unbounded over the
+> run index, so the search stays complete. A restart is a backjump to level 0 that keeps every
+> learned constraint, and every restart is reflected in the proof as the backtrack it is.
+> `--phase-saving` replaces the value choice (an annotation's included) by the value the
+> variable was last fixed at when that value is still in its domain. `--search activity` selects
+> the unfixed variable with the highest conflict activity, and `--search alternate` alternates the
+> annotation and the activity order at each restart. Each of these substitutes a strategy, and
+> each is only ever the user's explicit request. Without the flag, the sentence under "Anything
+> else MUST be refused" stands as it is.
+
+The `**Default.**` sentence ("restarts disabled") is unchanged, because it is still the
+default.
+
+### 7. T2: restarts and phase saving as built
+
+**Code.** `lib/core/restart.ml` (the policies of section 2, a pure state machine, with the
+CLI spelling `Restart.of_string` that refuses a malformed policy instead of defaulting),
+`lib/core/phase.ml` (section 3), and in `lib/core/search.ml` the node outcome `NRestart t`,
+the per-solve record `strat` (built by `search_core` only when a strategy flag is on, so the
+default run takes one `match` on `None` per hook and nothing else), the three hooks
+`undo_level`, `restart_after_conflict` and `close_restarted`, the order wrapper `phased`, and
+the config fields `restarts` and `phase_saving`. `bin/main.ml`: `--restarts POLICY` and
+`--phase-saving`, and under `--stats` five `stats:` lines (`restarts`, `unexplored`, `kept`,
+`phases`, `phase-used`) printed only when a strategy flag is on, so a default run's `--stats`
+is unchanged line for line.
+
+**What the proof shows.** No rule kind is new, which `test_search_strategy` checks on every
+restarting run (the rule keywords of its proof are a subset of the restart-free proof's).
+Over the 165 models with `--restarts luby:1 --phase-saving` (a restart after every learned
+conflict at first), 155 restarts in all, **165 of 165 proofs VERIFIED and every verdict equal
+to main's** (`smoke/luby1ps` on fataepyc-06).
+
+**Lanes.** `test/unit/test_search_strategy.ml` (new binary): the Luby sequence; each policy's
+schedule (Luby, geometric, the LBD test, its ring cleared at a restart, the Luby floor
+holding run 14 to 8 conflicts, the stable switch only at a restart); the CLI spelling; the
+default config off and `--restarts none` byte-identical to it; and end to end, on 6-queens
+over 0/1 cells (SAT, conflicts that learn), 5 pigeons in 4 holes (UNSAT) and 6-queens
+minimising the first row's column (OPT 2), under `luby:1`, `geom:1:1.2`, `lbd:2:1`,
+`luby:1` with phase saving, and phase saving alone: the same answer, a VERIFIED proof, every
+id deleted under the I-X2 audit, M1-T36's identity with `restart_unexplored`, no new rule
+kind, and two runs with the strategies on writing the same proof byte for byte. Three new
+models `test/models/restart_*.fzn` run in the main pass at default flags (their expected
+outputs are main's binary's), and a new lane in `scripts/run_model_tests.sh` runs them again
+with `--restarts luby:1 --phase-saving --search alternate`: VERIFIED, veripb's verdict line
+equal to the default run's, the `--no-proof` identity of D-0126, and at least one restart
+(read from `--stats`, so a lane whose flag was not in force fails).
+
+**No mutation lane, and why.** T2's brief asks for one "on any new proof line". There is
+none. A restart writes `% level` comments and `del` lines, and the only way such a line can
+be wrong is to delete something a later line needs. At a full restart that cannot happen by
+construction (`wipe_level` refuses 0, and everything a later run cites is tagged 0). A
+missing deletion is not a checker matter either, because the end-of-search sweeps delete
+every live id. The positive lanes above, on a satisfiable model among others, are what would
+see an over-deletion.
+
+### 8. T3: the activity heuristic as built
+
+**Code.** `lib/core/activity.ml` (section 4: one score per variable, `bump_lits` once per
+variable per learned clause, `bump_facts` for a conflict that learned nothing, EVSIDS decay
+with a rescale at `1e100`, `select` with SPEC §3.4's first-fail tie-break, `best_score` for
+the reuse rule). In `search.ml`: `activity_order`, `annotated_value` (an annotation's value
+choice for a variable, read from `Search.sequence`'s own record of its phases, so `compile.ml`
+is untouched), `alternate` (the parity of the restart policy's run index picks the order,
+and the staged form follows it), `reuse_target` (section 1.1), the config fields `search`
+and `reuse_trail`. `bin/main.ml`: `--search annotation|activity|alternate` and
+`--reuse-trail`, and a `stats: activity` line. The hook in `analysis.ml` for MiniSat's
+"every variable seen" bump was not needed to measure the clause variant and was not added.
+
+**Lanes.** The activity scores (`test_search_strategy`): all zero is first-fail's choice, a
+bump outranks it, a later bump weighs more and a variable is bumped once per clause, a rescale
+keeps the order. End to end, the three models under `activity`, `activity` with `luby:1` and
+phase saving, `alternate` with `luby:1`, and `activity` with `luby:1` and `--reuse-trail`,
+with the same five checks as T2's; and `--reuse-trail` really keeping levels (92 levels kept
+over 24 restarts on the three models, every proof VERIFIED), so the partial-restart lane is
+not full restarts under another name.
+
+### 9. What remains
+
+- **The defaults are T5's.** Nothing here is on by default, and section 10 says why none of it
+  should be on every model: the codes split (aut wants the activity order with restarts and
+  phase saving, the QR codes want today's search), as Chuffed's fixed and free searches do.
+- **Not built, each with its reason above:** agility restarts and Glucose's blocking (a hook in
+  `Store`'s push path), the stable mode's switch of the value heuristic, MiniSat's "every
+  variable seen" bump (a hook in `analysis.ml`, this session's file, not needed to measure
+  the clause variant), scoring the order literals' Booleans as Chuffed does (the difference
+  section 10 points at first), impact-based search, activity-based search in Michel and Van
+  Hentenryck's sense, LRB/CHB (a measurement per propagation, `Engine`'s hot loop), and a heap
+  for `Activity.select` (the linear scan has not shown in any profile yet).
+- **No mutation lane** (section 7: no rule is new), and no break lane for a partial restart
+  that wipes one level too many. That one would be checker-visible (the re-entered node's
+  level-`t` trace lines gone), and is the lane to add if `--reuse-trail` is ever proposed as a
+  default.
+- **The refused proofs of section 13 point 1** are open, and they come first: until they are
+  explained, a restart combined with phase saving and a dynamic order is not proof-safe on every
+  instance.
+- **The LBD policy's K** never fires on the codes (section 10, point 4). T5 should sweep it, or
+  measure Glucose's newer EMA form, before calling `lbd` useless.
+
+### 10. The measurements: today's search, the strategies, and Chuffed
+
+**Binaries.** Every number below was taken on fataepyc-06 on 2026-11-18 on the M6-T22 engine
+(D-0138, the orchestrator's instruction of that afternoon). The baseline rows are **main's
+binary `a9217430`** (main `23eb9d6`, gate 47). The codes rows WITHOUT `--phase-saving` are
+**`878ceb53`** (this branch at `8fa9585`, main `bd87a57` merged, byte-identical to `a9217430`
+without the flags on all 173 models, section 11). The codes rows WITH `--phase-saving` are
+**`46b0deaa`** (`48de0a3`, after section 3's addendum), whose only difference from `878ceb53`
+on these runs is the decision phase saving makes at an interior saved value; the same rows on
+`878ceb53` (with the assignment shape) all VERIFIED too and differ little (aut `alt+luby+ps`
+64 s and 14 746 nodes there, 62 s and 14 600 here). The subset's binaries are in 10.2. A first campaign on the
+pre-M6-T22 engine (`6d3d2dc3` and `db7468f1`) was stopped when M6-T22 landed. Its node counts
+agree with the ones below wherever both exist (QR48 `luby` 28 658 nodes and 60 restarts on
+both engines), and its times are not used. Node counts compare across binaries, and times only
+within this section.
+
+**Protocol.** `scripts/` is not involved, the harness is `wave45-strategy-runs/brun.sh`. Each
+run is `--time-limit` (600 s on the codes, 300 s on the subset) and `--stats`, once with
+`--no-proof` and once with `--proof`, the proof checked by veripb 3.0.2 (`d5644ca4`) and then
+deleted (its size is kept). Eight runs at a time, on a node shared with two other agents' runs
+(load 20 to 40), so a time is good to about 10 %. Results:
+`/scratch/arthur/wave45-strategy-runs/out3/<config>/<model>.<mode>.res`, tables by
+`tables.py`.
+
+**Configurations.** `base` is main's binary at default flags. `luby` = `--restarts luby`
+(unit 100), `lbd` = `--restarts lbd`, `ps` = `--phase-saving`, `act` = `--search activity`,
+`alt` = `--search alternate`, `reuse` = `--reuse-trail`, combined as named.
+
+#### 10.1 The codes set (the user's 2026-11-18 flattenings; `def` = no annotation, `u1` = `bool_search(..., input_order, indomain_max)` on the generator rows)
+
+Without the proof (time, nodes, restarts):
+
+| config | qr48 def | qr48 u1 | qr72 def | qr72 u1 | o7k2 def | o7k2 u1 |
+|---|---|---|---|---|---|---|
+| base | UNSAT 26 s, 23367 n | UNSAT 18 s, 23429 n | UNSAT 510 s, 100685 n | UNSAT 318 s, 101435 n | TO 600 s, 55178 n | UNSAT 3 s, 158 n |
+| luby | UNSAT 41 s, 28658 n, 60 r | UNSAT 24 s, 27600 n, 60 r | TO 600 s, 109054 n, 157 r | UNSAT 409 s, 114130 n, 179 r | TO 600 s, 50475 n, 92 r | UNSAT 3 s, 158 n |
+| lbd | UNSAT 26 s, 23367 n | UNSAT 18 s, 23429 n | UNSAT 557 s, 100685 n | UNSAT 316 s, 101435 n | TO 600 s, 53434 n, 40 r | UNSAT 3 s, 158 n |
+| lubyps | UNSAT 51 s, 28441 n, 60 r | UNSAT 36 s, 28408 n, 60 r | TO 600 s, 87425 n, 126 r | TO 600 s, 103482 n, 155 r | TO 600 s, 51163 n, 92 r | UNSAT 3 s, 157 n |
+| ps | UNSAT 27 s, 23377 n | UNSAT 23 s, 23395 n | TO 600 s, 98207 n | UNSAT 420 s, 101057 n | TO 600 s, 46321 n | UNSAT 3 s, 157 n |
+| act | UNSAT 54 s, 32136 n | UNSAT 41 s, 28873 n | TO 600 s, 94692 n | TO 600 s, 100585 n | TO 600 s, 66105 n | UNSAT 81 s, 15561 n |
+| actlubyps | UNSAT 42 s, 35232 n, 62 r | UNSAT 47 s, 36709 n, 62 r | TO 600 s, 91924 n, 126 r | TO 600 s, 99600 n, 141 r | UNSAT 164 s, 31369 n, 60 r | UNSAT 44 s, 10702 n, 27 r |
+| altluby | UNSAT 127 s, 50917 n, 90 r | UNSAT 127 s, 48216 n, 84 r | TO 600 s, 110747 n, 157 r | TO 600 s, 103744 n, 151 r | UNSAT 366 s, 45650 n, 77 r | UNSAT 3 s, 158 n |
+| altlubyps | UNSAT 129 s, 50325 n, 88 r | UNSAT 105 s, 51131 n, 90 r | TO 600 s, 107003 n, 155 r | TO 600 s, 106303 n, 153 r | UNSAT 62 s, 14600 n, 30 r | UNSAT 3 s, 157 n |
+| actreuse | UNSAT 31 s, 27343 n, 60 r | UNSAT 32 s, 27962 n, 60 r | TO 600 s, 97543 n, 142 r | TO 600 s, 91812 n, 129 r | UNSAT 159 s, 29589 n, 59 r | UNSAT 29 s, 6996 n, 17 r |
+
+With the proof (time, nodes, restarts, `.pbp` size, veripb's verdict and time; every verdict is
+VERIFIED, `UNSATISFIABLE` for the UNSAT rows and `NO CONCLUSION` for the stopped ones):
+
+| config | qr48 def | qr48 u1 | qr72 def | qr72 u1 | o7k2 def | o7k2 u1 |
+|---|---|---|---|---|---|---|
+| base | UNSAT 37 s, 23367 n, 144 MB, V 7.02 s | UNSAT 27 s, 23429 n, 144 MB, V 6.92 s | TO 600 s, 96839 n, 1031 MB, V 53.95 s | UNSAT 432 s, 101435 n, 1091 MB, V 56.39 s | TO 600 s, 53413 n, 828 MB, V 411.53 s | UNSAT 4 s, 158 n, 2 MB, V 0.73 s |
+| luby | UNSAT 58 s, 28658 n, 60 r, 173 MB, V 9.16 s | UNSAT 37 s, 27600 n, 60 r, 170 MB, V 8.94 s | TO 600 s, 103085 n, 153 r, 1055 MB, V 66.31 s | UNSAT 471 s, 114130 n, 179 r, 1215 MB, V 70.62 s | TO 600 s, 47149 n, 84 r, 847 MB, V 426.65 s | UNSAT 4 s, 158 n, 2 MB, V 0.73 s |
+| lbd | UNSAT 38 s, 23367 n, 144 MB, V 6.97 s | UNSAT 27 s, 23429 n, 144 MB, V 7.02 s | TO 600 s, 92830 n, 980 MB, V 51.84 s | UNSAT 384 s, 101435 n, 1091 MB, V 56.14 s | TO 600 s, 50102 n, 40 r, 822 MB, V 377.98 s | UNSAT 4 s, 158 n, 2 MB, V 0.74 s |
+| lubyps | UNSAT 63 s, 28441 n, 60 r, 173 MB, V 9.00 s | UNSAT 44 s, 28408 n, 60 r, 173 MB, V 8.94 s | TO 600 s, 82063 n, 126 r, 818 MB, V 46.73 s | TO 600 s, 93039 n, 129 r, 955 MB, V 53.70 s | TO 600 s, 48015 n, 84 r, 1179 MB, V 100.70 s | UNSAT 3 s, 157 n, 2 MB, V 0.36 s |
+| ps | UNSAT 40 s, 23377 n, 144 MB, V 6.89 s | UNSAT 31 s, 23395 n, 144 MB, V 6.88 s | TO 600 s, 95989 n, 1024 MB, V 53.59 s | UNSAT 520 s, 101057 n, 1088 MB, V 56.00 s | TO 600 s, 44292 n, 1280 MB, V 100.55 s | UNSAT 3 s, 157 n, 2 MB, V 0.35 s |
+| act | UNSAT 72 s, 32136 n, 242 MB, V 11.13 s | UNSAT 59 s, 28873 n, 271 MB, V 12.39 s | TO 601 s, 79306 n, 947 MB, V 46.84 s | TO 600 s, 91966 n, 1168 MB, V 55.14 s | TO 600 s, 58220 n, 849 MB, V 554.09 s | UNSAT 110 s, 15561 n, 308 MB, V 32.34 s |
+| actlubyps | UNSAT 61 s, 35232 n, 62 r, 302 MB, V 14.34 s | UNSAT 63 s, 36709 n, 62 r, 305 MB, V 14.49 s | TO 600 s, 89480 n, 126 r, 1195 MB, V 60.57 s | TO 600 s, 87157 n, 126 r, 954 MB, V 52.85 s | UNSAT 186 s, 31369 n, 60 r, 286 MB, V 25.97 s | UNSAT 52 s, 10702 n, 27 r, 67 MB, V 5.78 s |
+| altluby | UNSAT 153 s, 50917 n, 90 r, 269 MB, V 14.89 s | UNSAT 119 s, 48216 n, 84 r, 283 MB, V 14.78 s | TO 600 s, 99649 n, 140 r, 729 MB, V 44.41 s | TO 600 s, 98372 n, 140 r, 937 MB, V 53.62 s | UNSAT 440 s, 45650 n, 77 r, 921 MB, V 354.82 s | UNSAT 4 s, 158 n, 2 MB, V 0.73 s |
+| altlubyps | UNSAT 146 s, 50325 n, 88 r, 302 MB, V 15.87 s | UNSAT 150 s, 51131 n, 90 r, 305 MB, V 16.23 s | TO 600 s, 98386 n, 136 r, 983 MB, V 55.60 s | TO 600 s, 96050 n, 129 r, 951 MB, V 53.76 s | UNSAT 78 s, 14600 n, 30 r, 211 MB, V 18.57 s | UNSAT 3 s, 157 n, 2 MB, V 0.34 s |
+| actreuse | UNSAT 59 s, 27343 n, 60 r, 278 MB, V 12.98 s | UNSAT 53 s, 27962 n, 60 r, 284 MB, V 12.98 s | TO 600 s, 91550 n, 129 r, 1172 MB, V 61.74 s | TO 600 s, 82720 n, 126 r, 1089 MB, V 58.16 s | UNSAT 232 s, 29589 n, 59 r, 275 MB, V 24.60 s | UNSAT 32 s, 6996 n, 17 r, 51 MB, V 4.30 s |
+
+Chuffed on the same instances (its own flattenings, the user's `.log` files, solve time):
+
+| | QR48 def | QR48 u1 | QR72 def | QR72 u1 | o7k2 def | o7k2 u1 |
+|---|---|---|---|---|---|---|
+| Chuffed def / annotation | 0.44 s, 23 668 n | 0.14 s, 11 710 n | 2.8 s, 90 500 n | 1.0 s, 50 704 n | 0.01 s, 11 n | 0.01 s, 140 n |
+| Chuffed `-f` | 19.6 s, 123 835 n, 269 r | (`ufree`, min annotation) 0.37 s, 16 939 n, 55 r | 125 s, 752 668 n, 1 329 r | (`ufree`) 2.6 s, 70 197 n, 159 r | 0.01 s, 11 n | (`ufree`) 0.02 s, 231 n, 2 r |
+
+**What the codes say.**
+
+1. **aut order 7 without an annotation is solved, by the activity order with restarts and
+   phase saving, and not by any one of the three alone.** `base` stops at 600 s (55 178
+   nodes), and so do `luby`, `lbd`, `ps` and `act` alone. `act+luby+ps` refutes it in 164 s
+   (31 369 nodes, 60 restarts), 186 s with the proof (286 MB, VERIFIED in 26 s). Chuffed's
+   alternation, `alt+luby+ps`, is the best: **62 s and 14 600 nodes, 78 s with the proof (211
+   MB, VERIFIED in 19 s)**. Partial restarts change the activity order little (`act+reuse`,
+   159 s and 29 589 nodes). Phase saving is what makes the restarts work here (`alt+luby` without it takes 366 s and 45 650 nodes). Chuffed needs 11 nodes, so
+   the heuristic is still three orders of magnitude from Chuffed's on node count. The
+   difference most worth measuring next is the scoring, since Chuffed scores the Boolean
+   literals of its encoding where this scores variables (section 4).
+2. **On aut with the `indomain_max` annotation the annotation is best and the alternation keeps
+   it**: 158 nodes in 3 s for `base`, `luby`, `lbd`, `ps` and both `alt` rows (the first run IS
+   the annotation and finishes before the first restart). Replacing the annotation by activity
+   costs it (`act`, 15 561 nodes).
+3. **On the QR codes today's search is the best of everything measured, as Chuffed's fixed
+   search is the best of Chuffed's.** QR48: `base` 26 s and 23 367 nodes, every restarting
+   configuration 17 % (`act+reuse`) to 118 % (`alt+luby`) more nodes. QR72 is now solved by `base` without the proof (510 s
+   `def`, 318 s `u1`, on the M6-T22 engine) and by no restarting configuration within 600 s.
+   Chuffed's `-f` is 45 times slower than its default on QR48, so this is the same finding in
+   both solvers and not a weakness of the implementation.
+4. **`lbd` almost never fires on these models** (0 restarts on QR48 and QR72, 40 on o7k2 in
+   600 s). The learned clauses' LBD is nearly constant along a run (the user's QR48 histogram
+   is concentrated on 5 to 8), and K = 0.8 asks for a run's recent average to exceed the global
+   one by 25 %. That is a parameter finding for T5, not a defect.
+5. **The proof's cost of a restart is its trace.** At equal nodes the proof is the same size
+   (`ps`, `lbd` against `base`). Restarts make it grow with the nodes (QR48 144 MB to 173 MB
+   for 23 % more nodes), and the activity order more than in proportion (QR48 `act` 242 MB for
+   37 % more nodes, so more bytes per node). The checker time follows the size (7 s to 14 s on
+   QR48).
+
+#### 10.2 The Challenge subset
+
+Twenty instances from D-0133's run (`wave43run-2026-11-13`), five per status that run gave
+baguette (OPT, SAT, TIMEOUT with an incumbent, TIMEOUT with none), chosen where Chuffed's free
+search beats its fixed one in the Challenge's own results (`results/<Y>.json`, `chuffed-fd`
+against `chuffed-free`). No SAT instance in the 1 to 300 s window shows a free advantage (both
+Chuffed runs solve them in seconds), so the five SAT ones are plain. The wave43 `.fzn` were
+deleted after solving, so all twenty were re-flattened with main's `mznlib`
+(`baguette-gate-20261118`, MiniZinc 2.10.1). The re-flattenings differ from wave43's by 6 to 21
+bytes. Time limit 300 s.
+
+**Binaries.** `sbase` is main's `a9217430`. The three strategy columns are **`46b0deaa`**
+(`48de0a3`, phase saving without the assignment shape), measured 2026-11-18 in
+`/scratch/arthur/wave45-strategy-runs/out4/`, all 120 runs complete (both drivers finished,
+`c4.done` and `c4rev.done` in the run directory). They replace a first measurement of the same
+three columns on `878ceb53` (`out3/`), whose one refused proof is section 13 point 1.
+`slubyps` = `--restarts luby --phase-saving`, `saltlubyps` = the same with `--search alternate`,
+`sactlubyps` = with `--search activity`.
+
+Without the proof:
+
+| instance | sbase | slubyps | saltlubyps | sactlubyps |
+|---|---|---|---|---|
+| 2012_ship-schedule_6ShipsMixed | OPT 77 s, 3335 n | OPT 16 s, 2052 n, 5 r | TO(212945) 388 s, 480 n, 1 r | TO(300510) 310 s, 105 n |
+| 2014_amaze_2012-04-27 | SAT 10 s, 9427 n | SAT 9 s, 9856 n, 22 r | SAT 23 s, 16633 n, 30 r | SAT 2 s, 4910 n, 13 r |
+| 2014_fillomino_5x5_1 | SAT 20 s, 9646 n | SAT 18 s, 8974 n, 21 r | SAT 8 s, 6669 n, 14 r | SAT 7 s, 6434 n, 14 r |
+| 2014_openshop_gp10-4 | TO(1139) 300 s, 36374 n | TO(1101) 300 s, 48020 n, 62 r | TO(1078) 300 s, 42995 n, 62 r | TO(1078) 300 s, 46218 n, 62 r |
+| 2016_nfc_18_3_5 | OPT 88 s, 1033 n | OPT 36 s, 673 n, 2 r | OPT 228 s, 1335 n, 4 r | OPT 12 s, 246 n |
+| 2016_solbat_sb_15_15_7_3 | SAT 97 s, 13892 n | SAT 133 s, 16061 n, 30 r | SAT 162 s, 22191 n, 44 r | SAT 125 s, 21331 n, 36 r |
+| 2017_cargo_challenge01_0s_1913 | SAT 600 s, ? n | SAT 600 s, ? n | SAT 600 s, ? n | UNKNOWN 600 s, ? n |
+| 2017_hrc_exp1-1-5670 | OPT 19 s, 8343 n | OPT 28 s, 12751 n, 27 r | OPT 22 s, 10117 n, 20 r | OPT 5 s, 3115 n, 6 r |
+| 2019_amaze_2012-03-19 | SAT 62 s, 24465 n | SAT 67 s, 27381 n, 58 r | SAT 167 s, 38291 n, 62 r | SAT 0 s, 922 n, 2 r |
+| 2019_rotating-workforce_Example1337 | TO 300 s, 11333 n | TO 300 s, 12897 n, 20 r | TO 332 s, 647 n, 2 r | TO 319 s, 760 n, 2 r |
+| 2020_cable_tree_wiring_R046 | TO(2826893) 323 s, 1446 n | TO(2826840) 301 s, 1145 n | TO(2826840) 302 s, 1145 n | TO(2556804) 552 s, 850 n, 1 r |
+| 2020_hoist-benchmark-for-minizinc_PU_3_8_5 | TO 312 s, 18 n | TO 311 s, 18 n | TO 309 s, 18 n | SAT 600 s, ? n |
+| 2021_perfect_square_92 | TO 300 s, 24924 n | TO 300 s, 64643 n, 104 r | TO 300 s, 75278 n, 122 r | TO 300 s, 57782 n, 98 r |
+| 2022_blocks-world_16-4-13 | TO 300 s, 25468 n | TO 300 s, 29563 n, 55 r | TO 300 s, 42767 n, 62 r | TO 300 s, 58044 n, 78 r |
+| 2023_kidney-exchange_3_20_0.15_3 | OPT 83 s, 1489 n | OPT 128 s, 2110 n, 5 r | TO(793) 305 s, 2309 n, 5 r | TO(608) 301 s, 829 n, 2 r |
+| 2023_test-scheduling_t30m20r3-20 | TO(2745) 300 s, 15099 n | TO(2745) 300 s, 15063 n, 30 r | TO(2745) 300 s, 17362 n, 31 r | TO(2747) 300 s, 23222 n, 30 r |
+| 2024_word-equations_word_equations_02_track_8-int | OPT 28 s, 2630 n | OPT 26 s, 2351 n, 6 r | OPT 5 s, 302 n, 1 r | OPT 5 s, 57 n |
+| 2025_EchoSched_15-15-0-1_3 | TO(18890) 300 s, 6034 n | SAT 600 s, ? n | TO(18844) 300 s, 6898 n, 6 r | SAT 600 s, ? n |
+| 2026_gbac_csplib12-gbac | TO 312 s, 1 n | TO 300 s, 15527 n | TO 300 s, 18761 n | SAT 600 s, ? n |
+| 2026_gcc-benchmark_instance-i24 | SAT 5 s, 363 n | SAT 5 s, 363 n | SAT 5 s, 363 n | TO 300 s, 23077 n |
+
+With the proof. veripb's cap was 900 s for `sbase` and 300 s for the strategy columns, so a
+`check-TO` there means "not checked in 300 s", not a refusal. The `SAT 600 s, ? n` cells are runs
+the 600 s wall killed after the stop had fired, their proof truncated, which is what the
+`Syntax_error` verdicts are (section 13 point 3, main's binary included). The one `Checking
+error` is a real refusal (section 13 point 1).
+
+| instance | sbase | slubyps | saltlubyps | sactlubyps |
+|---|---|---|---|---|
+| 2012_ship-schedule_6ShipsMixed | OPT 140 s, 3335 n, 2408 MB, check-TO 900.08 s | OPT 37 s, 2052 n, 5 r, 1244 MB, check-TO 300.06 s | TO(212945) 407 s, 480 n, 1 r, 788 MB, V 120.12 s | TO(300510) 318 s, 105 n, 142 MB, V 17.71 s |
+| 2014_amaze_2012-04-27 | SAT 14 s, 9427 n, 84 MB, V 7.24 s | SAT 14 s, 9856 n, 22 r, 81 MB, V 7.30 s | SAT 34 s, 16633 n, 30 r, 119 MB, V 12.42 s | SAT 3 s, 4910 n, 13 r, 24 MB, V 2.02 s |
+| 2014_fillomino_5x5_1 | SAT 33 s, 9646 n, 197 MB, V 43.90 s | SAT 29 s, 8974 n, 21 r, 168 MB, V 35.30 s | SAT 15 s, 6669 n, 14 r, 102 MB, V 22.57 s | SAT 14 s, 6434 n, 14 r, 100 MB, V 20.41 s |
+| 2014_openshop_gp10-4 | TO(1139) 300 s, 29795 n, 1088 MB, check-TO 900.07 s | TO(1101) 300 s, 35216 n, 59 r, 2485 MB, check-TO 300.06 s | TO(1078) 300 s, 36154 n, 57 r, 1942 MB, check-TO 300.07 s | TO(1078) 300 s, 39570 n, 61 r, 1653 MB, check-TO 300.10 s |
+| 2016_nfc_18_3_5 | OPT 101 s, 1033 n, 450 MB, V 19.24 s | OPT 43 s, 673 n, 2 r, 218 MB, V 7.20 s | OPT 253 s, 1335 n, 4 r, 721 MB, V 56.51 s | OPT 14 s, 246 n, 68 MB, V 2.47 s |
+| 2016_solbat_sb_15_15_7_3 | SAT 187 s, 13892 n, 998 MB, V 184.17 s | SAT 208 s, 16061 n, 30 r, 1148 MB, V 184.59 s | SAT 269 s, 22191 n, 44 r, 1310 MB, V 289.42 s | SAT 208 s, 21331 n, 36 r, 1006 MB, V 189.51 s |
+| 2017_cargo_challenge01_0s_1913 | SAT 600 s, ? n, 33 MB, REJECTED:Error:_Syntax_error_while_parsing_proof_file! 610.42 s | SAT 600 s, ? n, 33 MB, check-TO 300.09 s | SAT 600 s, ? n, 33 MB, check-TO 300.08 s | UNKNOWN 600 s, ? n, 0 MB, REJECTED:Error:_Syntax_error_while_parsing_proof_file! 22.83 s |
+| 2017_hrc_exp1-1-5670 | OPT 46 s, 8343 n, 296 MB, V 26.59 s | OPT 62 s, 12751 n, 27 r, 387 MB, V 37.57 s | OPT 50 s, 10117 n, 20 r, 274 MB, REJECTED:Error:_Checking_error_at_/scratch/arthur/wave45-strategy-runs/out4/saltlubyps/2017_hrc_exp1-1-5670.proof.pbp:983748 9.08 s | OPT 11 s, 3115 n, 6 r, 75 MB, V 6.82 s |
+| 2019_amaze_2012-03-19 | SAT 71 s, 24465 n, 199 MB, V 18.51 s | SAT 91 s, 27381 n, 58 r, 204 MB, V 19.99 s | SAT 249 s, 38291 n, 62 r, 270 MB, V 30.67 s | SAT 1 s, 922 n, 2 r, 5 MB, V 0.39 s |
+| 2019_rotating-workforce_Example1337 | TO 301 s, 9678 n, 691 MB, check-TO 900.04 s | TO 301 s, 10983 n, 17 r, 820 MB, check-TO 300.02 s | TO 325 s, 647 n, 2 r, 58 MB, V 17.31 s | TO 360 s, 760 n, 2 r, 70 MB, V 21.33 s |
+| 2020_cable_tree_wiring_R046 | SAT 601 s, ? n, 916 MB, REJECTED:Error:_Syntax_error_while_parsing_proof_file! 108.30 s | SAT 601 s, ? n, 966 MB, REJECTED:Error:_Syntax_error_while_parsing_proof_file! 105.04 s | SAT 601 s, ? n, 946 MB, REJECTED:Error:_Syntax_error_while_parsing_proof_file! 106.03 s | SAT 601 s, ? n, 1926 MB, check-TO 300.08 s |
+| 2020_hoist-benchmark-for-minizinc_PU_3_8_5 | TO 326 s, 18 n, 0 MB, V 5.10 s | TO 320 s, 18 n, 0 MB, V 5.05 s | TO 324 s, 18 n, 0 MB, V 5.04 s | SAT 600 s, ? n, 31 MB, REJECTED:Error:_Syntax_error_while_parsing_proof_file! 50.74 s |
+| 2021_perfect_square_92 | TO 300 s, 22560 n, 336 MB, V 689.52 s | TO 300 s, 61059 n, 93 r, 427 MB, check-TO 300.02 s | TO 300 s, 71427 n, 113 r, 331 MB, check-TO 300.01 s | TO 300 s, 55533 n, 93 r, 201 MB, V 182.24 s |
+| 2022_blocks-world_16-4-13 | TO 300 s, 17706 n, 1578 MB, check-TO 900.05 s | TO 300 s, 20950 n, 37 r, 1658 MB, check-TO 300.02 s | TO 300 s, 27765 n, 48 r, 1811 MB, check-TO 300.02 s | TO 300 s, 45792 n, 62 r, 1424 MB, check-TO 300.02 s |
+| 2023_kidney-exchange_3_20_0.15_3 | OPT 90 s, 1489 n, 34 MB, V 3.89 s | OPT 130 s, 2110 n, 5 r, 49 MB, V 5.59 s | TO(793) 302 s, 2308 n, 5 r, 60 MB, V 6.15 s | TO(608) 301 s, 806 n, 2 r, 40 MB, V 4.64 s |
+| 2023_test-scheduling_t30m20r3-20 | TO 330 s, 1 n, 0 MB, V 23.33 s | TO(2745) 300 s, 1683 n, 5 r, 63 MB, check-TO 300.14 s | TO(2766) 300 s, 2557 n, 6 r, 136 MB, check-TO 300.15 s | TO(4709) 300 s, 2732 n, 115 MB, V 263.20 s |
+| 2024_word-equations_word_equations_02_track_8-int | OPT 58 s, 2630 n, 377 MB, V 323.04 s | OPT 51 s, 2351 n, 6 r, 378 MB, V 256.04 s | OPT 7 s, 302 n, 1 r, 14 MB, V 10.45 s | OPT 7 s, 57 n, 18 MB, V 9.89 s |
+| 2025_EchoSched_15-15-0-1_3 | TO(18890) 301 s, 5677 n, 960 MB, check-TO 600.08 s | TO(18867) 300 s, 6538 n, 5 r, 2309 MB, check-TO 300.08 s | TO(18844) 318 s, 6041 n, 4 r, 2373 MB, check-TO 300.08 s | SAT 600 s, ? n, 711 MB, check-TO 300.08 s |
+| 2026_gbac_csplib12-gbac | TO 416 s, 1 n, 0 MB, V 28.21 s | TO 361 s, 1 n, 0 MB, V 42.06 s | TO 357 s, 1 n, 0 MB, V 27.19 s | TO 362 s, 1 n, 0 MB, V 39.85 s |
+| 2026_gcc-benchmark_instance-i24 | SAT 6 s, 363 n, 0 MB, V 0.30 s | SAT 5 s, 363 n, 0 MB, V 0.31 s | SAT 5 s, 363 n, 0 MB, V 0.30 s | TO 300 s, 18616 n, 1027 MB, V 142.97 s |
+
+**What the subset says.**
+
+1. **The free search matters where Chuffed's free search matters, and it cuts both ways.** The
+   activity order with restarts and phase saving (`sactlubyps`) is the best column on nfc (OPT
+   in 12 s and 246 nodes against 88 s; Chuffed's fixed search never proves it), word-equations
+   (5 s against 28 s), hrc (5 s against 19 s), fillomino and both amaze (the 2019 one in under a
+   second against 62 s). It is the worst on ship-schedule and kidney-exchange (incumbents at
+   300 s where `base` proves the optimum) and on the gcc benchmark (`base` 5 s, the activity
+   order times out). On openshop and cable-tree its incumbent at the stop is better (1 078
+   against 1 139, Chuffed's free search proves 1 077; 2 556 804 against 2 826 893).
+2. **Restarts with phase saving and the annotation's order (`slubyps`) are never more than 55 %
+   slower than `base` where both answer, and faster on two**: ship-schedule OPT in 16 s against
+   77 s, nfc in 36 s against 88 s.
+3. **`saltlubyps` is best only on EchoSched's incumbent** (18 844 against 18 890) and ties on
+   word-equations and openshop. On nfc, solbat and the 2019 amaze it is the slowest column.
+4. **The TIMEOUT instances without a solution stay without one** in every column (rotating
+   workforce, hoist, perfect square, blocks world, gbac), where Chuffed's free search solves
+   them. On hoist and gbac the run makes 1 to 18 nodes in 300 s with the proof, so the search is
+   not what stops it there.
+5. **The proof follows the nodes**, as on the codes: where the free search takes fewer nodes the
+   proof is smaller and checks faster (word-equations 377 MB and 323 s of checking for `base`,
+   18 MB and 10 s for `sactlubyps`; nfc 450 MB against 68 MB).
+
+### 11. The gate
+
+A fresh clone of `wave45-strategy` at `8fa9585` (main `bd87a57` merged) on fataepyc-06,
+`/scratch/arthur/wave45-strategy-gate`, under `ulimit -v 4000000`: **`make check` rc 0**, peak RSS
+86 688 kB (`/usr/bin/time -v` over `make check`), 176 model tests passed (173 plus the three
+`restart_*`), 17 `bits_*` at `--bits-above 0`, the three `restart_*` again with restarts (8, 3
+and 14 restarts), `test_search_strategy` green. **Without the flags, on the 173 models of main,
+stdout, exit code, `.opb` and `.pbp` are byte-identical** to main's binary `a9217430`
+(`/scratch/arthur/gate47.art/new/`): 0 differences in each of the four. The new binary is
+`878ceb53`. Status: `/scratch/arthur/wave45-strategy-runs/gate.8fa9585.status`.
+
+**Re-run after merging `origin/main` (`576da4b`) and `origin/wave47-lanes`**, on a fresh clone of
+`efbe5b6`: **`make check` rc 0**, peak RSS 89 876 kB, 182 model tests passed (179 plus the three
+`restart_*`, which restart 8, 3 and 14 times in their lane), and **0 differences in stdout, exit
+code, `.opb` and `.pbp` on all 179 models** against main's binary `e8354a74` (gate 48,
+`/scratch/arthur/gate48.art/new/`). The new binary is `28c4a51c`. Status:
+`/scratch/arthur/wave45-strategy-runs/gate.efbe5b6.status`.
+
+**And once more after the phase-saving fix (section 3's addendum)**, on a fresh clone of
+`48de0a3`: `make check` rc 0, peak RSS 89 852 kB, 182 model tests, **0 differences on the 179
+models** against `e8354a74`, binary `46b0deaa`. Status: `gate.status` in the same directory.
+
+### 12. For the differential lane (M11-T2, D-0141): flags off, and the lines to add
+
+**With the flags off nothing moves.** `make diff ARGS="-j 16"` on this branch after merging
+`origin/main` (`576da4b`) and `origin/wave47-lanes` (`eaf5a7b`), binary `28c4a51c` at `9fb9b09`
+and again `46b0deaa` at `48de0a3` (after the phase-saving fix), both times
+against the reference recorded on `a9ffcc5` (`e8354a74`), 21 instances times the 8 configurations
+of `bench/diff/configs.tsv`: **`diff_lane: ok -- 168 of 168 runs equal the reference`** (203 s, rc 0). The strategy counters (`stats: restarts`, `unexplored`,
+`kept`, `activity`, `phases`, `phase-used`) are printed only when a strategy flag is on, so a
+default run's `--stats`, which the lane observes, has no new line.
+
+**The lines to add when this branch merges**, in place of the two commented slots (the slot's
+`--branching <activity>` is spelled `--search activity` here):
+
+```
+restarts	-	--restarts luby:1 --phase-saving	yes
+activity	-	--search activity --restarts luby:1 --reuse-trail	yes
+alternate	-	--search alternate --restarts lbd:3:1.5 --phase-saving	yes
+```
+
+Why these three. The lane runs at fixed node budgets, so a schedule must fire inside them:
+`luby:1` restarts after the first learned conflict and then on Luby's sequence of single
+conflicts, which is what the 165-model smoke run used (155 restarts, every proof VERIFIED). The
+`lbd` policy at its defaults never fires on the codes (section 10, point 4), so the third line
+uses a window of 3 and K = 1.5, which fires once the window's average exceeds two thirds of the
+run's (a window of 5 with K = 1 restarted 6 times over the whole suite, too rarely to be a lane),
+and so exercises the LBD state machine and its Luby floor. Between them the three
+lines cover every code path this branch adds: full restarts (all three), partial restarts
+(`--reuse-trail`, only under `activity`), the activity order with its bumps and decay, the
+alternation and its staged form, and phase saving's save and use. `stable` and `geom` are the same
+mechanism under another schedule and do not need a line of their own. Each line needs its
+reference recorded once with `scripts/diff_lane.sh --update --config NAME` on the merged binary.
+
+All three were run over the 182 test models first, every proof through veripb 3.0.2 and every
+verdict equal to the default run's (`smoke/<tag>/summary` on the node). On the final binary
+`46b0deaa`: `restarts` 182 of 182 VERIFIED (218 restarts), `alternate` 182 of 182 (79
+restarts), and `--search activity --restarts luby:1 --phase-saving` 182 of 182 (178). On
+`28c4a51c`, before the fix, which does not touch it: `activity` with `--reuse-trail` 182 of 182
+(182 restarts, 539 levels kept).
+
+**Caution, 2026-11-19.** Section 13 point 1 is open: two proofs refused on one Challenge
+instance under restarts with phase saving and a dynamic order. `diff_lane.sh --update` runs the
+checker over every proof it records and refuses one it does not accept, so recording these three
+references is itself a check on the 21 lane instances, and a refusal there would be a second
+reproduction worth having.
+
+### 13. Findings for other owners (filed in WORKLOG, `## Cross-session requests`, 2026-11-18)
+
+1. **A branch nogood veripb refuses, under restarts with phase saving and a dynamic order. OPEN.**
+   On `2017_hrc_exp1-1-5670`, twice. (a) Binary `28c4a51c`, `--search activity --restarts luby
+   --phase-saving`, phase saving then assigning interior saved values: the nogood of node 2801
+   keeps 34 of 50 decision levels and is not RUP. The clause of all 50 is, and so is the nogood
+   with the one decision of level 26 added back, and no other single level does it. So
+   `Learn.levels` misses a level the trace needs, while every `BAGUETTE_DEBUG` check holds (M7-T27
+   (a3)'s memo-against-walk cross-check included). Reproduced on the pre-M6-T22 code. (b) Binary
+   `46b0deaa`, phase saving branching `x <= s` (no assignment decision), `--search alternate
+   --restarts luby --phase-saving`: `reverse unit propagation` refused at line 983 748 of a
+   274 MB proof (10 117 nodes, 20 restarts). Not yet localised. On that instance every
+   configuration without restarts verifies (`ps`, `act`, `act+ps`), and so do `luby+ps` and
+   `act+luby` on both binaries, `act+luby+ps` on `46b0deaa` and `alt+luby+ps` on `878ceb53`. So
+   the refusals need restarts and phase saving and a dynamic order together, and depend on the
+   path. The 182 test models and the codes set never refused (every flag set measured). **Until
+   this is found, the strategy flags are not proof-safe on every instance**, and the default,
+   which is byte-identical to main, is unaffected. The first thing to try is (b) under the
+   instrumentation of (a) (`all`, `ng` and `ls` printed at the refused node), to see whether it
+   too is one missing level of the closure.
+2. **I-P7 fires on this instance at default flags**, on main's code and before M6-T22: a learned
+   clause's advisor declines a wake for a change that, run, prunes. A missed pruning, not an
+   unsound one.
+3. **The stop can overshoot `--time-limit 300` by more than 300 s** with the proof on, on main's
+   binary as on the flags (`2017_cargo_challenge01_0s_1913`, `2020_cable_tree_wiring_R046`):
+   the runs were killed at the 600 s wall with a truncated proof, which is why the subset tables
+   show `SAT 600 s` for them and no verdict. D-0136's family.
+
 ## D-0134  M8-bits-encoding-T3: the full substrate -- maxmin over bits by SELECTOR rows and one `Resolve` step, the checker facts measured first, and the step order
 
 **Status**: **IN PROGRESS, DESIGN SETTLED** (agent-t3, branch `wave44-t3`, 2026-11-16). **Steps 1 and 2 (int_ne only) landed 2026-11-18** (agent-t3b, §4 onwards); steps 3 to 5 and the rest of step 2 are open (§7). **Step 2's rest, steps 3 and 4 landed 2026-11-18** (agent-t3c, branch `wave46-t3`, §8 onwards): the reified and `bool2int` holds released, mapping's and ATSP's walls diagnosed and mapping's fixed, PB analysis over mixed rows measured and left to the clause path, learned clauses over atoms checked; step 5 designed and probed, not built (§13).
@@ -13928,6 +14552,454 @@ Unit suites on the fixed branch: 3 724 ok, 0 FAIL, and `test_engine` 123 ok, and
 **The second case** (`BAGUETTE_PROPAGATE_LEARNED=off`) is not an invariant either: the orchestrator's
 correction says the run dies of memory under the 4 GB cap in debug mode when learned constraints are
 proof-only, and agent-lanes records it in D-0141. It is the lot-sizing line above. Not chased here.
+
+### 2. The batch: how every fix below is measured and held to the bytes
+
+**Status of the batch**: DONE, recorded 2026-11-18 (agent-batch3, `wave48-batch3`). Eight fixes, all
+byte-identical in stdout, the SEARCH counters and the proof (sections 3 to 8b and 3's memory
+addendum), four items left out because they reorder runs, with their measured gains (section 9).
+
+**The evidence per fix**, all on `fataepyc-06` against the reference binary `e8354a74` (gate 48's,
+`main` at `a8d2924`, which `576da4b` and `e809a08` do not change under `lib/` or `bin/`):
+
+- the unit suites, `dune runtest --root . --force` under the 4 GB cap, and `test_pb`, `test_clause`
+  and `test_engine` again under `BAGUETTE_DEBUG=1`, each fix bringing its own test of the new
+  structure against the old one kept in the test as the specification,
+- the differential lane (M11-T2, D-0141), `scripts/diff_lane.sh --bin <fix> --tier all`: 21
+  instances in 9 configurations and the six D-0140 instances at their slow-tier budgets, stdout,
+  every `--stats` counter and the `.opb`/`.pbp` sha256 against the recorded reference,
+- the six D-0140 instances at 10 000 nodes, `--no-proof`, under `perf stat -e instructions:u`
+  (`bench/perf`'s method, and instructions because cycles moved by 30 % between two runs of one
+  binary on the loaded node), with their `--stats` observations compared to the reference's,
+- the debug pass on the batch's tip (section 11): every lane instance in every configuration at
+  1 500 nodes under `BAGUETTE_DEBUG=1`, each proof through VeriPB 3.0.2. For E3 (a) and E2 (a) the six
+  instances also ran at 1 500 nodes under `BAGUETTE_DEBUG=1` against the reference's own debug runs,
+  which before section 1's fix only says much on QR48 and QR72: the four integer instances stopped on
+  the I-P7 alarm in both builds, identically.
+
+**Why a pass can be byte-identical and still save work.** The lane splits the counters into
+SEARCH and WORK. A fix that removes asks or runs that change nothing moves WORK (wakes, advised,
+props) and must leave stdout, every SEARCH counter and both proof hashes alone. The orchestrator's
+standard of 2026-11-18 allows the WORK deltas and asks for them to be reported, and each section
+gives them.
+
+### 3. E3 (a): the PB pass over a per-row layout (`prop/pb.ml`, commit `5e3b4f8`)
+
+**What changed.** A pass of `Pb.propagate` (every model clause, every learned clause that is not
+quiet, every learned PB row) surveyed the row into a list of (term, status) pairs, built a hash table
+of (variable, polarity) groups from 12 terms on, filtered the forceable terms into a list, and kept
+the strongest per group with a `List.exists` over that list per forceable term: allocation on every
+pass and quadratic in a group. It now runs over a `layout` built once per row on its first pass
+(lazy, so a row `quiet` always answers never builds one): the terms as an array, each term's group,
+each group's terms in dominance order (strongest threshold first), and three scratch arrays
+(statuses, effective coefficients, the strongest forceable threshold per group). A pass is one walk
+for the statuses and the slack, one walk per group for the effective coefficients, one walk for the
+forceable terms and their groups' strongest, and the forcings in term order. It allocates nothing
+unless it prunes or conflicts, and then only the explanation, as before. E4 (the per-run allocation
+of every `Pb`-backed instance) is the same change.
+
+**Why the bytes cannot move.** Each piece computes the old value by the old definition. The
+snapshot F, the slack (summed in term order from `-degree` through `Checked.add`), the conflict and
+its reason are the old ones. The effective coefficient is a sum of the same positive addends in
+another order, so the same number. The only thing the order changes is where `Checked.add` would
+overflow and so the message it raises, and that is kept exact: a group's running sum that would pass
+`max_int` marks the terms from there on, and for those the old term-order fold is called and raises
+what it raised, at the same query, because the forceable terms are queried in term order as the old
+list filter did. "Forced" is "forceable and as strong as its group's strongest forceable threshold",
+which is the old `strongest` (no strictly stronger forceable term of its group). The forcings are
+applied in term order off the snapshot, the old list. The reason clause is built in term order from
+the snapshot and returns the shared `expl_all` when it names the whole row, so `Justify`'s
+physical-identity memo fires as before. The scratch arrays are written by every pass before they
+are read, so they carry nothing between calls and pb.ml's "no state the trail must undo" argument is
+untouched (its header now says why).
+
+**The test.** `test_pb.ml`, `test_pass_layout`: the old pass kept verbatim in the test as the
+specification, and 3 000 random rows (several rungs of one variable at both polarities, repeated
+literals, coefficients 1 to 3, every degree, narrowed boxes) run through both from the same store:
+same outcome, trail, reason facts, explanation literals and `expl_all` sharing on all 3 000 (403 of
+them prune, 1 412 conflict, 740 put three or more rungs on one variable). Two hand-built rows make
+`effective` overflow with their terms in each order: both passes raise, with the same message.
+
+**Evidence.** Lane 168 of 168 runs equal (the fast tier as it then was), WORK counters included,
+because the pass makes the same prunings in the same runs. The six at 10 000 nodes: stdout and every
+counter equal, proof-mode `.pbp` equal, `BAGUETTE_DEBUG` runs at 1 500 equal (see section 2 on what they show). Unit 3 726 ok.
+
+| instance, 10 000 nodes, no-proof | reference (G instr.) | E3 (a) | change |
+|---|---|---|---|
+| QR48 | 25.96 | 25.30 | -2.5 % |
+| QR72 | 37.55 | 36.55 | -2.7 % |
+| rcpsp_11 | 92.33 | 74.12 | **-19.7 %** |
+| mspsp_hard_01 | 109.13 | 106.28 | -2.6 % |
+| cyclic-rcpsp_easy_6 | 75.23 | 69.79 | -7.2 % |
+| openshop_gp10-4 | 806.88 | 802.85 | -0.5 % (setup is 95 % of it) |
+
+**What D-0140 expected and what came.** D-0140 measured cyclic at 439 G for 10 000 nodes with 21
+learned PB rows costing 73 % of a node, on `dc40d89`. The reference binary here (`e8354a74`, after the
+M8-T3 continuation's `int_times` split) runs the same 10 000 nodes in 75 G with 16 rows, so most of
+E3's cost on that instance had already gone with the search change, and what E3 (a) finds there is
+7 %. The largest gain is on rcpsp_11, where the pass runs on model clauses and learned clauses that
+are not quiet.
+
+**Addendum, the memory (commit `2cea86d`).** A layout with its three scratch arrays per row raised the
+peak RSS of the 40 000-node runs, one learned clause per conflict, by 9 to 16 % (rcpsp_11 551 to 641
+MB, mspsp 1 287 to 1 487 MB, openshop 1 015 to 1 111 MB, measured on `8b96877`). The scratch arrays
+are now one module-level set shared by every row, which is safe because two passes never overlap
+(pb.ml's header gives the argument), and a row whose (variable, polarity) groups are all single terms,
+every clause `Learn.minimise` produced, keeps no group arrays (its effective coefficient is its own
+coefficient while it is non-false). The lane (232 runs) and the six at 10 000 nodes:
+every observation equal to the previous fix's. Instructions within 0.8 % either way (mspsp 90.24 to
+89.57 G, cyclic 68.57 to 68.82 G). Peak RSS at 10 000 nodes: rcpsp_11 146 to 129 MB, mspsp 330 to 306
+MB, and at 40 000 nodes section 10 has it within -1.7 % and +4.5 % of the reference.
+
+### 4. E2 (a): one walk per learned-clause run (`prop/pb.ml`, `prop/clause.ml`, commit `ca9a53e`)
+
+**What changed.** A learned clause's run was `Pb.propagate` (whose `quiet` walks the clause with
+three closures built per call) followed by `rewatch`, whose `best` walked the clause again once per
+watch to replace. `Pb.quiet` now walks `t.atoms` (an array built once per row, which the learned clause
+shares it for its watches) with top-level functions, and records the first two non-false literals in
+the row's `scan`. `Learned_clause.propagate` then moves its watches from them (`rewatch_quiet`). A
+run `quiet` does not answer is `Pb.pass` followed by the full `rewatch`, as before.
+
+**Why the bytes cannot move.** `quiet`'s predicate is the old one split at the second non-false
+literal ("a non-false literal after the first, on another variable" is "the second is on another
+variable, or one after it is"). After a quiet run the store has not moved, so `rewatch` would
+choose by the same store, and its `best ~not_` ("the first non-false literal other than `not_`") is
+`f1` unless `not_` is `f1` and then `f2`, and its latest-falsified arm is unreachable because two
+non-false literals exist. `keep` is `rewatch`'s own test. So the watches are the ones `rewatch`
+chose, and every later wake with them.
+
+**The test.** `test_clause.ml`, `test_one_walk`: 4 000 random clauses over two Booleans and two
+small integers with random starting watches: `Pb.quiet` equals the old list walk on all, and a run
+through `Learned_clause.propagate` leaves the same outcome, trail and two watches as `Pb.propagate`
+followed by `rewatch` on all (over 1 000 quiet runs, over 300 of them moving a watch).
+
+**Evidence.** Lane 168 of 168 equal, WORK included. The six: every observation equal. Unit 3 730 ok,
+the three debug suites ok.
+
+| instance, 10 000 nodes, no-proof | after E3 (a) | after E2 (a) | change |
+|---|---|---|---|
+| QR48 | 25.30 | 24.23 | -4.2 % |
+| QR72 | 36.55 | 35.40 | -3.1 % |
+| rcpsp_11 | 74.12 | 69.49 | -6.2 % |
+| mspsp_hard_01 | 106.28 | 100.95 | -5.0 % |
+| cyclic-rcpsp_easy_6 | 69.79 | 69.75 | 0 |
+| openshop_gp10-4 | 802.85 | 803.25 | 0 |
+
+### 5. E1: the wake index by direction, on every variable (`engine.ml`, `propagator.ml`, `prop/clause.ml`, commits `6cb18ad`, `10558b5`, `94c91c5`, `fdae732`)
+
+**What changed.** A self-watching instance reports each watch as a `Propagator.watch`: its variable
+and the bound move that can falsify it (`watch_lo`, `watch_hi`, or `watch_any`). A learned clause's
+watch `x >= k` is falsified only when `hi x` drops below `k`, so it is `watch_hi`, and `x <= k - 1` is
+`watch_lo`. The engine's index (D-0138's `dyn_ids`) keeps three slots per variable instead of one,
+and an entry on `x` asks the any-move slot, plus the lower-move slot when the entry OR A NEWER ENTRY
+OF THE SAME WALK moved `lo x`, plus the upper-move slot likewise (`t.moved`, a byte per variable,
+cleared after the walk). The seed asks by the entry's own moves.
+
+**Why the search cannot move.** The ask is a function of the store, not of the entry: it says yes
+iff a watch of the instance on `x` is false now. So every entry on `x` of one walk gets the same
+answers, and the old walk placed an instance at its first occurrence, the oldest entry on `x` its
+trigger wants. Take an instance with a false watch on `x`, say `x >= k`. If an entry of the walk
+moved `hi x` below `k`, every entry on `x` up to it in age asks the upper slot, the oldest included,
+so the instance lands where it did. Otherwise the watch was false before the walk, hence when the
+instance last ran (had it been falsified since, the walk or seed that saw that entry woke it, and it
+has run since or is still queued). A run that leaves a false watch is a conflict, which ends the call
+and is backtracked over with both watches falsified at its level, or a unit propagation, after which
+the clause is satisfied by its one non-false literal. Then every other literal is false and stays
+false, and the run the old walk gave it changes nothing: `Pb.pass` finds no open term, and `rewatch`
+keeps the true literal and picks the same latest-falsified literal again, since no falsification
+position has moved. So what goes is the asks that answered no and those no-op runs: WORK counters,
+never the trail. The woken ids are merged by id as before (`sort_uniq`, one instance being able to
+sit in two slots of one variable).
+
+D-0138 section 5 and D-0140 (E1, "ordering on integer variables") filed the integer case as
+reordering, for the walk in which one run moves both bounds of `x`: an index that asked each entry
+only its own direction would place a clause woken by the newer upper move at the newer entry, after
+the clauses of the older lower move. Asking an entry the directions of the newer entries of the walk
+is what keeps it exact, and a test pins the both-bounds walk.
+
+**A precondition made explicit on the way.** The first random test drew clauses with two rungs of one
+variable in one direction (`y >= 1 \/ y >= 3 \/ x <= 0`) and the M6-T18 skip check fired under
+`BAGUETTE_DEBUG`, identically with both indexes. Such a clause propagates with both of those rungs
+non-false (`Pb.pass`'s ladder-effective rule forces `y >= 1` once `x <= 0` is false), so watching the
+two of them is not I-P7. The solver never builds one: `Search.register_learned` registers only
+`Learn.lits`, which `Learn.minimise` reduces to one literal per (variable, polarity), and names are
+unique in every store `Compile` builds. `Learned_clause.make` now states the precondition and checks
+it under `BAGUETTE_DEBUG` (commit `10558b5`), and the tests draw minimised clauses.
+
+**The tests.** `test_engine.ml`: `test_direction_index` runs 500 random searches (decide, propagate,
+backtrack) over minimised learned clauses on four Booleans and two variables on 0..3, against an engine
+whose advisor reports every watch as `watch_any` (the M6-T22 index): the same outcome and the same
+whole trail after all 5 594 calls, 154 conflicts, and 3 691 wakes against 9 202. `test_direction_walk_order`
+moves `lo x` then `hi x` in one walk with one clause watching `x >= 6` and one watching `x <= 1`:
+woken `[0; 1]` by both indexes. **The break, performed**: with the newer-entry rule removed (each entry
+asks its own direction only) the walk-order test FAILS (`[1; 0]`) while the random test still passes,
+which is why the walk-order test exists. Both pass under `BAGUETTE_DEBUG=1`, where the instances of
+the slots an entry does not ask go to `check_declined` exactly as if they had been asked.
+
+**Evidence.** The lane, `--tier all`, 232 runs: 50 identical, 182 differing in WORK counters
+only, none in stdout, a SEARCH counter or a proof hash. Over the 232 runs the wakes go from
+1 097 179 533 to 807 782 751 (-26.4 %), the runs from 447 919 323 to 445 959 364 (-0.4 %, the no-op
+runs of the satisfied clauses), and the effective runs stay at 55 033 067. After E1 the Boolean
+instances decline no ask at all (QR72 at 10 000 nodes: 3 270 455 declined before, 0 after). The six at
+10 000 nodes differ from the reference in WORK lines only. Unit 3 740 ok, the three suites ok under
+`BAGUETTE_DEBUG`.
+
+| instance, 10 000 nodes, no-proof | after E2 (a) | after E1 | instructions | cycles, median of 3, started together |
+|---|---|---|---|---|
+| QR48 | 24.23 | 23.83 | -1.7 % | |
+| QR72 (at 40 000 nodes) | 231.26 | 222.81 | -3.7 % | 208.0 G to 168.1 G, -19 % |
+| rcpsp_11 | 69.49 | 66.92 | -3.7 % | 45.8 G to 37.1 G, -19 % |
+| mspsp_hard_01 | 100.95 | 100.09 | -0.9 % | 61.4 G to 58.2 G, -5 % |
+| cyclic-rcpsp_easy_6 | 69.75 | 70.10 | +0.5 % | |
+| openshop_gp10-4 | 803.25 | 801.43 | -0.2 % | |
+
+The asks E1 removes are cheap in instructions and dear in cycles: each reads a cold clause record.
+D-0140 ranked E1 from a cycles profile, and the cycles are where it shows. On cyclic, where a learned
+clause is rarely asked, the walk's per-variable bookkeeping costs more than it saves (+0.5 %).
+
+### 6. E7: `Linear.propagate` without its two lists (`prop/linear.ml`, commit `8b96877`)
+
+**What changed.** Every run built the list of term minima (`List.map`) and its `List.combine` with the
+terms. The minima now go into a scratch array written for every term at the top of every run. It was
+first one array per row (`8b96877`), which cost smelt_2 about 9 MB before node 1 (378 to 369 MB when it
+went, `int_times` posting a guarded row per value of its case variable). It is now one array shared by
+every row (commit `1453de2`), safe for the reason pb.ml's scratch is. It carries nothing between runs,
+and two runs never overlap. (That commit's message puts the whole of smelt_2's 327 to 378 MB on these
+arrays. Most of it was section 8b's first table, measured after.)
+
+**Why the bytes cannot move.** The minima are computed in term order as `List.map` computed them, then
+summed in term order from 0 through `Checked.add` as `Checked.sum` did, so the values and an overflow's
+message are the old ones, and the pruning walk reads term `idx`'s minimum at `idx`. Every `int_times`/`int_div`/`int_abs` row and guard is a `Linear` (or a
+`Reif_lin_le` of two), so this reaches E6's rows as well, without changing which of them run.
+
+**The test.** `test_prop.ml`, `test_linear_scratch`: the old function kept verbatim as the
+specification, 2 000 random rows (four variables with negative bounds, coefficients -3..3 with zeros,
+every right-hand side) from the same narrowed store: same outcome, conflict reason and trail with its
+reasons on all, over 300 that prune and 300 that conflict.
+
+**Evidence.** The lane, 232 runs: every observation equal to E1's (no WORK counter moves either,
+the same runs happen). The six at 10 000 nodes: every observation equal to E1's.
+
+| instance, 10 000 nodes, no-proof | after E1 | after E7 | change |
+|---|---|---|---|
+| QR48 | 23.83 | 23.80 | -0.1 % |
+| QR72 | 35.10 | 35.06 | -0.1 % |
+| rcpsp_11 | 66.92 | 66.72 | -0.3 % |
+| mspsp_hard_01 | 100.09 | 99.19 | -0.9 % |
+| cyclic-rcpsp_easy_6 | 70.10 | 69.48 | -0.9 % |
+| openshop_gp10-4 | 801.43 | 800.78 | -0.1 % |
+
+### 7. S3's store half: `Store.is_level_start` in one load (`store.ml`, commit `e8760c8`)
+
+**Why here.** D-0140 filed S3 (`Search.decision_entries` walking the whole trail at every conflict)
+under T4, because the walk is in `search.ml`. An instruction profile of this batch's tip (`perf record
+-e instructions:u`, mspsp at 10 000 nodes) put 8.2 % of the instructions in `Store.go`, the binary
+search over the level marks that `is_level_start` runs for every entry of that walk. The walk stays
+T4's. Its per-entry cost is the store's.
+
+**What changed.** The store keeps `starts`, a count per trail position of the open level marks sitting
+there (an empty level can share its position with the next), updated in `push_mark` and `backtrack`,
+the only two places `n_levels` moves. `is_level_start` reads it. The old definition stays as
+`is_level_start_by_marks`.
+
+**Why the bytes cannot move.** The old test was "the last open mark at or below `i` is at `i`", which,
+the marks being monotone (I-T2), is "some open mark is at `i`", which is the count being positive. It
+is a pure query, so nothing else changes.
+
+**The test.** `test_core.ml`, `test_level_start_count`: 4 000 random steps of new levels, bound moves
+and backtracks, comparing the two definitions at every trail position (one past the end included)
+after every step, over 100 states with two levels at one position.
+
+**Evidence.** The lane, 232 runs, and the six at 10 000 nodes: every observation equal to E7's,
+WORK counters included (the same runs, the same asks). The unit run at this commit had one FAIL, and
+not in this change: E7's own test drew 276 pruning rows against the floor of 300 it sets itself, fixed
+by drawing 3 000 rows (`214e851`, 413 prune) and green at the gate.
+
+| instance, 10 000 nodes, no-proof | after E7 | after this | change |
+|---|---|---|---|
+| QR48 | 23.80 | 23.56 | -1.0 % |
+| QR72 | 35.06 | 34.63 | -1.2 % |
+| rcpsp_11 | 66.72 | 66.01 | -1.1 % |
+| mspsp_hard_01 | 99.19 | 90.39 | **-8.9 %** |
+| cyclic-rcpsp_easy_6 | 69.48 | 68.49 | -1.4 % |
+| openshop_gp10-4 | 800.78 | 797.71 | -0.4 % |
+
+### 8. E8, first part: cumulative's pass without its range lists (`prop/cumulative.ml`, commit `dd935e2`)
+
+**What changed.** For every task, in both directions, on every pass, the time-table filter built the
+list of the task's possible times (`range`, a `List.init`) and, for the lower push, its `List.rev`, and
+scanned it for the first overloaded point. A loop now visits the same times (descending from
+`lo + dur - 1` for the lower push, ascending from `hi` for the upper one) and stops at the same point.
+The rest of D-0140's E8 (the profile rebuilt and the snapshot array allocated per pass) is left: it is
+kept across runs only with a trail-undone state, which is the cumulative's own design question.
+
+**Why the bytes cannot move.** Same times, same order, same first hit, same push. The existing
+cumulative tests (`test_prop.ml`'s soundness, checking, rows, time-table fixpoint and search lanes,
+with VeriPB) and the lane's two rcpsp instances in nine configurations are the checks.
+
+**Evidence.** The lane, 232 runs, and the six at 10 000 nodes: every observation equal to the
+previous fix's, WORK counters included.
+
+| instance, 10 000 nodes, no-proof | before | after | change |
+|---|---|---|---|
+| QR48 | 23.56 | 23.55 | 0 |
+| QR72 | 34.63 | 34.63 | 0 |
+| rcpsp_11 | 66.01 | 63.99 | **-3.1 %** |
+| mspsp_hard_01 | 90.39 | 90.24 | -0.2 % |
+| cyclic-rcpsp_easy_6 | 68.49 | 68.57 | +0.1 % |
+| openshop_gp10-4 | 797.71 | 797.52 | 0 |
+
+### 8b. D-0143's request: `Engine.create` without its `List.mem` (`engine.ml`, commits `8e28002`, `7f4420a`)
+
+**The request** (agent-setup, D-0143, under `## Cross-session requests`). `Engine.create` registered
+each instance on each variable of its scope after a `List.mem` of its id over the variable's watcher
+list, so building the engine was quadratic in a variable's degree. On 2014 smelt_2 (variables in about
+2 000 constraints, 30 228 `int_times`) `List.mem` and polymorphic compare were 16 % of the 3 s left
+before node 1 after D-0143.
+
+**What changed.** Ids are distinct (`t.instances` holds instance `i` at slot `i`), so the id being
+registered can only be in a variable's list if this same instance put it there for an earlier
+occurrence of the variable in its own scope, and then it is the head, nothing having been prepended
+since. The test is now the head. A first version (`8e28002`) kept a table of every (variable, id)
+pair instead, exact without the argument, but the table raised smelt_2's peak memory by about 30 MB
+for the length of the setup (369 to 339 MB when it went), and `7f4420a` replaced it.
+
+**Why the bytes cannot move.** The same lists in the same order, by the argument above. `test_engine.ml`,
+`test_create_watchers`, keeps the old loop as the specification and compares every variable's list on
+200 random engines whose scopes repeat variables.
+
+**Evidence.** smelt_2 at one node, `--no-proof`, main (`85cecf4`, after D-0143) against the batch's tip,
+two runs each: 15.55 G instructions to 12.50 G (-19.6 %), 2.85 s to 2.49 s, stdout identical. The
+batch's tip uses 339 MB at that point against main's 327 MB (the per-row arrays of sections 3 and 4,
+for every model row). The lane on the tip is section 11's.
+
+### 9. What this batch leaves out, and why: the items that reorder runs, with their measured gains
+
+Each item below changes the order in which runs happen, so the trail, the learned clauses and the
+proof can move, and D-0104's standard (node counts reported, every proof verified) applies, not
+byte identity. They are a decision for the user, one each. The gains are measured on throwaway
+builds of `8b96877` (the batch as it stood after E7), never merged, at 10 000 nodes without the
+proof.
+
+**(a) E2 (b), the MiniSat watch move.** On a falsified watch, look for a non-false literal from
+that watch's position onwards (circularly) and stop there, instead of re-reading the clause from
+literal 0 (`/scratch/arthur/wave48-batch3-x1`, a dozen lines in `Learned_clause.propagate`). The
+watches chosen differ, so the clause is woken at other entries and placed elsewhere in the queue.
+Measured against `8b96877`, instructions at 10 000 nodes: QR48 +8.7 %, QR72 +4.4 %, rcpsp_11
+-4.3 %, mspsp -1.8 %, cyclic and openshop 0. The decisions and conflicts move on rcpsp_11 (5 114 and
+4 886 to 5 119 and 4 881) and on mspsp (5 565 and 4 435 to 5 575 and 4 425). It reorders even on the Boolean codes models (QR48: same node, decision and
+conflict counts, but other learned clauses, `cls-prune` 78 against 74). Not a gain as it stands (it costs more on
+the codes models, whose searches it changes), and small next to E2 (a)'s where it helps, because
+`quiet` already stops at the second non-false literal. Not recommended.
+
+**(b) E3 (b), an advisor for the learned PB rows.** A slack-watch advisor (RoundingSat, GCS's
+`linear-slack-waking.md`): watch enough non-false literals that their coefficients exceed the degree
+by the largest group sum, and wake the row only when one of them is falsified. Two reasons it is
+ordering: a declined wake whose run would do nothing now can become a run that prunes later in the
+same call, and then it runs at a later queue position than the variable index gave it. And the
+advisor has to be packed by `Learned.pb_instance` (`learned.ml`, claimed by wave45-retention).
+Measured upper bound, by running every learned-PB-row run twice in a throwaway (the second run of a
+row at its fixpoint is a no-op, checked: the throwaway exits if a second run prunes, and none did):
+all learned PB row runs cost 5.1 G of 73.9 G
+instructions on cyclic (6.9 %) and 5.3 G of 70.0 G on rcpsp_11 (7.5 %), and nothing measurable on mspsp
+(-0.4 G, within the noise of a run's allocation). Of those runs 87 % (cyclic), 96 % (mspsp) and 94 %
+(rcpsp_11) change nothing, so a free oracle advisor would save at most about that. After E3 (a) the
+rows are cheap per run, and on the reference binary there are 16 to 65 of them.
+
+**(c) E6, an advisor for the `int_times` guard rows.** Wake a guarded row only while its guard can
+still hold, a guard only when the case variable crosses its value. Same ordering argument as (b), and
+the rows are posted by `compile.ml` (claimed by wave48-setup). Measured the same way: all `int_times`
+runs cost 9.2 G of 73.9 G instructions on cyclic (12.5 %) and 4.2 G of 108.3 G on mspsp (3.8 %), and
+97.6 % of them change nothing on cyclic, 77 % on mspsp. E7 already made each
+of these runs cheaper without changing which run.
+
+**(d) The blocker literal (E1's second half).** A literal tested before the ask, so that a clause
+satisfied by it is not queued. Not I-P7 by itself (a satisfied clause with a false watch must keep
+the 2WL invariant over backtracking, which MiniSat gets from the blocker being assigned earlier on
+the trail), and it changes which runs happen and so the watches. After E1 the asks that remain are
+the ones that answer yes, and the blocker's target is the yes-answers whose run finds the clause
+satisfied, which this batch did not separate. Not measured, it is the next E1 question.
+
+### 10. The batch's result: instructions at three budgets, and the scaling ratios
+
+User instructions, `--no-proof`, in units of 10⁹, on the reference binary (`e8354a74`) and on the
+batch at `2cea86d` (sections 3 to 8 and the memory addendum, before section 8b and before main's
+D-0143 was merged in, so that the numbers are this batch's alone), measured on the same node the same
+afternoon. At every budget every observation of the batch equals the reference's but WORK counters
+(18 of 18 runs).
+
+| instance | 1 000: ref, batch | 10 000: ref, batch | 40 000: ref, batch | at 40 000 |
+|---|---|---|---|---|
+| QR48 (UNSAT at 23 367) | 1.52, 1.44 | 25.96, 23.58 | 86.14, 76.13 | -11.6 % |
+| QR72 | 2.31, 2.19 | 37.55, 34.57 | 247.71, 220.90 | -10.8 % |
+| rcpsp_11 | 4.81, 4.42 | 92.33, 64.05 | 1 079.68, 647.08 | **-40.1 %** |
+| mspsp_hard_01 | 11.19, 10.13 | 109.13, 89.57 | 756.51, 584.50 | **-22.7 %** |
+| cyclic-rcpsp_easy_6 | 17.20, 17.12 | 75.23, 68.82 | 294.22, 261.07 | -11.3 % |
+| openshop_gp10-4 | 728.77, 729.47 | 806.88, 798.27 | 1 471.55, 1 318.40 | -10.4 % |
+
+Wall time at 40 000 nodes on the loaded node, for orientation only: rcpsp_11 439 s to 283 s, mspsp 298
+to 241, QR72 90 to 64, openshop 364 to 308. Peak RSS at 40 000 nodes against the reference: between
+-1.7 % and +4.5 % (rcpsp_11 551 to 576 MB, mspsp 1 287 to 1 344 MB). Before section 3's memory addendum
+it was up to +16 %.
+
+**The scaling ratio** D-0140 section 7 defines: instructions per node over the 10 000 to 40 000
+segment, over the same over the 1 000 to 10 000 segment. Near 1 is the target, a rise is the alarm.
+
+| instance | per node, 1k to 10k (M instr.) | per node, 10k to 40k | ratio, reference | ratio, batch |
+|---|---|---|---|---|
+| QR48 | 2.72 to 2.46 | 4.50 to 3.93 | 1.66 | 1.60 |
+| QR72 | 3.92 to 3.60 | 7.01 to 6.21 | 1.79 | 1.73 |
+| rcpsp_11 | 9.72 to 6.63 | 32.91 to 19.43 | 3.38 | 2.93 |
+| mspsp_hard_01 | 10.88 to 8.83 | 21.58 to 16.50 | 1.98 | 1.87 |
+| cyclic-rcpsp_easy_6 | 6.45 to 5.74 | 7.30 to 6.41 | 1.13 | 1.12 |
+| openshop_gp10-4 | 8.68 to 7.64 | 22.16 to 17.34 | 2.55 | 2.27 |
+
+The reference ratios are D-0140 section 7's (1.8, 3.4, 2.0, 2.6), measured again here on the binary
+that has moved since.
+
+**Reading.** The batch takes the most from the later segment, where the growth is: the cost of a
+node between 10 000 and 40 000 falls by 41 % on rcpsp_11, 24 % on mspsp and 22 % on openshop, against
+32 %, 19 % and 12 % in the first segment, so every ratio falls. None reaches 1. What still grows is
+mostly T4's (the database's O(n) per conflict in `retention.ml`, `Search.decision_entries` walking the
+whole trail, the polymorphic `List.mem` of `count_learned_activity`) and the learned clauses' runs that
+change nothing, which E2 (b) and the blocker would address and section 9 leaves to the user. rcpsp_11's
+-40 % at 40 000 nodes is mostly E3 (a) and E1: its model clauses and learned clauses pass often, and
+72 % of its asks were declined ones before E1.
+
+### 11. The gate
+
+On a fresh clone of the batch's tip on `fataepyc-06` (`7f4420a`, binary `104769d1`,
+`/scratch/arthur/wave48-batch3-runs/gate.sh`, gate 48's script with the reference artefacts kept):
+`make check` rc 0 under the 4 GB cap, 3 834 unit checks ok and 0 FAIL, 179 models passed (VeriPB and
+the no-proof stdout lane), peak RSS 92 776 kB. Against main's `e8354a74` (gate 48's artefacts, which
+also predate D-0143), all 179 models: stdout 0 differences, exit codes 0, `.opb` 0, `.pbp` 0.
+
+The tip, merged with main's D-0143 (`7f4420a`), on the rest of the evidence. The lane, `--tier all`:
+232 runs, 50 identical, 182 differing in WORK counters only, none in anything else. The six at 10 000
+nodes: every observation equal to `2cea86d`'s. Unit 3 762 ok and 0 FAIL, `test_pb`, `test_clause` and
+`test_engine` ok under `BAGUETTE_DEBUG=1`. The debug pass (25 lane instances x 9 configurations at
+1 500 nodes): the same 216 of 225 runs end rc 0 with no check firing as on section 1's fixed binary,
+with the same decisions, conflicts and learned counts in all 225, the same 9 lot-sizing runs die of
+memory under the cap, and 185 proofs say `VERIFIED NO CONCLUSION`. openshop's seven proofs again
+exhausted VeriPB's 8 GB cap in the pass. Section 1's rerun of one of them under 32 GB ended
+`VERIFIED NO CONCLUSION` (600 s, 7.8 GB).
+
+### 12. What would reverse this
+
+- **A propagator whose run counts start to matter.** E1 and the fixes after it hold stdout, the
+  SEARCH counters and the proof, and move WORK (wakes, declined asks, the runs of satisfied clauses).
+  Nothing in `lib/` reads a run count to decide anything today (`runs_by_id` feeds `--stats` only). A
+  heuristic that did (an activity per instance, a restart rule on propagation work) would turn E1's
+  removed no-op runs into a search change.
+- **A learned clause with two literals of one variable in one direction.** E1, E2 (a) and D-0104's
+  watches all rest on `Learn.minimise` (section 5). A new source of learned clauses registered as
+  `Learned_clause` must minimise them too, which `BAGUETTE_DEBUG` checks at `make`.
+- **A watch that is not an order literal.** `watch_lo`/`watch_hi` are claims about `x >= k`. A bits
+  literal or a direct-encoding literal as a watch would need `watch_any`, which the index still keeps.
+- **Cycles.** E1 is worth 1 to 4 % of the instructions and 6 to 18 % of the cycles in this batch's
+  measurement (asks are cache misses on cold clause records, not instructions). If the node's noise
+  hid a loss, it would show there first. The instruction counts, which are the metric, do not move
+  the wrong way on any of the six.
 ## D-0143  M11-complexity-T7: the setup before node 1 was the .opb's name pipeline, three lists and two string tables per term of every linear row; eight fixes make openshop's setup 2 000 times cheaper without the proof and 9 times with it, every byte the same
 
 **Status**: **DONE**, recorded 2026-11-18 (agent-setup, `wave48-setup`). The contract is ROADMAP
@@ -14121,6 +15193,659 @@ RSS 481 MB.
 - If `define_reif` (the `.pbp` door) were wired into `Compile`, G would still be right, because it
   keeps `Occurs` exact; that is why it does not take the cheaper route of skipping `Occurs`.
 
+## D-0144  M11-complexity-T4 part 1: learning and PB analysis without their quadratic lists, the trail walk of `falsified_before` replaced by the bound history; 1 to 3.5 % of the instructions at 10 000 nodes, every byte the same
+
+**Status**: **DONE** (part 1 of M11-complexity-T4), recorded 2026-11-18 (agent-batch4a,
+`wave49-batch4a`). The contract is D-0140 §5's rows L1, S5 (its `learn.ml` half), P1, P2 (but
+`linear.ml`'s `pb_row`, which is M11-T3's) and J6 (its `learn.ml` part), and §7's T4 paragraph.
+Files changed: `lib/core/learn.ml`, `lib/core/pb_analysis.ml`, `lib/core/reduce.ml`,
+`lib/core/ladder.ml`, `test/unit/test_learn.ml`, `test/unit/test_core.ml`. No store function was
+added, and nothing in `search.ml`, `analysis.ml`, `retention.ml`, `learned.ml`, `store.ml` or
+`writer.ml`. Measured on `fataepyc-06` against `main`'s binary `5e6f653e` (`da9df69`, the binary
+gate 50 recorded), outputs under `/scratch/arthur/wave49-batch4a-runs/`.
+
+### 1. The fixes, and why each one keeps the bytes
+
+Every fix replaces a data structure and keeps the function it computes. Where the argument is not
+a line long, the old code stays in the module as the specification, under a `_reference` or
+`_scan` name, and a unit test or a `BAGUETTE_DEBUG` check compares the two.
+
+**L1, `Learn.supports`.** The I-S4 support list was deduplicated by a `List.exists` over the list
+so far and grown by `acc @ [s]`, quadratic in the supports of every learned clause (the check is
+always on). Now a table of the ids taken (`Hashtbl.Make (Int)`) and a reversed list turned round
+once. The same first-seen entries in the same order; the table is never iterated.
+
+**S5, `Learn.minimise_with`** (the `search.ml` half, `dfs`'s `kept`, is part 2). The branch
+nogood is as long as the decision stack (147 on mspsp, 226 on openshop) and was minimised by a
+fold that appended with `@` and found a literal's slot by a `List.map` over the whole accumulator
+with a POLYMORPHIC `slot m = Some s`. Now one cell per slot behind a table keyed by
+`(variable name, direction)` with `String.equal`/`Bool.equal`, the cells kept in first-appearance
+order. Same output element for element: a slot's cell is created where the fold appended the slot's
+first literal, and a later literal of the slot replaces the cell exactly when the fold replaced
+it (`keep` does not return the old one). `minimise_with_reference` is the old fold, and
+`test_learn.ml` compares the two on 2 000 random clauses under both policies, payloads included.
+
+**J6, `Learn.introduce`'s origin.** The origin string renders every literal of the learned clause.
+The null writer of a `--no-proof` run drops `~origin` unread (`Writer.fresh`, M9-no-proof-T2), so
+for it the string is no longer built (`Writer.is_null`). With a writer that writes, it is built as
+before, because the audit keeps it per live id and the mutation knob matches it; making it lazy
+there is the writer's change and is a cross-session request to M11-T5. The origin is never written
+to the `.pbp`, so neither arm can change a byte.
+
+**P1, `Pb_analysis.falsified_before`.** Asked four to five times per term per elimination by
+`Reduce` and `Ladder`, it reconstructed the variable's bounds before trail position `at` by two
+linear trail walks (`bounds_before`). It now answers from the bound history D-0088 and D-0124
+already keep, through the existing `Store.var_support`, in O(log moves): `[x >= k]` is false
+before `at` iff `hi x <= k - 1` holds now and the one live entry that established it sits strictly
+below `at`, or no entry established it (the created domain already had it). A bound only tightens
+along the trail (I-D3), so a bound that does not hold now held at no earlier position. The scan
+stays as `falsified_before_scan`, checked against under `BAGUETTE_DEBUG` at every call, and
+`test_core.ml`'s bound-history test compares the two at every position on every literal of a
+hand-built trail (holes, a fix, a duplicated name, undo and re-push).
+
+**P2, the rest of the PB step.**
+- `analyse`'s `step` carried `antecedents`, `antecedent_rows` and `pivots` grown by `@`, with a
+  `List.mem` per cited id: now reversed accumulators turned round once when the loop stops, and
+  the ids taken in an int table. Same lists.
+- `asserting_level` scanned every level from 0 with a full slack sum per level (levels x terms, the
+  levels being the search depth): now one pass over the terms into per-level sums and a suffix
+  maximum. The `Checked` operations are the old ones value for value, so an overflow raises where
+  it raised with the same message (which reaches `--stats` through `Fallback (Overflow m)`): the
+  level-0 sum is accumulated in list order with `Checked.add` exactly as before, every later sum
+  is that one minus coefficients that are >= 1, and each level's `Checked.sub` of the degree is on
+  the same two integers. `asserting_level_reference` is the old scan; `test_learn.ml` compares
+  the two on 3 000 random rows, with levels below 0, at 0 and past the conflict level, and with
+  coefficients near 2^61 so that both the overflow arm and the ordinary one are reached.
+- `fat_memo` and `cited_ids` keyed through `Lit.equal` and `Int.equal` (`Hashtbl.Make`) instead of
+  the polymorphic compare of a plain `Hashtbl` or `List.mem`; `cited_ids` also lost its `@`.
+- `Ladder.lift` accumulated the multipliers per rung in an association list (`assoc` and
+  `remove_assoc` per rung per term): now an int table, folded into a list that is then sorted by
+  the rung value, which is unique, so the table's order reaches nothing.
+- `Reduce.round_to_one`'s postcondition looked each kept term up in the reduced row by a scan
+  (row^2 per elimination): the reduced row is now read once into a table that keeps the first
+  term per literal, as `coeff_of`'s `find_map` did.
+
+Not done, and why: `Ladder.lift` still folds `Learned.combine` once per rung, each one re-sorting
+the whole row. One combination of all the rungs gives the same normal form, but not the same
+sequence of `Checked` additions, so the overflow point and its message could move; it needs its
+own argument, and `learned.ml` is M10-T4's file. Requested in WORKLOG.md.
+
+### 2. Byte identity
+
+- **The differential lane** (D-0141, `origin/wave47-lanes` merged into the branch), `make diff
+  ARGS="--tier all -j 24"` on `cc0639a5`: **232 of 232 runs equal the reference**, 54 of 54 in the
+  Boolean class and 178 of 178 in the integer class: rc, stdout, the `--stats` counters, `.opb`
+  and `.pbp` sha256, over every configuration D-0140 §7 asks T4 for (`keep_all`, `fifo-po`,
+  `lbd-po`, `nopb` for PB analysis off, `audit0`, `bits0`, `noproof`), with PB analysis learning
+  rows on cyclic, mspsp and rcpsp_11 and the deep searches of mspsp and openshop.
+- **The debug pass**, `--tier all --debug -j 16`, where `falsified_before`'s cross-check runs at
+  every call: **223 of 223 runs equal the reference** (54 Boolean, 169 integer;
+  lot-sizing's nine excluded by name as on `main`, `bench/diff/debug-skip.tsv`), rc 0, no
+  invariant fired.
+- **The measurement runs below**: stdout, the `--stats` output minus clocks, and the `.pbp` and
+  `.opb` md5 identical between `main` and the branch on all eight (instance, mode) pairs,
+  including cyclic's 2.0 GB proof (`17257ea6`).
+- **The unit suites**, `dune runtest --root . --force` under `ulimit -v 4000000`: 0 FAIL, the new
+  reference tests included.
+- **The gate**, `make check` on a fresh clone at `6c2646f` on `fataepyc-06`: rc 0, 0 FAIL,
+  179 models passed, peak RSS 89 MB (`make_check_wall 25.01 s peak_rss 89268 kB`, gate 50 said
+  23.30 s and 89 864 kB), and every model's stdout, exit code, `.opb` and `.pbp` byte-identical to
+  gate 50's (`/scratch/arthur/gate50.art/new/`, binary `5e6f653e`): 179 models, 0 differences.
+
+### 3. Measurement
+
+`perf stat -e instructions:u`, `BAGUETTE_NODE_LIMIT=10000`, `--stats`, one process each, the four
+instances D-0140 §1 names for T4 (`.fzn` md5 as there: cyclic `b6939345`, mspsp `ab82542d`,
+rcpsp_11 `3b810f0e`, QR48 `3ed67581`). `main` is `5e6f653e`, the branch `cc0639a5`. Two more
+builds split the gain: `learn` is `main` with only the branch's `learn.ml` (`cea992b0`: L1, S5,
+J6), `noP1` is the branch with `falsified_before` routed back to the scan (`5eaa9611`: everything
+but P1). So L1+S5+J6 = `learn` - `main`, P1 = branch - `noP1`, and P2 = `noP1` - `learn`.
+
+Instructions (G) at 10 000 nodes, and each split as a share of `main`'s count:
+
+| instance | mode | `main` | branch | total | L1+S5+J6 | P1 | P2 |
+|---|---|---|---|---|---|---|---|
+| cyclic-rcpsp_easy_6 | no-proof | 65.074 | 64.429 | **-0.99 %** | -0.73 % | -0.26 % | -0.01 % |
+| | proof | 1 205.443 | 1 204.819 | -0.05 % | -0.06 % | -0.00 % | +0.01 % |
+| mspsp_hard_01 | no-proof | 106.131 | 102.437 | **-3.48 %** | -2.70 % | -0.77 % | -0.01 % |
+| | proof | 187.726 | 184.069 | **-1.95 %** | -1.50 % | -0.45 % | -0.00 % |
+| rcpsp_11 | no-proof | 90.952 | 90.009 | **-1.04 %** | -0.83 % | -0.11 % | -0.10 % |
+| | proof | 296.647 | 295.644 | -0.34 % | -0.24 % | -0.05 % | -0.05 % |
+| QR48 (clause path) | no-proof | 25.871 | 25.206 | **-2.57 %** | -2.56 % | +0.03 % | -0.03 % |
+| | proof | 42.167 | 41.501 | **-1.58 %** | -1.63 % | +0.03 % | +0.08 % |
+
+Every (instance, mode) pair has the same stdout, `--stats` minus clocks and proof md5 in all four
+builds. Reading it:
+
+- **The learning half is most of it**, and it is S5 and L1 more than J6: mspsp's nogoods are as
+  deep as its search (147) and lose 2.7 %, QR48's 2.6 % (no PB analysis at all, `pb-learned=0`).
+  J6 acts only without the proof; its own share was not isolated by a build, and the column is
+  larger without the proof than with it on every instance, which it is also for the dilution
+  described in the last bullet.
+- **P1 is worth 0.8 % on mspsp** (65 PB rows learned in 10 000 nodes) and 0.26 % on cyclic, and
+  nothing on QR48, which never runs PB analysis: what a trail walk per literal query cost, and what
+  D-0140 measured as 0.3 % inclusive on cyclic.
+- **P2 is below what this measures**, as D-0140 §5 said ("nv, under 1 %"): within 0.1 % either way,
+  QR48's and cyclic proof's small positive entries included, which are differences of two builds
+  that are both noise-level away from each other (QR48 never reaches the code P2 changed). It is
+  kept because it removes quadratic and polymorphic work that grows with the depth and the row
+  width, and the lane shows it costs no byte.
+- In proof mode the shares are smaller because the proof writing (M11-T5's) is most of the count:
+  cyclic writes 2.0 GB of proof in 10 000 nodes.
+
+### 4. What is left for T4 part 2
+
+These wait for the branches in flight (`wave45-strategy` holds `search.ml` and `analysis.ml`,
+`wave45-retention` holds `retention.ml` and `learned.ml`), as the ROADMAP says:
+
+- `retention.ml`: R1 (`reduce` copies `live_rev` per learned constraint, under `keep_all` too), R2
+  (`holds` by `List.exists`), R3 (`fifo`/`lbd` sort the database per reduce), R4 (the key is
+  `Learned.to_string`). D-0140 ranks R1 + R2 fourth of all items.
+- `search.ml`: S1 (`count_learned_activity`'s polymorphic `List.mem`, mspsp -7.7 % in D-0140's
+  scratch patch), S2 (`register_learned*` render every literal into the `Retention.cite`
+  message), S3 (`decision_entries` over the whole trail), S4 (`unfixed`/`first_fail`), S5's other
+  half (`dfs`'s `kept`, polymorphic `List.mem` per nogood literal), S6 (`apply_globals`), and J6's
+  `bridges` origin.
+- `analysis.ml`: A1 (the 1UIP loop's lists and name-keyed facts), A3 (`check_attribution`'s
+  `List.exists Var.equal`); A2 stays, it is the backjump's definition.
+- `learned.ml`: L2 (`ladder_form`/`to_linear_row` per learned clause for `--stats` only), and
+  `Learned.combine` once per rung in `Ladder.lift` (§1, with its overflow argument).
+- Two cross-session requests filed in WORKLOG.md: a lazy `~origin` in `writer.ml` (M11-T5), then
+  in `Learned.introduce`'s signature; the combination of all the rungs at once in `learned.ml`.
+
+## D-0141  M11-complexity-T2: the two lanes of the M11 pass -- a differential lane that holds the search, the proof and the counters byte for byte on real instances at a fixed node budget, and a scaling lane that reads the growth of a node's cost in instructions
+
+**Status:** DONE, 2026-11-18 (agent-lanes, branch `wave47-lanes`). No file under `lib/` changes.
+**Context:** ROADMAP M11-complexity-T2; D-0140 (the inventory, whose §7 lists what this lane must
+contain per batch); D-0142 §1 (the debug-check fix this lane's debug pass prompted); D-0138 and
+D-0136 (linear costs the test models never showed); M6-T9 (`BAGUETTE_NODE_LIMIT`).
+
+### 1. Why two lanes, and why neither is in `make check`
+
+The M11 pass replaces every operation whose cost grows with the run, and each replacement must keep
+the search and the proof byte for byte. The test models cannot hold it to that. They never build a
+learned database of more than a few hundred constraints, so a change that alters the search only
+once the database is large passes all of them. This was measured. A throwaway binary that flips the
+side explored first at the 1 500th decision gives **0 differing artefacts on the 179 models**
+(stdout, exit code, `.opb`, `.pbp`), and the differential lane rejects it on **198 of its 232 runs**
+(§5).
+
+`make check` takes 25 s on fataepyc-06. The differential lane makes 232 solver runs of 1 to about
+330 s (466 with its debug pass), and the scaling lane needs `perf` and runs of up to 40 000 nodes.
+Neither fits the two-minute bound for `check`, so both are separate targets that the gate runs
+right after it (§7). Everything they read is in the repository, so they run from a fresh clone.
+
+### 2. The corpus, and where it lives
+
+In the repository: `bench/diff/corpus/`, 25 files (`gzip -9n`), **958 KB** in all, listed in
+`bench/diff/corpus.tsv` with budget, tier, class, configurations and the families each covers. That
+is under the 5 MB the brief allowed. Keeping it in the repository means `make diff` needs nothing
+off the repository, a clone carries the corpus its reference was recorded on, and a corpus change
+is reviewed like a code change. The instances are `.fzn` already flattened with the baguette
+mznlib, so the lane does not depend on MiniZinc.
+
+**Fast tier** (every batch, after every change; 21 instances, one default run 5 to 10.5 s at load 70):
+
+| instance | budget | class | why |
+|---|---|---|---|
+| `H_qr48_bag_def`, `H_qr72_bag_def` | 6 000, 5 000 | bool | D-0138's codes models: clause path |
+| `2012_parity-learning_48_24_6.2` | 4 000 | bool | learned PB rows (217 of 2 208) that propagate |
+| `2024_monitor-placement-…_real_hard` | 5 000 | bool | `array_bool_and` heavy |
+| `2017_opd_small_bibd_08_28_14`, `2015_opd_small_bibd_10_30_09` | 5 000, 4 000 | int | `int_times`; PB analysis learns rows (115, 124) |
+| `2013_rcpsp_12` | 5 000 | int | `cumulative` |
+| `2021_perfect_square_102` | 10 000 | int | reified disjunctive packing, 4 831 learned |
+| `2011_bacp_bacp-22` | 6 000 | int | linear, optimisation |
+| `2012_amaze_2012-06-29` | 6 000 | int | `int_eq_reif`, `int_lin_eq` |
+| `2013_filters_dct_2_2`, `2021_steiner-systems_…_N21` | 12 000, 7 000 | int | `array_int_maximum` |
+| `2015_grid-colouring_13_11` | 5 000 | int | reified linear |
+| `2016_diameterc-mst_s_v20_a50_d4` | 4 000 | int | `int_eq_reif`, `int_ne_reif` |
+| `2017_tc-graph-color_k5_05` | 8 000 | int | 819 `int_lin_ne`: domains with holes |
+| `2019_fox-geese-corn_foxgeesecorn_54` | 3 000 | int | `array_int_element`; several improving solutions |
+| `2020_lot-sizing_pigment15b.psp` | 3 000 | int | `global_cardinality`, `all_different_int`, element |
+| `2023_chessboard_chessboard4` | 2 500 | int | `global_cardinality`, element |
+| `2023_evm-super-compilation_isolated_block_6_0_input` | 2 000 | int | gcc, element, `int_ne` |
+| `2018_soccer-computational_xIGData_24_16_14_2` | 1 500 | int | `all_different_int` (310 learned: setup-heavy) |
+| `2011_roster_chicroster_dataset_large_18` | 3 500 | int | `int_eq_reif`, `int_ne_reif`, `array_bool_and` |
+
+The Challenge instances come from D-0133's archive (wave 43), among the TIMEOUT rows with the most
+learned constraints per second. They were flattened again on the node (that run kept only the
+REFUSED `.fzn`) and probed at 2 000 and 8 000 nodes. Those whose setup alone takes tens of seconds
+(cyclic-rcpsp_hard_11 106 s at 2 000 nodes, l2p 192 s, test-scheduling 43 s, saeling 40 s,
+openshop_j8per0-2 65 s at 2 000 nodes) were left out of the fast tier.
+
+**Slow tier** (D-0140 §7: its six measured instances, `.fzn` md5 equal to D-0140 §1's): QR48 and
+QR72 at 10 000; `2013_rcpsp_11` and `2012_mspsp_hard_01` at 10 000 (integer learned clauses, learned
+PB rows 25 and 65, mspsp at depth 147); `2011_cyclic-rcpsp_easy_6` at **2 000**, because its proof
+costs 180 M instructions a node, with `--bits-above 0`; `2014_openshop_gp10-4` at **300**, because
+its setup alone was 112 s without the proof and about 330 s with it on a8d2924 (depth 101 at 300
+nodes). D-0143, merged the same day, makes that setup 2 000 times cheaper without the proof and 9
+times with it and keeps every byte, so openshop's budget can grow at the next re-record.
+
+**Classes.** Each instance is `bool` or `int` after the variables its learned clauses range over,
+and the lane sums the two apart (`diff_lane: class bool …: x of y runs equal`), because D-0140's E1
+(a wake index by direction) is exact on the first and can reorder runs on the second.
+
+### 3. The configurations
+
+`bench/diff/configs.tsv`, the one file the orchestrator extends when a flag merges (the restart and
+activity flags of `wave45-strategy` have commented slots):
+
+| name | what | why |
+|---|---|---|
+| `default` | the CLI as shipped, proof on, audit on | the path every batch must keep |
+| `audit0` | `BAGUETTE_PROOF_AUDIT=0` | the end sweep's `del` lines exist only under the audit (D-0140 W8) |
+| `noproof` | `--no-proof` | stdout and counters; T3/T4 code without the proof's cost |
+| `lbd`, `fifo` | `BAGUETTE_RETENTION=lbd:500`, `fifo:500` | the policy runs after every learned constraint |
+| `lbd-po`, `fifo-po` | the same with `BAGUETTE_PROPAGATE_LEARNED=off` | where the cap binds (below) |
+| `nopb` | `BAGUETTE_PB_ANALYSIS=off` | the clause path only (`Search.no_pb`) |
+| `bits0` | `--bits-above 0` | the bits arm, atoms, `red` lines |
+
+Fast tier: all nine on every instance (189 runs). Slow tier: the configurations its line names (QR
+all nine; rcpsp_11 and mspsp eight, all but `bits0`; cyclic six, with `bits0`; openshop three), 43
+runs.
+
+**A finding on the retention configurations.** On main every learned constraint is a registered
+instance, so it is CITED, the soft cap pins all of them, and `lbd:500` and `fifo:500` **evict
+nothing** (QR48 at 6 000 nodes: `2990 added, 0 evicted, 2990 cited`). Their search equals the
+default's and only the policy's own code runs. With learned propagation off the cap binds (QR48:
+2 494 of 2 994 evicted mid-search; 20 of the 21 fast instances evict), which is what the `-po` lines
+are for. If `wave45-retention` changes this, its merge re-records.
+
+**Pinned environment.** The runner unsets every `BAGUETTE_*` variable of the caller's shell except
+the memory cap, so a stray `BAGUETTE_RETENTION` in a terminal cannot become the default, and
+`BAGUETTE_PROOF_AUDIT` is the CLI default (on) except in `audit0`. Each run is in its own directory
+with the model linked as `model.fzn` and the proof prefix `p`, because the `.opb` names the model
+path it was given (`* baguette: model.fzn`).
+
+**The debug pass.** `--debug` runs every selected (instance, configuration) again under
+`BAGUETTE_DEBUG=1` at min(budget, 1 500) nodes, against `bench/diff/reference-debug/`, because
+`check_watched`, `check_skip` and the I-P7 advise check catch a lost wake (D-0138) and run only in
+debug. Two runs are excluded by name in `bench/diff/debug-skip.tsv`, which the lane prints on every
+debug pass: lot-sizing under `lbd-po` and `fifo-po`. Debug with proof-only learning costs that
+instance 6.1 GB and 248 s at 1 500 nodes (measured under a 32 GB cap: rc 0, no invariant fired),
+and under the 4 GB cap it dies in the GC. Everywhere, a run with a non-zero exit is NEVER recorded
+(`--update` refuses it and quotes the solver's last line), so the lane cannot bless a failure.
+
+### 4. What is compared, and what a failure says
+
+`bench/diff/observe.py` turns a run into a text file: `rc`, every stdout line, the `--stats` and
+`limit:` counters, and the sha256 of the `.opb` and `.pbp`. A counter is kept as `key/unit value`
+with the leading number-unit pairs only, because the prose after it is edited for reasons that are
+not the search. `limit:` is kept field by field minus `cpu`, `wall`, `fired` and `time-limit`, and
+`time:` lines never appear. A counter present on one side only is a NOTE, not a failure, so a row
+that adds a counter needs no re-record (`pb-whys`, added by a8d2924, showed up exactly so). The
+comparator's self-test (12 cases) runs first on every invocation.
+
+Each counter is SEARCH or WORK. WORK is how much propagation it took to reach the same tree:
+propagator runs, effectful runs, wakes and their masks, seeds, deferred reasons, citation memos,
+the per-family run lines. It is the class a T3 batch is most likely to move on purpose (D-0140 E1,
+E2). Both classes fail. The message names the first differing item in the order exit code, stdout,
+SEARCH, proof hashes, WORK, and counts the rest:
+
+    DIFF 2011_bacp_bacp-22 [default]: .pbp sha256: reference 5e42…, now 462a…   [differing items: hash 1, work 10]
+
+so a message that names a WORK item first has everything else equal, and the batch must say in its
+record why the work moved. The order was set after the red test, whose first version named
+`limit.props` first on a changed search, because the `limit:` line comes first on stderr.
+
+### 5. Validation
+
+All on fataepyc-06 at load 30 to 70 on 192 cores, `ulimit -v 4000000` per run.
+
+- **Determinism.** Both tiers twice on a8d2924's binary: **232/232 both times** (220 s and 225 s
+  at `-j 24`, peak RSS of the whole lane 3.7 GB). The first 168-run lane twice: 168/168 both times.
+  On f9bf6c4's binary `15e23df0` (D-0142 §1's debug-only fix) the same references: **232/232, WORK counters included** (221 s), so they were kept.
+- **Red.** The throwaway binary `2614f4c3` (a8d2924 plus one line in `Search.branch_split`: the
+  side order flips at the 1 500th decision; never committed). The 179 test models: 0 differing
+  artefacts against a8d2924's binary. The lane: **198 of 232 runs differ**, class `bool` 54 of 54,
+  class `int` 144 of 178 (the rest never reach a 1 500th decision). For example
+  `DIFF 2011_bacp_bacp-22 [bits0]: SEARCH counter pol-tokens/tokens: reference 6368492 tokens, now 6368504 tokens   [differing items: search 1, hash 1, work 10]`.
+- **A cost-only change is green.** The teeth binary of §6 (an O(n) copy per learned constraint):
+  168/168 equal. The lane does not confuse cost with search.
+- **The debug pass raised an alarm, and it was the debug checks.** Its first recording on a8d2924
+  hit the I-P7 advise check on 16 instances, all of the `int` class, within 1 500 nodes (rcpsp_11,
+  rcpsp_12, mspsp, cyclic, openshop, roster, amaze, grid-colouring, diameterc-mst, tc-graph-color,
+  soccer, fox-geese-corn, lot-sizing, perfect_square, chessboard, evm; not QR48, QR72, parity,
+  monitor-placement, the two opd, bacp, filters, steiner), for example
+  `Engine.Not_at_fixpoint("I-P7: propagator #335 learned_clause declined the wake for a change of
+  X_INTRODUCED_30_, but a run pruned 1 entr(y/ies)")`, rc 2, proof truncated. With learned
+  propagation off only lot-sizing failed, and that was the memory cost of §3. I reported it as lost
+  propagation. It was not: agent-batch3 traced it (D-0142 §1) to two wrong debug checks. The I-P7
+  check ran a declined clause at the ask although another change of the same walk had already queued
+  it, and an O(1) swap-remove left a watch position stale that only the debug position check reads.
+  It showed on integers only because on a Boolean the change of the other watch's variable decides
+  that watch, while on an integer variable a change can leave the watch open in the same walk as a
+  unit propagation. The fix is debug-only (f9bf6c4), so the plain references were kept. The debug
+  pass was recorded on f9bf6c4: **223 runs, all rc 0, every proof VERIFIED** (497 s at `-j 24`), lot-sizing's nine excluded by name. Two compare runs: **223/223 both times** (406 s and 410 s).
+
+### 6. The scaling lane
+
+`scripts/scaling_lane.sh` runs each line of `bench/scaling/plan.tsv` at four node budgets and reads
+`perf stat -e instructions:u` (with `--stats` and `OCAMLRUNPARAM=v=0x400`):
+
+    ratio = [(I(N3) - I(N2)) / (N3 - N2)] / [(I(N1) - I(N0)) / (N1 - N0)]
+
+the instructions per node of a late segment (large database) over an early one (small database),
+D-0140 §7's measure. The plan: QR72 no-proof and proof over 1k..10k and 10k..40k (D-0140's
+segments); `2013_rcpsp_11` no-proof over 1k..10k and 10k..20k (D-0140's steepest growth, cut at 20k
+to keep the run near two minutes); `2012_parity-learning` both modes over 1k..4k and 8k..16k (PB
+rows). The lane checks that every run stopped at its budget (`nodes = N+1`), else the line is
+BROKEN. It takes 150 s at `-j 16`.
+
+**Why instructions.** They are a property of the binary and its input, not of the load: two whole
+runs of the same binary differ by 0.05 %, and the per-node ratio by at most 0.07 % between two runs
+of the final plan (a 500..1 000 early segment of an earlier plan jittered by 0.25 %, which is why
+parity's early segment is now 1k..4k). Cycles are printed as information. They did not even see the
+teeth below (QR72 no-proof, cycles per propagator run late over early: main 1.77, teeth 1.67), which
+is D-0140's 30 % again. Instructions understate a cost bound by memory (a list walk over the major
+heap retires few instructions per cache miss), which is why the copy D-0138 measured at 13 % of
+QR48's cycles is a few per cent here. That is the price of a gate that does not flake on a shared
+node.
+
+**Why per node and not per propagator run.** The ratio is not 1 even for a perfect implementation,
+because runs per node grow with the database (D-0140 §2: from 44 to 525 learned-clause runs per node
+on QR72). A first version divided by propagator runs to strip that, and read 0.91 on QR72. It cannot
+be the gate, because T3 removes the runs that change nothing, which moves that denominator, while
+the node count of a budget is fixed. Per run is printed as information.
+
+**The threshold** is a RATCHET. `bench/scaling/baseline.tsv` holds each line's ratio, and a line is
+OVER when its ratio exceeds the baseline by more than **0.5 %** (seven times the jitter). A batch
+that lowers a ratio re-records it after its gated merge, in its own commit, and nothing re-records
+it upward. Baselines on a8d2924 (`e8354a74`), instructions per node:
+
+| line | early (M/node) | late (M/node) | ratio | D-0140 §7 |
+|---|---|---|---|---|
+| QR72 no-proof, 1k..10k / 10k..40k | 3.92 | 7.01 | **1.789** | 1.8 |
+| QR72 proof, same | 6.62 | 10.33 | **1.561** | |
+| rcpsp_11 no-proof, 1k..10k / 10k..20k | 9.72 | 23.13 | **2.379** | 3.4 (to 40k) |
+| parity-learning no-proof, 1k..4k / 8k..16k | 4.85 | 15.11 | **3.116** | |
+| parity-learning proof, same | 7.86 | 18.09 | **2.301** | |
+
+A repeat of the same binary gave 1.7890, 1.5605, 2.3778, 3.1160 and 2.3014, all `ok`.
+
+**Report-only.** Main still carries the linear costs T3 and T4 remove, so the lane prints its
+verdict and exits 0. `--enforce` (or `SCALING_ENFORCE=1`) fails an OVER line now, and T6 makes it
+the default. Without a working `perf` it falls back to the GC's allocated words, says so, and
+compares a line only against a baseline of the same metric.
+
+**Teeth.** A throwaway binary adds `ignore (Sys.opaque_identity (List.map Fun.id t.live_rev))` in
+`Retention.add`: one O(n) copy of the database per learned constraint, search unchanged (binary
+`efb7587c` on a8d2924, never committed). Against the baseline:
+
+| line | baseline | teeth | change | verdict at 0.5 % |
+|---|---|---|---|---|
+| QR72 no-proof | 1.7890 | 1.8847 | +5.3 % | OVER |
+| QR72 proof | 1.5611 | 1.6196 | +3.7 % | OVER |
+| rcpsp_11 no-proof | 2.3789 | 2.3883 | +0.4 % | ok |
+| parity no-proof | 3.1157 | 3.1440 | +0.9 % | OVER |
+| parity proof | 2.3011 | 2.3160 | +0.6 % | OVER |
+
+The run itself used the 1 % margin then in force and printed OVER on the two QR72 lines; the last
+column applies the 0.5 % now in force to the same numbers. The copy is caught where a conflict is
+cheap and the database large (QR72 holds 20 000 constraints at 40k) and missed on rcpsp_11, whose
+nodes cost two to three times more instructions. An O(n) cost per conflict with a small constant is
+a few per cent of a node at these sizes. A first, per-run version of the lane on a9217430 gave the
+same picture (QR72 +5.7 % and +3.7 %, parity +1.4 % and +0.9 %).
+
+### 7. Wiring and the gate
+
+    make diff ARGS="-j 16"                     # fast tier, ~3 min: a batch agent, after every change
+    make diff ARGS="--tier all -j 24"          # both tiers, ~4 min: before reporting, and the gate
+    make diff ARGS="--debug --tier all -j 24"  # the debug pass, ~7 min
+    make scaling ARGS="-j 16"                  # report-only until T6, ~2.5 min
+
+are `make` targets that depend on `build` and apply the Makefile's cap (`--full` runs the plain and
+debug passes in one command). The lines to add to the orchestrator's gate script after
+`make check`, with `export TMPDIR=/scratch/arthur/tmp` (proofs of up to a few hundred MB are written
+and deleted per run):
+
+    (ulimit -v 4000000; timeout 3600 make diff ARGS="--tier all -j 24") > $G.diff.log 2>&1; echo "diff rc=$? $(grep '^diff_lane: \(ok\|FAIL\)' $G.diff.log)" >> $ST
+    (ulimit -v 4000000; timeout 3600 make diff ARGS="--debug --tier all -j 24") > $G.ddiff.log 2>&1; echo "debug diff rc=$? $(grep '^diff_lane: \(ok\|FAIL\)' $G.ddiff.log)" >> $ST
+    (ulimit -v 4000000; timeout 1800 make scaling ARGS="-j 16") > $G.scaling.log 2>&1; echo "scaling rc=$?" >> $ST; grep '^scaling: .*late/early' $G.scaling.log >> $ST
+
+**The gate procedure on a fresh clone** (`gate47.sh`'s steps, clone of `ef93f52` = main f9bf6c4 plus
+this branch, at `/scratch/arthur/wave47-lanes-gate`, load about 35): `make check` **rc 0** in 26.3 s,
+peak RSS 89.7 MB, `check: ok`, binary `15e23df0` (the gate-48e binary). Then `make diff ARGS="-j 16"`
+rc 0, 189/189 in 217 s (largest process 206 MB), and `make scaling ARGS="-j 16"` rc 0, every line
+within its threshold in 130 s (largest process 641 MB: QR72 at 40 000 nodes with the proof), with
+ratios 1.7887, 1.5613, 2.3790, 3.1157 and 2.3033 against baselines recorded on a8d2924.
+
+### 8. The reference rule, and the recordings
+
+The reference is re-recorded (`--update`, which runs veripb over every proof and refuses any run
+with a non-zero exit or a proof the checker does not accept) only after a GATED merge that changes
+the default search, the proof bytes or a recorded counter ON PURPOSE, in its own commit whose
+message gives the reason. Never to make a failing lane pass: a difference is a finding about the
+change under test, as a failing model test is. `bench/diff/reference/BINARY` (and its debug twin)
+keep one line per recording.
+
+It was recorded first on `a9217430` (main at the branch's start), then **re-recorded on a8d2924's
+binary `e8354a74`** (the gate-48 binary, md5 equal) at the orchestrator's request, because the
+M8-T3 continuation changes the default search on some Challenge instances. On this corpus a8d2924
+moved only the `bits0` configuration (9 proofs, more variables released to bits). The default,
+retention and no-proof runs kept every byte, and the other 147 changed files carry only the new
+`pb-whys` counter: that is what one merge looks like through the lane. The slow tier and `audit0`
+were recorded on the same binary, the debug pass on f9bf6c4 (`15e23df0`), whose fix is debug-only.
+Every recorded proof was accepted by veripb 3.0.2 (`s VERIFIED NO CONCLUSION`: a node-limit stop
+concludes nothing). `--update`'s veripb runs outside the per-run cap and peaked at 7.8 GB on the
+slow tier, so a re-record belongs on the node.
+
+### 9. How a batch of M11 uses the two lanes
+
+1. Merge `main` (with this lane), build `bin/`, hash the binary.
+2. After each change, `make diff ARGS="-j 16"`. A SEARCH, stdout or hash difference is a bug in the
+   change. A WORK-only difference is allowed only if the batch argues it in its record. An item
+   D-0140 marks *ordering* cannot be held to byte identity; it needs D-0104's standard (node counts,
+   every proof VERIFIED) and its own record, and the re-record that follows its gated merge.
+3. Before reporting, both tiers and the debug pass, and `make scaling ARGS="-j 16"`, quoting the
+   per-node ratios against the baseline. A ratio that went down is the batch's result. After the
+   gated merge, the baseline is re-recorded (`scripts/scaling_lane.sh --update`) in its own commit.
+4. T6 flips the scaling lane to `--enforce` by default.
+
+### 10. What would reverse this
+
+A corpus instance whose run is not deterministic at a node budget (a hash table seeded by address,
+a clock read on the search path) would make the lane flaky; two full runs agreed byte for byte, and
+the first such flake is a bug in the solver, not in the lane. If `instructions:u` stops being
+available where the gate runs, the fallback is blind to costs that do not allocate, and the scaling
+lane belongs where perf works. If a batch makes runs per node fall sharply, the per-node ratios fall
+with them, and that is the point of the pass.
+## D-0145  M11-complexity-T5: batch 3 of the complexity pass, trace, justification and proof writing, profiled with frame pointers; proof-mode instructions down 16 to 46 % on D-0140's four instances, every byte the same
+
+**Status**: **DONE**, recorded 2026-11-18 (agent-batch5, `wave49-batch5`). The contract is ROADMAP
+`## M11-complexity`, row T5, and the list is D-0140 §5's rows J1 to J6 and W2 to W8 (W7 is
+`encoding.ml`'s and was not touched, and the `learn.ml` and `search.ml` sites of J6 belong to
+other batches). Files changed: `lib/proof/writer.ml`, `lib/core/justify.ml`, `lib/core/trace.ml`,
+and the tests `test/unit/test_proof.ml`, `test_justify.ml`, `test_trace.ml`, plus one argument
+(`~history:true`) in `test_matrix.ml` and `test_random.ml`. `reason.ml` was claimed and needed
+nothing. Measured on `fataepyc-06` against `main` at `da9df69` (binary md5 `5e6f653e`, the same
+binary as gate 50), outputs under `/scratch/arthur/wave49-batch5-runs/`.
+
+### 1. The profiler, an opam switch with frame pointers
+
+D-0140 §8.6 asked for it, because OCaml 5's `--call-graph dwarf` cannot unwind from `caml_hash`,
+`caml_compare` or the GC to their OCaml caller. A second switch was created on `fataepyc-06` for
+profiling only, `opam switch create baguette-fp
+--packages=ocaml-variants.5.1.1+options,ocaml-option-fp`, with the `baguette` switch's `dune
+3.24.2` and `menhir 20260209` (the repository needs nothing else). `ocamlopt -config` says
+`with_frame_pointers: true`. It took about six minutes to build. The `baguette` switch was not
+touched and stays the default, and every build, test, lane, gate and instruction count of this
+record ran on it. The profiling binary is built into its own build directory (`dune build
+--build-dir=_build_fp`), and `perf record -F 499 --per-thread -m 512 --call-graph fp` then
+attributes C leaves to their callers. One trap: `perf report`'s caller view still leaves most
+`caml_hash` samples unattributed, while `perf script` has the full chains, so the attribution
+below aggregates `perf script` stacks (`/scratch/arthur/wave49-batch5-runs/callers.py` weights
+each sample by its period and reports the first OCaml and the first Baguette frame above a
+chosen leaf; `prof.sh` there is the build-and-record script).
+
+### 2. What it attributed on `main`, proof mode, 10 000 nodes (cyclic 2 000)
+
+Inclusive shares of the whole run (`perf report --children`), empty where under 1 %.
+
+| site | QR48 | rcpsp_11 | mspsp | cyclic |
+|---|---|---|---|---|
+| `Writer.write_cited`, the `pol` rendering (a `Printf.sprintf` per operator and per `@c` reference) | | 18.5 | 2.7 | 38.0 |
+| `Justify.shallow_hash`, the memo's hash (a tuple and a `List.map` per `Combine`, then `caml_hash`) | | 7.4 | 1.5 | 15.1 |
+| `Justify.wipe_level` (the hash recomputed per doomed entry, a bucket filtered once per entry) | 2.7 | 6.3 | 3.3 | 8.7 |
+| `Justify.find_memo` + `remember` (the hash again, twice) | | 8.0 | | 11.2 |
+| `Opb.constr_to_string` under `Writer.rup` (a `Buffer`, a string, `^ " ;"`) | 5.6 | 1.2 | 4.3 | |
+| `Justify.state_clause` (the claim index, `clause_key` sorted twice) | 4.7 | | 3.5 | |
+| `Encoding.consistency_id` + `Encoding.find`, from `Alldiff.excl` (W7, not this batch) | | 2.6 | 1.3 | 12.4 |
+
+`caml_hash` is 5.7 % of rcpsp_11's samples. Its first Baguette frame is `Justify` for 3.5 points
+(the closure inside `shallow_hash` 2.2, `shallow_hash` 0.7, then `remember`, `find_memo` and
+`wipe_level`), `Encoding.hash` for 0.8 and `Pb.effective_of` for 0.2. On mspsp it is
+`state_clause` 0.6, `Encoding.hash` 0.6 and the memo 1.1. `compare_val` in proof mode is mostly
+not this batch's, `Search.count_learned_activity` (T4's S1) leads it. The printf machinery
+(`__printf_buffer`, `CamlinternalFormat.*`, `caml_format_int`) is 6.7 % of rcpsp_11, of which
+`write_cited` is 4.0 and `emit_combine`'s origin 1.3. So the two largest proof-mode costs were
+the `pol` text and the memo's hashing, and neither could be seen without frame pointers.
+
+### 3. The fixes, and the four instances before and after
+
+Instructions (`perf stat -e instructions:u`, in G) in proof mode at 10 000 nodes with the CLI
+default (audit on). Each row is the branch at that commit, so the rows are cumulative.
+
+| commit | items | QR48 | rcpsp_11 | mspsp | cyclic |
+|---|---|---|---|---|---|
+| `main` `da9df69` | | 42.17 | 296.60 | 187.70 | 1 205.57 |
+| `366b599` + `9fb1ba9` | W3, W5, then W2, W4, W6, J6, W8 | 38.04 | 227.37 | 166.40 | 910.23 |
+| `1a70dfb` | J1 | 37.94 | 198.73 | 161.94 | 721.07 |
+| `16b8d0d` | J2 | 36.14 | 198.82 | 160.41 | 719.45 |
+| `9e65d05` | J3, J5 | 36.03 | 198.44 | 157.05 | 718.70 |
+| `8208b4b` | J4 | 35.64 | 198.21 | 155.86 | 724.06 |
+| `910af19` | J2 and J6 follow-ups | **35.39** | **188.63** | **152.58** | **651.54** |
+| change | | **-16.1 %** | **-36.4 %** | **-18.7 %** | **-46.0 %** |
+
+Wall time (one run each, the node at load 40 to 70) goes from 9.8 to 9.1 s on QR48, 58.7 to
+45.7 s on rcpsp_11, 45.0 to 44.8 s on mspsp and 180.8 to 103.0 s on cyclic. Peak RSS goes from
+115, 186, 476 and 210 MB to 91, 166, 365 and 189 MB in the same order. W3 and W5 were committed
+first and measured only together with the next commit.
+
+**W3, W5** (`writer.ml`). The writer's tables keyed by a constraint id (`tags`, `live`, `model`,
+`objective`) were polymorphic `Hashtbl`s, so `fresh`, every deletion and every lookup went
+through `caml_hash` and `compare_val`. They are now `Itbl`, a `Hashtbl.Make` over `int` with the
+identity as hash. `wipe_level` sorted its doomed ids with polymorphic `compare` on every
+backjump. It now collects them level by level in ascending order (a bucket is newest first, so
+the fold reverses it) and sorts with `Int.compare` only when that list is not ascending, which
+happens when a level was re-entered after an interlude below it. Bucket 0 of `by_lvl` is no
+longer filled, because `wipe_level` refuses level 0 and nothing else read it, and it held the id
+of every learned constraint for the whole run.
+
+**W2, W4, W6** (`writer.ml`). Every rule on the search's path (`rup`, `pol`, `ia`, `del id`, `del
+range`, the `% level` marker, `sol`, `soli`) is assembled in one writer-owned `Buffer` with
+`Lit.add_int` (M11-T7's allocation-free `string_of_int`) and `Lit.add_sanitized`, and written by
+one `Buffer.output_buffer`. Before, a `pol` went through `Pol.to_string_cited` (a `Printf` per
+operator and per reference), `label_for t id ^ body`, then `rule`'s `"%s ;"` format with `"\n"`
+appended, about four copies, and `rup` rendered its constraint through `Opb.constr_to_string`
+into a string of its own. `Pol.write_cited` keeps its signature for the tests and the mutation
+knob, over the same `write_with`. `put` and `emit_yielding` had no caller left and were removed.
+
+**J6, W8** (`writer.ml`, `justify.ml`, `trace.ml`). Every trace line and every `Justify` line built
+its `~origin` eagerly, a `Printf.sprintf` and a rendering of the line's literals (`emit_linear`
+rendered its constraint a second time for it). The origin has three readers, the audit's report
+of a leaked id, the mutation knob and `--stats`'s widest `pol`, and none of them runs on a normal
+line. The writer's entry now keeps `origin : unit -> string`, every rule that yields an id has a
+`_lazy` form taking the thunk (the string forms stay for every other caller and wrap a
+constant), and `pol_widest` keeps the thunk and renders it in `shape_stats`.
+`Justify.emit_clause`, `emit_rup_clause_lazy`, `emit_linear`, `emit_cut`, `emit_combine` and
+`Trace`'s lines pass thunks. The follow-up `910af19` is worth 72 G on cyclic and 10 G on
+rcpsp_11 by itself. The audit keeps the origin of every live id, and the first thunks captured
+the `Combine`'s summand list and the trace line's fact list, so every live line kept its
+explanation reachable and the major GC walked it. They now capture the two counts the text
+prints.
+
+**J1** (`justify.ml`). The memo's shallow hash was `Hashtbl.hash` over a tuple built per call, and
+for a `Combine` over a `List.map` of per-summand hashes as long as the row. It was computed in
+`find_memo`, again in `remember` and again for every doomed entry in `wipe_level`, and every
+`Deferred` hashed to the constant 6, so all of them shared one bucket walked with `==`. Now it is
+an integer mix of the constructor, its integers and at most four elements (a literal by
+`Hashtbl.hash` of its name, its value, its kind and its sign), with nothing allocated.
+`memoized` computes it once and passes it to `remember_with`, and `by_level` keeps the hashes, so
+the wipe never recomputes one and filters each touched bucket once. A forced `Deferred` hashes as
+its forced head. That is sound because `forced` only goes from `None` to `Some` and an entry
+exists only after its thunk forced it, and an unforced `Deferred` is looked up in the old
+constant bucket (empty in practice). The equality is still `==` and nothing iterates the table,
+so only the bucketing changed.
+
+**J2** (`justify.ml`). The claim index is `Claims`, a `Hashtbl.Make` over the sorted literal list
+with `List.equal Lit.equal`, which is the structural equality the polymorphic table used, and a
+hash over the first eight literals and the length (`1a4f47c`, because hashing every literal was
+2 % of QR48 in the frame-pointer profile). `emit_clause` computes the key once, where it was
+sorted by `defining_line` and again by `state_clause`. Level 0 is not recorded in
+`stated_by_level`, for the same reason as W5.
+
+**J3, J5** (`trace.ml`). `resync` walked the trail from position 0 to find the prefix it had
+already written. It now registers a low-water reader on the store (`Store.register_low_water`,
+M6-T18) at its first call and starts its identity walk at the mark. Every position below the
+mark has stayed on the trail unchanged since the previous `resync`, so `n_done` comes out as
+before. `emit_to_page` read each entry's level with two binary searches (`Store.is_level_start`
+and `Store.level_of_index`). It now keeps a cursor over the level marks that only moves forward
+with the position, read in place through `store.Store.marks` (there is no accessor for one mark,
+and `store.ml` is batch 1's), with a `BAGUETTE_DEBUG` cross-check against both functions.
+
+**J4** (`trace.ml`). `ids_rev` and `cites_rev` grew by one cell per trace line and one record per
+citation for the whole run, and only tests read them. They are kept under `Trace.create
+~history:true` only, `Search`'s private trace keeps none, and `emitted_ids` and `citations` on a
+trace without history raise rather than answer `[]`. The instruction count barely moves (the
+cyclic row is GC timing), the peak RSS does (mspsp 480 to 376 MB and QR48 114 to 89 MB at this
+step).
+
+### 4. Why the bytes are the same, and the evidence
+
+Every replacement either writes the same text by construction (W2, W4, W6), or changes how a
+table is bucketed while keeping its equality and never iterating it in an order that reaches the
+page (W3, J1, J2), or returns what the replaced walk returned (W5's sorted set, J3's `n_done`,
+J5's level), or stops building a value nothing printed (J4, J6). Measured at every commit of §3.
+
+- The four instances' `.pbp`, `.opb` and stdout md5 equal `main`'s on every row of the table
+  (QR48 `561db0f8`, 54.7 MB, rcpsp_11 `4aeef3f8`, 421 MB, mspsp `a6fe7ff4`, 226 MB, cyclic
+  `17257ea6`, 2.02 GB), and the `--stats` limit line without its clocks is identical.
+- The differential lane (`make diff ARGS="--tier all -j 16"`, D-0141, merged from `wave47-lanes`)
+  is 232 of 232 equal at `9fb1ba9`, `16b8d0d`, `8208b4b` and `910af19`. It includes the
+  `audit0` configuration (`BAGUETTE_PROOF_AUDIT=0`, where the end sweep's `del` lines do not
+  exist, W8) and `--bits-above 0`.
+- `dune runtest --root . --force` rc 0 with no `FAIL` at each of those commits. The new tests:
+  `test_proof` pins each new line against the pre-T5 spelling written out with `Printf`, over 300
+  random rules with awkward names and extreme integers, checks that no line renders its lazy
+  origin while the audit renders the leaked one, and checks `wipe_level`'s `del` lines over 100
+  random level walks against a slow model. `test_justify` checks that the memo stays physical
+  identity over 40 values with colliding prefixes, forced `Deferred`s included, before and after
+  a wipe, and that nine clauses sharing four literals each keep their own line in the claim
+  index. `test_trace` compares `resync` from the mark with the walk from 0 over 75 emits of a
+  random walk of levels, prunings and backtracks, checks every line's level, and checks that a
+  trace without history refuses to answer.
+- The gate is in §6.
+
+### 5. What is left
+
+- **`Alldiff.excl` and `Encoding.consistency_id`, 12.4 % of cyclic's proof mode** at `910af19`
+  and 2.6 % of rcpsp_11's. Each ladder rung an alldiff exclusion cites looks its variable up by
+  name (`Encoding.find`, a string `Hashtbl`). Filed as a cross-session request, since
+  `alldiff.ml` is batch 1's and `encoding.ml` is W7.
+- **The `pol` text itself.** `Writer.write_with` is still 13 % of cyclic and 5 % of rcpsp_11,
+  most of it `Lit.add_int` and `put_digits`. That is the size of the proof (2.02 GB for 2 000
+  cyclic nodes, 1 MB per node), and the next lever is fewer or shorter lines, not faster ones.
+- J6's other sites, `learn.ml`'s `introduce` and `search.ml`'s bridges, are T4's and the strategy
+  branch's files. `Justify.emit_bits_*` and the bits trace line still build their origin eagerly.
+  They run on the bits arm only and were not measured here.
+- W6's `encoding.ml` half (`assignment_lits`) and W7 are not this batch's.
+- The memo and the claim index keep their level-0 entries for the whole run, as before. With the
+  new hashes the buckets stay short, so only the memory is left, and none of the four instances
+  showed it.
+- At `910af19` the profile is led by `caml_apply2`, the GC and the propagators, which are batches 1
+  and 2.
+
+
+### 6. Gate
+
+`make check` on a fresh clone of `wave49-batch5` at `0f75dd4` on `fataepyc-06`
+(`/scratch/arthur/wave49-batch5-gate.sh`), under `ulimit -v 4000000`: rc 0, `check: ok`, 179
+model tests passed, each a proof veripb accepted and a `--no-proof` run byte-identical to it, the
+22 `bits_*` models also at `--bits-above 0`. Wall 22.5 s, peak RSS 89.7 MB. Binary md5
+`ac86699a`. Then every model of `test/models/` run with `--proof` and compared with gate 50's
+artefacts (`/scratch/arthur/gate50.art/new`, binary `5e6f653e`, which is `main` at `da9df69`):
+179 models, 0 differences in stdout, exit code, `.opb` and `.pbp`.
 ## D-0147  M12-parity-T1: the parity spike. Gauss-Jordan over the XOR rows removes no node on the user's searches, because every row there is a definition read forwards, and applied eagerly it hurts aut order 7 by spoiling the learned clauses
 
 **Status**: **DONE** (a spike; building T2 is the user's decision). Recorded 2026-11-18 and
@@ -14423,3 +16148,1150 @@ The one read that the node's absence delayed, the place where the 458 beyond inf
 aut `u1`, was run on 2026-11-19 (`o7k2_u1_{PB,N}_n{1,60,100,140,171}`, a few seconds each). No QR104
 `c` run without `--parity` was made, since no `c` run closes on any QR code and the missing number
 would not change §7.
+## D-0139  M10-search-strategy-T4: retention re-measured, the learned database made evictable (`Retention.gate`, the lock rule, three LBD tiers), and why the default should stay `keep_all` until M10-T5
+
+**Status**: **ACCEPTED** as built, 2026-11-18, agent-retention (`wave45-retention`). The default
+is unchanged (`keep_all`). Whether `tiered` becomes the default is M10-T5's decision, and §6
+below is this row's recommendation for it. The eviction of a learned constraint that has a
+consumer needs a two-site change in `lib/core/search.ml`, which M10-T1..T3 have claimed. It is
+on branch `wave45-retention-hook` (commit `c0c2c33`) and filed under `## Cross-session requests`.
+Every measurement of `tiered` below ran on that hook build.
+
+Request: WORKLOG 2026-11-18 "codes-cp measurements", point 3 and the addendum's point 4.
+Governing records: D-0051 (`keep_all` by measurement, and its M2-L12 re-run), D-0045 (the
+lifetime finding), D-0136 §1 (`retire` in one pass), D-0138 (M6-T22, the engine this row's
+step 3 runs on).
+
+### Binaries, so that no two tables are read as one
+
+| table | binary (md5) | tree |
+|---|---|---|
+| §1 (step 1) | `e4631564` | `wave45-retention` at `5c55eea`: main `9f3ed78`, i.e. the engine BEFORE M6-T22, plus a stderr-only progress line |
+| §3 (step 3) | `fcb944a4` | `wave45-retention-hook` at `6771a23`: main `23eb9d6` (M6-T22) + this row + the hook |
+| §4 timing | `a9217430` (main 23eb9d6) against `fcb944a4` | |
+| gate, `make diff` | `eececf76` | `wave45-retention` at `0824b1d`: main `a8d2924` via `wave47-lanes` + this row, no hook |
+
+Every run: `--time-limit 1170`, `ulimit -v 16777216 -f 16000000`, `--max-heap-mb 8192`, one
+run per cell, 10 in parallel on fataepyc-06. A proof run is checked by VeriPB 3.0.2 (`d5644ca4`)
+with a 3 600 s limit. "learned/s start → end" is the number of learned constraints per CPU
+second over the first 2 000 and over the last 2 000 the run learned, read from
+`BAGUETTE_RETENTION_TRACE=500` (new, stderr only). In these models conflicts and learned
+clauses are one to one, nodes about two per conflict.
+
+The instances are the four codes models from `fataepyc-06:/scratch/arthur/codes-bench/` and
+fifteen Challenge instances. Those are the fifteen TIMEOUT rows of D-0133's archive with the
+most learned clauses, one per family, flattened again with `tools/baguette.msc`.
+
+### 1. Step 1: today's policies, on main's engine of the morning
+
+| instance | answer (proof) | conflicts (np) | learned/s start → end (np) | held at stop | `lbd:2000` conflicts (np) | conflicts, learned clauses not propagated | .pbp MB | check (s) |
+|---|---|---|---|---|---|---|---|---|
+| H_o7k2_u1 | UNSATISFIABLE | 58 | - → - | - | 58 | 84 | 1.6 | unsatisfiable 0.75 |
+| H_qr48_def | UNSATISFIABLE | 11684 | 401 → 55 | 11500 | 11684 | 11715 | 143.8 | unsatisfiable 6.75 |
+| H_qr48_u | UNSATISFIABLE | 11684 | 406 → 54 | 11500 | 11684 | 11715 | 143.8 | unsatisfiable 6.95 |
+| H_qr72_def | UNKNOWN/STOP | 30207 | 343 → 11 | 30207 | 28898 | 50718 | 609.7 | no conclusion 30.77 |
+| 2011_bacp_bacp-22 | UNKNOWN/STOP | 27624 | 319 → 11 | 27624 | 28968 | 116363 | 272.7 | no conclusion 41.53 |
+| 2011_cyclic-rcpsp_hard_11 | SAT/STOP:1290 | 24029 | 157 → 7 | 23940 | 24632 | - | 1467.2 | timeout 3600 |
+| 2011_roster_chicroster_dataset_large_18 | SAT/STOP:15 | 27557 | 111 → 15 | 27544 | 26482 | - | 976.8 | no conclusion 104.28 |
+| 2012_parity-learning_48_24_6.2 | UNKNOWN/STOP | 22463 | 260 → 11 | 24826 | 20505 | - | 436.1 | no conclusion 24.01 |
+| 2013_filters_dct_2_2 | SAT/STOP:18 | 32302 | 442 → 13 | 32301 | 30497 | 115361 | 280.3 | no conclusion 113.93 |
+| 2013_l2p_l2p2 | UNKNOWN/STOP | 34015 | 255 → 13 | 34015 | 29007 | 94003 | 1450.9 | timeout 3600 |
+| 2013_rcpsp_12 | SAT/STOP:39 | 25428 | 366 → 10 | 25425 | 25384 | - | 659.8 | no conclusion 100.34 |
+| 2015_grid-colouring_13_11 | SAT/STOP:7 | 28691 | 182 → 9 | 28686 | 27122 | 97372 | 828.2 | no conclusion 139.03 |
+| 2017_opd_small_bibd_08_28_14 | SAT/STOP:7 | 40410 | 273 → 14 | 41497 | 33765 | 91769 | 708.5 | no conclusion 67.46 |
+| 2019_fox-geese-corn_foxgeesecorn_54 | SAT/STOP:1426 | 25450 | 161 → 7 | 25390 | 22608 | - | 225.8 | no conclusion 204.50 |
+| 2021_perfect_square_102 | UNKNOWN/STOP | 30561 | 1081 → 8 | 30561 | 29134 | 128136 | 378.9 | no conclusion 579.57 |
+| 2021_steiner-systems_steiner_t2_k7_N21 | UNKNOWN/STOP | 31948 | 326 → 14 | 31948 | 29081 | 119679 | 592.9 | no conclusion 71.84 |
+| 2023_test-scheduling_t20m10r10-17 | SAT/STOP:1069 | 30976 | 30 → 14 | 30975 | 30684 | 106216 | 698.6 | timeout 3600 |
+| 2024_neighbours_neightbours-new-5 | UNKNOWN/STOP | 47225 | 96 → 19 | 47225 | 39819 | 79245 | 2848.5 | no conclusion 199.11 |
+| 2026_saeling_s021 | SAT/STOP:200 | 34011 | 180 → 16 | 34009 | 30328 | 100742 | 1784.9 | timeout 3600 |
+
+Three findings, and the third is the one the rest of this record is built on.
+
+1. **The slowdown the user saw is general.** On every instance that runs to the limit, the
+   learning rate at the end is 2 to 135 times lower than at the start, and the base holds
+   every learned clause (`keep_all`). QR48 goes from 401 to 55 learned/s, `perfect_square`
+   from 1 081 to 8.
+2. **Without propagation, the learned base costs nothing per node.** With
+   `BAGUETTE_PROPAGATE_LEARNED=off` (the M2-L4 build, every clause still on the page) QR48 is
+   UNSAT in 11 s instead of 111 s, at the same node count (23 429 against 23 367). QR72 is
+   UNSAT in 154 s instead of stopping at 1 170 s. The Challenge instances run 1.7 to 4.2 times more
+   conflicts. On the merged engine (§3's binary) the same build solves QR48 in 7.8 s and QR72 in
+   71 s, or 136 s with proof. That build loses elsewhere: `grid-colouring` ends on 8 instead of
+   7, and `saeling` without an incumbent. So the cost is in PROPAGATING the learned clauses,
+   not in holding them.
+3. **`lbd:N` and `fifo:N` evict nothing.** Since M2-L12 every learned clause and PB row has a
+   runtime consumer and is `cite`d for the whole search, and `reduce` refuses to evict a cited
+   constraint. On QR48 `lbd:2000` evicts 0 of 11 684 and counts **46 894 770** refused
+   proposals. It runs 27 % slower than `off` (141.6 s against 111.2 s), because before this row
+   it sorted the whole database on every conflict to propose evictions it then refused. D-0051's
+   M2-L12 re-run had seen the start of this ("the constraints that propagate are the ones a
+   policy may not evict"). At this scale it means that no policy in the tree could act at all.
+
+### 2. What was built
+
+All in `lib/core/retention.ml`; `bin/main.ml` parses the policy. Three pieces.
+
+**(a) `Retention.gate db store ~cid inst`.** The search hands a learned constraint's engine
+instance to the database before `Engine.add`. What comes back is the same instance behind a
+switch. While the switch is on it runs and advises as before, and it records whether a run
+propagated (the trail grew) or conflicted. That record is `e_used`, the activity `tiered` ranks
+on, and for a conflict it also records the instance id (`last_conflict`). When `reduce` evicts the
+constraint, the switch goes off. `run` then answers `Fixpoint` without calling the propagator,
+`advise` answers `false`, and the citation is released before `retire`, so `retire`'s `Cited`
+guard keeps its meaning. Under `keep_all` (`p_detaches = false`) `gate` returns the instance
+**physically unchanged**, so the default build runs the closures it ran before this record.
+
+**(b) The lock rule (`locked_instances`).** A gated constraint may be evicted unless its instance
+is (1) the propagator of a trail entry still on the trail, or (2) the most recent gated instance
+to return `Conflict`. Half (1) holds because `lib/core/trace.ml` is lazy. A branch writes its
+trace lines when it fails, by walking the trail, and the line for an entry a learned instance
+propagated is `rup` against that learned constraint. So the constraint has to stay on the page as
+long as the entry can still be traced, and that is as long as the entry is on the trail. This is
+Glucose's "locked" clause, extended from the reason of the current assignment to every entry.
+Half (2) holds because `reduce` runs inside conflict handling, after the learned clause is on
+the page and before `pb_at_conflict` resolves the conflicting instance's row. Every other
+reference to a learned id is either a line already written (VeriPB keeps derived constraints when
+their premises go) or a level-0 unit. A unit is cited without a gate, so no policy can evict it.
+
+**(c) `tiered`.** Core (LBD ≤ `core`, default 2) is never proposed. Mid (≤ `mid`, default 6)
+is demoted to local if it goes unused between two checks, and a check comes every `mid_every`
+(10 000) learned constraints. Local is halved at each reduction, with the worst ranked first:
+unused before used, then higher LBD, then older. The first reduction comes at `first` (2 000) and
+each later one `first + k·inc` (`inc` 300) after the previous one, which is Glucose's schedule. A
+new entry starts used, which is CaDiCaL's grace. Without it, the clause that a reduction's own
+`add` had just learned would rank first among the unused, because `reduce` runs before the
+search backtracks.
+Spelled `BAGUETTE_RETENTION=tiered` or `tiered:core=2,mid=6,first=2000,inc=300,mid_every=10000`.
+The schedule counts learned constraints, not conflicts, because `reduce` sees one call per
+`add`. The two counts differ by the PB rows (M2-L6), and those are measured below.
+
+**Also changed, with no change to what is evicted.** A policy is now a pair `due`/`evict` built
+per database. `reduce` used to materialise the whole live list on every learned constraint, under
+`keep_all` too, and `due` makes that call O(1). `holds` is now a hash lookup. It used to walk the
+list, which made `add` O(n). `fifo` and `lbd` evict exactly what they evicted before.
+
+### 3. Step 3: `tiered` (defaults) against `keep_all`, on the merged engine with the hook
+
+| instance | conflicts np, off → tiered | conflicts proof, off → tiered | evicted (proof) | held at end, off → tiered | answer off / tiered (proof) | .pbp MB off → tiered | check s off → tiered |
+|---|---|---|---|---|---|---|---|
+| H_o7k2_u1 | 58 → 58 (+0 %) | 58 → 58 (+0 %) | 0 | - → - | UNSAT 4.29 s / UNSAT 4.23 s | 1.6 → 1.6 | 0.76 → 0.72 |
+| H_qr48_def | 11684 → 11684 (+0 %) | 11684 → 11684 (+0 %) | 4357 | 11500 → 7143 | UNSAT 44.77 s / UNSAT 31.39 s | 143.8 → 143.8 | 7.12 → 6.94 |
+| H_qr48_u | 11684 → 11684 (+0 %) | 11684 → 11684 (+0 %) | 4357 | 11500 → 7143 | UNSAT 36.60 s / UNSAT 30.26 s | 143.8 → 143.8 | 7.14 → 6.84 |
+| H_qr72_def | 50343 → 50346 (+0 %) | 50343 → 50346 (+0 %) | 41758 | 50000 → 8242 | UNSAT 554.20 s / UNSAT 295.55 s | 1084.6 → 1084.9 | 57.11 → 56.49 |
+| 2011_bacp_bacp-22 | 54610 → 91671 (+68 %) | 54610 → 91671 (+68 %) | 81511 | 54500 → 9989 | OPT 358.27 s / OPT 818.76 s | 486.1 → 812.6 | 78.06 → 122.86 |
+| 2011_cyclic-rcpsp_hard_11 | 64775 → 79176 (+22 %) | 58287 → 61492 (+5 %) | 48884 | 58194 → 12481 | inc 1288 / inc 1288 | 3262.1 → 3354.2 | >3600 → >3600 |
+| 2011_roster_chicroster_dataset_large_18 | 63781 → 65588 (+3 %) | 54273 → 58412 (+8 %) | 49669 | 54260 → 8730 | inc 15 / inc 15 | 1924.6 → 2099.3 | 215.16 → 225.80 |
+| 2012_parity-learning_48_24_6.2 | 41365 → 88027 (+113 %) | 38607 → 80816 (+109 %) | 82199 | 42626 → 7679 | none / none | 720.2 → 1504.9 | 44.41 → 80.92 |
+| 2013_filters_dct_2_2 | 61096 → 67021 (+10 %) | 56402 → 61462 (+9 %) | 39712 | 56401 → 21749 | inc 18 / inc 18 | 437.5 → 475.8 | 175.86 → 205.73 |
+| 2013_l2p_l2p2 | 50712 → 55041 (+9 %) | 50712 → 55041 (+9 %) | 43834 | 50500 → 11166 | OPT 809.74 s / OPT 648.71 s | 2180.0 → 2289.5 | >3600 → >3600 |
+| 2013_rcpsp_12 | 46463 → 47494 (+2 %) | 46995 → 47298 (+1 %) | 25778 | 46992 → 21517 | inc 39 / inc 39 | 1237.4 → 1251.1 | 196.21 → 193.04 |
+| 2015_grid-colouring_13_11 | 52456 → 62729 (+20 %) | 48701 → 60810 (+25 %) | 48421 | 48690 → 12384 | inc 7 / inc 7 | 1737.8 → 2184.0 | 285.04 → 411.66 |
+| 2017_opd_small_bibd_08_28_14 | 107536 → 231872 (+116 %) | 99304 → 165839 (+67 %) | 149785 | 101731 → 16751 | inc 7 / inc 7 | 1664.5 → 2768.4 | 173.75 → 283.45 |
+| 2019_fox-geese-corn_foxgeesecorn_54 | 27337 → 27755 (+2 %) | 28152 → 28195 (+0 %) | 8787 | 28092 → 19348 | inc 1426 / inc 1426 | 260.8 → 261.2 | 295.62 → 271.39 |
+| 2021_perfect_square_102 | 61586 → 61648 (+0 %) | 56986 → 64207 (+13 %) | 49902 | 56986 → 14305 | none / none | 762.3 → 929.0 | 1505.23 → 1984.35 |
+| 2021_steiner-systems_steiner_t2_k7_N21 | 72037 → 105210 (+46 %) | 53924 → 90012 (+67 %) | 82149 | 53924 → 7863 | none / none | 969.8 → 1623.3 | 126.22 → 207.07 |
+| 2023_test-scheduling_t20m10r10-17 | 52143 → 56808 (+9 %) | 47978 → 43766 (-9 %) | 24481 | 47977 → 19284 | inc 1069 / inc 1069 | 1048.4 → 931.2 | >3600 → >3600 |
+| 2024_neighbours_neightbours-new-5 | 60677 → 62529 (+3 %) | 32665 → 33583 (+3 %) | 6531 | 32665 → 27052 | none / none | 3678.3 → 3614.3 | 245.41 → 244.55 |
+| 2026_saeling_s021 | 52957 → 43577 (-18 %) | 40203 → 38486 (-4 %) | 22067 | 40201 → 16417 | inc 198 / inc 198 | 2101.3 → 1880.3 | >3600 → >3600 |
+
+How to read it.
+
+- **The codes: same search, much less propagation, and the proof run gains most.** QR48 and
+  QR72 have the SAME conflict count under both policies (11 684, and 50 343 against 50 346).
+  The clauses `tiered` evicts were never needed again. On QR72 the learned clauses' runs per
+  node fall from 996 to 345 and all propagator runs from 1 523 to 872 per node. Wall to UNSAT
+  with proof: QR48 44.8 → 31.4 s and 36.6 → 30.3 s, QR72 **554 → 296 s** (−47 %). Without
+  proof: QR48 22.1 → 22.4 s and 24.8 → 24.1 s (unchanged), QR72 343 → 266 s (−22 %).
+- **The Challenge: more conflicts per second, partly hollow, and no better answer.** Within
+  the 1 170 s, 12 of the 13 runs that reach the limit run more conflicts under `tiered` (np), up to +116 % on `opd` and
+  +113 % on `parity-learning`. Every incumbent and every final status is identical between the
+  two policies, in both modes. Part of the gain is the solver learning the same clause again
+  after evicting it: the `duplicate` counter under `tiered` is 36 % of the learned clauses on
+  `bacp-22` (33 200 of 91 671), 41 % on `steiner`, 33 % on `cyclic-rcpsp` and 15 % on `opd`,
+  against 0 to 3 % under `keep_all`. A DFS without restarts walks back into the subtree an
+  evicted clause had closed.
+- **One clear regression: `bacp-22`.** It reaches OPT under both, but needs 54 610 → 91 671
+  conflicts and 358 → 819 s with proof (231 → 662 s without). `l2p2` goes the other way, with
+  9 % more conflicts but 810 → 649 s to OPT with proof (446 → 391 s without).
+- **The checker sees no smaller database.** At an equal search the check time does not move.
+  QR48 takes 7.1 → 6.9 s and QR72 57.1 → 56.5 s, on the same proof bytes (the `del` lines are
+  under 0.1 %). Elsewhere proof bytes and check time scale with the conflicts run, about
+  18 kB per conflict on `steiner` under both policies. So in this proof system "a deleted
+  clause is a smaller database for the checker" buys nothing measurable. VeriPB's unit
+  propagation does not walk the learned constraints a `rup` does not touch.
+- Every proof that finished checking was VERIFIED, and every one that did not ran out of the
+  3 600 s budget. No REJECTED in either column.
+- PB rows are a small share everywhere except one instance. `parity-learning` has 9 062 PB rows
+  out of 80 816 under `tiered`. Everywhere else it is under 0.5 % (`opd` 697 of 165 839). A
+  RoundingSat LBD for PB rows would therefore matter only on `parity-learning`. It is parked,
+  and the request row says what it needs.
+
+**Two more configurations, read on 2026-11-19** after the node came back (the driver ended
+`ALL DONE 2026-11-18T18:51`). Both ran without proof on the same binary `fcb944a4`.
+`T500` is `tiered:first=500,inc=100,mid_every=2500`, the aggressive schedule. `lbd:5000` is
+the cap policy, which evicts for the first time once the hook is in. "inc" is the incumbent
+at the stop. `fox-geese-corn` maximises and the others minimise.
+
+| instance | answer: off / tiered / T500 / lbd:5000 | conflicts: off / tiered / T500 / lbd:5000 | held at end: T500 / lbd:5000 |
+|---|---|---|---|
+| H_o7k2_u1 | UNSAT 3 s / UNSAT 4 s / UNSAT 3 s / UNSAT 3 s | 58 / 58 / 58 / 58 | - / - |
+| H_qr48_def | UNSAT 22 s / UNSAT 22 s / UNSAT 17 s / UNSAT 29 s | 11684 / 11684 / 11684 / 11684 | 3100 / 5001 |
+| H_qr48_u | UNSAT 25 s / UNSAT 24 s / UNSAT 16 s / UNSAT 31 s | 11684 / 11684 / 11684 / 11684 | 3100 / 5001 |
+| H_qr72_def | UNSAT 343 s / UNSAT 266 s / UNSAT 161 s / UNSAT 234 s | 50343 / 50346 / 50357 / 50347 | 4835 / 5001 |
+| 2011_bacp_bacp-22 | OPT 231 s / OPT 662 s / OPT 1057 s / none | 54610 / 91671 / 121869 / 91254 | 9816 / 5000 |
+| 2011_cyclic-rcpsp_hard_11 | inc 1288 / inc 1288 / inc 1288 / inc 1288 | 64775 / 79176 / 98041 / 79306 | 8490 / 5002 |
+| 2011_roster_chicroster_dataset_large_18 | inc 15 / inc 15 / inc 15 / inc 15 | 63781 / 65588 / 64275 / 61713 | 5688 / 5000 |
+| 2012_parity-learning_48_24_6.2 | none / none / none / none | 41365 / 88027 / 105114 / 114307 | 4796 / 5000 |
+| 2013_filters_dct_2_2 | inc 18 / inc 18 / inc 18 / inc 18 | 61096 / 67021 / 78336 / 72847 | 8288 / 5019 |
+| 2013_l2p_l2p2 | OPT 446 s / OPT 391 s / OPT 381 s / none | 50712 / 55041 / 55240 / 88301 | 6405 / 5000 |
+| 2013_rcpsp_12 | inc 39 / inc 39 / inc 39 / inc 39 | 46463 / 47494 / 53201 / 66924 | 7676 / 5000 |
+| 2015_grid-colouring_13_11 | inc 7 / inc 7 / inc 7 / inc 7 | 52456 / 62729 / 97306 / 53176 | 8893 / 5000 |
+| 2017_opd_small_bibd_08_28_14 | inc 7 / inc 7 / inc 7 / inc 7 | 107536 / 231872 / 256631 / 113481 | 9618 / 5003 |
+| 2019_fox-geese-corn_foxgeesecorn_54 | inc 1426 / inc 1426 / inc 1426 / inc 1494 | 27337 / 27755 / 37337 / 47703 | 7320 / 5002 |
+| 2021_perfect_square_102 | none / none / none / none | 61586 / 61648 / 69417 / 73855 | 9116 / 5056 |
+| 2021_steiner-systems_steiner_t2_k7_N21 | none / none / none / none | 72037 / 105210 / 119761 / 155183 | 7871 / 5001 |
+| 2023_test-scheduling_t20m10r10-17 | inc 1069 / inc 1069 / OPT 883 s / inc 1069 | 52143 / 56808 / 57578 / 66505 | 7348 / 5000 |
+| 2024_neighbours_neightbours-new-5 | none / none / none / none | 60677 / 62529 / 71431 / 114747 | 15240 / 5070 |
+| 2026_saeling_s021 | inc 190 / inc 190 / inc 198 / none | 52957 / 43577 / 52184 / 101478 | 7200 / 5069 |
+
+- **`T500` goes further in both directions.**
+  - On the codes it is the fastest policy at the same conflict count. QR72 is UNSAT in
+    161 s (`off` 343 s, `tiered` 266 s) and QR48 in 16 to 17 s (22 to 25 s).
+  - It is the only configuration of the four that changes an answer for the better.
+    `test-scheduling` is proved OPTIMAL at 1 069 in 883 s, where the other three stop at
+    the same incumbent unproved. `l2p2` reaches OPT a little faster (381 s).
+  - It also costs more. `bacp-22` needs 1 057 s to OPT (4.6 times `off`). `saeling` stops
+    on 198 where `off` and `tiered` stop on 190.
+- **`lbd:5000` is dominated.**
+  - It loses two optima the others prove (`bacp-22` and `l2p2` both stop unproved) and
+    loses `saeling`'s incumbent.
+  - It gains one incumbent (`fox-geese-corn` 1 494 against 1 426).
+  - On the codes it is slower than `off` on QR48 (29 to 31 s) and faster on QR72 (234 s).
+  - A cap that keeps no tier evicts the clauses the search needed. That is the evidence for
+    tiers over a cap on this solver.
+
+
+### 4. The learned database's O(n) per conflict (M6-T22's cross-session request), taken here
+
+`reduce` now asks the policy's `due` first, which is O(1), so `keep_all` never builds the live
+list. `holds` is a hash lookup and `size` a counter. QR48 (`H_qr48_bag_def`) without proof at
+the default policy, 3 runs each, sequential on fataepyc-06: main 23eb9d6 takes 26.9, 27.3 and
+25.5 s, this build 20.5, 20.5 and 21.3 s, **about −22 %**. The M6-T22 scratch patch had
+measured −14 % in cycles. Exactly-once deletion is still a property of `retire` alone, and
+test_retention's (a)/(b) lanes are unchanged and green.
+
+### 5. Soundness: what was run, what reddens
+
+- **Sweeps over the 173 test models on the hook build.** Every proof was put through the
+  checker under five schedules: `tiered:core=0,mid=0,first=1,inc=0,mid_every=1` (a reduction
+  per learned constraint, half the base each time), `tiered:first=20,inc=5,mid_every=50`,
+  `fifo:0`, `lbd:2` and `lbd:0` (on the pre-merge build). **173 of 173 VERIFIED under each.**
+  The aggressive schedule detaches 2 034 constraints, and the lock refuses 1 971 proposals.
+- **The lock rule is load-bearing.** Its trail half was removed and the same sweep run:
+  `colour_unsat` is REJECTED with *"Trying to access constraint with ID 175 that has already
+  been deleted"*, on the pre-merge and the merged build alike. Removing the last-conflict
+  half reddens nothing, under the aggressive schedule or under `fifo:0`. That half is argued
+  (§2) and pinned by a unit lane, but no model in the suite needs it. It is kept because its
+  failure would be a rejected proof and it costs one table entry per reduction.
+- **`BAGUETTE_DEBUG=1`** passes on 172 of 173. The exception is `rup_level0_nogood_sat`,
+  which raises an I-P7 `Not_at_fixpoint` in `learned_clause`. The same exception is raised
+  at the default policy on main 23eb9d6 and on main before M6-T22. It is not this row's, and
+  it is filed for `clause.ml`.
+- **Unit lanes**, test/unit/test_retention.ml section (d), 146 checks in all, green:
+  - the tiers on a worked schedule (a glue clause never evicted, the worst local half evicted
+    at `first` and at `first + k·inc`, every id deleted once, checker accepts);
+  - mid demotion after the grace;
+  - the gate (identity under `keep_all`, locked by the trail and by the last conflict, a
+    detached instance never runs and declines every wake, an unknown id refused, checker
+    accepts);
+  - `tiered` through a real search on both builds.
+- **Gate** (`make check` on a fresh clone of `0824b1d`): rc 0, 3 847 ok, 0 FAIL, 179 model
+  tests passed. All four artefacts are byte-identical to gate 48's binary `e8354a74` on 179 of
+  179 models (535 509 `.pbp` bytes both). **`make diff ARGS="-j 16"`** (M11-T2): 168 of 168
+  runs equal the reference, `lbd`/`fifo` configurations included, so the evictions under
+  those policies are unchanged. The first run of the lane reddened the 84 `lbd`/`fifo` runs
+  on the `retention` counter's TEXT alone, because the first draft appended three counters to
+  that line for every detaching policy. They are now appended under `tiered` only.
+
+### 6. The default question: a recommendation for M10-T5
+
+**Keep `keep_all` as the default for now. Merge the hook. Measure `tiered` again with restarts
+and the activity heuristic, as M10-T5 plans.**
+
+- **For `tiered`.** At an equal search it removes most of the per-node cost the learned base
+  adds, which is the user's complaint: QR72 with proof is 47 % faster with the same conflicts.
+  It never changed an answer or an incumbent on 19 instances, and every proof verified.
+- **Against making it the default today.**
+  - On the Challenge subset it buys conflicts, not answers. About a third of those conflicts
+    are clauses learned a second time.
+  - It costs `bacp-22` a 2.3× slower OPT.
+  - Its proof-side promise (a smaller database for the checker) measures as nothing.
+  - Glucose's reduction is designed together with restarts and an activity heuristic. Its
+    "used" signal is participation in conflict analysis, and its LBD is updated as clauses
+    are used. This row has neither. "Used" here means propagated or conflicted, and LBD is
+    the derivation's, because `analysis.ml` and `search.ml` are M10-T1..T3's.
+- **What would make it the default.** A run of M10-T5's sixteen editions in which `tiered` with
+  restarts improves the answer count without a `bacp`-style regression. The knob is
+  `BAGUETTE_RETENTION=tiered[:core=,mid=,first=,inc=,mid_every=]`. A middle ground worth
+  measuring there is a larger `first` or a larger `mid` bound, which keeps more of the base on
+  instances like `bacp`.
+- **The two later configurations (§3, read 2026-11-19) do not change this recommendation.**
+  They sharpen it.
+  - `tiered` with a short schedule (`first=500`) is the candidate to carry into M10-T5. It
+    is the best policy on the codes (QR72 343 → 161 s at the same conflicts), and it is the
+    only configuration that proved a new optimum (`test-scheduling`).
+  - It also has the worst `bacp-22` (4.6 times slower) and a worse `saeling` incumbent. One
+    answer gained against one lost or degraded is not a default.
+  - `lbd:N` is not a candidate, because it loses two optima and an incumbent.
+  - T5 should therefore measure `tiered` at `first=500` and at the Glucose default, with
+    restarts.
+
+### 7. What this row did not do, and where it went
+
+- **The hook in `search.ml`**: filed under `## Cross-session requests` (`c0c2c33`).
+- **An engine call that removes a detached instance from the wake index**: not needed after
+  M6-T22. A detached clause stays only in the index of its two watched variables, and there it
+  costs one closure call that returns `false`.
+- **The PB-row LBD (RoundingSat)**: parked, see §3.
+- **LBD updated on use (Glucose)**: needs a hook in `analysis.ml`, which M10-T1..T3 own.
+  Recorded, not approximated.
+- **Jamali and Mitchell's simplified reduction and CrystalBall**: not built. The first is a
+  different ranking inside the same `evict` (one function). The second needs features this
+  solver does not log yet. Neither is worth building before restarts exist.
+
+## D-0146  M7-T28 first steps and M7-T29's gcc half: the closed gcc forms were never decomposed, a repeated gcc variable is copied away in the model, and `regular` is a layered graph of state flags whose every pruning is one `rup` against its rows and its backward-chain lemmas
+
+**Status**: **DONE** (2026-11-19; opened 2026-11-18, agent-globals, `wave49-globals`). The contract
+is ROADMAP rows M7-T28 (the decomposed globals that kill the search, D-0122) and M7-T29 (the gcc
+refusal of D-0121). Sections 1 and 2 are done and measured; section 3 is the design of
+`regular`, written and checked on the checker BEFORE any solver code (section 4); section 5 is
+the implementation, section 6 the Challenge measurement (final, 160 of 160), section 7 the design
+record of `inverse`.
+
+### 1. `global_cardinality_closed` and `_low_up_closed`: the route already existed
+
+D-0122's census counts 30 instances using `global_cardinality_closed` (26 of them time out with
+no solution) and lists it as **not native**, with the note "gcc over a closed value set, one
+mznlib line each onto gcc.ml". The census reads the model SOURCE (`challenge_globals.py`:
+"an instance uses a global when its model ... calls it"); it does not look at the flattened
+`.fzn`. Flattened, the closed forms were already on `gcc.ml`:
+
+- MiniZinc 2.10.1's `std/fzn_global_cardinality_closed.mzn` is `forall(i)(xs[i] in cover) /\
+  global_cardinality(xs, cover, count)`, and `global_cardinality` reaches
+  `fzn_global_cardinality`, which `mznlib/fzn_global_cardinality.mzn` keeps whole (D-0078).
+- `std/fzn_global_cardinality_low_up_closed.mzn` is the same over
+  `global_cardinality_low_up`, which reaches mznlib's `fzn_global_cardinality_low_up.mzn`
+  (D-0087), plus the par check `|xs| in sum(lbound)..sum(ubound)`.
+
+**Measured** on 2.10.1 (node `fataepyc-06`): the four provenance sources
+`mznlib/test/gcc_{,low_up_}closed_src_{sat,unsat}.mzn`, flattened against `main`'s mznlib (the
+two new files removed), emit exactly one `baguette_global_cardinality` call each and no
+`int_eq_reif`; the domain restriction lands on the declarations. So the 26 empty time-outs are not
+a missing route, and nothing in this row changes how those instances reach `gcc.ml`.
+
+What the two new files (`mznlib/fzn_global_cardinality_closed.mzn`,
+`mznlib/fzn_global_cardinality_low_up_closed.mzn`) do instead:
+
+1. **They pin the route**, so a std that decomposed the closed form again would not change what
+   baguette receives without a line of this repository changing.
+2. **They state the implied row** `sum(counts) = |xs|`, the one consequence of a closed cover
+   `gcc.ml` does not derive (its rules are interval capacities and per-value tallies, never the
+   total). It is an `int_lin_eq`, carried by `Lin_eq` with its own `pol`. It holds only when
+   the cover has no repeated value, and the files guard on that (`card` of the cover as a set
+   against its length) rather than assume it. For `_low_up_closed` the counts are declared in
+   the file, on the bounds `fzn_global_cardinality_low_up.mzn` gives them, so the row has
+   something to sum.
+
+Flattened with the new files the same sources emit one `baguette_global_cardinality` and one
+`int_lin_eq`; all four solve as their names say with proofs VERIFIED by 3.0.2
+(`test/models/gcc_{,low_up_}closed_{sat,unsat}.fzn`, `test/expected/`). Whether the implied row
+changes anything on the 30 instances is section 6's measurement.
+
+### 2. M7-T29, the gcc half: a repeated variable is copied away in the model
+
+`fzn_global_cardinality` with the same variable twice was refused by
+`Compile.post_global_cardinality` (D-0121: nine instances, community-detection 2017, 2021 and
+2026). The cause is MiniZinc's unification: the model's must-link constraints `x[a] = x[b]` make two
+array cells one variable, and `global_cardinality_low_up(x, 1..k, 0, n)` then names it twice.
+Its tally contribution is its multiplicity, and every cancellation in `gcc.ml`'s derivations
+assumes one.
+
+**Two ways out, and the choice.** Teaching `gcc.ml` multiplicities means weighting rule A's
+`|H|`, rule (a)'s saturation test and rule C's tallies, and scaling every ALO and drop line in
+every derivation by the multiplicity: every rule and every proof shape of a 1 200-line module
+whose lines are each measured on the checker. **Normalising the repeat away** costs one pass over
+the model: every occurrence after the first is replaced by a fresh variable declared on the
+original's domain and tied to it by `int_eq`. `gcc.ml` never sees a repeat, the `.opb` is the
+original model with one defined variable per repeat (so it decides the same solutions, projected),
+and nothing in the proof machinery changes. The cost is propagation between the copies: `int_eq`
+is `Lin_eq`, bounds consistent, so a hole `gcc.ml` punches in a copy does not reach the original.
+On the instances that produce the shape the gcc is `low_up` with bounds `[0, n]`, which prunes
+nothing, so the trade costs them nothing measurable. **Chosen: normalise.**
+
+**Where.** `Builder.split_gcc_repeats`, applied by `Builder.finish`, not `Compile`. Measured: the
+first version lived in `compile.ml` and the solver then died printing the solution with "solver
+variable 2 is outside the model's 2 variables", because `bin/main.ml` maps the store back onto
+`Model.vars` and a variable the compiler added is a store variable the model does not have. In
+the builder the copy is a model variable like any other. A copy is named
+`X_INTRODUCED_gcc_copy_<k>` (the flattener's own convention; `check_name_collisions` refuses a
+clash), appended after every model variable so no index moves, and a model with no repeat comes
+back physically unchanged. The refusal in `post_global_cardinality` stays as a guard for a
+`Model.t` built by other means.
+
+`test/models/gcc_repeat_{sat,unsat}.fzn` (from `mznlib/test/gcc_repeat_src_*.mzn`): the SAT one
+has value 1 occurring once among `[a, a, b]`, so its only solution is `[2, 2, 1]` and a front
+end that counted the repeat once would also accept `[1, 1, 2]`; the UNSAT one asks each of 1 and
+2 once among three cells. Both VERIFIED.
+
+### 3. `regular`: the design
+
+`regular(x, Q, S, d, q0, F)`: the word `x[1..n]` drives the DFA with states `1..Q`, transition
+`d[q, v]` (0 = fail) and start `q0` to a state in `F`. MiniZinc 2.10.1's decomposition is
+`n + 1` state variables `a[i] in 1..Q` and `a[i+1] = d[a[i], x[i]]`, an `array_int_element` on a
+computed index per layer; D-0122 measured it at 0 complete of 94 attempted instances, 70 of them
+timing out with no solution.
+
+**3.1 The model rows.** The route is `baguette_regular(x, Q, smin, d, q0, F, s)`
+(`mznlib/fzn_regular.mzn`): `d` flattened row-major over the contiguous symbol range
+`smin..smin+W-1` (0 for a value outside the alphabet, which is how `fzn_regular_set`'s non-
+contiguous `S` is carried), `F` as an array, and `s` an array of `(n+1) * Q` **state flags**
+`var bool`, introduced by the mznlib `let`, `s[i, q]` meaning "after `i` letters the automaton is in
+`q`". The `.opb` holds, over order literals of `x` and the flags' own literals:
+
+- `ALO_i`: `sum_q s[i,q] >= 1` and `AMO_i`: `sum_q ~s[i,q] >= Q - 1`, for every layer `i = 0..n`;
+- `START`: `s[0,q0] >= 1`; `ACCEPT`: `sum_{f in F} s[n,f] >= 1`;
+- `FWD(i, q, R)`: `~s[i,q] \/ x_i notin R \/ s[i+1, t]` for every layer `i < n`, state `q`, and
+  **symbol run** `R = [a, b]`, where `t = d[q, R]` and the clause loses its last literal when
+  `t = 0`. `x_i notin R` is `~x_i_ge_a \/ x_i_ge_(b+1)` with a constant half dropped at a
+  declared bound. A run is a maximal stretch of consecutive values of `x_i`'s declared hull whose
+  COLUMNS of `d` are identical (every state goes to the same place on each of them), so the
+  values outside the alphabet are one run, and a run is exactly the granularity at which every
+  argument below holds.
+
+That is the DFA's own semantics (GCS writes the same rows, `dev_docs/regular.md` "OPB encoding"),
+and it is all the `.opb` says: nothing in it is a consequence the solver computed.
+
+**3.2 The root lemmas.** The forward rows cannot carry a FORWARD death (a state no live
+predecessor edge reaches): that argument is two-dimensional (every pair `(q, v)` of layer `i`
+misses `q'`), and unit propagation fixes neither `a` state nor a value of `x_i`. GCS's answer, and
+this one, is the **backward chain**, one per layer `i < n`, state `q'` and run `R`:
+
+    B(i, q', R):  ~s[i+1,q'] \/ x_i notin R \/ OR_{q : d[q,R] = q'} s[i,q]
+
+derived ONCE, at the start of the proof, as `rup`: negate it and `AMO_(i+1)` clears every other
+flag of layer `i+1`, every `FWD(i, q, R)` with `q` outside the disjunction then forces `~s[i,q]`,
+and `ALO_i` is empty. They are written by `Encoding.start_proof` from a list compile.ml fills
+(`Encoding.add_root_lemma`, one appended block in `encoding.ml`), after the direct encoding and
+before search, never deleted until the end-of-run sweep (search.ml retires every live id before
+the conclusion). Deriving them rather than putting them in the `.opb` is the point: the checker
+verifies each one, so a bug in the inversion of `d` is a REJECTED proof, not a stronger model with
+a verified wrong answer (section 4, probe p2).
+
+**3.3 The propagator** (`lib/core/prop/regular.ml`, new; the layered-graph filtering of Pesant
+2004). Its scope is `x` and the flags, and the flags ARE store variables -- that is what lets every
+state death be an ordinary trail entry with a reason, written by `Trace` like any other pruning,
+instead of a proof line the propagator would have to write itself (GCS's `~state[i][q]` cache).
+One call:
+
+1. **Fixed flags.** A flag fixed to 1 kills every other flag of its layer (`AMO_i`); two fixed
+   to 1 in one layer is a conflict. `START` and `ACCEPT` kill the flags of layer 0 other than
+   `q0` and the flags of layer `n` outside `F` (their reason is empty).
+2. **Forward.** Layer by layer from 0: `q'` at `i+1` is reached iff some reached `q` at `i` has
+   an edge `d[q, v] = q'` with `v in dom(x_i)`. Each unreached live flag is killed (P1).
+3. **Backward.** Layer by layer from `n - 1`: a reached `q` at `i` survives iff some edge leaves
+   it on a value of `dom(x_i)` into a live flag of `i+1`. Each other is killed (P2).
+4. **Values.** `v in dom(x_i)` survives iff some live `q` at `i` has `d[q, v]` live at `i+1`;
+   every other value is removed (P3), one value at a time, so a bound move is a one-value step.
+5. **Fixing.** A layer left with one live flag fixes it to 1 (P4, `ALO_i`). A layer left with
+   none is a conflict (`ALO_i`, the layer's dead flags as facts).
+
+**Consistency: DOMAIN** (SPEC 3.2), for a scope where no variable of `x` repeats: after one call
+every remaining value of every `x_i` lies on an accepting path through the current domains, and
+so does every remaining value of every flag (1 for a live state; 0 because its layer holds
+another live state, or the flag is fixed). That is the definition, over the joint scope. A
+repeated `x` variable couples two layers the graph treats as independent, so that instance is
+packed as `Regular.Aliased`, declared `Checking`, with the same code.
+
+**3.4 Reasons and explanations, as data.** Every pruning's reason is BOUND facts (D-0026):
+
+- P1, `s[i+1,q']` dies forward: per run `R` of `x_i` meeting `[lo, hi]` of `x_i`, either every
+  predecessor `q` of `q'` on `R` is dead (the facts `s[i,q] <= 0`), or every value of `R` in
+  `[lo, hi]` is a hole (the facts of each hole's remover, D-0075's technique, as `element.ml`
+  does); plus `x_i >= lo` and `x_i <= hi` where they are not the declared bounds.
+- P2, `s[i,q]` dies backward: the same per run, with the successor `d[q, R]` dead (or 0) in place
+  of the predecessors.
+- P3, `x_i <> v`: per state `q` with `d[q, v] > 0`, either `s[i,q] <= 0` or `s[i+1, d[q,v]] <= 0`;
+  plus the bound fact `x_i >= v` (resp. `<= v`) when `v` is the current lower (upper) bound, since
+  the claim is then the settled bound and its negation must pin `x_i` to `v`.
+- P4: the other flags of the layer dead. Conflicts: the facts of the pruning that would empty,
+  plus the fixed flag; or the layer's dead flags.
+
+The explanation is `Explanation.clause` of the claim and the negated facts, deferred: the trace
+line itself, which `Justify` memoises against it. **No new `Explanation` constructor** and no
+`deriving_ahead`: every line is RUP once its facts are assumed, against the `.opb` rows, the root
+lemmas and the earlier trace lines (a hole is cited through its remover, so its own line fires).
+Under I-X10 the family is **`Single_row`** in the sense the table already gives `element.ml`:
+one constraint, several rows, plus lines on the page before search -- I-X10's own wording is
+"RUP against the `.opb` plus the lines already on the page".
+
+**3.5 What it costs.** Rows: `(n+1)` ALO/AMO pairs, `n * Q * runs` forward rows and as many
+lemmas, `runs <= |dom x_i|`. A call is `O(n * E)` with `E` the automaton's non-failing edges
+(the transition table is scanned once per layer, per live state, over its out-edges). The flags are
+`(n+1) * Q` Booleans of the store, each one order literal. The decomposition it replaces was
+`n + 1` integer state variables plus an element per layer, so the width is comparable and the
+propagation is not.
+
+### 4. The proof story, checked before coding
+
+`bench/regular_spike/` (`gen_probe.py`, `probe_regular.sh`), run on `fataepyc-06` against VeriPB
+3.0.2 (`d5644ca4`) on 2026-11-18 before any solver code. Instance 1: `Q = 3`, alphabet `{1, 2}`,
+`x_i in 1..3` (3 is outside the alphabet), `q0 = 1`, `F = {3}`, `n = 3`, language `1* 2 1+`.
+Instance 2 is built so that a lemma is load-bearing (two live states in layer 1 and three values
+of `x_1` that unit propagation cannot fix).
+
+| probe | content | verdict |
+|---|---|---|
+| p1 | all 27 lemmas; root deaths by START/ACCEPT, a forward (P1) and a backward (P2) death, two top-bound value removals (P3); below a decision `x0 >= 2` a P1 with its fact and a P4; then `sol` with the flags and `conclusion SAT` | VERIFIED SATISFIABLE |
+| p2 | one lemma too strong (its predecessors dropped, at layer 1) | refused: "The constraint is not implied by reverse unit propagation (RUP)" |
+| p4 | the P1 below the decision with its fact dropped | refused, same wording |
+| p7 | a false bound move (`x1 >= 2` under `x0 >= 2`, where 1 is supported) | refused, same wording |
+| p8 | an interior hole `x1 <> 2` with its fact | VERIFIED |
+| p9 | `sol` naming only `x`, no flag | VERIFIED SATISFIABLE: the checker fills the flags by propagation (the solver lists them anyway, they are store variables) |
+| p10 | `sol` of a word the DFA rejects, with its honest state run | refused: "The given assignment falsifies the constraint with ID 13" |
+| p11 | `rup >= 1` on a satisfiable instance | refused, RUP wording |
+| q1 / q2 | instance 2: a forward death below the root with all lemmas / with the three it needs dropped | VERIFIED / refused, RUP wording |
+
+Measured facts that shaped the design, not only confirmed it: dropping ONE lemma is often not a
+negative (p3, and p5/p6, verify) because the sweep from the top fixes `x_i` and the forward rows
+finish the argument, and at layer 0 a "too strong" lemma is implied by `START` -- the negative
+controls had to be built where a layer holds two live states and a value range unit propagation
+cannot fix (q2).
+
+### 5. `regular` as built, and what checks it
+
+**Files.** `lib/core/prop/regular.ml` (new; its header is section 3 in the code's words);
+`lib/flatzinc/compile.ml`, one block `post_regular` plus its dispatch arm and its bits-hold arm
+(the letters stay on the order encoding: the rows are over their ladders); `Model.Regular` and
+its oracle arm (`Model.regular_run`), `Builder`'s `baguette_regular` arm; one appended block in
+`lib/proof/encoding.ml` (`add_root_lemma`, `emit_root_lemmas`, called last in `start_proof`);
+`mznlib/fzn_regular.mzn`, `mznlib/fzn_regular_set.mzn`. No `Explanation` constructor, no
+`deriving_ahead`, nothing in `justify.ml`, `trace.ml`, `search.ml`.
+
+**Three things the design did not say and the code had to.**
+
+1. **One value at a time.** A letter value removed at a bound is its own trail entry, so the
+   claim is the settled bound and its negation pins the letter to the ONE value whose edges
+   the forward rows refute; a multi-value bound move would leave the letter unpinned and the
+   line not RUP. The reason then carries the bound fact `x >= v` (or `<= v`) that pins it.
+2. **The tail's order.** Per-value facts first, the letter's bound facts last. Nothing in the
+   proof depends on it; it lets the `death-fact` mutation lane drop the last literal and hit
+   the decision fact instead of a root fact the page restores (GCS's trap 3).
+3. **A layer emptied, or a fixed flag killed, is reported by the propagator**, never by
+   `Store.apply`'s failing arm, whose derivation would be the one pruning's and not the
+   contradiction (element.ml's reason, the same rule).
+
+**Cost, measured.** On `2011_nonogram_non_med_1` (100 regulars, 72 369 flags) the first version
+spent a quarter of its time in the GC and in polymorphic hashing of reason facts; the call now
+allocates only the reasons it writes (predecessor table and scratch arrays at `make`, dead-flag
+facts deduplicated by a stamp). The proofs of the two versions are the same line for line (same
+facts, same order). The node rate stays about 140 nodes/s over its first 600 nodes and falls to 40/s over a minute
+as the learned database grows, most of it outside `regular.ml` (learned-clause instances,
+analysis), with 1UIP clauses of 16+ literals: a flag death's reason
+is every dead predecessor, and the cut lands on flags. Smaller reasons (on letters only) are the
+obvious next lever for the nonograms that time out (section 6); they are not in this row.
+
+**Tests.**
+
+- `test/unit/test_prop.ml`, brute force: 300 random automata (2 or 3 states, alphabet `1..2`,
+  letters declared `0..3` so two values fail everywhere) x 4 random narrowings (letter bounds and
+  holes, flags fixed either way): **I-P1** (no solution lost, no conflict where one exists),
+  **DOMAIN consistency over letters and flags** (every remaining value of every variable is in a
+  solution within the current domains), **I-P2** (a second call changes nothing). 1 200 scenes,
+  370 pruned, 830 conflicts, 0 violations.
+- `test/unit/test_prop.ml`, the checker: the root-lemma counts (`n * Q * runs`: 48 for
+  instance 2, 20 for the next), and a model whose first branch fails under a decision the root
+  does not see (no two consecutive 2s, letters summing to 8): its proof, 20 lemmas and 44 trace
+  and nogood lines, VERIFIED.
+- `test/unit/test_mutation.ml`, three lanes behind a control, each refused at the RUP wording
+  ("The constraint is not implied by reverse unit propagation (RUP) from core and derived
+  database."): `lemma-rhs` (one lemma's degree raised: the lemmas are checked), `death-fact` (the
+  forward death of `s2_4` under the split `x1 <= 2`, its decision fact dropped), `no-lemmas` (all
+  48 lemmas deleted, their labels taken out of the end-of-run `del`: that death has nothing left
+  to sweep `x1` with).
+- The M2-T10 oracle (`BAGUETTE_CONSISTENCY=1`) on the four regular models: `CHECKED: regular
+  (domain)` x8, x1, x3 (some instance-checks of `regular_opt` skipped over the tuple cap, stated
+  by the oracle), no violation; `BAGUETTE_DEBUG=1` and the I-X2 audit on, all four VERIFIED.
+- Models (`test/models/`, flattened from `mznlib/test/*_src*.mzn`, every proof VERIFIED):
+  `regular_sat` (4x4 nonogram by regular expressions), `regular_unsat` (3x3 with disagreeing
+  clues), `regular_set_sat` (alphabet `3..5`, the gap 4 failing), `regular_opt` (a roster
+  maximised to 13 with a bound proof); and section 1-2's six gcc models. `check_mznlib.sh`: 26
+  ok, 0 failed (every new source flattens to its route, none to the decomposition).
+- I-X10: `regular.ml` is classified `Single_row` in `test/unit/test_trace.ml`'s table.
+
+**Gate** (fresh clone of `wave49-globals` at `b8a7817` on `fataepyc-06`, binary `c1485cc6`,
+`make check` under `ulimit -v 4000000`): rc 0, model tests 189 passed, determinism 189 models
+identical, mutation 96 checks passed, peak RSS 97 056 kB. Every test model against `main`'s
+gate-52 binary (`307879fa`): 183
+of 189 byte-identical in `.out`, exit code, `.opb` and `.pbp`; the 6 that differ are the six the
+old binary cannot read (`regular_*` x4: `baguette_regular` is unknown to it; `gcc_repeat_*` x2:
+it refused the repeat). The closed-gcc models are identical under both (the route was std's).
+**Differential lane** (`origin/wave47-lanes` merged, `make diff ARGS="--tier all -j 24"`, at `abae541` and again at `b8a7817`): 232
+of 232 runs equal the reference.
+
+### 6. The Challenge instances, before and after
+
+**The run.** `scripts/compare_run.sh` over the 160 Challenge instances whose model source calls
+`regular`, a closed gcc, or is community-detection, selected from `bench/challenge/<Y>.lst` by
+`bench/regular_spike/select_globals.py` (list at `/scratch/arthur/wave49-globals-inst.lst`).
+Each instance re-flattened with THIS branch's mznlib (MiniZinc 2.10.1, `tools/baguette.msc`),
+baguette only, 300 s, proof on, `MEM_KB=16777216`, `PROOF_CAP_KB=16000000`, 10-way, every
+complete answer's proof checked by `veripb` 3.0.2; frozen clone
+`/scratch/arthur/wave49-globals-meas-src-after` at `bde7930`, binary `08361947` (before section
+5's tail reorder and allocation change: the same prunings and the same facts per line, the
+tail's literals in another order); output `/scratch/arthur/wave49-globals-meas-after/`, all 160
+done on 2026-11-18 18:43. **Before** is wave 43's run of the sixteen editions (D-0133's baseline,
+`/scratch/arthur/wave43run/<Y>/results.tsv`, binary `a6327dc6`, **1 200 s**): the old binary had
+four times the time.
+
+**Grouped by the routes the FLATTENED model takes**, not by the source.
+`bench/regular_spike/count_routes.sh` flattened all 160 with this library and counted the
+`baguette_regular` and `baguette_global_cardinality` calls (`/scratch/arthur/wave49-globals-routes.tsv`,
+160 OK). It matters: gbac names `regular` in its source and calls it zero times once flattened,
+so the source grouping put it in the wrong row. Read with
+`bench/regular_spike/join_globals.py <list> <wave43run> <after> <routes.tsv>`; a SAT answer to
+a satisfaction problem counts as complete, a time-out with a solution as an incumbent.
+
+| route reached | n | before: complete / incumbent / no answer | after: complete / incumbent / no answer |
+|---|---|---|---|
+| `regular` only | 65 | 5 / 16 / 44 (34 time-out, 9 refused, 1 capped) | **18 / 17 / 30** (28 time-out, 2 refused) |
+| `regular` and gcc | 45 | 0 / 5 / 40 (35 time-out, 5 refused) | 0 / 6 / 39 (38 time-out, 1 refused) |
+| gcc only (the closed forms) | 30 | 4 / 1 / 25 (8 capped, 9 refused, 7 time-out, 1 error) | 4 / 2 / 24 (9 capped, 8 refused, 6 time-out, 1 error) |
+| gcc with a repeated variable (community-detection) | 20 | 0 / 0 / 20 (all refused) | **1 / 15 / 4** (3 time-out, 1 refused) |
+
+**Every complete answer whose proof was checked is VERIFIED, none REJECTED: the 18 `regular`
+and the 4 gcc.** The one exception is the community-detection OPT
+(`2021_..._rnd_n100_e5000_s500_d300_c4_p50`, 2 484 055 in 45 s): `veripb` ran out of memory
+under the harness's cap ("memory allocation of 683697504 bytes failed") on a 2 GB `.opb` whose
+`objective` is declared 14 227 894 wide. That is a finding about width (D-0028), not about these
+routes, and the answer stands UNCHECKED: no re-run with a raised cap.
+
+What moved, by name:
+
+- **`regular`, 13 new complete answers** (10 time-outs, 3 refusals before): nonograms 2011
+  `non_fast_3`, `non_fast_6`, `non_med_1`, 2012 `non_awful_5`, `non_fast_4`, `non_fast_11`,
+  2013 `dom_08`; pentominoes 2011 `_02`, `_06`, 2013 `pentominoes-int_02`, `_06`, 2020 `_02`,
+  `_06`; in 33 to 270 s. D-0122 had counted `regular` at 0 complete of 94 attempted. One new
+  incumbent (2014 `traveling-tppv_circ14bnonbal`); five refusals became attempts that time out
+  (the `_04` pentominoes, two zayenz). One regression in kind, not in answer:
+  `2021_pentominoes-zayenz_size_20_tiles_15_seed_4711` was CAPPED (proof file) and is now
+  refused by the 8 GB heap budget at 182 s; neither run answered.
+- **`regular` with gcc** (elitserien handball, rotating-workforce, generalized peaceable queens, work-task-variation): one
+  refusal became an incumbent and three became time-outs; no new complete answer. These are
+  optimisation models where `regular` is one constraint among many.
+- **The closed gcc forms** (gbac, blocks-world, gcc-benchmark): no change in kind, as section 1 predicted -- the route was std's
+  already, and the implied row does not move these instances. gbac dominates the row: 8 CAPPED
+  and 8 REFUSED at the width wall or the heap budget before and after, its load variables
+  declared tens to hundreds of thousands wide. One refusal became an incumbent
+  (`2016_gbac_reduced_UD6`), and `2026_gbac_csplib12`, a time-out with no solution at 1 200 s,
+  now finds 2058 before the heap budget stops it at 186 s (the harness files it REFUSED).
+- **The repeated gcc variable**: all 20 community-detection instances were refused; 19 are now
+  attempted, 15 with an incumbent and one OPT. The remaining refusal is
+  `2024_community-detection_Polblogs`, whose `objective` is declared 125 096 898 wide.
+
+**Reading.** The reach this row bought is `regular` on satisfaction models (nonogram,
+pentominoes: 5 -> 18 complete of 65, all verified) and community-detection (0 -> 16 answers of
+20). The nonograms still timing out are section 5's per-node cost and wide learned clauses, the
+next lever; the gcc rows are held by width, not by gcc.
+
+### 7. `inverse`: the design record, before any code (step 5 of the row)
+
+D-0122: 70 instances, 44 of the 50 attempted time out with no solution. MiniZinc 2.10.1's
+`std/fzn_inverse.mzn` is `f[i] in index_set(invf) /\ invf[f[i]] = i` and the mirror, an
+`array_var_int_element` per position, which baguette's subset does not have, so it reaches the
+solver as std's further decomposition: `n^2` reified equalities and their clauses.
+
+**7.1 The model rows** (`baguette_inverse(f, fmin, g, gmin)` from a mznlib `fzn_inverse`, the
+offsets carrying the two index sets): std's semantics as CHANNEL clauses over the order
+literals, per pair `(i, j)` of declared values, both directions, each `x = v` split into its two
+order halves:
+
+    CH(i, j)    f_i <> j  \/  g_j >= i        f_i <> j  \/  g_j <= i
+    CH'(j, i)   g_j <> i  \/  f_i >= j        g_j <> i  \/  f_i <= j
+
+`4 n^2` rows of at most three literals, no auxiliary, no direct encoding: the decomposition std
+writes, minus its reifiers.
+
+**7.2 Stage 1, the propagator: channel filtering**, `j in dom(f_i) <=> i in dom(g_j)` both
+ways, the `element` shape twice. Consistency **Checking** honestly (arc consistent on each
+channel pair, which is not domain consistency of `inverse`: that needs `all_different`'s
+matching on `f`). Every pruning is one `rup` with its facts on the tail -- the bound or the hole
+remover of the other side -- so the family is `Single_row`. **Measured** (`bench/regular_spike/
+probe_inverse.sh`, `n = 3`, 3.0.2 on `fataepyc-06`): a bound prune under a fact (`i1`) and an
+interior hole (`i2`) VERIFY; a prune the facts do not support (`i3`) is refused at the RUP
+wording.
+
+**7.3 Stage 2, `all_different` strength, and the one open question.** Both arrays of an
+`inverse` are permutations, so `all_different(f)` is implied, and running `alldiff.ml` over `f`
+and over `g` gives the matching's pruning. Its derivations cite pairwise rows `f_i <> j \/ f_k
+<> j` which the `.opb` above does not state -- and must not post as model rows (an implied row
+posted is the trust section 3.2 refused). They are ROOT LEMMAS: **measured**, the pairwise row
+is `rup` from `CH(i,j)` and `CH(k,j)` at the root (`i4` VERIFIES). So stage 2 is section 3.2's
+mechanism with one addition: `Encoding.add_root_lemma` has to hand back an id `alldiff.ml` can
+cite in its `pol`, which the regular lemmas never needed (they are used by unit propagation
+only). That API, and whether alldiff's derivations survive citing proof lines instead of model
+rows, is what a stage-2 probe must settle first.
+
+A measured surprise worth keeping: a Hall prune (`f1, f2 in {1, 2}` so `f3 >= 3`, `i5`) is
+already RUP over the channel rows of `n = 3` -- the mirror side does the counting, `g_3` having
+one possible preimage left. It is the singleton complement that makes it so; with two values
+outside the Hall set unit propagation fixes nothing, and stage 2 is still needed.
+
+## D-0150  M7-T32: the MiniZinc standard flags. `tools/baguette.msc` declares `-i -f -n -p -r -s -t -v`, each maps onto an option the CLI already had, every improving solution was already printed with its `soli`, and enumerating a satisfaction model is refused until it has a proof shape
+
+**Status**: **DONE** (2026-11-19, agent-flags, `wave51-flags`). The contract is ROADMAP row
+M7-T32, opened from the user's remark that baguette should take the same options as the other
+entrants. `search.ml` was not touched (M7-T31 holds it): nothing here needed a new search hook.
+
+### 1. What MiniZinc passes a solver, measured
+
+The FlatZinc specification (docs.minizinc.dev, `fzn-spec`, "Solver configuration files" and
+"Statistics output") gives the meaning of each standard flag. `-a` reports all solutions of a
+satisfaction problem and intermediate solutions of an optimisation problem. `-i` prints
+intermediate solutions of an optimisation problem, and "should be supported rather than -a for
+solvers which only support printing of intermediate solutions". `-n i` stops after `i` solutions
+of a satisfaction problem. `-f` is free search (ignore the search annotations). `-s` prints
+statistics. `-v` logs to stderr. `-p i` runs `i` threads. `-r i` is the random seed. `-t ms` is a
+wall time limit in milliseconds. The page does not say which of `-a` and `-i` the driver passes,
+so that was measured: a fake solver that logs its argv, three `.msc` files (declaring `-a` and
+`-i`, `-a` only, `-i` only), MiniZinc 2.10.1 on `fataepyc-06`.
+
+- The flags always come BEFORE the `.fzn` path.
+- On an optimisation model `-a`, `-i`, `--all-solutions` and `--intermediate-solutions` all
+  reach the solver as `-i` when it declares `-i`, and as `-a` when it declares only `-a`.
+- On a satisfaction model `-a` reaches the solver as `-a` when it is declared. When only `-i`
+  is declared MiniZinc passes nothing and prints `WARNING: Solver does not support all
+  solutions for satisfaction problems.` `-i` on a satisfaction model is dropped.
+- `-n i` reaches the solver on a satisfaction model only, and `-n 1` never does.
+- `--time-limit 5000` reaches it as `-t 4888`, the flattening time taken off, and
+  `--solver-time-limit 5000` as `-t 5000`.
+- `-f`, `-s`, `-p 4`, `-r 7` reach it as given.
+
+The `.msc` of the bundle's Chuffed declares `-a -f -n -r -s -t -v --cp-profiler`, Gecode's
+`-a -f -n -p -r -s -t --cp-profiler`, CP-SAT's `-a -i -f -p -r -s -v`.
+
+### 2. The declaration and the mapping
+
+`"stdFlags": ["-i", "-f", "-n", "-p", "-r", "-s", "-t", "-v"]`, and `--proof` as an extra flag
+of type string, so that `minizinc --solver baguette --proof P` writes `P.opb` and `P.pbp` (SPEC
+§1: the proof is a primary output; `--fzn-flags "--proof P"` also works). `-a` is NOT declared,
+because baguette prints intermediate solutions but cannot enumerate those of a satisfaction
+model (section 4). Declared this way MiniZinc maps `-a` to `-i` on an optimisation model by
+itself, and on a satisfaction model it warns and runs the first solution, which is the
+specification's own answer for such a solver. The CLI still accepts `-a` for a direct caller.
+
+| flag | baguette |
+|---|---|
+| `-i` | Accepted, no change. Since M5-T1 every improving solution is printed as it is found, each followed by `----------`, and `==========` follows the last when the proof establishes it is optimal (SPEC §2.2). On a satisfaction model it has no effect. |
+| `-a`, `--all` | On an optimisation model, `-i`. On a satisfaction model, REFUSED, exit 3, after the model is read (before M7-T32 `--all` was refused on every model, before the parse). |
+| `-n N` | `N >= 1`. `N = 1` is the default behaviour. `N > 1` on a satisfaction model is REFUSED as `-a` is. On an optimisation model it is ignored, as the specification uses it for satisfaction only. |
+| `-f` | `--search alternate --restarts luby --phase-saving`, each only where `--search` or `--restarts` was not given explicitly, in either order on the line. Chuffed's free search is the alternation of the annotation with its activity order under restarts (D-0137 section 4), Luby on a unit of 100 conflicts is D-0137 section 0's reading of Chuffed's restart counts, and phase saving is what Chuffed's SAT layer does. See section 5 for the warning. |
+| `-t MS` | `--time-limit MS/1000`: the same stop (wall clock from process start, parse and compile inside it), the same `limit:` line and `conclusion NONE`. A later `-t` or `--time-limit` wins. |
+| `-r SEED` | Accepted and unused. Nothing on the CLI's path draws a random number (`Search.random_order` is the tests' fuzzer and has its own state). |
+| `-p N` | Accepted. The run uses one thread. |
+| `-s` | `--stats` (stderr, unchanged), plus ONE block on stdout after the run's last marker: `%%%mzn-stat:` lines `nodes`, `failures` (the search's conflicts), `restarts`, `peakDepth`, `nogoods` (learned clauses and PB rows), `propagations` (propagator runs), `objective` (when a solution was found on an optimisation model), `initTime` (wall seconds from process start to the search's entry), `solveTime` (wall seconds of the search), then `%%%mzn-stat-end`. No `nSolutions`: `solns2out` counts the solutions and prints that line itself. |
+| `-v` | One line on stderr naming the search, the restart policy, phase saving and the time limit the flags became. |
+
+A malformed argument (`-t abc`, `-t -5`, `-n 0`, `-p 0`, `-r x`, a flag with no argument) is a
+usage error, exit 2, as every other option's is. The notes for `-r` and `-p N > 1` and the
+warning for `-f` go to stderr under `--stats`, `-s` or `-v` only, so that a run that asked for
+none of these keeps the empty stderr M1-T49 requires.
+
+### 3. Intermediate solutions and the proof
+
+Nothing had to change. `Search.optimise` calls the CLI's `on_solution` at each improving
+solution (`Search.record_improving`), after the independent check I-S1 of that solution and
+before the `soli` line that logs it and yields the strictly-improving constraint
+(`Writer.improving`). So the solutions printed and the `soli` lines of the proof are in one to one
+correspondence, and the last printed solution is the one `conclusion BOUNDS` names when the
+search finishes. A stopped run prints the improving solutions it found and no `==========`, and
+its proof ends `conclusion NONE` (SPEC §2.2, M6-T9), with one `soli` per printed solution as well.
+
+Measured through `minizinc --solver tools/baguette.msc` on `fataepyc-06` (binary md5
+`3298a0cdc8a6b13d7fb045116e87e3ca`, commit `3fcafda`, MiniZinc 2.10.1, veripb 3.0.2), on three
+small MiniZinc models written for this (a 6-item knapsack maximising profit, 4 jobs on 2 machines
+minimising the makespan, an 8-mark Golomb ruler):
+
+| model, flags | printed solutions | last printed | proof | veripb |
+|---|---|---|---|---|
+| knapsack `-i` (and `-a`, none, `-i -f`) | 3 (profit 0, 11, 20) | 20, then `==========` | 3 `soli`, `conclusion BOUNDS -20` | `VERIFIED BOUNDS -20 <= obj <= -20` |
+| makespan `-i` (and `-a`, none, `-i -f`) | 3 (span 14, 9, 7) | 7, then `==========` | 3 `soli`, `conclusion BOUNDS 7` | `VERIFIED BOUNDS 7 <= obj <= 7` |
+| Golomb `-i -t 3000` | 6 (length 44, 41, 40, 39, 38, 36) | 36, no `==========` | 6 `soli`, `conclusion NONE` | `VERIFIED NO CONCLUSION` |
+| Golomb `-i -f -s -t 3000` | 6, same lengths | 36, then the `-s` block | 6 `soli`, `conclusion NONE` | `VERIFIED NO CONCLUSION` |
+| `a < b < c` over 1..4, satisfy, `-s -r 3 -p 4 -t 5000` | 1 | `----------`, then the `-s` block | `conclusion SAT` | `VERIFIED SATISFIABLE` |
+
+The knapsack's optimum 20 and the makespan's 7 are checked by hand (items 7 and 8, or 3, 4 and
+8, fill the capacity 15; the durations 3+4 and 2+5 split 14 evenly). On the satisfaction model
+`-a` gave MiniZinc's warning and one solution, `-n 1` one solution, and `-n 2` baguette's
+refusal (MiniZinc prints `=====ERROR=====`).
+
+### 4. Refused: every solution of a satisfaction model, and the design for later
+
+`-a`, `--all` and `-n N > 1` on a satisfaction model exit 3 with a message that names this
+record. Enumeration needs two things that do not exist.
+
+1. **A search that continues past a solution.** `Search.solve` returns the first. Continuing is
+   the branch-and-bound loop of `Search.optimise` with the improving constraint replaced by the
+   exclusion of the solution just found. That is `search.ml`, which M7-T31 holds this week, and
+   no request is filed for it because the second need decides its shape.
+2. **A proof shape for "no other solution".** `Writer.solution_excluding` writes `solx`, which
+   veripb 3.0.2 refuses outside a preserved set ("Logging and excluding a solution with 'solx'
+   is only possible if a preserved set is specified", M1, recorded at the function). The
+   exclusion of a solution is not implied by the model, so it cannot be a `rup` or a `pol` line,
+   and a `red` that adds it would be wrong. The shape to measure on the checker BEFORE any code
+   is a preserved set over the order literals of the OUTPUT variables, one `solx` per solution
+   (excluding the projection, so two solutions that differ only on non-output variables are one
+   solution, as `solns2out` prints them), the search refuting the rest under those exclusions,
+   and `conclusion UNSAT` after the last one with `==========` on stdout. Whether veripb 3.0.2's
+   preserved-set syntax takes the order literals of a variable as one unit, and what it then
+   checks of each `solx`, is the first measurement.
+
+Printing one solution and letting its `----------` stand for "the only one" would be a claim no
+proof makes, which is why the CLI refuses rather than degrading.
+
+### 5. `-f` is not proof-safe on every instance yet
+
+`-f` is exactly the combination `saltlubyps` of D-0137 section 10.2, and section 13 point 1 (b)
+records a branch nogood veripb refuses under it on `2017_hrc_exp1-1-5670`. That is open as
+M7-T31. Until it lands a `-f` run may print correct solutions with a proof the checker refuses,
+which SPEC §1 calls a failed run. So the CLI says it on stderr under `--stats`, `-s` or `-v`
+(`baguette: WARNING -f (free search) is ... NOT proof-safe on every instance yet ... M7-T31`), the
+usage text says it, and the Challenge harness must not pass `-f` for a proved category until
+M7-T31 is closed. The default (no `-f`) is byte-identical to main, which the gate checks.
+
+### 6. Tests
+
+`test/unit/test_endtoend.ml`, `test_m7t32_std_flags`, 30 checks through `bin/main.exe` on an
+optimisation model with two improving solutions and a satisfaction model: `-i`, `-a`, `--all`
+and `-n 3` on the optimisation model, `-i` and `-n 1` on the satisfaction model, `-t 600000` and
+`-r 7 -p 4` all leave stdout byte-identical to the plain run and stderr empty; `-i --proof` has
+one `soli` per printed solution and verifies at the printed optimum; `-f --proof` reaches the same
+optimum and verifies; `-s` keeps the plain stdout as a prefix and appends exactly one block that
+ends `%%%mzn-stat-end` and names `objective=2`; `-f -v` names `alternate`, `luby:100` and phase
+saving with the M7-T31 warning; an explicit `--search` and `--restarts` win over `-f` on either
+side of it; `-t 2500` is 2.5 s; enumeration on the satisfaction model exits 3 with stdout empty;
+six malformed arguments exit 2. MiniZinc's own handling (section 1) is not a unit lane, since
+the suite does not depend on a MiniZinc install; section 3's runs are the end-to-end evidence.
+
+### 7. The gate (fataepyc-06, fresh clone of `wave51-flags` at `362066a`, binary md5 `3298a0cdc8a6b13d7fb045116e87e3ca`)
+
+`/scratch/arthur/gate53.sh` without its two `--update` lines, so no lane reference was recorded.
+The commits after `362066a` are documentation only.
+
+- **`make check` stops at `fmt-check` on `test/unit/test_prop.ml`**, before building. That is
+  main's own debt: a clean clone of `e34e133` fails the same way on the same file (one blank
+  line missing before the M7-T28 banner). This branch's two `.ml` pass `ocamlformat --check`.
+  The rest of `check` was then run in its order, `make build lint determinism unlimit
+  selftests test`: build, lint, determinism, unlimit and selftests pass; `unit` fails on
+  **5 checks of `test_retention`** (`(a)` and `(c)` "deep shipped", the policy that should evict
+  nothing), and `test_retention.exe` built from `e34e133` fails the same 5. Every other unit
+  check passes (4 114 `ok`, the 30 of section 6 among them). `make models`, which `make` skipped
+  after the unit failure: **192 passed, 0 failed**. Peak RSS 41.8 MB (the targets above) and
+  38.7 MB (`make models`), under `ulimit -v 4000000`.
+- **The default is unchanged.** The 192 models run with `--proof` by the branch's binary and by
+  `e34e133`'s: `.out`, exit code, `.opb` and `.pbp` byte-identical on all 192.
+- **`make diff ARGS="--tier all -j 24"`**: 117 of 301 runs differ from the recorded references,
+  in five configurations only: `fifo` 24 and `lbd` 24 (counters moved by M10-search-strategy-T4's
+  `Retention.gate`, `36c1312`, recorded before it) and `restarts`, `activity`, `alternate` 23 each
+  (no reference recorded on main yet). Every run of every other configuration is equal. The same
+  lane with `--bin` set to `e34e133`'s binary prints **the identical 117 `DIFF` lines**, so the
+  branch adds no difference to main's. The three findings above are filed in WORKLOG,
+  `## Cross-session requests`.
+
+## D-0148  M7-T31: a factless pruning that settled over a hole is not a root of the decision closure; the refused branch nogoods on hrc were that, not the assignment shape
+
+Status: DECIDED
+Date: 2026-11-19
+Task: M7-T31 (agent-proofbugs, `wave50-proofbugs`).
+Touches: `lib/core/analysis.ml` (`rests_on_nothing`, used by `analyse`'s `mk_node` and by
+`dependency_levels`' `cite`), `lib/core/search.ml` (`median_values`, a test-only knob),
+`test/unit/test_analysis.ml` (scene 7), `test/models/opt_global_settles_hole_sat.fzn`.
+Follows D-0137 section 13.1 and the WORKLOG note "three findings from the M10
+measurements", D-0124's a3 addendum (the closure over memoised citations), D-0077 (the
+assignment decision), M1-T44/M1-T57 (a settle's line cites the holes it walked over).
+
+### 1. The two reproducers, and what they had in common
+
+**A.** D-0137's own, on binary `28c4a51c` (code `9fb9b09`, identical in `lib/` and `bin/`
+to `457eb7f`): `2017_hrc_exp1-1-5670` with `--search activity --restarts luby
+--phase-saving`, phase saving then taking D-0077's assignment `x = s`, refused at line
+620 348 at *"The constraint is not implied by reverse unit propagation (RUP) from core and
+derived database"*. **B.** The orchestrator's second one, on current main (`f689aae`, binary
+`35fb5d77`), where phase saving branches `x <= s` and no assignment is ever taken, on the same
+instance with `--search alternate --restarts luby --phase-saving`, refused at line 983 748
+(`@c971723`, the branch nogood of node 3 935, a second child at level 80) at the same
+wording. So the assignment shape was not the cause, and B is what was dissected.
+
+### 2. The measurement
+
+An instrumented copy of the binary (not committed; `fataepyc-06:/scratch/arthur/
+wave50-proofbugs-dbg`, `BAGUETTE_DBG_NG`/`BAGUETTE_DBG_NODE`) printed the decision stack, the
+closure's levels and the nogood, and at node 3 935 the whole trail, with every entry's level, old
+and new domain, reason facts with their supports, and the trace line ids written for it. The
+same run's proof was byte-identical to the uninstrumented one.
+
+- The nogood kept 15 of 80 decision levels. Each of the 65 dropped decisions was added back
+  in turn (`addback.py`, one checker run each), and **only level 41** (`X_INTRODUCED_2859_ <= 0`)
+  makes it RUP, and the clause of all 80 is RUP too.
+- Replaying the conflict's facts over the trace lines of the live trail, under the 15 kept
+  decisions (`sim.py`), the chain breaks at one line, the one of trail entry 815, at level 61,
+  `X_INTRODUCED_2086_` from `1..3` to `1..1`, **with an empty reason and not a level start**,
+  whose line is `@c970126 rup +1 ~X_INTRODUCED_2086__ge_2 +1 X_INTRODUCED_2226__ge_1 >= 1`.
+  Entry 815 is the learned unit `X_INTRODUCED_2086_ <= 2` (`@c959341`, level 0), re-applied
+  at that node by `Search.apply_globals` with `Reason.none`. The value 2 was a hole, punched
+  at level 41 by entry 565 citing `X_INTRODUCED_2226_ <= 0` (entry 562, from the level-41
+  decision), so the push settled to `<= 1`, and `Trace.settle_facts` gave the line the
+  hole's facts. Every line the chain needs is on the page and live, so the nogood lacks a
+  premise and no line is missing.
+
+### 3. The cause
+
+`Analysis` called a node a ROOT, never expanded, when its supporting entry had no facts
+(`Reason.is_empty`), and its header said why that was safe, "a decision, a constraint posted
+at this level, or a pruning that genuinely follows from a model row alone", whose level the
+closure keeps, which is conservative. That holds for a factless entry that landed exactly
+where it was pushed. It does not hold for one that SETTLED, because its trace line cites
+the facts of every hole the settle crossed (M1-T57), exactly as a propagator's settle
+does. The closure pinned the entry's own level (61, kept
+anyway here) and never folded the holes, so the hole's level (41) left the nogood. Both
+walks, the memo over citations and the walk over facts, used the one rule, which is why
+BAGUETTE_DEBUG's cross-check agreed with a wrong answer.
+
+The shape needs a factless push at a level above a hole on its variable. `apply_globals`
+makes one at every node for every learned unit and for the branch-and-bound bound, so main
+can reach it at default flags (section 5). Restarts multiply the learned units and the
+dynamic orders vary the levels, which is why D-0137 saw it only under those flags. A's
+assignment shape made it likelier still, because D-0077's sibling removes `x = s` as a HOLE at the
+node's level, and the split `x <= s` punches none.
+
+**The GCS lead** (`restarts-nogoods-weighting.md`, "The proof lifecycle", point 1, about a
+restart that forgets root-level lines the next pass relies on) was checked and does not apply. A
+trace line carries its trail entry's level (`Trace.emit_to_page`), a restart to `t` wipes
+levels above `t` only, whose entries it pops, and `Writer.wipe_level` refuses level 0. So
+no line of a surviving entry is deleted, and section 2 found every needed line live.
+
+### 4. The fix
+
+With `Analysis.rests_on_nothing store p e`, an entry is a root when its reason is empty AND it is
+a level start or settled over no hole (`Store.settled_over_lo`/`_hi` both empty, the same run
+of holes `Trace.holes_below`/`holes_above` compute for the line). A factless settle is then
+expanded like any settle, into the reasons of the holes' removers, by both walks (the memo's
+`cites_of` already folded holes, it was never asked). Its own level is no longer pinned,
+which is right because its line needs the level-0 unit and the hole lines and no decision. A DECISION
+that settles stays a root, because it is assumed and its settle step is `Search.bridges`' line,
+whose ancestors the nogood keeps through `protected` (M1-T55/D-0070).
+
+The root rule is shared with the 1UIP walk, so a factless settle at the conflict level is
+now resolved there as well instead of standing in the cut. Both cuts are sound. No run
+below learned a different clause because of it (the default lane is byte-identical).
+
+### 5. The failing-first tests
+
+- `test/models/opt_global_settles_hole_sat.fzn`, 7 variables of at most 5 values. At default
+  flags, `t = 3` punches `obj <> 3` at level 1, the first solution `obj = 4` installs
+  `obj <= 3`, and at the re-entry of level 2 that bound settles to `obj <= 2`, a factless
+  entry resting on level 1; a level-3 conflict rests on it. `f689aae`'s binary writes the
+  nogood `~e_ge_1 \/ p_ge_1` and 3.0.2 refuses it at line 44 at the RUP wording, and the fix
+  writes `~e_ge_1 \/ ~t_ge_3` (the only changed line) and the proof is VERIFIED, OPT 0.
+  Its stdout is the same under both binaries.
+- `test_analysis.ml` scene 7 (`test_factless_settle_is_expanded`) builds a hole at level 1, a
+  single-term row pushing `o <= 3` factlessly at level 2 and settling to `o <= 2`, a conflict
+  resting on it. With the old rule restored three checks fail (the closure names `[2]`, a set
+  under which brute force finds the model satisfiable), and with the fix the closure is `[2; 1]`,
+  the memo and the walk agree, and the entry's memo is the hole remover's level-1 citation.
+- No mutation lane, because no rule kind and no line shape is new. Only the decisions a
+  nogood names change.
+
+### 6. The sweep
+
+The knob `BAGUETTE_TEST_VALUE_CHOICE=median` (test-only, read from the environment, never a CLI flag, in
+`Search.median_values`, wrapped last, after `phased`) replaces every decision's value by
+`indomain_median`'s, so an interior median is an assignment everywhere. Run on `fataepyc-06`
+over the 183 suite models (`test/models/` minus PENDING, with the new one) and the lane
+corpus's 27 (instance, budget) pairs at their node budgets, every proof checked, with the
+fixed binary (`fix-50d9221`, md5 `68b3d753`) and the same code with the old root rule
+(`unfixed-50d9221`, `b17cd31c`):
+
+| configuration | suite, fixed | corpus, fixed | proofs changed by the fix |
+|---|---|---|---|
+| default | 183/183 VERIFIED; 182 byte-identical to `f689aae` | (the lane) | the new model only |
+| median | 183/183 | 27/27 | none |
+| `--search alternate --restarts luby --phase-saving` | 183/183 | 27/27 | the new model only |
+| `--search activity --restarts luby --phase-saving` | 183/183 | 27/27 | none |
+| median + alternate + `luby:1` + phase saving | 183/183 | 27/27 | 2 suite (`backjump_unsat`, `backjump_deep_unsat`), 1 corpus (`2012_mspsp_hard_01@10000`) |
+| median + activity + `luby:1` + phase saving + `--reuse-trail` | 183/183 | 27/27 | 6 corpus (`bacp-22`, `filters_dct_2_2`, `rcpsp_12`, `foxgeesecorn_54`, `mspsp_hard_01`, `pigment15b`) |
+
+1 233 runs, every one VERIFIED with the fix. Under the old rule the only refusal in the
+1 233 was the new model under `alternate`. The shape occurs in the ten runs the last column
+names, and there the checker found the hole some other way (the disequality's own `.opb`
+rows, when its operands' facts are derivable), so those nogoods were unsupported by their
+trace but not refused. That is also why the 189-model gates never saw it. With the fix, hrc
+under B verifies (OPT 2, 10 328 nodes instead of 10 117) and under A, on `457eb7f` plus this
+commit, verifies too (BOUNDS 2, 8 086 nodes), and A without the fix still refuses at line 620 348
+(`main-9fb9b09.exe`, re-run).
+
+### 7. What changes on purpose
+
+A proof changes only where a factless push settled over a hole that the closure reached, and the
+nogood names the hole's levels instead of the push's. The differential lane's nine recorded
+configurations are byte-identical (232/232 with the fixed binary). The three strategy
+configurations (`restarts`, `activity`, `alternate`) had no reference on this branch when it
+was measured; their gate-53 references are compared at the merge (section 8 if any differ).
+
+### 8. The lane at the merge (2026-11-19, after `origin/main` at `681a9e6` was merged in)
+
+The three strategy configurations' references (gate 53) are on the branch now. Run with this
+branch's binary, every run of `restarts`, `activity` and `alternate`, plain and debug, equals
+its reference, so the fix changes no lane run under any configuration. The only differing runs
+are `fifo` and `lbd`, identical under current main's binary (D-0149 section 5).
+
+## D-0149  M6-T23: the `--time-limit` overshoot on cargo and cable was the stop never being asked, inside a PB analysis and inside a conflict's trace, and not the finaliser; and D-0137 section 13.2's alarm is gone on main
+
+Status: DECIDED
+Date: 2026-11-19
+Task: M6-T23 (agent-proofbugs, `wave50-proofbugs`).
+Touches: `lib/core/pb_analysis.ml` (`?stop`, the `Stopped` fallback), `lib/core/ladder.ml`
+(`lift ?stop`, `Ladder.Stopped`), `lib/core/trace.ml` (`emit ?stop`, `Trace.Stopped`),
+`lib/core/justify.ml` (`operand_hash`), `lib/core/search.ml` (the conflict arm and
+`pb_at_conflict` pass `cfg.stop`; `stats.stopped_in_trace`), `bin/main.ml` (`at=trace`).
+Follows D-0136 (M6-T21: `retire`'s sweep, the poll inside `Engine.propagate`, `fired=`),
+D-0137 section 13.2 and 13.3, D-0145 (J1, the memo's hash).
+
+### 1. Finding 2 (D-0137 section 13.2): no alarm on current main
+
+`BAGUETTE_DEBUG=1` on `2017_hrc_exp1-1-5670`, binary `f689aae` (which has D-0142 section 1's
+`f9bf6c4`), 1 500 s limit: at default flags OPT 2 in 8 343 nodes with and without the proof
+(the 296 MB proof VERIFIED), under `--search activity --restarts luby --phase-saving` OPT in
+3 115 nodes, under `--search alternate --restarts luby --phase-saving` OPT in 10 117 nodes.
+Neither `Not_at_fixpoint("I-P7: ...")` nor `Bad_watch("M6-T22: ...")` fired in any of the
+four. Both were D-0142 section 1's two false alarms, measured on `28c4a51c`, which predates
+the fix; engine.ml and prop/clause.ml need nothing. (The `alternate` run is D-0148's refused
+proof, and no invariant fired there either, which D-0148 section 3 explains.)
+
+### 2. Finding 3: what the overshoot was
+
+D-0137 section 13.3 read the overshoot as the finaliser after the stop. Measured on
+`fataepyc-06` with `--time-limit 300` under an outer wall of 2 400 s, binary `f689aae`, the
+`limit:` line's `fired=` (D-0136) says otherwise on both instances. The time is before
+the stop says yes, inside one node, where nothing asks it.
+
+| instance | proof | `fired=` | exit | nodes, conflicts | where the time went (perf, from 302 s) |
+|---|---|---|---|---|---|
+| `2017_cargo_challenge01_0s_1913` | no | never | killed at 2 400 s | 461, 15 | one PB analysis |
+| `2017_cargo_challenge01_0s_1913` | yes | never | killed at 2 400 s | 461, 15 | the same |
+| `2020_cable_tree_wiring_R046` | no | 302.23 s | 302.70 s | 1 505, 71 | (none) |
+| `2020_cable_tree_wiring_R046` | yes | 1 500.09 s | 1 509.5 s | 254, 1 | the first conflict's trace |
+
+**Cargo, with or without the proof.** A frame-pointer build (`baguette-fp`, D-0145) put
+90.3 % of the run under `Pb_analysis.analyse` -> `step` -> `Ladder.lift` (89.7 %), whose fold
+adds one ladder row per rung with `Learned.combine` (56 %) and re-sorts the whole row in
+`Learned.make` each time (34 %), with the GC around it. The 16th conflict's analysis did not
+end in 2 100 s. D-0136 had found that conflict analysis needed no poll, which was true of
+the instances it measured.
+
+**Cable, with the proof.** 254 nodes and one conflict, 252 levels down. Its `Trace.emit`
+writes the whole branch's lines, 1.9 GB, and from 302 s to 452 s 93.3 % of the samples were
+in `Justify.find_in_bucket`'s `==` walk. An instrumented build counted 1.65 M memo lookups
+for 300 M bucket steps, in buckets of 4 700 to 6 500 entries, each a chain
+`Combine [k * Combine [... Combine [Model_row i; ...]]]` differing from its neighbours only
+in row ids two to seven levels down. The shallow hash read a `Term` operand by its
+constructor alone (it did before J1 as well, since J1 changed the hash function and not its depth).
+The stop is asked at node entry and inside propagation, and a trace is neither.
+
+**The finaliser was never the time.** From `fired=` to exit, 6.6 s on cable with the proof,
+0.5 s without it.
+
+### 3. The fixes
+
+1. **PB analysis asks the stop** (`974c77d`). `Pb_analysis.analyse ?stop` checks it before
+   every elimination, and `Ladder.lift ?stop` before every rung's `combine`. Yes gives the
+   new fallback `Stopped`, and the conflict arm carries on with the clause path, exactly as
+   for any other fallback, so the stop lands at the next node entry. Nothing PB analysis
+   abandons has been written.
+2. **A conflict's trace asks the stop** (`3523070`, every entry since `aab586a`).
+   `Trace.emit ?stop` checks it before each trail entry. Yes restores the writer's level
+   and raises `Trace.Stopped`, which the conflict arm turns into `Limit_hit`
+   (`stats.stopped_in_trace`, `at=trace` on the `limit:` line). The lines already written
+   are a valid prefix, because each is RUP from the model and from earlier lines (oldest
+   first, Trace's header), and nothing else of the node is on the page yet.
+3. **The memo hashes an operand by its content** (`bc8aa58`). `operand_hash` walks a
+   `Term`'s, `Cut`'s or `Resolve`'s operand depth first, over at most 48 nodes and
+   `hash_width` elements per list. A nested `Deferred` is a constant whatever its `forced`
+   says, so forcing a thunk still cannot move a key, and the equality is still `==`, so no
+   emitted byte can change. Measured, 3.96 M lookups per 300 M steps (was 1.65 M), the
+   biggest bucket 388 entries. Those 388 are structurally IDENTICAL, one physical copy per
+   decision level of the same `Combine` rebuilt by its propagator, which no hash separates.
+   That is what is left of the walk, and the remedy is D-0140's J1 alternative (an id
+   stamped in each explanation at creation), which needs an `Explanation` field and a
+   record of its own. Not done here.
+
+In every run without a limit the stop is `fun () -> false` (or the node budget's
+`nodes > n`, which cannot turn true inside a node), so fixes 1 and 2 change nothing there.
+
+### 4. After
+
+Same machine, same flags, every stopped proof checked by 3.0.2 (64 GB cap for the checker,
+whose runs on these 1.9 GB `.opb` files need 7 to 16 GB):
+
+| instance, limit | binary | `fired=` | `limit:` wall | process exit | `at=` | proof |
+|---|---|---|---|---|---|---|
+| cargo, 300 s, no proof | `f689aae` | never | - | killed at 2 400 s | - | - |
+| cargo, 300 s, no proof | `85cc1b0` | 300.07 s | 300.07 s | 300.11 s | node | - |
+| cargo, 300 s, proof | `f689aae` | never | - | killed at 2 400 s | - | truncated |
+| cargo, 300 s, proof | `85cc1b0` | 300.05 s | 300.06 s | 300.12 s | node | VERIFIED NO CONCLUSION |
+| cable, 300 s, no proof | `f689aae` | 302.23 s | 302.23 s | 302.70 s | node | - |
+| cable, 300 s, no proof | `85cc1b0` | 300.32 s | 300.32 s | 300.73 s | node | - |
+| cable, 300 s, proof | `f689aae` | 1 500.09 s | 1 506.66 s | 1 509.52 s | node | (not checked) |
+| cable, 300 s, proof | `85cc1b0` | 304.82 s | 312.05 s | 314.96 s | node | VERIFIED NO CONCLUSION |
+| cable, 300 s, proof | `aab586a` | 300.09 s | 307.11 s | 310.40 s | trace | see section 5 |
+| cable, 120 s, proof | `85cc1b0` | 123.88 s | 133.40 s | - | trace | VERIFIED NO CONCLUSION |
+| cable, 120 s, proof | `aab586a` | 120.04 s | 129.74 s | 131.13 s | trace | VERIFIED NO CONCLUSION |
+
+Stop to exit, the finaliser's share, is 0.04 to 0.07 s on cargo, 7 to 10 s on cable with the
+proof (deleting the live ids of 252 open levels and flushing a 1.2 to 2.5 GB file), as
+before the fixes. The overshoot past the limit goes from more than 2 100 s to 0.1 s on cargo
+and from 1 209 s to 10 s on cable. Cargo's search is unchanged up to the stop (461 nodes and
+15 conflicts both ways). With `85cc1b0`, cable's first conflict wrote its whole 1.9 GB trace
+in about 280 s where `f689aae` took 1 200 s (fix 3 alone), and the stop then landed at the
+next node entry. `aab586a` polls at every trace entry where `85cc1b0` polled at every 64th,
+which is why it stops inside the second conflict's trace and why the 120 s run fires at
+120.04 s rather than 123.88 s.
+
+### 5. What the fixes cost, and what they change
+
+- **Bytes.** Fix 3 is bucketing only, and measured so. Cable at a 300-node budget with the
+  proof writes the same stdout, `.opb` and 1 887 164 408-byte `.pbp` (md5 `eee608b4`) under
+  `f689aae` in 1 847 s and under `bc8aa58` in 278 s (6.6 times faster, the same 21 GB peak).
+  Fixes 1 and 2 act only when the stop says yes inside a node, which a run without a time
+  limit never does, nor a node budget (`nodes > n` cannot change inside a node).
+- **The suite and the lane.** On the merged branch, 193 suite models with the proof are
+  byte-identical to current main's binary (`681a9e6`) except D-0148's new model. In the
+  differential lane, 301 plain and 289 debug runs, every run equals its reference except
+  48 plain and 39 debug runs in `fifo` and `lbd`. The `fifo` and `lbd` runs (51 plain, 49
+  debug) are byte-identical (stdout, `.opb`, `.pbp`, observations) between this branch's
+  binary and `681a9e6`'s, so those differences are main's, from the retention hook merged
+  after the references were recorded (`36c1312`, D-0139). Nothing in this row changes a
+  lane run.
+- **The M6-T9 lane, found by the gate.** `test_endtoend`'s stopped-satisfaction lane uses a
+  stop that COUNTS its calls (`m6_after 6`), and the new polls asked it inside the first
+  conflict's trace, so it stopped there instead of at the 7th node. D-0136 had already made
+  `stop_poll_runs = 0` the node-entry-only contract for such a predicate. The two new polls
+  follow it now (`inner_stop`, `c707051`) and the lane states it in its config, which is
+  what it always meant: it had run on the default config only because its scene never
+  reached `Engine.propagate`'s 128-run poll.
+- **Not done.** The 388-copy buckets (section 3, fix 3) are what remains of the memo walk;
+  the remedy is an explanation id, which is D-0140 J1's alternative and needs its own
+  record. The finaliser's 7 to 10 s on a 2 GB cable proof is the `del` of every live id of
+  252 open levels and the flush, linear, and was not touched.
+  `2020_hoist-benchmark-for-minizinc_PU_3_8_5` (D-0137 section 13.3, strategy flags only)
+  was not re-measured.

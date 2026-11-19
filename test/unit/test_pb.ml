@@ -683,6 +683,233 @@ let test_break_backjump_on_pb () =
   cleanup honest;
   cleanup broken
 
+(* ---------------------------------------------------------------------------
+   M11-complexity-T3 (D-0142, D-0140's E3 (a)): the pass over the LAYOUT is the list pass
+
+   lib/core/prop/pb.ml's pass used to survey the row into a list, group it through a hash
+   table, filter the forceable terms and keep the strongest with a [List.exists] per
+   forceable term. It now walks a layout built once per row (term array, (variable,
+   polarity) groups in dominance order, three scratch arrays). The claim is that nothing
+   observable changed: the same outcome, the same trail entries in the same order, the
+   same reason facts, the same explanation (including the PHYSICAL sharing of [expl_all]
+   that lib/core/justify.ml's memo relies on), and the same [Checked.Overflow] with the
+   same message.
+
+   [Ref_pass] below is the old pass, kept here verbatim as the SPECIFICATION, and the
+   test runs both on the same row from the same domains. The rows are random: several
+   rungs of one variable at both polarities (the ladder groups [effective] and the
+   strongest rule are about), repeated literals (ties), coefficients 1 to 3 and every
+   degree from 1 to past the coefficient sum (conflicts), over narrowed boxes. Domains
+   stay at 0..4. Two hand-built rows then overflow [Checked.add] inside [effective] with
+   their terms in each order, because the overflow MESSAGE names the operands and so
+   depends on the order of the addition, and the new pass sums in a different order. *)
+module Checked = Baguette_core.Checked
+module Reason = Baguette_core.Reason
+module Explanation = Baguette_core.Explanation
+
+module Ref_pass = struct
+  let survey store (t : Pb.t) =
+    List.map (fun (tm : Pb.term) -> (tm, Pb.status store tm.a)) t.terms
+
+  let slack_of degree surveyed =
+    List.fold_left
+      (fun s ((tm : Pb.term), st) ->
+        if st = Pb.Unsat_lit then s else Checked.add s tm.coeff)
+      (-degree) surveyed
+
+  let reason_clause (t : Pb.t) surveyed ~keep =
+    let picked = List.filter (fun (tm, st) -> keep tm st) surveyed in
+    let facts =
+      List.filter_map
+        (fun ((tm : Pb.term), st) ->
+          if st = Pb.Unsat_lit then Some (Pb.falsity_fact tm.a) else None)
+        picked
+    in
+    let expl =
+      if List.length picked = t.n_terms then t.expl_all
+      else
+        Explanation.clause (List.map (fun ((tm : Pb.term), _) -> Pb.pb_lit tm.a) picked)
+    in
+    (expl, facts)
+
+  let assign t store surveyed (tm : Pb.term) =
+    let a = tm.a in
+    let expl, facts =
+      reason_clause t surveyed ~keep:(fun u st -> u == tm || st = Pb.Unsat_lit)
+    in
+    let concludes =
+      Some
+        (if a.positive then Reason.at_least ~name:a.name ~decl:a.decl_lo a.k
+         else Reason.at_most ~name:a.name ~decl:a.decl_hi (a.k - 1))
+    in
+    let j = Reason.because ~concludes facts expl in
+    if a.positive then Store.set_lo store a.x a.k j
+    else Store.set_hi store a.x (a.k - 1) j
+
+  let conflict_of t store surveyed =
+    let expl, facts = reason_clause t surveyed ~keep:(fun _ st -> st = Pb.Unsat_lit) in
+    Propagator.Conflict (Store.conflict store (Reason.because ~concludes:None facts expl))
+
+  let effective surveyed (tm : Pb.term) =
+    let a = tm.a in
+    List.fold_left
+      (fun acc ((u : Pb.term), st) ->
+        if st = Pb.Unsat_lit then acc
+        else if Var.to_int u.a.x <> Var.to_int a.x then acc
+        else if u.a.positive <> a.positive then acc
+        else if a.positive then if u.a.k >= a.k then Checked.add acc u.coeff else acc
+        else if u.a.k <= a.k then Checked.add acc u.coeff
+        else acc)
+      0 surveyed
+
+  let strongest forceable ((tm : Pb.term), _) =
+    not
+      (List.exists
+         (fun ((u : Pb.term), _) ->
+           Var.to_int u.a.x = Var.to_int tm.a.x
+           && u.a.positive = tm.a.positive
+           && if tm.a.positive then u.a.k > tm.a.k else u.a.k < tm.a.k)
+         forceable)
+
+  let rec propagate t store =
+    if Pb.quiet store t then Propagator.Fixpoint else pass t store
+
+  and pass t store =
+    let surveyed = survey store t in
+    let slack = slack_of t.Pb.degree surveyed in
+    if slack < 0 then conflict_of t store surveyed
+    else
+      let forceable =
+        List.filter
+          (fun (tm, st) -> st = Pb.Open && effective surveyed tm > slack)
+          surveyed
+      in
+      let forced = List.filter (strongest forceable) forceable in
+      if forced = [] then Propagator.Fixpoint
+      else
+        let rec apply moved = function
+          | [] -> if moved then propagate t store else Propagator.Fixpoint
+          | (tm, _) :: rest -> (
+              match assign t store surveyed tm with
+              | Store.Changed -> apply true rest
+              | Store.Unchanged -> apply moved rest
+              | Store.Conflict e -> Propagator.Conflict e)
+        in
+        apply false forced
+end
+
+(* What one run SHOWED, as plain data: the outcome (with the conflict's reason), every
+   trail entry (variable, new box, reason facts, explanation literals and whether the
+   explanation is the row's shared [expl_all]), the final boxes, or the exception. *)
+let observe_run (row : Pb.t) store run =
+  let expl_of e =
+    let lits =
+      match e with Explanation.Clause ls -> List.map Lit.to_string ls | _ -> [ "?" ]
+    in
+    (lits, e == row.Pb.expl_all)
+  in
+  match run row store with
+  | exception e -> `Raised (Printexc.to_string e)
+  | r ->
+      let outcome =
+        match r with
+        | Propagator.Fixpoint -> `Fix
+        | Propagator.Conflict c ->
+            `Conflict (Reason.to_string c.Store.c_reason, expl_of c.Store.c_why)
+      in
+      let entries =
+        List.init (Store.trail_length store) (fun i ->
+            let e = Store.trail_entry store i in
+            ( Var.to_int e.Store.var,
+              (Domain.lo e.Store.now, Domain.hi e.Store.now),
+              Reason.to_string e.Store.reason,
+              expl_of (Store.explanation store e) ))
+      in
+      let boxes =
+        List.init (Store.n_vars store) (fun i ->
+            let d = Store.get store (Var.of_int i) in
+            (Domain.lo d, Domain.hi d))
+      in
+      `Ran (outcome, entries, boxes)
+
+let test_pass_layout () =
+  print_endline
+    "\n-- M11-complexity-T3 (D-0142, E3 (a)): the pass over the layout is the list pass";
+  let boxes = [ ("x", (0, 4)); ("y", (0, 4)); ("z", (0, 1)) ] in
+  let decl = decl_of boxes in
+  let rng = Random.State.make [| 0x0142 |] in
+  let trials = 3000 in
+  let same = ref 0 and prunes = ref 0 and conflicts = ref 0 and long_groups = ref 0 in
+  let first_diff = ref None in
+  for trial = 1 to trials do
+    let n = 1 + Random.State.int rng 9 in
+    let raw =
+      List.init n (fun _ ->
+          let nm, (lo, hi) = List.nth boxes (Random.State.int rng 3) in
+          let k = lo + 1 + Random.State.int rng (hi - lo) in
+          let l = if Random.State.bool rng then Lit.ge nm k else Lit.le nm (k - 1) in
+          (1 + Random.State.int rng 3, l))
+    in
+    let total = List.fold_left (fun s (c, _) -> s + c) 0 raw in
+    let degree = 1 + Random.State.int rng (total + 1) in
+    let narrowed =
+      List.map
+        (fun (nm, (lo, hi)) ->
+          let lo' = lo + Random.State.int rng (hi - lo + 1) in
+          let hi' = lo' + Random.State.int rng (hi - lo' + 1) in
+          (nm, (lo', hi')))
+        boxes
+    in
+    let s_new = store_of narrowed and s_ref = store_of narrowed in
+    let row = Option.get (Pb.of_terms s_new ~decl ~degree raw) in
+    let got = observe_run row s_new Pb.propagate in
+    let want = observe_run row s_ref Ref_pass.propagate in
+    if got = want then incr same else if !first_diff = None then first_diff := Some trial;
+    (match want with
+    | `Ran (`Conflict _, _, _) -> incr conflicts
+    | `Ran (_, _ :: _, _) -> incr prunes
+    | _ -> ());
+    let on_x (_, (l : Lit.t)) =
+      match l.v with Lit.Ge (nm, _) -> nm = "x" | _ -> false
+    in
+    if List.length (List.filter on_x raw) >= 3 then incr long_groups
+  done;
+  check_eq
+    (Printf.sprintf
+       "E3a: %d random rows, the layout pass and the list pass show the same outcome, \
+        trail, reasons, explanations and boxes (first difference: %s)"
+       trials
+       (match !first_diff with None -> "none" | Some i -> string_of_int i))
+    !same trials;
+  (* The draw has to reach what the layout is about, or the equality above is cheap. *)
+  check (Printf.sprintf "E3a: ...and %d of them prune (> 300)" !prunes) (!prunes > 300);
+  check
+    (Printf.sprintf "E3a: ...and %d of them conflict (> 300)" !conflicts)
+    (!conflicts > 300);
+  check
+    (Printf.sprintf "E3a: ...and %d of them put three or more rungs on x (> 500)"
+       !long_groups)
+    (!long_groups > 500);
+  (* The overflow inside [effective], with the two terms in each order. *)
+  let big = 1 lsl 61 in
+  let overflow_row terms =
+    let bx = [ ("x", (0, 4)) ] in
+    let s = store_of bx and s' = store_of bx in
+    let row = Option.get (Pb.of_terms s ~decl:(decl_of bx) ~degree:big terms) in
+    (observe_run row s Pb.propagate, observe_run row s' Ref_pass.propagate)
+  in
+  List.iter
+    (fun (label, terms) ->
+      let got, want = overflow_row terms in
+      check
+        (Printf.sprintf "E3a: %s -- the overflow raises, in both passes" label)
+        (match want with `Raised _ -> true | _ -> false);
+      check (Printf.sprintf "E3a: %s -- ...with the same message" label) (got = want))
+    [
+      ("[x>=1] first", [ (big + 1, Lit.ge "x" 1); (big - 1, Lit.ge "x" 2) ]);
+      ("[x>=2] first", [ (big - 1, Lit.ge "x" 2); (big + 1, Lit.ge "x" 1) ]);
+    ]
+
 let () =
   test_row_beats_clause ();
   test_order_literal_scene ();
@@ -695,6 +922,7 @@ let () =
   test_level_shape ();
   test_break_backjump_on_pb ();
   test_retention_citations ();
+  test_pass_layout ();
   if !failures > 0 then (
     Printf.printf "\n%d failure(s)\n" !failures;
     exit 1)

@@ -159,7 +159,7 @@ bench: build
 # each change; the gate script runs, right after `make check`,
 #
 #   make diff ARGS="--tier all -j 24"    # hard: fails on any difference
-#   make diff ARGS="--debug --tier all -j 24"   # the debug pass (RED on a8d2924: D-0141 s5)
+#   make diff ARGS="--debug --tier all -j 24"   # BAGUETTE_DEBUG=1 at <= 1 500 nodes, ~7 min
 #   make scaling ARGS="-j 16"            # REPORT-ONLY until M11-complexity-T6 (--enforce)
 #
 # `make diff` FAILS on any difference from bench/diff/reference/; the rule for

@@ -351,30 +351,40 @@ let test_a_exactly_once () =
       cleanup r.r_dir)
     scenes
 
-(* M2-L12, the other side of the lane above: the SHIPPED build, where the same cap
-   evicts NOTHING.
+(* M2-L12, the other side of the lane above: the SHIPPED build, where every learned
+   constraint gets a runtime consumer -- a unit becomes a global bound tightening, a wider
+   clause a registered [Clause.Learned_clause] instance -- and is CITED for the search.
 
-   This is not a weaker version of the check above, it is the finding. Every learned
-   constraint on these two scenes gets a runtime consumer -- a unit becomes a global
-   bound tightening, a wider clause a registered [Clause.Learned_clause] instance -- and
-   [Retention.reduce] refuses to evict a cited constraint, so the cap is SOFT. I-X2 still
-   has to hold: everything the policy could not evict has to be swept at the end, which
-   is the adding-up check repeated here against a zero eviction count. *)
+   Until the D-0139 hook (lib/core/search.ml routes both instance kinds through
+   [Retention.gate], main 36c1312) this lane asserted that the cap evicts NOTHING here,
+   because [reduce] refused every cited constraint. With the hook, a constraint whose
+   consumer is a gated instance is evictable unless [Retention.locked_instances] names it,
+   and evicting it detaches the instance first; a learned UNIT is cited without a gate and
+   stays pinned. So the assertions are now: eviction happens and goes through the gate
+   (not vacuous: [deep] detaches, measured 2026-11-19), the unit side is still refused and
+   counted rather than raised, and I-X2 adds up with both sources of deletion carrying
+   traffic. The proof must verify either way, which is the lane's real obligation. *)
 let test_a_pinned_on_the_shipped_build () =
+  let detached = ref 0 and pinned = ref 0 in
   List.iter
     (fun (name, src, cap) ->
       let r = run ~policy:(Retention.lbd ~cap) src in
       let db = r.r_db in
       let title s = Printf.sprintf "(a) %s shipped: %s" name s in
+      detached := !detached + Retention.n_detached db;
+      (* Refusals of an UNGATED consumer: [n_pinned] also counts the locked. *)
+      pinned := !pinned + Retention.n_pinned db - Retention.n_locked db;
       check
-        (title "every learned constraint has a consumer, so the policy evicts NOTHING")
-        (Retention.n_evicted db = 0 && Retention.n_cited db > 0);
+        (title "every learned constraint has a consumer (all cited)")
+        (Retention.n_cited db > 0);
       check
-        (title "...and the refusals are counted rather than raised")
-        (Retention.n_pinned db > 0);
+        (title
+           "every detach is an eviction: a cited constraint leaves only through its gate")
+        (Retention.n_detached db <= Retention.n_evicted db);
       check
-        (title "I-X2 still adds up: what the cap could not evict, the sweep took")
-        (Retention.n_added db = Retention.n_swept db && Retention.size db = 0);
+        (title "I-X2 adds up: what the cap evicted plus what the sweep took is everything")
+        (Retention.n_added db = Retention.n_evicted db + Retention.n_swept db
+        && Retention.size db = 0);
       check
         (title "no id is cited by two `del` rules")
         (not (has_duplicate (del_citations r.r_proof)));
@@ -383,7 +393,15 @@ let test_a_pinned_on_the_shipped_build () =
         (r.r_audit_error = None);
       expect_accepted ~title:(title "the proof") ~dir:r.r_dir ~opb:r.r_opb ~pbp:r.r_pbp;
       cleanup r.r_dir)
-    scenes
+    scenes;
+  check
+    "(a) shipped: the hook makes eviction real -- some cited constraint was detached and \
+     evicted (the lane is not vacuous)"
+    (!detached > 0);
+  check
+    "(a) shipped: a consumer without a gate (a learned unit) is still refused, and the \
+     refusal is counted rather than raised"
+    (!pinned > 0)
 
 (* The guard, at the module level: a second retirement of one id is refused, and the
    refusal happens BEFORE anything is written. *)
@@ -695,20 +713,19 @@ let test_c_bytes_both_ways () =
       cleanup on.r_dir)
     scenes
 
-(* M2-L12: the same comparison on the SHIPPED build, where it comes out the other way.
+(* M2-L12: the same comparison on the SHIPPED build.
 
-   D-0051's cap sweep was re-run for this row (lib/core/retention.ml's header has the
-   table) and its conclusion is that eviction still buys nothing -- but for a new reason:
-   what a policy may evict has no consumer, and what has a consumer it may not evict. On
-   these two scenes that is total: nothing is evicted at any cap, so the proof under
-   `lbd:<cap>` is BYTE-IDENTICAL to the proof under keep_all.
-
-   Asserting byte-identity is the opposite of what a before/after usually wants, and it is
-   asserted here for the same reason CLAUDE.md distrusts it: identical bytes are no
-   evidence UNLESS you know why. Here the why is checked beside it -- zero evicted, a
-   positive pinned count -- so the identity is a measurement and not two runs of the same
-   binary by accident. *)
+   Before the D-0139 hook nothing was evicted here at any cap, so the proof under
+   `lbd:<cap>` was BYTE-IDENTICAL to the proof under keep_all, and this lane asserted that
+   identity together with its reason (zero evicted, a positive pinned count). With the hook
+   a gated constraint is evictable, and on [deep] the cap now evicts (measured 2026-11-19);
+   on [bool] it still does not. The assertion is therefore the reason-and-effect pair
+   itself, which is what made the old identity a measurement rather than two runs of one
+   binary by accident: the proofs are byte-identical EXACTLY when the cap evicted nothing.
+   Both proofs must verify either way, and at least one scene must evict or the pair is
+   only ever tested on its identity side. *)
 let test_c_bytes_on_the_shipped_build () =
+  let evicted = ref 0 in
   List.iter
     (fun (name, src, cap) ->
       let off = run ~policy:Retention.keep_all src in
@@ -717,15 +734,18 @@ let test_c_bytes_on_the_shipped_build () =
       expect_accepted ~title:(title "policy OFF") ~dir:off.r_dir ~opb:off.r_opb
         ~pbp:off.r_pbp;
       expect_accepted ~title:(title "policy ON") ~dir:on.r_dir ~opb:on.r_opb ~pbp:on.r_pbp;
+      evicted := !evicted + Retention.n_evicted on.r_db;
       check
-        (title "the cap evicted nothing, because everything under it is cited")
-        (Retention.n_evicted on.r_db = 0 && Retention.n_pinned on.r_db > 0);
+        (title "the two proofs are byte-identical exactly when the cap evicted nothing")
+        (off.r_proof = on.r_proof = (Retention.n_evicted on.r_db = 0));
       check
-        (title "...so the two proofs ARE byte-identical, and that is the finding")
-        (off.r_proof = on.r_proof);
+        (title "an eviction under the cap went through a gate or had no consumer")
+        (Retention.n_detached on.r_db <= Retention.n_evicted on.r_db);
       cleanup off.r_dir;
       cleanup on.r_dir)
-    scenes
+    scenes;
+  check "(c) shipped: some scene evicted, so both sides of the pair are exercised"
+    (!evicted > 0)
 
 (* ==================================================== determinism and the policy axis *)
 
@@ -763,6 +783,327 @@ let test_policy_axis () =
       cleanup r.r_dir)
     (Retention.policies ~cap:2)
 
+(* ======================================================= (d) D-0139: tiers and gates *)
+
+(* A synthetic page for the lanes below: a model row [uu >= 2], its negation (so the
+   proof can close on a contradiction), and a row over three more names so that a
+   learned clause can be any superset of [uu >= 2] -- every such clause is RUP against
+   the first row, which is what lets these lanes run the CHECKER over a database whose
+   LBDs they choose. *)
+type page = {
+  pg_dir : string;
+  pg_opb : string;
+  pg_pbp : string;
+  pg_oc : out_channel;
+  pg_w : Writer.t;
+  pg_ctx : Justify.ctx;
+  pg_pos : Writer.cid;
+  pg_neg : Writer.cid;
+}
+
+let open_page prefix =
+  let dir = scratch prefix in
+  let opb = Filename.concat dir "m.opb" and pbp = Filename.concat dir "m.pbp" in
+  let e = Encoding.create () in
+  let pos = Encoding.add_constraint e (Opb.ge [ (1, Lit.ge "uu" 2) ] 1) in
+  let neg = Encoding.add_constraint e (Opb.ge [ (1, Lit.negate (Lit.ge "uu" 2)) ] 1) in
+  ignore
+    (Encoding.add_constraint e
+       (Opb.ge [ (1, Lit.ge "vv" 1); (1, Lit.ge "ww" 1); (1, Lit.ge "xx" 1) ] 1));
+  let ooc = open_out opb in
+  Encoding.write_opb e ooc;
+  close_out ooc;
+  let oc = open_out pbp in
+  let w = Writer.create ~audit:true oc in
+  Encoding.start_proof e w;
+  let ctx = Justify.create ~writer:w ~encoding:e in
+  {
+    pg_dir = dir;
+    pg_opb = opb;
+    pg_pbp = pbp;
+    pg_oc = oc;
+    pg_w = w;
+    pg_ctx = ctx;
+    pg_pos = pos;
+    pg_neg = neg;
+  }
+
+(* The k-th distinct learned clause: [uu >= 2] plus the k-th non-empty subset of the
+   other three names, so keys differ and the duplicate count stays out of the way. *)
+let learned_row k =
+  let others = [ Lit.ge "vv" 1; Lit.ge "ww" 1; Lit.ge "xx" 1 ] in
+  let pick = List.filteri (fun i _ -> (k lsr i) land 1 = 1) others in
+  Learned.of_clause (Lit.ge "uu" 2 :: pick)
+
+(* Introduce one learned clause with the LBD the lane asks for, and run [reduce] after
+   it -- the order lib/core/search.ml keeps (add, then reduce, once per learned
+   constraint). Returns the id and what that reduce evicted. *)
+let learn pg db k ~lbd =
+  let row = learned_row k in
+  let cid = Learned.introduce pg.pg_ctx row ~origin:"D-0139 lane" in
+  ignore (Retention.add db ~cid ~row ~lbd ~origin:"D-0139 lane");
+  (cid, Retention.reduce db pg.pg_ctx)
+
+(* Close the page: sweep, contradiction, conclusion, and the checker over it. *)
+let close_page ~title pg db =
+  Retention.release_all db;
+  ignore (Retention.retire_all db pg.pg_ctx);
+  let contra =
+    Writer.pol pg.pg_w ~origin:"contradiction" Pol.(sum [ id pg.pg_pos; id pg.pg_neg ])
+  in
+  let audit =
+    try
+      Writer.conclusion pg.pg_w (Writer.Unsat (Some contra));
+      None
+    with Writer.Audit_failed r -> Some r
+  in
+  close_out pg.pg_oc;
+  check (title ^ ": the I-X2 audit is clean at the conclusion") (audit = None);
+  let proof = read_file pg.pg_pbp in
+  check
+    (title ^ ": no id is cited by two `del` rules")
+    (not (has_duplicate (del_citations proof)));
+  expect_accepted ~title ~dir:pg.pg_dir ~opb:pg.pg_opb ~pbp:pg.pg_pbp;
+  cleanup pg.pg_dir
+
+(* A glue clause is never evicted; a local one is evicted ON SCHEDULE, the worst half of
+   the local tier, at [first] and then [first + k * inc] constraints later; and every
+   learned id is deleted exactly once across the evictions and the sweep. The schedule
+   below is worked by hand from the comment on [Retention.tier_params], so a change to
+   the ranking or the schedule reddens a named check rather than shifting a count. *)
+let test_d_tiers_on_schedule () =
+  let params = { Retention.core = 2; mid = 6; first = 4; inc = 2; mid_every = 1000 } in
+  let pg = open_page "baguette_ret_tiers" in
+  let db = Retention.create ~policy:(Retention.tiered ~params ()) () in
+  let all = ref [] in
+  let step k ~lbd =
+    let cid, ev = learn pg db k ~lbd in
+    all := cid :: !all;
+    (cid, ev)
+  in
+  let glue_a, e1 = step 1 ~lbd:1 in
+  let l1, e2 = step 2 ~lbd:9 in
+  let l2, e3 = step 3 ~lbd:9 in
+  let l3, e4 = step 4 ~lbd:8 in
+  check "(d) tiers: nothing is evicted before [first] constraints" (e1 @ e2 @ e3 = []);
+  check
+    "(d) tiers: the first reduction, at constraint 4, evicts the worst half of the local \
+     tier -- the oldest of the two LBD-9 clauses"
+    (e4 = [ l1 ]);
+  let glue_b, e5 = step 5 ~lbd:2 in
+  let mid_1, e6 = step 6 ~lbd:4 in
+  let _l4, e7 = step 7 ~lbd:7 in
+  let _l5, e8 = step 8 ~lbd:7 in
+  let _l6, e9 = step 9 ~lbd:7 in
+  check "(d) tiers: nothing between reductions (the next is at 4 + first + 1 * inc = 10)"
+    (e5 @ e6 @ e7 @ e8 @ e9 = []);
+  let l7, e10 = step 10 ~lbd:12 in
+  check
+    "(d) tiers: the second reduction evicts the worst three of six local entries: the \
+     two left unused since the first reduction, then -- the four new ones all being in \
+     their grace -- the highest LBD"
+    (e10 = [ l2; l3; l7 ]);
+  check "(d) tiers: exactly two reductions ran" (Retention.n_reductions db = 2);
+  check "(d) tiers: both glue clauses are still held"
+    (Retention.holds db glue_a && Retention.holds db glue_b);
+  check "(d) tiers: the mid-tier clause is still held" (Retention.holds db mid_1);
+  check "(d) tiers: added = evicted + live"
+    (Retention.n_added db = Retention.n_evicted db + Retention.size db);
+  close_page ~title:"(d) tiers" pg db;
+  check "(d) tiers: added = evicted + swept, nothing held"
+    (Retention.n_added db = Retention.n_evicted db + Retention.n_swept db
+    && Retention.size db = 0);
+  check "(d) tiers: every introduced id was retired"
+    (List.for_all (Retention.was_retired db) !all)
+
+(* Oh's tier 2: a mid entry not used between two checks is demoted to local, and one
+   that WAS used (its gated instance propagated) stays. A new entry is in its grace at
+   the first check it meets (CaDiCaL's rule, see [Retention.tier_params]), so demotion
+   takes two checks. Uses a gate because "used" is only ever observed through one. *)
+let test_d_mid_demotion () =
+  let params = { Retention.core = 2; mid = 6; first = 1000; inc = 0; mid_every = 3 } in
+  let pg = open_page "baguette_ret_mid" in
+  let db = Retention.create ~policy:(Retention.tiered ~params ()) () in
+  let store =
+    Store.create ~names:[| "a" |] ~domains:[| Baguette_core.Domain.make 0 3 |]
+  in
+  let m_idle, _ = learn pg db 1 ~lbd:4 in
+  let m_busy, _ = learn pg db 2 ~lbd:5 in
+  let inst =
+    {
+      Baguette_core.Propagator.id = 0;
+      inst_name = "fake";
+      inst_consistency = Baguette_core.Propagator.Checking;
+      inst_vars = [];
+      run =
+        (fun s ->
+          Store.with_running s 0 (fun () ->
+              ignore
+                (Store.set_lo s (Baguette_core.Var.of_int 0) 1
+                   (Baguette_core.Reason.because ~concludes:None Baguette_core.Reason.none
+                      (Baguette_core.Explanation.model_row 1))));
+          Baguette_core.Propagator.Fixpoint);
+      inst_row = Baguette_core.Propagator.no_row;
+      inst_advise = Baguette_core.Propagator.advise_always;
+      inst_watched = None;
+      inst_idempotent = false;
+    }
+  in
+  let gated = Retention.gate db store ~cid:m_busy inst in
+  check "(d) mid: a fresh LBD-4 entry is in the mid tier"
+    (match Retention.entry_of db m_idle with
+    | Some e -> Retention.entry_tier e = Retention.Mid
+    | None -> false);
+  let _, _ = learn pg db 3 ~lbd:1 in
+  check "(d) mid: at the first check both new entries are in their grace and stay mid"
+    (List.for_all
+       (fun c ->
+         match Retention.entry_of db c with
+         | Some e -> Retention.entry_tier e = Retention.Mid
+         | None -> false)
+       [ m_idle; m_busy ]);
+  ignore (gated.Baguette_core.Propagator.run store);
+  List.iter (fun k -> ignore (learn pg db k ~lbd:1)) [ 4; 5; 6 ];
+  check "(d) mid: the unused mid entry was demoted to local at the second check"
+    (match Retention.entry_of db m_idle with
+    | Some e -> Retention.entry_tier e = Retention.Local
+    | None -> false);
+  check "(d) mid: the entry whose instance propagated stays mid"
+    (match Retention.entry_of db m_busy with
+    | Some e -> Retention.entry_tier e = Retention.Mid
+    | None -> false);
+  close_page ~title:"(d) mid" pg db
+
+(* The gate itself. Under keep-all it is the identity (the default build runs the very
+   closure it ran before D-0139). Under a detaching policy, a gated constraint whose
+   instance has a trail entry on the trail is LOCKED -- refused and counted -- and once
+   the entry is popped it is evicted, after which the instance is off: it never runs and
+   it declines every wake. The most recent gated conflict is locked too. The page is then
+   closed and checked, so exactly-once holds across the gated evictions and the sweep. *)
+let test_d_gate () =
+  let module P = Baguette_core.Propagator in
+  let fake ~id ~calls ~conflict =
+    {
+      P.id;
+      inst_name = "fake";
+      inst_consistency = P.Checking;
+      inst_vars = [];
+      run =
+        (fun s ->
+          incr calls;
+          Store.with_running s id (fun () ->
+              let j =
+                Baguette_core.Reason.because ~concludes:None Baguette_core.Reason.none
+                  (Baguette_core.Explanation.model_row 1)
+              in
+              if conflict then P.Conflict (Store.conflict s j)
+              else (
+                ignore (Store.set_lo s (Baguette_core.Var.of_int 0) 1 j);
+                P.Fixpoint)));
+      inst_row = P.no_row;
+      inst_advise = P.advise_always;
+      inst_watched = None;
+      inst_idempotent = false;
+    }
+  in
+  let store =
+    Store.create ~names:[| "a" |] ~domains:[| Baguette_core.Domain.make 0 3 |]
+  in
+  (* keep-all: the identity. *)
+  let db0 = Retention.create ~policy:Retention.keep_all () in
+  let pg0 = open_page "baguette_ret_gate0" in
+  let c0, _ = learn pg0 db0 1 ~lbd:3 in
+  let i0 = fake ~id:0 ~calls:(ref 0) ~conflict:false in
+  check "(d) gate: under keep-all the instance comes back physically unchanged"
+    (Retention.gate db0 store ~cid:c0 i0 == i0);
+  close_page ~title:"(d) gate keep-all" pg0 db0;
+  (* fifo:0 -- every reduce wants everything gone. *)
+  let pg = open_page "baguette_ret_gate" in
+  let db = Retention.create ~policy:(Retention.fifo ~cap:0) () in
+  let row = learned_row 1 in
+  let c1 = Learned.introduce pg.pg_ctx row ~origin:"gated" in
+  ignore (Retention.add db ~cid:c1 ~row ~lbd:3 ~origin:"gated");
+  let calls1 = ref 0 in
+  let g1 = Retention.gate db store ~cid:c1 (fake ~id:0 ~calls:calls1 ~conflict:false) in
+  Retention.cite db ~cid:c1 ~by:"fake instance #0";
+  Store.new_level store;
+  ignore (g1.P.run store);
+  check "(d) gate: the gated run reached the propagator" (!calls1 = 1);
+  check "(d) gate: a constraint whose instance has an entry on the trail is LOCKED"
+    (Retention.reduce db pg.pg_ctx = [] && Retention.holds db c1);
+  check "(d) gate: ...and the refusal is counted as locked" (Retention.n_locked db = 1);
+  Store.backtrack store;
+  check "(d) gate: once the entry is popped, the gated constraint is evicted"
+    (Retention.reduce db pg.pg_ctx = [ c1 ] && not (Retention.holds db c1));
+  check "(d) gate: ...by detaching it, counted" (Retention.n_detached db = 1);
+  check "(d) gate: ...and its citation was released before the retirement"
+    (Retention.cited_by db c1 = None);
+  ignore (g1.P.run store);
+  check "(d) gate: a detached instance never reaches the propagator again" (!calls1 = 1);
+  check "(d) gate: a detached instance declines every wake"
+    (not (g1.P.inst_advise store (Baguette_core.Var.of_int 0)));
+  (* The most recent gated conflict is locked. *)
+  let row2 = learned_row 2 in
+  let c2 = Learned.introduce pg.pg_ctx row2 ~origin:"gated conflict" in
+  ignore (Retention.add db ~cid:c2 ~row:row2 ~lbd:3 ~origin:"gated conflict");
+  let g2 = Retention.gate db store ~cid:c2 (fake ~id:1 ~calls:(ref 0) ~conflict:true) in
+  Retention.cite db ~cid:c2 ~by:"fake instance #1";
+  check "(d) gate: the conflicting run's result is passed through"
+    (match g2.P.run store with P.Conflict _ -> true | P.Fixpoint -> false);
+  check "(d) gate: the most recent gated conflict is LOCKED, with an empty trail"
+    (Store.trail_length store = 0
+    && Retention.reduce db pg.pg_ctx = []
+    && Retention.holds db c2);
+  check "(d) gate: a gate for an id the database does not hold is refused"
+    (try
+       ignore
+         (Retention.gate db store ~cid:(c2 + 99)
+            (fake ~id:2 ~calls:(ref 0) ~conflict:false));
+       false
+     with Retention.Not_owned _ -> true);
+  close_page ~title:"(d) gate" pg db;
+  check "(d) gate: added = evicted + swept"
+    (Retention.n_added db = Retention.n_evicted db + Retention.n_swept db)
+
+(* The policy through a real search. On the M2-L4 build (no consumer) it evicts and the
+   proof is accepted. On the shipped build every learned constraint has a consumer, and
+   since the D-0139 hook (main 36c1312) lib/core/search.ml routes the clause and PB
+   instances through [Retention.gate], so the policy evicts what is not locked and leaves
+   the learned units (cited without a gate) -- and the proof is accepted. *)
+let test_d_tiered_in_a_search () =
+  let policy =
+    Retention.tiered
+      ~params:{ Retention.core = 0; mid = 0; first = 1; inc = 0; mid_every = 1 }
+      ()
+  in
+  List.iter
+    (fun (name, src, _) ->
+      List.iter
+        (fun propagate_learned ->
+          let r = run ~policy ~propagate_learned src in
+          let db = r.r_db in
+          let title s =
+            Printf.sprintf "(d) tiered %s, propagate_learned=%b: %s" name
+              propagate_learned s
+          in
+          if not propagate_learned then
+            check
+              (title "the policy actually evicted something (the lane is not vacuous)")
+              (Retention.n_evicted db > 0);
+          check
+            (title "added = evicted + swept, nothing still held")
+            (Retention.n_added db = Retention.n_evicted db + Retention.n_swept db
+            && Retention.size db = 0);
+          check (title "no audit failure") (r.r_audit_error = None);
+          check
+            (title "no id is cited by two `del` rules")
+            (not (has_duplicate (del_citations r.r_proof)));
+          expect_accepted ~title:(title "the proof") ~dir:r.r_dir ~opb:r.r_opb
+            ~pbp:r.r_pbp;
+          cleanup r.r_dir)
+        [ false; true ])
+    scenes
+
 let () =
   test_a_exactly_once ();
   test_a_pinned_on_the_shipped_build ();
@@ -777,6 +1118,10 @@ let () =
   test_c_bytes_on_the_shipped_build ();
   test_determinism ();
   test_policy_axis ();
+  test_d_tiers_on_schedule ();
+  test_d_mid_demotion ();
+  test_d_gate ();
+  test_d_tiered_in_a_search ();
   if !failures > 0 then (
     Printf.printf "\n%d FAILURE(S)\n" !failures;
     exit 1)

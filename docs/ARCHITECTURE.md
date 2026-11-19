@@ -69,8 +69,17 @@ lib/core/       Baguette_core
   propagator.ml             the PROPAGATOR module type (65 lines -- read it whole)
   engine.ml                 propagate-to-fixpoint loop and the queue (section 5)
   search.ml                 DFS, branching, backtracking, every step proof-logged.
-                            NOT restarts: SPEC 3.4 disables them, and whether that
-                            survives clause learning is the open question D-0045
+                            Restarts are OPT-IN (SPEC 3.4, D-0137): a restart is the
+                            node outcome NRestart t, the backjump unwinding to level t
+                            and re-entering that node -- no new proof rule
+  restart.ml                WHEN to restart: the policies (Luby, geometric, Glucose's
+                            LBD average with a Luby floor, the stable alternation) as
+                            a pure state machine over conflicts (M10-T2, D-0137)
+  phase.ml                  PHASE SAVING: the value each variable was last fixed at,
+                            read when its level is undone (M10-T2, D-0137)
+  activity.ml               the ACTIVITY heuristic: one VSIDS score per variable,
+                            learned-clause bumps, EVSIDS decay, first-fail tie-break
+                            (M10-T3, D-0137)
   checked.ml                checked integer arithmetic + the overflow cap
   interval.ml               interval arithmetic: mul, square, div of bounds
   debug.ml                  BAGUETTE_DEBUG-gated invariant checks
@@ -98,6 +107,10 @@ lib/core/       Baguette_core
                             views (M4-T9, D-0095). Over a bits variable, one big-M
                             SELECTOR row per operand + a clause, each pruning one
                             Resolve `pol` (M8-bits-encoding-T3, D-0134)
+    regular.ml              regular (DFA), DOMAIN consistent (Pesant's layered graph) over
+                            the letters AND (n+1)*Q state flags the mznlib route introduces;
+                            every pruning one rup against its rows plus the backward-chain
+                            lemmas Encoding.start_proof derives (M7-T28, D-0146)
     linear.ml               int_lin_le. THE REFERENCE PROPAGATOR -- copy this shape
     lin_eq.ml               int_lin_eq (two model rows, see D-0011)
     ne.ml                   int_lin_ne and int_ne (VALUE consistency)

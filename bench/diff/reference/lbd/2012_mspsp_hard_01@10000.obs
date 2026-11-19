@@ -39,90 +39,90 @@ search bits/vars 0 vars
 search bitsrows/lines 0 lines
 search choices/groups 0 groups
 search limit.nodes 10001
-search limit.decisions 5565
-search limit.conflicts 4435
-search limit.learned 4401
-search limit.pb-learned 65
-search limit.db 4466
+search limit.decisions 5670
+search limit.conflicts 4330
+search limit.learned 4296
+search limit.pb-learned 114
+search limit.db 500
 search limit.maxdepth 147
 search limit.incumbent 35
-work limit.props 16329851
-work limit.eff 1724706
-work limit.contra 4427
+work limit.props 14308842
+work limit.eff 1824700
+work limit.contra 4322
 search limit.at node
 search nodes/nodes 10001 nodes
-search decisions/decs 5565 decs
-search conflicts/nodes 4435 nodes
+search decisions/decs 5670 decs
+search conflicts/nodes 4330 nodes
 search maxdepth/levels 147 levels
 work exhausted/bool 0 bool 1 if
-search skipped/nodes 1090 nodes
-search learned/cls 4401 cls
-work later/asks 1531355 asks
-work cites/memos 184939 memos
-search convertible/cls 180 cls
-search retention lbd(cap=500) lbd(cap=500): 4466 added, 0 evicted, 4466 swept, 0 live, 78 duplicate, 4458 cited, 7866561 pinned
-search lbd 1:8,2:27,3:170,4:158,5:266,6:481,7:665,8:795,9:747,10:557,11:312,12:141,13:52,14:18,15:4
-search width 1:8,3:126,4:12,5:42,6:71,7:37,8:43,9:50,10:33,11:25,12:44,13:43,14:35,15:34,16:3798
+search skipped/nodes 1275 nodes
+search learned/cls 4296 cls
+work later/asks 1649767 asks
+work cites/memos 166637 memos
+search convertible/cls 223 cls
+search retention lbd(cap=500) lbd(cap=500): 4410 added, 3910 evicted, 500 swept, 0 live, 1297 duplicate, 4402 cited, 54 pinned
+search lbd 1:8,2:21,3:160,4:142,5:306,6:857,7:959,8:851,9:543,10:242,11:135,12:46,13:16,14:8,15:2
+search width 1:8,3:119,4:4,5:47,6:129,7:59,8:94,9:91,10:55,11:63,12:74,13:83,14:70,15:149,16:3251
 search globals/units 8 units
 search glob-prune/prunes 378 prunes
 search glob-confl/confl 8 confl
-search cls-inst/inst 4393 inst
+search cls-inst/inst 4288 inst
 search cls-decl/cls 0 cls
-search cls-prune/prunes 36066 prunes
-search pb-inst/inst 65 inst
+search cls-prune/prunes 35177 prunes
+search pb-inst/inst 114 inst
 search pb-inst-no/rows 0 rows
-search pb-prune/prunes 10684 prunes
-search pb-confl/confl 57 confl
-search minimised/lits 4077 lits
-search i-s4-cross/lines 224333 lines
-search pb-tried/confl 4401 confl
-search pb-learned/rows 65 rows
-search pb-fallback/confl 4336 confl
+search pb-prune/prunes 8022 prunes
+search pb-confl/confl 134 confl
+search minimised/lits 3744 lits
+search i-s4-cross/lines 98777 lines
+search pb-tried/confl 4296 confl
+search pb-learned/rows 114 rows
+search pb-fallback/confl 4182 confl
 search pb-why first fallback reason: no PB row for instance int_times
 work pb-whys/recd 64 recd 20 x
-search pb-steps/pivots 65 pivots
-search pb-convert/rows 65 rows
-search pb-stronger/rows 48 rows
-search pb-nondeg/rows 65 rows
-search pb-lifted/rows 0 rows
-search pb-rungs/rungs 0 rungs
-search lvl-cmp/confl 65 confl
+search pb-steps/pivots 114 pivots
+search pb-convert/rows 105 rows
+search pb-stronger/rows 83 rows
+search pb-nondeg/rows 114 rows
+search pb-lifted/rows 9 rows
+search pb-rungs/rungs 10 rungs
+search lvl-cmp/confl 114 confl
 search lvl-same/confl 0 confl
-search lvl-narrow/confl 61 confl
+search lvl-narrow/confl 84 confl
 search lvl-wide/confl 0 confl
-search lvl-incomp/confl 4 confl
+search lvl-incomp/confl 30 confl
 search lvl-empty/confl 0 confl
-search lvl-assert/confl 65 confl
+search lvl-assert/confl 105 confl
 search lvl-why first disagreement: closure {111,110,107,106,104,56,38,34,32,28,23,17,11,5} vs pb {111,104} (pb asserts at 0)
-work int_le_reif/inst 3450 inst 782.0 runs/node 29.01 eff/node
-work int_times/inst 15092 inst 420.8 runs/node 97.44 eff/node
-work learned_clause/inst 4393 inst 211.3 runs/node 3.61 eff/node
-work array_bool_and/inst 4968 inst 82.3 runs/node 14.47 eff/node
-work int_lin_le_reif/inst 100 inst 47.9 runs/node 3.86 eff/node
-work int_lin_le/inst 209 inst 32.5 runs/node 4.16 eff/node
-work bool2int/inst 1824 inst 31.5 runs/node 16.24 eff/node
-work learned_pb/inst 65 inst 14.2 runs/node 0.60 eff/node
-work bool_clause/inst 100 inst 6.2 runs/node 2.19 eff/node
-work cumulative/inst 2 inst 4.0 runs/node 0.89 eff/node
-work props/runs 16329851 runs
-work eff/runs 1724706 runs
-work contra/runs 4427 runs
-work passes/snaps 60525 snaps
-work deductions/chgs 28991 chgs
-work wakes/wakes 31375198 wakes
+work int_le_reif/inst 3450 inst 698.2 runs/node 22.82 eff/node
+work int_times/inst 15092 inst 486.0 runs/node 118.65 eff/node
+work array_bool_and/inst 4968 inst 70.4 runs/node 12.91 eff/node
+work learned_clause/inst 4288 inst 52.9 runs/node 3.52 eff/node
+work int_lin_le_reif/inst 100 inst 45.2 runs/node 2.69 eff/node
+work int_lin_le/inst 209 inst 31.4 runs/node 4.17 eff/node
+work bool2int/inst 1824 inst 28.7 runs/node 14.63 eff/node
+work learned_pb/inst 114 inst 9.2 runs/node 0.57 eff/node
+work bool_clause/inst 100 inst 4.7 runs/node 1.62 eff/node
+work cumulative/inst 2 inst 4.0 runs/node 0.88 eff/node
+work props/runs 14308842 runs
+work eff/runs 1824700 runs
+work contra/runs 4322 runs
+work passes/snaps 56999 snaps
+work deductions/chgs 24060 chgs
+work wakes/wakes 21635499 wakes
 work masked/wakes 0 wakes
-work vetoed/wakes 189259 wakes
-work advised/wakes 11443459 wakes
-work seeded/runs 4403386 runs
-work skipped/slots 273121779 slots
-search rup/lines 1802497 lines
-search pol/lines 876220 lines
-search pol-tokens/tokens 5612516 tokens
-search pol-widest/tokens 119 tokens
+work vetoed/wakes 177035 wakes
+work advised/wakes 5092370 wakes
+work seeded/runs 3308648 runs
+work skipped/slots 273358985 slots
+search rup/lines 1886280 lines
+search pol/lines 792869 lines
+search pol-tokens/tokens 5041773 tokens
+search pol-widest/tokens 145 tokens
 search atoms/atoms 0 atoms
 search atomlinks/lines 0 lines
 search bridges/pairs 0 pairs
 search boundlines/pairs 0 pairs
 search bitsprune/lines 0 lines
 opb c077f0e9a559b5ced56e08806a4df1601055cbf3ecd62c5297b3cd7d7332bf46
-pbp 3a0c215bd5744a6664437d7cdbbec4e58a11e60fb074c9821301c1697e2a7c1e
+pbp 3daa155586c77d363cd6abd18ae84d6d2dc0298dd48e7ed1a2c43fe353f16080

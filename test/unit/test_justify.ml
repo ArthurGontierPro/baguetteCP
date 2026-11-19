@@ -1729,6 +1729,80 @@ let test_reduction_truncation_is_rejected () =
       |> Array.iter (fun f -> try Sys.remove (Filename.concat dir f) with _ -> ());
       try Sys.rmdir dir with _ -> ())
 
+(* M11-complexity-T5 (D-0145, D-0140 J1). The memo's hash changed: an integer mix over a
+   bounded prefix, a forced [Deferred] hashed as its forced head, the hash kept for the
+   wipe. Its meaning must not have: a hit is PHYSICAL identity and nothing else, a
+   [Deferred] is found again after it was forced, colliding entries stay apart, and a
+   wipe drops exactly the entries at or above its level. *)
+let test_memo_identity_m11t5 () =
+  let _, r =
+    emitted (fun w ->
+        let _, ctx, c = build_ctx w in
+        let lin v = Explanation.linear [ (1, Lit.ge "x" v) ] 1 in
+        (* Forty explanations, many of which share the bounded hash: a Combine of the
+           same five first summands differs only past [hash_width]. *)
+        let comb k =
+          Explanation.combine
+            (List.init 5 (fun _ -> Explanation.Term (1, Explanation.model_row c))
+            @ List.init k (fun _ -> Explanation.Term (1, Explanation.model_row c)))
+            1
+        in
+        let defer e = Explanation.deferred (fun () -> e) in
+        let es =
+          List.init 10 (fun i -> lin (1 + (i mod 3)))
+          @ List.init 10 (fun k -> comb (k + 1))
+          @ List.init 10 (fun i -> defer (lin (1 + (i mod 3))))
+          @ List.init 10 (fun k -> defer (comb (k + 1)))
+        in
+        Writer.set_level w 2;
+        let ids = List.map (Justify.emit ctx) es in
+        check "m11t5 memo: forty values, forty ids (structural twins are not merged)"
+          (List.length (List.sort_uniq Int.compare ids) = 40);
+        let last = Writer.last_id w in
+        let again = List.map (Justify.emit ctx) es in
+        check "m11t5 memo: each one found again by identity, forced Deferreds included"
+          (List.equal Int.equal ids again && Writer.last_id w = last);
+        Justify.wipe_level ctx 2;
+        check "m11t5 memo: the wipe retired every one"
+          (List.for_all (fun id -> not (Writer.is_live w id)) ids);
+        let after = List.map (Justify.emit ctx) es in
+        check "m11t5 memo: after the wipe each is derived afresh"
+          (List.for_all (fun id -> id > last) after
+          && List.length (List.sort_uniq Int.compare after) = 40);
+        Writer.delete_many w after)
+  in
+  expect_ok "m11t5 memo: no exception" r
+
+(* M11-complexity-T5 (D-0145, D-0140 J2): the claim index hashes eight literals of the
+   key and its length, where the polymorphic hash read about three. Clauses that agree on
+   their first literals and differ further on each keep their own line, and each is
+   found again, in whatever order its literals come. *)
+let test_index_long_keys_m11t5 () =
+  let _, r =
+    emitted (fun w ->
+        let e = Encoding.create () in
+        List.iter
+          (fun x -> Encoding.declare_int e x ~lo:0 ~hi:9)
+          [ "a"; "b"; "c"; "d"; "z" ];
+        Encoding.start_proof e w;
+        let ctx = Justify.create ~writer:w ~encoding:e in
+        let prefix = [ Lit.ge "a" 1; Lit.ge "b" 1; Lit.ge "c" 1; Lit.ge "d" 1 ] in
+        let clause v = prefix @ [ Lit.ge "z" v ] in
+        let ids =
+          List.init 9 (fun v -> Justify.emit_rup_clause ctx ~origin:"t" (clause (v + 1)))
+        in
+        let last = Writer.last_id w in
+        let found =
+          List.init 9 (fun v ->
+              Justify.emit ctx (Explanation.clause (List.rev (clause (v + 1)))))
+        in
+        check
+          "m11t5 index: nine clauses sharing four literals, each found as its own line"
+          (List.equal Int.equal ids found && Writer.last_id w = last);
+        Writer.delete_many w ids)
+  in
+  expect_ok "m11t5 index: no exception" r
+
 let () =
   test_model_row ();
   test_decision_has_no_id ();
@@ -1736,6 +1810,7 @@ let () =
   test_index_reuses_the_right_line ();
   test_index_is_structural ();
   test_index_ignores_clause_order ();
+  test_index_long_keys_m11t5 ();
   test_index_levels ();
   test_wipe_levels_scene ();
   test_defining_lit ();
@@ -1746,6 +1821,7 @@ let () =
   test_deferred_linear ();
   test_deferred_cut ();
   test_wipe ();
+  test_memo_identity_m11t5 ();
   run_veripb ~name:"justify: a Linear explanation, checked end to end"
     ~build:build_linear_proof;
   run_veripb ~name:"justify: a Cut of two Linears, checked end to end"

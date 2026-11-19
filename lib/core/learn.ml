@@ -209,8 +209,52 @@ let keep policy a b =
    branch nogood, [()] for a bare clause. First-appearance order is preserved, and when
    two literals merge the payload of the SURVIVOR is kept: for a nogood that is the level
    whose decision the surviving literal actually negates, which is what [Search] then
-   reads to decide whether a branch can be skipped. *)
+   reads to decide whether a branch can be skipped.
+
+   M11-complexity-T4 (D-0140 S5, D-0144). This was a fold that appended with [acc @ [item]]
+   and looked each slot up by a [List.map] over the whole accumulator with a POLYMORPHIC
+   [slot m = Some s]: quadratic in the clause, and the branch nogood is as long as the
+   decision stack (147 on mspsp, 226 on openshop), once per conflict. It is now one cell
+   per slot, found through a table keyed by the slot, and the cells kept in
+   first-appearance order. Same output, element for element: a slot's cell is created
+   where the fold appended the slot's first literal, and every later literal of the slot
+   replaces the cell's content exactly when the fold's [List.map] replaced it ([keep]
+   does not return [m]). The table is only looked up, never iterated, so no output
+   depends on its order. [minimise_with_reference] is the old fold, kept as the
+   specification test/unit/test_learn.ml checks this against. *)
+module Slot_tbl = Hashtbl.Make (struct
+  type t = string * bool
+
+  let equal (a, p) (b, q) = String.equal a b && Bool.equal p q
+  let hash = Hashtbl.hash
+end)
+
 let minimise_with policy (xs : (Lit.t * 'a) list) : (Lit.t * 'a) list =
+  match xs with
+  | [] | [ _ ] -> xs
+  | _ ->
+      let cells = Slot_tbl.create 16 in
+      let rev =
+        List.fold_left
+          (fun rev ((l, _) as item) ->
+            match l.Lit.v with
+            | Lit.Eq _ | Lit.Bit _ -> ref item :: rev
+            | Lit.Ge (x, _) -> (
+                let s = (x, l.Lit.positive) in
+                match Slot_tbl.find_opt cells s with
+                | Some cell ->
+                    let m = fst !cell in
+                    if not (Lit.equal (keep policy m l) m) then cell := item;
+                    rev
+                | None ->
+                    let cell = ref item in
+                    Slot_tbl.add cells s cell;
+                    cell :: rev))
+          [] xs
+      in
+      List.rev_map ( ! ) rev
+
+let minimise_with_reference policy (xs : (Lit.t * 'a) list) : (Lit.t * 'a) list =
   List.fold_left
     (fun acc ((l, _) as item) ->
       match slot l with
@@ -310,11 +354,21 @@ let at_conflict ?(policy = Strongest) store (c : Store.conflict)
 
    I-X2: the id handed back is an id the caller must delete. [Search.solve] does, on
    every path, before the conclusion. *)
+(* M11-complexity-T4 (D-0140 J6, D-0144): the origin is built only for a writer that
+   keeps it. The null writer of a --no-proof run ([Writer.is_null]) drops [~origin]
+   unread in [Writer.fresh], so rendering every literal of every learned clause into a
+   string there was work nothing read. A writer that writes keeps it (the audit stores it
+   per live id, the mutation knob matches it), so it is built exactly as before; making it
+   lazy there is the writer's change, requested in WORKLOG.md. The origin is never written
+   to the .pbp, so neither arm can change a byte. *)
 let introduce ctx t : Writer.cid =
-  Learned.introduce ctx t.l_clause
-    ~origin:
-      (Printf.sprintf "M2-L3 1UIP learned clause (%s)"
-         (String.concat " " (List.map Lit.to_string t.l_lits)))
+  let origin =
+    if Writer.is_null (Justify.writer ctx) then ""
+    else
+      Printf.sprintf "M2-L3 1UIP learned clause (%s)"
+        (String.concat " " (List.map Lit.to_string t.l_lits))
+  in
+  Learned.introduce ctx t.l_clause ~origin
 
 (* ------------------------------------------------------------------ I-S4 *)
 
@@ -349,11 +403,22 @@ let support_of_written (w : Trace.written) ~var =
    nothing to say about: the step rests on the model's own rows (I-X10), which no `w` can
    retire. [Trace.settle_facts] makes the same distinction for the same reason.
 
-   Deduplicated by id, in first-seen order -- one entry can support several nodes. *)
+   Deduplicated by id, in first-seen order -- one entry can support several nodes.
+
+   M11-complexity-T4 (D-0140 L1, D-0144): the dedup was a [List.exists] over the list so
+   far and the append an [acc @ [s]], quadratic in the number of supports, on every
+   learned clause (the I-S4 check is always on). The ids already taken are now a table
+   and the list is built reversed and reversed once: the same first-seen entries in the
+   same order. *)
+module Int_tbl = Hashtbl.Make (Int)
+
 let supports store trace (t : t) : support list =
-  let acc = ref [] in
+  let seen = Int_tbl.create 32 in
+  let rev = ref [] in
   let add s =
-    if not (List.exists (fun x -> x.s_cid = s.s_cid) !acc) then acc := !acc @ [ s ]
+    if not (Int_tbl.mem seen s.s_cid) then (
+      Int_tbl.replace seen s.s_cid ();
+      rev := s :: !rev)
   in
   List.iter
     (fun (n : Analysis.node) ->
@@ -377,7 +442,7 @@ let supports store trace (t : t) : support list =
               | None -> ()
               | Some w -> add (support_of_written w ~var:f.Analysis.fold_var))))
     (Analysis.folds t.l_cut);
-  !acc
+  List.rev !rev
 
 let describe s =
   match s.s_hole with

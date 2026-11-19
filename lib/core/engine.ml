@@ -283,21 +283,29 @@ type t = {
           [inst_watched] that read it, newest first. The wake loops' copy of [watchers]
           minus the self-watching instances, indexed by array rather than hashed. Grown
           on demand; a variable past its end has no such reader. *)
+  mutable moved : Bytes.t;
+      (** M11-complexity-T3 (D-0142, E1): variable int -> the bound moves (bit 1 lower,
+          bit 2 upper) of the entries [watchers_of_new_entries] has walked so far, i.e.
+          of this walk's NEWER entries on the variable. All zero between walks; sized
+          with [wake_static]. *)
   mutable dyn_ids : int array array;
   mutable dyn_len : int array;
-      (** M6-T22 / D-0138: variable int -> the self-watching instances that CURRENTLY
-          watch it, as [dyn_ids.(x).(0 .. dyn_len.(x) - 1)], in no particular order. The
-          invariant, kept by [sync_watched]: [id] is there exactly once iff [x] is
-          [wv1.(id)] or [wv2.(id)]. *)
+      (** M6-T22 / D-0138: WATCH SLOT -> the self-watching instances that CURRENTLY
+          watch it, as [dyn_ids.(s).(0 .. dyn_len.(s) - 1)], in no particular order. The
+          invariant, kept by [sync_watched]: [id] is there exactly once iff [s] is
+          [wv1.(id)] or [wv2.(id)]. A slot is a [Propagator.watch], three per variable
+          [x]: [3x] for a watch any change of [x] may falsify, [3x + 1] for one only a
+          LOWER-bound move falsifies, [3x + 2] for one only an UPPER-bound move does
+          (M11-complexity-T3, D-0142, E1; "The wake index by direction" below). *)
   mutable wv1 : int array;
   mutable wv2 : int array;
-      (** M6-T22 / D-0138: id -> the two variables (ints) a self-watching instance
-          reported at the end of its last run, or [-1] before its first. *)
+      (** M6-T22 / D-0138: id -> the two watch slots a self-watching instance reported
+          at the end of its last run, or [-1] before its first. *)
   mutable wp1 : int array;
   mutable wp2 : int array;
       (** M6-T22 / D-0138: id -> where its entry sits in [dyn_ids.(wv1.(id))] and
           [dyn_ids.(wv2.(id))], so a watch move removes it in O(1). When both watches are
-          on one variable there is one entry and [wp1] holds it. *)
+          in one slot there is one entry and [wp1] holds it. *)
   mutable births : (int * int list) list;
   mutable newborns : int list;
       (** M6-T22 / D-0138: [born], inverted. [newborns] is every id whose [born] is
@@ -401,6 +409,48 @@ let in_scope t id v =
    because it is the declaration of what an instance reads, which test_engine.ml's
    wake-order oracle and the attribution argument are stated against. *)
 
+(* ---------------------------- M11-complexity-T3 (D-0142, E1): the wake index by direction
+
+   The index above asks a learned clause on EVERY change of a watched variable, and most
+   of those changes cannot make it want a run: a watch `x >= k` is falsified only when
+   [hi x] drops below [k], so a move of [lo x] can never falsify it. D-0138 section 5
+   measured that half on QR48 (37.3 M wakes, 17.1 M declined) and filed it.
+
+   So a self-watching instance reports each watch as a [Propagator.watch], which also
+   says which bound move can falsify it, and the index keeps three slots per variable:
+   [3x] (any change may falsify the watch), [3x + 1] (only a lower-bound move), [3x + 2]
+   (only an upper-bound move). An entry on [x] asks slot [3x] always, [3x + 1] when IT OR
+   A NEWER ENTRY OF THE SAME WALK moved [x]'s lower bound, and [3x + 2] likewise for the
+   upper bound ([t.moved]). The seed asks by the entry's own moves.
+
+   Why this wakes the same instances in the same order, apart from runs that do nothing.
+   The ask is a function of the store, not of the entry: it answers yes iff a watch of the
+   instance on [x] is false NOW, so every entry on [x] of one walk gets the same answers,
+   and the old walk placed an instance at its FIRST occurrence, the OLDEST entry on [x]
+   whose trigger kind it wants (the woken lists are oldest-entry-first, and a later
+   occurrence is a no-op of [enqueue]/[mark_dirty]). Take an instance whose watch on [x]
+   is false now, say `x >= k`. Either an entry of this walk moved [hi x] below [k], and
+   then every entry on [x] at or before it in age asks the upper slot, the oldest one
+   included, so the instance is placed where it was; or [hi x] was below [k] before the
+   walk. Then it was false when the instance last ran: had it been falsified since, the
+   walk or seed that saw that entry asked the upper slot, and the instance has run since
+   or is still queued, where a second wake changes nothing. A run that leaves a false
+   watch is a conflict (which ends the call and is backtracked over, both watches being
+   falsified at the conflict's level) or a unit propagation, after which the clause is
+   SATISFIED by its one non-false literal; so the clause is satisfied, every literal but
+   the true one is false, and the run the old walk gave it changes nothing: [Pb.pass] finds no open term,
+   and [rewatch] keeps the true literal and picks the latest-falsified other literal again,
+   which is the same one because no falsification position has moved. That run, and the
+   asks that answer no, are what goes: WORK counters (wakes, advised, props), never the
+   trail. The seed only marks, so its order never mattered, and the same two cases cover
+   which slots it marks. The woken ids are merged by id as before ([sort_uniq], because one
+   instance can now sit in two slots of one variable).
+
+   Under BAGUETTE_DEBUG the instances of the slots an entry does not ask are recorded as
+   declined asks ([record_unasked]), so [check_declined] runs each one nothing else woke,
+   as it did when they were asked: the satisfied clauses above pass it, and a watch whose
+   direction was wrong would not. *)
+
 let ensure_var t x =
   let n = Array.length t.wake_static in
   if x >= n then (
@@ -408,15 +458,18 @@ let ensure_var t x =
     let ws = Array.make m [] in
     Array.blit t.wake_static 0 ws 0 n;
     t.wake_static <- ws;
-    let di = Array.make m [||] in
-    Array.blit t.dyn_ids 0 di 0 n;
+    let mv = Bytes.make m '\000' in
+    Bytes.blit t.moved 0 mv 0 n;
+    t.moved <- mv;
+    let di = Array.make (3 * m) [||] in
+    Array.blit t.dyn_ids 0 di 0 (3 * n);
     t.dyn_ids <- di;
-    let dl = Array.make m 0 in
-    Array.blit t.dyn_len 0 dl 0 n;
+    let dl = Array.make (3 * m) 0 in
+    Array.blit t.dyn_len 0 dl 0 (3 * n);
     t.dyn_len <- dl)
 
 let dyn_push t x id =
-  ensure_var t x;
+  ensure_var t (x / 3);
   let len = t.dyn_len.(x) in
   let a = t.dyn_ids.(x) in
   let a =
@@ -431,7 +484,7 @@ let dyn_push t x id =
   t.dyn_len.(x) <- len + 1;
   len
 
-(* Swap-remove the entry at [i] of [x]'s slice: the order inside one slice carries
+(* Swap-remove the entry at [i] of slot [x]'s slice: the order inside one slice carries
    nothing, the wake loop sorts what it wakes. The entry moved into [i] has its position
    updated; it belongs to an instance whose [wv1]/[wv2] are current. With both its
    watches on [x] it has ONE entry and both positions name it, so both are updated
@@ -453,8 +506,9 @@ let dyn_remove t x i =
    those variables' wakes. *)
 exception Bad_watch of string
 
-let check_watched t (inst : Propagator.instance) store a1 a2 =
+let check_watched t (inst : Propagator.instance) store k1 k2 =
   let id = inst.Propagator.id in
+  let a1 = k1 / 3 and a2 = k2 / 3 in
   if id >= 0 && id < Array.length t.scopes then
     Array.iter
       (fun x ->
@@ -469,17 +523,17 @@ let check_watched t (inst : Propagator.instance) store a1 a2 =
                   id inst.Propagator.inst_name a1 a2 x)))
       t.scopes.(id)
 
-let sync_watched t (inst : Propagator.instance) store (w : unit -> Var.t * Var.t) =
+let sync_watched t (inst : Propagator.instance) store
+    (w : unit -> Propagator.watch * Propagator.watch) =
   let id = inst.Propagator.id in
-  let v1, v2 = w () in
-  let a1 = Var.to_int v1 and a2 = Var.to_int v2 in
+  let a1, a2 = w () in
   let o1 = t.wv1.(id) and o2 = t.wv2.(id) in
   if a1 <> o1 || a2 <> o2 then (
     let p1 = t.wp1.(id) and p2 = t.wp2.(id) in
     let gone x = x >= 0 && x <> a1 && x <> a2 in
     if gone o1 then dyn_remove t o1 p1;
     if o2 <> o1 && gone o2 then dyn_remove t o2 p2;
-    (* A kept variable keeps its entry, wherever its old slot recorded it. *)
+    (* A kept slot keeps its entry, wherever its old position recorded it. *)
     let fresh x = x <> o1 && x <> o2 in
     let pos_of x = if fresh x then dyn_push t x id else if x = o1 then p1 else p2 in
     let q1 = pos_of a1 in
@@ -558,13 +612,23 @@ let honours_claim (inst : Propagator.instance) =
 
 let create ?(trigger = default_trigger) (instances : Propagator.instance list) : t =
   let watchers = Hashtbl.create 64 in
+  (* M11-complexity-T3 (D-0142, D-0143's request): whether [id] is already in [v]'s list
+     was a [List.mem] over the list, which made building the engine quadratic in a
+     variable's degree (smelt_2: variables in about 2 000 constraints). Ids are distinct
+     ([t.instances] is indexed by them, instance [i] at slot [i]), so [id] can only be in
+     [v]'s list if THIS instance put it there, for an earlier occurrence of [v] in its own
+     scope, and then it is the head, nothing having been prepended since. So the head is
+     the whole test: the same lists in the same order, in O(1) and without the table of
+     pairs a first version kept, which cost smelt_2 50 MB of peak memory. *)
   List.iter
     (fun (inst : Propagator.instance) ->
+      let id = inst.Propagator.id in
       List.iter
         (fun v ->
           let cur = try Hashtbl.find watchers v with Not_found -> [] in
-          if not (List.mem inst.Propagator.id cur) then
-            Hashtbl.replace watchers v (inst.Propagator.id :: cur))
+          match cur with
+          | first :: _ when first = id -> ()
+          | _ -> Hashtbl.replace watchers v (id :: cur))
         inst.Propagator.inst_vars)
     instances;
   let max_id =
@@ -605,6 +669,7 @@ let create ?(trigger = default_trigger) (instances : Propagator.instance list) :
       poll_left = default_poll_runs;
       scopes;
       wake_static = [||];
+      moved = Bytes.empty;
       dyn_ids = [||];
       dyn_len = [||];
       wv1 = Array.make (Array.length triggers) (-1);
@@ -876,6 +941,31 @@ let check_declined t store =
             check_advise t.instances.(id) store v))
       ds)
 
+(* E1 (D-0142): did this entry move [x]'s lower bound, its upper bound? A hole entry
+   moves neither, a fixing entry on a wide domain can move both. *)
+let lo_moved (e : Store.entry) = Domain.lo e.now <> Domain.lo e.old
+let hi_moved (e : Store.entry) = Domain.hi e.now <> Domain.hi e.old
+
+(* E1 (D-0142), under BAGUETTE_DEBUG only: the instances of the directional slots of
+   [e.var] that this entry does NOT ask ([lo]/[hi] false) are recorded as declined asks, so that
+   [check_declined] treats them exactly as it treated them when every watcher of the
+   variable was asked: an instance that nothing else woke is run and must prune nothing.
+   That is the claim the direction index rests on, checked the way I-P7 is. [self] is a
+   vetoed self-wake (never asked, not recorded); [skip] an instance the seed marks
+   whatever its advisor says. The trigger mask is applied as the ask would apply it. *)
+let record_unasked ?(skip = fun _ -> false) t (e : Store.entry) ~lo ~hi ~self =
+  let x = Var.to_int e.Store.var in
+  let change = lazy (Domain.classify ~old:e.Store.old ~now:e.Store.now) in
+  let record sl =
+    for j = 0 to t.dyn_len.(sl) - 1 do
+      let id = t.dyn_ids.(sl).(j) in
+      if id <> self && (not (skip id)) && wakes_on (trigger_of t id) (Lazy.force change)
+      then t.declined <- (id, e.Store.var) :: t.declined
+    done
+  in
+  if not lo then record ((3 * x) + 1);
+  if not hi then record ((3 * x) + 2)
+
 let watchers_of_new_entries ?self t store ~since =
   (* M2-T6: [self] is the instance that pushed these entries. When its claim is
      honoured, its own id is dropped from every entry's watcher list -- a subsequence
@@ -898,28 +988,56 @@ let watchers_of_new_entries ?self t store ~since =
       t.ctr.c_masked <- t.ctr.c_masked + 1;
       false)
   in
+  (* M6-T22: the self-watching instances of one slot that want this entry, onto [dl].
+     A copy of the slice under BAGUETTE_DEBUG, as before D-0142 moved the I-P7 check
+     after the walk: nothing in the walk resyncs a slice now, and the copy costs nothing
+     that counts. *)
+  let dl = ref [] in
+  let collect change v sl =
+    let nd = t.dyn_len.(sl) in
+    if nd > 0 then
+      let ids = if Debug.enabled then Array.sub t.dyn_ids.(sl) 0 nd else t.dyn_ids.(sl) in
+      for j = 0 to nd - 1 do
+        let id = ids.(j) in
+        if wants id change v then dl := id :: !dl
+      done
+  in
   for i = Store.trail_length store - 1 downto since do
     let e : Store.entry = Store.trail_entry store i in
     let x = Var.to_int e.var in
-    if x < Array.length t.wake_static then
-      let stat = t.wake_static.(x) and nd = t.dyn_len.(x) in
+    if x < Array.length t.wake_static then (
+      let stat = t.wake_static.(x) in
+      (* E1 (D-0142): the slots this entry asks are those of the bound moves of this
+         entry AND of every newer entry of this walk on [x] -- see "The wake index by
+         direction", and [t.moved]. *)
+      let m =
+        Char.code (Bytes.unsafe_get t.moved x)
+        lor (if lo_moved e then 1 else 0)
+        lor if hi_moved e then 2 else 0
+      in
+      Bytes.unsafe_set t.moved x (Char.unsafe_chr m);
+      let sl = 3 * x and lo = m land 1 <> 0 and hi = m land 2 <> 0 in
+      let nd =
+        t.dyn_len.(sl)
+        + (if lo then t.dyn_len.(sl + 1) else 0)
+        + if hi then t.dyn_len.(sl + 2) else 0
+      in
+      if Debug.enabled then
+        record_unasked t e ~lo ~hi ~self:(if vetoed then self_id else -1);
       if stat <> [] || nd > 0 then (
         let change = Domain.classify ~old:e.old ~now:e.now in
         (* M6-T22: the self-watching instances that want this entry, DESCENDING, to
-           be merged into the static ones by id (see the wake index's header). A
-           BAGUETTE_DEBUG [check_advise] runs the instance, which may resync the very
-           slice being walked, so it walks a copy then. *)
-        let dl = ref [] in
+           be merged into the static ones by id (see the wake index's header). One
+           instance can sit in two of the slots asked (two watches on [x]), hence the
+           [sort_uniq]; with one slot per variable there was nothing to remove and it
+           is the [sort] it replaces. *)
+        dl := [];
         if nd > 0 then (
-          let ids =
-            if Debug.enabled then Array.sub t.dyn_ids.(x) 0 nd else t.dyn_ids.(x)
-          in
-          for j = 0 to nd - 1 do
-            let id = ids.(j) in
-            if wants id change e.var then dl := id :: !dl
-          done;
+          collect change e.var sl;
+          if lo then collect change e.var (sl + 1);
+          if hi then collect change e.var (sl + 2);
           match !dl with
-          | _ :: _ :: _ -> dl := List.sort (fun a b -> Int.compare b a) !dl
+          | _ :: _ :: _ -> dl := List.sort_uniq (fun a b -> Int.compare b a) !dl
           | _ -> ());
         let rec flush_above s =
           match !dl with
@@ -934,7 +1052,12 @@ let watchers_of_new_entries ?self t store ~since =
             flush_above id;
             if wants id change e.var then acc := id :: !acc)
           stat;
-        flush_above min_int)
+        flush_above min_int))
+  done;
+  (* [t.moved] back to all zero, over the same entries. *)
+  for i = since to Store.trail_length store - 1 do
+    let x = Var.to_int (Store.trail_entry store i).Store.var in
+    if x < Bytes.length t.moved then Bytes.unsafe_set t.moved x '\000'
   done;
   !acc
 
@@ -1535,24 +1658,36 @@ let seed_dirty t store ~since ~epoch =
          EXPECTED to prune (I-P7 is a contract between runs). *)
       if t.born.(id) > epoch || advises t store id v then mark_dirty t id
   in
+  let mark_slot change v sl =
+    let nd = t.dyn_len.(sl) in
+    if nd > 0 then
+      let ids = if Debug.enabled then Array.sub t.dyn_ids.(sl) 0 nd else t.dyn_ids.(sl) in
+      for j = 0 to nd - 1 do
+        mark change v ids.(j)
+      done
+  in
   for i = Store.trail_length store - 1 downto since do
     let e : Store.entry = Store.trail_entry store i in
     let x = Var.to_int e.var in
-    if x < Array.length t.wake_static then
-      let stat = t.wake_static.(x) and nd = t.dyn_len.(x) in
+    if x < Array.length t.wake_static then (
+      let stat = t.wake_static.(x) in
+      (* E1 (D-0142): the slots this entry asks -- see "The wake index by direction". *)
+      let sl = 3 * x and lo = lo_moved e and hi = hi_moved e in
+      let nd =
+        t.dyn_len.(sl)
+        + (if lo then t.dyn_len.(sl + 1) else 0)
+        + if hi then t.dyn_len.(sl + 2) else 0
+      in
+      if Debug.enabled then
+        record_unasked t e ~lo ~hi ~self:(-1) ~skip:(fun id -> t.born.(id) > epoch);
       if stat <> [] || nd > 0 then (
         let change = Domain.classify ~old:e.old ~now:e.now in
         List.iter (mark change e.var) stat;
-        (* M6-T22: the self-watching instances watching [x]; order is immaterial here,
-           this only marks. A copy under BAGUETTE_DEBUG, for [watchers_of_new_entries]'s
-           reason. *)
-        if nd > 0 then
-          let ids =
-            if Debug.enabled then Array.sub t.dyn_ids.(x) 0 nd else t.dyn_ids.(x)
-          in
-          for j = 0 to nd - 1 do
-            mark change e.var ids.(j)
-          done)
+        (* M6-T22: the self-watching instances of the slots asked; order is immaterial
+           here, this only marks. *)
+        mark_slot change e.var sl;
+        if lo then mark_slot change e.var (sl + 1);
+        if hi then mark_slot change e.var (sl + 2)))
   done
 
 (* M6-T18: under BAGUETTE_DEBUG, the run a skipped slot would have made under the old

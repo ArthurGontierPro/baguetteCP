@@ -1067,6 +1067,87 @@ let test_memo_survives_a_backjump () =
         && !Reason.materialisations = before));
   ()
 
+(* ===================================================================== *)
+(* (g) M7-T31, D-0148: A FACTLESS PRUNING THAT SETTLED OVER A HOLE IS NOT *)
+(* A ROOT.                                                               *)
+(*                                                                       *)
+(* Scene 7, over t p r o in 0..4:                                        *)
+(*   N   o <> t                                                          *)
+(*   Rr  3r - o <= 0      (o >= 3r)                                      *)
+(*   Rp  p - r <= 0       (r >= p)                                       *)
+(*   G   o <= 3           a single-term row: a FACTLESS push, the shape  *)
+(*                        [Search.apply_globals] gives a learned unit or *)
+(*                        an improving bound re-applied at a node        *)
+(*   level 1: assume t = 3 (two single-term rows) -> N punches o <> 3.   *)
+(*   level 2: assume p >= 1; then G pushes o <= 3, which SETTLES to o <= 2 *)
+(*            over the level-1 hole; Rr: r <= 0; Rp: p >= 1 and r <= 0    *)
+(*            conflict.                                                  *)
+(* The conflict rests on level 1: without t = 3 the value o = 3 is open,  *)
+(* r = 1, p = 1, o = 3, t = 0 satisfies everything. The trace line of the *)
+(* settle says so too (it cites the hole's facts, t >= 3). Before D-0148  *)
+(* the closure took G's entry for a root, pinned level 2 and named [2];   *)
+(* on 2017_hrc_exp1-1-5670 that dropped a level from a branch nogood and   *)
+(* 3.0.2 refused it.                                                     *)
+(* ===================================================================== *)
+let names7 = [| "t"; "p"; "r"; "o" |]
+let v7t = Var.of_int 0
+let v7p = Var.of_int 1
+let v7r = Var.of_int 2
+let v7o = Var.of_int 3
+
+(* The model with G, which the scene treats as a constraint (a learned unit is one). *)
+let model7 a =
+  a.(3) <> a.(0) && (3 * a.(2)) - a.(3) <= 0 && a.(1) - a.(2) <= 0 && a.(3) <= 3
+
+let test_factless_settle_is_expanded () =
+  let store = Store.create ~names:names7 ~domains:(Array.make 4 (Domain.make 0 4)) in
+  let n = ne_step ~id:0 store v7o v7t in
+  let rr = linear_step ~id:1 store [ (3, v7r); (-1, v7o) ] 0 in
+  let rp = linear_step ~id:2 store [ (1, v7p); (-1, v7r) ] 0 in
+  let t_ge = linear_step ~id:3 store [ (-1, v7t) ] (-3) in
+  let t_le = linear_step ~id:4 store [ (1, v7t) ] 3 in
+  let p_ge = linear_step ~id:5 store [ (-1, v7p) ] (-1) in
+  let g = linear_step ~id:6 store [ (1, v7o) ] 3 in
+  let all = [ n; rr; rp; t_ge; t_le; p_ge; g ] in
+  let c0 = run_steps store [ n; rr; rp ] in
+  Store.new_level store;
+  let c1 = run_steps store [ t_ge; t_le; n; rr; rp ] in
+  let hole_open = Domain.mem (Store.get store v7o) 3 in
+  Store.new_level store;
+  let c2 = run_steps store [ p_ge; g; rr; rp; n ] in
+  match (c0, c1, c2) with
+  | None, None, Some c ->
+      let g_pos = Store.hi_support store v7o in
+      let ge = Store.trail_entry store g_pos in
+      check "(g) scene 7: level 1 punched o <> 3" (not hole_open);
+      check
+        "(g) scene 7: G's push is factless, mid-level, and settled 3 -> 2 over the hole"
+        (Reason.is_empty ge.Store.reason
+        && (not (Store.is_level_start store g_pos))
+        && Store.level_of_index store g_pos = 2
+        && Domain.hi ge.Store.old = 4
+        && Domain.hi ge.Store.now = 2);
+      check "(g) scene 7: so it is NOT a root, and a decision still is"
+        ((not (Analysis.rests_on_nothing store g_pos ge))
+        &&
+        let d = Store.lo_support store v7p in
+        Analysis.rests_on_nothing store d (Store.trail_entry store d));
+      check "(g) scene 7: the model is satisfiable under level 2's decision alone"
+        (satisfiable ~n:4 ~lo:0 ~hi:4 ~sat:(fun a -> model7 a && a.(1) >= 1));
+      check "(g) scene 7: and not under levels 1 and 2 together"
+        (not
+           (satisfiable ~n:4 ~lo:0 ~hi:4 ~sat:(fun a ->
+                model7 a && a.(1) >= 1 && a.(0) = 3)));
+      let memo = agrees "scene 7" store all c in
+      check "(g) scene 7: the closure names [2; 1]: the settle's hole is folded"
+        (memo = Ok [ 2; 1 ]);
+      check "(g) scene 7: G's memo is the hole remover's citations, at level 1"
+        (match ge.Store.cites with
+        | Some a ->
+            Array.length a > 0 && Array.for_all (fun ct -> Analysis.cite_level ct = 1) a
+        | None -> false)
+  | _ -> failwith "test_analysis: scene 7 did not reach its conflict where it should"
+
 let test_memo_agrees_on_every_other_scene () =
   (let store, all, c = scene1 () in
    let memo = agrees "scene 1 (holes, two levels)" store all c in
@@ -1120,6 +1201,7 @@ let () =
   test_memo_matches_the_walk_on_a_bound_split ();
   test_memo_survives_a_backjump ();
   test_memo_agrees_on_every_other_scene ();
+  test_factless_settle_is_expanded ();
   if !failures > 0 then (
     Printf.printf "\n%d failure(s)\n" !failures;
     exit 1)

@@ -233,11 +233,66 @@ if [ "${bits_pass}" -eq 0 ]; then
   fail=$((fail+1))
 fi
 
+# M10-search-strategy-T2/T3 (D-0137): every restart_*.fzn again WITH the opt-in search
+# strategies on -- restarts after every learned conflict at first (luby:1), phase saving,
+# and the annotation alternating with the activity order. The main pass above already ran
+# these models with no flag, so this lane checks what the flags may change and what they
+# may not: the proof is VERIFIED, the --no-proof run's stdout and exit code are the
+# proved run's (D-0126), the ANSWER is the default run's (veripb's verdict line, which for
+# an optimisation includes the proved bounds; a satisfiable model may print a different
+# solution, which is allowed), and the search really restarted. A lane whose flag was not
+# in force is the trap CLAUDE.md records twice, hence the last check.
+restart_pass=0
+RFLAGS=(--restarts luby:1 --phase-saving --search alternate)
+for fzn in "${ROOT}"/test/models/restart_*.fzn; do
+  [ -f "${fzn}" ] || continue
+  base="$(basename "${fzn}" .fzn)"
+  prefix="${OUT}/${base}.rs"
+  "${SOLVER}" "${fzn}" "${RFLAGS[@]}" --proof "${prefix}" > "${prefix}.out" 2> "${prefix}.err"
+  rc=$?
+  if [ "${rc}" -ne 0 ] || [ -s "${prefix}.err" ]; then
+    echo "FAIL  ${base} (restarts): the proved run exited ${rc} or wrote to stderr"
+    sed 's/^/       /' "${prefix}.err" | head -5
+    fail=$((fail+1)); continue
+  fi
+  if ! "${VERIPB}" "${prefix}.opb" "${prefix}.pbp" > "${prefix}.veripb" 2>&1; then
+    echo "FAIL  ${base} (restarts): veripb rejected the proof"
+    sed 's/^/       /' "${prefix}.veripb" | tail -20
+    fail=$((fail+1)); continue
+  fi
+  v_new="$(grep -E '^s ' "${prefix}.veripb" | head -1)"
+  v_ref="$(grep -E '^s ' "${OUT}/${base}.veripb" 2>/dev/null | head -1)"
+  if [ -z "${v_new}" ] || [ "${v_new}" != "${v_ref}" ]; then
+    echo "FAIL  ${base} (restarts): verdict [${v_new}] is not the default run's [${v_ref}]"
+    fail=$((fail+1)); continue
+  fi
+  "${SOLVER}" "${fzn}" "${RFLAGS[@]}" --no-proof > "${prefix}.noproof.out" 2> "${prefix}.noproof.err"
+  rc2=$?
+  if [ "${rc2}" -ne "${rc}" ] || [ -s "${prefix}.noproof.err" ] \
+     || ! cmp -s "${prefix}.out" "${prefix}.noproof.out"; then
+    echo "FAIL  ${base} (restarts): --no-proof differs from the proved run (rc ${rc2}, D-0126)"
+    fail=$((fail+1)); continue
+  fi
+  nr="$("${SOLVER}" "${fzn}" "${RFLAGS[@]}" --no-proof --stats 2>&1 > /dev/null \
+        | awk '/^stats: restarts /{print $3}')"
+  if [ -z "${nr}" ] || [ "${nr}" -eq 0 ]; then
+    echo "FAIL  ${base} (restarts): the search did not restart (stats: restarts '${nr}')"
+    fail=$((fail+1)); continue
+  fi
+  echo "PASS  ${base} (restarts: ${nr})"
+  restart_pass=$((restart_pass+1))
+done
+if [ "${restart_pass}" -eq 0 ]; then
+  echo "FAIL  the restart lane ran on NO model: test/models/restart_*.fzn is empty."
+  fail=$((fail+1))
+fi
+
 echo
 echo "model tests: ${pass} passed, ${fail} failed, ${xfail} expected-fail, ${xpass} unexpected-pass, ${skip} skipped"
 echo "  every PASS is a proof veripb accepted AND a --no-proof run whose stdout and exit code"
 echo "  are byte-identical to it (M9-no-proof-T2, D-0126); ${bits_pass} bits_* model(s) passed"
-echo "  the same identity at --bits-above 0, proof verified."
+echo "  the same identity at --bits-above 0, proof verified; ${restart_pass} restart_* model(s)"
+echo "  passed again with restarts, phase saving and the alternating order (M10, D-0137)."
 
 if [ "${xfail}" -gt 0 ]; then
 

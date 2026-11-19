@@ -1,0 +1,111 @@
+rc 0
+out objective = 61;
+out course_period = array1d(1..50, [1, 1, 1, 9, 2, 1, 1, 2, 2, 2, 2, 3, 3, 3, 4, 4, 9, 4, 6, 5, 9, 5, 7, 8, 9, 8, 6, 6, 9, 9, 7, 7, 8, 8, 9, 7, 7, 8, 8, 7, 8, 8, 7, 10, 10, 10, 9, 9, 10, 9]);
+out ----------
+out objective = 52;
+out course_period = array1d(1..50, [1, 1, 1, 9, 2, 2, 2, 2, 2, 2, 2, 3, 3, 3, 4, 4, 10, 4, 5, 5, 5, 5, 6, 7, 10, 7, 6, 6, 8, 8, 7, 7, 8, 2, 9, 1, 5, 5, 2, 1, 1, 1, 1, 10, 10, 10, 8, 6, 10, 10]);
+out ----------
+out objective = 43;
+out course_period = array1d(1..50, [1, 1, 1, 9, 2, 2, 2, 2, 2, 2, 2, 3, 3, 3, 4, 4, 10, 4, 5, 5, 5, 5, 6, 7, 10, 7, 6, 6, 8, 8, 7, 7, 8, 2, 9, 4, 5, 5, 8, 1, 1, 1, 1, 10, 10, 10, 8, 6, 10, 10]);
+out ----------
+out objective = 37;
+out course_period = array1d(1..50, [1, 1, 1, 9, 2, 2, 1, 2, 2, 2, 2, 3, 3, 3, 4, 4, 2, 4, 5, 5, 5, 5, 6, 7, 8, 7, 6, 6, 8, 10, 7, 7, 8, 6, 9, 4, 5, 5, 8, 1, 1, 1, 3, 10, 10, 10, 8, 7, 10, 8]);
+out ----------
+out objective = 35;
+out course_period = array1d(1..50, [1, 1, 1, 7, 2, 2, 2, 2, 2, 2, 2, 3, 3, 3, 4, 4, 7, 4, 6, 5, 6, 5, 7, 9, 7, 8, 6, 6, 10, 9, 7, 7, 8, 6, 9, 5, 1, 5, 8, 3, 6, 6, 3, 10, 10, 10, 7, 9, 10, 8]);
+out ----------
+search ladder/cls 1438 cls
+search opb/lines 6373 lines
+search direct/vals 0 vals
+search widest/wide 98 wide
+search bits/vars 0 vars
+search bitsrows/lines 0 lines
+search choices/groups 0 groups
+search limit.nodes 6001
+search limit.decisions 4072
+search limit.conflicts 2514
+search limit.learned 2514
+search limit.pb-learned 146
+search limit.db 2660
+search limit.maxdepth 125
+search limit.incumbent 35
+work limit.props 1541049
+work limit.eff 240620
+work limit.contra 2502
+search limit.at node
+search nodes/nodes 6001 nodes
+search decisions/decs 4072 decs
+search conflicts/nodes 2514 nodes
+search maxdepth/levels 125 levels
+work exhausted/bool 0 bool 1 if
+search skipped/nodes 143 nodes
+search learned/cls 2514 cls
+work later/asks 170473 asks
+work cites/memos 82027 memos
+search convertible/cls 0 cls
+search retention keep-all keep-all: 2660 added, 0 evicted, 2660 swept, 0 live, 11 duplicate, 2648 cited, 0 pinned
+search lbd 1:12,2:4,3:60,4:171,5:338,6:397,7:369,8:359,9:283,10:191,11:111,12:99,13:55,14:27,15:19,16:19
+search width 1:12,7:2,8:2,9:3,10:7,11:13,12:74,13:75,14:58,15:44,16:2224
+search globals/units 5 units
+search glob-prune/prunes 15 prunes
+search glob-confl/confl 12 confl
+search cls-inst/inst 2502 inst
+search cls-decl/cls 0 cls
+search cls-prune/prunes 4254 prunes
+search pb-inst/inst 146 inst
+search pb-inst-no/rows 0 rows
+search pb-prune/prunes 511 prunes
+search pb-confl/confl 34 confl
+search minimised/lits 2881 lits
+search i-s4-cross/lines 49841 lines
+search pb-tried/confl 2514 confl
+search pb-learned/rows 146 rows
+search pb-fallback/confl 2368 confl
+search pb-why first fallback reason: no PB row for instance <unknown>
+work pb-whys/recd 64 recd 39 x
+search pb-steps/pivots 437 pivots
+search pb-convert/rows 0 rows
+search pb-stronger/rows 0 rows
+search pb-nondeg/rows 146 rows
+search pb-lifted/rows 0 rows
+search pb-rungs/rungs 0 rungs
+search lvl-cmp/confl 146 confl
+search lvl-same/confl 4 confl
+search lvl-narrow/confl 15 confl
+search lvl-wide/confl 13 confl
+search lvl-incomp/confl 114 confl
+search lvl-empty/confl 0 confl
+search lvl-assert/confl 2 confl
+search lvl-why first disagreement: closure {19,14,13,6,4,3,2,1} vs pb {19,14,13,12,11,10,9,8,7,6,1} (pb asserts at 14)
+search restarts/runs 586 runs
+search unexplored/nodes 1995 nodes
+search kept/levels 3329 levels
+search activity/bumps 100974 bumps
+work int_eq_reif/inst 500 inst 65.1 runs/node 9.17 eff/node
+work learned_clause/inst 2502 inst 60.4 runs/node 0.71 eff/node
+work int_le_reif/inst 450 inst 46.9 runs/node 9.65 eff/node
+work int_lin_le/inst 135 inst 32.2 runs/node 2.23 eff/node
+work bool2int/inst 950 inst 32.0 runs/node 18.25 eff/node
+work learned_pb/inst 146 inst 20.2 runs/node 0.08 eff/node
+work props/runs 1541049 runs
+work eff/runs 240620 runs
+work contra/runs 2502 runs
+work passes/snaps 0 snaps
+work deductions/chgs 0 chgs
+work wakes/wakes 2173408 wakes
+work masked/wakes 97626 wakes
+work vetoed/wakes 43642 wakes
+work advised/wakes 218213 wakes
+work seeded/runs 277994 runs
+work skipped/slots 21035677 slots
+search rup/lines 279822 lines
+search pol/lines 872 lines
+search pol-tokens/tokens 84972 tokens
+search pol-widest/tokens 233 tokens
+search atoms/atoms 0 atoms
+search atomlinks/lines 0 lines
+search bridges/pairs 0 pairs
+search boundlines/pairs 0 pairs
+search bitsprune/lines 0 lines
+opb b04006bb65351b90325a86d4086ba6f56cbea19966988fff3b9d0f2253e05191
+pbp a0dbe44e7fcd853b8d3710c9a76cf25c04ef0ba023d6dd67c8b0821dbe19a3ed

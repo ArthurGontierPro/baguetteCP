@@ -1,5 +1,10 @@
+# Who recorded bench/diff/reference/: one line per --update, newest last (D-0141).
 2026-11-18T14:57Z md5=a92174309acf973610248d5ce7700098 commit=d1c49f6 host=fataepyc-06 configs=default,noproof,lbd,fifo,nopb,bits0 instances=21
 2026-11-18T15:02Z md5=a92174309acf973610248d5ce7700098 commit=a444255 host=fataepyc-06 configs=lbd-po,fifo-po instances=21
 2026-11-18T15:08Z md5=e8354a74b5a2a5b0ac3d83f5a98d0a96 commit=a9ffcc5 host=fataepyc-06 configs=default,noproof,lbd,fifo,lbd-po,fifo-po,nopb,bits0 instances=21
 2026-11-18T15:28Z md5=e8354a74b5a2a5b0ac3d83f5a98d0a96 commit=ec72918 host=fataepyc-06 tier=fast runs=21
 2026-11-18T15:34Z md5=e8354a74b5a2a5b0ac3d83f5a98d0a96 commit=ec72918 host=fataepyc-06 tier=slow runs=43
+2026-11-18T17:20Z md5=31e8dfd81df9d19501b2bded13b406d4 commit=622528c host=fataepyc-06 tier=all runs=229 (orchestrator: the --update after M11-T3 rewrote every run but openshop, whose checker died under the 4 GB cap; this line was written by hand because that update exited 2 before appending it)
+2026-11-18T17:56Z md5=31e8dfd81df9d19501b2bded13b406d4 commit=622528c host=fataepyc-06 tier=slow runs=3
+2026-11-19T09:47Z md5=35fb5d7735c5d29473529269370cd2d4 commit=0b6f809 host=fataepyc-06 tier=all runs=69
+2026-11-19T10:22Z md5=bb8ccd8b69cf3bd83daa787a40b00eff commit=9c1b8e6 host=fataepyc-06 tier=all runs=51

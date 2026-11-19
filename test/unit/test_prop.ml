@@ -7740,6 +7740,406 @@ let test_cumulative_search () =
   run_veripb ~name:"cumulative search: the UNSAT lane's refutation verifies"
     ~build:(fun _ -> (opb, pbp))
 
+(* ---------------------------------------------------------------------------
+   M11-complexity-T3 (D-0142, E7): [Linear.propagate] without its two lists
+
+   The run used to build the list of term minima and its [List.combine] with the terms;
+   it now keeps the minima in the row's scratch array. [Ref_linear.propagate] is the old
+   function, kept here verbatim as the specification, and 3 000 random rows (four
+   variables over small boxes that include negatives, coefficients -3..3 with zeros,
+   every right-hand side from infeasible to slack) are run through both from the same
+   narrowed store: same outcome, same conflict reason, same trail with the same reasons. *)
+module Ref_linear = struct
+  open Linear
+
+  let propagate (t : Linear.t) store =
+    let mins = List.map (fun tm -> term_min store tm) t.terms in
+    let total_min = Checked.sum mins in
+    let slack = Checked.sub t.rhs total_min in
+    if slack < 0 then
+      let snaps = row_snaps store t.terms ~exclude:None in
+      Propagator.Conflict
+        (Store.conflict store
+           (justified_of_snaps ~concludes:None (base_explanation t) snaps 1))
+    else
+      let result = ref Propagator.Fixpoint in
+      let conflict = ref None in
+      let cross_conflict (tm : term) snaps =
+        let opposite_fact = opposite_bound_fact store tm in
+        conflict :=
+          Some
+            (Store.conflict store
+               (Reason.because ~concludes:None
+                  (List.map fact_of_snap snaps @ [ opposite_fact ])
+                  (explain_cross_conflict ~base:(base_explanation t) ~snaps ~crossed:tm
+                     ~name:(Store.name store tm.x)
+                     ~opposite_value:(Reason.fact_value opposite_fact)
+                     ~opposite:(opposite_rests_on store tm))))
+      in
+      List.iteri
+        (fun idx ((tm : term), m) ->
+          if Option.is_none !conflict && tm.coeff <> 0 then
+            let max_term = Checked.add m slack in
+            let d = Store.get store tm.x in
+            if tm.coeff > 0 then (
+              let new_hi = floordiv max_term tm.coeff in
+              if new_hi < Domain.hi d then
+                let h = Store.history store in
+                let exclude = Some idx in
+                let concludes =
+                  Some
+                    (Reason.at_most ~name:(Store.name store tm.x) ~decl:tm.decl_hi new_hi)
+                in
+                let j =
+                  justified_at ~concludes (base_explanation t) h t.terms ~exclude tm.coeff
+                in
+                match Store.set_hi store tm.x new_hi j with
+                | Store.Conflict _ -> cross_conflict tm (row_snaps_at h t.terms ~exclude)
+                | Store.Changed | Store.Unchanged -> ())
+            else
+              let new_lo = ceildiv max_term tm.coeff in
+              if new_lo > Domain.lo d then
+                let h = Store.history store in
+                let exclude = Some idx in
+                let divisor = Checked.neg tm.coeff in
+                let concludes =
+                  Some
+                    (Reason.at_least ~name:(Store.name store tm.x) ~decl:tm.decl_lo new_lo)
+                in
+                let j =
+                  justified_at ~concludes (base_explanation t) h t.terms ~exclude divisor
+                in
+                match Store.set_lo store tm.x new_lo j with
+                | Store.Conflict _ -> cross_conflict tm (row_snaps_at h t.terms ~exclude)
+                | Store.Changed | Store.Unchanged -> ())
+        (List.combine t.terms mins);
+      (match !conflict with Some c -> result := Propagator.Conflict c | None -> ());
+      !result
+end
+
+let test_linear_scratch () =
+  print_endline
+    "\n-- M11-complexity-T3 (D-0142, E7): Linear.propagate without its two lists";
+  let bounds = [ ("a", -3, 4); ("b", 0, 5); ("c", -2, 2); ("d", 1, 6) ] in
+  let rng = Random.State.make [| 0x0142; 7 |] in
+  let observe store r =
+    let out =
+      match r with
+      | exception e -> "raised " ^ Printexc.to_string e
+      | Propagator.Fixpoint -> "fix"
+      | Propagator.Conflict c -> "conflict " ^ Reason.to_string c.Store.c_reason
+    in
+    let trail =
+      List.init (Store.trail_length store) (fun i ->
+          let e = Store.trail_entry store i in
+          Printf.sprintf "%d:%d..%d:%s" (Var.to_int e.Store.var) (Domain.lo e.Store.now)
+            (Domain.hi e.Store.now)
+            (Reason.to_string e.Store.reason))
+    in
+    (out, trail)
+  in
+  let trials = 3000 and same = ref 0 and prunes = ref 0 and conflicts = ref 0 in
+  for _ = 1 to trials do
+    let raw =
+      List.filter_map
+        (fun i ->
+          if Random.State.int rng 4 = 0 then None
+          else Some (Random.State.int rng 7 - 3, var i))
+        [ 0; 1; 2; 3 ]
+    in
+    let rhs = Random.State.int rng 21 - 8 in
+    let narrow () =
+      let s = mk_store bounds in
+      Store.new_level s;
+      List.iteri
+        (fun i (_, lo, hi) ->
+          let lo' = lo + Random.State.int rng (hi - lo + 1) in
+          let hi' = lo' + Random.State.int rng (hi - lo' + 1) in
+          ignore (Store.set_lo s (var i) lo' placeholder_pruning);
+          ignore (Store.set_hi s (var i) hi' placeholder_pruning))
+        bounds;
+      s
+    in
+    let st = Random.State.copy rng in
+    let s1 = narrow () in
+    let s2 =
+      (* the same narrowing, replayed from the saved generator state *)
+      let s = mk_store bounds in
+      Store.new_level s;
+      List.iteri
+        (fun i (_, lo, hi) ->
+          let lo' = lo + Random.State.int st (hi - lo + 1) in
+          let hi' = lo' + Random.State.int st (hi - lo' + 1) in
+          ignore (Store.set_lo s (var i) lo' placeholder_pruning);
+          ignore (Store.set_hi s (var i) hi' placeholder_pruning))
+        bounds;
+      s
+    in
+    let base = Store.trail_length s1 in
+    let row = Linear.make ~row_id:1 (mk_store bounds) raw rhs in
+    let got = observe s1 (Linear.propagate row s1) in
+    let want = observe s2 (Ref_linear.propagate row s2) in
+    if got = want then incr same;
+    match want with
+    | o, _ when String.length o > 8 && String.sub o 0 8 = "conflict" -> incr conflicts
+    | _, tr when List.length tr > base -> incr prunes
+    | _ -> ()
+  done;
+  check
+    (Printf.sprintf
+       "E7: %d random rows, the scratch-array run and the list run show the same outcome \
+        and trail"
+       trials)
+    (!same = trials);
+  check (Printf.sprintf "E7: ...%d of them prune (> 300)" !prunes) (!prunes > 300);
+  check (Printf.sprintf "E7: ...%d of them conflict (> 300)" !conflicts) (!conflicts > 300)
+
+(* ======================================================================== M7-T28
+
+   regular (D-0146). Two questions, the module header's two claims:
+
+   1. BRUTE FORCE, over random small automata and random narrowed domains: the call is
+      sound (I-P1: no solution of the constraint is removed, and a conflict only where
+      there is none), DOMAIN consistent over the joint scope (every remaining value of
+      every letter AND every flag extends to a solution inside the current domains) and
+      idempotent (I-P2). A solution is a word the automaton accepts together with the
+      flags its run sets -- the relation Model.check_assignment grades.
+   2. THE CHECKER, on the solver's own output: D-0146 section 4's instance 2 (two live
+      states in layer 1, so a backward-chain lemma is load-bearing), compiled from an
+      inlined FlatZinc, searched to a conflict and a solution; the proof verifies, and
+      the rows and lemmas are the counts section 3 states. The load-bearing claims are
+      test/unit/test_mutation.ml's regular lanes. *)
+module Regular = Baguette_core.Regular
+
+let regular_rng = ref 2026
+
+let regular_rnd k =
+  regular_rng := ((!regular_rng * 1103515245) + 12345) land 0x3fffffff;
+  (!regular_rng lsr 8) mod k
+
+let rec regular_product = function
+  | [] -> [ [] ]
+  | l :: rest ->
+      let tails = regular_product rest in
+      List.concat_map (fun v -> List.map (fun t -> v :: t) tails) l
+
+(* The run of the automaton (alphabet 1..2, start 1) over [word], if it is accepted. *)
+let regular_accepts ~nq ~delta ~final word =
+  let step q v = if v < 1 || v > 2 then 0 else delta.(((q - 1) * 2) + v - 1) in
+  let rec go q acc = function
+    | [] -> if List.mem q final then Some (Array.of_list (List.rev acc)) else None
+    | v :: rest ->
+        let q' = step q v in
+        if q' = 0 then None else go q' (q' :: acc) rest
+  in
+  ignore nq;
+  go 1 [ 1 ] word
+
+let test_regular_brute_force () =
+  regular_rng := 2026;
+  let bad = ref 0 and scenes = ref 0 and changed = ref 0 and conflicts = ref 0 in
+  let first_bad = ref "" in
+  let flag_bad what = if !first_bad = "" then first_bad := what in
+  for _ = 1 to 300 do
+    let n = 2 + regular_rnd 2 and nq = 2 + regular_rnd 2 in
+    let delta = Array.init (nq * 2) (fun _ -> regular_rnd (nq + 1)) in
+    let final =
+      List.filter (fun _ -> regular_rnd 2 = 0) (List.init nq (fun k -> k + 1))
+    in
+    let final = if final = [] then [ nq ] else final in
+    for _ = 1 to 4 do
+      incr scenes;
+      let nf = (n + 1) * nq in
+      let decls =
+        List.init n (fun i -> (Printf.sprintf "x%d" i, 0, 3))
+        @ List.init nf (fun k ->
+              (Printf.sprintf "s%d_%d" (k / nq) ((k mod nq) + 1), 0, 1))
+      in
+      let store = mk_store decls in
+      let xs =
+        Array.init n (fun i ->
+            Regular.Letter
+              { var = var i; name = Printf.sprintf "x%d" i; dlo = 0; dhi = 3 })
+      in
+      let flags = Array.init nf (fun k -> var (n + k)) in
+      let p = Regular.make store ~xs ~nq ~smin:1 ~delta ~q0:1 ~final ~flags in
+      for i = 0 to n - 1 do
+        ignore (Store.set_lo store (var i) (regular_rnd 2) placeholder_pruning);
+        ignore (Store.set_hi store (var i) (2 + regular_rnd 2) placeholder_pruning);
+        if regular_rnd 3 = 0 then
+          ignore (Store.remove store (var i) (1 + regular_rnd 2) placeholder_pruning)
+      done;
+      for k = 0 to nf - 1 do
+        match regular_rnd 14 with
+        | 0 -> ignore (Store.set_hi store (var (n + k)) 0 placeholder_pruning)
+        | 1 -> ignore (Store.set_lo store (var (n + k)) 1 placeholder_pruning)
+        | _ -> ()
+      done;
+      let dom v = Store.get store v in
+      let flag_of states k = if states.(k / nq) = (k mod nq) + 1 then 1 else 0 in
+      let inside_flags states =
+        List.for_all
+          (fun k -> Domain.mem (dom (var (n + k))) (flag_of states k))
+          (List.init nf Fun.id)
+      in
+      let words = regular_product (List.init n (fun i -> Domain.to_list (dom (var i)))) in
+      let sols =
+        List.filter_map
+          (fun w ->
+            match regular_accepts ~nq ~delta ~final w with
+            | Some st when inside_flags st -> Some (w, st)
+            | _ -> None)
+          words
+      in
+      let before = Store.snapshot store in
+      match Regular.propagate p store with
+      | Propagator.Conflict _ ->
+          incr conflicts;
+          if sols <> [] then (
+            incr bad;
+            flag_bad "a conflict on a scene with a solution")
+      | Propagator.Fixpoint -> (
+          if not (Store.same_domains store before) then incr changed;
+          let in_now (w, st) =
+            List.for_all2 (fun i v -> Domain.mem (dom (var i)) v) (List.init n Fun.id) w
+            && inside_flags st
+          in
+          (* I-P1 *)
+          if not (List.for_all in_now sols) then (
+            incr bad;
+            flag_bad "a solution was removed");
+          (* DOMAIN: every remaining value of every variable of the scope has a support *)
+          for i = 0 to n - 1 do
+            Domain.iter
+              (fun v ->
+                if not (List.exists (fun (w, _) -> List.nth w i = v) sols) then (
+                  incr bad;
+                  flag_bad (Printf.sprintf "letter %d keeps the unsupported %d" i v)))
+              (dom (var i))
+          done;
+          for k = 0 to nf - 1 do
+            Domain.iter
+              (fun b ->
+                if not (List.exists (fun (_, st) -> flag_of st k = b) sols) then (
+                  incr bad;
+                  flag_bad (Printf.sprintf "flag %d keeps the unsupported %d" k b)))
+              (dom (var (n + k)))
+          done;
+          (* I-P2 *)
+          let snap = Store.snapshot store in
+          match Regular.propagate p store with
+          | Propagator.Conflict _ ->
+              incr bad;
+              flag_bad "the second call conflicts"
+          | Propagator.Fixpoint ->
+              if not (Store.same_domains store snap) then (
+                incr bad;
+                flag_bad "the second call prunes"))
+    done
+  done;
+  if !first_bad <> "" then Printf.printf "     first violation: %s\n" !first_bad;
+  check
+    (Printf.sprintf
+       "regular: I-P1, DOMAIN consistency over letters and flags, and I-P2, %d scenes \
+        (%d pruned, %d conflicts): no violation"
+       !scenes !changed !conflicts)
+    (!bad = 0 && !scenes = 1200 && !changed > 100 && !conflicts > 10)
+
+(* A [baguette_regular] instance as FlatZinc: [n] letters on 1..[dom_hi], [nq] states,
+   [table] row-major over the symbols 1..|table|/nq, start 1, accepting [final], flags
+   s<i>_<q>, then the [extra] lines and an input-order, smallest-first search on x. Shared
+   with test/unit/test_mutation.ml's lanes, which inline the same text. *)
+let regular_fzn ~n ~dom_hi ~nq ~table ~final ?(extra = []) () =
+  let xs = List.init n (Printf.sprintf "x%d") in
+  let flags =
+    List.init ((n + 1) * nq) (fun k -> Printf.sprintf "s%d_%d" (k / nq) ((k mod nq) + 1))
+  in
+  let ints l = String.concat ", " (List.map string_of_int l) in
+  String.concat ""
+    (List.map (fun x -> Printf.sprintf "var 1..%d: %s :: output_var;\n" dom_hi x) xs
+    @ List.map (fun f -> Printf.sprintf "var bool: %s;\n" f) flags
+    @ [
+        Printf.sprintf "constraint baguette_regular([%s], %d, 1, [%s], 1, [%s], [%s]);\n"
+          (String.concat ", " xs) nq (ints table) (ints final) (String.concat ", " flags);
+      ]
+    @ extra
+    @ [
+        Printf.sprintf
+          "solve :: int_search([%s], input_order, indomain_min, complete) satisfy;\n"
+          (String.concat ", " xs);
+      ])
+
+(* D-0146 section 4's instance 2: columns 1, 2, 3, 4 all distinct, so 4 runs a letter. *)
+let regular_inst2 () =
+  regular_fzn ~n:3 ~dom_hi:4 ~nq:4
+    ~table:[ 2; 3; 0; 0; 2; 2; 2; 4; 3; 3; 3; 4; 4; 4; 4; 4 ]
+    ~final:[ 4 ] ()
+
+(* "No two consecutive 2s" over five letters on 1..2, and the letters sum to 8: three 2s,
+   so 2 1 2 1 2 is the only word. Smallest-first on x0 fails first (the other four letters
+   cannot hold three separated 2s), under a decision the root fixpoint does not see, so
+   the trace lines of that branch -- deaths and value removals with a DECISION fact on
+   their tail -- are on the page before the solution. *)
+let regular_nocons () =
+  regular_fzn ~n:5 ~dom_hi:2 ~nq:2 ~table:[ 1; 2; 1; 0 ] ~final:[ 1; 2 ]
+    ~extra:[ "constraint int_lin_eq([1, 1, 1, 1, 1], [x0, x1, x2, x3, x4], 8);\n" ]
+    ()
+
+let regular_solve dir ~file src =
+  let m = Flatzinc.Builder.of_string ~file src in
+  let t = Compile.compile m in
+  let opb = Filename.concat dir (file ^ ".opb")
+  and pbp = Filename.concat dir (file ^ ".pbp") in
+  let oc = open_out opb in
+  Encoding.write_opb ~comments:[ file ] t.Compile.encoding oc;
+  close_out oc;
+  let oc = open_out pbp in
+  let w = Writer.create ~comments:true ~audit:true oc in
+  Encoding.start_proof t.Compile.encoding w;
+  let ctx = Justify.create ~writer:w ~encoding:t.Compile.encoding in
+  let check_sol (a : Search.assignment) =
+    let values = Array.make (Model.nvars m) 0 in
+    List.iter (fun (v, value) -> values.(Var.to_int v) <- value) a;
+    Model.check_assignment m values
+  in
+  let outcome =
+    Search.solve ~engine:t.Compile.engine ~store:t.Compile.store ~ctx ~check:check_sol
+      ?order:t.Compile.order ()
+  in
+  close_out oc;
+  (t, outcome, opb, pbp)
+
+let test_regular_veripb () =
+  let dir = Filename.temp_file "baguette_regular" "" in
+  Sys.remove dir;
+  Sys.mkdir dir 0o700;
+  let t2 =
+    Compile.compile (Flatzinc.Builder.of_string ~file:"inst2" (regular_inst2 ()))
+  in
+  check "regular: instance 2 registers n * Q * runs = 3 * 4 * 4 root lemmas"
+    (Encoding.n_root_lemmas t2.Compile.encoding = 48);
+  let t, outcome, opb, pbp =
+    regular_solve dir ~file:"regular_nocons" (regular_nocons ())
+  in
+  check "regular: no-two-consecutive registers 5 * 2 * 2 root lemmas"
+    (Encoding.n_root_lemmas t.Compile.encoding = 20);
+  check "regular: the solver finds the one word, and the oracle accepts it"
+    (match outcome with Search.Sat _ -> true | _ -> false);
+  let lines = String.split_on_char '\n' (read_file pbp) in
+  let ruplines =
+    List.length (List.filter (fun l -> contains_sub ~needle:" rup " l) lines)
+  in
+  check
+    (Printf.sprintf
+       "regular: the proof derives its 20 lemmas and the failed branch's trace lines (%d \
+        rup lines)"
+       ruplines)
+    (List.exists (fun l -> contains_sub ~needle:"root lemmas (D-0146)" l) lines
+    && ruplines > 20);
+  run_veripb
+    ~name:"regular: the no-two-consecutive proof, lemmas, trace and nogood, verifies"
+    ~build:(fun _ -> (opb, pbp))
+
 let () =
   print_endline "\npropagator unit tests";
   test_soundness ();
@@ -7941,6 +8341,11 @@ let () =
   test_cumulative_rows ();
   test_cumulative_timetable_fixpoint ();
   test_cumulative_search ();
+  (* M11-complexity-T3, D-0142: Linear's scratch array. *)
+  test_linear_scratch ();
+  (* M7-T28, D-0146: regular. *)
+  test_regular_brute_force ();
+  test_regular_veripb ();
   if !failures > 0 then (
     Printf.printf "\n%d FAILURE(S)\n" !failures;
     exit 1)
