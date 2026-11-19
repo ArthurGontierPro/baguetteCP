@@ -12,9 +12,14 @@ rows = defaultdict(dict)
 tags = []
 for line in open(sys.argv[1]):
     c = line.rstrip("\n").split("\t")
-    if len(c) < 9:
+    if len(c) < 5:
         continue
-    iid, tag, st, wall, nodes, n, mean, med, p90 = c[:9]
+    # a run that learned nothing prints its width columns empty (the histogram line holds
+    # no `w:n` pair): no clause, no width
+    c = (c + ["", "", "", ""])[:9]
+    iid, tag, st, wall, nodes, n, mean, med, p90 = c
+    if n in ("", "0"):
+        n, mean, med = "0", "-", "-"
     if tag not in tags:
         tags.append(tag)
     rows[iid][tag] = dict(st=st, wall=float(wall), nodes=int(nodes or 0), n=int(n),
