@@ -494,40 +494,34 @@ exception Unreadable of string
 (* [instantiate ~bits ~row ~pivot ~falsified] replaces every bits block of [row] as the
    section above says: at the pivot's own atom for the block of the pivot's variable when
    the block's direction matches the pivot's, at the frozen bound otherwise. [Error] names
-   what could not be read: a variable [bits] does not know, a block without its bit 0, a
-   pivot outside the declared range, or a block that is not [a * 2^i] (a bit left over).
-   The blocks are taken in the order their variables first occur in [row]'s terms, which
-   [Learned.make] sorted, so the result is a function of the row.
+   what could not be read: a variable [bits] does not know, a pivot outside the declared
+   range, or a block that is not [a * 2^i] (a bit left over, which is also what a block
+   without its bit 0 leaves).
 
-   Raises [Checked.Overflow] from [Learned.combine], the caller's to catch as for [lift]. *)
+   A block is found by its bit 0, in one pass over [row]'s terms, which [Learned.make]
+   sorted, so the result is a function of the row. The bridges are added in ONE
+   combination -- their scaled sum, then one [Learned.combine] with the row -- rather
+   than one [combine] per block: a Challenge row has hundreds of bits blocks, and a
+   [combine] sorts the whole row (M6-T23's lesson about [lift], D-0149). The sum is the
+   same row either way; the bridges name disjoint variables, so nothing in it cancels.
+
+   Raises [Checked.Overflow] from the scaling or [Learned.combine], the caller's to catch
+   as for [lift]. *)
 let instantiate ~(bits : bits) ~(row : Learned.t) ~(pivot : Lit.t option)
     ~(falsified : Lit.t -> bool) : (instantiated, string) result =
-  let names =
-    List.rev
-      (List.fold_left
-         (fun acc (tm : Learned.term) ->
-           match tm.Learned.lit.Lit.v with
-           | Lit.Bit (x, _) when not (List.mem x acc) -> x :: acc
-           | _ -> acc)
-         [] (Learned.terms row))
+  let blocks =
+    List.filter_map
+      (fun (tm : Learned.term) ->
+        match tm.Learned.lit.Lit.v with
+        | Lit.Bit (x, 0) -> Some (x, tm.Learned.coeff, tm.Learned.lit.Lit.positive)
+        | _ -> None)
+      (Learned.terms row)
   in
-  let block (row, added) x =
+  let block (x, a, positive) =
     let lo, hi, n =
       match bits.bits_var x with
       | Some r -> r
       | None -> raise (Unreadable (x ^ " is not on the bits encoding"))
-    in
-    let a, positive =
-      match
-        List.find_opt
-          (fun (tm : Learned.term) ->
-            match tm.Learned.lit.Lit.v with
-            | Lit.Bit (y, 0) -> String.equal x y
-            | _ -> false)
-          (Learned.terms row)
-      with
-      | Some tm -> (tm.Learned.coeff, tm.Learned.lit.Lit.positive)
-      | None -> raise (Unreadable (x ^ "'s block has no bit 0"))
     in
     let at_pivot =
       match pivot with
@@ -564,10 +558,24 @@ let instantiate ~(bits : bits) ~(row : Learned.t) ~(pivot : Lit.t option)
         | None -> (fst (bits.bound_rows x), lb_row x ~n)
         | Some v -> (fst (bits.bridge x v), b1_row x ~lo ~n v)
     in
-    (Learned.combine row 1 r a, (a, cid, r) :: added)
+    (a, cid, r)
   in
   try
-    let row, added_rev = List.fold_left block (row, []) names in
-    if has_bits row then raise (Unreadable "a bits block that is not a * 2^i");
-    Ok { inst = row; added = List.rev added_rev }
+    let added = List.map block blocks in
+    let sum =
+      Learned.make
+        (List.concat_map
+           (fun (a, _, r) ->
+             List.map
+               (fun (tm : Learned.term) ->
+                 (Checked.mul a tm.Learned.coeff, tm.Learned.lit))
+               (Learned.terms r))
+           added)
+        (List.fold_left
+           (fun acc (a, _, r) -> Checked.add acc (Checked.mul a (Learned.degree r)))
+           0 added)
+    in
+    let inst = if added = [] then row else Learned.combine row 1 sum 1 in
+    if has_bits inst then raise (Unreadable "a bits block that is not a * 2^i");
+    Ok { inst; added }
   with Unreadable m -> Error m

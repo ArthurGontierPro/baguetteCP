@@ -211,7 +211,10 @@ let vars t = List.map (fun tm -> tm.x) t.terms
    D-0153 it packed with no PB row at all; lib/core/pb_analysis.ml instantiates the bits
    blocks before it resolves anything (lib/core/ladder.ml, "The bits arm"). *)
 let pb_row ?(bits_n = fun _ -> None) store (t : t) : Propagator.pb_row =
-  let terms, const =
+  (* The blocks are gathered reversed and flattened once (D-0153): the [acc @ block] this
+     was is quadratic in the row's length, and a mixed Challenge row is offered now. The
+     list is the same, term for term. *)
+  let blocks, const =
     List.fold_left
       (fun (acc, const) tm ->
         if tm.coeff = 0 then (acc, const)
@@ -226,9 +229,10 @@ let pb_row ?(bits_n = fun _ -> None) store (t : t) : Propagator.pb_row =
                   (max 0 (tm.decl_hi - tm.decl_lo))
                   (fun i -> (-tm.coeff, Lit.ge name (tm.decl_lo + 1 + i)))
           in
-          (acc @ block, Checked.add const (Checked.mul tm.coeff tm.decl_lo)))
+          (block :: acc, Checked.add const (Checked.mul tm.coeff tm.decl_lo)))
       ([], 0) t.terms
   in
+  let terms = List.concat (List.rev blocks) in
   { Propagator.r_terms = terms; r_degree = Checked.sub const t.rhs; r_cid = t.row_id }
 
 (* -------------------------------------------------------------- integer division *)
