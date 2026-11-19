@@ -238,6 +238,36 @@
    it verifies because [reduce] refuses to delete the ones that are leaned on. The
    citation guard is doing the work the citation count of 0 used to do for free.
 
+   ---------------------------------------------------------------------------
+   M10-search-strategy-T4 (D-0139) RE-MEASURED IT ON MODELS THAT LEARN 10^4 TO 10^5
+   ---------------------------------------------------------------------------
+
+   D-0051's two verdicts above were taken on a suite where the largest learned base was 73
+   constraints. D-0139 took them to the coding-theory models and fifteen Challenge
+   instances, 1 170 s each, and three things came out, in order:
+
+     1. **Nothing above could evict anything.** Every learned clause and PB row is cited
+        for the whole search (M2-L12/L13), so `lbd:2000` on QR48 evicted 0 of 11 684 and
+        refused 46.9 million proposals, 27 % slower than `off` because it sorted the
+        database on every conflict to propose them. The cap was not soft but absent.
+     2. **The cost the user saw is in PROPAGATING the base, not in holding it.** The
+        learning rate falls 2 to 135 times from the start of a run to its end; with
+        BAGUETTE_PROPAGATE_LEARNED=off and every clause still held, QR48 runs the same
+        nodes in a tenth of the time.
+     3. **With a detachable consumer ([gate], below) and three LBD tiers ([tiered]), a
+        policy can act**, and on the codes it removes most of that cost at an EQUAL search
+        (QR72 with proof 554 -> 296 s, the same conflicts). On the Challenge subset it buys
+        conflicts and no answer, a third of them clauses learned again after eviction, and
+        costs `bacp-22` a 2.3 times slower optimum; the checker's time does not move at an
+        equal search, so "a smaller database for the checker" buys nothing measurable here.
+
+   So [default] is still [keep_all], now as a recommendation to M10-T5 (restarts and an
+   activity heuristic change what eviction loses) rather than as D-0051's measurement.
+   [gate] is wired by the search only on branch `wave45-retention-hook` until the
+   cross-session request for lib/core/search.ml is taken; without it [tiered] can evict
+   only what has no consumer, exactly as [lbd] could. D-0139 has the tables, the binaries
+   each was measured on, the lock rule's break, and what is pending.
+
    ### Determinism
 
    The gate requires two runs of one binary to be byte-identical, and a learned database
@@ -246,6 +276,8 @@
    introduction order; [gone] and [cited] are [Hashtbl]s that are only ever queried with
    [find_opt]/[mem] and never folded or iterated; and every policy below sorts on a key
    ending in [e_seq], which is unique, so no sort is left to compare equal elements.
+   D-0139 kept that: [index] and the table [locked_instances] builds are lookup only,
+   and [tiered] ranks on a key ending in [e_seq] like the others.
 *)
 
 module Lit = Baguette_proof.Lit
@@ -259,6 +291,16 @@ module Writer = Baguette_proof.Writer
    merges in [Learned.make]), used for the duplicate MEASUREMENT below and for nothing
    else -- it is not part of any policy. [e_seq] is introduction order and is unique,
    which is what makes every sort here total. *)
+type tier = Core | Mid | Local
+
+let tier_to_string = function Core -> "core" | Mid -> "mid" | Local -> "local"
+
+(* M10-search-strategy-T4 (D-0139): the runtime consumer of a learned constraint, when
+   the search handed it to [gate] -- the engine instance [g_inst] and the switch that
+   turns it off. A [gate]d constraint is the only kind of CITED constraint a policy may
+   evict; see [gate] and [reduce]. *)
+type gate = { g_inst : int; mutable g_dead : bool }
+
 type entry = {
   e_cid : Writer.cid;
   e_lbd : int;
@@ -266,12 +308,23 @@ type entry = {
   e_seq : int;
   e_key : string;
   e_origin : string;
+  mutable e_tier : tier;
+      (* D-0139. Set from [e_lbd] at [add] under [tiered] ([Local] under every other
+         policy, which never reads it) and moved only by [tiered]: a [Mid] entry that was
+         not used between two of its checks is demoted to [Local]. *)
+  mutable e_used : bool;
+      (* D-0139. The gated instance propagated or conflicted since the last reduction
+         that looked at this entry -- the activity this solver can observe without a
+         hook in conflict analysis (lib/core/analysis.ml is not this module's). Set only
+         by [gate]'s wrapper, so an ungated entry is never "used". *)
+  mutable e_gate : gate option;
 }
 
 let entry_cid e = e.e_cid
 let entry_lbd e = e.e_lbd
 let entry_seq e = e.e_seq
 let entry_origin e = e.e_origin
+let entry_tier e = e.e_tier
 
 (* ----------------------------------------------------------------- policies *)
 
@@ -284,14 +337,97 @@ let entry_origin e = e.e_origin
    be a subset of it. [reduce] checks the subset property rather than trusting it, because
    a policy that returned an id the database does not hold would be a delete from a second
    owner -- the exact failure this module exists to prevent, arriving through the one door
-   that is meant to be extensible. *)
-type policy = { p_name : string; p_evict : entry list -> entry list }
+   that is meant to be extensible.
+
+   M10-search-strategy-T4 (D-0139) split it in two, [due] and [evict], and made the pair
+   something a policy CONSTRUCTS ([p_new]) per database:
+
+   - [due] answers from two counters whether [evict] has anything to do. [reduce] runs
+     once per learned constraint, and before D-0139 it materialised the whole live list
+     ([List.rev]) on every call, under [keep_all] too, to hand it to a function that
+     returned [] -- O(n) per conflict for nothing, at 35 000 held constraints. [due]
+     makes the common call O(1). For [fifo] and [lbd] it is exactly their old "n <= cap
+     then []" test, so what they evict is unchanged.
+   - [p_new] gives each database its own schedule state. [tiered] carries a reduction
+     count and the point at which it next reduces, and a policy VALUE is shared by every
+     solve of a config, so the state cannot live in the value.
+   - [p_detaches] says whether the policy may ever evict, i.e. whether [gate] has to wrap
+     anything. [keep_all] says no, and [gate] then returns the instance unchanged: the
+     default build runs the very closure it ran before D-0139. *)
+type evictor = {
+  due : added:int -> live:int -> bool;
+  evict : added:int -> entry list -> entry list;
+}
+
+(* ------------------------------------------------- M10-T4 / D-0139: three tiers
+
+   Glucose (Audemard and Simon, IJCAI 2009) and its three-tier successor (Oh, SAT 2015,
+   COMiniSatPS; the scheme Kissat and CaDiCaL kept):
+
+   - CORE: LBD <= [core]. A "glue" clause links few decision blocks and is kept for the
+     whole search. Never proposed.
+   - MID (Oh's tier 2): [core] < LBD <= [mid]. Kept while it is used. Every [mid_every]
+     learned constraints, a mid entry not used since the previous such check is demoted
+     to local, and every mid entry's use flag is cleared.
+   - LOCAL: everything else, and the demoted. At a local reduction the half of the local
+     tier ranked worst is proposed; the k-th reduction (k = 1, 2, ...) schedules the next
+     one [first + k * inc] learned constraints later -- Glucose's schedule, first = 2000
+     and inc = 300 in Glucose 2 and 3. Worst = unused before used, then higher LBD, then
+     older; the use flags of the local tier are cleared after the ranking.
+
+   "Used" is [e_used]: the gated instance propagated or conflicted since the entry's last
+   check. Glucose bumps on participation in conflict ANALYSIS, which this module cannot
+   observe without a hook in lib/core/analysis.ml; a propagation is the nearest signal
+   the instance itself gives, and it is a superset (every clause that takes part in an
+   analysis propagated or conflicted first). An ungated entry -- the build where the
+   search does not call [gate] -- is never used after its first check, which is the
+   honest reading: nothing observed it working.
+
+   A NEW entry starts USED, CaDiCaL's rule (a learned clause is created with its `used`
+   flag set): at the first check it meets it ranks with the used, whatever it did.
+   Without that grace a reduction ranks a clause learned one conflict earlier -- which has
+   had no chance to propagate -- with the unused, first in line; [reduce] runs right
+   after [add], before the search has backtracked, so the clause just learned would be
+   the likeliest victim of the reduction its own [add] triggered.
+
+   The schedule counts LEARNED CONSTRAINTS, not conflicts: [reduce] sees one call per
+   [add], and a conflict that also learns a PB row (M2-L6) adds two. D-0139 records the
+   pb-learned share per instance.
+
+   The LBD is the one computed at derivation ([Learn.lbd], after minimisation) and is not
+   updated later. Glucose recomputes it when a clause takes part in an analysis; that is
+   the same missing hook, recorded rather than approximated. A PB row carries the LBD of
+   the conflict it came from (lib/core/search.ml says why); RoundingSat's per-row LBD
+   (Elffers and Nordstrom, IJCAI 2018) would need levelled literals out of
+   lib/core/pb_analysis.ml, and D-0139 has the count of PB rows that would be scored. *)
+type tier_params = { core : int; mid : int; first : int; inc : int; mid_every : int }
+
+let default_tier_params =
+  { core = 2; mid = 6; first = 2000; inc = 300; mid_every = 10000 }
+
+let tier_of_lbd prm lbd =
+  if lbd <= prm.core then Core else if lbd <= prm.mid then Mid else Local
+
+type policy = {
+  p_name : string;
+  p_new : unit -> evictor;
+  p_detaches : bool;
+  p_tiers : tier_params option;
+}
 
 let name p = p.p_name
 
 (* Off. The behaviour before M2-L4: everything is retained until the search ends. Test
    (c)'s "policy off" side, and the control every measurement here is taken against. *)
-let keep_all = { p_name = "keep-all"; p_evict = (fun _ -> []) }
+let keep_all =
+  {
+    p_name = "keep-all";
+    p_new =
+      (fun () ->
+        { due = (fun ~added:_ ~live:_ -> false); evict = (fun ~added:_ _ -> []) });
+    p_detaches = false;
+    p_tiers = None;
+  }
 
 (* Evict oldest-first down to [cap]. This IS the activity policy -- see the header: with
    every learned constraint's activity identically zero, an activity ranking is a tie
@@ -300,14 +436,21 @@ let keep_all = { p_name = "keep-all"; p_evict = (fun _ -> []) }
 let fifo ~cap =
   {
     p_name = Printf.sprintf "fifo(cap=%d)" cap;
-    p_evict =
-      (fun live ->
-        let n = List.length live in
-        if n <= cap then []
-        else
-          List.filteri
-            (fun i _ -> i < n - cap)
-            (List.sort (fun a b -> compare a.e_seq b.e_seq) live));
+    p_new =
+      (fun () ->
+        {
+          due = (fun ~added:_ ~live -> live > cap);
+          evict =
+            (fun ~added:_ live ->
+              let n = List.length live in
+              if n <= cap then []
+              else
+                List.filteri
+                  (fun i _ -> i < n - cap)
+                  (List.sort (fun a b -> compare a.e_seq b.e_seq) live));
+        });
+    p_detaches = true;
+    p_tiers = None;
   }
 
 (* The policy. Rank by LBD descending -- a higher LBD is a worse constraint, Glucose's
@@ -318,18 +461,81 @@ let fifo ~cap =
 let lbd ~cap =
   {
     p_name = Printf.sprintf "lbd(cap=%d)" cap;
-    p_evict =
-      (fun live ->
-        let n = List.length live in
-        if n <= cap then []
-        else
-          let worst_first =
-            List.sort
-              (fun a b ->
-                match compare b.e_lbd a.e_lbd with 0 -> compare a.e_seq b.e_seq | c -> c)
-              live
-          in
-          List.filteri (fun i _ -> i < n - cap) worst_first);
+    p_new =
+      (fun () ->
+        {
+          due = (fun ~added:_ ~live -> live > cap);
+          evict =
+            (fun ~added:_ live ->
+              let n = List.length live in
+              if n <= cap then []
+              else
+                let worst_first =
+                  List.sort
+                    (fun a b ->
+                      match compare b.e_lbd a.e_lbd with
+                      | 0 -> compare a.e_seq b.e_seq
+                      | c -> c)
+                    live
+                in
+                List.filteri (fun i _ -> i < n - cap) worst_first);
+        });
+    p_detaches = true;
+    p_tiers = None;
+  }
+
+(* The three-tier policy; see the comment above [tier_params]. *)
+let tiered ?(params = default_tier_params) () =
+  let prm = params in
+  if
+    prm.core < 0 || prm.mid < prm.core || prm.first < 1 || prm.inc < 0
+    || prm.mid_every < 1
+  then
+    invalid_arg
+      "Retention.tiered: need 0 <= core <= mid, first >= 1, inc >= 0, mid_every >= 1";
+  {
+    p_name =
+      Printf.sprintf "tiered(core<=%d,mid<=%d,first=%d,inc=%d,mid_every=%d)" prm.core
+        prm.mid prm.first prm.inc prm.mid_every;
+    p_new =
+      (fun () ->
+        let k = ref 0 in
+        let next_local = ref prm.first in
+        let next_mid = ref prm.mid_every in
+        {
+          due = (fun ~added ~live:_ -> added >= !next_local || added >= !next_mid);
+          evict =
+            (fun ~added live ->
+              if added >= !next_mid then (
+                List.iter
+                  (fun e ->
+                    if e.e_tier = Mid then (
+                      if not e.e_used then e.e_tier <- Local;
+                      e.e_used <- false))
+                  live;
+                next_mid := added + prm.mid_every);
+              if added < !next_local then []
+              else
+                let local = List.filter (fun e -> e.e_tier = Local) live in
+                let worst_first =
+                  List.sort
+                    (fun a b ->
+                      match compare a.e_used b.e_used with
+                      | 0 -> (
+                          match compare b.e_lbd a.e_lbd with
+                          | 0 -> compare a.e_seq b.e_seq
+                          | c -> c)
+                      | c -> c)
+                    local
+                in
+                List.iter (fun e -> e.e_used <- false) local;
+                incr k;
+                next_local := added + prm.first + (!k * prm.inc);
+                let half = List.length local / 2 in
+                List.filteri (fun i _ -> i < half) worst_first);
+        });
+    p_detaches = true;
+    p_tiers = Some prm;
   }
 
 (* The default is KEEP-ALL, and that is the measurement's verdict rather than a decision
@@ -340,7 +546,10 @@ let lbd ~cap =
    [lbd ~cap:16] is what the default WOULD be if the crossover the header describes were
    ever found, and `BAGUETTE_RETENTION=lbd:16` is how to run it without changing a line.
    It is not dead code: test/unit/test_retention.ml runs it end to end through the
-   checker, which is where the eviction path is exercised. *)
+   checker, which is where the eviction path is exercised.
+
+   D-0139 re-measured the question on the codes set and a Challenge subset, with
+   [tiered]; its recommendation is in docs/DECISIONS.md and the decision is M10-T5's. *)
 let default = keep_all
 
 (* Every policy, at one cap. For a test that wants to run the axis rather than a point
@@ -362,7 +571,22 @@ let () =
 
 type t = {
   policy : policy;
+  ev : evictor; (* [policy.p_new ()], this database's own schedule state *)
   mutable live_rev : entry list; (* newest first *)
+  mutable n_live : int; (* [List.length live_rev], kept so [size] and [due] are O(1) *)
+  index : (Writer.cid, entry) Hashtbl.t;
+      (* D-0139. cid -> its entry, for the ids in [live_rev] exactly. Lookup only, never
+         iterated (determinism, header). [holds] used to walk [live_rev], which made
+         [add] O(n) and a search O(n^2) in learned constraints. *)
+  mutable store : Store.t option;
+      (* D-0139. The store the gated instances run on, handed over by [gate]; [reduce]
+         reads its trail to find the LOCKED entries. [None] until something is gated. *)
+  mutable last_conflict : int;
+      (* D-0139. Engine id of the most recent gated instance whose run returned
+         [Conflict], or -1. See [locked_instances] for why it is protected. *)
+  mutable n_detached : int;
+  mutable n_locked : int;
+  mutable n_reductions : int;
   mutable next_seq : int;
   mutable n_added : int;
   mutable n_evicted : int;
@@ -393,7 +617,15 @@ type t = {
 let create ?(policy = default) () =
   {
     policy;
+    ev = policy.p_new ();
     live_rev = [];
+    n_live = 0;
+    index = Hashtbl.create 64;
+    store = None;
+    last_conflict = -1;
+    n_detached = 0;
+    n_locked = 0;
+    n_reductions = 0;
     next_seq = 0;
     n_added = 0;
     n_evicted = 0;
@@ -408,16 +640,34 @@ let create ?(policy = default) () =
 
 let live t = List.rev_map (fun e -> e.e_cid) t.live_rev
 let live_entries t = List.rev t.live_rev
-let size t = List.length t.live_rev
+let size t = t.n_live
 let n_added t = t.n_added
 let n_evicted t = t.n_evicted
 let n_swept t = t.n_swept
 let n_duplicate t = t.n_duplicate
 let n_cited t = t.n_cited
 let n_pinned t = t.n_pinned
+let n_detached t = t.n_detached
+let n_locked t = t.n_locked
+let n_reductions t = t.n_reductions
+let entry_of t cid = Hashtbl.find_opt t.index cid
 let policy_name t = t.policy.p_name
-let holds t cid = List.exists (fun e -> e.e_cid = cid) t.live_rev
+let holds t cid = Hashtbl.mem t.index cid
 let was_retired t cid = Hashtbl.mem t.gone cid
+
+(* M10-search-strategy-T4 (D-0139): a PROGRESS TRACE, measurement only. Every
+   [!trace_every] constraints added, one stderr line with what the database holds and the
+   process CPU time, so that a run's learning RATE can be read at its start and at its end
+   -- the per-node slowdown the codes models show as the base grows is a slope, and a
+   single end-of-run total cannot show a slope. 0 (the default) prints nothing; bin/main.ml
+   sets it from BAGUETTE_RETENTION_TRACE. stderr only, so the determinism gate and the
+   stdout-identity lane never see it. *)
+let trace_every = ref 0
+
+let trace t =
+  if !trace_every > 0 && t.n_added mod !trace_every = 0 then
+    Printf.eprintf "retention-trace: added=%d live=%d evicted=%d pinned=%d cpu=%.2f\n%!"
+      t.n_added t.n_live t.n_evicted t.n_pinned (Sys.time ())
 
 (* Register a learned constraint. The id must be one [Learned.introduce] or
    [Pb_analysis.introduce] just handed back, and registering it is what transfers I-X2's
@@ -448,11 +698,18 @@ let add t ~cid ~(row : Learned.t) ~lbd ~origin =
       e_seq = t.next_seq;
       e_key = key;
       e_origin = origin;
+      e_tier =
+        (match t.policy.p_tiers with Some prm -> tier_of_lbd prm lbd | None -> Local);
+      e_used = t.policy.p_tiers <> None (* the grace above [tier_params] *);
+      e_gate = None;
     }
   in
   t.next_seq <- t.next_seq + 1;
   t.n_added <- t.n_added + 1;
   t.live_rev <- e :: t.live_rev;
+  t.n_live <- t.n_live + 1;
+  Hashtbl.replace t.index cid e;
+  trace t;
   e
 
 (* --------------------------------------------------------------- I-X3: citations *)
@@ -488,6 +745,110 @@ let uncite t ~cid = Hashtbl.remove t.cited cid
    is a statement about lifetime and is made once, in one place. *)
 let release_all t = Hashtbl.reset t.cited
 let cited_by t cid = Hashtbl.find_opt t.cited cid
+
+(* ------------------------------------------- D-0139: a consumer that CAN be detached
+
+   Since M2-L12 every learned clause of two or more literals is a registered
+   [Clause.Learned_clause] instance and every learned PB row a [Pb] instance, and both
+   are [cite]d for the whole search, so [reduce] refuses to evict them: on the codes
+   models and the Challenge subset D-0139 measured, `lbd:N` and `fifo:N` evict NOTHING
+   and only count refusals ([n_pinned]). The cap is soft to the point of being absent.
+
+   [gate] is what lets a policy evict a constraint that has a consumer. The search hands
+   the instance over before [Engine.add]; what comes back is the same instance behind a
+   switch:
+
+   - while the switch is on it runs and advises exactly as before, and records whether a
+     run propagated (the trail grew) or conflicted -- [e_used], the activity [tiered]
+     ranks on -- and, for a conflict, which instance it was ([last_conflict]);
+   - once [reduce] turns it off, [run] is [Fixpoint] without calling the propagator and
+     [advise] is [false], so the engine never queues it again. Both are what a
+     propagator over a constraint that is no longer in the model may say: deleting a
+     learned constraint is sound, it is redundant by construction.
+
+   WHEN a gated constraint may be evicted is the proof's question, and the answer is
+   [locked_instances] below. The engine keeps the dead instance in its watcher lists (a
+   removal API would be lib/core/engine.ml's, which is not this module's; D-0139 records
+   the request), so a dead instance still costs one closure call per wake on its
+   variables -- and no run, which is where a learned clause's per-node cost was.
+
+   Under [keep_all] ([p_detaches = false]) the instance is returned UNCHANGED, so the
+   default build runs the very closures it ran before this function existed. *)
+let gate t store ~cid (inst : Propagator.instance) : Propagator.instance =
+  if not t.policy.p_detaches then inst
+  else
+    match Hashtbl.find_opt t.index cid with
+    | None ->
+        raise
+          (Not_owned
+             (Printf.sprintf
+                "retention: [gate] was handed instance #%d for id %d, which this \
+                 database does not hold; register the constraint with [add] first"
+                inst.Propagator.id cid))
+    | Some e ->
+        let g = { g_inst = inst.Propagator.id; g_dead = false } in
+        e.e_gate <- Some g;
+        t.store <- Some store;
+        let inner_run = inst.Propagator.run
+        and inner_advise = inst.Propagator.inst_advise in
+        let run s =
+          if g.g_dead then Propagator.Fixpoint
+          else
+            let before = Store.trail_length s in
+            match inner_run s with
+            | Propagator.Conflict _ as r ->
+                e.e_used <- true;
+                t.last_conflict <- g.g_inst;
+                r
+            | Propagator.Fixpoint as r ->
+                if Store.trail_length s <> before then e.e_used <- true;
+                r
+        in
+        {
+          inst with
+          Propagator.run;
+          inst_advise = (fun s v -> (not g.g_dead) && inner_advise s v);
+        }
+
+(* The engine ids whose constraint the proof may still need, at the moment of a
+   reduction. Two kinds, and the argument for each is the whole of why eviction of a
+   gated constraint is sound in THIS proof system:
+
+   1. THE PROPAGATOR OF A TRAIL ENTRY STILL ON THE TRAIL (Glucose's "locked" clause,
+      generalised from the reason of the current assignment to every entry). lib/core/
+      trace.ml is LAZY: a branch writes its trace lines when it fails, by walking the
+      trail, and a line for an entry propagated by a learned instance is `rup` against
+      that learned constraint. So the constraint must be on the page for as long as the
+      entry can still be traced, which is for as long as it is on the trail. A backjump
+      pops it and [Writer.wipe_level] deletes any line it got; after that nothing can
+      write a line citing the constraint through that entry.
+   2. THE MOST RECENT GATED CONFLICT ([last_conflict]). [reduce] is called from inside
+      conflict handling, after the learned clause is on the page and BEFORE the PB path
+      (lib/core/search.ml's [pb_at_conflict]) resolves the conflicting instance's row. If
+      that instance is gated it is the last gated one to have returned [Conflict] (the
+      engine stops at the first conflict), so protecting it is exact; when the conflict
+      came from elsewhere, protecting a stale id costs one entry one reduction.
+
+   Every other reference to a learned id is a line already written (its validity does
+   not depend on its premises staying -- VeriPB's database keeps derived constraints) or
+   a level-0 unit, which [tiered] never proposes (LBD 1) and which is cited without a
+   gate, so no policy can evict it. Under [BAGUETTE_PROOF_AUDIT] and the checker, every
+   proof the D-0139 hook build emitted over the 173 test models verified, under five
+   schedules down to a reduction per learned constraint. Half 1 is load-bearing: without
+   it `colour_unsat` is rejected ("Trying to access constraint with ID 175 that has
+   already been deleted"). Half 2 reddens no model in the suite and is kept on the
+   argument above; the unit lanes in test/unit/test_retention.ml pin both. *)
+let locked_instances t =
+  let locked = Hashtbl.create 64 in
+  if t.last_conflict >= 0 then Hashtbl.replace locked t.last_conflict ();
+  (match t.store with
+  | None -> ()
+  | Some s ->
+      for i = 0 to Store.trail_length s - 1 do
+        let en : Store.entry = Store.trail_entry s i in
+        Hashtbl.replace locked en.Store.prop ()
+      done);
+  locked
 
 (* ----------------------------------------------------------------- deletion *)
 
@@ -557,45 +918,87 @@ let retire ?(unchecked = false) t ctx ~why (ids : Writer.cid list) =
         ids;
     Writer.delete_many (Justify.writer ctx) ids;
     Hashtbl.iter (fun cid e -> Hashtbl.replace t.gone cid e) held;
-    t.live_rev <- List.filter (fun e -> not (Hashtbl.mem wanted e.e_cid)) t.live_rev)
+    t.live_rev <- List.filter (fun e -> not (Hashtbl.mem wanted e.e_cid)) t.live_rev;
+    (* D-0139: [index] and [n_live] follow [live_rev]. [held] is exactly the set of ids
+       in [ids] that [live_rev] held (and [add] refuses a repeat), so it is what left. *)
+    Hashtbl.iter (fun cid _ -> Hashtbl.remove t.index cid) held;
+    t.n_live <- t.n_live - Hashtbl.length held)
 
 (* Apply the policy. Returns the ids evicted, in the order they were deleted.
 
    The subset check is not defensive decoration: [policy] is the extension point, so a
    policy is the one place where an id that this database does not hold could enter the
-   deletion path. [retire]'s [Not_owned] is where it lands. *)
+   deletion path. [retire]'s [Not_owned] is where it lands.
+
+   D-0139: the call is O(1) unless the policy is [due], which is what keeps the once-per-
+   learned-constraint call off the profile (see [evictor]). *)
 let reduce t ctx =
-  let victims = t.policy.p_evict (live_entries t) in
-  (* M2-L12: A CITED CONSTRAINT IS NOT ELIGIBLE FOR EVICTION, so the cap is SOFT.
+  if not (t.ev.due ~added:t.n_added ~live:t.n_live) then []
+  else
+    let victims = t.ev.evict ~added:t.n_added (List.rev t.live_rev) in
+    t.n_reductions <- t.n_reductions + 1;
+    (* M2-L12: A CITED CONSTRAINT IS NOT ELIGIBLE FOR EVICTION, so the cap is SOFT.
 
-     Before M2-L12 this filter would have been dead code -- nothing propagated a learned
-     constraint, nothing cited one, and a policy's choice was always performable. Now a
-     unit is applied at every node and a wider clause has a registered instance, and a
-     trace line either writes is RUP only while the constraint is on the page. A policy
-     that named one would be naming a deletion the search cannot survive.
+       Before M2-L12 this filter would have been dead code -- nothing propagated a learned
+       constraint, nothing cited one, and a policy's choice was always performable. Now a
+       unit is applied at every node and a wider clause has a registered instance, and a
+       trace line either writes is RUP only while the constraint is on the page. A policy
+       that named one would be naming a deletion the search cannot survive.
 
-     Filtering here rather than letting [retire]'s [Cited] guard fire is the difference
-     between a POLICY DECISION and a FAULT, and the two must not be confused. [Cited] is
-     for a caller deleting something it should have known was in use; that is a bug and
-     it raises. A cap that cannot be met because everything under it is in use is not a
-     bug, it is the measurement M2-L12 owes D-0051 -- so it is counted ([n_pinned]) and
-     reported, and [BAGUETTE_RETENTION=lbd:0] stays runnable instead of aborting the
-     solver.
+       Filtering here rather than letting [retire]'s [Cited] guard fire is the difference
+       between a POLICY DECISION and a FAULT, and the two must not be confused. [Cited] is
+       for a caller deleting something it should have known was in use; that is a bug and
+       it raises. A cap that cannot be met because everything under it is in use is not a
+       bug, it is the measurement M2-L12 owes D-0051 -- so it is counted ([n_pinned]) and
+       reported, and [BAGUETTE_RETENTION=lbd:0] stays runnable instead of aborting the
+       solver.
 
-     The consequence is stated rather than buried: with [propagate_learned] on, NO
-     policy can evict a constraint with a consumer, so the achievable cap is bounded
-     below by the number of live consumers. That is exactly what the sweep in D-0051's
-     successor record has to be read against. *)
-  let evictable, pinned =
-    List.partition (fun e -> not (Hashtbl.mem t.cited e.e_cid)) victims
-  in
-  t.n_pinned <- t.n_pinned + List.length pinned;
-  let ids = List.map (fun e -> e.e_cid) evictable in
-  if ids = [] then []
-  else (
-    retire t ctx ~why:(Printf.sprintf "eviction by %s" t.policy.p_name) ids;
-    t.n_evicted <- t.n_evicted + List.length ids;
-    ids)
+       The consequence is stated rather than buried: with [propagate_learned] on, NO
+       policy can evict a constraint with a consumer, so the achievable cap is bounded
+       below by the number of live consumers. That is exactly what the sweep in D-0051's
+       successor record has to be read against.
+
+       D-0139 makes ONE exception, and it is the whole of what makes retention real with
+       propagation on: a cited constraint whose only consumer is a [gate]d instance is
+       eligible unless [locked_instances] names that instance. Evicting it turns the gate
+       off and releases the citation BEFORE [retire], so [retire]'s [Cited] guard still
+       means exactly what it meant. A cited constraint with no gate -- a global unit, or
+       any consumer of a search that does not call [gate] -- is pinned as before. *)
+    let locked =
+      if List.exists (fun e -> e.e_gate <> None && Hashtbl.mem t.cited e.e_cid) victims
+      then Some (locked_instances t)
+      else None
+    in
+    let evictable, pinned =
+      List.partition
+        (fun e ->
+          if not (Hashtbl.mem t.cited e.e_cid) then true
+          else
+            match (e.e_gate, locked) with
+            | Some g, Some l ->
+                if Hashtbl.mem l g.g_inst then (
+                  t.n_locked <- t.n_locked + 1;
+                  false)
+                else true
+            | _ -> false)
+        victims
+    in
+    t.n_pinned <- t.n_pinned + List.length pinned;
+    let ids = List.map (fun e -> e.e_cid) evictable in
+    if ids = [] then []
+    else (
+      List.iter
+        (fun e ->
+          match e.e_gate with
+          | Some g when Hashtbl.mem t.cited e.e_cid ->
+              g.g_dead <- true;
+              Hashtbl.remove t.cited e.e_cid;
+              t.n_detached <- t.n_detached + 1
+          | _ -> ())
+        evictable;
+      retire t ctx ~why:(Printf.sprintf "eviction by %s" t.policy.p_name) ids;
+      t.n_evicted <- t.n_evicted + List.length ids;
+      ids)
 
 (* The end-of-search sweep: retire whatever is still held, once, on every path.
 
@@ -613,6 +1016,14 @@ let retire_all t ctx =
 (* A one-line summary for [--stats] and for a test that wants the shape of a run. *)
 let to_string t =
   Printf.sprintf
-    "%s: %d added, %d evicted, %d swept, %d live, %d duplicate, %d cited, %d pinned"
+    "%s: %d added, %d evicted, %d swept, %d live, %d duplicate, %d cited, %d pinned%s"
     t.policy.p_name t.n_added t.n_evicted t.n_swept (size t) t.n_duplicate t.n_cited
     t.n_pinned
+    (* D-0139: only for [tiered], so the keep-all, fifo and lbd lines are the ones the
+       M11-T2 differential lane recorded (it compares this counter as text; the first
+       draft appended it for every detaching policy and reddened all 84 fifo/lbd runs
+       on this counter alone). *)
+    (if t.policy.p_tiers <> None then
+       Printf.sprintf ", %d reductions, %d detached, %d locked" t.n_reductions
+         t.n_detached t.n_locked
+     else "")

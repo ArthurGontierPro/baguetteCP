@@ -289,7 +289,10 @@ let usage () =
   prerr_endline "                    rather than a silent `none`.";
   prerr_endline "";
   prerr_endline
-    "  BAGUETTE_RETENTION=off|fifo:N|lbd:N  the learned-constraint retention policy";
+    "  BAGUETTE_RETENTION=off|fifo:N|lbd:N|tiered[:K=N,...]  the learned-constraint";
+  prerr_endline
+    "                    retention policy; tiered (D-0139) takes keys core, mid,";
+  prerr_endline "                    first, inc and mid_every, e.g. tiered:first=500";
   prerr_endline
     "                    (M2-L4). Default `off`: measured, see lib/core/retention.ml.";
   prerr_endline
@@ -764,17 +767,61 @@ let audit_enabled () =
    that silently used the default because the spelling was wrong is exactly the
    "byte-identical before and after" trap CLAUDE.md records twice. *)
 let retention_policy () =
+  (match Sys.getenv_opt "BAGUETTE_RETENTION_TRACE" with
+  | None -> ()
+  | Some v -> (
+      match int_of_string_opt v with
+      | Some n when n >= 0 -> Retention.trace_every := n
+      | _ ->
+          prerr_endline
+            (Printf.sprintf
+               "baguette: BAGUETTE_RETENTION_TRACE=%S is not a count. Use N >= 0." v);
+          exit 2));
   let bad v =
     prerr_endline
       (Printf.sprintf
          "baguette: BAGUETTE_RETENTION=%S is not a policy. Use off, fifo:N or lbd:N, \
-          where N is the database cap."
+          where N is the database cap, or \
+          tiered[:core=2,mid=6,first=2000,inc=300,mid_every=10000] (D-0139)."
          v);
     exit 2
+  in
+  (* D-0139: `tiered`, or `tiered:` followed by comma-separated KEY=N overriding
+     [Retention.default_tier_params] (keys core, mid, first, inc, mid_every). An unknown
+     key, a repeated one or a bad number FAILS, by the same rule as the rest. *)
+  let tiered v spec =
+    let d = Retention.default_tier_params in
+    let seen = Hashtbl.create 5 in
+    let set (p : Retention.tier_params) kv =
+      match String.index_opt kv '=' with
+      | None -> bad v
+      | Some i -> (
+          let k = String.sub kv 0 i in
+          let n = String.sub kv (i + 1) (String.length kv - i - 1) in
+          if Hashtbl.mem seen k then bad v;
+          Hashtbl.replace seen k ();
+          match int_of_string_opt n with
+          | None -> bad v
+          | Some n -> (
+              match k with
+              | "core" -> { p with core = n }
+              | "mid" -> { p with mid = n }
+              | "first" -> { p with first = n }
+              | "inc" -> { p with inc = n }
+              | "mid_every" -> { p with mid_every = n }
+              | _ -> bad v))
+    in
+    let params =
+      if spec = "" then d else List.fold_left set d (String.split_on_char ',' spec)
+    in
+    try Retention.tiered ~params () with Invalid_argument _ -> bad v
   in
   match Sys.getenv_opt "BAGUETTE_RETENTION" with
   | None -> Retention.default
   | Some "off" -> Retention.keep_all
+  | Some "tiered" -> tiered "tiered" ""
+  | Some v when String.length v > 7 && String.sub v 0 7 = "tiered:" ->
+      tiered v (String.sub v 7 (String.length v - 7))
   | Some v -> (
       match String.index_opt v ':' with
       | None -> bad v
