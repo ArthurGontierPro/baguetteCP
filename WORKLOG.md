@@ -20,6 +20,7 @@ of it to every session and stopping at a broken line before it even reached the 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
 | M12-parity-T1 (re-run on the orbit model) | the `wave49-parity` branch only (merge main into it if needed); on main only `docs/DECISIONS.md` (a D-0147 addendum) and `docs/ROADMAP.md` M12 rows, merged by the orchestrator | agent-parity2 (`wave49-parity`) | 2026-11-19 |
+| M10-search-strategy-T5 (the user's default decision) and M11-complexity-T3 §9 (deferred) | `bin/main.ml` (the stale `-f` warning), `test/unit/test_endtoend.ml` (its check), `README.md` (usage), `docs/DECISIONS.md` (D-0142 addendum, D-0154), `docs/ROADMAP.md` (M10-T5 and M11-T3 rows) | orchestrator | 2026-11-19 |
 
 ## Cross-session requests
 
