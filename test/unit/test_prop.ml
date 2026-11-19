@@ -8435,6 +8435,321 @@ let test_regular_veripb () =
     ~name:"regular: the no-two-consecutive proof, lemmas, trace and nogood, verifies"
     ~build:(fun _ -> (opb, pbp))
 
+(* ===================================================== M7-T33: alldiff conflicts learn
+
+   D-0156. Until M7-T33 both of all_different's pigeonholes -- stage 1's Hall interval
+   holding one variable too many, and stage 2's matching that cannot saturate -- reached
+   the store as a push that must fail, and [Store.apply]'s [Failed] arm paired the
+   derivation with [Reason.none] at every depth, so [Learn.at_conflict] saw an empty cut
+   (2015_p1f_13 learned 0 clauses, D-0151 section 2). Under a decision they now carry
+   their facts and their derivation is written ahead of `rup ~facts >= 1`, cumulative's
+   arrangement (D-0096). At the root nothing changed.
+
+   The two scenes are test/models/alldiff_conflict_learn_sat.fzn and
+   alldiff_regin_conflict_learn_sat.fzn, inline. In each, a decision on [k] confines or
+   holes x1..x3 through THREE single-variable propagators (int_le / int_ne) that all
+   watch [k] and none of which watches another x, so the engine's FIFO runs all three
+   before the all_different they wake: the conflict is all_different's by construction.
+   Domains stay in single digits (D-0028). *)
+
+module Learn = Baguette_core.Learn
+module Learned = Baguette_core.Learned
+
+(* Stage 1. k = 1 fixes every x to 1 (a one-value pigeonhole, RUP on one pairwise row);
+   k = 2 confines three variables to {1, 2}, which no pairwise row refutes alone; k = 3
+   is SAT. *)
+let m7t33_stage1_src =
+  "var 1..4: k :: output_var;\n\
+   var 1..4: x1 :: output_var;\n\
+   var 1..4: x2 :: output_var;\n\
+   var 1..4: x3 :: output_var;\n\
+   constraint int_le(x1,k);\n\
+   constraint int_le(x2,k);\n\
+   constraint int_le(x3,k);\n\
+   constraint all_different_int([x1,x2,x3]);\n\
+   solve :: int_search([k,x1,x2,x3], input_order, indomain_min, complete) satisfy;\n"
+
+(* Stage 2. k = 2 punches the hole 2 in x1..x3 (int_ne, tail k <= 2): every window is
+   still 1..3, so stage 1 sees a Hall interval and nothing to push, and the matching over
+   {1, 3} fails -- a Regin conflict whose only facts are the holes' REMOVER's. k = 3
+   moves every upper bound to 2 (a stage-1 conflict); k = 4 is SAT. *)
+let m7t33_regin_src =
+  "var 2..4: k :: output_var;\n\
+   var 1..3: x1 :: output_var;\n\
+   var 1..3: x2 :: output_var;\n\
+   var 1..3: x3 :: output_var;\n\
+   constraint int_ne(x1,k);\n\
+   constraint int_ne(x2,k);\n\
+   constraint int_ne(x3,k);\n\
+   constraint all_different_int([x1,x2,x3]);\n\
+   solve :: int_search([k,x1,x2,x3], input_order, indomain_min, complete) satisfy;\n"
+
+(* (a) The conflicts themselves, driven by hand: decide k <= [at] at level 1 and look at
+   what the engine hands back. *)
+let m7t33_conflict_at ~title ~src ~at ~want_lit =
+  let c = compile_src src in
+  let store = c.Compile.store and engine = c.Compile.engine in
+  let path = Filename.temp_file "baguette_m7t33" ".pbp" in
+  let oc = open_out path in
+  Encoding.start_proof c.Compile.encoding (Writer.create oc);
+  check
+    (title ^ ": the root is a fixpoint")
+    (Engine.propagate engine store = Engine.Fixpoint);
+  let k = Option.get (Store.var_named store "k") in
+  Store.new_level store;
+  ignore
+    (Store.set_hi store k at
+       (Reason.because ~concludes:None Reason.none (Explanation.decision (Lit.le "k" at)))
+      : Store.outcome);
+  (match Engine.propagate engine store with
+  | Engine.Fixpoint -> check (title ^ ": the decision reaches a conflict") false
+  | Engine.Conflict cf ->
+      check
+        (title ^ ": the conflict is all_different's (the scene is what we think it is)")
+        (Engine.name_of engine cf.Store.c_prop = Alldiff.name);
+      check
+        (title ^ ": it is made under deriving_ahead (store.ml's c_ahead)")
+        cf.Store.c_ahead;
+      let lits = Reason.lits cf.Store.c_reason in
+      check
+        (title ^ ": it carries facts (it used to be Reason.none at every depth)")
+        (lits <> []);
+      check
+        (Printf.sprintf "%s: the facts include %s (got %s)" title (Lit.to_string want_lit)
+           (String.concat " " (List.map Lit.to_string lits)))
+        (List.mem want_lit lits);
+      check
+        (title ^ ": no fact is listed twice")
+        (List.length (List.sort_uniq compare (Reason.facts cf.Store.c_reason))
+        = List.length (Reason.facts cf.Store.c_reason));
+      check
+        (title ^ ": the reason and the justification agree (D-0026)")
+        (Store.agreement_holds store
+           (Reason.because ~concludes:None
+              (Reason.facts cf.Store.c_reason)
+              cf.Store.c_why));
+      check
+        (title ^ ": Learn.at_conflict returns Some")
+        (Option.is_some
+           (Learn.at_conflict store cf ~vars_of:(Engine.vars_of engine)
+              ~decl:(Learned.decl_of_encoding c.Compile.encoding))));
+  close_out oc;
+  try Sys.remove path with _ -> ()
+
+(* And the root, which must NOT change: a pigeonhole at level 0 is still factless, so
+   search.ml's root arm writes the derivation that closes to [0 >= 1] and every root
+   refutation stays byte-identical (D-0101's split). *)
+let m7t33_root_is_factless () =
+  let c =
+    compile_src
+      "var 1..2: x1;\n\
+       var 1..2: x2;\n\
+       var 1..2: x3;\n\
+       constraint all_different_int([x1,x2,x3]);\n\
+       solve satisfy;\n"
+  in
+  let path = Filename.temp_file "baguette_m7t33_root" ".pbp" in
+  let oc = open_out path in
+  Encoding.start_proof c.Compile.encoding (Writer.create oc);
+  (match Engine.propagate c.Compile.engine c.Compile.store with
+  | Engine.Fixpoint -> check "M7-T33 root: the three-into-two pigeonhole conflicts" false
+  | Engine.Conflict cf ->
+      check "M7-T33 root: the root pigeonhole is still factless (byte-identical root)"
+        (Reason.is_empty cf.Store.c_reason));
+  close_out oc;
+  try Sys.remove path with _ -> ()
+
+let test_m7t33_conflict_facts () =
+  m7t33_conflict_at ~title:"M7-T33 a stage 1 (k <= 2)" ~src:m7t33_stage1_src ~at:2
+    ~want_lit:(Lit.le "x3" 2);
+  m7t33_conflict_at ~title:"M7-T33 a regin (k <= 2)" ~src:m7t33_regin_src ~at:2
+    ~want_lit:(Lit.le "k" 2);
+  m7t33_root_is_factless ()
+
+(* (b) THE LANES, on each scene's own proof. Solved under search as the CLI does (the
+   model's own order), with the audit on. SAT, so the database is not contradictory
+   (D-0053), and every lane is pinned to ONE line (D-0066/D-0073: a rup is checked by
+   being load-bearing, not by the model's answer):
+
+     control    the honest proof verifies, and the run learned from the conflicts;
+     standalone the conflict line stated alone against the .opb is REFUSED (I-X10: it is
+                the counting argument, not reverse unit propagation) -- cumulative's lane;
+     no-pol     the honest proof with the derivation ahead of that line deleted is
+                refused AT that line, so the derivation is what carries it in sequence too;
+     no-fact    the line with its last fact dropped is refused at that line: every fact is
+                one the derivation leaves in its row (the crossed opposing bound among them).
+
+   Each refusal is asserted on the checker's WORDING at full strength ([rup_wording]) and
+   on the line it names ("Checking error at <path>:<n>"): an exit status cannot tell a
+   judgement from a parse error, and any other RUP failure in the file would match the
+   wording alone. *)
+let m7t33_veripb ~opb ~pbp =
+  match veripb_path () with
+  | None -> None
+  | Some veripb ->
+      let log = pbp ^ ".log" in
+      let rc =
+        Sys.command
+          (Printf.sprintf "%s %s %s > %s 2>&1" (Filename.quote veripb)
+             (Filename.quote opb) (Filename.quote pbp) (Filename.quote log))
+      in
+      let out = read_file log in
+      (try Sys.remove log with _ -> ());
+      Some (rc = 0, out)
+
+(* The line number in "Checking error at <path>:<n>" (or the June build's "Verification
+   error at", D-0100). *)
+let m7t33_error_line out =
+  let find marker =
+    let n = String.length out and m = String.length marker in
+    let rec go i =
+      if i + m > n then None
+      else if String.sub out i m = marker then Some (i + m)
+      else go (i + 1)
+    in
+    go 0
+  in
+  match
+    match find "Checking error at " with
+    | Some _ as r -> r
+    | None -> find "Verification error at "
+  with
+  | None -> None
+  | Some start -> (
+      let stop = ref start in
+      while !stop < String.length out && out.[!stop] <> '\n' do
+        incr stop
+      done;
+      let tail = String.sub out start (!stop - start) in
+      match String.rindex_opt tail ':' with
+      | None -> None
+      | Some c -> int_of_string_opt (String.sub tail (c + 1) (String.length tail - c - 1))
+      )
+
+let m7t33_write path lines =
+  let oc = open_out path in
+  List.iter
+    (fun l ->
+      output_string oc l;
+      output_char oc '\n')
+    lines;
+  close_out oc
+
+(* A refusal lane: [lines] written as a proof, refused at the RUP wording AT [at] (1-based). *)
+let m7t33_refused ~name ~opb ~pbp ~at lines =
+  m7t33_write pbp lines;
+  match m7t33_veripb ~opb ~pbp with
+  | None -> check (name ^ ": veripb is available (a missing checker is a FAILURE)") false
+  | Some (true, _) -> check (name ^ ": REFUSED (veripb accepted the mutated proof)") false
+  | Some (false, out) ->
+      let ok_word = contains_sub ~needle:rup_wording out in
+      let line = m7t33_error_line out in
+      check
+        (Printf.sprintf "%s: REFUSED at the RUP wording, at line %d (got %s)" name at
+           (match line with Some n -> string_of_int n | None -> "no line"))
+        (ok_word && line = Some at);
+      if not (ok_word && line = Some at) then Printf.printf "     veripb said: %s\n" out
+
+let m7t33_lane ~title ~src ~min_learned ~line ~no_fact =
+  let c = compile_src src in
+  let dir = Filename.temp_file "baguette_m7t33_lane" "" in
+  Sys.remove dir;
+  Sys.mkdir dir 0o700;
+  let opb = Filename.concat dir "m.opb" and pbp = Filename.concat dir "m.pbp" in
+  let oc = open_out opb in
+  Encoding.write_opb ~comments:[ "M7-T33" ] c.Compile.encoding oc;
+  close_out oc;
+  let n_model = Encoding.n_constraints c.Compile.encoding in
+  let oc = open_out pbp in
+  let writer = Writer.create ~audit:true oc in
+  Encoding.start_proof c.Compile.encoding writer;
+  let ctx = Justify.create ~writer ~encoding:c.Compile.encoding in
+  let stats = Search.stats_create () in
+  let outcome =
+    Search.solve ~engine:c.Compile.engine ~store:c.Compile.store ~ctx
+      ~check:(fun _ -> true)
+      ~stats ?order:c.Compile.order ()
+  in
+  close_out oc;
+  check (title ^ ": SAT") (match outcome with Search.Sat _ -> true | _ -> false);
+  check
+    (Printf.sprintf "%s: learned %d >= %d (0 before M7-T33)" title stats.Search.n_learned
+       min_learned)
+    (stats.Search.n_learned >= min_learned);
+  let honest = String.split_on_char '\n' (read_file pbp) in
+  (match m7t33_veripb ~opb ~pbp with
+  | Some (true, _) -> check (title ^ " control: the honest proof verifies (I-X1)") true
+  | Some (false, out) ->
+      Printf.printf "     veripb said: %s\n" out;
+      check (title ^ " control: the honest proof verifies (I-X1)") false
+  | None -> check (title ^ ": veripb is available (a missing checker is a FAILURE)") false);
+  let arr = Array.of_list honest in
+  let idx = ref (-1) in
+  Array.iteri
+    (fun i l -> if !idx < 0 && String.equal (Writer.strip_label l) line then idx := i)
+    arr;
+  if !idx < 0 then (
+    check (Printf.sprintf "%s: the conflict line `%s` is on the page" title line) false;
+    (* What a re-pin needs: every rup the derive-ahead path wrote. *)
+    Array.iteri
+      (fun i l ->
+        if
+          i > 0
+          && starts_with_str "rup " (Writer.strip_label l)
+          && starts_with_str "pol " (Writer.strip_label arr.(i - 1))
+        then
+          Printf.printf "     after a pol, line %d: %s\n" (i + 1) (Writer.strip_label l))
+      arr)
+  else
+    let i = !idx in
+    check (Printf.sprintf "%s: the conflict line `%s` is on the page" title line) true;
+    check
+      (title ^ ": a pol is written immediately ahead of it (c_ahead)")
+      (i > 0 && starts_with_str "pol " (Writer.strip_label arr.(i - 1)));
+    (match cumul_standalone ~dir ~opb ~n:n_model line with
+    | Some (false, log) ->
+        check
+          (title ^ " standalone: REFUSED at the RUP wording (I-X10)")
+          (contains_sub ~needle:rup_wording log)
+    | Some (true, _) ->
+        check
+          (title ^ " standalone: REFUSED (it verified alone: no I-X10 obligation)")
+          false
+    | None -> check (title ^ ": veripb is available for the standalone lane") false);
+    let mutated = Filename.concat dir "mutated.pbp" in
+    (* no-pol: line [i] (0-based) moves up to line [i] (1-based) once [i - 1] is gone. *)
+    m7t33_refused ~name:(title ^ " no-pol") ~opb ~pbp:mutated ~at:i
+      (List.filteri (fun j _ -> j <> i - 1) honest);
+    (if no_fact then
+       (* The last ` +1 <lit>` term of the claim dropped, label and all else kept. *)
+       let l = arr.(i) in
+       let cut =
+         String.rindex_from l (String.length l - String.length " >= 1 ;" - 1) '+'
+       in
+       let l' = String.sub l 0 (cut - 1) ^ " >= 1 ;" in
+       m7t33_refused ~name:(title ^ " no-fact") ~opb ~pbp:mutated ~at:(i + 1)
+         (List.mapi (fun j x -> if j = i then l' else x) honest));
+    List.iter
+      (fun f -> try Sys.remove f with _ -> ())
+      [
+        opb;
+        pbp;
+        mutated;
+        Filename.concat dir "standalone.pbp";
+        Filename.concat dir "standalone.log";
+      ];
+    try Sys.rmdir dir with _ -> ()
+
+let test_m7t33_lanes () =
+  m7t33_lane ~title:"M7-T33 b stage 1" ~src:m7t33_stage1_src ~min_learned:2
+    ~line:"rup +1 x3_ge_3 +1 x1_ge_3 +1 x2_ge_3 >= 1 ;" ~no_fact:true;
+  m7t33_lane ~title:"M7-T33 b regin" ~src:m7t33_regin_src ~min_learned:2
+    ~line:"rup +1 k_ge_3 >= 1 ;" ~no_fact:false
+
+let () =
+  test_m7t33_conflict_facts ();
+  test_m7t33_lanes ()
+
 let () =
   print_endline "\npropagator unit tests";
   test_soundness ();
