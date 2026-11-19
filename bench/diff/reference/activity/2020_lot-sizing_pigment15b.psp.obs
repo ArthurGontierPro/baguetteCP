@@ -1,0 +1,105 @@
+rc 0
+out objective = 2045;
+out production_by_order = array1d(1..15, [12, 13, 10, 8, 1, 11, 5, 2, 9, 3, 0, 6, 7, 4, 0]);
+out inventory_periods = array1d(1..13, [1, 1, 1, 1, 3, 1, 2, 3, 5, 8, 8, 8, 13]);
+out ----------
+search ladder/cls 10276 cls
+search opb/lines 19165 lines
+search direct/vals 0 vals
+search widest/wide 4118 wide
+search bits/vars 0 vars
+search bitsrows/lines 0 lines
+search choices/groups 0 groups
+search limit.nodes 3001
+search limit.decisions 1696
+search limit.conflicts 1620
+search limit.learned 846
+search limit.pb-learned 403
+search limit.db 1249
+search limit.maxdepth 124
+search limit.incumbent 2045
+work limit.props 1179748
+work limit.eff 95029
+work limit.contra 1619
+search limit.at node
+search nodes/nodes 3001 nodes
+search decisions/decs 1696 decs
+search conflicts/nodes 1620 nodes
+search maxdepth/levels 124 levels
+work exhausted/bool 0 bool 1 if
+search skipped/nodes 4 nodes
+search learned/cls 846 cls
+work later/asks 106192 asks
+work cites/memos 12812 memos
+search convertible/cls 0 cls
+search retention keep-all keep-all: 1249 added, 0 evicted, 1249 swept, 0 live, 168 duplicate, 1248 cited, 0 pinned
+search lbd 1:1,2:68,3:102,4:226,5:225,6:142,7:54,8:24,9:2,10:1,16:1
+search width 1:1,2:23,3:1,4:115,5:73,6:99,7:46,8:13,9:12,10:15,11:25,12:11,13:19,14:12,15:28,16:353
+search globals/units 1 units
+search glob-prune/prunes 2 prunes
+search glob-confl/confl 1 confl
+search cls-inst/inst 845 inst
+search cls-decl/cls 0 cls
+search cls-prune/prunes 788 prunes
+search pb-inst/inst 403 inst
+search pb-inst-no/rows 0 rows
+search pb-prune/prunes 17400 prunes
+search pb-confl/confl 389 confl
+search minimised/lits 60606 lits
+search i-s4-cross/lines 6239 lines
+search pb-tried/confl 846 confl
+search pb-learned/rows 403 rows
+search pb-fallback/confl 443 confl
+search pb-why first fallback reason: no PB row for instance <unknown>
+work pb-whys/recd 64 recd 43 x
+search pb-steps/pivots 423 pivots
+search pb-convert/rows 38 rows
+search pb-stronger/rows 38 rows
+search pb-nondeg/rows 403 rows
+search pb-lifted/rows 294 rows
+search pb-rungs/rungs 2135 rungs
+search lvl-cmp/confl 403 confl
+search lvl-same/confl 109 confl
+search lvl-narrow/confl 253 confl
+search lvl-wide/confl 4 confl
+search lvl-incomp/confl 37 confl
+search lvl-empty/confl 0 confl
+search lvl-assert/confl 229 confl
+search lvl-why first disagreement: closure {42,41,40} vs pb {41,40,39,38,37,36,35,34,33,32,31,30,29,28,27,26,25,24,23,22,21,20,19,18,17,16,15,14,13,12,11,10,9,8,7,6,5,4,3,2,1} (pb asserts at 41)
+search restarts/runs 316 runs
+search unexplored/nodes 386 nodes
+search kept/levels 25693 levels
+search activity/bumps 8033 bumps
+work learned_pb/inst 403 inst 197.1 runs/node 2.86 eff/node
+work int_ne_reif/inst 195 inst 104.0 runs/node 11.01 eff/node
+work int_eq_reif/inst 432 inst 30.5 runs/node 4.14 eff/node
+work int_lin_le/inst 90 inst 28.1 runs/node 8.51 eff/node
+work learned_clause/inst 845 inst 14.2 runs/node 0.26 eff/node
+work bool_clause/inst 223 inst 8.1 runs/node 0.91 eff/node
+work bool2int/inst 195 inst 4.0 runs/node 1.96 eff/node
+work array_int_element/inst 14 inst 2.8 runs/node 1.09 eff/node
+work all_different_int/inst 1 inst 2.2 runs/node 0.77 eff/node
+work int_lin_ne/inst 46 inst 1.9 runs/node 0.02 eff/node
+work global_cardinality/inst 1 inst 0.3 runs/node 0.13 eff/node
+work props/runs 1179748 runs
+work eff/runs 95029 runs
+work contra/runs 1619 runs
+work passes/snaps 28861 snaps
+work deductions/chgs 241266 chgs
+work wakes/wakes 7943432 wakes
+work masked/wakes 662673 wakes
+work vetoed/wakes 47469 wakes
+work advised/wakes 198377 wakes
+work seeded/runs 636751 runs
+work skipped/slots 4824378 slots
+search rup/lines 365695 lines
+search pol/lines 2082341 lines
+search pol-tokens/tokens 24835889 tokens
+search pol-widest/tokens 8035 tokens
+search atoms/atoms 0 atoms
+search atomlinks/lines 0 lines
+search bridges/pairs 0 pairs
+search boundlines/pairs 0 pairs
+search bitsprune/lines 0 lines
+opb 435e72f8545d70174eb9f14c75c1113a52a6f9d7054cdd7774a3bce5d6ae3063
+pbp 39b98ab1eeb0b8f8b9a603777045e91e14b6a7759e884e55f41cb39640e1f8ef
