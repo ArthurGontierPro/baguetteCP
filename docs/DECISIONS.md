@@ -18560,3 +18560,244 @@ On a fresh clone of `f793ebe` on fataepyc-06 (`/scratch/arthur/wave53-element-ga
 - `make scaling ARGS="-j 16"`: ok, every line within its threshold (report-only).
 - Artefacts: every one of the 198 `test/models/*.fzn` run under main's binary (`64ec63e0`) and this
   branch's (`643f44e9`): stdout, exit code, `.opb` and `.pbp` byte-identical, 0 differ.
+
+
+## D-0156  M7-T33: all_different's two pigeonholes carry their facts under a decision, derived ahead of the conflict line, so 1UIP learning resolves from them; and `Alldiff.excl` cites its ladder rungs without a name lookup per rung
+
+Status: DECIDED (built, measured, gated on fataepyc-06; the diff-lane references of the runs listed in section 7 are the orchestrator's to re-record after the gated merge)
+Date: 2026-11-19
+Task: M7-T33, and D-0145 section 5's `Alldiff.excl` leftover (agent-alldiff, `wave53-alldiff`).
+Touches: `lib/core/prop/alldiff.ml` (`push_conflict`, `distinct_facts`, `pass`'s `push`,
+`regin_pass`'s failed matching, the term's `rungs`, `rung`, `excl`, `overshoot_cancel`, the
+header), `lib/proof/encoding.ml` (`consistency_ids`, additive), `test/unit/test_prop.ml` (the
+M7-T33 section), `test/models/alldiff_conflict_learn_sat.fzn` and
+`test/models/alldiff_regin_conflict_learn_sat.fzn` with their expected outputs.
+
+### 1. The finding
+
+D-0151 section 2 found that `2015_p1f_13` under the native `inverse` learns 0 clauses, and
+traced it to all_different. Both of its pigeonholes reached the store as a push that must fail:
+stage 1 pushes the surplus variable of a Hall interval past its own upper bound, stage 2 pushes
+the first unmatched variable past its upper bound, and `Store.apply`'s `Failed` arm pairs the
+derivation with `Reason.none`. That is sound, because search.ml's D-0040 arm writes the
+derivation and the decision nogood closes the branch. But `Learn.at_conflict` gets an empty cut,
+so no all_different conflict ever produced a 1UIP clause.
+
+### 2. The change
+
+Under a decision, both pigeonholes are now reported with their facts, under
+`Store.deriving_ahead` (`push_conflict`). `Trace.conflict_line` then writes the derivation
+first and `rup ~facts >= 1` after it, which is cumulative's arrangement (D-0096) and element's
+(D-0101). Nothing outside `alldiff.ml` changed on the solver side.
+
+The facts are chosen so that every literal the derivation leaves in its row is the negation of
+one of them. The `rup` line is then unit propagation against one line.
+
+| what the derivation leaves | where it comes from | fact on the tail |
+|---|---|---|
+| a Hall member's `~x_ge_lo` / `x_ge_(hi+1)` | `excl`, when `hall_cancels` cannot cancel a bound a decision moved | that bound (`hall_facts`) |
+| a deep hole's clause `~x_eq_v \/ ~facts` | `Gone_hole`, for a hole the value set excludes | the REMOVER's facts (`hall_facts` names the excluded holes only) |
+| the surplus variable's `~y_ge_lo(y)` | the telescoped forward channelling | `y >= lo(y)` |
+| the surplus variable's residue `y_ge_(b+1)` | the telescope, when `overshoot_cancel` has no root upper bound to cancel it with | `y <= hi(y)`, with `hi(y) <= b`: unit propagation walks the rungs `hi(y)+1 .. b` |
+
+The last row is the crossed opposing bound that `Store.apply`'s `Failed` arm says a conflict line
+needs and a pruning's reason does not carry. So stage 1's facts are `remove_reason`'s (both bounds
+of `y`, then the Hall set's) and not `prune_reason`'s. Stage 2's are `hall_facts` over the whole
+violating set A, value set B. A fact is listed once (`distinct_facts`): three members holed by
+the same remover would otherwise list its tail three times. A root-established fact whose literal
+the derivation cancelled is still listed. That is harmless, since Analysis drops root nodes from
+every cut, and it is element's choice too.
+
+AT THE ROOT NOTHING CHANGES. With no decision there is no branch to learn from, every bound the
+derivation reads is root-established and cancelled, and the derivation closes to `0 >= 1`, which
+search.ml's root arm writes. Every root refutation is byte-identical (measured, section 6). A
+test (`M7-T33 root`) holds the root conflict to `Reason.none`.
+
+Why the push test agrees with the store. Stage 1's pigeonhole arm reads `y` from the pass's
+snapshot, whose `s_hi <= b` the live bound can only undercut (I-P6), so `bound > y.s_hi` holds
+live too. The `n = k` arm reads `y` live. Stage 2 never reaches its emptying push under a
+decision any more. The removals of a Regin pass never empty a domain (a removal never takes
+`M(y)` from `y`), so `remove_one`'s conflict arm stays as it was.
+
+No new `Explanation` constructor, no change to `justify.ml`, `explanation.ml`, `store.ml` or
+`search.ml`.
+
+### 3. Lanes
+
+`test/unit/test_prop.ml`, the M7-T33 section, on two SAT scenes (D-0053). In each, a decision on
+`k` confines or holes `x1..x3` through three single-variable propagators (`int_le` / `int_ne`) that
+all watch `k`. The engine's FIFO runs all three before the all_different they wake, so the
+conflict is all_different's by construction.
+
+- (a) driven by hand: the stage-1 conflict (k <= 2 confines three variables to 1..2) and the
+  Regin conflict (k = 2 holes 2 in three variables of 1..3) are all_different's, `c_ahead`, carry
+  facts (`~x3_ge_3`, the crossed bound, and `~k_ge_3`, the holes' remover), list no fact twice,
+  satisfy `Store.agreement_holds` (D-0026), and `Learn.at_conflict` returns `Some`. The root
+  pigeonhole is still factless.
+- (b) under search, the model's own order, audit on. Both learn 2 clauses (0 before), both proofs
+  verify. The pinned conflict lines are `rup +1 x3_ge_3 +1 x1_ge_3 +1 x2_ge_3 >= 1 ;` and
+  `rup +1 k_ge_3 >= 1 ;`, each written right after its `pol`. Four refusal lanes, each asserted
+  on the full RUP sentence AND on the line number in "Checking error at":
+  - standalone: the line alone against the `.opb` is refused (I-X10, cumulative's lane);
+  - no-pol: the honest proof without the `pol` ahead of the line is refused at that line, so
+    the derivation carries it in sequence too (unlike element's, D-0101 section 2);
+  - no-crossed (stage 1): the line without `y`'s upper bound is refused;
+  - no-fact (stage 1): the line without its last fact, a Hall member's bound, is refused.
+  The Regin line has one fact, so no fact can be dropped without corrupting the claim itself
+  (test_mutation.ml's trap 3).
+
+On the code before this change, every (b) lane fails at "the conflict line is on the page".
+
+### 4. Measurements: p1f, the inverse instances, alldiff-heavy instances
+
+Challenge pairs on fataepyc-06, 100 instances (the alldiff, inverse and p1f families of the
+Challenge corpus), 300 s, proof on, `--max-heap-mb 8192`, 20 in parallel, binaries `643f44e9`
+(main `c058ada`) and `45b8a3c7` (this branch's tip, `328e631`), with every SAT/UNSAT proof checked.
+Results in `/scratch/arthur/wave53-alldiff-runs/chal/results.tsv`.
+
+| | main | branch |
+|---|---|---|
+| UNSAT / SAT (all VERIFIED) | 3 / 2 | 4 / 2 |
+| INCUMBENT | 16 | 37 |
+| TIMEOUT with nothing | 71 | 41 |
+| heap budget reached (rc 5) | 6 | 15 |
+| rc 134 | 2 | 1 |
+
+Per family (complete / incumbent / nothing / error, nodes and learned constraints summed):
+
+| family | n | main | branch |
+|---|---|---|---|
+| p1f | 5 | 0/0/5/0, 10 687 nodes, 301 learned | 1/0/4/0, 83 318, 39 971 |
+| elitserien_handball | 20 | 0/0/20/0, 6 689, 2 082 | 0/20/0/0, 177 347, 87 269 |
+| p1f-pjs | 10 | 0/1/9/0, 5 674, 993 | 0/1/9/0, 117 461, 52 601 |
+| costas-array | 10 | 0/0/10/0, 47 563, 20 276 | 0/0/10/0, 128 618, 64 262 |
+| ghoulomb | 5 | 0/1/3/1 | 0/2/1/2 |
+| black-hole | 10 | 3/0/7/0, 151, 8 | 3/0/3/4, 269, 95 |
+| black-hole_layout | 5 | 0/0/4/1 | 0/0/1/4 |
+| sudoku (fixed + opt) | 10 | 1/0/9/0, 409, 0 | 1/0/9/0, 15 913, 7 879 |
+| monomatch, tdtsp, travelling-thief | 32 | equal answers | equal answers |
+
+- `2015_p1f_13`: main TIMEOUT with 0 learned, branch UNSAT in 19.5 s with 1 877 learned, VERIFIED.
+  This is the instance D-0151 section 2 traced the finding to.
+- All 20 `elitserien_handball` instances go from no solution to an incumbent.
+- `2020_p1f-pjs_10`: incumbent objective 380 on main, 354 on the branch. No other incumbent changed.
+- The new rc 5 runs (black-hole 9, 14, 12 and 4, black-hole_layout 3, 17 and 25, ghoulomb
+  4-9-20, and tdtsp_inst_20_25, which was rc 134 on main) all reach the 8 GB heap budget before
+  300 s. They were TIMEOUT on main. See the finding below.
+
+#### Open finding: black-hole's heap per node
+
+`heapprobe/` reran `2013_black-hole_4` alone with `--max-heap-mb 8192 --time-limit 300`
+(`systemd-run MemoryMax=32G`), using `b1d01d50` (main plus `cc9d94d` alone, section 5b) and
+`45b8a3c7` (the tip). Both stop at the heap budget with rc 5 (8 221 MB and 8 243 MB of OCaml heap,
+8.41 and 8.43 GB RSS, after 88.8 s and 86.3 s). The heap is reached with section 5b alone, so
+part 1's learning does not cause it. Removing the trail walk makes the run go further in the
+same time, and it then reaches the heap growth per node that D-0155 section 4 left open for
+black-hole. Main does not reach the budget because it is slower and stops at 300 s first. NOT
+INVESTIGATED HERE. The next step is a heap profile of black-hole per node (what holds the
+memory: the proof writer, the trail, or the element and alldiff fact lists).
+
+### 5. `Alldiff.excl` without a name lookup per rung (D-0145 section 5)
+
+`excl` cites the ladder rungs between an excluded value and the current bound, O(width) rungs
+per excluded value, and each went through `Encoding.consistency_id`, which finds the variable by
+NAME (`Encoding.find`, a string hash). D-0145 measured that at 12.4 % of
+`2011_cyclic-rcpsp_easy_6`'s proof mode. `Encoding.consistency_ids t x` (additive, no signature
+changed) looks `x` up once and returns the function `consistency_id t x` is, from the record
+`find` returned. That record never changes once `x` is declared: a redeclaration with other
+bounds is refused, and `lo`, `hi`, `ladder_base` and `repr` are immutable. Each all_different
+term keeps it in a lazy field, forced the first time a derivation cites one of its rungs, and
+`excl` and `overshoot_cancel` cite through it. Same ids, same order, so every byte is the same.
+
+Proof mode at 10 000 nodes, `perf stat -e instructions:u`, CLI default (audit on), one run each
+on fataepyc-06 (binaries `64ec63e0` main at `9a9c461`, `4d06f9d4` at `b543817`):
+
+| instance | main | `b543817` | change | wall main / branch | `.pbp` |
+|---|---|---|---|---|---|
+| `2011_cyclic-rcpsp_easy_6` | 646.22 G | 581.31 G | -10.0 % | 90.5 / 82.9 s | identical, 2.02 GB |
+| `2013_rcpsp_11` | 194.28 G | 194.31 G | 0.0 % | 35.7 / 34.4 s | identical, 421 MB |
+
+A flat `perf record` of the branch on cyclic (2 000 nodes) no longer shows `Encoding.find` or
+`caml_hash` in its top 40 symbols. `Alldiff.rung` itself is 1.4 %. What is left of the
+derivation's cost is allocation (the `range` lists, one `Model_row` term per rung), which is the
+derivation's size and not a lookup. Gate on `b543817` alone: `make check` rc 0 (4 243 unit
+checks, 0 FAIL, 198 models), every model's `.out`/`.opb`/`.pbp` equal to main's, lane 301/301,
+debug lane 289/289.
+
+### 5b. `Alldiff.hole_cite` without a whole-trail walk per hole (D-0155 section 4)
+
+Added at the orchestrator's request once agent-element's D-0155 had removed element's own walk.
+`hole_cite` asks, for every hole in a snapshotted domain, which trail entry removed it, and at
+which level. `remover_index` answered by walking the WHOLE trail backwards, because when it was
+written an entry did not carry its position. Since M6-T15 it does (`pos`), so `hole_cite` now
+asks `Store.remover ~before:(Store.trail_length store)` (D-0088, a binary search over the
+variable's entry history) and reads the level off `e.pos`. It is the same entry: the walk's
+predicate is `Store.remover_scan`'s, started at the same position, and `Store.remover` is
+checked against that scan by physical equality under `BAGUETTE_DEBUG`. Element made the same
+move in D-0155. Its own commit (`cc9d94d`).
+
+Measured on top of main `c058ada` (D-0155 merged), `perf stat -e instructions:u`, proof on, one
+run each, binaries `643f44e9` (main, element's gate binary) and `b1d01d50` (main plus `cc9d94d`
+alone):
+
+| instance | budget | main | main + `cc9d94d` | artefacts |
+|---|---|---|---|---|
+| `2011_black-hole_10` | to the end (UNSAT at the root) | 52.23 G, 7.2 s | 15.92 G, 2.5 s | stdout, `.opb`, `.pbp` (49 MB), stats equal |
+| `2011_black-hole_20` | 20 nodes | 1 846.0 G, 262 s | 174.5 G, 29.4 s | equal (`.pbp` 278 MB) |
+
+Peak RSS is unchanged (363 MB and 2.99 GB). With part 1 as well, the Challenge run in section 4
+shows what the family does at 300 s.
+
+### 6. Gate on the branch tip
+
+Tip `328e631` (binary `45b8a3c7`) against main `c058ada` (binary `643f44e9`), on a fresh clone
+on fataepyc-06 (`/scratch/arthur/wave53-alldiff-runs/gate-tip`, logs in `final/gate/`):
+
+- `make check` rc 0, 4 278 unit checks ok, 0 FAIL, 200 models passed (0 failed, 0 skipped),
+  24.65 s, peak RSS 101 712 kB.
+- Artefacts against main over the 200 models: only four `.pbp` differ, all alldiff ones
+  (`alldiff_conflict_learn_sat`, `alldiff_pigeonhole_narrow_sat`,
+  `alldiff_regin_conflict_learn_sat`, `alldiff_search_unsat`). Each `.out` and `.opb` is equal,
+  and no other model's proof moved.
+- Scaling lane: ok, every line within its threshold (51 s).
+- Diff lane: rc 2, 18 of 301 runs differ, exactly the expected ones.
+  `2011_cyclic-rcpsp_easy_6@2000` differs in 6 configurations (default, audit0, lbd, nopb, bits0,
+  noproof), and the search now finds objective 666 or 667 within the budget where the reference
+  had none. `2020_lot-sizing_pigment15b.psp` differs in all 12 configurations: search counters
+  in 11, and `[activity]` exits 134 (`allocation failure during minor GC`) at the lane's 4 GB cap.
+  Every other line is equal, `2014_openshop_gp10-4@300`'s proof hash among them.
+- Debug lane: rc 2, 6 of 289 differ, the same six cyclic configurations. lot-sizing is skipped
+  there by `bench/diff/debug-skip.tsv`.
+
+### 7. What the orchestrator must re-record
+
+After the gated merge, in its own commit (`make diff ARGS="--tier all -j 16 --update"`, then the
+same with `--debug`):
+
+- `2011_cyclic-rcpsp_easy_6@2000` x {default, audit0, lbd, nopb, bits0, noproof}, both passes.
+- `2020_lot-sizing_pigment15b.psp` x its 11 configurations other than `activity` (normal pass
+  only, since the debug pass skips it).
+- `2020_lot-sizing_pigment15b.psp [activity]` CANNOT be recorded, because it dies at the lane's
+  4 GB cap. Main's run peaks at 3.44 GB RSS and the branch's at 4.35 GB. The extra memory is on the
+  search side (`--no-proof`: 2.55 -> 3.49 GB), and it follows the learned constraints, 846 on
+  main and 1 722 on the branch (`/scratch/arthur/wave53-alldiff-runs/mem/`, `repro/`). This is
+  for the user to decide, and the cap was not raised. The options are (a) raise this one
+  configuration's cap through `BAGUETTE_MEM_CAP_KB` with a recorded reason,
+  (b) move it to the skip list as debug-skip.tsv already does for this instance,
+  (c) lower its node budget, or (d) treat the growth as a regression of this branch and hold
+  the merge.
+
+A second refusal in the `--update` pass does not come from this branch.
+`2014_openshop_gp10-4@300 [default]` and `[audit0]` (both passes) are REFUSED because the checker
+exits with a Rust panic. The lane runs the checker outside the 4 GB cap. In the diff pass the same
+proof's hash equals the reference recorded on main, so the bytes are main's. A clean `--update`
+on main would most likely be refused the same way. NOT INVESTIGATED. Rerun
+`veripb p.opb p.pbp` on that proof with `RUST_BACKTRACE=1` to get the panic message.
+
+### 8. What would reverse this
+
+- A refused alldiff conflict line on a satisfiable model. That would mean a literal the
+  derivation leaves in its row has no fact, which is the D-0075 shape again.
+- A family where learning from alldiff conflicts costs more than it prunes (long Regin tails
+  from many removers). The tails are bounded by the violating set's facts, and the measurement
+  in section 4 is where to look first.
