@@ -18738,7 +18738,11 @@ A fresh clone of `ebd1c75` on fataepyc-06 (`/scratch/arthur/wave53-learned-gate.
 ### 6. What is left
 
 - `Trace.emit_to_page` and `Justify.emit_bits_combine` on bits runs (34 to 45 % of rcpsp-wet, with
-  or without the proof) and `Pb.pass` on roster (38 %). These are the two remaining costs of
+  or without the proof) and `Pb.pass` on roster (38 %).
+  *(Orchestrator's note, 2026-11-19: "without the proof" here means a run without `--proof`, which
+  still writes the whole proof to a temporary file (`bin/main.ml`, `open_proof_channel`). The
+  profiles in `/scratch/arthur/wave53-learned-runs/prof.sh` never pass `--no-proof`, so they say
+  nothing about the null writer's mode, where `Trace.emit` is guarded.)* These are the two remaining costs of
   `--bits-above 0`, and neither is in this row's files.
 - In the analysis: `Ladder.instantiate`'s frozen bound (a binary search of `falsified_before`
   probes) and `Encoding.ensure_atom`'s lookups (4 % of rcpsp-wet), and one `fat_memo` read per
