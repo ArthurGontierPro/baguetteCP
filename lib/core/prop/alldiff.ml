@@ -122,6 +122,19 @@
       for why it is a summand rather than a [t].
 
    ---------------------------------------------------------------------------
+   The pairwise rows may be ROOT LEMMAS (M7-T28, D-0151 section 2)
+   ---------------------------------------------------------------------------
+
+   The derivation above names each pairwise row `x <> v \/ z <> v` by id. For an
+   all_different the MODEL posts, that id is a model row ([Encoding.add_all_different]).
+   For one an `inverse` IMPLIES (lib/core/prop/inverse.ml's stage 2), the .opb states the
+   channel rows and not the pairs, and the pairs are `rup` lemmas written at the start of
+   the proof ([Encoding.add_cited_lemma]): [make]'s [?lemma_rows] carries their handles
+   and [row] resolves one to its id when a derivation is rendered. That lookup is the
+   whole of the change; the counting, the cancellations and every `pol` are the ones a
+   model row gets, since a `pol` cites a derived line exactly as it cites a model row.
+
+   ---------------------------------------------------------------------------
    Snapshotting and I-X6
    ---------------------------------------------------------------------------
 
@@ -209,6 +222,13 @@ type t = {
   (* (x, z, v) -> the id of the .opb row "x <> v \/ z <> v", both orders of the pair
      present so a lookup never has to know which way [add_all_different] listed it. *)
   rows : (string * string * int, int) Hashtbl.t;
+  (* M7-T28 (D-0151 section 2), the LEMMA-ROW HOOK: the same pairwise rows when they are
+     root lemmas rather than model rows -- an all_different IMPLIED by an `inverse`, whose
+     .opb states the channel rows and not the pairs ([Encoding.add_cited_lemma]). Keyed
+     like [rows]; resolved to an id only when a derivation is rendered, because the id
+     does not exist until [Encoding.start_proof] has written the lemma. Empty for every
+     all_different the model posts. *)
+  lemmas : (string * string * int, Encoding.lemma) Hashtbl.t;
 }
 
 let name = "all_different_int"
@@ -230,13 +250,19 @@ let default_cutoff = 256
    one: see the module header on I-X6. Reads each variable's domain, so it must be
    called before anything has narrowed it -- the same requirement, for the same D-0010
    reason, that [Linear.make] and [Ne.make] state. *)
-let make ?(cutoff = default_cutoff) store enc ~rows vars =
+let make ?(cutoff = default_cutoff) ?(lemma_rows = []) store enc ~rows vars =
   let tbl = Hashtbl.create (2 * List.length rows) in
   List.iter
     (fun ((x, z, v), cid) ->
       Hashtbl.replace tbl (x, z, v) cid;
       Hashtbl.replace tbl (z, x, v) cid)
     rows;
+  let lemmas = Hashtbl.create (2 * List.length lemma_rows) in
+  List.iter
+    (fun ((x, z, v), h) ->
+      Hashtbl.replace lemmas (x, z, v) h;
+      Hashtbl.replace lemmas (z, x, v) h)
+    lemma_rows;
   let terms =
     Array.of_list
       (List.map
@@ -245,7 +271,7 @@ let make ?(cutoff = default_cutoff) store enc ~rows vars =
            { x; name = Store.name store x; decl_lo = Domain.lo d; decl_hi = Domain.hi d })
          vars)
   in
-  { terms; enc; cutoff; rows = tbl }
+  { terms; enc; cutoff; rows = tbl; lemmas }
 
 let vars t = Array.to_list (Array.map (fun tm -> tm.x) t.terms)
 
@@ -341,6 +367,9 @@ let cid_of what = function
 let row t s1 s2 v =
   match Hashtbl.find_opt t.rows (s1.s_name, s2.s_name, v) with
   | Some id -> id
+  | None when Hashtbl.mem t.lemmas (s1.s_name, s2.s_name, v) ->
+      cid_of "the pairwise root lemma"
+        (Encoding.root_lemma_id t.enc (Hashtbl.find t.lemmas (s1.s_name, s2.s_name, v)))
   | None ->
       invalid_arg
         (Printf.sprintf

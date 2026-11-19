@@ -504,6 +504,12 @@ type t = {
   (* M7-T28 (D-0146 section 3.2): the ROOT LEMMAS a model-row family asked
      [start_proof] to derive, newest first. See [add_root_lemma]. *)
   mutable lemmas_rev : Opb.constr list;
+  (* M7-T28 (D-0151 section 2): how many, how many of them a derivation CITES, and the
+     id each got when [start_proof] wrote it, by registration index. See
+     [add_cited_lemma]. *)
+  mutable n_lemmas : int;
+  mutable n_cited : int;
+  mutable lemma_ids : Writer.cid array;
 }
 
 (* One choice group: its selectors, and which one a solution picks, read from the
@@ -559,6 +565,9 @@ let create () =
     choices_rev = [];
     n_choices = 0;
     lemmas_rev = [];
+    n_lemmas = 0;
+    n_cited = 0;
+    lemma_ids = [||];
   }
 
 let create () =
@@ -2034,17 +2043,49 @@ let write_opb ?(comments = []) t oc =
    sweep in lib/core/search.ml, which deletes every id still live before the conclusion,
    retires them with the rest (I-X2). A model with no lemma writes nothing here, so its
    proof is byte-identical. *)
-let add_root_lemma t (c : Opb.constr) = t.lemmas_rev <- c :: t.lemmas_rev
-let n_root_lemmas t = List.length t.lemmas_rev
+let add_root_lemma t (c : Opb.constr) =
+  t.lemmas_rev <- c :: t.lemmas_rev;
+  t.n_lemmas <- t.n_lemmas + 1
+
+let n_root_lemmas t = t.n_lemmas
+
+(* M7-T28 (D-0151 section 2): a root lemma a derivation CITES by id -- the pairwise row
+   `f_i <> j \/ f_k <> j` that lib/core/prop/alldiff.ml's Hall derivation names, when the
+   all_different is IMPLIED by an `inverse` rather than posted by the model. Everything
+   above holds unchanged (derived, checked, written by [start_proof] in registration
+   order, retired by the end-of-run sweep); the difference is that the caller keeps the
+   handle this returns and asks [root_lemma_id] for the id once the proof has started.
+   The id does not exist before [start_proof], which is why a handle is returned and not
+   an id: a propagator is built at compile time and renders its derivations later. *)
+type lemma = int
+
+let add_cited_lemma t (c : Opb.constr) : lemma =
+  let h = t.n_lemmas in
+  add_root_lemma t c;
+  t.n_cited <- t.n_cited + 1;
+  h
+
+(* [None] until [start_proof] has written the lemma, and for ever when no proof is being
+   written. *)
+let root_lemma_id t (h : lemma) =
+  if h >= 0 && h < Array.length t.lemma_ids then Some t.lemma_ids.(h) else None
 
 let emit_root_lemmas t w =
   match t.lemmas_rev with
   | [] -> ()
   | rev ->
-      Writer.comment w "root lemmas (D-0146): %d backward chains" (List.length rev);
-      List.iter
-        (fun c -> ignore (Writer.rup w ~origin:"root lemma (D-0146)" c : Writer.cid))
-        (List.rev rev)
+      (* The comment is D-0146's when no lemma is cited, so a model with only backward
+         chains writes the bytes it wrote before D-0151. *)
+      if t.n_cited = 0 then
+        Writer.comment w "root lemmas (D-0146): %d backward chains" t.n_lemmas
+      else
+        Writer.comment w "root lemmas (D-0146, D-0151): %d, of which %d cited by id"
+          t.n_lemmas t.n_cited;
+      t.lemma_ids <-
+        Array.of_list
+          (List.map
+             (fun c -> Writer.rup w ~origin:"root lemma (D-0146)" c)
+             (List.rev rev))
 
 let start_proof t w =
   Writer.header w ~n_model_constraints:t.n;

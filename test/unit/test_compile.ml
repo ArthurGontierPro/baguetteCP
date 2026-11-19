@@ -678,7 +678,15 @@ let evaluate (m : M.t) (assign : int array) =
                   q := r.M.r_delta.(((!q - 1) * w) + k);
                   ok := !q > 0 && layer_ok (i + 1) !q))
             r.M.r_xs;
-          !ok && Array.exists (fun f -> f = !q) r.M.r_final)
+          !ok && Array.exists (fun f -> f = !q) r.M.r_final
+      (* M7-T28 (D-0151), written apart from [Model.check_assignment]: the two arrays as
+         association lists from index to value, each one's pairs found in the other
+         reversed. *)
+      | M.Inverse iv ->
+          let assoc base ops = List.mapi (fun k x -> (base + k, operand x)) ops in
+          let f = assoc iv.M.inv_fmin iv.M.inv_f and g = assoc iv.M.inv_gmin iv.M.inv_g in
+          List.for_all (fun (i, j) -> List.assoc_opt j g = Some i) f
+          && List.for_all (fun (j, i) -> List.assoc_opt i f = Some j) g)
     m.M.constraints
 
 (* Brute force over the declared box: the independent oracle for the expected answer.
@@ -2037,6 +2045,79 @@ solve satisfy;
   check "bits pb_row: at the default the row is offered"
     (Option.is_some (Engine.row_of c.Compile.engine c.Compile.store 0))
 
+(* M7-T28 (D-0151 section 2): `baguette_inverse`, end to end. Each scene is brute-forced
+   over its declared box by [brute_force] (with the oracle arm above, written apart from
+   [Model.check_assignment]), solved, and its proof checked by veripb ([run_model]). The
+   scenes cover what [post_inverse] folds: a SAT and an UNSAT that needs search, index
+   sets that do not start at 1, a constant inside an array, declared domains wider than
+   the other index set (the unit restriction rows), arrays of different lengths (no
+   bijection), and an involution, f = g, where the same variables are on both sides. *)
+let inverse_src ~decls ~call ~extra =
+  String.concat ""
+    (List.map
+       (fun (x, lo, hi) -> Printf.sprintf "var %d..%d: %s :: output_var;\n" lo hi x)
+       decls
+    @ [ Printf.sprintf "constraint baguette_inverse(%s);\n" call ]
+    @ List.map (fun c -> "constraint " ^ c ^ ";\n") extra
+    @ [ "solve satisfy;\n" ])
+
+let test_inverse_models () =
+  let v3 p = List.init 3 (fun k -> (Printf.sprintf "%s%d" p (k + 1), 1, 3)) in
+  let v4 p = List.init 4 (fun k -> (Printf.sprintf "%s%d" p (k + 1), 1, 4)) in
+  run_model ~title:"inverse: SAT, g3 <= 1 pins f1"
+    ~src:
+      (inverse_src
+         ~decls:(v3 "f" @ v3 "g")
+         ~call:"[f1, f2, f3], 1, [g1, g2, g3], 1"
+         ~extra:[ "int_ne(f1, 1)"; "int_lin_le([1], [g3], 1)" ]);
+  run_model ~title:"inverse: UNSAT under search (sums 5 both ways, f3 <> 3, f2 <> 3)"
+    ~src:
+      (inverse_src
+         ~decls:(v4 "f" @ v4 "g")
+         ~call:"[f1, f2, f3, f4], 1, [g1, g2, g3, g4], 1"
+         ~extra:
+           [
+             "int_lin_eq([1, 1], [f1, f2], 5)";
+             "int_lin_eq([1, 1], [g1, g2], 5)";
+             "int_ne(f3, 3)";
+             "int_ne(f2, 3)";
+             "int_ne(f1, 1)";
+           ]);
+  run_model ~title:"inverse: SAT, f indexed from 0, g from 1"
+    ~src:
+      (inverse_src
+         ~decls:
+           (List.init 3 (fun k -> (Printf.sprintf "f%d" k, 1, 3))
+           @ List.init 3 (fun k -> (Printf.sprintf "g%d" (k + 1), 0, 2)))
+         ~call:"[f0, f1, f2], 0, [g1, g2, g3], 1"
+         ~extra:[ "int_lin_eq([1], [f0], 3)"; "int_ne(g1, 1)" ]);
+  run_model ~title:"inverse: SAT with a constant in f"
+    ~src:
+      (inverse_src
+         ~decls:([ ("f1", 1, 3); ("f3", 1, 3) ] @ v3 "g")
+         ~call:"[f1, 3, f3], 1, [g1, g2, g3], 1" ~extra:[ "int_ne(f1, 1)" ]);
+  run_model ~title:"inverse: UNSAT, a constant in f that no g can mirror"
+    ~src:
+      (inverse_src
+         ~decls:([ ("f1", 1, 3); ("f2", 1, 3) ] @ v3 "g")
+         ~call:"[f1, f2, 3], 1, [g1, g2, g3], 1" ~extra:[ "int_ne(g3, 3)" ]);
+  run_model ~title:"inverse: SAT, declared domains wider than the index sets"
+    ~src:
+      (inverse_src
+         ~decls:
+           (List.init 3 (fun k -> (Printf.sprintf "f%d" (k + 1), 0, 4))
+           @ List.init 3 (fun k -> (Printf.sprintf "g%d" (k + 1), 1, 5)))
+         ~call:"[f1, f2, f3], 1, [g1, g2, g3], 1" ~extra:[ "int_ne(f2, 2)" ]);
+  run_model ~title:"inverse: UNSAT, three f into two g"
+    ~src:
+      (inverse_src
+         ~decls:(v3 "f" @ [ ("g1", 1, 3); ("g2", 1, 3) ])
+         ~call:"[f1, f2, f3], 1, [g1, g2], 1" ~extra:[]);
+  run_model ~title:"inverse: SAT, an involution (f = g), no fixed point at 1"
+    ~src:
+      (inverse_src ~decls:(v3 "x") ~call:"[x1, x2, x3], 1, [x1, x2, x3], 1"
+         ~extra:[ "int_ne(x1, 1)" ])
+
 let () =
   print_endline "";
   test_variable_identity ();
@@ -2062,6 +2143,7 @@ let () =
   test_bits_eligibility ();
   test_bits_default_is_order ();
   test_bits_mixed_row_has_no_pb_row ();
+  test_inverse_models ();
   if !failures > 0 then (
     Printf.printf "\n%d failure(s)\n" !failures;
     exit 1)

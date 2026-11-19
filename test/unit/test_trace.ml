@@ -1136,8 +1136,19 @@ let ix10_table =
        "lines already on the page" in I-X10's own wording. Every pruning (a state flag
        killed forward or backward, a letter value with no live edge, a flag fixed by its
        layer) is one rup with its bound facts on the tail; measured on the checker before
-       the module existed (D-0146 section 4) and by its mutation lanes. *)
+       the module existed (D-0146 section 4) and by its mutation lanes. D-0151 section 1
+       moved the tails onto the LETTERS: where a line cited a dead flag it now cites the
+       tail of that flag's own earlier trace line, so a line is RUP against the rows, the
+       lemmas and those lines -- still lines already on the page, still one rup each.
+       Measured on 60 random scenes before the OCaml (bench/regular_spike/probe_letters.sh). *)
     ("regular.ml", Single_row);
+    (* M7-T28 (D-0151 section 2): inverse. Single_row in the plainest sense -- a channel
+       pruning, g_j <> i because j is out of dom(f_i), is RUP from ONE channel pair CH'(j,i)
+       once the fact excluding j is assumed (a hole cited through its remover, as element.ml
+       and regular.ml do). Measured in D-0146 section 7.2 before the module existed. The
+       all_different instances an inverse posts beside it (stage 2) are alldiff.ml's and
+       keep its Needs_derivation; their pairwise rows are root lemmas. *)
+    ("inverse.ml", Single_row);
   ]
 
 (* (a) CLOSURE. OCaml cannot reflect over its own modules, so the only way to notice a

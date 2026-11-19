@@ -75,6 +75,8 @@ let implemented =
     "baguette_cumulative";
     (* M7-T28 (D-0146): regular, through mznlib/fzn_regular.mzn and fzn_regular_set.mzn. *)
     "baguette_regular";
+    (* M7-T28 (D-0151): inverse, through mznlib/fzn_inverse.mzn. *)
+    "baguette_inverse";
   ]
 
 (* The rest of the SPEC 2.1 table, with the milestone that will bring it in. Listing
@@ -1120,6 +1122,22 @@ let build_constraint env (c : Ast.constraint_item) =
                 r_q0 = const "the start state" q0a;
                 r_final = consts "every accepting state" fa;
                 r_flags = operands env pos fla;
+              }
+        | _ -> Error.failf pos "builtin `%s`: internal arity mismatch" id)
+    (* M7-T28 (D-0151). `baguette_inverse(f, fmin, g, gmin)`: the two arrays are
+       operands, the two first indices constants. lib/flatzinc/compile.ml's
+       [post_inverse] writes the rows. *)
+    | "baguette_inverse" -> (
+        arity 4;
+        match c.Ast.c_args with
+        | [ fa; fm; ga; gm ] ->
+            let const what e = as_const pos ~builtin:id ~what (operand env pos e) in
+            Model.Inverse
+              {
+                Model.inv_f = operands env pos fa;
+                inv_fmin = const "f's first index" fm;
+                inv_g = operands env pos ga;
+                inv_gmin = const "g's first index" gm;
               }
         | _ -> Error.failf pos "builtin `%s`: internal arity mismatch" id)
     (* M4-T10 (D-0096). `baguette_cumulative(s, d, r, cap)`: the durations, resources
