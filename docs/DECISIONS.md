@@ -14581,11 +14581,12 @@ with them, and that is the point of the pass.
 
 ## D-0146  M7-T28 first steps and M7-T29's gcc half: the closed gcc forms were never decomposed, a repeated gcc variable is copied away in the model, and `regular` is a layered graph of state flags whose every pruning is one `rup` against its rows and its backward-chain lemmas
 
-**Status**: **IN PROGRESS**, opened 2026-11-18 (agent-globals, `wave49-globals`). The contract
+**Status**: **DONE** (2026-11-19; opened 2026-11-18, agent-globals, `wave49-globals`). The contract
 is ROADMAP rows M7-T28 (the decomposed globals that kill the search, D-0122) and M7-T29 (the gcc
 refusal of D-0121). Sections 1 and 2 are done and measured; section 3 is the design of
-`regular`, written and checked on the checker BEFORE any solver code (section 4); sections 5 and
-6 are the implementation and the measurement and are appended when they land.
+`regular`, written and checked on the checker BEFORE any solver code (section 4); section 5 is
+the implementation, section 6 the Challenge measurement (final, 160 of 160), section 7 the design
+record of `inverse`.
 
 ### 1. `global_cardinality_closed` and `_low_up_closed`: the route already existed
 
@@ -14859,70 +14860,68 @@ of 232 runs equal the reference.
 
 ### 6. The Challenge instances, before and after
 
-**The run.** `scripts/compare_run.sh` over the 160 Challenge instances whose model calls
-`regular` (110, of which 20 also call a closed gcc), a closed gcc (30 more) or is
-community-detection (20, the gcc repeat), selected from `bench/challenge/<Y>.lst` by
-`bench/regular_spike/select_globals.py` (the model and the `.mzn` it includes, comments
-stripped; list at `/scratch/arthur/wave49-globals-inst.lst`). Each instance re-flattened with
-THIS branch's mznlib (MiniZinc 2.10.1, `tools/baguette.msc`), baguette only, 300 s, proof on,
-`MEM_KB=16777216`, `PROOF_CAP_KB=16000000`, 10-way, every complete answer's proof checked by
-`veripb` 3.0.2; frozen clone `/scratch/arthur/wave49-globals-meas-src-after` at `bde7930`, binary `08361947` (before section 5's tail reorder and allocation change: the same prunings and the same facts per line, the tail's literals in another order), output `/scratch/arthur/wave49-globals-meas-after/`. **Before** is wave 43's
-run of the sixteen editions (D-0133's baseline: `/scratch/arthur/wave43run/<Y>/results.tsv`,
-binary `a6327dc6`, **1 200 s**), so the comparison gives the old binary four times the time.
-`bench/regular_spike/join_globals.py` joins the two; a SAT answer to a satisfaction problem
-counts as complete, a time-out with a solution as an incumbent.
+**The run.** `scripts/compare_run.sh` over the 160 Challenge instances whose model source calls
+`regular`, a closed gcc, or is community-detection, selected from `bench/challenge/<Y>.lst` by
+`bench/regular_spike/select_globals.py` (list at `/scratch/arthur/wave49-globals-inst.lst`).
+Each instance re-flattened with THIS branch's mznlib (MiniZinc 2.10.1, `tools/baguette.msc`),
+baguette only, 300 s, proof on, `MEM_KB=16777216`, `PROOF_CAP_KB=16000000`, 10-way, every
+complete answer's proof checked by `veripb` 3.0.2; frozen clone
+`/scratch/arthur/wave49-globals-meas-src-after` at `bde7930`, binary `08361947` (before section
+5's tail reorder and allocation change: the same prunings and the same facts per line, the
+tail's literals in another order); output `/scratch/arthur/wave49-globals-meas-after/`, all 160
+done on 2026-11-18 18:43. **Before** is wave 43's run of the sixteen editions (D-0133's baseline,
+`/scratch/arthur/wave43run/<Y>/results.tsv`, binary `a6327dc6`, **1 200 s**): the old binary had
+four times the time.
 
-**INTERIM: 51 of the 160 instances**, the last read before `fataepyc-06` became unreachable on
-2026-11-18 (the run itself is detached and goes on; see "Pending" below). Status before (wave 43,
-1 200 s) -> after (this branch, 300 s):
+**Grouped by the routes the FLATTENED model takes**, not by the source.
+`bench/regular_spike/count_routes.sh` flattened all 160 with this library and counted the
+`baguette_regular` and `baguette_global_cardinality` calls (`/scratch/arthur/wave49-globals-routes.tsv`,
+160 OK). It matters: gbac names `regular` in its source and calls it zero times once flattened,
+so the source grouping put it in the wrong row. Read with
+`bench/regular_spike/join_globals.py <list> <wave43run> <after> <routes.tsv>`; a SAT answer to
+a satisfaction problem counts as complete, a time-out with a solution as an incumbent.
 
-| group (by source) | transition | instances |
-|---|---|---|
-| regular | TIMEOUT -> COMPLETE | 9 |
-| regular | REFUSED -> COMPLETE | 2 |
-| regular | COMPLETE -> COMPLETE | 2 |
-| regular | REFUSED -> TIMEOUT | 2 |
-| regular | TIMEOUT -> TIMEOUT | 15 |
-| regular + gcc_closed | TIMEOUT -> TIMEOUT | 10 |
-| gcc_closed | CAPPED -> CAPPED | 5 |
-| gcc_closed | REFUSED -> CAPPED, REFUSED -> TIMEOUT | 1, 1 |
-| gcc_closed | REFUSED -> REFUSED | 2 |
-| gcc_repeat (community-detection 2017) | REFUSED -> attempted: 2 with an incumbent, 1 without | 3 |
+| route reached | n | before: complete / incumbent / no answer | after: complete / incumbent / no answer |
+|---|---|---|---|
+| `regular` only | 65 | 5 / 16 / 44 (34 time-out, 9 refused, 1 capped) | **18 / 17 / 30** (28 time-out, 2 refused) |
+| `regular` and gcc | 45 | 0 / 5 / 40 (35 time-out, 5 refused) | 0 / 6 / 39 (38 time-out, 1 refused) |
+| gcc only (the closed forms) | 30 | 4 / 1 / 25 (8 capped, 9 refused, 7 time-out, 1 error) | 4 / 2 / 24 (9 capped, 8 refused, 6 time-out, 1 error) |
+| gcc with a repeated variable (community-detection) | 20 | 0 / 0 / 20 (all refused) | **1 / 15 / 4** (3 time-out, 1 refused) |
 
-**Every one of the 13 complete answers is VERIFIED by `veripb`; none rejected.** The eleven
-that moved are nonograms (2011 `non_fast_3`, `non_fast_6`, `non_med_1`; 2012 `non_awful_5`,
-`non_fast_4`, `non_fast_11`; 2013 `dom_08`) and pentominoes (2011 `_02`, `_06`; 2013
-`pentominoes-int_02`, `_06`), in 34 to 270 s, where the old binary had timed out at 1 200 s or
-refused the decomposed model at the front end (the cause per instance is in wave 43's results.tsv).
-D-0122 counted `regular` at 0 complete of 94 attempted. The nonograms still timing out are the
-per-node cost and the learned clauses of section 5, not a refusal. The community-detection
-instances are no longer refused (M7-T29): `Strike.s2.k8` reaches an incumbent of 73 and
-`Strike.s6.k5` one of 51 within 300 s (the harness writes TIMEOUT with the objective and 3
-solutions; an interrupted run's proof is not checked). The `CAPPED` gcc instances are gbac, whose
-`.opb` alone passes the 16 GB file cap before the first node, on both binaries: a width matter,
-not one of these routes.
+**Every complete answer whose proof was checked is VERIFIED, none REJECTED: the 18 `regular`
+and the 4 gcc.** The one exception is the community-detection OPT
+(`2021_..._rnd_n100_e5000_s500_d300_c4_p50`, 2 484 055 in 45 s): `veripb` ran out of memory
+under the harness's cap ("memory allocation of 683697504 bytes failed") on a 2 GB `.opb` whose
+`objective` is declared 14 227 894 wide. That is a finding about width (D-0028), not about these
+routes, and the answer stands UNCHECKED: no re-run with a raised cap.
 
-**A correction to the grouping, measured.** The selection reads sources, and `gbac` names
-`regular` in its source but its flattened model calls it ZERO times (17 gcc calls), so the
-"regular" group above holds instances that never reach `regular.ml`.
-`bench/regular_spike/count_routes.sh` flattens each instance with this branch's library and
-counts the routes it reaches; its first 94 rows were in (nonograms: 100 to 120 `baguette_regular`
-calls, pentominoes 10 to 12) when the node went away.
+What moved, by name:
 
-**Pending on `fataepyc-06`, to read when the node is back** (both detached, both with pid files,
-nothing to relaunch):
+- **`regular`, 13 new complete answers** (10 time-outs, 3 refusals before): nonograms 2011
+  `non_fast_3`, `non_fast_6`, `non_med_1`, 2012 `non_awful_5`, `non_fast_4`, `non_fast_11`,
+  2013 `dom_08`; pentominoes 2011 `_02`, `_06`, 2013 `pentominoes-int_02`, `_06`, 2020 `_02`,
+  `_06`; in 33 to 270 s. D-0122 had counted `regular` at 0 complete of 94 attempted. One new
+  incumbent (2014 `traveling-tppv_circ14bnonbal`); five refusals became attempts that time out
+  (the `_04` pentominoes, two zayenz). One regression in kind, not in answer:
+  `2021_pentominoes-zayenz_size_20_tiles_15_seed_4711` was CAPPED (proof file) and is now
+  refused by the 8 GB heap budget at 182 s; neither run answered.
+- **`regular` with gcc** (elitserien handball, rotating-workforce, generalized peaceable queens, work-task-variation): one
+  refusal became an incumbent and three became time-outs; no new complete answer. These are
+  optimisation models where `regular` is one constraint among many.
+- **The closed gcc forms** (gbac, blocks-world, gcc-benchmark): no change in kind, as section 1 predicted -- the route was std's
+  already, and the implied row does not move these instances. gbac dominates the row: 8 CAPPED
+  and 8 REFUSED at the width wall or the heap budget before and after, its load variables
+  declared tens to hundreds of thousands wide. One refusal became an incumbent
+  (`2016_gbac_reduced_UD6`), and `2026_gbac_csplib12`, a time-out with no solution at 1 200 s,
+  now finds 2058 before the heap budget stops it at 186 s (the harness files it REFUSED).
+- **The repeated gcc variable**: all 20 community-detection instances were refused; 19 are now
+  attempted, 15 with an incumbent and one OPT. The remaining refusal is
+  `2024_community-detection_Polblogs`, whose `objective` is declared 125 096 898 wide.
 
-1. `/scratch/arthur/wave49-globals-meas-after/` (`compare_run.sh`, pid in
-   `/scratch/arthur/wave49-globals-meas-after.pid`; `DONE` written at the end): the remaining 109
-   instances. Read with `python3 -I bench/regular_spike/join_globals.py
-   /scratch/arthur/wave49-globals-inst.lst /scratch/arthur/wave43run
-   /scratch/arthur/wave49-globals-meas-after`, which now counts a time-out with solutions as an
-   incumbent.
-2. `/scratch/arthur/wave49-globals-routes.tsv` (pid `/scratch/arthur/wave49-globals-routes.pid`):
-   the 160 rows of routes reached, to regroup item 1 by what the FLATTENED model calls.
-
-Nothing about the proof is pending: every shape `regular` writes was measured on the checker
-before it landed (section 4) and is held by the lanes and models of section 5.
+**Reading.** The reach this row bought is `regular` on satisfaction models (nonogram,
+pentominoes: 5 -> 18 complete of 65, all verified) and community-detection (0 -> 16 answers of
+20). The nonograms still timing out are section 5's per-node cost and wide learned clauses, the
+next lever; the gcc rows are held by width, not by gcc.
 
 ### 7. `inverse`: the design record, before any code (step 5 of the row)
 
