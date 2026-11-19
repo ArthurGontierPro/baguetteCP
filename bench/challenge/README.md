@@ -18,6 +18,10 @@ Flattening is fine on the laptop; solving goes to the node (`scripts/README.md` 
 
 ## 2. The recorded runs
 
+Every path below on `/scratch` can be wiped by a node reset. The tables (`*.tsv`) of M7-T26 and
+wave43, and the archive, are copied to `/cluster/arthur/baguette-results/` (2026-11-19), which is
+persistent; read those copies if `/scratch` is gone.
+
 | Run | What | Where |
 |---|---|---|
 | M7-T26, 2026-10-30/31 | All sixteen editions, 1 200 s, 16 GiB, PAR 30; baguette and Chuffed, GCS on 2025 and 2026 only; fixed category only | tables `/scratch/arthur/m7t26/<YEAR>/{results,flatten}.tsv`; corpus `/scratch/arthur/mznc/<YEAR>/`; archive `/scratch/arthur/mznc-archive/` (also `~/mznc-archive` on the laptop); records D-0105 (2026) to D-0120 (2011), synthesis D-0121 |

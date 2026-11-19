@@ -486,7 +486,7 @@ after; say what the change costs in clarity as well as what it gains.
 ## The nodes are shared with the user's OTHER experiments
 
 Since November 2026 baguette's runs go to `fataepyc-06` (git remote `node06`, bare repo
-`/scratch/arthur/baguette.git`); `fataepyc-07` carries the user's other experiments (graph solvers,
+`/cluster/arthur/baguette.git`); `fataepyc-07` carries the user's other experiments (graph solvers,
 `veripb`, Julia harnesses, the codes-cp side project) and is **off limits for baguette runs**. Both
 run under the **same user**, often for hours or days, and other sessions share fataepyc-06 too. On 2026-10-28 a session cleaning up its own runs did `pkill -u arthur -f veripb` and
 killed the `veripb` children of an experiment that had been running for hours. It had to be
@@ -504,8 +504,10 @@ restarted from scratch.
 - A process you cannot identify as yours by PID is not yours to kill.
 
 **A session launched ON `fataepyc-06`** (possible since 2026-11-19) works in the clone
-`/scratch/arthur/baguette`, runs its experiments there directly, and pushes to the hub
-`/scratch/arthur/baguette.git` and to GitHub. The laptop-only rules above (15 GB, typecheck only)
+`/cluster/arthur/baguette`, runs its experiments directly, and pushes to the hub
+`/cluster/arthur/baguette.git` and to GitHub. `/cluster` is persistent; `/scratch` can be wiped by a
+node reset or crash, so it holds only proofs, run outputs and disposable clones, and a result worth
+keeping is copied to `/cluster/arthur/baguette-results/`. The laptop-only rules above (15 GB, typecheck only)
 do not apply to it; the sharing rules of this section do, more than ever. `scripts/README.md` is
 the operating manual: the shell, detached runs, the gate, re-recording, the merge traps.
 

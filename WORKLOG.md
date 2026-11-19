@@ -577,8 +577,9 @@ artefacts are unchanged by every M6-T22 fix, so the numbers below are comparable
 ### 2026-11-19 late (orchestrator): the orchestrator moves to fataepyc-06 -- READ THIS FIRST
 
 The user loses the laptop's connection to the node and relaunches the orchestrator ON
-`fataepyc-06`, in the clone `/scratch/arthur/baguette` (CLAUDE.md, "A session launched ON
-fataepyc-06"; `scripts/README.md` is the operating manual; `bench/challenge/README.md` has the
+`fataepyc-06`, in the clone `/cluster/arthur/baguette` on the persistent cluster disk, hub
+`/cluster/arthur/baguette.git` (`/scratch` can be wiped by a node reset; CLAUDE.md, "A session
+launched ON fataepyc-06"; `scripts/README.md` is the operating manual; `bench/challenge/README.md` has the
 solver paths). The laptop's memory notes were moved into those two READMEs and CLAUDE.md.
 
 **On main and gated (gates 61 to 64 green):** D-0154 (the default search stays fixed, `-f`

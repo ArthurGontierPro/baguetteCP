@@ -16,14 +16,19 @@ On `fataepyc-06`:
 
 | Path | What it is |
 |---|---|
-| `/scratch/arthur/baguette.git` | The bare hub. From the laptop it is the remote `node06`. |
-| `/scratch/arthur/baguette` | The working clone a session launched ON the node works in (since 2026-11-19). Its `origin` is the hub; `github` is `git@github.com:ArthurGontierPro/baguetteCP.git`, reachable from the node. Push to both. |
+| `/cluster/arthur/baguette.git` | The bare hub, on the persistent cluster disk. From the laptop it is the remote `node06`. |
+| `/cluster/arthur/baguette` | The working clone a session launched ON the node works in (since 2026-11-19). Its `origin` is the hub; `github` is `git@github.com:ArthurGontierPro/baguetteCP.git`, reachable from the node. Push to both. |
+| `/cluster/arthur/baguette-results/` | Copies of the results a decision record cites: the Challenge tables (`m7t26/`, `wave43run/`) and `mznc-archive/`. |
 | `/scratch/arthur/<branch>` and `/scratch/arthur/<branch>-runs` | An agent's clone of its branch, and its run outputs. |
 | `/scratch/arthur/baguette-gate-<date><letter>` | The fresh clone of one gate; its `_build/default/bin/main.exe` is the binary the next gate compares against. |
 | `/scratch/arthur/gateNN.sh`, `gateNN.status` | The gate scripts and their verdicts. |
 
-`/scratch` is local to each node; the home directory `/users/grad/arthur` is NFS, shared by the
-cluster but not with the laptop.
+**`/scratch` can be wiped** by a reset or a crash of the node (the user, 2026-11-19). It is for
+proofs, run outputs and disposable clones only. Code, clones you work in, memories and any result
+worth keeping go to `/cluster/arthur/` (persistent, shared by the cluster's nodes): copy a run's
+tables and logs there, under `baguette-results/<run>/`, before citing them in a decision record.
+`/scratch/arthur/baguette.git` is a stale copy of the hub from before the move: do not push to it.
+The home directory `/users/grad/arthur` is NFS too, shared by the cluster but not with the laptop.
 
 ## 2. The shell
 
@@ -76,7 +81,7 @@ The orchestrator gates every merge into `main` on a fresh clone, never on a work
 last `/scratch/arthur/gateNN.sh` and change its number, its clone directory and the previous gate's
 binary. It does, in order:
 
-1. `git clone /scratch/arthur/baguette.git` into a new `baguette-gate-<date><letter>`.
+1. `git clone /cluster/arthur/baguette.git` into a new `/scratch/arthur/baguette-gate-<date><letter>`.
 2. `make check` under `ulimit -v 4000000` with `/usr/bin/time` (rc, unit checks, models, peak RSS).
 3. For every `test/models/*.fzn`, stdout, exit code, `.opb` and `.pbp` of the new binary against
    the previous gate's binary, both hashed. A change meant to be byte-identical must show 0
