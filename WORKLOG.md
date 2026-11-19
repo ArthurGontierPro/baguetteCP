@@ -19,6 +19,9 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
+| M11-complexity-T4 (part 2: search, analysis, retention, learned) | `lib/core/search.ml` (all but the PB-analysis call site, which M8 holds this wave), `lib/core/analysis.ml`, `lib/core/retention.ml`, `lib/core/learned.ml`, their unit tests, `docs/DECISIONS.md` (D-0152), `docs/ROADMAP.md` M11-T4 row | agent-batch4b (`wave52-batch4b`) | 2026-11-19 |
+| M8-bits-encoding (PB analysis over bits rows, D-0134 §11) | `lib/core/pb_analysis.ml`, `lib/core/ladder.ml`, `lib/core/reduce.ml`, `lib/core/search.ml` (the PB-analysis call site only), their unit tests, new `test/models/bits_*`, `docs/DECISIONS.md` (D-0153), `docs/ROADMAP.md` M8 rows. NOT `learned.ml` (request it) | agent-pbbits (`wave52-pbbits`) | 2026-11-19 |
+| M12-parity-T1 (re-run on the orbit model) | the `wave49-parity` branch only (merge main into it if needed); on main only `docs/DECISIONS.md` (a D-0147 addendum) and `docs/ROADMAP.md` M12 rows, merged by the orchestrator | agent-parity2 (`wave49-parity`) | 2026-11-19 |
 | M7-T28 (continuation: regular's reasons, inverse) | `lib/core/prop/regular.ml`, a new `lib/core/prop/inverse.ml` (+ `docs/ARCHITECTURE.md` §1 and `CLAUDE.md`'s map), `lib/core/prop/alldiff.ml` (only the lemma-citation hook D-0146 §7 needs), `lib/flatzinc/compile.ml` (dispatch block), `mznlib/*.mzn`, `lib/proof/encoding.ml` (`add_root_lemma` only), their tests, new `test/models/*`, `docs/DECISIONS.md` (D-0151), `docs/SPEC.md` §2.1, `docs/ROADMAP.md` M7-T28 row | agent-globals2 (`wave51-globals2`) | 2026-11-19 |
 
 ## Cross-session requests
@@ -534,6 +537,18 @@ artefacts are unchanged by every M6-T22 fix, so the numbers below are comparable
 | M7-T28 (first steps; the row stays IN PROGRESS) and M7-T29 (the gcc half) | agent-globals (`wave49-globals`) | 2026-11-18 | **D-0146.** `regular` native (`lib/core/prop/regular.ml`, DOMAIN, every pruning one `rup`, backward chains as root lemmas via `Encoding.add_root_lemma`, mznlib `fzn_regular`/`fzn_regular_set`, 3 mutation lanes, 4 models); the closed gcc forms pinned (std already routed them) with the implied sum; a repeated gcc variable copied by `Builder.split_gcc_repeats`; `inverse` design record and probes (§7). Gate: make check rc 0, 189 models, peak RSS 97 056 kB; diff lane 232/232; Challenge numbers in D-0146 §6 |
 | M7-T32 | agent-flags (`wave51-flags`) | 2026-11-19 | **D-0150.** `tools/baguette.msc` declares `-i -f -n -p -r -s -t -v` (and `--proof` as an extra flag); `bin/main.ml` maps them onto existing options: `-t` ms to `--time-limit`, `-s` = `--stats` plus one `%%%mzn-stat` block on stdout, `-f` = `--search alternate --restarts luby --phase-saving` (warned: not proof-safe until M7-T31), `-r`/`-p` accepted. Every improving solution was already printed with one `soli` each (verified through `minizinc`). Every solution of a satisfaction model (`-a`, `-n N > 1`) refused, exit 3. SPEC §2.2 amended; 30 checks in `test_endtoend`; default artefacts byte-identical on 192 models |
 ## Handoff notes
+## M7-T31 and M6-T23 merged, gate 57 green; wave 52 launched, 2026-11-19 (orchestrator)
+
+`wave50-proofbugs` merged as `b403e28`. Gate 57 (`/scratch/arthur/gate57.status`, clone
+`/scratch/arthur/baguette-gate-20261119e`): `make check` rc 0, 193 models; against gate 56's binary
+`dc612951` the only artefact that differs is `opt_global_settles_hole_sat.pbp` (the new model whose proof the
+old binary got refused); the lane 301/301 and 289/289 equal; binary `9571b17ca68c59e3fd0b7e335b156211`.
+search.ml is free again: wave 52 starts M11-complexity-T4 part 2 (D-0152) and M8's PB analysis over bits rows
+(D-0153). The codes session's CryptoMiniSat runs (2026-11-19, on its own node) show XOR reasoning paying on
+the ORBIT model (17 296 redundant parity rows) and not on the 24-row basis, so M12-parity-T1's spike is re-run
+on the orbit model (D-0147 addendum); the model and its data were copied read-only to
+`fataepyc-06:/scratch/arthur/codes-bench/src/` (`models/minweight_chk.mzn`, `dom/`).
+
 ## M7-T31 and M6-T23 handoff, 2026-11-19 (agent-proofbugs, `wave50-proofbugs`): D-0148, D-0149
 
 M7-T31 is not the assignment shape. A factless pruning that SETTLED over a hole (a learned unit
