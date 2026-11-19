@@ -534,6 +534,18 @@ artefacts are unchanged by every M6-T22 fix, so the numbers below are comparable
 | M7-T28 (first steps; the row stays IN PROGRESS) and M7-T29 (the gcc half) | agent-globals (`wave49-globals`) | 2026-11-18 | **D-0146.** `regular` native (`lib/core/prop/regular.ml`, DOMAIN, every pruning one `rup`, backward chains as root lemmas via `Encoding.add_root_lemma`, mznlib `fzn_regular`/`fzn_regular_set`, 3 mutation lanes, 4 models); the closed gcc forms pinned (std already routed them) with the implied sum; a repeated gcc variable copied by `Builder.split_gcc_repeats`; `inverse` design record and probes (§7). Gate: make check rc 0, 189 models, peak RSS 97 056 kB; diff lane 232/232; Challenge numbers in D-0146 §6 |
 | M7-T32 | agent-flags (`wave51-flags`) | 2026-11-19 | **D-0150.** `tools/baguette.msc` declares `-i -f -n -p -r -s -t -v` (and `--proof` as an extra flag); `bin/main.ml` maps them onto existing options: `-t` ms to `--time-limit`, `-s` = `--stats` plus one `%%%mzn-stat` block on stdout, `-f` = `--search alternate --restarts luby --phase-saving` (warned: not proof-safe until M7-T31), `-r`/`-p` accepted. Every improving solution was already printed with one `soli` each (verified through `minizinc`). Every solution of a satisfaction model (`-a`, `-n N > 1`) refused, exit 3. SPEC §2.2 amended; 30 checks in `test_endtoend`; default artefacts byte-identical on 192 models |
 ## Handoff notes
+## Gate 56 green on the merged main, 2026-11-19 (orchestrator)
+
+Gate 56 on `2fb5bd8` (`/scratch/arthur/gate56.status`, clone `/scratch/arthur/baguette-gate-20261119d`):
+`make check` rc 0, 192 models, peak RSS 100 MB; the 192 models' four artefacts identical to gate 55's binary
+`bb8ccd8b`; the lane 301/301 and its debug pass 289/289 equal; scaling ok. Binary
+`dc612951288822e65fca794bf7b924c6`. On main since gate 53: retention + hook (`a0b50da`, `36c1312`), globals
+(`b13ce94`), the fmt repair of my test_prop.ml merge (`9c1b8e6`), the retention test fix (`6d69588`,
+two lanes that pinned the pre-hook behaviour), M7-T32 (`681a9e6`), and the lbd/fifo lane references
+re-recorded on purpose by gate 55 (`2fb5bd8`). Gate 54 had failed on fmt-check (my merge) and showed the
+expected lbd/fifo search change. Open: M7-T31/M6-T23 (wave50-proofbugs), the M7-T28 continuation
+(wave51-globals2). Waiting on M7-T31: M11-T4 part 2 and M8's PB analysis over bits rows (both need search.ml).
+
 ## M7-T32 handoff, 2026-11-19 (agent-flags, `wave51-flags`): the MiniZinc standard flags, D-0150
 
 `minizinc --solver tools/baguette.msc` now passes baguette `-i -f -n -p -r -s -t -v` (measured
