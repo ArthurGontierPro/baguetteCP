@@ -9,6 +9,6 @@
   "supportsFzn": true,
   "needsSolns2Out": true,
   "tags": ["cp", "int", "proof"],
-  "stdFlags": [],
+  "stdFlags": ["-i", "-f", "-n", "-p", "-r", "-s", "-t", "-v"],
   "extraFlags": []
 }
