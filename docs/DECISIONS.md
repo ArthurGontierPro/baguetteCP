@@ -19837,3 +19837,97 @@ on main would most likely be refused the same way. NOT INVESTIGATED. Rerun
 - A family where learning from alldiff conflicts costs more than it prunes (long Regin tails
   from many removers). The tails are bounded by the violating set's facts, and the measurement
   in section 4 is where to look first.
+
+## D-0165  D-0161 request 1: `Alldiff.snap_of` keeps only what needs the store; the values lost below and above the window are rebuilt inside the `Deferred`
+
+Status: DONE (gate green, section 4)
+Date: 2026-11-19
+
+By agent-snap (branch `wave54-snap`, on top of `wave53-alldiff`'s tip `b7e1ca9`, which it merges
+after). Touches `lib/core/prop/alldiff.ml` only. Runs in `/scratch/arthur/wave54-snap-runs/`,
+copied to `/cluster/arthur/baguette-results/wave54-snap/`.
+
+### 1. What changed
+
+D-0161 section 6 request 1. `snap_of` built, for every variable of the constraint at every
+snapshot, `s_gone`: every declared value the variable has lost, tagged `Gone_below`, a hole cite,
+or `Gone_above`. That is two `range` lists of up to the declared width per variable per pass.
+Only the derivations read the below and above runs (`alo_over`, `hall_cancels`), and they all run
+inside a `Deferred` (`prune_expl`, `remove_expl`, `conflict_expl`). The reason reads only the holes
+(`hall_facts`). So under `--no-proof` none of it was ever read, and with a proof most of it was not.
+
+- The snapshot now holds `s_holes`, the interior holes with their cites, and nothing else of that
+  list. A hole's cite reads the trail (`Store.remover`, the level of the remover), so it stays
+  EAGER. Its cost on black-hole is D-0155's request, not this one.
+- `gone s` rebuilds the full list when a derivation is forced: `range s_dlo (s_lo - 1)` tagged
+  `Gone_below`, then `s_holes`, then `range (s_hi + 1) s_dhi` tagged `Gone_above`. These are the
+  values, the order and the tags `gone_of` produced, so `alo_over` emits the same summands in the
+  same order. `hall_cancels` counts the excluded values of the two runs directly, which gives the
+  same two numbers the filter over `s_gone` gave.
+- The root flags `s_lo_root`/`s_hi_root` stay EAGER, because they read the bound supports as they
+  stand at the snapshot. They now call `Store.at_root` (one comparison against the first level
+  mark) instead of `Store.level_of_index ... = 0` (a binary search over the open levels). Same
+  answer by I-T2. `hole_cite` makes the same substitution. A `Store.history` (D-0124) was not
+  needed for this, and it would have tied the derivation's forcing to the history being live.
+
+### 2. Why it is sound (the rule, also in `alldiff.ml`'s header)
+
+I-X6 forbids a thunk to READ the store. It does not forbid a thunk to COMPUTE from numbers the
+snapshot froze. The below and above runs are functions of `s_dlo`, `s_lo`, `s_hi`, `s_dhi` and two
+constant tags, so building them at forcing time gives exactly the list the snapshot would have
+built. What does need the store (the supports' levels, the holes' removers) is still read at
+snapshot time. No proof line can move, and every proof is byte-identical (section 4).
+
+### 3. Measurements
+
+Binaries: base `b7e1ca9` md5 `45b8a3c7` (the same md5 as wave53-alldiff's tip gate), new `6d04191`
+md5 `75a821cb`. `perf stat -e instructions:u` and `/usr/bin/time` peak RSS, `--stats`, equal
+node counts, every stdout, `--stats` counter and `.pbp` md5 equal between the two.
+
+| instance, budget | mode | base instructions | new instructions | change | peak RSS base -> new |
+|---|---|---|---|---|---|
+| `2011_cyclic-rcpsp_easy_6`, 10 000 nodes | `--no-proof` | 156.96 G | 116.71 G | -25.6 % | 160 -> 140 MB |
+| `2011_black-hole_10`, to the end (UNSAT at the root) | `--no-proof` | 5.388 G | 5.334 G | -1.0 % | 155 -> 155 MB |
+| `2011_black-hole_20`, 20 nodes | `--no-proof` | 55.16 G | 51.51 G | -6.6 % | 1 152 -> 1 069 MB |
+| `2011_cyclic-rcpsp_easy_6`, 10 000 nodes | `--proof` | 776.9 G | 736.4 G | -5.2 % | 346 -> 352 MB |
+| `2011_black-hole_10`, to the end | `--proof` | 15.88 G | 15.79 G | -0.6 % | 364 -> 363 MB |
+| `2011_black-hole_20`, 20 nodes | `--proof` | 178.2 G | 174.0 G | -2.3 % | 3 023 -> 3 016 MB |
+
+Cyclic is from `bench/diff/corpus`, the black-hole pair from
+`/scratch/arthur/wave53-alldiff-runs/chal/fzn/` (the instances D-0156 measured). The cyclic proof
+is 2.41 GB, `.pbp` md5 `c60f0e33` on both.
+
+D-0161 predicted 39.4 % on cyclic and the change saves 25.6 %. The prediction was an inclusive
+share on main `e003729`, before M7-T33, and taken on another binary. On this base a flat profile
+(`perf record -F 499`, self time) puts Alldiff's own functions at 7.7 % and `Stdlib.List` plus the
+allocator and GC at 22.8 %. After the change they are at 1.8 % and 7.9 %. What alldiff still
+costs on cyclic is the snapshot record itself and the passes, and it is not where cyclic's time
+goes any more (`Pb.effective_all`, `Pb.status` and `Pb.pass` are 38 % of the new profile).
+
+Black-hole gains little because its alldiff variables carry holes, and the holes stay eager. Its
+heap is D-0164's `index_hole_clause`, merged on main after this base.
+
+### 4. Gate
+
+`/scratch/arthur/wave54-snap-runs/gate.sh`, on a fresh clone of the pushed tip `6d04191` from the
+hub, OLD = `b7e1ca9` built in its own fresh clone (md5 `45b8a3c7`), NEW md5 `75a821cb`.
+
+- `make check`: rc 0, 4 278 ok, 0 FAIL, model tests 200 passed, peak RSS 102 MB.
+- Every `test/models/*.fzn` (200): `--proof` stdout, exit code, `.opb`, `.pbp`, and `--no-proof
+  --stats` stdout and stderr, all equal to OLD (0 differences).
+- `make diff ARGS="--tier all -j 16"`: 18 of 301 runs differ from the reference, the SAME 18 lines
+  as the base's own lane (`/scratch/arthur/wave53-alldiff-runs/final/gate/diff.log`, same binary
+  md5): cyclic x6 and lot-sizing x12, wave53-alldiff's pending re-record. Nothing else.
+- `--debug`: 6 of 289 differ, the same 6 lines as the base's debug lane (cyclic x6).
+- `make scaling ARGS="-j 16"`: ok, every line within its threshold. `bench/diff` untouched.
+
+### 5. What this leaves
+
+- `holes_of` still lists `range lo hi` for a holed domain and cites every hole at every snapshot.
+  Only `hall_facts` reads the holes outside a derivation, and only the holes a Regin value set
+  EXCLUDES. Making the cites lazy needs the remover's level as it stood, so it would go through a
+  `Store.history` (D-0124) and its liveness check. That is D-0155's request, and it is the one that
+  matters on black-hole.
+- `snap_of` still runs for every variable at every pass, and the record is allocated whether a
+  pruning follows or not. It is now cheap per variable (two O(1) root tests and a `has_holes`
+  test), so I left it.

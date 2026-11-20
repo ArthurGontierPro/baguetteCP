@@ -152,8 +152,20 @@
    ---------------------------------------------------------------------------
 
    Every number a derivation depends on -- the interval, each variable's current and
-   declared bounds -- is snapshotted into [snap] records at the moment of the pruning
-   and the thunk reads nothing else from the store. What the thunk DOES read live is
+   declared bounds, whether each current bound is root-established, and each interior
+   hole with its cite -- is snapshotted into [snap] records at the moment of the pruning
+   and the thunk reads nothing else from the store.
+
+   WHAT IS BUILT EAGERLY AND WHAT LAZILY (D-0161 request 1). The snapshot holds only what
+   needs the store as it stood: the four bounds, the two root flags (they read the bound
+   supports) and the interior holes (their cite reads the trail). The list of declared
+   values the variable has lost BELOW and ABOVE its window is not stored: [gone] rebuilds
+   it inside the [Deferred] from the four frozen bounds, so a snapshot whose derivation is
+   never forced -- every snapshot under [--no-proof], most of them with a proof -- no
+   longer pays two width-long lists per variable. The rule that makes this sound: a
+   thunk may COMPUTE from snapshotted numbers whatever it likes; it may not READ the
+   store. The rebuilt list is the eager one value for value, in the same order, so no
+   proof byte moves. What the thunk DOES read live is
    [Encoding]'s constraint ids, and that is not an I-X6 violation for the reason I-X6
    is about: those ids are written once, by [Encoding.start_proof], before the first
    decision, and never move. Reading them later gives the same answer as reading them
@@ -216,12 +228,13 @@ type snap = {
      however deep the search has gone. *)
   s_lo_root : bool;
   s_hi_root : bool;
-  (* Every DECLARED value this variable can no longer take, ascending, with the reason
-     the derivation may cite for it. Snapshotted with everything else (I-X6): the hole
-     entries close over the trail as it stood at the pruning, and the thunk never looks
-     again. For a hole-free domain -- every domain M4-T1 ever saw -- this is two runs of
-     [Gone_below]/[Gone_above] and costs no trail walk at all. *)
-  s_gone : (int * gone) list;
+  (* The INTERIOR holes of the window [s_lo, s_hi], ascending, each with the reason the
+     derivation may cite for it ([Gone_hole_root] or [Gone_hole]). Snapshotted with
+     everything else (I-X6): a hole's cite reads the trail as it stood at the pruning,
+     and the thunk never looks again. Empty for a hole-free domain. The values below and
+     above the window are NOT stored: [gone] rebuilds them from the four bounds above
+     when a derivation is forced (D-0161 request 1, see [gone]). *)
+  s_holes : (int * gone) list;
   (* The term's [rungs], carried so that a derivation reaches the ladder without the
      name (M7-T33, D-0156). Not a number the derivation depends on: the ladder ids are
      written once and never move (the header's I-X6 paragraph). *)
@@ -313,19 +326,26 @@ let make ?(cutoff = default_cutoff) ?(lemma_rows = []) store enc ~rows vars =
 
 let vars t = Array.to_list (Array.map (fun tm -> tm.x) t.terms)
 
-(* The level the trail entry supporting this bound was pushed at, or 0 for a bound that
-   has never moved. [Store.level_of_index] counts the open level marks at or below the
-   entry, so this is the level the bound BELONGS to and not the one in force now. *)
+(* Whether the trail entry supporting this bound was pushed at level 0, or the bound has
+   never moved: the level the bound BELONGS to, not the one in force now. Stays EAGER,
+   because it reads the supports as they stand at the snapshot.
+
+   D-0161 request 1: [Store.at_root] answers [level_of_index sup = 0] in one comparison
+   instead of a binary search over the open levels -- the same answer by I-T2 (the marks
+   are monotone, so an entry is at level 0 iff it precedes the first mark). Asked twice
+   per variable per snapshot, the search was 2.2 % of 2011_cyclic-rcpsp_easy_6's
+   [--no-proof] instructions. *)
 let established_at_root store v ~lower =
   let sup = if lower then Store.lo_support store v else Store.hi_support store v in
-  sup = Store.no_support || Store.level_of_index store sup = 0
+  sup = Store.no_support || Store.at_root store sup
 
 let range a b = List.init (Stdlib.max 0 (b - a + 1)) (fun i -> a + i)
 
 (* The entry that took [value] out of [var], or [None].
 
    What decides whether a hole may be cited as a unit is the LEVEL it was established at,
-   and [Store.level_of_index] reads that off the entry's trail position, [pos] (M6-T15).
+   and [Store.at_root] reads that off the entry's trail position, [pos] (M6-T15; the
+   level-0 case of [Store.level_of_index], one comparison, D-0161 request 1).
    Until M7-T33 this walked the WHOLE trail backwards once per hole asked about, because
    when it was written the entry did not carry its position; on the Challenge's black-hole
    instances, once element's own walk was gone (D-0155), that walk was 70 to 89 % of the
@@ -339,26 +359,39 @@ let range a b = List.init (Stdlib.max 0 (b - a + 1)) (fun i -> a + i)
    lib/flatzinc/compile.ml's [reject_set_domain] refuses, so no model reaches it. *)
 let hole_cite store var value =
   match Store.remover store ~before:(Store.trail_length store) ~var value with
-  | Some e when Store.level_of_index store e.Store.pos = 0 -> Gone_hole_root
+  | Some e when Store.at_root store e.Store.pos -> Gone_hole_root
   | Some e -> Gone_hole e.Store.reason
   | None -> Gone_hole (Reason.of_facts Reason.none)
 
-(* [s_gone], ascending: below the window, then the holes inside it, then above. The
-   order is what makes an [alo_over] over an INTERVAL value set emit exactly the
-   summands M4-T1's [alo_window] emitted, in the same order, so stage 1's proofs are
-   unchanged byte for byte. *)
-let gone_of store tm d =
-  let lo = Domain.lo d and hi = Domain.hi d in
-  let holes =
-    if not (Domain.has_holes d) then []
-    else
-      List.filter_map
-        (fun v -> if Domain.mem d v then None else Some (v, hole_cite store tm.x v))
-        (range lo hi)
-  in
-  List.map (fun v -> (v, Gone_below)) (range tm.decl_lo (lo - 1))
-  @ holes
-  @ List.map (fun v -> (v, Gone_above)) (range (hi + 1) tm.decl_hi)
+(* [s_holes]: the interior holes of [d], ascending, each cited from the trail NOW (at
+   snapshot time, I-X6). *)
+let holes_of store tm d =
+  if not (Domain.has_holes d) then []
+  else
+    List.filter_map
+      (fun v -> if Domain.mem d v then None else Some (v, hole_cite store tm.x v))
+      (range (Domain.lo d) (Domain.hi d))
+
+(* Every DECLARED value [s] can no longer take, ascending, with the reason the derivation
+   may cite for it: below the window, then the holes inside it, then above. The order is
+   what makes an [alo_over] over an INTERVAL value set emit exactly the summands M4-T1's
+   [alo_window] emitted, in the same order, so stage 1's proofs are unchanged byte for
+   byte.
+
+   BUILT WHEN A DERIVATION IS FORCED, NOT AT THE SNAPSHOT (D-0161 request 1). Until then
+   [snap_of] built this list for every variable at every snapshot -- two [range] lists of
+   up to the declared width per variable per pass -- and only a derivation ever read the
+   below/above part: the REASON reads the holes alone ([hall_facts]). That was 37.3 % of
+   2011_cyclic-rcpsp_easy_6's [--no-proof] instructions at 10 000 nodes, built and never
+   read. Rebuilding it here is sound under I-X6 because the two outer runs are functions
+   of [s_dlo], [s_lo], [s_hi] and [s_dhi] alone -- numbers frozen in the snapshot -- with
+   the constant tags [Gone_below]/[Gone_above]; the store is not read. Only the holes need
+   the trail as it stood, and they stay eager in [s_holes]. Same values, same order, same
+   tags as the eager list, so every proof line is the same byte for byte. *)
+let gone s =
+  List.map (fun v -> (v, Gone_below)) (range s.s_dlo (s.s_lo - 1))
+  @ s.s_holes
+  @ List.map (fun v -> (v, Gone_above)) (range (s.s_hi + 1) s.s_dhi)
 
 let snap_of store tm =
   let d = Store.get store tm.x in
@@ -371,7 +404,7 @@ let snap_of store tm =
     s_hi = Domain.hi d;
     s_lo_root = established_at_root store tm.x ~lower:true;
     s_hi_root = established_at_root store tm.x ~lower:false;
-    s_gone = gone_of store tm d;
+    s_holes = holes_of store tm d;
     s_rungs = tm.rungs;
   }
 
@@ -541,7 +574,7 @@ let exclude_summand t s v g =
    SET of values that need not be contiguous, and everything else about the counting is
    unchanged. [keep] is membership of that set.
 
-   The excluded values are read off [s_gone] rather than recomputed, because the
+   The excluded values are read off [gone s] rather than recomputed, because the
    *reason* each one is gone is what decides which line cancels it. For an interval
    [keep] this is value-for-value and order-for-order what M4-T1 computed: a Hall
    variable's window is inside the interval, so every declared value outside the
@@ -551,7 +584,7 @@ let alo_over t s ~keep =
     (cite (cid_of "at-least-one" (Encoding.at_least_one_id t.enc s.s_name))
     :: List.filter_map
          (fun (v, g) -> if keep v then None else Some (exclude_summand t s v g))
-         s.s_gone)
+         (gone s))
     1
 
 (* The counting argument itself: one at-least-one per Hall variable, one at-most-one per
@@ -621,10 +654,10 @@ let core_summands t ~vals ~halls ~extra =
 let hall_cancels ~keep ~halls =
   List.concat_map
     (fun s ->
-      let count want =
-        List.length (List.filter (fun (v, g) -> (not (keep v)) && g = want) s.s_gone)
-      in
-      let below = count Gone_below and above = count Gone_above in
+      (* The [Gone_below]/[Gone_above] entries of [gone s] that [keep] excludes, counted
+         over the two runs directly rather than over the rebuilt list: the same numbers. *)
+      let count a b = List.length (List.filter (fun v -> not (keep v)) (range a b)) in
+      let below = count s.s_dlo (s.s_lo - 1) and above = count (s.s_hi + 1) s.s_dhi in
       (if below > 0 && s.s_lo_root then
          [ Explanation.defining below (Lit.ge s.s_name s.s_lo) ]
        else [])
@@ -805,7 +838,7 @@ let hall_facts ~keep halls =
       @ List.concat_map
           (fun (v, g) ->
             match g with Gone_hole r when not (keep v) -> Reason.facts r | _ -> [])
-          s.s_gone)
+          s.s_holes)
     halls
 
 let prune_reason ~keep halls y ~lower =
@@ -1103,7 +1136,7 @@ let removal_conclusion y d w =
    test/models/alldiff_regin_hole_element_unsat.fzn). The convention lives HERE, not as a
    bridge in [excl_hole], for the reason element.ml's own [in_order_currency] gives: one
    currency for every hole means an embedder never has to know which propagator punched
-   it. This module's own derivations never read this entry's explanation -- [gone_of]
+   it. This module's own derivations never read this entry's explanation -- [holes_of]
    cites a hole by its level ([Gone_hole_root]) or its facts ([Gone_hole]) -- so they are
    untouched. A removal AT a bound is a bound move, which no one embeds, and keeps its
    form, exactly as in element.ml. *)

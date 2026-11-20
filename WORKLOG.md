@@ -20,8 +20,6 @@ of it to every session and stopping at a broken line before it even reached the 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
 | M7-T28 (`member`) | new `lib/core/prop/member.ml`, `lib/flatzinc/compile.ml` (member dispatch), `mznlib/`, new `test/models/`, `test/unit/test_prop.ml` (member section) | agent-member (`wave53-member`) | 2026-11-19 |
-| D-0161 request 1 (`Alldiff.snap_of` builds derivation inputs at every snapshot) | `lib/core/prop/alldiff.ml` ON TOP OF `wave53-alldiff` (merges after it), `test/unit/test_prop.ml` (alldiff section) | agent-snap (`wave54-snap`) | 2026-11-19 |
-| merge of M7-T33 and D-0161 request 1 (D-0167 item 1) | merges `wave53-alldiff` then `wave54-snap` on branch `wave55-merge`; `bench/diff/corpus.tsv` (lot-sizing's budget), `bench/diff/reference*` (re-record) | agent-merge (`wave55-merge`) | 2026-11-20 |
 | M7-T34 (`member` without width-proportional rows) | on `wave53-member`'s files: `lib/core/prop/member.ml`, `lib/flatzinc/compile.ml` (member dispatch), `mznlib/`, `test/models/member_*`, `test/unit/test_prop.ml` (member section) | agent-member2 (`wave55-member`) | 2026-11-20 |
 | M11-complexity-T13 (drop a forced explanation once written) | `lib/core/explanation.ml` (the `thunk` record gains fields, D-0167 item 6), `lib/core/justify.ml`, `lib/core/pb_analysis.ml` (`cited_ids` only), `test/unit/test_justify.ml`, `docs/ARCHITECTURE.md` §4 | agent-thunk (`wave55-thunk`) | 2026-11-20 |
 
@@ -619,6 +617,7 @@ section 1. Shares are inclusive, of the whole run.
 | M11-complexity-T11 | agent-heap (`wave54-heap`, fix `wave54-heapfix`) | 2026-11-19 | **D-0164.** `Element.index_hole_clause` defers the puncher's literals; bh4 `--no-proof` 40 nodes 6.04 -> 1.72 GB RSS, -26.9 % instructions, `--proof` 11.66 -> 7.96 GB; 215 of 215 artefacts equal. The proof-side holders stay open (D-0164 §7) |
 | M11-complexity-T12 | agent-live (`wave54-live`) | 2026-11-19 | **D-0166.** Byte-identical shrink of four proof-side holders: claim index keys packed (333 -> 76 MB), memo as a chained table (342 -> 244 MB), audit keeps the origin alone, shared per `Combine` shape (325 -> 132 MB), `by_lvl` as runs (189 -> 118 MB). bh9 `--proof` node 40 (alldiff base): live 2 660 -> 2 041 MB, RSS 4 346 -> 3 648 MB, -2.2 % instructions, `.pbp` md5 equal. Gate on `c46952f` (binary `214e74d1`): `make check` rc 0 (4 289 ok), 198 x 4 artefacts equal to `22620b60`, lane 301/301, debug 289/289, scaling ok. alldiff's forced derivations (1.16 GB) and the never-hit memo entries are the user's call (D-0166 §5) |
 | M7-T33 (and `Alldiff.excl`'s proof cost, D-0145; `hole_cite` through `Store.remover`, D-0155 §4) | agent-alldiff (`wave53-alldiff`) | 2026-11-19 | **D-0156.** alldiff's pigeonholes carry their facts under a decision, so they are learned from (root byte-identical). `p1f_13` TIMEOUT -> UNSAT 19.5 s VERIFIED, elitserien 0 -> 20 incumbents, Challenge pairs 100 instances: 5 -> 6 complete, 16 -> 37 incumbents. `excl` cyclic 646 -> 581 G, `hole_cite` bh10 52 -> 16 G and bh20@20 1846 -> 175 G, bytes equal. Tip gate (`45b8a3c7`): check rc 0, 4278 ok, 200 models, 4 alldiff `.pbp` differ, lane 18 DIFF (cyclic x6, lot-sizing x12) and debug 6, all expected. Open: lot-sizing [activity] over the 4 GB cap, black-hole's heap per node, openshop's checker panic at `--update` (D-0156 §4, §7). |
+| D-0161 request 1 (`Alldiff.snap_of` builds derivation inputs at every snapshot) | agent-snap (`wave54-snap`) | 2026-11-19 | **D-0165.** `snap_of` keeps the interior holes only; `gone` rebuilds the below/above runs inside the `Deferred` from the four frozen bounds; root flags and `hole_cite` through `Store.at_root`. Every model artefact and every lane line equal to the base `45b8a3c7`. Cyclic 10 000 nodes `--no-proof` -25.6 % instructions (157.0 -> 116.7 G), `--proof` -5.2 %; black-hole_20 -6.6 % / -2.3 %. |
 
 ## Handoff notes
 
@@ -643,6 +642,10 @@ D-0163 §6 the proof's directory, MiniZinc's `./baguette-proof.*`, silent overwr
 releasing the forced alldiff trees (1.16 GB on bh9) through a field in `Explanation`'s thunk
 (option B, an `Explanation.t` change). Also seen: the openshop checker panics on alldiff's
 `--update` pass, on main's own proof (D-0156 §7, not investigated).
+
+### 2026-11-19 (agent-snap, `wave54-snap`): D-0161 request 1 done, D-0165, NOT merged
+
+`Alldiff.snap_of` no longer builds the values lost below and above the window; `gone` rebuilds them in the `Deferred` (byte-identical, `make check`, artefacts, lane and debug lane equal to the base, scaling green). Merge AFTER `wave53-alldiff`; at the merge, drop main's Active-claims row for this task (it was claimed on main, so this branch could not move it). Left: the holes' cites stay eager (D-0155's request), which is what black-hole still pays.
 
 ### 2026-11-19 (agent-alldiff, `wave53-alldiff`): M7-T33 done, D-0156, NOT merged
 
