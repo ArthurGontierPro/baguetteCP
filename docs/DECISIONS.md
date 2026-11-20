@@ -19578,3 +19578,22 @@ Fresh clone of `wave54-live` at `c46952f` from the hub (`/scratch/arthur/wave54-
 of `test_representations_m11t12`; 198 models, peak RSS 99 MB), 198 models x 4 artefacts equal
 (`out`, `rc`, `opb`, `pbp`), lane 301/301 and debug 289/289 equal to the reference, scaling ok,
 `bench/diff` untouched. Nothing to re-record.
+
+## D-0167  The six open decisions of 2026-11-19, taken by the orchestrator on the user's delegation
+
+Status: DECIDED (2026-11-20). The user, 2026-11-20: "Prends les décisions selon ton opinion, je
+regarderai quand j'aurai le temps." Each item below can be reversed by the user; each names what
+reversing it costs.
+
+| # | Question | Decision | Why | To reverse |
+|---|---|---|---|---|
+| 1 | lot-sizing [activity] over the lane's 4 GB cap with M7-T33 (D-0156 §7) | Lower `2020_lot-sizing_pigment15b.psp`'s node budget in `bench/diff/corpus.tsv` (3 000 today) to the largest round value whose twelve configurations all stay under the 4 GB cap with M7-T33, measured; its twelve references are re-recorded at the alldiff merge anyway | The 4 GB cap is a discipline of every suite (CLAUDE.md), and a per-line cap would be a new mechanism for one line; the growth is M7-T33 learning from alldiff conflicts (846 -> 1 722 learned under `keep_all`, D-0051), which is the point of the row, not a leak | restore 3 000 and add a per-line cap |
+| 2 | `member` (D-0159 §5) | Not merged as it stands. A new row, M7-T34, builds the width-independent encoding D-0159 §5 names (big-M rows per position) on the member branch; merge when it changes no answer for the worse and its rows no longer grow with the width | No answer changed on the 35 instances, and the rows reach 3.77 M on `gl_Map1f`; a propagator that costs width-proportional rows for no answer is not worth its weight yet | merge `wave53-member` as is |
+| 3 | The memo's share mode as the default (D-0158 §5) | ON by default, after the alldiff merge, with the 85 lane references whose `.pbp` hash and `pol`/`pol-tokens` counters move re-recorded in their own commit | Since D-0163 the default run keeps its proof, so proof size is now paid by every user on disk and by the checker: cable 1 887 -> 114 MB, cyclic 2 023 -> 322 MB, search identical, 274/274 proofs verified; the cost is up to +14.5 % instructions (rcpsp_11) | `share_default = false`, re-record the same 85 |
+| 4 | D-0162 §3, objective dominance to bound `fplen` | Rejected. The refusal stays | It would certify a capped model, not the one written, and the instance then dies on memory anyway | write the sentence into SPEC 2.1 |
+| 5 | D-0163 §6: the default proof's directory, MiniZinc's fixed name, silent overwrite | Kept as built: `./<model>.opb`/`.pbp` in the current directory, `./baguette-proof.*` under MiniZinc with the paths on stderr, overwrite silently | It is what a compiler does with its output, and `--proof PREFIX` chooses anything else | one line in `default_proof_prefix` |
+| 6 | D-0166 §5: releasing the forced alldiff trees (1.16 GB on bh9) | Option B: `Explanation`'s `thunk` gains a field recording its emitted id and level; the forced tree is dropped once written and re-forced on a later read. Built as M11-complexity-T13, every proof byte-identical | The largest holder left, and B changes no proof line; E makes a comment-level discipline load-bearing for the bytes | keep option A |
+
+Also decided: the Challenge-wide re-measurement (M8-T4, M9-T3, M10-T5) does NOT rerun Chuffed; it
+compares against M7-T26's recorded Chuffed runs and the official archive (bench/challenge/README §3
+asked the user; the delegation answers it).
