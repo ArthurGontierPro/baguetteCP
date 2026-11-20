@@ -278,6 +278,10 @@ type t = {
   aux : (string, unit) Hashtbl.t; (* selector literal names (positive) *)
   sel : (string, string * bool) Hashtbl.t; (* selector lit -> (flag var, s <-> flag?) *)
   q : (string, unit) Hashtbl.t; (* atom clauses already derived, by label *)
+  value_of : (string, int) Hashtbl.t; (* ladder literal name -> its value *)
+  holes : (string, string * int list) Hashtbl.t;
+      (* a variable with a set domain -> its `in` constraint's name and allowed values *)
+  mutable n_holes_vars : int;
   mutable cur : con option;
   mutable objective : (string * int) option;
   mutable nw : int;
@@ -303,6 +307,9 @@ let create path =
     aux = Hashtbl.create 16;
     sel = Hashtbl.create 16;
     q = Hashtbl.create 64;
+    value_of = Hashtbl.create 256;
+    holes = Hashtbl.create 8;
+    n_holes_vars = 0;
     cur = None;
     objective = None;
     nw = 0;
@@ -337,7 +344,7 @@ let terms_text terms =
    precede every line that names them.
    --------------------------------------------------------------------------- *)
 
-let declare t x ~lo ~hi ~lit =
+let declare ?(holes = []) t x ~lo ~hi ~lit =
   match t.cur with
   | Some c ->
       (* an auxiliary declared while a constraint is posted: a disequality selector *)
@@ -350,6 +357,17 @@ let declare t x ~lo ~hi ~lit =
       (match Hashtbl.find_opt t.cake_names cx with
       | Some y -> refuse "variables %s and %s have the same .scp name %s" y x cx
       | None -> Hashtbl.replace t.cake_names cx x);
+      (* a set domain with holes is the translator's `(d<k> in (v ...) X)`, k counted over
+         such variables in declaration order (tools/e2e/fzn2scp.py), cake's eq atoms of the
+         allowed values and `@c[d<k>][al1]` over them *)
+      if holes <> [] then (
+        t.n_holes_vars <- t.n_holes_vars + 1;
+        let allowed =
+          List.filter
+            (fun v -> not (List.mem v holes))
+            (List.init (hi - lo + 1) (fun i -> lo + i))
+        in
+        Hashtbl.replace t.holes x (Printf.sprintf "d%d" t.n_holes_vars, allowed));
       let comp, h = bit_width ~lo ~hi in
       let bits = List.init h (fun i -> (pow2 i, Printf.sprintf "i[%s][b%d]" cx i)) in
       let bsum =
@@ -364,6 +382,7 @@ let declare t x ~lo ~hi ~lit =
       for w = lo + 1 to hi do
         let a = lit w in
         Hashtbl.replace t.owner a x;
+        Hashtbl.replace t.value_of a w;
         let m = ck (w - bmin) and k = ck (bmax - w + 1) in
         emit t "@A1[%s] red %s +%d ~%s >= %d : %s -> 0 ;" a pos_b m a w a;
         emit t "@A2[%s] red %s +%d %s >= %d : %s -> 1 ;" a neg_b k a (1 - w) a
@@ -403,9 +422,6 @@ let declare t x ~lo ~hi ~lit =
       done
 
 let refuse_bits x = refuse "%s is on the bits encoding (--bits-above; T7)" x
-
-let refuse_holes x =
-  refuse "%s has a set domain with holes (cake's `in`, not covered yet)" x
 
 let find_var t x =
   match Hashtbl.find_opt t.vars x with
@@ -700,6 +716,13 @@ let rec q_clause t g which =
       | "f", F -> emit t "%s rup +1 ~%s >= 1 ;" lab g
       | "p", L m -> emit t "%s rup +1 ~%s +1 %s >= 1 ;" lab g m
       | "n", L m -> emit t "%s rup +1 %s +1 %s >= 1 ;" lab g (neg_lit m)
+      (* an interior value: e -> x_ge_k and e -> ~x_ge_(k+1), each by unit propagation *)
+      | "a", Interior ->
+          let v = find_var t (Hashtbl.find t.cake_names z) in
+          emit t "%s rup +1 ~%s +1 %s >= 1 ;" lab g (v.lit k)
+      | "b", Interior ->
+          let v = find_var t (Hashtbl.find t.cake_names z) in
+          emit t "%s rup +1 ~%s +1 ~%s >= 1 ;" lab g (v.lit (k + 1))
       | _ -> refuse "atom %s has no clause %s" g which));
   lab
 
@@ -872,19 +895,38 @@ let pin t ~id (c : Opb.constr) =
     else
       match SM.bindings bl with
       | [ (l1, 1); (l2, 1) ] when bd = 1 -> (
-          (* ~x_ge_(v+1) + x_ge_v *)
-          let hi, lo = if l1.[0] = '~' then (var_of l1, l2) else (var_of l2, l1) in
-          match (Hashtbl.find_opt t.owner hi, Hashtbl.find_opt t.owner lo) with
-          | Some x, Some y when x = y -> Some hi
+          (* ~x_ge_(v+1) + x_ge_v, a rung; ~x_ge_h + x_ge_(h+1), a hole *)
+          let n, p = if l1.[0] = '~' then (var_of l1, l2) else (var_of l2, l1) in
+          match (Hashtbl.find_opt t.owner n, Hashtbl.find_opt t.owner p) with
+          | Some x, Some y when x = y && p.[0] <> '~' -> (
+              match (Hashtbl.find_opt t.value_of n, Hashtbl.find_opt t.value_of p) with
+              | Some a, Some b when a = b + 1 -> Some (`Rung n)
+              | Some a, Some b when b = a + 1 -> Some (`Hole x)
+              | _ -> None)
           | _ -> None)
       | _ -> None
   in
   match (rung, t.cur) with
-  | Some hi, _ ->
+  | Some (`Rung hi), _ ->
       t.n_ia_rung <- t.n_ia_rung + 1;
       emit t "@c%d ia %s : @L[%s] ;" id body hi
-  | None, None -> refuse "row @c%d (%s) belongs to no covered constraint" id body
-  | None, Some con -> (
+  | Some (`Hole x), _ when Hashtbl.mem t.holes x ->
+      (* the clause x <> h: every allowed value's eq atom implies its ladder literals, then
+         cake's `@c[d<k>][al1]` has no true literal left under x = h *)
+      let _, allowed = Hashtbl.find t.holes x in
+      let v = find_var t x in
+      List.iter
+        (fun w ->
+          let g = Printf.sprintf "i[%s][eq%d]" v.cx w in
+          if w = v.lo || w = v.hi then ignore (q_clause t g "p")
+          else (
+            ignore (q_clause t g "a");
+            ignore (q_clause t g "b")))
+        allowed;
+      t.n_rup <- t.n_rup + 1;
+      emit t "@c%d rup %s ;" id body
+  | _, None -> refuse "row @c%d (%s) belongs to no covered constraint" id body
+  | _, Some con -> (
       let undefined =
         SM.fold
           (fun l _ acc ->

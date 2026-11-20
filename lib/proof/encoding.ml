@@ -1319,9 +1319,7 @@ let declare_int_gen t x ~holes ~lo ~hi =
   (* M14-e2e-verification-T3: the atoms, halves and ladder of x are written to the prefix
      before its rungs are committed, so each rung's pin follows its @L. *)
   (match t.e2e with
-  | Some e ->
-      if holes <> [] then E2e.refuse_holes x;
-      E2e.declare e x ~lo ~hi ~lit:(fun w -> Lit.to_string (Lit.ge x w))
+  | Some e -> E2e.declare e x ~holes ~lo ~hi ~lit:(fun w -> Lit.to_string (Lit.ge x w))
   | None -> ());
   (* The header's accounting for the whole ladder and its holes, once (M7-T27 (b), see
      [Occurs] above): the names x_ge_(lo+1) .. x_ge_hi, and the owner's renaming, and
