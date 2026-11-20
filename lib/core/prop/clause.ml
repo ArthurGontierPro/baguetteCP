@@ -382,8 +382,34 @@ module Learned_clause = struct
   (* M6-T20 / D-0104: the clause plus TWO WATCHED LITERALS, the first mutable propagator
      state in lib/core/prop/ and the one kind I-P7 admits. [w1] and [w2] index [atoms];
      after a run both are non-false unless the clause was unit or failed, and a widening
-     domain cannot falsify a literal, so backtracking never has to restore them. *)
-  type nonrec t = { pb : Pb.t; atoms : Pb.atom array; mutable w1 : int; mutable w2 : int }
+     domain cannot falsify a literal, so backtracking never has to restore them.
+
+     M11-complexity-T17 (D-0173): RESTING, with [rest_satisfied]. [rest] is the index of a
+     watched literal found TRUE by a run, or [-1]. THE RULE: a run that finds one of its two
+     watched literals true does nothing, MOVES NEITHER WATCH, and reports that it rests on
+     that literal ([watched] answers [(w, Propagator.rests)]); while it rests its advisor
+     declines every change; the engine indexes it under that literal alone and seeds it
+     again after a backtrack that pops the bound holding the literal up ([Engine.rest_on]);
+     that run finds the literal still true and rests again, or goes back to the two watches
+     it left. WHY IT LOSES NO PRUNING: a clause with a true literal cannot prune or fail
+     whatever else changes, so declining is I-P7 read literally; and the two watches it
+     left are good again once released, because the other watch was non-false or falsified
+     at a level at or above the true one's (the classic argument for MiniSat's satisfied
+     clauses, spelled out at [Engine.rest_on]). WHY: on codes-cp's QR48 every one of the 177
+     learned-clause runs per node was a run of a satisfied clause moving its false watch,
+     and the asks that woke it cost more than the runs (D-0173 section 2). WHAT IT CHANGES:
+     not the fixpoint of any node, but the watch a satisfied clause holds after a backtrack,
+     so a later pruning by it can be woken at another trail entry and land at another place
+     in the propagation order (D-0173 section 3). OFF by default in [make]; [Search] passes
+     its [config.rest_satisfied]. *)
+  type nonrec t = {
+    pb : Pb.t;
+    atoms : Pb.atom array;
+    mutable w1 : int;
+    mutable w2 : int;
+    rest_satisfied : bool;
+    mutable rest : int;
+  }
 
   let name = "learned_clause"
   let consistency = consistency
@@ -467,20 +493,25 @@ module Learned_clause = struct
     done;
     !ok
 
-  let make (pb : Pb.t) =
+  let make ?(rest_satisfied = false) (pb : Pb.t) =
     let atoms = pb.Pb.atoms in
     let n = Array.length atoms in
     Debug.check "Learned_clause: one literal per (variable, polarity) (D-0142 section 5)"
       (fun () -> one_per_slot atoms);
-    { pb; atoms; w1 = 0; w2 = (if n > 1 then 1 else 0) }
+    { pb; atoms; w1 = 0; w2 = (if n > 1 then 1 else 0); rest_satisfied; rest = -1 }
+
+  let true_at store t i = Pb.holds store t.atoms.(i)
 
   (* I-P7: queue only when a WATCHED literal on [v] has just become false. Written
      without a local closure (M6-T22): this is asked once per wake, and the closure the
-     first version built per call was an allocation on the engine's hottest loop. *)
+     first version built per call was an allocation on the engine's hottest loop. A
+     RESTING clause declines (M11-complexity-T17): it is satisfied, or a backtrack has
+     released it and the engine seeds it anyway. *)
   let ask t store v =
     let x = Var.to_int v in
-    (Var.to_int t.atoms.(t.w1).Pb.x = x && false_at store t t.w1)
-    || (Var.to_int t.atoms.(t.w2).Pb.x = x && false_at store t t.w2)
+    t.rest < 0
+    && ((Var.to_int t.atoms.(t.w1).Pb.x = x && false_at store t t.w1)
+       || (Var.to_int t.atoms.(t.w2).Pb.x = x && false_at store t t.w2))
 
   (* M6-T22 / D-0138: the variables of the two watches. [ask] answers [false] for every
      other variable whatever the store holds, which is [Propagator.inst_watched]'s
@@ -493,7 +524,9 @@ module Learned_clause = struct
   let watch_of (a : Pb.atom) =
     if a.Pb.positive then Propagator.watch_hi a.Pb.x else Propagator.watch_lo a.Pb.x
 
-  let watched t () = (watch_of t.atoms.(t.w1), watch_of t.atoms.(t.w2))
+  let watched t () =
+    if t.rest >= 0 then (watch_of t.atoms.(t.rest), Propagator.rests)
+    else (watch_of t.atoms.(t.w1), watch_of t.atoms.(t.w2))
 
   (* The advisor [Propagator.pack] takes: both halves of one object. *)
   let advise t = { Propagator.ask = ask t; watched = Some (watched t) }
@@ -525,8 +558,22 @@ module Learned_clause = struct
      replace. A run [quiet] does not answer is [Pb.pass] -- exactly what [Pb.propagate]
      does then -- followed by the full [rewatch], because that run may have moved the
      store. *)
-  let propagate t store =
-    if Pb.quiet store t.pb then (
+  (* RESTING first ([t]'s header): a resting clause whose literal still holds stays as it
+     is; one whose literal no longer does (a backtrack released it) goes back to its two
+     watches and is run as any other. *)
+  let rec propagate t store =
+    if t.rest >= 0 then
+      if true_at store t t.rest then Propagator.Fixpoint
+      else (
+        t.rest <- -1;
+        propagate t store)
+    else if t.rest_satisfied && true_at store t t.w1 then (
+      t.rest <- t.w1;
+      Propagator.Fixpoint)
+    else if t.rest_satisfied && true_at store t t.w2 then (
+      t.rest <- t.w2;
+      Propagator.Fixpoint)
+    else if Pb.quiet store t.pb then (
       rewatch_quiet store t t.pb.Pb.scan;
       Propagator.Fixpoint)
     else

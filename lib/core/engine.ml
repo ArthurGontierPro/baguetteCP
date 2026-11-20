@@ -325,6 +325,17 @@ type t = {
           from one call to the next and ALL FALSE between calls ([propagate] clears what
           it set, on every exit). They were allocated per call: two arrays of the whole
           database per search node, in the major heap once past 256 instances. *)
+  mutable resting : bool array;
+  mutable rest_levels : int list array;
+  mutable rest_top : int;
+  mutable releasing : bool array;
+  mutable released : int list;
+      (** M11-complexity-T17 (D-0173): the RESTING self-watching instances ([rest_on]).
+          [resting] is id -> whether the id sits in [rest_levels], which is level -> the
+          ids resting on a literal held up by a bound pushed at that level; [rest_top] is
+          at least the highest non-empty level, or [-1]. [releasing] is id -> released by
+          a backtrack and not run since; [released] holds those ids (and possibly some
+          whose flag a run has cleared since). *)
   mutable declined : (int * Var.t) list;
       (** M11-complexity-T3 (D-0142 section 1): under BAGUETTE_DEBUG only, the asks the
           advisors declined during the current wake walk or seed, newest first, waiting
@@ -500,6 +511,81 @@ let dyn_remove t x i =
     if t.wv1.(moved) = x then t.wp1.(moved) <- i;
     if t.wv2.(moved) = x then t.wp2.(moved) <- i)
 
+(* M11-complexity-T17 (D-0173): RESTING, the satisfied learned clause taken out of the wake
+   index.
+
+   A self-watching instance whose [inst_watched] answers [(w, Propagator.rests)] says that
+   the literal behind slot [w] is TRUE: [Clause.Learned_clause] does so when one of its two
+   watched literals holds, i.e. the clause is SATISFIED, and then no change can make it
+   prune and its advisor declines everything (I-P7 holds: a run would change nothing). It is
+   indexed under [w] alone, so the falsification of its other literals no longer asks it.
+   That ask, hundreds per trail entry on codes-cp's QR48, is what a satisfied clause cost
+   once it had stopped running.
+
+   Only a backtrack can make the literal untrue, and it does so only by popping the entry
+   that established the bound holding it up: [lo x] for `x >= k` (slot [3x + 2], falsified
+   by upper moves, made true by lower ones), [hi x] for `x <= k - 1` (slot [3x + 1]). So
+   [rest_on] files the instance under the LEVEL of that bound's current support, which is
+   at or above the level at which the literal first held (a later tightening can only move
+   the support up), and [release_rests] marks every instance filed at a popped level dirty
+   for the next [propagate]. Its run then finds the literal still true (it rests again, no
+   change) or not, and goes back to its two watches, which [Clause.Learned_clause] left
+   where they were when it began to rest. Releasing at the support's level and not at the
+   first crossing's is conservative: an early release costs one run that changes nothing.
+
+   Why the two watches it left are good again. The clause rested on [s] when a run found
+   [s] true; the other watch [f] was then non-false, or falsified at the CURRENT level (the
+   wake that brought the run), or the run was a seed of a clause [propagate] seeds anyway
+   (rule (b), a newborn or young instance, re-seeded after any backtrack below its birth).
+   In the first two cases [f]'s falsity, if any, is at a level at or above [s]'s, so the
+   backtrack that pops [s]'s support pops it too, and both watches are non-false again:
+   the two-watched-literal state of D-0104, the one MiniSat's satisfied clauses rely on.
+   The third case is covered by rule (b) exactly as before this row. *)
+let rest_on t store id (w : Propagator.watch) =
+  let x = Propagator.watch_var w in
+  let pos =
+    match w mod 3 with
+    | 2 -> Store.lo_support store x
+    | 1 -> Store.hi_support store x
+    | _ -> max (Store.lo_support store x) (Store.hi_support store x)
+  in
+  let lvl = Store.level_of_index store pos in
+  let n = Array.length t.rest_levels in
+  if lvl >= n then (
+    let a = Array.make (max (lvl + 1) (2 * n)) [] in
+    Array.blit t.rest_levels 0 a 0 n;
+    t.rest_levels <- a);
+  t.rest_levels.(lvl) <- id :: t.rest_levels.(lvl);
+  t.resting.(id) <- true;
+  if lvl > t.rest_top then t.rest_top <- lvl
+
+(* Release every instance filed at level [from] or above: no longer filed, and seeded by
+   this call ([mark] is [mark_dirty], or nothing when every slot is seeded anyway). A
+   released instance stays RELEASING until it has run, and is seeded again by every call
+   until then: a call that ends in a conflict before its slot drops its run, and nothing
+   else would bring it back. *)
+let release_rests t ~from mark =
+  if t.released <> [] then
+    t.released <-
+      List.filter
+        (fun id ->
+          t.releasing.(id)
+          &&
+          (mark id;
+           true))
+        t.released;
+  for l = t.rest_top downto max 0 from do
+    List.iter
+      (fun id ->
+        t.resting.(id) <- false;
+        t.releasing.(id) <- true;
+        t.released <- id :: t.released;
+        mark id)
+      t.rest_levels.(l);
+    t.rest_levels.(l) <- []
+  done;
+  if t.rest_top >= from then t.rest_top <- from - 1
+
 (* Under BAGUETTE_DEBUG, after every run of a self-watching instance: the advisor must
    answer [false] for every variable of its scope it does not watch, which is the whole
    of what [inst_watched] claims and the whole of why [dyn_ids] may leave it out of
@@ -526,7 +612,11 @@ let check_watched t (inst : Propagator.instance) store k1 k2 =
 let sync_watched t (inst : Propagator.instance) store
     (w : unit -> Propagator.watch * Propagator.watch) =
   let id = inst.Propagator.id in
-  let a1, a2 = w () in
+  let a1, b2 = w () in
+  let rests = b2 = Propagator.rests in
+  let a2 = if rests then a1 else b2 in
+  t.releasing.(id) <- false;
+  if rests && not t.resting.(id) then rest_on t store id a1;
   let o1 = t.wv1.(id) and o2 = t.wv2.(id) in
   if a1 <> o1 || a2 <> o2 then (
     let p1 = t.wp1.(id) and p2 = t.wp2.(id) in
@@ -682,6 +772,11 @@ let create ?(trigger = default_trigger) (instances : Propagator.instance list) :
       heap_len = 0;
       dirty = Array.make (Array.length triggers) false;
       in_queue = Array.make (Array.length triggers) false;
+      resting = Array.make (Array.length triggers) false;
+      rest_levels = [||];
+      rest_top = -1;
+      releasing = Array.make (Array.length triggers) false;
+      released = [];
       declined = [];
     }
   in
@@ -787,6 +882,8 @@ let add ?(trigger = default_trigger) (t : t) (inst : Propagator.instance) =
   t.wp2 <- room t.wp2 id (-1);
   t.dirty <- room t.dirty id false;
   t.in_queue <- room t.in_queue id false;
+  t.resting <- room t.resting id false;
+  t.releasing <- room t.releasing id false;
   index_static t inst;
   t.instances.(id) <- indexed t inst;
   let scope = scope_of inst in
@@ -1786,6 +1883,12 @@ let propagate ?stop ?(poll_runs = default_poll_runs) (t : t) (store : Store.t) :
       match t.seen with
       | Some (s, h) when s == store && t.incremental -> (
           let lw = Store.take_low_water store h in
+          (* M11-complexity-T17 (D-0173): the resting instances whose literal's support a
+             backtrack popped, seeded by this call ([rest_on]). [lw] is the first popped
+             position, the start of the lowest popped level, or the length the last call
+             ended at when nothing was popped. *)
+          if t.rest_top >= 0 || t.released <> [] then
+            release_rests t ~from:(Store.level_of_index store lw) (mark_dirty t);
           let rec drop = function
             | (len, _) :: rest when len > lw -> drop rest
             | l -> l
@@ -1807,6 +1910,8 @@ let propagate ?stop ?(poll_runs = default_poll_runs) (t : t) (store : Store.t) :
               if Debug.enabled then check_declined t store;
               e)
       | _ ->
+          (* Every slot is seeded: the resting instances too, whatever was popped. *)
+          release_rests t ~from:0 (fun _ -> ());
           t.seen <-
             (if t.incremental then Some (store, Store.register_low_water store) else None);
           t.fixpoints <- [];
