@@ -483,3 +483,19 @@ from a complicated presolve for now: a linear relaxation is the presolve step wo
 |---|---|---|---|
 | M13-codes-leads-T1 | **A linear relaxation as a presolve step**: solve the LP relaxation of the model's linear rows at the root (possibly at a few nodes later) and use its bound and its reduced-cost fixings. Each consequence is a nonnegative combination of model rows followed by a rounding, so one `pol` in the proof, the shape `Linear` already writes | TODO (to study) | Evidence: the MILP solvers find codewords and minimum weights far faster than every learner. Gurobi solves 73 of 83 P1 instances against 68 for RoundingSat, and all 15 instances where Gurobi is clearly faster are SAT questions or optimisation, while RoundingSat wins the UNSAT proofs. A cheap first measurement: what the root LP bound alone would fix on the codes and on the Challenge instances, before any code in baguette |
 | M13-codes-leads-T2 | **Symmetry detection**: find the model's variable symmetries (an automorphism search on the constraint graph, as CP-SAT's presolve does) and break them with constraints the proof justifies by the dominance rule | TODO (to study) | The certification half already exists outside baguette, a posteriori: codes-cp's `dom/` turns lex constraints into VeriPB `dom` lines (`scripts/domproof.py`, `scripts/dommerge.py`) and merged proofs for Hamming, Golay and QR48 are checked. Evidence: on the [n, k, d] existence instances, the AAAI-26 symmetry breaking takes Kissat from 15 to 30 solved of 32. The user's intuition is that detection is the hard part |
+
+## M14-e2e-verification — end-to-end verification: the model's PB encoding produced by a verified tool
+
+Opened 2026-11-20 at the user's request. Today the checker (VeriPB, then optionally `cake_pb`)
+certifies that the `.pbp` proof is correct FOR THE `.opb` baguette wrote; nothing certifies that
+the `.opb` is a faithful encoding of the user's model, so baguette's FlatZinc-to-OPB transcription
+is trusted. In Ciaran McCreesh's line of work with the CakeML/CakePB authors, a high-level CP
+description is given to a VERIFIED encoder (in the CakePB family) that produces the `.opb`
+itself, so the transcription is no longer trusted. What it implies for baguette: (1) its proof must
+use the same variable names/labels and the same encoding as the verified encoder's `.opb`
+(baguette's names are normative, PROOF-FORMAT §3, so the two must be made to agree); (2) the input
+must be in that high-level CP language, and how that fits with MiniZinc/FlatZinc is open.
+
+| ID | Task | Status | Notes |
+|---|---|---|---|
+| M14-e2e-verification-T1 | **Feasibility study** (no solver code): what the verified encoder is (paper(s), tool, input language, which constraints it covers, the `.opb` it writes and its naming), how far its encodings are from baguette's (order/bits, PROOF-FORMAT §3), which of baguette's constraint families it covers, how a FlatZinc model could reach it (a FlatZinc front end to its language, or its language as a second input to baguette), what the checker chain becomes (`veripb` + `cake_pb`, or `cake_pb` alone), and a staged plan with the first small end-to-end demo (one model, verified encoder's `.opb`, baguette's proof against it, checked) | IN PROGRESS | Opened 2026-11-20 (orchestrator) |

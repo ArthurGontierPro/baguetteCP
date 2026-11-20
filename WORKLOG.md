@@ -25,6 +25,7 @@ of it to every session and stopping at a broken line before it even reached the 
 | M11-complexity-T15 (SPIKE, explanations as a hash-consed DAG; a prototype branch, nothing merged without a decision) | `lib/core/explanation.ml`, `lib/core/justify.ml`, `lib/core/trace.ml`, propagators' explanation construction as needed, on branch `wave55-dag` only | agent-dag (`wave55-dag`) | 2026-11-20 |
 | M11-complexity-T16 (the release build) | `Makefile`, `dune-workspace` or `dune` profile stanzas, `scripts/compare_run.sh` and the bench harnesses (binary path only), `bench/challenge/README.md`, `scripts/README.md` | agent-release (`wave55-release`) | 2026-11-20 |
 | M11-complexity-T17 (learned clauses that cannot prune) | `lib/core/search.ml`, `lib/core/learned.ml`, `lib/core/retention.ml`, `lib/core/engine.ml` (learned wakes only), `lib/core/prop/clause.ml`, `lib/core/prop/pb.ml`, their unit tests | agent-learnprop (`wave55-learnprop`) | 2026-11-20 |
+| M14-e2e-verification-T1 (feasibility study, no solver code) | a new decision record; notes and scratch files under `/scratch/arthur/wave55-e2e-runs/` and `/cluster/arthur/baguette-results/wave55-e2e/` | agent-e2e (`wave55-e2e`) | 2026-11-20 |
 
 ## Cross-session requests
 
