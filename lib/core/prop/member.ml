@@ -118,7 +118,7 @@
         [a, b]), after which its hole and the rows refute it.
 
    The counts are minimal for holes the reason cites; a hole whose line holds with no
-   fact (declared, or punched at the root) can make one redundant -- 30 of 54 lemmas on
+   fact (declared, or punched at the root) can make one redundant -- 57 of 111 lemmas on
    satisfiable random models, test_mutation's chase lanes pin three that are not
    (bench/member_spike/fuzz_member.py, D-0169).
 
