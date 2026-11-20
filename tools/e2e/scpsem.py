@@ -32,8 +32,10 @@ The semantics, transcribed from cpScript.sml (CakeML master, 2026-11):
   inverse ((X1 ...) ox) ((Y1 ...) oy)
                                same length n; every Xi - oy and Yj - ox in [0, n);
                                X[i-ox] = j <=> Y[j-oy] = i over i in ox.., j in oy..  (inverse_sem)
-Any other keyword, a `_if` form other than a comparison's, or a prob_type other than `decide`
-is refused (exit 2).
+Any other keyword, or a `_if` form other than a comparison's, is refused (exit 2). The
+prob_type is `decide`, or `(minimize X)` / `(maximize X)` (T8, D-0182), whose solutions are
+the same set: the objective only adds the line `objective minimize|maximize NAME` at the end,
+NAME the FlatZinc name of X, for validate.py to take the optimum over the set.
 
 Prints `count N` then one line per solution, `name=value ...` over the FlatZinc names of
 NAMES, sorted; or `toobig` when MAX_NODES (default 2,000,000) is exceeded.
@@ -77,8 +79,13 @@ def load(path):
     sec = {s[0]: s[1:] for s in top}
     if sec.get("version") != ["1"]:
         raise Refused("version")
-    if sec.get("prob_type") != ["decide"]:
-        raise Refused(f"prob_type {sec.get('prob_type')}")
+    pt = sec.get("prob_type")
+    objective = None
+    if (pt and len(pt) == 1 and isinstance(pt[0], list) and len(pt[0]) == 2
+            and pt[0][0] in ("minimize", "maximize") and isinstance(pt[0][1], str)):
+        objective = (pt[0][0], pt[0][1])
+    elif pt != ["decide"]:
+        raise Refused(f"prob_type {pt}")
     bounds = {v: (int(lo), int(hi)) for v, lo, hi in sec["variables"]}
     cons = []
     for c in sec["constraints"]:
@@ -146,7 +153,7 @@ def load(path):
         for t in terms_of(c):
             if t[0] == "v" and t[1] not in bounds:
                 raise Refused(f"undeclared variable {t[1]}")
-    return bounds, cons
+    return bounds, cons, objective
 
 
 def terms_of(c):
@@ -301,7 +308,7 @@ def main(argv):
         return 64
     fzn_of = dict(l.split() for l in open(argv[2]) if l.strip())
     try:
-        bounds, cons = load(argv[1])
+        bounds, cons, objective = load(argv[1])
     except Refused as e:
         print(f"REFUSED: {e}", file=sys.stderr)
         return 2
@@ -313,6 +320,8 @@ def main(argv):
                    for s in sols)
     print(f"count {len(lines)}")
     print("\n".join(lines))
+    if objective:
+        print(f"objective {objective[0]} {fzn_of[objective[1]]}")
     return 0
 
 

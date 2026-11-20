@@ -26,12 +26,27 @@
 #                     rung as its original's, gets the witness `Y -> ~X` (tools/e2e/mutate.py
 #                     copy): a wrong definition of an auxiliary baguette introduces, refused at
 #                     that red line (T5, D-0180)
+#     opt-better      (T8, D-0182) baguette's `conclusion BOUNDS` claims an optimum one
+#                     better than the one it found (tools/e2e/mutate.py bounds .. -1):
+#                     refused by veripb at that line, the best recorded upper bound
+#     opt-worse       the same one worse (+1): refused at that line, the lower bound
+#     core-better     the ELABORATED core's conclusion moved by -1 after veripb accepted the
+#     core-worse      bridged proof (+1 for core-worse): refused by cake_pb_cp ITSELF, the
+#                     verified checker, at its conclusion line ("conclusion BOUNDS check
+#                     failed: ..."), so a wrong optimum is refused even past an untrusted
+#                     elaborator that let it through
 #   A mutation run prints `MODEL.MUT REFUSED ANSWER | at=<first two tokens of the refused
 #   line> | cause=<the checker's sentence> | target=<what was mutated>`, and the lane checks
 #   all of it against what the control expects (scripts/e2e_lane.sh).
 #
 # Prints ONE line: `MODEL VERDICT detail`, VERDICT in VERIFIED, SKIPPED, FAIL, and REFUSED
-# (mutation runs only). The verdict is read from cake_pb_cp's `s VERIFIED` line, never from
+# (mutation runs only). VERIFIED is followed by SAT, UNSAT or OPT=<v> (T8, D-0182): an
+# optimisation model is VERIFIED only on cake_pb_cp's `s VERIFIED BOUNDS v <= OBJ <= v`,
+# v the optimum baguette's own `conclusion BOUNDS v : .. v` claims (negated back for
+# `maximize`; cake prints a negative number as `~6`), or, when baguette says UNSAT, on
+# `s VERIFIED BOUNDS -INF <= OBJ <= +INF`. That print is cake's OBounds NONE NONE, and under
+# cpScript.sml's cp_sem_concl the side that is NONE for the problem's direction (cp_is_lb
+# for minimize, cp_is_ub for maximize) means cp_unsatisfiable. The verdict is read from cake_pb_cp's `s VERIFIED` line, never from
 # its exit status: it exits 0 when it refuses (D-0174 section 6).
 #
 # Env: CAKE_PB_CP (required), BAGUETTE, VERIPB (else scripts/checker.sh), E2E_TIMEOUT (s).
@@ -64,6 +79,7 @@ if ! python3 -I "$HERE/fzn2scp.py" "$FZN" "$o.scp" "$o.names" 2> "$o.tr.err"; th
     [ -n "$r" ] && say "SKIPPED $r"
     say "FAIL translator: $(head -1 "$o.tr.err")"
 fi
+opt=$(sed -n 's/.*(prob_type (\(minimize\|maximize\) .*/\1/p' "$o.scp")
 case "$MUT" in
     scp-stronger | scp-weaker)
         d=-1
@@ -79,10 +95,32 @@ rc=$?
 [ $rc -eq 0 ] || say "FAIL baguette exited $rc"
 ans=SAT
 grep -q '=====UNSATISFIABLE=====' "$o.bag.out" && ans=UNSAT
+want=
+if [ -n "$opt" ]; then
+    if [ $ans = UNSAT ]; then
+        want="s VERIFIED BOUNDS -INF <= OBJ <= +INF"
+    else
+        grep -qx '==========' "$o.bag.out" || say "FAIL baguette did not prove optimality"
+        read -r lb ub <<< "$(sed -n 's/^conclusion BOUNDS \(-\?[0-9]*\) : \S* \(-\?[0-9]*\).*/\1 \2/p' "$o.bag.pbp")"
+        [ -n "${ub:-}" ] && [ "$lb" = "$ub" ] || say "FAIL baguette's conclusion is not an optimum: $(grep '^conclusion' "$o.bag.pbp")"
+        v=$ub
+        [ "$opt" = maximize ] && v=$((-ub))
+        ans="OPT=$v"
+        sv=${v/#-/\~}
+        want="s VERIFIED BOUNDS $sv <= OBJ <= $sv"
+    fi
+fi
 
 if [ "$MUT" = opb-stronger ]; then
     target=$(python3 -I "$HERE/mutate.py" opb "$o.bag.opb") || say "FAIL no model row to mutate"
 fi
+case "$MUT" in
+    opt-better | opt-worse)
+        d=-1
+        [ "$MUT" = opt-worse ] && d=1
+        target=$(python3 -I "$HERE/mutate.py" bounds "$o.bag.pbp" "$d") || say "FAIL no conclusion BOUNDS to mutate"
+        ;;
+esac
 if [ "$MUT" = opb-reif ]; then
     target=$(python3 -I "$HERE/mutate.py" reif "$o.bag.opb") || say "FAIL no reified row to mutate"
 fi
@@ -106,6 +144,14 @@ t0=$(now)
 timeout "$TO" "$V" "$o.cake.opb" "$o.bridged.pbp" --elaborate "$o.core" > "$o.veripb.log" 2>&1
 t1=$(now)
 te=$(dt "$t0" "$t1")
+case "$MUT" in
+    core-better | core-worse)
+        d=-1
+        [ "$MUT" = core-worse ] && d=1
+        grep -q '^s VERIFIED' "$o.veripb.log" || say "FAIL mutation $MUT: veripb refused the unmutated proof"
+        target=$(python3 -I "$HERE/mutate.py" bounds "$o.core" "$d") || say "FAIL no conclusion BOUNDS in the core"
+        ;;
+esac
 rm -f "$o.check.log"
 t0=$(now)
 [ -s "$o.core" ] && timeout "$TO" "$CK" "$o.scp" "$o.core" > "$o.check.log" 2>&1
@@ -116,10 +162,21 @@ s=$(grep -m1 '^s ' "$o.check.log" 2> /dev/null)
 if [ -n "$MUT" ]; then
     # a control: the chain must refuse, and say where and why in the checker's own words
     [[ "$s" == "s VERIFIED"* ]] && say "FAIL mutation $MUT VERIFIED ($s) target=$target"
+    if [[ "$MUT" == core-* ]]; then
+        # refused by cake_pb_cp itself: `c Checking failed for top-level proof step starting
+        # at line: N (...). Reason: R`
+        ln=$(sed -n 's/^c Checking failed for top-level proof step starting at line: \([0-9]*\) .*/\1/p' "$o.check.log" | head -1)
+        [ -n "$ln" ] || say "FAIL mutation $MUT: cake_pb_cp did not refuse (${s:-no s line})"
+        at=$(sed -n "${ln}p" "$o.core" | awk '{print $1, $2}')
+        cause=$(sed -n 's/^c Checking failed for top-level proof step .* Reason: //p' "$o.check.log" | head -1)
+        say "REFUSED $ans | at=$at | cause=$cause | target=$target"
+    fi
     ln=$(sed -n 's/.*\(Checking\|Verification\) error at .*:\([0-9]*\)$/\2/p' "$o.veripb.log" | head -1)
     [ -n "$ln" ] || say "FAIL mutation $MUT: veripb did not refuse (cake: ${s:-no s line})"
     at=$(sed -n "${ln}p" "$o.bridged.pbp" | awk '{print $1, $2}')
-    cause=$(grep -A1 '^Caused by:' "$o.veripb.log" | tail -1 | sed 's/^[[:space:]]*//; s/\. .*/./')
+    cause=$(grep -A1 '^Caused by:' "$o.veripb.log" | tail -1 | sed 's/^[[:space:]]*//')
+    # one sentence, except a BOUNDS refusal, whose second sentence says which bound (T8)
+    [[ "$cause" == "Unable to verify 'conclusion BOUNDS'."* ]] || cause=$(echo "$cause" | sed 's/\. .*/./')
     # "conflicting with constraint K": name K by its label, a cake row (K <= f) or the
     # (K - f)-th line of the prefix (every prefix line derives exactly one constraint)
     k=$(echo "$cause" | sed -n 's/.*conflicting with constraint \([0-9]*\) in the database.*/\1/p')
@@ -135,8 +192,12 @@ if [ -n "$MUT" ]; then
     say "REFUSED $ans | at=$at | cause=$cause | target=$target"
 fi
 [[ "$s" == "s VERIFIED"* ]] || say "FAIL $ans veripb: $(grep -m1 -A2 'error' "$o.veripb.log" | tr '\n' ' ' | head -c 300) cake: ${s:-no s line}"
-case "$ans:$s" in
-    "SAT:s VERIFIED SATISFIABLE"* | "UNSAT:s VERIFIED UNSATISFIABLE"*) ;;
-    *) say "FAIL baguette said $ans, cake_pb_cp says $s" ;;
-esac
+if [ -n "$want" ]; then
+    [ "$s" = "$want" ] || say "FAIL baguette said $ans, cake_pb_cp says $s"
+else
+    case "$ans:$s" in
+        "SAT:s VERIFIED SATISFIABLE"* | "UNSAT:s VERIFIED UNSATISFIABLE"*) ;;
+        *) say "FAIL baguette said $ans, cake_pb_cp says $s" ;;
+    esac
+fi
 say "VERIFIED $ans veripb=${tv}s elaborate=${te}s cake=${tc}s pbp=$(stat -c %s "$o.bag.pbp") bridged=$(stat -c %s "$o.bridged.pbp") core=$(stat -c %s "$o.core")"

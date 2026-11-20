@@ -68,7 +68,7 @@ TERM = re.compile(r"([+-]?\d+)\s+(~?[^\s;]+)")
 
 def parse_row(line):
     line = line.strip()
-    if not line or line.startswith("*"):
+    if not line or line.startswith("*") or line.startswith("min:"):
         return None
     label = None
     if line.startswith("@"):
@@ -198,6 +198,17 @@ def main(cake_opb, names_file, bag_opb, bag_pbp):
             hi, lo = f"{x}_ge_{vn(v + 1)}", f"{x}_ge_{vn(v)}"
             emit(f"@L[{hi}] pol @A1[{hi}] @A2[{lo}] + s {(bmax - bmin) + 2} d ;")
     owner = {b: X for X, info in ivars.items() for b in info["bits"]}
+
+    # the OBJECTIVE (T8, D-0182). cake writes `min: k*B` for (minimize X) (k = 1) and
+    # (maximize X) (k = -1), over X's bits and with no constant; baguette writes
+    # `min: k*S +k*l`, X's order encoding with its constant (compile.ml, M5-T1). The two
+    # are the same function of x, so every objective value, every `soli` bound and the
+    # numbers of `conclusion BOUNDS` agree, and only the improving constraint each
+    # `soli` adds needs translating: the checker adds `k*B <= v - 1` over cake's bits,
+    # where baguette's later lines expect `k*S + k*l <= v - 1` over its ladder. The
+    # bridge renames each `@cK soli` to `@O[cK]` and derives @cK from it by the same
+    # substitution as a model row (B -> l + S: k * @E1 for k > 0, |k| * @E2 for k < 0).
+    obj_fix = objective(cake_opb, bag_lines, ivars, owner)
 
     # substitute every cake model row, B -> l + S
     subst = []   # (label to cite, {var: coef}, d)
@@ -585,7 +596,55 @@ def main(cake_opb, names_file, bag_opb, bag_pbp):
     print(lines[0])
     print(f"f {len(cake)} ;")
     print("\n".join(out))
-    print("\n".join(lines[2:]))
+    for line in lines[2:]:
+        m = re.match(r"(@\S+ )?soli\b(.*)$", line)
+        if not m:
+            print(line)
+            continue
+        if obj_fix is None:
+            raise SystemExit("bridge: a `soli` line, and no objective on both sides")
+        if not m.group(1):
+            raise SystemExit("bridge: an unlabelled `soli` line")
+        lab = m.group(1).strip()
+        half, k = obj_fix
+        print(f"@O[{lab[1:]}] soli{m.group(2)}")
+        print(f"{lab} pol @O[{lab[1:]}] {half} {k} * + ;")
+
+
+def objective(cake_opb, bag_lines, ivars, owner):
+    """(the half to add, its multiplier) for each soli, or None without an objective."""
+    def terms_of(lines):
+        got = [l.strip() for l in lines if l.strip().startswith("min:")]
+        if not got:
+            return None
+        body = got[0][4:].rstrip(";")
+        terms = TERM.findall(body)
+        rest = TERM.sub("", body).split()
+        if len(rest) > 1 or (rest and not re.fullmatch(r"[+-]?\d+", rest[0])):
+            raise SystemExit(f"bridge: cannot read the objective {got[0]!r}")
+        return {v: int(c) for c, v in terms}, int(rest[0]) if rest else 0
+    cobj = terms_of(open(cake_opb).read().splitlines())
+    bobj = terms_of(bag_lines)
+    if cobj is None and bobj is None:
+        return None
+    if cobj is None or bobj is None:
+        raise SystemExit("bridge: an objective on one side only")
+    (ct, cc), (bt, bc) = cobj, bobj
+    Xs = {owner.get(b) for b in ct}
+    if len(Xs) != 1 or None in Xs or cc != 0:
+        raise SystemExit("bridge: cake's objective is not one variable's bit sum")
+    X = Xs.pop()
+    info = ivars[X]
+    if set(ct) != set(info["bits"]):
+        raise SystemExit(f"bridge: cake's objective names only part of {X}'s bits")
+    ks = {ct[b] // info["bits"][b] for b in ct if ct[b] % info["bits"][b] == 0}
+    if len(ks) != 1 or len(ct) != sum(1 for b in ct if ct[b] % info["bits"][b] == 0):
+        raise SystemExit("bridge: cake's objective is not a multiple of one bit sum")
+    k = ks.pop()
+    want = {s: k for s in info["S"]}
+    if bt != want or bc != k * info["l"]:
+        raise SystemExit(f"bridge: baguette's objective is not {k} * {info['x']}")
+    return (info["e1"], k) if k > 0 else (info["e2"], -k)
 
 
 if __name__ == "__main__":
