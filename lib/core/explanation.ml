@@ -336,17 +336,24 @@ type expl = t
 
 (* ------------------------------------------------------ hash-consing (T15)
 
-   M11-complexity-T15, the spike of D-0140 J1. With BAGUETTE_HASHCONS=1 every node a line
-   can be written for is HASH-CONSED when it is built: a node whose content equals a node
-   still reachable is that node, so an identical derivation built twice is one value, its
-   line is written once and every later build cites it ([Justify.memoized]). The key is
-   SHALLOW: the constructor, its integers and literals, and every operand by its own
-   identity ([hid] for a node, [tid] for a thunk, the id for a [Model_row]), which is
-   sound because the operands are themselves hash-consed, so two equal operands are one
-   value. The table is scoped by decision level (see [table]). Off (the default), [hid] and [tid] are 0,
-   nothing is hashed, and every build is a value of its own, as before T15. *)
+   M11-complexity-T15, D-0172 (D-0140 J1). Every node a line can be written for is
+   HASH-CONSED when it is built: a node whose content equals a node whose line is on the
+   page IS that node, so an identical derivation built twice is one value, its line is
+   written once and every later build cites it ([Justify.memoized]). It replaces D-0158's
+   share mode, which found the same lines by rendering every miss: here the identical node
+   is found at its build and its emission is one field read. The key is SHALLOW: the
+   constructor, its integers and literals, and every operand by its own identity ([hid]
+   for a node, [tid] for a thunk, the id for a [Model_row]), which is sound because the
+   operands are themselves hash-consed, so two equal operands are one value. The table
+   holds the written nodes only (see [table]).
+
+   ON BY DEFAULT (D-0172, decided by the orchestrator on the user's delegation, D-0167
+   item 3). BAGUETTE_HASHCONS=0 turns it off for comparison: [hid] and [tid] are then 0,
+   nothing is hashed, every build is a value of its own and each copy writes its own line,
+   which is the proof main wrote before D-0172 byte for byte. [set_hashcons] is the same
+   switch for a test. *)
 let hashcons =
-  match Sys.getenv_opt "BAGUETTE_HASHCONS" with Some "1" -> true | _ -> false
+  ref (match Sys.getenv_opt "BAGUETTE_HASHCONS" with Some "0" -> false | _ -> true)
 
 let stats_on =
   match Sys.getenv_opt "BAGUETTE_MEMO_STATS" with
@@ -356,7 +363,7 @@ let stats_on =
 let hid_counter = ref 0
 
 let fresh_hid () =
-  if hashcons || stats_on then (
+  if !hashcons || stats_on then (
     incr hid_counter;
     !hid_counter)
   else 0
@@ -457,7 +464,25 @@ let table : t Hc.t = Hc.create 4096
 let hc_by_level : t list array ref = ref (Array.make 64 [])
 let hc_hi = ref (-1)
 
-let hc_written e level =
+let rec hc_written e level =
+  let twin_at_or_below =
+    match Hc.find_opt table e with
+    | Some x when x != e -> (
+        match x with
+        | Clause { line = Line { level = l; _ }; _ }
+        | Linear { line = Line { level = l; _ }; _ }
+        | Cut { line = Line { level = l; _ }; _ }
+        | Combine { line = Line { level = l; _ }; _ }
+        | Resolve { line = Line { level = l; _ }; _ } ->
+            l <= level
+        | _ -> false)
+    | _ -> false
+  in
+  (* Two nodes of one content are both written when the second was built before the first
+     was written. The table keeps the one whose line lives longer, the shallower. *)
+  if not twin_at_or_below then hc_enter e level
+
+and hc_enter e level =
   Hc.replace table e e;
   if level >= Array.length !hc_by_level then (
     let a = Array.make (2 * (level + 1)) [] in
@@ -475,6 +500,14 @@ let hc_wipe level =
     !hc_by_level.(l) <- []
   done;
   if !hc_hi >= level then hc_hi := level - 1
+
+(* For a test that needs both modes in one process: switch, and forget every written
+   node (a node written under the other mode must not answer a build under this one). *)
+let set_hashcons on =
+  hashcons := on;
+  Hc.reset table;
+  hc_by_level := Array.make 64 [];
+  hc_hi := -1
 
 (* BAGUETTE_MEMO_STATS: how many nodes of each constructor were built, and how many of
    those builds were IDENTICAL to a node still reachable (a hash-consing hit), per
@@ -513,7 +546,7 @@ let count key hit =
    identical to one of them is counted, and the value returned is still the new build, so
    nothing the solver writes changes. *)
 let built e =
-  if hashcons then (
+  if !hashcons then (
     let e' = match Hc.find_opt table e with Some x -> x | None -> e in
     if stats_on then count (producer_label () ^ "\t" ^ tag e) (e' != e);
     e')

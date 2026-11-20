@@ -158,31 +158,21 @@
    emitted this value" is a field read on the value, the identity question it always
    was, with the same liveness test as a thunk's line. The paragraphs above describe the
    table this replaced; what they say about identity being the only honest key is
-   unchanged, and is why the field is on the node. With BAGUETTE_HASHCONS=1 the smart
-   constructors also return a written node for a build of the same content
-   (explanation.ml, "hash-consing"), which makes an identical derivation one value and
-   so one line; that changes the proof's bytes and is off by default.
+   unchanged, and is why the field is on the node.
 
-   M11-complexity-T10 (D-0158): SHARE MODE, off by default. A propagator that rebuilds
-   the same derivation at every level (D-0149's 388 copies on cable_tree_wiring) hands
-   this module a new value each time, so the memo above misses and each copy writes its
-   own line, identical to the first copy's but for its id. With [BAGUETTE_MEMO_SHARE=1]
-   (or [create_sharing ~share:true]) a [Combine], [Cut] or [Linear] that the memo misses
-   is first rendered -- its operands emitted, in the order its own line would emit them
-   -- and the LINE it would write is looked up in [lines]: an identical `pol`
-   expression, or an identical `rup` target, already on the page at a level at or below
-   the writer's current one answers with that line's id, and nothing is written. That is
-   the claim index's condition 2 below, for the same reason: `w l` retires levels
-   [>= l], so a line at a level at or below the citing line's is never retired before
-   it, and a shared line cannot outlive the level that derived it. Two identical
-   expressions derive the same constraint whatever explanations they came from, so the
-   key is the text, not the explanation, and no structural equality on [Explanation.t]
-   is needed (the thing the paragraph above warns against stays untouched). A copy
-   answered this way is remembered with the shared line's id at the writer's current
-   level, as every entry is; the line is at or below that level, so the entry never
-   outlives it. Off, the proof is byte for byte what it was.
-   On, it is shorter and its ids differ; the search does not change. The default is off
-   because that is a change of proof bytes, which is the user's to decide (D-0158).
+   M11-complexity-T10 (D-0158) added a SHARE MODE (BAGUETTE_MEMO_SHARE=1): a propagator that
+   rebuilds the same derivation at every level (D-0149's 388 copies on cable_tree_wiring)
+   hands this module a new value each time, so the identity memo misses and each copy
+   writes its own line, identical to the first copy's but for its id; share mode rendered
+   every miss and looked the LINE up. M11-complexity-T15 (D-0172) replaced it, and it is
+   gone: the smart constructors HASH-CONS the nodes (explanation.ml, "hash-consing"), so a
+   build whose content equals a node whose line is on the page is that node, and its line
+   answers. The condition share mode put on a shared line stays, on the node's line
+   ([node_answer]): it answers only at or below the writer's current level, the claim
+   index's condition 2 below, for the same reason (`w l` retires levels [>= l], so a line
+   at a level at or below the citing line's is never retired before it). The proof is
+   share mode's proof (byte for byte on three of D-0172's four instances), the search does
+   not change, and BAGUETTE_HASHCONS=0 writes the proof of the identity memo alone.
 
    Every memo entry is tagged with the writer's level at the moment it was created
    (docs/PROOF-FORMAT.md section 5: [w] wipes every constraint at or above a level).
@@ -269,11 +259,10 @@ module Encoding = Baguette_proof.Encoding
    nothing is hashed, and nothing outside the node holds it: what D-0168's window, frame
    and second forcing existed to let go of is never held. *)
 
-(* M11-complexity-T10 (D-0158). Off unless asked for: BAGUETTE_MEMO_STATS=1 counts the
-   memo's lookups, its hits, the misses an identical line answered (share mode), the
-   entries it holds at most and its longest bucket, and prints them to stderr at exit,
-   as BAGUETTE_WAKE_STATS does for the engine. Counting a bucket's length is a walk of
-   it, which is why it is not always on. *)
+(* M11-complexity-T10 (D-0158), M11-complexity-T15. Off unless asked for:
+   BAGUETTE_MEMO_STATS=1 counts the memo's lookups, its hits, the lines too deep to answer
+   ([node_answer]) and the thunks' lines, and prints them to stderr at exit, as
+   BAGUETTE_WAKE_STATS does for the engine; explanation.ml adds the builds per producer. *)
 let memo_stats_on =
   match Sys.getenv_opt "BAGUETTE_MEMO_STATS" with
   | Some ("1" | "true" | "yes" | "on") -> true
@@ -281,25 +270,20 @@ let memo_stats_on =
 
 let ms_lookups = ref 0
 let ms_hits = ref 0
-let ms_shared = ref 0
 let ms_line_hits = ref 0
 let ms_level_misses = ref 0
 
 let () =
   if memo_stats_on then
     at_exit (fun () ->
-        Printf.eprintf "baguette: memo lookups=%d hits=%d shared=%d level_misses=%d\n"
-          !ms_lookups !ms_hits !ms_shared !ms_level_misses;
+        Printf.eprintf "baguette: memo lookups=%d hits=%d level_misses=%d\n" !ms_lookups
+          !ms_hits !ms_level_misses;
         Printf.eprintf
           "baguette: thunks released=%d line_hits=%d reforced=%d (to write again %d)\n"
           !Explanation.released !ms_line_hits !Explanation.reforced
           !Explanation.reforced_emit)
 
-(* The default of [create]'s sharing, read once. Only "1" turns it on. *)
-let share_default =
-  match Sys.getenv_opt "BAGUETTE_MEMO_SHARE" with Some "1" -> true | _ -> false
-
-(* An integer mix, for the claim index's and share mode's keys (M11-complexity-T5,
+(* An integer mix, for the claim index's keys (M11-complexity-T5,
    D-0145). A name is hashed with [Hashtbl.hash], the C string hash, which allocates
    nothing. *)
 let mix h x = (h * 31) + x
@@ -357,45 +341,9 @@ module Claims = Hashtbl.Make (struct
     finish (mix (go 8 0) (n / 2))
 end)
 
-(* M11-complexity-T10 (D-0158). Share mode's index of the lines this module wrote for a
-   [Combine], [Cut] or [Linear]: the expression or target, exactly as written, to the
-   line's id and level. Keyed by the whole of it, hashed over every node (the hash costs
-   what rendering the line costs, and is paid only on a memo miss), compared with the
-   structural equality of [Pol.t] and [Opb.constr], which hold integers, literals and
-   nothing mutable. Like [stated], nothing iterates it. *)
-type line_key = Pol_line of Pol.t | Rup_line of Opb.constr
-
-let rec pol_hash h (p : Pol.t) =
-  match p with
-  | Pol.Id c -> mix (mix h 1) c
-  | Pol.Axiom l -> mix (mix h 2) (lit_hash l)
-  | Pol.Add (a, b) -> pol_hash (pol_hash (mix h 3) a) b
-  | Pol.Mul (a, k) -> mix (pol_hash (mix h 4) a) k
-  | Pol.Div (a, k) -> mix (pol_hash (mix h 5) a) k
-  | Pol.Sat a -> pol_hash (mix h 6) a
-  | Pol.Weaken (a, v) -> mix (pol_hash (mix h 7) a) (Hashtbl.hash v)
-
-module Lines = Hashtbl.Make (struct
-  type t = line_key
-
-  let equal (a : t) (b : t) = a = b
-
-  let hash = function
-    | Pol_line p -> finish (pol_hash 1 p)
-    | Rup_line (c : Opb.constr) ->
-        finish
-          (List.fold_left
-             (fun h (k, l) -> mix (mix h k) (lit_hash l))
-             (mix (mix 2 c.Opb.rhs) (Hashtbl.hash c.Opb.rel))
-             c.Opb.terms)
-end)
-
 type ctx = {
   writer : Writer.t;
   encoding : Encoding.t;
-  share : bool;
-      (* M11-complexity-T10 (D-0158): an identical line at or below the current level
-         answers a miss. See the module header's "Memoisation". *)
   stated : stated Claims.t;
   mutable stated_by_level : int array list array;
       (* M6-T17: the keys each level stated, indexed by level. Level 0 is not recorded
@@ -404,10 +352,6 @@ type ctx = {
       (* M2-T9. Clause (as a sorted literal set) -> the line that states it. Read by
          [defining_line] and [defining_lit], written by every clause this module puts on
          the page, wiped by [wipe_level]. Lookup only -- never iterated for emission. *)
-  lines : stated Lines.t;
-  mutable lines_by_level : line_key list array;
-  mutable lines_hi : int;
-      (* M11-complexity-T10 (D-0158): share mode's lines, kept as [stated]; empty off *)
   names : (string, int) Hashtbl.t;
   mutable name_of : string array;
       (* M11-complexity-T12 (D-0166): the claim index's interned variable names, both
@@ -432,18 +376,14 @@ type ctx = {
 
 let serials = ref 0
 
-let create_sharing ~share ~writer ~encoding =
+let create ~writer ~encoding =
   incr serials;
   {
     writer;
     encoding;
-    share;
     stated = Claims.create 64;
     stated_by_level = Array.make 16 [];
     stated_hi = -1;
-    lines = Lines.create (if share then 1024 else 1);
-    lines_by_level = Array.make (if share then 16 else 1) [];
-    lines_hi = -1;
     names = Hashtbl.create 64;
     name_of = Array.make 64 "";
     combine_origins = Writer.Itbl.create 64;
@@ -452,10 +392,6 @@ let create_sharing ~share ~writer ~encoding =
     wiped_at = Array.make 16 0;
     line_hi = -1;
   }
-
-(* The [ctx] every caller makes: sharing as [BAGUETTE_MEMO_SHARE] says, off unless it is
-   "1" (D-0158). [create_sharing] names it, for a test that needs either mode. *)
-let create ~writer ~encoding = create_sharing ~share:share_default ~writer ~encoding
 
 (* The writer a [ctx] emits through. [Learned] needs it to put a constraint on the page
    with a rule this module has no [Explanation.t] for -- a learned constraint is not a
@@ -468,7 +404,7 @@ let writer ctx = ctx.writer
    [Writer.wipe_level] directly when a [ctx] is in play. *)
 let wipe_level ctx level =
   Writer.wipe_level ctx.writer level;
-  if Explanation.hashcons || Explanation.stats_on then Explanation.hc_wipe level;
+  if !Explanation.hashcons || Explanation.stats_on then Explanation.hc_wipe level;
   (* M11-complexity-T13 (D-0168), M11-complexity-T15: every line a thunk or a node
      remembers at [level] or above is gone from the page. One stamp per level: the
      nodes are not visited. *)
@@ -488,18 +424,7 @@ let wipe_level ctx level =
         | _ -> ())
       keys
   done;
-  if ctx.stated_hi >= level then ctx.stated_hi <- level - 1;
-  for l = level to ctx.lines_hi do
-    let keys = ctx.lines_by_level.(l) in
-    ctx.lines_by_level.(l) <- [];
-    List.iter
-      (fun k ->
-        match Lines.find_opt ctx.lines k with
-        | Some (s : stated) when s.s_level >= level -> Lines.remove ctx.lines k
-        | _ -> ())
-      keys
-  done;
-  if ctx.lines_hi >= level then ctx.lines_hi <- level - 1
+  if ctx.stated_hi >= level then ctx.stated_hi <- level - 1
 
 (* Emit at a chosen level -- [Writer.with_level] with the [ctx]'s two side tables kept
    honest, and the call every learned constraint goes through (M2-L1, D-0045).
@@ -698,19 +623,18 @@ let node_answer ctx (e : Explanation.t) =
   | Explanation.No_line -> None
   | Explanation.Line { level; _ } as l -> (
       match live ctx l with
-      | Some _ as hit when Explanation.hashcons ->
+      | Some _ as hit when !Explanation.hashcons ->
           if level <= Writer.current_level ctx.writer then hit
           else (
             if memo_stats_on then incr ms_level_misses;
             None)
       | hit -> hit)
 
-(* [e]'s line is [cid], written now (or, in share mode, an identical line already on the
-   page). With hash-consing the node enters the table of written nodes at the writer's
+(* [e]'s line is [cid], written now. With hash-consing the node enters the table of written nodes at the writer's
    level, which [wipe_level] empties with the level. *)
 let remember ctx (e : Explanation.t) cid =
   Explanation.set_node_line e (new_line ctx cid);
-  if Explanation.hashcons || Explanation.stats_on then
+  if !Explanation.hashcons || Explanation.stats_on then
     Explanation.hc_written e (Writer.current_level ctx.writer)
 
 (* What [e]'s line answers now, for tests: the id [emit] would hand back without writing. *)
@@ -728,56 +652,6 @@ let memoized ctx (e : Explanation.t) (write : unit -> Writer.cid) : Writer.cid =
       let cid = write () in
       remember ctx e cid;
       cid
-
-(* M11-complexity-T10 (D-0158). Share mode's lookup: [memoized] for a [Combine], [Cut]
-   or [Linear], with the line index between the memo and the writer. [line] renders the
-   line -- for a [Combine] or a [Cut] that emits its operands, which is what the line
-   would have done first anyway, so the page gets the same lines in the same order up to
-   this one -- and returns it with the function that writes it. An identical line at or
-   below the current level answers, and [e] is remembered with that line's id at the
-   current level, as any entry is: the line is at or below it, so the entry never
-   outlives the line. Both other choices were measured (D-0158 section 3). Not
-   remembering [e] made every later lookup of a copy render it again, operands and all
-   (rcpsp_11: 9.0 M lookups became 24.8 M). Remembering it at the LINE's level kept every
-   copy of a level-0 line for the rest of the run (cyclic: from 78 s and 181 MB to more
-   than 18 minutes and 7 GB, stopped). *)
-let find_line ctx k =
-  match Lines.find_opt ctx.lines k with
-  | Some (s : stated) when s.s_level <= Writer.current_level ctx.writer -> Some s
-  | _ -> None
-
-let state_line ctx k (cid : Writer.cid) =
-  let level = Writer.current_level ctx.writer in
-  Lines.replace ctx.lines k { s_cid = cid; s_level = level };
-  if level > 0 then (
-    if level >= Array.length ctx.lines_by_level then (
-      let a =
-        Array.make (Stdlib.max (level + 1) (2 * Array.length ctx.lines_by_level)) []
-      in
-      Array.blit ctx.lines_by_level 0 a 0 (Array.length ctx.lines_by_level);
-      ctx.lines_by_level <- a);
-    ctx.lines_by_level.(level) <- k :: ctx.lines_by_level.(level);
-    if level > ctx.lines_hi then ctx.lines_hi <- level)
-
-let memoized_line ctx (e : Explanation.t)
-    ~(line : unit -> line_key * (unit -> Writer.cid)) : Writer.cid =
-  if memo_stats_on then incr ms_lookups;
-  match node_answer ctx e with
-  | Some cid ->
-      if memo_stats_on then incr ms_hits;
-      cid
-  | None -> (
-      let k, write = line () in
-      match find_line ctx k with
-      | Some s ->
-          if memo_stats_on then incr ms_shared;
-          remember ctx e s.s_cid;
-          s.s_cid
-      | None ->
-          let cid = write () in
-          state_line ctx k cid;
-          remember ctx e cid;
-          cid)
 
 (* [Clause lits] -- rup, not pol.
 
@@ -925,8 +799,8 @@ let pol_stating ctx ~origin ~claim expr =
   | None -> Writer.pol_lazy ctx.writer ~origin expr
   | Some c -> Writer.pol_concluding_lazy ctx.writer ~origin ~claim:c expr
 
-(* The expression and the origin, with the operands emitted; [emit_cut] writes it. Split
-   so that share mode can look the line up before writing it (D-0158). *)
+(* The expression and the origin, with the operands emitted; [emit_cut] writes it (split
+   for D-0158's share mode, which D-0172 removed). *)
 let cut_line ~emit ctx e1 e2 c1 c2 =
   if c1 < 1 || c2 < 1 then
     invalid_arg
@@ -1046,8 +920,8 @@ let emit_summand ~emit ctx = function
       [ Pol.mul (Pol.id id) c ]
   | Explanation.Weaken lits -> emit_weaken ctx lits
 
-(* The expression and the origin, with the operands emitted; [emit_combine] writes it.
-   Split so that share mode can look the line up before writing it (D-0158). *)
+(* The expression and the origin, with the operands emitted; [emit_combine] writes it
+   (split for D-0158's share mode, which D-0172 removed). *)
 (* The origin of a [Combine] line, which the writer's audit keeps for as long as the line
    is live. It renders two integers, so every line of one shape can share one closure
    (M11-complexity-T12, D-0166): a closure per line was 40 bytes for each of the 3.1 M
@@ -1257,22 +1131,10 @@ let rec emit ctx (e : Explanation.t) : Writer.cid =
      is a caller's mistake in both modes. *)
   | _ when Writer.is_null ctx.writer -> Writer.fresh ctx.writer ~origin:"no-proof"
   | Explanation.Clause { lits; _ } -> memoized ctx e (fun () -> emit_clause ctx lits)
-  | Explanation.Linear { terms; rhs; _ } when ctx.share ->
-      memoized_line ctx e ~line:(fun () ->
-          let c = linear_line ctx terms rhs in
-          (Rup_line c, fun () -> write_linear ctx c))
   | Explanation.Linear { terms; rhs; _ } ->
       memoized ctx e (fun () -> emit_linear ctx terms rhs)
-  | Explanation.Cut { e1; e2; c1; c2; _ } when ctx.share ->
-      memoized_line ctx e ~line:(fun () ->
-          let expr, origin = cut_line ~emit ctx e1 e2 c1 c2 in
-          (Pol_line expr, fun () -> pol_stating ctx ~claim:None ~origin expr))
   | Explanation.Cut { e1; e2; c1; c2; _ } ->
       memoized ctx e (fun () -> emit_cut ~emit ~claim:None ctx e1 e2 c1 c2)
-  | Explanation.Combine { summands; divisor; _ } when ctx.share ->
-      memoized_line ctx e ~line:(fun () ->
-          let expr, origin = combine_line ~emit ctx summands divisor in
-          (Pol_line expr, fun () -> pol_stating ctx ~claim:None ~origin expr))
   | Explanation.Combine { summands; divisor; _ } ->
       memoized ctx e (fun () -> emit_combine ~emit ~claim:None ctx summands divisor)
   | Explanation.Deferred th -> (
