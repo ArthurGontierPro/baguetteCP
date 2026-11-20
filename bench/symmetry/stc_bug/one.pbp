@@ -1,0 +1,9 @@
+pseudo-Boolean proof version 3.0
+f 0 ;
+strengthening_to_core on ;
+red +1 x1 >= 1 : x1 -> 1 ;
+red +1 ~x1 >= 1 : x1 -> 0 ;
+rup >= 1 ;
+output NONE ;
+conclusion UNSAT : -1 ;
+end pseudo-Boolean proof ;
