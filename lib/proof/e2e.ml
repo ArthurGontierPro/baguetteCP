@@ -38,7 +38,8 @@
 
    Then, per FlatZinc constraint, every row cake writes for it ([cake_rows]) is
    SUBSTITUTED, B -> l + S: k * @E2 added for a coefficient k > 0 on B, |k| * @E1 for
-   k < 0 (@S[...]). And each of baguette's rows posted for that constraint is pinned:
+   k < 0 (@S[...]; written when a pin first cites it, or before a `rup` pin of the same
+   constraint, D-0188 section 3.2). And each of baguette's rows posted for that constraint is pinned:
 
      - `ia` against the substituted row of its OWN constraint that implies it
        syntactically (the coefficient each literal loses, summed, at most the slack), after
@@ -66,18 +67,40 @@
    A ladder rung is `ia` against its @L.
 
    ---------------------------------------------------------------------------
+   T5's globals (T3b, D-0188)
+   ---------------------------------------------------------------------------
+
+   element, global_cardinality, array_int_maximum/minimum (and int_max/min, cake's binary
+   `max`/`min`), inverse and member, their cake rows transcribed in [cake_rows]. Three
+   derivations, all `pol`:
+
+     - an INTERIOR eq atom [x = v] is the order indicator x_ge_v - x_ge_(v+1), exactly,
+       through @Ep/@Em ([indicator]); gcc's counting rows and inverse's channel rows are
+       then `ia` against cake's;
+     - a cake row LINEARISED at a clause ([linearise]): each B_z cancelled by @A1/@A2 at
+       the clause's threshold, or by z's bound row, saturated, its atoms replaced. That is
+       element's `[i = p] -> z >= w` (the bridge's 93 043 `rup` on black-hole_17, D-0182),
+       written as ONE `pol` under the row's own label when it is the row exactly;
+     - maxmin's `m >= v -> OR x_i >= v`: the operands' choice rows so linearised, summed
+       with the at-least-one over the flags ([special]).
+
+   A candidate that implies a row only after WEAKENING (and saturation), or after resolving
+   a literal against one of member's or inverse's own binary clauses ([resolve]), is tried
+   after every strict candidate failed. A gcc copy (D-0146) is defined as its original by
+   red pairs ([declare_copy], [split_copies]).
+
+   ---------------------------------------------------------------------------
    What is covered
    ---------------------------------------------------------------------------
 
    The families of T2 (D-0176): int_lin_le, int_lin_eq, int_lin_ne, int_le, int_lt,
-   int_eq, int_ne, all_different_int; and of T4 (D-0178): bool_clause, array_bool_or,
+   int_eq, int_ne, all_different_int; of T4 (D-0178): bool_clause, array_bool_or,
    array_bool_and, bool_eq, bool_not, bool2int, int_le_reif, int_eq_reif, int_ne_reif,
-   int_lin_le_reif; over `var lo..hi` and `var bool`, with or without an objective.
-   Everything else raises [Not_covered] with the construct's name, before the search:
-   the caller refuses `--e2e` and says why. In particular a set domain with holes (cake
-   writes it as an `in` constraint over INTERIOR eq atoms, which no single baguette
-   literal equals, T5), a variable on the bits arm (T7), and any row baguette commits
-   outside a covered constraint. *)
+   int_lin_le_reif; and of T5 above; over `var lo..hi` (a set domain with holes is cake's
+   `in` over interior eq atoms, D-0187) and `var bool`, with or without an objective.
+   Everything else raises [Not_covered] with the construct's name, before the search: the
+   caller refuses `--e2e` and says why. In particular a variable on the bits arm (T7),
+   T6's families, and any row baguette commits outside a covered constraint. *)
 
 exception Not_covered of string
 
