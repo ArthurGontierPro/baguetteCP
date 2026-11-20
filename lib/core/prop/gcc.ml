@@ -1155,12 +1155,33 @@ let pass t store =
     let rec up v = if Int_tbl.mem cover_at v then up (v + 1) else v - 1 in
     up a
   in
+  (* M16-file-review-T2 (D-0190): an interval is worked on only when it can push, which
+     needs a capacity [cap >= 0] and at least [cap] variables confined to it. [capacc]
+     holds the capacity of [a, a + i] summed in value order, as the fold below sums it,
+     and the confined variables are COUNTED; the lists are built, exactly as before, only
+     for an interval that passes both tests. Most intervals of a pass fail them, and each
+     used to build its cover list, the confined list and its partition first. *)
+  let rec confined ~a ~b n = function
+    | [] -> n
+    | s :: rest -> confined ~a ~b (if a <= s.s_lo && s.s_hi <= b then n + 1 else n) rest
+  in
   List.iter
     (fun a ->
       let top = reach a in
+      let capacc = Array.make (Int.max 0 (top - a + 1)) 0 in
+      let acc = ref 0 in
+      for i = 0 to top - a do
+        let k = Int_tbl.find cover_at (a + i) in
+        acc := !acc + k.k_hi - k.k_cov.cconst;
+        capacc.(i) <- !acc
+      done;
       List.iter
         (fun b ->
-          if b >= a && b <= top then
+          if
+            b >= a && b <= top
+            && capacc.(b - a) >= 0
+            && confined ~a ~b 0 snaps >= capacc.(b - a)
+          then
             let caps_ab = List.map (fun v -> Int_tbl.find cover_at v) (range a b) in
             let cap =
               List.fold_left (fun acc k -> acc + k.k_hi - k.k_cov.cconst) 0 caps_ab
