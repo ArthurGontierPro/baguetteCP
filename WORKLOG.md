@@ -23,6 +23,7 @@ of it to every session and stopping at a broken line before it even reached the 
 | M11-complexity-T15 (SPIKE, explanations as a hash-consed DAG; a prototype branch, nothing merged without a decision) | `lib/core/explanation.ml`, `lib/core/justify.ml`, `lib/core/trace.ml`, propagators' explanation construction as needed, on branch `wave55-dag` only | agent-dag (`wave55-dag`) | 2026-11-20 |
 | M11-complexity-T17 (learned clauses that cannot prune) | `lib/core/search.ml`, `lib/core/learned.ml`, `lib/core/retention.ml`, `lib/core/engine.ml` (learned wakes only), `lib/core/prop/clause.ml`, `lib/core/prop/pb.ml`, their unit tests | agent-learnprop (`wave55-learnprop`) | 2026-11-20 |
 | M15-symmetry-T2 (the pipeline side by side) | new `tools/symmetry/`, new `bench/symmetry/`, a new lane script `scripts/sym_lane.sh`, one `Makefile` target, `scripts/README.md` (one section); reserved record D-0179 | agent-sym2 (`wave55-sym2`) | 2026-11-20 |
+| M14-e2e-verification-T5 (globals with cake flags in the e2e chain) | `tools/e2e/`, `scripts/e2e_lane.sh`, `bench/e2e_spike/`; reserved record D-0180 | agent-e2e5 (`wave55-e2e5`) | 2026-11-20 |
 
 ## Cross-session requests
 
