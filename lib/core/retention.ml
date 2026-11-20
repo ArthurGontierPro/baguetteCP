@@ -284,6 +284,16 @@
 module Lit = Baguette_proof.Lit
 module Writer = Baguette_proof.Writer
 
+(* Engine ids, keyed by their own value: they are small non-negative ints, so the
+   identity is a hash and [Int.equal] the comparison, with no [caml_hash] and no
+   polymorphic compare per probe (D-0191). Lookup only, like every table here. *)
+module Int_tbl = Hashtbl.Make (struct
+  type t = int
+
+  let equal = Int.equal
+  let hash x = x land max_int
+end)
+
 (* ------------------------------------------------------------------ entries *)
 
 (* One learned constraint the database holds.
@@ -858,16 +868,30 @@ let gate t store ~cid (inst : Propagator.instance) : Propagator.instance =
    schedules down to a reduction per learned constraint. Half 1 is load-bearing: without
    it `colour_unsat` is rejected ("Trying to access constraint with ID 175 that has
    already been deleted"). Half 2 reddens no model in the suite and is kept on the
-   argument above; the unit lanes in test/unit/test_retention.ml pin both. *)
-let locked_instances t =
-  let locked = Hashtbl.create 64 in
-  if t.last_conflict >= 0 then Hashtbl.replace locked t.last_conflict ();
+   argument above; the unit lanes in test/unit/test_retention.ml pin both.
+
+   M16-file-review-T3 (D-0191): ASKED ONLY ABOUT [wanted], the gates of this reduction's
+   victims, and answering with the subset of them that is locked. It used to put the
+   instance of EVERY trail entry into a polymorphic table, one [caml_hash] and a growing
+   table per entry, once per reduction: under `lbd:500` that was 20 % of
+   2017_opd_small_bibd_08_28_14's samples. Now the trail is walked testing each entry's
+   instance against the few wanted ids, and the walk stops once all of them are found
+   locked. [reduce] asks the answer only about ids in [wanted], and for those the answer
+   is the one the full table gave: an id is locked iff it is [last_conflict] or the
+   instance of an entry on the trail. *)
+let locked_instances t (wanted : int list) =
+  let want = Int_tbl.create 8 and locked = Int_tbl.create 8 in
+  List.iter (fun id -> Int_tbl.replace want id ()) wanted;
+  let lock id = if Int_tbl.mem want id then Int_tbl.replace locked id () in
+  if t.last_conflict >= 0 then lock t.last_conflict;
   (match t.store with
   | None -> ()
   | Some s ->
-      for i = 0 to Store.trail_length s - 1 do
-        let en : Store.entry = Store.trail_entry s i in
-        Hashtbl.replace locked en.Store.prop ()
+      let n = Store.trail_length s in
+      let i = ref 0 in
+      while !i < n && Int_tbl.length locked < Int_tbl.length want do
+        lock (Store.trail_entry s !i).Store.prop;
+        incr i
       done);
   locked
 
@@ -987,7 +1011,10 @@ let reduce t ctx =
        any consumer of a search that does not call [gate] -- is pinned as before. *)
     let locked =
       if List.exists (fun e -> e.e_gate <> None && Hashtbl.mem t.cited e.e_cid) victims
-      then Some (locked_instances t)
+      then
+        Some
+          (locked_instances t
+             (List.filter_map (fun e -> Option.map (fun g -> g.g_inst) e.e_gate) victims))
       else None
     in
     let evictable, pinned =
@@ -997,7 +1024,7 @@ let reduce t ctx =
           else
             match (e.e_gate, locked) with
             | Some g, Some l ->
-                if Hashtbl.mem l g.g_inst then (
+                if Int_tbl.mem l g.g_inst then (
                   t.n_locked <- t.n_locked + 1;
                   false)
                 else true
