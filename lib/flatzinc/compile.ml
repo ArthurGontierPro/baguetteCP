@@ -786,16 +786,20 @@ let e2e_spec (names : string array) (c : Model.cstr) : Baguette_proof.E2e.spec =
   | Model.Int_eq (a, b) -> E.Eq (op a, op b)
   | Model.Int_ne (a, b) -> E.Ne (op a, op b)
   | Model.All_different xs -> E.All_different (List.map op xs)
-  | Model.Bool_clause _ -> E.refuse "bool_clause is not covered by --e2e yet"
-  | Model.Array_bool_or _ -> E.refuse "array_bool_or is not covered by --e2e yet"
-  | Model.Array_bool_and _ -> E.refuse "array_bool_and is not covered by --e2e yet"
-  | Model.Bool2int _ -> E.refuse "bool2int is not covered by --e2e yet"
-  | Model.Bool_eq _ -> E.refuse "bool_eq is not covered by --e2e yet"
-  | Model.Bool_not _ -> E.refuse "bool_not is not covered by --e2e yet"
-  | Model.Int_lin_le_reif _ -> E.refuse "int_lin_le_reif is not covered by --e2e yet"
-  | Model.Int_le_reif _ -> E.refuse "int_le_reif is not covered by --e2e yet"
-  | Model.Int_eq_reif _ -> E.refuse "int_eq_reif is not covered by --e2e yet"
-  | Model.Int_ne_reif _ -> E.refuse "int_ne_reif is not covered by --e2e yet"
+  (* T4: a Boolean b is cake's 0..1 integer, `b` true is the tuple (b = 1) *)
+  | Model.Bool_clause (ps, ns) ->
+      E.Or
+        ( List.map (fun p -> (op p, 1)) ps @ List.map (fun n -> (op n, 0)) ns,
+          (E.Const 1, 1) )
+  | Model.Array_bool_or (xs, r) -> E.Or (List.map (fun x -> (op x, 1)) xs, (op r, 1))
+  | Model.Array_bool_and (xs, r) -> E.And (List.map (fun x -> (op x, 1)) xs, (op r, 1))
+  | Model.Bool2int (b, x) -> E.Eq (op b, op x)
+  | Model.Bool_eq (a, b) -> E.Eq (op a, op b)
+  | Model.Bool_not (a, b) -> E.Ne (op a, op b)
+  | Model.Int_lin_le_reif (ts, r, b) -> E.Lin_le_iff ((op b, 1), lin ts, r)
+  | Model.Int_le_reif (a, b, r) -> E.Le_iff ((op r, 1), op a, op b)
+  | Model.Int_eq_reif (a, b, r) -> E.Eq_iff ((op r, 1), op a, op b)
+  | Model.Int_ne_reif (a, b, r) -> E.Ne_iff ((op r, 1), op a, op b)
   | Model.Int_times _ -> E.refuse "int_times is not covered by --e2e"
   | Model.Int_div _ -> E.refuse "int_div is not covered by --e2e"
   | Model.Int_abs _ -> E.refuse "int_abs is not covered by --e2e"
