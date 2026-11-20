@@ -690,7 +690,16 @@ let evaluate (m : M.t) (assign : int array) =
           let assoc base ops = List.mapi (fun k x -> (base + k, operand x)) ops in
           let f = assoc iv.M.inv_fmin iv.M.inv_f and g = assoc iv.M.inv_gmin iv.M.inv_g in
           List.for_all (fun (i, j) -> List.assoc_opt j g = Some i) f
-          && List.for_all (fun (j, i) -> List.assoc_opt i f = Some j) g)
+          && List.for_all (fun (j, i) -> List.assoc_opt i f = Some j) g
+      (* M7-T28 (D-0159), written apart from [Model.check_assignment]: the positions the
+         selectors name, all equal to y, and at least one of them. *)
+      | M.Member mb ->
+          let named =
+            List.filteri
+              (fun k _ -> operand (List.nth mb.M.mem_b k) = 1)
+              (List.map operand mb.M.mem_x)
+          in
+          named <> [] && List.for_all (( = ) (operand mb.M.mem_y)) named)
     m.M.constraints
 
 (* Brute force over the declared box: the independent oracle for the expected answer.
@@ -2138,6 +2147,117 @@ let test_inverse_models () =
       (inverse_src ~decls:(v3 "x") ~call:"[x1, x2, x3], 1, [x1, x2, x3], 1"
          ~extra:[ "int_ne(x1, 1)" ])
 
+(* M7-T28 (D-0159): `baguette_member`, end to end, as [test_inverse_models] does it: each
+   scene brute-forced over its declared box -- the selectors included, with the oracle arm
+   above written apart from [Model.check_assignment] -- solved, and its proof checked. The
+   scenes cover what [post_member] folds: a constant in x, a constant y, y one of the x,
+   a variable twice in x (the [Aliased] packing), disjoint hulls (the row is `~b_k`
+   alone), root holes that interleave (the bound-form chase; this file's brute force does
+   no set domains, so the holes are int_ne rows), an empty x, and the
+   Boolean spelling. Then the four shapes the front end refuses, by their message. *)
+let member_src ?(bools = []) ~ints ~call ~extra () =
+  String.concat ""
+    (List.map (fun (x, dom) -> Printf.sprintf "var %s: %s :: output_var;\n" dom x) ints
+    @ List.map (fun b -> Printf.sprintf "var bool: %s;\n" b) bools
+    @ [ Printf.sprintf "constraint %s;\n" call ]
+    @ List.map (fun c -> "constraint " ^ c ^ ";\n") extra
+    @ [ "solve satisfy;\n" ])
+
+let test_member_models () =
+  let r4 = "1..4" in
+  let sels n = List.init n (fun k -> Printf.sprintf "b%d" (k + 1)) in
+  run_model ~title:"member: SAT, y differs from x1, x3 small, y large: y = x2"
+    ~src:
+      (member_src
+         ~ints:[ ("x1", r4); ("x2", r4); ("x3", r4); ("y", r4) ]
+         ~bools:(sels 3) ~call:"baguette_member([x1, x2, x3], y, [b1, b2, b3])"
+         ~extra:
+           [ "int_ne(y, x1)"; "int_lin_le([1], [x3], 2)"; "int_lin_le([-1], [y], -3)" ]
+         ());
+  run_model ~title:"member: UNSAT, y differs from x1 and x2, x3 <= 2 < 3 <= y"
+    ~src:
+      (member_src
+         ~ints:[ ("x1", r4); ("x2", r4); ("x3", r4); ("y", r4) ]
+         ~bools:(sels 3) ~call:"baguette_member([x1, x2, x3], y, [b1, b2, b3])"
+         ~extra:
+           [
+             "int_ne(y, x1)";
+             "int_ne(y, x2)";
+             "int_lin_le([1], [x3], 2)";
+             "int_lin_le([-1], [y], -3)";
+           ]
+         ());
+  run_model ~title:"member: SAT, a constant in x is the only match"
+    ~src:
+      (member_src
+         ~ints:[ ("x1", r4); ("x3", r4); ("y", r4) ]
+         ~bools:(sels 3) ~call:"baguette_member([x1, 3, x3], y, [b1, b2, b3])"
+         ~extra:[ "int_ne(y, x1)"; "int_ne(y, x3)" ]
+         ());
+  run_model ~title:"member: UNSAT, a constant y above both hulls (rows ~b_k alone)"
+    ~src:
+      (member_src
+         ~ints:[ ("x1", "1..2"); ("x2", "1..3") ]
+         ~bools:(sels 2) ~call:"baguette_member([x1, x2], 5, [b1, b2])" ~extra:[] ());
+  run_model ~title:"member: SAT, y is one of the x"
+    ~src:
+      (member_src
+         ~ints:[ ("x2", r4); ("y", r4) ]
+         ~bools:(sels 2) ~call:"baguette_member([y, x2], y, [b1, b2])"
+         ~extra:[ "int_ne(y, x2)" ] ());
+  run_model ~title:"member: SAT, x1 twice in x (Aliased), y forced onto it"
+    ~src:
+      (member_src
+         ~ints:[ ("x1", r4); ("x2", r4); ("y", r4) ]
+         ~bools:(sels 3) ~call:"baguette_member([x1, x1, x2], y, [b1, b2, b3])"
+         ~extra:[ "int_ne(y, x2)"; "int_lin_le([-1], [x1], -2)" ]
+         ());
+  run_model ~title:"member: UNSAT, x over {1, 3, 5} and y over {2, 4}: holes interleave"
+    ~src:
+      (member_src
+         ~ints:[ ("x1", "1..5"); ("x2", "1..5"); ("y", "2..4") ]
+         ~bools:(sels 2) ~call:"baguette_member([x1, x2], y, [b1, b2])"
+         ~extra:
+           [
+             "int_ne(x1, 2)";
+             "int_ne(x1, 4)";
+             "int_ne(x2, 2)";
+             "int_ne(x2, 4)";
+             "int_ne(y, 3)";
+           ]
+         ());
+  run_model ~title:"member: UNSAT, an empty x"
+    ~src:(member_src ~ints:[ ("y", r4) ] ~call:"baguette_member([], y, [])" ~extra:[] ());
+  run_model ~title:"member: SAT, the Boolean spelling, q forced false, only p3 false"
+    ~src:
+      (member_src ~ints:[]
+         ~bools:([ "p1"; "p2"; "p3"; "q" ] @ sels 3)
+         ~call:"baguette_member_bool([p1, p2, p3], q, [b1, b2, b3])"
+         ~extra:
+           [
+             "bool_clause([p1], [])"; "bool_clause([p2], [])"; "bool_clause([], [q, p1])";
+           ]
+         ());
+  let ints = [ ("x1", r4); ("x2", r4); ("y", r4) ] in
+  expect_rejected "member: a selector count other than one per position is refused"
+    ~needles:[ "baguette_member"; "selectors for 2 positions" ]
+    (member_src ~ints ~bools:(sels 1) ~call:"baguette_member([x1, x2], y, [b1])" ~extra:[]
+       ());
+  expect_rejected "member: a selector declared wider than 0..1 is refused"
+    ~needles:[ "baguette_member"; "not a Boolean variable declared on 0..1" ]
+    (member_src
+       ~ints:(ints @ [ ("c", "0..2") ])
+       ~bools:(sels 1) ~call:"baguette_member([x1, x2], y, [b1, c])" ~extra:[] ());
+  expect_rejected "member: a selector that is also one of the x is refused"
+    ~needles:[ "baguette_member"; "distinct from x and y" ]
+    (member_src
+       ~ints:[ ("x1", "0..1"); ("y", "0..1") ]
+       ~bools:(sels 1) ~call:"baguette_member([x1, b1], y, [b1, x1])" ~extra:[] ());
+  expect_rejected "member: a selector given twice is refused"
+    ~needles:[ "baguette_member"; "a selector occurs twice" ]
+    (member_src ~ints ~bools:(sels 1) ~call:"baguette_member([x1, x2], y, [b1, b1])"
+       ~extra:[] ())
+
 let () =
   print_endline "";
   test_variable_identity ();
@@ -2164,6 +2284,7 @@ let () =
   test_bits_default_is_order ();
   test_bits_mixed_row_is_the_opb_row ();
   test_inverse_models ();
+  test_member_models ();
   if !failures > 0 then (
     Printf.printf "\n%d failure(s)\n" !failures;
     exit 1)

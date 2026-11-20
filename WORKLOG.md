@@ -19,11 +19,11 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M7-T28 (`member`) | new `lib/core/prop/member.ml`, `lib/flatzinc/compile.ml` (member dispatch), `mznlib/`, new `test/models/`, `test/unit/test_prop.ml` (member section) | agent-member (`wave53-member`) | 2026-11-19 |
-| M7-T34 (`member` without width-proportional rows) | on `wave53-member`'s files: `lib/core/prop/member.ml`, `lib/flatzinc/compile.ml` (member dispatch), `mznlib/`, `test/models/member_*`, `test/unit/test_prop.ml` (member section) | agent-member2 (`wave55-member`) | 2026-11-20 |
-| M11-complexity-T14 (per node against Gecode) | `lib/core/prop/pb.ml`, `lib/core/engine.ml`, `lib/core/store.ml`, `lib/core/prop/clause.ml`, their unit tests; `bench/` additions | agent-pernode2 (`wave55-pernode`) | 2026-11-20 |
 | M8-bits-encoding-T4 (two arms, `W = none` and `W = 0`, on the sixteen editions) | run directories under `/scratch/arthur/m8t4/`, `tools/compare/` (additions), `bench/challenge/README.md` (the run's row), a new D-record | agent-m8t4 (`wave55-m8t4`) | 2026-11-20 |
 | M11-complexity-T15 (SPIKE, explanations as a hash-consed DAG; a prototype branch, nothing merged without a decision) | `lib/core/explanation.ml`, `lib/core/justify.ml`, `lib/core/trace.ml`, propagators' explanation construction as needed, on branch `wave55-dag` only | agent-dag (`wave55-dag`) | 2026-11-20 |
+| M11-complexity-T17 (learned clauses that cannot prune) | `lib/core/search.ml`, `lib/core/learned.ml`, `lib/core/retention.ml`, `lib/core/engine.ml` (learned wakes only), `lib/core/prop/clause.ml`, `lib/core/prop/pb.ml`, their unit tests | agent-learnprop (`wave55-learnprop`) | 2026-11-20 |
+| M14-e2e-verification-T2 (first demo as a lane) | new `tools/e2e/` (the FlatZinc -> .scp translator, the bridge), `bench/e2e_spike/`, a new lane script `scripts/e2e_lane.sh`, `Makefile` (one target), `scripts/README.md` (one section); reserved record D-0176 | agent-e2e2 (`wave55-e2e2`) | 2026-11-20 |
+| M15-symmetry-T1 (study, documentation only) | a new decision record (reserved D-0177), notes under `/cluster/arthur/baguette-results/wave55-sym/` | agent-sym (`wave55-sym`) | 2026-11-20 |
 
 ## Cross-session requests
 
@@ -455,6 +455,9 @@ section 1. Shares are inclusive, of the whole run.
 
 | Task | Session | Date | Summary |
 |---|---|---|---|
+| M15-symmetry (roadmap rows only) | codes-cp session | 2026-11-20 | New M15 section at the end of `docs/ROADMAP.md`: dejavu beside baguette (not inside it), T1 study of dejavu's latest versions and Markus Anders' papers, T2 the side-by-side pipeline from codes-cp's prototype, T3 breaking that agrees with the search (Ciaran's idea), T4-T7 parked. M13-codes-leads-T2 marked moved to M15 |
+| M7-T34 (`member` without width-proportional rows) | agent-member2 (`wave55-member`) | 2026-11-20 | **D-0170.** Four bound clauses and two big-M rows over the declared overlap per position; the threshold clauses are lemmas written ahead of the lines that walk a hole (one per switch of the hole's owner), one `Combine` per line, no new constructor. Rows over the 35 Challenge instances 7.47 M -> 77 K, literals -38 %; statuses and incumbents equal to main's. Gate on `e150a70`: see D-0170 §5. Merge recommended |
+| M7-T28 (`member`) | agent-member (`wave53-member`) | 2026-11-19 | **D-0159.** `member` native, DOMAIN over x, y and one selector per position; released with M7-T34, which builds on its branch |
 | M11-complexity-T4 (part 2: search, analysis, retention, learned; T4 DONE) | agent-batch4b (`wave52-batch4b`) | 2026-11-19 | **D-0152.** S1 (learned-instance kind as a byte per engine id), S3 (`decision_entries` over the level marks), S4 (`is_fixed`, `first_fail` stops at size 2), S5 (`kept` by a level table), S6 (`apply_globals` keeps its forward list, skips a unit in force), S2 (lazy citation texts), R3 (typed orders, fifo's no-op sort skipped), J6 (`bridges`' origin a thunk), L2 (`to_linear_row` typed sorts, one-pass grouping), A1 (the 1UIP frontier keeps its count and a heap). R4 done and REVERTED (RSS +6-8 %). Every byte the same (36 measurement runs, lane 301/301 and 289/289); instructions at 40 000 nodes no-proof: mspsp -17.3 %, QR72 -15.6 %, QR48 -11.2 %, openshop -8.0 %, rcpsp_11 -5.9 %, cyclic -0.5 %; RSS -4 to -8 %. Gate on `d4e8477`: `make check` rc 0, peak RSS 99 MB, 193 models identical to gate 57's binary, lane 301/301 and 289/289, binary `d12feec0`. |
 | M8-bits-encoding-T6 (PB analysis over bits rows) | agent-pbbits (`wave52-pbbits`) | 2026-11-19 | **D-0153.** A mixed `Linear` row is offered to PB analysis as the .opb holds it and every bits block is INSTANTIATED through one line (the atom's bridge at the bound in force, the bound row at a declared bound, the pivot's own atom for the pruned block) before anything resolves on it (`ladder.ml`'s bits arm, `pb_analysis.ml`, `Linear.pb_row ?bits_n`, compile.ml's pack lines, one argument at the search.ml call site). Probed first (`probe_pbbits.sh`). Suite at `W = 0`: PB rows 143 -> 213, mixed-row fallbacks 110 -> 0, stdout identical, ten proofs change, all verified; byte-identical at `W = none`. Gate: `make check` rc 0 (100 MB), 195 models identical to gate 57, diff lane equal but for eight `bits0` runs (D-0153 section 6, re-record after the merge) |
 | M7-T31 and M6-T23 | agent-proofbugs (`wave50-proofbugs`) | 2026-11-19 | **D-0148, D-0149.** M7-T31: the refused nogoods on hrc were a FACTLESS pruning (a learned unit or the improving bound re-applied by `apply_globals`) that settled over a hole, taken for a root by the decision closure, so the hole's levels left the nogood. `Analysis.rests_on_nothing` expands it like any settle. Reachable at default flags (`opt_global_settles_hole_sat`, refused by main's binary), `test_analysis` scene 7, a median/strategy sweep of 1 233 runs all VERIFIED. M6-T23: not the finaliser. The stop was never asked inside one PB analysis (cargo) or one conflict's trace (cable, plus a degenerate memo hash, 6.6x), and both now poll it. Overshoot at 300 s: cargo > 2 100 s -> 0.1 s, cable 1 209 s -> 10 s. The I-P7 alarm does not fire on main. Default proofs byte-identical (192/193 models, every lane run of this row) |
@@ -621,6 +624,9 @@ section 1. Shares are inclusive, of the whole run.
 | M7-T33 (and `Alldiff.excl`'s proof cost, D-0145; `hole_cite` through `Store.remover`, D-0155 §4) | agent-alldiff (`wave53-alldiff`) | 2026-11-19 | **D-0156.** alldiff's pigeonholes carry their facts under a decision, so they are learned from (root byte-identical). `p1f_13` TIMEOUT -> UNSAT 19.5 s VERIFIED, elitserien 0 -> 20 incumbents, Challenge pairs 100 instances: 5 -> 6 complete, 16 -> 37 incumbents. `excl` cyclic 646 -> 581 G, `hole_cite` bh10 52 -> 16 G and bh20@20 1846 -> 175 G, bytes equal. Tip gate (`45b8a3c7`): check rc 0, 4278 ok, 200 models, 4 alldiff `.pbp` differ, lane 18 DIFF (cyclic x6, lot-sizing x12) and debug 6, all expected. Open: lot-sizing [activity] over the 4 GB cap, black-hole's heap per node, openshop's checker panic at `--update` (D-0156 §4, §7). |
 | D-0161 request 1 (`Alldiff.snap_of` builds derivation inputs at every snapshot) | agent-snap (`wave54-snap`) | 2026-11-19 | **D-0165.** `snap_of` keeps the interior holes only; `gone` rebuilds the below/above runs inside the `Deferred` from the four frozen bounds; root flags and `hole_cite` through `Store.at_root`. Every model artefact and every lane line equal to the base `45b8a3c7`. Cyclic 10 000 nodes `--no-proof` -25.6 % instructions (157.0 -> 116.7 G), `--proof` -5.2 %; black-hole_20 -6.6 % / -2.3 %. |
 | M11-complexity-T13 | agent-thunk (`wave55-thunk`) | 2026-11-20 | **D-0168.** A thunk keeps its line (id, level) once written and drops its tree; the memo lets go of the cells of the nodes the closure built (a forcing records the operands it did not build, and only those thunks are forced again at release); `derive_ahead` emits the thunk. bh9 `--proof` node 40 (alldiff base): live 2 041 -> 658 MB, RSS 3 646 -> 1 777 MB, -0.7 % instructions, `.pbp` md5 equal; lane default runs -28.7 % (rcpsp_11) to +0.35 %. Gate on `a8762eb` (binary `40638833`): `make check` rc 0 (4 312 ok), 198 x 4 artefacts equal to `214e74d1`, lane 301/301, debug 289/289, scaling ok |
+| M11-complexity-T14 (the cost per node against Gecode) | agent-pernode2 (`wave55-pernode`) | 2026-11-20 | **D-0169.** codes-cp QR48 XOR, same tree as Gecode: Gecode 28 k instr and 57 propagations per node, baguette 1 572 k and 413 runs. Four byte-identical cuts in `engine.ml`, `store.ml`, `pb.ml`, `clause.ml` (run bracket without `Fun.protect` and no walk after a quiet run; wake sort in a scratch array; literal status off the record; seed heap without closures): -12.3 % / -15.8 % instr per node without proof, -7.5 % / -10.7 % with, every proof and `--stats` line identical. Gate on `c531645` (merges main `42feb27`): `make check` rc 0, 200 models x 4 artefacts equal to gate 71's `492638b9`, lanes 301/301 and 289/289, scaling ok and re-baselined (`26240af`), binary `c308784d`. Then merged main `f41498a` (thunk, disjoint files). Two proposals for the user (D-0169 section 5) |
+| M11-complexity-T16 (the release build) | agent-release (`wave55-release`) | 2026-11-20 | **D-0171.** `make release` builds `bin/main.exe` with dune's release profile into `_build_release/` (own lock; `dune build`, `make check`, `--root .` unchanged). Same bytes as dev: 200 models x (stdout, rc, .opb, .pbp) 0 differences, diff lane 301/301 with each binary. Instr/node dev -> release: QR48 -15.2 % / -11.2 % (no proof / proof), rcpsp_11 -17.1 % / -6.9 %, cyclic -17.0 % / -5.0 %. Clean build 4.7 s. Harnesses unchanged (BAGUETTE= / BIN=); docs in scripts/README.md §8 and bench/challenge/README.md. `make check` rc 0, 100 MB. |
+| M14-e2e-verification-T1 (feasibility study) | agent-e2e (`wave55-e2e`) | 2026-11-20 | **D-0174 (STUDY).** The verified encoder is CakeML's `cake_pb_cp` (`.scp` in, OPB over two's-complement bits out, HOL4 theorem `full_encode_sem_concl`), prebuilt in gitlab.com/MIAOresearch/software/cakepb `cp/`. Route: baguette's proof re-derives its own `.opb` from cake's at its head (atoms, `B = l + S`, ladder, substituted rows, pins), search proof unchanged. `bench/e2e_spike/run.sh`: 4 models VERIFIED by `cake_pb_cp`, a faked transcription bug refused. ROADMAP M14-T2..T8 |
 
 ## Handoff notes
 
@@ -629,6 +635,48 @@ section 1. Shares are inclusive, of the whole run.
 A spike in two variants on `795e869`. A (default) puts each node's line on the node (`Explanation.t`'s five line-writing constructors become inline records), so the memo table, D-0168's window and its second forcing are gone, every byte stays (gate green on `3f888e58`), and rcpsp_11 runs -21 % instructions. B (`BAGUETTE_HASHCONS=1`) hash-conses written nodes and writes share mode's proof for less than main (cable -64 %, cyclic -58 %, every proof verified).
 Not merged. `store.ml`'s `with_running` stats hook conflicts with D-0169's `run_as` and belongs there. D-0172 section 7 is the table for the user.
 
+### 2026-11-20 (agent-e2e, `wave55-e2e`): M14-e2e-verification-T1, D-0174 (STUDY)
+
+The verified encoder exists and runs: `cake_pb_cp` (CakeML `examples/pseudo_bool/cp_encoding`, prebuilt in the
+public CakePB repo's `cp/`), already used by GCS. `bench/e2e_spike/` runs FlatZinc twin → baguette → a prefix that
+re-derives baguette's `.opb` from cake's → `veripb --elaborate` → `cake_pb_cp`, VERIFIED on 4 root-level models.
+Next is T2 (a FlatZinc → `.scp` translator and the lane). T3 needs a user decision on a second naming contract.
+
+### 2026-11-20 (agent-release, `wave55-release`): M11-complexity-T16, D-0171
+
+`make release` gives `_build_release/default/bin/main.exe`, the binary every measured series should use
+(`BAGUETTE=` or `BIN=`, defaults still dev); it writes the same bytes as dev and costs 5 to 17 % fewer
+instructions per node. Gates stay on dev. Record the md5 and the profile of every series, and do not compare release counts with older dev counts.
+
+### 2026-11-20 (orchestrator): gates 71 and 72 green; alldiff, snap, thunk and pernode merged
+
+Gate 71 (agent-merge, `4e65e46`, binary `492638b9`, merged into main as `42feb27`, code identical)
+and gate 72 (`f41498a`, merge wave55-thunk, D-0168, binary `c3b9cd1b`, against `492638b9`):
+`make check` rc 0 (4 345 ok, 200 models, 102 MB), 200 models x 4 artefacts equal, lane 301/301,
+debug 289/289, scaling ok. wave55-pernode (D-0169) merged next, gate 73 on it. The user delegated
+the open decisions on 2026-11-20 (D-0167). Held: the memo share default (D-0167 item 3) waits for
+the M11-complexity-T15 spike, whose variant B shares lines without share mode's search.
+
+### 2026-11-20 (agent-pernode2, `wave55-pernode`): M11-complexity-T14, D-0169
+
+Four byte-identical cuts of the per-run and per-wake cost (`Store.run_as`, `Engine.sort_desc_uniq`, `Pb.falsified`,
+`Engine.heap_up`/`heap_down`), -12 to -16 % instructions per node on codes-cp QR48 without proof. The `Pb.status` cost the
+codes-cp note gave the cardinality rows is the CLAUSES' (`Clause.t = Pb.t`). Two decisions wait (D-0169 section 5): the
+release build profile (-17 % more), and not propagating learned clauses that cannot prune (-37 to -57 %, proofs identical).
+
+### M7-T34 handoff, 2026-11-20 (agent-member2, `wave55-member`): D-0170
+
+`member` writes at most six rows per position (four bound clauses, two big-M rows over the declared overlap) instead of two
+per threshold; a line that walks a hole is derived ahead behind threshold lemmas, all else is one `rup` against the rows.
+Rows 7.47 M -> 77 K over the 35, no status moved against main; `wave55-member` carries M7-T28 too, merge it whole.
+
+### M7-T28 (`member`) handoff, 2026-11-19 (agent-member, `wave53-member`): D-0159
+
+`member` native (`lib/core/prop/member.ml`, mznlib `fzn_member_int`/`_bool`): DOMAIN over x, y and
+one selector per position, BOUND-form rows (D-0151's value form measured short), one `rup` per
+pruning except a value of y two holes exclude, derived ahead (I-X10 `Needs_derivation`). Challenge:
+35 of 40 reach it, complete 1 -> 1, no answer changed; the rows' width cost and its lever are D-0159
+§5. Gate on `30ce66a` green; nothing to re-record at merge.
 ### 2026-11-20 (agent-thunk, `wave55-thunk`): M11-complexity-T13, D-0168
 
 A thunk is released once its line is written: it keeps the id and level, drops its tree, and the
@@ -960,6 +1008,33 @@ tables in codes-cp `dom/report.md` §4.7 and `benchmark/README.md`.
   of this kind.
 - **Whether to learn decision-only nogoods at all** under a fixed search (same observation, search
   side): they grow the database and cost wakes, `learned_clause` reports no effective run.
+
+**Addendum, same day (codes-cp session): what symmetry detection sees in baguette's `.opb`, for
+M13-codes-leads-T2.** dejavu (Markus Anders' automorphism tool, the one inside satsuma) was run on
+graphs of baguette's own `.opb` files (codes-cp `scripts/opb2graph.py`: two literal vertices per
+variable, one vertex per constraint coloured by kind, degree and coefficients). With parity written
+as sums Σx = 2y it finds the code's whole automorphism group: PSL(2, 47), order 51 888, for QR48
+(the orbit model of 17 296 checks), and M24, order 244 823 040, for Golay; the order ladders of the
+y variables follow the permutation. With the same checks written through `bool_xor` chains it finds
+the trivial group, because a chain's partial-parity variables follow the coordinate order and have
+no image under a permutation; a dominance witness maps variables to literals, so these symmetries
+cannot be used directly either. With a basis of 24 checks instead of the orbit it also finds
+nothing. dejavu takes 14 to 34 s on the QR48 orbit graphs (0.2 to 0.4 M vertices), 0.7 s on the XOR one
+(0.8 M vertices, trivial group), under 0.1 s on small models (an earlier "under 3 s" was wrong). Duplicate
+constraints must be dropped first, or their twin vertices inflate the order dejavu reports. Implication for T2: detection on
+the `.opb` is cheap and exact, but only for encodings that keep the symmetry; a native parity row
+would have to keep it too. Details: codes-cp `notes/dejavu-plan.md`.
+
+## M15-symmetry opened, 2026-11-20 (codes-cp session): roadmap rows only, no code
+
+`docs/ROADMAP.md` gains an M15 section at its end, at the user's request. It follows the codes-cp
+measurements summarised in the addendum above (dejavu on baguette's `.opb`, a stabilizer chain whose
+clauses are derived by `dom` and merged into baguette's proof, checked by VeriPB). The user's rules:
+dejavu runs beside baguette in a pipeline and is not put inside it, and dejavu is used unchanged as
+long as nothing forces a change. First the study (T1), then the pipeline (T2), then the interaction
+with the search (T3, Ciaran's idea of letting the search fix the orbit elements as it goes).
+Optimisation, proof size, the Challenge and the encoding are parked. M13-codes-leads-T2 now points to
+M15.
 
 ## M13-codes-leads opened, 2026-11-19 (codes-cp session): two leads to study, no code
 

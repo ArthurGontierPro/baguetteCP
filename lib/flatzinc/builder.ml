@@ -77,6 +77,10 @@ let implemented =
     "baguette_regular";
     (* M7-T28 (D-0151): inverse, through mznlib/fzn_inverse.mzn. *)
     "baguette_inverse";
+    (* M7-T28 (D-0159): member, through mznlib/fzn_member_int.mzn and
+       fzn_member_bool.mzn -- one relation, the second spelling over var bool. *)
+    "baguette_member";
+    "baguette_member_bool";
   ]
 
 (* The rest of the SPEC 2.1 table, with the milestone that will bring it in. Listing
@@ -1138,6 +1142,21 @@ let build_constraint env (c : Ast.constraint_item) =
                 inv_fmin = const "f's first index" fm;
                 inv_g = operands env pos ga;
                 inv_gmin = const "g's first index" gm;
+              }
+        | _ -> Error.failf pos "builtin `%s`: internal arity mismatch" id)
+    (* M7-T28 (D-0159). `baguette_member(x, y, b)` and `baguette_member_bool(x, y, b)`:
+       three operand slots, the selectors last. A Boolean is the integer 0..1 here
+       (D-0007), so both spellings are one [Model.Member]; lib/flatzinc/compile.ml's
+       [post_member] checks the selectors' shape. *)
+    | "baguette_member" | "baguette_member_bool" -> (
+        arity 3;
+        match c.Ast.c_args with
+        | [ xa; ya; ba ] ->
+            Model.Member
+              {
+                Model.mem_x = operands env pos xa;
+                mem_y = operand env pos ya;
+                mem_b = operands env pos ba;
               }
         | _ -> Error.failf pos "builtin `%s`: internal arity mismatch" id)
     (* M4-T10 (D-0096). `baguette_cumulative(s, d, r, cap)`: the durations, resources

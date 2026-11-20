@@ -1,0 +1,5 @@
+var 1..2: a :: output_var;
+var 1..2: b :: output_var;
+var 1..2: c :: output_var;
+constraint all_different_int([a,b,c]);
+solve satisfy;

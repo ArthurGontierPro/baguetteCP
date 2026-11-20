@@ -403,16 +403,29 @@ let falsity_fact a =
 (* ------------------------------------------------------------------- propagation *)
 
 (* LIVE domains, every call. See the header: this is the whole difference between this
-   object and [Propagator.pb_row]. *)
+   object and [Propagator.pb_row].
+
+   M11-complexity-T14: the bounds are read off the domain record once ([d.Domain.lo],
+   [d.Domain.hi]) rather than through [Domain.lo]/[Domain.hi]. The values are the same; the
+   difference is that dune's default (dev) profile compiles with [-opaque], so a
+   cross-module accessor is never inlined and each was a call, two or three per literal
+   on the hottest loop of a clause-heavy model ([status] and [falsified] were 12 % of a
+   QR48 node with their callees). *)
 let status store a =
   let d = Store.get store a.x in
   if a.positive then
-    if Domain.lo d >= a.k then Sat_lit
-    else if Domain.hi d <= a.k - 1 then Unsat_lit
-    else Open
-  else if Domain.hi d <= a.k - 1 then Sat_lit
-  else if Domain.lo d >= a.k then Unsat_lit
+    if d.Domain.lo >= a.k then Sat_lit else if d.Domain.hi < a.k then Unsat_lit else Open
+  else if d.Domain.hi < a.k then Sat_lit
+  else if d.Domain.lo >= a.k then Unsat_lit
   else Open
+
+(* [status store a = Unsat_lit], in one test: `x >= k` is false iff [hi x < k], `x <= k - 1`
+   iff [lo x >= k]. The [Sat_lit] arm [status] tries first cannot hold at the same time,
+   since [lo <= hi] (I-D1). The walks of [quiet] and the learned clause's watches ask only
+   this. *)
+let falsified store a =
+  let d = Store.get store a.x in
+  if a.positive then d.Domain.hi < a.k else d.Domain.lo >= a.k
 
 let is_false = function Unsat_lit -> true | Sat_lit | Open -> false
 let is_open = function Open -> true | Sat_lit | Unsat_lit -> false
@@ -650,7 +663,7 @@ let forced w ~slack i =
    on another variable, or a non-false literal after the second one is". *)
 let rec next_free store (atoms : atom array) i =
   if i >= Array.length atoms then i
-  else if is_false (status store atoms.(i)) then next_free store atoms (i + 1)
+  else if falsified store atoms.(i) then next_free store atoms (i + 1)
   else i
 
 let rec free_off store (atoms : atom array) xi i =

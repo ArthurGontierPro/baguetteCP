@@ -1,0 +1,3 @@
+q = false;
+p = array1d(1..3, [true, true, false]);
+----------

@@ -1,0 +1,1 @@
+( (version 1) (variables (x -2 5) (y -2 5)) (constraints (c1 lin_less_equal (3 x -1 y) -4) (c2 all_different (x y))) (prob_type decide) )

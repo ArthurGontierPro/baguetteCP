@@ -105,7 +105,8 @@
 #            `none` passes nothing                       (default auto)
 #   SOLVE_TIMEOUT / FLATTEN_TIMEOUT / CHECK_TIMEOUT    (default 300 / 120 / 900)
 #   MZN      the minizinc binary                       (default: PATH)
-#   BAGUETTE the solver binary            (default: _build/default/bin/main.exe)
+#   BAGUETTE the solver binary            (default: _build/default/bin/main.exe; a measured
+#            series uses _build_release/default/bin/main.exe, `make release`, D-0170)
 #   VERIPB   the checker; resolved by scripts/checker.sh if unset
 #   ONLY     a file of instance ids to run, one per line -- for re-running suspects
 #   DATA_TRIES  how many data files to try before giving up  (default 4)

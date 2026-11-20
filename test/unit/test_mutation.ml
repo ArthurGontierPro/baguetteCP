@@ -1408,6 +1408,38 @@ let inverse_src =
          complete) satisfy;\n";
       ])
 
+(* member (D-0159): x1, x2 over {1, 3} (declared holes), x3 and y over 1..3, x4 over 1..4,
+   and w1 w2 w3 a pigeonhole only while x3 = 3. Largest-first: x4 = 4 kills b4 on the one
+   fact x4 >= 4 (y never exceeds 3) -- the line the `death-fact` lane corrupts; x3 = 3
+   leaves y's value 2 held by no live position, x1 and x2 excluding it by their HOLE only,
+   so the removal `y <> 2` is made AHEAD: one lemma per position (b4's is its death line,
+   already on the page), the OR row, the sum divided -- the derivation the `gap-lemma` and
+   `no-ahead` lanes corrupt and delete. The w branch then fails, so all of it is on the
+   page; x3 = 2 solves. *)
+let member_src =
+  String.concat ""
+    [
+      "var {1,3}: x1 :: output_var;\n";
+      "var {1,3}: x2 :: output_var;\n";
+      "var 1..3: x3 :: output_var;\n";
+      "var 1..4: x4 :: output_var;\n";
+      "var 1..3: y :: output_var;\n";
+      "var bool: b1;\nvar bool: b2;\nvar bool: b3;\nvar bool: b4;\n";
+      "var 1..2: w1;\nvar 1..2: w2;\nvar 1..3: w3;\n";
+      "constraint baguette_member([x1, x2, x3, x4], y, [b1, b2, b3, b4]);\n";
+      "constraint int_ne(w1, w2);\n\
+       constraint int_ne(w1, w3);\n\
+       constraint int_ne(w2, w3);\n";
+      "constraint int_lin_le([1, 1], [w3, x3], 5);\n";
+      "solve :: int_search([x4, x3, w1, w2, w3, y, x1, x2], input_order, indomain_max, \
+       complete) satisfy;\n";
+    ]
+
+(* The gap removal's trace line in [member_src]'s proof: `y <> 2` on b4's tail and x3's
+   bound. Pinned verbatim, so a change in what member.ml records reddens the lane rather
+   than retargeting it. *)
+let member_gap_line = "rup +1 ~y_ge_2 +1 y_ge_3 +1 ~x4_ge_4 +1 ~x3_ge_3 >= 1 ;"
+
 (* An emitter lane that also asserts the checker's WORDING at full strength: a rejection
    on the grammar would satisfy [Rejected_on_derivation]'s exit status and say nothing
    about the derivation (CLAUDE.md, "assert the checker's wording"). *)
@@ -1478,6 +1510,254 @@ let regular_no_lemmas_lane c ~proof ~opb ~n_lemmas =
       (Printf.sprintf "%s: ... at the checker's RUP wording" lane)
       (contains out rup_wording);
     if not (rejected && contains out rup_wording) then show out
+
+(* The text lane for member's derivation ahead: the honest proof with the `pol` just
+   before the gap removal's line deleted, and with it every lemma that pol cites (a line
+   stating `y <> 2` under a selector; b4's death line is cited too and stays, since it is
+   an ordinary trace line), their labels taken out of the `del` lines so the file still
+   parses. The line itself must then be refused at the RUP wording: the derivation ahead
+   is load-bearing, which is the I-X10 obligation this family carries. *)
+let member_no_ahead_lane c ~proof ~opb =
+  let lane = Printf.sprintf "%s/no-ahead" c.c_tag in
+  ran c "no-ahead";
+  let lines = Array.of_list (String.split_on_char '\n' (read_file proof)) in
+  let label l =
+    match String.index_opt l ' ' with Some k -> String.sub l 0 k | None -> l
+  in
+  let body l =
+    let l = String.trim l in
+    if String.length l > 0 && l.[0] = '@' then
+      match String.index_opt l ' ' with
+      | Some k -> String.sub l (k + 1) (String.length l - k - 1)
+      | None -> l
+    else l
+  in
+  let at = ref (-1) in
+  Array.iteri (fun i l -> if !at < 0 && body l = member_gap_line then at := i) lines;
+  let pol = ref (-1) in
+  if !at > 0 then (
+    let j = ref (!at - 1) in
+    while
+      !j >= 0 && (String.trim lines.(!j) = "" || (String.trim lines.(!j)).[0] = '%')
+    do
+      decr j
+    done;
+    if
+      !j >= 0
+      && String.length (body lines.(!j)) > 4
+      && String.sub (body lines.(!j)) 0 4 = "pol "
+    then pol := !j);
+  if !pol < 0 then (
+    incr checks;
+    fail
+      "%s: the gap removal's line or the pol ahead of it is not in the proof, so nothing \
+       was tested"
+      lane)
+  else
+    let cited =
+      List.filter
+        (fun w -> String.length w > 1 && w.[0] = '@')
+        (String.split_on_char ' ' (body lines.(!pol)))
+    in
+    let lemma i =
+      List.mem (label (String.trim lines.(i))) cited
+      && contains lines.(i) "~y_ge_2 +1 y_ge_3"
+    in
+    let gone =
+      label (String.trim lines.(!pol))
+      :: List.filter_map
+           (fun i -> if lemma i then Some (label (String.trim lines.(i))) else None)
+           (List.init (Array.length lines) Fun.id)
+    in
+    let strip_del l =
+      if String.length l > 7 && String.sub l 0 7 = "del id " then
+        let ids =
+          List.filter
+            (fun w -> w <> "" && not (List.mem w gone))
+            (String.split_on_char ' ' (String.sub l 7 (String.length l - 7)))
+        in
+        if ids = [ ";" ] then "" else "del id " ^ String.concat " " ids
+      else l
+    in
+    let kept =
+      List.filteri (fun i _ -> i <> !pol && not (lemma i)) (Array.to_list lines)
+      |> List.map strip_del
+    in
+    check
+      (Printf.sprintf "%s: the pol cites %d lemma(s) stating y <> 2 under a selector" lane
+         (List.length gone - 1))
+      (List.length gone - 1 >= 3);
+    let pbp = proof ^ ".no-ahead.pbp" in
+    let oc = open_out pbp in
+    output_string oc (String.concat "\n" kept);
+    close_out oc;
+    let v, out = check_proof { pbp; opb; fired = true } in
+    let rejected = v = Rejected_on_derivation in
+    check
+      (Printf.sprintf
+         "%s: with the derivation ahead deleted the proof is REFUSED -- the gap removal \
+          rests on it"
+         lane)
+      rejected;
+    check
+      (Printf.sprintf "%s: ... at the checker's RUP wording" lane)
+      (contains out rup_wording);
+    if not (rejected && contains out rup_wording) then show out
+
+(* M7-T34 (D-0170): member over big-M rows. [member_chase_src] is
+   test/models/member_chase_sat.fzn: indomain_max on w1 w2 w3 punches 1, 3, 5 out of y, so
+   b1 dies across the holes of x1 {1,3,5} and y {2,4,6} (the CHASE), and b2's set selector
+   carries y's hole 3 onto x2 (a HOLE TRANSFER); the pigeonhole p1 p2 p3 then fails the
+   branch, so both lines are on the page, each behind its derivation ahead. SATISFIABLE,
+   so the database is never contradictory where these lines are checked (CLAUDE.md, the
+   rup vacuity trap). *)
+let member_chase_src =
+  String.concat ""
+    [
+      "var {1,3,5}: x1 :: output_var;\nvar 1..6: x2 :: output_var;\n";
+      "var 1..6: y :: output_var;\n";
+      "var {0,1}: w1;\nvar {0,3}: w2;\nvar {0,5}: w3;\n";
+      "var 1..2: p1;\nvar 1..2: p2;\nvar 1..3: p3;\nvar bool: b1;\nvar bool: b2;\n";
+      "constraint baguette_member([x1, x2], y, [b1, b2]);\n";
+      "constraint int_ne(y, w1);\nconstraint int_ne(y, w2);\nconstraint int_ne(y, w3);\n";
+      "constraint int_ne(p1, p2);\n\
+       constraint int_ne(p1, p3);\n\
+       constraint int_ne(p2, p3);\n";
+      "constraint int_lin_le([1, 1], [p3, w3], 7);\n";
+      "solve :: int_search([w1, w2, w3, p1, p2, p3, x2, y, x1], input_order, \
+       indomain_max, complete) satisfy;\n";
+    ]
+
+(* b1's death across the holes, and x2 <> 3 from y's hole under b2. Pinned verbatim. *)
+let member_chase_line = "rup +1 ~b1_ge_1 +1 ~y_ge_2 +1 ~w2_ge_3 +1 ~w3_ge_5 >= 1 ;"
+
+let member_transfer_line =
+  "rup +1 ~x2_ge_3 +1 x2_ge_4 +1 ~y_ge_2 +1 ~w2_ge_3 +1 ~w3_ge_5 >= 1 ;"
+
+(* The text lane for one THRESHOLD LEMMA: in the honest proof, find the `pol` written
+   ahead of [line], delete it and the [nth] lemma it weakens back out (a cited id followed
+   by bare literal axioms), their labels taken out of the `del` lines. The FIRST
+   occurrence of [line] -- the copy the derivation cites, written right after the
+   lemmas -- must then be refused at the RUP wording: that lemma is load-bearing, which
+   is what writing it ahead claims. *)
+let member_lemma_lane c ~proof ~opb ~line ~nth name =
+  let lane = Printf.sprintf "%s/%s" c.c_tag name in
+  ran c name;
+  let lines = Array.of_list (String.split_on_char '\n' (read_file proof)) in
+  let label l =
+    match String.index_opt l ' ' with Some k -> String.sub l 0 k | None -> l
+  in
+  let body l =
+    let l = String.trim l in
+    if String.length l > 0 && l.[0] = '@' then
+      match String.index_opt l ' ' with
+      | Some k -> String.sub l (k + 1) (String.length l - k - 1)
+      | None -> l
+    else l
+  in
+  let is_pol l = String.length (body l) > 4 && String.sub (body l) 0 4 = "pol " in
+  let pol = ref (-1) in
+  Array.iteri
+    (fun i l ->
+      if !pol < 0 && is_pol l then (
+        let j = ref (i + 1) in
+        while
+          !j < Array.length lines
+          && (String.trim lines.(!j) = "" || (String.trim lines.(!j)).[0] = '%')
+        do
+          incr j
+        done;
+        if !j < Array.length lines && body lines.(!j) = line then pol := i))
+    lines;
+  let weakened =
+    if !pol < 0 then []
+    else
+      let toks =
+        List.filter (fun w -> w <> "") (String.split_on_char ' ' (body lines.(!pol)))
+      in
+      let is_lit w =
+        w <> ""
+        && w.[0] <> '@'
+        && w <> "+" && w <> "*" && w <> "d" && w <> ";"
+        && not (w.[0] >= '0' && w.[0] <= '9')
+      in
+      (* A lemma is cited and then weakened by axioms: `@cN lit ...` for the first
+         operand, `@cN + lit ...` for every later one (the running sum is added first). A
+         scaled operand (`@cN k *`, the line or the OR row) is not one. *)
+      let rec go acc = function
+        | a :: b :: rest when String.length a > 1 && a.[0] = '@' && is_lit b ->
+            go (a :: acc) (b :: rest)
+        | a :: "+" :: b :: rest when String.length a > 1 && a.[0] = '@' && is_lit b ->
+            go (a :: acc) (b :: rest)
+        | _ :: rest -> go acc rest
+        | [] -> List.rev acc
+      in
+      go [] (List.tl toks)
+  in
+  match List.nth_opt weakened nth with
+  | None ->
+      incr checks;
+      fail "%s: no pol ahead of the line, or fewer than %d lemma(s) in it: nothing tested"
+        lane (nth + 1)
+  | Some gone_lemma ->
+      let gone = [ label (String.trim lines.(!pol)); gone_lemma ] in
+      let strip_del l =
+        if String.length l > 7 && String.sub l 0 7 = "del id " then
+          let ids =
+            List.filter
+              (fun w -> w <> "" && not (List.mem w gone))
+              (String.split_on_char ' ' (String.sub l 7 (String.length l - 7)))
+          in
+          if ids = [ ";" ] then "" else "del id " ^ String.concat " " ids
+        else l
+      in
+      let kept =
+        List.filter
+          (fun l -> not (List.mem (label (String.trim l)) gone))
+          (Array.to_list lines)
+        |> List.map strip_del
+      in
+      let pbp = proof ^ "." ^ name ^ ".pbp" in
+      let oc = open_out pbp in
+      output_string oc (String.concat "\n" kept);
+      close_out oc;
+      let v, out = check_proof { pbp; opb; fired = true } in
+      let at =
+        let key = "pbp:" in
+        match String.index_opt out ':' with
+        | None -> None
+        | Some _ -> (
+            let n = String.length out and k = String.length key in
+            let rec find i =
+              if i + k > n then None
+              else if String.sub out i k = key then Some (i + k)
+              else find (i + 1)
+            in
+            match find 0 with
+            | None -> None
+            | Some i ->
+                let j = ref i in
+                while !j < n && out.[!j] >= '0' && out.[!j] <= '9' do
+                  incr j
+                done;
+                int_of_string_opt (String.sub out i (!j - i)))
+      in
+      let refused_line =
+        match at with
+        | Some n when n >= 1 && n <= List.length kept -> body (List.nth kept (n - 1))
+        | _ -> ""
+      in
+      check
+        (Printf.sprintf
+           "%s: with lemma %s and the pol deleted, the proof is REFUSED at the RUP \
+            wording"
+           lane gone_lemma)
+        (v = Rejected_on_derivation && contains out rup_wording);
+      check
+        (Printf.sprintf
+           "%s: ... and the line refused is the one the lemma was written for" lane)
+        (refused_line = line);
+      if not (v = Rejected_on_derivation && refused_line = line) then show out
 
 let run () =
   (* Without the script nothing below can check anything, and a run that quietly
@@ -2079,6 +2359,98 @@ solve :: seq_search([int_search([b, y], input_order, indomain_min, complete), in
         regular_lane c ~build:build_inv
           ~knob:(knob ~site:"root lemma (D-0146)" Writer.Mutation.Strengthen_rhs)
           "lemma-rhs");
+
+    (* -- M7-T28: member (D-0159) -------------------------------------------------------
+       [member_src] above. Three lanes, each refused at the RUP wording:
+         death-fact  the selector death of b4 under x4 >= 4 with its one tail literal
+                     dropped: b4 /\ x4 = y is then possible;
+         gap-lemma   x3's lemma of the derivation ahead with its last literal -- the
+                     bound x3 >= 3 that excludes 2 -- dropped: x3 = 2 = y is possible;
+         no-ahead    the derivation ahead deleted: the gap removal's own line, refused
+                     alone (two holes, two case splits). *)
+    let solve_mem ?mutation ~name () =
+      let m = F.Builder.of_string ~file:name member_src in
+      let c = Compile.compile m in
+      let opb = Filename.concat dir (name ^ ".opb")
+      and pbp = Filename.concat dir (name ^ ".pbp") in
+      let oc = open_out opb in
+      Encoding.write_opb ~comments:[ "test_mutation: " ^ name ] c.Compile.encoding oc;
+      close_out oc;
+      let oc = open_out pbp in
+      let writer =
+        match mutation with
+        | None -> Writer.create ~comments:true ~audit:true oc
+        | Some mutation -> Writer.create_mutated ~comments:false ~audit:true ~mutation oc
+      in
+      Encoding.start_proof c.Compile.encoding writer;
+      let ctx = Justify.create ~writer ~encoding:c.Compile.encoding in
+      let outcome =
+        Search.solve ~engine:c.Compile.engine ~store:c.Compile.store ~ctx
+          ~check:(fun _ -> true)
+          ?order:c.Compile.order ()
+      in
+      close_out oc;
+      ({ pbp; opb; fired = Writer.mutation_fired writer }, outcome)
+    in
+    let b, outcome = solve_mem ~name:"member" () in
+    check "member: the solver solves it (the instance is what we think it is)"
+      (match outcome with Search.Sat _ -> true | Search.Unsat -> false);
+    let build_mem ~name ~mutation = fst (solve_mem ~mutation ~name ()) in
+    gated ~tag:"member"
+      ~control:(fun () -> control_holds ~tag:"member" ~proof:b.pbp)
+      ~declares:[ "death-fact"; "gap-lemma"; "no-ahead" ]
+      (fun c ->
+        regular_lane c ~build:build_mem
+          ~knob:(knob ~site:"trace: ~b4_ge_1" Writer.Mutation.Drop_literal)
+          "death-fact";
+        regular_lane c ~build:build_mem
+          ~knob:(knob ~site:"clause(~b3_ge_1 ~y_ge_2 y_ge_3" Writer.Mutation.Drop_literal)
+          "gap-lemma";
+        member_no_ahead_lane c ~proof:b.pbp ~opb:b.opb);
+
+    (* -- M7-T34: member over big-M rows (D-0170) -----------------------------------------
+       [member_chase_src] above. Three text lanes, each deleting ONE threshold lemma of a
+       derivation ahead (and its pol) from the honest proof; the line it was written for
+       must be refused at the RUP wording:
+         chase-start  the chase's first lemma (R- at 3 under b1: x1 >= 3 -> y >= 3; the
+                      chase runs from the top, where y's declared overlap with x1 ends
+                      at 5, so its lemmas are the three owner switches 3, 4, 5);
+         chase-last   its last (R- at 5: x1 >= 5 -> y >= 5);
+         transfer     the hole transfer's one lemma (R- at 3 under b2). *)
+    let solve_chase () =
+      let name = "member_chase" in
+      let m = F.Builder.of_string ~file:name member_chase_src in
+      let c = Compile.compile m in
+      let opb = Filename.concat dir (name ^ ".opb")
+      and pbp = Filename.concat dir (name ^ ".pbp") in
+      let oc = open_out opb in
+      Encoding.write_opb ~comments:[ "test_mutation: " ^ name ] c.Compile.encoding oc;
+      close_out oc;
+      let oc = open_out pbp in
+      let writer = Writer.create ~comments:true ~audit:true oc in
+      Encoding.start_proof c.Compile.encoding writer;
+      let ctx = Justify.create ~writer ~encoding:c.Compile.encoding in
+      let outcome =
+        Search.solve ~engine:c.Compile.engine ~store:c.Compile.store ~ctx
+          ~check:(fun _ -> true)
+          ?order:c.Compile.order ()
+      in
+      close_out oc;
+      ({ pbp; opb; fired = false }, outcome)
+    in
+    let b, outcome = solve_chase () in
+    check "member chase: the solver solves it (the instance is what we think it is)"
+      (match outcome with Search.Sat _ -> true | Search.Unsat -> false);
+    gated ~tag:"member-chase"
+      ~control:(fun () -> control_holds ~tag:"member-chase" ~proof:b.pbp)
+      ~declares:[ "chase-start"; "chase-last"; "transfer" ]
+      (fun c ->
+        member_lemma_lane c ~proof:b.pbp ~opb:b.opb ~line:member_chase_line ~nth:0
+          "chase-start";
+        member_lemma_lane c ~proof:b.pbp ~opb:b.opb ~line:member_chase_line ~nth:2
+          "chase-last";
+        member_lemma_lane c ~proof:b.pbp ~opb:b.opb ~line:member_transfer_line ~nth:0
+          "transfer");
 
     census ~dir;
 

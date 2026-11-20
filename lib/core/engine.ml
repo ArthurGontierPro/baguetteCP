@@ -969,6 +969,54 @@ let record_unasked ?(skip = fun _ -> false) t (e : Store.entry) ~lo ~hi ~self =
   if not lo then record ((3 * x) + 1);
   if not hi then record ((3 * x) + 2)
 
+(* M11-complexity-T14: the woken self-watching ids of one entry, sorted DESCENDING with
+   duplicates dropped, in a scratch array instead of a list.
+
+   [watchers_of_new_entries] used [List.sort_uniq] here. On codes-cp's QR48 one entry
+   can wake hundreds of learned clauses (17 787 of the 230 000 entries of the 3-fixed run
+   woke 63 or more), and the list sort allocated O(k log k) cells and called its comparison
+   closure O(k log k) times, 5 % of the cycles. [sort_desc_uniq] is a heapsort over the
+   first [len] cells of [a], with no allocation and no closure: a MIN-heap is built, and its
+   minimum swapped to the end of the shrinking heap [len - 1] times, which leaves the
+   cells in DESCENDING order. Adjacent duplicates are then squeezed out, and the new length
+   is returned. The result is the list [List.sort_uniq (fun a b -> Int.compare b a)] gave,
+   as a prefix of [a], so the wake order is the same.
+
+   The scratch is module-level and grown on demand, like lib/core/prop/pb.ml's: the walk
+   writes every cell it reads ([0 .. len - 1]) before reading it, calls no propagator and
+   no walk while it holds the cells, so nothing one walk leaves there is read by another. *)
+let wake_scratch = ref (Array.make 64 0)
+
+let rec sift_min (a : int array) i n =
+  let l = (2 * i) + 1 in
+  if l < n then
+    let c = if l + 1 < n && a.(l + 1) < a.(l) then l + 1 else l in
+    if a.(c) < a.(i) then (
+      let x = a.(i) in
+      a.(i) <- a.(c);
+      a.(c) <- x;
+      sift_min a c n)
+
+let sort_desc_uniq (a : int array) len =
+  if len <= 1 then len
+  else (
+    for i = (len / 2) - 1 downto 0 do
+      sift_min a i len
+    done;
+    for n = len - 1 downto 1 do
+      let x = a.(0) in
+      a.(0) <- a.(n);
+      a.(n) <- x;
+      sift_min a 0 n
+    done;
+    let m = ref 1 in
+    for i = 1 to len - 1 do
+      if a.(i) <> a.(!m - 1) then (
+        a.(!m) <- a.(i);
+        incr m)
+    done;
+    !m)
+
 let watchers_of_new_entries ?self t store ~since =
   (* M2-T6: [self] is the instance that pushed these entries. When its claim is
      honoured, its own id is dropped from every entry's watcher list -- a subsequence
@@ -991,19 +1039,26 @@ let watchers_of_new_entries ?self t store ~since =
       t.ctr.c_masked <- t.ctr.c_masked + 1;
       false)
   in
-  (* M6-T22: the self-watching instances of one slot that want this entry, onto [dl].
-     A copy of the slice under BAGUETTE_DEBUG, as before D-0142 moved the I-P7 check
-     after the walk: nothing in the walk resyncs a slice now, and the copy costs nothing
-     that counts. *)
-  let dl = ref [] in
+  (* M6-T22: the self-watching instances of one slot that want this entry, into the
+     scratch [dl] at [!dn] ([sort_desc_uniq]'s header). A copy of the slice under
+     BAGUETTE_DEBUG, as before D-0142 moved the I-P7 check after the walk: nothing in the
+     walk resyncs a slice now, and the copy costs nothing that counts. *)
+  let dn = ref 0 in
   let collect change v sl =
     let nd = t.dyn_len.(sl) in
-    if nd > 0 then
+    if nd > 0 then (
+      if Array.length !wake_scratch < !dn + nd then (
+        let b = Array.make (2 * (!dn + nd)) 0 in
+        Array.blit !wake_scratch 0 b 0 !dn;
+        wake_scratch := b);
+      let dl = !wake_scratch in
       let ids = if Debug.enabled then Array.sub t.dyn_ids.(sl) 0 nd else t.dyn_ids.(sl) in
       for j = 0 to nd - 1 do
         let id = ids.(j) in
-        if wants id change v then dl := id :: !dl
-      done
+        if wants id change v then (
+          dl.(!dn) <- id;
+          incr dn)
+      done)
   in
   for i = Store.trail_length store - 1 downto since do
     let e : Store.entry = Store.trail_entry store i in
@@ -1032,23 +1087,19 @@ let watchers_of_new_entries ?self t store ~since =
         (* M6-T22: the self-watching instances that want this entry, DESCENDING, to
            be merged into the static ones by id (see the wake index's header). One
            instance can sit in two of the slots asked (two watches on [x]), hence the
-           [sort_uniq]; with one slot per variable there was nothing to remove and it
-           is the [sort] it replaces. *)
-        dl := [];
+           duplicates [sort_desc_uniq] drops. [dk] is the next one to merge. *)
+        dn := 0;
         if nd > 0 then (
           collect change e.var sl;
           if lo then collect change e.var (sl + 1);
           if hi then collect change e.var (sl + 2);
-          match !dl with
-          | _ :: _ :: _ -> dl := List.sort_uniq (fun a b -> Int.compare b a) !dl
-          | _ -> ());
+          dn := sort_desc_uniq !wake_scratch !dn);
+        let dl = !wake_scratch and dk = ref 0 in
         let rec flush_above s =
-          match !dl with
-          | d :: rest when d > s ->
-              acc := d :: !acc;
-              dl := rest;
-              flush_above s
-          | _ -> ()
+          if !dk < !dn && dl.(!dk) > s then (
+            acc := dl.(!dk) :: !acc;
+            incr dk;
+            flush_above s)
         in
         List.iter
           (fun id ->
@@ -1609,19 +1660,32 @@ let check_consistency_exn (t : t) (store : Store.t) : unit =
    the end. A starved instance is caught at the slot it was skipped at, before any later
    wake could cover it up. *)
 
-(* M6-T22: the seed's min-heap of dirty ids ([t.heap]). *)
-let heap_push t id =
-  let h = t.heap in
-  let rec up i =
-    if i > 0 then
-      let p = (i - 1) / 2 in
-      if h.(p) > id then (
-        h.(i) <- h.(p);
-        up p)
-      else h.(i) <- id
+(* M6-T22: the seed's min-heap of dirty ids ([t.heap]).
+
+   M11-complexity-T14: [heap_up] and [heap_down] are top-level functions of the array
+   rather than local closures, so a push or a pop allocates nothing; one pop per SEEDED
+   run, 266 per node on codes-cp's QR48. The moves are the ones the closures made. *)
+let rec heap_up (h : int array) id i =
+  if i > 0 then
+    let p = (i - 1) / 2 in
+    if h.(p) > id then (
+      h.(i) <- h.(p);
+      heap_up h id p)
     else h.(i) <- id
-  in
-  up t.heap_len;
+  else h.(i) <- id
+
+let rec heap_down (h : int array) x len i =
+  let l = (2 * i) + 1 in
+  if l >= len then h.(i) <- x
+  else
+    let c = if l + 1 < len && h.(l + 1) < h.(l) then l + 1 else l in
+    if h.(c) < x then (
+      h.(i) <- h.(c);
+      heap_down h x len c)
+    else h.(i) <- x
+
+let heap_push t id =
+  heap_up t.heap id t.heap_len;
   t.heap_len <- t.heap_len + 1
 
 let heap_pop t =
@@ -1629,19 +1693,7 @@ let heap_pop t =
   let top = h.(0) in
   let len = t.heap_len - 1 in
   t.heap_len <- len;
-  (if len > 0 then
-     let x = h.(len) in
-     let rec down i =
-       let l = (2 * i) + 1 in
-       if l >= len then h.(i) <- x
-       else
-         let c = if l + 1 < len && h.(l + 1) < h.(l) then l + 1 else l in
-         if h.(c) < x then (
-           h.(i) <- h.(c);
-           down c)
-         else h.(i) <- x
-     in
-     down 0);
+  if len > 0 then heap_down h h.(len) len 0;
   top
 
 (* Mark [id] dirty for this call's seed: the flag and the heap together. *)
@@ -1822,9 +1874,7 @@ let propagate ?stop ?(poll_runs = default_poll_runs) (t : t) (store : Store.t) :
          [check_attribution] then reads it back on both arms -- a propagator may push
          prunings and *then* conflict, so the conflict arm has new entries to check too,
          which is why the check is not simply folded into [watchers_of_new_entries]. *)
-      match
-        Store.with_running store inst.Propagator.id (fun () -> inst.Propagator.run store)
-      with
+      match Store.run_as store inst.Propagator.id inst.Propagator.run store with
       | Propagator.Conflict c ->
           check_attribution t inst store ~since:before ~conflict:(Some c);
           t.ctr.c_contra <- t.ctr.c_contra + 1;
@@ -1836,8 +1886,12 @@ let propagate ?stop ?(poll_runs = default_poll_runs) (t : t) (store : Store.t) :
           if pruned then t.ctr.c_effectful <- t.ctr.c_effectful + 1;
           bump_by_id t id ~eff:pruned;
           if pruned && Debug.enabled && vetoes_self t id then check_claim inst store;
-          let woken = watchers_of_new_entries ~self:id t store ~since:before in
-          List.iter wake woken;
+          (* M11-complexity-T14: a run that pushed nothing has no entry to walk, and the
+             walk would return [] after building its closures; nine runs in ten on
+             codes-cp's QR48 are such runs. [t.declined] is [[]] here either way: every
+             walk and every seed is followed by [check_declined], which empties it. *)
+          if pruned then
+            List.iter wake (watchers_of_new_entries ~self:id t store ~since:before);
           if Debug.enabled then check_declined t store;
           (* M6-T21: AFTER the run and its wakes, so the run is whole whatever the poll
              says. Not on the [Conflict] arm: that call is leaving anyway. *)
