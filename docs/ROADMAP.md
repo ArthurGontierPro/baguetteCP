@@ -541,3 +541,33 @@ applicability on the Challenge and the effect of the encoding are real questions
 | M15-symmetry-T5 | Proof size: witnesses list every moved variable (69 280 per line on QR48); the VeriPB addition of T1 may shorten them | PARKED | later. D-0177: it does not (it shortens the order; a witness is still one pair per moved variable). Lead: generators with smaller support (satsuma's generator optimisation), so shorter transversal products |
 | M15-symmetry-T6 | Applicability on the Challenge: share of instances with a nontrivial group on baguette's `.opb`, cost of dejavu, gain or loss | PARKED | later |
 | M15-symmetry-T7 | The encoding decides what is visible: XOR chains hide everything, order-encoded integers show their values only up to reversal, bit encodings hide linear symmetries, and equivalent rows written differently (gcd, saturation) get different colours | PARKED | later; codes-cp `notes/dejavu-plan.md` has the cases |
+
+## M16-file-review — file by file: the complexity of each algorithm and the fitness of each data structure
+
+Opened 2026-11-20 at the user's request. M11-complexity removed the costs that GROW with the run,
+driven by the lane's profiles (D-0140's inventory, D-0142 to D-0169). This milestone is the
+systematic pass it was not: every module read in turn, for its constant factors and its data
+structures (a list where an array belongs, a string-keyed table where an int suffices, a closure
+per call, a sort where a merge would do) and for the cold quadratic paths no benchmark reaches yet
+(element's and alldiff's whole-trail walks were each found by accident, D-0155, D-0156). baguette is
+70 to 120 times slower per node than Gecode on the same tree (D-0169).
+
+The rule for every tier, so that a review does not turn into changes that gain nothing:
+1. **A table per file**: each function, its complexity in the sizes that matter (domain width, trail
+   length, number of learned constraints, arity), its data structures, and its share of the lane's
+   profiles (`perf` with frame pointers, the `baguette-fp` switch, D-0145's method) and of the codes
+   same-tree instances (D-0169). The table goes in the tier's D-record.
+2. **Change only what is hot or asymptotically wrong**, every proof and every `--stats` counter
+   byte-identical unless a separate decision says otherwise; instructions per node before and after
+   at equal nodes, binaries hashed; the new rule and why it is sound in the module header
+   (CLAUDE.md, "Optimise, but keep clarity").
+3. A cold path that is quadratic gets a test that would show it (a model at a width or arity where
+   it bites, within the 4 GB cap) or a sentence in the header saying why it cannot grow.
+
+| ID | Task | Status | Notes |
+|---|---|---|---|
+| M16-file-review-T1 | **The core**: `store.ml`, `domain.ml`, `engine.ml`, `var.ml`, `propagator.ml`, `search.ml` (the per-node path: trail, wakes, queue, branching, backtracking) | IN PROGRESS | Opened 2026-11-20 |
+| M16-file-review-T2 | **The propagators**: `prop/linear.ml` and `prop/clause.ml`/`prop/pb.ml` first (the most run), then the globals one by one (`alldiff`, `element`, `gcc`, `cumulative`, `regular`, `inverse`, `member`, `maxmin`, `arith`, `reif*`, `ne`, `lin_eq`) | TODO | one sub-task per family if large |
+| M16-file-review-T3 | **Learning**: `learn.ml`, `analysis.ml`, `pb_analysis.ml`, `learned.ml`, `retention.ml`, `ladder.ml`, `reduce.ml`, `restart.ml`, `phase.ml`, `activity.ml` | TODO | |
+| M16-file-review-T4 | **The proof side**: `explanation.ml`, `justify.ml`, `trace.ml`, `lib/proof/writer.ml`, `encoding.ml`, `opb.ml`, `lit.ml` | TODO | after D-0172 (the DAG) settles |
+| M16-file-review-T5 | **The front end and setup**: `lexer.ml`, `parser.ml`, `builder.ml`, `compile.ml`, `output.ml` (the cost before node 1; D-0143) | TODO | |
