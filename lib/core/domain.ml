@@ -11,6 +11,16 @@
    store restores a domain by writing back the old [t], so a [t] must never share mutable
    state with its successors (invariant I-T1).
 
+   M16-file-review-T1 (D-0186), the costs that grow with the WIDTH, and why none of them
+   is on a per-entry path of the engine: [remove] of an interior value copies the bitset
+   (O(span / 8), so punching every hole of a domain along one branch is O(span^2 / 8));
+   [size] of a domain with holes counts the bits between the bounds (O(span / 8)), and
+   [Search.first_fail] asks it per candidate per node; [classify] of a hole entry walks
+   the bounds (O(width)) and is asked by the proof side ([Trace]) only, the engine reading
+   an entry's kind without it. [span] is at most [max_hole_span] (2^20 values, a 128 KB
+   bitset). The lane's domains are at most 10 000 values wide, and none of the three
+   reaches 1.5 % of a lane profile (D-0186's table).
+
    Invariants (docs/INVARIANTS.md):
      I-D1  lo <= hi; an empty domain is never constructed, it is reported as [Failed]
      I-D2  lo and hi are in the domain: holes never sit at a bound

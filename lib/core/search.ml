@@ -1171,6 +1171,9 @@ let staged_of (o : order) : staged option =
 let sequence_phases : (order, phase list) Ephemeron.K1.Bucket.t =
   Ephemeron.K1.Bucket.make ()
 
+(* D-0186: [full] builds a table of every candidate per call, O(variables) per node once
+   no phase has a live variable and [dfs] falls back on it, the order of the [unfixed]
+   array it is handed. The staged form below answers every node where a phase is live. *)
 let sequence ?(fallback = spec_order) (phases : phase list) : order =
   let full store cands =
     let live = Hashtbl.create (2 * Array.length cands) in
@@ -2623,7 +2626,11 @@ let apply_globals store stats : Store.conflict option =
   in
   go stats.globals_fwd
 
-(* File a learned unit, newest last in [globals_fwd] and newest first in [globals_rev]. *)
+(* File a learned unit, newest last in [globals_fwd] and newest first in [globals_rev].
+
+   D-0186: [push_global]'s append and [register_learned]'s duplicate test are O(units)
+   per learned unit, O(units^2) over a run. Left so on purpose: a unit is a learned clause
+   of width one, and D-0140's instances learn 6 to 27 of them in a run. *)
 let push_global stats g =
   stats.globals_rev <- g :: stats.globals_rev;
   stats.globals_fwd <- stats.globals_fwd @ [ g ]
@@ -3253,6 +3260,8 @@ and branch_split engine store ctx trace stats cfg order decisions (dec : decisio
   (* M1-T36. One decision taken, and this decision sits one deeper than the ancestors
      it was handed. *)
   stats.decisions <- stats.decisions + 1;
+  (* D-0186: O(depth) per node, a walk of one list cell per open level, which no profile
+     of the lane shows. *)
   let depth = List.length decisions + 1 in
   if depth > stats.max_depth then stats.max_depth <- depth;
   Store.new_level store;
