@@ -257,6 +257,102 @@ let test_window_straddle () =
     "var 0..1: x;\nsolve satisfy;\nsolve satisfy;\n";
   same "a truncated file (end inside an item)" "var 0..1: x;\nconstraint int_le(x,"
 
+(* M16-file-review-T5 (D-0193): an integer literal is folded into its value where its
+   digits lie, and [int_of_string_opt] is kept for one that straddles the window or does
+   not fit. Every literal below, through every window from 2 to 17 and the default, must
+   come out as [int_of_string_opt] reads its text: max_int, max_int + 1 (refused, quoted
+   whole), leading zeros and short ones. *)
+let test_int_literals () =
+  let lits =
+    [
+      "0";
+      "7";
+      "0000000000000000000000000017";
+      "4611686018427387903";
+      "1234567890123";
+      "99";
+      "100";
+      "4611686018427387900";
+    ]
+  in
+  let expected = List.map int_of_string lits in
+  List.iteri
+    (fun k (text, v) ->
+      let src1 =
+        Printf.sprintf "var 0..1: x;\nconstraint int_le(x, %s);\nsolve satisfy;\n" text
+      in
+      List.iter
+        (fun window ->
+          match
+            F.Error.catch (fun () -> F.Builder.of_string ~file:"<i>" ?window src1)
+          with
+          | Ok m ->
+              check
+                (Printf.sprintf "int literal %d (%s) is %d through window %s" k text v
+                   (match window with None -> "default" | Some w -> string_of_int w))
+                (List.map (fun c -> c.M.k) m.M.constraints
+                = [ M.Int_le (M.Var 0, M.Const v) ])
+          | Error _ -> check (Printf.sprintf "int literal %d (%s) parses" k text) false)
+        (None :: List.init 16 (fun i -> Some (i + 2))))
+    (List.combine lits expected);
+  List.iter
+    (fun window ->
+      match
+        F.Error.catch (fun () ->
+            F.Builder.of_string ~file:"<i>" ?window
+              "var 0..1: x;\n\
+               constraint int_le(x, 004611686018427387904);\n\
+               solve satisfy;\n")
+      with
+      | Ok _ -> check "int literal max_int + 1 is refused" false
+      | Error e ->
+          check_str
+            (Printf.sprintf
+               "int literal max_int + 1 is refused, quoted whole, through window %s"
+               (match window with None -> "default" | Some w -> string_of_int w))
+            ~expected:
+              "<i>:2:22: error: integer literal `004611686018427387904` does not fit in \
+               an OCaml int"
+            ~actual:(F.Error.to_string e))
+    (None :: List.init 16 (fun i -> Some (i + 2)))
+
+(* M16-file-review-T5 (D-0193): the builder's variables by index are an array grown by
+   doubling from 1024. Past the first growth, a variable is still found by its index (an
+   error naming it), and an undomained one inferred after the growth gets its domain. *)
+let test_many_variables () =
+  let n = 3000 in
+  let decls =
+    String.concat "" (List.init n (fun i -> Printf.sprintf "var 0..1: v%d;\n" i))
+  in
+  let src =
+    decls
+    ^ "var int: y;\n\
+       array [1..2] of int: a = [1, 2];\n\
+       constraint int_lin_eq([1, -1], [y, v2999], 0);\n\
+       solve satisfy;\n"
+  in
+  (match F.Error.catch (fun () -> F.Builder.of_string ~file:"<n>" src) with
+  | Ok m ->
+      check "many variables: 3001 in declaration order"
+        (Array.length m.M.vars = n + 1
+        && String.equal m.M.vars.(2047).M.v_name "v2047"
+        && String.equal m.M.vars.(n).M.v_name "y");
+      check "many variables: y inferred after the array grew"
+        (m.M.vars.(n).M.v_dom = M.Drange (0, 1))
+  | Error e ->
+      check_str "many variables: builds" ~expected:"" ~actual:(F.Error.to_string e));
+  let bad =
+    decls
+    ^ "array [1..2] of int: a = [1, 2];\n\
+       constraint int_le(a[v2500], 1);\n\
+       solve satisfy;\n"
+  in
+  match F.Error.catch (fun () -> F.Builder.of_string ~file:"<n>" bad) with
+  | Ok _ -> check "many variables: a variable index is refused" false
+  | Error e ->
+      check "many variables: the refusal names v2500"
+        (contains ~needle:"variable `v2500` was given" (F.Error.to_string e))
+
 let test_misc_accepts () =
   let ok name src =
     match F.Error.catch (fun () -> F.Builder.of_string ~file:"<t>" src) with
@@ -1744,6 +1840,8 @@ let () =
     test_ne_sat ());
   test_kitchen_sink ();
   test_window_straddle ();
+  test_int_literals ();
+  test_many_variables ();
   test_misc_accepts ();
   test_constant_folding ();
   test_rejections ();
