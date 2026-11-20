@@ -638,9 +638,18 @@ let record_citation t (w : Writer.t) ~citing ~citing_level ~cited ~cited_level ~
    through [emit_line], and an id [Justify] minted and memoised is [Justify]'s. *)
 let derive_ahead (ctx : Justify.ctx) store (e : Store.entry) =
   if e.Store.ahead then
-    match Explanation.force (Store.explanation store e) with
-    | Explanation.Decision _ -> ()
-    | forced -> ignore (Justify.emit ctx forced : Writer.cid)
+    (* M11-complexity-T13 (D-0168): the explanation is emitted as it stands, a thunk
+       and not its forced head, so that [Justify] records the line on the thunk and
+       releases its tree. A released thunk was emitted, so it is no decision, and is not
+       forced again just to be asked. *)
+    let why = Store.explanation store e in
+    match why with
+    | Explanation.Deferred th when Explanation.line_of th <> Explanation.No_line ->
+        ignore (Justify.emit ctx why : Writer.cid)
+    | _ -> (
+        match Explanation.force why with
+        | Explanation.Decision _ -> ()
+        | _ -> ignore (Justify.emit ctx why : Writer.cid))
 
 (* Write every line the trail owes, oldest first, and leave the writer on the level it
    was on. [Search] emits the nogood straight after, at the branch's own level, so this
