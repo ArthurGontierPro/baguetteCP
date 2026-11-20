@@ -509,13 +509,18 @@ let holes_of_domain (v : Model.var) =
    and a collision would silently merge their order literals inside [Opb.normalise],
    producing a row that is not the model's. [Encoding] keys on the unsanitised name and
    so would not notice. Checked once, here, because this is the only place that knows
-   the whole variable list. *)
+   the whole variable list.
+
+   M16-file-review-T5 (D-0193): the table is over [String] and sized for every variable
+   at once. It was a polymorphic [Hashtbl] created at 64 and doubled about fourteen times
+   on a million-variable model, re-hashing every name at each doubling. It is only
+   probed, never iterated, so its layout is not observable. *)
 let check_name_collisions (m : Model.t) =
-  let seen = Hashtbl.create 64 in
+  let seen = Model.Names.create (max 64 (Array.length m.Model.vars)) in
   Array.iter
     (fun (v : Model.var) ->
       let s = Lit.sanitize v.Model.v_name in
-      match Hashtbl.find_opt seen s with
+      match Model.Names.find_opt seen s with
       | Some other when not (String.equal other v.Model.v_name) ->
           Error.failf v.Model.v_pos
             "variables `%s` and `%s` both become `%s` in the .opb (identifiers are \
@@ -525,7 +530,7 @@ let check_name_collisions (m : Model.t) =
       | Some _ ->
           Error.failf v.Model.v_pos "variable `%s` is declared more than once"
             v.Model.v_name
-      | None -> Hashtbl.replace seen s v.Model.v_name)
+      | None -> Model.Names.replace seen s v.Model.v_name)
     m.Model.vars
 
 (* ------------------------------------------------------------------------ compile *)
