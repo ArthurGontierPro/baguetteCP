@@ -22826,3 +22826,83 @@ because it is the slowest stage on the largest models.
   are what would bring the chain toward the x2 of the test models. A cheaper derivation of element's
   direct-encoding clauses than 93 043 `rup` lines would help black-hole now.
 - T6's families: 34 of the 201 instances (`int_times` 19, `cumulative` 6, `regular` 5, `int_abs` 4).
+
+## D-0187  [AUTONOME] M14-e2e-verification-T3: baguette writes the end-to-end prefix itself under `--e2e`, off by default, against a second naming contract pinned to `cake_pb_cp` `ca92491e`
+
+Status: DECIDED in autonomous mode on 2026-11-20, before the work that depends on it. Section 6 is
+filled in when the work ends.
+Date: 2026-11-20
+Task: M14-e2e-verification-T3 (agent-e2e3, `wave55-e2e3`)
+Touches: this record, `docs/PROOF-FORMAT.md` §3 (a second contract), a new `lib/proof/e2e.ml`,
+`lib/proof/encoding.ml` (additive), `lib/flatzinc/compile.ml` (each row tagged with the FlatZinc
+constraint it comes from), `bin/main.ml` (the flag), `tools/e2e/`, `scripts/e2e_lane.sh`.
+
+### 1. Context
+
+The user marked T3 "**User decision**: a second naming contract, and whether `--e2e` becomes a
+default". The user is away (CLAUDE.md, "Mode autonome"), so this record decides and says why.
+
+What D-0182 measured on the first 100 Challenge instances of the series (96 certified by `cake_pb_cp`):
+
+- the chain costs a median ×12.7 of `veripb` alone, and the cost is the prefix that re-derives
+  baguette's `.opb` from cake's. On `2011_black-hole_17` the prefix alone takes 1 606 s of the
+  1 607 s of elaboration, with 93 043 `rup` pins;
+- the external bridge (`tools/e2e/bridge.py`) is the slowest stage on the largest models. It takes
+  3 459 s in all, and 2 408 s on `2015_gfd-schedule_n120f5d50m50k20`, 1 535 s on
+  `2019_zephyrus_14__6__6__3`, 1 272 s on `2015_p1f_13`, 423 s on `word-equations_..._140-int` and
+  382 s on `2023_sudoku_fixed_sudoku_p48` (whose `veripb --elaborate` takes 3.1 s). It is a
+  matcher. It rediscovers from two files where each of baguette's rows comes from, and that search
+  is close to quadratic in the rows over one variable.
+
+Found while deciding, measured on `alldiff_const_sat` with veripb 3.0.2 `d5644ca4`. A proof whose
+`f N` line is `f 0` or `f 99` is refused ("Checking error at ...:2"), and a proof with NO `f` line is
+`s VERIFIED`, its elaborated core carrying the right `f 11;`. So baguette does not need to know how
+many rows cake writes. The contract only has to cover the rows baguette cites, by label and content.
+
+### 2. The options
+
+| | what | gains | costs |
+|---|---|---|---|
+| (a) T3 as designed | under `--e2e`, baguette writes the prefix (atoms, the two halves of B = l + S, the ladder, each cake row's substitution, each pin) from what it knows of each row's origin, and from a replica of the rows cake writes for the covered keywords | the bridge stage disappears: the prefix is written in time linear in the rows, with no matching; a row's candidates are those of its own constraint, so no search; each family's derivation can be chosen where the knowledge is (`ia`/`pol` where the bridge needs `rup`) | a second normative contract (PROOF-FORMAT §3) that must follow cake's encoder; OCaml code in `lib/proof/` and three small hooks |
+| (b) keep the external bridge and make it faster | index the matcher by constraint (cake's labels carry the `.scp` name), port it to a compiled language | no contract inside baguette, nothing in `lib/` | the bridge still recovers what baguette knows; a cheaper prefix needs the same per-family derivations, written in a second place that must guess the origin first |
+| (c) defer | nothing | nothing | the slowest stage stays; T6 and T7 build on an external tool |
+
+### 3. The choice
+
+**(a), with `--e2e` OFF by default.** Every default byte stays as it is (the gate compares the 207
+models' four artefacts with main's). Whether `--e2e` ever becomes a default is left to the user.
+
+Why:
+
+1. **A stale contract is refused, it is never certified.** The proof is checked against the `.opb`
+   that the verified encoder wrote, which baguette never reads. If cake's encoder changes a label, a
+   coefficient or a big-M, a line of baguette's prefix fails ("not implied", or an unknown label), and
+   the chain says FAIL. The contract costs availability when cake moves, and nothing in soundness.
+2. **It is reversible.** A flag, one new module, and hooks that do nothing unless the flag is on.
+3. **The knowledge belongs where the rows are made.** compile.ml knows which FlatZinc constraint
+   posted each row and in which role. The bridge spends up to 2 408 s recovering that from text.
+   Option (b) would have to keep recovering it.
+
+The contract is pinned to `cake_pb_cp` sha256 `ca92491e` (CakePB `438b8f83`, built from CakeML
+`14856fcf`), and transcribed from that commit's HOL4 sources (`cp_encScript.sml`,
+`cp_to_ilpScript.sml`, `ilpScript.sml`, `ilp_to_pbScript.sml`, `cp_to_ilp_linearScript.sml`,
+`cp_to_ilp_primScript.sml`, `cp_to_ilp_countingScript.sml`, `int_bitwiseExtraScript.sml`), not
+guessed from its output. The translator's names are part of it too (`tools/e2e/fzn2scp.py`): the k-th
+FlatZinc constraint is `.scp` constraint `c<k>`, and a variable is its FlatZinc name with every
+character outside `[A-Za-z0-9_]` replaced by `_`.
+
+**Scope of this task.** The families of T2 first (`int_lin_le`, `int_lin_eq`, `int_lin_ne`, `int_le`,
+`int_lt`, `int_eq`, `int_ne`, `all_different_int`), then T4's Boolean and reified ones, then T5's as
+time allows. Under `--e2e`, a builtin outside the covered set, a variable on the bits arm (T7) or
+any other shape the contract does not cover makes baguette refuse `--e2e` with a message naming it,
+before any search. The external bridge stays the lane's path for everything else.
+
+### 4. How to revert
+
+Revert the commits prefixed `M14-e2e-verification-T3:` on branch `wave55-e2e3` (or their merge).
+Nothing else depends on them. The external bridge and `make e2e`'s existing path are not changed by
+this task, so reverting leaves the lane exactly as D-0182 left it.
+
+### 5. What this does not decide
+
+Whether `--e2e` becomes a default, and whether the bridge is retired. Both stay the user's.
