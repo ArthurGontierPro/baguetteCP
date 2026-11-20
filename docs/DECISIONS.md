@@ -23008,8 +23008,9 @@ decisions of section 5. Results in `/cluster/arthur/baguette-results/wave55-e2e3
 
 ## D-0188  [AUTONOME] M14-e2e-verification-T3b: T5's globals in the solver-written prefix, each row derived by one `pol` where the bridge needed `rup`
 
-Status: DECIDED in autonomous mode on 2026-11-20, before the work that depends on it; section 6 is
-the result.
+Status: DONE. DECIDED in autonomous mode on 2026-11-20 before the work that depended on it (commit
+`27783f1`, sections 3.4 and 3.5 added during the work, each before the series that measures it);
+section 6 is the result.
 Date: 2026-11-20
 Task: M14-e2e-verification-T3b (agent-e2e3b, `wave55-e2e3b`)
 Touches: this record, `lib/proof/e2e.ml`, `lib/flatzinc/compile.ml` (`e2e_spec` and the e2e loop),
@@ -23124,3 +23125,136 @@ left them, and nothing outside `--e2e` changes.
 
 Whether `--e2e` becomes a default, and whether the bridge is retired (D-0187 §5): both stay the
 user's.
+
+### 6. Result
+
+**What was built** (`lib/proof/e2e.ml`, about 1 800 lines now; `compile.ml`'s `e2e_spec` and two
+hooks; one `Encoding` hook; `Model.constr.c_id`). Under `--e2e`, T5's globals are covered:
+`array_int_element`, `global_cardinality` (with `count`, `at_least`/`at_most`/`exactly`, closed and
+low/up, and a repeated variable's copy), `array_int_maximum/minimum` and `int_max/min`, `inverse`,
+`member` (int and bool). Their cake rows are transcribed from the HOL4 sources of `14856fcf`
+(section 2, PROOF-FORMAT §3b's table). How each family's rows are pinned:
+
+| family | how baguette's rows are derived from cake's |
+|---|---|
+| element | each clause `[i = p] -> z >= w` (`<= w`) is ONE `pol` under its own label: `@c[N][<p>le] @A2[z_ge_w] + s` (resp. `<p>ge` and `@A1[z_ge_(w+1)]`), then the index's eq atom replaced by its ladder literals (`@Ep` for an interior p, the eq atom's clause at an end); out-of-range positions from `@c[N][lb]`/`[ub]` the same way. No `rup`. |
+| global_cardinality | each half of `sum_i [x_i = v] = c_v`: cake's `<j>_ge`/`<j>_le` substituted, its eq atoms replaced exactly by `@Em`/`@Ep`, then `ia`; a copy's share moved onto it by `@Y1`/`@Y2` |
+| maxmin | `x_i <= m` `ia` against cake's `<i>le` (resp. `lle`/`rle`); each `m >= v -> OR x_i >= v` ONE `pol`: every operand's `[r]` row linearised at the clause, plus `@c[N][al1]`, saturated |
+| inverse | channel clauses `ia` against cake's `<i>_<j>ge|le` with both eq atoms as indicators (weakened); range units by one `pol` of `X_<k>_lb|ub` |
+| member | the four guard clauses by one `pol` of `c<k>_<p>[ge|le]` linearised; the big-M rows over the overlap `ia` after weakening, or after resolving the literal past the overlap with the row's own guard clause (`@cK`, already pinned) |
+
+And for every family: each clause stating an eq atom's value is one `pol` of its definition, where
+D-0187 used `rup` (section 3.4); a candidate over a superset of a row's variables is weakened
+(section 3.5).
+
+The prefix's tally reports the new kinds: `rows by one pol of a linearised cake row` (a pin that IS
+the pol, under the row's label: 82 824 on black-hole_17) and `rows ia through one`.
+
+**Decisions of section 3, as they turned out.** 3.1 (`c_id`) as decided, its own commit `468139b`.
+3.2 (lazy substitutions) as decided. 3.3: the gcc copy is COVERED, not refused: its rungs are
+defined as its original's by a red pair each (`@Y1`, `@Y2`, the bridge's names), cake's rows
+naming the original k times are split onto the copies, and the copy's `int_eq` rows are the sums
+of the pairs; `gcc_repeat_sat`, `gcc_repeat_unsat` and `gcc_repeat_free_sat` verify. 3.4 as
+recorded.
+
+**The lane** (`make e2e`, `scripts/e2e_lane.sh -j 2`, run `lane4`, dev binary md5 `6bcc8e9f` =
+`16f0aa3`, veripb 3.0.2 `d5644ca4`, `cake_pb_cp` `ca92491e`; `lane3` on `74d1746` gave the same
+counts):
+
+| pass | D-0187 | now |
+|---|---|---|
+| 1, bridged (unchanged) | 188 VERIFIED, 19 SKIPPED, 0 FAIL | the same |
+| **1b, written by the solver** | 117 VERIFIED, 71 outside `--e2e` | **188 VERIFIED**, 0 outside `--e2e`'s families, 19 outside the translator's, **0 FAIL, 0 disagreeing** with pass 1 |
+| 2, controls | 31 of 31 | 31 of 31 |
+| **2b, solver controls** | 22 of 22 | **32 of 32** |
+| 3, validation | 187 AGREE, 1 UNCHECKED | the same |
+
+**The ten new controls** (pass 2b), each refused at the expected line in the checker's sentence:
+`pin-stronger` on `element_sat` (`@c13`), `element_learn_prunes_sat` (`@c10`), `gcc_forced_sat`
+(`@c4`), `gcc_const_counts_sat` (`@c7`), `maxmin_sat` (`@c11`), `maxmin_int_max_sat` (`@c9`),
+`inverse_sat` (`@c31`), `member_sat` (`@c25`), `member_gap_sat` (`@c8`), each at its `ia` with
+"Expected constraint is not syntactically implied by the constraint at the hint." (an element
+clause or a maxmin clause written as one `pol` is corrupted as that `pol` under `@Wmut` and an
+`ia` of the row with degree + 1, `tools/e2e/mutate.py`); and `copy-witness` on
+`gcc_repeat_free_sat`, the solver's `@Y1` with the witness `y -> ~x`, refused at that `red` with
+"Proofgoal #1 could not be autoproven.". Each `pin-stronger` claim is FALSE in at least one of
+the model's solutions (enumerated by `scpsem.py`; `falsity.txt` in the results directory): 2 of 2,
+1 of 1, 2 of 2, 2 of 2, 9 of 9, 7 of 7, 2 of 2, 48 of 48 and 48 of 66 solutions violate it. So
+each refusal judges a false claim, not a vacuous one (D-0053, D-0066). What a refused
+`pin-stronger` shows is that the pin does not accept a stronger row; it does not show that no
+derivation of one exists.
+
+**The Challenge.** Release binary md5 `f1a6dce7` (`make release` of `16f0aa3`) for the solver-written
+chain (`tools/e2e/measure_e2e.sh`: solve with `--e2e`, `veripb --elaborate` on cake's `.opb`,
+`cake_pb_cp` on the core, then the PREFIX alone the same way) and `veripb` alone on baguette's own
+files with the same binary (`alone.sh`); 103 instances, D-0182's 96 (its first 100 rows of
+`series3` that `cake_pb_cp` verified) and the 46 of `series3` in T5's families, 8 at a time, under
+`systemd-run --user --scope -p MemoryMax=32G`, load average 85 to 95. A same-period CONTROL ran the
+BRIDGED chain (`tools/e2e/measure.sh`, D-0182's) with release `0c0b0d70` (`74d1746`, whose default
+artefacts are those of `16f0aa3`: the gate compares them) on 92 of the 96, all but the two
+black-holes and the two word-equations instances (the 140-int one is D-0187's measured case). The ratio is D-0182's: (elaborate +
+cake) / `veripb` alone, each chain over its own `veripb` alone. Results: 102 VERIFIED by
+`cake_pb_cp`, every verdict baguette's and the bridged chain's; `2013_l2p_l2p1` exhausts cake's 24 GB
+heap on the whole core (911 s) and on the prefix's core alone, as on the bridged chain (D-0182 §4);
+`veripb --elaborate` accepts both.
+
+| instance | families | veripb alone s | bridged: bridge s, elab + cake s | solver-written: elab + cake s | its prefix alone: elab + cake s, MB | ratio bridged / solver |
+|---|---|---|---|---|---|---|
+| `2011_black-hole_17` (UNSAT) | element, inverse | 3.99 | 69, 1 607 + 58 (D-0182) | 16.5 + 30.7 | 2.6 + 17.6, 60 | x428 / **x11.8** |
+| `2013_black-hole_6` (UNSAT) | element, inverse | 4.22 | 69, 1 619 + 59 (D-0182) | 17.3 + 32.9 | 2.8 + 17.6, 60 | x370 / **x11.9** |
+| `2015_p1f_13` (UNSAT) | inverse, T2/T4 | 6.76 | 1 601, 131 + 57 (control) | 98.6 + 52.7 | 45.3 + 46.0, 190 | x27.9 / x22.4 |
+| `2018_oocsp_racks_050_r1` (SAT) | gcc, T4 | 18.19 | 444, 3 046 + 68 (D-0182) | 220 + 60 | 11.6 + 53.1, 269 | x180 / x15.4 |
+| `2016_oocsp_racks_030_ea4_cc` (SAT) | gcc, T4 | 3.40 | 76, 365 + 26 (control) | 40.3 + 23.1 | 4.1 + 19.2, 84 | x122 / x18.6 |
+| `2016_oocsp_racks_030_f7_cc` (UNSAT) | gcc, T4 | 74.8 | 78, 1 529 + 79 (D-0182) | 1 114 + 67 | 4.3 + 20.2, 87 | x24.1 / x15.8 |
+| `2021_steiner_t3_k3_N11` (SAT) | maxmin, T4 | 7.49 | 949, 1 802 + 115 (D-0182) | 591 + 118 | 46.6 + 105, 669 | x267 / x94.7 |
+| `2021_steiner_t4_k4_N10` (SAT) | maxmin, T4 | 15.61 | 1 799, 4 067 + 165 (D-0182) | 1 455 + 229 | 86.1 + 184, 981 | x305 / x108 |
+| `2024_portal_random_10_9_10` (OPT=9) | element, maxmin | 4.59 | 8, 132 + 16 (control) | 36.3 + 13.1 | 0.8 + 4.1, 16 | x31.9 / x10.8 |
+| `2024_word-equations_..._140-int` (OPT=3) | T2/T4 | 21.64 | 423, 841 + 42 (D-0182) | 784 + 43 | 4.4 + 24.4, 103 | x43.9 / x38.2 |
+| `2013_l2p_l2p13` (OPT=6) | element, T2/T4 | 132 | 304, 223 + 112 (D-0182) | 205 + 106 | 9.5 + 55.4, 289 | x2.6 / x2.4 |
+
+| | bridged | solver-written |
+|---|---|---|
+| D-0182's 96, median ratio | x12.66 (D-0182, `53d5f37a`, load 40-70) | **x11.84** (all 96) |
+| the 92 paired with the control, same binary, same period: median | x12.41 | **x11.73** |
+| the 102 VERIFIED, median / max | x13.33 / x428 | x11.86 / x125 |
+| of the 102, above x100 / above x20 | 8 / 39 | 2 / 32 |
+| the 102, elaborate + cake in all | 18 359 s | **7 819 s** |
+| the bridge stage removed | | 7 403 s |
+| the prefix alone over `veripb` alone, median over 102 | | x3.05 |
+
+What this says:
+
+1. **Element's head is no longer the cost.** On black-hole_17 the prefix took 1 606 s of elaboration
+   and 54 s of cake with 93 043 `rup` pins (D-0182); written by the solver, it is 82 824 pins that
+   are one `pol` each (element) and 10 506 `ia` through a `pol` (inverse's channel), no `rup`,
+   elaborated in 2.6 s and checked in 17.6 s, about the same size (60 MB). The whole
+   chain goes from 1 665 s to 47 s, x428 to x11.8 of `veripb` alone; black-hole_6 the same.
+2. **The x12.7 median barely falls**: x12.4 to x11.7 on the 92 paired instances, x12.66 to x11.84 on
+   D-0182's 96. The median instance's chain is not prefix-bound: its prefix alone is now about x3
+   of `veripb` alone, and the rest is the SEARCH proof elaborated against cake's encoding (bits, atoms
+   and flags in the database), which T3b does not touch. What falls is the TAIL: 8 instances above
+   x100 become 2 (gfd-schedule_n30, x125, whose cost is cake's check of a 15 529-wide ladder,
+   D-0182 §5, and steiner_t4, x108), and the total check time on the 102 drops by 57 %, the bridge's
+   7 403 s besides.
+3. **Section 3.4 and 3.5, not only T5, made the tail fall.** oocsp_030_ea4_cc and oocsp_050_r1 (gcc
+   over T4's Booleans; 75 302 atom `rup` on the former) went from x122 and x180 to x19 and x15
+   through the eq atoms' `pol` (3.4); steiner_t3 from x267 to x95 through the superset candidates
+   (3.5: 327 836 `rup` pins to 13 448; the whole chain's elaboration 1 634 s with `74d1746`, 591 s
+   now). What is left on steiner and oocsp_030_f7_cc is the search proof (591 s and 1 114 s of
+   elaboration, against 47 s and 4 s for their prefixes).
+4. p1f_13 is not lowered: its prefix is T4's rows (int_eq_reif, int_ne_reif, 26 000 of them),
+   45 + 46 s, and its search proof; the 12 inverse are a small part. Its bridge (1 601 s here) is
+   gone.
+
+**Gate.** Fresh clone of `1700627` (code of `16f0aa3`, dev binary `6bcc8e9f`) against main
+`8897c13`'s dev binary (`911a5750`, a separate clone): `make check` rc 0 (4 442 ok, 207 models),
+207 models x 4 artefacts equal, differential lane 324 of 324, debug 311 of 311, scaling ok. The
+same gate on `74d1746` (`b0ecb975`): rc 0, 207 x 4 equal, 324 of 324, debug 311 of 311, scaling ok.
+
+**Left.** The search proof's elaboration against cake's encoding is now the chain's median cost
+(steiner, oocsp_030_f7_cc, word-equations); T4's reified rows (p1f_13's prefix); the writer's speed
+on the largest prefixes (`--e2e` solves black-hole_17 in 3.2 s against 1.5 s, steiner_t4 in 61 s
+against 29 s); T6 and T7 as before; whether `--e2e` becomes a default and whether the bridge is retired (D-0187
+§5), the user's. Results in `/cluster/arthur/baguette-results/wave55-e2e3b/` (`summary.md` is the
+per-instance table, `chal/` and `ctlser/` the two series, the superseded series of `b467f40`,
+`7017c6c` and `74d1746` kept under `chal/old-*`).

@@ -22,7 +22,6 @@ of it to every session and stopping at a broken line before it even reached the 
 | M8-bits-encoding-T4 (two arms, `W = none` and `W = 0`, on the sixteen editions) | run directories under `/scratch/arthur/m8t4/`, `tools/compare/` (additions), `bench/challenge/README.md` (the run's row), a new D-record | agent-m8t4 (`wave55-m8t4`) | 2026-11-20 |
 | M10-search-strategy-T5, M9-no-proof-T3, M7-T30 (one Challenge series on current main: default, `-f`, default `--no-proof`) | run dirs `/scratch/arthur/m10t5/`, `tools/compare/` (additions), `bench/challenge/README.md` (the run's row); reserved record D-0185 | agent-m10t5 (`wave55-m10t5`) | 2026-11-20 |
 | M16-file-review-T1 (the core) | `lib/core/store.ml`, `domain.ml`, `engine.ml`, `var.ml`, `propagator.ml`, `search.ml`, their unit tests; `bench/scaling/baseline.tsv` (re-baseline only); reserved record D-0186 | agent-review1 (`wave55-review1`) | 2026-11-20 |
-| M14-e2e-verification-T3b (T5's globals under `--e2e`, and element's head cost) | `lib/proof/e2e.ml`, `lib/proof/encoding.ml` (additive), `lib/flatzinc/compile.ml` (the e2e hooks only), `tools/e2e/`, `scripts/e2e_lane.sh`, `docs/PROOF-FORMAT.md` §3b; added 2026-11-20: `lib/flatzinc/model.ml` and `lib/flatzinc/builder.ml` (a `c_id` field on `Model.constr` only, D-0188 §3.1), `test/unit/test_output.ml` (its two `Model.constr` literals); reserved record D-0188 | agent-e2e3b (`wave55-e2e3b`) | 2026-11-20 |
 
 ## Cross-session requests
 
@@ -632,6 +631,7 @@ section 1. Shares are inclusive, of the whole run.
 | M13-codes-leads-T1 (study: the root LP relaxation) | agent-lp (`wave55-lp`) | 2026-11-20 | **D-0183 (STUDY).** `tools/lp/opb2lp.py` reads baguette's `.opb`, propagates bounds at the integer level, solves the LP with HiGHS 1.16 (highspy) and counts reduced-cost fixings. Codes (17): LP bound 1, nothing fixed, no root UNSAT, structurally. Challenge (39 of 42): >10 % of the gap closed on 12, fixings on 2 (radiation). `pol` shape verified by veripb with per-claim controls. Recommended: not now; root cuts before a plain LP if ever. |
 | M4-T6 (spike: in-proof tabulation) | agent-tab (`wave55-tab`) | 2026-11-20 | **D-0184 (SPIKE).** The GCS tabulation transfers to the order encoding: a `red` pair per tuple over the order literals, the at-least-one row by `rup` from D-0060's rows through per-pair lemmas, one `rup` per GAC removal (plus a KILL line per hole-killed support). About `5 |Dx| |Dy|` root lines. `bench/tabulation_spike/run_spike.sh`: 4 models verified, 6 mutations refused at their line. Not built (option A) |
 | M14-e2e-verification-T3 (the bridge written by the solver) | agent-e2e3 (`wave55-e2e3`) | 2026-11-20 | **D-0187 [AUTONOME].** `--e2e`, OFF by default: baguette's proof is checked against `cake_pb_cp`'s `.opb` directly, its head (`lib/proof/e2e.ml`) deriving each `.opb` row from cake's, from compile.ml's per-constraint origin and a replica of cake's rows (PROOF-FORMAT §3b, CakeML `14856fcf`). T2, T4 and set domains covered; T5's globals refused (TODO T3b). `make e2e` pass 1b 117 of 207 VERIFIED with no bridge, 0 FAIL, 22 of 22 solver controls. Challenge: prefix size and check time equal to the bridge's, the bridge stage removed. See the handoff note |
+| M14-e2e-verification-T3b (T5's globals under `--e2e`, and element's head cost) | agent-e2e3b (`wave55-e2e3b`) | 2026-11-20 | **D-0188 [AUTONOME].** `--e2e` covers element, global_cardinality (copies included), maxmin and int_max/min (`Model.constr.c_id` tells them apart), inverse, member. Element's clauses are one `pol` each through `@A1`/`@A2` and the index's eq atom; interior eq atoms are exact indicators; eq atoms' clauses and superset candidates by `pol` for every family. `make e2e` 1b 188 VERIFIED, 32 of 32 solver controls. See the handoff note |
 
 ## Handoff notes
 
@@ -682,6 +682,13 @@ In-proof tabulation of `int_times` works over the order encoding and every piece
 `E2E_SOLVER=1`, `tools/e2e/measure_e2e.sh`). Off by default, every default byte unchanged. Covers T2, T4 and holes; a T5 global is
 refused with its name (TODO T3b: interior eq atoms, and element's clauses by `pol` through `@A2`, which is black-hole's cost).
 If cake_pb_cp is rebuilt from another CakeML commit, PROOF-FORMAT §3b may go stale: the lane's pass 1b will FAIL, it cannot verify wrongly.
+
+### 2026-11-20 (agent-e2e3b, `wave55-e2e3b`): M14-e2e-verification-T3b, D-0188 [AUTONOME]
+
+`--e2e` now covers every family the bridge does (lane pass 1b 188 of 207, 0 FAIL, 0 disagreeing, 32 of 32 solver controls). Element's
+clauses are one `pol` each, which takes black-hole_17 from x428 to x11.8 of veripb alone, and D-0188 §3.4-3.5 also turn T4's atom and
+`array_bool_and` `rup` pins into `pol`. The median barely moves (x12.4 to x11.7), because at the median the cost left is the SEARCH proof
+elaborated against cake's encoding, which no prefix change reaches.
 
 ## Handoff notes
 
