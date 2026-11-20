@@ -58,7 +58,11 @@
 #                                   witness s -> ~F): refused at that red line, "Proofgoal #1
 #                                   could not be autoproven." (models where the flag is free)
 #                  plus scp-weaker, scp-stronger, bridge-witness (the atom definition), and the
-#                  wrong optimum (opt-*, core-*) on the solver's own proof.
+#                  wrong optimum (opt-*, core-*) on the solver's own proof. T3b (D-0188) adds
+#                  pin-stronger on T5's globals, where the first such row is the family's:
+#                  element (2), global_cardinality (2), array_int_maximum and int_max,
+#                  inverse, member (2); each corrupted row is false in at least one of the
+#                  model's solutions (enumerated by scpsem.py, D-0188 section 6).
 #   3. validation  the TRUSTED translator against MiniZinc's reference solvers (D-0174 sec. 6,
 #                  GCS #987): on every model of pass 1 that is not SKIPPED, the solution set
 #                  cake's semantics admit for the .scp (tools/e2e/scpsem.py, which reads only
@@ -214,8 +218,11 @@ reif_lin_le_sat:pin-stronger alldiff_const_sat:sel-witness ne_sat:sel-witness re
 chain_sat:scp-weaker php_unsat:scp-weaker search_all_const_sat:scp-stronger bits_pb_learn_sat:scp-stronger
 chain_sat:bridge-witness lin_sat:bridge-witness opt_min_sat:opt-better opt_max_sat:opt-better
 opt_min_sat:opt-worse restart_queens6_opt:opt-worse opt_min_sat:core-better restart_queens6_opt:core-better
-opt_max_sat:core-worse opt_min_sat:core-worse"
-NSCONTROLS=22
+opt_max_sat:core-worse opt_min_sat:core-worse
+element_sat:pin-stronger element_learn_prunes_sat:pin-stronger gcc_forced_sat:pin-stronger
+gcc_const_counts_sat:pin-stronger maxmin_sat:pin-stronger maxmin_int_max_sat:pin-stronger
+inverse_sat:pin-stronger member_sat:pin-stronger member_gap_sat:pin-stronger"
+NSCONTROLS=31
 mkdir -p "$OUT/scontrols"
 for c in $SCONTROLS; do echo "$c"; done | E2E_SOLVER=1 xargs -P "$J" -I{} bash -c \
     'm=${0%%:*}; k=${0#*:}; f="$1/test/models/$m.fzn"; [ -f "$f" ] || f="$1/tools/e2e/models/$m.fzn"
