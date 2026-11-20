@@ -352,6 +352,7 @@ type t = {
   mutable n_ia_exact : int;
   mutable n_ia_w : int;
   mutable n_ia_lin : int; (* of which through a linearised cake row (T3b) *)
+  mutable n_pol_lin : int; (* rows that ARE one pol of a linearised cake row (T3b) *)
   mutable n_rup : int;
   mutable n_subst : int;
   mutable n_sel : int;
@@ -382,6 +383,7 @@ let create path =
     n_ia_exact = 0;
     n_ia_w = 0;
     n_ia_lin = 0;
+    n_pol_lin = 0;
     n_rup = 0;
     n_subst = 0;
     n_sel = 0;
@@ -1337,8 +1339,10 @@ let resolve (con : con) (cl, cd) bl =
     Some ((Buffer.contents b ^ if sat then " s" else ""), lf)
 
 (* The family's own derivation of a clause row (D-0188 section 2), as the rpn of one `pol`
-   whose result implies it syntactically, or None. *)
+   whose result implies it syntactically, and whether that result IS the row (then the
+   `pol` is the pin itself, with no `ia`), or None. *)
 let special t (con : con) bl =
+  let exact (cl, cd) = cd = 1 && SM.equal ( = ) cl bl in
   let lin labels =
     List.find_map
       (fun lab ->
@@ -1346,8 +1350,11 @@ let special t (con : con) bl =
         | None -> None
         | Some r -> (
             match linearise t r bl with
-            | Some (rpn, lf) ->
-                Option.map (fun wk -> rpn ^ wk) (implied_or_weakened lf (bl, 1))
+            | Some (rpn, lf) -> (
+                match implied_or_weakened lf (bl, 1) with
+                | Some "" -> Some (rpn, exact lf)
+                | Some wk -> Some (rpn ^ wk, false)
+                | None -> None)
             | None -> None))
       labels
   in
@@ -1416,9 +1423,10 @@ let special t (con : con) bl =
             else
               let rpns = List.map fst parts in
               Some
-                (Printf.sprintf "%s %s @%s + s" (List.hd rpns)
-                   (String.concat " " (List.map (fun r -> r ^ " +") (List.tl rpns)))
-                   al1))
+                ( Printf.sprintf "%s %s @%s + s" (List.hd rpns)
+                    (String.concat " " (List.map (fun r -> r ^ " +") (List.tl rpns)))
+                    al1,
+                  exact lf ))
 
 let pin t ~id (c : Opb.constr) =
   let body = Opb.constr_body c in
@@ -1468,14 +1476,19 @@ let pin t ~id (c : Opb.constr) =
       t.n_rup <- t.n_rup + 1;
       emit t "@c%d rup %s ;" id body
   | _, None -> refuse "row @c%d (%s) belongs to no covered constraint" id body
-  | _, Some con when is_clause (bl, bd) && sp con <> None ->
-      let rpn = Option.get (sp con) in
-      t.nw <- t.nw + 1;
-      t.n_ia_w <- t.n_ia_w + 1;
-      t.n_ia_lin <- t.n_ia_lin + 1;
-      emit t "@W[%d] pol %s ;" t.nw rpn;
-      emit t "@c%d ia %s : @W[%d] ;" id body t.nw;
-      emit t "del id @W[%d] ;" t.nw
+  | _, Some con when is_clause (bl, bd) && sp con <> None -> (
+      match Option.get (sp con) with
+      | rpn, true ->
+          (* the pol's result is the row itself: it is the pin, under the row's label *)
+          t.n_pol_lin <- t.n_pol_lin + 1;
+          emit t "@c%d pol %s ;" id rpn
+      | rpn, false ->
+          t.nw <- t.nw + 1;
+          t.n_ia_w <- t.n_ia_w + 1;
+          t.n_ia_lin <- t.n_ia_lin + 1;
+          emit t "@W[%d] pol %s ;" t.nw rpn;
+          emit t "@c%d ia %s : @W[%d] ;" id body t.nw;
+          emit t "del id @W[%d] ;" t.nw)
   | _, Some con -> (
       let undefined =
         SM.fold
@@ -1609,8 +1622,10 @@ let finish t =
     emit t
       "%% e2e prefix (D-0187, contract cake_pb_cp %s): %d substitutions, %d atom \
        clauses, %d selectors, pins: %d rungs ia, %d rows ia exact, %d rows ia through a \
-       pol, %d rows rup"
-      cake_pb_cp_sha256 t.n_subst t.n_q t.n_sel t.n_ia_rung t.n_ia_exact t.n_ia_w t.n_rup;
+       pol, %d rows rup; T3b (D-0188): %d rows by one pol of a linearised cake row, %d \
+       rows ia through one"
+      cake_pb_cp_sha256 t.n_subst t.n_q t.n_sel t.n_ia_rung t.n_ia_exact t.n_ia_w t.n_rup
+      t.n_pol_lin t.n_ia_lin;
     Buffer.output_buffer t.oc t.b;
     Buffer.clear t.b;
     close_out t.oc);
