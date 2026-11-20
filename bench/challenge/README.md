@@ -11,7 +11,7 @@ recorded runs are, so that a session reads a table instead of relaunching a seri
 | MiniZinc 2.10.1 bundle, with Chuffed | node: `/scratch/arthur/mzn/MiniZincIDE-2.10.1-x86_64-linux-gnu/bin/minizinc` (not on `PATH`); laptop: `~/opt/MiniZincIDE-2.10.1-x86_64-linux-gnu`, linked as `~/.local/bin/minizinc` |
 | Chuffed | `--solver chuffed` from the bundle |
 | GCS (Glasgow Constraint Solver) | node: `--solver /scratch/arthur/gcs/build/glasgow.msc` |
-| baguette | flatten with `minizinc -c --solver <checkout>/tools/baguette.msc model.mzn data.dzn -o x.fzn`, which uses `mznlib/`, then run `_build/default/bin/main.exe`; or `MZN_SOLVER_PATH=<checkout>/tools minizinc --solver baguette ...` |
+| baguette | flatten with `minizinc -c --solver <checkout>/tools/baguette.msc model.mzn data.dzn -o x.fzn`, which uses `mznlib/`, then run the release binary `_build_release/default/bin/main.exe` (`make release`, D-0170; the harnesses take it as `BAGUETTE=...`); or `MZN_SOLVER_PATH=<checkout>/tools minizinc --solver baguette ...` |
 | Kissat 4.0.2, pysat | installed 2026-11-16 under `/scratch/arthur/tools/`, which is not on `fataepyc-06` (checked 2026-11-19); look on `fataepyc-07` before reinstalling |
 
 Flattening is fine on the laptop; solving goes to the node (`scripts/README.md` §1).
@@ -48,4 +48,7 @@ those numbers, and the Challenge-wide re-measurement (M8-T4, M9-T3, M10-T5) is s
 - Ask the user before a new series whether to run Chuffed again. M7-T26 reran it as a scale factor
   against the official `chuffed-fd` results, and the user asked why; the question was left open.
 - The free category (`-f`, D-0154) has not been run yet. It is M10-T5's measurement.
-- Hash the binary of every series and write the hash in its record.
+- Run a series on the release binary (`make release`, `BAGUETTE=<checkout>/_build_release/default/bin/main.exe`;
+  `scripts/README.md` §8). It writes the same bytes as dev at ~17 % fewer instructions per node
+  (D-0170). The harnesses' default is still the dev binary, so set the variable.
+- Hash the binary of every series and write the md5 in its record, with whether it is release or dev.

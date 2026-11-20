@@ -30,10 +30,27 @@ CAP := $(if $(filter none unlimited 0,$(MEM_CAP_KB)),:,ulimit -v $(MEM_CAP_KB)) 
 # Passed down so a script invoked from a recipe agrees with the recipe.
 export BAGUETTE_MEM_CAP_KB = $(MEM_CAP_KB)
 
-.PHONY: build test unit models check fmt fmt-check lint determinism unlimit selftests clean proof bootstrap bench diff scaling
+.PHONY: build release test unit models check fmt fmt-check lint determinism unlimit selftests clean proof bootstrap bench diff scaling
 
 build:
 	dune build
+
+# M11-complexity-T16 (D-0170). The MEASURED binary: the solver alone, built with dune's
+# release profile into its own build directory, so it neither fights the dev `_build/`
+# (a separate tree, a separate lock) nor changes what `dune build`, `make check` or a
+# worktree's `--root .` produce. dune's dev profile compiles libraries with -opaque, i.e.
+# without cross-module inlining; release does not, which takes ~17 % of the instructions
+# per node off (D-0170 has the numbers) and writes the same bytes as dev.
+#
+#   make release   ->   _build_release/default/bin/main.exe
+#
+# Every harness takes it by variable: BAGUETTE= for compare_run.sh, corpus_run.sh,
+# run_bench.sh and the suites' scripts, BIN= (or --bin) for diff_lane.sh / scaling_lane.sh.
+# Release does NOT turn warnings into errors, so it is never the gate: dev is.
+# Record the binary's md5 beside every series measured with it.
+release:
+	dune build --root . --profile release --build-dir _build_release bin/main.exe
+	@md5sum _build_release/default/bin/main.exe
 
 unit:
 	$(CAP) dune runtest --force
@@ -141,7 +158,7 @@ bootstrap:
 
 clean:
 	dune clean
-	rm -rf test/out
+	rm -rf test/out _build_release
 
 # Measurement, deliberately NOT a dependency of `check`: a benchmark that gates a
 # commit becomes a flaky test. M3-T5. Pass arguments through, e.g.

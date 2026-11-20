@@ -139,7 +139,8 @@
 #   PROOF_CAP_KB  per-file size cap (ulimit -f), default 16000000 (~16 GB)
 #   SOLVE_TIMEOUT / FLATTEN_TIMEOUT / CHECK_TIMEOUT   (default 300 / 120 / 900)
 #   MZN         minizinc               (default: PATH)
-#   BAGUETTE    (default _build/default/bin/main.exe)
+#   BAGUETTE    (default _build/default/bin/main.exe; a measured series uses the release
+#               binary _build_release/default/bin/main.exe, `make release`, D-0170)
 #   CHUFFED     (default fzn-chuffed beside minizinc)
 #   GCS         fzn-glasgow            (default: PATH); GCS_MSC_DIR its .msc dir
 #               (default: the binary's directory). GCS_PROVE=1|0 (default 1)
