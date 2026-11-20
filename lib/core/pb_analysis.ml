@@ -826,8 +826,10 @@ let row_memo_bool (lits : Lit.t array) (p : Lit.t -> bool) : Lit.t -> bool =
    create that many major-to-minor pointers at once), and a row's literals are young: a
    combination or [Learned.of_pb_row] has just built them. A conflict row over a few
    wide order-encoded terms is longer than that, so every analysis of one paid a minor
-   GC here, 35 % of 2019_fox-geese-corn's samples. [filler] is a constant the compiler
-   places outside the heap, and every cell is overwritten before the array is read. *)
+   collection here: on 2019_fox-geese-corn (3 000 nodes, no proof) 306 of the run's 1 509,
+   a fifth of its promoted words, and 35 % of its samples under this function with the
+   major slices they brought. [filler] is a constant the compiler places outside the
+   heap, and every cell is overwritten before the array is read. *)
 let filler : Lit.t = { Lit.v = Lit.Ge ("", 0); positive = true }
 
 let lits_array (row : Learned.t) : Lit.t array =
@@ -924,9 +926,10 @@ let analyse ?(stop = fun () -> false) ?(bits = Ladder.no_bits) store (c : Store.
      the polymorphic compare of a plain [Hashtbl]; [Lit.equal] is structural equality on
      the same record, so the same lookups hit. *)
   (* M16-file-review-T3 (D-0191): replaced, empty, by one sized at the conflict row once
-     that row is known (below), because a table that grows re-hashes every literal it
-     holds at each doubling: a third of the memo's cost on 2019_fox-geese-corn, whose
-     conflict rows are hundreds of literals long. Nothing reads it before then. *)
+     that row is known and longer than 64 (below), because a table that grows re-hashes
+     every literal it holds at each doubling: a third of the memo's cost on
+     2019_fox-geese-corn, some of whose conflict rows run past 256 literals (see
+     [lits_array]). Nothing reads it before then. *)
   let fat_memo = ref (Lit_tbl.create 64) in
   let var_named = var_named_last store in
   let falsified_at store l =
@@ -1122,7 +1125,7 @@ let analyse ?(stop = fun () -> false) ?(bits = Ladder.no_bits) store (c : Store.
        we built is not the row the store conflicted on. That is a real disagreement and it
        falls back rather than deriving from a premise the search does not share. *)
     let lits0 = lits_array row0 in
-    fat_memo := Lit_tbl.create (Int.max 64 (Array.length lits0));
+    if Array.length lits0 > 64 then fat_memo := Lit_tbl.create (Array.length lits0);
     let at_of0 = row_memo lits0 (falsified_at store) in
     if not (slack_at (view row0 at_of0 0) conflict_level < 0) then
       raise (Give_up Not_conflicting);
