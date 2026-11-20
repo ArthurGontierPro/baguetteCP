@@ -95,11 +95,34 @@
    the root produces, when the whole search space is exhausted, the empty clause --
    an unconditional contradiction -- which is exactly the id [conclusion UNSAT] cites
    (invariant I-S2: the proof independently establishes it, not merely the solver's
-   own "I looked everywhere" bookkeeping). *)
+   own "I looked everywhere" bookkeeping).
+
+   ---------------------------------------------------------------------------
+   M16-file-review-T1 (D-0186): no literal set is a list
+   ---------------------------------------------------------------------------
+
+   A conflict handles sets of decision literals: the union of two child nogoods
+   ([combine_nogoods]), the decisions a settle bridge protects ([bridges]) and the
+   nogood literals kept for them ([dfs]). Each was a list asked [List.exists Lit.equal],
+   so a conflict at depth [d] cost O(d^2) literal comparisons, each a string compare of
+   two variable names; on the lane that was a third of 2011 roster's instructions and
+   half of 2018 soccer's (D-0186 has the profiles). The rule: membership in such a set
+   is asked of a [Lit_tbl], keyed through [Lit.equal] itself, so the predicate is the
+   one the list scan applied, and every list the old code returned is still built, in
+   the same order, so no caller sees a difference. *)
 
 module Lit = Baguette_proof.Lit
 module Writer = Baguette_proof.Writer
 module Encoding = Baguette_proof.Encoding
+
+(* D-0186: a literal-keyed table through [Lit.equal], never the polymorphic compare (the
+   same table as lib/core/reduce.ml's and pb_analysis.ml's, D-0144). *)
+module Lit_tbl = Hashtbl.Make (struct
+  type t = Lit.t
+
+  let equal = Lit.equal
+  let hash = Hashtbl.hash
+end)
 
 type assignment = (Var.t * int) list
 type outcome = Sat of assignment | Unsat
@@ -1762,17 +1785,28 @@ let minimise stats policy (xs : nogood) : nogood =
    of both. It is [rup] for the checker because both parents are still live -- which is
    why the wipe comes after (D-0018 point 4). Deduplicated by literal, then ordered by
    descending level, so the result is a function of the two clauses and not of the order
-   they were built in (test (f)). *)
+   they were built in (test (f)).
+
+   D-0186: the deduplication keeps the FIRST pair of each literal, in [joined]'s order,
+   as the fold over a list did ([List.exists Lit.equal] on the pairs kept so far, then
+   [acc @ [pair]]); the kept literals are a [Lit_tbl] and the pairs are consed and
+   reversed once, so a combine at depth [d] is O(d) and not O(d^2) string compares. The
+   sort compares levels with [Int.compare], which on ints is the [Stdlib.compare] it
+   replaces. *)
 let combine_nogoods stats policy (a : nogood) (b : nogood) ~lvl : nogood =
   let joined = List.filter (fun (_, l) -> l <> lvl) (a @ b) in
+  let kept = Lit_tbl.create 64 in
   let deduped =
-    List.fold_left
-      (fun acc (l, i) ->
-        if List.exists (fun (m, _) -> Lit.equal m l) acc then acc else acc @ [ (l, i) ])
-      [] joined
+    List.rev
+      (List.fold_left
+         (fun acc ((l, _) as pair) ->
+           if Lit_tbl.mem kept l then acc
+           else (
+             Lit_tbl.replace kept l ();
+             pair :: acc))
+         [] joined)
   in
-  minimise stats policy
-    (List.stable_sort (fun (_, i) (_, j) -> Stdlib.compare j i) deduped)
+  minimise stats policy (List.stable_sort (fun (_, i) (_, j) -> Int.compare j i) deduped)
 
 (* ------------------------------------------------------------------------------ dfs *)
 
