@@ -24,7 +24,6 @@ of it to every session and stopping at a broken line before it even reached the 
 | D-0161 request 1 (`Alldiff.snap_of` builds derivation inputs at every snapshot) | `lib/core/prop/alldiff.ml` ON TOP OF `wave53-alldiff` (merges after it), `test/unit/test_prop.ml` (alldiff section) | agent-snap (`wave54-snap`) | 2026-11-19 |
 | merge of M7-T33 and D-0161 request 1 (D-0167 item 1) | merges `wave53-alldiff` then `wave54-snap` on branch `wave55-merge`; `bench/diff/corpus.tsv` (lot-sizing's budget), `bench/diff/reference*` (re-record) | agent-merge (`wave55-merge`) | 2026-11-20 |
 | M7-T34 (`member` without width-proportional rows) | on `wave53-member`'s files: `lib/core/prop/member.ml`, `lib/flatzinc/compile.ml` (member dispatch), `mznlib/`, `test/models/member_*`, `test/unit/test_prop.ml` (member section) | agent-member2 (`wave55-member`) | 2026-11-20 |
-| M11-complexity-T13 (drop a forced explanation once written) | `lib/core/explanation.ml` (the `thunk` record gains fields, D-0167 item 6), `lib/core/justify.ml`, `lib/core/pb_analysis.ml` (`cited_ids` only), `test/unit/test_justify.ml`, `docs/ARCHITECTURE.md` §4, and (added by agent-thunk) `lib/core/trace.ml` (`derive_ahead` only: it emits the thunk, not its forced head) | agent-thunk (`wave55-thunk`) | 2026-11-20 |
 
 ## Cross-session requests
 
@@ -617,8 +616,16 @@ section 1. Shares are inclusive, of the whole run.
 | M9-no-proof-T5 | agent-keepproof (`wave54-keepproof`) | 2026-11-19 | **D-0163.** A run without `--proof` keeps its proof: `default_proof_prefix` in `bin/main.ml` gives `./foo.opb`/`.pbp` for `DIR/foo.fzn`, and `./baguette-proof` for MiniZinc's `mznfile*.fzn` (named on stderr); the next run overwrites. `tools/baguette.msc` gains `--no-proof`. Proofless runs fixed in `test_endtoend` (M7-T32), `check_unlimited.sh`, `check_mznlib.sh`, `learning_baseline.sh`, `corpus_run.sh` NO_PROOF=1 (still writes, unchecked); `diff_lane.sh` refuses proof=no without `--no-proof`. Files beyond the claim: `scripts/check_unlimited.sh`, `mznlib/test/check_mznlib.sh`, `bench/learning_baseline.sh`; `compare_run.sh` needed nothing. |
 | M11-complexity-T11 | agent-heap (`wave54-heap`, fix `wave54-heapfix`) | 2026-11-19 | **D-0164.** `Element.index_hole_clause` defers the puncher's literals; bh4 `--no-proof` 40 nodes 6.04 -> 1.72 GB RSS, -26.9 % instructions, `--proof` 11.66 -> 7.96 GB; 215 of 215 artefacts equal. The proof-side holders stay open (D-0164 §7) |
 | M11-complexity-T12 | agent-live (`wave54-live`) | 2026-11-19 | **D-0166.** Byte-identical shrink of four proof-side holders: claim index keys packed (333 -> 76 MB), memo as a chained table (342 -> 244 MB), audit keeps the origin alone, shared per `Combine` shape (325 -> 132 MB), `by_lvl` as runs (189 -> 118 MB). bh9 `--proof` node 40 (alldiff base): live 2 660 -> 2 041 MB, RSS 4 346 -> 3 648 MB, -2.2 % instructions, `.pbp` md5 equal. Gate on `c46952f` (binary `214e74d1`): `make check` rc 0 (4 289 ok), 198 x 4 artefacts equal to `22620b60`, lane 301/301, debug 289/289, scaling ok. alldiff's forced derivations (1.16 GB) and the never-hit memo entries are the user's call (D-0166 §5) |
+| M11-complexity-T13 | agent-thunk (`wave55-thunk`) | 2026-11-20 | **D-0168.** A thunk keeps its line (id, level) once written and drops its tree; the memo lets go of the cells of the nodes the closure built (a forcing records the operands it did not build, and only those thunks are forced again at release); `derive_ahead` emits the thunk. bh9 `--proof` node 40 (alldiff base): live 2 041 -> 658 MB, RSS 3 646 -> 1 777 MB, -0.7 % instructions, `.pbp` md5 equal; lane default runs -28.7 % (rcpsp_11) to +0.35 %. Gate on `a8762eb` (binary `40638833`): `make check` rc 0 (4 312 ok), 198 x 4 artefacts equal to `214e74d1`, lane 301/301, debug 289/289, scaling ok |
 
 ## Handoff notes
+
+### 2026-11-20 (agent-thunk, `wave55-thunk`): M11-complexity-T13, D-0168
+
+A thunk is released once its line is written: it keeps the id and level, drops its tree, and the
+memo takes out the cells of what the closure built (bh9 node 40 live 2 041 -> 658 MB, rcpsp_11
+-28.7 % instructions, every byte equal; gate green on `a8762eb`). "A thunk is the only shared node" was false:
+captured eager nodes exist (39 on the suite), and the frames in explanation.ml keep their cells.
 
 ### 2026-11-19 night (orchestrator): gate 70 green; the state for the morning -- READ THIS FIRST
 

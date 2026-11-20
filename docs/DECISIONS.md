@@ -19597,3 +19597,130 @@ reversing it costs.
 Also decided: the Challenge-wide re-measurement (M8-T4, M9-T3, M10-T5) does NOT rerun Chuffed; it
 compares against M7-T26's recorded Chuffed runs and the official archive (bench/challenge/README §3
 asked the user; the delegation answers it).
+
+## D-0168  M11-complexity-T13: a thunk is released once its line is written; the memo lets go of what the closure built
+
+Status: DONE (every byte the same; gate in section 6).
+Date: 2026-11-20
+Task: M11-complexity-T13 (agent-thunk, `wave55-thunk`). D-0166 section 5 option B, decided by D-0167
+item 6 on the user's delegation.
+Touches: `lib/core/explanation.ml` (the `thunk` record, `force`, the smart constructors, the
+header), `lib/core/justify.ml` (the thunk's line, the memo's window and its release, the debug
+checks), `lib/core/trace.ml` (`derive_ahead` emits the thunk, not its forced head: claimed on the
+branch), `lib/core/pb_analysis.ml` (a comment in `cited_ids`), `test/unit/test_justify.ml`,
+`docs/ARCHITECTURE.md` section 4.
+
+### 1. What changed
+
+`Explanation.thunk` gains two fields. `line` is `No_line` until `Justify.emit` has written the
+thunk's derivation, then `Line { cid; level; epoch; owner }`: the id, the writer's level, the
+`ctx`'s wipe count when it was written and the `ctx`'s serial. `captures` says whether the last
+forcing may hold a node the closure did not build (section 3). `compute` is now the original
+closure, never replaced. Once the line is written the thunk is RELEASED: `forced` is dropped, and
+the memo cells its emission made are taken out (`Justify.release_window`), except the cells of
+captured nodes. Before, the tree stayed reachable from `forced`, from the closure `force` put in
+place of the original, and from the memo's keys (the forced head and every inner `Combine`).
+
+Every reader, and what it does now:
+
+| reader | before | now |
+|---|---|---|
+| a later `emit` of the thunk (a citing `Term`, `derive_ahead`, a conflict) | memo hit on the thunk or its forced head while the level lives | `Justify.live_line`: the recorded id while no wipe has reached its level (`wiped_at.(level) <= epoch`), and only for the `ctx` that wrote it; the thunk is no longer a memo key |
+| `emit` after a wipe of that level | the same physical tree written again, every cell gone with the wipe | the closure forced again and that tree written again, then released again |
+| `Pb_analysis.cited_ids`, `Explanation.lits` (the D-0026 agreement walk under `BAGUETTE_DEBUG`), the readers that match a forced head (`Search.weakened_row_only`, `close_root_conflict`, the conflict arm of `dfs`) | the cached tree | `force` runs the original closure again and does not keep the result |
+| `Trace.derive_ahead` | forced the explanation and emitted the forced HEAD, so the line was the head's memo entry | emits the thunk itself (a released thunk is not forced again just to ask whether it is a decision) |
+
+### 2. Why every byte is the same
+
+A second `emit` is answered under exactly the condition the memo entry answered: an entry made at
+level `l` died at the first `wipe_level k` with `k <= l`, and `wiped_at` is stamped for every
+level from `k` up to the highest level a line was recorded at. A re-emission writes the closure's
+tree again rather than the old physical one. The two are the same derivation because a thunk
+closes over a snapshot (I-X6); the memo answers the two alike because each node of the tree is
+either CAPTURED (a value the closure did not build: held physically by both forcings, its cell
+kept, found as before) or BUILT (new at each forcing, reachable from its tree alone, so no lookup
+can present it again, and its cell can go without changing any answer).
+
+D-0166 section 5 stated B's condition as "a re-forced tree shares no non-thunk node with another
+live one", and explanation.ml's header said a thunk is the ONLY shared node of a derivation. That
+is false, measured: on `test/models/alldiff_regin_hole_element_unsat.fzn` a conflict's derivation
+holds an eager `Combine` the trace had already written as another entry's line (the first
+version of this change, which took out every cell of the window, raised on it under
+`BAGUETTE_DEBUG`), and on the suite 39 cells are captured nodes first written inside another
+thunk's emission (`element_foreign_hole_rup_sat/unsat`, `element_shared_result_root_unsat`).
+Taking those cells out happened not to change a byte on the 198 models, but it would have on the
+first later lookup. So the release keeps them, and needs to know which they are.
+
+### 3. Telling captured from built, and what it costs
+
+The first way was a second forcing at every release: a node both forcings hold physically was
+captured. Measured on the lane's default runs it costs what the closure costs: `cyclic-rcpsp_easy_6`
++36.7 % instructions, `rcpsp_12` +15.5 %, `rcpsp_11` +7.4 %, `mspsp_hard_01` +2.9 %, and
+`2011_black-hole_9` +5.3 % (all_different's closures are about 49 M instructions each). Rejected.
+
+What is built instead is a FRAME per forcing (explanation.ml, "what a forcing builds"): the smart
+constructors (`clause`, `linear`, `cut`, `combine`, `resolve`) note every node they build in a
+ring of the last 256, and `citable`, through which every operand passes (`term`, `cut`,
+`resolve`, `linear_term`), looks the operand up there by identity, newest first. An operand that
+is a memoisable node and is not found, or a root that is not, sets `captures`. A forcing with no
+capture is released with every cell of its window taken out and no second forcing; one with a
+capture is forced a second time, and a node the two forcings share keeps its cell; if the two are
+not `same_derivation`, the thunk is not released (it keeps its tree and its cells, as before T13).
+The lookup is exact in the direction that matters: a node found was built in this forcing; a node
+not found (captured, or built more than 256 nodes earlier) is treated as captured and only costs
+a second forcing. The frame rests on every node being built through the smart constructors;
+nothing in `lib/` builds a `Term (c, e)` or a node directly.
+
+`BAGUETTE_DEBUG` forces every release a second time and requires the same derivation, requires a
+forcing that recorded no capture to share no node with its second forcing, requires every node an
+emission found already written by ANOTHER derivation (a hit on a cell outside its own window) to
+be captured, keeps every cell taken out in a ghost table and raises if a lookup would have found
+one, and compares every later forcing of a released thunk with the original, which a released
+thunk keeps under `BAGUETTE_DEBUG`.
+
+### 4. Measurements (fataepyc-06)
+
+`2011_black-hole_9 --proof` at node 40, on a throwaway base: main `fa5628f` with
+`origin/wave53-alldiff` merged and agent-heap's PROBE commits (`/scratch/arthur/wave55-thunk-runs/`,
+`meas` clone). Binaries: before `3379d493`, after `55097e1a` (the same PROBE code).
+
+| | before | after |
+|---|---|---|
+| live heap at node 40 | 2 041 MB | 658 MB |
+| the memo's share (drop order of D-0166) | 244 MB | 9 MB |
+| all_different's arena slots | 1 160 MB | 2 MB |
+| peak RSS (probe off) | 3 646 MB | 1 777 MB |
+| instructions (`perf stat`, probe off) | 656.3 G | 651.6 G (-0.7 %) |
+| wall (probe off, shared node) | 120.2 s | 105.1 s |
+| `.pbp` md5 | `1d8104fe` | `1d8104fe` |
+| thunks released, cells taken out | | 819, 3 390 743 |
+| second forcings at release, re-forcings after | | 0, 0 |
+
+The lane's 27 default-configuration runs at their budgets, `--stats --proof`, main's binary
+`214e74d1` against `da7b1545` (this change before formatting): stdout and `.pbp` equal on all 27;
+instructions from -28.7 % (`rcpsp_11@10000`, 247.0 -> 176.1 G: the memo no longer keeps the
+inner cells its lookups walk) through -7.4 % (`rcpsp_12`), -4.1 % (`cyclic-rcpsp_easy_6`, peak RSS
+187 -> 71 MB), -2.9 % (`lot-sizing`) to +0.35 % (`openshop_gp10-4@300`, which releases nothing),
+every one within +2 %. Re-forcings after release: 1 631 on `lot-sizing` (9 342 released), 24 on
+`evm-super-compilation`, 0 elsewhere; their cost is inside those instruction counts.
+
+The suite's 198 models, main's `214e74d1` against `da7b1545`, `--proof`, with and without
+`BAGUETTE_DEBUG`: 198 x 4 artefacts equal both ways; 483 thunks released, 6 forced a second time
+at release (captures), 18 written again after a wipe, 40 captured nodes kept, no debug check
+raised.
+
+### 5. What it costs in clarity
+
+`Explanation` now carries mutable global state for the frames, its smart constructors are no
+longer pure (they note what they build while a thunk is forced), and the memo has a second life
+cycle beside the wipe (the window, its kept cells, its ghost). Each is stated where it lives. The
+sentence "a thunk is the only shared node" is gone from the header, replaced by what was measured.
+
+### 6. Gate
+
+Fresh clone of `wave55-thunk` at `a8762eb` from the hub (`/scratch/arthur/wave55-thunk-gate`,
+binary `40638833`) against gate 70's `214e74d1`: `make check` rc 0 (4 312 ok, gate 70's 4 289 plus
+the 23 of `test_release_m11t13` and the reworded thunk counts; 198 models, peak RSS 100 MB),
+198 models x 4 artefacts equal (`out`, `rc`, `opb`, `pbp`), lane 301/301 and debug 289/289 equal
+to the reference, scaling ok, `bench/diff` untouched. Nothing to re-record. The tip after
+`a8762eb` adds documentation only.
