@@ -525,6 +525,61 @@ Identifiers that are not valid OPB names are rewritten by `Lit.sanitize` and the
 is dumped as comments at the head of the `.opb`. Do not invent a second naming scheme —
 grep-ability of proofs against models is the point.
 
+### 3b. The second contract: `cake_pb_cp`'s names, under `--e2e` *(normative for `--e2e` only — M14-e2e-verification-T3, D-0187)*
+
+Everything above is baguette's own `.opb`, and stays the only naming scheme of a default
+run. Under `--e2e` the proof is checked against the `.opb` that CakeML's verified encoder
+`cake_pb_cp` writes for the model's `.scp` (D-0174), and its head (`lib/proof/e2e.ml`) cites
+that file's rows by label. Baguette never reads the file. What it relies on is this section,
+transcribed from the HOL4 sources of the build it was checked against: **`cake_pb_cp` sha256
+`ca92491e`, CakePB `438b8f83`, CakeML `14856fcf`** (`cp_encScript.sml`, `cp_to_ilpScript.sml`,
+`ilpScript.sml`, `ilp_to_pbScript.sml`, `cp_to_ilp_linearScript.sml`,
+`cp_to_ilp_primScript.sml`, `cp_to_ilp_logicalScript.sml`, `cp_to_ilp_countingScript.sml`,
+`int_bitwiseExtraScript.sml`). A different build may break it. That shows as a refused line,
+never as a verified wrong answer, because every cited row is checked against cake's file.
+
+**The translator's names** (`tools/e2e/fzn2scp.py`, part of the contract). The k-th FlatZinc
+constraint item, counted from 1 in file order, is `.scp` constraint `c<k>`; a variable is its
+FlatZinc name with every character outside `[A-Za-z0-9_]` replaced by `_` (written `X` below);
+the k-th variable with a set domain with holes, in declaration order, gets `(d<k> in (v ...) X)`.
+
+**Integers.** X over `[l, u]` is its two's-complement bits: `i[X][b<j>]` with weight `2^j`,
+`j < h`, and `i[X][sign]` with weight `-2^h` when `l < 0` (`bit_width`: `h` is the bit length
+of `u`, or of the larger of `l` and `u` when `l < 0`, a negative `i` counting as `-i - 1`). Its
+bound rows are `@i[X][lb]` (`B >= l`) and `@i[X][ub]` (`B <= u`).
+
+**Atoms**, written only where a constraint asks for one: `i[X][ge<k>]` (`B >= k`), defined by
+`@i[X][ge<k>][f]` (`B >= k -> atom`) and `@i[X][ge<k>][r]` (`atom -> B >= k`); `i[X][eq<k>]`,
+defined by `@i[X][eq<k>][f]` and `[r]` over `i[X][ge<k>]` and `i[X][ge<k+1>]`, which exist
+with it; a constant `K` in a reify tuple is `n[K][ge<k>]`, `n[K][eq<k>]`, likewise. A negative
+`k` is written `-3`.
+
+**Rows** (ilp_to_pb's `>=` form; `c[N]` is `mk_name`, `@c[N][tag]`):
+
+| `.scp` | rows | flags |
+|---|---|---|
+| `less_equal x y`, `less_than x y`, `lin_less_equal (a x ...) c` | `@c[N]`: `y - x >= 0`, `y - x >= 1`, `-sum a x >= -c` | |
+| `equals x y`, `lin_equals` | `@c[N][ge]` (`x - y >= 0`), `@c[N][le]` | |
+| `not_equals x y`, `lin_not_equals` | `@c[N][gt]` (`x - y >= 1` unless `~b[N][ne]`), `@c[N][lt]` (`y - x >= 1` unless `b[N][ne]`) | `b[N][ne]` |
+| `all_different (x0 ... )` | per pair `i < j`: `@c[N][<i>gt<j>]`, `@c[N][<i>lt<j>]` | `x[N][<i>_<j>]` |
+| `or (t ...) t0`, `and` | `@c[N][pos]`, `@c[N][neg]` over the tuples' eq atoms | |
+| `less_equal_iff t x y`, `lin_less_equal_iff` | `@c[N][r]` (`t -> ...`), `@c[N][f]` (`... -> t`) | |
+| `equals_iff t x y` | `@c[N][ge]`, `@c[N][le]` guarded by `t`; `@b[N][gt][r]`, `@b[N][lt][r]`; `@c[N][al1]`: `lt + gt + t >= 1` | `b[N][gt]`, `b[N][lt]` |
+| `not_equals_iff t x y` | the same guarded by `~t`, both flags with `[f]` and `[r]`, `al1` over `lt + gt + ~t` | `b[N][gt]`, `b[N][lt]` |
+| `d<k> in (v ...) X` | `@c[d<k>][al1]` over `i[X][eq<v>]` | |
+
+Constants are folded into the degree (`mk_constraint_ge`, `mk_lin_constraint_ge`), integer
+terms are kept per occurrence, and a guard's big-M is `max(0, c - min)` (`bits_imply`) or
+`max(0, 1 - c + max)` (`imply_bit`) over the terms' BIT range, not their declared bounds.
+
+**What the prefix adds**, all of it fresh names baguette's own `.opb` uses in the same sense:
+`@A1[x_ge_v]`, `@A2[x_ge_v]` (`red`, minting `x_ge_v`), `@E1[...]`, `@E2[...]` (the halves of
+`B = l + S`), `@L[x_ge_v]` (the rung), `@S[<cake label>]` (a cake row with `B -> l + S`),
+`@Q<p|n|t|f|a|b>[<atom>]` (an atom's value as a clause), `@D1[s]`, `@D2[s]` (a selector `s`
+defined as a flag), `@W[n]` (a candidate a pin cites), then each of baguette's rows under its
+own `@cN` (`ia` or `rup`), and the proof has **no `f` line**. Each `soli` is labelled
+`@O[c<id>]` and `@c<id>` derived from it by the objective's half (D-0182).
+
 ## 4. Per-propagator justification
 
 Each propagator module MUST document, in its header comment, the shape of the proof step

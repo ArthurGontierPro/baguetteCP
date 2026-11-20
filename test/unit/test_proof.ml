@@ -4680,6 +4680,60 @@ let test_m11t5_wipe_order () =
   check_eq "m11t5: wipe_level's del lines over 100 random level walks" ~expected:"0"
     ~got:(string_of_int !bad)
 
+(* M14-e2e-verification-T3 (D-0187): the second contract and the solver-written prefix.
+   bit_width and the .scp names are cake's own rules (PROOF-FORMAT section 3b); the
+   prefix of one row, `x <= y` over 0..2, is the shape veripb checks in the e2e lane:
+   atoms, halves, rungs pinned on their @L, cake's `@c[c1]` substituted and baguette's row
+   pinned by `ia` on it, no `f` line. Off by default: an encoding made without the request
+   carries no prefix writer. *)
+let test_m14t3_e2e_contract () =
+  let module E = Baguette_proof.E2e in
+  let bw lo hi =
+    let c, h = E.bit_width ~lo ~hi in
+    Printf.sprintf "%b,%d" c h
+  in
+  check_eq "e2e: bit_width 0..3" ~expected:"false,2" ~got:(bw 0 3);
+  check_eq "e2e: bit_width 0..9" ~expected:"false,4" ~got:(bw 0 9);
+  check_eq "e2e: bit_width -2..5 (sign)" ~expected:"true,3" ~got:(bw (-2) 5);
+  check_eq "e2e: bit_width -1..0" ~expected:"true,0" ~got:(bw (-1) 0);
+  check_eq "e2e: bit_width 0..0" ~expected:"false,0" ~got:(bw 0 0);
+  check_eq "e2e: scp_name" ~expected:"q_1_" ~got:(E.scp_name "q[1]");
+  check "e2e: off by default" (not (Encoding.e2e_on (Encoding.create ())));
+  let path = Filename.temp_file "baguette_e2e" ".prefix" in
+  Encoding.e2e_request := Some path;
+  let t = Encoding.create () in
+  Encoding.e2e_request := None;
+  check "e2e: on when requested" (Encoding.e2e_on t);
+  Encoding.declare_int t "x" ~lo:0 ~hi:2;
+  Encoding.declare_int t "y" ~lo:0 ~hi:2;
+  Encoding.e2e_begin t ~name:"c1" (E.Le (E.Var "x", E.Var "y"));
+  ignore (Encoding.add_int_lin_le t [ (1, "x"); (-1, "y") ] 0);
+  Encoding.e2e_end t;
+  raises "e2e: a row outside any constraint is refused" (fun () ->
+      ignore (Encoding.add_int_lin_le t [ (1, "x") ] 1));
+  let out, _ = emitted (fun w -> Encoding.start_proof t w) in
+  Writer.e2e_soli := None;
+  let lines = String.split_on_char '\n' out in
+  let has l = List.mem l lines in
+  check "e2e: no f line"
+    (not (List.exists (fun l -> String.length l > 1 && l.[0] = 'f' && l.[1] = ' ') lines));
+  check "e2e: atom A1"
+    (has "@A1[x_ge_1] red +1 i[x][b0] +2 i[x][b1] +1 ~x_ge_1 >= 1 : x_ge_1 -> 0 ;");
+  check "e2e: atom A2"
+    (has "@A2[x_ge_2] red -1 i[x][b0] -2 i[x][b1] +2 x_ge_2 >= -1 : x_ge_2 -> 1 ;");
+  check "e2e: rung pinned on its @L"
+    (has "@c1 ia +1 ~x_ge_2 +1 x_ge_1 >= 1 : @L[x_ge_2] ;");
+  check "e2e: cake's row substituted"
+    (has "@S[c[c1]] pol @c[c1] @E1[x_ge_2] 1 * + @E2[y_ge_1] 1 * + ;");
+  check "e2e: baguette's row pinned by ia"
+    (List.exists
+       (fun l ->
+         String.length l > 4
+         && String.sub l 0 4 = "@c3 "
+         && String.ends_with ~suffix:": @S[c[c1]] ;" l)
+       lines);
+  Sys.remove path
+
 let () =
   report_checker ();
   test_lits ();
@@ -4739,6 +4793,7 @@ let () =
   test_m11t5_writer_lines_are_the_reference ();
   test_m11t5_lazy_origin ();
   test_m11t5_wipe_order ();
+  test_m14t3_e2e_contract ();
   if !failures > 0 then (
     Printf.printf "\n%d failure(s)\n" !failures;
     exit 1)

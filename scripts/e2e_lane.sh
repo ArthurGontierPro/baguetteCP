@@ -42,6 +42,23 @@
 #                    core-worse     accepted: refused by cake_pb_cp itself at its conclusion
 #                                   ("conclusion BOUNDS check failed: ..."), so the verified
 #                                   checker refuses a wrong optimum whatever the elaborator did
+#   1b. solver     (M14-e2e-verification-T3, D-0187) every model again through chain.sh with
+#                  E2E_SOLVER=1: baguette --e2e writes the prefix itself and its .pbp is checked
+#                  against cake's .opb with no bridge. A model --e2e does not cover is SKIPPED
+#                  with baguette's reason; every model it VERIFIES must be VERIFIED by pass 1
+#                  too, with the same answer, and every model pass 1 VERIFIES must be VERIFIED
+#                  here or SKIPPED with an `e2e:` reason. FAIL otherwise.
+#   2b. solver controls  the corruptions of the solver-written path, asserted as in pass 2:
+#                    pin-stronger   the prefix's pin of baguette's first model row with three
+#                                   terms or more states it with degree + 1: refused at THAT
+#                                   pin ("Expected constraint is not syntactically implied by
+#                                   the constraint at the hint." for an `ia`, the RUP sentence
+#                                   for a `rup`)
+#                    sel-witness    a WRONG DEFINITION of a disequality selector (`@D1`'s
+#                                   witness s -> ~F): refused at that red line, "Proofgoal #1
+#                                   could not be autoproven." (models where the flag is free)
+#                  plus scp-weaker, scp-stronger, bridge-witness (the atom definition), and the
+#                  wrong optimum (opt-*, core-*) on the solver's own proof.
 #   3. validation  the TRUSTED translator against MiniZinc's reference solvers (D-0174 sec. 6,
 #                  GCS #987): on every model of pass 1 that is not SKIPPED, the solution set
 #                  cake's semantics admit for the .scp (tools/e2e/scpsem.py, which reads only
@@ -118,6 +135,26 @@ echo "chain: $nm models, $nv VERIFIED ($nvs SAT, $nvu UNSAT, $nvo OPT), $ns SKIP
 [ "$nf" -eq 0 ] && [ "$nl" -eq "$nm" ] || fail=1
 [ "$nv" -gt 0 ] || { echo "FAIL chain: NOT ONE model was verified. This is not a pass."; fail=1; }
 
+# ---------------------------------------------------------------- 1b. solver (T3, D-0187)
+mkdir -p "$OUT/solver"
+ls "$ROOT"/test/models/*.fzn | E2E_SOLVER=1 xargs -P "$J" -I{} bash -c 'run "$0"/tools/e2e/chain.sh {} "$1"' "$ROOT" "$OUT/solver" \
+    | sort > "$OUT/solver.txt"
+sv=$(grep -c ' VERIFIED ' "$OUT/solver.txt")
+ss=$(grep -c ' SKIPPED e2e: ' "$OUT/solver.txt")
+st=$(grep -c ' SKIPPED ' "$OUT/solver.txt")
+sf=$(grep -vc -E ' (VERIFIED|SKIPPED) ' "$OUT/solver.txt")
+# the two passes agree: a model VERIFIED on one path is VERIFIED on the other with the same
+# answer, unless --e2e does not cover it (SKIPPED e2e: ...)
+sd=$(join <(awk '{print $1, $2, $3}' "$OUT/chain.txt") <(awk '{print $1, $2, $3, $4}' "$OUT/solver.txt") |
+    awk '($2 == "VERIFIED" && !($4 == "VERIFIED" && $5 == $3) && !($4 == "SKIPPED" && $5 == "e2e:")) ||
+         ($4 == "VERIFIED" && !($2 == "VERIFIED" && $3 == $5)) {print}')
+[ -n "$sd" ] && echo "$sd" | sed 's/^/DISAGREE /'
+nsd=$(echo -n "$sd" | grep -c .)
+grep -v -E ' (VERIFIED|SKIPPED) ' "$OUT/solver.txt"
+echo "solver: $nm models, $sv VERIFIED by cake_pb_cp with the prefix written by baguette --e2e, $ss outside --e2e's families, $((st - ss)) outside the translator's, $sf FAIL, $nsd disagreeing with the bridged pass"
+[ "$sf" -eq 0 ] && [ "$nsd" -eq 0 ] && [ "$(wc -l < "$OUT/solver.txt")" -eq "$nm" ] || fail=1
+[ "$sv" -gt 0 ] || { echo "FAIL solver: NOT ONE model was verified. This is not a pass."; fail=1; }
+
 # ---------------------------------------------------------------- 2. controls
 RUP="The constraint is not implied by reverse unit propagation (RUP) from core and derived database."
 SOL="Propagation engine error: The given solution is conflicting with constraint"
@@ -169,6 +206,52 @@ while IFS= read -r l; do
 done < "$OUT/controls.txt"
 echo "controls: $ncok of $nc refused where and as expected ($NCONTROLS expected)"
 [ "$nc" -eq "$NCONTROLS" ] && [ "$ncok" -eq "$NCONTROLS" ] || fail=1
+
+# ---------------------------------------------------------------- 2b. solver controls (T3)
+IA="Expected constraint is not syntactically implied by the constraint at the hint."
+SCONTROLS="chain_sat:pin-stronger php_unsat:pin-stronger bool_or_sat:pin-stronger bool_and_sat:pin-stronger
+reif_lin_le_sat:pin-stronger alldiff_const_sat:sel-witness ne_sat:sel-witness reif_ne_entail_sat:sel-witness
+chain_sat:scp-weaker php_unsat:scp-weaker search_all_const_sat:scp-stronger bits_pb_learn_sat:scp-stronger
+chain_sat:bridge-witness lin_sat:bridge-witness opt_min_sat:opt-better opt_max_sat:opt-better
+opt_min_sat:opt-worse restart_queens6_opt:opt-worse opt_min_sat:core-better restart_queens6_opt:core-better
+opt_max_sat:core-worse opt_min_sat:core-worse"
+NSCONTROLS=22
+mkdir -p "$OUT/scontrols"
+for c in $SCONTROLS; do echo "$c"; done | E2E_SOLVER=1 xargs -P "$J" -I{} bash -c \
+    'm=${0%%:*}; k=${0#*:}; f="$1/test/models/$m.fzn"; [ -f "$f" ] || f="$1/tools/e2e/models/$m.fzn"
+     run "$1"/tools/e2e/chain.sh "$f" "$2" "$k"' {} "$ROOT" "$OUT/scontrols" \
+    | sort > "$OUT/scontrols.txt"
+nc=0
+ncok=0
+while IFS= read -r l; do
+    nc=$((nc + 1))
+    k=${l%% *}
+    k=${k#*.}
+    at=$(echo "$l" | sed -n 's/.*| at=\([^|]*\) | cause=.*/\1/p')
+    cause=$(echo "$l" | sed -n 's/.*| cause=\(.*\) | target=.*/\1/p')
+    target=$(echo "$l" | sed -n 's/.*| target=\(.*\)$/\1/p')
+    ok=0
+    case "$k" in
+        pin-stronger) { [ "$at" = "$target ia" ] && [ "$cause" = "$IA" ]; } || { [ "$at" = "$target rup" ] && [ "$cause" = "$RUP" ]; } && ok=1 ;;
+        scp-weaker) { [[ "$at" =~ ^@c[0-9]+\ ia$ ]] && [ "$cause" = "$IA" ]; } || { [[ "$at" =~ ^@c[0-9]+\ rup$ ]] && [ "$cause" = "$RUP" ]; } && ok=1 ;;
+        scp-stronger) [[ "$at" == "sol "* ]] && [[ "$cause" =~ ^"$SOL"\ [0-9]+\ in\ the\ database\.\ \(@S\[c\[$target\]\]\)$ ]] && ok=1 ;;
+        bridge-witness | sel-witness) [ "$at" = "$target red" ] && [ "$cause" = "$RED" ] && ok=1 ;;
+        opt-better)
+            ub=${target#* }
+            [ "$at" = "conclusion BOUNDS" ] && [ "$cause" = "Unable to verify 'conclusion BOUNDS'. The claimed upper bound of $ub mismatches the best recorded upper bound of $((ub + 1))." ] && ok=1 ;;
+        opt-worse) [ "$at" = "conclusion BOUNDS" ] && [ "$cause" = "$OPTW" ] && ok=1 ;;
+        core-better) [ "$at" = "conclusion BOUNDS" ] && [ "$cause" = "$CORE [lb <= dbound] T [upper bound check] F [lower bound check] T" ] && ok=1 ;;
+        core-worse) [ "$at" = "conclusion BOUNDS" ] && [ "$cause" = "$CORE [lb <= dbound] F [upper bound check] T [lower bound check] T" ] && ok=1 ;;
+    esac
+    if [[ "$l" == *" REFUSED "* ]] && [ $ok -eq 1 ]; then
+        echo "PASS  $l"
+        ncok=$((ncok + 1))
+    else
+        echo "FAIL  $l"
+    fi
+done < "$OUT/scontrols.txt"
+echo "solver controls: $ncok of $nc refused where and as expected ($NSCONTROLS expected)"
+[ "$nc" -eq "$NSCONTROLS" ] && [ "$ncok" -eq "$NSCONTROLS" ] || fail=1
 
 # ---------------------------------------------------------------- 3. validation
 # shellcheck disable=SC2016
