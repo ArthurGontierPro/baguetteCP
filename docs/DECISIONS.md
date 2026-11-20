@@ -22829,8 +22829,8 @@ because it is the slowest stage on the largest models.
 
 ## D-0187  [AUTONOME] M14-e2e-verification-T3: baguette writes the end-to-end prefix itself under `--e2e`, off by default, against a second naming contract pinned to `cake_pb_cp` `ca92491e`
 
-Status: DECIDED in autonomous mode on 2026-11-20, before the work that depends on it. Section 6 is
-filled in when the work ends.
+Status: DONE. DECIDED in autonomous mode on 2026-11-20 before the work that depended on it (commit
+`6766838`); section 6 is the result.
 Date: 2026-11-20
 Task: M14-e2e-verification-T3 (agent-e2e3, `wave55-e2e3`)
 Touches: this record, `docs/PROOF-FORMAT.md` §3 (a second contract), a new `lib/proof/e2e.ml`,
@@ -22906,3 +22906,102 @@ this task, so reverting leaves the lane exactly as D-0182 left it.
 ### 5. What this does not decide
 
 Whether `--e2e` becomes a default, and whether the bridge is retired. Both stay the user's.
+
+### 6. Result
+
+**What was built.** `baguette M.fzn --proof P --e2e` (`lib/proof/e2e.ml`, about 900 lines with its
+header, and four hooks that do nothing without the flag: `Encoding` reports each declaration and each
+committed row, `Compile` names the FlatZinc constraint it is posting and the cake constraint the
+translator writes for it, `Writer` leaves out `f` and relabels `soli`, `bin/main.ml` takes the flag).
+The prefix is written to a side file while the `.opb` is built and copied after the header. A row is
+pinned against the candidates of ITS OWN constraint only (cake's rows substituted, atoms replaced,
+flag-clause resolvents), so nothing is searched across the model. Two departures from the bridge,
+both found while building:
+
+- cake's ge atoms are replaced through clauses derived by ONE `pol` each from the atom's own
+  definition row and the `@A1`/`@A2` of the same value (`[r] + A2`, `[f] + A1`, saturated); the
+  bridge derived them by `rup`. eq atoms keep a `rup`, local once the two ge clauses exist;
+- a set domain with holes is covered (cake's `@c[d<k>][al1]`, interior eq atoms), which the
+  Challenge needs: 4 of the first 16 instances tried were refused for it before.
+
+Covered: T2 (`int_lin_le/eq/ne`, `int_le/lt/eq/ne`, `all_different_int`), T4 (`bool_clause`,
+`array_bool_or/and`, `bool_eq/not`, `bool2int`, `int_le/eq/ne_reif`, `int_lin_le_reif`), set
+domains with holes, objectives. Refused before the search, exit 3, with the construct's name: T5's
+globals (element, global_cardinality, maxmin, member, inverse), T6's, a bits-arm variable.
+
+**The lane** (`make e2e`, binary md5 `911a5750` = `b8958e5`, veripb 3.0.2 `d5644ca4`, `cake_pb_cp`
+`ca92491e`, run `lane2`):
+
+| pass | result |
+|---|---|
+| 1, bridged (unchanged) | 188 of 207 VERIFIED (100 SAT, 80 UNSAT, 8 OPT), 19 SKIPPED, 0 FAIL |
+| **1b, written by the solver** | **117 VERIFIED**, 71 outside `--e2e` (global_cardinality 33, element 18, maxmin 10, member 7, inverse 3), 19 outside the translator, **0 FAIL, 0 disagreeing** with pass 1 |
+| 2, controls | 31 of 31 |
+| **2b, solver controls** | **22 of 22** refused at the expected line, in the checker's sentence |
+| 3, validation | 187 AGREE, 1 UNCHECKED, 0 DIFFER |
+
+The 22: `pin-stronger` (the solver's own pin of a model row, degree + 1) on `chain_sat`, `php_unsat`,
+`bool_or_sat`, `bool_and_sat`, `reif_lin_le_sat`, each refused at that `ia` with "Expected constraint
+is not syntactically implied by the constraint at the hint."; `sel-witness` (a selector defined as
+the NEGATION of cake's flag, `@D1`'s witness `s -> ~F`) on `alldiff_const_sat`, `ne_sat`,
+`reif_ne_entail_sat` (a reified one), "Proofgoal #1 could not be autoproven."; and on the solver's
+proof the bridge's `scp-weaker` (2), `scp-stronger` (2), the atom witness (2) and the wrong optimum
+(8, four of them refused by `cake_pb_cp` itself). `sel-witness` is rightly NOT refused on
+`reif_eq_refute_sat`, where the model fixes the flag at the root, so the wrong witness is a valid
+one there (measured VERIFIED, D-0180's lesson again). A `pin-stronger` refused at an `ia` shows the
+pin does not accept a stronger row; it does not show that no derivation of it exists.
+
+**The Challenge** (instances of D-0182 that `--e2e` covers, release binary `409bec90` for the first
+series and `c35a6c52` for the second, same prefix lines as `b8958e5`; bridged numbers from D-0182's
+`series3`; load average near 70). Prefix = the solver's head of the proof alone, then `conclusion
+NONE`, elaborated and checked; "bridge prefix" = `tools/e2e/prefix.sh` on the same files.
+
+| instance | answer | bridge s removed | prefix MB, solver / bridge | prefix elab + cake s, solver / bridge | whole chain elab + cake s, solver / bridged | solve s, plain / `--e2e` |
+|---|---|---|---|---|---|---|
+| `2023_sudoku_fixed_sudoku_p48` | SAT | 381.9 | 10.5 / 10.4 | 2.1 + 2.9 / 3.1 + 2.7 | 2.1 + 3.1 / 3.1 + 3.2 | 0.17 / 2.06 |
+| `2024_word-equations_..._140-int` | OPT=3 | 422.9 | 102.5 / - | 133.1 + 25.6 / - | 961.6 + 50.4 / 840.6 + 42.4 | 4.17 / 12.97 |
+| `2015_gfd-schedule_n30f3d30m7k4` | OPT=1 | 39.0 | 46.8 / - | 8.0 + 189.7 / - | 19.1 + 169.1 / 17.8 + 167.6 | 0.89 / 3.29 |
+| `2011_fillomino_15` | SAT | 31.5 | 8.2 / 8.3 | 0.7 + 1.9 / 0.7 + 1.9 | 10.9 + 6.3 / 10.9 + 6.6 | 0.80 / 1.60 |
+| `2014_fillomino_5x5_6` | SAT | 30.0 | 8.6 / 8.6 | 0.8 + 1.9 / 0.7 + 1.9 | 47.8 + 17.6 / 46.2 + 18.4 | 3.55 / 4.50 |
+| `2011_fillomino_13` | SAT | 26.0 | 7.9 / - | 0.6 + 1.8 / - | 8.0 + 5.5 / 8.0 + 4.9 | 0.69 / 1.45 |
+| `2012_solbat_sb_14_14_6_0` | SAT | 21.9 | 23.3 / 23.1 | 7.4 + 5.6 / 8.7 + 5.7 | 54.9 + 13.0 / 47.9 + 12.6 | 2.66 / 3.81 |
+| `2014_solbat_sb_13_13_5_5` | UNSAT | 17.6 | 19.0 / 18.9 | 7.1 + 4.6 / 6.1 + 4.6 | 12.4 + 5.3 / 10.1 + 5.1 | 0.60 / 1.61 |
+| `2012_solbat_sb_12_12_5_1` | SAT | 13.4 | 16.1 / 16.0 | 8.6 + 3.9 / 7.8 + 3.8 | 74.0 + 17.7 / 73.5 + 17.8 | 5.47 / 5.44 |
+| `2019_amaze_2012-07-27` | SAT | 4.0 | 6.4 / - | 0.4 + 1.3 / - | 16.0 + 14.0 / 14.9 + 12.9 | 3.03 / 3.36 |
+| `2014_stochastic-fjsp_..._det` | OPT=108 | 3.4 | 19.4 / - | 0.7 + 4.8 / - | 56.6 + 41.1 / 50.2 + 38.9 | 3.09 / 4.00 |
+| `2011_bacp_bacp-19` | OPT=28 | 2.5 | 5.9 / 6.0 | 0.6 + 1.2 / 0.5 + 1.2 | 33.3 + 29.6 / 28.7 + 26.1 | 5.95 / 6.08 |
+| `2012_amaze_2012-06-22` | OPT=928 | 2.1 | 8.4 / 8.4 | 0.5 + 4.3 / 0.5 + 4.0 | 23.3 + 70.0 / 26.9 + 68.1 | 3.63 / 3.93 |
+| `2023_speck-optimisation_easy_3` | OPT=5 | 1.5 | 3.5 / - | 0.2 + 0.8 / - | 10.2 + 16.1 / 9.1 + 14.5 | 3.32 / 3.51 |
+| `2021_neighbours_..._19` | OPT=39 | 0.5 | 1.1 / - | 0.1 + 0.3 / - | 6.6 + 8.5 / 7.1 + 8.3 | 2.08 / 2.10 |
+| `2022_nfc_24_4_2` | OPT=1836 | 0.4 | 9.0 / 9.0 | 0.3 + 3.0 / 0.4 + 3.1 | 2.8 + 18.0 / 3.1 + 17.0 | 2.09 / 2.34 |
+| `2016_nfc_12_2_10` | OPT=848 | 0.2 | 3.9 / - | 0.2 + 1.0 / - | 1.9 + 10.3 / 1.9 + 10.1 | 0.99 / 1.09 |
+| `2016_zephyrus_12__8__6__3` | OPT=1300 | 1 170.7 | 1 357.6 / - | 106.6 + heap / - | 476.6 + heap / 475.9 + heap | 6.68 (D-0182) / 151.4 |
+| `2015_gfd-schedule_n120f5d50m50k20` | OPT=1 | 2 407.8 | 517.8 / - | 394.2 + (running) / - | 469.4 + heap / 380.0 + heap | 5.13 (D-0182) / 131.1 |
+
+17 VERIFIED by `cake_pb_cp`, every verdict the bridged chain's; on zephyrus and gfd-n120 `veripb
+--elaborate` accepts and `cake_pb_cp` exhausts its 24 GB heap, as on the bridged chain (D-0182 §4),
+and on zephyrus the prefix ALONE exhausts it too. `2011_black-hole_17` (element) and `2015_p1f_13`
+(inverse) are refused by `--e2e` (T3b).
+
+What this says:
+
+1. **The bridge stage is gone**: 4 577 s of bridge on these 19 instances (2 408 s on gfd-n120,
+   1 171 s on zephyrus, 423 s on word-equations, 382 s on sudoku_p48), replaced by the solver writing
+   the prefix: +0 to +9 s on 17 of them, +125 s on gfd-n120 (518 MB) and +145 s on zephyrus (1.36 GB).
+   The writer is linear but not fast (about 10 MB/s of prefix on the two largest), a lead if those
+   models matter.
+2. **The prefix is the bridge's, in size and in check time**: within 1 % in bytes and within the
+   load's noise in time wherever both were measured. So T3 does not by itself lower the chain's x12.7
+   (D-0182). What lowers it is a cheaper derivation where the prefix is expensive, and that is a
+   per-family choice the solver can now make where it has the knowledge: the ge atoms already go by
+   `pol`; element's clauses are the measured cost (black-hole), which is T3b.
+
+**Gate.** Fresh clone of `e103144` (binary `e77f4d11`) against main `66bdaab`'s dev binary
+(`0c1ff1e5`): `make check` rc 0 (4 442 ok), 207 models x 4 artefacts equal, differential lane 324 of
+324, debug 311 of 311, scaling ok. `b8958e5` (the selector index, `e2e.ml` only, same prefix lines)
+re-gated on a fresh clone: `make check` rc 0, 207 x 4 artefacts equal (binary `911a5750`).
+
+**Left.** T3b (the globals, and element's clauses by `pol` through `@A2` instead of 93 043 `rup`),
+T7 (a bits-arm variable is refused), the writer's speed on the largest models, and the two user
+decisions of section 5. Results in `/cluster/arthur/baguette-results/wave55-e2e3/`.
+

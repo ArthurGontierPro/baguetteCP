@@ -22,7 +22,6 @@ of it to every session and stopping at a broken line before it even reached the 
 | M8-bits-encoding-T4 (two arms, `W = none` and `W = 0`, on the sixteen editions) | run directories under `/scratch/arthur/m8t4/`, `tools/compare/` (additions), `bench/challenge/README.md` (the run's row), a new D-record | agent-m8t4 (`wave55-m8t4`) | 2026-11-20 |
 | M10-search-strategy-T5, M9-no-proof-T3, M7-T30 (one Challenge series on current main: default, `-f`, default `--no-proof`) | run dirs `/scratch/arthur/m10t5/`, `tools/compare/` (additions), `bench/challenge/README.md` (the run's row); reserved record D-0185 | agent-m10t5 (`wave55-m10t5`) | 2026-11-20 |
 | M16-file-review-T1 (the core) | `lib/core/store.ml`, `domain.ml`, `engine.ml`, `var.ml`, `propagator.ml`, `search.ml`, their unit tests; `bench/scaling/baseline.tsv` (re-baseline only); reserved record D-0186 | agent-review1 (`wave55-review1`) | 2026-11-20 |
-| M14-e2e-verification-T3 (the bridge written by the solver, `--e2e`) | `lib/proof/encoding.ml` (an e2e prefix writer, additive), a NEW `lib/proof/e2e.ml`, `bin/main.ml` (the `--e2e` flag only), `lib/flatzinc/compile.ml` and `lib/proof/writer.ml` (one hook each, inert without the flag; added by agent-e2e3), `docs/PROOF-FORMAT.md` §3 (cake's naming as a second contract), `tools/e2e/`, `scripts/e2e_lane.sh`, `test/unit/test_proof.ml` (one section); reserved record D-0187 ([AUTONOME]) | agent-e2e3 (`wave55-e2e3`) | 2026-11-20 |
 
 ## Cross-session requests
 
@@ -631,6 +630,7 @@ section 1. Shares are inclusive, of the whole run.
 | M11-complexity-T17 (learned clauses that cannot prune) | agent-learnprop (`wave55-learnprop`) | 2026-11-20 | **D-0173.** Every learned-clause run on codes QR48 is a run of a SATISFIED clause (100 %, true literal watched in 98 %). RESTING behind `BAGUETTE_REST_SATISFIED=on`, OFF: a satisfied clause keeps its watches, leaves the wake index but for the true literal, is released by the backtrack that pops its support. Same pruning, another order: QR48 same trees and proofs, -33/-54 % instr/node without proof, -17/-33 % with; lane 250/301 differ, median -1 %. Lane config `rest` and its references added. Gate green on `88275b8` (`24efccd8`). The default is the user's decision (D-0173 section 5) |
 | M13-codes-leads-T1 (study: the root LP relaxation) | agent-lp (`wave55-lp`) | 2026-11-20 | **D-0183 (STUDY).** `tools/lp/opb2lp.py` reads baguette's `.opb`, propagates bounds at the integer level, solves the LP with HiGHS 1.16 (highspy) and counts reduced-cost fixings. Codes (17): LP bound 1, nothing fixed, no root UNSAT, structurally. Challenge (39 of 42): >10 % of the gap closed on 12, fixings on 2 (radiation). `pol` shape verified by veripb with per-claim controls. Recommended: not now; root cuts before a plain LP if ever. |
 | M4-T6 (spike: in-proof tabulation) | agent-tab (`wave55-tab`) | 2026-11-20 | **D-0184 (SPIKE).** The GCS tabulation transfers to the order encoding: a `red` pair per tuple over the order literals, the at-least-one row by `rup` from D-0060's rows through per-pair lemmas, one `rup` per GAC removal (plus a KILL line per hole-killed support). About `5 |Dx| |Dy|` root lines. `bench/tabulation_spike/run_spike.sh`: 4 models verified, 6 mutations refused at their line. Not built (option A) |
+| M14-e2e-verification-T3 (the bridge written by the solver) | agent-e2e3 (`wave55-e2e3`) | 2026-11-20 | **D-0187 [AUTONOME].** `--e2e`, OFF by default: baguette's proof is checked against `cake_pb_cp`'s `.opb` directly, its head (`lib/proof/e2e.ml`) deriving each `.opb` row from cake's, from compile.ml's per-constraint origin and a replica of cake's rows (PROOF-FORMAT §3b, CakeML `14856fcf`). T2, T4 and set domains covered; T5's globals refused (TODO T3b). `make e2e` pass 1b 117 of 207 VERIFIED with no bridge, 0 FAIL, 22 of 22 solver controls. Challenge: prefix size and check time equal to the bridge's, the bridge stage removed. See the handoff note |
 
 ## Handoff notes
 
@@ -674,6 +674,13 @@ user decides between D-0183's options A (recommended, nothing now), B and C. Res
 ### 2026-11-20 (agent-tab, `wave55-tab`): M4-T6, D-0184 (SPIKE)
 
 In-proof tabulation of `int_times` works over the order encoding and every piece is checked by veripb (`bench/tabulation_spike/run_spike.sh`, 4 models, 6 mutation controls refused at their line). It costs about `5 |Dx| |Dy|` root lines, not ~10, and 23 of 37 GAC removals were already `rup` against D-0060's rows. Nothing built (D-0184 option A). M4-T6b (TODO, autonomous) measures the node gain on real instances before any build.
+
+### 2026-11-20 (agent-e2e3, `wave55-e2e3`): M14-e2e-verification-T3, D-0187 [AUTONOME]
+
+`baguette M.fzn --proof P --e2e` writes a proof to check against `cake_pb_cp M.scp`'s `.opb` with no bridge (`tools/e2e/chain.sh` with
+`E2E_SOLVER=1`, `tools/e2e/measure_e2e.sh`). Off by default, every default byte unchanged. Covers T2, T4 and holes; a T5 global is
+refused with its name (TODO T3b: interior eq atoms, and element's clauses by `pol` through `@A2`, which is black-hole's cost).
+If cake_pb_cp is rebuilt from another CakeML commit, PROOF-FORMAT §3b may go stale: the lane's pass 1b will FAIL, it cannot verify wrongly.
 
 ## Handoff notes
 
