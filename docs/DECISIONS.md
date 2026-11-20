@@ -22477,3 +22477,157 @@ MILP solvers' advantage on the codes' SAT questions is their primal heuristics a
 (D-0169 measured the node rate). If the Challenge side is wanted later, C should be studied before
 B, because the plain relaxation of order-encoded rows is weak exactly where HiGHS's cuts close the
 gap.
+
+## D-0184  M4-T6: in-proof tabulation over the order encoding. It transfers, at about five lines per pair of operand values, and two removals in three did not need it
+
+Status: SPIKE (no solver code, no default changed, a recommendation)
+Date: 2026-11-20
+Task: M4-T6 (agent-tab, `wave55-tab`)
+Touches: `bench/tabulation_spike/` (new: `tabulate.py`, `run_spike.sh`, `no_table.py`, four models).
+Runs in `fataepyc-06:/scratch/arthur/wave55-tab-runs/`, the summary and the scaling models copied to
+`/cluster/arthur/baguette-results/wave55-tab/`. Binary `main.exe` md5 `0c1ff1e5` (branch base
+`b321667`), veripb 3.0.2.
+
+### 1. The question
+
+The ROADMAP row asked whether the GCS route to GAC arithmetic (derive a table of the relation inside
+the proof, then justify every pruning by support reasoning over it, with no `.opb` change) carries
+over to baguette's ORDER encoding, where `x = v` is not a literal but the pair
+`x_ge_v /\ ~x_ge_(v+1)`. It was answered on `int_times(x, y, z)` with a generator
+(`tabulate.py`) that reads the `.opb` the solver writes, so the formula is the solver's byte for
+byte, and writes a `.pbp` of its own. No module was added under `lib/`, see section 6.
+
+### 2. The proof shape (all of it checked by veripb 3.0.2)
+
+Per pair `(a, b)` of declared values of x and y with `c = a*b` inside z's declared box, one fresh
+selector `s_ab` and two `red` lines, the literals `l_1..l_k` being those of `x = a`, `y = b`,
+`z = c` with constants dropped (`k <= 6`):
+
+```
+red +k ~s +1 l_1 ... +1 l_k >= k : s -> 0 ;        DEF1   s -> every literal
+red +1 s +1 ~l_1 ... +1 ~l_k >= 1 : s -> 1 ;       DEF2   every literal -> s
+```
+
+That is the shape the bits encoding already uses for its order atoms (PROOF-FORMAT §3,
+`Encoding.ensure_atom`), and both are accepted for a fresh selector. Then the at-least-one row
+(ALO) `sum s >= 1` is derived from D-0060's guarded rows, by `rup` only, in three layers:
+
+| line | per | shape | why it is needed |
+|---|---|---|---|
+| ZLO, ZHI | pair | `x <> a \/ y <> b \/ z_ge_c`, and `... \/ ~z_ge_(c+1)` | with x and y fixed the guarded rows are cardinality rows over z's ladder, which propagate only once a z literal is assumed |
+| CAB | pair | `x <> a \/ y <> b \/ s_ab` | DEF2 closes it once ZLO and ZHI fix z |
+| DEAD | pair with `c` outside z's box | `x <> a \/ y <> b` | the pair has no selector |
+| PERA | value of x | `sum_b s_ab \/ x <> a` | assuming `x = a` and every `s_ab` false, the CABs walk y's ladder to a conflict |
+| ALO | once | `sum s >= 1` | the PERA lines walk x's ladder |
+
+The lemmas are then deleted. What stays is DEF1, DEF2 and ALO, that is `2|T| + 1` constraints.
+
+Every GAC removal is then ONE line, `rup [w <> u] \/ ~F >= 1`, where `F` names, for each tuple
+supporting `w = u`, why it is dead. A tuple dead by a BOUND contributes that bound literal (DEF1
+then falsifies its selector by unit propagation), and one dead by an interior HOLE contributes the
+hole line's own facts through a KILL line `rup ~s_t \/ ~F_hole >= 1` written first. At the root
+every fact is a level-0 consequence and `F` is empty. A failed node writes the nogood over its left
+decisions, and a solution is logged with `sol` over the model's literals, the selectors following by
+propagation.
+
+**So the tabulation transfers to the order encoding.** The equality literal is never needed as a
+variable. It lives inside DEF1 and DEF2 as its two order literals, and a removal's claim is the
+two-literal clause every hole already uses (D-0086's one hole currency).
+
+### 3. The cost
+
+Lines at the root, measured: about `5 |Dx| |Dy| + |Dx| + 1`, that is 2 `red` + ZLO + ZHI + CAB per
+live pair. The ROADMAP's "about ten lines per constraint" is GCS's figure and does not hold here,
+where it is quadratic in the operands' declared widths. Scaling on
+`x in 0..k, y in -k..k, z in -k^2..k^2, z <= -1, z <> -2`:
+
+| k | pairs in the table | tabulation + search lines | `.pbp` bytes | `.opb` bytes (unchanged) | check time |
+|---|---|---|---|---|---|
+| 3 | 28 | 166 | 13 212 | 7 591 | 0.01 s |
+| 5 | 66 | 376 | 32 482 | 24 239 | 0.01 s |
+| 7 | 120 | 674 | 60 150 | 55 666 | 0.02 s |
+| 9 | 190 | 1 060 | 96 254 | 106 504 | 0.05 s |
+
+The tabulation costs about as many bytes as the `.opb` rows D-0060 already writes for the same
+constraint, and checking it is negligible at these widths. Per search node the cost is one line per
+removed value plus at most one KILL line per tuple killed by a hole.
+
+### 4. Verified models and mutation controls (`run_spike.sh`, exit 0)
+
+| model | answer | solver (D-0060, bounds) nodes / `.pbp` lines / bytes | tabulation nodes / lines / bytes |
+|---|---|---|---|
+| `tab_times_sat` | SAT | 2 / 7 / 511 | 3 / 211 / 17 572 |
+| `tab_times_holes_sat` | SAT | 4 / 9 / 529 | 3 / 225 / 18 149 |
+| `tab_times_holes_unsat` | UNSAT | 3 / 65 / 3 276 | 1 / 209 / 17 235 |
+| `tab_times_gap_unsat` | UNSAT | 5 / 62 / 2 125 | 1 / 62 / 3 651 |
+
+Every tabulation proof is `s VERIFIED` with the same answer as the solver's, checked in 0.01 s.
+On the two SAT models each control is refused at the line it targets, asserted by the line's shape
+and by the checker's full sentence:
+
+| mutation | refused at | wording |
+|---|---|---|
+| wrong selector definition (z = c+1 for a tuple of a solution; both `red`s still pass, a fresh definition is always sound) | that tuple's CAB | "The constraint is not implied by reverse unit propagation (RUP) from core and derived database." |
+| DEF2 with the witness `s -> 0` | that `red` | "Proofgoal #1 could not be autoproven. Please add an explicit subproof for proofgoal #1." |
+| removal of a supported value | that line | RUP sentence |
+| ALO with no lemma | ALO | RUP sentence |
+| CAB without ZLO/ZHI | the first CAB | RUP sentence |
+| no KILL lines | `z <> 2` in `tab_times_holes_sat` (supports `(1,2)` and `(2,1)`, killed by the holes `x <> 1`, `y <> 1`) | RUP sentence |
+
+Two of these are measurements of the shape rather than soundness controls. ALO is NOT `rup` from
+D-0060's rows (the case split on two operands is not unit propagation), and neither is CAB without
+the z lemmas.
+
+**The vacuity trap was met once and is recorded.** The first draft corrupted the tuple `(0,-3,0)`
+under `z <= -5`. Both corrupted proofs were ACCEPTED, because the model refutes that tuple anyway,
+so its CAB and its `red` goal close on the refutation and never read the definition. The controls now
+corrupt a tuple that belongs to a solution, the D-0053 rule applied to one tuple instead of to the
+whole database. Likewise the first holes model put the holes in z under a fixed x, where D-0060's
+rows refute by unit propagation alone and the KILL lines were not needed. The present model was
+chosen by a search over random disequality sets on the same box, 60 satisfiable models, whose
+60 honest tabulation proofs all verified and 29 of which needed the KILL lines.
+
+### 5. Where GAC cuts search, and how much of it needed the table
+
+Nodes, bounds (the solver) against GAC (the generator's search), on the gap family `x, y in 2..k`
+with every product removed from `z in 5..k^2-1`, UNSAT:
+
+| k | 4 | 5 | 6 | 7 |
+|---|---|---|---|---|
+| solver nodes | 5 | 7 | 9 | 11 |
+| GAC nodes | 1 | 1 | 1 | 1 |
+
+GAC refutes at the root what bounds consistency must search, and the gap is `2k - 3` nodes here.
+That is linear, and on a larger model clause learning would learn such a root-refutable fact once.
+None of the four spike models needs more than three nodes either way.
+
+The control `no_table.py` asks, for each GAC removal, whether it is `rup` against the `.opb` alone
+(every earlier line given as an axiom). 23 of 37 are (10/12, 11/18, 2/4, 0/3 on the four models).
+D-0060's guarded rows already justify a removal by unit propagation whenever assuming the value
+leaves a linear relation that bounds reasoning across the holes refutes, which is the case for most
+values of x and y. The table is needed for the other 14, which are values of z with no factorisation
+in the box (z = -7) and values whose supports die on holes of both operands.
+
+### 6. Why no prototype module
+
+The search half is cheap (the GAC filter over a table is a few dozen lines). The proof half is what
+a build would be, and it needs three things the solver does not have for a propagator today. It
+needs `red` definitions of proof-only selectors at the root, which only the bits atoms have
+(`Encoding.ensure_atom`). It needs a root-lemma hook to write the ZLO/ZHI/CAB/PERA lines and delete
+them (the regular family has one, `Encoding.start_proof`). And it needs the KILL line in the trace,
+with the hole's facts as its tail. Writing that unwired would have been a build without its
+decision, so it was left for the follow-up row.
+
+### 7. Recommendation
+
+| option | buys | costs |
+|---|---|---|
+| A. Do not build it now (recommended) | nothing lost on the measured models. Two removals in three are already `rup` against D-0060's rows | the `Bounds` level of `int_times`/`int_div` stays, and with it the extra nodes of section 5 |
+| B. A `Domain` int_times that writes plain `rup` where that suffices and tabulates LAZILY (on its first removal that needs the table), under a cap on `|Dx| |Dy|` | GAC on small operands, the table paid only by constraints that use it | the three proof-side pieces of section 6, and about `5 |Dx| |Dy|` lines for each constraint that tabulates |
+| C. Tabulate every small-domain arithmetic constraint at the root | the simplest code | the full quadratic line count on every such constraint, used or not, including on SAT runs whose proof today is one `sol` line |
+
+A is recommended because the search gain measured here is small and linear, and the one fact that
+would change that, the node count GAC saves on real instances with small-domain `int_times`/`int_div`,
+has not been measured. The follow-up row measures it first, with this generator's GAC as the oracle.
+If the gain is real, B is the shape to build, since the spike shows every piece of it checking.
+Reverting this record means deleting `bench/tabulation_spike/`. Nothing else depends on it.
