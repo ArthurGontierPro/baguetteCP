@@ -635,6 +635,14 @@ section 1. Shares are inclusive, of the whole run.
 
 ## Handoff notes
 
+### 2026-11-20 evening (orchestrator, autonomous mode): gates 77 and 78 green
+
+Gate 77 (`d654340`-era main: DAG D-0172, tab D-0184, lp D-0183, e2e8 D-0182, e2e3 D-0187, binary `911a5750`,
+against gate 76's `acb1abc9`): `make check` rc 0 (4 442 ok, 207 models), the only artefact differences are
+the 12 `.pbp` D-0172 makes smaller, lane 324/324, debug 311/311, scaling ok. Gate 78 (`4281619`, merge
+wave55-review1, D-0186, binary `aa3385fd`, against `911a5750`): rc 0 (4 443 ok), 207 x 4 artefacts equal,
+lane 324/324, debug 311/311, scaling ok. Autonomous rows added today: M4-T6b, M14-T3b, M7-T35 (3 of 3).
+
 ### 2026-11-20 (agent-review1, `wave55-review1`): M16-file-review-T1, the core, D-0186
 
 Seven byte-identical levers in `search.ml`, `store.ml` and `engine.ml` (tables per file in D-0186). The big ones were O(d^2) literal-list scans on the conflict path (soccer -65 %, roster -34 %, opd and grid -10 to -18 % per node), the lane median moves -1.8 % (release, no proof) and the codes -1.3 to -1.8 %. Gate 2 on `59dc6e6` green: `make check` rc 0, 207 models x 4 artefacts equal to main's binary, lane 324/324, debug 311/311, scaling ok (gate 1 on `e97f613` was over on rcpsp_11, fixed by `59dc6e6`).
