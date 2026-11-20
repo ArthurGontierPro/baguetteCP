@@ -275,7 +275,10 @@
    and per (lower, upper) pair COUNTS the confined variables, O(P n) for P pairs; the lists
    are built only for an interval with a capacity >= 0 and at least that many confined
    variables, the intervals that can push. Most of a pass's values and intervals push
-   nothing, and the counting is what they cost. *)
+   nothing, and the counting is what they cost. Two quadratic steps are left, both per
+   PUSH and so bounded by the prunings they pay for: a push's facts test each variable
+   against every value of [a, b] ([in_scope_of], O(n (b - a))), and a saturated
+   interval's arm looks each candidate up by name in the confined set (O(n cap)). *)
 
 module Lit = Baguette_proof.Lit
 module Encoding = Baguette_proof.Encoding

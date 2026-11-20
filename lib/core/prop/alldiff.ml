@@ -175,7 +175,8 @@
    COST (M16-file-review-T2, D-0190). Stage 1 is O(P n) per pass for P candidate
    intervals, as above. A tight interval (as many confined variables as values) tests
    every other variable's LIVE bounds first and snapshots, and looks up in the Hall set,
-   only one that can be pushed. With the proof, a pruning's derivation is O(|halls| w^2)
+   only one that can be pushed; the Hall set's own members pass that test and are found by
+   name, O(k^2) for an interval of width k, which the scope bounds. With the proof, a pruning's derivation is O(|halls| w^2)
    to BUILD, because each excluded value's [excl] telescopes its own rungs, and every
    build is hash-consed whether or not its line is already on the page (D-0190 section 5
    measures it at half of a proof-mode run on 2011 cyclic-rcpsp). *)
