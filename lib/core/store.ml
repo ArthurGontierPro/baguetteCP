@@ -405,15 +405,31 @@ let running t = t.current_prop
    engine that ever runs a propagator from inside another one gets the right answer, and
    a caller that never nests pays nothing for it.
 
-   [Fun.protect] rather than a plain set/run/restore because a propagator can raise --
-   [Checked]'s overflow guard does, by design (I-X8, D-0029) -- and a store left claiming
-   a propagator is running when none is would stamp the next change with a stale id.
-   The run is over in that case, but "the run is over" is an argument, and this is one
-   call per propagator invocation, which is noise next to the invocation. *)
-let with_running t id f =
+   The restore runs on BOTH exits, the return and the exception, because a propagator
+   can raise -- [Checked]'s overflow guard does, by design (I-X8, D-0029) -- and a store
+   left claiming a propagator is running when none is would stamp the next change with a
+   stale id. The exception is re-raised with its own backtrace.
+
+   M11-complexity-T14: written out as a [match ... with exception] rather than through
+   [Fun.protect]. The behaviour is the same on both exits ([Fun.protect]'s one extra case,
+   a [finally] that raises, cannot arise: the restore is one field write), but this is one
+   call per propagator RUN, 400 to 600 runs per node on codes-cp's QR48, and
+   [Fun.protect] allocates its [finally] closure and goes through two more calls and a
+   second handler on every one of them. [run_as] is the same bracket for the engine's
+   own call, [f x] instead of [f ()], so that call allocates no closure either. *)
+let run_as t id f x =
   let saved = t.current_prop in
   t.current_prop <- id;
-  Fun.protect ~finally:(fun () -> t.current_prop <- saved) f
+  match f x with
+  | r ->
+      t.current_prop <- saved;
+      r
+  | exception e ->
+      let bt = Printexc.get_raw_backtrace () in
+      t.current_prop <- saved;
+      Printexc.raise_with_backtrace e bt
+
+let with_running t id f = run_as t id f ()
 
 (* ------------------------------------------ derivation ahead (M7-T17, D-0082) *)
 

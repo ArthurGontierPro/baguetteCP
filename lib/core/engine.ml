@@ -1819,9 +1819,7 @@ let propagate ?stop ?(poll_runs = default_poll_runs) (t : t) (store : Store.t) :
          [check_attribution] then reads it back on both arms -- a propagator may push
          prunings and *then* conflict, so the conflict arm has new entries to check too,
          which is why the check is not simply folded into [watchers_of_new_entries]. *)
-      match
-        Store.with_running store inst.Propagator.id (fun () -> inst.Propagator.run store)
-      with
+      match Store.run_as store inst.Propagator.id inst.Propagator.run store with
       | Propagator.Conflict c ->
           check_attribution t inst store ~since:before ~conflict:(Some c);
           t.ctr.c_contra <- t.ctr.c_contra + 1;
@@ -1833,8 +1831,12 @@ let propagate ?stop ?(poll_runs = default_poll_runs) (t : t) (store : Store.t) :
           if pruned then t.ctr.c_effectful <- t.ctr.c_effectful + 1;
           bump_by_id t id ~eff:pruned;
           if pruned && Debug.enabled && vetoes_self t id then check_claim inst store;
-          let woken = watchers_of_new_entries ~self:id t store ~since:before in
-          List.iter wake woken;
+          (* M11-complexity-T14: a run that pushed nothing has no entry to walk, and the
+             walk would return [] after building its closures; nine runs in ten on
+             codes-cp's QR48 are such runs. [t.declined] is [[]] here either way: every
+             walk and every seed is followed by [check_declined], which empties it. *)
+          if pruned then
+            List.iter wake (watchers_of_new_entries ~self:id t store ~since:before);
           if Debug.enabled then check_declined t store;
           (* M6-T21: AFTER the run and its wakes, so the run is whole whatever the poll
              says. Not on the [Conflict] arm: that call is leaving anyway. *)
