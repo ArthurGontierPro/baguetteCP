@@ -135,6 +135,19 @@
    model row gets, since a `pol` cites a derived line exactly as it cites a model row.
 
    ---------------------------------------------------------------------------
+   A conflict carries its facts under a decision (M7-T33, D-0156)
+   ---------------------------------------------------------------------------
+
+   Both pigeonholes -- a Hall interval holding one variable too many, and a matching
+   that saturates no more than all but one variable -- are reported at the ROOT as
+   before, a factless emptying push whose derivation closes to [0 >= 1]. Under a
+   DECISION they are reported with their facts, under [Store.deriving_ahead], so that
+   1UIP learning has a reason to resolve from and the derivation is on the page ahead of
+   `rup ~facts >= 1` -- cumulative's arrangement (D-0096) and element's split (D-0101).
+   [push_conflict] says which facts and why each literal the derivation leaves is one of
+   them.
+
+   ---------------------------------------------------------------------------
    Snapshotting and I-X6
    ---------------------------------------------------------------------------
 
@@ -209,9 +222,27 @@ type snap = {
      again. For a hole-free domain -- every domain M4-T1 ever saw -- this is two runs of
      [Gone_below]/[Gone_above] and costs no trail walk at all. *)
   s_gone : (int * gone) list;
+  (* The term's [rungs], carried so that a derivation reaches the ladder without the
+     name (M7-T33, D-0156). Not a number the derivation depends on: the ladder ids are
+     written once and never move (the header's I-X6 paragraph). *)
+  s_rungs : (int -> int option) Lazy.t;
 }
 
-type term = { x : Var.t; name : string; decl_lo : int; decl_hi : int }
+(* [rungs] is [Encoding.consistency_id] for this variable with the lookup done once, the
+   first time a derivation cites one of its ladder rungs, and kept for the instance's
+   lifetime (M7-T33, D-0156). Until then [excl] looked the variable up by NAME for every
+   rung it cited -- a string hash per rung, O(width) rungs per excluded value -- which was
+   12.4 % of 2011_cyclic-rcpsp_easy_6's proof mode (D-0145 section 5). Lazy because an
+   instance whose explanations are never forced (no proof, or a test without an encoding
+   for its variables) must not look anything up. The ids are the same, so every proof is
+   byte-identical. *)
+type term = {
+  x : Var.t;
+  name : string;
+  decl_lo : int;
+  decl_hi : int;
+  rungs : (int -> int option) Lazy.t;
+}
 
 type t = {
   terms : term array;
@@ -268,7 +299,14 @@ let make ?(cutoff = default_cutoff) ?(lemma_rows = []) store enc ~rows vars =
       (List.map
          (fun x ->
            let d = Store.get store x in
-           { x; name = Store.name store x; decl_lo = Domain.lo d; decl_hi = Domain.hi d })
+           let name = Store.name store x in
+           {
+             x;
+             name;
+             decl_lo = Domain.lo d;
+             decl_hi = Domain.hi d;
+             rungs = lazy (Encoding.consistency_ids enc name);
+           })
          vars)
   in
   { terms; enc; cutoff; rows = tbl; lemmas }
@@ -284,34 +322,25 @@ let established_at_root store v ~lower =
 
 let range a b = List.init (Stdlib.max 0 (b - a + 1)) (fun i -> a + i)
 
-(* The trail POSITION of the entry that took [value] out of [var], or [None].
+(* The entry that took [value] out of [var], or [None].
 
-   [Store.remover] answers the same question with the entry, and the entry is not enough
-   here: what decides whether a hole may be cited as a unit is the LEVEL it was
-   established at, and [Store.entry] does not carry one ([Store.level_of_index] counts
-   the level marks at or below a position instead). Same rule, same "a value leaves a
-   domain once and stays gone until the backtrack that pops the entry that removed it",
-   so this finds at most one and stops at the first hit.
+   What decides whether a hole may be cited as a unit is the LEVEL it was established at,
+   and [Store.level_of_index] reads that off the entry's trail position, [pos] (M6-T15).
+   Until M7-T33 this walked the WHOLE trail backwards once per hole asked about, because
+   when it was written the entry did not carry its position; on the Challenge's black-hole
+   instances, once element's own walk was gone (D-0155), that walk was 70 to 89 % of the
+   run. [Store.remover] answers from [var]'s entry history by binary search (D-0088), and
+   it is the SAME entry: its predicate (on [var], [value] in [old], not in [now]) is the
+   walk's, [Store.remover_scan] is the walk started at the same position, and
+   [Store.remover] agrees with that scan under [BAGUETTE_DEBUG] by physical equality.
+   Element made the same move in D-0155. Read eagerly, at snapshot time (I-X6).
 
    [None] is a hole with no trail entry behind it -- a declared gap, which
    lib/flatzinc/compile.ml's [reject_set_domain] refuses, so no model reaches it. *)
-let remover_index store ~var value =
-  let rec go i =
-    if i < 0 then None
-    else
-      let e = Store.trail_entry store i in
-      if
-        Var.equal e.Store.var var && Domain.mem e.Store.old value
-        && not (Domain.mem e.Store.now value)
-      then Some i
-      else go (i - 1)
-  in
-  go (Store.trail_length store - 1)
-
 let hole_cite store var value =
-  match remover_index store ~var value with
-  | Some i when Store.level_of_index store i = 0 -> Gone_hole_root
-  | Some i -> Gone_hole (Store.trail_entry store i).Store.reason
+  match Store.remover store ~before:(Store.trail_length store) ~var value with
+  | Some e when Store.level_of_index store e.Store.pos = 0 -> Gone_hole_root
+  | Some e -> Gone_hole e.Store.reason
   | None -> Gone_hole (Reason.of_facts Reason.none)
 
 (* [s_gone], ascending: below the window, then the holes inside it, then above. The
@@ -343,6 +372,7 @@ let snap_of store tm =
     s_lo_root = established_at_root store tm.x ~lower:true;
     s_hi_root = established_at_root store tm.x ~lower:false;
     s_gone = gone_of store tm d;
+    s_rungs = tm.rungs;
   }
 
 (* ------------------------------------------------------------------ explanations *)
@@ -455,22 +485,20 @@ let amo t ss v =
    every u strictly inside the declared range -- and every u this asks for is, because
    v is inside the declared range and the current bound it is being compared against is
    strictly inside it too (if it were not, there would be no such v). *)
+(* The ladder rung of [s]'s variable at [u], through the term's once-looked-up [rungs]
+   (M7-T33, D-0156): the id [Encoding.consistency_id] gives, without the name lookup. *)
+let rung s u = cite (cid_of "ladder rung" (Lazy.force s.s_rungs u))
+
 let excl t s v =
   if v < s.s_lo then
     Explanation.combine
       (cite (cid_of "d_hi" (Encoding.direct_hi_id t.enc s.s_name v))
-      :: List.map
-           (fun u ->
-             cite (cid_of "ladder rung" (Encoding.consistency_id t.enc s.s_name u)))
-           (range (v + 1) (s.s_lo - 1)))
+      :: List.map (rung s) (range (v + 1) (s.s_lo - 1)))
       1
   else if v > s.s_hi then
     Explanation.combine
       (cite (cid_of "d_lo" (Encoding.direct_lo_id t.enc s.s_name v))
-      :: List.map
-           (fun u ->
-             cite (cid_of "ladder rung" (Encoding.consistency_id t.enc s.s_name u)))
-           (range (s.s_hi + 1) (v - 1)))
+      :: List.map (rung s) (range (s.s_hi + 1) (v - 1)))
       1
   else invalid_arg "Alldiff.excl: the value is inside the current window"
 
@@ -688,11 +716,9 @@ let prune_summands t ~a ~b ~halls ~y ~lower =
    `Alldiff: ladder rung has no constraint id` crash (exit 2) the bench/fuzz sweep found on
    models where an element constraint had shaved y's upper bound below a Hall interval
    reaching y's declared top. *)
-let overshoot_cancel t ~b ~y ~lower =
+let overshoot_cancel ~b ~y ~lower =
   if lower && b + 1 > y.s_hi && b < y.s_dhi && y.s_hi < y.s_dhi && y.s_hi_root then
-    List.map
-      (fun u -> cite (cid_of "ladder rung" (Encoding.consistency_id t.enc y.s_name u)))
-      (range (y.s_hi + 1) b)
+    List.map (rung y) (range (y.s_hi + 1) b)
     @ [ Explanation.defining 1 (Lit.le y.s_name y.s_hi) ]
   else []
 
@@ -701,8 +727,7 @@ let prune_expl t ~a ~b ~halls ~y ~lower =
       Explanation.combine
         (prune_summands t ~a ~b ~halls ~y ~lower
         @ hall_cancels ~keep:(fun v -> a <= v && v <= b) ~halls
-        @ target_cancel ~y ~lower
-        @ overshoot_cancel t ~b ~y ~lower)
+        @ target_cancel ~y ~lower @ overshoot_cancel ~b ~y ~lower)
         1)
 
 (* ------------------------------------------------------ M4-T2: a VALUE is removed
@@ -748,7 +773,9 @@ let remove_expl t ~vals ~halls ~y ~value =
    difference is the whole difference between a pruning and a refutation. It is reported
    the way [pass] reports its own: handed to a mutator that must fail, so
    [Store.apply]'s [Failed] arm pairs it with [Reason.none] and no `rup` conflict line
-   claims a counting argument as reverse unit propagation (I-X10, D-0040). *)
+   claims a counting argument as reverse unit propagation (I-X10, D-0040). That is the
+   ROOT's arrangement since M7-T33; under a decision the same derivation is the
+   conflict's, with its facts, written ahead of its line ([push_conflict], D-0156). *)
 let conflict_expl t ~vals ~halls =
   let keep v = List.mem v vals in
   Explanation.deferred (fun () ->
@@ -797,6 +824,65 @@ let remove_reason ~keep halls y =
   :: Reason.at_most ~name:y.s_name ~decl:y.s_dhi y.s_hi
   :: hall_facts ~keep halls
 
+(* ------------------------------------------- M7-T33: a conflict carries its facts
+
+   Until M7-T33 both pigeonholes -- [pass]'s push that empties a contained variable and
+   [regin_pass]'s failed matching -- reached the store as a pruning that must fail, and
+   [Store.apply]'s [Failed] arm paired the derivation with [Reason.none] at every depth.
+   That is sound (search.ml's D-0040 arm writes the derivation and the decision nogood
+   closes the branch), but it hands [Learn.at_conflict] an EMPTY cut: on 2015_p1f_13
+   under the native [inverse] the run learned 0 clauses (D-0151 section 2), where std's
+   decomposition learned 523.
+
+   AT THE ROOT nothing changes, deliberately: there is no branch to learn from, every
+   bound the derivation reads is root-established and cancelled ([hall_cancels],
+   [target_cancel], [overshoot_cancel]), so the derivation closes to [0 >= 1] itself and
+   search.ml's root arm writes it. Every root refutation is byte-identical -- element.ml's
+   [no_position_conflict] makes the same split (D-0101).
+
+   UNDER A DECISION the conflict is reported with the facts below and under
+   [Store.deriving_ahead], so [Trace.conflict_line] writes the derivation FIRST and then
+   `rup ~facts >= 1` (cumulative's arrangement, D-0096; store.ml's [c_ahead]). That line
+   is the counting argument, so it is NOT reverse unit propagation over the pairwise
+   rows on its own (I-X10, D-0040); after the derivation it is unit propagation against
+   one line, because every literal the derivation leaves in its row is the negation of a
+   fact listed here:
+
+     - a Hall variable's bound literal that [hall_cancels] could not cancel (moved under
+       a decision) -- its bound fact, from [hall_facts];
+     - a deep hole's [Gone_hole] clause -- the remover's facts, from [hall_facts], which
+       names exactly the EXCLUDED holes, the only ones the derivation cancels;
+     - the pushed variable's [~y_ge_lo(y)] -- its lower bound; and its residue
+       [y_ge_(b+1)], which [overshoot_cancel] closes only for a root-established upper
+       bound. Under a decision it stays, and the fact [y <= hi(y)] with [hi(y) <= b]
+       falsifies it through the ladder rungs [hi(y)+1 .. b], which unit propagation
+       walks. That fact is the CROSSED OPPOSING BOUND [Store.apply]'s [Failed] arm says
+       a conflict line needs and a pruning's reason does not carry, which is why the
+       pigeonhole's facts are [remove_reason]'s (both of [y]'s bounds) and not
+       [prune_reason]'s.
+
+   A root-established fact is listed too, where the derivation cancelled its literal: it
+   is harmless on a tail (Analysis drops root nodes from every cut), and listing it keeps
+   this free of a second copy of the cancellation rule -- element.ml's [conflict_facts]
+   reasons the same way. *)
+(* Each fact once, first occurrence kept. Two members of a Regin set holed by the same
+   remover list its facts twice (k-scene: int_ne(x_i, k) with k = 2 gives every x_i the
+   tail [k <= 2]), and a conflict line is a clause: a repeat is a longer line saying the
+   same thing. Once per conflict, linear in the facts. *)
+let distinct_facts facts =
+  let seen = Hashtbl.create 16 in
+  List.filter
+    (fun f ->
+      if Hashtbl.mem seen f then false
+      else (
+        Hashtbl.replace seen f ();
+        true))
+    facts
+
+let push_conflict store ~facts why =
+  Store.deriving_ahead store (fun () ->
+      Store.conflict store (Reason.because ~concludes:None (distinct_facts facts) why))
+
 (* ------------------------------------------------------------------- propagation *)
 
 (* The variables whose current window sits inside [a, b]. *)
@@ -837,6 +923,19 @@ let pass t store =
      [Found]/[Moved]; a push that changes nothing (the bound is already there) falls
      through, which is how [Unchanged] can happen at all here. *)
   let push ~halls ~a ~b ~y ~lower x bound =
+    (* M7-T33 (D-0156): the push that would EMPTY [y] -- [pass]'s pigeonhole arm, or an
+       [n = k] push whose live [y] is now confined -- is the conflict, reported with its
+       facts under a decision (see [push_conflict]). [y]'s bounds here are the ones the
+       store will read: live for the [n = k] arm, and for the pigeonhole arm a snapshot
+       whose [s_hi <= b] the live bound can only undercut, so this test and the store's
+       [Failed] agree. At the root the push runs and fails as before. *)
+    let empties = if lower then bound > y.s_hi else bound < y.s_lo in
+    if empties && Store.level store > 0 then
+      raise
+        (Found
+           (push_conflict store
+              ~facts:(remove_reason ~keep:(fun v -> a <= v && v <= b) halls y)
+              (prune_expl t ~a ~b ~halls ~y ~lower)));
     let j =
       Reason.because
         ~concludes:
@@ -880,6 +979,13 @@ let pass t store =
                pairs the derivation with [Reason.none] -- deliberately, and its own
                comment says why -- so no conflict line is written and what closes the
                root is this module's derivation, which really does derive [0 >= 1].
+
+               M7-T33 (D-0156) keeps that at the ROOT only. Under a decision [push]
+               reports the conflict itself, WITH its facts, under [deriving_ahead]: the
+               derivation then goes on the page before `rup ~fact ... >= 1`, which makes
+               that line unit propagation against one line rather than the Hall
+               argument, and 1UIP learning gets a reason to resolve from. See
+               [push_conflict].
 
                [all_in] is split rather than used whole: the Hall set must be EXACTLY as
                big as the interval for the counting to cancel, so the first [k] are the
@@ -949,7 +1055,9 @@ let pass t store =
    |A| = |B| + 1. Removing B from x0 empties x0's domain -- dom(x0) is inside B -- and the
    emptying is what makes the conflict provable, for the reason [pass] states above at
    length: [Store.apply]'s [Failed] arm pairs the derivation with [Reason.none] so no
-   `rup` conflict line claims the counting argument as reverse unit propagation.
+   `rup` conflict line claims the counting argument as reverse unit propagation. That is
+   the root's arrangement; under a decision the conflict is reported with A's facts and
+   its derivation written ahead of its line (M7-T33, D-0156, [push_conflict]).
 
    THE ALGORITHM is Kuhn's augmenting path and a reachability sweep per variable, which
    is O(n^2 d) per pass rather than Regin's O(n^2 d) matching plus one Tarjan SCC pass.
@@ -1093,6 +1201,16 @@ let regin_pass t store =
                (range 0 (nv - 1))
         in
         let x0_tm = t.terms.(x0) in
+        (* M7-T33 (D-0156): under a decision, the conflict with A's facts -- both bounds
+           of every member and the remover's facts of every hole the derivation cancels
+           ([hall_facts] over B) -- derived ahead ([push_conflict]). At the root, the
+           factless emptying push below, unchanged. *)
+        if Store.level store > 0 then
+          raise
+            (Found
+               (push_conflict store
+                  ~facts:(hall_facts ~keep:(fun v -> List.mem v vals) halls)
+                  (conflict_expl t ~vals ~halls)));
         let j =
           Reason.because ~concludes:None Reason.none (conflict_expl t ~vals ~halls)
         in
