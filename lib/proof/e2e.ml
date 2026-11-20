@@ -277,6 +277,9 @@ type t = {
   owner : (string, string) Hashtbl.t; (* ladder literal name -> baguette variable *)
   aux : (string, unit) Hashtbl.t; (* selector literal names (positive) *)
   sel : (string, string * bool) Hashtbl.t; (* selector lit -> (flag var, s <-> flag?) *)
+  sel_of_flag : (string, string * bool) Hashtbl.t;
+      (* the same, from the flag: looked up per candidate literal, so it is indexed (a scan
+         of [sel] made sudoku_p48's prefix cost 9.8 s over 4 068 selectors) *)
   q : (string, unit) Hashtbl.t; (* atom clauses already derived, by label *)
   value_of : (string, int) Hashtbl.t; (* ladder literal name -> its value *)
   holes : (string, string * int list) Hashtbl.t;
@@ -306,6 +309,7 @@ let create path =
     owner = Hashtbl.create 256;
     aux = Hashtbl.create 16;
     sel = Hashtbl.create 16;
+    sel_of_flag = Hashtbl.create 16;
     q = Hashtbl.create 64;
     value_of = Hashtbl.create 256;
     holes = Hashtbl.create 8;
@@ -849,11 +853,7 @@ let swap t (cl, cd) ~try_def =
         else
           let f = var_of l and positive = var_of l = l in
           let def =
-            match
-              Hashtbl.fold
-                (fun s (g, p) acc -> if g = f then Some (s, p) else acc)
-                t.sel None
-            with
+            match Hashtbl.find_opt t.sel_of_flag f with
             | Some d -> Some d
             | None -> (
                 match (try_def, !made) with
@@ -882,6 +882,7 @@ let swap t (cl, cd) ~try_def =
 
 let define t (s, f, p) =
   Hashtbl.replace t.sel s (f, p);
+  Hashtbl.replace t.sel_of_flag f (s, p);
   t.n_sel <- t.n_sel + 1;
   let fl = if p then f else "~" ^ f in
   emit t "@D1[%s] red +1 ~%s +1 %s >= 1 : %s -> %s ;" s s fl s fl;
