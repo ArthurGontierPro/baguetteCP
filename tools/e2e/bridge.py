@@ -279,6 +279,11 @@ def main(cake_opb, names_file, bag_opb, bag_pbp):
     for _, terms, op, rhs in bag:
         if op == ">=" and rhs == 1 and len(terms) == 2 and all(c == 1 for c, _ in terms):
             binary.add(frozenset(v for _, v in terms))
+    bin_partners = {}   # literal a -> every b with the binary clause a + b >= 1 in baguette's .opb
+    for ab in binary:
+        a, b = tuple(ab)
+        bin_partners.setdefault(a, set()).add(b)
+        bin_partners.setdefault(b, set()).add(a)
     alias = {}
     for _, terms, _, _ in bag:
         for _, lit in terms:
@@ -509,7 +514,7 @@ def main(cake_opb, names_file, bag_opb, bag_pbp):
             # this row) resolves away keeps the degree: c*L + c*(~L + M >= 1) is c*M + c,
             # and the degree rises by c. That is member's end values: `b -> y <= 5` turns
             # cake's y_ge_6 into baguette's guard ~b (D-0180). Otherwise weaken L away.
-            ms = [m for m in blits if frozenset((neg(L), m)) in binary] if resolve else []
+            ms = [m for m in bin_partners.get(neg(L), ()) if m in blits] if resolve else []
             M = max(ms, key=lambda m: (blits[m], m)) if ms else None
             if M is None:
                 rpn = rpn + [var_of(L), "w"]
@@ -538,8 +543,31 @@ def main(cake_opb, names_file, bag_opb, bag_pbp):
                 rpn, row = rpn + [f"@Y1[{Y}]", str(-k), "*", "+"], add(row, -k, ({Y: -1, X: 1}, 0))
         return rpn, row
 
+    flags_of = [[L for L in lit_form(*row)[0] if is_flag(var_of(L))] for _, row, _ in cands]
+    swap_cache = {}
+
+    def swapped(i):
+        """Candidate i with the defined selectors swapped in, in literal form, or None when
+        an atom has no baguette literal: cached while no flag of i changes its selector."""
+        sig = tuple(by_flag.get(L) for L in flags_of[i])
+        got = swap_cache.get(i)
+        if got and got[0] == sig:
+            return got[1]
+        rpn, row, _ = cands[i]
+        rpn2, row2, _ = replaced(rpn, row, [], flag_swap)
+        rl, rd = lit_form(*row2)
+        res = None if any(not is_flag(var_of(l)) and var_of(l) not in bagvars for l in rl) \
+            else (rpn2, rl, rd)
+        swap_cache[i] = (sig, res)
+        return res
+
     def match(blits, bd, bcoefs, loose=False):
-        """loose: a second pass for a row that is not a clause (rup would not close it),
+        return next(matches(blits, bd, bcoefs, loose), None)
+
+    def matches(blits, bd, bcoefs, loose=False):
+        """Every way a candidate implies the row, in the order tried (a generator: the
+        selector pre-pass below wants each PROPOSED definition, not only the first).
+        loose: a second pass for a row that is not a clause (rup would not close it),
         trying candidates that share variables with it rather than only those inside it,
         with tighten's weakening as the only way to match."""
         bvars = {var_of(l) for l in blits}
@@ -548,7 +576,7 @@ def main(cake_opb, names_file, bag_opb, bag_pbp):
         near = set(no_var) if not loose else set()
         for v in bvars:
             near.update(by_var.get(v, ()))
-        order = [(cands[i], cvars[i]) for i in sorted(near)]
+        order = [(i, cands[i], cvars[i]) for i in sorted(near)]
         if undef:
             # A row that will DEFINE a selector takes the candidate sharing the most of its
             # variables first (T8, D-0182). Found on 2014_amaze: int_eq_reif(x, y, b)'s first
@@ -556,26 +584,34 @@ def main(cake_opb, names_file, bag_opb, bag_pbp):
             # ANOTHER constraint over x and y that does not name b; defining _neN as that
             # flag left the selector's second row underivable. The flag of the constraint
             # that names b too is the one both rows follow from.
-            order.sort(key=lambda t: -len(t[1] & bvars))
-        for (rpn, row, deps), cv in order:
+            order.sort(key=lambda t: -len(t[2] & bvars))
+        for i, (rpn, row, deps), cv in order:
             if loose and (cv <= bvars or not cv & bvars or undef):
                 continue
             if not loose and not cv <= bvars:
                 continue
-            rpn2, row2, _ = replaced(rpn, row, [], flag_swap)
-            rpn2, row2 = onto_copies(rpn2, row2, bcoefs)
-            rl, rd = lit_form(*row2)
-            if any(not is_flag(var_of(l)) and var_of(l) not in bagvars for l in rl):
-                continue   # an atom with no baguette literal of its own
+            if any(Y in alias for Y in bcoefs):
+                rpn2, row2, _ = replaced(rpn, row, [], flag_swap)
+                rpn2, row2 = onto_copies(rpn2, row2, bcoefs)
+                rl, rd = lit_form(*row2)
+                if any(not is_flag(var_of(l)) and var_of(l) not in bagvars for l in rl):
+                    continue   # an atom with no baguette literal of its own
+            else:
+                got = swapped(i)
+                if got is None:
+                    continue
+                rpn2, rl, rd = got
             unk = [l for l in rl if is_flag(var_of(l))]
             if not unk and not undef:
                 rpn3, rl3 = saturate(rpn2, rl, rd)
                 if implies(rl3, rd, blits, bd):
-                    return rpn3, deps, None
+                    yield rpn3, deps, None
+                    continue
                 for resolve in (False, True):
                     got = tighten(rpn2, rl, rd, blits, resolve)
                     if got and implies(got[1], got[2], blits, bd):
-                        return got[0], deps + got[3], None
+                        yield got[0], deps + got[3], None
+                        break
                 continue
             if len(unk) == 1 and len(undef) == 1:
                 F_lit, sl = unk[0], undef[0]
@@ -587,17 +623,18 @@ def main(cake_opb, names_file, bag_opb, bag_pbp):
                 cite = f"@D2[{s_}]" if sl == s_ else f"@D1[{s_}]"
                 rpn3, trial = saturate(rpn2 + [cite, str(c), "*", "+"], trial, rd)
                 if implies(trial, rd, blits, bd):
-                    return rpn3, deps, (s_, F)
-        return None
+                    yield rpn3, deps, (s_, F)
 
     def const_pin(bl, bd):
         """A row a selector defined as a CONSTANT implies by itself: c * lit with lit the
-        selector's true literal and c >= the degree (T8, D-0182)."""
+        selector's true literal and c >= the degree (T8, D-0182). The pin is `ia` against
+        `pol @D0 c *` (c * lit >= c), since `lit >= 1` alone does not imply the row
+        syntactically when c > 1. Returns the rpn, or None."""
         for L, c in bl.items():
             v = var_of(L)
             if defined.get(v) in ("F", "T") and c >= bd:
                 if (defined[v] == "F") == L.startswith("~"):
-                    return f"@D0[{v}]"
+                    return [f"@D0[{v}]"] + ([str(c), "*"] if c > 1 else [])
         return None
 
     def find(coefs, d):
@@ -625,10 +662,16 @@ def main(cake_opb, names_file, bag_opb, bag_pbp):
     for s_, rows in groups.items():
         if s_ in defined:
             continue
-        first = find(*rows[0])
+        # every flag the first row proposes (on 2011_fillomino, int_ne(x, 12)'s own flag came
+        # after another constraint's over x that fitted the first row only), then constants
         tries = []
-        if first and first[2]:
-            tries.append(first[2][1])
+        bl0, bd0 = lit_form(*rows[0])
+        for loose in (False, True):
+            for got in matches(bl0, bd0, rows[0][0], loose):
+                if got[2] and got[2][1] not in tries:
+                    tries.append(got[2][1])
+                if len(tries) >= 64:
+                    break
         tries += ["F", "T"]
         for F in tries:
             define(s_, F)
@@ -641,19 +684,28 @@ def main(cake_opb, names_file, bag_opb, bag_pbp):
                 break
             undefine(s_)
 
+    by_coefs = {}   # a substituted row's coefficients -> (label, degree), for the exact pin
+    for lab, c2, d2 in subst:
+        by_coefs.setdefault(frozenset(c2.items()), []).append((lab, d2))
+
     pins = []
     for label, terms, op, rhs in bag:
         coefs, d = var_form(terms, op, rhs)
         line = row_text(terms, op, rhs)
         cp = const_pin(*lit_form(coefs, d))
         if cp:
-            pins.append(f"@{label} ia {line} : {cp} ;")
+            if len(cp) == 1:
+                pins.append(f"@{label} ia {line} : {cp[0]} ;")
+            else:
+                nw[0] += 1
+                emit(f"@W[{nw[0]}] pol {' '.join(cp)} ;")
+                pins.append(f"@{label} ia {line} : @W[{nw[0]}] ;")
             continue
         m = re.fullmatch(r"\+1 ~(\S+)_ge_(m?\d+) \+1 (\S+)_ge_(m?\d+) >= 1", line)
         if m and m.group(1) == m.group(3) and pv(m.group(2)) == pv(m.group(4)) + 1:
             pins.append(f"@{label} ia {line} : @L[{m.group(1)}_ge_{m.group(2)}] ;")
             continue
-        hit = next((lab for lab, c2, d2 in subst if c2 == coefs and d2 >= d), None)
+        hit = next((lab for lab, d2 in by_coefs.get(frozenset(coefs.items()), ()) if d2 >= d), None)
         if hit:
             pins.append(f"@{label} ia {line} : {hit} ;")
             continue
@@ -680,16 +732,23 @@ def main(cake_opb, names_file, bag_opb, bag_pbp):
         pins.append(f"@{label} rup {line} ;")
     out.extend(pins)
 
-    lines = open(bag_pbp).read().splitlines()
-    if not (lines and lines[0].startswith("pseudo-Boolean proof version") and lines[1].startswith("f ")):
+    # baguette's proof is STREAMED (a search proof can be gigabytes, T8)
+    pbp = open(bag_pbp)
+    head = [pbp.readline().rstrip("\n"), pbp.readline().rstrip("\n")]
+    if not (head[0].startswith("pseudo-Boolean proof version") and head[1].startswith("f ")):
         raise SystemExit("bridge: baguette's proof does not start with its header and `f N`")
-    print(lines[0])
-    print(f"f {len(cake)} ;")
-    print("\n".join(out))
-    for line in lines[2:]:
+    w = sys.stdout.write
+    w(head[0] + "\n")
+    w(f"f {len(cake)} ;\n")
+    w("\n".join(out) + "\n")
+    for line in pbp:
+        if "soli" not in line:
+            w(line)
+            continue
+        line = line.rstrip("\n")
         m = re.match(r"(@\S+ )?soli\b(.*)$", line)
         if not m:
-            print(line)
+            w(line + "\n")
             continue
         if obj_fix is None:
             raise SystemExit("bridge: a `soli` line, and no objective on both sides")
@@ -697,8 +756,8 @@ def main(cake_opb, names_file, bag_opb, bag_pbp):
             raise SystemExit("bridge: an unlabelled `soli` line")
         lab = m.group(1).strip()
         half, k = obj_fix
-        print(f"@O[{lab[1:]}] soli{m.group(2)}")
-        print(f"{lab} pol @O[{lab[1:]}] {half} {k} * + ;")
+        w(f"@O[{lab[1:]}] soli{m.group(2)}\n")
+        w(f"{lab} pol @O[{lab[1:]}] {half} {k} * + ;\n")
 
 
 def objective(cake_opb, bag_lines, ivars, owner):
