@@ -75,6 +75,62 @@
    reason can be demanded more than once during conflict analysis.
 
    -------------------------------------------------------------------------------
+   M11-complexity-T13 / docs/DECISIONS.md D-0168: releasing a written thunk
+   -------------------------------------------------------------------------------
+
+   D-0166 section 5 option B, decided by D-0167 item 6. Once [Justify.emit] has written a
+   thunk's derivation, the thunk records the line ([line]: the id, the level, and what
+   [Justify] needs to tell whether the line is still on the page) and drops its tree; the
+   memo cells that emission made for nodes the closure BUILT are taken out with it. Until
+   then the tree stayed reachable from [forced], from the closure [force] put in place of
+   the original, and from the memo's keys, for as long as the trail entry stood: 1.16 GB
+   of all_different derivations on 2011_black-hole_9 at node 40 (D-0166 section 4).
+
+   Why every proof byte is the same, reader by reader:
+
+   - A later [emit] of the thunk. The memo answered it (or its forced head) with the id
+     for as long as no wipe had reached the level it was written at; the line answers
+     under exactly that condition ([Justify.live_line]).
+   - [emit] after that level was wiped. The same physical tree used to be written again,
+     every cell of it gone with the wipe. Now the closure is forced again and that tree
+     is written. It is the same derivation because a thunk closes over a SNAPSHOT (I-X6);
+     under BAGUETTE_DEBUG every release forces the closure a second time and refuses to
+     go on unless [same_derivation] holds, and every later forcing is compared with the
+     original, which a released thunk then keeps. The memo answers the two trees alike
+     because a node of the tree either is CAPTURED -- a value the closure did not build,
+     like another entry's eager explanation, held physically by both forcings -- and
+     keeps its cell, so it is found as before; or is BUILT, new at every forcing and
+     reachable from nothing but its tree, so that no lookup can present it again.
+   - Which is which: every node is built by the smart constructors, and while a thunk is
+     forced they record what they build and look up every operand they are handed among
+     it (the FRAME, below the type). A forcing that was handed nothing it had not built
+     captured nothing: its cells all go, and no second forcing is paid. One that may have
+     captured ([captures]) is forced a second time at its release, and a node the two
+     forcings hold physically in common keeps its cell; if the two differ, the thunk is
+     not released at all and keeps its tree and its cells, as before T13.
+   - BAGUETTE_DEBUG checks the two halves of that split: a hit, inside a thunk's
+     emission, on a cell the emission did not make must be a captured node (the second
+     forcing holds it), and a cell taken out must never be asked for again (the ghost
+     table in [Justify]); and a forcing that recorded no capture must share no node with
+     its second forcing.
+   - [lits] (the D-0026 agreement walk, under BAGUETTE_DEBUG), [Pb_analysis.cited_ids],
+     and the readers that match on a forced head: [force] forces a released thunk again,
+     without memoising, and they read the same derivation.
+
+   The header of [thunk] below used to say a thunk is the ONLY shared node of a
+   derivation. That is not what the code does, and T13 measured it: on
+   test/models/alldiff_regin_hole_element_unsat.fzn a conflict's derivation holds an
+   eager [Combine] the trace had already written as another entry's line, and 39 cells of
+   the suite are captured nodes first written inside another thunk's emission
+   (element_foreign_hole_*, element_shared_result_root_unsat). The release does not rest
+   on that sentence; it rests on the captured/built split, which the frame records rather
+   than assumes. What it does rest on: a closure hands nobody a node it built (a cache
+   that kept one and handed it to a later forcing would make that node captured there and
+   built here, and the ghost check is what would see it), and every node is built through
+   the smart constructors (a direct [Term (c, e)] in a closure would hide its operand from
+   the frame; nothing in lib/ builds one).
+
+   -------------------------------------------------------------------------------
    M1-T12 / docs/DECISIONS.md D-0013: [Model_row], [Combine], [Weaken]
    -------------------------------------------------------------------------------
 
@@ -253,19 +309,121 @@ and linear_term = {
          carries the claim) *)
 }
 
-and thunk = { mutable forced : t option; mutable compute : unit -> t; mutable mark : int }
-(* [mark]: the walk that last visited this thunk ([lits] below). A thunk is the ONLY
-   shared node of a derivation -- a trail entry's explanation is one thunk cited by every
-   later derivation that rests on it -- so marking thunks is what makes a walk linear in
+and thunk = {
+  mutable forced : t option;
+  compute : unit -> t;
+      (* the ORIGINAL closure, never replaced: a released thunk is forced again through
+         it (M11-complexity-T13, D-0168) *)
+  mutable mark : int;
+  mutable line : line;
+  mutable captures : bool;
+      (* the last forcing's tree holds a node the closure did not build ([citable] below):
+         [Justify] then tells built nodes from captured ones by forcing it again before it
+         releases it (M11-complexity-T13, D-0168) *)
+}
+(* [mark]: the walk that last visited this thunk ([lits] below). A thunk is the shared
+   node of a derivation that matters -- a trail entry's explanation is one thunk cited by
+   every later derivation that rests on it (an eager explanation can be shared too, see
+   "releasing a written thunk" above) -- so marking thunks is what makes a walk linear in
    the DAG rather than exponential in its depth of sharing. Found on 2010_depot_placement
    under BAGUETTE_DEBUG, where [Store.agreement_holds] walks every pruning's derivation:
-   a 60 s run was still walking after 22 h, all of it in [lits]. *)
+   a 60 s run was still walking after 22 h, all of it in [lits].
+
+   [line]: the line [Justify.emit] wrote for this thunk, once it has written one, and
+   then [forced] is [None] for good: the thunk is RELEASED (see the section on releasing
+   below). *)
+
+(* The line a released thunk's derivation was written as: its constraint id, the
+   writer's level when it was written, and what [Justify] needs to tell whether that line
+   is still on the page ([epoch], [owner]: its own wipe count and its own identity, so a
+   line written through one [Justify.ctx] is never cited by another). This module only
+   stores it; [Justify] alone writes and reads it. *)
+and line = No_line | Line of { cid : int; level : int; epoch : int; owner : int }
 
 type expl = t
 
+(* ------------------------------------------------- what a forcing builds (T13)
+
+   M11-complexity-T13 (D-0168). While a thunk is forced, a FRAME records the last
+   [ring_size] nodes the smart constructors below built ([note]), and every operand a
+   constructor is handed ([citable]: a [Term]'s, a [Cut]'s, a [Resolve] part, a
+   [Linear_term]'s cited explanation) is looked up among them by identity. An operand that
+   is a memoisable node ([Clause], [Linear], [Cut], [Combine], [Resolve]) and is not found
+   is one the closure did not build in this forcing -- CAPTURED, or built so long before
+   that it left the ring -- and the frame says so. A thunk whose tree may hold a captured
+   node is released only after a second forcing has told the two kinds apart (see
+   [Justify.emit_thunk]); one whose tree holds none is released without it, which is what
+   keeps the release free: a second forcing of a cumulative or all_different closure is as
+   dear as the first (D-0168 measured +5 % to +37 % instructions with it on every
+   release). The ring is scanned newest first, and a closure builds an operand just
+   before it wraps it, so the lookup is a few comparisons. It is exact in one direction
+   only, which is the one that matters: a node found in the ring was built in this
+   forcing; a node not found is treated as captured. Every [t] is built through these
+   constructors in lib/ (a direct [Term (c, e)] would bypass the check; nothing in lib/
+   builds one, and the guard [citable] already makes the constructors the only door, for
+   M1-T50's sake). *)
+let ring_size = 256
+
+type frame = {
+  ring : t array;
+  mutable pos : int;
+  mutable n : int;
+  mutable captured : bool;
+}
+
+let frames : frame array ref = ref [||]
+let depth = ref 0
+
+let open_frame () =
+  if !depth = Array.length !frames then
+    frames :=
+      Array.append !frames
+        (Array.init (Stdlib.max 4 !depth) (fun _ ->
+             {
+               ring = Array.make ring_size (Model_row 0);
+               pos = 0;
+               n = 0;
+               captured = false;
+             }));
+  let f = !frames.(!depth) in
+  f.pos <- 0;
+  f.n <- 0;
+  f.captured <- false;
+  incr depth;
+  f
+
+(* Close the innermost frame and drop what its ring holds, so that a frame kept for reuse
+   does not keep the last tree it saw alive. *)
+let close_frame f =
+  decr depth;
+  Array.fill f.ring 0 f.n (Model_row 0)
+
+let note e =
+  if !depth > 0 then (
+    let f = !frames.(!depth - 1) in
+    f.ring.(f.pos) <- e;
+    f.pos <- (f.pos + 1) land (ring_size - 1);
+    if f.n < ring_size then f.n <- f.n + 1);
+  e
+
+let built_here f e =
+  let rec go k i =
+    k < f.n && (f.ring.(i) == e || go (k + 1) ((i - 1) land (ring_size - 1)))
+  in
+  go 0 ((f.pos - 1) land (ring_size - 1))
+
+(* An operand handed to a constructor inside a forcing. *)
+let operand e =
+  if !depth > 0 then
+    match e with
+    | Deferred _ | Model_row _ | Decision _ -> ()
+    | Clause _ | Linear _ | Cut _ | Combine _ | Resolve _ ->
+        let f = !frames.(!depth - 1) in
+        if (not f.captured) && not (built_here f e) then f.captured <- true
+
 let decision lit = Decision lit
-let clause lits = Clause lits
-let linear terms rhs = Linear (terms, rhs)
+let clause lits = note (Clause lits)
+let linear terms rhs = note (Linear (terms, rhs))
 let model_row id = Model_row id
 let weaken lits = Weaken lits
 
@@ -297,9 +455,11 @@ let citable what e =
            "Explanation.%s: a decision (%s) has no constraint id and cannot be cited. \
             Weaken the term out of the row instead -- see explanation.ml's header."
            what (Lit.to_string l))
-  | e -> e
+  | e ->
+      operand e;
+      e
 
-let cut e1 e2 c1 c2 = Cut (citable "cut" e1, citable "cut" e2, c1, c2)
+let cut e1 e2 c1 c2 = note (Cut (citable "cut" e1, citable "cut" e2, c1, c2))
 let term coeff e = Term (coeff, citable "term" e)
 
 (* [resolve parts]: the parts are cited (summed) and so cannot be decisions; two is the
@@ -308,7 +468,7 @@ let resolve parts =
   (match parts with
   | [] | [ _ ] -> invalid_arg "Explanation.resolve: at least two derivations to resolve"
   | _ -> ());
-  Resolve (List.map (citable "resolve") parts)
+  note (Resolve (List.map (citable "resolve") parts))
 
 (* [Linear_term] and its readings (M8-bits-encoding-T2). The term is DECLARED when the
    bound it read is the declared one in its own direction, and then has no literal:
@@ -355,9 +515,10 @@ let combine summands divisor =
   (match summands with
   | [] -> invalid_arg "Explanation.combine: summands must be non-empty"
   | _ -> ());
-  Combine (summands, divisor)
+  note (Combine (summands, divisor))
 
-let deferred compute = Deferred { forced = None; compute; mark = 0 }
+let deferred compute =
+  Deferred { forced = None; compute; mark = 0; line = No_line; captures = false }
 
 (* One fresh mark per walk; a thunk's [mark] equals it iff this walk has seen it. *)
 let marks = ref 0
@@ -366,20 +527,169 @@ let fresh_mark () =
   incr marks;
   !marks
 
+(* How many times a RELEASED thunk was forced again (M11-complexity-T13), for
+   [BAGUETTE_MEMO_STATS]: [reforced_emit] counts the forcings [Justify] made to write the
+   derivation again after its line was wiped, [reforced] every one. *)
+let reforced = ref 0
+let reforced_emit = ref 0
+let released = ref 0
+
+(* [same_derivation a b]: [a] and [b] are the same derivation -- the question
+   [Justify] asks of a thunk's tree and a second forcing of it before it releases the
+   thunk, and [force] asks under BAGUETTE_DEBUG of every forcing after. A thunk is compared
+   by identity, never descended into: a cited thunk is a shared node, and the second
+   forcing must cite the same one. Everything else is compared by structure, and a node
+   the two trees hold PHYSICALLY in common (a value the closure captured rather than
+   built) is not descended into either: it is pushed on [captured]. *)
+let same_derivation ?(captured = ref []) a b =
+  let rec go a b =
+    if a == b then (
+      (* a [Model_row] or a [Decision] has no memo cell, and is no capture that matters *)
+      (match a with
+      | Deferred _ | Model_row _ | Decision _ -> ()
+      | Clause _ | Linear _ | Cut _ | Combine _ | Resolve _ -> captured := a :: !captured);
+      true)
+    else
+      match (a, b) with
+      | Deferred x, Deferred y -> x == y
+      | Decision l, Decision m -> Lit.equal l m
+      | Clause ls, Clause ms -> List.equal Lit.equal ls ms
+      | Linear (ts, r), Linear (us, s) ->
+          r = s && List.equal (fun (c, l) (d, m) -> c = d && Lit.equal l m) ts us
+      | Cut (a1, a2, c1, c2), Cut (b1, b2, d1, d2) ->
+          c1 = d1 && c2 = d2 && go a1 b1 && go a2 b2
+      | Model_row i, Model_row j -> i = j
+      | Combine (ss, d), Combine (ts, e) -> d = e && List.equal summand ss ts
+      | Resolve ps, Resolve qs -> List.equal go ps qs
+      | _ -> false
+  and summand s t =
+    match (s, t) with
+    | Term (c, a), Term (d, b) -> c = d && go a b
+    | Weaken ls, Weaken ms ->
+        List.equal (fun (c, l) (d, m) -> c = d && Lit.equal l m) ls ms
+    | Defining (c, l), Defining (d, m) -> c = d && Lit.equal l m
+    | Linear_term r, Linear_term q ->
+        r.lt_coeff = q.lt_coeff
+        && String.equal r.lt_name q.lt_name
+        && r.lt_decl_lo = q.lt_decl_lo && r.lt_decl_hi = q.lt_decl_hi
+        && r.lt_value = q.lt_value
+        && List.equal go r.lt_cited q.lt_cited
+    | _ -> false
+  in
+  go a b
+
+(* Every node of the trees under [roots], thunks excepted and not descended into: what a
+   captured value holds that the memo could have a cell for. *)
+let nodes_under roots =
+  let acc = ref [] in
+  let rec go e =
+    match e with
+    | Deferred _ | Decision _ | Model_row _ -> ()
+    | Clause _ | Linear _ -> acc := e :: !acc
+    | Cut (a, b, _, _) ->
+        acc := e :: !acc;
+        go a;
+        go b
+    | Combine (ss, _) ->
+        acc := e :: !acc;
+        List.iter summand ss
+    | Resolve ps ->
+        acc := e :: !acc;
+        List.iter go ps
+  and summand = function
+    | Term (_, e) -> go e
+    | Linear_term r -> List.iter go r.lt_cited
+    | Weaken _ | Defining _ -> ()
+  in
+  List.iter go roots;
+  !acc
+
 (* Force to a non-deferred head. Nested [Deferred] is allowed: a thunk may return another
-   thunk, and memoisation records the fully forced result at each level. The closure is
-   dropped once forced so that whatever it captured - propagator state, coefficient
-   arrays - becomes collectable; a memoised thunk must never be re-run anyway. *)
+   thunk, and memoisation records the fully forced result at each level.
+
+   Until M11-complexity-T13 the closure was replaced, once forced, by one returning the
+   result, so that what it captured became collectable. It is kept now: a RELEASED thunk
+   (one whose line [Justify] has written, [line <> No_line]) holds no tree, and a later
+   read forces it again through the closure, without memoising, so that the tree is
+   collectable again as soon as that reader is done with it. The closure is the snapshot
+   I-X6 says it closes over, and D-0164 measured what the closures hold on
+   2011_black-hole_9 at node 40: about 15 MB.
+
+   Under BAGUETTE_DEBUG a released thunk keeps its original tree ([release]), and every
+   forcing again is compared with it ([same_derivation]): the measurement of the claim
+   the release rests on. The tree returned is the new one in both modes, so a debug run
+   presents the memo the same nodes a normal run does. *)
 let rec force = function
   | Deferred th -> (
-      match th.forced with
-      | Some e -> e
-      | None ->
-          let e = force (th.compute ()) in
-          th.forced <- Some e;
-          th.compute <- (fun () -> e);
+      match th.line with
+      | No_line -> (
+          match th.forced with
+          | Some e -> e
+          | None ->
+              let e = compute th in
+              th.forced <- Some e;
+              e)
+      | Line { cid; _ } ->
+          incr reforced;
+          let e = compute th in
+          (match th.forced with
+          | Some original when not (same_derivation original e) ->
+              failwith
+                (Printf.sprintf
+                   "invariant violated: I-X6 (M11-complexity-T13): the released thunk of \
+                    line %d, forced again, is not the derivation it was written from"
+                   cid)
+          | _ -> ());
           e)
   | e -> e
+
+(* Force [th]'s closure once more, outside the memoisation and the counts: what a re-forcing
+   would return. For [Justify]'s check before it releases. *)
+and reforce th = compute th
+
+(* Run [th]'s closure inside a frame and force what it returns. [captures] is set when the
+   tree may hold a node the closure did not build: an operand the frame did not see built,
+   or a root it did not see built (a closure returning a captured value, or another thunk,
+   whose tree is that thunk's). *)
+and compute th =
+  let f = open_frame () in
+  let v =
+    match th.compute () with
+    | v -> v
+    | exception ex ->
+        close_frame f;
+        raise ex
+  in
+  let root_built =
+    match v with
+    | Deferred _ -> false
+    | Model_row _ | Decision _ -> true
+    | Clause _ | Linear _ | Cut _ | Combine _ | Resolve _ -> built_here f v
+  in
+  th.captures <- f.captured || not root_built;
+  close_frame f;
+  force v
+
+(* Whether the last forcing of [th] may have captured a node ([compute]). *)
+let captures th = th.captures
+
+(* The line of a released thunk, or [No_line]. *)
+let line_of th = th.line
+
+(* Undo a release: [th] holds [tree] again and no line, as a thunk forced and never
+   released does. For [Justify], when a second forcing is not the same derivation. *)
+let keep th tree =
+  th.line <- No_line;
+  th.forced <- Some tree
+
+(* RELEASE [th]: record the line its derivation was written as and drop the tree (kept
+   under BAGUETTE_DEBUG, see [force]). The module header's section on releasing says why
+   that writes the same proof. *)
+let release th (l : line) =
+  (match l with No_line -> invalid_arg "Explanation.release: no line" | Line _ -> ());
+  if th.line = No_line then incr released;
+  th.line <- l;
+  if not Debug.enabled then th.forced <- None
 
 let is_forced = function Deferred { forced = None; _ } -> false | _ -> true
 
@@ -502,6 +812,8 @@ let rec to_string e =
   | Resolve parts ->
       Printf.sprintf "resolve(%s)" (String.concat " | " (List.map to_string parts))
   | Deferred { forced = Some e; _ } -> "deferred[" ^ to_string e ^ "]"
+  | Deferred { forced = None; line = Line { cid; _ }; _ } ->
+      Printf.sprintf "deferred[released, line %d]" cid
   | Deferred { forced = None; _ } -> "deferred[?]"
 
 and summand_to_string = function

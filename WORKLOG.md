@@ -21,9 +21,9 @@ of it to every session and stopping at a broken line before it even reached the 
 |---|---|---|---|
 | M7-T28 (`member`) | new `lib/core/prop/member.ml`, `lib/flatzinc/compile.ml` (member dispatch), `mznlib/`, new `test/models/`, `test/unit/test_prop.ml` (member section) | agent-member (`wave53-member`) | 2026-11-19 |
 | M7-T34 (`member` without width-proportional rows) | on `wave53-member`'s files: `lib/core/prop/member.ml`, `lib/flatzinc/compile.ml` (member dispatch), `mznlib/`, `test/models/member_*`, `test/unit/test_prop.ml` (member section) | agent-member2 (`wave55-member`) | 2026-11-20 |
-| M11-complexity-T13 (drop a forced explanation once written) | `lib/core/explanation.ml` (the `thunk` record gains fields, D-0167 item 6), `lib/core/justify.ml`, `lib/core/pb_analysis.ml` (`cited_ids` only), `test/unit/test_justify.ml`, `docs/ARCHITECTURE.md` §4 | agent-thunk (`wave55-thunk`) | 2026-11-20 |
 | M11-complexity-T14 (per node against Gecode) | `lib/core/prop/pb.ml`, `lib/core/engine.ml`, `lib/core/store.ml`, `lib/core/prop/clause.ml`, their unit tests; `bench/` additions | agent-pernode2 (`wave55-pernode`) | 2026-11-20 |
 | M8-bits-encoding-T4 (two arms, `W = none` and `W = 0`, on the sixteen editions) | run directories under `/scratch/arthur/m8t4/`, `tools/compare/` (additions), `bench/challenge/README.md` (the run's row), a new D-record | agent-m8t4 (`wave55-m8t4`) | 2026-11-20 |
+| M11-complexity-T15 (SPIKE, explanations as a hash-consed DAG; a prototype branch, nothing merged without a decision) | `lib/core/explanation.ml`, `lib/core/justify.ml`, `lib/core/trace.ml`, propagators' explanation construction as needed, on branch `wave55-dag` only | agent-dag (`wave55-dag`) | 2026-11-20 |
 
 ## Cross-session requests
 
@@ -620,8 +620,16 @@ section 1. Shares are inclusive, of the whole run.
 | M11-complexity-T12 | agent-live (`wave54-live`) | 2026-11-19 | **D-0166.** Byte-identical shrink of four proof-side holders: claim index keys packed (333 -> 76 MB), memo as a chained table (342 -> 244 MB), audit keeps the origin alone, shared per `Combine` shape (325 -> 132 MB), `by_lvl` as runs (189 -> 118 MB). bh9 `--proof` node 40 (alldiff base): live 2 660 -> 2 041 MB, RSS 4 346 -> 3 648 MB, -2.2 % instructions, `.pbp` md5 equal. Gate on `c46952f` (binary `214e74d1`): `make check` rc 0 (4 289 ok), 198 x 4 artefacts equal to `22620b60`, lane 301/301, debug 289/289, scaling ok. alldiff's forced derivations (1.16 GB) and the never-hit memo entries are the user's call (D-0166 §5) |
 | M7-T33 (and `Alldiff.excl`'s proof cost, D-0145; `hole_cite` through `Store.remover`, D-0155 §4) | agent-alldiff (`wave53-alldiff`) | 2026-11-19 | **D-0156.** alldiff's pigeonholes carry their facts under a decision, so they are learned from (root byte-identical). `p1f_13` TIMEOUT -> UNSAT 19.5 s VERIFIED, elitserien 0 -> 20 incumbents, Challenge pairs 100 instances: 5 -> 6 complete, 16 -> 37 incumbents. `excl` cyclic 646 -> 581 G, `hole_cite` bh10 52 -> 16 G and bh20@20 1846 -> 175 G, bytes equal. Tip gate (`45b8a3c7`): check rc 0, 4278 ok, 200 models, 4 alldiff `.pbp` differ, lane 18 DIFF (cyclic x6, lot-sizing x12) and debug 6, all expected. Open: lot-sizing [activity] over the 4 GB cap, black-hole's heap per node, openshop's checker panic at `--update` (D-0156 §4, §7). |
 | D-0161 request 1 (`Alldiff.snap_of` builds derivation inputs at every snapshot) | agent-snap (`wave54-snap`) | 2026-11-19 | **D-0165.** `snap_of` keeps the interior holes only; `gone` rebuilds the below/above runs inside the `Deferred` from the four frozen bounds; root flags and `hole_cite` through `Store.at_root`. Every model artefact and every lane line equal to the base `45b8a3c7`. Cyclic 10 000 nodes `--no-proof` -25.6 % instructions (157.0 -> 116.7 G), `--proof` -5.2 %; black-hole_20 -6.6 % / -2.3 %. |
+| M11-complexity-T13 | agent-thunk (`wave55-thunk`) | 2026-11-20 | **D-0168.** A thunk keeps its line (id, level) once written and drops its tree; the memo lets go of the cells of the nodes the closure built (a forcing records the operands it did not build, and only those thunks are forced again at release); `derive_ahead` emits the thunk. bh9 `--proof` node 40 (alldiff base): live 2 041 -> 658 MB, RSS 3 646 -> 1 777 MB, -0.7 % instructions, `.pbp` md5 equal; lane default runs -28.7 % (rcpsp_11) to +0.35 %. Gate on `a8762eb` (binary `40638833`): `make check` rc 0 (4 312 ok), 198 x 4 artefacts equal to `214e74d1`, lane 301/301, debug 289/289, scaling ok |
 
 ## Handoff notes
+
+### 2026-11-20 (agent-thunk, `wave55-thunk`): M11-complexity-T13, D-0168
+
+A thunk is released once its line is written: it keeps the id and level, drops its tree, and the
+memo takes out the cells of what the closure built (bh9 node 40 live 2 041 -> 658 MB, rcpsp_11
+-28.7 % instructions, every byte equal; gate green on `a8762eb`). "A thunk is the only shared node" was false:
+captured eager nodes exist (39 on the suite), and the frames in explanation.ml keep their cells.
 
 ### 2026-11-20 (agent-merge, `wave55-merge`): wave53-alldiff and wave54-snap merged on the branch, gate 71 green
 

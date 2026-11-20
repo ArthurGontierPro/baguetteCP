@@ -145,6 +145,16 @@
    [Model_row] is never memoised: it writes nothing and returns the id it already
    carries, so there is nothing to remember.
 
+   M11-complexity-T13 (D-0168): neither is a [Deferred] any more. A thunk's line is kept
+   ON THE THUNK ([Explanation.line]: its id, its level, this [ctx]'s epoch and serial),
+   and [emit_thunk] RELEASES the thunk once the line is written: the tree is dropped, and
+   the cells the emission made for nodes the closure built are taken out of the memo
+   ([release_window]), since no lookup can present those nodes again. The line answers a
+   later [emit] for as long as no wipe has reached its level ([live_line]), which is when
+   the memo entry it replaces would have answered; after such a wipe the thunk is forced
+   again and written again. explanation.ml's header ("releasing a written thunk") gives
+   the argument that every byte is the same, and what BAGUETTE_DEBUG checks of it.
+
    M11-complexity-T10 (D-0158): SHARE MODE, off by default. A propagator that rebuilds
    the same derivation at every level (D-0149's 388 copies on cable_tree_wiring) hands
    this module a new value each time, so the memo above misses and each copy writes its
@@ -299,6 +309,24 @@ and memo_table = {
   share : bool;
       (* M11-complexity-T10 (D-0158): an identical line at or below the current level
          answers a miss. See the module header's "Memoisation". *)
+  mutable window : chain array;
+  mutable window_kept : Bytes.t;
+  mutable window_len : int;
+      (* M11-complexity-T13 (D-0168): the cells remembered while a thunk's derivation is
+         being written, oldest first, in [window.(0 .. window_len - 1)], every cell an
+         emission at that level inserted since the outermost thunk's emission began, in
+         order; [release_window] takes a released thunk's cells out of the table. A cell
+         KEPT by an inner release ([window_kept] is ['k']) stays in the log for the
+         enclosing ones and is never taken out. Empty outside a thunk's emission. *)
+  mutable window_from : int; (* where the innermost thunk's own cells start *)
+  mutable depth : int; (* how many thunk emissions are in progress *)
+  mutable window_hits : Explanation.t list;
+      (* BAGUETTE_DEBUG only: the nodes the innermost thunk's emission found in the memo
+         on a cell it did not make itself; each must be a node the closure captured *)
+  ghost : memo_table option;
+      (* BAGUETTE_DEBUG only: the cells [release_thunk] took out, kept so that a lookup
+         that would have found one is caught (the discipline the release rests on is
+         then broken). [None] otherwise, and in a ghost itself. *)
 }
 
 (* M11-complexity-T10 (D-0158). Off unless asked for: BAGUETTE_MEMO_STATS=1 counts the
@@ -317,13 +345,24 @@ let ms_shared = ref 0
 let ms_entries = ref 0
 let ms_entries_peak = ref 0
 let ms_longest = ref 0
+let ms_line_hits = ref 0
+let ms_purged = ref 0
+let ms_reforce_shared = ref 0
+let ms_not_released = ref 0
+let ms_checked = ref 0
 
 let () =
   if memo_stats_on then
     at_exit (fun () ->
         Printf.eprintf
           "baguette: memo lookups=%d hits=%d shared=%d entries_peak=%d longest_bucket=%d\n"
-          !ms_lookups !ms_hits !ms_shared !ms_entries_peak !ms_longest)
+          !ms_lookups !ms_hits !ms_shared !ms_entries_peak !ms_longest;
+        (* M11-complexity-T13 (D-0168) *)
+        Printf.eprintf
+          "baguette: thunks released=%d checked=%d not_released=%d line_hits=%d \
+           cells_released=%d reforced=%d (to write again %d) captured_nodes=%d\n"
+          !Explanation.released !ms_checked !ms_not_released !ms_line_hits !ms_purged
+          !Explanation.reforced !Explanation.reforced_emit !ms_reforce_shared)
 
 (* The default of [create]'s sharing, read once. Only "1" turns it on. *)
 let share_default =
@@ -422,13 +461,7 @@ let summand_hash budget = function
   | Explanation.Term (c, t) -> operand_hash budget (mix 0 c) t
   | other -> summand_hash_flat other
 
-(* The value a [Deferred] that has not been forced hashes to. Nothing is ever remembered
-   under it in practice ([memoized] forces before it remembers), and [find_memo] looks
-   here as well, so that a [Deferred] remembered unforced by some future path would still
-   be found. *)
-let unforced_hash = 6
-
-let rec shallow_hash (e : Explanation.t) =
+let shallow_hash (e : Explanation.t) =
   match e with
   | Explanation.Decision l -> finish (mix 0 (lit_hash l))
   | Explanation.Clause ls -> finish (mix_list lit_hash 1 ls)
@@ -441,8 +474,8 @@ let rec shallow_hash (e : Explanation.t) =
   | Explanation.Combine (ss, d) ->
       let budget = ref operand_budget in
       finish (mix_list (summand_hash budget) (mix 5 d) ss)
-  | Explanation.Deferred { forced = Some f; _ } -> shallow_hash f
-  | Explanation.Deferred { forced = None; _ } -> unforced_hash
+  (* Never a memo key since M11-complexity-T13: a thunk's line is kept on the thunk. *)
+  | Explanation.Deferred _ -> 6
   | Explanation.Resolve parts ->
       let budget = ref operand_budget in
       finish (operand_list budget 7 0 parts)
@@ -548,20 +581,45 @@ type ctx = {
   combine_origins : (unit -> string) Writer.Itbl.t;
       (* M11-complexity-T12 (D-0166): one origin closure per (summands, divisor) shape,
          shared by every [Combine] line of that shape; see [combine_origin]. *)
+  serial : int;
+  mutable epoch : int;
+  mutable wiped_at : int array;
+  mutable line_hi : int;
+      (* M11-complexity-T13 (D-0168): what tells whether a released thunk's line is still
+         on the page. [epoch] counts this [ctx]'s wipes; [wiped_at.(l)] is the epoch of
+         the last wipe that reached level [l] (0 if none), stamped by [wipe_level] for
+         every level up to [line_hi], the highest level a line was recorded at since. A
+         line recorded at level [l] in epoch [e] by the [ctx] whose [serial] it carries
+         is live exactly when [wiped_at.(l) <= e]: the condition under which the memo
+         entry it replaces would still be in the memo. *)
 }
 
+let empty_memo ~share ~ghost =
+  {
+    slots = Array.make 1024 Nil;
+    count = 0;
+    by_level = Array.init 16 (fun _ -> { buf = [||]; len = 0 });
+    memo_hi = -1;
+    share;
+    window = [||];
+    window_kept = Bytes.empty;
+    window_len = 0;
+    window_from = 0;
+    depth = 0;
+    window_hits = [];
+    ghost;
+  }
+
+let serials = ref 0
+
 let create_sharing ~share ~writer ~encoding =
+  incr serials;
   {
     writer;
     encoding;
     memo =
-      {
-        slots = Array.make 1024 Nil;
-        count = 0;
-        by_level = Array.init 16 (fun _ -> { buf = [||]; len = 0 });
-        memo_hi = -1;
-        share;
-      };
+      empty_memo ~share
+        ~ghost:(if Debug.enabled then Some (empty_memo ~share ~ghost:None) else None);
     stated = Claims.create 64;
     stated_by_level = Array.make 16 [];
     stated_hi = -1;
@@ -571,6 +629,10 @@ let create_sharing ~share ~writer ~encoding =
     names = Hashtbl.create 64;
     name_of = Array.make 64 "";
     combine_origins = Writer.Itbl.create 64;
+    serial = !serials;
+    epoch = 0;
+    wiped_at = Array.make 16 0;
+    line_hi = -1;
   }
 
 (* The [ctx] every caller makes: sharing as [BAGUETTE_MEMO_SHARE] says, off unless it is
@@ -584,12 +646,15 @@ let create ~writer ~encoding = create_sharing ~share:share_default ~writer ~enco
 let writer ctx = ctx.writer
 let slot_of (m : memo_table) h = h land (Array.length m.slots - 1)
 
-let find_in_bucket ctx h (e : Explanation.t) =
+let find_cell (m : memo_table) h (e : Explanation.t) =
   let rec go = function
-    | Nil -> None
-    | Cell c -> if c.hash = h && c.key == e then Some c.cid else go c.next
+    | Nil -> Nil
+    | Cell c as cell -> if c.hash = h && c.key == e then cell else go c.next
   in
-  go ctx.memo.slots.(slot_of ctx.memo h)
+  go m.slots.(slot_of m h)
+
+let find_in_bucket ctx h (e : Explanation.t) =
+  match find_cell ctx.memo h e with Cell c -> Some c.cid | Nil -> None
 
 (* The cells of [chain] whose hash is [h]: the length of the bucket of [h], as the
    table had it before M11-complexity-T12. *)
@@ -634,29 +699,65 @@ let grow_memo (m : memo_table) =
         (cells [] chain))
     old
 
-(* [e]'s entry, looked up under the hash [h] it was given ([shallow_hash e]). A forced
-   [Deferred] is also looked up under [unforced_hash]: see there. *)
-let find_memo ctx h (e : Explanation.t) =
-  match find_in_bucket ctx h e with
-  | Some _ as cid -> cid
-  | None -> (
-      match e with
-      | Explanation.Deferred { forced = Some _; _ } when h <> unforced_hash ->
-          find_in_bucket ctx unforced_hash e
-      | _ -> None)
+(* M11-complexity-T13 (D-0168), BAGUETTE_DEBUG only: is [cell] one the innermost thunk's
+   emission made itself? A linear scan of its window, paid only on a hit inside a
+   thunk's emission, and the memo answers none on 2011_black-hole_9 (D-0166 section 1). *)
+let own_cell (m : memo_table) cell =
+  let rec go k =
+    k < m.window_len
+    && ((m.window.(k) == cell && Bytes.get m.window_kept k <> 'k') || go (k + 1))
+  in
+  go m.window_from
 
-let remember_with ctx (e : Explanation.t) h (cid : Writer.cid) : Writer.cid =
-  let level = Writer.current_level ctx.writer in
+(* [e]'s entry, looked up under the hash [h] it was given ([shallow_hash e]).
+
+   Under BAGUETTE_DEBUG it also gathers what the release of a thunk rests on (the module
+   header's "Releasing a written thunk"): inside a thunk's emission, a hit on a cell that
+   emission did not make is a node shared with another derivation, which [emit_thunk]
+   then requires to be one the closure CAPTURED (a second forcing holds it too); and a
+   miss must not be a cell a release took out (a node of a released tree presented
+   again). *)
+let find_memo ctx h (e : Explanation.t) =
   let m = ctx.memo in
+  match find_cell m h e with
+  | Cell c as cell ->
+      if Debug.enabled && m.depth > 0 && not (own_cell m cell) then
+        m.window_hits <- e :: m.window_hits;
+      Some c.cid
+  | Nil ->
+      (match m.ghost with
+      | Some g -> (
+          match find_cell g h e with
+          | Cell c ->
+              failwith
+                (Printf.sprintf
+                   "invariant violated: M11-complexity-T13: a node of a RELEASED \
+                    derivation (line %d, level %d) was presented again: %s"
+                   c.cid c.level (Explanation.to_string e))
+          | Nil -> ())
+      | None -> ());
+      None
+
+(* Put a cell for [e] in [m] at [level]. Inside a thunk's emission it is also logged in
+   the window, so that [release_window] can take it out again. *)
+let insert (m : memo_table) ~level h (e : Explanation.t) (cid : Writer.cid) =
   if m.count >= 2 * Array.length m.slots then grow_memo m;
   let i = slot_of m h in
-  m.slots.(i) <- Cell { key = e; cid; level; hash = h; next = m.slots.(i) };
+  let cell = Cell { key = e; cid; level; hash = h; next = m.slots.(i) } in
+  m.slots.(i) <- cell;
   m.count <- m.count + 1;
-  if memo_stats_on then (
-    incr ms_entries;
-    if !ms_entries > !ms_entries_peak then ms_entries_peak := !ms_entries;
-    let n = same_hash h 0 m.slots.(i) in
-    if n > !ms_longest then ms_longest := n);
+  if m.depth > 0 then (
+    if m.window_len = Array.length m.window then (
+      let n = Stdlib.max 64 (2 * m.window_len) in
+      let a = Array.make n Nil in
+      Array.blit m.window 0 a 0 m.window_len;
+      m.window <- a;
+      let k = Bytes.make n ' ' in
+      Bytes.blit m.window_kept 0 k 0 m.window_len;
+      m.window_kept <- k);
+    m.window.(m.window_len) <- cell;
+    Bytes.set m.window_kept m.window_len ' ';
+    m.window_len <- m.window_len + 1);
   if level > 0 then (
     (if level >= Array.length m.by_level then
        let n = Array.length m.by_level in
@@ -671,23 +772,112 @@ let remember_with ctx (e : Explanation.t) h (cid : Writer.cid) : Writer.cid =
       b.buf <- a);
     b.buf.(b.len) <- h;
     b.len <- b.len + 1;
-    if level > m.memo_hi then m.memo_hi <- level);
+    if level > m.memo_hi then m.memo_hi <- level)
+
+let remember_with ctx (e : Explanation.t) h (cid : Writer.cid) : Writer.cid =
+  let m = ctx.memo in
+  insert m ~level:(Writer.current_level ctx.writer) h e cid;
+  if memo_stats_on then (
+    incr ms_entries;
+    if !ms_entries > !ms_entries_peak then ms_entries_peak := !ms_entries;
+    let n = same_hash h 0 m.slots.(slot_of m h) in
+    if n > !ms_longest then ms_longest := n);
   cid
 
-let remember ctx e cid = remember_with ctx e (shallow_hash e) cid
+(* Unlink [cell] from its slot's chain. It is almost always the head (it was pushed there
+   and the cells pushed since were mostly released first); a KEPT cell can stand before
+   it, so the chain is walked. *)
+let unlink (m : memo_table) cell =
+  match cell with
+  | Nil -> ()
+  | Cell c ->
+      let i = slot_of m c.hash in
+      if m.slots.(i) == cell then m.slots.(i) <- c.next
+      else
+        let rec go = function
+          | Nil -> failwith "Justify.release_window: a released cell is not in its slot"
+          | Cell p -> if p.next == cell then p.next <- c.next else go p.next
+        in
+        go m.slots.(i)
 
-(* Backtracking: wipe the writer's level and drop the memo entries it invalidated, in
-   one call, so the two structures cannot drift apart. Always call this instead of
-   [Writer.wipe_level] directly when a [ctx] is in play. *)
-let wipe_level ctx level =
-  Writer.wipe_level ctx.writer level;
+(* M11-complexity-T13 (D-0168): take out of [m] the cells its window logged from [from]
+   on -- the cells a released thunk's emission made -- except those [keep] names (and
+   those an inner release kept), which stay in the table and, marked, in the log for the
+   enclosing emissions. [by_level] loses the hashes of the cells taken out: the cells of
+   the window are the last ones its level recorded, in the same order (one level for a
+   whole emission; checked, and left alone otherwise, a stale hash costing a wipe one
+   slot walk and nothing else). Under BAGUETTE_DEBUG the cells taken out move to the
+   ghost. *)
+let release_window (m : memo_table) from ~(keep : Explanation.t -> bool) =
+  let len = m.window_len in
+  let level =
+    if from < len then match m.window.(from) with Cell c -> c.level | Nil -> -1 else -1
+  in
+  let one_level = ref true in
+  let k = ref from in
+  for i = from to len - 1 do
+    let cell = m.window.(i) in
+    match cell with
+    | Nil -> ()
+    | Cell c ->
+        if c.level <> level then one_level := false;
+        if Bytes.get m.window_kept i = 'k' || keep c.key then (
+          m.window.(!k) <- cell;
+          Bytes.set m.window_kept !k 'k';
+          incr k)
+        else (
+          unlink m cell;
+          m.count <- m.count - 1;
+          if memo_stats_on then (
+            decr ms_entries;
+            incr ms_purged);
+          match m.ghost with
+          | Some g -> insert g ~level:c.level c.hash c.key c.cid
+          | None -> ())
+  done;
+  let b = if level > 0 then m.by_level.(level) else { buf = [||]; len = 0 } in
+  let tail_is_window =
+    !one_level && level > 0 && len > from
+    &&
+    match m.window.(len - 1) with
+    | Cell c -> b.len >= len - from && b.buf.(b.len - 1) = c.hash
+    | Nil -> false
+  in
+  if Debug.enabled && !one_level && level > 0 && len > from && not tail_is_window then
+    failwith "Justify.release_window: the window is not its level's last cells";
+  if tail_is_window then (
+    b.len <- b.len - (len - from);
+    for i = from to !k - 1 do
+      match m.window.(i) with
+      | Cell c ->
+          b.buf.(b.len) <- c.hash;
+          b.len <- b.len + 1
+      | Nil -> ()
+    done);
+  for i = !k to len - 1 do
+    m.window.(i) <- Nil
+  done;
+  m.window_len <- !k;
+  if m.depth = 1 then (
+    (* the outermost emission: what it kept stays in the table, untracked *)
+    for i = 0 to m.window_len - 1 do
+      m.window.(i) <- Nil
+    done;
+    m.window_len <- 0;
+    (* a large window is dropped rather than kept at its peak *)
+    if Array.length m.window > 65536 then (
+      m.window <- [||];
+      m.window_kept <- Bytes.empty))
+
+(* The memo's half of [wipe_level], on [m] (the memo, or under BAGUETTE_DEBUG its
+   ghost). *)
+let wipe_memo (m : memo_table) ~main level =
   (* M6-T17: walk levels [level, memo_hi] only, and the [stated] keys the same way,
      rather than folding every table. M11-complexity-T5: the hashes were kept by
      [remember], and each bucket is filtered once however many of its entries die (it
      was filtered once per doomed entry). The end state is the old one: every bucket that
      holds an entry at [level] or above is in the list, and loses exactly those entries.
-     [Writer.wipe_level] above refuses [level <= 0], so level 0 is never walked. *)
-  let m = ctx.memo in
+     [Writer.wipe_level] refuses [level <= 0], so level 0 is never walked. *)
   if m.memo_hi >= level then (
     (* M11-complexity-T12: every slot a doomed hash maps to loses exactly its cells at
        [level] or above. A slot met twice is walked twice and loses nothing the second
@@ -696,7 +886,7 @@ let wipe_level ctx level =
       | Nil -> Nil
       | Cell c when c.level >= level ->
           m.count <- m.count - 1;
-          if memo_stats_on then decr ms_entries;
+          if memo_stats_on && main then decr ms_entries;
           keep c.next
       | Cell c as cell ->
           c.next <- keep c.next;
@@ -712,7 +902,23 @@ let wipe_level ctx level =
       if Array.length b.buf > 4096 then b.buf <- [||];
       b.len <- 0
     done;
-    m.memo_hi <- level - 1);
+    m.memo_hi <- level - 1)
+
+(* Backtracking: wipe the writer's level and drop the memo entries it invalidated, in
+   one call, so the two structures cannot drift apart. Always call this instead of
+   [Writer.wipe_level] directly when a [ctx] is in play. *)
+let wipe_level ctx level =
+  Writer.wipe_level ctx.writer level;
+  wipe_memo ctx.memo ~main:true level;
+  (match ctx.memo.ghost with Some g -> wipe_memo g ~main:false level | None -> ());
+  (* M11-complexity-T13 (D-0168): every released thunk's line at [level] or above is
+     gone from the page with the memo entries above. *)
+  if ctx.line_hi >= level then (
+    ctx.epoch <- ctx.epoch + 1;
+    for l = level to ctx.line_hi do
+      ctx.wiped_at.(l) <- ctx.epoch
+    done;
+    ctx.line_hi <- level - 1);
   for l = level to ctx.stated_hi do
     let keys = ctx.stated_by_level.(l) in
     ctx.stated_by_level.(l) <- [];
@@ -898,28 +1104,19 @@ let validate_lits ctx lits =
     lits
 
 (* Run [thunk] and memoise its result under [e]'s identity, unless it is already
-   memoised. *)
+   memoised. [e] is never a [Deferred]: since M11-complexity-T13 a thunk's line is kept
+   on the thunk itself ([emit]'s [Deferred] arm), not in the memo. *)
 let memoized ctx (e : Explanation.t) (thunk : unit -> Writer.cid) : Writer.cid =
-  match e with
-  | Explanation.Deferred { forced = None; _ } -> (
-      (* Not forced, so not remembered (an entry exists only after its thunk ran, and
-         the thunk of a [Deferred] forces it, see [emit]), unless some path remembered
-         it unforced, which [unforced_hash]'s bucket would hold. [remember] hashes it
-         again after the thunk, forced. *)
-      match find_in_bucket ctx unforced_hash e with
-      | Some cid -> cid
-      | None -> remember ctx e (thunk ()))
-  | _ -> (
-      (* Hashed once: a head that is not a [Deferred] hashes the same before and after
-         its thunk runs ([shallow_hash] reads a nested [Deferred] as a constant, and
-         nothing else it reads is mutable). *)
-      let h = shallow_hash e in
-      if memo_stats_on then incr ms_lookups;
-      match find_memo ctx h e with
-      | Some cid ->
-          if memo_stats_on then incr ms_hits;
-          cid
-      | None -> remember_with ctx e h (thunk ()))
+  (* Hashed once: a head that is not a [Deferred] hashes the same before and after its
+     thunk runs ([shallow_hash] reads a nested [Deferred] as a constant, and nothing else
+     it reads is mutable). *)
+  let h = shallow_hash e in
+  if memo_stats_on then incr ms_lookups;
+  match find_memo ctx h e with
+  | Some cid ->
+      if memo_stats_on then incr ms_hits;
+      cid
+  | None -> remember_with ctx e h (thunk ())
 
 (* M11-complexity-T10 (D-0158). Share mode's lookup: [memoized] for a [Combine], [Cut]
    or [Linear], with the line index between the memo and the writer. [line] renders the
@@ -1405,6 +1602,31 @@ let resolve_clause parts =
     parts;
   List.rev !acc
 
+(* M11-complexity-T13 (D-0168): the line a released thunk's derivation was written as,
+   if this [ctx] wrote it and it is still on the page -- exactly when the memo entry the
+   thunk had before T13 would still answer (see [ctx]'s [wiped_at]). *)
+let live_line ctx (th : Explanation.thunk) =
+  match Explanation.line_of th with
+  | Explanation.Line { cid; level; epoch; owner } ->
+      if
+        owner = ctx.serial
+        && (level >= Array.length ctx.wiped_at || ctx.wiped_at.(level) <= epoch)
+      then Some cid
+      else None
+  | Explanation.No_line -> None
+
+(* The line [th] is released with: [cid] at the writer's current level, in this
+   [ctx]'s current epoch. *)
+let record_line ctx (th : Explanation.thunk) cid =
+  let level = Writer.current_level ctx.writer in
+  if level >= Array.length ctx.wiped_at then (
+    let a = Array.make (Stdlib.max (level + 1) (2 * Array.length ctx.wiped_at)) 0 in
+    Array.blit ctx.wiped_at 0 a 0 (Array.length ctx.wiped_at);
+    ctx.wiped_at <- a);
+  if level > ctx.line_hi then ctx.line_hi <- level;
+  Explanation.release th
+    (Explanation.Line { cid; level; epoch = ctx.epoch; owner = ctx.serial })
+
 (* [emit ctx e] renders [e] into proof rules through [Writer] and returns the id of the
    resulting constraint.
 
@@ -1463,7 +1685,12 @@ let rec emit ctx (e : Explanation.t) : Writer.cid =
           (Pol_line expr, fun () -> pol_stating ctx ~claim:None ~origin expr))
   | Explanation.Combine (summands, divisor) ->
       memoized ctx e (fun () -> emit_combine ~emit ~claim:None ctx summands divisor)
-  | Explanation.Deferred _ -> memoized ctx e (fun () -> emit ctx (Explanation.force e))
+  | Explanation.Deferred th -> (
+      match live_line ctx th with
+      | Some cid ->
+          if memo_stats_on then incr ms_line_hits;
+          cid
+      | None -> emit_thunk ctx e th)
   (* M8-bits-encoding-T3 (D-0134 section 2.6, and its deviation in section 5): a
      [Resolve] is written by [emit_bits_pruning] as the trace line of the entry it
      justifies. It reaches here only as a CITATION -- an order-arm derivation whose
@@ -1480,6 +1707,109 @@ let rec emit ctx (e : Explanation.t) : Writer.cid =
               fst
                 (emit_bits_resolve ctx ~origin:"bits resolve (cited)" ~concludes:None
                    parts))
+
+(* M11-complexity-T13 (D-0168): write a thunk's derivation and RELEASE it -- record the
+   line on the thunk, drop its tree, and take out of the memo the cells its emission made
+   for nodes the closure BUILT, so that nothing holds the tree once it is written. The
+   closure is forced a second time to tell built nodes from captured ones (a node the two
+   forcings hold physically in common was captured, is held by something else anyway,
+   and keeps its cell) and to check that the second forcing is the same derivation;
+   where it is not, the thunk is not released and keeps its tree and its cells, as
+   before T13. See the module header's "Releasing a written thunk" for why the proof is
+   the same. A thunk released before whose line has since been wiped comes here again,
+   is forced again through its closure, and its derivation is written again, as T12
+   wrote the same tree again. *)
+(* The cells of the window from [from] on stay in the table, marked kept for the
+   enclosing emissions (or untracked, from the outermost one). *)
+and keep_window m from =
+  if m.depth = 1 then (
+    for i = 0 to m.window_len - 1 do
+      m.window.(i) <- Nil
+    done;
+    m.window_len <- 0)
+  else
+    for i = from to m.window_len - 1 do
+      Bytes.set m.window_kept i 'k'
+    done
+
+and emit_thunk ctx e (th : Explanation.thunk) =
+  let m = ctx.memo in
+  let from = m.window_len and outer = m.window_from and outer_hits = m.window_hits in
+  let again = Explanation.line_of th <> Explanation.No_line in
+  let tree = Explanation.force e in
+  if again then incr Explanation.reforced_emit;
+  m.depth <- m.depth + 1;
+  m.window_from <- from;
+  m.window_hits <- [];
+  let leave () =
+    m.depth <- m.depth - 1;
+    m.window_from <- outer;
+    m.window_hits <- outer_hits
+  in
+  match emit ctx tree with
+  | exception ex ->
+      (* the cells stay, as they did before T13 *)
+      keep_window m from;
+      leave ();
+      raise ex
+  | cid -> (
+      (* Which cells to keep. A tree whose forcing captured nothing holds only nodes the
+         closure built, and every cell its emission made goes. One that may have captured
+         is forced again, and a node the two forcings hold physically in common keeps its
+         cell. BAGUETTE_DEBUG forces every thunk again, to check the derivation, the
+         registry's answer, and that every node the emission found already written by
+         another derivation was captured. *)
+      let check = Debug.enabled || Explanation.captures th in
+      let verdict =
+        if not check then Some []
+        else
+          let captured = ref [] in
+          if Explanation.same_derivation ~captured tree (Explanation.reforce th) then (
+            let kept = Explanation.nodes_under !captured in
+            if Debug.enabled then (
+              if kept <> [] && not (Explanation.captures th) then
+                failwith
+                  (Printf.sprintf
+                     "invariant violated: M11-complexity-T13: the thunk of line %d holds \
+                      a node a second forcing shares, and its forcing did not see it \
+                      captured: %s"
+                     cid
+                     (Explanation.to_string (List.hd kept)));
+              List.iter
+                (fun n ->
+                  if not (List.memq n kept) then
+                    failwith
+                      (Printf.sprintf
+                         "invariant violated: M11-complexity-T13: the thunk of line %d \
+                          found in the memo a node it BUILT, already written by another \
+                          derivation, which a second forcing would not find: %s"
+                         cid (Explanation.to_string n)))
+                m.window_hits);
+            Some kept)
+          else None
+      in
+      match verdict with
+      | Some kept ->
+          if memo_stats_on then (
+            if check then incr ms_checked;
+            ms_reforce_shared := !ms_reforce_shared + List.length kept);
+          record_line ctx th cid;
+          release_window m from ~keep:(fun k -> kept <> [] && List.memq k kept);
+          leave ();
+          cid
+      | None ->
+          if Debug.enabled then
+            failwith
+              (Printf.sprintf
+                 "invariant violated: I-X6 (M11-complexity-T13): forcing the thunk of \
+                  line %d again does not give the derivation it was written from"
+                 cid);
+          (* Not released: the thunk keeps this tree and its cells stay, as before T13. *)
+          if memo_stats_on then incr ms_not_released;
+          Explanation.keep th tree;
+          keep_window m from;
+          leave ();
+          cid)
 
 (* M2-L6: emit [e] as a [pol] that STATES the constraint [claim], where [e] renders to a
    [pol] at all.
