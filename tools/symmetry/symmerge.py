@@ -1,0 +1,150 @@
+#!/usr/bin/env python3
+"""symmerge.py CHAIN.json ORIG.opb BROKEN.opb BROKEN.pbp MERGED.pbp [--bad-witness K | --bad-cut K]
+-- baguette's proof of the BROKEN model turned into a proof about the ORIGINAL one
+(M15-symmetry-T2, D-0179).
+
+CHAIN.json is symchain.py's, BROKEN.opb/.pbp baguette's run on symchain's OUT.fzn, ORIG.opb
+baguette's .opb of the model without breaking. The merged proof is checked by VeriPB against
+ORIG.opb itself, unchanged:
+
+  veripb ORIG.opb MERGED.pbp
+
+baguette names every row (@c1, @c2, ...) and its proof cites rows by these names only. The cuts are
+the last constraints before `solve`, so baguette mints them last: BROKEN.opb must be ORIG.opb
+label for label, row for row, plus one row per cut and nothing else, and each extra row must be
+its cut's clause. symmerge refuses anything else. The merged proof is BROKEN.pbp with its `f`
+line counting ORIG.opb's rows, and, right after it, one line per cut, in chain order:
+
+  @cK red <the row of @cK> : <witness> ;
+
+The witness is w_b^-1, the inverse of the cut's word in its level's generators, so it sends b to
+c. No order is loaded. Why the line holds (D-0177 §4): under the negated cut (c false, b true) the
+image of the cut contains ~c, which holds; the witness is an automorphism of ORIG.opb, so the
+model's rows map onto rows; and the earlier cuts must map onto constraints that follow by unit
+propagation, which VeriPB checks rather than this script. baguette's proof then follows unchanged.
+
+Mutation controls (negative tests, each on one cut K, 0-based in chain order):
+  --bad-witness K   the witness of cut K becomes the transposition of c and b alone, which is
+                    not an automorphism of the model (codes-cp's BAD=1)
+  --bad-cut K       cut K (on a level >= 1) is derived as c v ~c_1 instead of c v ~b, with its
+                    true witness: c_1, the first point, is fixed by the level's group, so it is in
+                    no orbit of it and no element of the chain sends it to c.
+                    (Flipping the second literal, c v b, is NOT a sound control under `dom`: on
+                    hamming_w4 VeriPB accepts it, and rightly, because with c, b and the points
+                    before c at 0 the parity rows propagate every coordinate to 0, against
+                    sum x >= 1, so the dominance goal closes by propagation.)
+VeriPB must refuse both at the mutated line, which symmerge prints (`line N`).
+"""
+import argparse, json, re, sys, os
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from symchain import apply, compose, inverse, word_perm, neg  # noqa: E402
+
+
+def def_order(name, N, coef):
+    """codes-cp's scripts/domproof.py, verbatim: an order on N variables, u <= v iff
+    sum coef[p] * (v_p - u_p) >= 0 (a weighted sum: lex with coef 2^(N-1-p))"""
+    terms = " ".join(f"{-c} u{p + 1}" for p, c in enumerate(coef)) + " " + \
+            " ".join(f"{c} v{p + 1}" for p, c in enumerate(coef))
+    us = " ".join(f"u{p + 1}" for p in range(N)); vs = " ".join(f"v{p + 1}" for p in range(N))
+    ws = " ".join(f"w{p + 1}" for p in range(N))
+    return [f"def_order {name}", "  vars", f"    left {us};", f"    right {vs};", "    aux;", "  end;",
+            "  def", f"    {terms} >= 0;", "  end;",
+            "  transitivity", "    vars", f"      fresh_right {ws};", "    end;", "    proof",
+            "      proofgoal #1", "        pol 1 2 + 3 +;", "      qed : -1;", "    qed;", "  end;", "end;"]
+
+
+def rows(opb):
+    """[(label, body)] in file order, and the `#constraint=` count"""
+    R, n = [], None
+    for line in open(opb):
+        if line.startswith("* #variable="):
+            n = int(re.search(r"#constraint=\s*(\d+)", line).group(1))
+        elif line.startswith("@c"):
+            lab, body = line.rstrip("\n").split(" ", 1)
+            R.append((lab, body))
+    return R, n
+
+
+def lits_of(body):
+    """the literal set and degree of a clause row `+1 l1 +1 l2 >= 1 ;`, else None"""
+    m = re.fullmatch(r"((?:\+1 ~?\S+ )+)>= 1 ;", body.strip())
+    if not m:
+        return None
+    return frozenset(m.group(1).split()[1::2])
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("chain"); ap.add_argument("orig"); ap.add_argument("broken")
+    ap.add_argument("pbp"); ap.add_argument("merged")
+    ap.add_argument("--rule", choices=["auto", "red", "dom", "transversal"], default="auto")
+    g = ap.add_mutually_exclusive_group()
+    g.add_argument("--bad-witness", type=int)
+    g.add_argument("--bad-cut", type=int)
+    a = ap.parse_args()
+
+    J = json.load(open(a.chain))
+    cuts = J["cuts"]
+    O, n0 = rows(a.orig)
+    B, nb = rows(a.broken)
+    assert n0 == len(O) and nb == len(B), "a #constraint= count disagrees with the rows"
+    if B[:len(O)] != O:
+        k = next(i for i, (x, y) in enumerate(zip(B, O)) if x != y) if len(B) >= len(O) else len(B)
+        sys.exit(f"symmerge: BROKEN.opb is not ORIG.opb plus rows at the end (first difference at "
+                 f"row {k + 1})")
+    extra = B[len(O):]
+    if len(extra) != len(cuts):
+        sys.exit(f"symmerge: {len(extra)} extra rows for {len(cuts)} cuts")
+    lines, nrule, rule_of = [], {"red": 0, "dom": 0}, []
+    for i, ((lab, body), ct) in enumerate(zip(extra, cuts)):
+        if lits_of(body) != frozenset(ct["clause"]):
+            sys.exit(f"symmerge: row {lab} `{body}` is not cut {i} {ct['clause']}")
+        lv, c, b = ct["level"], ct["c"], ct["b"]
+        t = word_perm(J["generators"][lv], ct["word"])                    # t(c) = b
+        assert apply(t, c) == b, f"cut {i}: its word does not send c to b"
+        swap = ct.get("swap")
+        if a.rule == "dom" or (a.rule == "auto" and swap is None):
+            rule, w = "dom", t
+        elif swap is None or a.rule == "transversal":                    # D-0177's witness
+            rule, w = "red", inverse(t)
+        else:
+            rule, w = "red", compose(word_perm(J["generators"][lv + 1], swap), inverse(t))
+            assert apply(w, b) == c and apply(w, c) == b, f"cut {i}: the swap does not swap"
+        nrule[rule] += 1
+        rule_of.append(rule)
+        if a.bad_witness == i:
+            c, b = ct["c"], ct["b"]
+            w = {c: b, b: c} if not b.startswith("~") else {c: b}
+        if a.bad_cut == i:
+            if lv == 0:
+                sys.exit(f"symmerge: --bad-cut {i}: cut {i} is on level 0, take one on a later level")
+            d = J["levels"][0]["point"]                   # fixed by G_lv: never in c's orbit
+            body = f"+1 {c} +1 ~{d} >= 1 ;"
+        wit = " ".join(f"{v} -> {l}" for v, l in sorted(w.items()))
+        lines.append(f"{lab} {rule} {body.rstrip(' ;')} : {wit} ;")
+    points = [lv["point"] for lv in J["levels"] if "point" in lv]
+    k = a.bad_witness if a.bad_witness is not None else a.bad_cut
+    target = lines[k] if k is not None else None
+    if nrule["dom"]:
+        N = len(points)
+        lines = def_order(f"symlex{N}", N, [2 ** (N - 1 - p) for p in range(N)]) + \
+            [f"load_order symlex{N} " + " ".join("~" + c for c in points) + " ;"] + lines + ["load_order ;"]
+
+    P = open(a.pbp).read().splitlines()
+    assert P[0].startswith("pseudo-Boolean proof version") and P[1] == f"f {nb} ;", P[:2]
+    head = [P[0], f"f {n0} ;",
+            f"% ---- {len(cuts)} symmetry-breaking cuts, `red` with dejavu's permutations "
+            "(tools/symmetry/symmerge.py) ----"]
+    with open(a.merged, "w") as f:
+        f.write("\n".join(head + lines + ["% ---- baguette's proof of the broken model, unchanged ----"]
+                          + P[2:]) + "\n")
+    mut = "" if k is None else (f", MUTATED: bad {'witness' if a.bad_witness is not None else 'cut'}"
+                                f" at cut {k}, {rule_of[k]}, line {len(head) + lines.index(target) + 1}")
+    wl = [len(l.split(" : ")[-1].split(" -> ")) - 1 for l in lines if " red " in l or " dom " in l]
+    print(f"symmerge: {len(cuts)} cuts, {nrule['red']} red, {nrule['dom']} dom, largest witness "
+          f"{max(wl, default=0)} moved variables{mut} -> {a.merged}")
+
+
+if __name__ == "__main__":
+    main()

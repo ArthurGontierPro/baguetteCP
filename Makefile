@@ -30,7 +30,7 @@ CAP := $(if $(filter none unlimited 0,$(MEM_CAP_KB)),:,ulimit -v $(MEM_CAP_KB)) 
 # Passed down so a script invoked from a recipe agrees with the recipe.
 export BAGUETTE_MEM_CAP_KB = $(MEM_CAP_KB)
 
-.PHONY: build release test unit models check fmt fmt-check lint determinism unlimit selftests clean proof bootstrap bench diff scaling e2e
+.PHONY: build release test unit models check fmt fmt-check lint determinism unlimit selftests clean proof bootstrap bench diff scaling e2e sym
 
 build:
 	dune build
@@ -199,3 +199,12 @@ scaling: build
 # MemoryMax=32G, which bounds real memory instead.
 e2e: build
 	./scripts/e2e_lane.sh $(ARGS)
+
+# The SYMMETRY lane (M15-symmetry-T2, D-0179): dejavu beside baguette, each symmetry-breaking
+# cut re-derived in the merged proof, checked by veripb against the ORIGINAL .opb, plus the
+# mutation controls. Node only (dejavu, MiniZinc); not in `check`.
+#   make sym ARGS="-j 8 /scratch/arthur/<run>"      add --big for QR48 (about five minutes)
+# NOT under $(CAP): dejavu on QR48 takes about 4 GB. Every step runs under systemd's
+# MemoryMax=32G instead (scripts/sym_lane.sh).
+sym: build
+	./scripts/sym_lane.sh $(ARGS)
