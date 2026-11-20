@@ -68,19 +68,23 @@ let parse_int st =
       | t -> bad t)
   | t -> bad t
 
+(* An expression's start is taken as the token's line and column, two ints, and made a
+   [Pos.t] only for the diagnostic that needs it (M16-file-review-T5, D-0193): a
+   [Lexer.pos] per expression would be the allocation per token the lexer stopped
+   making. *)
 let rec parse_expr st =
-  let p = pos st in
+  let line = Lexer.tok_line st and col = Lexer.tok_col st in
   let e = parse_primary st in
   if cur st = Lexer.DOTDOT then (
     advance st;
     let e2 = parse_primary st in
     match (e, e2) with
     | Ast.Int a, Ast.Int b -> Ast.Range (a, b)
-    | _ -> Error.failf p "a range must have integer literal bounds")
+    | _ ->
+        Error.failf (Lexer.pos_at st line col) "a range must have integer literal bounds")
   else e
 
 and parse_primary st =
-  let p = pos st in
   match cur st with
   | Lexer.INT _ | Lexer.MINUS | Lexer.PLUS -> Ast.Int (parse_int st)
   | Lexer.TRUE ->
@@ -107,6 +111,7 @@ and parse_primary st =
       advance st;
       Ast.Array (parse_seq st Lexer.RBRACK "`]`")
   | Lexer.LBRACE ->
+      let p = pos st in
       advance st;
       let es = parse_seq st Lexer.RBRACE "`}`" in
       Ast.Set
@@ -118,7 +123,8 @@ and parse_primary st =
                    "a set literal may only contain integer literals, found `%s`"
                    (Ast.string_of_expr e))
            es)
-  | t -> Error.failf p "expected an expression but found %s" (Lexer.string_of_token t)
+  | t ->
+      Error.failf (pos st) "expected an expression but found %s" (Lexer.string_of_token t)
 
 (* A comma-separated list terminated by [close], which is consumed. Tolerates a
    trailing comma. *)

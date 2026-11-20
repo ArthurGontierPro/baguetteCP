@@ -124,10 +124,16 @@ type t = {
   mutable base : int; (* offset in the input of [buf.(0)] *)
   mutable line : int;
   mutable bol : int; (* offset in the input of the current line's first byte *)
-  (* the one lexeme of lookahead: [tok] is the current token and [tok_pos] where it
-     starts. [EOF] is sticky: once reached, [advance] does nothing. *)
+  (* the one lexeme of lookahead: [tok] is the current token and [tok_line],
+     [tok_col] where it starts. [EOF] is sticky: once reached, [advance] does nothing.
+
+     The start is two ints and not a [Pos.t] (M16-file-review-T5, D-0193): a [Pos.t]
+     per token was an allocation and a [caml_modify] per token, for a position the
+     parser asks for once per item and on an error. [pos] builds it on demand, the
+     same record [here] made, so every diagnostic reads as before. *)
   mutable tok : token;
-  mutable tok_pos : Pos.t;
+  mutable tok_line : int;
+  mutable tok_col : int;
 }
 
 let default_window = 65536
@@ -164,6 +170,17 @@ let peek t = Bytes.unsafe_get t.buf t.pos
 let peek2 t = Bytes.unsafe_get t.buf (t.pos + 1)
 let skip t = t.pos <- t.pos + 1
 let here t = Pos.make t.file t.line (t.base + t.pos - t.bol + 1)
+
+(* The current token starts at the cursor: record where, as [here] would have it. *)
+let mark_token t =
+  t.tok_line <- t.line;
+  t.tok_col <- t.base + t.pos - t.bol + 1
+
+(* Where the current token starts, as a [Pos.t]; [pos_at] for a start the parser kept. *)
+let pos_at t line col = Pos.make t.file line col
+let pos t = pos_at t t.tok_line t.tok_col
+let tok_line t = t.tok_line
+let tok_col t = t.tok_col
 
 (* Called with the cursor ON the newline byte, before it is skipped. *)
 let newline t =
@@ -235,7 +252,7 @@ let take_int_in_window t =
 (* Skip whitespace and comments, then scan one token, leaving it in [t.tok]. *)
 let rec scan t =
   if not (has1 t) then (
-    t.tok_pos <- here t;
+    mark_token t;
     t.tok <- EOF)
   else
     let c = peek t in
@@ -268,8 +285,7 @@ let rec scan t =
       done;
       scan t)
     else
-      let p = here t in
-      t.tok_pos <- p;
+      let () = mark_token t in
       if is_digit c then (
         let value =
           match take_int_in_window t with
@@ -279,11 +295,11 @@ let rec scan t =
         (* `1..2` is a range, `1.0` is a float literal and floats are out of scope
            (SPEC 1). Distinguish by looking at the character after the dot. *)
         if has1 t && peek t = '.' && not (has2 t && peek2 t = '.') then
-          Error.failf p
+          Error.failf (pos t)
             "floating-point literals are not supported: SPEC 2.1 restricts types to bool \
              and int";
         if has1 t && (peek t = 'e' || peek t = 'E') then
-          Error.failf p
+          Error.failf (pos t)
             "floating-point literals are not supported: SPEC 2.1 restricts types to bool \
              and int";
         match value with
@@ -292,7 +308,8 @@ let rec scan t =
             match int_of_string_opt text with
             | Some v -> t.tok <- INT v
             | None ->
-                Error.failf p "integer literal `%s` does not fit in an OCaml int" text))
+                Error.failf (pos t) "integer literal `%s` does not fit in an OCaml int"
+                  text))
       else if is_ident_start c then
         let s = take_while t cls_ident in
         match keyword s with Some k -> t.tok <- k | None -> t.tok <- IDENT s
@@ -301,13 +318,13 @@ let rec scan t =
         let b = Buffer.create 16 in
         let closed = ref false in
         while not !closed do
-          if not (has1 t) then Error.failf p "unterminated string literal"
+          if not (has1 t) then Error.failf (pos t) "unterminated string literal"
           else
             let ch = peek t in
             if ch = '"' then (
               skip t;
               closed := true)
-            else if ch = '\n' then Error.failf p "unterminated string literal"
+            else if ch = '\n' then Error.failf (pos t) "unterminated string literal"
             else if ch = '\\' && has2 t then (
               (match peek2 t with
               | 'n' -> Buffer.add_char b '\n'
@@ -344,12 +361,11 @@ let rec scan t =
           | '=' -> EQ
           | '-' -> MINUS
           | '+' -> PLUS
-          | _ -> Error.failf p "unexpected character %C" c))
+          | _ -> Error.failf (pos t) "unexpected character %C" c))
 
 (* ------------------------------------------------------------ the parser's view *)
 
 let cur t = t.tok
-let pos t = t.tok_pos
 let advance t = if t.tok <> EOF then scan t
 
 let make ~file ?(window = default_window) read =
@@ -364,7 +380,8 @@ let make ~file ?(window = default_window) read =
       line = 1;
       bol = 0;
       tok = EOF;
-      tok_pos = Pos.make file 1 1;
+      tok_line = 1;
+      tok_col = 1;
     }
   in
   scan t;
