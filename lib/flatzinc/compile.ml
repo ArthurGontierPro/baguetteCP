@@ -215,7 +215,7 @@ type t = {
 
    Called once per constraint; its result is what both the .opb row and the propagator
    are built from. See the module header. *)
-let normalise_terms (terms : (int * int) list) : (int * int) list =
+let normalise_terms_by_table (terms : (int * int) list) : (int * int) list =
   let coeff = Hashtbl.create 16 in
   let order = ref [] in
   List.iter
@@ -230,6 +230,28 @@ let normalise_terms (terms : (int * int) list) : (int * int) list =
   |> List.filter_map (fun i ->
          let c = Hashtbl.find coeff i in
          if c = 0 then None else Some (c, i))
+
+(* M16-file-review-T5 (D-0193): a row whose variables are pairwise distinct -- nearly
+   every row a flattener writes -- has nothing to merge, so its result is its own terms
+   with the zero coefficients dropped, which is what the table below computes for it (each
+   index occurs once, so its entry is its coefficient and the order is the input's). Up to
+   [distinct_scan_max] terms that is decided by comparing the indices pairwise, where the
+   table cost one polymorphic [Hashtbl] of 16 buckets per constraint; a longer row keeps
+   the table, so the scan stays O(k^2) for k <= 8. *)
+let distinct_scan_max = 8
+
+let rec indices_distinct = function
+  | [] -> true
+  | (_, i) :: rest -> List.for_all (fun (_, j) -> j <> i) rest && indices_distinct rest
+
+let rec short_list n = function
+  | [] -> true
+  | _ :: rest -> n > 0 && short_list (n - 1) rest
+
+let normalise_terms (terms : (int * int) list) : (int * int) list =
+  if short_list distinct_scan_max terms && indices_distinct terms then
+    List.filter (fun (c, _) -> c <> 0) terms
+  else normalise_terms_by_table terms
 
 let negate_terms terms = List.map (fun (c, i) -> (Checked.neg c, i)) terms
 
