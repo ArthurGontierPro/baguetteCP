@@ -22976,11 +22976,11 @@ NONE`, elaborated and checked; "bridge prefix" = `tools/e2e/prefix.sh` on the sa
 | `2022_nfc_24_4_2` | OPT=1836 | 0.4 | 9.0 / 9.0 | 0.3 + 3.0 / 0.4 + 3.1 | 2.8 + 18.0 / 3.1 + 17.0 | 2.09 / 2.34 |
 | `2016_nfc_12_2_10` | OPT=848 | 0.2 | 3.9 / - | 0.2 + 1.0 / - | 1.9 + 10.3 / 1.9 + 10.1 | 0.99 / 1.09 |
 | `2016_zephyrus_12__8__6__3` | OPT=1300 | 1 170.7 | 1 357.6 / - | 106.6 + heap / - | 476.6 + heap / 475.9 + heap | 6.68 (D-0182) / 151.4 |
-| `2015_gfd-schedule_n120f5d50m50k20` | OPT=1 | 2 407.8 | 517.8 / - | 394.2 + (running) / - | 469.4 + heap / 380.0 + heap | 5.13 (D-0182) / 131.1 |
+| `2015_gfd-schedule_n120f5d50m50k20` | OPT=1 | 2 407.8 | 517.8 / - | 394.2 + heap / - | 469.4 + heap / 380.0 + heap | 5.13 (D-0182) / 131.1 |
 
 17 VERIFIED by `cake_pb_cp`, every verdict the bridged chain's; on zephyrus and gfd-n120 `veripb
 --elaborate` accepts and `cake_pb_cp` exhausts its 24 GB heap, as on the bridged chain (D-0182 §4),
-and on zephyrus the prefix ALONE exhausts it too. `2011_black-hole_17` (element) and `2015_p1f_13`
+and on both the prefix ALONE exhausts it too. `2011_black-hole_17` (element) and `2015_p1f_13`
 (inverse) are refused by `--e2e` (T3b).
 
 What this says:
