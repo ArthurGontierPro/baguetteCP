@@ -8491,6 +8491,7 @@ let test_member_brute_force () =
   regular_rng := 2031;
   let bad = ref 0 and scenes = ref 0 and changed = ref 0 and conflicts = ref 0 in
   let reasons = ref 0 and ahead = ref 0 and lemmas = ref 0 and first_bad = ref "" in
+  let thresholds = ref 0 in
   let aliased_scenes = ref 0 and sel_facts = ref 0 in
   let flag what =
     incr bad;
@@ -8637,23 +8638,47 @@ let test_member_brute_force () =
         incr ahead;
         match Explanation.force (Store.explanation store e) with
         | Explanation.Combine (summands, m) ->
-            if List.length summands <> m + 1 then
-              flag "a gap derivation's divisor is not its lemma count";
+            (* M7-T34: [pre], the threshold lemmas, each a [Clause] followed by the
+               [Weaken] that cancels it; then the line's own summands, every coefficient
+               [k] = 1 + the degree the weakening costs, divided by [k] times their
+               lemma count (the line alone: one [Clause]; the gap shape: the OR row and
+               one [Clause] per position). *)
+            let true_on_sols what lits =
+              incr lemmas;
+              List.iter
+                (fun a ->
+                  if on_holes a && not (List.exists (lit_holds a) lits) then
+                    flag (Printf.sprintf "%s for %s is false on a solution" what nm))
+                sols
+            in
+            let rec pre s acc =
+              match acc with
+              | Explanation.Term (1, Explanation.Clause l) :: Explanation.Weaken w :: rest
+                when List.length w = List.length l
+                     && List.for_all2
+                          (fun x (c, y) -> c = 1 && Lit.equal y (Lit.negate x))
+                          l w ->
+                  true_on_sols "a threshold lemma" l;
+                  incr thresholds;
+                  pre (s + List.length l - 1) rest
+              | rest -> (s, rest)
+            in
+            let s, rest = pre 0 summands in
+            let k = s + 1 in
+            let clauses = ref 0 and rows = ref 0 in
             List.iter
               (function
-                | Explanation.Term (_, Explanation.Clause lits) ->
-                    incr lemmas;
-                    List.iter
-                      (fun a ->
-                        if on_holes a && not (List.exists (lit_holds a) lits) then
-                          flag
-                            (Printf.sprintf "a gap lemma for %s is false on a solution" nm))
-                      sols
-                | Explanation.Term (_, Explanation.Model_row _) -> ()
+                | Explanation.Term (c, Explanation.Clause lits) when c = k ->
+                    incr clauses;
+                    true_on_sols "a lemma" lits
+                | Explanation.Term (c, Explanation.Model_row _) when c = k -> incr rows
                 | _ ->
                     flag
-                      "a gap derivation holds a summand that is not a lemma or the OR row")
-              summands
+                      "a derivation ahead holds a summand that is not a lemma, the line \
+                       or the OR row at the scaled coefficient")
+              rest;
+            if m <> k * !clauses || !rows > 1 || (!rows = 1 && !clauses < 2) then
+              flag "a derivation ahead's divisor is not k times its lemma count"
         | _ -> flag "a removal made ahead whose derivation is not a Combine")
     done;
     match outcome with
@@ -8688,8 +8713,10 @@ let test_member_brute_force () =
     (Printf.sprintf
        "member (D-0159): I-P1, domain consistency, I-P2 and every reason SOUND over the \
         declared domains, %d scenes (%d aliased, %d pruned, %d conflicts, %d reasons, %d \
-        selector facts all the scene's, %d removals ahead with %d lemmas): no violation"
-       !scenes !aliased_scenes !changed !conflicts !reasons !sel_facts !ahead !lemmas)
+        selector facts all the scene's, %d changes ahead with %d lemmas, %d of them \
+        threshold lemmas, each true on every solution): no violation"
+       !scenes !aliased_scenes !changed !conflicts !reasons !sel_facts !ahead !lemmas
+       !thresholds)
     (!bad = 0 && !changed > 300 && !conflicts > 50 && !reasons > 1000 && !ahead > 5)
 
 (* member end to end on the checker. Three scenes, each one shape of the header:

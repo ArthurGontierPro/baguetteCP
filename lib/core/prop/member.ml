@@ -2,7 +2,8 @@
    through mznlib/fzn_member_int.mzn (and fzn_member_bool.mzn, over 0..1), where [b] is
    one SELECTOR Boolean per position the library introduces; docs/DECISIONS.md D-0151
    section 3 is its design record and D-0159 its implementation, including the one place
-   the implementation departs from the design (the rows, below). Governed by
+   the implementation departs from the design (the rows, below); D-0168 (M7-T34)
+   replaced its width-proportional rows by two big-M rows per position. Governed by
    docs/SPEC.md 3.2 (consistency) and 3.3 (explanations).
 
    ---------------------------------------------------------------------------
@@ -15,26 +16,34 @@
    section 3 carries over: a selector is to member what a state flag is to regular).
 
    ---------------------------------------------------------------------------
-   The .opb rows (lib/flatzinc/compile.ml's [post_member])
+   The .opb rows (lib/flatzinc/compile.ml's [post_member]): TWO per position (M7-T34)
    ---------------------------------------------------------------------------
 
      OR            b_1 \/ ... \/ b_n
-     R+(i, v)      ~b_i \/ ~[y >= v] \/ [x_i >= v]
-     R-(i, v)      ~b_i \/ ~[x_i >= v] \/ [y >= v]
+     F_k           x_k - y + M ~b_k >= 0       M = hi y - lo x_k
+     G_k           y - x_k + M' ~b_k >= 0      M' = hi x_k - lo y
 
-   for every threshold v of the union of the two declared hulls, a constant literal
-   folded at a declared bound, and a row a ladder clause implies (beyond the first one past
-   a hull) not written. With b_i, R+ and R- are y = x_i in the order encoding: every
-   threshold agrees.
+   over the DECLARED hulls, a constant folded into the degree, and a row whose M is not
+   positive (true on the declared box whatever b_k is) not written. With b_k, F_k and G_k
+   are y = x_k; without it, each is the declared box. A position whose x_k IS y has none.
 
-   D-0151 section 3.1 wrote the VALUE form instead, `~b_i \/ y <> v \/ x_i >= v` and
-   `... \/ x_i <= v` per value v of y. D-0159 measured the case its probes did not hold
-   (bench/member_spike/gen_rows_probe.py): a selector death across TWO holes of x_i inside
-   y's range is not RUP over the value form -- y = v forces x_i = v, and the hole
-   `x_i <> v` is a two-literal clause, so unit propagation can push y past neither the
-   lowest nor the highest such hole -- and it is RUP over the bound form, which chases
-   both lower bounds upward, each hole of either side pushing its own variable past it.
-   Same row count to within the folding, three literals instead of four.
+   Until M7-T34 the rows were the BOUND form per threshold v of the two hulls,
+
+     R+(k, v)      ~b_k \/ ~[y >= v] \/ [x_k >= v]
+     R-(k, v)      ~b_k \/ ~[x_k >= v] \/ [y >= v]
+
+   two per threshold per position, which is D-0028's width-proportionality paid per
+   position: 1.39 M rows on hexagon_gcc.reload1.gen_reload, 3.77 M on gl_Map1f (D-0159
+   section 5). They are now LEMMAS, written into the proof only where a line needs one
+   (see "The proof"). Each is RUP from its big-M row and the ladders: assume b_k,
+   [y >= v] and ~[x_k >= v]; the ladders put y at v or above and x_k below v, so F_k's
+   largest value is (v - 1) - v < 0. Folded the same way: a constant literal at a
+   declared bound, and a lemma a constant makes true not written.
+
+   D-0151 section 3.1 wrote the VALUE form, `~b_i \/ y <> v \/ x_i >= v`. D-0159 measured
+   that a selector death across TWO holes of x_i inside y's range is not RUP over it, and
+   is over the bound form, which chases both lower bounds upward, each hole pushing its own
+   variable past it. The lemmas keep the bound form for that reason.
 
    ---------------------------------------------------------------------------
    Consistency level: DOMAIN, and [Aliased] when it is not
@@ -62,40 +71,61 @@
    every mismatched selector dies, and none left is the OR row's conflict.
 
    ---------------------------------------------------------------------------
-   The proof: every pruning ONE `rup`, except one shape, written ahead
+   The proof: every line ONE `rup`, some behind threshold lemmas written ahead
    ---------------------------------------------------------------------------
 
-     K  ~b_i. Assume b_i: R+/R- give x_i and y the same bounds; from the larger of the two
-        lower bound facts, each value of the overlap is a hole of x_i or of y (its
-        remover's facts on the tail), whose line pushes that variable past it and R+/R-
-        the other, until the smaller upper bound fact is crossed. Disjoint hulls: the
-        two bounds that separate them.
-     C  b_k := 1: the other selectors' tails, so their lines fire, and OR.
+   A big-M row propagates the SELECTOR (its coefficient M exceeds the slack once the
+   x/y part is violated) and refutes two bounds that cross under b_k, but it propagates
+   no rung of a ladder: every rung has coefficient 1, and the slack is the width left.
+   So a line whose argument walks a hole needs the threshold lemma that carries the bound
+   across, on the page before it; a line that only compares bounds does not.
+
+     K  ~b_i. Disjoint by bounds: F_i or G_i, no lemma. Otherwise assume b_i: from the
+        larger of the two lower bound facts, each value v of the overlap is a hole of
+        x_i or of y (its remover's facts on the tail), whose line pushes that variable
+        past v and a lemma the other (R- at v + 1 for a hole of x_i, R+ for one of y),
+        until the smaller upper bound fact is crossed -- the LAST jump needs no lemma,
+        F_i or G_i refutes the two bounds. Lemmas: the start (R- or R+ at the larger
+        lower bound) and one per hole but the last.
+     C  b_k := 1: the other selectors' tails, so their lines fire, and OR. No lemma.
         A conflict: every selector's tail.
-     E  y >= lo(x_k), y <= hi(x_k), y <> v for a hole of x_k (and the same for x_k
-        against y): b_k's tail, the bound fact or the hole's remover facts; R+/R- at
-        one threshold, or both and the hole's line.
+     E  y >= lo(x_k), y <= hi(x_k) (and the same for x_k against y): b_k's tail and the
+        bound fact, refuted by F_k or G_k, no lemma. tgt <> v for a hole v of src: one
+        lemma carries tgt >= v to src (R+ at v when tgt is y, R- when it is x_k), src's
+        hole line pushes src past v, and the big-M row refutes src >= v + 1 > tgt.
      S  y <> v: per position, its death's tail if it is dead, else the fact excluding v
         from x_i -- the WEAKEST bound, or the hole's remover. Assume y = v: each dead
-        selector's line fires, each live one bound-excluded dies by R+/R- at v, OR forces
-        what is left.
+        selector's line fires, each live one bound-excluded dies on F_i or G_i, OR forces
+        what is left; a hole-excluded one needs R+(i, v), after which its hole and the
+        big-M row refute it.
 
-   S is one `rup` while at most ONE live position excludes v by a HOLE only: OR then
-   forces that position, and its hole refutes it. Two or more cannot be done by unit
-   propagation (each b_i needs its own case split: b_i /\ y = v gives x_i >= v and
-   x_i <= v, and `x_i <> v` is two literals). Measured: q2 refused, q2a/q2p accepted
-   (bench/member_spike/gen_rows_probe.py, D-0159). That pruning is made under
-   [Store.deriving_ahead], and its justification is the derivation lib/core/trace.ml
-   writes ahead of the line:
+   The derivation ahead (M7-T34). A line with lemmas is made under [Store.deriving_ahead],
+   so lib/core/trace.ml writes its explanation's `pol` before it: each lemma (a [Clause],
+   so a `rup`) weakened back out to a constant by its literals' axioms, then the line's own
+   [Clause] scaled by k = 1 + the degree the weakening cost, all divided by k. A [Combine]
+   emits its terms left to right, so every lemma is on the page before the line's clause;
+   the result is exactly that clause (the line's coefficients are k / k, and its degree
+   k less the k - 1 the weakening cost is 1, which divides to 1), which is what a
+   CITATION of the entry reads. The
+   pruning's trace line is then RUP in sequence. No new [Explanation] constructor: Term,
+   Weaken and Combine as D-0013 has them. Measured load-bearing on a SATISFIABLE model
+   (test/unit/test_mutation.ml's chase-start, chase-last and transfer lanes: one lemma
+   deleted, the line refused at the RUP wording), which the rup vacuity trap requires.
+
+   S is still not one line when two or more LIVE positions exclude v by a HOLE only: OR
+   then forces neither, and each b_i needs its own case split (D-0159, probe q2). That
+   removal is the derivation D-0159 wrote ahead:
 
        one lemma A_i = ~b_i \/ y <> v \/ ~F_i per position (a `rup`: assume b_i and
-       y = v, R+/R- pin x_i to v, F_i excludes it -- through the hole's own line), the
-       death's own line for a dead position, nothing for a selector a decision killed;
-       then OR + sum A_i, divided by their count: exactly the clause y <> v \/ ~F.
+       y = v; R+(i, v), the hole and the big-M row for a hole-excluded position, F_i or
+       G_i for a bound-excluded one), the death's own line for a dead position, nothing
+       for a selector a decision killed; then OR + sum A_i, divided by their count:
+       exactly the clause y <> v \/ ~F -- with the hole-excluded positions' R+(i, v)
+       weakened in front of it, the same way.
 
-   So this family is [Needs_derivation] under I-X10 for that one shape and [Single_row]
-   for every other (test/unit/test_trace.ml's table says so, and its derive-ahead lane
-   drives the shape).
+   So this family is [Needs_derivation] under I-X10 for those shapes and [Single_row] for
+   every other (test/unit/test_trace.ml's table says so, and its derive-ahead lane
+   drives the gap shape).
 
    ORDER ON THE TAIL: pinning bound facts first, then the dead selectors' tails, the
    excluding facts LAST, so test/unit/test_mutation.ml's lane that drops a line's last
@@ -109,7 +139,8 @@
    moved the selector now ([Store.hi_support] / [lo_support]), so a selector revived by a
    backtrack and moved again by a decision is cited as itself.
 
-   A call is O(n * w) for K and O(|dom y| * live) for S, w the overlap of two hulls. *)
+   A call is O(n * w) for K and O(|dom y| * live) for S, w the overlap of two hulls; the
+   lemmas a K line writes are as many as the holes its reason already cites. *)
 
 module Lit = Baguette_proof.Lit
 
@@ -149,6 +180,9 @@ type t = {
   mutable nkeys : int;
   mutable others_rev : Reason.fact list;
   mutable stamp : int;
+  (* M7-T34: the threshold lemmas the line under construction needs on the page ahead of
+     it, newest first (see the header, "The proof"). *)
+  mutable lemmas_rev : Lit.t list list;
 }
 
 let make store ~xs ~y ~sels ~or_row : t =
@@ -198,6 +232,7 @@ let make store ~xs ~y ~sels ~or_row : t =
     nkeys = 0;
     others_rev = [];
     stamp = 0;
+    lemmas_rev = [];
   }
 
 let vars t = t.vars
@@ -221,7 +256,8 @@ exception Found of Store.conflict
 let start t =
   t.stamp <- t.stamp + 1;
   t.nkeys <- 0;
-  t.others_rev <- []
+  t.others_rev <- [];
+  t.lemmas_rev <- []
 
 let is_lower_key key = key land 1 = 0
 
@@ -326,12 +362,90 @@ let clause_expl claim fs =
   Explanation.deferred (fun () ->
       Explanation.clause (claim @ List.map Lit.negate (Reason.lits_of_facts fs)))
 
-let conflict store fs =
-  Store.conflict store (Reason.because ~concludes:None fs (clause_expl [] fs))
+(* ------------------------------------------------- the threshold lemmas (M7-T34) *)
+
+(* [c >= v] over a cell's DECLARED hull: the constant true, the constant false, or a
+   literal -- the folding compile.ml applied to the rows these lemmas used to be. *)
+type glit = Tt | Ff | L of Lit.t
+
+let ge_decl c v =
+  match c with
+  | Fixed k -> if k >= v then Tt else Ff
+  | Cell { name; dlo; dhi; _ } ->
+      if v <= dlo then Tt else if v > dhi then Ff else L (Lit.ge name v)
+
+let neg = function Tt -> Ff | Ff -> Tt | L l -> L (Lit.negate l)
+let not_b t k = Option.get (Reason.lit_of_fact (dead_fact t k))
+
+(* A lemma's clause, or [None] when a constant literal makes it true. *)
+let lemma parts =
+  if List.mem Tt parts then None
+  else Some (List.filter_map (function L l -> Some l | Tt | Ff -> None) parts)
+
+(* R+(k, v)   ~b_k \/ ~[y >= v] \/ [x_k >= v]
+   R-(k, v)   ~b_k \/ ~[x_k >= v] \/ [y >= v] *)
+let need t = function Some l -> t.lemmas_rev <- l :: t.lemmas_rev | None -> ()
+
+let need_plus t k v =
+  need t (lemma [ L (not_b t k); neg (ge_decl t.y v); ge_decl t.xs.(k) v ])
+
+let need_minus t k v =
+  need t (lemma [ L (not_b t k); neg (ge_decl t.xs.(k) v); ge_decl t.y v ])
+
+(* The derivation written AHEAD of a line that needs threshold lemmas: each lemma (a
+   `rup`, RUP from its position's big-M row and the ladders) weakened back out to a
+   constant, then the original summands scaled by [k] = 1 + the degree the weakening
+   costs, the whole divided by [k * divisor]. The lemmas are on the page before the
+   summands' own lines (a [Combine] emits its terms left to right), and the result is
+   exactly what the summands alone derive: every coefficient is the old one times [k]
+   over [k * divisor], and the degree loses less than [k] before the division (the header
+   argues it). [lemmas = []] is the old [Combine] byte for byte. *)
+let ahead_combine lemmas summands divisor =
+  let s = List.fold_left (fun a l -> a + List.length l - 1) 0 lemmas in
+  let k = s + 1 in
+  let pre =
+    List.concat_map
+      (fun l ->
+        [
+          Explanation.term 1 (Explanation.clause l);
+          Explanation.weaken (List.map (fun x -> (1, Lit.negate x)) l);
+        ])
+      lemmas
+  in
+  Explanation.combine
+    (pre @ List.map (fun (c, e) -> Explanation.term (k * c) e) summands)
+    (k * divisor)
+
+(* A line's explanation: the bare [Clause] (one `rup`, RUP against the rows) when it needs
+   no lemma, else that clause behind its lemmas. The thunk closes over lists (I-X6). *)
+let line_expl lemmas claim fs =
+  match lemmas with
+  | [] -> clause_expl claim fs
+  | _ ->
+      Explanation.deferred (fun () ->
+          ahead_combine lemmas
+            [
+              ( 1,
+                Explanation.clause (claim @ List.map Lit.negate (Reason.lits_of_facts fs))
+              );
+            ]
+            1)
+
+let lemmas t = List.rev t.lemmas_rev
+
+(* Make a change (or a conflict) whose line needs lemmas under [Store.deriving_ahead], so
+   lib/core/trace.ml writes the derivation before the line. *)
+let ahead store lemmas f =
+  match lemmas with [] -> f () | _ -> Store.deriving_ahead store f
+
+let conflict store t fs =
+  let ls = lemmas t in
+  ahead store ls (fun () ->
+      Store.conflict store (Reason.because ~concludes:None fs (line_expl ls [] fs)))
 
 let conflict_now store t =
   let fs, _, _ = finish t in
-  conflict store fs
+  conflict store t fs
 
 (* "c <> v" over the order literals of a variable declared on [dlo, dhi]. *)
 let ne_lits ~name ~dlo ~dhi v =
@@ -382,11 +496,22 @@ let kill_reason store t i =
     add_lo t sy (hx + 1))
   else
     let a = max lx ly and b = min hx hy in
-    if lx >= ly then add_lo t sx a else add_lo t sy a;
+    if lx >= ly then (
+      add_lo t sx a;
+      need_minus t i a)
+    else (
+      add_lo t sy a;
+      need_plus t i a);
     if hx <= hy then add_hi t sx b else add_hi t sy b;
     for v = a to b do
-      if not (mx v) then add_hole store t cx v
-      else if not (my v) then add_hole store t cy v
+      (* The lemma that carries the jump past [v] to the other side; past [b] the big-M
+         row closes on the smaller upper bound without one. *)
+      if not (mx v) then (
+        add_hole store t cx v;
+        if v < b then need_minus t i (v + 1))
+      else if not (my v) then (
+        add_hole store t cy v;
+        if v < b then need_plus t i (v + 1))
       else invalid_arg "Member: a selector death with a value in common"
     done
 
@@ -401,9 +526,11 @@ let kill store t i =
     let concl = dead_fact t i in
     let claim = Option.to_list (Reason.lit_of_fact concl) in
     let v = t.sels.(i) in
+    let ls = lemmas t in
     match
-      Store.set_hi store v 0
-        (Reason.because ~concludes:(Some concl) fs (clause_expl claim fs))
+      ahead store ls (fun () ->
+          Store.set_hi store v 0
+            (Reason.because ~concludes:(Some concl) fs (line_expl ls claim fs)))
     with
     | Store.Conflict c -> raise (Found c)
     | Store.Changed ->
@@ -457,7 +584,7 @@ let single store t =
 
 (* Narrow [tgt] (slot [st]) to [src] (slot [ss]) under b_k: its bounds to src's, then
    every value src lacks inside them, each on b_k's tail and the fact on src. *)
-let narrow store t k ~tgt ~st ~src ~ss =
+let narrow store t k ~tgt_is_y ~tgt ~st ~src ~ss =
   match tgt with
   | Fixed _ -> false
   | Cell { var; name; dlo; dhi } ->
@@ -492,15 +619,20 @@ let narrow store t k ~tgt ~st ~src ~ss =
             if v = Domain.lo d then add_lo t st v;
             if v = Domain.hi d then add_hi t st v;
             add_hole store t src v;
+            (* tgt = v under b_k: one lemma carries tgt >= v to src, src's hole line
+               pushes src past v, and the big-M row refutes src >= v + 1 > tgt. *)
+            if tgt_is_y then need_plus t k v else need_minus t k v;
             if Domain.is_fixed d then raise (Found (conflict_now store t));
             let fs, _, _ = finish t in
+            let ls = lemmas t in
             if
               push
-                (Store.remove store var v
-                   (Reason.because
-                      ~concludes:(removal_conclusion ~name ~dlo ~dhi d v)
-                      fs
-                      (clause_expl (ne_lits ~name ~dlo ~dhi v) fs)))
+                (ahead store ls (fun () ->
+                     Store.remove store var v
+                       (Reason.because
+                          ~concludes:(removal_conclusion ~name ~dlo ~dhi d v)
+                          fs
+                          (line_expl ls (ne_lits ~name ~dlo ~dhi v) fs))))
             then changed := true))
         d0;
       !changed
@@ -514,13 +646,17 @@ let equalise store t =
       if not (intersects store t.xs.(k) t.y) then (
         kill_reason store t k;
         kill store t k);
-      if narrow store t k ~tgt:t.y ~st:t.slot_y ~src:t.xs.(k) ~ss:t.slot_x.(k) then
-        changed := true)
+      if
+        narrow store t k ~tgt_is_y:true ~tgt:t.y ~st:t.slot_y ~src:t.xs.(k)
+          ~ss:t.slot_x.(k)
+      then changed := true)
   done;
   for k = 0 to size t - 1 do
     if is_set store t k then
-      if narrow store t k ~tgt:t.xs.(k) ~st:t.slot_x.(k) ~src:t.y ~ss:t.slot_y then
-        changed := true
+      if
+        narrow store t k ~tgt_is_y:false ~tgt:t.xs.(k) ~st:t.slot_x.(k) ~src:t.y
+          ~ss:t.slot_y
+      then changed := true
   done;
   !changed
 
@@ -530,11 +666,12 @@ let equalise store t =
    only (see the header): one lemma per position, the OR row, the sum divided by the
    lemmas' count. Every literal list is computed now, at the push, from the facts as they
    stand; the thunk closes over lists and the row id, nothing live (I-X6). *)
-let gap_expl t lemmas =
+let gap_expl t ~pre lemmas =
+  let or_row = t.or_row in
   Explanation.deferred (fun () ->
-      Explanation.combine
-        (Explanation.term 1 (Explanation.model_row t.or_row)
-        :: List.map (fun lits -> Explanation.term 1 (Explanation.clause lits)) lemmas)
+      ahead_combine pre
+        ((1, Explanation.model_row or_row)
+        :: List.map (fun lits -> (1, Explanation.clause lits)) lemmas)
         (List.length lemmas))
 
 let remove_y store t ~var ~name ~dlo ~dhi v =
@@ -551,7 +688,9 @@ let remove_y store t ~var ~name ~dlo ~dhi v =
     for i = 0 to size t - 1 do
       if not (dead store t i) then (
         let fs, hole = excl_facts store t.xs.(i) v in
-        if hole then incr holes;
+        if hole then (
+          incr holes;
+          need_plus t i v);
         excl.(i) <- fs;
         List.iter (add_fact t) fs)
     done;
@@ -561,11 +700,13 @@ let remove_y store t ~var ~name ~dlo ~dhi v =
     let fs, _, _ = finish t in
     let claim = ne_lits ~name ~dlo ~dhi v in
     let concludes = removal_conclusion ~name ~dlo ~dhi d v in
+    let pre = lemmas t in
     if !holes < 2 then
       ignore
         (push
-           (Store.remove store var v
-              (Reason.because ~concludes fs (clause_expl claim fs)))
+           (ahead store pre (fun () ->
+                Store.remove store var v
+                  (Reason.because ~concludes fs (line_expl pre claim fs))))
           : bool)
     else
       let lemmas =
@@ -580,7 +721,7 @@ let remove_y store t ~var ~name ~dlo ~dhi v =
               Some ((not_b :: claim) @ List.map Lit.negate (Reason.lits_of_facts excl.(i))))
           (List.init (size t) Fun.id)
       in
-      let j = Reason.because ~concludes fs (gap_expl t lemmas) in
+      let j = Reason.because ~concludes fs (gap_expl t ~pre lemmas) in
       ignore
         (push (Store.deriving_ahead store (fun () -> Store.remove store var v j)) : bool))
 

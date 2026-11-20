@@ -1,0 +1,19 @@
+% M7-T34 (D-0168), hand-written: a SET selector carries holes both ways. x2 is the
+% constant 9, so b2 dies on its big-M row and b1 is set by OR at the root; x1 and y are
+% over 1..6 with root int_ne punching 2, 4, 6 out of x1 and 1, 3, 5 out of y. Each hole of
+% one side is removed from the other under b1 (y <> v from x1's hole, x1 <> v from y's):
+% lines that rest on two threshold lemmas each, written ahead. Nothing is left in common:
+% UNSAT at the root.
+predicate baguette_member(array [int] of var int: x,var int: y,array [int] of var bool: b);
+var 1..6: x1 :: output_var;
+var 1..6: y :: output_var;
+var bool: b1;
+var bool: b2;
+constraint baguette_member([x1, 9], y, [b1, b2]);
+constraint int_ne(x1, 2);
+constraint int_ne(x1, 4);
+constraint int_ne(x1, 6);
+constraint int_ne(y, 1);
+constraint int_ne(y, 3);
+constraint int_ne(y, 5);
+solve satisfy;

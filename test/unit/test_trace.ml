@@ -1149,17 +1149,17 @@ let ix10_table =
        all_different instances an inverse posts beside it (stage 2) are alldiff.ml's and
        keep its Needs_derivation; their pairwise rows are root lemmas. *)
     ("inverse.ml", Single_row);
-    (* M7-T28 (D-0159): member. Single_row for every pruning but ONE shape, which makes it
-       [Needs_derivation]: a selector death (R+/R- chase both bounds through the holes of
-       x_i and y, one rup), the last selector set (OR), the equality under a set selector
-       (R+/R- at one threshold) and a value of y no live position holds while at most one
-       of them excludes it by a hole only -- all one rup, the dead selectors' own lines
-       being lines already on the page. With TWO or more live positions excluding the
-       value by a hole only, each selector needs its own case split (b_i /\ y = v pins
-       x_i to v; `x_i <> v` is two literals), and the line is refused alone (measured,
-       bench/member_spike/gen_rows_probe.py q2). member.ml makes that removal under
-       [Store.deriving_ahead], with one lemma per position and the OR row summed and
-       divided ahead of it; [test_ix10_derive_ahead] drives the shape. *)
+    (* M7-T28 (D-0159, D-0168): member, over two big-M rows per position since M7-T34.
+       A line that only compares bounds is one rup against them (a selector death by
+       disjoint bounds, the last selector set by OR, a bound carried under a set selector,
+       a value of y every live position excludes by a bound). A line whose argument walks
+       a HOLE is not: a big-M row propagates no rung of a ladder, so the threshold lemmas
+       R+/R- that carry a bound across are written AHEAD of it (a selector death across
+       holes, a hole carried under a set selector, a value of y one live position excludes
+       by a hole), and so is the gap shape of D-0159 (two or more such positions, a case
+       split per selector: one lemma per position and the OR row, summed and divided).
+       All made under [Store.deriving_ahead]; [test_ix10_derive_ahead] drives the gap
+       shape and test_mutation.ml's member-chase lanes the lemmas. *)
     ("member.ml", Needs_derivation);
   ]
 
