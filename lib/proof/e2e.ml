@@ -1003,32 +1003,45 @@ let rec q_clause t g which =
       | "t", T -> emit t "%s pol @%s[f] ;" lab g
       | "f", F -> emit t "%s pol @%s[r] ;" lab g
       | _ -> refuse "atom %s has no clause %s" g which
-    else (
-      (* an eq atom: its two ge atoms' clauses first, then unit propagation *)
-      List.iter
-        (fun kk ->
-          let ge = Printf.sprintf "%s[%s][ge%d]" (if isvar then "i" else "n") z kk in
-          match atom_value t (isvar, z, "ge", kk) with
-          | L _ ->
-              ignore (q_clause t ge "p");
-              ignore (q_clause t ge "n")
-          | T -> ignore (q_clause t ge "t")
-          | F -> ignore (q_clause t ge "f")
-          | Interior -> ())
-        [ k; k + 1 ];
-      match (which, value) with
-      | "t", T -> emit t "%s rup +1 %s >= 1 ;" lab g
-      | "f", F -> emit t "%s rup +1 ~%s >= 1 ;" lab g
-      | "p", L m -> emit t "%s rup +1 ~%s +1 %s >= 1 ;" lab g m
-      | "n", L m -> emit t "%s rup +1 %s +1 %s >= 1 ;" lab g (neg_lit m)
-      (* an interior value: e -> x_ge_k and e -> ~x_ge_(k+1), each by unit propagation *)
-      | "a", Interior ->
-          let v = find_var t (Hashtbl.find t.cake_names z) in
-          emit t "%s rup +1 ~%s +1 %s >= 1 ;" lab g (v.lit k)
-      | "b", Interior ->
-          let v = find_var t (Hashtbl.find t.cake_names z) in
-          emit t "%s rup +1 ~%s +1 ~%s >= 1 ;" lab g (v.lit (k + 1))
-      | _ -> refuse "atom %s has no clause %s" g which));
+    else
+      (* an eq atom e = [z = k] (T3b, D-0188): ONE pol of its own definition row and its
+         two ge atoms' clauses, where D-0187 closed it by `rup` (on a Challenge instance of
+         T4's Booleans, 75 302 of them). A clause with e positive ("t", "n") comes from
+         [f], `e + ~ge_k + ge_(k+1) >= 1`, each ge atom replaced by its value or literal;
+         one with ~e ("f", "p", and the interior "a", "b") from [r],
+         `2 ~e + ge_k + ~ge_(k+1) >= 2`, a ge literal that is true or not wanted weakened
+         away, then saturated. *)
+      let ge kk = Printf.sprintf "%s[%s][ge%d]" (if isvar then "i" else "n") z kk in
+      let gv kk = atom_value t (isvar, z, "ge", kk) in
+      let b = Buffer.create 64 in
+      let cite kk w = Printf.bprintf b " %s +" (q_clause t (ge kk) w)
+      and weaken kk = Printf.bprintf b " %s w" (ge kk) in
+      let bad () = refuse "atom %s has no clause %s" g which in
+      (match (which, value) with
+      | "t", T | "n", L _ -> (
+          Printf.bprintf b "@%s[f]" g;
+          (match gv k with T -> cite k "t" | L _ -> cite k "n" | _ -> bad ());
+          match gv (k + 1) with
+          | F -> cite (k + 1) "f"
+          | L _ -> cite (k + 1) "p"
+          | _ -> bad ())
+      | "f", F | "p", L _ | "a", Interior | "b", Interior ->
+          Printf.bprintf b "@%s[r]" g;
+          (match gv k with
+          | T -> weaken k
+          | F -> cite k "f"
+          | L _ when which = "b" -> weaken k
+          | L _ -> cite k "p"
+          | Interior -> bad ());
+          (match gv (k + 1) with
+          | F -> weaken (k + 1)
+          | T -> cite (k + 1) "t"
+          | L _ when which = "a" -> weaken (k + 1)
+          | L _ -> cite (k + 1) "n"
+          | Interior -> bad ());
+          Buffer.add_string b " s"
+      | _ -> bad ());
+      emit t "%s pol %s ;" lab (Buffer.contents b));
   lab
 
 (* T3b (D-0188 section 2): an INTERIOR eq atom e = [x = v], lo < v < hi, as the order
