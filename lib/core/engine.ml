@@ -65,7 +65,8 @@
    M16-file-review-T1 (D-0186): the wake walk and the seed read a trail entry's change
    as its KIND only ([wakes_on_kind]: did it move a bound), which is all a trigger mask
    asks; [Domain.classify], which also lists the holes and walks the domain to find
-   them, is left to the proof side ([Trace]) that needs the list. *)
+   them, is left to the proof side ([Trace]) that needs the list. The woken learned
+   clauses of one entry are sorted by insertion when they are few ([sort_desc_uniq]). *)
 
 type outcome = Fixpoint | Conflict of Store.conflict
 
@@ -1110,18 +1111,35 @@ let rec sift_min (a : int array) i n =
       a.(c) <- x;
       sift_min a c n)
 
+(* M16-file-review-T1 (D-0186): at most [small_sort] ids are sorted by insertion, which
+   for a short run beats the heap's build and sifts; the same descending order, so the
+   same prefix after the duplicates are squeezed out. Most entries wake few learned
+   clauses; the heapsort stays for the long tail. *)
+let small_sort = 16
+
 let sort_desc_uniq (a : int array) len =
   if len <= 1 then len
   else (
-    for i = (len / 2) - 1 downto 0 do
-      sift_min a i len
-    done;
-    for n = len - 1 downto 1 do
-      let x = a.(0) in
-      a.(0) <- a.(n);
-      a.(n) <- x;
-      sift_min a 0 n
-    done;
+    if len <= small_sort then
+      for i = 1 to len - 1 do
+        let x = a.(i) in
+        let j = ref (i - 1) in
+        while !j >= 0 && a.(!j) < x do
+          a.(!j + 1) <- a.(!j);
+          decr j
+        done;
+        a.(!j + 1) <- x
+      done
+    else (
+      for i = (len / 2) - 1 downto 0 do
+        sift_min a i len
+      done;
+      for n = len - 1 downto 1 do
+        let x = a.(0) in
+        a.(0) <- a.(n);
+        a.(n) <- x;
+        sift_min a 0 n
+      done);
     let m = ref 1 in
     for i = 1 to len - 1 do
       if a.(i) <> a.(!m - 1) then (
