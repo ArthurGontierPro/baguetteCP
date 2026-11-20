@@ -14,7 +14,8 @@
    predicate is a closure over the entry's values, and a closure with free variables is
    allocated at every call whether or not anything checks it: three per entry, about as
    many words as the entry itself. The bound walks of [hi_below] and [lo_at_least] are
-   binary searches over the bound histories (see there). *)
+   binary searches over the bound histories, and [created_domain] reads an array of the
+   created domains (see each). *)
 
 module Lit = Baguette_proof.Lit
 
@@ -162,6 +163,9 @@ type entry = {
    level (I-D3) and the array is restored on backtrack. *)
 type t = {
   domains : Domain.t array;
+  initial : Domain.t array;
+      (* M16-file-review-T1 (D-0186): the domains the store was created with, read by
+         [created_domain]. A copy of the array, sharing the immutable records. *)
   names : string array;
   (* M6-T11 (D-0085): the name -> variable index behind [var_named] and [name_rep],
      built on first use rather than in [create], because [Engine.oracle_accepts] builds a
@@ -317,6 +321,7 @@ let create ~names ~domains =
   let nv = Stdlib.max 1 (Array.length domains) in
   {
     domains = Array.copy domains;
+    initial = Array.copy domains;
     names;
     by_name;
     reasons = Explanation.Arena.create ();
@@ -1308,10 +1313,24 @@ let hi_support_at h v =
 
 (* The domain [v] was created with: the [old] of its oldest entry, or its current domain
    while it has none. Only needed when a bound has no support within the history, i.e.
-   it still stood where the store created it. *)
-let created_domain t v =
+   it still stood where the store created it.
+
+   M16-file-review-T1 (D-0186): read from [initial], one load where the history took four
+   dependent ones (2 % of 2011 roster's instructions, whose reasons cite many declared
+   bounds). The two agree: only [apply] and [undo_to] write [domains], so before the
+   oldest live entry on [v] was pushed nothing live had moved [v], every popped entry
+   had restored what it found, and that entry's [old] is the created domain; with no
+   live entry the current domain is. [created_domain_by_history] is the old reading,
+   kept for the BAGUETTE_DEBUG cross-check and test_core.ml. *)
+let created_domain_by_history t v =
   let i = Var.to_int v in
   if t.all_hn.(i) > 0 then t.trail.(t.all_hist.(i).(0)).old else t.domains.(i)
+
+let created_domain t v =
+  let d = t.initial.(Var.to_int v) in
+  if Debug.enabled && not (Domain.equal d (created_domain_by_history t v)) then
+    failwith "invariant violated: D-0186: the created domain is the history's oldest";
+  d
 
 let lo_at h v =
   let q = lo_support_at h v in

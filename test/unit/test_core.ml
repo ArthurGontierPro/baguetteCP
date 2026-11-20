@@ -1491,6 +1491,18 @@ let test_bound_history () =
                 (Store.name s var) k a b c d)
         done)
       [ x; y; x'; z ];
+    (* D-0186: [Store.created_domain] (an array of the created domains) against the
+       reading through the history it replaced. *)
+    List.iter
+      (fun var ->
+        if
+          not
+            (Domain.equal (Store.created_domain s var)
+               (Store.created_domain_by_history s var))
+        then (
+          ok := false;
+          bad := Printf.sprintf "%s: created_domain" (Store.name s var)))
+      [ x; y; x'; z ];
     check
       (Printf.sprintf "bound history = trail scan, every case (%s)%s" tag
          (if !ok then "" else " -- " ^ !bad))
