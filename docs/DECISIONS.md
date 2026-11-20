@@ -23295,3 +23295,107 @@ the branch), not its growth with the learned database, which is what the lane ga
 What would reverse this record: a lever whose byte identity fails on an instance outside these 234
 (the debug cross-checks of L4, L4b and L8 and their test_core oracles are where to look first), or
 a measurement showing L6 or L8 cost more than they save on another machine.
+
+## D-0189  [AUTONOME] M7-T35: the member models that stopped under `BAGUETTE_DEBUG`. Their reasons were right and D-0026's reverse arm over-read the threshold lemmas, so the predicate is corrected, as D-0091 did for a root `Defining`
+
+**Status**: DONE, recorded 2026-11-20 (agent-memberdbg, `wave55-memberdbg`), decided in autonomous mode.
+**Task**: M7-T35, found by M16-file-review-T1 (D-0186 section 6).
+**Files changed**: `lib/core/store.ml` (`reverse_owners` and the two helpers above it, debug-only code),
+`test/unit/test_prop.ml` (member section). `lib/core/prop/member.ml` is unchanged.
+**Runs**: `fataepyc-06:/scratch/arthur/wave55-memberdbg-runs/` (`gate/gate.sh`, `chal/one.sh`, the fuzz logs).
+
+### 1. What stopped
+
+Six of the seven `test/models/member_*.fzn` (all but `member_bool_sat`) stop on `Store.check_agreement`,
+the D-0026 reverse arm, on the dev binary of main `167e56d` (`aa3385fd`). Every one is a line that
+member.ml builds with `ahead_combine` and at least one threshold lemma (D-0170):
+
+| Model | Rule | Reason | Top level of the justification |
+|---|---|---|---|
+| `member_chase_sat` | K, b1 dies across holes of x1 and y | `y>=2 w2>=3 w3>=5` | three lemmas R-/R+ under b1, then `7*clause(~b1 ~y>=2 ~w2>=3 ~w3>=5) / 7` |
+| `member_eqhole_sat` | S, `y <> 5` | `w1>=5` | R+(1, 5), then `3*clause(...) / 3` |
+| `member_eqhole_unsat` | E, under b1 | `y>=2 x1<=5` | four lemmas under b1 |
+| `member_gap_sat` | S, two positions exclude 2 by a hole | `x3>=3` | two lemmas, then OR and the per-position clauses, `/ 15` |
+| `member_sat`, `member_unsat` | S at the root | empty | three lemmas, one per live position |
+
+### 2. Why. The arm read a constant as a dependency
+
+`ahead_combine` writes each lemma `l` as `Term (1, Clause l)` followed by `Weaken [(1, ~l_j)]` for every
+literal of `l`. Each `l_j + ~l_j` is the constant 1, so the pair adds a constant to the `pol` and no
+variable at all. It is in the derivation only so that the lemma's own `rup` line is on the page ahead of
+the line that needs it (D-0170, "the derivation ahead"). The reverse arm exists for I-P5. It asks the
+reason to name every variable a top-level `Weaken` mentions, because such a variable is normally one the
+row read and chose not to cite. Here it asked for the selector `b_k` (in a K line the very selector the
+line kills, which cannot be in its own reason), for `x_k` and for `y`.
+
+The reason is right, for two independent reasons.
+
+1. The derivation's result does not depend on the lemma, since the pair contributes a constant.
+2. The lemma is a consequence of the model alone (RUP from `B_k`, `F_k`/`G_k` and the ladders, member.ml's
+   header). No branch fact is behind it, so a trace line that leaves its variables out is not short in
+   I-P5's sense. That is D-0091's argument for a root `Defining`.
+
+So no learned clause was ever built from a wrong reason, and veripb accepted every proof for the same
+cause. The defect was in the check.
+
+### 3. The options
+
+| Option | Artefacts | Cost |
+|---|---|---|
+| **Taken.** `Store.reverse_owners` drops a page-only lemma pair, on the exact shape | none (the predicate runs only under `BAGUETTE_DEBUG`) | one pattern in the check |
+| member.ml nests each lemma pair in its own `Combine` under a `Term` | every member proof with a lemma gains one `pol` line per line that has lemmas | `test_mutation.ml`'s three member lanes parse that `pol` text and would need rewriting, and the check would pass only because it does not look inside a `Term`, which hides the shape instead of stating it |
+| member.ml names `b_k`, `x_k`, `y` in the reason | trace lines and learned clauses weaker | wrong, and impossible for a K line's own selector |
+
+The exemption is exact. The `Term` must hold a raw `Clause` (never a `Deferred` one, so the check forces
+nothing it did not force before), and the `Weaken` must follow it at once with every literal negated, in
+order, at the `Term`'s coefficient. With one coefficient or one literal off the pair is no longer a
+constant and the `Weaken` counts as before. `Explanation.top_weaken_owners` is unchanged. The store's copy
+already differed from it by D-0091's root `Defining`, and the comment above `reverse_owners` now names
+both differences.
+
+### 4. Keeping it fixed
+
+- `test_prop.ml`, `test_member_page_only_lemma` (5 checks). The pair passes with a reason that names
+  neither `b` nor `x`. Three near misses still disagree: the same `Weaken` with no lemma before it, one
+  coefficient off, one literal short.
+- `test_prop.ml`, `test_member_debug_models` (8 checks). The binary re-runs itself with `BAGUETTE_DEBUG=1`
+  on every `test/models/member_*.fzn` and requires exit 0. The unit suite runs without the flag, so this is
+  the first place where `make check` sees the debug checks on a member model.
+- Break. With the old arm back, 7 of these 13 checks fail (the hand-made pair and the six models).
+- `bench/member_spike/fuzz_member.py` under `BAGUETTE_DEBUG=1` (`LOAD_BEARING=0`), 300 random models per
+  seed. The new binary has 0 failures on seeds 1, 2 and 3. Main's binary has 40 failures on seed 3, every
+  one the D-0026 stop on this pair.
+- Challenge, under `BAGUETTE_DEBUG=1` at 1 500 nodes with proof, one scope each: handball11 and handball7 (2014 and
+  2016 editions) reach about 625 nodes and 306 to 309 learned clauses in the 1 800 s limit, with no
+  invariant stop and 0.8 GB of RSS. Their proofs end where the timeout killed the run, so veripb reads
+  them to the last line and refuses only at the missing conclusion (end of file). find_regno_partial
+  stops on the 16 GB `ulimit -v` after 75 s, before any search. That is the debug mode keeping its trees
+  on a 650 MB `.opb`, and it is no D-0026 stop.
+
+### 5. Why no member instance in the diff lane
+
+ROADMAP M7-T35 notes that no lane instance has a `member`. None is added. The 35 Challenge instances
+that reach `baguette_member` (D-0159 section 5) start at 27 MB of `.opb` (handball) and reach 1.5 GB
+(code-generator), and under `BAGUETTE_DEBUG` handball7 does 64 nodes in 110 s, where the fast tier wants
+a default run of 1 to 10 s. A slow-tier instance would run only on `--tier all` gates and cost 13
+configurations of references. The new unit test runs at every `make check`, which the lane does not, and
+covers every member model the suite has. A small real instance with a `member` would still be worth adding
+if one turns up.
+
+### 6. Gate
+
+Fresh clone of `wave55-memberdbg` at `386a0a7` (dev binary `e6d0e1bf`), against the dev binary of main
+`167e56d` (`aa3385fd`) built in a separate clone. Lanes at `-j 8`.
+
+| | gate, `386a0a7` (`e6d0e1bf`) |
+|---|---|
+| `make check` | rc 0, 4 456 ok lines against main's 4 443 (measured on the clone of `167e56d`), the 13 new checks, 207 models, 31 s, peak RSS 108 MB |
+| 207 models x 4 artefacts (stdout, exit code, `.opb`, `.pbp`) | 0 differences, the seven member models included. The changed code runs only under `BAGUETTE_DEBUG`, so no reason, learned clause, tree or proof can move |
+| diff lane `--tier all` | 324 of 324 equal to the reference |
+| `--debug` lane | 311 of 311 equal |
+| scaling lane | ok on every line (rcpsp_11 +0.46 % of late, parity +0.10 % and +0.02 %) |
+| `bench/diff` | untouched, nothing re-recorded |
+
+What would reverse this record: a justification that writes the exact pair while its reason really
+depends on the lemma's variables. That would need a lemma derived from branch facts, and member's are
+derived from the rows and the ladders alone.
