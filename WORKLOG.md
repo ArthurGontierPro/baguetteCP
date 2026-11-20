@@ -984,7 +984,9 @@ y variables follow the permutation. With the same checks written through `bool_x
 the trivial group, because a chain's partial-parity variables follow the coordinate order and have
 no image under a permutation; a dominance witness maps variables to literals, so these symmetries
 cannot be used directly either. With a basis of 24 checks instead of the orbit it also finds
-nothing. dejavu takes under 3 s on graphs up to 825 000 vertices. Implication for T2: detection on
+nothing. dejavu takes 14 to 34 s on the QR48 orbit graphs (0.2 to 0.4 M vertices), 0.7 s on the XOR one
+(0.8 M vertices, trivial group), under 0.1 s on small models (an earlier "under 3 s" was wrong). Duplicate
+constraints must be dropped first, or their twin vertices inflate the order dejavu reports. Implication for T2: detection on
 the `.opb` is cheap and exact, but only for encodings that keep the symmetry; a native parity row
 would have to keep it too. Details: codes-cp `notes/dejavu-plan.md`.
 
