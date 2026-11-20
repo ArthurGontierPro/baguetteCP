@@ -1002,10 +1002,18 @@ let compile (m : Model.t) : t =
         let name = names.(i) in
         let lo, hi = bounds.(i) in
         let coeff = match dir with Search.Minimise -> 1 | Search.Maximise -> -1 in
-        let terms, constant =
-          Encoding.linear_terms_int_lin_le encoding [ (coeff, name) ]
-        in
-        Encoding.set_objective encoding (Opb.objective ~constant terms);
+        (* M16-file-review-T5 (D-0193): under [Discard_rows] (`--no-proof`) the line is
+           not built. Its one reader is the .opb's header ([Encoding.write_opb]), which
+           that sink never writes, and its length is the objective's width: one term
+           per rung, 52 million on wmsmc-int, where building it was the whole setup
+           (140 G instructions of 140 G). *)
+        (match !Encoding.row_sink with
+        | Encoding.Discard_rows -> ()
+        | Encoding.Retain_rows | Encoding.Stream_rows_to _ ->
+            let terms, constant =
+              Encoding.linear_terms_int_lin_le encoding [ (coeff, name) ]
+            in
+            Encoding.set_objective encoding (Opb.objective ~constant terms));
         Encoding.e2e_objective encoding name ~sign:coeff;
         {
           Search.o_var = Var.of_int i;
