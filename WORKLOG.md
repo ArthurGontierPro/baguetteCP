@@ -956,6 +956,20 @@ tables in codes-cp `dom/report.md` §4.7 and `benchmark/README.md`.
 - **Whether to learn decision-only nogoods at all** under a fixed search (same observation, search
   side): they grow the database and cost wakes, `learned_clause` reports no effective run.
 
+**Addendum, same day (codes-cp session): what symmetry detection sees in baguette's `.opb`, for
+M13-codes-leads-T2.** dejavu (Markus Anders' automorphism tool, the one inside satsuma) was run on
+graphs of baguette's own `.opb` files (codes-cp `scripts/opb2graph.py`: two literal vertices per
+variable, one vertex per constraint coloured by kind, degree and coefficients). With parity written
+as sums Σx = 2y it finds the code's whole automorphism group: PSL(2, 47), order 51 888, for QR48
+(the orbit model of 17 296 checks), and M24, order 244 823 040, for Golay; the order ladders of the
+y variables follow the permutation. With the same checks written through `bool_xor` chains it finds
+the trivial group, because a chain's partial-parity variables follow the coordinate order and have
+no image under a permutation; a dominance witness maps variables to literals, so these symmetries
+cannot be used directly either. With a basis of 24 checks instead of the orbit it also finds
+nothing. dejavu takes under 3 s on graphs up to 825 000 vertices. Implication for T2: detection on
+the `.opb` is cheap and exact, but only for encodings that keep the symmetry; a native parity row
+would have to keep it too. Details: codes-cp `notes/dejavu-plan.md`.
+
 ## M13-codes-leads opened, 2026-11-19 (codes-cp session): two leads to study, no code
 
 `docs/ROADMAP.md` gains an M13 section at its end. The codes-cp phase-1 benchmark (2 687 runs, 10 min)
