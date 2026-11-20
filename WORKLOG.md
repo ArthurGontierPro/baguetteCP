@@ -621,6 +621,18 @@ section 1. Shares are inclusive, of the whole run.
 
 ## Handoff notes
 
+### 2026-11-20 (agent-merge, `wave55-merge`): wave53-alldiff and wave54-snap merged on the branch, gate 71 green
+
+Branch `wave55-merge` (`bdbdcd4` merge M7-T33, `bb9f429` D-0167 item 1, `1d5c594` re-record, `4e65e46` merge
+D-0165), ready for main. lot-sizing's lane budget is 2500 (D-0167 item 1): `[activity]` peaks at 3.72 GB and exits
+134 at 3000, 3.34 GB at 2500, 2.74 GB at 2000; the eleven other configurations stay at or under 0.55 GB. The plain lanes before
+the re-record differed on exactly cyclic x6 and lot-sizing x12 (debug: cyclic x6); those 24 references were
+re-recorded, every proof accepted. Gate 71 (binary `492638b9`) against gate 70's `214e74d1`: `make check` rc 0
+(200 models, 25.7 s, 102 MB), 200 models x 4 artefacts with 4 differences, the four alldiff `.pbp` D-0156 §6 names,
+lane 301/301, debug 289/289, scaling rc 0 (no re-baseline). In `make check`, the compare self-test's information
+line `verdicts reached:` came out empty because a Rust `sort` panicked on thread spawn under the 4 GB cap (the
+checks themselves passed). This is cosmetic, but the line is vacuous when it happens.
+
 ### 2026-11-19 night (orchestrator): gate 70 green; the state for the morning -- READ THIS FIRST
 
 Gate 70 (`dcb40f1`, merge wave54-live, D-0166, binary `214e74d1`) against gate 64's `d7a1ef00`:

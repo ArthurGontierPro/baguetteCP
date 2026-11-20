@@ -32,7 +32,7 @@ H_qr72_bag_def	H_qr72_bag_def	5000	fast	bool	all	bool_clause, bool2int, int_lin_
 2017_tc-graph-color_k5_05	2017_tc-graph-color_k5_05	8000	fast	int	all	int_lin_ne (819: domains with HOLES), int_eq_reif, int_lin_le_reif	Challenge 2017
 2019_fox-geese-corn_foxgeesecorn_54	2019_fox-geese-corn_foxgeesecorn_54	3000	fast	int	all	array_int_element, int_eq_reif, int_ne_reif; several improving solutions	Challenge 2019
 # D-0167 item 1: lot-sizing 3000 -> 2500 nodes, so that [activity] stays under the 4 GB cap with M7-T33
-# (peak RSS at 3000: 3.72 GB, exit 134; at 2500: 3.34 GB; the eleven others at most 0.53 GB).
+# (peak RSS at 3000: 3.72 GB, exit 134; at 2500: 3.34 GB; the eleven others at most 0.55 GB; kB from /usr/bin/time).
 2020_lot-sizing_pigment15b.psp	2020_lot-sizing_pigment15b.psp	2500	fast	int	all	global_cardinality, all_different_int, array_int_element, int_ne_reif	Challenge 2020
 2023_chessboard_chessboard4	2023_chessboard_chessboard4	2500	fast	int	all	global_cardinality, array_int_element, int_ne_reif	Challenge 2023
 2023_evm-super-compilation_isolated_block_6_0_input	2023_evm-super-compilation_isolated_block_6_0_input	2000	fast	int	all	global_cardinality, array_int_element, int_ne (holes), bool_eq	Challenge 2023
