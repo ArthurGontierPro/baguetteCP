@@ -31,6 +31,10 @@ out objective = 667;
 out s = array1d(1..21, [0, 0, 0, 1, 2, 0, 3, 4, 0, 7, 5, 1, 8, 8, 6, 1, 9, 1, 2, 9, 10]);
 out k = array1d(1..21, [0, 0, 1, 1, 0, 1, 1, 0, 1, 1, 0, 1, 1, 1, 0, 1, 1, 0, 0, 1, 1]);
 out ----------
+out objective = 666;
+out s = array1d(1..21, [0, 0, 0, 1, 2, 0, 6, 3, 0, 7, 4, 1, 8, 8, 5, 1, 9, 1, 2, 9, 10]);
+out k = array1d(1..21, [0, 0, 1, 1, 0, 1, 1, 0, 1, 1, 0, 1, 1, 1, 0, 1, 1, 0, 0, 1, 1]);
+out ----------
 search ladder/cls 61958 cls
 search opb/lines 69021 lines
 search direct/vals 0 vals
@@ -39,82 +43,82 @@ search bits/vars 0 vars
 search bitsrows/lines 0 lines
 search choices/groups 0 groups
 search limit.nodes 2001
-search limit.decisions 1017
-search limit.conflicts 983
-search limit.learned 102
-search limit.pb-learned 15
-search limit.db 117
-search limit.maxdepth 31
-search limit.incumbent 667
-work limit.props 1633967
-work limit.eff 97226
-work limit.contra 975
+search limit.decisions 1046
+search limit.conflicts 954
+search limit.learned 931
+search limit.pb-learned 19
+search limit.db 950
+search limit.maxdepth 30
+search limit.incumbent 666
+work limit.props 2062557
+work limit.eff 98453
+work limit.contra 945
 search limit.at node
 search nodes/nodes 2001 nodes
-search decisions/decs 1017 decs
-search conflicts/nodes 983 nodes
-search maxdepth/levels 31 levels
+search decisions/decs 1046 decs
+search conflicts/nodes 954 nodes
+search maxdepth/levels 30 levels
 work exhausted/bool 0 bool 1 if
-search skipped/nodes 24 nodes
-search learned/cls 102 cls
-work later/asks 1862 asks
-work cites/memos 1573 memos
+search skipped/nodes 82 nodes
+search learned/cls 931 cls
+work later/asks 17501 asks
+work cites/memos 12316 memos
 search convertible/cls 0 cls
-search retention keep-all keep-all: 117 added, 0 evicted, 117 swept, 0 live, 43 duplicate, 109 cited, 0 pinned
-search lbd 1:8,2:3,5:10,6:27,7:32,8:22
-search width 1:8,4:3,6:3,7:4,8:34,9:50
-search globals/units 8 units
-search glob-prune/prunes 85 prunes
-search glob-confl/confl 8 confl
-search cls-inst/inst 94 inst
+search retention keep-all keep-all: 950 added, 0 evicted, 950 swept, 0 live, 28 duplicate, 941 cited, 0 pinned
+search lbd 1:9,2:3,5:9,6:20,7:25,8:31,9:17,10:51,11:137,12:241,13:222,14:133,15:29,16:4
+search width 1:9,4:3,6:4,7:3,8:14,9:44,10:1,12:1,13:1,14:8,15:5,16:838
+search globals/units 9 units
+search glob-prune/prunes 92 prunes
+search glob-confl/confl 9 confl
+search cls-inst/inst 922 inst
 search cls-decl/cls 0 cls
-search cls-prune/prunes 923 prunes
-search pb-inst/inst 15 inst
+search cls-prune/prunes 391 prunes
+search pb-inst/inst 19 inst
 search pb-inst-no/rows 0 rows
-search pb-prune/prunes 293 prunes
-search pb-confl/confl 24 confl
-search minimised/lits 2125 lits
+search pb-prune/prunes 366 prunes
+search pb-confl/confl 20 confl
+search minimised/lits 778 lits
 search i-s4-cross/lines 0 lines
-search pb-tried/confl 102 confl
-search pb-learned/rows 15 rows
-search pb-fallback/confl 87 confl
+search pb-tried/confl 931 confl
+search pb-learned/rows 19 rows
+search pb-fallback/confl 912 confl
 search pb-why first fallback reason: no PB row for instance <unknown>
-work pb-whys/recd 64 recd 32 x
-search pb-steps/pivots 15 pivots
-search pb-convert/rows 13 rows
-search pb-stronger/rows 13 rows
-search pb-nondeg/rows 15 rows
-search pb-lifted/rows 2 rows
-search pb-rungs/rungs 11 rungs
-search lvl-cmp/confl 15 confl
+work pb-whys/recd 64 recd 44 x
+search pb-steps/pivots 19 pivots
+search pb-convert/rows 15 rows
+search pb-stronger/rows 15 rows
+search pb-nondeg/rows 19 rows
+search pb-lifted/rows 4 rows
+search pb-rungs/rungs 7 rungs
+search lvl-cmp/confl 19 confl
 search lvl-same/confl 0 confl
-search lvl-narrow/confl 12 confl
+search lvl-narrow/confl 10 confl
 search lvl-wide/confl 0 confl
-search lvl-incomp/confl 3 confl
+search lvl-incomp/confl 9 confl
 search lvl-empty/confl 0 confl
-search lvl-assert/confl 13 confl
+search lvl-assert/confl 16 confl
 search lvl-why first disagreement: closure {19,18,17,16,15,14,13,12,9,7,5,4,3,2,1} vs pb {19,18,12} (pb asserts at 0)
-work int_times/inst 1273 inst 667.3 runs/node 15.38 eff/node
-work int_lin_le/inst 241 inst 76.6 runs/node 24.56 eff/node
-work int_lin_le_reif/inst 147 inst 51.5 runs/node 4.68 eff/node
-work bool_not/inst 162 inst 5.0 runs/node 1.43 eff/node
-work learned_clause/inst 94 inst 3.9 runs/node 0.46 eff/node
-work bool2int/inst 81 inst 2.6 runs/node 1.43 eff/node
-work cumulative/inst 1 inst 1.9 runs/node 0.00 eff/node
-work array_int_maximum/inst 2 inst 1.8 runs/node 0.08 eff/node
-work array_int_minimum/inst 1 inst 1.7 runs/node 0.03 eff/node
-work bool_clause/inst 45 inst 1.6 runs/node 0.00 eff/node
-work all_different_int/inst 1 inst 1.5 runs/node 0.39 eff/node
-work learned_pb/inst 15 inst 1.1 runs/node 0.14 eff/node
-work props/runs 1633967 runs
-work eff/runs 97226 runs
-work contra/runs 975 runs
-work passes/snaps 9911 snaps
-work deductions/chgs 2426 chgs
-work wakes/wakes 3363923 wakes
+work int_times/inst 1273 inst 827.6 runs/node 14.44 eff/node
+work int_lin_le/inst 241 inst 99.0 runs/node 24.72 eff/node
+work int_lin_le_reif/inst 147 inst 64.5 runs/node 5.74 eff/node
+work learned_clause/inst 922 inst 15.8 runs/node 0.20 eff/node
+work bool_not/inst 162 inst 5.8 runs/node 1.65 eff/node
+work learned_pb/inst 19 inst 5.0 runs/node 0.17 eff/node
+work bool2int/inst 81 inst 3.3 runs/node 1.64 eff/node
+work array_int_maximum/inst 2 inst 2.0 runs/node 0.08 eff/node
+work cumulative/inst 1 inst 2.0 runs/node 0.00 eff/node
+work array_int_minimum/inst 1 inst 2.0 runs/node 0.03 eff/node
+work all_different_int/inst 1 inst 1.9 runs/node 0.53 eff/node
+work bool_clause/inst 45 inst 1.9 runs/node 0.00 eff/node
+work props/runs 2062557 runs
+work eff/runs 98453 runs
+work contra/runs 945 runs
+work passes/snaps 11736 snaps
+work deductions/chgs 2686 chgs
+work wakes/wakes 3762656 wakes
 work masked/wakes 0 wakes
-work vetoed/wakes 78073 wakes
-work advised/wakes 49865 wakes
-work seeded/runs 128575 runs
-work skipped/slots 3901235 slots
+work vetoed/wakes 77667 wakes
+work advised/wakes 416300 wakes
+work seeded/runs 174387 runs
+work skipped/slots 4643227 slots
 search no-proof/bool 1 bool
