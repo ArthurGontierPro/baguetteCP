@@ -21779,8 +21779,10 @@ re-baseline; the model suite with the rule ON under `BAGUETTE_DEBUG=1` 200 of 20
 
 ## D-0172  M11-complexity-T15: explanations as a DAG whose nodes carry their line; the memo table goes and every byte stays (A), and hash-consing the written nodes writes share mode's proof for less than main costs (B)
 
-Status: PROPOSED. A spike on `wave55-dag` (`795e869`), nothing merged. Which variant lands is the
-user's call (section 7).
+Status: DECIDED. A and B landed, B (hash-consing) ON by default and share mode removed, by the
+orchestrator on the user's delegation (D-0167 item 3 had already put sharing on by default).
+`BAGUETTE_HASHCONS=0` turns B off. Sections 1 to 7 are the spike as measured on `795e869`;
+section 8 is what landed, its re-record and its gate.
 Date: 2026-11-20
 Task: M11-complexity-T15 (agent-dag, `wave55-dag`). D-0140 J1, after D-0168 (option B) and D-0158
 (share mode).
@@ -21968,3 +21970,62 @@ mode writes and costs less than main without sharing on all four instances, whic
 mode's switch nothing to do. That second step changes the proof's bytes and the lane's
 `pol` counters on the runs where something is shared, so it is the user's call, as D-0158 left
 share mode.
+
+**Decided** (orchestrator, on the user's delegation): land A and B, with B on by default in place
+of share mode, and a documented switch to turn it off.
+
+### 8. What landed
+
+- **Merged with main** twice (`89ba354`, then `6c785d2`). `store.ml` keeps D-0169's `run_as`
+  (no `Fun.protect` per run), with the producer hook of `BAGUETTE_MEMO_STATS` inside it behind
+  one test of a constant.
+- **B is on by default.** `Explanation.hashcons` is a reference, on unless
+  `BAGUETTE_HASHCONS=0`, which writes the proof of the identity memo alone (main's proof before
+  D-0172, byte for byte on the four instances of section 3); `set_hashcons` is the same switch
+  for a test. The switch is in the CLI's environment help, in explanation.ml's header and in
+  `docs/ARCHITECTURE.md` section 4.
+- **Share mode is removed**: `BAGUETTE_MEMO_SHARE`, `Justify.create_sharing`, the `Lines`
+  index and `memoized_line`. Its level condition stays on the node's line (`node_answer`).
+- **One rule added**: when two nodes of one content are both written (the second was built
+  before the first was written), the table keeps the one whose line is shallower, so a wipe
+  of the deeper level does not make the content forgotten while a line for it is still on the
+  page. The four instances write the same bytes as section 3's B with it.
+- **Measured again on the merged tip** (`cd565433`, main `89ba354` with D-0169 inside):
+  rcpsp_11 159.53 G and 159 MB, cyclic 53.94 G and 97 MB, cable 192.49 G and 2 066 MB,
+  black-hole_9 666.34 G and 1 572 MB, every `.pbp` the one of section 3's B, the four proofs
+  accepted. With `BAGUETTE_HASHCONS=0`: 133.90, 126.79, 518.00 and 734.12 G, every `.pbp`
+  main's.
+- **Tests.** The identity-memo tests of D-0145, D-0166 and D-0168 build structurally equal
+  copies on purpose and assert one line each, which is the OFF mode, so they run under
+  `with_hashcons false`. `test_share_m11t10` is now `test_hashcons_m11t15` over both modes: a
+  copy built after the first was written is that node and cites its line, a copy built before
+  writes its own line (share mode found that one by rendering, hash-consing does not), a thunk
+  of the same derivation cites the line, a copy asked for below the line's level gets its own.
+  `test_hashcons_holds_m11t15` checks that the table holds a written node until its level is
+  wiped and lets it go then. `dune runtest --force` 4 345 ok, 0 FAIL; the model suite 207 of
+  207, every proof through veripb.
+- **Re-record** (`cba65d2`, then `8deca4d` for D-0173's `rest` configuration), in fresh clones
+  with `BAGUETTE_MEM_CAP_KB=33554432`. Before it, the plain pass had 85 of 301 runs different
+  and the debug pass 63 of 289, and `rest` 6 of 23 and 4 of 22; on every one of them the only
+  items that differ are the `.pbp` hash and the two counters `pol` and `pol-tokens` (none
+  writes more `pol` lines). Every configuration but `noproof` moves. 274 + 23 plain and 263 +
+  22 debug references were recorded, every proof accepted by veripb.
+- **The scaling lane found one cost.** The first gate of the merged tip (`8deca4d`) failed it
+  on one line, rcpsp_11 without the proof at +0.68 % of its late cost per node (threshold
+  0.5 %): every build was hashed for a table that no line is ever written to under
+  `--no-proof`. Fixed in `cabc2e9`, with no byte changed: a build is not hashed while the table
+  is empty, and `--no-proof` turns hash-consing off. The line is then +0.37 % against the
+  baseline, where main `6c785d2` alone (gate 76) is +0.30 %; H_qr72 without the proof +0.37 %
+  (gate 76: +0.38 %). Nothing fell, so the baseline is not re-recorded.
+- **Gate** on a fresh clone of `cabc2e9` (binary `0c1ff1e5`) against gate 75's binary
+  (`4e41e8c1`, the same code as main `6c785d2` but for D-0173's flag, off by default). `make
+  check` rc 0 under `ulimit -v 4000000`, 4 427 ok and 0 FAIL, 207 models, peak RSS 104 MB. The
+  207 models give 0 differences over stdout, exit code and `.opb`, and 12 `.pbp` differ, every
+  one smaller: `alldiff_conflict_learn_sat`, `alldiff_hall_trace_unsat`,
+  `alldiff_overshoot_decl_top_unsat`, `alldiff_pigeonhole_narrow_sat`,
+  `alldiff_regin_conflict_learn_sat`, `alldiff_regin_hole_element_unsat`,
+  `alldiff_search_unsat`, `colour_unsat`, `disjunctive_sat`, `element_foreign_hole_rup_sat`,
+  `element_foreign_hole_rup_unsat`, `gcc_const_counts_unsat` (all verified by `make check`'s
+  model suite). The differential lane gives 324 of 324 runs equal to the new reference and its
+  debug pass 311 of 311. The scaling lane is within every threshold (rc 0). The logs are in
+  `/cluster/arthur/baguette-results/wave55-dag/`.

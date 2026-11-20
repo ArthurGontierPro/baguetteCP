@@ -631,10 +631,11 @@ section 1. Shares are inclusive, of the whole run.
 
 ## Handoff notes
 
-### 2026-11-20 (agent-dag, `wave55-dag`): M11-complexity-T15, D-0172 PROPOSED, decision pending
+### 2026-11-20 (agent-dag, `wave55-dag`): M11-complexity-T15, D-0172 DECIDED, A and B landed on the branch, hash-consing on by default
 
-A spike in two variants on `795e869`. A (default) puts each node's line on the node (`Explanation.t`'s five line-writing constructors become inline records), so the memo table, D-0168's window and its second forcing are gone, every byte stays (gate green on `3f888e58`), and rcpsp_11 runs -21 % instructions. B (`BAGUETTE_HASHCONS=1`) hash-conses written nodes and writes share mode's proof for less than main (cable -64 %, cyclic -58 %, every proof verified).
-Not merged. `store.ml`'s `with_running` stats hook conflicts with D-0169's `run_as` and belongs there. D-0172 section 7 is the table for the user.
+Each node carries its line (`Explanation.t`'s five line-writing constructors are inline records), so the memo table and D-0168's window and second forcing are gone; the smart constructors hash-cons written nodes, on by default, `BAGUETTE_HASHCONS=0` for the old proof; share mode removed. Spike: rcpsp_11 -21 % instructions with every byte kept (A), share mode's proof at cable -64 %, cyclic -58 % (B).
+Merged with main `6c785d2`; the lane re-recorded (`cba65d2`, `8deca4d`: only `.pbp` hashes and the `pol`/`pol-tokens` counters moved, 85+6 plain, 63+4 debug); gate in D-0172 section 8. The claim row is the orchestrator's to move.
+
 ### 2026-11-20 (agent-learnprop, `wave55-learnprop`): M11-complexity-T17, D-0173
 
 The learned clauses that never prune on codes QR48 are SATISFIED when woken (all 177 and 390 runs per node). RESTING takes a satisfied
