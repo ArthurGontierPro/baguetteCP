@@ -1,0 +1,13 @@
+% M4-T6 spike (D-0184). UNSAT, and the comparison model: x, y in 2..4 multiply to
+% {4, 6, 8, 9, 12, 16}; z in 5..15 with 6, 8, 9, 12 removed holds none of them. GAC refutes
+% at the root (no z value has a support); bounds consistency sees z in 5..15 and x*y in
+% 4..16 overlapping, and must search.
+var 2..4: x :: output_var;
+var 2..4: y :: output_var;
+var 5..15: z :: output_var;
+constraint int_times(x, y, z);
+constraint int_ne(z, 6);
+constraint int_ne(z, 8);
+constraint int_ne(z, 9);
+constraint int_ne(z, 12);
+solve satisfy;

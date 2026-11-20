@@ -21,7 +21,6 @@ of it to every session and stopping at a broken line before it even reached the 
 |---|---|---|---|
 | M8-bits-encoding-T4 (two arms, `W = none` and `W = 0`, on the sixteen editions) | run directories under `/scratch/arthur/m8t4/`, `tools/compare/` (additions), `bench/challenge/README.md` (the run's row), a new D-record | agent-m8t4 (`wave55-m8t4`) | 2026-11-20 |
 | M14-e2e-verification-T8 (optimisation, and cake_pb_cp on search proofs) | `tools/e2e/`, `scripts/e2e_lane.sh`, `bench/e2e_spike/`, run dirs `/scratch/arthur/wave55-e2e8-runs/`; reserved record D-0182 | agent-e2e8 (`wave55-e2e8`) | 2026-11-20 |
-| M4-T6 (spike: in-proof tabulation as the GAC route for small-domain relations) | a spike branch only: new `bench/tabulation_spike/`, prototype code in a NEW module under `lib/core/prop/` if needed (not wired into compile.ml without a decision); reserved record D-0184 | agent-tab (`wave55-tab`) | 2026-11-20 |
 | M10-search-strategy-T5, M9-no-proof-T3, M7-T30 (one Challenge series on current main: default, `-f`, default `--no-proof`) | run dirs `/scratch/arthur/m10t5/`, `tools/compare/` (additions), `bench/challenge/README.md` (the run's row); reserved record D-0185 | agent-m10t5 (`wave55-m10t5`) | 2026-11-20 |
 
 ## Cross-session requests
@@ -629,6 +628,7 @@ section 1. Shares are inclusive, of the whole run.
 | M11-complexity-T14 (the cost per node against Gecode) | agent-pernode2 (`wave55-pernode`) | 2026-11-20 | **D-0169.** codes-cp QR48 XOR, same tree as Gecode: Gecode 28 k instr and 57 propagations per node, baguette 1 572 k and 413 runs. Four byte-identical cuts in `engine.ml`, `store.ml`, `pb.ml`, `clause.ml` (run bracket without `Fun.protect` and no walk after a quiet run; wake sort in a scratch array; literal status off the record; seed heap without closures): -12.3 % / -15.8 % instr per node without proof, -7.5 % / -10.7 % with, every proof and `--stats` line identical. Gate on `c531645` (merges main `42feb27`): `make check` rc 0, 200 models x 4 artefacts equal to gate 71's `492638b9`, lanes 301/301 and 289/289, scaling ok and re-baselined (`26240af`), binary `c308784d`. Then merged main `f41498a` (thunk, disjoint files). Two proposals for the user (D-0169 section 5) |
 | M11-complexity-T17 (learned clauses that cannot prune) | agent-learnprop (`wave55-learnprop`) | 2026-11-20 | **D-0173.** Every learned-clause run on codes QR48 is a run of a SATISFIED clause (100 %, true literal watched in 98 %). RESTING behind `BAGUETTE_REST_SATISFIED=on`, OFF: a satisfied clause keeps its watches, leaves the wake index but for the true literal, is released by the backtrack that pops its support. Same pruning, another order: QR48 same trees and proofs, -33/-54 % instr/node without proof, -17/-33 % with; lane 250/301 differ, median -1 %. Lane config `rest` and its references added. Gate green on `88275b8` (`24efccd8`). The default is the user's decision (D-0173 section 5) |
 | M13-codes-leads-T1 (study: the root LP relaxation) | agent-lp (`wave55-lp`) | 2026-11-20 | **D-0183 (STUDY).** `tools/lp/opb2lp.py` reads baguette's `.opb`, propagates bounds at the integer level, solves the LP with HiGHS 1.16 (highspy) and counts reduced-cost fixings. Codes (17): LP bound 1, nothing fixed, no root UNSAT, structurally. Challenge (39 of 42): >10 % of the gap closed on 12, fixings on 2 (radiation). `pol` shape verified by veripb with per-claim controls. Recommended: not now; root cuts before a plain LP if ever. |
+| M4-T6 (spike: in-proof tabulation) | agent-tab (`wave55-tab`) | 2026-11-20 | **D-0184 (SPIKE).** The GCS tabulation transfers to the order encoding: a `red` pair per tuple over the order literals, the at-least-one row by `rup` from D-0060's rows through per-pair lemmas, one `rup` per GAC removal (plus a KILL line per hole-killed support). About `5 |Dx| |Dy|` root lines. `bench/tabulation_spike/run_spike.sh`: 4 models verified, 6 mutations refused at their line. Not built (option A) |
 
 ## Handoff notes
 
@@ -668,6 +668,10 @@ The root LP of baguette's own `.opb` gives nothing on the codes (bound 1 = `x !=
 with cuts too) and, on 39 Challenge instances, a real bound on 12 and reduced-cost fixings on 2 (radiation). Each
 consequence is one `pol` with rationalised duals, checked by veripb (`bench/lp/check_cert.sh`). No solver code; the
 user decides between D-0183's options A (recommended, nothing now), B and C. Results in `baguette-results/wave55-lp/`.
+
+### 2026-11-20 (agent-tab, `wave55-tab`): M4-T6, D-0184 (SPIKE)
+
+In-proof tabulation of `int_times` works over the order encoding and every piece is checked by veripb (`bench/tabulation_spike/run_spike.sh`, 4 models, 6 mutation controls refused at their line). It costs about `5 |Dx| |Dy|` root lines, not ~10, and 23 of 37 GAC removals were already `rup` against D-0060's rows. Nothing built (D-0184 option A). M4-T6b (TODO, autonomous) measures the node gain on real instances before any build.
 
 ## Handoff notes
 

@@ -1,0 +1,14 @@
+% M4-T6 spike (D-0184). SAT, with holes the GAC prunings must READ. x <> 1 and y <> 1 are
+% interior holes; z = 2 has exactly two supports, (1,2) and (2,1), each killed by one of
+% them, so its removal is RUP only after one KILL line per hole-killed tuple: with neither
+% x nor y fixed, D-0060's guarded rows cannot split on them, and the at-least-one row has
+% two live selectors. (A first version put the holes in z, under x fixed; there the
+% guarded rows refuted the value by unit propagation alone and the KILL lines were not
+% needed -- the selection of this model was a measurement, not a guess.)
+var 0..5: x :: output_var;
+var -3..3: y :: output_var;
+var -9..9: z :: output_var;
+constraint int_times(x, y, z);
+constraint int_ne(x, 1);
+constraint int_ne(y, 1);
+solve satisfy;

@@ -1,0 +1,10 @@
+% M4-T6 spike (D-0184). SAT. int_times over x in 0..5, y in -3..3: under z <= -5 the
+% products are -9 (3,-3), -8 (4,-2), -6 (2,-3 and 3,-2), -5 (5,-1), so -7 is an interior
+% value with no support (a hole GAC cuts and bounds consistency cannot), x loses 0 and 1,
+% y loses 0..3. A decision is still needed to reach a solution.
+var 0..5: x :: output_var;
+var -3..3: y :: output_var;
+var -9..9: z :: output_var;
+constraint int_times(x, y, z);
+constraint int_le(z, -5);
+solve satisfy;
