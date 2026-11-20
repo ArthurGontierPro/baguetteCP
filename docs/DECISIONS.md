@@ -22029,3 +22029,178 @@ of share mode, and a documented switch to turn it off.
   model suite). The differential lane gives 324 of 324 runs equal to the new reference and its
   debug pass 311 of 311. The scaling lane is within every threshold (rc 0). The logs are in
   `/cluster/arthur/baguette-results/wave55-dag/`.
+
+## D-0183  M13-codes-leads-T1: the root LP relaxation of baguette's own `.opb`, measured before any code. Nothing on the codes, a bound on a third of the Challenge sample, fixings on two instances
+
+Status: STUDY (no solver code, a recommendation for the user)
+Date: 2026-11-20
+Task: M13-codes-leads-T1 (agent-lp, `wave55-lp`)
+Touches: `tools/lp/opb2lp.py` (new), `bench/lp/` (new, `gen_codes.sh`, `gen_challenge.sh`,
+`run_lp.sh`, `table.py`, `check_cert.sh`, `minweight_opt.mzn`). Runs in
+`fataepyc-06:/scratch/arthur/wave55-lp-runs/`. The tables, the per-instance results, the
+certificates and the checker logs are copied to `/cluster/arthur/baguette-results/wave55-lp/`.
+
+### 1. The question, and the tool chain
+
+The ROADMAP row, after the user's direction of 2026-11-19, asks to solve the LP relaxation of the
+model's linear rows at the root and to use its bound and its reduced-cost fixings, each consequence
+being one `pol` (a nonnegative combination of rows, then a division). This study measures first what
+the root LP alone would give, on the codes and on Challenge instances.
+
+- The LP solver is HiGHS 1.16.0 (git `f3f113d`) through `highspy` 1.16.0 from PyPI, in a venv at
+  `/scratch/arthur/wave55-lp-runs/venv`, one thread. It is the HiGHS version of codes-cp's benchmark.
+  Nothing is installed into baguette.
+- The model is baguette's own `.opb`, written by the release binary (`make release`, md5 `7c880bce`)
+  at `--time-limit 0`. The LP is therefore over exactly the rows a `pol` could cite, which are every
+  model row, the ladder rows and the objective's `min:` line (its constant included, a maximisation
+  negated, PROOF-FORMAT §3). Every Boolean is relaxed to `0 <= x <= 1`, and `~x` is `1 - x`.
+- `tools/lp/opb2lp.py` reports, per instance:
+  - `prop`, bounds propagation of the same rows at the integer level, which stands in for the
+    solver's root. The literals `X_ge_v` are read back into intervals, and a row's terms on `X` are
+    the step function `sum of c_v over v <= x`. Literal-level PB propagation is useless on these
+    rows because every literal of an order-encoded linear row has the same coefficient, so it never
+    fires. The first version of the script did exactly that and reported a root bound of 0 on
+    rcpsp_13, whose critical path is 69.
+  - `LP0`, the pure relaxation, and `LP1`, the relaxation with the propagated bounds fixed. The gap
+    closed is `(LP1 - prop) / (UB - prop)`, with UB baguette's incumbent from the M7-T26 tables
+    (`/scratch/arthur/m7t26/<YEAR>/results.tsv`, 1 200 s runs). `gap closed 2` is the same against
+    the best known value (Chuffed's, when it is better).
+  - What the cutoff `obj <= UB - 1` adds. Bounds propagation runs first, because the solver gets
+    that once it holds an incumbent, and only fixings beyond it are counted. The LP over those bounds
+    proves UB optimal if it is infeasible or if `z > UB - 1`. Otherwise a free literal at its lower
+    bound with reduced cost `d_j > (UB - 1) - z` cannot be 1 in an improving solution (symmetrically
+    at its upper bound), and bounds propagation runs again to count what these fixings imply.
+  - For comparison only, HiGHS's own root (`mip_max_nodes = 1`, 60 s), which adds its presolve,
+    cuts and heuristics but no branching.
+
+### 2. The codes. The root LP gives nothing, and cannot
+
+`bench/lp/gen_codes.sh` builds Golay (`qr23`), QR48 (`qr47`) and the random [80,40] codes of phase 1
+(seeds 1 to 3, distances 9, 10 and 10 from codes-cp's `results/phase1-p1`) with codes-cp's
+`gen/p1.py` and `writers/write.py`. They are flattened through `models/minweight_chk.mzn` with
+`ENC=2`, the parity checks written as sums `= 2y`. That gives 12 decision instances, UNSAT at `d-4`
+(QR) or `d-1` (random) and SAT at `d`, with 0 or 3 fixed coordinates. The optimisation face
+(minimise the weight) goes through `bench/lp/minweight_opt.mzn`, 5 instances.
+
+| | instances | root LP | gap closed | RC fixings | UNSAT at the root |
+|---|---|---|---|---|---|
+| decision (12) | golay24 w4/w8, qr48 w8/w12 f0/f3, rand80s1..3 at d-1 and d | feasible on all 12, 0.01 s | n/a | n/a | **none** |
+| optimisation (5) | golay24, qr48, rand80s1..3 (d = 8, 12, 9, 10, 10) | bound **1** on all 5, the trivial `x != 0` | **0** | **0** | n/a |
+
+This is structural and not a matter of tolerance. The problem is homogeneous, because any fractional
+point scaled down to weight 1 still satisfies every parity row `sum x = 2y` with `y` continuous. No
+relaxation of these rows can therefore bound the weight above 1, with or without the odd-set cuts
+that make each single parity row integral. HiGHS's own root confirms it, its bound after presolve
+and cuts being still **1** on all five. What HiGHS does get at the root is a **solution**. Its
+heuristics found a word of weight `d` on golay24 and qr48 (and 13, 12, 13 on the random codes against
+9, 10, 10), and a codeword on the three SAT decision instances golay24_w8 and qr48_w12 f0/f3, each in
+under 0.1 s. The MILP solvers' lead on the codes' SAT and optimisation questions (the M13 evidence,
+Gurobi 73 of 83 P1 instances with every clear win a SAT or optimisation question) comes from primal
+heuristics and node speed, **not from the LP bound**. A root LP in baguette would not move a single
+codes instance.
+
+### 3. The Challenge sample, 42 instances in 15 families with linear rows
+
+`bench/lp/gen_challenge.sh` re-flattens each instance with the current `tools/baguette.msc` and
+writes the `.opb` at `--time-limit 0`. The selection takes up to three instances per family among
+those where baguette had an incumbent, unsolved ones (TIMEOUT) before OPT and the smallest flattened
+model first. 39 of the 42 finished. The three team-assignment instances (33 to 52 MB of `.opb`, 0.1
+million literals) did not finish in 900 s. Their parse takes 1 s, so the time goes to the script's
+Python propagation or to the LP, which this run does not separate. HiGHS's own root stays at the
+trivial bound (-1 000) on the one where it did not crash.
+
+| family (n) | prop -> LP1 bound (UB) | gap closed (vs baguette / vs best) | RC fixings with baguette's UB | with the best known | HiGHS root (cuts) |
+|---|---|---|---|---|---|
+| radiation (2) | 114 -> 708.7 (711), 51 -> 854.8 (856) | **0.996, 0.999** | **154 (+38 by propagation), 207 (+1 344)** | same UB | 710, 856 |
+| rcpsp-wet (3) | 0 -> 80 (127), 0 -> 89 (224), 7 -> 332 (929) | **0.63, 0.40, 0.35** / 0.95, 0.92, 0.41 | 0 | **238 (+227)** on j30_27_5 | 84, 97, 332 |
+| cyclic-rcpsp (3) | medium_2 42 -> 203 (516), hard_5 52 -> 316 (799), easy_5 85 -> 353 (881) | **0.34, 0.35, 0.34** | 0 | 0 | 204, 316, - |
+| stack-cuttingstock (1) | 0 -> 10 (16) | **0.63** | 0 | n/a | 10 |
+| rcpsp (3) | 45 -> 51.2, 16 -> 23.0, 69 -> 69 | 0.19, 0.31, 0 | 0 | rcpsp_12, **the LP proves 38 optimal** (after the cutoff's propagation) | 56, 25, 69 |
+| mrcpsp (3) | 31 -> 34.7, 25 and 30 unchanged | 0.14, 0, 0 | 0 (j30_17_10, propagation alone proves 26) | 0 | - |
+| lot-sizing (3) | 0 -> 60, 50, 40 (1 237..1 869) | 0.05, 0.03, 0.02 | 0 | 0 | 152, 147, 80 |
+| depot-placement (3) | 0 -> 0.2, 0.4, 2.9 | 0.002 | 0 | 0 | 13, 31, - |
+| bacp, fast-food, fjsp, openshop, stochastic-fjsp, project-planning, concert-hall-cap (2+3+2+2+3+3+3 = 18) | LP1 = prop on every one | **0** | 0 | 0 (fjsp_easy02, propagation alone proves 11) | bacp-9 38, s-fjsp 242 and 328 (all optimal) |
+
+A `-` in the last column is a root that did not finish in 60 s or crashed. Over the 39:
+
+- The LP closes more than 10 % of the gap beyond propagation on **12** instances (radiation 2,
+  rcpsp-wet 3, cyclic-rcpsp 3, stack-cuttingstock, rcpsp 2, mrcpsp 1), a trace (0.2 % to 5 %) on 6,
+  and **nothing on 21**.
+- Reduced-cost fixings against baguette's own incumbent exist on **2 instances**, the two radiation
+  ones (154 and 207 literals, from which propagation draws 38 and 1 344 more). Against the best known
+  value there is one more (rcpsp-wet j30_27_5, 238 + 227). The LP proves the incumbent optimal on
+  **one** instance and only against the best known value (rcpsp_12, 38, where baguette held 39).
+- **No LP was infeasible**, on the codes or here, so nothing is UNSAT at the root. Every Challenge
+  instance had an incumbent, so none could be.
+- LP1 takes under 6 s on 27 of the 39 (one thread), and 17 to 213 s on the other 12 (fast-food,
+  fjsp, openshop, mrcpsp, cyclic-rcpsp easy_5, depot ulysses22), whose `.opb` has 0.1 to 0.5 million
+  literals and 0.6 to 31 million nonzeros because of the order encoding's horizons. On those the LP
+  costs 1 % to 18 % of a 1 200 s run before it gives anything, and it closed a gap on two of them
+  (0.34 on cyclic-rcpsp easy_5, 0.14 on mrcpsp j30_37_4). HiGHS's MIP root crashed (SIGSEGV, HiGHS
+  1.16.0) on 5 instances where its LP did not, so `run_lp.sh` runs it in a process of its own and a
+  crash costs only that column.
+- **HiGHS's root with cuts is far stronger than the plain LP.** It reaches the optimum on bacp-9
+  (LP 31, root 38), on both stochastic-fjsp (230 -> 242, 300 -> 328), on rcpsp-wet j30_27_5 and
+  j30_44_8 (80 -> 84, 89 -> 97) and on radiation m07 (856), and it reaches 80 to 152 against 40 to 60
+  on lot-sizing. The bound the MILP solvers enjoy comes from presolve and cutting planes, and much
+  less from the relaxation of these rows.
+
+`prop` is bounds propagation of the PB rows. baguette's real root may be stronger where a global
+propagates more than its rows (cumulative's time-table, alldiff), so on those families the gap
+closed is an upper estimate. On the instances where the LP helps most (radiation, rcpsp-wet,
+lot-sizing) the objective is a weighted sum that bounds propagation does not bound at all.
+
+### 4. The proof shape, checked by veripb 3.0.2 on real instances
+
+`bench/lp/check_cert.sh` takes a real baguette proof, cuts it before `output` and `conclusion`,
+appends the LP's lines and concludes NONE. It then builds, once per claim, the same proof with that
+one claim made one unit stronger, which veripb must reject **at that claim's line and in its own
+wording**.
+
+- How the duals are made exact. HiGHS's row duals are floats. Each `y_i > 0` is rationalised with
+  `Fraction.limit_denominator(10^6)`, and the multipliers are the numerators over the lcm `D`. They
+  are nonnegative integers by construction, so the combination is valid whatever the rounding did,
+  and only its strength depends on it. The combination `sum m_i row_i` is computed in exact
+  integers. Every coefficient that differs from the target (`D*c_j` for the bound, zero for every
+  variable but `x_j` for a fixing) is brought there with a literal axiom (`x` or `~x` times the
+  difference), which only weakens the right-hand side. The line ends with `D d` for the bound, or
+  `|a_j| d` for a fixing. The script checks in integers that the result still implies the claim
+  before it writes anything, and the checker recomputes the arithmetic. An `ia <claim> : @id` after
+  each `pol` pins what the `pol` derived. `ia` is a syntactic check, so it is not vacuous over a
+  contradictory database the way `rup` and `red` are (D-0053, D-0066).
+- rcpsp_13, on baguette's own prefix (a 5 s run, its last `soli` as the cutoff). The bound
+  `objective >= 69` (the critical path, where triv is 0) is one `pol` of **5 rows** with `D = 1`,
+  because the duals of a chain of precedences are integral, and 947 tokens. Accepted
+  (`s VERIFIED NO CONCLUSION`, 6.2 s, 169 MB, on an 84 MB prefix). Its control is rejected at the
+  claim with *"Expected constraint is not syntactically implied by the constraint at the hint."*
+- radiation m07_07_20, the bound and two reduced-cost fixings. baguette found no incumbent in 30 s,
+  so the incumbent is HiGHS's optimal point (856, found in 42 s), logged into baguette's
+  `--time-limit 0` prefix as `@lpsol soli <all 68 065 literals>`, which veripb re-checks against
+  every row. The bound `obj >= 853` (LP0 852.43) is one `pol` of **57 rows** with `D = 7`, and each
+  of the two fixings is one `pol` of the same 57 rows plus the cutoff, 5 995 tokens. All three are
+  accepted (0.15 s), and the **three** controls are rejected, each at its own line (5, 7 and 9) with
+  the wording above.
+- rcpsp_12. The LP0 bound `obj >= 24` (LP 23.03, `D = 186`, 56 rows, 2 585 tokens) is accepted. The
+  optimality of 38 is **not** certified by this script, because the LP proves it only over the
+  bounds that propagation draws from the cutoff, and the script's certificates cite model rows and
+  literal axioms only. In baguette those bounds are root facts that already have ids, so the `pol`
+  would cite them in place of axioms. That was not built here.
+
+One consequence costs one `pol` whose length is the dual's support (5 to 57 rows here) plus one
+axiom term per variable it touches (hundreds to thousands). The axioms are the dominant part, and
+`w` would write them shorter.
+
+### 5. Recommendation
+
+| option | what it buys, measured | what it costs |
+|---|---|---|
+| **A. Do not build it now** (recommended) | nothing is lost on the codes, the reason M13 was opened, since the root LP is provably 1 there and HiGHS's root with cuts is 1 too | none |
+| B. A root LP bound, opt-in, for objectives that propagation cannot bound | the bound on about a third of this sample, fixings on 2 of 39 against baguette's own incumbent, one `pol` each (5 to 57 rows, D <= 186), the shape verified | an LP solver inside an OCaml solver (C bindings to HiGHS, or an exact simplex of our own). The bound alone shortens no search unless it is re-solved at nodes, a far larger change |
+| C. Cutting planes at the root (CG and {0,1/2} cuts, each a `pol` with a division) | where the MILP root's strength actually is, the optimum at the root on 6 of these instances | a separation loop and its tuning, a study of its own |
+
+A is recommended because on the question M13 was opened for the measurement is unambiguous. All 17
+codes instances get zero gap closed, zero fixings and no root UNSAT, and that is structural. The
+MILP solvers' advantage on the codes' SAT questions is their primal heuristics and their node rate
+(D-0169 measured the node rate). If the Challenge side is wanted later, C should be studied before
+B, because the plain relaxation of order-encoded rows is weak exactly where HiGHS's cuts close the
+gap.
