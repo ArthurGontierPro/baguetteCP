@@ -567,6 +567,12 @@ with it; a constant `K` in a reify tuple is `n[K][ge<k>]`, `n[K][eq<k>]`, likewi
 | `equals_iff t x y` | `@c[N][ge]`, `@c[N][le]` guarded by `t`; `@b[N][gt][r]`, `@b[N][lt][r]`; `@c[N][al1]`: `lt + gt + t >= 1` | `b[N][gt]`, `b[N][lt]` |
 | `not_equals_iff t x y` | the same guarded by `~t`, both flags with `[f]` and `[r]`, `al1` over `lt + gt + ~t` | `b[N][gt]`, `b[N][lt]` |
 | `d<k> in (v ...) X` | `@c[d<k>][al1]` over `i[X][eq<v>]` | |
+| `element (a0 ...) (I 1) Z` *(T3b)* | `@c[N][lb]` (`I >= 1`) when I's range starts below 1, `@c[N][ub]` (`-I >= -n`) when it ends above n; per position p from 0, `@c[N][<p>ge]` (`a_p - Z >= 0`) and `@c[N][<p>le]` (`Z - a_p >= 0`), each unless `~i[I][eq<1+p>]` | |
+| `gacglobalcardinality (X ...) (v ...) (C ...)` *(T3b)* | per cover value j from 0, `@c[N][<j>_ge]` (`sum_i [X_i = v_j] - C_j >= 0`) and `@c[N][<j>_le]` (the reverse); a constant C_j moves to the degree | |
+| `array_max (X ...) Y`, `array_min` *(T3b)* | per operand i from 0, `@x[N][<i>][f]` and `@x[N][<i>][r]` (the flag iff `X_i >= Y`, resp. `X_i <= Y`), `@c[N][<i>le]` (`Y - X_i >= 0`; resp. `<i>ge`), `@c[N][al1]` over the flags | `x[N][<i>]` |
+| `max X Y Z`, `min` *(T3b)* | `@b[N][lge][r]`, `@b[N][rge][r]` (flag -> `X >= Z`, `Y >= Z`; resp. `lle`, `rle`), `@c[N][lle]`, `@c[N][rle]` (resp. `lge`, `rge`), `@c[N][al1]` | `b[N][lge]`, `b[N][rge]` (resp. `lle`, `rle`) |
+| `inverse ((X ...) ox) ((Y ...) oy)` *(T3b)* | `@c[N][X_<k>_lb]`, `X_<k>_ub` (X_k in oy..oy+n-1), `@c[N][Y_<k>_lb]`, `Y_<k>_ub`, k from 1; per (i, j) from 0, `@c[N][<i+1>_<j+1>ge]` (`[X_i = oy+j] - [Y_j = ox+i] >= 0`) and `...le` (the reverse) | |
+| `c<k>_<p> equals_if (b = 1) X Y` *(T3b, member)* | `@c[c<k>_<p>][ge]`, `@c[c<k>_<p>][le]` guarded by `i[b][eq1]`; then `or` over the selectors' tuples with `(1 = 1)` | |
 
 Constants are folded into the degree (`mk_constraint_ge`, `mk_lin_constraint_ge`), integer
 terms are kept per occurrence, and a guard's big-M is `max(0, c - min)` (`bits_imply`) or
@@ -579,6 +585,17 @@ terms are kept per occurrence, and a guard's big-M is `max(0, c - min)` (`bits_i
 defined as a flag), `@W[n]` (a candidate a pin cites), then each of baguette's rows under its
 own `@cN` (`ia` or `rup`), and the proof has **no `f` line**. Each `soli` is labelled
 `@O[c<id>]` and `@c<id>` derived from it by the objective's half (D-0182).
+
+**T3b (D-0188)** adds, still fresh names in the sense baguette's `.opb` uses: `@Ep[e]`,
+`@Em[e]` (an INTERIOR eq atom `e = [x = v]` as `x_ge_v - x_ge_(v+1)`, each one `pol` of the
+atom's definition and its ge atoms' clauses), `@Y1[y_ge_v]`, `@Y2[y_ge_v]` (`red`, a gcc copy's
+rung defined as its original's; `@L[y_ge_v]` follows from them), and pins written as ONE `pol`
+under the row's own label when a cake row LINEARISED at the row (each `B_z` cancelled by
+`@A1`/`@A2` at the row's threshold or by z's bound row, saturated, its atoms replaced) is the row
+itself: element's clauses, maxmin's per-value clauses (the operands' `[r]` rows so linearised,
+plus `@c[N][al1]`), member's and inverse's range clauses. A `@cN pol` pin is the row exactly;
+any other is still `ia` against a `@W`. A substitution `@S[...]` is written only when a pin
+cites it, or before a `rup` pin of its constraint.
 
 ## 4. Per-propagator justification
 

@@ -21,7 +21,6 @@ of it to every session and stopping at a broken line before it even reached the 
 |---|---|---|---|
 | M8-bits-encoding-T4 (two arms, `W = none` and `W = 0`, on the sixteen editions) | run directories under `/scratch/arthur/m8t4/`, `tools/compare/` (additions), `bench/challenge/README.md` (the run's row), a new D-record | agent-m8t4 (`wave55-m8t4`) | 2026-11-20 |
 | M10-search-strategy-T5, M9-no-proof-T3, M7-T30 (one Challenge series on current main: default, `-f`, default `--no-proof`) | run dirs `/scratch/arthur/m10t5/`, `tools/compare/` (additions), `bench/challenge/README.md` (the run's row); reserved record D-0185 | agent-m10t5 (`wave55-m10t5`) | 2026-11-20 |
-| M14-e2e-verification-T3b (T5's globals under `--e2e`, and element's head cost) | `lib/proof/e2e.ml`, `lib/proof/encoding.ml` (additive), `lib/flatzinc/compile.ml` (the e2e hooks only), `tools/e2e/`, `scripts/e2e_lane.sh`, `docs/PROOF-FORMAT.md` §3b; reserved record D-0188 | agent-e2e3b (`wave55-e2e3b`) | 2026-11-20 |
 | M16-file-review-T3 (learning) and T2's leftover `member.ml` | `lib/core/learn.ml`, `analysis.ml`, `pb_analysis.ml`, `learned.ml`, `retention.ml`, `ladder.ml`, `reduce.ml`, `restart.ml`, `phase.ml`, `activity.ml`, `prop/member.ml`, their unit tests; `bench/scaling/baseline.tsv` (re-baseline only); reserved record D-0191 | agent-review3 (`wave55-review3`) | 2026-11-20 |
 
 ## Cross-session requests
@@ -637,6 +636,11 @@ section 1. Shares are inclusive, of the whole run.
 
 ## Handoff notes
 
+### 2026-11-20 night (orchestrator, autonomous mode): gate 80 green; M14-T3b merged, gate 81 on it
+
+Gate 80 (`723c682`, merge wave55-review2, D-0190, binary `a3c909f0`, against gate 79's `e6d0e1bf`):
+`make check` rc 0 (4 456 ok), 207 x 4 artefacts equal, lane 324/324, debug 311/311, scaling ok.
+
 ### 2026-11-20 evening (orchestrator, autonomous mode): gate 79 green; M16-T2 merged, gate 80 on it
 
 Gate 79 (`b555e0d`, merge wave55-memberdbg, D-0189, binary `e6d0e1bf`, against gate 78's `aa3385fd`):
@@ -713,6 +717,13 @@ In-proof tabulation of `int_times` works over the order encoding and every piece
 `E2E_SOLVER=1`, `tools/e2e/measure_e2e.sh`). Off by default, every default byte unchanged. Covers T2, T4 and holes; a T5 global is
 refused with its name (TODO T3b: interior eq atoms, and element's clauses by `pol` through `@A2`, which is black-hole's cost).
 If cake_pb_cp is rebuilt from another CakeML commit, PROOF-FORMAT §3b may go stale: the lane's pass 1b will FAIL, it cannot verify wrongly.
+
+### 2026-11-20 (agent-e2e3b, `wave55-e2e3b`): M14-e2e-verification-T3b, D-0188 [AUTONOME]
+
+`--e2e` now covers every family the bridge does (lane pass 1b 188 of 207, 0 FAIL, 0 disagreeing, 32 of 32 solver controls). Element's
+clauses are one `pol` each, which takes black-hole_17 from x428 to x11.8 of veripb alone, and D-0188 §3.4-3.5 also turn T4's atom and
+`array_bool_and` `rup` pins into `pol`. The median barely moves (x12.4 to x11.7), because at the median the cost left is the SEARCH proof
+elaborated against cake's encoding, which no prefix change reaches.
 
 ## Handoff notes
 

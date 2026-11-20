@@ -772,12 +772,19 @@ let pack_abs_guard (p : Reif_lin_le.t) : pending =
    builder keeps a linear row's variable terms as written and folds its constants into the
    right-hand side, which is what cake does with the translator's constants in place
    (mk_lin_constraint_ge), so the terms go across unchanged. A builtin outside the covered
-   families is refused here, before any row is posted. Only called under `--e2e`. *)
-let e2e_spec (names : string array) (c : Model.cstr) : Baguette_proof.E2e.spec =
+   families is refused here, before any row is posted. Only called under `--e2e`.
+
+   T3b (D-0188): T5's globals. [c_id] tells `int_max(x, y, z)` (cake's `max`) from
+   `array_int_maximum(z, [x, y])` (cake's `array_max`), which build the same [cstr]; the
+   int_eq tying a gcc copy has [c_id = ""] and no .scp counterpart (D-0188 section 3.3). *)
+let e2e_spec (names : string array) (con : Model.constr) : Baguette_proof.E2e.spec =
   let module E = Baguette_proof.E2e in
   let op = function Model.Var i -> E.Var names.(i) | Model.Const n -> E.Const n in
   let lin ts = List.map (fun (a, i) -> (a, E.Var names.(i))) ts in
-  match c with
+  match con.Model.k with
+  | Model.Int_eq (Model.Var i, Model.Var j) when con.Model.c_id = "" ->
+      E.Copy (names.(i), names.(j))
+  | _ when con.Model.c_id = "" -> E.refuse "a constraint no FlatZinc item states"
   | Model.Int_lin_le (ts, r) -> E.Lin_le (lin ts, r)
   | Model.Int_lin_eq (ts, r) -> E.Lin_eq (lin ts, r)
   | Model.Int_lin_ne (ts, r) -> E.Lin_ne (lin ts, r)
@@ -803,15 +810,28 @@ let e2e_spec (names : string array) (c : Model.cstr) : Baguette_proof.E2e.spec =
   | Model.Int_times _ -> E.refuse "int_times is not covered by --e2e"
   | Model.Int_div _ -> E.refuse "int_div is not covered by --e2e"
   | Model.Int_abs _ -> E.refuse "int_abs is not covered by --e2e"
-  | Model.Global_cardinality _ ->
-      E.refuse "global_cardinality is not covered by --e2e yet"
   | Model.Cumulative _ -> E.refuse "cumulative is not covered by --e2e"
-  | Model.Array_int_element _ -> E.refuse "array_int_element is not covered by --e2e yet"
-  | Model.Array_int_maximum _ -> E.refuse "array_int_maximum is not covered by --e2e yet"
-  | Model.Array_int_minimum _ -> E.refuse "array_int_minimum is not covered by --e2e yet"
   | Model.Regular _ -> E.refuse "regular is not covered by --e2e"
-  | Model.Inverse _ -> E.refuse "inverse is not covered by --e2e yet"
-  | Model.Member _ -> E.refuse "member is not covered by --e2e yet"
+  (* T5 (T3b): the translator's (tools/e2e/fzn2scp.py) keyword for each *)
+  | Model.Array_int_element (i, vs, z) -> E.Element (Array.to_list vs, op i, op z)
+  | Model.Global_cardinality (xs, cover, counts) ->
+      E.Gcc (List.map op xs, Array.to_list cover, List.map op counts)
+  | Model.Array_int_maximum (m, [ x; y ]) when con.Model.c_id = "int_max" ->
+      E.Max (op x, op y, op m)
+  | Model.Array_int_minimum (m, [ x; y ]) when con.Model.c_id = "int_min" ->
+      E.Min (op x, op y, op m)
+  | Model.Array_int_maximum (m, xs) -> E.Array_max (List.map op xs, op m)
+  | Model.Array_int_minimum (m, xs) -> E.Array_min (List.map op xs, op m)
+  | Model.Inverse iv ->
+      E.Inverse
+        ( List.map op iv.Model.inv_f,
+          iv.Model.inv_fmin,
+          List.map op iv.Model.inv_g,
+          iv.Model.inv_gmin )
+  | Model.Member mb ->
+      E.Member
+        ( List.combine (List.map op mb.Model.mem_b) (List.map op mb.Model.mem_x),
+          op mb.Model.mem_y )
 
 let compile (m : Model.t) : t =
   (* M5-T1. Resolved to a model variable index and a direction, or refused. The
@@ -909,6 +929,17 @@ let compile (m : Model.t) : t =
         | Some fs -> List.iter (Encoding.note_held_back encoding) (List.rev fs)
         | None -> ())
     m.Model.vars;
+  (* M14-e2e-verification-T3b (D-0188 section 3.3): the prefix defines a gcc copy's ladder
+     as its original's, so it is told the pairs before the copy is declared *)
+  if Encoding.e2e_on encoding then
+    List.iter
+      (fun (c : Model.constr) ->
+        match c.Model.k with
+        | Model.Int_eq (Model.Var i, Model.Var j) when c.Model.c_id = "" ->
+            Encoding.e2e_copy encoding ~copy:m.Model.vars.(j).Model.v_name
+              ~orig:m.Model.vars.(i).Model.v_name
+        | _ -> ())
+      m.Model.constraints;
   Array.iteri
     (fun i (v : Model.var) ->
       let lo, hi = bounds.(i) in
@@ -2358,9 +2389,10 @@ let compile (m : Model.t) : t =
     List.concat_map
       (fun (c : Model.constr) ->
         if Encoding.e2e_on encoding then (
-          incr e2e_k;
+          (* a gcc copy's int_eq (c_id = "") is no .scp constraint and takes no number *)
+          if c.Model.c_id <> "" then incr e2e_k;
           Encoding.e2e_begin encoding ~name:(Printf.sprintf "c%d" !e2e_k)
-            (e2e_spec names c.Model.k));
+            (e2e_spec names c));
         let pos = c.Model.c_pos in
         (* [check_row] is the diagnostic path and covers every row this arm posts, but
            the arithmetic that happens *before* a row exists -- merging duplicate

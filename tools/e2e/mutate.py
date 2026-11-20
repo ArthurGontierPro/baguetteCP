@@ -30,7 +30,9 @@ place and prints what it changed, for the lane to check the refusal against.
                                 corrupted where the SOLVER-WRITTEN prefix states it: that
                                 row's pin line in the --e2e proof (`@cK ia ROW : ..` or
                                 `@cK rup ROW`) gets its degree + 1, so the prefix claims more
-                                than cake's file implies; the .opb is not touched; prints @cK
+                                than cake's file implies; a pin that is one `pol` (T3b,
+                                D-0188) becomes that pol under `@Wmut` and `@cK ia ROW : @Wmut`
+                                with the degree + 1; the .opb is not touched; prints @cK
   mutate.py sel FILE.pbp        (T3, D-0187) a WRONG DEFINITION of a disequality selector:
                                 the first `@D1[...]` red line, `~s + F >= 1 : s -> F`, gets
                                 the witness `s -> ~F`; prints its label
@@ -60,10 +62,11 @@ def main(kind, path, *rest):
             return 1
         text = "\n".join(lines) + "\n"
     elif kind == "pin":
-        what = None
+        what = row = None
         for l in text.splitlines():
-            if re.fullmatch(r"(@\S+ (?:[+-]\d+ \S+ ){3,})>= (-?\d+) ;", l):
-                what = l.split()[0]
+            m = re.fullmatch(r"(@\S+) ((?:[+-]\d+ \S+ ){3,})>= (-?\d+) ;", l)
+            if m:
+                what, row = m.group(1), m
                 break
         if what is None:
             return 1
@@ -73,6 +76,13 @@ def main(kind, path, *rest):
             m = re.fullmatch(re.escape(what) + r" (ia|rup) ((?:[+-]\d+ \S+ )+)>= (-?\d+)( : \S+)? ;", l)
             if m:
                 lines[i] = f"{what} {m.group(1)} {m.group(2)}>= {int(m.group(3)) + 1}{m.group(4) or ''} ;"
+                break
+            # T3b (D-0188): a pin that IS one pol of a linearised cake row states no row;
+            # the corruption states it, with degree + 1, as an `ia` against that pol
+            m = re.fullmatch(re.escape(what) + r" pol (.*) ;", l)
+            if m:
+                lines[i] = (f"@Wmut pol {m.group(1)} ;\n"
+                            f"{what} ia {row.group(2)}>= {int(row.group(3)) + 1} : @Wmut ;")
                 break
         else:
             return 1

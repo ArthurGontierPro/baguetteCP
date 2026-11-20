@@ -1276,7 +1276,7 @@ let build_constraint env (c : Ast.constraint_item) =
         cmp (fun x z -> Model.Int_abs (x, z, { Model.x_sign = sign_bool x; y_ge = [] }))
     | other -> unsupported_builtin pos other
   in
-  { Model.k; Model.c_pos = pos }
+  { Model.k; Model.c_pos = pos; c_id = c.Ast.c_id }
 
 (* ----------------------------------------------------------- search annotations *)
 
@@ -1473,7 +1473,8 @@ let split_gcc_repeats (m : Model.t) : Model.t =
       { v with Model.v_name = Printf.sprintf "X_INTRODUCED_gcc_copy_%d" (j - n0) }
       :: !fresh_rev;
     defs_rev :=
-      { Model.k = Model.Int_eq (Model.Var i, Model.Var j); c_pos = pos } :: !defs_rev;
+      { Model.k = Model.Int_eq (Model.Var i, Model.Var j); c_pos = pos; c_id = "" }
+      :: !defs_rev;
     Model.Var j
   in
   let rewrite (c : Model.constr) =
