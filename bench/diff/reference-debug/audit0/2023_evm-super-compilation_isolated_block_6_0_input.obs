@@ -88,8 +88,8 @@ work advised/wakes 87825 wakes
 work seeded/runs 81854 runs
 work skipped/slots 11151381 slots
 search rup/lines 216136 lines
-search pol/lines 764 lines
-search pol-tokens/tokens 29330 tokens
+search pol/lines 688 lines
+search pol-tokens/tokens 26894 tokens
 search pol-widest/tokens 331 tokens
 search atoms/atoms 0 atoms
 search atomlinks/lines 0 lines
@@ -97,4 +97,4 @@ search bridges/pairs 0 pairs
 search boundlines/pairs 0 pairs
 search bitsprune/lines 0 lines
 opb 87b96ff1588ee09dfd60fe5f9fe55dd20457a35173761ceff28eaf4aa5d0ebbf
-pbp 4471ce6ba7a7d51973fdf8f526f2b2479aa1d81606210a7d0b7ed64ccc99dadd
+pbp 6006c539d0acf33b9b952c6f46e32f102d0ab2d500bceb7c0657887645536adb
