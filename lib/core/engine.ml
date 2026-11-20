@@ -60,7 +60,12 @@
    are trail entries with unrendered explanations, nothing more. [Search.dfs] turns
    [Stopped] into its own node-entry stop, and the run ends through M6-T9's path. Why
    the point is consistent, and what it costs (nothing measurable), is D-0136. Without
-   [?stop] the loop is exactly what it was: the countdown is one decrement per run. *)
+   [?stop] the loop is exactly what it was: the countdown is one decrement per run.
+
+   M16-file-review-T1 (D-0186): the wake walk and the seed read a trail entry's change
+   as its KIND only ([wakes_on_kind]: did it move a bound), which is all a trigger mask
+   asks; [Domain.classify], which also lists the holes and walks the domain to find
+   them, is left to the proof side ([Trace]) that needs the list. *)
 
 type outcome = Fixpoint | Conflict of Store.conflict
 
@@ -1046,6 +1051,17 @@ let check_declined t store =
 let lo_moved (e : Store.entry) = Domain.lo e.now <> Domain.lo e.old
 let hi_moved (e : Store.entry) = Domain.hi e.now <> Domain.hi e.old
 
+(* M16-file-review-T1 (D-0186): whether [trig] wants a trail entry, from the entry's KIND
+   alone: [bound] is "this entry moved a bound" ([lo_moved] or [hi_moved]). It is
+   [wakes_on trig (Domain.classify ~old ~now)] without the classification. [classify]
+   answers [Bound] exactly when a bound moved, and otherwise walks the domain for the
+   new holes and answers [Holes] -- never [NoChange] for a trail entry, because
+   [Store.apply] pushes only a [Domain.Changed] value, which is a strict subset of the
+   old domain with the same bounds only if a value inside them became a hole. So the
+   answer is the same, without the O(width) walk over a hole entry and without the
+   [Bound] record and its two options allocated per entry the engine looked at. *)
+let wakes_on_kind trig ~bound = if bound then trig.on_bound else trig.on_holes
+
 (* E1 (D-0142), under BAGUETTE_DEBUG only: the instances of the directional slots of
    [e.var] that this entry does NOT ask ([lo]/[hi] false) are recorded as declined asks, so that
    [check_declined] treats them exactly as it treated them when every watcher of the
@@ -1055,12 +1071,12 @@ let hi_moved (e : Store.entry) = Domain.hi e.now <> Domain.hi e.old
    whatever its advisor says. The trigger mask is applied as the ask would apply it. *)
 let record_unasked ?(skip = fun _ -> false) t (e : Store.entry) ~lo ~hi ~self =
   let x = Var.to_int e.Store.var in
-  let change = lazy (Domain.classify ~old:e.Store.old ~now:e.Store.now) in
+  let bound = lo_moved e || hi_moved e in
   let record sl =
     for j = 0 to t.dyn_len.(sl) - 1 do
       let id = t.dyn_ids.(sl).(j) in
-      if id <> self && (not (skip id)) && wakes_on (trigger_of t id) (Lazy.force change)
-      then t.declined <- (id, e.Store.var) :: t.declined
+      if id <> self && (not (skip id)) && wakes_on_kind (trigger_of t id) ~bound then
+        t.declined <- (id, e.Store.var) :: t.declined
     done
   in
   if not lo then record ((3 * x) + 1);
@@ -1123,11 +1139,11 @@ let watchers_of_new_entries ?self t store ~since =
   let acc = ref [] in
   (* D-0142 section 1: what this walk declines is checked after it, by its caller. *)
   if Debug.enabled then t.declined <- [];
-  let wants id change v =
+  let wants id bound v =
     if vetoed && id = self_id then (
       t.ctr.c_vetoed <- t.ctr.c_vetoed + 1;
       false)
-    else if wakes_on (trigger_of t id) change then (
+    else if wakes_on_kind (trigger_of t id) ~bound then (
       incr wakes;
       t.ctr.c_wakes <- t.ctr.c_wakes + 1;
       advises t store id v)
@@ -1141,7 +1157,7 @@ let watchers_of_new_entries ?self t store ~since =
      BAGUETTE_DEBUG, as before D-0142 moved the I-P7 check after the walk: nothing in the
      walk resyncs a slice now, and the copy costs nothing that counts. *)
   let dn = ref 0 in
-  let collect change v sl =
+  let collect bound v sl =
     let nd = t.dyn_len.(sl) in
     if nd > 0 then (
       if Array.length !wake_scratch < !dn + nd then (
@@ -1152,7 +1168,7 @@ let watchers_of_new_entries ?self t store ~since =
       let ids = if Debug.enabled then Array.sub t.dyn_ids.(sl) 0 nd else t.dyn_ids.(sl) in
       for j = 0 to nd - 1 do
         let id = ids.(j) in
-        if wants id change v then (
+        if wants id bound v then (
           dl.(!dn) <- id;
           incr dn)
       done)
@@ -1165,10 +1181,11 @@ let watchers_of_new_entries ?self t store ~since =
       (* E1 (D-0142): the slots this entry asks are those of the bound moves of this
          entry AND of every newer entry of this walk on [x] -- see "The wake index by
          direction", and [t.moved]. *)
+      let lm = lo_moved e and hm = hi_moved e in
       let m =
         Char.code (Bytes.unsafe_get t.moved x)
-        lor (if lo_moved e then 1 else 0)
-        lor if hi_moved e then 2 else 0
+        lor (if lm then 1 else 0)
+        lor if hm then 2 else 0
       in
       Bytes.unsafe_set t.moved x (Char.unsafe_chr m);
       let sl = 3 * x and lo = m land 1 <> 0 and hi = m land 2 <> 0 in
@@ -1180,16 +1197,16 @@ let watchers_of_new_entries ?self t store ~since =
       if Debug.enabled then
         record_unasked t e ~lo ~hi ~self:(if vetoed then self_id else -1);
       if stat <> [] || nd > 0 then (
-        let change = Domain.classify ~old:e.old ~now:e.now in
+        let bound = lm || hm in
         (* M6-T22: the self-watching instances that want this entry, DESCENDING, to
            be merged into the static ones by id (see the wake index's header). One
            instance can sit in two of the slots asked (two watches on [x]), hence the
            duplicates [sort_desc_uniq] drops. [dk] is the next one to merge. *)
         dn := 0;
         if nd > 0 then (
-          collect change e.var sl;
-          if lo then collect change e.var (sl + 1);
-          if hi then collect change e.var (sl + 2);
+          collect bound e.var sl;
+          if lo then collect bound e.var (sl + 1);
+          if hi then collect bound e.var (sl + 2);
           dn := sort_desc_uniq !wake_scratch !dn);
         let dl = !wake_scratch and dk = ref 0 in
         let rec flush_above s =
@@ -1201,7 +1218,7 @@ let watchers_of_new_entries ?self t store ~since =
         List.iter
           (fun id ->
             flush_above id;
-            if wants id change e.var then acc := id :: !acc)
+            if wants id bound e.var then acc := id :: !acc)
           stat;
         flush_above min_int))
   done;
@@ -1802,20 +1819,20 @@ let mark_dirty t id =
 let seed_dirty t store ~since ~epoch =
   let n = t.count in
   if Debug.enabled then t.declined <- [];
-  let mark change v id =
-    if id >= 0 && id < n && wakes_on (trigger_of t id) change then
+  let mark bound v id =
+    if id >= 0 && id < n && wakes_on_kind (trigger_of t id) ~bound then
       (* An instance born after the fixpoint at [epoch] has never run on this
          state: [propagate] seeds it whatever it says, so its advisor is not
          asked -- and under BAGUETTE_DEBUG not checked, since a run of it is
          EXPECTED to prune (I-P7 is a contract between runs). *)
       if t.born.(id) > epoch || advises t store id v then mark_dirty t id
   in
-  let mark_slot change v sl =
+  let mark_slot bound v sl =
     let nd = t.dyn_len.(sl) in
     if nd > 0 then
       let ids = if Debug.enabled then Array.sub t.dyn_ids.(sl) 0 nd else t.dyn_ids.(sl) in
       for j = 0 to nd - 1 do
-        mark change v ids.(j)
+        mark bound v ids.(j)
       done
   in
   for i = Store.trail_length store - 1 downto since do
@@ -1833,13 +1850,13 @@ let seed_dirty t store ~since ~epoch =
       if Debug.enabled then
         record_unasked t e ~lo ~hi ~self:(-1) ~skip:(fun id -> t.born.(id) > epoch);
       if stat <> [] || nd > 0 then (
-        let change = Domain.classify ~old:e.old ~now:e.now in
-        List.iter (mark change e.var) stat;
+        let bound = lo || hi in
+        List.iter (mark bound e.var) stat;
         (* M6-T22: the self-watching instances of the slots asked; order is immaterial
            here, this only marks. *)
-        mark_slot change e.var sl;
-        if lo then mark_slot change e.var (sl + 1);
-        if hi then mark_slot change e.var (sl + 2)))
+        mark_slot bound e.var sl;
+        if lo then mark_slot bound e.var (sl + 1);
+        if hi then mark_slot bound e.var (sl + 2)))
   done
 
 (* M6-T18: under BAGUETTE_DEBUG, the run a skipped slot would have made under the old

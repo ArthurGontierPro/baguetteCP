@@ -21,7 +21,6 @@ of it to every session and stopping at a broken line before it even reached the 
 |---|---|---|---|
 | M8-bits-encoding-T4 (two arms, `W = none` and `W = 0`, on the sixteen editions) | run directories under `/scratch/arthur/m8t4/`, `tools/compare/` (additions), `bench/challenge/README.md` (the run's row), a new D-record | agent-m8t4 (`wave55-m8t4`) | 2026-11-20 |
 | M10-search-strategy-T5, M9-no-proof-T3, M7-T30 (one Challenge series on current main: default, `-f`, default `--no-proof`) | run dirs `/scratch/arthur/m10t5/`, `tools/compare/` (additions), `bench/challenge/README.md` (the run's row); reserved record D-0185 | agent-m10t5 (`wave55-m10t5`) | 2026-11-20 |
-| M16-file-review-T1 (the core) | `lib/core/store.ml`, `domain.ml`, `engine.ml`, `var.ml`, `propagator.ml`, `search.ml`, their unit tests; `bench/scaling/baseline.tsv` (re-baseline only); reserved record D-0186 | agent-review1 (`wave55-review1`) | 2026-11-20 |
 | M14-e2e-verification-T3b (T5's globals under `--e2e`, and element's head cost) | `lib/proof/e2e.ml`, `lib/proof/encoding.ml` (additive), `lib/flatzinc/compile.ml` (the e2e hooks only), `tools/e2e/`, `scripts/e2e_lane.sh`, `docs/PROOF-FORMAT.md` §3b; reserved record D-0188 | agent-e2e3b (`wave55-e2e3b`) | 2026-11-20 |
 
 ## Cross-session requests
@@ -634,6 +633,11 @@ section 1. Shares are inclusive, of the whole run.
 | M14-e2e-verification-T3 (the bridge written by the solver) | agent-e2e3 (`wave55-e2e3`) | 2026-11-20 | **D-0187 [AUTONOME].** `--e2e`, OFF by default: baguette's proof is checked against `cake_pb_cp`'s `.opb` directly, its head (`lib/proof/e2e.ml`) deriving each `.opb` row from cake's, from compile.ml's per-constraint origin and a replica of cake's rows (PROOF-FORMAT §3b, CakeML `14856fcf`). T2, T4 and set domains covered; T5's globals refused (TODO T3b). `make e2e` pass 1b 117 of 207 VERIFIED with no bridge, 0 FAIL, 22 of 22 solver controls. Challenge: prefix size and check time equal to the bridge's, the bridge stage removed. See the handoff note |
 
 ## Handoff notes
+
+### 2026-11-20 (agent-review1, `wave55-review1`): M16-file-review-T1, the core, D-0186
+
+Seven byte-identical levers in `search.ml`, `store.ml` and `engine.ml` (tables per file in D-0186). The big ones were O(d^2) literal-list scans on the conflict path (soccer -65 %, roster -34 %, opd and grid -10 to -18 % per node), the lane median moves -1.8 % (release, no proof) and the codes -1.3 to -1.8 %. Gate 2 on `59dc6e6` green: `make check` rc 0, 207 models x 4 artefacts equal to main's binary, lane 324/324, debug 311/311, scaling ok (gate 1 on `e97f613` was over on rcpsp_11, fixed by `59dc6e6`).
+Left with numbers in D-0186 section 5: the seed heap (5.8 % of the codes' instructions, a two-level bitset would pop in the same order), the per-run dispatch, and requests to T2/T3 (`Store.var_named`'s string hash in its callers, `Domain.value`'s `Some`, and six `member` models that stop under BAGUETTE_DEBUG on main too).
 
 ### 2026-11-20 (orchestrator): gates 73 to 76 green; member, release, e2e T1-T5, symmetry T1-T2, learnprop merged
 

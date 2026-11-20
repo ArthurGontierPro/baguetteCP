@@ -7,7 +7,15 @@
    Invariant I-T1 is the one worth testing directly: backtrack_to restores every domain
    to exactly its state when the level was opened. The reason it holds here is that
    [Domain.t] is immutable - an entry keeps the old value, and restoring is a single
-   array write with no aliasing between the saved and the current domain. *)
+   array write with no aliasing between the saved and the current domain.
+
+   M16-file-review-T1 (D-0186): a [Debug.check] on a path taken per trail entry ([apply],
+   [push_entry], [check_agreement], [remover]) sits under [if Debug.enabled]. Its
+   predicate is a closure over the entry's values, and a closure with free variables is
+   allocated at every call whether or not anything checks it: three per entry, about as
+   many words as the entry itself. The bound walks of [hi_below] and [lo_at_least] are
+   walks of the newest moves then binary searches over the bound histories, and
+   [created_domain] reads an array of the created domains (see each). *)
 
 module Lit = Baguette_proof.Lit
 
@@ -155,6 +163,9 @@ type entry = {
    level (I-D3) and the array is restored on backtrack. *)
 type t = {
   domains : Domain.t array;
+  initial : Domain.t array;
+      (* M16-file-review-T1 (D-0186): the domains the store was created with, read by
+         [created_domain]. A copy of the array, sharing the immutable records. *)
   names : string array;
   (* M6-T11 (D-0085): the name -> variable index behind [var_named] and [name_rep],
      built on first use rather than in [create], because [Engine.oracle_accepts] builds a
@@ -310,6 +321,7 @@ let create ~names ~domains =
   let nv = Stdlib.max 1 (Array.length domains) in
   {
     domains = Array.copy domains;
+    initial = Array.copy domains;
     names;
     by_name;
     reasons = Explanation.Arena.create ();
@@ -359,8 +371,25 @@ let hi_support t v = t.hi_sup.(Var.to_int v)
    Each entry records the support of the bound BEFORE it ([sup_lo]/[sup_hi]), so the
    crossing is found by walking one bound's own chain of moves back from its support
    while the entry's [old] bound was already past [k]: O(moves of [v] on the trail),
-   and only asked for literals that are false now. *)
-let hi_below t v k =
+   and only asked for literals that are false now.
+
+   M16-file-review-T1 (D-0186): that walk now runs over the bound's HISTORY
+   ([hi_hist]/[lo_hist], below), its newest [walk_first] steps one by one and the rest
+   by binary search, O(min(steps, log moves)). The chain the walk followed IS
+   the history read backwards: [apply] pushes a position there exactly when it writes
+   [hi_sup] (the next entry's [sup_hi]), [undo_to] pops it exactly when it restores it.
+   Along the history the [old] upper bounds do not increase -- the first is the
+   declared bound, each later one the [now] of the entry before, and no entry outside
+   the history moves the bound -- so "[old] is already below [k]" is false, then true.
+   The walk stopped at the newest entry where it is false, or found none; past its first
+   steps, the search finds the first entry where it is true and answers its predecessor,
+   or [no_support] when there is none. The same answer, even for a literal that is not false now (the
+   walk then stops at once on the current support, the history's top). Symmetric on the
+   lower bound. On 2021 perfect_square the walk was 7 % of the instructions: its
+   learned clauses watch literals falsified many moves ago. The walks stay, as
+   [hi_below_walk] and [lo_at_least_walk], for the BAGUETTE_DEBUG cross-check and
+   test_core.ml's oracle. *)
+let hi_below_walk t v k =
   let rec back p =
     if p = no_support then p
     else
@@ -369,7 +398,7 @@ let hi_below t v k =
   in
   back (hi_support t v)
 
-let lo_at_least t v k =
+let lo_at_least_walk t v k =
   let rec back p =
     if p = no_support then p
     else
@@ -377,6 +406,55 @@ let lo_at_least t v k =
       if Domain.lo e.old >= k then back e.sup_lo else p
   in
   back (lo_support t v)
+
+(* The newest [walk_first] moves are tested one by one, newest first, before the binary
+   search takes the rest: a literal falsified a move or two ago is then found in a step or
+   two, as the walk found it, and only an old crossing pays the logarithm. The binary search
+   alone cost 2013 rcpsp_11 0.56 % more instructions per node than the walk, whose crossings
+   are recent, and grew with its histories; the walk alone is perfect_square's 7 %. *)
+let walk_first = 4
+
+(* [h.(j)] for the largest [j <= top] whose [old] upper bound is at least [k], or
+   [no_support]. *)
+let rec hi_crossing t h k top steps =
+  if top < 0 then no_support
+  else if Domain.hi t.trail.(h.(top)).old >= k then h.(top)
+  else if steps > 1 then hi_crossing t h k (top - 1) (steps - 1)
+  else
+    (* every position from [top] up is below [k]: the first j in [0, top) that is *)
+    let lo = ref 0 and hi = ref top in
+    while !lo < !hi do
+      let mid = (!lo + !hi) lsr 1 in
+      if Domain.hi t.trail.(h.(mid)).old < k then hi := mid else lo := mid + 1
+    done;
+    if !lo = 0 then no_support else h.(!lo - 1)
+
+let rec lo_crossing t h k top steps =
+  if top < 0 then no_support
+  else if Domain.lo t.trail.(h.(top)).old < k then h.(top)
+  else if steps > 1 then lo_crossing t h k (top - 1) (steps - 1)
+  else
+    let lo = ref 0 and hi = ref top in
+    while !lo < !hi do
+      let mid = (!lo + !hi) lsr 1 in
+      if Domain.lo t.trail.(h.(mid)).old >= k then hi := mid else lo := mid + 1
+    done;
+    if !lo = 0 then no_support else h.(!lo - 1)
+
+let hi_below t v k =
+  let i = Var.to_int v in
+  let r = hi_crossing t t.hi_hist.(i) k (t.hi_hn.(i) - 1) walk_first in
+  if Debug.enabled && r <> hi_below_walk t v k then
+    failwith "invariant violated: D-0186: hi_below's history search agrees with the walk";
+  r
+
+let lo_at_least t v k =
+  let i = Var.to_int v in
+  let r = lo_crossing t t.lo_hist.(i) k (t.lo_hn.(i) - 1) walk_first in
+  if Debug.enabled && r <> lo_at_least_walk t v k then
+    failwith
+      "invariant violated: D-0186: lo_at_least's history search agrees with the walk";
+  r
 
 let trail_length t = t.trail_len
 let reasons t = t.reasons
@@ -473,8 +551,9 @@ let deriving_ahead t f =
 (* ------------------------------------------------------------- trail growth *)
 
 let push_entry t e =
-  Debug.check "M6-T15: an entry is pushed at its own [pos]" (fun () ->
-      e.pos = t.trail_len);
+  if Debug.enabled then
+    Debug.check "M6-T15: an entry is pushed at its own [pos]" (fun () ->
+        e.pos = t.trail_len);
   if t.trail_len = Array.length t.trail then (
     let bigger = Array.make (2 * Array.length t.trail) dummy_entry in
     Array.blit t.trail 0 bigger 0 t.trail_len;
@@ -737,8 +816,9 @@ let decision_concludes_nothing (j : Reason.justified) =
    breakpoint. Built only on the failing path, so the enabled-and-passing cost is the
    predicate alone. *)
 let check_agreement t (j : Reason.justified) =
-  Debug.check "D-0124: a deferred reason's [empty] agrees with its materialisation"
-    (fun () -> Reason.is_empty j.reason = (Reason.facts j.reason = []));
+  if Debug.enabled then
+    Debug.check "D-0124: a deferred reason's [empty] agrees with its materialisation"
+      (fun () -> Reason.is_empty j.reason = (Reason.facts j.reason = []));
   if Debug.enabled && not (agreement_holds t j) then
     failwith
       (Printf.sprintf
@@ -857,12 +937,13 @@ let apply t v (r : Domain.result) (j : Reason.justified) =
   | Domain.Changed d ->
       let i = Var.to_int v in
       let old = t.domains.(i) in
-      Debug.check "I-D3: domains only shrink" (fun () ->
-          Domain.lo d >= Domain.lo old
-          && Domain.hi d <= Domain.hi old
-          && Domain.size d < Domain.size old);
-      Debug.check "I-D1: a stored domain is non-empty" (fun () ->
-          Domain.lo d <= Domain.hi d);
+      if Debug.enabled then (
+        Debug.check "I-D3: domains only shrink" (fun () ->
+            Domain.lo d >= Domain.lo old
+            && Domain.hi d <= Domain.hi old
+            && Domain.size d < Domain.size old);
+        Debug.check "I-D1: a stored domain is non-empty" (fun () ->
+            Domain.lo d <= Domain.hi d));
       check_agreement t j;
       check_conclusion t v ~old ~now:d j;
       let why = Explanation.Arena.add t.reasons why in
@@ -1132,8 +1213,9 @@ let remover t ~before ~var value =
       let e = t.trail.(at) in
       if at < before && Domain.mem e.old value then Some e else None
   in
-  Debug.check "M6-T14: remover's history agrees with the trail scan" (fun () ->
-      Option.equal ( == ) r (remover_scan t ~before ~var value));
+  if Debug.enabled then
+    Debug.check "M6-T14: remover's history agrees with the trail scan" (fun () ->
+        Option.equal ( == ) r (remover_scan t ~before ~var value));
   r
 
 (* The values [Domain.settle] walked a bound over on its way to [cur]: the maximal run of
@@ -1253,10 +1335,24 @@ let hi_support_at h v =
 
 (* The domain [v] was created with: the [old] of its oldest entry, or its current domain
    while it has none. Only needed when a bound has no support within the history, i.e.
-   it still stood where the store created it. *)
-let created_domain t v =
+   it still stood where the store created it.
+
+   M16-file-review-T1 (D-0186): read from [initial], one load where the history took four
+   dependent ones (2 % of 2011 roster's instructions, whose reasons cite many declared
+   bounds). The two agree: only [apply] and [undo_to] write [domains], so before the
+   oldest live entry on [v] was pushed nothing live had moved [v], every popped entry
+   had restored what it found, and that entry's [old] is the created domain; with no
+   live entry the current domain is. [created_domain_by_history] is the old reading,
+   kept for the BAGUETTE_DEBUG cross-check and test_core.ml. *)
+let created_domain_by_history t v =
   let i = Var.to_int v in
   if t.all_hn.(i) > 0 then t.trail.(t.all_hist.(i).(0)).old else t.domains.(i)
+
+let created_domain t v =
+  let d = t.initial.(Var.to_int v) in
+  if Debug.enabled && not (Domain.equal d (created_domain_by_history t v)) then
+    failwith "invariant violated: D-0186: the created domain is the history's oldest";
+  d
 
 let lo_at h v =
   let q = lo_support_at h v in

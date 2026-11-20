@@ -1476,6 +1476,33 @@ let test_bound_history () =
           done
         done)
       [ x; y; x'; z ];
+    (* D-0186: [Store.hi_below] and [lo_at_least] (binary search over the bound history)
+       against the walks along [sup_hi]/[sup_lo] they replaced, for every variable and
+       every threshold, false literals and true ones alike. *)
+    List.iter
+      (fun var ->
+        for k = -1 to 11 do
+          let a = Store.hi_below s var k and b = Store.hi_below_walk s var k in
+          let c = Store.lo_at_least s var k and d = Store.lo_at_least_walk s var k in
+          if a <> b || c <> d then (
+            ok := false;
+            bad :=
+              Printf.sprintf "%s k %d: hi_below %d walk %d, lo_at_least %d walk %d"
+                (Store.name s var) k a b c d)
+        done)
+      [ x; y; x'; z ];
+    (* D-0186: [Store.created_domain] (an array of the created domains) against the
+       reading through the history it replaced. *)
+    List.iter
+      (fun var ->
+        if
+          not
+            (Domain.equal (Store.created_domain s var)
+               (Store.created_domain_by_history s var))
+        then (
+          ok := false;
+          bad := Printf.sprintf "%s: created_domain" (Store.name s var)))
+      [ x; y; x'; z ];
     check
       (Printf.sprintf "bound history = trail scan, every case (%s)%s" tag
          (if !ok then "" else " -- " ^ !bad))
@@ -1528,6 +1555,44 @@ let test_bound_history () =
   all_agree "re-pushed after undo";
   Store.backtrack_to s 0;
   all_agree "back at level 0"
+
+(* D-0186: [Store.hi_below] and [lo_at_least] walk the newest few moves of a bound and
+   binary-search the rest of its history, so the history has to be longer than that walk
+   for the search to be exercised at all: a 0..29 variable whose bounds each move once per
+   level over 12 levels, against the walk along [sup_hi]/[sup_lo], for every threshold,
+   after every push and after every undo. *)
+let test_bound_history_long () =
+  let s = Store.create ~names:[| "x" |] ~domains:[| Domain.make 0 29 |] in
+  let why = Reason.because ~concludes:None Reason.none (Explanation.model_row 1) in
+  let x = Var.of_int 0 in
+  let ok = ref true and bad = ref "" in
+  let agree tag =
+    for k = -1 to 31 do
+      let a = Store.hi_below s x k and b = Store.hi_below_walk s x k in
+      let c = Store.lo_at_least s x k and d = Store.lo_at_least_walk s x k in
+      if a <> b || c <> d then (
+        ok := false;
+        bad :=
+          Printf.sprintf "%s k %d: hi_below %d walk %d, lo_at_least %d walk %d" tag k a b
+            c d)
+    done
+  in
+  agree "empty";
+  for l = 1 to 12 do
+    Store.new_level s;
+    ignore (Store.set_lo s x l why);
+    agree (Printf.sprintf "level %d lo" l);
+    ignore (Store.set_hi s x (29 - l) why);
+    agree (Printf.sprintf "level %d hi" l)
+  done;
+  for l = 12 downto 1 do
+    Store.backtrack s;
+    agree (Printf.sprintf "undo to %d" (l - 1))
+  done;
+  check
+    (Printf.sprintf "long bound history: hi_below/lo_at_least = the walk%s"
+       (if !ok then "" else " -- " ^ !bad))
+    !ok
 
 (* M6-T18: the trail's LOW-WATER MARK, per reader. [Engine.propagate] needs to know how
    far a backtrack reached since it last looked, and [trail_length] cannot say: a pop
@@ -1637,6 +1702,7 @@ let () =
       test_view_constants ();
       test_var_named_index ();
       test_bound_history ();
+      test_bound_history_long ();
       test_low_water ();
       test_level_start_count ();
       if !failures > 0 then (

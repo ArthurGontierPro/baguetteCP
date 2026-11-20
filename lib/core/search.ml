@@ -95,11 +95,41 @@
    the root produces, when the whole search space is exhausted, the empty clause --
    an unconditional contradiction -- which is exactly the id [conclusion UNSAT] cites
    (invariant I-S2: the proof independently establishes it, not merely the solver's
-   own "I looked everywhere" bookkeeping). *)
+   own "I looked everywhere" bookkeeping).
+
+   ---------------------------------------------------------------------------
+   M16-file-review-T1 (D-0186): no literal set is a list
+   ---------------------------------------------------------------------------
+
+   A conflict handles sets of decision literals: the union of two child nogoods
+   ([combine_nogoods]), the decisions a settle bridge protects ([bridges]) and the
+   nogood literals kept for them ([dfs]). Each was a list asked [List.exists Lit.equal],
+   so a conflict at depth [d] cost O(d^2) literal comparisons, each a string compare of
+   two variable names; on the lane that was a third of 2011 roster's instructions and
+   half of 2018 soccer's (D-0186 has the profiles). The rule: membership in such a set
+   is asked of a [Lit_tbl], keyed through [Lit.equal] itself, so the predicate is the
+   one the list scan applied, and every list the old code returned is still built, in
+   the same order, so no caller sees a difference.
+
+   And a walk made at every node allocates nothing per element: the staged order of an
+   annotated search ([sequence]) gathers a phase's live variables in one pass into a
+   scratch array and copies out the live prefix, the array [Array.of_seq] gave. A
+   [Debug.check] made per node or per conflict sits under [if Debug.enabled], so that
+   its closure (and in [bridges] its [Printf] message) is not built when nothing checks
+   it. *)
 
 module Lit = Baguette_proof.Lit
 module Writer = Baguette_proof.Writer
 module Encoding = Baguette_proof.Encoding
+
+(* D-0186: a literal-keyed table through [Lit.equal], never the polymorphic compare (the
+   same table as lib/core/reduce.ml's and pb_analysis.ml's, D-0144). *)
+module Lit_tbl = Hashtbl.Make (struct
+  type t = Lit.t
+
+  let equal = Lit.equal
+  let hash = Hashtbl.hash
+end)
 
 type assignment = (Var.t * int) list
 type outcome = Sat of assignment | Unsat
@@ -1141,6 +1171,9 @@ let staged_of (o : order) : staged option =
 let sequence_phases : (order, phase list) Ephemeron.K1.Bucket.t =
   Ephemeron.K1.Bucket.make ()
 
+(* D-0186: [full] builds a table of every candidate per call, O(variables) per node once
+   no phase has a live variable and [dfs] falls back on it, the order of the [unfixed]
+   array it is handed. The staged form below answers every node where a phase is live. *)
 let sequence ?(fallback = spec_order) (phases : phase list) : order =
   let full store cands =
     let live = Hashtbl.create (2 * Array.length cands) in
@@ -1164,19 +1197,37 @@ let sequence ?(fallback = spec_order) (phases : phase list) : order =
      what it always did with [unfixed store] -- solution if empty, [full] otherwise, which
      reaches [fallback] with that same array. A variable outside the store is never a
      candidate of [unfixed], so it is not live here either. *)
+  let scratch = ref [||] in
   let staged store =
     let n = Store.n_vars store in
     let is_live v =
       let i = Var.to_int v in
       i >= 0 && i < n && not (Domain.is_fixed (Store.get store v))
     in
+    (* D-0186: the live variables of a phase, in the phase's order, as one pass into a
+       scratch array and one copy of the live prefix. It was [Array.of_seq (Seq.filter
+       ...)], a [Seq] cell, a closure call and a list cell per variable at every node:
+       8 % of 2024 monitor-placement's instructions, whose phase is every Boolean of
+       the model. The array is the one [Array.of_seq] built. The scratch is this order's
+       own and is copied out before [p_var] or [p_val] runs, so nothing they do can
+       see it. *)
     let rec go = function
       | [] -> None
       | ph :: rest -> (
-          let sub = Array.of_seq (Seq.filter is_live (Array.to_seq ph.p_vars)) in
-          match Array.length sub with
+          let vars = ph.p_vars in
+          let len = Array.length vars in
+          if Array.length !scratch < len then scratch := Array.make len (Var.of_int 0);
+          let buf = !scratch in
+          let k = ref 0 in
+          for j = 0 to len - 1 do
+            let v = vars.(j) in
+            if is_live v then (
+              buf.(!k) <- v;
+              incr k)
+          done;
+          match !k with
           | 0 -> go rest
-          | _ -> Some (ph.p_val store (ph.p_var store sub)))
+          | k -> Some (ph.p_val store (ph.p_var store (Array.sub buf 0 k))))
     in
     go phases
   in
@@ -1762,17 +1813,28 @@ let minimise stats policy (xs : nogood) : nogood =
    of both. It is [rup] for the checker because both parents are still live -- which is
    why the wipe comes after (D-0018 point 4). Deduplicated by literal, then ordered by
    descending level, so the result is a function of the two clauses and not of the order
-   they were built in (test (f)). *)
+   they were built in (test (f)).
+
+   D-0186: the deduplication keeps the FIRST pair of each literal, in [joined]'s order,
+   as the fold over a list did ([List.exists Lit.equal] on the pairs kept so far, then
+   [acc @ [pair]]); the kept literals are a [Lit_tbl] and the pairs are consed and
+   reversed once, so a combine at depth [d] is O(d) and not O(d^2) string compares. The
+   sort compares levels with [Int.compare], which on ints is the [Stdlib.compare] it
+   replaces. *)
 let combine_nogoods stats policy (a : nogood) (b : nogood) ~lvl : nogood =
   let joined = List.filter (fun (_, l) -> l <> lvl) (a @ b) in
+  let kept = Lit_tbl.create 64 in
   let deduped =
-    List.fold_left
-      (fun acc (l, i) ->
-        if List.exists (fun (m, _) -> Lit.equal m l) acc then acc else acc @ [ (l, i) ])
-      [] joined
+    List.rev
+      (List.fold_left
+         (fun acc ((l, _) as pair) ->
+           if Lit_tbl.mem kept l then acc
+           else (
+             Lit_tbl.replace kept l ();
+             pair :: acc))
+         [] joined)
   in
-  minimise stats policy
-    (List.stable_sort (fun (_, i) (_, j) -> Stdlib.compare j i) deduped)
+  minimise stats policy (List.stable_sort (fun (_, i) (_, j) -> Int.compare j i) deduped)
 
 (* ------------------------------------------------------------------------------ dfs *)
 
@@ -1785,13 +1847,14 @@ let combine_nogoods stats policy (a : nogood) (b : nogood) ~lvl : nogood =
    Under the audit the id is checked to be live as well, which catches the same mistake
    made one call earlier. *)
 let wipe_after_nogood ctx ~lvl ~nogood =
-  Debug.check
-    "D-0018.4: the nogood is emitted, at the parent level, before the branch's level is \
-     wiped" (fun () ->
-      Writer.current_level ctx.Justify.writer < lvl
-      &&
-      let w = ctx.Justify.writer in
-      (not (Writer.auditing w)) || Writer.is_live w nogood);
+  if Debug.enabled then
+    Debug.check
+      "D-0018.4: the nogood is emitted, at the parent level, before the branch's level \
+       is wiped" (fun () ->
+        Writer.current_level ctx.Justify.writer < lvl
+        &&
+        let w = ctx.Justify.writer in
+        (not (Writer.auditing w)) || Writer.is_live w nogood);
   Justify.wipe_level ctx lvl
 
 (* ------------------------------------------------------------ the root conflict
@@ -2014,11 +2077,12 @@ let decision_entries store =
         else go m ((m, Store.trail_entry store m) :: acc) rest
   in
   let entries = go (-1) [] (Store.level_marks store) in
-  Debug.check "D-0152: decision_entries over the marks agrees with the trail scan"
-    (fun () ->
-      List.equal
-        (fun (i, (e : Store.entry)) (j, e') -> i = j && e == e')
-        entries (decision_entries_scan store));
+  if Debug.enabled then
+    Debug.check "D-0152: decision_entries over the marks agrees with the trail scan"
+      (fun () ->
+        List.equal
+          (fun (i, (e : Store.entry)) (j, e') -> i = j && e == e')
+          entries (decision_entries_scan store));
   entries
 
 (* Did this push land somewhere strictly stronger than its literal names, and if so on
@@ -2103,14 +2167,26 @@ let bridges (ctx : Justify.ctx) trace stats store (decisions : Lit.t list) : Lit
      disequality's .opb rows (route 2), both of which need those decisions on the trail.
      So a nogood that drops one of them stops entailing this line, and its [rup] fails
      at the nogood rather than here. The caller unions this back into the nogood; see
-     [dfs]'s conflict arm. *)
+     [dfs]'s conflict arm.
+
+     D-0186: [protect (l :: ancestors)] scanned every ancestor against the list, O(d^2)
+     string compares per settled decision at depth [d]. Membership is [seen] now, and
+     only the literals walked since the previous [protect] ([fresh], newest first) are
+     offered: every older ancestor was offered then, so it is in [seen] and the scan
+     skipped it. [l] itself is offered at its own call and goes into [fresh] like any
+     decision, where [seen] skips it next time. So each literal is prepended at the
+     same call and in the same order as before, and the list returned is the same. *)
   let protected = ref [] in
+  let seen = Lit_tbl.create 16 in
   let protect ls =
     List.iter
       (fun l ->
-        if not (List.exists (Lit.equal l) !protected) then protected := l :: !protected)
+        if not (Lit_tbl.mem seen l) then (
+          Lit_tbl.replace seen l ();
+          protected := l :: !protected))
       ls
   in
+  let fresh = ref [] in
   let rec go entries rev_decisions ancestors =
     match (entries, rev_decisions) with
     | [], _ | _, [] -> ()
@@ -2136,12 +2212,13 @@ let bridges (ctx : Justify.ctx) trace stats store (decisions : Lit.t list) : Lit
                      because [Domain.settle] walked it over something. If that run is
                      empty the two halves of this module disagree about what a settle is,
                      and the bridge below would be a line with nothing under it. *)
-                  Debug.check
-                    (Printf.sprintf
-                       "M1-T66: %s settled onto %s, so the push crossed at least \
-                        one                         hole"
-                       (Lit.to_string l) (Lit.to_string claim))
-                    (fun () -> holes <> []);
+                  if Debug.enabled then
+                    Debug.check
+                      (Printf.sprintf
+                         "M1-T66: %s settled onto %s, so the push crossed at least \
+                          one                         hole"
+                         (Lit.to_string l) (Lit.to_string claim))
+                      (fun () -> holes <> []);
                   let lits = claim :: Lit.negate l :: List.map Lit.negate ancestors in
                   (* D-0152 (D-0140 J6): the origin is a thunk, rendered only by the
                      writer's audit or the mutation knob, as [Trace]'s are (D-0145). *)
@@ -2149,7 +2226,8 @@ let bridges (ctx : Justify.ctx) trace stats store (decisions : Lit.t list) : Lit
                     Printf.sprintf "M1-T55: %s settled onto %s" (Lit.to_string l)
                       (Lit.to_string claim)
                   in
-                  protect (l :: ancestors);
+                  protect (l :: !fresh);
+                  fresh := [];
                   let cid = Justify.emit_rup_clause_lazy ctx ~origin lits in
                   let level = Writer.current_level ctx.Justify.writer in
                   let cited, unnamed =
@@ -2179,6 +2257,7 @@ let bridges (ctx : Justify.ctx) trace stats store (decisions : Lit.t list) : Lit
                       br_cid = cid;
                       br_level = level;
                     }));
+          fresh := l :: !fresh;
           go es ls (l :: ancestors)
   in
   go (decision_entries store) (List.rev decisions) [];
@@ -2547,7 +2626,11 @@ let apply_globals store stats : Store.conflict option =
   in
   go stats.globals_fwd
 
-(* File a learned unit, newest last in [globals_fwd] and newest first in [globals_rev]. *)
+(* File a learned unit, newest last in [globals_fwd] and newest first in [globals_rev].
+
+   D-0186: [push_global]'s append and [register_learned]'s duplicate test are O(units)
+   per learned unit, O(units^2) over a run. Left so on purpose: a unit is a learned clause
+   of width one, and D-0140's instances learn 6 to 27 of them in a run. *)
 let push_global stats g =
   stats.globals_rev <- g :: stats.globals_rev;
   stats.globals_fwd <- stats.globals_fwd @ [ g ]
@@ -2878,11 +2961,12 @@ let rec learn_at_conflict engine store ctx trace stats cfg (c : Store.conflict) 
         stats.i_s4_supports <- stats.i_s4_supports + List.length ss;
         stats.i_s4_crossings <- stats.i_s4_crossings + List.length (Learn.crossings ss);
         stats.i_s4_broken_rev <- List.rev_append broken stats.i_s4_broken_rev;
-        Debug.check
-          (match broken with
-          | m :: _ -> m
-          | [] -> "I-S4: the learned clause's supports are live at its derivation")
-          (fun () -> broken = []);
+        if Debug.enabled then
+          Debug.check
+            (match broken with
+            | m :: _ -> m
+            | [] -> "I-S4: the learned clause's supports are live at its derivation")
+            (fun () -> broken = []);
         let cid = Learn.introduce ctx l in
         (match stats.strat with
         | Some st -> (
@@ -3073,10 +3157,20 @@ and dfs engine store ctx trace stats cfg (order : order) (decisions : Lit.t list
                        table of its levels, where it was a polymorphic [List.mem] per
                        nogood literal (depth squared per conflict). Same predicate. *)
                     let in_ls = level_set ls in
+                    (* D-0186: "[lit] is the negation of a protected literal" is
+                       [Lit.equal (Lit.negate lit) p] for some [p] ([negate] flips the
+                       polarity and nothing else), asked of a table of [protected] where it
+                       was a scan of it per nogood literal. *)
+                    let negated_protected =
+                      match protected with
+                      | [] -> fun _ -> false
+                      | ps ->
+                          let tbl = Lit_tbl.create 16 in
+                          List.iter (fun p -> Lit_tbl.replace tbl p ()) ps;
+                          fun lit -> Lit_tbl.mem tbl (Lit.negate lit)
+                    in
                     let kept (lit, l) =
-                      in_ls l
-                      || (not cfg.break_bridge_levels)
-                         && List.exists (fun p -> Lit.equal lit (Lit.negate p)) protected
+                      in_ls l || ((not cfg.break_bridge_levels) && negated_protected lit)
                     in
                     minimise stats cfg.policy (List.filter kept all)
               in
@@ -3166,6 +3260,8 @@ and branch_split engine store ctx trace stats cfg order decisions (dec : decisio
   (* M1-T36. One decision taken, and this decision sits one deeper than the ancestors
      it was handed. *)
   stats.decisions <- stats.decisions + 1;
+  (* D-0186: O(depth) per node, a walk of one list cell per open level, which no profile
+     of the lane shows. *)
   let depth = List.length decisions + 1 in
   if depth > stats.max_depth then stats.max_depth <- depth;
   Store.new_level store;
@@ -3200,8 +3296,9 @@ and branch_split engine store ctx trace stats cfg order decisions (dec : decisio
   | NFail (ng1, _cid1) -> (
       Store.new_level store;
       let lvl2 = Store.level store in
-      Debug.check "search: reopened level matches the one just closed" (fun () ->
-          lvl2 = lvl);
+      if Debug.enabled then
+        Debug.check "search: reopened level matches the one just closed" (fun () ->
+            lvl2 = lvl);
       Writer.set_level ctx.Justify.writer lvl;
       stats.nodes <- stats.nodes + 1;
       let r2 = second store engine ctx trace stats cfg order decisions v k lit in
@@ -3221,9 +3318,10 @@ and branch_split engine store ctx trace stats cfg order decisions (dec : decisio
           close_level ctx ~lvl ~nogood:cid2;
           NFail (ng2, cid2)
       | NFail (ng2, cid2) ->
-          Debug.check
-            "search: each child's nogood names its own decision level before they resolve"
-            (fun () -> mentions_level ng1 lvl && mentions_level ng2 lvl);
+          if Debug.enabled then
+            Debug.check
+              "search: each child's nogood names its own decision level before they \
+               resolve" (fun () -> mentions_level ng1 lvl && mentions_level ng2 lvl);
           ignore cid2;
           let combined = combine_nogoods stats cfg.policy ng1 ng2 ~lvl in
           Writer.set_level ctx.Justify.writer (lvl - 1);
@@ -3456,12 +3554,13 @@ and branch_assign engine store ctx trace stats cfg order decisions (a : assign) 
       dfs engine store ctx trace stats cfg order decisions
 
 and check_decision_landed store lvl outcome =
-  Debug.check "D-0018: a decision is the first trail entry of its own level" (fun () ->
-      (match (outcome : Store.outcome) with
-      | Store.Changed -> true
-      | Store.Unchanged | Store.Conflict _ -> false)
-      && Store.level store = lvl
-      && Store.is_level_start store (Store.trail_length store - 1))
+  if Debug.enabled then
+    Debug.check "D-0018: a decision is the first trail entry of its own level" (fun () ->
+        (match (outcome : Store.outcome) with
+        | Store.Changed -> true
+        | Store.Unchanged | Store.Conflict _ -> false)
+        && Store.level store = lvl
+        && Store.is_level_start store (Store.trail_length store - 1))
 
 (* The low side, [x <= k] -- the decision literal is [~lit]. With [k = lo] (docs/SPEC.md
    3.4's indomain_min) this fixes [x = lo], which is what it has always done.
