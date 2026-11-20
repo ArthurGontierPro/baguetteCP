@@ -402,14 +402,50 @@ module Learned_clause = struct
      so a later pruning by it can be woken at another trail entry and land at another place
      in the propagation order (D-0173 section 3). OFF by default in [make]; [Search] passes
      its [config.rest_satisfied]. *)
+  (* M16-file-review-T2 (D-0190): each watch's literal is ALSO kept flat in the record, its
+     variable as an int ([x1]/[x2], [-1] for no literal), its threshold and its polarity,
+     because [ask] reads nothing else and is asked once per wake of every clause watching
+     the moved variable (27 % of 2013 rcpsp_11's samples were [ask] itself, a chain of
+     four dependent loads: the record, [atoms], the atom, the domain). They are a COPY of
+     [atoms.(w1)] and [atoms.(w2)], written only by [set_watches], which is the one place
+     [w1] and [w2] are written; a test that places the watches by hand calls it too. *)
   type nonrec t = {
     pb : Pb.t;
     atoms : Pb.atom array;
     mutable w1 : int;
     mutable w2 : int;
+    mutable x1 : int;
+    mutable k1 : int;
+    mutable p1 : bool;
+    mutable x2 : int;
+    mutable k2 : int;
+    mutable p2 : bool;
     rest_satisfied : bool;
     mutable rest : int;
   }
+
+  (* Place the two watches at [w1] and [w2], with their flat copies (the record's header);
+     a watch that does not move keeps the copy it has. An index outside [atoms] (the [-1]
+     [rewatch]'s [best] answers for a one-literal clause with its literal false) gets
+     [x = -1], which no variable is. *)
+  let set_watches t w1 w2 =
+    let n = Array.length t.atoms in
+    if w1 <> t.w1 then (
+      t.w1 <- w1;
+      if w1 >= 0 && w1 < n then (
+        let a = t.atoms.(w1) in
+        t.x1 <- Var.to_int a.Pb.x;
+        t.k1 <- a.Pb.k;
+        t.p1 <- a.Pb.positive)
+      else t.x1 <- -1);
+    if w2 <> t.w2 then (
+      t.w2 <- w2;
+      if w2 >= 0 && w2 < n then (
+        let a = t.atoms.(w2) in
+        t.x2 <- Var.to_int a.Pb.x;
+        t.k2 <- a.Pb.k;
+        t.p2 <- a.Pb.positive)
+      else t.x2 <- -1)
 
   let name = "learned_clause"
   let consistency = consistency
@@ -469,8 +505,7 @@ module Learned_clause = struct
     let keep i = i >= 0 && i < n && not (false_at store t i) in
     let w1 = if keep t.w1 then t.w1 else best ~not_:t.w2 in
     let w2 = if keep t.w2 && t.w2 <> w1 then t.w2 else best ~not_:w1 in
-    t.w1 <- w1;
-    t.w2 <- (if w2 >= 0 then w2 else w1)
+    set_watches t w1 (if w2 >= 0 then w2 else w1)
 
   (* THE PRECONDITION of the two watches (D-0142 section 5): at most one literal per
      (variable, polarity). Two rungs of one variable in one direction, `x >= 3 \/ x >= 5`,
@@ -498,7 +533,24 @@ module Learned_clause = struct
     let n = Array.length atoms in
     Debug.check "Learned_clause: one literal per (variable, polarity) (D-0142 section 5)"
       (fun () -> one_per_slot atoms);
-    { pb; atoms; w1 = 0; w2 = (if n > 1 then 1 else 0); rest_satisfied; rest = -1 }
+    let t =
+      {
+        pb;
+        atoms;
+        w1 = -1;
+        w2 = -1;
+        x1 = -1;
+        k1 = 0;
+        p1 = false;
+        x2 = -1;
+        k2 = 0;
+        p2 = false;
+        rest_satisfied;
+        rest = -1;
+      }
+    in
+    set_watches t 0 (if n > 1 then 1 else 0);
+    t
 
   let true_at store t i = Pb.holds store t.atoms.(i)
 
@@ -506,12 +558,19 @@ module Learned_clause = struct
      without a local closure (M6-T22): this is asked once per wake, and the closure the
      first version built per call was an allocation on the engine's hottest loop. A
      RESTING clause declines (M11-complexity-T17): it is satisfied, or a backtrack has
-     released it and the engine seeds it anyway. *)
+     released it and the engine seeds it anyway.
+     M16-file-review-T2 (D-0190): from the watches' flat copies ([set_watches]), which is
+     [false_at store t t.w1] on the same domain: [x1] is [atoms.(w1)]'s variable, which is
+     [v], and the test is [Pb.falsified]'s on [k1] and [p1]. *)
+  let watch_false store v positive k =
+    let d = Store.get store v in
+    if positive then d.Domain.hi < k else d.Domain.lo >= k
+
   let ask t store v =
     let x = Var.to_int v in
     t.rest < 0
-    && ((Var.to_int t.atoms.(t.w1).Pb.x = x && false_at store t t.w1)
-       || (Var.to_int t.atoms.(t.w2).Pb.x = x && false_at store t t.w2))
+    && ((t.x1 = x && watch_false store v t.p1 t.k1)
+       || (t.x2 = x && watch_false store v t.p2 t.k2))
 
   (* M6-T22 / D-0138: the variables of the two watches. [ask] answers [false] for every
      other variable whatever the store holds, which is [Propagator.inst_watched]'s
@@ -528,8 +587,14 @@ module Learned_clause = struct
     if t.rest >= 0 then (watch_of t.atoms.(t.rest), Propagator.rests)
     else (watch_of t.atoms.(t.w1), watch_of t.atoms.(t.w2))
 
-  (* The advisor [Propagator.pack] takes: both halves of one object. *)
-  let advise t = { Propagator.ask = ask t; watched = Some (watched t) }
+  (* The advisor [Propagator.pack] takes: both halves of one object. Each a closure of
+     its own arity over [t] (M16-file-review-T2, D-0190): [ask t], a partial application,
+     made every ask go through OCaml's currying stub before reaching [ask]. *)
+  let advise t =
+    {
+      Propagator.ask = (fun store v -> ask t store v);
+      watched = Some (fun () -> watched t ());
+    }
 
   (* [rewatch] after a run [Pb.quiet] answered (M11-complexity-T3, D-0142, E2 (a)), from
      what its walk found instead of a walk of its own. The store has not moved since
@@ -544,8 +609,7 @@ module Learned_clause = struct
     let keep i = i >= 0 && i < n && not (false_at store t i) in
     let w1 = if keep t.w1 then t.w1 else best ~not_:t.w2 in
     let w2 = if keep t.w2 && t.w2 <> w1 then t.w2 else best ~not_:w1 in
-    t.w1 <- w1;
-    t.w2 <- w2
+    set_watches t w1 w2
 
   (* M6-T22 / D-0138: nearly every run of a learned clause is a watched literal falsified
      with another literal still free -- the run a two-watched-literal solver answers by
