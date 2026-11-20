@@ -21445,3 +21445,277 @@ only make orbits smaller, so fewer cuts. Two costs: the merged proof carries eve
   decision, and T3 needs it.
 - `red` everywhere is not reachable for groups without swaps. Whether a different chain (another base,
   the `shared` score) finds swaps on QR is a T3 question.
+
+## D-0181  M15-symmetry-T3: the chain that follows the search, and what VeriPB accepts in the middle of a proof
+
+Status: step 1 DONE (tools and measurements, no solver code). Step 2 PROPOSED (the dynamic case, a
+design; the user decides any `lib/` change and whether dejavu's library runs beside baguette)
+Date: 2026-11-20
+Task: M15-symmetry-T3 (agent-sym3, `wave55-sym3`)
+Touches: `tools/symmetry/symchain.py` (`--order search`, `--orient`), `tools/symmetry/symmerge.py`
+(negative points, the probes `--as-rup` and `--unit-probe`), new `tools/symmetry/midproof.py`,
+`scripts/sym_lane.sh` (`--chain`, `--solver`, `--no-base`, a `:Wmax=K` source, the `huge` tier, the
+controls pinned to a cut that is not implied), `bench/symmetry/instances.tsv` (qr32_w8, qr48_w8,
+qr48_w12), new `bench/symmetry/stc_bug/` (a checker bug, §4), this record, `docs/ROADMAP.md` (T3
+row), `WORKLOG.md`. Nothing in `lib/` or `bin/`. Solver binary `243d84cd` (main `b1bb157`), dejavu
+`f984485` as distributed (`bb1759d0`), checker `~/.cargo/bin/veripb` 3.0.2 (`d5644ca4`). Runs in
+`/scratch/arthur/wave55-sym3-runs/`, copied (without proofs) to
+`/cluster/arthur/baguette-results/wave55-sym3/`.
+
+### 1. The static case: the chain takes the search's own order
+
+`symchain.py --order search` takes as the point of each level the FIRST break variable in search
+order whose orbit under the current stabilizer is nontrivial (T2's `first` score), and orients the
+cut by the value choice. The point becomes a literal p, the value the search tries first. It is
+p = x for `indomain_max` (the cut x_c v ~x_b, T2's) and p = ~x for `indomain_min`, `indomain`,
+`indomain_split` and SPEC 3.4's default (the cut ~x_c v x_b). `--orient max|min` forces one
+orientation, for the controls below. Without `--order search` everything is T2's, byte for byte.
+
+Why it agrees with the search. Every break variable before c_i in search order is fixed by G_{i-1},
+because it is an earlier point or its orbit is trivial (symchain checks it and writes
+`prefix_fixed` per level, true on every level measured here). Let s* be the lex-first solution in
+search order under the value choice. If s* violated a cut p_i v ~b, an element g of G_{i-1} with
+g(p_i) = b would give the solution s* o g, equal to s* before c_i and with the preferred value at
+c_i, so lex-smaller than s*. Hence s* satisfies every cut. A depth-first search with a static
+order and value choice finds s* first, with learning and backjumping too (a learned constraint is
+satisfied by s*, so the trail up to the first decision that leaves s* always agrees with s*). The
+broken search therefore reaches the same first solution, and on a satisfiable model the breaking
+cannot cut the branch the search was heading to. This guarantees that the breaking loses nothing.
+It does not make the search faster.
+
+The proof needs nothing new. A literal permutation commutes with negation, so the orbit of ~x is
+the negation of the orbit of x with the same words, a swap of x and y swaps ~x and ~y, and the
+`dom` order is the lex order of the points' negations (`load_order symlexN ~p_1 .. ~p_N`).
+
+### 2. Step 1 measured: T2's static chain against the chain that follows the search
+
+`make sym` with `--chain "--order search"` against the default, depth 3, the annotation's search
+(`bool_search(x, input_order, indomain_max)` on the codes, SPEC 3.4's first-fail with the min value
+on the test models, which have no annotation). One run each on fataepyc-06 under a load of about
+60, wall seconds. Every merged proof is `s VERIFIED` against the original `.opb` with the expected
+answer. In the points, x_k is the k-th coordinate or model variable, and ~ marks a point pushed to 0.
+
+| instance | answer | without breaking: nodes, s | T2's static chain: points, cuts, nodes, s | the search-order chain: points, cuts, nodes, s |
+|---|---|---|---|---|
+| Hamming, w <= 2 | UNSAT | 15, 0.00 | x1 x2 x3, 18, **5**, 0.00 | x1 x2 x3, 18, **5**, 0.00 |
+| Hamming, w <= 4 | SAT | 4, 0.00 | x1 x2 x3, 18, **4**, 0.00 | x1 x2 x3, 18, **4**, 0.00 |
+| Golay, w <= 4 | UNSAT | 209, 0.31 | x1 x2 x3, 66, **21**, 0.07 | x1 x2 x3, 66, **21**, 0.07 |
+| Golay, w <= 8 | SAT | 24, 0.08 | x1 x2 x3, 66, **24**, 0.08 | x1 x2 x3, 66, **24**, 0.08 |
+| QR32, w <= 4 | UNSAT | 217, 0.26 | x1 x2 x3, 75, **21**, 0.04 | x1 x2 x3, 75, **21**, 0.04 |
+| QR32, w <= 8 (codes-cp's qr32orb_w8) | SAT | 122, 0.20 | x1 x2 x3, 75, **122**, 0.23 | x1 x2 x3, 75, **122**, 0.21 |
+| QR48, w <= 4 | UNSAT | 11 491, 270.8 | x1 x2 x3, 115, **45**, 2.1 | x1 x2 x3, 115, **45**, 2.1 |
+| QR48, w <= 8 (qr48orb_w8) | UNSAT | 15 945, 1 087 | x1 x2 x3, 115, **1 273**, 42.4 | x1 x2 x3, 115, **1 273**, 44.0 |
+| QR48, w <= 12 (qr48orb_w12) | SAT | 1 108, 57.4 | x1 x2 x3, 115, **1 108**, 58.7 | x1 x2 x3, 115, **1 108**, 58.3 |
+| `php_unsat` | UNSAT | 59, 0.01 | x1 x7 x13, 59, **9**, 0.00 | ~x1 ~x2 ~x3, 34, **53**, 0.01 |
+| `php_wide_unsat` | UNSAT | 77, 0.01 | x1 x8 x15, 89, **17**, 0.01 | ~x1 ~x2 ~x3, 48, **77**, 0.01 |
+| `restart_pigeons54` | UNSAT | 35, 0.01 | x11 x22 x33, 35, **7**, 0.00 | ~x11 ~x12 ~x13, 22, **17**, 0.00 |
+| `colour_unsat` | UNSAT | 47, 0.01 | x1 x5, 17, **11**, 0.00 | ~x1 ~x2 ~x4, 16, **15**, 0.01 |
+| `php_escape_sat` | SAT | 76, 0.01 | x1 x8 x15, 59, **20**, 0.00 | ~x1 ~x2 ~x3, 34, **67**, 0.01 |
+| `restart_queens6` | SAT | 24, 0.00 | b12, 7, **23**, 0.01 | ~b11 ~b12, 4, **24**, 0.00 |
+
+The QR48 rows are codes-cp's qr48orb instances (its 17 296 words of weight 12 as the checks, no
+fixed coordinate), from `dom/sym_p47_w8_nofix.dzn` with `Wmax` set to 4, 8 or 12 (the row order may
+differ from codes-cp's benchmark file, the code and the group do not). QR48 runs with `SYM_TL=3600`.
+
+On every code the two chains are the SAME chain, with the same points and cuts, `.fzn` files that
+differ only in MiniZinc's comment line, and the same node counts. The codes are searched in input order with the
+value 1 first and their groups are transitive (2-transitive for QR, 5-transitive for Golay), so T2's
+largest-orbit rule already takes x1, x2, x3 in search order, and T2's cut x_c v ~x_b already pushes
+the point to the value tried first. On the three satisfiable codes the broken search visits exactly
+the nodes of the unbroken one (24, 122, 1 108), which is §1's guarantee at work.
+
+On the test models the search-order chain is WORSE (php_unsat 9 -> 53 nodes, php_escape_sat 20 ->
+67), and on all 15 instances it stays at or below the "without" column, as §1 predicts. Two causes,
+which the other two cells of the 2 x 2 (`--orient`) separate:
+
+| instance | largest orbits, point to 1 (T2) | largest orbits, point to 0 | search order, point to 0 (`--order search`) | search order, point to 1 |
+|---|---|---|---|---|
+| `php_unsat` (UNSAT) | **9** | 47 | 53 | 37 |
+| `php_wide_unsat` (UNSAT) | **17** | 63 | 77 | 61 |
+| `restart_pigeons54` (UNSAT) | **7** | 23 | 17 | 13 |
+| `colour_unsat` (UNSAT) | **11** | 25 | 15 | 17 |
+| `php_escape_sat` (SAT) | **20** | 62 | 67 | 51 |
+| `restart_queens6` (SAT) | 23 | 24 | 24 | **6** |
+
+- The orientation matters most. When solutions are sparse (one hole per pigeon, a few coordinates of
+  a code word), "the point is 1 unless its whole orbit is 0" keeps one solution in |orbit| and puts
+  the point in the support. "The point is 0 unless its whole orbit is 1" is almost always true
+  already (x1 = 0 follows by propagation) and removes little. Agreeing with `indomain_min` picks the
+  weak one.
+- The points matter next. The search order walks one pigeon's row (x1, x2, x3), whose orbits shrink
+  at once (30, 4, 3), where the largest-orbit rule takes a diagonal (30, 20, 12). At full depth
+  (`--depth 40`, until the group is trivial) the gap stays (`php_unsat` 9 against 25 nodes,
+  `php_wide_unsat` 11 against 53). On the codes the full chains are again identical (Golay has 7
+  levels, w <= 4 goes 21 -> 9 nodes and w <= 8 24 -> 12).
+
+The fighting control on the codes (search-order points pushed to 0 by `--orient min`, against the
+search's 1 first) confirms the orientation from the other side. UNSAT gets much worse (Hamming
+w <= 2 5 -> 9, Golay w <= 4 21 -> 83, QR32 w <= 4 21 -> 129, QR48 w <= 4 45 -> 6 859 nodes and
+2.1 -> 139.8 s, QR48 w <= 8 1 273 -> 10 269 nodes and 42 -> 570 s). SAT moves either way (Hamming
+w <= 4 4 -> 8, Golay w <= 8 24 -> 21, QR32 w <= 8 122 -> 86, QR48 w <= 12 1 108 -> 803 nodes and
+57.4 -> 41.8 s).
+
+### 3. Where the static chain hurts: qr48orb_w12, and the dynamic search
+
+codes-cp measured the harm on qr48orb_w12 with other solvers (HiGHS 4.3 -> 25 s, CP-SAT 176 ->
+332 s) and, for baguette, 71.8 -> 73.8 s with the annotation and 37.8 -> 45.8 s with
+`baguette-act` (`--search activity --restarts luby --phase-saving --reuse-trail`, tiered
+retention). Here with our binary, one run each, the same flags passed to both runs
+(`--solver`):
+
+| instance | search | without | T2's chain (the search-order chain on the codes) | the chain pushed to 0 (`--orient min`) |
+|---|---|---|---|---|
+| QR48, w <= 12 (SAT) | annotation | 1 108 nodes, 57.4 s | 1 108, 58.7 s | 803, 41.8 s |
+| QR48, w <= 12 (SAT) | activity | 401, 31.0 s | 441, 35.1 s | 146, 17.7 s |
+| QR48, w <= 8 (UNSAT) | activity | 8 596, 608.7 s | 702, 38.0 s | 4 912, 307.5 s |
+| QR48, w <= 4 (UNSAT) | activity | 9 597, 195.6 s | 45, 2.1 s | 5 311, 100.6 s |
+| QR32, w <= 8 (SAT) | activity | 115, 0.24 s | 115, 0.23 s | 16, 0.06 s |
+
+Every merged proof is `s VERIFIED` against the original `.opb`. The chain pushed to 0 makes the
+QR48 w <= 8 proofs 3.7 GB (0.8 GB for T2's chain under the activity search), checked in 2 586 s with the annotation
+(10 269 nodes, 8.6 GB of checker memory) and 1 276 s with the activity search (4 912 nodes).
+
+- With the annotation there is no harm to remove. The static chain is the search-order chain and
+  the broken search visits the same 1 108 nodes. codes-cp's 71.8 -> 73.8 s is what the 115 extra
+  rows cost on the same tree.
+- The activity search cannot be followed by a chain chosen before it starts, and there the chain
+  costs 10 % on the satisfiable QR48 (401 -> 441 nodes), the same sign as codes-cp's 37.8 -> 45.8 s.
+  The chain pushed to 0 finds the solution 2.7 times faster (146 nodes) and costs about 100 times
+  more on the two unsatisfiable QR48 (45 -> 5 311, 702 -> 4 912). Pushing three coordinates to 0 is
+  close to fixing them at 0, because x1 = 1 forces its whole orbit to 1, over the weight bound. It
+  gives a smaller space that still holds weight-12 words, and almost no breaking.
+- So the orientation that pays depends on the answer more than on the search. On the unsatisfiable
+  codes, where breaking pays at all (QR48 w <= 8 15 945 -> 1 273 nodes with the annotation, 8 596
+  -> 702 with the activity search), T2's chain is already the right one under both searches. The
+  harm codes-cp saw with HiGHS and CP-SAT comes from their own searches, which no chain written into
+  the model can follow.
+
+### 4. The dynamic case: what VeriPB 3.0.2 accepts in the middle of a proof (measured)
+
+With a dynamic order the next decision is known only during the search, so a cut that follows it
+must enter the proof where it is used, after baguette's learned constraints. `midproof.py` takes a
+T2 merged proof of a SATISFIABLE model (so no `red` is judged over a contradictory database,
+D-0053) and inserts, after some of baguette's learned `rup` lines, the cuts of another `symchain`
+run, each a `red` with its swap. `golay_w8` (3 938 learned lines in all):
+
+| inserted | default mode | `strengthening_to_core on`, explicit subproofs |
+|---|---|---|
+| the chain EXTENDED (level 3 of the same chain, 20 cuts, witnesses fixing x1 x2 x3) | after 80 learned: VERIFIED. After 1 974: refused at the first cut, proofgoal 5143, a learned constraint | VERIFIED after 80 and after 1 974 |
+| the chain RE-BASED (level 0 of a chain rooted at x6, 23 cuts) | refused at the first cut, proofgoal 3846 (a cut of the first chain), after 80 and after 1 974 | refused, proofgoal 3847 (a cut of the first chain), after 80 and after 1 974 |
+| the orientation FLIPPED (~x1 v x_b on top of x1 v ~x_b, 23 cuts) | refused at the third cut, proofgoal 3846 | refused at the third cut, proofgoal 3847 |
+| control: the extended or re-based cuts as bare `rup` | refused, so they are not implied where they stand and the acceptances above are judgements | |
+
+`php_escape_sat` (216 learned lines, insertion after 103) agrees. Extended (5 cuts of level 3)
+VERIFIED in the default mode, and accepted in the strengthening mode up to baguette's `sol` line,
+which then falsifies one of the new cuts, because the run that wrote the proof did not have them (a
+solver that installs the cuts finds a solution that satisfies them). Re-based (at x20) and flipped
+are refused at the first cut in both modes, proofgoals 25 to 28, the first chain's cuts.
+
+Read from the checker's source and then measured:
+
+- In the default mode `red` has a goal for every derived constraint its witness touches
+  (`red_strengthening.rs`, `add_derived_goals = !is_strengthening_to_core`). The image of a learned
+  constraint under a symmetry is implied by the model but is not RUP in general, so a cut introduced
+  after learning is refused once its witness touches enough learned constraints.
+- In `strengthening_to_core` mode `red` checks the core only, and a chain can be extended at any
+  point of the proof, because the new witnesses fix the earlier points and the earlier cuts map onto
+  cuts. Re-basing or flipping is refused. Cuts from two bases are not closed under each other's
+  witnesses, as the ROADMAP row expected.
+- **A checker bug.** In that mode a `red` WITHOUT an explicit subproof puts its constraint in the
+  DERIVED set (`RedStrengtheningRule` keeps the default `add_constraints_to_core = false`,
+  `veripb-checker/src/rules.rs:107`, which `DomStrengtheningRule` overrides), and later `red` lines
+  skip the derived set, so they are checked against no earlier cut at all. Measured, the re-based
+  and flipped insertions above are ACCEPTED without subproofs, and
+  `bench/symmetry/stc_bug/false_unsat.pbp` gets `s VERIFIED UNSATISFIABLE` for x1 + x2 = 1 (two
+  variables, satisfiable) on both 3.0.2 builds (`d5644ca4`, `78db9573`). The same proof without the
+  mode is refused at line 12 (`default_mode.pbp`), and with an empty `: subproof` .. `qed ;` on each
+  `red` it is refused at line 15 (`with_subproof.pbp`). baguette never writes
+  `strengthening_to_core`, so no proof it emits is affected. Any design below that uses the mode
+  must give every `red` an explicit subproof until the checker is fixed. To report upstream.
+- In that mode a core cut cannot be deleted unless it is implied (checked deletion is a proof by
+  contradiction, `deletion.rs:161`, measured on a three-variable proof). And `load_order` moves every
+  derived constraint into the core (`load_order.rs:42`), so a `dom` cut (the cuts with no swap, QR
+  levels 2 and 3) cannot be added after learning without making every learned constraint a goal.
+
+### 5. The dynamic case: the options (PROPOSED)
+
+From §4, a cut is accepted where it is used only if every core cut maps, under its witness, onto a
+constraint that is present or implied there. A witness from the stabilizer of the points already
+used does that for the earlier cuts. Nothing does it for the cuts of another base, nor for learned
+constraints in the default mode.
+
+| | (a1) one global chain, extended lazily | (a2) branch-local chains | (b) a family of chains, switched at restarts | (c) orbital / orbitopal fixing as propagation |
+|---|---|---|---|---|
+| what it is | each new point is the variable the search decides when the chain is extended (the first descent, or at a restart the unfixed variable of highest activity in a nontrivial orbit of the current stabilizer). Points never change, cuts are never removed | at a node with decisions D, the next decided variable c gets its orbit under the pointwise stabilizer of D's variables, and the cuts ~D v c v ~b | k chains computed in advance (other bases or orientations), one active per restart window | orbital fixing (Margot; Ostrowski et al.): at a node, x_b := 0 when b is in the orbit, under the stabilizer of the variables branched to 1, of a variable branched to 0. Orbitopal fixing (Anders, Codel, Heule, TACAS 2026): units at the root for a row-interchangeable matrix |
+| proof (VeriPB 3.0.2) | `red` with a swap where the cut is introduced, `strengthening_to_core on` at the head and an explicit subproof on every `red`. Measured, §4. Cuts without a swap are lost: `dom` needs `load_order`, which moves every learned constraint to the core | `red` with a witness in the stabilizer of D. It closes while every other branch's cut is falsified by D on a fixed variable, i.e. under chronological backtracking. After a backjump or a restart an old cut whose condition still holds is mapped off the database and refused (§4, re-based), and keeping it is unsound in general. It cannot be deleted either: a core cut in that mode is undeletable, and in the default mode every touched learned constraint is a goal | a second base or a flipped orientation is refused (§4, both modes, after 80 and 1 974 learned constraints). A switch must delete the old cuts AND every learned constraint, which may encode the old chain: a restart without learning | orbital fixing: each fixing is a conditional cut ~D v ~x_b, the proof problem of (a2). Orbitopal fixing: static units, one `red` each at the head (D-0177 measured one accepted) |
+| sound with learning and restarts | yes: global, permanent, one base | no, unless learning is switched off under the cuts | only by forgetting all learning at each switch | orbital: as (a2). Orbitopal: yes, it is static |
+| cost | one stabilizer per new point, at most n in a run: `set_base` + `sift_random` in dejavu's library (backend B), no graph search. Not measured | one stabilizer query per decision | k chains up front (47 to 151 s per chain on QR48 with backend A, growing with Wmax) | an orbit computation per node |
+| needs in `lib/` | a hook in `search.ml` at a decision or a restart; the cuts as permanent clauses (`learned.ml`, pinned in `retention.ml`); `writer.ml` writing the mode and the subproofs, and no `del range` over a cut's id; a client for a symmetry server. `Explanation.t` unchanged: a cut is a clause whose propagation is RUP | all of (a1), a cut store per level deleted on backtrack, and chronological backtracking under the cuts | (a1)'s writer and installation, and a restart that forgets everything | a propagator over the group with (a2)'s proof |
+| agrees with the search | with the first descent (under an annotation, exactly §1's chain), then with the activity order at each extension, never re-based | at every node | within a window | it reads the branching by construction |
+
+### 6. Recommendation, and what is left to decide
+
+The static case needs nothing more. `--order search` exists, and on the codes it is T2's chain. It
+should not become the default, because on the test models it loses to T2's chain (§2), since the
+orientation that agrees with a min-value search is the weak one for sparse solutions.
+
+For the dynamic case the recommendation is (a1), one global chain, extended lazily and never
+re-based. It is the only option that stays sound under learning and restarts and that VeriPB 3.0.2
+accepts as it is (§4, with the explicit-subproof workaround). Its new points would be the search's
+choice of variable (at the first descent, then at restarts the unfixed variable of highest activity
+in a nontrivial orbit) with T2's orientation (the point pushed to 1 on sparse 0/1 models). It is not
+worth building yet, for three measured reasons.
+
+1. Where breaking pays (the unsatisfiable codes), T2's static chain already gives the large gain
+   under both searches (QR48 w <= 8: 8 596 -> 702 nodes with the activity search), and the full
+   chain of PSL(2, 47) has 3 levels, so a lazy chain could only choose which three points.
+2. Where the static chain hurts (qr48orb_w12 under the activity search, 401 -> 441 nodes), the lever
+   measured is the orientation, and the right one depends on the answer. A dynamic choice of points
+   does not reach it.
+3. A cut introduced after learning can only be a `red` with a swap, so the 68 `dom` cuts of QR48
+   (levels 2 and 3) would be lost, and §8 shows that no other chain has swaps there.
+
+If the user wants it anyway, it needs, in `lib/` (a decision, and a claim on `lib/core/search.ml`,
+`learned.ml`, `retention.ml` and `lib/proof/writer.ml`), the four items of §5's (a1) column, and,
+beside baguette, a symmetry server, that is a C++ process over dejavu's header-only library (`set_base`,
+`sift_random`, `get_transversal_element`, D-0177's backend B), with dejavu unchanged and outside
+baguette, as the user's rule requires. Whether to run that server is the user's decision too.
+
+To do in any case, report the strengthening-to-core bug to VeriPB with `bench/symmetry/stc_bug/`.
+The checker is the sole oracle (D-0046), and a design that uses that mode is unsound on 3.0.2
+without the workaround.
+
+### 7. The lane and its controls
+
+- `scripts/sym_lane.sh` gains `--chain ARGS` (to symchain), `--solver ARGS` (to both baguette runs),
+  `--no-base`, a source `mzn:FILE:Wmax=K`, and the tier `huge` (run only when named: qr48_w8,
+  qr48_w12). `make sym` without options is T2's lane, and its results are unchanged.
+- The controls are now pinned to a cut that is NOT implied by the lines before it. A probe
+  (`symmerge --as-rup K`) writes cut K as a bare `rup`, and if VeriPB accepts it every mutation of
+  it is accepted for that reason alone. Under `--order search` on `php_escape_sat` every cut after
+  the first of a level is RUP (the pigeon's exactly-one row), and all four controls on T2's choice
+  (the second cut of level 1) were accepted, so the lane takes the next level-1 cut, then the first.
+- A second probe (`--unit-probe K`, the point alone as a unit with the cut's witness) marks the
+  bad-cut control VACUOUS when the unit is derivable, since c v X is then a weakening of a derivable
+  line. On `php_escape_sat` with its points pushed to 0 (`--order search`, or `--orient min`) the
+  unit ~x2 is derivable (with x2 = 1 the pigeon's row makes the swapped image ~x3 hold), so the lane
+  reports "refused 2/2 (cut 29), vacuous: auto/bad-cut dom/bad-cut", the bad witnesses refused at
+  full wording. When every level-1
+  cut is implied (search-order points pushed to 1 on `php_escape_sat`), the lane says VACUOUS for
+  that instance. Every other control run (hamming_w4, golay_w8, qr32_w8, under every chain) is
+  refused 4/4.
+- `tools/symmetry/midproof.py` is §4's probe, kept for the T4 to T7 rows and for checking a fixed
+  checker.
+- The default lane after these changes (`final-static`) gives T2's rows unchanged (nodes, verdicts,
+  controls 4/4). `make check` on the branch (`DUNE_JOBS=4`): `check: ok`.
+
+### 8. D-0179's last question: does another chain find swaps on QR?
+
+No chain can. A swap of c and b is an element g of the level's group with g(c) = b and g(b) = c, so
+g^2 fixes c. If the group has odd order, the order k of g is odd, and g = g^(k+1) = (g^2)^((k+1)/2)
+fixes c too, against g(c) = b. So a group of odd order has no swap. The level groups of QR48 after the first point are the stabilizer of one
+point, of order 51 888 / 48 = 1 081 = 23 x 47, and of two points, of order 23. Both are odd, and
+PSL(2, 47) is 2-transitive, so every choice of the first two points gives conjugate groups of the
+same orders. QR32 is the same (PSL(2, 31): 14 880 / 32 = 465, then 15). So on QR every cut of
+levels 2 and 3 is a `dom` under any base, any order and any orientation. This also caps (a1) on QR: a level
+added after learning would be lost entirely.

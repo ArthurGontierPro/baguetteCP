@@ -23,7 +23,6 @@ of it to every session and stopping at a broken line before it even reached the 
 | M11-complexity-T15 (SPIKE, explanations as a hash-consed DAG; a prototype branch, nothing merged without a decision) | `lib/core/explanation.ml`, `lib/core/justify.ml`, `lib/core/trace.ml`, propagators' explanation construction as needed, on branch `wave55-dag` only | agent-dag (`wave55-dag`) | 2026-11-20 |
 | M11-complexity-T17 (learned clauses that cannot prune) | `lib/core/search.ml`, `lib/core/learned.ml`, `lib/core/retention.ml`, `lib/core/engine.ml` (learned wakes only), `lib/core/prop/clause.ml`, `lib/core/prop/pb.ml`, their unit tests | agent-learnprop (`wave55-learnprop`) | 2026-11-20 |
 | M14-e2e-verification-T5 (globals with cake flags in the e2e chain) | `tools/e2e/`, `scripts/e2e_lane.sh`, `bench/e2e_spike/`; reserved record D-0180 | agent-e2e5 (`wave55-e2e5`) | 2026-11-20 |
-| M15-symmetry-T3 (breaking that agrees with the search: design, then a prototype outside `lib/`) | `tools/symmetry/`, `bench/symmetry/`, `scripts/sym_lane.sh`; a small C++ tool over dejavu's header-only library in `tools/symmetry/` if needed; NO `lib/` change without a new claim; reserved record D-0181 | agent-sym3 (`wave55-sym3`) | 2026-11-20 |
 
 ## Cross-session requests
 
@@ -631,8 +630,15 @@ section 1. Shares are inclusive, of the whole run.
 | M14-e2e-verification-T1 (feasibility study) | agent-e2e (`wave55-e2e`) | 2026-11-20 | **D-0174 (STUDY).** The verified encoder is CakeML's `cake_pb_cp` (`.scp` in, OPB over two's-complement bits out, HOL4 theorem `full_encode_sem_concl`), prebuilt in gitlab.com/MIAOresearch/software/cakepb `cp/`. Route: baguette's proof re-derives its own `.opb` from cake's at its head (atoms, `B = l + S`, ladder, substituted rows, pins), search proof unchanged. `bench/e2e_spike/run.sh`: 4 models VERIFIED by `cake_pb_cp`, a faked transcription bug refused. ROADMAP M14-T2..T8 |
 | M15-symmetry-T1 (study) | agent-sym (`wave55-sym`) | 2026-11-20 | **D-0177 (STUDY).** dejavu v2.1 is the latest release (satsuma's 2026 copy = upstream `6dd780e`, `main` `f984485` adds preprocessor fixes, same CLI). satsuma 1.4's Schreier cuts (Anders, Codel, Heule, SAT 2026) are codes-cp's chain, from one dejavu run via `random_schreier`, proved by `red` with the permutation witness (accepted by `d5644ca4`, damaged witness refused). The VeriPB addition is orders with auxiliary variables (3.0.0, AAAI 2026), present in our checker, shortens the order not the witness. T2 interface proposed; ROADMAP T1 DONE, T2/T3/T5 notes |
 | M15-symmetry-T2 (the pipeline side by side) | agent-sym2 (`wave55-sym2`) | 2026-11-20 | **D-0179.** `make sym`: `tools/symmetry/{opb2graph,symchain,symmerge}.py` beside baguette, dejavu `f984485` as distributed (binary in `/cluster/arthur/tools/dejavu-f984485/`), one run per level, cuts on the search's 0/1 variables, merged proof checked against the ORIGINAL `.opb`. D-0177's `red` witness w_b^-1 is refused on a level's second cut; `red` with a SWAP of c and b holds, `dom` under the points' lex order where the group has no swap (QR levels 2-3). 12/12 VERIFIED (QR48 11 491 -> 45 nodes, 253 s -> 2 s, check 10 s), 12/12 mutation controls refused on satisfiable models |
+| M15-symmetry-T3 (breaking that agrees with the search) | agent-sym3 (`wave55-sym3`) | 2026-11-20 | **D-0181.** Step 1 DONE: `symchain.py --order search` (points in search order, cuts oriented by the value choice), `make sym` `--chain/--solver/--no-base`. On the codes it is T2's chain (same nodes, QR48 w<=8 15 945 -> 1 273, qr48orb_w12 1 108 = 1 108), worse on the min-value test models (orientation to 0 is weak on sparse solutions). Step 2 PROPOSED: VeriPB accepts a chain extended mid-proof (strengthening-to-core + explicit subproofs), refuses a re-based one; design (a1), not worth building yet. VeriPB 3.0.2 bug: `red` without subproof in strengthening-to-core mode is never checked again, false UNSAT on 2 variables (`bench/symmetry/stc_bug/`) |
 
 ## Handoff notes
+
+### 2026-11-20 (agent-sym3, `wave55-sym3`): M15-symmetry-T3, D-0181
+
+`symchain.py --order search` takes the search's own order and value choice. On the codes it is T2's chain, so nothing changes there, and on the
+min-value test models it is worse, because a point pushed to 0 is a weak breaking. The dynamic design (a1) is written, not built, and the user decides `lib/`.
+VeriPB 3.0.2 accepts a false UNSAT in `strengthening_to_core` mode when `red` has no explicit subproof (`bench/symmetry/stc_bug/`). Report it upstream before using that mode.
 
 ### 2026-11-20 (agent-sym2, `wave55-sym2`): M15-symmetry-T2, D-0179
 
