@@ -167,7 +167,14 @@
    all of whose operands are parameters with the wrong truth value), and the propagator
    conflicts immediately with [Explanation.clause []], which renders as `rup >= 1 ;` and
    is closed the D-0022/I-X7 way because it rests on a clause. That is the same route
-   `int_ne(x, x)` takes in test/models/ne_self_unsat.fzn. *)
+   `int_ne(x, x)` takes in test/models/ne_self_unsat.fzn.
+
+   COST (M16-file-review-T2, D-0190). A run is [Pb.quiet]'s walk to the second non-false
+   literal, O(position of that literal), and a pass over the row when it is not quiet. A
+   learned clause's advisor ([Learned_clause.ask]) is asked once per wake of every clause
+   watching the moved variable, so it reads only its own record and the domain: each
+   watch's variable, threshold and polarity are kept there flat by [set_watches], the one
+   writer of [w1] and [w2]. *)
 
 module Lit = Baguette_proof.Lit
 

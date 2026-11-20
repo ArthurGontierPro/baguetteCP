@@ -261,7 +261,20 @@
    As in alldiff: every number a derivation reads is frozen into a [snap]/[csnap] at the
    moment of the pruning and the thunk reads nothing from the store afterwards.  The
    [Encoding] ids it reads live are written once, by [Encoding.start_proof], before the
-   first decision, and never move. *)
+   first decision, and never move.
+
+   ---------------------------------------------------------------------------
+   Cost of a pass (M16-file-review-T2, D-0190)
+   ---------------------------------------------------------------------------
+
+   Rule C and rules (a) and (b) are O(v n) for v cover values: per value, the scope's
+   variables that declare it, then COUNTS; the lists and the facts a push names are built
+   from the same snapshot by the same filters, only for a push. Rule A walks the run of
+   cover values that starts at each lower end once, sums the capacities of its prefixes,
+   and per (lower, upper) pair COUNTS the confined variables, O(P n) for P pairs; the lists
+   are built only for an interval with a capacity >= 0 and at least that many confined
+   variables, the intervals that can push. Most of a pass's values and intervals push
+   nothing, and the counting is what they cost. *)
 
 module Lit = Baguette_proof.Lit
 module Encoding = Baguette_proof.Encoding

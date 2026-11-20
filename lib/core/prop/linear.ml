@@ -124,7 +124,21 @@
    lib/flatzinc/compile.ml caps every declared bound and every row's magnitude
    |c| + sum_i |a_i| * max(|lo_i|, |hi_i|) at [Checked.limit], which leaves a factor
    of 16/9 over the largest intermediate anything computes from the row. The raise is
-   for callers that build a [Linear.t] directly, which is what every unit test does. *)
+   for callers that build a [Linear.t] directly, which is what every unit test does.
+
+   ---------------------------------------------------------------------------
+   Cost of a run (M16-file-review-T2, D-0190)
+   ---------------------------------------------------------------------------
+
+   A run is O(n) in the terms: one walk for the minima, one for their sum, one for the
+   prunings, each a loop over [t.arr] (the terms as an array, beside the list the
+   snapshots walk), with no closure built unless something prunes. A FIXED term is
+   skipped by the pruning walk before its divisions, because it cannot move ([prune_term]
+   has the argument). A pruning costs O(1) eagerly and its reason and justification are
+   materialised later, O(n) each (D-0124). Integers are compared with [Int.max],
+   [Int.min] and [Int.compare] here and in every module of prop/ that copies this shape:
+   the polymorphic [Stdlib.max] and [compare] reach [compare_val] through a C call, even
+   on two ints. *)
 
 module Lit = Baguette_proof.Lit
 
