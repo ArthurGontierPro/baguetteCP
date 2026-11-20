@@ -23,7 +23,6 @@ of it to every session and stopping at a broken line before it even reached the 
 | M11-complexity-T15 (SPIKE, explanations as a hash-consed DAG; a prototype branch, nothing merged without a decision) | `lib/core/explanation.ml`, `lib/core/justify.ml`, `lib/core/trace.ml`, propagators' explanation construction as needed, on branch `wave55-dag` only | agent-dag (`wave55-dag`) | 2026-11-20 |
 | M11-complexity-T17 (learned clauses that cannot prune) | `lib/core/search.ml`, `lib/core/learned.ml`, `lib/core/retention.ml`, `lib/core/engine.ml` (learned wakes only), `lib/core/prop/clause.ml`, `lib/core/prop/pb.ml`, their unit tests | agent-learnprop (`wave55-learnprop`) | 2026-11-20 |
 | M14-e2e-verification-T2 (first demo as a lane) | new `tools/e2e/` (the FlatZinc -> .scp translator, the bridge), `bench/e2e_spike/`, a new lane script `scripts/e2e_lane.sh`, `Makefile` (one target), `scripts/README.md` (one section); reserved record D-0176 | agent-e2e2 (`wave55-e2e2`) | 2026-11-20 |
-| M15-symmetry-T1 (study, documentation only) | a new decision record (reserved D-0177), notes under `/cluster/arthur/baguette-results/wave55-sym/` | agent-sym (`wave55-sym`) | 2026-11-20 |
 
 ## Cross-session requests
 
@@ -627,8 +626,16 @@ section 1. Shares are inclusive, of the whole run.
 | M11-complexity-T14 (the cost per node against Gecode) | agent-pernode2 (`wave55-pernode`) | 2026-11-20 | **D-0169.** codes-cp QR48 XOR, same tree as Gecode: Gecode 28 k instr and 57 propagations per node, baguette 1 572 k and 413 runs. Four byte-identical cuts in `engine.ml`, `store.ml`, `pb.ml`, `clause.ml` (run bracket without `Fun.protect` and no walk after a quiet run; wake sort in a scratch array; literal status off the record; seed heap without closures): -12.3 % / -15.8 % instr per node without proof, -7.5 % / -10.7 % with, every proof and `--stats` line identical. Gate on `c531645` (merges main `42feb27`): `make check` rc 0, 200 models x 4 artefacts equal to gate 71's `492638b9`, lanes 301/301 and 289/289, scaling ok and re-baselined (`26240af`), binary `c308784d`. Then merged main `f41498a` (thunk, disjoint files). Two proposals for the user (D-0169 section 5) |
 | M11-complexity-T16 (the release build) | agent-release (`wave55-release`) | 2026-11-20 | **D-0171.** `make release` builds `bin/main.exe` with dune's release profile into `_build_release/` (own lock; `dune build`, `make check`, `--root .` unchanged). Same bytes as dev: 200 models x (stdout, rc, .opb, .pbp) 0 differences, diff lane 301/301 with each binary. Instr/node dev -> release: QR48 -15.2 % / -11.2 % (no proof / proof), rcpsp_11 -17.1 % / -6.9 %, cyclic -17.0 % / -5.0 %. Clean build 4.7 s. Harnesses unchanged (BAGUETTE= / BIN=); docs in scripts/README.md §8 and bench/challenge/README.md. `make check` rc 0, 100 MB. |
 | M14-e2e-verification-T1 (feasibility study) | agent-e2e (`wave55-e2e`) | 2026-11-20 | **D-0174 (STUDY).** The verified encoder is CakeML's `cake_pb_cp` (`.scp` in, OPB over two's-complement bits out, HOL4 theorem `full_encode_sem_concl`), prebuilt in gitlab.com/MIAOresearch/software/cakepb `cp/`. Route: baguette's proof re-derives its own `.opb` from cake's at its head (atoms, `B = l + S`, ladder, substituted rows, pins), search proof unchanged. `bench/e2e_spike/run.sh`: 4 models VERIFIED by `cake_pb_cp`, a faked transcription bug refused. ROADMAP M14-T2..T8 |
+| M15-symmetry-T1 (study) | agent-sym (`wave55-sym`) | 2026-11-20 | **D-0177 (STUDY).** dejavu v2.1 is the latest release (satsuma's 2026 copy = upstream `6dd780e`, `main` `f984485` adds preprocessor fixes, same CLI). satsuma 1.4's Schreier cuts (Anders, Codel, Heule, SAT 2026) are codes-cp's chain, from one dejavu run via `random_schreier`, proved by `red` with the permutation witness (accepted by `d5644ca4`, damaged witness refused). The VeriPB addition is orders with auxiliary variables (3.0.0, AAAI 2026), present in our checker, shortens the order not the witness. T2 interface proposed; ROADMAP T1 DONE, T2/T3/T5 notes |
 
 ## Handoff notes
+
+### 2026-11-20 (agent-sym, `wave55-sym`): M15-symmetry-T1, D-0177 (STUDY)
+
+Take dejavu `main` (`f984485`, still v2.1, same command line as satsuma's copy `6dd780e`). For T2, prove the
+cuts with `red` and the transversal witness as satsuma 1.4 does, which drops the order from `dvbreak.py merge`.
+Start with the binary, one run per level. The header-only library route (one run, `set_base`/`sift_random`) is the
+user's call and is what T3 needs. The aux-variable orders do not shorten witnesses (T5). Proposed interface in D-0177 §4.
 
 ### 2026-11-20 (agent-e2e, `wave55-e2e`): M14-e2e-verification-T1, D-0174 (STUDY)
 
