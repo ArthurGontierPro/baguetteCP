@@ -174,12 +174,15 @@ skip:
 Three passes, one line per item, a summary each, `e2e_lane: PASS` or `FAIL` at the end:
 
 1. **chain**: every `test/models/*.fzn` through `tools/e2e/chain.sh`. `VERIFIED` means
-   `cake_pb_cp`'s own `s VERIFIED SATISFIABLE|UNSATISFIABLE` line, agreeing with baguette. It exits
+   `cake_pb_cp`'s own `s VERIFIED SATISFIABLE|UNSATISFIABLE` line, agreeing with baguette, or for
+   an objective (D-0182) `s VERIFIED BOUNDS v <= OBJ <= v` with v baguette's optimum (`OPT=v`). It exits
    0 when it refuses, so never read its status. `SKIPPED` names the first uncovered builtin (or the
    objective, or `var int` with no domain). Anything else is `FAIL`.
-2. **controls**: twenty-three corruptions the chain must refuse, each asserted at the refused line and
+2. **controls**: thirty-one corruptions the chain must refuse, each asserted at the refused line and
    in the checker's sentence (`chain.sh`'s header lists them). One runs on a model of its own,
-   `tools/e2e/models/gcc_repeat_free_sat.fzn` (D-0180 §4).
+   `tools/e2e/models/gcc_repeat_free_sat.fzn` (D-0180 §4). Eight claim a wrong optimum (D-0182):
+   four refused by `veripb` at baguette's `conclusion BOUNDS`, four by `cake_pb_cp` itself at the
+   elaborated core's.
 3. **validation**: the translator against the reference solvers, solution set for solution set. A
    model calling baguette's mznlib predicates is re-flattened as MiniZinc against the reference's own
    library (`tools/e2e/fzn_solutions.py`, D-0180 §5).

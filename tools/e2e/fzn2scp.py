@@ -76,8 +76,14 @@ starts `UNCOVERED:` and names the first construct it cannot translate):
   domains with holes (bounds plus `(dN in (v1 ...) x)`), annotations (ignored: they do not
   change the solutions), `solve satisfy` (with or without a search annotation).
 
+  `solve minimize x` / `solve maximize x` (T8, D-0182)  (prob_type (minimize X)), (maximize X)
+                                 x resolved through aliases to the .scp variable it names;
+                                 cake's Minimize/Maximize in cpScript.sml's cp_sem_concl. An
+                                 objective that resolves to a constant is refused (cake's
+                                 prob_type names a variable)
+
 Refused: `var int` with no domain (cake needs bounds, and a bound the translator invented
-would change the model), an objective (M14-T8), floats, sets as values, and every builtin
+would change the model), floats, sets as values, and every builtin
 not listed above. When a model has an uncovered builtin, that is the reason given, the first
 one in file order, whatever else the model also has.
 
@@ -236,6 +242,7 @@ class Model:
         self.arrays = {}     # name -> list of terms
         self.cons = []       # (builtin, args)
         self.extra = []      # (kind, ...) domain restrictions from aliases
+        self.objective = None   # ("minimize" | "maximize", expression), or None
 
     def term(self, e):
         """An expression standing for one integer: ("var", name) or ("int", k)."""
@@ -362,8 +369,11 @@ def parse(text):
             p.next()
             p.annotations()
             k, goal = p.next()
-            if goal != "satisfy":
-                raise Uncovered(f"`solve {goal}`: an objective (M14-e2e-verification-T8)")
+            if goal in ("minimize", "maximize"):
+                # resolved at emission, once every alias is known (T8, D-0182)
+                m.objective = (goal, p.expr())
+            elif goal != "satisfy":
+                raise Uncovered(f"`solve {goal}`")
             p.expect(";")
             solved = True
             continue
@@ -605,8 +615,16 @@ def emit(m):
             raise Uncovered(f"alias {by} has an empty domain")
         cons.append(f"(d{k} in ({' '.join(map(str, vals))}) {scp_of[n]})")
     var_s = " ".join(f"({scp_of[n]} {m.vars[n][0]} {m.vars[n][1]})" for n in m.order)
+    ptype = "decide"
+    if m.objective is not None:
+        goal, e = m.objective
+        t = m.term(e)
+        if t[0] != "var":
+            # cake's prob_type names a VARIABLE (sexp_prob_type reads an atom)
+            raise Uncovered(f"`solve {goal}` of the constant {t[1]}")
+        ptype = f"({goal} {scp_of[t[1]]})"
     scp = (f"( (version 1) (variables {var_s}) (constraints {' '.join(cons)}) "
-           f"(prob_type decide) )\n")
+           f"(prob_type {ptype}) )\n")
     return scp, names
 
 

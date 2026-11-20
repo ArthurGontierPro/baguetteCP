@@ -9,13 +9,31 @@ translator passes on this model when every reference that finished gives exactly
 solution set the .scp admits, over every translated variable, and baguette's printed
 solution (its output variables only) extends to one of them, or baguette said UNSAT and the
 set is empty. Prints one line: `AGREE n=N refs=...`, `DIFFER ...`, or `UNCHECKED ...`.
+
+With an objective (T8, D-0182) both sides end with `objective DIR NAME`: the .scp's
+prob_type read by scpsem.py (NAME by the names table), and the .fzn's solve item read by the
+reference script. They must name the same direction and variable, and baguette's printed
+solution (its last, the one it claims optimal) must reach the optimum of the set under it.
+The solution sets alone cannot see a swapped direction or objective variable, which is why
+the objective is compared as text AND by its optimum. AGREE then ends with `opt=V`.
 """
 import re
 import sys
 
 
+def objective_of(path):
+    """(direction, FlatZinc name) from a trailing `objective DIR NAME` line, else None."""
+    for l in open(path).read().splitlines()[::-1]:
+        m = re.fullmatch(r"objective (minimize|maximize) (\S+)", l.strip())
+        if m:
+            return m.group(1), m.group(2)
+    return None
+
+
 def read_set(path):
     lines = open(path).read().splitlines()
+    if lines and lines[-1].startswith("objective "):
+        lines = lines[:-1]
     if not lines or not lines[0].startswith("count "):
         return None, (lines[0] if lines else "empty")
     n = int(lines[0].split()[1])
@@ -60,6 +78,10 @@ def main(scpsem, names, bag_out, *refs):
             print(f"DIFFER {tag}: scp admits {len(mine)}, {tag} {len(theirs)}; "
                   f"scp only {only_scp}, {tag} only {only_ref}")
             return 0
+        if objective_of(r) != objective_of(scpsem):
+            print(f"DIFFER {tag}: the .scp's objective is {objective_of(scpsem)}, "
+                  f"the .fzn's {objective_of(r)}")
+            return 0
         used.append(tag)
     if not used:
         print(f"UNCHECKED no reference finished ({'; '.join(notes)})")
@@ -75,8 +97,21 @@ def main(scpsem, names, bag_out, *refs):
         if not any(all(f"{k}={v}" in s.split() for k, v in part.items()) for s in mine):
             print(f"DIFFER baguette's solution {part} is not one the .scp admits")
             return 0
+    opt = ""
+    obj = objective_of(scpsem)
+    if obj and mine:
+        d, name = obj
+        vals = [int(dict(kv.split("=") for kv in s.split())[name]) for s in mine]
+        best = min(vals) if d == "minimize" else max(vals)
+        got = sol.get(name) if sol else None
+        if got is None:
+            notes.append(f"baguette printed no {name}")
+        elif int(got) != best:
+            print(f"DIFFER baguette's {d[:3]} {name} = {got}, the .scp's optimum is {best}")
+            return 0
+        opt = f" opt={best}"
     extra = f" ({'; '.join(notes)})" if notes else ""
-    print(f"AGREE n={len(mine)} refs={','.join(used)}{extra}")
+    print(f"AGREE n={len(mine)} refs={','.join(used)}{opt}{extra}")
     return 0
 
 

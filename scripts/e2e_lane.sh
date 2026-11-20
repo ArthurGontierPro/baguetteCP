@@ -35,12 +35,22 @@
 #                  inverse, and opb-reif on member, whose selector guard flipped is a wrong
 #                  definition of the selectors mznlib introduces. Every control's model is
 #                  satisfiable and has a solution the corrupted claim excludes (D-0180).
+#                    opt-better     (T8, D-0182) a WRONG CLAIMED OPTIMUM: baguette's `conclusion
+#                    opt-worse      BOUNDS` one better (one worse) than the optimum it found:
+#                                   refused by veripb at that line, on the upper (lower) bound
+#                    core-better    the same corruption in the ELABORATED core, after veripb
+#                    core-worse     accepted: refused by cake_pb_cp itself at its conclusion
+#                                   ("conclusion BOUNDS check failed: ..."), so the verified
+#                                   checker refuses a wrong optimum whatever the elaborator did
 #   3. validation  the TRUSTED translator against MiniZinc's reference solvers (D-0174 sec. 6,
 #                  GCS #987): on every model of pass 1 that is not SKIPPED, the solution set
 #                  cake's semantics admit for the .scp (tools/e2e/scpsem.py, which reads only
 #                  the .scp) must equal the one Gecode (and CP-SAT) enumerate from the .fzn,
 #                  over every variable, and baguette's printed solution must be one of them.
-#                  A model too large to enumerate is UNCHECKED, and counted as such.
+#                  A model too large to enumerate is UNCHECKED, and counted as such. With an
+#                  objective (T8) the references enumerate it as `solve satisfy`, and the
+#                  .scp's prob_type must name the .fzn's direction and variable, and
+#                  baguette's last solution must reach the set's optimum under it.
 #
 # Usage: scripts/e2e_lane.sh [-j N] [OUTDIR]       (N <= 8; OUTDIR default /tmp/baguette-e2e-$$)
 # Env:   CAKE_PB_CP  the verified encoder/checker (default: the build of D-0174, see below);
@@ -99,11 +109,12 @@ cat "$OUT/chain.txt" | sed -E 's/ veripb=.*//'
 nv=$(grep -c ' VERIFIED ' "$OUT/chain.txt")
 nvs=$(grep -c ' VERIFIED SAT ' "$OUT/chain.txt")
 nvu=$(grep -c ' VERIFIED UNSAT ' "$OUT/chain.txt")
+nvo=$(grep -c ' VERIFIED OPT=' "$OUT/chain.txt")
 ns=$(grep -c ' SKIPPED ' "$OUT/chain.txt")
 nf=$(grep -vc -E ' (VERIFIED|SKIPPED) ' "$OUT/chain.txt")
 nm=$(ls "$ROOT"/test/models/*.fzn | wc -l)
 nl=$(wc -l < "$OUT/chain.txt")
-echo "chain: $nm models, $nv VERIFIED ($nvs SAT, $nvu UNSAT), $ns SKIPPED, $nf FAIL"
+echo "chain: $nm models, $nv VERIFIED ($nvs SAT, $nvu UNSAT, $nvo OPT), $ns SKIPPED, $nf FAIL"
 [ "$nf" -eq 0 ] && [ "$nl" -eq "$nm" ] || fail=1
 [ "$nv" -gt 0 ] || { echo "FAIL chain: NOT ONE model was verified. This is not a pass."; fail=1; }
 
@@ -117,8 +128,12 @@ bool_or_sat:opb-stronger bool_and_sat:opb-stronger reif_lin_le_sat:opb-stronger
 reif_eq_refute_sat:opb-reif reif_le_refute_sat:opb-reif bits_reif_sat:opb-reif
 element_sat:opb-stronger element_learn_prunes_sat:opb-stronger gcc_forced_sat:opb-stronger
 gcc_const_counts_sat:opb-stronger maxmin_sat:opb-stronger inverse_sat:opb-stronger
-member_sat:opb-reif member_gap_sat:opb-reif gcc_repeat_free_sat:copy-witness"
-NCONTROLS=23
+member_sat:opb-reif member_gap_sat:opb-reif gcc_repeat_free_sat:copy-witness
+opt_min_sat:opt-better opt_max_sat:opt-better opt_min_sat:opt-worse restart_queens6_opt:opt-worse
+opt_min_sat:core-better restart_queens6_opt:core-better opt_max_sat:core-worse bits_maxmin_opt_sat:core-worse"
+NCONTROLS=31
+OPTW="The lower bound claimed for \`conclusion BOUNDS\` is larger than the best logged objective value."
+CORE="conclusion BOUNDS check failed:"
 for c in $CONTROLS; do echo "$c"; done | xargs -P "$J" -I{} bash -c \
     'm=${0%%:*}; k=${0#*:}; f="$1/test/models/$m.fzn"; [ -f "$f" ] || f="$1/tools/e2e/models/$m.fzn"
      run "$1"/tools/e2e/chain.sh "$f" "$2" "$k"' {} "$ROOT" "$OUT/controls" \
@@ -138,6 +153,12 @@ while IFS= read -r l; do
         scp-weaker) [[ "$at" =~ ^@c[0-9]+\ rup$ ]] && [ "$cause" = "$RUP" ] && ok=1 ;;
         scp-stronger) [[ "$at" == "sol "* ]] && [[ "$cause" =~ ^"$SOL"\ [0-9]+\ in\ the\ database\.\ \(@S\[c\[$target\]\]\)$ ]] && ok=1 ;;
         bridge-witness | copy-witness) [ "$at" = "$target red" ] && [ "$cause" = "$RED" ] && ok=1 ;;
+        opt-better)
+            ub=${target#* }
+            [ "$at" = "conclusion BOUNDS" ] && [ "$cause" = "Unable to verify 'conclusion BOUNDS'. The claimed upper bound of $ub mismatches the best recorded upper bound of $((ub + 1))." ] && ok=1 ;;
+        opt-worse) [ "$at" = "conclusion BOUNDS" ] && [ "$cause" = "$OPTW" ] && ok=1 ;;
+        core-better) [ "$at" = "conclusion BOUNDS" ] && [ "$cause" = "$CORE [lb <= dbound] T [upper bound check] F [lower bound check] T" ] && ok=1 ;;
+        core-worse) [ "$at" = "conclusion BOUNDS" ] && [ "$cause" = "$CORE [lb <= dbound] F [upper bound check] T [lower bound check] T" ] && ok=1 ;;
     esac
     if [[ "$l" == *" REFUSED "* ]] && [ $ok -eq 1 ]; then
         echo "PASS  $l"

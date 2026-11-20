@@ -19,6 +19,12 @@ place and prints what it changed, for the lane to check the refusal against.
                                 D-0180): the first `@Y1[...]` red line, which defines a
                                 global_cardinality COPY's rung as its original's, gets the
                                 witness `Y -> ~X` in place of `Y -> X`; prints its label
+  mutate.py bounds FILE D        a WRONG CLAIMED OPTIMUM (T8, D-0182): the `conclusion BOUNDS
+                                LB : ID UB` line of a proof (baguette's .pbp) or of an
+                                elaborated core gets LB and UB moved by D, so it claims an
+                                optimum D away from the one found (in the PB objective's
+                                numbers, which are minimised: D < 0 claims a better one);
+                                prints the new `LB UB`
 Exit 1 when there is nothing to mutate.
 """
 import re
@@ -75,6 +81,14 @@ def main(kind, path, *rest):
             return 1
         text = text[:m.start(2)] + "0" + text[m.end(2):]
         what = m.group(1)
+    elif kind == "bounds":
+        m = re.search(r"^conclusion BOUNDS (-?\d+)( : \S+ )(-?\d+)", text, re.M)
+        if not m:
+            return 1
+        d = int(rest[0])
+        lb, ub = int(m.group(1)) + d, int(m.group(3)) + d
+        text = text[:m.start(1)] + f"{lb}{m.group(2)}{ub}" + text[m.end(3):]
+        what = f"{lb} {ub}"
     else:
         return 64
     open(path, "w").write(text)

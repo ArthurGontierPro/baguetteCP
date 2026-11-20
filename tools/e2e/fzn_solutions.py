@@ -23,6 +23,12 @@ standard library's globals where one exists (global_cardinality, inverse over th
 sets), and SPEC 2.1's sentence for member, which has no standard global with selectors.
 They share nothing with tools/e2e/fzn2scp.py; member's reading of SPEC is the one place the
 two are written from the same sentence.
+
+An objective (T8, D-0182). `solve [ann] minimize|maximize ID;` is replaced by `solve
+satisfy;` so that `-a` enumerates EVERY solution rather than the improving ones, and the
+line `objective minimize|maximize ID` is printed at the end, ID read from the .fzn as the
+reference has it: validate.py takes the optimum over the set from it, independently of the
+translator's prob_type.
 """
 import re
 import subprocess
@@ -64,6 +70,12 @@ def as_minizinc(text):
 def main(gecode, fzn, names, work, timeout=120):
     want = {l.split()[1] for l in open(names) if l.strip()}
     text = open(fzn).read()
+    objective = None
+    m = re.search(r"^\s*solve\b[^;]*?\b(minimize|maximize)\s+([A-Za-z_][A-Za-z0-9_]*)\s*;",
+                  text, re.M)
+    if m:
+        objective = (m.group(1), m.group(2))
+        text = text[:m.start()] + "solve satisfy;" + text[m.end():]
     mzn = any(re.search(rf"\bconstraint\s+{n}\s*\(", text) for n in NOT_BUILTIN)
     out = []
     for line in text.splitlines():
@@ -126,6 +138,8 @@ def main(gecode, fzn, names, work, timeout=120):
         return 1
     print(f"count {len(lines)}")
     print("\n".join(sorted(lines)))
+    if objective:
+        print(f"objective {objective[0]} {objective[1]}")
     return 0
 
 

@@ -20,7 +20,6 @@ of it to every session and stopping at a broken line before it even reached the 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
 | M8-bits-encoding-T4 (two arms, `W = none` and `W = 0`, on the sixteen editions) | run directories under `/scratch/arthur/m8t4/`, `tools/compare/` (additions), `bench/challenge/README.md` (the run's row), a new D-record | agent-m8t4 (`wave55-m8t4`) | 2026-11-20 |
-| M14-e2e-verification-T8 (optimisation, and cake_pb_cp on search proofs) | `tools/e2e/`, `scripts/e2e_lane.sh`, `bench/e2e_spike/`, run dirs `/scratch/arthur/wave55-e2e8-runs/`; reserved record D-0182 | agent-e2e8 (`wave55-e2e8`) | 2026-11-20 |
 | M10-search-strategy-T5, M9-no-proof-T3, M7-T30 (one Challenge series on current main: default, `-f`, default `--no-proof`) | run dirs `/scratch/arthur/m10t5/`, `tools/compare/` (additions), `bench/challenge/README.md` (the run's row); reserved record D-0185 | agent-m10t5 (`wave55-m10t5`) | 2026-11-20 |
 | M16-file-review-T1 (the core) | `lib/core/store.ml`, `domain.ml`, `engine.ml`, `var.ml`, `propagator.ml`, `search.ml`, their unit tests; `bench/scaling/baseline.tsv` (re-baseline only); reserved record D-0186 | agent-review1 (`wave55-review1`) | 2026-11-20 |
 
@@ -454,6 +453,7 @@ section 1. Shares are inclusive, of the whole run.
 
 | Task | Session | Date | Summary |
 |---|---|---|---|
+| M14-e2e-verification-T8 (optimisation, and cake_pb_cp on search proofs) | agent-e2e8 (`wave55-e2e8`) | 2026-11-20 | **D-0182.** `solve minimize/maximize` translated and bridged (each `soli` re-derived over the ladder); `make e2e` 188 of 207 VERIFIED (8 OPT), 31 of 31 controls (8 wrong optimum, 4 refused by `cake_pb_cp` itself), 187 AGREE. Challenge: 166 of the 201 instances baguette completes in 300 s are translatable; of the first 100, 96 VERIFIED by `cake_pb_cp`, 4 exhausted its 24 GB heap, 0 refused; chain a median x12.7 of `veripb` alone, the prefix being the cost. Series tail still running. Four bridge bugs fixed (selector definitions, constant selectors, clause resolvents, Theta(w^2) running rows). New `tools/e2e/measure.sh`, `prefix.sh`, `bench/e2e_spike/series.sh`, `summarise.py` |
 | M14-e2e-verification-T5 (globals in the e2e chain) | agent-e2e5 (`wave55-e2e5`) | 2026-11-20 | **D-0180.** Translator covers `array_int_element`, `global_cardinality` (open, both names), `array_int_maximum/minimum`, `int_max/min`, `baguette_inverse`, `baguette_member(_bool)` (per-selector `equals_if` + `or`, not cake's `in`), and bare `var int` aliases. Bridge: interior `eq` atoms as order indicators, gcc copies by a red pair, weakening/resolution + saturation. `make e2e`: 179 of 207 VERIFIED (was 105), 0 FAIL; 23 of 23 controls; 178 AGREE, 1 UNCHECKED. Also touched `scripts/README.md` §9 (control count, timing), unclaimed at the time |
 | M14-e2e-verification-T4 (Boolean and reified families in the e2e chain) | agent-e2e4 (`wave55-e2e4`) | 2026-11-20 | **D-0178.** The translator covers every Boolean and reified builtin of SPEC 2.1 (cake's `or`/`and`/`equals`/`not_equals`/`*_iff` with reify tuples `(b = 1)`); the bridge swaps cake's atoms for baguette's literals (`rup` clauses), resolves cake's `lt/gt` flag clause, defines `_neN` by a red pair, saturates cake's bit-range big-M, pins by `ia`. `make e2e`: 105 of 207 VERIFIED (was 75), 102 SKIPPED, 0 FAIL; 14 of 14 controls (6 new: `opb-stronger` on the Boolean family and `int_lin_le_reif`, `opb-reif` a wrong reification); 105 AGREE with Gecode/CP-SAT |
 | M15-symmetry (roadmap rows only) | codes-cp session | 2026-11-20 | New M15 section at the end of `docs/ROADMAP.md`: dejavu beside baguette (not inside it), T1 study of dejavu's latest versions and Markus Anders' papers, T2 the side-by-side pipeline from codes-cp's prototype, T3 breaking that agrees with the search (Ciaran's idea), T4-T7 parked. M13-codes-leads-T2 marked moved to M15 |
@@ -675,6 +675,13 @@ user decides between D-0183's options A (recommended, nothing now), B and C. Res
 In-proof tabulation of `int_times` works over the order encoding and every piece is checked by veripb (`bench/tabulation_spike/run_spike.sh`, 4 models, 6 mutation controls refused at their line). It costs about `5 |Dx| |Dy|` root lines, not ~10, and 23 of 37 GAC removals were already `rup` against D-0060's rows. Nothing built (D-0184 option A). M4-T6b (TODO, autonomous) measures the node gain on real instances before any build.
 
 ## Handoff notes
+
+### 2026-11-20 (agent-e2e8, `wave55-e2e8`): M14-e2e-verification-T8, D-0182
+
+Objectives are in the e2e chain (`make e2e` 188 of 207, 8 OPT, 31 controls). On the Challenge, 96 of the first
+100 instances are certified by `cake_pb_cp`, 4 exhaust its 24 GB heap, none refused; the cost is the prefix, not
+the search, so T3/T7 are the lever. The series' 66 largest instances still run detached: `kill $(cat
+/scratch/arthur/wave55-e2e8-runs/series3/series.pid)` plus `series3/runs/*.pid` and their `pgrep -P` children to stop it, never by name.
 
 ### 2026-11-20 (agent-sym3, `wave55-sym3`): M15-symmetry-T3, D-0181
 
