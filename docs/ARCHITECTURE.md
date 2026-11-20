@@ -238,19 +238,22 @@ conflict analysis, and recomputing a propagator's reason is not cheap.
 
 **Until its line is written** (M11-complexity-T13, D-0168). Once `Justify.emit` has
 written a thunk's derivation, the thunk is *released*: it records the line (id, level)
-and drops the tree, and the memo cells the emission made for nodes the closure built go
-with it. A later `emit` is answered by the line for as long as no wipe has reached its
-level; after such a wipe, and for every reader that walks the tree (`Explanation.lits`,
-`Pb_analysis.cited_ids`, a match on the forced head), the closure is forced again, not
-memoised. That writes the same proof because a thunk closes over a snapshot (I-X6), so a
-second forcing is the same derivation, and because a node of the tree is either
-*captured* (a value the closure did not build, held by both forcings, which keeps its
-cell) or *built* (new at each forcing, reachable from its tree alone, so no lookup can ask
-for it again). The smart constructors record, during a forcing, which operands they were
-handed that they had not built; only a forcing that may have captured pays a second
-forcing at its release to tell the two apart. `BAGUETTE_DEBUG` re-forces every release and
-every later read against the original, and checks that a cell taken out is never asked for
-again. `lib/core/explanation.ml`'s header gives the argument reader by reader. The type's
+and drops the tree. A later `emit` is answered by the line for as long as no wipe has
+reached its level; after such a wipe, and for every reader that walks the tree
+(`Explanation.lits`, `Pb_analysis.cited_ids`, a match on the forced head), the closure is
+forced again, not memoised. That writes the same proof because a thunk closes over a
+snapshot (I-X6), so a second forcing is the same derivation. `BAGUETTE_DEBUG` re-forces
+every release and every later read against the original.
+
+**Every node a line is written for carries it** (M11-complexity-T15, spike, branch
+`wave55-dag`). `Clause`, `Linear`, `Cut`, `Combine` and `Resolve` are inline records with
+a mutable `line` (the record a thunk keeps) and an identity `hid`, so `Justify`'s memo is
+a field read on the node and no table holds a node: what T13 needed to take out of the
+table (a frame of what a forcing built, a second forcing where it might have captured)
+is gone. Build nodes through the smart constructors; a pattern names the fields it reads
+and ends in `_`. With `BAGUETTE_HASHCONS=1` the constructors also return a written node
+of the same content, so an identical derivation is one line (the bytes change; off by
+default). `lib/core/explanation.ml`'s header gives the argument reader by reader. The type's
 listing above is the 2026-09 sketch; the module is the reference.
 
 **Open**: whether `Cut` and `Deferred` are enough, or whether explanations should be

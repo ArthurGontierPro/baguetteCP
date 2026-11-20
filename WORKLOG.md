@@ -624,6 +624,11 @@ section 1. Shares are inclusive, of the whole run.
 
 ## Handoff notes
 
+### 2026-11-20 (agent-dag, `wave55-dag`): M11-complexity-T15, D-0172 PROPOSED, decision pending
+
+A spike in two variants on `795e869`. A (default) puts each node's line on the node (`Explanation.t`'s five line-writing constructors become inline records), so the memo table, D-0168's window and its second forcing are gone, every byte stays (gate green on `3f888e58`), and rcpsp_11 runs -21 % instructions. B (`BAGUETTE_HASHCONS=1`) hash-conses written nodes and writes share mode's proof for less than main (cable -64 %, cyclic -58 %, every proof verified).
+Not merged. `store.ml`'s `with_running` stats hook conflicts with D-0169's `run_as` and belongs there. D-0172 section 7 is the table for the user.
+
 ### 2026-11-20 (agent-thunk, `wave55-thunk`): M11-complexity-T13, D-0168
 
 A thunk is released once its line is written: it keeps the id and level, drops its tree, and the
