@@ -177,7 +177,7 @@ Three passes, one line per item, a summary each, `e2e_lane: PASS` or `FAIL` at t
    `cake_pb_cp`'s own `s VERIFIED SATISFIABLE|UNSATISFIABLE` line, agreeing with baguette. It exits
    0 when it refuses, so never read its status. `SKIPPED` names the first uncovered builtin (or the
    objective, or `var int` with no domain). Anything else is `FAIL`.
-2. **controls**: eight corruptions the chain must refuse, each asserted at the refused line and in
+2. **controls**: fourteen corruptions the chain must refuse, each asserted at the refused line and in
    the checker's sentence (`chain.sh`'s header lists them).
 3. **validation**: the translator against the reference solvers, solution set for solution set.
 

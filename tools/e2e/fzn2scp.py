@@ -22,6 +22,26 @@ starts `UNCOVERED:` and names the first construct it cannot translate):
   int_ne(a, b)            a != b                (c not_equals a b)
   all_different_int(xs)   pairwise distinct     (c all_different (x1 ...))
 
+  The Boolean family and the reified forms (M14-e2e-verification-T4, D-0178). A FlatZinc
+  Boolean is cake's integer 0..1, so `b` true is the reify tuple `(b = 1)`, `b` false is
+  `(b = 0)`, and a constant Boolean is the tuple `(1 = 1)` or `(0 = 1)` (cake's varc
+  accepts an integer). Each is the cake keyword whose HOL4 meaning is the builtin's own:
+
+  bool_clause(ps, ns)     some ps_i true or some ns_j false (c or ((p1 = 1) ... (n1 = 0) ...) (1 = 1))
+  array_bool_or(as, r)    r <-> OR_i as_i              (c or ((a1 = 1) ...) (r = 1))
+  array_bool_and(as, r)   r <-> AND_i as_i             (c and ((a1 = 1) ...) (r = 1))
+  bool_eq(a, b)           a = b                        (c equals a b)
+  bool_not(a, b)          a != b, i.e. a = not b       (c not_equals a b)
+  bool2int(b, x)          x = b                        (c equals b x)
+  int_le_reif(a, b, r)    r <-> a <= b                 (c less_equal_iff (r = 1) a b)
+  int_eq_reif(a, b, r)    r <-> a = b                  (c equals_iff (r = 1) a b)
+  int_ne_reif(a, b, r)    r <-> a != b                 (c not_equals_iff (r = 1) a b)
+  int_lin_le_reif(as, xs, c, r)  r <-> sum as_i xs_i <= c
+                                              (c lin_less_equal_iff (r = 1) (a1 x1 ...) c)
+
+  These are every Boolean and reified builtin of SPEC section 2.1 (M2, M3); SPEC has no
+  `bool_lin_*`, `int_lin_eq_reif` or `int_lt_reif`, so neither does this table.
+
   `var lo..hi` and `var bool` (as 0..1) variables, arrays of them, aliases (`= y`, with the
   alias's own domain kept as a constraint on y when it is narrower), parameters and constant
   arrays (written in place: .scp accepts an integer wherever a variable may stand), set
@@ -43,6 +63,8 @@ COVERED = (
     "int_lin_le", "int_lin_eq", "int_lin_ne",
     "int_le", "int_lt", "int_eq", "int_ne",
     "all_different_int",
+    "bool_clause", "array_bool_or", "array_bool_and", "bool_eq", "bool_not", "bool2int",
+    "int_le_reif", "int_eq_reif", "int_ne_reif", "int_lin_le_reif",
 )
 
 
@@ -444,6 +466,39 @@ def emit(m):
                 raise Uncovered(f"{name} with {len(args)} arguments")
             xs = m.array(args[0])
             cons.append(f"({cn} all_different ({' '.join(tm(x) for x in xs)}))")
+        elif name == "bool_clause":
+            if len(args) != 2:
+                raise Uncovered(f"{name} with {len(args)} arguments")
+            ps, ns = m.array(args[0]), m.array(args[1])
+            lits = [f"({tm(p)} = 1)" for p in ps] + [f"({tm(n)} = 0)" for n in ns]
+            cons.append(f"({cn} or ({' '.join(lits)}) (1 = 1))")
+        elif name in ("array_bool_or", "array_bool_and"):
+            if len(args) != 2:
+                raise Uncovered(f"{name} with {len(args)} arguments")
+            xs, r = m.array(args[0]), m.term(args[1])
+            kw = "or" if name == "array_bool_or" else "and"
+            cons.append(f"({cn} {kw} ({' '.join(f'({tm(x)} = 1)' for x in xs)}) ({tm(r)} = 1))")
+        elif name in ("bool_eq", "bool_not", "bool2int"):
+            if len(args) != 2:
+                raise Uncovered(f"{name} with {len(args)} arguments")
+            a, b = m.term(args[0]), m.term(args[1])
+            kw = "not_equals" if name == "bool_not" else "equals"
+            cons.append(f"({cn} {kw} {tm(a)} {tm(b)})")
+        elif name in ("int_le_reif", "int_eq_reif", "int_ne_reif"):
+            if len(args) != 3:
+                raise Uncovered(f"{name} with {len(args)} arguments")
+            x, y, r = m.term(args[0]), m.term(args[1]), m.term(args[2])
+            kw = {"int_le_reif": "less_equal_iff", "int_eq_reif": "equals_iff",
+                  "int_ne_reif": "not_equals_iff"}[name]
+            cons.append(f"({cn} {kw} ({tm(r)} = 1) {tm(x)} {tm(y)})")
+        elif name == "int_lin_le_reif":
+            if len(args) != 4:
+                raise Uncovered(f"{name} with {len(args)} arguments")
+            a, xs, c, r = m.ints(args[0]), m.array(args[1]), m.term(args[2]), m.term(args[3])
+            if len(a) != len(xs) or c[0] != "int":
+                raise Uncovered(f"{name}: malformed arguments")
+            terms = " ".join(f"{ai} {tm(xi)}" for ai, xi in zip(a, xs))
+            cons.append(f"({cn} lin_less_equal_iff ({tm(r)} = 1) ({terms}) {c[1]})")
     k = 0
     for n in m.order:
         lo, hi, vals = m.vars[n]
