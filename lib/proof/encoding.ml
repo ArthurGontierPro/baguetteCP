@@ -1469,6 +1469,27 @@ let consistency_id t x value =
       if v.lo < value && value < v.hi then Some (v.ladder_base + (value - v.lo - 1))
       else None
 
+(* [consistency_id] for ONE variable, with the variable looked up ONCE (M7-T33, D-0156).
+
+   [consistency_id] finds [x] by name on every call -- a string hash and a bucket walk
+   ([find]) to answer an arithmetic question, since the rungs are an arithmetic progression
+   (see [ivar]'s [ladder_base]). A caller that cites a whole chain of rungs of one variable
+   paid that lookup per rung: lib/core/prop/alldiff.ml's [excl] cites O(width) rungs per
+   excluded value, and the lookups were 12.4 % of 2011_cyclic-rcpsp_easy_6's proof mode
+   (D-0145 section 5). The function returned here answers exactly what [consistency_id t x]
+   answers, value for value, from the record [find] returned when it was built; that record
+   never changes once [x] is declared ([declare_int_gen] refuses a redeclaration with other
+   bounds, and the fields read here are immutable), so the answer cannot drift from
+   [consistency_id]'s. Raises [Undeclared] when built, as [consistency_id] does when called. *)
+let consistency_ids t x =
+  let v = find t x in
+  match v.repr with
+  | Bits _ -> fun _ -> None
+  | Order ->
+      let lo = v.lo and hi = v.hi and base = v.ladder_base in
+      fun value ->
+        if lo < value && value < hi then Some (base + (value - lo - 1)) else None
+
 (* ---------------------------------------------------------------------------
    Direct encoding, introduced lazily with [red]
    --------------------------------------------------------------------------- *)
