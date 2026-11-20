@@ -339,7 +339,7 @@ let established_at_root store v ~lower =
   let sup = if lower then Store.lo_support store v else Store.hi_support store v in
   sup = Store.no_support || Store.at_root store sup
 
-let range a b = List.init (Stdlib.max 0 (b - a + 1)) (fun i -> a + i)
+let range a b = List.init (Int.max 0 (b - a + 1)) (fun i -> a + i)
 
 (* The entry that took [value] out of [var], or [None].
 
@@ -707,8 +707,8 @@ let target_cancel ~y ~lower =
 let prune_summands t ~a ~b ~halls ~y ~lower =
   let keep, drop =
     if lower then
-      (range y.s_lo (Stdlib.min b y.s_dhi), range (Stdlib.max a y.s_dlo) (y.s_lo - 1))
-    else (range a y.s_hi, range (y.s_hi + 1) (Stdlib.min b y.s_dhi))
+      (range y.s_lo (Int.min b y.s_dhi), range (Int.max a y.s_dlo) (y.s_lo - 1))
+    else (range a y.s_hi, range (y.s_hi + 1) (Int.min b y.s_dhi))
   in
   core_summands t ~vals:(range a b) ~halls ~extra:(Some y)
   @ List.map (fun v -> Explanation.weaken [ (1, Lit.eq y.s_name v) ]) drop
@@ -950,8 +950,8 @@ let pass t store =
   Propagator.count_pass ();
   let moved = ref false in
   let snaps = Array.to_list (Array.map (snap_of store) t.terms) in
-  let los = List.sort_uniq compare (List.map (fun s -> s.s_lo) snaps) in
-  let his = List.sort_uniq compare (List.map (fun s -> s.s_hi) snaps) in
+  let los = List.sort_uniq Int.compare (List.map (fun s -> s.s_lo) snaps) in
+  let his = List.sort_uniq Int.compare (List.map (fun s -> s.s_hi) snaps) in
   (* One push, with both halves of D-0026 built from the same snapshot. Returns through
      [Found]/[Moved]; a push that changes nothing (the bound is already there) falls
      through, which is how [Unchanged] can happen at all here. *)
@@ -1183,13 +1183,13 @@ let regin_pass t store =
     let doms = Array.map (fun tm -> Store.get store tm.x) t.terms in
     let values =
       Array.of_list
-        (List.sort_uniq compare (List.concat_map Domain.to_list (Array.to_list doms)))
+        (List.sort_uniq Int.compare (List.concat_map Domain.to_list (Array.to_list doms)))
     in
     let nv = Array.length values in
     let holds i vi = Domain.mem doms.(i) values.(vi) in
     (* [mval.(i)] is the index of the value matched to variable [i], [mvar.(vi)] the
        variable matched to value [vi]; [-1] is unmatched on both sides. *)
-    let mval = Array.make n (-1) and mvar = Array.make (Stdlib.max 1 nv) (-1) in
+    let mval = Array.make n (-1) and mvar = Array.make (Int.max 1 nv) (-1) in
     let rec augment i seen =
       let rec go vi =
         if vi >= nv then false
@@ -1207,7 +1207,7 @@ let regin_pass t store =
     let failed = ref None in
     for i = 0 to n - 1 do
       if Option.is_none !failed then
-        let seen = Array.make (Stdlib.max 1 nv) false in
+        let seen = Array.make (Int.max 1 nv) false in
         if not (augment i seen) then failed := Some (i, seen)
     done;
     let snaps_of pick =
@@ -1283,7 +1283,7 @@ let regin_pass t store =
             in
             if not free_reachable then
               let vals =
-                List.sort_uniq compare
+                List.sort_uniq Int.compare
                   (List.filter_map
                      (fun i -> if ink.(i) then Some values.(mval.(i)) else None)
                      (range 0 (n - 1)))

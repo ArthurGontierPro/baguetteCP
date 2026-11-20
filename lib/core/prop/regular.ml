@@ -266,10 +266,10 @@ let make store ~xs ~nq ~smin ~delta ~q0 ~final ~flags : t =
     slot_of_name;
     tails = Array.make ((n + 1) * nq) None;
     reach = Array.make ((n + 1) * nq) false;
-    sup = Array.make (max w 1) false;
-    best = Array.make (max (2 * ns) 1) 0;
-    seen = Array.make (max (2 * ns) 1) 0;
-    keys_in = Array.make (max (2 * ns) 1) 0;
+    sup = Array.make (Int.max w 1) false;
+    best = Array.make (Int.max (2 * ns) 1) 0;
+    seen = Array.make (Int.max (2 * ns) 1) 0;
+    keys_in = Array.make (Int.max (2 * ns) 1) 0;
     nkeys = 0;
     others_rev = [];
     stamp = 0;
@@ -490,7 +490,7 @@ let alphabet_hull t i =
   let a = t.smin and b = t.smin + t.w - 1 in
   match t.xs.(i) with
   | Fixed c -> (c, c)
-  | Letter { dlo; dhi; _ } -> (max a dlo, min b dhi)
+  | Letter { dlo; dhi; _ } -> (Int.max a dlo, Int.min b dhi)
 
 (* P1's reason for s(i+1,q'): per value of letter i, its predecessors on q' all dead ->
    their tails; else the value is out of the domain -> the weakest bound, or the hole. *)

@@ -369,7 +369,7 @@ let established_at_root store v ~lower =
   let sup = if lower then Store.lo_support store v else Store.hi_support store v in
   sup = Store.no_support || Store.level_of_index store sup = 0
 
-let range a b = List.init (Stdlib.max 0 (b - a + 1)) (fun i -> a + i)
+let range a b = List.init (Int.max 0 (b - a + 1)) (fun i -> a + i)
 
 module Int_tbl = Hashtbl.Make (Int)
 
@@ -525,8 +525,8 @@ let high_row_shared t k =
 (* ------------------------------------------------------------------- rule A: capacity *)
 
 let declares s v = s.s_dlo <= v && v <= s.s_dhi
-let clip_lo s ~a = Stdlib.max a s.s_dlo
-let clip_hi s ~b = Stdlib.min b s.s_dhi
+let clip_lo s ~a = Int.max a s.s_dlo
+let clip_hi s ~b = Int.min b s.s_dhi
 
 (* The confined variable's share of the counting: `I_i >= 1`, as far as the ladder can
    take it.  The chains a' -> lo(i) and hi(i)+1 -> b'+1 are globally valid and free, and

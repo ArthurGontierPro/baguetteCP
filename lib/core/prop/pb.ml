@@ -226,7 +226,7 @@ let layout_of (terms : term list) : layout =
   let arr = Array.of_list terms in
   let n = Array.length arr in
   let key (a : atom) = (2 * Var.to_int a.x) + if a.positive then 1 else 0 in
-  let ids = Hashtbl.create (max 1 n) in
+  let ids = Hashtbl.create (Int.max 1 n) in
   let gid = Array.make n 0 and ng = ref 0 in
   Array.iteri
     (fun i tm ->
@@ -274,7 +274,7 @@ let scratch = { st = [||]; eff = [||]; gbest = [||] }
 
 let ensure_scratch n =
   if Array.length scratch.st < n then (
-    let m = max n (2 * Array.length scratch.st) in
+    let m = Int.max n (2 * Array.length scratch.st) in
     scratch.st <- Array.make m Open;
     scratch.eff <- Array.make m 0;
     scratch.gbest <- Array.make m 0)

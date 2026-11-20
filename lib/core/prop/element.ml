@@ -329,8 +329,8 @@ let make store enc ~rows ~(pos : View.t) ~(res : View.t) ~(values : int array) =
   let d = Store.get store ibase in
   let idlo = Domain.lo d and idhi = Domain.hi d in
   let ends = [ Lit.apply imap idlo; Lit.apply imap idhi ] in
-  let plo = List.fold_left Stdlib.min (List.hd ends) ends in
-  let phi = List.fold_left Stdlib.max (List.hd ends) ends in
+  let plo = List.fold_left Int.min (List.hd ends) ends in
+  let phi = List.fold_left Int.max (List.hd ends) ends in
   let rd = View.domain store res in
   {
     pos;
@@ -357,14 +357,14 @@ let declared_positions store ~(pos : View.t) =
   | Some v, Some m ->
       let d = Store.get store v in
       let a = Lit.apply m (Domain.lo d) and b = Lit.apply m (Domain.hi d) in
-      let lo = Stdlib.min a b and hi = Stdlib.max a b in
+      let lo = Int.min a b and hi = Int.max a b in
       List.init (hi - lo + 1) (fun i -> lo + i)
   | _ ->
       invalid_arg "Element.declared_positions: the index must be a view onto a variable"
 
 (* ------------------------------------------------------------------- explanations *)
 
-let range a b = List.init (Stdlib.max 0 (b - a + 1)) (fun i -> a + i)
+let range a b = List.init (Int.max 0 (b - a + 1)) (fun i -> a + i)
 let cite id = Explanation.term 1 (Explanation.model_row id)
 
 let need what = function
@@ -419,7 +419,7 @@ let idx_halves t p =
 let restate t row p =
   let halves = idx_halves t p in
   let h = List.length halves in
-  Explanation.combine (cite row :: List.map (fun id -> cite id) halves) (Stdlib.max 1 h)
+  Explanation.combine (cite row :: List.map (fun id -> cite id) halves) (Int.max 1 h)
 
 let implies_ge t p = restate t (row_ge t p) p
 let implies_le t p = restate t (row_le t p) p
@@ -776,7 +776,7 @@ let hole_expl t store ~live ~v =
   let below = List.filter (fun p -> t.values.(p) < v) live in
   let above = List.filter (fun p -> t.values.(p) > v) live in
   let na = List.length below and nb = List.length above in
-  let m = Stdlib.max na nb in
+  let m = Int.max na nb in
   if m = 0 then
     invalid_arg "Element.hole_expl: no live position, which is a conflict and not a hole";
   let rn = match t.rname with Some x -> x | None -> assert false in
@@ -1214,8 +1214,8 @@ let filter_result t store =
   let live = live_positions t store in
   if live = [] then raise (Found (no_position_conflict t store));
   let vals = List.map (fun p -> t.values.(p)) live in
-  let a = List.fold_left Stdlib.min (List.hd vals) vals in
-  let b = List.fold_left Stdlib.max (List.hd vals) vals in
+  let a = List.fold_left Int.min (List.hd vals) vals in
+  let b = List.fold_left Int.max (List.hd vals) vals in
   (* M11-complexity-T8 / D-0155: built at the first pruning that needs it, not on every
      pass. Most passes prune nothing, and this list (one remover's reason per index hole,
      a [Later] materialised for each) was then built for nobody. Nothing in this pass

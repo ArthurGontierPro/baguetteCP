@@ -155,7 +155,7 @@ let mins_scratch = ref [||]
 
 let mins_for n =
   if Array.length !mins_scratch < n then
-    mins_scratch := Array.make (Stdlib.max n (2 * Array.length !mins_scratch)) 0;
+    mins_scratch := Array.make (Int.max n (2 * Array.length !mins_scratch)) 0;
   !mins_scratch
 
 let name = "int_lin_le"
@@ -232,7 +232,7 @@ let pb_row ?(bits_n = fun _ -> None) store (t : t) : Propagator.pb_row =
                 List.init n (fun i -> (Checked.mul (-tm.coeff) (1 lsl i), Lit.bit name i))
             | None ->
                 List.init
-                  (max 0 (tm.decl_hi - tm.decl_lo))
+                  (Int.max 0 (tm.decl_hi - tm.decl_lo))
                   (fun i -> (-tm.coeff, Lit.ge name (tm.decl_lo + 1 + i)))
           in
           (block :: acc, Checked.add const (Checked.mul tm.coeff tm.decl_lo)))
@@ -381,8 +381,8 @@ let rests_on_a_decision reasons =
    for it. ONE function for both halves (D-0026): [snapshot_at] stores it, [fact_at]
    states it, and neither recomputes the case split. No allocation. *)
 let value_at (h : Store.history) (tm : term) =
-  if tm.coeff >= 0 then Stdlib.max (Store.lo_at h tm.x) tm.decl_lo
-  else Stdlib.min (Store.hi_at h tm.x) tm.decl_hi
+  if tm.coeff >= 0 then Int.max (Store.lo_at h tm.x) tm.decl_lo
+  else Int.min (Store.hi_at h tm.x) tm.decl_hi
 
 let snapshot_at (h : Store.history) (tm : term) : source_snap option =
   if tm.coeff = 0 then None

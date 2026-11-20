@@ -312,7 +312,7 @@ let guarded_row ~bound ~(guards : guard list) (e : aff) rhs : row =
   match guards with
   | [] -> { r_terms = e.a_terms; r_rhs = rhs }
   | _ ->
-      let m = Stdlib.max 1 (Checked.sub (terms_max ~bound e.a_terms) rhs) in
+      let m = Int.max 1 (Checked.sub (terms_max ~bound e.a_terms) rhs) in
       let npos = List.length (List.filter (fun g -> g.g_pos) guards) in
       let gterms =
         List.map (fun g -> ((if g.g_pos then m else Checked.neg m), g.g_var)) guards
@@ -477,7 +477,7 @@ let div_rows ~bound ~(x : aff) ~(y : case) ~(q : aff) ~(sign : sign) ~ge : row l
         match x.a_terms with
         | [ (1, xi) ] ->
             let l, h = bound xi in
-            Stdlib.max (Checked.abs l) (Checked.abs h)
+            Int.max (Checked.abs l) (Checked.abs h)
         | [] -> Checked.abs x.a_const
         | _ -> -1
       in
@@ -517,9 +517,9 @@ let abs_rows ~bound ~(x : aff) ~(z : aff) ~(sign : sign) : row list =
   (match x.a_terms with
   | [ (1, xi) ] ->
       let xl, xh = bound xi in
-      let u = Stdlib.max (Checked.abs xl) (Checked.abs xh) in
+      let u = Int.max (Checked.abs xl) (Checked.abs xh) in
       let l =
-        if xl <= 0 && 0 <= xh then 0 else Stdlib.min (Checked.abs xl) (Checked.abs xh)
+        if xl <= 0 && 0 <= xh then 0 else Int.min (Checked.abs xl) (Checked.abs xh)
       in
       acc := emit ~bound ~guards:[] z u !acc;
       acc := emit ~bound ~guards:[] (aff_neg z) (Checked.neg l) !acc
