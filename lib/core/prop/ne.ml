@@ -354,7 +354,9 @@ let removal_conclusion tm w d =
 
 (* ------------------------------------------------------------------- propagation *)
 
-let fixed_at store tm = Domain.value (Store.get store tm.x)
+(* Whether [tm]'s variable is fixed: [Domain.value]'s [Some] test without the [Some]
+   (M16-file-review-T2, D-0190; [unfixed_positions] asks it per term per run). *)
+let is_fixed store tm = Domain.is_fixed (Store.get store tm.x)
 
 (* Every term paired with its current fixed value, or [None] if some term is unfixed.
    Only called once every term is known fixed. *)
@@ -379,7 +381,7 @@ let unfixed_positions store terms ~limit =
     | [] -> List.rev acc
     | tm :: rest ->
         if List.length acc >= limit then List.rev acc
-        else if Option.is_none (fixed_at store tm) then go (i + 1) (i :: acc) rest
+        else if not (is_fixed store tm) then go (i + 1) (i :: acc) rest
         else go (i + 1) acc rest
   in
   go 0 [] terms

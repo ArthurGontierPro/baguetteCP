@@ -98,7 +98,13 @@
    still, firing only with every condition variable fixed. The re-dispatch is a guard
    for a future author whose entailment test is cheaper than its enforcement, not a
    path this suite exercises; even without it nothing would be lost but a queue
-   round-trip, since the reifier is in [vars] and the engine re-wakes on it. *)
+   round-trip, since the reifier is in [vars] and the engine re-wakes on it.
+
+   COST (M16-file-review-T2, D-0190). A run reads the reifier once ([decided], a constant
+   constructor, no [Domain.value] option) and then costs what the author's piece costs:
+   for [Reif_lin_le] one or two [Linear] runs, O(n) each. The dispatcher builds no
+   closure per run, and the authors hand it closures of their own arity rather than
+   partial applications. *)
 
 module Domain = Domain
 module Store = Store
@@ -134,25 +140,31 @@ let make ~reifier ~positive ~vars ~hold ~not_hold ~entail store =
 (* The reifier first: it is the variable the engine will most often have just moved. *)
 let vars t = t.r_b :: t.r_vars
 
-let propagate t store =
-  (* [Some true] / [Some false] once the reification literal is decided, [None] while
-     it is open. This is the only place [r_positive] is read. *)
-  let decided () =
-    match Domain.value (Store.get store t.r_b) with
-    | None -> None
-    | Some v -> Some (v = 1 = t.r_positive)
-  in
-  let rec go again =
-    match decided () with
-    | Some true -> t.r_hold store
-    | Some false -> t.r_not_hold store
-    | None -> (
-        match t.r_entail store with
-        | Propagator.Conflict c -> Propagator.Conflict c
-        | Propagator.Fixpoint ->
-            (* The contrapositive just landed: the entailment piece decided the
-               reifier, so the matching enforcement piece has not run yet. *)
-            if again && Option.is_some (decided ()) then go false else Propagator.Fixpoint
-        )
-  in
-  go true
+(* Whether the reification literal is decided, and which way. This is the only place
+   [r_positive] is read. M16-file-review-T2 (D-0190): a constant constructor read off
+   [Domain.is_fixed] and [Domain.lo], where it was [Some true] / [Some false] / [None]
+   built from [Domain.value]'s [Some v], two allocations per run of every reified
+   constraint; and [decided] and [go] are top-level, so a run builds no closure. *)
+type decision = Holds | Fails | Open
+
+let decided t store =
+  let d = Store.get store t.r_b in
+  if not (Domain.is_fixed d) then Open
+  else if Domain.lo d = 1 = t.r_positive then Holds
+  else Fails
+
+let rec go t store again =
+  match decided t store with
+  | Holds -> t.r_hold store
+  | Fails -> t.r_not_hold store
+  | Open -> (
+      match t.r_entail store with
+      | Propagator.Conflict c -> Propagator.Conflict c
+      | Propagator.Fixpoint -> (
+          (* The contrapositive just landed: the entailment piece decided the
+             reifier, so the matching enforcement piece has not run yet. *)
+          match decided t store with
+          | (Holds | Fails) when again -> go t store false
+          | Holds | Fails | Open -> Propagator.Fixpoint))
+
+let propagate t store = go t store true
