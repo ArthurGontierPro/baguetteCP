@@ -2412,7 +2412,9 @@ solve :: seq_search([int_search([b, y], input_order, indomain_min, complete), in
        [member_chase_src] above. Three text lanes, each deleting ONE threshold lemma of a
        derivation ahead (and its pol) from the honest proof; the line it was written for
        must be refused at the RUP wording:
-         chase-start  the chase's first lemma (R+ at 2 under b1: y >= 2 -> x1 >= 2);
+         chase-start  the chase's first lemma (R- at 3 under b1: x1 >= 3 -> y >= 3; the
+                      chase runs from the top, where y's declared overlap with x1 ends
+                      at 5, so its lemmas are the three owner switches 3, 4, 5);
          chase-last   its last (R- at 5: x1 >= 5 -> y >= 5);
          transfer     the hole transfer's one lemma (R- at 3 under b2). *)
     let solve_chase () =
@@ -2445,7 +2447,7 @@ solve :: seq_search([int_search([b, y], input_order, indomain_min, complete), in
       (fun c ->
         member_lemma_lane c ~proof:b.pbp ~opb:b.opb ~line:member_chase_line ~nth:0
           "chase-start";
-        member_lemma_lane c ~proof:b.pbp ~opb:b.opb ~line:member_chase_line ~nth:3
+        member_lemma_lane c ~proof:b.pbp ~opb:b.opb ~line:member_chase_line ~nth:2
           "chase-last";
         member_lemma_lane c ~proof:b.pbp ~opb:b.opb ~line:member_transfer_line ~nth:0
           "transfer");

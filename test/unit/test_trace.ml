@@ -1149,11 +1149,12 @@ let ix10_table =
        all_different instances an inverse posts beside it (stage 2) are alldiff.ml's and
        keep its Needs_derivation; their pairwise rows are root lemmas. *)
     ("inverse.ml", Single_row);
-    (* M7-T28 (D-0159, D-0168): member, over two big-M rows per position since M7-T34.
+    (* M7-T28 (D-0159, D-0168): member, over at most six rows per position since M7-T34
+       (four bound clauses and two big-M rows over the declared overlap).
        A line that only compares bounds is one rup against them (a selector death by
        disjoint bounds, the last selector set by OR, a bound carried under a set selector,
        a value of y every live position excludes by a bound). A line whose argument walks
-       a HOLE is not: a big-M row propagates no rung of a ladder, so the threshold lemmas
+       a HOLE is not: the rows propagate no rung of a ladder, so the threshold lemmas
        R+/R- that carry a bound across are written AHEAD of it (a selector death across
        holes, a hole carried under a set selector, a value of y one live position excludes
        by a hole), and so is the gap shape of D-0159 (two or more such positions, a case

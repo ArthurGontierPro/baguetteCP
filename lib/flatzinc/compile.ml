@@ -1511,17 +1511,17 @@ let compile (m : Model.t) : t =
 
      `baguette_member(x, y, b)` (D-0151 section 3, D-0159, D-0168): the rows
      lib/core/prop/member.ml's header states, in this order -- OR over the selectors, then
-     per position k the two big-M rows of `b_k -> x_k = y` (M7-T34):
+     per position k, [a, b] the overlap of the two DECLARED hulls (M7-T34):
 
-       F_k   -x_k + y + M b_k <= M       M  = hi y - lo x_k
-       G_k    x_k - y + M' b_k <= M'     M' = hi x_k - lo y
+       ~b_k \/ [x_k >= a]   ~b_k \/ ~[x_k >= b+1]   ~b_k \/ [y >= a]   ~b_k \/ ~[y >= b+1]
+       F_k   sum_{v=a+1..b} ([x_k >= v] + ~[y >= v]) + (b - a) ~b_k >= b - a
+       G_k   the same with x_k and y swapped
 
-     over the DECLARED hulls, through [Encoding.add_int_lin_le] like any linear row, a
-     constant cell folded into the right-hand side, and a row whose M is not positive not
-     written (it holds on the declared box whatever b_k is). Two rows per position whatever
-     the width: the threshold clauses D-0159 posted here, two per value of the hulls'
-     overlap, are now lemmas member.ml writes into the proof where a line needs one. A
-     position whose x_k IS y has no rows: b_k is free.
+     a constant literal folded (a clause it makes true not written), a big-M row only when
+     b > a, and the single row `~b_k` when the hulls are disjoint. At most six rows per
+     position whatever the width; the threshold clauses D-0159 posted here, two per value
+     of the overlap, are now lemmas member.ml writes into the proof where a line needs
+     one. A position whose x_k IS y has no rows: b_k is free.
 
      Refused with a position: a selector count other than one per position, and a
      selector that is not a Boolean variable declared on 0..1, distinct from the others
@@ -1575,30 +1575,50 @@ let compile (m : Model.t) : t =
       | Member.Cell { var = u; _ }, Member.Cell { var = w; _ } -> Var.equal u w
       | _ -> false
     in
-    (* [sum a_i c_i + mb * b_k <= mb] over the cells [(a_i, c_i)], a constant folded into
-       the right-hand side; not written when [mb <= 0], where it holds on the declared
-       box whatever b_k is. *)
-    let big_m k cells mb =
-      if mb > 0 then
-        let terms, rhs =
-          List.fold_left
-            (fun (ts, r) (a, c) ->
-              match c with
-              | Member.Fixed v -> (ts, r - (a * v))
-              | Member.Cell { name; _ } -> ((a, name) :: ts, r))
-            ([ (mb, name_of pos svars.(k)) ], mb)
-            cells
+    (* [c >= v] as the constant true, the constant false, or a literal. *)
+    let ge c v =
+      match c with
+      | Member.Fixed k -> if k >= v then `T else `F
+      | Member.Cell { name; dlo; dhi; _ } ->
+          if v <= dlo then `T else if v > dhi then `F else `L (Lit.ge name v)
+    in
+    let not_ = function `T -> `F | `F -> `T | `L l -> `L (Lit.negate l) in
+    let clause parts =
+      if not (List.mem `T parts) then
+        let lits = List.filter_map (function `L l -> Some l | `T | `F -> None) parts in
+        ignore (Encoding.add_constraint encoding (Opb.clause lits) : int)
+    in
+    (* sum_{v = a+1..b} ([p >= v] + ~[q >= v]) + (b - a) ~b_k >= b - a: p - q >= 0 over
+       the overlap's rungs, both being in [a, b]. Every [v] is a rung of both: a cell in
+       the overlap with b > a is a variable. *)
+    let big_m nb p q a b =
+      if b > a then
+        let rung c v = match ge c v with `L l -> l | `T | `F -> assert false in
+        let terms =
+          List.concat_map
+            (fun v -> [ (1, rung p v); (1, Lit.negate (rung q v)) ])
+            (List.init (b - a) (fun i -> a + 1 + i))
         in
-        ignore (Encoding.add_int_lin_le encoding (List.rev terms) rhs : int)
+        ignore
+          (Encoding.add_constraint encoding (Opb.ge (terms @ [ (b - a, nb) ]) (b - a))
+            : int)
     in
     Array.iteri
       (fun k c ->
-        if not (same c cy) then (
+        if not (same c cy) then
+          let nb = Lit.negate (blit k) in
           let lx, hx = hull c and ly, hy = hull cy in
-          (* F_k   x_k - y + M ~b_k >= 0,  M = hi y - lo x_k *)
-          big_m k [ (-1, c); (1, cy) ] (hy - lx);
-          (* G_k   y - x_k + M ~b_k >= 0,  M = hi x_k - lo y *)
-          big_m k [ (1, c); (-1, cy) ] (hx - ly)))
+          let a = max lx ly and b = min hx hy in
+          if a > b then clause [ `L nb ]
+          else (
+            (* x_k and y in [a, b] under b_k *)
+            clause [ `L nb; ge c a ];
+            clause [ `L nb; not_ (ge c (b + 1)) ];
+            clause [ `L nb; ge cy a ];
+            clause [ `L nb; not_ (ge cy (b + 1)) ];
+            (* F_k, G_k: x_k - y >= 0 and y - x_k >= 0 over the overlap's rungs *)
+            big_m nb c cy a b;
+            big_m nb cy c a b))
       cx;
     let aliased = List.length (List.sort_uniq compare letters) <> List.length letters in
     let p = Member.make store ~xs:cx ~y:cy ~sels:(Array.map Var.of_int svars) ~or_row in

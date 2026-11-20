@@ -9,7 +9,9 @@ printed solution against the constraints, and veripb over the proof. Domains sta
 single digits (CLAUDE.md).
 
 usage: fuzz_member.py BINARY OUTDIR [N] [SEED] [EXTRA SOLVER FLAGS...]
-Prints one line per failure and a summary; exit 1 on any failure.
+Prints one line per failure and a summary; exit 1 on any failure. With LOAD_BEARING=1
+(the default) every threshold lemma of a SATISFIABLE model's proof is also deleted in
+turn, and counted load-bearing when veripb then refuses at the RUP wording.
 """
 import itertools
 import os
@@ -125,9 +127,62 @@ def sat(m):
     return any(holds(m, a) for a in itertools.product(*m[0]))
 
 
+LOAD_BEARING = os.environ.get("LOAD_BEARING", "1") == "1"
+
+
+def load_bearing(base):
+    """On a SATISFIABLE model's proof: for each `pol` written ahead of a line, delete each
+    threshold lemma it weakens back out (a cited id followed by literal axioms), with the
+    pol, and ask veripb again. A lemma is load-bearing when the proof is then refused at
+    the RUP wording. Returns (load-bearing, redundant)."""
+    lines = open(base + ".pbp").read().split("\n")
+    lb = red = 0
+    for i, line in enumerate(lines):
+        toks = line.split()
+        if len(toks) < 2 or toks[1] != "pol":
+            continue
+        lemmas = []
+        rest = toks[2:]
+        for j, w in enumerate(rest):
+            if w.startswith("@"):
+                nxt = rest[j + 1:j + 3]
+                if nxt and (is_lit(nxt[0]) or (nxt[0] == "+" and len(nxt) > 1 and is_lit(nxt[1]))):
+                    lemmas.append(w)
+        for lem in lemmas:
+            gone = {lem, toks[0]}
+            kept = []
+            for l in lines:
+                t = l.split()
+                if t and t[0] in gone:
+                    continue
+                if l.startswith("del id "):
+                    ids = [w for w in l[7:].split() if w not in gone]
+                    if ids == [";"]:
+                        continue
+                    l = "del id " + " ".join(ids)
+                kept.append(l)
+            with open(base + ".lb.pbp", "w") as f:
+                f.write("\n".join(kept))
+            v = subprocess.run(["veripb", base + ".opb", base + ".lb.pbp"],
+                               capture_output=True, text=True, timeout=300)
+            out = v.stdout + v.stderr
+            if v.returncode != 0 and "reverse unit propagation" in out:
+                lb += 1
+            else:
+                red += 1
+                print("REDUNDANT %s: lemma %s of %s" % (base, lem, toks[0]))
+                os.system("cp %s.fzn %s.redundant.fzn" % (base, base))
+        os.remove(base + ".lb.pbp") if os.path.exists(base + ".lb.pbp") else None
+    return lb, red
+
+
+def is_lit(w):
+    return w not in ("+", "*", "d", ";") and not w.startswith("@") and not w[0].isdigit()
+
+
 r = random.Random(SEED)
 fails = 0
-stats = {"SAT": 0, "UNSAT": 0, "pol": 0, "with_pol": 0}
+stats = {"SAT": 0, "UNSAT": 0, "pol": 0, "with_pol": 0, "lemmas_lb": 0, "lemmas_redundant": 0}
 for i in range(N):
     m = gen(r)
     base = os.path.join(OUT, "f%04d" % i)
@@ -167,9 +222,14 @@ for i in range(N):
         pols = sum(1 for line in f if " pol " in line or line.startswith("pol "))
     stats["pol"] += pols
     stats["with_pol"] += 1 if pols else 0
+    if got and pols and LOAD_BEARING:
+        lb, red = load_bearing(base)
+        stats["lemmas_lb"] += lb
+        stats["lemmas_redundant"] += red
     for ext in (".fzn", ".opb", ".pbp"):
         os.remove(base + ext)
 print("fuzz_member: %d models (%d SAT, %d UNSAT; %d proofs with a derivation ahead, "
-      "%d pol lines), %d failure(s)" % (N, stats["SAT"], stats["UNSAT"],
-                                        stats["with_pol"], stats["pol"], fails))
+      "%d pol lines; on the SAT ones %d threshold lemmas load-bearing, %d redundant), "
+      "%d failure(s)" % (N, stats["SAT"], stats["UNSAT"], stats["with_pol"], stats["pol"],
+                         stats["lemmas_lb"], stats["lemmas_redundant"], fails))
 sys.exit(1 if fails else 0)

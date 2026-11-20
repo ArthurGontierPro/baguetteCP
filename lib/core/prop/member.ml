@@ -20,12 +20,23 @@
    ---------------------------------------------------------------------------
 
      OR            b_1 \/ ... \/ b_n
-     F_k           x_k - y + M ~b_k >= 0       M = hi y - lo x_k
-     G_k           y - x_k + M' ~b_k >= 0      M' = hi x_k - lo y
+     B_k           ~b_k \/ [x_k >= a]    ~b_k \/ ~[x_k >= b+1]
+                   ~b_k \/ [y >= a]      ~b_k \/ ~[y >= b+1]
+     F_k           sum_{v=a+1..b} ([x_k >= v] + ~[y >= v]) + (b - a) ~b_k >= b - a
+     G_k           the same with x_k and y swapped
 
-   over the DECLARED hulls, a constant folded into the degree, and a row whose M is not
-   positive (true on the declared box whatever b_k is) not written. With b_k, F_k and G_k
-   are y = x_k; without it, each is the declared box. A position whose x_k IS y has none.
+   where [a, b] is the OVERLAP of the two DECLARED hulls. Under b_k both variables are in
+   it (B_k), and there x_k = a + (its rungs a+1..b that hold), y the same, so F_k and G_k
+   are x_k - y >= 0 and y - x_k >= 0 over the overlap's rungs only; without b_k every row
+   is true. Constant literals fold (a bound clause at a declared bound is not written);
+   disjoint hulls leave the one row `~b_k`; a single common value leaves B_k alone. A
+   position whose x_k IS y has no rows. Six rows per position at most, whatever the
+   width; the big-M rows cost 4 (b - a) + 2 literals, the threshold clauses below cost
+   about 6 (b - a) -- a rung of an order-encoded variable is a literal of any linear row
+   over it, so the literal mass cannot be width-free on this encoding, only smaller.
+   (A row over the whole hulls, `x_k - y + M ~b_k >= 0` with M = hi y - lo x_k, was built
+   first and measured: 47 M literals over the 35 Challenge instances of D-0159 section 5
+   against the clauses' 22 M, D-0168.)
 
    Until M7-T34 the rows were the BOUND form per threshold v of the two hulls,
 
@@ -35,10 +46,11 @@
    two per threshold per position, which is D-0028's width-proportionality paid per
    position: 1.39 M rows on hexagon_gcc.reload1.gen_reload, 3.77 M on gl_Map1f (D-0159
    section 5). They are now LEMMAS, written into the proof only where a line needs one
-   (see "The proof"). Each is RUP from its big-M row and the ladders: assume b_k,
-   [y >= v] and ~[x_k >= v]; the ladders put y at v or above and x_k below v, so F_k's
-   largest value is (v - 1) - v < 0. Folded the same way: a constant literal at a
-   declared bound, and a lemma a constant makes true not written.
+   (see "The proof"). Each is RUP from the rows and the ladders: assume b_k, [y >= v]
+   and ~[x_k >= v]. For v in a+1..b the ladders set y's rungs up to v and clear x_k's from
+   v, so F_k's left side is at most (v - 1 - a) + (b - v) + 0 < b - a. For v <= a,
+   [x_k >= v] follows from B_k; for v > b, ~[y >= v] does. Folded the same way: a
+   constant literal at a declared bound, and a lemma a constant makes true not written.
 
    D-0151 section 3.1 wrote the VALUE form, `~b_i \/ y <> v \/ x_i >= v`. D-0159 measured
    that a selector death across TWO holes of x_i inside y's range is not RUP over it, and
@@ -74,30 +86,41 @@
    The proof: every line ONE `rup`, some behind threshold lemmas written ahead
    ---------------------------------------------------------------------------
 
-   A big-M row propagates the SELECTOR (its coefficient M exceeds the slack once the
-   x/y part is violated) and refutes two bounds that cross under b_k, but it propagates
-   no rung of a ladder: every rung has coefficient 1, and the slack is the width left.
-   So a line whose argument walks a hole needs the threshold lemma that carries the bound
-   across, on the page before it; a line that only compares bounds does not.
+   The rows propagate the SELECTOR (F_k's coefficient on ~b_k exceeds its slack once the
+   x/y part is violated; B_k are clauses) and refute two bounds that cross under b_k --
+   "x_k <= p and y >= q > p" violates B_k when p < a or q > b and F_k otherwise -- but
+   they propagate no rung of a ladder: every rung has coefficient 1, and the slack is the
+   width left. So a line whose argument walks a hole needs the threshold lemma that
+   carries a bound across to the other variable, on the page before it; a line that only
+   compares bounds does not. [a, b] below is the DECLARED overlap.
 
-     K  ~b_i. Disjoint by bounds: F_i or G_i, no lemma. Otherwise assume b_i: from the
-        larger of the two lower bound facts, each value v of the overlap is a hole of
-        x_i or of y (its remover's facts on the tail), whose line pushes that variable
-        past v and a lemma the other (R- at v + 1 for a hole of x_i, R+ for one of y),
-        until the smaller upper bound fact is crossed -- the LAST jump needs no lemma,
-        F_i or G_i refutes the two bounds. Lemmas: the start (R- or R+ at the larger
-        lower bound) and one per hole but the last.
+     K  ~b_i. Disjoint by bounds: two crossing bounds, no lemma. Otherwise assume b_i:
+        between the larger lower bound fact and the smaller upper one, each value v is a
+        hole of x_i or of y (its remover's facts on the tail), its OWNER. A run of one
+        owner's holes walks on their lines alone; where the owner SWITCHES at v, the lemma
+        at v carries the previous owner's bound to the new one (R- at v from x_i, R+ from
+        y); the walk ends on two crossing bounds. It may start at either end: from the
+        bottom when the owner of the first value is the variable whose lower bound the
+        reason cites, or the declared overlap starts there (B_i), else with one more lemma
+        there; from the top the same. Both ends free: the two walks meet at the last
+        switch, whose lemma is dropped. Lemmas: one per switch, at most one more.
      C  b_k := 1: the other selectors' tails, so their lines fire, and OR. No lemma.
         A conflict: every selector's tail.
      E  y >= lo(x_k), y <= hi(x_k) (and the same for x_k against y): b_k's tail and the
-        bound fact, refuted by F_k or G_k, no lemma. tgt <> v for a hole v of src: one
+        bound fact, two crossing bounds, no lemma. tgt <> v for a hole v of src: one
         lemma carries tgt >= v to src (R+ at v when tgt is y, R- when it is x_k), src's
-        hole line pushes src past v, and the big-M row refutes src >= v + 1 > tgt.
+        hole line pushes it past v, and the rows refute src >= v + 1 > tgt -- none when v
+        is an end of [a, b], where B_k already bounds src.
      S  y <> v: per position, its death's tail if it is dead, else the fact excluding v
         from x_i -- the WEAKEST bound, or the hole's remover. Assume y = v: each dead
-        selector's line fires, each live one bound-excluded dies on F_i or G_i, OR forces
-        what is left; a hole-excluded one needs R+(i, v), after which its hole and the
-        big-M row refute it.
+        selector's line fires, each live one bound-excluded dies on two crossing bounds,
+        OR forces what is left; a hole-excluded one needs R+(i, v) (none at an end of
+        [a, b]), after which its hole and the rows refute it.
+
+   The counts are minimal for holes the reason cites; a hole whose line holds with no
+   fact (declared, or punched at the root) can make one redundant -- 30 of 54 lemmas on
+   satisfiable random models, test_mutation's chase lanes pin three that are not
+   (bench/member_spike/fuzz_member.py, D-0168).
 
    The derivation ahead (M7-T34). A line with lemmas is made under [Store.deriving_ahead],
    so lib/core/trace.ml writes its explanation's `pol` before it: each lemma (a [Clause],
@@ -248,6 +271,15 @@ let dom store = function
   | Cell { var; _ } ->
       let d = Store.get store var in
       (Domain.lo d, Domain.hi d, Domain.mem d)
+
+(* The declared hull of a cell. *)
+let decl = function Fixed c -> (c, c) | Cell { dlo; dhi; _ } -> (dlo, dhi)
+
+(* The declared overlap of x_k and y, [a, b]: under b_k both are in it (the bound
+   clauses, see the header), so a lemma at its ends is never needed. *)
+let overlap t k =
+  let (dlx, dhx), (dly, dhy) = (decl t.xs.(k), decl t.y) in
+  (max dlx dly, min dhx dhy)
 
 exception Found of Store.conflict
 
@@ -496,24 +528,45 @@ let kill_reason store t i =
     add_lo t sy (hx + 1))
   else
     let a = max lx ly and b = min hx hy in
-    if lx >= ly then (
-      add_lo t sx a;
-      need_minus t i a)
-    else (
-      add_lo t sy a;
-      need_plus t i a);
-    if hx <= hy then add_hi t sx b else add_hi t sy b;
-    for v = a to b do
-      (* The lemma that carries the jump past [v] to the other side; past [b] the big-M
-         row closes on the smaller upper bound without one. *)
-      if not (mx v) then (
-        add_hole store t cx v;
-        if v < b then need_minus t i (v + 1))
-      else if not (my v) then (
-        add_hole store t cy v;
-        if v < b then need_plus t i (v + 1))
+    let low_x = lx >= ly and high_x = hx <= hy in
+    if low_x then add_lo t sx a else add_lo t sy a;
+    if high_x then add_hi t sx b else add_hi t sy b;
+    (* [owner v]: true when v is a hole of x_i (the one the reason cites), false when of y *)
+    let owner v =
+      if not (mx v) then true
+      else if not (my v) then false
       else invalid_arg "Member: a selector death with a value in common"
-    done
+    in
+    for v = a to b do
+      if owner v then add_hole store t cx v else add_hole store t cy v
+    done;
+    (* The lemmas: one per SWITCH of owner, the lemma at v carrying the bound of v's
+       predecessor's owner to v's. A run of one owner's holes walks on its hole lines
+       alone, and the walk ends on a big-M row or a bound clause refuting two crossing
+       bounds, which needs no lemma. It may start at either end: from the bottom it
+       needs the owner of a to be at a already (the lower bound fact is its, or the
+       declared overlap starts at a), else one more lemma at a; from the top the same
+       with b. Both ends free: the two walks meet at the last switch, whose lemma is
+       not needed. *)
+    let ad, bd =
+      let (dlx, dhx), (dly, dhy) = (decl cx, decl cy) in
+      (max dlx dly, min dhx dhy)
+    in
+    let carry v ~from_x = if from_x then need_minus t i v else need_plus t i v in
+    let su = not (a <= ad || owner a = low_x)
+    and sd = not (b >= bd || owner b = high_x) in
+    let switches =
+      List.filter
+        (fun v -> owner v <> owner (v - 1))
+        (List.init (b - a) (fun j -> a + 1 + j))
+    in
+    let switches =
+      if (not su) && not sd then
+        match List.rev switches with [] -> [] | _ :: r -> List.rev r
+      else switches
+    in
+    if su && sd then carry a ~from_x:low_x;
+    List.iter (fun v -> carry v ~from_x:(owner (v - 1))) switches
 
 (* Kill b_i on the reason under way, and cache its tail. A selector set to 1 cannot die:
    that is a conflict on the same facts plus its own tail. *)
@@ -621,7 +674,9 @@ let narrow store t k ~tgt_is_y ~tgt ~st ~src ~ss =
             add_hole store t src v;
             (* tgt = v under b_k: one lemma carries tgt >= v to src, src's hole line
                pushes src past v, and the big-M row refutes src >= v + 1 > tgt. *)
-            if tgt_is_y then need_plus t k v else need_minus t k v;
+            (let ad, bd = overlap t k in
+             if ad < v && v < bd then
+               if tgt_is_y then need_plus t k v else need_minus t k v);
             if Domain.is_fixed d then raise (Found (conflict_now store t));
             let fs, _, _ = finish t in
             let ls = lemmas t in
@@ -690,7 +745,8 @@ let remove_y store t ~var ~name ~dlo ~dhi v =
         let fs, hole = excl_facts store t.xs.(i) v in
         if hole then (
           incr holes;
-          need_plus t i v);
+          let ad, bd = overlap t i in
+          if ad < v && v < bd then need_plus t i v);
         excl.(i) <- fs;
         List.iter (add_fact t) fs)
     done;

@@ -118,7 +118,7 @@ lib/core/       Baguette_core
                             its pairwise rows cited ROOT LEMMAS (M7-T28, D-0151)
     member.ml               member(x, y) through mznlib's baguette_member: DOMAIN consistent
                             over x, y and one SELECTOR per position (store variables, as
-                            regular's flags), b_k -> x_k = y as two big-M rows per position
+                            regular's flags), b_k -> x_k = y in at most six rows per position
                             (D-0168); every line one rup with its reasons on the letters, a
                             line that walks a hole behind threshold lemmas written ahead, a
                             value of y two holes exclude behind a lemma per position and the

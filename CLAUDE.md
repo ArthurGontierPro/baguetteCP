@@ -301,7 +301,7 @@ lib/core/       Baguette_core
                             ROOT LEMMAS (Encoding.add_cited_lemma) (M7-T28, D-0151)
     member.ml               member(x, y) through mznlib's baguette_member: DOMAIN consistent
                             over x, y and one SELECTOR per position (store variables, as
-                            regular's flags), b_k -> x_k = y as two big-M rows; a line that
+                            regular's flags), b_k -> x_k = y as six rows at most; a line that
                             walks a hole rests on threshold lemmas written AHEAD, and a value
                             of y two holes exclude on a derivation ahead (M7-T28, D-0159,
                             D-0168)
