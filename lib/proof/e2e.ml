@@ -346,6 +346,7 @@ type con = {
   rows : (string, crow) Hashtbl.t; (* cake's rows for it, by label *)
   mutable fam : fam;
   mutable pending : string list; (* its @S labels not written yet *)
+  mutable ncands : int;
   binary : (string, int * string) Hashtbl.t;
       (* member's and inverse's binary clause rows pinned so far: a literal -> (id, the
          other literal), to resolve a candidate's extra literal away ([resolve]) *)
@@ -1317,6 +1318,7 @@ let begin_con t ~name spec =
       rows = Hashtbl.create 16;
       fam = Generic;
       pending = [];
+      ncands = 0;
       binary = Hashtbl.create 16;
     }
   in
@@ -1330,6 +1332,7 @@ let begin_con t ~name spec =
     let cand =
       { rpn; plain = not (String.contains rpn ' '); cl; cd; key = key_of t cl; needs }
     in
+    c.ncands <- c.ncands + 1;
     push c.cands cand.key cand;
     push c.by_min
       (match String.index_opt cand.key ' ' with
@@ -1717,13 +1720,33 @@ let pin t ~id (c : Opb.constr) =
             in
             over tries
       in
+      (* relaxed, a constraint with few candidates: those over a SUPERSET of the row's
+         variables, whose extra literals the weakening drops (array_bool_and's `~r \/ x_i`
+         from cake's `pos` row: 155 554 such constraints and 327 836 `rup` pins on
+         steiner_t3_k3_N11, D-0188 section 6) *)
+      let superset () =
+        if con.ncands > 8 then []
+        else
+          let vs = if key = "" then [] else String.split_on_char ' ' key in
+          Hashtbl.fold
+            (fun k l acc ->
+              let ks = String.split_on_char ' ' k in
+              if k <> key && List.for_all (fun v -> List.mem v ks) vs then l @ acc
+              else acc)
+            con.cands []
+      in
       let search ~relaxed =
         match go ~relaxed exact with
         | Some r -> Some r
-        | None when exact = [] || SM.exists (fun l _ -> Hashtbl.mem t.aux (var_of l)) bl
-          ->
-            go ~relaxed (subset ())
-        | None -> None
+        | None -> (
+            match
+              if exact = [] || SM.exists (fun l _ -> Hashtbl.mem t.aux (var_of l)) bl then
+                go ~relaxed (subset ())
+              else None
+            with
+            | Some r -> Some r
+            | None when relaxed -> go ~relaxed (superset ())
+            | None -> None)
       in
       let found =
         match search ~relaxed:false with
