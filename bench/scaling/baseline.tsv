@@ -3,8 +3,8 @@
 # A RATCHET: re-recorded by `scripts/scaling_lane.sh --update` after a gated merge, in its own
 # commit. --update refuses while a line is OVER; --raise exists for a decision record, never
 # to make a line pass.
-H_qr72_bag_def	noproof	instructions	1613442	4031078	2417636	1.6674	fataepyc-06	c308784d1371a59f15fa187a781c8f7d	2026-11-20
+H_qr72_bag_def	noproof	instructions	1611274	3940568	2329294	1.6917	fataepyc-06	fde2ae9bab705de9d985aafdd8e75401	2026-11-20
 H_qr72_bag_def	proof	instructions	1939482	5678198	3738716	1.5188	fataepyc-06	c308784d1371a59f15fa187a781c8f7d	2026-11-20
-2013_rcpsp_11	noproof	instructions	5904499	11479871	5575372	2.0590	fataepyc-06	c308784d1371a59f15fa187a781c8f7d	2026-11-20
-2012_parity-learning_48_24_6.2	noproof	instructions	5023610	7828485	2804876	2.7910	fataepyc-06	c308784d1371a59f15fa187a781c8f7d	2026-11-20
+2013_rcpsp_11	noproof	instructions	5766773	11033712	5266940	2.0949	fataepyc-06	fde2ae9bab705de9d985aafdd8e75401	2026-11-20
+2012_parity-learning_48_24_6.2	noproof	instructions	5022510	7717119	2694609	2.8639	fataepyc-06	fde2ae9bab705de9d985aafdd8e75401	2026-11-20
 2012_parity-learning_48_24_6.2	proof	instructions	5025848	9382418	4356571	2.1536	fataepyc-06	c308784d1371a59f15fa187a781c8f7d	2026-11-20
