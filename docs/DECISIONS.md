@@ -20929,3 +20929,230 @@ T3 (the prefix written by the solver), the rest of T4 (reified forms and the Boo
 to T8 unchanged. `var int` without a declared domain stays refused until baguette's inferred
 domain can be justified to cake (it would have to be a lemma derived from the model, not a bound
 in the `.scp`).
+
+## D-0177  M15-symmetry-T1: dejavu as distributed, the chain from satsuma's Schreier cuts, and `red` with the permutation witness instead of `dom`
+
+Status: STUDY (documentation only, no solver code; four claims checked by running the tools)
+Date: 2026-11-20
+Task: M15-symmetry-T1 (agent-sym, `wave55-sym`)
+Touches: this record, `docs/ROADMAP.md` (M15 rows T1, T2, T3, T5), `WORKLOG.md`. Scratch:
+`fataepyc-06:/scratch/arthur/wave55-sym-runs/` (clones `src/dejavu` at `f984485` and `src/satsuma`
+at `4f73975`, three builds, the runs in `runs/`). Copy of the notes and the run logs in
+`/cluster/arthur/baguette-results/wave55-sym/`.
+
+The material read: codes-cp `notes/dejavu-plan.md`, `benchmark/README.md` (section "Les symétries de
+dejavu"), `scripts/{opb2graph.py,dvbreak.py,dvrun.sh,domproof.py}`; satsuma's 2026 competition
+sources at `~/satsuma26/satsuma-kissat-satcomp26/` (the path is under `$HOME`, not under
+`/cluster/arthur/`); upstream dejavu and satsuma on GitHub; VeriPB at `~/veripb-dev` (`d5644ca4`,
+the source of the checker of record, D-0100).
+
+### 1. dejavu: the current version and what it adds over satsuma's 2026 copy
+
+- **Repository** https://github.com/markusa4/dejavu, MIT licence. The **latest release is v2.1**,
+  tagged 2025-01-12 (`89365be`). There is no later tag. `main` is at `f984485` (2026-10-20), 26
+  commits after v2.1 (23 without merges), and still says version 2.1 (`DEJAVU_VERSION_MINOR 1`). The v2.1 release
+  notes list routines in the Schreier API to retrieve stabilizer generators, solver limits, more
+  efficient storage of sparse automorphisms, more parse checks, and a fixed preprocessor bug that
+  lifted automorphisms incorrectly.
+- **satsuma's 2026 copy is upstream commit `6dd780e`** (2026-02-04, "bump version for SCIP"). I
+  diffed every `.h`/`.cpp` of `satsuma-src/dejavu/` against each upstream commit and that one
+  differs by 0 lines. It is 21 commits after v2.1 and 5 behind `main`.
+- **What v2.1 → `6dd780e` added** (so satsuma's copy has it and the v2.1 release does not):
+  `random_schreier::get_transversal_element(base_pos, v, aut)` ("retrieve fixing elements from
+  Schreier table", `aeb980b`, 2025-09-17), `extend()` (close the orbits under the stored
+  generators, `f2fec18`), cost tracking exposed in the API (`get_computational_cost`), 64-bit
+  hashes, a CI workflow.
+- **What `6dd780e` → `main` adds**: two preprocessor fixes (`5d6f7ba`, "prevent vertices with aux
+  recovery to be added to edge recovery", and the densify fix in `ba2c84d`), a DFS assertion fix,
+  the DIMACS parser moved to `parser.h` with a new test suite for malformed input. **The command
+  line is identical** in v2.1, `6dd780e` and `main` (`--err`, `--silent`, `--gens`,
+  `--gens-file F`, `--grp-sz`, `--pseudo-random`, `--true-random`, `--true-random-seed`,
+  `--permute`, `--permute-seed`), and so is the input (DIMACS graph, `p edge n m`, `n v c` for a
+  vertex colour, `e u v`, 1-based) and the output (generators one per line in cycle notation,
+  0-based vertices, and the group order as `m*10^k`).
+- **Checked**: `main` and `6dd780e` built here (cmake, Release, scratch only). On the graphs
+  `opb2graph.py` makes of baguette's `.opb` for `alldiff_pigeonhole_narrow_unsat` and
+  `colour_unsat` (solver binary `4e41e8c1`, gate 20261120e) both report the same order (6 and 60)
+  with the same number of generators. Nothing forces a version change. The two preprocessor fixes
+  are a reason to take `main` when T2 pins a version, and they cannot make a proof wrong in any
+  case, because VeriPB checks every witness (a wrong automorphism is a rejected line, §5).
+- **The library** is header-only (`#include "dejavu.h"`, C++14). Besides `solver::automorphisms`
+  with hooks (`schreier_hook`, `orbit_hook`, `strong_certification_hook`, which re-checks each
+  automorphism on the original graph), it carries `groups::random_schreier`, a randomised
+  Schreier–Sims structure whose base the caller sets: `set_base(base, resift)`, `sift_random()`,
+  `get_fixed_orbit(pos)`, `get_stabilizer_orbit(pos, orbit)`, `get_stabilizer_generators(pos)`,
+  `get_transversal_element(pos, v, aut)`, `group_size()`. Its error is one-sided (a missing
+  generator means a smaller orbit, never a wrong element), bounded by the `error` argument.
+- **How codes-cp calls it today**: the binary only, `dejavu G --silent --grp-sz --gens-file F`
+  (`dvbreak.py`, `dejavu()`), built from satsuma's copy. One run per level of the chain: after
+  choosing c_i, the literal vertex of c_i is recoloured (`n v 1000+i`) and dejavu runs again for
+  the stabilizer. Orbits and transversals (products of generators) are computed in Python by a BFS
+  over the generators. On QR48 that is 79 to 106 s of dejavu for 3 levels.
+
+### 2. Markus Anders' recent papers (symmetry detection and breaking)
+
+Found and read at least at abstract level. dblp refused automated access, so the list comes from
+the venues, arXiv and satsuma's README and may miss a paper.
+
+1. M. Anders, S. Brenner, G. Rattan, *Satsuma: Structure-Based Symmetry Breaking in SAT*, SAT 2024,
+   LIPIcs 305, 4, doi:10.4230/LIPIcs.SAT.2024.4. **Journal version** JAIR 85, article 6, January
+   2026, doi:10.1613/jair.1.18744. Detection of row interchangeability, row–column symmetry and
+   Johnson symmetry by individualization–refinement, then breaking per structure. CNF only.
+2. M. Anders, S. Brenner, G. Rattan, *The Complexity of Symmetry Breaking Beyond Lex-Leader*, CP
+   2024, LIPIcs 307, 3 (cited in satsuma's 2026 description, not read further).
+3. M. Anders, P. Schweitzer, M. Soos, *Algorithms Transcending the SAT-Symmetry Interface*, SAT
+   2023, doi:10.4230/LIPIcs.SAT.2023.1, arXiv:2306.00613. Keeps the graph and the group together
+   for near-linear decompositions and "equivalent orbits".
+4. M. Anders, C. Codel, M. J. H. Heule, *Orbitopal Fixing in SAT*, TACAS 2026, arXiv:2601.16855.
+   Static, **unit clauses only**, adapted from MIP's orbitopal fixing, with compact certificates in
+   substitution redundancy (SR). In satsuma.
+5. M. Anders, C. Codel, M. J. H. Heule, *Simplify, Order, Break, Repeat*, SAT 2026, LIPIcs 377, 4,
+   doi:10.4230/LIPIcs.SAT.2026.4. **Unit and binary clauses only**, chosen along a Schreier–Sims
+   table, the break order taken from the formula's structure (cliques), and rounds of
+   simplify-then-break. +22 % PAR-2 on SAT Competition 2025 as a CaDiCaL preprocessor. This is
+   satsuma 1.4's `fix` mode and its `--schreier-cuts`. **Its binary clauses are exactly codes-cp's
+   chain**: in `src/symmetries.h` (`schreier_cuts`, satsuma `4f73975`), a base point v is chosen,
+   `set_base(base,false); sift_random()`, and for every w in v's orbit under the stabilizer of the
+   earlier points the clause (v ∨ ¬w) is added, with the inverse of `get_transversal_element(w)`
+   as its witness. A negation symmetry in the orbit gives the unit clause v instead. The point is
+   chosen as an unordered variable in a nontrivial orbit that **maximises the number of clauses it
+   shares with the points already chosen** (`common_clauses`), not the largest orbit.
+6. M. Anders, B. Bogaerts, B. Bogø, A. Gontier, W. Koops, C. McCreesh, M. O. Myreen, J. Nordström,
+   A. Oertel, A. Rebola-Pardo, Y. K. Tan, *Faster Certified Symmetry Breaking Using Orders With
+   Auxiliary Variables*, AAAI 2026, 40(17):14140–14148, doi:10.1609/aaai.v40i17.38426,
+   arXiv:2511.16637. The VeriPB addition of §3.
+7. D. Van Caudenberg, M. Anders, B. Bogaerts, *On Symmetries and Transformations*, CP 2026, LIPIcs
+   379, 54, doi:10.4230/LIPIcs.CP.2026.54, code https://github.com/markusa4/forkencoder. The
+   **PB/CP** paper: symmetry information is made part of the specification and passed through
+   transformations that change the variables (PB → CNF encodings evaluated, PB Competition 2025
+   instances). This is T7's question from the other side: instead of hoping the encoding keeps the
+   group visible to dejavu, carry the group through the encoding.
+8. Background on dejavu itself, as satsuma cites it: M. Anders, P. Schweitzer, *Parallel
+   Computation of Combinatorial Symmetries*, ESA 2021, LIPIcs 204, 6, and M. Anders, *Efficient
+   Algorithms for Symmetry Detection*, PhD thesis, TU Darmstadt, 2024.
+
+**Orbits and stabilizers along the search (T3)**: I found **no** paper by Anders on dynamic
+breaking during search, and none that certifies dynamic breaking in VeriPB. The 2026 papers are
+all static and all compute their stabilizer chain once, before solving. What exists for T3 is the
+machinery: in the library a base change is `set_base(base, false); sift_random()` on a structure
+already filled with the generators, with no new graph search (§4, backend B).
+
+### 3. The VeriPB addition satsuma uses, and our checker
+
+- **What**: orders defined with **auxiliary variables**. `def_order` gains `aux <vars>;`, a
+  `spec ... end spec;` block (a subproof deriving the auxiliaries' defining constraints by `red`
+  over them), `fresh_aux_1`/`fresh_aux_2` in the transitivity proof, and `scope leq` / `scope geq`
+  inside a `dom`/`red` subproof to bring the specification in. The lex order is then a chain of
+  auxiliaries instead of one constraint with coefficients 2^(n-1) … 1, and the proof of a
+  lex-leader constraint becomes **linear** in the support instead of quadratic (satsuma's 2026
+  description, which cites the VeriPB/CakePB documentation for the SAT Competition 2026,
+  ABBGKMMNORT26). Reference: paper 6 above.
+- **Which version**: VeriPB **3.0.0** (2025-10-03), whose changelog says "Orders are now allowed
+  have a specification section and can use auxiliary variables … used in redundance- and
+  dominance-based strengthening subproofs by using the `scope` command". 3.0.2 (2026-03-20) is an
+  ancestor of `d5644ca4`. `proof_format_overview.md` documents the syntax (sections "Order
+  Definition", "Specifications", "Scopes Inside Subproofs").
+- **Our checker has it, checked**: satsuma 1.4 (`4f73975`, built here) in `lex` mode on its own
+  examples writes 2 `def_order` with `aux` and a `spec` block and 27 (php-015-014) or 13
+  (ramsey-3-5-14) `dom` lines with `scope leq/geq` subproofs. `~/.cargo/bin/veripb` (3.0.2,
+  `d5644ca4`) says `s VERIFIED NO CONCLUSION` on both. Dropping one pair from one `dom` witness is
+  rejected ("Checking error at …:5491 … not contradicting, as specified by the hint").
+  Two caveats. satsuma's README calls its VeriPB output **experimental**, and it shows. The proof
+  file carries no `output`/`conclusion`/`end pseudo-Boolean proof;` trailer, because it is meant
+  to be followed by the SAT solver's proof, so I appended one. In `fix` mode with several rounds it
+  writes the `pseudo-Boolean proof version 3.0` header again per round. And on ramsey-3-5-14 `fix`
+  its `delc 2367` is refused ("Deletion of derived constraint ID 2367 using deletion from core
+  set"). All three are satsuma's problems, not the checker's.
+- **It does not shorten witnesses.** The witness syntax in `d5644ca4` is still one `var -> lit`
+  (or `var lit`) per moved variable. There is no cycle notation, no named or reusable
+  permutation, no composition. satsuma's own witnesses list the full support too (`permutation()`
+  in `src/proof.h`). The 69 280 moved variables per line on QR48 (T5) stay. The addition shortens
+  the **order** and its proof goals, which for codes-cp's chain are already tiny (a lex order on at
+  most 3 fixed coordinates). So for T5 it does nothing. What could help T5 is the support of the
+  witness itself. satsuma optimises its generators' support (`--opt-passes`,
+  `--opt-conjugations`, on by default in the 2026 competition copy, which has `--no-opt`, and off
+  by default in 1.4, which has `--opt`), and a transversal element is a
+  product of generators, so a shorter generating set gives shorter witnesses. That is a lead to
+  measure in T5, nothing more.
+
+### 4. What the pipeline (T2) should call
+
+**The proof step should be `red`, not `dom`.** satsuma 1.4 justifies each Schreier cut (v ∨ ¬w) by
+`red 1 v 1 ~w >= 1 : <transversal inverse, every moved variable>`, with no order loaded. Why that
+holds: under ¬C we have v false and w true, and ω (in the stabilizer of the earlier base points,
+with ω(w) = v) maps C to (ω(v) ∨ ¬v), which ¬v satisfies. ω maps the formula onto itself. ω also
+maps every earlier cut (v_j ∨ ¬w') to (v_j ∨ ¬ω(w')), which is again a cut, because ω fixes v_j
+and permutes v_j's orbit under the stabilizer it was computed in. So the database is closed under
+ω and every proof goal is a constraint already present. **Checked on our checker**: satsuma
+`fix --fix-and-cut` on ramsey-3-5-14 writes 20 such binary `red` lines (the first is
+`red 1 x1 1 ~x2 >= 1 : x2 -> x1 x1 -> x2 x26 -> x15 …`). The prefix up to the refused `delc` is
+`s VERIFIED NO CONCLUSION` with `d5644ca4`. With the last pair of the first witness dropped it is
+rejected ("Proofgoal 89 could not be autoproven"). Unit `red` with a permutation witness
+(orbitopal fixing) is accepted too, and its mutation is rejected the same way (php-015-014,
+"Proofgoal 15 could not be autoproven"). This removes `def_order`, `load_order` and the lex
+coefficients from `dvbreak.py merge`, and the witness length does not change. For T4
+(optimisation) `red` checks that the objective does not get worse under ω, as `dom` did, and the
+graph already keeps the objective. A `red` line is not vacuous here, because it stands at the head
+of the proof over a satisfiable model plus earlier cuts (the D-0053 trap needs a contradictory
+database).
+
+**Two backends for the chain, both with dejavu as distributed.**
+
+| | A: the binary, as codes-cp does it | B: the header-only library, as satsuma does it |
+|---|---|---|
+| what runs | `dejavu G --silent --grp-sz --gens-file F`, once per level, the fixed points recoloured | one `solver::automorphisms` with a `schreier_hook`, then `set_base`/`sift_random`/`get_fixed_orbit`/`get_transversal_element` per level |
+| code to write | none in C++. Orbits and transversals in Python (exists) | a C++ driver of about 100 lines that includes `dejavu.h` unchanged, next to baguette, not in `lib/` |
+| cost per level | one full dejavu search (QR48: 79 to 106 s for 3 levels) | sifting only, no new graph search (not measured here) |
+| changes the user's rule? | no | dejavu itself unchanged, but used as a library. **The user decides** |
+| needed for T3 | a base change during search is one more dejavu run | a base change is a library call |
+
+Recommendation: start T2 with A, which exists and is measured. Write B when T3 needs base changes
+during the search, or when the dejavu time on QR48 matters. B is what satsuma does, and it is the
+only route in which "the search picks the next chain point" costs nothing in dejavu.
+
+**Choosing the variables to break on (beyond `x`).** The base points are **literal vertices** of
+the graph (`opb2graph.py`'s `.map`), so any literal of the `.opb` can be one. For a Boolean `b`
+it is `b_ge_1`. For an order-encoded integer, a symmetry that permutes integers maps `x_ge_k` to
+`y_ge_k`, and the cut (x ≥ k ∨ y < k) is justified the same way. A negation symmetry in the orbit
+of l gives the unit clause l (satsuma does this). Proposed default: candidates are the literals of
+the model's search variables (FlatZinc variables that are not `is_defined_var`, read from the
+`.fzn`; `--vars NAME,...` overrides it, so codes-cp keeps `x`). The next point is the candidate in
+a nontrivial orbit of the current stabilizer chosen by a named, swappable score: `orbit` (largest
+orbit, today's rule) or `shared` (satsuma's `common_clauses`, constraints shared with the points
+already chosen). Stop at `--depth D` or at the trivial group. T3 replaces the score by the search's
+own choice.
+
+**Proposed T2 interface** (a directory `tools/symmetry/`, no code in `lib/`):
+
+```
+opb2graph.py IN.opb OUT.dimacs                  # from codes-cp, unchanged; writes OUT.dimacs.map
+symchain.py  IN.fzn IN.opb OUT [--vars V,..] [--depth D] [--score orbit|shared] [--backend bin|lib]
+             -> OUT.chain.json  {levels:[{point, orbit, order}], cuts:[{c, b, witness}]}
+             -> OUT.fzn         IN.fzn plus one bool_clause per cut (baguette solves this)
+symmerge.py  OUT.chain.json IN.opb OUT.opb OUT.pbp MERGED   # cuts removed from the .opb and
+             re-derived by `red` at the head of baguette's proof, then baguette's proof unchanged
+DEJAVU=<binary>  (backend bin)    DEJAVU_SRC=<headers, for building backend lib>
+```
+
+Read back from dejavu: the generators (cycle notation, 0-based) and the group order, and with
+backend B the orbits and transversal elements directly. The lane checks that VeriPB accepts the
+merged proof and **rejects** it with one witness damaged, matching the checker's wording
+("could not be autoproven"), as `dvrun.sh` does with `BAD=1`.
+
+### 5. Licences
+
+dejavu: MIT (Copyright 2025 Markus Anders, `LICENSE` in the repository and in satsuma's copy).
+satsuma: MIT (Copyright 2026 Markus Anders). VeriPB: MIT OR Apache-2.0 (`Cargo.toml` of
+`veripb-dev`). Running them beside baguette, or including dejavu's headers in a separate tool, is
+allowed by all three under their notice terms. No constraint.
+
+### 6. What this study did not do
+
+It did not run the codes-cp chain or QR48 here. Those files are on fataepyc-07's `/scratch`, which
+is not reachable, so the 79 to 106 s and the 69 280 per line are codes-cp's numbers, not
+re-measured. It did not write backend B or time a base change. It did not read the AAAI 2026, CP
+2026 or SAT 2026 papers beyond their abstracts and front matter, so their claims are quoted as the
+authors state them. It did not try satsuma on a `.opb`: satsuma 1.4 has a `--pb` flag and a PB
+formula class (`pbf.h`, with `=`, `<=` and an objective), but its command line reads nothing for
+that flag (`parse_*` is CNF or KNF, the OPB branch is `0`). So satsuma cannot take baguette's
+`.opb` today, and nothing in this record depends on it.
