@@ -781,11 +781,10 @@ let e2e_spec (names : string array) (con : Model.constr) : Baguette_proof.E2e.sp
   let module E = Baguette_proof.E2e in
   let op = function Model.Var i -> E.Var names.(i) | Model.Const n -> E.Const n in
   let lin ts = List.map (fun (a, i) -> (a, E.Var names.(i))) ts in
-  if con.Model.c_id = "" then
-    E.refuse
-      "a variable repeated in global_cardinality: its copy and the int_eq tying it have \
-       no .scp counterpart (D-0188 section 3.3)";
   match con.Model.k with
+  | Model.Int_eq (Model.Var i, Model.Var j) when con.Model.c_id = "" ->
+      E.Copy (names.(i), names.(j))
+  | _ when con.Model.c_id = "" -> E.refuse "a constraint no FlatZinc item states"
   | Model.Int_lin_le (ts, r) -> E.Lin_le (lin ts, r)
   | Model.Int_lin_eq (ts, r) -> E.Lin_eq (lin ts, r)
   | Model.Int_lin_ne (ts, r) -> E.Lin_ne (lin ts, r)
@@ -930,6 +929,17 @@ let compile (m : Model.t) : t =
         | Some fs -> List.iter (Encoding.note_held_back encoding) (List.rev fs)
         | None -> ())
     m.Model.vars;
+  (* M14-e2e-verification-T3b (D-0188 section 3.3): the prefix defines a gcc copy's ladder
+     as its original's, so it is told the pairs before the copy is declared *)
+  if Encoding.e2e_on encoding then
+    List.iter
+      (fun (c : Model.constr) ->
+        match c.Model.k with
+        | Model.Int_eq (Model.Var i, Model.Var j) when c.Model.c_id = "" ->
+            Encoding.e2e_copy encoding ~copy:m.Model.vars.(j).Model.v_name
+              ~orig:m.Model.vars.(i).Model.v_name
+        | _ -> ())
+      m.Model.constraints;
   Array.iteri
     (fun i (v : Model.var) ->
       let lo, hi = bounds.(i) in
@@ -2379,7 +2389,8 @@ let compile (m : Model.t) : t =
     List.concat_map
       (fun (c : Model.constr) ->
         if Encoding.e2e_on encoding then (
-          incr e2e_k;
+          (* a gcc copy's int_eq (c_id = "") is no .scp constraint and takes no number *)
+          if c.Model.c_id <> "" then incr e2e_k;
           Encoding.e2e_begin encoding ~name:(Printf.sprintf "c%d" !e2e_k)
             (e2e_spec names c));
         let pos = c.Model.c_pos in

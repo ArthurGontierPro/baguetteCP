@@ -2148,6 +2148,7 @@ let e2e_on t = t.e2e <> None
 let e2e_begin t ~name spec = Option.iter (fun e -> E2e.begin_con e ~name spec) t.e2e
 let e2e_end t = Option.iter E2e.end_con t.e2e
 let e2e_objective t x ~sign = Option.iter (fun e -> E2e.objective e x ~sign) t.e2e
+let e2e_copy t ~copy ~orig = Option.iter (fun e -> E2e.copy e ~copy ~orig) t.e2e
 let e2e_stats t = Option.map E2e.stats t.e2e
 
 let start_proof t w =

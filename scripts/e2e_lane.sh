@@ -62,7 +62,8 @@
 #                  pin-stronger on T5's globals, where the first such row is the family's:
 #                  element (2), global_cardinality (2), array_int_maximum and int_max,
 #                  inverse, member (2); each corrupted row is false in at least one of the
-#                  model's solutions (enumerated by scpsem.py, D-0188 section 6).
+#                  model's solutions (enumerated by scpsem.py, D-0188 section 6); and
+#                  copy-witness on the solver's own definition of a gcc copy (its `@Y1`).
 #   3. validation  the TRUSTED translator against MiniZinc's reference solvers (D-0174 sec. 6,
 #                  GCS #987): on every model of pass 1 that is not SKIPPED, the solution set
 #                  cake's semantics admit for the .scp (tools/e2e/scpsem.py, which reads only
@@ -221,8 +222,9 @@ opt_min_sat:opt-worse restart_queens6_opt:opt-worse opt_min_sat:core-better rest
 opt_max_sat:core-worse opt_min_sat:core-worse
 element_sat:pin-stronger element_learn_prunes_sat:pin-stronger gcc_forced_sat:pin-stronger
 gcc_const_counts_sat:pin-stronger maxmin_sat:pin-stronger maxmin_int_max_sat:pin-stronger
-inverse_sat:pin-stronger member_sat:pin-stronger member_gap_sat:pin-stronger"
-NSCONTROLS=31
+inverse_sat:pin-stronger member_sat:pin-stronger member_gap_sat:pin-stronger
+gcc_repeat_free_sat:copy-witness"
+NSCONTROLS=32
 mkdir -p "$OUT/scontrols"
 for c in $SCONTROLS; do echo "$c"; done | E2E_SOLVER=1 xargs -P "$J" -I{} bash -c \
     'm=${0%%:*}; k=${0#*:}; f="$1/test/models/$m.fzn"; [ -f "$f" ] || f="$1/tools/e2e/models/$m.fzn"
@@ -242,7 +244,7 @@ while IFS= read -r l; do
         pin-stronger) { [ "$at" = "$target ia" ] && [ "$cause" = "$IA" ]; } || { [ "$at" = "$target rup" ] && [ "$cause" = "$RUP" ]; } && ok=1 ;;
         scp-weaker) { [[ "$at" =~ ^@c[0-9]+\ ia$ ]] && [ "$cause" = "$IA" ]; } || { [[ "$at" =~ ^@c[0-9]+\ rup$ ]] && [ "$cause" = "$RUP" ]; } && ok=1 ;;
         scp-stronger) [[ "$at" == "sol "* ]] && [[ "$cause" =~ ^"$SOL"\ [0-9]+\ in\ the\ database\.\ \(@S\[c\[$target\]\]\)$ ]] && ok=1 ;;
-        bridge-witness | sel-witness) [ "$at" = "$target red" ] && [ "$cause" = "$RED" ] && ok=1 ;;
+        bridge-witness | sel-witness | copy-witness) [ "$at" = "$target red" ] && [ "$cause" = "$RED" ] && ok=1 ;;
         opt-better)
             ub=${target#* }
             [ "$at" = "conclusion BOUNDS" ] && [ "$cause" = "Unable to verify 'conclusion BOUNDS'. The claimed upper bound of $ub mismatches the best recorded upper bound of $((ub + 1))." ] && ok=1 ;;

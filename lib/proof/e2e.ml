@@ -242,8 +242,11 @@ type spec =
   | Inverse of operand list * int * operand list * int
     (* inverse ((f ...) fmin) ((g ...) gmin) *)
   | Member of (operand * operand) list * operand
-(* (c_k equals_if (b_k = 1) x_k y) per position k, from 1, then (c or ((b_k = 1) ...)
-   (1 = 1)): [(b_k, x_k)] and y *)
+  (* (c_k equals_if (b_k = 1) x_k y) per position k, from 1, then (c or ((b_k = 1) ...)
+     (1 = 1)): [(b_k, x_k)] and y *)
+  | Copy of string * string
+(* (original, copy): the int_eq lib/flatzinc/builder.ml adds to tie a gcc copy, which no
+   .scp constraint states (D-0146 section 2, D-0188 section 3.3) *)
 
 (* A cake row in cake's own form (ilp_to_pb's PGe): sum_e c_e * B_{X_e} over the integer
    entries (one per occurrence, as cake keeps them), plus flag terms, >= deg. *)
@@ -341,6 +344,7 @@ type t = {
   value_of : (string, int) Hashtbl.t; (* ladder literal name -> its value *)
   holes : (string, string * int list) Hashtbl.t;
       (* a variable with a set domain -> its `in` constraint's name and allowed values *)
+  copies : (string, string) Hashtbl.t; (* a gcc copy -> its original (D-0188 3.3) *)
   pending_s : (string, string) Hashtbl.t;
       (* an @S label -> its line, until a pin cites it (D-0188 section 3.2) *)
   mutable n_holes_vars : int;
@@ -374,6 +378,7 @@ let create path =
     q = Hashtbl.create 64;
     value_of = Hashtbl.create 256;
     holes = Hashtbl.create 8;
+    copies = Hashtbl.create 4;
     pending_s = Hashtbl.create 64;
     n_holes_vars = 0;
     cur = None;
@@ -412,8 +417,53 @@ let terms_text terms =
    precede every line that names them.
    --------------------------------------------------------------------------- *)
 
+(* T3b (D-0188 section 3.3): a gcc copy y of x has no bits in cake's file. Each rung is
+   DEFINED as the original's by a red pair (the bridge's @Y1/@Y2, D-0180), and its ladder
+   follows: @L[y_ge_(w+1)] = @Y1[y_ge_(w+1)] + @L[x_ge_(w+1)] + @Y2[y_ge_w]. *)
+let copy t ~copy ~orig = Hashtbl.replace t.copies copy orig
+
+let declare_copy t y ~orig ~lo ~hi ~lit =
+  let v =
+    match Hashtbl.find_opt t.vars orig with
+    | Some v -> v
+    | None -> refuse "the gcc copy %s's original %s is not declared before it" y orig
+  in
+  if v.lo <> lo || v.hi <> hi then
+    refuse "the gcc copy %s has another range than %s" y orig;
+  Hashtbl.replace t.vars y
+    {
+      x = y;
+      cx = "";
+      lo;
+      hi;
+      comp = false;
+      h = 0;
+      bsum = [];
+      bmin = 0;
+      bmax = 0;
+      lit;
+      e1 = "";
+      e2 = "";
+    };
+  for w = lo + 1 to hi do
+    let a = lit w and b = v.lit w in
+    Hashtbl.replace t.owner a y;
+    Hashtbl.replace t.value_of a w;
+    emit t "@Y1[%s] red +1 ~%s +1 %s >= 1 : %s -> %s ;" a a b a b;
+    emit t "@Y2[%s] red +1 %s +1 ~%s >= 1 : %s -> %s ;" a a b a b
+  done;
+  for w = lo + 1 to hi - 1 do
+    emit t "@L[%s] pol @Y1[%s] @L[%s] + @Y2[%s] + ;"
+      (lit (w + 1))
+      (lit (w + 1))
+      (v.lit (w + 1))
+      (lit w)
+  done
+
 let declare ?(holes = []) t x ~lo ~hi ~lit =
   match t.cur with
+  | None when Hashtbl.mem t.copies x ->
+      declare_copy t x ~orig:(Hashtbl.find t.copies x) ~lo ~hi ~lit
   | Some c ->
       (* an auxiliary declared while a constraint is posted: a disequality selector *)
       if lo <> 0 || hi <> 1 then
@@ -675,6 +725,15 @@ let rec cake_rows t name spec =
      value v_j (j from 0) cencode_bitsum of the eq atoms [x_i = v_j] against c_j
      (encode_bitsum, ilp_to_pb's >= form), labelled `<j>_ge` and `<j>_le` *)
   | Gcc (xs, cover, counts) ->
+      (* the translator names a repeated variable once per occurrence; baguette's copies
+         are moved back onto their originals here and split again by [split_copies] *)
+      let xs =
+        List.map
+          (function
+            | Var x -> Var (Option.value (Hashtbl.find_opt t.copies x) ~default:x)
+            | c -> c)
+          xs
+      in
       if List.length cover <> List.length counts then
         refuse "global_cardinality with %d cover values and %d counts" (List.length cover)
           (List.length counts);
@@ -782,6 +841,7 @@ let rec cake_rows t name spec =
              ])
            bxs)
       @ cake_rows t name (Or (List.map (fun (b, _) -> (b, 1)) bxs, (Const 1, 1)))
+  | Copy _ -> []
 
 (* The substituted row's literal form and the label of the line that derives it. The line
    is NOT written here (D-0188 section 3.2): it waits in [pending_s] until a pin cites it
@@ -1167,6 +1227,50 @@ let family name spec =
       by_var (side "X" f @ side "Y" g)
   | _ -> Generic
 
+(* T3b (D-0188 section 3.3): cake's gcc rows name a repeated variable x once per
+   occurrence, so a candidate carries k times x's coefficient where baguette's row has x
+   once and each of its k - 1 copies once. Each copy's share a / k of x_w's coefficient a
+   is moved onto y_w by a / k times @Y2[y_w] (y_w - x_w >= 0), or |a / k| times @Y1[y_w]
+   (x_w - y_w >= 0) for a negative share. *)
+let split_copies t xs (rpn, lf) =
+  let groups = Hashtbl.create 2 in
+  List.iter
+    (function
+      | Var y when Hashtbl.mem t.copies y ->
+          let o = Hashtbl.find t.copies y in
+          Hashtbl.replace groups o
+            (y :: Option.value (Hashtbl.find_opt groups o) ~default:[])
+      | _ -> ())
+    xs;
+  if Hashtbl.length groups = 0 then (rpn, lf)
+  else
+    let b = Buffer.create 32 in
+    Buffer.add_string b rpn;
+    let row = ref (to_var lf) in
+    Hashtbl.iter
+      (fun o ys ->
+        let k = 1 + List.length ys and v = find_var t o in
+        for w = v.lo + 1 to v.hi do
+          let xl = v.lit w in
+          let a = Option.value (SM.find_opt xl (fst !row)) ~default:0 in
+          if a <> 0 then (
+            if a mod k <> 0 then
+              refuse "a gcc candidate whose coefficient on %s is not split" xl;
+            let share = a / k in
+            List.iter
+              (fun y ->
+                let yl = (find_var t y).lit w in
+                if share > 0 then (
+                  Printf.bprintf b " @Y2[%s] %d * +" yl share;
+                  row := vadd !row share (var_form [ (1, yl); (1, "~" ^ xl) ] 1))
+                else (
+                  Printf.bprintf b " @Y1[%s] %d * +" yl (-share);
+                  row := vadd !row (-share) (var_form [ (1, "~" ^ yl); (1, xl) ] 1)))
+              ys)
+        done)
+      groups;
+    (Buffer.contents b, lit_form !row)
+
 let begin_con t ~name spec =
   let c =
     {
@@ -1211,10 +1315,34 @@ let begin_con t ~name spec =
             [ cite ])
           else []
         in
-        (needs, swap_atoms t (cite, lf)))
+        let rl = swap_atoms t (cite, lf) in
+        (needs, match spec with Gcc (xs, _, _) -> split_copies t xs rl | _ -> rl))
       generic
   in
   let cands = List.map (fun (needs, (rpn, lf)) -> add ~needs rpn lf) base in
+  (* a copy's int_eq: its two rows are the sums of the copy's @Y1, resp. @Y2 *)
+  (match spec with
+  | Copy (o, y) ->
+      let v = find_var t o and vy = find_var t y in
+      let ws = List.init (v.hi - v.lo) (fun i -> v.lo + 1 + i) in
+      List.iter
+        (fun (tag, terms) ->
+          if ws <> [] then
+            let rpn =
+              String.concat " "
+                (List.mapi
+                   (fun i w ->
+                     Printf.sprintf "@%s[%s]%s" tag (vy.lit w)
+                       (if i > 0 then " +" else ""))
+                   ws)
+            in
+            ignore
+              (add rpn (lit_form (var_form (List.concat_map terms ws) (List.length ws)))))
+        [
+          ("Y1", fun w -> [ (1, "~" ^ vy.lit w); (1, v.lit w) ]);
+          ("Y2", fun w -> [ (1, vy.lit w); (1, "~" ^ v.lit w) ]);
+        ]
+  | _ -> ());
   (* T4: resolve each candidate once against a FLAG CLAUSE of this constraint (a clause
      with a flag), on a flag the candidate has with the other polarity *)
   let clauses =
@@ -1460,6 +1588,10 @@ let pin t ~id (c : Opb.constr) =
   | Some (`Rung hi), _ ->
       t.n_ia_rung <- t.n_ia_rung + 1;
       emit t "@c%d ia %s : @L[%s] ;" id body hi
+  | Some (`Hole x), _ when Hashtbl.mem t.copies x ->
+      (* a copy's hole: its original's hole clause and the two red pairs, by propagation *)
+      t.n_rup <- t.n_rup + 1;
+      emit t "@c%d rup %s ;" id body
   | Some (`Hole x), _ when Hashtbl.mem t.holes x ->
       (* the clause x <> h: every allowed value's eq atom implies its ladder literals, then
          cake's `@c[d<k>][al1]` has no true literal left under x = h *)
