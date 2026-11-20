@@ -1476,6 +1476,21 @@ let test_bound_history () =
           done
         done)
       [ x; y; x'; z ];
+    (* D-0186: [Store.hi_below] and [lo_at_least] (binary search over the bound history)
+       against the walks along [sup_hi]/[sup_lo] they replaced, for every variable and
+       every threshold, false literals and true ones alike. *)
+    List.iter
+      (fun var ->
+        for k = -1 to 11 do
+          let a = Store.hi_below s var k and b = Store.hi_below_walk s var k in
+          let c = Store.lo_at_least s var k and d = Store.lo_at_least_walk s var k in
+          if a <> b || c <> d then (
+            ok := false;
+            bad :=
+              Printf.sprintf "%s k %d: hi_below %d walk %d, lo_at_least %d walk %d"
+                (Store.name s var) k a b c d)
+        done)
+      [ x; y; x'; z ];
     check
       (Printf.sprintf "bound history = trail scan, every case (%s)%s" tag
          (if !ok then "" else " -- " ^ !bad))

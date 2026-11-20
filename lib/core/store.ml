@@ -359,8 +359,24 @@ let hi_support t v = t.hi_sup.(Var.to_int v)
    Each entry records the support of the bound BEFORE it ([sup_lo]/[sup_hi]), so the
    crossing is found by walking one bound's own chain of moves back from its support
    while the entry's [old] bound was already past [k]: O(moves of [v] on the trail),
-   and only asked for literals that are false now. *)
-let hi_below t v k =
+   and only asked for literals that are false now.
+
+   M16-file-review-T1 (D-0186): that walk is now a binary search over the bound's
+   HISTORY ([hi_hist]/[lo_hist], below), O(log moves). The chain the walk followed IS
+   the history read backwards: [apply] pushes a position there exactly when it writes
+   [hi_sup] (the next entry's [sup_hi]), [undo_to] pops it exactly when it restores it.
+   Along the history the [old] upper bounds do not increase -- the first is the
+   declared bound, each later one the [now] of the entry before, and no entry outside
+   the history moves the bound -- so "[old] is already below [k]" is false, then true.
+   The walk stopped at the newest entry where it is false, or found none; the search
+   finds the first entry where it is true and answers its predecessor, or [no_support]
+   when there is none. The same answer, even for a literal that is not false now (the
+   walk then stops at once on the current support, the history's top). Symmetric on the
+   lower bound. On 2021 perfect_square the walk was 7 % of the instructions: its
+   learned clauses watch literals falsified many moves ago. The walks stay, as
+   [hi_below_walk] and [lo_at_least_walk], for the BAGUETTE_DEBUG cross-check and
+   test_core.ml's oracle. *)
+let hi_below_walk t v k =
   let rec back p =
     if p = no_support then p
     else
@@ -369,7 +385,7 @@ let hi_below t v k =
   in
   back (hi_support t v)
 
-let lo_at_least t v k =
+let lo_at_least_walk t v k =
   let rec back p =
     if p = no_support then p
     else
@@ -377,6 +393,34 @@ let lo_at_least t v k =
       if Domain.lo e.old >= k then back e.sup_lo else p
   in
   back (lo_support t v)
+
+let hi_below t v k =
+  let i = Var.to_int v in
+  let h = t.hi_hist.(i) in
+  (* the first j in [0, hi_hn) whose [old] upper bound is below [k], or hi_hn *)
+  let lo = ref 0 and hi = ref t.hi_hn.(i) in
+  while !lo < !hi do
+    let mid = (!lo + !hi) lsr 1 in
+    if Domain.hi t.trail.(h.(mid)).old < k then hi := mid else lo := mid + 1
+  done;
+  let r = if !lo = 0 then no_support else h.(!lo - 1) in
+  if Debug.enabled && r <> hi_below_walk t v k then
+    failwith "invariant violated: D-0186: hi_below's history search agrees with the walk";
+  r
+
+let lo_at_least t v k =
+  let i = Var.to_int v in
+  let h = t.lo_hist.(i) in
+  let lo = ref 0 and hi = ref t.lo_hn.(i) in
+  while !lo < !hi do
+    let mid = (!lo + !hi) lsr 1 in
+    if Domain.lo t.trail.(h.(mid)).old >= k then hi := mid else lo := mid + 1
+  done;
+  let r = if !lo = 0 then no_support else h.(!lo - 1) in
+  if Debug.enabled && r <> lo_at_least_walk t v k then
+    failwith
+      "invariant violated: D-0186: lo_at_least's history search agrees with the walk";
+  r
 
 let trail_length t = t.trail_len
 let reasons t = t.reasons
