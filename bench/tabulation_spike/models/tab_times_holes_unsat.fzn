@@ -1,0 +1,13 @@
+% M4-T6 spike (D-0184). UNSAT at the root under GAC, through HOLES. The z <= -5 products
+% left by the four disequalities are -9 (3,-3) and -5 (5,-1), and x <> 3, x <> 5 kill both;
+% every refuting step reads an interior hole of x or z, so the KILL lines are load-bearing.
+var 0..5: x :: output_var;
+var -3..3: y :: output_var;
+var -9..9: z :: output_var;
+constraint int_times(x, y, z);
+constraint int_le(z, -5);
+constraint int_ne(z, -6);
+constraint int_ne(z, -8);
+constraint int_ne(x, 3);
+constraint int_ne(x, 5);
+solve satisfy;
