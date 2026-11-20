@@ -22,7 +22,6 @@ of it to every session and stopping at a broken line before it even reached the 
 | M8-bits-encoding-T4 (two arms, `W = none` and `W = 0`, on the sixteen editions) | run directories under `/scratch/arthur/m8t4/`, `tools/compare/` (additions), `bench/challenge/README.md` (the run's row), a new D-record | agent-m8t4 (`wave55-m8t4`) | 2026-11-20 |
 | M11-complexity-T15 (SPIKE, explanations as a hash-consed DAG; a prototype branch, nothing merged without a decision) | `lib/core/explanation.ml`, `lib/core/justify.ml`, `lib/core/trace.ml`, propagators' explanation construction as needed, on branch `wave55-dag` only | agent-dag (`wave55-dag`) | 2026-11-20 |
 | M11-complexity-T17 (learned clauses that cannot prune) | `lib/core/search.ml`, `lib/core/learned.ml`, `lib/core/retention.ml`, `lib/core/engine.ml` (learned wakes only), `lib/core/prop/clause.ml`, `lib/core/prop/pb.ml`, their unit tests | agent-learnprop (`wave55-learnprop`) | 2026-11-20 |
-| M14-e2e-verification-T2 (first demo as a lane) | new `tools/e2e/` (the FlatZinc -> .scp translator, the bridge), `bench/e2e_spike/`, a new lane script `scripts/e2e_lane.sh`, `Makefile` (one target), `scripts/README.md` (one section); reserved record D-0176 | agent-e2e2 (`wave55-e2e2`) | 2026-11-20 |
 
 ## Cross-session requests
 
@@ -454,6 +453,7 @@ section 1. Shares are inclusive, of the whole run.
 
 | Task | Session | Date | Summary |
 |---|---|---|---|
+| M14-e2e-verification-T2 (first demo as a lane) | agent-e2e2 (`wave55-e2e2`) | 2026-11-20 | **D-0176.** `make e2e`: a separate FlatZinc -> `.scp` translator (M1 builtins, `all_different_int`), the bridge in `tools/e2e/`, 75 of 207 test models VERIFIED by `cake_pb_cp`, 132 SKIPPED, 0 FAIL; 8 mutation controls refused at line and wording; translator equal to Gecode/CP-SAT's solution sets on all 75 |
 | M7-T34 (`member` without width-proportional rows) | agent-member2 (`wave55-member`) | 2026-11-20 | **D-0170.** Four bound clauses and two big-M rows over the declared overlap per position; the threshold clauses are lemmas written ahead of the lines that walk a hole (one per switch of the hole's owner), one `Combine` per line, no new constructor. Rows over the 35 Challenge instances 7.47 M -> 77 K, literals -38 %; statuses and incumbents equal to main's. Gate on `e150a70`: see D-0170 §5. Merge recommended |
 | M7-T28 (`member`) | agent-member (`wave53-member`) | 2026-11-19 | **D-0159.** `member` native, DOMAIN over x, y and one selector per position; released with M7-T34, which builds on its branch |
 | M11-complexity-T4 (part 2: search, analysis, retention, learned; T4 DONE) | agent-batch4b (`wave52-batch4b`) | 2026-11-19 | **D-0152.** S1 (learned-instance kind as a byte per engine id), S3 (`decision_entries` over the level marks), S4 (`is_fixed`, `first_fail` stops at size 2), S5 (`kept` by a level table), S6 (`apply_globals` keeps its forward list, skips a unit in force), S2 (lazy citation texts), R3 (typed orders, fifo's no-op sort skipped), J6 (`bridges`' origin a thunk), L2 (`to_linear_row` typed sorts, one-pass grouping), A1 (the 1UIP frontier keeps its count and a heap). R4 done and REVERTED (RSS +6-8 %). Every byte the same (36 measurement runs, lane 301/301 and 289/289); instructions at 40 000 nodes no-proof: mspsp -17.3 %, QR72 -15.6 %, QR48 -11.2 %, openshop -8.0 %, rcpsp_11 -5.9 %, cyclic -0.5 %; RSS -4 to -8 %. Gate on `d4e8477`: `make check` rc 0, peak RSS 99 MB, 193 models identical to gate 57's binary, lane 301/301 and 289/289, binary `d12feec0`. |
@@ -627,6 +627,12 @@ section 1. Shares are inclusive, of the whole run.
 | M14-e2e-verification-T1 (feasibility study) | agent-e2e (`wave55-e2e`) | 2026-11-20 | **D-0174 (STUDY).** The verified encoder is CakeML's `cake_pb_cp` (`.scp` in, OPB over two's-complement bits out, HOL4 theorem `full_encode_sem_concl`), prebuilt in gitlab.com/MIAOresearch/software/cakepb `cp/`. Route: baguette's proof re-derives its own `.opb` from cake's at its head (atoms, `B = l + S`, ladder, substituted rows, pins), search proof unchanged. `bench/e2e_spike/run.sh`: 4 models VERIFIED by `cake_pb_cp`, a faked transcription bug refused. ROADMAP M14-T2..T8 |
 
 ## Handoff notes
+
+### 2026-11-20 (agent-e2e2, `wave55-e2e2`): M14-e2e-verification-T2, D-0176
+
+`make e2e ARGS="-j 8 OUTDIR"` (node only, not in `check`) runs every test model through translator -> `cake_pb_cp` ->
+baguette -> bridge -> `veripb --elaborate` -> `cake_pb_cp`: 75 VERIFIED, 132 SKIPPED, 8 of 8 controls refused, translator
+validated against Gecode/CP-SAT. `tools/e2e/fzn2scp.py` is TRUSTED: widen it only with `scpsem.py` and the validation pass.
 
 ### 2026-11-20 (agent-e2e, `wave55-e2e`): M14-e2e-verification-T1, D-0174 (STUDY)
 

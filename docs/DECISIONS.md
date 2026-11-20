@@ -20808,3 +20808,124 @@ It did not build HOL4 or CakeML. The prebuilt assembly was enough, and building 
 source is only needed to change it. It did not read the encoders of the T5/T6 families beyond their
 names. It did not run a search proof (every demo model closes at the root), so the prefix's cost
 relative to a real proof is not known. That waits for T2's coverage.
+
+## D-0176  M14-e2e-verification-T2: the end-to-end lane, 75 test models certified by CakeML's verified encoder and checker, with a separate translator checked against Gecode and CP-SAT
+
+Status: DONE (tooling and a lane, no solver code)
+Date: 2026-11-20
+Task: M14-e2e-verification-T2 (agent-e2e2, `wave55-e2e2`)
+Touches: `tools/e2e/` (new), `scripts/e2e_lane.sh` (new), `Makefile` (`make e2e`), `scripts/README.md`
+§9, `bench/e2e_spike/run.sh` (its `bridge.py` moved to `tools/e2e/`). Results:
+`/cluster/arthur/baguette-results/wave55-e2e2/` (the whole lane run, `lane2.log`).
+
+### 1. What was built
+
+The chain of D-0174 §4 with a real translator in place of the hand-written twins, run as a lane:
+`fzn2scp.py` (FlatZinc to `.scp`) → `cake_pb_cp` (encode) → baguette `--proof` (order arm, default
+flags) → `bridge.py` → `veripb --elaborate` → `cake_pb_cp` (check). A model is VERIFIED only on
+`cake_pb_cp`'s own `s VERIFIED SATISFIABLE` or `s VERIFIED UNSATISFIABLE` line, and only when it
+agrees with baguette's answer.
+
+| File | Role | Trusted |
+|---|---|---|
+| `tools/e2e/fzn2scp.py` | FlatZinc to `.scp`, its own scanner and parser, nothing shared with `lib/flatzinc/` (D-0174 §5) | **yes**, the only new trust |
+| `tools/e2e/bridge.py` | the prefix that derives baguette's `.opb` from cake's | no, a wrong line is refused |
+| `tools/e2e/chain.sh`, `mutate.py` | one model through the chain, and the corruptions | no |
+| `tools/e2e/scpsem.py`, `fzn_solutions.py`, `validate.py` | the translator's test (section 4) | no |
+
+**Covered by the translator**, everything else refused with `UNCOVERED: <first uncovered builtin>`:
+`int_lin_le`, `int_lin_eq`, `int_lin_ne`, `int_le`, `int_lt`, `int_eq`, `int_ne` (SPEC §2.1's M1 row)
+and `all_different_int`, over `var lo..hi`, `var bool` (as `0..1`), set domains with holes (bounds
+plus cake's `(dN in (v ...) x)`), arrays, aliases (a narrower alias domain is kept as an `in` on
+the target), parameters and constants written in place, `solve satisfy` with or without a search
+annotation. Refused besides the builtins: an objective (T8), and `var int` with no declared domain,
+because cake needs bounds and a bound the translator invented would change the model.
+
+**What the bridge gained over the spike.** (1) Names go through the translator's names table and
+baguette's `* name` comments, so `q[1]` reaches `q_1_`. (2) baguette's disequality selector
+`_neN_ge_1` (`int_ne`, `int_lin_ne`, and all_different's constant or repeated pairs) is DEFINED as
+cake's flag of the same two halves (`b[c][ne]`, `x[c][i_j]`) by a `red` pair with the witness
+`_neN_ge_1 -> F`, then each selector row is cake's substituted row with the flag swapped by one `pol`,
+pinned by `ia`. So the `_neN` half of T4 is done here, earlier than the ROADMAP planned. (3) Rows
+that are not a multiple of one variable's whole bit sum are refused by the bridge rather than
+mis-substituted. Over the 75 verified models the pins were 2 968 ladder rungs by `ia`, 486 model
+rows by `ia`, 92 selector rows by `ia` (47 selectors in 24 models), and 3 505 by `rup`
+(all_different's per-value clauses, the hole clauses through cake's `i[x][ge/eq]` atoms, and the
+rows of a contradictory pair).
+
+### 2. The lane's counts
+
+Binary md5 `4e41e8c1` (code of `main` `d2699c9`), veripb 3.0.2 `d5644ca4`, `cake_pb_cp` sha256
+`ca92491e` (CakePB `438b8f83`). `make e2e` takes about 40 s at `-j 8`. It is the one running target
+without the Makefile's `ulimit -v 4000000`. Under it `cake_pb_cp` refuses every model ("failed to
+allocate sufficient CakeML heap and stack space", measured), because it reserves its whole heap as
+virtual memory. baguette keeps the 4 GB cap inside `chain.sh`, and each run is under systemd's
+`MemoryMax=32G`.
+
+| | models |
+|---|---|
+| VERIFIED | **75** (42 SAT, 33 UNSAT), 41 of them with more than 20 proof lines, up to 817 (`colour_unsat`, a search) |
+| SKIPPED | 132: `baguette_global_cardinality` 19, `array_int_element` 18, `fzn_global_cardinality` 14, `int_eq_reif` 9, `array_int_maximum` 7, `solve minimize` 7, `int_le_reif` 6, `baguette_member` 6, `bool2int` 5, `var int` with no domain 4, `int_lin_le_reif` 4, `baguette_regular` 4, `array_bool_or` 4, and 22 more below 4 |
+| FAIL | 0 |
+
+### 3. The mutation controls
+
+Each control is asserted at the refused line and on the checker's whole sentence (CLAUDE.md, the
+lane that asserts a rejection). A RUP failure sentence alone would match any RUP failure, so the
+line is pinned too.
+
+| control | models | refused at | wording |
+|---|---|---|---|
+| baguette's `.opb` row says more than the model (degree + 1) | `chain_sat`, `php_unsat` | the pin of THAT row, `@cK rup` | "The constraint is not implied by reverse unit propagation (RUP) from core and derived database." |
+| the `.scp` says less than baguette's row (rhs + 1) | `chain_sat`, `php_unsat` | a pin, `@cK rup` | the same |
+| the `.scp` says more and baguette's solution breaks it (rhs − 1) | `search_all_const_sat`, `bits_pb_learn_sat` | the `sol` line | "Propagation engine error: The given solution is conflicting with constraint N in the database.", N being the substituted row `@S[c[c1]]` of the mutated constraint (checked) |
+| an atom definition with a wrong witness (`-> 0`) | `chain_sat`, `lin_sat` (satisfiable, so the `red` is judged, D-0053) | that `@A2[...] red` line | "Proofgoal #1 could not be autoproven." |
+
+8 of 8 refused as expected. The survey that chose them also showed which corruptions are rightly
+NOT refused. A stronger `.scp` verifies on an UNSAT model (the corrupted model is UNSAT too, so the
+verdict is true of it), and on a satisfiable model whose solution still fits. A stronger baguette
+row verifies on `lin_unsat`, whose cake database is already contradictory under unit propagation,
+so every `rup` holds there (D-0066's lesson). None of these is a hole in the chain, because each
+verified claim is true of the `.scp` that was checked. They are why every control is pinned to a
+model where its claim would be false.
+
+### 4. The translator's validation
+
+The certified chain starts at the `.scp`, so a wrong translation verifies (GCS #987). On every model
+the lane does not skip, `scpsem.py` enumerates the solutions cake's semantics admit, reading only
+the `.scp`, by backtracking over the declared bounds. The semantics are transcribed from
+`cpScript.sml` (`lin_sem`, `cmpop_sem`, `all_different_except_sem` with an empty exception list,
+`in_sem`, `valid_assignment`). `fzn_solutions.py` enumerates the `.fzn` with `fzn-gecode -a` and
+`fzn-cp-sat -a` (MiniZinc 2.10.1 bundle), every decision variable made an output. The model passes
+when every reference that ran gives the same set of complete assignments, and baguette's printed
+solution extends to one of them (or baguette said UNSAT and the set is empty).
+
+Result: **75 AGREE, 0 DIFFER, 0 UNCHECKED**, 1 177 solutions in all, 33 models with none, at most 720
+on one model. Both references agreed on 56 models. Gecode alone on 15, because CP-SAT's FlatZinc
+reader refuses `all_different_int`. CP-SAT alone on 4, because Gecode refuses literals beyond 32 bits
+(`backjump_lineq_unsat`, `near_limit_*`) and crashes on `bool_out_sat`'s aliased Boolean
+parameters. The test has teeth. Against `chain_sat`'s `.scp` with a constraint's rhs raised by one
+it says `DIFFER gecode: scp admits 0, gecode 1`.
+
+What it does not cover is what the corpus does not contain. It enumerates, so it only runs on small
+domains, and every model of the lane qualifies today. It does not test the shapes GCS lists that no
+covered test model has (index sets not from 1 are refused anyway, empty arrays, reified contexts).
+
+### 5. What the chain costs against `veripb` alone
+
+On the 75 verified models, `veripb` on baguette's own files takes 1.17 s in total, and
+`veripb --elaborate` on the bridged proof plus `cake_pb_cp` on the core take 1.71 + 2.68 = 4.39 s,
+**×3.75** in total and **×2.07** per model at the median (×1.6 to ×92.9). The proofs are small, so
+most of each figure is process start-up (about 17 ms per call). The outlier is `width_root_unsat`
+(two variables over 999 values), whose prefix is 1.5 MB. There `veripb` alone takes 0.017 s and
+15 MB, `--elaborate` 0.26 s and 193 MB, `cake_pb_cp` 1.32 s and 1.14 GB, in line with D-0174's
+w = 1 000 row. In bytes, baguette's proofs total 0.32 MB, the bridged ones 2.68 MB, the cores
+2.29 MB. The largest search proof, `colour_unsat` (33 KB), checks in 0.017 s alone against
+0.021 + 0.028 s through the chain. Nothing here measures a long search proof; that is T8.
+
+### 6. What is left
+
+T3 (the prefix written by the solver), the rest of T4 (reified forms and the Boolean builtins), T5
+to T8 unchanged. `var int` without a declared domain stays refused until baguette's inferred
+domain can be justified to cake (it would have to be a lemma derived from the model, not a bound
+in the `.scp`).

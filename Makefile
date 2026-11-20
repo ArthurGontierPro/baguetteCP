@@ -192,5 +192,10 @@ scaling: build
 # CakeML's verified encoder and checker, the mutation controls, and the translator against
 # Gecode/CP-SAT. Node only (cake_pb_cp and the MiniZinc bundle live there); not in `check`.
 #   make e2e ARGS="-j 8 /scratch/arthur/<run>"
+# NOT under $(CAP), deliberately: cake_pb_cp reserves its whole CakeML heap as virtual memory
+# at start-up, and under `ulimit -v 4000000` it refuses every model ("failed to allocate
+# sufficient CakeML heap and stack space", measured 2026-11-20). baguette itself still runs
+# under the 4 GB cap inside tools/e2e/chain.sh, and every run of the lane is under systemd's
+# MemoryMax=32G, which bounds real memory instead.
 e2e: build
-	$(CAP) ./scripts/e2e_lane.sh $(ARGS)
+	./scripts/e2e_lane.sh $(ARGS)
