@@ -640,8 +640,29 @@ let root_holds t (l : Lit.t) =
           if l.Lit.positive then Domain.lo (get t v) >= k && root (lo_support t v)
           else Domain.hi (get t v) <= k - 1 && root (hi_support t v))
 
-(* [Explanation.top_weaken_owners] less every top-level [Defining] the root holds: the
-   variables the reverse arm of [agreement_holds] requires the reason to name. *)
+(* A PAGE-ONLY LEMMA (M7-T35, D-0189): a [Term (c, Clause l)] followed at once by a
+   [Weaken] of exactly [(c, ~l_j)] for each literal of [l], in order. Each [c l_j + c ~l_j]
+   is the constant [c], so the pair adds a constant to the row and NO VARIABLE: the
+   clause is in the derivation only so that its own line is on the page ahead of the line
+   that needs it (member.ml's threshold lemmas, D-0170), and the derivation's result does
+   not read it. The [Weaken] there is not "a variable read and weakened away", which is
+   the only thing the reverse arm asks the reason to account for. Matched on the raw
+   [Clause], never a [Deferred] one, so the check forces nothing it did not force before,
+   and on the exact shape: one coefficient or literal off and the [Weaken] counts. *)
+let page_only_lemma c lits ws =
+  List.compare_lengths lits ws = 0
+  && List.for_all2 (fun l (c', w) -> c' = c && Lit.equal w (Lit.negate l)) lits ws
+
+let rec drop_page_only_lemmas = function
+  | Explanation.Term (c, Explanation.Clause { lits; _ }) :: Explanation.Weaken ws :: rest
+    when page_only_lemma c lits ws ->
+      drop_page_only_lemmas rest
+  | s :: rest -> s :: drop_page_only_lemmas rest
+  | [] -> []
+
+(* [Explanation.top_weaken_owners] less every top-level [Defining] the root holds and
+   every page-only lemma's [Weaken]: the variables the reverse arm of [agreement_holds]
+   requires the reason to name. *)
 let reverse_owners t e =
   match Explanation.force e with
   | Explanation.Combine { summands; divisor = _; _ } ->
@@ -653,7 +674,7 @@ let reverse_owners t e =
                  if root_holds t l then [] else [ Lit.owner l.Lit.v ]
              | Explanation.Term _ -> []
              | Explanation.Linear_term r -> if r.lt_cited = [] then [ r.lt_name ] else [])
-           summands)
+           (drop_page_only_lemmas summands))
   | _ -> []
 
 (* The predicate, public and unconditional, so that a test can assert it directly rather

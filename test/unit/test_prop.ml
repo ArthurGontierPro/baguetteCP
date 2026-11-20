@@ -8825,6 +8825,115 @@ let test_member_veripb () =
     (match outcome with Search.Sat _ -> true | _ -> false);
   run_veripb ~name:"member: the Boolean scene's proof verifies" ~build:(fun _ ->
       (opb, pbp))
+
+(* M7-T35 (D-0189). Six of the seven test/models/member_*.fzn stopped under
+   BAGUETTE_DEBUG on D-0026's reverse arm: a line with threshold lemmas (member.ml's
+   [ahead_combine]) puts each lemma in its [pol] as [Term (1, Clause l)] and then weakens
+   it back out with [Weaken] of every [~l_j], and the arm read that [Weaken] as variables
+   the derivation used, so it asked the reason to name the selector (the very one a K line
+   kills), x_k and y. The pair sums to a constant; the reason was right and the predicate
+   over-read, D-0091's shape. [Store.reverse_owners] now drops such a pair, on the exact
+   shape only.
+
+   Two halves. The predicate, on a hand-made pruning: the lemma pair passes with a reason
+   that names neither b nor x, and three near misses still disagree (the [Weaken] alone,
+   one coefficient off, one literal off). The wiring, on the real models: this binary
+   re-runs itself with BAGUETTE_DEBUG=1 on each member model ([member_debug_child]
+   below), so a regression stops the child at the check and fails here, which is what
+   the unit suite could not see before (it runs without BAGUETTE_DEBUG, and no
+   bench/diff instance has a member). *)
+let test_member_page_only_lemma () =
+  let store =
+    Store.create ~names:[| "b"; "x"; "y" |]
+      ~domains:[| Domain.make 0 1; Domain.make 1 5; Domain.make 1 5 |]
+  in
+  let nb = Lit.negate (Lit.ge "b" 1) in
+  (* R+(b, 3): ~b \/ ~[y >= 3] \/ [x >= 3]; the line: y <> 3 because y >= 3, x <= 2. *)
+  let lemma = [ nb; Lit.negate (Lit.ge "y" 3); Lit.ge "x" 3 ] in
+  let line = [ Lit.negate (Lit.ge "y" 3); Lit.ge "y" 4 ] in
+  let cancel c l = List.map (fun x -> (c, Lit.negate x)) l in
+  let pruning ws =
+    Reason.because ~concludes:None
+      [ Reason.at_least ~name:"y" ~decl:1 3 ]
+      (Explanation.combine
+         ([ Explanation.term 1 (Explanation.clause lemma); Explanation.weaken ws ]
+         @ [ Explanation.term 3 (Explanation.clause line) ])
+         3)
+  in
+  check
+    "M7-T35: a page-only lemma (Term clause + Weaken of its every negation) asks the \
+     reason for nothing"
+    (Store.agreement_holds store (pruning (cancel 1 lemma)));
+  check "M7-T35: ... and the reason it passes with names neither b nor x"
+    (not (List.mem "b" (Reason.owners (pruning (cancel 1 lemma)).Reason.reason)));
+  let alone =
+    Reason.because ~concludes:None
+      [ Reason.at_least ~name:"y" ~decl:1 3 ]
+      (Explanation.combine
+         [
+           Explanation.weaken (cancel 1 lemma);
+           Explanation.term 3 (Explanation.clause line);
+         ]
+         3)
+  in
+  check "M7-T35: the same Weaken with no lemma before it still asks for b and x"
+    (not (Store.agreement_holds store alone));
+  check "M7-T35: one Weaken coefficient off: no longer a constant, still asks"
+    (not
+       (Store.agreement_holds store
+          (pruning ((2, Lit.ge "b" 1) :: List.tl (cancel 1 lemma)))));
+  check "M7-T35: one literal short: the pair is no constant, b is still asked for"
+    (not
+       (Store.agreement_holds store
+          (pruning (List.filteri (fun i _ -> i < 2) (cancel 1 lemma)))))
+
+let member_debug_child file =
+  if not Baguette_core.Debug.enabled then exit 3;
+  let dir = Filename.temp_file "baguette_member_debug" "" in
+  Sys.remove dir;
+  Sys.mkdir dir 0o700;
+  let src = read_file file in
+  let _, outcome, opb, pbp =
+    regular_solve dir ~file:(Filename.remove_extension (Filename.basename file)) src
+  in
+  List.iter (fun f -> try Sys.remove f with _ -> ()) [ opb; pbp ];
+  (try Sys.rmdir dir with _ -> ());
+  exit (match outcome with Search.Sat _ | Search.Unsat -> 0)
+
+let () =
+  match Sys.argv with
+  | [| _; "--member-debug"; file |] -> member_debug_child file
+  | _ -> ()
+
+let test_member_debug_models () =
+  match bool_models_dir with
+  | None -> check "M7-T35: test/models/ found (the member debug lane ran)" false
+  | Some d ->
+      let models =
+        List.sort compare
+          (List.filter
+             (fun f ->
+               String.length f > 7
+               && String.sub f 0 7 = "member_"
+               && Filename.check_suffix f ".fzn")
+             (Array.to_list (Sys.readdir d)))
+      in
+      check "M7-T35: the seven member models are there" (List.length models >= 7);
+      List.iter
+        (fun f ->
+          let rc =
+            Sys.command
+              (Printf.sprintf "BAGUETTE_DEBUG=1 %s --member-debug %s >/dev/null 2>&1"
+                 (Filename.quote Sys.executable_name)
+                 (Filename.quote (Filename.concat d f)))
+          in
+          check
+            (Printf.sprintf
+               "M7-T35: %s solves under BAGUETTE_DEBUG=1, every D-0026 check passing (rc \
+                %d)"
+               f rc)
+            (rc = 0))
+        models
 (* ===================================================== M7-T33: alldiff conflicts learn
 
    D-0156. Until M7-T33 both of all_different's pigeonholes -- stage 1's Hall interval
@@ -9363,6 +9472,9 @@ let () =
   (* M7-T28, D-0159: member. *)
   test_member_brute_force ();
   test_member_veripb ();
+  (* M7-T35, D-0189: member under the D-0026 agreement check. *)
+  test_member_page_only_lemma ();
+  test_member_debug_models ();
   if !failures > 0 then (
     Printf.printf "\n%d FAILURE(S)\n" !failures;
     exit 1)
