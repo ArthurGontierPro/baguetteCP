@@ -22631,3 +22631,293 @@ would change that, the node count GAC saves on real instances with small-domain 
 has not been measured. The follow-up row measures it first, with this generator's GAC as the oracle.
 If the gain is real, B is the shape to build, since the spike shows every piece of it checking.
 Reverting this record means deleting `bench/tabulation_spike/`. Nothing else depends on it.
+
+## D-0186  M16-file-review-T1: the core read file by file. Three searches were quadratic in the depth of the tree, seven byte-identical levers taken (one corrected by the gate's scaling lane) and one reverted, and the engine's per-run cost left to a change of structure
+
+**Status**: DONE, recorded 2026-11-20 (agent-review1, `wave55-review1`).
+**Task**: M16-file-review-T1, the core (`store.ml`, `domain.ml`, `engine.ml`, `var.ml`, `propagator.ml`,
+`search.ml`).
+**Files changed**: `lib/core/search.ml`, `lib/core/store.ml`, `lib/core/engine.ml`, `lib/core/domain.ml`
+(a header paragraph only), `test/unit/test_core.ml`. `var.ml` and `propagator.ml` are unchanged.
+**Runs**: `fataepyc-06:/scratch/arthur/wave55-review1-runs/` (`job.sh`, `runjobs.sh`, `models.sh`,
+`cmpmodels.sh`, `tools/attrib.py`, `tools/callees.py`, `tools/cmp.py`, the profiles and the counts),
+the scripts, the attribution files and the comparisons copied to
+`/cluster/arthur/baguette-results/wave55-review1/`.
+
+### 1. Method
+
+Instances. The diff lane's 25 instances at their corpus budgets (the fast tier, plus the slow tier's
+mspsp, rcpsp_11, cyclic-rcpsp and openshop, QR48 and QR72 at their fast budgets), and the two codes-cp
+same-tree runs of D-0169, QR48 with 3 and with 2 positions fixed (`f3`, 29 779 nodes, and `f2`,
+108 699 nodes, the `f3.fzn`/`f2.fzn` D-0169 flattened, from `wave55-pernode`), run to the end.
+
+Profiles. The release build of main `5085652` compiled under the frame-pointer switch `baguette-fp`
+(D-0145's method, binary `11626745`), `perf record -e cycles:u -F 999 --call-graph fp`, with and
+without `--proof`. Only the samples of the search are counted (a `Search` frame on the stack, or a
+stack perf cut at its 127 frames, which only the deep `dfs` recursion reaches). For each function of
+the six files the share of those samples it is the leaf of (self) and the share it is on the stack of
+(inclusive). Release and not dev, because the release binary is the one a series runs (D-0171), and
+in it the small accessors (`Store.get`, `Domain.lo`, `Var.to_int`) are inlined into their callers,
+whose shares then carry them. Two traps met on the way. `perf_event_mlock_kb` is 2 MB per user, so
+two `perf record` at once with the default buffer fail with exit 255 and an empty stderr, and
+parallel profiles need `--per-thread -m 32`. And a deep search's stack is cut by perf before
+`Search.solve`, so a filter on that frame drops most of the samples of a deep run.
+
+Counts. `perf stat -e instructions:u`, minus a 1-node run of the same binary, over the nodes. Every
+lever was measured on the dev binary of its own commit against the dev binary of the commit before
+(the gate's profile, D-0171), the whole branch also on the release binaries for the absolute
+numbers. The node counts are equal by construction (the same budget) and checked. The node was shared
+with two Challenge series throughout (load 50 to 90 on 192 cores), so the cycle shares of the
+profiles are indicative and the instruction counts are the measure. Their noise, measured by running
+main's dev binary twice on every instance, is in section 4.
+
+Byte identity, at every lever. The 207 `test/models/*.fzn` with `--proof` and `--stats`: stdout,
+exit code, `.opb`, `.pbp` and the `--stats` lines without their timings, against main's binary, 0
+differences at each lever commit, the reverted one and the correction included. And on the 27 instances above, with and without the proof,
+the node count, the `--stats` lines, stdout and the `.opb`/`.pbp` hashes at the budget, equal at each
+commit.
+
+### 2. The tables, file by file
+
+Shares are of the search samples of the release profiles without the proof, as "lane median / lane
+maximum (instance)" over the 25 lane instances, then `f3` (codes QR48, 3 fixed). "Incl" is inclusive.
+A function absent from a profile was inlined or took under 0.1 %. Sizes: `d` the depth of the tree,
+`n` the variables, `w` a domain's width, `s` a hole bitset's span, `L` the learned constraints, `I`
+the instances, `k` the ids an entry wakes.
+
+**var.ml** (13 lines)
+
+| function | complexity | data structure | share | verdict |
+|---|---|---|---|---|
+| `of_int`, `to_int`, `equal`, `compare`, `hash` | O(1) | `type t = int` | inlined in release, absent from every profile | fine |
+| `Map`, `Set` | O(log n) | `Map.Make (Int)` | no per-node caller | fine |
+
+**propagator.ml** (218 lines)
+
+| function | complexity | data structure | share | verdict |
+|---|---|---|---|---|
+| `pack`: `run = fun store -> P.propagate p store` | one closure call per run, then the module's function | a closure per instance | `Propagator.fun` 0.52 / 1.07 (filters), f3 1.01, f2 1.18 | constant factor of D-0169's per-run dispatch, structural (first-class modules). Left |
+| `watch_any`/`watch_lo`/`watch_hi`/`watch_var` | O(1) | `3x + k` ints | inlined | fine |
+| `advise_always`, `no_row`, the pass counters | O(1) | | | fine |
+
+**domain.ml** (343 lines)
+
+| function | complexity | data structure | share | verdict |
+|---|---|---|---|---|
+| `lo`, `hi`, `is_fixed` | O(1) | `{lo; hi; holes option}` | inlined | fine |
+| `value` | O(1), allocates a `Some` | | 0.35 / 1.90 (perfect_square, through `Reif.decided`) | fine here; its per-run callers (`reif.ml`, `ne.ml`, `reif_lin_eq.ml`, `view.ml`) could read `is_fixed` and `lo` (T2) |
+| `is_hole`, `mem` | O(1) | bitset, `Bytes` | `get_bit` 0 / 2.43 (lot-sizing, through `Store.remover` and the globals) | fine |
+| `size` | O(1) without holes, O(s/8) with | popcount table | under 0.3 % everywhere | fine, the cost stated in the header |
+| `classify` | O(1) for a bound entry and a `Bound` record with two options allocated; O(w) for a hole entry | | 0 / 0.79 (lot-sizing), with proof 1.34 | on the engine's per-entry path for no use but the kind: **L5** |
+| `settle`, `set_lo`, `set_hi`, `fix` | O(1) plus the holes walked | | `settle` 0 / 0.25 | fine |
+| `remove` of an interior value (`with_hole`) | O(s/8), a copy-on-write bitset (I-T1) | | not seen | stated in the header (SPEC 3.1 allows it), bounded by `max_hole_span` |
+| `of_list`, `equal`, `affine`, `to_string`, `holes_list` | O(w) | | front end, printing, tests | fine |
+
+**store.ml** (1403 lines)
+
+| function | complexity | data structure | share | verdict |
+|---|---|---|---|---|
+| `get`, `name`, `level`, `lo_support`, `hi_support`, `trail_length`, `trail_entry` | O(1) | arrays by variable and by position | `trail_entry` 0.40 / 1.07 | fine |
+| `run_as` | O(1) | | 1.00 / 2.99 self (mspsp), f3 1.19 | fine (D-0169 took its closure) |
+| `apply` with `push_entry`, `push_hist`, `Arena.add` | O(1) amortised, plus three `Debug.check` closures built per entry | entry record of 12 fields, doubling arrays | `push_hist` 0.91 / 2.40 (steiner), `apply` 0.22 self | the closures: **L6** |
+| `undo_to`, `backtrack` | O(entries popped + readers) | | 0.36 / 1.10 | fine |
+| `hi_below`, `lo_at_least` | O(moves of the bound since it crossed `k`), a walk along `sup_hi`/`sup_lo` | | `Store.back` 0.37 / **6.86 (perfect_square)** | grows with the moves of a variable: **L4**, then **L4b** |
+| `level_of_index` (`first_mark_above`) | O(log levels) | the marks | `Store.go` 0.47 / 1.70 (rcpsp_12) | a per-position level array would answer in one load. Left (0.5 % median) |
+| `is_level_start` | O(1) | `starts` (D-0142) | | fine |
+| `member_support`, `bound_support`, `remover` | O(log moves) | per-variable histories (D-0088) | `member_support` 0.14 / 1.72 (openshop), `remover` 0 / 1.10 self, 4.24 incl (lot-sizing) | fine; `remover`'s debug closure is L6 |
+| `created_domain` | O(1), four dependent loads through the history | | **1.94 (roster), with proof 2.78 (roster) and 1.83 (bacp)** | a constant factor on the reasons' path: **L8** |
+| `lo_at`, `hi_at`, `support_before` | O(moves since the cut) | the support chain | `lo_at` 0 / 2.59 incl, `support_before` under 0.33 | fine |
+| `var_named` | O(name) hash and compare | `Hashtbl` string to int (D-0085) | 0.17 self, but **2.69 / 6.18 incl** (roster, fox-geese, QR72) | the string hash of a literal's name, asked by the conflict path (`Analysis`, `Learn`, `Pb_analysis`, `Pb`) to find a literal's variable. The lever is in those callers (T2, T3) |
+| `trail_entries`, `all_fixed`, `snapshot`, `same_domains`, `check_invariants`, the `_scan`/`_walk` oracles | O(trail) or O(n) | | tests and BAGUETTE_DEBUG only | fine |
+| `register_low_water`, `take_low_water` | O(readers) | | once per engine, once per call | fine |
+
+**engine.ml** (2104 lines). Engine self time is 16 % of the lane's median profile and 32 % of f2's.
+
+| function | complexity | data structure | share | verdict |
+|---|---|---|---|---|
+| `propagate` (per node) | the seed, O(dirty log dirty), then the FIFO | binary min-heap of ids, `Stdlib.Queue` | `propagate_inner` 0.28 self | see the rows below |
+| `run_one` (per run) | O(1) plus `check_attribution` and the counters | | 2.01 / 4.08 self, f3 4.12, f2 4.46 | D-0169's per-run dispatch. Left (structural) |
+| `heap_push`/`pop`/`up`/`down`, `mark_dirty` | O(log dirty) per mark and per pop | binary heap | `heap_down` 0.65 / 3.56, f3 3.25, f2 4.04 | constant factor. A two-level bitset would pop in the same ascending order (every mark made during the seed is at or above the cursor) without the log factor. Not built, section 5 |
+| `watchers_of_new_entries` (per run that pushed) | O(entries x (static watchers + k log k)) | `wake_static` lists, three watch slots per variable, `moved` bytes | 0.58 self, 13.0 incl median | its `Domain.classify` per entry: **L5**. Its sort, next row |
+| `sort_desc_uniq`, `sift_min` | O(k log k), heapsort | scratch array (D-0169) | `sift_min` 0.53 / 2.37, f3 2.54, f2 4.50 | L7 sorted the short runs by insertion and changed nothing (reverted): the cost is in the long runs. Left, section 5 |
+| `advises`, `wants`, `trigger_of`, `collect` | O(1) per ask, plus the advisor's closure | instance record, then its closure; trigger records | `advises` 1.62 / 3.51 self (f3 3.79), `trigger_of` 0.68, `wants` 0.51 | a per-id array of advisors and a byte per trigger would save a dependent load per ask, about 1 %. Left |
+| `seed_dirty`, `mark`, `mark_slot` | O(entries x watchers) | | 1.17 / 4.75 incl (openshop) | its `Domain.classify` per entry: L5 |
+| `check_attribution`, `in_scope` | O(new entries x log scope) | sorted scopes (D-0138) | `in_scope` 0.80 / **5.30 (openshop)** | on always (I-T4), one binary search per new entry. Left |
+| `sync_watched`, `dyn_push`, `dyn_remove` | O(1) | the watch slots | `sync_watched` 0.30 / 1.96, f3 2.22 | fine |
+| `bump_by_id` | O(1) amortised | measurement arrays | 0.56 / 1.72 | fine |
+| `add` | O(scope) amortised | doubling arrays, the `watchers` table | 0.65 / 3.39 incl | fine |
+| `release_rests`, `rest_on` | O(released) | | flag off (D-0173) | fine |
+| `check_*`, the consistency oracle | | | BAGUETTE_DEBUG and BAGUETTE_CONSISTENCY only (`check_declined`'s `List.mem` is O(k^2) there) | fine |
+
+**search.ml** (3989 lines)
+
+| function | complexity | data structure | share | verdict |
+|---|---|---|---|---|
+| `dfs` per node: `apply_globals`, `count_learned_activity`, `staged_of` | O(units), O(new entries), O(1) | | under 0.1 % self | fine |
+| the staged order of `sequence` | O(phase) per node, a `Seq` cell, a closure call and a list cell per variable | | `Search.go` **8.2 % of monitor-placement** (its phase is every Boolean), `is_live` 2.33 | **L3** |
+| `unfixed` and `first_fail` (no annotation) | O(n), two passes; `first_fail` stops at the first candidate of size 2 | | `unfixed` 0 / 1.91 (roster) | fine. A staged form of `spec_order` (one fused scan, no array) would be byte-identical. Left |
+| `sequence`'s `full` | O(n), a `Hashtbl` per call once every phase is fixed | | 0 / 1.85 incl (bacp) | stated where it lives |
+| `branch_split` | O(d), `List.length decisions` | | not seen | stated where it lives |
+| `bridges` (per conflict) | **O(d^2) per settled decision (every ancestor scanned against the protected list, a string compare per pair), up to O(d^3) per conflict** | list | **46.7 % of 2018 soccer**, 3.5 grid-colouring, 3.1 perfect_square | **L2** |
+| the nogood's `kept` filter in `dfs` | O(d x protected), string compares | list | `List.find_all` 8.4 % of soccer | **L2** |
+| `combine_nogoods` (per node whose two children failed) | **O(d^2): `List.exists Lit.equal` on the kept pairs and `acc @ [pair]`** | list | **33.1 % of 2011 roster**, 18.3 opd_08, 14.6 grid-colouring, 11.6 opd_10, median 1.46 incl | **L1** |
+| `levelled_nogood`, `filed_at`, `mentions_level`, `decision_entries`, `aligned` | O(d) | | `aligned` 0.18 / 1.66 | fine |
+| `register_learned`, `push_global` | O(width); a unit is O(units) | list, append | 1.59 incl median | the unit filing stated where it lives (6 to 27 units per run) |
+| `learn_at_conflict`, `pb_at_conflict`, `minimise` | the cost is `Learn`'s, `Analysis`'s, `Pb_analysis`'s | | 19.6 incl median | T3 |
+| the `Debug.check` of every node and conflict (`branch_split`, `check_decision_landed`, `wipe_after_nogood`, `combine`, `decision_entries`, `learn_at_conflict`) and `bridges`' `Printf` message | a closure or a formatted string built per call | | | **L6** |
+
+### 3. The levers taken, one commit each, every byte the same
+
+Instructions per node in thousands, dev binaries of consecutive commits, at the instance's node
+budget, without the proof (np) and with it (pf). Listed are the instances a lever moved by 1 % or
+more. "Median" is the median change over the 25 lane instances, "codes" is f2 then f3. Openshop
+(300 nodes behind a large set-up, section 4) moves by up to 5 % between any two binaries and is left
+out of the lists. Each lever's rule is stated in its module's header and at the function.
+
+| commit | lever | moved (np) | moved (pf) | median np / pf | codes np |
+|---|---|---|---|---|---|
+| `cbed2b9` | **L1** `Search.combine_nogoods` deduplicates through a `Lit_tbl` (O(d) per combine, was O(d^2) string compares) | roster 5 348 -> 3 618 (-32.4 %), opd_08 2 692 -> 2 218 (-17.6 %), grid-colouring 2 095 -> 1 786 (-14.8 %), opd_10 2 446 -> 2 150 (-12.1 %), soccer -3.4 %, QR72 -2.6 %, monitor -2.2 %, filters and steiner -1.4 %, QR48 -1.1 % | roster 7 843 -> 6 100 (-22.2 %), opd_08 -11.9 %, grid -9.6 %, opd_10 -7.5 %, soccer -2.5 %, monitor -1.9 %, QR72 -1.8 %, steiner -1.1 % | -0.76 / -0.44 % | -0.57, -0.63 % |
+| `9d6f5d3` | **L2** `Search.bridges` offers `protect` only the decisions walked since its last call, membership in a `Lit_tbl`; `dfs`'s kept filter asks a table of the protected literals (O(d) per conflict, was O(d^2) and more) | soccer 10 270 -> 4 059 (**-60.5 %**) | soccer 13 169 -> 6 980 (**-47.0 %**) | -0.03 / +0.01 % | +0.05, +0.02 % |
+| `af08551` | **L3** the staged order gathers a phase's live variables in one pass into a scratch array | monitor-placement 3 815 -> 3 598 (-5.7 %), soccer -1.7 % | monitor-placement 5 361 -> 5 139 (-4.1 %) | -0.06 / -0.09 % | -0.14, -0.19 % |
+| `cfbbaf3` | **L4** `Store.hi_below`/`lo_at_least` by binary search over the bound history (O(log moves), was a walk of the moves) | perfect_square 873 -> 857 (-1.8 %) | perfect_square 1 360 -> 1 344 (-1.2 %) | 0.00 / +0.06 % | +0.02, -0.08 % |
+| `67888e9` | **L5** the wake walk and the seed read an entry's kind instead of `Domain.classify` | lot-sizing and steiner -1.0 %, diameterc-mst -0.8 % | lot-sizing -0.8 % | -0.30 / -0.14 % | -0.39, -0.36 % |
+| `b68ac36` | **L6** the per-entry `Debug.check` of `Store` and the per-node/per-conflict ones of `Search` under `if Debug.enabled` | steiner -1.3 %, soccer -0.8 % | (none at 1 %) | -0.43 / -0.30 % | -0.38, -0.72 % |
+| `40d6e28` | **L8** `Store.created_domain` from an array of the created domains | (none at 1 %) | (none at 1 %) | -0.02 / -0.02 % | -0.02, -0.10 % |
+| `59dc6e6` | **L4b** `hi_below`/`lo_at_least` test the newest 4 moves one by one before the binary search (against L4 alone) | rcpsp_11 5 321 -> 5 300 (-0.4 %), rcpsp_12 -0.2 %, perfect_square 850 -> 854 (+0.5 %) | rcpsp_11 -0.1 %, perfect_square +0.3 % | -0.04 / -0.01 % | -0.07, -0.02 % |
+
+Two levers save cycles more than instructions, because what they remove is a chain of dependent
+loads, so they were also measured in cycles, three interleaved pairs of whole runs one at a time
+(`perf stat -e cycles:u`, load 72). L4 took perfect_square without the proof from 3.70, 3.76 and
+3.78 G cycles to 3.50, 3.50 and 3.51 (-6.5 %, the walk was 6.9 % of its profile). L8 took roster with
+the proof from 9.23, 9.60 and 9.23 G to 8.88, 8.85 and 9.11 (-4.3 %, `created_domain` was 2.8 % of
+its profile). In both, every run after is below every run before.
+
+L4b was made by the gate. On `e97f613` the scaling lane found 2013 rcpsp_11's growth (late minus
+early per node) at +0.61 % of late over the baseline, past the 0.5 % margin, where main `5085652`
+itself stands at +0.35 %. The per-lever counts put the difference on L4 (rcpsp_11 +0.56 %, rcpsp_12
++0.32 %). Its binary search pays a logarithm of the bound's history on every call, where the walk
+took a step or two for a literal falsified a move ago, which is rcpsp's common case, and the
+histories lengthen as the run goes on. L4b keeps the walk for the newest four moves and searches
+only behind them. The answers are the same (test_core's new long-history test runs the search
+part against the walk, and a mutation of it fails that test alone), rcpsp_11's line is back to
++0.45 % of late (section 7), and perfect_square keeps most of L4 (-2.1 % instructions per node from
+`af08551` to `59dc6e6`, with L5, L6 and L8 in between).
+
+One lever was tried and reverted. **L7** (`d300fb7`, reverted by `e97f613`) sorted the woken learned
+clauses of an entry by insertion when they were 16 or fewer. It changed nothing (-0.03 % median,
+QR48 -0.03 %, QR72 +0.00 %, f3 -0.04 %), because the heapsort's 3.7 % of f3's instructions is in
+the long runs, which it kept.
+
+In the release profiles of main and of the branch at `d5d3788` (cycles, indicative), soccer's
+`bridges` went from 46.7 % to 6.3 % of its samples, roster's `combine_nogoods` from 33.1 % to
+5.2 %, opd_08's from 18.3 % to 3.1 %, grid-colouring's from 14.6 % to 3.6 %, monitor-placement's
+staged order (`Search.go`) from 8.2 % to 3.4 %, and perfect_square's `Store.back` from 6.9 % to
+nothing. What remains of `bridges` is the bridge lines themselves (each states its ancestors),
+and of `combine_nogoods` the union, the sort and the minimisation of two nogoods of length `d`.
+
+### 4. The branch as a whole, release binaries
+
+Main `5085652` built with `make release`'s command (`7c880bce`) against the branch's code tip `59dc6e6`
+(`4504382d`), instructions per node in thousands, the same nodes, stdout, `--stats` and proof
+hashes equal on every line.
+
+| instance | nodes | np main | np branch | change | pf main | pf branch | change |
+|---|---|---|---|---|---|---|---|
+| 2011_bacp_bacp-22 | 6 001 | 1 591 | 1 561 | -1.9 % | 2 275 | 2 240 | -1.5 % |
+| 2011_cyclic-rcpsp_easy_6 | 2 001 | 5 305 | 5 286 | -0.4 % | 23 743 | 23 724 | -0.1 % |
+| 2011_roster_chicroster_dataset_large_18 | 3 501 | 4 430 | 2 927 | -33.9 % | 6 751 | 5 204 | -22.9 % |
+| 2012_amaze_2012-06-29 | 6 001 | 1 435 | 1 409 | -1.8 % | 3 042 | 3 019 | -0.7 % |
+| 2012_mspsp_hard_01 | 10 001 | 5 288 | 5 243 | -0.8 % | 9 555 | 9 519 | -0.4 % |
+| 2012_parity-learning_48_24_6.2 | 4 001 | 2 111 | 2 086 | -1.2 % | 3 601 | 3 572 | -0.8 % |
+| 2013_filters_dct_2_2 | 12 001 | 754 | 734 | -2.7 % | 1 196 | 1 175 | -1.8 % |
+| 2013_rcpsp_11 | 10 001 | 4 400 | 4 387 | -0.3 % | 14 745 | 14 734 | -0.1 % |
+| 2013_rcpsp_12 | 5 001 | 1 286 | 1 282 | -0.3 % | 3 594 | 3 606 | +0.3 % |
+| 2014_openshop_gp10-4 | 301 | 897 | 863 | -3.9 % | 11 014 | 11 790 | +7.0 % |
+| 2015_grid-colouring_13_11 | 5 001 | 1 785 | 1 499 | -16.0 % | 2 949 | 2 656 | -9.9 % |
+| 2015_opd_small_bibd_10_30_09 | 4 001 | 2 102 | 1 829 | -12.9 % | 3 429 | 3 164 | -7.7 % |
+| 2016_diameterc-mst_s_v20_a50_d4 | 4 001 | 2 113 | 2 079 | -1.6 % | 4 440 | 4 403 | -0.8 % |
+| 2017_opd_small_bibd_08_28_14 | 5 001 | 2 347 | 1 919 | -18.2 % | 3 554 | 3 131 | -11.9 % |
+| 2017_tc-graph-color_k5_05 | 8 001 | 1 084 | 1 053 | -2.9 % | 2 381 | 2 347 | -1.4 % |
+| 2018_soccer-computational_xIGData_24_16_14_2 | 1 501 | 9 388 | 3 261 | -65.3 % | 12 180 | 6 090 | -50.0 % |
+| 2019_fox-geese-corn_foxgeesecorn_54 | 3 001 | 7 674 | 7 671 | -0.1 % | 8 242 | 8 244 | +0.0 % |
+| 2020_lot-sizing_pigment15b.psp | 2 501 | 12 407 | 12 239 | -1.4 % | 16 329 | 16 157 | -1.1 % |
+| 2021_perfect_square_102 | 10 001 | 690 | 678 | -1.7 % | 1 163 | 1 150 | -1.1 % |
+| 2021_steiner-systems_steiner_t2_k7_N21 | 7 001 | 1 375 | 1 323 | -3.8 % | 2 559 | 2 516 | -1.7 % |
+| 2023_chessboard_chessboard4 | 2 501 | 4 811 | 4 788 | -0.5 % | 8 763 | 8 739 | -0.3 % |
+| 2023_evm-super-compilation_isolated_block_6_0_input | 2 001 | 5 601 | 5 576 | -0.4 % | 9 319 | 9 288 | -0.3 % |
+| 2024_monitor-placement-1id_igp_weight_based_rocketfuel_rf1755_real_hard | 5 001 | 3 211 | 2 897 | -9.8 % | 4 690 | 4 361 | -7.0 % |
+| H_qr48_bag_def | 6 001 | 1 247 | 1 228 | -1.6 % | 2 043 | 2 018 | -1.2 % |
+| H_qr72_bag_def | 5 001 | 1 657 | 1 603 | -3.2 % | 2 829 | 2 762 | -2.4 % |
+| f2 | 108 699 | 1 597 | 1 576 | -1.3 % | 2 803 | 2 775 | -1.0 % |
+| f3 | 29 779 | 1 156 | 1 135 | -1.8 % | 2 449 | 2 421 | -1.1 % |
+
+Lane median -1.83 % without the proof and -1.10 % with it (-1.17 % without openshop), codes QR48
+-1.8 % (3 fixed) and -1.3 % (2 fixed) without the proof, -1.1 % and -1.0 % with it. The dev binaries
+(`0c1ff1e5` against `98903e2b`) give the same picture, lane median -1.92 % and -1.53 %, codes -2.0 %
+and -1.5 % without the proof. The medians are small because the big levers act where the tree is
+deep and its nogoods long (and, for the staged order, where a phase is large), and there the removed
+work was up to two thirds of the run. Soccer moves by -65 % and -50 %, roster by -34 % and -23 %,
+opd_08 by -18 % and -12 %, grid-colouring by -16 % and -10 %, opd_10 by -13 % and -8 %, and
+monitor-placement by -10 % and -7 %.
+
+Two runs of main's dev binary on every instance differ by at most 0.21 % (median 0.00 %) without
+the proof, so a change under half a percent between two binaries is code layout more than the
+lever. Openshop with the proof is the exception. It moves by up to 7 % between two binaries, in either
+direction and whatever the lever, because its 300 nodes cost 3.6 G instructions after a 1-node run
+of 104 G, so a 0.1 % wobble of the set-up is 3 % of the per-node figure. Its row is read as noise.
+
+### 5. What is left, and why
+
+Each was measured in the profiles above and is left because its gain is small for what it costs in
+clarity, or because it changes the counters, or because the code to change is another tier's.
+
+| item | where | measured | why left |
+|---|---|---|---|
+| the seed's binary heap | `engine.ml` `heap_*`, `mark_dirty` | 5.8 % of f3's instructions (an instruction-sampled profile of the release branch at `d5d3788`), 0.65 % median of the lane's cycles | the one engine item worth a proposal. A two-level bitset of dirty ids would pop in the same ascending order, because every mark made during the seed is at or above the cursor, without the log factor. It would replace 30 lines of heap by about 60 of bitset with a lowest-bit search. Not built, so its gain is not measured |
+| the sort of the woken learned clauses | `sort_desc_uniq` | 3.7 % of f3's instructions, in the long runs (hundreds of ids) | sorting the runs of 16 or fewer by insertion changed 0.0 % (L7, reverted). Keeping the watch slots sorted would make every watch move O(slot) |
+| the per-run dispatch | `run_one`, `Store.run_as`, `Propagator.pack`'s closure, the counters | `run_one` 2.0 % median self, 4.1 % f3 | structural (one closure call through a first-class module per run), D-0169's first item. What removes it is fewer runs, watched literals for the model clauses, which changes the run counters |
+| the advisor asks | `advises`, `trigger_of`, `wants` | 2.8 % median self together, 5.7 % f3 | an array of advisors by id and a byte per trigger would save one dependent load per ask, about 1 % |
+| `level_of_index` | `store.ml` `first_mark_above` | 0.47 % median, 1.70 max | an array of levels by trail position would answer in one load. Small |
+| `check_attribution`'s scope search | `in_scope` | 0.80 % median, 5.3 % on openshop (300 nodes) | on always by I-T4; one binary search per entry is already the cheap form |
+| `unfixed` for an unannotated search | `search.ml` | 0 median, 1.91 % roster | a staged form of `spec_order` (one fused first-fail scan, no array) would be byte-identical. Small |
+| `var_named` on the conflict path | callers in `analysis.ml`, `learn.ml`, `pb_analysis.ml`, `pb.ml` | 2.69 % median inclusive, 6.18 max | the cost is the string hash of a literal's name, to find the variable of a literal the caller built from that variable. Request below |
+| `Domain.value`'s `Some` | callers in `reif.ml`, `ne.ml`, `reif_lin_eq.ml`, `view.ml` | 0.35 % median, 1.90 perfect_square | an allocation per run of a reification. Request below |
+
+### 6. Requests to the other tiers
+
+1. T3 (analysis and learning) and T2 (`pb.ml`): `Store.var_named` is 2.7 % of the lane's median
+   profile and up to 6.2 % (roster, fox-geese, QR72), inclusive, almost all of it `caml_hash` on a
+   variable's name. Its callers turn a `Lit.t` back into a `Var.t`. Carrying the variable with the
+   literal where the caller has it, or a table from the name's physical string to the variable,
+   would remove the hash.
+2. T2 (the reified families and `ne.ml`): `Domain.value` allocates a `Some` per call, once per run
+   of a reification. `Domain.is_fixed` then `Domain.lo` gives the same answer without it.
+3. The owner of `prop/member.ml` (T2): six of the seven `test/models/member*.fzn` stop under
+   BAGUETTE_DEBUG on `Store.check_agreement`, "D-0026: the reason and the justification are about
+   the same pruning", a pruning whose reason is empty (`[-]`) against a `combine` of the selector
+   clauses. Main `5085652`'s binary stops on the same six, so it is not this branch's. No lane
+   instance has a `member`, so the `--debug` lane never ran one.
+
+### 7. Gate
+
+Two gates, each on a fresh clone of the pushed branch (`scripts/README.md` section 4; `gate.sh` and
+`gate2.sh` in the results directory), against the dev binary of main `5085652` built in a separate
+clone (`0c1ff1e5`), the two lanes and the scaling lane at `-j 8`.
+
+| | gate 1, `e97f613` (`e4683f45`) | gate 2, `59dc6e6` (`98903e2b`) |
+|---|---|---|
+| `make check` | rc 0, 4 427 ok (main's count, measured on a clone of `5085652`), 207 models, 31 s, peak RSS 108 MB | rc 0, 4 428 ok (main's plus the new long-history check), 207 models, 30 s, peak RSS 106 MB |
+| 207 models x 4 artefacts (stdout, exit code, `.opb`, `.pbp`) | 0 differences | 0 differences |
+| diff lane `--tier all` | 324 of 324 equal to the reference | 324 of 324 equal |
+| `--debug` lane | 311 of 311 equal | 311 of 311 equal |
+| scaling lane | **over** on 2013 rcpsp_11 (growth +0.61 % of late, margin 0.5 %), the four other lines ok | ok on all five lines, rcpsp_11 +0.40 % of late (main `5085652` +0.35 %), QR72 +0.36 % and +0.43 %, parity +0.05 % and -0.04 % |
+
+The scaling baseline is not re-recorded. The ratchet rewrites a line only where its growth fell, and
+on gate 2 it fell on parity's proof line alone, by 0.04 % of late, inside the 0.11 % spread of one
+binary. The levers cut the cost of a node early and late alike (QR72 without the proof, 2 431 k and
+4 060 k instructions per node at the lane's early and late budgets on main, 2 359 k and 3 987 k on
+the branch), not its growth with the learned database, which is what the lane gates.
+
+What would reverse this record: a lever whose byte identity fails on an instance outside these 234
+(the debug cross-checks of L4, L4b and L8 and their test_core oracles are where to look first), or
+a measurement showing L6 or L8 cost more than they save on another machine.
