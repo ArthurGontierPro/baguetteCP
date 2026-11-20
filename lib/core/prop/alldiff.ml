@@ -170,7 +170,16 @@
    is about: those ids are written once, by [Encoding.start_proof], before the first
    decision, and never move. Reading them later gives the same answer as reading them
    now. (They do not exist at all when no proof is being written, which is why
-   [cid_of] says so rather than raising [Not_found] several layers down.) *)
+   [cid_of] says so rather than raising [Not_found] several layers down.)
+
+   COST (M16-file-review-T2, D-0190). Stage 1 is O(P n) per pass for P candidate
+   intervals, as above. A tight interval (as many confined variables as values) tests
+   every other variable's LIVE bounds first and snapshots, and looks up in the Hall set,
+   only one that can be pushed; the Hall set's own members pass that test and are found by
+   name, O(k^2) for an interval of width k, which the scope bounds. With the proof, a pruning's derivation is O(|halls| w^2)
+   to BUILD, because each excluded value's [excl] telescopes its own rungs, and every
+   build is hash-consed whether or not its line is already on the page (D-0190 section 5
+   measures it at half of a proof-mode run on 2011 cyclic-rcpsp). *)
 
 module Lit = Baguette_proof.Lit
 module Encoding = Baguette_proof.Encoding
@@ -339,7 +348,7 @@ let established_at_root store v ~lower =
   let sup = if lower then Store.lo_support store v else Store.hi_support store v in
   sup = Store.no_support || Store.at_root store sup
 
-let range a b = List.init (Stdlib.max 0 (b - a + 1)) (fun i -> a + i)
+let range a b = List.init (Int.max 0 (b - a + 1)) (fun i -> a + i)
 
 (* The entry that took [value] out of [var], or [None].
 
@@ -707,8 +716,8 @@ let target_cancel ~y ~lower =
 let prune_summands t ~a ~b ~halls ~y ~lower =
   let keep, drop =
     if lower then
-      (range y.s_lo (Stdlib.min b y.s_dhi), range (Stdlib.max a y.s_dlo) (y.s_lo - 1))
-    else (range a y.s_hi, range (y.s_hi + 1) (Stdlib.min b y.s_dhi))
+      (range y.s_lo (Int.min b y.s_dhi), range (Int.max a y.s_dlo) (y.s_lo - 1))
+    else (range a y.s_hi, range (y.s_hi + 1) (Int.min b y.s_dhi))
   in
   core_summands t ~vals:(range a b) ~halls ~extra:(Some y)
   @ List.map (fun v -> Explanation.weaken [ (1, Lit.eq y.s_name v) ]) drop
@@ -950,8 +959,8 @@ let pass t store =
   Propagator.count_pass ();
   let moved = ref false in
   let snaps = Array.to_list (Array.map (snap_of store) t.terms) in
-  let los = List.sort_uniq compare (List.map (fun s -> s.s_lo) snaps) in
-  let his = List.sort_uniq compare (List.map (fun s -> s.s_hi) snaps) in
+  let los = List.sort_uniq Int.compare (List.map (fun s -> s.s_lo) snaps) in
+  let his = List.sort_uniq Int.compare (List.map (fun s -> s.s_hi) snaps) in
   (* One push, with both halves of D-0026 built from the same snapshot. Returns through
      [Found]/[Moved]; a push that changes nothing (the bound is already there) falls
      through, which is how [Unchanged] can happen at all here. *)
@@ -1029,14 +1038,23 @@ let pass t store =
               let y = List.nth all_in k in
               push ~halls ~a ~b ~y ~lower:true y.s_var (b + 1)
             else if n = k then
+              (* M16-file-review-T2 (D-0190): a variable is snapshotted, and looked for in
+                 the Hall set, only once its LIVE bounds show it can be pushed: [y.s_lo]
+                 and [y.s_hi] are those bounds, read again by [snap_of] from the same
+                 store, so the same variables are pushed with the same snapshots. Every
+                 variable of the scope used to be snapshotted (its holes, two root tests)
+                 and compared by name with the Hall set, for every tight interval. *)
               Array.iter
                 (fun tm ->
-                  let y = snap_of store tm in
-                  if not (List.exists (fun s -> s.s_name = y.s_name) all_in) then
-                    if a <= y.s_lo && y.s_lo <= b then
-                      push ~halls:all_in ~a ~b ~y ~lower:true tm.x (b + 1)
-                    else if a <= y.s_hi && y.s_hi <= b then
-                      push ~halls:all_in ~a ~b ~y ~lower:false tm.x (a - 1))
+                  let d = Store.get store tm.x in
+                  let lo = Domain.lo d and hi = Domain.hi d in
+                  if (a <= lo && lo <= b) || (a <= hi && hi <= b) then
+                    let y = snap_of store tm in
+                    if not (List.exists (fun s -> s.s_name = y.s_name) all_in) then
+                      if a <= y.s_lo && y.s_lo <= b then
+                        push ~halls:all_in ~a ~b ~y ~lower:true tm.x (b + 1)
+                      else if a <= y.s_hi && y.s_hi <= b then
+                        push ~halls:all_in ~a ~b ~y ~lower:false tm.x (a - 1))
                 t.terms)
         his)
     los;
@@ -1183,13 +1201,13 @@ let regin_pass t store =
     let doms = Array.map (fun tm -> Store.get store tm.x) t.terms in
     let values =
       Array.of_list
-        (List.sort_uniq compare (List.concat_map Domain.to_list (Array.to_list doms)))
+        (List.sort_uniq Int.compare (List.concat_map Domain.to_list (Array.to_list doms)))
     in
     let nv = Array.length values in
     let holds i vi = Domain.mem doms.(i) values.(vi) in
     (* [mval.(i)] is the index of the value matched to variable [i], [mvar.(vi)] the
        variable matched to value [vi]; [-1] is unmatched on both sides. *)
-    let mval = Array.make n (-1) and mvar = Array.make (Stdlib.max 1 nv) (-1) in
+    let mval = Array.make n (-1) and mvar = Array.make (Int.max 1 nv) (-1) in
     let rec augment i seen =
       let rec go vi =
         if vi >= nv then false
@@ -1207,7 +1225,7 @@ let regin_pass t store =
     let failed = ref None in
     for i = 0 to n - 1 do
       if Option.is_none !failed then
-        let seen = Array.make (Stdlib.max 1 nv) false in
+        let seen = Array.make (Int.max 1 nv) false in
         if not (augment i seen) then failed := Some (i, seen)
     done;
     let snaps_of pick =
@@ -1283,7 +1301,7 @@ let regin_pass t store =
             in
             if not free_reachable then
               let vals =
-                List.sort_uniq compare
+                List.sort_uniq Int.compare
                   (List.filter_map
                      (fun i -> if ink.(i) then Some values.(mval.(i)) else None)
                      (range 0 (n - 1)))

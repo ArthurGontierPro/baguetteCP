@@ -628,10 +628,8 @@ let test_one_walk () =
         let w = Pb.width pb in
         let w1 = Random.State.int rng w and w2 = Random.State.int rng w in
         let lc_new = LC.make pb and lc_old = LC.make pb in
-        lc_new.LC.w1 <- w1;
-        lc_new.LC.w2 <- w2;
-        lc_old.LC.w1 <- w1;
-        lc_old.LC.w2 <- w2;
+        LC.set_watches lc_new w1 w2;
+        LC.set_watches lc_old w1 w2;
         let q_old = old_quiet s_new pb in
         if Pb.quiet s_new pb = q_old then incr quiet_same;
         if q_old then incr n_quiet;

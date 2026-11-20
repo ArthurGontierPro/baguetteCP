@@ -208,7 +208,9 @@ let removal_conclusion tm w d =
 
 (* ------------------------------------------------------------------- the pieces *)
 
-let fixed_at store tm = Domain.value (Store.get store tm.x)
+(* Whether [tm]'s variable is fixed: [Domain.value]'s [Some] test without the [Some]
+   (M16-file-review-T2, D-0190; [unfixed_positions] asks it per term per run). *)
+let is_fixed store tm = Domain.is_fixed (Store.get store tm.x)
 let value_of store tm = Domain.lo (Store.get store tm.x)
 let all_pairs store terms = List.map (fun tm -> (tm, value_of store tm)) terms
 
@@ -224,7 +226,7 @@ let unfixed_positions store terms ~limit =
     | [] -> List.rev acc
     | tm :: rest ->
         if List.length acc >= limit then List.rev acc
-        else if Option.is_none (fixed_at store tm) then go (i + 1) (i :: acc) rest
+        else if not (is_fixed store tm) then go (i + 1) (i :: acc) rest
         else go (i + 1) acc rest
   in
   go 0 [] terms
@@ -358,7 +360,8 @@ let make ?rows ~le_id ~ge_id ~k_le ~k_ge ~positive store terms rhs ~reifier =
     | Propagator.Fixpoint -> entail_equal p store
   in
   Reif.make ~reifier ~positive ~vars:(List.map snd terms) ~hold:rows
-    ~not_hold:(not_hold p) ~entail store
+    ~not_hold:(fun store -> not_hold p store)
+    ~entail store
 
 let vars = Reif.vars
 let propagate = Reif.propagate

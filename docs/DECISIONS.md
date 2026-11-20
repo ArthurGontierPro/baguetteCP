@@ -23399,3 +23399,277 @@ Fresh clone of `wave55-memberdbg` at `386a0a7` (dev binary `e6d0e1bf`), against 
 What would reverse this record: a justification that writes the exact pair while its reason really
 depends on the lemma's variables. That would need a lemma derived from branch facts, and member's are
 derived from the rows and the ladders alone.
+## D-0190  M16-file-review-T2: the propagators read file by file. Ten byte-identical levers; the hot ones were a learned clause's advisor, Linear's run and gcc's rules, and what is left is a proof-shape question in alldiff and element
+
+**Status**: DONE, recorded 2026-11-20 (agent-review2, `wave55-review2`).
+**Task**: M16-file-review-T2, `lib/core/prop/` except `member.ml` (held by M7-T35, D-0189).
+**Files changed**: `lib/core/prop/clause.ml`, `linear.ml`, `gcc.ml`, `reif.ml`, `reif_lin_le.ml`,
+`reif_lin_eq.ml`, `ne.ml`, `alldiff.ml`, `element.ml`, and (the comparison sweep, L6 only) `arith.ml`,
+`cumulative.ml`, `maxmin.ml`, `pb.ml`, `regular.ml`; `test/unit/test_clause.ml` (one test places the
+watches through the new setter). Unchanged: `pb.ml`'s code apart from two set-up `max`, `bool2int.ml`,
+`inverse.ml`, `lin_eq.ml`, `int_le.ml`, `int_lt.ml`, `int_eq.ml`, `order_reason.ml`.
+**Runs**: `fataepyc-06:/scratch/arthur/wave55-review2-runs/` (D-0186's scripts adapted: `job.sh`,
+`runjobs.sh`, `models.sh`, `cmpmodels.sh`, `build.sh`, `gate.sh`, `tools/attrib2.py` for the
+propagator modules, `tools/modtab.py`, `tools/callers.py`, `tools/cmp.py`), copied with the profiles'
+attributions and the comparisons to `/cluster/arthur/baguette-results/wave55-review2/`.
+
+### 1. Method
+
+D-0186's, on main `036133a` (the core review merged, gate 78's binary `aa3385fd`). The same 27
+instances at the same budgets: the diff lane's 25 and the two codes-cp same-tree runs, QR48 with 2 and
+3 positions fixed (`f2`, 108 699 nodes, and `f3`, 29 779 nodes, run to the end). Profiles: main's
+release build under the `baguette-fp` switch (`30c05cf8`), `perf record -e cycles:u --call-graph fp`,
+with and without `--proof`, only the search's samples. `tools/attrib2.py` attributes them per function
+of `lib/core/prop/` (self and inclusive) and per module, a module's inclusive share being the samples
+with any of its frames on the stack. Shares below are "lane median / lane maximum (instance)", without
+the proof unless said. Counts: `perf stat -e instructions:u` minus a 1-node run, over the nodes, each
+lever's dev binary against the dev binary of the lever before (the gate's profile), the branch as a
+whole also on release binaries. Byte identity at every lever: the 207 `test/models` with `--proof
+--stats` (stdout, exit code, `.opb`, `.pbp`, `--stats` without timings) against the previous lever's,
+and on the 27 instances the nodes, `--stats`, stdout and the `.opb`/`.pbp` md5, with and without the
+proof: 0 differences at every lever.
+
+The node ran at load 85 to 110 on 192 cores throughout (two Challenge series and other agents). Whole
+runs' cycles were not usable: one binary on rcpsp_11 took 26.2, 28.4 and 46.3 G cycles in three runs
+for 44.06 G instructions each. So every number below is instructions, and the profiles' cycle shares are
+where to look, not what was gained.
+
+### 2. The tables, file by file
+
+Sizes: `n` the arity (terms, variables, tasks), `w` a domain's width, `h` its holes, `d` the depth,
+`P` the (lower, upper) pairs of an interval search, `v` the cover values, `dur` a task's duration.
+"Incl" is inclusive. A function absent from every profile is given its complexity and "not seen".
+
+**linear.ml** (int_lin_le, and the rows of int_le, int_lt, int_eq, int_lin_eq, the reified big-M rows and
+arith's guarded rows). Module inclusive 14.0 / 34.5 % (soccer), with the proof 9.0 / 20.2 % (filters).
+
+| function | complexity | data structure | share | verdict |
+|---|---|---|---|---|
+| `propagate`, per run | O(n), three walks (minima, sum, prunings) | the terms as a list: `List.length`, two `List.iteri` with a closure call per term, and a `cross_conflict` closure built per run | `propagate` 1.6 / 5.9 self, its closures (`Linear.fun`) 1.6 / 4.8 self, 12.0 / 33.7 incl (soccer) | **L2** |
+| the pruning walk, per term | O(1) plus `floordiv` or `ceildiv` (a `/` and a `mod`), also for a fixed term | | in `propagate` | **L5** |
+| `term_min` | O(1), `Store.get` and `Checked.mul` | | 1.7 / 6.5 self (soccer) | fine |
+| `justified_at`, `row_snaps_at`, `facts_at`, `snapshot_at`, `value_at` | O(1) eagerly per pruning, O(n) per materialisation (D-0124) | the term list, walked by position | `fact_at` 0.3 / 3.0 incl (roster), with the proof 1.0 / 5.3 | fine; `value_at`'s polymorphic `Stdlib.max`: **L6** |
+| `no_other_term` | O(1) in practice, it stops at the first other term with a coefficient | | not seen | fine |
+| `cross_conflict`, `explain_cross_conflict` | O(n) | | not seen; reachable from a library caller only (header) | fine |
+| `pb_row` | O(n) blocks, O(width) for a bits term | | 0 / 2.7 incl (fox-geese, from `Pb_analysis`) | fine (its caller is T3's) |
+
+**clause.ml** (bool_clause and its four faces, learned clauses). Module inclusive 15.5 / 45.8 %
+(rcpsp_11), with the proof 9.8 / 30.7 % (f2).
+
+| function | complexity | data structure | share | verdict |
+|---|---|---|---|---|
+| `Learned_clause.ask`, once per wake of every learned clause watching the moved variable | O(1), but four dependent loads (the record, `atoms`, the atom, the domain) behind a currying stub (`advise` handed `ask t`, a partial application) | | **5.9 / 26.0 self (rcpsp_11)**, with the proof 4.0 / 13.3 (f2) | **L1** |
+| `Learned_clause.propagate` | `Pb.quiet`, then `rewatch_quiet`, O(1) | | 7.5 / 21.3 incl (f2), `rewatch_quiet` 0.6 / 3.6 self | fine (the walk is `Pb`'s) |
+| `rewatch`, `best`, `falsified_at` | O(width), and O(width log moves) when every candidate is false (`Store.hi_below`) | | 0.7 / 5.2 incl (rcpsp_12) | fine |
+| `one_per_slot` | O(width^2) | | BAGUETTE_DEBUG only | fine |
+| `dedup`, `make`, `of_lits` | O(width), a `Hashtbl` per clause built | | set-up and learning | fine |
+
+**pb.ml** (the propagation of every clause and learned PB row). Module inclusive 15.4 / 30.5 %
+(cyclic-rcpsp), with the proof 9.0 / 20.9 % (monitor-placement).
+
+| function | complexity | data structure | share | verdict |
+|---|---|---|---|---|
+| `quiet`, `next_free`, `falsified`, every run of a degree-1 row | O(index of the second non-false literal) | atoms array of records | `quiet` 2.7 / 8.7 self, `falsified` 3.9 / 11.8 self (monitor-placement), `next_free` 0.6 / 1.7 | fine: a load into the atom and one into the domain per literal; D-0142 and D-0169 took the closures and the accessors. The first two non-false literals in INDEX order decide the learned clause's next watches, so the walk cannot start at a watch without moving them |
+| `pass` | O(width), then `effective_all` and `mark_forceable` O(width) | the lazy layout and the shared scratch (D-0142) | 2.1 / 4.3 self, 3.1 / 26.8 incl (cyclic-rcpsp) | fine |
+| `effective_all`, `mark_forceable` | O(width) | groups | 0 / 13.4 self (cyclic-rcpsp) | fine (D-0142) |
+| `atom_of`, per literal of a registered learned constraint | two string-keyed lookups (`Store.var_named`, the declared bounds) | `Hashtbl` | 0.4 / 1.0 incl (grid-colouring); its `var_named` 0.15 % of roster | small; D-0186's request 1 lands in T3's callers (section 6) |
+| `layout_of` | O(width log width), once per row | | 0 / 1.1 | fine |
+| `reason_clause`, `assign`, `conflict_of` | O(width) per pruning | | 0.2 / 0.8 incl | fine |
+
+**gcc.ml** (global_cardinality). 0 median; 36.4 % of evm, 32.7 % of lot-sizing, 30.4 % of chessboard,
+with the proof 26.6 % of evm.
+
+| function | complexity | data structure | share | verdict |
+|---|---|---|---|---|
+| `rule_c`, per pass | O(v n); four lists (`poss`, `gone`, `fixed`, `others`) and the scope's facts built per cover value whether or not it pushes | lists | 0 / 14.4 incl (chessboard), 11.4 (evm) | **L3**; the per-value filter of the scope, **L10** |
+| rules (a) and (b) in `pass` | O(v n); `fixed`, `poss`, `gone` built ahead of the tests | lists | in `Gcc.fun`, 0 / 6.8 self (evm) | **L3**, **L10** |
+| rule A's interval search in `pass` | O(P (w + n)): for every pair, `range a b`, a polymorphic `Hashtbl` lookup per value, then the confined list and its partition | lists, polymorphic `Hashtbl` | `caml_hash` and `Hashtbl.find_opt` 5.1 % of evm, `List.find_all` 3.1 % | **L3** (the run of cover values once per lower end), **L7** (count, then build) |
+| `in_scope_of`, per push | O(n (b - a)) | list | 0 / 2.0 incl (lot-sizing) | per landed push; left |
+| its n = cap arm | O(n cap) name compares per saturated interval | list | in `Gcc.fun` | bounded by the pushes it makes; left |
+| `snap_of`, `csnap_of` | O(1), two `level_of_index` | | 0 / 1.4 incl | fine |
+| `prune_expl`, `hole_expl`, `forced_expl`, `c_upper_expl`, `c_lower_expl`, `high_row` | deferred | | | fine |
+
+**alldiff.ml** (all_different_int). 0 median; 9.0 % of cyclic-rcpsp, 7.7 % of lot-sizing; **with the
+proof 54.7 % of cyclic-rcpsp**.
+
+| function | complexity | data structure | share | verdict |
+|---|---|---|---|---|
+| `pass` (stage 1), per pass | O(P n), the header's O(n d^2) | lists | 0 / 5.7 incl (cyclic-rcpsp) | the naive complete enumeration is the header's stated choice; fine |
+| its tight-interval arm (n = k) | O(n (w + h log d)) per tight interval: EVERY variable snapshotted (its holes, two root tests) and compared by name with the Hall set before its bounds are tested | | 45 % of `pass` on cyclic-rcpsp (`List.exists` and `caml_string_equal` 25 %, `snap_of` and its root tests 21 %); `snap_of` 2.2 % of all of lot-sizing | **L9** |
+| `regin_pass` (stage 2) | Kuhn's matching O(n^2 nv) and a reachability sweep per variable; the removals of one component are retried once per member | arrays | 0 / 3.3 incl (cyclic-rcpsp) | gated by the cutoff (256 pairs); the header states the choice; left |
+| `core_summands`, `alo_over`, `excl`, `amo`, `pair_amo` (deferred, built when a line is written) | O(\|halls\| w^2) per pruning: each excluded value's `excl` telescopes its own rungs, and every node built is hash-consed (D-0172), so a derivation already on the page is rebuilt and re-hashed in full to be found | | **52 % of cyclic-rcpsp with the proof**: `Hashtbl.find_opt` 35.7 % incl, `List.equal` 12.0, `summand_hash` 7.9, `same_summand` 5.4 | left, section 5 |
+| `snap_of`, `holes_of` | O(1); O(w + h log d) with holes | list | 0 / 2.2 incl | fine |
+| `row` | a (string, string, int) key per pair | polymorphic `Hashtbl` | deferred | fine |
+
+**element.ml** (array_int_element). 0 median; 25.0 % of lot-sizing, 6.3 % of chessboard; with the proof
+16.9 % of lot-sizing.
+
+| function | complexity | data structure | share | verdict |
+|---|---|---|---|---|
+| `filter_result`, per pass | O(n_decl + w_res) | lists, `Int_tbl` | 0 / 24.3 incl (lot-sizing) | its explanations, next row |
+| `hole_expl`, `push_lo_expl`, `push_hi_expl`, per pruning | O(n_decl) eagerly: `dead_positions` (one `pos_gone` per dead position, reading the store) and `residue_cancel`; the table of live positions rebuilt by each | `Int_tbl` per call | `hole_expl` 0 / 17.8 incl, `pos_gone` 10.4, `int_set` 2.6 (lot-sizing) | the table: **L8**. The rest is O(n) per punched hole, the size of the hole's explanation, and its eager half is I-X6's snapshot; left, section 5 |
+| `filter_index`, `live_positions`, `add_facts`, `hole_facts` | O(n_decl), O(h) | `Fact_tbl` (D-0155) | 0 / 3.5 incl (chessboard) | fine |
+| `residue_cancel`, `established_at_root` | O(dead), O(log levels) | | 0 / 3.7 incl | fine |
+
+**cumulative.ml**. 0 median; 11.1 % of rcpsp_12, 10.1 % of rcpsp_11; with the proof 16.1 %.
+
+| function | complexity | data structure | share | verdict |
+|---|---|---|---|---|
+| `pass` | O(n dur + horizon): a profile array over the horizon per pass, a snapshot per task with two `level_of_index` | arrays | 0 / 11.0 incl (rcpsp_12) | the time-table rule's own cost; its polymorphic `Stdlib.max` per task (`compare_val` 5.2 % of `pass`): **L6** |
+| `overloaded`, `first_overloaded` | O(dur) per task and direction | | 0 / 3.3 incl | fine |
+| `push` | O(n), four list walks per landed push | | 0 / 2.4 incl | fine |
+| `rung_summands` (deferred) | one string-keyed `Encoding.consistency_id` per rung | | in the proof profile | what D-0156 cut in alldiff (`s_rungs`); left, section 5 |
+
+**reif.ml, reif_lin_le.ml, reif_lin_eq.ml, ne.ml** (the reified families and int_ne).
+
+| function | complexity | data structure | share | verdict |
+|---|---|---|---|---|
+| `Reif.propagate`, per run | O(1) and the author's piece; `Domain.value`'s `Some`, mapped to `Some true`/`Some false`, and two closures (`decided`, `go`) per run | | `Reif` 5.2 / 31.9 incl (soccer), `decided` 0.4 / 2.7 self (mspsp) | **L4** (D-0186 request 2) |
+| `Reif_lin_le.make`'s pieces | two `Linear` runs, O(n) each, while the reifier is open | partial applications of `Linear.propagate` | 1.0 / 11.7 incl (soccer) | the runs are Linear's (L2, L5); the partial applications: L4 |
+| `Reif_lin_eq.rows`, `entail`, `not_hold` | two `Linear` runs and O(n) | | 0 / 12.7 incl (diameterc-mst) | Linear's |
+| `Ne.unfixed_positions`, `Reif_lin_eq.unfixed_positions` | O(n), stops at the second unfixed term | `Domain.value` per term | 0 / 0.9 self (evm) | **L4** |
+| `Ne.propagate`'s one-unfixed arm | O(n): `List.nth` and `others_except` before the remainder test | lists | 0 / 2.5 incl (tc-graph) | fine: `int_ne` has two terms |
+
+**The small files**, each fine:
+- `bool2int.ml`: O(1) per run, two closures and four facts built per run; 0.5 / 3.7 % incl (soccer).
+- `maxmin.ml`: O(n) per run, a list of the reachers built to test for exactly one; 0 / 0.4 %.
+- `arith.ml`: no per-run code, its rows are `Linear`'s and `Reif_lin_le`'s; compile-time builders.
+- `regular.ml`: O(n E) per call from scratch (its header), a closure per layer and per state; in no lane
+  instance. The closures would be the lever if one had it.
+- `inverse.ml`: O(\|f\| \|g\|) per call by design (its header), a tuple and a closure per cell outside the
+  domain; in no lane instance.
+- `lin_eq.ml`, `int_le.ml`, `int_lt.ml`, `int_eq.ml`: constructors of `Linear` rows.
+- `order_reason.ml`: O(declared width) chains, built by `Justify` when a line is written.
+
+### 3. The levers taken, one commit each, every byte the same
+
+Instructions per node in thousands, dev binaries of consecutive commits (each against the one before),
+at the instance's node budget, without the proof (np) and with it (pf). Listed are the instances a
+lever moved by 1 % or more; "median" is the median change over the 25 lane instances, "codes" is f2 then
+f3. Openshop with the proof (300 nodes behind a 104 G-instruction set-up, D-0186 section 4) moves by up
+to 10 % between any two binaries, in both directions, and is left out of the lists. Each lever's rule is
+stated at its function and in its module's header.
+
+| commit | lever | moved (np) | moved (pf) | median np / pf | codes np |
+|---|---|---|---|---|---|
+| `532201c` | **L1** clause: `Learned_clause.ask` reads its two watches' variable, threshold and polarity from its own record, kept by `set_watches` (the one writer of `w1`, `w2`); the advisor's closures have their own arity | rcpsp_11 5 300 -> 5 219 (-1.5 %), rcpsp_12 1 577 -> 1 540 (-2.4 %) | (none at 1 %) | -0.19 / -0.06 % | -0.08, -0.02 % |
+| `1c37ad7` | **L2** linear: a run walks `t.arr`, the terms as an array beside the list; no `List.length`, no closure per term, the cross-row conflict top-level | soccer 3 959 -> 3 748 (-5.3 %), mspsp 6 356 -> 6 034 (-5.1 %), filters -5.0 %, perfect_square -3.9 %, amaze -3.8 %, openshop -3.5 %, tc-graph -3.0 %, grid-colouring -2.9 %, cyclic-rcpsp -2.8 %, bacp and opd_10 -2.7 %, diameterc-mst -2.5 %, steiner -2.0 %, opd_08, parity, rcpsp_12, roster, rcpsp_11, chessboard, evm -1.1 to -1.6 % | filters -3.0 %, soccer -2.8 %, perfect_square -2.6 %, mspsp -2.5 %, amaze -2.0 %, bacp, grid-colouring, tc-graph -1.8 to -1.9 %, opd_10, diameterc-mst, parity, opd_08, steiner -1.0 to -1.3 % | **-1.98 / -1.01 %** | -0.25, -0.31 % |
+| `1d42acb` | **L3** gcc: rule C and rules (a)/(b) count before they build their lists and facts; rule A walks the run of cover values once per lower end, in an `Int`-keyed table | evm 6 121 -> 5 446 (**-11.0 %**), chessboard 5 363 -> 4 878 (**-9.0 %**), lot-sizing -3.0 % | evm -5.8 %, chessboard -4.7 %, lot-sizing -2.5 % | 0.00 / -0.02 % | 0.00, +0.04 % |
+| `fa51e19` | **L4** reif: the reifier read into a constant constructor, no `Domain.value`, no closure per run; `Ne` and `Reif_lin_eq` ask `Domain.is_fixed`; closures of their own arity for the pieces | mspsp -1.5 %, openshop -1.4 %, filters -1.3 %, soccer -1.2 % | (none at 1 %) | -0.37 / -0.10 % | 0.00, 0.00 % |
+| `f269d9c` | **L5** linear: the pruning walk returns before the divisions for a fixed term | bacp 1 869 -> 1 808 (-3.3 %), tc-graph -2.2 %, mspsp -1.9 %, filters -1.6 %, parity, opd_10, openshop -1.4 %, diameterc-mst -1.2 %, opd_08 -1.1 %, grid-colouring -1.0 % | bacp -2.4 %, mspsp, filters, tc-graph -1.1 % | -0.78 / -0.44 % | -0.08, -0.15 % |
+| `94a8c43` | **L6** prop/: `Int.max`, `Int.min`, `Int.compare` for every polymorphic comparison of ints | rcpsp_12 1 509 -> 1 466 (-2.9 %), rcpsp_11 -2.7 %, roster -1.3 % | roster -2.5 %, amaze -2.0 %, rcpsp_12 -1.8 %, parity -1.5 %, bacp -1.4 %, rcpsp_11 -1.3 %, tc-graph and QR72 -1.1 %; f3 -1.6 %, f2 -1.3 % | -0.53 / -0.66 % | -0.47, -0.70 % |
+| `6d7c7a2` | **L7** gcc: rule A sums an interval's capacity once per lower end and counts its confined variables; the lists only for an interval that can push | evm 5 358 -> 4 672 (**-12.8 %**), chessboard -4.1 %, lot-sizing -1.4 % | evm -6.8 %, chessboard -1.9 %, lot-sizing -1.2 % | 0.00 / 0.00 % | 0.00, -0.09 % |
+| `7227fe3` | **L8** element: the table of live positions built once per pass, at its first pruning | lot-sizing 12 971 -> 12 862 (-0.8 %) | lot-sizing -0.3 % | 0.00 / 0.00 % | -0.02, +0.09 % |
+| `71d03e5` | **L9** alldiff: a tight interval tests a variable's live bounds before snapshotting it and looking it up in the Hall set | cyclic-rcpsp 6 123 -> 5 963 (-2.6 %), lot-sizing -1.9 % | lot-sizing -1.7 % | 0.00 / 0.00 % | 0.00, 0.00 % |
+| `9cba8dd` | **L10** gcc: each cover value's declaring variables listed once in `make` | chessboard 4 591 -> 4 487 (-2.3 %), evm 4 679 -> 4 572 (-2.3 %) | chessboard -1.0 %, evm -1.1 % | 0.00 / 0.00 % | -0.03 % (f3) |
+
+`0bfef43` adds the cost sections of `linear.ml`, `clause.ml` and `gcc.ml`'s headers (comments only).
+
+L1 removes loads more than instructions: the four dependent loads of an ask become two. Its cycles were
+measured as D-0186 measured L4 and L8, interleaved whole runs of the release binaries one at a time
+(rcpsp_11, 10 000 nodes, no proof), but at load 104 they say little: main 54.2, 37.6, 46.1, 29.0 and
+30.1 G cycles, L1 28.8, 28.7, 38.6, 29.4 and 24.6 G, so lower in four pairs of five (medians 37.6 and
+28.8 G), for 44.06 and 43.92 G instructions (-0.3 % of the whole run). Its profile share, 26 % of rcpsp_11's
+cycles in `ask` itself for an O(1) function, is what says the loads were the cost.
+
+L8 is the smallest lever kept: -0.8 % on lot-sizing, where `int_set` was 2.6 % of the cycles. It is kept
+because it removes work that was done once per pruning for no reason, and its clarity cost is one
+argument.
+
+### 4. The branch as a whole, release binaries
+
+Main `036133a` built with `make release`'s command (`125a4c62`) against the branch's code tip `9cba8dd`
+(`a5bc0f7e`), instructions per node in thousands, the same nodes, stdout, `--stats` and proof hashes equal
+on every line.
+
+| instance | nodes | np main | np branch | change | pf main | pf branch | change |
+|---|---|---|---|---|---|---|---|
+| 2011_bacp_bacp-22 | 6 001 | 1 561 | 1 430 | -8.4 % | 2 240 | 2 091 | -6.6 % |
+| 2011_cyclic-rcpsp_easy_6 | 2 001 | 5 286 | 4 886 | -7.5 % | 23 726 | 23 273 | -1.9 % |
+| 2011_roster_chicroster_dataset_large_18 | 3 501 | 2 910 | 2 800 | -3.8 % | 5 206 | 4 984 | -4.2 % |
+| 2012_amaze_2012-06-29 | 6 001 | 1 409 | 1 308 | -7.2 % | 3 011 | 2 847 | -5.4 % |
+| 2012_mspsp_hard_01 | 10 001 | 5 245 | 4 656 | -11.2 % | 9 519 | 8 985 | -5.6 % |
+| 2012_parity-learning_48_24_6.2 | 4 001 | 2 087 | 2 002 | -4.1 % | 3 572 | 3 446 | -3.5 % |
+| 2013_filters_dct_2_2 | 12 001 | 735 | 657 | -10.6 % | 1 175 | 1 108 | -5.7 % |
+| 2013_rcpsp_11 | 10 001 | 4 386 | 4 134 | -5.7 % | 14 745 | 14 438 | -2.1 % |
+| 2013_rcpsp_12 | 5 001 | 1 282 | 1 195 | -6.8 % | 3 602 | 3 476 | -3.5 % |
+| 2014_openshop_gp10-4 | 301 | 865 | 788 | -9.0 % | 11 865 | 10 004 | -15.7 % |
+| 2015_grid-colouring_13_11 | 5 001 | 1 500 | 1 405 | -6.3 % | 2 657 | 2 559 | -3.7 % |
+| 2015_opd_small_bibd_10_30_09 | 4 001 | 1 829 | 1 729 | -5.5 % | 3 164 | 3 071 | -2.9 % |
+| 2016_diameterc-mst_s_v20_a50_d4 | 4 001 | 2 078 | 1 965 | -5.4 % | 4 401 | 4 265 | -3.1 % |
+| 2017_opd_small_bibd_08_28_14 | 5 001 | 1 924 | 1 855 | -3.6 % | 3 132 | 3 055 | -2.5 % |
+| 2017_tc-graph-color_k5_05 | 8 001 | 1 053 | 978 | -7.2 % | 2 347 | 2 242 | -4.5 % |
+| 2018_soccer-computational_xIGData_24_16_14_2 | 1 501 | 3 259 | 2 986 | -8.4 % | 6 089 | 5 797 | -4.8 % |
+| 2019_fox-geese-corn_foxgeesecorn_54 | 3 001 | 7 678 | 7 646 | -0.4 % | 8 233 | 8 192 | -0.5 % |
+| 2020_lot-sizing_pigment15b.psp | 2 501 | 12 222 | 11 052 | -9.6 % | 16 152 | 14 975 | -7.3 % |
+| 2021_perfect_square_102 | 10 001 | 678 | 626 | -7.7 % | 1 151 | 1 090 | -5.3 % |
+| 2021_steiner-systems_steiner_t2_k7_N21 | 7 001 | 1 320 | 1 254 | -5.0 % | 2 516 | 2 448 | -2.7 % |
+| 2023_chessboard_chessboard4 | 2 501 | 4 785 | 3 901 | -18.5 % | 8 731 | 7 963 | -8.8 % |
+| 2023_evm-super-compilation_isolated_block_6_0_input | 2 001 | 5 555 | 3 982 | -28.3 % | 9 269 | 7 874 | -15.1 % |
+| 2024_monitor-placement-1id_igp_weight_based_rocketfuel_rf1755_real_hard | 5 001 | 2 897 | 2 864 | -1.1 % | 4 360 | 4 299 | -1.4 % |
+| H_qr48_bag_def | 6 001 | 1 228 | 1 213 | -1.2 % | 2 020 | 1 995 | -1.2 % |
+| H_qr72_bag_def | 5 001 | 1 600 | 1 576 | -1.5 % | 2 764 | 2 719 | -1.6 % |
+| f2 | 108 699 | 1 576 | 1 568 | -0.5 % | 2 776 | 2 734 | -1.5 % |
+| f3 | 29 779 | 1 134 | 1 121 | -1.2 % | 2 419 | 2 371 | -2.0 % |
+
+Lane median **-6.8 %** without the proof and **-3.7 %** with it (-3.6 % without openshop), codes QR48
+-1.2 % (3 fixed) and -0.5 % (2 fixed) without the proof, -2.0 % and -1.5 % with it. The dev binaries
+(`aa3385fd` against `fde2ae9b`) give -5.8 % and -3.4 %, codes -1.2 % and -0.9 % without the proof, -1.9 %
+and -1.6 % with it; the release binaries gain more because `Int.max` and the array loops inline where the
+dev profile's `-opaque` keeps calls. The broad part is Linear (L2, L5) and the comparisons (L6), which
+every instance with linear rows or a time table runs; the deep part is gcc (evm -28 %, chessboard -19 %),
+element and alldiff (lot-sizing -10 %). The codes move least: their nodes are clauses, and what costs
+there is `Pb.quiet`'s walk and the engine's per-run dispatch (section 5).
+
+### 5. What is left, and why
+
+| item | where | measured | why left |
+|---|---|---|---|
+| alldiff's derivations rebuilt and re-hashed | `core_summands` and below, with the proof | 52 % of cyclic-rcpsp's samples, `Hashtbl.find_opt` 35.7 % | the lines are written once (D-0172) but every pruning rebuilds its derivation, O(\|halls\| w^2), to find it in the table. A memo of `excl` per (variable, value, bound) in the instance would return a node without rebuilding it, but it is byte-identical only if it returns exactly what the table returns: a node built and not yet written would be shared between two derivations, and one line written where main writes two. It needs `Explanation`'s table contract (T4), or a proof decision (a chain of rungs shared by the values of one bound) |
+| element's dead positions per punched hole | `hole_expl` | 17.8 % of lot-sizing, `pos_gone` 10.4 | each hole's derivation names every dead position, and which arm each takes is read at the pruning (I-X6). Sharing the list across one pass's holes would share their `Deferred` nodes between derivations, which writes fewer lines: a proof change |
+| the walk of every clause run | `Pb.quiet` | 6 % median self | its first two non-false literals in index order are the learned clause's next watches |
+| the learned clauses asked per wake | `Learned_clause.ask` after L1, `Engine.advises` | 5.9 % median before L1 | the engine asks every clause watching the variable in that direction; ordering a variable's watches by threshold would skip the clauses whose literal the move cannot falsify. An engine structure, D-0186's per-run dispatch |
+| gcc's interval search | rule A in `Gcc.pass`, O(P n) counts per pass after L7 | gcc 23 % of evm's samples and 20 % of chessboard's after L7 (release profile of the tree at L9) | an O(n log n) algorithm (Quimper's) is a consistency change the header defers to a later row; what is left of the naive one is the counting it needs |
+| cumulative's rung lookups | `rung_summands`, with the proof | in cumulative's 16.1 % | D-0156's `s_rungs` (the ids looked up once per term) would carry over |
+| regular's and inverse's closures per call | `letter_dom`, `channel` | no lane instance | not hot anywhere measured |
+
+### 6. Requests to the other tiers
+
+1. T3 (D-0186 request 1, `var_named`): measured from the propagators' side, `Pb.atom_of` is 0.15 % of
+   roster's samples; the 7.5 % `Store.var_named` there is `Analysis.support_of` (from `mk_node` and
+   `cite`), and on fox-geese `Pb_analysis.falsified_at` is 6.7 % of the samples with 3.9 % of them in
+   `var_named`. The lever is in those two callers.
+2. T4 (the proof side, `explanation.ml` and `justify.ml`): alldiff's re-hash (section 5, first row) is 52 % of a
+   lane instance with the proof. A cheaper "is this derivation already written" for a node built from the
+   same (variable, value, bound) would serve every global whose derivations telescope rungs (alldiff,
+   cumulative, gcc).
+
+### 7. Gate
+
+A fresh clone of the pushed branch at `9cba8dd` (`scripts/README.md` section 4; `gate.sh` in the results
+directory), against gate 78's binary (`aa3385fd`, main `4281619`, whose `lib/` and `bin/` are main
+`036133a`'s), the two lanes and the scaling lane at `-j 8`, load 89 at the start and 71 at the end.
+
+| | gate, `9cba8dd` (`fde2ae9b`) |
+|---|---|
+| `make check` | rc 0, 4 443 ok (gate 78's count), 207 models, 32 s, peak RSS 108 MB |
+| 207 models x 4 artefacts (stdout, exit code, `.opb`, `.pbp`) | 0 differences |
+| diff lane `--tier all` | 324 of 324 equal to the reference |
+| `--debug` lane | 311 of 311 equal |
+| scaling lane | ok on all five lines: rcpsp_11 without the proof **-1.15 %** of late under its baseline, QR72 -0.07 % and +0.07 %, parity +0.02 % and +0.06 % |
+
+The gated binary is the dev build the counts of section 3 measured as L10 (`fde2ae9b`, the same md5).
+The commits after `9cba8dd` are comments (two header sentences on the quadratic steps left), this
+record, `ROADMAP.md`, `WORKLOG.md` and the scaling baseline.
+
+The scaling baseline IS re-recorded (`14abfbb`, its own commit), because rcpsp_11's growth fell by more
+than one binary's spread (0.11 % of late): `scripts/scaling_lane.sh --update -j 8` on the gated binary
+measured it at 5 766 773 instructions per node against 5 904 499 (-1.20 % of late), the asks of a
+growing learned database (L1) and cumulative's comparisons (L6) being part of what grows. The ratchet
+also wrote QR72's and parity's no-proof lines, which fell by 0.05 % and 0.01 % of late, and kept the two
+proof lines.
+
+What would reverse this record: a lever whose byte identity fails on an instance outside these 234 (L1's
+flat watches and L9's reordered test are where to look first: the first is a copy that `set_watches`
+alone keeps, the second relies on `snap_of` reading the same bounds it was tested on), or a
+measurement showing a lever costs more than it saves on another machine.

@@ -196,8 +196,8 @@ let slot_of store (v : View.t) =
         view = v;
         name = Store.name store base;
         map;
-        dlo = min a b;
-        dhi = max a b;
+        dlo = Int.min a b;
+        dhi = Int.max a b;
         bdlo;
         bdhi;
       }
@@ -250,9 +250,9 @@ let clause_lits m xs v =
   |> Option.map List.rev
 
 let threshold_range m xs =
-  let lx = Array.fold_left (fun a s -> max a s.dlo) min_int xs in
-  let hx = Array.fold_left (fun a s -> max a s.dhi) min_int xs in
-  (max m.dlo (lx + 1), min m.dhi (max (hx + 1) m.dlo))
+  let lx = Array.fold_left (fun a s -> Int.max a s.dlo) min_int xs in
+  let hx = Array.fold_left (fun a s -> Int.max a s.dhi) min_int xs in
+  (Int.max m.dlo (lx + 1), Int.min m.dhi (Int.max (hx + 1) m.dlo))
 
 (* [~shape] is the caller's: lib/flatzinc/compile.ml asks for [`Selector] exactly when
    a variable of the scope is on the bits encoding (D-0134 section 2.5), and the
@@ -269,7 +269,7 @@ let make ?(shape = `Per_value) store ~dir (m : View.t) (xs : View.t list) : t =
     | `Per_value ->
         Per_value
           (Array.init
-             (max 0 (vhi - vlo + 1))
+             (Int.max 0 (vhi - vlo + 1))
              (fun k -> Option.map Explanation.clause (clause_lits m xs (vlo + k))))
     | `Selector ->
         Selector { sel_rows = [||]; sel_clause = -1; cache = Hashtbl.create 16 }
@@ -387,7 +387,7 @@ let chosen t (value_of : string -> int) =
    lib/core/justify.ml renders the bridge (or the declared bound line) of each and
    divides by D_i = m_bound - x_bound >= 1. A constant contributes no term. *)
 let selector_part t row x ~v =
-  let m_bound = max v t.m.dlo and x_bound = min (v - 1) x.dhi in
+  let m_bound = Int.max v t.m.dlo and x_bound = Int.min (v - 1) x.dhi in
   let term s ~coeff ~bound =
     if sign s = 0 then []
     else
@@ -447,9 +447,9 @@ let opt f = Option.to_list f
 
 let propagate t store =
   let lm = View.lo store t.m.view and um = View.hi store t.m.view in
-  let h = Array.fold_left (fun a s -> max a (View.hi store s.view)) min_int t.xs in
+  let h = Array.fold_left (fun a s -> Int.max a (View.hi store s.view)) min_int t.xs in
   if h < lm then
-    let v = max (h + 1) t.m.dlo in
+    let v = Int.max (h + 1) t.m.dlo in
     let facts =
       opt (fact_ge t.m v)
       @ List.concat_map (fun s -> opt (fact_le s (v - 1))) (Array.to_list t.xs)

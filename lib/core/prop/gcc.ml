@@ -261,7 +261,24 @@
    As in alldiff: every number a derivation reads is frozen into a [snap]/[csnap] at the
    moment of the pruning and the thunk reads nothing from the store afterwards.  The
    [Encoding] ids it reads live are written once, by [Encoding.start_proof], before the
-   first decision, and never move. *)
+   first decision, and never move.
+
+   ---------------------------------------------------------------------------
+   Cost of a pass (M16-file-review-T2, D-0190)
+   ---------------------------------------------------------------------------
+
+   Rule C and rules (a) and (b) are O(sum over the v cover values of the variables that
+   declare each): per value, those variables, listed once at [make] ([declaring], since a
+   declared range never moves), then COUNTS; the lists and the facts a push names are built
+   from the same snapshot by the same filters, only for a push. Rule A walks the run of
+   cover values that starts at each lower end once, sums the capacities of its prefixes,
+   and per (lower, upper) pair COUNTS the confined variables, O(P n) for P pairs; the lists
+   are built only for an interval with a capacity >= 0 and at least that many confined
+   variables, the intervals that can push. Most of a pass's values and intervals push
+   nothing, and the counting is what they cost. Two quadratic steps are left, both per
+   PUSH and so bounded by the prunings they pay for: a push's facts test each variable
+   against every value of [a, b] ([in_scope_of], O(n (b - a))), and a saturated
+   interval's arm looks each candidate up by name in the confined set (O(n cap)). *)
 
 module Lit = Baguette_proof.Lit
 module Encoding = Baguette_proof.Encoding
@@ -308,6 +325,11 @@ type t = {
      identity) writes the row once per level instead of once per push.  [deferred],
      because the rungs it cites exist only once the proof has started. *)
   hrows : (int * int * bool, Explanation.t) Hashtbl.t;
+  (* M16-file-review-T2 (D-0190): per cover value (by its index in [cov]), the indices of
+     the terms whose DECLARED range holds it, ascending. [declares] reads only the declared
+     bounds, which never move, so this is the list every pass used to filter out of the
+     scope once per value and per rule. *)
+  declaring : int array array;
 }
 
 let name = "global_cardinality"
@@ -343,7 +365,17 @@ let make store enc ~cover vars_x =
            })
          cover)
   in
-  { terms; cov; enc; hrows = Hashtbl.create 16 }
+  let declaring =
+    Array.map
+      (fun c ->
+        let ids = ref [] in
+        for i = Array.length terms - 1 downto 0 do
+          if terms.(i).decl_lo <= c.cv && c.cv <= terms.(i).decl_hi then ids := i :: !ids
+        done;
+        Array.of_list !ids)
+      cov
+  in
+  { terms; cov; enc; hrows = Hashtbl.create 16; declaring }
 
 (* ------------------------------------------------------------------------ snapshots *)
 
@@ -369,7 +401,9 @@ let established_at_root store v ~lower =
   let sup = if lower then Store.lo_support store v else Store.hi_support store v in
   sup = Store.no_support || Store.level_of_index store sup = 0
 
-let range a b = List.init (Stdlib.max 0 (b - a + 1)) (fun i -> a + i)
+let range a b = List.init (Int.max 0 (b - a + 1)) (fun i -> a + i)
+
+module Int_tbl = Hashtbl.Make (Int)
 
 let snap_of store tm =
   let d = Store.get store tm.x in
@@ -523,8 +557,8 @@ let high_row_shared t k =
 (* ------------------------------------------------------------------- rule A: capacity *)
 
 let declares s v = s.s_dlo <= v && v <= s.s_dhi
-let clip_lo s ~a = Stdlib.max a s.s_dlo
-let clip_hi s ~b = Stdlib.min b s.s_dhi
+let clip_lo s ~a = Int.max a s.s_dlo
+let clip_hi s ~b = Int.min b s.s_dhi
 
 (* The confined variable's share of the counting: `I_i >= 1`, as far as the ladder can
    take it.  The chains a' -> lo(i) and hi(i)+1 -> b'+1 are globally valid and free, and
@@ -969,30 +1003,41 @@ let forced_expl t ~k ~v ~poss ~gone ~y ~lower =
 
 exception Found of Store.conflict
 
-let rule_c t store ~snaps ~caps ~apply =
-  List.iter
-    (fun k ->
+(* The snapshot's window holds [v] / is exactly [v]: the two tests rule C and rules (a)
+   and (b) sort a value's variables by. *)
+let holds_v v s = s.s_lo <= v && v <= s.s_hi
+let fixed_at v s = s.s_lo = v && s.s_hi = v
+let count_where p l = List.fold_left (fun n s -> if p s then n + 1 else n) 0 l
+
+(* M16-file-review-T2 (D-0190): the two counts first, and the lists and the facts a push
+   names only for a push. They are the same lists, built from the same snapshot by the
+   same filters, so every push is what it was; a pass that pushes nothing (most of them)
+   no longer builds four lists and the scope's facts per cover value. The facts are one
+   value for both pushes, as before. *)
+let rule_c t store ~dvs ~caps ~apply =
+  List.iteri
+    (fun j k ->
       let c = k.k_cov in
       let v = c.cv in
-      let dv = List.filter (fun s -> declares s v) snaps in
-      let poss = List.filter (fun s -> s.s_lo <= v && v <= s.s_hi) dv in
-      let gone = List.filter (fun s -> not (s.s_lo <= v && v <= s.s_hi)) dv in
-      let fixed = List.filter (fun s -> s.s_lo = v && s.s_hi = v) dv in
-      let others = List.filter (fun s -> not (s.s_lo = v && s.s_hi = v)) dv in
-      let may = c.cconst + List.length poss in
-      let must = c.cconst + List.length fixed in
-      let facts = scope_facts ~snaps:dv ~caps:[ k ] in
-      if may < k.k_hi then
-        apply ~ahead:false ~lower:false c.cx may
-          (Reason.because
-             ~concludes:(Some (Reason.at_most ~name:c.cname ~decl:c.cdhi may))
-             facts
-             (close_upper t ~k ~may (c_upper_expl t ~k ~poss ~gone ~may)));
+      let dv = dvs.(j) in
+      let may = c.cconst + count_where (holds_v v) dv in
+      let must = c.cconst + count_where (fixed_at v) dv in
+      let facts = lazy (scope_facts ~snaps:dv ~caps:[ k ]) in
+      (if may < k.k_hi then
+         let poss = List.filter (holds_v v) dv in
+         let gone = List.filter (fun s -> not (holds_v v s)) dv in
+         apply ~ahead:false ~lower:false c.cx may
+           (Reason.because
+              ~concludes:(Some (Reason.at_most ~name:c.cname ~decl:c.cdhi may))
+              (Lazy.force facts)
+              (close_upper t ~k ~may (c_upper_expl t ~k ~poss ~gone ~may))));
       if must > k.k_lo then
+        let fixed = List.filter (fixed_at v) dv in
+        let others = List.filter (fun s -> not (fixed_at v s)) dv in
         apply ~ahead:true ~lower:true c.cx must
           (Reason.because
              ~concludes:(Some (Reason.at_least ~name:c.cname ~decl:c.cdlo must))
-             facts
+             (Lazy.force facts)
              (close_lower t ~k ~must (c_lower_expl t ~k ~fixed ~others ~must))))
     caps;
   ignore store
@@ -1011,8 +1056,16 @@ let rule_c t store ~snaps ~caps ~apply =
 let pass t store =
   Propagator.count_pass ();
   let moved = ref false in
-  let snaps = Array.to_list (Array.map (snap_of store) t.terms) in
+  let snaps_arr = Array.map (snap_of store) t.terms in
+  let snaps = Array.to_list snaps_arr in
   let caps = Array.to_list (Array.map (csnap_of store) t.cov) in
+  (* Per cover value, the snapshots of the variables that declare it, in term order: what
+     [List.filter (fun s -> declares s v) snaps] gave, read off [t.declaring]. *)
+  let dvs =
+    Array.map
+      (fun ids -> Array.fold_right (fun i acc -> snaps_arr.(i) :: acc) ids [])
+      t.declaring
+  in
   (* [~ahead] is M7-T17's trigger (D-0082): rule A's capacity push sums a counting row
      per cover value of the interval, so its trace line is RUP only after its
      derivation and the push is made under [Store.deriving_ahead].
@@ -1043,11 +1096,11 @@ let pass t store =
         moved := true
     | Store.Unchanged -> ()
   in
-  rule_c t store ~snaps ~caps ~apply:(fun ~ahead -> apply ~ahead);
-  let cover_at = Hashtbl.create 16 in
-  List.iter (fun k -> Hashtbl.replace cover_at k.k_cov.cv k) caps;
-  let los = List.sort_uniq compare (List.map (fun s -> s.s_lo) snaps) in
-  let his = List.sort_uniq compare (List.map (fun s -> s.s_hi) snaps) in
+  rule_c t store ~dvs ~caps ~apply:(fun ~ahead -> apply ~ahead);
+  let cover_at = Int_tbl.create 16 in
+  List.iter (fun k -> Int_tbl.replace cover_at k.k_cov.cv k) caps;
+  let los = List.sort_uniq Int.compare (List.map (fun s -> s.s_lo) snaps) in
+  let his = List.sort_uniq Int.compare (List.map (fun s -> s.s_hi) snaps) in
   let push ~a ~b ~halls ~caps_ab ~y ~lower x bound =
     apply ~ahead:true ~lower (View.of_var x) bound
       (Reason.because
@@ -1060,117 +1113,144 @@ let pass t store =
   in
   (* M7-T24, rules (a) and (b): one cover value at a time, before the interval search,
      because each is O(n) per value and they are what a ROUTED one-value count needs. *)
-  List.iter
-    (fun k ->
+  List.iteri
+    (fun j k ->
       let c = k.k_cov in
       let v = c.cv in
-      let dv = List.filter (fun s -> declares s v) snaps in
-      let is_fixed s = s.s_lo = v && s.s_hi = v in
-      let holds s = s.s_lo <= v && v <= s.s_hi in
-      let fixed = List.filter is_fixed dv in
+      let dv = dvs.(j) in
+      let is_fixed = fixed_at v in
+      let holds = holds_v v in
+      (* M16-file-review-T2 (D-0190): counted first, as in [rule_c]; the lists are built
+         where a rule fires, from the same snapshot by the same filters. *)
+      let n_fixed = count_where is_fixed dv in
       (* (a) saturated *)
-      if c.cconst + List.length fixed = k.k_hi then
-        List.iter
-          (fun y ->
-            if not (is_fixed y) then
-              if y.s_lo = v then
-                push ~a:v ~b:v ~halls:fixed ~caps_ab:[ k ] ~y ~lower:true y.s_var (v + 1)
-              else if y.s_hi = v then
-                push ~a:v ~b:v ~halls:fixed ~caps_ab:[ k ] ~y ~lower:false y.s_var (v - 1)
-              else if
-                (* LIVE, not [y]'s snapshot bounds: an earlier push of this pass may have
-                   moved a bound of [y] onto [v], and a removal AT a bound is a bound
-                   move, which this entry's [~concludes:None] does not describe (I-P6's
-                   "shape" clause). Read live, the test is exactly what it was before
-                   M6-T19: an interior value, removed as a hole. *)
-                let live = Store.get store y.s_var in
-                Domain.lo live < v && v < Domain.hi live && Domain.mem live v
-              then
-                let j =
-                  Reason.because ~concludes:None
-                    (scope_facts ~snaps:dv ~caps:[ k ])
-                    (hole_expl t ~v ~snaps ~halls:fixed ~caps:[ k ] ~y)
-                in
-                match
-                  Store.deriving_ahead store (fun () -> Store.remove store y.s_var v j)
-                with
-                | Store.Conflict cf -> raise (Found cf)
-                | Store.Changed ->
-                    Propagator.count_deduction ();
-                    moved := true
-                | Store.Unchanged -> ())
-          dv;
+      (if c.cconst + n_fixed = k.k_hi then
+         let fixed = List.filter is_fixed dv in
+         List.iter
+           (fun y ->
+             if not (is_fixed y) then
+               if y.s_lo = v then
+                 push ~a:v ~b:v ~halls:fixed ~caps_ab:[ k ] ~y ~lower:true y.s_var (v + 1)
+               else if y.s_hi = v then
+                 push ~a:v ~b:v ~halls:fixed ~caps_ab:[ k ] ~y ~lower:false y.s_var (v - 1)
+               else if
+                 (* LIVE, not [y]'s snapshot bounds: an earlier push of this pass may have
+                    moved a bound of [y] onto [v], and a removal AT a bound is a bound
+                    move, which this entry's [~concludes:None] does not describe (I-P6's
+                    "shape" clause). Read live, the test is exactly what it was before
+                    M6-T19: an interior value, removed as a hole. *)
+                 let live = Store.get store y.s_var in
+                 Domain.lo live < v && v < Domain.hi live && Domain.mem live v
+               then
+                 let j =
+                   Reason.because ~concludes:None
+                     (scope_facts ~snaps:dv ~caps:[ k ])
+                     (hole_expl t ~v ~snaps ~halls:fixed ~caps:[ k ] ~y)
+                 in
+                 match
+                   Store.deriving_ahead store (fun () -> Store.remove store y.s_var v j)
+                 with
+                 | Store.Conflict cf -> raise (Found cf)
+                 | Store.Changed ->
+                     Propagator.count_deduction ();
+                     moved := true
+                 | Store.Unchanged -> ())
+           dv);
       (* (b) forced *)
-      let poss = List.filter holds dv in
-      let gone = List.filter (fun s -> not (holds s)) dv in
-      if
-        c.cconst + List.length poss = k.k_lo
-        && List.length fixed < List.length poss
-        && List.for_all (fun s -> Domain.mem (Store.get store s.s_var) v) poss
-      then
-        List.iter
-          (fun y ->
-            if not (is_fixed y) then
-              let lower = y.s_lo < v in
-              let facts =
-                scope_facts ~snaps:dv ~caps:[]
-                @
-                if View.is_const c.cx then []
-                else
-                  [
-                    Reason.at_least ~name:c.cname ~decl:c.cdlo k.k_lo;
-                    Reason.at_most ~name:c.cname ~decl:c.cdhi k.k_hi;
-                  ]
-              in
-              apply ~ahead:false ~lower (View.of_var y.s_var) v
-                (Reason.because
-                   ~concludes:
-                     (Some
-                        (if lower then Reason.at_least ~name:y.s_name ~decl:y.s_dlo v
-                         else Reason.at_most ~name:y.s_name ~decl:y.s_dhi v))
-                   facts
-                   (forced_expl t ~k ~v ~poss ~gone ~y ~lower)))
-          poss)
+      let n_poss = count_where holds dv in
+      if c.cconst + n_poss = k.k_lo && n_fixed < n_poss then
+        let poss = List.filter holds dv in
+        if List.for_all (fun s -> Domain.mem (Store.get store s.s_var) v) poss then
+          let gone = List.filter (fun s -> not (holds s)) dv in
+          List.iter
+            (fun y ->
+              if not (is_fixed y) then
+                let lower = y.s_lo < v in
+                let facts =
+                  scope_facts ~snaps:dv ~caps:[]
+                  @
+                  if View.is_const c.cx then []
+                  else
+                    [
+                      Reason.at_least ~name:c.cname ~decl:c.cdlo k.k_lo;
+                      Reason.at_most ~name:c.cname ~decl:c.cdhi k.k_hi;
+                    ]
+                in
+                apply ~ahead:false ~lower (View.of_var y.s_var) v
+                  (Reason.because
+                     ~concludes:
+                       (Some
+                          (if lower then Reason.at_least ~name:y.s_name ~decl:y.s_dlo v
+                           else Reason.at_most ~name:y.s_name ~decl:y.s_dhi v))
+                     facts
+                     (forced_expl t ~k ~v ~poss ~gone ~y ~lower)))
+            poss)
     caps;
+  (* M16-file-review-T2 (D-0190): [a, b] is a candidate when every value in it is in the
+     cover, which is [b <= reach a], the top of the run of cover values that starts at [a]
+     ([a - 1] when [a] is not one). One walk per lower end, where every (a, b) pair used to
+     build [range a b] and look each value up: the same pairs, in the same order, with the
+     same [caps_ab]. *)
+  let reach a =
+    let rec up v = if Int_tbl.mem cover_at v then up (v + 1) else v - 1 in
+    up a
+  in
+  (* M16-file-review-T2 (D-0190): an interval is worked on only when it can push, which
+     needs a capacity [cap >= 0] and at least [cap] variables confined to it. [capacc]
+     holds the capacity of [a, a + i] summed in value order, as the fold below sums it,
+     and the confined variables are COUNTED; the lists are built, exactly as before, only
+     for an interval that passes both tests. Most intervals of a pass fail them, and each
+     used to build its cover list, the confined list and its partition first. *)
+  let rec confined ~a ~b n = function
+    | [] -> n
+    | s :: rest -> confined ~a ~b (if a <= s.s_lo && s.s_hi <= b then n + 1 else n) rest
+  in
   List.iter
     (fun a ->
+      let top = reach a in
+      let capacc = Array.make (Int.max 0 (top - a + 1)) 0 in
+      let acc = ref 0 in
+      for i = 0 to top - a do
+        let k = Int_tbl.find cover_at (a + i) in
+        acc := !acc + k.k_hi - k.k_cov.cconst;
+        capacc.(i) <- !acc
+      done;
       List.iter
         (fun b ->
-          if b >= a then
-            let found = List.map (fun v -> Hashtbl.find_opt cover_at v) (range a b) in
-            if List.for_all Option.is_some found then
-              let caps_ab = List.filter_map Fun.id found in
-              let cap =
-                List.fold_left (fun acc k -> acc + k.k_hi - k.k_cov.cconst) 0 caps_ab
+          if
+            b >= a && b <= top
+            && capacc.(b - a) >= 0
+            && confined ~a ~b 0 snaps >= capacc.(b - a)
+          then
+            let caps_ab = List.map (fun v -> Int_tbl.find cover_at v) (range a b) in
+            let cap =
+              List.fold_left (fun acc k -> acc + k.k_hi - k.k_cov.cconst) 0 caps_ab
+            in
+            if cap >= 0 then
+              (* Variables whose DECLARED range is inside [a, b] consume their unit of
+                 capacity by the model row's own constant folding, so they must be in
+                 the confined set rather than outside it; ordering them first is what
+                 makes that so whenever there is room for them at all. *)
+              let all_in = List.filter (fun s -> a <= s.s_lo && s.s_hi <= b) snaps in
+              let folded, rest =
+                List.partition (fun s -> a <= s.s_dlo && s.s_dhi <= b) all_in
               in
-              if cap >= 0 then
-                (* Variables whose DECLARED range is inside [a, b] consume their unit of
-                   capacity by the model row's own constant folding, so they must be in
-                   the confined set rather than outside it; ordering them first is what
-                   makes that so whenever there is room for them at all. *)
-                let all_in = List.filter (fun s -> a <= s.s_lo && s.s_hi <= b) snaps in
-                let folded, rest =
-                  List.partition (fun s -> a <= s.s_dlo && s.s_dhi <= b) all_in
-                in
-                let ordered = folded @ rest in
-                let n = List.length ordered in
-                if n > cap then
-                  let halls = List.filteri (fun i _ -> i < cap) ordered in
-                  let y = List.nth ordered cap in
-                  push ~a ~b ~halls ~caps_ab ~y ~lower:true y.s_var (b + 1)
-                else if n = cap then
-                  List.iter
-                    (fun y ->
-                      if
-                        not
-                          (List.exists (fun s -> String.equal s.s_name y.s_name) ordered)
-                      then
-                        if a <= y.s_lo && y.s_lo <= b then
-                          push ~a ~b ~halls:ordered ~caps_ab ~y ~lower:true y.s_var (b + 1)
-                        else if a <= y.s_hi && y.s_hi <= b then
-                          push ~a ~b ~halls:ordered ~caps_ab ~y ~lower:false y.s_var
-                            (a - 1))
-                    snaps)
+              let ordered = folded @ rest in
+              let n = List.length ordered in
+              if n > cap then
+                let halls = List.filteri (fun i _ -> i < cap) ordered in
+                let y = List.nth ordered cap in
+                push ~a ~b ~halls ~caps_ab ~y ~lower:true y.s_var (b + 1)
+              else if n = cap then
+                List.iter
+                  (fun y ->
+                    if not (List.exists (fun s -> String.equal s.s_name y.s_name) ordered)
+                    then
+                      if a <= y.s_lo && y.s_lo <= b then
+                        push ~a ~b ~halls:ordered ~caps_ab ~y ~lower:true y.s_var (b + 1)
+                      else if a <= y.s_hi && y.s_hi <= b then
+                        push ~a ~b ~halls:ordered ~caps_ab ~y ~lower:false y.s_var (a - 1))
+                  snaps)
         his)
     los;
   !moved

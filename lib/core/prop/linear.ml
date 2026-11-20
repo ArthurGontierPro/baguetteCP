@@ -124,7 +124,21 @@
    lib/flatzinc/compile.ml caps every declared bound and every row's magnitude
    |c| + sum_i |a_i| * max(|lo_i|, |hi_i|) at [Checked.limit], which leaves a factor
    of 16/9 over the largest intermediate anything computes from the row. The raise is
-   for callers that build a [Linear.t] directly, which is what every unit test does. *)
+   for callers that build a [Linear.t] directly, which is what every unit test does.
+
+   ---------------------------------------------------------------------------
+   Cost of a run (M16-file-review-T2, D-0190)
+   ---------------------------------------------------------------------------
+
+   A run is O(n) in the terms: one walk for the minima, one for their sum, one for the
+   prunings, each a loop over [t.arr] (the terms as an array, beside the list the
+   snapshots walk), with no closure built unless something prunes. A FIXED term is
+   skipped by the pruning walk before its divisions, because it cannot move ([prune_term]
+   has the argument). A pruning costs O(1) eagerly and its reason and justification are
+   materialised later, O(n) each (D-0124). Integers are compared with [Int.max],
+   [Int.min] and [Int.compare] here and in every module of prop/ that copies this shape:
+   the polymorphic [Stdlib.max] and [compare] reach [compare_val] through a C call, even
+   on two ints. *)
 
 module Lit = Baguette_proof.Lit
 
@@ -134,7 +148,13 @@ module Lit = Baguette_proof.Lit
    explanation needs is the declared bound, which the store no longer holds once this or
    any other propagator has narrowed the domain). *)
 type term = { coeff : int; x : Var.t; decl_lo : int; decl_hi : int }
-type t = { terms : term list; rhs : int; row_id : int }
+
+(* [terms] and [arr] are the same terms in the same order: the list is what the snapshots
+   and the reasons walk (by position, [~exclude]), the array is what a run walks
+   (M16-file-review-T2, D-0190: a run used to be [List.length] and two [List.iteri], a
+   closure call per term on the hottest loop of a linear-heavy model). [make] builds both
+   and nothing else builds a [t]. *)
+type t = { terms : term list; arr : term array; rhs : int; row_id : int }
 
 (* M11-complexity-T3 (D-0142, E7): SCRATCH for [propagate], one slot per term, where a run
    keeps each term's minimum while it walks the row. It only spares the run the two lists
@@ -149,7 +169,7 @@ let mins_scratch = ref [||]
 
 let mins_for n =
   if Array.length !mins_scratch < n then
-    mins_scratch := Array.make (Stdlib.max n (2 * Array.length !mins_scratch)) 0;
+    mins_scratch := Array.make (Int.max n (2 * Array.length !mins_scratch)) 0;
   !mins_scratch
 
 let name = "int_lin_le"
@@ -167,7 +187,7 @@ let make ~row_id store raw_terms rhs =
         { coeff; x; decl_lo = Domain.lo d; decl_hi = Domain.hi d })
       raw_terms
   in
-  { terms; rhs; row_id }
+  { terms; arr = Array.of_list terms; rhs; row_id }
 
 let base_explanation t = Explanation.model_row t.row_id
 let vars t = List.map (fun tm -> tm.x) t.terms
@@ -226,7 +246,7 @@ let pb_row ?(bits_n = fun _ -> None) store (t : t) : Propagator.pb_row =
                 List.init n (fun i -> (Checked.mul (-tm.coeff) (1 lsl i), Lit.bit name i))
             | None ->
                 List.init
-                  (max 0 (tm.decl_hi - tm.decl_lo))
+                  (Int.max 0 (tm.decl_hi - tm.decl_lo))
                   (fun i -> (-tm.coeff, Lit.ge name (tm.decl_lo + 1 + i)))
           in
           (block :: acc, Checked.add const (Checked.mul tm.coeff tm.decl_lo)))
@@ -375,8 +395,8 @@ let rests_on_a_decision reasons =
    for it. ONE function for both halves (D-0026): [snapshot_at] stores it, [fact_at]
    states it, and neither recomputes the case split. No allocation. *)
 let value_at (h : Store.history) (tm : term) =
-  if tm.coeff >= 0 then Stdlib.max (Store.lo_at h tm.x) tm.decl_lo
-  else Stdlib.min (Store.hi_at h tm.x) tm.decl_hi
+  if tm.coeff >= 0 then Int.max (Store.lo_at h tm.x) tm.decl_lo
+  else Int.min (Store.hi_at h tm.x) tm.decl_hi
 
 let snapshot_at (h : Store.history) (tm : term) : source_snap option =
   if tm.coeff = 0 then None
@@ -717,14 +737,87 @@ let explain_cross_conflict ~base ~snaps ~crossed:(tm : term) ~name ~opposite_val
    and returning the conflict that the old one-shot slot's comment had to argue about.
    Neither path names this instance's id: [Store.conflict] stamps whoever the engine said
    was running. *)
+(* The cross-row conflict of [tm] (D-0013 step 5), as [Store.conflict] hands it back: the
+   row's own reason, plus the opposing bound this new one ran into. Both halves are
+   snapshotted here, not inside the thunk, for the reason [explain_cross_conflict] above
+   spells out. Top level rather than a closure inside [propagate], so a run that reaches
+   no conflict allocates none (M16-file-review-T2, D-0190). *)
+let cross_conflict t store (tm : term) snaps =
+  let opposite_fact = opposite_bound_fact store tm in
+  Store.conflict store
+    (Reason.because ~concludes:None
+       (List.map fact_of_snap snaps @ [ opposite_fact ])
+       (explain_cross_conflict ~base:(base_explanation t) ~snaps ~crossed:tm
+          ~name:(Store.name store tm.x)
+          ~opposite_value:(Reason.fact_value opposite_fact)
+          ~opposite:(opposite_rests_on store tm)))
+
+(* One term's pruning, if its bound moves: [Some] the cross-row conflict it ran into, or
+   [None]. [mins.(idx)] is the term's minimum as the run's first walk read it.
+
+   D-0124: the history is taken HERE, immediately before the push, so it holds exactly
+   what a snapshot taken here would have read -- including the entries earlier terms of
+   this same run pushed. On [Conflict] nothing was pushed, the history is still the
+   present, and the cross-row conflict materialises the same snapshot eagerly: a
+   conflict's reason is consumed where it is raised, and its justification is forced by
+   search before any backtrack, so there is nothing to defer and a closure that outlived
+   the backtrack would only have [check_history] to answer with. *)
+let prune_term t store mins ~slack idx (tm : term) =
+  let max_term = Checked.add mins.(idx) slack in
+  let d = Store.get store tm.x in
+  (* M16-file-review-T2 (D-0190): a FIXED term cannot move, so its two divisions are not
+     made. With [lo = hi = v] and [slack >= 0] (this walk runs only then), a positive
+     coefficient gives [new_hi = v + floor(slack / a) >= hi] and a negative one
+     [new_lo = v - floor(slack / |a|) <= lo]: neither test below passes, and neither
+     division can raise (the divisor is not 0, and [min_int / -1] would need [hi] past
+     [max_int]). [max_term] is still computed first, so an overflow raises where it did. *)
+  if Domain.lo d = Domain.hi d then None
+  else if tm.coeff > 0 then
+    let new_hi = floordiv max_term tm.coeff in
+    if new_hi < Domain.hi d then
+      let h = Store.history store in
+      let exclude = Some idx in
+      let concludes =
+        Some (Reason.at_most ~name:(Store.name store tm.x) ~decl:tm.decl_hi new_hi)
+      in
+      let j = justified_at ~concludes (base_explanation t) h t.terms ~exclude tm.coeff in
+      match Store.set_hi store tm.x new_hi j with
+      | Store.Conflict _ ->
+          Some (cross_conflict t store tm (row_snaps_at h t.terms ~exclude))
+      | Store.Changed | Store.Unchanged -> None
+    else None
+  else
+    let new_lo = ceildiv max_term tm.coeff in
+    if new_lo > Domain.lo d then
+      let h = Store.history store in
+      let exclude = Some idx in
+      let divisor = Checked.neg tm.coeff in
+      let concludes =
+        Some (Reason.at_least ~name:(Store.name store tm.x) ~decl:tm.decl_lo new_lo)
+      in
+      let j = justified_at ~concludes (base_explanation t) h t.terms ~exclude divisor in
+      match Store.set_lo store tm.x new_lo j with
+      | Store.Conflict _ ->
+          Some (cross_conflict t store tm (row_snaps_at h t.terms ~exclude))
+      | Store.Changed | Store.Unchanged -> None
+    else None
+
 (* M11-complexity-T3 (D-0142, E7): the minima go into the scratch in term order, as
    [List.map] computed them, and are summed afterwards in the same order from 0 through
    [Checked.add], as [Checked.sum] did; so every value, and an overflow's message, is the
-   one the lists gave. The pruning walk then reads the minimum of term [idx] at [idx]. *)
+   one the lists gave. The pruning walk then reads the minimum of term [idx] at [idx].
+
+   M16-file-review-T2 (D-0190): the three walks are loops over [t.arr], the terms in the
+   order of [t.terms], so each visits the terms in the order its [List] form did, makes
+   the same [Checked] operations in the same order, and the pruning walk stops after the
+   first cross-row conflict exactly as the [List.iteri] did by skipping every later term. *)
 let propagate t store =
-  let n = List.length t.terms in
+  let arr = t.arr in
+  let n = Array.length arr in
   let mins = mins_for n in
-  List.iteri (fun i tm -> mins.(i) <- term_min store tm) t.terms;
+  for i = 0 to n - 1 do
+    mins.(i) <- term_min store arr.(i)
+  done;
   let total_min = ref 0 in
   for i = 0 to n - 1 do
     total_min := Checked.add !total_min mins.(i)
@@ -737,70 +830,14 @@ let propagate t store =
       (Store.conflict store
          (justified_of_snaps ~concludes:None (base_explanation t) snaps 1))
   else
-    let result = ref Propagator.Fixpoint in
-    let conflict = ref None in
-    (* [tm : term] and [idx]'s [tm] below are annotated because [source_snap] is declared
-       after [term] and also has a [coeff] field, so OCaml's field disambiguation picks
-       [source_snap] for a bare [tm.coeff]. *)
-    let cross_conflict (tm : term) snaps =
-      (* The row's own reason, plus the opposing bound this new one ran into. Both halves
-         are snapshotted here, not inside the thunk, for the reason
-         [explain_cross_conflict] above spells out. *)
-      let opposite_fact = opposite_bound_fact store tm in
-      conflict :=
-        Some
-          (Store.conflict store
-             (Reason.because ~concludes:None
-                (List.map fact_of_snap snaps @ [ opposite_fact ])
-                (explain_cross_conflict ~base:(base_explanation t) ~snaps ~crossed:tm
-                   ~name:(Store.name store tm.x)
-                   ~opposite_value:(Reason.fact_value opposite_fact)
-                   ~opposite:(opposite_rests_on store tm))))
+    let rec walk idx =
+      if idx = n then Propagator.Fixpoint
+      else
+        let tm = arr.(idx) in
+        if tm.coeff = 0 then walk (idx + 1)
+        else
+          match prune_term t store mins ~slack idx tm with
+          | None -> walk (idx + 1)
+          | Some c -> Propagator.Conflict c
     in
-    List.iteri
-      (fun idx (tm : term) ->
-        if Option.is_none !conflict && tm.coeff <> 0 then
-          let max_term = Checked.add mins.(idx) slack in
-          let d = Store.get store tm.x in
-          (* D-0124: the history is taken HERE, immediately before the push, so it
-             holds exactly what a snapshot taken here would have read -- including the
-             entries earlier terms of this same run pushed. On [Conflict] nothing was
-             pushed, the history is still the present, and the cross-row conflict
-             materialises the same snapshot eagerly: a conflict's reason is consumed
-             where it is raised, and its justification is forced by search before any
-             backtrack, so there is nothing to defer and a closure that outlived the
-             backtrack would only have [check_history] to answer with. *)
-          if tm.coeff > 0 then (
-            let new_hi = floordiv max_term tm.coeff in
-            if new_hi < Domain.hi d then
-              let h = Store.history store in
-              let exclude = Some idx in
-              let concludes =
-                Some
-                  (Reason.at_most ~name:(Store.name store tm.x) ~decl:tm.decl_hi new_hi)
-              in
-              let j =
-                justified_at ~concludes (base_explanation t) h t.terms ~exclude tm.coeff
-              in
-              match Store.set_hi store tm.x new_hi j with
-              | Store.Conflict _ -> cross_conflict tm (row_snaps_at h t.terms ~exclude)
-              | Store.Changed | Store.Unchanged -> ())
-          else
-            let new_lo = ceildiv max_term tm.coeff in
-            if new_lo > Domain.lo d then
-              let h = Store.history store in
-              let exclude = Some idx in
-              let divisor = Checked.neg tm.coeff in
-              let concludes =
-                Some
-                  (Reason.at_least ~name:(Store.name store tm.x) ~decl:tm.decl_lo new_lo)
-              in
-              let j =
-                justified_at ~concludes (base_explanation t) h t.terms ~exclude divisor
-              in
-              match Store.set_lo store tm.x new_lo j with
-              | Store.Conflict _ -> cross_conflict tm (row_snaps_at h t.terms ~exclude)
-              | Store.Changed | Store.Unchanged -> ())
-      t.terms;
-    (match !conflict with Some c -> result := Propagator.Conflict c | None -> ());
-    !result
+    walk 0

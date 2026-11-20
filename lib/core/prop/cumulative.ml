@@ -123,7 +123,7 @@ type t = {
 let name = "cumulative"
 let consistency = Propagator.Checking
 let vars t = Array.to_list (Array.map (fun tk -> tk.x) t.tasks)
-let range a b = List.init (Stdlib.max 0 (b - a + 1)) (fun i -> a + i)
+let range a b = List.init (Int.max 0 (b - a + 1)) (fun i -> a + i)
 
 (* Merge repeated literals (the same start in two tasks) so the .opb row names each once.
    The row is the same linear form either way; the per-task derivation sums to it. *)
@@ -184,9 +184,9 @@ let make store enc ~cap (specs : (start * int * int) list) =
   match starts with
   | [] -> { tasks; rows = [||]; t0 = 0; enc; ground = None }
   | _ ->
-      let t0 = List.fold_left Stdlib.min max_int starts in
-      let t1 = List.fold_left Stdlib.max min_int ends in
-      let rows = Array.make (Stdlib.max 0 (t1 - t0)) None in
+      let t0 = List.fold_left Int.min max_int starts in
+      let t1 = List.fold_left Int.max min_int ends in
+      let rows = Array.make (Int.max 0 (t1 - t0)) None in
       let ground = ref None in
       for t = t0 to t1 - 1 do
         let fixed_load =
@@ -197,7 +197,7 @@ let make store enc ~cap (specs : (start * int * int) list) =
         let may = ref fixed_load and folded = ref 0 and terms = ref [] in
         Array.iter
           (fun tk ->
-            let a' = Stdlib.max (t - tk.dur + 1) tk.dlo and b' = Stdlib.min t tk.dhi in
+            let a' = Int.max (t - tk.dur + 1) tk.dlo and b' = Int.min t tk.dhi in
             if a' <= b' then (
               may := !may + tk.res;
               if a' > tk.dlo then terms := (tk.res, Lit.ge tk.name a') :: !terms
@@ -248,8 +248,7 @@ let snap_of store tk =
   }
 
 (* The task's window at t, clipped to its declared range: [a', b'], empty when a' > b'. *)
-let window s ~time =
-  (Stdlib.max (time - s.s_task.dur + 1) s.s_dlo, Stdlib.min time s.s_dhi)
+let window s ~time = (Int.max (time - s.s_task.dur + 1) s.s_dlo, Int.min time s.s_dhi)
 
 let in_row s ~time =
   let a', b' = window s ~time in
@@ -560,11 +559,11 @@ let pass t store =
        bound. [j] is re-read between the two because a landed lower push refreshed it. *)
     let j = snaps.(idx) in
     let d = j.s_task.dur in
-    (match first_overloaded j (j.s_lo + d - 1) (-1) (Stdlib.max 0 d) with
+    (match first_overloaded j (j.s_lo + d - 1) (-1) (Int.max 0 d) with
     | Some (time, row) -> push idx j row ~lower:true (time + 1)
     | None -> ());
     let j = snaps.(idx) in
-    match first_overloaded j j.s_hi 1 (Stdlib.max 0 d) with
+    match first_overloaded j j.s_hi 1 (Int.max 0 d) with
     | Some (time, row) -> push idx j row ~lower:false (time - d)
     | None -> ()
   done;
