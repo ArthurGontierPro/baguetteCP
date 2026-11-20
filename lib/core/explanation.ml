@@ -347,6 +347,15 @@ type expl = t
    operands are themselves hash-consed, so two equal operands are one value. The table
    holds the written nodes only (see [table]).
 
+   M16-file-review-T4 (D-0192): a node's [hid] is its content hash, computed once at its
+   build, so every later lookup of the node ([hc_written], [hc_wipe]) hashes it in one
+   read; equality still compares the operands by identity. The table and its two walks
+   are written out ([Hc], [summands_hash], [same_summands]) rather than built from
+   [Hashtbl.Make] and [List.fold_left]/[List.equal] over closures. The answers are the
+   same, so the bytes are: 2011_cyclic-rcpsp_easy_6 with the proof, whose alldiff hands
+   this module 2.27 M [Combine] builds and 51 M summands in 2 000 nodes (2.0 M of them
+   identical to a written node), went from 52.7 to 47.3 G instructions, the same proof.
+
    ON BY DEFAULT (D-0172, decided by the orchestrator on the user's delegation, D-0167
    item 3). BAGUETTE_HASHCONS=0 turns it off for comparison: [hid] and [tid] are then 0,
    nothing is hashed, every build is a value of its own and each copy writes its own line,
@@ -379,7 +388,7 @@ let lit_hash (l : Lit.t) =
   in
   mix (mix (mix (Hashtbl.hash x) v) k) (Bool.to_int l.Lit.positive)
 
-let operand_id = function
+let[@inline] operand_id = function
   | Clause r -> r.hid
   | Linear r -> r.hid
   | Cut r -> r.hid
@@ -389,7 +398,7 @@ let operand_id = function
   | Model_row i -> mix 4 i
   | Decision l -> lit_hash l
 
-let same_operand a b =
+let[@inline] same_operand a b =
   a == b || match (a, b) with Model_row i, Model_row j -> i = j | _ -> false
 
 let same_terms = List.equal (fun (c, l) (d, m) -> c = d && Lit.equal l m)
@@ -406,6 +415,11 @@ let same_summand s t =
       && List.equal same_operand r.lt_cited q.lt_cited
   | _ -> false
 
+(* M16-file-review-T4 (D-0192): the two walks a lookup makes over a [Combine]'s summands,
+   written as loops. They were [List.fold_left] and [List.equal] over a closure, one
+   [caml_apply2] and two calls per summand; alldiff's derivations hand this module 51 M
+   summands in 2 000 nodes of 2011_cyclic-rcpsp_easy_6. A summand physically shared by
+   the two lists is equal without being read. *)
 let summand_hash h = function
   | Term (c, e) -> mix (mix (mix h 1) c) (operand_id e)
   | Weaken ls -> List.fold_left (fun h (c, l) -> mix (mix h c) (lit_hash l)) (mix h 2) ls
@@ -416,31 +430,150 @@ let summand_hash h = function
         (mix (mix (mix (mix h 4) (Hashtbl.hash r.lt_name)) r.lt_coeff) r.lt_value)
         r.lt_cited
 
-module Hc = Hashtbl.Make (struct
-  type nonrec t = t
+let rec summands_hash h = function
+  | [] -> h
+  | Term (c, e) :: rest -> summands_hash (mix (mix (mix h 1) c) (operand_id e)) rest
+  | s :: rest -> summands_hash (summand_hash h s) rest
 
-  let equal a b =
-    match (a, b) with
-    | Clause x, Clause y -> List.equal Lit.equal x.lits y.lits
-    | Linear x, Linear y -> x.rhs = y.rhs && same_terms x.terms y.terms
-    | Cut x, Cut y ->
-        x.c1 = y.c1 && x.c2 = y.c2 && same_operand x.e1 y.e1 && same_operand x.e2 y.e2
-    | Combine x, Combine y ->
-        x.divisor = y.divisor && List.equal same_summand x.summands y.summands
-    | Resolve x, Resolve y -> List.equal same_operand x.parts y.parts
-    | _ -> false
+let rec same_summands a b =
+  match (a, b) with
+  | [], [] -> true
+  | Term (c, x) :: a', Term (d, y) :: b' ->
+      c = d && same_operand x y && same_summands a' b'
+  | s :: a', t :: b' -> (s == t || same_summand s t) && same_summands a' b'
+  | _ -> false
 
-  let hash e =
-    (match e with
-    | Clause r -> List.fold_left (fun h l -> mix h (lit_hash l)) 1 r.lits
-    | Linear r ->
-        List.fold_left (fun h (c, l) -> mix (mix h c) (lit_hash l)) (mix 2 r.rhs) r.terms
-    | Cut r -> mix (mix (mix (mix 3 r.c1) r.c2) (operand_id r.e1)) (operand_id r.e2)
-    | Combine r -> List.fold_left summand_hash (mix 5 r.divisor) r.summands
-    | Resolve r -> List.fold_left (fun h e -> mix h (operand_id e)) 7 r.parts
-    | Model_row _ | Decision _ | Deferred _ -> 0)
-    land max_int
-end)
+let rec parts_hash h = function
+  | [] -> h
+  | e :: rest -> parts_hash (mix h (operand_id e)) rest
+
+let rec same_parts a b =
+  match (a, b) with
+  | [], [] -> true
+  | e :: a', f :: b' -> same_operand e f && same_parts a' b'
+  | _ -> false
+
+(* The content hashes, one per constructor a line is written for: the constructor, its
+   integers and literals, and every operand by its [operand_id]. *)
+let clause_hash lits = List.fold_left (fun h l -> mix h (lit_hash l)) 1 lits land max_int
+
+let linear_hash terms rhs =
+  List.fold_left (fun h (c, l) -> mix (mix h c) (lit_hash l)) (mix 2 rhs) terms
+  land max_int
+
+let cut_hash e1 e2 c1 c2 =
+  mix (mix (mix (mix 3 c1) c2) (operand_id e1)) (operand_id e2) land max_int
+
+let combine_hash summands divisor = summands_hash (mix 5 divisor) summands land max_int
+let resolve_hash parts = parts_hash 7 parts land max_int
+
+(* M16-file-review-T4 (D-0192): a node's [hid] IS its content hash, computed once when it
+   is built. It was a counter, an identity, and the table hashed the node's content at
+   every lookup, five times over for a node that is written and wiped (its build, the two
+   lookups of [hc_written] and the two of [hc_wipe]). An operand's [hid] serves its parent's
+   hash as the counter did: two operands that are one value have one [hid]. Two DIFFERENT
+   values may now share one -- the twins of a content written twice, [hc_written] below --
+   and their parents' hashes then collide, which [hc_equal] tells apart, since it compares
+   operands by identity as before. 0 when hash-consing is off (unless the stats are on),
+   as before: nothing is hashed. *)
+let hashing () = !hashcons || stats_on
+
+(* A node built while hash-consing was off has [hid] 0 (a test switches with
+   [set_hashcons]); its content hash is computed when asked, so it hashes as it did. *)
+let content_hash e =
+  match e with
+  | Clause r -> clause_hash r.lits
+  | Linear r -> linear_hash r.terms r.rhs
+  | Cut r -> cut_hash r.e1 r.e2 r.c1 r.c2
+  | Combine r -> combine_hash r.summands r.divisor
+  | Resolve r -> resolve_hash r.parts
+  | Model_row _ | Decision _ | Deferred _ -> 0
+
+(* [x.hid <> y.hid] with both nonzero: two contents hashed apart, unequal. *)
+let[@inline] apart (h : int) (k : int) = h <> k && h <> 0 && k <> 0
+
+(* Equal content: the constructor, its integers and literals, the operands by identity. *)
+let hc_equal a b =
+  a == b
+  ||
+  match (a, b) with
+  | Clause x, Clause y -> (not (apart x.hid y.hid)) && List.equal Lit.equal x.lits y.lits
+  | Linear x, Linear y ->
+      (not (apart x.hid y.hid)) && x.rhs = y.rhs && same_terms x.terms y.terms
+  | Cut x, Cut y ->
+      (not (apart x.hid y.hid))
+      && x.c1 = y.c1 && x.c2 = y.c2 && same_operand x.e1 y.e1 && same_operand x.e2 y.e2
+  | Combine x, Combine y ->
+      (not (apart x.hid y.hid))
+      && x.divisor = y.divisor
+      && same_summands x.summands y.summands
+  | Resolve x, Resolve y -> (not (apart x.hid y.hid)) && same_parts x.parts y.parts
+  | _ -> false
+
+let hc_hash e =
+  let h = operand_id e in
+  match e with
+  | (Clause _ | Linear _ | Cut _ | Combine _ | Resolve _) when h <> 0 -> h
+  | _ -> content_hash e
+
+(* M16-file-review-T4 (D-0192): the table is written out here rather than taken from
+   [Hashtbl.Make], whose code calls [equal] and [hash] as unknown closures ([caml_apply2]
+   for every bucket entry compared). Buckets of nodes, at most one node of a content (the
+   only writer is [hc_enter], which replaces), doubled when it holds twice as many nodes
+   as buckets, as [Hashtbl] does. It is never iterated, so its layout reaches no byte. *)
+module Hc = struct
+  type tbl = { mutable buckets : t list array; mutable size : int }
+
+  let create n = { buckets = Array.make n []; size = 0 }
+  let length t = t.size
+  let index t h = h land (Array.length t.buckets - 1)
+
+  let reset t =
+    t.buckets <- Array.make 4096 [];
+    t.size <- 0
+
+  let find_opt t e =
+    let rec go = function
+      | [] -> None
+      | x :: r -> if hc_equal e x then Some x else go r
+    in
+    go t.buckets.(index t (hc_hash e))
+
+  let mem t e = Option.is_some (find_opt t e)
+
+  let resize t =
+    let old = t.buckets in
+    let b = Array.make (2 * Array.length old) [] in
+    t.buckets <- b;
+    Array.iter
+      (List.iter (fun x ->
+           let i = index t (hc_hash x) in
+           b.(i) <- x :: b.(i)))
+      old
+
+  (* [e] in the place of the node of its content, or added. *)
+  let replace t e =
+    let i = index t (hc_hash e) in
+    let rec take = function
+      | [] -> None
+      | x :: r -> (
+          if hc_equal e x then Some r
+          else match take r with Some r' -> Some (x :: r') | None -> None)
+    in
+    match take t.buckets.(i) with
+    | Some rest -> t.buckets.(i) <- e :: rest
+    | None ->
+        t.buckets.(i) <- e :: t.buckets.(i);
+        t.size <- t.size + 1;
+        if t.size > 2 * Array.length t.buckets then resize t
+
+  (* [e] itself out, if it is the node of its content. *)
+  let remove_node t e =
+    let i = index t (hc_hash e) in
+    if List.memq e t.buckets.(i) then (
+      t.buckets.(i) <- List.filter (fun x -> x != e) t.buckets.(i);
+      t.size <- t.size - 1)
+end
 
 (* The table holds the nodes whose LINE is on the page, by the content of the node, and
    only those. [Justify] enters a node when it writes its line ([hc_written], at the
@@ -460,7 +593,7 @@ end)
 
    What the table answers is a function of the lines on the page, so the bytes are a
    function of the search. *)
-let table : t Hc.t = Hc.create 4096
+let table : Hc.tbl = Hc.create 4096
 let hc_by_level : t list array ref = ref (Array.make 64 [])
 let hc_hi = ref (-1)
 
@@ -483,7 +616,7 @@ let rec hc_written e level =
   if not twin_at_or_below then hc_enter e level
 
 and hc_enter e level =
-  Hc.replace table e e;
+  Hc.replace table e;
   if level >= Array.length !hc_by_level then (
     let a = Array.make (2 * (level + 1)) [] in
     Array.blit !hc_by_level 0 a 0 (Array.length !hc_by_level);
@@ -493,10 +626,7 @@ and hc_enter e level =
 
 let hc_wipe level =
   for l = level to !hc_hi do
-    List.iter
-      (fun e ->
-        match Hc.find_opt table e with Some x when x == e -> Hc.remove table e | _ -> ())
-      !hc_by_level.(l);
+    List.iter (fun e -> Hc.remove_node table e) !hc_by_level.(l);
     !hc_by_level.(l) <- []
   done;
   if !hc_hi >= level then hc_hi := level - 1
@@ -573,8 +703,21 @@ let () =
           rows)
 
 let decision lit = Decision lit
-let clause lits = built (Clause { lits; line = No_line; hid = fresh_hid () })
-let linear terms rhs = built (Linear { terms; rhs; line = No_line; hid = fresh_hid () })
+
+let clause lits =
+  built
+    (Clause { lits; line = No_line; hid = (if hashing () then clause_hash lits else 0) })
+
+let linear terms rhs =
+  built
+    (Linear
+       {
+         terms;
+         rhs;
+         line = No_line;
+         hid = (if hashing () then linear_hash terms rhs else 0);
+       })
+
 let model_row id = Model_row id
 let weaken lits = Weaken lits
 
@@ -598,26 +741,28 @@ let defining coeff lit =
    bound rests on a decision is *weakened* out of the row with declared-width axioms
    (D-0009 -- an axiom cannot assert a bound but it can weaken one away), and the
    decision's literal is carried by the D-0018 trace line instead. *)
-let citable what e =
-  match e with
-  | Decision l ->
-      invalid_arg
-        (Printf.sprintf
-           "Explanation.%s: a decision (%s) has no constraint id and cannot be cited. \
-            Weaken the term out of the row instead -- see explanation.ml's header."
-           what (Lit.to_string l))
-  | e -> e
+let refuse_decision what l =
+  invalid_arg
+    (Printf.sprintf
+       "Explanation.%s: a decision (%s) has no constraint id and cannot be cited. Weaken \
+        the term out of the row instead -- see explanation.ml's header."
+       what (Lit.to_string l))
+
+(* Inlined (M16-file-review-T4, D-0192): it is asked once per summand alldiff builds, and
+   was 1.5 % of 2011_cyclic-rcpsp_easy_6's samples as a call. *)
+let[@inline] citable what e = match e with Decision l -> refuse_decision what l | e -> e
 
 let cut e1 e2 c1 c2 =
+  let e1 = citable "cut" e1 and e2 = citable "cut" e2 in
   built
     (Cut
        {
-         e1 = citable "cut" e1;
-         e2 = citable "cut" e2;
+         e1;
+         e2;
          c1;
          c2;
          line = No_line;
-         hid = fresh_hid ();
+         hid = (if hashing () then cut_hash e1 e2 c1 c2 else 0);
        })
 
 let term coeff e = Term (coeff, citable "term" e)
@@ -628,9 +773,10 @@ let resolve parts =
   (match parts with
   | [] | [ _ ] -> invalid_arg "Explanation.resolve: at least two derivations to resolve"
   | _ -> ());
+  let parts = List.map (citable "resolve") parts in
   built
     (Resolve
-       { parts = List.map (citable "resolve") parts; line = No_line; hid = fresh_hid () })
+       { parts; line = No_line; hid = (if hashing () then resolve_hash parts else 0) })
 
 (* [Linear_term] and its readings (M8-bits-encoding-T2). The term is DECLARED when the
    bound it read is the declared one in its own direction, and then has no literal:
@@ -677,7 +823,14 @@ let combine summands divisor =
   (match summands with
   | [] -> invalid_arg "Explanation.combine: summands must be non-empty"
   | _ -> ());
-  built (Combine { summands; divisor; line = No_line; hid = fresh_hid () })
+  built
+    (Combine
+       {
+         summands;
+         divisor;
+         line = No_line;
+         hid = (if hashing () then combine_hash summands divisor else 0);
+       })
 
 let born : (int, int) Hashtbl.t = Hashtbl.create (if stats_on then 4096 else 1)
 
