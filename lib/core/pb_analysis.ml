@@ -806,11 +806,21 @@ let row_memo_bool (lits : Lit.t array) (p : Lit.t -> bool) : Lit.t -> bool =
   let m = row_memo lits (fun l -> if p l then 1 else 0) in
   fun l -> m l = 1
 
+(* M16-file-review-T3 (D-0191): the array is made with a STATIC literal and then filled,
+   never with one of the row's own. [Array.make] of more than 256 words whose initial
+   value is a young block runs a whole minor collection first (the runtime will not
+   create that many major-to-minor pointers at once), and a row's literals are young: a
+   combination or [Learned.of_pb_row] has just built them. A conflict row over a few
+   wide order-encoded terms is longer than that, so every analysis of one paid a minor
+   GC here, 35 % of 2019_fox-geese-corn's samples. [filler] is a constant the compiler
+   places outside the heap, and every cell is overwritten before the array is read. *)
+let filler : Lit.t = { Lit.v = Lit.Ge ("", 0); positive = true }
+
 let lits_array (row : Learned.t) : Lit.t array =
   match Learned.terms row with
   | [] -> [||]
-  | tm0 :: _ as terms ->
-      let a = Array.make (List.length terms) tm0.Learned.lit in
+  | terms ->
+      let a = Array.make (List.length terms) filler in
       List.iteri (fun i (tm : Learned.term) -> a.(i) <- tm.Learned.lit) terms;
       a
 
