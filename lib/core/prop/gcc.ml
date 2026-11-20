@@ -267,8 +267,9 @@
    Cost of a pass (M16-file-review-T2, D-0190)
    ---------------------------------------------------------------------------
 
-   Rule C and rules (a) and (b) are O(v n) for v cover values: per value, the scope's
-   variables that declare it, then COUNTS; the lists and the facts a push names are built
+   Rule C and rules (a) and (b) are O(sum over the v cover values of the variables that
+   declare each): per value, those variables, listed once at [make] ([declaring], since a
+   declared range never moves), then COUNTS; the lists and the facts a push names are built
    from the same snapshot by the same filters, only for a push. Rule A walks the run of
    cover values that starts at each lower end once, sums the capacities of its prefixes,
    and per (lower, upper) pair COUNTS the confined variables, O(P n) for P pairs; the lists
@@ -321,6 +322,11 @@ type t = {
      identity) writes the row once per level instead of once per push.  [deferred],
      because the rungs it cites exist only once the proof has started. *)
   hrows : (int * int * bool, Explanation.t) Hashtbl.t;
+  (* M16-file-review-T2 (D-0190): per cover value (by its index in [cov]), the indices of
+     the terms whose DECLARED range holds it, ascending. [declares] reads only the declared
+     bounds, which never move, so this is the list every pass used to filter out of the
+     scope once per value and per rule. *)
+  declaring : int array array;
 }
 
 let name = "global_cardinality"
@@ -356,7 +362,17 @@ let make store enc ~cover vars_x =
            })
          cover)
   in
-  { terms; cov; enc; hrows = Hashtbl.create 16 }
+  let declaring =
+    Array.map
+      (fun c ->
+        let ids = ref [] in
+        for i = Array.length terms - 1 downto 0 do
+          if terms.(i).decl_lo <= c.cv && c.cv <= terms.(i).decl_hi then ids := i :: !ids
+        done;
+        Array.of_list !ids)
+      cov
+  in
+  { terms; cov; enc; hrows = Hashtbl.create 16; declaring }
 
 (* ------------------------------------------------------------------------ snapshots *)
 
@@ -995,12 +1011,12 @@ let count_where p l = List.fold_left (fun n s -> if p s then n + 1 else n) 0 l
    same filters, so every push is what it was; a pass that pushes nothing (most of them)
    no longer builds four lists and the scope's facts per cover value. The facts are one
    value for both pushes, as before. *)
-let rule_c t store ~snaps ~caps ~apply =
-  List.iter
-    (fun k ->
+let rule_c t store ~dvs ~caps ~apply =
+  List.iteri
+    (fun j k ->
       let c = k.k_cov in
       let v = c.cv in
-      let dv = List.filter (fun s -> declares s v) snaps in
+      let dv = dvs.(j) in
       let may = c.cconst + count_where (holds_v v) dv in
       let must = c.cconst + count_where (fixed_at v) dv in
       let facts = lazy (scope_facts ~snaps:dv ~caps:[ k ]) in
@@ -1037,8 +1053,16 @@ let rule_c t store ~snaps ~caps ~apply =
 let pass t store =
   Propagator.count_pass ();
   let moved = ref false in
-  let snaps = Array.to_list (Array.map (snap_of store) t.terms) in
+  let snaps_arr = Array.map (snap_of store) t.terms in
+  let snaps = Array.to_list snaps_arr in
   let caps = Array.to_list (Array.map (csnap_of store) t.cov) in
+  (* Per cover value, the snapshots of the variables that declare it, in term order: what
+     [List.filter (fun s -> declares s v) snaps] gave, read off [t.declaring]. *)
+  let dvs =
+    Array.map
+      (fun ids -> Array.fold_right (fun i acc -> snaps_arr.(i) :: acc) ids [])
+      t.declaring
+  in
   (* [~ahead] is M7-T17's trigger (D-0082): rule A's capacity push sums a counting row
      per cover value of the interval, so its trace line is RUP only after its
      derivation and the push is made under [Store.deriving_ahead].
@@ -1069,7 +1093,7 @@ let pass t store =
         moved := true
     | Store.Unchanged -> ()
   in
-  rule_c t store ~snaps ~caps ~apply:(fun ~ahead -> apply ~ahead);
+  rule_c t store ~dvs ~caps ~apply:(fun ~ahead -> apply ~ahead);
   let cover_at = Int_tbl.create 16 in
   List.iter (fun k -> Int_tbl.replace cover_at k.k_cov.cv k) caps;
   let los = List.sort_uniq Int.compare (List.map (fun s -> s.s_lo) snaps) in
@@ -1086,11 +1110,11 @@ let pass t store =
   in
   (* M7-T24, rules (a) and (b): one cover value at a time, before the interval search,
      because each is O(n) per value and they are what a ROUTED one-value count needs. *)
-  List.iter
-    (fun k ->
+  List.iteri
+    (fun j k ->
       let c = k.k_cov in
       let v = c.cv in
-      let dv = List.filter (fun s -> declares s v) snaps in
+      let dv = dvs.(j) in
       let is_fixed = fixed_at v in
       let holds = holds_v v in
       (* M16-file-review-T2 (D-0190): counted first, as in [rule_c]; the lists are built
