@@ -109,7 +109,11 @@
    half of 2018 soccer's (D-0186 has the profiles). The rule: membership in such a set
    is asked of a [Lit_tbl], keyed through [Lit.equal] itself, so the predicate is the
    one the list scan applied, and every list the old code returned is still built, in
-   the same order, so no caller sees a difference. *)
+   the same order, so no caller sees a difference.
+
+   And a walk made at every node allocates nothing per element: the staged order of an
+   annotated search ([sequence]) gathers a phase's live variables in one pass into a
+   scratch array and copies out the live prefix, the array [Array.of_seq] gave. *)
 
 module Lit = Baguette_proof.Lit
 module Writer = Baguette_proof.Writer
@@ -1187,19 +1191,37 @@ let sequence ?(fallback = spec_order) (phases : phase list) : order =
      what it always did with [unfixed store] -- solution if empty, [full] otherwise, which
      reaches [fallback] with that same array. A variable outside the store is never a
      candidate of [unfixed], so it is not live here either. *)
+  let scratch = ref [||] in
   let staged store =
     let n = Store.n_vars store in
     let is_live v =
       let i = Var.to_int v in
       i >= 0 && i < n && not (Domain.is_fixed (Store.get store v))
     in
+    (* D-0186: the live variables of a phase, in the phase's order, as one pass into a
+       scratch array and one copy of the live prefix. It was [Array.of_seq (Seq.filter
+       ...)], a [Seq] cell, a closure call and a list cell per variable at every node:
+       8 % of 2024 monitor-placement's instructions, whose phase is every Boolean of
+       the model. The array is the one [Array.of_seq] built. The scratch is this order's
+       own and is copied out before [p_var] or [p_val] runs, so nothing they do can
+       see it. *)
     let rec go = function
       | [] -> None
       | ph :: rest -> (
-          let sub = Array.of_seq (Seq.filter is_live (Array.to_seq ph.p_vars)) in
-          match Array.length sub with
+          let vars = ph.p_vars in
+          let len = Array.length vars in
+          if Array.length !scratch < len then scratch := Array.make len (Var.of_int 0);
+          let buf = !scratch in
+          let k = ref 0 in
+          for j = 0 to len - 1 do
+            let v = vars.(j) in
+            if is_live v then (
+              buf.(!k) <- v;
+              incr k)
+          done;
+          match !k with
           | 0 -> go rest
-          | _ -> Some (ph.p_val store (ph.p_var store sub)))
+          | k -> Some (ph.p_val store (ph.p_var store (Array.sub buf 0 k))))
     in
     go phases
   in
