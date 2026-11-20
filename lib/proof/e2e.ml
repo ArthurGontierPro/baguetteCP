@@ -175,8 +175,29 @@ let implies (cl, cd) (bl, bd) =
   in
   cd - loss >= bd
 
-let saturate (cl, cd) =
-  if SM.exists (fun _ a -> a > cd) cl then (true, (SM.map (fun a -> min a cd) cl, cd))
+(* T3b: [implies], or, failing it, after WEAKENING away every literal the target lacks and
+   saturating again (member's big-M row over the two hulls' overlap, where the loss of the
+   guard's big-M coefficient alone exceeds the slack; D-0180's bridge did the same). The
+   rpn suffix of the weakening, "" when none is needed. *)
+let rec implied_or_weakened (cl, cd) (bl, bd) =
+  if implies (cl, cd) (bl, bd) then Some ""
+  else if cd < 1 then None
+  else
+    let removed = SM.filter (fun l _ -> not (SM.mem l bl)) cl in
+    if SM.is_empty removed then None
+    else
+      let d = cd - SM.fold (fun _ a acc -> acc + a) removed 0 in
+      let _, w = saturate (SM.filter (fun l _ -> SM.mem l bl) cl, d) in
+      if snd w >= 1 && implies w (bl, bd) then
+        Some
+          (String.concat ""
+             (List.map (fun (l, _) -> " " ^ var_of l ^ " w") (SM.bindings removed))
+          ^ " s")
+      else None
+
+and saturate (cl, cd) =
+  if cd > 0 && SM.exists (fun _ a -> a > cd) cl then
+    (true, (SM.map (fun a -> min a cd) cl, cd))
   else (false, (cl, cd))
 
 let row_text lits d =
@@ -209,7 +230,20 @@ type spec =
   | Eq_iff of (operand * int) * operand * operand (* equals_iff tuple x y *)
   | Ne_iff of (operand * int) * operand * operand (* not_equals_iff tuple x y *)
   | Lin_le_iff of (operand * int) * (int * operand) list * int
-(* lin_less_equal_iff tuple (a x ...) c *)
+  (* lin_less_equal_iff tuple (a x ...) c *)
+  (* T5 (T3b, D-0188), the translator's keywords for the globals *)
+  | Element of int list * operand * operand (* element (a1 ... an) (i 1) z *)
+  | Gcc of operand list * int list * operand list
+    (* gacglobalcardinality (x ...) (v ...) (c ...) *)
+  | Array_max of operand list * operand (* array_max (x ...) y *)
+  | Array_min of operand list * operand (* array_min (x ...) y *)
+  | Max of operand * operand * operand (* max x y z, z = max(x, y) *)
+  | Min of operand * operand * operand (* min x y z *)
+  | Inverse of operand list * int * operand list * int
+    (* inverse ((f ...) fmin) ((g ...) gmin) *)
+  | Member of (operand * operand) list * operand
+(* (c_k equals_if (b_k = 1) x_k y) per position k, from 1, then (c or ((b_k = 1) ...)
+   (1 = 1)): [(b_k, x_k)] and y *)
 
 (* A cake row in cake's own form (ilp_to_pb's PGe): sum_e c_e * B_{X_e} over the integer
    entries (one per occurrence, as cake keeps them), plus flag terms, >= deg. *)
@@ -259,13 +293,36 @@ let negs axs = List.map (fun (a, x) -> (-a, x)) axs
 
 (* A candidate: the rpn of the `pol` that derives it ([plain] when it is a bare citation),
    its literal form, and the baguette variables it names. *)
-type cand = { rpn : string; plain : bool; cl : int SM.t; cd : int; key : string }
+type cand = {
+  rpn : string;
+  plain : bool;
+  cl : int SM.t;
+  cd : int;
+  key : string;
+  needs : string list; (* the @S labels its rpn cites, written when first cited *)
+}
+
+(* How a family's rows are pinned beyond the generic candidates (D-0188 section 2): the
+   cake rows to LINEARISE at a target clause, chosen from what the clause says. *)
+type fam =
+  | Generic
+  | Element_fam of { idx : string; n : int } (* the index variable, the array's length *)
+  | Choice_fam of { choices : string list; al1 : string }
+    (* maxmin: each operand's choice row [r], and the at-least-one over the flags *)
+  | By_var of (string, string list) Hashtbl.t
+(* member (a selector -> its two equals_if rows), inverse (a variable -> its range rows) *)
 
 type con = {
   cname : string;
   cands : (string, cand list) Hashtbl.t;
   by_min : (string, cand list) Hashtbl.t; (* its least variable (or "") -> candidates *)
   aux_seen : (string, unit) Hashtbl.t;
+  rows : (string, crow) Hashtbl.t; (* cake's rows for it, by label *)
+  mutable fam : fam;
+  mutable pending : string list; (* its @S labels not written yet *)
+  binary : (string, int * string) Hashtbl.t;
+      (* member's and inverse's binary clause rows pinned so far: a literal -> (id, the
+         other literal), to resolve a candidate's extra literal away ([resolve]) *)
 }
 
 type t = {
@@ -284,6 +341,8 @@ type t = {
   value_of : (string, int) Hashtbl.t; (* ladder literal name -> its value *)
   holes : (string, string * int list) Hashtbl.t;
       (* a variable with a set domain -> its `in` constraint's name and allowed values *)
+  pending_s : (string, string) Hashtbl.t;
+      (* an @S label -> its line, until a pin cites it (D-0188 section 3.2) *)
   mutable n_holes_vars : int;
   mutable cur : con option;
   mutable objective : (string * int) option;
@@ -292,6 +351,7 @@ type t = {
   mutable n_ia_rung : int;
   mutable n_ia_exact : int;
   mutable n_ia_w : int;
+  mutable n_ia_lin : int; (* of which through a linearised cake row (T3b) *)
   mutable n_rup : int;
   mutable n_subst : int;
   mutable n_sel : int;
@@ -313,6 +373,7 @@ let create path =
     q = Hashtbl.create 64;
     value_of = Hashtbl.create 256;
     holes = Hashtbl.create 8;
+    pending_s = Hashtbl.create 64;
     n_holes_vars = 0;
     cur = None;
     objective = None;
@@ -320,6 +381,7 @@ let create path =
     n_ia_rung = 0;
     n_ia_exact = 0;
     n_ia_w = 0;
+    n_ia_lin = 0;
     n_rup = 0;
     n_subst = 0;
     n_sel = 0;
@@ -436,7 +498,7 @@ let find_var t x =
    cake's rows for one constraint (the contract, per keyword)
    --------------------------------------------------------------------------- *)
 
-let cake_rows t name spec =
+let rec cake_rows t name spec =
   let lab tag = Printf.sprintf "c[%s][%s]" name tag in
   let width x =
     let v = find_var t x in
@@ -580,8 +642,149 @@ let cake_rows t name spec =
                           (bits_imply f (mk_constraint_ge 1 xa.(j) (-1) xa.(i) 1));
                       ]
                     else []))))
+  (* cp_to_ilp_arrayScript.sml, cencode_element with offset 1 (the translator's `(i 1)`):
+     the index's eq atoms (cencode_full_eq, not rows here), cencode_proper_index's
+     `lb`/`ub` when the index's range leaves 1..n, and per position p from 0 the two
+     halves of `z = a_p`, guarded by the index's eq atom of value 1 + p *)
+  | Element (arr, i, z) ->
+      let n = List.length arr in
+      let lb, ub =
+        match i with
+        | Var x ->
+            let v = find_var t x in
+            (v.lo, v.hi)
+        | Const k -> (k, k)
+      in
+      let one_ge a y b =
+        match y with Var vy -> ([ (a, vy) ], b) | Const cy -> ([], b - mul a cy)
+      in
+      (if lb < 1 then [ plain (lab "lb") (one_ge 1 i 1) ] else [])
+      @ (if ub > n then [ plain (lab "ub") (one_ge (-1) i (1 - n - 1)) ] else [])
+      @ List.concat
+          (List.mapi
+             (fun p a ->
+               let e = "~" ^ eq_atom (i, 1 + p) in
+               [
+                 row (lab (Printf.sprintf "%dge" p)) (bits_imply e (mk_ge (Const a) z));
+                 row (lab (Printf.sprintf "%dle" p)) (bits_imply e (mk_le (Const a) z));
+               ])
+             arr)
+  (* cp_to_ilp_countingScript.sml, cencode_global_cardinality with clsd = F: per cover
+     value v_j (j from 0) cencode_bitsum of the eq atoms [x_i = v_j] against c_j
+     (encode_bitsum, ilp_to_pb's >= form), labelled `<j>_ge` and `<j>_le` *)
+  | Gcc (xs, cover, counts) ->
+      if List.length cover <> List.length counts then
+        refuse "global_cardinality with %d cover values and %d counts" (List.length cover)
+          (List.length counts);
+      List.concat
+        (List.mapi
+           (fun j (v, cnt) ->
+             let pos = List.map (fun x -> (1, eq_atom (x, v))) xs
+             and neg = List.map (fun x -> (-1, eq_atom (x, v))) xs in
+             let ge = lab (Printf.sprintf "%d_ge" j)
+             and le = lab (Printf.sprintf "%d_le" j) in
+             match cnt with
+             | Var y -> [ row ge ([ (-1, y) ], pos, 0); row le ([ (1, y) ], neg, 0) ]
+             | Const k -> [ row ge ([], pos, k); row le ([], neg, -k) ])
+           (List.combine cover counts))
+  (* cencode_array_max / cencode_array_min: a choice flag x[N][i] per operand
+     (cbimply_var: `[f]` and `[r]`), the other half as `<i>le` (resp. `<i>ge`), and the
+     at-least-one over the flags *)
+  | Array_max (xs, y) | Array_min (xs, y) ->
+      let is_max = match spec with Array_max _ -> true | _ -> false in
+      let flag i = Printf.sprintf "x[%s][%d]" name i in
+      let choice x = if is_max then mk_ge x y else mk_le x y
+      and other x = if is_max then mk_le x y else mk_ge x y in
+      List.concat
+        (List.mapi
+           (fun i x ->
+             [
+               row (flag i ^ "[f]") (imply_bit (flag i) (choice x));
+               row (flag i ^ "[r]") (bits_imply ("~" ^ flag i) (choice x));
+             ])
+           xs)
+      @ List.mapi
+          (fun i x ->
+            plain
+              (lab (Printf.sprintf "%d%s" i (if is_max then "le" else "ge")))
+              (other x))
+          xs
+      @ [ row (lab "al1") ([], List.mapi (fun i _ -> (1, flag i)) xs, 1) ]
+  (* cp_to_ilp_primScript.sml, cencode_max / cencode_min: two flags with `[r]` only
+     (cvar_imply), the other half as `lle`/`rle` (resp. `lge`/`rge`), the at-least-one *)
+  | Max (x, y, z) | Min (x, y, z) ->
+      let is_max = match spec with Max _ -> true | _ -> false in
+      let c, o = if is_max then ("ge", "le") else ("le", "ge") in
+      let fl = Printf.sprintf "b[%s][l%s]" name c
+      and fr = Printf.sprintf "b[%s][r%s]" name c in
+      let choice a = if is_max then mk_ge a z else mk_le a z
+      and other a = if is_max then mk_le a z else mk_ge a z in
+      [
+        row (fl ^ "[r]") (bits_imply ("~" ^ fl) (choice x));
+        row (fr ^ "[r]") (bits_imply ("~" ^ fr) (choice y));
+        plain (lab ("l" ^ o)) (other x);
+        plain (lab ("r" ^ o)) (other y);
+        row (lab "al1") ([], [ (1, fl); (1, fr) ], 1);
+      ]
+  (* cp_to_ilp_channelingScript.sml, cencode_inverse (X = f from fmin, Y = g from gmin):
+     the eq atoms, mk_bounds of each f into g's indices and of each g into f's, labelled
+     `X_<k>_lb|ub`, `Y_<k>_lb|ub` (k from 1), and per (i, j) from 0 encode_bvar_eq of
+     [f_i = gmin + j] and [g_j = fmin + i], labelled `<i+1>_<j+1>ge|le` *)
+  | Inverse (f, fmin, g, gmin) ->
+      let n = List.length f in
+      if n <> List.length g then
+        refuse "inverse over arrays of lengths %d and %d" n (List.length g);
+      let one_ge a y b =
+        match y with Var vy -> ([ (a, vy) ], b) | Const cy -> ([], b - mul a cy)
+      in
+      let bounds side xs off =
+        List.concat
+          (List.mapi
+             (fun k x ->
+               [
+                 plain (lab (Printf.sprintf "%s_%d_lb" side (k + 1))) (one_ge 1 x off);
+                 plain
+                   (lab (Printf.sprintf "%s_%d_ub" side (k + 1)))
+                   (one_ge (-1) x (-(off + n - 1)));
+               ])
+             xs)
+      in
+      bounds "X" f gmin @ bounds "Y" g fmin
+      @ List.concat
+          (List.mapi
+             (fun i x ->
+               List.concat
+                 (List.mapi
+                    (fun j y ->
+                      let a = eq_atom (x, gmin + j) and b = eq_atom (y, fmin + i) in
+                      [
+                        row
+                          (lab (Printf.sprintf "%d_%dge" (i + 1) (j + 1)))
+                          ([], [ (1, a); (-1, b) ], 0);
+                        row
+                          (lab (Printf.sprintf "%d_%dle" (i + 1) (j + 1)))
+                          ([], [ (1, b); (-1, a) ], 0);
+                      ])
+                    g))
+             f)
+  (* the translator's member: cencode_equal with SOME (INL (b_k, Equal, 1)) per position,
+     `ge` and `le` guarded by the eq atom, then T4's `or` over the selectors' tuples *)
+  | Member (bxs, y) ->
+      List.concat
+        (List.mapi
+           (fun k (b, x) ->
+             let e = "~" ^ eq_atom (b, 1) and nk = Printf.sprintf "%s_%d" name (k + 1) in
+             [
+               row (Printf.sprintf "c[%s][ge]" nk) (bits_imply e (mk_ge x y));
+               row (Printf.sprintf "c[%s][le]" nk) (bits_imply e (mk_le x y));
+             ])
+           bxs)
+      @ cake_rows t name (Or (List.map (fun (b, _) -> (b, 1)) bxs, (Const 1, 1)))
 
-(* The substituted row's literal form and the line that derives it. *)
+(* The substituted row's literal form and the label of the line that derives it. The line
+   is NOT written here (D-0188 section 3.2): it waits in [pending_s] until a pin cites it
+   ([ensure_s]), or a `rup` pin of the same constraint needs the whole database ([flush_s]).
+   Returns the label it waits under, if any. *)
 let substitute t (r : crow) =
   let per = Hashtbl.create 4 in
   List.iter
@@ -619,12 +822,25 @@ let substitute t (r : crow) =
   in
   let cite =
     if rpn = [] then "@" ^ r.label
-    else (
-      t.n_subst <- t.n_subst + 1;
-      emit t "@S[%s] pol @%s %s ;" r.label r.label (String.concat " " rpn);
-      Printf.sprintf "@S[%s]" r.label)
+    else
+      let lab = Printf.sprintf "@S[%s]" r.label in
+      Hashtbl.replace t.pending_s lab
+        (Printf.sprintf "%s pol @%s %s ;" lab r.label (String.concat " " rpn));
+      lab
   in
   (cite, lit_form (SM.filter (fun _ c -> c <> 0) vm, d))
+
+let ensure_s t lab =
+  match Hashtbl.find_opt t.pending_s lab with
+  | None -> ()
+  | Some line ->
+      Hashtbl.remove t.pending_s lab;
+      t.n_subst <- t.n_subst + 1;
+      emit t "%s" line
+
+let flush_s t (c : con) =
+  List.iter (ensure_s t) (List.rev c.pending);
+  c.pending <- []
 
 (* The baguette variables a literal form names (selectors and flags left out). *)
 let key_of t lits =
@@ -730,6 +946,38 @@ let rec q_clause t g which =
       | _ -> refuse "atom %s has no clause %s" g which));
   lab
 
+(* T3b (D-0188 section 2): an INTERIOR eq atom e = [x = v], lo < v < hi, as the order
+   indicator x_ge_v - x_ge_(v+1). Two clauses, each one `pol` of the atom's own definition
+   row and its two ge atoms' clauses (the bridge's @Ep/@Em, D-0180, derived by `rup` there):
+
+     @Ep[e]  e + ~x_ge_v + x_ge_(v+1) >= 1    = [f] + Qn(ge_v) + Qp(ge_(v+1))
+     @Em[e]  ~e + x_ge_v + ~x_ge_(v+1) >= 2   = ([r] + Qp(ge_v) + Qn(ge_(v+1)) + @L) / 2
+
+   In variable form they are e >= x_ge_v - x_ge_(v+1) and e <= x_ge_v - x_ge_(v+1), so a
+   candidate's c * e is replaced exactly by adding c * @Em, and c * ~e by c * @Ep. *)
+let indicator t g ~pos =
+  let lab = Printf.sprintf "@E%s[%s]" (if pos then "p" else "m") g in
+  if not (Hashtbl.mem t.q lab) then (
+    Hashtbl.replace t.q lab ();
+    t.n_q <- t.n_q + 1;
+    let z, k =
+      match parse_atom g with
+      | Some (true, z, "eq", k) -> (z, k)
+      | _ -> refuse "not an interior eq atom: %s" g
+    in
+    let v = find_var t (Hashtbl.find t.cake_names z) in
+    let ge kk = Printf.sprintf "i[%s][ge%d]" z kk in
+    if pos then
+      emit t "%s pol @%s[f] %s + %s + ;" lab g
+        (q_clause t (ge k) "n")
+        (q_clause t (ge (k + 1)) "p")
+    else
+      emit t "%s pol @%s[r] %s + %s + @L[%s] + 2 d ;" lab g
+        (q_clause t (ge k) "p")
+        (q_clause t (ge (k + 1)) "n")
+        (v.lit (k + 1)));
+  lab
+
 let to_var (cl, cd) =
   SM.fold
     (fun l c (m, d) ->
@@ -752,7 +1000,18 @@ let swap_atoms t (rpn, (cl, cd)) =
               vadd row c (var_form lits d)
             in
             match (atom_value t a, positive) with
-            | Interior, _ -> row
+            | Interior, true ->
+                let _, z, _, k = a in
+                let v = find_var t (Hashtbl.find t.cake_names z) in
+                clause (indicator t g ~pos:false)
+                  [ (1, "~" ^ g); (1, v.lit k); (1, "~" ^ v.lit (k + 1)) ]
+                  2
+            | Interior, false ->
+                let _, z, _, k = a in
+                let v = find_var t (Hashtbl.find t.cake_names z) in
+                clause (indicator t g ~pos:true)
+                  [ (1, g); (1, "~" ^ v.lit k); (1, v.lit (k + 1)) ]
+                  1
             | T, true -> clause ("~" ^ g) [ (1, "~" ^ g) ] 0
             | F, false -> clause g [ (1, g) ] 0
             | T, false -> clause (q_clause t g "t") [ (1, g) ] 1
@@ -768,6 +1027,144 @@ let is_flag t l =
   let v = var_of l in
   not (Hashtbl.mem t.owner v || Hashtbl.mem t.aux v || parse_atom v <> None)
 
+(* ---------------------------------------------------------------------------
+   T3b (D-0188 section 2): a cake row LINEARISED at a target clause [bl] (literal form).
+   Each integer B_z of the row, net coefficient a, is cancelled by
+
+     a > 0:  a * @A2[z_ge_w] when bl holds z_ge_w   (-B + K z_ge_w >= 1 - w), else
+             a * @i[Z][ub]                           (-B >= -hi)
+     a < 0: |a| * @A1[z_ge_w] when bl holds ~z_ge_w  (B + M ~z_ge_w >= w), else
+            |a| * @i[Z][lb]                          (B >= lo)
+
+   and what is left, the flags and those literals, is saturated, then cake's atoms are
+   replaced by baguette's literals ([swap_atoms]). That is element's `[i = p] -> z >= w`:
+   `@c[N][<p>le] + @A2[z_ge_w]`, saturated, is `~[i = 1 + p] + z_ge_w >= 1`, and the
+   eq atom's @Ep turns `~[i = 1 + p]` into the index's two ladder literals. None when bl
+   holds two literals of z of the polarity a needs, or when the result is trivial.
+   --------------------------------------------------------------------------- *)
+let linearise t (r : crow) bl =
+  let per = Hashtbl.create 4 in
+  List.iter
+    (fun (k, x) ->
+      Hashtbl.replace per x (Option.value (Hashtbl.find_opt per x) ~default:0 + k))
+    r.ints;
+  let lits_of x pos =
+    SM.fold
+      (fun l _ acc ->
+        if Hashtbl.find_opt t.owner (var_of l) = Some x && l.[0] <> '~' = pos then
+          l :: acc
+        else acc)
+      bl []
+  in
+  let step acc x =
+    match acc with
+    | None -> None
+    | Some (rpn, terms, d) -> (
+        let a = Hashtbl.find per x and v = find_var t x in
+        if a = 0 then acc
+        else if a > 0 then
+          match lits_of x true with
+          | [ l ] ->
+              let w = Hashtbl.find t.value_of l in
+              Some
+                ( Printf.sprintf "%s @A2[%s] %d * +" rpn l a,
+                  (mul a (ck (v.bmax - w + 1)), l) :: terms,
+                  d + mul a (1 - w) )
+          | [] ->
+              Some
+                (Printf.sprintf "%s @i[%s][ub] %d * +" rpn v.cx a, terms, d - mul a v.hi)
+          | _ -> None
+        else
+          let a = -a in
+          match lits_of x false with
+          | [ l ] ->
+              let p = var_of l in
+              let w = Hashtbl.find t.value_of p in
+              Some
+                ( Printf.sprintf "%s @A1[%s] %d * +" rpn p a,
+                  (mul a (ck (w - v.bmin)), l) :: terms,
+                  d + mul a w )
+          | [] ->
+              Some
+                (Printf.sprintf "%s @i[%s][lb] %d * +" rpn v.cx a, terms, d + mul a v.lo)
+          | _ -> None)
+  in
+  match
+    List.fold_left step
+      (Some ("@" ^ r.label, [], r.deg))
+      (List.sort_uniq compare (List.map snd r.ints))
+  with
+  | None -> None
+  | Some (rpn, terms, d) ->
+      let _, (cl, cd) = saturate (lit_form (var_form (r.flags @ terms) d)) in
+      if cd < 1 then None
+      else
+        (* saturated at a degree d > 1 with every coefficient d, it is a clause divided by d *)
+        let rpn, cl, cd =
+          if cd > 1 && SM.for_all (fun _ a -> a = cd) cl then
+            (Printf.sprintf "%s s %d d" rpn cd, SM.map (fun _ -> 1) cl, 1)
+          else (rpn ^ " s", cl, cd)
+        in
+        let rpn, lf = swap_atoms t (rpn, (cl, cd)) in
+        let sat, lf = saturate lf in
+        Some ((if sat then rpn ^ " s" else rpn), lf)
+
+(* The cake rows each family LINEARISES for a target clause, chosen from what the clause
+   names; see [fam]. *)
+let family name spec =
+  let lab tag = Printf.sprintf "c[%s][%s]" name tag in
+  let by_var pairs =
+    let tbl = Hashtbl.create 16 in
+    List.iter
+      (fun (x, ls) ->
+        match x with
+        | Var x ->
+            Hashtbl.replace tbl x (Option.value (Hashtbl.find_opt tbl x) ~default:[] @ ls)
+        | Const _ -> ())
+      pairs;
+    By_var tbl
+  in
+  match spec with
+  | Element (arr, Var x, z) ->
+      if z = Var x then refuse "array_int_element whose result is its own index";
+      Element_fam { idx = x; n = List.length arr }
+  | Array_max (xs, _) | Array_min (xs, _) ->
+      Choice_fam
+        {
+          choices = List.mapi (fun i _ -> Printf.sprintf "x[%s][%d][r]" name i) xs;
+          al1 = lab "al1";
+        }
+  | Max _ | Min _ ->
+      let c = match spec with Max _ -> "ge" | _ -> "le" in
+      Choice_fam
+        {
+          choices =
+            [
+              Printf.sprintf "b[%s][l%s][r]" name c; Printf.sprintf "b[%s][r%s][r]" name c;
+            ];
+          al1 = lab "al1";
+        }
+  | Member (bxs, _) ->
+      by_var
+        (List.mapi
+           (fun k (b, _) ->
+             let nk = Printf.sprintf "%s_%d" name (k + 1) in
+             (b, [ Printf.sprintf "c[%s][ge]" nk; Printf.sprintf "c[%s][le]" nk ]))
+           bxs)
+  | Inverse (f, _, g, _) ->
+      let side s xs =
+        List.mapi
+          (fun k x ->
+            ( x,
+              [
+                lab (Printf.sprintf "%s_%d_lb" s (k + 1));
+                lab (Printf.sprintf "%s_%d_ub" s (k + 1));
+              ] ))
+          xs
+      in
+      by_var (side "X" f @ side "Y" g)
+  | _ -> Generic
+
 let begin_con t ~name spec =
   let c =
     {
@@ -775,14 +1172,21 @@ let begin_con t ~name spec =
       cands = Hashtbl.create 8;
       by_min = Hashtbl.create 8;
       aux_seen = Hashtbl.create 2;
+      rows = Hashtbl.create 16;
+      fam = Generic;
+      pending = [];
+      binary = Hashtbl.create 16;
     }
   in
+  let crows = cake_rows t name spec in
+  List.iter (fun (r : crow) -> Hashtbl.replace c.rows r.label r) crows;
+  c.fam <- family name spec;
   let push tbl k cand =
     Hashtbl.replace tbl k (Option.value (Hashtbl.find_opt tbl k) ~default:[] @ [ cand ])
   in
-  let add rpn (cl, cd) =
+  let add ?(needs = []) rpn (cl, cd) =
     let cand =
-      { rpn; plain = not (String.contains rpn ' '); cl; cd; key = key_of t cl }
+      { rpn; plain = not (String.contains rpn ' '); cl; cd; key = key_of t cl; needs }
     in
     push c.cands cand.key cand;
     push c.by_min
@@ -792,14 +1196,23 @@ let begin_con t ~name spec =
       cand;
     cand
   in
+  (* element's rows are all LINEARISED for the clause that cites them ([pin]); offering
+     their substitutions too would cost a ladder-wide row each and is never cited *)
+  let generic = match c.fam with Element_fam _ -> [] | _ -> crows in
   let base =
     List.map
       (fun r ->
         let cite, lf = substitute t r in
-        swap_atoms t (cite, lf))
-      (cake_rows t name spec)
+        let needs =
+          if Hashtbl.mem t.pending_s cite then (
+            c.pending <- cite :: c.pending;
+            [ cite ])
+          else []
+        in
+        (needs, swap_atoms t (cite, lf)))
+      generic
   in
-  let cands = List.map (fun (rpn, lf) -> add rpn lf) base in
+  let cands = List.map (fun (needs, (rpn, lf)) -> add ~needs rpn lf) base in
   (* T4: resolve each candidate once against a FLAG CLAUSE of this constraint (a clause
      with a flag), on a flag the candidate has with the other polarity *)
   let clauses =
@@ -819,7 +1232,7 @@ let begin_con t ~name spec =
               (fun k ->
                 if k != cand && SM.mem (neg_lit l) k.cl then
                   ignore
-                    (add
+                    (add ~needs:(cand.needs @ k.needs)
                        (Printf.sprintf "%s %s %d * +" cand.rpn k.rpn a)
                        (lit_form
                           (vadd (to_var (cand.cl, cand.cd)) a (to_var (k.cl, k.cd))))))
@@ -828,7 +1241,11 @@ let begin_con t ~name spec =
     cands;
   t.cur <- Some c
 
-let end_con t = t.cur <- None
+let end_con t =
+  (match t.cur with
+  | Some c -> List.iter (Hashtbl.remove t.pending_s) c.pending
+  | None -> ());
+  t.cur <- None
 
 (* ---------------------------------------------------------------------------
    Pins
@@ -888,6 +1305,121 @@ let define t (s, f, p) =
   emit t "@D1[%s] red +1 ~%s +1 %s >= 1 : %s -> %s ;" s s fl s fl;
   emit t "@D2[%s] red +1 %s +1 %s >= 1 : %s -> %s ;" s s (neg_lit fl) s fl
 
+let is_clause (bl, bd) = bd = 1 && SM.for_all (fun _ a -> a = 1) bl
+
+(* T3b: a candidate's literal l the target lacks, RESOLVED against a binary clause of the
+   same constraint already pinned, `~l + m` with m in the target: adding it a times (a the
+   candidate's coefficient on l) replaces l by m. member's big-M row over the overlap
+   needs it where the candidate runs past the overlap, as D-0180's bridge found (its @R
+   rows, a `rup` each; here they are baguette's own pinned rows, cited). *)
+let resolve (con : con) (cl, cd) bl =
+  let b = Buffer.create 16 in
+  let row =
+    SM.fold
+      (fun l a row ->
+        if SM.mem l bl then row
+        else
+          match
+            List.find_opt
+              (fun (_, m) -> SM.mem m bl)
+              (Hashtbl.find_all con.binary (neg_lit l))
+          with
+          | Some (id, m) ->
+              Printf.bprintf b " @c%d %d * +" id a;
+              vadd row a (to_var (SM.add (neg_lit l) 1 (SM.singleton m 1), 1))
+          | None -> row)
+      cl
+      (to_var (cl, cd))
+  in
+  if Buffer.length b = 0 then None
+  else
+    let sat, lf = saturate (lit_form row) in
+    Some ((Buffer.contents b ^ if sat then " s" else ""), lf)
+
+(* The family's own derivation of a clause row (D-0188 section 2), as the rpn of one `pol`
+   whose result implies it syntactically, or None. *)
+let special t (con : con) bl =
+  let lin labels =
+    List.find_map
+      (fun lab ->
+        match Hashtbl.find_opt con.rows lab with
+        | None -> None
+        | Some r -> (
+            match linearise t r bl with
+            | Some (rpn, lf) ->
+                Option.map (fun wk -> rpn ^ wk) (implied_or_weakened lf (bl, 1))
+            | None -> None))
+      labels
+  in
+  match con.fam with
+  | Generic -> None
+  | Element_fam { idx; n } -> (
+      (* the guard is `x <> bp` over the index's ladder (Encoding.ne_clause): read bp *)
+      let v = find_var t idx in
+      let il =
+        SM.fold
+          (fun l _ acc ->
+            if Hashtbl.find_opt t.owner (var_of l) = Some idx then l :: acc else acc)
+          bl []
+      in
+      let value l = Hashtbl.find t.value_of (var_of l) in
+      let bp =
+        match il with
+        | [] when v.lo = v.hi -> Some v.lo
+        | [ l ] when l.[0] <> '~' && value l = v.lo + 1 -> Some v.lo
+        | [ l ] when l.[0] = '~' && value l = v.hi -> Some v.hi
+        | [ a; b ] ->
+            let ng, ps = if a.[0] = '~' then (a, b) else (b, a) in
+            if ng.[0] = '~' && ps.[0] <> '~' && value ps = value ng + 1 then
+              Some (value ng)
+            else None
+        | _ -> None
+      in
+      match bp with
+      | None -> None
+      | Some bp ->
+          let p = bp - 1 in
+          let lab tag = Printf.sprintf "c[%s][%s]" con.cname tag in
+          lin
+            (if p >= 0 && p < n then
+               [ lab (Printf.sprintf "%dle" p); lab (Printf.sprintf "%dge" p) ]
+             else [ lab "lb"; lab "ub" ]))
+  | By_var tbl ->
+      lin
+        (SM.fold
+           (fun l _ acc ->
+             match Hashtbl.find_opt t.owner (var_of l) with
+             | Some x -> acc @ Option.value (Hashtbl.find_opt tbl x) ~default:[]
+             | None -> acc)
+           bl [])
+  | Choice_fam { choices; al1 } -> (
+      (* maxmin's `m >= v -> OR x_i >= v`: every operand's choice row linearised at the
+         clause, each leaving `~f_i + ...`, summed with the at-least-one over the flags *)
+      let parts =
+        List.map
+          (fun lab ->
+            Option.bind (Hashtbl.find_opt con.rows lab) (fun r -> linearise t r bl))
+          choices
+      in
+      if List.exists Option.is_none parts then None
+      else
+        let parts = List.map Option.get parts in
+        let sum =
+          List.fold_left (fun acc (_, lf) -> vadd acc 1 (to_var lf)) (SM.empty, 0) parts
+        in
+        match Hashtbl.find_opt con.rows al1 with
+        | None -> None
+        | Some a ->
+            let sum = vadd sum 1 (var_form a.flags a.deg) in
+            let _, lf = saturate (lit_form sum) in
+            if not (implies lf (bl, 1)) then None
+            else
+              let rpns = List.map fst parts in
+              Some
+                (Printf.sprintf "%s %s @%s + s" (List.hd rpns)
+                   (String.concat " " (List.map (fun r -> r ^ " +") (List.tl rpns)))
+                   al1))
+
 let pin t ~id (c : Opb.constr) =
   let body = Opb.constr_body c in
   let bl, bd = lits_of_row c in
@@ -906,6 +1438,15 @@ let pin t ~id (c : Opb.constr) =
               | _ -> None)
           | _ -> None)
       | _ -> None
+  in
+  let memo = ref None in
+  let sp con =
+    match !memo with
+    | Some r -> r
+    | None ->
+        let r = special t con bl in
+        memo := Some r;
+        r
   in
   match (rung, t.cur) with
   | Some (`Rung hi), _ ->
@@ -927,6 +1468,14 @@ let pin t ~id (c : Opb.constr) =
       t.n_rup <- t.n_rup + 1;
       emit t "@c%d rup %s ;" id body
   | _, None -> refuse "row @c%d (%s) belongs to no covered constraint" id body
+  | _, Some con when is_clause (bl, bd) && sp con <> None ->
+      let rpn = Option.get (sp con) in
+      t.nw <- t.nw + 1;
+      t.n_ia_w <- t.n_ia_w + 1;
+      t.n_ia_lin <- t.n_ia_lin + 1;
+      emit t "@W[%d] pol %s ;" t.nw rpn;
+      emit t "@c%d ia %s : @W[%d] ;" id body t.nw;
+      emit t "del id @W[%d] ;" t.nw
   | _, Some con -> (
       let undefined =
         SM.fold
@@ -958,27 +1507,50 @@ let pin t ~id (c : Opb.constr) =
               (Option.value (Hashtbl.find_opt con.by_min v) ~default:[]))
           ("" :: vs)
       in
-      let rec go = function
+      (* [relaxed] (T3b): a candidate weakened, or resolved against the constraint's own
+         binary clauses, then weakened; tried only after every candidate failed strictly,
+         and only for a row with no selector to define (a weakening could drop the very
+         literal a selector's orientation is chosen by) *)
+      let rec go ~relaxed = function
         | [] -> None
         | cand :: rest ->
             let rec over = function
-              | [] -> go rest
-              | try_def :: more ->
+              | [] -> go ~relaxed rest
+              | try_def :: more -> (
                   let (sl, sd), rpn, made = swap t (cand.cl, cand.cd) ~try_def in
                   let sat, (sl, sd) = saturate (sl, sd) in
-                  if implies (sl, sd) (bl, bd) then Some (cand, rpn, sat, made)
-                  else over more
+                  if not relaxed then
+                    if implies (sl, sd) (bl, bd) then Some (cand, rpn, sat, made)
+                    else over more
+                  else
+                    let rpn = rpn ^ if sat then " s" else "" in
+                    match implied_or_weakened (sl, sd) (bl, bd) with
+                    | Some wk -> Some (cand, rpn ^ wk, false, made)
+                    | None -> (
+                        match resolve con (sl, sd) bl with
+                        | Some (rr, lf) -> (
+                            match implied_or_weakened lf (bl, bd) with
+                            | Some wk -> Some (cand, rpn ^ rr ^ wk, false, made)
+                            | None -> over more)
+                        | None -> over more))
             in
             over tries
       in
-      let found =
-        match go exact with
+      let search ~relaxed =
+        match go ~relaxed exact with
         | Some r -> Some r
         | None when exact = [] || SM.exists (fun l _ -> Hashtbl.mem t.aux (var_of l)) bl
           ->
-            go (subset ())
+            go ~relaxed (subset ())
         | None -> None
       in
+      let found =
+        match search ~relaxed:false with
+        | Some r -> Some r
+        | None when undefined = [] -> search ~relaxed:true
+        | None -> None
+      in
+      Option.iter (fun (cand, _, _, _) -> List.iter (ensure_s t) cand.needs) found;
       match found with
       | Some (cand, "", false, None) when cand.plain ->
           t.n_ia_exact <- t.n_ia_exact + 1;
@@ -991,10 +1563,25 @@ let pin t ~id (c : Opb.constr) =
           emit t "@c%d ia %s : @W[%d] ;" id body t.nw;
           emit t "del id @W[%d] ;" t.nw
       | None ->
+          (* unit propagation may need any of this constraint's substitutions *)
+          flush_s t con;
           t.n_rup <- t.n_rup + 1;
           emit t "@c%d rup %s ;" id body)
 
-let row t ~id c = pin t ~id c
+(* member's and inverse's binary clauses, recorded once pinned (for [resolve]) *)
+let row t ~id c =
+  pin t ~id c;
+  match t.cur with
+  | Some ({ fam = By_var _; _ } as con) -> (
+      match lits_of_row c with
+      | bl, 1 when SM.cardinal bl = 2 && SM.for_all (fun _ a -> a = 1) bl -> (
+          match SM.bindings bl with
+          | [ (a, _); (b, _) ] ->
+              Hashtbl.add con.binary a (id, b);
+              Hashtbl.add con.binary b (id, a)
+          | _ -> ())
+      | _ -> ())
+  | _ -> ()
 
 (* ---------------------------------------------------------------------------
    The objective (T8, D-0182): cake writes `min: k * B` (k = 1 minimise, -1 maximise),
