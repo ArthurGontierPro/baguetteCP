@@ -23103,6 +23103,17 @@ clause, a true or unwanted ge literal weakened away (`w`), saturated. Measured o
 instance, same load: 7.8 s, the same verdict. It changes D-0187's T2/T4 prefixes too (no verdict
 may change: the lane checks it), which is why it is recorded here. Revert: commit `74d1746` alone.
 
+**3.5. (Added during the work, with commit `16f0aa3`, before the series that measures it.) A
+candidate over a SUPERSET of a row's variables, weakened.** Found on
+`2021_steiner-systems_steiner_t3_k3_N11` with `74d1746`: 603 MB of its 650 MB proof is the prefix,
+with 327 836 `rup` pins, almost all `array_bool_and`'s binary clauses `~r \/ x_i` (155 554 such
+constraints). cake's `pos` row `sum x_j + n ~r >= n` implies each of them after weakening the
+other `x_j` and saturating, but D-0187's search only offers candidates over the row's own
+variables or a subset. In the relaxed pass (section 6), a constraint with at most 8 candidates now
+also offers those over a superset. The prefix alone: 13 448 `rup` pins left, elaborated in 54 s
+(the whole chain's elaboration with `74d1746` was 1 634 s). T4 only, `--e2e` only. Revert: commit
+`16f0aa3` alone.
+
 ### 4. How to revert
 
 Revert the commits prefixed `M14-e2e-verification-T3b:` on branch `wave55-e2e3b` (or their merge).
