@@ -23,7 +23,6 @@ of it to every session and stopping at a broken line before it even reached the 
 | M11-complexity-T15 (SPIKE, explanations as a hash-consed DAG; a prototype branch, nothing merged without a decision) | `lib/core/explanation.ml`, `lib/core/justify.ml`, `lib/core/trace.ml`, propagators' explanation construction as needed, on branch `wave55-dag` only | agent-dag (`wave55-dag`) | 2026-11-20 |
 | M11-complexity-T16 (the release build) | `Makefile`, `dune-workspace` or `dune` profile stanzas, `scripts/compare_run.sh` and the bench harnesses (binary path only), `bench/challenge/README.md`, `scripts/README.md` | agent-release (`wave55-release`) | 2026-11-20 |
 | M11-complexity-T17 (learned clauses that cannot prune) | `lib/core/search.ml`, `lib/core/learned.ml`, `lib/core/retention.ml`, `lib/core/engine.ml` (learned wakes only), `lib/core/prop/clause.ml`, `lib/core/prop/pb.ml`, their unit tests | agent-learnprop (`wave55-learnprop`) | 2026-11-20 |
-| M14-e2e-verification-T1 (feasibility study, no solver code) | a new decision record; notes and scratch files under `/scratch/arthur/wave55-e2e-runs/` and `/cluster/arthur/baguette-results/wave55-e2e/` | agent-e2e (`wave55-e2e`) | 2026-11-20 |
 
 ## Cross-session requests
 
@@ -624,8 +623,16 @@ section 1. Shares are inclusive, of the whole run.
 | D-0161 request 1 (`Alldiff.snap_of` builds derivation inputs at every snapshot) | agent-snap (`wave54-snap`) | 2026-11-19 | **D-0165.** `snap_of` keeps the interior holes only; `gone` rebuilds the below/above runs inside the `Deferred` from the four frozen bounds; root flags and `hole_cite` through `Store.at_root`. Every model artefact and every lane line equal to the base `45b8a3c7`. Cyclic 10 000 nodes `--no-proof` -25.6 % instructions (157.0 -> 116.7 G), `--proof` -5.2 %; black-hole_20 -6.6 % / -2.3 %. |
 | M11-complexity-T13 | agent-thunk (`wave55-thunk`) | 2026-11-20 | **D-0168.** A thunk keeps its line (id, level) once written and drops its tree; the memo lets go of the cells of the nodes the closure built (a forcing records the operands it did not build, and only those thunks are forced again at release); `derive_ahead` emits the thunk. bh9 `--proof` node 40 (alldiff base): live 2 041 -> 658 MB, RSS 3 646 -> 1 777 MB, -0.7 % instructions, `.pbp` md5 equal; lane default runs -28.7 % (rcpsp_11) to +0.35 %. Gate on `a8762eb` (binary `40638833`): `make check` rc 0 (4 312 ok), 198 x 4 artefacts equal to `214e74d1`, lane 301/301, debug 289/289, scaling ok |
 | M11-complexity-T14 (the cost per node against Gecode) | agent-pernode2 (`wave55-pernode`) | 2026-11-20 | **D-0169.** codes-cp QR48 XOR, same tree as Gecode: Gecode 28 k instr and 57 propagations per node, baguette 1 572 k and 413 runs. Four byte-identical cuts in `engine.ml`, `store.ml`, `pb.ml`, `clause.ml` (run bracket without `Fun.protect` and no walk after a quiet run; wake sort in a scratch array; literal status off the record; seed heap without closures): -12.3 % / -15.8 % instr per node without proof, -7.5 % / -10.7 % with, every proof and `--stats` line identical. Gate on `c531645` (merges main `42feb27`): `make check` rc 0, 200 models x 4 artefacts equal to gate 71's `492638b9`, lanes 301/301 and 289/289, scaling ok and re-baselined (`26240af`), binary `c308784d`. Then merged main `f41498a` (thunk, disjoint files). Two proposals for the user (D-0169 section 5) |
+| M14-e2e-verification-T1 (feasibility study) | agent-e2e (`wave55-e2e`) | 2026-11-20 | **D-0174 (STUDY).** The verified encoder is CakeML's `cake_pb_cp` (`.scp` in, OPB over two's-complement bits out, HOL4 theorem `full_encode_sem_concl`), prebuilt in gitlab.com/MIAOresearch/software/cakepb `cp/`. Route: baguette's proof re-derives its own `.opb` from cake's at its head (atoms, `B = l + S`, ladder, substituted rows, pins), search proof unchanged. `bench/e2e_spike/run.sh`: 4 models VERIFIED by `cake_pb_cp`, a faked transcription bug refused. ROADMAP M14-T2..T8 |
 
 ## Handoff notes
+
+### 2026-11-20 (agent-e2e, `wave55-e2e`): M14-e2e-verification-T1, D-0174 (STUDY)
+
+The verified encoder exists and runs: `cake_pb_cp` (CakeML `examples/pseudo_bool/cp_encoding`, prebuilt in the
+public CakePB repo's `cp/`), already used by GCS. `bench/e2e_spike/` runs FlatZinc twin → baguette → a prefix that
+re-derives baguette's `.opb` from cake's → `veripb --elaborate` → `cake_pb_cp`, VERIFIED on 4 root-level models.
+Next is T2 (a FlatZinc → `.scp` translator and the lane). T3 needs a user decision on a second naming contract.
 
 ### 2026-11-20 (orchestrator): gates 71 and 72 green; alldiff, snap, thunk and pernode merged
 
