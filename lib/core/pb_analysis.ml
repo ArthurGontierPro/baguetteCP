@@ -326,6 +326,21 @@ let falsified_before_scan store ~at (l : Lit.t) =
           let lo, hi = bounds_before store ~at v in
           if l.Lit.positive then hi < k else lo >= k)
 
+(* [Store.var_named store] that remembers the last name it answered, by the name's
+   physical identity: a row asks about one variable's literals in a run, all carrying the
+   one string the store named it with, and the hash is then paid once per run. Any other
+   string, equal or not, is looked up. D-0157 built it into [falsified_before]; D-0191
+   gives the analysis's [falsified_at] memo the same lookup (see [falsified_at_with]). *)
+let var_named_last store =
+  let last = ref None in
+  fun name ->
+    match !last with
+    | Some (n, v) when n == name -> v
+    | _ ->
+        let v = Store.var_named store name in
+        last := Some (name, v);
+        v
+
 (* M11-complexity-T4 (D-0140 P1, D-0144): the same answer as [falsified_before_scan]
    above, case for case, from [v]'s bound history in O(log moves) instead of the two trail
    walks of [bounds_before]. [Reduce] and [Ladder] ask it four to five times per term per
@@ -354,15 +369,7 @@ let falsified_before_scan store ~at (l : Lit.t) =
    [Ladder.instantiate]'s binary search asks it of one variable's atoms O(log w) times in
    a row. A name is a name: the same string answers the same variable. *)
 let falsified_before store ~at =
-  let last = ref None in
-  let var_named name =
-    match !last with
-    | Some (n, v) when n == name -> v
-    | _ ->
-        let v = Store.var_named store name in
-        last := Some (name, v);
-        v
-  in
+  let var_named = var_named_last store in
   fun (l : Lit.t) ->
     let r =
       match l.Lit.v with
@@ -451,12 +458,17 @@ let falsified_at_scan store (l : Lit.t) =
    [Store.var_support] returns unless the declared bound already falsified (the scan's
    "position 0" cases, a moverless [v] included). An empty trail is the scan's own
    [none] and is kept. The scan stays one wave as the [BAGUETTE_DEBUG] cross-check. *)
-let falsified_at store (l : Lit.t) =
+(* [falsified_at] with the name lookup handed in: [analyse] passes [var_named_last],
+   because the rows it reads put a wide variable's order literals side by side, all
+   under one name. M16-file-review-T3 (D-0191): [Store.var_named] there was 5.5 % of
+   2019_fox-geese-corn's samples. The lookup returns what [Store.var_named] returns, so
+   the position is the same. *)
+let falsified_at_with ~var_named store (l : Lit.t) =
   let at =
     match l.Lit.v with
     | Lit.Eq _ | Lit.Bit _ -> Store.no_support
     | Lit.Ge (name, k) -> (
-        match Store.var_named store name with
+        match var_named name with
         | None -> Store.no_support
         | Some v ->
             let d = Store.get store v in
@@ -473,6 +485,8 @@ let falsified_at store (l : Lit.t) =
   Debug.check "M6-T14: falsified_at agrees with the trail scan" (fun () ->
       at = falsified_at_scan store l);
   at
+
+let falsified_at store l = falsified_at_with ~var_named:(Store.var_named store) store l
 
 (* The decision level at which [l] became falsified; 0 when it is falsified by the
    declared domain or not falsified at all. *)
@@ -914,11 +928,12 @@ let analyse ?(stop = fun () -> false) ?(bits = Ladder.no_bits) store (c : Store.
      holds at each doubling: a third of the memo's cost on 2019_fox-geese-corn, whose
      conflict rows are hundreds of literals long. Nothing reads it before then. *)
   let fat_memo = ref (Lit_tbl.create 64) in
+  let var_named = var_named_last store in
   let falsified_at store l =
     match Lit_tbl.find_opt !fat_memo l with
     | Some i -> i
     | None ->
-        let i = falsified_at store l in
+        let i = falsified_at_with ~var_named store l in
         Lit_tbl.add !fat_memo l i;
         i
   in
