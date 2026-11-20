@@ -19,10 +19,12 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M11-complexity-T8 | `lib/core/prop/element.ml`, `test/unit/test_prop.ml` (element section) | agent-element (`wave53-element`) | 2026-11-19 |
 | M7-T33 (and `Alldiff.excl`'s proof cost, D-0145) | `lib/core/prop/alldiff.ml`, `lib/proof/encoding.ml` (additive only), new `test/models/`, `test/unit/test_prop.ml` (alldiff section) | agent-alldiff (`wave53-alldiff`) | 2026-11-19 |
-| M11-complexity-T9 | `lib/core/learned.ml`, `lib/core/pb_analysis.ml`, `lib/core/ladder.ml`, `lib/core/reduce.ml`, their unit tests | agent-learned (`wave53-learned`) | 2026-11-19 |
-| M11-complexity-T10 | `lib/core/justify.ml`, `lib/core/explanation.ml` (additive functions only, the type unchanged), `test/unit/test_justify.ml` | agent-memo (`wave53-memo`) | 2026-11-19 |
+| M7-T28 (`member`) | new `lib/core/prop/member.ml`, `lib/flatzinc/compile.ml` (member dispatch), `mznlib/`, new `test/models/`, `test/unit/test_prop.ml` (member section) | agent-member (`wave53-member`) | 2026-11-19 |
+| D-0161 request 1 (`Alldiff.snap_of` builds derivation inputs at every snapshot) | `lib/core/prop/alldiff.ml` ON TOP OF `wave53-alldiff` (merges after it), `test/unit/test_prop.ml` (alldiff section) | agent-snap (`wave54-snap`) | 2026-11-19 |
+| merge of M7-T33 and D-0161 request 1 (D-0167 item 1) | merges `wave53-alldiff` then `wave54-snap` on branch `wave55-merge`; `bench/diff/corpus.tsv` (lot-sizing's budget), `bench/diff/reference*` (re-record) | agent-merge (`wave55-merge`) | 2026-11-20 |
+| M7-T34 (`member` without width-proportional rows) | on `wave53-member`'s files: `lib/core/prop/member.ml`, `lib/flatzinc/compile.ml` (member dispatch), `mznlib/`, `test/models/member_*`, `test/unit/test_prop.ml` (member section) | agent-member2 (`wave55-member`) | 2026-11-20 |
+| M11-complexity-T13 (drop a forced explanation once written) | `lib/core/explanation.ml` (the `thunk` record gains fields, D-0167 item 6), `lib/core/justify.ml`, `lib/core/pb_analysis.ml` (`cited_ids` only), `test/unit/test_justify.ml`, `docs/ARCHITECTURE.md` §4 | agent-thunk (`wave55-thunk`) | 2026-11-20 |
 
 ## Cross-session requests
 
@@ -396,6 +398,58 @@ artefacts are unchanged by every M6-T22 fix, so the numbers below are comparable
    nodes in 300 s, on main and on this branch alike. A stamp or hash dedup (regular.ml's
    [add_key] shape) is the obvious fix. Owner: M11-complexity (element.ml is unclaimed).
 
+### 2026-11-19 — one finding from M11-complexity-T8's measurements, for the owner of alldiff.ml (agent-element, `wave53-element`, D-0155)
+
+1. **`Alldiff.remover_index` walks the whole trail per hole, and is now black-hole's top cost**
+   (`lib/core/prop/alldiff.ml` ~line 298, claimed by agent-alldiff for M7-T33). With
+   `Element.add_facts` fixed, `perf record` on `2011_black-hole_10` (the native `inverse`) puts
+   about 70 % of the run in that walk (`Alldiff.go` 26 %, `caml_apply2` 17 %,
+   `Store.trail_entry` 17 %, `Int.equal` 9 %). Its comment says `Store.entry` carries no level,
+   but since M6-T15 the entry carries its trail position `pos`, so
+   `Option.map (fun e -> e.Store.pos) (Store.remover store ~before:(Store.trail_length store)
+   ~var value)` answers the same question in O(log) and is the same entry (the walk's
+   predicate is `Store.remover_scan`'s, which `Store.remover` is checked against under
+   `BAGUETTE_DEBUG`). element.ml's two copies of the walk were replaced that way in D-0155,
+   every artefact unchanged.
+
+### 2026-11-19 — M9-no-proof-T4 (D-0161): proof-only work `--no-proof` still does, in files that row did not hold (agent-noproof-audit, `wave53-noproof`)
+
+Measured with `perf record --call-graph fp` (switch `baguette-fp`) under `--no-proof`, D-0161
+section 1. Shares are inclusive, of the whole run.
+
+1. **`Alldiff.snap_of` builds derivation inputs at every snapshot** (`lib/core/prop/alldiff.ml`,
+   agent-alldiff's). `gone_of` lists every declared value below and above the window
+   (`Gone_below`, `Gone_above`, two `range` lists per variable per pass) and
+   `established_at_root` reads both supports. Only derivations read them (`alo_over`,
+   `hall_cancels`, `target_cancel`, `overshoot_cancel`, all inside `prune_expl`'s `Deferred`).
+   The reason reads only the `Gone_hole` entries (`hall_facts`). Under `--no-proof` at 10 000
+   nodes this is 39.4 % of `2011_cyclic-rcpsp_easy_6`'s instructions (`gone_of` 37.3,
+   `established_at_root` 2.2), built and never read. The below and above runs are functions of
+   `s_dlo`, `s_lo`, `s_hi` and `s_dhi`, which the snapshot already holds, so the `Deferred` can
+   rebuild them when it is forced. The root flags need the supports as they were, so they stay
+   eager or go through a `Store.history` (D-0124). Proof mode gains the same instructions. The
+   holes' `hole_cite` walk is D-0155's request above, and it is 87 % of `2011_black-hole_10`.
+2. **The root lemmas are built in `compile.ml` and dropped under `--no-proof`**
+   (`lib/flatzinc/compile.ml`, agent-member's). Since D-0161 `Encoding.start_proof` mints their
+   ids under the null writer without reading them and drops the list. `post_regular` still
+   builds every B(i, q', R) (`List.filter` over the predecessors, `Opb.clause`), which is 8.9 %
+   of `2012_nonogram_non_awful_5`'s startup instructions under `--no-proof`, and `post_inverse`'s
+   stage 2 builds its pairwise lemmas, 2.8 % of `2011_black-hole_10`'s run. The ids must still
+   be minted, because alldiff cites the pairwise ones (D-0126 rule 2), so the door is a count.
+   compile.ml has no writer, and `Encoding.row_sink` is `Discard_rows` for every run without
+   `--proof` as well, whose temporary proof does write the lemmas. So the change needs a
+   no-proof signal at compile time, for example an ambient set by `bin/main.ml` beside
+   `row_sink`, read by a lazy `add_root_lemma`/`add_cited_lemma` that forces its constraint only
+   when a proof will be written and counts it otherwise.
+3. **`Justify.ensure_lit` has no null-writer guard** (`lib/core/justify.ml`, agent-memo's). Its
+   two callers in `search.ml` (a decision's atom) are guarded since D-0161 and `validate_lits`
+   is reached only past the existing guards, so nothing pays for it today. One line at its head,
+   `if not (Writer.is_null ctx.writer)`, would keep a future caller from minting atoms for the
+   null writer. The memo and the claim index need nothing. Under the null writer `emit`,
+   `emit_stating`, `emit_concluding` and `emit_rup_clause_lazy` return before `memoized` and
+   `state_clause`, so both tables stay empty and `wipe_level` walks nothing. `Justify.*` is at
+   most 0.05 % on all ten instances.
+
 ## Completed
 
 | Task | Session | Date | Summary |
@@ -555,6 +609,14 @@ artefacts are unchanged by every M6-T22 fix, so the numbers below are comparable
 | M7-T28 (first steps; the row stays IN PROGRESS) and M7-T29 (the gcc half) | agent-globals (`wave49-globals`) | 2026-11-18 | **D-0146.** `regular` native (`lib/core/prop/regular.ml`, DOMAIN, every pruning one `rup`, backward chains as root lemmas via `Encoding.add_root_lemma`, mznlib `fzn_regular`/`fzn_regular_set`, 3 mutation lanes, 4 models); the closed gcc forms pinned (std already routed them) with the implied sum; a repeated gcc variable copied by `Builder.split_gcc_repeats`; `inverse` design record and probes (§7). Gate: make check rc 0, 189 models, peak RSS 97 056 kB; diff lane 232/232; Challenge numbers in D-0146 §6 |
 | M7-T32 | agent-flags (`wave51-flags`) | 2026-11-19 | **D-0150.** `tools/baguette.msc` declares `-i -f -n -p -r -s -t -v` (and `--proof` as an extra flag); `bin/main.ml` maps them onto existing options: `-t` ms to `--time-limit`, `-s` = `--stats` plus one `%%%mzn-stat` block on stdout, `-f` = `--search alternate --restarts luby --phase-saving` (warned: not proof-safe until M7-T31), `-r`/`-p` accepted. Every improving solution was already printed with one `soli` each (verified through `minizinc`). Every solution of a satisfaction model (`-a`, `-n N > 1`) refused, exit 3. SPEC §2.2 amended; 30 checks in `test_endtoend`; default artefacts byte-identical on 192 models |
 | M7-T28 (continuation: regular's reasons, inverse; the row stays IN PROGRESS) | agent-globals2 (`wave51-globals2`) | 2026-11-19 | **D-0151.** `regular`'s reasons on the LETTERS (tails recurse into the dead flags' own lines; probes on 60 scenes first): learned clauses 321 -> 80 literals on average over 40 nonograms/pentominoes, node rate x2.6 without the proof, complete 19 -> 20 of 65 with it, all VERIFIED. `inverse` native: `lib/core/prop/inverse.ml` (channel, CHECKING), mznlib `fzn_inverse`, stage 2 all_different from CITED root lemmas (`Encoding.add_cited_lemma`, alldiff's lemma-row hook), 2 mutation lanes, 3 models; Challenge 70 reach the route, 3 -> 3 complete (held by `Element.add_facts` and alldiff's factless conflicts, both filed). `member` designed with probes. Gate on `d1df37f`: `make -k check` rc 2 from the 5 pre-existing test_retention checks only (main fails the same), 195 models passed, peak RSS 100 104 kB; 181/195 models byte-identical to main (the 14 diffs: inverse x3, regular_opt/unsat .pbp); diff lane 184/184 default runs equal (fifo/lbd diffs identical to main's, strategy configs without references on this base) |
+| M11-complexity-T8 | agent-element (`wave53-element`) | 2026-11-19 | **D-0155.** `Element.add_facts` hashed and linear (same list as the old fold, oracle-tested), the index-hole trail walks through `Store.remover`, live and carried-value membership through an int table, hole facts once per pass. black-hole_10 168 G to 52 G instructions; every model's artefacts equal to main |
+| M13-codes-leads (roadmap rows only) | codes-cp session | 2026-11-19 | Two TODO (to study) rows from the codes-cp phase-1 benchmark: T1 a linear relaxation as a presolve step, T2 symmetry detection with dominance-justified breaking. No code. |
+| M11-complexity-T10 | agent-memo (`wave53-memo`) | 2026-11-19 | **D-0158.** The memo's identical copies are identical LINES, so an entry cannot be shared without changing the bytes. `justify.ml` gains a share mode, OFF by default (`BAGUETTE_MEMO_SHARE=1`), that answers a miss with an identical line already on the page at or below the current level: cable's proof 1 887 -> 114 MB, cyclic's 2 023 -> 322 MB, rcpsp_11 +14.5 % instructions, search identical. Share lane: 85/301 runs differ in the `.pbp` hash and the `pol`/`pol-tokens` counters only (`pol` lines -32 % over the lane), 274/274 proofs VERIFIED. Off, every byte is main's. Gate on `95759c5`: `make check` rc 0, 198 models x 4 artefacts equal to `64ec63e0`, lane 301/301, debug 289/289, binary `59368b5f`. The default is the user's call (D-0158 section 5) |
+| M9-no-proof-T4 | agent-noproof-audit (`wave53-noproof`) | 2026-11-19 | **D-0161.** Six guards behind the null writer in `Search` (`record_improving`'s literal family and bits bridge, the SAT conclusion, `ensure_decision_atom`, `Learn.supports`) and in `start_proof`'s root lemmas (`mint_root_lemma_ids`). openshop `--no-proof` -42.6 % instructions, RSS 341 -> 93 MB; proved runs byte-identical. Gate on `658c785` (binary `fd3d9635`): `make check` rc 0 (4 253 ok, 198 models, 100 MB), 198 models x 4 artefacts equal to `d7a1ef00`, lane 301/301, debug 289/289, scaling ok |
+| M7-T29 (the `fplen` half; M7-T29 DONE) | agent-fplen (`wave54-fplen`) | 2026-11-19 | **D-0162 (PROPOSED).** No fix: `connect__0086_02` is the one connect instance with a positive floor-plan cost, and `fplen`/`fpwid` are bounded only below and minimised, so the model's solution set is unbounded in them and SPEC 2.1 admits no bound. A dominance cap from the objective is drafted in D-0162 §3 for the user. Measured on a hand-capped `.fzn` (binary `c72c48e2`): order encoding passed 51 GB of `.opb` in 5 min (stopped), `--bits-above 10000` stopped on the 16 GB heap budget at 15 min 25 s, no solution. One `test_flatzinc` reject case pins the shape. Gate: `make check` rc 0, 198 models, peak RSS 100 MB |
+| M9-no-proof-T5 | agent-keepproof (`wave54-keepproof`) | 2026-11-19 | **D-0163.** A run without `--proof` keeps its proof: `default_proof_prefix` in `bin/main.ml` gives `./foo.opb`/`.pbp` for `DIR/foo.fzn`, and `./baguette-proof` for MiniZinc's `mznfile*.fzn` (named on stderr); the next run overwrites. `tools/baguette.msc` gains `--no-proof`. Proofless runs fixed in `test_endtoend` (M7-T32), `check_unlimited.sh`, `check_mznlib.sh`, `learning_baseline.sh`, `corpus_run.sh` NO_PROOF=1 (still writes, unchecked); `diff_lane.sh` refuses proof=no without `--no-proof`. Files beyond the claim: `scripts/check_unlimited.sh`, `mznlib/test/check_mznlib.sh`, `bench/learning_baseline.sh`; `compare_run.sh` needed nothing. |
+| M11-complexity-T11 | agent-heap (`wave54-heap`, fix `wave54-heapfix`) | 2026-11-19 | **D-0164.** `Element.index_hole_clause` defers the puncher's literals; bh4 `--no-proof` 40 nodes 6.04 -> 1.72 GB RSS, -26.9 % instructions, `--proof` 11.66 -> 7.96 GB; 215 of 215 artefacts equal. The proof-side holders stay open (D-0164 §7) |
+| M11-complexity-T12 | agent-live (`wave54-live`) | 2026-11-19 | **D-0166.** Byte-identical shrink of four proof-side holders: claim index keys packed (333 -> 76 MB), memo as a chained table (342 -> 244 MB), audit keeps the origin alone, shared per `Combine` shape (325 -> 132 MB), `by_lvl` as runs (189 -> 118 MB). bh9 `--proof` node 40 (alldiff base): live 2 660 -> 2 041 MB, RSS 4 346 -> 3 648 MB, -2.2 % instructions, `.pbp` md5 equal. Gate on `c46952f` (binary `214e74d1`): `make check` rc 0 (4 289 ok), 198 x 4 artefacts equal to `22620b60`, lane 301/301, debug 289/289, scaling ok. alldiff's forced derivations (1.16 GB) and the never-hit memo entries are the user's call (D-0166 §5) |
 
 ## Handoff notes
 
@@ -565,6 +627,158 @@ one selector per position, BOUND-form rows (D-0151's value form measured short),
 pruning except a value of y two holes exclude, derived ahead (I-X10 `Needs_derivation`). Challenge:
 35 of 40 reach it, complete 1 -> 1, no answer changed; the rows' width cost and its lever are D-0159
 §5. Gate on `30ce66a` green; nothing to re-record at merge.
+### 2026-11-19 night (orchestrator): gate 70 green; the state for the morning -- READ THIS FIRST
+
+Gate 70 (`dcb40f1`, merge wave54-live, D-0166, binary `214e74d1`) against gate 64's `d7a1ef00`:
+`make check` rc 0 (4 289 ok, 198 models, 99 MB), 198 models x 4 artefacts equal, lane 301/301,
+debug 289/289, scaling ok. Since the move to the node, main gained (gates 65 to 70, all green,
+every `--proof` artefact byte-identical, nothing re-recorded): D-0158 memo share mode (off),
+D-0161 the `--no-proof` guards, D-0162 `fplen` a correct refusal (PROPOSED), D-0163 the default
+keeps the proof, D-0164 element's heap per node, D-0166 the proof-side live memory.
+
+**Finished, waiting to merge, in this order:** `wave53-alldiff` (M7-T33, D-0156; re-record cyclic
+x6 and lot-sizing x12 at merge), then `wave54-snap` (D-0165, `snap_of` lazy, cyclic `--no-proof`
+-25.6 %, gated against alldiff's tip; delete its claim row on main at merge). `wave53-member`
+(D-0159) as before.
+
+**Waiting for the user:** lot-sizing [activity] over the lane's 4 GB cap with alldiff (D-0156 §7:
+raise this line's cap, skip it, cut its budget, or hold the merge); `member` (D-0159 §5); the memo
+share mode's default (D-0158 §5); D-0162 §3's objective-dominance sentence (recommended: no);
+D-0163 §6 the proof's directory, MiniZinc's `./baguette-proof.*`, silent overwrite; D-0166 §5
+releasing the forced alldiff trees (1.16 GB on bh9) through a field in `Explanation`'s thunk
+(option B, an `Explanation.t` change). Also seen: the openshop checker panics on alldiff's
+`--update` pass, on main's own proof (D-0156 §7, not investigated).
+
+### 2026-11-19 night (agent-live, `wave54-live`): M11-complexity-T12, D-0166
+
+Four proof-side tables keep less per line, every byte the same (`justify.ml`, `writer.ml`): bh9 `--proof` node 40
+live 2 660 -> 2 041 MB, gate green on `c46952f`, ready to merge (it does not need wave53-alldiff). Left for
+the user (D-0166 §5): alldiff's forced trees, 1.16 GB, need a field on `Explanation`'s thunk (option B).
+
+### 2026-11-19 night (orchestrator): D-0164 merged, gate 69 green
+
+Gate 69 (`1668f43`, merge wave54-heapfix, `Element.index_hole_clause` lazy, binary `22620b60`)
+against gate 64's `d7a1ef00`: `make check` rc 0 (4 279 ok, 198 models, 99 MB), 198 models x 4
+artefacts equal, lane 301/301, debug 289/289, scaling ok. On main itself (without M7-T33),
+`2013_black-hole_4 --no-proof --time-limit 60`: 13 nodes on both gate 68's `b4a16e86` and gate
+69's binary, same counters, peak RSS 575 -> 189 MB (`/scratch/arthur/heapfix-main/`). Main still
+stops at 13 nodes there because of `Alldiff.remover_index`, which wave53-alldiff fixes.
+
+### 2026-11-19 night (orchestrator): gates 67 and 68 green; M9-no-proof-T5 merged
+
+Gate 67 (`ba44dfa`, merge wave54-fplen, binary `a52448f2`) and gate 68 (`375d45b`, merge
+wave54-keepproof, D-0163, binary `b4a16e86`), against gate 64's `d7a1ef00`, both with `--proof`:
+`make check` rc 0 (4 267 and 4 279 ok, 198 models, ~100 MB), 198 models x 4 artefacts equal, lane
+301/301, debug 289/289, scaling ok, nothing re-recorded. Gate 68 also looked for proofs written
+since the clone outside `_build`: only `test/out/` (the model tests' own output, gitignored), none
+in the root. A run without `--proof` now keeps `./<model>.opb`/`.pbp`; the directory, MiniZinc's
+fixed `./baguette-proof.*` and the silent overwrite wait for the user (D-0163 §6).
+
+### 2026-11-19 (agent-keepproof, `wave54-keepproof`): M9-no-proof-T5, D-0163
+
+A run without `--proof` now writes and keeps `./<model>.opb`/`.pbp` in the cwd (MiniZinc: `./baguette-proof`, named on stderr), overwriting a previous run's; the rule is `default_proof_prefix` in `bin/main.ml`, and the DIRECTORY is still the user's to confirm (D-0163 §6).
+Gate: `make check` 4 278 ok, 198 models with `--proof` byte-identical to main's `d7a1ef00` (binary `b4a16e86`), lane 301/301, debug 289/289, scaling ok, no stray `.opb`/`.pbp` in the clone.
+`*.opb`/`*.pbp` are gitignored: look for strays with `git status --short --ignored` or `find`, never a plain `git status`. `Discard_rows` now means `--no-proof` only, which answers D-0161 §6's compile.ml request for a no-proof signal.
+
+### 2026-11-19 night (orchestrator, in screen on fataepyc-06): memo, noproof and fplen merged; gates 65, 66 green
+
+Gate 65 (`d3ab9b7`, merge wave53-memo, D-0158, share mode OFF, binary `c72c48e2`) and gate 66
+(`38c7625`, merge wave53-noproof, D-0161, binary `a52448f2`), each against gate 64's `d7a1ef00`:
+`make check` rc 0 (4 266 ok, 198 models, ~100 MB), 198 models x 4 artefacts equal, lane 301/301,
+debug 289/289, scaling ok. Nothing re-recorded. Merge order changed from the move note: alldiff
+waits for the user's lot-sizing [activity] decision (D-0156 §7), so memo and noproof went first.
+wave54-fplen (M7-T29 DONE, D-0162 PROPOSED: `fplen` is a correct refusal; a test pins it) merged
+after them, gate 67 on it. bin_packing_load (the user's question): none of the 48 refusals is the
+global; every rc 5 is the 8 GB heap budget on wide objectives and sums (gbac's sum of squared load
+deviations, mapping's communication cost), and `--bits-above 64` runs all four tried (RSS 9-17 GB
+-> 1.3-3.5 GB, gbac_UD3 0 -> 15 solutions). Report: `/cluster/arthur/baguette-results/binpack-probe/REPORT.md`.
+
+### 2026-11-19 (agent-fplen, `wave54-fplen`): M7-T29's `fplen` half, D-0162 (PROPOSED)
+
+No solver change. `fplen` is a correct refusal, because the model bounds it only from below and minimises it, so no sound inference
+bounds it. D-0162 §3 drafts the objective-dominance sentence the user would have to accept, and §4-§5 show that even capped the
+instance dies on memory (51 GB of `.opb` on the order encoding, heap budget on bits). Recommendation there is to leave it refused.
+
+### 2026-11-19 (agent-noproof-audit, finished by the orchestrator): M9-no-proof-T4, D-0161
+
+Six guards put the proof-only work of `Search` and `Encoding.start_proof`'s root lemmas behind the
+null writer: openshop under `--no-proof` -42.6 % instructions, RSS 341 -> 93 MB, proved runs
+byte-identical to main. Gate on `658c785` green (4 253 ok, 198 models, lane 301/301, debug 289/289,
+scaling ok). Left for the owners: alldiff's `snap_of` (39.4 % of cyclic under `--no-proof`),
+compile.ml's root lemmas, `Justify.ensure_lit`'s guard (the three requests, dated 2026-11-19).
+
+### 2026-11-19 (agent-memo, `wave53-memo`): M11-complexity-T10, D-0158
+
+The memo's identical copies are identical LINES (each missed and wrote its own), so sharing them
+cannot keep the bytes. `justify.ml` gains a share mode, OFF by default (`BAGUETTE_MEMO_SHARE=1`),
+that answers a miss with an identical line already on the page at or below the current level:
+cable's proof 1 887 -> 114 MB, cyclic's 2 023 -> 322 MB, rcpsp_11 +14.5 % instructions, search
+identical. Off, every byte is main's. The default is the user's to decide (D-0158 section 5).
+Gate on `95759c5` (binary `59368b5f`): `make check` rc 0 (4 256 ok, 198 models, 100 MB), 198
+models x 4 artefacts equal to main's `64ec63e0`, lane 301/301, debug 289/289, scaling ok. With
+sharing on, 85 of 301 lane runs differ, and only in the `.pbp` hash and the `pol` and `pol-tokens`
+counters (proof size, filed under SEARCH by `observe.py`, read by nothing in `lib/`). Stdout and
+every other counter are equal on all 301, and veripb accepts all 274 proofs (D-0158 section 4).
+
+### 2026-11-19 late (orchestrator): the orchestrator moves to fataepyc-06 -- READ THIS FIRST
+
+The user loses the laptop's connection to the node and relaunches the orchestrator ON
+`fataepyc-06`, in the clone `/cluster/arthur/baguette` on the persistent cluster disk, hub
+`/cluster/arthur/baguette.git` (`/scratch` can be wiped by a node reset; CLAUDE.md, "A session
+launched ON fataepyc-06"; `scripts/README.md` is the operating manual; `bench/challenge/README.md` has the
+solver paths). The laptop's memory notes were moved into those two READMEs and CLAUDE.md.
+
+**On main and gated (gates 61 to 64 green):** D-0154 (the default search stays fixed, `-f`
+documented, the stale `-f` warning removed), D-0160 (the scaling lane is a blocking gate), D-0155
+(element: black-hole_10 168 G -> 52 G instructions), D-0157 (learned PB arithmetic: PB rows over bits
+1.89x -> 1.39x). Docs only: D-0147 §10-11 (parity archived by the user), M2-L7 closed (D-0050
+addendum), M9-no-proof-T5 opened (the user's decision: the default run writes AND KEEPS its proof).
+
+**Paused agents** (each branch carries a WIP commit and a `PAUSED` note at the top of its own
+`## Handoff notes`; relaunch one fresh agent per branch from that note, on the node):
+- `wave53-alldiff` (M7-T33, `Alldiff.excl`, `Alldiff.remover_index`), tip `eac5fdd`. p1f_13 timeout
+  -> UNSAT in 19.5 s (1 877 learned), black-hole_20 1 846 G -> 175 G instructions, 15 handball
+  instances gain an incumbent. Lot-sizing under the lane's `activity` configuration now dies at the
+  lane's 4 GB cap (twice the learned clauses). `final.sh` was still running
+  (`/scratch/arthur/wave53-alldiff-runs/final.pid`). Left: D-0156 from its draft, ROADMAP, the gate
+  numbers. At merge: re-record the lane for cyclic (6 configurations) and lot-sizing (12).
+- `wave53-memo` (M11-T10), tip `496ee3e`. Sharing identical explanations cannot keep the bytes:
+  each copy wrote its own line, so it needs an id in `Explanation.t` (the user's decision). Built
+  instead: a share mode behind `BAGUETTE_MEMO_SHARE=1`, off by default (byte-identical): cable's
+  proof 1 887 -> 114 MB, RSS 21.1 -> 16.0 GB, -22 % instructions, but rcpsp_11 +14.5 %.
+  `memo-gate.sh` was still running (`/scratch/arthur/wave53-memo-runs/memo-gate.pid`). Left: the
+  placeholders of D-0158 from `gate.status`.
+- `wave53-noproof` (M9-no-proof-T4), tip `cabacd2`. Six guards: openshop under `--no-proof` -42.6 %
+  instructions, RSS 341 -> 93 MB. Left: the profile placeholder, `gate.sh`, the handoff. Its
+  requests: `Alldiff.snap_of` builds derivation-only data at every snapshot (39.4 % of cyclic under
+  `--no-proof`, after the alldiff merge), the root lemmas built in `compile.ml` (8.9 % of
+  nonogram's startup), `Justify.ensure_lit`'s own guard.
+
+**Finished, not merged:** `wave53-member` (M7-T28 `member`, D-0159), tip `1a913cf`, gate green. On
+the Challenge it changes no answer, and its rows grow with the domain width (3.77 M on
+`gl_Map1f`), so it waits for the user (merge, keep the branch until D-0159 §5's cheaper encoding,
+or merge with a fallback). Its claim row stays until then.
+
+**Waiting for the user:** `member` (above); an investigation of `bin_packing_load` (48 of 65
+instances refused by the front end, cause unrecorded); where the default proof is written
+(M9-T5; proposed `./<model>.opb` and `.pbp`); the memo share mode or an id in `Explanation.t`; the
+lot-sizing `activity` lane cap.
+
+**Merge order once resumed:** alldiff (with its re-record commit), then noproof, then memo.
+
+**The two detached runs finished** before the move. alldiff's `final.sh`: `LANES-DONE`, then both
+`--update` passes rc 2 (the lot-sizing `activity` run at the 4 GB cap, as the agent predicted);
+its D-0156 draft is also copied to `/cluster/arthur/baguette-results/wave53-alldiff/`. memo's
+`memo-gate.sh`: share mode's lane proofs 274/274 VERIFIED, but against the reference without
+`.pbp` and WORK 216 same and 85 different, which says share mode moves stdout or SEARCH counters
+somewhere: read `/scratch/arthur/wave53-memo-runs/gate.status` before filling D-0158.
+
+### 2026-11-19 (orchestrator): wave53-element and wave53-learned merged, gates 63 and 64 green
+
+Gate 63 (`c058ada`, D-0155, binary `643f44e9`) and gate 64 (`6bf83d4`, D-0157, binary `d7a1ef00`), each
+against the previous gate's binary: `make check` rc 0, 198 models with 0 artefact differences, lane
+301/301, debug 289/289, scaling enforced ok on every line (within +0.13 % of late). No reference was
+re-recorded. `Alldiff.remover_index` (agent-element's request) was forwarded to agent-alldiff.
 
 ### 2026-11-19 (orchestrator): wave53-tooling merged, gate 62 green
 
@@ -582,6 +796,28 @@ on `64ec63e0`; `--update` is a per-line ratchet, `--raise` only with a decision 
 green, three enforced passes, a planted O(database) scan per node failed on all five lines. The
 orchestrator's gate must grep `'^scaling: .*growth'` and treat the lane's rc as red. The width lint
 takes a `(* width-ok-begin: reason *)` ... `(* width-ok-end *)` region that ocamlformat leaves alone.
+
+### 2026-11-19 (agent-element, `wave53-element`): M11-complexity-T8, D-0155
+
+`Element.add_facts` is a hashed accumulator returning the old fold's list element for element, and
+element.ml's other per-pruning scans are gone (trail walks per index hole through `Store.remover`,
+`List.mem` over live positions and carried values through an int table, hole facts once per pass).
+`2011_black-hole_10` 168 G to 52 G instructions; stdout, .opb and .pbp equal to main on every model.
+The black-hole family is now held by `Alldiff.remover_index`'s trail walk (cross-session request,
+alldiff.ml is agent-alldiff's), and behind it by about 150 MB of heap per node (D-0155 section 4).
+
+| M11-complexity-T9 | agent-learned (`wave53-learned`) | 2026-11-19 | **D-0157.** `Learned.combine` as one merge of two sorted rows, `Ladder.lift`'s rungs in one merge (`add_multiples`), `make` without a sort on sorted input (natural merge sort otherwise), each analysis row read through a memo of its own literals, per-row `to_string`/`to_linear_row`/decl cheaper. Fast paths only under a bound that rules out every `Checked` overflow of the kept references (compared under `BAGUETTE_DEBUG` and on random rows). Instructions at equal nodes, both modes: rcpsp-wet W=0 -26 %, roster W=0 -7 %, the rest within 1 %, every byte the same. Gate on `ebd1c75` (binary `0fe90d0c`): `make check` rc 0 (4 251 ok, 0 FAIL, 198 models, 97 MB), 396 model runs (default and W=0) identical to main's `64ec63e0`, lane 301/301, debug 289/289, scaling ok, nothing to re-record |
+
+## Handoff notes
+
+### 2026-11-19 (agent-learned, `wave53-learned`): M11-complexity-T9, D-0157
+
+The learned PB row's arithmetic is a merge now: `Learned.combine` walks two sorted rows once, a
+lift adds all its rungs in one walk (`Learned.add_multiples`), `make` keeps a sorted input, and the
+analysis reads each row through `Pb_analysis.row_memo`. The old bodies stay as `make_reference` and
+`combine_reference`, compared at every call under `BAGUETTE_DEBUG`. rcpsp-wet at `--bits-above 0`
+-26 % instructions, roster -7 %, every byte equal, nothing to re-record. What is left of the bits
+cost is `Trace`/`Justify`'s bits lines and `Pb.pass`, not these files (D-0157 section 6).
 
 ### 2026-11-19 (orchestrator): the parity idea archived (D-0147 §10)
 
@@ -618,6 +854,14 @@ waves 41-52 is merged and gated except the M12 parity spike, whose code stays on
   re-run, the free-category default once M10-T5 measures it.
 - **Procedures**: gates and lanes as in D-0141 §7 and the last `/scratch/arthur/gate60.sh` on fataepyc-06;
   CLAUDE.md now names fataepyc-06 as baguette's node and lists `make diff` and `make scaling`.
+
+## M13-codes-leads opened, 2026-11-19 (codes-cp session): two leads to study, no code
+
+`docs/ROADMAP.md` gains an M13 section at its end. The codes-cp phase-1 benchmark (2 687 runs, 10 min)
+puts baguette at default flags last of the CP solvers on the minimum-distance instances (39 of 64,
+against 50 for Gecode and CP-SAT and 55 to 57 for the MILP solvers on the same sums model). T1 is a
+linear relaxation as a presolve step, T2 symmetry detection with breaking justified by `dom`. The user
+does not want a complicated presolve now. A run with the M10 options is being added to the same table.
 
 ## The M7-T28 continuation merged, gate 60 green, 2026-11-19 (orchestrator)
 

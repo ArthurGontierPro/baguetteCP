@@ -25,6 +25,10 @@ Keywords MUST / SHOULD / MAY are used in the RFC 2119 sense.
 The proof is not a debugging aid. It is a primary output: a run that produces a correct
 answer with an unverifiable proof is a **failed run**. *(normative)*
 
+So every run writes its proof and **keeps** it, including a run without `--proof`, which
+names it after the model (§4.1). *(amended 2026-11-19, M9-no-proof-T5, D-0163, the user's
+decision; until then such a run wrote its proof to a temporary file and deleted it.)*
+
 **A solve-without-proof mode exists, as a measurement instrument** *(amended 2026-11-06,
 M9-no-proof-T1, D-0126; the paragraph above is unchanged and still governs every run that is
 a result)*. The solver MAY be run with `--no-proof`, which is off by default. Such a run
@@ -415,7 +419,7 @@ Every branching decision and every backtrack MUST be reflected in the proof.
 
 ### 4.1 Artefacts
 
-A run with `--proof PREFIX` writes two files:
+Every run except one under `--no-proof` (§1) writes two files, and keeps them:
 
 - `PREFIX.opb` — the pseudo-Boolean encoding of the model
 - `PREFIX.pbp` — the proof, whose first line is exactly
@@ -428,6 +432,20 @@ agree about that or the checker stops at the grammar without judging anything.
 `Encoding.write_opb` is the only way to write the `.opb`, so they cannot disagree.
 
 Both are required; VeriPB is invoked as `veripb PREFIX.opb PREFIX.pbp`.
+
+`--proof PREFIX` chooses PREFIX. Without it, PREFIX is taken from the model
+*(M9-no-proof-T5, D-0163)*:
+
+- `DIR/foo.fzn` gives `./foo.opb` and `./foo.pbp`, in the **current directory**. Only a
+  `.fzn` extension is dropped, so a model is never its own proof's name.
+- Under MiniZinc the model is a temporary `mznfile*.fzn` whose name means nothing, and
+  MiniZinc does not pass the `.mzn`'s. PREFIX is then `./baguette-proof`, and the run says
+  on stderr where the two files are. `--proof` and `--no-proof` are extra flags of
+  `tools/baguette.msc`, so `minizinc --solver baguette --proof out` names the proof.
+
+A file of the same name from an earlier run is overwritten, as a compiler overwrites its
+output. The rule is one function, `default_proof_prefix` in `bin/main.ml`. *The directory is
+the proposal on record and is still the user's to confirm.*
 
 ### 4.2 Encoding
 

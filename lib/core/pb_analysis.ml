@@ -346,29 +346,45 @@ let falsified_before_scan store ~at (l : Lit.t) =
 
    The negation [~[x >= k]] is the same question on the lower bound with value [k]. The
    scan stays as the [BAGUETTE_DEBUG] cross-check, as [falsified_at_scan] does for
-   [falsified_at]. *)
-let falsified_before store ~at (l : Lit.t) =
-  let r =
-    match l.Lit.v with
-    | Lit.Eq _ | Lit.Bit _ -> false
-    | Lit.Ge (name, k) -> (
-        match Store.var_named store name with
-        | None -> false
-        | Some v ->
-            let d = Store.get store v in
-            let positive = l.Lit.positive in
-            let holds_now = if positive then Domain.hi d < k else Domain.lo d >= k in
-            if not holds_now then false
-            else
-              let p =
-                if positive then Store.var_support store v ~is_lower:false ~value:(k - 1)
-                else Store.var_support store v ~is_lower:true ~value:k
-              in
-              p = Store.no_support || p < at)
+   [falsified_at].
+
+   M11-complexity-T9 (D-0157): applied to [store] and [~at] alone it is a predicate that
+   remembers the last name it looked up, by the name's physical identity, in front of
+   [Store.var_named]'s hash: a step asks it of one reason's terms over and over, and
+   [Ladder.instantiate]'s binary search asks it of one variable's atoms O(log w) times in
+   a row. A name is a name: the same string answers the same variable. *)
+let falsified_before store ~at =
+  let last = ref None in
+  let var_named name =
+    match !last with
+    | Some (n, v) when n == name -> v
+    | _ ->
+        let v = Store.var_named store name in
+        last := Some (name, v);
+        v
   in
-  Debug.check "M11-T4: falsified_before agrees with the trail scan" (fun () ->
-      r = falsified_before_scan store ~at l);
-  r
+  fun (l : Lit.t) ->
+    let r =
+      match l.Lit.v with
+      | Lit.Eq _ | Lit.Bit _ -> false
+      | Lit.Ge (name, k) -> (
+          match var_named name with
+          | None -> false
+          | Some v ->
+              let d = Store.get store v in
+              let positive = l.Lit.positive in
+              let holds_now = if positive then Domain.hi d < k else Domain.lo d >= k in
+              if not holds_now then false
+              else
+                let p =
+                  if positive then Store.var_support store v ~is_lower:false ~value:(k - 1)
+                  else Store.var_support store v ~is_lower:true ~value:k
+                in
+                p = Store.no_support || p < at)
+    in
+    Debug.check "M11-T4: falsified_before agrees with the trail scan" (fun () ->
+        r = falsified_before_scan store ~at l);
+    r
 
 (* The same question at the conflict, i.e. with the whole trail in force. *)
 let falsified_now store (l : Lit.t) =
@@ -740,6 +756,64 @@ end)
 
 module Int_tbl = Hashtbl.Make (Int)
 
+(* M11-complexity-T9 (D-0157): a question about literals, remembered for ONE ROW's
+   literals by their physical identity, in row order.
+
+   Each elimination reads the row it holds several times over -- the pivot choice, the
+   criterion's slack and its propagation test, the conflict check after the combination
+   -- and each read asked [falsified_at] of every term again, through [fat_memo], whose
+   key is a [Lit.t]: a hash of the literal's name and a [Lit.equal] in the bucket, four
+   times per term per step. [Reduce] and [Ladder] likewise ask [falsified_before] of the
+   reason's terms four or five times each. Every one of those reads walks the row's
+   terms first to last and asks about [tm.lit], the very record the row holds, so the
+   next literal asked is the one after the last one answered, or a few further on (a
+   reduced row skips the terms it weakened away). A pointer comparison at most [window]
+   places ahead finds it, and its answer is computed once per row instead of once per
+   read. A literal found nowhere near -- the pivot built by [Lit.negate], a term a
+   combination rebuilt -- is answered by [f] itself.
+
+   The answers are [f]'s: [f] is a function of the literal for the whole call (the trail
+   does not move while [analyse] runs, and a reason's predicate is frozen at its
+   position, I-X6), so remembering an answer changes how often [f] runs and nothing
+   else. *)
+let window = 4
+
+let row_memo (lits : Lit.t array) (f : Lit.t -> int) : Lit.t -> int =
+  let n = Array.length lits in
+  let unknown = min_int (* no answer of [f] here is min_int: a position, or 0/1 *) in
+  let ans = Array.make n unknown in
+  let cur = ref 0 in
+  let rec find i k l =
+    if k > window || i >= n then -1
+    else if lits.(i) == l then i
+    else find (i + 1) (k + 1) l
+  in
+  fun l ->
+    let i = find !cur 0 l in
+    let i = if i >= 0 then i else find 0 0 l in
+    if i < 0 then f l
+    else (
+      cur := i + 1;
+      let a = ans.(i) in
+      if a <> unknown then a
+      else
+        let a = f l in
+        ans.(i) <- a;
+        a)
+
+(* A predicate, through [row_memo]. *)
+let row_memo_bool (lits : Lit.t array) (p : Lit.t -> bool) : Lit.t -> bool =
+  let m = row_memo lits (fun l -> if p l then 1 else 0) in
+  fun l -> m l = 1
+
+let lits_array (row : Learned.t) : Lit.t array =
+  match Learned.terms row with
+  | [] -> [||]
+  | tm0 :: _ as terms ->
+      let a = Array.make (List.length terms) tm0.Learned.lit in
+      List.iteri (fun i (tm : Learned.term) -> a.(i) <- tm.Learned.lit) terms;
+      a
+
 (* ------------------------------------------------------- reading a derivation *)
 
 (* Every constraint id the derivation cites. The I-S4 discharge in the header is a claim
@@ -859,37 +933,46 @@ let analyse ?(stop = fun () -> false) ?(bits = Ladder.no_bits) store (c : Store.
             Ladder.derive_instantiated i (Explanation.model_row cid),
             List.map (fun (_, id, r) -> (id, r)) i.Ladder.added )
   in
-  let level_of l =
-    let at = falsified_at store l in
-    if at = Store.no_support then 0 else Store.level_of_index store at
-  in
-  let view row steps =
+  (* M11-complexity-T9 (D-0157): a row is read through [row_memo] over its own
+     literals -- [at_of] below -- built once per row and shared by every read of it: the
+     pivot choice, the conflict check after the combination that made it, and the
+     criterion's view. The view's [c_level_of] is [falsified_at]'s level, as it was. *)
+  let at_of row = row_memo (lits_array row) (falsified_at store) in
+  let view row at_of steps =
     {
       c_row = row;
       c_conflict_level = conflict_level;
       c_steps = steps;
-      c_level_of = level_of;
+      c_level_of =
+        (fun l ->
+          let at = at_of l in
+          if at = Store.no_support then 0 else Store.level_of_index store at);
     }
   in
   (* The literal to resolve on: falsified, established at the conflict level by an entry
      that rests on facts (a decision rests on none and is never resolved away -- the same
      root rule lib/core/analysis.ml states), and the most RECENT such, which is what makes
-     the walk terminate: every elimination's pivot is strictly below the last. *)
-  let pivot_of row =
+     the walk terminate: every elimination's pivot is strictly below the last. Returned
+     with its coefficient in the row (D-0157): a row names a literal once ([Learned.make]),
+     so this is the coefficient [coeff_of row l] found by a second scan of the row. *)
+  let pivot_of row at_of =
     List.fold_left
       (fun best (tm : Learned.term) ->
         let l = tm.Learned.lit in
-        let at = falsified_at store l in
+        let at = at_of l in
         if at = Store.no_support then best
         else if Store.level_of_index store at <> conflict_level then best
         else if Reason.is_empty (Store.trail_entry store at).Store.reason then best
-        else match best with Some (_, b) when b >= at -> best | _ -> Some (l, at))
+        else
+          match best with
+          | Some (_, b, _) when b >= at -> best
+          | _ -> Some (l, at, tm.Learned.coeff))
       None (Learned.terms row)
   in
-  let step row expl steps pivots antecedents rows lifts =
-    match pivot_of row with
+  let step row at_of_row expl steps pivots antecedents rows lifts =
+    match pivot_of row at_of_row with
     | None -> raise (Give_up No_pivot)
-    | Some (l, at) ->
+    | Some (l, at, a) ->
         let e = Store.trail_entry store at in
         let reason_row =
           match row_of e.Store.prop with
@@ -902,12 +985,16 @@ let analyse ?(stop = fun () -> false) ?(bits = Ladder.no_bits) store (c : Store.
         let p = Lit.negate l in
         (* Frozen at the propagation, not at the conflict. This is the I-X6 discharge and
            the header says why it cannot be the conflict-time predicate. *)
-        let falsified = falsified_before store ~at in
+        let falsified_at_prop = falsified_before store ~at in
         (* D-0153: the reason's bits blocks, at the bounds the propagation read and at
            the pivot's own atom. [r] is [r0] when it has none. *)
         let r, base, bridge_rows =
-          instantiated r0 ~cid:reason_row.Propagator.r_cid ~pivot:(Some p) ~falsified
+          instantiated r0 ~cid:reason_row.Propagator.r_cid ~pivot:(Some p)
+            ~falsified:falsified_at_prop
         in
+        (* D-0157: the same predicate, remembered for [r]'s literals, which [Reduce] and
+           [Ladder.lift] read term by term several times over. *)
+        let falsified = row_memo_bool (lits_array r) falsified_at_prop in
         if coeff_of r p = None then raise (Give_up Pivot_not_in_reason);
         (* One attempt at the reduction, as a result rather than a raise, so that the
            M2-L11 ladder lift below can be a RETRY on the same pivot instead of a second
@@ -949,19 +1036,18 @@ let analyse ?(stop = fun () -> false) ?(bits = Ladder.no_bits) store (c : Store.
                   | Ok o -> (o, Ladder.derive ~break:break_ladder lt, Some lt)
                   | Error _ -> raise (Give_up e0)))
         in
-        let a =
-          match coeff_of row l with Some a -> a | None -> raise (Give_up No_pivot)
-        in
         (* I-X8 / D-0029: [Learned.combine] multiplies through [Checked], which RAISES
            past the cap. Caught here and turned into a fallback -- never wrapped, and
-           never allowed to abandon the solve. *)
+           never allowed to abandon the solve. [a] is the pivot's coefficient in [row],
+           from [pivot_of]. *)
         let row' =
           try Learned.combine row 1 o.Reduce.reduced a
           with Checked.Overflow m -> raise (Give_up (Overflow m))
         in
         (* D-0044's named condition, checked every step. See the header on why it should
            not fire for the reductions that exist today and is checked anyway. *)
-        let v' = view row' (steps + 1) in
+        let at_of' = at_of row' in
+        let v' = view row' at_of' (steps + 1) in
         if not (slack_at v' conflict_level < 0) then raise (Give_up Not_conflicting);
         let expl' =
           Explanation.combine
@@ -984,7 +1070,7 @@ let analyse ?(stop = fun () -> false) ?(bits = Ladder.no_bits) store (c : Store.
         let lifts =
           match lift with None -> lifts | Some lt -> lifts + lt.Ladder.rungs
         in
-        (row', expl', l :: pivots, antecedents, rows, lifts)
+        (row', at_of', expl', l :: pivots, antecedents, rows, lifts)
   in
   try
     let conflict_row =
@@ -996,18 +1082,19 @@ let analyse ?(stop = fun () -> false) ?(bits = Ladder.no_bits) store (c : Store.
     (* D-0153: the conflict row's bits blocks, at the bounds in force at the conflict. *)
     let row0, expl0, bridge_rows0 =
       instantiated row0_opb ~cid:conflict_row.Propagator.r_cid ~pivot:None
-        ~falsified:(falsified_now store)
+        ~falsified:(falsified_before store ~at:(Store.trail_length store))
     in
     (* If our reconstruction of the conflicting row is not actually conflicting, the row
        we built is not the row the store conflicted on. That is a real disagreement and it
        falls back rather than deriving from a premise the search does not share. *)
-    if not (slack_at (view row0 0) conflict_level < 0) then
+    let at_of0 = at_of row0 in
+    if not (slack_at (view row0 at_of0 0) conflict_level < 0) then
       raise (Give_up Not_conflicting);
-    let rec loop row expl steps pivots antecedents rows lifts =
-      if criterion.stop (view row steps) then
+    let rec loop row at_of_row expl steps pivots antecedents rows lifts =
+      let v = view row at_of_row steps in
+      if criterion.stop v then
         if steps = 0 then raise (Give_up Nothing_to_learn)
         else
-          let v = view row steps in
           Learned_row
             {
               row;
@@ -1029,10 +1116,10 @@ let analyse ?(stop = fun () -> false) ?(bits = Ladder.no_bits) store (c : Store.
       else if steps >= max_steps then raise (Give_up (Diverged steps))
       else if stop () then raise (Give_up Stopped)
       else
-        let row', expl', pivots', antecedents', rows', lifts' =
-          step row expl steps pivots antecedents rows lifts
+        let row', at_of', expl', pivots', antecedents', rows', lifts' =
+          step row at_of_row expl steps pivots antecedents rows lifts
         in
-        loop row' expl' (steps + 1) pivots' antecedents' rows' lifts'
+        loop row' at_of' expl' (steps + 1) pivots' antecedents' rows' lifts'
     in
     Int_tbl.replace cited conflict_row.Propagator.r_cid ();
     let antecedents0, rows0 =
@@ -1041,7 +1128,7 @@ let analyse ?(stop = fun () -> false) ?(bits = Ladder.no_bits) store (c : Store.
         ([ conflict_row.Propagator.r_cid ], [ row0_opb ])
         bridge_rows0
     in
-    loop row0 expl0 0 [] antecedents0 rows0 0
+    loop row0 at_of0 expl0 0 [] antecedents0 rows0 0
   with
   | Give_up f -> Fallback f
   (* M6-T9. The combination and the ladder lift were already wrapped (above), but the

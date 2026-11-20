@@ -783,7 +783,246 @@ let test_l2_to_linear_row_reference () =
        !some)
     (!agree && !some > 100)
 
+(* M11-complexity-T9 (D-0157): [make], [combine], [add_multiples] and [to_string] against
+   the code they replaced, kept in learned.ml as [make_reference] / [combine_reference]
+   (the fold of it, for [add_multiples]) and copied here for [to_string]. Every result
+   must be EQUAL: the same terms in the same order and the same degree, or the same
+   [Checked.Overflow] with the same message. Coefficients near 2^60 are drawn often
+   enough that both arms are reached, the overflow arm and the one-merge arm, and the
+   lanes say how often each was. *)
+module Checked = Baguette_core.Checked
+
+let rng_t9 = Random.State.make [| 0x0157; 9 |]
+let names_t9 = [| "a"; "b"; "c"; "d"; "X_INTRODUCED_7_"; "q.r" |]
+
+let lit_t9 () =
+  let x = names_t9.(Random.State.int rng_t9 (Array.length names_t9)) in
+  let v = Random.State.int rng_t9 6 - 1 in
+  let l =
+    match Random.State.int rng_t9 10 with
+    | 0 -> Lit.eq x v
+    | 1 -> Lit.bit x (abs v)
+    | _ -> Lit.ge x v
+  in
+  if Random.State.bool rng_t9 then Lit.negate l else l
+
+let big_t9 () = (1 lsl 60) + Random.State.int rng_t9 1_000_000
+
+let coeff_t9 ~big =
+  if big && Random.State.int rng_t9 6 = 0 then big_t9 ()
+  else 1 + Random.State.int rng_t9 5
+
+(* A row through [make], so in [make]'s order. *)
+let row_t9 ~big =
+  let n = Random.State.int rng_t9 9 in
+  Learned.make
+    (List.init n (fun _ -> (coeff_t9 ~big, lit_t9 ())))
+    (Random.State.int rng_t9 7 - 2)
+
+let outcome_t9 f = try Ok (f ()) with Checked.Overflow m -> Error m
+
+let same_t9 r1 r2 =
+  match (r1, r2) with
+  | Ok a, Ok b -> Learned.equal a b
+  | Error m1, Error m2 -> String.equal m1 m2
+  | _ -> false
+
+let test_t9_make () =
+  (* A raw list in one of four shapes: anything (repeats, zeros, negative coefficients),
+     a model row's expansion (one sorted block per variable, variables in random order,
+     a variable sometimes twice), a [make] output's own terms, and blocks that overlap. *)
+  let raw () =
+    match Random.State.int rng_t9 4 with
+    | 0 ->
+        List.init (Random.State.int rng_t9 12) (fun _ ->
+            (Random.State.int rng_t9 9 - 4, lit_t9 ()))
+    | 1 ->
+        List.concat
+          (List.init
+             (1 + Random.State.int rng_t9 5)
+             (fun _ ->
+               let x = names_t9.(Random.State.int rng_t9 (Array.length names_t9)) in
+               let a = Random.State.int rng_t9 7 - 3 in
+               let lo = Random.State.int rng_t9 3 - 1 in
+               List.init (Random.State.int rng_t9 5) (fun i -> (a, Lit.ge x (lo + 1 + i)))))
+    | 2 -> Learned.raw_terms (row_t9 ~big:false)
+    | _ ->
+        List.concat
+          (List.init
+             (2 + Random.State.int rng_t9 3)
+             (fun _ ->
+               List.init (Random.State.int rng_t9 4) (fun i -> (1 + i, Lit.ge "b" i))))
+  in
+  let agree = ref true in
+  for _ = 1 to 20_000 do
+    let r = raw () and d = Random.State.int rng_t9 9 - 4 in
+    if not (Learned.equal (Learned.make r d) (Learned.make_reference r d)) then
+      agree := false
+  done;
+  check "D-0157: make equals make_reference on 20 000 raw lists of four shapes" !agree;
+  (* The sort on its own, payload included: stability is part of the claim. *)
+  let agree = ref true in
+  for _ = 1 to 20_000 do
+    let l =
+      match Random.State.int rng_t9 2 with
+      | 0 -> List.init (Random.State.int rng_t9 14) (fun i -> (lit_t9 (), i))
+      | _ ->
+          List.concat
+            (List.init
+               (1 + Random.State.int rng_t9 4)
+               (fun k ->
+                 let x = names_t9.(Random.State.int rng_t9 3) in
+                 List.init (Random.State.int rng_t9 5) (fun i ->
+                     (Lit.ge x (i + Random.State.int rng_t9 2), (10 * k) + i))))
+    in
+    let want = List.stable_sort (fun (l1, _) (l2, _) -> Lit.compare l1 l2) l in
+    let got = Learned.sort_by_lit l in
+    if
+      not
+        (List.equal
+           (fun (l1, i1) (l2, i2) -> Lit.equal l1 l2 && Int.equal i1 i2)
+           got want)
+    then agree := false
+  done;
+  check "D-0157: sort_by_lit is List.stable_sort, payload order included, on 20 000 lists"
+    !agree
+
+let test_t9_combine () =
+  let mult () =
+    match Random.State.int rng_t9 8 with
+    | 0 -> 0
+    | 1 -> big_t9 ()
+    | 2 -> 1 lsl 31
+    | 3 -> -1
+    | _ -> 1 + Random.State.int rng_t9 6
+  in
+  let agree = ref true and n_ok = ref 0 and n_over = ref 0 and n_merged = ref 0 in
+  for _ = 1 to 30_000 do
+    let a = row_t9 ~big:true and b = row_t9 ~big:true in
+    let ca = mult () and cb = mult () in
+    let got = outcome_t9 (fun () -> Learned.combine a ca b cb) in
+    let want = outcome_t9 (fun () -> Learned.combine_reference a ca b cb) in
+    if not (same_t9 got want) then agree := false;
+    if Learned.add_mass (Learned.scaled_mass ca a) (Learned.scaled_mass cb b) >= 0 then
+      incr n_merged;
+    match want with Ok _ -> incr n_ok | Error _ -> incr n_over
+  done;
+  check
+    (Printf.sprintf
+       "D-0157: combine equals combine_reference on 30 000 pairs (%d rows, %d by the one \
+        merge; %d overflows, message for message)"
+       !n_ok !n_merged !n_over)
+    (!agree && !n_merged > 5000 && !n_ok - !n_merged > 1000 && !n_over > 1000);
+  (* The pivot cancels: the shape every elimination has. *)
+  let p = Lit.ge "a" 2 in
+  let r1 = Learned.make [ (3, p); (2, Lit.ge "b" 1) ] 3
+  and r2 = Learned.make [ (1, Lit.negate p); (1, Lit.ge "c" 1) ] 1 in
+  let c = Learned.combine r1 1 r2 3 in
+  check "D-0157: the pivot cancels and the degree loses min(p, n)"
+    (Learned.equal c (Learned.make [ (2, Lit.ge "b" 1); (3, Lit.ge "c" 1) ] 3))
+
+exception Stop_t9
+
+let test_t9_add_multiples () =
+  (* The fold [Ladder.lift] ran, with its stop: [before] is counted, and raises at the
+     [stop_at]-th call when [stop_at] is drawn. *)
+  let fold ~before row summands =
+    List.fold_left
+      (fun acc (m, r) ->
+        before ();
+        Learned.combine_reference acc 1 r m)
+      row summands
+  in
+  let run f ~stop_at =
+    let calls = ref 0 in
+    let before () =
+      incr calls;
+      if !calls = stop_at then raise Stop_t9
+    in
+    let r =
+      try Ok (f ~before) with
+      | Checked.Overflow m -> Error ("overflow " ^ m)
+      | Stop_t9 -> Error "stopped"
+    in
+    (r, !calls)
+  in
+  let ladder name w =
+    Learned.make [ (1, Lit.ge name w); (1, Lit.negate (Lit.ge name (w + 1))) ] 1
+  in
+  let agree = ref true and n_ok = ref 0 and n_over = ref 0 and n_stop = ref 0 in
+  let n_merged = ref 0 in
+  for _ = 1 to 30_000 do
+    let big = Random.State.int rng_t9 3 = 0 in
+    let row = row_t9 ~big in
+    let summands =
+      List.init (Random.State.int rng_t9 7) (fun _ ->
+          let m =
+            if big && Random.State.int rng_t9 4 = 0 then big_t9 ()
+            else Random.State.int rng_t9 6
+          in
+          let r =
+            if Random.State.bool rng_t9 then ladder "a" (Random.State.int rng_t9 5)
+            else row_t9 ~big
+          in
+          (m, r))
+    in
+    let stop_at =
+      if Random.State.int rng_t9 5 = 0 then 1 + Random.State.int rng_t9 4 else 0
+    in
+    let got, gcalls =
+      run (fun ~before -> Learned.add_multiples ~before row summands) ~stop_at
+    in
+    let want, wcalls = run (fun ~before -> fold ~before row summands) ~stop_at in
+    if
+      summands <> []
+      && List.fold_left
+           (fun acc (m, r) -> Learned.add_mass acc (Learned.scaled_mass m r))
+           (Learned.mass row) summands
+         >= 0
+    then incr n_merged;
+    let eq =
+      match (got, want) with
+      | Ok a, Ok b -> Learned.equal a b
+      | Error x, Error y -> String.equal x y
+      | _ -> false
+    in
+    if not (eq && gcalls = wcalls) then agree := false;
+    match want with
+    | Ok _ -> incr n_ok
+    | Error "stopped" -> incr n_stop
+    | Error _ -> incr n_over
+  done;
+  check
+    (Printf.sprintf
+       "D-0157: add_multiples equals the fold of combine_reference, stop calls counted, \
+        on 30 000 rows (%d rows, %d overflows, %d stops; %d by the one merge)"
+       !n_ok !n_over !n_stop !n_merged)
+    (!agree && !n_ok > 1000 && !n_over > 100 && !n_stop > 100 && !n_merged > 5000)
+
+let test_t9_to_string () =
+  let reference t =
+    Printf.sprintf "%s >= %d"
+      (String.concat " "
+         (List.map
+            (fun (tm : Learned.term) ->
+              Printf.sprintf "+%d %s" tm.Learned.coeff (Lit.to_string tm.Learned.lit))
+            (Learned.terms t)))
+      (Learned.degree t)
+  in
+  let agree = ref true in
+  for _ = 1 to 5_000 do
+    let t = row_t9 ~big:true in
+    if not (String.equal (Learned.to_string t) (reference t)) then agree := false
+  done;
+  let t = Learned.make [ (2, Lit.ge "x" (-3)) ] min_int in
+  check "D-0157: to_string is the Printf rendering, byte for byte, on 5 000 rows"
+    (!agree && String.equal (Learned.to_string t) (reference t))
+
 let () =
+  test_t9_make ();
+  test_t9_combine ();
+  test_t9_add_multiples ();
+  test_t9_to_string ();
   test_l2_to_linear_row_reference ();
   test_normalisation ();
   test_oracle_round_trip ();

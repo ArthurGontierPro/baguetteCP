@@ -1546,6 +1546,25 @@ let test_m7_t19 () =
        constraint int_lin_eq([1, 1, -1], [x, w, z], 0);\n\
        solve satisfy;\n"
     ~needles:[ "`z`"; "`w` (unbounded"; "1 other undomained variable" ];
+  (* M7-T29, the `connect__0086_02` shape: a size bounded only BELOW and minimised through
+     a cost row. The model's solution set is unbounded in it, so SPEC 2.1's soundness
+     clause admits no upper bound; capping it from the objective is a dominance argument,
+     not inference, and stays refused until the user decides otherwise. *)
+  reject "M7-T29: bounded below and minimised is still a refusal" ~line:2
+    ~src:
+      "var 1..3: x;\n\
+       var int: len;\n\
+       var int: cost;\n\
+       constraint int_le(x, len);\n\
+       constraint int_lin_eq([1, -1], [cost, len], 0);\n\
+       solve minimize cost;\n"
+    ~needles:
+      [
+        "`len`";
+        "could not bound it";
+        "inferred lower bound 1, upper bound none";
+        "`cost` (unbounded";
+      ];
   (* A reified row implies no bound -- it may be false -- and must not be read as one. *)
   reject "M7-T19 (d): a reified comparison is not read as a bound" ~line:2
     ~src:

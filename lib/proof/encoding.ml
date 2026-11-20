@@ -2070,9 +2070,24 @@ let add_cited_lemma t (c : Opb.constr) : lemma =
 let root_lemma_id t (h : lemma) =
   if h >= 0 && h < Array.length t.lemma_ids then Some t.lemma_ids.(h) else None
 
+(* M9-no-proof-T4 (D-0161): under the null writer of `--no-proof` the lemmas are not
+   written, but their ids must still exist, and be the ids the proved run gets: alldiff
+   cites the pairwise ones by id inside a [Combine] (D-0151), and D-0126's id rule wants
+   every id an Explanation can carry minted in both modes, by the same counter, in the same
+   order. A null [rup] is [Writer.fresh] and reads nothing else, so [n_lemmas] fresh ids
+   in registration order ARE the ids the loop below mints, without reversing the list or
+   visiting a lemma. The constraints are then dropped, so the search does not carry them:
+   nothing reads them again. *)
+let mint_root_lemma_ids t w =
+  if t.n_lemmas > 0 then
+    t.lemma_ids <-
+      Array.init t.n_lemmas (fun _ -> Writer.fresh w ~origin:"root lemma (D-0146)");
+  t.lemmas_rev <- []
+
 let emit_root_lemmas t w =
   match t.lemmas_rev with
   | [] -> ()
+  | _ when Writer.is_null w -> mint_root_lemma_ids t w
   | rev ->
       (* The comment is D-0146's when no lemma is cited, so a model with only backward
          chains writes the bytes it wrote before D-0151. *)

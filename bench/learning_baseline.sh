@@ -92,9 +92,9 @@ for fzn in "${MODELS[@]}"; do
   base="$(basename "${fzn}" .fzn)"
   n_models=$((n_models + 1))
 
-  on=$(BAGUETTE_PROPAGATE_LEARNED=on "${SOLVER}" "${fzn}" --stats 2>&1 >/dev/null \
+  on=$(BAGUETTE_PROPAGATE_LEARNED=on "${SOLVER}" "${fzn}" --stats --proof "${WORK}/s" 2>&1 >/dev/null \
         | awk '$2 == "nodes" { print $3 }')
-  off=$(BAGUETTE_PROPAGATE_LEARNED=off "${SOLVER}" "${fzn}" --stats 2>&1 >/dev/null \
+  off=$(BAGUETTE_PROPAGATE_LEARNED=off "${SOLVER}" "${fzn}" --stats --proof "${WORK}/s" 2>&1 >/dev/null \
         | awk '$2 == "nodes" { print $3 }')
   if [ -z "${on}" ] || [ -z "${off}" ]; then
     printf '%-26s %8s %8s\n' "${base}" "ERR" "ERR"

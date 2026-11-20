@@ -18652,3 +18652,1148 @@ complete, 48 refused by the front end before any search). It has no design recor
 step is to read why the 48 are refused (the decomposition's width or heap, D-0122 only counts
 them), then probe a per-bin load row the way section 1 probed these rows. For member itself,
 section 5's lazy big-M lever is the one measured cost left.
+## D-0155  M11-complexity-T8: `Element`'s fact deduplication hashed and linear, and the other per-pruning scans of element.ml gone; `2011_black-hole_10` from 168 G to 52 G instructions, every byte the same
+
+Status: DONE (built, measured, gated on a fresh clone; every lane equals its reference, nothing to re-record)
+Date: 2026-11-19
+Task: M11-complexity-T8 (agent-element, `wave53-element`), opened from D-0151 section 2.
+Touches: `lib/core/prop/element.ml` (`Fact_tbl`, `fact_acc`/`add_to`/`acc_facts`, `add_facts`,
+`hole_facts`, `index_hole_puncher`, `Int_tbl`/`int_set`, `dead_positions`, `conflict_facts`,
+`filter_index`, `filter_result`), `test/unit/test_prop.ml` (one oracle test in the element
+section). Measured on `fataepyc-06` against main at `9a9c461` (binary
+`64ec63e019e192aaec1da06410745ee2`), this branch's code at `f793ebe` (binary
+`643f44e96155b901eb00573538b90e70`); outputs under `/scratch/arthur/wave53-element-meas/`.
+
+### 1. What was quadratic
+
+D-0151 section 2 put 99 % of `2011_black-hole_10`'s run (102 `array_int_element`, the native
+`inverse`) in `Element.add_facts`: `List.mem f acc` then `acc @ [f]` per fact, so quadratic in
+the facts collected, each step a polymorphic compare of records holding `X_INTRODUCED_` names.
+Reading the rest of the module under the same standard found four more scans on per-pass or
+per-pruning paths:
+
+- `index_hole_clause` and `conflict_facts`' puncher walked the WHOLE trail backwards once per
+  interior index hole asked about, so O(positions x trail) per pruning and per conflict.
+- `dead_positions` asked `List.mem p live` once per declared position, and every pruning's eager
+  explanation calls it (one per hole `filter_result` punches): O(|decl| x |live|).
+- `filter_result`'s interior-value loop asked `List.mem v vals` once per value of the result's
+  window: O(width x |live|) per pass.
+- `filter_result` built its reason (the index's hole facts, one remover's reason per hole, a
+  `Later` materialised for each) on EVERY pass, and most passes prune nothing; `filter_index`
+  rebuilt the result's hole facts once per removal.
+
+### 2. The fixes, and why each keeps the bytes
+
+- **`add_facts`** is a hashed accumulator (`Fact_tbl`, `Hashtbl.Make` on `Reason.fact` with a
+  monomorphic structural `equal`: both constructors, `String.equal` on the name, `=` on the two
+  ints) plus a reversed list. It returns the old fold's list element for element: the seed whole
+  and in order, duplicates inside it included (the fold never examined them), then each later fact
+  iff no equal fact precedes it. `index_hole_facts`, `result_hole_facts` and `conflict_facts` feed
+  one accumulator rather than folding `add_facts`, which is the same composition. Test:
+  `test_d0155_element_add_facts_oracle` holds `Element.add_facts` to the old fold on 2 000 random
+  lists over a small alphabet (seeds with duplicates in over 100 of them).
+- **The two trail walks** go through `Store.remover` (D-0088, binary search over the variable's
+  entry history), and the level through the entry's `pos` (M6-T15). The walk's predicate (on
+  `ibase`, `bp` in `old`, not in `now`, from the top of the trail) is `Store.remover_scan`'s, and
+  `Store.remover` is checked against that scan by physical equality under `BAGUETTE_DEBUG`, which
+  the debug pass of the differential lane runs.
+- **`dead_positions`** and the interior-value loop test membership in an `Int_tbl` built once per
+  call. The walks are still over `t.decl_pos` and the window, in the same order.
+- **`filter_result`'s reason** is `lazy` and forced at the first pruning. Nothing in the pass writes
+  the store before the first `justified` call (only reads: `live_positions`, the explanations'
+  eager reads), so the list is the one the eager `let` built. **`filter_index`'s result hole
+  facts** are read once per pass: a removal there moves only the index, so while the result's base
+  variable is another variable its holes and removers are the same at every removal. When the result
+  IS the index, every removal re-reads, as before.
+
+The only counter this can move is `Reason.materialisations` (`--stats`), lower where a pass built
+facts for nobody; no lane's recorded counters moved (section 5).
+
+### 3. Measurements (fataepyc-06, `perf stat -e instructions:u`, proof on)
+
+| instance | budget | main | this branch | artefacts |
+|---|---|---|---|---|
+| `2011_black-hole_10` (native inverse) | to the end (UNSAT at the root) | 168.0 G, 23.5 s | 52.2 G, 7.6 s | stdout, .opb, .pbp, stats equal |
+| `2011_black-hole_20` | 20 nodes | 6 284 G, 934 s | 1 846 G, 280 s | equal |
+| `2023_chessboard_chessboard4` (98 elements) | 10 000 nodes | 170.3 G, 30.6 s | 110.3 G, 21.9 s | equal |
+| `2020_lot-sizing_pigment15b` (14) | 12 000 nodes | 160.6 G, 28.1 s | 144.7 G, 25.5 s | equal |
+| `2023_evm-super-compilation_..._6_0` (94) | 8 000 nodes | 101.3 G, 19.3 s | 100.3 G, 19.6 s | equal |
+
+Peak RSS moves by under 2 % either way.
+
+**The Challenge black-hole family at 300 s** (D-0151's inverse list, `bench/regular_spike/meas_pair.sh`,
+8 GB heap budget, every complete answer's proof checked by veripb 3.0.2): main and this branch
+answer the same three (`2011_black-hole_10` 23.4 s to 7.9 s, `2011_black-hole_17` 2.1 to 1.5 s,
+`2013_black-hole_6` 5.1 to 3.9 s), all VERIFIED. The other twelve time out on both, with 1.2x to 2x
+the nodes on this branch (for example `2011_black-hole_9` 14 to 26, `2013_black-hole_16` 13 to 27).
+`2025_black-hole_layout_14` is refused by the 8 GB heap budget at 323 s on this branch where main
+timed out at 20 nodes, which is D-0151's native-route refusal again, reached because the run gets
+further.
+
+### 4. Why the reach did not move, and what is next (not done here)
+
+`perf record` after the fix, on `2011_black-hole_10` and on 90 s of `2011_black-hole_20`: Element is
+gone from the profile (0.1 %), and about 70 % (bh10) to 89 % (bh20) of the run is
+`Alldiff.remover_index` (`Alldiff.go`, `Store.trail_entry`, `caml_apply2`, `Int.equal`), the same
+whole-trail walk per hole that this record removed from element.ml. alldiff.ml is claimed by
+agent-alldiff (M7-T33), so this is a cross-session request in WORKLOG, not a change. To size it, an
+UNCOMMITTED probe (that walk replaced by `Store.remover` plus `pos`, `/scratch/arthur/wave53-element-probe`,
+results in `wave53-element-meas/probe/`) ran the same fifteen instances: the same three answers
+VERIFIED (bh10 in 2.5 s); of the twelve others, four time out at 80 to 95 nodes where this branch
+reached 14 to 27, and eight are refused by the 8 GB heap budget between 87 s and 305 s. The
+memory is not the proof's: `2011_black-hole_9` without `--proof` holds 6.3 GB RSS after 39 nodes
+(about 150 MB per node). That is the next wall on this family, and nobody owns it yet.
+
+Outside element.ml, nothing else of this shape was found on a per-node path: `Analysis.scan_support`
+is the same walk but is the `BAGUETTE_DEBUG` cross-check only.
+
+### 5. The gate
+
+On a fresh clone of `f793ebe` on fataepyc-06 (`/scratch/arthur/wave53-element-gate`, binary
+`643f44e9`), the code tip; the commits after it touch only `docs/` and `WORKLOG.md`.
+
+- `make check`: rc 0. 4 245 unit checks `ok`, 0 `FAIL` (the two D-0155 checks among them); model
+  tests 198 passed, 0 failed; peak RSS 98 MB (`/usr/bin/time -v`).
+- `make diff ARGS="--tier all -j 24"`: 301 of 301 runs equal the reference (bool 72/72, int
+  229/229). `--debug`: 289 of 289 equal (bool 72/72, int 217/217; the debug-skip list as on main).
+  No recorded counter moved, so nothing is to be re-recorded.
+- `make scaling ARGS="-j 16"`: ok, every line within its threshold (report-only).
+- Artefacts: every one of the 198 `test/models/*.fzn` run under main's binary (`64ec63e0`) and this
+  branch's (`643f44e9`): stdout, exit code, `.opb` and `.pbp` byte-identical, 0 differ.
+
+## D-0157  M11-complexity-T9: the learned PB row's arithmetic without its sorts -- `Learned.combine` as one merge of two sorted rows, `Ladder.lift`'s rungs in one merge, `make` without a sort on sorted input, each row of an analysis read through a memo of its own literals; every result equal, the overflow point unmoved
+
+Status: DONE (built, measured, gated; nothing to re-record)
+Date: 2026-11-19
+Task: M11-complexity-T9 (agent-learned, `wave53-learned`).
+Touches: `lib/core/learned.ml` (`make` / `make_reference`, `sort_by_lit`, `combine` /
+`combine_reference`, `mass`, `walk`, `equal`, `add_multiples`, `to_string`, `to_linear_row`'s
+sorts, `decl_of_encoding`), `lib/core/ladder.ml` (`lift` through `add_multiples`,
+`instantiate`'s sum handed over in order, `b1_row`/`b2_row` atom first),
+`lib/core/pb_analysis.ml` (`row_memo`, the analysis loop reading each row through it, the
+pivot's coefficient from `pivot_of`, `falsified_before`'s name cache), `test/unit/test_learned.ml`,
+`test/unit/test_ladder.ml`. `reduce.ml` is NOT touched: its rows reach `make`'s fast path, and its
+predicate arrives memoised. No other file, and no cross-session request.
+Follows D-0153 section 5 (the profile that opened the row) and section 8.3, D-0152 section 1 and
+D-0144 section 1 (`Ladder.lift`'s per-rung `combine`, left with its overflow argument), D-0145
+section 1 (the frame-pointer switch), D-0085 (`combine`'s one-pass span), I-X8 / D-0029 (an
+overflow is a fallback, never a wrap).
+
+### 0. The sentence
+
+A learned PB row is `make`'s output, so its terms are already sorted by literal, and the
+arithmetic on it is a merge. `combine` walks the two rows once instead of scaling, appending,
+sorting by variable, grouping and handing the result to a `make` that sorts again. A lift adds all
+its rungs in one walk instead of one `combine` per rung, and `make` keeps a list that is already in
+its order. Each fast path runs only where its answer is provably the reference's, overflow
+included, and the reference runs everywhere else.
+
+### 1. The profile, before (`baguette-fp`, `perf record --call-graph fp`, main `9a9c461`)
+
+Inclusive shares of the whole run, proof mode (no-proof within a point). D-0153's five instances
+at `--bits-above 0` at its node budgets (`BAGUETTE_NODE_LIMIT`), and the two default-path
+instances at 10 000 nodes.
+
+| site | rcpsp-wet (1 500) | roster-shifts-bool (900) |
+|---|---|---|
+| `Pb_analysis.analyse` | 39.5 | 10.8 |
+| `Learned.combine` (in the elimination and the lift) | 15.1 | 3.1 |
+| `Learned.make` (every caller) | 10.2 | 2.6 |
+| `Ladder.instantiate` | 9.3 | 2.2 |
+| `Ladder.lift` (a `combine` per rung) | 9.2 | under 1 |
+| `falsified_at` + `level_of` (the memo's `Lit.t` hash, four reads of each row per step) | 9.5 | 5.6 |
+| `Reduce` (the attempt, its predicate asked four or five times per term) | 4.7 | 1.0 |
+| `to_linear_row` + `to_string` + `decl_of_encoding` (per learned row: `--stats`, the retention key) | under 1 | 5.0 |
+| GC inside the analysis | 7.7 | 2.5 |
+
+On the other three bits instances and on rcpsp_11 and mspsp_hard_01 the analysis is under 1 % of
+the run (rcpsp_11 falls back on 4 849 of 4 874 conflicts, on rows `cumulative` does not offer).
+The default path is not this row's, and its numbers below only show that nothing got worse. What
+the rest of a bits run costs is not in these files: `Trace.emit_to_page` (34 to 45 % of
+rcpsp-wet, mostly `Justify.emit_bits_combine`, with or without the proof) and `Pb.pass`, the
+learned instances' propagation (38 % of roster).
+
+### 2. What changed, and why each result is the reference's
+
+1. **`Learned.make`.** An input already in `make`'s output order (strictly increasing by
+   `Lit.compare`, every coefficient >= 1) is that order. The fold, the stable sort and the merge
+   all leave it unchanged, so it is taken as it stands. Otherwise the sort is `sort_by_lit`, a
+   natural merge sort (adjacent runs merged pairwise, the earlier run winning ties, two runs with
+   disjoint ranges joined by an append). It is a stable sort, so its answer is exactly
+   `List.sort`'s, and it costs about `n` comparisons on a model row's expansion, which is one
+   sorted run per variable. The old body is `make_reference`.
+2. **`Learned.combine`**, the step every elimination takes. Both inputs are sorted by literal,
+   hence by variable, so `walk` merges them one variable at a time, nets the two polarities as
+   stage 3 does (`p - m` on `l`, `n - m` on `~l`, `m = min p n` off the degree) and emits at most
+   one term per variable, in increasing variable order, which is the order the reference's `make`
+   produces. A term whose coefficient and literal are an input's is that input's record (the same
+   value, no allocation). The old body is `combine_reference`, word for word.
+   **The overflow point.** `walk` sums in plain `int`, so it runs only when
+   `ca * mass a + cb * mass b <= max_int`, `mass` being |degree| plus the coefficients. Every
+   integer the reference forms (a scaled coefficient or degree, a side sum, `dropped`, the final
+   degree) is then at most that in absolute value, and a `Checked` operation raises only when its
+   exact result is out of range, so the reference would not have raised. Otherwise, and with a
+   negative multiplier, a coefficient below 1, or an input out of order (`walk` checks that the
+   variables it visits strictly increase rather than assuming it of a public record), the
+   reference runs and raises where and as it always did.
+3. **`Ladder.lift` through `Learned.add_multiples`.** The fold `combine acc 1 rung m` over k rungs
+   is k walks of a row that does not shrink. The answer is one walk of the row with all the rungs'
+   scaled terms, sorted together, and it is the fold's answer because cancellation keeps a running
+   total. For a variable with positive and negative masses P and N over the row and the first j
+   summands, after j steps it carries `P - N` (or `N - P` on the negation) and the degree has lost
+   `min P N` for it in all. That holds after the first step, which normalises the whole row, and
+   each further step keeps it, since netting `P - N + dp` against `dn` drops
+   `min (P + dp) (N + dn) - N` more. With no summand the fold is the row itself, not normalised,
+   and so is this. The guard is the same bound over the whole fold
+   (`mass row + sum m_j * mass r_j`), and outside it the fold itself runs. The stop is asked once
+   per rung in both cases, and nothing between two asks can raise in the one-walk case, so a yes
+   raises `Stopped` at the same rung. This is the change D-0144 and D-0152 left for its overflow
+   argument, and the argument is the bound.
+4. **`Ladder.instantiate`.** The bridges' scaled terms are handed to `make` atoms first, bits
+   after, each half in block order. That is already `make`'s order (blocks are found in the row's
+   sorted order, one atom each, bits by index), so `make` sorts nothing. `make`'s answer is a
+   function of the multiset, and the `Checked` products run before the reordering, in the same
+   order, inside the same two-argument application. `b1_row`/`b2_row` list the atom first for the
+   same reason.
+5. **The analysis reads each row through `row_memo`.** The pivot choice, the conflict check after
+   the combination and the criterion's two scans each asked `falsified_at` of every term, through
+   `fat_memo`, whose key is a `Lit.t`, so each read paid a hash of the name and a `Lit.equal`.
+   Every read walks the row first to last and asks about the record the row holds, so `row_memo`
+   finds it by a pointer comparison at most four places past the last answer and computes each
+   term once per row. The reason's predicate, which `Reduce` and `lift` ask four or five times per
+   term, is memoised the same way. A literal not found (the pivot made by `Lit.negate`, a term a
+   combination rebuilt) is answered by the function itself. The answers are the function's,
+   because the trail does not move during `analyse` and a reason's predicate is frozen at its
+   position (I-X6). The pivot's coefficient now comes with the pivot from `pivot_of` (a row names
+   a literal once), and `falsified_before`, applied to a store and a position, remembers the last
+   name it looked up by physical identity.
+6. **Per learned row.** `to_string` (the retention key) writes into one buffer (`Lit.add_int`,
+   `Lit.add_sanitized`, the same bytes). `to_linear_row` (`--stats`) no longer re-sorts the rungs
+   of a row that `make` already listed in `rung_compare` order, since a stable sort of a sorted
+   list is the list. `decl_of_encoding` asks `Encoding.domain` once and reads `Undeclared` as
+   `None`.
+
+Where the argument is longer than a line, the old code stays as the specification.
+`make_reference`, `combine_reference` and the fold of it are compared at every call under
+`BAGUETTE_DEBUG`, so the lane's debug pass runs the comparison on every combine and lift of its
+runs, and on random inputs in the unit lanes.
+
+### 3. Tests
+
+- **test_learned, the D-0157 lanes.** `make` against `make_reference` on 20 000 raw lists of four
+  shapes (anything, a model row's blocks, `make`'s own output, overlapping blocks). `sort_by_lit`
+  against `List.stable_sort` with a payload, so stability is checked. `combine` against
+  `combine_reference` on 30 000 pairs with coefficients near 2^60 and multipliers 0, -1, 2^31 and
+  near 2^60 (15 615 rows, 9 305 of them by the one walk, 14 385 overflows, message for message).
+  `add_multiples` against the fold with a counted stop that raises at a drawn call (22 978 rows,
+  20 223 by the one walk, 3 449 overflows, 3 573 stops, the number of asks equal). `to_string`
+  against the `Printf` rendering, `min_int` included. Each lane requires both arms to be reached.
+- **test_ladder.** `lift` on 5 000 random rows over a ladder in either pivot direction, the lifted
+  row against the per-rung fold of `combine_reference` term for term (1 289 lifts), and a stop
+  answering yes at a drawn rung raising after exactly that many asks.
+
+### 4. Measurements (fataepyc-06, `/scratch/arthur/wave53-learned-runs/m/`)
+
+Binaries: main = `64ec63e0` (`9a9c461`, gate 61's binary), branch = `0fe90d0c` (`ebd1c75`).
+`perf stat -e instructions:u`, OCaml `minor_words` (`OCAMLRUNPARAM=v=0x400`) and peak RSS at the
+fixed node budgets. Every pair is equal in stdout, rc, the non-timing `--stats` lines and the
+`.opb`/`.pbp` sha256.
+
+| instance (nodes, flags) | proof | instructions, main -> branch | ratio | minor words | peak RSS MB |
+|---|---|---|---|---|---|
+| rcpsp-wet (1 500, `--bits-above 0`) | no | 77.71 G -> 57.39 G | **0.738** | 1.84 G -> 0.90 G | 140 -> 135 |
+| | yes | 77.99 G -> 57.58 G | **0.738** | 1.84 G -> 0.90 G | 144 -> 135 |
+| roster-shifts-bool (900, `--bits-above 0`) | no | 145.60 G -> 135.50 G | **0.931** | 1.40 G -> 1.02 G | 828 -> 807 |
+| | yes | 145.42 G -> 135.52 G | **0.932** | 1.40 G -> 1.02 G | 811 -> 822 |
+| rcpsp-wet-diverse (90, `--bits-above 0`) | no / yes | 46.76 / 47.99 G -> 46.58 / 47.80 G | 0.996 / 0.996 | -0.1 % | 1 418 -> 1 409 |
+| workforce-alloc (3 000, `--bits-above 0`) | no / yes | 22.26 / 22.82 G -> 22.18 / 22.78 G | 0.997 / 0.999 | -0.6 % | 231 -> 230 |
+| fbd1 (90, `--bits-above 0`) | no / yes | 209.01 / 210.66 G -> 207.71 / 209.39 G | 0.994 / 0.994 | -1.1 % | 2 245 -> 2 250 |
+| rcpsp_11 (10 000, default) | no / yes | 194.06 / 194.27 G -> 193.76 / 194.02 G | 0.998 / 0.999 | -1.0 % | 164 -> 166 |
+| mspsp_hard_01 (10 000, default) | no / yes | 121.85 / 122.32 G -> 121.29 / 121.84 G | 0.995 / 0.996 | -0.7 % | 361 -> 361 |
+
+In three steps on rcpsp-wet without the proof: 77.71 G, then 61.19 G (items 1 to 3), 58.83 G
+(items 5 and 6), 57.39 G (the natural merge sort, the atom-first bridges, the name cache). After,
+the analysis is 20.1 % of rcpsp-wet (was 39.5 %) and 6.1 % of roster (was 10.8 %); `combine` is
+2.2 % and the lift under 1 %. The GC share of the whole run hardly moves (rcpsp-wet 20 to 22 %,
+roster 15 %), because it is now the trace's and the justification's. For scale, D-0153's before
+binary (`9571b17c`, where a row with a bits term offers no PB row and falls back) runs rcpsp-wet
+at 1 500 nodes in 41.17 G without the proof. The PB rows over bits cost 1.89x that on main and 1.39x on this branch.
+
+### 5. The gate
+
+A fresh clone of `ebd1c75` on fataepyc-06 (`/scratch/arthur/wave53-learned-gate.*`), binary
+`0fe90d0c`, the one measured above.
+
+- `make check` rc 0 (24.7 s, peak RSS 97 456 kB): 4 251 unit checks `ok`, no `FAIL`; model tests
+  198 passed, 0 failed; the 24 `bits_*` models at `--bits-above 0` passed (proof verified,
+  `--no-proof` stdout identical).
+- Every `test/models/*.fzn` at default flags and at `--bits-above 0` against main's binary at the
+  branch point (`64ec63e0`): 396 runs, 0 differences in stdout, rc, `.opb`, `.pbp` or the
+  non-timing `--stats` lines.
+- `make diff --tier all -j 24`: 301 of 301 runs equal the reference, `bits0` included, SEARCH and
+  WORK counters alike. `--debug`: 289 of 289, with `combine` and `add_multiples` compared to their
+  references at every call and no check fired. `make scaling -j 16`: ok, every line within its
+  threshold. No reference file changed, so nothing is to re-record.
+
+### 6. What is left
+
+- `Trace.emit_to_page` and `Justify.emit_bits_combine` on bits runs (34 to 45 % of rcpsp-wet, with
+  or without the proof) and `Pb.pass` on roster (38 %).
+  *(Orchestrator's note, 2026-11-19: "without the proof" here means a run without `--proof`, which
+  still writes the whole proof to a temporary file (`bin/main.ml`, `open_proof_channel`). The
+  profiles in `/scratch/arthur/wave53-learned-runs/prof.sh` never pass `--no-proof`, so they say
+  nothing about the null writer's mode, where `Trace.emit` is guarded.)* These are the two remaining costs of
+  `--bits-above 0`, and neither is in this row's files.
+- In the analysis: `Ladder.instantiate`'s frozen bound (a binary search of `falsified_before`
+  probes) and `Encoding.ensure_atom`'s lookups (4 % of rcpsp-wet), and one `fat_memo` read per
+  term per new row. A per-variable integer index would remove the last hash, as RoundingSat's
+  arrays do. `Lit.t` has no integer identity, and giving it one is a `lib/proof/` change.
+- `Linear.pb_row` still rebuilds its row per call (D-0140 P2's other half, which is `linear.ml`'s).
+## D-0158  M11-complexity-T10: the memo's identical copies cannot share an entry without changing the proof's bytes; a share mode that writes each identical line once is built, off by default, and turning it on is the user's call
+
+Status: DECIDED for the default (off, every byte as before). OPEN for the user: whether share mode becomes the default (section 5).
+Date: 2026-11-19
+Task: M11-complexity-T10 (agent-memo, `wave53-memo`).
+Touches: `lib/core/justify.ml` (share mode: `create_sharing`, the `Lines` index, `memoized_line`;
+`cut_line`, `combine_line` and `linear_line` split out of `emit_cut`, `emit_combine` and
+`emit_linear` with the same order of side effects; `BAGUETTE_MEMO_STATS`, `memo_stats`),
+`test/unit/test_justify.ml` (`test_share_m11t10`, both modes over one scene, and a veripb lane of
+a share-mode proof). `lib/core/explanation.ml` is unchanged, since the structural equality added
+on the way was removed again (section 3). Follows D-0149 section 3 fix 3, D-0140 J1, D-0145.
+
+### 1. The finding: an identical copy is a line of its own, so sharing it changes the proof
+
+The memo answers "have I emitted this VALUE before", by `==`. D-0149's 388 copies on cable are
+structurally identical values built separately, and each one missed the memo, was emitted and
+wrote its own line, identical to the first copy's but for its id. The new `BAGUETTE_MEMO_STATS=1`
+counts it on the default binary. On `2020_cable_tree_wiring_R046` at 300 nodes the memo takes
+17 513 986 lookups, has no hit and holds 17 513 986 entries at its peak, with a longest bucket of
+1 326. On `2011_cyclic-rcpsp_easy_6` at 10 000 nodes it takes 9 538 832 lookups for 106 hits.
+
+So "one entry for identical explanations" and "every proof line and every id byte-identical"
+cannot both hold. An entry shared by two copies is one line where the proof had two, and every id
+after it moves. Of cable's 17.5 M lookups, 17 314 925 find an identical line already on the page,
+and 8 210 033 of cyclic's 9.5 M do (section 4).
+
+A byte-identical change can only make the same walk cheaper, and for that it must tell two copies
+apart without comparing them. An `Explanation.t` cannot do that, because a copy has no identity
+but its address. The remedy is D-0140 J1's alternative, an id stamped in each explanation at
+creation, which changes the type and therefore needs the user's record. It is not done here.
+
+### 2. What was built: share mode, off by default
+
+It is turned on by `BAGUETTE_MEMO_SHARE=1` (or `Justify.create_sharing ~share:true`). For a
+`Combine`, a `Cut` or a `Linear` that misses the memo, `memoized_line` first renders the line,
+emitting the operands in the order the line itself would emit them, so the page gets the same lines
+in the same order up to this one. It then looks the LINE up in `Lines` (the `Pol.t` expression of
+a `pol`, the `Opb.constr` of a `rup`). An identical line at a level at or below the writer's current
+level answers with its id, and nothing is written. The copy is then remembered in the memo with
+that id at the current level, as every entry is.
+
+- Two identical `pol` expressions, or two identical `rup` targets, derive the same constraint
+  whatever explanations they came from. The level condition is the claim index's condition 2
+  (M2-T9). `w l` retires levels `>= l`, so a line at or below the citing level is not retired
+  before the citing line, and an entry at the current level is wiped no later than the line it
+  names. veripb 3.0.2 accepts every share-mode proof measured (sections 4 and 6).
+- The key is the line and not the explanation, so no structural equality on `Explanation.t` is
+  needed and the header's warning about `Deferred`'s mutable field stays untouched.
+- Off, the code path is the one before this task, and every byte is the same (section 6).
+
+### 3. The designs measured and dropped on the way (rcpsp_11 and cable)
+
+| design | what went wrong |
+|---|---|
+| `Explanation.equal` on a hash hit, shallow buckets | rcpsp_11 keeps buckets of up to 7 730 distinct `Combine`s that agree on their first four summands, and comparing each structurally was 90 % of the run |
+| the same, keyed by a full structural hash | rcpsp +71 % instructions, because the hash re-walked every nested operand at every lookup (46 % of the run) |
+| keyed by a hash of every top-level summand | rcpsp 21 times the instructions, because the near-twins differ below the top |
+| the line as key, the copy not remembered | rcpsp's 9.0 M lookups became 24.8 M (each lookup of a copy rendered it again), +77 % |
+| the line as key, the copy remembered at the LINE's level | every copy of a level-0 line stayed for the rest of the run, and cyclic went from 78 s and 181 MB to more than 18 min and 7 GB (stopped) |
+| the line's text as key (a string, which the collector does not scan) | cable +12 % against the `Pol.t` key, rcpsp -1 % |
+
+The design kept is the `Pol.t` key with the copy remembered at the current level.
+
+### 4. Measured on `fataepyc-06`, proof mode, `perf stat -e instructions:u`
+
+"main" is the branch point `9a9c461` (md5 `64ec63e0`, gate 61's binary), "branch" is `c488b8e`
+(md5 `59368b5f`), off and with `BAGUETTE_MEMO_SHARE=1`. Budgets are `BAGUETTE_NODE_LIMIT`, 10 000
+for D-0140's six, 300 for cable (D-0149's) and 400 for cargo. The runs are under
+`/scratch/arthur/wave53-memo-runs/m/`. Instructions in G, `.pbp` in MB, peak RSS.
+
+| instance | main | branch, off | branch, share | `.pbp` off / share | RSS off / share | memo off: lookups, hits, peak, longest | shared |
+|---|---|---|---|---|---|---|---|
+| H_qr48_bag_def | 28.59 | 28.59 | 28.59 | 54.7 / 54.7 | 83 / 85 MB | 9 982, 0, 6, 1 | 0 |
+| H_qr72_bag_def | 40.50 | 40.52 | 40.52 | 78.2 / 78.2 | 101 / 103 MB | 9 967, 0, 6, 1 | 0 |
+| 2013_rcpsp_11 | 194.23 | 194.46 | 222.74 (+14.5 %) | 420.7 / 374.3 | 164 / 172 MB | 8.97 M, 4.37 M, 25 557, 7 730 | 543 369 |
+| 2012_mspsp_hard_01 | 122.31 | 122.38 | 125.65 (+2.7 %) | 226.1 / 221.2 | 364 / 359 MB | 1.67 M, 0.79 M, 2 598, 108 | 88 855 |
+| 2011_cyclic-rcpsp_easy_6 | 645.99 | 646.58 | 584.68 (-9.6 %) | 2 022.8 / 321.7 | 193 / 186 MB | 9.54 M, 106, 32 215, 87 | 8.21 M |
+| 2014_openshop_gp10-4 | 196.13 | 195.92 | 196.34 | 505.0 / 505.0 | 607 / 631 MB | 8 309, 0, 324, 1 | 0 |
+| 2020_cable_tree_wiring_R046 | 797.16 | 797.79 | 621.60 (-22 %) | 1 887.2 / 114.1 | 21.05 / 15.97 GB | 17.5 M, 0, 17.5 M, 1 326 | 17.3 M |
+| 2017_cargo_challenge01_0s_1913 | 123.16 | 122.97 | 122.90 | 0.005 / 0.005 | 268 / 268 MB | 0 lookups | 0 |
+
+Every run of the branch, in both modes, prints main's stdout and main's `--stats` search counters.
+Off, its `.pbp` is main's byte for byte on all eight. Cargo's time is PB analysis (D-0149), and it
+never reaches the memo by node 400.
+
+Share mode is a large proof and memory saving where propagators rebuild derivations (cable loses
+94 % of its proof and 24 % of its RSS, cyclic 84 % of its proof). It costs instructions where most
+misses are new lines (rcpsp +14.5 %, mspsp +2.7 %), because every miss is rendered and hashed once
+more before it is written.
+
+The differential lane with sharing on (`memo-gate.sh`, `--tier all`, 301 runs at the lane's node
+budgets, each under `ulimit -v 4000000`) reports 85 of 301 runs different from the reference. On
+all 85 the only lines that differ, besides the `.pbp` hash and the WORK counters, are two `--stats`
+counters, `pol` (the `pol` lines written) and `pol-tokens` (their operands and operators). They
+measure the proof's size. `observe.py` files them under SEARCH only because they are not in its WORK
+list, and nothing reads them back, since `Writer.n_pol` and `pol_tokens` are read by `main.ml`'s
+stats printer and by nothing in `lib/`. On every one of the 301 runs, stdout, the exit code, the
+`.opb` hash and every other counter (nodes, failures, learned, the LBD and width histograms, the
+retention line) equal the reference, and on the 216 others the `.pbp` hash is equal too, because
+nothing was shared there. The 85 runs are 12 instances (cyclic, mspsp, rcpsp_11, rcpsp_12,
+lot-sizing, parity-learning, soccer, chessboard, evm, bacp and the two opd) under their
+configurations. `pol` lines go down on all 85 and up on none. Over the 301 runs they fall from
+70.8 M to 48.4 M (-32 %) and `pol` tokens from 1 226 M to 670 M (-45 %). Depending on the configuration,
+lot-sizing loses 67 % to 92 % of its `pol` lines, cyclic 80 % to 84 %, soccer up to 85 % and
+rcpsp_11 12 % to 33 %. Veripb
+`d5644ca4` accepts all 274 kept proofs (the other 27 runs are the `noproof` configuration), 272
+with `s VERIFIED NO CONCLUSION` and two with `s VERIFIED BOUNDS` at the optimum. This check ran
+veripb under `ulimit -v 16000000`, because the cyclic proofs are large. The model suite with
+`BAGUETTE_MEMO_SHARE=1` passes 198 of 198 with every proof checked. The per-run counters are in
+`/cluster/arthur/baguette-results/wave53-memo/share-lane-pol-counters.txt`.
+
+### 5. The decision left to the user
+
+Turning share mode on by default would shrink proofs by up to 16 times on instances like cable and
+cyclic and keep the search identical. It would change the `.pbp` hash and the `pol` and `pol-tokens`
+counters of 85 of the differential lane's 301 reference runs, which would then be re-recorded in a
+commit of their own. Stdout and every other counter stay. It costs up to +14.5 % instructions on
+rcpsp_11. The switch is one line (`share_default`). The alternative that keeps the bytes is D-0140
+J1's id in `Explanation.t`, which would make the walk O(1) but still write 1.9 GB on cable.
+
+### 6. The gate (default mode)
+
+`memo-gate.sh` on a fresh clone of `95759c5` (code `c488b8e`), on `fataepyc-06`. `make check` rc 0
+under `ulimit -v 4000000`, 4 256 ok and 0 FAIL, 198 models, peak RSS 100 MB. The binary is
+`59368b5f`. Against `base.exe` (`9a9c461`, md5 `64ec63e0`, gate 61's binary), the 198 models give
+0 differences over their four artefacts (stdout, exit code, `.opb`, `.pbp`). The differential lane
+gives 301 of 301 runs equal to the reference and its debug pass 289 of 289. The scaling lane is
+within every threshold. The share-mode checks are in section 4. The gate's status, the share
+lane's logs and the section 4 runs (without their proofs) are copied to
+`/cluster/arthur/baguette-results/wave53-memo/`.
+
+### 7. Not done
+
+- The id in `Explanation.t` (section 1), a type change for the user's record.
+- Share mode renders a missed line twice when it writes it, once for the key and once in the
+  writer. Handing the writer the rendered expression would remove that, and is `writer.ml`'s change.
+- `Resolve` and `Clause` are not in share mode. A `Clause` already goes through the claim index,
+  which is the same sharing for clauses, and a `Resolve` answers through `defining_line`.
+
+## D-0161  M9-no-proof-T4: the `--no-proof` audit -- what the null writer still paid for after D-0135, six guards in Search and in start_proof's root lemmas, and three requests to the owners of the rest
+
+Status: DONE (gate green 2026-11-19, section 5)
+Date: 2026-11-19
+Task: M9-no-proof-T4 (agent-noproof-audit, `wave53-noproof`), the user's question "is `--no-proof`
+nicely detached?".
+Touches: `lib/core/search.ml` (`record_improving`, `solve`'s SAT arm, `learn_at_conflict`, the new
+`ensure_decision_atom` and its three call sites), `lib/proof/encoding.ml` (`emit_root_lemmas`'
+null arm, `mint_root_lemma_ids`), `bin/main.ml` (its header only). `lib/core/trace.ml`,
+`lib/core/prop/regular.ml` and `lib/core/prop/inverse.ml` were claimed and need nothing (section
+2). `justify.ml`, `compile.ml` and `alldiff.ml` are other rows' files and get requests (section 6).
+
+### 1. Method
+
+D-0135 built the detachment on 2026-11-18. What merged since (the bits atoms and PB analysis over
+bits rows, D-0153; `regular`'s and `inverse`'s root lemmas, D-0146 and D-0151; the memo and the
+citation index of D-0145) was never profiled under the mode, and the orchestrator's note under
+D-0153 section 6 says why those "without the proof" profiles do not count: a run without
+`--proof` writes a temporary proof. Every run below passes `--no-proof`.
+
+- Binaries on `fataepyc-06`: main at the branch point `e003729` (md5 `d7a1ef00`, called *base*),
+  and this branch at `5a15ed1` (md5 `af081ab4`, *guarded*), the same `lib/` as the tip. Profiles
+  use the frame-pointer switch `baguette-fp` of D-0145 (`_build_fp`, base `b5db9239`, guarded
+  `c3baa1a3`), `perf record -F 499 --per-thread -m 128 --call-graph fp`, read with `perf report
+  --children` and a caller split over `perf script` stacks (`under.py`). Instruction counts are
+  `perf stat -e instructions:u` on the ordinary switch, peak RSS is `/usr/bin/time`'s.
+- Instances. D-0140's six from `bench/diff/corpus` at 10 000 nodes. Two bits instances at
+  `--bits-above 0`, `2017_rcpsp-wet_j90_48_4-wet` at 10 000 nodes and
+  `2023_roster-shifts-bool_s50_e50_c3` at 900, D-0157's budget, because 10 000 had run past eight
+  minutes. Two Challenge instances of D-0151's runs, `2011_black-hole_10` (`inverse` native, 138 K
+  cited root lemmas, refuted at the root so the whole run is setup, from
+  `wave51-globals2-meas-inv/fzn/f7196cf5/`) and `2012_nonogram_non_awful_5` (105 `regular` calls,
+  from `wave51-globals2-meas1/fzn/`) at 10 000 nodes.
+- The startup is `BAGUETTE_NODE_LIMIT=1`, D-0140's "setup alone": parse, compile, `start_proof`,
+  the root's propagation and the first child.
+- Everything is under `/scratch/arthur/wave53-noproof-runs/` (`specs.tsv`, `meas.sh`, `prof.sh`,
+  `ident.sh`, `counters.sh`, `table.sh`, `m/`, `prof/`, `ident/`, `counters/`).
+
+### 2. What `--no-proof` did that only a proof line reads
+
+Shares are inclusive, of the whole run under the base binary.
+
+| # | function | where it showed | what it built | verdict |
+|---|---|---|---|---|
+| 1 | `Search.record_improving` -> `Encoding.assignment_lits` | openshop 28.9 %, cyclic 1.1 %, wet_b0 0.4 %, mspsp 0.4 % | every improving solution's whole literal family (each rung of each variable, the direct values, the choice selectors) for a `soli` the null writer drops unread | guarded |
+| 2 | `Search.solve`, the SAT conclusion | once per run | the same family for `conclusion SAT` | guarded |
+| 3 | `record_improving`, the bits objective's bridge | under 0.1 % | `Encoding.ensure_atom` (the `red` pair, its links, their origin strings) and a `Justify.state_clause` entry, per improving solution | guarded |
+| 4 | `Justify.ensure_lit` at a decision | under 0.1 % (`ensure_atom` 0.09 % of wet_b0, PB analysis included) | the decision's atom on a bits variable | guarded at the three call sites |
+| 5 | `Learn.supports` + `support_check` (I-S4) | up to 0.21 % (roster) | a walk over the cut and the folds that finds no line, because `Trace` writes none | guarded |
+| 6 | `Encoding.emit_root_lemmas` | nonogram 1.8 % of the startup, black-hole 0.2 % | `List.rev` and `List.map` of every lemma through a null `rup`, and the list kept for the whole search | guarded |
+| 7 | `Encoding.ensure_direct`, `derive_at_least_one` | black-hole 0.8 % | the channelling ids and tables | kept |
+| 8 | `Pb_analysis.bits_of_ctx`'s bridge | under 0.1 % | an atom PB analysis over a bits row asks for | kept |
+| 9 | `Search.bridges` | up to 0.8 % (openshop) | the decision literals a bridge rests on | kept |
+| 10 | `Retention.add`, `Learned.to_string` | roster 2.1 %, elsewhere under 0.5 % | the duplicate key | kept, not proof |
+| 11 | `Alldiff.snap_of` -> `gone_of`, `established_at_root` | cyclic 39.4 %, black-hole 88 % | the derivation's below/above runs and root flags, and each hole's remover | request |
+| 12 | `Compile.post_regular`, `post_inverse` (stage 2) | nonogram 8.9 % of the startup, black-hole 2.8 % | every root lemma's constraint | request |
+
+Why each kept one stays.
+
+- **7.** `element` and `alldiff` carry the channelling ids inside their `Combine`s, so D-0126's rule
+  2 wants them minted in both modes, and the tables `d_lo`, `d_hi`, `d_fwd` and `direct_cids` are
+  what their explanation builders read. Only the `Opb.clause` and `sprintf` arguments are
+  proof-only, about 0.2 % of black-hole's run, and splitting the loop for them was not worth the
+  risk to rule 2.
+- **8.** PB analysis deduplicates its antecedents by id (`Pb_analysis.analyse`'s `add`), so its
+  arithmetic depends on one id per atom. The memo in `ensure_atom` gives that in both modes.
+- **9.** Its answer, the protected decision literals, goes into the nogood (D-0070). The
+  proof-only part inside it (the hole citations, `record_bridge`) is a part of that 0.8 %.
+- **10.** The key feeds `n_duplicate`, a measurement `--stats` prints in both modes (D-0152 kept
+  the text as the cheaper key). It is not proof work and this row leaves it.
+- `Writer.set_level`, `with_level`, `wipe_level` and `fresh`, `Justify.with_level` and
+  `wipe_level` stay. Under the null writer they are O(1), and the fresh id of a learned row is its
+  key in `Retention`.
+- The compile-time bookkeeping under `Discard_rows` (`count_discarded_row`, `discard_shape_ok`,
+  `Occurs`, the renamings) stays. D-0143 keeps the encoding the same object in both modes, and
+  `reif_occurs`'s refusal reads `Occurs`.
+
+And what needed nothing.
+
+- `Trace.settle_facts` and `Trace.derive_ahead` are reached only from `emit_to_page`, behind
+  `Trace.emit`'s guard. `Trace.*` was at most 0.11 % anywhere, nearly all of it `lines_at` and
+  `position_of` called by `Learn.supports` (row 5).
+- The memo and the claim index of `justify.ml` stay empty. `emit`, `emit_stating`,
+  `emit_concluding` and `emit_rup_clause_lazy` return before `memoized` and `state_clause`, so
+  `wipe_level` walks nothing, and the one writer of the claim index the null writer still reached
+  was row 3. `Justify.*` was at most 0.05 % on every instance.
+- `regular.ml` and `inverse.ml` do propagation and reasons, and the reasons feed 1UIP. Their proof
+  side under the null writer is the root lemmas (rows 6 and 12).
+
+One correction to D-0135 section 2, which says the callers of `ensure_atom` are `Justify.ensure_lit`
+"(guarded, so under `--no-proof` it never runs)". `ensure_lit` has no guard. `validate_lits`
+reaches it only past the guards, but `Search.branch_split` and `branch_assign` called it directly,
+so a decision on a bits variable minted its atom through the null writer. The cost was small, and
+row 4 removes it.
+
+### 3. The guards, and why none of them can change the search
+
+- **1, 2.** `lits` is `[]` under the null writer. `Writer.improving` and `Writer.conclusion` read
+  nothing but their id there (`fresh`, `finished`), so the `soli` id is minted by the same call in
+  the same place, and nothing in the search ever read `lits`.
+- **3, 4.** The bits objective's bridge and a decision's atom are skipped under the null writer.
+  The global then carries the `soli` id, which no search step reads (`g_cid` has no reader). An
+  atom PB analysis needs is minted there on first ask and memoised, so the one property the
+  analysis reads, one id per atom, holds. This does change the null writer's counter (fewer fresh
+  ids after `start_proof`), which D-0126's rule 3 allows. Those ids already differ between the two
+  modes (D-0135 section 2), `Retention` orders by `e_seq` and never by id, and section 5 measures
+  every counter equal.
+- **5.** Under the null writer `Trace` holds no line (`n_done = 0`), so `lines_at` and
+  `hole_line_of` answer nothing and `Learn.supports` returned `[]`. The guard returns `[]`, and the
+  `i-s4` counters read the same lengths.
+- **6.** A null `rup` is `Writer.fresh` and reads nothing else, so `Array.init n_lemmas fresh` in
+  registration order mints exactly the ids the `List.map` minted, which is what alldiff cites for
+  the pairwise lemmas of an `inverse` (D-0151, rule 2). The list is then dropped, so the search
+  does not carry it.
+
+### 4. Before and after, under `--no-proof`
+
+Instructions in G at the budget and at the startup (budget 1), peak RSS in MB at the budget. One
+run each. Repeated runs of one binary move by about 0.2 %, so a change under that is noise.
+
+| instance | budget | base | guarded | change | startup base | guarded | change | RSS base | guarded |
+|---|---|---|---|---|---|---|---|---|---|
+| H_qr48_bag_def | 10 000 | 19.02 | 19.01 | -0.1 % | 0.063 | 0.063 | 0 | 65 | 65 |
+| H_qr72_bag_def | 10 000 | 26.00 | 25.96 | -0.2 % | 0.123 | 0.123 | 0 | 83 | 81 |
+| 2013_rcpsp_11 | 10 000 | 58.25 | 58.16 | -0.2 % | 0.212 | 0.212 | 0 | 120 | 117 |
+| 2012_mspsp_hard_01 | 10 000 | 72.63 | 72.31 | -0.4 % | 1.330 | 1.332 | 0 | 281 | 274 |
+| 2011_cyclic-rcpsp_easy_6 | 10 000 | 57.51 | 56.67 | -1.5 % | 0.280 | 0.280 | 0 | 47 | 41 |
+| 2014_openshop_gp10-4 | 10 000 | 65.77 | 37.72 | **-42.6 %** | 0.356 | 0.355 | 0 | 341 | **93** |
+| rcpsp-wet, `--bits-above 0` | 10 000 | 1 054.01 | 1 048.82 | -0.5 % | 0.430 | 0.430 | 0 | 582 | 584 |
+| roster-shifts-bool, `--bits-above 0` | 900 | 103.89 | 103.82 | -0.1 % | 0.377 | 0.378 | 0 | 582 | 578 |
+| 2011_black-hole_10 (whole run) | root | 41.70 | 41.63 | -0.2 % | 41.71 | 41.63 | -0.2 % | 152 | 149 |
+| 2012_nonogram_non_awful_5 | 10 000 | 340.50 | 338.70 | -0.5 % | 5.479 | 5.401 | -1.4 % | 1 043 | **891** |
+
+The startup's peak RSS moves by 4 % at most (nonogram 178 to 172 MB, black-hole 157 to 151 MB),
+because the root lemmas are built during compile either way (row 12). Wall time, one run each on
+a node at load 50: openshop 12.0 to 8.1 s, nonogram 62.8 to 59.6 s, rcpsp-wet 171 to 165 s,
+cyclic 8.6 s both.
+
+openshop gains more than row 1's 28.9 % because those lists were what its major GC was collecting.
+`caml_major_collection_slice` was 11.3 % of the base run.
+
+The after-profile (`prof/g1/`, `g1_fp.exe` under `--no-proof`, the same ten instances, read with
+`suspects.sh`) confirms rows 1, 5 and 6. `record_improving` falls from 28.9 % of openshop to 0.3 %,
+and `Encoding.assignment_lits` and `assignment_lits_of` no longer appear on any instance.
+`Learn.supports` is gone everywhere, and `emit_root_lemmas` is replaced by `mint_root_lemma_ids` at
+0.07 % of black-hole. No frame whose name says it serves only the proof reaches 1 % of any
+instance any more except black-hole's compile-time encoding (`Opb.clause` 0.9 %, `ensure_direct`
+and `start_proof` 0.8 % each), which builds the model's rows and is the same in both modes. What
+remains of the no-proof cost lies outside this row's files. Alldiff's `snap_of` is 43.2 % of cyclic
+and 87.8 % of black-hole (87.0 % in `hole_cite`), and `Compile.post_inverse` is 4.3 % of black-hole
+and `post_regular` 0.6 % of nonogram's budget run (section 6). `Retention.add` (2.0 % of roster,
+0.3 to 0.6 % elsewhere) and `Search.bridges` (1.0 % of openshop) serve the search as well as the
+proof, so they are not candidates for a null guard.
+
+### 5. The checks
+
+- **The proved run is byte-identical to main's.** Every `test/models/*.fzn` at default flags (198),
+  the 24 `bits_*` at `--bits-above 0` and the 3 `restart_*` with the restart lane's flags, base
+  against guarded, 225 runs, 0 differences in stdout, exit code, stderr, `.opb` or `.pbp`
+  (`ident.sh`).
+- **Under `--no-proof`, stdout and the search counters equal the proved run's.** The same 225
+  runs, each proved (`--proof --stats`) and unproved (`--no-proof --stats`), on the guarded
+  binary. Stdout and exit code are equal on all 225, and every `stats:` line is equal except two
+  that are about the proof, `later` (deferred reasons materialised, which the trace asks for once
+  per entry, 111 runs) and `i-s4-cross` (hole lines above level 0 that a learned clause rests on,
+  40 runs). Every node, decision, conflict, skip, learned, PB, global, propagation and wake
+  counter is equal on every run. The base binary gives the same two exceptions on the same runs,
+  and the 450 `--stats` outputs are line for line the same on the two binaries (`counters.sh`).
+- On the ten instances, base against guarded under `--no-proof`, stdout and the `limit:` line
+  (nodes, decisions, conflicts, learned, PB rows, database, depth, incumbent, propagator runs)
+  are equal.
+- `make check`'s lane already covers what this row needed. Every model (the four `regular_*` and
+  three `inverse_*` among them) and the `bits_*` at `--bits-above 0` are proved and then run
+  under `--no-proof` with stdout and exit code compared. It does not compare counters. The
+  script above does, and it is not part of the gate.
+
+The gate, on a fresh clone of `658c785` (binary `fd3d9635`, against gate 64's `d7a1ef00`):
+`make check` rc 0 (4 253 ok, 0 FAIL, 198 models passed, 24 s, peak RSS 100 MB); stdout, exit code,
+`.opb` and `.pbp` of the 198 models equal to gate 64's (0 differences); the differential lane 301 of
+301 runs equal to the reference, its debug pass 289 of 289; the scaling lane ok on every line
+(largest +0.11 % of late). Nothing to re-record.
+
+### 6. What is left, and whose it is
+
+Three requests are under `## Cross-session requests` in `WORKLOG.md`, dated 2026-11-19.
+
+- **`alldiff.ml` (agent-alldiff).** `snap_of` builds `Gone_below`/`Gone_above` (two `range` lists
+  per variable per pass) and the two root flags at every snapshot, and only the deferred
+  derivations read them. That is 39.4 % of cyclic's instructions under `--no-proof`, and the same
+  instructions in proof mode. The runs are functions of four ints the snapshot holds, so the
+  `Deferred` can rebuild them. Black-hole's 88 % is the holes' `hole_cite` walk, D-0155's request.
+- **`compile.ml` (agent-member).** The root lemmas are still built in `post_regular` and
+  `post_inverse` and now dropped unread at `start_proof`, 8.9 % of nonogram's startup and 2.8 % of
+  black-hole. A count would do, but compile.ml has no writer, and `Discard_rows` also covers the
+  runs without `--proof`, whose temporary proof writes the lemmas. So it needs a no-proof signal
+  at compile time.
+- **`justify.ml` (agent-memo).** `ensure_lit` should carry the null guard itself, so that a future
+  caller cannot mint atoms for the null writer. Nothing pays for its absence today.
+## D-0162  M7-T29 (the `fplen` half): `connect__0086_02` is a correct refusal under SPEC 2.1; capping a variable from the objective would be a dominance argument, and is PROPOSED for the user, not built
+
+Status: PROPOSED. Nothing changed in the solver; the SPEC sentence in section 3 awaits the user.
+Date: 2026-11-19
+Task: M7-T29, the `fplen` half (agent-fplen, `wave54-fplen`).
+Touches: `test/unit/test_flatzinc.ml` (one `reject` case pinning the shape). No solver code.
+Follows D-0083 (bounds inference, which already called this refusal correct), D-0121.
+
+### 1. The cause
+
+`2021_MZNC_connect_connect__0086_02` is the only one of the five `connect` instances with a
+positive floor-plan cost (`dFPUnitCost__PERIM = 100`, `nFPUnits = 0`; the four others have both
+costs 0, so `fpSz = [0, 0]`). Its perimeter branch states only
+`fpSz[c] >= fpPosXY_F[c] - fpPosXY[c]` and `fpSzCost[c] = fpSz[c] * 1`, and the objective
+minimises `PIPECOST + SUPPCOST + FPCOST`. Flattened: `int_lin_le([-1,1,-1],[fplen,X2775,X2773],0)`
+(`X2775` in 54939..112000, `X2773` in 0..1) and `int_lin_eq([1,-1,-1],[FPCOST,fplen,fpwid],0)`,
+then `OBJ__PHASE_1 = FPCOST + SUPPCOST + PIPECOST`. Nothing bounds `fplen`, `fpwid`, `FPCOST` or
+`OBJ__PHASE_1` above: the model's solution set really is unbounded in them (any `fplen >= 54938`
+extends a solution). SPEC 2.1's inference MUST be sound for every solution, so no rule, extended
+or not, may bound them. The refusal (binary `c72c48e2`) names `fplen`, lower bound 54938, and
+three other undomained variables.
+
+### 2. What a bound would need
+
+The only finite bound is a DOMINANCE one: `fplen` occurs in one lower-bound row and with a positive
+coefficient in the minimised cost, so any solution with `fplen > max(X2775) - min(X2773) = 112000`
+is matched by one with `fplen = 112000` and a strictly better objective. That keeps the optimum and
+loses solutions, so it violates 2.1's soundness sentence as written, and the `.opb` would encode
+the capped model: VeriPB would certify the optimum of a model the user did not write, by an
+argument it never checks (or the cap has to be derived in the proof, a `red` whose witness moves
+`fplen` to a value depending on other variables, which the order encoding does not express as a
+substitution).
+
+### 3. The SPEC sentence it would need (for the user)
+
+> A `var int` with no declared domain that occurs only (a) in rows bounding it from below and
+> (b) with a positive coefficient in a chain of equalities defining a minimised objective (the
+> mirror for maximise) MAY be capped at the largest value its lower-bound rows can require. The
+> capped model has the same optimal value, not the same solutions; a solution printed is a
+> solution of the original model, and the proof certifies the capped model, which the
+> diagnostic on stderr says.
+
+### 4. What the cap would buy (measured on a hand-patched `.fzn`, binary `c72c48e2`)
+
+`fplen` declared 54938..112000 and `fpwid` 24992..62000 by hand
+(`/scratch/arthur/wave54-fplen-runs/fplen_capped.fzn`), everything else as flattened. The model
+then compiles, but it has the four siblings' shape: `PIPECOST` is declared 0..216000000,
+`SUPPCOST` 0..86000000, and 217 auxiliaries 0..1000000. On the order encoding the `.opb` passed
+51 GB within five minutes, still in the encoding (stopped by its PID; the siblings were CAPPED at
+about 370 GB in wave 41, ELIGIBILITY-wave41). With `--bits-above 10000`: see section 5.
+
+### 5. The bits run
+
+Same patched `.fzn`, `--bits-above 10000 --width-warn none --proof --time-limit 1200
+--max-heap-mb 16384`, under `systemd-run -p MemoryMax=32G`: 1 166 variables on bits (110 held back
+by `element`), `.opb` 0.93 GB. The run stopped on the HEAP BUDGET after 15 min 25 s (exit 5,
+peak RSS 26.2 GB), with no solution printed and a 0.77 GB `.pbp` (nothing to verify). So the cap
+alone does not make the instance answerable: it would turn a refusal at parse time into a
+memory death in the search, the fate of 14 other wide instances in D-0121. The user's call is
+whether that is worth a normative sentence that changes what the proof certifies; this record's
+recommendation is NO for now, and to revisit it with the bits encoding's `element` (the 110
+held-back variables).
+
+## D-0163  M9-no-proof-T5: the default run keeps its proof -- `./<model>.opb` and `.pbp` in the current directory, `./baguette-proof` under MiniZinc, overwritten by the next run, and the directory still the user's to confirm
+
+**Status**: DONE 2026-11-19 (agent-keepproof, branch `wave54-keepproof`). Implements the user's
+decision of 2026-11-19 recorded in the ROADMAP row: a run without `--proof` writes its proof and
+KEEPS it, under a name taken from the model; `--proof PREFIX` chooses the name; `--no-proof` is
+the run without a proof. The directory is the proposal on record, not yet confirmed.
+
+### 1. What a run without `--proof` did, and does
+
+Until this row, `bin/main.ml` opened `Filename.temp_file "baguette" ".pbp"`, wrote the proof into
+it and deleted it at the end, and wrote no `.opb` at all (`Encoding.row_sink` stayed at
+`Discard_rows`, so the model rows were dropped at the door). The answer such a run printed came
+with a proof nobody could check, which SPEC §1 ("a primary output") did not mean.
+
+Now `parse_args` resolves the prefix once. `opts.proof_prefix` is `None` exactly under
+`--no-proof`, and every other run is a `--proof PREFIX` run with PREFIX from
+`default_proof_prefix`: the rows stream to `PREFIX.opb.rows`, the `.opb` is written before the
+proof, the `.pbp` is opened at `PREFIX.pbp`, and nothing is deleted. The temporary file and its
+cleanup closure are gone. A consequence for D-0161 §6's request to `compile.ml`: `Discard_rows`
+now means `--no-proof` and nothing else, so it IS the no-proof signal at compile time that
+request said was missing.
+
+### 2. The naming rule, in one function
+
+`default_proof_prefix` in `bin/main.ml`, whose header states the rule and that the directory is
+the user's to confirm. Changing it is an edit to that function alone.
+
+| Model given | Files kept | stderr |
+|---|---|---|
+| `DIR/foo.fzn` | `./foo.opb`, `./foo.pbp` (current directory) | nothing (M1-T49) |
+| `DIR/foo` (no `.fzn`) | `./foo.opb`, `./foo.pbp` | nothing |
+| `DIR/x.pbp` | `./x.pbp.opb`, `./x.pbp.pbp` (only `.fzn` is dropped, so a model is never its proof's name) | nothing |
+| `/tmp/mznfileXXXXXX.fzn` (MiniZinc) | `./baguette-proof.opb`, `./baguette-proof.pbp` | one line with both full paths |
+| anything, with `--proof P` | `P.opb`, `P.pbp` | nothing |
+| anything, with `--no-proof` | none | nothing |
+
+The MiniZinc case, measured on 2.10.1 with a fake solver that logs its argv, cwd and
+environment: `minizinc --solver S m.mzn` runs the solver in the caller's cwd with argv = the
+flags, then `/tmp/mznfile<6 random chars>.fzn`. Neither the argv, the environment nor the `.fzn`
+names the `.mzn`. A name from the model would be a new meaningless name on every run, so the
+rule recognises MiniZinc's temporary name (`mznfile*.fzn`, the prefix of MiniZinc's
+`FileUtils::TmpFile`) and uses a fixed `baguette-proof` in the cwd, and says where on stderr,
+because the user never typed that name. `tools/baguette.msc` gains `--no-proof` as a `bool`
+extraFlag beside the existing `--proof` string flag (measured: MiniZinc passes `--no-proof` only
+when given). So `minizinc --solver baguette --proof out m.mzn` names the proof and
+`--no-proof` skips it. Checked end to end with the real MiniZinc and the built solver: the
+default run leaves `baguette-proof.opb`/`.pbp`, which veripb verifies (`VERIFIED BOUNDS`).
+
+The alternative for MiniZinc was to recognise any model in the temp directory. It was not taken
+because a user who keeps a model in `/tmp` would get `baguette-proof` instead of its name.
+
+### 3. Overwriting
+
+A file of the same name is overwritten without a word, as `--proof PREFIX` always did and as a
+compiler overwrites its output: it is the previous run's proof. The cost of that choice is that
+two runs of the same model, or two MiniZinc runs, in the same directory at the same time write
+over each other's proof. Give each its own `--proof`. A refusal before the solve (exit 2 at the
+front end) writes nothing; a resource death mid-proof prints the existing INCOMPLETE warning,
+now worded "A proof was being written" since the user may not have asked for one.
+
+### 4. The lanes and tests that ran without `--proof`
+
+Found by grep over every script, test and bench file that names the binary. SPEC §1 says
+`make check` always proves, so the in-gate ones take a scratch prefix, not `--no-proof`.
+
+- `test/unit/test_endtoend.ml`: the M7-T32 flag runs name `--proof plain` in their temp dir when
+  the run names none, and the lane ends by checking no default-named proof appeared. New lane
+  `test_m9t5_default_keeps_proof`, 12 checks: (a) the default run keeps exactly `./keep.opb` and
+  `./keep.pbp` in its cwd, veripb accepts them, stderr is empty, nothing appears beside the
+  model; (b) a second run overwrites them with the same bytes; (c) a model without `.fzn`;
+  (d) `mznfileQ1w2E3.fzn` gives `baguette-proof`, veripb accepts it and stderr names both full
+  paths; (e) a refused model exits 2 and leaves no file.
+- `mznlib/test/check_mznlib.sh`: the second, output-only run of a flattened model names
+  `--proof "$tmp/<n>_again"`.
+- `scripts/diff_lane.sh`: a configuration with `proof=no` must carry `--no-proof` in its flags,
+  and a proof column other than yes/no is refused. The one such line, `noproof`, already did, so
+  no reference moved.
+- `scripts/corpus_run.sh` `NO_PROOF=1`: its documented meaning was "the solver still writes its
+  proof to a temporary file, so this removes the checker and the artefact, not the logging"
+  (config b of D-0080). Kept: it now passes `--proof "$L"` and deletes the pair unchecked. The
+  one difference is that the `.opb` is now written too. `SOLVER_ARGS=--no-proof` beside it
+  replaces the prefix (the two flags together are exit 2).
+- `bench/learning_baseline.sh`: the two `--stats` runs name `--proof "$WORK/s"`.
+- Already explicit, unchanged: `scripts/compare_run.sh` (`--proof "$L"`), `run_model_tests.sh`,
+  `verify_proof.sh`, `check_determinism.sh`, `check_unlimited.sh`, `scaling_lane.sh`,
+  `shrink.sh`, `bench/run_bench.sh`, `bench/fuzz/run.py`, the `bench/perf` scripts. The
+  historical one-off scripts under `bench/m6t9`, `bench/bits_spike` and `bench/regular_spike`
+  all pass `--proof` or `--no-proof`, or go through `corpus_run.sh`.
+
+`*.opb` and `*.pbp` are in `.gitignore`, so a plain `git status` cannot show a stray proof. The
+gate's stray check therefore uses `git status --short --ignored` and a `find` outside `_build`.
+
+### 5. The gate
+
+First gate, fresh clone of `6b8ba3d` in `/scratch/arthur/wave54-keepproof-gate` (binary
+`b4a16e86`, against gate 64's `d7a1ef00`): `make check` rc 0 (4 278 ok, 198 models passed, 25 s,
+peak RSS 99 MB); stdout, exit code, `.opb` and `.pbp` of the 198 models run WITH `--proof` equal
+to main's binary (0 differences, so proof mode is byte-identical); the differential lane 301 of
+301 equal to the reference, its debug pass 289 of 289; the scaling lane ok on every line;
+`bench/diff` unchanged, nothing re-recorded. The stray check then found `./wide.opb`/`.pbp` and
+`./justover.opb`/`.pbp` (2.1 MB and 0.7 MB) in the clone's root: `scripts/check_unlimited.sh`
+had eight runs without `--proof` that the first grep missed, because their solver call and its
+flags sit on separate lines. They now name `--proof "$TMP/scratch"` (`26f9b89`, a script-only
+change). A line scanner over every tracked script, joining continuation lines, then found no
+other run of the solver without `--proof` or `--no-proof`.
+
+Second gate, fresh clone of `26f9b89` in `/scratch/arthur/wave54-keepproof-gate2`: `make check`
+rc 0 (4 278 ok, 198 models, 26 s, peak RSS 100 MB), the same binary `b4a16e86` (so the lanes
+above stand), and no `.opb` or `.pbp` anywhere in the clone outside `_build/`, `test/out/` (the
+model lane's own output directory) and the two tracked fixtures under `bench/control/`, by
+`find` and by `git status --short --ignored`.
+
+### 6. What the user must still confirm
+
+- **The directory.** The current directory is the proposal on record. The alternatives are the
+  model's own directory (which would write into `test/models/` when a model there is run
+  without `--proof`), or a fixed proofs directory. Either is a one-line change to
+  `default_proof_prefix`, plus SPEC §4.1's bullet and the lane `test_m9t5_default_keeps_proof`.
+- **The MiniZinc name.** `./baguette-proof`, fixed, overwritten by the next run, with a line on
+  stderr. A per-run unique name would never collide but would pile up files in the cwd.
+- **Overwriting.** Chosen silent, like `--proof PREFIX` and a compiler. Refusing to overwrite
+  would make the second run of a model fail until the user deletes the first proof.
+
+## D-0164  M11-complexity-T11: what black-hole keeps per node, and Element's foreign-hole clauses built lazily
+
+Status: DONE (the fix); section 7 stays open
+Date: 2026-11-19
+
+By agent-heap (branch `wave54-heap` for the probe, `wave54-heap-fix` for the fix, both on
+the hub). Base: `wave53-alldiff` tip `b7e1ca9` (M7-T33, not yet merged), binary `45b8a3c7`.
+Runs in `/scratch/arthur/wave54-heap-runs/`, copied to `/cluster/arthur/baguette-results/wave54-heap/`.
+
+### 1. The question
+
+D-0155 section 4 and D-0156 section 4 left one finding open. `2011_black-hole_9` without
+`--proof` held 6.3 GB RSS after 39 nodes, and with M7-T33 black-hole x4, black-hole_layout x3 and
+ghoulomb x1 stop at the 8 GB heap budget (rc 5) within about 90 s. Which structure holds the
+memory, and is it (a) data that should be released on backtrack and is not, (b) data that is
+legitimately live along the branch but too big per entry, or (c) something cumulative across the
+run?
+
+### 2. Method
+
+A probe on `wave54-heap` (`lib/core/search.ml`, the seven commits marked PROBE, not for merging):
+
+- `BAGUETTE_HEAP_PROBE=K`: every K nodes a full major GC, the live heap (`Gc.stat`), the words
+  reachable from the search's roots `(store, engine, ctx, trace, stats)`, and the MARGINAL share of
+  the trail, the explanation arena, the propagator instances and, per propagator family, of that
+  family's trail entries together with their arena slots (each hidden in turn and
+  `Obj.reachable_words` taken again). `unreached` = live minus reachable, which is where a
+  module-level table would show.
+- `BAGUETTE_HEAP_QUICK=1`: `Gc.quick_stat` at every node, no forced GC.
+- At `BAGUETTE_NODE_LIMIT` with the probe on: DESTRUCTIVE drops in a fixed order (writer audit
+  table, writer tags, `Justify` memo, `Justify` stated, trace, the arena slots family by family,
+  the arena, the trail), live heap after each.
+
+memtrace is not usable: OCaml 5.1.1 has no `Gc.Memprof`.
+
+### 3. What is retained
+
+**Without `--proof`, base binary, `2011_black-hole_9`** (probe every 5 nodes):
+
+| node | trail | live | arena share | element entries + slots |
+|---|---|---|---|---|
+| 5 | 7 047 | 121 MB | 26 MB | 6 322 / 32 MB |
+| 10 | 12 179 | 244 MB | 135 MB | 10 919 / 154 MB |
+| 15 | 18 767 | 725 MB | 579 MB | 16 694 / 633 MB |
+| 30 | 24 924 | 1 194 MB | 965 MB | |
+| 40 | 24 928 | 1 193 MB | 965 MB | 22 007 / 1 082 MB |
+
+`unreached` is 0 at every probe and the instances' share is 0, so nothing is held outside the
+search's roots and nothing is (c). Between nodes 15 and 20, and on `2013_black-hole_4` between
+nodes 20 and 25 where the trail shrinks back to 17 746 entries, the live heap follows the trail
+and not the node count: what a backtrack pops is released. So it is not (a) either. It is (b):
+live along the branch, and far too big per entry, about 49 KB per `array_int_element` entry at
+node 40 and growing with depth (4.7 KB per entry at node 5), so the heap is superlinear in the
+trail.
+
+The structure: `Element.index_hole_clause` (`lib/core/prop/element.ml`, M7-T21 / D-0084), called
+by `pos_gone` for each dead position whose index value is an interior hole punched under a decision
+by another propagator. It built `Explanation.clause (unit :: List.map Lit.negate (Reason.lits
+e.reason))` EAGERLY: the puncher's whole reason materialised as fresh literals. `dead_positions`
+calls `pos_gone` for every dead declared position at every pruning (`alo`, `push_lo_expl`,
+`push_hi_expl`, `hole_expl`, `no_position_conflict`), so one pruning copied O(dead positions x
+puncher facts) literals, and the puncher's facts themselves grow along the branch (an element
+reason carries its index holes' punchers' facts, `index_hole_facts`). On black-hole the 102
+element constraints share ONE index, `X_INTRODUCED_107_` over 1..416 (the widest variable of the
+model), each with its own constant array and a result over 1..52. Every hole one instance punches in
+that index is a foreign hole for the 101 others, and a pruning walks up to 416 dead positions.
+
+**With `--proof`** the eager copies were only part of it. The quick probe (`p5/`) shows the heap
+flat until the first failure deep in the tree, then a jump at that one node: base 1 661 -> 4 182 MB,
+fix 763 -> 3 242 MB at node 30 of `2011_black-hole_9`, then +100 to +350 MB per later failure. At
+the first failure `Trace.emit` writes a line and its derivation for every entry of the branch
+(about 25 000), and each written derivation stays reachable until its level is wiped. The drops at
+node 40 (`p7/`, fix, live 2 660 MB):
+
+| dropped (in this order) | live after | share |
+|---|---|---|
+| writer audit table (`Writer.live`, origin closures) | 2 335 MB | 325 MB |
+| writer `tags` + `by_lvl` | 2 145 MB | 190 MB |
+| `Justify` memo | 1 804 MB | 341 MB |
+| `Justify` stated (claim index) | 1 471 MB | 333 MB |
+| trace | 1 454 MB | 17 MB |
+| explanation arena (forced derivations) | 233 MB | 1 221 MB |
+| trail (reasons, `cites` memos) | 93 MB | 140 MB |
+
+All of it is (b) as well: proof state of the open levels, wiped by `Justify.wipe_level`. Dropping
+the arena slots family by family after the four tables above (`p12/`): element's slots free 60 MB,
+then `all_different_int`'s free 1 161 MB, inverse, int_lin_le and decisions nothing. So the
+largest single holder in proof mode is the FORCED derivations of `all_different` prunings, about
+530 entries on the branch and 2.2 MB each, held by `Explanation.force`'s memoisation once their
+lines are written (element's derivations cite them, which is why dropping element's slots first
+frees little). Without `--proof` the same 530 entries hold 15 MB: what is big is the rendered
+derivation, not the snapshot it is built from.
+
+Without `--proof` one more (b) item shows in `--stats` on `2013_black-hole_4` (300 s, fix): the
+decision-closure citation memos (`Store.entry.cites`, M7-T27 a3), 13 163 memos and 231.6 MB.
+
+### 4. The fix (one commit on `wave54-heap-fix`, element.ml only)
+
+1. `9e6a230`: the puncher is still found eagerly (I-X6: which entry punched the hole is live store
+   state), its literals are not. The clause is built inside `Explanation.deferred` from the
+   puncher's `Reason.t`, which is frozen data (a `Facts` list, or a `Later` reading a history that
+   is valid while the puncher is on the trail, and the puncher is below the pruning, so it outlives
+   every arena slot that can hold the thunk). Same literals in the same order.
+
+It changes neither the type `Explanation.t`, a proof rule nor the search.
+
+Tried and reverted (`e0a57bb`, reverted by `3b32af4` on `wave54-heap`): one clause per hole,
+cached per index value with the puncher entry it was built for, so that every pruning citing the
+hole shares one node. Same proof bytes, but no gain on bh9 with `--proof` (live 2 660 -> 2 657 MB
+at node 40, RSS 5 644 -> 5 620 MB) and 7 958 -> 7 518 MB on bh4, because section 3's proof-mode
+holder is alldiff's derivations rather than these clauses. Its cache also keeps popped puncher
+entries alive (75 MB on bh9 without `--proof`). Not worth a cache.
+
+### 5. Measurements (fataepyc-06)
+
+Binaries: base `45b8a3c7` (`b7e1ca9`), fix `c4cd4783` (`9e6a230`). The probe binaries (the same
+code plus the inactive probe, whose own node limit exits at once): base `3e8c79ae`, fix `af833694`.
+
+Equal nodes (node limit 40, same trail length at every probe, so the same search), probe binaries,
+`perf stat -e instructions:u` (`p3/`):
+
+| run | RSS base -> fix | instructions base -> fix |
+|---|---|---|
+| bh9 `--no-proof` | 2 127 -> 839 MB | 132.4 G -> 111.9 G (-15.5 %) |
+| bh4 `--no-proof` | 6 044 -> 1 719 MB | 645.1 G -> 471.4 G (-26.9 %) |
+| bh9 `--proof` | 5 424 -> 4 344 MB | 686.9 G -> 670.8 G (-2.3 %) |
+| bh4 `--proof` | 11 655 -> 7 977 MB | 2 109.6 G -> 1 938.0 G (-8.1 %) |
+
+The `.pbp` of each proof pair has the same sha256 (bh9 `468e80ec...`, 551 MB; bh4 `fb65a630...`,
+1.13 GB).
+
+The same with the clean binaries and the CLI's own node limit (`BAGUETTE_NODE_LIMIT=40`, M6-T9,
+which writes the proof to its end; `p10/`):
+
+| run | RSS base -> fix | instructions base -> fix | `.pbp` (same sha256) |
+|---|---|---|---|
+| bh9 `--proof` | 6 726 -> 5 644 MB | 800.4 G -> 776.8 G (-3.0 %) | 617 MB `e29e8967...` |
+| bh4 `--proof` | 11 656 -> 7 958 MB | 2 134.6 G -> 1 960.8 G (-8.1 %) | 2.50 GB `f08cdbd5...` |
+
+The Challenge setting, `2013_black-hole_4`, 300 s, `--max-heap-mb 8192` (`p9/`, clean binaries):
+
+| | base | fix |
+|---|---|---|
+| `--proof` | rc 5 at 92 s (heap budget), 8.42 GB | rc 0, time limit, 42 nodes, 8.02 GB |
+| `--no-proof` | 125 nodes, 6.60 GB | 154 nodes, 2.04 GB |
+
+The 15 black-hole and black-hole_layout instances at 30 nodes with `--proof` (`p4/`), peak RSS
+base -> fix: bh4 11 292 -> 7 098 MB, bh12 8 243 -> 6 382, bh14 12 136 -> 10 847, bh16 3 467 ->
+2 255, bh18 4 879 -> 3 031, bh20 3 218 -> 2 350, bh9 5 145 -> 4 152, layout_3 4 706 -> 4 103,
+layout_14 10 787 -> 10 106, layout_17 6 525 -> 5 168, layout_25 12 352 -> 11 140, layout_27 3 861
+-> 2 599. bh6, bh10 and bh17 finish under 400 MB either way.
+
+### 6. Bytes and the gate
+
+- Every `test/models/*.fzn` (200) solved with `--proof`, plus the 15 black-hole instances at
+  `BAGUETTE_NODE_LIMIT=30`: stdout, exit code, `.opb` and `.pbp` sha256 of fix against base,
+  215 of 215 identical (`p4/results`).
+- fix on a fresh clone (`gate/`): `make check` under `ulimit -v 4000000` rc 0, 200/200 models,
+  0 FAIL. `make diff ARGS="--tier all -j 16"`: FAIL, 18 of 301 runs differ from the reference,
+  `2020_lot-sizing_pigment15b.psp` in 12 configurations and `2011_cyclic-rcpsp_easy_6@2000` in 6,
+  exactly the runs wave53-alldiff's handoff says must be re-recorded at its merge. The same lane
+  on the BASE binary fails on the same 18 runs, and the kept observations of base and fix are equal on 300 of 301 runs. The one
+  that differs is lot-sizing's `activity` configuration, which dies at the lane's 4 GB cap in
+  both (the cap wave53-alldiff's `--update` already hit): base with rc 134 "allocation failure
+  during minor GC" before printing its encoding counters, fix with rc 2 "Out of memory" after
+  them. Rerun twice each with the same cap (`p8/`), base and fix both die with rc 134, so where
+  the 4 GB cap is hit is not deterministic. With the cap at 24 GB both complete (rc 0, 4.27 GB peak RSS) and their observations, proof hashes included, are equal.
+
+### 7. What is left, not done here
+
+- With `--proof`, black-hole still grows 100 to 350 MB per deep failure and reaches 2.66 GB live
+  (5.6 GB RSS) at node 40 of bh9. The holders are section 3's table: alldiff's forced derivations
+  (1.16 GB), the `Justify` memo (341 MB) and claim index (333 MB), the writer's audit table (325 MB,
+  on by default in the CLI) and its tags (190 MB). They are proof state of the open levels. Shrinking
+  the largest means not keeping a forced derivation once its line is written: its id is what a
+  later citation needs, and the `Justify` memo already holds that under the `Deferred` node's
+  identity. But `Explanation.force` memoises the tree by design, `Justify`'s hashing reads the
+  forced head, and a re-forced tree has new inner nodes, so whether the bytes stay the same needs
+  its own argument and measurement. That touches `explanation.ml` and `justify.ml` and is a
+  decision of its own, not attempted here. The other way in is the size of alldiff's derivations
+  themselves, 2.2 MB of heap each.
+- The per-pruning `dead_positions` list is still built eagerly, one deferred thunk per dead
+  position per pruning (about 8 KB per element entry at node 40 without `--proof`), and an element
+  reason still copies its index holes' punchers' facts (`index_hole_facts`).
+- `Store.entry.cites` (231.6 MB on bh4 without `--proof`).
+
+### 8. To land
+
+The fix touches only `lib/core/prop/element.ml`, which nobody claims in the current table. The
+branch is built on `wave53-alldiff` (M7-T33), so it lands after that merge, as the one commit
+`9e6a230` cherry-picked onto main and gated there (the alldiff merge re-records the lane's
+lot-sizing and cyclic references first). The probe commits on `wave54-heap` are not to be merged.
+
+### 9. Landed on main ahead of M7-T33 (orchestrator)
+
+The fix touches `element.ml` only, which main holds since D-0155, so it was cherry-picked onto main
+(`bb59854`) as its own branch `wave54-heapfix` instead of waiting for wave53-alldiff's merge. The
+numbers of section 5 were measured over wave53-alldiff's tip; on main the gate checks that every
+artefact stays byte-identical (gate 69, WORKLOG).
+
+
+## D-0166  M11-complexity-T12: what a proved run keeps once a line is written; four holders shrunk byte for byte, the largest is the user's call
+
+Status: DONE for sections 2 and 3 (every byte the same). OPEN for the user: section 5.
+Date: 2026-11-19
+Task: M11-complexity-T12 (agent-live, `wave54-live`). Follows D-0164 section 7.
+Touches: `lib/core/justify.ml` (the claim index's packed keys, the memo's chained table, shared
+`Combine` origins), `lib/proof/writer.ml` (the audit keeps the origin alone, `by_lvl` as runs),
+`test/unit/test_justify.ml` (`test_representations_m11t12`). `lib/core/explanation.ml` is
+unchanged.
+
+### 1. The question
+
+D-0164 section 3 found 2.66 GB live on `2011_black-hole_9` with `--proof` at node 40, held by
+alldiff's forced derivations (1.16 GB), the `Justify` memo (341 MB) and claim index (333 MB), the
+writer's audit table (325 MB) and its tags (190 MB). For each holder, which part must outlive the
+line it wrote and which part is kept only because nothing dropped it?
+
+Measured on a throwaway base, main `f5c7973` with `origin/wave53-alldiff` merged (main stops at 13
+nodes on black-hole) and agent-heap's PROBE commits, plus counts per table at the node limit:
+3 131 911 memo entries (3 130 755 of them inner `Combine`s, 462 `Deferred`, 694 `Clause`),
+25 888 claim keys holding 4 868 262 literals (16 387 keys over 20 literals: the trace lines),
+3 371 554 live ids in the audit table and in `tags` alike. With `BAGUETTE_MEMO_STATS=1` the memo
+takes 3 391 406 lookups to node 40 and answers **none** of them.
+
+### 2. What each holder must keep, and what it kept for nothing
+
+| holder | read again after the line is written | kept only because nothing dropped it | done |
+|---|---|---|---|
+| claim index (`stated`) | the clause as a SET, for `defining_line`'s equality test and `wipe_level` | a fresh `Lit.t` record and `Ge` block per literal of every key, 68 bytes a literal | key packed to two ints a literal over interned names: 333 -> 76 MB |
+| memo | the key's identity (`==`), its hash, the id and the level, for the hit test and the wipe | a tuple, a record and a list cons per entry, and the hash again as a cons per level, about 93 bytes | one 48-byte cell per entry in a chained table, the per-level hashes in int buffers: 342 -> 244 MB |
+| audit table (`live`) | the id's presence (I-X2, `is_live`, the end sweep `live_ids`), its origin for a failure report | the level (it is the id's tag, in `tags`), and one origin closure per `Combine` line | the origin alone, one closure per `Combine` shape: 325 -> 132 MB |
+| `tags`, `by_lvl` | each live id's level, for `wipe_level`'s doomed set | one cons per id in a level's bucket, whose ids are almost always consecutive | the bucket as runs of consecutive ids: 189 -> 118 MB |
+| alldiff's forced derivations | the head's identity and shallow hash (memo hit), the whole tree for `Explanation.lits` (the D-0026 agreement check under `BAGUETTE_DEBUG`), `Pb_analysis.cited_ids`, and a re-emission after the memo entry's level is wiped while the explanation lives on | nothing, within the type: see section 5 | not done, 1.16 GB stays |
+
+The memo's entries are kept as they were, each one. Every lookup keys on a physical value, so an
+entry cannot be dropped while its key is reachable without risking a second line, and the memo
+cannot know which keys a later derivation will reach.
+
+### 3. Why the bytes cannot move
+
+- Claim index: the packing is injective (one interned id per name string, so two names share an
+  id exactly when `String.equal` holds, which is what `Lit.equal` compares; kind, sign and value
+  are their own fields), so two packed keys are equal exactly when the sorted literal lists were
+  equal. Nothing iterates the table. The interned names are never wiped, so an id stays stable
+  for as long as any key can use it.
+- Memo: a lookup compares the full hash, then `==`, and a slot's chain is newest first as a bucket
+  was, so it answers what the bucket of that hash answered; growing the table keeps each hash's
+  cells in their order. A wipe removes from a slot exactly its cells at the wiped level or above.
+- Audit: `live` and `tags` gain and lose ids at the same four sites (`fresh_lazy`, `wipe_level`,
+  `delete_many`, `delete_core`); nothing re-tags an id, so the report's level read from `tags` is
+  the level the entry held. An origin is rendered only by the report, the mutation knob and
+  `--stats`' widest `pol`, and a shared `Combine` closure renders the same string (the key packs
+  both integers and is used only where both fit in 31 bits).
+- `by_lvl`: a run is extended only when the new id is the next one at the same level, and a bucket
+  read from each run's `hi` down to its `lo` lists the same ids in the same order as the list did,
+  so `wipe_level` computes the same doomed list and writes the same deletions.
+
+`test_representations_m11t12` drives 5 000 derivations over four interleaved levels past the
+table's growth, a run broken by an interlude at another level, and clauses that differ by kind,
+sign, name or order, through hits, wipes and re-derivation.
+
+### 4. Measurements (fataepyc-06, `2011_black-hole_9`, `--proof`, node 40)
+
+Binaries on the throwaway base: before `d1e5e20a`, after `b28d132a` (the same PROBE code, which
+is inert without `BAGUETTE_HEAP_PROBE` except for the node limit). Runs in
+`/scratch/arthur/wave54-live-runs/`.
+
+| | before | after |
+|---|---|---|
+| live heap at node 40 | 2 660 MB | 2 041 MB |
+| peak RSS (probe off) | 4 346 MB | 3 648 MB |
+| instructions (`perf stat`, probe off) | 670.7 G | 656.3 G (-2.2 %) |
+| wall (probe off, shared node) | 118.9 s | 121.8 s |
+| `.pbp` md5 | `1d8104fe` | `1d8104fe` |
+
+The drops after the change (same order as D-0164's): audit origins 13 MB (was 129), audit table
+119 MB, `tags` + `by_lvl` 118 MB, memo 244 MB, claim index 76 MB, trace 16 MB, element's arena
+slots 61 MB, all_different's 1 160 MB.
+
+### 5. For the user: alldiff's forced derivations (1.16 GB) and the memo that never hits
+
+Every forced derivation is held by its arena slot through `thunk.forced` (and `thunk.compute`,
+which `force` sets to a closure returning it) for as long as its trail entry stands. After the line
+is written the solver reads it again only in the four ways of section 2's last row. None of the
+options below is taken.
+
+| option | what changes | bytes | memory on bh9 node 40 | cost |
+|---|---|---|---|---|
+| A. keep (now) | nothing | same | 1.16 GB stays | none |
+| B. a thunk records its emitted id and level, drops its forced tree, keeps its original closure and re-forces on a later read | `Explanation.t`'s `thunk` record (a field) | same if every thunk is deterministic (I-X6 says it closes over a snapshot) and a re-forced tree shares no non-thunk node with another live one; argued, then measured | most of 1.16 GB (the closures hold about 15 MB, D-0164) | a re-force per later read: debug agreement walks, `cited_ids`, a re-emission after a wipe |
+| C. replace the forced tree by `Model_row id` once written | no type change | a citation after the line's level is wiped names a deleted id; `Explanation.lits` loses the cited literals, so the D-0026 agreement check under `BAGUETTE_DEBUG` fires on the parents | most of 1.16 GB | not sound as it stands; rejected |
+| D. make alldiff's derivations smaller (share the axiom chains, fewer inner `Combine`s per line) | `lib/core/prop/alldiff.ml` only | same if every line is the same | unknown, the tree is 2.2 MB of heap per derivation | its own task |
+| E. memoise only roots and `Deferred`s, not a `Combine` reached as another `Combine`'s `Term` | `justify.ml` only | same if no non-thunk node is shared by two derivations or twice in one; that is explanation.ml's stated discipline ("a thunk is the ONLY shared node"), not a property of the type, and a violation would write a duplicate line, still valid | most of the memo's 244 MB here (3.13 M inner entries, 0 hits) | the discipline becomes load-bearing for the bytes; a `BAGUETTE_DEBUG` check could keep the full memo and assert no inner hit |
+
+Recommendation: B, which takes the largest holder without touching any proof line, if the user
+accepts a field on `thunk`; E is cheap, but it makes a comment-level discipline load-bearing for
+the bytes, and that should be the user's call too.
+
+### 6. Gate
+
+Fresh clone of `wave54-live` at `c46952f` from the hub (`/scratch/arthur/wave54-live-gate`, binary
+`214e74d1`) against gate 69's `22620b60`: `make check` rc 0 (4 289 ok, gate 69's 4 279 plus the 10
+of `test_representations_m11t12`; 198 models, peak RSS 99 MB), 198 models x 4 artefacts equal
+(`out`, `rc`, `opb`, `pbp`), lane 301/301 and debug 289/289 equal to the reference, scaling ok,
+`bench/diff` untouched. Nothing to re-record.
+
+## D-0167  The six open decisions of 2026-11-19, taken by the orchestrator on the user's delegation
+
+Status: DECIDED (2026-11-20). The user, 2026-11-20: "Prends les décisions selon ton opinion, je
+regarderai quand j'aurai le temps." Each item below can be reversed by the user; each names what
+reversing it costs.
+
+| # | Question | Decision | Why | To reverse |
+|---|---|---|---|---|
+| 1 | lot-sizing [activity] over the lane's 4 GB cap with M7-T33 (D-0156 §7) | Lower `2020_lot-sizing_pigment15b.psp`'s node budget in `bench/diff/corpus.tsv` (3 000 today) to the largest round value whose twelve configurations all stay under the 4 GB cap with M7-T33, measured; its twelve references are re-recorded at the alldiff merge anyway | The 4 GB cap is a discipline of every suite (CLAUDE.md), and a per-line cap would be a new mechanism for one line; the growth is M7-T33 learning from alldiff conflicts (846 -> 1 722 learned under `keep_all`, D-0051), which is the point of the row, not a leak | restore 3 000 and add a per-line cap |
+| 2 | `member` (D-0159 §5) | Not merged as it stands. A new row, M7-T34, builds the width-independent encoding D-0159 §5 names (big-M rows per position) on the member branch; merge when it changes no answer for the worse and its rows no longer grow with the width | No answer changed on the 35 instances, and the rows reach 3.77 M on `gl_Map1f`; a propagator that costs width-proportional rows for no answer is not worth its weight yet | merge `wave53-member` as is |
+| 3 | The memo's share mode as the default (D-0158 §5) | ON by default, after the alldiff merge, with the 85 lane references whose `.pbp` hash and `pol`/`pol-tokens` counters move re-recorded in their own commit | Since D-0163 the default run keeps its proof, so proof size is now paid by every user on disk and by the checker: cable 1 887 -> 114 MB, cyclic 2 023 -> 322 MB, search identical, 274/274 proofs verified; the cost is up to +14.5 % instructions (rcpsp_11) | `share_default = false`, re-record the same 85 |
+| 4 | D-0162 §3, objective dominance to bound `fplen` | Rejected. The refusal stays | It would certify a capped model, not the one written, and the instance then dies on memory anyway | write the sentence into SPEC 2.1 |
+| 5 | D-0163 §6: the default proof's directory, MiniZinc's fixed name, silent overwrite | Kept as built: `./<model>.opb`/`.pbp` in the current directory, `./baguette-proof.*` under MiniZinc with the paths on stderr, overwrite silently | It is what a compiler does with its output, and `--proof PREFIX` chooses anything else | one line in `default_proof_prefix` |
+| 6 | D-0166 §5: releasing the forced alldiff trees (1.16 GB on bh9) | Option B: `Explanation`'s `thunk` gains a field recording its emitted id and level; the forced tree is dropped once written and re-forced on a later read. Built as M11-complexity-T13, every proof byte-identical | The largest holder left, and B changes no proof line; E makes a comment-level discipline load-bearing for the bytes | keep option A |
+
+Also decided: the Challenge-wide re-measurement (M8-T4, M9-T3, M10-T5) does NOT rerun Chuffed; it
+compares against M7-T26's recorded Chuffed runs and the official archive (bench/challenge/README §3
+asked the user; the delegation answers it).

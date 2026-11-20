@@ -354,7 +354,7 @@ make check          # fmt-check + build + lint + determinism + test — the gate
 make fmt            # the explicit fixer. Rewrites files. Run it, then stage only YOURS
 make proof FZN=test/models/foo.fzn   # solve and verify one model's proof
 make bench ARGS="..."                # measurement only, never a commit gate
-make diff ARGS="--tier all -j 24"    # the DIFFERENTIAL lane (M11-T2, D-0141): real instances at a
+make diff ARGS="--tier all -j 16"    # the DIFFERENTIAL lane (M11-T2, D-0141): real instances at a
                                      # fixed node budget, stdout + counters + proof hashes against
                                      # bench/diff/reference; add --debug for the BAGUETTE_DEBUG pass.
                                      # Node only. Re-record (--update) only after a gated merge that
@@ -393,11 +393,40 @@ general-purpose agents for work that actually edits. Continue an existing agent 
 than spawning a fresh one for a follow-up in the same area — the fresh one pays the
 discovery cost again.
 
+### Orchestrating: what the user expects
+
+Recorded from the user's own words, November 2026. Each rule names when it does not apply.
+
+- **Keep the node busy.** While agents run, start every task whose files nobody holds (claim
+  first) and queue the rest until the holder merges ("on lance encore plus de travail en
+  parallèle", 2026-11-18). Not when the node is loaded by the user's own experiments.
+- **Never stop an agent mid-task** to free a file or to save time ("ne coupons pas les agents en
+  route, ça pourrait désorganiser la progression et on pourrait oublier des trucs"). The
+  exceptions are an agent doing something unsafe or wrong, a rate limit, or a lost connection.
+  Then PAUSE it: a WIP commit on its branch, pushed, and a `PAUSED` note at the top of
+  `## Handoff notes` saying what is done, measured and left, and resume from that note.
+- **Check that an agent is alive before saying it runs** (ListAgents). One launched before a
+  context continuation can be gone; on 2026-11-19 the orchestrator reported a stopped agent as
+  running.
+- **Every merge is gated** on a fresh clone on the node (`scripts/README.md` §4), and recorded.
+- **Numbers, not predictions.** Report what was measured, with the binary's hash. A claim about a
+  run that has not finished is not made.
+- **The user decides** what changes the solver's default behaviour, a normative SPEC sentence, or
+  `Explanation.t`. Give the options as a short table of consequences and a recommendation.
+- **How to report.** The user writes French, sometimes English; answer in the language of the
+  message. Short and structured: what is done, what runs, what waits for a decision. A concrete
+  example before a formula. When the user asks whether a claim holds under a criterion they
+  name, answer on that criterion first.
+
 ---
 
 ## Rules for this codebase
 
 ### The machine has 15 GB of RAM, shared by every session running at once
+
+*That machine is the laptop, which since 2026-10-23 only builds and typechecks
+(`scripts/README.md` §1). On `fataepyc-06` (2 TB, shared) the caps below still apply: they are
+test discipline as much as protection, and a suite that needs more than 4 GB has a bug.*
 
 This is the constraint that has bitten this project hardest in practice. On 2026-09-16 a
 `test_prop.exe` reached **14.9 GB RSS** and had to be killed by hand; later the same day
@@ -450,10 +479,18 @@ not just the session that caused it.
 - Keep explanations *lazy where they are expensive*: see `docs/ARCHITECTURE.md`,
   "Deferred explanations".
 
+### Optimise, but keep clarity
+
+The user, 2026-10-23: optimise, "but needs to keep clarity for code expandability". The solver is
+slow next to Chuffed and real inefficiencies must be fixed, so "not doing it" is not the default.
+While doing it: state the new rule and why it is sound in the module header; keep one shared rule
+rather than per-propagator variants; keep the layers separate (D-0026, D-0054); measure before and
+after; say what the change costs in clarity as well as what it gains.
+
 ## The nodes are shared with the user's OTHER experiments
 
 Since November 2026 baguette's runs go to `fataepyc-06` (git remote `node06`, bare repo
-`/scratch/arthur/baguette.git`); `fataepyc-07` carries the user's other experiments (graph solvers,
+`/cluster/arthur/baguette.git`); `fataepyc-07` carries the user's other experiments (graph solvers,
 `veripb`, Julia harnesses, the codes-cp side project) and is **off limits for baguette runs**. Both
 run under the **same user**, often for hours or days, and other sessions share fataepyc-06 too. On 2026-10-28 a session cleaning up its own runs did `pkill -u arthur -f veripb` and
 killed the `veripb` children of an experiment that had been running for hours. It had to be
@@ -469,6 +506,14 @@ restarted from scratch.
   is running, it has priority: do not launch, and ask before killing even your own if the
   cleanup could touch shared I/O.
 - A process you cannot identify as yours by PID is not yours to kill.
+
+**A session launched ON `fataepyc-06`** (possible since 2026-11-19) works in the clone
+`/cluster/arthur/baguette`, runs its experiments directly, and pushes to the hub
+`/cluster/arthur/baguette.git` and to GitHub. `/cluster` is persistent; `/scratch` can be wiped by a
+node reset or crash, so it holds only proofs, run outputs and disposable clones, and a result worth
+keeping is copied to `/cluster/arthur/baguette-results/`. The laptop-only rules above (15 GB, typecheck only)
+do not apply to it; the sharing rules of this section do, more than ever. `scripts/README.md` is
+the operating manual: the shell, detached runs, the gate, re-recording, the merge traps.
 
 ## Git
 
@@ -486,7 +531,8 @@ Several sessions share this checkout, so staging discipline matters more than us
 
 ## Environment note
 
-The toolchain is installed and working:
+The toolchain is installed and working. MiniZinc, Chuffed and GCS on the node, and where the
+Challenge runs are recorded: `bench/challenge/README.md`.
 
 - opam 2.5.2 at `~/.local/bin/opam`, switch `baguette` on OCaml 5.1.1
 - **The checker is VeriPB 3.0.2** (the Rust build, **source `d5644ca4` of 2026-09-04 since

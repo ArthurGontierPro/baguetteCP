@@ -493,6 +493,17 @@ let idx_excl_above t p ~bhi =
    forced by the caller's guard rather than checked here: the caller has already
    established [lo(c) <= w <= hi(c)], and a bound move that removed [w] would have left
    [w] outside the current bounds, since bounds only tighten. *)
+(* The trail entry that punched [bp] out of the index, or [None]. M11-complexity-T8 /
+   D-0155: this was a backward walk of the WHOLE trail per position asked about, which
+   [index_hole_clause] and [conflict_facts] each repeated over every dead position, so
+   O(positions x trail) per pruning. [Store.remover] answers the same question from the
+   variable's own entry history by binary search (D-0088), and it is the SAME entry: the
+   walk's predicate (on [ibase], [bp] in [old], not in [now]) is [Store.remover_scan]'s,
+   started at the same position, and [Store.remover] agrees with that scan under
+   [BAGUETTE_DEBUG] by physical equality. Read EAGERLY, as the walk was (I-X6). *)
+let index_hole_puncher store t bp =
+  Store.remover store ~before:(Store.trail_length store) ~var:t.ibase bp
+
 let hole_line t store w =
   match View.base_var t.res with
   | None -> None
@@ -522,23 +533,25 @@ let hole_line t store w =
    stay in the row, which is the same globally valid "pruning disjoined with what it
    read" every other arm of [pos_gone] already derives. A level-0 hole keeps the bare unit
    -- it is RUP there, and keeping it leaves every proof that never reaches a deep foreign
-   hole byte-identical. The remover is found EAGERLY, here, at pruning time (I-X6). *)
+   hole byte-identical. The remover is found EAGERLY, here, at pruning time (I-X6).
+
+   M11-complexity-T11: the puncher is found eagerly, its literals are not. The clause
+   used to be materialised here, so every pruning of this instance copied every foreign
+   hole's puncher's literals once per dead position -- O(dead x facts) words per entry,
+   with facts growing along the branch. On 2011_black-hole_9 (--no-proof, node 40, the
+   same trail of 24 928 entries) the live heap goes from 1 193 MB to 291 MB, the arena's
+   share from 965 MB to 63 MB. What the thunk keeps is the puncher's [Reason.t], which is frozen data
+   (a [Facts] list, or a [Later] reading a history that is live as long as the puncher
+   is on the trail -- and the puncher is BELOW this pruning, so it outlives every arena
+   slot that can hold this thunk). The literals, their order and the clause are the
+   ones the eager call built, so every proof byte is the same. *)
 let index_hole_clause t store bp =
   let unit = Lit.negate (Lit.eq t.iname bp) in
-  let rec find i =
-    if i < 0 then None
-    else
-      let e = Store.trail_entry store i in
-      if
-        Var.equal e.Store.var t.ibase && Domain.mem e.Store.old bp
-        && not (Domain.mem e.Store.now bp)
-      then Some i
-      else find (i - 1)
-  in
-  match find (Store.trail_length store - 1) with
-  | Some i when Store.level_of_index store i > 0 ->
-      let r = (Store.trail_entry store i).Store.reason in
-      Explanation.clause (unit :: List.map Lit.negate (Reason.lits r))
+  match index_hole_puncher store t bp with
+  | Some e when Store.level_of_index store e.Store.pos > 0 ->
+      let reason = e.Store.reason in
+      Explanation.deferred (fun () ->
+          Explanation.clause (unit :: List.map Lit.negate (Reason.lits reason)))
   | Some _ | None -> Explanation.clause [ unit ]
 
 (* WHAT A SHAPE-1 LINE LEAVES BEHIND, so that a conflict can cancel it.
@@ -680,9 +693,21 @@ let residue_cancel t store ~dead =
       (fun h -> Lit.le t.iname h)
       (Some t.ibase) ~lower:false
 
+(* M11-complexity-T8 / D-0155: membership in [live] through a table, where it was a
+   [List.mem] per declared position -- O(|decl_pos| x |live|) on every pruning's eager
+   explanation, and [filter_result] builds one per hole it punches. Same positions, same
+   order: the walk is still over [t.decl_pos]. *)
+module Int_tbl = Hashtbl.Make (Int)
+
+let int_set l =
+  let s = Int_tbl.create ((2 * List.length l) + 1) in
+  List.iter (fun x -> Int_tbl.replace s x ()) l;
+  s
+
 let dead_positions t store ~live =
+  let alive = int_set live in
   List.filter_map
-    (fun p -> if List.mem p live then None else Some (pos_gone t store p))
+    (fun p -> if Int_tbl.mem alive p then None else Some (pos_gone t store p))
     t.decl_pos
 
 (* M7-T21 / D-0084: [cancel] is [residue_cancel] over the same [dead], computed EAGERLY
@@ -823,8 +848,58 @@ let bound_facts t store =
    same trade [bound_facts] makes. [None] from [Store.remover] is a declared hole, which
    `lib/` cannot produce (see [Store.remover]'s header and D-0072); citing nothing there
    is what trace.ml does and leaves the line exactly as strong as it was. *)
-let add_facts acc fs =
-  List.fold_left (fun acc f -> if List.mem f acc then acc else acc @ [ f ]) acc fs
+(* M11-complexity-T8 / D-0155. THE DEDUPLICATION, in first-occurrence order, in linear
+   time. Until D-0155 this was [List.mem f acc] then [acc @ [f]] per fact: quadratic in
+   the facts collected, each step a POLYMORPHIC compare of records holding
+   `X_INTRODUCED_` names, and 99 % of `2011_black-hole_10`'s run (D-0151 section 2). The
+   list it returns is the one the old fold returned, element for element: the seed is kept
+   whole and in order (duplicates inside it included, exactly as the fold never examined
+   them), and every later fact is appended iff no equal fact precedes it. Equality is
+   structural on the two constructors, which is what [List.mem]'s [=] was on this type;
+   [Fact_tbl] only makes it monomorphic and hashed. The ORDER is load-bearing: it is the
+   order of a trace line's tail, which the proof diff compares byte for byte. *)
+module Fact_tbl = Hashtbl.Make (struct
+  type t = Reason.fact
+
+  let equal (a : t) (b : t) =
+    match (a, b) with
+    | At_least x, At_least y ->
+        x.value = y.value && x.decl = y.decl && String.equal x.name y.name
+    | At_most x, At_most y ->
+        x.value = y.value && x.decl = y.decl && String.equal x.name y.name
+    | At_least _, At_most _ | At_most _, At_least _ -> false
+
+  let hash (f : t) =
+    match f with
+    | At_least { name; value; decl } -> Hashtbl.hash (0, name, value, decl)
+    | At_most { name; value; decl } -> Hashtbl.hash (1, name, value, decl)
+end)
+
+type fact_acc = { seen : unit Fact_tbl.t; mutable rev : Reason.fact list }
+
+let fact_acc seed =
+  let seen = Fact_tbl.create 16 in
+  List.iter (fun f -> Fact_tbl.replace seen f ()) seed;
+  { seen; rev = List.rev seed }
+
+let add_to acc fs =
+  List.iter
+    (fun f ->
+      if not (Fact_tbl.mem acc.seen f) then (
+        Fact_tbl.add acc.seen f ();
+        acc.rev <- f :: acc.rev))
+    fs
+
+let acc_facts acc = List.rev acc.rev
+
+(* [seed] followed by the facts of [fs] that are neither in [seed] nor earlier in [fs]. *)
+let add_facts seed fs =
+  match fs with
+  | [] -> seed
+  | _ ->
+      let acc = fact_acc seed in
+      add_to acc fs;
+      acc_facts acc
 
 let remover_facts store ~var v =
   match Store.remover store ~before:(Store.trail_length store) ~var v with
@@ -834,24 +909,21 @@ let remover_facts store ~var v =
 let holes_of d =
   List.filter (fun v -> not (Domain.mem d v)) (range (Domain.lo d + 1) (Domain.hi d - 1))
 
+let hole_facts store ~var =
+  let acc = fact_acc [] in
+  List.iter
+    (fun v -> add_to acc (remover_facts store ~var v))
+    (holes_of (Store.get store var));
+  acc_facts acc
+
 (* The facts behind the INDEX's interior holes: what a RESULT pruning read beyond bounds. *)
-let index_hole_facts t store =
-  let d = Store.get store t.ibase in
-  List.fold_left
-    (fun acc v -> add_facts acc (remover_facts store ~var:t.ibase v))
-    [] (holes_of d)
+let index_hole_facts t store = hole_facts store ~var:t.ibase
 
 (* The facts behind the RESULT's interior holes: what an INDEX pruning read beyond bounds.
    Over the result's BASE domain, so no view value has to be translated back -- the facts
    are the same either way and this needs no [View] inverse. *)
 let result_hole_facts t store =
-  match View.base_var t.res with
-  | None -> []
-  | Some rv ->
-      let d = Store.get store rv in
-      List.fold_left
-        (fun acc v -> add_facts acc (remover_facts store ~var:rv v))
-        [] (holes_of d)
+  match View.base_var t.res with None -> [] | Some rv -> hole_facts store ~var:rv
 
 (* D-0043's conclusion for a value removal, on the INDEX's base variable: a removal at a
    bound settles and concludes the bound it settled to, an interior one concludes a
@@ -899,7 +971,7 @@ let live_positions t store = List.filter (fun p -> View.mem store t.pos p) t.dec
        when the puncher acted under a decision, and nothing for a level-0 hole.
 
    Each arm reads the store exactly as [pos_gone] does (the same [View.lo]/[View.hi],
-   [hole_line]'s [Store.remover], [index_hole_clause]'s trail walk), and EAGERLY (I-X6).
+   [hole_line]'s [Store.remover], [index_hole_puncher]), and EAGERLY (I-X6).
    A fact at its declared value materialises to no literal, matching an arm that leaves
    none. Root-established residue that [residue_cancel] cancels is still listed: a root
    fact is harmless on a tail (Analysis drops root nodes from every cut), and listing it
@@ -915,18 +987,11 @@ let conflict_facts t store =
   let rlo = View.lo store t.res and rhi = View.hi store t.res in
   let d = Store.get store t.ibase in
   let dlo = Domain.lo d and dhi = Domain.hi d in
-  let index_hole_puncher bp =
-    let rec find i =
-      if i < 0 then []
-      else
-        let e = Store.trail_entry store i in
-        if
-          Var.equal e.Store.var t.ibase && Domain.mem e.Store.old bp
-          && not (Domain.mem e.Store.now bp)
-        then if Store.level_of_index store i > 0 then Reason.facts e.Store.reason else []
-        else find (i - 1)
-    in
-    find (Store.trail_length store - 1)
+  let puncher_facts bp =
+    match index_hole_puncher store t bp with
+    | Some e when Store.level_of_index store e.Store.pos > 0 ->
+        Reason.facts e.Store.reason
+    | Some _ | None -> []
   in
   let of_pos p =
     if p < 0 || p >= n then []
@@ -945,9 +1010,11 @@ let conflict_facts t store =
         let bp = base_of t p in
         if bp < dlo then [ Reason.at_least ~name:t.iname ~decl:t.idlo dlo ]
         else if bp > dhi then [ Reason.at_most ~name:t.iname ~decl:t.idhi dhi ]
-        else index_hole_puncher bp
+        else puncher_facts bp
   in
-  List.fold_left (fun acc p -> add_facts acc (of_pos p)) [] t.decl_pos
+  let acc = fact_acc [] in
+  List.iter (fun p -> add_to acc (of_pos p)) t.decl_pos;
+  acc_facts acc
 
 (* Every declared position is impossible, so the at-least-one line has nothing left and
    the sum IS [0 >= 1] -- once the bound literals the exclusions carried are cancelled.
@@ -1087,6 +1154,19 @@ let in_order_currency t bw expl =
 let filter_index t store =
   let n = Array.length t.values in
   let moved = ref false in
+  (* M11-complexity-T8 / D-0155: the result's hole facts, read ONCE per pass rather than
+     once per removal. A removal here moves the INDEX and nothing else, so while the
+     result's base variable is a different variable its holes and their removers are the
+     same at every removal of the pass, and the list is the one each removal used to
+     rebuild. Forced at the first removal, before which this pass has written nothing.
+     When the result IS the index (one variable on both sides), every removal re-reads. *)
+  let shares_index =
+    match View.base_var t.res with Some rv -> Var.equal rv t.ibase | None -> false
+  in
+  let res_holes = lazy (result_hole_facts t store) in
+  let result_holes () =
+    if shares_index then result_hole_facts t store else Lazy.force res_holes
+  in
   List.iter
     (fun p ->
       if View.mem store t.pos p then
@@ -1108,7 +1188,7 @@ let filter_index t store =
           let concludes = removal_conclusion t d bw in
           let j =
             Reason.because ~concludes
-              (add_facts (bound_facts t store) (result_hole_facts t store))
+              (add_facts (bound_facts t store) (result_holes ()))
               (Explanation.deferred (fun () ->
                    let exact =
                      if cancel = [] then expl
@@ -1136,9 +1216,14 @@ let filter_result t store =
   let vals = List.map (fun p -> t.values.(p)) live in
   let a = List.fold_left Stdlib.min (List.hd vals) vals in
   let b = List.fold_left Stdlib.max (List.hd vals) vals in
-  let facts = add_facts (bound_facts t store) (index_hole_facts t store) in
+  (* M11-complexity-T8 / D-0155: built at the first pruning that needs it, not on every
+     pass. Most passes prune nothing, and this list (one remover's reason per index hole,
+     a [Later] materialised for each) was then built for nobody. Nothing in this pass
+     writes the store before the first [justified] call, so the list is the one the
+     eager [let] built. *)
+  let facts = lazy (add_facts (bound_facts t store) (index_hole_facts t store)) in
   let justified ~concludes expl =
-    Reason.because ~concludes facts (Explanation.deferred (fun () -> expl))
+    Reason.because ~concludes (Lazy.force facts) (Explanation.deferred (fun () -> expl))
   in
   (if a > View.lo store t.res then
      let h = View.hi store t.res in
@@ -1174,9 +1259,10 @@ let filter_result t store =
   | None -> ()
   | Some _ ->
       let d = View.domain store t.res in
+      let carried = int_set vals in
       List.iter
         (fun v ->
-          if Domain.mem d v && not (List.mem v vals) then
+          if Domain.mem d v && not (Int_tbl.mem carried v) then
             let expl = hole_expl t store ~live ~v in
             match View.remove store t.res v (justified ~concludes:None expl) with
             | Store.Conflict _ ->

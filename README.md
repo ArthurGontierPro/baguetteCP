@@ -25,10 +25,14 @@ make test
 ## Usage
 
 ```sh
-baguette model.fzn                          # solve
-baguette model.fzn --proof out              # solve, write out.opb and out.pbp
+baguette model.fzn                          # solve, keep the proof as ./model.opb and ./model.pbp
+baguette model.fzn --proof out              # solve, write the proof as out.opb and out.pbp
 veripb out.opb out.pbp                      # verify
+baguette model.fzn --no-proof               # solve without a proof (the answer is unverified)
 ```
+
+Every run writes its proof and keeps it. Without `--proof` the two files are named after the
+model and go in the current directory, replacing those of an earlier run of the same model.
 
 `baguette --help` lists every option.
 
@@ -39,10 +43,14 @@ global constraints it handles natively.
 
 ```sh
 export MZN_SOLVER_PATH=$PWD/tools
-minizinc --solver baguette model.mzn data.dzn                  # solve
+minizinc --solver baguette model.mzn data.dzn                  # solve, keep ./baguette-proof.opb, .pbp
 minizinc --solver baguette --proof out model.mzn data.dzn      # and write out.opb, out.pbp
 minizinc --solver baguette -t 300000 -s model.mzn data.dzn     # 300 s limit, statistics
 ```
+
+MiniZinc hands baguette a temporary `.fzn` and not the name of the `.mzn`, so without
+`--proof` the proof is kept as `./baguette-proof.opb` and `.pbp`, and baguette says so on
+stderr. `--no-proof` works through MiniZinc too.
 
 baguette accepts the MiniZinc standard flags `-i -f -n -p -r -s -t -v`. It runs on one
 thread and draws no random numbers, so `-p` and `-r` are accepted and change nothing.

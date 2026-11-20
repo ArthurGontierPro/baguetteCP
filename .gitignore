@@ -16,3 +16,4 @@ perf.data*
 .claude/worktrees/
 *.pdf
 *:Zone.Identifier
+__pycache__/

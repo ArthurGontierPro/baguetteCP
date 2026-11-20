@@ -1298,8 +1298,8 @@ runs everything right after `make check`, on fataepyc-06:
 
 ```sh
 make diff ARGS="-j 16"                      # fast tier, ~3 min: after every change
-make diff ARGS="--tier all -j 24"           # + D-0140's six instances, ~4 min: before reporting, and the gate
-make diff ARGS="--debug --tier all -j 24"   # the same under BAGUETTE_DEBUG=1 at <= 1 500 nodes
+make diff ARGS="--tier all -j 16"           # + D-0140's six instances, ~4 min: before reporting, and the gate
+make diff ARGS="--debug --tier all -j 16"   # the same under BAGUETTE_DEBUG=1 at <= 1 500 nodes
 make scaling ARGS="-j 16"                   # a gate since M11-complexity-T6 (D-0160)
 ```
 

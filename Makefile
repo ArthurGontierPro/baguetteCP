@@ -158,8 +158,8 @@ bench: build
 # perf and runs of up to 40 000 nodes. A batch agent runs `make diff ARGS="-j 16"` after
 # each change; the gate script runs, right after `make check`,
 #
-#   make diff ARGS="--tier all -j 24"    # hard: fails on any difference
-#   make diff ARGS="--debug --tier all -j 24"   # BAGUETTE_DEBUG=1 at <= 1 500 nodes, ~7 min
+#   make diff ARGS="--tier all -j 16"    # hard: fails on any difference
+#   make diff ARGS="--debug --tier all -j 16"   # BAGUETTE_DEBUG=1 at <= 1 500 nodes, ~7 min
 #   make scaling ARGS="-j 16"            # ENFORCING since M11-complexity-T6 (D-0160)
 #
 # `make diff` FAILS on any difference from bench/diff/reference/; the rule for

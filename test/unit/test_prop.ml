@@ -4048,6 +4048,36 @@ let test_d0091_element_root_defining () =
                   (Reason.facts c1.Store.c_reason)
                   c1.Store.c_why)))
 
+(* M11-complexity-T8 / D-0155: [Element.add_facts] replaced a quadratic [List.mem] /
+   [@] fold with a hashed accumulator, and the list it returns is the order of a trace
+   line's tail, which the proof diff compares byte for byte. So the new function is held to
+   the OLD fold as an oracle, element for element, on random lists drawn from a small
+   alphabet (so duplicates are frequent): both constructors, a shared name, values and
+   declared bounds that collide, and seeds that hold duplicates of their own, which the old
+   fold kept and the new one must keep too. *)
+let test_d0155_element_add_facts_oracle () =
+  let old_add_facts acc fs =
+    List.fold_left (fun acc f -> if List.mem f acc then acc else acc @ [ f ]) acc fs
+  in
+  let rnd = Random.State.make [| 155 |] in
+  let fact () =
+    let name = if Random.State.bool rnd then "X_INTRODUCED_7_" else "y" in
+    let value = Random.State.int rnd 3 and decl = Random.State.int rnd 2 in
+    if Random.State.bool rnd then Reason.at_least ~name ~decl value
+    else Reason.at_most ~name ~decl value
+  in
+  let list () = List.init (Random.State.int rnd 12) (fun _ -> fact ()) in
+  let agree = ref true and seed_dups = ref 0 in
+  for _ = 1 to 2000 do
+    let seed = list () and fs = list () in
+    if List.length (List.sort_uniq compare seed) < List.length seed then incr seed_dups;
+    if Baguette_core.Element.add_facts seed fs <> old_add_facts seed fs then
+      agree := false
+  done;
+  check "D-0155: Element.add_facts equals the old quadratic fold on 2000 random lists"
+    !agree;
+  check "D-0155: and the draw did exercise seeds holding duplicates" (!seed_dups > 100)
+
 (* ---------------------------------------------------------------------------
    M2-L0 / D-0043, test (c): the conclusion tracks the split lib/core/trace.ml
    already draws.
@@ -8871,6 +8901,7 @@ let () =
   test_d0026_linear_pairing ();
   test_d0026_all_declared ();
   test_d0091_element_root_defining ();
+  test_d0155_element_add_facts_oracle ();
   test_ix6_justification_snapshot ();
   test_ix6_cross_conflict_snapshot ();
   test_d0124_reason_reads_history ();
