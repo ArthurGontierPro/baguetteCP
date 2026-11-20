@@ -221,19 +221,26 @@ let keep policy a b =
    replaces the cell's content exactly when the fold's [List.map] replaced it ([keep]
    does not return [m]). The table is only looked up, never iterated, so no output
    depends on its order. [minimise_with_reference] is the old fold, kept as the
-   specification test/unit/test_learn.ml checks this against. *)
+   specification test/unit/test_learn.ml checks this against.
+
+   M16-file-review-T3 (D-0191): the table is created at the clause's length, where it
+   started at 16 and doubled, re-hashing every slot it held at each doubling; and a slot
+   hashes its name and adds the direction, where [Hashtbl.hash] walked the pair. On
+   2011_roster, whose learned clauses are nearly all of 16 literals or more, this function
+   was 6 % of the run's samples, a third of it the doublings. Neither changes an answer: the table is looked
+   up, never iterated. *)
 module Slot_tbl = Hashtbl.Make (struct
   type t = string * bool
 
   let equal (a, p) (b, q) = String.equal a b && Bool.equal p q
-  let hash = Hashtbl.hash
+  let hash (a, p) = (2 * Hashtbl.hash a) + Bool.to_int p
 end)
 
 let minimise_with policy (xs : (Lit.t * 'a) list) : (Lit.t * 'a) list =
   match xs with
   | [] | [ _ ] -> xs
   | _ ->
-      let cells = Slot_tbl.create 16 in
+      let cells = Slot_tbl.create (List.length xs) in
       let rev =
         List.fold_left
           (fun rev ((l, _) as item) ->
