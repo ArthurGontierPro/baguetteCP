@@ -23,7 +23,6 @@ of it to every session and stopping at a broken line before it even reached the 
 | M11-complexity-T15 (SPIKE, explanations as a hash-consed DAG; a prototype branch, nothing merged without a decision) | `lib/core/explanation.ml`, `lib/core/justify.ml`, `lib/core/trace.ml`, propagators' explanation construction as needed, on branch `wave55-dag` only | agent-dag (`wave55-dag`) | 2026-11-20 |
 | M11-complexity-T17 (learned clauses that cannot prune) | `lib/core/search.ml`, `lib/core/learned.ml`, `lib/core/retention.ml`, `lib/core/engine.ml` (learned wakes only), `lib/core/prop/clause.ml`, `lib/core/prop/pb.ml`, their unit tests | agent-learnprop (`wave55-learnprop`) | 2026-11-20 |
 | M15-symmetry-T1 (study, documentation only) | a new decision record (reserved D-0177), notes under `/cluster/arthur/baguette-results/wave55-sym/` | agent-sym (`wave55-sym`) | 2026-11-20 |
-| M14-e2e-verification-T4 (auxiliary Booleans, reified and Boolean families in the e2e chain) | `tools/e2e/`, `scripts/e2e_lane.sh`, `bench/e2e_spike/`; reserved record D-0178 | agent-e2e4 (`wave55-e2e4`) | 2026-11-20 |
 
 ## Cross-session requests
 
@@ -455,6 +454,7 @@ section 1. Shares are inclusive, of the whole run.
 
 | Task | Session | Date | Summary |
 |---|---|---|---|
+| M14-e2e-verification-T4 (Boolean and reified families in the e2e chain) | agent-e2e4 (`wave55-e2e4`) | 2026-11-20 | **D-0178.** The translator covers every Boolean and reified builtin of SPEC 2.1 (cake's `or`/`and`/`equals`/`not_equals`/`*_iff` with reify tuples `(b = 1)`); the bridge swaps cake's atoms for baguette's literals (`rup` clauses), resolves cake's `lt/gt` flag clause, defines `_neN` by a red pair, saturates cake's bit-range big-M, pins by `ia`. `make e2e`: 105 of 207 VERIFIED (was 75), 102 SKIPPED, 0 FAIL; 14 of 14 controls (6 new: `opb-stronger` on the Boolean family and `int_lin_le_reif`, `opb-reif` a wrong reification); 105 AGREE with Gecode/CP-SAT |
 | M15-symmetry (roadmap rows only) | codes-cp session | 2026-11-20 | New M15 section at the end of `docs/ROADMAP.md`: dejavu beside baguette (not inside it), T1 study of dejavu's latest versions and Markus Anders' papers, T2 the side-by-side pipeline from codes-cp's prototype, T3 breaking that agrees with the search (Ciaran's idea), T4-T7 parked. M13-codes-leads-T2 marked moved to M15 |
 | M14-e2e-verification-T2 (first demo as a lane) | agent-e2e2 (`wave55-e2e2`) | 2026-11-20 | **D-0176.** `make e2e`: a separate FlatZinc -> `.scp` translator (M1 builtins, `all_different_int`), the bridge in `tools/e2e/`, 75 of 207 test models VERIFIED by `cake_pb_cp`, 132 SKIPPED, 0 FAIL; 8 mutation controls refused at line and wording; translator equal to Gecode/CP-SAT's solution sets on all 75 |
 | M7-T34 (`member` without width-proportional rows) | agent-member2 (`wave55-member`) | 2026-11-20 | **D-0170.** Four bound clauses and two big-M rows over the declared overlap per position; the threshold clauses are lemmas written ahead of the lines that walk a hole (one per switch of the hole's owner), one `Combine` per line, no new constructor. Rows over the 35 Challenge instances 7.47 M -> 77 K, literals -38 %; statuses and incumbents equal to main's. Gate on `e150a70`: see D-0170 §5. Merge recommended |
@@ -630,6 +630,12 @@ section 1. Shares are inclusive, of the whole run.
 | M14-e2e-verification-T1 (feasibility study) | agent-e2e (`wave55-e2e`) | 2026-11-20 | **D-0174 (STUDY).** The verified encoder is CakeML's `cake_pb_cp` (`.scp` in, OPB over two's-complement bits out, HOL4 theorem `full_encode_sem_concl`), prebuilt in gitlab.com/MIAOresearch/software/cakepb `cp/`. Route: baguette's proof re-derives its own `.opb` from cake's at its head (atoms, `B = l + S`, ladder, substituted rows, pins), search proof unchanged. `bench/e2e_spike/run.sh`: 4 models VERIFIED by `cake_pb_cp`, a faked transcription bug refused. ROADMAP M14-T2..T8 |
 
 ## Handoff notes
+
+### 2026-11-20 (agent-e2e4, `wave55-e2e4`): M14-e2e-verification-T4, D-0178
+
+`make e2e` now verifies 105 of 207 models (the Boolean and reified families added, 0 FAIL, 14 controls). The
+bridge's matcher is generic (atom swap by `rup`, one flag resolvent, `_neN` red pair, saturation, `ia` by syntactic
+implication), so T5 can try it on the globals first. Still out: `var int` with no domain (8 models), objectives (T8).
 
 ### 2026-11-20 (agent-e2e2, `wave55-e2e2`): M14-e2e-verification-T2, D-0176
 
