@@ -315,8 +315,10 @@ type stated = { s_cid : Writer.cid; s_level : int }
    The packing is injective (one interned id per name STRING, so two names are one id
    exactly when [String.equal] holds, which is what [Lit.equal] compares), so two keys
    are equal exactly when the sorted literal lists were [List.equal Lit.equal], the
-   equality the table had. The hash mixes the first [claim_hash_width] literals and the
-   length, now from the packed integers rather than a string hash of each name.
+   equality the table had. The hash mixes the packed integers rather than a string hash
+   of each name; since M16-file-review-T4 (D-0192) all of them, and the pairs are sorted
+   as integers (by interned name, kind, sign, value) rather than by [Lit.compare]: any
+   one order makes a set's key unique, and this one compares no string.
    Nothing iterates this table, so only the cost of a lookup and the bytes a key holds
    change. *)
 module Claims = Hashtbl.Make (struct
@@ -329,15 +331,13 @@ module Claims = Hashtbl.Make (struct
     let rec go i = i >= n || (Int.equal a.(i) b.(i) && go (i + 1)) in
     go 0
 
-  (* The first [claim_hash_width] literals (two slots each) and the length. A key is
-     sorted, so two clauses that agree on that prefix and length share a bucket and
-     [equal] tells them apart. *)
-  let claim_hash_width = 8
-
+  (* Every slot and the length. M16-file-review-T4 (D-0192): it was the first eight
+     literals, and once a key is sorted by interned name (the names met first sort first)
+     the clauses of 2023_evm-super-compilation agreed on that prefix by the thousand, one
+     bucket walked by [equal] at every lookup (+15 % per node with the proof). *)
   let hash (a : int array) =
     let n = Array.length a in
-    let m = Stdlib.min n (2 * claim_hash_width) in
-    let rec go h i = if i >= m then h else go (mix h a.(i)) (i + 1) in
+    let rec go h i = if i >= n then h else go (mix h a.(i)) (i + 1) in
     finish (mix (go 8 0) (n / 2))
 end)
 
