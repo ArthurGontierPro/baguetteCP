@@ -1659,6 +1659,9 @@ let solve opts (m : Model.t) =
           Writer.create ~comments:opts.proof_comments ~audit:(audit_enabled ())
             ~null:opts.no_proof proof_oc
         in
+        (* D-0172: with no line ever written there is nothing to share, so a build is not
+           hash-consed (nor given an identity) at all under --no-proof. *)
+        if opts.no_proof then Baguette_core.Explanation.set_hashcons false;
         Encoding.start_proof encoding writer;
         (* Every propagator instance carries its own row id (D-0011/D-0015). This used
            to install a [model_id] thunk that raised, because [Explanation.Trivial]

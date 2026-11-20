@@ -545,9 +545,16 @@ let count key hit =
 (* Off, with the stats asked for, the table still takes the written nodes: a build
    identical to one of them is counted, and the value returned is still the new build, so
    nothing the solver writes changes. *)
+(* The table is looked into only when it holds something: under `--no-proof`, and before
+   the first line, nothing is ever written, so a build pays one length read and is not
+   hashed (the scaling lane measured rcpsp_11 without the proof +0.68 % of its late cost per
+   node with the hash paid on every build, D-0172 section 8). *)
 let built e =
   if !hashcons then (
-    let e' = match Hc.find_opt table e with Some x -> x | None -> e in
+    let e' =
+      if Hc.length table = 0 then e
+      else match Hc.find_opt table e with Some x -> x | None -> e
+    in
     if stats_on then count (producer_label () ^ "\t" ^ tag e) (e' != e);
     e')
   else if stats_on then (
