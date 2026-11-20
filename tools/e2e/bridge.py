@@ -403,14 +403,28 @@ def main(cake_opb, names_file, bag_opb, bag_pbp):
         return qlab[L], row, (None if M == "F" else M)
 
     defined = {}   # selector var s -> the flag literal F it was defined as (s <-> F)
+    by_flag = {}   # flag literal -> the selector defined as it (or as its negation)
+
+    def define(s_, F):
+        defined[s_] = F
+        if F not in ("F", "T"):
+            by_flag.setdefault(F, s_)
+            by_flag.setdefault(neg(F), s_)
+
+    def undefine(s_):
+        F = defined.pop(s_)
+        for G in (F, neg(F)) if F not in ("F", "T") else ():
+            if by_flag.get(G) == s_:
+                del by_flag[G]
 
     def flag_swap(L):
-        for s_, F in defined.items():
-            if L == F:   # F -> s: add (~F + s), @D2
-                return f"@D2[{s_}]", clause(neg(F), s_)
-            if L == neg(F):   # ~F -> ~s: add (F + ~s), @D1
-                return f"@D1[{s_}]", clause(F, neg(s_))
-        return None
+        s_ = by_flag.get(L)
+        if s_ is None:
+            return None
+        F = defined[s_]
+        if L == F:   # F -> s: add (~F + s), @D2
+            return f"@D2[{s_}]", clause(neg(F), s_)
+        return f"@D1[{s_}]", clause(F, neg(s_))   # ~F -> ~s: add (F + ~s), @D1
 
     def replaced(rpn, row, deps, swap):
         rpn, deps = list(rpn), list(deps)
@@ -446,8 +460,8 @@ def main(cake_opb, names_file, bag_opb, bag_pbp):
     resolvents = []
     for rpn, row, deps in cands:
         lits, d = lit_form(*row)
-        if d == 1 and all(a == 1 for a in lits.values()):
-            continue
+        # a CLAUSE is resolved too (T8, D-0182): int_eq_reif(x, u, b) at x's upper bound u
+        # makes cake's `lt` row the clause `lt -> x <= u - 1` once the bits are the ladder
         for L, c in lits.items():
             if not is_flag(var_of(L)):
                 continue
@@ -457,6 +471,15 @@ def main(cake_opb, names_file, bag_opb, bag_pbp):
                                        deps + cdeps))
     cands += resolvents
     cvars = [{var_of(l) for l in lit_form(*row)[0]} & bagvars for _, row, _ in cands]
+    # an index from each baguette variable to the candidates that name it, so that a row is
+    # tried only against candidates it could match (both passes need a shared variable or,
+    # for the first, none at all): the matcher was quadratic in the model (T8, D-0182)
+    by_var, no_var = {}, []
+    for i, cv in enumerate(cvars):
+        for v in cv:
+            by_var.setdefault(v, []).append(i)
+        if not cv:
+            no_var.append(i)
     nw = [0]
 
     def implies(rl, rd, bl, bd):
@@ -522,7 +545,19 @@ def main(cake_opb, names_file, bag_opb, bag_pbp):
         bvars = {var_of(l) for l in blits}
         bvars |= {alias[v] for v in bvars if v in alias}
         undef = [l for l in blits if var_of(l) in sel_vars and var_of(l) not in defined]
-        for (rpn, row, deps), cv in zip(cands, cvars):
+        near = set(no_var) if not loose else set()
+        for v in bvars:
+            near.update(by_var.get(v, ()))
+        order = [(cands[i], cvars[i]) for i in sorted(near)]
+        if undef:
+            # A row that will DEFINE a selector takes the candidate sharing the most of its
+            # variables first (T8, D-0182). Found on 2014_amaze: int_eq_reif(x, y, b)'s first
+            # selector row, guarded by b, is also implied (by weakening) by the flag row of
+            # ANOTHER constraint over x and y that does not name b; defining _neN as that
+            # flag left the selector's second row underivable. The flag of the constraint
+            # that names b too is the one both rows follow from.
+            order.sort(key=lambda t: -len(t[1] & bvars))
+        for (rpn, row, deps), cv in order:
             if loose and (cv <= bvars or not cv & bvars or undef):
                 continue
             if not loose and not cv <= bvars:
@@ -555,10 +590,65 @@ def main(cake_opb, names_file, bag_opb, bag_pbp):
                     return rpn3, deps, (s_, F)
         return None
 
+    def const_pin(bl, bd):
+        """A row a selector defined as a CONSTANT implies by itself: c * lit with lit the
+        selector's true literal and c >= the degree (T8, D-0182)."""
+        for L, c in bl.items():
+            v = var_of(L)
+            if defined.get(v) in ("F", "T") and c >= bd:
+                if (defined[v] == "F") == L.startswith("~"):
+                    return f"@D0[{v}]"
+        return None
+
+    def find(coefs, d):
+        bl, bd = lit_form(coefs, d)
+        found = match(bl, bd, coefs) if cands else None
+        if not found and cands and not (bd == 1 and all(a == 1 for a in bl.values())):
+            found = match(bl, bd, coefs, loose=True)
+        return found
+
+    # SELECTORS, each defined once against ALL its rows (T8, D-0182). A `_neN` selector
+    # stands in two rows of baguette's .opb (A and B of one disequality). The first row
+    # alone can be implied, by weakening, by the flag of ANOTHER constraint over the same
+    # variables, and a definition chosen from it leaves the second row underivable (found
+    # on 2014_amaze, int_eq_reif). So a definition is tried against every row of the
+    # selector before it is kept: the flag the first row's match proposes, then the
+    # constants (int_eq_reif(x, u, b) with u x's upper bound: baguette's `x > u` half is
+    # impossible, cake writes no flag for it, and `_neN := 0` is the definition, a red
+    # unit `~s >= 1 : s -> 0`), and only then the old greedy rule.
+    groups = {}
+    for _, terms, op, rhs in bag:
+        coefs, d = var_form(terms, op, rhs)
+        for v in coefs:
+            if v in sel_vars:
+                groups.setdefault(v, []).append((coefs, d))
+    for s_, rows in groups.items():
+        if s_ in defined:
+            continue
+        first = find(*rows[0])
+        tries = []
+        if first and first[2]:
+            tries.append(first[2][1])
+        tries += ["F", "T"]
+        for F in tries:
+            define(s_, F)
+            if all(const_pin(*lit_form(c, d)) or find(c, d) for c, d in rows):
+                if F in ("F", "T"):
+                    emit(f"@D0[{s_}] red +1 {'~' if F == 'F' else ''}{s_} >= 1 : {s_} -> {0 if F == 'F' else 1} ;")
+                else:
+                    emit(f"@D1[{s_}] red +1 ~{s_} +1 {F} >= 1 : {s_} -> {F} ;")
+                    emit(f"@D2[{s_}] red +1 {s_} +1 {neg(F)} >= 1 : {s_} -> {F} ;")
+                break
+            undefine(s_)
+
     pins = []
     for label, terms, op, rhs in bag:
         coefs, d = var_form(terms, op, rhs)
         line = row_text(terms, op, rhs)
+        cp = const_pin(*lit_form(coefs, d))
+        if cp:
+            pins.append(f"@{label} ia {line} : {cp} ;")
+            continue
         m = re.fullmatch(r"\+1 ~(\S+)_ge_(m?\d+) \+1 (\S+)_ge_(m?\d+) >= 1", line)
         if m and m.group(1) == m.group(3) and pv(m.group(2)) == pv(m.group(4)) + 1:
             pins.append(f"@{label} ia {line} : @L[{m.group(1)}_ge_{m.group(2)}] ;")
@@ -575,7 +665,7 @@ def main(cake_opb, names_file, bag_opb, bag_pbp):
             rpn, deps, new = found
             if new:
                 s_, F = new
-                defined[s_] = F
+                define(s_, F)
                 emit(f"@D1[{s_}] red +1 ~{s_} +1 {F} >= 1 : {s_} -> {F} ;")
                 emit(f"@D2[{s_}] red +1 {s_} +1 {neg(F)} >= 1 : {s_} -> {F} ;")
             for dep in deps:

@@ -10,11 +10,14 @@
 # Env:   CAKE_PB_CP (required), BAGUETTE (use the release binary, D-0171), VERIPB (else
 #        scripts/checker.sh), SOLVE_TIMEOUT (s, default 300), CHECK_TIMEOUT (s, per checking
 #        stage, default 7200), KEEP=1 to keep the proofs (default: deleted once measured,
-#        their sizes recorded).
+#        their sizes recorded), CAKE_HEAP (MB, default 24576: cake_pb_cp's CakeML heap,
+#        whose default of 4 GB a long proof can exhaust; passed as --CML_HEAP_SIZE to both
+#        of its runs, and it is reserved as virtual memory, so the RSS column is what it
+#        touched).
 #
 # Prints ONE tab-separated line:
-#   id answer verdict  t_solve rss_solve  t_veripb rss_veripb  t_bridge rss_bridge
-#   t_elab rss_elab  t_cake rss_cake  opb pbp bridged core  cake_s_line
+#   id answer verdict  t_tr rss_tr  t_enc rss_enc  t_solve rss_solve  t_veripb rss_veripb
+#   t_bridge rss_bridge  t_elab rss_elab  t_cake rss_cake  opb pbp bridged core  cake_s_line
 # times in seconds, RSS in MB, sizes in bytes. `verdict` is VERIFIED when cake_pb_cp's own
 # `s VERIFIED ...` line states baguette's answer (chain.sh's rule, including OPT), else the
 # first stage that did not end as it should (SKIPPED, SOLVE-TIMEOUT, VERIPB-REFUSED,
@@ -55,18 +58,25 @@ stage() {
 sz() { [ -f "$1" ] && stat -c %s "$1" || echo -; }
 fin() {
     local verdict=$1 s=${2:-}
-    while [ ${#T[@]} -lt 5 ]; do T+=("- -"); done
-    printf '%s\t%s\t%s' "$id" "${ans:--}" "$verdict"
-    for x in "${T[@]}"; do printf '\t%s\t%s' ${x}; done
-    printf '\t%s\t%s\t%s\t%s\t%s\n' "$(sz "$o.bag.opb")" "$(sz "$o.bag.pbp")" "$(sz "$o.bridged.pbp")" "$(sz "$o.core")" "$s"
+    while [ ${#T[@]} -lt 7 ]; do T+=("- -"); done
+    # ONE write per line: several instances append to the same file at once
+    local line x
+    line=$(printf '%s\t%s\t%s' "$id" "${ans:--}" "$verdict")
+    for x in "${T[@]}"; do line+=$(printf '\t%s\t%s' ${x}); done
+    line+=$(printf '\t%s\t%s\t%s\t%s\t%s' "$(sz "$o.bag.opb")" "$(sz "$o.bag.pbp")" "$(sz "$o.bridged.pbp")" "$(sz "$o.core")" "$s")
+    printf '%s\n' "$line"
     [ "${KEEP:-0}" = 1 ] || rm -f "$o.bag.pbp" "$o.bridged.pbp" "$o.core"
     rm -f "$o.pid"
     exit 0
 }
 ans=
 
-python3 -I "$HERE/fzn2scp.py" "$FZN" "$o.scp" "$o.names" 2> "$o.tr.err" || fin "SKIPPED"
-"$CK" "$o.scp" > "$o.cake.opb" 2> "$o.cake.err"
+CH=(--CML_HEAP_SIZE="${CAKE_HEAP:-24576}" --CML_STACK_SIZE=4096)
+stage tr "$TC" python3 -I "$HERE/fzn2scp.py" "$FZN" "$o.scp" "$o.names" 2> "$o.tr.err"
+T+=("$st_t $st_m")
+[ "$st_rc" -eq 0 ] || fin "SKIPPED"
+stage enc "$TC" bash -c 'exec "$0" "$1" "$2" "$3" > "$4" 2> "$5"' "$CK" "${CH[@]}" "$o.scp" "$o.cake.opb" "$o.cake.err"
+T+=("$st_t $st_m")
 [ -s "$o.cake.err" ] && fin "CAKE-ENCODE-FAIL"
 opt=$(sed -n 's/.*(prob_type (\(minimize\|maximize\) .*/\1/p' "$o.scp")
 
@@ -108,7 +118,7 @@ stage elab "$TC" bash -c 'exec "$0" "$1" "$2" --elaborate "$3" > "$4" 2>&1' \
 T+=("$st_t $st_m")
 [ "$st_rc" -eq 124 ] && fin "ELAB-TIMEOUT"
 grep -q '^s VERIFIED' "$o.elab.log" || fin "ELAB-REFUSED"
-stage cake "$TC" bash -c 'exec "$0" "$1" "$2" > "$3" 2>&1' "$CK" "$o.scp" "$o.core" "$o.check.log"
+stage cake "$TC" bash -c 'exec "$0" "$1" "$2" "$3" "$4" > "$5" 2>&1' "$CK" "${CH[@]}" "$o.scp" "$o.core" "$o.check.log"
 T+=("$st_t $st_m")
 [ "$st_rc" -eq 124 ] && fin "CAKE-TIMEOUT"
 s=$(grep -m1 '^s ' "$o.check.log")
