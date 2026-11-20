@@ -1,0 +1,5 @@
+var -2..5: x :: output_var;
+var -2..5: y :: output_var;
+constraint int_lin_le([3,-1],[x,y],-4);
+constraint all_different_int([x,y]);
+solve satisfy;

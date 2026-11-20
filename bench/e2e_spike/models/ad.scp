@@ -1,0 +1,1 @@
+( (version 1) (variables (a 1 2) (b 1 2) (c 1 2)) (constraints (c1 all_different (a b c))) (prob_type decide) )
