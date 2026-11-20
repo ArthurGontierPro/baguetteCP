@@ -388,7 +388,7 @@ module Learned_clause = struct
   let name = "learned_clause"
   let consistency = consistency
   let vars t = vars t.pb
-  let false_at store t i = Pb.status store t.atoms.(i) = Pb.Unsat_lit
+  let false_at store t i = Pb.falsified store t.atoms.(i)
 
   (* The trail position of the entry that FALSIFIED literal [i], which must be false:
      a positive atom `x >= k` became false when [hi x] first moved below [k], a
