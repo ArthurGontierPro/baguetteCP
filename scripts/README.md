@@ -158,3 +158,37 @@ own lock, so it does not fight the dev `_build/`, and `dune build`, `make check`
   gate. The scaling lane's baseline was measured on dev: compare a release run only with a release
   run.
 - **Every series records the binary's md5** (`make release` prints it), and says it is release.
+
+## 9. The end-to-end lane (M14-e2e-verification-T2, D-0176)
+
+`make e2e ARGS="-j 8 /scratch/arthur/<run>"`, or `scripts/e2e_lane.sh -j 8 OUTDIR`. Node only, not
+in `check`. It needs three things outside the repository, and a missing one is a failure, never a
+skip:
+
+| What | Default | Override |
+|---|---|---|
+| `cake_pb_cp`, CakeML's verified CP encoder and checker (D-0174) | `/cluster/arthur/baguette-results/wave55-e2e/cake_pb_cp-438b8f83` (sha256 `ca92491e`) | `CAKE_PB_CP=` |
+| the solver | `_build/default/bin/main.exe`, NOT built by the script: `dune build --root . bin/` first | `BAGUETTE=` |
+| Gecode and CP-SAT, the translator's references | the MiniZinc 2.10.1 bundle under `/scratch/arthur/mzn/` | `MZN_BIN=` |
+
+Three passes, one line per item, a summary each, `e2e_lane: PASS` or `FAIL` at the end:
+
+1. **chain**: every `test/models/*.fzn` through `tools/e2e/chain.sh`. `VERIFIED` means
+   `cake_pb_cp`'s own `s VERIFIED SATISFIABLE|UNSATISFIABLE` line, agreeing with baguette. It exits
+   0 when it refuses, so never read its status. `SKIPPED` names the first uncovered builtin (or the
+   objective, or `var int` with no domain). Anything else is `FAIL`.
+2. **controls**: eight corruptions the chain must refuse, each asserted at the refused line and in
+   the checker's sentence (`chain.sh`'s header lists them).
+3. **validation**: the translator against the reference solvers, solution set for solution set.
+
+Each run is under `systemd-run --user --scope -p MemoryMax=32G` with a timeout, at most 8 at a
+time, and writes `OUTDIR/<dir>/<model>.pid` while it runs; the lane's own PID is `OUTDIR/lane.pid`.
+Clean up with `kill $(cat OUTDIR/lane.pid)` and the per-model pidfiles, never by name. `make e2e` is the one
+running target without `ulimit -v`: `cake_pb_cp` reserves its whole heap as virtual memory and
+refuses every model under the 4 GB cap. baguette keeps the cap inside `chain.sh`. The whole
+lane takes about a minute on the 207 models.
+
+The translator, `tools/e2e/fzn2scp.py`, is the one TRUSTED new link: a wrong translation verifies.
+It shares no code with `lib/flatzinc/` on purpose (D-0174 §5). Widen it only together with
+`tools/e2e/scpsem.py` (the .scp semantics transcribed from CakeML's `cpScript.sml`) and the
+validation pass, and run the lane.

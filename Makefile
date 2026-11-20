@@ -30,7 +30,7 @@ CAP := $(if $(filter none unlimited 0,$(MEM_CAP_KB)),:,ulimit -v $(MEM_CAP_KB)) 
 # Passed down so a script invoked from a recipe agrees with the recipe.
 export BAGUETTE_MEM_CAP_KB = $(MEM_CAP_KB)
 
-.PHONY: build release test unit models check fmt fmt-check lint determinism unlimit selftests clean proof bootstrap bench diff scaling
+.PHONY: build release test unit models check fmt fmt-check lint determinism unlimit selftests clean proof bootstrap bench diff scaling e2e
 
 build:
 	dune build
@@ -187,3 +187,15 @@ diff: build
 
 scaling: build
 	$(CAP) ./scripts/scaling_lane.sh --enforce $(ARGS)
+
+# The END-TO-END lane (M14-e2e-verification-T2, D-0176): the covered test models through
+# CakeML's verified encoder and checker, the mutation controls, and the translator against
+# Gecode/CP-SAT. Node only (cake_pb_cp and the MiniZinc bundle live there); not in `check`.
+#   make e2e ARGS="-j 8 /scratch/arthur/<run>"
+# NOT under $(CAP), deliberately: cake_pb_cp reserves its whole CakeML heap as virtual memory
+# at start-up, and under `ulimit -v 4000000` it refuses every model ("failed to allocate
+# sufficient CakeML heap and stack space", measured 2026-11-20). baguette itself still runs
+# under the 4 GB cap inside tools/e2e/chain.sh, and every run of the lane is under systemd's
+# MemoryMax=32G, which bounds real memory instead.
+e2e: build
+	./scripts/e2e_lane.sh $(ARGS)
