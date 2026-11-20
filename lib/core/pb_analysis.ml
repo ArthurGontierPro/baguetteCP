@@ -909,13 +909,17 @@ let analyse ?(stop = fun () -> false) ?(bits = Ladder.no_bits) store (c : Store.
      order. M11-complexity-T4 (D-0140 P2, D-0144): keyed through [Lit.equal] rather than
      the polymorphic compare of a plain [Hashtbl]; [Lit.equal] is structural equality on
      the same record, so the same lookups hit. *)
-  let fat_memo = Lit_tbl.create 64 in
+  (* M16-file-review-T3 (D-0191): replaced, empty, by one sized at the conflict row once
+     that row is known (below), because a table that grows re-hashes every literal it
+     holds at each doubling: a third of the memo's cost on 2019_fox-geese-corn, whose
+     conflict rows are hundreds of literals long. Nothing reads it before then. *)
+  let fat_memo = ref (Lit_tbl.create 64) in
   let falsified_at store l =
-    match Lit_tbl.find_opt fat_memo l with
+    match Lit_tbl.find_opt !fat_memo l with
     | Some i -> i
     | None ->
         let i = falsified_at store l in
-        Lit_tbl.add fat_memo l i;
+        Lit_tbl.add !fat_memo l i;
         i
   in
   (* M11-complexity-T4 (D-0140 P2, D-0144): the ids [antecedents] already holds, so that
@@ -1102,7 +1106,9 @@ let analyse ?(stop = fun () -> false) ?(bits = Ladder.no_bits) store (c : Store.
     (* If our reconstruction of the conflicting row is not actually conflicting, the row
        we built is not the row the store conflicted on. That is a real disagreement and it
        falls back rather than deriving from a premise the search does not share. *)
-    let at_of0 = at_of row0 in
+    let lits0 = lits_array row0 in
+    fat_memo := Lit_tbl.create (Int.max 64 (Array.length lits0));
+    let at_of0 = row_memo lits0 (falsified_at store) in
     if not (slack_at (view row0 at_of0 0) conflict_level < 0) then
       raise (Give_up Not_conflicting);
     let rec loop row at_of_row expl steps pivots antecedents rows lifts =
