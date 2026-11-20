@@ -21156,3 +21156,151 @@ authors state them. It did not try satsuma on a `.opb`: satsuma 1.4 has a `--pb`
 formula class (`pbf.h`, with `=`, `<=` and an objective), but its command line reads nothing for
 that flag (`parse_*` is CNF or KNF, the OPB branch is `0`). So satsuma cannot take baguette's
 `.opb` today, and nothing in this record depends on it.
+
+## D-0179  M15-symmetry-T2: the pipeline beside baguette, cuts proved by `red` with a SWAP, `dom` where the group has none
+
+Status: DONE (tools and a lane, no solver code)
+Date: 2026-11-20
+Task: M15-symmetry-T2 (agent-sym2, `wave55-sym2`)
+Touches: new `tools/symmetry/` (`opb2graph.py`, `symchain.py`, `symmerge.py`), new `bench/symmetry/`
+(`instances.tsv`, `minweight_chk.mzn`, five `.dzn`), new `scripts/sym_lane.sh`, `Makefile` (`make sym`),
+`scripts/README.md` §10, this record, `docs/ROADMAP.md` (T2 row), `WORKLOG.md`. Nothing in `lib/` or `bin/`.
+dejavu: upstream `main` `f984485` (v2.1), unchanged, built with cmake Release into
+`/cluster/arthur/tools/dejavu-f984485/` (binary sha256 `bb1759d0`, `PROVENANCE` beside it). Solver binary
+`243d84cd` (main `52d7ee9`). Checker `~/.cargo/bin/veripb` 3.0.2 (`d5644ca4`). Runs and results:
+`/scratch/arthur/wave55-sym2-runs/`, copied to `/cluster/arthur/baguette-results/wave55-sym2/`.
+
+### 1. The pipeline
+
+dejavu is not inside baguette (the user's rule): the two run side by side, and dejavu is called as a
+binary, as distributed. Five commands:
+
+```sh
+main.exe M.fzn --proof ORIG --time-limit 0               # ORIG.opb: the model, no search
+tools/symmetry/symchain.py M.fzn ORIG.opb S [--depth 3] [--vars V,..] [--score orbit|first|shared]
+main.exe S.fzn --proof S                                 # baguette on the broken model
+tools/symmetry/symmerge.py S.chain.json ORIG.opb S.opb S.pbp MERGED.pbp [--rule auto|red|dom|transversal]
+veripb ORIG.opb MERGED.pbp                               # the ORIGINAL .opb, unchanged
+```
+
+- `opb2graph.py` is codes-cp's (`3b4667a`), byte for byte: two literal vertices per variable, one vertex
+  per row coloured by its kind, degree and coefficients, the objective a vertex of its own colour.
+- `symchain.py` (backend A of D-0177 §4): dejavu once per level, the points already chosen coloured
+  apart, so level i's generators generate the stabilizer G_{i-1} of c_1 .. c_{i-1}. Orbits are a BFS over
+  LITERALS (an image may be negative). Break variables: the FlatZinc search annotation's
+  (`int_search`, `bool_search`, `seq_search`), else every non-defined variable, `--vars` to override.
+  Only 0/1 variables (`var bool`, `var 0..1`) can be points, and an orbit is eligible only when every
+  literal in it is one, of one kind, because the cut must be a FlatZinc constraint over existing
+  variables (`bool_clause`, or `int_lin_le` over `0..1`). Score `orbit` (largest orbit, codes-cp's rule,
+  the default), `first` (search order), `shared` (rows shared with the points chosen, satsuma's
+  `common_clauses`). For every b != c_i in the orbit, the cut c_i v ~b (b = ~c_i gives the unit c_i).
+  Optimisation models are refused (T4). Output: `S.chain.json` (each level's generators as
+  {variable: literal} over the moved literal variables, each cut with its word in them) and `S.fzn`,
+  the model plus one constraint per cut before `solve`. dejavu runs with its default pseudo-random seed,
+  so two runs give the same chain (checked on golay_w4).
+- `symmerge.py`: baguette mints the cuts last, so `S.opb` must be `ORIG.opb` label for label and row for
+  row, plus one clause row per cut, each its cut's clause. It refuses anything else. The merged proof is
+  baguette's proof with `f` counting ORIG's rows and, after it, one line per cut, under the cut's own
+  label, in chain order. baguette's proof then follows unchanged, and it cites the cuts by those labels.
+
+### 2. D-0177's `red` witness is refused, and what replaces it
+
+D-0177 §4 proposed `red` with the inverse transversal element w_b^-1 (it sends b to c) and argued that
+the database stays closed under it. That holds for the cuts of EARLIER levels (the witness fixes their
+point and permutes their orbit), not for the cuts of the SAME level: the image of an earlier cut
+c v ~w is w^-1(c) v ~w^-1(w), and nothing makes it hold under the negated cut. Measured with
+`--rule transversal` (D-0177's witness): refused at the level's second cut on `php_unsat` (line 5,
+"Proofgoal 18 could not be autoproven", 18 being the first cut), `golay_w4` (line 5, proofgoal 2328) and
+`qr32_w4` (line 5, proofgoal 1927). Accepted on `hamming_w2`, by luck of the transversal. A three-point
+example shows it is not a matter of order: under Z3 acting on {c, a, b}, red refuses the second of the
+two cuts whichever comes first, although the pair is a sound breaking.
+
+What works:
+- **A SWAP.** If ω in G_{i-1} sends b to c AND c to b, the image of every same-level cut contains
+  ω(c) = b, true under the negated cut, so every goal closes. symchain finds one without a group
+  library: u = w_b^-1 sends b to c; the next level's dejavu run gives G_i, the stabilizer of c; if u(c)
+  reaches b under G_i by a word h, then h o u swaps b and c. The cut records h (`swap`), and symmerge
+  writes `red` with h o u. No order is loaded.
+- **`dom` when there is no swap.** Some groups have none: in PSL(2, q) with q = 3 mod 4 (QR32, QR48), the
+  stabilizer of a point acts as x -> a x + b with a a square, a swap of v and w needs a = -1, and -1 is
+  not a square. So levels 2 and 3 of QR32 and QR48 have no swap at all. Those cuts are derived by `dom`
+  with the transversal element w_b (it sends c to b) under codes-cp's lex order of the points ("c_1, then
+  c_2, ..., a 1 first", `def_order` with coefficients 2^(N-1-p)), which checks only the core and so
+  ignores the other cuts. `--rule auto` (the default) writes `red` for the cuts with a swap and `dom` for
+  the rest, with the order loaded around the cut section; veripb accepts the mix (qr32_w4, QR48).
+  `--rule dom` writes every cut by `dom`, as codes-cp did.
+
+### 3. The lane
+
+`make sym ARGS="-j 8 OUTDIR"` (`scripts/sym_lane.sh`, `--big` adds QR48). Node only, not in `check`.
+Per instance: ORIG.opb, a baseline run with `--proof --stats` (proof deleted), the chain, the broken
+run, the merge, and veripb on ORIG.opb. VERIFIED means veripb's `s VERIFIED` line, agreeing with the
+expected answer and with both runs. Each step under `systemd-run --user --scope -p MemoryMax=32G` and a
+timeout, pidfiles beside the outputs. Depth 3 everywhere. Measured 2026-11-20 on fataepyc-06 under a
+load of about 28 (times are wall seconds, one run each, so read the small ones as "under a second"):
+
+| instance | answer | group (dejavu) | orbits | cuts (red + dom) | nodes without -> with | s without -> with | chain s | veripb s | |
+|---|---|---|---|---|---|---|---|---|---|
+| Hamming, w <= 2 | UNSAT | 1 344 | 8, 7, 6 | 18 (18 + 0) | 15 -> 5 | 0.00 -> 0.00 | 0.14 | 0.00 | VERIFIED |
+| Hamming, w <= 4 | SAT | 1 344 | 8, 7, 6 | 18 (18 + 0) | 4 -> 4 | 0.00 -> 0.00 | 0.14 | 0.00 | VERIFIED |
+| Golay, w <= 4 | UNSAT | 2.44823e8 (M24) | 24, 23, 22 | 66 (66 + 0) | 209 -> 21 | 0.31 -> 0.07 | 0.79 | 0.17 | VERIFIED |
+| Golay, w <= 8 | SAT | 2.44823e8 | 24, 23, 22 | 66 (66 + 0) | 24 -> 24 | 0.08 -> 0.08 | 1.28 | 0.27 | VERIFIED |
+| QR32, w <= 4 | UNSAT | 14 880 | 32, 31, 15 | 75 (31 + 44) | 217 -> 21 | 0.24 -> 0.04 | 0.53 | 0.15 | VERIFIED |
+| QR48, w <= 4 (`--big`) | UNSAT | 51 888 | 48, 47, 23 | 115 (47 + 68) | 11 491 -> 45 | 252.8 -> 2.0 | 43.9 (dejavu 28.4, 3.8 GB) | 10.3 (159 MB) | VERIFIED |
+| `php_unsat` (6 -> 5) | UNSAT | 86 400 | 30, 20, 12 | 59 (59 + 0) | 59 -> 9 | 0.01 -> 0.00 | 0.13 | 0.00 | VERIFIED |
+| `php_wide_unsat` | UNSAT | 3 628 800 | 42, 30, 20 | 89 (89 + 0) | 77 -> 17 | 0.01 -> 0.00 | 0.14 | 0.00 | VERIFIED |
+| `restart_pigeons54` | UNSAT | 2 880 | 20, 12, 6 | 35 (35 + 0) | 35 -> 7 | 0.01 -> 0.00 | 0.13 | 0.00 | VERIFIED |
+| `colour_unsat` (Groetzsch) | UNSAT | 60 | 15, 4 | 17 (17 + 0) | 47 -> 11 | 0.01 -> 0.00 | 0.12 | 0.00 | VERIFIED |
+| `php_escape_sat` | SAT | 86 400 | 30, 20, 12 | 59 (59 + 0) | 76 -> 20 | 0.01 -> 0.00 | 0.13 | 0.01 | VERIFIED |
+| `restart_queens6` | SAT | 8 | 8 | 7 (5 + 2) | 24 -> 23 | 0.01 -> 0.00 | 0.12 | 0.00 | VERIFIED |
+
+The small tier takes 7 s in all with `-j 8`; QR48 about 5 minutes, 253 s of it the run without
+breaking. `make check` on the branch: `check: ok` (no solver change).
+
+The codes are codes-cp's `minweight_chk.mzn` with sums (ENC=2) and no fixed coordinate, and the node
+counts are codes-cp's own (`notes/dejavu-plan.md`: 15 -> 5, 209 -> 21, 217 -> 21, 11 491 -> 45 on QR48, where codes-cp measured 347 s -> 2.3 s and a 14.9 s check), with `red`
+in place of its `dom` wherever the level has a swap. Largest witness: 30 moved variables on
+php, 1 566 on Golay, 1 300 on QR32, 34 686 on QR48.
+
+### 4. Mutation controls
+
+On the three satisfiable models with a second level (`hamming_w4`, `golay_w8`, `php_escape_sat`), on
+the second cut of level 1, under `--rule auto` (a `red` line there) and `--rule dom`: a wrong witness
+(`--bad-witness`: the transposition of c and b alone, which is not an automorphism) and a wrong cut
+(`--bad-cut`: c v ~c_1 with the true witness; c_1 is fixed by the level's group, so no element of it
+sends c_1 to c). 12 of 12 refused, each at the mutated line, in veripb's words: "Checking error at
+MERGED:LINE" and "could not be autoproven" ("Proofgoal N" with N a constraint id for a wrong witness,
+"Proofgoal #1" or "#2" for a wrong cut). The models are satisfiable, so the refused lines were judged (D-0053), and the
+unmutated proofs of the same models are VERIFIED SATISFIABLE.
+
+A control that was dropped: flipping the cut's second literal (c v b) is accepted under `dom` on
+`hamming_w4`, and rightly: with c, b and the earlier point at 0, the parity rows propagate every
+coordinate to 0 against sum x >= 1, so the dominance goal closes by propagation. It is not a wrong cut
+there, so it cannot be a control.
+
+### 5. What the pipeline trusts
+
+Nothing it adds. dejavu, the graph, the orbits, the words, the swaps and the merge are all outside the
+trusted base: a wrong generator, orbit or witness is a `red` or `dom` line that veripb refuses, and
+symmerge refuses a broken `.opb` that is not the original plus the cuts. What stays trusted is what was
+trusted before: baguette's `.opb` as the meaning of the `.fzn` (the merged proof is checked against
+`ORIG.opb`, the model without breaking) and veripb. dejavu's one-sided error (a missing generator) can
+only make orbits smaller, so fewer cuts. Two costs: the merged proof carries every witness in full
+(T5), and the lex order makes the cut section depend on the points' order, as codes-cp's did.
+
+### 6. Limits, and what T3 to T7 inherit
+
+- Only 0/1 variables are points. An order literal x >= k of a wider integer cannot be a cut without a
+  new FlatZinc variable, which would change the `.opb` beyond the cuts. So Challenge models over
+  integers (black-hole, alldiff pigeonholes) get no cut today, although their group is found
+  (`alldiff_pigeonhole_narrow_unsat`, order 6). Writing the cut directly into the `.opb` and the proof
+  (not through the `.fzn`) would lift this, and needs baguette to read a cut it did not compile.
+- `restart_queens6` has one level: the `orbit` score picks `b12`, whose orbit of 8 is regular under D4
+  (order 8), so its stabilizer is trivial and the chain ends. Five of its seven cuts have a swap (the
+  reflections and the half turn), the two quarter turns go to `dom`. The SAT search barely changes
+  (24 -> 23 nodes).
+- dejavu is re-run per level (backend A). The swap needs the next level's group, so the last level costs
+  one more dejavu run than the chain's depth. Backend B (the library, one search) stays the user's
+  decision, and T3 needs it.
+- `red` everywhere is not reachable for groups without swaps. Whether a different chain (another base,
+  the `shared` score) finds swaps on QR is a T3 question.

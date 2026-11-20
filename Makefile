@@ -203,7 +203,7 @@ e2e: build
 # The SYMMETRY lane (M15-symmetry-T2, D-0179): dejavu beside baguette, each symmetry-breaking
 # cut re-derived in the merged proof, checked by veripb against the ORIGINAL .opb, plus the
 # mutation controls. Node only (dejavu, MiniZinc); not in `check`.
-#   make sym ARGS="-j 8 /scratch/arthur/<run>"      add --big for QR48 (about ten minutes)
+#   make sym ARGS="-j 8 /scratch/arthur/<run>"      add --big for QR48 (about five minutes)
 # NOT under $(CAP): dejavu on QR48 takes about 4 GB. Every step runs under systemd's
 # MemoryMax=32G instead (scripts/sym_lane.sh).
 sym: build

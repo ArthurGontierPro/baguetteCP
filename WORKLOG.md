@@ -23,7 +23,6 @@ of it to every session and stopping at a broken line before it even reached the 
 | M11-complexity-T15 (SPIKE, explanations as a hash-consed DAG; a prototype branch, nothing merged without a decision) | `lib/core/explanation.ml`, `lib/core/justify.ml`, `lib/core/trace.ml`, propagators' explanation construction as needed, on branch `wave55-dag` only | agent-dag (`wave55-dag`) | 2026-11-20 |
 | M11-complexity-T17 (learned clauses that cannot prune) | `lib/core/search.ml`, `lib/core/learned.ml`, `lib/core/retention.ml`, `lib/core/engine.ml` (learned wakes only), `lib/core/prop/clause.ml`, `lib/core/prop/pb.ml`, their unit tests | agent-learnprop (`wave55-learnprop`) | 2026-11-20 |
 | M14-e2e-verification-T4 (auxiliary Booleans, reified and Boolean families in the e2e chain) | `tools/e2e/`, `scripts/e2e_lane.sh`, `bench/e2e_spike/`; reserved record D-0178 | agent-e2e4 (`wave55-e2e4`) | 2026-11-20 |
-| M15-symmetry-T2 (the pipeline side by side) | new `tools/symmetry/`, new `bench/symmetry/`, a new lane script `scripts/sym_lane.sh`, one `Makefile` target, `scripts/README.md` (one section); reserved record D-0179 | agent-sym2 (`wave55-sym2`) | 2026-11-20 |
 
 ## Cross-session requests
 
@@ -629,8 +628,15 @@ section 1. Shares are inclusive, of the whole run.
 | M11-complexity-T16 (the release build) | agent-release (`wave55-release`) | 2026-11-20 | **D-0171.** `make release` builds `bin/main.exe` with dune's release profile into `_build_release/` (own lock; `dune build`, `make check`, `--root .` unchanged). Same bytes as dev: 200 models x (stdout, rc, .opb, .pbp) 0 differences, diff lane 301/301 with each binary. Instr/node dev -> release: QR48 -15.2 % / -11.2 % (no proof / proof), rcpsp_11 -17.1 % / -6.9 %, cyclic -17.0 % / -5.0 %. Clean build 4.7 s. Harnesses unchanged (BAGUETTE= / BIN=); docs in scripts/README.md §8 and bench/challenge/README.md. `make check` rc 0, 100 MB. |
 | M14-e2e-verification-T1 (feasibility study) | agent-e2e (`wave55-e2e`) | 2026-11-20 | **D-0174 (STUDY).** The verified encoder is CakeML's `cake_pb_cp` (`.scp` in, OPB over two's-complement bits out, HOL4 theorem `full_encode_sem_concl`), prebuilt in gitlab.com/MIAOresearch/software/cakepb `cp/`. Route: baguette's proof re-derives its own `.opb` from cake's at its head (atoms, `B = l + S`, ladder, substituted rows, pins), search proof unchanged. `bench/e2e_spike/run.sh`: 4 models VERIFIED by `cake_pb_cp`, a faked transcription bug refused. ROADMAP M14-T2..T8 |
 | M15-symmetry-T1 (study) | agent-sym (`wave55-sym`) | 2026-11-20 | **D-0177 (STUDY).** dejavu v2.1 is the latest release (satsuma's 2026 copy = upstream `6dd780e`, `main` `f984485` adds preprocessor fixes, same CLI). satsuma 1.4's Schreier cuts (Anders, Codel, Heule, SAT 2026) are codes-cp's chain, from one dejavu run via `random_schreier`, proved by `red` with the permutation witness (accepted by `d5644ca4`, damaged witness refused). The VeriPB addition is orders with auxiliary variables (3.0.0, AAAI 2026), present in our checker, shortens the order not the witness. T2 interface proposed; ROADMAP T1 DONE, T2/T3/T5 notes |
+| M15-symmetry-T2 (the pipeline side by side) | agent-sym2 (`wave55-sym2`) | 2026-11-20 | **D-0179.** `make sym`: `tools/symmetry/{opb2graph,symchain,symmerge}.py` beside baguette, dejavu `f984485` as distributed (binary in `/cluster/arthur/tools/dejavu-f984485/`), one run per level, cuts on the search's 0/1 variables, merged proof checked against the ORIGINAL `.opb`. D-0177's `red` witness w_b^-1 is refused on a level's second cut; `red` with a SWAP of c and b holds, `dom` under the points' lex order where the group has no swap (QR levels 2-3). 12/12 VERIFIED (QR48 11 491 -> 45 nodes, 253 s -> 2 s, check 10 s), 12/12 mutation controls refused on satisfiable models |
 
 ## Handoff notes
+
+### 2026-11-20 (agent-sym2, `wave55-sym2`): M15-symmetry-T2, D-0179
+
+`make sym ARGS="-j 8 OUTDIR"` (`--big` adds QR48) runs `.fzn` -> `.opb` -> `opb2graph.py` -> dejavu per level -> `symchain.py` -> baguette
+-> `symmerge.py` -> veripb on the original `.opb`. Cuts with a swap witness are `red`, the others `dom` (D-0177's plain `red` is refused, §2).
+Only 0/1 variables are points: integer models (black-hole) get no cut until cuts are written into the `.opb` directly. T3 inherits the swap rule.
 
 ### 2026-11-20 (agent-sym, `wave55-sym`): M15-symmetry-T1, D-0177 (STUDY)
 

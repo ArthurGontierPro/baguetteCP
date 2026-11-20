@@ -222,7 +222,7 @@ marked `yes`, four controls (a wrong witness and a wrong cut, under `red` and un
 refused at the mutated line, in the checker's words. Each step is under `systemd-run --user
 --scope -p MemoryMax=32G` and a timeout (`SYM_TL`, 1800 s), with `OUTDIR/<name>/<step>.pid`
 while it runs and `OUTDIR/lane.pid`. Clean up by those PIDs, never by name. The small tier takes
-seconds; QR48 (`--big`) about ten minutes, most of it the run without breaking.
+seconds; QR48 (`--big`) about five minutes, most of it the run without breaking (253 s).
 
 Nothing in `tools/symmetry/` is trusted: a wrong generator, orbit or witness is a line veripb
 refuses. Only 0/1 variables are broken on (the cut has to be a FlatZinc constraint without new
