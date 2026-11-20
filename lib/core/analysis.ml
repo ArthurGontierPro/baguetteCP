@@ -1066,6 +1066,19 @@ module Heap = struct
       Some top
 end
 
+(* A slot ([2 * variable + direction], so a non-negative int) as a table key: the
+   identity is its hash and [Int.equal] its comparison. D-0191: the closure's cell table
+   was a polymorphic [(int, int) Hashtbl.t], a [caml_hash] and a [compare_val] per probe
+   and a re-hash of every cell at each doubling; [insert] and the walk's lookups were 5 %
+   of 2011_roster's samples and 10 % of 2017_opd_small_bibd_08_28_14's. The table is
+   folded once, into a list the caller sorts, so its order reaches nothing. *)
+module Slot_tbl = Hashtbl.Make (struct
+  type t = int
+
+  let equal = Int.equal
+  let hash x = x land max_int
+end)
+
 (* The decision levels the conflict rests on, descending, level 0 dropped: what
    [decision_levels] reads off the decision closure, see the section header. [Error]
    when the graph is corrupt or the walk does not close, as [analyse] reports them. *)
@@ -1075,8 +1088,8 @@ let dependency_levels store (c : Store.conflict) ~(vars_of : int -> Var.t list o
   let max_resolutions = Store.trail_length store + 1 in
   let resolutions = ref 0 in
   (* Slot -> the citation its cell holds. Looked up and never iterated for an ordered
-     result: the levels are sorted at the end. *)
-  let cells : (int, int) Hashtbl.t = Hashtbl.create 64 in
+     result: the levels are sorted at the end. Keyed through [Slot_tbl], see there. *)
+  let cells = Slot_tbl.create 64 in
   let heap = Heap.create () in
   let slot c =
     let e = Store.trail_entry store (cite_pos c) in
@@ -1084,10 +1097,10 @@ let dependency_levels store (c : Store.conflict) ~(vars_of : int -> Var.t list o
   in
   let insert c =
     let k = slot c in
-    match Hashtbl.find_opt cells k with
+    match Slot_tbl.find_opt cells k with
     | Some held when cite_pos held >= cite_pos c -> ()
     | _ ->
-        Hashtbl.replace cells k c;
+        Slot_tbl.replace cells k c;
         if not (cite_root c) then Heap.push heap c
   in
   let rec loop () =
@@ -1095,11 +1108,11 @@ let dependency_levels store (c : Store.conflict) ~(vars_of : int -> Var.t list o
     | None -> ()
     | Some c ->
         let k = slot c in
-        (match Hashtbl.find_opt cells k with
+        (match Slot_tbl.find_opt cells k with
         | Some held when held = c ->
             if !resolutions >= max_resolutions then raise (Bad (Diverged !resolutions));
             incr resolutions;
-            Hashtbl.remove cells k;
+            Slot_tbl.remove cells k;
             Array.iter insert (cites_of store ~check (cite_pos c))
         | _ -> ());
         loop ()
@@ -1118,7 +1131,7 @@ let dependency_levels store (c : Store.conflict) ~(vars_of : int -> Var.t list o
     let levels =
       List.rev
         (List.sort_uniq Int.compare
-           (Hashtbl.fold (fun _ c acc -> cite_level c :: acc) cells []))
+           (Slot_tbl.fold (fun _ c acc -> cite_level c :: acc) cells []))
     in
     Debug.check
       "M7-T27 (a3): the memoised closure names the levels the walk over facts does"
