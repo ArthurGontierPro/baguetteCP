@@ -371,6 +371,8 @@ let established_at_root store v ~lower =
 
 let range a b = List.init (Stdlib.max 0 (b - a + 1)) (fun i -> a + i)
 
+module Int_tbl = Hashtbl.Make (Int)
+
 let snap_of store tm =
   let d = Store.get store tm.x in
   {
@@ -969,30 +971,41 @@ let forced_expl t ~k ~v ~poss ~gone ~y ~lower =
 
 exception Found of Store.conflict
 
+(* The snapshot's window holds [v] / is exactly [v]: the two tests rule C and rules (a)
+   and (b) sort a value's variables by. *)
+let holds_v v s = s.s_lo <= v && v <= s.s_hi
+let fixed_at v s = s.s_lo = v && s.s_hi = v
+let count_where p l = List.fold_left (fun n s -> if p s then n + 1 else n) 0 l
+
+(* M16-file-review-T2 (D-0190): the two counts first, and the lists and the facts a push
+   names only for a push. They are the same lists, built from the same snapshot by the
+   same filters, so every push is what it was; a pass that pushes nothing (most of them)
+   no longer builds four lists and the scope's facts per cover value. The facts are one
+   value for both pushes, as before. *)
 let rule_c t store ~snaps ~caps ~apply =
   List.iter
     (fun k ->
       let c = k.k_cov in
       let v = c.cv in
       let dv = List.filter (fun s -> declares s v) snaps in
-      let poss = List.filter (fun s -> s.s_lo <= v && v <= s.s_hi) dv in
-      let gone = List.filter (fun s -> not (s.s_lo <= v && v <= s.s_hi)) dv in
-      let fixed = List.filter (fun s -> s.s_lo = v && s.s_hi = v) dv in
-      let others = List.filter (fun s -> not (s.s_lo = v && s.s_hi = v)) dv in
-      let may = c.cconst + List.length poss in
-      let must = c.cconst + List.length fixed in
-      let facts = scope_facts ~snaps:dv ~caps:[ k ] in
-      if may < k.k_hi then
-        apply ~ahead:false ~lower:false c.cx may
-          (Reason.because
-             ~concludes:(Some (Reason.at_most ~name:c.cname ~decl:c.cdhi may))
-             facts
-             (close_upper t ~k ~may (c_upper_expl t ~k ~poss ~gone ~may)));
+      let may = c.cconst + count_where (holds_v v) dv in
+      let must = c.cconst + count_where (fixed_at v) dv in
+      let facts = lazy (scope_facts ~snaps:dv ~caps:[ k ]) in
+      (if may < k.k_hi then
+         let poss = List.filter (holds_v v) dv in
+         let gone = List.filter (fun s -> not (holds_v v s)) dv in
+         apply ~ahead:false ~lower:false c.cx may
+           (Reason.because
+              ~concludes:(Some (Reason.at_most ~name:c.cname ~decl:c.cdhi may))
+              (Lazy.force facts)
+              (close_upper t ~k ~may (c_upper_expl t ~k ~poss ~gone ~may))));
       if must > k.k_lo then
+        let fixed = List.filter (fixed_at v) dv in
+        let others = List.filter (fun s -> not (fixed_at v s)) dv in
         apply ~ahead:true ~lower:true c.cx must
           (Reason.because
              ~concludes:(Some (Reason.at_least ~name:c.cname ~decl:c.cdlo must))
-             facts
+             (Lazy.force facts)
              (close_lower t ~k ~must (c_lower_expl t ~k ~fixed ~others ~must))))
     caps;
   ignore store
@@ -1044,10 +1057,10 @@ let pass t store =
     | Store.Unchanged -> ()
   in
   rule_c t store ~snaps ~caps ~apply:(fun ~ahead -> apply ~ahead);
-  let cover_at = Hashtbl.create 16 in
-  List.iter (fun k -> Hashtbl.replace cover_at k.k_cov.cv k) caps;
-  let los = List.sort_uniq compare (List.map (fun s -> s.s_lo) snaps) in
-  let his = List.sort_uniq compare (List.map (fun s -> s.s_hi) snaps) in
+  let cover_at = Int_tbl.create 16 in
+  List.iter (fun k -> Int_tbl.replace cover_at k.k_cov.cv k) caps;
+  let los = List.sort_uniq Int.compare (List.map (fun s -> s.s_lo) snaps) in
+  let his = List.sort_uniq Int.compare (List.map (fun s -> s.s_hi) snaps) in
   let push ~a ~b ~halls ~caps_ab ~y ~lower x bound =
     apply ~ahead:true ~lower (View.of_var x) bound
       (Reason.because
@@ -1065,112 +1078,118 @@ let pass t store =
       let c = k.k_cov in
       let v = c.cv in
       let dv = List.filter (fun s -> declares s v) snaps in
-      let is_fixed s = s.s_lo = v && s.s_hi = v in
-      let holds s = s.s_lo <= v && v <= s.s_hi in
-      let fixed = List.filter is_fixed dv in
+      let is_fixed = fixed_at v in
+      let holds = holds_v v in
+      (* M16-file-review-T2 (D-0190): counted first, as in [rule_c]; the lists are built
+         where a rule fires, from the same snapshot by the same filters. *)
+      let n_fixed = count_where is_fixed dv in
       (* (a) saturated *)
-      if c.cconst + List.length fixed = k.k_hi then
-        List.iter
-          (fun y ->
-            if not (is_fixed y) then
-              if y.s_lo = v then
-                push ~a:v ~b:v ~halls:fixed ~caps_ab:[ k ] ~y ~lower:true y.s_var (v + 1)
-              else if y.s_hi = v then
-                push ~a:v ~b:v ~halls:fixed ~caps_ab:[ k ] ~y ~lower:false y.s_var (v - 1)
-              else if
-                (* LIVE, not [y]'s snapshot bounds: an earlier push of this pass may have
-                   moved a bound of [y] onto [v], and a removal AT a bound is a bound
-                   move, which this entry's [~concludes:None] does not describe (I-P6's
-                   "shape" clause). Read live, the test is exactly what it was before
-                   M6-T19: an interior value, removed as a hole. *)
-                let live = Store.get store y.s_var in
-                Domain.lo live < v && v < Domain.hi live && Domain.mem live v
-              then
-                let j =
-                  Reason.because ~concludes:None
-                    (scope_facts ~snaps:dv ~caps:[ k ])
-                    (hole_expl t ~v ~snaps ~halls:fixed ~caps:[ k ] ~y)
-                in
-                match
-                  Store.deriving_ahead store (fun () -> Store.remove store y.s_var v j)
-                with
-                | Store.Conflict cf -> raise (Found cf)
-                | Store.Changed ->
-                    Propagator.count_deduction ();
-                    moved := true
-                | Store.Unchanged -> ())
-          dv;
+      (if c.cconst + n_fixed = k.k_hi then
+         let fixed = List.filter is_fixed dv in
+         List.iter
+           (fun y ->
+             if not (is_fixed y) then
+               if y.s_lo = v then
+                 push ~a:v ~b:v ~halls:fixed ~caps_ab:[ k ] ~y ~lower:true y.s_var (v + 1)
+               else if y.s_hi = v then
+                 push ~a:v ~b:v ~halls:fixed ~caps_ab:[ k ] ~y ~lower:false y.s_var (v - 1)
+               else if
+                 (* LIVE, not [y]'s snapshot bounds: an earlier push of this pass may have
+                    moved a bound of [y] onto [v], and a removal AT a bound is a bound
+                    move, which this entry's [~concludes:None] does not describe (I-P6's
+                    "shape" clause). Read live, the test is exactly what it was before
+                    M6-T19: an interior value, removed as a hole. *)
+                 let live = Store.get store y.s_var in
+                 Domain.lo live < v && v < Domain.hi live && Domain.mem live v
+               then
+                 let j =
+                   Reason.because ~concludes:None
+                     (scope_facts ~snaps:dv ~caps:[ k ])
+                     (hole_expl t ~v ~snaps ~halls:fixed ~caps:[ k ] ~y)
+                 in
+                 match
+                   Store.deriving_ahead store (fun () -> Store.remove store y.s_var v j)
+                 with
+                 | Store.Conflict cf -> raise (Found cf)
+                 | Store.Changed ->
+                     Propagator.count_deduction ();
+                     moved := true
+                 | Store.Unchanged -> ())
+           dv);
       (* (b) forced *)
-      let poss = List.filter holds dv in
-      let gone = List.filter (fun s -> not (holds s)) dv in
-      if
-        c.cconst + List.length poss = k.k_lo
-        && List.length fixed < List.length poss
-        && List.for_all (fun s -> Domain.mem (Store.get store s.s_var) v) poss
-      then
-        List.iter
-          (fun y ->
-            if not (is_fixed y) then
-              let lower = y.s_lo < v in
-              let facts =
-                scope_facts ~snaps:dv ~caps:[]
-                @
-                if View.is_const c.cx then []
-                else
-                  [
-                    Reason.at_least ~name:c.cname ~decl:c.cdlo k.k_lo;
-                    Reason.at_most ~name:c.cname ~decl:c.cdhi k.k_hi;
-                  ]
-              in
-              apply ~ahead:false ~lower (View.of_var y.s_var) v
-                (Reason.because
-                   ~concludes:
-                     (Some
-                        (if lower then Reason.at_least ~name:y.s_name ~decl:y.s_dlo v
-                         else Reason.at_most ~name:y.s_name ~decl:y.s_dhi v))
-                   facts
-                   (forced_expl t ~k ~v ~poss ~gone ~y ~lower)))
-          poss)
+      let n_poss = count_where holds dv in
+      if c.cconst + n_poss = k.k_lo && n_fixed < n_poss then
+        let poss = List.filter holds dv in
+        if List.for_all (fun s -> Domain.mem (Store.get store s.s_var) v) poss then
+          let gone = List.filter (fun s -> not (holds s)) dv in
+          List.iter
+            (fun y ->
+              if not (is_fixed y) then
+                let lower = y.s_lo < v in
+                let facts =
+                  scope_facts ~snaps:dv ~caps:[]
+                  @
+                  if View.is_const c.cx then []
+                  else
+                    [
+                      Reason.at_least ~name:c.cname ~decl:c.cdlo k.k_lo;
+                      Reason.at_most ~name:c.cname ~decl:c.cdhi k.k_hi;
+                    ]
+                in
+                apply ~ahead:false ~lower (View.of_var y.s_var) v
+                  (Reason.because
+                     ~concludes:
+                       (Some
+                          (if lower then Reason.at_least ~name:y.s_name ~decl:y.s_dlo v
+                           else Reason.at_most ~name:y.s_name ~decl:y.s_dhi v))
+                     facts
+                     (forced_expl t ~k ~v ~poss ~gone ~y ~lower)))
+            poss)
     caps;
+  (* M16-file-review-T2 (D-0190): [a, b] is a candidate when every value in it is in the
+     cover, which is [b <= reach a], the top of the run of cover values that starts at [a]
+     ([a - 1] when [a] is not one). One walk per lower end, where every (a, b) pair used to
+     build [range a b] and look each value up: the same pairs, in the same order, with the
+     same [caps_ab]. *)
+  let reach a =
+    let rec up v = if Int_tbl.mem cover_at v then up (v + 1) else v - 1 in
+    up a
+  in
   List.iter
     (fun a ->
+      let top = reach a in
       List.iter
         (fun b ->
-          if b >= a then
-            let found = List.map (fun v -> Hashtbl.find_opt cover_at v) (range a b) in
-            if List.for_all Option.is_some found then
-              let caps_ab = List.filter_map Fun.id found in
-              let cap =
-                List.fold_left (fun acc k -> acc + k.k_hi - k.k_cov.cconst) 0 caps_ab
+          if b >= a && b <= top then
+            let caps_ab = List.map (fun v -> Int_tbl.find cover_at v) (range a b) in
+            let cap =
+              List.fold_left (fun acc k -> acc + k.k_hi - k.k_cov.cconst) 0 caps_ab
+            in
+            if cap >= 0 then
+              (* Variables whose DECLARED range is inside [a, b] consume their unit of
+                 capacity by the model row's own constant folding, so they must be in
+                 the confined set rather than outside it; ordering them first is what
+                 makes that so whenever there is room for them at all. *)
+              let all_in = List.filter (fun s -> a <= s.s_lo && s.s_hi <= b) snaps in
+              let folded, rest =
+                List.partition (fun s -> a <= s.s_dlo && s.s_dhi <= b) all_in
               in
-              if cap >= 0 then
-                (* Variables whose DECLARED range is inside [a, b] consume their unit of
-                   capacity by the model row's own constant folding, so they must be in
-                   the confined set rather than outside it; ordering them first is what
-                   makes that so whenever there is room for them at all. *)
-                let all_in = List.filter (fun s -> a <= s.s_lo && s.s_hi <= b) snaps in
-                let folded, rest =
-                  List.partition (fun s -> a <= s.s_dlo && s.s_dhi <= b) all_in
-                in
-                let ordered = folded @ rest in
-                let n = List.length ordered in
-                if n > cap then
-                  let halls = List.filteri (fun i _ -> i < cap) ordered in
-                  let y = List.nth ordered cap in
-                  push ~a ~b ~halls ~caps_ab ~y ~lower:true y.s_var (b + 1)
-                else if n = cap then
-                  List.iter
-                    (fun y ->
-                      if
-                        not
-                          (List.exists (fun s -> String.equal s.s_name y.s_name) ordered)
-                      then
-                        if a <= y.s_lo && y.s_lo <= b then
-                          push ~a ~b ~halls:ordered ~caps_ab ~y ~lower:true y.s_var (b + 1)
-                        else if a <= y.s_hi && y.s_hi <= b then
-                          push ~a ~b ~halls:ordered ~caps_ab ~y ~lower:false y.s_var
-                            (a - 1))
-                    snaps)
+              let ordered = folded @ rest in
+              let n = List.length ordered in
+              if n > cap then
+                let halls = List.filteri (fun i _ -> i < cap) ordered in
+                let y = List.nth ordered cap in
+                push ~a ~b ~halls ~caps_ab ~y ~lower:true y.s_var (b + 1)
+              else if n = cap then
+                List.iter
+                  (fun y ->
+                    if not (List.exists (fun s -> String.equal s.s_name y.s_name) ordered)
+                    then
+                      if a <= y.s_lo && y.s_lo <= b then
+                        push ~a ~b ~halls:ordered ~caps_ab ~y ~lower:true y.s_var (b + 1)
+                      else if a <= y.s_hi && y.s_hi <= b then
+                        push ~a ~b ~halls:ordered ~caps_ab ~y ~lower:false y.s_var (a - 1))
+                  snaps)
         his)
     los;
   !moved
