@@ -40,7 +40,11 @@
    The scan in [select] is linear in the candidates, as [Search.unfixed] already is per
    node. A binary heap keyed on the score is the optimisation if a profile ever shows
    the scan; it would have to be told about every fix and unfix, which the store does
-   not report, and that is why it is not here.
+   not report, and that is why it is not here. M16-file-review-T3 (D-0191) measured it:
+   under `--search activity` it is 0.2 % of the median lane instance's samples and 13 %
+   of 2011_roster's, whose thousands of candidates are tied at score 0 for most of the
+   run, so every one is also asked its [Domain.size]. The heap is the lever there and it
+   needs the store's events, so it stays a proposal (D-0191 section 5).
 
    ---------------------------------------------------------------------------
    Determinism

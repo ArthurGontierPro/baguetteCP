@@ -1003,7 +1003,14 @@ let retire ?(unchecked = false) t ctx ~why (ids : Writer.cid list) =
    deletion path. [retire]'s [Not_owned] is where it lands.
 
    D-0139: the call is O(1) unless the policy is [due], which is what keeps the once-per-
-   learned-constraint call off the profile (see [evictor]). *)
+   learned-constraint call off the profile (see [evictor]).
+
+   M16-file-review-T3 (D-0191): when it is due it is O(n) in the live database (the
+   [List.rev], the policy's pass, the partition), plus [locked_instances]' one trail walk.
+   Over a run that is O(n) per learned constraint, and n is the cap plus what is PINNED: a
+   database whose pinned constraints keep growing past the cap (cited consumers without a
+   gate) makes the run quadratic in them. Under `lbd:500` no lane instance ends with more
+   than 526 live constraints (the end sweep's count), so there n stays near the cap. *)
 let reduce t ctx =
   if not (t.ev.due ~added:t.n_added ~live:t.n_live) then []
   else
