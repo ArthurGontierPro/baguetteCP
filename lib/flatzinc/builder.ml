@@ -1484,7 +1484,7 @@ let add_item st (item : Ast.item) =
    anything, so it is never copied. *)
 let split_gcc_repeats (m : Model.t) : Model.t =
   let n0 = Array.length m.Model.vars in
-  let fresh_rev = ref [] and defs_rev = ref [] in
+  let fresh_rev = ref [] and defs_rev = ref [] and n_fresh = ref 0 in
   let fixed i =
     match m.Model.vars.(i).Model.v_dom with
     | Model.Drange (lo, hi) -> lo = hi
@@ -1492,7 +1492,9 @@ let split_gcc_repeats (m : Model.t) : Model.t =
     | Model.Dset _ | Model.Dbool -> false
   in
   let copy pos i =
-    let j = n0 + List.length !fresh_rev in
+    (* a count, where it was [List.length !fresh_rev]: quadratic in the copies *)
+    let j = n0 + !n_fresh in
+    incr n_fresh;
     let v = m.Model.vars.(i) in
     fresh_rev :=
       { v with Model.v_name = Printf.sprintf "X_INTRODUCED_gcc_copy_%d" (j - n0) }
