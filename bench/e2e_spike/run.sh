@@ -3,12 +3,15 @@
 #
 #   cake_pb_cp M.scp                      -> M.cake.opb   (the verified encoder's OPB)
 #   baguette M.fzn --proof M.bag          -> M.bag.opb, M.bag.pbp (baguette's own, unchanged)
-#   bridge.py M.cake.opb M.bag.opb M.bag.pbp -> M.bridged.pbp (re-derives every M.bag.opb row
+#   tools/e2e/bridge.py M.cake.opb M.names M.bag.opb M.bag.pbp -> M.bridged.pbp (re-derives every M.bag.opb row
 #                                              from M.cake.opb, then baguette's proof)
 #   veripb M.cake.opb M.bridged.pbp --elaborate M.core
 #   cake_pb_cp M.scp M.core               -> "s VERIFIED ..." (the verified checker, last word)
 #
-# M.scp and M.fzn are hand-written twins (no translator yet, M14-T2). cake_pb_cp is built from
+# M.scp and M.fzn are hand-written twins, written before the translator existed. Since M14-T2
+# (D-0176) the bridge lives in tools/e2e/bridge.py and needs the translator's names table,
+# so the translator runs on M.fzn too (its own .scp is not used here: the lane,
+# scripts/e2e_lane.sh, is the chain with the translator in place of the twins). cake_pb_cp is built from
 # the public CakePB repository (gitlab.com/MIAOresearch/software/cakepb, cp/, commit 438b8f83):
 # `gcc basis_ffi.c cp/cake_pb_cp.S -o cake_pb_cp`. cake_pb_cp exits 0 on a refusal, so the
 # verdict is read from its "s VERIFIED" line, never from its status.
@@ -29,7 +32,8 @@ for scp in "$HERE"/models/*.scp; do
     o="$OUT/$m"
     "$CK" "$scp" > "$o.cake.opb"
     (ulimit -v 4000000; "$B" "$HERE/models/$m.fzn" --proof "$o.bag" > "$o.out" 2>&1)
-    python3 -I "$HERE/bridge.py" "$o.cake.opb" "$o.bag.opb" "$o.bag.pbp" > "$o.bridged.pbp"
+    python3 -I "$ROOT/tools/e2e/fzn2scp.py" "$HERE/models/$m.fzn" "$o.tr.scp" "$o.names"
+    python3 -I "$ROOT/tools/e2e/bridge.py" "$o.cake.opb" "$o.names" "$o.bag.opb" "$o.bag.pbp" > "$o.bridged.pbp"
     v=$("$V" "$o.cake.opb" "$o.bridged.pbp" --elaborate "$o.core" 2>&1 | grep '^s ')
     c=$("$CK" "$scp" "$o.core" 2>&1 | grep '^s ')
     echo "$m | veripb: ${v:-REFUSED} | cake_pb_cp: ${c:-REFUSED}"

@@ -21,9 +21,8 @@ of it to every session and stopping at a broken line before it even reached the 
 |---|---|---|---|
 | M8-bits-encoding-T4 (two arms, `W = none` and `W = 0`, on the sixteen editions) | run directories under `/scratch/arthur/m8t4/`, `tools/compare/` (additions), `bench/challenge/README.md` (the run's row), a new D-record | agent-m8t4 (`wave55-m8t4`) | 2026-11-20 |
 | M11-complexity-T15 (SPIKE, explanations as a hash-consed DAG; a prototype branch, nothing merged without a decision) | `lib/core/explanation.ml`, `lib/core/justify.ml`, `lib/core/trace.ml`, propagators' explanation construction as needed, on branch `wave55-dag` only | agent-dag (`wave55-dag`) | 2026-11-20 |
-| M11-complexity-T17 (learned clauses that cannot prune) | `lib/core/search.ml`, `lib/core/learned.ml`, `lib/core/retention.ml`, `lib/core/engine.ml` (learned wakes only), `lib/core/prop/clause.ml`, `lib/core/prop/pb.ml`, their unit tests | agent-learnprop (`wave55-learnprop`) | 2026-11-20 |
-| M14-e2e-verification-T2 (first demo as a lane) | new `tools/e2e/` (the FlatZinc -> .scp translator, the bridge), `bench/e2e_spike/`, a new lane script `scripts/e2e_lane.sh`, `Makefile` (one target), `scripts/README.md` (one section); reserved record D-0176 | agent-e2e2 (`wave55-e2e2`) | 2026-11-20 |
-| M15-symmetry-T1 (study, documentation only) | a new decision record (reserved D-0177), notes under `/cluster/arthur/baguette-results/wave55-sym/` | agent-sym (`wave55-sym`) | 2026-11-20 |
+| M15-symmetry-T3 (breaking that agrees with the search: design, then a prototype outside `lib/`) | `tools/symmetry/`, `bench/symmetry/`, `scripts/sym_lane.sh`; a small C++ tool over dejavu's header-only library in `tools/symmetry/` if needed; NO `lib/` change without a new claim; reserved record D-0181 | agent-sym3 (`wave55-sym3`) | 2026-11-20 |
+| M14-e2e-verification-T8 (optimisation, and cake_pb_cp on search proofs) | `tools/e2e/`, `scripts/e2e_lane.sh`, `bench/e2e_spike/`, run dirs `/scratch/arthur/wave55-e2e8-runs/`; reserved record D-0182 | agent-e2e8 (`wave55-e2e8`) | 2026-11-20 |
 
 ## Cross-session requests
 
@@ -455,7 +454,10 @@ section 1. Shares are inclusive, of the whole run.
 
 | Task | Session | Date | Summary |
 |---|---|---|---|
+| M14-e2e-verification-T5 (globals in the e2e chain) | agent-e2e5 (`wave55-e2e5`) | 2026-11-20 | **D-0180.** Translator covers `array_int_element`, `global_cardinality` (open, both names), `array_int_maximum/minimum`, `int_max/min`, `baguette_inverse`, `baguette_member(_bool)` (per-selector `equals_if` + `or`, not cake's `in`), and bare `var int` aliases. Bridge: interior `eq` atoms as order indicators, gcc copies by a red pair, weakening/resolution + saturation. `make e2e`: 179 of 207 VERIFIED (was 105), 0 FAIL; 23 of 23 controls; 178 AGREE, 1 UNCHECKED. Also touched `scripts/README.md` §9 (control count, timing), unclaimed at the time |
+| M14-e2e-verification-T4 (Boolean and reified families in the e2e chain) | agent-e2e4 (`wave55-e2e4`) | 2026-11-20 | **D-0178.** The translator covers every Boolean and reified builtin of SPEC 2.1 (cake's `or`/`and`/`equals`/`not_equals`/`*_iff` with reify tuples `(b = 1)`); the bridge swaps cake's atoms for baguette's literals (`rup` clauses), resolves cake's `lt/gt` flag clause, defines `_neN` by a red pair, saturates cake's bit-range big-M, pins by `ia`. `make e2e`: 105 of 207 VERIFIED (was 75), 102 SKIPPED, 0 FAIL; 14 of 14 controls (6 new: `opb-stronger` on the Boolean family and `int_lin_le_reif`, `opb-reif` a wrong reification); 105 AGREE with Gecode/CP-SAT |
 | M15-symmetry (roadmap rows only) | codes-cp session | 2026-11-20 | New M15 section at the end of `docs/ROADMAP.md`: dejavu beside baguette (not inside it), T1 study of dejavu's latest versions and Markus Anders' papers, T2 the side-by-side pipeline from codes-cp's prototype, T3 breaking that agrees with the search (Ciaran's idea), T4-T7 parked. M13-codes-leads-T2 marked moved to M15 |
+| M14-e2e-verification-T2 (first demo as a lane) | agent-e2e2 (`wave55-e2e2`) | 2026-11-20 | **D-0176.** `make e2e`: a separate FlatZinc -> `.scp` translator (M1 builtins, `all_different_int`), the bridge in `tools/e2e/`, 75 of 207 test models VERIFIED by `cake_pb_cp`, 132 SKIPPED, 0 FAIL; 8 mutation controls refused at line and wording; translator equal to Gecode/CP-SAT's solution sets on all 75 |
 | M7-T34 (`member` without width-proportional rows) | agent-member2 (`wave55-member`) | 2026-11-20 | **D-0170.** Four bound clauses and two big-M rows over the declared overlap per position; the threshold clauses are lemmas written ahead of the lines that walk a hole (one per switch of the hole's owner), one `Combine` per line, no new constructor. Rows over the 35 Challenge instances 7.47 M -> 77 K, literals -38 %; statuses and incumbents equal to main's. Gate on `e150a70`: see D-0170 §5. Merge recommended |
 | M7-T28 (`member`) | agent-member (`wave53-member`) | 2026-11-19 | **D-0159.** `member` native, DOMAIN over x, y and one selector per position; released with M7-T34, which builds on its branch |
 | M11-complexity-T4 (part 2: search, analysis, retention, learned; T4 DONE) | agent-batch4b (`wave52-batch4b`) | 2026-11-19 | **D-0152.** S1 (learned-instance kind as a byte per engine id), S3 (`decision_entries` over the level marks), S4 (`is_fixed`, `first_fail` stops at size 2), S5 (`kept` by a level table), S6 (`apply_globals` keeps its forward list, skips a unit in force), S2 (lazy citation texts), R3 (typed orders, fifo's no-op sort skipped), J6 (`bridges`' origin a thunk), L2 (`to_linear_row` typed sorts, one-pass grouping), A1 (the 1UIP frontier keeps its count and a heap). R4 done and REVERTED (RSS +6-8 %). Every byte the same (36 measurement runs, lane 301/301 and 289/289); instructions at 40 000 nodes no-proof: mspsp -17.3 %, QR72 -15.6 %, QR48 -11.2 %, openshop -8.0 %, rcpsp_11 -5.9 %, cyclic -0.5 %; RSS -4 to -8 %. Gate on `d4e8477`: `make check` rc 0, peak RSS 99 MB, 193 models identical to gate 57's binary, lane 301/301 and 289/289, binary `d12feec0`. |
@@ -625,8 +627,7 @@ section 1. Shares are inclusive, of the whole run.
 | D-0161 request 1 (`Alldiff.snap_of` builds derivation inputs at every snapshot) | agent-snap (`wave54-snap`) | 2026-11-19 | **D-0165.** `snap_of` keeps the interior holes only; `gone` rebuilds the below/above runs inside the `Deferred` from the four frozen bounds; root flags and `hole_cite` through `Store.at_root`. Every model artefact and every lane line equal to the base `45b8a3c7`. Cyclic 10 000 nodes `--no-proof` -25.6 % instructions (157.0 -> 116.7 G), `--proof` -5.2 %; black-hole_20 -6.6 % / -2.3 %. |
 | M11-complexity-T13 | agent-thunk (`wave55-thunk`) | 2026-11-20 | **D-0168.** A thunk keeps its line (id, level) once written and drops its tree; the memo lets go of the cells of the nodes the closure built (a forcing records the operands it did not build, and only those thunks are forced again at release); `derive_ahead` emits the thunk. bh9 `--proof` node 40 (alldiff base): live 2 041 -> 658 MB, RSS 3 646 -> 1 777 MB, -0.7 % instructions, `.pbp` md5 equal; lane default runs -28.7 % (rcpsp_11) to +0.35 %. Gate on `a8762eb` (binary `40638833`): `make check` rc 0 (4 312 ok), 198 x 4 artefacts equal to `214e74d1`, lane 301/301, debug 289/289, scaling ok |
 | M11-complexity-T14 (the cost per node against Gecode) | agent-pernode2 (`wave55-pernode`) | 2026-11-20 | **D-0169.** codes-cp QR48 XOR, same tree as Gecode: Gecode 28 k instr and 57 propagations per node, baguette 1 572 k and 413 runs. Four byte-identical cuts in `engine.ml`, `store.ml`, `pb.ml`, `clause.ml` (run bracket without `Fun.protect` and no walk after a quiet run; wake sort in a scratch array; literal status off the record; seed heap without closures): -12.3 % / -15.8 % instr per node without proof, -7.5 % / -10.7 % with, every proof and `--stats` line identical. Gate on `c531645` (merges main `42feb27`): `make check` rc 0, 200 models x 4 artefacts equal to gate 71's `492638b9`, lanes 301/301 and 289/289, scaling ok and re-baselined (`26240af`), binary `c308784d`. Then merged main `f41498a` (thunk, disjoint files). Two proposals for the user (D-0169 section 5) |
-| M11-complexity-T16 (the release build) | agent-release (`wave55-release`) | 2026-11-20 | **D-0171.** `make release` builds `bin/main.exe` with dune's release profile into `_build_release/` (own lock; `dune build`, `make check`, `--root .` unchanged). Same bytes as dev: 200 models x (stdout, rc, .opb, .pbp) 0 differences, diff lane 301/301 with each binary. Instr/node dev -> release: QR48 -15.2 % / -11.2 % (no proof / proof), rcpsp_11 -17.1 % / -6.9 %, cyclic -17.0 % / -5.0 %. Clean build 4.7 s. Harnesses unchanged (BAGUETTE= / BIN=); docs in scripts/README.md §8 and bench/challenge/README.md. `make check` rc 0, 100 MB. |
-| M14-e2e-verification-T1 (feasibility study) | agent-e2e (`wave55-e2e`) | 2026-11-20 | **D-0174 (STUDY).** The verified encoder is CakeML's `cake_pb_cp` (`.scp` in, OPB over two's-complement bits out, HOL4 theorem `full_encode_sem_concl`), prebuilt in gitlab.com/MIAOresearch/software/cakepb `cp/`. Route: baguette's proof re-derives its own `.opb` from cake's at its head (atoms, `B = l + S`, ladder, substituted rows, pins), search proof unchanged. `bench/e2e_spike/run.sh`: 4 models VERIFIED by `cake_pb_cp`, a faked transcription bug refused. ROADMAP M14-T2..T8 |
+| M11-complexity-T17 (learned clauses that cannot prune) | agent-learnprop (`wave55-learnprop`) | 2026-11-20 | **D-0173.** Every learned-clause run on codes QR48 is a run of a SATISFIED clause (100 %, true literal watched in 98 %). RESTING behind `BAGUETTE_REST_SATISFIED=on`, OFF: a satisfied clause keeps its watches, leaves the wake index but for the true literal, is released by the backtrack that pops its support. Same pruning, another order: QR48 same trees and proofs, -33/-54 % instr/node without proof, -17/-33 % with; lane 250/301 differ, median -1 %. Lane config `rest` and its references added. Gate green on `88275b8` (`24efccd8`). The default is the user's decision (D-0173 section 5) |
 
 ## Handoff notes
 
@@ -634,6 +635,52 @@ section 1. Shares are inclusive, of the whole run.
 
 A spike in two variants on `795e869`. A (default) puts each node's line on the node (`Explanation.t`'s five line-writing constructors become inline records), so the memo table, D-0168's window and its second forcing are gone, every byte stays (gate green on `3f888e58`), and rcpsp_11 runs -21 % instructions. B (`BAGUETTE_HASHCONS=1`) hash-conses written nodes and writes share mode's proof for less than main (cable -64 %, cyclic -58 %, every proof verified).
 Not merged. `store.ml`'s `with_running` stats hook conflicts with D-0169's `run_as` and belongs there. D-0172 section 7 is the table for the user.
+### 2026-11-20 (agent-learnprop, `wave55-learnprop`): M11-complexity-T17, D-0173
+
+The learned clauses that never prune on codes QR48 are SATISFIED when woken (all 177 and 390 runs per node). RESTING takes a satisfied
+clause out of the wake index until a backtrack pops its true literal's support: same pruning, but another propagation order, so other
+trees on most of the lane. Hence a flag, `BAGUETTE_REST_SATISFIED=on`, OFF, with its lane config `rest` (references recorded,
+every proof accepted). QR48 same trees and proofs -33/-54 % instructions per node without proof, -17/-33 % with. Gate on `88275b8`
+green (200 x 4 artefacts equal, lane 324/324, debug 311/311, scaling ok, models with the rule on under debug 200/200). Waiting for
+the user: default on or not (D-0173 section 5; recommended, on in the codes harness now). The default path costs +0.3 %.
+
+| M11-complexity-T16 (the release build) | agent-release (`wave55-release`) | 2026-11-20 | **D-0171.** `make release` builds `bin/main.exe` with dune's release profile into `_build_release/` (own lock; `dune build`, `make check`, `--root .` unchanged). Same bytes as dev: 200 models x (stdout, rc, .opb, .pbp) 0 differences, diff lane 301/301 with each binary. Instr/node dev -> release: QR48 -15.2 % / -11.2 % (no proof / proof), rcpsp_11 -17.1 % / -6.9 %, cyclic -17.0 % / -5.0 %. Clean build 4.7 s. Harnesses unchanged (BAGUETTE= / BIN=); docs in scripts/README.md §8 and bench/challenge/README.md. `make check` rc 0, 100 MB. |
+| M14-e2e-verification-T1 (feasibility study) | agent-e2e (`wave55-e2e`) | 2026-11-20 | **D-0174 (STUDY).** The verified encoder is CakeML's `cake_pb_cp` (`.scp` in, OPB over two's-complement bits out, HOL4 theorem `full_encode_sem_concl`), prebuilt in gitlab.com/MIAOresearch/software/cakepb `cp/`. Route: baguette's proof re-derives its own `.opb` from cake's at its head (atoms, `B = l + S`, ladder, substituted rows, pins), search proof unchanged. `bench/e2e_spike/run.sh`: 4 models VERIFIED by `cake_pb_cp`, a faked transcription bug refused. ROADMAP M14-T2..T8 |
+| M15-symmetry-T1 (study) | agent-sym (`wave55-sym`) | 2026-11-20 | **D-0177 (STUDY).** dejavu v2.1 is the latest release (satsuma's 2026 copy = upstream `6dd780e`, `main` `f984485` adds preprocessor fixes, same CLI). satsuma 1.4's Schreier cuts (Anders, Codel, Heule, SAT 2026) are codes-cp's chain, from one dejavu run via `random_schreier`, proved by `red` with the permutation witness (accepted by `d5644ca4`, damaged witness refused). The VeriPB addition is orders with auxiliary variables (3.0.0, AAAI 2026), present in our checker, shortens the order not the witness. T2 interface proposed; ROADMAP T1 DONE, T2/T3/T5 notes |
+| M15-symmetry-T2 (the pipeline side by side) | agent-sym2 (`wave55-sym2`) | 2026-11-20 | **D-0179.** `make sym`: `tools/symmetry/{opb2graph,symchain,symmerge}.py` beside baguette, dejavu `f984485` as distributed (binary in `/cluster/arthur/tools/dejavu-f984485/`), one run per level, cuts on the search's 0/1 variables, merged proof checked against the ORIGINAL `.opb`. D-0177's `red` witness w_b^-1 is refused on a level's second cut; `red` with a SWAP of c and b holds, `dom` under the points' lex order where the group has no swap (QR levels 2-3). 12/12 VERIFIED (QR48 11 491 -> 45 nodes, 253 s -> 2 s, check 10 s), 12/12 mutation controls refused on satisfiable models |
+
+## Handoff notes
+
+### 2026-11-20 (agent-e2e5, `wave55-e2e5`): M14-e2e-verification-T5, D-0180
+
+`make e2e` verifies 179 of 207 (every T5 global bridged, 0 FAIL, 23 controls, 178 AGREE). The bridge gained
+three generic steps (interior `eq` atoms as `x_ge_v - x_ge_(v+1)`, copies by a red pair, weakening/resolution
+then saturation); the references now re-flatten baguette's mznlib predicates as MiniZinc. Left: T6, T8, 4 `var int` models.
+
+### 2026-11-20 (agent-sym2, `wave55-sym2`): M15-symmetry-T2, D-0179
+
+`make sym ARGS="-j 8 OUTDIR"` (`--big` adds QR48) runs `.fzn` -> `.opb` -> `opb2graph.py` -> dejavu per level -> `symchain.py` -> baguette
+-> `symmerge.py` -> veripb on the original `.opb`. Cuts with a swap witness are `red`, the others `dom` (D-0177's plain `red` is refused, §2).
+Only 0/1 variables are points: integer models (black-hole) get no cut until cuts are written into the `.opb` directly. T3 inherits the swap rule.
+
+### 2026-11-20 (agent-e2e4, `wave55-e2e4`): M14-e2e-verification-T4, D-0178
+
+`make e2e` now verifies 105 of 207 models (the Boolean and reified families added, 0 FAIL, 14 controls). The
+bridge's matcher is generic (atom swap by `rup`, one flag resolvent, `_neN` red pair, saturation, `ia` by syntactic
+implication), so T5 can try it on the globals first. Still out: `var int` with no domain (8 models), objectives (T8).
+
+### 2026-11-20 (agent-sym, `wave55-sym`): M15-symmetry-T1, D-0177 (STUDY)
+
+Take dejavu `main` (`f984485`, still v2.1, same command line as satsuma's copy `6dd780e`). For T2, prove the
+cuts with `red` and the transversal witness as satsuma 1.4 does, which drops the order from `dvbreak.py merge`.
+Start with the binary, one run per level. The header-only library route (one run, `set_base`/`sift_random`) is the
+user's call and is what T3 needs. The aux-variable orders do not shorten witnesses (T5). Proposed interface in D-0177 §4.
+
+### 2026-11-20 (agent-e2e2, `wave55-e2e2`): M14-e2e-verification-T2, D-0176
+
+`make e2e ARGS="-j 8 OUTDIR"` (node only, not in `check`) runs every test model through translator -> `cake_pb_cp` ->
+baguette -> bridge -> `veripb --elaborate` -> `cake_pb_cp`: 75 VERIFIED, 132 SKIPPED, 8 of 8 controls refused, translator
+validated against Gecode/CP-SAT. `tools/e2e/fzn2scp.py` is TRUSTED: widen it only with `scpsem.py` and the validation pass.
 
 ### 2026-11-20 (agent-e2e, `wave55-e2e`): M14-e2e-verification-T1, D-0174 (STUDY)
 

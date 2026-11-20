@@ -1,0 +1,26 @@
+# The SYMMETRY lane's instances (M15-symmetry-T2, D-0179). scripts/sym_lane.sh reads this file.
+#
+# name             source                                   depth expect controls tier
+#   source  test:F        test/models/F
+#           mzn:D         bench/symmetry/minweight_chk.mzn + bench/symmetry/D, flattened with
+#                         ENC=2 (parities as sums, sum x = 2y) by MiniZinc for tools/baguette.msc
+#           mzn:@CODES/D  the same with D under $CODES_CP (default /cluster/arthur/codes-cp)
+#   controls  yes: the four mutation controls run on this model (satisfiable ones only: a `red` or
+#             `dom` line over a database that is already unsatisfiable proves nothing, D-0053)
+#   tier      small runs by default, big only with --big
+#
+# The codes are codes-cp's minimum-distance models without fixed coordinates (dom/sym_p*_nofix.dzn;
+# the two Hamming files are dom/sym_p7_w2.dzn with nF = 0): is there a nonzero codeword of weight at
+# most Wmax? Extended Hamming [8,4,4], Golay [24,12,8], QR32 [32,16,8], QR48 [48,24,12].
+hamming_w2         mzn:hamming_w2.dzn                        3  UNSAT  -    small
+hamming_w4         mzn:hamming_w4.dzn                        3  SAT    yes  small
+golay_w4           mzn:golay_w4.dzn                          3  UNSAT  -    small
+golay_w8           mzn:golay_w8.dzn                          3  SAT    yes  small
+qr32_w4            mzn:qr32_w4.dzn                           3  UNSAT  -    small
+php_unsat          test:php_unsat.fzn                        3  UNSAT  -    small
+php_wide_unsat     test:php_wide_unsat.fzn                   3  UNSAT  -    small
+restart_pigeons54  test:restart_pigeons54.fzn                3  UNSAT  -    small
+colour_unsat       test:colour_unsat.fzn                     3  UNSAT  -    small
+php_escape_sat     test:php_escape_sat.fzn                   3  SAT    yes  small
+restart_queens6    test:restart_queens6.fzn                  3  SAT    -    small
+qr48_w4            mzn:@CODES/dom/sym_p47_w4_nofix.dzn       3  UNSAT  -    big

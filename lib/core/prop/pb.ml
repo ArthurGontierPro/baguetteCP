@@ -427,6 +427,13 @@ let falsified store a =
   let d = Store.get store a.x in
   if a.positive then d.Domain.hi < a.k else d.Domain.lo >= a.k
 
+(* [status store a = Sat_lit], in one test: `x >= k` holds iff [lo x >= k], `x <= k - 1` iff
+   [hi x < k]. The satisfied-watch rule of [Clause.Learned_clause] asks only this
+   (M11-complexity-T17, D-0173). *)
+let holds store a =
+  let d = Store.get store a.x in
+  if a.positive then d.Domain.lo >= a.k else d.Domain.hi < a.k
+
 let is_false = function Unsat_lit -> true | Sat_lit | Open -> false
 let is_open = function Open -> true | Sat_lit | Unsat_lit -> false
 

@@ -1,0 +1,3 @@
+output let {array [int] of string: X_INTRODUCED_86589_ = ["x = "++format(x)++"\n"]} in (X_INTRODUCED_86589_);
+int: n = 48;
+array [1..n] of bool: x;

@@ -1657,6 +1657,14 @@ type config = {
          Turning it off does not make the proof different in kind, only smaller: the
          learned constraints still go on the page, nothing cites them, and
          [Retention]'s citation guard has nothing to guard. *)
+  rest_satisfied : bool;
+      (* M11-complexity-T17 (D-0173): RESTING ([Clause.Learned_clause], [Engine.rest_on]).
+         A learned clause whose run finds one of its two watched literals TRUE keeps both
+         watches, leaves the wake index but for that literal's slot, and is run again after
+         a backtrack that pops the literal's support. It loses no pruning (every node
+         reaches the same fixpoint), but it changes the order prunings land in, so the
+         trees and the proofs, on most of the differential lane. OFF: a default-behaviour
+         change, for the user (D-0173 section 5). CLI: BAGUETTE_REST_SATISFIED=on. *)
   restarts : Restart.policy;
       (* M10-search-strategy-T2 (D-0137 sections 1-2). [Restart.No_restarts] is SPEC 3.4's
          default and every pre-M10 caller's behaviour: [search_core] then builds no
@@ -1687,6 +1695,7 @@ let default_config =
     retention = Retention.default;
     backjump_on_pb = false;
     propagate_learned = true;
+    rest_satisfied = false;
     break_assign_clause = false;
     break_assign_facts = false;
     break_bridge_levels = false;
@@ -2558,7 +2567,7 @@ let push_global stats g =
    A DUPLICATE unit is not cited, and that is deliberate rather than an omission: the
    bound is already in force from the first derivation, the second constraint has no
    consumer, and leaving it uncited leaves the policy free to evict it. *)
-let register_learned engine store ctx stats ~cid ~(lits : Lit.t list) =
+let register_learned engine store ctx stats ~rest_satisfied ~cid ~(lits : Lit.t list) =
   let decl = Learned.decl_of_encoding ctx.Justify.encoding in
   match lits with
   | [] -> ()
@@ -2577,7 +2586,7 @@ let register_learned engine store ctx stats ~cid ~(lits : Lit.t list) =
       | None -> stats.n_clause_declined <- stats.n_clause_declined + 1
       | Some p ->
           let id = Engine.next_id engine in
-          let lc = Clause.Learned_clause.make p in
+          let lc = Clause.Learned_clause.make ~rest_satisfied p in
           (* D-0139: behind [Retention.gate], so a policy that detaches can evict it. *)
           Engine.add engine
             (Retention.gate stats.db store ~cid
@@ -2900,7 +2909,8 @@ let rec learn_at_conflict engine store ctx trace stats cfg (c : Store.conflict) 
            policy cannot evict on this very call a constraint the next line is about to
            give a consumer. *)
         if cfg.propagate_learned then
-          register_learned engine store ctx stats ~cid ~lits:(Learn.lits l);
+          register_learned engine store ctx stats ~rest_satisfied:cfg.rest_satisfied ~cid
+            ~lits:(Learn.lits l);
         ignore (Retention.reduce stats.db ctx);
         let pb_levels =
           pb_at_conflict engine store ctx stats cfg c ~clause_converts ~lbd:(Learn.lbd l)

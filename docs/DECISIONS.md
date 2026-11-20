@@ -20809,6 +20809,974 @@ source is only needed to change it. It did not read the encoders of the T5/T6 fa
 names. It did not run a search proof (every demo model closes at the root), so the prefix's cost
 relative to a real proof is not known. That waits for T2's coverage.
 
+## D-0176  M14-e2e-verification-T2: the end-to-end lane, 75 test models certified by CakeML's verified encoder and checker, with a separate translator checked against Gecode and CP-SAT
+
+Status: DONE (tooling and a lane, no solver code)
+Date: 2026-11-20
+Task: M14-e2e-verification-T2 (agent-e2e2, `wave55-e2e2`)
+Touches: `tools/e2e/` (new), `scripts/e2e_lane.sh` (new), `Makefile` (`make e2e`), `scripts/README.md`
+§9, `bench/e2e_spike/run.sh` (its `bridge.py` moved to `tools/e2e/`). Results:
+`/cluster/arthur/baguette-results/wave55-e2e2/` (the whole lane run, `lane2.log`).
+
+### 1. What was built
+
+The chain of D-0174 §4 with a real translator in place of the hand-written twins, run as a lane:
+`fzn2scp.py` (FlatZinc to `.scp`) → `cake_pb_cp` (encode) → baguette `--proof` (order arm, default
+flags) → `bridge.py` → `veripb --elaborate` → `cake_pb_cp` (check). A model is VERIFIED only on
+`cake_pb_cp`'s own `s VERIFIED SATISFIABLE` or `s VERIFIED UNSATISFIABLE` line, and only when it
+agrees with baguette's answer.
+
+| File | Role | Trusted |
+|---|---|---|
+| `tools/e2e/fzn2scp.py` | FlatZinc to `.scp`, its own scanner and parser, nothing shared with `lib/flatzinc/` (D-0174 §5) | **yes**, the only new trust |
+| `tools/e2e/bridge.py` | the prefix that derives baguette's `.opb` from cake's | no, a wrong line is refused |
+| `tools/e2e/chain.sh`, `mutate.py` | one model through the chain, and the corruptions | no |
+| `tools/e2e/scpsem.py`, `fzn_solutions.py`, `validate.py` | the translator's test (section 4) | no |
+
+**Covered by the translator**, everything else refused with `UNCOVERED: <first uncovered builtin>`:
+`int_lin_le`, `int_lin_eq`, `int_lin_ne`, `int_le`, `int_lt`, `int_eq`, `int_ne` (SPEC §2.1's M1 row)
+and `all_different_int`, over `var lo..hi`, `var bool` (as `0..1`), set domains with holes (bounds
+plus cake's `(dN in (v ...) x)`), arrays, aliases (a narrower alias domain is kept as an `in` on
+the target), parameters and constants written in place, `solve satisfy` with or without a search
+annotation. Refused besides the builtins: an objective (T8), and `var int` with no declared domain,
+because cake needs bounds and a bound the translator invented would change the model.
+
+**What the bridge gained over the spike.** (1) Names go through the translator's names table and
+baguette's `* name` comments, so `q[1]` reaches `q_1_`. (2) baguette's disequality selector
+`_neN_ge_1` (`int_ne`, `int_lin_ne`, and all_different's constant or repeated pairs) is DEFINED as
+cake's flag of the same two halves (`b[c][ne]`, `x[c][i_j]`) by a `red` pair with the witness
+`_neN_ge_1 -> F`, then each selector row is cake's substituted row with the flag swapped by one `pol`,
+pinned by `ia`. So the `_neN` half of T4 is done here, earlier than the ROADMAP planned. (3) Rows
+that are not a multiple of one variable's whole bit sum are refused by the bridge rather than
+mis-substituted. Over the 75 verified models the pins were 2 968 ladder rungs by `ia`, 486 model
+rows by `ia`, 92 selector rows by `ia` (47 selectors in 24 models), and 3 505 by `rup`
+(all_different's per-value clauses, the hole clauses through cake's `i[x][ge/eq]` atoms, and the
+rows of a contradictory pair).
+
+### 2. The lane's counts
+
+Binary md5 `4e41e8c1` (code of `main` `d2699c9`), veripb 3.0.2 `d5644ca4`, `cake_pb_cp` sha256
+`ca92491e` (CakePB `438b8f83`). `make e2e` takes about 40 s at `-j 8`. It is the one running target
+without the Makefile's `ulimit -v 4000000`. Under it `cake_pb_cp` refuses every model ("failed to
+allocate sufficient CakeML heap and stack space", measured), because it reserves its whole heap as
+virtual memory. baguette keeps the 4 GB cap inside `chain.sh`, and each run is under systemd's
+`MemoryMax=32G`.
+
+| | models |
+|---|---|
+| VERIFIED | **75** (42 SAT, 33 UNSAT), 41 of them with more than 20 proof lines, up to 817 (`colour_unsat`, a search) |
+| SKIPPED | 132: `baguette_global_cardinality` 19, `array_int_element` 18, `fzn_global_cardinality` 14, `int_eq_reif` 9, `array_int_maximum` 7, `solve minimize` 7, `int_le_reif` 6, `baguette_member` 6, `bool2int` 5, `var int` with no domain 4, `int_lin_le_reif` 4, `baguette_regular` 4, `array_bool_or` 4, and 22 more below 4 |
+| FAIL | 0 |
+
+### 3. The mutation controls
+
+Each control is asserted at the refused line and on the checker's whole sentence (CLAUDE.md, the
+lane that asserts a rejection). A RUP failure sentence alone would match any RUP failure, so the
+line is pinned too.
+
+| control | models | refused at | wording |
+|---|---|---|---|
+| baguette's `.opb` row says more than the model (degree + 1) | `chain_sat`, `php_unsat` | the pin of THAT row, `@cK rup` | "The constraint is not implied by reverse unit propagation (RUP) from core and derived database." |
+| the `.scp` says less than baguette's row (rhs + 1) | `chain_sat`, `php_unsat` | a pin, `@cK rup` | the same |
+| the `.scp` says more and baguette's solution breaks it (rhs − 1) | `search_all_const_sat`, `bits_pb_learn_sat` | the `sol` line | "Propagation engine error: The given solution is conflicting with constraint N in the database.", N being the substituted row `@S[c[c1]]` of the mutated constraint (checked) |
+| an atom definition with a wrong witness (`-> 0`) | `chain_sat`, `lin_sat` (satisfiable, so the `red` is judged, D-0053) | that `@A2[...] red` line | "Proofgoal #1 could not be autoproven." |
+
+8 of 8 refused as expected. The survey that chose them also showed which corruptions are rightly
+NOT refused. A stronger `.scp` verifies on an UNSAT model (the corrupted model is UNSAT too, so the
+verdict is true of it), and on a satisfiable model whose solution still fits. A stronger baguette
+row verifies on `lin_unsat`, whose cake database is already contradictory under unit propagation,
+so every `rup` holds there (D-0066's lesson). None of these is a hole in the chain, because each
+verified claim is true of the `.scp` that was checked. They are why every control is pinned to a
+model where its claim would be false.
+
+### 4. The translator's validation
+
+The certified chain starts at the `.scp`, so a wrong translation verifies (GCS #987). On every model
+the lane does not skip, `scpsem.py` enumerates the solutions cake's semantics admit, reading only
+the `.scp`, by backtracking over the declared bounds. The semantics are transcribed from
+`cpScript.sml` (`lin_sem`, `cmpop_sem`, `all_different_except_sem` with an empty exception list,
+`in_sem`, `valid_assignment`). `fzn_solutions.py` enumerates the `.fzn` with `fzn-gecode -a` and
+`fzn-cp-sat -a` (MiniZinc 2.10.1 bundle), every decision variable made an output. The model passes
+when every reference that ran gives the same set of complete assignments, and baguette's printed
+solution extends to one of them (or baguette said UNSAT and the set is empty).
+
+Result: **75 AGREE, 0 DIFFER, 0 UNCHECKED**, 1 177 solutions in all, 33 models with none, at most 720
+on one model. Both references agreed on 56 models. Gecode alone on 15, because CP-SAT's FlatZinc
+reader refuses `all_different_int`. CP-SAT alone on 4, because Gecode refuses literals beyond 32 bits
+(`backjump_lineq_unsat`, `near_limit_*`) and crashes on `bool_out_sat`'s aliased Boolean
+parameters. The test has teeth. Against `chain_sat`'s `.scp` with a constraint's rhs raised by one
+it says `DIFFER gecode: scp admits 0, gecode 1`.
+
+What it does not cover is what the corpus does not contain. It enumerates, so it only runs on small
+domains, and every model of the lane qualifies today. It does not test the shapes GCS lists that no
+covered test model has (index sets not from 1 are refused anyway, empty arrays, reified contexts).
+
+### 5. What the chain costs against `veripb` alone
+
+On the 75 verified models, `veripb` on baguette's own files takes 1.17 s in total, and
+`veripb --elaborate` on the bridged proof plus `cake_pb_cp` on the core take 1.71 + 2.68 = 4.39 s,
+**×3.75** in total and **×2.07** per model at the median (×1.6 to ×92.9). The proofs are small, so
+most of each figure is process start-up (about 17 ms per call). The outlier is `width_root_unsat`
+(two variables over 999 values), whose prefix is 1.5 MB. There `veripb` alone takes 0.017 s and
+15 MB, `--elaborate` 0.26 s and 193 MB, `cake_pb_cp` 1.32 s and 1.14 GB, in line with D-0174's
+w = 1 000 row. In bytes, baguette's proofs total 0.32 MB, the bridged ones 2.68 MB, the cores
+2.29 MB. The largest search proof, `colour_unsat` (33 KB), checks in 0.017 s alone against
+0.021 + 0.028 s through the chain. Nothing here measures a long search proof; that is T8.
+
+### 6. What is left
+
+T3 (the prefix written by the solver), the rest of T4 (reified forms and the Boolean builtins), T5
+to T8 unchanged. `var int` without a declared domain stays refused until baguette's inferred
+domain can be justified to cake (it would have to be a lemma derived from the model, not a bound
+in the `.scp`).
+
+## D-0177  M15-symmetry-T1: dejavu as distributed, the chain from satsuma's Schreier cuts, and `red` with the permutation witness instead of `dom`
+
+Status: STUDY (documentation only, no solver code; four claims checked by running the tools)
+Date: 2026-11-20
+Task: M15-symmetry-T1 (agent-sym, `wave55-sym`)
+Touches: this record, `docs/ROADMAP.md` (M15 rows T1, T2, T3, T5), `WORKLOG.md`. Scratch:
+`fataepyc-06:/scratch/arthur/wave55-sym-runs/` (clones `src/dejavu` at `f984485` and `src/satsuma`
+at `4f73975`, three builds, the runs in `runs/`). Copy of the notes and the run logs in
+`/cluster/arthur/baguette-results/wave55-sym/`.
+
+The material read: codes-cp `notes/dejavu-plan.md`, `benchmark/README.md` (section "Les symétries de
+dejavu"), `scripts/{opb2graph.py,dvbreak.py,dvrun.sh,domproof.py}`; satsuma's 2026 competition
+sources at `~/satsuma26/satsuma-kissat-satcomp26/` (the path is under `$HOME`, not under
+`/cluster/arthur/`); upstream dejavu and satsuma on GitHub; VeriPB at `~/veripb-dev` (`d5644ca4`,
+the source of the checker of record, D-0100).
+
+### 1. dejavu: the current version and what it adds over satsuma's 2026 copy
+
+- **Repository** https://github.com/markusa4/dejavu, MIT licence. The **latest release is v2.1**,
+  tagged 2025-01-12 (`89365be`). There is no later tag. `main` is at `f984485` (2026-10-20), 26
+  commits after v2.1 (23 without merges), and still says version 2.1 (`DEJAVU_VERSION_MINOR 1`). The v2.1 release
+  notes list routines in the Schreier API to retrieve stabilizer generators, solver limits, more
+  efficient storage of sparse automorphisms, more parse checks, and a fixed preprocessor bug that
+  lifted automorphisms incorrectly.
+- **satsuma's 2026 copy is upstream commit `6dd780e`** (2026-02-04, "bump version for SCIP"). I
+  diffed every `.h`/`.cpp` of `satsuma-src/dejavu/` against each upstream commit and that one
+  differs by 0 lines. It is 21 commits after v2.1 and 5 behind `main`.
+- **What v2.1 → `6dd780e` added** (so satsuma's copy has it and the v2.1 release does not):
+  `random_schreier::get_transversal_element(base_pos, v, aut)` ("retrieve fixing elements from
+  Schreier table", `aeb980b`, 2025-09-17), `extend()` (close the orbits under the stored
+  generators, `f2fec18`), cost tracking exposed in the API (`get_computational_cost`), 64-bit
+  hashes, a CI workflow.
+- **What `6dd780e` → `main` adds**: two preprocessor fixes (`5d6f7ba`, "prevent vertices with aux
+  recovery to be added to edge recovery", and the densify fix in `ba2c84d`), a DFS assertion fix,
+  the DIMACS parser moved to `parser.h` with a new test suite for malformed input. **The command
+  line is identical** in v2.1, `6dd780e` and `main` (`--err`, `--silent`, `--gens`,
+  `--gens-file F`, `--grp-sz`, `--pseudo-random`, `--true-random`, `--true-random-seed`,
+  `--permute`, `--permute-seed`), and so is the input (DIMACS graph, `p edge n m`, `n v c` for a
+  vertex colour, `e u v`, 1-based) and the output (generators one per line in cycle notation,
+  0-based vertices, and the group order as `m*10^k`).
+- **Checked**: `main` and `6dd780e` built here (cmake, Release, scratch only). On the graphs
+  `opb2graph.py` makes of baguette's `.opb` for `alldiff_pigeonhole_narrow_unsat` and
+  `colour_unsat` (solver binary `4e41e8c1`, gate 20261120e) both report the same order (6 and 60)
+  with the same number of generators. Nothing forces a version change. The two preprocessor fixes
+  are a reason to take `main` when T2 pins a version, and they cannot make a proof wrong in any
+  case, because VeriPB checks every witness (a wrong automorphism is a rejected line, §5).
+- **The library** is header-only (`#include "dejavu.h"`, C++14). Besides `solver::automorphisms`
+  with hooks (`schreier_hook`, `orbit_hook`, `strong_certification_hook`, which re-checks each
+  automorphism on the original graph), it carries `groups::random_schreier`, a randomised
+  Schreier–Sims structure whose base the caller sets: `set_base(base, resift)`, `sift_random()`,
+  `get_fixed_orbit(pos)`, `get_stabilizer_orbit(pos, orbit)`, `get_stabilizer_generators(pos)`,
+  `get_transversal_element(pos, v, aut)`, `group_size()`. Its error is one-sided (a missing
+  generator means a smaller orbit, never a wrong element), bounded by the `error` argument.
+- **How codes-cp calls it today**: the binary only, `dejavu G --silent --grp-sz --gens-file F`
+  (`dvbreak.py`, `dejavu()`), built from satsuma's copy. One run per level of the chain: after
+  choosing c_i, the literal vertex of c_i is recoloured (`n v 1000+i`) and dejavu runs again for
+  the stabilizer. Orbits and transversals (products of generators) are computed in Python by a BFS
+  over the generators. On QR48 that is 79 to 106 s of dejavu for 3 levels.
+
+### 2. Markus Anders' recent papers (symmetry detection and breaking)
+
+Found and read at least at abstract level. dblp refused automated access, so the list comes from
+the venues, arXiv and satsuma's README and may miss a paper.
+
+1. M. Anders, S. Brenner, G. Rattan, *Satsuma: Structure-Based Symmetry Breaking in SAT*, SAT 2024,
+   LIPIcs 305, 4, doi:10.4230/LIPIcs.SAT.2024.4. **Journal version** JAIR 85, article 6, January
+   2026, doi:10.1613/jair.1.18744. Detection of row interchangeability, row–column symmetry and
+   Johnson symmetry by individualization–refinement, then breaking per structure. CNF only.
+2. M. Anders, S. Brenner, G. Rattan, *The Complexity of Symmetry Breaking Beyond Lex-Leader*, CP
+   2024, LIPIcs 307, 3 (cited in satsuma's 2026 description, not read further).
+3. M. Anders, P. Schweitzer, M. Soos, *Algorithms Transcending the SAT-Symmetry Interface*, SAT
+   2023, doi:10.4230/LIPIcs.SAT.2023.1, arXiv:2306.00613. Keeps the graph and the group together
+   for near-linear decompositions and "equivalent orbits".
+4. M. Anders, C. Codel, M. J. H. Heule, *Orbitopal Fixing in SAT*, TACAS 2026, arXiv:2601.16855.
+   Static, **unit clauses only**, adapted from MIP's orbitopal fixing, with compact certificates in
+   substitution redundancy (SR). In satsuma.
+5. M. Anders, C. Codel, M. J. H. Heule, *Simplify, Order, Break, Repeat*, SAT 2026, LIPIcs 377, 4,
+   doi:10.4230/LIPIcs.SAT.2026.4. **Unit and binary clauses only**, chosen along a Schreier–Sims
+   table, the break order taken from the formula's structure (cliques), and rounds of
+   simplify-then-break. +22 % PAR-2 on SAT Competition 2025 as a CaDiCaL preprocessor. This is
+   satsuma 1.4's `fix` mode and its `--schreier-cuts`. **Its binary clauses are exactly codes-cp's
+   chain**: in `src/symmetries.h` (`schreier_cuts`, satsuma `4f73975`), a base point v is chosen,
+   `set_base(base,false); sift_random()`, and for every w in v's orbit under the stabilizer of the
+   earlier points the clause (v ∨ ¬w) is added, with the inverse of `get_transversal_element(w)`
+   as its witness. A negation symmetry in the orbit gives the unit clause v instead. The point is
+   chosen as an unordered variable in a nontrivial orbit that **maximises the number of clauses it
+   shares with the points already chosen** (`common_clauses`), not the largest orbit.
+6. M. Anders, B. Bogaerts, B. Bogø, A. Gontier, W. Koops, C. McCreesh, M. O. Myreen, J. Nordström,
+   A. Oertel, A. Rebola-Pardo, Y. K. Tan, *Faster Certified Symmetry Breaking Using Orders With
+   Auxiliary Variables*, AAAI 2026, 40(17):14140–14148, doi:10.1609/aaai.v40i17.38426,
+   arXiv:2511.16637. The VeriPB addition of §3.
+7. D. Van Caudenberg, M. Anders, B. Bogaerts, *On Symmetries and Transformations*, CP 2026, LIPIcs
+   379, 54, doi:10.4230/LIPIcs.CP.2026.54, code https://github.com/markusa4/forkencoder. The
+   **PB/CP** paper: symmetry information is made part of the specification and passed through
+   transformations that change the variables (PB → CNF encodings evaluated, PB Competition 2025
+   instances). This is T7's question from the other side: instead of hoping the encoding keeps the
+   group visible to dejavu, carry the group through the encoding.
+8. Background on dejavu itself, as satsuma cites it: M. Anders, P. Schweitzer, *Parallel
+   Computation of Combinatorial Symmetries*, ESA 2021, LIPIcs 204, 6, and M. Anders, *Efficient
+   Algorithms for Symmetry Detection*, PhD thesis, TU Darmstadt, 2024.
+
+**Orbits and stabilizers along the search (T3)**: I found **no** paper by Anders on dynamic
+breaking during search, and none that certifies dynamic breaking in VeriPB. The 2026 papers are
+all static and all compute their stabilizer chain once, before solving. What exists for T3 is the
+machinery: in the library a base change is `set_base(base, false); sift_random()` on a structure
+already filled with the generators, with no new graph search (§4, backend B).
+
+### 3. The VeriPB addition satsuma uses, and our checker
+
+- **What**: orders defined with **auxiliary variables**. `def_order` gains `aux <vars>;`, a
+  `spec ... end spec;` block (a subproof deriving the auxiliaries' defining constraints by `red`
+  over them), `fresh_aux_1`/`fresh_aux_2` in the transitivity proof, and `scope leq` / `scope geq`
+  inside a `dom`/`red` subproof to bring the specification in. The lex order is then a chain of
+  auxiliaries instead of one constraint with coefficients 2^(n-1) … 1, and the proof of a
+  lex-leader constraint becomes **linear** in the support instead of quadratic (satsuma's 2026
+  description, which cites the VeriPB/CakePB documentation for the SAT Competition 2026,
+  ABBGKMMNORT26). Reference: paper 6 above.
+- **Which version**: VeriPB **3.0.0** (2025-10-03), whose changelog says "Orders are now allowed
+  have a specification section and can use auxiliary variables … used in redundance- and
+  dominance-based strengthening subproofs by using the `scope` command". 3.0.2 (2026-03-20) is an
+  ancestor of `d5644ca4`. `proof_format_overview.md` documents the syntax (sections "Order
+  Definition", "Specifications", "Scopes Inside Subproofs").
+- **Our checker has it, checked**: satsuma 1.4 (`4f73975`, built here) in `lex` mode on its own
+  examples writes 2 `def_order` with `aux` and a `spec` block and 27 (php-015-014) or 13
+  (ramsey-3-5-14) `dom` lines with `scope leq/geq` subproofs. `~/.cargo/bin/veripb` (3.0.2,
+  `d5644ca4`) says `s VERIFIED NO CONCLUSION` on both. Dropping one pair from one `dom` witness is
+  rejected ("Checking error at …:5491 … not contradicting, as specified by the hint").
+  Two caveats. satsuma's README calls its VeriPB output **experimental**, and it shows. The proof
+  file carries no `output`/`conclusion`/`end pseudo-Boolean proof;` trailer, because it is meant
+  to be followed by the SAT solver's proof, so I appended one. In `fix` mode with several rounds it
+  writes the `pseudo-Boolean proof version 3.0` header again per round. And on ramsey-3-5-14 `fix`
+  its `delc 2367` is refused ("Deletion of derived constraint ID 2367 using deletion from core
+  set"). All three are satsuma's problems, not the checker's.
+- **It does not shorten witnesses.** The witness syntax in `d5644ca4` is still one `var -> lit`
+  (or `var lit`) per moved variable. There is no cycle notation, no named or reusable
+  permutation, no composition. satsuma's own witnesses list the full support too (`permutation()`
+  in `src/proof.h`). The 69 280 moved variables per line on QR48 (T5) stay. The addition shortens
+  the **order** and its proof goals, which for codes-cp's chain are already tiny (a lex order on at
+  most 3 fixed coordinates). So for T5 it does nothing. What could help T5 is the support of the
+  witness itself. satsuma optimises its generators' support (`--opt-passes`,
+  `--opt-conjugations`, on by default in the 2026 competition copy, which has `--no-opt`, and off
+  by default in 1.4, which has `--opt`), and a transversal element is a
+  product of generators, so a shorter generating set gives shorter witnesses. That is a lead to
+  measure in T5, nothing more.
+
+### 4. What the pipeline (T2) should call
+
+**The proof step should be `red`, not `dom`.** satsuma 1.4 justifies each Schreier cut (v ∨ ¬w) by
+`red 1 v 1 ~w >= 1 : <transversal inverse, every moved variable>`, with no order loaded. Why that
+holds: under ¬C we have v false and w true, and ω (in the stabilizer of the earlier base points,
+with ω(w) = v) maps C to (ω(v) ∨ ¬v), which ¬v satisfies. ω maps the formula onto itself. ω also
+maps every earlier cut (v_j ∨ ¬w') to (v_j ∨ ¬ω(w')), which is again a cut, because ω fixes v_j
+and permutes v_j's orbit under the stabilizer it was computed in. So the database is closed under
+ω and every proof goal is a constraint already present. **Checked on our checker**: satsuma
+`fix --fix-and-cut` on ramsey-3-5-14 writes 20 such binary `red` lines (the first is
+`red 1 x1 1 ~x2 >= 1 : x2 -> x1 x1 -> x2 x26 -> x15 …`). The prefix up to the refused `delc` is
+`s VERIFIED NO CONCLUSION` with `d5644ca4`. With the last pair of the first witness dropped it is
+rejected ("Proofgoal 89 could not be autoproven"). Unit `red` with a permutation witness
+(orbitopal fixing) is accepted too, and its mutation is rejected the same way (php-015-014,
+"Proofgoal 15 could not be autoproven"). This removes `def_order`, `load_order` and the lex
+coefficients from `dvbreak.py merge`, and the witness length does not change. For T4
+(optimisation) `red` checks that the objective does not get worse under ω, as `dom` did, and the
+graph already keeps the objective. A `red` line is not vacuous here, because it stands at the head
+of the proof over a satisfiable model plus earlier cuts (the D-0053 trap needs a contradictory
+database).
+
+**Two backends for the chain, both with dejavu as distributed.**
+
+| | A: the binary, as codes-cp does it | B: the header-only library, as satsuma does it |
+|---|---|---|
+| what runs | `dejavu G --silent --grp-sz --gens-file F`, once per level, the fixed points recoloured | one `solver::automorphisms` with a `schreier_hook`, then `set_base`/`sift_random`/`get_fixed_orbit`/`get_transversal_element` per level |
+| code to write | none in C++. Orbits and transversals in Python (exists) | a C++ driver of about 100 lines that includes `dejavu.h` unchanged, next to baguette, not in `lib/` |
+| cost per level | one full dejavu search (QR48: 79 to 106 s for 3 levels) | sifting only, no new graph search (not measured here) |
+| changes the user's rule? | no | dejavu itself unchanged, but used as a library. **The user decides** |
+| needed for T3 | a base change during search is one more dejavu run | a base change is a library call |
+
+Recommendation: start T2 with A, which exists and is measured. Write B when T3 needs base changes
+during the search, or when the dejavu time on QR48 matters. B is what satsuma does, and it is the
+only route in which "the search picks the next chain point" costs nothing in dejavu.
+
+**Choosing the variables to break on (beyond `x`).** The base points are **literal vertices** of
+the graph (`opb2graph.py`'s `.map`), so any literal of the `.opb` can be one. For a Boolean `b`
+it is `b_ge_1`. For an order-encoded integer, a symmetry that permutes integers maps `x_ge_k` to
+`y_ge_k`, and the cut (x ≥ k ∨ y < k) is justified the same way. A negation symmetry in the orbit
+of l gives the unit clause l (satsuma does this). Proposed default: candidates are the literals of
+the model's search variables (FlatZinc variables that are not `is_defined_var`, read from the
+`.fzn`; `--vars NAME,...` overrides it, so codes-cp keeps `x`). The next point is the candidate in
+a nontrivial orbit of the current stabilizer chosen by a named, swappable score: `orbit` (largest
+orbit, today's rule) or `shared` (satsuma's `common_clauses`, constraints shared with the points
+already chosen). Stop at `--depth D` or at the trivial group. T3 replaces the score by the search's
+own choice.
+
+**Proposed T2 interface** (a directory `tools/symmetry/`, no code in `lib/`):
+
+```
+opb2graph.py IN.opb OUT.dimacs                  # from codes-cp, unchanged; writes OUT.dimacs.map
+symchain.py  IN.fzn IN.opb OUT [--vars V,..] [--depth D] [--score orbit|shared] [--backend bin|lib]
+             -> OUT.chain.json  {levels:[{point, orbit, order}], cuts:[{c, b, witness}]}
+             -> OUT.fzn         IN.fzn plus one bool_clause per cut (baguette solves this)
+symmerge.py  OUT.chain.json IN.opb OUT.opb OUT.pbp MERGED   # cuts removed from the .opb and
+             re-derived by `red` at the head of baguette's proof, then baguette's proof unchanged
+DEJAVU=<binary>  (backend bin)    DEJAVU_SRC=<headers, for building backend lib>
+```
+
+Read back from dejavu: the generators (cycle notation, 0-based) and the group order, and with
+backend B the orbits and transversal elements directly. The lane checks that VeriPB accepts the
+merged proof and **rejects** it with one witness damaged, matching the checker's wording
+("could not be autoproven"), as `dvrun.sh` does with `BAD=1`.
+
+### 5. Licences
+
+dejavu: MIT (Copyright 2025 Markus Anders, `LICENSE` in the repository and in satsuma's copy).
+satsuma: MIT (Copyright 2026 Markus Anders). VeriPB: MIT OR Apache-2.0 (`Cargo.toml` of
+`veripb-dev`). Running them beside baguette, or including dejavu's headers in a separate tool, is
+allowed by all three under their notice terms. No constraint.
+
+### 6. What this study did not do
+
+It did not run the codes-cp chain or QR48 here. Those files are on fataepyc-07's `/scratch`, which
+is not reachable, so the 79 to 106 s and the 69 280 per line are codes-cp's numbers, not
+re-measured. It did not write backend B or time a base change. It did not read the AAAI 2026, CP
+2026 or SAT 2026 papers beyond their abstracts and front matter, so their claims are quoted as the
+authors state them. It did not try satsuma on a `.opb`: satsuma 1.4 has a `--pb` flag and a PB
+formula class (`pbf.h`, with `=`, `<=` and an objective), but its command line reads nothing for
+that flag (`parse_*` is CNF or KNF, the OPB branch is `0`). So satsuma cannot take baguette's
+`.opb` today, and nothing in this record depends on it.
+## D-0178  M14-e2e-verification-T4: the Boolean and reified families in the end-to-end lane, 105 test models certified by `cake_pb_cp`
+
+Status: DONE (tooling and a lane, no solver code)
+Date: 2026-11-20
+Task: M14-e2e-verification-T4 (agent-e2e4, `wave55-e2e4`)
+Touches: `tools/e2e/fzn2scp.py`, `tools/e2e/scpsem.py`, `tools/e2e/bridge.py`, `tools/e2e/mutate.py`,
+`tools/e2e/chain.sh`, `scripts/e2e_lane.sh`, `scripts/README.md` §9 (the control count). Runs:
+`fataepyc-06:/scratch/arthur/wave55-e2e4-runs/lane2/` and `lane3/` (the whole lane, same counts; `lane3` on the committed code), `lane3`, the teeth check and the CakeML sources read copied to
+`/cluster/arthur/baguette-results/wave55-e2e4/`.
+
+### 1. What the translator now covers
+
+Every Boolean and reified builtin of SPEC §2.1 (rows M2 and M3). SPEC has no `bool_lin_*`,
+`int_lin_eq_reif` or `int_lt_reif`, so the translator has none either. A FlatZinc Boolean is
+cake's integer `0..1`, so "`b` is true" is cake's reify tuple `(b = 1)` and a constant is `(1 = 1)`
+or `(0 = 1)`. The tuple takes a comparison SYMBOL. `(b equals 1)` is refused by `cake_pb_cp` with
+"unknown comparison symbol: equals" (measured), and `cp_parseScript.sml`'s `sexp_cmpop_sym` says
+the same. Each builtin maps to the cake keyword whose HOL4 meaning (`cpScript.sml`, CakeML master
+of 2026-11) is the builtin's own:
+
+| builtin | `.scp` | cake's meaning |
+|---|---|---|
+| `bool_clause(ps, ns)` | `(c or ((p1 = 1) ... (n1 = 0) ...) (1 = 1))` | `or_sem`, true iff some tuple holds |
+| `array_bool_or(as, r)`, `array_bool_and(as, r)` | `(c or|and ((a1 = 1) ...) (r = 1))` | `or_sem`, `and_sem` (`r` reified both ways) |
+| `bool_eq(a, b)`, `bool2int(b, x)` | `(c equals a b)`, `(c equals b x)` | `cmpop_sem` |
+| `bool_not(a, b)` | `(c not_equals a b)` | over `0..1`, `a != b` is `a = not b` |
+| `int_le_reif`, `int_eq_reif`, `int_ne_reif` `(x, y, r)` | `(c less_equal_iff|equals_iff|not_equals_iff (r = 1) x y)` | `reify_sem (INR (r,=,1))` |
+| `int_lin_le_reif(as, xs, c, r)` | `(c lin_less_equal_iff (r = 1) (a1 x1 ...) c)` | `lin_sem` with `INR` |
+
+`bool_clause` is cake's `or` with a reifier that is constant true, not a linear row
+`sum ps - sum ns >= 1 - |ns|`. Both are right, and the `or` is the builtin read as written, so a
+reader of the translator checks one line against one definition. `scpsem.py` reads the same forms
+(`_iff` comparisons, `lin_*_iff`, `or`, `and`, reify tuples) and still refuses the one-sided `_if`.
+
+### 2. How the bridge re-derives baguette's rows
+
+cake writes `(b = 1)` as its atom `i[b][eq1]`, defined over `b`'s bit together with `i[b][ge1]` and
+`i[b][ge2]`, and a constant tuple as `n[K][ge/eq<v>]` atoms fixed by unit rows. After D-0174's
+substitution of the bits those definitions are over baguette's ladder. Three mechanisms are new,
+and they are generic in the bridge, not one per family.
+
+- **Atom swap, one `rup` per atom.** Every cake atom that equals ONE baguette literal (`i[x][ge<v>]`
+  is `x_ge_v`, `i[x][eq<v>]` is `~x_ge_(l+1)` at `l` and `x_ge_u` at `u`, so `i[b][eq1]` is
+  `b_ge_1`) or a constant gets the clause `~atom + lit >= 1` (or `~atom >= 1` when false), derived
+  by `rup` from the substituted definitions (`@Q`). A candidate row then swaps `c * atom` for
+  `c * lit` by adding `c` times that clause. A true atom is dropped by the literal axiom.
+- **Resolvent and selector, one `red` pair per selector.** `equals_iff` and `not_equals_iff` write the
+  disequality half as two flags `b[c][lt]`, `b[c][gt]` (each implies its strict comparison) and the
+  clause `lt + gt + eq1 >= 1` (or `~eq1`). baguette writes it as `A` and `B` over one fresh `_neN`.
+  The bridge adds to its candidates every row resolved once against such a flag clause (the `lt`
+  row plus 4 times the clause eliminates `lt`). T2's red pair then defines `_neN` as whichever flag
+  literal stands where baguette's selector stands (for `reif_eq_refute_sat`, `_ne0 <-> ~lt`). T2's
+  "equal up to one literal" test is subsumed.
+- **Saturation.** cake's big-M is over the bit range and baguette's over the declared bounds. For
+  `x, y in 0..4` (three bits) cake writes `X - Y + 8 eq1 >= 1` where baguette writes `5 b_ge_1`.
+  Once the bits are the ladder, the row in normal form has degree 5, and saturating it gives
+  baguette's row exactly.
+
+A baguette row is pinned by `ia` against the first candidate that, after these steps, implies it
+syntactically (the coefficient each literal loses, `max(0, a - b)`, summed, is at most the slack
+of its degree over baguette's). That covers a baguette big-M larger than cake's and a guard cake
+does not write. Per family, over the 30 newly verified models:
+
+| family | baguette's rows | derived by |
+|---|---|---|
+| `bool_eq`, `bool2int` | the two halves of `=` | `ia` against the substituted row, exact, as T2's `int_eq` |
+| `bool_clause` | one clause | one `pol` (cake's `or` row with its atoms swapped), `ia` |
+| `array_bool_or`, `array_bool_and` | `r -> OR` (resp. `AND -> r`) and one binary clause per operand | the wide clause by one `pol`; the binary ones by `rup` (cake's `2r + ~a + ~b >= 2` does not imply `r + ~a` syntactically, unit propagation does) |
+| `bool_not` | two clauses | `rup` through cake's `ne` flag |
+| `int_le_reif`, `int_lin_le_reif` | two big-M rows | one `pol` each: atom swap plus saturation |
+| `int_eq_reif`, `int_ne_reif` | two guarded halves, then `A` and `B` over `_neN` | the halves by one `pol` (atom swap); `_neN` by a `red` pair; `A` and `B` by one `pol` each, one of them a resolvent with cake's flag clause |
+
+Tally over the 30: 117 `@Q` lines (`rup`), 130 `@W` lines (`pol`) each pinning one row by `ia`,
+18 selectors defined (`red` pairs), 59 rows `ia` against a substituted row exactly, 169 ladder rungs,
+18 rows by `rup`. No big-M row is pinned by `rup`, so none of the reified rows rests on unit
+propagation over a contradictory database (D-0066). The bridge takes 0.07 s on the largest model
+(`width_root_unsat`).
+
+### 3. The lane's counts
+
+Binary md5 `4e41e8c1` (the solver code is `main`'s `a5ba3f2`, unchanged by this task), veripb 3.0.2
+`d5644ca4`, `cake_pb_cp` sha256 `ca92491e`.
+
+| | before (D-0176) | after |
+|---|---|---|
+| VERIFIED | 75 (42 SAT, 33 UNSAT) | **105** (59 SAT, 46 UNSAT) |
+| SKIPPED | 132 | 102 |
+| FAIL | 0 | 0 |
+
+Skipped now: `baguette_global_cardinality` 19, `array_int_element` 18, `fzn_global_cardinality` 14,
+`var int` with no domain 8, an objective 8, `array_int_maximum` 7, `baguette_member` 6,
+`baguette_regular` 4, `int_times` 3, `int_div` 3, `baguette_inverse` 3, `baguette_cumulative` 3,
+`int_abs` 2, `array_int_minimum` 2, `int_max` 1, `baguette_member_bool` 1. Four models of the new
+families stay out because they declare a `var int` with no domain (`count_var_value_sat`,
+`rup_level0_nogood_sat`, `unbounded_case_split_sat`, `unbounded_inferred_sat`), D-0176 §6.
+
+### 4. The mutation controls
+
+Six new controls, 14 in all, 14 of 14 refused at the expected line and with the checker's whole
+sentence "The constraint is not implied by reverse unit propagation (RUP) from core and derived
+database.". All six models are satisfiable.
+
+| control | model (family) | refused at |
+|---|---|---|
+| `opb-stronger`, baguette's row degree + 1 | `bool_or_sat` (`array_bool_or`) | `@c1 rup` |
+| | `bool_and_sat` (`array_bool_and`) | `@c3 rup` |
+| | `reif_lin_le_sat` (`int_lin_le_reif`) | `@c7 rup` |
+| `opb-reif`, a WRONG REIFICATION: the reifier's literal of baguette's first big-M row flipped (`mutate.py reif`) | `reif_eq_refute_sat` (`int_eq_reif`) | `@c5 rup` |
+| | `reif_le_refute_sat` (`int_le_reif`) | `@c7 rup` |
+| | `bits_reif_sat` (`int_lin_le_reif`) | `@c39 rup` |
+
+The bridge falls back to `rup` on these rows because its own implication test fails, and the
+checker refuses the `rup`. `opb-reif` is rightly NOT refused on `reif_lin_le_sat` and
+`reif_ne_entail_sat`, both measured VERIFIED. There the model fixes the reifier
+(`bool_clause([b], [])` in the first, `x = 0` and `y = 2` in the second), so the flipped row's
+guard is off in every solution and the mutated row is still implied by the model. Every control is pinned to a model where its claim is false,
+D-0176 §3's lesson again.
+
+### 5. The translator's validation
+
+`scpsem.py` against `fzn-gecode -a` and `fzn-cp-sat -a`, as in D-0176 §4: **105 AGREE, 0 DIFFER,
+0 UNCHECKED**. On the 30 new models both references ran on 29. On `bits_reif_eq_sat` (57 solutions)
+CP-SAT alone, because Gecode aborts with `Gecode::FlatZinc::AST::TypeError`. The test has teeth on
+the new forms. Four hand-made mistranslations of the `.scp` each give DIFFER against both
+references: `lin_less_equal_iff` as `lin_less_than_iff` (`reif_lin_le_sat`, 7 solutions against
+13), `or` as `and` (`bool_or_sat`), the reifier `(b = 1)` as `(b = 0)` (`reif_eq_refute_sat`), and a
+negative literal of `bool_clause` made positive (`bool_clause_sat`, 3 against 2).
+
+### 6. What the chain costs against `veripb` alone
+
+On the 105, `veripb` on baguette's own files takes 1.75 s, and `veripb --elaborate` plus
+`cake_pb_cp` take 2.31 + 3.24 = 5.55 s, **×3.17** in total and **×2.06** per model at the median
+(×1.6 to ×87.8, the maximum still `width_root_unsat`). On the 30 new models alone, ×2.02 in total,
+×2.03 at the median, ×1.6 to ×2.4. Their proofs are tiny (0.02 MB, 0.20 MB bridged, 0.14 MB of
+core), so the figure is process start-up. Measured at a load average near 25 on the shared node.
+
+### 7. What is left
+
+`var int` without a declared domain (four models of these families, eight in all), and T3, T5 to T8
+unchanged. The bridge's matcher is generic (atoms, one flag, one resolvent, saturation), so T5's
+globals may reuse it where cake's flags have one-literal counterparts in baguette's rows.
+
+## D-0179  M15-symmetry-T2: the pipeline beside baguette, cuts proved by `red` with a SWAP, `dom` where the group has none
+
+Status: DONE (tools and a lane, no solver code)
+Date: 2026-11-20
+Task: M15-symmetry-T2 (agent-sym2, `wave55-sym2`)
+Touches: new `tools/symmetry/` (`opb2graph.py`, `symchain.py`, `symmerge.py`), new `bench/symmetry/`
+(`instances.tsv`, `minweight_chk.mzn`, five `.dzn`), new `scripts/sym_lane.sh`, `Makefile` (`make sym`),
+`scripts/README.md` §10, this record, `docs/ROADMAP.md` (T2 row), `WORKLOG.md`. Nothing in `lib/` or `bin/`.
+dejavu: upstream `main` `f984485` (v2.1), unchanged, built with cmake Release into
+`/cluster/arthur/tools/dejavu-f984485/` (binary sha256 `bb1759d0`, `PROVENANCE` beside it). Solver binary
+`243d84cd` (main `52d7ee9`). Checker `~/.cargo/bin/veripb` 3.0.2 (`d5644ca4`). Runs and results:
+`/scratch/arthur/wave55-sym2-runs/`, copied to `/cluster/arthur/baguette-results/wave55-sym2/`.
+
+### 1. The pipeline
+
+dejavu is not inside baguette (the user's rule): the two run side by side, and dejavu is called as a
+binary, as distributed. Five commands:
+
+```sh
+main.exe M.fzn --proof ORIG --time-limit 0               # ORIG.opb: the model, no search
+tools/symmetry/symchain.py M.fzn ORIG.opb S [--depth 3] [--vars V,..] [--score orbit|first|shared]
+main.exe S.fzn --proof S                                 # baguette on the broken model
+tools/symmetry/symmerge.py S.chain.json ORIG.opb S.opb S.pbp MERGED.pbp [--rule auto|red|dom|transversal]
+veripb ORIG.opb MERGED.pbp                               # the ORIGINAL .opb, unchanged
+```
+
+- `opb2graph.py` is codes-cp's (`3b4667a`), byte for byte: two literal vertices per variable, one vertex
+  per row coloured by its kind, degree and coefficients, the objective a vertex of its own colour.
+- `symchain.py` (backend A of D-0177 §4): dejavu once per level, the points already chosen coloured
+  apart, so level i's generators generate the stabilizer G_{i-1} of c_1 .. c_{i-1}. Orbits are a BFS over
+  LITERALS (an image may be negative). Break variables: the FlatZinc search annotation's
+  (`int_search`, `bool_search`, `seq_search`), else every non-defined variable, `--vars` to override.
+  Only 0/1 variables (`var bool`, `var 0..1`) can be points, and an orbit is eligible only when every
+  literal in it is one, of one kind, because the cut must be a FlatZinc constraint over existing
+  variables (`bool_clause`, or `int_lin_le` over `0..1`). Score `orbit` (largest orbit, codes-cp's rule,
+  the default), `first` (search order), `shared` (rows shared with the points chosen, satsuma's
+  `common_clauses`). For every b != c_i in the orbit, the cut c_i v ~b (b = ~c_i gives the unit c_i).
+  Optimisation models are refused (T4). Output: `S.chain.json` (each level's generators as
+  {variable: literal} over the moved literal variables, each cut with its word in them) and `S.fzn`,
+  the model plus one constraint per cut before `solve`. dejavu runs with its default pseudo-random seed,
+  so two runs give the same chain (checked on golay_w4).
+- `symmerge.py`: baguette mints the cuts last, so `S.opb` must be `ORIG.opb` label for label and row for
+  row, plus one clause row per cut, each its cut's clause. It refuses anything else. The merged proof is
+  baguette's proof with `f` counting ORIG's rows and, after it, one line per cut, under the cut's own
+  label, in chain order. baguette's proof then follows unchanged, and it cites the cuts by those labels.
+
+### 2. D-0177's `red` witness is refused, and what replaces it
+
+D-0177 §4 proposed `red` with the inverse transversal element w_b^-1 (it sends b to c) and argued that
+the database stays closed under it. That holds for the cuts of EARLIER levels (the witness fixes their
+point and permutes their orbit), not for the cuts of the SAME level: the image of an earlier cut
+c v ~w is w^-1(c) v ~w^-1(w), and nothing makes it hold under the negated cut. Measured with
+`--rule transversal` (D-0177's witness): refused at the level's second cut on `php_unsat` (line 5,
+"Proofgoal 18 could not be autoproven", 18 being the first cut), `golay_w4` (line 5, proofgoal 2328) and
+`qr32_w4` (line 5, proofgoal 1927). Accepted on `hamming_w2`, by luck of the transversal. A three-point
+example shows it is not a matter of order: under Z3 acting on {c, a, b}, red refuses the second of the
+two cuts whichever comes first, although the pair is a sound breaking.
+
+What works:
+- **A SWAP.** If ω in G_{i-1} sends b to c AND c to b, the image of every same-level cut contains
+  ω(c) = b, true under the negated cut, so every goal closes. symchain finds one without a group
+  library: u = w_b^-1 sends b to c; the next level's dejavu run gives G_i, the stabilizer of c; if u(c)
+  reaches b under G_i by a word h, then h o u swaps b and c. The cut records h (`swap`), and symmerge
+  writes `red` with h o u. No order is loaded.
+- **`dom` when there is no swap.** Some groups have none: in PSL(2, q) with q = 3 mod 4 (QR32, QR48), the
+  stabilizer of a point acts as x -> a x + b with a a square, a swap of v and w needs a = -1, and -1 is
+  not a square. So levels 2 and 3 of QR32 and QR48 have no swap at all. Those cuts are derived by `dom`
+  with the transversal element w_b (it sends c to b) under codes-cp's lex order of the points ("c_1, then
+  c_2, ..., a 1 first", `def_order` with coefficients 2^(N-1-p)), which checks only the core and so
+  ignores the other cuts. `--rule auto` (the default) writes `red` for the cuts with a swap and `dom` for
+  the rest, with the order loaded around the cut section; veripb accepts the mix (qr32_w4, QR48).
+  `--rule dom` writes every cut by `dom`, as codes-cp did.
+
+### 3. The lane
+
+`make sym ARGS="-j 8 OUTDIR"` (`scripts/sym_lane.sh`, `--big` adds QR48). Node only, not in `check`.
+Per instance: ORIG.opb, a baseline run with `--proof --stats` (proof deleted), the chain, the broken
+run, the merge, and veripb on ORIG.opb. VERIFIED means veripb's `s VERIFIED` line, agreeing with the
+expected answer and with both runs. Each step under `systemd-run --user --scope -p MemoryMax=32G` and a
+timeout, pidfiles beside the outputs. Depth 3 everywhere. Measured 2026-11-20 on fataepyc-06 under a
+load of about 28 (times are wall seconds, one run each, so read the small ones as "under a second"):
+
+| instance | answer | group (dejavu) | orbits | cuts (red + dom) | nodes without -> with | s without -> with | chain s | veripb s | |
+|---|---|---|---|---|---|---|---|---|---|
+| Hamming, w <= 2 | UNSAT | 1 344 | 8, 7, 6 | 18 (18 + 0) | 15 -> 5 | 0.00 -> 0.00 | 0.14 | 0.00 | VERIFIED |
+| Hamming, w <= 4 | SAT | 1 344 | 8, 7, 6 | 18 (18 + 0) | 4 -> 4 | 0.00 -> 0.00 | 0.14 | 0.00 | VERIFIED |
+| Golay, w <= 4 | UNSAT | 2.44823e8 (M24) | 24, 23, 22 | 66 (66 + 0) | 209 -> 21 | 0.31 -> 0.07 | 0.79 | 0.17 | VERIFIED |
+| Golay, w <= 8 | SAT | 2.44823e8 | 24, 23, 22 | 66 (66 + 0) | 24 -> 24 | 0.08 -> 0.08 | 1.28 | 0.27 | VERIFIED |
+| QR32, w <= 4 | UNSAT | 14 880 | 32, 31, 15 | 75 (31 + 44) | 217 -> 21 | 0.24 -> 0.04 | 0.53 | 0.15 | VERIFIED |
+| QR48, w <= 4 (`--big`) | UNSAT | 51 888 | 48, 47, 23 | 115 (47 + 68) | 11 491 -> 45 | 252.8 -> 2.0 | 43.9 (dejavu 28.4, 3.8 GB) | 10.3 (159 MB) | VERIFIED |
+| `php_unsat` (6 -> 5) | UNSAT | 86 400 | 30, 20, 12 | 59 (59 + 0) | 59 -> 9 | 0.01 -> 0.00 | 0.13 | 0.00 | VERIFIED |
+| `php_wide_unsat` | UNSAT | 3 628 800 | 42, 30, 20 | 89 (89 + 0) | 77 -> 17 | 0.01 -> 0.00 | 0.14 | 0.00 | VERIFIED |
+| `restart_pigeons54` | UNSAT | 2 880 | 20, 12, 6 | 35 (35 + 0) | 35 -> 7 | 0.01 -> 0.00 | 0.13 | 0.00 | VERIFIED |
+| `colour_unsat` (Groetzsch) | UNSAT | 60 | 15, 4 | 17 (17 + 0) | 47 -> 11 | 0.01 -> 0.00 | 0.12 | 0.00 | VERIFIED |
+| `php_escape_sat` | SAT | 86 400 | 30, 20, 12 | 59 (59 + 0) | 76 -> 20 | 0.01 -> 0.00 | 0.13 | 0.01 | VERIFIED |
+| `restart_queens6` | SAT | 8 | 8 | 7 (5 + 2) | 24 -> 23 | 0.01 -> 0.00 | 0.12 | 0.00 | VERIFIED |
+
+The small tier takes 7 s in all with `-j 8`; QR48 about 5 minutes, 253 s of it the run without
+breaking. `make check` on the branch: `check: ok` (no solver change).
+
+The codes are codes-cp's `minweight_chk.mzn` with sums (ENC=2) and no fixed coordinate, and the node
+counts are codes-cp's own (`notes/dejavu-plan.md`: 15 -> 5, 209 -> 21, 217 -> 21, 11 491 -> 45 on QR48, where codes-cp measured 347 s -> 2.3 s and a 14.9 s check), with `red`
+in place of its `dom` wherever the level has a swap. Largest witness: 30 moved variables on
+php, 1 566 on Golay, 1 300 on QR32, 34 686 on QR48.
+
+### 4. Mutation controls
+
+On the three satisfiable models with a second level (`hamming_w4`, `golay_w8`, `php_escape_sat`), on
+the second cut of level 1, under `--rule auto` (a `red` line there) and `--rule dom`: a wrong witness
+(`--bad-witness`: the transposition of c and b alone, which is not an automorphism) and a wrong cut
+(`--bad-cut`: c v ~c_1 with the true witness; c_1 is fixed by the level's group, so no element of it
+sends c_1 to c). 12 of 12 refused, each at the mutated line, in veripb's words: "Checking error at
+MERGED:LINE" and "could not be autoproven" ("Proofgoal N" with N a constraint id for a wrong witness,
+"Proofgoal #1" or "#2" for a wrong cut). The models are satisfiable, so the refused lines were judged (D-0053), and the
+unmutated proofs of the same models are VERIFIED SATISFIABLE.
+
+A control that was dropped: flipping the cut's second literal (c v b) is accepted under `dom` on
+`hamming_w4`, and rightly: with c, b and the earlier point at 0, the parity rows propagate every
+coordinate to 0 against sum x >= 1, so the dominance goal closes by propagation. It is not a wrong cut
+there, so it cannot be a control.
+
+### 5. What the pipeline trusts
+
+Nothing it adds. dejavu, the graph, the orbits, the words, the swaps and the merge are all outside the
+trusted base: a wrong generator, orbit or witness is a `red` or `dom` line that veripb refuses, and
+symmerge refuses a broken `.opb` that is not the original plus the cuts. What stays trusted is what was
+trusted before: baguette's `.opb` as the meaning of the `.fzn` (the merged proof is checked against
+`ORIG.opb`, the model without breaking) and veripb. dejavu's one-sided error (a missing generator) can
+only make orbits smaller, so fewer cuts. Two costs: the merged proof carries every witness in full
+(T5), and the lex order makes the cut section depend on the points' order, as codes-cp's did.
+
+### 6. Limits, and what T3 to T7 inherit
+
+- Only 0/1 variables are points. An order literal x >= k of a wider integer cannot be a cut without a
+  new FlatZinc variable, which would change the `.opb` beyond the cuts. So Challenge models over
+  integers (black-hole, alldiff pigeonholes) get no cut today, although their group is found
+  (`alldiff_pigeonhole_narrow_unsat`, order 6). Writing the cut directly into the `.opb` and the proof
+  (not through the `.fzn`) would lift this, and needs baguette to read a cut it did not compile.
+- `restart_queens6` has one level: the `orbit` score picks `b12`, whose orbit of 8 is regular under D4
+  (order 8), so its stabilizer is trivial and the chain ends. Five of its seven cuts have a swap (the
+  reflections and the half turn), the two quarter turns go to `dom`. The SAT search barely changes
+  (24 -> 23 nodes).
+- dejavu is re-run per level (backend A). The swap needs the next level's group, so the last level costs
+  one more dejavu run than the chain's depth. Backend B (the library, one search) stays the user's
+  decision, and T3 needs it.
+- `red` everywhere is not reachable for groups without swaps. Whether a different chain (another base,
+  the `shared` score) finds swaps on QR is a T3 question.
+## D-0180  M14-e2e-verification-T5: the globals in the end-to-end lane, 179 test models certified by `cake_pb_cp`
+
+Status: DONE (tooling and a lane, no solver code)
+Date: 2026-11-20
+Task: M14-e2e-verification-T5 (agent-e2e5, `wave55-e2e5`)
+Touches: `tools/e2e/fzn2scp.py`, `tools/e2e/bridge.py`, `tools/e2e/scpsem.py`,
+`tools/e2e/fzn_solutions.py`, `tools/e2e/mutate.py`, `tools/e2e/chain.sh`,
+`tools/e2e/models/gcc_repeat_free_sat.fzn` (new, a control model), `scripts/e2e_lane.sh`,
+`scripts/README.md` §9 (the control count). Runs: `fataepyc-06:/scratch/arthur/wave55-e2e5-runs/lane2/`;
+the lane's log, its three result files, the translator teeth check and the tally scripts copied to
+`/cluster/arthur/baguette-results/wave55-e2e5/`.
+
+### 1. The families, and the cake keyword each one is translated to
+
+Every family of the task is bridged. Each builtin maps to the cake keyword whose HOL4 meaning
+(`cpScript.sml`, CakeML master of 2026-11) is the builtin's own. Nothing was left out for want of a
+derivation.
+
+| builtin (SPEC 2.1) | `.scp` | cake's meaning |
+|---|---|---|
+| `array_int_element(i, as, z)` | `(c element (a1 ... an) (i 1) z)` | `element_sem`: `0 <= i - 1 < n` and `z = as[i - 1]`, so offset 1 is FlatZinc's 1-based index |
+| `fzn_global_cardinality`, `baguette_global_cardinality(xs, cover, cs)` | `(c gacglobalcardinality (x1 ...) (v1 ...) (c1 ...))` | `global_cardinality_sem` with `clsd = F`, each `cj` the number of `xi = vj`. mznlib's closed variants post their `in` constraints themselves, which reach the `.scp` as set domains |
+| `array_int_maximum(y, xs)`, `array_int_minimum` | `(c array_max (x1 ...) y)`, `array_min` | `array_max_sem`: `y` is one of the `xi` and no `xi` exceeds it |
+| `int_max(a, b, z)`, `int_min` | `(c max a b z)`, `(c min a b z)` | `binop_sem`, `max a b = z` |
+| `baguette_inverse(f, fmin, g, gmin)` | `(c inverse ((f1 ...) fmin) ((g1 ...) gmin))` | `inverse_sem`, which is SPEC's sentence term for term, the unequal-length case (unsatisfiable) included |
+| `baguette_member(xs, y, bs)`, `baguette_member_bool` | `(c_k equals_if (b_k = 1) x_k y)` per position, and `(c or ((b1 = 1) ...) (1 = 1))` | `cmpop_sem` with `INL` (one-sided) and `or_sem`, which is SPEC's "some `b_k` true, every true `b_k` has `x_k = y`" |
+
+**Not cake's `in` for member.** `(c in (x1 ...) y)` means `y` is one of the `x` and says nothing of the
+selectors `b`. mznlib introduces them, but they are FlatZinc variables and baguette's rows constrain
+them, so with `in` the `.scp` would admit selector values the model refuses (the validation of §5
+would report DIFFER, and baguette's `b -> x = y` rows would not be derivable at all).
+
+**`count` and `array_var_int_element` are not SPEC 2.1 builtins.** MiniZinc's `count` and its
+`at_least`/`at_most`/`exactly` reach baguette as `baguette_global_cardinality` over one value
+(mznlib), and are covered as that (`count_sat`, `at_least_sat`, ... are among the verified models).
+baguette has no variable-array element (SPEC 2.1's M4 row admits constants only).
+
+**One translator gap closed on the way.** mznlib's wrappers write `array [1..n] of var int: f = [...]`,
+an array of ALIASES with no domain, and so do a few M1 models (`var int: x = y`). The translator
+refused every such line as "`var int` with no declared domain". It now accepts a bare `var int` when
+the declaration ends in `= ...`: it declares nothing and restricts nothing, and the items keep their
+own domains. That alone made 24 of the 70 family models translatable (every `inverse` model, the
+`count`/`at_least`/`at_most`/`exactly` ones, `gcc_shim_*`, `gcc_repeat_*`, ...), and four models outside the
+families (`count_var_value_sat`, `is_output_shim_sat`, `rup_level0_nogood_sat`, `search_string_sat`).
+A `var int` that declares a variable is still refused.
+
+### 2. What baguette writes per family, and how the bridge derives it
+
+The auxiliaries D-0174 §4 expected to need a `red` pair mostly do not reach the `.opb`. element's
+index is a view, gcc's window indicators and alldiff's direct encoding are introduced in the proof
+by `Encoding.start_proof` (so they are already in baguette's own proof, unchanged after the prefix),
+member's selectors and inverse's channel are model variables or rows over order literals. The one
+auxiliary that does reach the `.opb` is the COPY baguette's front end makes of a variable repeated
+in a `global_cardinality` (SPEC 2.1, a fresh integer tied by `int_eq`).
+
+The obstacle was instead cake's VALUE ATOMS. cake writes element, global_cardinality, inverse and
+`in` (a hole) over `i[X][eq<v>]`, and for an interior value (l < v < u) no single baguette literal
+equals it, so T4's one-literal atom swap could not touch those rows. Three generic additions to the
+bridge, no per-family code:
+
+- **Interior `eq` as the order indicator.** `[x = v] = x_ge_v - x_ge_(v+1)`. The bridge derives the two
+  halves, `@Ep: eq + ~x_ge_v + x_ge_(v+1) >= 1` by `rup`, and `@Em: ~eq + x_ge_v + ~x_ge_(v+1) >= 2` by
+  one `pol` (two `rup` clauses `~eq + x_ge_v`, `~eq + ~x_ge_(v+1)`, plus the rung, divided by 2). In
+  variable form they are `eq = x_ge_v - x_ge_(v+1)`, so `c*eq` is replaced EXACTLY by adding `c*@Em`
+  (or `c*@Ep` for `~eq`). This is gcc's identity (lib/core/prop/gcc.ml's header) read backwards.
+- **Copies by a red pair.** A rung `Y_ge_v` whose `int_eq` rows `~Y + X >= 1` and `Y + ~X >= 1` name a
+  known atom is defined `@Y1: ~Y + X >= 1 : Y -> X`, `@Y2: Y + ~X >= 1 : Y -> X`, and a candidate's
+  coefficient on `X` is moved onto `Y` where baguette's row names the copy.
+- **Weakening or resolution, then saturation.** For a row that is not a clause and that no candidate
+  implies, a second pass tries candidates that share variables with it. A literal baguette's row
+  lacks is weakened away (pol's `w`), or, when that is too weak, resolved against one of baguette's
+  own binary clauses whose other literal is in the row (`@R`, a `rup` of that clause). Then the
+  result is saturated. That is member's big-M row, over the INTERSECTION of `x_k`'s and `y`'s ranges
+  where cake's is over both whole ranges, the end values being guarded by baguette's separate clauses
+  `b -> x_k >= l_y` and `b -> y <= u_x`.
+
+How each family's rows are pinned, over the 70 newly verified family models (counts of baguette
+`.opb` rows; the ladder rungs, `ia` against `@L`, are left out):
+
+| family | models | baguette's rows | `ia` against a substituted row | `ia` against a `pol` (`@W`) | `rup` |
+|---|---|---|---|---|---|
+| `array_int_element` | 18 | per position `~[i = p] or z >= w` and `z <= w`, as clauses over the ORDER encoding | 14 | 57 | 186 |
+| `global_cardinality` (with `count`, `at_least`, `at_most`, `exactly`, closed and low/up) | 33 | the two halves of `sum_i (x_i_ge_v - x_i_ge_(v+1)) = c_v - const_v` | 52 | 193 | 20 |
+| `array_int_maximum/minimum`, `int_max/min` | 9 | `x_i <= m` as linear rows, one clause `m >= v -> OR_i x_i >= v` per value | 49 | 19 | 53 |
+| `inverse` | 3 | channel clauses `[f_k = l] -> [g_l = k]`, both directions | 2 | 77 | 90 |
+| `member` (int and bool) | 7 | `b_k -> x_k >= l_y`, `b_k -> y <= u_x`, a big-M pair over the common range, one clause over the `b` | 7 | 98 | 61 |
+
+The `@W` lines carry the swaps: 119 `@Em` lines (each from two `rup` clauses) and 124 `@Ep` lines
+(`rup`) for interior atoms, two copies defined (four `red` lines, in `gcc_repeat_*`), 25 resolvent
+clauses (`@R`, `rup`). element's clauses close by
+unit propagation over cake's `eq` atoms and its two rows per position. inverse's channel clauses close
+the same way over both sides' atoms. No new mechanism was needed for maxmin, whose `m >= v -> OR`
+clauses close by unit propagation through cake's choice flags (T4's matcher already had the rest).
+
+### 3. The lane's counts
+
+Binary md5 `4e41e8c1` (the solver code is `main`'s `2ec83bc`, unchanged by this task), veripb 3.0.2
+`d5644ca4`, `cake_pb_cp` sha256 `ca92491e`.
+
+| | before (D-0178) | after |
+|---|---|---|
+| VERIFIED | 105 (59 SAT, 46 UNSAT) | **179** (100 SAT, 79 UNSAT) |
+| SKIPPED | 102 | 28 |
+| FAIL | 0 | 0 |
+
+The 74 new: the 70 family models and the four of §1. Skipped now: an objective 9 (T8), `baguette_regular`
+4, `var int` with no domain 4 (the `unbounded_*` models, D-0176 §6), `int_times` 3, `int_div` 3,
+`baguette_cumulative` 3, `int_abs` 2 (T6).
+
+### 4. The mutation controls
+
+Nine new controls, 23 in all, 23 of 23 refused at the expected line and with the checker's whole
+sentence. Every model is satisfiable, and for each `.opb` control the corrupted row is false in at
+least one of the model's solutions (enumerated by `scpsem.py`, checked one by one, `falsity.txt` in the
+results directory), so each refusal judges a claim that is false, not a vacuous one (D-0053, D-0066).
+
+| control | model (family) | refused at | wording | solutions the corrupted row excludes |
+|---|---|---|---|---|
+| `opb-stronger` | `element_sat` (element) | `@c13 rup` | "The constraint is not implied by reverse unit propagation (RUP) from core and derived database." | 2 of 2 |
+| | `element_learn_prunes_sat` (element) | `@c10 rup` | the same | 1 of 1 |
+| | `gcc_forced_sat` (gcc, a `@W` row) | `@c4 rup` | the same | 2 of 2 |
+| | `gcc_const_counts_sat` (gcc) | `@c7 rup` | the same | 2 of 2 |
+| | `maxmin_sat` (array_int_maximum) | `@c11 rup` | the same | 9 of 9 |
+| | `inverse_sat` (inverse) | `@c31 rup` | the same | 2 of 2 |
+| `opb-reif`, member's selector guard flipped: a WRONG DEFINITION of the selectors mznlib introduces | `member_sat` | `@c26 rup` | the same | 24 of 48 |
+| | `member_gap_sat` | `@c9 rup` | the same | 8 of 66 |
+| `copy-witness`, a gcc copy defined as the NEGATION of its original (`@Y1`'s witness `Y -> ~X`) | `gcc_repeat_free_sat` (new, `tools/e2e/models/`) | `@Y1[...] red` | "Proofgoal #1 could not be autoproven." | (a `red`) |
+
+`copy-witness` has its own model because on `test/models/gcc_repeat_sat` the original is fixed at the
+root (it occurs twice and the count of its other value is 1), so `Y -> ~X` is a correct witness
+there and the chain rightly VERIFIED it (measured). `gcc_repeat_free_sat` leaves it free, four
+solutions.
+
+### 5. The translator's validation
+
+`scpsem.py` now reads `element`, `gacglobalcardinality`, `array_max/min`, `max/min`, `inverse` and the
+one-sided `<cmp>_if`, each transcribed from its `cpScript.sml` definition. The references needed a
+change of their own. Neither Gecode nor CP-SAT knows `baguette_global_cardinality`, `baguette_inverse`,
+`baguette_member(_bool)` or `fzn_global_cardinality` as FlatZinc builtins ("Registry: Constraint ...
+not found", measured on the first run, 46 models UNCHECKED). `fzn_solutions.py` now turns such a
+`.fzn` back into MiniZinc (FlatZinc is MiniZinc syntax), replaces the declarations by the standard
+library's `global_cardinality` and `inverse` (over the two index sets) and by SPEC's sentence for
+member (no standard global has the selectors), and lets `minizinc --solver gecode|cp-sat` flatten it
+against the reference's own library. Those definitions share nothing with the translator, except
+member's reading of the same SPEC sentence.
+
+Result: **178 AGREE, 1 UNCHECKED, 0 DIFFER**. On the 74 new models: both references on 61, Gecode alone
+on 6 (CP-SAT refuses `all_different_int`), CP-SAT alone on 6 (Gecode aborts with
+`Gecode::FlatZinc::AST::TypeError`), and `rup_level0_nogood_sat` UNCHECKED (nine variables over
+1..11, too many assignments for the enumerator, a model of §1's four). Six hand-made mistranslations of
+the new forms each give DIFFER: element's offset 0 for 1 (`element_sat`), `array_max` as `array_min`
+(`maxmin_sat`), `max` as `min` (`maxmin_int_max_sat`), inverse's two offsets swapped
+(`inverse_offset_sat`), one `equals_if` as `not_equals_if` (`member_sat`, 180 solutions against 48),
+and two counts swapped (`gcc_const_counts_sat`).
+
+### 6. The prefix and what the chain costs
+
+| family | models | prefix bytes | per model | veripb alone s | elaborate + cake_pb_cp s | ratio |
+|---|---|---|---|---|---|---|
+| element | 18 | 151 954 | 8.4 KB | 0.32 | 0.34 + 0.34 | ×2.12 |
+| global_cardinality | 33 | 427 543 | 13.0 KB | 0.57 | 0.61 + 0.62 | ×2.15 |
+| maxmin | 9 | 126 323 | 14.0 KB | 0.16 | 0.17 + 0.18 | ×2.22 |
+| inverse | 3 | 140 979 | 47.0 KB | 0.05 | 0.07 + 0.09 | ×2.94 |
+| member | 7 | 139 219 | 19.9 KB | 0.11 | 0.13 + 0.15 | ×2.47 |
+
+Most of each prefix is still D-0174's per-value atoms, halves and ladder, and the substitution of
+cake's rows, not the family's own derivations: in element, 1 395 of its 2 493 prefix lines are atoms,
+halves and rungs, 584 substitutions, 404 pins. inverse is the largest per model because `inverse_sat`
+has ten variables over 1..5 and baguette's 22 KB proof. On the whole lane, `veripb` alone 3.10 s and
+the chain 3.79 + 4.74 s, ×2.76 in total, ×2.12 per model at the median (×1.6 to ×86.1, the maximum
+still `width_root_unsat`). On the 74 new models ×2.22 in total, ×1.8 to ×3.1, so the figure is still
+process start-up. The bridge takes at most 0.07 s on a model. Measured at a load average near 24.
+
+### 7. What is left
+
+T6's families (`int_times`, `int_div`, `int_abs`, `cumulative`, `regular`), objectives (T8), `var int`
+with no domain (4 models), T3 and T7 unchanged. The bridge's matcher is still generic: one-literal
+atoms, interior atoms as indicators, one flag, one resolvent, copies, weakening and resolution
+against baguette's own clauses, saturation. A `rup` pin is load-bearing only where a control shows it
+(D-0066), and element's 186 rest on unit propagation: the two element controls are the evidence that
+a stronger element row is refused, and nothing broader.
+
+## D-0173  M11-complexity-T17: the learned clauses that "cannot prune" are SATISFIED; RESTING takes them out of the wake index, same pruning, another order, so behind a flag (off)
+
+**Status**: **DONE** as a flag, `BAGUETTE_REST_SATISFIED=on` (`Search.config.rest_satisfied`), OFF by
+default. Making it the default is a **decision for the user** (section 5). Recorded 2026-11-20 by
+agent-learnprop on `wave55-learnprop`. Files: `lib/core/prop/clause.ml` (`Learned_clause`),
+`lib/core/engine.ml` (`rest_on`, `release_rests`, `sync_watched`), `lib/core/propagator.ml` (the constant
+`rests`), `lib/core/prop/pb.ml` (`holds`), `lib/core/search.ml` and `bin/main.ml` (the knob),
+`test/unit/test_engine.ml`, `bench/diff/configs.tsv` and the `rest` references. Measured on `fataepyc-06`
+under load 23 to 66, instruction counts (`perf stat -e instructions:u`, minus a 1-node run of the same
+binary) as the robust number. Scripts and outputs under `/scratch/arthur/wave55-learnprop-runs/`, the
+scripts, counters and summaries copied to `/cluster/arthur/baguette-results/wave55-learnprop/`.
+
+### 1. What a learned clause can still do here, the four candidates examined
+
+- **(a) A nogood made only of negated decisions is never unit again once its subtree is closed.** Not the
+  object. The clauses registered for propagation are the 1UIP clauses (`Search.register_learned`), the
+  decision nogoods are proof lines only. And the claim is false for a decision nogood too. `~d1 \/ ~d3`
+  learned under `d1, d2, d3` is unit at the root of `~d2`'s subtree whenever that sibling is explored
+  (another conflict below `d2` named level 2), where it forces `~d3`.
+- **(b) A 1UIP clause asserts at its backjump level and is unit again only after a restart or a backjump.**
+  False in this DFS. It is unit at the root of every later subtree hanging below its assertion level, and
+  above that level chronological backtracking un-falsifies its lower literals and later decisions can
+  falsify them again. Neither a restart nor a backjump is needed.
+- **(c) Two watched literals would make a non-unit clause free.** Learned clauses already have them
+  (D-0104, M6-T22, D-0142). The hundreds of ids one trail entry wakes (D-0169, item 4) are exactly the
+  visits of the clauses watching the literal just falsified. What MiniSat does that this engine did not is
+  leave a SATISFIED clause alone (section 2).
+- **(d) A per-clause activity that stops waking clauses that never prune.** Loses pruning by construction,
+  and section 2 shows nothing has to be lost.
+
+The one rule of this kind that is search-neutral by proof was measured and is worth nothing. A clause
+satisfied at a level the DFS never pops again (the prefix of second branches above the current node,
+without restarts) can be dropped for good. On QR48 3 fixed that covers 14 889 of 5 283 653 learned-clause
+runs, about one per clause.
+
+### 2. What the 177 runs per node are
+
+An instrumented build (not committed) classified every learned-clause run on the two QR48 instances of
+D-0169 (`dom/sym_p47_w8_basis.dzn` "3 fixed", `..._f2_...` "2 fixed", flattened with `tools/baguette.msc`).
+
+| | runs | of a SATISFIED clause | with the true literal WATCHED | effective |
+|---|---|---|---|---|
+| 3 fixed (29 779 nodes) | 5 283 653 | 5 283 653 (100 %) | 5 166 230 (97.8 %) | 0 |
+| 2 fixed (108 699 nodes) | 42 408 976 | 42 408 976 (100 %) | 41 877 893 (98.7 %) | 0 |
+
+So every run is a satisfied clause woken because its OTHER watch was falsified. The run walks the clause,
+moves that watch to the next free literal, and the clause is woken again when that one falls. A concrete
+case. A clause learned in the left branch `x_k = 1` contains `x_k <= 0`, which the right branch decides.
+For the whole right subtree the clause is true, and each deeper decision that falsifies its current second
+watch costs a wake, a queue slot, a walk and an index move.
+
+A first cut skipped only the runs (the advisor declined when a watched literal is true). 3 fixed went from
+1 380 k to 1 223 k instructions per node, and 2 fixed went UP, 1 911 k to 2 044 k, at three times the CPU
+time. A satisfied clause that no longer moves its watch stays in the slot of a variable the search keeps
+re-deciding, and is asked again at every re-descent. The asks were the cost, so the clause has to leave the
+index.
+
+### 3. The rule, why it loses no pruning, and why it is not search-neutral
+
+**RESTING.** A learned clause whose run finds one of its two watched literals TRUE does nothing, moves
+neither watch, and reports `(w, Propagator.rests)` from `inst_watched`. The engine then indexes it under
+`w` alone and files it under the decision level of the bound holding that literal up (`lo x` for `x >= k`,
+`hi x` for `x <= k-1`). Its advisor declines everything while it rests. At the first propagation after a
+backtrack that popped that level, the engine seeds it (`release_rests`, and a released clause stays seeded
+by every call until it has actually run, since a conflict can drop its run). That run finds the literal
+still true and rests again, or goes back to the two watches it left.
+
+**No pruning is lost.** A clause with a true literal cannot prune or fail, so declining is I-P7 read
+literally. Once released, its two watches are good again. The second watch was non-false or falsified at
+the current level when the clause began to rest, so at or above the true literal's level, and the backtrack
+that pops the true literal's support pops it too. That is the argument behind MiniSat's satisfied clauses.
+The one other case, a clause seeded as newborn or young, is re-seeded after any backtrack below its birth,
+as before this row (rule (b) of the incremental seed, M6-T18). Filing under the level of the CURRENT support and not of the first
+crossing releases early at worst, which costs one run that changes nothing. Checked by
+`test_engine.ml`'s scene (rests, is not run, is released, propagates, with its control) and by 500 random
+searches with and without the rule, equal domains at every fixpoint (and, there, equal trails in 500 of
+500). Under `BAGUETTE_DEBUG`, whose `check_skip`, I-P7 and `check_fixpoint` re-run what was skipped or
+declined, 289 of 289 debug lane runs and 200 of 200 model tests with the rule on raised nothing, and every
+proof was accepted.
+
+**But the order can change.** The old engine moved a satisfied clause's false watch, resting keeps it. After
+the release the two engines watch different literals, so the clause can be woken at another trail entry.
+The engine runs a woken learned clause later, at its seed slot or in the FIFO, so with an earlier wake it
+can find itself unit and force its literal BEFORE another propagator woken in between, whose reason would
+have been on the trail. Example, `a \/ b \/ c` with `a` true at level 3. At level 5 `b` falls, the old run
+moves the watch to `c`, resting keeps `b`. Back at level 2 a run R1 falsifies `b`, then R2 falsifies `c`.
+The old engine is woken by R2 and resting by R1. In the FIFO the resting clause then runs ahead of a row `Y`
+that R2 wakes too, and forces `a` first, where the old engine runs `Y` first (lower id, same wake). The trace
+line for `a` cites the clause instead of `Y`. Different reasons make
+different 1UIP clauses, so different trees. A search-neutral version would have to reproduce the old watch
+moves, which needs the old queue positions of runs that a conflict can cut, which is the cost removed.
+On QR48 nothing a learned clause does is ever effective, so the order never shows there.
+
+### 4. Measured
+
+QR48, the same tree (binary `1fed7ed7`, the rule's logic as merged; `88275b8` only trims the default path).
+Instructions per node, stdout, every `--stats` search counter and both proof files byte-identical with the
+rule on and off.
+
+| | main `bf6aa1e6` | rest on | learned propagation off (D-0169 b) |
+|---|---|---|---|
+| 3 fixed `--no-proof` | 1 380 k | **923 k (-33.1 %)** | 862 k (-37.6 %) |
+| 3 fixed with proof | 2 718 k | **2 250 k (-17.2 %)** | 2 167 k (-20.3 %) |
+| 2 fixed `--no-proof` | 1 911 k | **886 k (-53.6 %)** | 819 k (-57.1 %) |
+| 2 fixed with proof | 3 157 k | **2 111 k (-33.1 %)** | 2 018 k (-36.1 %) |
+| learned-clause runs per node, 3 / 2 fixed | 177.4 / 390.2 | 7.0 / 8.3 | 0 |
+
+CPU time at load 23, 2 fixed: 50.1 s to 17.0 s without proof, 91.7 s to 40.9 s with. The rule keeps 85 to
+94 % of what switching learned propagation off gains there, and keeps every pruning everywhere else.
+
+The differential lane, rule on against the reference: **250 of 301 runs differ** (188 a SEARCH counter
+first, 17 the `.pbp`, 6 stdout, 39 WORK only), and 241 of 289 in the debug pass. The differences are
+small (`cls-prune` 82 against 78 on parity-learning, decisions 2513 against 2515 on QR72), the order of
+section 3. Rule off, **301 of 301 equal** the reference, WORK counters included. The lane's 27 lines at
+their budgets, instructions per node rule on against main (`bf6aa1e6`), the trees differing:
+
+| | median | best | worst |
+|---|---|---|---|
+| `--no-proof` | -1.1 % | -15.2 % (rcpsp_12) | +3.4 % (amaze) |
+| with proof | -0.7 % | -9.8 % (perfect_square_102) | +6.0 % (openshop@300) |
+
+The lane's QR48 and QR72 (another flattening and the solver's default search, where learned clauses do
+prune, 56 and 252 times) gain 6 to 12 % without proof. Where it loses, learned-clause runs per node go UP,
+released clauses resting again: amaze 138 to 191, diameterc 88 to 115, steiner 79 to 108 (rcpsp_12, a gain,
+113 to 86). The 200 test models solve with the same node counts and the
+same stdout with the rule on (1 482 nodes in all). The default path costs +0.3 % instructions per node
+(QR48 3 fixed, one test per run).
+
+### 5. For the user
+
+| option | consequence |
+|---|---|
+| keep it OFF (as merged) | nothing changes, the knob and the lane's `rest` line measure it |
+| make it the DEFAULT | codes-cp QR48 runs -33 to -54 % instructions without proof and -17 to -33 % with, on the same trees; the lane is flat (median -1 %, worst +3 to +6 %); the trees and proofs of most other models change (same pruning, another order), so the lane's reference is re-recorded after the gated merge, and every Challenge comparison restarts from new trees |
+| on for the codes campaigns only (`BAGUETTE_REST_SATISFIED=on` in their harness) | the gain where it is measured, nothing else moves |
+
+**Recommendation**: the third, now, and the second once a Challenge series has been run with the knob on and
+shows no loss in solved instances. Open, not done here: learned PB rows (`Pb` instances) are not
+self-watching and rest never; and conflict analysis (15 % on QR48, D-0169) is untouched.
+
+### 6. Gate
+
+Fresh clone of `wave55-learnprop` at `88275b8` (binary `24efccd8`), against gate 73's binary `bf6aa1e6`
+(main's `lib/` and `bin/` at `327141a`), script and status in `/cluster/arthur/baguette-results/wave55-learnprop/`.
+`make check` rc 0 (4 355 ok, 200 models, 25.8 s, peak RSS 102 MB); 200 models x 4 artefacts (stdout, exit
+code, `.opb`, `.pbp`) equal; the diff lane 324 of 324 (the reference's 301 and the 23 new `rest` runs) and
+the debug pass 311 of 311; the scaling lane ok under `--enforce`, growth -0.02 to +0.36 % of the late cost
+against the baseline (the +0.3 % of the default path's checks, under the 0.5 % threshold), so no
+re-baseline; the model suite with the rule ON under `BAGUETTE_DEBUG=1` 200 of 200, every proof accepted.
+
 ## D-0172  M11-complexity-T15: explanations as a DAG whose nodes carry their line; the memo table goes and every byte stays (A), and hash-consing the written nodes writes share mode's proof for less than main costs (B)
 
 Status: PROPOSED. A spike on `wave55-dag` (`795e869`), nothing merged. Which variant lands is the
