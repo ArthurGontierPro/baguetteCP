@@ -22,6 +22,7 @@ of it to every session and stopping at a broken line before it even reached the 
 | M8-bits-encoding-T4 (two arms, `W = none` and `W = 0`, on the sixteen editions) | run directories under `/scratch/arthur/m8t4/`, `tools/compare/` (additions), `bench/challenge/README.md` (the run's row), a new D-record | agent-m8t4 (`wave55-m8t4`) | 2026-11-20 |
 | M15-symmetry-T3 (breaking that agrees with the search: design, then a prototype outside `lib/`) | `tools/symmetry/`, `bench/symmetry/`, `scripts/sym_lane.sh`; a small C++ tool over dejavu's header-only library in `tools/symmetry/` if needed; NO `lib/` change without a new claim; reserved record D-0181 | agent-sym3 (`wave55-sym3`) | 2026-11-20 |
 | M14-e2e-verification-T8 (optimisation, and cake_pb_cp on search proofs) | `tools/e2e/`, `scripts/e2e_lane.sh`, `bench/e2e_spike/`, run dirs `/scratch/arthur/wave55-e2e8-runs/`; reserved record D-0182 | agent-e2e8 (`wave55-e2e8`) | 2026-11-20 |
+| M13-codes-leads-T1 (study: what the root LP bound would fix, before any code) | new `tools/lp/` and `bench/lp/` (scripts only), run dirs `/scratch/arthur/wave55-lp-runs/`; reserved record D-0183 | agent-lp (`wave55-lp`) | 2026-11-20 |
 
 ## Cross-session requests
 
