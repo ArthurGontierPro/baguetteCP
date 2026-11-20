@@ -23092,6 +23092,17 @@ cake's file. Under `--e2e` it is refused with that reason in this task's first v
 the bridge; covering it is a `red` pair per rung (D-0180's `@Y1`/`@Y2`), done if time allows and
 recorded in section 6 either way.
 
+**3.4. (Added during the work, with commit `74d1746`, before the Challenge series that measures
+it.) An eq atom's clauses by `pol` for every family, not only T5's.** D-0187's prefix closes each
+clause stating an eq atom's value (`@Qp`, `@Qn`, `@Qt`, `@Qf`, and the interior `@Qa`, `@Qb` of a
+set domain) by `rup`. On `2016_oocsp_racks_030_ea4_cc` (T4's Booleans, gcc) that is 75 302 `rup`
+lines, and its prefix alone took 248 s of `veripb --elaborate` (measured with `7017c6c`). The same
+derivation as §2's indicator applies: [f] `e + ~ge_k + ge_(k+1) >= 1` for a clause with e
+positive, [r] `2 ~e + ge_k + ~ge_(k+1) >= 2` for one with ~e, each ge atom replaced by its
+clause, a true or unwanted ge literal weakened away (`w`), saturated. Measured on the same
+instance, same load: 7.8 s, the same verdict. It changes D-0187's T2/T4 prefixes too (no verdict
+may change: the lane checks it), which is why it is recorded here. Revert: commit `74d1746` alone.
+
 ### 4. How to revert
 
 Revert the commits prefixed `M14-e2e-verification-T3b:` on branch `wave55-e2e3b` (or their merge).
