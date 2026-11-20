@@ -24,7 +24,6 @@ of it to every session and stopping at a broken line before it even reached the 
 | M8-bits-encoding-T4 (two arms, `W = none` and `W = 0`, on the sixteen editions) | run directories under `/scratch/arthur/m8t4/`, `tools/compare/` (additions), `bench/challenge/README.md` (the run's row), a new D-record | agent-m8t4 (`wave55-m8t4`) | 2026-11-20 |
 | M11-complexity-T15 (SPIKE, explanations as a hash-consed DAG; a prototype branch, nothing merged without a decision) | `lib/core/explanation.ml`, `lib/core/justify.ml`, `lib/core/trace.ml`, propagators' explanation construction as needed, on branch `wave55-dag` only | agent-dag (`wave55-dag`) | 2026-11-20 |
 | M11-complexity-T16 (the release build) | `Makefile`, `dune-workspace` or `dune` profile stanzas, `scripts/compare_run.sh` and the bench harnesses (binary path only), `bench/challenge/README.md`, `scripts/README.md` | agent-release (`wave55-release`) | 2026-11-20 |
-| M11-complexity-T17 (learned clauses that cannot prune) | `lib/core/search.ml`, `lib/core/learned.ml`, `lib/core/retention.ml`, `lib/core/engine.ml` (learned wakes only), `lib/core/prop/clause.ml`, `lib/core/prop/pb.ml`, `lib/core/propagator.ml` (one constant, `rests`), `bin/main.ml` (one knob), their unit tests | agent-learnprop (`wave55-learnprop`) | 2026-11-20 |
 
 ## Cross-session requests
 
@@ -623,8 +622,18 @@ section 1. Shares are inclusive, of the whole run.
 | D-0161 request 1 (`Alldiff.snap_of` builds derivation inputs at every snapshot) | agent-snap (`wave54-snap`) | 2026-11-19 | **D-0165.** `snap_of` keeps the interior holes only; `gone` rebuilds the below/above runs inside the `Deferred` from the four frozen bounds; root flags and `hole_cite` through `Store.at_root`. Every model artefact and every lane line equal to the base `45b8a3c7`. Cyclic 10 000 nodes `--no-proof` -25.6 % instructions (157.0 -> 116.7 G), `--proof` -5.2 %; black-hole_20 -6.6 % / -2.3 %. |
 | M11-complexity-T13 | agent-thunk (`wave55-thunk`) | 2026-11-20 | **D-0168.** A thunk keeps its line (id, level) once written and drops its tree; the memo lets go of the cells of the nodes the closure built (a forcing records the operands it did not build, and only those thunks are forced again at release); `derive_ahead` emits the thunk. bh9 `--proof` node 40 (alldiff base): live 2 041 -> 658 MB, RSS 3 646 -> 1 777 MB, -0.7 % instructions, `.pbp` md5 equal; lane default runs -28.7 % (rcpsp_11) to +0.35 %. Gate on `a8762eb` (binary `40638833`): `make check` rc 0 (4 312 ok), 198 x 4 artefacts equal to `214e74d1`, lane 301/301, debug 289/289, scaling ok |
 | M11-complexity-T14 (the cost per node against Gecode) | agent-pernode2 (`wave55-pernode`) | 2026-11-20 | **D-0169.** codes-cp QR48 XOR, same tree as Gecode: Gecode 28 k instr and 57 propagations per node, baguette 1 572 k and 413 runs. Four byte-identical cuts in `engine.ml`, `store.ml`, `pb.ml`, `clause.ml` (run bracket without `Fun.protect` and no walk after a quiet run; wake sort in a scratch array; literal status off the record; seed heap without closures): -12.3 % / -15.8 % instr per node without proof, -7.5 % / -10.7 % with, every proof and `--stats` line identical. Gate on `c531645` (merges main `42feb27`): `make check` rc 0, 200 models x 4 artefacts equal to gate 71's `492638b9`, lanes 301/301 and 289/289, scaling ok and re-baselined (`26240af`), binary `c308784d`. Then merged main `f41498a` (thunk, disjoint files). Two proposals for the user (D-0169 section 5) |
+| M11-complexity-T17 (learned clauses that cannot prune) | agent-learnprop (`wave55-learnprop`) | 2026-11-20 | **D-0173.** Every learned-clause run on codes QR48 is a run of a SATISFIED clause (100 %, true literal watched in 98 %). RESTING behind `BAGUETTE_REST_SATISFIED=on`, OFF: a satisfied clause keeps its watches, leaves the wake index but for the true literal, is released by the backtrack that pops its support. Same pruning, another order: QR48 same trees and proofs, -33/-54 % instr/node without proof, -17/-33 % with; lane 250/301 differ, median -1 %. Lane config `rest` and its references added. Gate green on `88275b8` (`24efccd8`). The default is the user's decision (D-0173 section 5) |
 
 ## Handoff notes
+
+### 2026-11-20 (agent-learnprop, `wave55-learnprop`): M11-complexity-T17, D-0173
+
+The learned clauses that never prune on codes QR48 are SATISFIED when woken (all 177 and 390 runs per node). RESTING takes a satisfied
+clause out of the wake index until a backtrack pops its true literal's support: same pruning, but another propagation order, so other
+trees on most of the lane. Hence a flag, `BAGUETTE_REST_SATISFIED=on`, OFF, with its lane config `rest` (references recorded,
+every proof accepted). QR48 same trees and proofs -33/-54 % instructions per node without proof, -17/-33 % with. Gate on `88275b8`
+green (200 x 4 artefacts equal, lane 324/324, debug 311/311, scaling ok, models with the rule on under debug 200/200). Waiting for
+the user: default on or not (D-0173 section 5; recommended, on in the codes harness now). The default path costs +0.3 %.
 
 ### 2026-11-20 (orchestrator): gates 71 and 72 green; alldiff, snap, thunk and pernode merged
 

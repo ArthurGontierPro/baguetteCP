@@ -20153,3 +20153,153 @@ the late cost under the baseline, so re-baselined with `--update -j 16` in its o
 
 Not proposed here, because the row forbids it and it is a separate decision: learning less (the 15 %
 of conflict analysis). (b) keeps every learned clause on the page and only stops running it.
+
+## D-0173  M11-complexity-T17: the learned clauses that "cannot prune" are SATISFIED; RESTING takes them out of the wake index, same pruning, another order, so behind a flag (off)
+
+**Status**: **DONE** as a flag, `BAGUETTE_REST_SATISFIED=on` (`Search.config.rest_satisfied`), OFF by
+default. Making it the default is a **decision for the user** (section 5). Recorded 2026-11-20 by
+agent-learnprop on `wave55-learnprop`. Files: `lib/core/prop/clause.ml` (`Learned_clause`),
+`lib/core/engine.ml` (`rest_on`, `release_rests`, `sync_watched`), `lib/core/propagator.ml` (the constant
+`rests`), `lib/core/prop/pb.ml` (`holds`), `lib/core/search.ml` and `bin/main.ml` (the knob),
+`test/unit/test_engine.ml`, `bench/diff/configs.tsv` and the `rest` references. Measured on `fataepyc-06`
+under load 23 to 66, instruction counts (`perf stat -e instructions:u`, minus a 1-node run of the same
+binary) as the robust number. Scripts and outputs under `/scratch/arthur/wave55-learnprop-runs/`, the
+scripts, counters and summaries copied to `/cluster/arthur/baguette-results/wave55-learnprop/`.
+
+### 1. What a learned clause can still do here, the four candidates examined
+
+- **(a) A nogood made only of negated decisions is never unit again once its subtree is closed.** Not the
+  object. The clauses registered for propagation are the 1UIP clauses (`Search.register_learned`), the
+  decision nogoods are proof lines only. And the claim is false for a decision nogood too. `~d1 \/ ~d3`
+  learned under `d1, d2, d3` is unit at the root of `~d2`'s subtree whenever that sibling is explored
+  (another conflict below `d2` named level 2), where it forces `~d3`.
+- **(b) A 1UIP clause asserts at its backjump level and is unit again only after a restart or a backjump.**
+  False in this DFS. It is unit at the root of every later subtree hanging below its assertion level, and
+  above that level chronological backtracking un-falsifies its lower literals and later decisions can
+  falsify them again. Neither a restart nor a backjump is needed.
+- **(c) Two watched literals would make a non-unit clause free.** Learned clauses already have them
+  (D-0104, M6-T22, D-0142). The hundreds of ids one trail entry wakes (D-0169, item 4) are exactly the
+  visits of the clauses watching the literal just falsified. What MiniSat does that this engine did not is
+  leave a SATISFIED clause alone (section 2).
+- **(d) A per-clause activity that stops waking clauses that never prune.** Loses pruning by construction,
+  and section 2 shows nothing has to be lost.
+
+The one rule of this kind that is search-neutral by proof was measured and is worth nothing. A clause
+satisfied at a level the DFS never pops again (the prefix of second branches above the current node,
+without restarts) can be dropped for good. On QR48 3 fixed that covers 14 889 of 5 283 653 learned-clause
+runs, about one per clause.
+
+### 2. What the 177 runs per node are
+
+An instrumented build (not committed) classified every learned-clause run on the two QR48 instances of
+D-0169 (`dom/sym_p47_w8_basis.dzn` "3 fixed", `..._f2_...` "2 fixed", flattened with `tools/baguette.msc`).
+
+| | runs | of a SATISFIED clause | with the true literal WATCHED | effective |
+|---|---|---|---|---|
+| 3 fixed (29 779 nodes) | 5 283 653 | 5 283 653 (100 %) | 5 166 230 (97.8 %) | 0 |
+| 2 fixed (108 699 nodes) | 42 408 976 | 42 408 976 (100 %) | 41 877 893 (98.7 %) | 0 |
+
+So every run is a satisfied clause woken because its OTHER watch was falsified. The run walks the clause,
+moves that watch to the next free literal, and the clause is woken again when that one falls. A concrete
+case. A clause learned in the left branch `x_k = 1` contains `x_k <= 0`, which the right branch decides.
+For the whole right subtree the clause is true, and each deeper decision that falsifies its current second
+watch costs a wake, a queue slot, a walk and an index move.
+
+A first cut skipped only the runs (the advisor declined when a watched literal is true). 3 fixed went from
+1 380 k to 1 223 k instructions per node, and 2 fixed went UP, 1 911 k to 2 044 k, at three times the CPU
+time. A satisfied clause that no longer moves its watch stays in the slot of a variable the search keeps
+re-deciding, and is asked again at every re-descent. The asks were the cost, so the clause has to leave the
+index.
+
+### 3. The rule, why it loses no pruning, and why it is not search-neutral
+
+**RESTING.** A learned clause whose run finds one of its two watched literals TRUE does nothing, moves
+neither watch, and reports `(w, Propagator.rests)` from `inst_watched`. The engine then indexes it under
+`w` alone and files it under the decision level of the bound holding that literal up (`lo x` for `x >= k`,
+`hi x` for `x <= k-1`). Its advisor declines everything while it rests. At the first propagation after a
+backtrack that popped that level, the engine seeds it (`release_rests`, and a released clause stays seeded
+by every call until it has actually run, since a conflict can drop its run). That run finds the literal
+still true and rests again, or goes back to the two watches it left.
+
+**No pruning is lost.** A clause with a true literal cannot prune or fail, so declining is I-P7 read
+literally. Once released, its two watches are good again. The second watch was non-false or falsified at
+the current level when the clause began to rest, so at or above the true literal's level, and the backtrack
+that pops the true literal's support pops it too. That is the argument behind MiniSat's satisfied clauses.
+The one other case, a clause seeded as newborn or young, is re-seeded after any backtrack below its birth,
+as before this row (rule (b) of the incremental seed, M6-T18). Filing under the level of the CURRENT support and not of the first
+crossing releases early at worst, which costs one run that changes nothing. Checked by
+`test_engine.ml`'s scene (rests, is not run, is released, propagates, with its control) and by 500 random
+searches with and without the rule, equal domains at every fixpoint (and, there, equal trails in 500 of
+500). Under `BAGUETTE_DEBUG`, whose `check_skip`, I-P7 and `check_fixpoint` re-run what was skipped or
+declined, 289 of 289 debug lane runs and 200 of 200 model tests with the rule on raised nothing, and every
+proof was accepted.
+
+**But the order can change.** The old engine moved a satisfied clause's false watch, resting keeps it. After
+the release the two engines watch different literals, so the clause can be woken at another trail entry.
+The engine runs a woken learned clause later, at its seed slot or in the FIFO, so with an earlier wake it
+can find itself unit and force its literal BEFORE another propagator woken in between, whose reason would
+have been on the trail. Example, `a \/ b \/ c` with `a` true at level 3. At level 5 `b` falls, the old run
+moves the watch to `c`, resting keeps `b`. Back at level 2 a run R1 falsifies `b`, then R2 falsifies `c`.
+The old engine is woken by R2 and resting by R1. In the FIFO the resting clause then runs ahead of a row `Y`
+that R2 wakes too, and forces `a` first, where the old engine runs `Y` first (lower id, same wake). The trace
+line for `a` cites the clause instead of `Y`. Different reasons make
+different 1UIP clauses, so different trees. A search-neutral version would have to reproduce the old watch
+moves, which needs the old queue positions of runs that a conflict can cut, which is the cost removed.
+On QR48 nothing a learned clause does is ever effective, so the order never shows there.
+
+### 4. Measured
+
+QR48, the same tree (binary `1fed7ed7`, the rule's logic as merged; `88275b8` only trims the default path).
+Instructions per node, stdout, every `--stats` search counter and both proof files byte-identical with the
+rule on and off.
+
+| | main `bf6aa1e6` | rest on | learned propagation off (D-0169 b) |
+|---|---|---|---|
+| 3 fixed `--no-proof` | 1 380 k | **923 k (-33.1 %)** | 862 k (-37.6 %) |
+| 3 fixed with proof | 2 718 k | **2 250 k (-17.2 %)** | 2 167 k (-20.3 %) |
+| 2 fixed `--no-proof` | 1 911 k | **886 k (-53.6 %)** | 819 k (-57.1 %) |
+| 2 fixed with proof | 3 157 k | **2 111 k (-33.1 %)** | 2 018 k (-36.1 %) |
+| learned-clause runs per node, 3 / 2 fixed | 177.4 / 390.2 | 7.0 / 8.3 | 0 |
+
+CPU time at load 23, 2 fixed: 50.1 s to 17.0 s without proof, 91.7 s to 40.9 s with. The rule keeps 85 to
+94 % of what switching learned propagation off gains there, and keeps every pruning everywhere else.
+
+The differential lane, rule on against the reference: **250 of 301 runs differ** (188 a SEARCH counter
+first, 17 the `.pbp`, 6 stdout, 39 WORK only), and 241 of 289 in the debug pass. The differences are
+small (`cls-prune` 82 against 78 on parity-learning, decisions 2513 against 2515 on QR72), the order of
+section 3. Rule off, **301 of 301 equal** the reference, WORK counters included. The lane's 27 lines at
+their budgets, instructions per node rule on against main (`bf6aa1e6`), the trees differing:
+
+| | median | best | worst |
+|---|---|---|---|
+| `--no-proof` | -1.1 % | -15.2 % (rcpsp_12) | +3.4 % (amaze) |
+| with proof | -0.7 % | -9.8 % (perfect_square_102) | +6.0 % (openshop@300) |
+
+The lane's QR48 and QR72 (another flattening and the solver's default search, where learned clauses do
+prune, 56 and 252 times) gain 6 to 12 % without proof. Where it loses, learned-clause runs per node go UP,
+released clauses resting again: amaze 138 to 191, diameterc 88 to 115, steiner 79 to 108 (rcpsp_12, a gain,
+113 to 86). The 200 test models solve with the same node counts and the
+same stdout with the rule on (1 482 nodes in all). The default path costs +0.3 % instructions per node
+(QR48 3 fixed, one test per run).
+
+### 5. For the user
+
+| option | consequence |
+|---|---|
+| keep it OFF (as merged) | nothing changes, the knob and the lane's `rest` line measure it |
+| make it the DEFAULT | codes-cp QR48 runs -33 to -54 % instructions without proof and -17 to -33 % with, on the same trees; the lane is flat (median -1 %, worst +3 to +6 %); the trees and proofs of most other models change (same pruning, another order), so the lane's reference is re-recorded after the gated merge, and every Challenge comparison restarts from new trees |
+| on for the codes campaigns only (`BAGUETTE_REST_SATISFIED=on` in their harness) | the gain where it is measured, nothing else moves |
+
+**Recommendation**: the third, now, and the second once a Challenge series has been run with the knob on and
+shows no loss in solved instances. Open, not done here: learned PB rows (`Pb` instances) are not
+self-watching and rest never; and conflict analysis (15 % on QR48, D-0169) is untouched.
+
+### 6. Gate
+
+Fresh clone of `wave55-learnprop` at `88275b8` (binary `24efccd8`), against gate 73's binary `bf6aa1e6`
+(main's `lib/` and `bin/` at `327141a`), script and status in `/cluster/arthur/baguette-results/wave55-learnprop/`.
+`make check` rc 0 (4 355 ok, 200 models, 25.8 s, peak RSS 102 MB); 200 models x 4 artefacts (stdout, exit
+code, `.opb`, `.pbp`) equal; the diff lane 324 of 324 (the reference's 301 and the 23 new `rest` runs) and
+the debug pass 311 of 311; the scaling lane ok under `--enforce`, growth -0.02 to +0.36 % of the late cost
+against the baseline (the +0.3 % of the default path's checks, under the 0.5 % threshold), so no
+re-baseline; the model suite with the rule ON under `BAGUETTE_DEBUG=1` 200 of 200, every proof accepted.
