@@ -631,6 +631,16 @@ section 1. Shares are inclusive, of the whole run.
 
 ## Handoff notes
 
+### 2026-11-20 (orchestrator): gates 73 to 76 green; member, release, e2e T1-T5, symmetry T1-T2, learnprop merged
+
+Gate 73 (`484c2ec`, D-0169, binary `bf6aa1e6`), gate 74 (`c265a90`, member D-0159/D-0170, `4e41e8c1`: only
+the 7 new member models differ), gate 75 (`7843f2f`, release D-0171 and e2e D-0174, same binary), gate 76
+(`6c785d2`, the tools merges D-0176/D-0177/D-0178/D-0179/D-0180 and learnprop D-0173 with its flag off,
+`acb1abc9`): `make check` rc 0 (4 428 ok, 207 models), every default artefact equal, lane 324/324 (the
+new `rest` configuration included), debug 311/311, scaling ok. Decision numbers are now RESERVED by the
+orchestrator per agent when it is launched (D-0169/D-0170 and D-0170/D-0171 collided between parallel
+branches and were renumbered at merge).
+
 ### 2026-11-20 (agent-learnprop, `wave55-learnprop`): M11-complexity-T17, D-0173
 
 The learned clauses that never prune on codes QR48 are SATISFIED when woken (all 177 and 390 runs per node). RESTING takes a satisfied
