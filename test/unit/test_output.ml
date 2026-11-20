@@ -88,7 +88,7 @@ let read_file path =
 
 let p = F.Pos.unknown
 let v name dom = { M.v_name = name; M.v_dom = dom; M.v_pos = p }
-let c k = { M.k; M.c_pos = p }
+let c k = { M.k; M.c_pos = p; M.c_id = "" }
 
 let model ?(vars = [||]) ?(constraints = []) ?(output = []) () =
   { M.vars; constraints; objective = M.Satisfy; search = []; output }
@@ -347,7 +347,8 @@ let hand_model vars constraints =
            (fun (n, lo, hi) ->
              { M.v_name = n; M.v_dom = M.Drange (lo, hi); M.v_pos = F.Pos.unknown })
            vars);
-    M.constraints = List.map (fun k -> { M.k; M.c_pos = F.Pos.unknown }) constraints;
+    M.constraints =
+      List.map (fun k -> { M.k; M.c_pos = F.Pos.unknown; M.c_id = "" }) constraints;
     M.objective = M.Satisfy;
     M.search = [];
     M.output = [];

@@ -207,7 +207,12 @@ type cstr =
   (* M7-T28 (D-0159): see [member] above. *)
   | Member of member
 
-type constr = { k : cstr; c_pos : Pos.t }
+(* [c_id] is the FlatZinc builtin as written (`int_max`, `array_int_maximum`, ...), or "" for
+   a constraint no FlatZinc item wrote (the `int_eq` tying a gcc copy, D-0146 section 2). Two
+   builtins can build one [cstr] (`int_max(x, y, z)` is [Array_int_maximum (z, [x; y])]), and
+   only the end-to-end contract tells them apart, because its translator writes a different
+   cake keyword for each (M14-e2e-verification-T3b, D-0188 section 3.1). Nothing else reads it. *)
+type constr = { k : cstr; c_pos : Pos.t; c_id : string }
 
 (* M7-T2, extended by M7-T9. The strategies docs/SPEC.md 3.4 admits, one constructor
    each. A strategy that is NOT here is refused by [Builder.search_of_annot]; there is no
