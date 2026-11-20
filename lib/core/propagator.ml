@@ -104,6 +104,14 @@ let watch_lo v = (3 * Var.to_int v) + 1
 let watch_hi v = (3 * Var.to_int v) + 2
 let watch_var (w : watch) = Var.of_int (w / 3)
 
+(* M11-complexity-T17 (D-0173): [rests], in the SECOND place of an [inst_watched] pair
+   [(w, rests)], says the instance RESTS on the literal behind [w]: that literal is TRUE,
+   its advisor answers [false] for every change while the store keeps it true, and only a
+   backtrack can undo it. The engine then indexes the instance under [w] alone, and wakes
+   it again at the first propagation after a backtrack that popped the bound holding the
+   literal up (see [Engine.rest_on]). Never a real slot: those are [>= 0]. *)
+let rests : watch = -1
+
 type instance = {
   id : int;
   inst_name : string;
@@ -124,6 +132,7 @@ type instance = {
       (* M6-T22 / D-0138: [Some w] when [inst_advise] answers [false] for EVERY variable
          except the two [w ()] returns (the same variable twice is allowed), whatever the
          store says -- the two variables a watched-literal propagator currently watches.
+         M11-complexity-T17 (D-0173): or [(w, rests)], the instance resting on [w].
          M11-complexity-T3 (D-0142, E1): each comes as a [watch], which also says which
          bound move can falsify the literal, so the engine asks only on that move when
          the watch is directional.

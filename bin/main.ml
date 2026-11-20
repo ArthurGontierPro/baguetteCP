@@ -1075,6 +1075,21 @@ let propagate_learned () =
            "baguette: BAGUETTE_PROPAGATE_LEARNED=%S is not a setting. Use on or off." v);
       exit 2
 
+(* [Search.config.rest_satisfied] (M11-complexity-T17, D-0173), with the same discipline:
+   anything other than on, off or unset FAILS. A measurement knob for a default-behaviour
+   change the user decides: on, learned clauses rest while satisfied (same pruning, another
+   propagation order, so other trees and proofs). *)
+let rest_satisfied () =
+  match Sys.getenv_opt "BAGUETTE_REST_SATISFIED" with
+  | None -> Search.default_config.Search.rest_satisfied
+  | Some "on" -> true
+  | Some "off" -> false
+  | Some v ->
+      prerr_endline
+        (Printf.sprintf
+           "baguette: BAGUETTE_REST_SATISFIED=%S is not a setting. Use on or off." v);
+      exit 2
+
 (* --------------------------------------------------- search-tree counters (M1-T36) *)
 
 (* [Search.stats] rendered on stderr, one `stats: ` line each, under --stats.
@@ -1697,6 +1712,7 @@ let solve opts (m : Model.t) =
                 Search.default_config with
                 retention = retention_policy ();
                 propagate_learned = propagate_learned ();
+                rest_satisfied = rest_satisfied ();
                 pb = pb_analysis ();
                 restarts = opts.restarts;
                 phase_saving = opts.phase_saving;

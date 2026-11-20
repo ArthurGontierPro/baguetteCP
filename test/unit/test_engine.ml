@@ -2255,6 +2255,208 @@ let test_direction_index () =
     (!conflicts > 100)
 
 (* ---------------------------------------------------------------------------
+   M11-complexity-T17 (D-0173): a SATISFIED learned clause rests, and a backtrack releases it
+
+   [Clause.Learned_clause.make ~rest_satisfied:true] gives the clause the resting rule: a run
+   that finds one of its two watched literals TRUE leaves both watches where they are and
+   reports [(w, Propagator.rests)], and the engine then indexes it under the true literal
+   alone and files it under the level of the bound holding that literal up
+   ([Engine.rest_on]). The scene, over three Booleans and `a >= 1 \/ b >= 1 \/ c >= 1`:
+
+     level 1  a = 1                the clause is satisfied; nothing falsified a watch
+     level 2  b = 0                watch b falsified: one run, which finds a true and RESTS
+     pop 2, level 2 again, c = 0   resting on a (level 1, not popped): NOT ASKED at all
+     pop to 0, level 1, b = 0      a's support popped: RELEASED, run, back on two watches
+     level 2  c = 0                the clause is unit and propagates a >= 1
+
+   The CONTROL is the same scene without the rule: the same prunings, and the clause, whose
+   run at b = 0 moved that watch to c, asked (and run for nothing) at c = 0. *)
+let test_resting_scene () =
+  let module Clause = Baguette_core.Clause in
+  let module LC = Clause.Learned_clause in
+  let bounds = [ ("a", 0, 1); ("b", 0, 1); ("c", 0, 1) ] in
+  let decl name =
+    List.find_map (fun (n, lo, hi) -> if n = name then Some (lo, hi) else None) bounds
+  in
+  let scene rest_satisfied =
+    let store = mk_store bounds in
+    let p =
+      Option.get (Clause.of_lits store ~decl [ Lit.ge "a" 1; Lit.ge "b" 1; Lit.ge "c" 1 ])
+    in
+    let lc = LC.make ~rest_satisfied p in
+    let inst =
+      Propagator.pack ~id:0 ~advise:(LC.advise lc)
+        (module LC : Propagator.S with type t = LC.t)
+        lc
+    in
+    let engine = Engine.create [ inst ] in
+    let prop () =
+      match Engine.propagate engine store with
+      | Engine.Fixpoint -> ()
+      | Engine.Conflict _ -> failwith "resting: unexpected conflict"
+    in
+    let decide v f =
+      Store.new_level store;
+      ignore (f store (var v) no_facts_placeholder);
+      prop ()
+    in
+    (* The decisions are seeded, so the asks they make are not [c_wakes]; the run is
+       what a satisfied clause cost before this row, and is counted. *)
+    let asks () = (Engine.counters engine).Engine.c_runs in
+    prop ();
+    decide 0 (fun s v j -> Store.set_lo s v 1 j);
+    decide 1 (fun s v j -> Store.set_hi s v 0 j);
+    let rested =
+      engine.Engine.resting.(0) && engine.Engine.wv1.(0) = engine.Engine.wv2.(0)
+    in
+    Store.backtrack store;
+    let before = asks () in
+    decide 2 (fun s v j -> Store.set_hi s v 0 j);
+    let asked_again = asks () > before in
+    Store.backtrack_to store 0;
+    decide 1 (fun s v j -> Store.set_hi s v 0 j);
+    let released = not engine.Engine.resting.(0) in
+    decide 2 (fun s v j -> Store.set_hi s v 0 j);
+    (rested, asked_again, released, Domain.lo (Store.get store (var 0)))
+  in
+  let rested, asked_again, released, a_lo = scene true in
+  check "resting: the satisfied clause rests on its true watch, filed by the engine"
+    rested;
+  check "resting: ...and is not run when its other literals are falsified"
+    (not asked_again);
+  check "resting: popping the true literal's support releases it" released;
+  check "resting: ...and the released clause, unit, propagates a >= 1" (a_lo = 1);
+  let rested, asked_again, _, a_lo = scene false in
+  check "resting CONTROL: without the rule the clause never rests" (not rested);
+  check "resting CONTROL: ...it is run at c = 0, a satisfied clause woken" asked_again;
+  check "resting CONTROL: ...and makes the same propagation" (a_lo = 1)
+
+(* M11-complexity-T17 (D-0173): the resting rule loses no pruning. Two engines over the same
+   learned clauses, one with the rule and one without, driven by the same random search (as
+   [test_direction_index]: decide a bound, propagate, backtrack on a conflict or at random);
+   after every [propagate] they must agree on the outcome and on every DOMAIN. Every learned
+   clause propagates every literal it ever could, so the fixpoints are equal. The trails are
+   compared too and reported, not required: resting keeps a satisfied clause's two watches
+   where they were instead of moving one, so after a backtrack it can be woken at another
+   entry, and its pruning can land at another place in the order (D-0173, section 3). *)
+let test_resting_same_fixpoints () =
+  let module Clause = Baguette_core.Clause in
+  let module LC = Clause.Learned_clause in
+  let bounds =
+    [ ("a", 0, 1); ("b", 0, 1); ("c", 0, 1); ("d", 0, 1); ("x", 0, 3); ("y", 0, 3) ]
+  in
+  let nv = List.length bounds in
+  let decl name =
+    List.find_map (fun (n, lo, hi) -> if n = name then Some (lo, hi) else None) bounds
+  in
+  let rng = Random.State.make [| 0x0173; 1 |] in
+  let lit () =
+    let nm, lo, hi = List.nth bounds (Random.State.int rng nv) in
+    let k = lo + 1 + Random.State.int rng (hi - lo) in
+    if Random.State.bool rng then Lit.ge nm k else Lit.le nm (k - 1)
+  in
+  let domains store =
+    List.init nv (fun v -> Domain.to_string (Store.get store (var v)))
+  in
+  let trail store =
+    List.init (Store.trail_length store) (fun i ->
+        let e = Store.trail_entry store i in
+        (Var.to_int e.Store.var, Domain.lo e.Store.now, Domain.hi e.Store.now))
+  in
+  let scenes = 500 and agree = ref 0 and steps = ref 0 and conflicts = ref 0 in
+  let same_trail = ref 0 and rests = ref 0 and w_on = ref 0 and w_off = ref 0 in
+  for _ = 1 to scenes do
+    let clauses =
+      List.init
+        (8 + Random.State.int rng 9)
+        (fun _ ->
+          Baguette_core.Learn.minimise
+            (List.init (2 + Random.State.int rng 3) (fun _ -> lit ())))
+      |> List.filter (fun ls -> List.length ls >= 2)
+    in
+    let build rest_satisfied =
+      let store = mk_store bounds in
+      let insts =
+        List.filter_map (fun ls -> Clause.of_lits store ~decl ls) clauses
+        |> List.mapi (fun id p ->
+               let lc = LC.make ~rest_satisfied p in
+               Propagator.pack ~id ~advise:(LC.advise lc)
+                 (module LC : Propagator.S with type t = LC.t)
+                 lc)
+      in
+      (store, Engine.create insts)
+    in
+    let s1, e1 = build false and s2, e2 = build true in
+    let ok = ref true and trails = ref true in
+    let step () =
+      let r1 =
+        try Ok (Engine.propagate e1 s1) with ex -> Error (Printexc.to_string ex)
+      in
+      let r2 =
+        try Ok (Engine.propagate e2 s2) with ex -> Error (Printexc.to_string ex)
+      in
+      incr steps;
+      Array.iteri
+        (fun id r -> if id < Engine.n_instances e2 && r then incr rests)
+        e2.Engine.resting;
+      let kind = function
+        | Ok Engine.Fixpoint -> "fix"
+        | Ok (Engine.Conflict _) -> "conflict"
+        | Error m -> m
+      in
+      if kind r1 <> kind r2 || (kind r1 = "fix" && domains s1 <> domains s2) then
+        ok := false;
+      if trail s1 <> trail s2 then trails := false;
+      kind r1
+    in
+    let rec go depth =
+      if depth < 7 && !ok then
+        match step () with
+        | "fix" ->
+            let v = Random.State.int rng nv in
+            let d = Store.get s1 (var v) in
+            if Domain.lo d < Domain.hi d then (
+              let k = Domain.lo d + Random.State.int rng (Domain.hi d - Domain.lo d) in
+              let up = Random.State.bool rng in
+              List.iter
+                (fun s ->
+                  Store.new_level s;
+                  ignore
+                    (if up then Store.set_lo s (var v) (k + 1) no_facts_placeholder
+                     else Store.set_hi s (var v) k no_facts_placeholder))
+                [ s1; s2 ];
+              go (depth + 1);
+              if Random.State.int rng 3 > 0 then (
+                List.iter Store.backtrack [ s1; s2 ];
+                go depth))
+            else go (depth + 1)
+        | "conflict" -> incr conflicts
+        | _ -> ok := false
+    in
+    go 0;
+    if !ok then incr agree;
+    if !trails then incr same_trail;
+    w_off := !w_off + (Engine.counters e1).Engine.c_wakes;
+    w_on := !w_on + (Engine.counters e2).Engine.c_wakes
+  done;
+  check
+    (Printf.sprintf
+       "resting: %d random searches (%d propagate calls, %d conflicts), with and without \
+        the rule, give the same outcomes and the same domains at every fixpoint"
+       scenes !steps !conflicts)
+    (!agree = scenes);
+  check
+    (Printf.sprintf
+       "resting: ...over clauses that really rest (%d resting at the end of a call), and \
+        enough conflicts (%d > 100); the trails were also equal in %d of %d searches"
+       !rests !conflicts !same_trail scenes)
+    (!rests > 100 && !conflicts > 100);
+  check
+    (Printf.sprintf "resting: ...and the resting engine asks less (%d wakes against %d)"
+       !w_on !w_off)
+    (!w_on < !w_off)
+
+(* ---------------------------------------------------------------------------
    M11-complexity-T3 (D-0142, E1): one walk that moves BOTH bounds of one variable
 
    The case D-0138 section 5 named as the reason the direction index was not exact on
@@ -2406,6 +2608,8 @@ let () =
   test_declined_while_pending ();
   test_index_positions ();
   test_direction_index ();
+  test_resting_scene ();
+  test_resting_same_fixpoints ();
   test_direction_walk_order ();
   test_create_watchers ();
   if !failures > 0 then (
