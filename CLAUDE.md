@@ -425,6 +425,28 @@ Recorded from the user's own words, November 2026. Each rule names when it does 
   example before a formula. When the user asks whether a claim holds under a criterion they
   name, answer on that criterion first.
 
+### Mode autonome (when ~/.baguette-autonome exists)
+
+The user is away and answers nothing. Recorded from the user's own words, 2026-11-20. It does
+not apply when the file is absent, even if the user is slow to answer. A `Stop` hook
+(`.claude/hooks/autonome.sh`, wired in `.claude/settings.local.json`) sends you back to work
+while TODO rows remain.
+
+- **No question to the user.** Every rule above that says "the user decides" (default
+  behaviour, a normative SPEC sentence, `Explanation.t`) becomes: decide, and justify it
+  afterwards.
+- **A decision is a D-record**, written when it is taken, before the work that depends on it:
+  the context, the options considered with their consequences, the choice, why, and how to
+  revert it (the commit or the branch). Its title starts with `[AUTONOME]` so the user can
+  grep them.
+- **Prefer the reversible option** when two are close. A decision that changes the solver's
+  default goes in its own commit, so that reverting it does not revert anything else.
+- **Adding tasks**: at most 3 TODO rows per autonomous run, in an existing milestone, with
+  "(ajouté en mode autonome le AAAA-MM-JJ)" in Notes. No new milestone.
+- **When the user comes back**, a summary at the top of `## Handoff notes`: merged, running,
+  blocked, added, and the list of `[AUTONOME]` decisions with one line each, the most
+  consequential first.
+
 ---
 
 ## Rules for this codebase
