@@ -194,6 +194,11 @@ type node = {
   support : int;
   implied_by : int;
   root : bool;
+  slot : int;
+      (* [2 * v + 1] for a lower bound and [2 * v] for an upper one, [v] the variable the
+         store names [fact]'s owner ([Store.var_named], read once by [locate]), or -1
+         when the store knows no such name. The KEY [Frontier] merges on: two facts share
+         a slot iff they share a name and a direction (D-0191). *)
 }
 
 (* One hole folded into a bound move, per the rule in the header. [fold_into] is the
@@ -358,6 +363,20 @@ let criteria = [ one_uip; conflict_side; decision_cut; decision_closure ]
    whatever the set of expandable nodes is. *)
 type scope = At_conflict_level | Everywhere
 
+(* A slot ([2 * variable + direction], so a non-negative int) as a table key: the
+   identity is its hash and [Int.equal] its comparison. M16-file-review-T3 (D-0191): the
+   decision closure's cell table was a polymorphic [(int, int) Hashtbl.t], a [caml_hash]
+   and a [compare_val] per probe and a re-hash of every cell at each doubling, and
+   [Frontier] hashed a fact's NAME, a string, at every merge and removal. Neither table is
+   iterated in an order that reaches an output: the closure's is folded into a list the
+   caller sorts, the frontier's is only looked up. *)
+module Slot_tbl = Hashtbl.Make (struct
+  type t = int
+
+  let equal = Int.equal
+  let hash x = x land max_int
+end)
+
 (* ------------------------------------------------------- the walk *)
 
 (* Did [e] establish [value] in this direction? True for exactly one entry per
@@ -390,27 +409,34 @@ let scan_support store ~before ~v ~is_lower ~value =
   go (min (before - 1) (Store.trail_length store - 1))
 
 (* The trail position that established [fact], looking strictly below [before]. Returns
-   the position and whether the O(1) array answered it ([false]: the bound history did).
-   See the header. *)
-let support_of store ~before fact =
+   the position, whether the O(1) array answered it ([false]: the bound history did), and
+   the fact's slot (see [node]), which the variable found on the way gives for free. See
+   the header. *)
+let locate store ~before fact =
   let name = Reason.fact_owner fact in
   let is_lower = Reason.fact_is_lower fact in
   let value = fact_value fact in
   match Store.var_named store name with
-  | None -> (Store.no_support, false)
+  | None -> (Store.no_support, false, -1)
   | Some v ->
+      let slot = (2 * Var.to_int v) + if is_lower then 1 else 0 in
       let fast =
         if is_lower then Store.lo_support store v else Store.hi_support store v
       in
       if
         fast <> Store.no_support && fast < before
         && establishes (Store.trail_entry store fast) ~is_lower ~value
-      then (fast, true)
+      then (fast, true, slot)
       else
         let at = Store.bound_support store ~before v ~is_lower ~value in
         Debug.check "M6-T14: the bound history agrees with the trail scan" (fun () ->
             at = scan_support store ~before ~v ~is_lower ~value);
-        (at, false)
+        (at, false, slot)
+
+(* [locate] without the slot. *)
+let support_of store ~before fact =
+  let at, fast, _ = locate store ~before fact in
+  (at, fast)
 
 (* Is the entry at trail position [p] a ROOT: does its trace line rest on nothing a
    decision supports? A decision does by definition. A pruning without facts does only if
@@ -478,6 +504,9 @@ let add_node nodes n =
    every frontier node every step, cost more than the short [String.equal] scans they
    replaced. The table here persists across the walk, is keyed on the bare name with a
    monomorphic [String] table per bound direction, and hashes only incoming facts.
+   M16-file-review-T3 (D-0191): keyed on the node's [slot] instead, an int [locate]
+   computes from the variable it looks up anyway, so a merge or a removal no longer
+   hashes the name; the name tables remain for a node without a slot.
 
    [mk] is applied to the facts in order, once each, so [mk_node]'s counters and its
    [Bad] exception fire in the same order as before.
@@ -520,6 +549,7 @@ module Frontier = struct
   type entry = { e_support : int; e_seq : int; e_cell : cell; e_node : node }
 
   type t = {
+    slots : cell Slot_tbl.t;
     lo : cell H.t;
     hi : cell H.t;
     mutable rev_cells : cell list;
@@ -533,8 +563,9 @@ module Frontier = struct
 
   let create ?(conflict_level = min_int) ?(expandable = fun _ -> false) () =
     {
-      lo = H.create 64;
-      hi = H.create 64;
+      slots = Slot_tbl.create 64;
+      lo = H.create 8;
+      hi = H.create 8;
       rev_cells = [];
       next_seq = 0;
       conflict_level;
@@ -544,7 +575,22 @@ module Frontier = struct
       heap_n = 0;
     }
 
+  (* A node's cell, keyed by its slot, or by its name and direction when it has none
+     (a name the store does not know, or a test's hand-built node). The two never meet:
+     a name has a slot in every node or in none. *)
   let table f n = if Reason.fact_is_lower n.fact then f.lo else f.hi
+
+  let find f n =
+    if n.slot >= 0 then Slot_tbl.find_opt f.slots n.slot
+    else H.find_opt (table f n) (Reason.fact_owner n.fact)
+
+  let bind f n c =
+    if n.slot >= 0 then Slot_tbl.replace f.slots n.slot c
+    else H.replace (table f n) (Reason.fact_owner n.fact) c
+
+  let unbind f n =
+    if n.slot >= 0 then Slot_tbl.remove f.slots n.slot
+    else H.remove (table f n) (Reason.fact_owner n.fact)
 
   let nodes f =
     List.fold_left (fun acc c -> if c.alive then c.cur :: acc else acc) [] f.rev_cells
@@ -606,8 +652,7 @@ module Frontier = struct
     List.iter
       (fun x ->
         let n = mk x in
-        let tbl = table f n and name = Reason.fact_owner n.fact in
-        match H.find_opt tbl name with
+        match find f n with
         | Some c ->
             let s = stronger c.cur n in
             if s != c.cur then (
@@ -617,7 +662,7 @@ module Frontier = struct
         | None ->
             let c = { cur = n; seq = f.next_seq; alive = true } in
             f.next_seq <- f.next_seq + 1;
-            H.replace tbl name c;
+            bind f n c;
             f.rev_cells <- c :: f.rev_cells;
             f.at_level <- f.at_level + level_count f n;
             push f c)
@@ -626,12 +671,11 @@ module Frontier = struct
   (* Drop [n]'s cell, as [analyse]'s [List.filter] on slot AND value did. The frontier
      holds one cell per slot, so this removes [n]'s slot whenever [n] is in it. *)
   let remove f n =
-    let tbl = table f n and name = Reason.fact_owner n.fact in
-    match H.find_opt tbl name with
+    match find f n with
     | Some c when fact_value c.cur.fact = fact_value n.fact ->
         c.alive <- false;
         f.at_level <- f.at_level - level_count f c.cur;
-        H.remove tbl name
+        unbind f n
     | Some _ | None -> ()
 end
 
@@ -677,10 +721,10 @@ let analyse ?(scope = At_conflict_level) store (c : Store.conflict)
   let add_antecedent p = if p <> Store.no_prop then Uniq.add antecedents p in
   let check_attr = check_attribution store ~vars_of in
   let mk_node ~before fact =
-    let support, fast = support_of store ~before fact in
+    let support, fast, slot = locate store ~before fact in
     if fast then incr o1 else incr scanned;
     if support = Store.no_support then
-      { fact; level = 0; support; implied_by = Store.no_prop; root = true }
+      { fact; level = 0; support; implied_by = Store.no_prop; root = true; slot }
     else
       let e = Store.trail_entry store support in
       check_attr ~at:support ~prop:e.Store.prop ~var:e.Store.var;
@@ -690,6 +734,7 @@ let analyse ?(scope = At_conflict_level) store (c : Store.conflict)
         support;
         implied_by = e.Store.prop;
         root = rests_on_nothing store support e;
+        slot;
       }
   in
   (* The facts a hole-consuming bound move rests on, per the rule in the header, with
@@ -1065,19 +1110,6 @@ module Heap = struct
       done;
       Some top
 end
-
-(* A slot ([2 * variable + direction], so a non-negative int) as a table key: the
-   identity is its hash and [Int.equal] its comparison. D-0191: the closure's cell table
-   was a polymorphic [(int, int) Hashtbl.t], a [caml_hash] and a [compare_val] per probe
-   and a re-hash of every cell at each doubling; [insert] and the walk's lookups were 5 %
-   of 2011_roster's samples and 10 % of 2017_opd_small_bibd_08_28_14's. The table is
-   folded once, into a list the caller sorts, so its order reaches nothing. *)
-module Slot_tbl = Hashtbl.Make (struct
-  type t = int
-
-  let equal = Int.equal
-  let hash x = x land max_int
-end)
 
 (* The decision levels the conflict rests on, descending, level 0 dropped: what
    [decision_levels] reads off the decision closure, see the section header. [Error]
