@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """symchain.py IN.fzn IN.opb OUT [--vars V,..] [--depth D] [--score orbit|first|shared]
+                                [--order static|search] [--orient auto|max|min]
 -- a stabilizer chain of the model's symmetry group, found by dejavu as distributed, and the
-symmetry-breaking clauses it licenses (M15-symmetry-T2, D-0179; the study is D-0177).
+symmetry-breaking clauses it licenses (M15-symmetry-T2, D-0179; the study is D-0177; the chain that
+follows the search, `--order search`, is M15-symmetry-T3, D-0181).
 
 IN.opb is baguette's .opb of IN.fzn, without breaking (`main.exe IN.fzn --proof P --time-limit 0`
 writes it without searching). The pipeline, one dejavu run per level (D-0177 §4, backend A):
@@ -30,6 +32,25 @@ writes it without searching). The pipeline, one dejavu run per level (D-0177 §4
      why the swap matters: D-0177's `red` with w_b^-1 alone is refused on the second cut of a
      level, measured on php_unsat).
   4. stop at --depth levels, at a trivial group, or when no candidate is eligible.
+
+THE CHAIN THAT FOLLOWS THE SEARCH (`--order search`, M15-symmetry-T3, D-0181). For a static search
+order (`bool_search(x, input_order, ...)`, or SPEC 3.4's default over 0/1 variables) the chain can
+take the search's own order: at each level the point is the FIRST break variable in search order
+with a nontrivial eligible orbit (the `first` score), and the cut is ORIENTED by the value choice.
+The point is then a LITERAL p, the value the search tries first: p = x for indomain_max
+(the cut x_c v ~x_b, T2's), p = ~x for indomain_min, indomain, indomain_split and the default
+(the cut ~x_c v x_b). Why this agrees with the search: every break variable before c_i in search
+order is fixed by G_{i-1} (it is an earlier point, or its orbit is trivial), so for any solution s
+an element of G_{i-1} that brings a preferred value onto c_i keeps the prefix before c_i. The
+first solution a depth-first search finds (the lex-first one in search order under the value
+choice, learning and propagation do not change which) therefore satisfies every cut, and the
+broken search still finds it first: on a satisfiable model the breaking can no longer cut the
+branch the search was heading to. The proof is unchanged, because a literal permutation commutes
+with negation: the orbit of ~x is the negation of the orbit of x with the same words, a swap of x
+and y swaps ~x and ~y, and the `dom` order is the lex order of the points' negations (the
+preferred value first). `--orient max|min` forces one orientation for every point (the control:
+a chain that fights the value choice); `auto` is `max` under `--order static` (T2's chains, byte
+for byte) and the annotation's value choice under `--order search`.
 
 Writes OUT.chain.json (the generators of each level as {var: literal} over the moved literal
 variables, the levels, and each cut with its word, so that symmerge.py recomputes the witness
@@ -143,14 +164,17 @@ def read_fzn(path):
             m = re.search(r"::\s*defines_var\(\s*([A-Za-z_][\w\[\]]*)\s*\)", st)
             if m:
                 defined.add(m.group(1))
-    search = None
+    search, value = None, {}
     if "_search" in solve:
         search = []
-        for m in re.finditer(r"(?:int|bool)_search\(\s*(\[[^\]]*\]|[A-Za-z_][\w]*)", solve):
-            search += expand(m.group(1), arrays)
+        for m in re.finditer(r"(?:int|bool)_search\(\s*(\[[^\]]*\]|[A-Za-z_][\w]*)\s*,\s*(\w+)\s*,\s*(\w+)", solve):
+            vs = expand(m.group(1), arrays)
+            search += vs
+            for v in vs:                                  # the first annotation naming v decides
+                value.setdefault(v, "max" if m.group(3) in ("indomain_max", "indomain_reverse_split") else "min")
     optimise = bool(re.search(r"\b(minimize|maximize)\b", solve))
     natural = [v for v in order if v not in defined]
-    return kinds, arrays, search, natural, optimise
+    return kinds, arrays, search, natural, optimise, value
 
 
 def kind_of(dom):
@@ -236,9 +260,17 @@ def main():
     ap.add_argument("--vars", help="break variables, FlatZinc names or arrays, comma separated")
     ap.add_argument("--depth", type=int, default=3)
     ap.add_argument("--score", choices=["orbit", "first", "shared"], default="orbit")
+    ap.add_argument("--order", choices=["static", "search"], default="static",
+                    help="search: the point is the first break variable in search order (--score "
+                         "first) and the cut is oriented by the value choice (D-0181)")
+    ap.add_argument("--orient", choices=["auto", "max", "min"], default="auto",
+                    help="the value each point is pushed to: max (x_c v ~x_b, T2's), min "
+                         "(~x_c v x_b); auto: max under --order static, the value choice under search")
     a = ap.parse_args()
+    if a.order == "search":
+        a.score = "first"
 
-    kinds, arrays, search, natural, optimise = read_fzn(a.fzn)
+    kinds, arrays, search, natural, optimise, value = read_fzn(a.fzn)
     if optimise or any(l.startswith("min:") for l in open(a.opb)):
         sys.exit("symchain: optimisation model refused: a `red` cut would also have to keep the "
                  "objective (M15-symmetry-T4)")
@@ -273,6 +305,14 @@ def main():
             if line.startswith("@c"):
                 rows.append(set(re.findall(r"~?([A-Za-z_][\w]*_ge_\d+)", line)))
 
+    def orient(v):
+        """the value the chain pushes FlatZinc variable v to: 'max' or 'min'"""
+        if a.orient != "auto":
+            return a.orient
+        if a.order == "static":
+            return "max"
+        return value.get(v, "min")                       # SPEC 3.4: no annotation, min value
+
     def writable(lits):
         ks = {kinds[fzn_of[l.lstrip("~")]] for l in lits if l.lstrip("~") in fzn_of}
         return all(l.lstrip("~") in fzn_of for l in lits) and len(ks) == 1
@@ -280,7 +320,7 @@ def main():
     fixed, levels, cuts, gens_all = [], [], [], []
     dj_total = 0.0
     for lev in range(a.depth + 1):
-        G, order, dt = run_dejavu(graph, {litv[c]: i for i, c in enumerate(fixed)}, f"L{lev}", vlit)
+        G, order, dt = run_dejavu(graph, {litv[c.lstrip("~")]: i for i, c in enumerate(fixed)}, f"L{lev}", vlit)
         dj_total += dt
         level = {"order": order, "dejavu_s": round(dt, 3), "generators": len(G)}
         gens_all.append(G)
@@ -298,7 +338,7 @@ def main():
             break
         seen, orbs = set(), {}
         for c in cands:
-            if c in seen or c in fixed:
+            if c in seen or c in {f.lstrip("~") for f in fixed}:
                 continue
             W = orbit(G, c)
             for b in W:
@@ -315,11 +355,26 @@ def main():
         elif a.score == "first":
             c = min(orbs, key=lambda s: pos[s])
         else:
-            fv = {f for f in fixed}
+            fv = {f.lstrip("~") for f in fixed}
             sh = lambda s: sum(1 for R in rows if s in R and R & fv)
             c = max(orbs, key=lambda s: (sh(s), len(orbs[s]), -pos[s]))
         W = orbs[c]
-        level.update({"point": c, "fzn": fzn_of[c], "orbit": len(W),
+        if a.order == "search":
+            # the agreement argument needs every break variable before c in search order to be
+            # fixed by G (an earlier point, or a trivial orbit). A break variable that is not a
+            # candidate (an integer, or an orbit of mixed kinds) may be moved: say so.
+            moved = {k for g in G for k in g}
+            moved_vars = {k.rsplit("_", 2)[0] for k in moved if re.search(r"_(ge|eq)_-?\d+$", k)}
+            cpos = brk.index(fzn_of[c])
+            bad = [v for v in brk[:cpos] if pb(v) in moved_vars or (pb(v) + "_ge_1") in moved]
+            level["prefix_fixed"] = not bad
+            if bad:
+                level["prefix_moved"] = bad[:3]
+        val = orient(fzn_of[c])
+        if val == "min":                                  # the point is ~x: the same words send
+            W = {neg(b): w for b, w in W.items()}         # ~c to ~b
+            c = neg(c)
+        level.update({"point": c, "fzn": fzn_of[c.lstrip("~")], "value": val, "orbit": len(W),
                       "orbit_sizes": sorted((len(o) for o in orbs.values()), reverse=True)})
         levels.append(level)
         for b in sorted(W, key=lambda l: (l.lstrip("~") not in pos, pos.get(l.lstrip("~"), 0), l)):
@@ -343,7 +398,7 @@ def main():
     add = "".join(fzn_clause(ct["clause"]) + "\n" for ct in cuts)
     open(a.out + ".fzn", "w").write(F[:i] + "% ---- symmetry-breaking cuts, tools/symmetry/symchain.py ----\n" + add + F[i:])
     J = {"tool": "symchain.py", "dejavu": DEJAVU, "fzn": a.fzn, "opb": a.opb, "graph": graph_line,
-         "break_vars": source, "score": a.score, "depth": a.depth, "dejavu_s": round(dj_total, 3),
+         "break_vars": source, "score": a.score, "order": a.order, "orient": a.orient, "depth": a.depth, "dejavu_s": round(dj_total, 3),
          "levels": levels, "generators": gens_all, "cuts": cuts}
     with open(a.out + ".chain.json", "w") as f:
         json.dump(J, f)
@@ -351,7 +406,8 @@ def main():
     for lev in levels:
         print("  level " + json.dumps(lev))
     print(f"symchain: group {levels[0]['order']}, {len(fixed)} levels, {len(cuts)} cuts, "
-          f"dejavu {dj_total:.2f} s, break variables from {source} -> {a.out}.fzn")
+          f"dejavu {dj_total:.2f} s, break variables from {source}, order {a.order}, "
+          f"points {' '.join(lv['point'] for lv in levels if 'point' in lv)} -> {a.out}.fzn")
 
 
 if __name__ == "__main__":

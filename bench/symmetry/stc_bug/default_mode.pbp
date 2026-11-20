@@ -1,0 +1,17 @@
+pseudo-Boolean proof version 3.0
+% M15-symmetry-T3, D-0181. false_unsat.pbp WITHOUT strengthening-to-core mode: refused at the
+% second `red` (line 12), "Proofgoal 3 could not be autoproven", 3 being the first red's
+% constraint: in the default mode red's goals include the derived set.
+%
+%
+%
+%
+%
+f 2 ;
+red +1 x1 +1 ~x2 >= 1 : x1 -> x2 x2 -> x1 ;
+red +1 ~x1 +1 x2 >= 1 : x1 -> x2 x2 -> x1 ;
+rup +1 ~x1 >= 1 ;
+rup >= 1 ;
+output NONE ;
+conclusion UNSAT : -1 ;
+end pseudo-Boolean proof ;

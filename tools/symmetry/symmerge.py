@@ -34,6 +34,20 @@ Mutation controls (negative tests, each on one cut K, 0-based in chain order):
                     before c at 0 the parity rows propagate every coordinate to 0, against
                     sum x >= 1, so the dominance goal closes by propagation.)
 VeriPB must refuse both at the mutated line, which symmerge prints (`line N`).
+  --as-rup K        the PROBE that makes a control meaningful (D-0181): cut K written as a bare
+                    `rup` line. If VeriPB accepts it, cut K is implied by the lines before it, so
+                    any witness or any weaker mutation of it would be accepted too, and a control
+                    on it tests nothing (measured: under `--order search` on php_escape_sat every
+                    cut after the first of a level is RUP, through the pigeon's exactly-one row).
+  --unit-probe K    cut K written as the UNIT clause c (its point alone), with its true witness and
+                    rule. If VeriPB accepts it, every clause c v X is a weakening of a derivable
+                    line, so --bad-cut (c v ~c_1) cannot be refused there and that control is
+                    VACUOUS, not failed (measured: php_escape_sat under `--order search`, where c =
+                    ~x_2 and the pigeon's exactly-one row makes the swapped image ~x_3 hold).
+
+A point may be a NEGATIVE literal (`symchain.py --order search` under a min value choice, D-0181):
+its cuts are ~x_c v x_b, the witnesses are the same permutations, and the `dom` order is the lex
+order of the points' negations, so the preferred value comes first either way.
 """
 import argparse, json, re, sys, os
 
@@ -52,6 +66,20 @@ def def_order(name, N, coef):
             "  def", f"    {terms} >= 0;", "  end;",
             "  transitivity", "    vars", f"      fresh_right {ws};", "    end;", "    proof",
             "      proofgoal #1", "        pol 1 2 + 3 +;", "      qed : -1;", "    qed;", "  end;", "end;"]
+
+
+def lit_swap(c, b):
+    """the map on variables of the literal transposition c <-> b (b = ~c: c's variable negated)"""
+    def put(m, src, dst):                                 # literal src -> literal dst
+        if src.startswith("~"):
+            m[src[1:]] = neg(dst)
+        else:
+            m[src] = dst
+    m = {}
+    put(m, c, b)
+    if b.lstrip("~") != c.lstrip("~"):
+        put(m, b, c)
+    return m
 
 
 def rows(opb):
@@ -82,6 +110,8 @@ def main():
     g = ap.add_mutually_exclusive_group()
     g.add_argument("--bad-witness", type=int)
     g.add_argument("--bad-cut", type=int)
+    g.add_argument("--as-rup", type=int)
+    g.add_argument("--unit-probe", type=int)
     a = ap.parse_args()
 
     J = json.load(open(a.chain))
@@ -113,23 +143,31 @@ def main():
             assert apply(w, b) == c and apply(w, c) == b, f"cut {i}: the swap does not swap"
         nrule[rule] += 1
         rule_of.append(rule)
-        if a.bad_witness == i:
-            c, b = ct["c"], ct["b"]
-            w = {c: b, b: c} if not b.startswith("~") else {c: b}
+        if a.bad_witness == i:                            # the literal transposition c <-> b,
+            c, b = ct["c"], ct["b"]                       # as a map on variables (T2's map
+            if not c.startswith("~"):                     # when c is positive, unchanged)
+                w = {c: b, b: c} if not b.startswith("~") else {c: b}
+            else:
+                w = lit_swap(c, b)
         if a.bad_cut == i:
             if lv == 0:
                 sys.exit(f"symmerge: --bad-cut {i}: cut {i} is on level 0, take one on a later level")
             d = J["levels"][0]["point"]                   # fixed by G_lv: never in c's orbit
-            body = f"+1 {c} +1 ~{d} >= 1 ;"
+            body = f"+1 {c} +1 {neg(d)} >= 1 ;"
         wit = " ".join(f"{v} -> {l}" for v, l in sorted(w.items()))
-        lines.append(f"{lab} {rule} {body.rstrip(' ;')} : {wit} ;")
+        if a.unit_probe == i:                             # the probe: is the point alone derivable?
+            body = f"+1 {c} >= 1 ;"
+        if a.as_rup == i:                                 # the probe: is cut i implied already?
+            lines.append(f"{lab} rup {body.rstrip(' ;')} ;")
+        else:
+            lines.append(f"{lab} {rule} {body.rstrip(' ;')} : {wit} ;")
     points = [lv["point"] for lv in J["levels"] if "point" in lv]
-    k = a.bad_witness if a.bad_witness is not None else a.bad_cut
+    k = next((x for x in (a.bad_witness, a.bad_cut, a.as_rup, a.unit_probe) if x is not None), None)
     target = lines[k] if k is not None else None
     if nrule["dom"]:
         N = len(points)
         lines = def_order(f"symlex{N}", N, [2 ** (N - 1 - p) for p in range(N)]) + \
-            [f"load_order symlex{N} " + " ".join("~" + c for c in points) + " ;"] + lines + ["load_order ;"]
+            [f"load_order symlex{N} " + " ".join(neg(c) for c in points) + " ;"] + lines + ["load_order ;"]
 
     P = open(a.pbp).read().splitlines()
     assert P[0].startswith("pseudo-Boolean proof version") and P[1] == f"f {nb} ;", P[:2]
@@ -139,7 +177,9 @@ def main():
     with open(a.merged, "w") as f:
         f.write("\n".join(head + lines + ["% ---- baguette's proof of the broken model, unchanged ----"]
                           + P[2:]) + "\n")
-    mut = "" if k is None else (f", MUTATED: bad {'witness' if a.bad_witness is not None else 'cut'}"
+    what = ("bad witness" if a.bad_witness is not None else "bad cut" if a.bad_cut is not None
+            else "as rup" if a.as_rup is not None else "unit probe")
+    mut = "" if k is None else (f", MUTATED: {what}"
                                 f" at cut {k}, {rule_of[k]}, line {len(head) + lines.index(target) + 1}")
     wl = [len(l.split(" : ")[-1].split(" -> ")) - 1 for l in lines if " red " in l or " dom " in l]
     print(f"symmerge: {len(cuts)} cuts, {nrule['red']} red, {nrule['dom']} dom, largest witness "

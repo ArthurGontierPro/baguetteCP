@@ -17,8 +17,17 @@
 #      each be refused AT the mutated line, in the checker's words: "Checking error at
 #      FILE:LINE" and "could not be autoproven" (CLAUDE.md: assert the wording, at full strength).
 #
-# Usage: scripts/sym_lane.sh [-j N] [--big] [OUTDIR] [NAME...]   (N <= 8; OUTDIR default
-#        /tmp/baguette-sym-$$; NAMEs restrict to those instances)
+# Usage: scripts/sym_lane.sh [-j N] [--big] [--chain "ARGS"] [--solver "ARGS"] [--no-base]
+#                            [OUTDIR] [NAME...]   (N <= 8; OUTDIR default /tmp/baguette-sym-$$;
+#                            NAMEs restrict to those instances)
+#        --chain ARGS   extra symchain.py arguments, e.g. "--order search" (M15-symmetry-T3,
+#                       D-0181: the chain that follows the search's variable order and value choice)
+#        --solver ARGS  extra main.exe arguments for BOTH runs (baseline and broken), e.g. the
+#                       dynamic search "--search activity --restarts luby --phase-saving"
+#        --no-base      skip step 3 (the baseline's columns are then "-"); for a second chain
+#                       over instances whose baseline another OUTDIR already measured
+# A `mzn:` source may end in `:Wmax=K`: the .dzn is copied with its `Wmax = ...;` set to K (QR48's
+# weight-12 question reuses codes-cp's weight-8 file, as codes-cp's qr48orb_w12 is that file's code).
 # Env:   BAGUETTE  the solver (default _build/default/bin/main.exe; NOT built here: run
 #                  `dune build --root . bin/` first; its sha256 is printed)
 #        DEJAVU    dejavu as distributed (default /cluster/arthur/tools/dejavu-f984485/build/dejavu,
@@ -33,12 +42,15 @@
 # while it runs; the lane writes OUTDIR/lane.pid. Clean up by those PIDs only, never by name.
 set -u
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
-J=4; BIG=0
+J=4; BIG=0; CHAIN_ARGS=""; SOLVER_ARGS=""; NOBASE=0
 while [ $# -gt 0 ]; do
     case "$1" in
         -j) J=$2; shift 2 ;;
         -j*) J=${1#-j}; shift ;;
         --big) BIG=1; shift ;;
+        --chain) CHAIN_ARGS=$2; shift 2 ;;
+        --solver) SOLVER_ARGS=$2; shift 2 ;;
+        --no-base) NOBASE=1; shift ;;
         *) break ;;
     esac
 done
@@ -65,6 +77,9 @@ for t in "$BAGUETTE" "$DEJAVU" "$VERIPB" "$MZN"; do
 done
 [ $fail = 0 ] || { echo "sym_lane: FAIL"; exit 1; }
 echo "sym_lane: baguette $(sha256sum "$BAGUETTE" | cut -c1-16), dejavu $(sha256sum "$DEJAVU" | cut -c1-16), $("$VERIPB" --version 2>&1 | head -1)"
+echo "sym_lane: chain [${CHAIN_ARGS}] solver [${SOLVER_ARGS}]$([ $NOBASE = 1 ] && echo ', no baseline')"
+read -r -a CHAIN_A <<< "$CHAIN_ARGS"
+read -r -a SOLVER_A <<< "$SOLVER_ARGS"
 
 if command -v systemd-run > /dev/null 2>&1; then
     RUN=(systemd-run --user --scope -q -p MemoryMax=32G)
@@ -96,7 +111,14 @@ one() {
     case "$src" in
         test:*) fzn=$ROOT/test/models/${src#test:} ;;
         mzn:*)  local dzn=${src#mzn:}; dzn=${dzn/@CODES/$CODES_CP}
+                local wmax=""
+                case "$dzn" in *:Wmax=*) wmax=${dzn##*:Wmax=}; dzn=${dzn%:Wmax=*} ;; esac
                 [ "${dzn#/}" = "$dzn" ] && dzn=$ROOT/bench/symmetry/$dzn
+                if [ -n "$wmax" ]; then
+                    sed "s/Wmax = [0-9]*;/Wmax = $wmax;/" "$dzn" > "$D/$n.dzn"
+                    grep -q "Wmax = $wmax;" "$D/$n.dzn" || { echo "FAIL $n: no Wmax in $dzn"; return; }
+                    dzn=$D/$n.dzn
+                fi
                 fzn=$D/$n.fzn
                 run "$D/flatten.pid" "$MZN" -c --solver "$ROOT/tools/baguette.msc" -D "ENC=2;" \
                     "$ROOT/bench/symmetry/minweight_chk.mzn" "$dzn" -o "$fzn" >> "$L" 2>&1 ;;
@@ -105,12 +127,16 @@ one() {
     run "$D/orig.pid" "$BAGUETTE" "$fzn" --proof "$D/orig" --time-limit 0 > /dev/null 2>> "$L"
     rm -f "$D/orig.pbp"
     [ -s "$D/orig.opb" ] || { echo "FAIL $n: baguette wrote no .opb"; return; }
-    run "$D/base.pid" "${TIME[@]}" "$BAGUETTE" "$fzn" --proof "$D/base" --stats > "$D/base.log" 2>&1
-    rm -f "$D/base.pbp" "$D/base.opb"
+    if [ $NOBASE = 0 ]; then
+        run "$D/base.pid" "${TIME[@]}" "$BAGUETTE" "$fzn" --proof "$D/base" --stats "${SOLVER_A[@]}" > "$D/base.log" 2>&1
+        rm -f "$D/base.pbp" "$D/base.opb"
+    else
+        printf '=====NOBASE=====\n' > "$D/base.log"
+    fi
     run "$D/chain.pid" "${TIME[@]}" "$PY" "$ROOT/tools/symmetry/symchain.py" "$fzn" "$D/orig.opb" \
-        "$D/sym" --depth "$depth" > "$D/chain.log" 2>&1
+        "$D/sym" --depth "$depth" "${CHAIN_A[@]}" > "$D/chain.log" 2>&1
     [ -s "$D/sym.chain.json" ] || { echo "FAIL $n: symchain: $(tail -1 "$D/chain.log")"; return; }
-    run "$D/broken.pid" "${TIME[@]}" "$BAGUETTE" "$D/sym.fzn" --proof "$D/sym" --stats > "$D/broken.log" 2>&1
+    run "$D/broken.pid" "${TIME[@]}" "$BAGUETTE" "$D/sym.fzn" --proof "$D/sym" --stats "${SOLVER_A[@]}" > "$D/broken.log" 2>&1
     run "$D/merge.pid" "$PY" "$ROOT/tools/symmetry/symmerge.py" "$D/sym.chain.json" "$D/orig.opb" \
         "$D/sym.opb" "$D/sym.pbp" "$D/merged.pbp" > "$D/merge.log" 2>&1
     run "$D/veripb.pid" "${TIME[@]}" "$VERIPB" "$D/orig.opb" "$D/merged.pbp" > "$D/veripb.log" 2>&1
@@ -122,6 +148,7 @@ one() {
         UNSAT:"s VERIFIED UNSATISFIABLE"|SAT:"s VERIFIED SATISFIABLE") ;;
         *) verdict="FAIL(veripb: $(grep -m1 -E '^s |error' "$D/veripb.log"))" ;;
     esac
+    [ $NOBASE = 1 ] && ba=$expect
     [ "$ba" = "$expect" ] && [ "$br" = "$expect" ] || verdict="FAIL(answers base $ba broken $br, expected $expect)"
     local stat ctl="-"
     stat=$($PY - "$D/sym.chain.json" <<'EOF'
@@ -130,6 +157,8 @@ J = json.load(open(sys.argv[1])); L = J["levels"]
 pts = [lv for lv in L if "point" in lv]
 print(L[0]["order"], len(pts), "/".join(str(lv["orbit"]) for lv in pts) or "-", len(J["cuts"]),
       J["dejavu_s"], sep="\t")
+print(" ".join(lv["point"] for lv in pts) or "-", ",".join(str(lv.get("prefix_fixed", "-")) for lv in pts) or "-",
+      sep="\t", file=open(sys.argv[1] + ".points", "w"))
 EOF
 )
     local mrg; mrg=$(grep -o '[0-9]* red, [0-9]* dom, largest witness [0-9]*' "$D/merge.log")
@@ -138,21 +167,44 @@ EOF
     fi
     rm -f "$D/sym.pbp"
     [ "${SYM_KEEP:-0}" = 1 ] || rm -f "$D/merged.pbp"
-    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$n" "$expect" "$stat" "$mrg" \
-        "$(nodes "$D/base.log")" "$(wall "$D/base.log")" "$(wall "$D/chain.log")" \
+    local nb wb
+    nb=$(nodes "$D/base.log"); wb=$(wall "$D/base.log")
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$n" "$expect" "$stat" "$mrg" \
+        "${nb:--}" "${wb:--}" "$(wall "$D/chain.log")" \
         "$(nodes "$D/broken.log")" "$(wall "$D/broken.log")" "$(wall "$D/veripb.log")" \
-        "$(rss "$D/veripb.log")" "$verdict" "$ctl" > "$D/row.tsv"
+        "$(rss "$D/veripb.log")" "$verdict" "$ctl" "$(cat "$D/sym.chain.json.points")" > "$D/row.tsv"
     echo "$n: $verdict, controls $ctl"
 }
 
-# the four controls; prints "refused 4/4" or what got through
+# the four controls; prints "refused 4/4" or what got through.
+# The cut: T2's, the second cut of level 1, unless the probe (symmerge --as-rup) shows it is
+# already implied by the lines before it -- then every mutation of it is accepted for that reason
+# alone, and the control would test nothing (D-0181). The next level-1 cut is tried, then the first.
 controls() {
-    local n=$1 D=$2 K ok=0 bad=""
-    K=$($PY -c "import json,sys;J=json.load(open(sys.argv[1]));print(next((k+1 for k,c in enumerate(J['cuts']) if c['level']==1),''))" "$D/sym.chain.json")
-    [ -n "$K" ] || { echo "FAIL(no level-1 cut)"; return; }
-    local rule mut
+    local n=$1 D=$2 K="" ok=0 bad="" k
+    for k in $($PY -c "import json,sys;J=json.load(open(sys.argv[1]));L=[i for i,c in enumerate(J['cuts']) if c['level']==1];print(*(L[1:]+L[:1]))" "$D/sym.chain.json"); do
+        "$PY" "$ROOT/tools/symmetry/symmerge.py" "$D/sym.chain.json" "$D/orig.opb" "$D/sym.opb" \
+            "$D/sym.pbp" "$D/probe.pbp" --as-rup "$k" > "$D/probe.merge.log" 2>&1
+        local pl; pl=$(sed -n 's/.*MUTATED: .*, line \([0-9]*\) ->.*/\1/p' "$D/probe.merge.log")
+        run "$D/ctl.pid" "$VERIPB" "$D/orig.opb" "$D/probe.pbp" > "$D/probe.veripb.log" 2>&1
+        rm -f "$D/probe.pbp"
+        if [ -n "$pl" ] && grep -q "Checking error at $D/probe.pbp:$pl\$" "$D/probe.veripb.log"; then
+            K=$k; break
+        fi
+    done
+    [ -n "$K" ] || { echo "FAIL(no level-1 cut that is not implied: every control would be vacuous)"; return; }
+    local rule mut vac=""
     for rule in auto dom; do
+        # can a bad cut c v X be refused at all? Not if the unit c is derivable (then c v X is a
+        # weakening of it). Such a control is VACUOUS: reported, not counted (D-0181).
+        "$PY" "$ROOT/tools/symmetry/symmerge.py" "$D/sym.chain.json" "$D/orig.opb" "$D/sym.opb" \
+            "$D/sym.pbp" "$D/probe.pbp" --rule "$rule" --unit-probe "$K" > "$D/probe.merge.log" 2>&1
+        run "$D/ctl.pid" "$VERIPB" "$D/orig.opb" "$D/probe.pbp" > "$D/unit-$rule.veripb.log" 2>&1
+        rm -f "$D/probe.pbp"
+        local vac_rule=0
+        grep -q '^s VERIFIED' "$D/unit-$rule.veripb.log" && { vac_rule=1; vac="$vac $rule/bad-cut"; }
         for mut in bad-witness bad-cut; do
+            [ "$mut" = bad-cut ] && [ $vac_rule = 1 ] && continue
             local m=$D/ctl-$rule-$mut
             "$PY" "$ROOT/tools/symmetry/symmerge.py" "$D/sym.chain.json" "$D/orig.opb" "$D/sym.opb" \
                 "$D/sym.pbp" "$m.pbp" --rule "$rule" --$mut "$K" > "$m.merge.log" 2>&1
@@ -167,15 +219,17 @@ controls() {
             rm -f "$m.pbp"
         done
     done
-    if [ -z "$bad" ]; then echo "refused 4/4 (cut $K)"; else echo "FAIL(accepted or wrong wording:$bad)"; fi
+    local tot=$((4 - $(echo $vac | wc -w)))
+    if [ -z "$bad" ]; then echo "refused $ok/$tot (cut $K)${vac:+, vacuous:$vac}"; else echo "FAIL(accepted or wrong wording:$bad)"; fi
 }
 
-printf 'instance\texpect\tgroup\tlevels\torbits\tcuts\tdejavu_s\tproof_rules\tnodes_without\ts_without\tchain_s\tnodes_with\ts_with\tveripb_s\tveripb_kB\tverdict\tcontrols\n' > "$OUT/results.tsv"
+printf 'instance\texpect\tgroup\tlevels\torbits\tcuts\tdejavu_s\tproof_rules\tnodes_without\ts_without\tchain_s\tnodes_with\ts_with\tveripb_s\tveripb_kB\tverdict\tcontrols\tpoints\tprefix_fixed\n' > "$OUT/results.tsv"
 names=()
 while read -r n src depth expect controls tier; do
     case "$n" in ''|\#*) continue ;; esac
     [ "$ONLY" = "  " ] || [[ "$ONLY" == *" $n "* ]] || continue
     [ "$tier" = big ] && [ $BIG = 0 ] && [[ "$ONLY" != *" $n "* ]] && continue
+    [ "$tier" = huge ] && [[ "$ONLY" != *" $n "* ]] && continue   # only when named
     while [ "$(jobs -rp | wc -l)" -ge "$J" ]; do wait -n; done
     one "$n" "$src" "$depth" "$expect" "$controls" &
     names+=("$n")

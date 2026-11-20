@@ -7,7 +7,7 @@
 #           mzn:@CODES/D  the same with D under $CODES_CP (default /cluster/arthur/codes-cp)
 #   controls  yes: the four mutation controls run on this model (satisfiable ones only: a `red` or
 #             `dom` line over a database that is already unsatisfiable proves nothing, D-0053)
-#   tier      small runs by default, big only with --big
+#   tier      small runs by default, big only with --big, huge only when named on the command line
 #
 # The codes are codes-cp's minimum-distance models without fixed coordinates (dom/sym_p*_nofix.dzn;
 # the two Hamming files are dom/sym_p7_w2.dzn with nF = 0): is there a nonzero codeword of weight at
@@ -24,3 +24,7 @@ colour_unsat       test:colour_unsat.fzn                     3  UNSAT  -    smal
 php_escape_sat     test:php_escape_sat.fzn                   3  SAT    yes  small
 restart_queens6    test:restart_queens6.fzn                  3  SAT    -    small
 qr48_w4            mzn:@CODES/dom/sym_p47_w4_nofix.dzn       3  UNSAT  -    big
+# M15-symmetry-T3 (D-0181): codes-cp's qr48orb_w8 (UNSAT) and qr48orb_w12 (SAT), the 17 296 words of
+# weight 12 of QR48 as the checks, no fixed coordinate; the w12 file is the w8 one with Wmax = 12.
+qr48_w8            mzn:@CODES/dom/sym_p47_w8_nofix.dzn       3  UNSAT  -    huge
+qr48_w12           mzn:@CODES/dom/sym_p47_w8_nofix.dzn:Wmax=12  3  SAT  -    huge

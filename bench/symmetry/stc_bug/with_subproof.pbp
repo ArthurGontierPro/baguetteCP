@@ -1,0 +1,20 @@
+pseudo-Boolean proof version 3.0
+% M15-symmetry-T3, D-0181. The workaround: false_unsat.pbp with an explicit (empty) subproof on
+% each `red`. The constraint then goes to the core (the subproof path honours
+% is_strengthening_to_core), and the second `red` is refused at its `qed` (line 15),
+% "Proofgoal 4 could not be autoproven", 4 being the first red's constraint.
+%
+%
+%
+%
+f 2 ;
+strengthening_to_core on ;
+red +1 x1 +1 ~x2 >= 1 : x1 -> x2 x2 -> x1 : subproof
+qed ;
+red +1 ~x1 +1 x2 >= 1 : x1 -> x2 x2 -> x1 : subproof
+qed ;
+rup +1 ~x1 >= 1 ;
+rup >= 1 ;
+output NONE ;
+conclusion UNSAT : -1 ;
+end pseudo-Boolean proof ;

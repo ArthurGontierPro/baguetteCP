@@ -1,0 +1,18 @@
+pseudo-Boolean proof version 3.0
+% M15-symmetry-T3, D-0181. `veripb two.opb false_unsat.pbp` prints `s VERIFIED UNSATISFIABLE` on
+% VeriPB 3.0.2 (d5644ca4 and 78db9573), although two.opb is satisfiable.
+% The two `red` lines are each sound ALONE (x1 >= x2, then x2 >= x1, both with the swap), not
+% together. In strengthening-to-core mode a `red` without an explicit subproof adds its constraint
+% to the DERIVED set (RedStrengtheningRule keeps the default add_constraints_to_core = false,
+% veripb-checker src/rules.rs:107; DomStrengtheningRule overrides it), and red's goals skip the
+% derived set in that mode (red_strengthening.rs: add_derived_goals = !is_strengthening_to_core).
+% So the second line is checked against neither the first nor anything else.
+f 2 ;
+strengthening_to_core on ;
+red +1 x1 +1 ~x2 >= 1 : x1 -> x2 x2 -> x1 ;
+red +1 ~x1 +1 x2 >= 1 : x1 -> x2 x2 -> x1 ;
+rup +1 ~x1 >= 1 ;
+rup >= 1 ;
+output NONE ;
+conclusion UNSAT : -1 ;
+end pseudo-Boolean proof ;
