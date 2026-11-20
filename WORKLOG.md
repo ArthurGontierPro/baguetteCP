@@ -25,6 +25,7 @@ of it to every session and stopping at a broken line before it even reached the 
 | merge of M7-T33 and D-0161 request 1 (D-0167 item 1) | merges `wave53-alldiff` then `wave54-snap` on branch `wave55-merge`; `bench/diff/corpus.tsv` (lot-sizing's budget), `bench/diff/reference*` (re-record) | agent-merge (`wave55-merge`) | 2026-11-20 |
 | M7-T34 (`member` without width-proportional rows) | on `wave53-member`'s files: `lib/core/prop/member.ml`, `lib/flatzinc/compile.ml` (member dispatch), `mznlib/`, `test/models/member_*`, `test/unit/test_prop.ml` (member section) | agent-member2 (`wave55-member`) | 2026-11-20 |
 | M11-complexity-T13 (drop a forced explanation once written) | `lib/core/explanation.ml` (the `thunk` record gains fields, D-0167 item 6), `lib/core/justify.ml`, `lib/core/pb_analysis.ml` (`cited_ids` only), `test/unit/test_justify.ml`, `docs/ARCHITECTURE.md` §4 | agent-thunk (`wave55-thunk`) | 2026-11-20 |
+| M11-complexity-T14 (per node against Gecode) | `lib/core/prop/pb.ml`, `lib/core/engine.ml`, `lib/core/store.ml`, `lib/core/prop/clause.ml`, their unit tests; `bench/` additions | agent-pernode2 (`wave55-pernode`) | 2026-11-20 |
 
 ## Cross-session requests
 
