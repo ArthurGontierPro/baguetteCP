@@ -21626,3 +21626,199 @@ atoms, interior atoms as indicators, one flag, one resolvent, copies, weakening 
 against baguette's own clauses, saturation. A `rup` pin is load-bearing only where a control shows it
 (D-0066), and element's 186 rest on unit propagation: the two element controls are the evidence that
 a stronger element row is refused, and nothing broader.
+
+## D-0182  M14-e2e-verification-T8: objectives in the end-to-end chain, and the first measurement of `cake_pb_cp` on baguette's search proofs (Challenge)
+
+Status: DONE (tooling, a lane and a measurement, no solver code)
+Date: 2026-11-20
+Task: M14-e2e-verification-T8 (agent-e2e8, `wave55-e2e8`)
+Touches: `tools/e2e/fzn2scp.py`, `tools/e2e/bridge.py`, `tools/e2e/chain.sh`, `tools/e2e/mutate.py`,
+`tools/e2e/scpsem.py`, `tools/e2e/fzn_solutions.py`, `tools/e2e/validate.py`, new `tools/e2e/measure.sh` and
+`tools/e2e/prefix.sh`, new `bench/e2e_spike/series.sh` and `summarise.py`, `scripts/e2e_lane.sh`,
+`scripts/README.md` §9. Runs: `fataepyc-06:/scratch/arthur/wave55-e2e8-runs/` (`lane6/`, `series3/`, `screen/`,
+`fzn/`); tables, logs and the flattened instances copied to `/cluster/arthur/baguette-results/wave55-e2e8/`.
+
+### 1. Objectives: what cake writes, what baguette writes, and the bridge
+
+cake_pb_cp's `.scp` takes `(prob_type (minimize X))` or `(maximize X)` (`cp_parseScript.sml`,
+`sexp_prob_type`), X a variable name. It writes `min: B_X` for minimize and `min: -B_X` for maximize, over
+X's two's-complement bits with no constant (measured). baguette writes `min: k*S_x + k*l` over x's ladder
+(`compile.ml`, M5-T1: the objective variable's own order encoding with its constant, k = 1 or -1). Both
+are the same function of x, so every objective value VeriPB computes, every `soli` bound and the numbers of
+`conclusion BOUNDS` agree, and nothing in baguette's proof needs renumbering. The translator maps `solve
+minimize|maximize x` to the prob_type, x resolved through aliases (a constant objective is refused,
+since cake's prob_type names a variable).
+
+What differs is the constraint each `soli` adds. Checked against cake's `.opb`, VeriPB adds `k*B <= v - 1`
+over cake's bits, where baguette's later lines (rup steps, the bits arm's `pol @soli @B1`, the
+lower-bound hint of the conclusion) expect `k*S + k*l <= v - 1` over its ladder. The bridge renames
+each `@cK soli ...` to `@O[cK] soli ...` and derives `@cK` from it by the substitution every model
+row already gets: `@cK pol @O[cK] @E1 k * +` for minimize, `@E2` for maximize (B >= l + S, resp. B <= l + S).
+The bridge checks first that cake's objective is exactly one variable's bit sum times k and that
+baguette's is k times the same variable's ladder with constant k*l, and refuses otherwise.
+
+**cake's verdict.** For minimize it prints `s VERIFIED BOUNDS v <= OBJ <= v` with v in the model's
+numbers, for maximize the same in the model's numbers (cake converts back; baguette's `conclusion
+BOUNDS` is in negated numbers, so the chain negates), and a negative number SML-style (`~6`). An
+infeasible optimisation problem prints `s VERIFIED BOUNDS -INF <= OBJ <= +INF` for both directions. That
+print is cake's `OBounds NONE NONE`, and under `cp_sem_concl` (`cpScript.sml`) the bound that is NONE on
+the side the direction makes universal (`cp_is_lb` for Minimize, `cp_is_ub` for Maximize) means
+`cp_unsatisfiable`. So that line is cake's UNSAT for an objective, and the chain requires it when
+baguette says `=====UNSATISFIABLE=====`. Measured on both directions (`opt_unsat` and a maximize copy).
+A partial conclusion prints the missing side as INF (`BOUNDS 2 : id INF` gives `2 <= OBJ <= +INF`), so
+`OPT=v` is accepted only on the exact two-sided line.
+
+### 2. The lane
+
+Binary md5 `4e41e8c1` (dev, the lane's default; solver code unchanged by this task), veripb 3.0.2
+`d5644ca4`, `cake_pb_cp` sha256 `ca92491e`. `make e2e`, last run `lane6` on `99b3c98`:
+
+| | before (D-0180) | after |
+|---|---|---|
+| VERIFIED | 179 (100 SAT, 79 UNSAT) | **188** (100 SAT, 80 UNSAT, **8 OPT**) |
+| SKIPPED | 28 | 19 |
+| FAIL | 0 | 0 |
+| controls | 23 of 23 | **31 of 31** |
+| validation | 178 AGREE, 1 UNCHECKED | 187 AGREE, 1 UNCHECKED, 0 DIFFER |
+
+The nine new: `opt_min_sat` (OPT=2), `opt_max_sat` (5), `opt_floor_sat` (0), `opt_ne_sat` (0),
+`opt_global_settles_hole_sat` (0), `bits_opt_min_sat` (6), `bits_maxmin_opt_sat` (7),
+`restart_queens6_opt` (2) and `opt_unsat` (UNSAT). The one optimisation model still skipped is
+`regular_opt` (`baguette_regular`, T6). Skipped now: `baguette_regular` 4 (one with an objective),
+`var int` with no domain 4, `int_times` 3, `int_div` 3, `baguette_cumulative` 3, `int_abs` 2.
+
+**Eight new controls, a wrong claimed optimum**, every one refused at the conclusion line with the
+checker's whole sentence:
+
+| control | models | refused by, wording |
+|---|---|---|
+| `opt-better`: baguette's `conclusion BOUNDS` one better than its optimum | `opt_min_sat`, `opt_max_sat` | veripb: "Unable to verify 'conclusion BOUNDS'. The claimed upper bound of N mismatches the best recorded upper bound of N+1." |
+| `opt-worse`: one worse | `opt_min_sat`, `restart_queens6_opt` | veripb: "The lower bound claimed for \`conclusion BOUNDS\` is larger than the best logged objective value." |
+| `core-better`: the ELABORATED core's conclusion one better, after veripb accepted | `opt_min_sat`, `restart_queens6_opt` | cake_pb_cp: "conclusion BOUNDS check failed: [lb <= dbound] T [upper bound check] F [lower bound check] T" |
+| `core-worse`: the core's one worse | `opt_max_sat`, `bits_maxmin_opt_sat` | cake_pb_cp: "... [lb <= dbound] F [upper bound check] T ..." |
+
+The `core-*` pair is the one that matters for the trust argument: veripb is an untrusted elaborator in
+this chain, and these show the verified checker itself refusing a wrong optimum. A wrong optimum is a
+false claim on every model, so no control here can be vacuous (D-0053 is about `red`/`rup` over a
+contradictory database, not about conclusions).
+
+**Validation of the objective.** The references enumerate the model as `solve satisfy` (`-a` on an
+optimisation model would print only the improving solutions), and `validate.py` then requires the
+.scp's prob_type to name the same direction and variable as the .fzn's solve item, and baguette's last
+solution to reach the optimum of the solution set under it. All nine AGREE with their `opt=`. Teeth:
+the direction swapped in the .scp gives DIFFER on `opt_min_sat` and `bits_opt_min_sat`, the variable
+swapped gives DIFFER on `bits_opt_min_sat`. The solution set alone could not see either.
+
+### 3. The Challenge measurement: which instances
+
+Every instance of the sixteen editions that baguette completed (OPT, UNSAT, or SAT of a satisfaction
+problem) in at most 300 s in wave43 (`baguette-results/wave43run/<YEAR>/results.tsv`, 1 200 s budget):
+**201**. Re-flattened with this clone's `tools/baguette.msc` (`pair.tsv`'s model and data, 300 s): 200
+flatten (`2024_monitor-placement-1id_hop_counting_based_caida_139203` timed out). The translator covers
+**166** of them. The other 34: `int_times` 19, `baguette_cumulative` 6, `baguette_regular` 5, `int_abs` 4,
+all T6.
+
+Each through `tools/e2e/measure.sh`: translate, encode (`cake_pb_cp`), solve (release binary md5
+`53d5f37a`, `--proof`, 300 s, `ulimit -v 4000000`), `veripb` alone on baguette's own files (the
+baseline), bridge, `veripb --elaborate` on cake's `.opb` and the bridged proof, `cake_pb_cp` on the core,
+each stage timed with peak RSS (`/usr/bin/time`), under `systemd-run --user --scope -p MemoryMax=32G`,
+7200 s per checking stage, at most 8 at a time (`bench/e2e_spike/series.sh`, `series3`). `cake_pb_cp`
+ran with `--CML_HEAP_SIZE=24576` (24 GB; its default 4 GB is the CakeML default, D-0176), and its RSS
+column is what it touched of that heap.
+
+Release binary md5 `53d5f37a` (`make release` of `843a13b`'s solver code), veripb 3.0.2 `d5644ca4`,
+`cake_pb_cp` sha256 `ca92491e`, tools at `99b3c98`. Load average 40 to 70 on the shared node.
+
+### 4. The Challenge measurement: results
+
+**Not complete when this record was written.** The series (`series3`) runs cheapest first (wave43's proof
+size), and at 15:01 UTC **100 of the 166** had finished; the 66 left are the largest proofs. It keeps
+running detached (`series3/series.pid`), and its `results.tsv` is the table of record; `summarise.py`
+reads it. The numbers below are those 100.
+
+| verdict | instances |
+|---|---|
+| VERIFIED by `cake_pb_cp` | **96** (64 OPT, 25 SAT, 7 UNSAT) |
+| `cake_pb_cp` heap exhausted at 24 GB ("CakeML heap space exhausted.") | 4: `2016_zephyrus_12__8__6__3`, `2019_zephyrus_12__8__6__3`, `2019_zephyrus_12__6__6__3`, `2015_gfd-schedule_n120f5d50m50k20` |
+| refused (veripb or cake disagreeing) | **0** |
+
+On the four, `veripb --elaborate` accepted (`s VERIFIED`), and cake ran out of its heap on cores of 0.4 to
+3.3 GB. That is a resource limit, not a refusal: a larger heap would need more than the 32 GB the node's
+rule allows a run, so it was not tried. Every baguette answer that reached a verdict was certified,
+optimum included.
+
+**Cost, over the 96 VERIFIED** (`veripb` alone on baguette's own files against `veripb --elaborate` +
+`cake_pb_cp` on the bridged proof):
+
+| | all 96 | the 51 where `veripb` alone takes >= 1 s |
+|---|---|---|
+| `veripb` alone | 283.5 s | 272.6 s |
+| `veripb --elaborate` | 5 441 s | 5 357 s |
+| `cake_pb_cp` | 1 495 s | 1 309 s |
+| ratio, in total | x24.5 | x24.5 |
+| ratio per instance, median | **x12.7** | **x8.5** |
+| ratio per instance, min / max | x2.0 / x428 | x3.1 / x428 |
+
+10 instances under x5, 52 from x5 to x20, 30 from x20 to x100, 4 above. `cake_pb_cp` takes a median 1.8
+times `veripb --elaborate`'s time. Peak RSS: solve 0.41 GB, `veripb` alone 1.08 GB, the bridge 6.3 GB
+(`2013_l2p_l2p12`), `veripb --elaborate` 3.0 GB (`2013_black-hole_6`), `cake_pb_cp` 24.0 GB, which is
+its whole heap. Proofs: baguette's 1.58 GB in all, bridged 3.76 GB, cores 6.10 GB (largest 0.54 GB); the
+bridged proof is a median 2.85 times baguette's.
+
+**Where the cost is: the prefix, not the search.** `tools/e2e/prefix.sh` checks the bridge's prefix
+alone (baguette's `.opb` re-derived from cake's, then `conclusion NONE`). On the worst ratio,
+`2011_black-hole_17` (UNSAT, 154 variables, widths up to 415, 102 `element`), the whole chain took 1 607
+s of elaboration and 58 s of cake; **the prefix alone takes 1 606 s and 54 s**. Its 60 MB hold 137 724
+substituted cake rows and **93 043 `rup` pins** (element's direct-encoding clauses, which close by
+unit propagation over cake's `eq` atoms, D-0180 §7), against 35 MB of search proof that costs next to
+nothing on top. On `2026_saeling` (x175) likewise, 10.6 + 5.1 s for the prefix against 10.5 + 5.3 s
+for the whole. So a search proof does not make the chain expensive; baguette's own encoding re-derived
+from cake's does, and that is T3's work (the solver writing the prefix from what it knows, `ia` instead
+of `rup` for the derived clauses) and T7's (bits, where widths are large).
+
+**The bridge itself** took 3 459 s in all, worst 1 272 s (`2015_p1f_13`, 294 385 `.opb` rows; its matcher
+is Python and close to quadratic in a model's rows over one variable). It is untrusted and replaceable,
+and T3 removes it; it is reported apart and not in the ratio. The encoder took 55 s in all.
+
+A selection, by `veripb` alone:
+
+| instance | answer | solve s | veripb s | bridge s | elaborate s | cake s | cake GB |
+|---|---|---|---|---|---|---|---|
+| `2013_l2p_l2p12` | OPT=5 | 3.4 | 35.3 | 357 | 83.3 | 98.8 | 24.0 |
+| `2026_filters_ar_4_2` | OPT=18 | 7.2 | 21.1 | 2.1 | 35.2 | 41.2 | 24.0 |
+| `2024_word-equations_..._140-int` | OPT=3 | 3.7 | 20.1 | 423 | 841 | 42.4 | 24.0 |
+| `2015_p1f_13` | UNSAT | 13.6 | 12.2 | 1 272 | 129 | 58.4 | 24.0 |
+| `2013_black-hole_6` | UNSAT | 2.2 | 4.5 | 68.9 | 1 619 | 58.8 | 24.0 |
+| `2023_kidney-exchange_3_20_0.15_3` | OPT=815 | 2.6 | 4.2 | 22.4 | 10.6 | 10.9 | 6.6 |
+| `2015_gfd-schedule_n30f3d30m7k4` | OPT=1 | 0.8 | 1.4 | 39.2 | 17.7 | 187 | 24.0 |
+
+### 5. Findings: four bridge bugs, each found as a refusal on the Challenge
+
+Every refusal was traced to the bridge (untrusted), none to the translator or to a disagreement:
+
+1. **A selector defined from its first row only** (`2014_amaze`, `2011_fillomino_*`, `2025_hitori`). `int_eq_reif(x, y, b)`'s
+   first `_neN` row, guarded by b, is also implied, by weakening, by the `lt`/`gt` flag of ANOTHER
+   constraint over x and y; defining `_neN` as that flag left the second row underivable ("not implied
+   by reverse unit propagation" at its pin). A selector is now defined against all its rows, trying every
+   flag its first row proposes, then the constants.
+2. **A selector with no flag** (`int_eq_reif(x, u, b)` with u x's upper bound, `2016_java-auto-gen`,
+   `2015_gfd-schedule`): baguette's `x > u` half is impossible and cake writes no flag for it. `_neN := 0`
+   by a `red` unit, and a row `c * ~s >= d` (c >= d) is pinned by `ia` against `pol @D0 c *`, since
+   `~s >= 1` does not imply it syntactically ("Expected constraint is not syntactically implied").
+3. **Clause candidates were never resolved** against cake's flag clause, which (2) needs at the upper bound.
+4. **Theta(w^2) live terms in the prefix.** The halves' running rows and intermediate halves were kept;
+   at width 15 529 (`2015_gfd-schedule_n30f3d30m7k4`) `veripb --elaborate` reached 30 GB and `cake_pb_cp`
+   exhausted its heap. They are deleted once spent: 0.5 GB, and cake verifies it (187 s).
+
+Also: `measure.sh`'s first version wrote a line in several writes and parallel instances interleaved;
+one write per line now. And the bridge's matcher was made 4 to 8 times faster (indexes), which matters
+because it is the slowest stage on the largest models.
+
+### 6. What is left
+
+- The series' 66 largest instances (running; `summarise.py series3/results.tsv` when it ends).
+- `cake_pb_cp`'s heap on the zephyrus cores (2.4 to 3.3 GB): above the 32 GB per-run rule, so a user decision.
+- The prefix is the cost. T3 (the solver writes the prefix, with `ia` where the bridge uses `rup`) and T7 (bits)
+  are what would bring the chain toward the x2 of the test models. A cheaper derivation of element's
+  direct-encoding clauses than 93 043 `rup` lines would help black-hole now.
+- T6's families: 34 of the 201 instances (`int_times` 19, `cumulative` 6, `regular` 5, `int_abs` 4).
