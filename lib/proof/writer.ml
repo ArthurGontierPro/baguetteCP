@@ -736,7 +736,26 @@ let fresh t ~origin = fresh_lazy t ~origin:(fun () -> origin)
    contains 3 constraints, but the rule expected that there are 2"), measured. What
    used to be silent was the *consequence* of miscounting inside [Encoding] -- a `pol`
    citing a shifted id. That is gone too: citations are labels. *)
-let header t ~n_model_constraints =
+(* M14-e2e-verification-T3 (D-0187). Under `--e2e` the proof is checked against the .opb
+   cake_pb_cp wrote, whose row count baguette does not know: the `f` line is left out
+   (veripb 3.0.2 accepts that and elaborates the right count), and the prefix
+   [Encoding] wrote while the .opb was built ([e2e_prefix], a file) is copied in its place.
+   Every `soli` is then relabelled @O[c<id>] and @c<id> derived from it by the line
+   [e2e_soli] returns. [None] for both is every byte as before. *)
+let e2e_soli : (int -> string) option ref = ref None
+
+let copy_file t path =
+  let ic = open_in_bin path in
+  let buf = Bytes.create 65536 in
+  let rec go () =
+    let n = input ic buf 0 65536 in
+    if n > 0 then (
+      output t.oc buf 0 n;
+      go ())
+  in
+  Fun.protect ~finally:(fun () -> close_in ic) go
+
+let header ?e2e_prefix t ~n_model_constraints =
   (* M9-no-proof-T2: the null writer writes no preamble, but the counter still starts
      where the `f` rule would have put it, so the direct-encoding ids
      [Encoding.start_proof] mints next are the proved run's (D-0126's id rule). *)
@@ -754,7 +773,9 @@ let header t ~n_model_constraints =
            M1-T26 mutation gate; a normal run cannot produce this line."
           (Mutation.describe m)
     | None -> ());
-    rule t (Printf.sprintf "f %d" n_model_constraints));
+    match e2e_prefix with
+    | None -> rule t (Printf.sprintf "f %d" n_model_constraints)
+    | Some path -> copy_file t path);
   (* The f rule makes the model constraints ids 1..n. *)
   t.next_id <- n_model_constraints;
   t.n_model <- n_model_constraints;
@@ -1591,11 +1612,17 @@ let improving t ~origin lits =
     let id = t.next_id + 1 in
     (* "@c<id> soli <lits> ;" (D-0145, W6). *)
     let b = line_buf t in
-    add_label b id;
+    (match !e2e_soli with
+    | None -> add_label b id
+    | Some _ ->
+        Buffer.add_string b "@O[c";
+        Lit.add_int b id;
+        Buffer.add_string b "] ");
     Buffer.add_string b "soli ";
     add_lits b lits;
     Buffer.add_string b " ;";
     put_line t;
+    Option.iter (fun f -> line t "%s" (f id)) !e2e_soli;
     let id = fresh t ~origin in
     forget t id;
     if t.audit then

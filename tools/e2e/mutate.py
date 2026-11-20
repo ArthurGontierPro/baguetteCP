@@ -25,6 +25,15 @@ place and prints what it changed, for the lane to check the refusal against.
                                 optimum D away from the one found (in the PB objective's
                                 numbers, which are minimised: D < 0 claims a better one);
                                 prints the new `LB UB`
+  mutate.py pin FILE.opb FILE.pbp
+                                (T3, D-0187) the row `opb` would pick in baguette's .opb, but
+                                corrupted where the SOLVER-WRITTEN prefix states it: that
+                                row's pin line in the --e2e proof (`@cK ia ROW : ..` or
+                                `@cK rup ROW`) gets its degree + 1, so the prefix claims more
+                                than cake's file implies; the .opb is not touched; prints @cK
+  mutate.py sel FILE.pbp        (T3, D-0187) a WRONG DEFINITION of a disequality selector:
+                                the first `@D1[...]` red line, `~s + F >= 1 : s -> F`, gets
+                                the witness `s -> ~F`; prints its label
 Exit 1 when there is nothing to mutate.
 """
 import re
@@ -50,6 +59,30 @@ def main(kind, path, *rest):
         else:
             return 1
         text = "\n".join(lines) + "\n"
+    elif kind == "pin":
+        what = None
+        for l in text.splitlines():
+            if re.fullmatch(r"(@\S+ (?:[+-]\d+ \S+ ){3,})>= (-?\d+) ;", l):
+                what = l.split()[0]
+                break
+        if what is None:
+            return 1
+        path = rest[0]
+        lines = open(path).read().splitlines()
+        for i, l in enumerate(lines):
+            m = re.fullmatch(re.escape(what) + r" (ia|rup) ((?:[+-]\d+ \S+ )+)>= (-?\d+)( : \S+)? ;", l)
+            if m:
+                lines[i] = f"{what} {m.group(1)} {m.group(2)}>= {int(m.group(3)) + 1}{m.group(4) or ''} ;"
+                break
+        else:
+            return 1
+        text = "\n".join(lines) + "\n"
+    elif kind == "sel":
+        m = re.search(r"^(@D1\[[^\]]*\]) red .* -> (~?)(\S+) ;$", text, re.M)
+        if not m:
+            return 1
+        text = text[:m.start(2)] + ("" if m.group(2) else "~") + text[m.end(2):]
+        what = m.group(1)
     elif kind == "reif":
         lines = text.splitlines()
         for i, l in enumerate(lines):

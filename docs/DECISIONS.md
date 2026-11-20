@@ -22826,3 +22826,182 @@ because it is the slowest stage on the largest models.
   are what would bring the chain toward the x2 of the test models. A cheaper derivation of element's
   direct-encoding clauses than 93 043 `rup` lines would help black-hole now.
 - T6's families: 34 of the 201 instances (`int_times` 19, `cumulative` 6, `regular` 5, `int_abs` 4).
+
+## D-0187  [AUTONOME] M14-e2e-verification-T3: baguette writes the end-to-end prefix itself under `--e2e`, off by default, against a second naming contract pinned to `cake_pb_cp` `ca92491e`
+
+Status: DONE. DECIDED in autonomous mode on 2026-11-20 before the work that depended on it (commit
+`6766838`); section 6 is the result.
+Date: 2026-11-20
+Task: M14-e2e-verification-T3 (agent-e2e3, `wave55-e2e3`)
+Touches: this record, `docs/PROOF-FORMAT.md` §3 (a second contract), a new `lib/proof/e2e.ml`,
+`lib/proof/encoding.ml` (additive), `lib/flatzinc/compile.ml` (each row tagged with the FlatZinc
+constraint it comes from), `bin/main.ml` (the flag), `tools/e2e/`, `scripts/e2e_lane.sh`.
+
+### 1. Context
+
+The user marked T3 "**User decision**: a second naming contract, and whether `--e2e` becomes a
+default". The user is away (CLAUDE.md, "Mode autonome"), so this record decides and says why.
+
+What D-0182 measured on the first 100 Challenge instances of the series (96 certified by `cake_pb_cp`):
+
+- the chain costs a median ×12.7 of `veripb` alone, and the cost is the prefix that re-derives
+  baguette's `.opb` from cake's. On `2011_black-hole_17` the prefix alone takes 1 606 s of the
+  1 607 s of elaboration, with 93 043 `rup` pins;
+- the external bridge (`tools/e2e/bridge.py`) is the slowest stage on the largest models. It takes
+  3 459 s in all, and 2 408 s on `2015_gfd-schedule_n120f5d50m50k20`, 1 535 s on
+  `2019_zephyrus_14__6__6__3`, 1 272 s on `2015_p1f_13`, 423 s on `word-equations_..._140-int` and
+  382 s on `2023_sudoku_fixed_sudoku_p48` (whose `veripb --elaborate` takes 3.1 s). It is a
+  matcher. It rediscovers from two files where each of baguette's rows comes from, and that search
+  is close to quadratic in the rows over one variable.
+
+Found while deciding, measured on `alldiff_const_sat` with veripb 3.0.2 `d5644ca4`. A proof whose
+`f N` line is `f 0` or `f 99` is refused ("Checking error at ...:2"), and a proof with NO `f` line is
+`s VERIFIED`, its elaborated core carrying the right `f 11;`. So baguette does not need to know how
+many rows cake writes. The contract only has to cover the rows baguette cites, by label and content.
+
+### 2. The options
+
+| | what | gains | costs |
+|---|---|---|---|
+| (a) T3 as designed | under `--e2e`, baguette writes the prefix (atoms, the two halves of B = l + S, the ladder, each cake row's substitution, each pin) from what it knows of each row's origin, and from a replica of the rows cake writes for the covered keywords | the bridge stage disappears: the prefix is written in time linear in the rows, with no matching; a row's candidates are those of its own constraint, so no search; each family's derivation can be chosen where the knowledge is (`ia`/`pol` where the bridge needs `rup`) | a second normative contract (PROOF-FORMAT §3) that must follow cake's encoder; OCaml code in `lib/proof/` and three small hooks |
+| (b) keep the external bridge and make it faster | index the matcher by constraint (cake's labels carry the `.scp` name), port it to a compiled language | no contract inside baguette, nothing in `lib/` | the bridge still recovers what baguette knows; a cheaper prefix needs the same per-family derivations, written in a second place that must guess the origin first |
+| (c) defer | nothing | nothing | the slowest stage stays; T6 and T7 build on an external tool |
+
+### 3. The choice
+
+**(a), with `--e2e` OFF by default.** Every default byte stays as it is (the gate compares the 207
+models' four artefacts with main's). Whether `--e2e` ever becomes a default is left to the user.
+
+Why:
+
+1. **A stale contract is refused, it is never certified.** The proof is checked against the `.opb`
+   that the verified encoder wrote, which baguette never reads. If cake's encoder changes a label, a
+   coefficient or a big-M, a line of baguette's prefix fails ("not implied", or an unknown label), and
+   the chain says FAIL. The contract costs availability when cake moves, and nothing in soundness.
+2. **It is reversible.** A flag, one new module, and hooks that do nothing unless the flag is on.
+3. **The knowledge belongs where the rows are made.** compile.ml knows which FlatZinc constraint
+   posted each row and in which role. The bridge spends up to 2 408 s recovering that from text.
+   Option (b) would have to keep recovering it.
+
+The contract is pinned to `cake_pb_cp` sha256 `ca92491e` (CakePB `438b8f83`, built from CakeML
+`14856fcf`), and transcribed from that commit's HOL4 sources (`cp_encScript.sml`,
+`cp_to_ilpScript.sml`, `ilpScript.sml`, `ilp_to_pbScript.sml`, `cp_to_ilp_linearScript.sml`,
+`cp_to_ilp_primScript.sml`, `cp_to_ilp_countingScript.sml`, `int_bitwiseExtraScript.sml`), not
+guessed from its output. The translator's names are part of it too (`tools/e2e/fzn2scp.py`): the k-th
+FlatZinc constraint is `.scp` constraint `c<k>`, and a variable is its FlatZinc name with every
+character outside `[A-Za-z0-9_]` replaced by `_`.
+
+**Scope of this task.** The families of T2 first (`int_lin_le`, `int_lin_eq`, `int_lin_ne`, `int_le`,
+`int_lt`, `int_eq`, `int_ne`, `all_different_int`), then T4's Boolean and reified ones, then T5's as
+time allows. Under `--e2e`, a builtin outside the covered set, a variable on the bits arm (T7) or
+any other shape the contract does not cover makes baguette refuse `--e2e` with a message naming it,
+before any search. The external bridge stays the lane's path for everything else.
+
+### 4. How to revert
+
+Revert the commits prefixed `M14-e2e-verification-T3:` on branch `wave55-e2e3` (or their merge).
+Nothing else depends on them. The external bridge and `make e2e`'s existing path are not changed by
+this task, so reverting leaves the lane exactly as D-0182 left it.
+
+### 5. What this does not decide
+
+Whether `--e2e` becomes a default, and whether the bridge is retired. Both stay the user's.
+
+### 6. Result
+
+**What was built.** `baguette M.fzn --proof P --e2e` (`lib/proof/e2e.ml`, about 900 lines with its
+header, and four hooks that do nothing without the flag: `Encoding` reports each declaration and each
+committed row, `Compile` names the FlatZinc constraint it is posting and the cake constraint the
+translator writes for it, `Writer` leaves out `f` and relabels `soli`, `bin/main.ml` takes the flag).
+The prefix is written to a side file while the `.opb` is built and copied after the header. A row is
+pinned against the candidates of ITS OWN constraint only (cake's rows substituted, atoms replaced,
+flag-clause resolvents), so nothing is searched across the model. Two departures from the bridge,
+both found while building:
+
+- cake's ge atoms are replaced through clauses derived by ONE `pol` each from the atom's own
+  definition row and the `@A1`/`@A2` of the same value (`[r] + A2`, `[f] + A1`, saturated); the
+  bridge derived them by `rup`. eq atoms keep a `rup`, local once the two ge clauses exist;
+- a set domain with holes is covered (cake's `@c[d<k>][al1]`, interior eq atoms), which the
+  Challenge needs: 4 of the first 16 instances tried were refused for it before.
+
+Covered: T2 (`int_lin_le/eq/ne`, `int_le/lt/eq/ne`, `all_different_int`), T4 (`bool_clause`,
+`array_bool_or/and`, `bool_eq/not`, `bool2int`, `int_le/eq/ne_reif`, `int_lin_le_reif`), set
+domains with holes, objectives. Refused before the search, exit 3, with the construct's name: T5's
+globals (element, global_cardinality, maxmin, member, inverse), T6's, a bits-arm variable.
+
+**The lane** (`make e2e`, binary md5 `911a5750` = `b8958e5`, veripb 3.0.2 `d5644ca4`, `cake_pb_cp`
+`ca92491e`, run `lane2`):
+
+| pass | result |
+|---|---|
+| 1, bridged (unchanged) | 188 of 207 VERIFIED (100 SAT, 80 UNSAT, 8 OPT), 19 SKIPPED, 0 FAIL |
+| **1b, written by the solver** | **117 VERIFIED**, 71 outside `--e2e` (global_cardinality 33, element 18, maxmin 10, member 7, inverse 3), 19 outside the translator, **0 FAIL, 0 disagreeing** with pass 1 |
+| 2, controls | 31 of 31 |
+| **2b, solver controls** | **22 of 22** refused at the expected line, in the checker's sentence |
+| 3, validation | 187 AGREE, 1 UNCHECKED, 0 DIFFER |
+
+The 22: `pin-stronger` (the solver's own pin of a model row, degree + 1) on `chain_sat`, `php_unsat`,
+`bool_or_sat`, `bool_and_sat`, `reif_lin_le_sat`, each refused at that `ia` with "Expected constraint
+is not syntactically implied by the constraint at the hint."; `sel-witness` (a selector defined as
+the NEGATION of cake's flag, `@D1`'s witness `s -> ~F`) on `alldiff_const_sat`, `ne_sat`,
+`reif_ne_entail_sat` (a reified one), "Proofgoal #1 could not be autoproven."; and on the solver's
+proof the bridge's `scp-weaker` (2), `scp-stronger` (2), the atom witness (2) and the wrong optimum
+(8, four of them refused by `cake_pb_cp` itself). `sel-witness` is rightly NOT refused on
+`reif_eq_refute_sat`, where the model fixes the flag at the root, so the wrong witness is a valid
+one there (measured VERIFIED, D-0180's lesson again). A `pin-stronger` refused at an `ia` shows the
+pin does not accept a stronger row; it does not show that no derivation of it exists.
+
+**The Challenge** (instances of D-0182 that `--e2e` covers, release binary `409bec90` for the first
+series and `c35a6c52` for the second, same prefix lines as `b8958e5`; bridged numbers from D-0182's
+`series3`; load average near 70). Prefix = the solver's head of the proof alone, then `conclusion
+NONE`, elaborated and checked; "bridge prefix" = `tools/e2e/prefix.sh` on the same files.
+
+| instance | answer | bridge s removed | prefix MB, solver / bridge | prefix elab + cake s, solver / bridge | whole chain elab + cake s, solver / bridged | solve s, plain / `--e2e` |
+|---|---|---|---|---|---|---|
+| `2023_sudoku_fixed_sudoku_p48` | SAT | 381.9 | 10.5 / 10.4 | 2.1 + 2.9 / 3.1 + 2.7 | 2.1 + 3.1 / 3.1 + 3.2 | 0.17 / 2.06 |
+| `2024_word-equations_..._140-int` | OPT=3 | 422.9 | 102.5 / - | 133.1 + 25.6 / - | 961.6 + 50.4 / 840.6 + 42.4 | 4.17 / 12.97 |
+| `2015_gfd-schedule_n30f3d30m7k4` | OPT=1 | 39.0 | 46.8 / - | 8.0 + 189.7 / - | 19.1 + 169.1 / 17.8 + 167.6 | 0.89 / 3.29 |
+| `2011_fillomino_15` | SAT | 31.5 | 8.2 / 8.3 | 0.7 + 1.9 / 0.7 + 1.9 | 10.9 + 6.3 / 10.9 + 6.6 | 0.80 / 1.60 |
+| `2014_fillomino_5x5_6` | SAT | 30.0 | 8.6 / 8.6 | 0.8 + 1.9 / 0.7 + 1.9 | 47.8 + 17.6 / 46.2 + 18.4 | 3.55 / 4.50 |
+| `2011_fillomino_13` | SAT | 26.0 | 7.9 / - | 0.6 + 1.8 / - | 8.0 + 5.5 / 8.0 + 4.9 | 0.69 / 1.45 |
+| `2012_solbat_sb_14_14_6_0` | SAT | 21.9 | 23.3 / 23.1 | 7.4 + 5.6 / 8.7 + 5.7 | 54.9 + 13.0 / 47.9 + 12.6 | 2.66 / 3.81 |
+| `2014_solbat_sb_13_13_5_5` | UNSAT | 17.6 | 19.0 / 18.9 | 7.1 + 4.6 / 6.1 + 4.6 | 12.4 + 5.3 / 10.1 + 5.1 | 0.60 / 1.61 |
+| `2012_solbat_sb_12_12_5_1` | SAT | 13.4 | 16.1 / 16.0 | 8.6 + 3.9 / 7.8 + 3.8 | 74.0 + 17.7 / 73.5 + 17.8 | 5.47 / 5.44 |
+| `2019_amaze_2012-07-27` | SAT | 4.0 | 6.4 / - | 0.4 + 1.3 / - | 16.0 + 14.0 / 14.9 + 12.9 | 3.03 / 3.36 |
+| `2014_stochastic-fjsp_..._det` | OPT=108 | 3.4 | 19.4 / - | 0.7 + 4.8 / - | 56.6 + 41.1 / 50.2 + 38.9 | 3.09 / 4.00 |
+| `2011_bacp_bacp-19` | OPT=28 | 2.5 | 5.9 / 6.0 | 0.6 + 1.2 / 0.5 + 1.2 | 33.3 + 29.6 / 28.7 + 26.1 | 5.95 / 6.08 |
+| `2012_amaze_2012-06-22` | OPT=928 | 2.1 | 8.4 / 8.4 | 0.5 + 4.3 / 0.5 + 4.0 | 23.3 + 70.0 / 26.9 + 68.1 | 3.63 / 3.93 |
+| `2023_speck-optimisation_easy_3` | OPT=5 | 1.5 | 3.5 / - | 0.2 + 0.8 / - | 10.2 + 16.1 / 9.1 + 14.5 | 3.32 / 3.51 |
+| `2021_neighbours_..._19` | OPT=39 | 0.5 | 1.1 / - | 0.1 + 0.3 / - | 6.6 + 8.5 / 7.1 + 8.3 | 2.08 / 2.10 |
+| `2022_nfc_24_4_2` | OPT=1836 | 0.4 | 9.0 / 9.0 | 0.3 + 3.0 / 0.4 + 3.1 | 2.8 + 18.0 / 3.1 + 17.0 | 2.09 / 2.34 |
+| `2016_nfc_12_2_10` | OPT=848 | 0.2 | 3.9 / - | 0.2 + 1.0 / - | 1.9 + 10.3 / 1.9 + 10.1 | 0.99 / 1.09 |
+| `2016_zephyrus_12__8__6__3` | OPT=1300 | 1 170.7 | 1 357.6 / - | 106.6 + heap / - | 476.6 + heap / 475.9 + heap | 6.68 (D-0182) / 151.4 |
+| `2015_gfd-schedule_n120f5d50m50k20` | OPT=1 | 2 407.8 | 517.8 / - | 394.2 + (running) / - | 469.4 + heap / 380.0 + heap | 5.13 (D-0182) / 131.1 |
+
+17 VERIFIED by `cake_pb_cp`, every verdict the bridged chain's; on zephyrus and gfd-n120 `veripb
+--elaborate` accepts and `cake_pb_cp` exhausts its 24 GB heap, as on the bridged chain (D-0182 §4),
+and on zephyrus the prefix ALONE exhausts it too. `2011_black-hole_17` (element) and `2015_p1f_13`
+(inverse) are refused by `--e2e` (T3b).
+
+What this says:
+
+1. **The bridge stage is gone**: 4 577 s of bridge on these 19 instances (2 408 s on gfd-n120,
+   1 171 s on zephyrus, 423 s on word-equations, 382 s on sudoku_p48), replaced by the solver writing
+   the prefix: +0 to +9 s on 17 of them, +125 s on gfd-n120 (518 MB) and +145 s on zephyrus (1.36 GB).
+   The writer is linear but not fast (about 10 MB/s of prefix on the two largest), a lead if those
+   models matter.
+2. **The prefix is the bridge's, in size and in check time**: within 1 % in bytes and within the
+   load's noise in time wherever both were measured. So T3 does not by itself lower the chain's x12.7
+   (D-0182). What lowers it is a cheaper derivation where the prefix is expensive, and that is a
+   per-family choice the solver can now make where it has the knowledge: the ge atoms already go by
+   `pol`; element's clauses are the measured cost (black-hole), which is T3b.
+
+**Gate.** Fresh clone of `e103144` (binary `e77f4d11`) against main `66bdaab`'s dev binary
+(`0c1ff1e5`): `make check` rc 0 (4 442 ok), 207 models x 4 artefacts equal, differential lane 324 of
+324, debug 311 of 311, scaling ok. `b8958e5` (the selector index, `e2e.ml` only, same prefix lines)
+re-gated on a fresh clone: `make check` rc 0, 207 x 4 artefacts equal (binary `911a5750`).
+
+**Left.** T3b (the globals, and element's clauses by `pol` through `@A2` instead of 93 043 `rup`),
+T7 (a bits-arm variable is refused), the writer's speed on the largest models, and the two user
+decisions of section 5. Results in `/cluster/arthur/baguette-results/wave55-e2e3/`.
+
