@@ -20057,3 +20057,99 @@ the 23 of `test_release_m11t13` and the reworded thunk counts; 198 models, peak 
 198 models x 4 artefacts equal (`out`, `rc`, `opb`, `pbp`), lane 301/301 and debug 289/289 equal
 to the reference, scaling ok, `bench/diff` untouched. Nothing to re-record. The tip after
 `a8762eb` adds documentation only.
+
+## D-0169  M11-complexity-T14: the cost per node against Gecode on the same tree (codes-cp QR48, XOR clauses); four byte-identical cuts, -12 to -16 % instructions per node without proof, and two measured proposals
+
+**Status**: **DONE** for the cuts, recorded 2026-11-20 (agent-pernode2, `wave55-pernode`). Two
+PROPOSALS (section 5) wait for the user. Files changed: `lib/core/engine.ml`, `lib/core/store.ml`,
+`lib/core/prop/pb.ml`, `lib/core/prop/clause.ml`. Measured on `fataepyc-06`, outputs and scripts under
+`/scratch/arthur/wave55-pernode-runs/` (`timeit.sh`, `quick.sh`, `prof.sh`, `tools/cats.py`), copied to
+`/cluster/arthur/baguette-results/wave55-pernode/`. The node was shared with other agents throughout:
+the load is given beside every timing, and the instruction counts (`perf stat -e instructions:u`, minus
+a 1-node run of the same binary, so parsing and set-up are out) are the robust number.
+
+### 1. The same tree
+
+codes-cp `models/minweight_chk.mzn`, `ENC=1` (each parity check a chain of XOR, flattened by MiniZinc
+2.10.1 into `bool_clause`), QR48, weight <= 8, `bool_search(x, input_order, indomain_max)`. "3 fixed" is
+`dom/sym_p47_w8_basis.dzn`, "2 fixed" `dom/sym_p47_w8_f2_basis.dzn`. Gecode 6.4.0 gets its own
+flattening (`bool_xor` native: 249 xor, 138 clauses, 2 linear, 48 `bool2int`); baguette's has 1 134
+`bool_clause`, 48 `bool2int`, 2 `int_lin_le`. Both visit 29 779 and 108 699 nodes, UNSAT, with 14 890 and
+54 350 failures. Gecode's nodes/s is its own `solveTime`; baguette's is the CPU time of the whole run.
+
+| | 3 fixed: instr/node | nodes/s | 2 fixed: instr/node | nodes/s |
+|---|---|---|---|---|
+| Gecode 6.4.0 | 28 000 | 214 000 | 26 800 | 223 000 |
+| baguette `--no-proof`, main `214e74d1` (load 8) | 1 572 000 | 3 080 | 2 268 000 | 1 860 |
+| baguette `--no-proof`, this branch `c308784d` (load 29-31) | 1 379 000 | 3 560 | 1 911 000 | 2 060 |
+| baguette with proof, main (load 8-12) | 2 935 000 | 1 760 | 3 535 000 | 1 190 |
+| baguette with proof, this branch (load 30-34) | 2 715 000 | 1 880 | 3 157 000 | 1 140 |
+
+Propagator runs per node: Gecode 57.5 and 55.2 propagations; baguette 413.4 and 613.6 runs
+(`bool_clause` 219 and `learned_clause` 177 per node on 3 fixed). So baguette makes 7 to 11 times more
+runs per node, and each costs 6 to 7 times more than one of Gecode's. The 2-fixed nodes/s with proof
+on this branch is lower than main's only because the load was three times higher: its instruction
+count is 10.7 % lower.
+
+### 2. Where a node's instructions go (main, 3 fixed, `--no-proof`)
+
+`perf record --call-graph fp` with the `baguette-fp` switch (D-0145's method), each sample assigned to the
+first matching category walking its stack (`tools/cats.py`), share of cycles times instructions per node:
+
+| item | share | instr/node | Gecode | why |
+|---|---|---|---|---|
+| per-run dispatch: `Engine.run_one`'s bracket (`Fun.protect`), counters, closures, the seed heap and the FIFO | 24 % | 380 k | the same work, done 7 times as often and more expensively | 413 runs per node, each through two or three closures; `caml_apply2` alone is 5.6 % |
+| learned-clause upkeep: their runs (`Pb.quiet` over 9 to 16 literals), the advisor asks, `sync_watched` | 24 % | 370 k | does none (no learning) | 177 runs per node, **0.00 effective** |
+| conflict analysis: 1UIP, `Analysis.dependency_levels`, the PB attempt that always falls back | 15 % | 240 k | does none | one per failure, 14 890 |
+| the wake walk (`watchers_of_new_entries`): per trail entry, every static watcher's trigger and advisor, and the sort of the woken learned clauses | 13 % | 206 k | its own, much cheaper | `List.sort_uniq` over up to hundreds of ids per entry |
+| model clause runs (`Pb.quiet`/`Pb.pass`) | 11 % | 180 k | one xor propagator per link | each XOR is 4 three-literal clauses; 219 runs per node |
+
+Under all of it: dune's dev profile compiles every module opaque, so no cross-module function is ever
+inlined (`Var.to_int`, `Domain.lo`, `Store.get` are calls, a two-argument one goes through `caml_apply2`).
+GC is 6 %, the two cardinality rows (`int_lin_le`, i.e. `Linear`) 2.8 %.
+
+**A correction to the codes-cp note** (WORKLOG, 2026-11-20): `Pb.status` and `Pb.next_free` are not the
+two cardinality rows. Those are `int_lin_le` rows, propagated by `Linear` (2.8 %). `Pb` is the code of
+every CLAUSE (`Clause.t = Pb.t`, D-0044, M2-L12), and the 13 % was the clauses' `Pb.quiet` walk. So
+D-0085/D-0087's watched slack for PB rows has nothing to act on here. The scheme that would act on the
+clauses, watched literals for `bool_clause`, removes runs, and the runs are `--stats` counters
+(`props`, the per-family table), so it is outside a byte-identical row.
+
+### 3. What was cut, every byte the same
+
+One commit each, measured on 3 fixed `--no-proof`; stdout, every `--stats` line and the `.opb`/`.pbp`
+md5 were compared with main's at every step.
+
+| commit | lever | instr/node | binary |
+|---|---|---|---|
+| `2672822` | `Store.run_as`: the run bracket as `match f x with`, no `Fun.protect` and no closure per run; no wake walk after a run that pushed nothing (nine runs in ten) | 1 572 k -> 1 478 k (-6.0 %) | `214e74d1` -> `6d275ffe` |
+| `7ed6938` | the woken learned clauses of one entry sorted in a scratch array by a non-allocating heapsort (`sort_desc_uniq`), the order `List.sort_uniq` gave | -> 1 452 k (-1.8 %) | `4537224b` |
+| `47fd373` | `Pb.status` reads the record's fields; `Pb.falsified` is its `Unsat_lit` test in one comparison, for `quiet` and the learned watches | -> 1 398 k (-3.8 %) | `7f87a297` |
+| `c052d0b` | the seed heap's sifts as top-level functions, no closure per push or pop | -> 1 378 k (-1.4 %) | `ec418e1e` |
+
+All four, on the merged tip (`c308784d`): 3 fixed `--no-proof` -12.3 %, 2 fixed -15.8 %; with proof -7.5 %
+and -10.7 %. Each rule is stated where it lives (`Store.run_as`, `sort_desc_uniq`, `Pb.status` and
+`Pb.falsified`, `heap_up`), with the argument that it computes what the old code computed. Clarity
+cost: one small heapsort in `engine.ml` and a scratch array argued like `pb.ml`'s; the rest is shorter.
+Tried and reverted: skipping the closure call for `Propagator.advise_always` by physical equality, -0.5 %,
+not worth the trick.
+
+### 4. Gate
+
+Fresh clone of `wave55-pernode` at `c531645` (which merges `origin/main` `42feb27`, the alldiff merge that
+re-recorded the lane's reference; the branch then merged `f41498a`, the thunk merge of D-0168, whose `lib/` changes
+are disjoint from these four files, after this gate): `make check` rc 0; 200 models x 4 artefacts (stdout, exit code, .opb,
+.pbp) equal to gate 71's binary `492638b9` (main's `lib/` and `bin/`); the diff lane 301/301 and the
+`--debug` lane 289/289 equal to the reference; the scaling lane ok on all five lines, its growth 6 to 9 % of
+the late cost under the baseline, so re-baselined with `--update -j 16` in its own commit (`26240af`).
+`make check` took 27 s (peak RSS 103 MB) on the node's dune cache, as gate 71's did.
+
+### 5. Proposals (the user decides)
+
+| # | proposal | measured | consequence |
+|---|---|---|---|
+| a | **Build the solver with dune's release profile** (a `dune-workspace` with `(profile release)`, and the dev profile's warning flags restated for release so the lint stays as strict) | on this branch: 3 fixed 1 379 k -> 1 149 k instr/node (-16.6 %), 2 fixed 1 911 k -> 1 581 k (-17.3 %); `--stats` and stdout identical | every cross-module call can be inlined; the cost is incremental rebuilds (a change to a module recompiles its dependents) for every session, and the build directory of every clone changes once |
+| b | **Do not propagate learned clauses when they cannot prune**: on this model under the fixed search they never do (0.00 effective runs per node, and `skipped 0`: no backjump ever happens) | `BAGUETTE_PROPAGATE_LEARNED=off` on this branch: same trees, stdout and **both proofs byte-identical**; `--no-proof` 3 fixed 1 379 k -> 862 k (-37.5 %), 2 fixed 1 911 k -> 819 k (-57.1 %); with proof -20 % and -36 % | needs a rule for WHEN (by search mode, or adaptive on the effective rate), and changes the work counters; on models with backjumps learned clauses do prune (D-0138), so it cannot be unconditional |
+
+Not proposed here, because the row forbids it and it is a separate decision: learning less (the 15 %
+of conflict analysis). (b) keeps every learned clause on the page and only stops running it.
