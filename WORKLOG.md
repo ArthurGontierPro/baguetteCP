@@ -22,6 +22,7 @@ of it to every session and stopping at a broken line before it even reached the 
 | M8-bits-encoding-T4 (two arms, `W = none` and `W = 0`, on the sixteen editions) | run directories under `/scratch/arthur/m8t4/`, `tools/compare/` (additions), `bench/challenge/README.md` (the run's row), a new D-record | agent-m8t4 (`wave55-m8t4`) | 2026-11-20 |
 | M10-search-strategy-T5, M9-no-proof-T3, M7-T30 (one Challenge series on current main: default, `-f`, default `--no-proof`) | run dirs `/scratch/arthur/m10t5/`, `tools/compare/` (additions), `bench/challenge/README.md` (the run's row); reserved record D-0185 | agent-m10t5 (`wave55-m10t5`) | 2026-11-20 |
 | M14-e2e-verification-T3b (T5's globals under `--e2e`, and element's head cost) | `lib/proof/e2e.ml`, `lib/proof/encoding.ml` (additive), `lib/flatzinc/compile.ml` (the e2e hooks only), `tools/e2e/`, `scripts/e2e_lane.sh`, `docs/PROOF-FORMAT.md` §3b; reserved record D-0188 | agent-e2e3b (`wave55-e2e3b`) | 2026-11-20 |
+| M7-T35 (member models fail the D-0026 agreement check under BAGUETTE_DEBUG) | `lib/core/prop/member.ml`, `test/unit/test_prop.ml` (member section), `bench/diff/` (adding a member instance only if needed); reserved record D-0189 | agent-memberdbg (`wave55-memberdbg`) | 2026-11-20 |
 
 ## Cross-session requests
 
