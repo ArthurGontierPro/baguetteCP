@@ -932,6 +932,9 @@ let row_of t store id =
 let name_of t id =
   if id >= 0 && id < t.count then t.instances.(id).Propagator.inst_name else "<unknown>"
 
+(* M11-complexity-T15: BAGUETTE_MEMO_STATS names the producer of a build by its instance. *)
+let install_names t = if Explanation.stats_on then Explanation.producer_name := name_of t
+
 let trigger_of t id =
   if id >= 0 && id < Array.length t.triggers then t.triggers.(id) else wake_on_any
 

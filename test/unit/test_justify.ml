@@ -52,12 +52,21 @@ let expect_ok name = function
 (* ------------------------------------------------------------------ *)
 
 (* M11-complexity-T13 (D-0168): how many times writing a thunk runs its closure -- once,
-   and once more when the release checks it (under BAGUETTE_DEBUG, or when the forcing
-   handed a constructor a node it had not built). *)
+   and once more when the release checks it under BAGUETTE_DEBUG. Since
+   M11-complexity-T15 nothing else forces it again: no table holds the tree's nodes, so
+   nothing has to tell built nodes from captured ones. *)
 let release_runs = function
-  | Explanation.Deferred th ->
-      if Baguette_core.Debug.enabled || Explanation.captures th then 2 else 1
+  | Explanation.Deferred _ -> if Baguette_core.Debug.enabled then 2 else 1
   | _ -> 1
+
+(* M11-complexity-T15 (D-0172): run [f] with hash-consing on or off, and restore. The
+   tests of the identity memo (D-0145, D-0166, D-0168) build structurally equal copies on
+   purpose and assert that each is its own line, which is the OFF mode
+   (BAGUETTE_HASHCONS=0); hash-consing has its own tests ([test_hashcons_m11t15]). *)
+let with_hashcons on f =
+  let saved = !Explanation.hashcons in
+  Explanation.set_hashcons on;
+  Fun.protect ~finally:(fun () -> Explanation.set_hashcons saved) f
 
 let emitted ?(comments = false) ?(audit = true) f =
   let path = Filename.temp_file "baguette_justify" ".pbp" in
@@ -225,14 +234,17 @@ let test_deferred_cut () =
         let id1 = Justify.emit ctx d in
         let id2 = Justify.emit ctx d in
         check "deferred cut: same id on repeat" (id1 = id2);
-        check "deferred cut: the cut's operands were built outside the thunk: captured"
-          (match d with Explanation.Deferred th -> Explanation.captures th | _ -> false);
         expected := release_runs d)
   in
   check_eq "deferred cut: identical proof text to the direct cut" ~expected:direct_text
     ~got:deferred_text;
-  check "deferred cut: the thunk ran twice (written, then checked), not on the repeat"
-    (!calls = !expected && !expected = 2)
+  (* M11-complexity-T15: the operands were built outside the thunk (captured), which
+     until T15 cost a second forcing at the release; no table holds them now, so the
+     thunk runs once (twice under BAGUETTE_DEBUG, which checks I-X6), not on the repeat *)
+  check
+    "deferred cut: the thunk ran once when written (and once more under BAGUETTE_DEBUG), \
+     not on the repeat"
+    (!calls = !expected)
 
 (* ------------------------------------------------------------------ *)
 (* 6. Wipe: drops the right memo entries, and nothing below the wiped level. *)
@@ -1817,9 +1829,9 @@ let test_representations_m11t12 () =
               Justify.emit ctx e)
             es
         in
-        check "m11t12 memo: 5000 values, 5000 ids, 5000 entries"
+        check "m11t12 memo: 5000 values, 5000 ids, each remembered on its node"
           (List.length (List.sort_uniq Int.compare (Array.to_list ids)) = n
-          && fst (Justify.memo_stats ctx) = n);
+          && Array.for_all2 (fun e id -> Justify.remembered ctx e = Some id) es ids);
         Writer.set_level w 4;
         let last = Writer.last_id w in
         let again = Array.map (Justify.emit ctx) es in
@@ -1829,7 +1841,8 @@ let test_representations_m11t12 () =
         Writer.set_level w 2;
         let r1 = List.init 3 (fun i -> Justify.emit ctx (comb (n + i))) in
         Writer.set_level w 1;
-        let inter = Justify.emit ctx (comb (n + 3)) in
+        let inter_e = comb (n + 3) in
+        let inter = Justify.emit ctx inter_e in
         Writer.set_level w 2;
         let r2 = List.init 3 (fun i -> Justify.emit ctx (comb (n + 4 + i))) in
         Writer.set_level w 4;
@@ -1843,8 +1856,11 @@ let test_representations_m11t12 () =
           && dead r1 && dead r2
           && live_at (below 2)
           && live_at [ inter ]);
-        check "m11t12 memo: the wipe keeps exactly the level-1 entries"
-          (fst (Justify.memo_stats ctx) = (n / 4) + 1);
+        check "m11t12 memo: after the wipe exactly the level-1 nodes answer"
+          (Array.for_all
+             (fun ok -> ok)
+             (Array.mapi (fun i e -> Justify.remembered ctx e <> None = (lvl i = 1)) es)
+          && Justify.remembered ctx inter_e = Some inter);
         Writer.set_level w 1;
         let last = Writer.last_id w in
         let back = Array.map (Justify.emit ctx) es in
@@ -1916,10 +1932,17 @@ let test_release_m11t13 () =
           | Explanation.Deferred th -> th
           | _ -> failwith "not a thunk"
         in
-        let t = Explanation.deferred tree in
+        (* M11-complexity-T15: what the thunk's forcing built, watched weakly, so that the
+           test can see the tree become collectable once the thunk is released *)
+        let watch = Weak.create 2 in
+        let t =
+          Explanation.deferred (fun () ->
+              let x = tree () in
+              Weak.set watch 0 (Some x);
+              x)
+        in
         let th = thunk_of t in
         Writer.set_level w 2;
-        let cells0 = fst (Justify.memo_stats ctx) in
         let last0 = Writer.last_id w in
         let id = Justify.emit ctx t in
         first := id;
@@ -1930,8 +1953,9 @@ let test_release_m11t13 () =
           | Explanation.No_line -> false);
         check "m11t13: the tree is dropped (kept under BAGUETTE_DEBUG)"
           (Baguette_core.Debug.enabled || not (Explanation.is_forced t));
-        check "m11t13: the cells its emission made are out of the memo"
-          (fst (Justify.memo_stats ctx) = cells0);
+        Gc.full_major ();
+        check "m11t13/t15: nothing holds the written tree (kept under BAGUETTE_DEBUG)"
+          (Baguette_core.Debug.enabled || Weak.get watch 0 = None);
         let reforced0 = !Explanation.reforced in
         let last1 = Writer.last_id w in
         check "m11t13: the line answers a second emit, nothing written"
@@ -1981,7 +2005,6 @@ let test_release_m11t13 () =
         (* Nesting and growth: a thunk whose tree cites an unwritten thunk, and a tree of
            3000 inner Combines (the memo starts at 1024 slots and grows at 2048 cells). *)
         Writer.set_level w 2;
-        let cells1 = fst (Justify.memo_stats ctx) in
         let inner = Explanation.deferred tree in
         let rec chain k acc =
           if k = 0 then acc
@@ -1997,12 +2020,20 @@ let test_release_m11t13 () =
         let outer =
           Explanation.deferred (fun () ->
               Explanation.combine
-                [ Explanation.Term (1, chain 3000 inner); Explanation.Term (1, inner) ]
+                [
+                  Explanation.Term
+                    ( 1,
+                      let c = chain 3000 inner in
+                      Weak.set watch 1 (Some c);
+                      c );
+                  Explanation.Term (1, inner);
+                ]
                 1)
         in
         let id_outer = Justify.emit ctx outer in
-        check "m11t13: nested and grown, the memo is back to what it held"
-          (fst (Justify.memo_stats ctx) = cells1);
+        Gc.full_major ();
+        check "m11t13/t15: nested and long, nothing holds the chain once written"
+          (Baguette_core.Debug.enabled || Weak.get watch 1 = None);
         check "m11t13: the nested thunk was released with its own line"
           (Justify.emit ctx inner < id_outer
           && (Baguette_core.Debug.enabled || not (Explanation.is_forced inner)));
@@ -2023,36 +2054,16 @@ let test_release_m11t13 () =
                 [ Explanation.term 1 x; Explanation.term 2 (Explanation.model_row cy) ]
                 2)
         in
-        let cells2 = fst (Justify.memo_stats ctx) in
         let id_tx = Justify.emit ctx tx in
         let last3 = Writer.last_id w in
-        check "m11t13: the forcing saw the captured node"
-          (Explanation.captures (thunk_of tx));
-        check "m11t13: a captured node keeps its cell, its holder finds its line"
+        check "m11t13: a captured node keeps its line, its holder finds it"
           (Justify.emit ctx x = id_tx - 1
           && Writer.last_id w = last3
-          && fst (Justify.memo_stats ctx) = cells2 + 1);
-        (* A closure that does not give the same derivation twice, checked because it
-           captured [x], is not released: it keeps its tree and its cells, as before T13
-           (BAGUETTE_DEBUG refuses it). *)
-        (if not Baguette_core.Debug.enabled then
-           let n = ref 0 in
-           let flaky =
-             Explanation.deferred (fun () ->
-                 incr n;
-                 Explanation.combine
-                   [
-                     Explanation.term !n x; Explanation.term 1 (Explanation.model_row cy);
-                   ]
-                   1)
-           in
-           let id_f = Justify.emit ctx flaky in
-           let last4 = Writer.last_id w in
-           check "m11t13: a thunk forced twice to two derivations is not released"
-             (Explanation.line_of (thunk_of flaky) = Explanation.No_line
-             && Explanation.is_forced flaky
-             && Justify.emit ctx flaky = id_f
-             && Writer.last_id w = last4));
+          && Justify.remembered ctx x = Some (id_tx - 1));
+        (* Until M11-complexity-T15 a closure that did not give the same derivation twice
+           was not released (the second forcing that told captured nodes from built ones
+           saw it). There is no second forcing now outside BAGUETTE_DEBUG, which refuses
+           such a closure (I-X6); the test of that refusal is the debug run's. *)
         Writer.set_level w 3;
         Justify.wipe_level ctx 1;
         Writer.set_level w 0;
@@ -2082,51 +2093,68 @@ let test_release_m11t13 () =
     ~expected:(fst (derivation !first) ^ " | " ^ snd (derivation !first))
     ~got:(fst (derivation !rewritten) ^ " | " ^ snd (derivation !rewritten))
 
-(* M11-complexity-T10 (D-0158). The memo's two modes over the same scene: a derivation
-   REBUILT at each of three levels, as D-0149's propagator rebuilt its [Combine] (one
-   physical copy per level), plus a thunk of the same derivation.
+(* M11-complexity-T10 (D-0158), restated for M11-complexity-T15 (D-0172), which replaced
+   share mode by hash-consing. The two modes over the same scene: a derivation REBUILT at
+   each of three levels, as D-0149's propagator rebuilt its [Combine] (one physical copy
+   per level), plus a thunk of the same derivation.
 
-   Off ([create_sharing ~share:false], the default): every copy is its own entry and its
-   own line -- the proof the suite and the lanes have recorded.
-   On: each copy renders the line the first copy wrote, so it gets that line's id while
-   the line's level is at or below the writer's, and it is remembered at the writer's
-   level like any entry, so a wipe above the line drops the copy but not the line, and
-   the copy asked for again finds the line; a copy asked for BELOW the line's level
-   (through [with_level]) gets its own line; after the wipe of the line's level the next
-   copy is derived afresh; an unforced [Deferred] is never forced by a lookup. *)
-let test_share_m11t10 () =
-  let run share =
+   Off (BAGUETTE_HASHCONS=0, [Explanation.set_hashcons false]): every copy is its own value
+   and its own line, the proof main wrote before D-0172.
+   On (the default): a copy built AFTER the first was written IS the written node and cites
+   its line while that line is at or below the writer's level; a copy built BEFORE the first
+   was written is a value of its own and writes its own line (share mode found that line
+   by rendering; hash-consing does not); a thunk of the same derivation built after cites
+   the line and is forced only to be written; after the wipe of the line's level the next
+   copy is derived afresh; a copy asked for BELOW the line's level (through [with_level])
+   gets its own line. *)
+let test_hashcons_m11t15 () =
+  let saved = !Explanation.hashcons in
+  let run hc =
+    Explanation.set_hashcons hc;
     let _, r =
       emitted (fun w ->
           let e, _, cx, cy = build_two_ctx w in
-          let ctx = Justify.create_sharing ~share ~writer:w ~encoding:e in
+          let ctx = Justify.create ~writer:w ~encoding:e in
+          (* every node built, outer and inner, so that the test can ask which of them
+             remembers a line *)
+          let built = ref [] in
           let copy () =
-            Explanation.combine
-              [
-                Explanation.Term
-                  ( 1,
-                    Explanation.combine
-                      [
-                        Explanation.Term (1, Explanation.model_row cx);
-                        Explanation.Term (1, Explanation.model_row cy);
-                      ]
-                      1 );
-                Explanation.Term (2, Explanation.model_row cy);
-              ]
-              2
+            let inner =
+              Explanation.combine
+                [
+                  Explanation.Term (1, Explanation.model_row cx);
+                  Explanation.Term (1, Explanation.model_row cy);
+                ]
+                1
+            in
+            let outer =
+              Explanation.combine
+                [
+                  Explanation.Term (1, inner);
+                  Explanation.Term (2, Explanation.model_row cy);
+                ]
+                2
+            in
+            built := outer :: inner :: !built;
+            outer
+          in
+          let answering () =
+            List.length (List.filter (fun n -> Justify.remembered ctx n <> None) !built)
           in
           let c2 = copy () in
           Writer.set_level w 1;
-          let id1 = Justify.emit ctx (copy ()) in
+          let first = copy () in
+          let id1 = Justify.emit ctx first in
           Writer.set_level w 2;
           let id2 = Justify.emit ctx c2 in
           Writer.set_level w 3;
-          let id3 = Justify.emit ctx (copy ()) in
-          let stats = Justify.memo_stats ctx in
-          (* Wipe levels 2 and up: the line is at level 1. *)
+          let third = copy () in
+          let id3 = Justify.emit ctx third in
+          let n = answering () in
+          (* Wipe levels 2 and up: the first line is at level 1. *)
           Justify.wipe_level ctx 2;
           Writer.set_level w 1;
-          let n_after_wipe = fst (Justify.memo_stats ctx) in
+          let n_after_wipe = answering () in
           let last = Writer.last_id w in
           let id2b = Justify.emit ctx c2 in
           let c2_minted = Writer.last_id w > last in
@@ -2149,67 +2177,111 @@ let test_share_m11t10 () =
           let live_low = Writer.is_live w id_low in
           Justify.wipe_level ctx 1;
           ( [ id1; id2; id3 ],
-            stats,
+            (n, third == first),
             (n_after_wipe, id2b, c2_minted),
             (id_d, d_minted, id_d_again, !calls = release_runs d),
             (id_after, id_low, live_low) ))
     in
+    Explanation.set_hashcons saved;
     r
   in
   (match run false with
   | Ok
       ( [ id1; id2; id3 ],
-        (n, longest),
+        (n, same),
         (n_after, _, c2_minted),
         (_, d_minted, _, calls_ok),
         _ ) ->
-      check "m11t10 share OFF: three rebuilt copies, three lines"
-        (List.length (List.sort_uniq Int.compare [ id1; id2; id3 ]) = 3);
+      check "m11t15 hash-consing OFF: three rebuilt copies, three lines"
+        (List.length (List.sort_uniq Int.compare [ id1; id2; id3 ]) = 3 && not same);
       check
-        "m11t10 share OFF: six entries, three to a bucket (each copy and its inner \
+        "m11t15 hash-consing OFF: six nodes remember a line (each copy and its inner \
          Combine)"
-        (n = 6 && longest = 3);
+        (n = 6);
       check
-        "m11t10 share OFF: a wipe of level 2 drops the copies made at 2 and 3, which are \
-         derived again"
+        "m11t15 hash-consing OFF: a wipe of level 2 drops the copies made at 2 and 3, \
+         which are derived again"
         (n_after = 2 && c2_minted);
-      check "m11t10 share OFF: a thunk of the same derivation mints its own line" d_minted;
-      check "m11t10 share OFF: the thunk ran to be written (and checked), no more"
+      check "m11t15 hash-consing OFF: a thunk of the same derivation mints its own line"
+        d_minted;
+      check "m11t15 hash-consing OFF: the thunk ran to be written (and checked), no more"
         calls_ok
-  | Ok _ -> check "m11t10 share OFF: the scene ran" false
+  | Ok _ -> check "m11t15 hash-consing OFF: the scene ran" false
   | Error e ->
       incr failures;
-      Printf.printf "FAIL m11t10 share OFF (raised %s)\n" (Printexc.to_string e));
+      Printf.printf "FAIL m11t15 hash-consing OFF (raised %s)\n" (Printexc.to_string e));
   match run true with
   | Ok
       ( [ id1; id2; id3 ],
-        (n, longest),
-        (n_after, id2b, c2_minted),
+        (_, same),
+        (_, id2b, c2_minted),
         (id_d, d_minted, id_d_again, calls_ok),
         (id_after, id_low, live_low) ) ->
-      check "m11t10 share ON: three rebuilt copies, one line" (id1 = id2 && id2 = id3);
-      check "m11t10 share ON: every copy is remembered (six entries, three to a bucket)"
-        (n = 6 && longest = 3);
       check
-        "m11t10 share ON: a wipe of level 2 drops the copies made at 2 and 3, and the \
-         copy asked for again finds the level-1 line"
-        (n_after = 2 && id2b = id1 && not c2_minted);
-      check "m11t10 share ON: a forced thunk of the same derivation shares the line"
+        "m11t15 hash-consing ON: a copy built after the first was written IS that node, \
+         one line"
+        (same && id3 = id1);
+      check
+        "m11t15 hash-consing ON: a copy built before the first was written writes its \
+         own line, and again after its level is wiped"
+        (id2 <> id1 && id2b <> id1 && c2_minted);
+      check "m11t15 hash-consing ON: a thunk of the same derivation cites the line"
         (id_d = id1 && (not d_minted) && id_d_again = id1);
       check
-        "m11t10 share ON: the thunk ran to be written (and checked), never by a lookup"
+        "m11t15 hash-consing ON: the thunk ran to be written (and checked), never by a \
+         lookup"
         calls_ok;
-      check "m11t10 share ON: after the wipe of the line's level, derived afresh"
+      check "m11t15 hash-consing ON: after the wipe of the line's level, derived afresh"
         (id_after > id1);
-      check "m11t10 share ON: a copy asked for below the line's level gets its own line"
+      check
+        "m11t15 hash-consing ON: a copy asked for below the line's level gets its own \
+         line"
         (id_low > id_after && live_low)
-  | Ok _ -> check "m11t10 share ON: the scene ran" false
+  | Ok _ -> check "m11t15 hash-consing ON: the scene ran" false
   | Error e ->
       incr failures;
-      Printf.printf "FAIL m11t10 share ON (raised %s)\n" (Printexc.to_string e)
+      Printf.printf "FAIL m11t15 hash-consing ON (raised %s)\n" (Printexc.to_string e)
 
-(* The same scene end to end, share ON, through 3.0.2: the copies at levels 2 and 3 cite
-   the level-1 line, and a [Cut] at level 3 of two more rebuilt copies cites it twice.
+(* M11-complexity-T15 (D-0172): what hash-consing holds. The table keeps a WRITTEN node
+   alive until the level of its line is wiped (that is how a later build finds it), and
+   lets it go with the wipe. Without hash-consing nothing holds it once written, which
+   [test_release_m11t13] checks. *)
+let test_hashcons_holds_m11t15 () =
+  with_hashcons true (fun () ->
+      let _, r =
+        emitted (fun w ->
+            let _, ctx, cx, cy = build_two_ctx w in
+            let watch = Weak.create 1 in
+            let write () =
+              let x =
+                Explanation.combine
+                  [
+                    Explanation.Term (3, Explanation.model_row cx);
+                    Explanation.Term (5, Explanation.model_row cy);
+                  ]
+                  1
+              in
+              Weak.set watch 0 (Some x);
+              ignore (Justify.emit ctx x : Writer.cid)
+            in
+            Writer.set_level w 2;
+            write ();
+            Gc.full_major ();
+            check "m11t15 hash-consing ON: a written node is held while its line lives"
+              (Weak.get watch 0 <> None);
+            Writer.set_level w 3;
+            Justify.wipe_level ctx 2;
+            Gc.full_major ();
+            check "m11t15 hash-consing ON: the wipe of its level lets it go"
+              (Weak.get watch 0 = None);
+            Writer.set_level w 0;
+            Writer.delete_many w (Writer.live_ids w))
+      in
+      expect_ok "m11t15 holds: no exception" r)
+
+(* The same scene end to end, hash-consing ON (the default since D-0172), through 3.0.2:
+   the copies at levels 2 and 3 cite the level-1 line, and a [Cut] at level 3 of two more
+   rebuilt copies cites it twice.
    Every cited id must be live when it is cited, and the model is satisfiable (D-0053: a
    contradictory database would make the check vacuous). *)
 let build_share_proof dir =
@@ -2226,7 +2298,7 @@ let build_share_proof dir =
   let oc = open_out pbp in
   let w = Writer.create ~comments:true ~audit:true oc in
   Encoding.start_proof e w;
-  let ctx = Justify.create_sharing ~share:true ~writer:w ~encoding:e in
+  let ctx = Justify.create ~writer:w ~encoding:e in
   let copy () =
     Explanation.combine
       [
@@ -2294,16 +2366,18 @@ let () =
   test_deferred_linear ();
   test_deferred_cut ();
   test_wipe ();
-  test_memo_identity_m11t5 ();
-  test_share_m11t10 ();
-  test_representations_m11t12 ();
-  test_release_m11t13 ();
+  with_hashcons false test_memo_identity_m11t5;
+  test_hashcons_m11t15 ();
+  with_hashcons false test_representations_m11t12;
+  with_hashcons false test_release_m11t13;
+  test_hashcons_holds_m11t15 ();
   run_veripb ~name:"justify: a Linear explanation, checked end to end"
     ~build:build_linear_proof;
   run_veripb ~name:"justify: a Cut of two Linears, checked end to end"
     ~build:build_cut_proof;
   run_veripb
-    ~name:"m11t10 share ON: rebuilt copies citing one line across levels, end to end"
+    ~name:
+      "m11t15 hash-consing ON: rebuilt copies citing one line across levels, end to end"
     ~build:build_share_proof;
   run_veripb
     ~name:"justify: a real int_lin_le pruning (one-step bound), checked end to end"

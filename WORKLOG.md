@@ -20,7 +20,6 @@ of it to every session and stopping at a broken line before it even reached the 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
 | M8-bits-encoding-T4 (two arms, `W = none` and `W = 0`, on the sixteen editions) | run directories under `/scratch/arthur/m8t4/`, `tools/compare/` (additions), `bench/challenge/README.md` (the run's row), a new D-record | agent-m8t4 (`wave55-m8t4`) | 2026-11-20 |
-| M11-complexity-T15 (SPIKE, explanations as a hash-consed DAG; a prototype branch, nothing merged without a decision) | `lib/core/explanation.ml`, `lib/core/justify.ml`, `lib/core/trace.ml`, propagators' explanation construction as needed, on branch `wave55-dag` only | agent-dag (`wave55-dag`) | 2026-11-20 |
 | M15-symmetry-T3 (breaking that agrees with the search: design, then a prototype outside `lib/`) | `tools/symmetry/`, `bench/symmetry/`, `scripts/sym_lane.sh`; a small C++ tool over dejavu's header-only library in `tools/symmetry/` if needed; NO `lib/` change without a new claim; reserved record D-0181 | agent-sym3 (`wave55-sym3`) | 2026-11-20 |
 | M14-e2e-verification-T8 (optimisation, and cake_pb_cp on search proofs) | `tools/e2e/`, `scripts/e2e_lane.sh`, `bench/e2e_spike/`, run dirs `/scratch/arthur/wave55-e2e8-runs/`; reserved record D-0182 | agent-e2e8 (`wave55-e2e8`) | 2026-11-20 |
 
@@ -640,6 +639,11 @@ the 7 new member models differ), gate 75 (`7843f2f`, release D-0171 and e2e D-01
 new `rest` configuration included), debug 311/311, scaling ok. Decision numbers are now RESERVED by the
 orchestrator per agent when it is launched (D-0169/D-0170 and D-0170/D-0171 collided between parallel
 branches and were renumbered at merge).
+
+### 2026-11-20 (agent-dag, `wave55-dag`): M11-complexity-T15, D-0172 DECIDED, A and B landed on the branch, hash-consing on by default
+
+Each node carries its line (`Explanation.t`'s five line-writing constructors are inline records), so the memo table and D-0168's window and second forcing are gone; the smart constructors hash-cons written nodes, on by default, `BAGUETTE_HASHCONS=0` for the old proof; share mode removed. Spike: rcpsp_11 -21 % instructions with every byte kept (A), share mode's proof at cable -64 %, cyclic -58 % (B).
+Merged with main `6c785d2`; the lane re-recorded (`cba65d2`, `8deca4d`: only `.pbp` hashes and the `pol`/`pol-tokens` counters moved, 85+6 plain, 63+4 debug); gate in D-0172 section 8. The claim row is the orchestrator's to move.
 
 ### 2026-11-20 (agent-learnprop, `wave55-learnprop`): M11-complexity-T17, D-0173
 

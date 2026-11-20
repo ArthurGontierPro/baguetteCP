@@ -21776,3 +21776,256 @@ code, `.opb`, `.pbp`) equal; the diff lane 324 of 324 (the reference's 301 and t
 the debug pass 311 of 311; the scaling lane ok under `--enforce`, growth -0.02 to +0.36 % of the late cost
 against the baseline (the +0.3 % of the default path's checks, under the 0.5 % threshold), so no
 re-baseline; the model suite with the rule ON under `BAGUETTE_DEBUG=1` 200 of 200, every proof accepted.
+
+## D-0172  M11-complexity-T15: explanations as a DAG whose nodes carry their line; the memo table goes and every byte stays (A), and hash-consing the written nodes writes share mode's proof for less than main costs (B)
+
+Status: DECIDED. A and B landed, B (hash-consing) ON by default and share mode removed, by the
+orchestrator on the user's delegation (D-0167 item 3 had already put sharing on by default).
+`BAGUETTE_HASHCONS=0` turns B off. Sections 1 to 7 are the spike as measured on `795e869`;
+section 8 is what landed, its re-record and its gate.
+Date: 2026-11-20
+Task: M11-complexity-T15 (agent-dag, `wave55-dag`). D-0140 J1, after D-0168 (option B) and D-0158
+(share mode).
+Touches: `lib/core/explanation.ml` (the type: `Clause`, `Linear`, `Cut`, `Combine` and `Resolve`
+become inline records with `mutable line` and `hid`; `node_line`, `set_node_line`; the
+hash-consing table; T13's frame, `captures`, `nodes_under` and `keep` removed),
+`lib/core/justify.ml` (the memo table, its shallow hash, D-0168's window, ghost and release of
+cells, and the second forcing at a release removed; `memoized` reads the node; a thunk whose
+tree answered takes that line), `lib/core/store.ml`, `engine.ml`, `trace.ml`, `search.ml` (the
+producer of a build, for `BAGUETTE_MEMO_STATS` only, and patterns), `pb_analysis.ml`,
+`prop/maxmin.ml`, six test files (patterns), `test/unit/test_justify.ml` (the D-0166 and D-0168
+tests restated without memo cells), `docs/ARCHITECTURE.md` section 4.
+
+### 1. Where identical explanations come from
+
+`BAGUETTE_HASHCONS=1 BAGUETTE_MEMO_STATS=1` counts every node built and whether it equals a
+node whose line is on the page, by the propagator that built it (a node built inside a thunk
+is counted for the propagator that made the thunk). At the budgets of section 3:
+
+| instance | producer | `Combine` builds | identical to a written node | per node |
+|---|---|---|---|---|
+| `2020_cable_tree_wiring_R046`, 300 nodes | `all_different_int` | 17 513 990 | 17 314 925 (98.9 %) | 57 525 |
+| `2011_black-hole_9`, 40 nodes | `all_different_int` | 3 499 845 | 3 230 221 (92.3 %) | 78 786 |
+| `2011_cyclic-rcpsp_easy_6`, 2 000 nodes | `all_different_int` | 2 271 912 | 2 000 001 (88.0 %) | 1 000 |
+| `2013_rcpsp_11`, 10 000 nodes | `cumulative` | 4 596 500 | 543 369 (11.8 %) | 54 |
+
+Every other producer (`bool2int`, `array_int_element`, `learned_pb`, the search and the
+analyses) builds `Clause`s or a few thousand `Combine`s, and two of all those builds (on
+cyclic) are identical to a written one. So the identical explanations are, all of them, the derivations a
+`Needs_derivation` family writes ahead of its trace line (I-X10): all_different's Hall
+derivations and cumulative's capacity derivations, rebuilt from scratch each time the
+propagator finds the same Hall set or the same overloaded time point again at another level.
+On cable and rcpsp_11 the count is exactly D-0158's "shared" column (17 314 925 and 543 369):
+the identity at the build finds the lines share mode finds by rendering them.
+
+### 2. The design
+
+1. **A node carries its line.** The five constructors a line is written for are inline
+   records, `Combine of { summands; divisor; mutable line : line; hid : int }` and so on. The
+   `line` is D-0168's record (id, level, epoch, owner) and is live under D-0168's test
+   (`wiped_at.(level) <= epoch`), so a wipe stamps its levels and visits no node.
+   `Justify.memoized` reads and writes the field. What goes: the memo table of
+   `justify.ml` (its chains, its shallow hash with the 48-node operand walk, `by_level`, the
+   growth), D-0168's window, ghost and release of cells, and in `explanation.ml` the frame
+   that recorded every build during a forcing and the second forcing at a release. They all
+   existed to take a written tree's cells out of a table, and no table holds a node any more.
+   This is variant A, and its memo answers exactly what main's answered (the same lookups
+   and hits on the four instances, 8 971 984 and 4 366 803 on rcpsp_11).
+2. **Hash-consing in the smart constructors** (variant B, `BAGUETTE_HASHCONS=1`). The key is
+   the constructor, its integers and literals, and every operand by identity (`hid` for a
+   node, `tid` for a thunk, the id for a `Model_row`). It is shallow because the operands are
+   themselves canonical, so a lookup costs the size of the node and never descends.
+3. **The table holds the written nodes and nothing else.** `Justify` enters a node when it
+   writes its line, at the writer's level, and `wipe_level` takes that level's nodes out with
+   the lines. A build of equal content returns the written node, whose line is then cited. A
+   line deeper than the writer's current level does not answer (the claim index's condition
+   2, as in share mode), and a node whose line was wiped is written again, as D-0168 does for a
+   thunk. Two other scopings were measured and dropped. A weak table answers according to
+   whether the collector has run, and the same run wrote a different proof with
+   `BAGUETTE_MEMO_STATS` on. A table scoped by the store's level at the build never answers
+   (rcpsp_11 at 300 nodes, 0 identical builds found against 67 264 with the weak table),
+   because the identical rebuilds come after the level that built the first copy was undone,
+   while its line, written at a shallower level, is still on the page.
+4. **Thunks** keep D-0168's line. One change in both variants: a thunk whose tree answered
+   with a line already on the page takes that line, its level and its epoch, instead of a new
+   record at the writer's current level. Main's choice states a shorter life than the line
+   has when the line is shallower (the thunk is then rewritten to the same id after its own
+   level is wiped, the same bytes), and a longer one when the line is deeper, which can happen
+   only inside `with_level` (PB learning at level 0), where the thunk could then be cited after
+   its line was deleted. Not observed on main, and closed here.
+
+### 3. Measured
+
+On `fataepyc-06`, proof mode, `perf stat -e instructions:u`, peak RSS from `/usr/bin/time`,
+under `systemd-run -p MemoryMax=32G`, at the budgets of D-0158 and D-0168 (`BAGUETTE_NODE_LIMIT`
+10 000 for rcpsp_11, the lane's 2 000 for cyclic, 300 for cable, 40 for black-hole_9). "main" is
+`d275d46` (md5 `c3b9cd1b`, gate 72's binary), "share" is main with `BAGUETTE_MEMO_SHARE=1`, A and
+B are `795e869` (md5 `3f888e58`) without and with `BAGUETTE_HASHCONS=1`. Instructions in G,
+RSS and `.pbp` in MB. The runs are under `/scratch/arthur/wave55-dag-runs/r/`.
+
+| instance | main | share | A | B |
+|---|---|---|---|---|
+| rcpsp_11, instructions | 175.61 | 203.29 (+15.8 %) | 138.65 (-21.0 %) | 162.38 (-7.5 %) |
+| rcpsp_11, RSS | 144 | 157 | 145 | 160 |
+| rcpsp_11, `.pbp` | 420.7 | 374.3 | 420.7 | 374.3 |
+| cyclic, instructions | 130.67 | 117.01 (-10.5 %) | 127.61 (-2.3 %) | 54.48 (-58.3 %) |
+| cyclic, RSS | 99 | 95 | 101 | 105 |
+| cyclic, `.pbp` | 490.0 | 86.7 | 490.0 | 86.7 |
+| cable, instructions | 536.19 | 379.30 (-29.3 %) | 518.11 (-3.4 %) | 192.28 (-64.1 %) |
+| cable, RSS | 4 646 | 2 069 | 4 586 | 2 068 |
+| cable, `.pbp` | 1 887.2 | 114.1 | 1 887.2 | 114.1 |
+| black-hole_9, instructions | 737.96 | 705.93 (-4.3 %) | 734.18 (-0.5 %) | 666.36 (-9.7 %) |
+| black-hole_9, RSS | 2 230 | 1 603 | 2 173 | 1 577 |
+| black-hole_9, `.pbp` | 617.1 | 316.6 | 617.1 | 316.6 |
+
+Stdout and the `.opb` are main's on all sixteen runs, and veripb `d5644ca4` accepts all sixteen
+proofs (`s VERIFIED NO CONCLUSION`). A's `.pbp` is main's byte for byte on the four. B's is
+share mode's byte for byte on rcpsp_11, cyclic and cable (the same md5), and on black-hole_9 B
+writes 266 907 `pol` lines where share mode writes 266 817, the same size to 0.1 MB. Share mode
+on the branch writes main's share-mode bytes for less (rcpsp_11 166.08 G, cyclic 114.30,
+cable 358.23, black-hole_9 701.47).
+
+**Why B costs less than share mode for the same proof.** Share mode finds an identical line by
+rendering it, so every miss emits its operands and builds and hashes the whole `Pol.t` before
+it can be answered. B finds the identical node when it is built, by a shallow key, and its
+emission is then one field read that skips the whole subtree.
+
+**What B costs where little is identical** (rcpsp_11, 11.8 %): 23.7 G more than A. A profile
+of both at 10 000 nodes puts the collector at 17.6 % of B's instructions against 7.7 % of A's
+(about 18 G), because the table keeps every written node alive until its level is wiped, so
+the nodes are promoted and marked where A drops a written tree at once; hashing and comparing
+nodes is 3.9 % (about 6 G). RSS is +11 % on rcpsp_11 and +6 % on cyclic, and -56 % on cable
+and -29 % on black-hole_9, where the lines B does not write are most of the live state.
+
+### 4. Checked
+
+- **A, the gate** on a fresh clone of `795e869` (`/scratch/arthur/wave55-dag-runs/gate.sh`,
+  binary `3f888e58`) against `c3b9cd1b`. `make check` rc 0 under `ulimit -v 4000000`, 4 342
+  ok and 0 FAIL, 200 models, peak RSS 100 MB. The 200 models give 0 differences over their four
+  artefacts (stdout, exit code, `.opb`, `.pbp`). The differential lane gives 301 of 301 runs
+  equal to the reference and its debug pass 289 of 289 (every release forced again and
+  compared, I-X6). The scaling lane is within every threshold. Lanes at `-j 8`. The logs are
+  in `/cluster/arthur/baguette-results/wave55-dag/`.
+- **B, the model suite** with `BAGUETTE_HASHCONS=1`: 200 of 200, every proof through veripb.
+  12 of the 200 proofs differ from A's (sharing happened), five of them on satisfiable models
+  (`alldiff_conflict_learn_sat`, `alldiff_pigeonhole_narrow_sat`,
+  `alldiff_regin_conflict_learn_sat`, `disjunctive_sat`, `element_foreign_hole_rup_sat`), which
+  is where an accepted proof is evidence (D-0053, D-0066).
+- **B, the differential lane** with `BAGUETTE_HASHCONS=1` (a wrapper, `--tier all -j 8`,
+  every run kept): 216 of 301 runs equal the reference, and on the other 85 the only lines
+  that differ, besides the `.pbp` hash and the WORK counters, are the two proof-size counters
+  `pol` and `pol-tokens`, as for share mode in D-0158 (85 runs there too). Stdout, the exit
+  code, the `.opb` hash and every other counter equal the reference on all 301. Over the 301
+  runs the `pol` lines fall from 72.1 M to 48.2 M (-33 %) and the `pol` tokens from 1 303 M to
+  668 M (-49 %), and no run writes more. Veripb `d5644ca4` accepts all 274 kept proofs (the
+  other 27 runs are `noproof`), 272 with `s VERIFIED NO CONCLUSION` and two with
+  `s VERIFIED BOUNDS`.
+- **B is a function of the search.** rcpsp_11 at 300 nodes writes the same B proof with
+  `BAGUETTE_MEMO_STATS` and with `BAGUETTE_DEBUG` on.
+- `dune runtest --force` on the branch: 4 270 ok, 0 FAIL.
+
+### 5. What it costs in clarity
+
+- **`Explanation.t` changes shape, and gains mutable state.** Five constructors go from tuples
+  to inline records with two more fields, `mutable line : line` and `hid : int`. A pattern now
+  names the fields it reads and ends in `_` (`Combine (ss, d)` becomes
+  `Combine { summands = ss; divisor = d; _ }`): 30 lines of `lib/` and about 25 of `test/`,
+  mechanical. A node can no longer be built without spelling `line = No_line; hid = 0`, so the
+  rule "build through the smart constructors", which was a comment, is now visible at every
+  site that breaks it. The D-0026 split is untouched: `Reason.t` keeps the facts and these
+  nodes stay the cutting-planes data, nothing is merged. `same_derivation` ignores the line.
+- **Removed.** `justify.ml` goes from 1 977 to 1 505 lines (the table, its hashing, the window,
+  the ghost, the release of cells). `explanation.ml` loses T13's frame and `captures`, and gains
+  the hash-consing table and the per-producer counts (900 to 990 lines with B; A alone would be
+  shorter than main).
+- **What a propagator author must know.** Under A, nothing new, and one rule less: D-0168's
+  "a closure hands nobody a node it built" protected the release of memo cells and has nothing
+  left to protect. Under B, a node may be the same value as another propagator's identical
+  derivation, so nothing may rely on the physical identity of a fresh build, nor on its line
+  being unset.
+
+### 6. The tests restated
+
+The D-0166 and D-0168 tests counted memo cells (`Justify.memo_stats`), which no longer exist. They
+now ask the property the count stood for: every node remembers its line
+(`Justify.remembered`), after a wipe exactly the nodes below the wiped level answer, and a
+released thunk's tree is collectable (a weak pointer to it is empty after `Gc.full_major`,
+which is stronger than a cell count). Two checks went: "the forcing saw the captured node"
+(nothing tracks captures) and "a thunk whose closure gives two derivations is not released"
+(there is no second forcing outside `BAGUETTE_DEBUG`, which refuses such a closure as I-X6
+says, and the thunk is released like any other).
+
+### 7. The decision left to the user
+
+| option | proof bytes | instructions against main | peak RSS | clarity |
+|---|---|---|---|---|
+| land A | the same | rcpsp_11 -21.0 %, cable -3.4 %, cyclic -2.3 %, black-hole_9 -0.5 % | the same (±3 %) | `Explanation.t` becomes inline records with a mutable line; 470 lines fewer in `justify.ml`; D-0168's frame and second forcing gone |
+| land B on by default | share mode's: cable -94 %, cyclic -82 %, black-hole_9 -49 %, rcpsp_11 -11 %; 85 of the lane's 301 references re-recorded (their `pol` counters and `.pbp` hash) | cable -64 %, cyclic -58 %, black-hole_9 -10 %, rcpsp_11 -7.5 % | cable -56 %, black-hole_9 -29 %, rcpsp_11 +11 % | A's, plus a table of written nodes (about 150 lines) and the rule of section 5; share mode then has no use and goes |
+| land A, B behind its switch | the same by default | A's | A's | A's plus the switch; share mode stays or goes |
+| drop | the same | none | none | none |
+
+Recommendation: land A now, since it changes no byte, passed the gate and removes more code
+than it adds. Then replace share mode by B and turn it on by default: it writes the proof share
+mode writes and costs less than main without sharing on all four instances, which leaves share
+mode's switch nothing to do. That second step changes the proof's bytes and the lane's
+`pol` counters on the runs where something is shared, so it is the user's call, as D-0158 left
+share mode.
+
+**Decided** (orchestrator, on the user's delegation): land A and B, with B on by default in place
+of share mode, and a documented switch to turn it off.
+
+### 8. What landed
+
+- **Merged with main** twice (`89ba354`, then `6c785d2`). `store.ml` keeps D-0169's `run_as`
+  (no `Fun.protect` per run), with the producer hook of `BAGUETTE_MEMO_STATS` inside it behind
+  one test of a constant.
+- **B is on by default.** `Explanation.hashcons` is a reference, on unless
+  `BAGUETTE_HASHCONS=0`, which writes the proof of the identity memo alone (main's proof before
+  D-0172, byte for byte on the four instances of section 3); `set_hashcons` is the same switch
+  for a test. The switch is in the CLI's environment help, in explanation.ml's header and in
+  `docs/ARCHITECTURE.md` section 4.
+- **Share mode is removed**: `BAGUETTE_MEMO_SHARE`, `Justify.create_sharing`, the `Lines`
+  index and `memoized_line`. Its level condition stays on the node's line (`node_answer`).
+- **One rule added**: when two nodes of one content are both written (the second was built
+  before the first was written), the table keeps the one whose line is shallower, so a wipe
+  of the deeper level does not make the content forgotten while a line for it is still on the
+  page. The four instances write the same bytes as section 3's B with it.
+- **Measured again on the merged tip** (`cd565433`, main `89ba354` with D-0169 inside):
+  rcpsp_11 159.53 G and 159 MB, cyclic 53.94 G and 97 MB, cable 192.49 G and 2 066 MB,
+  black-hole_9 666.34 G and 1 572 MB, every `.pbp` the one of section 3's B, the four proofs
+  accepted. With `BAGUETTE_HASHCONS=0`: 133.90, 126.79, 518.00 and 734.12 G, every `.pbp`
+  main's.
+- **Tests.** The identity-memo tests of D-0145, D-0166 and D-0168 build structurally equal
+  copies on purpose and assert one line each, which is the OFF mode, so they run under
+  `with_hashcons false`. `test_share_m11t10` is now `test_hashcons_m11t15` over both modes: a
+  copy built after the first was written is that node and cites its line, a copy built before
+  writes its own line (share mode found that one by rendering, hash-consing does not), a thunk
+  of the same derivation cites the line, a copy asked for below the line's level gets its own.
+  `test_hashcons_holds_m11t15` checks that the table holds a written node until its level is
+  wiped and lets it go then. `dune runtest --force` 4 345 ok, 0 FAIL; the model suite 207 of
+  207, every proof through veripb.
+- **Re-record** (`cba65d2`, then `8deca4d` for D-0173's `rest` configuration), in fresh clones
+  with `BAGUETTE_MEM_CAP_KB=33554432`. Before it, the plain pass had 85 of 301 runs different
+  and the debug pass 63 of 289, and `rest` 6 of 23 and 4 of 22; on every one of them the only
+  items that differ are the `.pbp` hash and the two counters `pol` and `pol-tokens` (none
+  writes more `pol` lines). Every configuration but `noproof` moves. 274 + 23 plain and 263 +
+  22 debug references were recorded, every proof accepted by veripb.
+- **The scaling lane found one cost.** The first gate of the merged tip (`8deca4d`) failed it
+  on one line, rcpsp_11 without the proof at +0.68 % of its late cost per node (threshold
+  0.5 %): every build was hashed for a table that no line is ever written to under
+  `--no-proof`. Fixed in `cabc2e9`, with no byte changed: a build is not hashed while the table
+  is empty, and `--no-proof` turns hash-consing off. The line is then +0.37 % against the
+  baseline, where main `6c785d2` alone (gate 76) is +0.30 %; H_qr72 without the proof +0.37 %
+  (gate 76: +0.38 %). Nothing fell, so the baseline is not re-recorded.
+- **Gate** on a fresh clone of `cabc2e9` (binary `0c1ff1e5`) against gate 75's binary
+  (`4e41e8c1`, the same code as main `6c785d2` but for D-0173's flag, off by default). `make
+  check` rc 0 under `ulimit -v 4000000`, 4 427 ok and 0 FAIL, 207 models, peak RSS 104 MB. The
+  207 models give 0 differences over stdout, exit code and `.opb`, and 12 `.pbp` differ, every
+  one smaller: `alldiff_conflict_learn_sat`, `alldiff_hall_trace_unsat`,
+  `alldiff_overshoot_decl_top_unsat`, `alldiff_pigeonhole_narrow_sat`,
+  `alldiff_regin_conflict_learn_sat`, `alldiff_regin_hole_element_unsat`,
+  `alldiff_search_unsat`, `colour_unsat`, `disjunctive_sat`, `element_foreign_hole_rup_sat`,
+  `element_foreign_hole_rup_unsat`, `gcc_const_counts_unsat` (all verified by `make check`'s
+  model suite). The differential lane gives 324 of 324 runs equal to the new reference and its
+  debug pass 311 of 311. The scaling lane is within every threshold (rc 0). The logs are in
+  `/cluster/arthur/baguette-results/wave55-dag/`.

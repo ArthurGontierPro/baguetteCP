@@ -378,6 +378,10 @@ let usage () =
     "                    the deterministic stop, for byte-comparing two builds.";
   prerr_endline "  BAGUETTE_PROOF_AUDIT=0 disables the constraint-id audit (I-X2), which";
   prerr_endline "  is on by default here even though the library's own default is off.";
+  prerr_endline
+    "  BAGUETTE_HASHCONS=0  every rebuilt derivation writes its own proof line (D-0172):";
+  prerr_endline
+    "                    the proof before hash-consing, for comparison. Default on.";
   exit exit_usage
 
 (* A limit from the command line or the environment. A value that is neither an integer
@@ -1655,6 +1659,9 @@ let solve opts (m : Model.t) =
           Writer.create ~comments:opts.proof_comments ~audit:(audit_enabled ())
             ~null:opts.no_proof proof_oc
         in
+        (* D-0172: with no line ever written there is nothing to share, so a build is not
+           hash-consed (nor given an identity) at all under --no-proof. *)
+        if opts.no_proof then Baguette_core.Explanation.set_hashcons false;
         Encoding.start_proof encoding writer;
         (* Every propagator instance carries its own row id (D-0011/D-0015). This used
            to install a [model_id] thunk that raised, because [Explanation.Trivial]

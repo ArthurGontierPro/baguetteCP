@@ -1853,7 +1853,7 @@ let wipe_after_nogood ctx ~lvl ~nogood =
    (D-0019) -- emitted once rather than twice. *)
 let weakened_row_only (e : Explanation.t) =
   match Explanation.force e with
-  | Explanation.Combine (summands, _) ->
+  | Explanation.Combine { summands; divisor = _; _ } ->
       let rows =
         List.filter
           (function
@@ -1888,12 +1888,14 @@ let close_root_conflict ctx trace store (c : Store.conflict) =
      whatever comes after. *)
   Encoding.close_atoms ctx.Justify.encoding;
   match Explanation.force e with
-  | Explanation.Clause [] -> Justify.emit ctx e
+  | Explanation.Clause { lits = []; _ } -> Justify.emit ctx e
   | forced ->
       (match (line, forced) with
       (* M8-bits-encoding-T3 (D-0134): a [Resolve] -- a choice derivation over bits,
          e.g. a disequality all of whose terms are fixed -- is arithmetic too. *)
-      | None, (Explanation.Combine _ | Explanation.Cut _ | Explanation.Resolve _)
+      | ( None,
+          ( Explanation.Combine _ | Explanation.Cut _
+          | Explanation.Resolve { parts = _; _ } ) )
         when not (weakened_row_only e) ->
           (* Factless: [conflict_line] wrote nothing, so the derivation is written here,
              as the under-a-decision arm of [dfs] writes it -- unless it is one row
@@ -3016,7 +3018,8 @@ and dfs engine store ctx trace stats cfg (order : order) (decisions : Lit.t list
               match Explanation.force c.Store.c_why with
               (* M8-bits-encoding-T3 (D-0134): a [Resolve] states its clause by `pol`
                  + `ia`; over bits the nogood cannot reach it by unit propagation. *)
-              | Explanation.Combine _ | Explanation.Cut _ | Explanation.Resolve _ ->
+              | Explanation.Combine _ | Explanation.Cut _
+              | Explanation.Resolve { parts = _; _ } ->
                   ignore (Justify.emit ctx c.Store.c_why : Writer.cid)
               | _ ->
                   (* A conflict whose derivation IS a clause already states itself in the
@@ -3534,6 +3537,7 @@ exception Interrupted of Trace.t * stats
 
 let search_core ~(engine : Engine.t) ~(store : Store.t) ~(ctx : Justify.ctx) ?trace ?stats
     ?(order = spec_order) ?(config = default_config) () : node * Trace.t * stats =
+  Engine.install_names engine;
   let entry_level = Store.level store in
   (* [?trace] exists so a caller can read back *which* rules in the emitted proof were
      D-0018 trace lines (test/unit/test_trace.ml checks each of them standalone against

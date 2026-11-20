@@ -833,8 +833,8 @@ let cited_ids (e : Explanation.t) : int list =
   let rec go (e : Explanation.t) =
     match e with
     | Explanation.Model_row id -> add id
-    | Explanation.Combine (summands, _) -> List.iter summand summands
-    | Explanation.Cut (a, b, _, _) ->
+    | Explanation.Combine { summands; divisor = _; _ } -> List.iter summand summands
+    | Explanation.Cut { e1 = a; e2 = b; c1 = _; c2 = _; _ } ->
         go a;
         go b
     (* A RELEASED thunk (M11-complexity-T13, D-0168) has no tree: [force] builds it
@@ -842,8 +842,10 @@ let cited_ids (e : Explanation.t) : int list =
        not kept. *)
     | Explanation.Deferred _ -> go (Explanation.force e)
     (* M8-bits-encoding-T3 (D-0134): a choice derivation cites its parts' rows. *)
-    | Explanation.Resolve parts -> List.iter go parts
-    | Explanation.Decision _ | Explanation.Clause _ | Explanation.Linear _ -> ()
+    | Explanation.Resolve { parts; _ } -> List.iter go parts
+    | Explanation.Decision _ | Explanation.Clause { lits = _; _ } | Explanation.Linear _
+      ->
+        ()
   and summand = function
     | Explanation.Term (_, e) -> go e
     | Explanation.Weaken _ -> ()

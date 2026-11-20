@@ -420,14 +420,29 @@ let running t = t.current_prop
 let run_as t id f x =
   let saved = t.current_prop in
   t.current_prop <- id;
-  match f x with
-  | r ->
-      t.current_prop <- saved;
-      r
-  | exception e ->
-      let bt = Printexc.get_raw_backtrace () in
-      t.current_prop <- saved;
-      Printexc.raise_with_backtrace e bt
+  if Explanation.stats_on then (
+    (* M11-complexity-T15: who builds what, for BAGUETTE_MEMO_STATS only *)
+    let p = !Explanation.producer in
+    Explanation.producer := id;
+    match f x with
+    | r ->
+        t.current_prop <- saved;
+        Explanation.producer := p;
+        r
+    | exception e ->
+        let bt = Printexc.get_raw_backtrace () in
+        t.current_prop <- saved;
+        Explanation.producer := p;
+        Printexc.raise_with_backtrace e bt)
+  else
+    match f x with
+    | r ->
+        t.current_prop <- saved;
+        r
+    | exception e ->
+        let bt = Printexc.get_raw_backtrace () in
+        t.current_prop <- saved;
+        Printexc.raise_with_backtrace e bt
 
 let with_running t id f = run_as t id f ()
 
@@ -550,7 +565,7 @@ let root_holds t (l : Lit.t) =
    variables the reverse arm of [agreement_holds] requires the reason to name. *)
 let reverse_owners t e =
   match Explanation.force e with
-  | Explanation.Combine (summands, _) ->
+  | Explanation.Combine { summands; divisor = _; _ } ->
       List.sort_uniq String.compare
         (List.concat_map
            (function

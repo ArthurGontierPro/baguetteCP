@@ -270,7 +270,7 @@ let test_store () =
     (match Store.trail_entries s3 with
     | e :: _ -> (
         match Store.explanation s3 e with
-        | Explanation.Clause [ l ] -> Lit.to_string l = Lit.to_string lit
+        | Explanation.Clause { lits = [ l ]; _ } -> Lit.to_string l = Lit.to_string lit
         | _ -> false)
     | [] -> false);
   Store.backtrack s3;
@@ -310,7 +310,7 @@ let test_explanations () =
   check "explanation: Deferred is memoised" (!calls = 1);
   check "explanation: forced value is the computed one"
     (match Explanation.force e with
-    | Explanation.Clause [ l' ] -> Lit.to_string l' = "x_ge_3"
+    | Explanation.Clause { lits = [ l' ]; _ } -> Lit.to_string l' = "x_ge_3"
     | _ -> false);
   check "explanation: is_forced after forcing" (Explanation.is_forced e);
 
@@ -327,7 +327,9 @@ let test_explanations () =
   let head = Explanation.force nested in
   let head2 = Explanation.force nested in
   check "explanation: nested Deferred forces through to a concrete head"
-    (match head with Explanation.Linear ([ (1, _) ], 1) -> true | _ -> false);
+    (match head with
+    | Explanation.Linear { terms = [ (1, _) ]; rhs = 1; _ } -> true
+    | _ -> false);
   check "explanation: nested Deferred is memoised at every layer"
     (!outer_calls = 1 && !inner_calls = 1);
   check "explanation: repeated force returns the same value" (head == head2);
@@ -391,7 +393,9 @@ let test_explanations () =
   check "arena: ids are dense" (i0 = 0 && i1 = 1 && i2 = 2);
   check "arena: it grows past its initial capacity" (Arena.length a = 3);
   check "arena: get resolves"
-    (match Arena.get a i1 with Explanation.Clause [ _ ] -> true | _ -> false);
+    (match Arena.get a i1 with
+    | Explanation.Clause { lits = [ _ ]; _ } -> true
+    | _ -> false);
   check "arena: mem agrees with get" (Arena.mem a i2 && not (Arena.mem a 3));
   check "arena: null is not a member" (not (Arena.mem a Arena.null));
   check_raises "arena: get out of range raises" (fun () -> Arena.get a 3);
@@ -414,7 +418,11 @@ let test_explanations () =
   let _ = Arena.force_at b id in
   let _ = Arena.force_at b id in
   check "arena: force_at memoises into the arena"
-    (!n = 1 && match Arena.get b id with Explanation.Clause [ _ ] -> true | _ -> false)
+    (!n = 1
+    &&
+    match Arena.get b id with
+    | Explanation.Clause { lits = [ _ ]; _ } -> true
+    | _ -> false)
 
 (* ------------------------------------------------- who made the change (M2-T7)
 

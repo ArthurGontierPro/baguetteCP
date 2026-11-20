@@ -80,8 +80,9 @@
 
    D-0166 section 5 option B, decided by D-0167 item 6. Once [Justify.emit] has written a
    thunk's derivation, the thunk records the line ([line]: the id, the level, and what
-   [Justify] needs to tell whether the line is still on the page) and drops its tree; the
-   memo cells that emission made for nodes the closure BUILT are taken out with it. Until
+   [Justify] needs to tell whether the line is still on the page) and drops its tree
+   (until M11-complexity-T15 the memo cells that emission made for nodes the closure
+   BUILT were taken out with it; since T15 every node carries its own line). Until
    then the tree stayed reachable from [forced], from the closure [force] put in place of
    the original, and from the memo's keys, for as long as the trail entry stood: 1.16 GB
    of all_different derivations on 2011_black-hole_9 at node 40 (D-0166 section 4).
@@ -90,7 +91,7 @@
 
    - A later [emit] of the thunk. The memo answered it (or its forced head) with the id
      for as long as no wipe had reached the level it was written at; the line answers
-     under exactly that condition ([Justify.live_line]).
+     under exactly that condition ([Justify.live]).
    - [emit] after that level was wiped. The same physical tree used to be written again,
      every cell of it gone with the wipe. Now the closure is forced again and that tree
      is written. It is the same derivation because a thunk closes over a SNAPSHOT (I-X6);
@@ -99,36 +100,21 @@
      original, which a released thunk then keeps. The memo answers the two trees alike
      because a node of the tree either is CAPTURED -- a value the closure did not build,
      like another entry's eager explanation, held physically by both forcings -- and
-     keeps its cell, so it is found as before; or is BUILT, new at every forcing and
-     reachable from nothing but its tree, so that no lookup can present it again.
-   - Which is which: every node is built by the smart constructors, and while a thunk is
-     forced they record what they build and look up every operand they are handed among
-     it (the FRAME, below the type). A forcing that was handed nothing it had not built
-     captured nothing: its cells all go, and no second forcing is paid. One that may have
-     captured ([captures]) is forced a second time at its release, and a node the two
-     forcings hold physically in common keeps its cell; if the two differ, the thunk is
-     not released at all and keeps its tree and its cells, as before T13.
-   - BAGUETTE_DEBUG checks the two halves of that split: a hit, inside a thunk's
-     emission, on a cell the emission did not make must be a captured node (the second
-     forcing holds it), and a cell taken out must never be asked for again (the ghost
-     table in [Justify]); and a forcing that recorded no capture must share no node with
-     its second forcing.
+     carries its own line, so it is found as before; or is BUILT, new at every forcing
+     and reachable from nothing but its tree, so that no lookup can present it again.
    - [lits] (the D-0026 agreement walk, under BAGUETTE_DEBUG), [Pb_analysis.cited_ids],
      and the readers that match on a forced head: [force] forces a released thunk again,
      without memoising, and they read the same derivation.
 
-   The header of [thunk] below used to say a thunk is the ONLY shared node of a
-   derivation. That is not what the code does, and T13 measured it: on
-   test/models/alldiff_regin_hole_element_unsat.fzn a conflict's derivation holds an
-   eager [Combine] the trace had already written as another entry's line, and 39 cells of
-   the suite are captured nodes first written inside another thunk's emission
-   (element_foreign_hole_*, element_shared_result_root_unsat). The release does not rest
-   on that sentence; it rests on the captured/built split, which the frame records rather
-   than assumes. What it does rest on: a closure hands nobody a node it built (a cache
-   that kept one and handed it to a later forcing would make that node captured there and
-   built here, and the ghost check is what would see it), and every node is built through
-   the smart constructors (a direct [Term (c, e)] in a closure would hide its operand from
-   the frame; nothing in lib/ builds one).
+   M11-complexity-T15 removed what T13 needed to tell CAPTURED from BUILT nodes (a frame
+   recording every build while a thunk was forced, and a second forcing at the release
+   when the tree might hold a node the closure had not built): that split existed to
+   take a released tree's memo cells out of a table, and since T15 a node's line is a
+   field of the node, so no table holds a node and there is nothing to take out. T13
+   measured, and the sentence stays true, that a thunk is not the only shared node of a
+   derivation (39 captured cells on the suite: an eager [Combine] the trace had already
+   written as another entry's line); with the line on the node that sharing needs no
+   bookkeeping, since the node is the same value for every derivation that holds it.
 
    -------------------------------------------------------------------------------
    M1-T12 / docs/DECISIONS.md D-0013: [Model_row], [Combine], [Weaken]
@@ -244,10 +230,11 @@ type t =
     (* An assumption the search made: [lit] holds *because we said so*, on this
        branch only. Nothing derives it, so it has no constraint id and can never be
        a [pol] operand -- see the module header. *)
-  | Clause of Lit.t list (* These literals together imply the pruning. Renders to rup. *)
-  | Linear of (int * Lit.t) list * int
+  | Clause of { lits : Lit.t list; mutable line : line; hid : int }
+    (* These literals together imply the pruning. Renders to rup. *)
+  | Linear of { terms : (int * Lit.t) list; rhs : int; mutable line : line; hid : int }
     (* sum a_i l_i >= b. Renders to pol over the model constraint. *)
-  | Cut of t * t * int * int
+  | Cut of { e1 : t; e2 : t; c1 : int; c2 : int; mutable line : line; hid : int }
     (* Linear combination: c1 * e1 + c2 * e2, the cutting-planes workhorse. Kept for
        existing single-row uses; D-0013's cross-row, divided combination is
        [Combine], below -- see the module header. *)
@@ -256,11 +243,11 @@ type t =
        the checker's [f] rule, named explicitly rather than resolved through
        whatever [ctx.model_id] happens to point at right now. See the module
        header. *)
-  | Combine of summand list * int
+  | Combine of { summands : summand list; divisor : int; mutable line : line; hid : int }
     (* sum of summands, then divide by the int (>= 1; 1 means "do not divide" --
        Justify skips emitting a division step rather than a no-op "1 d"). One
        [Combine] is one [pol] step (D-0013). *)
-  | Resolve of t list
+  | Resolve of { parts : t list; mutable line : line; hid : int }
     (* M8-bits-encoding-T3, D-0134 section 2.2: the SUM of the listed derivations, each
        first saturated to the clause it derives (a [Combine] is summed, divided and
        saturated; a [Model_row] is cited as it stands), saturated again -- resolution on
@@ -275,7 +262,15 @@ type t =
        [Justify.emit] meets one only as a CITATION from an order-arm derivation and
        answers the line stating the clause it derives (D-0134 section 5). *)
   | Deferred of thunk
-(* Computed only if actually needed. *)
+(* Computed only if actually needed.
+
+   M11-complexity-T15 (the DAG spike): the five constructors a line is written for
+   ([Clause], [Linear], [Cut], [Combine], [Resolve]) carry that line ([line]: [No_line]
+   until [Justify] writes one, the same record a thunk keeps) and an identity [hid] (0
+   unless BAGUETTE_HASHCONS=1, see "hash-consing" below). The memo that was a table in
+   [Justify] keyed by physical identity is this field: a node remembers its own line, so
+   a lookup is a field read and nothing outside the node holds it. Build them through
+   the smart constructors; a pattern reads the fields it needs and ends in [_]. *)
 
 and summand =
   | Term of int * t
@@ -316,10 +311,7 @@ and thunk = {
          it (M11-complexity-T13, D-0168) *)
   mutable mark : int;
   mutable line : line;
-  mutable captures : bool;
-      (* the last forcing's tree holds a node the closure did not build ([citable] below):
-         [Justify] then tells built nodes from captured ones by forcing it again before it
-         releases it (M11-complexity-T13, D-0168) *)
+  tid : int; (* M11-complexity-T15: the identity a hash-consed parent hashes it by *)
 }
 (* [mark]: the walk that last visited this thunk ([lits] below). A thunk is the shared
    node of a derivation that matters -- a trail entry's explanation is one thunk cited by
@@ -342,88 +334,247 @@ and line = No_line | Line of { cid : int; level : int; epoch : int; owner : int 
 
 type expl = t
 
-(* ------------------------------------------------- what a forcing builds (T13)
+(* ------------------------------------------------------ hash-consing (T15)
 
-   M11-complexity-T13 (D-0168). While a thunk is forced, a FRAME records the last
-   [ring_size] nodes the smart constructors below built ([note]), and every operand a
-   constructor is handed ([citable]: a [Term]'s, a [Cut]'s, a [Resolve] part, a
-   [Linear_term]'s cited explanation) is looked up among them by identity. An operand that
-   is a memoisable node ([Clause], [Linear], [Cut], [Combine], [Resolve]) and is not found
-   is one the closure did not build in this forcing -- CAPTURED, or built so long before
-   that it left the ring -- and the frame says so. A thunk whose tree may hold a captured
-   node is released only after a second forcing has told the two kinds apart (see
-   [Justify.emit_thunk]); one whose tree holds none is released without it, which is what
-   keeps the release free: a second forcing of a cumulative or all_different closure is as
-   dear as the first (D-0168 measured +5 % to +37 % instructions with it on every
-   release). The ring is scanned newest first, and a closure builds an operand just
-   before it wraps it, so the lookup is a few comparisons. It is exact in one direction
-   only, which is the one that matters: a node found in the ring was built in this
-   forcing; a node not found is treated as captured. Every [t] is built through these
-   constructors in lib/ (a direct [Term (c, e)] would bypass the check; nothing in lib/
-   builds one, and the guard [citable] already makes the constructors the only door, for
-   M1-T50's sake). *)
-let ring_size = 256
+   M11-complexity-T15, D-0172 (D-0140 J1). Every node a line can be written for is
+   HASH-CONSED when it is built: a node whose content equals a node whose line is on the
+   page IS that node, so an identical derivation built twice is one value, its line is
+   written once and every later build cites it ([Justify.memoized]). It replaces D-0158's
+   share mode, which found the same lines by rendering every miss: here the identical node
+   is found at its build and its emission is one field read. The key is SHALLOW: the
+   constructor, its integers and literals, and every operand by its own identity ([hid]
+   for a node, [tid] for a thunk, the id for a [Model_row]), which is sound because the
+   operands are themselves hash-consed, so two equal operands are one value. The table
+   holds the written nodes only (see [table]).
 
-type frame = {
-  ring : t array;
-  mutable pos : int;
-  mutable n : int;
-  mutable captured : bool;
-}
+   ON BY DEFAULT (D-0172, decided by the orchestrator on the user's delegation, D-0167
+   item 3). BAGUETTE_HASHCONS=0 turns it off for comparison: [hid] and [tid] are then 0,
+   nothing is hashed, every build is a value of its own and each copy writes its own line,
+   which is the proof main wrote before D-0172 byte for byte. [set_hashcons] is the same
+   switch for a test. *)
+let hashcons =
+  ref (match Sys.getenv_opt "BAGUETTE_HASHCONS" with Some "0" -> false | _ -> true)
 
-let frames : frame array ref = ref [||]
-let depth = ref 0
+let stats_on =
+  match Sys.getenv_opt "BAGUETTE_MEMO_STATS" with
+  | Some ("1" | "true" | "yes" | "on") -> true
+  | _ -> false
 
-let open_frame () =
-  if !depth = Array.length !frames then
-    frames :=
-      Array.append !frames
-        (Array.init (Stdlib.max 4 !depth) (fun _ ->
-             {
-               ring = Array.make ring_size (Model_row 0);
-               pos = 0;
-               n = 0;
-               captured = false;
-             }));
-  let f = !frames.(!depth) in
-  f.pos <- 0;
-  f.n <- 0;
-  f.captured <- false;
-  incr depth;
-  f
+let hid_counter = ref 0
 
-(* Close the innermost frame and drop what its ring holds, so that a frame kept for reuse
-   does not keep the last tree it saw alive. *)
-let close_frame f =
-  decr depth;
-  Array.fill f.ring 0 f.n (Model_row 0)
+let fresh_hid () =
+  if !hashcons || stats_on then (
+    incr hid_counter;
+    !hid_counter)
+  else 0
 
-let note e =
-  if !depth > 0 then (
-    let f = !frames.(!depth - 1) in
-    f.ring.(f.pos) <- e;
-    f.pos <- (f.pos + 1) land (ring_size - 1);
-    if f.n < ring_size then f.n <- f.n + 1);
-  e
+let mix h x = (h * 31) + x
 
-let built_here f e =
-  let rec go k i =
-    k < f.n && (f.ring.(i) == e || go (k + 1) ((i - 1) land (ring_size - 1)))
+let lit_hash (l : Lit.t) =
+  let k, x, v =
+    match l.Lit.v with
+    | Lit.Ge (x, v) -> (0, x, v)
+    | Lit.Eq (x, v) -> (1, x, v)
+    | Lit.Bit (x, i) -> (2, x, i)
   in
-  go 0 ((f.pos - 1) land (ring_size - 1))
+  mix (mix (mix (Hashtbl.hash x) v) k) (Bool.to_int l.Lit.positive)
 
-(* An operand handed to a constructor inside a forcing. *)
-let operand e =
-  if !depth > 0 then
-    match e with
-    | Deferred _ | Model_row _ | Decision _ -> ()
-    | Clause _ | Linear _ | Cut _ | Combine _ | Resolve _ ->
-        let f = !frames.(!depth - 1) in
-        if (not f.captured) && not (built_here f e) then f.captured <- true
+let operand_id = function
+  | Clause r -> r.hid
+  | Linear r -> r.hid
+  | Cut r -> r.hid
+  | Combine r -> r.hid
+  | Resolve r -> r.hid
+  | Deferred th -> th.tid
+  | Model_row i -> mix 4 i
+  | Decision l -> lit_hash l
+
+let same_operand a b =
+  a == b || match (a, b) with Model_row i, Model_row j -> i = j | _ -> false
+
+let same_terms = List.equal (fun (c, l) (d, m) -> c = d && Lit.equal l m)
+
+let same_summand s t =
+  match (s, t) with
+  | Term (c, a), Term (d, b) -> c = d && same_operand a b
+  | Weaken ls, Weaken ms -> same_terms ls ms
+  | Defining (c, l), Defining (d, m) -> c = d && Lit.equal l m
+  | Linear_term r, Linear_term q ->
+      r.lt_coeff = q.lt_coeff && r.lt_value = q.lt_value && r.lt_decl_lo = q.lt_decl_lo
+      && r.lt_decl_hi = q.lt_decl_hi
+      && String.equal r.lt_name q.lt_name
+      && List.equal same_operand r.lt_cited q.lt_cited
+  | _ -> false
+
+let summand_hash h = function
+  | Term (c, e) -> mix (mix (mix h 1) c) (operand_id e)
+  | Weaken ls -> List.fold_left (fun h (c, l) -> mix (mix h c) (lit_hash l)) (mix h 2) ls
+  | Defining (c, l) -> mix (mix (mix h 3) c) (lit_hash l)
+  | Linear_term r ->
+      List.fold_left
+        (fun h e -> mix h (operand_id e))
+        (mix (mix (mix (mix h 4) (Hashtbl.hash r.lt_name)) r.lt_coeff) r.lt_value)
+        r.lt_cited
+
+module Hc = Hashtbl.Make (struct
+  type nonrec t = t
+
+  let equal a b =
+    match (a, b) with
+    | Clause x, Clause y -> List.equal Lit.equal x.lits y.lits
+    | Linear x, Linear y -> x.rhs = y.rhs && same_terms x.terms y.terms
+    | Cut x, Cut y ->
+        x.c1 = y.c1 && x.c2 = y.c2 && same_operand x.e1 y.e1 && same_operand x.e2 y.e2
+    | Combine x, Combine y ->
+        x.divisor = y.divisor && List.equal same_summand x.summands y.summands
+    | Resolve x, Resolve y -> List.equal same_operand x.parts y.parts
+    | _ -> false
+
+  let hash e =
+    (match e with
+    | Clause r -> List.fold_left (fun h l -> mix h (lit_hash l)) 1 r.lits
+    | Linear r ->
+        List.fold_left (fun h (c, l) -> mix (mix h c) (lit_hash l)) (mix 2 r.rhs) r.terms
+    | Cut r -> mix (mix (mix (mix 3 r.c1) r.c2) (operand_id r.e1)) (operand_id r.e2)
+    | Combine r -> List.fold_left summand_hash (mix 5 r.divisor) r.summands
+    | Resolve r -> List.fold_left (fun h e -> mix h (operand_id e)) 7 r.parts
+    | Model_row _ | Decision _ | Deferred _ -> 0)
+    land max_int
+end)
+
+(* The table holds the nodes whose LINE is on the page, by the content of the node, and
+   only those. [Justify] enters a node when it writes its line ([hc_written], at the
+   writer's level) and takes it out when that level is wiped ([hc_wipe]), so a build
+   whose content equals a written node returns that node, and [Justify] cites its line.
+   Two other scopings were tried and measured, and both are wrong for a reason worth
+   keeping:
+
+   - a WEAK table (a node stays while anything reaches it): the answer then depends on
+     whether the collector has run, and the proof's bytes moved with every allocation
+     anywhere (the same run with BAGUETTE_MEMO_STATS on wrote a different proof);
+   - a table scoped by the STORE's level at the build: it never answers, because the
+     identical rebuilds come after the level that built the first copy was undone, while
+     the first copy's line, written at a shallower level, is still on the page
+     (2013_rcpsp_11 at 300 nodes: 0 identical builds found, against 67 264 with the weak
+     table).
+
+   What the table answers is a function of the lines on the page, so the bytes are a
+   function of the search. *)
+let table : t Hc.t = Hc.create 4096
+let hc_by_level : t list array ref = ref (Array.make 64 [])
+let hc_hi = ref (-1)
+
+let rec hc_written e level =
+  let twin_at_or_below =
+    match Hc.find_opt table e with
+    | Some x when x != e -> (
+        match x with
+        | Clause { line = Line { level = l; _ }; _ }
+        | Linear { line = Line { level = l; _ }; _ }
+        | Cut { line = Line { level = l; _ }; _ }
+        | Combine { line = Line { level = l; _ }; _ }
+        | Resolve { line = Line { level = l; _ }; _ } ->
+            l <= level
+        | _ -> false)
+    | _ -> false
+  in
+  (* Two nodes of one content are both written when the second was built before the first
+     was written. The table keeps the one whose line lives longer, the shallower. *)
+  if not twin_at_or_below then hc_enter e level
+
+and hc_enter e level =
+  Hc.replace table e e;
+  if level >= Array.length !hc_by_level then (
+    let a = Array.make (2 * (level + 1)) [] in
+    Array.blit !hc_by_level 0 a 0 (Array.length !hc_by_level);
+    hc_by_level := a);
+  !hc_by_level.(level) <- e :: !hc_by_level.(level);
+  if level > !hc_hi then hc_hi := level
+
+let hc_wipe level =
+  for l = level to !hc_hi do
+    List.iter
+      (fun e ->
+        match Hc.find_opt table e with Some x when x == e -> Hc.remove table e | _ -> ())
+      !hc_by_level.(l);
+    !hc_by_level.(l) <- []
+  done;
+  if !hc_hi >= level then hc_hi := level - 1
+
+(* For a test that needs both modes in one process: switch, and forget every written
+   node (a node written under the other mode must not answer a build under this one). *)
+let set_hashcons on =
+  hashcons := on;
+  Hc.reset table;
+  hc_by_level := Array.make 64 [];
+  hc_hi := -1
+
+(* BAGUETTE_MEMO_STATS: how many nodes of each constructor were built, and how many of
+   those builds were IDENTICAL to a node still reachable (a hash-consing hit), per
+   constructor and per producer -- the propagator running when the node was built
+   ([producer], set by [Engine] around a run and by [Trace] around an entry's lines). The
+   identical builds are counted whether or not hash-consing is on: off, the table is
+   still consulted when the stats are asked for, and a hit is counted and discarded. *)
+(* The instance id of the propagator building now, or -1; [producer_name] is [Engine]'s
+   [name_of], installed when the stats are on. *)
+let producer = ref (-1)
+let producer_name : (int -> string) ref = ref (fun _ -> "other")
+let producer_label () = if !producer < 0 then "other" else !producer_name !producer
+let hc_by : (string, int ref * int ref) Hashtbl.t = Hashtbl.create 32
+
+let tag = function
+  | Clause _ -> "clause"
+  | Linear _ -> "linear"
+  | Cut _ -> "cut"
+  | Combine _ -> "combine"
+  | Resolve _ -> "resolve"
+  | _ -> "other"
+
+let count key hit =
+  let b, h =
+    match Hashtbl.find_opt hc_by key with
+    | Some p -> p
+    | None ->
+        let p = (ref 0, ref 0) in
+        Hashtbl.replace hc_by key p;
+        p
+  in
+  incr b;
+  if hit then incr h
+
+(* Off, with the stats asked for, the table still takes the written nodes: a build
+   identical to one of them is counted, and the value returned is still the new build, so
+   nothing the solver writes changes. *)
+(* The table is looked into only when it holds something: under `--no-proof`, and before
+   the first line, nothing is ever written, so a build pays one length read and is not
+   hashed (the scaling lane measured rcpsp_11 without the proof +0.68 % of its late cost per
+   node with the hash paid on every build, D-0172 section 8). *)
+let built e =
+  if !hashcons then (
+    let e' =
+      if Hc.length table = 0 then e
+      else match Hc.find_opt table e with Some x -> x | None -> e
+    in
+    if stats_on then count (producer_label () ^ "\t" ^ tag e) (e' != e);
+    e')
+  else if stats_on then (
+    count (producer_label () ^ "\t" ^ tag e) (Hc.mem table e);
+    e)
+  else e
+
+let () =
+  if stats_on then
+    at_exit (fun () ->
+        let rows = Hashtbl.fold (fun k (b, h) acc -> (k, !b, !h) :: acc) hc_by [] in
+        let rows = List.sort (fun (_, _, a) (_, _, b) -> compare b a) rows in
+        List.iter
+          (fun (k, b, h) ->
+            Printf.eprintf "baguette: hashcons\t%s\tbuilt=%d\tidentical=%d\n" k b h)
+          rows)
 
 let decision lit = Decision lit
-let clause lits = note (Clause lits)
-let linear terms rhs = note (Linear (terms, rhs))
+let clause lits = built (Clause { lits; line = No_line; hid = fresh_hid () })
+let linear terms rhs = built (Linear { terms; rhs; line = No_line; hid = fresh_hid () })
 let model_row id = Model_row id
 let weaken lits = Weaken lits
 
@@ -455,11 +606,20 @@ let citable what e =
            "Explanation.%s: a decision (%s) has no constraint id and cannot be cited. \
             Weaken the term out of the row instead -- see explanation.ml's header."
            what (Lit.to_string l))
-  | e ->
-      operand e;
-      e
+  | e -> e
 
-let cut e1 e2 c1 c2 = note (Cut (citable "cut" e1, citable "cut" e2, c1, c2))
+let cut e1 e2 c1 c2 =
+  built
+    (Cut
+       {
+         e1 = citable "cut" e1;
+         e2 = citable "cut" e2;
+         c1;
+         c2;
+         line = No_line;
+         hid = fresh_hid ();
+       })
+
 let term coeff e = Term (coeff, citable "term" e)
 
 (* [resolve parts]: the parts are cited (summed) and so cannot be decisions; two is the
@@ -468,7 +628,9 @@ let resolve parts =
   (match parts with
   | [] | [ _ ] -> invalid_arg "Explanation.resolve: at least two derivations to resolve"
   | _ -> ());
-  note (Resolve (List.map (citable "resolve") parts))
+  built
+    (Resolve
+       { parts = List.map (citable "resolve") parts; line = No_line; hid = fresh_hid () })
 
 (* [Linear_term] and its readings (M8-bits-encoding-T2). The term is DECLARED when the
    bound it read is the declared one in its own direction, and then has no literal:
@@ -515,10 +677,34 @@ let combine summands divisor =
   (match summands with
   | [] -> invalid_arg "Explanation.combine: summands must be non-empty"
   | _ -> ());
-  note (Combine (summands, divisor))
+  built (Combine { summands; divisor; line = No_line; hid = fresh_hid () })
+
+let born : (int, int) Hashtbl.t = Hashtbl.create (if stats_on then 4096 else 1)
 
 let deferred compute =
-  Deferred { forced = None; compute; mark = 0; line = No_line; captures = false }
+  let tid = fresh_hid () in
+  if stats_on then Hashtbl.replace born tid !producer;
+  Deferred { forced = None; compute; mark = 0; line = No_line; tid }
+
+(* The line a node remembers ([No_line] for a [Decision], a [Model_row] or a thunk, whose
+   line [Justify] reads through [line_of]), and the writing of it. *)
+let node_line = function
+  | Clause r -> r.line
+  | Linear r -> r.line
+  | Cut r -> r.line
+  | Combine r -> r.line
+  | Resolve r -> r.line
+  | Decision _ | Model_row _ | Deferred _ -> No_line
+
+let set_node_line e l =
+  match e with
+  | Clause r -> r.line <- l
+  | Linear r -> r.line <- l
+  | Cut r -> r.line <- l
+  | Combine r -> r.line <- l
+  | Resolve r -> r.line <- l
+  | Decision _ | Model_row _ | Deferred _ ->
+      invalid_arg "Explanation.set_node_line: not a node a line is written for"
 
 (* One fresh mark per walk; a thunk's [mark] equals it iff this walk has seen it. *)
 let marks = ref 0
@@ -535,38 +721,30 @@ let reforced_emit = ref 0
 let released = ref 0
 
 (* [same_derivation a b]: [a] and [b] are the same derivation -- the question
-   [Justify] asks of a thunk's tree and a second forcing of it before it releases the
-   thunk, and [force] asks under BAGUETTE_DEBUG of every forcing after. A thunk is compared
-   by identity, never descended into: a cited thunk is a shared node, and the second
-   forcing must cite the same one. Everything else is compared by structure, and a node
-   the two trees hold PHYSICALLY in common (a value the closure captured rather than
-   built) is not descended into either: it is pushed on [captured]. *)
-let same_derivation ?(captured = ref []) a b =
+   BAGUETTE_DEBUG asks of a thunk's tree and a second forcing of it when [Justify]
+   releases the thunk, and of every forcing after (I-X6). A thunk is compared by identity,
+   never descended into: a cited thunk is a shared node, and the second forcing must cite
+   the same one. Everything else is compared by structure; the [line] a node carries is
+   not part of what it derives and is not compared. *)
+let same_derivation a b =
   let rec go a b =
-    if a == b then (
-      (* a [Model_row] or a [Decision] has no memo cell, and is no capture that matters *)
-      (match a with
-      | Deferred _ | Model_row _ | Decision _ -> ()
-      | Clause _ | Linear _ | Cut _ | Combine _ | Resolve _ -> captured := a :: !captured);
-      true)
-    else
-      match (a, b) with
-      | Deferred x, Deferred y -> x == y
-      | Decision l, Decision m -> Lit.equal l m
-      | Clause ls, Clause ms -> List.equal Lit.equal ls ms
-      | Linear (ts, r), Linear (us, s) ->
-          r = s && List.equal (fun (c, l) (d, m) -> c = d && Lit.equal l m) ts us
-      | Cut (a1, a2, c1, c2), Cut (b1, b2, d1, d2) ->
-          c1 = d1 && c2 = d2 && go a1 b1 && go a2 b2
-      | Model_row i, Model_row j -> i = j
-      | Combine (ss, d), Combine (ts, e) -> d = e && List.equal summand ss ts
-      | Resolve ps, Resolve qs -> List.equal go ps qs
-      | _ -> false
+    a == b
+    ||
+    match (a, b) with
+    | Deferred x, Deferred y -> x == y
+    | Decision l, Decision m -> Lit.equal l m
+    | Clause x, Clause y -> List.equal Lit.equal x.lits y.lits
+    | Linear x, Linear y -> x.rhs = y.rhs && same_terms x.terms y.terms
+    | Cut x, Cut y -> x.c1 = y.c1 && x.c2 = y.c2 && go x.e1 y.e1 && go x.e2 y.e2
+    | Model_row i, Model_row j -> i = j
+    | Combine x, Combine y ->
+        x.divisor = y.divisor && List.equal summand x.summands y.summands
+    | Resolve x, Resolve y -> List.equal go x.parts y.parts
+    | _ -> false
   and summand s t =
     match (s, t) with
     | Term (c, a), Term (d, b) -> c = d && go a b
-    | Weaken ls, Weaken ms ->
-        List.equal (fun (c, l) (d, m) -> c = d && Lit.equal l m) ls ms
+    | Weaken ls, Weaken ms -> same_terms ls ms
     | Defining (c, l), Defining (d, m) -> c = d && Lit.equal l m
     | Linear_term r, Linear_term q ->
         r.lt_coeff = q.lt_coeff
@@ -577,32 +755,6 @@ let same_derivation ?(captured = ref []) a b =
     | _ -> false
   in
   go a b
-
-(* Every node of the trees under [roots], thunks excepted and not descended into: what a
-   captured value holds that the memo could have a cell for. *)
-let nodes_under roots =
-  let acc = ref [] in
-  let rec go e =
-    match e with
-    | Deferred _ | Decision _ | Model_row _ -> ()
-    | Clause _ | Linear _ -> acc := e :: !acc
-    | Cut (a, b, _, _) ->
-        acc := e :: !acc;
-        go a;
-        go b
-    | Combine (ss, _) ->
-        acc := e :: !acc;
-        List.iter summand ss
-    | Resolve ps ->
-        acc := e :: !acc;
-        List.iter go ps
-  and summand = function
-    | Term (_, e) -> go e
-    | Linear_term r -> List.iter go r.lt_cited
-    | Weaken _ | Defining _ -> ()
-  in
-  List.iter go roots;
-  !acc
 
 (* Force to a non-deferred head. Nested [Deferred] is allowed: a thunk may return another
    thunk, and memoisation records the fully forced result at each level.
@@ -617,8 +769,7 @@ let nodes_under roots =
 
    Under BAGUETTE_DEBUG a released thunk keeps its original tree ([release]), and every
    forcing again is compared with it ([same_derivation]): the measurement of the claim
-   the release rests on. The tree returned is the new one in both modes, so a debug run
-   presents the memo the same nodes a normal run does. *)
+   the release rests on. The tree returned is the new one in both modes. *)
 let rec force = function
   | Deferred th -> (
       match th.line with
@@ -644,47 +795,25 @@ let rec force = function
   | e -> e
 
 (* Force [th]'s closure once more, outside the memoisation and the counts: what a re-forcing
-   would return. For [Justify]'s check before it releases. *)
+   would return. For BAGUETTE_DEBUG's check when [Justify] releases. *)
 and reforce th = compute th
 
-(* Run [th]'s closure inside a frame and force what it returns. [captures] is set when the
-   tree may hold a node the closure did not build: an operand the frame did not see built,
-   or a root it did not see built (a closure returning a captured value, or another thunk,
-   whose tree is that thunk's). *)
 and compute th =
-  let f = open_frame () in
-  let v =
-    match th.compute () with
-    | v -> v
-    | exception ex ->
-        close_frame f;
-        raise ex
-  in
-  let root_built =
-    match v with
-    | Deferred _ -> false
-    | Model_row _ | Decision _ -> true
-    | Clause _ | Linear _ | Cut _ | Combine _ | Resolve _ -> built_here f v
-  in
-  th.captures <- f.captured || not root_built;
-  close_frame f;
-  force v
-
-(* Whether the last forcing of [th] may have captured a node ([compute]). *)
-let captures th = th.captures
+  if stats_on then (
+    (* a build inside the closure is the producer's that made the thunk *)
+    let p = !producer in
+    (match Hashtbl.find_opt born th.tid with Some b -> producer := b | None -> ());
+    let v = th.compute () in
+    producer := p;
+    force v)
+  else force (th.compute ())
 
 (* The line of a released thunk, or [No_line]. *)
 let line_of th = th.line
 
-(* Undo a release: [th] holds [tree] again and no line, as a thunk forced and never
-   released does. For [Justify], when a second forcing is not the same derivation. *)
-let keep th tree =
-  th.line <- No_line;
-  th.forced <- Some tree
-
 (* RELEASE [th]: record the line its derivation was written as and drop the tree (kept
-   under BAGUETTE_DEBUG, see [force]). The module header's section on releasing says why
-   that writes the same proof. *)
+   under BAGUETTE_DEBUG, see [force]). Since M11-complexity-T15 nothing else has to let go
+   of the tree: every node of it carries its own line, and no table holds a node. *)
 let release th (l : line) =
   (match l with No_line -> invalid_arg "Explanation.release: no line" | Line _ -> ());
   if th.line = No_line then incr released;
@@ -720,13 +849,13 @@ let lits e =
        empty, which is the dependency D-0035 says becomes unsoundness in M2-T3. *)
     | Decision l -> add l
     | Model_row _ -> ()
-    | Clause ls -> List.iter add ls
-    | Linear (terms, _) -> List.iter (fun (_, l) -> add l) terms
-    | Cut (a, b, _, _) ->
-        go a;
-        go b
-    | Combine (summands, _) -> List.iter go_summand summands
-    | Resolve parts -> List.iter go parts
+    | Clause r -> List.iter add r.lits
+    | Linear r -> List.iter (fun (_, l) -> add l) r.terms
+    | Cut r ->
+        go r.e1;
+        go r.e2
+    | Combine r -> List.iter go_summand r.summands
+    | Resolve r -> List.iter go r.parts
     | Deferred _ -> assert false (* force returns a non-deferred head *)
   and go_summand = function
     | Term (_, e) -> go e
@@ -777,7 +906,7 @@ let owners e =
    the check stays where the question is well posed. *)
 let top_weaken_owners e =
   match force e with
-  | Combine (summands, _) ->
+  | Combine { summands; _ } ->
       List.sort_uniq String.compare
         (List.concat_map
            (function
@@ -796,20 +925,21 @@ let top_weaken_owners e =
 let rec to_string e =
   match e with
   | Decision l -> "decision(" ^ Lit.to_string l ^ ")"
-  | Clause ls -> "clause(" ^ String.concat " " (List.map Lit.to_string ls) ^ ")"
-  | Linear (terms, rhs) ->
+  | Clause { lits = ls; _ } ->
+      "clause(" ^ String.concat " " (List.map Lit.to_string ls) ^ ")"
+  | Linear { terms; rhs; _ } ->
       Printf.sprintf "linear(%s >= %d)"
         (String.concat " "
            (List.map (fun (a, l) -> Printf.sprintf "%+d %s" a (Lit.to_string l)) terms))
         rhs
-  | Cut (a, b, c1, c2) ->
+  | Cut { e1 = a; e2 = b; c1; c2; _ } ->
       Printf.sprintf "cut(%d*%s + %d*%s)" c1 (to_string a) c2 (to_string b)
   | Model_row id -> Printf.sprintf "model_row(%d)" id
-  | Combine (summands, divisor) ->
+  | Combine { summands; divisor; _ } ->
       Printf.sprintf "combine(%s)%s"
         (String.concat " + " (List.map summand_to_string summands))
         (if divisor = 1 then "" else Printf.sprintf " / %d" divisor)
-  | Resolve parts ->
+  | Resolve { parts; _ } ->
       Printf.sprintf "resolve(%s)" (String.concat " | " (List.map to_string parts))
   | Deferred { forced = Some e; _ } -> "deferred[" ^ to_string e ^ "]"
   | Deferred { forced = None; line = Line { cid; _ }; _ } ->
@@ -857,7 +987,7 @@ module Arena = struct
      a slot that leaked read as "the model row justifies this" and nothing complained,
      which is the failure mode this whole task is about. The empty clause renders as a
      claimed contradiction and fails at the checker on sight. *)
-  let vacant : expl = Clause []
+  let vacant : expl = Clause { lits = []; line = No_line; hid = 0 }
 
   let create ?(capacity = 256) () =
     { items = Array.make (Stdlib.max 1 capacity) vacant; len = 0 }
