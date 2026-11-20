@@ -280,11 +280,11 @@ let clause_folded_into_pol e =
   let found = ref false in
   let rec go ~in_pol e =
     match Explanation.force e with
-    | Explanation.Clause _ -> if in_pol then found := true
-    | Explanation.Cut (a, b, _, _) ->
+    | Explanation.Clause { lits = _; _ } -> if in_pol then found := true
+    | Explanation.Cut { e1 = a; e2 = b; c1 = _; c2 = _; _ } ->
         go ~in_pol:true a;
         go ~in_pol:true b
-    | Explanation.Combine (summands, _) ->
+    | Explanation.Combine { summands; divisor = _; _ } ->
         List.iter
           (function
             | Explanation.Term (_, e) -> go ~in_pol:true e
@@ -304,7 +304,9 @@ let classify obs store e =
   if Store.level store = 0 then obs.root_conflict <- true;
   if clause_folded_into_pol e then obs.clause_in_pol <- true;
   match Explanation.force e with
-  | Explanation.Combine ([ Explanation.Term (1, _); Explanation.Term (1, _) ], 1) ->
+  | Explanation.Combine
+      { summands = [ Explanation.Term (1, _); Explanation.Term (1, _) ]; divisor = 1; _ }
+    ->
       obs.cross_conflict <- true
   | _ -> ()
 

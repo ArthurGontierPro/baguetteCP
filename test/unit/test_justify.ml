@@ -52,11 +52,11 @@ let expect_ok name = function
 (* ------------------------------------------------------------------ *)
 
 (* M11-complexity-T13 (D-0168): how many times writing a thunk runs its closure -- once,
-   and once more when the release checks it (under BAGUETTE_DEBUG, or when the forcing
-   handed a constructor a node it had not built). *)
+   and once more when the release checks it under BAGUETTE_DEBUG. Since
+   M11-complexity-T15 nothing else forces it again: no table holds the tree's nodes, so
+   nothing has to tell built nodes from captured ones. *)
 let release_runs = function
-  | Explanation.Deferred th ->
-      if Baguette_core.Debug.enabled || Explanation.captures th then 2 else 1
+  | Explanation.Deferred _ -> if Baguette_core.Debug.enabled then 2 else 1
   | _ -> 1
 
 let emitted ?(comments = false) ?(audit = true) f =
@@ -225,14 +225,17 @@ let test_deferred_cut () =
         let id1 = Justify.emit ctx d in
         let id2 = Justify.emit ctx d in
         check "deferred cut: same id on repeat" (id1 = id2);
-        check "deferred cut: the cut's operands were built outside the thunk: captured"
-          (match d with Explanation.Deferred th -> Explanation.captures th | _ -> false);
         expected := release_runs d)
   in
   check_eq "deferred cut: identical proof text to the direct cut" ~expected:direct_text
     ~got:deferred_text;
-  check "deferred cut: the thunk ran twice (written, then checked), not on the repeat"
-    (!calls = !expected && !expected = 2)
+  (* M11-complexity-T15: the operands were built outside the thunk (captured), which
+     until T15 cost a second forcing at the release; no table holds them now, so the
+     thunk runs once (twice under BAGUETTE_DEBUG, which checks I-X6), not on the repeat *)
+  check
+    "deferred cut: the thunk ran once when written (and once more under BAGUETTE_DEBUG), \
+     not on the repeat"
+    (!calls = !expected)
 
 (* ------------------------------------------------------------------ *)
 (* 6. Wipe: drops the right memo entries, and nothing below the wiped level. *)
@@ -1817,9 +1820,9 @@ let test_representations_m11t12 () =
               Justify.emit ctx e)
             es
         in
-        check "m11t12 memo: 5000 values, 5000 ids, 5000 entries"
+        check "m11t12 memo: 5000 values, 5000 ids, each remembered on its node"
           (List.length (List.sort_uniq Int.compare (Array.to_list ids)) = n
-          && fst (Justify.memo_stats ctx) = n);
+          && Array.for_all2 (fun e id -> Justify.remembered ctx e = Some id) es ids);
         Writer.set_level w 4;
         let last = Writer.last_id w in
         let again = Array.map (Justify.emit ctx) es in
@@ -1829,7 +1832,8 @@ let test_representations_m11t12 () =
         Writer.set_level w 2;
         let r1 = List.init 3 (fun i -> Justify.emit ctx (comb (n + i))) in
         Writer.set_level w 1;
-        let inter = Justify.emit ctx (comb (n + 3)) in
+        let inter_e = comb (n + 3) in
+        let inter = Justify.emit ctx inter_e in
         Writer.set_level w 2;
         let r2 = List.init 3 (fun i -> Justify.emit ctx (comb (n + 4 + i))) in
         Writer.set_level w 4;
@@ -1843,8 +1847,11 @@ let test_representations_m11t12 () =
           && dead r1 && dead r2
           && live_at (below 2)
           && live_at [ inter ]);
-        check "m11t12 memo: the wipe keeps exactly the level-1 entries"
-          (fst (Justify.memo_stats ctx) = (n / 4) + 1);
+        check "m11t12 memo: after the wipe exactly the level-1 nodes answer"
+          (Array.for_all
+             (fun ok -> ok)
+             (Array.mapi (fun i e -> Justify.remembered ctx e <> None = (lvl i = 1)) es)
+          && Justify.remembered ctx inter_e = Some inter);
         Writer.set_level w 1;
         let last = Writer.last_id w in
         let back = Array.map (Justify.emit ctx) es in
@@ -1916,10 +1923,17 @@ let test_release_m11t13 () =
           | Explanation.Deferred th -> th
           | _ -> failwith "not a thunk"
         in
-        let t = Explanation.deferred tree in
+        (* M11-complexity-T15: what the thunk's forcing built, watched weakly, so that the
+           test can see the tree become collectable once the thunk is released *)
+        let watch = Weak.create 2 in
+        let t =
+          Explanation.deferred (fun () ->
+              let x = tree () in
+              Weak.set watch 0 (Some x);
+              x)
+        in
         let th = thunk_of t in
         Writer.set_level w 2;
-        let cells0 = fst (Justify.memo_stats ctx) in
         let last0 = Writer.last_id w in
         let id = Justify.emit ctx t in
         first := id;
@@ -1930,8 +1944,9 @@ let test_release_m11t13 () =
           | Explanation.No_line -> false);
         check "m11t13: the tree is dropped (kept under BAGUETTE_DEBUG)"
           (Baguette_core.Debug.enabled || not (Explanation.is_forced t));
-        check "m11t13: the cells its emission made are out of the memo"
-          (fst (Justify.memo_stats ctx) = cells0);
+        Gc.full_major ();
+        check "m11t13/t15: nothing holds the written tree (kept under BAGUETTE_DEBUG)"
+          (Baguette_core.Debug.enabled || Weak.get watch 0 = None);
         let reforced0 = !Explanation.reforced in
         let last1 = Writer.last_id w in
         check "m11t13: the line answers a second emit, nothing written"
@@ -1981,7 +1996,6 @@ let test_release_m11t13 () =
         (* Nesting and growth: a thunk whose tree cites an unwritten thunk, and a tree of
            3000 inner Combines (the memo starts at 1024 slots and grows at 2048 cells). *)
         Writer.set_level w 2;
-        let cells1 = fst (Justify.memo_stats ctx) in
         let inner = Explanation.deferred tree in
         let rec chain k acc =
           if k = 0 then acc
@@ -1997,12 +2011,20 @@ let test_release_m11t13 () =
         let outer =
           Explanation.deferred (fun () ->
               Explanation.combine
-                [ Explanation.Term (1, chain 3000 inner); Explanation.Term (1, inner) ]
+                [
+                  Explanation.Term
+                    ( 1,
+                      let c = chain 3000 inner in
+                      Weak.set watch 1 (Some c);
+                      c );
+                  Explanation.Term (1, inner);
+                ]
                 1)
         in
         let id_outer = Justify.emit ctx outer in
-        check "m11t13: nested and grown, the memo is back to what it held"
-          (fst (Justify.memo_stats ctx) = cells1);
+        Gc.full_major ();
+        check "m11t13/t15: nested and long, nothing holds the chain once written"
+          (Baguette_core.Debug.enabled || Weak.get watch 1 = None);
         check "m11t13: the nested thunk was released with its own line"
           (Justify.emit ctx inner < id_outer
           && (Baguette_core.Debug.enabled || not (Explanation.is_forced inner)));
@@ -2023,36 +2045,16 @@ let test_release_m11t13 () =
                 [ Explanation.term 1 x; Explanation.term 2 (Explanation.model_row cy) ]
                 2)
         in
-        let cells2 = fst (Justify.memo_stats ctx) in
         let id_tx = Justify.emit ctx tx in
         let last3 = Writer.last_id w in
-        check "m11t13: the forcing saw the captured node"
-          (Explanation.captures (thunk_of tx));
-        check "m11t13: a captured node keeps its cell, its holder finds its line"
+        check "m11t13: a captured node keeps its line, its holder finds it"
           (Justify.emit ctx x = id_tx - 1
           && Writer.last_id w = last3
-          && fst (Justify.memo_stats ctx) = cells2 + 1);
-        (* A closure that does not give the same derivation twice, checked because it
-           captured [x], is not released: it keeps its tree and its cells, as before T13
-           (BAGUETTE_DEBUG refuses it). *)
-        (if not Baguette_core.Debug.enabled then
-           let n = ref 0 in
-           let flaky =
-             Explanation.deferred (fun () ->
-                 incr n;
-                 Explanation.combine
-                   [
-                     Explanation.term !n x; Explanation.term 1 (Explanation.model_row cy);
-                   ]
-                   1)
-           in
-           let id_f = Justify.emit ctx flaky in
-           let last4 = Writer.last_id w in
-           check "m11t13: a thunk forced twice to two derivations is not released"
-             (Explanation.line_of (thunk_of flaky) = Explanation.No_line
-             && Explanation.is_forced flaky
-             && Justify.emit ctx flaky = id_f
-             && Writer.last_id w = last4));
+          && Justify.remembered ctx x = Some (id_tx - 1));
+        (* Until M11-complexity-T15 a closure that did not give the same derivation twice
+           was not released (the second forcing that told captured nodes from built ones
+           saw it). There is no second forcing now outside BAGUETTE_DEBUG, which refuses
+           such a closure (I-X6); the test of that refusal is the debug run's. *)
         Writer.set_level w 3;
         Justify.wipe_level ctx 1;
         Writer.set_level w 0;
@@ -2100,20 +2102,31 @@ let test_share_m11t10 () =
       emitted (fun w ->
           let e, _, cx, cy = build_two_ctx w in
           let ctx = Justify.create_sharing ~share ~writer:w ~encoding:e in
+          (* M11-complexity-T15: every node built, outer and inner, so that the test can
+             ask which of them remembers a line (there are no memo entries to count) *)
+          let built = ref [] in
           let copy () =
-            Explanation.combine
-              [
-                Explanation.Term
-                  ( 1,
-                    Explanation.combine
-                      [
-                        Explanation.Term (1, Explanation.model_row cx);
-                        Explanation.Term (1, Explanation.model_row cy);
-                      ]
-                      1 );
-                Explanation.Term (2, Explanation.model_row cy);
-              ]
-              2
+            let inner =
+              Explanation.combine
+                [
+                  Explanation.Term (1, Explanation.model_row cx);
+                  Explanation.Term (1, Explanation.model_row cy);
+                ]
+                1
+            in
+            let outer =
+              Explanation.combine
+                [
+                  Explanation.Term (1, inner);
+                  Explanation.Term (2, Explanation.model_row cy);
+                ]
+                2
+            in
+            built := outer :: inner :: !built;
+            outer
+          in
+          let answering () =
+            List.length (List.filter (fun n -> Justify.remembered ctx n <> None) !built)
           in
           let c2 = copy () in
           Writer.set_level w 1;
@@ -2122,11 +2135,11 @@ let test_share_m11t10 () =
           let id2 = Justify.emit ctx c2 in
           Writer.set_level w 3;
           let id3 = Justify.emit ctx (copy ()) in
-          let stats = Justify.memo_stats ctx in
+          let stats = (answering (), List.length !built) in
           (* Wipe levels 2 and up: the line is at level 1. *)
           Justify.wipe_level ctx 2;
           Writer.set_level w 1;
-          let n_after_wipe = fst (Justify.memo_stats ctx) in
+          let n_after_wipe = answering () in
           let last = Writer.last_id w in
           let id2b = Justify.emit ctx c2 in
           let c2_minted = Writer.last_id w > last in
@@ -2166,9 +2179,8 @@ let test_share_m11t10 () =
       check "m11t10 share OFF: three rebuilt copies, three lines"
         (List.length (List.sort_uniq Int.compare [ id1; id2; id3 ]) = 3);
       check
-        "m11t10 share OFF: six entries, three to a bucket (each copy and its inner \
-         Combine)"
-        (n = 6 && longest = 3);
+        "m11t10 share OFF: six nodes remember a line (each copy and its inner Combine)"
+        (n = 6 && longest = 6);
       check
         "m11t10 share OFF: a wipe of level 2 drops the copies made at 2 and 3, which are \
          derived again"
@@ -2188,8 +2200,8 @@ let test_share_m11t10 () =
         (id_d, d_minted, id_d_again, calls_ok),
         (id_after, id_low, live_low) ) ->
       check "m11t10 share ON: three rebuilt copies, one line" (id1 = id2 && id2 = id3);
-      check "m11t10 share ON: every copy is remembered (six entries, three to a bucket)"
-        (n = 6 && longest = 3);
+      check "m11t10 share ON: every copy is remembered (six nodes answer)"
+        (n = 6 && longest = 6);
       check
         "m11t10 share ON: a wipe of level 2 drops the copies made at 2 and 3, and the \
          copy asked for again finds the level-1 line"

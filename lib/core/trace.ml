@@ -696,6 +696,8 @@ let emit_to_page ?(stop = fun () -> false) (ctx : Justify.ctx) t store =
         !lv = Store.level_of_index store i && opens = Store.is_level_start store i);
     let e = Store.trail_entry store i in
     remember t i e;
+    (* M11-complexity-T15: a thunk forced here was built by the entry's propagator. *)
+    if Explanation.stats_on then Explanation.producer := e.Store.prop;
     if not opens then
       let name = Store.name store e.Store.var in
       (* [claims] first: a change that claims nothing writes nothing and must not force
@@ -785,6 +787,7 @@ let emit_to_page ?(stop = fun () -> false) (ctx : Justify.ctx) t store =
                 cited)
             cs
   done;
+  if Explanation.stats_on then Explanation.producer := -1;
   if !at <> saved then Writer.set_level ctx.Justify.writer saved
 
 (* M9-no-proof-T2 (D-0126): under `--no-proof` the writer is null and this module writes

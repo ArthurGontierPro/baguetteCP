@@ -400,12 +400,12 @@ let walk_explanation e =
        news. *)
     | Explanation.Decision _ -> ()
     | Explanation.Model_row id -> if not (List.mem id !rows) then rows := id :: !rows
-    | Explanation.Clause _ -> if in_pol then clause_in_pol := true
+    | Explanation.Clause { lits = _; _ } -> if in_pol then clause_in_pol := true
     | Explanation.Linear _ -> ()
-    | Explanation.Cut (a, b, _, _) ->
+    | Explanation.Cut { e1 = a; e2 = b; c1 = _; c2 = _; _ } ->
         go ~in_pol:true a;
         go ~in_pol:true b
-    | Explanation.Combine (summands, _) ->
+    | Explanation.Combine { summands; divisor = _; _ } ->
         List.iter
           (function
             | Explanation.Term (_, e) -> go ~in_pol:true e
@@ -416,7 +416,7 @@ let walk_explanation e =
             | Explanation.Defining _ -> ())
           summands
     (* M8-bits-encoding-T3 (D-0134): a choice derivation is one `pol` over its parts. *)
-    | Explanation.Resolve parts -> List.iter (go ~in_pol:true) parts
+    | Explanation.Resolve { parts; _ } -> List.iter (go ~in_pol:true) parts
     | Explanation.Deferred _ -> ()
   in
   go ~in_pol:false e;
@@ -517,7 +517,8 @@ let classify_conflict obs store e =
               (fun c ->
                 match Explanation.force c with
                 | Explanation.Combine
-                    (Explanation.Term (1, Explanation.Model_row r') :: _, _) ->
+                    { summands = Explanation.Term (1, Explanation.Model_row r') :: _; _ }
+                  ->
                     r' = row
                 | _ -> false)
               r.Explanation.lt_cited
@@ -525,9 +526,13 @@ let classify_conflict obs store e =
       summands
   in
   match Explanation.force e with
-  | Explanation.Clause _ -> obs.ne_conflict <- true
+  | Explanation.Clause { lits = _; _ } -> obs.ne_conflict <- true
   | Explanation.Combine
-      ((Explanation.Term (1, Explanation.Model_row row) :: _ as summands), 1) ->
+      {
+        summands = Explanation.Term (1, Explanation.Model_row row) :: _ as summands;
+        divisor = 1;
+        _;
+      } ->
       if same_row_cited row summands then obs.cross_conflict <- true
       else (
         obs.slack_conflict <- true;

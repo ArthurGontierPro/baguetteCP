@@ -804,7 +804,9 @@ end
 let observe_run (row : Pb.t) store run =
   let expl_of e =
     let lits =
-      match e with Explanation.Clause ls -> List.map Lit.to_string ls | _ -> [ "?" ]
+      match e with
+      | Explanation.Clause { lits = ls; _ } -> List.map Lit.to_string ls
+      | _ -> [ "?" ]
     in
     (lits, e == row.Pb.expl_all)
   in

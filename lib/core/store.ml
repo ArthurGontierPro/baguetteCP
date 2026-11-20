@@ -413,7 +413,16 @@ let running t = t.current_prop
 let with_running t id f =
   let saved = t.current_prop in
   t.current_prop <- id;
-  Fun.protect ~finally:(fun () -> t.current_prop <- saved) f
+  if Explanation.stats_on then (
+    (* M11-complexity-T15: who builds what, for BAGUETTE_MEMO_STATS *)
+    let p = !Explanation.producer in
+    Explanation.producer := id;
+    Fun.protect
+      ~finally:(fun () ->
+        t.current_prop <- saved;
+        Explanation.producer := p)
+      f)
+  else Fun.protect ~finally:(fun () -> t.current_prop <- saved) f
 
 (* ------------------------------------------ derivation ahead (M7-T17, D-0082) *)
 
@@ -534,7 +543,7 @@ let root_holds t (l : Lit.t) =
    variables the reverse arm of [agreement_holds] requires the reason to name. *)
 let reverse_owners t e =
   match Explanation.force e with
-  | Explanation.Combine (summands, _) ->
+  | Explanation.Combine { summands; divisor = _; _ } ->
       List.sort_uniq String.compare
         (List.concat_map
            (function

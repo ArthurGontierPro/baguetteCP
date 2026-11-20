@@ -247,7 +247,7 @@ let verify_combine ?(strict = true) test_name store bounds terms expl ~excluded 
     check (Printf.sprintf "%s: %s" test_name msg) cond
   in
   match expl with
-  | Explanation.Combine (base :: rest, divisor) ->
+  | Explanation.Combine { summands = base :: rest; divisor; _ } ->
       let expected_divisor =
         match excluded with None -> 1 | Some idx -> abs (fst (List.nth terms idx))
       in
@@ -1884,7 +1884,7 @@ let build_ne_case dir ~file ~decls ~terms ~rhs ~pre ~target ~sat ~expect_lines
   in
   let expl =
     match Explanation.force expl with
-    | Explanation.Clause lits -> Explanation.clause (corrupt lits)
+    | Explanation.Clause { lits; _ } -> Explanation.clause (corrupt lits)
     | other -> other
   in
   let oc = open_out pbp in
@@ -2677,7 +2677,8 @@ let test_bool_clause_idempotence () =
 
 let expl_lits e =
   match Explanation.force e with
-  | Explanation.Clause ls -> Some (String.concat " " (List.map Lit.to_string ls))
+  | Explanation.Clause { lits = ls; _ } ->
+      Some (String.concat " " (List.map Lit.to_string ls))
   | _ -> None
 
 let test_bool_clause_unit_push () =
@@ -3694,7 +3695,7 @@ let test_ix6_justification_snapshot () =
 
 let rec render_deep e =
   match Explanation.force e with
-  | Explanation.Combine (summands, divisor) ->
+  | Explanation.Combine { summands; divisor; _ } ->
       Printf.sprintf "combine(%s)/%d"
         (String.concat " + "
            (List.map
@@ -3710,7 +3711,7 @@ let rec render_deep e =
                     Explanation.summand_to_string w)
               summands))
         divisor
-  | Explanation.Cut (a, b, c1, c2) ->
+  | Explanation.Cut { e1 = a; e2 = b; c1; c2; _ } ->
       Printf.sprintf "cut(%d*%s + %d*%s)" c1 (render_deep a) c2 (render_deep b)
   | other -> Explanation.to_string other
 
@@ -3746,8 +3747,12 @@ let test_ix6_cross_conflict_snapshot () =
        [classify_conflict] tells this path from the row's own slack conflict. *)
     let is_cross =
       match Explanation.force c.Store.c_why with
-      | Explanation.Combine (Explanation.Term (1, Explanation.Model_row _) :: summands, 1)
-        ->
+      | Explanation.Combine
+          {
+            summands = Explanation.Term (1, Explanation.Model_row _) :: summands;
+            divisor = 1;
+            _;
+          } ->
           List.exists
             (function
               | Explanation.Linear_term r -> r.Explanation.lt_cited <> [] | _ -> false)
@@ -5912,7 +5917,7 @@ let alldiff_level_scene ~root_bounds =
   (try Sys.rmdir dir with _ -> ());
   let n_defining =
     match expl with
-    | Explanation.Combine (summands, _) ->
+    | Explanation.Combine { summands; divisor = _; _ } ->
         List.length
           (List.filter (function Explanation.Defining _ -> true | _ -> false) summands)
     | _ -> -1
@@ -6726,7 +6731,9 @@ module Maxmin = Baguette_core.Maxmin
 module View = Baguette_core.View
 
 let mm_clause e =
-  match Explanation.force e with Explanation.Clause ls -> Some ls | _ -> None
+  match Explanation.force e with
+  | Explanation.Clause { lits = ls; _ } -> Some ls
+  | _ -> None
 
 let mm_entry_of store before v =
   List.find_opt
@@ -7012,7 +7019,9 @@ let bits_mm_scene ?(root_unsat = false) () =
 let test_bits_maxmin_rules () =
   let sorted ls = List.sort compare (List.map Lit.to_string ls) in
   let resolve_of e =
-    match Explanation.force e with Explanation.Resolve parts -> Some parts | _ -> None
+    match Explanation.force e with
+    | Explanation.Resolve { parts; _ } -> Some parts
+    | _ -> None
   in
   let scene ~title ~setup ~pushed ~clause ~facts =
     let _, store, p, twin_store = bits_mm_scene () in
@@ -7211,7 +7220,7 @@ let test_bits_ne_rules () =
       match
         (Explanation.force ex, Explanation.force (Store.explanation twin_store te))
       with
-      | Explanation.Resolve parts, Explanation.Clause twin_lits ->
+      | Explanation.Resolve { parts; _ }, Explanation.Clause { lits = twin_lits; _ } ->
           check "bits ne: two parts, the A half and the B half" (List.length parts = 2);
           check "bits ne: the derived clause is the twin's nogood, literal for literal"
             (sorted (Justify.resolve_clause parts) = sorted twin_lits
@@ -7341,7 +7350,7 @@ let test_bits_reif_rules () =
       | _ -> failwith "bits reif: the twin did something else"
     in
     match (Explanation.force why, Explanation.force twhy) with
-    | Explanation.Resolve parts, Explanation.Clause twin_lits ->
+    | Explanation.Resolve { parts; _ }, Explanation.Clause { lits = twin_lits; _ } ->
         check (title ^ ": two parts, the A half and the B half") (List.length parts = 2);
         check
           (title ^ ": the derived clause is the twin's nogood, literal for literal")

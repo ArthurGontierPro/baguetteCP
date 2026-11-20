@@ -293,7 +293,7 @@ let rows t =
            | None -> None
            | Some e -> (
                match Explanation.force e with
-               | Explanation.Clause ls -> Some ls
+               | Explanation.Clause { lits = ls; _ } -> Some ls
                | _ -> None))
 
 let n_rows t =

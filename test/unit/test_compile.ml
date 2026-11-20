@@ -1306,7 +1306,7 @@ let with_proof m f =
    [no_position_conflict]'s own [Combine], never nested inside a [Term]. *)
 let cites_defining_le (e : Baguette_core.Explanation.t) ~name ~bound =
   match Baguette_core.Explanation.force e with
-  | Baguette_core.Explanation.Combine (summands, _) ->
+  | Baguette_core.Explanation.Combine { summands; divisor = _; _ } ->
       List.exists
         (function
           | Baguette_core.Explanation.Defining (_, l) ->
