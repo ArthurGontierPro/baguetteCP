@@ -1,0 +1,13 @@
+% M14-e2e-verification-T5 (D-0180): a control model for the lane, not a solver test.
+% `a` occurs twice in the cardinality array, so baguette copies it into a fresh integer
+% tied by int_eq (SPEC 2.1), and the bridge defines the copy's rung by a red pair. Unlike
+% test/models/gcc_repeat_sat, `a` is free here (four solutions), so a WRONG definition of
+% the copy (copy = not a) is false in some solution and the checker must refuse it.
+predicate baguette_global_cardinality(array [int] of var int: x,array [int] of int: cover,array [int] of var int: counts);
+var 1..2: a :: output_var;
+var 1..2: b :: output_var;
+var 0..3: n1 :: output_var;
+var 0..3: n2 :: output_var;
+array [1..3] of var int: x = [a,a,b];
+constraint baguette_global_cardinality(x,[1,2],[n1,n2]);
+solve satisfy;

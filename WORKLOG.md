@@ -22,7 +22,6 @@ of it to every session and stopping at a broken line before it even reached the 
 | M8-bits-encoding-T4 (two arms, `W = none` and `W = 0`, on the sixteen editions) | run directories under `/scratch/arthur/m8t4/`, `tools/compare/` (additions), `bench/challenge/README.md` (the run's row), a new D-record | agent-m8t4 (`wave55-m8t4`) | 2026-11-20 |
 | M11-complexity-T15 (SPIKE, explanations as a hash-consed DAG; a prototype branch, nothing merged without a decision) | `lib/core/explanation.ml`, `lib/core/justify.ml`, `lib/core/trace.ml`, propagators' explanation construction as needed, on branch `wave55-dag` only | agent-dag (`wave55-dag`) | 2026-11-20 |
 | M11-complexity-T17 (learned clauses that cannot prune) | `lib/core/search.ml`, `lib/core/learned.ml`, `lib/core/retention.ml`, `lib/core/engine.ml` (learned wakes only), `lib/core/prop/clause.ml`, `lib/core/prop/pb.ml`, their unit tests | agent-learnprop (`wave55-learnprop`) | 2026-11-20 |
-| M14-e2e-verification-T5 (globals with cake flags in the e2e chain) | `tools/e2e/`, `scripts/e2e_lane.sh`, `bench/e2e_spike/`; reserved record D-0180 | agent-e2e5 (`wave55-e2e5`) | 2026-11-20 |
 | M15-symmetry-T3 (breaking that agrees with the search: design, then a prototype outside `lib/`) | `tools/symmetry/`, `bench/symmetry/`, `scripts/sym_lane.sh`; a small C++ tool over dejavu's header-only library in `tools/symmetry/` if needed; NO `lib/` change without a new claim; reserved record D-0181 | agent-sym3 (`wave55-sym3`) | 2026-11-20 |
 
 ## Cross-session requests
@@ -455,6 +454,7 @@ section 1. Shares are inclusive, of the whole run.
 
 | Task | Session | Date | Summary |
 |---|---|---|---|
+| M14-e2e-verification-T5 (globals in the e2e chain) | agent-e2e5 (`wave55-e2e5`) | 2026-11-20 | **D-0180.** Translator covers `array_int_element`, `global_cardinality` (open, both names), `array_int_maximum/minimum`, `int_max/min`, `baguette_inverse`, `baguette_member(_bool)` (per-selector `equals_if` + `or`, not cake's `in`), and bare `var int` aliases. Bridge: interior `eq` atoms as order indicators, gcc copies by a red pair, weakening/resolution + saturation. `make e2e`: 179 of 207 VERIFIED (was 105), 0 FAIL; 23 of 23 controls; 178 AGREE, 1 UNCHECKED. Also touched `scripts/README.md` §9 (control count, timing), unclaimed at the time |
 | M14-e2e-verification-T4 (Boolean and reified families in the e2e chain) | agent-e2e4 (`wave55-e2e4`) | 2026-11-20 | **D-0178.** The translator covers every Boolean and reified builtin of SPEC 2.1 (cake's `or`/`and`/`equals`/`not_equals`/`*_iff` with reify tuples `(b = 1)`); the bridge swaps cake's atoms for baguette's literals (`rup` clauses), resolves cake's `lt/gt` flag clause, defines `_neN` by a red pair, saturates cake's bit-range big-M, pins by `ia`. `make e2e`: 105 of 207 VERIFIED (was 75), 102 SKIPPED, 0 FAIL; 14 of 14 controls (6 new: `opb-stronger` on the Boolean family and `int_lin_le_reif`, `opb-reif` a wrong reification); 105 AGREE with Gecode/CP-SAT |
 | M15-symmetry (roadmap rows only) | codes-cp session | 2026-11-20 | New M15 section at the end of `docs/ROADMAP.md`: dejavu beside baguette (not inside it), T1 study of dejavu's latest versions and Markus Anders' papers, T2 the side-by-side pipeline from codes-cp's prototype, T3 breaking that agrees with the search (Ciaran's idea), T4-T7 parked. M13-codes-leads-T2 marked moved to M15 |
 | M14-e2e-verification-T2 (first demo as a lane) | agent-e2e2 (`wave55-e2e2`) | 2026-11-20 | **D-0176.** `make e2e`: a separate FlatZinc -> `.scp` translator (M1 builtins, `all_different_int`), the bridge in `tools/e2e/`, 75 of 207 test models VERIFIED by `cake_pb_cp`, 132 SKIPPED, 0 FAIL; 8 mutation controls refused at line and wording; translator equal to Gecode/CP-SAT's solution sets on all 75 |
@@ -633,6 +633,12 @@ section 1. Shares are inclusive, of the whole run.
 | M15-symmetry-T2 (the pipeline side by side) | agent-sym2 (`wave55-sym2`) | 2026-11-20 | **D-0179.** `make sym`: `tools/symmetry/{opb2graph,symchain,symmerge}.py` beside baguette, dejavu `f984485` as distributed (binary in `/cluster/arthur/tools/dejavu-f984485/`), one run per level, cuts on the search's 0/1 variables, merged proof checked against the ORIGINAL `.opb`. D-0177's `red` witness w_b^-1 is refused on a level's second cut; `red` with a SWAP of c and b holds, `dom` under the points' lex order where the group has no swap (QR levels 2-3). 12/12 VERIFIED (QR48 11 491 -> 45 nodes, 253 s -> 2 s, check 10 s), 12/12 mutation controls refused on satisfiable models |
 
 ## Handoff notes
+
+### 2026-11-20 (agent-e2e5, `wave55-e2e5`): M14-e2e-verification-T5, D-0180
+
+`make e2e` verifies 179 of 207 (every T5 global bridged, 0 FAIL, 23 controls, 178 AGREE). The bridge gained
+three generic steps (interior `eq` atoms as `x_ge_v - x_ge_(v+1)`, copies by a red pair, weakening/resolution
+then saturation); the references now re-flatten baguette's mznlib predicates as MiniZinc. Left: T6, T8, 4 `var int` models.
 
 ### 2026-11-20 (agent-sym2, `wave55-sym2`): M15-symmetry-T2, D-0179
 

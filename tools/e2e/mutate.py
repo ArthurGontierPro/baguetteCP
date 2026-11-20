@@ -15,6 +15,10 @@ place and prints what it changed, for the lane to check the refusal against.
                                 `_neN` selector) gets that literal's polarity flipped, so
                                 its big-M guard fires on the wrong value of the reifier;
                                 prints its label (@cK)
+  mutate.py copy FILE.pbp       a WRONG DEFINITION of an auxiliary baguette introduces (T5,
+                                D-0180): the first `@Y1[...]` red line, which defines a
+                                global_cardinality COPY's rung as its original's, gets the
+                                witness `Y -> ~X` in place of `Y -> X`; prints its label
 Exit 1 when there is nothing to mutate.
 """
 import re
@@ -59,6 +63,12 @@ def main(kind, path, *rest):
         else:
             return 1
         text = "\n".join(lines) + "\n"
+    elif kind == "copy":
+        m = re.search(r"^(@Y1\[[^\]]*\]) red .* -> (\S+) ;$", text, re.M)
+        if not m:
+            return 1
+        text = text[:m.start(2)] + "~" + m.group(2) + text[m.end(2):]
+        what = m.group(1)
     elif kind == "witness":
         m = re.search(r"^(@A2\[[^\]]*\]) red .* -> (1) ;$", text, re.M)
         if not m:

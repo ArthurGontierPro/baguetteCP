@@ -39,6 +39,20 @@ half is cake's `lt`/`gt` flags and its clause `lt + gt + eq1 >= 1`: one resolven
 a flag, and baguette's `_neN` selector is defined as the other by the red pair above. A
 candidate whose big-M exceeds baguette's (bit range against declared bounds) is saturated.
 
+The globals (T5, D-0180). cake's element, global_cardinality and inverse rows, and its
+encoding of a hole (`in`), name INTERIOR value atoms i[X][eq<v>] (l < v < u), which no single
+baguette literal equals; the order encoding's indicator does, [x = v] = x_ge_v - x_ge_(v+1).
+The bridge derives the identity as two rows (@Ep by rup, @Em by one pol from two rup clauses
+and the rung) and swaps c*eq for c*(x_ge_v - x_ge_(v+1)). A copy baguette makes of a
+variable repeated in a global_cardinality (a fresh integer tied by int_eq) has its rungs
+DEFINED as the original's by a red pair each (@Y1, @Y2), and a candidate is moved onto the
+copy where baguette's row names it. A row that is not a clause and that no candidate implies
+is tried once more against candidates that share variables with it: a literal baguette's
+row does not have is weakened away (pol's `w`), or resolved against one of baguette's own
+binary clauses (@R, rup) when weakening is too weak, then the result is saturated. That is
+member's big-M rows, over the intersection of x_k's and y's ranges where cake's is over both
+whole ranges, with the end values guarded by separate clauses `b -> x_k >= ..`.
+
 Pins, in this order: a ladder row is `ia` against its @L; a row a substituted cake row
 implies with the same coefficients is `ia` against it; a row a swapped, resolved or
 saturated candidate implies syntactically is `ia` against that candidate's `pol` line @W;
@@ -243,6 +257,32 @@ def main(cake_opb, names_file, bag_opb, bag_pbp):
     sel_vars = {f"{s}_ge_1" for s in sel_names}
     bagvars = set(atoms) | sel_vars
 
+    # COPIES (T5, D-0180). baguette's front end copies a variable that occurs twice in a
+    # global_cardinality into a fresh integer tied by int_eq (SPEC 2.1), so its .opb has a
+    # ladder cake's file has no counterpart for. Each rung Y_ge_v of such a copy whose
+    # int_eq rows `~Y_ge_v + X_ge_v >= 1` and `Y_ge_v + ~X_ge_v >= 1` name a known atom
+    # X_ge_v is DEFINED as it, by a red pair (Y fresh, so the pair is a renaming):
+    #   @Y1[Y]  ~Y + X >= 1 : Y -> X        @Y2[Y]  Y + ~X >= 1 : Y -> X
+    # and a candidate is moved onto the copy where baguette's row names it (match below).
+    binary = set()
+    for _, terms, op, rhs in bag:
+        if op == ">=" and rhs == 1 and len(terms) == 2 and all(c == 1 for c, _ in terms):
+            binary.add(frozenset(v for _, v in terms))
+    alias = {}
+    for _, terms, _, _ in bag:
+        for _, lit in terms:
+            Y = lit.lstrip("~")
+            if Y in bagvars or Y in alias or not re.fullmatch(r".+_ge_m?\d+", Y):
+                continue
+            partners = sorted(next(iter(b - {f"~{Y}"})) for b in binary if f"~{Y}" in b)
+            for X in partners:
+                if X in atoms and frozenset((Y, f"~{X}")) in binary:
+                    alias[Y] = X
+                    emit(f"@Y1[{Y}] red +1 ~{Y} +1 {X} >= 1 : {Y} -> {X} ;")
+                    emit(f"@Y2[{Y}] red +1 {Y} +1 ~{X} >= 1 : {Y} -> {X} ;")
+                    break
+    bagvars |= set(alias)
+
     def var_of(lit):
         return lit.lstrip("~")
 
@@ -285,20 +325,61 @@ def main(cake_opb, names_file, bag_opb, bag_pbp):
         return {v: c for v, c in out_c.items() if c}, d1 + k * d2
 
     deferred = {}   # label -> the line deriving it, emitted on first use
+    needs = {}      # label -> the deferred labels its line cites
     done = set()
 
     def ensure(label):
         if label in deferred and label not in done:
             done.add(label)
+            for dep in needs.get(label, ()):
+                ensure(dep)
             emit(deferred[label])
 
     qlab = {}
+
+    def interior_eq(var):
+        """(x, v) when var is cake's i[X][eq<v>] with l < v < u: no ONE baguette literal is
+        [x = v], but the order encoding's indicator x_ge_v - x_ge_(v+1) is (T5, D-0180)."""
+        m = ATOM.fullmatch(var)
+        if not m or m.group(1) != "i" or m.group(3) != "eq" or m.group(2) not in ivars:
+            return None
+        info, v = ivars[m.group(2)], int(m.group(4))
+        return (info["x"], v) if info["l"] < v < info["ub"] else None
+
+    def eq_identity(L):
+        """Swap an interior eq atom for its indicator. With e = i[X][eq<v>], a = x_ge_v,
+        b = x_ge_(v+1):
+          @Ep[e]  e + ~a + b >= 1     (rup: a and ~b fix x's ladder, so the substituted
+                                      ge/eq definitions propagate e)
+          @Em[e]  ~e + a + ~b >= 2    (pol: the two rup clauses ~e + a, ~e + ~b, plus the
+                                      rung ~b + a, divided by 2)
+        In variable form these are e - a + b >= 0 and -e + a - b >= 0, i.e. e = a - b, so
+        c*e is replaced by c*(a - b) exactly: a positive e by adding c*@Em, a negated one
+        by adding c*@Ep."""
+        e = var_of(L)
+        got = interior_eq(e)
+        if got is None:
+            return None
+        x, v = got
+        a, b = f"{x}_ge_{vn(v)}", f"{x}_ge_{vn(v + 1)}"
+        if L == e:
+            lab = f"@Em[{e}]"
+            if lab not in deferred:
+                q1, q2 = f"@Ea[{e}]", f"@Eb[{e}]"
+                deferred[q1] = f"{q1} rup +1 ~{e} +1 {a} >= 1 ;"
+                deferred[q2] = f"{q2} rup +1 ~{e} +1 ~{b} >= 1 ;"
+                deferred[lab] = f"{lab} pol {q1} {q2} + @L[{b}] + 2 d ;"
+                needs[lab] = [q1, q2]
+            return lab, clause(neg(e), a, neg(b), d=2), None
+        lab = f"@Ep[{e}]"
+        deferred.setdefault(lab, f"{lab} rup +1 {e} +1 ~{a} +1 {b} >= 1 ;")
+        return lab, clause(e, neg(a), b), None
 
     def atom_swap(L):
         """(cite, its row, M) to replace literal L (an atom) by M, or None."""
         val = atom_value(var_of(L))
         if val is None:
-            return None
+            return eq_identity(L)
         M = val if L == var_of(L) else lneg(val)
         if M == "T":   # L is false: the literal axiom ~L drops it (weakening)
             return neg(L), clause(neg(L), d=0), None
@@ -329,7 +410,7 @@ def main(cake_opb, names_file, bag_opb, bag_pbp):
                 continue
             cite, crow = got[0], got[1]
             rpn += [cite, str(c), "*", "+"]
-            if cite.startswith("@Q"):
+            if cite.startswith(("@Q", "@E")):
                 deps.append(cite)
             row = add(row, c, crow)
         return rpn, row, deps
@@ -377,13 +458,66 @@ def main(cake_opb, names_file, bag_opb, bag_pbp):
             return rpn + ["s"], {l: min(a, rd) for l, a in rl.items()}
         return rpn, rl
 
-    def match(blits, bd):
+    rlab = {}
+
+    def tighten(rpn, rl, rd, blits, resolve=False):
+        """Weaken away (pol's `w`) every literal baguette's row does not have, then
+        saturate: a cake big-M over the variables' whole ranges against baguette's over
+        the INTERSECTION of the ranges, whose end values baguette guards by separate
+        clauses (member's `b -> x = y`, T5, D-0180)."""
+        extra = [l for l in rl if l not in blits]
+        if not extra:
+            return None
+        rl, deps = dict(rl), []
+        for L in extra:
+            c = rl.pop(L)
+            # an extra literal L that one of baguette's own binary clauses ~L + M (M in
+            # this row) resolves away keeps the degree: c*L + c*(~L + M >= 1) is c*M + c,
+            # and the degree rises by c. That is member's end values: `b -> y <= 5` turns
+            # cake's y_ge_6 into baguette's guard ~b (D-0180). Otherwise weaken L away.
+            ms = [m for m in blits if frozenset((neg(L), m)) in binary] if resolve else []
+            M = max(ms, key=lambda m: (blits[m], m)) if ms else None
+            if M is None:
+                rpn = rpn + [var_of(L), "w"]
+                rd -= c
+                continue
+            lab = f"@R[{len(rlab)}]"
+            rlab.setdefault(frozenset((neg(L), M)), lab)
+            lab = rlab[frozenset((neg(L), M))]
+            deferred.setdefault(lab, f"{lab} rup +1 {neg(L)} +1 {M} >= 1 ;")
+            deps.append(lab)
+            rpn = rpn + [lab, str(c), "*", "+"]
+            rl[M] = rl.get(M, 0) + c
+        rpn, rl = saturate(rpn, rl, rd)
+        return rpn, rl, rd, deps
+
+    def onto_copies(rpn, row, bcoefs):
+        """Move the coefficient baguette's row puts on a copy Y off its original X: add
+        k * @Y2 (X -> Y) for +k on Y, k * @Y1 (Y -> X) for -k."""
+        for Y, k in bcoefs.items():
+            if Y not in alias or k == 0:
+                continue
+            X = alias[Y]
+            if k > 0:
+                rpn, row = rpn + [f"@Y2[{Y}]", str(k), "*", "+"], add(row, k, ({Y: 1, X: -1}, 0))
+            else:
+                rpn, row = rpn + [f"@Y1[{Y}]", str(-k), "*", "+"], add(row, -k, ({Y: -1, X: 1}, 0))
+        return rpn, row
+
+    def match(blits, bd, bcoefs, loose=False):
+        """loose: a second pass for a row that is not a clause (rup would not close it),
+        trying candidates that share variables with it rather than only those inside it,
+        with tighten's weakening as the only way to match."""
         bvars = {var_of(l) for l in blits}
+        bvars |= {alias[v] for v in bvars if v in alias}
         undef = [l for l in blits if var_of(l) in sel_vars and var_of(l) not in defined]
         for (rpn, row, deps), cv in zip(cands, cvars):
-            if not cv <= bvars:
+            if loose and (cv <= bvars or not cv & bvars or undef):
+                continue
+            if not loose and not cv <= bvars:
                 continue
             rpn2, row2, _ = replaced(rpn, row, [], flag_swap)
+            rpn2, row2 = onto_copies(rpn2, row2, bcoefs)
             rl, rd = lit_form(*row2)
             if any(not is_flag(var_of(l)) and var_of(l) not in bagvars for l in rl):
                 continue   # an atom with no baguette literal of its own
@@ -392,6 +526,10 @@ def main(cake_opb, names_file, bag_opb, bag_pbp):
                 rpn3, rl3 = saturate(rpn2, rl, rd)
                 if implies(rl3, rd, blits, bd):
                     return rpn3, deps, None
+                for resolve in (False, True):
+                    got = tighten(rpn2, rl, rd, blits, resolve)
+                    if got and implies(got[1], got[2], blits, bd):
+                        return got[0], deps + got[3], None
                 continue
             if len(unk) == 1 and len(undef) == 1:
                 F_lit, sl = unk[0], undef[0]
@@ -418,7 +556,10 @@ def main(cake_opb, names_file, bag_opb, bag_pbp):
         if hit:
             pins.append(f"@{label} ia {line} : {hit} ;")
             continue
-        found = match(*lit_form(coefs, d)) if cands else None
+        found = match(*lit_form(coefs, d), coefs) if cands else None
+        bl, bd = lit_form(coefs, d)
+        if not found and cands and not (bd == 1 and all(a == 1 for a in bl.values())):
+            found = match(bl, bd, coefs, loose=True)
         if found:
             rpn, deps, new = found
             if new:

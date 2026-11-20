@@ -42,8 +42,36 @@ starts `UNCOVERED:` and names the first construct it cannot translate):
   These are every Boolean and reified builtin of SPEC section 2.1 (M2, M3); SPEC has no
   `bool_lin_*`, `int_lin_eq_reif` or `int_lt_reif`, so neither does this table.
 
+  The globals (M14-e2e-verification-T5, D-0180), each against its cpScript.sml definition:
+
+  array_int_element(i, as, z)    i in 1..n and z = as[i]   (c element (a1 ... an) (i 1) z)
+                                 cake's (Y off) is position Y - off from 0, so off = 1
+  fzn_global_cardinality(xs, cover, cs), baguette_global_cardinality(...)
+                                 cs_j = #{k : xs_k = cover_j}
+                                              (c gacglobalcardinality (x1 ...) (v1 ...) (c1 ...))
+                                 the OPEN form (clsd = F): mznlib's closed variants add their
+                                 own `in` constraints, which arrive as set domains
+  array_int_maximum(y, xs)       y = max xs                (c array_max (x1 ...) y)
+  array_int_minimum(y, xs)       y = min xs                (c array_min (x1 ...) y)
+  int_max(a, b, z), int_min      z = max(a, b)             (c max a b z), (c min a b z)
+  baguette_inverse(f, fmin, g, gmin)                       (c inverse ((f1 ...) fmin) ((g1 ...) gmin))
+                                 SPEC 2.1's sentence and cake's inverse_sem agree term for
+                                 term, the unequal-length case (unsatisfiable) included
+  baguette_member(xs, y, bs), baguette_member_bool(...)
+                                 some b_k true, and every true b_k has x_k = y (SPEC 2.1)
+                                              (c_k equals_if (b_k = 1) x_k y) per k, and
+                                              (c or ((b1 = 1) ...) (1 = 1))
+                                 NOT cake's `in`: `in (x1 ...) y` says y is one of the x and
+                                 nothing of the b, which are model variables here (mznlib
+                                 introduces them, baguette's rows constrain them), so the .scp
+                                 would admit b's that the FlatZinc model does not
+
+  `count` is not a FlatZinc builtin of SPEC 2.1: MiniZinc's count reaches baguette as
+  baguette_global_cardinality over one value (mznlib), and is covered as that.
+
   `var lo..hi` and `var bool` (as 0..1) variables, arrays of them, aliases (`= y`, with the
-  alias's own domain kept as a constraint on y when it is narrower), parameters and constant
+  alias's own domain kept as a constraint on y when it is narrower; a `var int` alias or
+  array of aliases, which mznlib's wrappers write, declares nothing and restricts nothing), parameters and constant
   arrays (written in place: .scp accepts an integer wherever a variable may stand), set
   domains with holes (bounds plus `(dN in (v1 ...) x)`), annotations (ignored: they do not
   change the solutions), `solve satisfy` (with or without a search annotation).
@@ -65,6 +93,9 @@ COVERED = (
     "all_different_int",
     "bool_clause", "array_bool_or", "array_bool_and", "bool_eq", "bool_not", "bool2int",
     "int_le_reif", "int_eq_reif", "int_ne_reif", "int_lin_le_reif",
+    "array_int_element", "fzn_global_cardinality", "baguette_global_cardinality",
+    "array_int_maximum", "array_int_minimum", "int_max", "int_min",
+    "baguette_inverse", "baguette_member", "baguette_member_bool",
 )
 
 
@@ -247,9 +278,14 @@ class Model:
         return out
 
 
-def domain_of(p):
-    """`var` type after the keyword: returns (lo, hi, values-or-None)."""
+def domain_of(p, alias=False):
+    """`var` type after the keyword: returns (lo, hi, values-or-None), or None for a bare
+    `var int` that is an ALIAS (`= y`, or an array of existing items): it declares nothing,
+    and its items keep their own domains (T5, D-0180: mznlib's wrappers write these)."""
     k, v = p.peek()
+    if v == "int" and alias:
+        p.next()
+        return None
     if v == "int":
         raise Uncovered("`var int` with no declared domain (cake needs bounds; an invented "
                         "bound would change the model)")
@@ -270,6 +306,16 @@ def domain_of(p):
         full = vals == list(range(vals[0], vals[-1] + 1))
         return (vals[0], vals[-1], None if full else vals)
     raise Uncovered(f"domain {e!r}")
+
+
+def is_alias(p):
+    """After `var`, at `int`: does this declaration end in `= ...` before its `;`?"""
+    j = p.i
+    while j < len(p.t) and p.t[j][1] != ";":
+        if p.t[j][1] == "=":
+            return True
+        j += 1
+    return False
 
 
 def first_uncovered(toks):
@@ -332,7 +378,7 @@ def parse(text):
             p.expect("of")
             if p.at("var"):
                 p.next()
-                dom = domain_of(p)
+                dom = domain_of(p, alias=is_alias(p))
                 p.expect(":")
                 k, name = p.next()
                 p.annotations()
@@ -342,7 +388,8 @@ def parse(text):
                     if len(items) != n:
                         raise Uncovered(f"array {name} has {len(items)} items for 1..{n}")
                     for j, t in enumerate(items):
-                        restrict(m, t, dom, f"{name}[{j + 1}]")
+                        if dom is not None:
+                            restrict(m, t, dom, f"{name}[{j + 1}]")
                     m.arrays[name] = items
                 else:
                     items = []
@@ -368,14 +415,15 @@ def parse(text):
             continue
         if v == "var":
             p.next()
-            dom = domain_of(p)
+            dom = domain_of(p, alias=is_alias(p))
             p.expect(":")
             k, name = p.next()
             p.annotations()
             if p.at("="):
                 p.next()
                 t = m.term(p.expr())
-                restrict(m, t, dom, name)
+                if dom is not None:
+                    restrict(m, t, dom, name)
                 m.alias[name] = t
             else:
                 declare(m, name, dom)
@@ -499,6 +547,52 @@ def emit(m):
                 raise Uncovered(f"{name}: malformed arguments")
             terms = " ".join(f"{ai} {tm(xi)}" for ai, xi in zip(a, xs))
             cons.append(f"({cn} lin_less_equal_iff ({tm(r)} = 1) ({terms}) {c[1]})")
+        elif name == "array_int_element":
+            if len(args) != 3:
+                raise Uncovered(f"{name} with {len(args)} arguments")
+            i, a, z = m.term(args[0]), m.ints(args[1]), m.term(args[2])
+            # FlatZinc's index is 1-based; cake's (Y off) means position Y - off from 0
+            cons.append(f"({cn} element ({' '.join(map(str, a))}) ({tm(i)} 1) {tm(z)})")
+        elif name in ("fzn_global_cardinality", "baguette_global_cardinality"):
+            if len(args) != 3:
+                raise Uncovered(f"{name} with {len(args)} arguments")
+            xs, cover, cs = m.array(args[0]), m.ints(args[1]), m.array(args[2])
+            if len(cover) != len(cs):
+                raise Uncovered(f"{name}: {len(cover)} cover values for {len(cs)} counts")
+            cons.append(f"({cn} gacglobalcardinality ({' '.join(tm(x) for x in xs)}) "
+                        f"({' '.join(map(str, cover))}) ({' '.join(tm(c) for c in cs)}))")
+        elif name in ("array_int_maximum", "array_int_minimum"):
+            if len(args) != 2:
+                raise Uncovered(f"{name} with {len(args)} arguments")
+            y, xs = m.term(args[0]), m.array(args[1])
+            if not xs:
+                raise Uncovered(f"{name} over an empty array")
+            kw = "array_max" if name == "array_int_maximum" else "array_min"
+            cons.append(f"({cn} {kw} ({' '.join(tm(x) for x in xs)}) {tm(y)})")
+        elif name in ("int_max", "int_min"):
+            if len(args) != 3:
+                raise Uncovered(f"{name} with {len(args)} arguments")
+            x, y, z = m.term(args[0]), m.term(args[1]), m.term(args[2])
+            cons.append(f"({cn} {name[4:]} {tm(x)} {tm(y)} {tm(z)})")
+        elif name == "baguette_inverse":
+            if len(args) != 4:
+                raise Uncovered(f"{name} with {len(args)} arguments")
+            f, fmin, g, gmin = m.array(args[0]), m.term(args[1]), m.array(args[2]), m.term(args[3])
+            if fmin[0] != "int" or gmin[0] != "int":
+                raise Uncovered(f"{name}: a first index that is not a constant")
+            cons.append(f"({cn} inverse (({' '.join(tm(x) for x in f)}) {fmin[1]}) "
+                        f"(({' '.join(tm(x) for x in g)}) {gmin[1]}))")
+        elif name in ("baguette_member", "baguette_member_bool"):
+            if len(args) != 3:
+                raise Uncovered(f"{name} with {len(args)} arguments")
+            xs, y, bs = m.array(args[0]), m.term(args[1]), m.array(args[2])
+            if len(xs) != len(bs):
+                raise Uncovered(f"{name}: {len(xs)} values for {len(bs)} selectors")
+            # SPEC 2.1: some b[k] is true, and every true b[k] has x[k] = y. Not cake's
+            # `in`, whose meaning leaves the selectors b free (see the header).
+            for j, (x, b) in enumerate(zip(xs, bs), 1):
+                cons.append(f"({cn}_{j} equals_if ({tm(b)} = 1) {tm(x)} {tm(y)})")
+            cons.append(f"({cn} or ({' '.join(f'({tm(b)} = 1)' for b in bs)}) (1 = 1))")
     k = 0
     for n in m.order:
         lo, hi, vals = m.vars[n]
