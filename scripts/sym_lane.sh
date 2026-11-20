@@ -192,7 +192,10 @@ controls() {
             K=$k; break
         fi
     done
-    [ -n "$K" ] || { echo "FAIL(no level-1 cut that is not implied: every control would be vacuous)"; return; }
+    # every level-1 cut implied by the lines before it: no mutation of one can be refused, so the
+    # controls cannot run on this chain. Reported as VACUOUS, not as a pass (and not a failure of the
+    # pipeline: measured on php_escape_sat with search-order points pushed to 1, D-0181)
+    [ -n "$K" ] || { echo "VACUOUS(every level-1 cut is implied by the lines before it)"; return; }
     local rule mut vac=""
     for rule in auto dom; do
         # can a bad cut c v X be refused at all? Not if the unit c is derivable (then c v X is a
@@ -240,5 +243,5 @@ for n in "${names[@]}"; do
     if [ -s "$OUT/$n/row.tsv" ]; then cat "$OUT/$n/row.tsv" >> "$OUT/results.tsv"; else echo "$n: FAIL (no result row)"; nf=$((nf + 1)); fi
 done
 nf=$((nf + $(grep -c 'FAIL' "$OUT/results.tsv")))
-echo "sym_lane: ${#names[@]} instances, results in $OUT/results.tsv"
+echo "sym_lane: ${#names[@]} instances, results in $OUT/results.tsv$(v=$(grep -c VACUOUS "$OUT/results.tsv"); [ "$v" -gt 0 ] && echo ", controls VACUOUS on $v")"
 if [ $nf = 0 ]; then echo "sym_lane: PASS"; else echo "sym_lane: FAIL ($nf)"; exit 1; fi

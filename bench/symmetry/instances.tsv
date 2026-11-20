@@ -28,3 +28,4 @@ qr48_w4            mzn:@CODES/dom/sym_p47_w4_nofix.dzn       3  UNSAT  -    big
 # weight 12 of QR48 as the checks, no fixed coordinate; the w12 file is the w8 one with Wmax = 12.
 qr48_w8            mzn:@CODES/dom/sym_p47_w8_nofix.dzn       3  UNSAT  -    huge
 qr48_w12           mzn:@CODES/dom/sym_p47_w8_nofix.dzn:Wmax=12  3  SAT  -    huge
+qr32_w8            mzn:@CODES/dom/sym_p31_w4_nofix.dzn:Wmax=8  3  SAT  yes  big
