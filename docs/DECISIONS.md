@@ -20556,3 +20556,255 @@ gate on the same sources: a warning dev would refuse never reaches a merge.
 **Consequences.** A measured series names its binary's md5 and says it is release. The scaling
 lane's baseline is a dev measurement, so a release run is compared only with a release run.
 Instruction counts from before this record (dev) and after (release) do not compare directly.
+## D-0174  M14-e2e-verification-T1: the verified encoder is CakeML's `cake_pb_cp`, and baguette reaches it by re-deriving its own `.opb` at the head of its proof
+
+Status: STUDY (feasibility, no solver code; the route of section 4 ran end to end on four models)
+Date: 2026-11-20
+Task: M14-e2e-verification-T1 (agent-e2e, `wave55-e2e`)
+Touches: this record, `docs/ROADMAP.md` (M14 rows T2 to T8), `bench/e2e_spike/` (new:
+`bridge.py`, `run.sh`, four `.scp`/`.fzn` twins). Scratch: `fataepyc-06:/scratch/arthur/wave55-e2e-runs/`,
+copy of the notes and artefacts in `/cluster/arthur/baguette-results/wave55-e2e/`.
+
+### 1. What exists, with sources
+
+The user's recollection is right about the mechanism and the people, and there is a tool to run
+today. There is **no paper yet on the CP encoder itself**. I searched for one (CakeML publication
+list, CP 2026 proceedings, the GCS repository) and found none, so none is cited for it.
+
+- The pattern (a verified encoder in front of the verified PB checker, so the encoding is no
+  longer trusted) is Gocht, McCreesh, Myreen, Nordström, Oertel and Tan, *End-to-End Verification
+  for Subgraph Solving*, AAAI 2024, doi:10.1609/aaai.v38i8.28642
+  (https://cakeml.org/aaai24-verified-subgraphs.pdf). Its encoders cover subgraph isomorphism,
+  maximum clique and maximum common induced subgraph, which are not CP.
+- McCreesh, Nordström, Oertel and Tan, *Proof Logging for Projected Enumeration (and Counting?)
+  Problems in VeriPB*, CP 2026, LIPIcs 379, 43, doi:10.4230/LIPIcs.CP.2026.43, section 3, states
+  the general flow ("a formally verified frontend which ensures that the original
+  (non-pseudo-Boolean) problem is re-encoded into pseudo-Boolean format correctly"), builds one for
+  maximal-clique enumeration, and runs the Glasgow Constraint Solver's (GCS) test suite through
+  CakePB. It does not describe a CP encoder.
+- **The tool is `cake_pb_cp`.** Source: CakeML `examples/pseudo_bool/cp_encoding/`
+  (https://github.com/CakeML/cakeml/tree/master/examples/pseudo_bool/cp_encoding), added by PR
+  #1436 ("adds a verified CP frontend for the CakePB example", Yong Kiam Tan, merged 2026-07-28).
+  Prebuilt x64 assembly in the public CakePB repository
+  (https://gitlab.com/MIAOresearch/software/cakepb, directory `cp/`, commit `438b8f83` of
+  2026-08-21, built from CakeML `14856fcf` and HOL4 `fac52534`). Built here with
+  `gcc basis_ffi.c cp/cake_pb_cp.S` in seconds, sha256 `ca92491e…`. Our older
+  `/cluster/arthur/cakepb-dev` checkout predates it and has no `cp/` directory.
+- GCS is the solver that uses it, as its "workflow 2": `dev_docs/workflow2_testing.md`,
+  `verified_encodings/run_scp_chain.bash` and 160-odd `verified_encodings/scp_cases/*.scp` in
+  https://github.com/ciaranm/glasgow-constraint-solver, and issues #353 (coverage tiers, June to
+  September 2026) and #1412 (November 2026). **GCS conformed its own `.opb` to cake's names**, row
+  for row, so that its proof checks against cake's OPB as it stands.
+- A different route, for completeness: Flippo, Sidorov, ten Brink, Pit-Claudel and Demirović,
+  *Formally Verified Certification of Constraint Programming Proofs*, CP 2026, LIPIcs 379, 24,
+  doi:10.4230/LIPIcs.CP.2026.24, check DRCP proofs **directly against FlatZinc** with a checker
+  verified in Rocq. No PB encoding is involved, so it would mean a second proof format for baguette.
+  Not studied further here.
+
+### 2. The verified encoder: input, output, theorem
+
+**Input** is a `.scp` file, one s-expression of four sections (`cp_parseScript.sml`):
+
+```
+( (version 1) (variables (x 0 3) (y 0 3))
+  (constraints (c1 lin_less_equal (1 x 1 y) 2) (c2 greater_equal x 2))
+  (prob_type decide) )
+```
+
+Variables are integers with bounds only (no holes, no Booleans), constraint names must be distinct,
+and `prob_type` is `decide`, `enumerate`, `(minimize v)` or `(maximize v)`. The constraint language
+(`cpScript.sml`) is XCSP3-like and covers what GCS supports: `plus minus multiply divide modulus abs
+max min`, the comparisons with `_if`/`_iff` reification, `lin_*` with reification, `all_different
+all_different_except all_equal symmetric_all_different nvalue count among in notin at_most_one`,
+`global_cardinality` (bounds and GAC, open and closed), `element element_2d array_max array_min`,
+`table negative_table smart_table regular`, `and or parity`, `lex_*`, `value_precede
+seq_precede_chain`, `inverse`, `circuit knapsack`, `disjunctive disjunctive2d cumulative`, `sort
+arg_sort increasing decreasing`.
+
+**Output** is an `.opb`. Measured on the model above:
+
+```
+@i[x][lb] 1 i[x][b0] 2 i[x][b1] >= 0 ;
+@i[x][ub] 1 i[x][b0] 2 i[x][b1] <= 3 ;
+...
+@c[c1] -1 i[y][b0] -2 i[y][b1] -1 i[x][b0] -2 i[x][b1] >= -2 ;
+@c[c2] 1 i[x][b0] 2 i[x][b1] >= 2 ;
+```
+
+Every integer is its **two's-complement bits** `i[X][b<k>]`, plus `i[X][sign]` with weight `-2^h`
+when its lower bound is negative, bounded by two labelled rows. Atoms `i[X][ge<v>]` and `i[X][eq<v>]`
+exist only where a constraint needs one, defined by big-M rows over the bits. Constraint-local flags
+are `b[name][…]`, `x[name][i_j][…]` and `v[name][…]`, and rows are labelled `@c[name][…]`. For
+`all_different (a b c)` it writes, per pair, two rows and one selector `x[c1][i_j]`
+(`A - B + 4 ~x >= 1`, `B - A + 4 x >= 1`). No `* #variable=` header.
+
+**What is verified** is `full_encode_sem_concl` (`cp_encScript.sml`): if the PB conclusion
+(SAT, UNSAT, objective bounds, an enumeration count) holds for the encoding, the converted
+conclusion holds for the CP instance under the semantics of `cpScript.sml`, all in HOL4, compiled to
+machine code by the verified CakeML compiler, and composed with CakePB's checker of the elaborated
+proof. What is left to trust on that side is the HOL4 definition of what each constraint means,
+HOL4 itself, and the hardware.
+
+### 3. How far it is from baguette
+
+| | baguette (PROOF-FORMAT §3) | `cake_pb_cp` |
+|---|---|---|
+| integer in the `.opb` | order ladder `x_ge_v` (default), or `x_bit_i` = bits of `x - l`, unsigned, above `--bits-above` | two's-complement bits of `x`, `i[x][b<k>]`, `i[x][sign]` |
+| `[x >= v]` | the variable `x_ge_v` (order), or a proof atom `x_ge_v` minted by a `red` pair (bits) | `i[x][ge<v>]`, in the `.opb` only where a constraint uses it, defined over the bits |
+| `[x = v]` | `x_eq_v`, minted in the proof (element, alldiff) | `i[x][eq<v>]`, as above |
+| Booleans | order on `[0,1]`, `b_ge_1` | integers `0..1`, `i[b][b0]` |
+| auxiliaries | `_neN` selectors, `X_INTRODUCED_arith_N` case-split Booleans, `$mxN` choice selectors, mznlib's regular state flags | per-constraint flags `b[…]`, `x[…]`, `v[…]` |
+| labels | `@c<id>`, model rows included | `@i[x][lb/ub]`, `@c[name][…]` |
+
+The semantics of `x_ge_v` and `i[x][ge<v>]` are the same, so the difference is one of naming and of
+which variables are primitive. In baguette's order arm the atoms ARE the integer. In cake's OPB the
+bits are, and the atoms are defined from them. No row baguette writes is literally in cake's file.
+
+### 4. The route: baguette re-derives its own `.opb` from cake's, at the head of its proof
+
+Only cake's `.opb` is then trusted, and baguette's `.opb` becomes a set of lemmas its proof must
+derive. The proof after the prefix is baguette's own, **unchanged** apart from the `f N` count. Per
+integer variable `x` over `[l, u]`, with `B` cake's bit sum and `S = Σ_{l<v≤u} x_ge_v`:
+
+1. **atoms**, two `red` lines per value, the shape baguette's bits arm already mints
+   (`Encoding.ensure_atom`): `B + M ~x_ge_v >= v : x_ge_v -> 0` and `-B + K x_ge_v >= 1 - v :
+   x_ge_v -> 1`;
+2. **the two halves of `B = l + S`**. `B - S >= l` is derived upwards from `@i[x][lb]`, one `pol` per
+   value. Each step combines the case `x_ge_v` false (the previous line) with the case `x_ge_v` true
+   (the atom plus a running row `Σ_{w≤v} ~x_ge_w >= 0`) and divides, so the `x_ge_v` terms cancel
+   exactly. `S - B >= -l` is derived downwards from `@i[x][ub]` in the same way;
+3. **the ladder**, one `pol` per rung (`A1(v+1) + A2(v)`, saturate, divide);
+4. **every cake row substituted**. `B -> l + S` is one `pol`, the row plus each variable's half
+   scaled by its coefficient;
+5. **every baguette `.opb` row pinned to its own label `@c<k>`**, by `ia` against a substituted row
+   when it is one, or by `rup` otherwise (alldiff's pairwise clauses close by unit propagation over
+   the substituted pair rows and their selector).
+
+`bench/e2e_spike/bridge.py` writes this from the two `.opb` files. `run.sh` runs the whole chain:
+`cake_pb_cp M.scp` → `baguette M.fzn --proof` → `bridge.py` → `veripb cake.opb bridged.pbp
+--elaborate core` → `cake_pb_cp M.scp core`. Binary `69fd9b74` (`main` at `387523b`), veripb 3.0.2
+`d5644ca4`, `cake_pb_cp` `ca92491e`:
+
+| model | constraints | answer | veripb on cake's OPB | `cake_pb_cp` on the core |
+|---|---|---|---|---|
+| `lin` | `x + y <= 2`, `x >= 2`, `y >= 1`, over `0..3` | UNSAT | VERIFIED | VERIFIED UNSATISFIABLE |
+| `linsat` | the same without `y >= 1` | `x = 2, y = 0` | VERIFIED | VERIFIED SATISFIABLE |
+| `ad` | `all_different(a, b, c)` over `1..2` | UNSAT | VERIFIED | VERIFIED UNSATISFIABLE |
+| `neg` | `3x - y <= -4`, `all_different(x, y)`, over `-2..5` (sign bit) | `x = -2, y = -1` | VERIFIED | VERIFIED SATISFIABLE |
+
+`lin` and `ad` are UNSAT, so their `red` lines were judged over a contradictory database and prove
+nothing about the prefix (D-0053). `linsat` and `neg` are satisfiable, so there they were judged.
+baguette's `sol` line, written over its own atoms, was accepted against cake's rows, the bits being
+propagated from the atoms' definitions. Mutations, all on `linsat`:
+
+| mutation | refused at | wording |
+|---|---|---|
+| atom `A2[x_ge_2]`'s witness flipped to `-> 0` | its line | "Proofgoal #1 could not be autoproven" |
+| baguette's row says `x + y <= 1` where the model says `<= 2` (a transcription bug) | the pin of `@c5` | "not implied by reverse unit propagation" |
+| the `.scp` says `x + y <= 1`, baguette solved `<= 2` | the `sol` line | "The given solution is conflicting with constraint 5" |
+| baguette's row says `x + y <= 3` (weaker than the model) | accepted | sound: a proof from weaker rows proves the claim for the model |
+
+The second line is the point of the milestone. A wrong transcription in baguette's `.opb` no longer
+yields a verified wrong answer, because its row cannot be derived from the verified encoding.
+
+**Cost**, on `x, y in 0..w` with `x + y <= w` and `x >= w`, a model that is SAT at the root:
+
+| w | baguette `.pbp` B | bridged `.pbp` B | core B | veripb `-e` s, MB | `cake_pb_cp` s, MB |
+|---|---|---|---|---|---|
+| 10 | 256 | 10 745 | 7 319 | 0.03, 11 | 0.02, 6 |
+| 100 | 1 789 | 128 139 | 92 373 | 0.05, 17 | 0.05, 34 |
+| 300 | 5 589 | 433 625 | 319 983 | 0.09, 46 | 0.23, 157 |
+| 1 000 | 18 892 | 1 520 709 | 1 141 621 | 0.43, 261 | 1.30, 1 146 |
+
+That is about 760 bytes of prefix per value per variable, O(w) text. A first version wrote the running
+sums out in full in each `pol` line and grew as Θ(w²) (24.1 MB at w = 1 000, `cake_pb_cp` 6.3 s and
+4.2 GB). The check is still Θ(w²) arithmetic, because each of the Θ(w) lines adds rows of Θ(w)
+literals. At baguette's order width cap this is affordable, and above it baguette is on bits, where
+section 5's T7 applies.
+
+**The other routes, and why not first.** (b) *Conform*, GCS's route, makes baguette write cake's
+names and cake's rows. For the order arm that means giving up the ladder as `.opb` variables, which
+D-0031 found load-bearing for every `rup` baguette writes, and it is a rewrite of `encoding.ml` and
+every propagator's row. (c) *Rename only*, so that baguette calls its atoms `i[x][ge<v>]`. That buys
+nothing by itself, because the atoms still have to be defined from the bits. (a), the route above,
+changes no line of baguette's search proof. Its prefix can also be written by the solver, which
+knows each row's origin, rather than by matching files as the spike does (T3).
+
+**Where the bridge will be hard**, by family (keyword = cake's):
+
+| baguette family | cake keyword | expected bridge |
+|---|---|---|
+| `int_lin_le/eq`, `int_le/lt/eq` | `lin_less_equal`, `lin_equals`, comparisons | substitution + `ia`, measured |
+| `all_different_int` | `all_different` | substitution + `rup`, measured |
+| `int_lin_ne`, `int_ne` (`_neN` selector) | `lin_not_equals`, `not_equals` | `_neN` defined by a `red` pair, as an atom (T4) |
+| reified (`reif_lin_le`, `reif_lin_eq`) | `lin_*_iff`, `equals_iff` … | the Boolean is a model variable, so substitution plus `rup` is expected (T4) |
+| `bool_clause`, `array_bool_*`, `bool_eq/not` | `or`, `and`, `equals` | Booleans as `0..1` integers, `b_ge_1` atom of `i[b][b0]` (T4) |
+| `bool2int` | `equals` | as above (T4) |
+| `array_int_element` | `element` (offset index) | cake's flags against baguette's `x_eq_v` rows, `rup` or `pol` to be measured (T5) |
+| `global_cardinality*`, `count` | `*globalcardinality*`, `count` | counting rows against cake's count flags (T5) |
+| `inverse` (`baguette_inverse`) | `inverse` | channel rows and the added alldiff (T5) |
+| `array_int_maximum/minimum`, `int_max/min` | `array_max/min`, `max/min` | clause rows per value, or `$mxN` choice groups over bits (T5) |
+| member (M7-T28) | `in` | `b_k -> x_k = y` rows (T5) |
+| `int_times`, `int_div`, `int_abs` | `multiply`, `divide`, `abs` | baguette's case split puts `X_INTRODUCED_arith_N` Booleans in the model, and cake encodes the product over bit products. The rows are far apart (T6) |
+| `cumulative` | `cumulative` | time-table rows against cake's (T6) |
+| `regular` (`baguette_regular`, `(n+1)Q` state flags) | `regular` (NFA, no flags in the `.scp`) | baguette's flags have to be defined, from cake's own run flags if their meaning matches (T6) |
+
+Every family in SPEC §2.1 has a keyword. Coverage of the encoder is therefore not the obstacle.
+The obstacle is the derivation of each family's rows, one family at a time.
+
+### 5. MiniZinc and FlatZinc
+
+`cake_pb_cp` reads `.scp`, so a FlatZinc model needs a **translator** FlatZinc → `.scp`. FlatZinc is
+close enough that the translation is a table, one builtin to one keyword with its arguments reordered,
+plus these points:
+
+- `var bool` becomes `0..1`, and a set domain with holes becomes bounds plus a `notin` constraint;
+- FlatZinc arrays are 1-based, so `array_int_element`'s index becomes cake's `(var offset)` pair with
+  offset 1 (GCS's #987 is this exact bug, and it verified);
+- aliases (`var int: x = y;`) are substituted, constants are written in place (`.scp` allows an
+  integer anywhere a variable may stand), and `solve` becomes `prob_type`;
+- `baguette_regular` and `baguette_inverse` (mznlib) map to `regular` and `inverse`. The regular state
+  flags remain declared variables with no constraint in the `.scp`, and T6 decides how they are tied.
+
+**What is trusted at the end.** MiniZinc's flattening and our `mznlib` were trusted before and still
+are. The translator is new trust, and it is the only one. HOL4's definitions of the constraints are
+the reference semantics, and the `.opb`, the solver and VeriPB all leave the trusted base. The GCS
+documentation states the hazard precisely: "the certified chain starts at the `.scp`", so a wrong
+translation verifies. The translator should therefore be small, separate from baguette's front end
+(another parser, so that a parsing bug shared by the two cannot hide), and tested by counting
+solutions against MiniZinc's reference solvers on the shapes GCS lists (index sets not from 1, empty
+arrays, holes, negative values, reified contexts).
+
+### 6. The checker chain, and what "end to end" certifies
+
+`veripb cake.opb proof.pbp --elaborate core` and then `cake_pb_cp model.scp core`. VeriPB is an
+**untrusted translator** in this chain, and cake has the last word. `cake_pb_cp` reads only the
+elaborated kernel proof. On the bridged proof itself it fails at its first `%` comment line (measured),
+and D-0127 found the same for labels. It exits 0 on a refusal, so a lane reads its `s VERIFIED` line.
+Throughput, from what is recorded: `cake_pb` checks the elaborated proof of D-0127/D-0131's
+single-row shapes at 10⁶ in 34 to 77 s, where veripb takes 2.6 to 3.8 s (×10 to ×20), with RSS at
+its 4.3 GB heap. On GSS's subgraph proofs (`/cluster/arthur/cakecmp-2026-10-21`, 310 instances) the
+`develop` build of 2026-10-21 took a median of 87 s. **Nothing has measured `cake_pb` on a baguette
+search proof yet**, which is T8.
+
+In one paragraph for a non-specialist: today, when baguette says "no solution", a checker confirms
+that its reasoning is correct for the pseudo-Boolean file baguette wrote, but nobody checks that this
+file says the same thing as the user's model. With the chain above, the file is written by
+`cake_pb_cp`, whose translation from constraints to pseudo-Boolean form is proved correct in the HOL4
+theorem prover, and the final check is done by CakePB, a checker whose code is also proved correct.
+baguette has to prove, inside its proof, that its own file follows from that verified file. A
+mistake in baguette's translation is then caught rather than certified. What remains to be trusted
+is MiniZinc's flattening, a small FlatZinc-to-`.scp` translator, and the HOL4 definitions of the
+constraints.
+
+### 7. Plan
+
+T2 to T8 in `docs/ROADMAP.md` M14, smallest first. The first demo (T2) is section 4's chain with
+a real translator in place of the hand-written twins, on the M1 builtins and `all_different_int`.
+
+### 8. What this study did not do
+
+It did not build HOL4 or CakeML. The prebuilt assembly was enough, and building the encoder from
+source is only needed to change it. It did not read the encoders of the T5/T6 families beyond their
+names. It did not run a search proof (every demo model closes at the root), so the prefix's cost
+relative to a real proof is not known. That waits for T2's coverage.
