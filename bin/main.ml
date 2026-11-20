@@ -127,6 +127,9 @@ type options = {
   threads : int option; (* -p N: accepted, one thread *)
   mzn_stats : bool; (* -s: --stats and the %%%mzn-stat block on stdout *)
   verbose : bool; (* -v: the flags' mapping, on stderr *)
+  e2e : bool;
+      (* M14-e2e-verification-T3, D-0187: --e2e, the proof is written to be checked
+         against cake_pb_cp's .opb, its prefix deriving this run's .opb from it *)
 }
 
 (* Exit codes. 0 covers both SAT and UNSAT: an UNSAT model is a successful run that
@@ -257,6 +260,18 @@ let usage () =
   prerr_endline
     "                    every model, every `make check`. Cannot be combined with";
   prerr_endline "                    --proof (exit 2). --stats says the run was unproved.";
+  prerr_endline "";
+  prerr_endline
+    "  --e2e             (M14-e2e-verification-T3, D-0187) write PREFIX.pbp to be checked";
+  prerr_endline
+    "                    against the .opb CakeML's verified encoder cake_pb_cp writes for";
+  prerr_endline
+    "                    the model's .scp (tools/e2e/fzn2scp.py), not against PREFIX.opb:";
+  prerr_endline
+    "                    its head derives each row of PREFIX.opb from cake's rows";
+  prerr_endline
+    "                    (docs/PROOF-FORMAT.md section 3b). Needs --proof. A builtin it";
+  prerr_endline "                    does not cover is refused (exit 3). Off by default.";
   prerr_endline "";
   prerr_endline
     "  --restarts POLICY (M10-search-strategy-T2, D-0137, SPEC 3.4) restart the search";
@@ -460,6 +475,7 @@ let parse_args argv =
   let threads = ref None in
   let mzn_stats = ref false in
   let verbose = ref false in
+  let e2e = ref false in
   (* A standard flag's integer argument. Malformed is a usage error, as everywhere in
      this parser: a flag that was not in force is the trap CLAUDE.md records twice. *)
   let int_arg flag ~ok ~what i =
@@ -492,6 +508,9 @@ let parse_args argv =
           go (i + 1)
       | "--no-proof" ->
           no_proof := true;
+          go (i + 1)
+      | "--e2e" ->
+          e2e := true;
           go (i + 1)
       (* M10-search-strategy-T2 (D-0137). A malformed policy is a usage error, never a
          silent `none`: a measurement whose flag was not in force is the trap CLAUDE.md
@@ -635,6 +654,11 @@ let parse_args argv =
       "baguette: --no-proof and --proof PREFIX contradict each other: one asks for no \
        proof and the other for where to write it. Give one of them.";
     exit exit_usage);
+  if !e2e && !proof_prefix = None then (
+    prerr_endline
+      "baguette: --e2e writes a proof to be checked against cake_pb_cp's .opb, so it \
+       needs --proof PREFIX.";
+    exit exit_usage);
   match !model with
   | None -> usage ()
   | Some m ->
@@ -665,6 +689,7 @@ let parse_args argv =
         threads = !threads;
         mzn_stats = !mzn_stats;
         verbose = !verbose;
+        e2e = !e2e;
       }
 
 (* --------------------------------------------------------- timing (M1-T35) *)
@@ -1623,7 +1648,12 @@ let solve opts (m : Model.t) =
       let rows = prefix ^ ".opb.rows" in
       Encoding.row_sink := Encoding.Stream_rows_to rows;
       at_exit (fun () ->
-          if Sys.file_exists rows then try Sys.remove rows with Sys_error _ -> ())
+          if Sys.file_exists rows then try Sys.remove rows with Sys_error _ -> ());
+      if opts.e2e then (
+        let pre = prefix ^ ".e2e-prefix" in
+        Encoding.e2e_request := Some pre;
+        at_exit (fun () ->
+            if Sys.file_exists pre then try Sys.remove pre with Sys_error _ -> ()))
   | None -> Encoding.row_sink := Encoding.Discard_rows);
   let compiled = Timing.phase "compile" (fun () -> Compile.compile m) in
   let store = compiled.Compile.store in
@@ -1926,6 +1956,15 @@ let () =
              cannot express, an objective, a search annotation that is not what the
              search actually does. *)
           prerr_endline (Fz_error.to_string e);
+          exit exit_unsupported
+      | exception Baguette_proof.E2e.Not_covered why ->
+          (* M14-e2e-verification-T3 (D-0187): the model has a construct the solver-written
+             prefix does not cover. Refused before the search, like an unsupported
+             builtin; the external bridge (tools/e2e/bridge.py) is the path for it. *)
+          Printf.eprintf
+            "baguette: --e2e: %s (D-0187). Run without --e2e and bridge the proof with \
+             tools/e2e/bridge.py.\n"
+            why;
           exit exit_unsupported
       | exception Search.Unsound_solution assignment ->
           (* I-P1. The solver found an assignment its own propagators accepted and the

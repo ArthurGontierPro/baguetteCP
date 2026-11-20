@@ -766,6 +766,49 @@ let pack_div_guard (p : Reif_lin_le.t) : pending =
 let pack_abs_guard (p : Reif_lin_le.t) : pending =
   pack_reif_as (module Arith.Abs_guard : Propagator.S with type t = Reif_lin_le.t) p
 
+(* M14-e2e-verification-T3 (D-0187). The cake constraint tools/e2e/fzn2scp.py writes for
+   a FlatZinc constraint, over the variables' FlatZinc names: the second half of what
+   [Baguette_proof.E2e] needs to derive this constraint's rows from cake_pb_cp's .opb. The
+   builder keeps a linear row's variable terms as written and folds its constants into the
+   right-hand side, which is what cake does with the translator's constants in place
+   (mk_lin_constraint_ge), so the terms go across unchanged. A builtin outside the covered
+   families is refused here, before any row is posted. Only called under `--e2e`. *)
+let e2e_spec (names : string array) (c : Model.cstr) : Baguette_proof.E2e.spec =
+  let module E = Baguette_proof.E2e in
+  let op = function Model.Var i -> E.Var names.(i) | Model.Const n -> E.Const n in
+  let lin ts = List.map (fun (a, i) -> (a, E.Var names.(i))) ts in
+  match c with
+  | Model.Int_lin_le (ts, r) -> E.Lin_le (lin ts, r)
+  | Model.Int_lin_eq (ts, r) -> E.Lin_eq (lin ts, r)
+  | Model.Int_lin_ne (ts, r) -> E.Lin_ne (lin ts, r)
+  | Model.Int_le (a, b) -> E.Le (op a, op b)
+  | Model.Int_lt (a, b) -> E.Lt (op a, op b)
+  | Model.Int_eq (a, b) -> E.Eq (op a, op b)
+  | Model.Int_ne (a, b) -> E.Ne (op a, op b)
+  | Model.All_different xs -> E.All_different (List.map op xs)
+  | Model.Bool_clause _ -> E.refuse "bool_clause is not covered by --e2e yet"
+  | Model.Array_bool_or _ -> E.refuse "array_bool_or is not covered by --e2e yet"
+  | Model.Array_bool_and _ -> E.refuse "array_bool_and is not covered by --e2e yet"
+  | Model.Bool2int _ -> E.refuse "bool2int is not covered by --e2e yet"
+  | Model.Bool_eq _ -> E.refuse "bool_eq is not covered by --e2e yet"
+  | Model.Bool_not _ -> E.refuse "bool_not is not covered by --e2e yet"
+  | Model.Int_lin_le_reif _ -> E.refuse "int_lin_le_reif is not covered by --e2e yet"
+  | Model.Int_le_reif _ -> E.refuse "int_le_reif is not covered by --e2e yet"
+  | Model.Int_eq_reif _ -> E.refuse "int_eq_reif is not covered by --e2e yet"
+  | Model.Int_ne_reif _ -> E.refuse "int_ne_reif is not covered by --e2e yet"
+  | Model.Int_times _ -> E.refuse "int_times is not covered by --e2e"
+  | Model.Int_div _ -> E.refuse "int_div is not covered by --e2e"
+  | Model.Int_abs _ -> E.refuse "int_abs is not covered by --e2e"
+  | Model.Global_cardinality _ ->
+      E.refuse "global_cardinality is not covered by --e2e yet"
+  | Model.Cumulative _ -> E.refuse "cumulative is not covered by --e2e"
+  | Model.Array_int_element _ -> E.refuse "array_int_element is not covered by --e2e yet"
+  | Model.Array_int_maximum _ -> E.refuse "array_int_maximum is not covered by --e2e yet"
+  | Model.Array_int_minimum _ -> E.refuse "array_int_minimum is not covered by --e2e yet"
+  | Model.Regular _ -> E.refuse "regular is not covered by --e2e"
+  | Model.Inverse _ -> E.refuse "inverse is not covered by --e2e yet"
+  | Model.Member _ -> E.refuse "member is not covered by --e2e yet"
+
 let compile (m : Model.t) : t =
   (* M5-T1. Resolved to a model variable index and a direction, or refused. The
      ENCODING half of it happens further down, once the variable is declared: an
@@ -901,6 +944,7 @@ let compile (m : Model.t) : t =
           Encoding.linear_terms_int_lin_le encoding [ (coeff, name) ]
         in
         Encoding.set_objective encoding (Opb.objective ~constant terms);
+        Encoding.e2e_objective encoding name ~sign:coeff;
         {
           Search.o_var = Var.of_int i;
           o_name = name;
@@ -2303,9 +2347,16 @@ let compile (m : Model.t) : t =
      empty [Clause]; and the refutation veripb accepts is `rup >= 1 ;`, closed the
      D-0022/I-X7 way because it rests on a clause. That model is
      test/models/ne_self_unsat.fzn. *)
+  (* M14-e2e-verification-T3: the .scp name of the k-th constraint is `c<k>`, k counted
+     from 1 in file order (tools/e2e/fzn2scp.py), which is [m.constraints]' order. *)
+  let e2e_k = ref 0 in
   let instances =
     List.concat_map
       (fun (c : Model.constr) ->
+        if Encoding.e2e_on encoding then (
+          incr e2e_k;
+          Encoding.e2e_begin encoding ~name:(Printf.sprintf "c%d" !e2e_k)
+            (e2e_spec names c.Model.k));
         let pos = c.Model.c_pos in
         (* [check_row] is the diagnostic path and covers every row this arm posts, but
            the arithmetic that happens *before* a row exists -- merging duplicate
@@ -2314,66 +2365,70 @@ let compile (m : Model.t) : t =
            inputs so large that no magnitude can be reported. Converting that to the
            same positioned [Error.failf] is what stops an overflowing model from
            leaving the CLI with an escaping exception instead of a diagnostic. *)
-        try
-          match c.Model.k with
-          | Model.Int_lin_le (terms, rhs) -> post_le pos (normalise_terms terms) rhs
-          | Model.Int_lin_eq (terms, rhs) -> post_eq pos (normalise_terms terms) rhs
-          | Model.Int_lin_ne (terms, rhs) ->
-              post_ne pos (normalise_terms terms) rhs ~pack:pack_lin_ne
-          | Model.Int_le (a, b) ->
-              let terms, rhs = difference_terms a b ~offset:0 in
-              post_le pos (normalise_terms terms) rhs
-          | Model.Int_lt (a, b) ->
-              let terms, rhs = difference_terms a b ~offset:(-1) in
-              post_le pos (normalise_terms terms) rhs
-          | Model.Int_eq (a, b) ->
-              let terms, rhs = difference_terms a b ~offset:0 in
-              post_eq pos (normalise_terms terms) rhs
-          | Model.Int_ne (a, b) ->
-              let terms, rhs = difference_terms a b ~offset:0 in
-              post_ne pos (normalise_terms terms) rhs ~pack:pack_ne
-          | Model.Bool_clause (ps, ns) ->
-              clause ~builtin:"bool_clause" ~pack:pack_bool_clause pos
-                (List.map (fun o -> (o, true)) ps @ List.map (fun o -> (o, false)) ns)
-          | Model.Array_bool_or (xs, r) -> post_array_bool_or pos xs r
-          | Model.Array_bool_and (xs, r) -> post_array_bool_and pos xs r
-          | Model.Bool2int (b, x) -> post_bool2int pos b x
-          | Model.Bool_eq (a, b) -> post_bool_eq pos a b
-          | Model.Bool_not (a, b) -> post_bool_not pos a b
-          | Model.Int_lin_le_reif (terms, rhs, r) ->
-              post_reif_le pos ~builtin:"int_lin_le_reif" ~pack:pack_int_lin_le_reif
-                (normalise_terms terms) rhs r
-          | Model.Int_le_reif (a, b, r) ->
-              let terms, rhs = difference_terms a b ~offset:0 in
-              post_reif_le pos ~builtin:"int_le_reif" ~pack:pack_int_le_reif
-                (normalise_terms terms) rhs r
-          | Model.Int_eq_reif (a, b, r) ->
-              let terms, rhs = difference_terms a b ~offset:0 in
-              post_reif_eq pos ~builtin:"int_eq_reif" ~pack:pack_int_eq_reif
-                ~positive:true (normalise_terms terms) rhs r
-          | Model.Int_ne_reif (a, b, r) ->
-              let terms, rhs = difference_terms a b ~offset:0 in
-              post_reif_eq pos ~builtin:"int_ne_reif" ~pack:pack_int_ne_reif
-                ~positive:false (normalise_terms terms) rhs r
-          | Model.Int_times (x, y, z, aux) -> post_int_times pos x y z aux
-          | Model.Int_div (x, y, q, aux) -> post_int_div pos x y q aux
-          | Model.Int_abs (x, z, aux) -> post_int_abs pos x z aux
-          | Model.All_different xs -> post_all_different pos xs
-          | Model.Global_cardinality (xs, cover, counts) ->
-              post_global_cardinality pos xs cover counts
-          | Model.Cumulative (ss, ds, rs, cap) -> post_cumulative pos ss ds rs cap
-          | Model.Array_int_element (i, vs, c) -> post_array_int_element pos i vs c
-          | Model.Array_int_maximum (mo, xs) -> post_maxmin pos ~dir:Maxmin.Max mo xs
-          | Model.Array_int_minimum (mo, xs) -> post_maxmin pos ~dir:Maxmin.Min mo xs
-          | Model.Regular r -> post_regular pos r (* M7-T28, D-0146 *)
-          | Model.Inverse iv -> post_inverse pos iv (* M7-T28, D-0151 *)
-          | Model.Member mb -> post_member pos mb (* M7-T28, D-0159 *)
-        with Checked.Overflow msg ->
-          reject_row pos
-            ~what:
-              (Printf.sprintf
-                 "this constraint (its coefficients alone already overflow: %s)" msg)
-            ~magnitude:None)
+        let r =
+          try
+            match c.Model.k with
+            | Model.Int_lin_le (terms, rhs) -> post_le pos (normalise_terms terms) rhs
+            | Model.Int_lin_eq (terms, rhs) -> post_eq pos (normalise_terms terms) rhs
+            | Model.Int_lin_ne (terms, rhs) ->
+                post_ne pos (normalise_terms terms) rhs ~pack:pack_lin_ne
+            | Model.Int_le (a, b) ->
+                let terms, rhs = difference_terms a b ~offset:0 in
+                post_le pos (normalise_terms terms) rhs
+            | Model.Int_lt (a, b) ->
+                let terms, rhs = difference_terms a b ~offset:(-1) in
+                post_le pos (normalise_terms terms) rhs
+            | Model.Int_eq (a, b) ->
+                let terms, rhs = difference_terms a b ~offset:0 in
+                post_eq pos (normalise_terms terms) rhs
+            | Model.Int_ne (a, b) ->
+                let terms, rhs = difference_terms a b ~offset:0 in
+                post_ne pos (normalise_terms terms) rhs ~pack:pack_ne
+            | Model.Bool_clause (ps, ns) ->
+                clause ~builtin:"bool_clause" ~pack:pack_bool_clause pos
+                  (List.map (fun o -> (o, true)) ps @ List.map (fun o -> (o, false)) ns)
+            | Model.Array_bool_or (xs, r) -> post_array_bool_or pos xs r
+            | Model.Array_bool_and (xs, r) -> post_array_bool_and pos xs r
+            | Model.Bool2int (b, x) -> post_bool2int pos b x
+            | Model.Bool_eq (a, b) -> post_bool_eq pos a b
+            | Model.Bool_not (a, b) -> post_bool_not pos a b
+            | Model.Int_lin_le_reif (terms, rhs, r) ->
+                post_reif_le pos ~builtin:"int_lin_le_reif" ~pack:pack_int_lin_le_reif
+                  (normalise_terms terms) rhs r
+            | Model.Int_le_reif (a, b, r) ->
+                let terms, rhs = difference_terms a b ~offset:0 in
+                post_reif_le pos ~builtin:"int_le_reif" ~pack:pack_int_le_reif
+                  (normalise_terms terms) rhs r
+            | Model.Int_eq_reif (a, b, r) ->
+                let terms, rhs = difference_terms a b ~offset:0 in
+                post_reif_eq pos ~builtin:"int_eq_reif" ~pack:pack_int_eq_reif
+                  ~positive:true (normalise_terms terms) rhs r
+            | Model.Int_ne_reif (a, b, r) ->
+                let terms, rhs = difference_terms a b ~offset:0 in
+                post_reif_eq pos ~builtin:"int_ne_reif" ~pack:pack_int_ne_reif
+                  ~positive:false (normalise_terms terms) rhs r
+            | Model.Int_times (x, y, z, aux) -> post_int_times pos x y z aux
+            | Model.Int_div (x, y, q, aux) -> post_int_div pos x y q aux
+            | Model.Int_abs (x, z, aux) -> post_int_abs pos x z aux
+            | Model.All_different xs -> post_all_different pos xs
+            | Model.Global_cardinality (xs, cover, counts) ->
+                post_global_cardinality pos xs cover counts
+            | Model.Cumulative (ss, ds, rs, cap) -> post_cumulative pos ss ds rs cap
+            | Model.Array_int_element (i, vs, c) -> post_array_int_element pos i vs c
+            | Model.Array_int_maximum (mo, xs) -> post_maxmin pos ~dir:Maxmin.Max mo xs
+            | Model.Array_int_minimum (mo, xs) -> post_maxmin pos ~dir:Maxmin.Min mo xs
+            | Model.Regular r -> post_regular pos r (* M7-T28, D-0146 *)
+            | Model.Inverse iv -> post_inverse pos iv (* M7-T28, D-0151 *)
+            | Model.Member mb -> post_member pos mb (* M7-T28, D-0159 *)
+          with Checked.Overflow msg ->
+            reject_row pos
+              ~what:
+                (Printf.sprintf
+                   "this constraint (its coefficients alone already overflow: %s)" msg)
+              ~magnitude:None
+        in
+        Encoding.e2e_end encoding;
+        r)
       m.Model.constraints
   in
   (* M7-T11: the declared holes of a set domain, as propagator instances.

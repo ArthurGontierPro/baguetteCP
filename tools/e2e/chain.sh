@@ -39,6 +39,20 @@
 #   line> | cause=<the checker's sentence> | target=<what was mutated>`, and the lane checks
 #   all of it against what the control expects (scripts/e2e_lane.sh).
 #
+# E2E_SOLVER=1 (M14-e2e-verification-T3, D-0187): the SOLVER-WRITTEN path. baguette runs with
+# `--e2e` and its own .pbp is checked against M.cake.opb directly: its head derives M.bag.opb's
+# rows from cake's, so there is no bridge and no `veripb alone` baseline (that proof does not
+# check against baguette's own .opb). A model --e2e does not cover (baguette exits 3 with
+# "--e2e: ...") is SKIPPED with that reason. Two more mutations, for this path:
+#     pin-stronger    the solver-written pin of the row opb-stronger picks (the first .opb row
+#                     with three terms or more) gets its degree raised by 1 in the proof: the
+#                     prefix now claims a row cake's file does not imply
+#                     (tools/e2e/mutate.py pin); refused at that pin
+#     sel-witness     the first disequality selector definition `@D1[...]` gets the witness
+#                     `s -> ~F` in place of `s -> F` (tools/e2e/mutate.py sel): a wrong
+#                     definition of the auxiliary the solver introduces, refused at that red
+# bridge-witness, scp-*, opt-* and core-* apply to it unchanged (on the solver's own .pbp).
+#
 # Prints ONE line: `MODEL VERDICT detail`, VERDICT in VERIFIED, SKIPPED, FAIL, and REFUSED
 # (mutation runs only). VERIFIED is followed by SAT, UNSAT or OPT=<v> (T8, D-0182): an
 # optimisation model is VERIFIED only on cake_pb_cp's `s VERIFIED BOUNDS v <= OBJ <= v`,
@@ -90,9 +104,18 @@ esac
 timeout "$TO" "$CK" "$o.scp" > "$o.cake.opb" 2> "$o.cake.err"
 [ -s "$o.cake.err" ] && say "FAIL cake_pb_cp refused the .scp: $(head -1 "$o.cake.err")"
 
-(ulimit -v 4000000; timeout "$TO" "$B" "$FZN" --proof "$o.bag" > "$o.bag.out" 2> "$o.bag.err")
+SOLVER=${E2E_SOLVER:-}
+EF=()
+[ -n "$SOLVER" ] && EF=(--e2e)
+(ulimit -v 4000000; timeout "$TO" "$B" "$FZN" --proof "$o.bag" "${EF[@]}" > "$o.bag.out" 2> "$o.bag.err")
 rc=$?
+if [ -n "$SOLVER" ] && [ $rc -eq 3 ] && grep -q '^baguette: --e2e: ' "$o.bag.err"; then
+    say "SKIPPED e2e: $(sed -n 's/^baguette: --e2e: \(.*\) (D-0187).*/\1/p' "$o.bag.err" | head -1)"
+fi
 [ $rc -eq 0 ] || say "FAIL baguette exited $rc"
+# the proof checked against cake's file: the bridged one, or the solver's own under --e2e
+PB="$o.bridged.pbp"
+[ -n "$SOLVER" ] && PB="$o.bag.pbp"
 ans=SAT
 grep -q '=====UNSATISFIABLE=====' "$o.bag.out" && ans=UNSAT
 want=
@@ -114,6 +137,12 @@ fi
 if [ "$MUT" = opb-stronger ]; then
     target=$(python3 -I "$HERE/mutate.py" opb "$o.bag.opb") || say "FAIL no model row to mutate"
 fi
+if [ "$MUT" = pin-stronger ]; then
+    target=$(python3 -I "$HERE/mutate.py" pin "$o.bag.opb" "$o.bag.pbp") || say "FAIL no pinned model row to mutate"
+fi
+if [ "$MUT" = sel-witness ]; then
+    target=$(python3 -I "$HERE/mutate.py" sel "$o.bag.pbp") || say "FAIL no selector definition to mutate"
+fi
 case "$MUT" in
     opt-better | opt-worse)
         d=-1
@@ -125,23 +154,26 @@ if [ "$MUT" = opb-reif ]; then
     target=$(python3 -I "$HERE/mutate.py" reif "$o.bag.opb") || say "FAIL no reified row to mutate"
 fi
 
-# veripb alone on baguette's own files: the cost the chain is compared against
-t0=$(now)
-timeout "$TO" "$V" "$o.bag.opb" "$o.bag.pbp" > "$o.vbag.log" 2>&1
-t1=$(now)
-tv=$(dt "$t0" "$t1")
+tv=NA
+if [ -z "$SOLVER" ]; then
+    # veripb alone on baguette's own files: the cost the chain is compared against
+    t0=$(now)
+    timeout "$TO" "$V" "$o.bag.opb" "$o.bag.pbp" > "$o.vbag.log" 2>&1
+    t1=$(now)
+    tv=$(dt "$t0" "$t1")
 
-python3 -I "$HERE/bridge.py" "$o.cake.opb" "$o.names" "$o.bag.opb" "$o.bag.pbp" \
-    > "$o.bridged.pbp" 2> "$o.bridge.err" || say "FAIL bridge: $(tail -1 "$o.bridge.err")"
+    python3 -I "$HERE/bridge.py" "$o.cake.opb" "$o.names" "$o.bag.opb" "$o.bag.pbp" \
+        > "$o.bridged.pbp" 2> "$o.bridge.err" || say "FAIL bridge: $(tail -1 "$o.bridge.err")"
+fi
 if [ "$MUT" = bridge-witness ]; then
-    target=$(python3 -I "$HERE/mutate.py" witness "$o.bridged.pbp") || say "FAIL no atom definition to mutate"
+    target=$(python3 -I "$HERE/mutate.py" witness "$PB") || say "FAIL no atom definition to mutate"
 fi
 if [ "$MUT" = copy-witness ]; then
-    target=$(python3 -I "$HERE/mutate.py" copy "$o.bridged.pbp") || say "FAIL no copy definition to mutate"
+    target=$(python3 -I "$HERE/mutate.py" copy "$PB") || say "FAIL no copy definition to mutate"
 fi
 
 t0=$(now)
-timeout "$TO" "$V" "$o.cake.opb" "$o.bridged.pbp" --elaborate "$o.core" > "$o.veripb.log" 2>&1
+timeout "$TO" "$V" "$o.cake.opb" "$PB" --elaborate "$o.core" > "$o.veripb.log" 2>&1
 t1=$(now)
 te=$(dt "$t0" "$t1")
 case "$MUT" in
@@ -173,7 +205,7 @@ if [ -n "$MUT" ]; then
     fi
     ln=$(sed -n 's/.*\(Checking\|Verification\) error at .*:\([0-9]*\)$/\2/p' "$o.veripb.log" | head -1)
     [ -n "$ln" ] || say "FAIL mutation $MUT: veripb did not refuse (cake: ${s:-no s line})"
-    at=$(sed -n "${ln}p" "$o.bridged.pbp" | awk '{print $1, $2}')
+    at=$(sed -n "${ln}p" "$PB" | awk '{print $1, $2}')
     cause=$(grep -A1 '^Caused by:' "$o.veripb.log" | tail -1 | sed 's/^[[:space:]]*//')
     # one sentence, except a BOUNDS refusal, whose second sentence says which bound (T8)
     [[ "$cause" == "Unable to verify 'conclusion BOUNDS'."* ]] || cause=$(echo "$cause" | sed 's/\. .*/./')
@@ -185,7 +217,10 @@ if [ -n "$MUT" ]; then
         if [ "$k" -le "$f" ]; then
             lab=$(grep ';' "$o.cake.opb" | sed -n "${k}p" | awk '{print $1}')
         else
-            lab=$(tail -n +3 "$o.bridged.pbp" | grep -v -e '^%' -e '^del ' | sed -n "$((k - f))p" | awk '{print $1}')
+            # the bridged proof has an `f` line (skip 2 lines), the solver's has none (skip 1)
+            hd=3
+            [ -n "$SOLVER" ] && hd=2
+            lab=$(tail -n +$hd "$PB" | grep -v -e '^%' -e '^del ' | sed -n "$((k - f))p" | awk '{print $1}')
         fi
         cause="$cause ($lab)"
     fi
@@ -200,4 +235,4 @@ else
         *) say "FAIL baguette said $ans, cake_pb_cp says $s" ;;
     esac
 fi
-say "VERIFIED $ans veripb=${tv}s elaborate=${te}s cake=${tc}s pbp=$(stat -c %s "$o.bag.pbp") bridged=$(stat -c %s "$o.bridged.pbp") core=$(stat -c %s "$o.core")"
+say "VERIFIED $ans veripb=${tv}s elaborate=${te}s cake=${tc}s pbp=$(stat -c %s "$o.bag.pbp") bridged=$(stat -c %s "$PB") core=$(stat -c %s "$o.core")"

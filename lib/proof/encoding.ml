@@ -420,6 +420,11 @@ type sink_policy = Retain_rows | Stream_rows_to of string | Discard_rows
    keeps every test and every direct caller exactly as they were. *)
 let row_sink : sink_policy ref = ref Retain_rows
 
+(* M14-e2e-verification-T3 (D-0187). The CLI's `--e2e` sets it, before [Compile.compile],
+   to the path of the file the prefix is written to while the .opb is built; [start_proof]
+   copies it into the proof. [None], the default, is every byte as before. *)
+let e2e_request : string option ref = ref None
+
 type t = {
   ints : ivar Names.t;
   taken : unit Names.t;
@@ -510,6 +515,10 @@ type t = {
   mutable n_lemmas : int;
   mutable n_cited : int;
   mutable lemma_ids : Writer.cid array;
+  (* M14-e2e-verification-T3 (D-0187): under `--e2e`, the prefix writer every declaration
+     and every committed row is reported to ([E2e]). [None] otherwise, and then no line of
+     this module behaves differently. *)
+  e2e : E2e.t option;
 }
 
 (* One choice group: its selectors, and which one a solution picks, read from the
@@ -568,6 +577,7 @@ let create () =
     n_lemmas = 0;
     n_cited = 0;
     lemma_ids = [||];
+    e2e = Option.map E2e.create !e2e_request;
   }
 
 let create () =
@@ -614,6 +624,7 @@ let commit t c =
   | Discard -> ()
   | Written ->
       invalid_arg "Encoding.add_constraint: the .opb has already been written (I-X5)");
+  (match t.e2e with Some e -> E2e.row e ~id:t.n c | None -> ());
   t.n
 
 (* Append a constraint to the .opb and hand back the id [f] will give it.
@@ -1305,6 +1316,13 @@ let declare_int_gen t x ~holes ~lo ~hi =
   Names.replace t.ints x v;
   Names.replace t.taken (Lit.sanitize x) ();
   t.decl_rev <- x :: t.decl_rev;
+  (* M14-e2e-verification-T3: the atoms, halves and ladder of x are written to the prefix
+     before its rungs are committed, so each rung's pin follows its @L. *)
+  (match t.e2e with
+  | Some e ->
+      if holes <> [] then E2e.refuse_holes x;
+      E2e.declare e x ~lo ~hi ~lit:(fun w -> Lit.to_string (Lit.ge x w))
+  | None -> ());
   (* The header's accounting for the whole ladder and its holes, once (M7-T27 (b), see
      [Occurs] above): the names x_ge_(lo+1) .. x_ge_hi, and the owner's renaming, and
      only if a row is actually committed, which is when the ladder has a rung (a hole
@@ -1391,6 +1409,7 @@ let bit_terms x n = List.init n (fun i -> (1 lsl i, Lit.bit x i))
 
 let declare_int_bits t x ~lo ~hi =
   if lo > hi then raise (Empty_domain x);
+  if t.e2e <> None then E2e.refuse_bits x;
   (match width_opt ~lo ~hi with
   | None -> raise (Width_too_large (x, lo, hi))
   | Some w when w < 2 ->
@@ -2123,8 +2142,23 @@ let emit_root_lemmas t w =
              (fun c -> Writer.rup w ~origin:"root lemma (D-0146)" c)
              (List.rev rev))
 
+(* M14-e2e-verification-T3 (D-0187): what compile.ml tells the prefix writer. Each is a
+   no-op without `--e2e`. [e2e_begin] names the FlatZinc constraint whose rows are about to
+   be committed (its .scp name, `c<k>`, and the cake constraint the translator writes for
+   it); [e2e_end] closes it; [e2e_objective] is the objective variable and its sign. *)
+let e2e_on t = t.e2e <> None
+let e2e_begin t ~name spec = Option.iter (fun e -> E2e.begin_con e ~name spec) t.e2e
+let e2e_end t = Option.iter E2e.end_con t.e2e
+let e2e_objective t x ~sign = Option.iter (fun e -> E2e.objective e x ~sign) t.e2e
+let e2e_stats t = Option.map E2e.stats t.e2e
+
 let start_proof t w =
-  Writer.header w ~n_model_constraints:t.n;
+  (match t.e2e with
+  | None -> Writer.header w ~n_model_constraints:t.n
+  | Some e ->
+      let prefix = E2e.finish e in
+      Writer.header ~e2e_prefix:prefix w ~n_model_constraints:t.n;
+      Writer.e2e_soli := E2e.soli_tail e);
   List.iter
     (fun x ->
       ignore (ensure_direct t w x);
