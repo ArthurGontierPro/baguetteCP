@@ -235,7 +235,12 @@
    thunks do read is [Encoding]'s constraint ids, which [start_proof] writes once before
    the first decision and never moves -- the same exemption alldiff.ml's header argues.
    The one lookup that must happen eagerly is [Store.remover]'s, hoisted to its call site
-   for the reason lib/core/prop/linear.ml's [explain_cross_conflict] spells out. *)
+   for the reason lib/core/prop/linear.ml's [explain_cross_conflict] spells out.
+
+   COST (M16-file-review-T2, D-0190). A pass is O(n_decl + w_res). A pruning of the
+   result is O(n_decl) eagerly: one [pos_gone] per dead position, which is what its
+   derivation names, decided at the pruning (I-X6). The table of live positions those
+   walks test against is built once per pass, at its first pruning. *)
 
 module Lit = Baguette_proof.Lit
 module Encoding = Baguette_proof.Encoding
@@ -704,8 +709,10 @@ let int_set l =
   List.iter (fun x -> Int_tbl.replace s x ()) l;
   s
 
-let dead_positions t store ~live =
-  let alive = int_set live in
+(* M16-file-review-T2 (D-0190): [alive] is [int_set live], built by the caller, so that
+   [filter_result] builds it once per pass for its two pushes and every hole it punches,
+   where each of them built its own. The same table answers the same [mem]. *)
+let dead_positions t store ~alive =
   List.filter_map
     (fun p -> if Int_tbl.mem alive p then None else Some (pos_gone t store p))
     t.decl_pos
@@ -731,7 +738,7 @@ let alo_of t ~dead ~cancel =
         1)
 
 let alo t store ~live =
-  let dead = dead_positions t store ~live in
+  let dead = dead_positions t store ~alive:(int_set live) in
   alo_of t ~dead ~cancel:(residue_cancel t store ~dead)
 
 (* [~idx_eq_p \/ ~c_ge_(b+1)] for a live position whose value is at most [b]. *)
@@ -748,8 +755,8 @@ let at_least_from t p ~a =
     :: List.map (fun u -> cite (res_rung t u)) (range a (t.values.(p) - 1)))
     1
 
-let push_hi_expl t store ~live ~b =
-  let dead = dead_positions t store ~live in
+let push_hi_expl t store ~live ~alive ~b =
+  let dead = dead_positions t store ~alive in
   let cancel = residue_cancel t store ~dead in
   Explanation.deferred (fun () ->
       Explanation.combine
@@ -757,8 +764,8 @@ let push_hi_expl t store ~live ~b =
         :: List.map (fun p -> Explanation.term 1 (at_most_from t p ~b)) live)
         (List.length live))
 
-let push_lo_expl t store ~live ~a =
-  let dead = dead_positions t store ~live in
+let push_lo_expl t store ~live ~alive ~a =
+  let dead = dead_positions t store ~alive in
   let cancel = residue_cancel t store ~dead in
   Explanation.deferred (fun () ->
       Explanation.combine
@@ -770,8 +777,8 @@ let push_lo_expl t store ~live ~a =
    halves arrive with different coefficients ([na] positions below [v], [nb] above), so
    each is padded up to their maximum with its own literal axiom before the division:
    D-0009's weakening, used exactly as alldiff.ml's [pair_amo] uses it. *)
-let hole_expl t store ~live ~v =
-  let dead = dead_positions t store ~live in
+let hole_expl t store ~live ~alive ~v =
+  let dead = dead_positions t store ~alive in
   let cancel = residue_cancel t store ~dead in
   let below = List.filter (fun p -> t.values.(p) < v) live in
   let above = List.filter (fun p -> t.values.(p) > v) live in
@@ -1039,7 +1046,7 @@ let conflict_facts t store =
    negation of a fact listed here, and the `rup` is then unit propagation against that
    one line. *)
 let no_position_conflict t store =
-  let dead = dead_positions t store ~live:[] in
+  let dead = dead_positions t store ~alive:(int_set []) in
   let cancel = residue_cancel t store ~dead in
   let why =
     Explanation.deferred (fun () ->
@@ -1214,6 +1221,8 @@ let filter_result t store =
   let live = live_positions t store in
   if live = [] then raise (Found (no_position_conflict t store));
   let vals = List.map (fun p -> t.values.(p)) live in
+  (* Built at the first pruning that needs it, once for the pass ([dead_positions]). *)
+  let alive = lazy (int_set live) in
   let a = List.fold_left Int.min (List.hd vals) vals in
   let b = List.fold_left Int.max (List.hd vals) vals in
   (* M11-complexity-T8 / D-0155: built at the first pruning that needs it, not on every
@@ -1227,7 +1236,7 @@ let filter_result t store =
   in
   (if a > View.lo store t.res then
      let h = View.hi store t.res in
-     let expl = push_lo_expl t store ~live ~a in
+     let expl = push_lo_expl t store ~live ~alive:(Lazy.force alive) ~a in
      let concludes =
        Option.map (fun rn -> Reason.at_least ~name:rn ~decl:t.rdlo a) t.rname
      in
@@ -1240,7 +1249,7 @@ let filter_result t store =
      | Store.Unchanged -> ());
   (if b < View.hi store t.res then
      let l = View.lo store t.res in
-     let expl = push_hi_expl t store ~live ~b in
+     let expl = push_hi_expl t store ~live ~alive:(Lazy.force alive) ~b in
      let concludes =
        Option.map (fun rn -> Reason.at_most ~name:rn ~decl:t.rdhi b) t.rname
      in
@@ -1263,7 +1272,7 @@ let filter_result t store =
       List.iter
         (fun v ->
           if Domain.mem d v && not (Int_tbl.mem carried v) then
-            let expl = hole_expl t store ~live ~v in
+            let expl = hole_expl t store ~live ~alive:(Lazy.force alive) ~v in
             match View.remove store t.res v (justified ~concludes:None expl) with
             | Store.Conflict _ ->
                 raise (Found (conflict_of store (hole_conflict t store ~expl ~v)))
