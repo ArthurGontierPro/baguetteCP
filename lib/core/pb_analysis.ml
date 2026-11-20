@@ -837,6 +837,9 @@ let cited_ids (e : Explanation.t) : int list =
     | Explanation.Cut (a, b, _, _) ->
         go a;
         go b
+    (* A RELEASED thunk (M11-complexity-T13, D-0168) has no tree: [force] builds it
+       again from the closure, the same derivation (explanation.ml's header), and it is
+       not kept. *)
     | Explanation.Deferred _ -> go (Explanation.force e)
     (* M8-bits-encoding-T3 (D-0134): a choice derivation cites its parts' rows. *)
     | Explanation.Resolve parts -> List.iter go parts

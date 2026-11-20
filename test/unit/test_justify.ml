@@ -51,6 +51,14 @@ let expect_ok name = function
 (* Harness: capture what a writer session wrote, like test_proof.ml's [emitted]. *)
 (* ------------------------------------------------------------------ *)
 
+(* M11-complexity-T13 (D-0168): how many times writing a thunk runs its closure -- once,
+   and once more when the release checks it (under BAGUETTE_DEBUG, or when the forcing
+   handed a constructor a node it had not built). *)
+let release_runs = function
+  | Explanation.Deferred th ->
+      if Baguette_core.Debug.enabled || Explanation.captures th then 2 else 1
+  | _ -> 1
+
 let emitted ?(comments = false) ?(audit = true) f =
   let path = Filename.temp_file "baguette_justify" ".pbp" in
   let oc = open_out path in
@@ -170,7 +178,7 @@ let test_deferred_linear () =
         let _, ctx, _ = build_ctx w in
         ignore (Justify.emit ctx (Explanation.linear [ (1, Lit.ge "x" 2) ] 1)))
   in
-  let calls = ref 0 in
+  let calls = ref 0 and expected = ref 0 in
   let deferred_text =
     text (fun w ->
         let _, ctx, _ = build_ctx w in
@@ -181,11 +189,15 @@ let test_deferred_linear () =
         in
         let id1 = Justify.emit ctx expl in
         let id2 = Justify.emit ctx expl in
-        check "deferred linear: same id on repeat" (id1 = id2))
+        check "deferred linear: same id on repeat" (id1 = id2);
+        expected := release_runs expl)
   in
   check_eq "deferred linear: identical proof text to the direct explanation"
     ~expected:direct_text ~got:deferred_text;
-  check "deferred linear: the thunk ran exactly once" (!calls = 1)
+  (* M11-complexity-T13 (D-0168): once to be written (and once more if the release checks
+     it); the repeat runs it not at all. *)
+  check "deferred linear: the thunk ran to be written (and checked), not on the repeat"
+    (!calls = !expected)
 
 let test_deferred_cut () =
   let direct_text =
@@ -197,7 +209,7 @@ let test_deferred_cut () =
         ignore (Justify.emit ctx ey);
         ignore (Justify.emit ctx (Explanation.cut ex ey 1 1)))
   in
-  let calls = ref 0 in
+  let calls = ref 0 and expected = ref 0 in
   let deferred_text =
     text (fun w ->
         let _, ctx, _, _ = build_two_ctx w in
@@ -212,11 +224,15 @@ let test_deferred_cut () =
         in
         let id1 = Justify.emit ctx d in
         let id2 = Justify.emit ctx d in
-        check "deferred cut: same id on repeat" (id1 = id2))
+        check "deferred cut: same id on repeat" (id1 = id2);
+        check "deferred cut: the cut's operands were built outside the thunk: captured"
+          (match d with Explanation.Deferred th -> Explanation.captures th | _ -> false);
+        expected := release_runs d)
   in
   check_eq "deferred cut: identical proof text to the direct cut" ~expected:direct_text
     ~got:deferred_text;
-  check "deferred cut: the thunk ran exactly once" (!calls = 1)
+  check "deferred cut: the thunk ran twice (written, then checked), not on the repeat"
+    (!calls = !expected && !expected = 2)
 
 (* ------------------------------------------------------------------ *)
 (* 6. Wipe: drops the right memo entries, and nothing below the wiped level. *)
@@ -1860,6 +1876,212 @@ let test_representations_m11t12 () =
   in
   expect_ok "m11t12 representations: no exception" r
 
+(* M11-complexity-T13 (D-0168). RELEASING a written thunk: once [Justify.emit] has written
+   a thunk's derivation, the thunk keeps the line (id, level) and drops its tree, and the
+   memo cells that emission made are taken out. Every later reader is driven here:
+
+   - the line answers a second [emit] and a citing parent, with nothing written and
+     nothing forced again;
+   - [Pb_analysis.cited_ids] and [Explanation.lits] force it again and read the same
+     derivation as a fresh copy of it;
+   - another [ctx] on the same writer does not cite this one's line;
+   - after the wipe of the line's level the thunk is forced again and written again, the
+     same lines as the first time, ids aside, and a line at a level below the wipe still
+     answers;
+   - a thunk nested in another's tree, and a tree large enough to grow the memo while it
+     is written, leave the memo exactly as it was before;
+   - a node the closure CAPTURED keeps its cell, and a closure that gives two different
+     derivations is not released at all. *)
+let test_release_m11t13 () =
+  let first = ref 0 and rewritten = ref 0 in
+  let text, r =
+    emitted (fun w ->
+        let e, ctx, cx, cy = build_two_ctx w in
+        let tree () =
+          Explanation.combine
+            [
+              Explanation.Term
+                ( 1,
+                  Explanation.combine
+                    [
+                      Explanation.Term (1, Explanation.model_row cx);
+                      Explanation.Term (1, Explanation.model_row cy);
+                    ]
+                    1 );
+              Explanation.Term (2, Explanation.model_row cy);
+            ]
+            2
+        in
+        let thunk_of = function
+          | Explanation.Deferred th -> th
+          | _ -> failwith "not a thunk"
+        in
+        let t = Explanation.deferred tree in
+        let th = thunk_of t in
+        Writer.set_level w 2;
+        let cells0 = fst (Justify.memo_stats ctx) in
+        let last0 = Writer.last_id w in
+        let id = Justify.emit ctx t in
+        first := id;
+        check "m11t13: the thunk's derivation is two lines" (Writer.last_id w = last0 + 2);
+        check "m11t13: the thunk records its line and level"
+          (match Explanation.line_of th with
+          | Explanation.Line { cid; level; _ } -> cid = id && level = 2
+          | Explanation.No_line -> false);
+        check "m11t13: the tree is dropped (kept under BAGUETTE_DEBUG)"
+          (Baguette_core.Debug.enabled || not (Explanation.is_forced t));
+        check "m11t13: the cells its emission made are out of the memo"
+          (fst (Justify.memo_stats ctx) = cells0);
+        let reforced0 = !Explanation.reforced in
+        let last1 = Writer.last_id w in
+        check "m11t13: the line answers a second emit, nothing written"
+          (Justify.emit ctx t = id && Writer.last_id w = last1);
+        let parent =
+          Explanation.combine
+            [ Explanation.Term (1, t); Explanation.Term (1, Explanation.model_row cx) ]
+            1
+        in
+        let _ = Justify.emit ctx parent in
+        check "m11t13: a citing parent writes its own line only"
+          (Writer.last_id w = last1 + 1);
+        check "m11t13: neither forced the thunk again" (!Explanation.reforced = reforced0);
+        let fresh = Explanation.deferred tree in
+        check "m11t13: cited_ids of the released thunk = of a fresh copy"
+          (Baguette_core.Pb_analysis.cited_ids t
+          = Baguette_core.Pb_analysis.cited_ids fresh);
+        check "m11t13: lits of the released thunk = of a fresh copy"
+          (Explanation.lits t = Explanation.lits fresh);
+        check "m11t13: both readers forced it again, once each"
+          (!Explanation.reforced = reforced0 + 2);
+        check "m11t13: a reader does not keep the tree"
+          (Baguette_core.Debug.enabled || not (Explanation.is_forced t));
+        Writer.set_level w 1;
+        let low = Explanation.deferred tree in
+        let id_low = Justify.emit ctx low in
+        Writer.set_level w 3;
+        Justify.wipe_level ctx 2;
+        Writer.set_level w 2;
+        let last2 = Writer.last_id w in
+        let again0 = !Explanation.reforced_emit in
+        let id3 = Justify.emit ctx t in
+        rewritten := id3;
+        check
+          "m11t13: after the wipe of its level the thunk is forced again and written \
+           again, two lines"
+          (id3 > last2
+          && Writer.last_id w = last2 + 2
+          && !Explanation.reforced_emit = again0 + 1);
+        check "m11t13: ... once: the new line answers"
+          (Justify.emit ctx t = id3 && Writer.last_id w = last2 + 2);
+        check "m11t13: a line below the wipe still answers"
+          (Justify.emit ctx low = id_low && Writer.last_id w = last2 + 2);
+        let other = Justify.create ~writer:w ~encoding:e in
+        check "m11t13: another ctx does not cite this ctx's line"
+          (Justify.emit other t > last2 + 2);
+        (* Nesting and growth: a thunk whose tree cites an unwritten thunk, and a tree of
+           3000 inner Combines (the memo starts at 1024 slots and grows at 2048 cells). *)
+        Writer.set_level w 2;
+        let cells1 = fst (Justify.memo_stats ctx) in
+        let inner = Explanation.deferred tree in
+        let rec chain k acc =
+          if k = 0 then acc
+          else
+            chain (k - 1)
+              (Explanation.combine
+                 [
+                   Explanation.Term (1, acc);
+                   Explanation.Term (1, Explanation.model_row cx);
+                 ]
+                 1)
+        in
+        let outer =
+          Explanation.deferred (fun () ->
+              Explanation.combine
+                [ Explanation.Term (1, chain 3000 inner); Explanation.Term (1, inner) ]
+                1)
+        in
+        let id_outer = Justify.emit ctx outer in
+        check "m11t13: nested and grown, the memo is back to what it held"
+          (fst (Justify.memo_stats ctx) = cells1);
+        check "m11t13: the nested thunk was released with its own line"
+          (Justify.emit ctx inner < id_outer
+          && (Baguette_core.Debug.enabled || not (Explanation.is_forced inner)));
+        (* A CAPTURED node: the closure returns a tree holding [x], a value it did not
+           build and which is held, and written, elsewhere. Its cell is made inside the
+           thunk's emission and must stay, so that its holder still finds it. *)
+        let x =
+          Explanation.combine
+            [
+              Explanation.Term (1, Explanation.model_row cx);
+              Explanation.Term (3, Explanation.model_row cy);
+            ]
+            1
+        in
+        let tx =
+          Explanation.deferred (fun () ->
+              Explanation.combine
+                [ Explanation.term 1 x; Explanation.term 2 (Explanation.model_row cy) ]
+                2)
+        in
+        let cells2 = fst (Justify.memo_stats ctx) in
+        let id_tx = Justify.emit ctx tx in
+        let last3 = Writer.last_id w in
+        check "m11t13: the forcing saw the captured node"
+          (Explanation.captures (thunk_of tx));
+        check "m11t13: a captured node keeps its cell, its holder finds its line"
+          (Justify.emit ctx x = id_tx - 1
+          && Writer.last_id w = last3
+          && fst (Justify.memo_stats ctx) = cells2 + 1);
+        (* A closure that does not give the same derivation twice, checked because it
+           captured [x], is not released: it keeps its tree and its cells, as before T13
+           (BAGUETTE_DEBUG refuses it). *)
+        (if not Baguette_core.Debug.enabled then
+           let n = ref 0 in
+           let flaky =
+             Explanation.deferred (fun () ->
+                 incr n;
+                 Explanation.combine
+                   [
+                     Explanation.term !n x; Explanation.term 1 (Explanation.model_row cy);
+                   ]
+                   1)
+           in
+           let id_f = Justify.emit ctx flaky in
+           let last4 = Writer.last_id w in
+           check "m11t13: a thunk forced twice to two derivations is not released"
+             (Explanation.line_of (thunk_of flaky) = Explanation.No_line
+             && Explanation.is_forced flaky
+             && Justify.emit ctx flaky = id_f
+             && Writer.last_id w = last4));
+        Writer.set_level w 3;
+        Justify.wipe_level ctx 1;
+        Writer.set_level w 0;
+        Writer.delete_many w (Writer.live_ids w))
+  in
+  expect_ok "m11t13 release: no exception" r;
+  (* The re-written derivation is the first one's text: its two `pol` lines, the label
+     dropped and the inner line's id named by its role. *)
+  let lines = String.split_on_char '\n' text in
+  let labelled k =
+    let tag = Printf.sprintf "@c%d " k in
+    let n = String.length tag in
+    match
+      List.find_opt (fun l -> String.length l > n && String.sub l 0 n = tag) lines
+    with
+    | Some l -> String.sub l n (String.length l - n)
+    | None -> "(missing @c" ^ string_of_int k ^ ")"
+  in
+  let role inner l =
+    String.concat " "
+      (List.map
+         (fun tok -> if tok = Printf.sprintf "@c%d" inner then "@inner" else tok)
+         (String.split_on_char ' ' l))
+  in
+  let derivation top = (labelled (top - 1), role (top - 1) (labelled top)) in
+  check_eq "m11t13: the derivation written again is the first one, ids aside"
+    ~expected:(fst (derivation !first) ^ " | " ^ snd (derivation !first))
+    ~got:(fst (derivation !rewritten) ^ " | " ^ snd (derivation !rewritten))
+
 (* M11-complexity-T10 (D-0158). The memo's two modes over the same scene: a derivation
    REBUILT at each of three levels, as D-0149's propagator rebuilt its [Combine] (one
    physical copy per level), plus a thunk of the same derivation.
@@ -1929,7 +2151,7 @@ let test_share_m11t10 () =
           ( [ id1; id2; id3 ],
             stats,
             (n_after_wipe, id2b, c2_minted),
-            (id_d, d_minted, id_d_again, !calls),
+            (id_d, d_minted, id_d_again, !calls = release_runs d),
             (id_after, id_low, live_low) ))
     in
     r
@@ -1939,7 +2161,7 @@ let test_share_m11t10 () =
       ( [ id1; id2; id3 ],
         (n, longest),
         (n_after, _, c2_minted),
-        (_, d_minted, _, calls),
+        (_, d_minted, _, calls_ok),
         _ ) ->
       check "m11t10 share OFF: three rebuilt copies, three lines"
         (List.length (List.sort_uniq Int.compare [ id1; id2; id3 ]) = 3);
@@ -1952,7 +2174,8 @@ let test_share_m11t10 () =
          derived again"
         (n_after = 2 && c2_minted);
       check "m11t10 share OFF: a thunk of the same derivation mints its own line" d_minted;
-      check "m11t10 share OFF: the thunk ran once" (calls = 1)
+      check "m11t10 share OFF: the thunk ran to be written (and checked), no more"
+        calls_ok
   | Ok _ -> check "m11t10 share OFF: the scene ran" false
   | Error e ->
       incr failures;
@@ -1962,7 +2185,7 @@ let test_share_m11t10 () =
       ( [ id1; id2; id3 ],
         (n, longest),
         (n_after, id2b, c2_minted),
-        (id_d, d_minted, id_d_again, calls),
+        (id_d, d_minted, id_d_again, calls_ok),
         (id_after, id_low, live_low) ) ->
       check "m11t10 share ON: three rebuilt copies, one line" (id1 = id2 && id2 = id3);
       check "m11t10 share ON: every copy is remembered (six entries, three to a bucket)"
@@ -1973,7 +2196,9 @@ let test_share_m11t10 () =
         (n_after = 2 && id2b = id1 && not c2_minted);
       check "m11t10 share ON: a forced thunk of the same derivation shares the line"
         (id_d = id1 && (not d_minted) && id_d_again = id1);
-      check "m11t10 share ON: the thunk ran once, by force and not by a lookup" (calls = 1);
+      check
+        "m11t10 share ON: the thunk ran to be written (and checked), never by a lookup"
+        calls_ok;
       check "m11t10 share ON: after the wipe of the line's level, derived afresh"
         (id_after > id1);
       check "m11t10 share ON: a copy asked for below the line's level gets its own line"
@@ -2072,6 +2297,7 @@ let () =
   test_memo_identity_m11t5 ();
   test_share_m11t10 ();
   test_representations_m11t12 ();
+  test_release_m11t13 ();
   run_veripb ~name:"justify: a Linear explanation, checked end to end"
     ~build:build_linear_proof;
   run_veripb ~name:"justify: a Cut of two Linears, checked end to end"

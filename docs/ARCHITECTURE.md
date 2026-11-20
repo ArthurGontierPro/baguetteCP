@@ -236,6 +236,23 @@ type t =
 `Deferred` MUST be memoised on force — a reason can be demanded more than once during
 conflict analysis, and recomputing a propagator's reason is not cheap.
 
+**Until its line is written** (M11-complexity-T13, D-0168). Once `Justify.emit` has
+written a thunk's derivation, the thunk is *released*: it records the line (id, level)
+and drops the tree, and the memo cells the emission made for nodes the closure built go
+with it. A later `emit` is answered by the line for as long as no wipe has reached its
+level; after such a wipe, and for every reader that walks the tree (`Explanation.lits`,
+`Pb_analysis.cited_ids`, a match on the forced head), the closure is forced again, not
+memoised. That writes the same proof because a thunk closes over a snapshot (I-X6), so a
+second forcing is the same derivation, and because a node of the tree is either
+*captured* (a value the closure did not build, held by both forcings, which keeps its
+cell) or *built* (new at each forcing, reachable from its tree alone, so no lookup can ask
+for it again). The smart constructors record, during a forcing, which operands they were
+handed that they had not built; only a forcing that may have captured pays a second
+forcing at its release to tell the two apart. `BAGUETTE_DEBUG` re-forces every release and
+every later read against the original, and checks that a cell taken out is never asked for
+again. `lib/core/explanation.ml`'s header gives the argument reader by reader. The type's
+listing above is the 2026-09 sketch; the module is the reference.
+
 **Open**: whether `Cut` and `Deferred` are enough, or whether explanations should be
 parameterised over the reasons they consume (a genuinely higher-order form). That is
 decision **D-0003**; do not build past M3 without settling it.
