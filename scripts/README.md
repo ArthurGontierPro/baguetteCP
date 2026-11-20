@@ -134,3 +134,27 @@ Launch it detached (section 3) and poll `gateNN.status`.
 | `compare_selftest.sh`, `corpus_selftest.sh` | Self-tests of the two harnesses |
 | `shrink.sh` | Shrinks a failing model |
 | `bootstrap.sh` | Installs the toolchain on a fresh machine; safe to re-run |
+
+## 8. The release binary (M11-complexity-T16, D-0171)
+
+`make release` builds the solver alone with dune's release profile into its own build directory:
+
+```sh
+make release        # dune build --root . --profile release --build-dir _build_release bin/main.exe
+                    # -> _build_release/default/bin/main.exe, and prints its md5
+```
+
+dune's dev profile compiles every library module with `-opaque`, so no cross-module call is ever
+inlined. The release binary runs about 17 % fewer instructions per node on QR48 and writes the same
+bytes as the dev binary of the same commit (D-0171 has the measurement). `_build_release/` has its
+own lock, so it does not fight the dev `_build/`, and `dune build`, `make check` and a worktree's
+`--root .` are unchanged.
+
+- **Measurements and Challenge series use it.** Point the harness at it by variable:
+  `BAGUETTE=_build_release/default/bin/main.exe` for `compare_run.sh`, `corpus_run.sh`,
+  `bench/run_bench.sh` and the suite scripts, `BIN=...` (or `--bin`) for `diff_lane.sh` and
+  `scaling_lane.sh`. The defaults stay the dev binary.
+- **Gates and sessions keep dev.** Release does not turn warnings into errors, so it is never the
+  gate. The scaling lane's baseline was measured on dev: compare a release run only with a release
+  run.
+- **Every series records the binary's md5** (`make release` prints it), and says it is release.

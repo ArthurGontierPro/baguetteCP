@@ -20503,3 +20503,56 @@ Merge. No answer is worse than main's or D-0159's, the rows no longer grow with 
 conditions hold. What it does not buy: no instance changes status, for D-0159 section 5's reason
 (handball's search is spent elsewhere, the code-generator ends on the proof cap or the heap). Nothing
 to re-record: no lane instance reaches member.
+
+## D-0171  M11-complexity-T16: the release build for the measured binary (`make release`); same bytes as dev, 5 to 17 % fewer instructions per node
+
+**Context.** D-0169 found that dune's dev profile compiles every library module with `-opaque`, so
+no cross-module call is inlined, and measured the release profile at about -17 % instructions per
+node on codes-cp QR48. The orchestrator decided, on the user's delegation: a `make release` target,
+the Challenge and bench harnesses can use its binary, gates and sessions keep dev.
+
+**Decision.** `make release` runs
+`dune build --root . --profile release --build-dir _build_release bin/main.exe` and prints the
+binary's md5. A separate build directory has its own lock, so it does not fight the dev `_build/`;
+dune does not scan `_build_release/` as source (a leading `_`), and it is in `.gitignore`. No
+`dune-workspace` and no profile stanza: a workspace context would build everything twice on every
+`dune build`, and D-0169's option (a) (release as THE profile) would change every session's build.
+`dune build`, `make check` and a worktree's `--root .` are unchanged. No harness changed its
+default: every one already took the binary by variable (`BAGUETTE=` for `compare_run.sh`,
+`corpus_run.sh`, `bench/run_bench.sh` and the suite scripts, `BIN=`/`--bin` for the two lanes).
+`scripts/README.md` §8 and `bench/challenge/README.md` say to run a series on the release binary
+and to record its md5 and its profile.
+
+The release profile does not turn warnings into errors. That hides nothing, because dev stays the
+gate on the same sources: a warning dev would refuse never reaches a merge.
+
+**Measured** on `4b6a08f` (sources as main `327141a`), fataepyc-06 at load 59 to 72, binaries dev
+`bf6aa1e6`, release `6f6a12c9`. Results copied to `/cluster/arthur/baguette-results/wave55-release/`.
+
+1. Same bytes. Every `test/models/*.fzn` (200) with `--proof`: stdout, exit code, `.opb` and `.pbp`
+   of dev and release, 800 comparisons, 0 differences. The diff lane `--tier all` (`-j 8`) with
+   `BIN=` each binary: 301 of 301 runs equal the reference both times. The twelve perf runs below:
+   stdout, `--stats`, `.opb` and `.pbp` identical between the two.
+2. Instructions per node (`perf stat -e instructions:u`, `BAGUETTE_NODE_LIMIT` at the lane's budget,
+   the same node count on both sides):
+
+| instance (nodes) | mode | dev k instr/node | release | change |
+|---|---|---|---|---|
+| `H_qr48_bag_def` (6 001) | `--no-proof` | 1 474 | 1 250 | -15.2 % |
+| | `--proof` | 2 267 | 2 012 | -11.2 % |
+| `2013_rcpsp_11` (10 001) | `--no-proof` | 5 315 | 4 403 | -17.1 % |
+| | `--proof` | 17 085 | 15 906 | -6.9 % |
+| `2011_cyclic-rcpsp_easy_6` (2 001) | `--no-proof` | 6 545 | 5 435 | -17.0 % |
+| | `--proof` | 64 865 | 61 608 | -5.0 % |
+
+   With a proof the gain is smaller because more of the time is in proof text and the stdlib's
+   buffers, which are compiled the same way under both profiles.
+3. Build time. A clean release build with `DUNE_CACHE=disabled` takes 4.7 s wall (7.7 s user), and
+   rebuilding gives the same md5 `6f6a12c9`. A dev build of the binary over a populated dev tree
+   takes 4.0 s.
+
+`make check` on the branch (dev, unchanged): rc 0, `check: ok`, 200 models, peak RSS 100 MB.
+
+**Consequences.** A measured series names its binary's md5 and says it is release. The scaling
+lane's baseline is a dev measurement, so a release run is compared only with a release run.
+Instruction counts from before this record (dev) and after (release) do not compare directly.
