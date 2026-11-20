@@ -341,6 +341,20 @@ module Claims = Hashtbl.Make (struct
     finish (mix (go 8 0) (n / 2))
 end)
 
+(* M16-file-review-T4 (D-0192): the table of [combine_origin]'s shapes, keyed by the two
+   integers packed as one, the count in the high bits. It was a [Writer.Itbl], whose hash
+   is the key itself because the writer's keys are consecutive ids, and a bucket is the
+   key's LOW bits: every shape of one divisor fell in one bucket, and the lookup walked
+   them all (10.6 % of 2013_rcpsp_11's samples with the proof, a chain of every shape of
+   divisor 1). [finish] spreads the high bits into the low ones. The table is never
+   iterated, and a shape still finds the one closure it shared, so no byte moves. *)
+module Shapes = Hashtbl.Make (struct
+  type t = int
+
+  let equal = Int.equal
+  let hash k = finish k
+end)
+
 type ctx = {
   writer : Writer.t;
   encoding : Encoding.t;
@@ -358,7 +372,7 @@ type ctx = {
          ways ([name_of] only to spell a key back in [defining_key]'s message). One
          entry per name a stated clause has named, never wiped: the ids must stay
          stable for as long as a key that uses them can be in [stated]. *)
-  combine_origins : (unit -> string) Writer.Itbl.t;
+  combine_origins : (unit -> string) Shapes.t;
       (* M11-complexity-T12 (D-0166): one origin closure per (summands, divisor) shape,
          shared by every [Combine] line of that shape; see [combine_origin]. *)
   serial : int;
@@ -386,7 +400,7 @@ let create ~writer ~encoding =
     stated_hi = -1;
     names = Hashtbl.create 64;
     name_of = Array.make 64 "";
-    combine_origins = Writer.Itbl.create 64;
+    combine_origins = Shapes.create 64;
     serial = !serials;
     epoch = 0;
     wiped_at = Array.make 16 0;
@@ -926,7 +940,8 @@ let emit_summand ~emit ctx = function
    is live. It renders two integers, so every line of one shape can share one closure
    (M11-complexity-T12, D-0166): a closure per line was 40 bytes for each of the 3.1 M
    live `pol` lines of 2011_black-hole_9 at node 40, and the shapes are a few hundred. The
-   string it renders is the same. *)
+   string it renders is the same. The table is [Shapes], whose hash mixes the key: see
+   there why the writer's identity-hashed table was quadratic in the shapes here. *)
 let combine_origin ctx n_summands divisor =
   let o () = Printf.sprintf "combine(%d summand(s), / %d)" n_summands divisor in
   (* The key packs both integers, so it is shared only where both fit in 31 bits (both
@@ -934,10 +949,10 @@ let combine_origin ctx n_summands divisor =
   if n_summands >= 1 lsl 31 || divisor < 0 || divisor >= 1 lsl 31 then o
   else
     let k = (n_summands lsl 31) lor divisor in
-    match Writer.Itbl.find_opt ctx.combine_origins k with
+    match Shapes.find_opt ctx.combine_origins k with
     | Some shared -> shared
     | None ->
-        Writer.Itbl.add ctx.combine_origins k o;
+        Shapes.add ctx.combine_origins k o;
         o
 
 let combine_line ~emit ctx summands divisor =
