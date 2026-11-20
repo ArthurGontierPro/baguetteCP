@@ -23005,3 +23005,100 @@ re-gated on a fresh clone: `make check` rc 0, 207 x 4 artefacts equal (binary `9
 T7 (a bits-arm variable is refused), the writer's speed on the largest models, and the two user
 decisions of section 5. Results in `/cluster/arthur/baguette-results/wave55-e2e3/`.
 
+
+## D-0188  [AUTONOME] M14-e2e-verification-T3b: T5's globals in the solver-written prefix, each row derived by one `pol` where the bridge needed `rup`
+
+Status: DECIDED in autonomous mode on 2026-11-20, before the work that depends on it; section 6 is
+the result.
+Date: 2026-11-20
+Task: M14-e2e-verification-T3b (agent-e2e3b, `wave55-e2e3b`)
+Touches: this record, `lib/proof/e2e.ml`, `lib/flatzinc/compile.ml` (`e2e_spec` and the e2e loop),
+`lib/flatzinc/model.ml` and `lib/flatzinc/builder.ml` (one field, section 3.1),
+`test/unit/test_output.ml` (its two `Model.constr` literals), `docs/PROOF-FORMAT.md` §3b,
+`scripts/e2e_lane.sh`, `tools/e2e/`.
+
+### 1. Context
+
+D-0187 made `--e2e` write the prefix that re-derives baguette's `.opb` from `cake_pb_cp`'s, for T2's
+and T4's families, and refused T5's globals (`array_int_element`, `global_cardinality`,
+`array_int_maximum/minimum` with `int_max/min`, `baguette_member`, `baguette_inverse`): 71 of the
+188 test models the bridge verifies, and `2011_black-hole_17`, `2013_black-hole_6` (element and
+inverse) and `2015_p1f_13` (inverse) on the Challenge. D-0182 measured that the chain's cost is the
+prefix, and on black-hole_17 that the prefix is 93 043 `rup` pins of element's direct-encoding
+clauses (1 606 s of the 1 607 s of elaboration). The bridge pins them by `rup` because it sees two
+files; the solver knows which position and which half each clause is.
+
+### 2. What is derived, and how (the plan)
+
+cake's rows for each family are transcribed from the pinned HOL4 sources (CakeML `14856fcf`):
+`cencode_element` (`cp_to_ilp_arrayScript.sml`: the eq atoms of each index value, `@c[N][lb]`,
+`@c[N][ub]` when the index's range exceeds the array, `@c[N][<p>ge]`, `@c[N][<p>le]` guarded by the
+index's eq atom), `cencode_global_cardinality` (`cp_to_ilp_countingScript.sml`, `clsd = F`: the eq
+grid, `@c[N][<j>_ge]`, `@c[N][<j>_le]`, the j-th count against the sum of the eq atoms of value
+`v_j`), `cencode_array_max/min` (choice flags `x[N][<i>]` with `[f]`, `[r]`, `@c[N][<i>le|ge]`,
+`@c[N][al1]`), `cencode_max/min` (`cp_to_ilp_primScript.sml`: flags `b[N][lge|rge]` or
+`b[N][lle|rle]`, `[r]` only, `@c[N][lle|rle]` or `[lge|rge]`, `@c[N][al1]`), `cencode_inverse`
+(`cp_to_ilp_channelingScript.sml`: the eq atoms, `@c[N][X_<k>_lb|ub]`, `@c[N][Y_<k>_lb|ub]`,
+`@c[N][<i>_<j>ge|le]`), and `equals_if` with `or` for member (`cencode_equal` with `SOME (INL _)`).
+
+Three derivations, all of them `pol`:
+
+- **cake's interior eq atom as the order indicator** (D-0180's `@Ep`/`@Em`), but derived by `pol`
+  from the atom's own definition rows and its two ge atoms' clauses, where the bridge used `rup`:
+  `@Ep[e] = [f] + Qn(ge_v) + Qp(ge_(v+1))` is `e + ~x_ge_v + x_ge_(v+1) >= 1`, and
+  `@Em[e] = ([r] + Qp(ge_v) + Qn(ge_(v+1)) + @L[x_ge_(v+1)]) / 2` is `~e + x_ge_v + ~x_ge_(v+1) >= 2`.
+  In variable form they are `e = x_ge_v - x_ge_(v+1)`, so a candidate's `c * e` is replaced exactly.
+  This makes gcc's counting rows and inverse's channel rows `ia` against cake's.
+- **a cake row LINEARISED at a clause's thresholds**: for a target clause C and a cake row R, each
+  integer B_z of R with coefficient a is cancelled by |a| times `@A2[z_ge_t]` (a > 0, C holds
+  `z_ge_t`), `@A1[z_ge_t]` (a < 0, C holds `~z_ge_t`), or z's bound row `@i[Z][ub]` / `@i[Z][lb]` when
+  C names no literal of z; the sum is saturated, and the atoms left are replaced by baguette's
+  literals. That is element's `[i = p] -> z >= w` from `@c[N][<p>le] + @A2[z_ge_w]`, saturated, plus
+  the eq atom's `@Ep` (the task's "one `pol` through `@A2` and the index's eq atom"), its proper-index
+  units, inverse's range units, and member's four guard clauses.
+- **maxmin's per-value clause** `m >= v -> OR x_i >= v`: the sum over the operands of their choice
+  row `[r]` linearised at the clause, plus `@c[N][al1]`, saturated: one `pol` per clause, where the
+  bridge closed it by `rup` through cake's choice flags.
+
+Whatever none of these derives is pinned by `rup`, as before; the tallies say how many.
+
+### 3. The decisions taken without the user
+
+**3.1. A `c_id` field on `Model.constr`: the FlatZinc builtin as written.** `int_max(x, y, z)` and
+`array_int_maximum(z, [x, y])` build the same `Model.Array_int_maximum`, but the translator writes
+`(c max x y z)` for the first and `(c array_max (x y) z)` for the second, and cake encodes the two
+with different flags and labels (`b[c][lge][r]`, `c[c][lle]` against `x[c][0][r]`, `c[c][0le]`).
+The prefix cites labels, so it must know which.
+
+| | what | gains | costs |
+|---|---|---|---|
+| (a) a `c_id : string` field on `Model.constr`, set by the builder from `Ast.c_id` | compile.ml's `e2e_spec` reads it | both spellings covered, and the provenance is in the model where the next contract needing it will look | a field on a front-end record; two literals in `test/unit/test_output.ml` |
+| (b) refuse every 2-element maximum/minimum under `--e2e` | nothing in the front end | nothing outside the claim | `maxmin_int_max_sat` and any 2-operand array maximum stay on the bridge |
+| (c) re-read the builtin from the source at `c_pos` | nothing in the front end | | a second parser of the file, fragile |
+
+**(a).** It is read only under `--e2e`, so every default byte stays as it is. The int_eq the builder
+adds for a gcc copy (D-0146 §2) gets `c_id = ""`, since no FlatZinc constraint wrote it, and
+`e2e_spec` uses that to keep the `.scp` numbering (`c<k>` counts the file's constraints only).
+
+**3.2. A substituted cake row (`@S[...]`) is written when it is first cited, not when its constraint
+begins.** D-0187 wrote every cake row's substitution eagerly. On black-hole_17 that is 137 724 rows
+of up to 415 ladder terms each, and the new derivations above never cite them. A substitution is
+now written the first time a pin cites it, and before any `rup` pin of the same constraint (whose
+unit propagation may use any of them). This shortens D-0187's prefixes too; their verdicts must not
+change (the lane checks it).
+
+**3.3. A gcc copy** (`X_INTRODUCED_gcc_copy_<k>`, D-0146 §2) has no `.scp` counterpart and no bits in
+cake's file. Under `--e2e` it is refused with that reason in this task's first version, and stays on
+the bridge; covering it is a `red` pair per rung (D-0180's `@Y1`/`@Y2`), done if time allows and
+recorded in section 6 either way.
+
+### 4. How to revert
+
+Revert the commits prefixed `M14-e2e-verification-T3b:` on branch `wave55-e2e3b` (or their merge).
+The `c_id` field is its own commit. Under `--e2e` the T5 families are then refused again, as D-0187
+left them, and nothing outside `--e2e` changes.
+
+### 5. What this does not decide
+
+Whether `--e2e` becomes a default, and whether the bridge is retired (D-0187 §5): both stay the
+user's.
