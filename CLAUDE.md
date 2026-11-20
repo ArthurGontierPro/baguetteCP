@@ -390,6 +390,11 @@ rediscovers the codebase from scratch. Four rules:
    Do not paste source or test output."* An unbounded agent report lands in your context
    and is re-read on every subsequent turn of your session.
 
+**Reserve each agent's decision-record number when you launch it** ("Your record is D-0XXX, use no
+other"). "The first free number above main's" collides when agents run in parallel: on 2026-11-20 two
+pairs of branches both took D-0169 and D-0170 and had to be renumbered at merge, in every file that
+cited them.
+
 Use `Explore`-style read-only agents for "where is X" questions and reserve
 general-purpose agents for work that actually edits. Continue an existing agent rather
 than spawning a fresh one for a follow-up in the same area — the fresh one pays the
