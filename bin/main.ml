@@ -378,6 +378,10 @@ let usage () =
     "                    the deterministic stop, for byte-comparing two builds.";
   prerr_endline "  BAGUETTE_PROOF_AUDIT=0 disables the constraint-id audit (I-X2), which";
   prerr_endline "  is on by default here even though the library's own default is off.";
+  prerr_endline
+    "  BAGUETTE_HASHCONS=0  every rebuilt derivation writes its own proof line (D-0172):";
+  prerr_endline
+    "                    the proof before hash-consing, for comparison. Default on.";
   exit exit_usage
 
 (* A limit from the command line or the environment. A value that is neither an integer
