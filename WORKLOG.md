@@ -848,6 +848,78 @@ waves 41-52 is merged and gated except the M12 parity spike, whose code stays on
 - **Procedures**: gates and lanes as in D-0141 §7 and the last `/scratch/arthur/gate60.sh` on fataepyc-06;
   CLAUDE.md now names fataepyc-06 as baguette's node and lists `make diff` and `make scaling`.
 
+## codes-cp measurements with b403e28, and leads, 2026-11-20 (codes-cp session): summary, no code
+
+Measured on fataepyc-07 with `/scratch/arthur/baguette-b403e28` (branch `codes-cp-b403e28`), one run
+after the other on an idle node (load 4). Model `models/minweight_chk.mzn` of codes-cp: QR48, weight
+<= 8, 24 parity checks, written as XOR clauses (`ENC=1`) or as sums Σx = 2y (`ENC=2`), fixed search
+`bool_search(x, input_order, indomain_max)`. FlatZinc in `/scratch/arthur/codes-cp-work/nps/`, full
+tables in codes-cp `dom/report.md` §4.7 and `benchmark/README.md`.
+
+**Summary**
+
+1. **Nodes per second on the same tree** (XOR clauses; GCS, Gecode and baguette visit exactly the same
+   nodes, Chuffed the same tree counted as decisions):
+
+   | solver | 3 fixed (29 779 nodes) | 2 fixed (108 699) | weight <= 4 (16 451) |
+   |---|---|---|---|
+   | Gecode 6.4.0 | 213 000 | 225 000 | 189 000 |
+   | Chuffed | 204 000 | 212 000 | 183 000 |
+   | GCS | 61 000 | 63 000 | 57 000 |
+   | baguette `--no-proof` | 2 870 | 1 820 | 3 430 |
+   | baguette with proof | 1 640 | 1 220 | 1 840 |
+
+   Without proof baguette is 70 to 120 times slower per node than Gecode. The proof costs 1.5 to 1.9
+   times on the XOR clauses (733 MB of `rup` for the 108 699 nodes) and 1.03 to 1.16 times on the
+   sums. Against 2c97b16 (the 2026-11-18 table above), b403e28 visits the same trees 1.4 to 16 times
+   faster (2 fixed, XOR, with proof: 1 710 s -> 109 s).
+2. **Profile without proof** (`perf record`, 40 s of the 2-fixed XOR run, self time by module):
+   engine (store, domains, wakes, advisors, watch lists) 40 %; `Pb.*` 17 %, for the only two PB rows
+   of the model, 1 <= Σx <= 8 over 48 variables (`Pb.status` alone 9.5 %, `Pb.next_free` 3.2 %);
+   closure calls (`caml_apply2`) 8 %; GC and allocation 6 %; clause propagation, the whole rest of the
+   model, 6 %; hashing and comparing literals 5 %.
+3. **Learned PB rows are all kept.** With the sums (with proof, default flags):
+
+   | series | learned PB rows | `learned_pb` runs per node | effective runs per node | nodes/s |
+   |---|---|---|---|---|
+   | 3 coordinates fixed | 1 047 | 476 | 8.4 | 430 |
+   | 2 coordinates fixed | 4 125 | 1 704 | 10.1 | 77 |
+   | no symmetry breaking (1 h, UNKNOWN) | 23 298 | 8 631 | 10.9 | 13 |
+
+   Here the PB rows are all the learned constraints, where D-0139 §3 counted them under 0.5 % on
+   its suite.
+4. **The clause path prunes nothing on these models under a fixed search.** On the XOR form
+   `learned_clause` makes 0.00 effective runs per node and `skipped 0`; Chuffed explores GCS's tree
+   too. On the codes-cp benchmark instance `rand80s3_w9` (sums, 1 h), Gecode proves UNSAT with 186 M
+   failures at 93 000/s, Chuffed reaches 105 M at 28 000/s with `backjumps=0`. The PB path is what
+   shrinks the search: 2 099 nodes against 29 779 (3 fixed), and `act` (`--search activity
+   --restarts luby --phase-saving --reuse-trail`, tiered retention) brings it to 1 454; on the XOR
+   clauses `act` visits 2 to 3 times more nodes, and `-f` is worse than the default in every cell.
+5. **Benchmark, second pass at 1 h** (the 12 instances at most two solvers solved in 10 min): baguette,
+   `baguette-act`, Chuffed, GCS, Huub and Pumpkin solve none of them; Gecode and CP-SAT solve the two
+   random [80, 40] UNSAT instances in 1 608 to 3 032 s.
+6. **A result proved with baguette.** In the codes-cp R4 work (an extremal [72, 36, 16] code with an
+   automorphism of order 7, case k = 3), baguette proves the last round UNSAT in 17 nodes and 16.8 s,
+   and VeriPB 3.0.2 checks the 2.7 MB proof in 1 s. The FlatZinc is written by a script, with each XOR
+   as 4 `bool_clause` since `bool_xor` is outside SPEC 2.1's subset.
+
+**Leads to explore** (none claimed; each could become an M13-codes-leads row)
+
+- **Incremental slack for the cardinality rows.** `Pb.status` and `Pb.next_free` take 13 % on a model
+  with two PB rows. D-0085/D-0087 already proposed a watched-slack PB propagation, never measured;
+  these models are a small, clean benchmark for it.
+- **The engine's per-node overhead on pure Boolean models.** 40 % in store, wakes and advisors, and
+  70 to 120 times Gecode per node. A first measurement: instructions per node on this model, split
+  by engine call site, against Gecode's.
+- **A retention policy that evicts learned PB rows**, measured on the three sum series above (the
+  parked M10-T4 row "Optional, for a PB-row LBD").
+- **Proof cost on the clause path.** 733 MB of `rup` for 108 699 nodes is about 6.7 KB per node. When a
+  learned clause is only the negation of the current decisions, it prunes nothing under a fixed search
+  and its `rup` line could be avoided. To check: how many of the learned clauses on these models are
+  of this kind.
+- **Whether to learn decision-only nogoods at all** under a fixed search (same observation, search
+  side): they grow the database and cost wakes, `learned_clause` reports no effective run.
+
 ## M13-codes-leads opened, 2026-11-19 (codes-cp session): two leads to study, no code
 
 `docs/ROADMAP.md` gains an M13 section at its end. The codes-cp phase-1 benchmark (2 687 runs, 10 min)
