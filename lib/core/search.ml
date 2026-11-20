@@ -2137,14 +2137,26 @@ let bridges (ctx : Justify.ctx) trace stats store (decisions : Lit.t list) : Lit
      disequality's .opb rows (route 2), both of which need those decisions on the trail.
      So a nogood that drops one of them stops entailing this line, and its [rup] fails
      at the nogood rather than here. The caller unions this back into the nogood; see
-     [dfs]'s conflict arm. *)
+     [dfs]'s conflict arm.
+
+     D-0186: [protect (l :: ancestors)] scanned every ancestor against the list, O(d^2)
+     string compares per settled decision at depth [d]. Membership is [seen] now, and
+     only the literals walked since the previous [protect] ([fresh], newest first) are
+     offered: every older ancestor was offered then, so it is in [seen] and the scan
+     skipped it. [l] itself is offered at its own call and goes into [fresh] like any
+     decision, where [seen] skips it next time. So each literal is prepended at the
+     same call and in the same order as before, and the list returned is the same. *)
   let protected = ref [] in
+  let seen = Lit_tbl.create 16 in
   let protect ls =
     List.iter
       (fun l ->
-        if not (List.exists (Lit.equal l) !protected) then protected := l :: !protected)
+        if not (Lit_tbl.mem seen l) then (
+          Lit_tbl.replace seen l ();
+          protected := l :: !protected))
       ls
   in
+  let fresh = ref [] in
   let rec go entries rev_decisions ancestors =
     match (entries, rev_decisions) with
     | [], _ | _, [] -> ()
@@ -2183,7 +2195,8 @@ let bridges (ctx : Justify.ctx) trace stats store (decisions : Lit.t list) : Lit
                     Printf.sprintf "M1-T55: %s settled onto %s" (Lit.to_string l)
                       (Lit.to_string claim)
                   in
-                  protect (l :: ancestors);
+                  protect (l :: !fresh);
+                  fresh := [];
                   let cid = Justify.emit_rup_clause_lazy ctx ~origin lits in
                   let level = Writer.current_level ctx.Justify.writer in
                   let cited, unnamed =
@@ -2213,6 +2226,7 @@ let bridges (ctx : Justify.ctx) trace stats store (decisions : Lit.t list) : Lit
                       br_cid = cid;
                       br_level = level;
                     }));
+          fresh := l :: !fresh;
           go es ls (l :: ancestors)
   in
   go (decision_entries store) (List.rev decisions) [];
@@ -3107,10 +3121,20 @@ and dfs engine store ctx trace stats cfg (order : order) (decisions : Lit.t list
                        table of its levels, where it was a polymorphic [List.mem] per
                        nogood literal (depth squared per conflict). Same predicate. *)
                     let in_ls = level_set ls in
+                    (* D-0186: "[lit] is the negation of a protected literal" is
+                       [Lit.equal (Lit.negate lit) p] for some [p] ([negate] flips the
+                       polarity and nothing else), asked of a table of [protected] where it
+                       was a scan of it per nogood literal. *)
+                    let negated_protected =
+                      match protected with
+                      | [] -> fun _ -> false
+                      | ps ->
+                          let tbl = Lit_tbl.create 16 in
+                          List.iter (fun p -> Lit_tbl.replace tbl p ()) ps;
+                          fun lit -> Lit_tbl.mem tbl (Lit.negate lit)
+                    in
                     let kept (lit, l) =
-                      in_ls l
-                      || (not cfg.break_bridge_levels)
-                         && List.exists (fun p -> Lit.equal lit (Lit.negate p)) protected
+                      in_ls l || ((not cfg.break_bridge_levels) && negated_protected lit)
                     in
                     minimise stats cfg.policy (List.filter kept all)
               in
