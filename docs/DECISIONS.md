@@ -21297,3 +21297,185 @@ core), so the figure is process start-up. Measured at a load average near 25 on 
 `var int` without a declared domain (four models of these families, eight in all), and T3, T5 to T8
 unchanged. The bridge's matcher is generic (atoms, one flag, one resolvent, saturation), so T5's
 globals may reuse it where cake's flags have one-literal counterparts in baguette's rows.
+
+## D-0180  M14-e2e-verification-T5: the globals in the end-to-end lane, 179 test models certified by `cake_pb_cp`
+
+Status: DONE (tooling and a lane, no solver code)
+Date: 2026-11-20
+Task: M14-e2e-verification-T5 (agent-e2e5, `wave55-e2e5`)
+Touches: `tools/e2e/fzn2scp.py`, `tools/e2e/bridge.py`, `tools/e2e/scpsem.py`,
+`tools/e2e/fzn_solutions.py`, `tools/e2e/mutate.py`, `tools/e2e/chain.sh`,
+`tools/e2e/models/gcc_repeat_free_sat.fzn` (new, a control model), `scripts/e2e_lane.sh`,
+`scripts/README.md` §9 (the control count). Runs: `fataepyc-06:/scratch/arthur/wave55-e2e5-runs/lane2/`;
+the lane's log, its three result files, the translator teeth check and the tally scripts copied to
+`/cluster/arthur/baguette-results/wave55-e2e5/`.
+
+### 1. The families, and the cake keyword each one is translated to
+
+Every family of the task is bridged. Each builtin maps to the cake keyword whose HOL4 meaning
+(`cpScript.sml`, CakeML master of 2026-11) is the builtin's own. Nothing was left out for want of a
+derivation.
+
+| builtin (SPEC 2.1) | `.scp` | cake's meaning |
+|---|---|---|
+| `array_int_element(i, as, z)` | `(c element (a1 ... an) (i 1) z)` | `element_sem`: `0 <= i - 1 < n` and `z = as[i - 1]`, so offset 1 is FlatZinc's 1-based index |
+| `fzn_global_cardinality`, `baguette_global_cardinality(xs, cover, cs)` | `(c gacglobalcardinality (x1 ...) (v1 ...) (c1 ...))` | `global_cardinality_sem` with `clsd = F`, each `cj` the number of `xi = vj`. mznlib's closed variants post their `in` constraints themselves, which reach the `.scp` as set domains |
+| `array_int_maximum(y, xs)`, `array_int_minimum` | `(c array_max (x1 ...) y)`, `array_min` | `array_max_sem`: `y` is one of the `xi` and no `xi` exceeds it |
+| `int_max(a, b, z)`, `int_min` | `(c max a b z)`, `(c min a b z)` | `binop_sem`, `max a b = z` |
+| `baguette_inverse(f, fmin, g, gmin)` | `(c inverse ((f1 ...) fmin) ((g1 ...) gmin))` | `inverse_sem`, which is SPEC's sentence term for term, the unequal-length case (unsatisfiable) included |
+| `baguette_member(xs, y, bs)`, `baguette_member_bool` | `(c_k equals_if (b_k = 1) x_k y)` per position, and `(c or ((b1 = 1) ...) (1 = 1))` | `cmpop_sem` with `INL` (one-sided) and `or_sem`, which is SPEC's "some `b_k` true, every true `b_k` has `x_k = y`" |
+
+**Not cake's `in` for member.** `(c in (x1 ...) y)` means `y` is one of the `x` and says nothing of the
+selectors `b`. mznlib introduces them, but they are FlatZinc variables and baguette's rows constrain
+them, so with `in` the `.scp` would admit selector values the model refuses (the validation of §5
+would report DIFFER, and baguette's `b -> x = y` rows would not be derivable at all).
+
+**`count` and `array_var_int_element` are not SPEC 2.1 builtins.** MiniZinc's `count` and its
+`at_least`/`at_most`/`exactly` reach baguette as `baguette_global_cardinality` over one value
+(mznlib), and are covered as that (`count_sat`, `at_least_sat`, ... are among the verified models).
+baguette has no variable-array element (SPEC 2.1's M4 row admits constants only).
+
+**One translator gap closed on the way.** mznlib's wrappers write `array [1..n] of var int: f = [...]`,
+an array of ALIASES with no domain, and so do a few M1 models (`var int: x = y`). The translator
+refused every such line as "`var int` with no declared domain". It now accepts a bare `var int` when
+the declaration ends in `= ...`: it declares nothing and restricts nothing, and the items keep their
+own domains. That alone made 24 of the 70 family models translatable (every `inverse` model, the
+`count`/`at_least`/`at_most`/`exactly` ones, `gcc_shim_*`, `gcc_repeat_*`, ...), and four models outside the
+families (`count_var_value_sat`, `is_output_shim_sat`, `rup_level0_nogood_sat`, `search_string_sat`).
+A `var int` that declares a variable is still refused.
+
+### 2. What baguette writes per family, and how the bridge derives it
+
+The auxiliaries D-0174 §4 expected to need a `red` pair mostly do not reach the `.opb`. element's
+index is a view, gcc's window indicators and alldiff's direct encoding are introduced in the proof
+by `Encoding.start_proof` (so they are already in baguette's own proof, unchanged after the prefix),
+member's selectors and inverse's channel are model variables or rows over order literals. The one
+auxiliary that does reach the `.opb` is the COPY baguette's front end makes of a variable repeated
+in a `global_cardinality` (SPEC 2.1, a fresh integer tied by `int_eq`).
+
+The obstacle was instead cake's VALUE ATOMS. cake writes element, global_cardinality, inverse and
+`in` (a hole) over `i[X][eq<v>]`, and for an interior value (l < v < u) no single baguette literal
+equals it, so T4's one-literal atom swap could not touch those rows. Three generic additions to the
+bridge, no per-family code:
+
+- **Interior `eq` as the order indicator.** `[x = v] = x_ge_v - x_ge_(v+1)`. The bridge derives the two
+  halves, `@Ep: eq + ~x_ge_v + x_ge_(v+1) >= 1` by `rup`, and `@Em: ~eq + x_ge_v + ~x_ge_(v+1) >= 2` by
+  one `pol` (two `rup` clauses `~eq + x_ge_v`, `~eq + ~x_ge_(v+1)`, plus the rung, divided by 2). In
+  variable form they are `eq = x_ge_v - x_ge_(v+1)`, so `c*eq` is replaced EXACTLY by adding `c*@Em`
+  (or `c*@Ep` for `~eq`). This is gcc's identity (lib/core/prop/gcc.ml's header) read backwards.
+- **Copies by a red pair.** A rung `Y_ge_v` whose `int_eq` rows `~Y + X >= 1` and `Y + ~X >= 1` name a
+  known atom is defined `@Y1: ~Y + X >= 1 : Y -> X`, `@Y2: Y + ~X >= 1 : Y -> X`, and a candidate's
+  coefficient on `X` is moved onto `Y` where baguette's row names the copy.
+- **Weakening or resolution, then saturation.** For a row that is not a clause and that no candidate
+  implies, a second pass tries candidates that share variables with it. A literal baguette's row
+  lacks is weakened away (pol's `w`), or, when that is too weak, resolved against one of baguette's
+  own binary clauses whose other literal is in the row (`@R`, a `rup` of that clause). Then the
+  result is saturated. That is member's big-M row, over the INTERSECTION of `x_k`'s and `y`'s ranges
+  where cake's is over both whole ranges, the end values being guarded by baguette's separate clauses
+  `b -> x_k >= l_y` and `b -> y <= u_x`.
+
+How each family's rows are pinned, over the 70 newly verified family models (counts of baguette
+`.opb` rows; the ladder rungs, `ia` against `@L`, are left out):
+
+| family | models | baguette's rows | `ia` against a substituted row | `ia` against a `pol` (`@W`) | `rup` |
+|---|---|---|---|---|---|
+| `array_int_element` | 18 | per position `~[i = p] or z >= w` and `z <= w`, as clauses over the ORDER encoding | 14 | 57 | 186 |
+| `global_cardinality` (with `count`, `at_least`, `at_most`, `exactly`, closed and low/up) | 33 | the two halves of `sum_i (x_i_ge_v - x_i_ge_(v+1)) = c_v - const_v` | 52 | 193 | 20 |
+| `array_int_maximum/minimum`, `int_max/min` | 9 | `x_i <= m` as linear rows, one clause `m >= v -> OR_i x_i >= v` per value | 49 | 19 | 53 |
+| `inverse` | 3 | channel clauses `[f_k = l] -> [g_l = k]`, both directions | 2 | 77 | 90 |
+| `member` (int and bool) | 7 | `b_k -> x_k >= l_y`, `b_k -> y <= u_x`, a big-M pair over the common range, one clause over the `b` | 7 | 98 | 61 |
+
+The `@W` lines carry the swaps: 119 `@Em` lines (each from two `rup` clauses) and 124 `@Ep` lines
+(`rup`) for interior atoms, two copies defined (four `red` lines, in `gcc_repeat_*`), 25 resolvent
+clauses (`@R`, `rup`). element's clauses close by
+unit propagation over cake's `eq` atoms and its two rows per position. inverse's channel clauses close
+the same way over both sides' atoms. No new mechanism was needed for maxmin, whose `m >= v -> OR`
+clauses close by unit propagation through cake's choice flags (T4's matcher already had the rest).
+
+### 3. The lane's counts
+
+Binary md5 `4e41e8c1` (the solver code is `main`'s `2ec83bc`, unchanged by this task), veripb 3.0.2
+`d5644ca4`, `cake_pb_cp` sha256 `ca92491e`.
+
+| | before (D-0178) | after |
+|---|---|---|
+| VERIFIED | 105 (59 SAT, 46 UNSAT) | **179** (100 SAT, 79 UNSAT) |
+| SKIPPED | 102 | 28 |
+| FAIL | 0 | 0 |
+
+The 74 new: the 70 family models and the four of §1. Skipped now: an objective 9 (T8), `baguette_regular`
+4, `var int` with no domain 4 (the `unbounded_*` models, D-0176 §6), `int_times` 3, `int_div` 3,
+`baguette_cumulative` 3, `int_abs` 2 (T6).
+
+### 4. The mutation controls
+
+Nine new controls, 23 in all, 23 of 23 refused at the expected line and with the checker's whole
+sentence. Every model is satisfiable, and for each `.opb` control the corrupted row is false in at
+least one of the model's solutions (enumerated by `scpsem.py`, checked one by one, `falsity.txt` in the
+results directory), so each refusal judges a claim that is false, not a vacuous one (D-0053, D-0066).
+
+| control | model (family) | refused at | wording | solutions the corrupted row excludes |
+|---|---|---|---|---|
+| `opb-stronger` | `element_sat` (element) | `@c13 rup` | "The constraint is not implied by reverse unit propagation (RUP) from core and derived database." | 2 of 2 |
+| | `element_learn_prunes_sat` (element) | `@c10 rup` | the same | 1 of 1 |
+| | `gcc_forced_sat` (gcc, a `@W` row) | `@c4 rup` | the same | 2 of 2 |
+| | `gcc_const_counts_sat` (gcc) | `@c7 rup` | the same | 2 of 2 |
+| | `maxmin_sat` (array_int_maximum) | `@c11 rup` | the same | 9 of 9 |
+| | `inverse_sat` (inverse) | `@c31 rup` | the same | 2 of 2 |
+| `opb-reif`, member's selector guard flipped: a WRONG DEFINITION of the selectors mznlib introduces | `member_sat` | `@c26 rup` | the same | 24 of 48 |
+| | `member_gap_sat` | `@c9 rup` | the same | 8 of 66 |
+| `copy-witness`, a gcc copy defined as the NEGATION of its original (`@Y1`'s witness `Y -> ~X`) | `gcc_repeat_free_sat` (new, `tools/e2e/models/`) | `@Y1[...] red` | "Proofgoal #1 could not be autoproven." | (a `red`) |
+
+`copy-witness` has its own model because on `test/models/gcc_repeat_sat` the original is fixed at the
+root (it occurs twice and the count of its other value is 1), so `Y -> ~X` is a correct witness
+there and the chain rightly VERIFIED it (measured). `gcc_repeat_free_sat` leaves it free, four
+solutions.
+
+### 5. The translator's validation
+
+`scpsem.py` now reads `element`, `gacglobalcardinality`, `array_max/min`, `max/min`, `inverse` and the
+one-sided `<cmp>_if`, each transcribed from its `cpScript.sml` definition. The references needed a
+change of their own. Neither Gecode nor CP-SAT knows `baguette_global_cardinality`, `baguette_inverse`,
+`baguette_member(_bool)` or `fzn_global_cardinality` as FlatZinc builtins ("Registry: Constraint ...
+not found", measured on the first run, 46 models UNCHECKED). `fzn_solutions.py` now turns such a
+`.fzn` back into MiniZinc (FlatZinc is MiniZinc syntax), replaces the declarations by the standard
+library's `global_cardinality` and `inverse` (over the two index sets) and by SPEC's sentence for
+member (no standard global has the selectors), and lets `minizinc --solver gecode|cp-sat` flatten it
+against the reference's own library. Those definitions share nothing with the translator, except
+member's reading of the same SPEC sentence.
+
+Result: **178 AGREE, 1 UNCHECKED, 0 DIFFER**. On the 74 new models: both references on 61, Gecode alone
+on 6 (CP-SAT refuses `all_different_int`), CP-SAT alone on 6 (Gecode aborts with
+`Gecode::FlatZinc::AST::TypeError`), and `rup_level0_nogood_sat` UNCHECKED (nine variables over
+1..11, too many assignments for the enumerator, a model of §1's four). Six hand-made mistranslations of
+the new forms each give DIFFER: element's offset 0 for 1 (`element_sat`), `array_max` as `array_min`
+(`maxmin_sat`), `max` as `min` (`maxmin_int_max_sat`), inverse's two offsets swapped
+(`inverse_offset_sat`), one `equals_if` as `not_equals_if` (`member_sat`, 180 solutions against 48),
+and two counts swapped (`gcc_const_counts_sat`).
+
+### 6. The prefix and what the chain costs
+
+| family | models | prefix bytes | per model | veripb alone s | elaborate + cake_pb_cp s | ratio |
+|---|---|---|---|---|---|---|
+| element | 18 | 151 954 | 8.4 KB | 0.32 | 0.34 + 0.34 | ×2.12 |
+| global_cardinality | 33 | 427 543 | 13.0 KB | 0.57 | 0.61 + 0.62 | ×2.15 |
+| maxmin | 9 | 126 323 | 14.0 KB | 0.16 | 0.17 + 0.18 | ×2.22 |
+| inverse | 3 | 140 979 | 47.0 KB | 0.05 | 0.07 + 0.09 | ×2.94 |
+| member | 7 | 139 219 | 19.9 KB | 0.11 | 0.13 + 0.15 | ×2.47 |
+
+Most of each prefix is still D-0174's per-value atoms, halves and ladder, and the substitution of
+cake's rows, not the family's own derivations: in element, 1 395 of its 2 493 prefix lines are atoms,
+halves and rungs, 584 substitutions, 404 pins. inverse is the largest per model because `inverse_sat`
+has ten variables over 1..5 and baguette's 22 KB proof. On the whole lane, `veripb` alone 3.10 s and
+the chain 3.79 + 4.74 s, ×2.76 in total, ×2.12 per model at the median (×1.6 to ×86.1, the maximum
+still `width_root_unsat`). On the 74 new models ×2.22 in total, ×1.8 to ×3.1, so the figure is still
+process start-up. The bridge takes at most 0.07 s on a model. Measured at a load average near 24.
+
+### 7. What is left
+
+T6's families (`int_times`, `int_div`, `int_abs`, `cumulative`, `regular`), objectives (T8), `var int`
+with no domain (4 models), T3 and T7 unchanged. The bridge's matcher is still generic: one-literal
+atoms, interior atoms as indicators, one flag, one resolvent, copies, weakening and resolution
+against baguette's own clauses, saturation. A `rup` pin is load-bearing only where a control shows it
+(D-0066), and element's 186 rest on unit propagation: the two element controls are the evidence that
+a stronger element row is refused, and nothing broader.

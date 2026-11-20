@@ -177,16 +177,21 @@ Three passes, one line per item, a summary each, `e2e_lane: PASS` or `FAIL` at t
    `cake_pb_cp`'s own `s VERIFIED SATISFIABLE|UNSATISFIABLE` line, agreeing with baguette. It exits
    0 when it refuses, so never read its status. `SKIPPED` names the first uncovered builtin (or the
    objective, or `var int` with no domain). Anything else is `FAIL`.
-2. **controls**: fourteen corruptions the chain must refuse, each asserted at the refused line and in
-   the checker's sentence (`chain.sh`'s header lists them).
-3. **validation**: the translator against the reference solvers, solution set for solution set.
+2. **controls**: twenty-three corruptions the chain must refuse, each asserted at the refused line and
+   in the checker's sentence (`chain.sh`'s header lists them). One runs on a model of its own,
+   `tools/e2e/models/gcc_repeat_free_sat.fzn` (D-0180 §4).
+3. **validation**: the translator against the reference solvers, solution set for solution set. A
+   model calling baguette's mznlib predicates is re-flattened as MiniZinc against the reference's own
+   library (`tools/e2e/fzn_solutions.py`, D-0180 §5).
 
 Each run is under `systemd-run --user --scope -p MemoryMax=32G` with a timeout, at most 8 at a
 time, and writes `OUTDIR/<dir>/<model>.pid` while it runs; the lane's own PID is `OUTDIR/lane.pid`.
 Clean up with `kill $(cat OUTDIR/lane.pid)` and the per-model pidfiles, never by name. `make e2e` is the one
 running target without `ulimit -v`: `cake_pb_cp` reserves its whole heap as virtual memory and
-refuses every model under the 4 GB cap. baguette keeps the cap inside `chain.sh`. The whole
-lane takes about a minute on the 207 models.
+refuses every model under the 4 GB cap. baguette keeps the cap inside `chain.sh`. The chain and
+the controls take about ten seconds at `-j 8`; the validation takes about four and a half minutes,
+most of it the two references timing out (120 s each) on `rup_level0_nogood_sat`, which stays
+UNCHECKED (measured 2026-11-20, D-0180).
 
 The translator, `tools/e2e/fzn2scp.py`, is the one TRUSTED new link: a wrong translation verifies.
 It shares no code with `lib/flatzinc/` on purpose (D-0174 §5). Widen it only together with
