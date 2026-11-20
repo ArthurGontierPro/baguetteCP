@@ -624,6 +624,15 @@ section 1. Shares are inclusive, of the whole run.
 
 ## Handoff notes
 
+### 2026-11-20 (orchestrator): gates 71 and 72 green; alldiff, snap, thunk and pernode merged
+
+Gate 71 (agent-merge, `4e65e46`, binary `492638b9`, merged into main as `42feb27`, code identical)
+and gate 72 (`f41498a`, merge wave55-thunk, D-0168, binary `c3b9cd1b`, against `492638b9`):
+`make check` rc 0 (4 345 ok, 200 models, 102 MB), 200 models x 4 artefacts equal, lane 301/301,
+debug 289/289, scaling ok. wave55-pernode (D-0169) merged next, gate 73 on it. The user delegated
+the open decisions on 2026-11-20 (D-0167). Held: the memo share default (D-0167 item 3) waits for
+the M11-complexity-T15 spike, whose variant B shares lines without share mode's search.
+
 ### 2026-11-20 (agent-pernode2, `wave55-pernode`): M11-complexity-T14, D-0169
 
 Four byte-identical cuts of the per-run and per-wake cost (`Store.run_as`, `Engine.sort_desc_uniq`, `Pb.falsified`,
