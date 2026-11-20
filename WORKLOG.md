@@ -22,6 +22,7 @@ of it to every session and stopping at a broken line before it even reached the 
 | M8-bits-encoding-T4 (two arms, `W = none` and `W = 0`, on the sixteen editions) | run directories under `/scratch/arthur/m8t4/`, `tools/compare/` (additions), `bench/challenge/README.md` (the run's row), a new D-record | agent-m8t4 (`wave55-m8t4`) | 2026-11-20 |
 | M10-search-strategy-T5, M9-no-proof-T3, M7-T30 (one Challenge series on current main: default, `-f`, default `--no-proof`) | run dirs `/scratch/arthur/m10t5/`, `tools/compare/` (additions), `bench/challenge/README.md` (the run's row); reserved record D-0185 | agent-m10t5 (`wave55-m10t5`) | 2026-11-20 |
 | M16-file-review-T1 (the core) | `lib/core/store.ml`, `domain.ml`, `engine.ml`, `var.ml`, `propagator.ml`, `search.ml`, their unit tests; `bench/scaling/baseline.tsv` (re-baseline only); reserved record D-0186 | agent-review1 (`wave55-review1`) | 2026-11-20 |
+| M14-e2e-verification-T3 (the bridge written by the solver, `--e2e`) | `lib/proof/encoding.ml` (an e2e prefix writer, additive), a NEW `lib/proof/e2e.ml`, `bin/main.ml` (the `--e2e` flag only), `docs/PROOF-FORMAT.md` §3 (cake's naming as a second contract), `tools/e2e/`, `scripts/e2e_lane.sh`, `test/unit/test_proof.ml` (one section); reserved record D-0187 ([AUTONOME]) | agent-e2e3 (`wave55-e2e3`) | 2026-11-20 |
 
 ## Cross-session requests
 
