@@ -23,6 +23,7 @@ of it to every session and stopping at a broken line before it even reached the 
 | M11-complexity-T15 (SPIKE, explanations as a hash-consed DAG; a prototype branch, nothing merged without a decision) | `lib/core/explanation.ml`, `lib/core/justify.ml`, `lib/core/trace.ml`, propagators' explanation construction as needed, on branch `wave55-dag` only | agent-dag (`wave55-dag`) | 2026-11-20 |
 | M11-complexity-T17 (learned clauses that cannot prune) | `lib/core/search.ml`, `lib/core/learned.ml`, `lib/core/retention.ml`, `lib/core/engine.ml` (learned wakes only), `lib/core/prop/clause.ml`, `lib/core/prop/pb.ml`, their unit tests | agent-learnprop (`wave55-learnprop`) | 2026-11-20 |
 | M15-symmetry-T1 (study, documentation only) | a new decision record (reserved D-0177), notes under `/cluster/arthur/baguette-results/wave55-sym/` | agent-sym (`wave55-sym`) | 2026-11-20 |
+| M14-e2e-verification-T4 (auxiliary Booleans, reified and Boolean families in the e2e chain) | `tools/e2e/`, `scripts/e2e_lane.sh`, `bench/e2e_spike/`; reserved record D-0178 | agent-e2e4 (`wave55-e2e4`) | 2026-11-20 |
 
 ## Cross-session requests
 
