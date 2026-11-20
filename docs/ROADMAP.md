@@ -482,7 +482,7 @@ from a complicated presolve for now: a linear relaxation is the presolve step wo
 | ID | Task | Status | Notes |
 |---|---|---|---|
 | M13-codes-leads-T1 | **A linear relaxation as a presolve step**: solve the LP relaxation of the model's linear rows at the root (possibly at a few nodes later) and use its bound and its reduced-cost fixings. Each consequence is a nonnegative combination of model rows followed by a rounding, so one `pol` in the proof, the shape `Linear` already writes | TODO (to study) | Evidence: the MILP solvers find codewords and minimum weights far faster than every learner. Gurobi solves 73 of 83 P1 instances against 68 for RoundingSat, and all 15 instances where Gurobi is clearly faster are SAT questions or optimisation, while RoundingSat wins the UNSAT proofs. A cheap first measurement: what the root LP bound alone would fix on the codes and on the Challenge instances, before any code in baguette |
-| M13-codes-leads-T2 | **Symmetry detection**: find the model's variable symmetries (an automorphism search on the constraint graph, as CP-SAT's presolve does) and break them with constraints the proof justifies by the dominance rule | TODO (to study) | The certification half already exists outside baguette, a posteriori: codes-cp's `dom/` turns lex constraints into VeriPB `dom` lines (`scripts/domproof.py`, `scripts/dommerge.py`) and merged proofs for Hamming, Golay and QR48 are checked. Evidence: on the [n, k, d] existence instances, the AAAI-26 symmetry breaking takes Kissat from 15 to 30 solved of 32. The user's intuition is that detection is the hard part |
+| M13-codes-leads-T2 | **Symmetry detection**: find the model's variable symmetries (an automorphism search on the constraint graph, as CP-SAT's presolve does) and break them with constraints the proof justifies by the dominance rule | MOVED to M15-symmetry (2026-11-20) | The certification half already exists outside baguette, a posteriori: codes-cp's `dom/` turns lex constraints into VeriPB `dom` lines (`scripts/domproof.py`, `scripts/dommerge.py`) and merged proofs for Hamming, Golay and QR48 are checked. Evidence: on the [n, k, d] existence instances, the AAAI-26 symmetry breaking takes Kissat from 15 to 30 solved of 32. The user's intuition is that detection is the hard part |
 
 ## M14-e2e-verification — end-to-end verification: the model's PB encoding produced by a verified tool
 
@@ -506,3 +506,37 @@ must be in that high-level CP language, and how that fits with MiniZinc/FlatZinc
 | M14-e2e-verification-T6 | The far families: `int_times`/`int_div`/`int_abs` (baguette's case-split Booleans against cake's bit products), `cumulative`, `regular` (the mznlib state flags have no counterpart in the `.scp`) | TODO | may conclude that a family stays outside the verified chain |
 | M14-e2e-verification-T7 | The bits arm: baguette's `x_bit_i` (bits of `x - l`, unsigned) against cake's two's-complement bits of `x`. Either baguette's bits arm writes cake's representation under `--e2e`, or the bridge derives one from the other | TODO | |
 | M14-e2e-verification-T8 | Optimisation (objective over cake's bits, `soli`) and the first measurement of `cake_pb_cp` on baguette **search** proofs, on the Challenge instances inside the covered subset: time and RSS of `veripb --elaborate` and `cake_pb_cp` against `veripb` alone | TODO | numbers, with the binary's hash |
+
+## M15-symmetry — symmetry detection by dejavu, beside baguette, with breaking justified in the proof
+
+Opened 2026-11-20 by the user, from codes-cp's measurements (`~/codes-cp/notes/dejavu-plan.md`,
+`benchmark/README.md` section "Les symétries de dejavu"). dejavu is Markus Anders' automorphism tool
+(the one inside satsuma). Run on a coloured graph of baguette's own `.opb` (two literal vertices per
+variable, one vertex per constraint coloured by kind, degree and coefficients, the objective as a
+vertex of its own colour), it finds the code's whole group when parities are written as sums Σx = 2y:
+PSL(2, 47), order 51 888, for QR48, and M24 for Golay. With `bool_xor` chains, or with a basis of
+parity checks instead of a closed set, it finds the trivial group. A stabilizer chain built from its
+generators (orbit of c1, then dejavu again with c1 coloured apart, and so on), with each clause
+x_c ∨ ¬x_b derived by a `dom` line whose witness is a product of dejavu's generators and merged into
+baguette's proof, is checked by VeriPB on Hamming, Golay, QR32 and QR48, and wrong witnesses are
+rejected. On QR48 with weight ≤ 8 it gives the hand-written chain's 1 273 nodes (15 945 without
+breaking, 1 220 s down to 48 s), with a 297 s check of the merged proof. In the 600 s benchmark it
+only matters on one instance in 115 (qr48orb_w8: 9 of 31 configurations solve it without breaking,
+26 with the chain), it costs 79 to 106 s of dejavu there, and it gains nothing on the SAT instances,
+where some solvers lose (HiGHS 4.3 s to 25 s, CP-SAT 176 s to 332 s).
+
+Engineering rule (the user's): dejavu is **not** put inside baguette. The two run side by side in a
+pipeline, and dejavu is used as distributed, without changes, as long as nothing forces one. Both are
+open-source research software, so licences are not an obstacle. Optimisation, proof size,
+applicability on the Challenge and the effect of the encoding are real questions, parked for later
+(T4 to T7).
+
+| ID | Task | Status | Notes |
+|---|---|---|---|
+| M15-symmetry-T1 | **Study**: the most recent iterations of dejavu (its current release and what it adds over the version in satsuma's SAT-competition 2026 sources, `~/satsuma26/satsuma-kissat-satcomp26/solver/satsuma-src/dejavu/`) and Markus Anders' latest papers (symmetry detection and breaking for SAT and beyond, satsuma's structure-based breaking, computing orbits and stabilizers along the search), and the recent VeriPB addition that satsuma uses for shorter symmetry-breaking proofs. What to take as is, what the pipeline should call | TODO | documentation only, a D-record |
+| M15-symmetry-T2 | **The pipeline, side by side**: `.opb` → graph → dejavu → breaking constraints with their `dom` steps → baguette on the broken model → merged proof → VeriPB. Start from codes-cp's prototype (`scripts/opb2graph.py`, `scripts/dvbreak.py`, `scripts/dvrun.sh`, `scripts/domproof.py`), which only breaks on a model's `x` array; generalise the choice of the variables to break on. A script or a tool directory next to baguette, not code in `lib/` | TODO | after T1 |
+| M15-symmetry-T3 | **Breaking that agrees with the search.** A static order chosen before the search can fight the branching. Ciaran's idea: let the search fix the elements of the orbits as it goes, so that each chain point is the variable the search decides next rather than one chosen in advance. Design it, then measure against the static chain on the codes and on instances where the static chain hurts (qr48orb_w12 above) | TODO | the main open question |
+| M15-symmetry-T4 | Optimisation: the `dom` steps must also show that the witness does not worsen the objective (the graph already keeps the objective) | PARKED | later |
+| M15-symmetry-T5 | Proof size: witnesses list every moved variable (69 280 per line on QR48); the VeriPB addition of T1 may shorten them | PARKED | later |
+| M15-symmetry-T6 | Applicability on the Challenge: share of instances with a nontrivial group on baguette's `.opb`, cost of dejavu, gain or loss | PARKED | later |
+| M15-symmetry-T7 | The encoding decides what is visible: XOR chains hide everything, order-encoded integers show their values only up to reversal, bit encodings hide linear symmetries, and equivalent rows written differently (gcd, saturation) get different colours | PARKED | later; codes-cp `notes/dejavu-plan.md` has the cases |

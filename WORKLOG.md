@@ -23,7 +23,6 @@ of it to every session and stopping at a broken line before it even reached the 
 | M11-complexity-T15 (SPIKE, explanations as a hash-consed DAG; a prototype branch, nothing merged without a decision) | `lib/core/explanation.ml`, `lib/core/justify.ml`, `lib/core/trace.ml`, propagators' explanation construction as needed, on branch `wave55-dag` only | agent-dag (`wave55-dag`) | 2026-11-20 |
 | M11-complexity-T17 (learned clauses that cannot prune) | `lib/core/search.ml`, `lib/core/learned.ml`, `lib/core/retention.ml`, `lib/core/engine.ml` (learned wakes only), `lib/core/prop/clause.ml`, `lib/core/prop/pb.ml`, their unit tests | agent-learnprop (`wave55-learnprop`) | 2026-11-20 |
 | M14-e2e-verification-T2 (first demo as a lane) | new `tools/e2e/` (the FlatZinc -> .scp translator, the bridge), `bench/e2e_spike/`, a new lane script `scripts/e2e_lane.sh`, `Makefile` (one target), `scripts/README.md` (one section); reserved record D-0176 | agent-e2e2 (`wave55-e2e2`) | 2026-11-20 |
-| M15-symmetry (roadmap rows only) | `docs/ROADMAP.md` (a new M15 section at the end, and the status cell of M13-codes-leads-T2, nothing else) | codes-cp session | 2026-11-20 |
 
 ## Cross-session requests
 
@@ -455,6 +454,7 @@ section 1. Shares are inclusive, of the whole run.
 
 | Task | Session | Date | Summary |
 |---|---|---|---|
+| M15-symmetry (roadmap rows only) | codes-cp session | 2026-11-20 | New M15 section at the end of `docs/ROADMAP.md`: dejavu beside baguette (not inside it), T1 study of dejavu's latest versions and Markus Anders' papers, T2 the side-by-side pipeline from codes-cp's prototype, T3 breaking that agrees with the search (Ciaran's idea), T4-T7 parked. M13-codes-leads-T2 marked moved to M15 |
 | M7-T34 (`member` without width-proportional rows) | agent-member2 (`wave55-member`) | 2026-11-20 | **D-0170.** Four bound clauses and two big-M rows over the declared overlap per position; the threshold clauses are lemmas written ahead of the lines that walk a hole (one per switch of the hole's owner), one `Combine` per line, no new constructor. Rows over the 35 Challenge instances 7.47 M -> 77 K, literals -38 %; statuses and incumbents equal to main's. Gate on `e150a70`: see D-0170 §5. Merge recommended |
 | M7-T28 (`member`) | agent-member (`wave53-member`) | 2026-11-19 | **D-0159.** `member` native, DOMAIN over x, y and one selector per position; released with M7-T34, which builds on its branch |
 | M11-complexity-T4 (part 2: search, analysis, retention, learned; T4 DONE) | agent-batch4b (`wave52-batch4b`) | 2026-11-19 | **D-0152.** S1 (learned-instance kind as a byte per engine id), S3 (`decision_entries` over the level marks), S4 (`is_fixed`, `first_fail` stops at size 2), S5 (`kept` by a level table), S6 (`apply_globals` keeps its forward list, skips a unit in force), S2 (lazy citation texts), R3 (typed orders, fifo's no-op sort skipped), J6 (`bridges`' origin a thunk), L2 (`to_linear_row` typed sorts, one-pass grouping), A1 (the 1UIP frontier keeps its count and a heap). R4 done and REVERTED (RSS +6-8 %). Every byte the same (36 measurement runs, lane 301/301 and 289/289); instructions at 40 000 nodes no-proof: mspsp -17.3 %, QR72 -15.6 %, QR48 -11.2 %, openshop -8.0 %, rcpsp_11 -5.9 %, cyclic -0.5 %; RSS -4 to -8 %. Gate on `d4e8477`: `make check` rc 0, peak RSS 99 MB, 193 models identical to gate 57's binary, lane 301/301 and 289/289, binary `d12feec0`. |
@@ -1018,6 +1018,17 @@ nothing. dejavu takes 14 to 34 s on the QR48 orbit graphs (0.2 to 0.4 M vertices
 constraints must be dropped first, or their twin vertices inflate the order dejavu reports. Implication for T2: detection on
 the `.opb` is cheap and exact, but only for encodings that keep the symmetry; a native parity row
 would have to keep it too. Details: codes-cp `notes/dejavu-plan.md`.
+
+## M15-symmetry opened, 2026-11-20 (codes-cp session): roadmap rows only, no code
+
+`docs/ROADMAP.md` gains an M15 section at its end, at the user's request. It follows the codes-cp
+measurements summarised in the addendum above (dejavu on baguette's `.opb`, a stabilizer chain whose
+clauses are derived by `dom` and merged into baguette's proof, checked by VeriPB). The user's rules:
+dejavu runs beside baguette in a pipeline and is not put inside it, and dejavu is used unchanged as
+long as nothing forces a change. First the study (T1), then the pipeline (T2), then the interaction
+with the search (T3, Ciaran's idea of letting the search fix the orbit elements as it goes).
+Optimisation, proof size, the Challenge and the encoding are parked. M13-codes-leads-T2 now points to
+M15.
 
 ## M13-codes-leads opened, 2026-11-19 (codes-cp session): two leads to study, no code
 
