@@ -192,3 +192,38 @@ The translator, `tools/e2e/fzn2scp.py`, is the one TRUSTED new link: a wrong tra
 It shares no code with `lib/flatzinc/` on purpose (D-0174 §5). Widen it only together with
 `tools/e2e/scpsem.py` (the .scp semantics transcribed from CakeML's `cpScript.sml`) and the
 validation pass, and run the lane.
+
+## 10. The symmetry lane (M15-symmetry-T2, D-0179)
+
+`make sym ARGS="-j 8 /scratch/arthur/<run>"`, or `scripts/sym_lane.sh [-j N] [--big] OUTDIR
+[NAME...]`. Node only, not in `check`. dejavu is NOT inside baguette (the user's rule): it runs
+beside it, as distributed, in a pipeline of three scripts under `tools/symmetry/`.
+
+```sh
+main.exe M.fzn --proof ORIG --time-limit 0                 # ORIG.opb, the model, no search
+tools/symmetry/symchain.py M.fzn ORIG.opb S --depth 3      # dejavu per level -> S.chain.json, S.fzn
+main.exe S.fzn --proof S                                   # baguette on the broken model
+tools/symmetry/symmerge.py S.chain.json ORIG.opb S.opb S.pbp MERGED.pbp
+veripb ORIG.opb MERGED.pbp                                 # the ORIGINAL model, unchanged
+```
+
+| What | Default | Override |
+|---|---|---|
+| dejavu, upstream `main` `f984485` (v2.1), unchanged | `/cluster/arthur/tools/dejavu-f984485/build/dejavu` (sha256 `bb1759d0`, `PROVENANCE` beside it) | `DEJAVU=` |
+| the solver | `_build/default/bin/main.exe`, NOT built by the script: `dune build --root . bin/` first | `BAGUETTE=` |
+| MiniZinc, to flatten the codes | the 2.10.1 bundle under `/scratch/arthur/mzn/` | `MZN=` |
+| codes-cp, for QR48's `.dzn` (`--big`) | `/cluster/arthur/codes-cp` | `CODES_CP=` |
+
+The instances are `bench/symmetry/instances.tsv`. One line per instance, a row of
+`OUTDIR/results.tsv` (group order, chain, cuts, nodes and seconds without and with the cuts, the
+check), and `sym_lane: PASS` or `FAIL`. VERIFIED means veripb's `s VERIFIED` line on the original
+`.opb`, agreeing with the expected answer and with both baguette runs. On the satisfiable models
+marked `yes`, four controls (a wrong witness and a wrong cut, under `red` and under `dom`) must be
+refused at the mutated line, in the checker's words. Each step is under `systemd-run --user
+--scope -p MemoryMax=32G` and a timeout (`SYM_TL`, 1800 s), with `OUTDIR/<name>/<step>.pid`
+while it runs and `OUTDIR/lane.pid`. Clean up by those PIDs, never by name. The small tier takes
+seconds; QR48 (`--big`) about ten minutes, most of it the run without breaking.
+
+Nothing in `tools/symmetry/` is trusted: a wrong generator, orbit or witness is a line veripb
+refuses. Only 0/1 variables are broken on (the cut has to be a FlatZinc constraint without new
+variables), and optimisation models are refused (M15-symmetry-T4).
