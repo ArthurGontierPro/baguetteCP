@@ -170,23 +170,65 @@ let newline t =
   t.line <- t.line + 1;
   t.bol <- t.base + t.pos + 1
 
-(* The maximal run of bytes satisfying [pred] from the cursor, as a string. Taken
+(* Character classes, one table load per byte (M16-file-review-T5, D-0193). [take_while]
+   took the class as a closure and called it once per byte, through [is_ident_char],
+   which calls [is_ident_start] and [is_digit]: three calls a byte, about two thirds of
+   the lexer's time on a Challenge `.fzn`. The table answers exactly what those
+   predicates answer, byte for byte (bit 1: [is_digit]; bit 2: [is_ident_char]). *)
+let cls_digit = 1
+let cls_ident = 2
+
+let classes =
+  String.init 256 (fun i ->
+      let c = Char.chr i in
+      Char.chr
+        ((if is_digit c then cls_digit else 0)
+        lor if is_ident_char c then cls_ident else 0))
+
+let in_class cls c = Char.code (String.unsafe_get classes (Char.code c)) land cls <> 0
+
+(* The maximal run of bytes of class [cls] from the cursor, as a string. Taken
    straight out of the window when it ends inside it; copied through a Buffer when it
    reaches the window's edge, because sliding would overwrite it. *)
-let take_while t pred =
+let take_while t cls =
+  let buf = t.buf and len = t.len in
   let start = t.pos in
-  while t.pos < t.len && pred (Bytes.unsafe_get t.buf t.pos) do
-    skip t
+  let i = ref start in
+  while !i < len && in_class cls (Bytes.unsafe_get buf !i) do
+    incr i
   done;
-  if t.pos < t.len then Bytes.sub_string t.buf start (t.pos - start)
+  t.pos <- !i;
+  if !i < len then Bytes.sub_string buf start (!i - start)
   else
     let b = Buffer.create 32 in
-    Buffer.add_subbytes b t.buf start (t.pos - start);
-    while has1 t && pred (peek t) do
+    Buffer.add_subbytes b buf start (!i - start);
+    while has1 t && in_class cls (peek t) do
       Buffer.add_char b (peek t);
       skip t
     done;
     Buffer.contents b
+
+(* An integer literal's value, read off the digits where they lie (M16-file-review-T5,
+   D-0193): no string is made for it unless it does not fit or straddles the window's
+   edge. [None] is "use [take_while] and [int_of_string_opt]", which is the path for
+   both of those cases, so the value accepted and the text quoted by the diagnostic are
+   [int_of_string_opt]'s. Over decimal digits alone [int_of_string_opt] accepts exactly
+   the values up to [max_int]; [acc <= (max_int - d) / 10] is that bound before the
+   multiplication can wrap. The cursor moves only when [Some] is returned. *)
+let take_int_in_window t =
+  let buf = t.buf and len = t.len in
+  let rec go i acc =
+    if i >= len then None
+    else
+      let c = Bytes.unsafe_get buf i in
+      if is_digit c then
+        let d = Char.code c - 48 in
+        if acc > (max_int - d) / 10 then None else go (i + 1) ((acc * 10) + d)
+      else (
+        t.pos <- i;
+        Some acc)
+  in
+  go t.pos 0
 
 (* --------------------------------------------------------------------- scanning *)
 
@@ -229,7 +271,11 @@ let rec scan t =
       let p = here t in
       t.tok_pos <- p;
       if is_digit c then (
-        let text = take_while t is_digit in
+        let value =
+          match take_int_in_window t with
+          | Some v -> Ok v
+          | None -> Error (take_while t cls_digit)
+        in
         (* `1..2` is a range, `1.0` is a float literal and floats are out of scope
            (SPEC 1). Distinguish by looking at the character after the dot. *)
         if has1 t && peek t = '.' && not (has2 t && peek2 t = '.') then
@@ -240,11 +286,15 @@ let rec scan t =
           Error.failf p
             "floating-point literals are not supported: SPEC 2.1 restricts types to bool \
              and int";
-        match int_of_string_opt text with
-        | Some v -> t.tok <- INT v
-        | None -> Error.failf p "integer literal `%s` does not fit in an OCaml int" text)
+        match value with
+        | Ok v -> t.tok <- INT v
+        | Error text -> (
+            match int_of_string_opt text with
+            | Some v -> t.tok <- INT v
+            | None ->
+                Error.failf p "integer literal `%s` does not fit in an OCaml int" text))
       else if is_ident_start c then
-        let s = take_while t is_ident_char in
+        let s = take_while t cls_ident in
         match keyword s with Some k -> t.tok <- k | None -> t.tok <- IDENT s
       else if c = '"' then (
         skip t;
