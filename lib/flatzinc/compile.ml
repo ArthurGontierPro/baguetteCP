@@ -148,7 +148,26 @@
    that one exits 4 and tells the reader baguette's own invariant has failed, which is
    right for a wrapped row (Compile's arithmetic cap should have caught it) and would
    be actively wrong here: an over-wide domain is a model problem, reported at the
-   model, with the model's exit code. *)
+   model, with the model's exit code.
+
+   ---------------------------------------------------------------------------
+   What the setup costs, and what of it is this file's (M16-file-review-T5, D-0193)
+   ---------------------------------------------------------------------------
+
+   On the Challenge's costliest setups [compile]'s own code is a few percent; the rest
+   is what it calls ([Encoding]'s declarations and rows, [Engine.create], the globals'
+   [make]). Its own rules: [normalise_terms] answers a short row over distinct
+   variables without a table; the name check is one sized [Model.Names]; and under
+   [Discard_rows] (`--no-proof`) the objective's .opb line, one term per rung of the
+   objective, is not built, because the header that would print it is never written.
+
+   Three paths are quadratic in an argument's length and are left so, each bounded by
+   what the .fzn states and none seen in a profile: [post_all_different] tests every
+   pair of its n operands for a constant or a repeat (O(n^2) cheap tests; the global's
+   own [Alldiff.make] dominates long before), [post_global_cardinality] filters the
+   movable variables once per cover value (O(cover x n)), and [post_regular] finds a
+   state's predecessors per symbol run (O(n x Q^2 x runs), the size of its own table
+   times Q). *)
 
 module Var = Baguette_core.Var
 module Checked = Baguette_core.Checked

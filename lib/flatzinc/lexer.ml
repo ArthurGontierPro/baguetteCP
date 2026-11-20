@@ -17,7 +17,17 @@
 
    A token that straddles the window's edge is copied through a Buffer; one that does
    not is taken straight out of the window. The window is 64 KiB by default and a
-   parameter, so a test can shrink it to a few bytes and exercise every straddle. *)
+   parameter, so a test can shrink it to a few bytes and exercise every straddle.
+
+   Cost (M16-file-review-T5, D-0193). The scanner is O(bytes), and the constant is what
+   the Challenge's largest files pay first: on smelt_11 (136 MB, 18.4 M tokens) it was
+   530 instructions per token before this review and is 330 after. Three rules keep it there. A run of
+   identifier or digit bytes is read against [classes], one table load per byte, never
+   through a predicate closure. An integer is folded into its value where its digits
+   lie, and only one that straddles the window or does not fit goes through a string
+   and [int_of_string_opt], which decides both. A token's start is two ints, and the
+   [Pos.t] is made by [pos] when someone asks. What is left per token is the
+   identifier's string (the parser keeps it) and one [caml_modify] for [tok]. *)
 
 type token =
   (* keywords *)

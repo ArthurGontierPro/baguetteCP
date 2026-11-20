@@ -21,7 +21,16 @@
    (D-0083, and the arithmetic family sizes its auxiliaries from domains). On a
    FlatZinc 2.x file every declaration precedes every constraint, so that is either
    every constraint or none. What this costs, and the one way it differs from building
-   a whole tree, is in D-0128. *)
+   a whole tree, is in D-0128.
+
+   Cost (M16-file-review-T5, D-0193). Every occurrence of a name in the file is one probe
+   of [Model.Names], a table over [String] (a polymorphic [Hashtbl] compared every key
+   through [compare_val]), and a variable is found by its index in an array. Nothing is
+   quadratic in the file on the accepting path, except two costs bounded by what the
+   file states: a parameter array of a set type checks each element against the set
+   ([check_par_domain], O(elements x set)), and [infer_domains] runs at most
+   [infer_max_passes] passes over the facts. The diagnostics ([refuse_unbounded]) may
+   walk the facts once per unbounded variable; they end the run. *)
 
 (* SPEC 2.1, milestones M1, M2 and M3. *)
 let implemented =
