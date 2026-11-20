@@ -181,7 +181,14 @@ def main(cake_opb, names_file, bag_opb, bag_pbp):
             # previous half (x_ge_v false) and A1 + T1_v (x_ge_v true), divided
             emit(f"@T1[{a}] pol {'@T1[' + S[i - 1] + '] ' if i else ''}~{a}{' +' if i else ''} ;")
             emit(f"@E1[{a}] pol {prev} {M} * @A1[{a}] + @T1[{a}] + {M + 1} d ;")
+            # the running rows and the halves before this one are spent: kept, they hold
+            # Theta(w^2) terms, and a width of 15 529 (2015_gfd-schedule) took veripb
+            # --elaborate to 30 GB and exhausted cake_pb_cp's 24 GB heap (T8, D-0182)
+            if i:
+                emit(f"del id @T1[{S[i - 1]}] @E1[{S[i - 1]}] ;")
             prev = f"@E1[{a}]"
+        if S:
+            emit(f"del id @T1[{S[-1]}] ;")
         e1 = prev
         prev = f"@i[{X}][ub]"
         for v in range(u, l, -1):
@@ -191,7 +198,11 @@ def main(cake_opb, names_file, bag_opb, bag_pbp):
             more = j + 1 < len(S)
             emit(f"@T2[{a}] pol {'@T2[' + S[j + 1] + '] ' if more else ''}{a}{' +' if more else ''} ;")
             emit(f"@E2[{a}] pol {prev} {K} * @A2[{a}] + @T2[{a}] + {K + 1} d ;")
+            if more:
+                emit(f"del id @T2[{S[j + 1]}] @E2[{S[j + 1]}] ;")
             prev = f"@E2[{a}]"
+        if S:
+            emit(f"del id @T2[{S[0]}] ;")
         e2 = prev
         info.update(l=l, S=S, e1=e1, e2=e2, x=x)
         for v in range(l + 1, u):

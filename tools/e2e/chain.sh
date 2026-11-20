@@ -178,14 +178,14 @@ if [ -n "$MUT" ]; then
     # one sentence, except a BOUNDS refusal, whose second sentence says which bound (T8)
     [[ "$cause" == "Unable to verify 'conclusion BOUNDS'."* ]] || cause=$(echo "$cause" | sed 's/\. .*/./')
     # "conflicting with constraint K": name K by its label, a cake row (K <= f) or the
-    # (K - f)-th line of the prefix (every prefix line derives exactly one constraint)
+    # (K - f)-th line of the prefix (every prefix line but a `del` derives exactly one constraint)
     k=$(echo "$cause" | sed -n 's/.*conflicting with constraint \([0-9]*\) in the database.*/\1/p')
     if [ -n "$k" ]; then
         f=$(grep -c ';' "$o.cake.opb")
         if [ "$k" -le "$f" ]; then
             lab=$(grep ';' "$o.cake.opb" | sed -n "${k}p" | awk '{print $1}')
         else
-            lab=$(tail -n +3 "$o.bridged.pbp" | grep -v '^%' | sed -n "$((k - f))p" | awk '{print $1}')
+            lab=$(tail -n +3 "$o.bridged.pbp" | grep -v -e '^%' -e '^del ' | sed -n "$((k - f))p" | awk '{print $1}')
         fi
         cause="$cause ($lab)"
     fi
