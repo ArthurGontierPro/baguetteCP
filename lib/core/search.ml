@@ -113,7 +113,10 @@
 
    And a walk made at every node allocates nothing per element: the staged order of an
    annotated search ([sequence]) gathers a phase's live variables in one pass into a
-   scratch array and copies out the live prefix, the array [Array.of_seq] gave. *)
+   scratch array and copies out the live prefix, the array [Array.of_seq] gave. A
+   [Debug.check] made per node or per conflict sits under [if Debug.enabled], so that
+   its closure (and in [bridges] its [Printf] message) is not built when nothing checks
+   it. *)
 
 module Lit = Baguette_proof.Lit
 module Writer = Baguette_proof.Writer
@@ -1841,13 +1844,14 @@ let combine_nogoods stats policy (a : nogood) (b : nogood) ~lvl : nogood =
    Under the audit the id is checked to be live as well, which catches the same mistake
    made one call earlier. *)
 let wipe_after_nogood ctx ~lvl ~nogood =
-  Debug.check
-    "D-0018.4: the nogood is emitted, at the parent level, before the branch's level is \
-     wiped" (fun () ->
-      Writer.current_level ctx.Justify.writer < lvl
-      &&
-      let w = ctx.Justify.writer in
-      (not (Writer.auditing w)) || Writer.is_live w nogood);
+  if Debug.enabled then
+    Debug.check
+      "D-0018.4: the nogood is emitted, at the parent level, before the branch's level \
+       is wiped" (fun () ->
+        Writer.current_level ctx.Justify.writer < lvl
+        &&
+        let w = ctx.Justify.writer in
+        (not (Writer.auditing w)) || Writer.is_live w nogood);
   Justify.wipe_level ctx lvl
 
 (* ------------------------------------------------------------ the root conflict
@@ -2070,11 +2074,12 @@ let decision_entries store =
         else go m ((m, Store.trail_entry store m) :: acc) rest
   in
   let entries = go (-1) [] (Store.level_marks store) in
-  Debug.check "D-0152: decision_entries over the marks agrees with the trail scan"
-    (fun () ->
-      List.equal
-        (fun (i, (e : Store.entry)) (j, e') -> i = j && e == e')
-        entries (decision_entries_scan store));
+  if Debug.enabled then
+    Debug.check "D-0152: decision_entries over the marks agrees with the trail scan"
+      (fun () ->
+        List.equal
+          (fun (i, (e : Store.entry)) (j, e') -> i = j && e == e')
+          entries (decision_entries_scan store));
   entries
 
 (* Did this push land somewhere strictly stronger than its literal names, and if so on
@@ -2204,12 +2209,13 @@ let bridges (ctx : Justify.ctx) trace stats store (decisions : Lit.t list) : Lit
                      because [Domain.settle] walked it over something. If that run is
                      empty the two halves of this module disagree about what a settle is,
                      and the bridge below would be a line with nothing under it. *)
-                  Debug.check
-                    (Printf.sprintf
-                       "M1-T66: %s settled onto %s, so the push crossed at least \
-                        one                         hole"
-                       (Lit.to_string l) (Lit.to_string claim))
-                    (fun () -> holes <> []);
+                  if Debug.enabled then
+                    Debug.check
+                      (Printf.sprintf
+                         "M1-T66: %s settled onto %s, so the push crossed at least \
+                          one                         hole"
+                         (Lit.to_string l) (Lit.to_string claim))
+                      (fun () -> holes <> []);
                   let lits = claim :: Lit.negate l :: List.map Lit.negate ancestors in
                   (* D-0152 (D-0140 J6): the origin is a thunk, rendered only by the
                      writer's audit or the mutation knob, as [Trace]'s are (D-0145). *)
@@ -2948,11 +2954,12 @@ let rec learn_at_conflict engine store ctx trace stats cfg (c : Store.conflict) 
         stats.i_s4_supports <- stats.i_s4_supports + List.length ss;
         stats.i_s4_crossings <- stats.i_s4_crossings + List.length (Learn.crossings ss);
         stats.i_s4_broken_rev <- List.rev_append broken stats.i_s4_broken_rev;
-        Debug.check
-          (match broken with
-          | m :: _ -> m
-          | [] -> "I-S4: the learned clause's supports are live at its derivation")
-          (fun () -> broken = []);
+        if Debug.enabled then
+          Debug.check
+            (match broken with
+            | m :: _ -> m
+            | [] -> "I-S4: the learned clause's supports are live at its derivation")
+            (fun () -> broken = []);
         let cid = Learn.introduce ctx l in
         (match stats.strat with
         | Some st -> (
@@ -3280,8 +3287,9 @@ and branch_split engine store ctx trace stats cfg order decisions (dec : decisio
   | NFail (ng1, _cid1) -> (
       Store.new_level store;
       let lvl2 = Store.level store in
-      Debug.check "search: reopened level matches the one just closed" (fun () ->
-          lvl2 = lvl);
+      if Debug.enabled then
+        Debug.check "search: reopened level matches the one just closed" (fun () ->
+            lvl2 = lvl);
       Writer.set_level ctx.Justify.writer lvl;
       stats.nodes <- stats.nodes + 1;
       let r2 = second store engine ctx trace stats cfg order decisions v k lit in
@@ -3301,9 +3309,10 @@ and branch_split engine store ctx trace stats cfg order decisions (dec : decisio
           close_level ctx ~lvl ~nogood:cid2;
           NFail (ng2, cid2)
       | NFail (ng2, cid2) ->
-          Debug.check
-            "search: each child's nogood names its own decision level before they resolve"
-            (fun () -> mentions_level ng1 lvl && mentions_level ng2 lvl);
+          if Debug.enabled then
+            Debug.check
+              "search: each child's nogood names its own decision level before they \
+               resolve" (fun () -> mentions_level ng1 lvl && mentions_level ng2 lvl);
           ignore cid2;
           let combined = combine_nogoods stats cfg.policy ng1 ng2 ~lvl in
           Writer.set_level ctx.Justify.writer (lvl - 1);
@@ -3536,12 +3545,13 @@ and branch_assign engine store ctx trace stats cfg order decisions (a : assign) 
       dfs engine store ctx trace stats cfg order decisions
 
 and check_decision_landed store lvl outcome =
-  Debug.check "D-0018: a decision is the first trail entry of its own level" (fun () ->
-      (match (outcome : Store.outcome) with
-      | Store.Changed -> true
-      | Store.Unchanged | Store.Conflict _ -> false)
-      && Store.level store = lvl
-      && Store.is_level_start store (Store.trail_length store - 1))
+  if Debug.enabled then
+    Debug.check "D-0018: a decision is the first trail entry of its own level" (fun () ->
+        (match (outcome : Store.outcome) with
+        | Store.Changed -> true
+        | Store.Unchanged | Store.Conflict _ -> false)
+        && Store.level store = lvl
+        && Store.is_level_start store (Store.trail_length store - 1))
 
 (* The low side, [x <= k] -- the decision literal is [~lit]. With [k = lo] (docs/SPEC.md
    3.4's indomain_min) this fixes [x = lo], which is what it has always done.

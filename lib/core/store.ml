@@ -7,7 +7,14 @@
    Invariant I-T1 is the one worth testing directly: backtrack_to restores every domain
    to exactly its state when the level was opened. The reason it holds here is that
    [Domain.t] is immutable - an entry keeps the old value, and restoring is a single
-   array write with no aliasing between the saved and the current domain. *)
+   array write with no aliasing between the saved and the current domain.
+
+   M16-file-review-T1 (D-0186): a [Debug.check] on a path taken per trail entry ([apply],
+   [push_entry], [check_agreement], [remover]) sits under [if Debug.enabled]. Its
+   predicate is a closure over the entry's values, and a closure with free variables is
+   allocated at every call whether or not anything checks it: three per entry, about as
+   many words as the entry itself. The bound walks of [hi_below] and [lo_at_least] are
+   binary searches over the bound histories (see there). *)
 
 module Lit = Baguette_proof.Lit
 
@@ -517,8 +524,9 @@ let deriving_ahead t f =
 (* ------------------------------------------------------------- trail growth *)
 
 let push_entry t e =
-  Debug.check "M6-T15: an entry is pushed at its own [pos]" (fun () ->
-      e.pos = t.trail_len);
+  if Debug.enabled then
+    Debug.check "M6-T15: an entry is pushed at its own [pos]" (fun () ->
+        e.pos = t.trail_len);
   if t.trail_len = Array.length t.trail then (
     let bigger = Array.make (2 * Array.length t.trail) dummy_entry in
     Array.blit t.trail 0 bigger 0 t.trail_len;
@@ -781,8 +789,9 @@ let decision_concludes_nothing (j : Reason.justified) =
    breakpoint. Built only on the failing path, so the enabled-and-passing cost is the
    predicate alone. *)
 let check_agreement t (j : Reason.justified) =
-  Debug.check "D-0124: a deferred reason's [empty] agrees with its materialisation"
-    (fun () -> Reason.is_empty j.reason = (Reason.facts j.reason = []));
+  if Debug.enabled then
+    Debug.check "D-0124: a deferred reason's [empty] agrees with its materialisation"
+      (fun () -> Reason.is_empty j.reason = (Reason.facts j.reason = []));
   if Debug.enabled && not (agreement_holds t j) then
     failwith
       (Printf.sprintf
@@ -901,12 +910,13 @@ let apply t v (r : Domain.result) (j : Reason.justified) =
   | Domain.Changed d ->
       let i = Var.to_int v in
       let old = t.domains.(i) in
-      Debug.check "I-D3: domains only shrink" (fun () ->
-          Domain.lo d >= Domain.lo old
-          && Domain.hi d <= Domain.hi old
-          && Domain.size d < Domain.size old);
-      Debug.check "I-D1: a stored domain is non-empty" (fun () ->
-          Domain.lo d <= Domain.hi d);
+      if Debug.enabled then (
+        Debug.check "I-D3: domains only shrink" (fun () ->
+            Domain.lo d >= Domain.lo old
+            && Domain.hi d <= Domain.hi old
+            && Domain.size d < Domain.size old);
+        Debug.check "I-D1: a stored domain is non-empty" (fun () ->
+            Domain.lo d <= Domain.hi d));
       check_agreement t j;
       check_conclusion t v ~old ~now:d j;
       let why = Explanation.Arena.add t.reasons why in
@@ -1176,8 +1186,9 @@ let remover t ~before ~var value =
       let e = t.trail.(at) in
       if at < before && Domain.mem e.old value then Some e else None
   in
-  Debug.check "M6-T14: remover's history agrees with the trail scan" (fun () ->
-      Option.equal ( == ) r (remover_scan t ~before ~var value));
+  if Debug.enabled then
+    Debug.check "M6-T14: remover's history agrees with the trail scan" (fun () ->
+        Option.equal ( == ) r (remover_scan t ~before ~var value));
   r
 
 (* The values [Domain.settle] walked a bound over on its way to [cur]: the maximal run of
