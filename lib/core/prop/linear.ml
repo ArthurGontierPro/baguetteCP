@@ -751,7 +751,14 @@ let cross_conflict t store (tm : term) snaps =
 let prune_term t store mins ~slack idx (tm : term) =
   let max_term = Checked.add mins.(idx) slack in
   let d = Store.get store tm.x in
-  if tm.coeff > 0 then
+  (* M16-file-review-T2 (D-0190): a FIXED term cannot move, so its two divisions are not
+     made. With [lo = hi = v] and [slack >= 0] (this walk runs only then), a positive
+     coefficient gives [new_hi = v + floor(slack / a) >= hi] and a negative one
+     [new_lo = v - floor(slack / |a|) <= lo]: neither test below passes, and neither
+     division can raise (the divisor is not 0, and [min_int / -1] would need [hi] past
+     [max_int]). [max_term] is still computed first, so an overflow raises where it did. *)
+  if Domain.lo d = Domain.hi d then None
+  else if tm.coeff > 0 then
     let new_hi = floordiv max_term tm.coeff in
     if new_hi < Domain.hi d then
       let h = Store.history store in
