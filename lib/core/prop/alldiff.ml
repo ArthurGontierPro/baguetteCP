@@ -170,7 +170,15 @@
    is about: those ids are written once, by [Encoding.start_proof], before the first
    decision, and never move. Reading them later gives the same answer as reading them
    now. (They do not exist at all when no proof is being written, which is why
-   [cid_of] says so rather than raising [Not_found] several layers down.) *)
+   [cid_of] says so rather than raising [Not_found] several layers down.)
+
+   COST (M16-file-review-T2, D-0190). Stage 1 is O(P n) per pass for P candidate
+   intervals, as above. A tight interval (as many confined variables as values) tests
+   every other variable's LIVE bounds first and snapshots, and looks up in the Hall set,
+   only one that can be pushed. With the proof, a pruning's derivation is O(|halls| w^2)
+   to BUILD, because each excluded value's [excl] telescopes its own rungs, and every
+   build is hash-consed whether or not its line is already on the page (D-0190 section 5
+   measures it at half of a proof-mode run on 2011 cyclic-rcpsp). *)
 
 module Lit = Baguette_proof.Lit
 module Encoding = Baguette_proof.Encoding
@@ -1029,14 +1037,23 @@ let pass t store =
               let y = List.nth all_in k in
               push ~halls ~a ~b ~y ~lower:true y.s_var (b + 1)
             else if n = k then
+              (* M16-file-review-T2 (D-0190): a variable is snapshotted, and looked for in
+                 the Hall set, only once its LIVE bounds show it can be pushed: [y.s_lo]
+                 and [y.s_hi] are those bounds, read again by [snap_of] from the same
+                 store, so the same variables are pushed with the same snapshots. Every
+                 variable of the scope used to be snapshotted (its holes, two root tests)
+                 and compared by name with the Hall set, for every tight interval. *)
               Array.iter
                 (fun tm ->
-                  let y = snap_of store tm in
-                  if not (List.exists (fun s -> s.s_name = y.s_name) all_in) then
-                    if a <= y.s_lo && y.s_lo <= b then
-                      push ~halls:all_in ~a ~b ~y ~lower:true tm.x (b + 1)
-                    else if a <= y.s_hi && y.s_hi <= b then
-                      push ~halls:all_in ~a ~b ~y ~lower:false tm.x (a - 1))
+                  let d = Store.get store tm.x in
+                  let lo = Domain.lo d and hi = Domain.hi d in
+                  if (a <= lo && lo <= b) || (a <= hi && hi <= b) then
+                    let y = snap_of store tm in
+                    if not (List.exists (fun s -> s.s_name = y.s_name) all_in) then
+                      if a <= y.s_lo && y.s_lo <= b then
+                        push ~halls:all_in ~a ~b ~y ~lower:true tm.x (b + 1)
+                      else if a <= y.s_hi && y.s_hi <= b then
+                        push ~halls:all_in ~a ~b ~y ~lower:false tm.x (a - 1))
                 t.terms)
         his)
     los;
