@@ -19,8 +19,6 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M7-T28 (`member`) | new `lib/core/prop/member.ml`, `lib/flatzinc/compile.ml` (member dispatch), `mznlib/`, new `test/models/`, `test/unit/test_prop.ml` (member section) | agent-member (`wave53-member`) | 2026-11-19 |
-| M7-T34 (`member` without width-proportional rows) | on `wave53-member`'s files: `lib/core/prop/member.ml`, `lib/flatzinc/compile.ml` (member dispatch), `mznlib/`, `test/models/member_*`, `test/unit/test_prop.ml` (member section) | agent-member2 (`wave55-member`) | 2026-11-20 |
 | M8-bits-encoding-T4 (two arms, `W = none` and `W = 0`, on the sixteen editions) | run directories under `/scratch/arthur/m8t4/`, `tools/compare/` (additions), `bench/challenge/README.md` (the run's row), a new D-record | agent-m8t4 (`wave55-m8t4`) | 2026-11-20 |
 | M11-complexity-T15 (SPIKE, explanations as a hash-consed DAG; a prototype branch, nothing merged without a decision) | `lib/core/explanation.ml`, `lib/core/justify.ml`, `lib/core/trace.ml`, propagators' explanation construction as needed, on branch `wave55-dag` only | agent-dag (`wave55-dag`) | 2026-11-20 |
 | M11-complexity-T16 (the release build) | `Makefile`, `dune-workspace` or `dune` profile stanzas, `scripts/compare_run.sh` and the bench harnesses (binary path only), `bench/challenge/README.md`, `scripts/README.md` | agent-release (`wave55-release`) | 2026-11-20 |
@@ -457,6 +455,8 @@ section 1. Shares are inclusive, of the whole run.
 
 | Task | Session | Date | Summary |
 |---|---|---|---|
+| M7-T34 (`member` without width-proportional rows) | agent-member2 (`wave55-member`) | 2026-11-20 | **D-0170.** Four bound clauses and two big-M rows over the declared overlap per position; the threshold clauses are lemmas written ahead of the lines that walk a hole (one per switch of the hole's owner), one `Combine` per line, no new constructor. Rows over the 35 Challenge instances 7.47 M -> 77 K, literals -38 %; statuses and incumbents equal to main's. Gate on `e150a70`: see D-0170 §5. Merge recommended |
+| M7-T28 (`member`) | agent-member (`wave53-member`) | 2026-11-19 | **D-0159.** `member` native, DOMAIN over x, y and one selector per position; released with M7-T34, which builds on its branch |
 | M11-complexity-T4 (part 2: search, analysis, retention, learned; T4 DONE) | agent-batch4b (`wave52-batch4b`) | 2026-11-19 | **D-0152.** S1 (learned-instance kind as a byte per engine id), S3 (`decision_entries` over the level marks), S4 (`is_fixed`, `first_fail` stops at size 2), S5 (`kept` by a level table), S6 (`apply_globals` keeps its forward list, skips a unit in force), S2 (lazy citation texts), R3 (typed orders, fifo's no-op sort skipped), J6 (`bridges`' origin a thunk), L2 (`to_linear_row` typed sorts, one-pass grouping), A1 (the 1UIP frontier keeps its count and a heap). R4 done and REVERTED (RSS +6-8 %). Every byte the same (36 measurement runs, lane 301/301 and 289/289); instructions at 40 000 nodes no-proof: mspsp -17.3 %, QR72 -15.6 %, QR48 -11.2 %, openshop -8.0 %, rcpsp_11 -5.9 %, cyclic -0.5 %; RSS -4 to -8 %. Gate on `d4e8477`: `make check` rc 0, peak RSS 99 MB, 193 models identical to gate 57's binary, lane 301/301 and 289/289, binary `d12feec0`. |
 | M8-bits-encoding-T6 (PB analysis over bits rows) | agent-pbbits (`wave52-pbbits`) | 2026-11-19 | **D-0153.** A mixed `Linear` row is offered to PB analysis as the .opb holds it and every bits block is INSTANTIATED through one line (the atom's bridge at the bound in force, the bound row at a declared bound, the pivot's own atom for the pruned block) before anything resolves on it (`ladder.ml`'s bits arm, `pb_analysis.ml`, `Linear.pb_row ?bits_n`, compile.ml's pack lines, one argument at the search.ml call site). Probed first (`probe_pbbits.sh`). Suite at `W = 0`: PB rows 143 -> 213, mixed-row fallbacks 110 -> 0, stdout identical, ten proofs change, all verified; byte-identical at `W = none`. Gate: `make check` rc 0 (100 MB), 195 models identical to gate 57, diff lane equal but for eight `bits0` runs (D-0153 section 6, re-record after the merge) |
 | M7-T31 and M6-T23 | agent-proofbugs (`wave50-proofbugs`) | 2026-11-19 | **D-0148, D-0149.** M7-T31: the refused nogoods on hrc were a FACTLESS pruning (a learned unit or the improving bound re-applied by `apply_globals`) that settled over a hole, taken for a root by the decision closure, so the hole's levels left the nogood. `Analysis.rests_on_nothing` expands it like any settle. Reachable at default flags (`opt_global_settles_hole_sat`, refused by main's binary), `test_analysis` scene 7, a median/strategy sweep of 1 233 runs all VERIFIED. M6-T23: not the finaliser. The stop was never asked inside one PB analysis (cargo) or one conflict's trace (cable, plus a degenerate memo hash, 6.6x), and both now poll it. Overshoot at 300 s: cargo > 2 100 s -> 0.1 s, cable 1 209 s -> 10 s. The I-P7 alarm does not fire on main. Default proofs byte-identical (192/193 models, every lane run of this row) |
@@ -643,6 +643,19 @@ Four byte-identical cuts of the per-run and per-wake cost (`Store.run_as`, `Engi
 codes-cp note gave the cardinality rows is the CLAUSES' (`Clause.t = Pb.t`). Two decisions wait (D-0169 section 5): the
 release build profile (-17 % more), and not propagating learned clauses that cannot prune (-37 to -57 %, proofs identical).
 
+### M7-T34 handoff, 2026-11-20 (agent-member2, `wave55-member`): D-0170
+
+`member` writes at most six rows per position (four bound clauses, two big-M rows over the declared overlap) instead of two
+per threshold; a line that walks a hole is derived ahead behind threshold lemmas, all else is one `rup` against the rows.
+Rows 7.47 M -> 77 K over the 35, no status moved against main; `wave55-member` carries M7-T28 too, merge it whole.
+
+### M7-T28 (`member`) handoff, 2026-11-19 (agent-member, `wave53-member`): D-0159
+
+`member` native (`lib/core/prop/member.ml`, mznlib `fzn_member_int`/`_bool`): DOMAIN over x, y and
+one selector per position, BOUND-form rows (D-0151's value form measured short), one `rup` per
+pruning except a value of y two holes exclude, derived ahead (I-X10 `Needs_derivation`). Challenge:
+35 of 40 reach it, complete 1 -> 1, no answer changed; the rows' width cost and its lever are D-0159
+§5. Gate on `30ce66a` green; nothing to re-record at merge.
 ### 2026-11-20 (agent-thunk, `wave55-thunk`): M11-complexity-T13, D-0168
 
 A thunk is released once its line is written: it keeps the id and level, drops its tree, and the

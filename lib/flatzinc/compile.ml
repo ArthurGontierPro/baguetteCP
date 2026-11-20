@@ -165,6 +165,7 @@ module Maxmin = Baguette_core.Maxmin
 module Cumulative = Baguette_core.Cumulative
 module Regular = Baguette_core.Regular (* M7-T28, D-0146 *)
 module Inverse = Baguette_core.Inverse (* M7-T28, D-0151 *)
+module Member = Baguette_core.Member (* M7-T28, D-0159 *)
 module View = Baguette_core.View
 
 (* M2-L12/D-0052: the clause propagator was widened to general order literals and its
@@ -737,6 +738,10 @@ let held_families (m : Model.t) : (int, string list) Hashtbl.t =
       | Model.Inverse iv ->
           (* M7-T28 (D-0151): the channel rows are over both arrays' ladders *)
           hold "inverse" (iv.Model.inv_f @ iv.Model.inv_g)
+      | Model.Member mb ->
+          (* M7-T28 (D-0159, D-0170): every line is a [Clause] over the ladders of x
+             and y, and so are the threshold lemmas written ahead of some *)
+          hold "member" (mb.Model.mem_y :: mb.Model.mem_x)
       | Model.Int_lin_le _ | Model.Int_lin_eq _ | Model.Int_le _ | Model.Int_lt _
       | Model.Int_eq _ | Model.Bool_clause _ | Model.Array_bool_or _
       | Model.Array_bool_and _ | Model.Bool_eq _ | Model.Bool_not _
@@ -1502,6 +1507,136 @@ let compile (m : Model.t) : t =
         p)
     :: (stage2 iv.Model.inv_f @ stage2 iv.Model.inv_g)
   in
+  (* ------------------------------------------------------------------------ M7-T28
+
+     `baguette_member(x, y, b)` (D-0151 section 3, D-0159, D-0170): the rows
+     lib/core/prop/member.ml's header states, in this order -- OR over the selectors, then
+     per position k, [a, b] the overlap of the two DECLARED hulls (M7-T34):
+
+       ~b_k \/ [x_k >= a]   ~b_k \/ ~[x_k >= b+1]   ~b_k \/ [y >= a]   ~b_k \/ ~[y >= b+1]
+       F_k   sum_{v=a+1..b} ([x_k >= v] + ~[y >= v]) + (b - a) ~b_k >= b - a
+       G_k   the same with x_k and y swapped
+
+     a constant literal folded (a clause it makes true not written), a big-M row only when
+     b > a, and the single row `~b_k` when the hulls are disjoint. At most six rows per
+     position whatever the width; the threshold clauses D-0159 posted here, two per value
+     of the overlap, are now lemmas member.ml writes into the proof where a line needs
+     one. A position whose x_k IS y has no rows: b_k is free.
+
+     Refused with a position: a selector count other than one per position, and a
+     selector that is not a Boolean variable declared on 0..1, distinct from the others
+     and from x and y (the library introduces them; a hand-written .fzn that gets them
+     wrong is told so). *)
+  let post_member pos (mb : Model.member) =
+    let builtin = "baguette_member" in
+    let decl i =
+      let d = Store.get store (Var.of_int i) in
+      (Domain.lo d, Domain.hi d)
+    in
+    let xs = Array.of_list mb.Model.mem_x and bs = Array.of_list mb.Model.mem_b in
+    let n = Array.length xs in
+    if Array.length bs <> n then
+      Error.failf pos
+        "builtin `%s`: %d selectors for %d positions; there must be one each" builtin
+        (Array.length bs) n;
+    let letters =
+      List.filter_map
+        (function Model.Var i -> Some i | Model.Const _ -> None)
+        (mb.Model.mem_y :: mb.Model.mem_x)
+    in
+    let svars =
+      Array.map
+        (function
+          | Model.Var i when decl i = (0, 1) && not (List.mem i letters) -> i
+          | _ ->
+              Error.failf pos
+                "builtin `%s`: a selector is not a Boolean variable declared on 0..1 and \
+                 distinct from x and y"
+                builtin)
+        bs
+    in
+    if List.length (List.sort_uniq compare (Array.to_list svars)) <> n then
+      Error.failf pos "builtin `%s`: a selector occurs twice" builtin;
+    let cell = function
+      | Model.Const c -> Member.Fixed c
+      | Model.Var i ->
+          let dlo, dhi = decl i in
+          Member.Cell { var = Var.of_int i; name = name_of pos i; dlo; dhi }
+    in
+    let cx = Array.map cell xs and cy = cell mb.Model.mem_y in
+    let hull = function
+      | Member.Fixed c -> (c, c)
+      | Member.Cell { dlo; dhi; _ } -> (dlo, dhi)
+    in
+    let blit k = Lit.ge (name_of pos svars.(k)) 1 in
+    let or_row = Encoding.add_constraint encoding (Opb.clause (List.init n blit)) in
+    let same a b =
+      match (a, b) with
+      | Member.Cell { var = u; _ }, Member.Cell { var = w; _ } -> Var.equal u w
+      | _ -> false
+    in
+    (* [c >= v] as the constant true, the constant false, or a literal. *)
+    let ge c v =
+      match c with
+      | Member.Fixed k -> if k >= v then `T else `F
+      | Member.Cell { name; dlo; dhi; _ } ->
+          if v <= dlo then `T else if v > dhi then `F else `L (Lit.ge name v)
+    in
+    let not_ = function `T -> `F | `F -> `T | `L l -> `L (Lit.negate l) in
+    let clause parts =
+      if not (List.mem `T parts) then
+        let lits = List.filter_map (function `L l -> Some l | `T | `F -> None) parts in
+        ignore (Encoding.add_constraint encoding (Opb.clause lits) : int)
+    in
+    (* sum_{v = a+1..b} ([p >= v] + ~[q >= v]) + (b - a) ~b_k >= b - a: p - q >= 0 over
+       the overlap's rungs, both being in [a, b]. Every [v] is a rung of both: a cell in
+       the overlap with b > a is a variable. *)
+    let big_m nb p q a b =
+      if b > a then
+        let rung c v = match ge c v with `L l -> l | `T | `F -> assert false in
+        let terms =
+          List.concat_map
+            (fun v -> [ (1, rung p v); (1, Lit.negate (rung q v)) ])
+            (List.init (b - a) (fun i -> a + 1 + i))
+        in
+        ignore
+          (Encoding.add_constraint encoding (Opb.ge (terms @ [ (b - a, nb) ]) (b - a))
+            : int)
+    in
+    Array.iteri
+      (fun k c ->
+        if not (same c cy) then
+          let nb = Lit.negate (blit k) in
+          let lx, hx = hull c and ly, hy = hull cy in
+          let a = max lx ly and b = min hx hy in
+          if a > b then clause [ `L nb ]
+          else (
+            (* x_k and y in [a, b] under b_k *)
+            clause [ `L nb; ge c a ];
+            clause [ `L nb; not_ (ge c (b + 1)) ];
+            clause [ `L nb; ge cy a ];
+            clause [ `L nb; not_ (ge cy (b + 1)) ];
+            (* F_k, G_k: x_k - y >= 0 and y - x_k >= 0 over the overlap's rungs *)
+            big_m nb c cy a b;
+            big_m nb cy c a b))
+      cx;
+    let aliased = List.length (List.sort_uniq compare letters) <> List.length letters in
+    let p = Member.make store ~xs:cx ~y:cy ~sels:(Array.map Var.of_int svars) ~or_row in
+    if aliased then
+      [
+        (fun id ->
+          Propagator.pack ~id
+            (module Member.Aliased : Propagator.S with type t = Member.t)
+            p);
+      ]
+    else
+      [
+        (fun id ->
+          Propagator.pack ~idempotent:true ~id
+            (module Member : Propagator.S with type t = Member.t)
+            p);
+      ]
+  in
   (* ===================================================================== end M7-T28 *)
   (* ------------------------------------------------------------------------ M4-T9
 
@@ -2232,6 +2367,7 @@ let compile (m : Model.t) : t =
           | Model.Array_int_minimum (mo, xs) -> post_maxmin pos ~dir:Maxmin.Min mo xs
           | Model.Regular r -> post_regular pos r (* M7-T28, D-0146 *)
           | Model.Inverse iv -> post_inverse pos iv (* M7-T28, D-0151 *)
+          | Model.Member mb -> post_member pos mb (* M7-T28, D-0159 *)
         with Checked.Overflow msg ->
           reject_row pos
             ~what:

@@ -1149,6 +1149,19 @@ let ix10_table =
        all_different instances an inverse posts beside it (stage 2) are alldiff.ml's and
        keep its Needs_derivation; their pairwise rows are root lemmas. *)
     ("inverse.ml", Single_row);
+    (* M7-T28 (D-0159, D-0170): member, over at most six rows per position since M7-T34
+       (four bound clauses and two big-M rows over the declared overlap).
+       A line that only compares bounds is one rup against them (a selector death by
+       disjoint bounds, the last selector set by OR, a bound carried under a set selector,
+       a value of y every live position excludes by a bound). A line whose argument walks
+       a HOLE is not: the rows propagate no rung of a ladder, so the threshold lemmas
+       R+/R- that carry a bound across are written AHEAD of it (a selector death across
+       holes, a hole carried under a set selector, a value of y one live position excludes
+       by a hole), and so is the gap shape of D-0159 (two or more such positions, a case
+       split per selector: one lemma per position and the OR row, summed and divided).
+       All made under [Store.deriving_ahead]; [test_ix10_derive_ahead] drives the gap
+       shape and test_mutation.ml's member-chase lanes the lemmas. *)
+    ("member.ml", Needs_derivation);
   ]
 
 (* (a) CLOSURE. OCaml cannot reflect over its own modules, so the only way to notice a
@@ -1211,15 +1224,15 @@ let test_ix10_closure () =
       let needs =
         List.map fst (List.filter (fun (_, c) -> c = Needs_derivation) ix10_table)
       in
-      if needs <> [ "alldiff.ml"; "gcc.ml"; "cumulative.ml" ] then
+      if needs <> [ "alldiff.ml"; "gcc.ml"; "cumulative.ml"; "member.ml" ] then
         Printf.printf
           "     Needs_derivation is now %s. test_ix10_derive_ahead below drives\n\
-          \     `alldiff.ml`, `gcc.ml` and `cumulative.ml` and nothing else, so any\n\
-          \     other family here is classified but UNCHECKED: give it a scene there.\n\
-          \     See D-0040.\n"
+          \     `alldiff.ml`, `gcc.ml`, `cumulative.ml` and `member.ml` and nothing\n\
+          \     else, so any other family here is classified but UNCHECKED: give it a\n\
+          \     scene there. See D-0040.\n"
           (String.concat ", " needs);
       check "I-X10 closure: every Needs_derivation family is one the content check drives"
-        (needs = [ "alldiff.ml"; "gcc.ml"; "cumulative.ml" ])
+        (needs = [ "alldiff.ml"; "gcc.ml"; "cumulative.ml"; "member.ml" ])
 
 (* (b) CONTENT. The closure check is a name list; on its own it would pass forever even
    if I-X10 were false. This asserts the checker's actual verdict on the shape a
@@ -1440,6 +1453,33 @@ solve :: int_search([s3,s4,s2,s1,s0], input_order, indomain_max, complete) satis
 |}
 
 let ix10_cumul_line = "rup +1 ~s2_ge_2 +1 s2_ge_3 >= 1 ;"
+
+(* M7-T28 (D-0159). member's one [Needs_derivation] shape: x1 and x2 over {1, 3} (declared
+   holes), x3 and y over 1..3, w1 w2 w3 a pigeonhole only while x3 = 3. Largest-first on
+   x3: x3 = 3 leaves the value 2 of y held by no live position, x1 and x2 excluding it by
+   their HOLE only and x3 by the decision's bound -- the line pinned below, `y <> 2` on
+   the tail `x3 >= 3`. The w branch then fails, so the line is on the page; x3 = 2
+   solves, so the scene is SAT and a refusal of the line means something (D-0053). *)
+let ix10_member_source =
+  {|var {1,3}: x1;
+var {1,3}: x2;
+var 1..3: x3;
+var 1..3: y;
+var bool: b1;
+var bool: b2;
+var bool: b3;
+var 1..2: w1;
+var 1..2: w2;
+var 1..3: w3;
+constraint baguette_member([x1, x2, x3], y, [b1, b2, b3]);
+constraint int_ne(w1, w2);
+constraint int_ne(w1, w3);
+constraint int_ne(w2, w3);
+constraint int_lin_le([1, 1], [w3, x3], 5);
+solve :: int_search([x3, w1, w2, w3, y, x1, x2], input_order, indomain_max, complete) satisfy;
+|}
+
+let ix10_member_line = "rup +1 ~y_ge_2 +1 y_ge_3 +1 ~x3_ge_3 >= 1 ;"
 
 let ix10_gcc_source =
   {|var 1..4: q;
@@ -2271,6 +2311,8 @@ let () =
     ~src:m7t24_hole_source ~claim:m7t24_hole_line ~outcome:`Sat ();
   test_ix10_derive_ahead ~use_order:true ~tag:"(M4-T10, a cumulative time-table push)"
     ~src:ix10_cumul_source ~claim:ix10_cumul_line ~outcome:`Sat ();
+  test_ix10_derive_ahead ~use_order:true ~tag:"(M7-T28, a member value two holes exclude)"
+    ~src:ix10_member_source ~claim:ix10_member_line ~outcome:`Sat ();
   test_m7t21_element ();
   test_is4_gate ();
   test_m6t15_position_of ();

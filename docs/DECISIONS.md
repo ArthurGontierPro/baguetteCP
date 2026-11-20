@@ -18452,6 +18452,206 @@ for the verdicts. The lane's rc is now the verdict and must count as red. After 
 re-record with `scripts/scaling_lane.sh --update -j 16` on the merged binary in its own commit;
 it refuses while a line is OVER and keeps every line whose growth did not go down.
 
+## D-0159  M7-T28 continued: `member` native -- one selector per position as a store variable, the rows in the BOUND form (D-0151's value form measured short), domain consistency, every pruning one `rup` except a value of y two holes exclude, which is derived ahead
+
+Status: DONE (built, measured, gated on the branch; the orchestrator merges)
+Date: 2026-11-19
+Task: M7-T28 (agent-member, `wave53-member`), the design of D-0151 section 3.
+Touches: `lib/core/prop/member.ml` (new), `lib/flatzinc/compile.ml` (`post_member`, its
+dispatch arm and its `hold "member"`), `lib/flatzinc/model.ml` and `builder.ml` (the `Member`
+constructor, its oracle and `baguette_member`/`baguette_member_bool`), `mznlib/fzn_member_int.mzn`,
+`mznlib/fzn_member_bool.mzn`, `mznlib/test/member_src_{sat,unsat,bool_sat}.mzn`,
+`test/models/member_{sat,unsat,bool_sat,gap_sat}.fzn` and their `test/expected/*.out`,
+`test/unit/test_prop.ml`, `test_compile.ml`, `test_trace.ml` (the I-X10 row and scene),
+`test_mutation.ml` (three lanes), `bench/member_spike/`, SPEC 2.1, PROOF-FORMAT section 4,
+ARCHITECTURE section 1 and CLAUDE.md's map. No `Explanation` constructor, nothing in
+`justify.ml`, `explanation.ml`, `learned.ml`, `element.ml`, `alldiff.ml`, `trace.ml`,
+`search.ml` or `encoding.ml`.
+
+### 1. The one place this departs from D-0151 section 3: the rows
+
+Section 3.1 wrote the VALUE form, per position i and value v of y,
+`~b_i \/ y <> v \/ x_i >= v` and `~b_i \/ y <> v \/ x_i <= v`. Its probes never put two HOLES
+of x_i inside y's range under one selector death, nor two hole-excluded positions under one
+value of y. Both were probed here before any OCaml (`bench/member_spike/gen_rows_probe.py`,
+`probe_rows.sh`, VeriPB 3.0.2 on fataepyc-06; x1, x2, x3, y over 1..5, model holes x1 <> 2,
+x1 <> 4, x2 <> 2, y <> 3, the OR row), against the value form (V) and the BOUND form (B), the
+order encoding's own equality under the selector:
+
+    R+(i, v)   ~b_i \/ ~[y >= v] \/ [x_i >= v]      R-(i, v)   ~b_i \/ ~[x_i >= v] \/ [y >= v]
+
+| probe | content | V | B |
+|---|---|---|---|
+| q1 | `~b1` with y in 2..4 by facts: x1 in {1,3,5} and y in {2,4} share nothing, two holes of x1 inside y's range | refused, RUP wording | VERIFIED |
+| q1w | q1 without `y <= 4` (y = 5 = x1 matches) | refused | refused |
+| q2 | `y <> 2`, x1 and x2 excluding 2 by a hole only, x3 by `x3 >= 3` | refused | refused |
+| q2a | q2 after one lemma `~b_i \/ y <> 2` per hole-excluded position | VERIFIED | VERIFIED |
+| q2p | q2 after the three lemmas, `pol OR a1 + a2 + a3 + 3 d` and `ia` of the claim clause from it | VERIFIED | VERIFIED |
+| q2w | q2p's lemmas with x3's fact dropped from its own | refused (at a3) | refused |
+| q2c | `y <> 2` with ONE hole-excluded position | VERIFIED | VERIFIED |
+| q3 | D-0151's m5 (x1 <= 2 from y <= 2, x2 >= 3, x3 >= 3) with no selector line | refused | VERIFIED |
+| q4, q4h | under a set selector: x1 <= 4 from y <= 4, x2 <> 3 against y's hole | VERIFIED | VERIFIED |
+| q5 | a wrong `y <> 5` | refused | refused |
+| q6 / q7 | `sol` y = x1 = 5 with b1 / with b2 instead | SATISFIABLE / refused, "falsifies" | same |
+
+q1 is the finding. A selector death is a trail entry whose line must be RUP alone, and in the
+value form it is not once x_i has two holes inside y's range: y = v forces x_i = v and the hole
+`x_i <> v` is a two-literal clause, so unit propagation pushes y past neither the lowest such
+hole from below nor the highest from above. The bound form chases both lower bounds upward,
+each hole pushing its own variable past it through its own line and R+/R- carrying the bound
+to the other. Same row count to within the folding, three literals instead of four, and q3
+shows a letters-only death is even RUP without the selector lines (they stay: the holes need
+them). So the rows are the bound form, per threshold of the union of the two declared hulls,
+a constant literal folded, and a threshold below the first or past the last that matters not
+written (a ladder clause implies it); two hulls more than one apart leave the single row `~b_i`.
+
+q2 is the second fact, and no row form removes it: a value of y that two or more LIVE
+positions exclude by a hole only needs one case split per selector (b_i /\ y = v gives
+x_i >= v and x_i <= v, and `x_i <> v` is two literals). Section 3.2 said "every pruning one
+`rup`"; that holds for every pruning but this one (section 3).
+
+### 2. The propagator, as built
+
+`lib/core/prop/member.ml`, its header the statement. Selectors are store variables in the
+scope, introduced by mznlib's `let` exactly as regular's flags are. One call, to its fixpoint:
+
+- **K** b_i dies when dom(x_i) and dom(y) share no value (if b_i is set: a conflict);
+- **C** no live selector is the OR row's conflict; one left and not set is set to 1;
+- **E** for every set selector, y and x_k are made equal domain-wise (bounds, then the
+  interior values the other lacks); K, C and E repeat until E changes nothing;
+- **S** with no selector set, a value of y no live position holds is removed.
+
+Afterwards every remaining value of x, y and the selectors extends to a solution (the header
+argues each kind), so the tag is `Domain`; with a variable twice among x and y the same code is
+packed as `Member.Aliased`, `Checking`, as regular does (x_i and x_j one variable with b_i and
+b_j the last two live selectors: a value of it outside y is unsupported and stays). The two
+sections 3.2 left open are taken the way the probes support: the selectors are cited through
+the TAILS of their own lines (D-0151 section 1's recursion; q3 shows bound-only tails would
+even do without them, the holes are why they stay), and y and x_k are equalised through R+/R-
+at one threshold (q4, q4h).
+
+The reasons are on the LETTERS (x and y) with regular.ml's machinery, copied rather than shared
+(that module is not this task's): a slot per distinct variable, the reason under construction
+as stamped arrays keeping the strongest fact per letter and direction, a selector's tail cached
+with the trail entry it belongs to and read back through `Store.hi_support`/`lo_support`. A
+selector a decision fixed is cited as itself.
+
+### 3. The proof, and the one shape written ahead
+
+K, C, E and S are each one `rup` (the header gives each argument; K is q1's chase, S is the OR
+row with the dead selectors' lines firing on their tails). S's line is NOT RUP when two or more
+live positions exclude v by a hole only (q2). That removal is made under
+`Store.deriving_ahead`, and its justification is the derivation `Trace.derive_ahead` writes
+before the line:
+
+- one lemma per position, `A_i = ~b_i \/ y <> v \/ ~F_i` with F_i the facts excluding v from
+  x_i (each a `rup`: assume b_i and y = v, R+/R- pin x_i to v, F_i refutes it, through the
+  hole's own line); for a dead position its death line, which `Justify`'s claim index finds on
+  the page; nothing for a selector a decision killed (its literal stays in the sum, as its fact
+  is in the reason);
+- `OR + sum A_i`, divided by the lemmas' count: exactly the clause `y <> v \/ ~F` (q2p pins it
+  with `ia`).
+
+The trace line then rests on the lemmas (q2a). The `pol` is not load-bearing for that line; it
+is what a CITATION of the entry reads (`Justify.emit` of the entry's explanation, as an
+order-arm derivation citing the bound would), so the explanation still derives exactly what the
+line states. Under I-X10 the family is `Needs_derivation` for this shape and `Single_row` for
+every other; `test/unit/test_trace.ml` classifies it so and drives the shape in
+`test_ix10_derive_ahead` (the line refused alone at the RUP wording, a `pol` ahead of it in the
+solver's own proof, the whole proof VERIFIED).
+
+### 4. Tests
+
+- `test/unit/test_prop.ml`: a brute force over 1 500 random scenes (n in 2..3 over 1..4, a
+  constant sometimes, y over 1..4, bounds, root holes and selectors fixed by the scene, one
+  variable twice in 320 of them): I-P1, domain consistency (non-aliased), I-P2 and every reason
+  SOUND over the declared domains -- 803 scenes pruned, 65 conflicts, 1 733 reasons, 1 258
+  selector facts all on selectors the scene fixed (none on one the propagator moved), 51
+  removals made ahead with 110 lemmas each true on every solution; no violation. Three scenes
+  end to end on veripb: the shape written ahead (its line found, a `pol` just before it), the
+  parity refutation, the Boolean spelling.
+- `test/unit/test_compile.ml`: nine scenes brute-forced over their declared box and checked by
+  veripb (search, a constant in x, a constant y above both hulls, y one of the x, a variable
+  twice in x, interleaved root holes, an empty x, the Boolean spelling) and the four refusals
+  (selector count, a selector not on 0..1, a selector among x, a selector twice), 41 checks.
+- `test/unit/test_trace.ml`: the I-X10 row and scene above.
+- `test/unit/test_mutation.ml`, three lanes, each refused at the RUP wording: `death-fact`
+  (b4's death under x4 >= 4 with its one tail literal dropped), `gap-lemma` (x3's lemma of the
+  derivation ahead with its last literal, the bound that excludes 2, dropped), `no-ahead` (the
+  `pol` and the three lemmas it cites deleted: the removal's own line is refused).
+- Four models: `member_sat`, `member_unsat` (parity: y = x1 + x2 over odd x, refuted by search
+  through selector deaths across the holes; the root removes y's even values ahead), and
+  `member_bool_sat` flattened by MiniZinc 2.10.1 from `mznlib/test/` (MUST-EMIT the route,
+  MUST-NOT-EMIT std's reifications, SOLVES-AS), and the hand-written `member_gap_sat`. Each
+  VERIFIED on the node; Chuffed agrees on the three sources.
+
+`fzn_member_int` keeps a constant array a domain restriction (`y in {...}`), which the
+flattener does better than any propagator; `fzn_member_bool` is the same relation over 0..1.
+
+### 5. The Challenge
+
+**Census.** D-0122's 40 instances call `member` in their sources
+(`bench/member_spike/select_member.py`); flattened with this branch's mznlib
+(`member_routes.sh`), 35 reach `baguette_member`: the 20 elitserien handball (8 calls of 3
+positions) and 15 code-generator (81 to 1 733 calls, up to 23 positions). The 5
+multiple-constant-multiplication instances call it in a reified context over a constant array,
+which is std's `set_in_reif` route and not this one. No instance reaches `baguette_member_bool`.
+
+**Runs.** `meas_member.sh` on fataepyc-06, `compare_run.sh` over the 35, 300 s, proof on,
+veripb on every complete answer, 12 + 12 at a time. Before: main `13dadc9` (binary `64ec63e0`),
+flattened with main's mznlib, so member is std's `int_eq_reif` per position and a clause.
+After: this branch at `e79a2fa` (main merged in; `lib/` and `bin/` differ from main by this
+record only).
+
+| 35 instances, 300 s | OPT/UNSAT (VERIFIED) | timeout with a solution | timeout, none | CAPPED (proof > 16 GB) | REFUSED (8 GB heap) |
+|---|---|---|---|---|---|
+| before | 1 | 2 | 24 | 6 | 2 (one with a solution) |
+| after | 1 | 2 | 23 | 7 | 2 (one with a solution) |
+
+The complete answer is the same instance both sides (`2023_code-generator_mips_gcc.flow.find_regno_partial`,
+OPT 6340, 38.5 s, VERIFIED); the incumbents are the same values. Two statuses moved, neither an
+answer: `gcc.function.use_return_register` from a timeout to the heap budget at 283 s (both
+without a solution), `mesa.eval.gl_Map1f` from the heap budget to the proof cap at 165 s (both
+without a solution). **No answer changed.**
+
+**Why, read off the search** (`meas_stats.sh`, 60 s, `--no-proof --stats`, six of the 35):
+the handball instances visit about 100 nodes a minute on BOTH sides, and member's 8 instances
+are not among the ten busiest families (int_eq_reif and int_ne_reif lead with 470 to 510 runs
+a node) -- the bottleneck there is elsewhere. On the code-generator, the node count moves both
+ways (`rasta.mapping.comp_Jboundaries` 4 670 -> 5 659, `gcc.cfgrtl.update_br_prob_note`
+1 527 -> 1 447, `find_regno_partial` completes on both), peak RSS within 2 %; those instances
+end on the proof cap or the heap, which member neither causes nor cures.
+
+**What it costs** (`member_rows.py`, the exact rows `post_member` writes): two rows per
+threshold of the hulls' overlap per position, from 320 rows on a handball instance to 1.39 M on
+`hexagon_gcc.reload1.gen_reload` and 3.77 M on `gl_Map1f` (2.83 M constraints in its .fzn);
+std's decomposition is a handful of rows per position. That is D-0028's width-proportionality,
+paid per position. **The lever, not built and not measured:** post `b_k -> x_k = y` as the two
+big-M rows `x_k - y + M ~b_k >= 0` and its mirror (width-independent), and write a threshold
+row only when a pruning needs it, as a lemma -- each is RUP from its big-M row (assume b_k,
+`y >= v` and `x_k < v`: the ladders bound both sides and the row is violated), the way
+`Encoding.add_cited_lemma` serves inverse's stage 2. Its probes come first: the chase of
+section 3 needs the rows on the page, so a lazy scheme writes them ahead of each line.
+
+### 6. The gate (fataepyc-06, a fresh clone of `30ce66a`; later commits are documentation)
+
+- `make check` rc 0: 4 307 `ok` lines, 0 FAIL, models 202 passed and 0 failed, peak RSS
+  103 MB, 28 s wall.
+- Every `test/models/*.fzn` against main's binary (`64ec63e0`) at the default encoding and at
+  `--bits-above 0`, 404 runs: stdout, exit code, `.opb` and `.pbp` byte-identical on every
+  pre-existing model; the 32 differences are the four new member models (main refuses
+  `baguette_member`), 4 artefacts x 2 encodings each.
+- `make diff --tier all -j 24`: 301 of 301 equal; `--debug`: 289 of 289 equal;
+  `make scaling -j 16`: ok on every line. No lane instance reaches member; `bench/diff` is
+  untouched.
+
+### 7. Next
+
+`bin_packing_load` is the last of D-0122's decomposed globals in this row (65 instances, 0
+complete, 48 refused by the front end before any search). It has no design record: the first
+step is to read why the 48 are refused (the decomposition's width or heap, D-0122 only counts
+them), then probe a per-bin load row the way section 1 probed these rows. For member itself,
+section 5's lazy big-M lever is the one measured cost left.
 ## D-0155  M11-complexity-T8: `Element`'s fact deduplication hashed and linear, and the other per-pruning scans of element.ml gone; `2011_black-hole_10` from 168 G to 52 G instructions, every byte the same
 
 Status: DONE (built, measured, gated on a fresh clone; every lane equals its reference, nothing to re-record)
@@ -20153,3 +20353,153 @@ the late cost under the baseline, so re-baselined with `--update -j 16` in its o
 
 Not proposed here, because the row forbids it and it is a separate decision: learning less (the 15 %
 of conflict analysis). (b) keeps every learned clause on the page and only stops running it.
+## D-0170  M7-T34: `member` without width-proportional rows -- `b_k -> x_k = y` as four bound clauses and two big-M rows over the declared overlap, the threshold clauses now lemmas written ahead of the lines that walk a hole
+
+Status: DONE (built, measured on the 35 Challenge instances, gated on a fresh clone; the
+orchestrator merges)
+Date: 2026-11-20
+Task: M7-T34 (agent-member2, `wave55-member`, from `wave53-member`'s `1a913cf`), D-0167 item 2,
+D-0159 section 5's lever.
+Touches: `lib/core/prop/member.ml`, `lib/flatzinc/compile.ml` (`post_member` and its `hold`
+comment), `test/unit/test_prop.ml` (member brute force), `test_mutation.ml` (three lanes),
+`test_trace.ml` (the I-X10 comment), `test/models/member_{chase_sat,eqhole_sat,eqhole_unsat}.fzn`
+and their expected outputs, `bench/member_spike/` (`fuzz_member.py` new, `meas_member.sh`,
+`member_rows.py`), PROOF-FORMAT section 4, ARCHITECTURE section 1, CLAUDE.md's map. No
+`Explanation` constructor, nothing in `justify.ml`, `trace.ml`, `explanation.ml`, `encoding.ml`.
+
+### 1. The rows
+
+Per position k, [a, b] the overlap of the DECLARED hulls of x_k and y:
+
+    ~b_k \/ [x_k >= a]    ~b_k \/ ~[x_k >= b+1]    ~b_k \/ [y >= a]    ~b_k \/ ~[y >= b+1]
+    F_k   sum_{v=a+1..b} ([x_k >= v] + ~[y >= v]) + (b - a) ~b_k >= b - a
+    G_k   the same with x_k and y swapped
+
+a constant literal folded (a clause it makes true not written), `~b_k` alone for disjoint hulls,
+the big-M pair only when b > a. Under b_k the clauses put both variables in [a, b], where each is
+a plus its rungs a+1..b that hold, so F_k and G_k are x_k >= y and y >= x_k; without b_k every row
+is true. At most six rows per position whatever the width.
+
+The row the task named first, over the WHOLE hulls (`x_k - y + M ~b_k >= 0`, M = hi y - lo x_k),
+was built and counted before it was measured: a rung of an order-encoded variable is a literal of
+any linear row over it, so that row has |hull x_k| + |hull y| literals, and over the 35 instances
+the pair cost 46.7 M literals against the threshold clauses' 22.4 M. Restricted to the overlap the
+pair costs 4 (b - a) + 2 literals against the clauses' ~6 (b - a). The literal mass stays
+width-proportional on the order encoding (only a bits encoding could change that); the row COUNT
+does not.
+
+### 2. Soundness and the justifications
+
+A line is still one `rup`. The rows propagate the SELECTOR (F_k's coefficient on ~b_k exceeds its
+slack once the x/y part is violated) and refute two bounds that cross under b_k (`x_k <= p` and
+`y >= q > p`: a bound clause when p < a or q > b, F_k otherwise), but no ladder rung: every rung has
+coefficient 1 and the slack is the width left. So:
+
+- lines that only compare bounds are RUP against the rows directly: a selector death by disjoint
+  bounds, the last selector set by OR, a bound carried under a set selector, a value of y every
+  live position excludes by a bound (each bound-excluded selector dies on its row);
+- a line whose argument walks a HOLE needs the bound-form clause of D-0159 at the threshold where
+  the bound crosses from one variable to the other. Those clauses are now LEMMAS:
+  `R+(k, v) = ~b_k \/ ~[y >= v] \/ [x_k >= v]` and its mirror R-, each RUP from the rows and the
+  ladders (assume b_k, [y >= v], ~[x_k >= v]: for v in a+1..b, F_k's left side is at most
+  (v-1-a) + (b-v) < b - a; for v <= a or v > b a bound clause closes it).
+
+Which lemmas: a selector death across holes walks runs of one OWNER's holes (x_k or y) on their own
+lines, and needs a lemma only where the owner switches; it starts at whichever end is free (the
+owner of the end value is the variable whose bound the reason cites, or the declared overlap ends
+there), with one more lemma when neither is, and when both are the two walks meet at the last
+switch, whose lemma is dropped. A hole carried under a set selector needs one lemma, a value of y
+one live position excludes by a hole one, none at an end of the overlap.
+
+The derivation ahead. Such a line is made under `Store.deriving_ahead`; its explanation is ONE
+`Combine`: each lemma as a `Term` of its `Clause` (a `rup`) followed by the `Weaken` of all its
+literals (the lemma becomes a constant), then the line's own `Clause` scaled by k = 1 + the degree
+the weakening cost, divided by k. A `Combine` emits its terms left to right, so the lemmas are on
+the page before the line's clause is checked; the result is exactly the line's clause (coefficients
+k/k, degree k - (k-1) = 1), which is what a later citation of the entry reads. D-0159's gap shape
+(two hole-excluded positions, a case split per selector) keeps its OR + lemmas divided by their
+count, with the threshold lemmas weakened in front the same way. No new `Explanation` constructor.
+The cost is two lines per such pruning beyond the lemmas: the line's clause is stated once inside
+the derivation and once by the trace (Trace states its own line and does not consult the claim
+index, M1-T59).
+
+### 3. Tests
+
+- Three new models, every proof VERIFIED: `member_chase_sat` (b1 dies across the holes of x1 and of
+  y at level 3, b2's set selector carries y's holes onto x2, a pigeonhole fails the branch so the
+  lines are on the page), `member_eqhole_sat` and `member_eqhole_unsat` (holes carried both ways
+  under a set selector, at depth and at the root).
+- `test_mutation.ml`, three lanes on `member_chase_sat`, a SATISFIABLE model (the rup vacuity trap):
+  `chase-start`, `chase-last`, `transfer` each delete ONE lemma and the `pol` from the honest proof;
+  veripb refuses at the RUP wording, at the line the lemma was written for. The three D-0159 lanes
+  still pass.
+- `test_prop.ml`'s brute force reads the new derivation shape (lemma/weaken pairs, the scaled line,
+  the divisor) and checks every lemma true on every solution: 1 500 scenes, no violation.
+- `bench/member_spike/fuzz_member.py`: 3 600 random small models (n in 2..4 over 1..7, set domains,
+  constants, aliasing, side constraints, random search; 400 of them at `--bits-above 0`), answer
+  against a brute-force oracle, solution against the model, veripb over every proof: 0 failures.
+  On the satisfiable ones every threshold lemma was deleted in turn: 54 load-bearing, 57 redundant.
+  The redundant ones rest on holes whose lines hold with no fact (declared, or punched at the root),
+  which a walk from a bound clause can cross on its own; the choice above is minimal for holes the
+  reason cites. Taking those into account is possible and was not done.
+
+### 4. Measurements
+
+Rows `post_member` writes (`member_rows.py` over the 35 flattened models, D-0159's routes):
+
+| instance | positions | rows before (threshold clauses) | rows after | literals before | literals after |
+|---|---|---|---|---|---|
+| 2023 `mips_mesa.eval.gl_Map1f` | 5 210 | 3 771 621 | 15 725 | 11 308 022 | 6 851 758 |
+| 2020 `hexagon_gcc.reload1.gen_reload` | 4 905 | 1 388 335 | 14 465 | 4 158 647 | 2 573 649 |
+| 2020 `mips_pgp.crypto.encryptfile` | 3 677 | 906 717 | 10 847 | 2 715 710 | 1 757 088 |
+| a handball instance | 24 | 320 | 80 | 936 | 696 |
+| all 35 | | 7 473 560 | 76 712 | 22 387 599 | 13 870 495 |
+
+The Challenge, the harness of D-0159 section 5 (`meas_member.sh`, `compare_run.sh`, 300 s, proof
+on, veripb on every complete answer, 12 + 12 at a time, every solver and checker process in its own
+`systemd-run --user --scope` with MemoryMax=32G). Runs in `/scratch/arthur/wave55-member-runs/`,
+copied to `/cluster/arthur/baguette-results/wave55-member/`. "D-0159 after" is its recorded table
+(binary `b7c11b9f`); "main" is `fa5628f` (binary `214e74d1`), member through std's decomposition;
+"M7-T34" is `0e8db18` (binary `75eb92e7`, main `fa5628f` merged in).
+
+| 35 instances, 300 s | OPT/UNSAT (VERIFIED) | timeout with a solution | timeout, none | CAPPED (proof > 16 GB) | REFUSED (8 GB heap) |
+|---|---|---|---|---|---|
+| D-0159 after | 1 | 2 | 23 | 7 | 2 (one with a solution) |
+| main | 1 | 2 | 23 | 6 | 3 (one with a solution) |
+| M7-T34 | 1 | 2 | 23 | 6 | 3 (one with a solution) |
+
+Every instance has the same status and incumbent as main. The complete answer is the same
+(`find_regno_partial`, OPT 6340, VERIFIED, 21.9 s against D-0159's 38.5 s and main's 22.6 s). The one
+status that moved against D-0159's table is `gl_Map1f`, CAPPED at 165 s there and REFUSED at 156 s
+here, as on main; neither has a solution. The `.opb` sizes the runs recorded barely move (24.3 GB
+over the 28 instances that record one, both sides): member's rows are a small part of those models,
+and the three largest member instances end on the proof cap before an `.opb` size is recorded.
+
+### 5. Gate
+
+Fataepyc-06, a fresh clone of `e150a70` (main `d275d46` merged in; binary `1e4ddbd6`) against
+gate 72's binary `c3b9cd1b` (main `f41498a`, whose code `d275d46` carries), every phase in its own
+`systemd-run` scope (`/scratch/arthur/wave55-member-gate.sh`, status copied to
+`baguette-results/wave55-member/gate.status`):
+
+- `make check` rc 0: 4 418 `ok` lines, 0 FAIL, models 207 passed and 0 failed, peak RSS 106 MB,
+  32 s wall.
+- Every `test/models/*.fzn` at the default encoding and at `--bits-above 0`, 414 runs: stdout,
+  exit code, `.opb` and `.pbp` byte-identical on every model except the seven member models (main
+  refuses `baguette_member`): 7 x 4 artefacts x 2 encodings = 56 differences, no other.
+- `make diff --tier all -j 16`: 301 of 301 equal; `--debug`: 289 of 289 equal; `make scaling -j 16`:
+  ok on every line. No lane instance reaches member, `bench/diff` untouched.
+
+A first gate on `0e8db18` (main `fa5628f` merged in, against gate 70's `214e74d1`) gave the same
+verdict (4 362 ok, 410 runs with the same 56 differences, 301/301, 289/289, scaling ok); main moved
+to `d275d46` meanwhile, so the branch merged it again and the gate above is the one that counts. The
+Challenge runs of section 4 are on `0e8db18`: the merge changed nothing in member's code.
+The tip after `e150a70` adds documentation and one comment.
+
+### 6. Recommendation
+
+Merge. No answer is worse than main's or D-0159's, the rows no longer grow with the width (7.47 M ->
+77 K over the 35, 3.77 M -> 16 K on `gl_Map1f`), and the literals drop by 38 %. D-0167 item 2's
+conditions hold. What it does not buy: no instance changes status, for D-0159 section 5's reason
+(handball's search is spent elsewhere, the code-generator ends on the proof cap or the heap). Nothing
+to re-record: no lane instance reaches member.

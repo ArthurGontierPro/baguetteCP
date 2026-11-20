@@ -1,0 +1,24 @@
+% M7-T28 (D-0159): flattened by MiniZinc 2.10.1 with baguette's mznlib from
+% mznlib/test/member_src_sat.mzn. Four distinct values of 1..6 avoiding 3, y one of the
+% last two, x[1] + x[2] + y = 12: one baguette_member call.
+predicate baguette_member(array [int] of var int: x,var int: y,array [int] of var bool: b);
+predicate all_different_int(array [int] of var int: x);
+array [1..2] of int: X_INTRODUCED_25_ = [1,-1];
+array [1..3] of int: X_INTRODUCED_26_ = [1,1,1];
+var {1,2,4,5,6}: X_INTRODUCED_16_;
+var {1,2,4,5,6}: X_INTRODUCED_17_;
+var {1,2,4,5,6}: X_INTRODUCED_18_;
+var {1,2,4,5,6}: X_INTRODUCED_19_;
+var 1..6: y:: output_var;
+var bool: X_INTRODUCED_21_ ::var_is_introduced ;
+var bool: X_INTRODUCED_22_ ::var_is_introduced ;
+var bool: X_INTRODUCED_23_ ::var_is_introduced ;
+var bool: X_INTRODUCED_24_ ::var_is_introduced ;
+array [1..4] of var int: x:: output_array([1..4]) = [X_INTRODUCED_16_,X_INTRODUCED_17_,X_INTRODUCED_18_,X_INTRODUCED_19_];
+array [1..4] of var bool: X_INTRODUCED_20_ ::var_is_introduced  = [X_INTRODUCED_21_,X_INTRODUCED_22_,X_INTRODUCED_23_,X_INTRODUCED_24_];
+constraint baguette_member(x,y,X_INTRODUCED_20_);
+constraint all_different_int(x);
+constraint int_lin_ne(X_INTRODUCED_25_,[y,X_INTRODUCED_16_],0);
+constraint int_lin_ne(X_INTRODUCED_25_,[y,X_INTRODUCED_17_],0);
+constraint int_lin_eq(X_INTRODUCED_26_,[X_INTRODUCED_17_,X_INTRODUCED_16_,y],12);
+solve  satisfy;

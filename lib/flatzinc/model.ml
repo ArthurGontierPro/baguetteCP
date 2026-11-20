@@ -77,6 +77,13 @@ type inverse = {
   inv_gmin : int;
 }
 
+(* M7-T28 (D-0159). `baguette_member(x, y, b)`, std's fzn_member_int (and fzn_member_bool,
+   over 0..1) through mznlib/fzn_member_int.mzn: [mem_b] are the SELECTOR Booleans the
+   library introduces, one per position of [mem_x], and they are PART OF THE RELATION:
+   y is one of the x, every selector set names a position equal to y, and one is set
+   (lib/core/prop/member.ml's header). *)
+type member = { mem_x : operand list; mem_y : operand; mem_b : operand list }
+
 type cstr =
   | Int_lin_le of (int * int) list * int (* sum coeff*x_i <= rhs *)
   | Int_lin_eq of (int * int) list * int (* sum coeff*x_i  = rhs *)
@@ -197,6 +204,8 @@ type cstr =
   | Regular of regular
   (* M7-T28 (D-0151): see [inverse] above. *)
   | Inverse of inverse
+  (* M7-T28 (D-0159): see [member] above. *)
+  | Member of member
 
 type constr = { k : cstr; c_pos : Pos.t }
 
@@ -353,6 +362,10 @@ let string_of_cstr t = function
         iv.inv_fmin
         (String.concat ", " (List.map (string_of_operand t) iv.inv_g))
         iv.inv_gmin
+  | Member mb ->
+      Printf.sprintf "member([%s], %s)"
+        (String.concat ", " (List.map (string_of_operand t) mb.mem_x))
+        (string_of_operand t mb.mem_y)
 
 let to_string t =
   let b = Buffer.create 256 in
@@ -734,6 +747,13 @@ let check_assignment (t : t) (values : int array) : bool =
           i >= 0 && i < nf && f.(i) = iv.inv_gmin + k
         in
         List.for_all ok_f (List.init nf Fun.id) && List.for_all ok_g (List.init ng Fun.id)
+    (* M7-T28 (D-0159), the relation over x, y AND the selectors: one selector is set and
+       every set selector names a position equal to y (so y is one of the x). *)
+    | Member mb ->
+        let y = value mb.mem_y in
+        List.length mb.mem_x = List.length mb.mem_b
+        && List.exists (fun b -> value b = 1) mb.mem_b
+        && List.for_all2 (fun x b -> value b = 0 || value x = y) mb.mem_x mb.mem_b
   in
   let domains_ok =
     let ok = ref true in

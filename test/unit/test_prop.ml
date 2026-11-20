@@ -8465,6 +8465,355 @@ let test_regular_veripb () =
     ~name:"regular: the no-two-consecutive proof, lemmas, trace and nogood, verifies"
     ~build:(fun _ -> (opb, pbp))
 
+(* ======================================================================== M7-T28
+
+   member (D-0159), by brute force over random small scenes: n in 2..3 positions over
+   1..4 (sometimes a constant), y over 1..4, one selector each; random bound narrowings,
+   holes punched with no facts (a ROOT hole, which the page holds the way a model row
+   does), selectors fixed by the scene, and now and then one variable twice among x and y
+   (the [Aliased] packing). The claims of lib/core/prop/member.ml's header:
+
+   - I-P1: no solution (x, y and the selectors, the relation over all three) inside the
+     current domains is removed, and a conflict only where there is none;
+   - DOMAIN consistency over (x, y, b) after a fixpoint, when nothing is aliased: every
+     value of every variable of the scope is in a solution inside the domains;
+   - I-P2: a second call changes nothing (aliased scenes too: the call loops to its own
+     fixpoint);
+   - every reason SOUND on its own facts over the DECLARED domains and the scene's holes:
+     each solution satisfying the facts keeps the claim (for a conflict, none does), and
+     no fact names a selector the propagator moved itself (the reasons are on the letters);
+   - a removal of y's value with two hole-excluded live positions is made AHEAD (the one
+     [Needs_derivation] shape), and each lemma of its derivation is a clause every
+     solution satisfies. *)
+module Member = Baguette_core.Member
+
+let test_member_brute_force () =
+  regular_rng := 2031;
+  let bad = ref 0 and scenes = ref 0 and changed = ref 0 and conflicts = ref 0 in
+  let reasons = ref 0 and ahead = ref 0 and lemmas = ref 0 and first_bad = ref "" in
+  let thresholds = ref 0 in
+  let aliased_scenes = ref 0 and sel_facts = ref 0 in
+  let flag what =
+    incr bad;
+    if !first_bad = "" then first_bad := what
+  in
+  for _ = 1 to 1500 do
+    incr scenes;
+    let n = 2 + regular_rnd 2 in
+    (* var k < n: x_k; n: y; n + 1 + i: b_i *)
+    let decls =
+      List.init n (fun k -> (Printf.sprintf "x%d" k, 1, 4))
+      @ [ ("y", 1, 4) ]
+      @ List.init n (fun i -> (Printf.sprintf "b%d" i, 0, 1))
+    in
+    let nv = (2 * n) + 1 in
+    let store = mk_store decls in
+    (* which variable each position reads: its own, or (aliased) x0's or y's *)
+    let alias = regular_rnd 8 in
+    let pos_var =
+      Array.init n (fun i ->
+          if i = 1 && alias = 0 then 0 else if i = 1 && alias = 1 then n else i)
+    in
+    let fixed =
+      Array.init n (fun _ -> if regular_rnd 6 = 0 then Some (1 + regular_rnd 4) else None)
+    in
+    let aliased = alias <= 1 && fixed.(1) = None in
+    if aliased then incr aliased_scenes;
+    let name_of k = Store.name store (var k) in
+    let xs =
+      Array.init n (fun i ->
+          match fixed.(i) with
+          | Some c -> Member.Fixed c
+          | None ->
+              let k = pos_var.(i) in
+              Member.Cell { var = var k; name = name_of k; dlo = 1; dhi = 4 })
+    in
+    let y = Member.Cell { var = var n; name = "y"; dlo = 1; dhi = 4 } in
+    let sels = Array.init n (fun i -> var (n + 1 + i)) in
+    let p = Member.make store ~xs ~y ~sels ~or_row:0 in
+    let holes = ref [] and by_scene = Hashtbl.create 4 in
+    for k = 0 to n do
+      let d = Store.get store (var k) in
+      if regular_rnd 3 = 0 then
+        ignore (Store.set_lo store (var k) (Domain.lo d + 1) placeholder_pruning);
+      if regular_rnd 3 = 0 then
+        ignore (Store.set_hi store (var k) (Domain.hi d - 1) placeholder_pruning);
+      let d = Store.get store (var k) in
+      if regular_rnd 2 = 0 && Domain.hi d - Domain.lo d >= 2 then (
+        let h = Domain.lo d + 1 + regular_rnd (Domain.hi d - Domain.lo d - 1) in
+        holes := (k, h) :: !holes;
+        ignore (Store.remove store (var k) h placeholder_pruning))
+    done;
+    for i = 0 to n - 1 do
+      match regular_rnd 8 with
+      | 0 ->
+          Hashtbl.replace by_scene (Printf.sprintf "b%d" i) ();
+          ignore (Store.set_hi store (var (n + 1 + i)) 0 placeholder_pruning)
+      | 1 ->
+          Hashtbl.replace by_scene (Printf.sprintf "b%d" i) ();
+          ignore (Store.set_lo store (var (n + 1 + i)) 1 placeholder_pruning)
+      | _ -> ()
+    done;
+    (* every solution over the DECLARED domains: an assignment of all nv variables *)
+    let declared k = if k <= n then (1, 4) else (0, 1) in
+    let rec words k =
+      if k = nv then [ [] ]
+      else
+        let lo, hi = declared k in
+        List.concat_map
+          (fun v -> List.map (fun w -> v :: w) (words (k + 1)))
+          (List.init (hi - lo + 1) (fun d -> lo + d))
+    in
+    let xval a i = match fixed.(i) with Some c -> c | None -> a.(pos_var.(i)) in
+    let sols =
+      List.filter_map
+        (fun w ->
+          let a = Array.of_list w in
+          let sel i = a.(n + 1 + i) = 1 in
+          if
+            List.exists sel (List.init n Fun.id)
+            && List.for_all
+                 (fun i -> (not (sel i)) || xval a i = a.(n))
+                 (List.init n Fun.id)
+          then Some a
+          else None)
+        (words 0)
+    in
+    let used k =
+      k >= n
+      || List.exists (fun i -> fixed.(i) = None && pos_var.(i) = k) (List.init n Fun.id)
+    in
+    let inside a =
+      List.for_all
+        (fun k -> (not (used k)) || Domain.mem (Store.get store (var k)) a.(k))
+        (List.init nv Fun.id)
+    in
+    let on_holes a = List.for_all (fun (k, v) -> a.(k) <> v) !holes in
+    let live0 = List.filter inside sols in
+    let index_of nm =
+      match Store.var_named store nm with Some v -> Var.to_int v | None -> -1
+    in
+    let holds a (fct : Reason.fact) =
+      let v = a.(index_of (Reason.fact_owner fct)) in
+      if Reason.fact_is_lower fct then v >= Reason.fact_value fct
+      else v <= Reason.fact_value fct
+    in
+    let lit_holds a (l : Lit.t) =
+      match l.Lit.v with
+      | Lit.Ge (nm, v) -> a.(index_of nm) >= v = l.Lit.positive
+      | _ -> false
+    in
+    let audit what facts claim_ok =
+      incr reasons;
+      List.iter
+        (fun f ->
+          let nm = Reason.fact_owner f in
+          if nm.[0] = 'b' then (
+            incr sel_facts;
+            if not (Hashtbl.mem by_scene nm) then
+              flag
+                (Printf.sprintf "%s cites the selector %s, which it moved itself" what nm)))
+        facts;
+      List.iter
+        (fun a ->
+          if on_holes a && List.for_all (holds a) facts && not (claim_ok a) then
+            flag
+              (Printf.sprintf "%s: a solution satisfies its facts [%s]" what
+                 (Reason.to_string_facts facts)))
+        sols
+    in
+    let from = Store.trail_length store in
+    let before = Store.snapshot store in
+    let outcome = Member.propagate p store in
+    for pos = from to Store.trail_length store - 1 do
+      let e = Store.trail_entry store pos in
+      let k = Var.to_int e.Store.var in
+      let nm = Store.name store e.Store.var in
+      let removed =
+        List.filter (fun v -> not (Domain.mem e.Store.now v)) (Domain.to_list e.Store.old)
+      in
+      audit ("the pruning of " ^ nm) (Reason.facts e.Store.reason) (fun a ->
+          not (List.mem a.(k) removed));
+      if e.Store.ahead then (
+        incr ahead;
+        match Explanation.force (Store.explanation store e) with
+        | Explanation.Combine (summands, m) ->
+            (* M7-T34: [pre], the threshold lemmas, each a [Clause] followed by the
+               [Weaken] that cancels it; then the line's own summands, every coefficient
+               [k] = 1 + the degree the weakening costs, divided by [k] times their
+               lemma count (the line alone: one [Clause]; the gap shape: the OR row and
+               one [Clause] per position). *)
+            let true_on_sols what lits =
+              incr lemmas;
+              List.iter
+                (fun a ->
+                  if on_holes a && not (List.exists (lit_holds a) lits) then
+                    flag (Printf.sprintf "%s for %s is false on a solution" what nm))
+                sols
+            in
+            let rec pre s acc =
+              match acc with
+              | Explanation.Term (1, Explanation.Clause l) :: Explanation.Weaken w :: rest
+                when List.length w = List.length l
+                     && List.for_all2
+                          (fun x (c, y) -> c = 1 && Lit.equal y (Lit.negate x))
+                          l w ->
+                  true_on_sols "a threshold lemma" l;
+                  incr thresholds;
+                  pre (s + List.length l - 1) rest
+              | rest -> (s, rest)
+            in
+            let s, rest = pre 0 summands in
+            let k = s + 1 in
+            let clauses = ref 0 and rows = ref 0 in
+            List.iter
+              (function
+                | Explanation.Term (c, Explanation.Clause lits) when c = k ->
+                    incr clauses;
+                    true_on_sols "a lemma" lits
+                | Explanation.Term (c, Explanation.Model_row _) when c = k -> incr rows
+                | _ ->
+                    flag
+                      "a derivation ahead holds a summand that is not a lemma, the line \
+                       or the OR row at the scaled coefficient")
+              rest;
+            if m <> k * !clauses || !rows > 1 || (!rows = 1 && !clauses < 2) then
+              flag "a derivation ahead's divisor is not k times its lemma count"
+        | _ -> flag "a removal made ahead whose derivation is not a Combine")
+    done;
+    match outcome with
+    | Propagator.Conflict c ->
+        incr conflicts;
+        audit "a conflict" (Reason.facts c.Store.c_reason) (fun _ -> false);
+        if live0 <> [] then flag "a conflict on a scene with a solution"
+    | Propagator.Fixpoint -> (
+        if not (Store.same_domains store before) then incr changed;
+        if not (List.for_all inside live0) then flag "a solution was removed";
+        let live = List.filter inside sols in
+        if not aliased then
+          List.iter
+            (fun k ->
+              if used k then
+                Domain.iter
+                  (fun v ->
+                    if not (List.exists (fun a -> a.(k) = v) live) then
+                      flag
+                        (Printf.sprintf "%s keeps %d, which no solution inside uses"
+                           (name_of k) v))
+                  (Store.get store (var k)))
+            (List.init nv Fun.id);
+        let snap = Store.snapshot store in
+        match Member.propagate p store with
+        | Propagator.Conflict _ -> flag "the second call conflicts"
+        | Propagator.Fixpoint ->
+            if not (Store.same_domains store snap) then flag "the second call prunes")
+  done;
+  if !first_bad <> "" then Printf.printf "     first violation: %s\n" !first_bad;
+  check
+    (Printf.sprintf
+       "member (D-0159): I-P1, domain consistency, I-P2 and every reason SOUND over the \
+        declared domains, %d scenes (%d aliased, %d pruned, %d conflicts, %d reasons, %d \
+        selector facts all the scene's, %d changes ahead with %d lemmas, %d of them \
+        threshold lemmas, each true on every solution): no violation"
+       !scenes !aliased_scenes !changed !conflicts !reasons !sel_facts !ahead !lemmas
+       !thresholds)
+    (!bad = 0 && !changed > 300 && !conflicts > 50 && !reasons > 1000 && !ahead > 5)
+
+(* member end to end on the checker. Three scenes, each one shape of the header:
+
+   - member_gap: x1, x2 over {1, 3} (declared holes), x3 and y over 1..3, w1 w2 w3 a
+     pigeonhole only while x3 = 3 (w3 <= 5 - x3). Largest-first on x3: x3 = 3 leaves y's
+     2 to x1 and x2, which exclude it by a HOLE only -- the removal made AHEAD -- then the
+     w branch fails, so that line and its derivation are on the page; x3 = 2 solves.
+   - member_parity: y = x1 + x2 over odd x (sets {1, 3, 5}): UNSAT, by search, every
+     branch through the selector deaths across holes the bound-form rows exist for.
+   - member_bool: over var bool. p1 = p2 = 1 forces q = 0 (q -> ~p2) with p3 = 1: no
+     position holds 0, a member conflict under decisions; p2 = 0 then solves.
+
+   Each proof verifies, and the gap scene's must hold a pol ahead of the line. *)
+let member_gap_src =
+  {|var {1,3}: x1 :: output_var;
+var {1,3}: x2 :: output_var;
+var 1..3: x3 :: output_var;
+var 1..3: y :: output_var;
+var bool: b1;
+var bool: b2;
+var bool: b3;
+var 1..2: w1 :: output_var;
+var 1..2: w2 :: output_var;
+var 1..3: w3 :: output_var;
+constraint baguette_member([x1, x2, x3], y, [b1, b2, b3]);
+constraint int_ne(w1, w2);
+constraint int_ne(w1, w3);
+constraint int_ne(w2, w3);
+constraint int_lin_le([1, 1], [w3, x3], 5);
+solve :: int_search([x3, w1, w2, w3, y, x1, x2], input_order, indomain_max, complete) satisfy;
+|}
+
+let member_parity_src =
+  {|var {1,3,5}: x1 :: output_var;
+var {1,3,5}: x2 :: output_var;
+var {1,3,5}: x3 :: output_var;
+var 1..6: y :: output_var;
+var bool: b1;
+var bool: b2;
+var bool: b3;
+constraint baguette_member([x1, x2, x3], y, [b1, b2, b3]);
+constraint int_lin_eq([1, 1, -1], [x1, x2, y], 0);
+solve satisfy;
+|}
+
+let member_bool_src =
+  {|var bool: p1 :: output_var;
+var bool: p2 :: output_var;
+var bool: p3 :: output_var;
+var bool: q :: output_var;
+var bool: b1;
+var bool: b2;
+var bool: b3;
+constraint baguette_member_bool([p1, p2, p3], q, [b1, b2, b3]);
+constraint bool_clause([], [q, p2]);
+constraint bool_clause([p3], []);
+solve :: int_search([p1, p2, q, p3], input_order, indomain_max, complete) satisfy;
+|}
+
+let test_member_veripb () =
+  let dir = Filename.temp_file "baguette_member" "" in
+  Sys.remove dir;
+  Sys.mkdir dir 0o700;
+  let solve file src = regular_solve dir ~file src in
+  let _, outcome, opb, pbp = solve "member_gap" member_gap_src in
+  check "member: the gap scene is SAT (x3 = 2), its oracle accepts the solution"
+    (match outcome with Search.Sat _ -> true | _ -> false);
+  let lines = String.split_on_char '\n' (read_file pbp) in
+  let line = "rup +1 ~y_ge_2 +1 y_ge_3 +1 ~x3_ge_3 >= 1 ;" in
+  let rec find i = function
+    | [] -> None
+    | l :: rest -> if contains_sub ~needle:line l then Some i else find (i + 1) rest
+  in
+  (match find 0 lines with
+  | None -> check (Printf.sprintf "member: the gap scene writes `%s`" line) false
+  | Some i ->
+      let pol_before =
+        List.exists
+          (fun l -> contains_sub ~needle:" pol " l)
+          (List.filteri (fun j _ -> j < i && j >= i - 6) lines)
+      in
+      check
+        (Printf.sprintf "member: the gap removal `%s` is written, its pol just ahead" line)
+        pol_before);
+  run_veripb
+    ~name:"member: the gap scene's proof, the derivation ahead included, verifies"
+    ~build:(fun _ -> (opb, pbp));
+  let _, outcome, opb, pbp = solve "member_parity" member_parity_src in
+  check "member: the parity scene is UNSAT" (outcome = Search.Unsat);
+  run_veripb ~name:"member: the parity scene's refutation verifies" ~build:(fun _ ->
+      (opb, pbp));
+  let _, outcome, opb, pbp = solve "member_bool" member_bool_src in
+  check "member: the Boolean scene is SAT, its oracle accepts the solution"
+    (match outcome with Search.Sat _ -> true | _ -> false);
+  run_veripb ~name:"member: the Boolean scene's proof verifies" ~build:(fun _ ->
+      (opb, pbp))
 (* ===================================================== M7-T33: alldiff conflicts learn
 
    D-0156. Until M7-T33 both of all_different's pigeonholes -- stage 1's Hall interval
@@ -9000,6 +9349,9 @@ let () =
   test_regular_letter_reasons ();
   test_regular_veripb ();
   test_inverse_brute_force ();
+  (* M7-T28, D-0159: member. *)
+  test_member_brute_force ();
+  test_member_veripb ();
   if !failures > 0 then (
     Printf.printf "\n%d FAILURE(S)\n" !failures;
     exit 1)
