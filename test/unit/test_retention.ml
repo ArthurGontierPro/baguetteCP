@@ -1166,7 +1166,8 @@ let test_r3_orders () =
           if ids (f.Retention.evict ~added:0 l) <> ids (fifo_ref cap l) then ok := false;
           if ids (b.Retention.evict ~added:0 l) <> ids (lbd_ref cap l) then ok := false)
         [ live; shuffled ])
-    [ 0; 1; 50; 199; 200; 300 ];
+    (* D-0191: 191 to 198 evict 9 down to 2, either side of [Retention.first_k]'s passes *)
+    [ 0; 1; 50; 191; 192; 195; 198; 199; 200; 300 ];
   check "D-0152 R3: fifo and lbd evict what the polymorphic sorts evicted" !ok
 
 let () =

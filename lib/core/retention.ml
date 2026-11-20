@@ -482,6 +482,36 @@ let fifo ~cap =
     p_tiers = None;
   }
 
+(* The [k] first elements of [List.sort cmp l], in that order, for a TOTAL [cmp] (every
+   comparator here ends in [by_seq]). M16-file-review-T3 (D-0191): [lbd] asks for the
+   [n - cap] worst of a database that is over its cap by one or a few, once per learned
+   constraint, and sorting all [n] for them was most of its cost once [locked_instances]
+   stopped dominating. For a small [k] this takes them one pass each, the next being the
+   least element above the last one taken, which a total order makes the same element the
+   sort puts there; past [first_k_passes] it sorts. *)
+let first_k_passes = 8
+
+let first_k cmp k l =
+  if k <= 0 then []
+  else if k > first_k_passes then List.filteri (fun i _ -> i < k) (List.sort cmp l)
+  else
+    let least_above prev =
+      List.fold_left
+        (fun best x ->
+          match prev with
+          | Some p when cmp x p <= 0 -> best
+          | _ -> ( match best with Some b when cmp b x <= 0 -> best | _ -> Some x))
+        None l
+    in
+    let rec take i prev acc =
+      if i = k then List.rev acc
+      else
+        match least_above prev with
+        | None -> List.rev acc
+        | Some x -> take (i + 1) (Some x) (x :: acc)
+    in
+    take 0 None []
+
 (* The policy. Rank by LBD descending -- a higher LBD is a worse constraint, Glucose's
    direction -- and break ties by age, oldest first. Evict down to [cap].
 
@@ -499,13 +529,10 @@ let lbd ~cap =
               let n = List.length live in
               if n <= cap then []
               else
-                let worst_first =
-                  List.sort
-                    (fun a b ->
-                      match Int.compare b.e_lbd a.e_lbd with 0 -> by_seq a b | c -> c)
-                    live
-                in
-                List.filteri (fun i _ -> i < n - cap) worst_first);
+                first_k
+                  (fun a b ->
+                    match Int.compare b.e_lbd a.e_lbd with 0 -> by_seq a b | c -> c)
+                  (n - cap) live);
         });
     p_detaches = true;
     p_tiers = None;
