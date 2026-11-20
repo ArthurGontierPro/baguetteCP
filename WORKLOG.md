@@ -22,6 +22,7 @@ of it to every session and stopping at a broken line before it even reached the 
 | M8-bits-encoding-T4 (two arms, `W = none` and `W = 0`, on the sixteen editions) | run directories under `/scratch/arthur/m8t4/`, `tools/compare/` (additions), `bench/challenge/README.md` (the run's row), a new D-record | agent-m8t4 (`wave55-m8t4`) | 2026-11-20 |
 | M10-search-strategy-T5, M9-no-proof-T3, M7-T30 (one Challenge series on current main: default, `-f`, default `--no-proof`) | run dirs `/scratch/arthur/m10t5/`, `tools/compare/` (additions), `bench/challenge/README.md` (the run's row); reserved record D-0185 | agent-m10t5 (`wave55-m10t5`) | 2026-11-20 |
 | M16-file-review-T4 (the proof side) | `lib/core/explanation.ml` (functions; the type only with an [AUTONOME] record), `justify.ml`, `trace.ml`, `lib/proof/writer.ml`, `encoding.ml`, `opb.ml`, `lit.ml`, their unit tests; `bench/scaling/baseline.tsv` (re-baseline only); reserved record D-0192 | agent-review4 (`wave55-review4`) | 2026-11-20 |
+| M16-file-review-T5 (the front end and setup) | `lib/flatzinc/lexer.ml`, `parser.ml`, `builder.ml`, `compile.ml`, `output.ml`, `model.ml`, `ast.ml`, their unit tests (`test_flatzinc.ml`, `test_compile.ml`, `test_output.ml`); reserved record D-0193 | agent-review5 (`wave55-review5`) | 2026-11-20 |
 
 ## Cross-session requests
 
