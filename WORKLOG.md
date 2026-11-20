@@ -19,12 +19,11 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M7-T33 (and `Alldiff.excl`'s proof cost, D-0145) | `lib/core/prop/alldiff.ml`, `lib/proof/encoding.ml` (additive only), new `test/models/`, `test/unit/test_prop.ml` (alldiff section) | agent-alldiff (`wave53-alldiff`) | 2026-11-19 |
 | M7-T28 (`member`) | new `lib/core/prop/member.ml`, `lib/flatzinc/compile.ml` (member dispatch), `mznlib/`, new `test/models/`, `test/unit/test_prop.ml` (member section) | agent-member (`wave53-member`) | 2026-11-19 |
-| D-0161 request 1 (`Alldiff.snap_of` builds derivation inputs at every snapshot) | `lib/core/prop/alldiff.ml` ON TOP OF `wave53-alldiff` (merges after it), `test/unit/test_prop.ml` (alldiff section) | agent-snap (`wave54-snap`) | 2026-11-19 |
-| merge of M7-T33 and D-0161 request 1 (D-0167 item 1) | merges `wave53-alldiff` then `wave54-snap` on branch `wave55-merge`; `bench/diff/corpus.tsv` (lot-sizing's budget), `bench/diff/reference*` (re-record) | agent-merge (`wave55-merge`) | 2026-11-20 |
 | M7-T34 (`member` without width-proportional rows) | on `wave53-member`'s files: `lib/core/prop/member.ml`, `lib/flatzinc/compile.ml` (member dispatch), `mznlib/`, `test/models/member_*`, `test/unit/test_prop.ml` (member section) | agent-member2 (`wave55-member`) | 2026-11-20 |
-| M11-complexity-T13 (drop a forced explanation once written) | `lib/core/explanation.ml` (the `thunk` record gains fields, D-0167 item 6), `lib/core/justify.ml`, `lib/core/pb_analysis.ml` (`cited_ids` only), `test/unit/test_justify.ml`, `docs/ARCHITECTURE.md` §4 | agent-thunk (`wave55-thunk`) | 2026-11-20 |
+| M11-complexity-T14 (per node against Gecode) | `lib/core/prop/pb.ml`, `lib/core/engine.ml`, `lib/core/store.ml`, `lib/core/prop/clause.ml`, their unit tests; `bench/` additions | agent-pernode2 (`wave55-pernode`) | 2026-11-20 |
+| M8-bits-encoding-T4 (two arms, `W = none` and `W = 0`, on the sixteen editions) | run directories under `/scratch/arthur/m8t4/`, `tools/compare/` (additions), `bench/challenge/README.md` (the run's row), a new D-record | agent-m8t4 (`wave55-m8t4`) | 2026-11-20 |
+| M11-complexity-T15 (SPIKE, explanations as a hash-consed DAG; a prototype branch, nothing merged without a decision) | `lib/core/explanation.ml`, `lib/core/justify.ml`, `lib/core/trace.ml`, propagators' explanation construction as needed, on branch `wave55-dag` only | agent-dag (`wave55-dag`) | 2026-11-20 |
 
 ## Cross-session requests
 
@@ -335,7 +334,7 @@ artefacts are unchanged by every M6-T22 fix, so the numbers below are comparable
 ### 2026-11-18 — M11-complexity-T5 (D-0145): the largest proof-mode cost left on cyclic is in batch 1's and W7's files (agent-batch5, `wave49-batch5`)
 
 |---|---|---|---|
-| `Alldiff.excl` cites one ladder rung per value through `Encoding.consistency_id`, which looks the variable up by NAME every time (`Encoding.find`, a string `Hashtbl`, `Encoding.hash`): 12.4 % of 2011_cyclic-rcpsp_easy_6's proof mode at 2 000 nodes and 2.6 % of rcpsp_11's at 10 000, measured with the frame-pointer switch at `910af19`. Look the variable up once per exclusion (its `ladder_base` and bounds) and compute the rung ids arithmetically, as `consistency_id` itself does; or give `Encoding` a lookup by variable index (D-0140 W7). Byte-neutral: the ids are the same. | `lib/core/prop/alldiff.ml`, `lib/proof/encoding.ml` | agent-batch5 (M11-T5) | open |
+| `Alldiff.excl` cites one ladder rung per value through `Encoding.consistency_id`, which looks the variable up by NAME every time (`Encoding.find`, a string `Hashtbl`, `Encoding.hash`): 12.4 % of 2011_cyclic-rcpsp_easy_6's proof mode at 2 000 nodes and 2.6 % of rcpsp_11's at 10 000, measured with the frame-pointer switch at `910af19`. Look the variable up once per exclusion (its `ladder_base` and bounds) and compute the rung ids arithmetically, as `consistency_id` itself does; or give `Encoding` a lookup by variable index (D-0140 W7). Byte-neutral: the ids are the same. | `lib/core/prop/alldiff.ml`, `lib/proof/encoding.ml` | agent-batch5 (M11-T5) | DONE in `wave53-alldiff` (`b543817`, D-0156 section 5): -10.0 % of cyclic's proof-mode instructions, every byte the same |
 | **Three gate findings on main at `e34e133`, not from M7-T32** (D-0150 section 7, measured on a fresh clone on fataepyc-06, each reproduced with main's own binary or clone): (1) `test/unit/test_prop.ml` is not formatted, so `make check` stops at `fmt-check` before building (one blank line missing before the M7-T28 `regular` banner, after `test_linear_scratch`); (2) `test_retention` fails 5 checks, `(a)` and `(c)` "deep shipped" (the policy that should evict nothing), presumably since `36c1312` routed the learned instances through `Retention.gate`; (3) `make diff --tier all` differs on 117 of 301 runs, `fifo` and `lbd` (counters moved by `36c1312`) and `restarts`, `activity`, `alternate` (no reference committed). The default configuration is equal everywhere. Each needs its owner's decision (D-0141's rule on re-recording) | `test/unit/test_prop.ml`, `test/unit/test_retention.ml`, `bench/diff/reference/` | agent-flags (M7-T32) | open |
 ### 2026-11-18 — three findings from the M10 measurements, for the owners of the code they point at (agent-strategy, `wave45-strategy`, D-0137 section 13)
 
@@ -411,6 +410,8 @@ artefacts are unchanged by every M6-T22 fix, so the numbers below are comparable
    predicate is `Store.remover_scan`'s, which `Store.remover` is checked against under
    `BAGUETTE_DEBUG`). element.ml's two copies of the walk were replaced that way in D-0155,
    every artefact unchanged.
+   DONE in `wave53-alldiff` (`cc9d94d`, D-0156 section 5b): black-hole_10 52.2 G to 15.9 G,
+   black-hole_20 at 20 nodes 1 846 G to 175 G, every artefact the same.
 
 ### 2026-11-19 — M9-no-proof-T4 (D-0161): proof-only work `--no-proof` still does, in files that row did not hold (agent-noproof-audit, `wave53-noproof`)
 
@@ -617,6 +618,9 @@ section 1. Shares are inclusive, of the whole run.
 | M9-no-proof-T5 | agent-keepproof (`wave54-keepproof`) | 2026-11-19 | **D-0163.** A run without `--proof` keeps its proof: `default_proof_prefix` in `bin/main.ml` gives `./foo.opb`/`.pbp` for `DIR/foo.fzn`, and `./baguette-proof` for MiniZinc's `mznfile*.fzn` (named on stderr); the next run overwrites. `tools/baguette.msc` gains `--no-proof`. Proofless runs fixed in `test_endtoend` (M7-T32), `check_unlimited.sh`, `check_mznlib.sh`, `learning_baseline.sh`, `corpus_run.sh` NO_PROOF=1 (still writes, unchecked); `diff_lane.sh` refuses proof=no without `--no-proof`. Files beyond the claim: `scripts/check_unlimited.sh`, `mznlib/test/check_mznlib.sh`, `bench/learning_baseline.sh`; `compare_run.sh` needed nothing. |
 | M11-complexity-T11 | agent-heap (`wave54-heap`, fix `wave54-heapfix`) | 2026-11-19 | **D-0164.** `Element.index_hole_clause` defers the puncher's literals; bh4 `--no-proof` 40 nodes 6.04 -> 1.72 GB RSS, -26.9 % instructions, `--proof` 11.66 -> 7.96 GB; 215 of 215 artefacts equal. The proof-side holders stay open (D-0164 §7) |
 | M11-complexity-T12 | agent-live (`wave54-live`) | 2026-11-19 | **D-0166.** Byte-identical shrink of four proof-side holders: claim index keys packed (333 -> 76 MB), memo as a chained table (342 -> 244 MB), audit keeps the origin alone, shared per `Combine` shape (325 -> 132 MB), `by_lvl` as runs (189 -> 118 MB). bh9 `--proof` node 40 (alldiff base): live 2 660 -> 2 041 MB, RSS 4 346 -> 3 648 MB, -2.2 % instructions, `.pbp` md5 equal. Gate on `c46952f` (binary `214e74d1`): `make check` rc 0 (4 289 ok), 198 x 4 artefacts equal to `22620b60`, lane 301/301, debug 289/289, scaling ok. alldiff's forced derivations (1.16 GB) and the never-hit memo entries are the user's call (D-0166 §5) |
+| M7-T33 (and `Alldiff.excl`'s proof cost, D-0145; `hole_cite` through `Store.remover`, D-0155 §4) | agent-alldiff (`wave53-alldiff`) | 2026-11-19 | **D-0156.** alldiff's pigeonholes carry their facts under a decision, so they are learned from (root byte-identical). `p1f_13` TIMEOUT -> UNSAT 19.5 s VERIFIED, elitserien 0 -> 20 incumbents, Challenge pairs 100 instances: 5 -> 6 complete, 16 -> 37 incumbents. `excl` cyclic 646 -> 581 G, `hole_cite` bh10 52 -> 16 G and bh20@20 1846 -> 175 G, bytes equal. Tip gate (`45b8a3c7`): check rc 0, 4278 ok, 200 models, 4 alldiff `.pbp` differ, lane 18 DIFF (cyclic x6, lot-sizing x12) and debug 6, all expected. Open: lot-sizing [activity] over the 4 GB cap, black-hole's heap per node, openshop's checker panic at `--update` (D-0156 §4, §7). |
+| D-0161 request 1 (`Alldiff.snap_of` builds derivation inputs at every snapshot) | agent-snap (`wave54-snap`) | 2026-11-19 | **D-0165.** `snap_of` keeps the interior holes only; `gone` rebuilds the below/above runs inside the `Deferred` from the four frozen bounds; root flags and `hole_cite` through `Store.at_root`. Every model artefact and every lane line equal to the base `45b8a3c7`. Cyclic 10 000 nodes `--no-proof` -25.6 % instructions (157.0 -> 116.7 G), `--proof` -5.2 %; black-hole_20 -6.6 % / -2.3 %. |
+| M11-complexity-T13 | agent-thunk (`wave55-thunk`) | 2026-11-20 | **D-0168.** A thunk keeps its line (id, level) once written and drops its tree; the memo lets go of the cells of the nodes the closure built (a forcing records the operands it did not build, and only those thunks are forced again at release); `derive_ahead` emits the thunk. bh9 `--proof` node 40 (alldiff base): live 2 041 -> 658 MB, RSS 3 646 -> 1 777 MB, -0.7 % instructions, `.pbp` md5 equal; lane default runs -28.7 % (rcpsp_11) to +0.35 %. Gate on `a8762eb` (binary `40638833`): `make check` rc 0 (4 312 ok), 198 x 4 artefacts equal to `214e74d1`, lane 301/301, debug 289/289, scaling ok |
 
 ## Handoff notes
 
@@ -627,6 +631,25 @@ one selector per position, BOUND-form rows (D-0151's value form measured short),
 pruning except a value of y two holes exclude, derived ahead (I-X10 `Needs_derivation`). Challenge:
 35 of 40 reach it, complete 1 -> 1, no answer changed; the rows' width cost and its lever are D-0159
 §5. Gate on `30ce66a` green; nothing to re-record at merge.
+### 2026-11-20 (agent-thunk, `wave55-thunk`): M11-complexity-T13, D-0168
+
+A thunk is released once its line is written: it keeps the id and level, drops its tree, and the
+memo takes out the cells of what the closure built (bh9 node 40 live 2 041 -> 658 MB, rcpsp_11
+-28.7 % instructions, every byte equal; gate green on `a8762eb`). "A thunk is the only shared node" was false:
+captured eager nodes exist (39 on the suite), and the frames in explanation.ml keep their cells.
+
+### 2026-11-20 (agent-merge, `wave55-merge`): wave53-alldiff and wave54-snap merged on the branch, gate 71 green
+
+Branch `wave55-merge` (`bdbdcd4` merge M7-T33, `bb9f429` D-0167 item 1, `1d5c594` re-record, `4e65e46` merge
+D-0165), ready for main. lot-sizing's lane budget is 2500 (D-0167 item 1): `[activity]` peaks at 3.72 GB and exits
+134 at 3000, 3.34 GB at 2500, 2.74 GB at 2000; the eleven other configurations stay at or under 0.55 GB. The plain lanes before
+the re-record differed on exactly cyclic x6 and lot-sizing x12 (debug: cyclic x6); those 24 references were
+re-recorded, every proof accepted. Gate 71 (binary `492638b9`) against gate 70's `214e74d1`: `make check` rc 0
+(200 models, 25.7 s, 102 MB), 200 models x 4 artefacts with 4 differences, the four alldiff `.pbp` D-0156 §6 names,
+lane 301/301, debug 289/289, scaling rc 0 (no re-baseline). In `make check`, the compare self-test's information
+line `verdicts reached:` came out empty because a Rust `sort` panicked on thread spawn under the 4 GB cap (the
+checks themselves passed). This is cosmetic, but the line is vacuous when it happens.
+
 ### 2026-11-19 night (orchestrator): gate 70 green; the state for the morning -- READ THIS FIRST
 
 Gate 70 (`dcb40f1`, merge wave54-live, D-0166, binary `214e74d1`) against gate 64's `d7a1ef00`:
@@ -648,6 +671,19 @@ D-0163 §6 the proof's directory, MiniZinc's `./baguette-proof.*`, silent overwr
 releasing the forced alldiff trees (1.16 GB on bh9) through a field in `Explanation`'s thunk
 (option B, an `Explanation.t` change). Also seen: the openshop checker panics on alldiff's
 `--update` pass, on main's own proof (D-0156 §7, not investigated).
+
+### 2026-11-19 (agent-snap, `wave54-snap`): D-0161 request 1 done, D-0165, NOT merged
+
+`Alldiff.snap_of` no longer builds the values lost below and above the window; `gone` rebuilds them in the `Deferred` (byte-identical, `make check`, artefacts, lane and debug lane equal to the base, scaling green). Merge AFTER `wave53-alldiff`; at the merge, drop main's Active-claims row for this task (it was claimed on main, so this branch could not move it). Left: the holes' cites stay eager (D-0155's request), which is what black-hole still pays.
+
+### 2026-11-19 (agent-alldiff, `wave53-alldiff`): M7-T33 done, D-0156, NOT merged
+
+Branch `wave53-alldiff` is ready for the orchestrator's gated merge (tip gate green, D-0156 §6). The merge must re-record
+the lane per D-0156 §7: cyclic@2000 x 6 configurations in both passes, and lot-sizing x 11 configurations. lot-sizing
+[activity] cannot be recorded under the 4 GB cap (main 3.44 GB, branch 4.35 GB, learned 846 -> 1722), and the user
+must decide. `--update` also refuses `2014_openshop_gp10-4@300` [default, audit0] on a checker panic, over a proof whose
+bytes are main's, so that refusal comes from main and not this branch. Black-hole now reaches the 8 GB heap budget
+within 300 s (D-0156 §4 finding); the next step is a heap profile, not done here.
 
 ### 2026-11-19 night (agent-live, `wave54-live`): M11-complexity-T12, D-0166
 
@@ -854,6 +890,78 @@ waves 41-52 is merged and gated except the M12 parity spike, whose code stays on
   re-run, the free-category default once M10-T5 measures it.
 - **Procedures**: gates and lanes as in D-0141 §7 and the last `/scratch/arthur/gate60.sh` on fataepyc-06;
   CLAUDE.md now names fataepyc-06 as baguette's node and lists `make diff` and `make scaling`.
+
+## codes-cp measurements with b403e28, and leads, 2026-11-20 (codes-cp session): summary, no code
+
+Measured on fataepyc-07 with `/scratch/arthur/baguette-b403e28` (branch `codes-cp-b403e28`), one run
+after the other on an idle node (load 4). Model `models/minweight_chk.mzn` of codes-cp: QR48, weight
+<= 8, 24 parity checks, written as XOR clauses (`ENC=1`) or as sums Σx = 2y (`ENC=2`), fixed search
+`bool_search(x, input_order, indomain_max)`. FlatZinc in `/scratch/arthur/codes-cp-work/nps/`, full
+tables in codes-cp `dom/report.md` §4.7 and `benchmark/README.md`.
+
+**Summary**
+
+1. **Nodes per second on the same tree** (XOR clauses; GCS, Gecode and baguette visit exactly the same
+   nodes, Chuffed the same tree counted as decisions):
+
+   | solver | 3 fixed (29 779 nodes) | 2 fixed (108 699) | weight <= 4 (16 451) |
+   |---|---|---|---|
+   | Gecode 6.4.0 | 213 000 | 225 000 | 189 000 |
+   | Chuffed | 204 000 | 212 000 | 183 000 |
+   | GCS | 61 000 | 63 000 | 57 000 |
+   | baguette `--no-proof` | 2 870 | 1 820 | 3 430 |
+   | baguette with proof | 1 640 | 1 220 | 1 840 |
+
+   Without proof baguette is 70 to 120 times slower per node than Gecode. The proof costs 1.5 to 1.9
+   times on the XOR clauses (733 MB of `rup` for the 108 699 nodes) and 1.03 to 1.16 times on the
+   sums. Against 2c97b16 (the 2026-11-18 table above), b403e28 visits the same trees 1.4 to 16 times
+   faster (2 fixed, XOR, with proof: 1 710 s -> 109 s).
+2. **Profile without proof** (`perf record`, 40 s of the 2-fixed XOR run, self time by module):
+   engine (store, domains, wakes, advisors, watch lists) 40 %; `Pb.*` 17 %, for the only two PB rows
+   of the model, 1 <= Σx <= 8 over 48 variables (`Pb.status` alone 9.5 %, `Pb.next_free` 3.2 %);
+   closure calls (`caml_apply2`) 8 %; GC and allocation 6 %; clause propagation, the whole rest of the
+   model, 6 %; hashing and comparing literals 5 %.
+3. **Learned PB rows are all kept.** With the sums (with proof, default flags):
+
+   | series | learned PB rows | `learned_pb` runs per node | effective runs per node | nodes/s |
+   |---|---|---|---|---|
+   | 3 coordinates fixed | 1 047 | 476 | 8.4 | 430 |
+   | 2 coordinates fixed | 4 125 | 1 704 | 10.1 | 77 |
+   | no symmetry breaking (1 h, UNKNOWN) | 23 298 | 8 631 | 10.9 | 13 |
+
+   Here the PB rows are all the learned constraints, where D-0139 §3 counted them under 0.5 % on
+   its suite.
+4. **The clause path prunes nothing on these models under a fixed search.** On the XOR form
+   `learned_clause` makes 0.00 effective runs per node and `skipped 0`; Chuffed explores GCS's tree
+   too. On the codes-cp benchmark instance `rand80s3_w9` (sums, 1 h), Gecode proves UNSAT with 186 M
+   failures at 93 000/s, Chuffed reaches 105 M at 28 000/s with `backjumps=0`. The PB path is what
+   shrinks the search: 2 099 nodes against 29 779 (3 fixed), and `act` (`--search activity
+   --restarts luby --phase-saving --reuse-trail`, tiered retention) brings it to 1 454; on the XOR
+   clauses `act` visits 2 to 3 times more nodes, and `-f` is worse than the default in every cell.
+5. **Benchmark, second pass at 1 h** (the 12 instances at most two solvers solved in 10 min): baguette,
+   `baguette-act`, Chuffed, GCS, Huub and Pumpkin solve none of them; Gecode and CP-SAT solve the two
+   random [80, 40] UNSAT instances in 1 608 to 3 032 s.
+6. **A result proved with baguette.** In the codes-cp R4 work (an extremal [72, 36, 16] code with an
+   automorphism of order 7, case k = 3), baguette proves the last round UNSAT in 17 nodes and 16.8 s,
+   and VeriPB 3.0.2 checks the 2.7 MB proof in 1 s. The FlatZinc is written by a script, with each XOR
+   as 4 `bool_clause` since `bool_xor` is outside SPEC 2.1's subset.
+
+**Leads to explore** (none claimed; each could become an M13-codes-leads row)
+
+- **Incremental slack for the cardinality rows.** `Pb.status` and `Pb.next_free` take 13 % on a model
+  with two PB rows. D-0085/D-0087 already proposed a watched-slack PB propagation, never measured;
+  these models are a small, clean benchmark for it.
+- **The engine's per-node overhead on pure Boolean models.** 40 % in store, wakes and advisors, and
+  70 to 120 times Gecode per node. A first measurement: instructions per node on this model, split
+  by engine call site, against Gecode's.
+- **A retention policy that evicts learned PB rows**, measured on the three sum series above (the
+  parked M10-T4 row "Optional, for a PB-row LBD").
+- **Proof cost on the clause path.** 733 MB of `rup` for 108 699 nodes is about 6.7 KB per node. When a
+  learned clause is only the negation of the current decisions, it prunes nothing under a fixed search
+  and its `rup` line could be avoided. To check: how many of the learned clauses on these models are
+  of this kind.
+- **Whether to learn decision-only nogoods at all** under a fixed search (same observation, search
+  side): they grow the database and cost wakes, `learned_clause` reports no effective run.
 
 ## M13-codes-leads opened, 2026-11-19 (codes-cp session): two leads to study, no code
 

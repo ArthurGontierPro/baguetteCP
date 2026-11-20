@@ -2,7 +2,7 @@
    through mznlib/fzn_member_int.mzn (and fzn_member_bool.mzn, over 0..1), where [b] is
    one SELECTOR Boolean per position the library introduces; docs/DECISIONS.md D-0151
    section 3 is its design record and D-0159 its implementation, including the one place
-   the implementation departs from the design (the rows, below); D-0168 (M7-T34)
+   the implementation departs from the design (the rows, below); D-0169 (M7-T34)
    replaced its width-proportional rows by two big-M rows per position. Governed by
    docs/SPEC.md 3.2 (consistency) and 3.3 (explanations).
 
@@ -36,7 +36,7 @@
    over it, so the literal mass cannot be width-free on this encoding, only smaller.
    (A row over the whole hulls, `x_k - y + M ~b_k >= 0` with M = hi y - lo x_k, was built
    first and measured: 47 M literals over the 35 Challenge instances of D-0159 section 5
-   against the clauses' 22 M, D-0168.)
+   against the clauses' 22 M, D-0169.)
 
    Until M7-T34 the rows were the BOUND form per threshold v of the two hulls,
 
@@ -120,7 +120,7 @@
    The counts are minimal for holes the reason cites; a hole whose line holds with no
    fact (declared, or punched at the root) can make one redundant -- 30 of 54 lemmas on
    satisfiable random models, test_mutation's chase lanes pin three that are not
-   (bench/member_spike/fuzz_member.py, D-0168).
+   (bench/member_spike/fuzz_member.py, D-0169).
 
    The derivation ahead (M7-T34). A line with lemmas is made under [Store.deriving_ahead],
    so lib/core/trace.ml writes its explanation's `pol` before it: each lemma (a [Clause],

@@ -1,4 +1,4 @@
-% M7-T34 (D-0168), hand-written: a SET selector carries holes both ways. x2 is the
+% M7-T34 (D-0169), hand-written: a SET selector carries holes both ways. x2 is the
 % constant 9, so b2 dies on its big-M row and b1 is set by OR at the root; x1 and y are
 % over 1..6 with root int_ne punching 2, 4, 6 out of x1 and 1, 3, 5 out of y. Each hole of
 % one side is removed from the other under b1 (y <> v from x1's hole, x1 <> v from y's):

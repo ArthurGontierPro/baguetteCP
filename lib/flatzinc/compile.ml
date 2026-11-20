@@ -739,7 +739,7 @@ let held_families (m : Model.t) : (int, string list) Hashtbl.t =
           (* M7-T28 (D-0151): the channel rows are over both arrays' ladders *)
           hold "inverse" (iv.Model.inv_f @ iv.Model.inv_g)
       | Model.Member mb ->
-          (* M7-T28 (D-0159, D-0168): every line is a [Clause] over the ladders of x
+          (* M7-T28 (D-0159, D-0169): every line is a [Clause] over the ladders of x
              and y, and so are the threshold lemmas written ahead of some *)
           hold "member" (mb.Model.mem_y :: mb.Model.mem_x)
       | Model.Int_lin_le _ | Model.Int_lin_eq _ | Model.Int_le _ | Model.Int_lt _
@@ -1509,7 +1509,7 @@ let compile (m : Model.t) : t =
   in
   (* ------------------------------------------------------------------------ M7-T28
 
-     `baguette_member(x, y, b)` (D-0151 section 3, D-0159, D-0168): the rows
+     `baguette_member(x, y, b)` (D-0151 section 3, D-0159, D-0169): the rows
      lib/core/prop/member.ml's header states, in this order -- OR over the selectors, then
      per position k, [a, b] the overlap of the two DECLARED hulls (M7-T34):
 

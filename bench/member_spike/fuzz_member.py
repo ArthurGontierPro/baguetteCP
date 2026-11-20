@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""M7-T34 (D-0168): random small `baguette_member` models, end to end.
+"""M7-T34 (D-0169): random small `baguette_member` models, end to end.
 
 Each model: 2..4 positions over 1..7 (set domains, so declared holes; sometimes a
 constant, sometimes a variable twice or y itself among x), y over a set (sometimes a

@@ -3,7 +3,7 @@
 # then compare_run.sh over the Challenge instances that reach `baguette_member` once
 # flattened (member_routes.sh), 300 s with proof, baguette only, <par>-way. Each side
 # flattens with ITS OWN mznlib: "before" is main, where member is std's decomposition.
-# M7-T34 (D-0168): the hub and the run directory are parameters (HUB, RUNS), and every
+# M7-T34 (D-0169): the hub and the run directory are parameters (HUB, RUNS), and every
 # solver and checker process runs in its own `systemd-run --user --scope` with
 # MemoryMax=32G (a wrapper script per side; the real binary's md5 is in binary.md5).
 # Usage: meas_member.sh <tag> <branch> <instances.lst> [par]   (detached by the caller)

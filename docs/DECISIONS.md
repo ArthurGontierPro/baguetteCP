@@ -19797,3 +19797,463 @@ reversing it costs.
 Also decided: the Challenge-wide re-measurement (M8-T4, M9-T3, M10-T5) does NOT rerun Chuffed; it
 compares against M7-T26's recorded Chuffed runs and the official archive (bench/challenge/README §3
 asked the user; the delegation answers it).
+
+## D-0156  M7-T33: all_different's two pigeonholes carry their facts under a decision, derived ahead of the conflict line, so 1UIP learning resolves from them; and `Alldiff.excl` cites its ladder rungs without a name lookup per rung
+
+Status: DECIDED (built, measured, gated on fataepyc-06; the diff-lane references of the runs listed in section 7 are the orchestrator's to re-record after the gated merge)
+Date: 2026-11-19
+Task: M7-T33, and D-0145 section 5's `Alldiff.excl` leftover (agent-alldiff, `wave53-alldiff`).
+Touches: `lib/core/prop/alldiff.ml` (`push_conflict`, `distinct_facts`, `pass`'s `push`,
+`regin_pass`'s failed matching, the term's `rungs`, `rung`, `excl`, `overshoot_cancel`, the
+header), `lib/proof/encoding.ml` (`consistency_ids`, additive), `test/unit/test_prop.ml` (the
+M7-T33 section), `test/models/alldiff_conflict_learn_sat.fzn` and
+`test/models/alldiff_regin_conflict_learn_sat.fzn` with their expected outputs.
+
+### 1. The finding
+
+D-0151 section 2 found that `2015_p1f_13` under the native `inverse` learns 0 clauses, and
+traced it to all_different. Both of its pigeonholes reached the store as a push that must fail:
+stage 1 pushes the surplus variable of a Hall interval past its own upper bound, stage 2 pushes
+the first unmatched variable past its upper bound, and `Store.apply`'s `Failed` arm pairs the
+derivation with `Reason.none`. That is sound, because search.ml's D-0040 arm writes the
+derivation and the decision nogood closes the branch. But `Learn.at_conflict` gets an empty cut,
+so no all_different conflict ever produced a 1UIP clause.
+
+### 2. The change
+
+Under a decision, both pigeonholes are now reported with their facts, under
+`Store.deriving_ahead` (`push_conflict`). `Trace.conflict_line` then writes the derivation
+first and `rup ~facts >= 1` after it, which is cumulative's arrangement (D-0096) and element's
+(D-0101). Nothing outside `alldiff.ml` changed on the solver side.
+
+The facts are chosen so that every literal the derivation leaves in its row is the negation of
+one of them. The `rup` line is then unit propagation against one line.
+
+| what the derivation leaves | where it comes from | fact on the tail |
+|---|---|---|
+| a Hall member's `~x_ge_lo` / `x_ge_(hi+1)` | `excl`, when `hall_cancels` cannot cancel a bound a decision moved | that bound (`hall_facts`) |
+| a deep hole's clause `~x_eq_v \/ ~facts` | `Gone_hole`, for a hole the value set excludes | the REMOVER's facts (`hall_facts` names the excluded holes only) |
+| the surplus variable's `~y_ge_lo(y)` | the telescoped forward channelling | `y >= lo(y)` |
+| the surplus variable's residue `y_ge_(b+1)` | the telescope, when `overshoot_cancel` has no root upper bound to cancel it with | `y <= hi(y)`, with `hi(y) <= b`: unit propagation walks the rungs `hi(y)+1 .. b` |
+
+The last row is the crossed opposing bound that `Store.apply`'s `Failed` arm says a conflict line
+needs and a pruning's reason does not carry. So stage 1's facts are `remove_reason`'s (both bounds
+of `y`, then the Hall set's) and not `prune_reason`'s. Stage 2's are `hall_facts` over the whole
+violating set A, value set B. A fact is listed once (`distinct_facts`): three members holed by
+the same remover would otherwise list its tail three times. A root-established fact whose literal
+the derivation cancelled is still listed. That is harmless, since Analysis drops root nodes from
+every cut, and it is element's choice too.
+
+AT THE ROOT NOTHING CHANGES. With no decision there is no branch to learn from, every bound the
+derivation reads is root-established and cancelled, and the derivation closes to `0 >= 1`, which
+search.ml's root arm writes. Every root refutation is byte-identical (measured, section 6). A
+test (`M7-T33 root`) holds the root conflict to `Reason.none`.
+
+Why the push test agrees with the store. Stage 1's pigeonhole arm reads `y` from the pass's
+snapshot, whose `s_hi <= b` the live bound can only undercut (I-P6), so `bound > y.s_hi` holds
+live too. The `n = k` arm reads `y` live. Stage 2 never reaches its emptying push under a
+decision any more. The removals of a Regin pass never empty a domain (a removal never takes
+`M(y)` from `y`), so `remove_one`'s conflict arm stays as it was.
+
+No new `Explanation` constructor, no change to `justify.ml`, `explanation.ml`, `store.ml` or
+`search.ml`.
+
+### 3. Lanes
+
+`test/unit/test_prop.ml`, the M7-T33 section, on two SAT scenes (D-0053). In each, a decision on
+`k` confines or holes `x1..x3` through three single-variable propagators (`int_le` / `int_ne`) that
+all watch `k`. The engine's FIFO runs all three before the all_different they wake, so the
+conflict is all_different's by construction.
+
+- (a) driven by hand: the stage-1 conflict (k <= 2 confines three variables to 1..2) and the
+  Regin conflict (k = 2 holes 2 in three variables of 1..3) are all_different's, `c_ahead`, carry
+  facts (`~x3_ge_3`, the crossed bound, and `~k_ge_3`, the holes' remover), list no fact twice,
+  satisfy `Store.agreement_holds` (D-0026), and `Learn.at_conflict` returns `Some`. The root
+  pigeonhole is still factless.
+- (b) under search, the model's own order, audit on. Both learn 2 clauses (0 before), both proofs
+  verify. The pinned conflict lines are `rup +1 x3_ge_3 +1 x1_ge_3 +1 x2_ge_3 >= 1 ;` and
+  `rup +1 k_ge_3 >= 1 ;`, each written right after its `pol`. Four refusal lanes, each asserted
+  on the full RUP sentence AND on the line number in "Checking error at":
+  - standalone: the line alone against the `.opb` is refused (I-X10, cumulative's lane);
+  - no-pol: the honest proof without the `pol` ahead of the line is refused at that line, so
+    the derivation carries it in sequence too (unlike element's, D-0101 section 2);
+  - no-crossed (stage 1): the line without `y`'s upper bound is refused;
+  - no-fact (stage 1): the line without its last fact, a Hall member's bound, is refused.
+  The Regin line has one fact, so no fact can be dropped without corrupting the claim itself
+  (test_mutation.ml's trap 3).
+
+On the code before this change, every (b) lane fails at "the conflict line is on the page".
+
+### 4. Measurements: p1f, the inverse instances, alldiff-heavy instances
+
+Challenge pairs on fataepyc-06, 100 instances (the alldiff, inverse and p1f families of the
+Challenge corpus), 300 s, proof on, `--max-heap-mb 8192`, 20 in parallel, binaries `643f44e9`
+(main `c058ada`) and `45b8a3c7` (this branch's tip, `328e631`), with every SAT/UNSAT proof checked.
+Results in `/scratch/arthur/wave53-alldiff-runs/chal/results.tsv`.
+
+| | main | branch |
+|---|---|---|
+| UNSAT / SAT (all VERIFIED) | 3 / 2 | 4 / 2 |
+| INCUMBENT | 16 | 37 |
+| TIMEOUT with nothing | 71 | 41 |
+| heap budget reached (rc 5) | 6 | 15 |
+| rc 134 | 2 | 1 |
+
+Per family (complete / incumbent / nothing / error, nodes and learned constraints summed):
+
+| family | n | main | branch |
+|---|---|---|---|
+| p1f | 5 | 0/0/5/0, 10 687 nodes, 301 learned | 1/0/4/0, 83 318, 39 971 |
+| elitserien_handball | 20 | 0/0/20/0, 6 689, 2 082 | 0/20/0/0, 177 347, 87 269 |
+| p1f-pjs | 10 | 0/1/9/0, 5 674, 993 | 0/1/9/0, 117 461, 52 601 |
+| costas-array | 10 | 0/0/10/0, 47 563, 20 276 | 0/0/10/0, 128 618, 64 262 |
+| ghoulomb | 5 | 0/1/3/1 | 0/2/1/2 |
+| black-hole | 10 | 3/0/7/0, 151, 8 | 3/0/3/4, 269, 95 |
+| black-hole_layout | 5 | 0/0/4/1 | 0/0/1/4 |
+| sudoku (fixed + opt) | 10 | 1/0/9/0, 409, 0 | 1/0/9/0, 15 913, 7 879 |
+| monomatch, tdtsp, travelling-thief | 32 | equal answers | equal answers |
+
+- `2015_p1f_13`: main TIMEOUT with 0 learned, branch UNSAT in 19.5 s with 1 877 learned, VERIFIED.
+  This is the instance D-0151 section 2 traced the finding to.
+- All 20 `elitserien_handball` instances go from no solution to an incumbent.
+- `2020_p1f-pjs_10`: incumbent objective 380 on main, 354 on the branch. No other incumbent changed.
+- The new rc 5 runs (black-hole 9, 14, 12 and 4, black-hole_layout 3, 17 and 25, ghoulomb
+  4-9-20, and tdtsp_inst_20_25, which was rc 134 on main) all reach the 8 GB heap budget before
+  300 s. They were TIMEOUT on main. See the finding below.
+
+#### Open finding: black-hole's heap per node
+
+`heapprobe/` reran `2013_black-hole_4` alone with `--max-heap-mb 8192 --time-limit 300`
+(`systemd-run MemoryMax=32G`), using `b1d01d50` (main plus `cc9d94d` alone, section 5b) and
+`45b8a3c7` (the tip). Both stop at the heap budget with rc 5 (8 221 MB and 8 243 MB of OCaml heap,
+8.41 and 8.43 GB RSS, after 88.8 s and 86.3 s). The heap is reached with section 5b alone, so
+part 1's learning does not cause it. Removing the trail walk makes the run go further in the
+same time, and it then reaches the heap growth per node that D-0155 section 4 left open for
+black-hole. Main does not reach the budget because it is slower and stops at 300 s first. NOT
+INVESTIGATED HERE. The next step is a heap profile of black-hole per node (what holds the
+memory: the proof writer, the trail, or the element and alldiff fact lists).
+
+### 5. `Alldiff.excl` without a name lookup per rung (D-0145 section 5)
+
+`excl` cites the ladder rungs between an excluded value and the current bound, O(width) rungs
+per excluded value, and each went through `Encoding.consistency_id`, which finds the variable by
+NAME (`Encoding.find`, a string hash). D-0145 measured that at 12.4 % of
+`2011_cyclic-rcpsp_easy_6`'s proof mode. `Encoding.consistency_ids t x` (additive, no signature
+changed) looks `x` up once and returns the function `consistency_id t x` is, from the record
+`find` returned. That record never changes once `x` is declared: a redeclaration with other
+bounds is refused, and `lo`, `hi`, `ladder_base` and `repr` are immutable. Each all_different
+term keeps it in a lazy field, forced the first time a derivation cites one of its rungs, and
+`excl` and `overshoot_cancel` cite through it. Same ids, same order, so every byte is the same.
+
+Proof mode at 10 000 nodes, `perf stat -e instructions:u`, CLI default (audit on), one run each
+on fataepyc-06 (binaries `64ec63e0` main at `9a9c461`, `4d06f9d4` at `b543817`):
+
+| instance | main | `b543817` | change | wall main / branch | `.pbp` |
+|---|---|---|---|---|---|
+| `2011_cyclic-rcpsp_easy_6` | 646.22 G | 581.31 G | -10.0 % | 90.5 / 82.9 s | identical, 2.02 GB |
+| `2013_rcpsp_11` | 194.28 G | 194.31 G | 0.0 % | 35.7 / 34.4 s | identical, 421 MB |
+
+A flat `perf record` of the branch on cyclic (2 000 nodes) no longer shows `Encoding.find` or
+`caml_hash` in its top 40 symbols. `Alldiff.rung` itself is 1.4 %. What is left of the
+derivation's cost is allocation (the `range` lists, one `Model_row` term per rung), which is the
+derivation's size and not a lookup. Gate on `b543817` alone: `make check` rc 0 (4 243 unit
+checks, 0 FAIL, 198 models), every model's `.out`/`.opb`/`.pbp` equal to main's, lane 301/301,
+debug lane 289/289.
+
+### 5b. `Alldiff.hole_cite` without a whole-trail walk per hole (D-0155 section 4)
+
+Added at the orchestrator's request once agent-element's D-0155 had removed element's own walk.
+`hole_cite` asks, for every hole in a snapshotted domain, which trail entry removed it, and at
+which level. `remover_index` answered by walking the WHOLE trail backwards, because when it was
+written an entry did not carry its position. Since M6-T15 it does (`pos`), so `hole_cite` now
+asks `Store.remover ~before:(Store.trail_length store)` (D-0088, a binary search over the
+variable's entry history) and reads the level off `e.pos`. It is the same entry: the walk's
+predicate is `Store.remover_scan`'s, started at the same position, and `Store.remover` is
+checked against that scan by physical equality under `BAGUETTE_DEBUG`. Element made the same
+move in D-0155. Its own commit (`cc9d94d`).
+
+Measured on top of main `c058ada` (D-0155 merged), `perf stat -e instructions:u`, proof on, one
+run each, binaries `643f44e9` (main, element's gate binary) and `b1d01d50` (main plus `cc9d94d`
+alone):
+
+| instance | budget | main | main + `cc9d94d` | artefacts |
+|---|---|---|---|---|
+| `2011_black-hole_10` | to the end (UNSAT at the root) | 52.23 G, 7.2 s | 15.92 G, 2.5 s | stdout, `.opb`, `.pbp` (49 MB), stats equal |
+| `2011_black-hole_20` | 20 nodes | 1 846.0 G, 262 s | 174.5 G, 29.4 s | equal (`.pbp` 278 MB) |
+
+Peak RSS is unchanged (363 MB and 2.99 GB). With part 1 as well, the Challenge run in section 4
+shows what the family does at 300 s.
+
+### 6. Gate on the branch tip
+
+Tip `328e631` (binary `45b8a3c7`) against main `c058ada` (binary `643f44e9`), on a fresh clone
+on fataepyc-06 (`/scratch/arthur/wave53-alldiff-runs/gate-tip`, logs in `final/gate/`):
+
+- `make check` rc 0, 4 278 unit checks ok, 0 FAIL, 200 models passed (0 failed, 0 skipped),
+  24.65 s, peak RSS 101 712 kB.
+- Artefacts against main over the 200 models: only four `.pbp` differ, all alldiff ones
+  (`alldiff_conflict_learn_sat`, `alldiff_pigeonhole_narrow_sat`,
+  `alldiff_regin_conflict_learn_sat`, `alldiff_search_unsat`). Each `.out` and `.opb` is equal,
+  and no other model's proof moved.
+- Scaling lane: ok, every line within its threshold (51 s).
+- Diff lane: rc 2, 18 of 301 runs differ, exactly the expected ones.
+  `2011_cyclic-rcpsp_easy_6@2000` differs in 6 configurations (default, audit0, lbd, nopb, bits0,
+  noproof), and the search now finds objective 666 or 667 within the budget where the reference
+  had none. `2020_lot-sizing_pigment15b.psp` differs in all 12 configurations: search counters
+  in 11, and `[activity]` exits 134 (`allocation failure during minor GC`) at the lane's 4 GB cap.
+  Every other line is equal, `2014_openshop_gp10-4@300`'s proof hash among them.
+- Debug lane: rc 2, 6 of 289 differ, the same six cyclic configurations. lot-sizing is skipped
+  there by `bench/diff/debug-skip.tsv`.
+
+### 7. What the orchestrator must re-record
+
+After the gated merge, in its own commit (`make diff ARGS="--tier all -j 16 --update"`, then the
+same with `--debug`):
+
+- `2011_cyclic-rcpsp_easy_6@2000` x {default, audit0, lbd, nopb, bits0, noproof}, both passes.
+- `2020_lot-sizing_pigment15b.psp` x its 11 configurations other than `activity` (normal pass
+  only, since the debug pass skips it).
+- `2020_lot-sizing_pigment15b.psp [activity]` CANNOT be recorded, because it dies at the lane's
+  4 GB cap. Main's run peaks at 3.44 GB RSS and the branch's at 4.35 GB. The extra memory is on the
+  search side (`--no-proof`: 2.55 -> 3.49 GB), and it follows the learned constraints, 846 on
+  main and 1 722 on the branch (`/scratch/arthur/wave53-alldiff-runs/mem/`, `repro/`). This is
+  for the user to decide, and the cap was not raised. The options are (a) raise this one
+  configuration's cap through `BAGUETTE_MEM_CAP_KB` with a recorded reason,
+  (b) move it to the skip list as debug-skip.tsv already does for this instance,
+  (c) lower its node budget, or (d) treat the growth as a regression of this branch and hold
+  the merge.
+
+A second refusal in the `--update` pass does not come from this branch.
+`2014_openshop_gp10-4@300 [default]` and `[audit0]` (both passes) are REFUSED because the checker
+exits with a Rust panic. The lane runs the checker outside the 4 GB cap. In the diff pass the same
+proof's hash equals the reference recorded on main, so the bytes are main's. A clean `--update`
+on main would most likely be refused the same way. NOT INVESTIGATED. Rerun
+`veripb p.opb p.pbp` on that proof with `RUST_BACKTRACE=1` to get the panic message.
+
+### 8. What would reverse this
+
+- A refused alldiff conflict line on a satisfiable model. That would mean a literal the
+  derivation leaves in its row has no fact, which is the D-0075 shape again.
+- A family where learning from alldiff conflicts costs more than it prunes (long Regin tails
+  from many removers). The tails are bounded by the violating set's facts, and the measurement
+  in section 4 is where to look first.
+
+## D-0165  D-0161 request 1: `Alldiff.snap_of` keeps only what needs the store; the values lost below and above the window are rebuilt inside the `Deferred`
+
+Status: DONE (gate green, section 4)
+Date: 2026-11-19
+
+By agent-snap (branch `wave54-snap`, on top of `wave53-alldiff`'s tip `b7e1ca9`, which it merges
+after). Touches `lib/core/prop/alldiff.ml` only. Runs in `/scratch/arthur/wave54-snap-runs/`,
+copied to `/cluster/arthur/baguette-results/wave54-snap/`.
+
+### 1. What changed
+
+D-0161 section 6 request 1. `snap_of` built, for every variable of the constraint at every
+snapshot, `s_gone`: every declared value the variable has lost, tagged `Gone_below`, a hole cite,
+or `Gone_above`. That is two `range` lists of up to the declared width per variable per pass.
+Only the derivations read the below and above runs (`alo_over`, `hall_cancels`), and they all run
+inside a `Deferred` (`prune_expl`, `remove_expl`, `conflict_expl`). The reason reads only the holes
+(`hall_facts`). So under `--no-proof` none of it was ever read, and with a proof most of it was not.
+
+- The snapshot now holds `s_holes`, the interior holes with their cites, and nothing else of that
+  list. A hole's cite reads the trail (`Store.remover`, the level of the remover), so it stays
+  EAGER. Its cost on black-hole is D-0155's request, not this one.
+- `gone s` rebuilds the full list when a derivation is forced: `range s_dlo (s_lo - 1)` tagged
+  `Gone_below`, then `s_holes`, then `range (s_hi + 1) s_dhi` tagged `Gone_above`. These are the
+  values, the order and the tags `gone_of` produced, so `alo_over` emits the same summands in the
+  same order. `hall_cancels` counts the excluded values of the two runs directly, which gives the
+  same two numbers the filter over `s_gone` gave.
+- The root flags `s_lo_root`/`s_hi_root` stay EAGER, because they read the bound supports as they
+  stand at the snapshot. They now call `Store.at_root` (one comparison against the first level
+  mark) instead of `Store.level_of_index ... = 0` (a binary search over the open levels). Same
+  answer by I-T2. `hole_cite` makes the same substitution. A `Store.history` (D-0124) was not
+  needed for this, and it would have tied the derivation's forcing to the history being live.
+
+### 2. Why it is sound (the rule, also in `alldiff.ml`'s header)
+
+I-X6 forbids a thunk to READ the store. It does not forbid a thunk to COMPUTE from numbers the
+snapshot froze. The below and above runs are functions of `s_dlo`, `s_lo`, `s_hi`, `s_dhi` and two
+constant tags, so building them at forcing time gives exactly the list the snapshot would have
+built. What does need the store (the supports' levels, the holes' removers) is still read at
+snapshot time. No proof line can move, and every proof is byte-identical (section 4).
+
+### 3. Measurements
+
+Binaries: base `b7e1ca9` md5 `45b8a3c7` (the same md5 as wave53-alldiff's tip gate), new `6d04191`
+md5 `75a821cb`. `perf stat -e instructions:u` and `/usr/bin/time` peak RSS, `--stats`, equal
+node counts, every stdout, `--stats` counter and `.pbp` md5 equal between the two.
+
+| instance, budget | mode | base instructions | new instructions | change | peak RSS base -> new |
+|---|---|---|---|---|---|
+| `2011_cyclic-rcpsp_easy_6`, 10 000 nodes | `--no-proof` | 156.96 G | 116.71 G | -25.6 % | 160 -> 140 MB |
+| `2011_black-hole_10`, to the end (UNSAT at the root) | `--no-proof` | 5.388 G | 5.334 G | -1.0 % | 155 -> 155 MB |
+| `2011_black-hole_20`, 20 nodes | `--no-proof` | 55.16 G | 51.51 G | -6.6 % | 1 152 -> 1 069 MB |
+| `2011_cyclic-rcpsp_easy_6`, 10 000 nodes | `--proof` | 776.9 G | 736.4 G | -5.2 % | 346 -> 352 MB |
+| `2011_black-hole_10`, to the end | `--proof` | 15.88 G | 15.79 G | -0.6 % | 364 -> 363 MB |
+| `2011_black-hole_20`, 20 nodes | `--proof` | 178.2 G | 174.0 G | -2.3 % | 3 023 -> 3 016 MB |
+
+Cyclic is from `bench/diff/corpus`, the black-hole pair from
+`/scratch/arthur/wave53-alldiff-runs/chal/fzn/` (the instances D-0156 measured). The cyclic proof
+is 2.41 GB, `.pbp` md5 `c60f0e33` on both.
+
+D-0161 predicted 39.4 % on cyclic and the change saves 25.6 %. The prediction was an inclusive
+share on main `e003729`, before M7-T33, and taken on another binary. On this base a flat profile
+(`perf record -F 499`, self time) puts Alldiff's own functions at 7.7 % and `Stdlib.List` plus the
+allocator and GC at 22.8 %. After the change they are at 1.8 % and 7.9 %. What alldiff still
+costs on cyclic is the snapshot record itself and the passes, and it is not where cyclic's time
+goes any more (`Pb.effective_all`, `Pb.status` and `Pb.pass` are 38 % of the new profile).
+
+Black-hole gains little because its alldiff variables carry holes, and the holes stay eager. Its
+heap is D-0164's `index_hole_clause`, merged on main after this base.
+
+### 4. Gate
+
+`/scratch/arthur/wave54-snap-runs/gate.sh`, on a fresh clone of the pushed tip `6d04191` from the
+hub, OLD = `b7e1ca9` built in its own fresh clone (md5 `45b8a3c7`), NEW md5 `75a821cb`.
+
+- `make check`: rc 0, 4 278 ok, 0 FAIL, model tests 200 passed, peak RSS 102 MB.
+- Every `test/models/*.fzn` (200): `--proof` stdout, exit code, `.opb`, `.pbp`, and `--no-proof
+  --stats` stdout and stderr, all equal to OLD (0 differences).
+- `make diff ARGS="--tier all -j 16"`: 18 of 301 runs differ from the reference, the SAME 18 lines
+  as the base's own lane (`/scratch/arthur/wave53-alldiff-runs/final/gate/diff.log`, same binary
+  md5): cyclic x6 and lot-sizing x12, wave53-alldiff's pending re-record. Nothing else.
+- `--debug`: 6 of 289 differ, the same 6 lines as the base's debug lane (cyclic x6).
+- `make scaling ARGS="-j 16"`: ok, every line within its threshold. `bench/diff` untouched.
+
+### 5. What this leaves
+
+- `holes_of` still lists `range lo hi` for a holed domain and cites every hole at every snapshot.
+  Only `hall_facts` reads the holes outside a derivation, and only the holes a Regin value set
+  EXCLUDES. Making the cites lazy needs the remover's level as it stood, so it would go through a
+  `Store.history` (D-0124) and its liveness check. That is D-0155's request, and it is the one that
+  matters on black-hole.
+- `snap_of` still runs for every variable at every pass, and the record is allocated whether a
+  pruning follows or not. It is now cheap per variable (two O(1) root tests and a `has_holes`
+  test), so I left it.
+## D-0168  M11-complexity-T13: a thunk is released once its line is written; the memo lets go of what the closure built
+
+Status: DONE (every byte the same; gate in section 6).
+Date: 2026-11-20
+Task: M11-complexity-T13 (agent-thunk, `wave55-thunk`). D-0166 section 5 option B, decided by D-0167
+item 6 on the user's delegation.
+Touches: `lib/core/explanation.ml` (the `thunk` record, `force`, the smart constructors, the
+header), `lib/core/justify.ml` (the thunk's line, the memo's window and its release, the debug
+checks), `lib/core/trace.ml` (`derive_ahead` emits the thunk, not its forced head: claimed on the
+branch), `lib/core/pb_analysis.ml` (a comment in `cited_ids`), `test/unit/test_justify.ml`,
+`docs/ARCHITECTURE.md` section 4.
+
+### 1. What changed
+
+`Explanation.thunk` gains two fields. `line` is `No_line` until `Justify.emit` has written the
+thunk's derivation, then `Line { cid; level; epoch; owner }`: the id, the writer's level, the
+`ctx`'s wipe count when it was written and the `ctx`'s serial. `captures` says whether the last
+forcing may hold a node the closure did not build (section 3). `compute` is now the original
+closure, never replaced. Once the line is written the thunk is RELEASED: `forced` is dropped, and
+the memo cells its emission made are taken out (`Justify.release_window`), except the cells of
+captured nodes. Before, the tree stayed reachable from `forced`, from the closure `force` put in
+place of the original, and from the memo's keys (the forced head and every inner `Combine`).
+
+Every reader, and what it does now:
+
+| reader | before | now |
+|---|---|---|
+| a later `emit` of the thunk (a citing `Term`, `derive_ahead`, a conflict) | memo hit on the thunk or its forced head while the level lives | `Justify.live_line`: the recorded id while no wipe has reached its level (`wiped_at.(level) <= epoch`), and only for the `ctx` that wrote it; the thunk is no longer a memo key |
+| `emit` after a wipe of that level | the same physical tree written again, every cell gone with the wipe | the closure forced again and that tree written again, then released again |
+| `Pb_analysis.cited_ids`, `Explanation.lits` (the D-0026 agreement walk under `BAGUETTE_DEBUG`), the readers that match a forced head (`Search.weakened_row_only`, `close_root_conflict`, the conflict arm of `dfs`) | the cached tree | `force` runs the original closure again and does not keep the result |
+| `Trace.derive_ahead` | forced the explanation and emitted the forced HEAD, so the line was the head's memo entry | emits the thunk itself (a released thunk is not forced again just to ask whether it is a decision) |
+
+### 2. Why every byte is the same
+
+A second `emit` is answered under exactly the condition the memo entry answered: an entry made at
+level `l` died at the first `wipe_level k` with `k <= l`, and `wiped_at` is stamped for every
+level from `k` up to the highest level a line was recorded at. A re-emission writes the closure's
+tree again rather than the old physical one. The two are the same derivation because a thunk
+closes over a snapshot (I-X6); the memo answers the two alike because each node of the tree is
+either CAPTURED (a value the closure did not build: held physically by both forcings, its cell
+kept, found as before) or BUILT (new at each forcing, reachable from its tree alone, so no lookup
+can present it again, and its cell can go without changing any answer).
+
+D-0166 section 5 stated B's condition as "a re-forced tree shares no non-thunk node with another
+live one", and explanation.ml's header said a thunk is the ONLY shared node of a derivation. That
+is false, measured: on `test/models/alldiff_regin_hole_element_unsat.fzn` a conflict's derivation
+holds an eager `Combine` the trace had already written as another entry's line (the first
+version of this change, which took out every cell of the window, raised on it under
+`BAGUETTE_DEBUG`), and on the suite 39 cells are captured nodes first written inside another
+thunk's emission (`element_foreign_hole_rup_sat/unsat`, `element_shared_result_root_unsat`).
+Taking those cells out happened not to change a byte on the 198 models, but it would have on the
+first later lookup. So the release keeps them, and needs to know which they are.
+
+### 3. Telling captured from built, and what it costs
+
+The first way was a second forcing at every release: a node both forcings hold physically was
+captured. Measured on the lane's default runs it costs what the closure costs: `cyclic-rcpsp_easy_6`
++36.7 % instructions, `rcpsp_12` +15.5 %, `rcpsp_11` +7.4 %, `mspsp_hard_01` +2.9 %, and
+`2011_black-hole_9` +5.3 % (all_different's closures are about 49 M instructions each). Rejected.
+
+What is built instead is a FRAME per forcing (explanation.ml, "what a forcing builds"): the smart
+constructors (`clause`, `linear`, `cut`, `combine`, `resolve`) note every node they build in a
+ring of the last 256, and `citable`, through which every operand passes (`term`, `cut`,
+`resolve`, `linear_term`), looks the operand up there by identity, newest first. An operand that
+is a memoisable node and is not found, or a root that is not, sets `captures`. A forcing with no
+capture is released with every cell of its window taken out and no second forcing; one with a
+capture is forced a second time, and a node the two forcings share keeps its cell; if the two are
+not `same_derivation`, the thunk is not released (it keeps its tree and its cells, as before T13).
+The lookup is exact in the direction that matters: a node found was built in this forcing; a node
+not found (captured, or built more than 256 nodes earlier) is treated as captured and only costs
+a second forcing. The frame rests on every node being built through the smart constructors;
+nothing in `lib/` builds a `Term (c, e)` or a node directly.
+
+`BAGUETTE_DEBUG` forces every release a second time and requires the same derivation, requires a
+forcing that recorded no capture to share no node with its second forcing, requires every node an
+emission found already written by ANOTHER derivation (a hit on a cell outside its own window) to
+be captured, keeps every cell taken out in a ghost table and raises if a lookup would have found
+one, and compares every later forcing of a released thunk with the original, which a released
+thunk keeps under `BAGUETTE_DEBUG`.
+
+### 4. Measurements (fataepyc-06)
+
+`2011_black-hole_9 --proof` at node 40, on a throwaway base: main `fa5628f` with
+`origin/wave53-alldiff` merged and agent-heap's PROBE commits (`/scratch/arthur/wave55-thunk-runs/`,
+`meas` clone). Binaries: before `3379d493`, after `55097e1a` (the same PROBE code).
+
+| | before | after |
+|---|---|---|
+| live heap at node 40 | 2 041 MB | 658 MB |
+| the memo's share (drop order of D-0166) | 244 MB | 9 MB |
+| all_different's arena slots | 1 160 MB | 2 MB |
+| peak RSS (probe off) | 3 646 MB | 1 777 MB |
+| instructions (`perf stat`, probe off) | 656.3 G | 651.6 G (-0.7 %) |
+| wall (probe off, shared node) | 120.2 s | 105.1 s |
+| `.pbp` md5 | `1d8104fe` | `1d8104fe` |
+| thunks released, cells taken out | | 819, 3 390 743 |
+| second forcings at release, re-forcings after | | 0, 0 |
+
+The lane's 27 default-configuration runs at their budgets, `--stats --proof`, main's binary
+`214e74d1` against `da7b1545` (this change before formatting): stdout and `.pbp` equal on all 27;
+instructions from -28.7 % (`rcpsp_11@10000`, 247.0 -> 176.1 G: the memo no longer keeps the
+inner cells its lookups walk) through -7.4 % (`rcpsp_12`), -4.1 % (`cyclic-rcpsp_easy_6`, peak RSS
+187 -> 71 MB), -2.9 % (`lot-sizing`) to +0.35 % (`openshop_gp10-4@300`, which releases nothing),
+every one within +2 %. Re-forcings after release: 1 631 on `lot-sizing` (9 342 released), 24 on
+`evm-super-compilation`, 0 elsewhere; their cost is inside those instruction counts.
+
+The suite's 198 models, main's `214e74d1` against `da7b1545`, `--proof`, with and without
+`BAGUETTE_DEBUG`: 198 x 4 artefacts equal both ways; 483 thunks released, 6 forced a second time
+at release (captures), 18 written again after a wipe, 40 captured nodes kept, no debug check
+raised.
+
+### 5. What it costs in clarity
+
+`Explanation` now carries mutable global state for the frames, its smart constructors are no
+longer pure (they note what they build while a thunk is forced), and the memo has a second life
+cycle beside the wipe (the window, its kept cells, its ghost). Each is stated where it lives. The
+sentence "a thunk is the only shared node" is gone from the header, replaced by what was measured.
+
+### 6. Gate
+
+Fresh clone of `wave55-thunk` at `a8762eb` from the hub (`/scratch/arthur/wave55-thunk-gate`,
+binary `40638833`) against gate 70's `214e74d1`: `make check` rc 0 (4 312 ok, gate 70's 4 289 plus
+the 23 of `test_release_m11t13` and the reworded thunk counts; 198 models, peak RSS 100 MB),
+198 models x 4 artefacts equal (`out`, `rc`, `opb`, `pbp`), lane 301/301 and debug 289/289 equal
+to the reference, scaling ok, `bench/diff` untouched. Nothing to re-record. The tip after
+`a8762eb` adds documentation only.

@@ -1604,7 +1604,7 @@ let member_no_ahead_lane c ~proof ~opb =
       (contains out rup_wording);
     if not (rejected && contains out rup_wording) then show out
 
-(* M7-T34 (D-0168): member over big-M rows. [member_chase_src] is
+(* M7-T34 (D-0169): member over big-M rows. [member_chase_src] is
    test/models/member_chase_sat.fzn: indomain_max on w1 w2 w3 punches 1, 3, 5 out of y, so
    b1 dies across the holes of x1 {1,3,5} and y {2,4,6} (the CHASE), and b2's set selector
    carries y's hole 3 onto x2 (a HOLE TRANSFER); the pigeonhole p1 p2 p3 then fails the
@@ -2408,7 +2408,7 @@ solve :: seq_search([int_search([b, y], input_order, indomain_min, complete), in
           "gap-lemma";
         member_no_ahead_lane c ~proof:b.pbp ~opb:b.opb);
 
-    (* -- M7-T34: member over big-M rows (D-0168) -----------------------------------------
+    (* -- M7-T34: member over big-M rows (D-0169) -----------------------------------------
        [member_chase_src] above. Three text lanes, each deleting ONE threshold lemma of a
        derivation ahead (and its pol) from the honest proof; the line it was written for
        must be refused at the RUP wording:

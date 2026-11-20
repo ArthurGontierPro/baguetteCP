@@ -1,4 +1,4 @@
-% M7-T34 (D-0168), hand-written: the satisfiable twin of member_eqhole_unsat, so the hole
+% M7-T34 (D-0169), hand-written: the satisfiable twin of member_eqhole_unsat, so the hole
 % transfers' lemmas are checked over a database that is not contradictory. x2 is the
 % constant 9, so b1 is set at the root. indomain_max on w1, w2: x1 loses 5 and y loses 3,
 % and each hole crosses to the other side under b1 (y <> 5, x1 <> 3: one line on two

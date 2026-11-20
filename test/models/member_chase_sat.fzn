@@ -1,4 +1,4 @@
-% M7-T34 (D-0168), hand-written: a selector death ACROSS HOLES under search, the shape whose
+% M7-T34 (D-0169), hand-written: a selector death ACROSS HOLES under search, the shape whose
 % line rests on threshold lemmas written ahead (the big-M rows alone do not chase a hole).
 % x1 over {1,3,5} (declared holes), x2 and y over 1..6. indomain_max on w1, w2, w3 punches
 % 1, 3 and 5 out of y, so b1 dies across the holes of BOTH x1 (2, 4) and y (3, 5); OR sets

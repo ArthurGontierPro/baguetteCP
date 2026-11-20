@@ -4,7 +4,7 @@ baguette_member call of a flattened model, from the declared hulls alone (the sa
 threshold ranges as post_member), against what std's decomposition costs (n int_eq_reif).
 Usage: member_rows.py <model.fzn>   prints: calls, positions, rows, widest union hull.
 
-M7-T34 (D-0168): also what the big-M encoding writes -- OR, and per position over the
+M7-T34 (D-0169): also what the big-M encoding writes -- OR, and per position over the
 overlap [a, b] of the declared hulls the four bound clauses a constant does not fold and
 the two big-M rows over the overlap's rungs (the single row ~b_k for disjoint hulls; none
 for a position that IS y) -- as rows and literals, next to the threshold rows' literals;

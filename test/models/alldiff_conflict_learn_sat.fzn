@@ -1,0 +1,23 @@
+% M7-T33 / D-0156: an all_different STAGE-1 conflict under a decision now LEARNS.
+%
+% Deciding k <= 2 makes the three int_le push x1, x2, x3 <= 2 before the all_different they
+% wake runs (FIFO: each watches k and one x), so the Hall interval 1..2 holds three
+% variables. Until M7-T33 that pigeonhole was a push that must fail, paired with
+% Reason.none, so the branch closed on the full decision nogood and nothing was learned.
+% Now it is reported with its facts -- both bounds of the surplus variable and of the Hall
+% set, x1..x3 <= 2 -- and its derivation is written ahead of `rup ~facts >= 1`
+% (Store.deriving_ahead, D-0096), so 1UIP learning resolves from it (learned 2: k >= 2 and
+% k >= 3).
+%
+% SAT, so the database is not contradictory and every rup on the page is really checked
+% (D-0053, D-0066/D-0073). test_prop.ml's M7-T33 lanes pin the k <= 2 conflict line and
+% refuse it standalone, without its pol, and with its last fact dropped.
+var 1..4: k :: output_var;
+var 1..4: x1 :: output_var;
+var 1..4: x2 :: output_var;
+var 1..4: x3 :: output_var;
+constraint int_le(x1,k);
+constraint int_le(x2,k);
+constraint int_le(x3,k);
+constraint all_different_int([x1,x2,x3]);
+solve :: int_search([k,x1,x2,x3], input_order, indomain_min, complete) satisfy;
