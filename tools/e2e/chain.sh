@@ -22,6 +22,10 @@
 #                     its .opb, which the bridge cannot derive either (T4, D-0178)
 #     bridge-witness  the bridge's first `@A2` atom definition gets the witness `-> 0` in place
 #                     of `-> 1` (D-0174's first mutation): its red line is refused
+#     copy-witness    the bridge's first `@Y1` line, which defines a global_cardinality copy's
+#                     rung as its original's, gets the witness `Y -> ~X` (tools/e2e/mutate.py
+#                     copy): a wrong definition of an auxiliary baguette introduces, refused at
+#                     that red line (T5, D-0180)
 #   A mutation run prints `MODEL.MUT REFUSED ANSWER | at=<first two tokens of the refused
 #   line> | cause=<the checker's sentence> | target=<what was mutated>`, and the lane checks
 #   all of it against what the control expects (scripts/e2e_lane.sh).
@@ -93,6 +97,9 @@ python3 -I "$HERE/bridge.py" "$o.cake.opb" "$o.names" "$o.bag.opb" "$o.bag.pbp" 
     > "$o.bridged.pbp" 2> "$o.bridge.err" || say "FAIL bridge: $(tail -1 "$o.bridge.err")"
 if [ "$MUT" = bridge-witness ]; then
     target=$(python3 -I "$HERE/mutate.py" witness "$o.bridged.pbp") || say "FAIL no atom definition to mutate"
+fi
+if [ "$MUT" = copy-witness ]; then
+    target=$(python3 -I "$HERE/mutate.py" copy "$o.bridged.pbp") || say "FAIL no copy definition to mutate"
 fi
 
 t0=$(now)

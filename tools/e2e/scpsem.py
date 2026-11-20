@@ -21,7 +21,19 @@ The semantics, transcribed from cpScript.sml (CakeML master, 2026-11):
   lin_<cmp>_iff R (c1 X1 ...) Y   R <=> cmpop_val cmp (sum ...) Y  (lin_sem, Zr = INR R)
   or (R1 ...) R                R <=> EXISTS Ri                    (or_sem)
   and (R1 ...) R               R <=> EVERY Ri                     (and_sem)
-Any other keyword, a one-sided `_if` form or a prob_type other than `decide` is refused (exit 2).
+  and the T5 forms (D-0180):
+  <cmp>_if R X Y               R ==> cmpop_val cmp X Y            (cmpop_sem, Zr = INL R)
+  element (A0 ...) (Y off) Z   0 <= Y-off < n and Z = A[Y-off]    (element_sem)
+  gacglobalcardinality (X1 ...) (v1 ...) (C1 ...)
+                               each Cj = #{i : Xi = vj}           (global_cardinality_sem, open)
+  array_max (X1 ...) Y         Y is some Xi and every Xi <= Y     (array_max_sem)
+  array_min (X1 ...) Y         Y is some Xi and every Xi >= Y     (array_min_sem)
+  max X Y Z, min X Y Z         max(X, Y) = Z, min(X, Y) = Z      (binop_sem)
+  inverse ((X1 ...) ox) ((Y1 ...) oy)
+                               same length n; every Xi - oy and Yj - ox in [0, n);
+                               X[i-ox] = j <=> Y[j-oy] = i over i in ox.., j in oy..  (inverse_sem)
+Any other keyword, a `_if` form other than a comparison's, or a prob_type other than `decide`
+is refused (exit 2).
 
 Prints `count N` then one line per solution, `name=value ...` over the FlatZinc names of
 NAMES, sorted; or `toobig` when MAX_NODES (default 2,000,000) is exceeded.
@@ -81,6 +93,35 @@ def load(path):
         if kw.endswith("_iff"):
             kw = kw[:-4]
             reif, args = reify(args[0]), args[1:]
+        elif kw.endswith("_if") and kw[:-3] in CMP:
+            # one-sided: R ==> X cmp Y (reify_sem's INL)
+            kw = kw[:-3]
+            x, y = args[1:]
+            cons.append(("imp", reify(args[0]), CMP[kw], term(x), term(y)))
+            continue
+        if kw == "element":
+            lst, (y, off), z = args
+            cons.append(("elem", [term(a) for a in lst], term(y), int(off), term(z)))
+            continue
+        if kw == "gacglobalcardinality":
+            xs, vs, cs = args
+            if len(vs) != len(cs):
+                raise Refused(f"{name}: {len(vs)} values for {len(cs)} counts")
+            cons.append(("gcc", [term(a) for a in xs], [int(v) for v in vs],
+                         [term(a) for a in cs]))
+            continue
+        if kw in ("array_max", "array_min", "max", "min"):
+            if kw.startswith("array_"):
+                lst, y = args
+                xs = [term(a) for a in lst]
+            else:
+                xs, y = [term(args[0]), term(args[1])], args[2]
+            cons.append(("ext", max if kw.endswith("max") else min, xs, term(y)))
+            continue
+        if kw == "inverse":
+            (xs, ox), (ys, oy) = args
+            cons.append(("inv", [term(a) for a in xs], int(ox), [term(a) for a in ys], int(oy)))
+            continue
         if kw.startswith("lin_") and kw[4:] in CMP:
             (lst, y) = args
             if len(lst) % 2:
@@ -109,6 +150,16 @@ def load(path):
 
 
 def terms_of(c):
+    if c[0] == "imp":
+        return [c[1][0], c[3], c[4]]
+    if c[0] == "elem":
+        return c[1] + [c[2], c[4]]
+    if c[0] == "gcc":
+        return c[1] + c[3]
+    if c[0] == "ext":
+        return c[2] + [c[3]]
+    if c[0] == "inv":
+        return c[1] + c[3]
     if c[0] == "lin":
         return [t for _, t in c[2]] + [c[3]] + ([c[4][0]] if c[4] else [])
     if c[0] == "log":
@@ -180,12 +231,39 @@ def solve(bounds, cons, max_nodes):
                 return lo <= yhi and ylo <= hi
             return True
         vals = [val(t) for t in terms_of(c)]
+        if c[0] in ("imp", "elem", "gcc", "ext", "inv"):
+            # T5's forms are checked once every variable they name is assigned
+            if any(v is None for v in vals):
+                return True
+            return global_holds(c)
         if c[0] == "alldiff":
             got = [v for v in vals if v is not None]
             return len(got) == len(set(got))
         if any(v is None for v in vals):
             return True
         return vals[-1] in vals[:-1]
+
+    def global_holds(c):
+        if c[0] == "imp":
+            return (not holds(c[1])) or c[2](val(c[3]), val(c[4]))
+        if c[0] == "elem":
+            xs, y, z = [val(t) for t in c[1]], val(c[2]) - c[3], val(c[4])
+            return 0 <= y < len(xs) and z == xs[y]
+        if c[0] == "gcc":
+            xs = [val(t) for t in c[1]]
+            return all(val(cj) == sum(1 for x in xs if x == v) for v, cj in zip(c[2], c[3]))
+        if c[0] == "ext":
+            xs, y = [val(t) for t in c[2]], val(c[3])
+            return y in xs and c[1](xs + [y]) == y
+        if c[0] == "inv":
+            xs, ox, ys, oy = [val(t) for t in c[1]], c[2], [val(t) for t in c[3]], c[4]
+            n = len(xs)
+            if len(ys) != n:
+                return False
+            if not all(0 <= x - oy < n for x in xs) or not all(0 <= y - ox < n for y in ys):
+                return False
+            return all((xs[i] == oy + j) == (ys[j] == ox + i) for i in range(n) for j in range(n))
+        raise AssertionError(c[0])
 
     watch = {v: [] for v in order}
     for c in cons:

@@ -25,6 +25,16 @@
 #                    bridge-witness an atom definition with a wrong witness: refused at it,
 #                                   "Proofgoal #1 could not be autoproven" (satisfiable models,
 #                                   so the `red` is judged, D-0053)
+#                    copy-witness   (T5, D-0180) a WRONG DEFINITION of an auxiliary baguette
+#                                   introduces, a global_cardinality copy defined as the NEGATION
+#                                   of its original: refused at that `@Y1` red line, as
+#                                   bridge-witness. Its model, tools/e2e/models/gcc_repeat_free_sat,
+#                                   leaves the original free (in test/models/gcc_repeat_sat it is
+#                                   fixed at the root, so the wrong definition is true there)
+#                  T5 adds opb-stronger on element, global_cardinality, array_int_maximum and
+#                  inverse, and opb-reif on member, whose selector guard flipped is a wrong
+#                  definition of the selectors mznlib introduces. Every control's model is
+#                  satisfiable and has a solution the corrupted claim excludes (D-0180).
 #   3. validation  the TRUSTED translator against MiniZinc's reference solvers (D-0174 sec. 6,
 #                  GCS #987): on every model of pass 1 that is not SKIPPED, the solution set
 #                  cake's semantics admit for the .scp (tools/e2e/scpsem.py, which reads only
@@ -104,10 +114,14 @@ RED="Proofgoal #1 could not be autoproven."
 CONTROLS="chain_sat:opb-stronger php_unsat:opb-stronger chain_sat:scp-weaker php_unsat:scp-weaker
 search_all_const_sat:scp-stronger bits_pb_learn_sat:scp-stronger chain_sat:bridge-witness lin_sat:bridge-witness
 bool_or_sat:opb-stronger bool_and_sat:opb-stronger reif_lin_le_sat:opb-stronger
-reif_eq_refute_sat:opb-reif reif_le_refute_sat:opb-reif bits_reif_sat:opb-reif"
-NCONTROLS=14
+reif_eq_refute_sat:opb-reif reif_le_refute_sat:opb-reif bits_reif_sat:opb-reif
+element_sat:opb-stronger element_learn_prunes_sat:opb-stronger gcc_forced_sat:opb-stronger
+gcc_const_counts_sat:opb-stronger maxmin_sat:opb-stronger inverse_sat:opb-stronger
+member_sat:opb-reif member_gap_sat:opb-reif gcc_repeat_free_sat:copy-witness"
+NCONTROLS=23
 for c in $CONTROLS; do echo "$c"; done | xargs -P "$J" -I{} bash -c \
-    'm=${0%%:*}; k=${0#*:}; run "$1"/tools/e2e/chain.sh "$1/test/models/$m.fzn" "$2" "$k"' {} "$ROOT" "$OUT/controls" \
+    'm=${0%%:*}; k=${0#*:}; f="$1/test/models/$m.fzn"; [ -f "$f" ] || f="$1/tools/e2e/models/$m.fzn"
+     run "$1"/tools/e2e/chain.sh "$f" "$2" "$k"' {} "$ROOT" "$OUT/controls" \
     | sort > "$OUT/controls.txt"
 nc=0
 ncok=0
@@ -123,7 +137,7 @@ while IFS= read -r l; do
         opb-stronger | opb-reif) [ "$at" = "$target rup" ] && [ "$cause" = "$RUP" ] && ok=1 ;;
         scp-weaker) [[ "$at" =~ ^@c[0-9]+\ rup$ ]] && [ "$cause" = "$RUP" ] && ok=1 ;;
         scp-stronger) [[ "$at" == "sol "* ]] && [[ "$cause" =~ ^"$SOL"\ [0-9]+\ in\ the\ database\.\ \(@S\[c\[$target\]\]\)$ ]] && ok=1 ;;
-        bridge-witness) [ "$at" = "$target red" ] && [ "$cause" = "$RED" ] && ok=1 ;;
+        bridge-witness | copy-witness) [ "$at" = "$target red" ] && [ "$cause" = "$RED" ] && ok=1 ;;
     esac
     if [[ "$l" == *" REFUSED "* ]] && [ $ok -eq 1 ]; then
         echo "PASS  $l"
