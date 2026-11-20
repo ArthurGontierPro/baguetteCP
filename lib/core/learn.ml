@@ -227,8 +227,8 @@ let keep policy a b =
    started at 16 and doubled, re-hashing every slot it held at each doubling; and a slot
    hashes its name and adds the direction, where [Hashtbl.hash] walked the pair. On
    2011_roster, whose learned clauses are nearly all of 16 literals or more, this function
-   was 6 % of the run's samples, a third of it the doublings. Neither changes an answer: the table is looked
-   up, never iterated. *)
+   was 6 % of the run's samples, a third of it the doublings. Neither changes an answer:
+   the table is looked up, never iterated. *)
 module Slot_tbl = Hashtbl.Make (struct
   type t = string * bool
 

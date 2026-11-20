@@ -165,7 +165,7 @@
    A call is O(n * w) for K and O(|dom y| * live) for S, w the overlap of two hulls; the
    lemmas a K line writes are as many as the holes its reason already cites.
 
-   M16-file-review-T3 (D-0191) measured this module at 0.03 to 0.32 % of the search's
+   M16-file-review-T3 (D-0191) measured this module at no more than 0.32 % of the search's
    samples on the five Challenge instances it profiled (elitserien_handball 7 and 11 at
    20 000 nodes, three code-generator instances), with the proof and without, so nothing
    here was changed. Two costs are stated for whoever finds one hot: [support] builds a
