@@ -567,11 +567,8 @@ module Learned_clause = struct
       else (
         t.rest <- -1;
         propagate t store)
-    else if t.rest_satisfied && true_at store t t.w1 then (
-      t.rest <- t.w1;
-      Propagator.Fixpoint)
-    else if t.rest_satisfied && true_at store t t.w2 then (
-      t.rest <- t.w2;
+    else if t.rest_satisfied && (true_at store t t.w1 || true_at store t t.w2) then (
+      t.rest <- (if true_at store t t.w1 then t.w1 else t.w2);
       Propagator.Fixpoint)
     else if Pb.quiet store t.pb then (
       rewatch_quiet store t t.pb.Pb.scan;

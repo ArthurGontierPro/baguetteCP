@@ -615,7 +615,7 @@ let sync_watched t (inst : Propagator.instance) store
   let a1, b2 = w () in
   let rests = b2 = Propagator.rests in
   let a2 = if rests then a1 else b2 in
-  t.releasing.(id) <- false;
+  if t.released <> [] then t.releasing.(id) <- false;
   if rests && not t.resting.(id) then rest_on t store id a1;
   let o1 = t.wv1.(id) and o2 = t.wv2.(id) in
   if a1 <> o1 || a2 <> o2 then (
