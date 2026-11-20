@@ -652,9 +652,22 @@ let test_lits_are_the_negated_cut () =
    weaker fact, a new slot, a new slot merged again later (it must not move), both bounds
    of one variable as distinct slots, an empty [rest], and a resolution step's removal
    followed by a fact on the removed slot (it must come back at the END). *)
+(* D-0191: a hand-built node's slot, as [Analysis.locate] would give it over a store whose
+   variables are named "a", "b", ... in that order. *)
+let slot_of_fact fact =
+  let v = Char.code (Reason.fact_owner fact).[0] - Char.code 'a' in
+  (2 * v) + if Reason.fact_is_lower fact then 1 else 0
+
 let test_merge_nodes_is_the_add_node_fold () =
   let node ?(support = 0) ?(level = 0) fact =
-    { Analysis.fact; level; support; implied_by = Store.no_prop; root = false }
+    {
+      Analysis.fact;
+      level;
+      support;
+      implied_by = Store.no_prop;
+      root = false;
+      slot = slot_of_fact fact;
+    }
   in
   let ge ?support name value = node ?support (Reason.At_least { name; value; decl = 0 })
   and le ?support name value = node ?support (Reason.At_most { name; value; decl = 9 }) in
@@ -712,6 +725,12 @@ let test_merge_nodes_is_the_add_node_fold () =
     = render (reference [] incoming));
   check "M6-T16: and with nothing incoming the frontier is unchanged"
     (render (Analysis.Frontier.nodes (frontier_of rest [] ~mk:Fun.id)) = render rest);
+  let unkeyed = List.map (fun n -> { n with Analysis.slot = -1 }) in
+  check "D-0191: nodes without a slot merge by name, to the same sequence"
+    (render
+       (Analysis.Frontier.nodes
+          (frontier_of (unkeyed rest) (unkeyed incoming) ~mk:Fun.id))
+    = render got);
   (* A resolution step: expand b (now b<=3@16), then resolve onto facts that include a
      WEAKER b and a stronger c. The old shape: filter b out, fold add_node. *)
   let f = frontier_of rest incoming ~mk:Fun.id in
@@ -763,17 +782,22 @@ let test_frontier_best_and_count () =
     if Random.State.bool rng then Reason.At_least { name; value; decl = 0 }
     else Reason.At_most { name; value; decl = 9 }
   in
+  (* Each walk keys its nodes by slot or, every third walk, by name (D-0191). *)
+  let keyed = ref true in
   let node () =
+    let fact = fact () in
     {
-      Analysis.fact = fact ();
+      Analysis.fact;
       level = Random.State.int rng 4;
       support = Random.State.int rng 12;
       implied_by = Store.no_prop;
       root = Random.State.int rng 5 = 0;
+      slot = (if !keyed then slot_of_fact fact else -1);
     }
   in
   let ok_count = ref true and ok_best = ref true and steps = ref 0 in
-  for _ = 1 to 3000 do
+  for walk = 1 to 3000 do
+    keyed := walk mod 3 <> 0;
     let f = Analysis.Frontier.create ~conflict_level:cl ~expandable () in
     Analysis.Frontier.add_all f (List.init 6 (fun _ -> node ())) ~mk:Fun.id;
     let go = ref true in

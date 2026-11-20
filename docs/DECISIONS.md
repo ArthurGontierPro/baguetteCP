@@ -23925,3 +23925,284 @@ against 29 s); T6 and T7 as before; whether `--e2e` becomes a default and whethe
 §5), the user's. Results in `/cluster/arthur/baguette-results/wave55-e2e3b/` (`summary.md` is the
 per-instance table, `chal/` and `ctlser/` the two series, the superseded series of `b467f40`,
 `7017c6c` and `74d1746` kept under `chal/old-*`).
+
+## D-0191  M16-file-review-T3: learning read file by file. The cost was in hash tables (a polymorphic one per conflict, a full trail table per eviction, tables that doubled), one forced minor collection per long PB row, and a sort per eviction. Nine byte-identical levers, and `Store.var_named` left to its owner
+
+**Status**: DONE, recorded 2026-11-20 (agent-review3, `wave55-review3`, autonomous mode).
+**Task**: M16-file-review-T3, `lib/core/learn.ml`, `analysis.ml`, `pb_analysis.ml`, `learned.ml`,
+`retention.ml`, `ladder.ml`, `reduce.ml`, `restart.ml`, `phase.ml`, `activity.ml`; and T2's leftover
+`lib/core/prop/member.ml`.
+**Files changed**: `lib/core/retention.ml`, `analysis.ml`, `learn.ml`, `pb_analysis.ml`, and (header
+sentences only) `activity.ml`, `phase.ml`, `prop/member.ml`; `test/unit/test_analysis.ml` (the frontier
+keyed both ways) and `test_retention.ml` (the evictions either side of the passes). Unchanged:
+`learned.ml`, `ladder.ml`, `reduce.ml`, `restart.ml`.
+**Runs**: `fataepyc-06:/scratch/arthur/wave55-review3-runs/` (D-0190's scripts adapted: `job.sh` takes a
+`bench/diff/configs.tsv` name as its mode, `mkjobs3.sh`, `runjobs.sh`, `chain.sh`, `models.sh`,
+`cmpmodels.sh`, `build.sh`, `buildfp.sh`, `gate.sh`, `tools/attrib3.py` for the learning modules,
+`tools/modtab4.py`, `tools/nearest.py`, `tools/leafcallers.py`, `tools/cmp3.py`), copied with the
+profiles' attributions and the comparisons to `/cluster/arthur/baguette-results/wave55-review3/`.
+
+### 1. Method
+
+D-0186's and D-0190's, on main `a26e614` (gate 80's binary `a3c909f0`), with the two additions the
+task named. The same 27 instances run at the same budgets (the diff lane's 25, and codes-cp QR48 `f2`
+and `f3` of D-0169 run to the end). The first addition is `qr48s2_f3`, the learning-heavy codes form,
+which is codes-cp's `minweight_chk.mzn` with `ENC=2` (the parity checks as sums `= 2y`, D-0183's
+`qr48_w8_f3`). It is UNSAT at 2 795 nodes, with 1 393 learned PB rows registered and 52 107 of their
+prunings. The second is every lane instance in the learning configurations of `bench/diff/configs.tsv`
+that its corpus line allows (`lbd` at lbd:500, `activity`, `restarts`, `bits0`, `nopb`), each with the
+proof as the lane runs them. That makes 173 runs per binary.
+
+The profiles are main's release build under `baguette-fp` (`eaaf2c35`), recorded with `perf record -e
+cycles:u --call-graph fp` and counted over the search's samples only. `tools/attrib3.py` attributes them
+per function of the eleven modules, self and inclusive. `tools/nearest.py` gives a function's own cost
+with the library and runtime code it calls directly (`Hashtbl`, `caml_hash`, the GC), because that is
+where most of these modules' time goes. Shares below are "lane median / lane maximum (instance)" over the
+25 lane instances, then the codes (f3, qr48s2_f3). The counts are `perf stat -e instructions:u` minus a
+1-node run, over the nodes, each lever's dev binary against the dev binary of the lever before, in all
+seven modes. Byte identity was checked at every lever on the 207 `test/models` with `--proof --stats`
+(stdout, exit code, `.opb`, `.pbp`, `--stats` without timings) and, on the 173 runs, on the nodes,
+`--stats`, stdout and the `.opb`/`.pbp` md5. There were 0 differences at every lever. The node ran at
+load 55 to 75 on 192 cores (two Challenge series and other agents), so the instruction counts are the
+measure and the cycle shares only say where to look.
+
+### 2. The tables, file by file
+
+The sizes are `F` the facts a reason states, `R` the resolutions of one conflict, `d` the depth, `T` the
+trail length, `n` the live learned constraints, `k` the victims of one reduction, `w` a row's or a
+clause's width, `a` an instance's arity and `C` the candidates of a decision. Shares are of the search
+samples of the release profiles without the proof, as "lane median / lane maximum (instance)", then the
+codes (`f3`, and `qr48s2_f3` the ENC=2 form) when they differ. "Incl" is inclusive and "own" is
+`nearest.py`'s.
+
+**analysis.ml** (the implication graph, the 1UIP cut, the decision closure). Module inclusive 17.1 / 43.8 %
+(roster), with the proof 9.2 / 27.2 %, and 13.1 % of f3, 3.3 % of qr48s2_f3. It is nearly all of `Learn`'s share.
+
+| function | complexity | data structure | share | verdict |
+|---|---|---|---|---|
+| `support_of` (from `mk_node` and `cite`), per fact | O(1) fast path, O(log moves) by the history; one `Store.var_named` | | 4.1 / 13.5 incl (roster); **`Store.var_named` own 8.3 % of roster, 6.0 % of QR72** | the name hash is the cost (section 5): the fact names its variable by a string |
+| `analyse`'s walk, per resolution | O(F) facts in, a heap push each; O(R log R) | `Frontier`: a cell per slot, a string-keyed table per direction | `analyse_inner` 5.9 / 17.4 incl; `Analysis.hash` 0.4 / 1.3 | two string hashes per fact (find, then replace) and two per removal: **L7** |
+| `mk_node`, per fact | O(1) + `support_of` + `check_attribution` + `level_of_index` O(log d) | node record | 3.2 / 9.4 incl | fine but for the two calls it makes |
+| `check_attribution`, per node and per citation | O(a): `List.exists` over the instance's variables | `Var.t list` from `Engine.vars_of` | 0.8 / 2.0 incl (roster) | an O(1) membership would be the engine's (a scope set); left |
+| `dependency_levels`, per conflict | O(cited facts reached x log), each entry's citations memoised once (M7-T27 a3) | a polymorphic `(int, int) Hashtbl` of cells, an int max-heap | 10.2 / 26.2 incl (roster); `insert` 2.0 / 10.0 (opd_08) | the polymorphic table, `caml_hash` and `compare_val` per probe: **L2** |
+| `cites_of`, `cite`, per entry's first visit | O(F) `support_of` | `int array` on the entry | 4.0 / 13.0 incl | fine: memoised, its cost is `var_named` |
+| `Heap.pop`, `slot` | O(log n); a trail load for the slot | | `pop` 0.7 / 2.3 (openshop), `slot` 0.3 / 1.3 | fine |
+| `Uniq.add` | O(1), polymorphic table | | not seen | fine (per resolution, not per fact) |
+| `rests_on_nothing`, `hole_facts` | O(1); O(holes walked) | | not seen | fine |
+| `add_node`, `scan_support`, `view_of`, `best_expandable` | O(frontier), O(T) | | tests and BAGUETTE_DEBUG only | fine |
+
+**learn.ml** (1UIP learning, minimisation, supports). Module inclusive 19.8 / 52.7 % (roster), with the
+proof 11.1 / 32.2 %, and 15.3 % of f3. Its share is `Analysis`'s but for `minimise_with`.
+
+| function | complexity | data structure | share | verdict |
+|---|---|---|---|---|
+| `at_conflict`, per conflict | the two walks, `minimise_with`, `Learned.of_clause`, `to_linear_row` (a statistic) | | 19.3 / 46.6 incl | its callees |
+| `minimise_with`, per learned clause and per branch nogood | O(w) | `Slot_tbl` keyed by `(name, polarity)`, created at 16 | 1.3 / 6.4 incl (roster), **own 6.3 % of roster**: a third in `insert_all_buckets` (the doublings re-hash every key), the rest `caml_hash` of the pair | **L3** |
+| `supports`, `support_check`, `introduce` | O(w) per learned clause; the origin only for a writing writer (D-0144) | `Int_tbl` | with the proof 0.3 / 1.3 (monitor-placement) | fine |
+| `minimise_with_reference` | O(w^2) | | tests only | fine |
+
+**pb_analysis.ml** (PB conflict analysis). Module inclusive 0.8 / **82.3 % (fox-geese)**, with the proof
+0.4 / 75.7 %, and 1.5 % of f3, 1.7 % of qr48s2_f3. It matters on one instance, and there it is the run.
+
+| function | complexity | data structure | share | verdict |
+|---|---|---|---|---|
+| `lits_array`, per row read | O(w) | `Array.make w` with the row's first literal as the initial value | 0 / **36.0 incl (fox-geese)**, its leaves the GC | over 256 words with a young initial value the runtime runs a minor collection first: **L4** |
+| the `fat_memo` wrapper of `falsified_at`, per distinct literal of an analysis | O(1) | `Lit_tbl` created at 64 | own 24.5 % of fox-geese: `insert_all_buckets` a third, `find_opt` and `add` the rest | doubling under long rows: **L5** |
+| `falsified_at`, per literal | O(log moves) + one `Store.var_named` | | `var_named` own 5.5 % of fox-geese | the conflict rows are order-encoded terms, one name over many literals: **L6** |
+| `slack_at`, `asserts_at`, `pivot_of`, per step | O(w) through the row memo | `row_memo` (D-0157) | 0.4 / 36.2 incl (its callees above) | fine after L4 to L6 |
+| `asserting_level`, `row_levels` | O(w + levels) (D-0144) | arrays | not seen | fine |
+| `cited_ids` | O(derivation) | `Int_tbl` | not seen | fine |
+| `coeff_of` | O(w) | list | once per step | fine |
+| `falsified_before` | O(log moves), the last name remembered (D-0157) | | in `Reduce`/`Ladder` below | fine |
+| `bounds_before`, `*_scan`, `asserting_level_reference` | O(T), O(levels x w) | | BAGUETTE_DEBUG and tests | fine |
+
+**retention.ml** (the learned-constraint database). Under the default `keep_all` it is 1.0 / 2.0 %
+inclusive, all of it `add` (the row's text for the duplicate count, D-0152 R4). **Under `lbd:500` it is
+15.9 / 42.1 % (grid-colouring), and 49.9 % of qr48s2_f3.**
+
+| function | complexity | data structure | share (lbd) | verdict |
+|---|---|---|---|---|
+| `locked_instances`, per reduction that may evict a gated constraint | O(T) inserts | a polymorphic table of EVERY trail entry's instance, grown from 64 | 5.7 / **33.7 incl (grid-colouring)**, own 20.4 % of opd_08 | the question is about the few victims: **L1** |
+| `lbd`'s `evict`, per reduction | O(n log n), the whole database sorted for `n - cap` victims | `List.sort` | `Retention.fun` own 2.3 / 5.8 (filters) | `k` is 1 on most instances, a few on some: **L8** |
+| `reduce` | O(n): `List.rev` of the live list, a partition of the victims | lists | in the above | fine (bounded by the cap, see the header for a database that pins) |
+| the gate's `inst_advise` of a DEAD instance, per wake | O(1), but every evicted instance stays in the engine's watch lists | closure | `Retention.fun` own **18.4 % of qr48s2_f3**, 12.5 % from `Engine.advises` | an engine removal API (D-0139's request); left, section 5 |
+| `retire`, `retire_all`, `add`, `cite`, `gate` | O(k + n) per call (D-0136), O(1), O(w) for the text | `Hashtbl`s by id, lookup only | `add` 0.9 / 1.9 incl | fine |
+
+**learned.ml** (the PB row type and its arithmetic). Inclusive 2.4 / 8.3 % (fox-geese), with the proof
+1.2 / 4.7 %.
+
+| function | complexity | data structure | share | verdict |
+|---|---|---|---|---|
+| `make`, `sort_by_lit` | O(w) on sorted input, a natural merge sort otherwise (D-0157) | lists | 0.6 / 6.4 incl (fox-geese: the conflict row rebuilt from `Engine.row_of` per analysis) | fine; the row is rebuilt by its owner per call |
+| `combine`, `walk`, `add_multiples` | one merge of two sorted rows (D-0157) | | not seen at 0.5 | fine |
+| `to_linear_row`, `ladder_form`, `decl_of_encoding` | O(w), one `Encoding` lookup per variable | | 0.5 / 2.1 incl (diameterc-mst) | a `--stats` counter (`l_converts`); fine |
+| `to_string` | O(w) | `Buffer` | 0.4 / 1.4 (evm) | `Retention.add`'s duplicate key (D-0152 R4 measured the alternative); fine |
+
+**ladder.ml**, **reduce.ml** (lifting a reason onto its rungs, and the reduction). Inclusive 0 / 0.7 %
+(soccer) and 0 / 1.5 % (soccer), `Ladder.instantiate` 0 / 1.4 % (fox-geese) under `--bits-above 0`, and
+`Reduce` 0 / 10.5 % (fox-geese) under `activity`. Their per-term questions go through
+`falsified_before`'s memo, and `lift` adds its rungs in one merge (both D-0157). Fine.
+
+**activity.ml**, **phase.ml**, **restart.ml** (the search-strategy flags, D-0137).
+
+| function | complexity | share | verdict |
+|---|---|---|---|
+| `Activity.select`, per decision | O(C), a `Domain.size` per candidate tied on the score | under `activity` 0.2 / **13.3 incl (roster)**, 9.0 own: 4 190 variables scanned per node, all tied at 0 for most of the run | the header's own condition ("a binary heap keyed on the score is the optimisation if a profile ever shows the scan") is met on roster; the heap needs fix and unfix events the store does not report. Left, section 5 |
+| `Activity.bump_lits`, `bump_facts`, `decay`, `rescale` | O(w) with a `Store.var_named` per literal, O(1), O(n) per rescale | under `activity` 0.04 / 0.4 | fine |
+| `Phase.save_level`, per backtrack | O(d) for `Store.level_marks` (a list of every mark, then `List.nth`), plus the level's entries | under `restarts` 0.2 / 1.0 (roster) | an O(1) mark accessor would be the store's; left, a sentence |
+| `Phase.saved` | O(1) | | fine |
+| `Restart.on_conflict`, `due`, `on_restart` | O(1), a ring of `window` LBDs | 0 / 0.1 | fine |
+
+**prop/member.ml** (T2's leftover, `member` through `baguette_member`). It is in no lane instance, so it
+was profiled on the five Challenge instances D-0189 flattened (`/scratch/arthur/wave55-memberdbg-runs/chal/`),
+which are elitserien handball 11 and 7 at 20 000 nodes, code-generator `update_br_prob_note` and
+`comp_Jboundaries` at 3 000, and `find_regno_partial` to its optimum (199 nodes), each with and without
+the proof. The module's inclusive share is at most **0.32 %** (handball11 without the proof), 0.03 to
+0.23 % on the others and under 0.03 % on handball7 with the proof, while the engine takes 28 to 92 % of
+the same runs.
+
+| function | complexity | share | verdict |
+|---|---|---|---|
+| `kill_all`, `intersects`, `kill_reason`, per call | O(n w), a `dom` triple and closure per position | under 0.3 % | the header's stated cost |
+| `support`, `remove_y`, per call with no selector set | O(\|dom y\| x live), a `dom` per live position per value; O(n) per removed value | under 0.3 % | stated in the header (this review) |
+| `add_fact`, per foreign fact of a reason | O(others), `List.mem` | not seen | quadratic in a reason's foreign facts (a hole punched by a wide row brings one per other term); stated in the header with element.ml's `Fact_tbl` (D-0155) as the shape to copy |
+| `single`, `equalise`, `narrow`, `finish`, the tails | O(n), O(w) | not seen | fine |
+
+Nothing in `member.ml` was changed but its header.
+
+### 3. The levers taken, one commit each, every byte the same
+
+Instructions per node in thousands, dev binaries of consecutive commits (each against the one before),
+at the instance's node budget. "np" is without the proof, "pf" with it, and the configurations of
+`bench/diff/configs.tsv` run with the proof as the lane runs them. Listed are the instances a lever moved
+by 1 % or more. "Median" is over the lane instances of that mode (25 in np and pf, 21 to 24 in the
+configurations), and "codes" is f2 and f3 without the proof, with qr48s2_f3 when it moved. Openshop with
+the proof moves by up to 7 % between any two binaries in either direction (D-0186 section 4) and is left
+out. Each lever's rule is stated at its function and, where it is the module's cost, in its header.
+
+| commit | lever | moved | medians np / pf / configs | codes |
+|---|---|---|---|---|
+| `1aaca4b` | **L1** retention: `locked_instances` is asked about the victims' gates only, one trail walk against a small int table that stops when all are found, where it put every trail entry's instance into a polymorphic table per reduction | **lbd**: grid-colouring 4 329 -> 2 700 (-37.6 %), mspsp -32.5 %, steiner -28.7 %, opd_10 -26.2 %, opd_08 -25.7 %, bacp -21.0 %, filters -19.6 %, perfect_square -17.7 %, diameterc-mst -12.1 %, roster -11.8 %, monitor-placement -10.3 %, tc-graph -10.1 %, evm -7.7 %, chessboard -5.2 %, QR72 -4.9 %, lot-sizing, amaze, QR48 -2.7 to -2.9 %, parity, rcpsp_11, rcpsp_12 -1.2 to -1.7 % | 0.00 / 0.00 / **lbd -8.92 %**, the others 0.00 | 0.0 % |
+| `21754c2` | **L2** analysis: the decision closure's cell table is a `Hashtbl.Make` keyed by the slot with the identity as its hash, where it was a polymorphic `(int, int) Hashtbl.t` | np: opd_08 2 128 -> 2 012 (-5.4 %), opd_10 -3.9 %, roster -3.2 %, diameterc-mst -3.0 %, grid-colouring -2.8 %, QR72 and bacp -2.1 %, evm and QR48 -1.9 %, rcpsp_12 -1.6 %, amaze -1.5 %, monitor-placement -1.4 %, soccer, filters, chessboard, steiner -1.1 to -1.2 %; pf the same instances at about two thirds | **-1.19 / -0.67** / lbd -0.70, activity -0.49, restarts -0.27, bits0 -0.59, nopb -0.72 | -0.4, -0.5 % |
+| `9a538d4` | **L3** learn: `minimise_with`'s slot table created at the clause's length (it doubled from 16, re-hashing every slot) and hashed on the name plus the polarity (it walked the pair) | np: roster 3 374 -> 3 276 (-2.9 %), opd_08 -2.6 %, grid-colouring -2.3 %, opd_10 -1.8 %, monitor-placement -1.0 %; pf, lbd, nopb the same four at -1.1 to -2.1 % | -0.35 / -0.16 / -0.06 to -0.17 | -0.1, -0.2 % |
+| `c099cef` | **L4** pb_analysis: `lits_array` makes its array from a static literal, so a row over 256 literals no longer runs a minor collection first (306 of fox-geese's 1 509 minor collections, a fifth of its promoted words) | fox-geese 8 100 -> 7 435 (**-8.2 %**), pf -7.8 %, lbd -7.3 %, restarts -5.2 % | 0.00 / 0.00 / 0.00 | 0.0 % |
+| `3ad51e0` | **L5** pb_analysis: the analysis's `falsified_at` memo created at the conflict row's length, where it doubled from 64 re-hashing every literal | fox-geese 7 435 -> 6 386 (**-14.1 %**), pf -12.4 %, lbd -11.5 %, restarts -7.6 %, activity -1.0 % | -0.02 / 0.00 / 0.00 | 0.0 to +0.2 % (qr48s2_f3, the second table, see L5b) |
+| `9f7afa9` | **L6** pb_analysis: that memo asks `Store.var_named` through the last-name lookup `falsified_before` already had (D-0157), now one helper, `var_named_last` | fox-geese 6 386 -> 5 824 (**-8.8 %**), pf -8.2 %, lbd -9.0 %, restarts -5.4 % | -0.08 / 0.00 / 0.00 | 0.0 % |
+| `31c5b12` | **L7** analysis: the 1UIP frontier keyed by the node's `slot` (2 x variable + direction, from the variable `locate` finds anyway), the name tables kept for a node without one | np: bacp 1 724 -> 1 694 (-1.8 %), QR48 and QR72 -1.7 %, steiner -1.3 %, monitor-placement -1.2 % | **-0.46 / -0.30** / lbd -0.28, activity -0.25, restarts -0.11, bits0 -0.31, nopb -0.31 | **-0.9, -1.2 %**; nopb qr48s2_f3 -0.8 % |
+| `caa10fa` | **L8** retention: `lbd`'s evict takes its `n - cap` victims one pass each (the least above the last taken) when they are 8 or fewer, where it sorted the whole database per reduction | **lbd**: QR48 2 247 -> 2 127 (-5.3 %), bacp -4.2 %, steiner -3.9 %, QR72 and parity -3.7 %, amaze -3.2 %, rcpsp_12 and tc-graph -3.1 %, opd_08 -2.7 %, opd_10 -2.5 %, monitor-placement and diameterc-mst -2.2 %, mspsp -1.2 %, rcpsp_11 and fox-geese -1.1 % | 0.00 / 0.00 / **lbd -1.70 %** | qr48s2_f3 lbd **+0.5 %** (about 8 victims a reduction there, the passes' worst case) |
+| `cab38a2` | **L5b** pb_analysis: the memo is replaced only for a conflict row over 64 literals (no second table for a short one); L4's and L5's comments carry the counts | (none at 1 %) | 0.00 / -0.01 / 0.00 | 0.0 % |
+
+`6f3bf50` adds the cost sentences of `activity.ml`, `phase.ml` and `retention.ml`'s `reduce`, and `eed8d5e`
+`member.ml`'s (comments only).
+
+From main to L5b (dev binaries, `a3c909f0` against `e5700bfb`) the lane median is **-2.08 %** without
+the proof, **-1.30 %** with it, **-13.95 % under `lbd`**, -1.03 % under `activity`, -0.45 % under
+`restarts`, -1.04 % under `bits0` and -1.38 % under `nopb`. Fox-geese is -28.6 % without the proof and
+-26.5 % with it. The codes move by -1.3 % (f2) and -1.9 % (f3) without the proof, -0.7 % and -0.9 % with
+it, and qr48s2_f3 by -0.1 % and -0.5 %.
+
+L7 was the one weighed for its clarity, because the node gains a field and the frontier two key paths.
+On roster, where the profile put the frontier's string hashing at about 3 % of the cycles, it moved
+0.03 % of the instructions. On the clause instances it is 1 to 2 % (QR48, QR72, the codes), and that is
+why it is kept.
+
+### 4. The branch as a whole, release binaries
+
+Main `a26e614` built with `make release`'s command (`0b783da2`) against the branch's code tip `eed8d5e`
+(`7dd85262`), instructions per node in thousands. The nodes, stdout, `--stats` and proof hashes are equal
+on every line. The last column is the change under `lbd:500` (with the proof).
+
+| instance | nodes | np main | np branch | change | pf main | pf branch | change | lbd change |
+|---|---|---|---|---|---|---|---|---|
+| H_qr48_bag_def | 6 001 | 1 212 | 1 158 | -4.5 % | 1 996 | 1 942 | -2.7 % | -10.9 % |
+| H_qr72_bag_def | 5 001 | 1 578 | 1 501 | -4.8 % | 2 719 | 2 646 | -2.7 % | -11.6 % |
+| 2012_parity-learning_48_24_6.2 | 4 001 | 2 001 | 1 957 | -2.2 % | 3 443 | 3 391 | -1.5 % | -7.7 % |
+| 2024_monitor-placement-1id_igp_weight_based_rocketfuel_rf1755_real_hard | 5 001 | 2 864 | 2 737 | -4.4 % | 4 298 | 4 175 | -2.9 % | -16.3 % |
+| 2017_opd_small_bibd_08_28_14 | 5 001 | 1 855 | 1 672 | -9.8 % | 3 055 | 2 874 | -5.9 % | -33.3 % |
+| 2015_opd_small_bibd_10_30_09 | 4 001 | 1 728 | 1 597 | -7.6 % | 3 072 | 2 935 | -4.4 % | -33.1 % |
+| 2013_rcpsp_12 | 5 001 | 1 195 | 1 162 | -2.8 % | 3 477 | 3 445 | -0.9 % | -5.5 % |
+| 2021_perfect_square_102 | 10 001 | 627 | 618 | -1.3 % | 1 090 | 1 084 | -0.6 % | -20.1 % |
+| 2011_bacp_bacp-22 | 6 001 | 1 430 | 1 336 | -6.6 % | 2 091 | 1 995 | -4.6 % | -30.4 % |
+| 2012_amaze_2012-06-29 | 6 001 | 1 308 | 1 271 | -2.8 % | 2 847 | 2 803 | -1.5 % | -7.6 % |
+| 2013_filters_dct_2_2 | 12 001 | 657 | 636 | -3.2 % | 1 108 | 1 090 | -1.6 % | -23.1 % |
+| 2021_steiner-systems_steiner_t2_k7_N21 | 7 001 | 1 252 | 1 221 | -2.5 % | 2 447 | 2 409 | -1.6 % | -34.6 % |
+| 2015_grid-colouring_13_11 | 5 001 | 1 407 | 1 315 | -6.5 % | 2 557 | 2 464 | -3.6 % | -41.8 % |
+| 2016_diameterc-mst_s_v20_a50_d4 | 4 001 | 1 964 | 1 869 | -4.9 % | 4 265 | 4 166 | -2.3 % | -17.1 % |
+| 2017_tc-graph-color_k5_05 | 8 001 | 978 | 958 | -2.0 % | 2 241 | 2 220 | -1.0 % | -15.0 % |
+| 2019_fox-geese-corn_foxgeesecorn_54 | 3 001 | 7 646 | 5 342 | -30.1 % | 8 192 | 5 913 | -27.8 % | -28.2 % |
+| 2020_lot-sizing_pigment15b.psp | 2 501 | 11 052 | 10 993 | -0.5 % | 14 975 | 14 867 | -0.7 % | -5.0 % |
+| 2023_chessboard_chessboard4 | 2 501 | 3 900 | 3 812 | -2.2 % | 7 964 | 7 865 | -1.3 % | -7.8 % |
+| 2023_evm-super-compilation_isolated_block_6_0_input | 2 001 | 3 982 | 3 886 | -2.4 % | 7 876 | 7 782 | -1.2 % | -10.2 % |
+| 2018_soccer-computational_xIGData_24_16_14_2 | 1 501 | 2 987 | 2 933 | -1.8 % | 5 799 | 5 731 | -1.2 % | -1.1 % |
+| 2011_roster_chicroster_dataset_large_18 | 3 501 | 2 799 | 2 589 | -7.5 % | 4 986 | 4 760 | -4.5 % | -17.8 % |
+| 2013_rcpsp_11 | 10 001 | 4 134 | 4 042 | -2.2 % | 14 431 | 14 346 | -0.6 % | -3.1 % |
+| 2012_mspsp_hard_01 | 10 001 | 4 655 | 4 586 | -1.5 % | 8 985 | 8 895 | -1.0 % | -36.5 % |
+| 2011_cyclic-rcpsp_easy_6 | 2 001 | 4 889 | 4 848 | -0.8 % | 23 274 | 23 200 | -0.3 % | -1.2 % |
+| 2014_openshop_gp10-4 | 301 | 782 | 771 | -1.4 % | 10 005 | 10 972 | +9.7 % | - |
+| f3 | 29 779 | 1 122 | 1 096 | -2.3 % | 2 371 | 2 346 | -1.0 % | - |
+| f2 | 108 699 | 1 568 | 1 543 | -1.6 % | 2 732 | 2 710 | -0.8 % | - |
+| qr48s2_f3 | 2 795 | 9 405 | 9 392 | -0.1 % | 10 569 | 10 524 | -0.4 % | -0.1 % |
+
+The lane median is **-2.8 %** without the proof, **-1.5 %** with it (the same without openshop, whose
+proof line moves by up to 10 % between any two binaries), and **-15.6 % under `lbd:500`**. Codes QR48
+moves by -2.3 % (3 fixed) and -1.6 % (2 fixed) without the proof, -1.0 % and -0.8 % with it, and the
+ENC=2 form by -0.1 % and -0.4 %. The broad part is the two analyses' tables (L2, L7) and `minimise_with`
+(L3), which every instance that learns runs. The deep part is PB analysis on long rows (fox-geese -30 %)
+and the eviction path under `lbd` (grid-colouring -42 %, mspsp -37 %, steiner -35 %, the two opd
+-33 %). The ENC=2 codes move least, because their nodes are spent in the learned PB rows' propagation
+(`Pb`, 60 % of the samples), which is T2's file.
+
+### 5. What is left, and why
+
+| item | where | measured | why left |
+|---|---|---|---|
+| a fact's variable found by its NAME | `Analysis.support_of` (from `mk_node` and `cite`), `Pb_analysis.falsified_at` | `Store.var_named` own 8.3 % of roster's samples and 6.0 % of QR72's (base); 5.5 % of fox-geese's before L6 | `Reason.fact` names its variable by a string, so every resolution hashes it (`caml_hash` half of `var_named`, the polymorphic compare of `Store.by_name` a sixth). Two fixes, neither in these files: the fact carrying the variable (a `Reason` change, T4's side), or `Store.by_name` monomorphic (`Hashtbl.Make` over `String`, which drops `compare_val`). A caller-side cache would hash the same string (request 1) |
+| fox-geese's PB analyses, after L4 to L6 | `Pb_analysis.analyse` on a conflict row of hundreds of literals | still 68 % of fox-geese's cycles (the memo's literal hashes 17 %, `lits_array`'s major-heap allocation and the slices it brings 14 %), for 1 457 of 1 458 analyses that fall back, at the first pivot (62 of the 64 reasons `--stats` records: "no PB row for instance int_lin_le_reif") | every literal is read before the pivot is known, and the fallback's reason is a `--stats` line, so a cheaper test first would change which reason is printed. A reified row that hands `Engine.row_of` its big-M rows (T2's `reif_lin_le.ml`) would turn these into learned rows or early fallbacks: a behaviour change, the user's |
+| the dead gates still asked | `Retention.gate`'s advisor of an evicted instance, through `Engine.advises` | 18.4 % of qr48s2_f3's samples under `lbd:500` (2 834 dead instances against 500 live); on the lane it is part of `Retention.fun`'s 2.3 % median own share | the engine keeps an evicted instance in its watch lists (D-0139 recorded the request for a removal API, still open, request 2) |
+| `check_attribution`'s scope walk | `Analysis.check_attribution`, per node and per citation | 0.8 / 2.0 % (roster) | O(arity) because `Engine.vars_of` hands a list; an O(1) "does instance i watch v" is the engine's |
+| the activity order's scan | `Activity.select` | 13.3 % of roster under `activity`, 0.2 % median | the header's heap needs fix and unfix events the store does not send; stated in the header |
+| phase saving's mark lookup | `Phase.save_level` | 0.2 / 1.0 % under `restarts` | `Store.level_marks` lists every mark per backtrack; a one-mark accessor is the store's; stated in the header |
+| the learned row's text | `Retention.add` (`Learned.to_string`) | 0.9 / 1.9 % | the duplicate count `--stats` prints; D-0152 R4 measured the alternative (the row as key) and reverted it for RSS |
+
+### 6. Requests to the other tiers
+
+1. `store.ml` (T1's, or whoever holds it next). With `by_name` as a `Hashtbl.Make (String)` table,
+   `var_named` would be one string hash and a `String.equal`, where it is now a `caml_hash`, a
+   `compare_val` and the polymorphic bucket walk. `Phase.save_level` would also take an O(1)
+   `level_mark t l`.
+2. `engine.ml`. A gated instance that `Retention.reduce` detached should leave the watch lists (D-0139's
+   request), which this record measures at 18 % of a codes run under `lbd:500`. `Analysis.check_attribution`
+   would take an O(1) scope membership.
+3. T4 (`reason.ml` is its neighbour). A `Reason.fact` that carries its variable would remove the name
+   lookup from every resolution of both analyses, the largest single cost left in learning (section 5,
+   first row).
+
+### 7. Gate
+
+A fresh clone of the pushed branch at `eed8d5e` (`scripts/README.md` section 4, with `gate.sh` in the
+results directory adapted from gate 80's) was gated against gate 80's binary (`a3c909f0`, main
+`a26e614`), the two lanes and the scaling lane at `-j 8`, at load 70 at the start and 68 at the end.
+
+| | gate, `eed8d5e` (`c740d4a8`) |
+|---|---|
+| `make check` | rc 0, 4 457 ok (gate 80's 4 456 and the frontier's new check), 207 models, 32 s, peak RSS 108 MB |
+| 207 models x 4 artefacts (stdout, exit code, `.opb`, `.pbp`) | 0 differences |
+| diff lane `--tier all` | 324 of 324 equal to the reference |
+| `--debug` lane | 311 of 311 equal |
+| scaling lane | ok on all five lines: QR72 without the proof **-0.45 %** of late under its baseline and -0.18 % with it, rcpsp_11 -0.05 %, parity +0.17 % and +0.02 % |
+
+The gated binary is the dev build of the code the counts of section 3 end on (L5b's, `e5700bfb`), plus
+two comment commits. The commits after `eed8d5e` are comments (`800dcee` reflows one paragraph and states
+one share as a bound), this record, `ROADMAP.md`, `WORKLOG.md` and the scaling baseline.
+
+The scaling baseline IS re-recorded (`16366a4`, its own commit), because QR72's growth without the proof
+fell by more than one binary's spread. `scripts/scaling_lane.sh --update -j 8 --bin` on the gated binary
+measured it at 1 590 818 instructions per node against 1 611 274 (-0.52 % of late). The ratchet also wrote
+QR72's proof line (-0.17 %), rcpsp_11's (-0.01 %) and parity's proof line (-0.03 %), and kept parity's
+no-proof line, which rose by 0.14 % of late (under its threshold).
+
+This record would be reversed by a lever whose byte identity fails on an instance outside these, or by
+a measurement showing a lever costs more than it saves on another machine. L7's slot is the place to look
+first, because two facts must share a slot exactly when they share a name and a direction, which holds
+because `Store.var_named` maps a name to the first variable of that name. L8's passes rely on every
+comparator ending in `by_seq`, which makes the order total.

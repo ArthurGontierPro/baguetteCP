@@ -284,6 +284,16 @@
 module Lit = Baguette_proof.Lit
 module Writer = Baguette_proof.Writer
 
+(* Engine ids, keyed by their own value: they are small non-negative ints, so the
+   identity is a hash and [Int.equal] the comparison, with no [caml_hash] and no
+   polymorphic compare per probe (D-0191). Lookup only, like every table here. *)
+module Int_tbl = Hashtbl.Make (struct
+  type t = int
+
+  let equal = Int.equal
+  let hash x = x land max_int
+end)
+
 (* ------------------------------------------------------------------ entries *)
 
 (* One learned constraint the database holds.
@@ -472,6 +482,36 @@ let fifo ~cap =
     p_tiers = None;
   }
 
+(* The [k] first elements of [List.sort cmp l], in that order, for a TOTAL [cmp] (every
+   comparator here ends in [by_seq]). M16-file-review-T3 (D-0191): [lbd] asks for the
+   [n - cap] worst of a database that is over its cap by one or a few, once per learned
+   constraint, and sorting all [n] for them was most of its cost once [locked_instances]
+   stopped dominating. For a small [k] this takes them one pass each, the next being the
+   least element above the last one taken, which a total order makes the same element the
+   sort puts there; past [first_k_passes] it sorts. *)
+let first_k_passes = 8
+
+let first_k cmp k l =
+  if k <= 0 then []
+  else if k > first_k_passes then List.filteri (fun i _ -> i < k) (List.sort cmp l)
+  else
+    let least_above prev =
+      List.fold_left
+        (fun best x ->
+          match prev with
+          | Some p when cmp x p <= 0 -> best
+          | _ -> ( match best with Some b when cmp b x <= 0 -> best | _ -> Some x))
+        None l
+    in
+    let rec take i prev acc =
+      if i = k then List.rev acc
+      else
+        match least_above prev with
+        | None -> List.rev acc
+        | Some x -> take (i + 1) (Some x) (x :: acc)
+    in
+    take 0 None []
+
 (* The policy. Rank by LBD descending -- a higher LBD is a worse constraint, Glucose's
    direction -- and break ties by age, oldest first. Evict down to [cap].
 
@@ -489,13 +529,10 @@ let lbd ~cap =
               let n = List.length live in
               if n <= cap then []
               else
-                let worst_first =
-                  List.sort
-                    (fun a b ->
-                      match Int.compare b.e_lbd a.e_lbd with 0 -> by_seq a b | c -> c)
-                    live
-                in
-                List.filteri (fun i _ -> i < n - cap) worst_first);
+                first_k
+                  (fun a b ->
+                    match Int.compare b.e_lbd a.e_lbd with 0 -> by_seq a b | c -> c)
+                  (n - cap) live);
         });
     p_detaches = true;
     p_tiers = None;
@@ -858,16 +895,30 @@ let gate t store ~cid (inst : Propagator.instance) : Propagator.instance =
    schedules down to a reduction per learned constraint. Half 1 is load-bearing: without
    it `colour_unsat` is rejected ("Trying to access constraint with ID 175 that has
    already been deleted"). Half 2 reddens no model in the suite and is kept on the
-   argument above; the unit lanes in test/unit/test_retention.ml pin both. *)
-let locked_instances t =
-  let locked = Hashtbl.create 64 in
-  if t.last_conflict >= 0 then Hashtbl.replace locked t.last_conflict ();
+   argument above; the unit lanes in test/unit/test_retention.ml pin both.
+
+   M16-file-review-T3 (D-0191): ASKED ONLY ABOUT [wanted], the gates of this reduction's
+   victims, and answering with the subset of them that is locked. It used to put the
+   instance of EVERY trail entry into a polymorphic table, one [caml_hash] and a growing
+   table per entry, once per reduction: under `lbd:500` that was 20 % of
+   2017_opd_small_bibd_08_28_14's samples. Now the trail is walked testing each entry's
+   instance against the few wanted ids, and the walk stops once all of them are found
+   locked. [reduce] asks the answer only about ids in [wanted], and for those the answer
+   is the one the full table gave: an id is locked iff it is [last_conflict] or the
+   instance of an entry on the trail. *)
+let locked_instances t (wanted : int list) =
+  let want = Int_tbl.create 8 and locked = Int_tbl.create 8 in
+  List.iter (fun id -> Int_tbl.replace want id ()) wanted;
+  let lock id = if Int_tbl.mem want id then Int_tbl.replace locked id () in
+  if t.last_conflict >= 0 then lock t.last_conflict;
   (match t.store with
   | None -> ()
   | Some s ->
-      for i = 0 to Store.trail_length s - 1 do
-        let en : Store.entry = Store.trail_entry s i in
-        Hashtbl.replace locked en.Store.prop ()
+      let n = Store.trail_length s in
+      let i = ref 0 in
+      while !i < n && Int_tbl.length locked < Int_tbl.length want do
+        lock (Store.trail_entry s !i).Store.prop;
+        incr i
       done);
   locked
 
@@ -952,7 +1003,14 @@ let retire ?(unchecked = false) t ctx ~why (ids : Writer.cid list) =
    deletion path. [retire]'s [Not_owned] is where it lands.
 
    D-0139: the call is O(1) unless the policy is [due], which is what keeps the once-per-
-   learned-constraint call off the profile (see [evictor]). *)
+   learned-constraint call off the profile (see [evictor]).
+
+   M16-file-review-T3 (D-0191): when it is due it is O(n) in the live database (the
+   [List.rev], the policy's pass, the partition), plus [locked_instances]' one trail walk.
+   Over a run that is O(n) per learned constraint, and n is the cap plus what is PINNED: a
+   database whose pinned constraints keep growing past the cap (cited consumers without a
+   gate) makes the run quadratic in them. Under `lbd:500` no lane instance ends with more
+   than 526 live constraints (the end sweep's count), so there n stays near the cap. *)
 let reduce t ctx =
   if not (t.ev.due ~added:t.n_added ~live:t.n_live) then []
   else
@@ -987,7 +1045,10 @@ let reduce t ctx =
        any consumer of a search that does not call [gate] -- is pinned as before. *)
     let locked =
       if List.exists (fun e -> e.e_gate <> None && Hashtbl.mem t.cited e.e_cid) victims
-      then Some (locked_instances t)
+      then
+        Some
+          (locked_instances t
+             (List.filter_map (fun e -> Option.map (fun g -> g.g_inst) e.e_gate) victims))
       else None
     in
     let evictable, pinned =
@@ -997,7 +1058,7 @@ let reduce t ctx =
           else
             match (e.e_gate, locked) with
             | Some g, Some l ->
-                if Hashtbl.mem l g.g_inst then (
+                if Int_tbl.mem l g.g_inst then (
                   t.n_locked <- t.n_locked + 1;
                   false)
                 else true
