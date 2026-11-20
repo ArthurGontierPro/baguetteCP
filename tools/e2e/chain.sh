@@ -17,6 +17,9 @@
 #                     side lowered by 1 (a mistranslation): a SAT answer's `sol` conflicts
 #                     with cake's row, or baguette's row is not derivable from it
 #     scp-weaker      the same raised by 1: baguette's row is not derivable from it
+#     opb-reif        baguette's first reified big-M row gets its reifier's literal flipped
+#                     after baguette ran (tools/e2e/mutate.py reif): a wrong reification in
+#                     its .opb, which the bridge cannot derive either (T4, D-0178)
 #     bridge-witness  the bridge's first `@A2` atom definition gets the witness `-> 0` in place
 #                     of `-> 1` (D-0174's first mutation): its red line is refused
 #   A mutation run prints `MODEL.MUT REFUSED ANSWER | at=<first two tokens of the refused
@@ -75,6 +78,9 @@ grep -q '=====UNSATISFIABLE=====' "$o.bag.out" && ans=UNSAT
 
 if [ "$MUT" = opb-stronger ]; then
     target=$(python3 -I "$HERE/mutate.py" opb "$o.bag.opb") || say "FAIL no model row to mutate"
+fi
+if [ "$MUT" = opb-reif ]; then
+    target=$(python3 -I "$HERE/mutate.py" reif "$o.bag.opb") || say "FAIL no reified row to mutate"
 fi
 
 # veripb alone on baguette's own files: the cost the chain is compared against

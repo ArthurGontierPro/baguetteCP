@@ -18,6 +18,10 @@
 #                    scp-weaker     the .scp says less than baguette's row: refused at a pin
 #                    scp-stronger   the .scp says more, baguette's `sol` breaks it: refused at
 #                                   `sol`, conflicting with the mutated constraint's own row
+#                    opb-reif       (T4, D-0178) baguette's reified big-M row with its
+#                                   reifier's literal flipped, a wrong reification: refused
+#                                   at THAT row's pin, as opb-stronger
+#                  opb-stronger also runs on the Boolean family and int_lin_le_reif (T4).
 #                    bridge-witness an atom definition with a wrong witness: refused at it,
 #                                   "Proofgoal #1 could not be autoproven" (satisfiable models,
 #                                   so the `red` is judged, D-0053)
@@ -98,7 +102,10 @@ RUP="The constraint is not implied by reverse unit propagation (RUP) from core a
 SOL="Propagation engine error: The given solution is conflicting with constraint"
 RED="Proofgoal #1 could not be autoproven."
 CONTROLS="chain_sat:opb-stronger php_unsat:opb-stronger chain_sat:scp-weaker php_unsat:scp-weaker
-search_all_const_sat:scp-stronger bits_pb_learn_sat:scp-stronger chain_sat:bridge-witness lin_sat:bridge-witness"
+search_all_const_sat:scp-stronger bits_pb_learn_sat:scp-stronger chain_sat:bridge-witness lin_sat:bridge-witness
+bool_or_sat:opb-stronger bool_and_sat:opb-stronger reif_lin_le_sat:opb-stronger
+reif_eq_refute_sat:opb-reif reif_le_refute_sat:opb-reif bits_reif_sat:opb-reif"
+NCONTROLS=14
 for c in $CONTROLS; do echo "$c"; done | xargs -P "$J" -I{} bash -c \
     'm=${0%%:*}; k=${0#*:}; run "$1"/tools/e2e/chain.sh "$1/test/models/$m.fzn" "$2" "$k"' {} "$ROOT" "$OUT/controls" \
     | sort > "$OUT/controls.txt"
@@ -113,7 +120,7 @@ while IFS= read -r l; do
     target=$(echo "$l" | sed -n 's/.*| target=\(.*\)$/\1/p')
     ok=0
     case "$k" in
-        opb-stronger) [ "$at" = "$target rup" ] && [ "$cause" = "$RUP" ] && ok=1 ;;
+        opb-stronger | opb-reif) [ "$at" = "$target rup" ] && [ "$cause" = "$RUP" ] && ok=1 ;;
         scp-weaker) [[ "$at" =~ ^@c[0-9]+\ rup$ ]] && [ "$cause" = "$RUP" ] && ok=1 ;;
         scp-stronger) [[ "$at" == "sol "* ]] && [[ "$cause" =~ ^"$SOL"\ [0-9]+\ in\ the\ database\.\ \(@S\[c\[$target\]\]\)$ ]] && ok=1 ;;
         bridge-witness) [ "$at" = "$target red" ] && [ "$cause" = "$RED" ] && ok=1 ;;
@@ -125,8 +132,8 @@ while IFS= read -r l; do
         echo "FAIL  $l"
     fi
 done < "$OUT/controls.txt"
-echo "controls: $ncok of $nc refused where and as expected (8 expected)"
-[ "$nc" -eq 8 ] && [ "$ncok" -eq 8 ] || fail=1
+echo "controls: $ncok of $nc refused where and as expected ($NCONTROLS expected)"
+[ "$nc" -eq "$NCONTROLS" ] && [ "$ncok" -eq "$NCONTROLS" ] || fail=1
 
 # ---------------------------------------------------------------- 3. validation
 # shellcheck disable=SC2016

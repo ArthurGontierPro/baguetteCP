@@ -21156,3 +21156,144 @@ authors state them. It did not try satsuma on a `.opb`: satsuma 1.4 has a `--pb`
 formula class (`pbf.h`, with `=`, `<=` and an objective), but its command line reads nothing for
 that flag (`parse_*` is CNF or KNF, the OPB branch is `0`). So satsuma cannot take baguette's
 `.opb` today, and nothing in this record depends on it.
+## D-0178  M14-e2e-verification-T4: the Boolean and reified families in the end-to-end lane, 105 test models certified by `cake_pb_cp`
+
+Status: DONE (tooling and a lane, no solver code)
+Date: 2026-11-20
+Task: M14-e2e-verification-T4 (agent-e2e4, `wave55-e2e4`)
+Touches: `tools/e2e/fzn2scp.py`, `tools/e2e/scpsem.py`, `tools/e2e/bridge.py`, `tools/e2e/mutate.py`,
+`tools/e2e/chain.sh`, `scripts/e2e_lane.sh`, `scripts/README.md` §9 (the control count). Runs:
+`fataepyc-06:/scratch/arthur/wave55-e2e4-runs/lane2/` and `lane3/` (the whole lane, same counts; `lane3` on the committed code), `lane3`, the teeth check and the CakeML sources read copied to
+`/cluster/arthur/baguette-results/wave55-e2e4/`.
+
+### 1. What the translator now covers
+
+Every Boolean and reified builtin of SPEC §2.1 (rows M2 and M3). SPEC has no `bool_lin_*`,
+`int_lin_eq_reif` or `int_lt_reif`, so the translator has none either. A FlatZinc Boolean is
+cake's integer `0..1`, so "`b` is true" is cake's reify tuple `(b = 1)` and a constant is `(1 = 1)`
+or `(0 = 1)`. The tuple takes a comparison SYMBOL. `(b equals 1)` is refused by `cake_pb_cp` with
+"unknown comparison symbol: equals" (measured), and `cp_parseScript.sml`'s `sexp_cmpop_sym` says
+the same. Each builtin maps to the cake keyword whose HOL4 meaning (`cpScript.sml`, CakeML master
+of 2026-11) is the builtin's own:
+
+| builtin | `.scp` | cake's meaning |
+|---|---|---|
+| `bool_clause(ps, ns)` | `(c or ((p1 = 1) ... (n1 = 0) ...) (1 = 1))` | `or_sem`, true iff some tuple holds |
+| `array_bool_or(as, r)`, `array_bool_and(as, r)` | `(c or|and ((a1 = 1) ...) (r = 1))` | `or_sem`, `and_sem` (`r` reified both ways) |
+| `bool_eq(a, b)`, `bool2int(b, x)` | `(c equals a b)`, `(c equals b x)` | `cmpop_sem` |
+| `bool_not(a, b)` | `(c not_equals a b)` | over `0..1`, `a != b` is `a = not b` |
+| `int_le_reif`, `int_eq_reif`, `int_ne_reif` `(x, y, r)` | `(c less_equal_iff|equals_iff|not_equals_iff (r = 1) x y)` | `reify_sem (INR (r,=,1))` |
+| `int_lin_le_reif(as, xs, c, r)` | `(c lin_less_equal_iff (r = 1) (a1 x1 ...) c)` | `lin_sem` with `INR` |
+
+`bool_clause` is cake's `or` with a reifier that is constant true, not a linear row
+`sum ps - sum ns >= 1 - |ns|`. Both are right, and the `or` is the builtin read as written, so a
+reader of the translator checks one line against one definition. `scpsem.py` reads the same forms
+(`_iff` comparisons, `lin_*_iff`, `or`, `and`, reify tuples) and still refuses the one-sided `_if`.
+
+### 2. How the bridge re-derives baguette's rows
+
+cake writes `(b = 1)` as its atom `i[b][eq1]`, defined over `b`'s bit together with `i[b][ge1]` and
+`i[b][ge2]`, and a constant tuple as `n[K][ge/eq<v>]` atoms fixed by unit rows. After D-0174's
+substitution of the bits those definitions are over baguette's ladder. Three mechanisms are new,
+and they are generic in the bridge, not one per family.
+
+- **Atom swap, one `rup` per atom.** Every cake atom that equals ONE baguette literal (`i[x][ge<v>]`
+  is `x_ge_v`, `i[x][eq<v>]` is `~x_ge_(l+1)` at `l` and `x_ge_u` at `u`, so `i[b][eq1]` is
+  `b_ge_1`) or a constant gets the clause `~atom + lit >= 1` (or `~atom >= 1` when false), derived
+  by `rup` from the substituted definitions (`@Q`). A candidate row then swaps `c * atom` for
+  `c * lit` by adding `c` times that clause. A true atom is dropped by the literal axiom.
+- **Resolvent and selector, one `red` pair per selector.** `equals_iff` and `not_equals_iff` write the
+  disequality half as two flags `b[c][lt]`, `b[c][gt]` (each implies its strict comparison) and the
+  clause `lt + gt + eq1 >= 1` (or `~eq1`). baguette writes it as `A` and `B` over one fresh `_neN`.
+  The bridge adds to its candidates every row resolved once against such a flag clause (the `lt`
+  row plus 4 times the clause eliminates `lt`). T2's red pair then defines `_neN` as whichever flag
+  literal stands where baguette's selector stands (for `reif_eq_refute_sat`, `_ne0 <-> ~lt`). T2's
+  "equal up to one literal" test is subsumed.
+- **Saturation.** cake's big-M is over the bit range and baguette's over the declared bounds. For
+  `x, y in 0..4` (three bits) cake writes `X - Y + 8 eq1 >= 1` where baguette writes `5 b_ge_1`.
+  Once the bits are the ladder, the row in normal form has degree 5, and saturating it gives
+  baguette's row exactly.
+
+A baguette row is pinned by `ia` against the first candidate that, after these steps, implies it
+syntactically (the coefficient each literal loses, `max(0, a - b)`, summed, is at most the slack
+of its degree over baguette's). That covers a baguette big-M larger than cake's and a guard cake
+does not write. Per family, over the 30 newly verified models:
+
+| family | baguette's rows | derived by |
+|---|---|---|
+| `bool_eq`, `bool2int` | the two halves of `=` | `ia` against the substituted row, exact, as T2's `int_eq` |
+| `bool_clause` | one clause | one `pol` (cake's `or` row with its atoms swapped), `ia` |
+| `array_bool_or`, `array_bool_and` | `r -> OR` (resp. `AND -> r`) and one binary clause per operand | the wide clause by one `pol`; the binary ones by `rup` (cake's `2r + ~a + ~b >= 2` does not imply `r + ~a` syntactically, unit propagation does) |
+| `bool_not` | two clauses | `rup` through cake's `ne` flag |
+| `int_le_reif`, `int_lin_le_reif` | two big-M rows | one `pol` each: atom swap plus saturation |
+| `int_eq_reif`, `int_ne_reif` | two guarded halves, then `A` and `B` over `_neN` | the halves by one `pol` (atom swap); `_neN` by a `red` pair; `A` and `B` by one `pol` each, one of them a resolvent with cake's flag clause |
+
+Tally over the 30: 117 `@Q` lines (`rup`), 130 `@W` lines (`pol`) each pinning one row by `ia`,
+18 selectors defined (`red` pairs), 59 rows `ia` against a substituted row exactly, 169 ladder rungs,
+18 rows by `rup`. No big-M row is pinned by `rup`, so none of the reified rows rests on unit
+propagation over a contradictory database (D-0066). The bridge takes 0.07 s on the largest model
+(`width_root_unsat`).
+
+### 3. The lane's counts
+
+Binary md5 `4e41e8c1` (the solver code is `main`'s `a5ba3f2`, unchanged by this task), veripb 3.0.2
+`d5644ca4`, `cake_pb_cp` sha256 `ca92491e`.
+
+| | before (D-0176) | after |
+|---|---|---|
+| VERIFIED | 75 (42 SAT, 33 UNSAT) | **105** (59 SAT, 46 UNSAT) |
+| SKIPPED | 132 | 102 |
+| FAIL | 0 | 0 |
+
+Skipped now: `baguette_global_cardinality` 19, `array_int_element` 18, `fzn_global_cardinality` 14,
+`var int` with no domain 8, an objective 8, `array_int_maximum` 7, `baguette_member` 6,
+`baguette_regular` 4, `int_times` 3, `int_div` 3, `baguette_inverse` 3, `baguette_cumulative` 3,
+`int_abs` 2, `array_int_minimum` 2, `int_max` 1, `baguette_member_bool` 1. Four models of the new
+families stay out because they declare a `var int` with no domain (`count_var_value_sat`,
+`rup_level0_nogood_sat`, `unbounded_case_split_sat`, `unbounded_inferred_sat`), D-0176 §6.
+
+### 4. The mutation controls
+
+Six new controls, 14 in all, 14 of 14 refused at the expected line and with the checker's whole
+sentence "The constraint is not implied by reverse unit propagation (RUP) from core and derived
+database.". All six models are satisfiable.
+
+| control | model (family) | refused at |
+|---|---|---|
+| `opb-stronger`, baguette's row degree + 1 | `bool_or_sat` (`array_bool_or`) | `@c1 rup` |
+| | `bool_and_sat` (`array_bool_and`) | `@c3 rup` |
+| | `reif_lin_le_sat` (`int_lin_le_reif`) | `@c7 rup` |
+| `opb-reif`, a WRONG REIFICATION: the reifier's literal of baguette's first big-M row flipped (`mutate.py reif`) | `reif_eq_refute_sat` (`int_eq_reif`) | `@c5 rup` |
+| | `reif_le_refute_sat` (`int_le_reif`) | `@c7 rup` |
+| | `bits_reif_sat` (`int_lin_le_reif`) | `@c39 rup` |
+
+The bridge falls back to `rup` on these rows because its own implication test fails, and the
+checker refuses the `rup`. `opb-reif` is rightly NOT refused on `reif_lin_le_sat` and
+`reif_ne_entail_sat`, both measured VERIFIED. There the model fixes the reifier
+(`bool_clause([b], [])` in the first, `x = 0` and `y = 2` in the second), so the flipped row's
+guard is off in every solution and the mutated row is still implied by the model. Every control is pinned to a model where its claim is false,
+D-0176 §3's lesson again.
+
+### 5. The translator's validation
+
+`scpsem.py` against `fzn-gecode -a` and `fzn-cp-sat -a`, as in D-0176 §4: **105 AGREE, 0 DIFFER,
+0 UNCHECKED**. On the 30 new models both references ran on 29. On `bits_reif_eq_sat` (57 solutions)
+CP-SAT alone, because Gecode aborts with `Gecode::FlatZinc::AST::TypeError`. The test has teeth on
+the new forms. Four hand-made mistranslations of the `.scp` each give DIFFER against both
+references: `lin_less_equal_iff` as `lin_less_than_iff` (`reif_lin_le_sat`, 7 solutions against
+13), `or` as `and` (`bool_or_sat`), the reifier `(b = 1)` as `(b = 0)` (`reif_eq_refute_sat`), and a
+negative literal of `bool_clause` made positive (`bool_clause_sat`, 3 against 2).
+
+### 6. What the chain costs against `veripb` alone
+
+On the 105, `veripb` on baguette's own files takes 1.75 s, and `veripb --elaborate` plus
+`cake_pb_cp` take 2.31 + 3.24 = 5.55 s, **×3.17** in total and **×2.06** per model at the median
+(×1.6 to ×87.8, the maximum still `width_root_unsat`). On the 30 new models alone, ×2.02 in total,
+×2.03 at the median, ×1.6 to ×2.4. Their proofs are tiny (0.02 MB, 0.20 MB bridged, 0.14 MB of
+core), so the figure is process start-up. Measured at a load average near 25 on the shared node.
+
+### 7. What is left
+
+`var int` without a declared domain (four models of these families, eight in all), and T3, T5 to T8
+unchanged. The bridge's matcher is generic (atoms, one flag, one resolvent, saturation), so T5's
+globals may reuse it where cake's flags have one-literal counterparts in baguette's rows.

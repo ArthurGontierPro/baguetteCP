@@ -16,7 +16,12 @@ The semantics, transcribed from cpScript.sml (CakeML master, 2026-11):
      cmp: equals =, not_equals !=, less_equal <=, less_than <, greater_equal >=, greater_than >
   all_different (X1 ...)       ALL_DISTINCT (MAP (varc w) Xs)     (AllDifferentExcept Xs [])
   in (X1 ...) Y                MEM (varc w Y) (MAP (varc w) Xs)   (in_sem)
-Any other keyword, a reified form or a prob_type other than `decide` is refused (exit 2).
+  and the T4 forms (D-0178), a reify tuple (Z op v) meaning `varc Z op v`, op in = != >= > <= <:
+  <cmp>_iff R X Y              R <=> cmpop_val cmp X Y            (cmpop_sem, Zr = INR R)
+  lin_<cmp>_iff R (c1 X1 ...) Y   R <=> cmpop_val cmp (sum ...) Y  (lin_sem, Zr = INR R)
+  or (R1 ...) R                R <=> EXISTS Ri                    (or_sem)
+  and (R1 ...) R               R <=> EVERY Ri                     (and_sem)
+Any other keyword, a one-sided `_if` form or a prob_type other than `decide` is refused (exit 2).
 
 Prints `count N` then one line per solution, `name=value ...` over the FlatZinc names of
 NAMES, sorted; or `toobig` when MAX_NODES (default 2,000,000) is exceeded.
@@ -27,6 +32,8 @@ import sys
 
 CMP = {"equals": operator.eq, "not_equals": operator.ne, "less_equal": operator.le,
        "less_than": operator.lt, "greater_equal": operator.ge, "greater_than": operator.gt}
+SYM = {"=": operator.eq, "!=": operator.ne, "<=": operator.le, "<": operator.lt,
+       ">=": operator.ge, ">": operator.gt}
 
 
 def sexp(text):
@@ -65,15 +72,27 @@ def load(path):
     for c in sec["constraints"]:
         name, kw, args = c[0], c[1], c[2:]
         term = (lambda a: ("c", int(a)) if isint(a) else ("v", a))
+
+        def reify(r):
+            if not (isinstance(r, list) and len(r) == 3 and r[1] in SYM and isint(r[2])):
+                raise Refused(f"{name}: reify tuple {r}")
+            return (term(r[0]), SYM[r[1]], int(r[2]))
+        reif = None
+        if kw.endswith("_iff"):
+            kw = kw[:-4]
+            reif, args = reify(args[0]), args[1:]
         if kw.startswith("lin_") and kw[4:] in CMP:
             (lst, y) = args
             if len(lst) % 2:
                 raise Refused(f"{name}: odd linear term")
             pairs = [(int(lst[i]), term(lst[i + 1])) for i in range(0, len(lst), 2)]
-            cons.append(("lin", CMP[kw[4:]], pairs, term(y)))
+            cons.append(("lin", CMP[kw[4:]], pairs, term(y), reif))
         elif kw in CMP:
             x, y = args
-            cons.append(("lin", CMP[kw], [(1, term(x))], term(y)))
+            cons.append(("lin", CMP[kw], [(1, term(x))], term(y), reif))
+        elif kw in ("or", "and") and reif is None:
+            lst, y = args
+            cons.append(("log", any if kw == "or" else all, [reify(r) for r in lst], reify(y)))
         elif kw == "all_different":
             (lst,) = args
             cons.append(("alldiff", [term(a) for a in lst]))
@@ -91,7 +110,9 @@ def load(path):
 
 def terms_of(c):
     if c[0] == "lin":
-        return [t for _, t in c[2]] + [c[3]]
+        return [t for _, t in c[2]] + [c[3]] + ([c[4][0]] if c[4] else [])
+    if c[0] == "log":
+        return [r[0] for r in c[2]] + [c[3][0]]
     if c[0] == "alldiff":
         return c[1]
     return c[1] + [c[2]]
@@ -109,7 +130,25 @@ def solve(bounds, cons, max_nodes):
     def val(t):
         return t[1] if t[0] == "c" else w.get(t[1])
 
+    def holds(r):
+        """A reify tuple's truth value, or None while its variable is unassigned."""
+        v = val(r[0])
+        return None if v is None else r[1](v, r[2])
+
     def feasible(c):
+        if c[0] == "log":
+            vals = [holds(r) for r in c[2]]
+            y = holds(c[3])
+            if y is None or any(v is None for v in vals):
+                return True
+            return y == c[1](vals)
+        if c[0] == "lin" and c[4] is not None:
+            # reified: checked once everything is assigned (the enumeration is exhaustive)
+            vals = [val(t) for t in terms_of(c)]
+            if any(v is None for v in vals):
+                return True
+            total = sum(a * val(t) for a, t in c[2])
+            return holds(c[4]) == c[1](total, val(c[3]))
         if c[0] == "lin":
             op, pairs, y = c[1], c[2], c[3]
             lo = hi = 0

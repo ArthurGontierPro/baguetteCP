@@ -31,11 +31,20 @@ equals a substituted cake row up to that one literal, the selector is DEFINED as
 by a red pair, `~s + F >= 1` and `s + ~F >= 1`, both with witness `s -> F` (s is fresh, so
 the pair is a renaming), and the row is the cake row with F swapped for s by one pol.
 
+Atoms and reifications (T4, D-0178). cake writes a Boolean reifier `(b = 1)` as its atom
+`i[b][eq1]`, defined over b's bit; after substitution that atom equals baguette's b_ge_1, and
+the bridge swaps one for the other through a clause derived by `rup` (@Q), the same for every
+atom that equals one baguette literal or a constant. int_eq_reif/int_ne_reif's disequality
+half is cake's `lt`/`gt` flags and its clause `lt + gt + eq1 >= 1`: one resolvent eliminates
+a flag, and baguette's `_neN` selector is defined as the other by the red pair above. A
+candidate whose big-M exceeds baguette's (bit range against declared bounds) is saturated.
+
 Pins, in this order: a ladder row is `ia` against its @L; a row a substituted cake row
-implies with the same coefficients is `ia` against it; a selector row is `ia` against its
-swapped row; anything else is `rup` (all_different's per-value clauses close by unit
-propagation over the substituted pair rows and their flags; a hole's clause over cake's
-`in` rows and its `i[X][ge/eq]` atoms).
+implies with the same coefficients is `ia` against it; a row a swapped, resolved or
+saturated candidate implies syntactically is `ia` against that candidate's `pol` line @W;
+anything else is `rup` (all_different's per-value clauses close by unit propagation over the
+substituted pair rows and their flags; a hole's clause over cake's `in` rows and its
+`i[X][ge/eq]` atoms; array_bool_and/or's `r -> a_i` and `a_i -> r` clauses).
 """
 import re
 import sys
@@ -207,27 +216,194 @@ def main(cake_opb, names_file, bag_opb, bag_pbp):
         emit(f"@S[{label}] pol {' '.join(rpn)} ;")
         subst.append((f"@S[{label}]", {k: v for k, v in new.items() if v}, d))
 
-    # selectors: a baguette row that is a substituted cake row up to one literal
+    # ---- cake's auxiliaries against baguette's literals (T2's selectors, T4's atoms) ----
+    #
+    # A substituted cake row is over baguette's order atoms plus cake's own auxiliaries:
+    #   ATOMS  i[X][ge<v>], i[X][eq<v>] (defined over X's bits, so after substitution over
+    #          x's ladder) and n[K][ge<v>]/n[K][eq<v>] (a constant K in a reify tuple, defined
+    #          by unit rows). Each atom that equals ONE baguette literal (ge<v> is x_ge_v;
+    #          eq<v> is ~x_ge_(l+1) at l and x_ge_u at u, so b_ge_1 for a 0..1 Boolean) or a
+    #          constant is replaced by it: c*L becomes c*M by adding c*(~L + M >= 1), a
+    #          clause derived by `rup` from the substituted atom definitions (@Q); a FALSE
+    #          L by adding c*(~L >= 1), a TRUE L by the literal axiom ~L (weakening).
+    #   FLAGS  b[c][...], x[c][...]: constraint-local, with no baguette counterpart. A flag
+    #          that stands where baguette has a fresh selector (`_neN_ge_1`) DEFINES that
+    #          selector by a red pair (s fresh, so the pair is a renaming), and is replaced
+    #          by it the same way (@D1 = ~s + F, @D2 = s + ~F).
+    # A candidate is a substituted row, or one RESOLVENT of it with a substituted clause
+    # over flags and atoms (int_eq_reif's `lt + gt + eq1 >= 1`: Y - X + 4~lt >= 1 plus
+    # 4 times it eliminates lt). A baguette row is pinned by `ia` against the first candidate
+    # that, after the replacements, implies it syntactically: sum over its literals of the
+    # coefficient it loses (max(0, a - b)) at most its slack over the baguette row's degree.
+    # That is where a baguette big-M is larger than cake's, or a guard cake does not have;
+    # where cake's big-M is the larger (bit range against declared bounds), the candidate
+    # is saturated first.
+    ATOM = re.compile(r"(i|n)\[(.+)\]\[(ge|eq)(-?\d+)\]")
     sel_names = {san for orig, san in sanit.items() if orig.startswith("$ne")}
     sel_vars = {f"{s}_ge_1" for s in sel_names}
-    canon = [(lab, *lit_form(c, d)) for lab, c, d in subst]
-    defined = {}   # selector var -> its flag literal F (s <-> F)
+    bagvars = set(atoms) | sel_vars
 
-    def selector_match(lits, d):
-        """lits has one selector literal; find a cake row with one other literal in its place."""
-        sl = next(l for l in lits if l.lstrip("~") in sel_vars)
-        rest = {k: v for k, v in lits.items() if k != sl}
-        for lab, clits, cd in canon:
-            if cd != d or len(clits) != len(lits):
+    def var_of(lit):
+        return lit.lstrip("~")
+
+    def atom_value(var):
+        m = ATOM.fullmatch(var)
+        if not m:
+            return None
+        kind, X, op, v = m.group(1), m.group(2), m.group(3), int(m.group(4))
+        if kind == "n":
+            K = int(X)
+            return "T" if (K >= v if op == "ge" else K == v) else "F"
+        info = ivars.get(X)
+        if info is None:
+            return None
+        l, u, x = info["l"], info["ub"], info["x"]
+        if op == "ge":
+            return "T" if v <= l else "F" if v > u else f"{x}_ge_{vn(v)}"
+        if v < l or v > u:
+            return "F"
+        if l == u:
+            return "T"
+        if v == l:
+            return f"~{x}_ge_{vn(l + 1)}"
+        if v == u:
+            return f"{x}_ge_{vn(u)}"
+        return None
+
+    def lneg(m):
+        return {"T": "F", "F": "T"}.get(m) or neg(m)
+
+    def clause(*lits, d=1):
+        return var_form([(1, l) for l in lits], ">=", d)
+
+    def add(row, k, other):
+        c1, d1 = row
+        c2, d2 = other
+        out_c = dict(c1)
+        for v, c in c2.items():
+            out_c[v] = out_c.get(v, 0) + k * c
+        return {v: c for v, c in out_c.items() if c}, d1 + k * d2
+
+    deferred = {}   # label -> the line deriving it, emitted on first use
+    done = set()
+
+    def ensure(label):
+        if label in deferred and label not in done:
+            done.add(label)
+            emit(deferred[label])
+
+    qlab = {}
+
+    def atom_swap(L):
+        """(cite, its row, M) to replace literal L (an atom) by M, or None."""
+        val = atom_value(var_of(L))
+        if val is None:
+            return None
+        M = val if L == var_of(L) else lneg(val)
+        if M == "T":   # L is false: the literal axiom ~L drops it (weakening)
+            return neg(L), clause(neg(L), d=0), None
+        if L not in qlab:
+            k = len(qlab)
+            qlab[L] = f"@Q[{k}]"
+            body = f"+1 {neg(L)} >= 1" if M == "F" else f"+1 {neg(L)} +1 {M} >= 1"
+            deferred[qlab[L]] = f"{qlab[L]} rup {body} ;"
+        row = clause(neg(L)) if M == "F" else clause(neg(L), M)
+        return qlab[L], row, (None if M == "F" else M)
+
+    defined = {}   # selector var s -> the flag literal F it was defined as (s <-> F)
+
+    def flag_swap(L):
+        for s_, F in defined.items():
+            if L == F:   # F -> s: add (~F + s), @D2
+                return f"@D2[{s_}]", clause(neg(F), s_)
+            if L == neg(F):   # ~F -> ~s: add (F + ~s), @D1
+                return f"@D1[{s_}]", clause(F, neg(s_))
+        return None
+
+    def replaced(rpn, row, deps, swap):
+        rpn, deps = list(rpn), list(deps)
+        lits, _ = lit_form(*row)
+        for L, c in lits.items():
+            got = swap(L)
+            if got is None:
                 continue
-            extra = [k for k in clits if k not in rest or clits[k] != rest[k]]
-            if len(extra) != 1:
+            cite, crow = got[0], got[1]
+            rpn += [cite, str(c), "*", "+"]
+            if cite.startswith("@Q"):
+                deps.append(cite)
+            row = add(row, c, crow)
+        return rpn, row, deps
+
+    # candidates: (rpn, row after the atoms are replaced, deps)
+    cands = []
+    for lab, c, d in subst:
+        if re.fullmatch(r"@S\[[in]\[.+\]\[(ge|eq)-?\d+\]\[[fr]\]\]|@[in]\[.+\]\[(ge|eq)-?\d+\]\[[fr]\]", lab):
+            continue   # an atom's own definition
+        if all(v in bagvars for v in c):
+            continue   # already over baguette's literals: the exact `hit` above covers it
+        cands.append(replaced([lab], (c, d), [], atom_swap))
+
+    def is_flag(v):
+        return v not in bagvars and v not in owner and not ATOM.fullmatch(v)
+
+    flag_clauses = []
+    for rpn, row, deps in cands:
+        lits, d = lit_form(*row)
+        if d == 1 and all(a == 1 for a in lits.values()) and any(is_flag(var_of(l)) for l in lits):
+            flag_clauses.append((rpn, row, deps, lits))
+    resolvents = []
+    for rpn, row, deps in cands:
+        lits, d = lit_form(*row)
+        if d == 1 and all(a == 1 for a in lits.values()):
+            continue
+        for L, c in lits.items():
+            if not is_flag(var_of(L)):
                 continue
-            fl = extra[0]
-            if fl.lstrip("~") in atoms or fl.lstrip("~") in owner:
+            for crpn, crow, cdeps, clits in flag_clauses:
+                if neg(L) in clits:
+                    resolvents.append((rpn + crpn + [str(c), "*", "+"], add(row, c, crow),
+                                       deps + cdeps))
+    cands += resolvents
+    cvars = [{var_of(l) for l in lit_form(*row)[0]} & bagvars for _, row, _ in cands]
+    nw = [0]
+
+    def implies(rl, rd, bl, bd):
+        return rd - sum(max(0, a - bl.get(l, 0)) for l, a in rl.items()) >= bd
+
+    def saturate(rpn, rl, rd):
+        """cake's big-M is over the bit range (0..7 for 0..4), baguette's over the declared
+        bounds; once the bits are the ladder, saturation brings the first down to the second."""
+        if any(a > rd for a in rl.values()):
+            return rpn + ["s"], {l: min(a, rd) for l, a in rl.items()}
+        return rpn, rl
+
+    def match(blits, bd):
+        bvars = {var_of(l) for l in blits}
+        undef = [l for l in blits if var_of(l) in sel_vars and var_of(l) not in defined]
+        for (rpn, row, deps), cv in zip(cands, cvars):
+            if not cv <= bvars:
                 continue
-            if all(clits.get(k) == v for k, v in rest.items()):
-                return sl, fl, clits[fl], lab
+            rpn2, row2, _ = replaced(rpn, row, [], flag_swap)
+            rl, rd = lit_form(*row2)
+            if any(not is_flag(var_of(l)) and var_of(l) not in bagvars for l in rl):
+                continue   # an atom with no baguette literal of its own
+            unk = [l for l in rl if is_flag(var_of(l))]
+            if not unk and not undef:
+                rpn3, rl3 = saturate(rpn2, rl, rd)
+                if implies(rl3, rd, blits, bd):
+                    return rpn3, deps, None
+                continue
+            if len(unk) == 1 and len(undef) == 1:
+                F_lit, sl = unk[0], undef[0]
+                s_ = var_of(sl)
+                F = F_lit if sl == s_ else neg(F_lit)   # s <-> F
+                c = rl[F_lit]
+                trial = {l: a for l, a in rl.items() if l != F_lit}
+                trial[sl] = trial.get(sl, 0) + c
+                cite = f"@D2[{s_}]" if sl == s_ else f"@D1[{s_}]"
+                rpn3, trial = saturate(rpn2 + [cite, str(c), "*", "+"], trial, rd)
+                if implies(trial, rd, blits, bd):
+                    return rpn3, deps, (s_, F)
         return None
 
     pins = []
@@ -242,23 +418,23 @@ def main(cake_opb, names_file, bag_opb, bag_pbp):
         if hit:
             pins.append(f"@{label} ia {line} : {hit} ;")
             continue
-        lits, ld = lit_form(coefs, d)
-        if any(l.lstrip("~") in sel_vars for l in lits):
-            found = selector_match(lits, ld)
-            if found:
-                sl, fl, mc, lab = found
-                s = sl.lstrip("~")
-                F = fl if sl == s else neg(fl)   # s <-> F
-                if s not in defined:
-                    defined[s] = F
-                    emit(f"@D1[{s}] red +1 ~{s} +1 {F} >= 1 : {s} -> {F} ;")
-                    emit(f"@D2[{s}] red +1 {s} +1 {neg(F)} >= 1 : {s} -> {F} ;")
-                if defined[s] == F:
-                    # swap fl for sl: add mc * (sl + ~fl >= 1)
-                    swap = f"@D2[{s}]" if sl == s else f"@D1[{s}]"
-                    emit(f"@P[{label}] pol {lab} {swap} {mc} * + ;")
-                    pins.append(f"@{label} ia {line} : @P[{label}] ;")
-                    continue
+        found = match(*lit_form(coefs, d)) if cands else None
+        if found:
+            rpn, deps, new = found
+            if new:
+                s_, F = new
+                defined[s_] = F
+                emit(f"@D1[{s_}] red +1 ~{s_} +1 {F} >= 1 : {s_} -> {F} ;")
+                emit(f"@D2[{s_}] red +1 {s_} +1 {neg(F)} >= 1 : {s_} -> {F} ;")
+            for dep in deps:
+                ensure(dep)
+            if len(rpn) == 1:
+                pins.append(f"@{label} ia {line} : {rpn[0]} ;")
+            else:
+                nw[0] += 1
+                emit(f"@W[{nw[0]}] pol {' '.join(rpn)} ;")
+                pins.append(f"@{label} ia {line} : @W[{nw[0]}] ;")
+            continue
         pins.append(f"@{label} rup {line} ;")
     out.extend(pins)
 

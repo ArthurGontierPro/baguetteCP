@@ -9,6 +9,12 @@ place and prints what it changed, for the lane to check the refusal against.
                                 prints its label (@cK)
   mutate.py witness FILE.pbp    the first `@A2[...]` atom definition: witness `-> 1` becomes
                                 `-> 0`; prints its label
+  mutate.py reif FILE.opb       a WRONG REIFICATION in baguette's .opb (T4, D-0178): the first
+                                row of three terms or more whose largest coefficient, 2 or
+                                more and on one term only, is on a Boolean's `_ge_1` (not a
+                                `_neN` selector) gets that literal's polarity flipped, so
+                                its big-M guard fires on the wrong value of the reifier;
+                                prints its label (@cK)
 Exit 1 when there is nothing to mutate.
 """
 import re
@@ -31,6 +37,25 @@ def main(kind, path, *rest):
                 lines[i] = f"{m.group(1)}>= {int(m.group(2)) + 1} ;"
                 what = l.split()[0]
                 break
+        else:
+            return 1
+        text = "\n".join(lines) + "\n"
+    elif kind == "reif":
+        lines = text.splitlines()
+        for i, l in enumerate(lines):
+            m = re.fullmatch(r"(@\S+) ((?:[+-]\d+ \S+ ){3,})>= (-?\d+) ;", l)
+            if not m:
+                continue
+            terms = re.findall(r"([+-]\d+) (\S+)", m.group(2))
+            top = max(abs(int(c)) for c, _ in terms)
+            at = [k for k, (c, v) in enumerate(terms) if abs(int(c)) == top]
+            v = terms[at[0]][1] if len(at) == 1 else ""
+            if top < 2 or not v.endswith("_ge_1") or v.lstrip("~").startswith("_ne"):
+                continue
+            terms[at[0]] = (terms[at[0]][0], v[1:] if v.startswith("~") else "~" + v)
+            lines[i] = f"{m.group(1)} {' '.join(f'{c} {x}' for c, x in terms)} >= {m.group(3)} ;"
+            what = m.group(1)
+            break
         else:
             return 1
         text = "\n".join(lines) + "\n"
