@@ -22,7 +22,6 @@ of it to every session and stopping at a broken line before it even reached the 
 | M8-bits-encoding-T4 (two arms, `W = none` and `W = 0`, on the sixteen editions) | run directories under `/scratch/arthur/m8t4/`, `tools/compare/` (additions), `bench/challenge/README.md` (the run's row), a new D-record | agent-m8t4 (`wave55-m8t4`) | 2026-11-20 |
 | M10-search-strategy-T5, M9-no-proof-T3, M7-T30 (one Challenge series on current main: default, `-f`, default `--no-proof`) | run dirs `/scratch/arthur/m10t5/`, `tools/compare/` (additions), `bench/challenge/README.md` (the run's row); reserved record D-0185 | agent-m10t5 (`wave55-m10t5`) | 2026-11-20 |
 | M14-e2e-verification-T7 (the bits arm in the e2e chain) | `tools/e2e/`, `scripts/e2e_lane.sh`, `lib/proof/e2e.ml`, `lib/proof/encoding.ml` (additive), `lib/flatzinc/compile.ml` (the e2e hooks only), `docs/PROOF-FORMAT.md` §3b; reserved record D-0196 | agent-e2e7 (`wave56-e2e7`) | 2026-11-21 |
-| M6-T2 (re-scope first: is minor-GC pressure still worth a Bigarray/Bytes change after M16?) | measurement first; the measurement put the lever outside Store/Domain, so widened 2026-11-21 to `bin/main.ml` (the minor-heap size, [AUTONOME]) and `lib/core/justify.ml` (`sort_pairs` only); `store.ml`, `domain.ml` released untouched; reserved record D-0198 | agent-gc (`wave56-gc`) | 2026-11-21 |
 
 ## Cross-session requests
 
@@ -644,8 +643,14 @@ section 1. Shares are inclusive, of the whole run.
 | M7-T35 (member models fail the D-0026 agreement check under BAGUETTE_DEBUG) | agent-memberdbg (`wave55-memberdbg`) | 2026-11-20 | **D-0189 [AUTONOME].** The reasons were right: member's page-only threshold lemmas (`Term (1, Clause l)` + `Weaken` of every `~l_j`, a constant) were read by the reverse arm as variables used. `Store.reverse_owners` drops that exact pair (D-0091's shape), debug-only, so every artefact is byte-identical. `test_prop.ml` re-runs the seven member models under `BAGUETTE_DEBUG=1` (13 checks, 7 fail with the old arm). Gate on `386a0a7`: make check 4 456 ok, 207x4 artefacts equal, lane 324/324, debug 311/311, scaling ok. No lane instance (too heavy, D-0189 section 5) |
 | M4-T6b (measure the node gain of GAC arithmetic before building it) | agent-gac (`wave56-gac`) | 2026-11-21 | **D-0194 [AUTONOME].** Not built. Of 8.6 M small-operand `int_times`/`int_div`/`int_abs` on the Challenge, 99.8 % are 0..1 indicator products, and root GAC prunes no operand value beyond bounds(Z). GAC saves at most 9 % of nodes under Gecode (14 closed, same search) and nothing inside baguette (a `baguette_regular` twin, 26 closed, geo 1.10x the nodes). `bench/gac_measure/` |
 | hotfix: the Stack overflow on the ATSP instances (D-0194 §7) | agent-stack (`wave56-stack`) | 2026-11-21 | **D-0197 [AUTONOME].** Not on the exit path: `Learned.make`'s merge recursed once per term (`learned.ml:247`) and PB conflict analysis built a 32 168 204-term row (a ladder 22 M wide). Constant-stack walks in `learned.ml` (+ `List.merge` replaced), `writer.ml` (`Pol.write_with`, `Pol.tokens`), `store.ml`; test in `test_learned.ml` under a 512 KiB fiber stack. Same bytes everywhere (gate on `99cf6b0`). |
+| M6-T2 (re-scope the minor-GC lever after M16) | agent-gc (`wave56-gc`) | 2026-11-21 | **D-0198 [AUTONOME].** No `Bigarray`/`Bytes` move: the trail and the domains are 0.5 to 4.5 % of the words allocated. The nursery at 4 M words (`bin/main.ml`, an eighth of a tight `ulimit -v` at most) and `Justify.sort_pairs` over indices. Instructions -7.1 % (no proof) and -11.7 % (proof) median, byte-identical |
 
 ## Handoff notes
+
+### 2026-11-21 (agent-gc, `wave56-gc`): M6-T2 re-scoped, D-0198 [AUTONOME]
+
+No `Bigarray`/`Bytes` move. The trail and the domains are 0.5 to 4.5 % of the allocation, and no site reaches 1 % of the cycles on average. The GC was a median 13 to 17 % of the cycles because OCaml's 2 MB nursery promotes data that dies a moment later. `bin/main.ml` now sets 4 M words, and `Justify.sort_pairs` no longer forces a minor collection. Instructions -7.1 % (no proof) and -11.7 % (proof) median, every byte the same.
+To know: OCaml 5.1 reserves 128 nurseries of address space, so under `ulimit -v` the size is cut to an eighth of the limit (about 490 k words under the lanes' 4 GB). A quarter lost lane lot-sizing `[activity]`, which sits at 3.2 GB of major heap in its 4 GB cap with any binary. `OCAMLRUNPARAM=s=256k` gives back the old behaviour.
 
 ### 2026-11-21 (orchestrator, autonomous mode): gate 85 green; M16 complete; the crash hotfix merged, gate 86 on it
 
