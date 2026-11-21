@@ -21,7 +21,15 @@
    streaming lexer holds, and [advance] scans the next. It delivers the file one [item]
    at a time through [iter_items] rather than as a tree (M7-T27 (d), D-0128), so that
    the builder can drop each item once it is built; the two rules that are about the
-   model and not an item -- exactly one `solve` -- are checked in [iter_items]. *)
+   model and not an item -- exactly one `solve` -- are checked in [iter_items].
+
+   Cost (M16-file-review-T5, D-0193). One pass, O(tokens): every token is looked at
+   once through [cur] and consumed once by [advance], and nothing is ever re-read. A
+   sequence ([parse_seq], [parse_annots]) is accumulated in reverse and reversed once,
+   so an array literal of n elements costs O(n), whatever its length. A [Pos.t] is
+   made once per item, per set literal and per diagnostic, never per token (the
+   expression's start is two ints, see [parse_expr]). On smelt_11 (136 MB) the parser's
+   own code is a few percent of the front end; the rest is the lexer and the builder. *)
 
 type state = Lexer.t
 
