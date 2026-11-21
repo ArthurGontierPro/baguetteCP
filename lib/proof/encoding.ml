@@ -1276,20 +1276,25 @@ let install_heap_guard () =
       in
       if Option.is_none !alarm then alarm := Some (Gc.create_alarm check)
 
-(* D-0200. The SYNCHRONOUS half of the backstop, for the stretch between two cycle ends
-   that the alarm cannot see (see [heap_estimate]). bin/main.ml calls it from the search's
-   [stop] closure, which [Search] and [Engine] already ask at every node entry, every
-   [stop_poll_runs]-th propagator run and in the trace (M6-T21, M6-T23): the points where
-   a run can stop between two whole steps, with no proof line half-written. That closure
-   is only wrapped when a budget is set, so a run without --max-heap-mb executes exactly
-   the code it did before.
+(* D-0200. The poll for the stretch between two cycle ends that the alarm cannot see (see
+   [heap_estimate]). bin/main.ml calls it from a SIGVTALRM handler, every
+   [heap_poll_seconds] of CPU time, installed only when a budget is set.
 
-   It ends the run the way the alarm does (message, exit 5) rather than raising: [stop]
-   is asked inside the engine and the trace, and an exception from there would have to be
-   threaded through two layers that have no business knowing about memory. *)
+   A timer and not a count of nodes or propagator runs, because no count bounds the
+   allocation between two polls: on 2017 groupsplitter u6g3pref0 the root propagation
+   completed 127 runs in 42 s and grew the heap from 4.4 to 9.9 GB, one run short of the
+   search's every-128-runs [stop] poll. A tenth of a second of CPU bounds it by what the
+   mutator can allocate in that time, a few hundred MB, and costs ten calls a second.
+
+   It ends the run the way the alarm does (message, exit 5), wherever the handler lands,
+   and for the alarm's reason: there is no point the signal can wait for that every phase
+   reaches. [forcing] makes a tick that lands inside its own forced collection a no-op. *)
+let heap_poll_seconds = 0.1
+
 let poll_heap () =
   match !heap_limit_mb with
   | None -> ()
+  | Some _ when !forcing -> ()
   | Some limit -> (
       match heap_overrun limit with None -> () | Some w -> refuse_heap ~limit w)
 

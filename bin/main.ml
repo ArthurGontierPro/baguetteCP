@@ -1767,21 +1767,9 @@ let solve opts (m : Model.t) =
                            (if Float.is_nan !stop_fired_at then stop_fired_at := w;
                             true)
                    in
-                   let stop =
-                     match node_limit () with
-                     | None -> by_time
-                     | Some n -> fun () -> stats.Search.nodes > n || by_time ()
-                   in
-                   (* D-0200: the heap budget's poll rides this closure, which the search
-                      already asks at every node entry, every [stop_poll_runs]-th
-                      propagator run and in the trace. Wrapped only under --max-heap-mb,
-                      so a run without it executes what it did before. *)
-                   match Encoding.current_heap_limit_mb () with
-                   | None -> stop
-                   | Some _ ->
-                       fun () ->
-                         Encoding.poll_heap ();
-                         stop ());
+                   match node_limit () with
+                   | None -> by_time
+                   | Some n -> fun () -> stats.Search.nodes > n || by_time ());
               }
             in
             let r =
@@ -2013,6 +2001,23 @@ let () =
      before the first allocation that is not argument parsing. Installs nothing at all
      unless --max-heap-mb was asked for. *)
   Encoding.install_heap_guard ();
+  (* D-0200. The alarm reads the heap only at the end of a major cycle, and a cycle on a
+     heap of several GB can outlast the climb to the address-space limit. So the budget is
+     also polled on a CPU-time ticker, ten times a second: every phase, every granularity
+     of propagator (D-0200 §2 has the run whose root propagation did 127 runs in 42 s).
+     The handler ends the run where it stands, as the alarm does. ITIMER_VIRTUAL counts
+     this process's user time only, so it does not tick while a write blocks. Installed
+     only under --max-heap-mb, so a run without it has no timer and no handler. *)
+  (match Encoding.current_heap_limit_mb () with
+  | None -> ()
+  | Some _ ->
+      Sys.set_signal Sys.sigvtalrm (Sys.Signal_handle (fun _ -> Encoding.poll_heap ()));
+      ignore
+        (Unix.setitimer Unix.ITIMER_VIRTUAL
+           {
+             Unix.it_interval = Encoding.heap_poll_seconds;
+             it_value = Encoding.heap_poll_seconds;
+           }));
   if not (Sys.file_exists opts.model) then (
     Printf.eprintf "no such file: %s\n" opts.model;
     exit exit_usage);
