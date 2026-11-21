@@ -4,7 +4,7 @@
 # commit. --update refuses while a line is OVER; --raise exists for a decision record, never
 # to make a line pass.
 H_qr72_bag_def	noproof	instructions	1590818	3835759	2244941	1.7086	fataepyc-06	c740d4a8235d4eb9632fbf9c50a322d4	2026-11-20
-H_qr72_bag_def	proof	instructions	1929737	5518180	3588442	1.5378	fataepyc-06	c740d4a8235d4eb9632fbf9c50a322d4	2026-11-20
-2013_rcpsp_11	noproof	instructions	5765305	10933585	5168280	2.1155	fataepyc-06	c740d4a8235d4eb9632fbf9c50a322d4	2026-11-20
+H_qr72_bag_def	proof	instructions	1895675	5313376	3417701	1.5547	fataepyc-06	e5d5a541a51bb0d818c2f271ed3b6e50	2026-11-21
+2013_rcpsp_11	noproof	instructions	5756110	10924762	5168652	2.1137	fataepyc-06	e5d5a541a51bb0d818c2f271ed3b6e50	2026-11-21
 2012_parity-learning_48_24_6.2	noproof	instructions	5022510	7717119	2694609	2.8639	fataepyc-06	fde2ae9bab705de9d985aafdd8e75401	2026-11-20
 2012_parity-learning_48_24_6.2	proof	instructions	5022825	9216741	4193916	2.1976	fataepyc-06	c740d4a8235d4eb9632fbf9c50a322d4	2026-11-20

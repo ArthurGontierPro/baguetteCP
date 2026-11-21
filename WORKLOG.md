@@ -21,7 +21,6 @@ of it to every session and stopping at a broken line before it even reached the 
 |---|---|---|---|
 | M8-bits-encoding-T4 (two arms, `W = none` and `W = 0`, on the sixteen editions) | run directories under `/scratch/arthur/m8t4/`, `tools/compare/` (additions), `bench/challenge/README.md` (the run's row), a new D-record | agent-m8t4 (`wave55-m8t4`) | 2026-11-20 |
 | M10-search-strategy-T5, M9-no-proof-T3, M7-T30 (one Challenge series on current main: default, `-f`, default `--no-proof`) | run dirs `/scratch/arthur/m10t5/`, `tools/compare/` (additions), `bench/challenge/README.md` (the run's row); reserved record D-0185 | agent-m10t5 (`wave55-m10t5`) | 2026-11-20 |
-| M16-file-review-T4 (the proof side) | `lib/core/explanation.ml` (functions; the type only with an [AUTONOME] record), `justify.ml`, `trace.ml`, `lib/proof/writer.ml`, `encoding.ml`, `opb.ml`, `lit.ml`, their unit tests; `bench/scaling/baseline.tsv` (re-baseline only); reserved record D-0192 | agent-review4 (`wave55-review4`) | 2026-11-20 |
 | M16-file-review-T5 (the front end and setup) | `lib/flatzinc/lexer.ml`, `parser.ml`, `builder.ml`, `compile.ml`, `output.ml`, `model.ml`, `ast.ml`, their unit tests (`test_flatzinc.ml`, `test_compile.ml`, `test_output.ml`); reserved record D-0193 | agent-review5 (`wave55-review5`) | 2026-11-20 |
 
 ## Cross-session requests
@@ -456,6 +455,7 @@ section 1. Shares are inclusive, of the whole run.
 
 | Task | Session | Date | Summary |
 |---|---|---|---|
+| M16-file-review-T4 (the proof side) | agent-review4, resumed by agent-review4b (`wave55-review4`) | 2026-11-21 | **D-0192.** The seven proof-side modules read and tabled, profiled on the lane with the proof and on the codes. Six byte-identical levers in `justify.ml` (`combine_origin`'s table, the claim key over interned names and its hash), `explanation.ml` (a node's hash computed once) and `writer.ml`/`encoding.ml` (solution lines); release lane median -6.3 % per node with the proof, 0.0 % without; rcpsp_11 -20 %, cyclic-rcpsp -12.5 %, openshop -20 %, codes -8.6 and -11.1 %. Gate on `cc52a57` green against gate 82's binary. Left: alldiff's derivation per pruning (52 % of cyclic-rcpsp, a request), solution lines as a list, soccer's long keys |
 | M16-file-review-T3 (learning) and T2's leftover `member.ml` | agent-review3 (`wave55-review3`) | 2026-11-20 | **D-0191.** The ten learning modules and `member.ml` read and tabled, profiled on the lane, in its learning configurations (lbd, activity, restarts, bits0, nopb) and on the codes (QR48 f2/f3, the ENC=2 form). Nine byte-identical levers in `retention.ml`, `analysis.ml`, `learn.ml` and `pb_analysis.ml`; release lane median -2.8 % without the proof, -1.5 % with it, -15.6 % under `lbd:500`, fox-geese -30 %. `member.ml` at most 0.32 % of five Challenge instances, unchanged. Gate on `eed8d5e` (`c740d4a8`) against gate 80: `make check` 4 457 ok, 207 x 4 artefacts equal, lane 324/324, debug 311/311, scaling ok and re-baselined (`16366a4`) |
 | M16-file-review-T2 (the propagators, `member.ml` excepted: M7-T35 held it) | agent-review2 (`wave55-review2`) | 2026-11-20 | **D-0190.** Every file of `lib/core/prop/` but `member.ml` read and tabled. Ten byte-identical levers: the learned clause's advisor reads its watches from its own record, Linear's run over an array and without a fixed term's divisions, gcc's three rules count before they build and list each value's declaring variables once, the reified run without `Domain.value` or closures, `Int` comparisons in prop/, element's live table once per pass, alldiff's tight interval tested before it snapshots. Release, per node: lane median -6.8 % without the proof, -3.7 % with it; evm -28 %, chessboard -19 %, mspsp -11 %, filters -11 %, lot-sizing -10 %; codes -0.5 to -2.0 %. Gate on `9cba8dd` (`fde2ae9b`) green: `make check` rc 0 (4 443 ok), 207 models x 4 artefacts equal to gate 78's binary, lane 324/324, debug 311/311, scaling ok; baseline re-recorded (rcpsp_11 -1.2 % of late). `member.ml` left for after M7-T35 |
 | M14-e2e-verification-T8 (optimisation, and cake_pb_cp on search proofs) | agent-e2e8 (`wave55-e2e8`) | 2026-11-20 | **D-0182.** `solve minimize/maximize` translated and bridged (each `soli` re-derived over the ladder); `make e2e` 188 of 207 VERIFIED (8 OPT), 31 of 31 controls (8 wrong optimum, 4 refused by `cake_pb_cp` itself), 187 AGREE. Challenge: 166 of the 201 instances baguette completes in 300 s are translatable; of the first 100, 96 VERIFIED by `cake_pb_cp`, 4 exhausted its 24 GB heap, 0 refused; chain a median x12.7 of `veripb` alone, the prefix being the cost. Series tail still running. Four bridge bugs fixed (selector definitions, constant selectors, clause resolvents, Theta(w^2) running rows). New `tools/e2e/measure.sh`, `prefix.sh`, `bench/e2e_spike/series.sh`, `summarise.py` |
@@ -639,6 +639,21 @@ section 1. Shares are inclusive, of the whole run.
 | M7-T35 (member models fail the D-0026 agreement check under BAGUETTE_DEBUG) | agent-memberdbg (`wave55-memberdbg`) | 2026-11-20 | **D-0189 [AUTONOME].** The reasons were right: member's page-only threshold lemmas (`Term (1, Clause l)` + `Weaken` of every `~l_j`, a constant) were read by the reverse arm as variables used. `Store.reverse_owners` drops that exact pair (D-0091's shape), debug-only, so every artefact is byte-identical. `test_prop.ml` re-runs the seven member models under `BAGUETTE_DEBUG=1` (13 checks, 7 fail with the old arm). Gate on `386a0a7`: make check 4 456 ok, 207x4 artefacts equal, lane 324/324, debug 311/311, scaling ok. No lane instance (too heavy, D-0189 section 5) |
 
 ## Handoff notes
+
+### 2026-11-21 (orchestrator, autonomous mode): gate 82 green; two review agents stalled and were relaunched; M16-T4 merged
+
+Gate 82 (`a0f18b3`, merge wave55-review3, D-0191, binary `7b967430`, against gate 81's `641f19b6`): `make
+check` rc 0 (4 457 ok), 207 x 4 artefacts equal, lane 324/324, debug 311/311, scaling ok. agent-review4 and
+agent-review5 stopped making progress for ~14 h (no process, no file written, a nudge unanswered for
+3 h 40); the orchestrator stopped them, saved review4's uncommitted change as a WIP commit (`302a275`),
+and relaunched fresh agents from the pushed branches. review4b kept the WIP as L6 (measured, byte-
+identical) and finished T4 (D-0192, gate green on `cc52a57`). Agents are now told never to wait on a
+background command for more than 30 minutes without checking it.
+
+### 2026-11-21 (agent-review4b, `wave55-review4`): M16-file-review-T4, the proof side, D-0192
+
+Six byte-identical levers (a table per file in D-0192): `combine_origin`'s shapes and the claim index hashed on their whole key, the claim key sorted as interned integers, a hash-consed node's hash computed once, solution lines written without a string or four cells per literal. Release lane median -6.3 % per node with the proof, 0.0 % without, codes -8.6 and -11.1 %. The WIP the first agent left (`assignment_lits`) was measured and kept as L6 (openshop -10.4 %).
+Left in D-0192 section 5: alldiff's Hall derivation rebuilt per pruning is now the largest proof-side cost (52 % of cyclic-rcpsp, request to `alldiff.ml`), then openshop's solution list and soccer's long keys. Scaling baseline re-recorded on the gated binary (QR72 with the proof -0.62 % of late).
 
 ### 2026-11-20 night (orchestrator, autonomous mode): gate 81 green; M16-T3 merged, gate 82 on it
 

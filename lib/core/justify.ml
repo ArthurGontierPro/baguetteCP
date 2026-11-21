@@ -315,8 +315,10 @@ type stated = { s_cid : Writer.cid; s_level : int }
    The packing is injective (one interned id per name STRING, so two names are one id
    exactly when [String.equal] holds, which is what [Lit.equal] compares), so two keys
    are equal exactly when the sorted literal lists were [List.equal Lit.equal], the
-   equality the table had. The hash mixes the first [claim_hash_width] literals and the
-   length, now from the packed integers rather than a string hash of each name.
+   equality the table had. The hash mixes the packed integers rather than a string hash
+   of each name; since M16-file-review-T4 (D-0192) all of them, and the pairs are sorted
+   as integers (by interned name, kind, sign, value) rather than by [Lit.compare]: any
+   one order makes a set's key unique, and this one compares no string.
    Nothing iterates this table, so only the cost of a lookup and the bytes a key holds
    change. *)
 module Claims = Hashtbl.Make (struct
@@ -329,16 +331,40 @@ module Claims = Hashtbl.Make (struct
     let rec go i = i >= n || (Int.equal a.(i) b.(i) && go (i + 1)) in
     go 0
 
-  (* The first [claim_hash_width] literals (two slots each) and the length. A key is
-     sorted, so two clauses that agree on that prefix and length share a bucket and
-     [equal] tells them apart. *)
-  let claim_hash_width = 8
-
+  (* Every slot and the length. M16-file-review-T4 (D-0192): it was the first eight
+     literals, and once a key is sorted by interned name (the names met first sort first)
+     the clauses of 2023_evm-super-compilation agreed on that prefix by the thousand, one
+     bucket walked by [equal] at every lookup (+15 % per node with the proof). *)
   let hash (a : int array) =
     let n = Array.length a in
-    let m = Stdlib.min n (2 * claim_hash_width) in
-    let rec go h i = if i >= m then h else go (mix h a.(i)) (i + 1) in
+    let rec go h i = if i >= n then h else go (mix h a.(i)) (i + 1) in
     finish (mix (go 8 0) (n / 2))
+end)
+
+(* M16-file-review-T4 (D-0192): the interned names, keyed by the string with [String.equal]
+   and the C string hash. It was the polymorphic [Hashtbl], whose lookup compares a key
+   with [compare] (the C [compare_val] walking both strings), a quarter of [intern]'s
+   cost on soccer. The same answer for every name: the polymorphic equality on two
+   strings is [String.equal], and the hash is the one [Hashtbl.hash] computed. *)
+module Names = Hashtbl.Make (struct
+  type t = string
+
+  let equal = String.equal
+  let hash (s : string) = Hashtbl.hash s
+end)
+
+(* M16-file-review-T4 (D-0192): the table of [combine_origin]'s shapes, keyed by the two
+   integers packed as one, the count in the high bits. It was a [Writer.Itbl], whose hash
+   is the key itself because the writer's keys are consecutive ids, and a bucket is the
+   key's LOW bits: every shape of one divisor fell in one bucket, and the lookup walked
+   them all (10.6 % of 2013_rcpsp_11's samples with the proof, a chain of every shape of
+   divisor 1). [finish] spreads the high bits into the low ones. The table is never
+   iterated, and a shape still finds the one closure it shared, so no byte moves. *)
+module Shapes = Hashtbl.Make (struct
+  type t = int
+
+  let equal = Int.equal
+  let hash k = finish k
 end)
 
 type ctx = {
@@ -352,13 +378,18 @@ type ctx = {
       (* M2-T9. Clause (as a sorted literal set) -> the line that states it. Read by
          [defining_line] and [defining_lit], written by every clause this module puts on
          the page, wiped by [wipe_level]. Lookup only -- never iterated for emission. *)
-  names : (string, int) Hashtbl.t;
+  names : int Names.t;
   mutable name_of : string array;
       (* M11-complexity-T12 (D-0166): the claim index's interned variable names, both
          ways ([name_of] only to spell a key back in [defining_key]'s message). One
          entry per name a stated clause has named, never wiped: the ids must stay
          stable for as long as a key that uses them can be in [stated]. *)
-  combine_origins : (unit -> string) Writer.Itbl.t;
+  mutable declared : Bytes.t;
+      (* M16-file-review-T4 (D-0192): per interned name, '\001' once [validate_lit] has
+         found it declared in [encoding]. A name is never undeclared ([Encoding] only adds
+         to its table), so the answer [Encoding.is_declared] gave once is the answer it
+         would give again, and the check costs one lookup where it cost two. *)
+  combine_origins : (unit -> string) Shapes.t;
       (* M11-complexity-T12 (D-0166): one origin closure per (summands, divisor) shape,
          shared by every [Combine] line of that shape; see [combine_origin]. *)
   serial : int;
@@ -384,9 +415,10 @@ let create ~writer ~encoding =
     stated = Claims.create 64;
     stated_by_level = Array.make 16 [];
     stated_hi = -1;
-    names = Hashtbl.create 64;
+    names = Names.create 64;
     name_of = Array.make 64 "";
-    combine_origins = Writer.Itbl.create 64;
+    declared = Bytes.make 64 '\000';
+    combine_origins = Shapes.create 64;
     serial = !serials;
     epoch = 0;
     wiped_at = Array.make 16 0;
@@ -446,35 +478,87 @@ let with_level ctx level f = Writer.with_level ctx.writer level f
 
 (* The key, or [None] for a clause this index does not describe: the empty clause, and
    any clause whose [Opb] rendering is not the literal *set* its key would claim. See
-   the module header. Packed as [Claims] says (M11-complexity-T12, D-0166), in the
-   order [Lit.compare] sorts the set. *)
+   the module header. Packed as [Claims] says (M11-complexity-T12, D-0166), sorted by
+   the packed integers (D-0192), not by [Lit.compare]. *)
 let intern ctx (x : string) =
-  match Hashtbl.find_opt ctx.names x with
+  match Names.find_opt ctx.names x with
   | Some i -> i
   | None ->
-      let i = Hashtbl.length ctx.names in
-      Hashtbl.add ctx.names x i;
+      let i = Names.length ctx.names in
+      Names.add ctx.names x i;
       if i >= Array.length ctx.name_of then (
         let a = Array.make (2 * Array.length ctx.name_of) "" in
         Array.blit ctx.name_of 0 a 0 (Array.length ctx.name_of);
-        ctx.name_of <- a);
+        ctx.name_of <- a;
+        let d = Bytes.make (2 * Bytes.length ctx.declared) '\000' in
+        Bytes.blit ctx.declared 0 d 0 (Bytes.length ctx.declared);
+        ctx.declared <- d);
       ctx.name_of.(i) <- x;
       i
 
-let pack_key ctx (sorted : Lit.t list) : int array =
-  let a = Array.make (2 * List.length sorted) 0 in
-  List.iteri
-    (fun i (l : Lit.t) ->
-      let kind, x, v =
-        match l.Lit.v with
-        | Lit.Ge (x, v) -> (0, x, v)
-        | Lit.Eq (x, v) -> (1, x, v)
-        | Lit.Bit (x, v) -> (2, x, v)
-      in
-      a.(2 * i) <- (intern ctx x lsl 3) lor (kind lsl 1) lor Bool.to_int l.Lit.positive;
-      a.((2 * i) + 1) <- v)
-    sorted;
-  a
+(* One literal's two slots: the interned name with the kind and the sign, then the value. *)
+let pack_word ctx (l : Lit.t) =
+  let kind, x =
+    match l.Lit.v with
+    | Lit.Ge (x, _) -> (0, x)
+    | Lit.Eq (x, _) -> (1, x)
+    | Lit.Bit (x, _) -> (2, x)
+  in
+  (intern ctx x lsl 3) lor (kind lsl 1) lor Bool.to_int l.Lit.positive
+
+(* M16-file-review-T4 (D-0192): the pairs sorted by their two integers, in place, and
+   whether two of them are equal. Insertion for a short clause (the trace's lines are),
+   [Array.stable_sort] over the pairs beyond [insertion_max]. *)
+let insertion_max = 24
+
+let sort_pairs (a : int array) =
+  let n = Array.length a / 2 in
+  if n <= insertion_max then
+    for i = 1 to n - 1 do
+      let w = a.(2 * i) and v = a.((2 * i) + 1) in
+      let j = ref (i - 1) in
+      while !j >= 0 && (a.(2 * !j) > w || (a.(2 * !j) = w && a.((2 * !j) + 1) > v)) do
+        a.(2 * (!j + 1)) <- a.(2 * !j);
+        a.((2 * (!j + 1)) + 1) <- a.((2 * !j) + 1);
+        decr j
+      done;
+      a.(2 * (!j + 1)) <- w;
+      a.((2 * (!j + 1)) + 1) <- v
+    done
+  else
+    let p = Array.init n (fun i -> (a.(2 * i), a.((2 * i) + 1))) in
+    Array.stable_sort
+      (fun ((w1 : int), (v1 : int)) (w2, v2) ->
+        if w1 <> w2 then Int.compare w1 w2 else Int.compare v1 v2)
+      p;
+    Array.iteri
+      (fun i (w, v) ->
+        a.(2 * i) <- w;
+        a.((2 * i) + 1) <- v)
+      p
+
+let has_repeat (a : int array) =
+  let n = Array.length a / 2 in
+  let rec go i =
+    i < n
+    && ((a.(2 * i) = a.(2 * (i - 1)) && a.((2 * i) + 1) = a.((2 * (i - 1)) + 1))
+       || go (i + 1))
+  in
+  go 1
+
+(* The key of a clause whose literals [word] packs, in the order given, then sorted. *)
+let key_of_words (word : Lit.t -> int) (lits : Lit.t list) : int array option =
+  match lits with
+  | [] -> None
+  | _ ->
+      let a = Array.make (2 * List.length lits) 0 in
+      List.iteri
+        (fun i (l : Lit.t) ->
+          a.(2 * i) <- word l;
+          a.((2 * i) + 1) <- Lit.value l.Lit.v)
+        lits;
+      sort_pairs a;
+      if has_repeat a then None else Some a
 
 (* [pack_key] read back, for a message only. *)
 let unpack_key ctx (a : int array) : Lit.t list =
@@ -492,11 +576,7 @@ let unpack_key ctx (a : int array) : Lit.t list =
       { Lit.v = pv; positive = w land 1 = 1 })
 
 let clause_key ctx (lits : Lit.t list) : int array option =
-  match lits with
-  | [] -> None
-  | _ ->
-      let sorted = List.sort_uniq Lit.compare lits in
-      if List.compare_lengths sorted lits = 0 then Some (pack_key ctx sorted) else None
+  key_of_words (pack_word ctx) lits
 
 (* Record that [cid] states [lits]. The *outermost* line wins when a clause is stated
    more than once: it is the one that survives the most backtracking, so it is the one
@@ -575,17 +655,30 @@ let ensure_lit ctx (l : Lit.t) =
       ignore (Encoding.ensure_atom ctx.encoding ctx.writer x v : Writer.cid * Writer.cid)
   | Lit.Ge _ | Lit.Eq _ | Lit.Bit _ -> ()
 
-let validate_lits ctx lits =
-  List.iter
-    (fun (l : Lit.t) ->
-      let owner = Lit.owner l.Lit.v in
-      if not (Encoding.is_declared ctx.encoding owner) then
-        invalid_arg
-          (Printf.sprintf
-             "Justify: literal %s refers to variable %s not declared in this encoding"
-             (Lit.to_string l) owner);
-      ensure_lit ctx l)
-    lits
+(* [l] is about a declared variable, or this raises; then its atom is minted, if it has
+   one to mint. Answers [l]'s first packed slot, so a caller building the claim key does not
+   intern the name a second time (M16-file-review-T4, D-0192: the check was a lookup in
+   [Encoding]'s names and the key a lookup in [ctx.names], two string hashes a literal of
+   every line; it is now the second alone, and [declared] remembers the first's answer). *)
+let validate_lit ctx (l : Lit.t) =
+  let w = pack_word ctx l in
+  let i = w lsr 3 in
+  if Bytes.unsafe_get ctx.declared i = '\000' then (
+    let owner = Lit.owner l.Lit.v in
+    if not (Encoding.is_declared ctx.encoding owner) then
+      invalid_arg
+        (Printf.sprintf
+           "Justify: literal %s refers to variable %s not declared in this encoding"
+           (Lit.to_string l) owner);
+    Bytes.unsafe_set ctx.declared i '\001');
+  ensure_lit ctx l;
+  w
+
+let validate_lits ctx lits = List.iter (fun l -> ignore (validate_lit ctx l : int)) lits
+
+(* [validate_lits] and [clause_key] in one pass: every literal checked and its atom minted
+   in the order given, as [validate_lits] does, then the key. *)
+let validated_key ctx lits = key_of_words (validate_lit ctx) lits
 
 (* M11-complexity-T13 (D-0168), M11-complexity-T15: the id of a line a thunk or a node
    remembers, if this [ctx] wrote it and it is still on the page (see [ctx]'s
@@ -680,10 +773,9 @@ let memoized ctx (e : Explanation.t) (write : unit -> Writer.cid) : Writer.cid =
    already cannot mean exclusive ownership of an [emit] result, and [Search.solve]
    already retires by [live_ids] rather than by counting what it was handed. *)
 let emit_clause ctx lits =
-  validate_lits ctx lits;
   (* The key once (M11-complexity-T5, D-0140 J2): it was sorted by [defining_line] and
-     again by [state_clause]. *)
-  let key = clause_key ctx lits in
+     again by [state_clause]. Built in the same pass as the check (D-0192). *)
+  let key = validated_key ctx lits in
   match match key with None -> None | Some k -> defining_key ctx k with
   | Some cid -> cid
   | None ->
@@ -719,11 +811,11 @@ let emit_clause ctx lits =
 let emit_rup_clause_lazy ctx ~origin lits =
   (* M9-no-proof-T2: no line, no claim-index entry, no literal validated. *)
   if Writer.is_null ctx.writer then Writer.fresh_lazy ctx.writer ~origin
-  else (
-    validate_lits ctx lits;
+  else
+    let key = validated_key ctx lits in
     let cid = Writer.rup_clause_lazy ctx.writer ~origin lits in
-    state_clause ctx lits cid;
-    cid)
+    (match key with None -> () | Some k -> state_key ctx k cid);
+    cid
 
 let emit_rup_clause ctx ~origin lits =
   emit_rup_clause_lazy ctx ~origin:(fun () -> origin) lits
@@ -926,7 +1018,8 @@ let emit_summand ~emit ctx = function
    is live. It renders two integers, so every line of one shape can share one closure
    (M11-complexity-T12, D-0166): a closure per line was 40 bytes for each of the 3.1 M
    live `pol` lines of 2011_black-hole_9 at node 40, and the shapes are a few hundred. The
-   string it renders is the same. *)
+   string it renders is the same. The table is [Shapes], whose hash mixes the key: see
+   there why the writer's identity-hashed table was quadratic in the shapes here. *)
 let combine_origin ctx n_summands divisor =
   let o () = Printf.sprintf "combine(%d summand(s), / %d)" n_summands divisor in
   (* The key packs both integers, so it is shared only where both fit in 31 bits (both
@@ -934,10 +1027,10 @@ let combine_origin ctx n_summands divisor =
   if n_summands >= 1 lsl 31 || divisor < 0 || divisor >= 1 lsl 31 then o
   else
     let k = (n_summands lsl 31) lor divisor in
-    match Writer.Itbl.find_opt ctx.combine_origins k with
+    match Shapes.find_opt ctx.combine_origins k with
     | Some shared -> shared
     | None ->
-        Writer.Itbl.add ctx.combine_origins k o;
+        Shapes.add ctx.combine_origins k o;
         o
 
 let combine_line ~emit ctx summands divisor =
