@@ -36,6 +36,10 @@ def read_one(d, i):
     r["nodes"] = int(m[-1]) if m else None
     m = R_BITS.search(err)
     r["bits"] = int(m.group(1)) if m else None
+    try:  # veripb rc 134 under the harness's 16 GiB ulimit -v: the checker's memory, not a judgement
+        r["chkmem"] = r["verdict"] == "CHECK-ERROR" and "memory allocation of" in open(L + ".vp", errors="replace").read()
+    except OSError:
+        r["chkmem"] = False
     try:
         r["rss"] = int(R_RSS.search(open(L + ".rss").read()).group(1))
     except (OSError, AttributeError):
@@ -49,7 +53,11 @@ def has_value(r):
 
 
 def solved(r):
-    return r["verdict"] == "VERIFIED" and (r["status"] in ("OPT", "UNSAT") or (r["status"] == "SAT" and r["obj"] == "-"))
+    """complete (OPT/UNSAT) or a solved satisfaction problem, with the proof VERIFIED -- or with the check
+    stopped by the checker's own memory (CHECK-ERROR rc 134, `memory allocation ... failed`), counted as
+    complete the same way in every arm (orchestrator, 2026-11-21: re-checked under 32 GB, such a proof
+    verifies). Proof-side failures (REJECTED) and TIMEOUT-CHECK are not counted."""
+    return (r["verdict"] == "VERIFIED" or r.get("chkmem")) and (r["status"] in ("OPT", "UNSAT") or (r["status"] == "SAT" and r["obj"] == "-"))
 
 
 def quality(r):
@@ -85,7 +93,7 @@ def main():
                 o.write(s.read())
 
     groups = ["order-win", "order-family", "w0-win"]
-    keys = ["solved", "incumbent", "TIMEOUT-noval", "REFUSED", "CAPPED", "unverified"]
+    keys = ["solved", "of which chk-mem", "incumbent", "TIMEOUT-noval", "REFUSED", "CAPPED", "unverified"]
     with open(os.path.join(ROOT, "per_instance.tsv"), "w") as out:
         out.write("id\tgroup\tfamily\t" + "\t".join("%s_%s" % (k, a) for a in ARMS for k in ("status", "obj", "verdict", "wall", "bits", "rss_kb")) + "\n")
         for i, (y, g, fam, rs) in sorted(data.items()):
@@ -104,11 +112,12 @@ def main():
                 if r is None:
                     continue
                 c[a]["solved"] += solved(r)
+                c[a]["of which chk-mem"] += solved(r) and r["verdict"] != "VERIFIED"
                 c[a]["incumbent"] += has_value(r)
                 c[a]["TIMEOUT-noval"] += r["status"] == "TIMEOUT" and not has_value(r)
                 c[a]["REFUSED"] += r["status"] == "REFUSED"
                 c[a]["CAPPED"] += r["status"] == "CAPPED"
-                c[a]["unverified"] += r["status"] in ("OPT", "UNSAT") and r["verdict"] != "VERIFIED"
+                c[a]["unverified"] += r["status"] in ("OPT", "UNSAT") and not solved(r)
         return c
 
     def pairwise(ids):
