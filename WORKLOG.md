@@ -658,8 +658,12 @@ zephyrus, gfd-n120 verified at `--bits-above 64`); M7-T35 (member's debug-check 
 and M4-T6b (GAC arithmetic: not built, no node gain); M13-T1 (root LP: not built); M15 T1-T3; a crash
 hotfix (D-0197); M6-T2 (D-0198: no Bigarray move, the trail and domains are under 1 % of cycles; a larger minor heap and an index sort in Justify instead, -7 % instructions without proof and -12 % with, byte-identical).
 
-**Running**: M8-T4 (`W = none` vs `W = 0`, D-0175) and M10-T5/M9-T3/M7-T30 (default, `-f`, `--no-proof`,
-D-0185): two Challenge series, about two thirds done.
+**Running**: M10-T5/M9-T3/M7-T30 (default, `-f`, `--no-proof`, D-0185), a Challenge series; M8-T4's middle-W
+check (D-0199) before choosing the default.
+
+**M8-T4 finished (D-0175)**: `W = 0` scores 3 441 against 2 712 for `W = none` (287 complete against 245,
+proof caps 214 -> 68), but order keeps 14 complete answers (10 `nfc`) and 10 incumbents, so the order
+encoding cannot go yet. A targeted W = 64 / 100 check runs before the default is chosen.
 
 **Added in autonomous mode** (3 of 3): M4-T6b, M14-T3b, M7-T35, all done.
 
