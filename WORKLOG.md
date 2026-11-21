@@ -23,7 +23,6 @@ of it to every session and stopping at a broken line before it even reached the 
 | M7-T34 (`member` without width-proportional rows) | on `wave53-member`'s files: `lib/core/prop/member.ml`, `lib/flatzinc/compile.ml` (member dispatch), `mznlib/`, `test/models/member_*`, `test/unit/test_prop.ml` (member section) | agent-member2 (`wave55-member`) | 2026-11-20 |
 | M11-complexity-T13 (drop a forced explanation once written) | `lib/core/explanation.ml` (the `thunk` record gains fields, D-0167 item 6), `lib/core/justify.ml`, `lib/core/pb_analysis.ml` (`cited_ids` only), `test/unit/test_justify.ml`, `docs/ARCHITECTURE.md` §4 | agent-thunk (`wave55-thunk`) | 2026-11-20 |
 | M11-complexity-T14 (per node against Gecode) | `lib/core/prop/pb.ml`, `lib/core/engine.ml`, `lib/core/store.ml`, `lib/core/prop/clause.ml`, their unit tests; `bench/` additions | agent-pernode2 (`wave55-pernode`) | 2026-11-20 |
-| M8-bits-encoding-T4 (two arms, `W = none` and `W = 0`, on the sixteen editions) | run directories under `/scratch/arthur/m8t4/`, `tools/compare/` (additions), `bench/challenge/README.md` (the run's row), a new D-record | agent-m8t4 (`wave55-m8t4`) | 2026-11-20 |
 
 ## Cross-session requests
 
@@ -455,6 +454,7 @@ section 1. Shares are inclusive, of the whole run.
 
 | Task | Session | Date | Summary |
 |---|---|---|---|
+| M8-bits-encoding-T4 (two arms, `W = none` and `W = 0`) | agent-m8t4 (`wave55-m8t4`) | 2026-11-21 | **D-0175.** Binary `492638b9` (`ec53df4`), D-0133's rules, 1 600 instances per arm. `none` / `w0`: 245 / 287 verified complete, 926 / 1 045 incumbents, 259 / 279 TIMEOUT without a value, 320 / 277 REFUSED (heap 318 / 276), 214 / 68 CAPPED, 0 REJECTED; score 2 712.4 / 3 441.3, rank better in 6 editions, worse in none, 2024 -5.3 (heap guard after a better incumbent). nodes/s ratio 1.00 [0.90, 1.28], RSS 1.00 [0.85, 1.07]. `w0` loses 14 complete answers (10 `nfc`, 2 `mapping`) and 10 incumbents, so order stays; the default is the user's (D-0175 §6). |
 | M11-complexity-T4 (part 2: search, analysis, retention, learned; T4 DONE) | agent-batch4b (`wave52-batch4b`) | 2026-11-19 | **D-0152.** S1 (learned-instance kind as a byte per engine id), S3 (`decision_entries` over the level marks), S4 (`is_fixed`, `first_fail` stops at size 2), S5 (`kept` by a level table), S6 (`apply_globals` keeps its forward list, skips a unit in force), S2 (lazy citation texts), R3 (typed orders, fifo's no-op sort skipped), J6 (`bridges`' origin a thunk), L2 (`to_linear_row` typed sorts, one-pass grouping), A1 (the 1UIP frontier keeps its count and a heap). R4 done and REVERTED (RSS +6-8 %). Every byte the same (36 measurement runs, lane 301/301 and 289/289); instructions at 40 000 nodes no-proof: mspsp -17.3 %, QR72 -15.6 %, QR48 -11.2 %, openshop -8.0 %, rcpsp_11 -5.9 %, cyclic -0.5 %; RSS -4 to -8 %. Gate on `d4e8477`: `make check` rc 0, peak RSS 99 MB, 193 models identical to gate 57's binary, lane 301/301 and 289/289, binary `d12feec0`. |
 | M8-bits-encoding-T6 (PB analysis over bits rows) | agent-pbbits (`wave52-pbbits`) | 2026-11-19 | **D-0153.** A mixed `Linear` row is offered to PB analysis as the .opb holds it and every bits block is INSTANTIATED through one line (the atom's bridge at the bound in force, the bound row at a declared bound, the pivot's own atom for the pruned block) before anything resolves on it (`ladder.ml`'s bits arm, `pb_analysis.ml`, `Linear.pb_row ?bits_n`, compile.ml's pack lines, one argument at the search.ml call site). Probed first (`probe_pbbits.sh`). Suite at `W = 0`: PB rows 143 -> 213, mixed-row fallbacks 110 -> 0, stdout identical, ten proofs change, all verified; byte-identical at `W = none`. Gate: `make check` rc 0 (100 MB), 195 models identical to gate 57, diff lane equal but for eight `bits0` runs (D-0153 section 6, re-record after the merge) |
 | M7-T31 and M6-T23 | agent-proofbugs (`wave50-proofbugs`) | 2026-11-19 | **D-0148, D-0149.** M7-T31: the refused nogoods on hrc were a FACTLESS pruning (a learned unit or the improving bound re-applied by `apply_globals`) that settled over a hole, taken for a root by the decision closure, so the hole's levels left the nogood. `Analysis.rests_on_nothing` expands it like any settle. Reachable at default flags (`opt_global_settles_hole_sat`, refused by main's binary), `test_analysis` scene 7, a median/strategy sweep of 1 233 runs all VERIFIED. M6-T23: not the finaliser. The stop was never asked inside one PB analysis (cargo) or one conflict's trace (cable, plus a degenerate memo hash, 6.6x), and both now poll it. Overshoot at 300 s: cargo > 2 100 s -> 0.1 s, cable 1 209 s -> 10 s. The I-P7 alarm does not fire on main. Default proofs byte-identical (192/193 models, every lane run of this row) |
@@ -622,6 +622,14 @@ section 1. Shares are inclusive, of the whole run.
 | D-0161 request 1 (`Alldiff.snap_of` builds derivation inputs at every snapshot) | agent-snap (`wave54-snap`) | 2026-11-19 | **D-0165.** `snap_of` keeps the interior holes only; `gone` rebuilds the below/above runs inside the `Deferred` from the four frozen bounds; root flags and `hole_cite` through `Store.at_root`. Every model artefact and every lane line equal to the base `45b8a3c7`. Cyclic 10 000 nodes `--no-proof` -25.6 % instructions (157.0 -> 116.7 G), `--proof` -5.2 %; black-hole_20 -6.6 % / -2.3 %. |
 
 ## Handoff notes
+
+### 2026-11-21 (agent-m8t4, `wave55-m8t4`): M8-bits-encoding-T4, D-0175
+
+The two arms ran on the sixteen editions with one binary. `W = 0` wins in total (3 441 against 2 712 points, +42 verified
+complete answers), but it loses 14 complete answers to order, 10 of them `nfc` (nodes/s 0.21, RSS 4.5x), so the order
+encoding cannot go yet. The next steps are the user's choice of default (D-0175 §6) and a look at `nfc` on bits. Tables
+are in `/cluster/arthur/baguette-results/m8t4/`, and 107 GB of runs (proofs of the CHECK-ERROR rows among them) are under
+`/scratch/arthur/m8t4/`.
 
 ### 2026-11-20 (agent-merge, `wave55-merge`): wave53-alldiff and wave54-snap merged on the branch, gate 71 green
 
