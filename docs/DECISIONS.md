@@ -24690,3 +24690,145 @@ average near 80.
 writing cake's product encoding); the writer's speed on regular rows; whether `--e2e` becomes a
 default and whether the bridge is retired (D-0187 §5, the user's). Results in
 `/cluster/arthur/baguette-results/wave56-e2e6/`.
+## D-0194  [AUTONOME] M4-T6b: GAC arithmetic measured before it is built. On the Challenge and codes instances it saves no nodes worth a build, so D-0184's option B is not built
+
+Status: DONE (a measurement and a recommendation, no solver code, no default changed)
+Date: 2026-11-21
+Task: M4-T6b (agent-gac, `wave56-gac`)
+Touches: `bench/gac_measure/` (new: `census.py`, `gac_rewrite.py`, `gecode_pair.sh`, `bag_twin.py`,
+`bag_pair.sh`, `summarise.py`, `series.sh`). Runs in `fataepyc-06:/scratch/arthur/wave56-gac-runs/`, the
+tables copied to `/cluster/arthur/baguette-results/wave56-gac/`. Binary `main.exe` md5 `bb916498` (release,
+branch base `42262b3`), Gecode 6.4.0 through MiniZinc 2.10.1, veripb 3.0.2.
+
+### 1. The question
+
+D-0184 showed that GAC `int_times` can be proved over the order encoding and recommended not building it
+until one number was known, the node count a domain-consistent filter saves on real instances with
+small-operand arithmetic. D-0060's arithmetic is bounds consistent. This record measures what GAC would
+add, three ways, from the cheapest to the most faithful.
+
+`int_mod` never reaches the solver. `mznlib/redefinitions.mzn` rewrites it as `int_div`, `int_times` and
+a linear row, so it is counted through those two.
+
+### 2. Census and root probe (`census.py`, every flattened Challenge instance)
+
+1 575 flattened instances (`/scratch/arthur/m8t4/flat/`, the sixteen editions). 426 instances of 53
+families post the builtins: 10 029 572 `int_times`, 5 593 `int_div`, 19 353 `int_abs`. A constraint is
+`small` when every operand has at most 64 declared values and none is a constant.
+
+| | constraints | share |
+|---|---|---|
+| an operand is a constant (linear already) | 1 217 065 | 12 % |
+| an operand wider than 64 values | 229 098 | 2 % |
+| small | 8 608 355 (224 instances, 32 families) | 86 % |
+| small with a two-valued operand (a 0..1 indicator times an integer) | 8 593 451 | 99.8 % of small |
+
+So small-operand arithmetic on the Challenge is almost entirely `b * x = z` with `b` in 0..1, posted by
+the flattening of conditional sums (code-generator 3.1 M, yumi-dynamic 2.3 M, nside 0.96 M, smelt, fjsp,
+gfd-schedule, test-scheduling). The only genuine two-variable products over small domains are in
+harmony and vaccine (`int_div` and `int_abs`), stripboard, cable and on-call-rostering (`int_abs`), and
+the codes models' squares (section 5).
+
+On each small constraint, from the declared domains alone, the probe compares GAC with the fixpoint of
+bounds(Z) consistency over the hulls, which is an UPPER bound on what D-0060's rows do, so its gap is
+a lower bound on GAC's root gain. **GAC removes an operand value that bounds(Z) keeps on 0 of the
+8 608 355 constraints.** It removes values of the RESULT on 366 688 constraints (42.3 M values, 225 389 of
+them in carpet-cutting, 125 219 in mrcpsp): those are the holes of a product, which matter only if
+another constraint reads the interior of z.
+
+### 3. Gecode, bounds against GAC under one search (`gecode_pair.sh`)
+
+Up to four instances per family with small arithmetic (the smallest `.fzn`), 118 of them, and the three
+codes instances of section 5. Each is flattened with Gecode's library, and its twin replaces every small
+`int_times`/`int_div`/`int_mod`/`int_abs` by `gecode_table_int` over the relation's tuples, which Gecode
+propagates domain consistently. The model's own search annotations are kept, and each arm gets 150 s.
+
+| | instances |
+|---|---|
+| flattening failed | 8 |
+| nothing to tabulate (Gecode's library posts the indicator products differently) | 49 |
+| run | 64 |
+| both arms closed (optimum, UNSAT or a first solution) | 14 |
+| both at the limit, same best objective | 48 |
+| both at the limit, GAC worse (stack-cuttingstock d7, 35 against 38: GAC explored half the nodes) | 1 |
+| GAC closed where bounds did not, or found a better objective | **0** |
+
+On the 14 closed instances, nodes GAC / bounds: ATSP 0.913 (69 against 63), atsp 0.955 (155 against
+148), stable-goods 0.982, still-life-wastage 0.999 and 1.000. The nine others (compression, nside,
+ship-schedule x4, stack-cuttingstock, stripboard) give 1.000. The largest saving measured is 9 % of a
+69-node tree.
+
+### 4. Inside baguette (`bag_twin.py`, `bag_pair.sh`)
+
+Gecode has no learning and flattens differently, so the same 121 instances were also run in baguette,
+on the `.fzn` the Challenge series ran. The twin replaces every small `int_times`/`int_div`/`int_abs`
+by the same relation as a DFA through `baguette_regular` (`state 1 --x=a--> A_a --y=b--> C_(ab)
+--z=ab--> accept`, over `[x, z]` when the operands are aliased), which `lib/core/prop/regular.ml`
+propagates domain consistently, learning and proof included. It is a measuring device, not option B,
+because its rows are a DFA and not D-0184's tabulation. Two twins were run with their proofs and checked:
+gfd-schedule n25 (1 579 nodes in both arms, both VERIFIED BOUNDS) and fjsp easy01 (118 nodes against 113,
+both VERIFIED BOUNDS). The other runs used `--no-proof`, which does not move the search. Each arm got
+240 s.
+
+| | instances |
+|---|---|
+| no twin (DFA table over the 400 000-cell cap: gbac, cyclic-rcpsp hard_5, routing-flexible) | 9 |
+| twin over 3 M state flags (nside, yumi-dynamic) | 7 |
+| an arm died (the twin out of its 32G scope on ATSP, atsp, code-generator, ihtc; two Stack overflow crashes, see section 7) | 9 |
+| compared | 96 |
+| both closed | 26 |
+| both at the limit, same best objective | 53 |
+| GAC better objective at the limit / closed by GAC only | 4 / 1 |
+| GAC worse objective at the limit / closed by bounds only | 9 / 3 |
+
+On the 26 closed instances, nodes GAC / bounds have a geometric mean of **1.096**, a minimum of 0.958
+(fjsp) and a maximum of 2.028 (ship-schedule). None is below 0.95. Learning makes the twin's trees
+different, and they are not smaller. The five changes in GAC's favour are not node savings. In each, the
+GAC arm explored MORE nodes than bounds in the same time: still-life-wastage_09 closed at 217 s after
+24 730 nodes where bounds had done 22 201 in 240 s, opd 277 199 against 94 374, maximum-dag 72 677
+against 67 800, stable-goods s-d16 6 407 against 5 011, still-life-wastage_12 17 562 against 14 349. That is the DFA device's cost per node, which
+is lower than D-0060's rows on those models, and option B would not have that cost.
+
+### 5. The codes models
+
+`codes-cp/models/shortvec.mzn` posts `int_times(x, x, sq)`, x in `-W..W`, which are the only small
+two-variable products of the codes models (`minweight` posts none, `code.mzn` avoids `mod` on purpose).
+On leech_m2, p48q_m4_b0L and p48q_m4_b1:
+
+| | leech_m2 (UNSAT) | p48q b0L, b1 |
+|---|---|---|
+| Gecode, model's default (dynamic) branching | 42 757 against 308 831 nodes | both at the limit, no answer |
+| Gecode, static input-order search | **221 193 against 221 193** | both at the limit, no answer |
+| baguette | 9 583 against 9 577 nodes, **46.9 s against 12.4 s** | both at the limit, no answer |
+
+Under a static search GAC on the squares prunes nothing more. The difference under Gecode's default
+branching is the branching heuristic reading different failure counts. The twin solves leech_m2 3.8 times
+faster in baguette with the same nodes, so D-0060's case split on `x * x` costs more per node than a
+40-state DFA does. That is a lead on the COST of the square rows, not on GAC (section 7).
+
+### 6. Decision
+
+| option | buys, measured | costs |
+|---|---|---|
+| A. Do not build GAC arithmetic (chosen) | nothing lost: no instance in sections 3 to 5 saves more than 9 % of its nodes, and none changes an answer within the limits through pruning | `int_times`/`int_div` stay `Bounds` |
+| B. D-0184's option B (plain `rup` where D-0060's rows suffice, lazy tabulation under a cap) | GAC on 8.6 M small constraints, 99.8 % of which are indicator products where it adds no operand pruning at the root and no measurable node saving in search | the three proof-side pieces of D-0184 section 6 and about `5 \|Dx\| \|Dy\|` lines per tabulating constraint |
+
+**A is chosen.** The bound on an answer within 1 200 s follows from the same numbers. Where both arms
+close, GAC saves at most 9 % of the nodes. Where neither closes, the best objective is the same in 101
+of the 115 limit pairs (48 of 49 in Gecode, 53 of 66 in baguette). Of the 14 that differ, 4 favour GAC
+and 10 favour bounds, and each of the 4 explored more nodes than its bounds arm, not fewer. A 9 %
+saving cannot move an instance across the 1 200 s line unless it already sits within 9 % of it. This record is reverted by a family whose
+small arithmetic is a genuine two-variable product over holed domains (not an indicator, not a square)
+and on which a twin, with both arms closed, saves a large share of the nodes. `bench/gac_measure/`
+measures that in one command (`series.sh bag RUN LIST BIN`). Nothing else depends on this record.
+
+### 7. Two findings on the way, not acted on here
+
+- **Stack overflow.** `main.exe 2021_ATSP_instance10_0p25.baguette.fzn --no-proof -s -t 240000` (and
+  `2025_atsp_instance4_0p15`) prints its solutions and then dies with `Fatal error: exception Stack
+  overflow` before the `%%%mzn-stat` block, in both arms. The Challenge series ran those two with a
+  proof and was stopped by the proof cap (CAPPED, REFUSED) before reaching that point.
+- **The square rows are expensive.** On codes leech_m2 a DFA over `[x, x*x]` replaces D-0060's case
+  split for 3.8 times less time at equal nodes (section 5). A cheaper encoding of `int_times(x, x, z)`
+  (one guarded row per value of x is what D-0060 writes, and that is the cost) belongs to the M16
+  per-node cost work, not to GAC.
