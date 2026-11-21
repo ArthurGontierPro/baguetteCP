@@ -20,7 +20,6 @@ of it to every session and stopping at a broken line before it even reached the 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
 | M10-search-strategy-T5, M9-no-proof-T3, M7-T30 (one Challenge series on current main: default, `-f`, default `--no-proof`) | run dirs `/scratch/arthur/m10t5/`, `tools/compare/` (additions), `bench/challenge/README.md` (the run's row); reserved record D-0185 | agent-m10t5 (`wave55-m10t5`) | 2026-11-20 |
-| M8-bits-encoding-T4 continuation (middle W on the families order wins, then the default) | run dirs `/scratch/arthur/m8t4b/`, `tools/compare/` (additions); reserved record D-0199 | agent-m8t4b (`wave56-m8t4b`) | 2026-11-21 |
 
 ## Cross-session requests
 
@@ -759,6 +758,12 @@ Two findings for other rows (D-0194 section 7). `main.exe 2021_ATSP_instance10_0
 
 | M14-e2e-verification-T6 (the far families in the e2e chain) | agent-e2e6 (`wave56-e2e6`) | 2026-11-21 | **D-0195 [AUTONOME].** regular, cumulative and int_abs IN the chain on both paths (bridge and `--e2e`): regular's flags left out of the `.scp` and defined as cake's by red pairs, each capacity row one `pol`, abs's guard defined as `x_ge_0` and its two-sign rows by `pbc`. int_times/int_div OUT (a case split per value and sign; the generic step only verifies pinned operands, measured). `make e2e` 188 -> 197 VERIFIED on both paths, 0 FAIL, controls 37/37 and 38/38, validation 196 AGREE 0 DIFFER. Challenge: 6 of 8 new instances VERIFIED. Gate green (see D-0195 section 6) |
 | M14-e2e-verification-T7 (the bits arm in the e2e chain) | agent-e2e7 (`wave56-e2e7`) | 2026-11-21 | **D-0196 [AUTONOME].** baguette's bits (`--bits-above`) DERIVED in the prefix from cake's two's-complement bits by a ripple-carry adder (one linear row per digit, red pairs for each carry and bit), on both paths; guarded rows with baguette's big-M by `pbc` against the ub rows; choice selectors and abs guards over bits defined. `make e2e` at W=0 and W=4: 197 VERIFIED on both paths, 0 FAIL, 0 verdict differing; controls 41/41 and 42/42; validation 196 AGREE. Challenge at W=64: roster-sickness, fast-food, zephyrus_12_8_6_3 and gfd-n120 VERIFIED end to end (each failed on the order arm). Gate green (see D-0196 section 6) |
+
+### M8-bits-encoding-T4 continuation handoff, 2026-11-21 (agent-m8t4b, `wave56-m8t4b`): D-0199
+
+- D-0199 recommends the default `--bits-above 0` (order kept behind `none`). No code changed: the orchestrator flips the default in its own commit, with the lane re-record. A middle W (64, 100) does not save `nfc` (widths 421-1 849) and costs `steelmillslab`/`radiation`.
+- Next lever: `nfc` on bits (a fifth of the nodes/s, 4.5x RSS, D-0175 §4), as its own task, possibly a bits-path bug.
+- Finding for D-0198's owner (D-0199 §4): 24 ERROR rows, `allocation failure during minor GC` at 14.2-14.7 GB RSS with `--max-heap-mb 8192`, where D-0175's binary REFUSED; the heap guard no longer bounds RSS.
 
 ## Handoff notes
 
