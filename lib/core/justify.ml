@@ -478,8 +478,8 @@ let with_level ctx level f = Writer.with_level ctx.writer level f
 
 (* The key, or [None] for a clause this index does not describe: the empty clause, and
    any clause whose [Opb] rendering is not the literal *set* its key would claim. See
-   the module header. Packed as [Claims] says (M11-complexity-T12, D-0166), in the
-   order [Lit.compare] sorts the set. *)
+   the module header. Packed as [Claims] says (M11-complexity-T12, D-0166), sorted by
+   the packed integers (D-0192), not by [Lit.compare]. *)
 let intern ctx (x : string) =
   match Names.find_opt ctx.names x with
   | Some i -> i
