@@ -1095,9 +1095,11 @@ let forced_at = ref neg_infinity
    WHY A SECOND, FULL COLLECTION BEFORE REFUSING. OCaml 5 sweeps a cycle's garbage during
    the NEXT cycle, so the figure at the end of the forced cycle still counts what died
    during it (measured on this switch: 14 M words of dropped list cells read 14 M after
-   one [Gc.major] and 0 after a second). A run is refused only if [Gc.full_major] confirms
-   it, which costs a few more seconds on the path that ends the run anyway, and makes this
-   path never stricter than the alarm. [forcing] keeps the alarm, which those collections
+   one [Gc.major] and 0 after a second; 40 M words of dropped large arrays took three).
+   A run is refused only if [Gc.full_major] confirms it. That costs time on the path that
+   ends the run anyway (on the Challenge runs of D-0200 §4, up to a minute on an 8 GB
+   heap), and makes this path never stricter than the alarm. Two [Gc.major] are not
+   enough: the unit lane's 48 MB of dropped arrays still read past its budget after them. [forcing] keeps the alarm, which those collections
    wake, from refusing on the first, inflated reading. *)
 let forcing = ref false
 
@@ -1220,20 +1222,6 @@ let check_heap_at t ~what ~blo ~bhi =
                  o_widest = widest;
                }))
 
-(* The reactive backstop, as a [Gc] alarm -- mem_guard.ml's shape (M1-T53), in the
-   solver rather than in a test binary.
-
-   It EXITS rather than raising, and that is not a shortcut: an alarm runs at the end
-   of a major cycle, at whatever point in whatever function the mutator had reached,
-   and an exception thrown from there would unwind through code that never agreed to
-   handle it -- including the proof writer, mid-line. An unfinished .pbp that ends in a
-   truncated rule is worse than no .pbp, so the run stops where it stands, having said
-   so. The synchronous check above is the one that raises, because it knows where it
-   is.
-
-   Idempotent under repeated firing (the alarm is deleted first), and installing it
-   twice is harmless. [None] installs nothing at all, so the default build does not
-   even pay for the alarm. *)
 (* The asynchronous refusal, shared by the alarm and by [poll_heap] (D-0200): the same
    message and the same exit, so a harness cannot tell which of the two caught the run and
    has no reason to. *)
@@ -1255,6 +1243,20 @@ let refuse_heap ~limit w =
        });
   exit exit_resource
 
+(* The reactive backstop, as a [Gc] alarm -- mem_guard.ml's shape (M1-T53), in the
+   solver rather than in a test binary.
+
+   It EXITS rather than raising, and that is not a shortcut: an alarm runs at the end
+   of a major cycle, at whatever point in whatever function the mutator had reached,
+   and an exception thrown from there would unwind through code that never agreed to
+   handle it -- including the proof writer, mid-line. An unfinished .pbp that ends in a
+   truncated rule is worse than no .pbp, so the run stops where it stands, having said
+   so. The synchronous check above is the one that raises, because it knows where it
+   is.
+
+   Idempotent under repeated firing (the alarm is deleted first), and installing it
+   twice is harmless. [None] installs nothing at all, so the default build does not
+   even pay for the alarm. *)
 let alarm : Gc.alarm option ref = ref None
 
 let install_heap_guard () =
