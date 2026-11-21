@@ -22,6 +22,7 @@ of it to every session and stopping at a broken line before it even reached the 
 | M8-bits-encoding-T4 (two arms, `W = none` and `W = 0`, on the sixteen editions) | run directories under `/scratch/arthur/m8t4/`, `tools/compare/` (additions), `bench/challenge/README.md` (the run's row), a new D-record | agent-m8t4 (`wave55-m8t4`) | 2026-11-20 |
 | M10-search-strategy-T5, M9-no-proof-T3, M7-T30 (one Challenge series on current main: default, `-f`, default `--no-proof`) | run dirs `/scratch/arthur/m10t5/`, `tools/compare/` (additions), `bench/challenge/README.md` (the run's row); reserved record D-0185 | agent-m10t5 (`wave55-m10t5`) | 2026-11-20 |
 | M14-e2e-verification-T7 (the bits arm in the e2e chain) | `tools/e2e/`, `scripts/e2e_lane.sh`, `lib/proof/e2e.ml`, `lib/proof/encoding.ml` (additive), `lib/flatzinc/compile.ml` (the e2e hooks only), `docs/PROOF-FORMAT.md` §3b; reserved record D-0196 | agent-e2e7 (`wave56-e2e7`) | 2026-11-21 |
+| M6-T2 (re-scope first: is minor-GC pressure still worth a Bigarray/Bytes change after M16?) | measurement first, no edit; `lib/core/store.ml`, `domain.ml` only if the measurement says so, with an [AUTONOME] record; reserved record D-0198 | agent-gc (`wave56-gc`) | 2026-11-21 |
 
 ## Cross-session requests
 
