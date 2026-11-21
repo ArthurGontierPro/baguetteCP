@@ -19,7 +19,13 @@
    the saved polarity.
 
    The cost is one look at each popped entry, once, which is what popping it already
-   costs. Nothing is saved on a path that never backtracks, and nothing needs to be.
+   costs. Nothing is saved on a path that never backtracks, and nothing needs to be. To
+   FIND the level's first entry it pays O(depth) more per backtrack: [Store.level_marks]
+   lists every mark and [List.nth] walks to the level's (M16-file-review-T3, D-0191). That
+   is linear in the depth per node, quadratic only in a run whose every node backtracks
+   from the bottom of a deep stack; measured 0.2 % median and 1.0 % at most of the lane's
+   samples under `--restarts luby:1 --phase-saving`, so it stays until the store offers
+   one mark by its level.
 
    ---------------------------------------------------------------------------
    What it changes: the value choice, never the variable choice
