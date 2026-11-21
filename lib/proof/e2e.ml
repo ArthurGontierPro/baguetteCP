@@ -1494,8 +1494,10 @@ let begin_con t ~name spec =
   let crows = cake_rows t name spec in
   List.iter (fun (r : crow) -> Hashtbl.replace c.rows r.label r) crows;
   c.fam <- family name spec;
+  (* the lists are kept NEWEST FIRST and reversed where read ([cands_of]): appending at the
+     end was quadratic in a key's candidates, 7 000 per regular on 2021_pentominoes (T6) *)
   let push tbl k cand =
-    Hashtbl.replace tbl k (Option.value (Hashtbl.find_opt tbl k) ~default:[] @ [ cand ])
+    Hashtbl.replace tbl k (cand :: Option.value (Hashtbl.find_opt tbl k) ~default:[])
   in
   let add ?(needs = []) rpn (cl, cd) =
     let cand =
@@ -1690,6 +1692,9 @@ let end_con t =
 (* ---------------------------------------------------------------------------
    Pins
    --------------------------------------------------------------------------- *)
+
+(* a candidate table's list for a key, in insertion order ([begin_con] keeps it reversed) *)
+let cands_of tbl k = List.rev (Option.value (Hashtbl.find_opt tbl k) ~default:[])
 
 let lits_of_row (c : Opb.constr) =
   lit_form
@@ -1949,7 +1954,7 @@ let pin t ~id (c : Opb.constr) =
          guard the candidate lacks is a literal the row may add: int_eq_reif's `gt` half,
          D-0178) *)
       let key = key_of t bl in
-      let exact = Option.value (Hashtbl.find_opt con.cands key) ~default:[] in
+      let exact = cands_of con.cands key in
       let subset () =
         let vs = if key = "" then [] else String.split_on_char ' ' key in
         let inside k =
@@ -1957,9 +1962,7 @@ let pin t ~id (c : Opb.constr) =
         in
         List.concat_map
           (fun v ->
-            List.filter
-              (fun cd -> cd.key <> key && inside cd.key)
-              (Option.value (Hashtbl.find_opt con.by_min v) ~default:[]))
+            List.filter (fun cd -> cd.key <> key && inside cd.key) (cands_of con.by_min v))
           ("" :: vs)
       in
       (* [relaxed] (T3b): a candidate weakened, or resolved against the constraint's own
@@ -2002,7 +2005,8 @@ let pin t ~id (c : Opb.constr) =
           Hashtbl.fold
             (fun k l acc ->
               let ks = String.split_on_char ' ' k in
-              if k <> key && List.for_all (fun v -> List.mem v ks) vs then l @ acc
+              if k <> key && List.for_all (fun v -> List.mem v ks) vs then
+                List.rev_append l acc
               else acc)
             con.cands []
       in
@@ -2019,10 +2023,15 @@ let pin t ~id (c : Opb.constr) =
             | None when relaxed -> go ~relaxed (superset ())
             | None -> None)
       in
+      (* T6 (D-0195): a regular row no candidate implies strictly is a forward clause over
+         a symbol run, which weakening never reaches (its literals are the run's bounds,
+         cake's are one value's eq atom): straight to `rup`. The relaxed search tried ~560
+         candidates per such row on 2021_pentominoes (116 s of --e2e against 0.08 s) *)
+      let relax_ok = match con.fam with Regular_fam _ -> false | _ -> true in
       let found =
         match search ~relaxed:false with
         | Some r -> Some r
-        | None when undefined = [] -> search ~relaxed:true
+        | None when undefined = [] && relax_ok -> search ~relaxed:true
         | None -> None
       in
       Option.iter (fun (cand, _, _, _) -> List.iter (ensure_s t) cand.needs) found;
@@ -2045,7 +2054,7 @@ let pin t ~id (c : Opb.constr) =
              planes cannot resolve two big-M rows on their guard. By contradiction: the
              negation plus each candidate, saturated, is a unit on the guard (or nothing),
              and unit propagation closes. *)
-          let all = Hashtbl.fold (fun _ l acc -> l @ acc) con.cands [] in
+          let all = Hashtbl.fold (fun _ l acc -> List.rev_append l acc) con.cands [] in
           let all = List.sort (fun a b -> compare a.rpn b.rpn) all in
           List.iter (fun cd -> List.iter (ensure_s t) cd.needs) all;
           t.n_pbc <- t.n_pbc + 1;
