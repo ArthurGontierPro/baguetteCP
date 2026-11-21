@@ -1018,8 +1018,93 @@ let test_t9_to_string () =
   check "D-0157: to_string is the Printf rendering, byte for byte, on 5 000 rows"
     (!agree && String.equal (Learned.to_string t) (reference t))
 
+(* -------------------------------------------- D-0197: long rows under a small stack
+
+   2021_ATSP_instance10_0p25 died mid-search with "Fatal error: exception Stack overflow":
+   PB conflict analysis built a row of 32 168 204 terms (a conflict row lifted onto the
+   ladder of a variable 22 million values wide), and [Learned.make]'s merge recursed once
+   per term, past the 1 GiB OCaml stack. Reproducing that takes four minutes and 26 GB.
+
+   What this does instead: the walks run inside a FRESH FIBER whose stack may grow to
+   64 Ki words (512 KiB) only -- [Gc.stack_limit] bounds every fiber stack, and a fiber
+   started after it is lowered starts small, where the main stack may already have grown.
+   200 000 terms is then about ten times what one frame per term can hold, and nothing
+   that walks a row in constant stack notices the limit. Measured before the fix: the
+   [make] and [Pol] checks below raise [Stack_overflow] here. Every walk the fix touched
+   is driven: [make] on an unsorted row of two overlapping runs (the stable merge of
+   [sort_by_lit], then the summing of equal literals), [make_reference], [combine] and
+   [combine_reference], a [Pol.sum] of 200 000 operands written and counted, and
+   [Store.drop_page_only_lemmas] over 200 000 summands. *)
+let in_small_stack f =
+  let saved = Gc.get () in
+  Gc.set { saved with Gc.stack_limit = 64 * 1024 };
+  Fun.protect
+    ~finally:(fun () -> Gc.set { (Gc.get ()) with Gc.stack_limit = saved.Gc.stack_limit })
+    (fun () ->
+      Effect.Deep.match_with f ()
+        {
+          Effect.Deep.retc = (fun x -> Ok x);
+          exnc = (function Stack_overflow -> Error "Stack_overflow" | e -> raise e);
+          effc = (fun _ -> None);
+        })
+
+let test_d0197_long_rows_small_stack () =
+  let n = 200_000 in
+  let probe =
+    in_small_stack (fun () ->
+        let rec deep k = if k = 0 then 0 else 1 + deep (k - 1) in
+        deep n)
+  in
+  check "D-0197: the small stack is small (one frame per term overflows it)"
+    (probe = Error "Stack_overflow");
+  let run = List.init n (fun i -> (1, Lit.ge "x" (i + 1))) in
+  let raw = run @ run in
+  let expect_doubled t =
+    Learned.degree t = 3
+    && List.length (Learned.terms t) = n
+    && List.for_all (fun (tm : Learned.term) -> tm.Learned.coeff = 2) (Learned.terms t)
+  in
+  check "D-0197: make on 2 x 200 000 overlapping terms, in a 512 KiB stack"
+    (match in_small_stack (fun () -> Learned.make raw 3) with
+    | Ok t -> expect_doubled t
+    | Error _ -> false);
+  check "D-0197: make_reference on the same row, in a 512 KiB stack"
+    (match in_small_stack (fun () -> Learned.make_reference raw 3) with
+    | Ok t -> expect_doubled t
+    | Error _ -> false);
+  let a = Learned.make run 1 in
+  let b = Learned.make (List.map (fun (c, l) -> (c, Lit.negate l)) run) 1 in
+  check
+    "D-0197: combine and combine_reference of two 200 000-term rows, in a 512 KiB stack"
+    (match
+       in_small_stack (fun () ->
+           (Learned.combine a 1 b 2, Learned.combine_reference a 1 b 2))
+     with
+    | Ok (c, r) -> Learned.equal c r && List.length (Learned.terms c) = n
+    | Error _ -> false);
+  let p = Writer.Pol.sum (List.init n (fun i -> Writer.Pol.id (i + 1))) in
+  check "D-0197: a 200 000-operand pol is written and counted in a 512 KiB stack"
+    (match
+       in_small_stack (fun () ->
+           (Writer.Pol.to_string_cited ~cite:string_of_int p, Writer.Pol.tokens p))
+     with
+    | Ok (str, toks) ->
+        toks = (2 * n) - 1
+        && String.length str > 6
+        && String.sub str 0 6 = "1 2 + "
+        && String.ends_with ~suffix:(Printf.sprintf " %d +" n) str
+    | Error _ -> false);
+  let summands =
+    List.init n (fun i -> Explanation.Term (1, Explanation.Model_row (i + 1)))
+  in
+  check "D-0197: drop_page_only_lemmas over 200 000 summands, in a 512 KiB stack"
+    (match in_small_stack (fun () -> Store.drop_page_only_lemmas summands) with
+    | Ok l -> List.length l = n
+    | Error _ -> false)
+
 let () =
   test_t9_make ();
+  test_d0197_long_rows_small_stack ();
   test_t9_combine ();
   test_t9_add_multiples ();
   test_t9_to_string ();

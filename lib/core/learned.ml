@@ -122,7 +122,14 @@
    grouping in [to_linear_row] is done on a sorted list, not in a [Hashtbl]. The gate
    requires two runs of one binary to be byte-identical, and a learned database iterated
    in hash order is the specific way learning breaks it. There is no [Hashtbl] in this
-   file; keep it that way. *)
+   file; keep it that way.
+
+   CONSTANT STACK PER TERM (D-0197). A row is as long as the ladders it crosses -- 32
+   million terms on 2021_ATSP_instance10, whose conflict row lifted onto a variable 22
+   million values wide -- so no walk in this file recurses once per term outside a tail
+   position, and [List.merge], one frame per element in OCaml 5.1, is not called. A
+   [x :: go rest] here overflowed the 1 GiB OCaml stack mid-search. test_learned.ml runs
+   these walks in a 512 KiB stack. *)
 
 module Lit = Baguette_proof.Lit
 module Opb = Baguette_proof.Opb
@@ -165,6 +172,28 @@ type t = { terms : term list; degree : int }
        blocks one per variable ([Linear.pb_row]).
 
    The merge's [a1 + a2] stays unchecked, as it was: it is the reference's arithmetic. *)
+(* The merge both [make]s end with: a list sorted by [Lit.compare] in, its equal
+   literals summed, as terms.
+
+   D-0197: TAIL-RECURSIVE, the result accumulated in reverse and reversed once. It was
+   [{ coeff = a1; lit = l1 } :: merge rest], one stack frame per term, and PB conflict
+   analysis hands [make] rows of tens of millions of terms: on 2021_ATSP_instance10_0p25,
+   a conflict row lifted onto the ladder of a variable 22 million values wide had 32 168 204
+   terms ([Pb_analysis.analyse]'s [Learned.of_pb_row]), and that recursion overflowed the
+   1 GiB OCaml stack mid-search with "Fatal error: exception Stack overflow". The same rule
+   holds for every walk in this module: a row is as long as the ladders it crosses, so
+   nothing here recurses once per term outside a tail position, and [List.merge], which is
+   not tail-recursive in OCaml 5.1, is not called. *)
+let merge_equal_lits (sorted : (Lit.t * int) list) : term list =
+  let rec go acc = function
+    | [] -> List.rev acc
+    | [ (l, a) ] -> List.rev ({ coeff = a; lit = l } :: acc)
+    | (l1, a1) :: (l2, a2) :: rest ->
+        if Lit.equal l1 l2 then go acc ((l1, a1 + a2) :: rest)
+        else go ({ coeff = a1; lit = l1 } :: acc) ((l2, a2) :: rest)
+  in
+  go [] sorted
+
 let make_reference (raw : (int * Lit.t) list) (degree : int) : t =
   let signed, degree =
     List.fold_left
@@ -175,14 +204,7 @@ let make_reference (raw : (int * Lit.t) list) (degree : int) : t =
       ([], degree) raw
   in
   let sorted = List.sort (fun (l1, _) (l2, _) -> Lit.compare l1 l2) (List.rev signed) in
-  let rec merge = function
-    | [] -> []
-    | [ (l, a) ] -> [ { coeff = a; lit = l } ]
-    | (l1, a1) :: (l2, a2) :: rest ->
-        if Lit.equal l1 l2 then merge ((l1, a1 + a2) :: rest)
-        else { coeff = a1; lit = l1 } :: merge ((l2, a2) :: rest)
-  in
-  { terms = merge sorted; degree }
+  { terms = merge_equal_lits sorted; degree }
 
 (* Is [raw] already in [make]'s output order: strictly increasing by [Lit.compare], every
    coefficient >= 1? *)
@@ -210,11 +232,23 @@ let sort_by_lit (l : (Lit.t * int) list) : (Lit.t * int) list =
         else runs (List.rev cur :: acc) [ x ] x rest
   in
   let rec last = function [ y ] -> y | _ :: ys -> last ys | [] -> assert false in
+  (* [List.merge cmp a b], tail-recursive (D-0197): the stdlib's is one stack frame per
+     element in OCaml 5.1, and a run here can be millions long. Same answer: on a tie the
+     head of [a], the earlier run, is taken first. *)
+  let merge_runs a b =
+    let rec go acc a b =
+      match (a, b) with
+      | [], rest | rest, [] -> List.rev_append acc rest
+      | x :: a', y :: b' ->
+          if cmp x y <= 0 then go (x :: acc) a' b else go (y :: acc) a b'
+    in
+    go [] a b
+  in
   (* Two adjacent runs, [a] the earlier. *)
   let merge2 a b =
     if cmp (last a) (List.hd b) <= 0 then a @ b
     else if cmp (last b) (List.hd a) < 0 then b @ a
-    else List.merge cmp a b
+    else merge_runs a b
   in
   let rec pass acc = function
     | a :: b :: rest -> pass (merge2 a b :: acc) rest
@@ -239,14 +273,7 @@ let make (raw : (int * Lit.t) list) (degree : int) : t =
         ([], degree) raw
     in
     let sorted = sort_by_lit (List.rev signed) in
-    let rec merge = function
-      | [] -> []
-      | [ (l, a) ] -> [ { coeff = a; lit = l } ]
-      | (l1, a1) :: (l2, a2) :: rest ->
-          if Lit.equal l1 l2 then merge ((l1, a1 + a2) :: rest)
-          else { coeff = a1; lit = l1 } :: merge ((l2, a2) :: rest)
-    in
-    { terms = merge sorted; degree }
+    { terms = merge_equal_lits sorted; degree }
 
 (* D-0044's degenerate case, written as what it is: every coefficient 1, degree 1. *)
 let of_clause (lits : Lit.t list) : t = make (List.map (fun l -> (1, l)) lits) 1
@@ -724,13 +751,14 @@ let to_linear_row t ~decl =
         | (y, v, c) :: rest when String.equal x y -> span x ((v, c) :: mine) rest
         | others -> (List.rev mine, others)
       in
-      let rec group = function
-        | [] -> []
+      (* Accumulated and reversed (D-0197): one group per variable the row names. *)
+      let rec group acc = function
+        | [] -> List.rev acc
         | (x, v, c) :: rest ->
             let mine, others = span x [] rest in
-            (x, (v, c) :: mine) :: group others
+            group ((x, (v, c) :: mine) :: acc) others
       in
-      let groups = group rungs in
+      let groups = group [] rungs in
       let rec fold acc const = function
         | [] -> Some (List.rev acc, const)
         | (x, rungs) :: rest -> (
