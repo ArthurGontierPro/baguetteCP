@@ -1,0 +1,8 @@
+% M14-e2e-verification-T6 (D-0195): a CONTROL model for int_abs. x straddles zero, so the
+% sign guard S <-> x >= 0 exists, and x = 0 is a solution: the guard's own row strengthened
+% by one (S -> x >= 1) is false there, so a refusal of it judges a false claim (D-0053,
+% D-0180). Five solutions, (x, z) = (-2, 2) (-1, 1) (0, 0) (1, 1) (2, 2).
+var -2..2: x :: output_var;
+var 0..2: z :: output_var;
+constraint int_abs(x, z);
+solve satisfy;

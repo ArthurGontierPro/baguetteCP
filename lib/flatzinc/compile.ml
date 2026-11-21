@@ -853,11 +853,16 @@ let e2e_spec (names : string array) (con : Model.constr) : Baguette_proof.E2e.sp
   | Model.Int_le_reif (a, b, r) -> E.Le_iff ((op r, 1), op a, op b)
   | Model.Int_eq_reif (a, b, r) -> E.Eq_iff ((op r, 1), op a, op b)
   | Model.Int_ne_reif (a, b, r) -> E.Ne_iff ((op r, 1), op a, op b)
+  (* T6 (D-0195): int_times and int_div stay outside the chain (section 2.4) *)
   | Model.Int_times _ -> E.refuse "int_times is not covered by --e2e"
   | Model.Int_div _ -> E.refuse "int_div is not covered by --e2e"
-  | Model.Int_abs _ -> E.refuse "int_abs is not covered by --e2e"
-  | Model.Cumulative _ -> E.refuse "cumulative is not covered by --e2e"
-  | Model.Regular _ -> E.refuse "regular is not covered by --e2e"
+  | Model.Int_abs (x, z, _) -> E.Abs (op x, op z)
+  | Model.Cumulative (ss, d, r, cap) ->
+      E.Cumulative (List.map op ss, Array.to_list d, Array.to_list r, cap)
+  | Model.Regular r ->
+      E.regular_spec ~letters:(List.map op r.Model.r_xs) ~nq:r.Model.r_nq
+        ~smin:r.Model.r_smin ~delta:r.Model.r_delta ~q0:r.Model.r_q0
+        ~finals:(Array.to_list r.Model.r_final)
   (* T5 (T3b): the translator's (tools/e2e/fzn2scp.py) keyword for each *)
   | Model.Array_int_element (i, vs, z) -> E.Element (Array.to_list vs, op i, op z)
   | Model.Global_cardinality (xs, cover, counts) ->
@@ -986,6 +991,34 @@ let compile (m : Model.t) : t =
               ~orig:m.Model.vars.(i).Model.v_name
         | _ -> ())
       m.Model.constraints;
+  (* M14-e2e-verification-T6 (D-0195): the Booleans the .scp has no counterpart for, which
+     the prefix DEFINES instead of declaring: a regular state flag as cake's own flag of the
+     same constraint `c<k>` (k counted as in the loop that posts the rows), an int_abs sign
+     guard as x_ge_0 *)
+  (if Encoding.e2e_on encoding then
+     let k = ref 0 in
+     List.iter
+       (fun (c : Model.constr) ->
+         if c.Model.c_id <> "" then incr k;
+         match c.Model.k with
+         | Model.Regular r ->
+             let nq = r.Model.r_nq in
+             List.iteri
+               (fun j f ->
+                 match f with
+                 | Model.Var fi ->
+                     Encoding.e2e_flag encoding ~var:names.(fi)
+                       ~cake:
+                         (Printf.sprintf "x[c%d][%d_%d][st]" !k (j / nq)
+                            (Baguette_proof.E2e.regular_state ~q0:r.Model.r_q0 ~nq
+                               ((j mod nq) + 1)))
+                 | Model.Const _ ->
+                     Baguette_proof.E2e.refuse "a regular state flag is a constant")
+               r.Model.r_flags
+         | Model.Int_abs (Model.Var xi, _, { Model.x_sign = Some b; _ }) ->
+             Encoding.e2e_guard encoding ~var:names.(b) ~x:names.(xi) ~at:0 ~pos:true
+         | _ -> ())
+       m.Model.constraints);
   Array.iteri
     (fun i (v : Model.var) ->
       let lo, hi = bounds.(i) in

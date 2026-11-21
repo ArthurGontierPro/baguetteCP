@@ -608,12 +608,29 @@ let add_cite b id =
   Buffer.add_string b "@c";
   Lit.add_int b id
 
-(* [lits_to_string lits] appended to [b]: the literals separated by one space. *)
+(* [lits_to_string lits] appended to [b]: the literals separated by one space.
+
+   M16-file-review-T4 (D-0192): each literal is written by [Lit.add_sanitized], which
+   writes [Lit.to_string]'s bytes without building the string, and a run of literals of
+   one variable sanitises its name once, as [add_constr_body] does. A `sol`/`soli` line
+   lists every literal of every variable (Encoding.assignment_lits), so a run is a
+   variable's whole ladder: 2014_openshop_gp10-4 spent a third of its search writing
+   them, one string allocated and one name scanned per literal. *)
 let add_lits b lits =
+  let last = ref "" and last' = ref "" in
   List.iteri
-    (fun i l ->
+    (fun i (l : Lit.t) ->
       if i > 0 then Buffer.add_char b ' ';
-      Buffer.add_string b (Lit.to_string l))
+      let x = Lit.owner l.Lit.v in
+      let x' =
+        if x == !last then !last'
+        else
+          let x' = Lit.sanitize x in
+          last := x;
+          last' := x';
+          x'
+      in
+      Lit.add_sanitized b x' l)
     lits
 
 (* [Opb.constr_body c] appended to [b], byte for byte: per term the signed coefficient

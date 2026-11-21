@@ -100,7 +100,21 @@
    `in` over interior eq atoms, D-0187) and `var bool`, with or without an objective.
    Everything else raises [Not_covered] with the construct's name, before the search: the
    caller refuses `--e2e` and says why. In particular a variable on the bits arm (T7),
-   T6's families, and any row baguette commits outside a covered constraint. *)
+   int_times and int_div (T6 left them outside, D-0195 section 2.4), and any row baguette
+   commits outside a covered constraint.
+
+   ---------------------------------------------------------------------------
+   T6's families (D-0195)
+   ---------------------------------------------------------------------------
+
+   - regular: mznlib's state flags have no .scp counterpart. Each is DEFINED as cake's flag
+     of the same position and (renumbered, [regular_state]) state by a red pair, and swapped
+     in as a selector ([flag], [declare]); a forward clause over a symbol run that no
+     candidate implies closes by `rup` once its letter's eq atoms have their clauses.
+   - cumulative: one candidate per time point, ONE pol of cake's capacity row, contribution
+     rows, activity clauses and flag clauses ([begin_con]).
+   - int_abs: the sign guard is DEFINED as x_ge_0 ([guard]); a row true in both signs is
+     derived by contradiction, `pbc` with the negation plus each candidate ([pin]). *)
 
 exception Not_covered of string
 
@@ -268,8 +282,46 @@ type spec =
   (* (c_k equals_if (b_k = 1) x_k y) per position k, from 1, then (c or ((b_k = 1) ...)
      (1 = 1)): [(b_k, x_k)] and y *)
   | Copy of string * string
-(* (original, copy): the int_eq lib/flatzinc/builder.ml adds to tie a gcc copy, which no
-   .scp constraint states (D-0146 section 2, D-0188 section 3.3) *)
+  (* (original, copy): the int_eq lib/flatzinc/builder.ml adds to tie a gcc copy, which no
+     .scp constraint states (D-0146 section 2, D-0188 section 3.3) *)
+  (* T6 (D-0195) *)
+  | Abs of operand * operand (* abs x z *)
+  | Cumulative of operand list * int list * int list * int
+    (* cumulative (s ...) (d ...) (r ...) cap, d, r and cap constants *)
+  | Regular of operand list * int * (int * int) list array * int list
+(* regular (x ...) n ((edges of state 0) ...) (finals), in CAKE's state numbering: see
+   [regular_spec] *)
+
+(* tools/e2e/fzn2scp.py's renumbering of a baguette_regular's states (D-0195 2.1): cake's
+   NFA starts in state 0, so q goes to (q - q0) mod Q. *)
+let regular_state ~q0 ~nq q = (((q - q0) mod nq) + nq) mod nq
+
+(* The translator's `regular` for baguette_regular(x, Q, smin, d, q0, F, s): an edge
+   (smin + j, pi(d)) out of pi(q) for every non-zero entry d of row q, finals pi(F). *)
+let regular_spec ~letters ~nq ~smin ~delta ~q0 ~finals =
+  let n = Array.length delta in
+  if nq < 1 || n mod nq <> 0 || q0 < 1 || q0 > nq then
+    refuse "a regular with %d states and %d transitions" nq n;
+  if
+    Array.exists (fun d -> d < 0 || d > nq) delta
+    || List.exists (fun f -> f < 1 || f > nq) finals
+  then refuse "a regular with a state outside 1..%d" nq;
+  let w = n / nq and pi = regular_state ~q0 ~nq in
+  let edges = Array.make nq [] in
+  for q = 1 to nq do
+    edges.(pi q) <-
+      List.filter_map
+        (fun j ->
+          let d = delta.(((q - 1) * w) + j) in
+          if d = 0 then None else Some (smin + j, pi d))
+        (List.init w Fun.id)
+  done;
+  Regular (letters, nq, edges, List.sort_uniq compare (List.map pi finals))
+
+(* A model Boolean with no .scp counterpart, DEFINED in the prefix by a red pair (D-0195):
+   a regular state flag as cake's own flag ([Flag]), an arith guard `b <-> x >= w` as
+   baguette's literal x_ge_w, or `b <-> x <= w - 1` as its negation ([Guard]). *)
+type def = Flag of string | Guard of string * int * bool
 
 (* A cake row in cake's own form (ilp_to_pb's PGe): sum_e c_e * B_{X_e} over the integer
    entries (one per occurrence, as cake keeps them), plus flag terms, >= deg. *)
@@ -336,7 +388,9 @@ type fam =
   | Choice_fam of { choices : string list; al1 : string }
     (* maxmin: each operand's choice row [r], and the at-least-one over the flags *)
   | By_var of (string, string list) Hashtbl.t
-(* member (a selector -> its two equals_if rows), inverse (a variable -> its range rows) *)
+  (* member (a selector -> its two equals_if rows), inverse (a variable -> its range rows) *)
+  | Abs_fam (* T6: a row no candidate implies is derived by contradiction ([pin]) *)
+  | Regular_fam of string list (* T6: its letters, whose eq atoms a `rup` pin reads *)
 
 type con = {
   cname : string;
@@ -369,6 +423,7 @@ type t = {
   holes : (string, string * int list) Hashtbl.t;
       (* a variable with a set domain -> its `in` constraint's name and allowed values *)
   copies : (string, string) Hashtbl.t; (* a gcc copy -> its original (D-0188 3.3) *)
+  defs : (string, def) Hashtbl.t; (* T6 (D-0195): a Boolean defined, not declared *)
   pending_s : (string, string) Hashtbl.t;
       (* an @S label -> its line, until a pin cites it (D-0188 section 3.2) *)
   mutable n_holes_vars : int;
@@ -382,6 +437,8 @@ type t = {
   mutable n_ia_lin : int; (* of which through a linearised cake row (T3b) *)
   mutable n_pol_lin : int; (* rows that ARE one pol of a linearised cake row (T3b) *)
   mutable n_rup : int;
+  mutable n_pbc : int; (* T6: rows derived by contradiction (int_abs) *)
+  mutable n_k : int; (* T6: cumulative's flag clauses *)
   mutable n_subst : int;
   mutable n_sel : int;
   mutable n_q : int;
@@ -403,6 +460,7 @@ let create path =
     value_of = Hashtbl.create 256;
     holes = Hashtbl.create 8;
     copies = Hashtbl.create 4;
+    defs = Hashtbl.create 16;
     pending_s = Hashtbl.create 64;
     n_holes_vars = 0;
     cur = None;
@@ -414,6 +472,8 @@ let create path =
     n_ia_lin = 0;
     n_pol_lin = 0;
     n_rup = 0;
+    n_pbc = 0;
+    n_k = 0;
     n_subst = 0;
     n_sel = 0;
     n_q = 0;
@@ -445,6 +505,10 @@ let terms_text terms =
    DEFINED as the original's by a red pair (the bridge's @Y1/@Y2, D-0180), and its ladder
    follows: @L[y_ge_(w+1)] = @Y1[y_ge_(w+1)] + @L[x_ge_(w+1)] + @Y2[y_ge_w]. *)
 let copy t ~copy ~orig = Hashtbl.replace t.copies copy orig
+
+(* T6 (D-0195): told before the variable is declared, like a copy *)
+let flag t ~var ~cake = Hashtbl.replace t.defs var (Flag cake)
+let guard t ~var ~x ~at ~pos = Hashtbl.replace t.defs var (Guard (x, at, pos))
 
 let declare_copy t y ~orig ~lo ~hi ~lit =
   let v =
@@ -488,6 +552,32 @@ let declare ?(holes = []) t x ~lo ~hi ~lit =
   match t.cur with
   | None when Hashtbl.mem t.copies x ->
       declare_copy t x ~orig:(Hashtbl.find t.copies x) ~lo ~hi ~lit
+  | None when Hashtbl.mem t.defs x ->
+      (* T6 (D-0195): no bits in cake's file. s_ge_1 is fresh, so a red pair with witness
+         s -> F makes it F: cake's regular flag (then swapped for s in every candidate, as
+         a selector), or the guard's ladder literal (never swapped: it is baguette's own) *)
+      if lo <> 0 || hi <> 1 then refuse "the defined Boolean %s is not 0..1" x;
+      let s = lit 1 in
+      Hashtbl.replace t.aux s ();
+      let fl =
+        match Hashtbl.find t.defs x with
+        | Flag f ->
+            Hashtbl.replace t.sel_of_flag f (s, true);
+            f
+        | Guard (y, w, pos) ->
+            let v =
+              match Hashtbl.find_opt t.vars y with
+              | Some v -> v
+              | None -> refuse "the guard %s is declared before its variable %s" x y
+            in
+            if w <= v.lo || w > v.hi then
+              refuse "the guard %s over %s at %d, outside its ladder" x y w;
+            if pos then v.lit w else "~" ^ v.lit w
+      in
+      Hashtbl.replace t.sel s (fl, true);
+      t.n_sel <- t.n_sel + 1;
+      emit t "@D1[%s] red +1 ~%s +1 %s >= 1 : %s -> %s ;" s s fl s fl;
+      emit t "@D2[%s] red +1 %s +1 %s >= 1 : %s -> %s ;" s s (neg_lit fl) s fl
   | Some c ->
       (* an auxiliary declared while a constraint is posted: a disequality selector *)
       if lo <> 0 || hi <> 1 then
@@ -866,6 +956,81 @@ let rec cake_rows t name spec =
            bxs)
       @ cake_rows t name (Or (List.map (fun (b, _) -> (b, 1)) bxs, (Const 1, 1)))
   | Copy _ -> []
+  (* cp_to_ilp_primScript.sml, cencode_abs (T6, D-0195): the atom i[X][ge0] and the four
+     rows of encode_abs_body, the first two guarded by it, the last two by its negation *)
+  | Abs (x, z) ->
+      let g =
+        match x with
+        | Var v -> Printf.sprintf "i[%s][ge0]" (find_var t v).cx
+        | Const _ -> refuse "int_abs of a constant"
+      in
+      let mk_nle x y = mk_constraint_ge 1 y 1 x 0
+      and mk_nge x y = mk_constraint_ge (-1) x (-1) y 0 in
+      [
+        row (lab "posge") (bits_imply ("~" ^ g) (mk_ge x z));
+        row (lab "posle") (bits_imply ("~" ^ g) (mk_le x z));
+        row (lab "negle") (bits_imply g (mk_nle x z));
+        row (lab "negge") (bits_imply g (mk_nge x z));
+      ]
+  (* cp_to_ilp_extensionalScript.sml, cencode_regular (T6, D-0195): the state flags
+     x[N][<idx>_<q>][st], exactly one per position (`pos<idx>al1`, `am1`), some final at the
+     end (`st<n>al1`), the start (`st0`), and per position, state and value index vi of the
+     letter's domain (bounds: holes are `in` constraints) the clause `<idx>_<q>_<vi>t`,
+     st /\ [X = v] -> OR of the targets' flags *)
+  | Regular (xs, nq, edges, finals) ->
+      let n = List.length xs in
+      let st i q = Printf.sprintf "x[%s][%d_%d][st]" name i q in
+      let layer i = List.init nq (fun q -> st i q) in
+      List.concat
+        (List.init (n + 1) (fun i ->
+             [
+               row
+                 (lab (Printf.sprintf "pos%dal1" i))
+                 ([], List.map (fun f -> (1, f)) (layer i), 1);
+               row
+                 (lab (Printf.sprintf "pos%dam1" i))
+                 ([], List.map (fun f -> (-1, f)) (layer i), -1);
+             ]))
+      @ [
+          row
+            (lab (Printf.sprintf "st%dal1" n))
+            ( [],
+              List.filter_map (fun f -> if f < nq then Some (1, st n f) else None) finals,
+              1 );
+          row (lab "st0") ([], [ (1, st 0 0) ], 1);
+        ]
+      @ List.concat
+          (List.mapi
+             (fun i x ->
+               (* a constant letter is cake's constant: its one value, the atom n[K][eq<K>] *)
+               let values, atom =
+                 match x with
+                 | Var x ->
+                     let v = find_var t x in
+                     ( List.init (v.hi - v.lo + 1) (fun k -> v.lo + k),
+                       fun value -> Printf.sprintf "i[%s][eq%d]" v.cx value )
+                 | Const k -> ([ k ], fun value -> Printf.sprintf "n[%d][eq%d]" k value)
+               in
+               List.concat
+                 (List.mapi
+                    (fun vi value ->
+                      let e = atom value in
+                      List.init nq (fun q ->
+                          let tg =
+                            List.filter_map
+                              (fun (sym, q2) ->
+                                if sym = value && q2 < nq then Some (1, st (i + 1) q2)
+                                else None)
+                              edges.(q)
+                          in
+                          row
+                            (lab (Printf.sprintf "%d_%d_%dt" i q vi))
+                            ([], (1, "~" ^ st i q) :: (1, "~" ^ e) :: tg, 1)))
+                    values))
+             xs)
+  (* cumulative's rows are not offered as candidates: [begin_con] derives one row per time
+     point from them ([cumulative_cands]) *)
+  | Cumulative _ -> []
 
 (* The substituted row's literal form and the label of the line that derives it. The line
    is NOT written here (D-0188 section 3.2): it waits in [pending_s] until a pin cites it
@@ -921,7 +1086,8 @@ let ensure_s t lab =
   | None -> ()
   | Some line ->
       Hashtbl.remove t.pending_s lab;
-      t.n_subst <- t.n_subst + 1;
+      if String.length lab > 3 && String.sub lab 0 3 = "@K[" then t.n_k <- t.n_k + 1
+      else t.n_subst <- t.n_subst + 1;
       emit t "%s" line
 
 let flush_s t (c : con) =
@@ -1262,6 +1428,9 @@ let family name spec =
           xs
       in
       by_var (side "X" f @ side "Y" g)
+  | Abs _ -> Abs_fam
+  | Regular (xs, _, _, _) ->
+      Regular_fam (List.filter_map (function Var x -> Some x | Const _ -> None) xs)
   | _ -> Generic
 
 (* T3b (D-0188 section 3.3): cake's gcc rows name a repeated variable x once per
@@ -1325,8 +1494,10 @@ let begin_con t ~name spec =
   let crows = cake_rows t name spec in
   List.iter (fun (r : crow) -> Hashtbl.replace c.rows r.label r) crows;
   c.fam <- family name spec;
+  (* the lists are kept NEWEST FIRST and reversed where read ([cands_of]): appending at the
+     end was quadratic in a key's candidates, 7 000 per regular on 2021_pentominoes (T6) *)
   let push tbl k cand =
-    Hashtbl.replace tbl k (Option.value (Hashtbl.find_opt tbl k) ~default:[] @ [ cand ])
+    Hashtbl.replace tbl k (cand :: Option.value (Hashtbl.find_opt tbl k) ~default:[])
   in
   let add ?(needs = []) rpn (cl, cd) =
     let cand =
@@ -1359,6 +1530,108 @@ let begin_con t ~name spec =
       generic
   in
   let cands = List.map (fun (needs, (rpn, lf)) -> add ~needs rpn lf) base in
+  (* T6 (D-0195): cumulative. cake writes, per task i and time t of its window [lb s_i,
+     ub s_i + d_i - 1] (cp_to_ilp_schedulingScript.sml, cencode_cumulative), flags cb
+     (s_i <= t) and ca (s_i + d_i >= t + 1) by cbimply_var, act = cb /\ ca
+     (`<i>_<t>_acta|b|cal1`), contribution bits equal to r_i under act (`<i>_<t>_cge`:
+     r_i ~act + bits >= r_i), and `cap_<t>`: minus every covering task's bits >= -cap.
+     baguette's row at t is ONE pol of them:
+       cap_t + sum_i ( cge + r_i actc + r_i [cb's clause] + r_i [ca's clause] )
+     cge cancels the bits (sum r_i ~act_i >= sum r_i - cap), actc turns ~act into
+     ~cb + ~ca, and each flag's clause, one pol of its [f] row and the atom @A2 (cb) or @A1
+     (ca) at its threshold, saturated, swaps it for baguette's literal, `cb \/ s_ge_(t+1)`
+     and `ca \/ ~s_ge_(t+1-d)`; at a clipped end the bound row instead leaves the flag's
+     unit. One candidate per time point; the generic pin finds it by its variables. *)
+  (match spec with
+  | Cumulative (ss, ds, rs, cap) ->
+      if List.length ds <> List.length ss || List.length rs <> List.length ss then
+        refuse "cumulative with %d starts, %d durations, %d resources" (List.length ss)
+          (List.length ds) (List.length rs);
+      let tasks = List.combine ss (List.combine ds rs) in
+      let window (st, (d, _)) =
+        match st with
+        | Var x ->
+            let v = find_var t x in
+            (v.lo, v.hi + d - 1)
+        | Const c0 -> (c0, c0 + d - 1)
+      in
+      let times =
+        List.sort_uniq compare
+          (List.concat_map
+             (fun task ->
+               let lo, hi = window task in
+               if hi < lo then [] else List.init (hi - lo + 1) (fun k -> lo + k))
+             tasks)
+      in
+      let pending lab line =
+        if not (Hashtbl.mem t.pending_s lab || Hashtbl.mem t.q lab) then (
+          Hashtbl.replace t.q lab ();
+          Hashtbl.replace t.pending_s lab line;
+          c.pending <- lab :: c.pending);
+        lab
+      in
+      let div k = if k > 1 then Printf.sprintf " %d d" k else "" in
+      List.iter
+        (fun tm ->
+          let acc = ref (SM.empty, -cap) and needs = ref [] and any = ref false in
+          let rpn = Buffer.create 128 in
+          Printf.bprintf rpn "@c[%s][cap_%d]" name tm;
+          List.iteri
+            (fun i ((st, (d, r)) as task) ->
+              let lo, hi = window task in
+              if r > 0 && lo <= tm && tm <= hi then (
+                any := true;
+                let pre = Printf.sprintf "%d_%d" i tm in
+                let fl w = Printf.sprintf "v[%s][%s][%s]" name pre w in
+                let act = fl "cact" and cb = fl "cb" and ca = fl "ca" in
+                acc := vadd !acc 1 (var_form [ (r, "~" ^ act) ] r);
+                Printf.bprintf rpn " @c[%s][%s_cge] +" name pre;
+                acc := vadd !acc r (var_form [ (1, act); (1, "~" ^ cb); (1, "~" ^ ca) ] 1);
+                Printf.bprintf rpn " @c[%s][%s_actcal1] %d * +" name pre r;
+                let clause f line lits =
+                  let lab =
+                    pending ("@K[" ^ f ^ "]") (Printf.sprintf "@K[%s] pol %s ;" f line)
+                  in
+                  needs := lab :: !needs;
+                  acc := vadd !acc r (var_form lits 1);
+                  Printf.bprintf rpn " %s %d * +" lab r
+                in
+                match st with
+                | Var x ->
+                    let v = find_var t x in
+                    if tm + 1 <= v.hi then
+                      clause cb
+                        (Printf.sprintf "@%s[f] @A2[%s] + s" cb (v.lit (tm + 1)))
+                        [ (1, cb); (1, v.lit (tm + 1)) ]
+                    else
+                      clause cb
+                        (Printf.sprintf "@%s[f] @i[%s][ub] + s%s" cb v.cx
+                           (div (tm + 1 - v.hi)))
+                        [ (1, cb) ];
+                    let w = tm + 1 - d in
+                    if w <= v.lo then
+                      clause ca
+                        (Printf.sprintf "@%s[f] @i[%s][lb] + s%s" ca v.cx
+                           (div (v.lo - w + 1)))
+                        [ (1, ca) ]
+                    else if w > v.hi then refuse "cumulative's window beyond %s's range" x
+                    else
+                      clause ca
+                        (Printf.sprintf "@%s[f] @A1[%s] + s" ca (v.lit w))
+                        [ (1, ca); (1, "~" ^ v.lit w) ]
+                | Const c0 ->
+                    clause cb
+                      (Printf.sprintf "@%s[f]%s" cb (div (1 + tm - c0)))
+                      [ (1, cb) ];
+                    clause ca
+                      (Printf.sprintf "@%s[f]%s" ca (div (c0 + d - tm)))
+                      [ (1, ca) ]))
+            tasks;
+          let cl, cd = lit_form !acc in
+          if !any && SM.for_all (fun l _ -> Hashtbl.mem t.owner (var_of l)) cl then
+            ignore (add ~needs:(List.rev !needs) (Buffer.contents rpn) (cl, cd)))
+        times
+  | _ -> ());
   (* a copy's int_eq: its two rows are the sums of the copy's @Y1, resp. @Y2 *)
   (match spec with
   | Copy (o, y) ->
@@ -1419,6 +1692,9 @@ let end_con t =
 (* ---------------------------------------------------------------------------
    Pins
    --------------------------------------------------------------------------- *)
+
+(* a candidate table's list for a key, in insertion order ([begin_con] keeps it reversed) *)
+let cands_of tbl k = List.rev (Option.value (Hashtbl.find_opt tbl k) ~default:[])
 
 let lits_of_row (c : Opb.constr) =
   lit_form
@@ -1526,7 +1802,7 @@ let special t (con : con) bl =
       labels
   in
   match con.fam with
-  | Generic -> None
+  | Generic | Abs_fam | Regular_fam _ -> None
   | Element_fam { idx; n } -> (
       (* the guard is `x <> bp` over the index's ladder (Encoding.ne_clause): read bp *)
       let v = find_var t idx in
@@ -1678,7 +1954,7 @@ let pin t ~id (c : Opb.constr) =
          guard the candidate lacks is a literal the row may add: int_eq_reif's `gt` half,
          D-0178) *)
       let key = key_of t bl in
-      let exact = Option.value (Hashtbl.find_opt con.cands key) ~default:[] in
+      let exact = cands_of con.cands key in
       let subset () =
         let vs = if key = "" then [] else String.split_on_char ' ' key in
         let inside k =
@@ -1686,9 +1962,7 @@ let pin t ~id (c : Opb.constr) =
         in
         List.concat_map
           (fun v ->
-            List.filter
-              (fun cd -> cd.key <> key && inside cd.key)
-              (Option.value (Hashtbl.find_opt con.by_min v) ~default:[]))
+            List.filter (fun cd -> cd.key <> key && inside cd.key) (cands_of con.by_min v))
           ("" :: vs)
       in
       (* [relaxed] (T3b): a candidate weakened, or resolved against the constraint's own
@@ -1731,7 +2005,8 @@ let pin t ~id (c : Opb.constr) =
           Hashtbl.fold
             (fun k l acc ->
               let ks = String.split_on_char ' ' k in
-              if k <> key && List.for_all (fun v -> List.mem v ks) vs then l @ acc
+              if k <> key && List.for_all (fun v -> List.mem v ks) vs then
+                List.rev_append l acc
               else acc)
             con.cands []
       in
@@ -1748,10 +2023,15 @@ let pin t ~id (c : Opb.constr) =
             | None when relaxed -> go ~relaxed (superset ())
             | None -> None)
       in
+      (* T6 (D-0195): a regular row no candidate implies strictly is a forward clause over
+         a symbol run, which weakening never reaches (its literals are the run's bounds,
+         cake's are one value's eq atom): straight to `rup`. The relaxed search tried ~560
+         candidates per such row on 2021_pentominoes (116 s of --e2e against 0.08 s) *)
+      let relax_ok = match con.fam with Regular_fam _ -> false | _ -> true in
       let found =
         match search ~relaxed:false with
         | Some r -> Some r
-        | None when undefined = [] -> search ~relaxed:true
+        | None when undefined = [] && relax_ok -> search ~relaxed:true
         | None -> None
       in
       Option.iter (fun (cand, _, _, _) -> List.iter (ensure_s t) cand.needs) found;
@@ -1766,7 +2046,42 @@ let pin t ~id (c : Opb.constr) =
           emit t "@W[%d] pol %s%s%s ;" t.nw cand.rpn rpn (if sat then " s" else "");
           emit t "@c%d ia %s : @W[%d] ;" id body t.nw;
           emit t "del id @W[%d] ;" t.nw
+      | None
+        when (match con.fam with Abs_fam -> true | _ -> false)
+             && not (is_clause (bl, bd)) ->
+          (* T6 (D-0195 2.3): a row that holds in both signs of int_abs (z >= x, z >= -x,
+             the hull, the guard's own rows) is implied by no single cake row, and cutting
+             planes cannot resolve two big-M rows on their guard. By contradiction: the
+             negation plus each candidate, saturated, is a unit on the guard (or nothing),
+             and unit propagation closes. *)
+          let all = Hashtbl.fold (fun _ l acc -> List.rev_append l acc) con.cands [] in
+          let all = List.sort (fun a b -> compare a.rpn b.rpn) all in
+          List.iter (fun cd -> List.iter (ensure_s t) cd.needs) all;
+          t.n_pbc <- t.n_pbc + 1;
+          emit t "@c%d pbc %s : subproof" id body;
+          List.iteri (fun k cd -> emit t "    pol -%d %s + s ;" (k + 1) cd.rpn) all;
+          emit t "    rup >= 1 ;";
+          emit t "qed ;"
       | None ->
+          (* T6 (D-0195): regular's forward clause over a symbol run is unit propagation
+             through cake's transition clauses and the letter's eq atoms, read as ladder
+             literals: each value's clause `[x = v] \/ ~x_ge_v \/ x_ge_(v+1)` first *)
+          (match con.fam with
+          | Regular_fam letters ->
+              SM.iter
+                (fun l _ ->
+                  match Hashtbl.find_opt t.owner (var_of l) with
+                  | Some x when List.mem x letters ->
+                      let v = find_var t x in
+                      if v.lo < v.hi then
+                        for w = v.lo to v.hi do
+                          let g = Printf.sprintf "i[%s][eq%d]" v.cx w in
+                          if w = v.lo || w = v.hi then ignore (q_clause t g "n")
+                          else ignore (indicator t g ~pos:true)
+                        done
+                  | _ -> ())
+                bl
+          | _ -> ());
           (* unit propagation may need any of this constraint's substitutions *)
           flush_s t con;
           t.n_rup <- t.n_rup + 1;
@@ -1814,9 +2129,10 @@ let finish t =
       "%% e2e prefix (D-0187, contract cake_pb_cp %s): %d substitutions, %d atom \
        clauses, %d selectors, pins: %d rungs ia, %d rows ia exact, %d rows ia through a \
        pol, %d rows rup; T3b (D-0188): %d rows by one pol of a linearised cake row, %d \
-       rows ia through one"
+       rows ia through one; T6 (D-0195): %d rows by contradiction, %d cumulative flag \
+       clauses"
       cake_pb_cp_sha256 t.n_subst t.n_q t.n_sel t.n_ia_rung t.n_ia_exact t.n_ia_w t.n_rup
-      t.n_pol_lin t.n_ia_lin;
+      t.n_pol_lin t.n_ia_lin t.n_pbc t.n_k;
     Buffer.output_buffer t.oc t.b;
     Buffer.clear t.b;
     close_out t.oc);

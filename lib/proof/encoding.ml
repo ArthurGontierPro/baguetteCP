@@ -1925,36 +1925,48 @@ let is_direct_row t id = Hashtbl.mem t.direct_cids id
 
 (* Every literal of x, with the polarity that fixing x to [value] gives it. VeriPB's
    [sol] wants an assignment that propagates to a total one; handing it the full
-   family of every variable is the way not to have to reason about that. *)
-let assignment_lits_of t x value =
+   family of every variable is the way not to have to reason about that.
+
+   M16-file-review-T4 (D-0192): pushed, in order, onto [acc] (reversed), so that
+   [assignment_lits] conses each literal once. It built [order @ direct] per variable,
+   [List.concat_map] copied each and a final [@] copied the whole, four cells a literal
+   of a list that holds every ladder literal of every variable, and a solution line is
+   that list (2014_openshop_gp10-4 spent about a third of its search with the proof on
+   its solution lines). The literals and their order are the same. *)
+let push_assignment t acc x value =
   let v = find t x in
   if value < v.lo || value > v.hi then invalid_arg "Encoding.assignment_lits_of";
-  let order =
+  let acc =
     match v.repr with
     | Bits { n; _ } ->
         (* The bits of (value - lo); the atoms follow by unit propagation on their
            pairs, as the `_neN` selectors follow from the rows (D-0130 section 9). *)
         let k = value - v.lo in
-        List.init n (fun i ->
-            if (k lsr i) land 1 = 1 then Lit.bit x i else Lit.negate (Lit.bit x i))
+        let acc = ref acc in
+        for i = 0 to n - 1 do
+          acc :=
+            (if (k lsr i) land 1 = 1 then Lit.bit x i else Lit.negate (Lit.bit x i))
+            :: !acc
+        done;
+        !acc
     | Order ->
-        List.init
-          (max 0 (v.hi - v.lo))
-          (fun i ->
-            let k = v.lo + 1 + i in
-            if value >= k then Lit.ge x k else Lit.negate (Lit.ge x k))
+        let acc = ref acc in
+        for k = v.lo + 1 to v.hi do
+          acc := (if value >= k then Lit.ge x k else Lit.negate (Lit.ge x k)) :: !acc
+        done;
+        !acc
   in
-  let direct =
-    match v.direct with
-    | None -> []
-    | Some _ ->
-        List.init
-          (v.hi - v.lo + 1)
-          (fun i ->
-            let k = v.lo + i in
-            if value = k then Lit.eq x k else Lit.ne x k)
-  in
-  order @ direct
+  match v.direct with
+  | None -> acc
+  | Some _ ->
+      let acc = ref acc in
+      for k = v.lo to v.hi do
+        acc := (if value = k then Lit.eq x k else Lit.ne x k) :: !acc
+      done;
+      !acc
+
+(* [push_assignment] onto nothing, turned over. *)
+let assignment_lits_of t x value = List.rev (push_assignment t [] x value)
 
 (* M8-bits-encoding-T3 (D-0134 section 2.4): after the bindings, every choice group's
    selectors -- the picked one true, the others false -- in the order the groups were
@@ -1987,9 +1999,13 @@ let choice_lits t bindings =
             g.ch_sels)
         (List.rev groups)
 
+(* The bindings are read first to last, so an invalid one is refused where it was, and
+   the choice literals are computed first, as the right operand of the [@] was. *)
 let assignment_lits t bindings =
-  List.concat_map (fun (x, value) -> assignment_lits_of t x value) bindings
-  @ choice_lits t bindings
+  let choices = choice_lits t bindings in
+  List.rev_append
+    (List.fold_left (fun acc (x, value) -> push_assignment t acc x value) [] bindings)
+    choices
 
 (* ---------------------------------------------------------------------------
    Output
@@ -2149,6 +2165,13 @@ let e2e_begin t ~name spec = Option.iter (fun e -> E2e.begin_con e ~name spec) t
 let e2e_end t = Option.iter E2e.end_con t.e2e
 let e2e_objective t x ~sign = Option.iter (fun e -> E2e.objective e x ~sign) t.e2e
 let e2e_copy t ~copy ~orig = Option.iter (fun e -> E2e.copy e ~copy ~orig) t.e2e
+
+(* M14-e2e-verification-T6 (D-0195): a regular state flag, an arith guard *)
+let e2e_flag t ~var ~cake = Option.iter (fun e -> E2e.flag e ~var ~cake) t.e2e
+
+let e2e_guard t ~var ~x ~at ~pos =
+  Option.iter (fun e -> E2e.guard e ~var ~x ~at ~pos) t.e2e
+
 let e2e_stats t = Option.map E2e.stats t.e2e
 
 let start_proof t w =

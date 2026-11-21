@@ -52,6 +52,13 @@
 #                     `s -> ~F` in place of `s -> F` (tools/e2e/mutate.py sel): a wrong
 #                     definition of the auxiliary the solver introduces, refused at that red
 # bridge-witness, scp-*, opt-* and core-* apply to it unchanged (on the solver's own .pbp).
+# T6 (D-0195) adds two, on either path's proof (the bridged one or the solver's):
+#     flag-witness    the first regular state flag past layer 0, `@D1[s]`, defined with the
+#                     witness `s -> ~F`, F cake's flag (tools/e2e/mutate.py flag)
+#     guard-witness   the first `@D1[...]` (on an int_abs model, its sign guard's definition
+#                     as x_ge_0) with the witness `s -> ~F` (tools/e2e/mutate.py sel)
+# and a refused line inside a subproof is reported as the `pbc` that opens it (an int_abs
+# row derived by contradiction), so pin-stronger and opb-stronger name the row's label.
 #
 # Prints ONE line: `MODEL VERDICT detail`, VERDICT in VERIFIED, SKIPPED, FAIL, and REFUSED
 # (mutation runs only). VERIFIED is followed by SAT, UNSAT or OPT=<v> (T8, D-0182): an
@@ -171,6 +178,13 @@ fi
 if [ "$MUT" = copy-witness ]; then
     target=$(python3 -I "$HERE/mutate.py" copy "$PB") || say "FAIL no copy definition to mutate"
 fi
+# T6 (D-0195), on either path's proof: a regular state flag, an int_abs sign guard defined wrong
+if [ "$MUT" = flag-witness ]; then
+    target=$(python3 -I "$HERE/mutate.py" flag "$PB") || say "FAIL no regular flag definition to mutate"
+fi
+if [ "$MUT" = guard-witness ]; then
+    target=$(python3 -I "$HERE/mutate.py" sel "$PB") || say "FAIL no guard definition to mutate"
+fi
 
 t0=$(now)
 timeout "$TO" "$V" "$o.cake.opb" "$PB" --elaborate "$o.core" > "$o.veripb.log" 2>&1
@@ -206,6 +220,11 @@ if [ -n "$MUT" ]; then
     ln=$(sed -n 's/.*\(Checking\|Verification\) error at .*:\([0-9]*\)$/\2/p' "$o.veripb.log" | head -1)
     [ -n "$ln" ] || say "FAIL mutation $MUT: veripb did not refuse (cake: ${s:-no s line})"
     at=$(sed -n "${ln}p" "$PB" | awk '{print $1, $2}')
+    # a line inside a subproof (T6, D-0195: an int_abs row by contradiction) is reported as
+    # the `pbc` that opens it, whose label names the row
+    if sed -n "${ln}p" "$PB" | grep -q '^[[:space:]]'; then
+        at=$(head -n "$ln" "$PB" | grep ' pbc ' | tail -1 | awk '{print $1, $2}')
+    fi
     cause=$(grep -A1 '^Caused by:' "$o.veripb.log" | tail -1 | sed 's/^[[:space:]]*//')
     # one sentence, except a BOUNDS refusal, whose second sentence says which bound (T8)
     [[ "$cause" == "Unable to verify 'conclusion BOUNDS'."* ]] || cause=$(echo "$cause" | sed 's/\. .*/./')

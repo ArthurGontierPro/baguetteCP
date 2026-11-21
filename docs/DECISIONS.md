@@ -24206,3 +24206,487 @@ a measurement showing a lever costs more than it saves on another machine. L7's 
 first, because two facts must share a slot exactly when they share a name and a direction, which holds
 because `Store.var_named` maps a name to the first variable of that name. L8's passes rely on every
 comparator ending in `by_seq`, which makes the order total.
+
+## D-0192  M16-file-review-T4: the proof side read file by file. The cost was in hashing (a table whose hash was its key, a claim key sorted by string compare and hashed on eight slots, hash-consing that re-hashed a node at every lookup) and in solution lines built literal by literal. Six byte-identical levers, and alldiff's derivations left to their producer
+
+**Status**: DONE, recorded 2026-11-21 (agent-review4, resumed by agent-review4b after it stalled, `wave55-review4`, autonomous mode).
+**Task**: M16-file-review-T4, `lib/core/explanation.ml`, `justify.ml`, `trace.ml`, `lib/proof/writer.ml`,
+`encoding.ml`, `opb.ml`, `lit.ml`.
+**Files changed**: `lib/core/justify.ml` (L1, L2, L4), `lib/core/explanation.ml` (L3, functions only, the
+type untouched), `lib/proof/writer.ml` (L5), `lib/proof/encoding.ml` (L6). Unchanged: `trace.ml`,
+`opb.ml`, `lit.ml`, and no test changed (every lever keeps the answers its tests already pin).
+**Runs**: `fataepyc-06:/scratch/arthur/wave55-review4-runs/` (D-0190's and D-0191's scripts adapted:
+`job.sh`, `runjobs.sh`, `lever.sh`, `models.sh`, `cmpmodels.sh`, `build.sh`, `buildfp.sh`, `proftip.sh`,
+`tools/attrib4.py` for the seven modules, `tools/modtab.py`, `tools/cmp.py`, `tools/levtab2.py`); the
+gate in `/scratch/arthur/gate-review4.*`.
+
+### 1. Method
+
+D-0186's, D-0190's and D-0191's, on main `0126228` (dev `641f19b6`, release `68f46309`, both rebuilt
+from that commit and found equal). The same 27 instances at the same budgets (the diff lane's 25, and
+codes-cp QR48 `f2` and `f3` of D-0169 run to the end), each without the proof ("np") and with it
+("pf"). This tier's modules run only when a proof is written, so the "pf" columns are the measure and
+"np" is the control: it moved by at most 0.2 % on any instance at any lever.
+
+The profiles are main's release build under `baguette-fp` (`d0b0b5b2`), `perf record -e cycles:u
+--call-graph fp`, counted over the search's samples, attributed per function of the seven modules self
+and inclusive. Shares below are "lane median / lane maximum (instance)" over the 25 lane instances with
+the proof. The counts are `perf stat -e instructions:u` minus a 1-node run, over the nodes, each lever's
+dev binary against the dev binary of the lever before. Byte identity was checked at every lever on the
+207 `test/models` with `--proof --stats` (stdout, exit code, `.opb`, `.pbp`, `--stats` without
+timings), in both `BAGUETTE_HASHCONS` modes, and on the 54 runs on the nodes, `--stats`, stdout and the
+`.opb`/`.pbp` md5. There were 0 differences at every lever. The node ran at load 45 to 75 on 192 cores,
+so the instruction counts are the measure and the cycle shares only say where to look. After the
+levers, six proof-heavy instances were profiled again on the tip's `baguette-fp` release build
+(section 5).
+
+### 2. The tables, file by file
+
+The sizes are `w` a clause's or a row's width, `s` the summands of a derivation, `n` a node's size in
+the explanation DAG, `T` the trail length, `k` the claims stated at a level, `V` the variables and `D`
+a domain's width. Shares are of the search samples of the base release profiles with the proof.
+
+**explanation.ml** (the derivation ADT, its hash-consing, the thunks). Module inclusive 1.8 / 57.4 %
+(cyclic-rcpsp), 18.3 % of rcpsp_12, 16.7 % of rcpsp_11. Without the proof 0.5 / 2.8 % (lot-sizing,
+`deferred`'s closures).
+
+| function | complexity | data structure | share | verdict |
+|---|---|---|---|---|
+| `force`, `compute`, per demanded reason | the producer's closure, memoised on the thunk | `thunk.forced` | 0.0 / 51.6 incl (cyclic-rcpsp) | the closure is the PRODUCER's: alldiff's Hall derivation rebuilt per pruning (D-0190 section 5); left, section 5 |
+| `built` (the hash-consing lookup), per constructed node | was O(n) hash at each lookup plus O(n) equality on a hit | `Hashtbl.Make` over closures (`hash`, `equal`) | 0.6 / 20.0 incl (cyclic-rcpsp); `summand_hash` 4.9, `same_summand` 5.0, `operand_id` 3.0, `same_operand` 2.3 self | the summands re-hashed at every lookup, three times per node with `hc_written` and `hc_wipe`: **L3** |
+| `hc_written`, `hc_enter`, `hc_wipe`, per written node and per backtrack | O(1) table operations per node, O(nodes at the levels wiped) | a list per level | `hc_wipe` 0.4 / 4.2 incl (rcpsp_12), `hc_enter` 0 / 1.9 | their cost was the re-hash: **L3** |
+| `lit_hash`, `clause_hash`, `linear_hash` | O(w) | | `lit_hash` 0.5 / 2.0 incl (roster) | computed once per node after L3 |
+| `same_derivation` | O(n) | | `BAGUETTE_DEBUG` only (I-X6) | fine |
+| `lits`, `owners`, `top_weaken_owners` | O(n) | lists | not seen | fine |
+| `deferred`, `add`, `grow`, `truncate` | O(1) amortised | arrays that double | `add` 0 / 0.8 (openshop) | fine |
+| `to_string` | O(n) | `Buffer` | messages only | fine |
+
+**justify.ml** (an explanation rendered as `pol`/`rup` lines, the memo, the claim index). Module
+inclusive 25.1 / 41.0 % (cyclic-rcpsp), 40.4 % of rcpsp_12, 39.9 % of rcpsp_11.
+
+| function | complexity | data structure | share | verdict |
+|---|---|---|---|---|
+| `emit`, `emit_thunk`, `memoized`, per node | O(1) memo hit, else the node's line | the memo on the node (D-0168) | `emit_thunk` 0 / 32.3 incl (cyclic-rcpsp), `memoized` 2.3 / 30.1 incl (rcpsp_11) | their callees |
+| `combine_line`, `emit_summand`, per `Combine` | O(s w) | | 0 / 28.4 incl (rcpsp_11) | their callees, and `combine_origin` |
+| `combine_origin`, per `Combine` with a divisor | O(1) expected | `Writer.Itbl`, whose hash is the key itself, with the count in the high bits | 0 / 10.7 incl (rcpsp_11) | every shape of one divisor in one bucket, walked at each lookup: **L1** |
+| `clause_key`, `pack_key`, `intern`, per stated or looked-up clause | O(w log w) sorts by `Lit.compare` (a string compare per pair), one polymorphic `Hashtbl` intern per literal | `(string, int) Hashtbl.t`, a list sorted then packed | `clause_key` 6.6 / 14.2 incl (soccer), `pack_key` 4.0 / 8.8, `intern` 3.2 / 7.4 | a string compare per comparison and `compare_val` per intern: **L2** |
+| `validate_lits`, per emitted clause | O(w) `Encoding` lookups | `Encoding`'s name table | in `emit_rup_clause_lazy` 16.8 / 30.2 incl (soccer) | the same name looked up twice, by the key and by the check: **L2** (one lookup remembers that the name was found declared) |
+| `state_clause`, `state_key`, per stated clause | O(1) expected, the key hashed | `Claims`, keys of packed integers | `state_clause` 5.2 / 13.3 incl (soccer), `state_key` 3.0 / 5.7 | after L2 the hash read only the first eight literals, which evm's keys share by the thousand: **L4** |
+| `wipe_level`, per backtrack | O(k) for the claims stated at the levels wiped, one stamp per level for the memo | lists per level | 2.8 / 6.0 incl (rcpsp_12) | linear in what was stated; fine |
+| `emit_clause`, `emit_rup_clause_lazy`, `emit_weaken` | O(w) plus the key | | `emit_clause` 1.2 / 7.7 incl (roster) | their callees |
+| `go`, `hash`, `equal` (the `Claims` functions) | O(w) | | 0.8 / 1.9, 1.0 / 1.8, 0.8 / 1.6 | fine after L4 |
+| `node_answer`, `remember`, `new_line` | O(1) | | under 0.5 | fine |
+
+**trace.ml** (the trail written as lines, oldest first). Module inclusive 28.5 / 71.6 % (cyclic-rcpsp),
+nearly all of it the `Justify` and `Writer` calls it makes.
+
+| function | complexity | data structure | share | verdict |
+|---|---|---|---|---|
+| `emit_to_page`, per branch | O(new trail entries), a forward cursor over the level marks (D-0145) | the `done_` array | 28.2 / 46.4 incl, 0.4 / 0.9 self | its callees |
+| `derive_ahead`, per `Needs_derivation` entry | the entry's explanation, emitted once | | 0 / 40.5 incl (cyclic-rcpsp) | `Justify` and the producer's closure |
+| `conflict_line_to_page` | the conflict's explanation | | 0.4 / 25.1 incl (cyclic-rcpsp) | the same |
+| `lines`, `claims`, per entry | O(F) through `Reason.lits` | | 2.7 / 6.4 incl (evm) | fine |
+| `settle_facts`, `add_fact_rev`, per settle over holes | O(h F) with a `List.exists` per fact added | lists | 0 / 3.3 incl (lot-sizing), `add_fact_rev` 0 / 1.4 | quadratic in a settle's facts; left with its share, section 5 |
+| `position_of`, `lines_at`, `hole_line_of` | O(1) by `entry.pos` (D-0090), O(lines of one entry) | | not seen | fine |
+| `position_of_scan` | O(T) | | `BAGUETTE_DEBUG` and tests only | fine |
+| `remember`, `record`, `record_citation`, `resync` | O(1), O(1), O(cited), O(entries undone) | arrays | 0.5 / 1.0 incl (filters) | fine |
+
+**writer.ml** (the `.pbp` writer, its ids, its levels). Module inclusive 8.9 / 33.6 % (openshop), 14.0 %
+of rcpsp_12, 12.1 % of rcpsp_11.
+
+| function | complexity | data structure | share | verdict |
+|---|---|---|---|---|
+| `improving`, `solution` (the `soli`/`sol` lines), per solution | O(sum of the encodings' literals) | `Buffer` | 0 / 32.2 incl (openshop) | `add_lits` built a string per literal, `Lit.to_string`, scanning the owner's name each time: **L5** |
+| `add_constr_body`, per line | O(w), the name sanitised once per run of one variable | `Buffer` | 3.9 / 6.7 incl (tc-graph) | fine; L5 copies its shape |
+| `rup_lazy`, `pol_lazy`, `fresh_lazy` | O(line), the origin a closure kept only by an auditing writer | | 5.2 / 8.4, 0 / 9.3, 2.0 / 3.2 incl | their text; fine |
+| `write_with`, `tokens`, `mul`, `add` | O(line) | `Buffer` | `write_with` 0 / 5.0 incl (rcpsp_11) | fine |
+| `wipe_level`, `with_level` | O(lines at the levels wiped), O(1) | `Itbl` | 0.5 / 0.9 | fine |
+| `add_label`, `write_buf` | O(digits), O(buffer) | | 0.5 / 0.9 incl | fine |
+
+**encoding.ml** (which variable has which literals, the channelling rows, the bridges). Module inclusive
+3.3 / 36.0 % (openshop), 5.9 % of cyclic-rcpsp and evm. Without the proof 0.6 / 1.9 % (`domain` from
+the propagators).
+
+| function | complexity | data structure | share | verdict |
+|---|---|---|---|---|
+| `assignment_lits`, `assignment_lits_of`, per solution line | O(V D) literals | lists: `order @ direct` per variable, `List.concat_map`, a final `@` | 0 / 35.1 incl (openshop), its leaves the minor GC | four cons cells a literal: **L6** |
+| `find`, `domain`, `is_declared` | O(name) | `Names`, a `String`-keyed `Hashtbl.Make` | `find` 1.8 / 3.8 incl (evm) | fine |
+| `ge`, `le`, `consistency_id` | O(1) after `find` | | `le` 1.0 / 2.5, `ge` 0.7 / 2.2, `consistency_id` 0 / 3.6 (rcpsp_12) | fine |
+| `direct_lo_id`, `direct_hi_id` | O(1) expected | polymorphic `(int, cid) Hashtbl.t` (`d_lo`, `d_hi`) | 0 / 1.9 and 0 / 1.3 incl (cyclic-rcpsp) | `caml_hash` and `compare_val` per lookup; left, section 5 |
+| `hash` (the `Names` function) | O(name) | | 1.2 / 1.9 incl (soccer) | fine |
+| the setup (`declare`, the ladders, the channelling, `start_proof`) | O(V D) once | | before node 1 (T5's and D-0143's) | fine |
+
+**opb.ml** (rows and clauses as text). Inclusive 0.5 / 1.5 % (soccer).
+
+| function | complexity | share | verdict |
+|---|---|---|---|
+| `clause`, `row`, the renderers | O(w) | `clause` 0.5 / 1.5 incl | fine |
+
+**lit.ml** (literal names, normative per PROOF-FORMAT section 3). Inclusive 5.3 / 25.7 % (openshop),
+without the proof 1.0 / 4.2 % (fox-geese, `compare` from the analyses).
+
+| function | complexity | share | verdict |
+|---|---|---|---|
+| `to_string`, `render_sanitized`, `sanitize`, `needs_sanitize`, per rendered literal | O(name) scan and a fresh string | `render_sanitized` 0 / 8.8, `to_string` 0 / 5.2, `needs_sanitize` 0.9 / 4.2 self (openshop) | the callers that render one literal at a time were the cost (L5); fine |
+| `add_sanitized`, `add_int`, `put_digits` | O(name + digits) into a `Buffer` | `add_int` 0.9 / 2.9 incl (rcpsp_11), `put_digits` 0.6 / 4.1 self | fine |
+| `compare`, `var_compare`, `equal` | O(name) string compare | 1.3 / 3.1 incl (fox-geese) | its proof-side caller was `clause_key` (L2); the analyses' calls are T3's |
+| `ge`, `le`, `eq`, `bit`, `negate` | O(1) allocation | `ge` 0.2 / 10.5 incl (openshop, the solution lines) | fine after L6 |
+
+### 3. The levers taken, one commit each, every byte the same
+
+Instructions per node in thousands, dev binaries of consecutive commits (each against the one before),
+with the proof, at the instance's node budget. Listed are the instances a lever moved by 1 % or more.
+"Median" is over the 25 lane instances, "codes" is f2 and f3. Without the proof no lever moved the lane
+median by more than 0.01 % or an instance by more than 0.2 %. Openshop with the proof moves by up to
+7 % between two binaries (D-0186 section 4), so its line is given only where the lever is about it, and
+there it was repeated.
+
+| commit | lever | moved (pf) | median pf | codes pf |
+|---|---|---|---|---|
+| `2cb4daa` | **L1** justify: `combine_origin`'s shapes in a table whose hash mixes the key, where `Writer.Itbl`'s hash was the key itself and the count in its high bits put every shape of one divisor in one bucket | rcpsp_11 15 553 -> 13 797 (**-11.3 %**), rcpsp_12 -5.3 %, mspsp -1.3 % | -0.01 % | +0.01, +0.01 % |
+| `c3dc622` | **L2** justify: the claim key packs interned names as integers and sorts the pairs as integers (insertion up to 24 literals), one `String`-keyed lookup per literal that also remembers the name was found declared, where it sorted by `Lit.compare` and interned in a polymorphic table, and `validate_lits` looked each name up again | tc-graph -5.9 %, amaze -5.3 %, diameterc-mst -5.0 %, f3, grid-colouring -4.3 %, parity -3.9 %, steiner -3.7 %, roster, filters, perfect_square -3.5 %, QR48 -3.2 %, chessboard -3.0 %, opd_08 and mspsp -2.7 to -2.8 %, bacp -2.6 %, monitor-placement -2.5 %, QR72 -2.4 %, lot-sizing -1.7 %, rcpsp_12 -1.6 %; soccer +1.5 %, **evm +15.4 %** (the hash, L4) | **-2.83 %** | **-3.86, -4.95 %** |
+| `63a32f6` | **L3** explanation: a hash-consed node's hid is its content hash, computed once at its build (it served the parents' hashes already), the table a bucket array and its walks loops, where the summands were hashed at every lookup through closures | cyclic-rcpsp 25 288 -> 22 578 (**-10.7 %**), rcpsp_11 -7.5 %, rcpsp_12 -7.1 %, opd_08 -2.6 %, roster -2.5 %, grid-colouring -2.0 %, opd_10 -1.8 %, mspsp, chessboard -1.6 %, bacp -1.3 %, QR72 -1.1 %, QR48 -1.0 % | -0.99 % | -0.70, -0.73 % |
+| `46489cd` | **L4** justify: the claim key's hash mixes every slot, where it read the first eight | **evm 9 847 -> 8 048 (-18.3 %)**, opd_10 -3.3 %, diameterc-mst -2.7 %, QR72 -1.6 %, QR48 -1.2 %, roster -1.0 % | -0.38 % | **-3.28, -4.52 %** |
+| `b52a47f` | **L5** writer: a `sol`/`soli` line writes its literals with `Lit.add_sanitized`, the name sanitised once per run of one variable as `add_constr_body` does, where it built a string per literal | openshop 11 795 -> 10 473 (**-11.2 %**) | -0.02 % | 0.00 % |
+| `8dad1d7` | **L6** encoding: `assignment_lits` pushes each variable's literals onto one accumulator and turns it over once, where it built `order @ direct` per variable, copied it in `List.concat_map` and again in a final `@` | openshop 10 546 to 10 548 -> 9 384 to 9 533 (**-10.4 %**, three runs each), -9.0 % at 1 501 nodes, release -12.3 % | -0.01 % | +0.03, -0.03 % |
+
+L2 and L4 are one change measured in two steps. L2 alone cost evm 15 %, because sorting by interned
+name made evm's keys agree on their first eight literals by the thousand and the hash read only those,
+so one bucket was walked by `equal` at every lookup. L4 is the correction, found by the lever's own
+measurement before anything was gated. Together they are evm -5.7 %, and the codes -7.0 % and -9.3 %.
+
+L2 is the one weighed for its clarity. The key is no longer `Lit.compare`'s order but the interned
+names' order, and two tables became one. What holds it is that the key is compared only as a set
+(the module header says so), and the gate's 207 x 4 artefacts and the lane's proof hashes say the
+index answers the same questions.
+
+### 4. The branch as a whole, release binaries
+
+Main `0126228` built with `make release`'s command (`68f46309`) against the branch's code tip `8dad1d7`
+(`52f7310c`), instructions per node in thousands. The nodes, stdout, `--stats` and proof hashes are equal
+on every line.
+
+| instance | nodes | np main | np branch | change | pf main | pf branch | change |
+|---|---|---|---|---|---|---|---|
+| H_qr48_bag_def | 6 001 | 1 212 | 1 212 | -0.0 % | 1 997 | 1 880 | -5.9 % |
+| H_qr72_bag_def | 5 001 | 1 581 | 1 581 | +0.0 % | 2 719 | 2 566 | -5.6 % |
+| 2012_parity-learning_48_24_6.2 | 4 001 | 2 003 | 2 002 | -0.1 % | 3 448 | 3 235 | -6.2 % |
+| 2024_monitor-placement-1id_igp_weight_based_rocketfuel_rf1755_real_hard | 5 001 | 2 864 | 2 863 | -0.0 % | 4 299 | 4 118 | -4.2 % |
+| 2017_opd_small_bibd_08_28_14 | 5 001 | 1 859 | 1 859 | -0.0 % | 3 058 | 2 850 | -6.8 % |
+| 2015_opd_small_bibd_10_30_09 | 4 001 | 1 730 | 1 731 | +0.1 % | 3 069 | 2 868 | -6.5 % |
+| 2013_rcpsp_12 | 5 001 | 1 195 | 1 195 | -0.0 % | 3 484 | 2 975 | **-14.6 %** |
+| 2021_perfect_square_102 | 10 001 | 628 | 627 | -0.2 % | 1 089 | 1 033 | -5.1 % |
+| 2011_bacp_bacp-22 | 6 001 | 1 430 | 1 430 | -0.0 % | 2 089 | 1 993 | -4.6 % |
+| 2012_amaze_2012-06-29 | 6 001 | 1 308 | 1 307 | -0.0 % | 2 840 | 2 657 | -6.5 % |
+| 2013_filters_dct_2_2 | 12 001 | 656 | 656 | -0.0 % | 1 107 | 1 046 | -5.5 % |
+| 2021_steiner-systems_steiner_t2_k7_N21 | 7 001 | 1 259 | 1 259 | +0.1 % | 2 445 | 2 305 | -5.7 % |
+| 2015_grid-colouring_13_11 | 5 001 | 1 404 | 1 405 | +0.1 % | 2 556 | 2 367 | -7.4 % |
+| 2016_diameterc-mst_s_v20_a50_d4 | 4 001 | 1 955 | 1 955 | -0.0 % | 4 266 | 3 893 | -8.7 % |
+| 2017_tc-graph-color_k5_05 | 8 001 | 977 | 978 | +0.0 % | 2 242 | 2 070 | -7.6 % |
+| 2019_fox-geese-corn_foxgeesecorn_54 | 3 001 | 7 636 | 7 642 | +0.1 % | 8 186 | 8 108 | -1.0 % |
+| 2020_lot-sizing_pigment15b.psp | 2 501 | 11 086 | 11 077 | -0.1 % | 14 980 | 14 528 | -3.0 % |
+| 2023_chessboard_chessboard4 | 2 501 | 3 902 | 3 904 | +0.0 % | 7 957 | 7 483 | -6.0 % |
+| 2023_evm-super-compilation_isolated_block_6_0_input | 2 001 | 3 992 | 3 992 | +0.0 % | 7 869 | 7 373 | -6.3 % |
+| 2018_soccer-computational_xIGData_24_16_14_2 | 1 501 | 2 962 | 2 964 | +0.1 % | 5 804 | 5 826 | +0.4 % |
+| 2011_roster_chicroster_dataset_large_18 | 3 501 | 2 793 | 2 795 | +0.1 % | 4 990 | 4 584 | -8.1 % |
+| 2013_rcpsp_11 | 10 001 | 4 136 | 4 135 | -0.0 % | 14 432 | 11 546 | **-20.0 %** |
+| 2012_mspsp_hard_01 | 10 001 | 4 648 | 4 649 | +0.0 % | 8 989 | 8 364 | -7.0 % |
+| 2011_cyclic-rcpsp_easy_6 | 2 001 | 4 890 | 4 891 | +0.0 % | 23 247 | 20 340 | **-12.5 %** |
+| 2014_openshop_gp10-4 | 301 | 781 | 780 | -0.2 % | 10 560 | 8 402 | **-20.4 %** |
+| f3 | 29 779 | 1 123 | 1 123 | +0.0 % | 2 372 | 2 108 | **-11.1 %** |
+| f2 | 108 699 | 1 568 | 1 568 | -0.0 % | 2 731 | 2 497 | **-8.6 %** |
+
+The lane median is **-6.3 %** per node with the proof and 0.0 % without it (min -0.2 %, max +0.1 %).
+The dev binaries give -5.7 % and 0.0 %. The codes with the proof move by -8.6 % (f2) and -11.1 % (f3).
+The broad part is the claim key (L2 with L4), which every instance whose trace writes `rup` clauses
+runs. The deep part is the scheduling instances' derivations (rcpsp_11 -20 %, rcpsp_12 -15 %,
+cyclic-rcpsp -12.5 %, by L1 and L3) and openshop's solution lines (-20 %, L5 and L6). Soccer is the one
+line that rose (+0.4 %), and section 5 says why.
+
+### 5. D-0190's question, and what is left
+
+D-0190 section 5 left alldiff's derivations (52 % of cyclic-rcpsp with the proof) as a T4 question.
+The answer measured here is that half of it was this tier's. The hash-consing lookup that every rebuilt
+derivation goes through (`Explanation.built`) fell from 19.2 % of cyclic-rcpsp's cycles to 8.9 % with
+L3, and the instance moved by -12.5 %. The other half is the producer's. On the tip's profile
+`Explanation.compute` is still 51.7 % inclusive and `Alldiff` 53.7 %, because alldiff builds the same
+Hall derivation again at every pruning and the table only finds that it already has it.
+
+| item | where | measured (tip, release, with the proof) | why left |
+|---|---|---|---|
+| alldiff's derivation built per pruning | `prop/alldiff.ml`'s closures, under `Explanation.compute` | 51.7 % incl of cyclic-rcpsp; `same_summands` 6.1 % self (the equality on a table hit), `Explanation.built` 8.9 % | built by T2's file; the fix is that a derivation is built once per Hall interval and reused, a change of alldiff's, request 1 |
+| solution lines still built as a list | `Encoding.assignment_lits` under `Writer.improving` | 33.8 % incl of openshop (`Lit.ge` allocations 17.5 %, the minor GC 26 % of the run) | writing the literals straight into the line's buffer, without a `Lit.t` each, would remove the list. It changes `Encoding`'s interface to `Writer` (a callback where there is a list), more than this tier's rule asked for one instance |
+| long claim keys sorted through tuples | `Justify.key_of_words` beyond 24 literals (`Array.stable_sort` over pairs) | 21.5 % incl of soccer, `sort_pairs` 12.5 % | soccer's trace clauses are long, and the pairs are allocated to sort them. Packing a pair into one integer when the value fits would sort ints in place, but it needs a width rule and its own measurement |
+| `d_lo`/`d_hi` polymorphic tables | `Encoding.direct_lo_id`, `direct_hi_id` | 2.6 % and 1.6 % incl of cyclic-rcpsp | `caml_hash` and `compare_val` per lookup on int keys. An `Int`-keyed `Hashtbl.Make` is the fix, about 1 % of one instance |
+| a settle's facts deduplicated by `List.exists` | `Trace.add_fact_rev` in `settle_facts` | 3.3 % incl of lot-sizing (base), 0 elsewhere | quadratic in the facts of one settle. It is bounded by the holes one bound walks over, and a `Lit_tbl` (D-0186's shape) is the fix if a profile ever shows it higher |
+| `Justify.wipe_level`'s claim lists | per backtrack | 3.7 % incl of rcpsp_12 | linear in the claims stated at the levels undone, so the work is paid once per claim |
+
+### 6. Requests to the other tiers
+
+1. `prop/alldiff.ml` (T2's file). Build a Hall interval's derivation once and hand the same value to
+   every pruning it justifies, so that the hash-consing does not have to find it again. That is 52 % of
+   cyclic-rcpsp with the proof, the largest single cost left on the proof side.
+2. D-0191 section 6 request 3 asked T4 for a `Reason.fact` that carries its variable. `reason.ml` is
+   not one of this tier's files and nothing here was changed for it. The request stays open, with
+   D-0191's numbers.
+
+### 7. Gate
+
+A fresh clone of the pushed branch at `cc52a57` (the levers merged with main `95b4406`, `scripts/README.md`
+section 4, `/scratch/arthur/gate-review4.sh` adapted from gate 82's) was gated against gate 82's binary
+(`7b967430`, main after T3), the two lanes and the scaling lane at `-j 8`.
+
+| | gate, `cc52a57` (`e5d5a541`) |
+|---|---|
+| `make check` | rc 0, 4 457 ok (gate 82's count), 207 models, 29 s, peak RSS 108 MB |
+| 207 models x 4 artefacts (stdout, exit code, `.opb`, `.pbp`) | 0 differences |
+| diff lane `--tier all` | 324 of 324 equal to the reference |
+| `--debug` lane | 311 of 311 equal |
+| scaling lane | ok on all five lines: QR72 without the proof -0.05 % of late under its baseline and **-0.61 %** with it, rcpsp_11 -0.09 %, parity +0.18 % and -0.02 % |
+
+The node ran at load 52 at the start and 56 at the end. The commits after `cc52a57` are the scaling
+baseline, one comment in `justify.ml` (a sentence that still named `Lit.compare` as the key's order; that
+binary `418fa3c4` gives the gated binary's 207 x 5 artefacts, 0 differences), this record, `ROADMAP.md`
+and `WORKLOG.md`.
+
+The scaling baseline IS re-recorded (its own commit), because QR72's growth with the proof fell by more
+than one binary's spread. `scripts/scaling_lane.sh --update -j 8 --bin` on the gated binary measured it
+at 1 895 675 instructions per node against 1 929 737 (-0.62 % of late), and the ratchet also wrote
+rcpsp_11's line (-0.08 %). It kept the three lines that did not go down (QR72 and parity without the
+proof, parity with it, all within 0.1 % of late).
+
+This record would be reversed by a lever whose byte identity fails on an instance outside these, or by
+a measurement showing a lever costs more than it saves on another machine. L2's key is the place to
+look first, because it is right only while the claim index compares keys as sets and two literals of
+one name pack to the same word exactly when their names are equal, which `intern` makes true by
+giving each name one integer for the run.
+
+## D-0195  [AUTONOME] M14-e2e-verification-T6: the far families in the end-to-end chain. `regular` and `cumulative` in, `int_abs` in, `int_times` and `int_div` left outside
+
+Status: DECIDED in autonomous mode on 2026-11-21, before the work that depends on it. Section 6 is
+the result.
+Date: 2026-11-21
+Task: M14-e2e-verification-T6 (agent-e2e6, `wave56-e2e6`)
+Touches: this record, `tools/e2e/` (translator, its semantics and references, bridge, mutations),
+`scripts/e2e_lane.sh`, `lib/proof/e2e.ml`, `lib/flatzinc/compile.ml` (the e2e hooks only),
+`docs/PROOF-FORMAT.md` §3b.
+
+### 1. Context
+
+D-0180 left 15 test models SKIPPED for T6's families: `baguette_regular` 4, `baguette_cumulative` 3,
+`int_times` 3, `int_div` 3, `int_abs` 2. D-0174 §4 expected each to be hard for a different reason.
+What cake's encoder writes for each (CakeML `14856fcf`: `cp_to_ilp_extensionalScript.sml`,
+`cp_to_ilp_schedulingScript.sml`, `cp_to_ilp_primScript.sml`, `cpScript.sml`, `cp_parseScript.sml`,
+measured on hand-written `.scp` files with `cake_pb_cp` `ca92491e`):
+
+- `regular (X ...) n ((edges_q) ...) (f ...)`, an NFA over states `0..n-1` with start state **0**:
+  per position `idx` (0..n) and state `q` a flag `x[N][<idx>_<q>][st]`, `@c[N][pos<idx>al1]` and
+  `am1` (exactly one), `@c[N][st0]` (`st[0][0]`), `@c[N][st<n>al1]` (some final), and per position,
+  state and value index `vi` of `X_idx`'s domain the clause `@c[N][<idx>_<q>_<vi>t]`:
+  `~st[idx][q] \/ ~i[X][eq<v>] \/ OR_targets st[idx+1][t]`. The same object as baguette's rows over
+  its state flags, with eq atoms where baguette has symbol runs over the ladder;
+- `cumulative (s ...) (d ...) (r ...) cap`: per task i and time t of its window `[lb s_i, ub s_i +
+  d_i - 1]`, reified flags `v[N][<i>_<t>][cb]` (`s_i <= t`) and `[ca]` (`s_i + d_i >= t + 1`), their
+  conjunction `[cact]`, contribution bits `v[N][<i>_<t>_<b>][cc]` equal to `r_i` when active and 0
+  otherwise (`@c[N][<i>_<t>_cge|cle|cz]`), and `@c[N][cap_<t>]`: minus the contributions `>= -cap`;
+- `abs X Y`: four rows `@c[N][posge|posle|negle|negge]` guarded by the atom `i[X][ge0]`;
+- `multiply X Y Z`, `divide X Y Z`: the MAGNITUDES' bits `x[N][<axis>_<b>][bin]`, product flags
+  `x[N][<i>_<j>][prod]` (`bin_i /\ bin_j`), four rows per operand guarded by its sign atom, and six
+  (multiply) or ten (divide) sign and remainder rows.
+
+baguette's rows for the same constraints are D-0146's (regular: ALO, AMO, START, ACCEPT, FWD over
+symbol runs, and the state flags are mznlib's `var bool`), D-0096's (cumulative: one row per time
+point over order literals, no auxiliary) and D-0060's (arith: a case split posted as guarded linear
+rows, its guards `X_INTRODUCED_arith_N` Booleans defined by int_lin_le_reif pairs).
+
+### 2. The decisions
+
+**2.1. regular: the state flags are left out of the `.scp`, and the prefix defines each as cake's
+flag.** mznlib's `fzn_regular` introduces the flags in a `let`, so they are existential in the
+model: the FlatZinc admits exactly one flag assignment per accepted word, the run. The options:
+
+| | what | gains | costs |
+|---|---|---|---|
+| (a) `.scp` = `(cK regular (x ...) Q edges finals)` without the flags; the prefix DEFINES each flag `s(i,q)` by a red pair as `x[cK][<i>_<pi(q)>][st]` | the `.scp` is std's `fzn_regular` and nothing else; the translator is one table row; baguette's rows follow by `ia`/`rup` from cake's | the translator must refuse a flag used anywhere else (it is then not existential) |
+| (b) declare the flags in the `.scp` and constrain them by a decomposition (one `equals_iff`/`and` chain per flag) | the `.scp` names every FlatZinc variable | a decomposition of the run in the TRUSTED translator, the thing D-0174 §5 asks to keep small; the chain would check the decomposition, not the meaning |
+| (c) declare the flags in the `.scp` unconstrained | one line | the `.scp` admits flag values the FlatZinc refuses (the validation reports DIFFER), and the flags' cake bits are free, so baguette's rows over them are not derivable |
+
+**(a).** The validation compares the solution sets over the `.scp`'s variables, which are the
+FlatZinc's minus the flags; the references enumerate the FlatZinc with the flags pinned to the run
+(their reading of SPEC's sentence), so a flag assignment cannot hide a difference. The states are
+renumbered by the rotation `pi(q) = (q - q0) mod Q` so that the start state is cake's 0, and the
+letters `smin .. smin + w - 1` keep their values (`0` in `d` is no edge).
+
+**2.2. cumulative: cake's `cumulative`, and each of baguette's capacity rows by one `pol`.** Durations,
+resources and capacity are constants (mznlib routes nothing else to `baguette_cumulative`); the
+translator refuses a negative one, since cake's `cumulative_sem` makes a negative height or capacity
+infeasible and baguette's front end was never asked about it. baguette's row at t is
+`sum_i r_i (s_i_ge_(t-d_i+1) - s_i_ge_(t+1)) <= cap - folded`, and from cake's it is
+
+  `cap_t + sum_i (cge_(i,t) + r_i actc_(i,t)) + r_i x (cb's clause) + r_i x (ca's clause)`,
+
+where cb's clause `cb \/ s_i_ge_(t+1)` and ca's `ca \/ ~s_i_ge_(t+1-d_i)` are each one `pol` of the
+flag's definition row linearised at the threshold (D-0188's device), and a clipped end (a threshold at
+or below `lb s_i`, or above `ub s_i`) is a unit of the flag instead. No `rup`.
+
+**2.3. int_abs: `abs`, the sign guard defined as baguette's own literal, and a row no candidate
+implies derived by contradiction.** baguette's guard `S <-> x >= 0` is a model Boolean cake's file
+does not have; it is defined by a red pair as `x_ge_0` (a guard `b <-> y >= v` as `y_ge_v`, `b <->
+y <= v` as `~y_ge_(v+1)`, read from its two int_lin_le_reif rows). The rows `A3`, `A4` are cake's
+`posge`, `negge` with the atom swapped. `A1` (`z >= x`), `A2` (`z >= -x`) and the hull rows hold in
+both signs, so no single cake row implies them and cutting planes cannot resolve two big-M rows on
+their guard. They are derived by **`pbc`** (VeriPB's proof by contradiction): assume the negation,
+add it to each of the constraint's candidates and saturate (each sum is a unit on the guard or
+nothing), and close by `rup >= 1`. The pbc subproof is checked by veripb and elaborated into
+the kernel proof cake_pb_cp reads; section 6 says whether cake_pb_cp accepts it.
+
+**2.4. int_times and int_div stay outside the chain in this task.** The translator keeps refusing
+them, so their models stay SKIPPED with that reason. Why: baguette's rows are one guarded group per
+value v of the case variable (`y >= v /\ x >= 0 -> z >= v x`, D-0060), and cake's are the operands'
+magnitudes in bits, their bit products and sign rows guarded by `i[X][ge0]` and `i[Z][ge0]`. A
+group's row covers every y at or above v, every sign of x within its guard and every sign of z, so
+each is a resolution over the case variable's values and over cake's sign atoms, which cutting
+planes cannot do on big-M rows (2.3); by contradiction it needs, per row, a split on y's value
+(the row for y = v, from |v|'s bits fixed under the guard and the product flags reduced to x's
+magnitude bits, then the row for y >= v + 1, already derived) and on the two signs. That is
+Theta(|dom y| x bits_x x bits_y) lines per constraint, each a nested `pbc`, written for this family
+alone, and a new derivation per remainder row for int_div. The other route is GCS's: baguette
+writes cake's product encoding itself under `--e2e` (D-0174 §4 (b)). Either is a task of its own;
+this one records the measurement that motivates it (section 6).
+
+### 3. How to revert
+
+Revert the commits prefixed `M14-e2e-verification-T6:` on branch `wave56-e2e6` (or their merge). The
+translator then refuses the three families again and the lane's counts return to D-0188's. Nothing
+outside `tools/e2e/`, `scripts/e2e_lane.sh` and the `--e2e` path changes, and every default byte
+stays as it is (the gate compares the 207 models' four artefacts).
+
+### 4. What this does not decide
+
+Whether `--e2e` becomes a default and whether the bridge is retired (D-0187 §5, the user's).
+
+### 5. (reserved)
+
+### 6. Result
+
+**What was built.** In `tools/e2e/`: the translator writes `regular` (flags left out, states
+rotated), `cumulative` and `abs`, and refuses a flag used anywhere else; `scpsem.py` reads the
+three from `cpScript.sml` (`regular_sem`/`nfa_accepts`, `cumulative_sem`, `unop_sem Abs`);
+`fzn_solutions.py` gives the references `baguette_cumulative` (std's `cumulative`) and
+`baguette_regular` (the run as states `a[0..n]`, the flags pinned to it); the bridge defines the
+flags from the translator's hint file `NAMES.flags`, derives each capacity row by one `pol`
+(`@K`), defines the abs guard from its int_lin_le_reif row and closes the rows true in both signs
+by `pbc`. Under `--e2e` (`lib/proof/e2e.ml`, three hooks in `compile.ml` and two in `encoding.ml`,
+all no-ops without the flag) the same three derivations, the flags and the guard told before their
+declaration (`E2e.flag`, `E2e.guard`), cake's rows transcribed in [cake_rows] (PROOF-FORMAT §3b's
+three new rows). Two departures found on the Challenge: a regular over a CONSTANT letter is cake's
+`n[K][eq<K>]` atom (2021_pentominoes was refused before), and the writer's candidate tables were
+appended at the end of a list (quadratic, 7 000 transition clauses per regular on pentominoes:
+116 s of `--e2e`, 41 s now, the same proof bytes).
+
+How each family's rows are pinned (solver-written, the nine test models):
+
+| family | models | rows of baguette | how |
+|---|---|---|---|
+| regular | 4 | 550: layers' ALO/AMO, START, ACCEPT, forward clauses | flags `@D1`/`@D2` (216 red pairs); every row `ia` through one `pol` (550), the transition clause with the letter's eq atom as its ladder literals (`@Qn`, `@Ep`: 249 atom clauses); no `rup` here, 2 916 `rup` on pentominoes (runs of several values) |
+| cumulative, disjunctive | 3 | 17 capacity rows | each `ia` against ONE `pol` of `cap_t`, the covering tasks' `cge` and `actc`, and 138 flag clauses `@K` (each one `pol` of a flag's `[f]` row and `@A1`/`@A2`); no `rup` |
+| int_abs | 2 | 21 (abs's four, the hull, the guard's two, the models' other rows) | the guard `@D1`/`@D2` as `x_ge_0`; 5 `ia`, 1 `rup`, 15 by contradiction (`pbc`: the negation plus each of the four candidates, saturated, then `rup >= 1`) |
+
+**The lane** (`make e2e`, `scripts/e2e_lane.sh -j 8` from the gate's fresh clone of the tip
+`20fc7e4`, run `lane-final`, dev binary md5 `dca706be`, veripb 3.0.2 `d5644ca4`, `cake_pb_cp`
+`ca92491e`; `lane-t6b` on `c222541`'s code gave the same counts; the same lane on main's binary
+`418fa3c4` gave D-0188's):
+
+| pass | before (main) | after |
+|---|---|---|
+| 1, bridged | 188 VERIFIED (100 SAT, 80 UNSAT, 8 OPT), 19 SKIPPED, 0 FAIL | **197** (105 SAT, 83 UNSAT, 9 OPT), 10 SKIPPED (`var int` with no domain 4, `int_times` 3, `int_div` 3), 0 FAIL |
+| 1b, solver-written | 188 VERIFIED, 0 FAIL | **197** VERIFIED, 0 outside `--e2e`'s families, 0 FAIL, 0 disagreeing |
+| 2, controls | 31 of 31 | **37 of 37** |
+| 2b, solver controls | 32 of 32 | **38 of 38** |
+| 3, validation | 187 AGREE, 1 UNCHECKED, 0 DIFFER | **196 AGREE**, 1 UNCHECKED, 0 DIFFER |
+
+**The twelve new controls**, each refused at the expected line with the checker's whole sentence,
+on satisfiable models (D-0053), each corrupted claim false in at least one solution:
+
+| control | model | refused at | wording | solutions the claim excludes |
+|---|---|---|---|---|
+| opb-stronger (bridge) | `regular_sat` (a layer's ALO, degree 2) | `@c1 rup` | "The constraint is not implied by reverse unit propagation (RUP) from core and derived database." | 1 of 1 (two states at once contradicts AMO) |
+| | `cumulative_sat` (capacity row) | `@c12 rup` | the same | 8 of 8 |
+| | `disjunctive_sat` (capacity row) | `@c10 rup` | the same | 1 of 1 |
+| | `abs_zero_sat` (new, `tools/e2e/models/`: the guard's row, `S -> x >= 1`) | inside `@c5 pbc` | the same | 2 of 5 |
+| pin-stronger (solver) | `regular_sat` | `@c1 ia` | "Expected constraint is not syntactically implied by the constraint at the hint." | 1 of 1 |
+| | `cumulative_sat` | `@c12 ia` | the same | 8 of 8 |
+| | `disjunctive_sat` | `@c10 ia` | the same | 1 of 1 |
+| | `abs_zero_sat` | inside `@c5 pbc` | the RUP sentence | 2 of 5 |
+| flag-witness (both paths) | `regular_sat`: the first flag past layer 0 defined as the NEGATION of cake's | `@D1[X_INTRODUCED_39__ge_1] red` | "Proofgoal #1 could not be autoproven." | (a `red`) |
+| guard-witness (both paths) | `abs_zero_sat`: the guard as `~x_ge_0` | `@D1[X_INTRODUCED_arith_0_ge_1] red` | the same | (a `red`) |
+
+`abs_zero_sat` exists because on `arith_abs_sat` (one solution, x = -3) the guard's row
+strengthened by one is still true. A refusal inside a `pbc` is reported by `chain.sh` as the
+`pbc` that opens it. What a refused `pin-stronger` shows is that the pin does not accept a
+stronger row; it does not show that no derivation of one exists.
+
+**The translator's validation.** The nine models AGREE with both references (Gecode and CP-SAT).
+Seven hand-made mistranslations each give DIFFER: `regular_sat` with the finals shifted by one
+state, `regular_set_sat` with every edge's symbol +1, `regular_opt` with one edge's target changed
+(shifting its finals does nothing, both states are final, and that one AGREEs), `cumulative_sat` and
+`disjunctive_sat` with durations and resources swapped, `arith_abs_sat` and `abs_zero_sat` with
+abs's arguments swapped.
+
+**int_times and int_div, measured.** The generic step int_abs uses (the negation plus each of the
+constraint's cake rows, saturated, then `rup`) was tried on the six arith test models through the
+bridge, with the translator writing `multiply`/`divide` (a scratch copy, not committed). Five
+verify, `cake_pb_cp` included, and every one of them because the model's other constraints fix
+the operands at the root (`z = -6` with `x <= -1`, `x = -7` with `y = 2`, ...): the database the
+`rup` runs against is cake's whole file. On `arith_times_narrow_sat` (`b * y = z`, y free over
+0..4) the row `b -> z >= y` is refused at `rup >= 1`. So the step is not a derivation of the
+family's rows, and a lane on it would be green on pinned models and fail on the first free one.
+2.4 stands: outside the chain, for the reasons it gives.
+
+**The Challenge.** The eight instances of D-0182's 733 flattened ones whose T6 families the
+translator now covers (5 regular, 3 int_abs; seven more, six with cumulative and one with
+int_abs, have an int_times beside them and stay out), release binary `1e00ca57` (`a11521db` for pentominoes, after the constant-letter
+change), 4 at a time under `systemd-run --user --scope -p MemoryMax=32G`, `tools/e2e/measure_e2e.sh`
+and D-0188's `alone.sh`:
+
+| instance | answer | solve s, plain / `--e2e` | veripb alone s | chain elab + cake s | ratio | prefix MB | prefix alone, elab + cake s |
+|---|---|---|---|---|---|---|---|
+| `2013_nonogram_dom_06` | SAT | 0.71 / 0.90 | 1.52 | 2.10 + 3.81 | x3.9 | 1.4 | 0.07 + 0.33 |
+| `2026_nonogram_easy_01` | SAT | 0.52 / 1.85 | 1.32 | 2.65 + 3.05 | x4.3 | 4.4 | 0.20 + 0.99 |
+| `2026_nonogram_medium_05` | SAT | 7.75 / 20.05 | 59.31 | 105.92 + 34.91 | x2.4 | 20.4 | 0.92 + 4.72 |
+| `2012_nonogram_non_fast_8` | SAT | 18.80 / 115.08 | 248.80 | 591.33 + 69.13 | x2.7 | 92.3 | 4.28 + 22.58 |
+| `2021_pentominoes_..._close` | SAT | 0.08 / 110.15 (41 with `9a78320`) | 0.05 | 0.30 + 1.28 | x32 | 2.6 | 0.20 + 1.06 |
+| `2013_on-call-rostering_4s-10d` (int_abs) | OPT=1 | 0.42 / 2.56 | 1.04 | 4.29 + 22.58 (cake 16 GB RSS) | x26 | 33.8 | 1.61 + 17.99 |
+| `2022_roster-sickness_large-4-2` (int_abs) | OPT | 16.37 / exhausted the 4 GB solver cap at 147 s | 30.24 | - | - | 13 500 when stopped | - |
+| `2011_fast-food_ff53` (int_abs) | OPT=1 | 8.29 / timeout 300 s | 304.01 | - | - | 4 000 when stopped | - |
+
+Six VERIFIED by `cake_pb_cp`, every verdict baguette's. The bridged chain on pentominoes did not
+finish in 900 s (the matcher; the solver-written chain does it in 1.6 s of checking). What this
+says:
+
+1. **regular is cheap in the chain.** Its prefix is a red pair per flag and one `ia` per row; on
+   the four nonograms the chain costs x2.4 to x4.3 of `veripb` alone, and the prefix alone at most
+   a tenth of it. pentominoes' x32 is start-up over a 0.05 s proof.
+2. **int_abs is not the cost where it fails.** roster-sickness and fast-food have domains of
+   width 3 770 and 910 (their default `.opb` are 945 and 709 MB), and D-0187's per-value prefix
+   (atoms, halves, ladder) is what reaches 13.5 GB and 4 GB; their 22 and 1 190 abs constraints
+   are a small part. on-call-rostering verifies, with `cake_pb_cp`'s check of its 34 MB prefix the
+   larger half (18 s, 16 GB RSS).
+3. **The writer is still the slow stage under `--e2e`** (D-0187's lead): pentominoes 41 s, and
+   non_fast_8 115 s against 18.8 s, in the generic search over the transition candidates of a
+   row's letter. Indexing those by state is the next lever if regular instances matter.
+
+No cumulative instance reached the chain: the Challenge's cumulative models in this set all have
+an `int_times` beside them (mspsp, smelt).
+
+**Gate.** A fresh clone of the pushed tip `20fc7e4` (dev binary `dca706be`) against gate 83's
+binary (`418fa3c4`, `/scratch/arthur/baguette-gate-20261121a`): `make check` rc 0 (4 457 ok, 207
+models, peak RSS 105 MB), 207 models x 4 artefacts (stdout, exit code, `.opb`, `.pbp`) equal,
+differential lane 324 of 324, debug 311 of 311, scaling ok. The same gate on `1091384` (before
+the writer's speed commit, binary `e09903aa`): the same five results. Every lane at `-j 8`, load
+average near 80.
+
+**Left.** int_times and int_div (2.4: a case split per value of the case variable, or baguette
+writing cake's product encoding); the writer's speed on regular rows; whether `--e2e` becomes a
+default and whether the bridge is retired (D-0187 §5, the user's). Results in
+`/cluster/arthur/baguette-results/wave56-e2e6/`.

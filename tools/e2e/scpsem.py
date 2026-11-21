@@ -32,6 +32,14 @@ The semantics, transcribed from cpScript.sml (CakeML master, 2026-11):
   inverse ((X1 ...) ox) ((Y1 ...) oy)
                                same length n; every Xi - oy and Yj - ox in [0, n);
                                X[i-ox] = j <=> Y[j-oy] = i over i in ox.., j in oy..  (inverse_sem)
+  and the T6 forms (D-0195):
+  abs X Y                      ABS X = Y                          (unop_sem Abs)
+  cumulative (X1 ...) (W1 ...) (H1 ...) C
+                               equal lengths, every Hi >= 0, C >= 0, and at every t the Hi
+                               of the i with Xi <= t < Xi + Wi sum to at most C  (cumulative_sem)
+  regular (X1 ...) n ((edges_0) ...) (f ...)
+                               some run from state 0 along edges (v q') of EL q trans, every
+                               state < n, ends in a final state      (regular_sem, nfa_accepts)
 Any other keyword, or a `_if` form other than a comparison's, is refused (exit 2). The
 prob_type is `decide`, or `(minimize X)` / `(maximize X)` (T8, D-0182), whose solutions are
 the same set: the objective only adds the line `objective minimize|maximize NAME` at the end,
@@ -125,6 +133,21 @@ def load(path):
                 xs, y = [term(args[0]), term(args[1])], args[2]
             cons.append(("ext", max if kw.endswith("max") else min, xs, term(y)))
             continue
+        if kw == "abs":
+            x, y = args
+            cons.append(("abs", term(x), term(y)))
+            continue
+        if kw == "cumulative":
+            xs, ws, hs, cap = args
+            cons.append(("cumul", [term(a) for a in xs], [term(a) for a in ws],
+                         [term(a) for a in hs], term(cap)))
+            continue
+        if kw == "regular":
+            xs, n, trans, fin = args
+            cons.append(("reg", [term(a) for a in xs], int(n),
+                         [[(int(v), int(q)) for v, q in es] for es in trans],
+                         [int(f) for f in fin]))
+            continue
         if kw == "inverse":
             (xs, ox), (ys, oy) = args
             cons.append(("inv", [term(a) for a in xs], int(ox), [term(a) for a in ys], int(oy)))
@@ -167,6 +190,12 @@ def terms_of(c):
         return c[2] + [c[3]]
     if c[0] == "inv":
         return c[1] + c[3]
+    if c[0] == "abs":
+        return [c[1], c[2]]
+    if c[0] == "cumul":
+        return c[1] + c[2] + c[3] + [c[4]]
+    if c[0] == "reg":
+        return c[1]
     if c[0] == "lin":
         return [t for _, t in c[2]] + [c[3]] + ([c[4][0]] if c[4] else [])
     if c[0] == "log":
@@ -238,7 +267,7 @@ def solve(bounds, cons, max_nodes):
                 return lo <= yhi and ylo <= hi
             return True
         vals = [val(t) for t in terms_of(c)]
-        if c[0] in ("imp", "elem", "gcc", "ext", "inv"):
+        if c[0] in ("imp", "elem", "gcc", "ext", "inv", "abs", "cumul", "reg"):
             # T5's forms are checked once every variable they name is assigned
             if any(v is None for v in vals):
                 return True
@@ -270,6 +299,23 @@ def solve(bounds, cons, max_nodes):
             if not all(0 <= x - oy < n for x in xs) or not all(0 <= y - ox < n for y in ys):
                 return False
             return all((xs[i] == oy + j) == (ys[j] == ox + i) for i in range(n) for j in range(n))
+        if c[0] == "abs":
+            return abs(val(c[1])) == val(c[2])
+        if c[0] == "cumul":
+            xs, ws, hs = ([val(t) for t in c[i]] for i in (1, 2, 3))
+            cap = val(c[4])
+            if not len(xs) == len(ws) == len(hs) or min(hs, default=0) < 0 or cap < 0:
+                return False
+            # the sum only changes where a task starts, so those t are enough
+            return all(sum(h for x, w, h in zip(xs, ws, hs) if x <= t < x + w) <= cap
+                       for t in xs)
+        if c[0] == "reg":
+            xs, n, trans, fin = [val(t) for t in c[1]], c[2], c[3], c[4]
+            states = {0} if 0 < n else set()
+            for v in xs:
+                states = {q2 for q in states if q < len(trans)
+                          for (sym, q2) in trans[q] if sym == v and q2 < n}
+            return any(q in fin for q in states)
         raise AssertionError(c[0])
 
     watch = {v: [] for v in order}
