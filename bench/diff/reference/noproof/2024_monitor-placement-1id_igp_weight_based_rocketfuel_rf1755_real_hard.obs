@@ -1,12 +1,12 @@
 rc 0
 out x = array1d(1..87, [false, false, false, false, false, false, false, false, false, false, false, false, false, false, true, false, true, true, true, true, false, false, false, false, false, false, false, false, false, false, false, false, false, true, true, false, false, true, true, false, false, true, false, false, true, false, false, false, true, true, true, true, false, false, true, false, false, false, false, false, false, true, true, true, true, false, false, true, true, false, true, true, false, false, true, true, true, true, true, true, false, true, true, true, true, true, true]);
 out ----------
-search ladder/cls 86 cls
-search opb/lines 5228 lines
+search ladder/cls 0 cls
+search opb/lines 5144 lines
 search direct/vals 0 vals
 search widest/wide 87 wide
-search bits/vars 0 vars
-search bitsrows/lines 0 lines
+search bits/vars 1 vars
+search bitsrows/lines 2 lines
 search choices/groups 0 groups
 search limit.nodes 5001
 search limit.decisions 2515

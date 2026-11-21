@@ -1,17 +1,17 @@
 rc 0
 out =====UNKNOWN=====
-search ladder/cls 533 cls
-search opb/lines 1067 lines
+search ladder/cls 0 cls
+search opb/lines 632 lines
 search direct/vals 0 vals
 search widest/wide 12 wide
-search bits/vars 0 vars
-search bitsrows/lines 0 lines
+search bits/vars 49 vars
+search bitsrows/lines 98 lines
 search choices/groups 0 groups
 search limit.nodes 1501
 search limit.decisions 757
 search limit.conflicts 743
 search limit.learned 743
-search limit.pb-learned 125
+search limit.pb-learned 113
 search limit.db 500
 search limit.maxdepth 24
 search limit.incumbent none
@@ -29,7 +29,7 @@ search learned/cls 743 cls
 work later/asks 175253 asks
 work cites/memos 24260 memos
 search convertible/cls 12 cls
-search retention fifo(cap=500) fifo(cap=500): 868 added, 368 evicted, 500 swept, 0 live, 93 duplicate, 0 cited, 0 pinned
+search retention fifo(cap=500) fifo(cap=500): 856 added, 356 evicted, 500 swept, 0 live, 73 duplicate, 0 cited, 0 pinned
 search lbd 5:1,6:3,7:2,8:4,9:1,10:1,11:2,12:6,13:21,14:32,15:33,16:637
 search width 10:2,11:2,12:1,13:2,14:3,15:3,16:730
 search globals/units 0 units
@@ -45,24 +45,24 @@ search pb-confl/confl 0 confl
 search minimised/lits 0 lits
 search i-s4-cross/lines 18063 lines
 search pb-tried/confl 743 confl
-search pb-learned/rows 125 rows
-search pb-fallback/confl 618 confl
+search pb-learned/rows 113 rows
+search pb-fallback/confl 630 confl
 search pb-why first fallback reason: no PB row for instance bool2int
 work pb-whys/recd 64 recd 64 x
-search pb-steps/pivots 189 pivots
-search pb-convert/rows 125 rows
-search pb-stronger/rows 125 rows
-search pb-nondeg/rows 125 rows
+search pb-steps/pivots 180 pivots
+search pb-convert/rows 0 rows
+search pb-stronger/rows 0 rows
+search pb-nondeg/rows 113 rows
 search pb-lifted/rows 0 rows
 search pb-rungs/rungs 0 rungs
-search lvl-cmp/confl 125 confl
+search lvl-cmp/confl 113 confl
 search lvl-same/confl 0 confl
-search lvl-narrow/confl 125 confl
+search lvl-narrow/confl 113 confl
 search lvl-wide/confl 0 confl
 search lvl-incomp/confl 0 confl
 search lvl-empty/confl 0 confl
-search lvl-assert/confl 61 confl
-search lvl-why first disagreement: closure {22,21,20,19,18,17,16,15,14,13,12,11,10,9,8,7,6,5,4,3,2,1} vs pb {22,21,19,17,15,14,13,10,8,6,4,1} (pb asserts at 0)
+search lvl-assert/confl 2 confl
+search lvl-why first disagreement: closure {22,21,20,19,18,17,16,15,14,13,12,11,10,9,8,7,6,5,4,3,2,1} vs pb {22,21,15,14,1} (pb asserts at 0)
 work int_lin_le/inst 98 inst 60.4 runs/node 19.62 eff/node
 work bool_not/inst 96 inst 32.5 runs/node 10.01 eff/node
 work bool2int/inst 120 inst 32.1 runs/node 17.82 eff/node
@@ -78,14 +78,15 @@ work vetoed/wakes 37542 wakes
 work advised/wakes 0 wakes
 work seeded/runs 1863 runs
 work skipped/slots 544137 slots
-search rup/lines 90300 lines
-search pol/lines 181 lines
-search pol-tokens/tokens 803 tokens
-search pol-widest/tokens 17 tokens
-search atoms/atoms 0 atoms
-search atomlinks/lines 0 lines
-search bridges/pairs 0 pairs
-search boundlines/pairs 0 pairs
-search bitsprune/lines 0 lines
-opb 595626bcf85609b773ac9bd1bf2cfab7c5bdf9ee6aeaf88b3407ffc5095b036b
-pbp e9a6d14e3f7c85a6ed7ad846fe18e76bcaea9f15f3d030ed6d895183eddba53d
+search rup/lines 52480 lines
+search pol/lines 38883 lines
+search pol-tokens/tokens 1891995 tokens
+search pol-widest/tokens 100 tokens
+search atoms/atoms 331 atoms
+search atomlinks/lines 512 lines
+search bridges/pairs 120 pairs
+search boundlines/pairs 120 pairs
+search bitsprune/lines 38180 lines
+search atoms/prune/atoms 0.009 atoms
+opb 0e48333621aadfeee1f60bf19ca949ee3a2fc272a8275c886e4642418f8dacac
+pbp 98a1b77bc71715a0d958999f5d2f7067a07ff3620a4e4d13b0fbafb7fe567eec

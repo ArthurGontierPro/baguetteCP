@@ -81,6 +81,12 @@ module Trace = Baguette_core.Trace
 
 (* M1-T53: the inner heap guard; see mem_guard.ml for what it cannot see. *)
 let () = Mem_guard.install ()
+
+(* D-0201: this suite was written against the ORDER encoding -- its scenes name x_ge_v
+   rungs, ladder rows and order-encoding counts -- which stopped being the default when
+   D-0199 made it `--bits-above 0`. Pinned before any test runs, so every scene keeps the
+   encoding it was measured on; a bits test sets its own W and restores this one. *)
+let () = Baguette_proof.Encoding.bits_above := None
 let failures = ref 0
 
 let check name cond =

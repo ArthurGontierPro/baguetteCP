@@ -1,11 +1,11 @@
 rc 0
 out =====UNKNOWN=====
-search ladder/cls 4674 cls
-search opb/lines 23433 lines
+search ladder/cls 870 cls
+search opb/lines 20419 lines
 search direct/vals 0 vals
 search widest/wide 75 wide
-search bits/vars 0 vars
-search bitsrows/lines 0 lines
+search bits/vars 395 vars
+search bitsrows/lines 790 lines
 search choices/groups 0 groups
 search limit.nodes 2001
 search limit.decisions 1161

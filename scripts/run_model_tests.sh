@@ -186,50 +186,57 @@ for fzn in "${ROOT}"/test/models/*.fzn; do
   report "${base}" pass || true
 done
 
-# M9-no-proof-T2 (D-0126, D-0135): the same identity at `--bits-above 0`, on the bits_*
-# models. The pass above runs them at the default W = none, where nothing is on the bits
-# encoding; here every eligible variable is, so atoms are minted on demand
-# ([Encoding.ensure_atom], D-0132) -- through the page in the proved run and not at all
-# under `--no-proof`, whose justifications are never rendered -- and the proof-side ids
-# the two runs mint after `start_proof` diverge. That is allowed (D-0126's id rule, point
-# 3: no Explanation carries one) and this lane is what checks that the search never reads
-# one. The proved side is verified by veripb here too; its stdout is NOT compared with
-# test/expected/, which records the W = none run, only with the --no-proof run's.
-bits_pass=0
-for fzn in "${ROOT}"/test/models/bits_*.fzn; do
-  [ -f "${fzn}" ] || continue
+# D-0201 (D-0199 applied): the ORDER encoding, `--bits-above none`, on EVERY model. Until
+# D-0201 the default was the order encoding and this pass ran the bits_* models at
+# `--bits-above 0` (M9-no-proof-T2, D-0126, D-0135); since D-0199 the main pass above IS
+# that run (every eligible variable on bits, atoms minted on demand, the --no-proof
+# identity checked), so this pass keeps the encoding the main pass no longer runs: the
+# order encoding everywhere, the solver before D-0201 byte for byte. Each run's proof is
+# VERIFIED, its --no-proof run prints the same bytes and exits the same way (D-0126), and
+# its ANSWER is the default run's -- veripb's verdict line, which for an optimisation
+# carries the proved bounds; a satisfiable model may print another solution, as in the
+# restart lane below (D-0201 measured all 207 printing the same bytes at both W).
+order_pass=0
+for fzn in "${ROOT}"/test/models/*.fzn; do
   base="$(basename "${fzn}" .fzn)"
-  prefix="${OUT}/${base}.w0"
-  "${SOLVER}" "${fzn}" --bits-above 0 --proof "${prefix}" > "${prefix}.out" 2> "${prefix}.err"
+  is_pending "${base}" && continue
+  [ -f "${OUT}/${base}.veripb" ] || continue
+  prefix="${OUT}/${base}.order"
+  "${SOLVER}" "${fzn}" --bits-above none --proof "${prefix}" > "${prefix}.out" 2> "${prefix}.err"
   rc=$?
   if [ "${rc}" -ne 0 ] || [ -s "${prefix}.err" ]; then
-    echo "FAIL  ${base} (--bits-above 0): the proved run exited ${rc} or wrote to stderr"
+    echo "FAIL  ${base} (--bits-above none): the proved run exited ${rc} or wrote to stderr"
     sed 's/^/       /' "${prefix}.err" | head -5
     fail=$((fail+1)); continue
   fi
   if ! "${VERIPB}" "${prefix}.opb" "${prefix}.pbp" > "${prefix}.veripb" 2>&1; then
-    echo "FAIL  ${base} (--bits-above 0): veripb rejected the proof"
+    echo "FAIL  ${base} (--bits-above none): veripb rejected the proof"
     sed 's/^/       /' "${prefix}.veripb" | tail -20
     fail=$((fail+1)); continue
   fi
-  "${SOLVER}" "${fzn}" --bits-above 0 --no-proof > "${prefix}.noproof.out" 2> "${prefix}.noproof.err"
+  v_new="$(grep -E '^s ' "${prefix}.veripb" | head -1)"
+  v_ref="$(grep -E '^s ' "${OUT}/${base}.veripb" | head -1)"
+  if [ -z "${v_new}" ] || [ "${v_new}" != "${v_ref}" ]; then
+    echo "FAIL  ${base} (--bits-above none): verdict [${v_new}] is not the default run's [${v_ref}]"
+    fail=$((fail+1)); continue
+  fi
+  "${SOLVER}" "${fzn}" --bits-above none --no-proof > "${prefix}.noproof.out" 2> "${prefix}.noproof.err"
   rc2=$?
   if [ "${rc2}" -ne "${rc}" ] || [ -s "${prefix}.noproof.err" ]; then
-    echo "FAIL  ${base} (--bits-above 0): --no-proof exited ${rc2} where the proved run exited ${rc}, or wrote to stderr (M9-no-proof-T2)"
+    echo "FAIL  ${base} (--bits-above none): --no-proof exited ${rc2} where the proved run exited ${rc}, or wrote to stderr (M9-no-proof-T2)"
     sed 's/^/       /' "${prefix}.noproof.err" | head -5
     fail=$((fail+1)); continue
   fi
   if ! cmp -s "${prefix}.out" "${prefix}.noproof.out"; then
-    echo "FAIL  ${base} (--bits-above 0): --no-proof stdout DIFFERS from the proved run (M9-no-proof-T2)"
+    echo "FAIL  ${base} (--bits-above none): --no-proof stdout DIFFERS from the proved run (M9-no-proof-T2)"
     diff -u "${prefix}.out" "${prefix}.noproof.out" | sed 's/^/       /' | head -20
     echo "       D-0126: a finding about the PROVED run. Record it; do not change the no-proof side."
     fail=$((fail+1)); continue
   fi
-  echo "PASS  ${base} (--bits-above 0)"
-  bits_pass=$((bits_pass+1))
+  order_pass=$((order_pass+1))
 done
-if [ "${bits_pass}" -eq 0 ]; then
-  echo "FAIL  the --bits-above 0 identity lane ran on NO model: test/models/bits_*.fzn is empty."
+if [ "${order_pass}" -eq 0 ]; then
+  echo "FAIL  the --bits-above none lane ran on NO model."
   fail=$((fail+1))
 fi
 
@@ -290,8 +297,9 @@ fi
 echo
 echo "model tests: ${pass} passed, ${fail} failed, ${xfail} expected-fail, ${xpass} unexpected-pass, ${skip} skipped"
 echo "  every PASS is a proof veripb accepted AND a --no-proof run whose stdout and exit code"
-echo "  are byte-identical to it (M9-no-proof-T2, D-0126); ${bits_pass} bits_* model(s) passed"
-echo "  the same identity at --bits-above 0, proof verified; ${restart_pass} restart_* model(s)"
+echo "  are byte-identical to it (M9-no-proof-T2, D-0126); ${order_pass} model(s) passed"
+echo "  again on the order encoding (--bits-above none, D-0201): proof verified, same verdict,"
+echo "  same identity; ${restart_pass} restart_* model(s)"
 echo "  passed again with restarts, phase saving and the alternating order (M10, D-0137)."
 
 if [ "${xfail}" -gt 0 ]; then

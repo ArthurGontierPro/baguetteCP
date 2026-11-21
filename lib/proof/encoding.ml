@@ -782,11 +782,12 @@ let limit_of_string ~what s =
         | _ -> raise (Bad_limit (what, s)))
 
 (* M8-bits-encoding-T2 (D-0130 section 10): `--bits-above W`, `BAGUETTE_BITS_ABOVE`.
-   [None] (the default) is the order encoding everywhere -- today's solver, byte for
-   byte. [Some k] puts every ELIGIBLE variable of width > k on bits; width 0 and 1 stay
-   order by rule ([wants_bits]), so `0` and `1` are the same set. Eligibility by scope is
-   [Compile]'s and is checked there; this ref answers the width half only. *)
-let bits_above : int option ref = ref None
+   [Some k] puts every ELIGIBLE variable of width > k on bits; width 0 and 1 stay order
+   by rule ([wants_bits]), so `0` and `1` are the same set. [Some 0] is the DEFAULT since
+   D-0199/D-0201 (every eligible variable on bits). [None] (`--bits-above none`) is the
+   order encoding everywhere, the solver before D-0201 byte for byte. Eligibility by
+   scope is [Compile]'s and is checked there; this ref answers the width half only. *)
+let bits_above : int option ref = ref (Some 0)
 
 let bits_above_string () =
   match !bits_above with None -> "none" | Some n -> string_of_int n

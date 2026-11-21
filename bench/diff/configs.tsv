@@ -39,3 +39,5 @@ activity	-	--search activity --restarts luby:1 --reuse-trail	yes
 alternate	-	--search alternate --restarts lbd:3:1.5 --phase-saving	yes
 # --- M11-complexity-T17 (D-0173): learned clauses REST while satisfied, a flag (off), added 2026-11-20 ---
 rest	BAGUETTE_REST_SATISFIED=on	-	yes
+# --- D-0201 (D-0199 applied): the ORDER encoding, the default before D-0201, added 2026-11-21 ---
+order	-	--bits-above none	yes

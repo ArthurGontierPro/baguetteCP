@@ -20,12 +20,12 @@ out ----------
 out objective = 3;
 out X_INTRODUCED_0_ = array1d(1..300, [1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0, 1, 1, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 1, 1, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 1, 1, 1, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 1, 1, 0, 0, 0, 1, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0]);
 out ----------
-search ladder/cls 27 cls
-search opb/lines 15960 lines
+search ladder/cls 0 cls
+search opb/lines 15935 lines
 search direct/vals 0 vals
 search widest/wide 28 wide
-search bits/vars 0 vars
-search bitsrows/lines 0 lines
+search bits/vars 1 vars
+search bitsrows/lines 2 lines
 search choices/groups 0 groups
 search limit.nodes 4001
 search limit.decisions 2301
@@ -49,7 +49,7 @@ search learned/cls 1699 cls
 work later/asks 232828 asks
 work cites/memos 32725 memos
 search convertible/cls 355 cls
-search retention lbd(cap=500) lbd(cap=500): 2303 added, 1803 evicted, 500 swept, 0 live, 572 duplicate, 0 cited, 0 pinned
+search retention lbd(cap=500) lbd(cap=500): 2303 added, 1803 evicted, 500 swept, 0 live, 570 duplicate, 0 cited, 0 pinned
 search lbd 1:7,5:9,6:50,7:20,8:40,9:29,10:55,11:57,12:102,13:126,14:141,15:148,16:915
 search width 1:7,16:1692
 search globals/units 7 units
@@ -70,8 +70,8 @@ search pb-fallback/confl 1095 confl
 search pb-why first fallback reason: no PB row for instance <unknown>
 work pb-whys/recd 64 recd 36 x
 search pb-steps/pivots 604 pivots
-search pb-convert/rows 604 rows
-search pb-stronger/rows 604 rows
+search pb-convert/rows 0 rows
+search pb-stronger/rows 0 rows
 search pb-nondeg/rows 604 rows
 search pb-lifted/rows 0 rows
 search pb-rungs/rungs 0 rungs
@@ -81,8 +81,8 @@ search lvl-narrow/confl 604 confl
 search lvl-wide/confl 0 confl
 search lvl-incomp/confl 0 confl
 search lvl-empty/confl 0 confl
-search lvl-assert/confl 0 confl
-search lvl-why first disagreement: closure {62,61,60,59,58,57,56,55,54,53,52,51,50,49,48,47,46,45,44,43,42,41,40,39,38,37,36,35,34,33,32,31,30,29,28,27,26,25,24,23,22,21,20,19,18,17,16,15,14,13,12,11,10,9,8,7,6,5,4,3,2,1} vs pb {62,58,57,56,46,14} (pb asserts at 14)
+search lvl-assert/confl 604 confl
+search lvl-why first disagreement: closure {62,61,60,59,58,57,56,55,54,53,52,51,50,49,48,47,46,45,44,43,42,41,40,39,38,37,36,35,34,33,32,31,30,29,28,27,26,25,24,23,22,21,20,19,18,17,16,15,14,13,12,11,10,9,8,7,6,5,4,3,2,1} vs pb {62,58,57,56,46,14} (pb asserts at 0)
 work int_times/inst 9450 inst 145.7 runs/node 32.25 eff/node
 work int_lin_le_reif/inst 1044 inst 30.2 runs/node 10.47 eff/node
 work bool_clause/inst 1490 inst 29.8 runs/node 4.19 eff/node
@@ -99,14 +99,15 @@ work vetoed/wakes 54534 wakes
 work advised/wakes 0 wakes
 work seeded/runs 234854 runs
 work skipped/slots 53863175 slots
-search rup/lines 225123 lines
-search pol/lines 604 lines
-search pol-tokens/tokens 1812 tokens
-search pol-widest/tokens 3 tokens
-search atoms/atoms 0 atoms
-search atomlinks/lines 0 lines
-search bridges/pairs 0 pairs
-search boundlines/pairs 0 pairs
-search bitsprune/lines 0 lines
-opb 934ac5cf4caac1cf25fb652af59f204da2ceb63138ccba94d281e46fd477f1a2
-pbp f420a5cb78a7cbe9990eb5e4805e538065faa1977c9fae8eab48a26ee3d22177
+search rup/lines 221087 lines
+search pol/lines 8135 lines
+search pol-tokens/tokens 481216 tokens
+search pol-widest/tokens 64 tokens
+search atoms/atoms 8 atoms
+search atomlinks/lines 12 lines
+search bridges/pairs 818 pairs
+search boundlines/pairs 1317 pairs
+search bitsprune/lines 7488 lines
+search atoms/prune/atoms 0.001 atoms
+opb ba2f35372413b36e9df63faa4d7ecb6953ee1bf768fec95d3d8b3f2b8617405c
+pbp 6c1c2d8975ddeb38987b3592ca3f5486aa55f9fcc600b4f947649205ce5b53ca

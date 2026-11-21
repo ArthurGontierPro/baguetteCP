@@ -11,12 +11,12 @@ out ----------
 out objective = 8;
 out X_INTRODUCED_0_ = array1d(1..143, [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1, 2, 3, 3, 3, 3, 3, 3, 3, 3, 3, 1, 2, 3, 4, 4, 4, 4, 4, 4, 4, 4, 1, 2, 3, 4, 5, 5, 5, 5, 5, 5, 5, 1, 2, 3, 4, 5, 6, 6, 6, 6, 6, 6, 1, 2, 3, 4, 5, 6, 7, 7, 7, 7, 7, 1, 2, 3, 4, 5, 6, 7, 8, 8, 8, 8, 1, 2, 3, 4, 6, 7, 8, 5, 6, 7, 8, 1, 2, 3, 4, 6, 7, 8, 6, 7, 8, 5, 1, 2, 3, 4, 6, 7, 8, 7, 8, 5, 6, 1, 2, 3, 4, 6, 7, 8, 8, 5, 6, 7, 1, 2, 3, 5, 6, 8, 6, 4, 5, 7, 8]);
 out ----------
-search ladder/cls 1296 cls
-search opb/lines 21452 lines
+search ladder/cls 0 cls
+search opb/lines 20444 lines
 search direct/vals 0 vals
 search widest/wide 10 wide
-search bits/vars 0 vars
-search bitsrows/lines 0 lines
+search bits/vars 144 vars
+search bitsrows/lines 288 lines
 search choices/groups 0 groups
 search limit.nodes 5001
 search limit.decisions 2628

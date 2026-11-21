@@ -34,12 +34,12 @@ out X_INTRODUCED_16_ = array1d(1..49, [3, 5, 5, 5, 5, 5, 5, 5, 3, 5, 5, 5, 5, 5,
 out cnt = array1d(1..5, [12, 0, 2, 0, 35]);
 out X_INTRODUCED_71_ = array1d(1..49, [2, 5, 5, 5, 5, 5, 5, 5, 2, 5, 5, 5, 5, 5, 5, 5, 4, 5, 4, 5, 4, 5, 5, 5, 4, 5, 4, 5, 5, 5, 4, 5, 4, 5, 4, 5, 5, 5, 4, 5, 4, 5, 5, 5, 4, 5, 4, 5, 5]);
 out ----------
-search ladder/cls 558 cls
-search opb/lines 6868 lines
+search ladder/cls 510 cls
+search opb/lines 6822 lines
 search direct/vals 0 vals
 search widest/wide 49 wide
-search bits/vars 0 vars
-search bitsrows/lines 0 lines
+search bits/vars 1 vars
+search bitsrows/lines 2 lines
 search choices/groups 0 groups
 search limit.nodes 1501
 search limit.decisions 758

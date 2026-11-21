@@ -43,13 +43,13 @@ out objective = 664;
 out s = array1d(1..21, [0, 0, 0, 1, 2, 0, 6, 3, 0, 7, 4, 7, 8, 8, 5, 8, 9, 1, 1, 9, 10]);
 out k = array1d(1..21, [0, 0, 1, 1, 0, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 1, 1]);
 out ----------
-search ladder/cls 61958 cls
-search opb/lines 69021 lines
+search ladder/cls 1216 cls
+search opb/lines 7017 lines
 search direct/vals 0 vals
 search widest/wide 4290 wide
-search bits/vars 0 vars
-search bitsrows/lines 0 lines
-search choices/groups 0 groups
+search bits/vars 63 vars
+search bitsrows/lines 126 lines
+search choices/groups 3 groups
 search limit.nodes 2001
 search limit.decisions 1048
 search limit.conflicts 952
@@ -125,14 +125,15 @@ work vetoed/wakes 67907 wakes
 work advised/wakes 339707 wakes
 work seeded/runs 170443 runs
 work skipped/slots 4578095 slots
-search rup/lines 91335 lines
-search pol/lines 256294 lines
-search pol-tokens/tokens 10714168 tokens
-search pol-widest/tokens 131 tokens
-search atoms/atoms 0 atoms
-search atomlinks/lines 0 lines
-search bridges/pairs 0 pairs
-search boundlines/pairs 0 pairs
-search bitsprune/lines 0 lines
-opb 5476c93aeb50b94eea4f3846c0ac08b058228fe421888bd7774742d3d435708f
-pbp db1b8ce4d3a4e0cf09f4d597abb3b86f732d8e8583425a033276e8509677d717
+search rup/lines 21925 lines
+search pol/lines 329437 lines
+search pol-tokens/tokens 11395774 tokens
+search pol-widest/tokens 142 tokens
+search atoms/atoms 1560 atoms
+search atomlinks/lines 2817 lines
+search bridges/pairs 617 pairs
+search boundlines/pairs 52 pairs
+search bitsprune/lines 70315 lines
+search atoms/prune/atoms 0.022 atoms
+opb 3ab0b932f670f5b7911dee5d7693a0af31da318222511786fb747864059e0841
+pbp c9d9c4eb58a25aa07aac0636b40b077b376ac015f786a0e4813d8ac31f1f3730

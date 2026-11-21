@@ -25894,3 +25894,101 @@ with 8 to 17 on `w0`'s side (`steelmillslab` shows that the band under 64 is not
 uniformly order's). It also keeps two representations in the default path, against the simplicity
 asked for. The next lever is `nfc` itself: why bits runs it at a fifth of the nodes per second with
 4.5 times the memory (D-0175 §4) is a task, and a per-family cause there may be a bug in the bits path.
+
+## D-0201  [AUTONOME] D-0199 applied: the default is `--bits-above 0`. Every eligible integer variable is on the bits encoding, and `--bits-above none` gives back the order encoding everywhere, byte for byte
+
+**Status**: **APPLIED**, recorded 2026-11-21 (agent-bitsdefault, `wave56-bitsdefault`, from main `8edef3b`),
+in autonomous mode. It applies D-0199's recommendation (option `W = 0`, D-0175's option (a)). The default
+change is one commit, so that reverting it reverts nothing else.
+
+### 1. The commits
+
+| commit | what |
+|---|---|
+| A `18d4841` | `Encoding.bits_above` from `None` to `Some 0`, the usage text of `--bits-above`, SPEC §4.2 and PROOF-FORMAT §3's statement of the default. Nothing else. `README.md` states no default and is unchanged |
+| B `5f0dc7a` | the eight unit suites written against the order encoding pin it, and so do `check_unlimited.sh` and the model lane's second pass (§2) |
+| C `d53ce76` | the differential lane re-recorded, plus a new `order` configuration (`--bits-above none`) (§3) |
+| D `29d2c08` | the scaling baseline ratcheted (§4) |
+| E `3e1d67e` | the e2e lane's controls pin `--bits-above none` (§5) |
+
+All five were measured on one binary, `83b863f87d3d66f1c22d3e3d5155635b` (B to E do not touch `lib/` or `bin/`).
+
+### 2. `make check` at the new default, and what the tests needed
+
+The first `make check` after A had 63 failing checks. 62 of them were in eight unit suites
+(`test_flatzinc`, `test_ladder`, `test_compile`, `test_prop`, `test_learn`, `test_endtoend`, `test_trace`,
+`test_mutation`), and one was the self-test of `check_unlimited.sh`. Each one names something only the
+order encoding has. Examples are the `x_ge_v` rungs of a hand-written `rup` line (I-X10's accept-side
+control, `trace_settle_*`), the ladder rows a PB row is lifted onto (`test_ladder` b/d), the consistency
+clause that comes first in `bool2int`'s rows, an order-width cap that a bits variable does not reach
+(`--max-order-width`, `test_flatzinc`'s width cap), and the conflict counts of `test_learn`'s scenes. In
+each of them the break lane's target exists only on the ladder. Each suite now sets
+`Encoding.bits_above := None` before any test runs, `check_unlimited.sh` exports `BAGUETTE_BITS_ABOVE=none`,
+and no assertion changed. A bits test still sets its own `W` and restores the pin.
+
+**Model tests**: 207 of 207 print the same stdout and exit code at `W = 0` as at `W = none`, so
+`test/expected/` is unchanged and no solution needed an independent check. The proofs differ (§6).
+`run_model_tests.sh`'s second pass ran the `bits_*` models at `--bits-above 0`, which is now the main
+pass. It now runs every model at `--bits-above none` instead. The proof is verified, the verdict is the
+default run's, and the `--no-proof` identity is checked (207 of 207). Without this pass the order
+encoding would have left the model lane, against D-0199's "order kept in the tests".
+
+`make check` rc 0 after B.
+
+### 3. The differential lane (fresh clone, `BAGUETTE_MEM_CAP_KB=33554432`, every proof verified by `--update`)
+
+| pass | recorded | moved | unchanged |
+|---|---|---|---|
+| plain | 347 | 252 | 4 all-Boolean codes instances (`H_qr48`, `H_qr72`, both budgets) in each of the 12 moving configurations, and `bits0`'s 24 |
+| debug | 333 | 240 | the same codes instances, and `bits0`'s 23 |
+
+Every configuration without an explicit `--bits-above` moved on the 23 instances that have an eligible
+integer variable. `bits0` did not move, and the new `default` equals it byte for byte on its 24
+instances. The new `order` configuration's 23 plain and 22 debug references equal the previous
+`default` references byte for byte. So the lane itself shows that `--bits-above none` is the solver
+before D-0201.
+
+### 4. Scaling
+
+`make scaling` ok on all five lines, and every line's growth fell, so `--update` rewrote all five (no
+`--raise`). parity-learning has 49 of its variables on bits, and its growth went from 5 022 510 to 1 965 712
+instructions per node without proof and from 5 022 825 to 1 923 406 with it. QR72 (search unchanged) and
+rcpsp_11 (1 variable on bits, the others in a cumulative scope) moved by -1.5 % and -1.1 % of late.
+
+### 5. The e2e lane (`make e2e`, §9 of `scripts/README.md`)
+
+The chain passes at the new default: 197 of 207 VERIFIED (105 SAT, 83 UNSAT, 9 OPT), 10 SKIPPED, 0 FAIL,
+on both paths. These are the order arm's counts. 8 of 41 bridged controls and 4 of 42 solver controls
+missed their mark. They corrupt order atom definitions ("no atom definition to mutate"), reified ladder
+rows, and a model row that a bits proof does not lean on (an `opb-stronger` that still verifies, or a
+refusal at the `sol` line instead of at the target). The controls now run at `--bits-above none`, and
+the `bits-*` ones still run at 0 (`chain.sh`). Result: 41 of 41, 42 of 42, validation 196 AGREE, 1 UNCHECKED (`rup_level0_nogood_sat`, as before), 0 DIFFER, `e2e_lane: PASS`.
+
+### 6. The gate (fresh clone of `29d2c08`, against gate 89's binary `34db2c68`)
+
+| step | result |
+|---|---|
+| `make check` | rc 0, 4 633 `ok` lines, model tests 207 passed (and 207 again at `--bits-above none`), peak RSS 155 MB |
+| artefacts at the default, new `83b863f8` against `34db2c68` | stdout and exit code equal on all 207. `.opb` and `.pbp` differ on 113 models (226 files), the models with an eligible integer variable. All 113 new `.pbp` VERIFY |
+| artefacts at `--bits-above none` against `34db2c68`'s default | **0 differences** on 207 models (stdout, exit code, `.opb`, `.pbp`) |
+| `make diff --tier all -j 12` | 347 of 347 equal the new reference, under the default 4 GB cap per run |
+| `make diff --debug --tier all -j 12` | 333 of 333 equal |
+| `make scaling -j 12` | ok, every line within its threshold |
+| stray | 834 `.opb`/`.pbp` files, all under `test/out/`. That is the model lane's two passes over 207 models plus the 3 restart models, against gate 89's 468 (which had the 24-model bits pass) |
+
+The script is `/scratch/arthur/wave56-bitsdefault-runs/gate.sh`, and its outputs are next to it (`gate.status`, `gate.*.log`).
+
+### 7. How to revert
+
+- One run: `--bits-above none` (or `BAGUETTE_BITS_ABOVE=none`). §3 and §6 show that this is the solver before D-0201, byte for byte.
+- The default: `git revert` A, C and D together. A alone would leave C's references and D's baseline
+  recorded at `W = 0`, so the lane would fail and parity-learning's growth would be OVER. B and E are
+  correct at either default, because they pin the order encoding where a test needs it. They can stay,
+  or be reverted too (`git revert 3e1d67e 29d2c08 d53ce76 5f0dc7a 18d4841`).
+
+### 8. What it leaves
+
+D-0199 §5's open lever is `nfc`: it is OPT under the order encoding and TIMEOUT under bits, at a fifth
+of the nodes per second with 4.5 times the memory. `--bits-above none` gives it back per run. The eight pinned
+unit suites keep testing what they tested before, which is the order encoding plus their explicit
+bits tests. The model lane, the differential lane and the e2e chain test both encodings.

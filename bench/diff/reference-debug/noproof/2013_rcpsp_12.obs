@@ -5,12 +5,12 @@ out ----------
 out objective = 40;
 out s = array1d(1..19, [0, 4, 4, 6, 4, 6, 7, 10, 13, 26, 7, 11, 22, 23, 29, 35, 19, 16, 21]);
 out ----------
-search ladder/cls 1320 cls
-search opb/lines 2020 lines
+search ladder/cls 1254 cls
+search opb/lines 1956 lines
 search direct/vals 0 vals
 search widest/wide 67 wide
-search bits/vars 0 vars
-search bitsrows/lines 0 lines
+search bits/vars 1 vars
+search bitsrows/lines 2 lines
 search choices/groups 0 groups
 search limit.nodes 1501
 search limit.decisions 775

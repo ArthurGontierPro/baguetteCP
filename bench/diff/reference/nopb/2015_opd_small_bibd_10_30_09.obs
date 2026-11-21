@@ -20,12 +20,12 @@ out ----------
 out objective = 3;
 out X_INTRODUCED_0_ = array1d(1..300, [1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0, 1, 1, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 1, 1, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 1, 1, 1, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 1, 1, 0, 0, 0, 1, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0]);
 out ----------
-search ladder/cls 27 cls
-search opb/lines 15960 lines
+search ladder/cls 0 cls
+search opb/lines 15935 lines
 search direct/vals 0 vals
 search widest/wide 28 wide
-search bits/vars 0 vars
-search bitsrows/lines 0 lines
+search bits/vars 1 vars
+search bitsrows/lines 2 lines
 search choices/groups 0 groups
 search limit.nodes 4001
 search limit.decisions 2336
@@ -97,13 +97,15 @@ work vetoed/wakes 53625 wakes
 work advised/wakes 0 wakes
 work seeded/runs 283863 runs
 work skipped/slots 56580871 slots
-search rup/lines 230753 lines
-search pol/lines 0 lines
-search pol-tokens/tokens 0 tokens
-search atoms/atoms 0 atoms
-search atomlinks/lines 0 lines
-search bridges/pairs 0 pairs
-search boundlines/pairs 0 pairs
-search bitsprune/lines 0 lines
-opb 934ac5cf4caac1cf25fb652af59f204da2ceb63138ccba94d281e46fd477f1a2
-pbp c4fe077c57aaa3f21673997dae7a9c42d5e7a5a4fbf9eb913c8be840aa3ef578
+search rup/lines 226991 lines
+search pol/lines 7241 lines
+search pol-tokens/tokens 462308 tokens
+search pol-widest/tokens 64 tokens
+search atoms/atoms 8 atoms
+search atomlinks/lines 12 lines
+search bridges/pairs 824 pairs
+search boundlines/pairs 1318 pairs
+search bitsprune/lines 7222 lines
+search atoms/prune/atoms 0.001 atoms
+opb ba2f35372413b36e9df63faa4d7ecb6953ee1bf768fec95d3d8b3f2b8617405c
+pbp fd0c3675469f2cb7bbc90e297602df9e8cc09ef575bbcfc8da4c03e9cd0868a4

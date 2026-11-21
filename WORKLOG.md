@@ -20,7 +20,6 @@ of it to every session and stopping at a broken line before it even reached the 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
 | M10-search-strategy-T5, M9-no-proof-T3, M7-T30 (one Challenge series on current main: default, `-f`, default `--no-proof`) | run dirs `/scratch/arthur/m10t5/`, `tools/compare/` (additions), `bench/challenge/README.md` (the run's row); reserved record D-0185 | agent-m10t5 (`wave55-m10t5`) | 2026-11-20 |
-| D-0199 applied: the default becomes `--bits-above 0` (its own commit, reversible) | `lib/proof/encoding.ml` (the `bits_above` default only), `bin/main.ml` (usage text), `docs/SPEC.md` §3 (the default's sentence), `README.md`, `bench/diff/reference*` and `configs.tsv` (re-record), `bench/scaling/baseline.tsv`, `test/expected/` (only with each changed solution validated independently); reserved record D-0201 | agent-bitsdefault (`wave56-bitsdefault`) | 2026-11-21 |
 
 ## Cross-session requests
 
@@ -457,6 +456,7 @@ section 1. Shares are inclusive, of the whole run.
 
 | Task | Session | Date | Summary |
 |---|---|---|---|
+| D-0199 applied: the default becomes `--bits-above 0` | agent-bitsdefault (`wave56-bitsdefault`) | 2026-11-21 | **D-0201.** Commit A `18d4841` is the default alone (`Encoding.bits_above` = `Some 0`, usage text, SPEC §4.2, PROOF-FORMAT §3). B `5f0dc7a` makes eight unit suites, `check_unlimited.sh` and the model lane's second pass pin `--bits-above none` (207/207 stdout unchanged, so `test/expected/` is untouched). C `d53ce76` re-records the lane (252 + 240 moved, `bits0` unchanged), and the new `order` configuration equals the old `default` byte for byte. D `29d2c08` is the scaling ratchet (every growth fell). E `3e1d67e` pins the e2e controls to order. Gated on a fresh clone. |
 | M16-file-review-T5 (the front end and setup) | agent-review5, resumed by agent-review5b (`wave55-review5`) | 2026-11-21 | **D-0193.** The five front-end files read and tabled, the setup measured before node 1 on 150 large Challenge instances with and without the proof. Seven byte-identical levers: under `--no-proof` the objective's `.opb` line is not built (79 of the 150 setups -51 to -100 %, the largest peak RSS 32.7 GB to 364 MB), the lexer's class table and in-window integers, a token's start as two ints, the builder's and the name check's tables over `String`, `normalise_terms` without a table for short rows, `split_gcc_repeats`' count. Setup median -84.3 % without the proof, -2.1 % where the objective does not dominate, -0.0 % with the proof; 207 models x 5 artefacts equal. Left: `Encoding`'s name lookups and `Engine.create`, two requests |
 | M16-file-review-T4 (the proof side) | agent-review4, resumed by agent-review4b (`wave55-review4`) | 2026-11-21 | **D-0192.** The seven proof-side modules read and tabled, profiled on the lane with the proof and on the codes. Six byte-identical levers in `justify.ml` (`combine_origin`'s table, the claim key over interned names and its hash), `explanation.ml` (a node's hash computed once) and `writer.ml`/`encoding.ml` (solution lines); release lane median -6.3 % per node with the proof, 0.0 % without; rcpsp_11 -20 %, cyclic-rcpsp -12.5 %, openshop -20 %, codes -8.6 and -11.1 %. Gate on `cc52a57` green against gate 82's binary. Left: alldiff's derivation per pruning (52 % of cyclic-rcpsp, a request), solution lines as a list, soccer's long keys |
 | M16-file-review-T3 (learning) and T2's leftover `member.ml` | agent-review3 (`wave55-review3`) | 2026-11-20 | **D-0191.** The ten learning modules and `member.ml` read and tabled, profiled on the lane, in its learning configurations (lbd, activity, restarts, bits0, nopb) and on the codes (QR48 f2/f3, the ENC=2 form). Nine byte-identical levers in `retention.ml`, `analysis.ml`, `learn.ml` and `pb_analysis.ml`; release lane median -2.8 % without the proof, -1.5 % with it, -15.6 % under `lbd:500`, fox-geese -30 %. `member.ml` at most 0.32 % of five Challenge instances, unchanged. Gate on `eed8d5e` (`c740d4a8`) against gate 80: `make check` 4 457 ok, 207 x 4 artefacts equal, lane 324/324, debug 311/311, scaling ok and re-baselined (`16366a4`) |
@@ -647,6 +647,10 @@ section 1. Shares are inclusive, of the whole run.
 
 ## Handoff notes
 
+### 2026-11-21 (agent-bitsdefault, `wave56-bitsdefault`): D-0199 applied, D-0201
+
+The default is `--bits-above 0` (commit A `18d4841`, alone), and `--bits-above none` gives back the solver before D-0201 byte for byte. The lane's new `order` configuration and the gate's 207 models both show it. Tests that name order-encoding rows now pin `none` (B, E). The model lane runs every model at both encodings. The lane and the scaling baseline are re-recorded (C, D). To revert the default, `git revert` A, C and D together (D-0201 §7). Open lever: `nfc`, which is OPT under order and TIMEOUT under bits (D-0199 §5).
+
 ### FOR THE USER'S RETURN: the autonomous run of 2026-11-20 evening to 2026-11-21 (orchestrator)
 
 **Merged and gated** (gates 77 to 89 green; every default `--proof` artefact byte-identical except D-0172's 12
@@ -659,8 +663,9 @@ zephyrus, gfd-n120 verified at `--bits-above 64`); M7-T35 (member's debug-check 
 and M4-T6b (GAC arithmetic: not built, no node gain); M13-T1 (root LP: not built); M15 T1-T3; a crash
 hotfix (D-0197); a second hotfix (D-0200: the heap guard read a heap size updated only at major-cycle ends, so runs died on `allocation failure during minor GC` instead of the clean refusal; now estimated live, every 0.1 s, under `--max-heap-mb` only); M6-T2 (D-0198: no Bigarray move, the trail and domains are under 1 % of cycles; a larger minor heap and an index sort in Justify instead, -7 % instructions without proof and -12 % with, byte-identical).
 
-**Running**: M10-T5/M9-T3/M7-T30 (default, `-f`, `--no-proof`, D-0185), a Challenge series; D-0199 applied by agent-bitsdefault: the default becomes
-`--bits-above 0`, in its own commit with the lane re-record (D-0201); `--bits-above none` restores the old default.
+**Running**: M10-T5/M9-T3/M7-T30 (default, `-f`, `--no-proof`, D-0185), a Challenge series; the default is now `--bits-above 0` (D-0201, merged, gate 90 on it):
+stdout equal on all 207 models, 113 new proofs all verified, lane re-recorded (and an `order` configuration
+keeps the order encoding in the lane); `--bits-above none` gives gate 89's artefacts back exactly.
 
 **M8-T4 finished (D-0175)**: `W = 0` scores 3 441 against 2 712 for `W = none` (287 complete against 245,
 proof caps 214 -> 68), but order keeps 14 complete answers (10 `nfc`) and 10 incumbents, so the order

@@ -12,12 +12,12 @@ out objective = 31;
 out course_period = array1d(1..50, [1, 1, 1, 6, 2, 1, 1, 2, 2, 2, 2, 3, 3, 3, 4, 4, 10, 4, 6, 5, 8, 5, 7, 8, 9, 8, 6, 6, 9, 9, 7, 7, 8, 4, 9, 4, 6, 5, 7, 8, 3, 3, 5, 10, 10, 10, 7, 9, 10, 1]);
 out ----------
 out ==========
-search ladder/cls 1438 cls
-search opb/lines 6373 lines
+search ladder/cls 0 cls
+search opb/lines 5057 lines
 search direct/vals 0 vals
 search widest/wide 98 wide
-search bits/vars 0 vars
-search bitsrows/lines 0 lines
+search bits/vars 61 vars
+search bitsrows/lines 122 lines
 search choices/groups 0 groups
 search nodes/nodes 556 nodes
 search decisions/decs 521 decs
@@ -86,14 +86,15 @@ work vetoed/wakes 2130 wakes
 work advised/wakes 499 wakes
 work seeded/runs 9099 runs
 work skipped/slots 1159834 slots
-search rup/lines 13293 lines
-search pol/lines 18 lines
-search pol-tokens/tokens 1722 tokens
-search pol-widest/tokens 215 tokens
-search atoms/atoms 0 atoms
-search atomlinks/lines 0 lines
-search bridges/pairs 0 pairs
-search boundlines/pairs 0 pairs
-search bitsprune/lines 0 lines
-opb b04006bb65351b90325a86d4086ba6f56cbea19966988fff3b9d0f2253e05191
-pbp 89fa1f299c35aefb11b6ae6a3930577b6b533055d943ccb5b9a9556a6a77254f
+search rup/lines 9150 lines
+search pol/lines 8493 lines
+search pol-tokens/tokens 345867 tokens
+search pol-widest/tokens 196 tokens
+search atoms/atoms 537 atoms
+search atomlinks/lines 830 lines
+search bridges/pairs 1706 pairs
+search boundlines/pairs 758 pairs
+search bitsprune/lines 7631 lines
+search atoms/prune/atoms 0.070 atoms
+opb 9b1cacead48d373abfde2131d0428b342d3fb2f772b2f455e9491e8bffec1287
+pbp c095ebf59dafa9e2c2c832da0f41e2cd89b185859a9b2619ffa7bbe61c943e57

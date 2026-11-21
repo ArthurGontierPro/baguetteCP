@@ -101,7 +101,9 @@
 #
 # Usage: scripts/e2e_lane.sh [-j N] [--bits W] [OUTDIR]   (N <= 8; OUTDIR default /tmp/baguette-e2e-$$)
 #        --bits W (T7, D-0196): passes 1, 1b and 3 run the solver at `--bits-above W` (the
-#        controls keep their own flags, the default but for the bits-* ones)
+#        controls keep their own flags: `--bits-above none` but for the bits-* ones, which
+#        run at 0. D-0201: the controls corrupt ORDER-encoding rows and atom definitions,
+#        so since D-0199 made bits the default they pin the order encoding explicitly)
 # Env:   CAKE_PB_CP  the verified encoder/checker (default: the build of D-0174, see below);
 #                    missing is a FAILURE, never a skip
 #        BAGUETTE    the solver (default _build/default/bin/main.exe; build it first, the lane
@@ -208,7 +210,7 @@ bits_offset_sat:bits-def bits_ne_sat:bits-def bits_offset_sat:bits-opb bits_offs
 NCONTROLS=41
 OPTW="The lower bound claimed for \`conclusion BOUNDS\` is larger than the best logged objective value."
 CORE="conclusion BOUNDS check failed:"
-for c in $CONTROLS; do echo "$c"; done | E2E_FLAGS= xargs -P "$J" -I{} bash -c \
+for c in $CONTROLS; do echo "$c"; done | E2E_FLAGS="--bits-above none" xargs -P "$J" -I{} bash -c \
     'm=${0%%:*}; k=${0#*:}; f="$1/test/models/$m.fzn"; [ -f "$f" ] || f="$1/tools/e2e/models/$m.fzn"
      run "$1"/tools/e2e/chain.sh "$f" "$2" "$k"' {} "$ROOT" "$OUT/controls" \
     | sort > "$OUT/controls.txt"
@@ -262,7 +264,7 @@ regular_sat:flag-witness abs_zero_sat:guard-witness
 bits_offset_sat:bits-def bits_ne_sat:bits-def bits_offset_sat:bits-pin bits_offset_sat:bits-tight"
 NSCONTROLS=42
 mkdir -p "$OUT/scontrols"
-for c in $SCONTROLS; do echo "$c"; done | E2E_FLAGS= E2E_SOLVER=1 xargs -P "$J" -I{} bash -c \
+for c in $SCONTROLS; do echo "$c"; done | E2E_FLAGS="--bits-above none" E2E_SOLVER=1 xargs -P "$J" -I{} bash -c \
     'm=${0%%:*}; k=${0#*:}; f="$1/test/models/$m.fzn"; [ -f "$f" ] || f="$1/tools/e2e/models/$m.fzn"
      run "$1"/tools/e2e/chain.sh "$f" "$2" "$k"' {} "$ROOT" "$OUT/scontrols" \
     | sort > "$OUT/scontrols.txt"

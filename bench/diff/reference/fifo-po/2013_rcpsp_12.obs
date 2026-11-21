@@ -2,12 +2,12 @@ rc 0
 out objective = 41;
 out s = array1d(1..19, [0, 4, 4, 6, 4, 6, 7, 10, 13, 24, 7, 13, 10, 27, 30, 36, 19, 18, 21]);
 out ----------
-search ladder/cls 1320 cls
-search opb/lines 2020 lines
+search ladder/cls 1254 cls
+search opb/lines 1956 lines
 search direct/vals 0 vals
 search widest/wide 67 wide
-search bits/vars 0 vars
-search bitsrows/lines 0 lines
+search bits/vars 1 vars
+search bitsrows/lines 2 lines
 search choices/groups 0 groups
 search limit.nodes 5001
 search limit.decisions 2534
@@ -79,14 +79,15 @@ work vetoed/wakes 892 wakes
 work advised/wakes 0 wakes
 work seeded/runs 108961 runs
 work skipped/slots 1133869 slots
-search rup/lines 26265 lines
-search pol/lines 314758 lines
-search pol-tokens/tokens 2895464 tokens
+search rup/lines 25535 lines
+search pol/lines 315657 lines
+search pol-tokens/tokens 2900856 tokens
 search pol-widest/tokens 229 tokens
-search atoms/atoms 0 atoms
-search atomlinks/lines 0 lines
-search bridges/pairs 0 pairs
-search boundlines/pairs 0 pairs
-search bitsprune/lines 0 lines
-opb 034ea827d99f67ebfe7a7c0aa346167afac6361339071eebd6b9d8f29c4cd68b
-pbp c4c5077fcf12170335343c4467dbbc957d64765e1af6af9b256896ffebea615e
+search atoms/atoms 21 atoms
+search atomlinks/lines 38 lines
+search bridges/pairs 64 pairs
+search boundlines/pairs 1 pairs
+search bitsprune/lines 860 lines
+search atoms/prune/atoms 0.024 atoms
+opb c010db8e9f9775726deb4329ad066103de0eeeb43459cb997f499e6b8eff0d3c
+pbp bd6aa597e461f46ef7c2939b6cb0a56ec6697c11f55d259c065c52d918096146

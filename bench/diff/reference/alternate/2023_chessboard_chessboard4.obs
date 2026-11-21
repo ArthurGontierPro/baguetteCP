@@ -14,12 +14,12 @@ out X_INTRODUCED_16_ = array1d(1..49, [3, 5, 5, 5, 5, 5, 5, 5, 3, 5, 5, 5, 5, 5,
 out cnt = array1d(1..5, [6, 0, 3, 0, 40]);
 out X_INTRODUCED_71_ = array1d(1..49, [2, 5, 5, 5, 5, 5, 5, 5, 2, 5, 5, 5, 5, 5, 5, 5, 2, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 4, 5, 5, 5, 5, 5, 4, 5, 5, 5, 5, 5, 4, 5, 4, 5, 5, 5, 4, 5, 4, 5]);
 out ----------
-search ladder/cls 558 cls
-search opb/lines 6868 lines
+search ladder/cls 510 cls
+search opb/lines 6822 lines
 search direct/vals 0 vals
 search widest/wide 49 wide
-search bits/vars 0 vars
-search bitsrows/lines 0 lines
+search bits/vars 1 vars
+search bitsrows/lines 2 lines
 search choices/groups 0 groups
 search limit.nodes 2501
 search limit.decisions 2199
@@ -105,14 +105,15 @@ work vetoed/wakes 2597 wakes
 work advised/wakes 2241 wakes
 work seeded/runs 141432 runs
 work skipped/slots 11947748 slots
-search rup/lines 256334 lines
-search pol/lines 3264 lines
-search pol-tokens/tokens 578186 tokens
+search rup/lines 254002 lines
+search pol/lines 5825 lines
+search pol-tokens/tokens 831434 tokens
 search pol-widest/tokens 2357 tokens
-search atoms/atoms 0 atoms
-search atomlinks/lines 0 lines
-search bridges/pairs 0 pairs
-search boundlines/pairs 0 pairs
-search bitsprune/lines 0 lines
-opb 6e94b50058d5053300bd7568379132a9650f851faedfb63164e3403fa2a6be7f
-pbp 31ab7e0c3c66b85d3d026bfafdd3194e9280ef14cf8fd51e07324ebb5253e29e
+search atoms/atoms 43 atoms
+search atomlinks/lines 80 lines
+search bridges/pairs 49 pairs
+search boundlines/pairs 49 pairs
+search bitsprune/lines 2478 lines
+search atoms/prune/atoms 0.017 atoms
+opb 8b89a20d08c2b177f0f119aaf4b41450cab180d782901252654b2495a0d2a9fa
+pbp 516d77d9f43dec2916d0974fdbd812f2fdea44cb023487dc1a7197709e32fda0

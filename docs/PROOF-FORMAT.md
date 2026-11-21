@@ -370,7 +370,7 @@ see D-0031.
 
 ### Bits encoding *(normative — M8-bits-encoding-T2, D-0130 §4–§5, D-0132)*
 
-A variable declared wider than `--bits-above W` (default `none`: no variable) whose scope
+A variable declared wider than `--bits-above W` (default `0` since D-0201: every eligible variable; `none`: no variable) whose scope
 is eligible (D-0130 §3.4: no `all_different`, `global_cardinality`, `array_int_element`
 or `cumulative` row names it, and no declared holes; width 0 and 1 stay order by rule;
 M8-bits-encoding-T3, D-0134, released `array_int_maximum`/`minimum` (choice groups,
