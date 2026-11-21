@@ -2251,6 +2251,105 @@ let test_m9t5_default_keeps_proof () =
         (rc = 2 && sorted cwd_e = []);
       m9_rm_rf dir
 
+(* ------------------------------------------- D-0200: the heap budget is timely *)
+
+(* The M7-T8 budget used to be read only at the end of a major cycle, and a cycle lasts
+   longer the larger the heap is: Challenge runs at --max-heap-mb 8192 grew from 6.6 GB at
+   one cycle end to the 16 GiB address-space limit before the next, and died on "Fatal
+   error: allocation failure during minor GC" instead of the refusal. The same lag, on a
+   heap small enough for a test: a 10-into-9 pigeonhole over clauses (Boolean cells, no
+   width), whose learned clauses grow the heap, under OCAMLRUNPARAM's [o=100000], a GC
+   pacing that makes major cycles rare. [s=256k] pins the minor heap, which bin/main.ml
+   otherwise sizes from `ulimit -v`. Measured on f365c1e, before D-0200: exit 5 at 16 MB
+   past an 8 MB budget (and exit 0, budget never enforced, without [s=]). Asserted here:
+   exit 5, the refusal's wording, the heap it names at most a sixteenth past the budget
+   (D-0200 §3) plus the whole-MB rounding, and no runtime abort. *)
+let d0200_pigeons =
+  let b = Buffer.create 4096 in
+  let p = 10 and h = 9 in
+  for i = 1 to p do
+    for j = 1 to h do
+      Buffer.add_string b (Printf.sprintf "var bool: x%d_%d :: output_var;\n" i j)
+    done
+  done;
+  for i = 1 to p do
+    Buffer.add_string b
+      (Printf.sprintf "constraint bool_clause([%s],[]);\n"
+         (String.concat "," (List.init h (fun j -> Printf.sprintf "x%d_%d" i (j + 1)))))
+  done;
+  for j = 1 to h do
+    for i = 1 to p do
+      for k = i + 1 to p do
+        Buffer.add_string b
+          (Printf.sprintf "constraint bool_clause([],[x%d_%d,x%d_%d]);\n" i j k j)
+      done
+    done
+  done;
+  Buffer.add_string b "solve satisfy;\n";
+  Buffer.contents b
+
+let test_d0200_heap_budget_cli () =
+  match m9_binary () with
+  | None ->
+      incr failures;
+      print_endline
+        "FAIL D-0200: bin/main.exe was not found above the test's cwd, so the \
+         heap-budget lane was NOT run. Build bin/ first (`dune build bin/`)."
+  | Some binary ->
+      let binary =
+        if Filename.is_relative binary then Filename.concat (Sys.getcwd ()) binary
+        else binary
+      in
+      let dir = Filename.temp_file "baguette_d0200" "" in
+      Sys.remove dir;
+      Sys.mkdir dir 0o700;
+      let fzn = Filename.concat dir "pigeons.fzn" in
+      let oc = open_out fzn in
+      output_string oc d0200_pigeons;
+      close_out oc;
+      let out = Filename.concat dir "out" and err = Filename.concat dir "err" in
+      let rc =
+        Sys.command
+          (Printf.sprintf
+             "OCAMLRUNPARAM=s=256k,o=100000 timeout 300 %s --no-proof --max-heap-mb 8 %s \
+              > %s 2> %s"
+             (Filename.quote binary) (Filename.quote fzn) (Filename.quote out)
+             (Filename.quote err))
+      in
+      let o = read_file out and e = read_file err in
+      let reached =
+        let needle = "heap has reached " in
+        let nl = String.length needle in
+        let rec find i =
+          if i + nl > String.length e then -1
+          else if String.sub e i nl = needle then
+            try
+              Scanf.sscanf
+                (String.sub e (i + nl) (String.length e - i - nl))
+                "%d MB" Fun.id
+            with _ -> -1
+          else find (i + 1)
+        in
+        find 0
+      in
+      check "D-0200: a heap budget crossed during the search ends in exit 5" (rc = 5);
+      check "D-0200: with the refusal's wording"
+        (m6_says e "baguette: the heap budget is exhausted");
+      check
+        (Printf.sprintf
+           "D-0200: naming a heap within a sixteenth of the 8 MB budget (named %d MB)"
+           reached)
+        (reached >= 8 && reached <= 9);
+      (* At the start of a line: the refusal itself QUOTES the runtime's abort, in
+         backquotes, to say what a run without a budget ends in. *)
+      check "D-0200: and no runtime abort" (not (m6_says ("\n" ^ e) "\nFatal error"));
+      check "D-0200: and no answer printed" (not (m6_says o "=========="));
+      if rc <> 5 then Printf.printf "  stderr:\n%s" e;
+      List.iter
+        (fun f -> Sys.remove (Filename.concat dir f))
+        (Array.to_list (Sys.readdir dir));
+      Sys.rmdir dir
+
 let () =
   print_endline "";
   List.iter run_model models;
@@ -2265,6 +2364,7 @@ let () =
   test_m9_no_proof_cli ();
   test_m7t32_std_flags ();
   test_m9t5_default_keeps_proof ();
+  test_d0200_heap_budget_cli ();
   if !failures > 0 then (
     Printf.printf "\n%d failure(s)\n" !failures;
     exit 1)

@@ -1767,9 +1767,21 @@ let solve opts (m : Model.t) =
                            (if Float.is_nan !stop_fired_at then stop_fired_at := w;
                             true)
                    in
-                   match node_limit () with
-                   | None -> by_time
-                   | Some n -> fun () -> stats.Search.nodes > n || by_time ());
+                   let stop =
+                     match node_limit () with
+                     | None -> by_time
+                     | Some n -> fun () -> stats.Search.nodes > n || by_time ()
+                   in
+                   (* D-0200: the heap budget's poll rides this closure, which the search
+                      already asks at every node entry, every [stop_poll_runs]-th
+                      propagator run and in the trace. Wrapped only under --max-heap-mb,
+                      so a run without it executes what it did before. *)
+                   match Encoding.current_heap_limit_mb () with
+                   | None -> stop
+                   | Some _ ->
+                       fun () ->
+                         Encoding.poll_heap ();
+                         stop ());
               }
             in
             let r =
@@ -2009,6 +2021,10 @@ let () =
   match
     Timing.phase "parse" (fun () -> Fz_error.catch (fun () -> Builder.of_file opts.model))
   with
+  | exception Out_of_memory ->
+      prerr_string (Encoding.out_of_memory_message ());
+      flush stderr;
+      exit exit_resource
   | Error e ->
       prerr_endline (Fz_error.to_string e);
       exit exit_usage
@@ -2056,6 +2072,14 @@ let () =
              exit 134 it replaces. [Encoding] refuses before it allocates, so there is
              no partial encoding and no partial proof to warn about. *)
           prerr_string (Encoding.overrun_message o);
+          warn_partial_proof opts;
+          flush stderr;
+          exit exit_resource
+      | exception Out_of_memory ->
+          (* D-0200. One allocation the runtime could not map: the one failure of this
+             kind that can be caught. "Fatal error: allocation failure during minor GC"
+             cannot be, which is why the budget's poll exists. *)
+          prerr_string (Encoding.out_of_memory_message ());
           warn_partial_proof opts;
           flush stderr;
           exit exit_resource
