@@ -60,6 +60,16 @@ activity and flag rows (@K); int_abs's sign guard, a Boolean cake does not have,
 the ladder literal its int_lin_le_reif row names, and a row true in both signs is derived by
 contradiction (`pbc`, the negation plus each of the constraint's guarded rows, saturated).
 
+The bits arm (T7, D-0196). A variable baguette encodes on bits (`--bits-above`) has `x_bit_i`,
+the bits of x - l, unsigned, and no ladder. They are DEFINED from cake's two's-complement bits
+by a ripple-carry adder whose every relation is one linear row ([bits_prefix]), which gives the
+same halves @E1/@E2 of B = l + S with S = sum 2^i x_bit_i, so the substitution is unchanged;
+the two bound rows are `ia` against @BL/@BU. A guarded row whose big-M is baguette's (over the
+declared bounds) where cake's is over the bit range is derived by contradiction against the
+candidate and the bits variables' ub rows ([tight]). A choice selector `_mxN` (array_int_maximum
+over bits) is defined as its flag AND no earlier one, as `sol` sets it; an int_abs guard over a
+bits variable as cake's own atom.
+
 Pins, in this order: a ladder row is `ia` against its @L; a row a substituted cake row
 implies with the same coefficients is `ia` against it; a row a swapped, resolved or
 saturated candidate implies syntactically is `ia` against that candidate's `pol` line @W;
@@ -138,6 +148,86 @@ def row_text(terms, op, rhs):
     return " ".join(f"{'+' if c >= 0 else ''}{c} {v}" for c, v in terms) + f" {op} {rhs}"
 
 
+def bits_prefix(X, x, n, l, u, bits, emit):
+    """baguette's BITS arm (T7, D-0196): x_bit_i, i < n, are the bits of x - l, unsigned
+    (PROOF-FORMAT section 3), against cake's two's-complement bits of x. With h cake's
+    magnitude bits and s its sign (when l < 0), U = B + 2^h [s] is unsigned on m = h + [s]
+    digits u_j (b_j, and ~s at j = h), and x - l = U - L' with L' = l + 2^h [s] >= 0. The
+    digits of x - l are those of U + c, c = (2^m - L') mod 2^m, by a ripple-carry adder
+    whose every relation is one LINEAR row: per digit i, with carry k_i (k_0 = 0)
+
+        d_i + 2 k_(i+1) = u_i + c_i + k_i
+
+    k_(i+1) is a constant or u_i while k_i is a constant, else a fresh variable defined by a
+    red pair (@BK1: T - 2k >= 0 : k -> 0, @BK2: 2k - T >= -1 : k -> 1, T = u_i + c_i + k_i;
+    both goals are tautologies). d_i (x_bit_i for i < n, x_bith_i above) is defined by the
+    two halves of the relation, @BP (witness d -> 1, goal @BK2) and @BN (d -> 0, goal @BK1).
+    Summed with weights 2^i the relations telescope to S_all + 2^m k_m = U + c; the final
+    carry k_m (literal when c > 0) is a unit by rup against @BPs + cake's lb, and each digit
+    above n is zero by rup against @BNk, so the two halves of B = l + S follow by one pol
+    each. Returns (E1, E2, {x_bit_i: 2^i})."""
+    pos = sorted((c, b) for b, c in bits.items() if c > 0)
+    neg_ = [b for b, c in bits.items() if c < 0]
+    h = len(pos)
+    if [c for c, _ in pos] != [1 << j for j in range(h)] or len(neg_) > 1:
+        raise SystemExit(f"bridge: {X}'s bits are not a two's-complement bit sum")
+    digits = [b for _, b in pos] + [f"~{b}" for b in neg_]
+    m = len(digits)
+    L = l + (1 << h if neg_ else 0)
+    if not 0 <= L < (1 << m) or n > m:
+        raise SystemExit(f"bridge: {X} over [{l},{u}] does not fit its {m} digits")
+    c = ((1 << m) - L) % (1 << m)
+
+    def row(terms, d):
+        coefs, dd = var_form(terms, ">=", d)
+        return " ".join(f"{v:+d} {k}" for k, v in coefs.items()) + f" >= {dd}"
+
+    def lneg(t):
+        return [(-a, v) for a, v in t]
+
+    k = 0
+    for i in range(m):
+        ui, ci = digits[i], (c >> i) & 1
+        d = f"{x}_bit_{i}" if i < n else f"{x}_bith_{i}"
+        if isinstance(k, int):
+            sk = ci + k
+            kp = 0 if sk == 0 else ui if sk == 1 else 1
+            T, tc = [(1, ui)], sk
+        else:
+            kp = f"{x}_bitc_{i + 1}"
+            T, tc = [(1, ui), (1, k)], ci
+            emit(f"@BK1[{kp}] red {row(T + [(-2, kp)], -tc)} : {kp} -> 0 ;")
+            emit(f"@BK2[{kp}] red {row([(2, kp)] + lneg(T), tc - 1)} : {kp} -> 1 ;")
+        kt, kc = ([], 2 * kp) if isinstance(kp, int) else ([(2, kp)], 0)
+        emit(f"@BP[{d}] red {row([(1, d)] + kt + lneg(T), tc - kc)} : {d} -> 1 ;")
+        emit(f"@BN[{d}] red {row(T + lneg(kt) + [(-1, d)], kc - tc)} : {d} -> 0 ;")
+        k = kp
+    dig = [f"{x}_bit_{i}" if i < n else f"{x}_bith_{i}" for i in range(m)]
+
+    def wsum(tag):
+        return " ".join([f"@{tag}[{dig[0]}]"] + [f"@{tag}[{dig[i]}] {1 << i} * +" for i in range(1, m)])
+
+    emit(f"@BPs[{x}] pol {wsum('BP')} ;")
+    emit(f"@BNs[{x}] pol {wsum('BN')} ;")
+    lit = not isinstance(k, int)
+    if not lit and k != 0:
+        raise SystemExit(f"bridge: {X}'s final carry is the constant {k}")
+    M = 1 << m
+    if lit:
+        emit(f"@BPk[{x}] pol @BPs[{x}] @i[{X}][lb] + ;")
+        emit(f"@BK[{x}] rup +1 {k} >= 1 ;")
+    emit(f"@BNk[{x}] pol @BNs[{x}] @i[{X}][ub] +{f' @BK[{x}] {M} * +' if lit else ''} ;")
+    for j in range(n, m):
+        emit(f"@BZ[{dig[j]}] rup +1 ~{dig[j]} >= 1 ;")
+    e1 = f"@BE1[{x}] pol @BNs[{x}]" + (f" @BK[{x}] {M} * +" if lit else "")
+    e1 += "".join(f" {dig[j]} {1 << j} * +" for j in range(n, m))
+    e2 = f"@BE2[{x}] pol @BPs[{x}]" + (f" {neg(k)} {M} * +" if lit else "")
+    e2 += "".join(f" @BZ[{dig[j]}] {1 << j} * +" for j in range(n, m))
+    emit(e1 + " ;")
+    emit(e2 + " ;")
+    return f"@BE1[{x}]", f"@BE2[{x}]", {f"{x}_bit_{i}": 1 << i for i in range(n)}
+
+
 def main(cake_opb, names_file, bag_opb, bag_pbp):
     cake = [r for r in (parse_row(l) for l in open(cake_opb)) if r]
     bag_lines = open(bag_opb).read().splitlines()
@@ -161,12 +251,30 @@ def main(cake_opb, names_file, bag_opb, bag_pbp):
             info[m.group(2)] = rhs
             info["bits"] = {v: c for c, v in terms}
     atoms = set()
+    # T7 (D-0196): which of baguette's variables are on its BITS arm (`--bits-above`): their
+    # `x_bit_i` are in baguette's .opb, and no ladder is
+    bag_names = {v.lstrip("~") for _, terms, _, _ in bag for _, v in terms}
+    bitvars = set()
+    bound_pins = []   # (label, coefs, d): baguette's two bound rows of a bits variable
     for X, info in ivars.items():
         fz = fzn_of.get(X)
         if fz is None:
             raise SystemExit(f"bridge: cake variable {X} is not in the names table")
         x = sanit.get(fz, fz)
         l, u, bits = info["lb"], info["ub"], info["bits"]
+        n = 0
+        while f"{x}_bit_{n}" in bag_names:
+            n += 1
+        if n:
+            e1, e2, W = bits_prefix(X, x, n, l, u, bits, emit)
+            bitvars.update(W)
+            info.update(l=l, S=[], W=W, e1=e1, e2=e2, x=x, n=n)
+            # baguette's bound rows, S >= 0 and -S >= -(u - l): E2 + cake's lb, E1 + cake's ub
+            emit(f"@BL[{x}] pol {e2} @i[{X}][lb] + ;")
+            emit(f"@BU[{x}] pol {e1} @i[{X}][ub] + ;")
+            bound_pins.append((f"@BL[{x}]", dict(W), 0))
+            bound_pins.append((f"@BU[{x}]", {b: -w for b, w in W.items()}, l - u))
+            continue
         bmin = sum(c for c in bits.values() if c < 0)
         bmax = sum(c for c in bits.values() if c > 0)
         S = [f"{x}_ge_{vn(v)}" for v in range(l + 1, u + 1)]
@@ -211,7 +319,7 @@ def main(cake_opb, names_file, bag_opb, bag_pbp):
         if S:
             emit(f"del id @T2[{S[0]}] ;")
         e2 = prev
-        info.update(l=l, S=S, e1=e1, e2=e2, x=x)
+        info.update(l=l, S=S, W={a: 1 for a in S}, e1=e1, e2=e2, x=x, n=0)
         for v in range(l + 1, u):
             hi, lo = f"{x}_ge_{vn(v + 1)}", f"{x}_ge_{vn(v)}"
             emit(f"@L[{hi}] pol @A1[{hi}] @A2[{lo}] + s {(bmax - bmin) + 2} d ;")
@@ -253,8 +361,8 @@ def main(cake_opb, names_file, bag_opb, bag_pbp):
             rpn += [info["e2"] if k > 0 else info["e1"], str(abs(k)), "*", "+"]
             for b in info["bits"]:
                 new.pop(b)
-            for s in info["S"]:
-                new[s] = new.get(s, 0) + k
+            for s, w in info["W"].items():
+                new[s] = new.get(s, 0) + k * w
             d -= k * info["l"]
         emit(f"@S[{label}] pol {' '.join(rpn)} ;")
         subst.append((f"@S[{label}]", {k: v for k, v in new.items() if v}, d))
@@ -283,9 +391,9 @@ def main(cake_opb, names_file, bag_opb, bag_pbp):
     # is saturated first.
     ATOM = re.compile(r"(i|n)\[(.+)\]\[(ge|eq)(-?\d+)\]")
     ABS = re.compile(r"@S\[c\[.+\]\[(posge|posle|negle|negge)\]\]")
-    sel_names = {san for orig, san in sanit.items() if orig.startswith("$ne")}
+    sel_names = {san for orig, san in sanit.items() if orig.startswith(("$ne", "$mx"))}
     sel_vars = {f"{s}_ge_1" for s in sel_names}
-    bagvars = set(atoms) | sel_vars
+    bagvars = set(atoms) | sel_vars | bitvars
 
     # COPIES (T5, D-0180). baguette's front end copies a variable that occurs twice in a
     # global_cardinality into a fresh integer tied by int_eq (SPEC 2.1), so its .opb has a
@@ -347,8 +455,8 @@ def main(cake_opb, names_file, bag_opb, bag_pbp):
             K = int(X)
             return "T" if (K >= v if op == "ge" else K == v) else "F"
         info = ivars.get(X)
-        if info is None:
-            return None
+        if info is None or info["n"]:
+            return None   # a bits variable's atoms are not in the prefix (T7)
         l, u, x = info["l"], info["ub"], info["x"]
         if op == "ge":
             return "T" if v <= l else "F" if v > u else f"{x}_ge_{vn(v)}"
@@ -394,6 +502,8 @@ def main(cake_opb, names_file, bag_opb, bag_pbp):
         [x = v], but the order encoding's indicator x_ge_v - x_ge_(v+1) is (T5, D-0180)."""
         m = ATOM.fullmatch(var)
         if not m or m.group(1) != "i" or m.group(3) != "eq" or m.group(2) not in ivars:
+            return None
+        if ivars[m.group(2)]["n"]:
             return None
         info, v = ivars[m.group(2)], int(m.group(4))
         return (info["x"], v) if info["l"] < v < info["ub"] else None
@@ -458,11 +568,37 @@ def main(cake_opb, names_file, bag_opb, bag_pbp):
             if by_flag.get(G) == s_:
                 del by_flag[G]
 
+    # T7 (D-0196): array_int_maximum/minimum over a bits variable is baguette's CHOICE GROUP,
+    # selectors `_mxN` (PROOF-FORMAT section 3), whose `sol` sets the FIRST operand attaining
+    # m and no other; cake's array_max flag i is x_i >= m both ways (`[f]` and `[r]`), so at a
+    # tie two flags hold. A selector is then defined as its flag AND no earlier one:
+    #   @C1[s]  red (i+1) ~s + F_i + sum_{j<i} ~F_j >= i+1 : s -> 0
+    #   @C2[s]  red s + ~F_i + sum_{j<i} F_j >= 1         : s -> 1
+    # and @D1[s] = ~s + F_i (C1 weakened) still swaps ~F_i for ~s; the at-least-one over the
+    # selectors closes by rup through @C2 and cake's al1. The binary max/min's flags have
+    # no `[f]` (one direction only), and stay renamings.
+    al1_flags = {}
+    for label, terms, op, rhs in cake:
+        mm = re.fullmatch(r"c\[(.+)\]\[al1\]", label or "")
+        if mm and all(re.fullmatch(r"x\[" + re.escape(mm.group(1)) + r"\]\[\d+\]", v) for _, v in terms):
+            al1_flags[mm.group(1)] = [v for _, v in terms]
+    mx_vars = {f"{san}_ge_1" for orig, san in sanit.items() if orig.startswith("$mx")}
+    conj = {}   # selector -> (F_i, the earlier flags)
+
+    def conj_of(s_, F):
+        mm = re.fullmatch(r"x\[(.+)\]\[\d+\]", F)
+        if s_ not in mx_vars or not mm or F not in al1_flags.get(mm.group(1), ()):
+            return None
+        fl = al1_flags[mm.group(1)]
+        return (F, fl[: fl.index(F)]) if fl.index(F) else None
+
     def flag_swap(L):
         s_ = by_flag.get(L)
         if s_ is None:
             return None
         F = defined[s_]
+        if L == F and s_ in conj:
+            return None
         if L == F:   # F -> s: add (~F + s), @D2
             return f"@D2[{s_}]", clause(neg(F), s_)
         return f"@D1[{s_}]", clause(F, neg(s_))   # ~F -> ~s: add (F + ~s), @D1
@@ -478,6 +614,7 @@ def main(cake_opb, names_file, bag_opb, bag_pbp):
     # says which literal it is: x_ge_(l+k) (resp. ~x_ge_(u-k+1)). g is DEFINED as that literal
     # by a red pair (g fresh, so the pair is a renaming), and its two rows then close by rup.
     # Only a variable cake does not know and that no other mechanism defined is read so.
+    cake_labels = {label for label, _, _, _ in cake}
     ladder_of = {}
     for X, info in ivars.items():
         if info["S"]:
@@ -490,6 +627,20 @@ def main(cake_opb, names_file, bag_opb, bag_pbp):
             continue
         g = unk[0]
         rest = {v: c for v, c in coefs.items() if v != g}
+        # T7 (D-0196): over a BITS variable, g is cake's own atom at that threshold (x's
+        # order atoms are not in the prefix), swapped in for it as a selector
+        bx = next((X for X, info in ivars.items() if info["n"] and
+                   set(rest) == {f"{info['x']}_bit_{i}" for i in range(info["n"])}), None)
+        if bx is not None:
+            info = ivars[bx]
+            c = rest[f"{info['x']}_bit_0"]
+            if c in (1, -1) and all(rest[f"{info['x']}_bit_{i}"] == c << i for i in range(info["n"])):
+                k = d - coefs[g]
+                v = info["l"] + k if c == 1 else info["l"] - k + 1
+                if f"i[{bx}][ge{v}][f]" in cake_labels:
+                    guards[g] = f"i[{bx}][ge{v}]" if c == 1 else f"~i[{bx}][ge{v}]"
+                    define(g, guards[g])
+            continue
         info = ladder_of.get(frozenset(rest))
         if info is None or len(set(rest.values())) != 1:
             continue
@@ -520,8 +671,9 @@ def main(cake_opb, names_file, bag_opb, bag_pbp):
     # candidates: (rpn, row after the atoms are replaced, deps)
     cands = []
     for lab, c, d in subst:
-        if re.fullmatch(r"@S\[[in]\[.+\]\[(ge|eq)-?\d+\]\[[fr]\]\]|@[in]\[.+\]\[(ge|eq)-?\d+\]\[[fr]\]", lab):
-            continue   # an atom's own definition
+        am = re.fullmatch(r"@S\[[in]\[(.+)\]\[(ge|eq)-?\d+\]\[[fr]\]\]|@[in]\[(.+)\]\[(ge|eq)-?\d+\]\[[fr]\]", lab)
+        if am and not ivars.get(am.group(1) or am.group(3), {}).get("n"):
+            continue   # an atom's own definition (a bits variable's is a guard's candidate, T7)
         if all(v in bagvars for v in c):
             continue   # already over baguette's literals: the exact `hit` above covers it
         cands.append(replaced([lab], (c, d), [], atom_swap))
@@ -665,6 +817,60 @@ def main(cake_opb, names_file, bag_opb, bag_pbp):
     def implies(rl, rd, bl, bd):
         return rd - sum(max(0, a - bl.get(l, 0)) for l, a in rl.items()) >= bd
 
+    ub_of = {}   # a bits variable's x_bit_0 -> (its @BU label, n, l - u)
+    for X, info in ivars.items():
+        if info["n"]:
+            ub_of[f"{info['x']}_bit_0"] = (f"@BU[{info['x']}]", info["n"], info["l"] - info["ub"])
+
+    def lsum(rows):
+        acc, dd = {}, 0
+        for k, (lits, d) in rows:
+            cf, d2 = var_form(list((a, l) for l, a in lits.items()), ">=", d)
+            for v, a in cf.items():
+                acc[v] = acc.get(v, 0) + k * a
+            dd += k * d2
+        return lit_form({v: a for v, a in acc.items() if a}, dd)
+
+    def tight(rl, rd, blits, bd):
+        """T7 (D-0196): a candidate whose big-M on a guard is cake's, over the BIT range of a
+        bits variable, where baguette's row has its own, over the declared bounds. No
+        weakening reaches it: the guard false makes the row a bound of the bits, true only
+        under baguette's ub row. By contradiction: the negation plus the candidate, saturated,
+        forces the guard; the negation plus each negated bits variable's ub row (@BU) then
+        has no room for it, and unit propagation closes. The rpn of that second sum, or None."""
+        if not any(var_of(l) in bitvars for l in blits):
+            return None
+        sa = sum(blits.values())
+        nt = ({neg(l): a for l, a in blits.items()}, sa - bd + 1)
+        r1l, r1d = lsum([(1, nt), (1, (rl, rd))])
+        if r1d < 1:
+            return None
+        r1l = {l: min(a, r1d) for l, a in r1l.items()}
+        rows, rpn = [(1, nt)], []
+        for b0, (lab, n, dlu) in ub_of.items():
+            if f"~{b0}" not in blits:
+                continue
+            a = blits[f"~{b0}"]
+            x = b0[: -len("_bit_0")]
+            if any(blits.get(f"~{x}_bit_{i}") != a << i for i in range(n)):
+                return None
+            rows.append((a, ({f"{x}_bit_{i}": -(1 << i) for i in range(n)}, dlu)))
+            rpn += [lab] + ([str(a), "*"] if a > 1 else []) + (["+"] if rpn else [])
+        if not rpn:
+            return None
+        r2l, r2d = lsum([(k, (lits, d)) for k, (lits, d) in rows])
+        # unit propagation closes when what one sum forces leaves the other no room
+        def forced(ls, d):
+            tot = sum(ls.values())
+            return {l for l, a in ls.items() if tot - a < d}
+
+        def room(ls, f):
+            return sum(a for l, a in ls.items() if neg(l) not in f)
+
+        if room(r2l, forced(r1l, r1d)) < r2d or room(r1l, forced(r2l, r2d)) < r1d:
+            return rpn
+        return None
+
     def saturate(rpn, rl, rd):
         """cake's big-M is over the bit range (0..7 for 0..4), baguette's over the declared
         bounds; once the bits are the ladder, saturation brings the first down to the second."""
@@ -724,7 +930,11 @@ def main(cake_opb, names_file, bag_opb, bag_pbp):
     def swapped(i):
         """Candidate i with the defined selectors swapped in, in literal form, or None when
         an atom has no baguette literal: cached while no flag of i changes its selector."""
-        sig = tuple(by_flag.get(L) for L in flags_of[i])
+        # the selector AND the flag it is defined as: a selector tried as F, then as ~F
+        # (T7, D-0196: both orientations of int_lin_ne's flag over a bits sum) has the same
+        # name in by_flag both times, and a cache keyed on the name alone served the first
+        sig = tuple((by_flag.get(L), defined.get(by_flag.get(L)), by_flag.get(L) in conj)
+                    for L in flags_of[i])
         got = swap_cache.get(i)
         if got and got[0] == sig:
             return got[1]
@@ -780,12 +990,16 @@ def main(cake_opb, names_file, bag_opb, bag_pbp):
             if not unk and not undef:
                 rpn3, rl3 = saturate(rpn2, rl, rd)
                 if implies(rl3, rd, blits, bd):
-                    yield rpn3, deps, None
+                    yield rpn3, deps, None, None
+                    continue
+                tw = tight(rl3, rd, blits, bd)
+                if tw:
+                    yield rpn3, deps, None, tw
                     continue
                 for resolve in (False, True):
                     got = tighten(rpn2, rl, rd, blits, resolve)
                     if got and implies(got[1], got[2], blits, bd):
-                        yield got[0], deps + got[3], None
+                        yield got[0], deps + got[3], None, None
                         break
                 continue
             if len(unk) == 1 and len(undef) == 1:
@@ -798,7 +1012,11 @@ def main(cake_opb, names_file, bag_opb, bag_pbp):
                 cite = f"@D2[{s_}]" if sl == s_ else f"@D1[{s_}]"
                 rpn3, trial = saturate(rpn2 + [cite, str(c), "*", "+"], trial, rd)
                 if implies(trial, rd, blits, bd):
-                    yield rpn3, deps, (s_, F)
+                    yield rpn3, deps, (s_, F), None
+                else:
+                    tw = tight(trial, rd, blits, bd)
+                    if tw:
+                        yield rpn3, deps, (s_, F), tw
 
     def const_pin(bl, bd):
         """A row a selector defined as a CONSTANT implies by itself: c * lit with lit the
@@ -850,17 +1068,30 @@ def main(cake_opb, names_file, bag_opb, bag_pbp):
         tries += ["F", "T"]
         for F in tries:
             define(s_, F)
-            if all(const_pin(*lit_form(c, d)) or find(c, d) for c, d in rows):
+            cj = conj_of(s_, F) if F not in ("F", "T") else None
+            if cj:
+                conj[s_] = cj
+
+            def sel_clause(c, d):
+                return cj and d == 1 and all(v in mx_vars and a == 1 for v, a in c.items())
+
+            if all(const_pin(*lit_form(c, d)) or sel_clause(c, d) or find(c, d) for c, d in rows):
                 if F in ("F", "T"):
                     emit(f"@D0[{s_}] red +1 {'~' if F == 'F' else ''}{s_} >= 1 : {s_} -> {0 if F == 'F' else 1} ;")
+                elif cj:
+                    k = len(cj[1])
+                    emit(f"@C1[{s_}] red +{k + 1} ~{s_} +1 {F} {' '.join('+1 ~' + g for g in cj[1])} >= {k + 1} : {s_} -> 0 ;")
+                    emit(f"@C2[{s_}] red +1 {s_} +1 ~{F} {' '.join('+1 ' + g for g in cj[1])} >= 1 : {s_} -> 1 ;")
+                    emit(f"@D1[{s_}] pol @C1[{s_}] {' '.join(g + ' w' for g in cj[1])} s ;")
                 else:
                     emit(f"@D1[{s_}] red +1 ~{s_} +1 {F} >= 1 : {s_} -> {F} ;")
                     emit(f"@D2[{s_}] red +1 {s_} +1 {neg(F)} >= 1 : {s_} -> {F} ;")
                 break
+            conj.pop(s_, None)
             undefine(s_)
 
     by_coefs = {}   # a substituted row's coefficients -> (label, degree), for the exact pin
-    for lab, c2, d2 in subst:
+    for lab, c2, d2 in subst + bound_pins:
         by_coefs.setdefault(frozenset(c2.items()), []).append((lab, d2))
 
     pins = []
@@ -889,7 +1120,7 @@ def main(cake_opb, names_file, bag_opb, bag_pbp):
         if not found and cands and not (bd == 1 and all(a == 1 for a in bl.values())):
             found = match(bl, bd, coefs, loose=True)
         if found:
-            rpn, deps, new = found
+            rpn, deps, new, tw = found
             if new:
                 s_, F = new
                 define(s_, F)
@@ -897,6 +1128,11 @@ def main(cake_opb, names_file, bag_opb, bag_pbp):
                 emit(f"@D2[{s_}] red +1 {s_} +1 {neg(F)} >= 1 : {s_} -> {F} ;")
             for dep in deps:
                 ensure(dep)
+            if tw:
+                # T7 (D-0196): the big-M over the bits' declared bounds, by contradiction
+                pins.append(f"@{label} pbc {line} : subproof\n    pol -1 {' '.join(rpn)} + s ;\n"
+                            f"    pol -2 {' '.join(tw)} + ;\n    rup >= 1 ;\nqed ;")
+                continue
             if len(rpn) == 1:
                 pins.append(f"@{label} ia {line} : {rpn[0]} ;")
             else:
@@ -986,7 +1222,7 @@ def objective(cake_opb, bag_lines, ivars, owner):
     if len(ks) != 1 or len(ct) != sum(1 for b in ct if ct[b] % info["bits"][b] == 0):
         raise SystemExit("bridge: cake's objective is not a multiple of one bit sum")
     k = ks.pop()
-    want = {s: k for s in info["S"]}
+    want = {s: k * w for s, w in info["W"].items()}
     if bt != want or bc != k * info["l"]:
         raise SystemExit(f"bridge: baguette's objective is not {k} * {info['x']}")
     return (info["e1"], k) if k > 0 else (info["e2"], -k)

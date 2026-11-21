@@ -114,7 +114,9 @@ timeout "$TO" "$CK" "$o.scp" > "$o.cake.opb" 2> "$o.cake.err"
 SOLVER=${E2E_SOLVER:-}
 EF=()
 [ -n "$SOLVER" ] && EF=(--e2e)
-(ulimit -v 4000000; timeout "$TO" "$B" "$FZN" --proof "$o.bag" "${EF[@]}" > "$o.bag.out" 2> "$o.bag.err")
+# E2E_FLAGS (T7, D-0196): more solver flags, `--bits-above W` for the bits arm
+read -r -a XF <<< "${E2E_FLAGS:-}"
+(ulimit -v 4000000; timeout "$TO" "$B" "$FZN" --proof "$o.bag" "${EF[@]}" "${XF[@]}" > "$o.bag.out" 2> "$o.bag.err")
 rc=$?
 if [ -n "$SOLVER" ] && [ $rc -eq 3 ] && grep -q '^baguette: --e2e: ' "$o.bag.err"; then
     say "SKIPPED e2e: $(sed -n 's/^baguette: --e2e: \(.*\) (D-0187).*/\1/p' "$o.bag.err" | head -1)"
