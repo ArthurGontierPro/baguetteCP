@@ -3463,6 +3463,14 @@ let test_m7t8_resource_guard () =
         "D-0200 (b): and is not refused, because the forced collection finds the heap \
          under it"
         (Encoding.heap_overrun budget = None);
+      (* The top-level Out_of_memory arm's wording (bin/main.ml, exit 5): it names the
+         exception, so a harness can tell it from the budget, and the budget in force. *)
+      Encoding.heap_limit_mb := Some 4242;
+      let oom = Encoding.out_of_memory_message () in
+      check "D-0200: the Out_of_memory refusal names the exception"
+        (m7_contains oom ~needle:"an allocation failed (Out_of_memory)");
+      check "D-0200: and the budget it ran out under"
+        (m7_contains oom ~needle:"the 4242 MB asked for with --max-heap-mb");
 
       (* ---- the exit status is a bucket of its own ----
 

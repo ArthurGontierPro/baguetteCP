@@ -1304,25 +1304,28 @@ let poll_heap () =
    the heap can see coming. Same exit as the budget, because it is the same bucket -- the
    machine ran out, the model is not wrong and neither is the solver. *)
 let out_of_memory_message () =
-  let w = heap_words () in
-  Printf.sprintf
-    "baguette: out of memory: an allocation failed (Out_of_memory), and the run is \
-     stopping here (M7-T8, D-0200).\n\
-    \  The OCaml heap was %d MB at the last major cycle%s. The address space (ulimit -v) \
-     or the\n\
-    \  machine ran out before %s.\n"
-    (mb_of_words w)
-    (match !live with
+  let encoding =
+    match !live with
     | None -> ""
-    | Some t ->
-        Printf.sprintf ", and the encoding is %d clauses and values" (encoding_size t))
-    (match !heap_limit_mb with
-    | None -> "any budget could stop the run: --max-heap-mb=N sets one"
+    | Some t -> Printf.sprintf ", the encoding %d clauses and values" (encoding_size t)
+  in
+  let budget =
+    match !heap_limit_mb with
+    | None ->
+        "  No budget was set. --max-heap-mb=N sets one, and stops a run at it before this.\n"
     | Some l ->
         Printf.sprintf
-          "the %d MB asked for with --max-heap-mb was reached: lower it, or raise the \
-           limit"
-          l)
+          "  The address space ran out before the %d MB asked for with --max-heap-mb was\n\
+          \  reached: lower it, or raise `ulimit -v`.\n"
+          l
+  in
+  Printf.sprintf
+    "baguette: out of memory: an allocation failed (Out_of_memory), and the run is \
+     stopping\n\
+    \  here (M7-T8, D-0200). The OCaml heap was %d MB at the last major cycle%s.\n\
+     %s"
+    (mb_of_words (heap_words ()))
+    encoding budget
 
 (* M7-T8's two join the other three, through the SAME entry point rather than a second
    one bin/main.ml would have to remember to call. A budget nobody reads is a budget
