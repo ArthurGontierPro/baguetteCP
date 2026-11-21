@@ -1916,6 +1916,72 @@ let refuse_enumeration opts (m : Model.t) =
 
 (* --------------------------------------------------------------------- main *)
 
+(* M6-T2 (D-0198). The minor heap is up to 4 M words (32 MB), not OCaml 5.1's 256 k words
+   (2 MB). The solver allocates 14 to 23 words per thousand instructions everywhere, mostly data
+   that dies within a branch or a conflict: trail entries of a level that is undone, an
+   analysis's terms, a proof line's literals. In a 2 MB nursery much of it is promoted before
+   it dies and the major collector pays for it again. At 4 M words promotion falls 2 to 9
+   times, and the instructions by a median 7 % without the proof and 12 % with it (D-0198 §2
+   and §4 have the tables).
+
+   THE ADDRESS SPACE. OCaml 5.1 reserves the minor heaps of all [max_domains] = 128 possible
+   domains in one mapping, so a 4 M-word nursery reserves 4 GiB of address space it never
+   touches. Under [ulimit -v 4000000], which every suite and lane here runs under, the
+   runtime then aborts at startup ("Not enough heap memory to reserve minor heaps"); the
+   gate found it. So the size is cut until the reservation is at most an EIGHTH of the soft
+   address-space limit read from /proc/self/limits: about 490 k words under a 4 GB cap, the
+   full 4 M under the 32 GB cap of the corpus scripts or with no limit, and never below the
+   runtime's default. No /proc (not Linux) reads as no limit. A quarter was tried first and
+   lost the lane's lot-sizing [activity] run, whose major heap alone is 3.2 GB of its 4 GB
+   cap, to an Out_of_memory (D-0198 §2).
+
+   It changes WHEN memory is reclaimed, never a value: nothing in [lib/] reads an address, so
+   stdout, proofs and --stats are the same bytes. It costs up to 32 MB resident per process.
+   An explicit [s=] in OCAMLRUNPARAM or CAMLRUNPARAM wins, so [OCAMLRUNPARAM=s=256k] gives
+   back the old behaviour without a rebuild. The test binaries do not link this file and keep
+   the default. *)
+let minor_heap_words_max = 4 * 1024 * 1024
+let max_domains = 128
+
+let runparam_sets_minor_heap () =
+  let sets v =
+    List.exists
+      (fun kv -> String.length kv >= 2 && kv.[0] = 's' && kv.[1] = '=')
+      (String.split_on_char ',' v)
+  in
+  match Sys.getenv_opt "OCAMLRUNPARAM" with
+  | Some v -> sets v
+  | None -> ( match Sys.getenv_opt "CAMLRUNPARAM" with Some v -> sets v | None -> false)
+
+(* The soft "Max address space" of /proc/self/limits in bytes, or [None] for "unlimited" or
+   when the file cannot be read. *)
+let address_space_limit () =
+  match open_in "/proc/self/limits" with
+  | exception Sys_error _ -> None
+  | ic ->
+      let rec scan () =
+        match input_line ic with
+        | exception End_of_file -> None
+        | l when String.starts_with ~prefix:"Max address space" l -> (
+            match List.filter (( <> ) "") (String.split_on_char ' ' l) with
+            | _ :: _ :: _ :: soft :: _ -> int_of_string_opt soft
+            | _ -> None)
+        | _ -> scan ()
+      in
+      Fun.protect ~finally:(fun () -> close_in_noerr ic) scan
+
+let minor_heap_words () =
+  let default = (Gc.get ()).Gc.minor_heap_size in
+  match address_space_limit () with
+  | None -> minor_heap_words_max
+  | Some bytes ->
+      let fits = bytes / 8 / (max_domains * (Sys.word_size / 8)) in
+      Stdlib.max default (Stdlib.min minor_heap_words_max fits)
+
+let () =
+  if not (runparam_sets_minor_heap ()) then
+    Gc.set { (Gc.get ()) with Gc.minor_heap_size = minor_heap_words () }
+
 let () =
   (* One [Sys.time] read, unconditionally, because --time has not been parsed yet and
      [startup] has to be sampled before anything else happens. It costs one syscall

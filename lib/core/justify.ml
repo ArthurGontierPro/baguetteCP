@@ -508,7 +508,14 @@ let pack_word ctx (l : Lit.t) =
 
 (* M16-file-review-T4 (D-0192): the pairs sorted by their two integers, in place, and
    whether two of them are equal. Insertion for a short clause (the trace's lines are),
-   [Array.stable_sort] over the pairs beyond [insertion_max]. *)
+   [Array.stable_sort] beyond [insertion_max].
+
+   M6-T2 (D-0198 §3): the long case sorts an [int array] of pair INDICES and writes the
+   pairs back from a copy. It used to sort an array of tuples, and past 256 pairs
+   [Array.make] with a young tuple as its initial value runs a minor collection first, once
+   for the array and once for the merge's scratch: 1 300 of soccer's 1 635 collections, 10 %
+   of its cycles with the proof. An int array holds no pointer, so nothing forces one. The
+   bytes are the same, because two pairs that compare equal are equal pairs. *)
 let insertion_max = 24
 
 let sort_pairs (a : int array) =
@@ -526,16 +533,19 @@ let sort_pairs (a : int array) =
       a.((2 * (!j + 1)) + 1) <- v
     done
   else
-    let p = Array.init n (fun i -> (a.(2 * i), a.((2 * i) + 1))) in
+    let idx = Array.init n Fun.id in
     Array.stable_sort
-      (fun ((w1 : int), (v1 : int)) (w2, v2) ->
-        if w1 <> w2 then Int.compare w1 w2 else Int.compare v1 v2)
-      p;
+      (fun i j ->
+        let w1 = a.(2 * i) and w2 = a.(2 * j) in
+        if w1 <> w2 then Int.compare w1 w2
+        else Int.compare a.((2 * i) + 1) a.((2 * j) + 1))
+      idx;
+    let src = Array.copy a in
     Array.iteri
-      (fun i (w, v) ->
-        a.(2 * i) <- w;
-        a.((2 * i) + 1) <- v)
-      p
+      (fun k i ->
+        a.(2 * k) <- src.(2 * i);
+        a.((2 * k) + 1) <- src.((2 * i) + 1))
+      idx
 
 let has_repeat (a : int array) =
   let n = Array.length a / 2 in

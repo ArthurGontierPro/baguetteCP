@@ -25313,3 +25313,152 @@ of the same tip: rc 0, 207 models, peak RSS 108 MB.
 go to the bits arm by default (section 4, the user's). On fast-food and gfd-n120 cake_pb_cp reaches
 its 24 GB heap; `--e2e`'s writer is the slow stage there. int_times and int_div stay outside
 (D-0195 2.4). Results in `/cluster/arthur/baguette-results/wave56-e2e7/`.
+## D-0198  [AUTONOME] M6-T2 re-scoped: the trail and the domains are 0.5 to 4.5 % of the words allocated, so no `Bigarray`/`Bytes` move. The lever was the minor heap's size, 256 k words by default, and one sort that forced a minor collection per call
+
+Agent-gc, branch `wave56-gc`, 2026-11-21. ROADMAP M6-T2 asked to find the allocating site with a
+profiler before spending the `Bigarray`/`Bytes` change. This record is written before the code it
+decides (CLAUDE.md, "Mode autonome"), and §4 adds the measurements after it.
+
+### 1. What the run allocates and what the GC costs, at `0518dc2`
+
+Release binary `9956c047`, on the 21 fast instances of `bench/diff/corpus.tsv` at their lane budget
+and on the codes instances `f3` and `f2` (D-0169's, run to the end), with and without `--proof`.
+`OCAMLRUNPARAM=v=0x400` for the totals, `perf record --call-graph fp` on the same source built in the
+`baguette-fp` switch for the shares. Scripts and outputs in `/scratch/arthur/wave56-gc-runs/`.
+
+- **The allocation rate is the same everywhere**: 14 to 23 words per thousand instructions on all
+  46 runs. What varies is the share of it that survives a minor collection: 3 to 13 % on most
+  runs, 19 to 25 % on lot-sizing and fox-geese.
+- **The GC's share of the cycles**: median 13.3 % without the proof (5.3 % on f2, 42.5 % on
+  fox-geese) and 16.6 % with it (9.2 % on f2, 40.3 % on fox-geese). About 60 % of that is the
+  minor collector and 35 % the major one. The runtime allocation functions (`caml_make_vect` and
+  the like) take 0.2 to 1.5 %.
+- **No site dominates.** A GC sample charged to the first non-`Stdlib` OCaml frame above the
+  runtime (the site whose allocation crossed the minor-heap limit, or that called the runtime to
+  allocate) gives, averaged over the 23 instances, at most 0.72 % of the cycles to one site without
+  the proof (`Engine.watchers_of_new_entries`) and 0.65 % with it (`Trace.emit_to_page_inner`).
+  The large single sites are on one instance each. `Pb_analysis.lits_array` and `Learned.make`
+  take 10.7 % and 8.3 % on fox-geese, already D-0191's subject. `Gcc` takes 6.8 % on lot-sizing.
+  `Justify.sort_pairs` takes 10 % on soccer with the proof, see §3.
+- **The trail and the domains are not among them.** `Store.apply` is 0.19 % on average (at most
+  0.71 %). A probe build that counted the `Changed` arm of `Store.apply` puts the trail's
+  allocation, about 20 words a push (the 14-word entry, the 4-word `Domain.t`, the `Changed`
+  box), at 4.4 % of the words on f3, 3.3 % on chessboard, 3.2 % on QR48 and 0.5 % on fox-geese.
+  Moving the trail and the domains into `Bigarray`/`Bytes` would remove at most that share of the
+  allocation. The entry would still point at its `Reason.t`, which is boxed. At a GC share of
+  15 %, that is under 1 % of the cycles for a rewrite of `Store`'s central structure. M6-T2's
+  premise does not hold, and the row is closed without that change.
+  `Store.first_mark_above` allocates a closure per call (0.21 % on average, 1.2 % on fox-geese).
+  That is too small to act on here.
+
+### 2. The minor heap: 256 k words by default, 4 M words from here on
+
+OCaml 5.1's minor heap is 256 k words (2 MB). With `OCAMLRUNPARAM=s=...` on the base binary, two
+runs each on eight of the instances above (cycles, at load ~50 on a 192-core node, noise about 5 %):
+
+| instance | 256 k | 2 M | 4 M | 8 M |
+|---|---|---|---|---|
+| f3 `--proof` | 34.6 / 31.1 G | 28.9 / 27.7 | 25.5 / 26.8 | 26.8 / 27.6 |
+| f3 no proof | 16.7 / 17.1 | 16.1 / 16.5 | 16.1 / 16.7 | 15.7 / 15.9 |
+| lot-sizing no proof | 10.7 / 10.6 | 8.9 / 8.7 | 8.1 / 8.1 | 7.8 / 7.8 |
+| rcpsp_12 `--proof` | 7.0 / 7.3 | 6.3 / 6.6 | 6.0 / 6.2 | 5.8 / 5.8 |
+| chessboard `--proof` | 9.8 / 8.8 | 8.1 / 8.0 | 7.9 / 8.4 | 8.1 / 7.6 |
+| fox-geese no proof | 5.5 / 5.6 | 5.2 / 5.0 | 5.2 / 5.0 | 5.0 / 5.0 |
+| QR48 no proof | 3.3 / 3.5 | 3.2 / 3.4 | 3.3 / 3.1 | 3.3 / 3.1 |
+| soccer `--proof` | 3.9 / 3.9 | 4.3 / 4.1 | 3.8 / 4.0 | 3.9 / 4.2 |
+
+A larger nursery lets more of the short-lived data (trail entries of a branch that is undone, a
+conflict's analysis, a proof line's terms) die young instead of being promoted. Promoted words fall
+by 2 to 9 times (f3 with the proof 106 M to 18 M at 4 M words), and the major collector follows.
+Soccer does not move: its minor collections are forced, see §3.
+
+| option | consequence |
+|---|---|
+| keep 256 k | nothing changes; 10 to 25 % of the cycles stay on the table on most proof runs |
+| `OCAMLRUNPARAM=s=4M` in the scripts | the lanes and Challenge scripts gain, a user running `main.exe` by hand does not, and every script must carry it |
+| **`Gc.set` at the top of `bin/main.ml`, 4 M words, unless `OCAMLRUNPARAM`/`CAMLRUNPARAM` sets `s`** | every run gains; an explicit `s=` still wins; +32 MB resident per process (the nursery is touched in full after the first cycle); and, found by the gate below, 4 GiB of reserved address space |
+| the same at 8 M words | a little more gain on lot-sizing and rcpsp, inside the noise elsewhere, +64 MB per process |
+
+**Choice: 4 M words in `bin/main.ml`, cut under a tight address-space limit (below).** It is the knee of the table. 32 MB is the size of one
+EPYC L3 slice, and the extra memory is small beside a 92-run campaign's budget or the laptop's 15 GB.
+The setting changes only when memory is reclaimed, never a value the solver computes. Nothing in
+`lib/` depends on addresses (the one ephemeron, `Search.staged_orders`, is keyed by a live object),
+so stdout, proofs and `--stats` must stay byte-identical, and the gate checks that. The test
+binaries do not link `bin/main.ml`, so the suites keep the default nursery. The model tests run
+`main.exe` and get the new one.
+
+**Corrected by the gate: the address space.** The first gate failed at `make check`'s
+determinism self-test with `Fatal error: Not enough heap memory to reserve minor heaps`. OCaml 5.1
+reserves the minor heaps of all 128 possible domains in one mapping, so a 4 M-word nursery reserves
+4 GiB of address space that is never touched, and every suite and lane here runs under
+`ulimit -v 4000000`. So the size now depends on the soft address-space limit read from
+`/proc/self/limits`: the largest size up to 4 M words whose reservation is at most an eighth of that
+limit, and never below the runtime's 256 k. That is about 490 k words under the lanes' 4 GB cap, the
+full 4 M under the corpus scripts' 32 GB cap, under `systemd-run -p MemoryMax` (a cgroup, not an
+address-space limit) or with no limit. No `/proc` reads as no limit. Across the lane, against
+`0518dc2`, in instructions (median over the 23 instances, the `sort_pairs` change included):
+
+| nursery | no proof | `--proof` |
+|---|---|---|
+| 512 k (about the lanes' 490 k, under 4 GB) | -3.4 % | -4.1 % |
+| 1 M | -5.1 % | -7.7 % |
+| 2 M | -6.3 % | -9.8 % |
+| 4 M (no limit, 32 GB) | -7.1 % | -11.7 % |
+
+A fixed 1 M words would have been simpler and safe everywhere, but it gives up a third of the gain
+on exactly the runs that matter (the Challenge and codes runs, which have no tight limit). The
+eighth is the second try. A quarter (1 M words under 4 GB) passed `make check`, the 207 artefacts,
+the debug lane and the scaling lane, and lost one lane run: lot-sizing under `activity`, whose major
+heap alone peaks at 405 M words (3.2 GB) of its 4 GB cap, ended in `Out_of_memory`. At 488 k words
+the same run passes, its peak RSS 3 189 MB against 3 269 MB at 256 k, because the larger nursery
+promotes less. That run sits at the edge of its cap with any binary, and the eighth keeps the margin
+it had. It leaves 28 GB of the corpus scripts' 32 GB, where `--max-heap-mb=auto` already stops the
+solver at half.
+
+**To revert**: the commits `M6-T2: the minor heap at 4 M words` and `M6-T2: the nursery keeps its
+reservation within a quarter...` and the one that made it an eighth touch only `bin/main.ml`'s startup. Revert both, or run with
+`OCAMLRUNPARAM=s=256k` to get the old behaviour from the new binary.
+
+### 3. `Justify.sort_pairs` forced one minor collection per long claim key
+
+`sort_pairs` sorted a claim key of more than 24 pairs by building an array of tuples with
+`Array.init` and handing it to `Array.stable_sort`. Past 256 elements, `Array.make` with a young
+initial value (the first tuple) runs a minor collection before it allocates, and the merge sort's
+scratch array does the same. On soccer with the proof that is 1 300 of its 1 635 minor collections,
+6.5 % of its cycles in the collections alone and 10 % with the sort. D-0191's L4 fixed the same
+pattern in `Pb_analysis.lits_array`.
+
+The fix sorts an `int array` of pair indices with the same comparison and then writes the pairs
+back from a copy. No tuple is allocated and no array holds a pointer, so nothing forces a
+collection. The result is the same bytes: two pairs that compare equal are equal pairs, so the
+order among them cannot show. The change is in `justify.ml` only.
+
+### 4. Measured after, and the gate
+
+Release binary at `5bbe225` (4 M words, since no limit applies under `systemd-run -p MemoryMax`)
+against `0518dc2`'s `9956c047`, on the same 46 runs as §1:
+
+- **Byte-identical**: stdout, the `.pbp`/`.opb` md5 and every `--stats` line other than the times,
+  on all 46 runs.
+- **Instructions** (deterministic): median -7.1 % without the proof and -11.7 % with it. Every run
+  gains. The smallest gains are rcpsp_12 without the proof (-3.5 %) and perfect_square with it
+  (-6.2 %). The largest is lot-sizing without the proof (-27.4 %), and soccer with the proof gains
+  -17.5 %, `sort_pairs` included.
+- **Cycles** (load 45 to 60, so noisy): median -7.0 % and -11.4 % in one campaign, -5.2 % and -7.3 %
+  in a second one with a gate running beside it. f2, the longest run, gains -18 to -25 %.
+- **The GC's share of the cycles** (perf): median 13.3 % to 8.7 % without the proof, 16.6 % to
+  8.8 % with it. Promoted words fall 1.4 to 5.9 times. fox-geese stays at 35 %, which is the
+  long PB rows of D-0191 and not the nursery.
+- **Peak RSS**: +8 to +20 MB on the small runs (QR48 38 to 58 MB, rcpsp_12 with the proof 49 to
+  68 MB). f3 with the proof goes from 174 to 132 MB, because less is promoted.
+- **Under the lanes' 4 GB cap** the nursery is about 490 k words, worth -3.4 % and -4.1 % in
+  instructions (§2's table).
+
+Left as they are: allocation stays diffuse, and no other site reaches 1 % of the cycles on average.
+`Store.first_mark_above`'s closure is about 0.2 %. The long-row allocation in `Pb_analysis` and
+`Learned` on fox-geese belongs to D-0191's line.
+
+**Gate** (fresh clone of `wave56-gc` at `8cf4345`, binary `16f96560`, against gate 86's `ba895ce2`):
+`make check` rc 0 (207 models passed), 207 x 4 artefacts equal, lane 324/324, debug lane 311/311,
+scaling ok. The first gate, at a quarter of the limit, had the same results except lane 323/324
+(§2).
