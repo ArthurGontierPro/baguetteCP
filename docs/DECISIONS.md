@@ -24592,10 +24592,10 @@ How each family's rows are pinned (solver-written, the nine test models):
 | cumulative, disjunctive | 3 | 17 capacity rows | each `ia` against ONE `pol` of `cap_t`, the covering tasks' `cge` and `actc`, and 138 flag clauses `@K` (each one `pol` of a flag's `[f]` row and `@A1`/`@A2`); no `rup` |
 | int_abs | 2 | 21 (abs's four, the hull, the guard's two, the models' other rows) | the guard `@D1`/`@D2` as `x_ge_0`; 5 `ia`, 1 `rup`, 15 by contradiction (`pbc`: the negation plus each of the four candidates, saturated, then `rup >= 1`) |
 
-**The lane** (`make e2e`, `scripts/e2e_lane.sh -j 6`, run `lane-t6b`, dev binary md5 `5452a219`
-(`c222541`'s code; the later commits change only `--e2e`'s constant letters and its writer's
-speed), veripb 3.0.2 `d5644ca4`, `cake_pb_cp` `ca92491e`; the same lane on main's binary
-`418fa3c4` gave D-0188's counts):
+**The lane** (`make e2e`, `scripts/e2e_lane.sh -j 8` from the gate's fresh clone of the tip
+`20fc7e4`, run `lane-final`, dev binary md5 `dca706be`, veripb 3.0.2 `d5644ca4`, `cake_pb_cp`
+`ca92491e`; `lane-t6b` on `c222541`'s code gave the same counts; the same lane on main's binary
+`418fa3c4` gave D-0188's):
 
 | pass | before (main) | after |
 |---|---|---|
@@ -24679,7 +24679,12 @@ says:
 No cumulative instance reached the chain: the Challenge's cumulative models in this set all have
 an `int_times` beside them (mspsp, smelt).
 
-**Gate.** (Written below when it ran.)
+**Gate.** A fresh clone of the pushed tip `20fc7e4` (dev binary `dca706be`) against gate 83's
+binary (`418fa3c4`, `/scratch/arthur/baguette-gate-20261121a`): `make check` rc 0 (4 457 ok, 207
+models, peak RSS 105 MB), 207 models x 4 artefacts (stdout, exit code, `.opb`, `.pbp`) equal,
+differential lane 324 of 324, debug 311 of 311, scaling ok. The same gate on `1091384` (before
+the writer's speed commit, binary `e09903aa`): the same five results. Every lane at `-j 8`, load
+average near 80.
 
 **Left.** int_times and int_div (2.4: a case split per value of the case variable, or baguette
 writing cake's product encoding); the writer's speed on regular rows; whether `--e2e` becomes a

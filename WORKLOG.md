@@ -451,6 +451,7 @@ section 1. Shares are inclusive, of the whole run.
    most 0.05 % on all ten instances.
 | **`Store.var_named` is the largest cost left in learning** (D-0191 sections 5 and 6): `Analysis.support_of` and `Pb_analysis.falsified_at` ask it per fact, 8.3 % of roster's samples and 6.0 % of QR72's, half of it `caml_hash` of the name and a sixth the polymorphic compare of `by_name`. A monomorphic `Hashtbl.Make (String)` for `by_name` drops the compare, and a `Reason.fact` that carries its variable (T4's side) would drop the lookup. Also an O(1) `level_mark t l` for `Phase.save_level`, which lists every mark per backtrack | `lib/core/store.ml`, `lib/core/reason.ml` | agent-review3 | open |
 | **An evicted learned instance is still asked at every wake** (D-0139's request, measured in D-0191): under `lbd:500` the dead gates' advisor is 18.4 % of qr48s2_f3's samples (2 834 dead instances against 500 live). Wanted: a removal from the watch lists when `Retention.reduce` detaches a gate, and an O(1) "does instance i watch v" for `Analysis.check_attribution` (0.8 % median, O(arity) over `vars_of`'s list) | `lib/core/engine.ml` | agent-review3 | open |
+| `scripts/README.md` section 9 still says the lane has "thirty-one corruptions"; since D-0195 it is 37 controls on the bridged path and 38 on the solver-written one (the list and what each asserts are in `scripts/e2e_lane.sh`'s header) | `scripts/README.md` | agent-e2e6 | open |
 
 ## Completed
 
