@@ -20,6 +20,7 @@ of it to every session and stopping at a broken line before it even reached the 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
 | M10-search-strategy-T5, M9-no-proof-T3, M7-T30 (one Challenge series on current main: default, `-f`, default `--no-proof`) | run dirs `/scratch/arthur/m10t5/`, `tools/compare/` (additions), `bench/challenge/README.md` (the run's row); reserved record D-0185 | agent-m10t5 (`wave55-m10t5`) | 2026-11-20 |
+| D-0199 applied: the default becomes `--bits-above 0` (its own commit, reversible) | `lib/proof/encoding.ml` (the `bits_above` default only), `bin/main.ml` (usage text), `docs/SPEC.md` §3 (the default's sentence), `README.md`, `bench/diff/reference*` and `configs.tsv` (re-record), `bench/scaling/baseline.tsv`, `test/expected/` (only with each changed solution validated independently); reserved record D-0201 | agent-bitsdefault (`wave56-bitsdefault`) | 2026-11-21 |
 
 ## Cross-session requests
 
