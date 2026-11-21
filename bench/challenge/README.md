@@ -26,6 +26,7 @@ persistent; read those copies if `/scratch` is gone.
 |---|---|---|
 | M7-T26, 2026-10-30/31 | All sixteen editions, 1 200 s, 16 GiB, PAR 30; baguette and Chuffed, GCS on 2025 and 2026 only; fixed category only | tables `/scratch/arthur/m7t26/<YEAR>/{results,flatten}.tsv`; corpus `/scratch/arthur/mznc/<YEAR>/`; archive `/scratch/arthur/mznc-archive/` (also `~/mznc-archive` on the laptop); records D-0105 (2026) to D-0120 (2011), synthesis D-0121 |
 | wave43, 2026-11-13 | The editions again after M7-T27 | `/scratch/arthur/wave43run/`, D-0133 |
+| M8-T4, 2026-11-20/21 | Two arms, one binary (`492638b9`, `ec53df4`): `W = none` and `--bits-above 0`, baguette only, D-0133's rules, 20 + 20 runs; peak RSS per run in `log/*.rss` | `/scratch/arthur/m8t4/{none,w0}/<YEAR>/`, tables in `/cluster/arthur/baguette-results/m8t4/`, D-0175 |
 | Later rows | Per-feature Challenge runs (`regular`, `inverse`, `member`, alldiff conflicts) | each record's own section names its run directory |
 
 Re-read an edition without re-running it:
