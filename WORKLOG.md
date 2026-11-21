@@ -649,7 +649,7 @@ section 1. Shares are inclusive, of the whole run.
 
 ### FOR THE USER'S RETURN: the autonomous run of 2026-11-20 evening to 2026-11-21 (orchestrator)
 
-**Merged and gated** (gates 77 to 88 green; every default `--proof` artefact byte-identical except D-0172's 12
+**Merged and gated** (gates 77 to 89 green; every default `--proof` artefact byte-identical except D-0172's 12
 smaller `.pbp`; lane 324/324, debug 311/311, scaling ok): M16 complete (D-0186 core, D-0190 propagators,
 D-0191 learning, D-0192 proof side, D-0193 front end: release lane median about -7 % per node without
 proof and -6 % with, evm -28 %, openshop and rcpsp_11 -20 % with proof, setup under `--no-proof` 7 329 G
@@ -685,6 +685,11 @@ relaunched from their branches (agents are now told to check any wait after 30 m
 - D-0189: the D-0026 reverse arm ignores member's lemma-plus-Weaken pair (debug-only).
 - D-0198: the minor heap raised to 4 M words (capped to fit the tests' ulimit -v), `OCAMLRUNPARAM=s=256k` restores it.
 - D-0194: GAC arithmetic not built.
+
+### 2026-11-21 (orchestrator, autonomous mode): gate 89 green
+
+Gate 89 (`c9f4bfe`, merge wave56-heapguard, D-0200, binary `34db2c68`, against gate 88's `7c475a45`): `make
+check` rc 0 (4 633 ok), 207 x 4 artefacts equal, lane 324/324, debug 311/311, scaling ok.
 
 ### 2026-11-21 (agent-heapguard, `wave56-heapguard`): hotfix, D-0200, the heap budget is polled between cycle ends
 
