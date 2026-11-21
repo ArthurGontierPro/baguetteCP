@@ -23,6 +23,7 @@ of it to every session and stopping at a broken line before it even reached the 
 | M10-search-strategy-T5, M9-no-proof-T3, M7-T30 (one Challenge series on current main: default, `-f`, default `--no-proof`) | run dirs `/scratch/arthur/m10t5/`, `tools/compare/` (additions), `bench/challenge/README.md` (the run's row); reserved record D-0185 | agent-m10t5 (`wave55-m10t5`) | 2026-11-20 |
 | M16-file-review-T5 (the front end and setup) | `lib/flatzinc/lexer.ml`, `parser.ml`, `builder.ml`, `compile.ml`, `output.ml`, `model.ml`, `ast.ml`, their unit tests (`test_flatzinc.ml`, `test_compile.ml`, `test_output.ml`); reserved record D-0193 | agent-review5 (`wave55-review5`) | 2026-11-20 |
 | M4-T6b (measure the node gain of GAC arithmetic before building it) | new `bench/gac_measure/` (scripts), run dirs `/scratch/arthur/wave56-gac-runs/`; no solver code; reserved record D-0194 | agent-gac (`wave56-gac`) | 2026-11-21 |
+| M14-e2e-verification-T7 (the bits arm in the e2e chain) | `tools/e2e/`, `scripts/e2e_lane.sh`, `lib/proof/e2e.ml`, `lib/proof/encoding.ml` (additive), `lib/flatzinc/compile.ml` (the e2e hooks only), `docs/PROOF-FORMAT.md` §3b; reserved record D-0196 | agent-e2e7 (`wave56-e2e7`) | 2026-11-21 |
 
 ## Cross-session requests
 
