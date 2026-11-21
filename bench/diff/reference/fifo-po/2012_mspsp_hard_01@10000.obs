@@ -31,12 +31,12 @@ out objective = 35;
 out s = array1d(1..25, [0, 4, 11, 0, 4, 15, 6, 9, 18, 20, 19, 23, 26, 11, 22, 27, 14, 26, 31, 23, 17, 18, 21, 32, 30]);
 out X_INTRODUCED_41_ = array1d(1..50, [true, true, true, false, false, true, false, true, false, false, true, true, false, false, true, true, false, true, true, false, false, true, false, true, false, false, false, false, true, true, false, true, false, true, true, false, false, true, true, false, false, true, false, false, true, true, false, true, false, true]);
 out ----------
-search ladder/cls 1768 cls
-search opb/lines 35187 lines
+search ladder/cls 1700 cls
+search opb/lines 35121 lines
 search direct/vals 0 vals
 search widest/wide 69 wide
-search bits/vars 0 vars
-search bitsrows/lines 0 lines
+search bits/vars 1 vars
+search bitsrows/lines 2 lines
 search choices/groups 0 groups
 search limit.nodes 10001
 search limit.decisions 6264
@@ -113,14 +113,15 @@ work vetoed/wakes 113825 wakes
 work advised/wakes 0 wakes
 work seeded/runs 2725540 runs
 work skipped/slots 250806882 slots
-search rup/lines 1199532 lines
-search pol/lines 513367 lines
-search pol-tokens/tokens 3138803 tokens
+search rup/lines 1198458 lines
+search pol/lines 514602 lines
+search pol-tokens/tokens 3146197 tokens
 search pol-widest/tokens 115 tokens
-search atoms/atoms 0 atoms
-search atomlinks/lines 0 lines
-search bridges/pairs 0 pairs
+search atoms/atoms 25 atoms
+search atomlinks/lines 33 lines
+search bridges/pairs 60 pairs
 search boundlines/pairs 0 pairs
-search bitsprune/lines 0 lines
-opb c077f0e9a559b5ced56e08806a4df1601055cbf3ecd62c5297b3cd7d7332bf46
-pbp 60952fbb732a895aa80f5c5bf42d3faf8647d84de5188031290e84babc365157
+search bitsprune/lines 1194 lines
+search atoms/prune/atoms 0.021 atoms
+opb fa898743e7b1b8370fc7c4ef5df3c8273e613904eed49267fd19a26364efa765
+pbp fbcfb3aa87fc02b909de8e373ef5b5514705a1fe6066e287a32b20a26657d509

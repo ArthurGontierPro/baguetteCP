@@ -17,12 +17,12 @@ out ----------
 out objective = 79;
 out s = array1d(1..30, [0, 0, 6, 6, 12, 15, 16, 25, 17, 25, 20, 32, 66, 35, 32, 35, 42, 50, 43, 52, 60, 62, 41, 65, 43, 69, 67, 54, 69, 72]);
 out ----------
-search ladder/cls 4836 cls
-search opb/lines 6569 lines
+search ladder/cls 4680 cls
+search opb/lines 6415 lines
 search direct/vals 0 vals
 search widest/wide 157 wide
-search bits/vars 0 vars
-search bitsrows/lines 0 lines
+search bits/vars 1 vars
+search bitsrows/lines 2 lines
 search choices/groups 0 groups
 search limit.nodes 1501
 search limit.decisions 783

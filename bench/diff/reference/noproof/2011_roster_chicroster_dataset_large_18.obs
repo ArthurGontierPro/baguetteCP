@@ -7,12 +7,12 @@ out evemorn = 0;
 out isolated = 16;
 out X_INTRODUCED_17_ = array1d(1..182, [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 1, 1, 1, 1, 1, 1, 2, 1, 1, 1, 1, 1, 1, 2, 1, 1, 1, 1, 1, 1, 2, 1, 1, 1, 1, 2, 2, 2, 1, 1, 2, 2, 2, 2, 3, 2, 1, 2, 2, 3, 2, 3, 2, 2, 2, 2, 3, 3, 3, 2, 2, 2, 2, 4, 4, 4, 2, 4, 3, 2, 4, 4, 4, 2, 4, 3, 3, 4, 4, 4, 3, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 5, 5, 5, 5, 5, 4, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5]);
 out ----------
-search ladder/cls 3091 cls
-search opb/lines 14622 lines
+search ladder/cls 0 cls
+search opb/lines 12993 lines
 search direct/vals 0 vals
 search widest/wide 364 wide
-search bits/vars 0 vars
-search bitsrows/lines 0 lines
+search bits/vars 731 vars
+search bitsrows/lines 1462 lines
 search choices/groups 0 groups
 search limit.nodes 3501
 search limit.decisions 2238

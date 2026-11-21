@@ -20,12 +20,12 @@ out ----------
 out objective = 8;
 out X_INTRODUCED_0_ = array1d(1..224, [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, 0, 0, 1, 1, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 1, 1, 1, 0, 0, 0, 1, 0, 1, 0, 1, 0, 0, 0, 1, 0, 1, 1, 0, 0, 1, 1, 1, 1, 1, 0, 0, 0, 1, 0, 1, 0, 1, 0, 0, 1, 0, 1, 0, 1, 1, 0, 0, 1, 1, 0, 0, 0]);
 out ----------
-search ladder/cls 21 cls
-search opb/lines 9981 lines
+search ladder/cls 0 cls
+search opb/lines 9962 lines
 search direct/vals 0 vals
 search widest/wide 22 wide
-search bits/vars 0 vars
-search bitsrows/lines 0 lines
+search bits/vars 1 vars
+search bitsrows/lines 2 lines
 search choices/groups 0 groups
 search limit.nodes 5001
 search limit.decisions 2855
@@ -97,13 +97,15 @@ work vetoed/wakes 58481 wakes
 work advised/wakes 0 wakes
 work seeded/runs 307350 runs
 work skipped/slots 46141485 slots
-search rup/lines 235848 lines
-search pol/lines 0 lines
-search pol-tokens/tokens 0 tokens
-search atoms/atoms 0 atoms
-search atomlinks/lines 0 lines
-search bridges/pairs 0 pairs
-search boundlines/pairs 0 pairs
-search bitsprune/lines 0 lines
-opb fd586246a58580458718ffd8ea9aec6cd6d897f2c2236d329b97d929a736d676
-pbp bfebc9c4b5741e2b35f532cc71819778912980d582388f31ea3db0cc298c5658
+search rup/lines 231639 lines
+search pol/lines 6243 lines
+search pol-tokens/tokens 373432 tokens
+search pol-widest/tokens 60 tokens
+search atoms/atoms 9 atoms
+search atomlinks/lines 14 lines
+search bridges/pairs 617 pairs
+search boundlines/pairs 698 pairs
+search bitsprune/lines 6222 lines
+search atoms/prune/atoms 0.001 atoms
+opb aee8e1796b01b9072c1f3ea02536f46c7a2fd40a2d59a388086a36f6b691fba9
+pbp c1bcd82b8de16a0fa897802c2e22eb6e784d68137b2653a108422447d6104827

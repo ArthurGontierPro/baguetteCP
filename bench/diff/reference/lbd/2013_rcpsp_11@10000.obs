@@ -17,12 +17,12 @@ out ----------
 out objective = 79;
 out s = array1d(1..30, [0, 0, 6, 6, 12, 15, 16, 25, 17, 25, 20, 32, 66, 35, 32, 35, 42, 50, 43, 52, 60, 62, 41, 65, 43, 69, 67, 54, 69, 72]);
 out ----------
-search ladder/cls 4836 cls
-search opb/lines 6569 lines
+search ladder/cls 4680 cls
+search opb/lines 6415 lines
 search direct/vals 0 vals
 search widest/wide 157 wide
-search bits/vars 0 vars
-search bitsrows/lines 0 lines
+search bits/vars 1 vars
+search bitsrows/lines 2 lines
 search choices/groups 0 groups
 search limit.nodes 10001
 search limit.decisions 5067
@@ -97,14 +97,15 @@ work vetoed/wakes 33602 wakes
 work advised/wakes 13696332 wakes
 work seeded/runs 1292455 runs
 work skipped/slots 28267678 slots
-search rup/lines 304893 lines
-search pol/lines 4274844 lines
-search pol-tokens/tokens 56984720 tokens
+search rup/lines 300938 lines
+search pol/lines 4279163 lines
+search pol-tokens/tokens 57010622 tokens
 search pol-widest/tokens 609 tokens
-search atoms/atoms 0 atoms
-search atomlinks/lines 0 lines
-search bridges/pairs 0 pairs
-search boundlines/pairs 0 pairs
-search bitsprune/lines 0 lines
-opb 3d1618810eebfa3ab6c2412092d86f361c1384a73ba17d0ecf4d6c79438ee367
-pbp bd6258b1e99599260f886257170709869506d43221b369c65f49a89e9ff754f8
+search atoms/atoms 44 atoms
+search atomlinks/lines 84 lines
+search bridges/pairs 135 pairs
+search boundlines/pairs 2 pairs
+search bitsprune/lines 4229 lines
+search atoms/prune/atoms 0.010 atoms
+opb 27b7a4d637df57619748e3120da8395bda6a9b9857e39f67aaa2491dda697371
+pbp fc1c2594966c79b476a4fc45f55da1b94821c2194878ab344215d3e747884049

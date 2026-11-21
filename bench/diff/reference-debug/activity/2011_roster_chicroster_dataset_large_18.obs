@@ -3,12 +3,12 @@ out evemorn = 0;
 out isolated = 17;
 out X_INTRODUCED_17_ = array1d(1..182, [4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 3, 4, 4, 3, 4, 4, 4, 5, 4, 4, 5, 4, 4, 4, 5, 4, 3, 5, 3, 3, 3, 5, 2, 3, 5, 3, 5, 3, 5, 2, 5, 5, 5, 5, 3, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 2, 5, 5, 5, 2, 5, 5, 2, 5, 5, 5, 2, 5, 5, 2, 5, 5, 5, 2, 5, 2, 2, 5, 2, 5, 2, 5, 2, 2, 2, 2, 5, 2, 1, 2, 1, 2, 2, 2, 1, 1, 2, 1, 1, 1, 2, 1, 1, 1, 1, 1, 1, 2, 1, 1, 1, 1, 1, 1, 2, 1, 1, 1, 1, 1, 1, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]);
 out ----------
-search ladder/cls 3091 cls
-search opb/lines 14622 lines
+search ladder/cls 0 cls
+search opb/lines 12993 lines
 search direct/vals 0 vals
 search widest/wide 364 wide
-search bits/vars 0 vars
-search bitsrows/lines 0 lines
+search bits/vars 731 vars
+search bitsrows/lines 1462 lines
 search choices/groups 0 groups
 search limit.nodes 1501
 search limit.decisions 1499
@@ -86,13 +86,15 @@ work vetoed/wakes 3481 wakes
 work advised/wakes 0 wakes
 work seeded/runs 18697 runs
 work skipped/slots 7752601 slots
-search rup/lines 11290 lines
-search pol/lines 0 lines
-search pol-tokens/tokens 0 tokens
-search atoms/atoms 0 atoms
-search atomlinks/lines 0 lines
-search bridges/pairs 0 pairs
-search boundlines/pairs 0 pairs
-search bitsprune/lines 0 lines
-opb 7b734d8fb5caadfdf2029e1043aaf5a9041c113ca54df90aa6cb82d439454c5b
-pbp 287fe7adec6e9867e223c64de836efad6b402e2e28af839160d26e0484212b67
+search rup/lines 8297 lines
+search pol/lines 10134 lines
+search pol-tokens/tokens 311656 tokens
+search pol-widest/tokens 368 tokens
+search atoms/atoms 3100 atoms
+search atomlinks/lines 3690 lines
+search bridges/pairs 2136 pairs
+search boundlines/pairs 552 pairs
+search bitsprune/lines 6443 lines
+search atoms/prune/atoms 0.481 atoms
+opb 7d9b08943407d12c10f7e2c68bd93b1650b6c9977f187c918527b4ab620aec7e
+pbp b5667bd1adc89c20499b4c61a1bd0bffca49080bab98960ed4db1551e86f99df

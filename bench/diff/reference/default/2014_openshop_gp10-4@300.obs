@@ -2,12 +2,12 @@ rc 0
 out objective = 1235;
 out X_INTRODUCED_16_ = array1d(1..100, [0, 990, 244, 642, 1, 1031, 1231, 1086, 992, 2, 520, 0, 229, 1076, 1031, 749, 494, 534, 1032, 244, 521, 229, 0, 995, 1076, 1136, 489, 1087, 1077, 494, 84, 1013, 779, 0, 24, 83, 520, 11, 1015, 1045, 1, 811, 642, 26, 0, 586, 990, 749, 774, 781, 1086, 489, 1087, 1167, 1170, 0, 1, 811, 1206, 1207, 998, 993, 1013, 990, 83, 1, 0, 137, 781, 534, 26, 992, 1014, 11, 600, 84, 983, 0, 990, 1046, 1045, 1046, 643, 600, 137, 601, 778, 115, 0, 861, 995, 984, 774, 24, 2, 1032, 861, 25, 115, 0]);
 out ----------
-search ladder/cls 1008899 cls
-search opb/lines 1015299 lines
+search ladder/cls 0 cls
+search opb/lines 6602 lines
 search direct/vals 0 vals
 search widest/wide 10000 wide
-search bits/vars 0 vars
-search bitsrows/lines 0 lines
+search bits/vars 101 vars
+search bitsrows/lines 202 lines
 search choices/groups 0 groups
 search limit.nodes 301
 search limit.decisions 231
@@ -79,13 +79,15 @@ work vetoed/wakes 849 wakes
 work advised/wakes 811 wakes
 work seeded/runs 36348 runs
 work skipped/slots 1349654 slots
-search rup/lines 6746 lines
-search pol/lines 0 lines
-search pol-tokens/tokens 0 tokens
-search atoms/atoms 0 atoms
-search atomlinks/lines 0 lines
-search bridges/pairs 0 pairs
+search rup/lines 4500 lines
+search pol/lines 5483 lines
+search pol-tokens/tokens 45684 tokens
+search pol-widest/tokens 10 tokens
+search atoms/atoms 915 atoms
+search atomlinks/lines 1436 lines
+search bridges/pairs 1800 pairs
 search boundlines/pairs 0 pairs
-search bitsprune/lines 0 lines
-opb c929b0800b9e5cf2ef457cdcd32bf00600c6f360ce1482dc9603cb1281477f44
-pbp cab78e42bbbe292d2a02143d480f410e2ca14f19bf3034066301ba7f4bcacebe
+search bitsprune/lines 4046 lines
+search atoms/prune/atoms 0.226 atoms
+opb 13ef0e82fb07f03706094f31f9bbaaabb8df06b6d19b9a08d7d09f0a160b3106
+pbp b1913f99e8454221a0852080f005fc093258d83838262499e348f2bbf768e9aa

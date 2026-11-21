@@ -2,12 +2,12 @@ rc 0
 out x = array1d(1..87, [false, false, false, false, false, false, false, false, false, false, false, false, false, false, true, false, true, true, true, true, false, false, false, false, false, false, false, false, false, false, false, false, false, true, true, false, false, true, true, false, false, true, false, false, true, false, false, false, true, true, true, true, false, false, true, false, false, false, false, false, false, true, true, true, true, false, false, true, true, false, true, true, false, false, true, true, true, true, true, true, false, true, true, true, true, true, true]);
 out ----------
 out ==========
-search ladder/cls 86 cls
-search opb/lines 5228 lines
+search ladder/cls 0 cls
+search opb/lines 5144 lines
 search direct/vals 0 vals
 search widest/wide 87 wide
-search bits/vars 0 vars
-search bitsrows/lines 0 lines
+search bits/vars 1 vars
+search bitsrows/lines 2 lines
 search choices/groups 0 groups
 search nodes/nodes 417 nodes
 search decisions/decs 323 decs
@@ -72,13 +72,15 @@ work vetoed/wakes 3766 wakes
 work advised/wakes 80 wakes
 work seeded/runs 34915 runs
 work skipped/slots 2417019 slots
-search rup/lines 107040 lines
-search pol/lines 0 lines
-search pol-tokens/tokens 0 tokens
-search atoms/atoms 0 atoms
-search atomlinks/lines 0 lines
-search bridges/pairs 0 pairs
-search boundlines/pairs 0 pairs
-search bitsprune/lines 0 lines
-opb bc52092979fd806cbd3710b6efc2fbed3c6a2b59a646061d948843aa4f109c05
-pbp d2acaf364954143524f00d615ed02c71c8f5afa9e9a1b5fbc50ee41f80829d42
+search rup/lines 103435 lines
+search pol/lines 3895 lines
+search pol-tokens/tokens 454174 tokens
+search pol-widest/tokens 120 tokens
+search atoms/atoms 59 atoms
+search atomlinks/lines 115 lines
+search bridges/pairs 58 pairs
+search boundlines/pairs 58 pairs
+search bitsprune/lines 3779 lines
+search atoms/prune/atoms 0.016 atoms
+opb 154f7e2bc3c9b654121a8dd32f6cd22cfe264c1a83cb48234e14d31a8db099f0
+pbp 08da938a673b0c945162d4f31f857e150a83e8239f6508a43b70490cabb49cfb

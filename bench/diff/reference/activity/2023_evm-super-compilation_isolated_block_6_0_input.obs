@@ -1,11 +1,11 @@
 rc 0
 out =====UNKNOWN=====
-search ladder/cls 4674 cls
-search opb/lines 23433 lines
+search ladder/cls 870 cls
+search opb/lines 20419 lines
 search direct/vals 0 vals
 search widest/wide 75 wide
-search bits/vars 0 vars
-search bitsrows/lines 0 lines
+search bits/vars 395 vars
+search bitsrows/lines 790 lines
 search choices/groups 0 groups
 search limit.nodes 2001
 search limit.decisions 1516
@@ -91,14 +91,15 @@ work vetoed/wakes 3339 wakes
 work advised/wakes 43133 wakes
 work seeded/runs 132056 runs
 work skipped/slots 16447445 slots
-search rup/lines 242910 lines
-search pol/lines 2310 lines
-search pol-tokens/tokens 71448 tokens
+search rup/lines 113410 lines
+search pol/lines 139931 lines
+search pol-tokens/tokens 1584410 tokens
 search pol-widest/tokens 163 tokens
-search atoms/atoms 0 atoms
-search atomlinks/lines 0 lines
-search bridges/pairs 0 pairs
-search boundlines/pairs 0 pairs
-search bitsprune/lines 0 lines
-opb 87b96ff1588ee09dfd60fe5f9fe55dd20457a35173761ceff28eaf4aa5d0ebbf
-pbp 4334569729d1cf09388446f70f576a0dc1ed81d00c64788568cc8a0d8f5e0ab3
+search atoms/atoms 3047 atoms
+search atomlinks/lines 3963 lines
+search bridges/pairs 2966 pairs
+search boundlines/pairs 76 pairs
+search bitsprune/lines 133658 lines
+search atoms/prune/atoms 0.023 atoms
+opb 959ea28ada0978cbc4002e5b4eb908cf85326ee143da085be66a3be94d68eda0
+pbp 7113d64985ab3fc7b8db70d604ff895b988ea32f9d9dbbde4fb0825617224f23

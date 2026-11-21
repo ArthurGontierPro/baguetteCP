@@ -7,12 +7,12 @@ out evemorn = 0;
 out isolated = 16;
 out X_INTRODUCED_17_ = array1d(1..182, [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 1, 1, 1, 1, 1, 1, 2, 1, 1, 1, 1, 1, 1, 2, 1, 1, 1, 1, 1, 1, 2, 1, 1, 1, 1, 2, 2, 2, 1, 1, 2, 2, 2, 2, 3, 2, 1, 2, 2, 3, 2, 3, 2, 2, 2, 2, 3, 3, 3, 2, 2, 2, 2, 4, 4, 4, 2, 4, 3, 2, 4, 4, 4, 2, 4, 3, 3, 4, 4, 4, 3, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 5, 5, 5, 5, 5, 4, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5]);
 out ----------
-search ladder/cls 3091 cls
-search opb/lines 14622 lines
+search ladder/cls 0 cls
+search opb/lines 12993 lines
 search direct/vals 0 vals
 search widest/wide 364 wide
-search bits/vars 0 vars
-search bitsrows/lines 0 lines
+search bits/vars 731 vars
+search bitsrows/lines 1462 lines
 search choices/groups 0 groups
 search limit.nodes 3501
 search limit.decisions 2238
@@ -84,13 +84,15 @@ work vetoed/wakes 112820 wakes
 work advised/wakes 304 wakes
 work seeded/runs 119355 runs
 work skipped/slots 19612248 slots
-search rup/lines 211829 lines
-search pol/lines 0 lines
-search pol-tokens/tokens 0 tokens
-search atoms/atoms 0 atoms
-search atomlinks/lines 0 lines
-search bridges/pairs 0 pairs
-search boundlines/pairs 0 pairs
-search bitsprune/lines 0 lines
-opb 7b734d8fb5caadfdf2029e1043aaf5a9041c113ca54df90aa6cb82d439454c5b
-pbp b23f5ef7215da613474a7bfa04129422e3e41158d834260970948f485f332f6c
+search rup/lines 71228 lines
+search pol/lines 147817 lines
+search pol-tokens/tokens 9647224 tokens
+search pol-widest/tokens 368 tokens
+search atoms/atoms 3253 atoms
+search atomlinks/lines 3964 lines
+search bridges/pairs 2133 pairs
+search boundlines/pairs 551 pairs
+search bitsprune/lines 143851 lines
+search atoms/prune/atoms 0.023 atoms
+opb 7d9b08943407d12c10f7e2c68bd93b1650b6c9977f187c918527b4ab620aec7e
+pbp 5a7e10bf5a62127820573617f58e4f1710fe4d1a3377e8b3fcad8d778aefe095
