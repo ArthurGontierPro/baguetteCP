@@ -24460,3 +24460,113 @@ a measurement showing a lever costs more than it saves on another machine. L2's 
 look first, because it is right only while the claim index compares keys as sets and two literals of
 one name pack to the same word exactly when their names are equal, which `intern` makes true by
 giving each name one integer for the run.
+
+## D-0195  [AUTONOME] M14-e2e-verification-T6: the far families in the end-to-end chain. `regular` and `cumulative` in, `int_abs` in, `int_times` and `int_div` left outside
+
+Status: DECIDED in autonomous mode on 2026-11-21, before the work that depends on it. Section 6 is
+the result.
+Date: 2026-11-21
+Task: M14-e2e-verification-T6 (agent-e2e6, `wave56-e2e6`)
+Touches: this record, `tools/e2e/` (translator, its semantics and references, bridge, mutations),
+`scripts/e2e_lane.sh`, `lib/proof/e2e.ml`, `lib/flatzinc/compile.ml` (the e2e hooks only),
+`docs/PROOF-FORMAT.md` §3b.
+
+### 1. Context
+
+D-0180 left 15 test models SKIPPED for T6's families: `baguette_regular` 4, `baguette_cumulative` 3,
+`int_times` 3, `int_div` 3, `int_abs` 2. D-0174 §4 expected each to be hard for a different reason.
+What cake's encoder writes for each (CakeML `14856fcf`: `cp_to_ilp_extensionalScript.sml`,
+`cp_to_ilp_schedulingScript.sml`, `cp_to_ilp_primScript.sml`, `cpScript.sml`, `cp_parseScript.sml`,
+measured on hand-written `.scp` files with `cake_pb_cp` `ca92491e`):
+
+- `regular (X ...) n ((edges_q) ...) (f ...)`, an NFA over states `0..n-1` with start state **0**:
+  per position `idx` (0..n) and state `q` a flag `x[N][<idx>_<q>][st]`, `@c[N][pos<idx>al1]` and
+  `am1` (exactly one), `@c[N][st0]` (`st[0][0]`), `@c[N][st<n>al1]` (some final), and per position,
+  state and value index `vi` of `X_idx`'s domain the clause `@c[N][<idx>_<q>_<vi>t]`:
+  `~st[idx][q] \/ ~i[X][eq<v>] \/ OR_targets st[idx+1][t]`. The same object as baguette's rows over
+  its state flags, with eq atoms where baguette has symbol runs over the ladder;
+- `cumulative (s ...) (d ...) (r ...) cap`: per task i and time t of its window `[lb s_i, ub s_i +
+  d_i - 1]`, reified flags `v[N][<i>_<t>][cb]` (`s_i <= t`) and `[ca]` (`s_i + d_i >= t + 1`), their
+  conjunction `[cact]`, contribution bits `v[N][<i>_<t>_<b>][cc]` equal to `r_i` when active and 0
+  otherwise (`@c[N][<i>_<t>_cge|cle|cz]`), and `@c[N][cap_<t>]`: minus the contributions `>= -cap`;
+- `abs X Y`: four rows `@c[N][posge|posle|negle|negge]` guarded by the atom `i[X][ge0]`;
+- `multiply X Y Z`, `divide X Y Z`: the MAGNITUDES' bits `x[N][<axis>_<b>][bin]`, product flags
+  `x[N][<i>_<j>][prod]` (`bin_i /\ bin_j`), four rows per operand guarded by its sign atom, and six
+  (multiply) or ten (divide) sign and remainder rows.
+
+baguette's rows for the same constraints are D-0146's (regular: ALO, AMO, START, ACCEPT, FWD over
+symbol runs, and the state flags are mznlib's `var bool`), D-0096's (cumulative: one row per time
+point over order literals, no auxiliary) and D-0060's (arith: a case split posted as guarded linear
+rows, its guards `X_INTRODUCED_arith_N` Booleans defined by int_lin_le_reif pairs).
+
+### 2. The decisions
+
+**2.1. regular: the state flags are left out of the `.scp`, and the prefix defines each as cake's
+flag.** mznlib's `fzn_regular` introduces the flags in a `let`, so they are existential in the
+model: the FlatZinc admits exactly one flag assignment per accepted word, the run. The options:
+
+| | what | gains | costs |
+|---|---|---|---|
+| (a) `.scp` = `(cK regular (x ...) Q edges finals)` without the flags; the prefix DEFINES each flag `s(i,q)` by a red pair as `x[cK][<i>_<pi(q)>][st]` | the `.scp` is std's `fzn_regular` and nothing else; the translator is one table row; baguette's rows follow by `ia`/`rup` from cake's | the translator must refuse a flag used anywhere else (it is then not existential) |
+| (b) declare the flags in the `.scp` and constrain them by a decomposition (one `equals_iff`/`and` chain per flag) | the `.scp` names every FlatZinc variable | a decomposition of the run in the TRUSTED translator, the thing D-0174 §5 asks to keep small; the chain would check the decomposition, not the meaning |
+| (c) declare the flags in the `.scp` unconstrained | one line | the `.scp` admits flag values the FlatZinc refuses (the validation reports DIFFER), and the flags' cake bits are free, so baguette's rows over them are not derivable |
+
+**(a).** The validation compares the solution sets over the `.scp`'s variables, which are the
+FlatZinc's minus the flags; the references enumerate the FlatZinc with the flags pinned to the run
+(their reading of SPEC's sentence), so a flag assignment cannot hide a difference. The states are
+renumbered by the rotation `pi(q) = (q - q0) mod Q` so that the start state is cake's 0, and the
+letters `smin .. smin + w - 1` keep their values (`0` in `d` is no edge).
+
+**2.2. cumulative: cake's `cumulative`, and each of baguette's capacity rows by one `pol`.** Durations,
+resources and capacity are constants (mznlib routes nothing else to `baguette_cumulative`); the
+translator refuses a negative one, since cake's `cumulative_sem` makes a negative height or capacity
+infeasible and baguette's front end was never asked about it. baguette's row at t is
+`sum_i r_i (s_i_ge_(t-d_i+1) - s_i_ge_(t+1)) <= cap - folded`, and from cake's it is
+
+  `cap_t + sum_i (cge_(i,t) + r_i actc_(i,t)) + r_i x (cb's clause) + r_i x (ca's clause)`,
+
+where cb's clause `cb \/ s_i_ge_(t+1)` and ca's `ca \/ ~s_i_ge_(t+1-d_i)` are each one `pol` of the
+flag's definition row linearised at the threshold (D-0188's device), and a clipped end (a threshold at
+or below `lb s_i`, or above `ub s_i`) is a unit of the flag instead. No `rup`.
+
+**2.3. int_abs: `abs`, the sign guard defined as baguette's own literal, and a row no candidate
+implies derived by contradiction.** baguette's guard `S <-> x >= 0` is a model Boolean cake's file
+does not have; it is defined by a red pair as `x_ge_0` (a guard `b <-> y >= v` as `y_ge_v`, `b <->
+y <= v` as `~y_ge_(v+1)`, read from its two int_lin_le_reif rows). The rows `A3`, `A4` are cake's
+`posge`, `negge` with the atom swapped. `A1` (`z >= x`), `A2` (`z >= -x`) and the hull rows hold in
+both signs, so no single cake row implies them and cutting planes cannot resolve two big-M rows on
+their guard. They are derived by **`pbc`** (VeriPB's proof by contradiction): assume the negation,
+add it to each of the constraint's candidates and saturate (each sum is a unit on the guard or
+nothing), and close by `rup >= 1`. The pbc subproof is checked by veripb and elaborated into
+the kernel proof cake_pb_cp reads; section 6 says whether cake_pb_cp accepts it.
+
+**2.4. int_times and int_div stay outside the chain in this task.** The translator keeps refusing
+them, so their models stay SKIPPED with that reason. Why: baguette's rows are one guarded group per
+value v of the case variable (`y >= v /\ x >= 0 -> z >= v x`, D-0060), and cake's are the operands'
+magnitudes in bits, their bit products and sign rows guarded by `i[X][ge0]` and `i[Z][ge0]`. A
+group's row covers every y at or above v, every sign of x within its guard and every sign of z, so
+each is a resolution over the case variable's values and over cake's sign atoms, which cutting
+planes cannot do on big-M rows (2.3); by contradiction it needs, per row, a split on y's value
+(the row for y = v, from |v|'s bits fixed under the guard and the product flags reduced to x's
+magnitude bits, then the row for y >= v + 1, already derived) and on the two signs. That is
+Theta(|dom y| x bits_x x bits_y) lines per constraint, each a nested `pbc`, written for this family
+alone, and a new derivation per remainder row for int_div. The other route is GCS's: baguette
+writes cake's product encoding itself under `--e2e` (D-0174 §4 (b)). Either is a task of its own;
+this one records the measurement that motivates it (section 6).
+
+### 3. How to revert
+
+Revert the commits prefixed `M14-e2e-verification-T6:` on branch `wave56-e2e6` (or their merge). The
+translator then refuses the three families again and the lane's counts return to D-0188's. Nothing
+outside `tools/e2e/`, `scripts/e2e_lane.sh` and the `--e2e` path changes, and every default byte
+stays as it is (the gate compares the 207 models' four artefacts).
+
+### 4. What this does not decide
+
+Whether `--e2e` becomes a default and whether the bridge is retired (D-0187 §5, the user's).
+
+### 5. (reserved)
+
+### 6. Result
+
+(Written at the end of the task.)
