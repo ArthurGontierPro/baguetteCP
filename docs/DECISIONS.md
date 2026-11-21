@@ -24569,4 +24569,119 @@ Whether `--e2e` becomes a default and whether the bridge is retired (D-0187 §5,
 
 ### 6. Result
 
-(Written at the end of the task.)
+**What was built.** In `tools/e2e/`: the translator writes `regular` (flags left out, states
+rotated), `cumulative` and `abs`, and refuses a flag used anywhere else; `scpsem.py` reads the
+three from `cpScript.sml` (`regular_sem`/`nfa_accepts`, `cumulative_sem`, `unop_sem Abs`);
+`fzn_solutions.py` gives the references `baguette_cumulative` (std's `cumulative`) and
+`baguette_regular` (the run as states `a[0..n]`, the flags pinned to it); the bridge defines the
+flags from the translator's hint file `NAMES.flags`, derives each capacity row by one `pol`
+(`@K`), defines the abs guard from its int_lin_le_reif row and closes the rows true in both signs
+by `pbc`. Under `--e2e` (`lib/proof/e2e.ml`, three hooks in `compile.ml` and two in `encoding.ml`,
+all no-ops without the flag) the same three derivations, the flags and the guard told before their
+declaration (`E2e.flag`, `E2e.guard`), cake's rows transcribed in [cake_rows] (PROOF-FORMAT §3b's
+three new rows). Two departures found on the Challenge: a regular over a CONSTANT letter is cake's
+`n[K][eq<K>]` atom (2021_pentominoes was refused before), and the writer's candidate tables were
+appended at the end of a list (quadratic, 7 000 transition clauses per regular on pentominoes:
+116 s of `--e2e`, 41 s now, the same proof bytes).
+
+How each family's rows are pinned (solver-written, the nine test models):
+
+| family | models | rows of baguette | how |
+|---|---|---|---|
+| regular | 4 | 550: layers' ALO/AMO, START, ACCEPT, forward clauses | flags `@D1`/`@D2` (216 red pairs); every row `ia` through one `pol` (550), the transition clause with the letter's eq atom as its ladder literals (`@Qn`, `@Ep`: 249 atom clauses); no `rup` here, 2 916 `rup` on pentominoes (runs of several values) |
+| cumulative, disjunctive | 3 | 17 capacity rows | each `ia` against ONE `pol` of `cap_t`, the covering tasks' `cge` and `actc`, and 138 flag clauses `@K` (each one `pol` of a flag's `[f]` row and `@A1`/`@A2`); no `rup` |
+| int_abs | 2 | 21 (abs's four, the hull, the guard's two, the models' other rows) | the guard `@D1`/`@D2` as `x_ge_0`; 5 `ia`, 1 `rup`, 15 by contradiction (`pbc`: the negation plus each of the four candidates, saturated, then `rup >= 1`) |
+
+**The lane** (`make e2e`, `scripts/e2e_lane.sh -j 6`, run `lane-t6b`, dev binary md5 `5452a219`
+(`c222541`'s code; the later commits change only `--e2e`'s constant letters and its writer's
+speed), veripb 3.0.2 `d5644ca4`, `cake_pb_cp` `ca92491e`; the same lane on main's binary
+`418fa3c4` gave D-0188's counts):
+
+| pass | before (main) | after |
+|---|---|---|
+| 1, bridged | 188 VERIFIED (100 SAT, 80 UNSAT, 8 OPT), 19 SKIPPED, 0 FAIL | **197** (105 SAT, 83 UNSAT, 9 OPT), 10 SKIPPED (`var int` with no domain 4, `int_times` 3, `int_div` 3), 0 FAIL |
+| 1b, solver-written | 188 VERIFIED, 0 FAIL | **197** VERIFIED, 0 outside `--e2e`'s families, 0 FAIL, 0 disagreeing |
+| 2, controls | 31 of 31 | **37 of 37** |
+| 2b, solver controls | 32 of 32 | **38 of 38** |
+| 3, validation | 187 AGREE, 1 UNCHECKED, 0 DIFFER | **196 AGREE**, 1 UNCHECKED, 0 DIFFER |
+
+**The twelve new controls**, each refused at the expected line with the checker's whole sentence,
+on satisfiable models (D-0053), each corrupted claim false in at least one solution:
+
+| control | model | refused at | wording | solutions the claim excludes |
+|---|---|---|---|---|
+| opb-stronger (bridge) | `regular_sat` (a layer's ALO, degree 2) | `@c1 rup` | "The constraint is not implied by reverse unit propagation (RUP) from core and derived database." | 1 of 1 (two states at once contradicts AMO) |
+| | `cumulative_sat` (capacity row) | `@c12 rup` | the same | 8 of 8 |
+| | `disjunctive_sat` (capacity row) | `@c10 rup` | the same | 1 of 1 |
+| | `abs_zero_sat` (new, `tools/e2e/models/`: the guard's row, `S -> x >= 1`) | inside `@c5 pbc` | the same | 2 of 5 |
+| pin-stronger (solver) | `regular_sat` | `@c1 ia` | "Expected constraint is not syntactically implied by the constraint at the hint." | 1 of 1 |
+| | `cumulative_sat` | `@c12 ia` | the same | 8 of 8 |
+| | `disjunctive_sat` | `@c10 ia` | the same | 1 of 1 |
+| | `abs_zero_sat` | inside `@c5 pbc` | the RUP sentence | 2 of 5 |
+| flag-witness (both paths) | `regular_sat`: the first flag past layer 0 defined as the NEGATION of cake's | `@D1[X_INTRODUCED_39__ge_1] red` | "Proofgoal #1 could not be autoproven." | (a `red`) |
+| guard-witness (both paths) | `abs_zero_sat`: the guard as `~x_ge_0` | `@D1[X_INTRODUCED_arith_0_ge_1] red` | the same | (a `red`) |
+
+`abs_zero_sat` exists because on `arith_abs_sat` (one solution, x = -3) the guard's row
+strengthened by one is still true. A refusal inside a `pbc` is reported by `chain.sh` as the
+`pbc` that opens it. What a refused `pin-stronger` shows is that the pin does not accept a
+stronger row; it does not show that no derivation of one exists.
+
+**The translator's validation.** The nine models AGREE with both references (Gecode and CP-SAT).
+Seven hand-made mistranslations each give DIFFER: `regular_sat` with the finals shifted by one
+state, `regular_set_sat` with every edge's symbol +1, `regular_opt` with one edge's target changed
+(shifting its finals does nothing, both states are final, and that one AGREEs), `cumulative_sat` and
+`disjunctive_sat` with durations and resources swapped, `arith_abs_sat` and `abs_zero_sat` with
+abs's arguments swapped.
+
+**int_times and int_div, measured.** The generic step int_abs uses (the negation plus each of the
+constraint's cake rows, saturated, then `rup`) was tried on the six arith test models through the
+bridge, with the translator writing `multiply`/`divide` (a scratch copy, not committed). Five
+verify, `cake_pb_cp` included, and every one of them because the model's other constraints fix
+the operands at the root (`z = -6` with `x <= -1`, `x = -7` with `y = 2`, ...): the database the
+`rup` runs against is cake's whole file. On `arith_times_narrow_sat` (`b * y = z`, y free over
+0..4) the row `b -> z >= y` is refused at `rup >= 1`. So the step is not a derivation of the
+family's rows, and a lane on it would be green on pinned models and fail on the first free one.
+2.4 stands: outside the chain, for the reasons it gives.
+
+**The Challenge.** The eight instances of D-0182's 733 flattened ones whose T6 families the
+translator now covers (5 regular, 3 int_abs; seven more, six with cumulative and one with
+int_abs, have an int_times beside them and stay out), release binary `1e00ca57` (`a11521db` for pentominoes, after the constant-letter
+change), 4 at a time under `systemd-run --user --scope -p MemoryMax=32G`, `tools/e2e/measure_e2e.sh`
+and D-0188's `alone.sh`:
+
+| instance | answer | solve s, plain / `--e2e` | veripb alone s | chain elab + cake s | ratio | prefix MB | prefix alone, elab + cake s |
+|---|---|---|---|---|---|---|---|
+| `2013_nonogram_dom_06` | SAT | 0.71 / 0.90 | 1.52 | 2.10 + 3.81 | x3.9 | 1.4 | 0.07 + 0.33 |
+| `2026_nonogram_easy_01` | SAT | 0.52 / 1.85 | 1.32 | 2.65 + 3.05 | x4.3 | 4.4 | 0.20 + 0.99 |
+| `2026_nonogram_medium_05` | SAT | 7.75 / 20.05 | 59.31 | 105.92 + 34.91 | x2.4 | 20.4 | 0.92 + 4.72 |
+| `2012_nonogram_non_fast_8` | SAT | 18.80 / 115.08 | 248.80 | 591.33 + 69.13 | x2.7 | 92.3 | 4.28 + 22.58 |
+| `2021_pentominoes_..._close` | SAT | 0.08 / 110.15 (41 with `9a78320`) | 0.05 | 0.30 + 1.28 | x32 | 2.6 | 0.20 + 1.06 |
+| `2013_on-call-rostering_4s-10d` (int_abs) | OPT=1 | 0.42 / 2.56 | 1.04 | 4.29 + 22.58 (cake 16 GB RSS) | x26 | 33.8 | 1.61 + 17.99 |
+| `2022_roster-sickness_large-4-2` (int_abs) | OPT | 16.37 / exhausted the 4 GB solver cap at 147 s | 30.24 | - | - | 13 500 when stopped | - |
+| `2011_fast-food_ff53` (int_abs) | OPT=1 | 8.29 / timeout 300 s | 304.01 | - | - | 4 000 when stopped | - |
+
+Six VERIFIED by `cake_pb_cp`, every verdict baguette's. The bridged chain on pentominoes did not
+finish in 900 s (the matcher; the solver-written chain does it in 1.6 s of checking). What this
+says:
+
+1. **regular is cheap in the chain.** Its prefix is a red pair per flag and one `ia` per row; on
+   the four nonograms the chain costs x2.4 to x4.3 of `veripb` alone, and the prefix alone at most
+   a tenth of it. pentominoes' x32 is start-up over a 0.05 s proof.
+2. **int_abs is not the cost where it fails.** roster-sickness and fast-food have domains of
+   width 3 770 and 910 (their default `.opb` are 945 and 709 MB), and D-0187's per-value prefix
+   (atoms, halves, ladder) is what reaches 13.5 GB and 4 GB; their 22 and 1 190 abs constraints
+   are a small part. on-call-rostering verifies, with `cake_pb_cp`'s check of its 34 MB prefix the
+   larger half (18 s, 16 GB RSS).
+3. **The writer is still the slow stage under `--e2e`** (D-0187's lead): pentominoes 41 s, and
+   non_fast_8 115 s against 18.8 s, in the generic search over the transition candidates of a
+   row's letter. Indexing those by state is the next lever if regular instances matter.
+
+No cumulative instance reached the chain: the Challenge's cumulative models in this set all have
+an `int_times` beside them (mspsp, smelt).
+
+**Gate.** (Written below when it ran.)
+
+**Left.** int_times and int_div (2.4: a case split per value of the case variable, or baguette
+writing cake's product encoding); the writer's speed on regular rows; whether `--e2e` becomes a
+default and whether the bridge is retired (D-0187 §5, the user's). Results in
+`/cluster/arthur/baguette-results/wave56-e2e6/`.
