@@ -12,7 +12,7 @@
 #
 # Usage: tools/e2e/measure_e2e.sh MODEL.fzn OUTDIR
 # Env:   as measure.sh: CAKE_PB_CP (required), BAGUETTE, VERIPB, SOLVE_TIMEOUT, CHECK_TIMEOUT,
-#        CAKE_HEAP, KEEP.
+#        CAKE_HEAP, KEEP; E2E_FLAGS (T7, D-0196), e.g. `--bits-above 64`.
 #
 # Prints ONE tab-separated line:
 #   id answer verdict  t_solve rss_solve  t_elab rss_elab  t_cake rss_cake
@@ -75,8 +75,9 @@ python3 -I "$HERE/fzn2scp.py" "$FZN" "$o.scp" "$o.names" 2> "$o.tr.err" || fin "
 [ -s "$o.cake.err" ] && fin "CAKE-ENCODE-FAIL"
 opt=$(sed -n 's/.*(prob_type (\(minimize\|maximize\) .*/\1/p' "$o.scp")
 
-stage solve "$TS" bash -c 'ulimit -v 4000000; exec "$0" "$1" --proof "$2" --e2e > "$3" 2> "$4"' \
-    "$B" "$FZN" "$o.bag" "$o.bag.out" "$o.bag.err"
+# E2E_FLAGS (T7, D-0196): more solver flags, `--bits-above W` for the bits arm
+stage solve "$TS" bash -c 'ulimit -v 4000000; exec "$0" "$1" --proof "$2" --e2e $5 > "$3" 2> "$4"' \
+    "$B" "$FZN" "$o.bag" "$o.bag.out" "$o.bag.err" "${E2E_FLAGS:-}"
 T+=("$st_t $st_m")
 [ "$st_rc" -eq 124 ] && fin "SOLVE-TIMEOUT"
 [ "$st_rc" -eq 3 ] && grep -q '^baguette: --e2e: ' "$o.bag.err" &&
