@@ -25674,3 +25674,119 @@ rather than a property of the encoding. A middle `W` is (b), not part of this ta
   D-0133.
 - The nodes per second include the encoding time in the wall. An arm that encodes faster looks faster
   per node on short runs.
+
+## D-0200  [AUTONOME] hotfix: the M7-T8 heap budget was read only at the end of a major cycle, so a growing heap could reach the address-space limit between two readings. It is now also polled ten times a second of CPU against the last reading plus the major words allocated since, and confirmed by one forced cycle
+
+Agent-heapguard, branch `wave56-heapguard`, 2026-11-21. Claim `hotfix`, no ROADMAP row. Runs and
+scripts in `/scratch/arthur/wave56-heapguard-runs/`.
+
+### 1. The cause
+
+Under the Challenge harness (`--max-heap-mb 8192`, `ulimit -v` 16 GiB, MemoryMax 32G), four runs
+died on `Fatal error: allocation failure during minor GC` or `Fatal error: exception Out of memory`
+at 14.4 to 14.7 GB RSS instead of the M7-T8 refusal. Reproduced with main `f365c1e` (binary
+`7c475a45`, the gate-88 binary) on 2013 proteindesign12 1HZ5, same flags and limits: rc 134 after
+63 s, 14.5 GB RSS.
+
+The guard read `Gc.quick_stat ().heap_words`, which on OCaml 5.1 is a snapshot taken at the end of
+the last major cycle (the header of `check_heap_at` had already measured that it is 0 before the
+first one). Both halves read it, the `Gc` alarm at each cycle end and the synchronous check at each
+declaration. A cycle lasts longer the larger the heap is. A probe build that printed the snapshot
+and `/proc/self/statm` at each alarm showed it on 1HZ5:
+
+| CPU s | heap at the cycle end | RSS |
+|---|---|---|
+| 16.0 | 2 924 MB | 3.2 GB |
+| 27.3 | 6 574 MB | 7.0 GB |
+| 63 | (no cycle ended) | 14.5 GB, abort |
+
+The heap grew by about 2 GB every 7 s and the next cycle had not ended when the address space ran
+out. RSS tracks the heap figure at every alarm on 1HZ5, on 2017 groupsplitter u6g3pref0 and on 2015
+is HgSWGJHxY5, so nothing outside the OCaml heap is involved. D-0198's larger minor heap is not the
+cause either. The m10t5 series binary predates it and failed the same way, and main with
+`OCAMLRUNPARAM=s=256k` aborts the same way on 1HZ5 (74 s, 16.3 GB RSS, the smaller minor heaps
+reserving less of the address space).
+
+### 2. The fix
+
+- **An estimate between two cycle ends** (`Encoding.heap_estimate`). The heap cannot gain more
+  words since the snapshot than were allocated into it since, by promotion or directly.
+  `Gc.counters`'s third component counts exactly those and is live. So the snapshot plus the major
+  words allocated since is an upper bound on the heap now, and it is tight while the heap grows (on
+  1HZ5 between the two alarms above, the heap gained 3.65 GB and the major words 3.8 GB). The base
+  pair is taken by the alarm at each cycle end.
+- **The estimate only decides when to look** (`Encoding.heap_overrun`). Past the budget, it forces
+  the current cycle to its end with `Gc.major` and the fresh snapshot decides. A run is refused on a
+  cycle-end figure, which is the rule the alarm already had. The declaration check uses it too.
+- **A CPU-time ticker** calls it (`bin/main.ml`, `SIGVTALRM` every 0.1 s of user time, handler
+  `Encoding.poll_heap`), installed only under `--max-heap-mb`. It ends the run the way the alarm
+  does, message and exit 5, wherever it lands.
+- **`Out_of_memory` at the top level** (parse and solve) prints a resource message and exits 5. It
+  is the one allocation failure that can be caught, a single large allocation the runtime could not
+  map, which no reading of the heap sees coming.
+
+### 3. The choices, and the two designs that were measured and dropped
+
+| option | measured consequence |
+|---|---|
+| poll from the search's `stop` closure (node entry, every 128 runs, the trace) | 2017 groupsplitter u6g3pref0 `--no-proof`: the root propagation completed 127 runs in 42 s and grew the heap from 4.4 to 9.9 GB, one run short of the poll. The alarm refused at 9 876 MB, 10 939 MB with `s=256k`. No count of runs or nodes bounds the allocation between two polls |
+| **poll on a CPU-time ticker** (kept) | 16 of 16 runs refused between 8 196 and 8 703 MB, see §4 |
+| confirm with `Gc.full_major` before refusing (never stricter than the alarm) | 1HZ5 `--no-proof` sat at 8.8 GB RSS for 680 s, forcing a cycle every `limit / 16` words, 143 nodes in 683 s, never refused and never ending. Killed by its PID |
+| **confirm with one `Gc.major`** (kept) | the alarm's rule. The same run is refused at 30 s |
+
+Two parameters, both round rather than calibrated. The ticker period is 0.1 s, so the heap can
+pass the budget by what the mutator allocates in a tenth of a second (a few hundred MB on these
+runs, 6 % at most in §4). After a forced cycle finds the heap under the budget, the next one waits
+for `limit / 16` more major words. Without that floor a run hovering under its budget would force a
+cycle every few MB of promotion. With it, such a run can be caught up to a sixteenth past.
+
+The poll ends the run from a signal handler, at an arbitrary point, as the alarm always has, with the
+same partial proof that the refusal message already declares. Raising instead would have to unwind
+through code that never agreed to handle it, the proof writer included (the alarm's own comment).
+
+To revert, revert the `hotfix (D-0200)` commits of `wave56-heapguard`. No default changes, since
+everything here is behind `--max-heap-mb`, except the `Out_of_memory` arm, which turns an rc 2
+abort into an rc 5 message.
+
+### 4. Measurements
+
+Binary `34db2c68` (`3465a33`) unless stated, harness flags and limits, `--proof` and `--no-proof`,
+default minor heap and `OCAMLRUNPARAM=s=256k`. Before is the m8t4b and m10t5 run directories.
+
+| instance | before | after, 4 runs each |
+|---|---|---|
+| 2013 proteindesign12 1HZ5 | allocation failure, 14.5 GB | exit 5 at 8 203 to 8 678 MB, 30 to 51 s, RSS at most 8.9 GB |
+| 2018 proteindesign12 2PCY | Out of memory, 14.4 GB | exit 5 at 8 210 to 8 703 MB, 32 to 56 s, RSS at most 9.1 GB |
+| 2015 is HgSWGJHxY5 | allocation failure, 14.6 GB | exit 5 at 8 196 to 8 646 MB, 26 to 48 s, RSS at most 9.0 GB |
+| 2017 groupsplitter u6g3pref0 | allocation failure (m10t5), 14.7 GB without the proof | exit 5 at 8 589 to 8 687 MB, 48 to 67 s, RSS at most 9.0 GB |
+
+2PCY without any budget: main `7c475a45` dies on `Fatal error: exception Out of memory`, rc 2, and
+this branch exits 5 with the `Out_of_memory` message (both at 14.4 GB RSS).
+
+Cost (`perf stat -e instructions:u`, binary `c181478d`, which differs from `34db2c68` only on the
+paths that fire and in a message), the 21 fast lane instances at their node budget with `--proof`.
+Without `--max-heap-mb` the code executed is the old one (no timer, no handler, the declaration
+check still matches `None` first), and the instructions move by at most 0.08 % (fox-geese, 0.014 %
+when rerun with one proof path for both). With `--max-heap-mb 100000`, which never fires, the new
+binary runs 0.01 to 0.39 % FEWER instructions than the old one, because the declaration check now
+reads `Gc.counters` where it read `Gc.quick_stat`, which aggregates every domain's statistics
+into a freshly allocated record. Against its own run without the budget, the new binary costs at most 0.19 %
+(fox-geese) and 0.016 % elsewhere.
+
+### 5. The tests
+
+- `test_proof`: the estimate both ways at a budget 16 MB above the live heap. 32 MB kept alive is an
+  overrun, and 48 MB that died before the last collection, which the estimate counts past the
+  budget, is not one. Plus the `Out_of_memory` message's wording.
+- `test_endtoend`: the CLI, a 10-into-9 pigeonhole over clauses (Boolean cells, 0.3 s) under
+  `OCAMLRUNPARAM=s=256k,o=100000`, a pacing that makes major cycles rare, at `--max-heap-mb 8`.
+  Asserts exit 5, the wording, a heap of 8 to 12 MB and no runtime abort. Main `7c475a45` exits 5
+  at 16 MB there (and 0 without `s=`, the budget never enforced), this branch at 9 MB on 30 runs of
+  30.
+
+### 6. What this does not cover
+
+- A single allocation larger than what is left of the address space. It surfaces as
+  `Out_of_memory` and §2's arm, or, inside a minor collection, as the uncatchable abort.
+- Phases that allocate faster than a few GB per second of CPU, where a tenth of a second is more
+  than the headroom. The harness's budget at half of `ulimit -v` leaves 8 GB on these runs.

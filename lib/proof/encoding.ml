@@ -1035,6 +1035,87 @@ let heap_words_now = heap_words
 let words_of_mb mb = mb * 1024 * 1024 / word_bytes
 let mb_of_words w = w * word_bytes / 1024 / 1024
 
+(* D-0200. THE READING BETWEEN TWO MAJOR CYCLES.
+
+   [heap_words] above is a snapshot taken at the end of the last major cycle, and a cycle
+   lasts longer the larger the heap is. Measured on 2013 proteindesign12 1HZ5 at
+   --max-heap-mb 8192 under the harness's 16 GiB `ulimit -v`: the alarms read 2.9 GB at
+   16 s and 6.6 GB at 27 s, the heap grew by about 2 GB every 7 s, and the next cycle had
+   not ended when the address space ran out at 14.5 GB RSS, 63 s in -- "Fatal error:
+   allocation failure during minor GC", the abort M7-T8 exists to replace. The alarm and
+   the synchronous check both read that snapshot, so neither could see past 6.6 GB.
+
+   The words the heap can have gained since the snapshot are bounded by the words
+   allocated INTO it since then: promoted by a minor collection, or allocated there
+   directly (a large array). [Gc.counters]'s third component counts exactly those, and it
+   is live -- [Caml_state]'s counter plus the current slice, no walk -- unlike the heap
+   figure. So
+
+     estimate = heap at the last cycle end + major words allocated since
+
+   is an UPPER bound on the heap now (memory swept and reused in between only makes it
+   loose), and it is tight while the heap grows, which is the case that kills a run: on
+   1HZ5 between the two alarms above, the heap gained 3.65 GB and the major words 3.8 GB.
+
+   The base pair is recorded by the alarm, i.e. at the end of each cycle, and by
+   [heap_overrun] after the cycle it forces. Before the first cycle (and in a process that
+   never installed the alarm, a test binary) the base is (0, 0) and the estimate is every
+   major word ever allocated: looser, still an upper bound. *)
+let base_heap = ref 0
+let base_major = ref 0.
+
+let live_major_words () =
+  let _, _, major = Gc.counters () in
+  major
+
+let rebaseline () =
+  base_heap := heap_words ();
+  base_major := live_major_words ()
+
+let heap_estimate () = !base_heap + int_of_float (live_major_words () -. !base_major)
+
+(* The major words at the end of the last cycle [heap_overrun] forced; see there. *)
+let forced_at = ref neg_infinity
+
+(* [Some w] when the heap is past [limit] MB, [w] its size in words; [None] otherwise.
+
+   An estimate past the budget is not yet a refusal, because the estimate is loose on a
+   heap that churns: a run with 3 GB live and 6 GB of garbage promoted during one cycle
+   would read 9 GB. So the estimate only decides when to LOOK: it forces the current
+   major cycle to its end ([Gc.major], seconds on a heap of several GB, and paid only by a
+   run near its budget), and the fresh snapshot decides. A run is therefore refused on a
+   cycle-end figure, never on the estimate, and the refusal is the alarm's.
+
+   One more cycle is not forced until [limit / 16] major words have been allocated since
+   the last forced one. Without that floor, a run whose live heap sits just under its
+   budget would force a full cycle every few MB of promotion and spend its time in the
+   collector instead of ending. The cost of the floor: such a run can be caught up to a
+   sixteenth past its budget, never more. [AUTONOME] D-0200 §3.
+
+   WHY ONE COLLECTION AND NOT A FULL ONE. OCaml 5 sweeps a cycle's garbage during the NEXT
+   cycle, so the figure at the end of the forced cycle still counts what died during it
+   -- exactly as the figure the alarm reads at a natural cycle end does. Confirming with
+   [Gc.full_major] instead was tried and is worse: it is more lenient than the alarm, so a
+   run whose live heap sits just under its budget is never refused and never ends
+   either. 2013 proteindesign12 1HZ5 --no-proof spent 680 s at 8.8 GB RSS forcing a
+   cycle every [limit / 16] words, at half its speed, where the single-cycle reading
+   refuses it at 31 s (D-0200 §3). One cycle keeps the rule the alarm already had: a run
+   is refused when the heap at a cycle end is past its budget; the estimate only makes
+   that cycle end come sooner. [forcing] keeps the alarm, which the forced cycle wakes,
+   from refusing in the middle of [heap_overrun] with no o_what to give. *)
+let forcing = ref false
+
+let heap_overrun limit =
+  let lim = words_of_mb limit in
+  if heap_estimate () <= lim then None
+  else if live_major_words () -. !forced_at < float_of_int (lim / 16) then None
+  else (
+    forcing := true;
+    Fun.protect ~finally:(fun () -> forcing := false) Gc.major;
+    rebaseline ();
+    forced_at := !base_major;
+    if !base_heap > lim then Some !base_heap else None)
+
 let narrow_this = function
   | None -> "  No integer variable has been declared yet.\n"
   | Some (x, lo, hi) ->
@@ -1113,31 +1194,53 @@ let check_heap_at t ~what ~blo ~bhi =
   let lo = blo and hi = bhi in
   match !heap_limit_mb with
   | None -> ()
-  | Some limit ->
-      let w = heap_words () in
-      if w > words_of_mb limit then
-        (* The declaration being attempted counts as a candidate for "the one to
-           narrow": it has not reached [t.widest] yet, and on the very first
-           declaration it is the only thing there is to name. A diagnostic that says
-           "no integer variable has been declared yet" while refusing a declaration
-           would be technically true and useless. *)
-        let widest =
-          match t.widest with
-          | Some (_, wlo, whi) when whi - wlo >= hi - lo -> t.widest
-          | _ -> Some (what, lo, hi)
-        in
-        raise
-          (Heap_too_large
-             {
-               o_what = what;
-               o_kind = "MB of OCaml heap";
-               o_lo = lo;
-               o_hi = hi;
-               o_adds = encoding_size t;
-               o_already = w;
-               o_limit = limit;
-               o_widest = widest;
-             })
+  | Some limit -> (
+      match heap_overrun limit with
+      | None -> ()
+      | Some w ->
+          (* The declaration being attempted counts as a candidate for "the one to
+             narrow": it has not reached [t.widest] yet, and on the very first
+             declaration it is the only thing there is to name. A diagnostic that says
+             "no integer variable has been declared yet" while refusing a declaration
+             would be technically true and useless. *)
+          let widest =
+            match t.widest with
+            | Some (_, wlo, whi) when whi - wlo >= hi - lo -> t.widest
+            | _ -> Some (what, lo, hi)
+          in
+          raise
+            (Heap_too_large
+               {
+                 o_what = what;
+                 o_kind = "MB of OCaml heap";
+                 o_lo = lo;
+                 o_hi = hi;
+                 o_adds = encoding_size t;
+                 o_already = w;
+                 o_limit = limit;
+                 o_widest = widest;
+               }))
+
+(* The asynchronous refusal, shared by the alarm and by [poll_heap] (D-0200): the same
+   message and the same exit, so a harness cannot tell which of the two caught the run and
+   has no reason to. *)
+let refuse_heap ~limit w =
+  let size, widest =
+    match !live with None -> (0, None) | Some t -> (encoding_size t, t.widest)
+  in
+  !warn_sink
+    (heap_message
+       {
+         o_what = "";
+         o_kind = "MB of OCaml heap";
+         o_lo = 0;
+         o_hi = 0;
+         o_adds = size;
+         o_already = w;
+         o_limit = limit;
+         o_widest = widest;
+       });
+  exit exit_resource
 
 (* The reactive backstop, as a [Gc] alarm -- mem_guard.ml's shape (M1-T53), in the
    solver rather than in a test binary.
@@ -1153,39 +1256,76 @@ let check_heap_at t ~what ~blo ~bhi =
    Idempotent under repeated firing (the alarm is deleted first), and installing it
    twice is harmless. [None] installs nothing at all, so the default build does not
    even pay for the alarm. *)
+let alarm : Gc.alarm option ref = ref None
+
 let install_heap_guard () =
   match !heap_limit_mb with
   | None -> ()
   | Some limit ->
-      let alarm = ref None in
       let check () =
-        let w = heap_words () in
-        if w > words_of_mb limit then (
+        (* D-0200: the end of a cycle is the moment the snapshot is fresh, so it is also
+           the moment the estimate's base is taken. *)
+        rebaseline ();
+        let w = !base_heap in
+        if w > words_of_mb limit && not !forcing then (
           (match !alarm with
           | Some a ->
               Gc.delete_alarm a;
               alarm := None
           | None -> ());
-          let size, widest, what =
-            match !live with
-            | None -> (0, None, "")
-            | Some t -> (encoding_size t, t.widest, "")
-          in
-          !warn_sink
-            (heap_message
-               {
-                 o_what = what;
-                 o_kind = "MB of OCaml heap";
-                 o_lo = 0;
-                 o_hi = 0;
-                 o_adds = size;
-                 o_already = w;
-                 o_limit = limit;
-                 o_widest = widest;
-               });
-          exit exit_resource)
+          refuse_heap ~limit w)
       in
-      alarm := Some (Gc.create_alarm check)
+      if Option.is_none !alarm then alarm := Some (Gc.create_alarm check)
+
+(* D-0200. The poll for the stretch between two cycle ends that the alarm cannot see (see
+   [heap_estimate]). bin/main.ml calls it from a SIGVTALRM handler, every
+   [heap_poll_seconds] of CPU time, installed only when a budget is set.
+
+   A timer and not a count of nodes or propagator runs, because no count bounds the
+   allocation between two polls: on 2017 groupsplitter u6g3pref0 the root propagation
+   completed 127 runs in 42 s and grew the heap from 4.4 to 9.9 GB, one run short of the
+   search's every-128-runs [stop] poll. A tenth of a second of CPU bounds it by what the
+   mutator can allocate in that time, a few hundred MB, and costs ten calls a second.
+
+   It ends the run the way the alarm does (message, exit 5), wherever the handler lands,
+   and for the alarm's reason: there is no point the signal can wait for that every phase
+   reaches. [forcing] makes a tick that lands inside its own forced collection a no-op. *)
+let heap_poll_seconds = 0.1
+
+let poll_heap () =
+  match !heap_limit_mb with
+  | None -> ()
+  | Some _ when !forcing -> ()
+  | Some limit -> (
+      match heap_overrun limit with None -> () | Some w -> refuse_heap ~limit w)
+
+(* D-0200. What an [Out_of_memory] that reached bin/main.ml's top level says: a single
+   allocation the runtime could not map, typically one large array, which no reading of
+   the heap can see coming. Same exit as the budget, because it is the same bucket -- the
+   machine ran out, the model is not wrong and neither is the solver. *)
+let out_of_memory_message () =
+  let encoding =
+    match !live with
+    | None -> ""
+    | Some t -> Printf.sprintf ", the encoding %d clauses and values" (encoding_size t)
+  in
+  let budget =
+    match !heap_limit_mb with
+    | None ->
+        "  No budget was set. --max-heap-mb=N sets one, and stops a run at it before this.\n"
+    | Some l ->
+        Printf.sprintf
+          "  The address space ran out before the %d MB asked for with --max-heap-mb was\n\
+          \  reached: lower it, or raise `ulimit -v`.\n"
+          l
+  in
+  Printf.sprintf
+    "baguette: out of memory: an allocation failed (Out_of_memory), and the run is \
+     stopping\n\
+    \  here (M7-T8, D-0200). The OCaml heap was %d MB at the last major cycle%s.\n\
+     %s"
+    (mb_of_words (heap_words ()))
+    encoding budget
 
 (* M7-T8's two join the other three, through the SAME entry point rather than a second
    one bin/main.ml would have to remember to call. A budget nobody reads is a budget

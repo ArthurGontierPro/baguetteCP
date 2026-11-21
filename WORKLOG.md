@@ -21,7 +21,6 @@ of it to every session and stopping at a broken line before it even reached the 
 |---|---|---|---|
 | M10-search-strategy-T5, M9-no-proof-T3, M7-T30 (one Challenge series on current main: default, `-f`, default `--no-proof`) | run dirs `/scratch/arthur/m10t5/`, `tools/compare/` (additions), `bench/challenge/README.md` (the run's row); reserved record D-0185 | agent-m10t5 (`wave55-m10t5`) | 2026-11-20 |
 | M8-bits-encoding-T4 continuation (middle W on the families order wins, then the default) | run dirs `/scratch/arthur/m8t4b/`, `tools/compare/` (additions); reserved record D-0199 | agent-m8t4b (`wave56-m8t4b`) | 2026-11-21 |
-| hotfix: the heap guard is overshot (runs die on `Fatal error: allocation failure during minor GC` or `Out of memory` instead of the M7-T8 refusal) | `lib/proof/encoding.ml` (the guard's alarm), and the polling site it needs (`lib/core/search.ml` or `engine.ml`, one hook), named in the first commit; reserved record D-0200 | agent-heapguard (`wave56-heapguard`) | 2026-11-21 |
 
 ## Cross-session requests
 
@@ -644,6 +643,7 @@ section 1. Shares are inclusive, of the whole run.
 | M4-T6b (measure the node gain of GAC arithmetic before building it) | agent-gac (`wave56-gac`) | 2026-11-21 | **D-0194 [AUTONOME].** Not built. Of 8.6 M small-operand `int_times`/`int_div`/`int_abs` on the Challenge, 99.8 % are 0..1 indicator products, and root GAC prunes no operand value beyond bounds(Z). GAC saves at most 9 % of nodes under Gecode (14 closed, same search) and nothing inside baguette (a `baguette_regular` twin, 26 closed, geo 1.10x the nodes). `bench/gac_measure/` |
 | hotfix: the Stack overflow on the ATSP instances (D-0194 §7) | agent-stack (`wave56-stack`) | 2026-11-21 | **D-0197 [AUTONOME].** Not on the exit path: `Learned.make`'s merge recursed once per term (`learned.ml:247`) and PB conflict analysis built a 32 168 204-term row (a ladder 22 M wide). Constant-stack walks in `learned.ml` (+ `List.merge` replaced), `writer.ml` (`Pol.write_with`, `Pol.tokens`), `store.ml`; test in `test_learned.ml` under a 512 KiB fiber stack. Same bytes everywhere (gate on `99cf6b0`). |
 | M6-T2 (re-scope the minor-GC lever after M16) | agent-gc (`wave56-gc`) | 2026-11-21 | **D-0198 [AUTONOME].** No `Bigarray`/`Bytes` move: the trail and the domains are 0.5 to 4.5 % of the words allocated. The nursery at 4 M words (`bin/main.ml`, an eighth of a tight `ulimit -v` at most) and `Justify.sort_pairs` over indices. Instructions -7.1 % (no proof) and -11.7 % (proof) median, byte-identical |
+| hotfix: the heap guard is overshot (`Fatal error: allocation failure during minor GC` or `Out of memory` instead of the M7-T8 refusal) | agent-heapguard (`wave56-heapguard`) | 2026-11-21 | **D-0200 [AUTONOME].** The budget was read only at a major cycle's end, and on a growing heap a cycle outlasts the climb to the address-space limit (1HZ5: 6.6 GB at one cycle end, abort at 14.5 GB before the next). Now also a SIGVTALRM poll every 0.1 s of CPU, under `--max-heap-mb` only, against the last snapshot plus the major words allocated since, confirmed by one forced `Gc.major`; `Out_of_memory` at the top level exits 5. The four instances: 16 of 16 runs (proof and not, default and `s=256k` minor heap) exit 5 at 8 196 to 8 703 MB under an 8 192 MB budget, RSS at most 9.1 GB. No timer without the flag; with it, instructions 0.01 to 0.39 % below main. Two lanes (test_proof, test_endtoend). Not merged; the orchestrator merges |
 
 ## Handoff notes
 
@@ -657,7 +657,7 @@ proof and -6 % with, evm -28 %, openshop and rcpsp_11 -20 % with proof, setup un
 end by cake_pb_cp on both paths, order and bits arms; black-hole_17 x428 -> x11.8; roster-sickness,
 zephyrus, gfd-n120 verified at `--bits-above 64`); M7-T35 (member's debug-check false alarm); M4-T6
 and M4-T6b (GAC arithmetic: not built, no node gain); M13-T1 (root LP: not built); M15 T1-T3; a crash
-hotfix (D-0197); M6-T2 (D-0198: no Bigarray move, the trail and domains are under 1 % of cycles; a larger minor heap and an index sort in Justify instead, -7 % instructions without proof and -12 % with, byte-identical).
+hotfix (D-0197); a second hotfix (D-0200: the heap guard read a heap size updated only at major-cycle ends, so runs died on `allocation failure during minor GC` instead of the clean refusal; now estimated live, every 0.1 s, under `--max-heap-mb` only); M6-T2 (D-0198: no Bigarray move, the trail and domains are under 1 % of cycles; a larger minor heap and an index sort in Justify instead, -7 % instructions without proof and -12 % with, byte-identical).
 
 **Running**: M10-T5/M9-T3/M7-T30 (default, `-f`, `--no-proof`, D-0185), a Challenge series; M8-T4's middle-W
 check (D-0199) before choosing the default.
@@ -680,10 +680,16 @@ relaunched from their branches (agents are now told to check any wait after 30 m
 - D-0196: the bits arm in the e2e prefix through a ripple-carry adder over cake's bits.
 - D-0188: T5's globals under `--e2e`, element's head by `pol` (and `Model.constr` gains `c_id`).
 - D-0195: regular, cumulative, int_abs in the chain; int_times and int_div left out.
+- D-0200: the heap guard's live estimate and timer (design chosen among three, D-0200 §3).
 - D-0197: the stack-overflow hotfix (tail-recursive merges), byte-identical.
 - D-0189: the D-0026 reverse arm ignores member's lemma-plus-Weaken pair (debug-only).
 - D-0198: the minor heap raised to 4 M words (capped to fit the tests' ulimit -v), `OCAMLRUNPARAM=s=256k` restores it.
 - D-0194: GAC arithmetic not built.
+
+### 2026-11-21 (agent-heapguard, `wave56-heapguard`): hotfix, D-0200, the heap budget is polled between cycle ends
+
+`--max-heap-mb` now also polls on a CPU-time ticker (SIGVTALRM, 0.1 s, `Encoding.poll_heap`, installed only under the flag) against the last cycle-end snapshot plus the major words allocated since, and confirms with one forced `Gc.major` (the alarm's rule). `Gc.full_major` as the confirmation was tried and dropped, a run hovering under its budget then never ended (D-0200 §3).
+The four Challenge instances now exit 5 within 6 % of the 8 GB budget instead of aborting at 14 GB, with and without the proof, at both minor-heap settings; `Out_of_memory` reaching the top level exits 5 with a message. Without the flag nothing executes differently. Gate on a fresh clone of `3465a33` (binary `34db2c68`, against gate 88's `7c475a45`): `make check` ok (156 MB peak RSS), 207 x 4 artefacts equal, lane 324/324, debug 311/311, scaling ok, stray 468 in `test/out` as gate 88.
 
 ### 2026-11-21 (orchestrator, autonomous mode): gate 88 green
 

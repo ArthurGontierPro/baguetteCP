@@ -3429,6 +3429,49 @@ let test_m7t8_resource_guard () =
                (Printexc.to_string ex))
             false);
 
+      (* ---- D-0200: the reading BETWEEN two major cycles ----
+
+         [heap_words] is the snapshot of the last cycle end, which on a growing heap lags
+         by a whole cycle; the Challenge runs that died at 14 GB under an 8 GB budget died
+         in that lag. [heap_overrun] bounds the heap by the snapshot plus the major words
+         allocated since, and confirms with a forced collection before it says yes.
+         Asserted both ways, at a budget 16 MB above the live heap:
+         (a) 32 MB kept alive past the budget IS an overrun, whatever the snapshot says;
+         (b) 48 MB that died before the last collection, which the estimate (still on
+             its old base) counts past the budget, is NOT one -- the forced cycle finds
+             the heap under it. Without (b) a guard that refused on the estimate alone
+             would pass (a). *)
+      Gc.full_major ();
+      Encoding.rebaseline ();
+      let budget = Encoding.mb_of_words (Encoding.heap_words_now ()) + 16 in
+      let lim = Encoding.words_of_mb budget in
+      (* [opaque_identity] AFTER the check, so the array is live while it runs: an
+         unread local would be dead, and the collection the check forces would free it. *)
+      let kept = Array.make (Encoding.words_of_mb 32) 0 in
+      check "D-0200 (a): 32 MB kept past a budget 16 MB above the heap is an overrun"
+        (match Encoding.heap_overrun budget with Some w -> w > lim | None -> false);
+      ignore (Sys.opaque_identity kept);
+      Gc.full_major ();
+      Encoding.rebaseline ();
+      for _ = 1 to 6 do
+        ignore (Sys.opaque_identity (Array.make (Encoding.words_of_mb 8) 0))
+      done;
+      Gc.full_major ();
+      check "D-0200 (b): 48 MB of garbage puts the estimate past the budget"
+        (Encoding.heap_estimate () > lim);
+      check
+        "D-0200 (b): and is not refused, because the forced collection finds the heap \
+         under it"
+        (Encoding.heap_overrun budget = None);
+      (* The top-level Out_of_memory arm's wording (bin/main.ml, exit 5): it names the
+         exception, so a harness can tell it from the budget, and the budget in force. *)
+      Encoding.heap_limit_mb := Some 4242;
+      let oom = Encoding.out_of_memory_message () in
+      check "D-0200: the Out_of_memory refusal names the exception"
+        (m7_contains oom ~needle:"an allocation failed (Out_of_memory)");
+      check "D-0200: and the budget it ran out under"
+        (m7_contains oom ~needle:"the 4242 MB asked for with --max-heap-mb");
+
       (* ---- the exit status is a bucket of its own ----
 
          A harness that cannot tell "this machine ran out" from "this proof is wrong"

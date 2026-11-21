@@ -2001,6 +2001,23 @@ let () =
      before the first allocation that is not argument parsing. Installs nothing at all
      unless --max-heap-mb was asked for. *)
   Encoding.install_heap_guard ();
+  (* D-0200. The alarm reads the heap only at the end of a major cycle, and a cycle on a
+     heap of several GB can outlast the climb to the address-space limit. So the budget is
+     also polled on a CPU-time ticker, ten times a second: every phase, every granularity
+     of propagator (D-0200 §2 has the run whose root propagation did 127 runs in 42 s).
+     The handler ends the run where it stands, as the alarm does. ITIMER_VIRTUAL counts
+     this process's user time only, so it does not tick while a write blocks. Installed
+     only under --max-heap-mb, so a run without it has no timer and no handler. *)
+  (match Encoding.current_heap_limit_mb () with
+  | None -> ()
+  | Some _ ->
+      Sys.set_signal Sys.sigvtalrm (Sys.Signal_handle (fun _ -> Encoding.poll_heap ()));
+      ignore
+        (Unix.setitimer Unix.ITIMER_VIRTUAL
+           {
+             Unix.it_interval = Encoding.heap_poll_seconds;
+             it_value = Encoding.heap_poll_seconds;
+           }));
   if not (Sys.file_exists opts.model) then (
     Printf.eprintf "no such file: %s\n" opts.model;
     exit exit_usage);
@@ -2009,6 +2026,10 @@ let () =
   match
     Timing.phase "parse" (fun () -> Fz_error.catch (fun () -> Builder.of_file opts.model))
   with
+  | exception Out_of_memory ->
+      prerr_string (Encoding.out_of_memory_message ());
+      flush stderr;
+      exit exit_resource
   | Error e ->
       prerr_endline (Fz_error.to_string e);
       exit exit_usage
@@ -2056,6 +2077,14 @@ let () =
              exit 134 it replaces. [Encoding] refuses before it allocates, so there is
              no partial encoding and no partial proof to warn about. *)
           prerr_string (Encoding.overrun_message o);
+          warn_partial_proof opts;
+          flush stderr;
+          exit exit_resource
+      | exception Out_of_memory ->
+          (* D-0200. One allocation the runtime could not map: the one failure of this
+             kind that can be caught. "Fatal error: allocation failure during minor GC"
+             cannot be, which is why the budget's poll exists. *)
+          prerr_string (Encoding.out_of_memory_message ());
           warn_partial_proof opts;
           flush stderr;
           exit exit_resource
