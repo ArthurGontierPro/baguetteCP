@@ -25033,3 +25033,100 @@ That holds because `Encoding.write_opb` is never called under that sink, and `re
 reads the objective, serves only `define_reif`, which nothing in `lib/` calls. L1 relies on
 `int_of_string_opt` accepting exactly the decimal digit strings up to `max_int`, which its test checks
 through every window from 2 to 17 bytes and the default.
+## D-0197  [AUTONOME] hotfix: the "Stack overflow" on the ATSP instances (D-0194 §7) was `Learned.make` recursing once per term on a 32-million-term PB row. Constant-stack walks there and on five more sites, same answers
+
+Agent-stack, branch `wave56-stack`, 2026-11-21. Claim `hotfix`, no ROADMAP row.
+
+### 1. The cause
+
+`main.exe 2021_ATSP_instance10_0p25.baguette.fzn --no-proof -s -t 240000` (binary `dca706be`) prints
+two solutions and dies with `Fatal error: exception Stack overflow`, rc 2. With `OCAMLRUNPARAM=b` the
+backtrace is 1 022 frames of `Learned.make.merge` (`lib/core/learned.ml:247` at `15a10e0`) under
+`Lit.equal` (`lib/proof/lit.ml:183`). A probe build that printed the call stack of every `make` over
+more than a million terms found the caller: `Pb_analysis.analyse` (`pb_analysis.ml:1118`,
+`Learned.of_pb_row` of the conflict row) from `Search.pb_at_conflict`, on a row of **32 168 204 terms**,
+the conflict row over the ladder of `X_INTRODUCED_317_`, a variable 22 072 740 values wide. The merge was
+`{ coeff = a1; lit = l1 } :: merge rest`, one frame per term, and 32 million of them pass OCaml 5's
+1 GiB stack limit. `2025_atsp_instance4_0p15` gives the same backtrace.
+
+So the crash was in the SEARCH, at the first PB conflict analysis over that row, and not on the exit
+path. The `stats:` lines printed before it are the encoding cost, which `bin/main.ml` prints before
+search starts. The run "ended rc 0 at -t 30000" because the 63 s setup outlasts 30 s: that run took
+no decision.
+
+With `--proof` the old binary does not reach the crash point. After 6.5 minutes it was still writing
+the `.opb` (33 GB on disk, 30 GB resident, no search yet), which is why the Challenge series saw
+CAPPED or REFUSED rather than the crash.
+
+### 2. The fix
+
+- `lib/core/learned.ml`: `merge_equal_lits`, the merge shared by `make` and `make_reference`. It
+  accumulates in reverse and reverses once. `sort_by_lit` no longer calls `List.merge`, which is
+  one frame per element in OCaml 5.1.1's stdlib (unlike `List.map` and `@`, which are
+  `tail_mod_cons` there), and calls a tail-recursive stable merge instead, earlier run first on a tie.
+  `ladder_form`'s per-variable `group` is accumulated too.
+- `lib/proof/writer.ml`: `Pol.write_with` walks a `pol`'s left spine with a loop. `Pol.sum` and
+  `Pol.lin_comb` build one `Add` per operand, so the recursion was one frame per operand of the line
+  being written, which is the same width again on the `--proof` path. `Pol.tokens` (the `--stats`
+  shape count) is tail-recursive down the same spine.
+- `lib/core/store.ml`: `drop_page_only_lemmas` (a walk over a `Combine`'s summands) is accumulated.
+
+Each module header has one paragraph saying so. None of these changes an answer. The lists come out
+in the same order, ties go the same way, and the bytes are written in the same order.
+
+### 3. Sites looked at and left
+
+Checked: every `let rec` in `lib/` and `bin/` whose recursive call is under a `::`, an `@` or a `+`,
+and every call of the stdlib functions that are not tail-recursive in 5.1.1 (`List.merge`,
+`List.combine`, `List.split`, `List.concat`/`flatten`, `List.fold_right`, `List.remove_assoc`).
+
+- Left because they are bounded by the MODEL's size, not by width or by the run: `List.combine` on
+  FlatZinc arrays (`builder.ml:358`, `compile.ml:838`, `e2e.ml`), `pairs` (`compile.ml`,
+  `encoding.ml`), `take` (`builder.ml`), `decompose` (`compile.ml`), the `List.concat` of one block
+  per variable of a row (`linear.ml:255`, `encoding.ml:2246`), and `Occurs.merge` and `note_held_back`
+  (a few entries each).
+- Left because they only run in the mutation harness, on the test models: `Writer.rewrite_first`
+  and `Writer.cited_ids`. The writer's header says so.
+- Not measured: `cumulative.ml`'s ladder walk builds explanations nested as deep as the window it
+  crosses (`step prev k`). A recursive emission over that nesting would be one frame per value. No
+  instance has been seen to overflow there, and it is a tree to walk, not a list to rewrite. It is
+  left for whoever finds one.
+
+### 4. The test
+
+`test/unit/test_learned.ml`, `test_d0197_long_rows_small_stack`. The walks run inside a fresh effect
+fiber after `Gc.stack_limit` is lowered to 64 Ki words (512 KiB). A fiber started after that starts
+small, while the main stack may already have grown and does not shrink. 200 000 terms is then about
+ten times what one frame per term can hold. A probe check asserts that a one-frame-per-element
+recursion over 200 000 does overflow there, so the test cannot pass because the limit failed to apply.
+The checks drive `make` on two overlapping runs (the stable merge, then the summing), `make_reference`,
+`combine` against `combine_reference`, a 200 000-operand `Pol.sum` written and counted, and
+`drop_page_only_lemmas`. On the old code the probe passes and the five checks FAIL. With the fix they
+pass in well under a second.
+
+A model run under a reduced stack was not chosen. The overflow needs a row tens of millions of terms
+long, which only a declared width in the millions produces, and CLAUDE.md forbids wide domains in the
+suite. A unit test that shrinks the stack instead of growing the input finds the same defect at width
+200 000 with no solver run.
+
+### 5. Measured
+
+Gate on a fresh clone of `wave56-stack` at `99cf6b0` (binary `b8c71132`) against gate 84's
+`dca706be`: `make check` rc 0 (4 463 ok, 0 FAIL, which is gate 84's 4 457 plus the six above), 207 x 4
+artefacts equal, lane 324/324, debug 311/311, scaling ok. The two ATSP instances, `--no-proof -s -t
+240000`, under `MemoryMax=32G`:
+
+| instance | before (`dca706be`) | after (`b8c71132`) |
+|---|---|---|
+| 2021_ATSP_instance10_0p25 | 2 solutions, Stack overflow, rc 2 | the same 2 solutions, rc 0. Stop fired at **373.5 s** wall, 709 nodes, peak 32 GB plus 5.8 GB swap |
+| 2025_atsp_instance4_0p15 | 2 solutions, Stack overflow, rc 2 | those 2 and a third improving one, rc 0. Stop at 240.7 s, 824 nodes, peak 27.7 GB |
+
+### 6. A finding left open
+
+The fix removes the crash and exposes the next limit on instance10. The PB analysis of that one
+32-million-term row takes RSS from 11.8 GB to the 32 GB cap in about 2.5 minutes. The profile is
+`Store.member_support`, `Hashtbl.find_opt` and `Pb_analysis.falsified_at_with` per term, then the
+kernel's swap paths. The analysis polls the stop only between its steps, so the 240 s limit landed
+133 s late. A bound on PB analysis by row length, giving the conflict back to the clause path past
+some number of terms, would change what is learned on wide instances. That is a default-behaviour
+decision for the user, so it is not taken here.

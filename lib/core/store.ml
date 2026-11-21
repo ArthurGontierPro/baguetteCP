@@ -15,7 +15,10 @@
    allocated at every call whether or not anything checks it: three per entry, about as
    many words as the entry itself. The bound walks of [hi_below] and [lo_at_least] are
    walks of the newest moves then binary searches over the bound histories, and
-   [created_domain] reads an array of the created domains (see each). *)
+   [created_domain] reads an array of the created domains (see each).
+
+   D-0197: a walk over a [Combine]'s summands ([drop_page_only_lemmas]) runs in constant
+   stack, since a summand list is as long as the ladders it crosses. *)
 
 module Lit = Baguette_proof.Lit
 
@@ -653,12 +656,19 @@ let page_only_lemma c lits ws =
   List.compare_lengths lits ws = 0
   && List.for_all2 (fun l (c', w) -> c' = c && Lit.equal w (Lit.negate l)) lits ws
 
-let rec drop_page_only_lemmas = function
-  | Explanation.Term (c, Explanation.Clause { lits; _ }) :: Explanation.Weaken ws :: rest
-    when page_only_lemma c lits ws ->
-      drop_page_only_lemmas rest
-  | s :: rest -> s :: drop_page_only_lemmas rest
-  | [] -> []
+(* Accumulated and reversed (D-0197): a [Combine]'s summand list is as long as the
+   ladders it crosses, so no walk over one recurses once per summand. *)
+let drop_page_only_lemmas summands =
+  let rec go acc = function
+    | Explanation.Term (c, Explanation.Clause { lits; _ })
+      :: Explanation.Weaken ws
+      :: rest
+      when page_only_lemma c lits ws ->
+        go acc rest
+    | s :: rest -> go (s :: acc) rest
+    | [] -> List.rev acc
+  in
+  go [] summands
 
 (* [Explanation.top_weaken_owners] less every top-level [Defining] the root holds and
    every page-only lemma's [Weaken]: the variables the reverse arm of [agreement_holds]

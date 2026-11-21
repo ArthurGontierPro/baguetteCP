@@ -21,7 +21,12 @@
      - comments are [%]; [*] is refused outright.
      - [red]'s witness follows a [:], before the terminator.
      - [#] and [w] DO NOT EXIST. See [wipe_level] and D-0024.
-     - constraints carry [@label]s and are cited by name, never by number. *)
+     - constraints carry [@label]s and are cited by name, never by number.
+
+   D-0197: a [Pol.t] is walked down its left spine in constant stack ([Pol.write_with],
+   [Pol.tokens]): [Pol.sum] builds one [Add] per operand, and a `pol` can have millions.
+   The mutation knob's walks ([rewrite_first], [cited_ids]) still recurse; they run on
+   the test models only. *)
 
 type cid = int
 
@@ -87,32 +92,46 @@ module Pol = struct
   (* M11-complexity-T5 (D-0145, D-0140 W4): the integers go through [Lit.add_int], which
      writes [string_of_int]'s bytes without the format interpreter "%d" used to cost per
      operator; [id_out] writes one constraint reference. *)
-  let rec write_with b id_out = function
+  (* D-0197: the LEFT SPINE is walked by a loop, not by recursion. [sum] and [lin_comb]
+     build left-deep trees, one [Add] per operand, so a `pol` of n operands is a spine n
+     deep, and a recursion down it is n stack frames: a PB conflict row lifted onto the
+     ladder of a variable 22 million values wide is that many operands (2021_ATSP,
+     D-0197). [spine] collects the operators from the leaf up; the right operand of an
+     [Add], which [sum] keeps small, is still written by recursion. Same bytes in the same
+     order: the leftmost leaf, then each operator with its right operand, innermost first,
+     which is reverse Polish. *)
+  let rec write_with b id_out p =
+    let rec spine ops = function
+      | (Id _ | Axiom _) as leaf -> (leaf, ops)
+      | (Add (a, _) | Mul (a, _) | Div (a, _) | Sat a | Weaken (a, _)) as op ->
+          spine (op :: ops) a
+    in
+    let leaf, ops = spine [] p in
+    (match leaf with
     | Id c -> id_out b c
     | Axiom l -> Buffer.add_string b (Lit.to_string l)
-    | Add (a, c) ->
-        write_with b id_out a;
-        Buffer.add_char b ' ';
-        write_with b id_out c;
-        Buffer.add_string b " +"
-    | Mul (a, k) ->
-        write_with b id_out a;
-        Buffer.add_char b ' ';
-        Lit.add_int b k;
-        Buffer.add_string b " *"
-    | Div (a, k) ->
-        write_with b id_out a;
-        Buffer.add_char b ' ';
-        Lit.add_int b k;
-        Buffer.add_string b " d"
-    | Sat a ->
-        write_with b id_out a;
-        Buffer.add_string b " s"
-    | Weaken (a, v) ->
-        write_with b id_out a;
-        Buffer.add_char b ' ';
-        Buffer.add_string b (Lit.var_name v);
-        Buffer.add_string b " w"
+    | _ -> assert false);
+    List.iter
+      (function
+        | Add (_, c) ->
+            Buffer.add_char b ' ';
+            write_with b id_out c;
+            Buffer.add_string b " +"
+        | Mul (_, k) ->
+            Buffer.add_char b ' ';
+            Lit.add_int b k;
+            Buffer.add_string b " *"
+        | Div (_, k) ->
+            Buffer.add_char b ' ';
+            Lit.add_int b k;
+            Buffer.add_string b " d"
+        | Sat _ -> Buffer.add_string b " s"
+        | Weaken (_, v) ->
+            Buffer.add_char b ' ';
+            Buffer.add_string b (Lit.var_name v);
+            Buffer.add_string b " w"
+        | Id _ | Axiom _ -> assert false)
+      ops
 
   let write_cited b cite p = write_with b (fun b c -> Buffer.add_string b (cite c)) p
 
@@ -137,11 +156,15 @@ module Pol = struct
      `+` into an accumulator of Theta(w) terms costs Theta(w), so a `pol` of Theta(w)
      tokens is the shape whose check time grows faster than its byte count, and the
      count is the number to watch rather than the line's length. *)
-  let rec tokens = function
-    | Id _ | Axiom _ -> 1
-    | Add (a, b) -> tokens a + tokens b + 1
-    | Mul (a, _) | Div (a, _) | Weaken (a, _) -> tokens a + 2
-    | Sat a -> tokens a + 1
+  (* Tail-recursive down the left spine, as [write_with] is and for its reason (D-0197). *)
+  let tokens p =
+    let rec go acc = function
+      | Id _ | Axiom _ -> acc + 1
+      | Add (a, b) -> go (acc + go 0 b + 1) a
+      | Mul (a, _) | Div (a, _) | Weaken (a, _) -> go (acc + 2) a
+      | Sat a -> go (acc + 1) a
+    in
+    go 0 p
 end
 
 (* ---------------------------------------------------------------------------
