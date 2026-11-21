@@ -659,12 +659,12 @@ zephyrus, gfd-n120 verified at `--bits-above 64`); M7-T35 (member's debug-check 
 and M4-T6b (GAC arithmetic: not built, no node gain); M13-T1 (root LP: not built); M15 T1-T3; a crash
 hotfix (D-0197); a second hotfix (D-0200: the heap guard read a heap size updated only at major-cycle ends, so runs died on `allocation failure during minor GC` instead of the clean refusal; now estimated live, every 0.1 s, under `--max-heap-mb` only); M6-T2 (D-0198: no Bigarray move, the trail and domains are under 1 % of cycles; a larger minor heap and an index sort in Justify instead, -7 % instructions without proof and -12 % with, byte-identical).
 
-**Running**: M10-T5/M9-T3/M7-T30 (default, `-f`, `--no-proof`, D-0185), a Challenge series; M8-T4's middle-W
-check (D-0199) before choosing the default.
+**Running**: M10-T5/M9-T3/M7-T30 (default, `-f`, `--no-proof`, D-0185), a Challenge series; D-0199 applied by agent-bitsdefault: the default becomes
+`--bits-above 0`, in its own commit with the lane re-record (D-0201); `--bits-above none` restores the old default.
 
 **M8-T4 finished (D-0175)**: `W = 0` scores 3 441 against 2 712 for `W = none` (287 complete against 245,
 proof caps 214 -> 68), but order keeps 14 complete answers (10 `nfc`) and 10 incumbents, so the order
-encoding cannot go yet. A targeted W = 64 / 100 check runs before the default is chosen.
+encoding cannot go yet. The targeted W = 64 / 100 check (D-0199) found no W that keeps W = 0's gains and wins back order's losses (nfc stays order-only), so W = 0 was chosen as the default.
 
 **Added in autonomous mode** (3 of 3): M4-T6b, M14-T3b, M7-T35, all done.
 
@@ -675,6 +675,7 @@ wrote 90 GB `.opb` each during M16-T5's sweep (deleted); (5) two review agents s
 relaunched from their branches (agents are now told to check any wait after 30 min).
 
 **[AUTONOME] decisions**, most consequential first:
+- D-0199 / D-0201: the default becomes `--bits-above 0` (all eligible variables bits-encoded); revert by `git revert` of D-0201's commits or `--bits-above none`.
 - D-0187: `--e2e`, baguette writes the end-to-end prefix itself under cake's naming as a second contract
   (PROOF-FORMAT §3b), off by default.
 - D-0196: the bits arm in the e2e prefix through a ripple-carry adder over cake's bits.
