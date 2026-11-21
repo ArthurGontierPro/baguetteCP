@@ -25674,3 +25674,108 @@ rather than a property of the encoding. A middle `W` is (b), not part of this ta
   D-0133.
 - The nodes per second include the encoding time in the wall. An arm that encodes faster looks faster
   per node on short runs.
+
+## D-0199  [AUTONOME] M8-bits-encoding-T4 continuation: a middle `W` (64 or 100) wins back 4 of order's 14 lost complete answers and none of the 10 `nfc`, and loses 4 of the 15 that `W = 0` gains on a sample of its wins. Recommended default `W = 0`, order kept
+
+**Status**: **MEASUREMENT and RECOMMENDATION**, recorded 2026-11-21 (agent-m8t4b, `wave56-m8t4b`), in
+autonomous mode. It does not change the default in code. The orchestrator does that in its own commit,
+because the lanes must be re-recorded.
+
+### 1. The run
+
+| | |
+|---|---|
+| binary | `c8b6119925c73329d75ba6bcd969e3ea` = `make release` at `d0ea737` (main after M16, D-0172, D-0198), copied to `/scratch/arthur/m8t4b/bin/main.exe`. The four arms run that one file |
+| arms | `none`, `w0`, `w64`, `w100` = `main.exe --stats [--bits-above 0 / 64 / 100]`, through `bin/baguette-<arm>.sh` (systemd scope `MemoryMax=32G`, D-0175's `rss_wrap.py`) |
+| rules | D-0175's: `scripts/compare_run.sh`, 1 200 s solve, 3 600 s check, `MEM_KB=16777216`, 16 GB proof cap, veripb 3.0.2 on every clean exit; the `.fzn` are D-0175's flattened files (`/scratch/arthur/m8t4/flat/<Y>/`, hard links), so the bytes solved are D-0175's |
+| set | 150 instances (`tools/compare/m8t4b_select.py` over D-0175's tables): the 25 that `none` won in D-0175 (15 complete, 10 incumbents), all 85 other instances of their 10 families (`nfc`, `mapping`, `is`, `nside`, `hrc`, `proteindesign12`, `java-auto-gen`, `fox-geese-corn`, `sdn-chain`, `work-task-variation`), and 40 drawn (seed 199) from the 170 instances outside those families that `w0` won |
+| parallelism | one `compare_run.sh` per (arm, instance), 24 at once under `xargs -P 24`, pidfile per run. 2026-11-21 14:56 to 21:00, beside another series |
+| where | `/scratch/arthur/m8t4b/<arm>/<Y>/<id>/`. Tables, the per-edition merged tables and the scripts are in `/cluster/arthur/baguette-results/m8t4b/`. Read again with `python3 -I tools/compare/m8t4b_analyze.py /scratch/arthur/m8t4b .` |
+
+**Complete** below is OPT or UNSAT (or a solved satisfaction problem) with the proof VERIFIED, **or**
+with the check stopped by veripb's own memory (CHECK-ERROR rc 134, `memory allocation ... failed`
+under the harness's 16 GiB `ulimit -v`). Those rows are counted as complete in every arm alike, on the
+orchestrator's measurement that such a proof verifies under 32 GB (2017 `hrc_exp1-1-5145`, `s VERIFIED`
+in 918 s at 17.5 GB). There are 4 in `none`, 0 in `w0`, 1 in `w64` and 2 in `w100`, all `hrc`,
+`test-scheduling` or `carpet-cutting`. A TIMEOUT-CHECK is not counted.
+
+### 2. Totals on the 150 instances
+
+| arm | complete | incumbents | REFUSED | CAPPED | pairwise among the 4 arms | Challenge score (official fd entrants, these 150) |
+|---|---|---|---|---|---|---|
+| `none` | 37 | 107 | 51 | 27 | 209.7 | 296.8 |
+| `w0` | 36 | **125** | 45 | 6 | 229.2 | 332.3 |
+| `w64` | 35 | 124 | 48 | 4 | 227.1 | 344.7 |
+| `w100` | 36 | 124 | 48 | 4 | **234.0** | **345.6** |
+
+By group:
+
+| group | complete `none` / `w0` / `w64` / `w100` | Challenge score `none` / `w0` / `w64` / `w100` |
+|---|---|---|
+| the 10 order families (110 instances, the whole population) | 35 / 21 / 25 / 26 | 274.8 / 219.2 / 242.2 / 242.6 |
+| of which the 25 order wins | 14 / 0 / 4 / 4 | |
+| the 40 sampled `w0` wins (of 170) | 2 / 15 / 10 / 10 | 22.0 / 113.1 / 102.5 / 103.0 |
+
+The set is chosen on order's wins, so its totals favour order and a middle `W` by construction. The
+sampled group stands for 170 instances and the family group for 110, so a difference in the sample
+weighs about four times as much in the population.
+
+### 3. What a middle `W` changes, instance by instance
+
+**Won back from `w0` (64 and 100 alike)**: `2016_java-auto-gen_plusexample_6`,
+`2024_fox-geese-corn_foxgeesecorn_61`, `2018_mapping_full2x2_mp3`, `2018_mapping_mesh3x3_mp3_2` (OPT
+VERIFIED in `none`, `w64`, `w100`, TIMEOUT in `w0`), and `2018_mapping_ring_mp3` (OPT in `w64` and
+`w100` only). `w100` also keeps `2019_hrc_exp2-1-5145`. Their widest variables are under 100 (or the
+variables bits would take are), which is D-0175 §6's narrow band.
+
+**Not won back**: all 10 `nfc` (OPT VERIFIED in `none`, TIMEOUT with the same or a worse objective in
+the three bits arms). At `W = 100` each still puts 13 to 39 variables on bits, its widths being 421
+to 1 849. Also the `mapping` mesh instances of 2015, 2016 and 2021, the `is`, `nside` and
+`proteindesign12` incumbents (REFUSED by the heap guard in all three bits arms), and `2016_mapping_ring_1`.
+
+**Lost against `w0`**: of the 15 complete answers `w0` gives on the sample, `w64` and `w100` lose 4.
+`2017_steelmillslab_bench_14_1`, `_16_10` and `2019_steelmillslab_bench_20_8` (OPT 0 in `w0` within 360
+to 943 s, TIMEOUT or REFUSED at 16 to 44 in the three others. Half of steelmillslab's 223 bits variables
+are 64 wide or narrower, and they are the ones that help), and `2013_radiation_i7-15` (OPT in `w0`, no
+solution at all in `none`, `w64` and `w100`). The fifth difference, `2022_gfd-schedule`, is OPT in all
+four arms and only the check differs. `nside` loses its one `w0`-only complete answer
+(`2019_nside_EASY_200_50`) too.
+
+So on complete answers a middle `W` nets +4 (`w64`) or +5 (`w100`) on the 110 family instances (5 or 6
+won back, `nside_EASY` lost) against -4 on 40 of the 170 sampled instances. Scaled to the pool, that
+-4 is -17 if the sample is taken as uniform, and about -8 if steelmillslab, which was drawn whole, is
+counted once (3, plus 1 in 37 over the other 167). So the net is -3 to -13 complete answers. The
+Challenge score moves the same way: +23 for a middle `W` on the families, -10.6 on the sample, which is
+about -45 over the pool, so about -20 net in `w0`'s favour (rough, the per-family clustering is not
+modelled). Both estimates carry the sample's noise, and neither reaches
+a sign that a middle `W` is better.
+
+`w64` and `w100` differ on one instance (`hrc_exp2-1-5145`, a check that ran out of veripb's memory).
+
+### 4. A finding on the way: 24 ERROR rows where D-0175 had REFUSED
+
+On 6 instances per arm (`proteindesign12`, `is`), the solver dies with `Fatal error: allocation failure
+during minor GC` at a peak RSS of 14.2 to 14.7 GB. That is under the 16 GiB `ulimit -v`, and
+`--max-heap-mb 8192` should have stopped the run first. In D-0175 (binary `492638b9`) the same instances
+ended REFUSED by the heap guard (exit 5). The guard's Gc alarm runs at the end of a major cycle. With
+D-0198's larger minor heap, it seems the RSS can outrun the alarm. This changes no score (REFUSED and
+ERROR are both UNK), but the heap guard no longer bounds the RSS it promises. It belongs to D-0198's
+owner, as a task.
+
+### 5. The decision
+
+| option | consequence on this measurement |
+|---|---|
+| keep `none` (today) | the 10 `nfc` and 4 narrow answers kept; D-0175's -42 complete answers, -119 incumbents, +146 proof caps and -729 points stay |
+| **`W = 0`** | D-0175's gains whole. Loses `nfc` (10) and the 4 narrow answers, which `--bits-above none` gives back. One representation for every eligible variable, the step toward Ciaran's all-bits code |
+| `W = 64` | gives back `java-auto-gen`, `fox-geese-corn` and 3 `mapping` instances, and not `nfc`. Loses 4 of the 15 sampled `w0` complete answers (`steelmillslab` 3, `radiation`), about 10 or more over the pool. Two representations stay in the default path |
+| `W = 100` | as `W = 64`, plus one `hrc` check. The best score on this order-biased set (345.6 against 332.3), but behind `W = 0` once the sample is weighted to its pool |
+
+**Recommendation: `W = 0`** (D-0175's option (a)), with the order encoding kept behind `--bits-above none`
+and in the tests. No `W` gets back what order wins most, `nfc`, because its widths (421 to 1 849) sit
+where bits pays elsewhere (D-0175 §4). A middle `W` that saved `nfc` (about 2 000) would give back most
+of the gain in the 1 000 to 10 000 band. A small middle `W` gets back 5 narrow answers and pays for them
+with 8 to 17 on `w0`'s side (`steelmillslab` shows that the band under 64 is not
+uniformly order's). It also keeps two representations in the default path, against the simplicity
+asked for. The next lever is `nfc` itself: why bits runs it at a fifth of the nodes per second with
+4.5 times the memory (D-0175 §4) is a task, and a per-family cause there may be a bug in the bits path.
