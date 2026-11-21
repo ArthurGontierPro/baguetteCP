@@ -37,6 +37,11 @@ set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SOLVER="${BAGUETTE:-${ROOT}/_build/default/bin/main.exe}"
 
+# D-0201: every lane below is about the ORDER encoding's width -- its ladder, the cost
+# sentence, --max-order-width -- and since D-0199 the default puts the wide variable on
+# bits, where there is no ladder to refuse or report. Pinned to the order encoding.
+export BAGUETTE_BITS_ABOVE=none
+
 # This lane's own memory cap, separate from the suite's only so that it can be switched
 # off on the corpus node like every other (M7-T1). The default is the suite's.
 MEM_CAP_KB="${BAGUETTE_MEM_CAP_KB:-4000000}"
