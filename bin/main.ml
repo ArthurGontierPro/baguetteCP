@@ -1928,10 +1928,12 @@ let refuse_enumeration opts (m : Model.t) =
    domains in one mapping, so a 4 M-word nursery reserves 4 GiB of address space it never
    touches. Under [ulimit -v 4000000], which every suite and lane here runs under, the
    runtime then aborts at startup ("Not enough heap memory to reserve minor heaps"); the
-   gate found it. So the size is cut until the reservation is at most a QUARTER of the soft
-   address-space limit read from /proc/self/limits: about 1 M words under a 4 GB cap, the
+   gate found it. So the size is cut until the reservation is at most an EIGHTH of the soft
+   address-space limit read from /proc/self/limits: about 490 k words under a 4 GB cap, the
    full 4 M under the 32 GB cap of the corpus scripts or with no limit, and never below the
-   runtime's default. No /proc (not Linux) reads as no limit.
+   runtime's default. No /proc (not Linux) reads as no limit. A quarter was tried first and
+   lost the lane's lot-sizing [activity] run, whose major heap alone is 3.2 GB of its 4 GB
+   cap, to an Out_of_memory (D-0198 §2).
 
    It changes WHEN memory is reclaimed, never a value: nothing in [lib/] reads an address, so
    stdout, proofs and --stats are the same bytes. It costs up to 32 MB resident per process.
@@ -1973,7 +1975,7 @@ let minor_heap_words () =
   match address_space_limit () with
   | None -> minor_heap_words_max
   | Some bytes ->
-      let fits = bytes / 4 / (max_domains * (Sys.word_size / 8)) in
+      let fits = bytes / 8 / (max_domains * (Sys.word_size / 8)) in
       Stdlib.max default (Stdlib.min minor_heap_words_max fits)
 
 let () =
