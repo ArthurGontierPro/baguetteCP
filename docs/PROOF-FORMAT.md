@@ -535,7 +535,8 @@ transcribed from the HOL4 sources of the build it was checked against: **`cake_p
 `ca92491e`, CakePB `438b8f83`, CakeML `14856fcf`** (`cp_encScript.sml`, `cp_to_ilpScript.sml`,
 `ilpScript.sml`, `ilp_to_pbScript.sml`, `cp_to_ilp_linearScript.sml`,
 `cp_to_ilp_primScript.sml`, `cp_to_ilp_logicalScript.sml`, `cp_to_ilp_countingScript.sml`,
-`int_bitwiseExtraScript.sml`). A different build may break it. That shows as a refused line,
+`int_bitwiseExtraScript.sml`; for T6, `cp_to_ilp_extensionalScript.sml` and
+`cp_to_ilp_schedulingScript.sml`). A different build may break it. That shows as a refused line,
 never as a verified wrong answer, because every cited row is checked against cake's file.
 
 **The translator's names** (`tools/e2e/fzn2scp.py`, part of the contract). The k-th FlatZinc
@@ -573,6 +574,9 @@ with it; a constant `K` in a reify tuple is `n[K][ge<k>]`, `n[K][eq<k>]`, likewi
 | `max X Y Z`, `min` *(T3b)* | `@b[N][lge][r]`, `@b[N][rge][r]` (flag -> `X >= Z`, `Y >= Z`; resp. `lle`, `rle`), `@c[N][lle]`, `@c[N][rle]` (resp. `lge`, `rge`), `@c[N][al1]` | `b[N][lge]`, `b[N][rge]` (resp. `lle`, `rle`) |
 | `inverse ((X ...) ox) ((Y ...) oy)` *(T3b)* | `@c[N][X_<k>_lb]`, `X_<k>_ub` (X_k in oy..oy+n-1), `@c[N][Y_<k>_lb]`, `Y_<k>_ub`, k from 1; per (i, j) from 0, `@c[N][<i+1>_<j+1>ge]` (`[X_i = oy+j] - [Y_j = ox+i] >= 0`) and `...le` (the reverse) | |
 | `c<k>_<p> equals_if (b = 1) X Y` *(T3b, member)* | `@c[c<k>_<p>][ge]`, `@c[c<k>_<p>][le]` guarded by `i[b][eq1]`; then `or` over the selectors' tuples with `(1 = 1)` | |
+| `abs X Y` *(T6, D-0195)* | the atom `i[X][ge0]`; `@c[N][posge]` (`X - Y >= 0`), `@c[N][posle]` (`Y - X >= 0`) unless `~i[X][ge0]`; `@c[N][negle]` (`Y + X >= 0`), `@c[N][negge]` (`-X - Y >= 0`) unless `i[X][ge0]` | |
+| `regular (X0 ...) n ((edges of 0) ...) (f ...)` *(T6)* | per position idx (0..len) `@c[N][pos<idx>al1]`, `am1` over `x[N][<idx>_<q>][st]`, `q < n`; `@c[N][st<len>al1]` over the finals' flags at the end; `@c[N][st0]`; per position, state q and value index vi of `X_idx`'s BOUNDS (holes included), `@c[N][<idx>_<q>_<vi>t]`: `~st[idx][q] + ~i[X][eq<v>] + OR st[idx+1][targets] >= 1`; the eq atoms of every value | `x[N][<idx>_<q>][st]` |
+| `cumulative (S ...) (d ...) (r ...) cap` *(T6)*, constants d, r, cap | `@c[N][cap_ge0]`, `@c[N][h_<i>_ge0]`; per task i from 0 and time t of `[lb S_i, ub S_i + d_i - 1]`: `@v[N][<i>_<t>][cb][f]`, `[r]` (the flag iff `S_i <= t`), `@v[N][<i>_<t>][ca][f]`, `[r]` (iff `S_i + d_i >= t + 1`), `@c[N][<i>_<t>_acta|actb|actcal1]` (`cact` iff both), `@c[N][<i>_<t>_cge]` (`r_i ~cact + sum_b 2^b cc_b >= r_i`), `_cle`, `_cz`; per t of the windows' union, `@c[N][cap_<t>]`: `- sum over the tasks covering t of their cc bits >= -cap` (a negative t written `-3`) | `v[N][<i>_<t>][cb|ca|cact]`, `v[N][<i>_<t>_<b>][cc]` |
 
 Constants are folded into the degree (`mk_constraint_ge`, `mk_lin_constraint_ge`), integer
 terms are kept per occurrence, and a guard's big-M is `max(0, c - min)` (`bits_imply`) or
@@ -596,6 +600,25 @@ itself: element's clauses, maxmin's per-value clauses (the operands' `[r]` rows 
 plus `@c[N][al1]`), member's and inverse's range clauses. A `@cN pol` pin is the row exactly;
 any other is still `ia` against a `@W`. A substitution `@S[...]` is written only when a pin
 cites it, or before a `rup` pin of its constraint.
+
+**T6 (D-0195)** adds the translator's three far families. `int_times` and `int_div` are not
+covered (refused before the search). **regular**: the translator leaves mznlib's state flags out
+of the `.scp` (they are existential in `fzn_regular`) and renumbers the states by
+`pi(q) = (q - q0) mod Q`, cake's NFA starting in 0; an edge `(smin + j  pi(d))` per non-zero entry
+of row q of the flattened table, finals `pi(F)`. The prefix DEFINES each flag `s(i,q)` (baguette's
+`s_ge_1`, fresh) as cake's `x[c<k>][<i>_<pi(q)>][st]` by a red pair `@D1[s]`, `@D2[s]`, and swaps it
+in as a selector; the layer rows, the start and the accept row are `ia`, a forward clause over a
+symbol run `ia` (one value) or `rup` through the transition clauses and the letters' eq atoms
+(`@Qn` at an end of the range, `@Ep` inside). **cumulative**: each capacity row of baguette at t is
+`ia` against ONE `pol`: `@c[N][cap_<t>]` plus, per covering task with `r_i > 0`, `@c[N][<i>_<t>_cge]`,
+`r_i` times `@c[N][<i>_<t>_actcal1]`, and `r_i` times each flag's clause `@K[v[N][<i>_<t>][cb]]`
+(`cb + s_ge_(t+1) >= 1`, one `pol` of its `[f]` row and `@A2` at t + 1, saturated; at t + 1 past
+the range its bound row, the unit) and `@K[v[N][<i>_<t>][ca]]` (`ca + ~s_ge_(t+1-d) >= 1` with
+`@A1`; at or below lb, the unit). **int_abs**: baguette's sign guard `S <-> x >= 0`, a model Boolean
+with no `.scp` counterpart, is DEFINED as `x_ge_0` by `@D1`, `@D2`; a row no candidate implies (the
+rows true in both signs, the hull, the guard's own rows) is derived **by contradiction**:
+`@cN pbc ROW : subproof`, then `pol -k <candidate> + s ;` for each of the constraint's four
+candidates and `rup >= 1 ;`, closed by `qed ;`.
 
 ## 4. Per-propagator justification
 
