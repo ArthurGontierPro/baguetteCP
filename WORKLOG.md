@@ -21,6 +21,7 @@ of it to every session and stopping at a broken line before it even reached the 
 |---|---|---|---|
 | M10-search-strategy-T5, M9-no-proof-T3, M7-T30 (one Challenge series on current main: default, `-f`, default `--no-proof`) | run dirs `/scratch/arthur/m10t5/`, `tools/compare/` (additions), `bench/challenge/README.md` (the run's row); reserved record D-0185 | agent-m10t5 (`wave55-m10t5`) | 2026-11-20 |
 | M8-bits-encoding-T4 continuation (middle W on the families order wins, then the default) | run dirs `/scratch/arthur/m8t4b/`, `tools/compare/` (additions); reserved record D-0199 | agent-m8t4b (`wave56-m8t4b`) | 2026-11-21 |
+| hotfix: the heap guard is overshot (runs die on `Fatal error: allocation failure during minor GC` or `Out of memory` instead of the M7-T8 refusal) | `lib/proof/encoding.ml` (the guard's alarm), and the polling site it needs (`lib/core/search.ml` or `engine.ml`, one hook), named in the first commit; reserved record D-0200 | agent-heapguard (`wave56-heapguard`) | 2026-11-21 |
 
 ## Cross-session requests
 
