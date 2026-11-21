@@ -3437,9 +3437,10 @@ let test_m7t8_resource_guard () =
          allocated since, and confirms with a forced collection before it says yes.
          Asserted both ways, at a budget 16 MB above the live heap:
          (a) 32 MB kept alive past the budget IS an overrun, whatever the snapshot says;
-         (b) 48 MB of garbage, which pushes the ESTIMATE past the budget, is NOT one --
-             the forced collection finds the heap under it. Without (b) a guard that
-             refused on the estimate alone would pass (a). *)
+         (b) 48 MB that died before the last collection, which the estimate (still on
+             its old base) counts past the budget, is NOT one -- the forced cycle finds
+             the heap under it. Without (b) a guard that refused on the estimate alone
+             would pass (a). *)
       Gc.full_major ();
       Encoding.rebaseline ();
       let budget = Encoding.mb_of_words (Encoding.heap_words_now ()) + 16 in
@@ -3455,6 +3456,7 @@ let test_m7t8_resource_guard () =
       for _ = 1 to 6 do
         ignore (Sys.opaque_identity (Array.make (Encoding.words_of_mb 8) 0))
       done;
+      Gc.full_major ();
       check "D-0200 (b): 48 MB of garbage puts the estimate past the budget"
         (Encoding.heap_estimate () > lim);
       check

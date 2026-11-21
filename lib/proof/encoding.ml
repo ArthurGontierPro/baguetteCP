@@ -1083,8 +1083,8 @@ let forced_at = ref neg_infinity
    heap that churns: a run with 3 GB live and 6 GB of garbage promoted during one cycle
    would read 9 GB. So the estimate only decides when to LOOK: it forces the current
    major cycle to its end ([Gc.major], seconds on a heap of several GB, and paid only by a
-   run already at its budget), and the fresh snapshot decides. A run is therefore refused
-   on the heap it has, never on the estimate, and the refusal is as exact as the alarm's.
+   run near its budget), and the fresh snapshot decides. A run is therefore refused on a
+   cycle-end figure, never on the estimate, and the refusal is the alarm's.
 
    One more cycle is not forced until [limit / 16] major words have been allocated since
    the last forced one. Without that floor, a run whose live heap sits just under its
@@ -1092,30 +1092,29 @@ let forced_at = ref neg_infinity
    collector instead of ending. The cost of the floor: such a run can be caught up to a
    sixteenth past its budget, never more. [AUTONOME] D-0200 §3.
 
-   WHY A SECOND, FULL COLLECTION BEFORE REFUSING. OCaml 5 sweeps a cycle's garbage during
-   the NEXT cycle, so the figure at the end of the forced cycle still counts what died
-   during it (measured on this switch: 14 M words of dropped list cells read 14 M after
-   one [Gc.major] and 0 after a second; 40 M words of dropped large arrays took three).
-   A run is refused only if [Gc.full_major] confirms it. That costs time on the path that
-   ends the run anyway (on the Challenge runs of D-0200 §4, up to a minute on an 8 GB
-   heap), and makes this path never stricter than the alarm. Two [Gc.major] are not
-   enough: the unit lane's 48 MB of dropped arrays still read past its budget after them. [forcing] keeps the alarm, which those collections
-   wake, from refusing on the first, inflated reading. *)
+   WHY ONE COLLECTION AND NOT A FULL ONE. OCaml 5 sweeps a cycle's garbage during the NEXT
+   cycle, so the figure at the end of the forced cycle still counts what died during it
+   -- exactly as the figure the alarm reads at a natural cycle end does. Confirming with
+   [Gc.full_major] instead was tried and is worse: it is more lenient than the alarm, so a
+   run whose live heap sits just under its budget is never refused and never ends
+   either. 2013 proteindesign12 1HZ5 --no-proof spent 680 s at 8.8 GB RSS forcing a
+   cycle every [limit / 16] words, at half its speed, where the single-cycle reading
+   refuses it at 31 s (D-0200 §3). One cycle keeps the rule the alarm already had: a run
+   is refused when the heap at a cycle end is past its budget; the estimate only makes
+   that cycle end come sooner. [forcing] keeps the alarm, which the forced cycle wakes,
+   from refusing in the middle of [heap_overrun] with no o_what to give. *)
 let forcing = ref false
 
 let heap_overrun limit =
   let lim = words_of_mb limit in
   if heap_estimate () <= lim then None
   else if live_major_words () -. !forced_at < float_of_int (lim / 16) then None
-  else
-    let force collect =
-      forcing := true;
-      Fun.protect ~finally:(fun () -> forcing := false) collect;
-      rebaseline ();
-      forced_at := !base_major;
-      !base_heap > lim
-    in
-    if force Gc.major && force Gc.full_major then Some !base_heap else None
+  else (
+    forcing := true;
+    Fun.protect ~finally:(fun () -> forcing := false) Gc.major;
+    rebaseline ();
+    forced_at := !base_major;
+    if !base_heap > lim then Some !base_heap else None)
 
 let narrow_this = function
   | None -> "  No integer variable has been declared yet.\n"
