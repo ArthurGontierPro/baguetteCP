@@ -1002,17 +1002,19 @@ let rec cake_rows t name spec =
       @ List.concat
           (List.mapi
              (fun i x ->
-               let v =
+               (* a constant letter is cake's constant: its one value, the atom n[K][eq<K>] *)
+               let values, atom =
                  match x with
-                 | Var x -> find_var t x
-                 | Const _ -> refuse "regular over a constant letter"
+                 | Var x ->
+                     let v = find_var t x in
+                     ( List.init (v.hi - v.lo + 1) (fun k -> v.lo + k),
+                       fun value -> Printf.sprintf "i[%s][eq%d]" v.cx value )
+                 | Const k -> ([ k ], fun value -> Printf.sprintf "n[%d][eq%d]" k value)
                in
                List.concat
-                 (List.init
-                    (v.hi - v.lo + 1)
-                    (fun vi ->
-                      let value = v.lo + vi in
-                      let e = Printf.sprintf "i[%s][eq%d]" v.cx value in
+                 (List.mapi
+                    (fun vi value ->
+                      let e = atom value in
                       List.init nq (fun q ->
                           let tg =
                             List.filter_map
@@ -1023,7 +1025,8 @@ let rec cake_rows t name spec =
                           in
                           row
                             (lab (Printf.sprintf "%d_%d_%dt" i q vi))
-                            ([], (1, "~" ^ st i q) :: (1, "~" ^ e) :: tg, 1)))))
+                            ([], (1, "~" ^ st i q) :: (1, "~" ^ e) :: tg, 1)))
+                    values))
              xs)
   (* cumulative's rows are not offered as candidates: [begin_con] derives one row per time
      point from them ([cumulative_cands]) *)
