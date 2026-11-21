@@ -25462,3 +25462,215 @@ Left as they are: allocation stays diffuse, and no other site reaches 1 % of the
 `make check` rc 0 (207 models passed), 207 x 4 artefacts equal, lane 324/324, debug lane 311/311,
 scaling ok. The first gate, at a quarter of the limit, had the same results except lane 323/324
 (§2).
+
+## D-0175  M8-bits-encoding-T4: two arms on the sixteen editions, `W = none` and `W = 0`, one binary. `W = 0` scores 3 441 against 2 712 and wins 42 complete answers, but loses 14 to the order encoding (10 of them `nfc`), so the order encoding cannot go yet
+
+**Status**: **MEASUREMENT**, recorded 2026-11-21 (agent-m8t4, `wave55-m8t4`). It answers the question
+the user asked on 2026-11-20 (ROADMAP M8-bits-encoding-T4). Ciaran thinks that all-bits with helper
+functions is the simplest code, so can the order encoding go outside the tests? It does not choose the
+default, because that changes the solver's default behaviour and the user decides that (the options
+are in §6).
+
+### 1. The run
+
+| | |
+|---|---|
+| binary | `492638b9ac9666dbe84ab537c365597d` = `ec53df4` (main after the wave-55 merge, D-0156 and D-0165 in), built once in the clone, copied to `/scratch/arthur/m8t4/bin/main.exe`; both arms run that file |
+| arms | `none` = `main.exe --stats`, `w0` = `main.exe --stats --bits-above 0`, through the wrappers `bin/baguette-{none,w0}.sh` (so `run.conf`'s `baguette_md5` is the wrapper's, `2cdd73ff` and `44b041a7`) |
+| per run | `systemd-run --user --scope -p MemoryMax=32G`, then `bin/rss_wrap.py`, which writes the child's `ru_maxrss` to `<proof base>.rss` and exits as the child did (signals re-raised, so a TIMEOUT and a CAPPED classify as before). The floor of that measure is about 6 MB, the forked Python before the `exec` |
+| rules | D-0133's: `scripts/compare_run.sh` with `INSTANCES=bench/challenge/<Y>.lst`, 1 200 s solve, 1 200 s flatten, 3 600 s check, `MEM_KB=16777216` (so `--max-heap-mb 8192`), 16 GB proof cap, veripb 3.0.2 on every clean exit; baguette only, Chuffed from the archive (D-0167) |
+| flatten | once, `flat/<Y>/` (a pass whose solver exits 2 so that the harness keeps the `.fzn`). Each arm hard-links those files, so the two arms solve the same bytes and share `flatten.tsv` |
+| parallelism | 20 per arm, 40 in all. A valve (`valve.sh`) lowered an edition's xargs to 12 when the 5-minute load passed 80, which it did six times |
+| when | 2026-11-20 10:35 to 2026-11-21 14:47, on `fataepyc-06` beside other campaigns |
+| where | `/scratch/arthur/m8t4/{none,w0}/<Y>/`. The tables (`results.tsv`, `flatten.tsv`, `pair.tsv`, `run.conf`), `per_instance.tsv` (one row per instance, both arms) and the reading scripts are copied to `/cluster/arthur/baguette-results/m8t4/` |
+
+Read again with `python3 -I analyze.py` (that directory), `challenge_rank.py <archive>/<Y>.json
+bench/challenge/<Y>.lst <arm>/<Y> --no-chuffed`, and `refusal_causes.py /scratch/arthur/m8t4/<arm>`.
+
+### 2. The statuses, in total over the 1 600 instances
+
+| | `none` | `w0` |
+|---|---|---|
+| complete answers, OPT or UNSAT with the proof VERIFIED | **245** | **287** |
+| OPT or UNSAT as printed, whatever the check said | 271 | 299 |
+| satisfaction problems solved, VERIFIED | 70 | 71 |
+| incumbents (an objective value present, any status) | 926 | 1 045 |
+| TIMEOUT without a solution | 259 | 279 |
+| REFUSED | 320 | 277 |
+| of which the heap budget (exit 5) | 318 | 276 |
+| ... A, 0 clauses minted (the "front end" class) | 1 | 39 |
+| ... B, the Gc alarm after the encoding | 304 | 225 |
+| ... C, inside a ladder loop | 13 | 12 |
+| of which a front-end error (exit 2, a `var int` with no bounds) | 1 | 1 |
+| of which `Out of memory` (exit 2) | 1 | 0 |
+| of which the width wall | 0 | 0 |
+| CAPPED (the 16 GB proof cap) | 214 | 68 |
+| ERROR | 9 | 5 |
+| FLATTEN-FAIL | 25 | 25 |
+| REJECTED | **0** | **0** |
+| CHECK-ERROR (veripb rc 134, `memory allocation ... failed` under the 16 GiB cap; not a judgement) | 9 | 3 |
+| TIMEOUT-CHECK (veripb past 3 600 s) | 22 | 14 |
+| REFUSED rows that carry an incumbent (scored UNK) | 182 | 148 |
+
+The class A count of `w0` is not 39 front-end deaths. `refusal_causes.py` reads "0 clauses minted"
+from the heap guard's message, and that counter counts ladder and direct clauses, which a bits
+variable does not mint. So on the bits arm A also holds runs that died after a bits-only encoding.
+The script would need the `bitsrows` count to tell them apart, and it does not read it.
+
+### 3. Per edition
+
+The columns are complete (VERIFIED) / incumbents / TIMEOUT without a value / REFUSED / CAPPED, then the
+rank among the fixed-category entrants and the score (`challenge_rank.py --no-chuffed`, official
+`chuffed-fd` among the entrants).
+
+| edition | `none` | `w0` | rank `none` -> `w0` | score `none` -> `w0` |
+|---|---|---|---|---|
+| 2026 | 15 / 50 / 20 / 30 / 13 | 18 / 54 / 23 / 28 / 5 | 12 -> **11** of 13 | 221.9 -> 275.4 (+53.5) |
+| 2025 | 13 / 48 / 14 / 36 / 15 | 17 / 58 / 14 / 36 / 4 | 10 -> 10 of 10 | 119.5 -> 172.1 (+52.6) |
+| 2024 | 12 / 65 / 13 / 17 / 6 | 12 / 73 / 14 / 19 / 4 | 9 -> 9 of 9 | 233.6 -> 228.3 (**-5.3**) |
+| 2023 | 18 / 63 / 12 / 23 / 17 | 24 / 69 / 13 / 20 / 9 | 7 -> 7 of 7 | 155.8 -> 182.3 (+26.5) |
+| 2022 | 9 / 56 / 20 / 18 / 22 | 8 / 63 / 20 / 15 / 11 | 7 -> 7 of 7 | 128.3 -> 155.0 (+26.7) |
+| 2021 | 6 / 42 / 19 / 22 / 19 | 11 / 52 / 26 / 19 / 1 | 7 -> 7 of 7 | 99.9 -> 161.6 (+61.8) |
+| 2020 | 15 / 37 / 33 / 18 / 14 | 14 / 46 / 34 / 20 / 2 | 6 -> **5** of 6 | 71.1 -> 90.1 (+19.0) |
+| 2019 | 19 / 66 / 15 / 19 / 6 | 23 / 66 / 18 / 16 / 1 | 7 -> 7 of 8 | 188.1 -> 216.4 (+28.3) |
+| 2018 | 6 / 49 / 19 / 18 / 22 | 7 / 57 / 23 / 12 / 10 | 8 -> **6** of 8 | 122.5 -> 187.2 (+64.7) |
+| 2017 | 3 / 70 / 4 / 38 / 16 | 5 / 85 / 5 / 30 / 3 | 12 -> 12 of 12 | 100.3 -> 180.9 (+80.5) |
+| 2016 | 32 / 76 / 6 / 8 / 11 | 29 / 81 / 7 / 2 / 4 | 8 -> 8 of 11 | 335.7 -> 343.6 (+7.9) |
+| 2015 | 17 / 63 / 20 / 18 / 8 | 18 / 69 / 19 / 21 / 3 | 9 -> 9 of 9 | 138.9 -> 153.1 (+14.3) |
+| 2014 | 13 / 55 / 16 / 11 / 16 | 16 / 68 / 17 / 10 / 6 | 11 -> **9** of 11 | 212.2 -> 296.9 (+84.7) |
+| 2013 | 14 / 61 / 15 / 24 / 9 | 19 / 68 / 12 / 19 / 3 | 10 -> 10 of 11 | 168.4 -> 244.5 (+76.2) |
+| 2012 | 28 / 63 / 16 / 11 / 12 | 33 / 72 / 19 / 4 / 0 | 8 -> **5** of 10 | 254.0 -> 353.0 (+99.0) |
+| 2011 | 25 / 62 / 17 / 9 / 8 | 33 / 64 / 15 / 6 / 2 | 8 -> **7** of 8 | 162.5 -> 201.0 (+38.5) |
+| **sum** | **245 / 926 / 259 / 320 / 214** | **287 / 1 045 / 279 / 277 / 68** | better in 6, equal in 10, worse in 0 | **2 712.4 -> 3 441.3 (+729.0)** |
+
+The `none` arm is far above D-0133's order baseline (2 316.7) because of what M10 and M11 merged
+since. D-0133's noise floor is up to 3.0 points in an edition and 14 against 20 objective moves. Every
+edition except 2024 stands above it in `w0`'s favour, and 2024's -5.3 stands above it the other way.
+2024 decomposes by problem as `harmony` -12.0, `community-detection` -9.0, `fox-geese-corn` -5.5 and
+`network_50_cstr` -4.5, against `aircraft-disassembly` +17.9, `accap` +5.5 and `concert-hall-cap`
++4.0. In `harmony` and `community-detection`, `w0` finds the **better** objective in every pair (50
+against 55, 405 634 against 158 332, ...), but the heap guard then stops the run (REFUSED), and
+`challenge_rank.py` scores a REFUSED as UNK, incumbent or not. The loss there is the heap, not the
+search.
+
+### 4. Instance by instance, where both arms ran
+
+1 600 pairs. `w0`'s `--stats` says `bits` > 0 on 1 397, `bits 0 vars` on 93 (the two arms are the same
+solver there, D-0130 §12), and 110 have no stats line (FLATTEN-FAIL, or a death before the line).
+
+| ratio `w0` / `none`, median [q1, q3] | all | `bits` > 0 | `bits` = 0 |
+|---|---|---|---|
+| nodes per second of wall (both arms counted nodes) | 1.00 [0.90, 1.28], n = 990 | 1.00 [0.89, 1.35], n = 912 | 1.01 [0.99, 1.04], n = 78 |
+| peak RSS (both at least 64 MB) | 1.00 [0.85, 1.07], n = 1 444 | 0.99 [0.82, 1.07], n = 1 280 | 1.00 [1.00, 1.02], n = 164 |
+
+By the declared width of the widest variable (from `none`'s `stats: widest`), `bits` > 0 only:
+
+| widest | nodes/s | RSS |
+|---|---|---|
+| up to 9 | 0.94 [0.76, 1.00], n = 11 | 1.03 [0.99, 1.05], n = 7 |
+| 10 to 99 | 0.94 [0.84, 1.00], n = 181 | 1.00 [0.93, 1.06], n = 165 |
+| 100 to 999 | 0.98 [0.87, 1.07], n = 280 | 1.01 [0.96, 1.07], n = 292 |
+| 1 000 to 9 999 | 1.00 [0.92, 2.47], n = 255 | 0.96 [0.75, 1.04], n = 310 |
+| 10 000 and over | **1.98 [1.00, 7.86]**, n = 185 | 0.94 [0.44, 1.19], n = 506 |
+
+So per node, bits costs about 6 % below width 100 and pays from width 1 000 on, where the order ladder
+is what the search walks through. The bimodal quartiles of the wide rows are the families below.
+
+On the 256 instances that both arms complete (by status), the wall ratio is 1.02 [0.71, 1.25] (217 of
+at least 1 s; faster by more than 5 % on 79, slower on 94), and the sum is 47 045 -> 40 612 s. Where
+both arms have an incumbent and not both are complete, `w0`'s objective is better on 233, worse on 53
+and equal on 411.
+
+**By family** (`bits` > 0, nodes/s | RSS, the extremes; the whole table is in `analyze.out`):
+
+| order is better | nodes/s | RSS | bits is better | nodes/s | RSS |
+|---|---|---|---|---|---|
+| `network_50_cstr` | 0.18 | 3.50 | `radiation` | 8.43 | 0.23 |
+| `nfc` | **0.21** | **4.48** | `rcpsp-wet` | 6.02 | 0.24 |
+| `word-equations` | 0.61 | 1.06 | `stack-cuttingstock` | 5.49 | 0.53 |
+| `compression` | 0.72 | 0.87 | `EchoSched` | 5.38 | 0.68 |
+| `hrc` | 0.72 | 0.93 | `mapping` | 5.08 | 1.01 |
+| `fillomino` | 0.75 | 1.05 | `diameterc-mst` | 4.88 | 0.51 |
+| `amaze` | 0.80 | 1.06 | `stable-goods` | 4.43 | 1.02 |
+| `nmseq` | 0.82 | 1.79 | `fast-food`, `cyclic-rcpsp`, `accap`, `celar`, `ship-schedule` | 2.4 to 3.3 | 0.2 to 1.8 |
+| `road-cons` (RSS only) | - | **78.9** | `multi-knapsack` | 1.66 | 0.44 |
+| `largescheduling` (RSS only) | - | **8.53** | `gbac` (RSS only) | - | 0.36 |
+| `fjsp`, `test-scheduling`, `rotating-workforce-scheduling` | 0.87 to 1.13 | 1.5 to 3.0 | `rel2onto`, `city-position` (RSS only) | - | 0.33 to 0.40 |
+
+### 5. What one arm answers and the other does not
+
+**Complete in `none` only: 15**, of which 14 by status and 1 by the check (`2020_sdn-chain_d10n780-1`,
+OPT in both, the `w0` proof not VERIFIED in time).
+
+| family | n | widest | bits vars | what |
+|---|---|---|---|---|
+| `nfc` | 10 | 421 to 1 849 | 23 to 60 | 2016 (5) and 2022 (5): OPT -> TIMEOUT, nodes/s 0.21, RSS 4.5x |
+| `mapping` | 2 | 10 000, 14 440 | 282, 552 | 2018: OPT -> TIMEOUT, although its nodes/s ratio is 5.1 |
+| `java-auto-gen` | 1 | 65 | 118 | 2016 `plusexample_6` |
+| `fox-geese-corn` | 1 | 52 | 310 | 2024 `foxgeesecorn_61`, 44 s -> TIMEOUT |
+
+**Complete in `w0` only: 58**, 42 by status and 16 by the check (OPT in both, `none`'s proof
+CHECK-ERROR or TIMEOUT-CHECK). The status gains are `ship-schedule` (4, from CAPPED or REFUSED),
+`radiation` and `steelmillslab` (3 each), `cyclic-rcpsp`, `fast-food`, `league`, `maximum-dag`,
+`steiner-tree`, `flowshop-workers` and `tower` (2 each), and 18 more, one each, among them
+`aircraft-disassembly` (an UNSAT where `none` is REFUSED) and `zephyrus-2016`.
+
+**Incumbent in `none` only: 10.** `mapping` (3), `is` (2, REFUSED in `w0`), `nside` (2, REFUSED in
+`w0`), `hrc`, `proteindesign12`, `work-task-variation` (1 each). **Incumbent in `w0` only: 129**,
+runs that `none` loses to the proof cap (CAPPED, 97), the heap guard (REFUSED, 28), a TIMEOUT (3)
+or an ERROR (1): `train`, `tower`,
+`gbac`, `road-cons`, `carpet-cutting`, `ATSP`/`atsp`, `routing-flexible`, `zephyrus`, `wmsmc-int`,
+`unit-commitment`, `aircraft-disassembly`.
+
+The objective moves that favour `none` (53) cluster in `is` (7), `depot-placement`, `proteindesign12`,
+`mapping` and `gfd-schedule` (3 each). Those that favour `w0` (233) cluster in `accap` (15), `vrp` (13),
+`spot5` (11), `rcpsp-wet` and `team-assignment` (10 each), `on-call-rostering` (9) and `ship-schedule` (8).
+
+### 6. The answer
+
+**`W = 0` is not at least as good everywhere.** It is better in total by a wide margin: +42 verified
+complete answers, +119 incumbents, 146 fewer proof caps, 43 fewer refusals, a better rank in 6
+editions and a worse one in none, +729 points. But the order encoding answers 14 instances that `W = 0`
+does not, and keeps 10 incumbents that `W = 0` loses. So removing it outside the tests would lose
+those answers today.
+
+What favours order, as the input for a middle `W`:
+
+- **one family carries most of it.** `nfc` gives 10 of the 14 lost complete answers. Its widest
+  variables are 421 to 1 849 wide, which is the middle of the distribution, and it runs at a fifth of
+  the nodes per second with 4.5 times the memory on bits. A middle `W` saves `nfc` only if `W` is
+  above its widths (around 2 000). That gives back most of what the wide families gain in the 1 000 to
+  10 000 band.
+- **narrow variables.** Below width 100, bits costs about 6 % per node (median 0.94 in both bands),
+  and `fox-geese-corn` (52) and `java-auto-gen` (65) lose an answer there. That band is cheap to put
+  back on order with a small `W` (say 64 or 100), and it is where the ladder is short anyway.
+- **memory on a few families.** `road-cons` (79x), `largescheduling` (8.5x), `nfc`, `network_50_cstr`,
+  `fjsp` and `test-scheduling` grow their RSS on bits. In 2024 the heap guard then throws away a better
+  incumbent (`harmony`, `community-detection`), which is all of that edition's loss.
+- **`mapping` and `is`** are mixed. `mapping` runs 5 times more nodes per second on bits and still
+  loses two complete answers and three incumbents, so its loss is not the per-node cost. It is what the
+  search finds (the encodings give different propagation, and so a different tree).
+
+The options for the default, which the user decides:
+
+| option | consequence |
+|---|---|
+| (a) default `W = 0`, keep the order code | +729 points and +42 complete answers on this measurement. `nfc` and the other 4 instances are lost by default and come back with `--bits-above none`. Both paths stay in the code |
+| (b) a middle `W` (64 or 100, a second run) | likely keeps (a)'s gains and gives back the narrow losses (`fox-geese-corn`, `java-auto-gen`). It does not give back `nfc`, `mapping` or `is` |
+| (c) remove the order encoding outside the tests | the simplest code (Ciaran's point), and (a)'s numbers, with the 14 answers and 10 incumbents lost for good, and no switch to get them back |
+
+**Recommendation**: (a) now, with `nfc` investigated as its own task before (c) is considered. One
+family gives 10 of the 14 lost answers, and a per-family cause there may be a bug in the bits path
+rather than a property of the encoding. A middle `W` is (b), not part of this task.
+
+### 7. What this record does not show
+
+- 93 pairs have no bits variable in `w0` (D-0130 §12). On them the two arms are the same solver, and
+  their ratios (1.01 and 1.00) are this run's noise.
+- The scores count a REFUSED as UNK, incumbent or not (182 such rows in `none`, 148 in `w0`). That
+  harness rule penalises whichever arm hits the heap guard after finding a solution.
+- veripb ran out of memory under the same 16 GiB cap on 12 proofs and ran past 3 600 s on 36 (both arms
+  together). So 26 printed OPT or UNSAT in `none` and 12 in `w0` are not in the complete column, as in
+  D-0133.
+- The nodes per second include the encoding time in the wall. An arm that encodes faster looks faster
+  per node on short runs.

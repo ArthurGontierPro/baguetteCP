@@ -19,7 +19,6 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M8-bits-encoding-T4 (two arms, `W = none` and `W = 0`, on the sixteen editions) | run directories under `/scratch/arthur/m8t4/`, `tools/compare/` (additions), `bench/challenge/README.md` (the run's row), a new D-record | agent-m8t4 (`wave55-m8t4`) | 2026-11-20 |
 | M10-search-strategy-T5, M9-no-proof-T3, M7-T30 (one Challenge series on current main: default, `-f`, default `--no-proof`) | run dirs `/scratch/arthur/m10t5/`, `tools/compare/` (additions), `bench/challenge/README.md` (the run's row); reserved record D-0185 | agent-m10t5 (`wave55-m10t5`) | 2026-11-20 |
 
 ## Cross-session requests
@@ -969,6 +968,14 @@ A thunk is released once its line is written: it keeps the id and level, drops i
 memo takes out the cells of what the closure built (bh9 node 40 live 2 041 -> 658 MB, rcpsp_11
 -28.7 % instructions, every byte equal; gate green on `a8762eb`). "A thunk is the only shared node" was false:
 captured eager nodes exist (39 on the suite), and the frames in explanation.ml keep their cells.
+
+### 2026-11-21 (agent-m8t4, `wave55-m8t4`): M8-bits-encoding-T4, D-0175
+
+The two arms ran on the sixteen editions with one binary. `W = 0` wins in total (3 441 against 2 712 points, +42 verified
+complete answers), but it loses 14 complete answers to order, 10 of them `nfc` (nodes/s 0.21, RSS 4.5x), so the order
+encoding cannot go yet. The next steps are the user's choice of default (D-0175 §6) and a look at `nfc` on bits. Tables
+are in `/cluster/arthur/baguette-results/m8t4/`, and 107 GB of runs (proofs of the CHECK-ERROR rows among them) are under
+`/scratch/arthur/m8t4/`.
 
 ### 2026-11-20 (agent-merge, `wave55-merge`): wave53-alldiff and wave54-snap merged on the branch, gate 71 green
 
