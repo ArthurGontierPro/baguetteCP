@@ -688,7 +688,7 @@ relaunched from their branches (agents are now told to check any wait after 30 m
 ### 2026-11-21 (agent-heapguard, `wave56-heapguard`): hotfix, D-0200, the heap budget is polled between cycle ends
 
 `--max-heap-mb` now also polls on a CPU-time ticker (SIGVTALRM, 0.1 s, `Encoding.poll_heap`, installed only under the flag) against the last cycle-end snapshot plus the major words allocated since, and confirms with one forced `Gc.major` (the alarm's rule). `Gc.full_major` as the confirmation was tried and dropped, a run hovering under its budget then never ended (D-0200 §3).
-The four Challenge instances now exit 5 within 6 % of the 8 GB budget instead of aborting at 14 GB, with and without the proof, at both minor-heap settings; `Out_of_memory` reaching the top level exits 5 with a message. Without the flag nothing executes differently. Gate on a fresh clone: see the merge record.
+The four Challenge instances now exit 5 within 6 % of the 8 GB budget instead of aborting at 14 GB, with and without the proof, at both minor-heap settings; `Out_of_memory` reaching the top level exits 5 with a message. Without the flag nothing executes differently. Gate on a fresh clone of `3465a33` (binary `34db2c68`, against gate 88's `7c475a45`): `make check` ok (156 MB peak RSS), 207 x 4 artefacts equal, lane 324/324, debug 311/311, scaling ok, stray 468 in `test/out` as gate 88.
 
 ### 2026-11-21 (orchestrator, autonomous mode): gate 88 green
 
