@@ -23,7 +23,6 @@ of it to every session and stopping at a broken line before it even reached the 
 | M10-search-strategy-T5, M9-no-proof-T3, M7-T30 (one Challenge series on current main: default, `-f`, default `--no-proof`) | run dirs `/scratch/arthur/m10t5/`, `tools/compare/` (additions), `bench/challenge/README.md` (the run's row); reserved record D-0185 | agent-m10t5 (`wave55-m10t5`) | 2026-11-20 |
 | M16-file-review-T5 (the front end and setup) | `lib/flatzinc/lexer.ml`, `parser.ml`, `builder.ml`, `compile.ml`, `output.ml`, `model.ml`, `ast.ml`, their unit tests (`test_flatzinc.ml`, `test_compile.ml`, `test_output.ml`); reserved record D-0193 | agent-review5 (`wave55-review5`) | 2026-11-20 |
 | M14-e2e-verification-T7 (the bits arm in the e2e chain) | `tools/e2e/`, `scripts/e2e_lane.sh`, `lib/proof/e2e.ml`, `lib/proof/encoding.ml` (additive), `lib/flatzinc/compile.ml` (the e2e hooks only), `docs/PROOF-FORMAT.md` §3b; reserved record D-0196 | agent-e2e7 (`wave56-e2e7`) | 2026-11-21 |
-| hotfix: stack overflow at the end of a long run (D-0194 §7: 2021_ATSP_instance10_0p25 and 2025_atsp_instance4_0p15 at -t 240000, rc 2 after the stats) | whichever file holds the non-tail recursion (found first, then named in a commit here before editing); reserved record D-0197 | agent-stack (`wave56-stack`) | 2026-11-21 |
 
 ## Cross-session requests
 
@@ -641,8 +640,14 @@ section 1. Shares are inclusive, of the whole run.
 | M14-e2e-verification-T3 (the bridge written by the solver) | agent-e2e3 (`wave55-e2e3`) | 2026-11-20 | **D-0187 [AUTONOME].** `--e2e`, OFF by default: baguette's proof is checked against `cake_pb_cp`'s `.opb` directly, its head (`lib/proof/e2e.ml`) deriving each `.opb` row from cake's, from compile.ml's per-constraint origin and a replica of cake's rows (PROOF-FORMAT §3b, CakeML `14856fcf`). T2, T4 and set domains covered; T5's globals refused (TODO T3b). `make e2e` pass 1b 117 of 207 VERIFIED with no bridge, 0 FAIL, 22 of 22 solver controls. Challenge: prefix size and check time equal to the bridge's, the bridge stage removed. See the handoff note |
 | M7-T35 (member models fail the D-0026 agreement check under BAGUETTE_DEBUG) | agent-memberdbg (`wave55-memberdbg`) | 2026-11-20 | **D-0189 [AUTONOME].** The reasons were right: member's page-only threshold lemmas (`Term (1, Clause l)` + `Weaken` of every `~l_j`, a constant) were read by the reverse arm as variables used. `Store.reverse_owners` drops that exact pair (D-0091's shape), debug-only, so every artefact is byte-identical. `test_prop.ml` re-runs the seven member models under `BAGUETTE_DEBUG=1` (13 checks, 7 fail with the old arm). Gate on `386a0a7`: make check 4 456 ok, 207x4 artefacts equal, lane 324/324, debug 311/311, scaling ok. No lane instance (too heavy, D-0189 section 5) |
 | M4-T6b (measure the node gain of GAC arithmetic before building it) | agent-gac (`wave56-gac`) | 2026-11-21 | **D-0194 [AUTONOME].** Not built. Of 8.6 M small-operand `int_times`/`int_div`/`int_abs` on the Challenge, 99.8 % are 0..1 indicator products, and root GAC prunes no operand value beyond bounds(Z). GAC saves at most 9 % of nodes under Gecode (14 closed, same search) and nothing inside baguette (a `baguette_regular` twin, 26 closed, geo 1.10x the nodes). `bench/gac_measure/` |
+| hotfix: the Stack overflow on the ATSP instances (D-0194 §7) | agent-stack (`wave56-stack`) | 2026-11-21 | **D-0197 [AUTONOME].** Not on the exit path: `Learned.make`'s merge recursed once per term (`learned.ml:247`) and PB conflict analysis built a 32 168 204-term row (a ladder 22 M wide). Constant-stack walks in `learned.ml` (+ `List.merge` replaced), `writer.ml` (`Pol.write_with`, `Pol.tokens`), `store.ml`; test in `test_learned.ml` under a 512 KiB fiber stack. Same bytes everywhere (gate on `99cf6b0`). |
 
 ## Handoff notes
+
+### 2026-11-21 (agent-stack, `wave56-stack`): hotfix, D-0197, the ATSP Stack overflow
+
+The crash was mid-search, at the first PB conflict analysis over a 32-million-term row: `Learned.make` recursed once per term. Fixed with constant-stack walks (`learned.ml`, `writer.ml`, `store.ml`), byte-identical, gated on `99cf6b0` (binary `b8c71132`). Both ATSP instances now end rc 0 with the old solutions as a prefix.
+Open, for the user (D-0197 §6): on instance10 that one analysis takes RSS from 11.8 GB to the 32 GB cap and the 240 s stop lands at 373.5 s. Bounding PB analysis by row length would change what is learned, so it is a decision.
 
 ### 2026-11-21 (orchestrator, autonomous mode): gate 84 green; M4-T6b merged; a crash hotfix launched
 
