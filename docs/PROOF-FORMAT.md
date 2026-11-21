@@ -620,6 +620,38 @@ rows true in both signs, the hull, the guard's own rows) is derived **by contrad
 `@cN pbc ROW : subproof`, then `pol -k <candidate> + s ;` for each of the constraint's four
 candidates and `rup >= 1 ;`, closed by `qed ;`.
 
+**T7 (D-0196)** covers baguette's **bits arm** (`--bits-above`, the bits encoding above). Its
+`x_bit_i` are the bits of `x - l`, unsigned; cake's are x's two's complement. Over cake's digits
+`u_j` (`i[X][b<j>]` for `j < h`, `~i[X][sign]` at `j = h` when `l < 0`), `U = B + 2^h [sign]` is
+unsigned on m digits and `x - l = U - L'` with `L' = l + 2^h [sign] >= 0`, so the digits of
+`x - l` are those of `U + c`, `c = (2^m - L') mod 2^m`: a ripple-carry adder whose relation at
+digit i is the linear row `d_i + 2 k_(i+1) = u_i + c_i + k_i` (`k_0 = 0`). The prefix writes, per
+bits variable (`x` its sanitized name):
+
+| label | rule | what |
+|---|---|---|
+| `@BK1[x_bitc_<i+1>]`, `@BK2[...]` | `red`, witness `k -> 0`, `k -> 1` | a carry once the previous is a literal: `T - 2k >= 0`, `2k - T >= -1`, `T = u_i + c_i + k_i` (both goals tautologies); while it is a constant the next carry is `0`, `u_i` or `1`, no line |
+| `@BP[d]`, `@BN[d]` | `red`, witness `d -> 1`, `d -> 0` | the relation's two halves, defining `d = x_bit_i` (`i < n`) or the high digit `x_bith_i` (`n <= i < m`); goals `@BK2`, `@BK1` |
+| `@BPs[x]`, `@BNs[x]` | `pol` | the halves summed with weights `2^i`: `S_all + 2^m k_m = U + c`, telescoped |
+| `@BPk[x]`, `@BK[x]` | `pol`, `rup` | the final carry is 1 (`@BPs + @i[X][lb]`), when it is a literal |
+| `@BNk[x]`, `@BZ[d]` | `pol`, `rup` | `-S_all >= -(u - l)` (`@BNs + @i[X][ub] + 2^m @BK`), and each high digit 0 |
+| `@BE1[x]`, `@BE2[x]` | `pol` | the halves of `B = l + S`, `S = sum 2^i x_bit_i`: the order arm's `@E1`/`@E2` over the bits |
+| `@BL[x]`, `@BU[x]` | `pol` | `@BE2 + @i[X][lb]` and `@BE1 + @i[X][ub]`: baguette's two bound rows, each `ia` against its own |
+
+With `l = 0` and no sign every carry is 0 and each pair renames `x_bit_i` to `i[X][b<i>]`. The
+substitution of cake's rows (`@S[...]`, `k * @BE2` or `|k| * @BE1`) is then the order arm's. A
+guarded row whose big-M is baguette's own, over the declared bounds, where cake's is over the bit
+range (`bits_imply`), is derived **by contradiction**: `@cN pbc ROW : subproof`, `pol -1
+<candidate> + s ;` (the negation plus the candidate, saturated: a clause over the guards), `pol -2
+<a * @BU[y] ...> + ;` (the negation plus each negated bits variable's ub row: no room left for
+them), `rup >= 1 ;`, `qed ;`. A choice selector `_mxN` over bits (array_int_maximum/minimum, D-0134)
+is defined as cake's flag `F_i` AND no earlier flag, as `sol` sets it (first operand attaining m):
+`@C1[s]` `red (i+1) ~s + F_i + sum_{j<i} ~F_j >= i+1 : s -> 0`, `@C2[s]` `red s + ~F_i + sum_{j<i}
+F_j >= 1 : s -> 1`, `@D1[s]` `pol @C1` with the earlier flags weakened (the first operand's is a
+renaming, `@D1`/`@D2`). An int_abs sign guard over a bits variable is defined as cake's atom
+`i[X][ge0]` (its order atom is minted later, by the solver's proof), and the atom's own rows
+`@i[X][ge0][f]`, `[r]` are its rows' candidates.
+
 ## 4. Per-propagator justification
 
 Each propagator module MUST document, in its header comment, the shape of the proof step

@@ -178,7 +178,7 @@ Three passes, one line per item, a summary each, `e2e_lane: PASS` or `FAIL` at t
    an objective (D-0182) `s VERIFIED BOUNDS v <= OBJ <= v` with v baguette's optimum (`OPT=v`). It exits
    0 when it refuses, so never read its status. `SKIPPED` names the first uncovered builtin (or the
    objective, or `var int` with no domain). Anything else is `FAIL`.
-2. **controls**: thirty-seven corruptions the bridged chain must refuse (thirty-eight on the solver-written `--e2e` path, D-0195), each asserted at the refused line and
+2. **controls**: forty-one corruptions the bridged chain must refuse (forty-two on the solver-written `--e2e` path, D-0195, D-0196), each asserted at the refused line and
    in the checker's sentence (`chain.sh`'s header lists them). One runs on a model of its own,
    `tools/e2e/models/gcc_repeat_free_sat.fzn` (D-0180 §4). Eight claim a wrong optimum (D-0182):
    four refused by `veripb` at baguette's `conclusion BOUNDS`, four by `cake_pb_cp` itself at the
@@ -200,6 +200,8 @@ The translator, `tools/e2e/fzn2scp.py`, is the one TRUSTED new link: a wrong tra
 It shares no code with `lib/flatzinc/` on purpose (D-0174 §5). Widen it only together with
 `tools/e2e/scpsem.py` (the .scp semantics transcribed from CakeML's `cpScript.sml`) and the
 validation pass, and run the lane.
+
+`make e2e ARGS="--bits W"` runs the solver's passes at `--bits-above W` (the bits arm, D-0196: baguette's unsigned offset bits rebuilt from cake's two's-complement bits by a ripple-carry adder in the prefix); the lane is VERIFIED at W = 0 and W = 4 with the same counts as the order arm.
 
 ## 10. The symmetry lane (M15-symmetry-T2, D-0179)
 

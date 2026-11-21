@@ -1407,7 +1407,6 @@ let bit_terms x n = List.init n (fun i -> (1 lsl i, Lit.bit x i))
 
 let declare_int_bits t x ~lo ~hi =
   if lo > hi then raise (Empty_domain x);
-  if t.e2e <> None then E2e.refuse_bits x;
   (match width_opt ~lo ~hi with
   | None -> raise (Width_too_large (x, lo, hi))
   | Some w when w < 2 ->
@@ -1432,6 +1431,12 @@ let declare_int_bits t x ~lo ~hi =
   Occurs.add_bit_range t.occurs x 0 (n - 1);
   note_renamed t x;
   let terms = bit_terms x n in
+  (* M14-e2e-verification-T7 (D-0196): the bits' definitions from cake's and the halves of
+     B = lo + S go to the prefix before the two bound rows are committed, so each row's
+     pin follows its @BL / @BU *)
+  (match t.e2e with
+  | Some e -> E2e.declare_bits e x ~lo ~hi ~n ~bit:(fun i -> Lit.to_string (Lit.bit x i))
+  | None -> ());
   let lb_row = commit t (Opb.ge terms 0) in
   let ub_row = commit t (Opb.le terms width) in
   assert (ub_row = lb_row + 1);

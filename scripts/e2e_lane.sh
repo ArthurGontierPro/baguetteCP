@@ -72,6 +72,23 @@
 #                  Booleans the .scp has no counterpart for: flag-witness (a regular state
 #                  flag past layer 0 as the negation of cake's flag) and guard-witness (the
 #                  int_abs sign guard as ~x_ge_0), each refused at its red line.
+#                  T7 (D-0196) adds the bits arm's, each at `--bits-above 0` whatever the lane's
+#                  flags, on tools/e2e/models/bits_offset_sat (x signed, y offset: the adder's
+#                  carries; every bound attained) and test/models/bits_ne_sat (bits renamed):
+#                    bits-def       (both paths) x_bit_0 DEFINED as cake's b1 where it reads b0
+#                                   (still a valid red pair: the definition of a fresh
+#                                   variable is never refused itself): refused at the first
+#                                   line it breaks, the variable's ub-row pin against @BU, "Expected
+#                                   constraint is not syntactically implied by the constraint at
+#                                   the hint."
+#                    bits-opb       (bridge) opb-stronger at `--bits-above 0`: a bits lb row
+#                                   x >= l + 1, false at x = l: refused at its pin, the RUP sentence
+#                    bits-pin       (solver) pin-stronger at `--bits-above 0`: the same row's pin,
+#                                   refused at that `ia`, the hint sentence
+#                    bits-tight     (both paths) the first row derived by contradiction against
+#                                   a bits ub row, degree + 1 (x - y >= -2 where the half says
+#                                   -3, false at x = 0, y = 3): refused inside its `pbc`, the RUP
+#                                   sentence, reported as the `pbc`
 #   3. validation  the TRUSTED translator against MiniZinc's reference solvers (D-0174 sec. 6,
 #                  GCS #987): on every model of pass 1 that is not SKIPPED, the solution set
 #                  cake's semantics admit for the .scp (tools/e2e/scpsem.py, which reads only
@@ -82,7 +99,9 @@
 #                  .scp's prob_type must name the .fzn's direction and variable, and
 #                  baguette's last solution must reach the set's optimum under it.
 #
-# Usage: scripts/e2e_lane.sh [-j N] [OUTDIR]       (N <= 8; OUTDIR default /tmp/baguette-e2e-$$)
+# Usage: scripts/e2e_lane.sh [-j N] [--bits W] [OUTDIR]   (N <= 8; OUTDIR default /tmp/baguette-e2e-$$)
+#        --bits W (T7, D-0196): passes 1, 1b and 3 run the solver at `--bits-above W` (the
+#        controls keep their own flags, the default but for the bits-* ones)
 # Env:   CAKE_PB_CP  the verified encoder/checker (default: the build of D-0174, see below);
 #                    missing is a FAILURE, never a skip
 #        BAGUETTE    the solver (default _build/default/bin/main.exe; build it first, the lane
@@ -103,6 +122,7 @@ while [ $# -gt 0 ]; do
     case "$1" in
         -j) J=$2; shift 2 ;;
         -j*) J=${1#-j}; shift ;;
+        --bits) export E2E_FLAGS="--bits-above $2"; shift 2 ;;
         *) break ;;
     esac
 done
@@ -119,7 +139,7 @@ export E2E_TIMEOUT=${E2E_TIMEOUT:-300}
 for f in "$CAKE_PB_CP" "$BAGUETTE" "$MZN_BIN/fzn-gecode" "$MZN_BIN/fzn-cp-sat"; do
     [ -x "$f" ] || { echo "FAIL e2e_lane: $f is missing or not executable"; exit 1; }
 done
-echo "e2e_lane: baguette md5 $(md5sum < "$BAGUETTE" | cut -c1-8), cake_pb_cp sha256 $(sha256sum < "$CAKE_PB_CP" | cut -c1-8), out $OUT"
+echo "e2e_lane: baguette md5 $(md5sum < "$BAGUETTE" | cut -c1-8), cake_pb_cp sha256 $(sha256sum < "$CAKE_PB_CP" | cut -c1-8), out $OUT, flags ${E2E_FLAGS:-default}"
 
 if command -v systemd-run > /dev/null 2>&1; then
     RUN=(systemd-run --user --scope -q -p MemoryMax=32G)
@@ -172,6 +192,7 @@ echo "solver: $nm models, $sv VERIFIED by cake_pb_cp with the prefix written by 
 RUP="The constraint is not implied by reverse unit propagation (RUP) from core and derived database."
 SOL="Propagation engine error: The given solution is conflicting with constraint"
 RED="Proofgoal #1 could not be autoproven."
+IA="Expected constraint is not syntactically implied by the constraint at the hint."
 CONTROLS="chain_sat:opb-stronger php_unsat:opb-stronger chain_sat:scp-weaker php_unsat:scp-weaker
 search_all_const_sat:scp-stronger bits_pb_learn_sat:scp-stronger chain_sat:bridge-witness lin_sat:bridge-witness
 bool_or_sat:opb-stronger bool_and_sat:opb-stronger reif_lin_le_sat:opb-stronger
@@ -182,11 +203,12 @@ member_sat:opb-reif member_gap_sat:opb-reif gcc_repeat_free_sat:copy-witness
 opt_min_sat:opt-better opt_max_sat:opt-better opt_min_sat:opt-worse restart_queens6_opt:opt-worse
 opt_min_sat:core-better restart_queens6_opt:core-better opt_max_sat:core-worse bits_maxmin_opt_sat:core-worse
 regular_sat:opb-stronger cumulative_sat:opb-stronger disjunctive_sat:opb-stronger abs_zero_sat:opb-stronger
-regular_sat:flag-witness abs_zero_sat:guard-witness"
-NCONTROLS=37
+regular_sat:flag-witness abs_zero_sat:guard-witness
+bits_offset_sat:bits-def bits_ne_sat:bits-def bits_offset_sat:bits-opb bits_offset_sat:bits-tight"
+NCONTROLS=41
 OPTW="The lower bound claimed for \`conclusion BOUNDS\` is larger than the best logged objective value."
 CORE="conclusion BOUNDS check failed:"
-for c in $CONTROLS; do echo "$c"; done | xargs -P "$J" -I{} bash -c \
+for c in $CONTROLS; do echo "$c"; done | E2E_FLAGS= xargs -P "$J" -I{} bash -c \
     'm=${0%%:*}; k=${0#*:}; f="$1/test/models/$m.fzn"; [ -f "$f" ] || f="$1/tools/e2e/models/$m.fzn"
      run "$1"/tools/e2e/chain.sh "$f" "$2" "$k"' {} "$ROOT" "$OUT/controls" \
     | sort > "$OUT/controls.txt"
@@ -201,7 +223,9 @@ while IFS= read -r l; do
     target=$(echo "$l" | sed -n 's/.*| target=\(.*\)$/\1/p')
     ok=0
     case "$k" in
-        opb-stronger | opb-reif) { [ "$at" = "$target rup" ] || [ "$at" = "$target pbc" ]; } && [ "$cause" = "$RUP" ] && ok=1 ;;
+        opb-stronger | opb-reif | bits-opb) { [ "$at" = "$target rup" ] || [ "$at" = "$target pbc" ]; } && [ "$cause" = "$RUP" ] && ok=1 ;;
+        bits-def) [ "$at" = "$target ia" ] && [ "$cause" = "$IA" ] && ok=1 ;;
+        bits-tight) [ "$at" = "$target pbc" ] && [ "$cause" = "$RUP" ] && ok=1 ;;
         scp-weaker) [[ "$at" =~ ^@c[0-9]+\ rup$ ]] && [ "$cause" = "$RUP" ] && ok=1 ;;
         scp-stronger) [[ "$at" == "sol "* ]] && [[ "$cause" =~ ^"$SOL"\ [0-9]+\ in\ the\ database\.\ \(@S\[c\[$target\]\]\)$ ]] && ok=1 ;;
         bridge-witness | copy-witness | flag-witness | guard-witness) [ "$at" = "$target red" ] && [ "$cause" = "$RED" ] && ok=1 ;;
@@ -223,7 +247,6 @@ echo "controls: $ncok of $nc refused where and as expected ($NCONTROLS expected)
 [ "$nc" -eq "$NCONTROLS" ] && [ "$ncok" -eq "$NCONTROLS" ] || fail=1
 
 # ---------------------------------------------------------------- 2b. solver controls (T3)
-IA="Expected constraint is not syntactically implied by the constraint at the hint."
 SCONTROLS="chain_sat:pin-stronger php_unsat:pin-stronger bool_or_sat:pin-stronger bool_and_sat:pin-stronger
 reif_lin_le_sat:pin-stronger alldiff_const_sat:sel-witness ne_sat:sel-witness reif_ne_entail_sat:sel-witness
 chain_sat:scp-weaker php_unsat:scp-weaker search_all_const_sat:scp-stronger bits_pb_learn_sat:scp-stronger
@@ -235,10 +258,11 @@ gcc_const_counts_sat:pin-stronger maxmin_sat:pin-stronger maxmin_int_max_sat:pin
 inverse_sat:pin-stronger member_sat:pin-stronger member_gap_sat:pin-stronger
 gcc_repeat_free_sat:copy-witness
 regular_sat:pin-stronger cumulative_sat:pin-stronger disjunctive_sat:pin-stronger abs_zero_sat:pin-stronger
-regular_sat:flag-witness abs_zero_sat:guard-witness"
-NSCONTROLS=38
+regular_sat:flag-witness abs_zero_sat:guard-witness
+bits_offset_sat:bits-def bits_ne_sat:bits-def bits_offset_sat:bits-pin bits_offset_sat:bits-tight"
+NSCONTROLS=42
 mkdir -p "$OUT/scontrols"
-for c in $SCONTROLS; do echo "$c"; done | E2E_SOLVER=1 xargs -P "$J" -I{} bash -c \
+for c in $SCONTROLS; do echo "$c"; done | E2E_FLAGS= E2E_SOLVER=1 xargs -P "$J" -I{} bash -c \
     'm=${0%%:*}; k=${0#*:}; f="$1/test/models/$m.fzn"; [ -f "$f" ] || f="$1/tools/e2e/models/$m.fzn"
      run "$1"/tools/e2e/chain.sh "$f" "$2" "$k"' {} "$ROOT" "$OUT/scontrols" \
     | sort > "$OUT/scontrols.txt"
@@ -253,7 +277,9 @@ while IFS= read -r l; do
     target=$(echo "$l" | sed -n 's/.*| target=\(.*\)$/\1/p')
     ok=0
     case "$k" in
-        pin-stronger) { [ "$at" = "$target ia" ] && [ "$cause" = "$IA" ]; } || { { [ "$at" = "$target rup" ] || [ "$at" = "$target pbc" ]; } && [ "$cause" = "$RUP" ]; } && ok=1 ;;
+        pin-stronger | bits-pin) { [ "$at" = "$target ia" ] && [ "$cause" = "$IA" ]; } || { { [ "$at" = "$target rup" ] || [ "$at" = "$target pbc" ]; } && [ "$cause" = "$RUP" ]; } && ok=1 ;;
+        bits-def) [ "$at" = "$target ia" ] && [ "$cause" = "$IA" ] && ok=1 ;;
+        bits-tight) [ "$at" = "$target pbc" ] && [ "$cause" = "$RUP" ] && ok=1 ;;
         scp-weaker) { [[ "$at" =~ ^@c[0-9]+\ ia$ ]] && [ "$cause" = "$IA" ]; } || { [[ "$at" =~ ^@c[0-9]+\ rup$ ]] && [ "$cause" = "$RUP" ]; } && ok=1 ;;
         scp-stronger) [[ "$at" == "sol "* ]] && [[ "$cause" =~ ^"$SOL"\ [0-9]+\ in\ the\ database\.\ \(@S\[c\[$target\]\]\)$ ]] && ok=1 ;;
         bridge-witness | sel-witness | copy-witness | flag-witness | guard-witness) [ "$at" = "$target red" ] && [ "$cause" = "$RED" ] && ok=1 ;;

@@ -21,7 +21,6 @@ of it to every session and stopping at a broken line before it even reached the 
 |---|---|---|---|
 | M8-bits-encoding-T4 (two arms, `W = none` and `W = 0`, on the sixteen editions) | run directories under `/scratch/arthur/m8t4/`, `tools/compare/` (additions), `bench/challenge/README.md` (the run's row), a new D-record | agent-m8t4 (`wave55-m8t4`) | 2026-11-20 |
 | M10-search-strategy-T5, M9-no-proof-T3, M7-T30 (one Challenge series on current main: default, `-f`, default `--no-proof`) | run dirs `/scratch/arthur/m10t5/`, `tools/compare/` (additions), `bench/challenge/README.md` (the run's row); reserved record D-0185 | agent-m10t5 (`wave55-m10t5`) | 2026-11-20 |
-| M14-e2e-verification-T7 (the bits arm in the e2e chain) | `tools/e2e/`, `scripts/e2e_lane.sh`, `lib/proof/e2e.ml`, `lib/proof/encoding.ml` (additive), `lib/flatzinc/compile.ml` (the e2e hooks only), `docs/PROOF-FORMAT.md` §3b; reserved record D-0196 | agent-e2e7 (`wave56-e2e7`) | 2026-11-21 |
 | M6-T2 (re-scope first: is minor-GC pressure still worth a Bigarray/Bytes change after M16?) | measurement first, no edit; `lib/core/store.ml`, `domain.ml` only if the measurement says so, with an [AUTONOME] record; reserved record D-0198 | agent-gc (`wave56-gc`) | 2026-11-21 |
 
 ## Cross-session requests
@@ -647,6 +646,14 @@ section 1. Shares are inclusive, of the whole run.
 
 ## Handoff notes
 
+### 2026-11-21 (orchestrator, autonomous mode): gate 86 green; M14-T7 merged, gate 87 on it
+
+Gate 86 (`1427baa`, merge wave56-stack, D-0197, binary `ba895ce2`, against gate 85's `33cf382f`): `make check`
+rc 0 (4 623 ok; peak RSS 157 MB, up from 108 MB with D-0197's 200 000-term small-stack test), 207 x 4
+artefacts equal, lane 324/324, debug 311/311, scaling ok. agent-e2e7's request (scripts/README.md §9: the
+control counts 41/42 and `--bits W`) done in the merge commit. Seen in its gate: `compare_selftest.sh` gave
+0 of 9 rows once under load and passed on rerun, a flake to watch.
+
 ### 2026-11-21 (orchestrator, autonomous mode): gate 85 green; M16 complete; the crash hotfix merged, gate 86 on it
 
 Gate 85 (`9f274c9`, merges wave56-gac D-0194 and wave55-review5 D-0193, binary `33cf382f`, against gate 84's
@@ -676,8 +683,15 @@ Measured three ways (`bench/gac_measure/`): a root census of every flattened Cha
 Two findings for other rows (D-0194 section 7). `main.exe 2021_ATSP_instance10_0p25.baguette.fzn --no-proof -s -t 240000` dies with a Stack overflow after its solutions. On codes leech_m2 a DFA over `[x, x*x]` runs 3.8 times faster than D-0060's square rows at equal nodes, which makes the square rows a per-node cost lead for M16.
 
 | M14-e2e-verification-T6 (the far families in the e2e chain) | agent-e2e6 (`wave56-e2e6`) | 2026-11-21 | **D-0195 [AUTONOME].** regular, cumulative and int_abs IN the chain on both paths (bridge and `--e2e`): regular's flags left out of the `.scp` and defined as cake's by red pairs, each capacity row one `pol`, abs's guard defined as `x_ge_0` and its two-sign rows by `pbc`. int_times/int_div OUT (a case split per value and sign; the generic step only verifies pinned operands, measured). `make e2e` 188 -> 197 VERIFIED on both paths, 0 FAIL, controls 37/37 and 38/38, validation 196 AGREE 0 DIFFER. Challenge: 6 of 8 new instances VERIFIED. Gate green (see D-0195 section 6) |
+| M14-e2e-verification-T7 (the bits arm in the e2e chain) | agent-e2e7 (`wave56-e2e7`) | 2026-11-21 | **D-0196 [AUTONOME].** baguette's bits (`--bits-above`) DERIVED in the prefix from cake's two's-complement bits by a ripple-carry adder (one linear row per digit, red pairs for each carry and bit), on both paths; guarded rows with baguette's big-M by `pbc` against the ub rows; choice selectors and abs guards over bits defined. `make e2e` at W=0 and W=4: 197 VERIFIED on both paths, 0 FAIL, 0 verdict differing; controls 41/41 and 42/42; validation 196 AGREE. Challenge at W=64: roster-sickness, fast-food, zephyrus_12_8_6_3 and gfd-n120 VERIFIED end to end (each failed on the order arm). Gate green (see D-0196 section 6) |
 
 ## Handoff notes
+
+### 2026-11-21 (agent-e2e7, `wave56-e2e7`): M14-e2e-verification-T7, the bits arm in the e2e chain, D-0196
+
+baguette's bits arm is in the end-to-end chain on both paths: the prefix defines `x_bit_i` from cake's two's-complement bits by a ripple-carry adder (`@BK1/2`, `@BP/@BN`, halves `@BE1/@BE2`, bound rows against `@BL/@BU`); guarded rows whose big-M is baguette's go by `pbc` against the ub rows. `scripts/e2e_lane.sh --bits W`: 197 VERIFIED at W = 0 and 4 on both paths, verdicts equal to the order arm's.
+At `--bits-above 64` the wide Challenge instances the order arm could not chain (roster-sickness, fast-food, zephyrus_12_8_6_3, gfd-n120) VERIFY; fast-food and gfd-n120 still bring cake_pb_cp to its 24 GB, and `--e2e`'s writer is still the slow stage there (35 s against 4.4 s plain).
+A cross-session request (`## Cross-session requests`): scripts/README.md §9's control counts, 41 and 42, and `--bits W`.
 
 ### 2026-11-21 (agent-review5b, `wave55-review5`): M16-file-review-T5, the front end and setup, D-0193
 

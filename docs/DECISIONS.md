@@ -25130,3 +25130,186 @@ kernel's swap paths. The analysis polls the stop only between its steps, so the 
 133 s late. A bound on PB analysis by row length, giving the conflict back to the clause path past
 some number of terms, would change what is learned on wide instances. That is a default-behaviour
 decision for the user, so it is not taken here.
+
+
+## D-0196  [AUTONOME] M14-e2e-verification-T7: the bits arm in the end-to-end chain. The prefix DERIVES baguette's unsigned offset bits from cake's two's-complement bits by a ripple-carry adder whose every relation is one linear row
+
+Status: DECIDED in autonomous mode on 2026-11-21, before the work that depends on it. Section 6 is
+the result.
+Date: 2026-11-21
+Task: M14-e2e-verification-T7 (agent-e2e7, `wave56-e2e7`)
+Touches: this record, `tools/e2e/` (bridge, chain, mutations, models), `scripts/e2e_lane.sh`,
+`lib/proof/e2e.ml`, `lib/proof/encoding.ml` (additive), `lib/flatzinc/compile.ml` (the e2e hooks
+only), `docs/PROOF-FORMAT.md` §3b.
+
+### 1. Context
+
+Under `--bits-above W` a variable wider than W whose scope allows it (D-0130 §3.4) is encoded on
+`x_bit_i`, the bits of `x - l`, unsigned, `n = bit_length(u - l)` of them, with two bound rows and no
+ladder (D-0130, D-0132, PROOF-FORMAT §3). cake_pb_cp encodes every integer by its two's-complement
+bits `i[X][b<j>]`, weight `2^j`, `j < h`, and `i[X][sign]`, weight `-2^h`, when `l < 0` (§3b). Neither
+end-to-end path covered a bits variable: the bridge assumed a ladder, `--e2e` refused (D-0187 §3).
+
+Found while deciding, measured on `bits_ne_sat` at `--bits-above 0` with a scratch bridge: once the
+bits are defined, every substituted cake row is over baguette's bits, and baguette's linear rows are
+`ia` against them unchanged. What does not follow by `ia` is any row with a guard (a disequality
+selector, a reifier, a choice selector, an arith guard): cake's big-M is over the BIT range of the
+terms (`bits_imply`), baguette's over the declared bounds, and on a bits variable the two differ
+(`x + 17 ~b >= 2` against `x + 11 ~s >= 17` in literal form, for `var 0..9`). On the ladder they
+coincide after saturation, which is why the order arm never met it.
+
+### 2. The options
+
+| | what | gains | costs |
+|---|---|---|---|
+| (a) baguette writes cake's representation under `--e2e` | its bits arm declares two's-complement bits and posts its rows over them | the bits are cake's, no definition | a second bits encoding in the solver: every `pol` the bits arm writes (D-0130 §5, D-0132) cites rows whose coefficients change, the minted atoms' pairs too; a large change to lib/core's justifications for one flag |
+| (b) the prefix DERIVES baguette's bits from cake's | per digit a linear relation of an adder, each fresh variable defined by a red pair | the solver's proof after the prefix is byte for byte its own (as for the order arm); O(bits) lines per variable where the order arm writes O(width) | the definitions are a new device to get right (checked, so a mistake is a refused line) |
+| (c) identity only (`l = 0`, no sign: `x_bit_i` is `i[X][b<i>]`), refuse the rest | trivial | every negative or offset domain refused |
+| (d) define `x_bit_(n-1)` down to `x_bit_0` greedily, each by a red pair reifying `x - l - (higher bits) >= 2^i` | no carries | the halves of `B = l + S` then need the big-M of each reification tightened, the same problem as the guards, n times per variable |
+
+**(b).** Over cake's digits `u_j` (`b_j` for `j < h`, `~sign` at `j = h`), `U = B + 2^h [sign]` is
+unsigned and `x - l = U - L'` with `L' = l + 2^h [sign] >= 0`. The digits of `x - l` are those of
+`U + c`, `c = (2^m - L') mod 2^m`, through a ripple-carry adder, and its relation at digit i is ONE
+linear row, `d_i + 2 k_(i+1) = u_i + c_i + k_i` (`k_0 = 0`). While the carry is a constant, the next
+one is `0`, `u_i` or `1`; once it is a literal, the next is a fresh variable defined by a red pair
+whose two goals are tautologies. `d_i` (`x_bit_i` for `i < n`, a fresh high digit above, which is zero)
+is defined by the relation's two halves, a red pair whose goals are the carry's own rows. Summed with
+weights `2^i` the relations telescope, so the halves of `B = l + S` (the order arm's `@E1`/`@E2`, now
+with `S = sum 2^i x_bit_i`) follow by one `pol` each, after a unit on the final carry and one per high
+digit (`rup` against one row each). Everything downstream of the halves, the substitution of cake's
+rows (D-0187), is unchanged. With `l = 0` and no sign, every carry is 0 and each bit is a renaming.
+
+**The guards, by contradiction.** A row whose guard's big-M is baguette's own and that cake's
+candidate implies only up to that coefficient is derived by `pbc` (D-0195 §2.3's device): the
+negation plus the candidate, saturated, forces the guard; the negation plus each negated bits
+variable's ub row (`-S >= -(u - l)`, baguette's own, pinned in the prefix) leaves it no room; unit
+propagation closes. No new rule, and only where `ia` fails.
+
+**Two definitions the order arm did not need.** (i) A choice-group selector `_mxN` (D-0134) is set
+by `sol` to the FIRST operand attaining m and no other, where cake's array_max flag `x[N][<i>]` is
+`x_i >= m` both ways: at a tie two flags hold. So `_mx_i` is defined as `F_i /\ ~F_0 /\ .. /\
+~F_(i-1)` (a red pair over the conjunction), not as `F_i`; the binary max/min, whose flags have one
+direction only, keep the renaming. (ii) An int_abs sign guard over a bits variable is defined as
+cake's atom `i[X][ge0]` itself (its order atom `x_ge_0` is minted by the solver's proof, later, and
+two definitions of one name would collide).
+
+### 3. How to revert
+
+Revert the commits prefixed `M14-e2e-verification-T7:` on branch `wave56-e2e7` (or their merge).
+Nothing outside `tools/e2e/`, `scripts/e2e_lane.sh` and the `--e2e` path changes, and every default
+byte stays (the gate compares the 207 models' four artefacts with main's).
+
+### 4. What this does not decide
+
+Whether `--e2e` becomes a default, whether the bridge is retired (D-0187 §5), and whether a wide
+domain should go to the bits arm by default (D-0130's threshold stays `none`).
+
+### 5. (reserved)
+
+### 6. Result
+
+**What was built.** In `tools/e2e/bridge.py`: [bits_prefix] (the adder, the halves, `@BL`/`@BU`),
+[tight] (a guarded row by contradiction against the ub rows, tried after every candidate failed
+strictly), the choice selectors' conjunction (`@C1`/`@C2`) and the abs guard over bits; and a fix
+found on the way: the swap cache was keyed on a selector's name alone, so a selector tried as F
+and then as ~F (an int_lin_ne's flag over a bits sum, `search_split_hole_unsat`) was served its
+first orientation's swap. Under `--e2e` (`lib/proof/e2e.ml`): `E2e.declare_bits`, called by
+`Encoding.declare_int_bits` (a no-op without the flag) where it refused, the same derivations
+([tight], [conj_of], the guard as cake's atom, the atom's rows as abs candidates). `chain.sh`,
+`measure_e2e.sh` take `E2E_FLAGS`; `scripts/e2e_lane.sh --bits W` runs passes 1, 1b and 3 at
+`--bits-above W`. PROOF-FORMAT §3b states the labels.
+
+Every red line of the adder was accepted at its first run, on satisfiable models: its goals are
+tautologies or one row of the database.
+
+**The lane** (`scripts/e2e_lane.sh -j 8` from the clone at `29d1dfb`'s code, dev binary md5
+`843d7c47`, veripb 3.0.2 `d5644ca4`, `cake_pb_cp` `ca92491e`; logs and tables in
+`/cluster/arthur/baguette-results/wave56-e2e7/`):
+
+| pass | default flags | `--bits 0` | `--bits 4` |
+|---|---|---|---|
+| 1, bridged | 197 VERIFIED (105 SAT, 83 UNSAT, 9 OPT), 10 SKIPPED, 0 FAIL | **197**, the same split, 0 FAIL | **197**, 0 FAIL |
+| 1b, solver-written | 197, 0 outside `--e2e`, 0 FAIL, 0 disagreeing | **197**, 0 outside, 0 FAIL, 0 disagreeing | **197**, the same |
+| 2, controls | **41 of 41** (37 + 4) | 41 of 41 | 41 of 41 |
+| 2b, solver controls | **42 of 42** (38 + 4) | 42 of 42 | 42 of 42 |
+| 3, validation | 196 AGREE, 1 UNCHECKED, 0 DIFFER | the same | the same |
+
+At `--bits-above 0`, 103 of the 197 models have a bits variable (245 variables; the others are
+held by scope or Boolean), and 183 of their rows are derived by contradiction against the ub
+rows; at 4, 42 models, 106 variables, 51 rows. Every verdict of passes 1 and 1b at 0 and at 4 is
+the default bridged pass's verdict, answer and optimum (0 of 197 differ). The default lane's
+counts are D-0195's plus the four new controls per path: the order arm is untouched.
+
+**The controls**, each refused at the expected line in the checker's whole sentence, on
+satisfiable models (D-0053); `bits_offset_sat` (new, `tools/e2e/models/`) has a signed x and an
+offset y (carries), 38 solutions, every bound attained:
+
+| control | path | model | refused at | wording | why it is a judgement |
+|---|---|---|---|---|---|
+| bits-def | both | `bits_offset_sat` (y's adder) | `@c4 ia` (y's ub row) | "Expected constraint is not syntactically implied by the constraint at the hint." | y's bit 0 takes both values over the solutions; the red pair itself is accepted, as any definition of a fresh variable is |
+| | both | `bits_ne_sat` (renamed bits) | `@c2 ia` | the same | x takes 4 and 5 |
+| bits-opb | bridge | `bits_offset_sat`: `x >= -2` | `@c1 rup` | "The constraint is not implied by reverse unit propagation (RUP) from core and derived database." | false at x = -3 |
+| bits-pin | solver | the same row's pin | `@c1 ia` | the hint sentence | false at x = -3 |
+| bits-tight | both | `bits_offset_sat`: the disequality's half `x - y >= -2` where it is -3 | inside `@c7 pbc` | the RUP sentence | false at x = 0, y = 3 |
+
+A wrong DEFINITION is never refused at its own red line (it defines a fresh variable); it is
+refused at the first line it breaks, which bits-def shows. `bits-def` picks the first variable
+whose ub row is not a tautology: over x in -3..4, `S <= 7` holds for three bits whatever they
+mean.
+
+**The prefix against the order arm, on the test models** (the solver-written prefix up to its
+closing comment, same binary, lane runs): on the 103 models with a bits variable at 0, 3.06 MB
+(order) against 0.63 MB (bits), x0.21; at 4, on 42 models, 2.63 MB against 0.28 MB, x0.11. The
+bits prefix is larger on 16 narrow models at 0 (at most +5 %: an adder of 3 or 4 digits against
+a ladder of 3 to 9 values), on none at 4. `width_root_unsat` (w = 999): 1.66 MB against 5.2 KB.
+
+**The Challenge** (D-0182's flattened instances, release binary `8599f044`, `--bits-above 64`
+(column W) or the order arm (-), `tools/e2e/measure_e2e.sh` with `E2E_FLAGS`, 4 at a time under
+`systemd-run --user --scope -p MemoryMax=32G`; "alone" is `veripb` on baguette's own files with the
+same flags; order-arm rows marked * are D-0187's and D-0195's, with their binaries):
+
+| instance | W | bits vars | answer | solve s, plain / `--e2e` | veripb alone s | chain elab + cake s (cake GB) | prefix MB | prefix alone elab + cake s |
+|---|---|---|---|---|---|---|---|---|
+| `2022_roster-sickness_large-4-2` | 64 | 45 | OPT | 0.10 / 0.28 | 0.04 | 0.28 + 1.91 (1.1) | 3.2 | 0.15 + 0.71 |
+| | -* | 0 | - | 16.37 / exhausted the 4 GB solver cap at 147 s | 30.24 | - | 13 500 when stopped | - |
+| `2011_fast-food_ff53` | 64 | 2 452 | OPT=1 | 4.42 / 35.05 | 10.06 | 51.07 + 74.31 (24.0) | 144.1 | 39.55 + 52.99 |
+| | -* | 0 | OPT=1 | 8.29 / timeout 300 s | 304.01 | - | 4 000 when stopped | - |
+| `2016_zephyrus_12__8__6__3` | 64 | 104 | OPT=1300 | 1.02 / 1.82 | 1.04 | 3.76 + 5.72 (3.6) | 9.5 | 0.96 + 2.18 |
+| | -* | 0 | OPT=1300 | 6.68 / 151.4 | - | 476.6 + heap exhausted (24) | 1 357.6 | 106.6 + heap |
+| `2015_gfd-schedule_n120f5d50m50k20` | 64 | 3 | OPT=1 | 5.24 / 52.85 | 10.20 | 189.63 + 79.98 (24.0) | 399.2 | 41.24 + 75.19 |
+| | -* | 0 | OPT=1 | 5.13 / 131.1 | - | 469.4 + heap exhausted (24) | 517.8 | 394.2 + heap |
+| `2015_gfd-schedule_n30f3d30m7k4` | 64 | 2 | OPT=1 | 0.85 / 3.04 | 2.19 | 12.51 + 7.96 (4.8) | 24.8 | 1.29 + 5.61 |
+| | - | 0 | OPT=1 | 0.79 / 3.09 | 1.46 | 16.86 + 168.63 (24.0) | 47.6 | 7.08 + 160.71 |
+| `2013_on-call-rostering_4s-10d` | 64 | 24 | OPT=1 | 0.08 / 0.12 | 0.09 | 0.20 + 0.52 (0.3) | 0.6 | 0.04 + 0.12 |
+| | - | 0 | OPT=1 | 0.38 / 2.64 | 0.76 | 3.64 + 21.31 (15.9) | 33.8 | 1.57 + 17.48 |
+| `2024_word-equations_..._140-int` | 64 | 0 | OPT=3 | 4.28 / 12.84 | 22.32 | 699.96 + 41.77 (22.9) | 102.9 | 4.18 + 24.69 |
+
+All eleven runs VERIFIED by `cake_pb_cp`, every verdict and optimum the order arm's where both
+exist (roster-sickness's solution is byte-identical to the order arm's plain run). What this says:
+
+1. **Bits makes the two instances D-0195 named feasible end to end.** roster-sickness (an
+   objective over 6.2 million values) goes from a 13.5 GB prefix that exhausted the solver's
+   cap to a 3.2 MB one checked in 2.2 s; fast-food from a timeout to VERIFIED in 125 s of
+   checking, with a 144 MB prefix (35 of its variables stay on the order arm, held by their
+   holes) and 4 795 rows by contradiction against the ub rows.
+2. **And two D-0187 left at cake_pb_cp's heap**: zephyrus (1.36 GB of prefix, 104 bits variables
+   at 64) is checked in 9.5 s; gfd-n120 (3 bits variables, the widest) in 270 s, with cake at
+   24 GB, the heap's edge. gfd-n30's two widest variables were half its prefix and 95 % of its
+   cake time (168.6 s to 8.0 s).
+3. **Where no variable is wide, nothing changes**: word-equations has none above 64, and its
+   prefix is the order arm's.
+4. The solver under `--e2e` is still the slow stage on fast-food (35 s against 4.4 s plain) and
+   gfd-n120 (53 s against 5.2 s): D-0187's lead, the writer, now on the bits arm's candidate search.
+
+**Gate.** A fresh clone of the pushed tip `29d1dfb` (dev binary `843d7c47`) against gate 84's
+binary (`dca706be`, `/scratch/arthur/baguette-gate-20261121b`): 207 models x 4 artefacts (stdout,
+exit code, `.opb`, `.pbp`) equal, differential lane 324 of 324, debug 311 of 311, scaling ok, at `-j 4` beside the
+Challenge's four workers. That clone's `make check` stopped at `scripts/compare_selftest.sh` (its
+first run of the comparison harness wrote 0 rows of 9 under the node's load; a harness self-test this
+task does not touch), which passed when rerun in the same clone; `make check` on a second fresh clone
+of the same tip: rc 0, 207 models, peak RSS 108 MB.
+
+**Left.** Whether `--e2e` becomes a default, whether the bridge is retired, and whether wide domains
+go to the bits arm by default (section 4, the user's). On fast-food and gfd-n120 cake_pb_cp reaches
+its 24 GB heap; `--e2e`'s writer is the slow stage there. int_times and int_div stay outside
+(D-0195 2.4). Results in `/cluster/arthur/baguette-results/wave56-e2e7/`.

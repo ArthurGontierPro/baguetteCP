@@ -99,9 +99,12 @@
    int_lin_le_reif; and of T5 above; over `var lo..hi` (a set domain with holes is cake's
    `in` over interior eq atoms, D-0187) and `var bool`, with or without an objective.
    Everything else raises [Not_covered] with the construct's name, before the search: the
-   caller refuses `--e2e` and says why. In particular a variable on the bits arm (T7),
-   int_times and int_div (T6 left them outside, D-0195 section 2.4), and any row baguette
-   commits outside a covered constraint.
+   caller refuses `--e2e` and says why. In particular int_times and int_div (T6 left them
+   outside, D-0195 section 2.4), and any row baguette commits outside a covered constraint.
+   A variable on the bits arm (`--bits-above`) is covered since T7 (D-0196, [declare_bits]):
+   its bits are defined from cake's, a guarded row whose big-M is baguette's is derived by
+   contradiction against the bits' ub rows ([tight]), a choice selector over bits is defined
+   as its flag AND no earlier one ([conj_of]), an int_abs guard over bits as cake's atom.
 
    ---------------------------------------------------------------------------
    T6's families (D-0195)
@@ -345,6 +348,8 @@ type ivar = {
   lit : int -> string; (* x_ge_v's name *)
   mutable e1 : string;
   mutable e2 : string;
+  bitw : (int * string) list;
+      (* T7 (D-0196): a bits variable's (2^i, x_bit_i); [] on the ladder *)
 }
 
 (* cp_to_ilpScript.sml, mk_constraint_ge a X b Y c: a * X + b * Y >= c, constants folded. *)
@@ -443,6 +448,13 @@ type t = {
   mutable n_sel : int;
   mutable n_q : int;
   mutable finished : bool;
+  (* T7 (D-0196) *)
+  bound_q : string Queue.t;
+      (* a bits variable's @BL/@BU, for its next two committed rows *)
+  conj : (string, string list) Hashtbl.t;
+      (* a choice selector defined as its flag AND no earlier one -> those earlier flags *)
+  mutable n_bits : int;
+  mutable n_tight : int; (* rows derived by contradiction against the bits' ub rows *)
 }
 
 let create path =
@@ -478,6 +490,10 @@ let create path =
     n_sel = 0;
     n_q = 0;
     finished = false;
+    bound_q = Queue.create ();
+    conj = Hashtbl.create 4;
+    n_bits = 0;
+    n_tight = 0;
   }
 
 let flush_if t =
@@ -532,6 +548,7 @@ let declare_copy t y ~orig ~lo ~hi ~lit =
       lit;
       e1 = "";
       e2 = "";
+      bitw = [];
     };
   for w = lo + 1 to hi do
     let a = lit w and b = v.lit w in
@@ -572,7 +589,14 @@ let declare ?(holes = []) t x ~lo ~hi ~lit =
             in
             if w <= v.lo || w > v.hi then
               refuse "the guard %s over %s at %d, outside its ladder" x y w;
-            if pos then v.lit w else "~" ^ v.lit w
+            if v.bitw <> [] then (
+              (* T7 (D-0196): over a bits variable, cake's own atom (the order atom is minted
+                 later, by the solver's proof); swapped for s in candidates *)
+              let g = Printf.sprintf "i[%s][ge%d]" v.cx w in
+              Hashtbl.replace t.sel_of_flag g (s, pos);
+              if pos then g else "~" ^ g)
+            else if pos then v.lit w
+            else "~" ^ v.lit w
       in
       Hashtbl.replace t.sel s (fl, true);
       t.n_sel <- t.n_sel + 1;
@@ -607,7 +631,9 @@ let declare ?(holes = []) t x ~lo ~hi ~lit =
       in
       let bmin = List.fold_left (fun a (c, _) -> if c < 0 then a + c else a) 0 bsum in
       let bmax = List.fold_left (fun a (c, _) -> if c > 0 then a + c else a) 0 bsum in
-      let v = { x; cx; lo; hi; comp; h; bsum; bmin; bmax; lit; e1 = ""; e2 = "" } in
+      let v =
+        { x; cx; lo; hi; comp; h; bsum; bmin; bmax; lit; e1 = ""; e2 = ""; bitw = [] }
+      in
       Hashtbl.replace t.vars x v;
       let pos_b = terms_text bsum
       and neg_b = terms_text (List.map (fun (c, n) -> (-c, n)) bsum) in
@@ -653,7 +679,156 @@ let declare ?(holes = []) t x ~lo ~hi ~lit =
           (ck (bmax - bmin + 2))
       done
 
-let refuse_bits x = refuse "%s is on the bits encoding (--bits-above; T7)" x
+(* ---------------------------------------------------------------------------
+   T7 (D-0196): a variable on baguette's BITS arm. Its x_bit_i (i < n) are the bits of
+   x - lo, unsigned (PROOF-FORMAT section 3); cake's are x's two's complement. Over cake's
+   digits u_j (b_j for j < h, ~sign at j = h when lo < 0), U = B + 2^h [sign] is unsigned on
+   m digits and x - lo = U - L', L' = lo + 2^h [sign] >= 0, so the digits of x - lo are those
+   of U + c, c = (2^m - L') mod 2^m: a ripple-carry adder, whose relation at digit i is ONE
+   linear row,
+
+     d_i + 2 k_(i+1) = u_i + c_i + k_i        (k_0 = 0)
+
+   While the carry is a constant the next one is 0, u_i or 1; once it is a literal, k_(i+1)
+   is fresh (x_bitc_(i+1)), defined by a red pair whose goals are tautologies:
+
+     @BK1[k]  T - 2k >= 0 : k -> 0        @BK2[k]  2k - T >= -1 : k -> 1     (T = u_i + c_i + k_i)
+
+   and d_i (x_bit_i for i < n, x_bith_i above, where it is zero) by the relation's halves:
+
+     @BP[d]   d + 2k - T >= 0 : d -> 1    (goal: @BK2)
+     @BN[d]   T - 2k - d >= 0 : d -> 0    (goal: @BK1)
+
+   With lo = 0 and no sign every carry is 0 and each pair renames d_i to b_i. Summed with
+   weights 2^i (@BPs, @BNs) the relations telescope to S_all + 2^m k_m = U + c. The final
+   carry is a unit by rup against @BPs + cake's lb row (@BPk, @BK), each high digit a unit
+   ~d by rup against @BNs + cake's ub row (@BNk, @BZ), and the halves follow by one pol each:
+
+     @BE1 = @BNs + 2^m @BK + sum_high 2^j d_j            B - S >= lo
+     @BE2 = @BPs + 2^m ~k_m + sum_high 2^j @BZ[d_j]       S - B >= -lo
+
+   (S = sum 2^i x_bit_i), the order arm's halves over the bits, so substitution is the same.
+   baguette's two bound rows are `ia` against @BL = @BE2 + lb and @BU = @BE1 + ub.
+   --------------------------------------------------------------------------- *)
+
+let declare_bits t x ~lo ~hi ~n ~bit =
+  (match t.cur with
+  | Some c -> refuse "a bits variable %s declared inside constraint %s" x c.cname
+  | None -> ());
+  if Hashtbl.mem t.copies x || Hashtbl.mem t.defs x then
+    refuse "%s is on the bits encoding and has no .scp counterpart" x;
+  let cx = scp_name x in
+  (match Hashtbl.find_opt t.cake_names cx with
+  | Some y -> refuse "variables %s and %s have the same .scp name %s" y x cx
+  | None -> Hashtbl.replace t.cake_names cx x);
+  let comp, h = bit_width ~lo ~hi in
+  let bits = List.init h (fun i -> (pow2 i, Printf.sprintf "i[%s][b%d]" cx i)) in
+  let bsum = if comp then (-pow2 h, Printf.sprintf "i[%s][sign]" cx) :: bits else bits in
+  let bmin = List.fold_left (fun a (c, _) -> if c < 0 then a + c else a) 0 bsum in
+  let bmax = List.fold_left (fun a (c, _) -> if c > 0 then a + c else a) 0 bsum in
+  let bitw = List.init n (fun i -> (pow2 i, bit i)) in
+  let v =
+    {
+      x;
+      cx;
+      lo;
+      hi;
+      comp;
+      h;
+      bsum;
+      bmin;
+      bmax;
+      lit = (fun _ -> refuse "an order atom of the bits variable %s in the prefix" x);
+      e1 = "";
+      e2 = "";
+      bitw;
+    }
+  in
+  Hashtbl.replace t.vars x v;
+  List.iter (fun (_, b) -> Hashtbl.replace t.owner b x) bitw;
+  t.n_bits <- t.n_bits + 1;
+  let digits =
+    Array.of_list
+      (List.init h (fun j -> Printf.sprintf "i[%s][b%d]" cx j)
+      @ if comp then [ Printf.sprintf "~i[%s][sign]" cx ] else [])
+  in
+  let m = Array.length digits in
+  let lp = lo + if comp then pow2 h else 0 in
+  if lp < 0 || lp >= pow2 m || n > m then
+    refuse "%s over [%d, %d] does not fit its %d digits" x lo hi m;
+  let c = (pow2 m - lp) mod pow2 m in
+  let dig i = if i < n then bit i else Printf.sprintf "%s_bith_%d" (Lit.sanitize x) i in
+  let row terms d =
+    let vm, d = var_form terms d in
+    let b = Buffer.create 64 in
+    SM.iter (fun l k -> Printf.bprintf b "%+d %s " k l) vm;
+    Printf.bprintf b ">= %d" d;
+    Buffer.contents b
+  in
+  let lneg = List.map (fun (a, l) -> (-a, l)) in
+  (* the carry: a constant, or a literal *)
+  let k = ref (`C 0) in
+  for i = 0 to m - 1 do
+    let ui = digits.(i) and ci = (c lsr i) land 1 in
+    let d = dig i in
+    let kp, tt, tc =
+      match !k with
+      | `C k0 ->
+          let sk = ci + k0 in
+          ((if sk = 0 then `C 0 else if sk = 1 then `L ui else `C 1), [ (1, ui) ], sk)
+      | `L kl ->
+          let kp = Printf.sprintf "%s_bitc_%d" (Lit.sanitize x) (i + 1) in
+          let tt = [ (1, ui); (1, kl) ] in
+          emit t "@BK1[%s] red %s : %s -> 0 ;" kp (row (tt @ [ (-2, kp) ]) (-ci)) kp;
+          emit t "@BK2[%s] red %s : %s -> 1 ;" kp (row ((2, kp) :: lneg tt) (ci - 1)) kp;
+          (`L kp, tt, ci)
+    in
+    let kt, kc = match kp with `C k1 -> ([], 2 * k1) | `L l -> ([ (2, l) ], 0) in
+    emit t "@BP[%s] red %s : %s -> 1 ;" d (row (((1, d) :: kt) @ lneg tt) (tc - kc)) d;
+    emit t "@BN[%s] red %s : %s -> 0 ;" d (row (tt @ lneg kt @ [ (-1, d) ]) (kc - tc)) d;
+    k := kp
+  done;
+  let wsum tag =
+    String.concat " "
+      (List.init m (fun i ->
+           if i = 0 then Printf.sprintf "@%s[%s]" tag (dig 0)
+           else Printf.sprintf "@%s[%s] %d * +" tag (dig i) (pow2 i)))
+  in
+  let sx = Lit.sanitize x in
+  emit t "@BPs[%s] pol %s ;" sx (wsum "BP");
+  emit t "@BNs[%s] pol %s ;" sx (wsum "BN");
+  let km =
+    match !k with
+    | `L l -> Some l
+    | `C 0 -> None
+    | `C _ -> refuse "%s's final carry is a constant 1" x
+  in
+  let mm = pow2 m in
+  (match km with
+  | Some l ->
+      emit t "@BPk[%s] pol @BPs[%s] @i[%s][lb] + ;" sx sx cx;
+      emit t "@BK[%s] rup +1 %s >= 1 ;" sx l
+  | None -> ());
+  emit t "@BNk[%s] pol @BNs[%s] @i[%s][ub] +%s ;" sx sx cx
+    (match km with Some _ -> Printf.sprintf " @BK[%s] %d * +" sx mm | None -> "");
+  for j = n to m - 1 do
+    emit t "@BZ[%s] rup +1 ~%s >= 1 ;" (dig j) (dig j)
+  done;
+  let high f =
+    String.concat "" (List.init (m - n) (fun j -> f (dig (n + j)) (pow2 (n + j))))
+  in
+  emit t "@BE1[%s] pol @BNs[%s]%s%s ;" sx sx
+    (match km with Some _ -> Printf.sprintf " @BK[%s] %d * +" sx mm | None -> "")
+    (high (fun d w -> Printf.sprintf " %s %d * +" d w));
+  emit t "@BE2[%s] pol @BPs[%s]%s%s ;" sx sx
+    (match km with Some l -> Printf.sprintf " %s %d * +" (neg_lit l) mm | None -> "")
+    (high (fun d w -> Printf.sprintf " @BZ[%s] %d * +" d w));
+  v.e1 <- Printf.sprintf "@BE1[%s]" sx;
+  v.e2 <- Printf.sprintf "@BE2[%s]" sx;
+  emit t "@BL[%s] pol %s @i[%s][lb] + ;" sx v.e2 cx;
+  emit t "@BU[%s] pol %s @i[%s][ub] + ;" sx v.e1 cx;
+  Queue.push (Printf.sprintf "@BL[%s]" sx) t.bound_q;
+  Queue.push (Printf.sprintf "@BU[%s]" sx) t.bound_q
 
 let find_var t x =
   match Hashtbl.find_opt t.vars x with
@@ -958,7 +1133,7 @@ let rec cake_rows t name spec =
   | Copy _ -> []
   (* cp_to_ilp_primScript.sml, cencode_abs (T6, D-0195): the atom i[X][ge0] and the four
      rows of encode_abs_body, the first two guarded by it, the last two by its negation *)
-  | Abs (x, z) ->
+  | Abs (x, z) -> (
       let g =
         match x with
         | Var v -> Printf.sprintf "i[%s][ge0]" (find_var t v).cx
@@ -972,6 +1147,17 @@ let rec cake_rows t name spec =
         row (lab "negle") (bits_imply g (mk_nle x z));
         row (lab "negge") (bits_imply g (mk_nge x z));
       ]
+      (* T7 (D-0196): over a bits x, the guard is the atom itself, and its two definition
+         rows (cp_to_ilpScript.sml, cencode_ge: imply_bit and bits_imply over x >= 0) are
+         the candidates of the guard's own rows *)
+      @
+      match x with
+      | Var v when (find_var t v).bitw <> [] ->
+          [
+            row (g ^ "[f]") (imply_bit g ([ (1, v) ], 0));
+            row (g ^ "[r]") (bits_imply ("~" ^ g) ([ (1, v) ], 0));
+          ]
+      | _ -> [])
   (* cp_to_ilp_extensionalScript.sml, cencode_regular (T6, D-0195): the state flags
      x[N][<idx>_<q>][st], exactly one per position (`pos<idx>al1`, `am1`), some final at the
      end (`st<n>al1`), the start (`st0`), and per position, state and value index vi of the
@@ -1051,9 +1237,16 @@ let substitute t (r : crow) =
         else
           let v = find_var t x in
           let m = ref m in
-          for w = v.lo + 1 to v.hi do
-            m := SM.update (v.lit w) (fun o -> Some (Option.value o ~default:0 + k)) !m
-          done;
+          if v.bitw <> [] then
+            (* T7: S = sum 2^i x_bit_i *)
+            List.iter
+              (fun (w, b) ->
+                m := SM.update b (fun o -> Some (Option.value o ~default:0 + mul k w)) !m)
+              v.bitw
+          else
+            for w = v.lo + 1 to v.hi do
+              m := SM.update (v.lit w) (fun o -> Some (Option.value o ~default:0 + k)) !m
+            done;
           (!m, d - mul k v.lo))
       (SM.empty, r.deg) xs
   in
@@ -1118,7 +1311,12 @@ let parse_atom v =
           | Some k when kind = "ge" || kind = "eq" -> Some (v.[0] = 'i', z, kind, k)
           | _ -> None)
 
-type aval = T | F | L of string | Interior
+type aval =
+  | T
+  | F
+  | L of string
+  | Interior
+  | Keep (* T7: a bits variable's: no literal *)
 
 let atom_value t (isvar, z, kind, k) =
   if not isvar then
@@ -1131,7 +1329,11 @@ let atom_value t (isvar, z, kind, k) =
       | None -> refuse "cake's atom over %s, which is no declared variable" z
     in
     let v = find_var t x in
-    if kind = "ge" then if k <= v.lo then T else if k > v.hi then F else L (v.lit k)
+    if v.bitw <> [] then
+      if kind = "ge" then if k <= v.lo then T else if k > v.hi then F else Keep
+      else if k < v.lo || k > v.hi then F
+      else Keep
+    else if kind = "ge" then if k <= v.lo then T else if k > v.hi then F else L (v.lit k)
     else if k < v.lo || k > v.hi then F
     else if v.lo = v.hi then T
     else if k = v.lo then L ("~" ^ v.lit (v.lo + 1))
@@ -1199,13 +1401,13 @@ let rec q_clause t g which =
           | F -> cite k "f"
           | L _ when which = "b" -> weaken k
           | L _ -> cite k "p"
-          | Interior -> bad ());
+          | Interior | Keep -> bad ());
           (match gv (k + 1) with
           | F -> weaken (k + 1)
           | T -> cite (k + 1) "t"
           | L _ when which = "a" -> weaken (k + 1)
           | L _ -> cite (k + 1) "n"
-          | Interior -> bad ());
+          | Interior | Keep -> bad ());
           Buffer.add_string b " s"
       | _ -> bad ());
       emit t "%s pol %s ;" lab (Buffer.contents b));
@@ -1265,6 +1467,7 @@ let swap_atoms t (rpn, (cl, cd)) =
               vadd row c (var_form lits d)
             in
             match (atom_value t a, positive) with
+            | Keep, _ -> row
             | Interior, true ->
                 let _, z, _, k = a in
                 let v = find_var t (Hashtbl.find t.cake_names z) in
@@ -1710,7 +1913,7 @@ let swap t (cl, cd) ~try_def =
   let cl =
     SM.fold
       (fun l c acc ->
-        if not (is_flag t l) then
+        if not (is_flag t l || Hashtbl.mem t.sel_of_flag (var_of l)) then
           SM.update l (fun o -> Some (Option.value o ~default:0 + c)) acc
         else
           let f = var_of l and positive = var_of l = l in
@@ -1726,6 +1929,10 @@ let swap t (cl, cd) ~try_def =
           in
           match def with
           | None -> SM.update l (fun o -> Some (Option.value o ~default:0 + c)) acc
+          | Some (s, _) when Hashtbl.mem t.conj s && positive ->
+              (* T7: a choice selector defined as F_i AND no earlier flag: F_i -> s does
+                 not hold, only ~F_i -> ~s (@D1) *)
+              SM.update l (fun o -> Some (Option.value o ~default:0 + c)) acc
           | Some (s, p) ->
               (* s <-> f when p, s <-> ~f otherwise; the literal m equal to l *)
               let m = if positive = p then s else "~" ^ s in
@@ -1742,13 +1949,52 @@ let swap t (cl, cd) ~try_def =
     cl;
   ((cl, cd), Buffer.contents rpn, !made)
 
+(* T7 (D-0196): a choice-group selector `_mxN` (array_int_maximum/minimum over a bits
+   variable, D-0134) is set by `sol` to the FIRST operand attaining m and no other
+   ([Maxmin.chosen]); cake's array_max flag i is x_i >= m both ways (`[f]`, `[r]`), so at a
+   tie two flags hold, and s := F_i would contradict the `sol`. It is defined as F_i AND
+   no earlier flag of the same constraint:
+
+     @C1[s]  red (i+1) ~s + F_i + sum_{j<i} ~F_j >= i+1 : s -> 0
+     @C2[s]  red s + ~F_i + sum_{j<i} F_j >= 1         : s -> 1
+     @D1[s]  pol @C1[s], the earlier flags weakened, saturated:  ~s + F_i >= 1
+
+   so ~F_i is still swapped for ~s ([swap]); the at-least-one over the selectors closes by
+   rup through the @C2 and cake's al1. The earlier flags, or None for a renaming. *)
+let conj_of t s f =
+  let n = String.length s in
+  let is_mx = n > 3 && String.sub s 0 3 = "_mx" in
+  match t.cur with
+  | Some ({ fam = Choice_fam { choices; _ }; _ } as con) when is_mx -> (
+      let flag i = Printf.sprintf "x[%s][%d]" con.cname i in
+      let flags = List.mapi (fun i _ -> flag i) choices in
+      let rec earlier acc = function
+        | [] -> None
+        | g :: rest -> if g = f then Some (List.rev acc) else earlier (g :: acc) rest
+      in
+      match earlier [] flags with Some (_ :: _ as e) -> Some e | _ -> None)
+  | _ -> None
+
 let define t (s, f, p) =
   Hashtbl.replace t.sel s (f, p);
   Hashtbl.replace t.sel_of_flag f (s, p);
   t.n_sel <- t.n_sel + 1;
   let fl = if p then f else "~" ^ f in
-  emit t "@D1[%s] red +1 ~%s +1 %s >= 1 : %s -> %s ;" s s fl s fl;
-  emit t "@D2[%s] red +1 %s +1 %s >= 1 : %s -> %s ;" s s (neg_lit fl) s fl
+  match if p then conj_of t s f else None with
+  | Some e ->
+      Hashtbl.replace t.conj s e;
+      let k = List.length e in
+      let terms pre =
+        String.concat "" (List.map (fun g -> Printf.sprintf " +1 %s%s" pre g) e)
+      in
+      emit t "@C1[%s] red +%d ~%s +1 %s%s >= %d : %s -> 0 ;" s (k + 1) s f (terms "~")
+        (k + 1) s;
+      emit t "@C2[%s] red +1 %s +1 ~%s%s >= 1 : %s -> 1 ;" s s f (terms "") s;
+      emit t "@D1[%s] pol @C1[%s]%s s ;" s s
+        (String.concat "" (List.map (fun g -> " " ^ g ^ " w") e))
+  | None ->
+      emit t "@D1[%s] red +1 ~%s +1 %s >= 1 : %s -> %s ;" s s fl s fl;
+      emit t "@D2[%s] red +1 %s +1 %s >= 1 : %s -> %s ;" s s (neg_lit fl) s fl
 
 let is_clause (bl, bd) = bd = 1 && SM.for_all (fun _ a -> a = 1) bl
 
@@ -1871,6 +2117,77 @@ let special t (con : con) bl =
                     al1,
                   exact lf ))
 
+(* T7 (D-0196): a guarded row over a bits variable whose big-M is baguette's own, over the
+   declared bounds, where cake's candidate's is over the bit range (`bits_imply`): on the
+   ladder the two agree after saturation, on bits they do not (`x + 17 ~b >= 2` against
+   `x + 11 ~s >= 17` in literal form for `var 0..9`), and no weakening reaches it. By
+   contradiction, as int_abs's rows (D-0195 2.3): the negation plus the candidate,
+   saturated, is a clause over the guards; the negation plus each NEGATED bits variable's
+   ub row (@BU, `-S >= -(u - l)`, a times for a coefficient a 2^i on ~x_bit_i) leaves them
+   no room; unit propagation closes. Simulated here (what one sum forces leaves the other no
+   room), so that it is tried only where it closes. The rpn of the second sum, or None. *)
+let tight t (cl, cd) (bl, bd) =
+  let neg_t =
+    ( SM.fold (fun l a acc -> SM.add (neg_lit l) a acc) bl SM.empty,
+      SM.fold (fun _ a acc -> acc + a) bl 0 - bd + 1 )
+  in
+  let add rows =
+    lit_form
+      (List.fold_left (fun acc (k, lf) -> vadd acc k (to_var lf)) (SM.empty, 0) rows)
+  in
+  let r1l, r1d = add [ (1, neg_t); (1, (cl, cd)) ] in
+  if r1d < 1 then None
+  else
+    let r1l = SM.map (fun a -> min a r1d) r1l in
+    let ubs =
+      Hashtbl.fold
+        (fun x v acc ->
+          match v.bitw with
+          | (_, b0) :: _ -> (
+              match SM.find_opt ("~" ^ b0) bl with
+              | Some a ->
+                  if
+                    List.for_all
+                      (fun (w, b) -> SM.find_opt ("~" ^ b) bl = Some (a * w))
+                      v.bitw
+                  then Some (x, v, a) :: acc
+                  else None :: acc
+              | None -> acc)
+          | [] -> acc)
+        t.vars []
+    in
+    if ubs = [] || List.mem None ubs then None
+    else
+      let ubs = List.sort compare (List.filter_map Fun.id ubs) in
+      let r2l, r2d =
+        add
+          ((1, neg_t)
+          :: List.map
+               (fun (_, v, a) ->
+                 ( a,
+                   lit_form
+                     ( List.fold_left (fun m (w, b) -> SM.add b (-w) m) SM.empty v.bitw,
+                       v.lo - v.hi ) ))
+               ubs)
+      in
+      let forced (ls, d) =
+        let tot = SM.fold (fun _ a acc -> acc + a) ls 0 in
+        SM.filter (fun _ a -> tot - a < d) ls
+      in
+      let room ls f =
+        SM.fold (fun l a acc -> if SM.mem (neg_lit l) f then acc else acc + a) ls 0
+      in
+      if room r2l (forced (r1l, r1d)) < r2d || room r1l (forced (r2l, r2d)) < r1d then
+        Some
+          (String.concat " "
+             (List.mapi
+                (fun i (x, _, a) ->
+                  Printf.sprintf "@BU[%s]%s%s" (Lit.sanitize x)
+                    (if a > 1 then Printf.sprintf " %d *" a else "")
+                    (if i > 0 then " +" else ""))
+                ubs))
+      else None
+
 let pin t ~id (c : Opb.constr) =
   let body = Opb.constr_body c in
   let bl, bd = lits_of_row c in
@@ -1900,6 +2217,10 @@ let pin t ~id (c : Opb.constr) =
         r
   in
   match (rung, t.cur) with
+  | _ when not (Queue.is_empty t.bound_q) ->
+      (* T7: a bits variable's bound row, against @BL / @BU *)
+      t.n_ia_exact <- t.n_ia_exact + 1;
+      emit t "@c%d ia %s : %s ;" id body (Queue.pop t.bound_q)
   | Some (`Rung hi), _ ->
       t.n_ia_rung <- t.n_ia_rung + 1;
       emit t "@c%d ia %s : @L[%s] ;" id body hi
@@ -1969,15 +2290,23 @@ let pin t ~id (c : Opb.constr) =
          binary clauses, then weakened; tried only after every candidate failed strictly,
          and only for a row with no selector to define (a weakening could drop the very
          literal a selector's orientation is chosen by) *)
-      let rec go ~relaxed = function
+      let tw = ref None in
+      let rec go ~mode = function
         | [] -> None
         | cand :: rest ->
+            let relaxed = mode = `Relaxed in
             let rec over = function
-              | [] -> go ~relaxed rest
+              | [] -> go ~mode rest
               | try_def :: more -> (
                   let (sl, sd), rpn, made = swap t (cand.cl, cand.cd) ~try_def in
                   let sat, (sl, sd) = saturate (sl, sd) in
-                  if not relaxed then
+                  if mode = `Tight then
+                    match tight t (sl, sd) (bl, bd) with
+                    | Some w ->
+                        tw := Some w;
+                        Some (cand, rpn, sat, made)
+                    | None -> over more
+                  else if not relaxed then
                     if implies (sl, sd) (bl, bd) then Some (cand, rpn, sat, made)
                     else over more
                   else
@@ -2010,18 +2339,31 @@ let pin t ~id (c : Opb.constr) =
               else acc)
             con.cands []
       in
-      let search ~relaxed =
-        match go ~relaxed exact with
+      let search ~mode =
+        match go ~mode exact with
         | Some r -> Some r
         | None -> (
             match
-              if exact = [] || SM.exists (fun l _ -> Hashtbl.mem t.aux (var_of l)) bl then
-                go ~relaxed (subset ())
+              if
+                exact = []
+                || SM.exists (fun l _ -> Hashtbl.mem t.aux (var_of l)) bl
+                || mode = `Tight
+              then go ~mode (subset ())
               else None
             with
             | Some r -> Some r
-            | None when relaxed -> go ~relaxed (superset ())
+            | None when mode = `Relaxed -> go ~mode (superset ())
             | None -> None)
+      in
+      (* T7 (D-0196): a row over a bits variable no candidate implies: by contradiction
+         against the bits' ub rows ([tight]), before `rup` *)
+      let bits_row =
+        SM.exists
+          (fun l _ ->
+            match Hashtbl.find_opt t.owner (var_of l) with
+            | Some x -> (find_var t x).bitw <> []
+            | None -> false)
+          bl
       in
       (* T6 (D-0195): a regular row no candidate implies strictly is a forward clause over
          a symbol run, which weakening never reaches (its literals are the run's bounds,
@@ -2029,13 +2371,23 @@ let pin t ~id (c : Opb.constr) =
          candidates per such row on 2021_pentominoes (116 s of --e2e against 0.08 s) *)
       let relax_ok = match con.fam with Regular_fam _ -> false | _ -> true in
       let found =
-        match search ~relaxed:false with
+        match search ~mode:`Strict with
         | Some r -> Some r
-        | None when undefined = [] && relax_ok -> search ~relaxed:true
-        | None -> None
+        | None -> (
+            match if undefined = [] && relax_ok then search ~mode:`Relaxed else None with
+            | Some r -> Some r
+            | None -> if bits_row then search ~mode:`Tight else None)
       in
       Option.iter (fun (cand, _, _, _) -> List.iter (ensure_s t) cand.needs) found;
       match found with
+      | Some (cand, rpn, sat, made) when !tw <> None ->
+          Option.iter (define t) made;
+          t.n_tight <- t.n_tight + 1;
+          emit t "@c%d pbc %s : subproof" id body;
+          emit t "    pol -1 %s%s%s + s ;" cand.rpn rpn (if sat then " s" else "");
+          emit t "    pol -2 %s + ;" (Option.get !tw);
+          emit t "    rup >= 1 ;";
+          emit t "qed ;"
       | Some (cand, "", false, None) when cand.plain ->
           t.n_ia_exact <- t.n_ia_exact + 1;
           emit t "@c%d ia %s : %s ;" id body cand.rpn
@@ -2130,9 +2482,10 @@ let finish t =
        clauses, %d selectors, pins: %d rungs ia, %d rows ia exact, %d rows ia through a \
        pol, %d rows rup; T3b (D-0188): %d rows by one pol of a linearised cake row, %d \
        rows ia through one; T6 (D-0195): %d rows by contradiction, %d cumulative flag \
-       clauses"
+       clauses; T7 (D-0196): %d bits variables, %d rows by contradiction against their \
+       ub rows"
       cake_pb_cp_sha256 t.n_subst t.n_q t.n_sel t.n_ia_rung t.n_ia_exact t.n_ia_w t.n_rup
-      t.n_pol_lin t.n_ia_lin t.n_pbc t.n_k;
+      t.n_pol_lin t.n_ia_lin t.n_pbc t.n_k t.n_bits t.n_tight;
     Buffer.output_buffer t.oc t.b;
     Buffer.clear t.b;
     close_out t.oc);

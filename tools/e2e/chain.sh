@@ -114,7 +114,11 @@ timeout "$TO" "$CK" "$o.scp" > "$o.cake.opb" 2> "$o.cake.err"
 SOLVER=${E2E_SOLVER:-}
 EF=()
 [ -n "$SOLVER" ] && EF=(--e2e)
-(ulimit -v 4000000; timeout "$TO" "$B" "$FZN" --proof "$o.bag" "${EF[@]}" > "$o.bag.out" 2> "$o.bag.err")
+# E2E_FLAGS (T7, D-0196): more solver flags, `--bits-above W` for the bits arm; a `bits-*`
+# control runs at `--bits-above 0` whatever E2E_FLAGS says
+read -r -a XF <<< "${E2E_FLAGS:-}"
+case "$MUT" in bits-*) XF=(--bits-above 0) ;; esac
+(ulimit -v 4000000; timeout "$TO" "$B" "$FZN" --proof "$o.bag" "${EF[@]}" "${XF[@]}" > "$o.bag.out" 2> "$o.bag.err")
 rc=$?
 if [ -n "$SOLVER" ] && [ $rc -eq 3 ] && grep -q '^baguette: --e2e: ' "$o.bag.err"; then
     say "SKIPPED e2e: $(sed -n 's/^baguette: --e2e: \(.*\) (D-0187).*/\1/p' "$o.bag.err" | head -1)"
@@ -141,10 +145,10 @@ if [ -n "$opt" ]; then
     fi
 fi
 
-if [ "$MUT" = opb-stronger ]; then
+if [ "$MUT" = opb-stronger ] || [ "$MUT" = bits-opb ]; then
     target=$(python3 -I "$HERE/mutate.py" opb "$o.bag.opb") || say "FAIL no model row to mutate"
 fi
-if [ "$MUT" = pin-stronger ]; then
+if [ "$MUT" = pin-stronger ] || [ "$MUT" = bits-pin ]; then
     target=$(python3 -I "$HERE/mutate.py" pin "$o.bag.opb" "$o.bag.pbp") || say "FAIL no pinned model row to mutate"
 fi
 if [ "$MUT" = sel-witness ]; then
@@ -181,6 +185,13 @@ fi
 # T6 (D-0195), on either path's proof: a regular state flag, an int_abs sign guard defined wrong
 if [ "$MUT" = flag-witness ]; then
     target=$(python3 -I "$HERE/mutate.py" flag "$PB") || say "FAIL no regular flag definition to mutate"
+fi
+# T7 (D-0196), on either path's proof: a bits-arm bit defined as the wrong cake bit
+if [ "$MUT" = bits-def ]; then
+    target=$(python3 -I "$HERE/mutate.py" bitdef "$PB") || say "FAIL no bits definition to mutate"
+fi
+if [ "$MUT" = bits-tight ]; then
+    target=$(python3 -I "$HERE/mutate.py" tight "$PB") || say "FAIL no row by contradiction to mutate"
 fi
 if [ "$MUT" = guard-witness ]; then
     target=$(python3 -I "$HERE/mutate.py" sel "$PB") || say "FAIL no guard definition to mutate"

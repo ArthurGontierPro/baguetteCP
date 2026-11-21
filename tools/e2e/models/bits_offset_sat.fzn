@@ -1,0 +1,12 @@
+% M14-e2e-verification-T7 (D-0196): a CONTROL model for the bits arm (`--bits-above 0`). x is
+% signed (cake writes a sign bit), y is offset (l = 3, so baguette's bits are those of y - 3,
+% through the adder's carries), and both are free enough that every bound is attained: x = -3
+% and x = 4, y = 3 and y = 8 each occur in a solution, so a bound row strengthened by one is
+% false in one of them, and a wrong bit definition is not saved by the model (D-0053, D-0180).
+% The disequality's selector is a guarded row whose big-M is baguette's over the declared
+% bounds, derived by contradiction against the ub rows.
+var -3..4: x :: output_var;
+var 3..8: y :: output_var;
+constraint int_lin_le([1, 1], [x, y], 9);
+constraint int_lin_ne([1, -1], [x, y], -4);
+solve satisfy;
