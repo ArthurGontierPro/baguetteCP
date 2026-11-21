@@ -653,7 +653,7 @@ The default is `--bits-above 0` (commit A `18d4841`, alone), and `--bits-above n
 
 ### FOR THE USER'S RETURN: the autonomous run of 2026-11-20 evening to 2026-11-21 (orchestrator)
 
-**Merged and gated** (gates 77 to 89 green; every default `--proof` artefact byte-identical except D-0172's 12
+**Merged and gated** (gates 77 to 90 green; every default `--proof` artefact byte-identical except D-0172's 12
 smaller `.pbp`; lane 324/324, debug 311/311, scaling ok): M16 complete (D-0186 core, D-0190 propagators,
 D-0191 learning, D-0192 proof side, D-0193 front end: release lane median about -7 % per node without
 proof and -6 % with, evm -28 %, openshop and rcpsp_11 -20 % with proof, setup under `--no-proof` 7 329 G
@@ -663,7 +663,7 @@ zephyrus, gfd-n120 verified at `--bits-above 64`); M7-T35 (member's debug-check 
 and M4-T6b (GAC arithmetic: not built, no node gain); M13-T1 (root LP: not built); M15 T1-T3; a crash
 hotfix (D-0197); a second hotfix (D-0200: the heap guard read a heap size updated only at major-cycle ends, so runs died on `allocation failure during minor GC` instead of the clean refusal; now estimated live, every 0.1 s, under `--max-heap-mb` only); M6-T2 (D-0198: no Bigarray move, the trail and domains are under 1 % of cycles; a larger minor heap and an index sort in Justify instead, -7 % instructions without proof and -12 % with, byte-identical).
 
-**Running**: M10-T5/M9-T3/M7-T30 (default, `-f`, `--no-proof`, D-0185), a Challenge series; the default is now `--bits-above 0` (D-0201, merged, gate 90 on it):
+**Running**: M10-T5/M9-T3/M7-T30 (default, `-f`, `--no-proof`, D-0185), a Challenge series; the default is now `--bits-above 0` (D-0201, merged, gate 90 green):
 stdout equal on all 207 models, 113 new proofs all verified, lane re-recorded (and an `order` configuration
 keeps the order encoding in the lane); `--bits-above none` gives gate 89's artefacts back exactly.
 
@@ -691,6 +691,13 @@ relaunched from their branches (agents are now told to check any wait after 30 m
 - D-0189: the D-0026 reverse arm ignores member's lemma-plus-Weaken pair (debug-only).
 - D-0198: the minor heap raised to 4 M words (capped to fit the tests' ulimit -v), `OCAMLRUNPARAM=s=256k` restores it.
 - D-0194: GAC arithmetic not built.
+
+### 2026-11-22 (orchestrator, autonomous mode): gate 90 green, the default is --bits-above 0
+
+Gate 90 (`72ec89f`, merge wave56-bitsdefault, D-0201, binary `83b863f8`, against gate 89's `34db2c68`): `make
+check` rc 0 (4 633 ok), stdout and exit code equal on all 207 models, `.opb`/`.pbp` differ on 113 models (the
+new default; every new proof verified), lane 347/347 (121 s, was about 260 s), debug 333/333, scaling ok.
+`test/out/` now holds 834 proofs after a run (the added order pass), gitignored.
 
 ### 2026-11-21 (orchestrator): the hrc CHECK-ERRORs are veripb's memory under the harness's 16 GiB limit, not a proof
 
