@@ -25130,3 +25130,94 @@ kernel's swap paths. The analysis polls the stop only between its steps, so the 
 133 s late. A bound on PB analysis by row length, giving the conflict back to the clause path past
 some number of terms, would change what is learned on wide instances. That is a default-behaviour
 decision for the user, so it is not taken here.
+
+## D-0198  [AUTONOME] M6-T2 re-scoped: the trail and the domains are 0.5 to 4.5 % of the words allocated, so no `Bigarray`/`Bytes` move. The lever was the minor heap's size, 256 k words by default, and one sort that forced a minor collection per call
+
+Agent-gc, branch `wave56-gc`, 2026-11-21. ROADMAP M6-T2 asked to find the allocating site with a
+profiler before spending the `Bigarray`/`Bytes` change. This record is written before the code it
+decides (CLAUDE.md, "Mode autonome"), and §4 adds the measurements after it.
+
+### 1. What the run allocates and what the GC costs, at `0518dc2`
+
+Release binary `9956c047`, on the 21 fast instances of `bench/diff/corpus.tsv` at their lane budget
+and on the codes instances `f3` and `f2` (D-0169's, run to the end), with and without `--proof`.
+`OCAMLRUNPARAM=v=0x400` for the totals, `perf record --call-graph fp` on the same source built in the
+`baguette-fp` switch for the shares. Scripts and outputs in `/scratch/arthur/wave56-gc-runs/`.
+
+- **The allocation rate is the same everywhere**: 14 to 23 words per thousand instructions on all
+  46 runs. What varies is the share of it that survives a minor collection: 3 to 13 % on most
+  runs, 19 to 25 % on lot-sizing and fox-geese.
+- **The GC's share of the cycles**: median 13.3 % without the proof (5.3 % on f2, 42.5 % on
+  fox-geese) and 16.6 % with it (9.2 % on f2, 40.3 % on fox-geese). About 60 % of that is the
+  minor collector and 35 % the major one. The runtime allocation functions (`caml_make_vect` and
+  the like) take 0.2 to 1.5 %.
+- **No site dominates.** A GC sample charged to the first non-`Stdlib` OCaml frame above the
+  runtime (the site whose allocation crossed the minor-heap limit, or that called the runtime to
+  allocate) gives, averaged over the 23 instances, at most 0.72 % of the cycles to one site without
+  the proof (`Engine.watchers_of_new_entries`) and 0.65 % with it (`Trace.emit_to_page_inner`).
+  The large single sites are on one instance each. `Pb_analysis.lits_array` and `Learned.make`
+  take 10.7 % and 8.3 % on fox-geese, already D-0191's subject. `Gcc` takes 6.8 % on lot-sizing.
+  `Justify.sort_pairs` takes 10 % on soccer with the proof, see §3.
+- **The trail and the domains are not among them.** `Store.apply` is 0.19 % on average (at most
+  0.71 %). A probe build that counted the `Changed` arm of `Store.apply` puts the trail's
+  allocation, about 20 words a push (the 14-word entry, the 4-word `Domain.t`, the `Changed`
+  box), at 4.4 % of the words on f3, 3.3 % on chessboard, 3.2 % on QR48 and 0.5 % on fox-geese.
+  Moving the trail and the domains into `Bigarray`/`Bytes` would remove at most that share of the
+  allocation. The entry would still point at its `Reason.t`, which is boxed. At a GC share of
+  15 %, that is under 1 % of the cycles for a rewrite of `Store`'s central structure. M6-T2's
+  premise does not hold, and the row is closed without that change.
+  `Store.first_mark_above` allocates a closure per call (0.21 % on average, 1.2 % on fox-geese).
+  That is too small to act on here.
+
+### 2. The minor heap: 256 k words by default, 4 M words from here on
+
+OCaml 5.1's minor heap is 256 k words (2 MB). With `OCAMLRUNPARAM=s=...` on the base binary, two
+runs each on eight of the instances above (cycles, at load ~50 on a 192-core node, noise about 5 %):
+
+| instance | 256 k | 2 M | 4 M | 8 M |
+|---|---|---|---|---|
+| f3 `--proof` | 34.6 / 31.1 G | 28.9 / 27.7 | 25.5 / 26.8 | 26.8 / 27.6 |
+| f3 no proof | 16.7 / 17.1 | 16.1 / 16.5 | 16.1 / 16.7 | 15.7 / 15.9 |
+| lot-sizing no proof | 10.7 / 10.6 | 8.9 / 8.7 | 8.1 / 8.1 | 7.8 / 7.8 |
+| rcpsp_12 `--proof` | 7.0 / 7.3 | 6.3 / 6.6 | 6.0 / 6.2 | 5.8 / 5.8 |
+| chessboard `--proof` | 9.8 / 8.8 | 8.1 / 8.0 | 7.9 / 8.4 | 8.1 / 7.6 |
+| fox-geese no proof | 5.5 / 5.6 | 5.2 / 5.0 | 5.2 / 5.0 | 5.0 / 5.0 |
+| QR48 no proof | 3.3 / 3.5 | 3.2 / 3.4 | 3.3 / 3.1 | 3.3 / 3.1 |
+| soccer `--proof` | 3.9 / 3.9 | 4.3 / 4.1 | 3.8 / 4.0 | 3.9 / 4.2 |
+
+A larger nursery lets more of the short-lived data (trail entries of a branch that is undone, a
+conflict's analysis, a proof line's terms) die young instead of being promoted. Promoted words fall
+by 2 to 9 times (f3 with the proof 106 M to 18 M at 4 M words), and the major collector follows.
+Soccer does not move: its minor collections are forced, see §3.
+
+| option | consequence |
+|---|---|
+| keep 256 k | nothing changes; 10 to 25 % of the cycles stay on the table on most proof runs |
+| `OCAMLRUNPARAM=s=4M` in the scripts | the lanes and Challenge scripts gain, a user running `main.exe` by hand does not, and every script must carry it |
+| **`Gc.set` at the top of `bin/main.ml`, 4 M words, unless `OCAMLRUNPARAM`/`CAMLRUNPARAM` sets `s`** | every run gains; an explicit `s=` still wins; +32 MB resident per process (the nursery is touched in full after the first cycle) |
+| the same at 8 M words | a little more gain on lot-sizing and rcpsp, inside the noise elsewhere, +64 MB per process |
+
+**Choice: 4 M words in `bin/main.ml`.** It is the knee of the table. 32 MB is the size of one
+EPYC L3 slice, and the extra memory is small beside a 92-run campaign's budget or the laptop's 15 GB.
+The setting changes only when memory is reclaimed, never a value the solver computes. Nothing in
+`lib/` depends on addresses (the one ephemeron, `Search.staged_orders`, is keyed by a live object),
+so stdout, proofs and `--stats` must stay byte-identical, and the gate checks that. The test
+binaries do not link `bin/main.ml`, so the suites keep the default nursery. The model tests run
+`main.exe` and get the new one.
+
+**To revert**: the commit `M6-T2: the minor heap at 4 M words` touches only `bin/main.ml`'s
+startup. Revert it, or run with `OCAMLRUNPARAM=s=256k` to get the old behaviour from the new binary.
+
+### 3. `Justify.sort_pairs` forced one minor collection per long claim key
+
+`sort_pairs` sorted a claim key of more than 24 pairs by building an array of tuples with
+`Array.init` and handing it to `Array.stable_sort`. Past 256 elements, `Array.make` with a young
+initial value (the first tuple) runs a minor collection before it allocates, and the merge sort's
+scratch array does the same. On soccer with the proof that is 1 300 of its 1 635 minor collections,
+6.5 % of its cycles in the collections alone and 10 % with the sort. D-0191's L4 fixed the same
+pattern in `Pb_analysis.lits_array`.
+
+The fix sorts an `int array` of pair indices with the same comparison and then writes the pairs
+back from a copy. No tuple is allocated and no array holds a pointer, so nothing forces a
+collection. The result is the same bytes: two pairs that compare equal are equal pairs, so the
+order among them cannot show. The change is in `justify.ml` only.
