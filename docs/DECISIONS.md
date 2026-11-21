@@ -24690,3 +24690,78 @@ average near 80.
 writing cake's product encoding); the writer's speed on regular rows; whether `--e2e` becomes a
 default and whether the bridge is retired (D-0187 §5, the user's). Results in
 `/cluster/arthur/baguette-results/wave56-e2e6/`.
+
+
+## D-0196  [AUTONOME] M14-e2e-verification-T7: the bits arm in the end-to-end chain. The prefix DERIVES baguette's unsigned offset bits from cake's two's-complement bits by a ripple-carry adder whose every relation is one linear row
+
+Status: DECIDED in autonomous mode on 2026-11-21, before the work that depends on it. Section 6 is
+the result.
+Date: 2026-11-21
+Task: M14-e2e-verification-T7 (agent-e2e7, `wave56-e2e7`)
+Touches: this record, `tools/e2e/` (bridge, chain, mutations, models), `scripts/e2e_lane.sh`,
+`lib/proof/e2e.ml`, `lib/proof/encoding.ml` (additive), `lib/flatzinc/compile.ml` (the e2e hooks
+only), `docs/PROOF-FORMAT.md` §3b.
+
+### 1. Context
+
+Under `--bits-above W` a variable wider than W whose scope allows it (D-0130 §3.4) is encoded on
+`x_bit_i`, the bits of `x - l`, unsigned, `n = bit_length(u - l)` of them, with two bound rows and no
+ladder (D-0130, D-0132, PROOF-FORMAT §3). cake_pb_cp encodes every integer by its two's-complement
+bits `i[X][b<j>]`, weight `2^j`, `j < h`, and `i[X][sign]`, weight `-2^h`, when `l < 0` (§3b). Neither
+end-to-end path covered a bits variable: the bridge assumed a ladder, `--e2e` refused (D-0187 §3).
+
+Found while deciding, measured on `bits_ne_sat` at `--bits-above 0` with a scratch bridge: once the
+bits are defined, every substituted cake row is over baguette's bits, and baguette's linear rows are
+`ia` against them unchanged. What does not follow by `ia` is any row with a guard (a disequality
+selector, a reifier, a choice selector, an arith guard): cake's big-M is over the BIT range of the
+terms (`bits_imply`), baguette's over the declared bounds, and on a bits variable the two differ
+(`x + 17 ~b >= 2` against `x + 11 ~s >= 17` in literal form, for `var 0..9`). On the ladder they
+coincide after saturation, which is why the order arm never met it.
+
+### 2. The options
+
+| | what | gains | costs |
+|---|---|---|---|
+| (a) baguette writes cake's representation under `--e2e` | its bits arm declares two's-complement bits and posts its rows over them | the bits are cake's, no definition | a second bits encoding in the solver: every `pol` the bits arm writes (D-0130 §5, D-0132) cites rows whose coefficients change, the minted atoms' pairs too; a large change to lib/core's justifications for one flag |
+| (b) the prefix DERIVES baguette's bits from cake's | per digit a linear relation of an adder, each fresh variable defined by a red pair | the solver's proof after the prefix is byte for byte its own (as for the order arm); O(bits) lines per variable where the order arm writes O(width) | the definitions are a new device to get right (checked, so a mistake is a refused line) |
+| (c) identity only (`l = 0`, no sign: `x_bit_i` is `i[X][b<i>]`), refuse the rest | trivial | every negative or offset domain refused |
+| (d) define `x_bit_(n-1)` down to `x_bit_0` greedily, each by a red pair reifying `x - l - (higher bits) >= 2^i` | no carries | the halves of `B = l + S` then need the big-M of each reification tightened, the same problem as the guards, n times per variable |
+
+**(b).** Over cake's digits `u_j` (`b_j` for `j < h`, `~sign` at `j = h`), `U = B + 2^h [sign]` is
+unsigned and `x - l = U - L'` with `L' = l + 2^h [sign] >= 0`. The digits of `x - l` are those of
+`U + c`, `c = (2^m - L') mod 2^m`, through a ripple-carry adder, and its relation at digit i is ONE
+linear row, `d_i + 2 k_(i+1) = u_i + c_i + k_i` (`k_0 = 0`). While the carry is a constant, the next
+one is `0`, `u_i` or `1`; once it is a literal, the next is a fresh variable defined by a red pair
+whose two goals are tautologies. `d_i` (`x_bit_i` for `i < n`, a fresh high digit above, which is zero)
+is defined by the relation's two halves, a red pair whose goals are the carry's own rows. Summed with
+weights `2^i` the relations telescope, so the halves of `B = l + S` (the order arm's `@E1`/`@E2`, now
+with `S = sum 2^i x_bit_i`) follow by one `pol` each, after a unit on the final carry and one per high
+digit (`rup` against one row each). Everything downstream of the halves, the substitution of cake's
+rows (D-0187), is unchanged. With `l = 0` and no sign, every carry is 0 and each bit is a renaming.
+
+**The guards, by contradiction.** A row whose guard's big-M is baguette's own and that cake's
+candidate implies only up to that coefficient is derived by `pbc` (D-0195 §2.3's device): the
+negation plus the candidate, saturated, forces the guard; the negation plus each negated bits
+variable's ub row (`-S >= -(u - l)`, baguette's own, pinned in the prefix) leaves it no room; unit
+propagation closes. No new rule, and only where `ia` fails.
+
+**Two definitions the order arm did not need.** (i) A choice-group selector `_mxN` (D-0134) is set
+by `sol` to the FIRST operand attaining m and no other, where cake's array_max flag `x[N][<i>]` is
+`x_i >= m` both ways: at a tie two flags hold. So `_mx_i` is defined as `F_i /\ ~F_0 /\ .. /\
+~F_(i-1)` (a red pair over the conjunction), not as `F_i`; the binary max/min, whose flags have one
+direction only, keep the renaming. (ii) An int_abs sign guard over a bits variable is defined as
+cake's atom `i[X][ge0]` itself (its order atom `x_ge_0` is minted by the solver's proof, later, and
+two definitions of one name would collide).
+
+### 3. How to revert
+
+Revert the commits prefixed `M14-e2e-verification-T7:` on branch `wave56-e2e7` (or their merge).
+Nothing outside `tools/e2e/`, `scripts/e2e_lane.sh` and the `--e2e` path changes, and every default
+byte stays (the gate compares the 207 models' four artefacts with main's).
+
+### 4. What this does not decide
+
+Whether `--e2e` becomes a default, whether the bridge is retired (D-0187 §5), and whether a wide
+domain should go to the bits arm by default (D-0130's threshold stays `none`).
+
+### 5. (reserved)
