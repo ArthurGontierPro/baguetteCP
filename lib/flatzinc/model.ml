@@ -6,6 +6,17 @@
    Wiring `Model.t` into the engine is a later task; when it happens, the translation
    lives on the core side of the boundary, not here. *)
 
+(* A table keyed by an identifier, for the front end's name lookups (builder.ml's
+   environment, compile.ml's collision check). Over [String] with [String.equal]: a
+   polymorphic [Hashtbl] compares its keys through [compare_val], and these tables are
+   probed once per name in the file (M16-file-review-T5, D-0193). *)
+module Names = Hashtbl.Make (struct
+  type t = string
+
+  let equal = String.equal
+  let hash (s : string) = Hashtbl.hash s
+end)
+
 type domain =
   | Dbool (* a `var bool`: treated as 0/1 *)
   | Drange of int * int (* inclusive *)

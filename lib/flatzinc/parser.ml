@@ -21,7 +21,16 @@
    streaming lexer holds, and [advance] scans the next. It delivers the file one [item]
    at a time through [iter_items] rather than as a tree (M7-T27 (d), D-0128), so that
    the builder can drop each item once it is built; the two rules that are about the
-   model and not an item -- exactly one `solve` -- are checked in [iter_items]. *)
+   model and not an item -- exactly one `solve` -- are checked in [iter_items].
+
+   Cost (M16-file-review-T5, D-0193). One pass, O(tokens): every token is looked at
+   once through [cur] and consumed once by [advance], and nothing is ever re-read. A
+   sequence ([parse_seq], [parse_annots]) is accumulated in reverse and reversed once,
+   so an array literal of n elements costs O(n), whatever its length. A [Pos.t] is
+   made once per item, per set literal and per diagnostic, never per token (the
+   expression's start is two ints, see [parse_expr]). On smelt_11 (136 MB) the parser's
+   own code was 2.3 % of the setup's samples before this review, the lexer's 8.3 % and
+   the builder's 12.6 %, so the review's levers went to those two. *)
 
 type state = Lexer.t
 
@@ -68,19 +77,23 @@ let parse_int st =
       | t -> bad t)
   | t -> bad t
 
+(* An expression's start is taken as the token's line and column, two ints, and made a
+   [Pos.t] only for the diagnostic that needs it (M16-file-review-T5, D-0193): a
+   [Lexer.pos] per expression would be the allocation per token the lexer stopped
+   making. *)
 let rec parse_expr st =
-  let p = pos st in
+  let line = Lexer.tok_line st and col = Lexer.tok_col st in
   let e = parse_primary st in
   if cur st = Lexer.DOTDOT then (
     advance st;
     let e2 = parse_primary st in
     match (e, e2) with
     | Ast.Int a, Ast.Int b -> Ast.Range (a, b)
-    | _ -> Error.failf p "a range must have integer literal bounds")
+    | _ ->
+        Error.failf (Lexer.pos_at st line col) "a range must have integer literal bounds")
   else e
 
 and parse_primary st =
-  let p = pos st in
   match cur st with
   | Lexer.INT _ | Lexer.MINUS | Lexer.PLUS -> Ast.Int (parse_int st)
   | Lexer.TRUE ->
@@ -107,6 +120,7 @@ and parse_primary st =
       advance st;
       Ast.Array (parse_seq st Lexer.RBRACK "`]`")
   | Lexer.LBRACE ->
+      let p = pos st in
       advance st;
       let es = parse_seq st Lexer.RBRACE "`}`" in
       Ast.Set
@@ -118,7 +132,8 @@ and parse_primary st =
                    "a set literal may only contain integer literals, found `%s`"
                    (Ast.string_of_expr e))
            es)
-  | t -> Error.failf p "expected an expression but found %s" (Lexer.string_of_token t)
+  | t ->
+      Error.failf (pos st) "expected an expression but found %s" (Lexer.string_of_token t)
 
 (* A comma-separated list terminated by [close], which is consumed. Tolerates a
    trailing comma. *)

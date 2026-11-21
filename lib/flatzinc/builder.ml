@@ -21,7 +21,16 @@
    (D-0083, and the arithmetic family sizes its auxiliaries from domains). On a
    FlatZinc 2.x file every declaration precedes every constraint, so that is either
    every constraint or none. What this costs, and the one way it differs from building
-   a whole tree, is in D-0128. *)
+   a whole tree, is in D-0128.
+
+   Cost (M16-file-review-T5, D-0193). Every occurrence of a name in the file is one probe
+   of [Model.Names], a table over [String] (a polymorphic [Hashtbl] compared every key
+   through [compare_val]), and a variable is found by its index in an array. Nothing is
+   quadratic in the file on the accepting path, except two costs bounded by what the
+   file states: a parameter array of a set type checks each element against the set
+   ([check_par_domain], O(elements x set)), and [infer_domains] runs at most
+   [infer_max_passes] passes over the facts. The diagnostics ([refuse_unbounded]) may
+   walk the facts once per unbounded variable; they end the run. *)
 
 (* SPEC 2.1, milestones M1, M2 and M3. *)
 let implemented =
@@ -93,16 +102,28 @@ let implemented =
 let planned : (string * string) list = []
 let implemented_list = String.concat ", " implemented
 
+(* The name tables, keyed by the identifier, are [Model.Names] (M16-file-review-T5,
+   D-0193), where they were polymorphic [Hashtbl]s whose every probe went through
+   [compare_val]: a name is looked up once per occurrence in the file, and these probes
+   were a quarter of the builder's time on a Challenge `.fzn`. Nothing iterates them, so
+   their bucket order is not observable. *)
+module Names = Model.Names
+
 type env = {
-  scalars : (string, Model.operand) Hashtbl.t;
-  arrays : (string, Model.operand array) Hashtbl.t;
-  array_dims : (string, (int * int) list) Hashtbl.t;
+  scalars : Model.operand Names.t;
+  arrays : Model.operand array Names.t;
+  array_dims : (int * int) list Names.t;
   mutable vars_rev : Model.var list;
   (* M6-T21: the same variables BY INDEX, kept in step with [vars_rev] by [new_var] and
      [infer_domains]. Both lookups below used to be [List.nth_opt (List.rev vars_rev) i],
      a reversal of the whole table per lookup: 44 s of the 60 s budget on 2016_mrcpsp
-     (118 756 lines) went there, as `List.rev_append` and the GC behind it. *)
-  vars_by_index : (int, Model.var) Hashtbl.t;
+     (118 756 lines) went there, as `List.rev_append` and the GC behind it.
+     M16-file-review-T5 (D-0193): an array doubled as it fills, where it was an
+     [(int, var) Hashtbl.t] -- one polymorphic hash, a bucket scan for [replace] and the
+     table's resizing per declared variable, 13 % of the builder's time on smelt_11.
+     Slots [nvars] and above are unused; [var_at] answers [None] there as the table did
+     for an index it did not hold. *)
+  mutable vars_by_index : Model.var array;
   mutable nvars : int;
   mutable outputs_rev : Model.output_item list;
   (* M4-T4b: how many auxiliary Booleans the arithmetic family has introduced so far.
@@ -120,11 +141,11 @@ type env = {
 
 let new_env () =
   {
-    scalars = Hashtbl.create 64;
-    arrays = Hashtbl.create 16;
-    array_dims = Hashtbl.create 16;
+    scalars = Names.create 64;
+    arrays = Names.create 16;
+    array_dims = Names.create 16;
     vars_rev = [];
-    vars_by_index = Hashtbl.create 1024;
+    vars_by_index = [||];
     nvars = 0;
     outputs_rev = [];
     naux = 0;
@@ -135,11 +156,15 @@ let new_var env name dom pos =
   let i = env.nvars in
   let v = { Model.v_name = name; v_dom = dom; v_pos = pos } in
   env.vars_rev <- v :: env.vars_rev;
-  Hashtbl.replace env.vars_by_index i v;
+  if i >= Array.length env.vars_by_index then (
+    let grown = Array.make (max 1024 (2 * i)) v in
+    Array.blit env.vars_by_index 0 grown 0 i;
+    env.vars_by_index <- grown);
+  env.vars_by_index.(i) <- v;
   env.nvars <- i + 1;
   i
 
-let var_at env i = Hashtbl.find_opt env.vars_by_index i
+let var_at env i = if i >= 0 && i < env.nvars then Some env.vars_by_index.(i) else None
 
 (* ------------------------------------------------------------------ name resolution *)
 
@@ -148,23 +173,23 @@ let rec operand env pos (e : Ast.expr) : Model.operand =
   | Ast.Int n -> Model.Const n
   | Ast.Bool b -> Model.Const (if b then 1 else 0)
   | Ast.Ident s -> (
-      match Hashtbl.find_opt env.scalars s with
+      match Names.find_opt env.scalars s with
       | Some op -> op
       | None ->
-          if Hashtbl.mem env.arrays s then
+          if Names.mem env.arrays s then
             Error.failf pos "`%s` is an array, but a single value is expected here" s
           else Error.failf pos "undeclared identifier `%s`" s)
   | Ast.Access (s, ix) ->
       let arr =
-        match Hashtbl.find_opt env.arrays s with
+        match Names.find_opt env.arrays s with
         | Some a -> a
         | None ->
-            if Hashtbl.mem env.scalars s then
+            if Names.mem env.scalars s then
               Error.failf pos "`%s` is not an array, so it cannot be indexed" s
             else Error.failf pos "undeclared identifier `%s`" s
       in
       let lo =
-        match Hashtbl.find_opt env.array_dims s with Some ((l, _) :: _) -> l | _ -> 1
+        match Names.find_opt env.array_dims s with Some ((l, _) :: _) -> l | _ -> 1
       in
       let i = const_of env pos (Printf.sprintf "the index of `%s`" s) ix in
       if i < lo || i - lo >= Array.length arr then
@@ -191,8 +216,8 @@ and const_of env pos what e =
 let operands env pos (e : Ast.expr) : Model.operand list =
   match e with
   | Ast.Array es -> List.map (operand env pos) es
-  | Ast.Ident s when Hashtbl.mem env.arrays s -> Array.to_list (Hashtbl.find env.arrays s)
-  | Ast.Ident s when Hashtbl.mem env.scalars s ->
+  | Ast.Ident s when Names.mem env.arrays s -> Array.to_list (Names.find env.arrays s)
+  | Ast.Ident s when Names.mem env.scalars s ->
       Error.failf pos "`%s` is not an array, but an array is expected here" s
   | Ast.Ident s -> Error.failf pos "undeclared identifier `%s`" s
   | _ -> Error.failf pos "expected an array, found `%s`" (Ast.string_of_expr e)
@@ -654,7 +679,7 @@ let infer_domains env (cs : Ast.constraint_item list) =
         undomained
     in
     env.vars_rev <- List.rev (Array.to_list vars);
-    Array.iteri (fun i v -> Hashtbl.replace env.vars_by_index i v) vars;
+    Array.blit vars 0 env.vars_by_index 0 (Array.length vars);
     match unbounded with [] -> None | _ -> Some (unbounded, vars, facts, lo, hi)
 
 let refuse_unbounded (unbounded, (vars : Model.var array), facts, lo, hi) =
@@ -765,15 +790,15 @@ let record_array_output env pos ty (d : Ast.decl) dims elems =
         Model.Out_array (d.Ast.d_name, dims, ty, Array.to_list elems) :: env.outputs_rev
 
 let bind_scalar env pos name op =
-  if Hashtbl.mem env.scalars name || Hashtbl.mem env.arrays name then
+  if Names.mem env.scalars name || Names.mem env.arrays name then
     Error.failf pos "`%s` is declared more than once" name;
-  Hashtbl.replace env.scalars name op
+  Names.replace env.scalars name op
 
 let bind_array env pos name dims elems =
-  if Hashtbl.mem env.scalars name || Hashtbl.mem env.arrays name then
+  if Names.mem env.scalars name || Names.mem env.arrays name then
     Error.failf pos "`%s` is declared more than once" name;
-  Hashtbl.replace env.arrays name elems;
-  Hashtbl.replace env.array_dims name dims
+  Names.replace env.arrays name elems;
+  Names.replace env.array_dims name dims
 
 let add_par_scalar env (d : Ast.decl) bt =
   let pos = d.Ast.d_pos and name = d.Ast.d_name in
@@ -1459,7 +1484,7 @@ let add_item st (item : Ast.item) =
    anything, so it is never copied. *)
 let split_gcc_repeats (m : Model.t) : Model.t =
   let n0 = Array.length m.Model.vars in
-  let fresh_rev = ref [] and defs_rev = ref [] in
+  let fresh_rev = ref [] and defs_rev = ref [] and n_fresh = ref 0 in
   let fixed i =
     match m.Model.vars.(i).Model.v_dom with
     | Model.Drange (lo, hi) -> lo = hi
@@ -1467,7 +1492,9 @@ let split_gcc_repeats (m : Model.t) : Model.t =
     | Model.Dset _ | Model.Dbool -> false
   in
   let copy pos i =
-    let j = n0 + List.length !fresh_rev in
+    (* a count, where it was [List.length !fresh_rev]: quadratic in the copies *)
+    let j = n0 + !n_fresh in
+    incr n_fresh;
     let v = m.Model.vars.(i) in
     fresh_rev :=
       { v with Model.v_name = Printf.sprintf "X_INTRODUCED_gcc_copy_%d" (j - n0) }

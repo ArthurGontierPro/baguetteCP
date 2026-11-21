@@ -17,7 +17,17 @@
 
    A token that straddles the window's edge is copied through a Buffer; one that does
    not is taken straight out of the window. The window is 64 KiB by default and a
-   parameter, so a test can shrink it to a few bytes and exercise every straddle. *)
+   parameter, so a test can shrink it to a few bytes and exercise every straddle.
+
+   Cost (M16-file-review-T5, D-0193). The scanner is O(bytes), and the constant is what
+   the Challenge's largest files pay first: on smelt_11 (136 MB, 18.4 M tokens) it was
+   530 instructions per token before this review and is 330 after. Three rules keep it there. A run of
+   identifier or digit bytes is read against [classes], one table load per byte, never
+   through a predicate closure. An integer is folded into its value where its digits
+   lie, and only one that straddles the window or does not fit goes through a string
+   and [int_of_string_opt], which decides both. A token's start is two ints, and the
+   [Pos.t] is made by [pos] when someone asks. What is left per token is the
+   identifier's string (the parser keeps it) and one [caml_modify] for [tok]. *)
 
 type token =
   (* keywords *)
@@ -124,10 +134,16 @@ type t = {
   mutable base : int; (* offset in the input of [buf.(0)] *)
   mutable line : int;
   mutable bol : int; (* offset in the input of the current line's first byte *)
-  (* the one lexeme of lookahead: [tok] is the current token and [tok_pos] where it
-     starts. [EOF] is sticky: once reached, [advance] does nothing. *)
+  (* the one lexeme of lookahead: [tok] is the current token and [tok_line],
+     [tok_col] where it starts. [EOF] is sticky: once reached, [advance] does nothing.
+
+     The start is two ints and not a [Pos.t] (M16-file-review-T5, D-0193): a [Pos.t]
+     per token was an allocation and a [caml_modify] per token, for a position the
+     parser asks for once per item and on an error. [pos] builds it on demand, the
+     same record [here] made, so every diagnostic reads as before. *)
   mutable tok : token;
-  mutable tok_pos : Pos.t;
+  mutable tok_line : int;
+  mutable tok_col : int;
 }
 
 let default_window = 65536
@@ -165,35 +181,88 @@ let peek2 t = Bytes.unsafe_get t.buf (t.pos + 1)
 let skip t = t.pos <- t.pos + 1
 let here t = Pos.make t.file t.line (t.base + t.pos - t.bol + 1)
 
+(* The current token starts at the cursor: record where, as [here] would have it. *)
+let mark_token t =
+  t.tok_line <- t.line;
+  t.tok_col <- t.base + t.pos - t.bol + 1
+
+(* Where the current token starts, as a [Pos.t]; [pos_at] for a start the parser kept. *)
+let pos_at t line col = Pos.make t.file line col
+let pos t = pos_at t t.tok_line t.tok_col
+let tok_line t = t.tok_line
+let tok_col t = t.tok_col
+
 (* Called with the cursor ON the newline byte, before it is skipped. *)
 let newline t =
   t.line <- t.line + 1;
   t.bol <- t.base + t.pos + 1
 
-(* The maximal run of bytes satisfying [pred] from the cursor, as a string. Taken
+(* Character classes, one table load per byte (M16-file-review-T5, D-0193). [take_while]
+   took the class as a closure and called it once per byte, through [is_ident_char],
+   which calls [is_ident_start] and [is_digit]: three calls a byte, about two thirds of
+   the lexer's time on a Challenge `.fzn`. The table answers exactly what those
+   predicates answer, byte for byte (bit 1: [is_digit]; bit 2: [is_ident_char]). *)
+let cls_digit = 1
+let cls_ident = 2
+
+let classes =
+  String.init 256 (fun i ->
+      let c = Char.chr i in
+      Char.chr
+        ((if is_digit c then cls_digit else 0)
+        lor if is_ident_char c then cls_ident else 0))
+
+let in_class cls c = Char.code (String.unsafe_get classes (Char.code c)) land cls <> 0
+
+(* The maximal run of bytes of class [cls] from the cursor, as a string. Taken
    straight out of the window when it ends inside it; copied through a Buffer when it
    reaches the window's edge, because sliding would overwrite it. *)
-let take_while t pred =
+let take_while t cls =
+  let buf = t.buf and len = t.len in
   let start = t.pos in
-  while t.pos < t.len && pred (Bytes.unsafe_get t.buf t.pos) do
-    skip t
+  let i = ref start in
+  while !i < len && in_class cls (Bytes.unsafe_get buf !i) do
+    incr i
   done;
-  if t.pos < t.len then Bytes.sub_string t.buf start (t.pos - start)
+  t.pos <- !i;
+  if !i < len then Bytes.sub_string buf start (!i - start)
   else
     let b = Buffer.create 32 in
-    Buffer.add_subbytes b t.buf start (t.pos - start);
-    while has1 t && pred (peek t) do
+    Buffer.add_subbytes b buf start (!i - start);
+    while has1 t && in_class cls (peek t) do
       Buffer.add_char b (peek t);
       skip t
     done;
     Buffer.contents b
+
+(* An integer literal's value, read off the digits where they lie (M16-file-review-T5,
+   D-0193): no string is made for it unless it does not fit or straddles the window's
+   edge. [None] is "use [take_while] and [int_of_string_opt]", which is the path for
+   both of those cases, so the value accepted and the text quoted by the diagnostic are
+   [int_of_string_opt]'s. Over decimal digits alone [int_of_string_opt] accepts exactly
+   the values up to [max_int]; [acc <= (max_int - d) / 10] is that bound before the
+   multiplication can wrap. The cursor moves only when [Some] is returned. *)
+let take_int_in_window t =
+  let buf = t.buf and len = t.len in
+  let rec go i acc =
+    if i >= len then None
+    else
+      let c = Bytes.unsafe_get buf i in
+      if is_digit c then
+        let d = Char.code c - 48 in
+        if acc > (max_int - d) / 10 then None else go (i + 1) ((acc * 10) + d)
+      else (
+        t.pos <- i;
+        Some acc)
+  in
+  go t.pos 0
 
 (* --------------------------------------------------------------------- scanning *)
 
 (* Skip whitespace and comments, then scan one token, leaving it in [t.tok]. *)
 let rec scan t =
   if not (has1 t) then (
-    t.tok_pos <- here t;
+    mark_token t;
     t.tok <- EOF)
   else
     let c = peek t in
@@ -226,38 +295,46 @@ let rec scan t =
       done;
       scan t)
     else
-      let p = here t in
-      t.tok_pos <- p;
+      let () = mark_token t in
       if is_digit c then (
-        let text = take_while t is_digit in
+        let value =
+          match take_int_in_window t with
+          | Some v -> Ok v
+          | None -> Error (take_while t cls_digit)
+        in
         (* `1..2` is a range, `1.0` is a float literal and floats are out of scope
            (SPEC 1). Distinguish by looking at the character after the dot. *)
         if has1 t && peek t = '.' && not (has2 t && peek2 t = '.') then
-          Error.failf p
+          Error.failf (pos t)
             "floating-point literals are not supported: SPEC 2.1 restricts types to bool \
              and int";
         if has1 t && (peek t = 'e' || peek t = 'E') then
-          Error.failf p
+          Error.failf (pos t)
             "floating-point literals are not supported: SPEC 2.1 restricts types to bool \
              and int";
-        match int_of_string_opt text with
-        | Some v -> t.tok <- INT v
-        | None -> Error.failf p "integer literal `%s` does not fit in an OCaml int" text)
+        match value with
+        | Ok v -> t.tok <- INT v
+        | Error text -> (
+            match int_of_string_opt text with
+            | Some v -> t.tok <- INT v
+            | None ->
+                Error.failf (pos t) "integer literal `%s` does not fit in an OCaml int"
+                  text))
       else if is_ident_start c then
-        let s = take_while t is_ident_char in
+        let s = take_while t cls_ident in
         match keyword s with Some k -> t.tok <- k | None -> t.tok <- IDENT s
       else if c = '"' then (
         skip t;
         let b = Buffer.create 16 in
         let closed = ref false in
         while not !closed do
-          if not (has1 t) then Error.failf p "unterminated string literal"
+          if not (has1 t) then Error.failf (pos t) "unterminated string literal"
           else
             let ch = peek t in
             if ch = '"' then (
               skip t;
               closed := true)
-            else if ch = '\n' then Error.failf p "unterminated string literal"
+            else if ch = '\n' then Error.failf (pos t) "unterminated string literal"
             else if ch = '\\' && has2 t then (
               (match peek2 t with
               | 'n' -> Buffer.add_char b '\n'
@@ -294,12 +371,11 @@ let rec scan t =
           | '=' -> EQ
           | '-' -> MINUS
           | '+' -> PLUS
-          | _ -> Error.failf p "unexpected character %C" c))
+          | _ -> Error.failf (pos t) "unexpected character %C" c))
 
 (* ------------------------------------------------------------ the parser's view *)
 
 let cur t = t.tok
-let pos t = t.tok_pos
 let advance t = if t.tok <> EOF then scan t
 
 let make ~file ?(window = default_window) read =
@@ -314,7 +390,8 @@ let make ~file ?(window = default_window) read =
       line = 1;
       bol = 0;
       tok = EOF;
-      tok_pos = Pos.make file 1 1;
+      tok_line = 1;
+      tok_col = 1;
     }
   in
   scan t;

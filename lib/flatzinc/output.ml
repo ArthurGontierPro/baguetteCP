@@ -9,7 +9,13 @@
    match this module, this module is adjusted to match it. What those files pin down, and
    the spec does not spell out, is that there is no blank line and no trailing space
    anywhere: a solution is exactly `name = value;\n' per output item followed by
-   `----------\n', and every line including the last is newline-terminated. *)
+   `----------\n', and every line including the last is newline-terminated.
+
+   Cost (M16-file-review-T5, D-0193). [solution] is O(output items + array elements),
+   one [Buffer] per solution and one string per item, and it runs once per solution
+   printed, never per node. An optimisation run that prints many solutions pays it per
+   improvement, which is bounded by the objective's range and is linear in the output
+   each time. Nothing here is on the setup's path before node 1. *)
 
 (* Rendering a value needs the *declared* type of the output item, because "1" and "true"
    are the same assignment printed under two different types, and only the declaration

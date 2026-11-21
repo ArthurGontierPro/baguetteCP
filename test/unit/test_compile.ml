@@ -201,7 +201,21 @@ let test_normalise_terms () =
   check "normalise: first-occurrence order is preserved"
     (eq (Compile.normalise_terms [ (1, 2); (1, 0); (1, 2) ]) [ (2, 2); (1, 0) ]);
   check "normalise: everything cancelling leaves an empty list"
-    (eq (Compile.normalise_terms [ (2, 0); (-2, 0) ]) [])
+    (eq (Compile.normalise_terms [ (2, 0); (-2, 0) ]) []);
+  (* M16-file-review-T5 (D-0193): a short row over distinct variables skips the table.
+     Both paths, against the table as the reference, on rows of 0 to 12 terms over 6
+     indices, so that repeats, zero coefficients and the 8-term cut are all common. *)
+  let rng = Random.State.make [| 193 |] in
+  let bad = ref 0 in
+  for _ = 1 to 5000 do
+    let k = Random.State.int rng 13 in
+    let row =
+      List.init k (fun _ -> (Random.State.int rng 7 - 3, Random.State.int rng 6))
+    in
+    if not (eq (Compile.normalise_terms row) (Compile.normalise_terms_by_table row)) then
+      incr bad
+  done;
+  check "normalise: the distinct-row path equals the table on 5000 random rows" (!bad = 0)
 
 (* Propagate once and report the resulting domain of variable [i]. The engine is the
    only thing that can show that the *propagator* got the same normalised terms the
@@ -2258,9 +2272,34 @@ let test_member_models () =
     (member_src ~ints ~bools:(sels 1) ~call:"baguette_member([x1, x2], y, [b1, b1])"
        ~extra:[] ())
 
+(* M16-file-review-T5 (D-0193): under [Discard_rows] (`--no-proof`) the objective's .opb
+   line is not built, because nothing reads it; under the sinks that write the .opb it is
+   there, the order encoding of the objective variable. *)
+let test_objective_line_by_sink () =
+  let src = "var 0..5: x;\nconstraint int_le(x, 3);\nsolve maximize x;\n" in
+  let objective_under sink =
+    let saved = !Encoding.row_sink in
+    Encoding.row_sink := sink;
+    let c =
+      Fun.protect
+        ~finally:(fun () -> Encoding.row_sink := saved)
+        (fun () -> Compile.compile (build src))
+    in
+    (Encoding.objective c.Compile.encoding, c.Compile.objective <> None)
+  in
+  let discarded, searched = objective_under Encoding.Discard_rows in
+  check "objective: no .opb line under Discard_rows" (discarded = None);
+  check "objective: the search still optimises under Discard_rows" searched;
+  match objective_under Encoding.Retain_rows with
+  | Some o, true ->
+      check "objective: the .opb line under Retain_rows is the variable's 5 rungs"
+        (List.length o.Opb.obj_terms = 5)
+  | _ -> check "objective: an .opb line under Retain_rows" false
+
 let () =
   print_endline "";
   test_variable_identity ();
+  test_objective_line_by_sink ();
   test_instance_counts ();
   test_normalise_terms ();
   test_constant_folding ();

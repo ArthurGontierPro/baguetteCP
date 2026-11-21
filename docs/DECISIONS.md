@@ -24832,3 +24832,204 @@ measures that in one command (`series.sh bag RUN LIST BIN`). Nothing else depend
   split for 3.8 times less time at equal nodes (section 5). A cheaper encoding of `int_times(x, x, z)`
   (one guarded row per value of x is what D-0060 writes, and that is the cost) belongs to the M16
   per-node cost work, not to GAC.
+
+## D-0193  M16-file-review-T5: the front end and the setup read file by file. Under `--no-proof` the objective's `.opb` line was built for nothing, and on 79 of the 150 large instances measured it was nearly the whole setup. The lexer called three closures per byte and allocated a position per token, and the name tables were polymorphic. Seven byte-identical levers, and what is left is `Encoding`'s and `Engine.create`'s
+
+**Status**: DONE, recorded 2026-11-21 (agent-review5, resumed by agent-review5b, `wave55-review5`,
+autonomous mode).
+**Task**: M16-file-review-T5, `lib/flatzinc/lexer.ml`, `parser.ml`, `builder.ml`, `compile.ml`,
+`output.ml` (the cost before node 1, after D-0143).
+**Files changed**: `lib/flatzinc/lexer.ml`, `parser.ml`, `builder.ml`, `compile.ml`, `model.ml` (the
+`Names` table), `output.ml` (its header only), `test/unit/test_flatzinc.ml` and `test_compile.ml`.
+**Runs**: `fataepyc-06:/scratch/arthur/wave55-review5-runs/` (`setup1.sh` one setup-only run, `job5b.sh`
+and `s5.sh` the sweep, `lev5.sh` and `lev5slot.sh` the per-lever runs, `models.sh`/`modelsnp.sh` and
+`cmpmodels.sh` the byte identity, `tools/s5cmp.py`, `tools/levtab5.py`, `tools/setupattr.py`,
+`gate-review5.sh`).
+
+### 1. Method
+
+The setup is everything before node 1, so it is measured by `--time-limit 0` (the run stops at node 1)
+with `--stats --time`, under `perf stat -e instructions:u` and `/usr/bin/time`, once with `--no-proof`
+(np) and once with `--proof` (pf), the `.opb` and `.pbp` md5 kept. The instances are the 150 Challenge
+`.fzn` agent-review5 chose (`top150.list`) after its sweep of the setup over all 1 574 flattened
+instances (`setup/sw.np.tsv`). It did not record its rule, and the list holds both the costliest
+setups without the proof and seven `train_instance` files whose `.opb` is 90 GB. To these come smelt_11, nonogram_non_med_3 and gt-sort_n9,
+whose setup is most the front end's, and D-0143's openshop_gp10-4. The binaries are release builds of main
+`95b4406` (`68ed1cf0`) and of the branch before main's merge, `be6f0f2` (`d54edb28`), and one per lever
+commit for section 3. The profiles are main's release build under `baguette-fp` (`perf record -e
+cycles:u --call-graph fp`, np), attributed by `tools/setupattr.py` to the nearest front-end frame. The
+node ran at load 45 to 65 on 192 cores (two Challenge series and the M8-T4 runs), so instruction
+counts are the measure and wall times only a check.
+
+Byte identity was checked on the dev builds (`7b967430` main, `d8077c1a` branch) over the 207
+`test/models` with `--proof --stats` (stdout, exit code, `.opb`, `.pbp`, `--stats` without timings) and
+again with `--no-proof --stats` (stdout, exit code, `--stats`), with 0 differences. On the sweep, stdout
+and `--stats` are equal on all 150 np pairs, and stdout, `--stats`, `.opb` and `.pbp` on every pf pair
+that finished.
+
+### 2. The tables, file by file
+
+The sizes are `B` the bytes of the `.fzn`, `T` its tokens, `N` the identifiers' occurrences, `V` the
+variables, `C` the constraints, `k` a row's terms, `n` a global's operands and `W` the objective's
+width in rungs. Shares are of the setup's samples (`perf record -e cycles:u --call-graph fp`, the
+release build of main under `baguette-fp`, `--no-proof --time-limit 0`), attributed to the nearest
+front-end frame by `tools/setupattr.py`. smelt_11 (136 MB, 18.4 M tokens, 1.0 M variables) is the
+instance whose setup is most the front end's (parse phase 22.4 %, the four files 38.5 %), and the
+others are named where they differ.
+
+**lexer.ml** (the streaming scanner, D-0128). 8.3 % of smelt_11's samples, 9.3 % of nonogram's.
+
+| function | complexity | data structure | share (smelt_11) | verdict |
+|---|---|---|---|---|
+| `take_while`, per identifier or integer | O(length), a predicate closure per byte (`is_ident_char` calls `is_ident_start` and `is_digit`) | the 64 KiB window | 2.5 own, `is_ident_start` 0.8, `is_ident_char` 0.6 | three calls per byte: **L1** (a class table) |
+| the integer path of `scan` | a string per literal, then `int_of_string_opt` | | in the above | **L1** (the value folded off the digits) |
+| `here`, per token | a `Pos.t` record and a `caml_modify` of `tok_pos` | | 1.2 own | **L6** (two ints, the record on demand) |
+| `scan`'s dispatch, comments, strings | O(bytes) | | 2.8 own | fine |
+| `keyword` | a match on the identifier's string | | not seen | fine |
+
+**parser.ml** (LL(1) recursive descent, one item at a time). 2.3 % of smelt_11.
+
+| function | complexity | data structure | share | verdict |
+|---|---|---|---|---|
+| `parse_seq`, `parse_annots` | O(n), accumulated and reversed once | lists | 0.6 (`loop`) | fine |
+| `parse_expr`, per expression | `Lexer.pos` per expression | | in `here` | **L6** (two ints) |
+| `next_item`, `parse_primary` | O(tokens of the item) | `Ast` | 0.6, 0.4 | fine |
+
+**builder.ml** (`Ast` to `Model.t`, the SPEC 2.1 rules). 12.6 % of smelt_11, 17.4 % of nonogram.
+
+| function | complexity | data structure | share (smelt_11) | verdict |
+|---|---|---|---|---|
+| `operand`, `operands`, `bind_scalar`, `bind_array`, per name occurrence | O(1) expected per probe, O(N) in all | three polymorphic `(string, _) Hashtbl.t` (`scalars`, `arrays`, `array_dims`) | `operand` 3.1, `bind_scalar` 1.6, `add_var_scalar` 2.0 own, of which `compare_val` the bucket walk | **L2** (`Model.Names`, a `Hashtbl.Make` over `String`) |
+| `new_var`, `var_at`, per variable and per lookup | O(1) expected | an `(int, Model.var) Hashtbl.t` created at 1 024 | `new_var` 2.9 own | the table doubled ten times on a million variables: **L2** (an array doubled as it fills) |
+| `infer_domains` | at most `infer_max_passes` (64) passes over the facts | arrays | not seen | bounded; header |
+| `check_par_domain`, a set-typed parameter array | O(elements x set) by `List.mem` | list | not seen | bounded by what the file states; header |
+| `refuse_unbounded` | O(facts) per unbounded variable | | diagnostics only | ends the run; header |
+| `split_gcc_repeats` | `List.length` of the copies so far per copy, O(copies^2) | list | not seen | **L7** (a count) |
+| `var_bounds`, `fresh_bool`, `build_constraint` | O(1), O(set) for a set domain | | 0.9, 0.4, 0.4 | fine |
+
+**compile.ml** (`Model.t` to the store, the `.opb` and the instances). Its own code is 15.3 % of
+smelt_11's samples, and what it causes, callees included, is 77 % (`compile` 28.0, `post_le_as` 15.3,
+`post_reif_le` 11.6), and nearly all of that is `Encoding` (34.6 % of the samples) and `Engine.create`
+(13.9 %), the files of T4 and T1.
+
+| function | complexity | data structure | share | verdict |
+|---|---|---|---|---|
+| the objective's `.opb` line in `compile` | O(W): one term per rung | a list of `W` terms | **99.8 % of gbac's samples without the proof**, 99 % of wmsmc's, unit-commitment's, connect's, steiner-tree's, celar's, aircraft's | built and never read under `Discard_rows`: **L5** |
+| `normalise_terms`, per row | O(k) and a polymorphic `Hashtbl.create 16` per row | table + list | 1.8 own | **L4** (no table for k <= 8 distinct indices) |
+| `check_name_collisions` | O(V) probes | a polymorphic table created at 64, doubled about fourteen times on a million variables | not separated (its closure is among the anonymous `F:Compile.fun`, 6.2 % own) | **L3** (`Model.Names` sized for V) |
+| `post_le_as`, `post_reif_le`, `post_clause`, the globals' `post_*` | O(k) and the callee's | | 15.3, 11.6, 3.8 incl, nearly all `Encoding` | T4's (section 5) |
+| `post_all_different` | O(n^2) cheap tests for a constant or a repeat | list | not seen | `Alldiff.make` dominates before; header |
+| `post_global_cardinality` | O(cover x n) | list filter per cover value | not seen | bounded by the arguments; header |
+| `post_regular` | O(n x Q^2 x runs) | | not seen | the size of its own table times Q; header |
+| `check_row`, `opb_terms`, `term_bounds`, `bool_operand` | O(k) | | 1.4, 0.3, 0.3, 0.3 | fine |
+
+**output.ml** (the solution printer). O(output items + array elements) per solution printed, never
+on the setup's path and never per node. Not seen in any profile, so only its header changed.
+
+### 3. The levers taken, one commit each, every byte the same
+
+Setup instructions, release binaries of consecutive commits (`setup/lev*/`), np unless marked. The
+change is against the commit before. Each lever's rule is stated in its module's header and at the
+function. Instruction counts repeat exactly between runs of one binary (tower's and ghoulomb's below
+came out identical in the sweep and in these runs).
+
+| commit | lever | moved by 1 % or more | against |
+|---|---|---|---|
+| `d8f349c` | **L1** the lexer reads a run of bytes against a 256-byte class table, and an integer off its digits in the window (a string and `int_of_string_opt` only when it straddles the window or does not fit) | nonogram -4.3 %, openshop -3.5 %, smelt_11 -3.4 %, gt-sort -1.3 %; **tower_100-05 +2.3 %** (below) | main `95b4406` |
+| `fb90df6` | **L2** the builder's three name tables are `Model.Names` (`Hashtbl.Make` over `String`), its variables an array doubled as it fills | openshop -4.1 %, nonogram -2.9 %, smelt_11 -1.6 %, wmsmc -1.3 %, gt-sort -1.2 %; ghoulomb_5-7-22 +1.0 % (below) | L1 |
+| `64fa15d` | **L3** `check_name_collisions` over `Model.Names`, sized for every variable | nonogram -2.2 % | L2 |
+| `5b40602` | **L4** `normalise_terms` returns a row of at most 8 pairwise distinct indices as it is, zero coefficients dropped, without its table | smelt_11 -2.9 %, gt-sort -1.8 %, openshop -1.7 % | L3 |
+| `56c1f60` | **L5** under `Discard_rows` (`--no-proof`) the objective's `.opb` line is not built | **wmsmc_426 -100.0 % (102.75 G to 0.01 G), celar_SUB4 -99.4 %**, openshop -4.1 % | L4 |
+| `755777b` | **L6** a token's start is two ints, its `Pos.t` made when the parser asks | gt-sort -2.0 %, openshop -1.4 %, nonogram -1.1 %, smelt_11 -1.0 % | L5 |
+| `be6f0f2` | **L7** `split_gcc_repeats` numbers its copies by a count (it was `List.length` of the copies so far, O(copies^2)) | none (a cold path, no instance repeats a gcc variable at scale) | L6 |
+| `209fa0d` | tests: integer literals (`max_int`, `max_int + 1` and their neighbours) through every window from 2 to 17 bytes and the default, 3 000 variables past the array's growth, `normalise_terms`' two paths against each other on 5 000 random rows, the objective line by sink | | |
+| `5f0bab2`, `59f9a9a`, `e90e40f` | the cost paragraphs in the five headers and the cold quadratic paths named with their bounds | | |
+
+From main to `be6f0f2`: smelt_11 118.90 G to 107.72 G (-9.4 %, its parse phase 5.97 s to 4.09 s),
+nonogram -10.1 %, gt-sort 238.45 G to 223.67 G (-6.2 %, parse 10.4 s to 7.5 s), openshop -14.7 % np
+and +0.3 % pf. The lexer alone (the probe driver, `probe.*.exe lex`, smelt_11's 18.4 M tokens) went from
+533 instructions per token to 371 with L1 (release), and in the frame-pointer builds from 593 on main
+to 357 with L6 (-40 %).
+
+**The +2.3 % on tower and +1.0 % on ghoulomb are a major collection, not code.** Tower's setup holds a
+19.6 GB heap. Under `OCAMLRUNPARAM=v=0x400`, main and L1 allocate the same words to 0.001 %
+(12 272 458 931 against 12 272 542 232), but L1's run ends with 28 major collections where main's ends
+with 27, and one more cycle over 2.45 G heap words is the 18 G instructions. The other eight towers of
+the sweep move from -1.3 % to +0.2 %. The sign of such a step depends on where the last cycle falls,
+so it is left.
+
+### 4. The branch as a whole, the 150 instances
+
+| | np | pf |
+|---|---|---|
+| pairs that reached node 1 on both binaries | 150 of 150 | 116 of 150 |
+| artefact differences (stdout, `--stats`; and `.opb`, `.pbp` for pf) | 0 | 0 |
+| setup instructions, median change | **-84.3 %** | -0.0 % |
+| setup instructions, total | 23 174 G to 15 507 G (-33.1 %) | 113 576 G to 113 573 G (-0.0 %) |
+
+Without the proof the 150 split in two. **On 79 the objective's line was most of the setup**
+(L5 removed 50.9 % to 100 % of it). Their median is -97.9 %, their instructions 7 329 G to 103 G,
+their wall 1 100 s to 18 s, and the largest peak RSS 32.7 GB to 364 MB. connect_0018's setup was
+95.6 s and is 0.04 s, and wmsmc case 115's went from 74.1 s and 29.9 GB to 0.00 s and 7 MB. These are wide objectives over the order encoding,
+one term per rung, built as a list of `(coefficient, Lit.t)` pairs, each with its name. **On the other
+71** the median is -2.1 % (at 10, 25, 50, 75 and 90 % of them, -16.9, -5.3, -2.1, -0.5 and 0.0 %). The
+gains above 10 % are again L5 where the objective is a part of the setup (the cgt, atsp, spot5,
+work-task-variation instances), and the rest is L1 to L6. Three move up by 0.5 % or more, tower_100-05 by 2.3 % and
+ghoulomb_5-7-22 by 1.0 % (the collection of section 3) and ghoulomb_3-9-16 by 0.5 %.
+
+With the proof the setup is `Encoding`'s, its rows and the `.opb`, and the levers leave it where it
+was. The median is -0.0 %, the quartiles -1.2, -0.5, -0.0, +0.2, +0.6 %, the largest gain concert-hall -2.4 % and
+the largest loss yumi-static +3.5 % (its np line moves by -1.5 %, and with the proof the branch allocates
+0.4 % fewer words but promotes 24 % more, presumably because its minor collections fall at other
+points, and ends with 25 major collections against 23). 25 instances did not reach node 1 within 1 200 s or under the 32 GB
+cap on either binary (gbac, liner-sf, wmsmc, unit-commitment, aircraft, connect, steiner es20, two
+towers, an ATSP and two arithmetic-target, mostly wide objectives whose `.opb` line has one term per
+rung), and the 9 whose setup without the proof is longest (six towers and three atsp, 89 s to 263 s
+without the proof) were not run with it. The pf sweep was stopped after 2 h 10, when those were all
+that was left, because their neighbours of the same families had taken 20 to 40 min a pair and several
+had timed out. The seven `train_instance` pairs each wrote a 90 GB `.opb`, deleted after its md5.
+
+### 5. What is left, and why
+
+| item | where | measured | why left |
+|---|---|---|---|
+| a variable found by its NAME at every declaration and every row term | `Encoding.declare_int_gen`, `find`, `owner`, `hash` | 6.1 + 6.0 + 5.2 + 6.4 = 23.7 % of smelt_11's setup samples (main), `Encoding` 34.6 % in all | `Encoding` keys its variables by name (`Names`, already over `String`), so each term of each row hashes its string; an index-keyed table is a change of `Encoding`'s interface, T4's file (request 1) |
+| `Engine.create` and the instances' registration | `Engine.create_inner`, `index_static`, `scope_of`, `Propagator.pack_inner` | 13.9 % of smelt_11 (Engine), 1.9 % `pack_inner` | T1's file; the one structure is the static index, built once (request 2) |
+| the objective's `.opb` line WITH the proof | `compile`'s objective, `Encoding.linear_terms_int_lin_le`, `Lit.ge` | the whole setup of the 79 instances above when `--proof` is on; 24 of them do not reach node 1 in 1 200 s | the line is the file: one term per rung is what the `.opb` header says. It would shrink only with a shorter objective (the bits encoding, M8, or a ladder-free objective form), a format decision |
+| `post_all_different`'s pair tests, `post_global_cardinality`'s filter per cover value, `post_regular`'s predecessor search | `compile.ml` | not seen in any profile | quadratic in an argument the `.fzn` states and dominated by the global's own `make`; bounds in the header (rule 3) |
+| `check_par_domain` on a set-typed parameter array, `infer_domains`' passes, `refuse_unbounded` | `builder.ml` | not seen | bounded by the file (O(elements x set)), by `infer_max_passes` (64), or ending the run; header |
+
+### 6. Requests to the other tiers
+
+1. `lib/proof/encoding.ml` (T4's tier, released). The setup's largest cost left is the name lookup at
+   every declaration and row term (section 5, first row). `Compile` knows every variable's model index;
+   an `Encoding` keyed by that index, with the name kept for printing, would remove a string hash per
+   term. This changes `Encoding`'s interface and every caller's, so it is a task of its own.
+2. `lib/core/engine.ml` (T1's). `Engine.create` is 13.9 % of smelt_11's setup, and its profile is in
+   `prof/smelt11.base.attr`.
+
+### 7. Gate
+
+A fresh clone of the pushed branch at `80afbfb` (the branch after `git merge origin/main`, main
+`201726e`, whose code is gate 84's `f1051d8`) was gated with `gate-review5.sh` (gate 82's script with
+the lanes at `-j 8`) against gate 84's binary (`dca706be`), at load 60 to 65.
+
+| | gate, `80afbfb` (`33cf382f`) |
+|---|---|
+| `make check` | rc 0, 4 617 ok lines, 34 s, peak RSS 108 MB |
+| 207 models x 4 artefacts (stdout, exit code, `.opb`, `.pbp`) | 0 differences |
+| diff lane `--tier all` | 324 of 324 equal to the reference |
+| `--debug` lane | 311 of 311 equal |
+| scaling lane | ok on all five lines: QR72 +0.10 % of late without the proof and -0.05 % with it, rcpsp_11 +0.04 %, parity +0.17 % and +0.12 % |
+
+The scaling baseline is not re-recorded, because the levers are in the setup, which the lane
+subtracts (late minus early), and no line moved past one binary's spread. The commits after `80afbfb` are this record,
+`ROADMAP.md` and `WORKLOG.md`.
+
+This record would be reversed by a lever whose byte identity fails on an instance outside these. L5
+is the one to look at first, because it relies on the objective line having no reader under
+`Discard_rows`.
+That holds because `Encoding.write_opb` is never called under that sink, and `reif_occurs`, which also
+reads the objective, serves only `define_reif`, which nothing in `lib/` calls. L1 relies on
+`int_of_string_opt` accepting exactly the decimal digit strings up to `max_int`, which its test checks
+through every window from 2 to 17 bytes and the default.

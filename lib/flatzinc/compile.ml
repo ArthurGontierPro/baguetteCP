@@ -148,7 +148,26 @@
    that one exits 4 and tells the reader baguette's own invariant has failed, which is
    right for a wrapped row (Compile's arithmetic cap should have caught it) and would
    be actively wrong here: an over-wide domain is a model problem, reported at the
-   model, with the model's exit code. *)
+   model, with the model's exit code.
+
+   ---------------------------------------------------------------------------
+   What the setup costs, and what of it is this file's (M16-file-review-T5, D-0193)
+   ---------------------------------------------------------------------------
+
+   On the Challenge's costliest setups [compile]'s own code is a few percent; the rest
+   is what it calls ([Encoding]'s declarations and rows, [Engine.create], the globals'
+   [make]). Its own rules: [normalise_terms] answers a short row over distinct
+   variables without a table; the name check is one sized [Model.Names]; and under
+   [Discard_rows] (`--no-proof`) the objective's .opb line, one term per rung of the
+   objective, is not built, because the header that would print it is never written.
+
+   Three paths are quadratic in an argument's length and are left so, each bounded by
+   what the .fzn states and none seen in a profile: [post_all_different] tests every
+   pair of its n operands for a constant or a repeat (O(n^2) cheap tests; the global's
+   own [Alldiff.make] dominates long before), [post_global_cardinality] filters the
+   movable variables once per cover value (O(cover x n)), and [post_regular] finds a
+   state's predecessors per symbol run (O(n x Q^2 x runs), the size of its own table
+   times Q). *)
 
 module Var = Baguette_core.Var
 module Checked = Baguette_core.Checked
@@ -215,7 +234,7 @@ type t = {
 
    Called once per constraint; its result is what both the .opb row and the propagator
    are built from. See the module header. *)
-let normalise_terms (terms : (int * int) list) : (int * int) list =
+let normalise_terms_by_table (terms : (int * int) list) : (int * int) list =
   let coeff = Hashtbl.create 16 in
   let order = ref [] in
   List.iter
@@ -230,6 +249,28 @@ let normalise_terms (terms : (int * int) list) : (int * int) list =
   |> List.filter_map (fun i ->
          let c = Hashtbl.find coeff i in
          if c = 0 then None else Some (c, i))
+
+(* M16-file-review-T5 (D-0193): a row whose variables are pairwise distinct -- nearly
+   every row a flattener writes -- has nothing to merge, so its result is its own terms
+   with the zero coefficients dropped, which is what the table below computes for it (each
+   index occurs once, so its entry is its coefficient and the order is the input's). Up to
+   [distinct_scan_max] terms that is decided by comparing the indices pairwise, where the
+   table cost one polymorphic [Hashtbl] of 16 buckets per constraint; a longer row keeps
+   the table, so the scan stays O(k^2) for k <= 8. *)
+let distinct_scan_max = 8
+
+let rec indices_distinct = function
+  | [] -> true
+  | (_, i) :: rest -> List.for_all (fun (_, j) -> j <> i) rest && indices_distinct rest
+
+let rec short_list n = function
+  | [] -> true
+  | _ :: rest -> n > 0 && short_list (n - 1) rest
+
+let normalise_terms (terms : (int * int) list) : (int * int) list =
+  if short_list distinct_scan_max terms && indices_distinct terms then
+    List.filter (fun (c, _) -> c <> 0) terms
+  else normalise_terms_by_table terms
 
 let negate_terms terms = List.map (fun (c, i) -> (Checked.neg c, i)) terms
 
@@ -509,13 +550,18 @@ let holes_of_domain (v : Model.var) =
    and a collision would silently merge their order literals inside [Opb.normalise],
    producing a row that is not the model's. [Encoding] keys on the unsanitised name and
    so would not notice. Checked once, here, because this is the only place that knows
-   the whole variable list. *)
+   the whole variable list.
+
+   M16-file-review-T5 (D-0193): the table is over [String] and sized for every variable
+   at once. It was a polymorphic [Hashtbl] created at 64 and doubled about fourteen times
+   on a million-variable model, re-hashing every name at each doubling. It is only
+   probed, never iterated, so its layout is not observable. *)
 let check_name_collisions (m : Model.t) =
-  let seen = Hashtbl.create 64 in
+  let seen = Model.Names.create (max 64 (Array.length m.Model.vars)) in
   Array.iter
     (fun (v : Model.var) ->
       let s = Lit.sanitize v.Model.v_name in
-      match Hashtbl.find_opt seen s with
+      match Model.Names.find_opt seen s with
       | Some other when not (String.equal other v.Model.v_name) ->
           Error.failf v.Model.v_pos
             "variables `%s` and `%s` both become `%s` in the .opb (identifiers are \
@@ -525,7 +571,7 @@ let check_name_collisions (m : Model.t) =
       | Some _ ->
           Error.failf v.Model.v_pos "variable `%s` is declared more than once"
             v.Model.v_name
-      | None -> Hashtbl.replace seen s v.Model.v_name)
+      | None -> Model.Names.replace seen s v.Model.v_name)
     m.Model.vars
 
 (* ------------------------------------------------------------------------ compile *)
@@ -1008,10 +1054,18 @@ let compile (m : Model.t) : t =
         let name = names.(i) in
         let lo, hi = bounds.(i) in
         let coeff = match dir with Search.Minimise -> 1 | Search.Maximise -> -1 in
-        let terms, constant =
-          Encoding.linear_terms_int_lin_le encoding [ (coeff, name) ]
-        in
-        Encoding.set_objective encoding (Opb.objective ~constant terms);
+        (* M16-file-review-T5 (D-0193): under [Discard_rows] (`--no-proof`) the line is
+           not built. Its one reader is the .opb's header ([Encoding.write_opb]), which
+           that sink never writes, and its length is the objective's width: one term
+           per rung, 52 million on wmsmc-int, where building it was the whole setup
+           (140 G instructions of 140 G). *)
+        (match !Encoding.row_sink with
+        | Encoding.Discard_rows -> ()
+        | Encoding.Retain_rows | Encoding.Stream_rows_to _ ->
+            let terms, constant =
+              Encoding.linear_terms_int_lin_le encoding [ (coeff, name) ]
+            in
+            Encoding.set_objective encoding (Opb.objective ~constant terms));
         Encoding.e2e_objective encoding name ~sign:coeff;
         {
           Search.o_var = Var.of_int i;
