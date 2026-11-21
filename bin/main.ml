@@ -357,9 +357,10 @@ let usage () =
     "                    bit_length(hi-lo) Booleans x_bit_i, two bound rows, no";
   prerr_endline "                    ladder; its order atoms are minted into the proof on";
   prerr_endline
-    "                    demand. `none` (default): the order encoding everywhere.";
+    "                    demand. `0` (default, D-0199): every eligible variable";
   prerr_endline
-    "                    `0`: every eligible variable (width 0 and 1 stay order).";
+    "                    (width 0 and 1 stay order). `none`: the order encoding";
+  prerr_endline "                    everywhere, the solver before D-0201.";
   prerr_endline
     "                    A variable in an all_different, gcc, element, maxmin,";
   prerr_endline

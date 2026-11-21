@@ -459,8 +459,8 @@ the order encoding** *(normative; amended by M8-bits-encoding-T2, D-0132 — unt
 **bits encoding** when it is declared wider than `--bits-above W` and its scope is eligible
 (`docs/PROOF-FORMAT.md` §3, "Bits encoding", normative; D-0130 §3.4): `bit_length(u − l)`
 Booleans `x_bit_i` for `x − l`, two bound rows in the `.opb` and no ladder, its order atoms
-`x_ge_v` minted into the proof on demand by a `red` pair. At the default `W = none` no
-variable is. The consistency clauses are not an optimisation and not a convenience for the
+`x_ge_v` minted into the proof on demand by a `red` pair. At the default `W = 0` (D-0199,
+D-0201) every eligible variable is, and `--bits-above none` puts none on it. The consistency clauses are not an optimisation and not a convenience for the
 solver: no proof step this solver emits ever cites one, and the checker needs them all the
 same. A model row is this encoding's own expansion, in which every literal of one variable
 carries the same coefficient, so a row constrains only *how many* of `x`'s literals hold.
