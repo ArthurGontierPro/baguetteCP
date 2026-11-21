@@ -1916,6 +1916,34 @@ let refuse_enumeration opts (m : Model.t) =
 
 (* --------------------------------------------------------------------- main *)
 
+(* M6-T2 (D-0198). The minor heap is 4 M words (32 MB), not OCaml 5.1's 256 k words (2 MB).
+   The solver allocates 14 to 23 words per thousand instructions everywhere, mostly data that
+   dies within a branch or a conflict: trail entries of a level that is undone, an analysis's
+   terms, a proof line's literals. In a 2 MB nursery much of it is promoted before it dies and
+   the major collector pays for it again. At 4 M words promotion falls 2 to 9 times, and the
+   cycles by 10 to 25 % on most proof runs (D-0198 §2 has the table, and 4 M is its knee).
+
+   It changes WHEN memory is reclaimed, never a value: nothing in [lib/] reads an address, so
+   stdout, proofs and --stats are the same bytes. It costs 32 MB resident per process. An
+   explicit [s=] in OCAMLRUNPARAM or CAMLRUNPARAM wins, so [OCAMLRUNPARAM=s=256k] gives back
+   the old behaviour without a rebuild. The test binaries do not link this file and keep the
+   default. *)
+let minor_heap_words = 4 * 1024 * 1024
+
+let runparam_sets_minor_heap () =
+  let sets v =
+    List.exists
+      (fun kv -> String.length kv >= 2 && kv.[0] = 's' && kv.[1] = '=')
+      (String.split_on_char ',' v)
+  in
+  match Sys.getenv_opt "OCAMLRUNPARAM" with
+  | Some v -> sets v
+  | None -> ( match Sys.getenv_opt "CAMLRUNPARAM" with Some v -> sets v | None -> false)
+
+let () =
+  if not (runparam_sets_minor_heap ()) then
+    Gc.set { (Gc.get ()) with Gc.minor_heap_size = minor_heap_words }
+
 let () =
   (* One [Sys.time] read, unconditionally, because --time has not been parsed yet and
      [startup] has to be sampled before anything else happens. It costs one syscall
