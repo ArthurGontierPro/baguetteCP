@@ -646,6 +646,39 @@ section 1. Shares are inclusive, of the whole run.
 
 ## Handoff notes
 
+### FOR THE USER'S RETURN: the autonomous run of 2026-11-20 evening to 2026-11-21 (orchestrator)
+
+**Merged and gated** (gates 77 to 87 green, every default `--proof` artefact byte-identical except D-0172's 12
+smaller `.pbp`; lane 324/324, debug 311/311, scaling ok): M16 complete (D-0186 core, D-0190 propagators,
+D-0191 learning, D-0192 proof side, D-0193 front end: release lane median about -7 % per node without
+proof and -6 % with, evm -28 %, openshop and rcpsp_11 -20 % with proof, setup under `--no-proof` 7 329 G
+-> 103 G on the top 150); M14 T3, T3b, T6, T7 (`--e2e`, off by default: 197 of 207 models verified end to
+end by cake_pb_cp on both paths, order and bits arms; black-hole_17 x428 -> x11.8; roster-sickness,
+zephyrus, gfd-n120 verified at `--bits-above 64`); M7-T35 (member's debug-check false alarm); M4-T6
+and M4-T6b (GAC arithmetic: not built, no node gain); M13-T1 (root LP: not built); M15 T1-T3; a crash
+hotfix (D-0197).
+
+**Running**: M8-T4 (`W = none` vs `W = 0`, D-0175) and M10-T5/M9-T3/M7-T30 (default, `-f`, `--no-proof`,
+D-0185): two Challenge series, about two thirds done; M6-T2 (re-scope of the GC lever, D-0198).
+
+**Added in autonomous mode** (3 of 3): M4-T6b, M14-T3b, M7-T35, all done.
+
+**Open for you**: (1) D-0197 §6: PB analysis of a 32 M-term ladder row costs 20 GB and delays the time-limit
+stop (cap by row length or not); (2) whether `--e2e` ever becomes a default (D-0187); (3) the VeriPB
+`strengthening_to_core` bug report (`bench/symmetry/stc_bug/REPORT.md`); (4) seven `train_instance` runs
+wrote 90 GB `.opb` each during M16-T5's sweep (deleted); (5) two review agents stalled ~14 h and were
+relaunched from their branches (agents are now told to check any wait after 30 min).
+
+**[AUTONOME] decisions**, most consequential first:
+- D-0187: `--e2e`, baguette writes the end-to-end prefix itself under cake's naming as a second contract
+  (PROOF-FORMAT §3b), off by default.
+- D-0196: the bits arm in the e2e prefix through a ripple-carry adder over cake's bits.
+- D-0188: T5's globals under `--e2e`, element's head by `pol` (and `Model.constr` gains `c_id`).
+- D-0195: regular, cumulative, int_abs in the chain; int_times and int_div left out.
+- D-0197: the stack-overflow hotfix (tail-recursive merges), byte-identical.
+- D-0189: the D-0026 reverse arm ignores member's lemma-plus-Weaken pair (debug-only).
+- D-0194: GAC arithmetic not built.
+
 ### 2026-11-21 (orchestrator, autonomous mode): gate 86 green; M14-T7 merged, gate 87 on it
 
 Gate 86 (`1427baa`, merge wave56-stack, D-0197, binary `ba895ce2`, against gate 85's `33cf382f`): `make check`
