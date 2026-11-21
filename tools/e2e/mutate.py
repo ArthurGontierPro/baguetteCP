@@ -41,6 +41,17 @@ place and prints what it changed, for the lane to check the refusal against.
   mutate.py flag FILE.pbp       (T6, D-0195) a WRONG DEFINITION of a regular state flag: the
                                 first `@D1[...]` whose F is cake's flag past layer 0 gets the
                                 witness `s -> ~F`; prints its label
+  mutate.py bitdef FILE.pbp     (T7, D-0196) a WRONG DEFINITION of a bits-arm bit: the first
+                                variable's digit-0 pair `@BP[x_bit_0]`, `@BN[x_bit_0]` (both
+                                red lines, still valid definitions of a fresh variable) gets
+                                cake's `i[X][b1]` where it reads `i[X][b0]`, so x_bit_0 is
+                                defined as the wrong cake bit; the first line that depends on
+                                it is the variable's bound-row pin against @BU (the halves no
+                                longer telescope), on the first variable whose ub row is not
+                                a tautology; prints that pin's label (@cK)
+  mutate.py tight FILE.pbp      (T7, D-0196) the first row derived by contradiction against a
+                                bits variable's ub row (`@cK pbc ROW : subproof` whose second
+                                step cites @BU) gets its degree + 1; prints @cK
 Exit 1 when there is nothing to mutate.
 """
 import re
@@ -143,6 +154,43 @@ def main(kind, path, *rest):
             return 1
         text = text[:m.start(2)] + "0" + text[m.end(2):]
         what = m.group(1)
+    elif kind == "bitdef":
+        lines = text.splitlines()
+        # the first variable whose ub row is not a tautology (u - l < 2^n - 1), so that its pin
+        # judges the halves: S <= 7 over three bits holds whatever the bits mean
+        for l in lines:
+            m = re.fullmatch(r"(@c\d+) ia ((?:[+-]\d+ \S+ )+)>= (-?\d+) : @BU\[(\S+)\] ;", l)
+            if m and -int(m.group(3)) < sum(-int(c) for c in re.findall(r"([+-]\d+) ", m.group(2))):
+                pin, x = m.group(1), m.group(4)
+                break
+        else:
+            return 1
+        mm = re.search(r"^@BP\[" + re.escape(x) + r"_bit_0\] red .*?\bi\[([^\]]+)\]\[b0\]", text, re.M)
+        if not mm:
+            return 1
+        X = mm.group(1)
+        n = 0
+        for i, l in enumerate(lines):
+            if l.startswith((f"@BP[{x}_bit_0] red ", f"@BN[{x}_bit_0] red ")):
+                lines[i] = l.replace(f"i[{X}][b0]", f"i[{X}][b1]")
+                n += 1
+        if n != 2:
+            return 1
+        text = "\n".join(lines) + "\n"
+        what = pin
+    elif kind == "tight":
+        # T7 (D-0196): the first row derived by contradiction against a bits ub row, its
+        # degree + 1 (on either path's proof)
+        lines = text.splitlines()
+        for i, l in enumerate(lines):
+            m = re.fullmatch(r"(@\S+) pbc ((?:[+-]\d+ \S+ )+)>= (-?\d+) : subproof", l)
+            if m and i + 2 < len(lines) and "@BU[" in lines[i + 2]:
+                lines[i] = f"{m.group(1)} pbc {m.group(2)}>= {int(m.group(3)) + 1} : subproof"
+                what = m.group(1)
+                break
+        else:
+            return 1
+        text = "\n".join(lines) + "\n"
     elif kind == "bounds":
         m = re.search(r"^conclusion BOUNDS (-?\d+)( : \S+ )(-?\d+)", text, re.M)
         if not m:

@@ -1091,7 +1091,7 @@ def main(cake_opb, names_file, bag_opb, bag_pbp):
             undefine(s_)
 
     by_coefs = {}   # a substituted row's coefficients -> (label, degree), for the exact pin
-    for lab, c2, d2 in subst + bound_pins:
+    for lab, c2, d2 in bound_pins + subst:   # a bits bound row against its own @BL/@BU first
         by_coefs.setdefault(frozenset(c2.items()), []).append((lab, d2))
 
     pins = []
