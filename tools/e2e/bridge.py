@@ -53,6 +53,13 @@ binary clauses (@R, rup) when weakening is too weak, then the result is saturate
 member's big-M rows, over the intersection of x_k's and y's ranges where cake's is over both
 whole ranges, with the end values guarded by separate clauses `b -> x_k >= ..`.
 
+The far families (T6, D-0195). regular's state flags, which the translator leaves out of the
+.scp, are DEFINED as cake's flags named in NAMES.flags (red pairs, then swapped as selectors);
+cumulative's capacity rows are each `ia` against ONE pol of cake's capacity, contribution,
+activity and flag rows (@K); int_abs's sign guard, a Boolean cake does not have, is defined as
+the ladder literal its int_lin_le_reif row names, and a row true in both signs is derived by
+contradiction (`pbc`, the negation plus each of the constraint's guarded rows, saturated).
+
 Pins, in this order: a ladder row is `ia` against its @L; a row a substituted cake row
 implies with the same coefficients is `ia` against it; a row a swapped, resolved or
 saturated candidate implies syntactically is `ia` against that candidate's `pol` line @W;
@@ -275,6 +282,7 @@ def main(cake_opb, names_file, bag_opb, bag_pbp):
     # where cake's big-M is the larger (bit range against declared bounds), the candidate
     # is saturated first.
     ATOM = re.compile(r"(i|n)\[(.+)\]\[(ge|eq)(-?\d+)\]")
+    ABS = re.compile(r"@S\[c\[.+\]\[(posge|posle|negle|negge)\]\]")
     sel_names = {san for orig, san in sanit.items() if orig.startswith("$ne")}
     sel_vars = {f"{s}_ge_1" for s in sel_names}
     bagvars = set(atoms) | sel_vars
@@ -309,6 +317,23 @@ def main(cake_opb, names_file, bag_opb, bag_pbp):
                     emit(f"@Y2[{Y}] red +1 {Y} +1 ~{X} >= 1 : {Y} -> {X} ;")
                     break
     bagvars |= set(alias)
+
+    # REGULAR'S STATE FLAGS (T6, D-0195). The translator leaves mznlib's flags out of the .scp
+    # (they are existential) and names, in NAMES.flags, cake's own flag for each one: s(i,q) is
+    # x[cK][<i>_<pi(q)>][st]. baguette's flag (fresh in the proof: cake's file has no such
+    # variable) is DEFINED as it by a red pair, the selectors' @D1/@D2 below, and the matcher
+    # then sees cake's regular rows over baguette's flags: ALO, AMO, START and ACCEPT are
+    # `ia`, a forward clause over a symbol run is `rup` through the transition clauses and the
+    # letters' eq atoms. A wrong hint is a refused line, never a verified answer.
+    reg_defs = []
+    import os
+    if os.path.exists(names_file + ".flags"):
+        for l in open(names_file + ".flags"):
+            if l.strip():
+                fz, F = l.split()
+                s_ = f"{sanit.get(fz, fz)}_ge_1"
+                reg_defs.append((s_, F))
+                bagvars.add(s_)
 
     def var_of(lit):
         return lit.lstrip("~")
@@ -442,6 +467,42 @@ def main(cake_opb, names_file, bag_opb, bag_pbp):
             return f"@D2[{s_}]", clause(neg(F), s_)
         return f"@D1[{s_}]", clause(F, neg(s_))   # ~F -> ~s: add (F + ~s), @D1
 
+    for s_, F in reg_defs:
+        define(s_, F)
+        emit(f"@D1[{s_}] red +1 ~{s_} +1 {F} >= 1 : {s_} -> {F} ;")
+        emit(f"@D2[{s_}] red +1 {s_} +1 {neg(F)} >= 1 : {s_} -> {F} ;")
+
+    # ARITH GUARDS (T6, D-0195). int_abs's sign guard S <-> x >= 0 is a model Boolean
+    # (X_INTRODUCED_arith_N, D-0060) that cake's file does not have. Its int_lin_le_reif row
+    # `g -> sum_v x_ge_v >= k` (or `g -> sum_v ~x_ge_v >= k`) over ONE integer's whole ladder
+    # says which literal it is: x_ge_(l+k) (resp. ~x_ge_(u-k+1)). g is DEFINED as that literal
+    # by a red pair (g fresh, so the pair is a renaming), and its two rows then close by rup.
+    # Only a variable cake does not know and that no other mechanism defined is read so.
+    ladder_of = {}
+    for X, info in ivars.items():
+        if info["S"]:
+            ladder_of[frozenset(info["S"])] = info
+    guards = {}
+    for _, terms, op, rhs in bag:
+        coefs, d = var_form(terms, op, rhs)
+        unk = [v for v in coefs if v not in bagvars and v not in guards]
+        if len(unk) != 1 or coefs[unk[0]] >= 0:
+            continue
+        g = unk[0]
+        rest = {v: c for v, c in coefs.items() if v != g}
+        info = ladder_of.get(frozenset(rest))
+        if info is None or len(set(rest.values())) != 1:
+            continue
+        c, k = next(iter(rest.values())), d - coefs[g]   # the degree when g holds
+        if c == 1 and info["l"] < info["l"] + k <= info["ub"]:
+            guards[g] = f"{info['x']}_ge_{vn(info['l'] + k)}"
+        elif c == -1 and info["l"] < info["l"] - k + 1 <= info["ub"]:
+            guards[g] = f"~{info['x']}_ge_{vn(info['l'] - k + 1)}"
+    for g, F in guards.items():
+        emit(f"@D1[{g}] red +1 ~{g} +1 {F} >= 1 : {g} -> {F} ;")
+        emit(f"@D2[{g}] red +1 {g} +1 {neg(F)} >= 1 : {g} -> {F} ;")
+    bagvars |= set(guards)
+
     def replaced(rpn, row, deps, swap):
         rpn, deps = list(rpn), list(deps)
         lits, _ = lit_form(*row)
@@ -486,6 +547,109 @@ def main(cake_opb, names_file, bag_opb, bag_pbp):
                     resolvents.append((rpn + crpn + [str(c), "*", "+"], add(row, c, crow),
                                        deps + cdeps))
     cands += resolvents
+
+    # CUMULATIVE (T6, D-0195). cake writes, per task i covering time t, flags cb (s_i <= t),
+    # ca (s_i + d_i >= t + 1) and act = cb /\ ca, contribution bits equal to r_i when act,
+    # and per t the row cap_t: minus every contribution >= -cap. baguette's row at t is
+    # sum_i r_i (s_i_ge_(t+1-d_i) - s_i_ge_(t+1)) <= cap - folded. ONE pol derives it:
+    #   cap_t + sum_i ( cge_(i,t) + r_i actc_(i,t) + r_i [cb's clause] + r_i [ca's clause] )
+    # cge cancels the contribution bits against cap_t (sum r_i ~act_i >= sum r_i - cap),
+    # actc (act \/ ~cb \/ ~ca) turns ~act into ~cb + ~ca, and each flag's clause swaps it for
+    # baguette's literal: `cb \/ s_ge_(t+1)` and `ca \/ ~s_ge_(t+1-d)`, each one pol of the
+    # flag's own definition row and the atom's @A2 (resp. @A1) at that threshold, saturated;
+    # at a clipped end the bound row instead, which leaves the flag's unit. The result is a
+    # candidate like any other (`ia` against it, after saturation).
+    cake_row = {label: (terms, op, rhs) for label, terms, op, rhs in cake}
+
+    def flag_clause(flab):
+        """The flag's [f] row (the flag positive: ~flag -> a bound on one integer) linearised
+        at its threshold: (label of a deferred pol, var-form row), or None."""
+        got = cake_row.get(flab)
+        if got is None:
+            return None
+        coefs, d = var_form(*got)
+        flag = [v for v in coefs if v not in owner]
+        Xs = {owner[v] for v in coefs if v in owner}
+        if len(flag) != 1 or len(Xs) > 1:
+            return None
+        F, M = flag[0], coefs[flag[0]]
+        lab = f"@K[{flab}]"
+        if not Xs:
+            if M <= 0 or d <= 0:
+                return None
+            deferred.setdefault(lab, f"{lab} pol @{flab} s ;")
+            return lab, clause(F)
+        X = Xs.pop()
+        info = ivars[X]
+        k = {coefs[b] // c for b, c in info["bits"].items() if b in coefs}
+        if len(k) != 1 or set(info["bits"]) - set(coefs) or M <= 0:
+            return None
+        k = k.pop()
+        if k == 1:      # ~F -> B >= d : F \/ x_ge_d
+            v = d
+            if v <= info["l"]:
+                return None
+            if v > info["ub"]:
+                deferred.setdefault(lab, f"{lab} pol @{flab} @i[{X}][ub] + s ;")
+                return lab, clause(F)
+            a = f"{info['x']}_ge_{vn(v)}"
+            deferred.setdefault(lab, f"{lab} pol @{flab} @A2[{a}] + s ;")
+            return lab, clause(F, a)
+        if k == -1:     # ~F -> B <= -d : F \/ ~x_ge_(1-d)
+            v = 1 - d
+            if v > info["ub"]:
+                return None
+            if v <= info["l"]:
+                deferred.setdefault(lab, f"{lab} pol @{flab} @i[{X}][lb] + s ;")
+                return lab, clause(F)
+            a = f"{info['x']}_ge_{vn(v)}"
+            deferred.setdefault(lab, f"{lab} pol @{flab} @A1[{a}] + s ;")
+            return lab, clause(F, neg(a))
+        return None
+
+    CAP = re.compile(r"c\[(.+)\]\[cap_(-?\d+)\]")
+    for label, terms, op, rhs in cake:
+        m = CAP.fullmatch(label or "")
+        if not m:
+            continue
+        N, t = m.group(1), m.group(2)
+        row = var_form(terms, op, rhs)
+        rpn, deps, ok = [f"@{label}"], [], True
+        ntasks = 0
+        for lab2 in cake_row:
+            mm = re.fullmatch(rf"c\[{re.escape(N)}\]\[(\d+)_{re.escape(t)}_cge\]", lab2)
+            if not mm:
+                continue
+            ntasks += 1
+            j = mm.group(1)
+            cge = var_form(*cake_row[lab2])
+            act = f"v[{N}][{j}_{t}][cact]"
+            r = -cge[0].get(act, 0)   # cge: r ~act + bits >= r, var form -r act + bits >= 0
+            row = add(row, 1, cge)
+            rpn += [f"@{lab2}", "+"]
+            if r == 0:
+                continue
+            row = add(row, r, var_form(*cake_row[f"c[{N}][{j}_{t}_actcal1]"]))
+            rpn += [f"@c[{N}][{j}_{t}_actcal1]", str(r), "*", "+"]
+            for fl in ("cb", "ca"):
+                got = flag_clause(f"v[{N}][{j}_{t}][{fl}][f]")
+                if got is None:
+                    ok = False
+                    break
+                row = add(row, r, got[1])
+                rpn += [got[0], str(r), "*", "+"]
+                deps.append(got[0])
+            if not ok:
+                break
+        if not ok or not ntasks:
+            continue
+        coefs, d = row
+        if any(v not in bagvars for v in coefs):
+            continue
+        klab = f"@K[{label}]"
+        deferred[klab] = f"{klab} pol {' '.join(rpn)} ;"
+        needs[klab] = deps
+        cands.append(([klab], (coefs, d), [klab]))
     cvars = [{var_of(l) for l in lit_form(*row)[0]} & bagvars for _, row, _ in cands]
     # an index from each baguette variable to the candidates that name it, so that a row is
     # tried only against candidates it could match (both passes need a shared variable or,
@@ -740,6 +904,27 @@ def main(cake_opb, names_file, bag_opb, bag_pbp):
                 emit(f"@W[{nw[0]}] pol {' '.join(rpn)} ;")
                 pins.append(f"@{label} ia {line} : @W[{nw[0]}] ;")
             continue
+        if not (bd == 1 and all(a == 1 for a in bl.values())):
+            # a row that holds in both signs of an int_abs (z >= x, z >= -x, the hull rows):
+            # by contradiction (D-0195 2.3). The negation plus each of the constraint's
+            # guarded rows, saturated, is a unit on the guard or nothing, and rup closes
+            bvars = {var_of(l) for l in bl}
+            sums = []
+            for rpn, row, deps in cands:
+                if not ABS.fullmatch(rpn[0]):
+                    continue
+                if not {var_of(l) for l in lit_form(*row)[0]} & bvars:
+                    continue
+                for dep in deps:
+                    ensure(dep)
+                sums.append(rpn)
+            if sums:
+                body = [f"@{label} pbc {line} : subproof"]
+                for k, rpn in enumerate(sums):
+                    body.append(f"    pol -{k + 1} {' '.join(rpn)} + s ;")
+                body += ["    rup >= 1 ;", "qed ;"]
+                pins.append("\n".join(body))
+                continue
         pins.append(f"@{label} rup {line} ;")
     out.extend(pins)
 

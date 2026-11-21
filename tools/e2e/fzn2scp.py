@@ -66,6 +66,30 @@ starts `UNCOVERED:` and names the first construct it cannot translate):
                                  introduces them, baguette's rows constrain them), so the .scp
                                  would admit b's that the FlatZinc model does not
 
+  The far families (M14-e2e-verification-T6, D-0195), each against its cpScript.sml definition:
+
+  int_abs(x, z)                  z = |x|                   (c abs x z)
+  baguette_cumulative(s, d, r, b)  at every time t, the r_i of the tasks with s_i <= t < s_i + d_i
+                                 sum to at most b          (c cumulative (s1 ...) (d1 ...) (r1 ...) b)
+                                 d, r and b constants (mznlib routes nothing else here) and none
+                                 negative: cake's cumulative_sem makes a negative height or
+                                 capacity infeasible, which baguette was never asked to agree with
+  baguette_regular(x, Q, smin, d, q0, F, s)
+                                 the word x drives the DFA (states 1..Q, d flattened row-major over
+                                 the symbols smin..smin+w-1, 0 = no edge) from q0 into F
+                                              (c regular (x1 ...) Q ((edges of 0) ...) (finals))
+                                 states renumbered by pi(q) = (q - q0) mod Q, because cake's NFA
+                                 starts in state 0; an edge (v pi(d[q][v])) per non-zero entry.
+                                 The STATE FLAGS s are left out of the .scp: mznlib introduces them
+                                 in a let, so they are existential, and the .scp is std's
+                                 fzn_regular. A flag that is not a distinct, unconstrained Boolean
+                                 used by this constraint alone is refused. OUT.names.flags maps
+                                 each flag to cake's own (`x[c<k>][<i>_<pi(q)>][st]`), a HINT for
+                                 the untrusted bridge, which defines baguette's flag as cake's
+
+  `int_times` and `int_div` are refused (D-0195 section 2.4): their encoding is cake's, but no
+  derivation of baguette's guarded rows from it is built, so they stay outside the chain.
+
   `count` is not a FlatZinc builtin of SPEC 2.1: MiniZinc's count reaches baguette as
   baguette_global_cardinality over one value (mznlib), and is covered as that.
 
@@ -102,6 +126,7 @@ COVERED = (
     "array_int_element", "fzn_global_cardinality", "baguette_global_cardinality",
     "array_int_maximum", "array_int_minimum", "int_max", "int_min",
     "baguette_inverse", "baguette_member", "baguette_member_bool",
+    "baguette_regular", "baguette_cumulative", "int_abs",
 )
 
 
@@ -243,6 +268,7 @@ class Model:
         self.cons = []       # (builtin, args)
         self.extra = []      # (kind, ...) domain restrictions from aliases
         self.objective = None   # ("minimize" | "maximize", expression), or None
+        self.flag_hint = {}     # regular state flag -> cake's flag (D-0195), for the bridge
 
     def term(self, e):
         """An expression standing for one integer: ("var", name) or ("int", k)."""
@@ -485,7 +511,67 @@ def sanitise(name):
     return re.sub(r"[^A-Za-z0-9_]", "_", name)
 
 
+def regular_flags(m):
+    """The state flags of every baguette_regular, checked to be existential (D-0195 2.1): distinct
+    `var bool` variables with their full 0..1 domain, named by no other constraint, by no other
+    regular, not the objective. Returns {fzn flag: (k, i, q)} with k the constraint's number."""
+    def names_in(e):
+        if e[0] == "array":
+            return [n for x in e[1] for n in names_in(x)]
+        if e[0] == "id" and e[1] in m.arrays:
+            return [t[1] for t in m.arrays[e[1]] if t[0] == "var"]
+        if e[0] in ("id", "elem"):
+            try:
+                t = m.term(e)
+            except Uncovered:
+                return []
+            return [t[1]] if t[0] == "var" else []
+        return []
+
+    flags = {}
+    used = {}
+    for k, (name, args) in enumerate(m.cons, 1):
+        for j, a in enumerate(args):
+            if name == "baguette_regular" and j == 6:
+                continue
+            for n in names_in(a):
+                used.setdefault(n, k)
+    for k, (name, args) in enumerate(m.cons, 1):
+        if name != "baguette_regular":
+            continue
+        if len(args) != 7:
+            raise Uncovered(f"{name} with {len(args)} arguments")
+        xs = m.array(args[0])
+        Q = m.term(args[1])
+        s = m.array(args[6])
+        if Q[0] != "int" or Q[1] < 1:
+            raise Uncovered(f"{name}: Q is not a positive constant")
+        if len(s) != (len(xs) + 1) * Q[1]:
+            raise Uncovered(f"{name}: {len(s)} state flags for {len(xs)} letters and {Q[1]} states")
+        for j, t in enumerate(s):
+            if t[0] != "var":
+                raise Uncovered(f"{name}: state flag {j + 1} is a constant")
+            n = t[1]
+            if m.vars.get(n) != (0, 1, None):
+                raise Uncovered(f"{name}: state flag {n} is not an unrestricted Boolean")
+            if n in flags:
+                raise Uncovered(f"{name}: state flag {n} occurs twice")
+            if n in used:
+                raise Uncovered(f"{name}: state flag {n} is also used by constraint c{used[n]}")
+            flags[n] = (k, j // Q[1], j % Q[1] + 1)
+    if m.objective is not None and flags:
+        t = m.term(m.objective[1])
+        if t[0] == "var" and t[1] in flags:
+            raise Uncovered("the objective is a regular state flag")
+    for n, _, _ in m.extra:
+        if n in flags:
+            raise Uncovered(f"state flag {n} has its domain restricted by an alias")
+    return flags
+
+
 def emit(m):
+    flags = regular_flags(m)
+    m.order = [n for n in m.order if n not in flags]
     names = {}
     for n in m.order:
         s = sanitise(n)
@@ -603,6 +689,44 @@ def emit(m):
             for j, (x, b) in enumerate(zip(xs, bs), 1):
                 cons.append(f"({cn}_{j} equals_if ({tm(b)} = 1) {tm(x)} {tm(y)})")
             cons.append(f"({cn} or ({' '.join(f'({tm(b)} = 1)' for b in bs)}) (1 = 1))")
+        elif name == "int_abs":
+            if len(args) != 2:
+                raise Uncovered(f"{name} with {len(args)} arguments")
+            x, z = m.term(args[0]), m.term(args[1])
+            cons.append(f"({cn} abs {tm(x)} {tm(z)})")
+        elif name == "baguette_cumulative":
+            if len(args) != 4:
+                raise Uncovered(f"{name} with {len(args)} arguments")
+            ss, d, r, b = m.array(args[0]), m.ints(args[1]), m.ints(args[2]), m.term(args[3])
+            if b[0] != "int":
+                raise Uncovered(f"{name}: a capacity that is not a constant")
+            if not len(ss) == len(d) == len(r):
+                raise Uncovered(f"{name}: {len(ss)} starts, {len(d)} durations, {len(r)} resources")
+            if min(d + r + [b[1]]) < 0:
+                raise Uncovered(f"{name}: a negative duration, resource or capacity")
+            cons.append(f"({cn} cumulative ({' '.join(tm(x) for x in ss)}) "
+                        f"({' '.join(map(str, d))}) ({' '.join(map(str, r))}) {b[1]})")
+        elif name == "baguette_regular":
+            xs, Q, smin = m.array(args[0]), m.term(args[1])[1], m.term(args[2])
+            d, q0, F = m.ints(args[3]), m.term(args[4]), m.ints(args[5])
+            if smin[0] != "int" or q0[0] != "int":
+                raise Uncovered(f"{name}: smin or q0 is not a constant")
+            smin, q0 = smin[1], q0[1]
+            if len(d) % Q or not 1 <= q0 <= Q:
+                raise Uncovered(f"{name}: {len(d)} transitions for {Q} states, start {q0}")
+            if any(not 0 <= t <= Q for t in d) or any(not 1 <= f <= Q for f in F):
+                raise Uncovered(f"{name}: a transition or final state outside 1..{Q}")
+            w = len(d) // Q
+            pi = {q: (q - q0) % Q for q in range(1, Q + 1)}
+            edges = {pi[q]: [(smin + j, pi[d[(q - 1) * w + j]]) for j in range(w)
+                             if d[(q - 1) * w + j]] for q in range(1, Q + 1)}
+            trans = " ".join("(" + " ".join(f"({v} {t})" for v, t in edges[p]) + ")"
+                             for p in range(Q))
+            fin = " ".join(str(pi[f]) for f in sorted(set(F), key=lambda f: pi[f]))
+            cons.append(f"({cn} regular ({' '.join(tm(x) for x in xs)}) {Q} ({trans}) ({fin}))")
+            for n, (kk, i, q) in flags.items():
+                if kk == k:
+                    m.flag_hint[n] = f"x[{cn}][{i}_{pi[q]}][st]"
     k = 0
     for n in m.order:
         lo, hi, vals = m.vars[n]
@@ -643,6 +767,10 @@ def main(argv):
     with open(argv[3], "w") as f:
         for s, n in names.items():
             f.write(f"{s} {n}\n")
+    if m.flag_hint:
+        with open(argv[3] + ".flags", "w") as f:
+            for n, c in m.flag_hint.items():
+                f.write(f"{n} {c}\n")
     return 0
 
 

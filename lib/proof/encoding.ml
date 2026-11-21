@@ -2165,6 +2165,13 @@ let e2e_begin t ~name spec = Option.iter (fun e -> E2e.begin_con e ~name spec) t
 let e2e_end t = Option.iter E2e.end_con t.e2e
 let e2e_objective t x ~sign = Option.iter (fun e -> E2e.objective e x ~sign) t.e2e
 let e2e_copy t ~copy ~orig = Option.iter (fun e -> E2e.copy e ~copy ~orig) t.e2e
+
+(* M14-e2e-verification-T6 (D-0195): a regular state flag, an arith guard *)
+let e2e_flag t ~var ~cake = Option.iter (fun e -> E2e.flag e ~var ~cake) t.e2e
+
+let e2e_guard t ~var ~x ~at ~pos =
+  Option.iter (fun e -> E2e.guard e ~var ~x ~at ~pos) t.e2e
+
 let e2e_stats t = Option.map E2e.stats t.e2e
 
 let start_proof t w =

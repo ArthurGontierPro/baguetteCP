@@ -28,14 +28,19 @@ place and prints what it changed, for the lane to check the refusal against.
   mutate.py pin FILE.opb FILE.pbp
                                 (T3, D-0187) the row `opb` would pick in baguette's .opb, but
                                 corrupted where the SOLVER-WRITTEN prefix states it: that
-                                row's pin line in the --e2e proof (`@cK ia ROW : ..` or
-                                `@cK rup ROW`) gets its degree + 1, so the prefix claims more
+                                row's pin line in the --e2e proof (`@cK ia ROW : ..`,
+                                `@cK rup ROW` or, T6, `@cK pbc ROW : subproof`) gets its
+                                degree + 1, so the prefix claims more
                                 than cake's file implies; a pin that is one `pol` (T3b,
                                 D-0188) becomes that pol under `@Wmut` and `@cK ia ROW : @Wmut`
                                 with the degree + 1; the .opb is not touched; prints @cK
   mutate.py sel FILE.pbp        (T3, D-0187) a WRONG DEFINITION of a disequality selector:
                                 the first `@D1[...]` red line, `~s + F >= 1 : s -> F`, gets
-                                the witness `s -> ~F`; prints its label
+                                the witness `s -> ~F`; prints its label. (T6, D-0195: on an
+                                int_abs model the first is the sign guard's, F = x_ge_0)
+  mutate.py flag FILE.pbp       (T6, D-0195) a WRONG DEFINITION of a regular state flag: the
+                                first `@D1[...]` whose F is cake's flag past layer 0 gets the
+                                witness `s -> ~F`; prints its label
 Exit 1 when there is nothing to mutate.
 """
 import re
@@ -74,6 +79,12 @@ def main(kind, path, *rest):
         lines = open(path).read().splitlines()
         for i, l in enumerate(lines):
             m = re.fullmatch(re.escape(what) + r" (ia|rup) ((?:[+-]\d+ \S+ )+)>= (-?\d+)( : \S+)? ;", l)
+            if not m:
+                # T6 (D-0195): a row derived by contradiction, `@cK pbc ROW : subproof`
+                m = re.fullmatch(re.escape(what) + r" (pbc) ((?:[+-]\d+ \S+ )+)>= (-?\d+)( : subproof)", l)
+                if m:
+                    lines[i] = f"{what} pbc {m.group(2)}>= {int(m.group(3)) + 1} : subproof"
+                    break
             if m:
                 lines[i] = f"{what} {m.group(1)} {m.group(2)}>= {int(m.group(3)) + 1}{m.group(4) or ''} ;"
                 break
@@ -89,6 +100,14 @@ def main(kind, path, *rest):
         text = "\n".join(lines) + "\n"
     elif kind == "sel":
         m = re.search(r"^(@D1\[[^\]]*\]) red .* -> (~?)(\S+) ;$", text, re.M)
+        if not m:
+            return 1
+        text = text[:m.start(2)] + ("" if m.group(2) else "~") + text[m.end(2):]
+        what = m.group(1)
+    elif kind == "flag":
+        # T6 (D-0195): the first regular state flag past layer 0 (cake's x[cK][<i>_<q>][st]
+        # with i >= 1, not fixed by `st0`), defined with the witness s -> ~F
+        m = re.search(r"^(@D1\[[^\]]*\]) red .* -> (~?)(x\[c\d+\]\[[1-9]\d*_\d+\]\[st\]) ;$", text, re.M)
         if not m:
             return 1
         text = text[:m.start(2)] + ("" if m.group(2) else "~") + text[m.end(2):]

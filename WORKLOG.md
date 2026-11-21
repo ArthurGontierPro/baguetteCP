@@ -23,7 +23,6 @@ of it to every session and stopping at a broken line before it even reached the 
 | M10-search-strategy-T5, M9-no-proof-T3, M7-T30 (one Challenge series on current main: default, `-f`, default `--no-proof`) | run dirs `/scratch/arthur/m10t5/`, `tools/compare/` (additions), `bench/challenge/README.md` (the run's row); reserved record D-0185 | agent-m10t5 (`wave55-m10t5`) | 2026-11-20 |
 | M16-file-review-T5 (the front end and setup) | `lib/flatzinc/lexer.ml`, `parser.ml`, `builder.ml`, `compile.ml`, `output.ml`, `model.ml`, `ast.ml`, their unit tests (`test_flatzinc.ml`, `test_compile.ml`, `test_output.ml`); reserved record D-0193 | agent-review5 (`wave55-review5`) | 2026-11-20 |
 | M4-T6b (measure the node gain of GAC arithmetic before building it) | new `bench/gac_measure/` (scripts), run dirs `/scratch/arthur/wave56-gac-runs/`; no solver code; reserved record D-0194 | agent-gac (`wave56-gac`) | 2026-11-21 |
-| M14-e2e-verification-T6 (the far families in the e2e chain) | `tools/e2e/`, `scripts/e2e_lane.sh`, `lib/proof/e2e.ml`, `lib/proof/encoding.ml` (additive), `lib/flatzinc/compile.ml` (the e2e hooks only), `docs/PROOF-FORMAT.md` §3b; reserved record D-0195 | agent-e2e6 (`wave56-e2e6`) | 2026-11-21 |
 
 ## Cross-session requests
 
@@ -452,6 +451,7 @@ section 1. Shares are inclusive, of the whole run.
    most 0.05 % on all ten instances.
 | **`Store.var_named` is the largest cost left in learning** (D-0191 sections 5 and 6): `Analysis.support_of` and `Pb_analysis.falsified_at` ask it per fact, 8.3 % of roster's samples and 6.0 % of QR72's, half of it `caml_hash` of the name and a sixth the polymorphic compare of `by_name`. A monomorphic `Hashtbl.Make (String)` for `by_name` drops the compare, and a `Reason.fact` that carries its variable (T4's side) would drop the lookup. Also an O(1) `level_mark t l` for `Phase.save_level`, which lists every mark per backtrack | `lib/core/store.ml`, `lib/core/reason.ml` | agent-review3 | open |
 | **An evicted learned instance is still asked at every wake** (D-0139's request, measured in D-0191): under `lbd:500` the dead gates' advisor is 18.4 % of qr48s2_f3's samples (2 834 dead instances against 500 live). Wanted: a removal from the watch lists when `Retention.reduce` detaches a gate, and an O(1) "does instance i watch v" for `Analysis.check_attribution` (0.8 % median, O(arity) over `vars_of`'s list) | `lib/core/engine.ml` | agent-review3 | open |
+| `scripts/README.md` section 9 still says the lane has "thirty-one corruptions"; since D-0195 it is 37 controls on the bridged path and 38 on the solver-written one (the list and what each asserts are in `scripts/e2e_lane.sh`'s header) | `scripts/README.md` | agent-e2e6 | open |
 
 ## Completed
 
@@ -639,8 +639,21 @@ section 1. Shares are inclusive, of the whole run.
 | M4-T6 (spike: in-proof tabulation) | agent-tab (`wave55-tab`) | 2026-11-20 | **D-0184 (SPIKE).** The GCS tabulation transfers to the order encoding: a `red` pair per tuple over the order literals, the at-least-one row by `rup` from D-0060's rows through per-pair lemmas, one `rup` per GAC removal (plus a KILL line per hole-killed support). About `5 |Dx| |Dy|` root lines. `bench/tabulation_spike/run_spike.sh`: 4 models verified, 6 mutations refused at their line. Not built (option A) |
 | M14-e2e-verification-T3 (the bridge written by the solver) | agent-e2e3 (`wave55-e2e3`) | 2026-11-20 | **D-0187 [AUTONOME].** `--e2e`, OFF by default: baguette's proof is checked against `cake_pb_cp`'s `.opb` directly, its head (`lib/proof/e2e.ml`) deriving each `.opb` row from cake's, from compile.ml's per-constraint origin and a replica of cake's rows (PROOF-FORMAT §3b, CakeML `14856fcf`). T2, T4 and set domains covered; T5's globals refused (TODO T3b). `make e2e` pass 1b 117 of 207 VERIFIED with no bridge, 0 FAIL, 22 of 22 solver controls. Challenge: prefix size and check time equal to the bridge's, the bridge stage removed. See the handoff note |
 | M7-T35 (member models fail the D-0026 agreement check under BAGUETTE_DEBUG) | agent-memberdbg (`wave55-memberdbg`) | 2026-11-20 | **D-0189 [AUTONOME].** The reasons were right: member's page-only threshold lemmas (`Term (1, Clause l)` + `Weaken` of every `~l_j`, a constant) were read by the reverse arm as variables used. `Store.reverse_owners` drops that exact pair (D-0091's shape), debug-only, so every artefact is byte-identical. `test_prop.ml` re-runs the seven member models under `BAGUETTE_DEBUG=1` (13 checks, 7 fail with the old arm). Gate on `386a0a7`: make check 4 456 ok, 207x4 artefacts equal, lane 324/324, debug 311/311, scaling ok. No lane instance (too heavy, D-0189 section 5) |
+| M14-e2e-verification-T6 (the far families in the e2e chain) | agent-e2e6 (`wave56-e2e6`) | 2026-11-21 | **D-0195 [AUTONOME].** regular, cumulative and int_abs IN the chain on both paths (bridge and `--e2e`): regular's flags left out of the `.scp` and defined as cake's by red pairs, each capacity row one `pol`, abs's guard defined as `x_ge_0` and its two-sign rows by `pbc`. int_times/int_div OUT (a case split per value and sign; the generic step only verifies pinned operands, measured). `make e2e` 188 -> 197 VERIFIED on both paths, 0 FAIL, controls 37/37 and 38/38, validation 196 AGREE 0 DIFFER. Challenge: 6 of 8 new instances VERIFIED. Gate green (see D-0195 section 6) |
 
 ## Handoff notes
+
+### 2026-11-21 (orchestrator, autonomous mode): gate 83 green; M14-T6 merged, gate 84 on it
+
+Gate 83 (`ece8872`, merge wave55-review4, D-0192, binary `418fa3c4`, against gate 82's `7b967430`): `make
+check` rc 0 (4 457 ok), 207 x 4 artefacts equal, lane 324/324, debug 311/311, scaling ok. agent-e2e6's
+cross-session request (scripts/README.md §9's control count) done in the merge commit.
+
+### 2026-11-21 (agent-e2e6, `wave56-e2e6`): M14-e2e-verification-T6, the far families, D-0195
+
+regular, cumulative and int_abs are in the end-to-end chain on both paths: the translator leaves regular's state flags out of the `.scp` (they are existential) and the prefix defines them as cake's flags; `make e2e` 188 -> 197 VERIFIED, controls 37 and 38, validation 196 AGREE.
+int_times and int_div stay out (D-0195 2.4 and its measurement); covering them is a case split per value of the case variable, or baguette writing cake's product encoding under `--e2e`, a task of its own.
+`--e2e`'s writer is the slow stage on regular (pentominoes 41 s against 0.08 s): index the transition candidates by state if regular instances matter; very wide domains (roster-sickness, fast-food) exhaust it through D-0187's per-value prefix, not through T6.
 
 ### 2026-11-21 (orchestrator, autonomous mode): gate 82 green; two review agents stalled and were relaunched; M16-T4 merged
 

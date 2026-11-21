@@ -11,7 +11,7 @@ model with `:: output_var` / `:: output_array([1..n])` added where it was missin
 of NAMES (the translator's variables, by FlatZinc name), in scpsem.py's format; `timeout`
 when Gecode did not finish.
 
-baguette's own predicates (T5, D-0180). A .fzn flattened against baguette's mznlib calls
+baguette's own predicates (T5, D-0180; T6's regular and cumulative, D-0195). A .fzn flattened against baguette's mznlib calls
 `baguette_global_cardinality`, `baguette_inverse`, `baguette_member(_bool)`, and the test
 models call `fzn_global_cardinality` directly; neither reference knows those names as
 FlatZinc builtins ("Registry: Constraint ... not found", measured). Such a model is turned
@@ -53,6 +53,22 @@ REFERENCE = {
     "baguette_member_bool":
         "predicate baguette_member_bool(array [int] of var bool: x, var bool: y,"
         " array [int] of var bool: b) = exists(b) /\\ forall (k in index_set(b)) (b[k] -> x[k] = y);",
+    # T6 (D-0195): std's cumulative; the DFA run made explicit as states a[0..n], with the state
+    # flags PINNED to it (mznlib's sentence: s[i*Q + q] is "after i letters the automaton is in
+    # q"), so that each word is one solution and the flags cannot hide a difference
+    "baguette_cumulative":
+        "predicate baguette_cumulative(array [int] of var int: s, array [int] of int: d,"
+        " array [int] of int: r, int: b) = cumulative(s, d, r, b);",
+    "baguette_regular":
+        "predicate baguette_regular(array [int] of var int: x, int: Q, int: smin,"
+        " array [int] of int: d, int: q0, array [int] of int: F, array [int] of var bool: s) ="
+        " let { int: n = length(x); int: w = length(d) div Q; array [0..n] of var 1..Q: a;"
+        " array [1..n] of var int: xx = array1d(x); array [1..length(d)] of int: dd = array1d(d);"
+        " array [1..length(s)] of var bool: ss = array1d(s); } in"
+        " a[0] = q0 /\\ exists (f in F) (a[n] = f)"
+        " /\\ forall (i in 1..n) (xx[i] >= smin /\\ xx[i] <= smin + w - 1"
+        " /\\ dd[(a[i - 1] - 1) * w + xx[i] - smin + 1] = a[i])"
+        " /\\ forall (i in 0..n, q in 1..Q) (ss[i * Q + q] <-> a[i] = q);",
 }
 NOT_BUILTIN = set(REFERENCE) | {"fzn_global_cardinality"}
 
