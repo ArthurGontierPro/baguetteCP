@@ -686,6 +686,15 @@ relaunched from their branches (agents are now told to check any wait after 30 m
 - D-0198: the minor heap raised to 4 M words (capped to fit the tests' ulimit -v), `OCAMLRUNPARAM=s=256k` restores it.
 - D-0194: GAC arithmetic not built.
 
+### 2026-11-21 (orchestrator): the hrc CHECK-ERRORs are veripb's memory under the harness's 16 GiB limit, not a proof
+
+`2017_hrc_exp1-1-5145` (and `2019_hrc_exp2-1-5145`) read CHECK-ERROR (veripb rc 134, a Rust abort) in the
+series of D-0175, D-0185 and D-0199, on old and new binaries alike. Re-checked by the orchestrator without
+`ulimit -v`, under MemoryMax=32G: `s VERIFIED BOUNDS 3 <= obj <= 3` in 918 s at 17.5 GB peak RSS
+(`/scratch/arthur/hrc-check/`). `compare_run.sh` applies MEM_KB (16 GiB) to the checker too, so a proof
+whose check needs more than 16 GiB reads CHECK-ERROR. Readers of those series: count these as
+checker-memory, not as refused proofs; a later series could give the checker its own, larger cap.
+
 ### 2026-11-21 (orchestrator, autonomous mode): gate 89 green
 
 Gate 89 (`c9f4bfe`, merge wave56-heapguard, D-0200, binary `34db2c68`, against gate 88's `7c475a45`): `make
