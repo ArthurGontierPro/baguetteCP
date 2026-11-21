@@ -64,6 +64,14 @@
 #                  inverse, member (2); each corrupted row is false in at least one of the
 #                  model's solutions (enumerated by scpsem.py, D-0188 section 6); and
 #                  copy-witness on the solver's own definition of a gcc copy (its `@Y1`).
+#                  T6 (D-0195) adds, on BOTH paths: opb-stronger (bridge) and pin-stronger
+#                  (solver) on regular (a layer's at-least-one), cumulative and disjunctive
+#                  (a capacity row) and int_abs (tools/e2e/models/abs_zero_sat: the sign
+#                  guard's row, false at x = 0; derived by contradiction, so refused inside
+#                  its `pbc`, reported as `@cK pbc`), and two wrong DEFINITIONS of the
+#                  Booleans the .scp has no counterpart for: flag-witness (a regular state
+#                  flag past layer 0 as the negation of cake's flag) and guard-witness (the
+#                  int_abs sign guard as ~x_ge_0), each refused at its red line.
 #   3. validation  the TRUSTED translator against MiniZinc's reference solvers (D-0174 sec. 6,
 #                  GCS #987): on every model of pass 1 that is not SKIPPED, the solution set
 #                  cake's semantics admit for the .scp (tools/e2e/scpsem.py, which reads only
@@ -172,8 +180,10 @@ element_sat:opb-stronger element_learn_prunes_sat:opb-stronger gcc_forced_sat:op
 gcc_const_counts_sat:opb-stronger maxmin_sat:opb-stronger inverse_sat:opb-stronger
 member_sat:opb-reif member_gap_sat:opb-reif gcc_repeat_free_sat:copy-witness
 opt_min_sat:opt-better opt_max_sat:opt-better opt_min_sat:opt-worse restart_queens6_opt:opt-worse
-opt_min_sat:core-better restart_queens6_opt:core-better opt_max_sat:core-worse bits_maxmin_opt_sat:core-worse"
-NCONTROLS=31
+opt_min_sat:core-better restart_queens6_opt:core-better opt_max_sat:core-worse bits_maxmin_opt_sat:core-worse
+regular_sat:opb-stronger cumulative_sat:opb-stronger disjunctive_sat:opb-stronger abs_zero_sat:opb-stronger
+regular_sat:flag-witness abs_zero_sat:guard-witness"
+NCONTROLS=37
 OPTW="The lower bound claimed for \`conclusion BOUNDS\` is larger than the best logged objective value."
 CORE="conclusion BOUNDS check failed:"
 for c in $CONTROLS; do echo "$c"; done | xargs -P "$J" -I{} bash -c \
@@ -191,10 +201,10 @@ while IFS= read -r l; do
     target=$(echo "$l" | sed -n 's/.*| target=\(.*\)$/\1/p')
     ok=0
     case "$k" in
-        opb-stronger | opb-reif) [ "$at" = "$target rup" ] && [ "$cause" = "$RUP" ] && ok=1 ;;
+        opb-stronger | opb-reif) { [ "$at" = "$target rup" ] || [ "$at" = "$target pbc" ]; } && [ "$cause" = "$RUP" ] && ok=1 ;;
         scp-weaker) [[ "$at" =~ ^@c[0-9]+\ rup$ ]] && [ "$cause" = "$RUP" ] && ok=1 ;;
         scp-stronger) [[ "$at" == "sol "* ]] && [[ "$cause" =~ ^"$SOL"\ [0-9]+\ in\ the\ database\.\ \(@S\[c\[$target\]\]\)$ ]] && ok=1 ;;
-        bridge-witness | copy-witness) [ "$at" = "$target red" ] && [ "$cause" = "$RED" ] && ok=1 ;;
+        bridge-witness | copy-witness | flag-witness | guard-witness) [ "$at" = "$target red" ] && [ "$cause" = "$RED" ] && ok=1 ;;
         opt-better)
             ub=${target#* }
             [ "$at" = "conclusion BOUNDS" ] && [ "$cause" = "Unable to verify 'conclusion BOUNDS'. The claimed upper bound of $ub mismatches the best recorded upper bound of $((ub + 1))." ] && ok=1 ;;
@@ -223,8 +233,10 @@ opt_max_sat:core-worse opt_min_sat:core-worse
 element_sat:pin-stronger element_learn_prunes_sat:pin-stronger gcc_forced_sat:pin-stronger
 gcc_const_counts_sat:pin-stronger maxmin_sat:pin-stronger maxmin_int_max_sat:pin-stronger
 inverse_sat:pin-stronger member_sat:pin-stronger member_gap_sat:pin-stronger
-gcc_repeat_free_sat:copy-witness"
-NSCONTROLS=32
+gcc_repeat_free_sat:copy-witness
+regular_sat:pin-stronger cumulative_sat:pin-stronger disjunctive_sat:pin-stronger abs_zero_sat:pin-stronger
+regular_sat:flag-witness abs_zero_sat:guard-witness"
+NSCONTROLS=38
 mkdir -p "$OUT/scontrols"
 for c in $SCONTROLS; do echo "$c"; done | E2E_SOLVER=1 xargs -P "$J" -I{} bash -c \
     'm=${0%%:*}; k=${0#*:}; f="$1/test/models/$m.fzn"; [ -f "$f" ] || f="$1/tools/e2e/models/$m.fzn"
@@ -241,10 +253,10 @@ while IFS= read -r l; do
     target=$(echo "$l" | sed -n 's/.*| target=\(.*\)$/\1/p')
     ok=0
     case "$k" in
-        pin-stronger) { [ "$at" = "$target ia" ] && [ "$cause" = "$IA" ]; } || { [ "$at" = "$target rup" ] && [ "$cause" = "$RUP" ]; } && ok=1 ;;
+        pin-stronger) { [ "$at" = "$target ia" ] && [ "$cause" = "$IA" ]; } || { { [ "$at" = "$target rup" ] || [ "$at" = "$target pbc" ]; } && [ "$cause" = "$RUP" ]; } && ok=1 ;;
         scp-weaker) { [[ "$at" =~ ^@c[0-9]+\ ia$ ]] && [ "$cause" = "$IA" ]; } || { [[ "$at" =~ ^@c[0-9]+\ rup$ ]] && [ "$cause" = "$RUP" ]; } && ok=1 ;;
         scp-stronger) [[ "$at" == "sol "* ]] && [[ "$cause" =~ ^"$SOL"\ [0-9]+\ in\ the\ database\.\ \(@S\[c\[$target\]\]\)$ ]] && ok=1 ;;
-        bridge-witness | sel-witness | copy-witness) [ "$at" = "$target red" ] && [ "$cause" = "$RED" ] && ok=1 ;;
+        bridge-witness | sel-witness | copy-witness | flag-witness | guard-witness) [ "$at" = "$target red" ] && [ "$cause" = "$RED" ] && ok=1 ;;
         opt-better)
             ub=${target#* }
             [ "$at" = "conclusion BOUNDS" ] && [ "$cause" = "Unable to verify 'conclusion BOUNDS'. The claimed upper bound of $ub mismatches the best recorded upper bound of $((ub + 1))." ] && ok=1 ;;
