@@ -19,6 +19,7 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
+| M10-search-strategy-T5 (codes set under -f and tiered) | docs/DECISIONS.md (D-0202), docs/ROADMAP.md (T5 row), WORKLOG.md, tools/ only | agent-m10t5b | 2026-11-22 |
 
 ## Cross-session requests
 
