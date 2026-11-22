@@ -19,7 +19,6 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M10-search-strategy-T5, M9-no-proof-T3, M7-T30 (one Challenge series on current main: default, `-f`, default `--no-proof`) | run dirs `/scratch/arthur/m10t5/`, `tools/compare/` (additions), `bench/challenge/README.md` (the run's row); reserved record D-0185 | agent-m10t5 (`wave55-m10t5`) | 2026-11-20 |
 
 ## Cross-session requests
 
@@ -559,6 +558,7 @@ section 1. Shares are inclusive, of the whole run.
 | M1-T66 | agent-bridge | 2026-09-18 | **Row NOT closed — the prize is out of reach in M1, and here is the proof.** The bridge's absence is now observable at the **derivation** rather than by grepping proof text: `Search.bridges` files a `Search.bridge` per settle (decision, literal assumed, bound settled onto, holes crossed, and which line states each hole at which level) and one `Trace.record_citation` per named hole, so a **decision** settle enters the I-S4 audit it was entirely outside of before (`Trace.emit` skips level-start entries, so a decision push writes no line and recorded no citation). Two scenes in `test_matrix.ml` read those records. Measured with `bridges` made a no-op: `bridge_derivation` reddens **at the derivation**, with a message saying the settle step is missing — while **veripb still accepts the proof**. That is route 1 answered in the negative and answered *analytically*: the settle is re-derivable from the page by two routes, the hole's own trace line (M1-T56) and, under it, `int_lin_ne`'s big-M `.opb` rows (I-X10) which no `w` can retire. `br_unnamed` is empty in both scenes, i.e. the page always names the hole. **No proof bytes change.** +15 unit checks (1723 -> 1738), 34/34, peak RSS 36 MB. Commits `7ae1843`, `6d08c4b` on `wave11-bridge` |
 | M2-L1 | agent-learned | 2026-09-18 | `Learned.t` (PB inequality over `Lit.t`, clause = degree-1 case), its runtime instance as a **`Linear` instance** registered through the new `Engine.add`, and its proof-side introduction/deletion through the new `Writer.with_level`. D-0044's central claim **converted**: measured green on all 27 scenes. D-0045's prediction **measured before fixing**, in both formats. 1766 unit checks, 34/34, determinism clean. |
 | M7-T11 | agent-holes | 2026-09-23 | Set domains accepted: one order-ladder row per hole in the `.opb` (the MIRROR of the rung, D-0072), hull in the store, one `Ne` instance per hole. `reject_set_domain` removed, not weakened |
+| M10-search-strategy-T5, M9-no-proof-T3, M7-T30 (the sixteen editions in three arms: default, `-f`, `--no-proof`) | agent-m10t5 (`wave55-m10t5`) | 2026-11-22 | **D-0185.** Release binary `7c880bce` (`10b3507`, order default, before D-0201). Verified OPT+UNSAT+SAT: A 323, B (`-f`) 362, C unverified 380; 0 REJECTED, 21 CHECK-ERROR are veripb against the 16 GiB `ulimit -v`. Fixed-category score sum A 2 789, C (no proof, trusted) 3 237; B 15 of 16 editions above A if scored in fixed. Default stays fixed ([AUTONOME], proposal only). Tables in `/cluster/arthur/baguette-results/m10t5/` |
 
 | M2-L3 | agent-learn3 | 2026-09-18 | 1UIP clause learning over order literals, proof-only (**D-0044 fork (ii)**), with conflict-directed backjumping over the **decision closure** and its `rup` derivation at level 0. **I-S4's cross-level debt is discharged** and the check is wider than the invariant's wording. Backjump measured: 31 -> 9 nodes on `backjump_unsat.fzn`. **M1-T66 stays OPEN**: with `Search.bridges` disabled, 35/35 models still pass and no checker rejects — a learned clause citing across levels did NOT make the bridge load-bearing. 1833 unit checks, 267 matrix, 44 mutation, 35/35 models, determinism 35/35 byte-identical |
 | M2-T14 | agent-fmt2 | 2026-09-18 | Format-2.0 vacuity sweep. Three more instances of the M2-L0 defect found and fixed (test_proof 3.0-only lanes resolving 2.2.2 via `$VERIPB`; D-0030's certification in test_mutation writing a 3.0 proof against an env-format `.opb`; 20 blanked-trace controls asserting on exit status alone). Test (c) now checks the claim index by content, so it runs under both formats. |
@@ -663,7 +663,13 @@ zephyrus, gfd-n120 verified at `--bits-above 64`); M7-T35 (member's debug-check 
 and M4-T6b (GAC arithmetic: not built, no node gain); M13-T1 (root LP: not built); M15 T1-T3; a crash
 hotfix (D-0197); a second hotfix (D-0200: the heap guard read a heap size updated only at major-cycle ends, so runs died on `allocation failure during minor GC` instead of the clean refusal; now estimated live, every 0.1 s, under `--max-heap-mb` only); M6-T2 (D-0198: no Bigarray move, the trail and domains are under 1 % of cycles; a larger minor heap and an index sort in Justify instead, -7 % instructions without proof and -12 % with, byte-identical).
 
-**Running**: M10-T5/M9-T3/M7-T30 (default, `-f`, `--no-proof`, D-0185), a Challenge series; the default is now `--bits-above 0` (D-0201, merged, gate 90 green):
+**M10-T5/M9-T3/M7-T30 finished and merged (D-0185)**, three arms of release `7c880bce` (order default, before D-0201) on the sixteen
+editions: A default with proof 251 OPT+UNSAT / 72 SAT verified, B `-f` 265 / 97, C `--no-proof` 296 / 84 unverified. No proof rejected;
+the 21 CHECK-ERROR are veripb out of the harness's 16 GiB. Without proof: 0.64 of the time, RSS 0.96, 113 attempts gained, score 2 789
+-> 3 237. `-f` scores higher in 15 of 16 editions but loses on 336 instances (routing, zephyrus) and hits the heap budget 64 more times,
+so the default stays fixed and the proposal is D-0185 §5. Tools and docs only, no solver gate needed.
+
+**Running**: nothing. The default is now `--bits-above 0` (D-0201, merged, gate 90 green):
 stdout equal on all 207 models, 113 new proofs all verified, lane re-recorded (and an `order` configuration
 keeps the order encoding in the lane); `--bits-above none` gives gate 89's artefacts back exactly.
 
@@ -673,7 +679,7 @@ encoding cannot go yet. The targeted W = 64 / 100 check (D-0199) found no W that
 
 **Added in autonomous mode** (3 of 3): M4-T6b, M14-T3b, M7-T35, all done.
 
-**Open for you**: (1) D-0197 §6: PB analysis of a 32 M-term ladder row costs 20 GB and delays the time-limit
+**Open for you**: (0) D-0185 §5, switch the default to `-f` or not; (1) D-0197 §6: PB analysis of a 32 M-term ladder row costs 20 GB and delays the time-limit
 stop (cap by row length or not); (2) whether `--e2e` ever becomes a default (D-0187); (3) the VeriPB
 `strengthening_to_core` bug report (`bench/symmetry/stc_bug/REPORT.md`); (4) seven `train_instance` runs
 wrote 90 GB `.opb` each during M16-T5's sweep (deleted); (5) two review agents stalled ~14 h and were
@@ -681,6 +687,7 @@ relaunched from their branches (agents are now told to check any wait after 30 m
 
 **[AUTONOME] decisions**, most consequential first:
 - D-0199 / D-0201: the default becomes `--bits-above 0` (all eligible variables bits-encoded); revert by `git revert` of D-0201's commits or `--bits-above none`.
+- D-0185: the default search stays fixed although `-f` scores higher in 15 of 16 editions (proposal in D-0185 §5, no code changed).
 - D-0187: `--e2e`, baguette writes the end-to-end prefix itself under cake's naming as a second contract
   (PROOF-FORMAT §3b), off by default.
 - D-0196: the bits arm in the e2e prefix through a ripple-carry adder over cake's bits.
@@ -927,6 +934,12 @@ Objectives are in the e2e chain (`make e2e` 188 of 207, 8 OPT, 31 controls). On 
 100 instances are certified by `cake_pb_cp`, 4 exhaust its 24 GB heap, none refused; the cost is the prefix, not
 the search, so T3/T7 are the lever. The series' 66 largest instances still run detached: `kill $(cat
 /scratch/arthur/wave55-e2e8-runs/series3/series.pid)` plus `series3/runs/*.pid` and their `pgrep -P` children to stop it, never by name.
+
+### 2026-11-22 (agent-m10t5, `wave55-m10t5`): M10-search-strategy-T5, M9-no-proof-T3, M7-T30, D-0185
+
+Three arms of one release binary (`7c880bce`, `10b3507`) over the 1 600 instances. Without proof the wall time on complete answers is 0.64 of A, RSS 0.96, 113 attempts gained, ranks up in 5 editions: the proof costs time and the file cap, not memory.
+`-f` gains 39 verified answers and scores higher in 15 of 16 editions but loses 336 instances and hits the heap budget 64 more times. The default stays fixed and the proposal is in D-0185 §5. The codes set under `-f` is not run.
+The binary predates D-0197, D-0200 and D-0201, so compare a later series with arm A only through a same-binary pair. `tools/compare/arms_compare.py` reads N arms. `compare_run.sh` would need its own checker memory limit to stop the CHECK-ERROR rows.
 
 ### 2026-11-20 (agent-sym3, `wave55-sym3`): M15-symmetry-T3, D-0181
 
