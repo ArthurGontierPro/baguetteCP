@@ -26193,3 +26193,69 @@ option, change the default in `bin/main.ml` in its own commit and re-record the 
   same-binary pair, never directly.
 - The 21 CHECK-ERROR rows would be VERIFIED under a larger checker limit. `compare_run.sh` could
   give the checker its own `CHECK_MEM_KB`.
+
+## D-0202  M10-search-strategy-T5: the codes set under `-f` and under `BAGUETTE_RETENTION=tiered`. `-f` solves o7k2 def (27 s against a timeout) and costs 2x on QR; `tiered` is a wash; the two together lose QR72. No default changes, proposal only
+
+**Context.** D-0185 measured the sixteen editions and left the codes set (D-0137 section 10.1: qr48,
+qr72, o7k2, each `def` and `u1`) under `-f` and `tiered` (D-0139). No decision is taken here beyond
+the proposal below, so no `[AUTONOME]` default change.
+
+**Binary.** Release build of main `8aaf8bf`, md5 `f244c35ac8a1960cd82fd6f39357891d` (`make release`,
+fresh clone under `/scratch/arthur/m10t5b/src`). Flattenings are D-0137's
+(`wave45-strategy-runs/codes/H_*_bag_{def,u1}.fzn`). Arms: default (`--bits-above 0`, D-0201), `-f`,
+default + `BAGUETTE_RETENTION=tiered`, `-f` + `tiered`, and `--bits-above none` (the D-0137 encoding).
+Each with `--no-proof` and with `--proof`, `--time-limit 600 --stats`, 30 runs at a time on a node at
+load 15 to 30 (times good to about 10 %), each solver under `MemoryMax=32G`, veripb 3.0.2 under
+`MemoryMax=64G` and 7200 s. 60 runs. Harness, raw `.res`/`.err` and tables:
+`/cluster/arthur/baguette-results/m10t5b/` (`job.sh`, `tab.py`). Proofs were deleted after
+checking; together they were 30.1 GB (largest 4.5 GB), `/scratch` at 11 % before.
+
+**Without proof** (`--no-proof`)
+
+| arm | qr48_def | qr48_u1 | qr72_def | qr72_u1 | o7k2_def | o7k2_u1 |
+|---|---|---|---|---|---|---|
+| default | UNSAT 10s 23367n | UNSAT 6s 23429n | UNSAT 117s 100685n | UNSAT 59s 101435n | TO 601s 151440n | UNSAT 2s 172n |
+| f | UNSAT 21s 50325n 88r | UNSAT 21s 51131n 90r | UNSAT 222s 209557n 254r | UNSAT 209s 209991n 254r | UNSAT 27s 14869n 30r | UNSAT 2s 157n 0r |
+| tiered | UNSAT 9s 23367n | UNSAT 6s 23429n | UNSAT 70s 100691n | UNSAT 52s 101435n | TO 601s 234366n | UNSAT 2s 172n |
+| ftiered | UNSAT 44s 82671n 126r | UNSAT 43s 82617n 126r | TO 600s 511288n 566r | TO 600s 520961n 573r | UNSAT 26s 15219n 30r | UNSAT 2s 157n 0r |
+| bitsnone | UNSAT 10s 23367n | UNSAT 6s 23429n | UNSAT 115s 100685n | UNSAT 58s 101435n | TO 601s 103583n | UNSAT 2s 172n |
+**With proof** (+ `.pbp` size, veripb verdict V = `s VERIFIED`, check time)
+
+| arm | qr48_def | qr48_u1 | qr72_def | qr72_u1 | o7k2_def | o7k2_u1 |
+|---|---|---|---|---|---|---|
+| default | UNSAT 13s 23367n 143MB V 7s | UNSAT 9s 23429n 144MB V 7s | UNSAT 156s 100685n 1084MB V 56s | UNSAT 89s 101435n 1091MB V 55s | TO 601s 125514n 2035MB V 184s | UNSAT 2s 172n 2MB V 0s |
+| f | UNSAT 31s 50325n 88r 302MB V 16s | UNSAT 30s 51131n 90r 305MB V 16s | UNSAT 271s 209557n 254r 2000MB V 111s | UNSAT 265s 209991n 254r 2013MB V 109s | UNSAT 37s 14869n 30r 229MB V 13s | UNSAT 2s 157n 0r 2MB V 0s |
+| tiered | UNSAT 12s 23367n 143MB V 7s | UNSAT 10s 23429n 144MB V 7s | UNSAT 103s 100691n 1084MB V 56s | UNSAT 81s 101435n 1091MB V 57s | TO 601s 197024n 3164MB V 270s | UNSAT 2s 172n 2MB V 0s |
+| ftiered | UNSAT 56s 82671n 126r 488MB V 25s | UNSAT 57s 82617n 126r 478MB V 26s | TO 600s 431477n 509r 4380MB V 228s | TO 600s 451780n 510r 4500MB V 237s | UNSAT 36s 15219n 30r 225MB V 13s | UNSAT 2s 157n 0r 2MB V 0s |
+| bitsnone | UNSAT 13s 23367n 143MB V 7s | UNSAT 10s 23429n 144MB V 7s | UNSAT 138s 100685n 1084MB V 55s | UNSAT 86s 101435n 1091MB V 60s | TO 601s 91468n 2587MB V 203s | UNSAT 2s 172n 1MB V 0s |
+
+**Reading.**
+
+1. **No proof was rejected, none hit a checker memory failure or a timeout**: all 30 proofs are
+   `s VERIFIED` (partial proofs of stopped runs included), the largest check 270 s.
+2. **`-f` against default.** QR48 2.1x the time (23 367 to 50 325 nodes), QR72 def 1.9x (222 s
+   against 117 s) and QR72 u1 3.5x (209 s against 59 s), the nodes doubling.
+   o7k2 def, a timeout for default in 600 s (151 440 nodes), is refuted in 27 s (14 869 nodes, 30
+   restarts); with proof 37 s, 229 MB. o7k2 u1 is the annotation and unchanged (2 s, 0 restarts). This is
+   D-0137's finding on the new default encoding, and the Challenge's: the free search wins where
+   the fixed search is wrong and loses 2x where it is right.
+3. **`tiered` alone is a wash.** Node counts equal default (QR48 identical, QR72 within 6 of 100 685).
+   QR72 def is faster (70 s against 117 s, 103 s against 156 s with proof), QR72 u1 12 % faster, QR48
+   equal. o7k2 def still times out (more nodes per second, 234 k against 151 k). Proofs are the same
+   size where nothing is evicted. It does not change an answer.
+4. **`-f` + `tiered` is worse than `-f`.** QR48 doubles again (44 s against 21 s, 82 k nodes
+   against 50 k, 126 restarts against 88) and QR72 times out in both (511 k nodes, 566 restarts),
+   where `-f` alone finishes in 210 to 270 s. o7k2 def is the same as `-f` (26 s). The restarts
+   re-enter the nodes `tiered` has evicted lemmas for. D-0139's finding that `tiered` costs
+   more conflicts (+116 % on `opd`) shows here once a restart repeats work.
+5. **`--bits-above none` against default** (D-0201's pair, this binary): node counts equal on all
+   five instances that finish, times 1 to 4 % apart (QR72 def 115 s against 117 s), so the
+   codes set is insensitive to the encoding. o7k2 def times out on both (104 k and 151 k nodes).
+   Against D-0137's `base` rows (QR48 23 367 nodes, QR72 100 685 and 101 435, o7k2 u1 158)
+   the node counts are identical; times are 2.5x to 4x lower (release build, D-0171, and a less
+   loaded node), o7k2 u1 172 nodes against 158 (the D-0201 default, and 157 under `-f`).
+
+**Proposal (not applied).** Keep the fixed search as default (D-0154, D-0185 section 5) and keep
+`keep_all`. The codes set confirms D-0185: `-f` is the free-category setting, 2x on the instances
+the fixed search already solves, and the only arm that refutes o7k2 def. `tiered` gains nothing here
+and breaks `-f`, so it stays off, and `-f` should not be combined with it. Nothing to revert.

@@ -19,7 +19,7 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M10-search-strategy-T5 (codes set under -f and tiered) | docs/DECISIONS.md (D-0202), docs/ROADMAP.md (T5 row), WORKLOG.md, tools/ only | agent-m10t5b | 2026-11-22 |
+| M10-search-strategy-T5: codes set under `-f` and `tiered` | agent-m10t5b (`wave57-m10t5b`) | 2026-11-22 | **D-0202.** Release `f244c35a`, 60 runs, 30 proofs VERIFIED, none rejected. `-f` solves o7k2 def, 2x slower on QR; `tiered` a wash; both together lose QR72. Proposal only, no default change. |
 
 ## Cross-session requests
 
@@ -647,6 +647,11 @@ section 1. Shares are inclusive, of the whole run.
 | hotfix: the heap guard is overshot (`Fatal error: allocation failure during minor GC` or `Out of memory` instead of the M7-T8 refusal) | agent-heapguard (`wave56-heapguard`) | 2026-11-21 | **D-0200 [AUTONOME].** The budget was read only at a major cycle's end, and on a growing heap a cycle outlasts the climb to the address-space limit (1HZ5: 6.6 GB at one cycle end, abort at 14.5 GB before the next). Now also a SIGVTALRM poll every 0.1 s of CPU, under `--max-heap-mb` only, against the last snapshot plus the major words allocated since, confirmed by one forced `Gc.major`; `Out_of_memory` at the top level exits 5. The four instances: 16 of 16 runs (proof and not, default and `s=256k` minor heap) exit 5 at 8 196 to 8 703 MB under an 8 192 MB budget, RSS at most 9.1 GB. No timer without the flag; with it, instructions 0.01 to 0.39 % below main. Two lanes (test_proof, test_endtoend). Not merged; the orchestrator merges |
 
 ## Handoff notes
+
+### 2026-11-22 (agent-m10t5b, `wave57-m10t5b`): codes set under `-f` and `tiered`, D-0202
+
+Measurement only, no lib/ or bin/ change. Results and harness in `/cluster/arthur/baguette-results/m10t5b/` (proofs deleted after checking, 30.1 GB written, largest 4.5 GB).
+M10-T5 is DONE except the user's decision on D-0185 section 5; `tiered` stays off and should not be combined with `-f`.
 
 ### 2026-11-21 (agent-bitsdefault, `wave56-bitsdefault`): D-0199 applied, D-0201
 
