@@ -26,6 +26,7 @@ persistent; read those copies if `/scratch` is gone.
 |---|---|---|
 | M7-T26, 2026-10-30/31 | All sixteen editions, 1 200 s, 16 GiB, PAR 30; baguette and Chuffed, GCS on 2025 and 2026 only; fixed category only | tables `/scratch/arthur/m7t26/<YEAR>/{results,flatten}.tsv`; corpus `/scratch/arthur/mznc/<YEAR>/`; archive `/scratch/arthur/mznc-archive/` (also `~/mznc-archive` on the laptop); records D-0105 (2026) to D-0120 (2011), synthesis D-0121 |
 | wave43, 2026-11-13 | The editions again after M7-T27 | `/scratch/arthur/wave43run/`, D-0133 |
+| M10-T5 / M9-T3 / M7-T30, 2026-11-20/22 | All sixteen editions in three arms of one release binary (`7c880bce`, main `10b3507`, order default, before D-0201): A default with proof (fixed category), B `-f` with proof (free category), C default `--no-proof` (unverified); D-0133's settings, flattened once with `10b3507`'s mznlib | runs `/scratch/arthur/m10t5/{A,B,C}/<YEAR>/`; tables, per-instance pairs and drivers `/cluster/arthur/baguette-results/m10t5/`; record D-0185 |
 | Later rows | Per-feature Challenge runs (`regular`, `inverse`, `member`, alldiff conflicts) | each record's own section names its run directory |
 
 Re-read an edition without re-running it:
@@ -38,7 +39,8 @@ python3 -I tools/compare/challenge_rank.py <archive>/results/<YEAR>.json bench/c
 M7-T26's headline, stale since the November work: baguette-fd last in 13 editions and next to last
 in 3; 169 complete answers, all VERIFIED; 543 refusals (388 width wall, 145 heap budget, 9 gcc with
 a repeated variable, 1 unbounded `var int`). The M8, M9, M10 and M11 milestones changed most of
-those numbers, and the Challenge-wide re-measurement (M8-T4, M9-T3, M10-T5) is still to be run.
+those numbers. D-0185 (M9-T3, M10-T5) re-measured all sixteen on `10b3507`: 323 verified complete answers,
+0 REJECTED, no width-wall refusal left, 311 heap-budget refusals, fixed-category score sum 2 789.
 
 ## 3. Rules for a new series
 
@@ -47,7 +49,7 @@ those numbers, and the Challenge-wide re-measurement (M8-T4, M9-T3, M10-T5) is s
   whose proof is not VERIFIED is demoted by `challenge_rank.py`.
 - Ask the user before a new series whether to run Chuffed again. M7-T26 reran it as a scale factor
   against the official `chuffed-fd` results, and the user asked why; the question was left open.
-- The free category (`-f`, D-0154) has not been run yet. It is M10-T5's measurement.
+- The free category (`-f`, D-0154) was first run in D-0185 (arm B), on a binary before D-0201's default.
 - Run a series on the release binary (`make release`, `BAGUETTE=<checkout>/_build_release/default/bin/main.exe`;
   `scripts/README.md` §8). It writes the same bytes as dev at ~17 % fewer instructions per node
   (D-0171). The harnesses' default is still the dev binary, so set the variable.
