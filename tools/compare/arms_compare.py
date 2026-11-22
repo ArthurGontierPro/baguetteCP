@@ -127,13 +127,17 @@ def counts(rows):
         c["incumbent"] += has_value(r)
         c["incumbent_not_opt"] += has_value(r) and s != "OPT"
         c["rejected"] += r["verdict"] == "REJECTED" or s == "REJECTED"
+        # CHECK-ERROR is not a refused proof: on these runs it is veripb dying against the
+        # harness's MEM_KB (`ulimit -v` covers the checker too), rc 134. Kept apart from REJECTED.
+        c["check_error"] += r["verdict"] == "CHECK-ERROR"
+        c["timeout_check"] += r["verdict"] == "TIMEOUT-CHECK"
         c[s] += 1
     return c
 
 
 COLS = ["opt_unsat", "opt_unsat_verified", "sat_solved", "sat_solved_verified", "incumbent",
         "incumbent_not_opt", "TIMEOUT", "CAPPED", "REFUSED", "ERROR", "UNKNOWN", "FLATTEN-FAIL",
-        "rejected"]
+        "rejected", "check_error", "timeout_check"]
 
 
 def verdict(x, y):
@@ -258,7 +262,7 @@ def main(argv):
         i += 1
     fam = families(repo)
     data = {}
-    print("== per edition: opt+unsat (verified) / sat-solved (verified) / incumbents / TIMEOUT / CAPPED / REFUSED / ERROR / FLATTEN-FAIL / rejected")
+    print("== per edition: opt+unsat (verified) / sat-solved (verified) / incumbents / TIMEOUT / CAPPED / REFUSED / ERROR / FLATTEN-FAIL / rejected / check-error / timeout-check")
     tot = {n: Counter() for n, _ in arms}
     allrows = {n: {} for n, _ in arms}
     done = {}
@@ -272,10 +276,10 @@ def main(argv):
             tot[n].update(c)
             st = done[n][y]
             tag = "" if st else (" (absent)" if st is None else " (PARTIAL %d)" % len(rows))
-            cells.append("%s%s %d (%d) / %d (%d) / %d / %d / %d / %d / %d / %d / %d" % (
+            cells.append("%s%s %d (%d) / %d (%d) / %d / %d / %d / %d / %d / %d / %d / %d / %d" % (
                 n, tag, c["opt_unsat"], c["opt_unsat_verified"], c["sat_solved"],
                 c["sat_solved_verified"], c["incumbent"], c["TIMEOUT"], c["CAPPED"], c["REFUSED"],
-                c["ERROR"], c["FLATTEN-FAIL"], c["rejected"]))
+                c["ERROR"], c["FLATTEN-FAIL"], c["rejected"], c["check_error"], c["timeout_check"]))
         print(y, " | ".join(cells))
     for n, _ in arms:
         print("TOTAL", n, " ".join("%s=%d" % (k, tot[n][k]) for k in COLS + ["rows"]))

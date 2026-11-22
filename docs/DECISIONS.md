@@ -22477,3 +22477,204 @@ MILP solvers' advantage on the codes' SAT questions is their primal heuristics a
 (D-0169 measured the node rate). If the Challenge side is wanted later, C should be studied before
 B, because the plain relaxation of order-encoded rows is weak exactly where HiGHS's cuts close the
 gap.
+
+## D-0185  [AUTONOME] M10-search-strategy-T5 / M9-no-proof-T3 / M7-T30: the sixteen editions in three arms of one binary (fixed with proof, `-f` with proof, fixed with `--no-proof`). `-f` scores higher in 15 of 16 editions and the default stays fixed, as a proposal for the user. Without proof, 0.64 of the time and 113 attempts gained
+
+**Status**: **MEASUREMENT**, with one **[AUTONOME] decision** (the default stays the fixed search,
+D-0154 is not reopened by a change, only by the proposal at the end). Recorded 2026-11-22
+(agent-m10t5, branch `wave55-m10t5`). Run on `fataepyc-06` from 2026-11-20 14:50 to 2026-11-22
+01:07 UTC. Binary **`7c880bce87387d04564fd16e9e4e259b`**, the RELEASE build (`make release`,
+D-0171) of main `10b3507`, copied to `/scratch/arthur/m10t5/bin/main.exe` before the run. It
+predates D-0197, D-0200 and D-0201 (the default `--bits-above 0`), so every arm here runs the
+ORDER encoding by default. The comparisons between arms are within one binary and stay valid. The
+absolute counts are those of `10b3507`, not of today's main.
+
+**Settings**, those of D-0133: 1 200 s solve, 1 200 s flatten, 3 600 s check, `MEM_KB=16777216`
+(16 GiB `ulimit -v`, which covers veripb too), 16 GB proof file cap, `--max-heap-mb 8192`, every
+run in its own `systemd-run --user --scope -p MemoryMax=32G` with `--stats` and a peak-RSS
+recorder (`rss_wrap.py`, copied from agent-m8t4). PAR 12 per arm, 36 in all beside agent-m8t4's 40.
+The load valve (lower to 8 per arm above a load of 120) never fired, and the load stayed between 57
+and 85. The three arms ran the same edition at the same time, 2026 down to 2011, on the same
+flattened files. They were flattened once, with this clone's `mznlib` and hard-linked into each
+arm. agent-m8t4's `.fzn` were NOT reused because `mznlib` gained `fzn_member_{int,bool}.mzn` after
+its `ec53df4`, and 195 of the 1 574 files both passes flattened differ beyond comment lines.
+
+| arm | flags | proof |
+|---|---|---|
+| A | default (the model's annotation, no restarts) | `--proof`, veripb on every finished run |
+| B | `-f` (`--search alternate --restarts luby`, D-0154) | `--proof`, veripb on every finished run |
+| C | default | `--no-proof`. Its complete answers are **UNVERIFIED** and are never counted as verified below |
+
+Run directories `/scratch/arthur/m10t5/{A,B,C}/<YEAR>/`. Drivers, wrappers and every table (not
+the proofs) are copied to `/cluster/arthur/baguette-results/m10t5/`. Read again with
+`tools/compare/arms_compare.py . A=... B=... C=... --trust C --pair A B --pair A C` and
+`tools/compare/challenge_rank.py` (the script `read_all.sh` in that directory runs all of it).
+
+### 1. Per edition and in total
+
+Cells are `OPT+UNSAT (verified) / SAT on a satisfaction model (verified) / incumbents / TIMEOUT /
+CAPPED / REFUSED / ERROR`. An incumbent is a row whose objective VALUE is present (D-0125's
+addendum). FLATTEN-FAIL is the same in the three arms (26 in all: 2015 2, 2016 5, 2018 3, 2021 5,
+2022 2, 2023 1, 2024 5, 2025 3).
+
+| edition | A | B (`-f`) | C (`--no-proof`, unverified) |
+|---|---|---|---|
+| 2026 | 16 (15) / 5 (5) / 52 / 39 / 13 / 27 / 0 | 18 (16) / 5 (5) / 59 / 40 / 11 / 26 / 0 | 16 / 5 / 54 / 49 / 0 / 29 / 1 |
+| 2025 | 14 (13) / 0 / 47 / 39 / 15 / 29 / 0 | 17 (15) / 0 / 52 / 34 / 13 / 33 / 0 | 14 / 0 / 51 / 46 / 0 / 36 / 1 |
+| 2024 | 12 (12) / 0 / 64 / 59 / 6 / 18 / 0 | 18 (17) / 0 / 68 / 50 / 6 / 20 / 1 | 14 / 0 / 72 / 54 / 0 / 26 / 1 |
+| 2023 | 22 (18) / 2 (2) / 64 / 44 / 8 / 23 / 0 | 21 (18) / 2 (2) / 69 / 48 / 7 / 21 / 0 | 23 / 2 / 68 / 45 / 0 / 28 / 1 |
+| 2022 | 10 (9) / 1 (0) / 57 / 50 / 18 / 19 / 0 | 9 (9) / 0 / 59 / 53 / 16 / 20 / 0 | 11 / 1 / 59 / 63 / 0 / 22 / 1 |
+| 2021 | 9 (6) / 6 (6) / 43 / 38 / 21 / 21 / 0 | 9 (6) / 6 (5) / 46 / 37 / 18 / 25 / 0 | 11 / 6 / 51 / 47 / 0 / 31 / 0 |
+| 2020 | 17 (15) / 5 (4) / 36 / 48 / 12 / 17 / 1 | 17 (16) / 7 (5) / 47 / 47 / 12 / 17 / 0 | 18 / 6 / 42 / 48 / 0 / 25 / 3 |
+| 2019 | 22 (19) / 5 (5) / 67 / 44 / 7 / 22 / 0 | 18 (18) / 6 (6) / 71 / 49 / 5 / 22 / 0 | 24 / 5 / 67 / 51 / 0 / 19 / 1 |
+| 2018 | 7 (6) / 3 (3) / 49 / 48 / 20 / 19 / 0 | 8 (6) / 8 (8) / 55 / 42 / 18 / 21 / 0 | 7 / 3 / 60 / 60 / 0 / 27 / 0 |
+| 2017 | 5 (3) / 0 / 70 / 41 / 17 / 36 / 1 | 10 (7) / 0 / 72 / 35 / 17 / 37 / 1 | 6 / 0 / 72 / 45 / 0 / 46 / 3 |
+| 2016 | 34 (33) / 5 (4) / 76 / 39 / 8 / 8 / 1 | 34 (32) / 8 (8) / 76 / 35 / 7 / 10 / 1 | 35 / 6 / 80 / 40 / 0 / 12 / 2 |
+| 2015 | 17 (17) / 1 (1) / 63 / 52 / 8 / 19 / 1 | 18 (18) / 2 (2) / 67 / 48 / 8 / 22 / 0 | 17 / 1 / 69 / 56 / 0 / 22 / 2 |
+| 2014 | 15 (13) / 10 (10) / 57 / 51 / 14 / 10 / 0 | 14 (12) / 17 (17) / 57 / 40 / 13 / 16 / 0 | 17 / 10 / 65 / 51 / 0 / 22 / 0 |
+| 2013 | 18 (15) / 11 (10) / 63 / 42 / 8 / 21 / 0 | 20 (18) / 13 (11) / 66 / 44 / 6 / 17 / 0 | 20 / 12 / 67 / 48 / 0 / 20 / 0 |
+| 2012 | 32 (30) / 9 (7) / 63 / 35 / 13 / 11 / 0 | 28 (28) / 10 (10) / 65 / 32 / 12 / 18 / 0 | 32 / 9 / 72 / 40 / 0 / 19 / 0 |
+| 2011 | 28 (27) / 17 (15) / 62 / 31 / 10 / 14 / 0 | 30 (29) / 21 (18) / 63 / 34 / 4 / 11 / 0 | 31 / 18 / 64 / 37 / 0 / 14 / 0 |
+| **total** | **278 (251) / 80 (72) / 933 / 700 / 198 / 314 / 4** | **289 (265) / 105 (97) / 992 / 668 / 173 / 336 / 3** | **296 / 84 / 1 013 / 780 / 0 / 398 / 16** |
+
+**Verification.** **0 REJECTED** in A and B. The complete answers that are not VERIFIED (35 in A,
+32 in B) are TIMEOUT-CHECK (24 in A, 22 in B, veripb past 3 600 s) and **CHECK-ERROR** (11 in A, 10
+in B). A CHECK-ERROR here is NOT a refused proof. It is veripb exiting rc 134 (`memory allocation
+of N bytes failed`) against the harness's 16 GiB `ulimit -v`, which `compare_run.sh` applies to
+the checker as well as to the solver. The orchestrator re-checked one of them without that limit
+(the `none`-arm proof of `2017_hrc_exp1-1-5145`, D-0199's series), and it is `s VERIFIED BOUNDS 3
+<= obj <= 3` in 918 s at 17.5 GB peak (WORKLOG note, main `661cce5`). `challenge_rank.py` demotes
+these answers all the same (27 OPT in A, 24 in B), so the scores below do not count them.
+
+For scale against D-0133 (dev binary `a6327dc6`, `f158c9f`, 13 November): 184 OPT+UNSAT then, 251
+VERIFIED now in A, and the fixed-category score summed over the sixteen editions goes from 2 316.7
+to 2 789.4.
+
+**Refusals by cause** (`refusal_causes.py` over each arm). There is **no width-wall refusal left**
+in any arm. Every REFUSED is the heap budget (rc 5), except three.
+
+| cause | A | B | C |
+|---|---|---|---|
+| heap budget, Gc alarm after the encoding (D-0123 B) | 297 | 322 | 379 |
+| heap budget, inside a ladder loop (D-0123 C) | 13 | 12 | 13 |
+| heap budget, before the first declaration (front end) | 1 | 0 | 3 |
+| `Out of memory` exception (rc 2) | 2 | 1 | 0 |
+| `Stack overflow` (rc 2) | 0 | 0 | 2 |
+| unbounded `var int` (rc 2) | 1 | 1 | 1 |
+| ERROR rows, all `Fatal error: allocation failure during minor GC` against the 16 GiB `ulimit -v` | 4 | 3 | 16 |
+
+The two stack overflows (`2015_zephyrus_zephyrus-FH-2-15`, `2026_atp-stage2_instance1-stage2`) and
+the ERROR rows are what D-0197 (recursion over a huge learned row) and D-0200 (the heap budget read
+too rarely to stop before `ulimit -v`) fixed on main after `10b3507`. C has more of both because,
+without the proof file cap, it runs long enough to reach them.
+
+### 2. The scores
+
+`challenge_rank.py --no-chuffed`. The scoring of every edition is reproduced exactly and all
+official ranks are reproduced. A is in the fixed category. B is in the free category, among that
+category's entrants. C is in the fixed category with `--trust-unverified`, which is D-0121's
+standings re-ranked without proofs (D-0122's caveat). The last column puts B in the FIXED category
+with `--as=baguette-f-in-fd`. That is not a legal entry, because the fixed category requires the
+annotation to be followed, but it is the only reading where A and B are scored against the same
+opponents.
+
+| edition | D-0121 rank / score | A, fixed | B, free | C, fixed, no proof | B scored in fixed (information only) |
+|---|---|---|---|---|---|
+| 2026 | 12 / 13, 149.9 | 12 / 13, 212.4 | 23 / 27, 620.5 | 11 / 13, 244.5 | 11, 300.7 |
+| 2025 | 10 / 10, 69.3 | 10 / 10, 124.4 | 19 / 21, 394.3 | 10 / 10, 167.5 | 10, 167.1 |
+| 2024 | 9 / 9, 192.8 | 9 / 9, 233.4 | 22 / 22, 674.7 | 9 / 9, 227.4 | 9, 285.5 |
+| 2023 | 7 / 7, 120.1 | 7 / 7, 153.8 | 12 / 18, 604.0 | 7 / 7, 161.7 | 7, 191.7 |
+| 2022 | 7 / 7, 105.4 | 7 / 7, 129.2 | 18 / 19, 408.0 | 7 / 7, 162.1 | 7, 152.1 |
+| 2021 | 7 / 7, 94.8 | 7 / 7, 93.7 | 16 / 17, 262.8 | 7 / 7, 137.7 | 7, 101.9 |
+| 2020 | 6 / 6, 34.7 | 6 / 6, 71.9 | 14 / 17, 370.1 | 6 / 6, 79.3 | **4**, 121.9 |
+| 2019 | 8 / 8, 123.4 | 7 / 8, 190.5 | 11 / 14, 464.3 | 7 / 8, 240.0 | 6, 265.9 |
+| 2018 | 8 / 8, 69.6 | **6** / 8, 128.4 | 13 / 15, 343.0 | 6 / 8, 140.6 | 6, 183.7 |
+| 2017 | 12 / 12, 52.8 | 12 / 12, 128.8 | 22 / 22, 373.3 | 12 / 12, 146.8 | 12, 162.1 |
+| 2016 | 10 / 11, 249.5 | **8** / 11, 352.5 | 19 / 23, 721.6 | 7 / 11, 386.4 | 8, 367.9 |
+| 2015 | 9 / 9, 100.3 | 9 / 9, 133.0 | 18 / 19, 444.9 | 9 / 9, 141.1 | 9, 173.3 |
+| 2014 | 11 / 11, 131.6 | 11 / 11, 242.4 | 15 / 17, 508.4 | 9 / 11, 277.6 | 9, 331.6 |
+| 2013 | 11 / 11, 118.3 | 10 / 11, 186.6 | 14 / 18, 521.8 | 10 / 11, 228.4 | 10, 273.7 |
+| 2012 | 9 / 10, 176.5 | **8** / 10, 267.0 | 12 / 17, 549.0 | 6 / 10, 309.5 | 9, 257.5 |
+| 2011 | 8 / 8, 96.0 | 8 / 8, 141.5 | 8 / 14, 525.0 | 7 / 8, 186.5 | 7, 244.0 |
+| sum of scores | 1 885.0 | **2 789.4** | 7 785.7 (other opponents) | **3 237.1** | 3 580.6 |
+
+A gains a rank against D-0133 in 2018 (8 -> 6), 2016 (9 -> 8) and 2012 (9 -> 8), and keeps it
+everywhere else. In the free category B is last in 2 editions (2024, 2017), next to last in 3
+(2022, 2021, 2015) and in the lower third in all but 2011 and 2023. Its free-category score is not comparable with A's because
+the free category has two to three times as many opponents.
+
+### 3. A against C: what proving costs (M9-no-proof-T3)
+
+| over the 1 574 instances both arms reached | |
+|---|---|
+| wall time, on the 323 complete in both (A VERIFIED, C trusted) | C / A median **0.64** [0.51, 0.79], sums 38 827 s -> 27 286 s |
+| peak RSS (both >= 64 MB, n = 1 433) | C / A median **0.96** [0.83, 1.11] |
+| nodes per second (n = 1 045) | C / A median **1.27** [1.08, 1.64] |
+| per-instance verdict, Challenge order | C better on 541, worse on 6, tied on 1 027 |
+| complete in A only / in C only | 0 / 57 |
+| **attempts gained** (A REFUSED, CAPPED or ERROR, C not) | **113**: 78 CAPPED -> TIMEOUT, 27 REFUSED -> TIMEOUT, 7 CAPPED -> OPT, 1 REFUSED -> OPT. 80 of the 113 end with an incumbent value |
+| attempts lost (the reverse) | 11, all TIMEOUT -> REFUSED (the heap budget, reached later in a longer search) |
+
+Of the 57 complete in C only, 35 are A's own OPT whose proof was not VERIFIED (TIMEOUT-CHECK or
+CHECK-ERROR) and 22 are new answers (10 TIMEOUT -> OPT, 4 TIMEOUT -> SAT, 7 CAPPED -> OPT, 1
+REFUSED -> OPT). The proof's cost is time (a third of the wall time on complete answers) and the
+16 GB file cap (all 198 CAPPED rows of A go elsewhere in C: 104 REFUSED, 78 TIMEOUT, 9 ERROR, 7
+OPT). It is **not memory**: the peak RSS moves by 4 % at the median, because D-0123's family B
+(the explanations, learning) is the same in both arms. **D-0122's caveat, answered**: without
+proofs baguette ranks one or two places higher in 5 of the 16 editions (2026, 2016, 2014, 2012,
+2011) and the same in the other 11. Its score rises by 16 % (2 789 -> 3 237). The gap to the entrant
+above is not made of proof logging.
+
+### 4. A against B: where free search wins and loses (M10-T5, M7-T30)
+
+| | |
+|---|---|
+| verified complete answers (OPT+UNSAT+SAT) | A 323, B **362** (+39) |
+| incumbents | A 933, B **992** |
+| per-instance verdict, Challenge order | B better on **489**, worse on **336**, tied on 749 |
+| complete in A only / in B only | 43 (23 OPT -> TIMEOUT, 12 OPT -> REFUSED, 4 SAT -> TIMEOUT) / **82** (30 TIMEOUT -> OPT, 27 TIMEOUT -> SAT, 8 REFUSED -> OPT, 4 CAPPED -> OPT/UNSAT) |
+| REFUSED | A 314, B **336**: 50 TIMEOUT -> REFUSED and 14 OPT -> REFUSED against 40 REFUSED -> TIMEOUT and 9 REFUSED -> OPT |
+| wall time on the 280 complete in both | B / A median 1.01 [0.66, 1.70], sums 23 477 s -> 25 877 s |
+| peak RSS / nodes per second | B / A 1.00 [0.87, 1.17] / 1.02 [0.79, 1.32] |
+| families (256 with a win or a loss) | B better in **139**, worse in **90**, even in 27 |
+| fixed-category score, B entered illegally | higher than A in **15 of 16** editions (lower in 2012, 257.5 against 267.0) |
+
+By family, B wins every instance in scheduling, packing and planning models whose annotation is a
+fixed order: `pattern-set-mining`, `ship-schedule`, `still-life-wastage`, `fillomino`,
+`rectangle-packing`, `project-planning` (2015), `gfd-schedule` (2016, 2018), `city-position`,
+`mario`, `steelmillslab`, `accap`, `hrc`, `ptv`, `peacable_queens`, `harmony`, `tiny-cvrp` (+5 -0
+each). B wins none and loses all five on `prize-collecting` (2011), `table-layout`, `l2p`, `is`
+(2015), `tpp` (2016), `zephyrus` (2016, 2019), `neighbours` (2018) and `kidney-exchange`, and wins
+none while losing most on `tpp` (2012, 5 of 7 rows), `is` (2020), `fast-food`, `vrp` and
+`traveling-tppv` (4 of 5). These are models whose annotation
+carries the knowledge (routing orders, zephyrus's configuration order) or where B's longer search
+reaches the heap budget (the 64 rows that become REFUSED). Per-instance rows are in
+`pairs.tsv`, with the family in column 4.
+
+### 5. [AUTONOME] Does the default stay fixed (D-0154)?
+
+**It stays.** The brief's criterion was "unless B wins nearly everywhere". By edition score B
+wins 15 of 16. By instance it wins 489 and loses 336, and by family 139 against 90. So it wins on
+aggregate and is far from winning everywhere. D-0154's reason was never performance. The default
+follows the model's annotation, as the fixed category and a MiniZinc user expect, and `-f` is one
+flag away. Nothing in the solver changes here.
+
+**Proposal for the user** (no change made):
+
+| option | consequence |
+|---|---|
+| keep fixed by default (recommended) | the annotation is followed, the Challenge's fixed category is what a plain run does, and users who want the stronger aggregate pass `-f`, which the README documents |
+| make `-f` the default | +28 % summed score in fixed-category scoring and +39 verified answers on this binary, but 336 instances get worse, 64 more instances reach the heap budget, and the fixed-category entry needs a flag to turn it off |
+| keep fixed, and let `minizinc -f` choose free search | already the case: `-f` is in `stdFlags` of `tools/baguette.msc`, so MiniZinc passes it through |
+
+To revert this decision there is nothing to revert, because no code changed. To take the second
+option, change the default in `bin/main.ml` in its own commit and re-record the lanes.
+
+### 6. What is left
+
+- The codes set under `-f` and `tiered` (M10-T5's other half) were not run here.
+- The series predates D-0201 (default `--bits-above 0`). A Challenge-wide series on today's
+  default is M8-bits-encoding-T4's to read against this one's A arm only through D-0199's
+  same-binary pair, never directly.
+- The 21 CHECK-ERROR rows would be VERIFIED under a larger checker limit. `compare_run.sh` could
+  give the checker its own `CHECK_MEM_KB`.
