@@ -675,7 +675,10 @@ the 21 CHECK-ERROR are veripb out of the harness's 16 GiB. Without proof: 0.64 o
 -> 3 237. `-f` scores higher in 15 of 16 editions but loses on 336 instances (routing, zephyrus) and hits the heap budget 64 more times,
 so the default stays fixed and the proposal is D-0185 §5. Tools and docs only, no solver gate needed.
 
-**Running**: agent-m10t5b (`wave57-m10t5b`, D-0202), the codes set under `-f` and `tiered`, M10-T5's last half. The default is now `--bits-above 0` (D-0201, merged, gate 90 green):
+**M10-T5 DONE (D-0202)**, the codes set on release `f244c35a`: `-f` alone refutes o7k2 def in 27 s where the default times out, but
+costs 2x to 3.5x on qr48 and qr72; `tiered` changes no answer; `-f` + `tiered` is worse than `-f`; 30 proofs all VERIFIED. No default changed.
+
+**Running**: nothing, and no TODO row is left. The default is now `--bits-above 0` (D-0201, merged, gate 90 green):
 stdout equal on all 207 models, 113 new proofs all verified, lane re-recorded (and an `order` configuration
 keeps the order encoding in the lane); `--bits-above none` gives gate 89's artefacts back exactly.
 
