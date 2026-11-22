@@ -669,7 +669,7 @@ the 21 CHECK-ERROR are veripb out of the harness's 16 GiB. Without proof: 0.64 o
 -> 3 237. `-f` scores higher in 15 of 16 editions but loses on 336 instances (routing, zephyrus) and hits the heap budget 64 more times,
 so the default stays fixed and the proposal is D-0185 §5. Tools and docs only, no solver gate needed.
 
-**Running**: nothing. The default is now `--bits-above 0` (D-0201, merged, gate 90 green):
+**Running**: agent-m10t5b (`wave57-m10t5b`, D-0202), the codes set under `-f` and `tiered`, M10-T5's last half. The default is now `--bits-above 0` (D-0201, merged, gate 90 green):
 stdout equal on all 207 models, 113 new proofs all verified, lane re-recorded (and an `order` configuration
 keeps the order encoding in the lane); `--bits-above none` gives gate 89's artefacts back exactly.
 
@@ -681,7 +681,7 @@ encoding cannot go yet. The targeted W = 64 / 100 check (D-0199) found no W that
 
 **Open for you**: (0) D-0185 §5, switch the default to `-f` or not; (1) D-0197 §6: PB analysis of a 32 M-term ladder row costs 20 GB and delays the time-limit
 stop (cap by row length or not); (2) whether `--e2e` ever becomes a default (D-0187); (3) the VeriPB
-`strengthening_to_core` bug report (`bench/symmetry/stc_bug/REPORT.md`); (4) seven `train_instance` runs
+`strengthening_to_core` bug report (`bench/symmetry/stc_bug/REPORT.md`); (3b) the D-0185 series' run directories `/scratch/arthur/m10t5/` take 145 GB (kept, tables copied to `/cluster/arthur/baguette-results/m10t5/`), say if they can go; (4) seven `train_instance` runs
 wrote 90 GB `.opb` each during M16-T5's sweep (deleted); (5) two review agents stalled ~14 h and were
 relaunched from their branches (agents are now told to check any wait after 30 min).
 
