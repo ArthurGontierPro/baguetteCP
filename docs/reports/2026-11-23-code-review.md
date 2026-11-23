@@ -264,6 +264,13 @@ still the user's to confirm.
 
 The recommendation is the second option.
 
+Decided by the user on 2026-11-23, who left the name to the reviewing session. A run under MiniZinc
+without `--proof` writes `./baguette-proof-YYYYMMDD-HHMMSS-PID.opb` and `.pbp`, with the local time at
+the start of the run and the process id, and names the files on stderr as it does now. Two runs in
+one directory then never share a name, the names sort by time, and a later run never overwrites an
+earlier proof. A direct run keeps `./MODEL.opb` and `.pbp`, and `--proof` and `--no-proof` are
+unchanged.
+
 ## 3. What holds up
 
 - No exception handler in the tree catches every exception.
