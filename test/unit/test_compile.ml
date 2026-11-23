@@ -800,12 +800,14 @@ let assignment_array (m : M.t) (a : Search.assignment) =
    annotated model run through here is searched the way the annotation says and its
    proof is checked in that shape -- M7-T2 obligation (c). [~order] overrides it, and
    exists for the break lane below. *)
-let run_model_with ?order ?mutate ?(expect_reject = false) ~title ~src () =
+let run_model_with ?order ?mutate ?(expect_reject = false) ?expect_sat ~title ~src () =
   let m = build src in
   let c = Compile.compile m in
   let order = match order with Some o -> Some o | None -> c.Compile.order in
-  let expected = brute_force m in
-  let expect_sat = expected <> None in
+  (* M18-coverage-T2: [?expect_sat] replaces the box enumeration by the caller's own
+     oracle, for scenes whose Booleans make the box too large to walk (diffn's four
+     reifiers per pair) and whose oracle must not read the model anyway. *)
+  let expect_sat = match expect_sat with Some b -> b | None -> brute_force m <> None in
   let dir = Filename.temp_file "baguette_compile" "" in
   Sys.remove dir;
   Sys.mkdir dir 0o700;
@@ -2411,6 +2413,302 @@ let test_objective_line_by_sink () =
         (List.length o.Opb.obj_terms = 5)
   | _ -> check "objective: an .opb line under Retain_rows" false
 
+(* M18-coverage-T2 (D-0213): diffn's two cumulative relaxations.
+
+   mznlib/fzn_diffn.mzn adds, beside std's pairwise disjunction,
+
+     cumulative(x, lb(dx), lb(dy), Hy)   and   cumulative(y, lb(dy), lb(dx), Wx)
+
+   over the rectangles T with lb(dx) > 0 and lb(dy) > 0, Hy = max_T (ub(y) + ub(dy)) -
+   min_T lb(y). Those rows are MODEL rows: the checker never re-derives them (D-0213
+   section 3), so the theorem they rest on is checked here instead, by enumeration.
+   [diffn_relax] restates mznlib's formula; [diffn_pairs_ok] is the predicate's own
+   definition (std's, strict and non-strict), written geometrically. *)
+
+type drect = { xd : int * int; yd : int * int; wd : int * int; hd : int * int }
+
+(* One projection's (tasks, capacity) as mznlib computes it: [along] picks the
+   coordinate and size the cumulative runs over, [across] the other pair. A task is
+   (index, duration, resource). *)
+let diffn_projection (rs : drect array) ~along ~across =
+  let t =
+    List.filter
+      (fun i -> fst (snd (along rs.(i))) > 0 && fst (snd (across rs.(i))) > 0)
+      (List.init (Array.length rs) Fun.id)
+  in
+  match t with
+  | [] | [ _ ] -> None
+  | _ ->
+      let hi =
+        List.fold_left
+          (fun a i ->
+            let (_, cu), (_, du) = across rs.(i) in
+            max a (cu + du))
+          min_int t
+      and lo = List.fold_left (fun a i -> min a (fst (fst (across rs.(i))))) max_int t in
+      Some
+        ( List.map (fun i -> (i, fst (snd (along rs.(i))), fst (snd (across rs.(i))))) t,
+          hi - lo )
+
+let along_x r = (r.xd, r.wd)
+let along_y r = (r.yd, r.hd)
+
+(* A projection's row at every integer t, for one placement [s] of the coordinates
+   along it: the tasks running at t weigh at most [cap]. *)
+let diffn_row_holds tasks cap (s : int array) =
+  let lo = List.fold_left (fun a (i, _, _) -> min a s.(i)) max_int tasks
+  and hi = List.fold_left (fun a (i, d, _) -> max a (s.(i) + d)) min_int tasks in
+  let ok = ref true in
+  for t = lo to hi - 1 do
+    let load =
+      List.fold_left
+        (fun a (i, d, r) -> if s.(i) <= t && t < s.(i) + d then a + r else a)
+        0 tasks
+    in
+    if load > cap then ok := false
+  done;
+  !ok
+
+let diffn_pairs_ok ~strict (x : int array) (y : int array) (w : int array) (h : int array)
+    =
+  let n = Array.length x in
+  let ok = ref true in
+  for i = 0 to n - 1 do
+    for j = i + 1 to n - 1 do
+      let sep =
+        x.(i) + w.(i) <= x.(j)
+        || y.(i) + h.(i) <= y.(j)
+        || x.(j) + w.(j) <= x.(i)
+        || y.(j) + h.(j) <= y.(i)
+      in
+      let escape = (not strict) && (w.(i) = 0 || w.(j) = 0 || h.(i) = 0 || h.(j) = 0) in
+      if not (sep || escape) then ok := false
+    done
+  done;
+  !ok
+
+(* Every placement and every size inside the declared box that satisfies the pairwise
+   disjunction satisfies both projections' rows. [cap_shift] = -1 is the control: the
+   same enumeration with every capacity one too small must find a violation on some
+   scene, or the enumeration is not looking. Returns (placements checked, violations). *)
+let diffn_theorem_scene ~strict ~cap_shift (rs : drect array) =
+  let n = Array.length rs in
+  let px = diffn_projection rs ~along:along_x ~across:along_y
+  and py = diffn_projection rs ~along:along_y ~across:along_x in
+  let x = Array.make n 0
+  and y = Array.make n 0
+  and w = Array.make n 0
+  and h = Array.make n 0 in
+  let seen = ref 0 and bad = ref 0 in
+  let doms =
+    Array.concat
+      [
+        Array.map (fun r -> r.xd) rs;
+        Array.map (fun r -> r.yd) rs;
+        Array.map (fun r -> r.wd) rs;
+        Array.map (fun r -> r.hd) rs;
+      ]
+  in
+  let set k v =
+    let a = [| x; y; w; h |].(k / n) in
+    a.(k mod n) <- v
+  in
+  let rec go k =
+    if k = 4 * n then (
+      if diffn_pairs_ok ~strict x y w h then (
+        incr seen;
+        let holds p s =
+          match p with
+          | None -> true
+          | Some (tasks, cap) -> diffn_row_holds tasks (cap + cap_shift) s
+        in
+        if not (holds px x && holds py y) then incr bad))
+    else
+      let lo, hi = doms.(k) in
+      for v = lo to hi do
+        set k v;
+        go (k + 1)
+      done
+  in
+  go 0;
+  (!seen, !bad)
+
+let diffn_random_rect st ~fixed =
+  let dom lo span = (lo, lo + Random.State.int st (span + 1)) in
+  let size () =
+    if fixed then
+      let v = 1 + Random.State.int st 3 in
+      (v, v)
+    else dom (Random.State.int st 3) 1
+  in
+  {
+    xd = dom (Random.State.int st 2) 2;
+    yd = dom (Random.State.int st 2) 2;
+    wd = size ();
+    hd = size ();
+  }
+
+let test_diffn_relaxation_theorem () =
+  let st = Random.State.make [| 2013 |] in
+  let seen = ref 0 and bad = ref 0 and control_caught = ref 0 and scenes = ref 0 in
+  for k = 0 to 199 do
+    let strict = k mod 2 = 0 and fixed = k mod 4 < 2 in
+    let n = 2 + Random.State.int st 2 in
+    let rs = Array.init n (fun _ -> diffn_random_rect st ~fixed) in
+    let s, b = diffn_theorem_scene ~strict ~cap_shift:0 rs in
+    incr scenes;
+    seen := !seen + s;
+    bad := !bad + b;
+    let _, cb = diffn_theorem_scene ~strict ~cap_shift:(-1) rs in
+    if cb > 0 then incr control_caught
+  done;
+  check
+    (Printf.sprintf
+       "diffn relaxation: %d placements satisfying the pairs over %d random scenes \
+        (strict and non-strict, fixed and variable sizes) all satisfy both projections' \
+        rows"
+       !seen !scenes)
+    (!bad = 0 && !seen > 1000);
+  check
+    (Printf.sprintf
+       "diffn relaxation control: a capacity one too small is violated on %d of %d scenes"
+       !control_caught !scenes)
+    (!control_caught > 0)
+
+(* End to end: FlatZinc scenes written the way mznlib flattens them -- the four reified
+   disjuncts and the clause per pair, the order COPIES tied by two int_lin_le rows, and
+   baguette_cumulative over the copies when the projection can prune -- brute-forced by
+   the geometric oracle over the coordinates alone (the oracle knows no relaxation, so a
+   relaxation stronger than diffn turns a SAT into a disagreement), solved, and the proof
+   checked by veripb on the default bits encoding and under --bits-above none. *)
+let diffn_src (rs : (int * int * int * int * int * int) array) =
+  let n = Array.length rs in
+  let b = Buffer.create 1024 in
+  let p fmt = Printf.bprintf b fmt in
+  p
+    "predicate baguette_cumulative(array [int] of var int: s,array [int] of int: d,array \
+     [int] of int: r,int: b);\n";
+  Array.iteri
+    (fun i (xl, xu, yl, yu, _, _) ->
+      p "var %d..%d: x%d :: output_var;\nvar %d..%d: y%d :: output_var;\n" xl xu i yl yu i)
+    rs;
+  for i = 0 to n - 1 do
+    for j = i + 1 to n - 1 do
+      for k = 1 to 4 do
+        p "var bool: b%d_%d_%d;\n" i j k
+      done
+    done
+  done;
+  let copy c i lo hi =
+    if lo = hi then string_of_int lo
+    else (
+      p "var %d..%d: %s%d;\n" lo hi c i;
+      Printf.sprintf "%s%d" c i)
+  in
+  let proj ~cname ~coord ~sz ~across ~asz =
+    let cap =
+      Array.fold_left (fun a r -> max a (snd (across r) + asz r)) min_int rs
+      - Array.fold_left (fun a r -> min a (fst (across r))) max_int rs
+    in
+    let total = Array.fold_left (fun a r -> a + asz r) 0 rs in
+    if total <= cap then None
+    else
+      let starts =
+        Array.to_list
+          (Array.mapi (fun i r -> copy cname i (fst (coord r)) (snd (coord r))) rs)
+      in
+      Some
+        (Printf.sprintf "baguette_cumulative([%s], [%s], [%s], %d)"
+           (String.concat ", " starts)
+           (String.concat ", "
+              (Array.to_list (Array.map (fun r -> string_of_int (sz r)) rs)))
+           (String.concat ", "
+              (Array.to_list (Array.map (fun r -> string_of_int (asz r)) rs)))
+           cap)
+  in
+  let xc (xl, xu, _, _, _, _) = (xl, xu) and yc (_, _, yl, yu, _, _) = (yl, yu) in
+  let wf (_, _, _, _, w, _) = w and hf (_, _, _, _, _, h) = h in
+  let px = proj ~cname:"cx" ~coord:xc ~sz:wf ~across:yc ~asz:hf in
+  let py = proj ~cname:"cy" ~coord:yc ~sz:hf ~across:xc ~asz:wf in
+  for i = 0 to n - 1 do
+    for j = i + 1 to n - 1 do
+      let w_ = wf rs.(i) and h_ = hf rs.(i) and wj = wf rs.(j) and hj = hf rs.(j) in
+      p "constraint int_lin_le_reif([1, -1], [x%d, x%d], %d, b%d_%d_1);\n" i j (-w_) i j;
+      p "constraint int_lin_le_reif([1, -1], [y%d, y%d], %d, b%d_%d_2);\n" i j (-h_) i j;
+      p "constraint int_lin_le_reif([1, -1], [x%d, x%d], %d, b%d_%d_3);\n" j i (-wj) i j;
+      p "constraint int_lin_le_reif([1, -1], [y%d, y%d], %d, b%d_%d_4);\n" j i (-hj) i j;
+      p "constraint bool_clause([b%d_%d_1, b%d_%d_2, b%d_%d_3, b%d_%d_4], []);\n" i j i j
+        i j i j
+    done
+  done;
+  let tie c v i lo hi =
+    if lo < hi then (
+      p "constraint int_lin_le([1, -1], [%s%d, %s%d], 0);\n" c i v i;
+      p "constraint int_lin_le([-1, 1], [%s%d, %s%d], 0);\n" c i v i)
+  in
+  if px <> None then Array.iteri (fun i r -> tie "cx" "x" i (fst (xc r)) (snd (xc r))) rs;
+  if py <> None then Array.iteri (fun i r -> tie "cy" "y" i (fst (yc r)) (snd (yc r))) rs;
+  List.iter (function Some c -> p "constraint %s;\n" c | None -> ()) [ px; py ];
+  p "solve :: int_search([%s], input_order, indomain_min, complete) satisfy;\n"
+    (String.concat ", "
+       (List.init n (fun i -> Printf.sprintf "x%d" i)
+       @ List.init n (fun i -> Printf.sprintf "y%d" i)));
+  (Buffer.contents b, px <> None || py <> None)
+
+let diffn_oracle (rs : (int * int * int * int * int * int) array) =
+  let n = Array.length rs in
+  let x = Array.make n 0 and y = Array.make n 0 in
+  let w = Array.map (fun (_, _, _, _, w, _) -> w) rs
+  and h = Array.map (fun (_, _, _, _, _, h) -> h) rs in
+  let found = ref false in
+  let rec go k =
+    if not !found then
+      if k = 2 * n then (if diffn_pairs_ok ~strict:true x y w h then found := true)
+      else
+        let xl, xu, yl, yu, _, _ = rs.(k mod n) in
+        let lo, hi = if k < n then (xl, xu) else (yl, yu) in
+        for v = lo to hi do
+          (if k < n then x else y).(k mod n) <- v;
+          go (k + 1)
+        done
+  in
+  go 0;
+  !found
+
+let test_diffn_models () =
+  let st = Random.State.make [| 213 |] in
+  let relaxed = ref 0 and sat = ref 0 and unsat = ref 0 in
+  for k = 1 to 16 do
+    let n = 3 + Random.State.int st 2 in
+    let bw = 3 + Random.State.int st 3 and bh = 3 + Random.State.int st 2 in
+    let rs =
+      Array.init n (fun _ ->
+          let w = 1 + Random.State.int st (min 3 bw)
+          and h = 1 + Random.State.int st (min 3 bh) in
+          let xl = Random.State.int st 2 and yl = 0 in
+          (min xl (bw - w), bw - w, yl, bh - h, w, h))
+    in
+    let src, has_relax = diffn_src rs in
+    let expect = diffn_oracle rs in
+    if has_relax then incr relaxed;
+    if expect then incr sat else incr unsat;
+    List.iter
+      (fun (enc, w) ->
+        with_bits_above w (fun () ->
+            run_model_with ~expect_sat:expect
+              ~title:
+                (Printf.sprintf "diffn scene %d (%d rectangles in %dx%d, %s, %s)" k n bw
+                   bh
+                   (if has_relax then "relaxed" else "pairs only")
+                   enc)
+              ~src ()))
+      [ ("bits", Some 0); ("order", None) ]
+  done;
+  check
+    (Printf.sprintf "diffn scenes: %d of 16 post a relaxation, %d SAT and %d UNSAT"
+       !relaxed !sat !unsat)
+    (!relaxed >= 8 && !sat > 0 && !unsat > 0)
+
 let () =
   print_endline "";
   test_variable_identity ();
@@ -2440,6 +2738,8 @@ let () =
   test_inverse_models ();
   test_member_models ();
   test_table_models ();
+  test_diffn_relaxation_theorem ();
+  test_diffn_models ();
   if !failures > 0 then (
     Printf.printf "\n%d failure(s)\n" !failures;
     exit 1)

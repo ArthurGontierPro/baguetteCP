@@ -1446,6 +1446,82 @@ let member_src =
    than retargeting it. *)
 let member_gap_line = "rup +1 ~y_ge_2 +1 y_ge_3 +1 ~x4_ge_4 +1 ~x3_ge_3 >= 1 ;"
 
+(* diffn (D-0213, M18-coverage-T2): a scene written the way mznlib/fzn_diffn.mzn
+   flattens it -- four reified disjuncts and a clause per pair, an ORDER copy of every
+   coordinate tied by two int_lin_le rows, and the two relaxations as
+   baguette_cumulative over the copies. Six rectangles in a 5 x 5 box (area 24 of 25),
+   searched in an order that places y before x for half of them: the time-tables push
+   with derivations ahead, the first choices fail, and the box is packed after
+   backjumps. Found by a search over random scenes for one whose derivations are
+   LOAD-BEARING: on most small scenes every push is RUP from its capacity row alone
+   (cumulative.ml's header: that takes two tasks in the row that are neither compulsory
+   nor the target), so a corrupted derivation is accepted there and the lane would be
+   green for no reason. SATISFIABLE, so a refusal below is a judgement on a line. *)
+let diffn_lane_src =
+  let rs =
+    [
+      ("a", 0, 3, 0, 4, 2, 1);
+      ("b", 0, 4, 0, 2, 1, 3);
+      ("c", 0, 4, 0, 3, 1, 2);
+      ("d", 0, 2, 0, 3, 3, 2);
+      ("e", 0, 2, 0, 4, 3, 1);
+      ("f", 0, 3, 0, 2, 2, 3);
+    ]
+  in
+  let b = Buffer.create 4096 in
+  let p fmt = Printf.bprintf b fmt in
+  p
+    "predicate baguette_cumulative(array [int] of var int: s,array [int] of int: d,array \
+     [int] of int: r,int: b);\n";
+  List.iter
+    (fun (n, xl, xu, yl, yu, _, _) ->
+      p "var %d..%d: x%s :: output_var;\nvar %d..%d: y%s :: output_var;\n" xl xu n yl yu n)
+    rs;
+  List.iter
+    (fun (n, xl, xu, yl, yu, _, _) ->
+      p "var %d..%d: cx%s;\nvar %d..%d: cy%s;\n" xl xu n yl yu n)
+    rs;
+  let rec pairs = function
+    | [] -> []
+    | a :: t -> List.map (fun b -> (a, b)) t @ pairs t
+  in
+  let ps = pairs rs in
+  List.iter
+    (fun ((i, _, _, _, _, _, _), (j, _, _, _, _, _, _)) ->
+      for k = 1 to 4 do
+        p "var bool: b%s%s%d;\n" i j k
+      done)
+    ps;
+  List.iter
+    (fun ((i, _, _, _, _, wi, hi), (j, _, _, _, _, wj, hj)) ->
+      p "constraint int_lin_le_reif([1, -1], [x%s, x%s], %d, b%s%s1);\n" i j (-wi) i j;
+      p "constraint int_lin_le_reif([1, -1], [y%s, y%s], %d, b%s%s2);\n" i j (-hi) i j;
+      p "constraint int_lin_le_reif([1, -1], [x%s, x%s], %d, b%s%s3);\n" j i (-wj) i j;
+      p "constraint int_lin_le_reif([1, -1], [y%s, y%s], %d, b%s%s4);\n" j i (-hj) i j;
+      p "constraint bool_clause([b%s%s1, b%s%s2, b%s%s3, b%s%s4], []);\n" i j i j i j i j)
+    ps;
+  List.iter
+    (fun (n, _, _, _, _, _, _) ->
+      List.iter
+        (fun c ->
+          p "constraint int_lin_le([1, -1], [c%s%s, %s%s], 0);\n" c n c n;
+          p "constraint int_lin_le([-1, 1], [c%s%s, %s%s], 0);\n" c n c n)
+        [ "x"; "y" ])
+    rs;
+  let col f = String.concat ", " (List.map f rs) in
+  p "constraint baguette_cumulative([%s], [%s], [%s], 5);\n"
+    (col (fun (n, _, _, _, _, _, _) -> "cx" ^ n))
+    (col (fun (_, _, _, _, _, w, _) -> string_of_int w))
+    (col (fun (_, _, _, _, _, _, h) -> string_of_int h));
+  p "constraint baguette_cumulative([%s], [%s], [%s], 5);\n"
+    (col (fun (n, _, _, _, _, _, _) -> "cy" ^ n))
+    (col (fun (_, _, _, _, _, _, h) -> string_of_int h))
+    (col (fun (_, _, _, _, _, w, _) -> string_of_int w));
+  p
+    "solve :: int_search([yf, yc, ye, xe, xb, xd, xf, yb, xc, ya, xa, yd], input_order, \
+     indomain_min, complete) satisfy;\n";
+  Buffer.contents b
+
 (* table (D-0206, M18-coverage-T1): x1 decided first at its minimum. x1 = 1 kills the
    three tuples that need x1 >= 2 (one trace line each, on the bound), sets s1 on their
    tails (C), and s1 fixes x2 = 1 (E), which int_ne(x1, x2) refutes; x1 = 2 then solves.
@@ -2480,6 +2556,53 @@ solve :: seq_search([int_search([b, y], input_order, indomain_min, complete), in
         regular_lane c ~build:build_tab
           ~knob:(knob ~site:"trace: ~x2_ge_2" Writer.Mutation.Drop_literal)
           "enforce-fact");
+
+    (* -- M18-coverage-T2: diffn's relaxations (D-0213) ----------------------------------
+       [diffn_lane_src] above. The relaxations are cumulative.ml's, so these lanes
+       corrupt the FIRST derivation ahead of a time-table push (a `combine` over a
+       y-projection capacity row, the ladder chains of the compulsory tasks and the
+       target's bound) and require the push it was written for to be refused at the RUP
+       wording:
+         relax-truncate  the derivation cut to its first operand, the capacity row;
+         relax-swap      one cited line replaced by another live one. *)
+    let solve_diffn ?mutation ~name () =
+      let m = F.Builder.of_string ~file:name diffn_lane_src in
+      let c = Compile.compile m in
+      let opb = Filename.concat dir (name ^ ".opb")
+      and pbp = Filename.concat dir (name ^ ".pbp") in
+      let oc = open_out opb in
+      Encoding.write_opb ~comments:[ "test_mutation: " ^ name ] c.Compile.encoding oc;
+      close_out oc;
+      let oc = open_out pbp in
+      let writer =
+        match mutation with
+        | None -> Writer.create ~comments:true ~audit:true oc
+        | Some mutation -> Writer.create_mutated ~comments:false ~audit:true ~mutation oc
+      in
+      Encoding.start_proof c.Compile.encoding writer;
+      let ctx = Justify.create ~writer ~encoding:c.Compile.encoding in
+      let outcome =
+        Search.solve ~engine:c.Compile.engine ~store:c.Compile.store ~ctx
+          ~check:(fun _ -> true)
+          ?order:c.Compile.order ()
+      in
+      close_out oc;
+      ({ pbp; opb; fired = Writer.mutation_fired writer }, outcome)
+    in
+    let b, outcome = solve_diffn ~name:"diffn" () in
+    check "diffn: the solver solves it (the instance is what we think it is)"
+      (match outcome with Search.Sat _ -> true | Search.Unsat -> false);
+    let build_diffn ~name ~mutation = fst (solve_diffn ~mutation ~name ()) in
+    gated ~tag:"diffn"
+      ~control:(fun () -> control_holds ~tag:"diffn" ~proof:b.pbp)
+      ~declares:[ "relax-truncate"; "relax-swap" ]
+      (fun c ->
+        regular_lane c ~build:build_diffn
+          ~knob:(knob ~site:"combine(" Writer.Mutation.Truncate_derivation)
+          "relax-truncate";
+        regular_lane c ~build:build_diffn
+          ~knob:(knob ~site:"combine(" Writer.Mutation.Swap_citation)
+          "relax-swap");
 
     (* -- M7-T34: member over big-M rows (D-0170) -----------------------------------------
        [member_chase_src] above. Three text lanes, each deleting ONE threshold lemma of a
