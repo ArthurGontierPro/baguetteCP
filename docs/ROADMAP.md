@@ -587,7 +587,7 @@ table from its output, a history of every series so the progress shows, and a ru
 | M17-bench-series-T2 | **The first series on current main**: default with proof, `-f` with proof, default `--no-proof`, on the bits default; the README table regenerated from it, D-0185's table kept in the history | TODO | Needs T1 |
 | M17-bench-series-T3 | **The history and the rule**: `bench/series/HISTORY.md`, one row per series (date, commit, binary hash, per arm the verified counts, summed score, rank range), and in CLAUDE.md's orchestration section the rule for when a series runs: after a merge that changes the default behaviour, the encoding or the search (a gate with artefact diffs on purpose), and before a paper or a release; not after a byte-identical merge | TODO | Fill D-0185 (`7c880bce`) and D-0175 (`492638b9`, two arms) as the first rows |
 | M17-bench-series-T4 | **A proof-logging reference beside baguette**: GCS with proofs (and Chuffed without, as the speed reference) on the same editions and settings, once per GCS release, so the README can say where baguette stands among proof-logging solvers and not only against the official entrants | TODO | M7-T26 ran GCS on 2025 and 2026 only (D-0103: 76 CAPPED at the 16 GB cap). GCS and Chuffed locations: `bench/challenge/README.md` |
-| M17-bench-series-T5 | **The harness limits are ours to choose (D-0204)**: no proof cap in our series (the time limit stays 1 200 s); decide the solver memory limit (16 GiB today, 314 refusals at the heap budget in D-0185 arm A) by one series at 64 GiB on the same binary, and record what it buys | TODO | The proof cap is removed in T2's series already (the user, 2026-11-23). Watch `/scratch`: without the cap a proof can reach hundreds of GB |
+| M17-bench-series-T5 | **The harness limits are ours to choose (D-0204)**: no proof cap in our series (the time limit stays 1 200 s); the reference series keep 16 GiB, for comparability with the official entrants (the user, 2026-11-23); one OBSERVATION series at 64 GiB on the same binary says what the 314 heap-budget refusals of D-0185 arm A become (complete, timeout, or more memory still) and feeds M21-memory | TODO | The proof cap is removed in T2's series already (the user, 2026-11-23). Watch `/scratch`: without the cap a proof can reach hundreds of GB |
 
 ## M18-coverage — the globals that reach baguette decomposed, and the third of the Challenge refused before search
 
@@ -627,7 +627,7 @@ M17 series' families that use it; the baseline to beat is the row above.
 | M18-coverage-T7 | **The cheap ones**: `alldifferent_except_0` (37, 3 % complete) as alldiff over the non-zero values, `all_equal`, `nvalue` (already 52 %, measure before building) | TODO | |
 | M18-coverage-T8 | **`regular` is native and completes 1 of 98 attempted** (62 incumbents): find out why (search over the state flags, propagation strength, or the size of the flag encoding) before any other regular work | TODO | D-0146 §6 measured 5 -> 18 of 65 at 300 s; this census reads 1 200 s |
 | M18-coverage-T9 | **The refused third**: 314 heap-budget refusals in arm A, most after the encoding (D-0185 §1, cause table). Measure which encodings fill the heap (eager order literals over wide domains, decompositions, the ladder) and whether introducing literals LAZILY, as GCS does for order atoms, removes them. Design record first: lazy literals touch the PB encoding and the proof's naming contract (PROOF-FORMAT §3) | TODO | T2's series (no proof cap) and M17-T5 (64 GiB) say how much of the third is the cap and how much is the encoding |
-| M18-coverage-T10 | **Set variables** (35 instances): stay out of scope (SPEC §1) or support `var set of int` as Boolean arrays through mznlib. A decision for the user, with the payoff measured first | TODO | |
+| M18-coverage-T10 | **Set variables** (35 instances): stay out of scope (SPEC §1) or support `var set of int` as Boolean arrays through mznlib | PARKED | The user, 2026-11-23: later, few problems really need them |
 
 ## M19-config — the ideas of other solvers, each behind a flag in baguette, measured to find our best configuration
 
@@ -665,4 +665,18 @@ These rows look for the factors, not the percents.
 | M20-pernode-T3 | **Compiler and runtime**: flambda with `-O3`, unsafe array access in the measured hot loops (with the `BAGUETTE_DEBUG` checks kept), the GC settings per family | TODO | D-0171's release profile is the start |
 | M20-pernode-T4 | **Data structures on the hot path**: domains (sparse sets or bitsets for small domains), watched literals for clauses and PB rows, the event queue, the trail | TODO | |
 | M20-pernode-T5 | **Proof writing**: its share of the time (T1), buffered output without `Printf`, shorter lines, and deleting dead lines earlier | TODO | Without the cap (D-0204) proof size becomes time, not a refusal |
+
+## M21-memory — is OCaml's memory overhead large, or is it our data structures?
+
+Opened 2026-11-23 at the user's request. A common claim is that OCaml uses a lot of memory. With sound
+algorithms and data structures the overhead should stay small: an OCaml block costs one header word,
+an `int` is unboxed, a float array is flat. The question matters because a fifth of the Challenge is
+refused at the 16 GiB heap budget (314 instances in D-0185 arm A), and M17-T5 keeps that limit for the
+reference series.
+
+| ID | Task | Status | Notes |
+|---|---|---|---|
+| M21-memory-T1 | **Bytes per object, measured**: for a few refused instances and a few solved ones, the live heap after the encoding and during search, split by kind (variables and domains, order and bits literals, PB rows of the model, learned rows, explanations and their hash-consing table, the trail, the proof writer's buffers), with `memtrace` or `Gc` statistics around each phase. The same instances in Chuffed and Gecode for the peak RSS | TODO | `--max-heap-mb`, D-0200's estimate, `OCAMLRUNPARAM=v=0x400` |
+| M21-memory-T2 | **The overhead, attributed**: for each large kind, the bytes an ideal flat layout would take against what baguette takes (headers, boxing, lists where arrays belong, `Hashtbl` buckets, closures kept alive), so the claim "OCaml eats memory" gets a number per kind | TODO | Needs T1 |
+| M21-memory-T3 | **The fixes the numbers point at**, one per kind, each measured on the refused instances (how many become attempts at 16 GiB) | TODO | Needs T2; overlaps M18-coverage-T9 (lazy literals) when the encoding is the kind |
 
