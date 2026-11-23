@@ -1168,6 +1168,14 @@ let ix10_table =
        All made under [Store.deriving_ahead]; [test_ix10_derive_ahead] drives the gap
        shape and test_mutation.ml's member-chase lanes the lemmas. *)
     ("member.ml", Needs_derivation);
+    (* M18-coverage-T1 (D-0206): table. Single_row in regular.ml's sense -- one
+       constraint, several rows (ALO and one DEF_t per tuple). Every pruning is one rup
+       with its facts on the tail: a tuple's death against DEF_t and the bound or the
+       hole's own line, a selector set by ALO, x pushed by DEF_t under a set selector, a
+       value with no live tuple against every DEF_t through x's ladder and ALO; a dead
+       tuple is cited through the tail of its own earlier trace line (D-0151), a line
+       already on the page. test_mutation.ml's table lanes are the load-bearing claims. *)
+    ("table.ml", Single_row);
   ]
 
 (* (a) CLOSURE. OCaml cannot reflect over its own modules, so the only way to notice a
