@@ -27059,3 +27059,161 @@ node):
 `56ca13a` `Store.at_root` in Element, Cumulative and Gcc). The test fix `56522b6` stands on its
 own and should stay. Nothing else depends on them, since no signature outside `element.ml`
 changed and `View` only gained three functions.
+
+## D-0215  [AUTONOME] M20-pernode-T4 (rank 5 of D-0207): alldiff's Régin stage skips a pass that cannot prune. A matching kept across passes is repaired and one Tarjan pass looks for an edge in no maximum matching; the test is exact, the from-scratch pass runs unchanged whenever it finds one, and the artefacts are byte-identical. A costas node costs 36 % fewer instructions without learning or proof
+
+**Status**: DONE on branch `wave63-regin` (agent-regin, 2026-11-23), not merged. Rank 5 of D-0207
+section 6, ROADMAP M20-pernode-T4. Taken in autonomous mode. It changes no output and no default.
+It is `[AUTONOME]` because the shape (a gate in front of the unchanged scratch pass, rather than an
+incremental pass that replaces it) was chosen without asking. Measured on `fataepyc-06` while the
+Challenge series of 2026-11-23 ran, one experiment process at a time, in instructions (`perf stat
+-e instructions:u`). Runs and scripts in `/scratch/arthur/regin-runs/`, copied to
+`/cluster/arthur/baguette-results/regin/`.
+
+### 1. Context
+
+D-0207 section 5 item 4 found that `Alldiff` is 85 % of a costas node without learning or proof, and 57 % of
+it is the Régin stage, run from scratch on every pass. A pass sorts the union of the domains,
+rebuilds a maximum matching by Kuhn's algorithm, and then, for every variable `u`, walks the
+alternating graph from `u` (O(n^2) membership tests) and asks whether a free value is reachable
+(O(n d) more per `u`). On a costas node almost every pass finds nothing, because the stage is called once
+after stage 1 reaches its fixpoint, and once more after every pass that removed something, to
+establish that nothing is left. Gecode and Chuffed keep their matching across calls and repair it.
+
+### 2. The rule
+
+`regin_pass` asks `cannot_prune` first, and runs the old pass (now `regin_scratch`, unchanged)
+only when the answer is no.
+
+1. **Repair.** The instance keeps a matching (`g_val`, `g_owner`) from its last call. Every
+   matched edge whose value has left its variable's live domain is dropped, and every unmatched
+   variable is re-augmented (Kuhn, a free value tried first). If one cannot be, no matching
+   saturates the scope (a partial matching with no augmenting path from `i` cannot be extended to
+   cover `i`, Berge), and the answer is "may prune".
+2. **Tarjan.** Over the variables, `i -> j` when `i` holds the value matched to `j`, and `i`
+   marked when it holds a free value. By Régin's characterisation, an edge `(y, v)` outside the
+   matching lies in some maximum matching iff `v` is free, or `y` and `v`'s partner `j` share a
+   strongly connected component (an even alternating cycle), or `j` reaches a free value (an even
+   alternating path). The only edge that can fail all three is an edge into a component Tarjan has
+   already closed and that reaches no free value, and the search stops at the first such edge.
+
+The answer is exact both ways. `regin_scratch` removes `v` from `y` iff the edge `(y, v)` is in no
+maximum matching, because its `ink` walk from `v`'s partner `j` finds the least tight set containing `j`,
+which excludes `y` exactly when `j` reaches neither `y` nor a free value. And a scratch pass that
+removes nothing has no effect at all, since it pushes nothing and what it reads (`snap_of`, the trail's
+removers) is read only. Its conflict branch is reached iff no matching saturates the scope, which
+step 1 detects. So "cannot prune" holds iff the scratch pass would land nothing and not fail, and
+skipping it changes the speed and nothing else.
+
+`Propagator.count_pass` is still counted once per Régin pass, gated or not, so every counter the
+differential lane compares is unchanged.
+
+### 3. Why the bytes cannot change
+
+The gate only ever decides whether to run `regin_scratch`, and `regin_scratch` is the old code:
+it rebuilds its own matching from scratch, in the same value order, and never sees the kept one.
+Every removal it makes, their order, the `halls` and `vals` of each, and the pigeonhole's `seen`
+set are functions of the domains alone, as they were. A gating that skipped a pass which would
+have pruned would move proof lines. The exactness argument above is why none is skipped, and the
+BAGUETTE_DEBUG check below is what would see one.
+
+### 4. The state across passes, and backtracking
+
+The kept matching is a HINT, not a fact about the store, and it needs neither a trail entry nor a
+validity stamp. Step 1 re-reads every matched edge against the live domain at the start of every
+pass. After a backtrack the domains are wider (I-T1), so every kept edge still exists and the
+matching is still a matching. After a descent the edges that left are the ones step 1 drops. On a
+restart, or a different store handed to the same instance (the consistency oracle, a test), the
+same re-read applies. A stale hint costs augmentations, never an answer. The invariant that covers
+the answer is I-P2. Under BAGUETTE_DEBUG, whenever the gate says "cannot prune", `regin_pass` runs
+`regin_scratch` as well and raises `invariant violated: I-P2 (D-0215)` if it lands anything or
+fails. The scratch pass that lands nothing pushes nothing, so the check is invisible to the
+artefacts and to the counters.
+
+A scope whose declared span exceeds `max_gate_span` (2^16 values) gets no gate and runs from
+scratch as before, since the gate indexes values by slot. Such a scope already pays a list of every
+value per scratch pass.
+
+### 5. Tests
+
+`test_prop` (f), `test_regin_gate_random`, runs 400 random scenes of 2 to 6 variables over small
+windows, two copies of each, one instance gated and one not (`Alldiff.make ~gate:false`). Both
+receive the same decisions, value removals and backtracks (14 steps), and after each step both
+propagate and must agree on the outcome, every domain and every trail entry (variable, domain
+after, reason literals). Before each propagate, at stage 1's fixpoint, the gate's verdict is held
+against what the scratch stage then does on the ungated copy, so the test checks that the gate is
+exact and not only safe. Over the 400 scenes the gate skipped 5 147 passes and let 215 through, and every one of the 215 then pruned or failed. Breaking the gate (`Prunable` answered "cannot prune")
+fails both checks of (f), six earlier Régin checks of `test_prop` ((a), (b), (e) and the sweep), and,
+under BAGUETTE_DEBUG=1, the I-P2 check of section 4.
+
+### 6. Measurement
+
+Five instances of D-0207 (`/cluster/arthur/baguette-results/pernode2/`), the same flattenings and
+node limits, and two other Challenge instances whose flattening holds many `all_different_int`:
+2015 `p1f_13` (146 of them) and 2018 `team-assignment_data3_6_28` (7), both cut at 5 000 nodes.
+Instructions per node = (I - I_base) / (N - N_base), base the same command at one node. The binaries are the
+shipped release before `260a505d` (main `f355e42`), after `cba056a8`, and with the no-learning measurement
+patch (D-0207 `nolearn.patch`, `BAGUETTE_LEARN=off`) before `f0e1e6fe`, after `5414468f`. The
+before binaries are byte for byte D-0214's "after" binaries, so the five instances' before column is
+D-0214's measurement (`/scratch/arthur/wt-lazy-runs/out/*.final.*`, copied to
+`/cluster/arthur/baguette-results/regin/before-d0214/`). Re-run here, costas NL np gave
+5 820 916 per node again, to the instruction. The two other instances were run before and after
+here. The node, decision and conflict counts of every pair are equal, every `stats:` counter line is
+equal, the stdout is equal (the `limit:` line's cpu time aside), and so are the `.opb`/`.pbp` of
+every proved pair.
+
+Thousands of instructions per node, before / after (change). B is the shipped release binary, NL
+the no-learning measurement binary, np `--no-proof`, pf with the proof. rcpsp is `rcpsp11_66` for B
+and `rcpsp11_60` for NL, as in D-0207. p1f's B run solves at 1 047 nodes.
+
+| instance | B np | B pf | NL np | NL pf |
+|---|---|---|---|---|
+| costas 14 | 44 699 / 42 994 (-3.8 %) | 53 271 / 51 460 (-3.4 %) | 5 821 / 3 718 (-36.1 %) | 14 288 / 12 021 (-15.9 %) |
+| javarouting (jr63, 20 000 nodes) | 9 534 / 8 933 (-6.3 %) | 21 481 / 20 863 (-2.9 %) | 5 263 / 4 719 (-10.3 %) | 15 510 / 14 934 (-3.7 %) |
+| p1f 13 (5 000 nodes) | 8 608 / 3 660 (-57.5 %) | 11 080 / 6 016 (-45.7 %) | 6 445 / 3 151 (-51.1 %) | 8 870 / 5 452 (-38.5 %) |
+| team-assignment 3_6_28 (5 000 nodes) | 23 001 / 21 298 (-7.4 %) | 51 773 / 49 999 (-3.4 %) | 6 430 / 5 463 (-15.0 %) | 33 312 / 32 344 (-2.9 %) |
+| rcpsp 11 | 2 424 / 2 424 (0.0 %) | 9 078 / 9 078 (0.0 %) | 778 / 778 (0.0 %) | 6 553 / 6 556 (+0.04 %) |
+| mknap2-1 (20 000 nodes) | 40 149 / 40 149 (0.0 %) | 40 792 / 40 792 (0.0 %) | 524 / 524 (0.0 %) | 960 / 960 (0.0 %) |
+| QR48 | 1 036 / 1 036 (0.0 %) | 1 700 / 1 700 (0.0 %) | 431 / 431 (0.0 %) | 1 071 / 1 071 (0.0 %) |
+
+Costas without learning or proof loses 36 % of its node, inside D-0207's estimate of 30 to 45 %.
+With learning the learned PB rows still hold 83 % of the node (D-0207 section 5 item 1), so the gain
+is 3 to 4 % there until rank 1 is done, as D-0207 predicted. `p1f` is the instance where the stage
+weighed most, with 146 `all_different` in its flattening, and half of its node goes with or
+without learning. javarouting has one `all_different` beside its `element`s. The
+three families without an `all_different` are the control, unchanged to the instruction but for
+rcpsp NL pf (+0.04 %, 2 700 instructions per node in a 6.5 M node that writes a proof).
+
+**The artefacts on the test models.** The `.opb`, `.pbp` and stdout are byte-identical on the 214
+test models under default flags and `--bits-above none` (428 runs, every one exit 0 with both
+files, before `260a505d`, after `cba056a8`).
+
+**The differential lane** (`scripts/diff_lane.sh --tier all`, 347 runs) was run with the before
+and the after binary against the same reference, the one of 2026-11-21 that D-0214's `later/asks`
+re-record has not replaced yet. Both report the same 54 differing runs, all in `later/asks` (D-0214's
+counter), and the 54 report lines are identical to the character, counts included. The `--debug`
+pass (333 runs, BAGUETTE_DEBUG=1, so the I-P2 check of section 4 ran at every gated pass) is the same:
+42 identical lines before and after, all `later/asks`, and no invariant fired. Nothing is
+re-recorded here.
+
+**The suites.** `dune runtest --root . --force` under `ulimit -v 4000000` gives 4 700 ok and 0 FAIL
+(D-0214's 4 698 plus this record's two). `test_prop` under BAGUETTE_DEBUG=1 gives 822 ok and 0 FAIL.
+The scaling lane (`--enforce`, after binary) is green.
+
+### 7. What it costs in clarity
+
+- Régin's stage now has two algorithms where it had one, the exact test and the scratch pass
+  behind it. The scratch pass is untouched, so what produces prunings and proofs is still the
+  evident one D-0061 and M4-T2 chose. The gate is a pure function of the domains plus a hint,
+  about 130 lines, and its correctness argument is in the code comment above `cannot_prune`.
+- One mutable record per instance (`gate`), the first cross-pass state in `alldiff.ml`. It holds
+  no fact about the store, which is what keeps it off the trail.
+- A pass that prunes pays the gate and the scratch pass. The pass after it is gated, so a call
+  that prunes costs one scratch pass where it cost two.
+
+### 8. How to revert
+
+`git revert` the code commit of `wave63-regin` (`2545a19`), which touches `alldiff.ml` and
+`test_prop.ml` only. No signature changed. `make` gained an optional `?gate` (default on), and
+`regin_pass` keeps its name and type. Turning the gate off without reverting is `~gate:false` at
+the two `Alldiff.make` calls in `compile.ml`.
