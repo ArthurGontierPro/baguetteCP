@@ -719,7 +719,23 @@ let evaluate (m : M.t) (assign : int array) =
               (fun k _ -> operand (List.nth mb.M.mem_b k) = 1)
               (List.map operand mb.M.mem_x)
           in
-          named <> [] && List.for_all (( = ) (operand mb.M.mem_y)) named)
+          named <> [] && List.for_all (( = ) (operand mb.M.mem_y)) named
+      (* M18-coverage-T1 (D-0206), written apart from [Model.check_assignment]: the
+         tuples the selectors name, all equal to x, and at least one of them. *)
+      | M.Table tb ->
+          let x = List.map operand tb.M.tab_x in
+          let n = List.length x in
+          let named =
+            List.filteri (fun k _ -> operand (List.nth tb.M.tab_s k) = 1) tb.M.tab_s
+            |> List.length
+          in
+          named > 0
+          && List.for_all
+               (fun k ->
+                 operand (List.nth tb.M.tab_s k) = 0
+                 || List.for_all2 ( = ) x
+                      (List.init n (fun i -> tb.M.tab_t.((k * n) + i))))
+               (List.init (List.length tb.M.tab_s) Fun.id))
     m.M.constraints
 
 (* Brute force over the declared box: the independent oracle for the expected answer.
@@ -2278,6 +2294,99 @@ let test_member_models () =
     (member_src ~ints ~bools:(sels 1) ~call:"baguette_member([x1, x2], y, [b1, b1])"
        ~extra:[] ())
 
+(* M18-coverage-T1 (D-0206): `baguette_table`, end to end, as [test_member_models] does
+   it: each scene brute-forced over its declared box, the selectors included, solved, and
+   its proof checked. The scenes cover what [post_table] folds: a constant in x (equal,
+   and differing: the row `~s_t`), a tuple outside a declared hull (`~s_t`), a variable
+   twice in x (the [Aliased] packing), holes punched by int_ne, an empty table, and the
+   Boolean spelling. Then the refusals, by their message. *)
+let test_table_models () =
+  let r4 = "1..4" in
+  let sels n = List.init n (fun k -> Printf.sprintf "s%d" (k + 1)) in
+  let call xs tups =
+    let n = List.length tups in
+    Printf.sprintf "baguette_table([%s], [%s], [%s])" xs
+      (String.concat ", " (List.map string_of_int (List.concat tups)))
+      (String.concat ", " (sels n))
+  in
+  let tups = [ [ 1; 2; 3 ]; [ 2; 2; 4 ]; [ 3; 1; 1 ]; [ 4; 4; 2 ]; [ 2; 3; 1 ] ] in
+  run_model ~title:"table: SAT, x1 + x3 >= 6 picks (2, 2, 4) or (4, 4, 2)"
+    ~src:
+      (member_src
+         ~ints:[ ("x1", r4); ("x2", r4); ("x3", r4) ]
+         ~bools:(sels 5) ~call:(call "x1, x2, x3" tups)
+         ~extra:[ "int_lin_le([-1, -1], [x1, x3], -6)"; "int_ne(x2, x3)" ]
+         ());
+  run_model ~title:"table: UNSAT, x2 <> 2, 4 and x3 <> 1"
+    ~src:
+      (member_src
+         ~ints:[ ("x1", r4); ("x2", r4); ("x3", r4) ]
+         ~bools:(sels 5) ~call:(call "x1, x2, x3" tups)
+         ~extra:[ "int_ne(x2, 2)"; "int_ne(x2, 4)"; "int_ne(x3, 1)" ]
+         ());
+  run_model ~title:"table: SAT, a constant in x matches two tuples, differs from three"
+    ~src:
+      (member_src
+         ~ints:[ ("x1", r4); ("x3", r4) ]
+         ~bools:(sels 5) ~call:(call "x1, 2, x3" tups) ~extra:[ "int_ne(x1, 1)" ] ());
+  run_model ~title:"table: UNSAT, every tuple leaves a declared hull (rows ~s_t alone)"
+    ~src:
+      (member_src
+         ~ints:[ ("x1", "1..2"); ("x2", "3..4") ]
+         ~bools:(sels 3)
+         ~call:(call "x1, x2" [ [ 1; 2 ]; [ 3; 3 ]; [ 0; 4 ] ])
+         ~extra:[] ());
+  run_model
+    ~title:
+      "table: SAT, x1 twice in x (Aliased), (2, 2, 4) and (4, 4, 2) agree with themselves"
+    ~src:
+      (member_src
+         ~ints:[ ("x1", r4); ("y", r4) ]
+         ~bools:(sels 5) ~call:(call "x1, x1, y" tups) ~extra:[] ());
+  run_model ~title:"table: UNSAT, x1 twice in x and y <> 4"
+    ~src:
+      (member_src
+         ~ints:[ ("x1", r4); ("y", r4) ]
+         ~bools:(sels 5) ~call:(call "x1, x1, y" tups)
+         ~extra:[ "int_ne(y, 4)"; "int_ne(x1, 4)" ]
+         ());
+  run_model ~title:"table: UNSAT, an empty table"
+    ~src:
+      (member_src ~ints:[ ("x1", r4) ] ~call:"baguette_table([x1], [], [])" ~extra:[] ());
+  run_model ~title:"table: SAT, the Boolean spelling, exactly one of three, not p1"
+    ~src:
+      (member_src ~ints:[]
+         ~bools:([ "p1"; "p2"; "p3" ] @ sels 3)
+         ~call:
+           "baguette_table_bool([p1, p2, p3], [1, 0, 0, 0, 1, 0, 0, 0, 1], [s1, s2, s3])"
+         ~extra:[ "bool_clause([], [p1])"; "bool_clause([], [p2])" ]
+         ());
+  let ints = [ ("x1", r4); ("x2", r4) ] in
+  expect_rejected "table: a tuple count other than one value per cell is refused"
+    ~needles:[ "baguette_table"; "one per cell" ]
+    (member_src ~ints ~bools:(sels 2)
+       ~call:"baguette_table([x1, x2], [1, 2, 3], [s1, s2])" ~extra:[] ());
+  expect_rejected "table: a selector declared wider than 0..1 is refused"
+    ~needles:[ "baguette_table"; "not a Boolean variable declared on 0..1" ]
+    (member_src
+       ~ints:(ints @ [ ("c", "0..2") ])
+       ~bools:(sels 1) ~call:"baguette_table([x1, x2], [1, 2, 3, 4], [s1, c])" ~extra:[]
+       ());
+  expect_rejected "table: a selector that is also one of the x is refused"
+    ~needles:[ "baguette_table"; "distinct from x" ]
+    (member_src
+       ~ints:[ ("x1", "0..1") ]
+       ~bools:(sels 1) ~call:"baguette_table([x1, s1], [0, 1, 1, 0], [s1, x1])" ~extra:[]
+       ());
+  expect_rejected "table: a selector given twice is refused"
+    ~needles:[ "baguette_table"; "a selector occurs twice" ]
+    (member_src ~ints ~bools:(sels 1)
+       ~call:"baguette_table([x1, x2], [1, 2, 3, 4], [s1, s1])" ~extra:[] ());
+  expect_rejected "table: a variable among the tuples is refused"
+    ~needles:[ "baguette_table"; "every tuple value must be a constant" ]
+    (member_src ~ints ~bools:(sels 1) ~call:"baguette_table([x1, x2], [1, x2], [s1])"
+       ~extra:[] ())
+
 (* M16-file-review-T5 (D-0193): under [Discard_rows] (`--no-proof`) the objective's .opb
    line is not built, because nothing reads it; under the sinks that write the .opb it is
    there, the order encoding of the objective variable. *)
@@ -2330,6 +2439,7 @@ let () =
   test_bits_mixed_row_is_the_opb_row ();
   test_inverse_models ();
   test_member_models ();
+  test_table_models ();
   if !failures > 0 then (
     Printf.printf "\n%d failure(s)\n" !failures;
     exit 1)
