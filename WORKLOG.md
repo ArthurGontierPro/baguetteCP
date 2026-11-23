@@ -19,7 +19,6 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M18-coverage-T0, M18-coverage-T1 | tools/compare/challenge_globals.py, lib/core/prop/table.ml (new), lib/core/dune, lib/flatzinc/compile.ml, mznlib/fzn_table_int.mzn, mznlib/fzn_table_bool.mzn, docs/SPEC.md §2.1, docs/DECISIONS.md (D-0206), docs/ARCHITECTURE.md §1, CLAUDE.md map, test/models/table_*, test/unit/, docs/ROADMAP.md (T0, T1 rows) | agent-table (wave59-table) | 2026-11-23 |
 
 ## Cross-session requests
 
@@ -456,6 +455,7 @@ section 1. Shares are inclusive, of the whole run.
 
 | Task | Session | Date | Summary |
 |---|---|---|---|
+| M18-coverage-T0, M18-coverage-T1 (native `table`) | agent-table (`wave59-table`) | 2026-11-23 | **D-0206.** T0: the census reads NATIVE from mznlib. T1: `table.ml`, selectors as store variables, one DEF row per tuple, every pruning one `rup`; 5 models, brute force, veripb on both encodings, 3 mutation lanes, I-X10 Single_row. Measured on 20 Challenge instances, see the ROADMAP row |
 | D-0199 applied: the default becomes `--bits-above 0` | agent-bitsdefault (`wave56-bitsdefault`) | 2026-11-21 | **D-0201.** Commit A `18d4841` is the default alone (`Encoding.bits_above` = `Some 0`, usage text, SPEC §4.2, PROOF-FORMAT §3). B `5f0dc7a` makes eight unit suites, `check_unlimited.sh` and the model lane's second pass pin `--bits-above none` (207/207 stdout unchanged, so `test/expected/` is untouched). C `d53ce76` re-records the lane (252 + 240 moved, `bits0` unchanged), and the new `order` configuration equals the old `default` byte for byte. D `29d2c08` is the scaling ratchet (every growth fell). E `3e1d67e` pins the e2e controls to order. Gated on a fresh clone. |
 | M16-file-review-T5 (the front end and setup) | agent-review5, resumed by agent-review5b (`wave55-review5`) | 2026-11-21 | **D-0193.** The five front-end files read and tabled, the setup measured before node 1 on 150 large Challenge instances with and without the proof. Seven byte-identical levers: under `--no-proof` the objective's `.opb` line is not built (79 of the 150 setups -51 to -100 %, the largest peak RSS 32.7 GB to 364 MB), the lexer's class table and in-window integers, a token's start as two ints, the builder's and the name check's tables over `String`, `normalise_terms` without a table for short rows, `split_gcc_repeats`' count. Setup median -84.3 % without the proof, -2.1 % where the objective does not dominate, -0.0 % with the proof; 207 models x 5 artefacts equal. Left: `Encoding`'s name lookups and `Engine.create`, two requests |
 | M16-file-review-T4 (the proof side) | agent-review4, resumed by agent-review4b (`wave55-review4`) | 2026-11-21 | **D-0192.** The seven proof-side modules read and tabled, profiled on the lane with the proof and on the codes. Six byte-identical levers in `justify.ml` (`combine_origin`'s table, the claim key over interned names and its hash), `explanation.ml` (a node's hash computed once) and `writer.ml`/`encoding.ml` (solution lines); release lane median -6.3 % per node with the proof, 0.0 % without; rcpsp_11 -20 %, cyclic-rcpsp -12.5 %, openshop -20 %, codes -8.6 and -11.1 %. Gate on `cc52a57` green against gate 82's binary. Left: alldiff's derivation per pruning (52 % of cyclic-rcpsp, a request), solution lines as a list, soccer's long keys |
@@ -648,6 +648,11 @@ section 1. Shares are inclusive, of the whole run.
 | hotfix: the heap guard is overshot (`Fatal error: allocation failure during minor GC` or `Out of memory` instead of the M7-T8 refusal) | agent-heapguard (`wave56-heapguard`) | 2026-11-21 | **D-0200 [AUTONOME].** The budget was read only at a major cycle's end, and on a growing heap a cycle outlasts the climb to the address-space limit (1HZ5: 6.6 GB at one cycle end, abort at 14.5 GB before the next). Now also a SIGVTALRM poll every 0.1 s of CPU, under `--max-heap-mb` only, against the last snapshot plus the major words allocated since, confirmed by one forced `Gc.major`; `Out_of_memory` at the top level exits 5. The four instances: 16 of 16 runs (proof and not, default and `s=256k` minor heap) exit 5 at 8 196 to 8 703 MB under an 8 192 MB budget, RSS at most 9.1 GB. No timer without the flag; with it, instructions 0.01 to 0.39 % below main. Two lanes (test_proof, test_endtoend). Not merged; the orchestrator merges |
 
 ## Handoff notes
+
+### 2026-11-23 (agent-table, `wave59-table`): M18-coverage-T0 and T1, D-0206
+
+`table` is native (`lib/core/prop/table.ml`, mznlib `fzn_table_int`/`fzn_table_bool`): the .opb shrinks 3x to 16x where table dominates and nodes per 300 s rise, but black-hole got slower at the root, and the cost is in `Explanation`'s hash-consing of the inverse's alldiff `pol` lines (perf: `same_summands`, `caml_hash`), not in table.ml. That is the next thing to look at before a series. A wide table variable is held on the order encoding (family `table`), and a bits-native DEF row is not built.
+Not merged. Results are in `/cluster/arthur/baguette-results/wave59-table/`. Most 300 s proofs did not finish checking within the 300 s check limit (none was rejected).
 
 ### 2026-11-22 (agent-m10t5b, `wave57-m10t5b`): codes set under `-f` and `tiered`, D-0202
 
