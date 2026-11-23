@@ -19,7 +19,6 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M22-review-T4 (all but the module map), T6 (false comments in unclaimed files), T7, the speed section | CLAUDE.md (context-budget table, the `dune runtest` section; NOT the module map), README.md, lib/core/domain.ml, lib/core/retention.ml, lib/proof/encoding.ml, lib/flatzinc/lexer.ml, bin/main.ml (comments and the `--proof-comments` help line only), scripts/fuzz_lane.sh (new), scripts/README.md, tools/fuzz/, docs/reports/2026-11-23-code-review.md, docs/ROADMAP.md (M22-review section), WORKLOG.md | review-1123 (laptop session, branch `review-easy`, gate on fataepyc-07) | 2026-11-23 |
 
 ## Cross-session requests
 
@@ -463,6 +462,7 @@ section 1. Shares are inclusive, of the whole run.
 
 | Task | Session | Date | Summary |
 |---|---|---|---|
+| M22-review-T4 (but the module map), T6 (the seven comments), T7 (the fuzz lane), the report's speed section | review-1123 (laptop session, `review-easy`, gate on fataepyc-07) | 2026-11-23 | CLAUDE.md's context budget measured again (it said 340 KB for docs/, which is 2.5 MB) and its stale-binary section corrected; README's alldiff consistency; seven comments that had become false; `scripts/fuzz_lane.sh`; the report leads with speed (section 2), and T12 sends it to M20-pernode. Byte-identical, gate 2 in the handoff note. |
 | M22-review-T1, M22-review-T2 (the two bugs of the 2026-11-23 review) | review-1123 (laptop session, `review-fixes`, gate on fataepyc-07) | 2026-11-23 | T1: `builder.ml`'s constant fold through `Checked`; `int_lin_le([2^61, 1], [4, x], 0)` printed `x = 0` and VeriPB verified it, it is now refused with the limit named. T2: cumulative reports an overload among fixed tasks (exit 4 before), two regression models. Report, fuzz harness and rows T3 to T13: `docs/reports/2026-11-23-code-review.md`, `tools/fuzz/`. |
 | M20-pernode-T1 (where the factor per node goes) | agent-pernode2 (`wave59-pernode2`) | 2026-11-23 | **D-0207.** Five families on the same tree, instructions per node against Gecode and Chuffed, `perf` by layer; measurement only, results in `/cluster/arthur/baguette-results/pernode2/` |
 | D-0199 applied: the default becomes `--bits-above 0` | agent-bitsdefault (`wave56-bitsdefault`) | 2026-11-21 | **D-0201.** Commit A `18d4841` is the default alone (`Encoding.bits_above` = `Some 0`, usage text, SPEC §4.2, PROOF-FORMAT §3). B `5f0dc7a` makes eight unit suites, `check_unlimited.sh` and the model lane's second pass pin `--bits-above none` (207/207 stdout unchanged, so `test/expected/` is untouched). C `d53ce76` re-records the lane (252 + 240 moved, `bits0` unchanged), and the new `order` configuration equals the old `default` byte for byte. D `29d2c08` is the scaling ratchet (every growth fell). E `3e1d67e` pins the e2e controls to order. Gated on a fresh clone. |
@@ -658,6 +658,11 @@ section 1. Shares are inclusive, of the whole run.
 | M19-config-T0 (the tuning set) | agent-tuning (`wave59-tuning`) | 2026-11-23 | **D-0205.** `bench/tuning/`, 200 instances in 183 families. DONE except the driver hook. |
 
 ## Handoff notes
+
+### 2026-11-23 (review-1123, laptop session, `review-easy`): speed first, then the rest of M22-review
+
+FOR THE NODE SESSION: after its two bugs, the review's main finding is SPEED. Read `docs/reports/2026-11-23-code-review.md` section 2 and take its six findings into M20-pernode first (row M22-review-T12 says which M20 row each one goes to). Then section 3 in order (T3 to T11, T13). T3, T13 and T4's module map wait for M18-coverage-T1 to release `test/unit/` and CLAUDE.md's map. The retention default in T12 is the user's decision, with a rule proposed.
+Done here: T4 except the map, T6's seven comments, T7's `scripts/fuzz_lane.sh`. Gate 2 on fataepyc-07 against main `6ed7405`'s binary: check ok, 209 models byte-identical, diff 347/347, debug 333/333, scaling ok. The lane's first run showed a bug of the script itself (`xargs -L 1` joined lines), fixed in `a41dcd5`; then 192 models, 0 disagreements. Status in `/cluster/arthur/baguette-results/m22review2/`.
 
 ### 2026-11-23 (review-1123, laptop session, `review-fixes`): the code review, M22-review-T1 and T2
 

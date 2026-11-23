@@ -52,13 +52,9 @@ type result = Unchanged | Changed of t | Failed
      ([settle] restores I-D2), so a change is either a [Bound] or a [Holes] and never
      both. The engine relies on exactly that disjointness.
 
-   NOTE (M2-T5, deviation to route): this is a *sibling* of [result], not a payload of
-   [Changed]. Putting the change inside [Changed] is the shape ARCHITECTURE section 2
-   reads as promising, and it is a two-line diff -- [Changed of t * change] here and the
-   one match in [Store.apply] -- but lib/core/store.ml and test/unit/test_core.ml were
-   not this round's to edit. [classify] below computes the same value from the [old] and
-   [now] a trail entry already records, so nothing is lost today; the bridge is
-   [change_of]. *)
+   [change] is a sibling of [result]: [classify] below recovers it from the [old] and
+   [now] a trail entry records. Carrying it in [Changed] instead, as ARCHITECTURE section 2
+   reads, would be a change here and in [Store.apply] (M22-review-T6). *)
 type change =
   | NoChange
   | Bound of { lo : int option; hi : int option }
@@ -182,10 +178,11 @@ let equal a b =
    docs/ARCHITECTURE.md section 2, recovered from the pair of domains rather than
    returned alongside the new one - see the NOTE on [change] above for why.
 
-   Cost matters here: [Engine] calls this once per trail entry, on the hot path of the
-   fixpoint loop. The bound comparison is O(1) and returns first, so the common case (a
-   bound move, which is every pruning M1's propagators make) costs four integer
-   comparisons and no allocation beyond the result. Only the interior-hole case walks the
+   Who asks: [Trace], once per trail entry it writes a line for, and the engine's debug
+   messages. The propagation path reads an entry's bound moves directly ([Engine.lo_moved],
+   [Engine.hi_moved]) and never calls it. The bound comparison is O(1) and returns first,
+   so the common case (a bound move) costs four integer comparisons and no allocation
+   beyond the result. Only the interior-hole case walks the
    interval, and it is bounded by the span of a domain that is already known to have a
    bitset. That is the right way round: the rare case pays.
 

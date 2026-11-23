@@ -1,10 +1,9 @@
 (* Hand-written FlatZinc lexer, STREAMING.
 
-   Why not ocamllex/menhir: the `menhir` dune stanza needs `(using menhir X.Y)` in
-   `dune-project`, and dune-project is owned by another session (see WORKLOG). The
-   subset in SPEC 2.1 is small enough that a hand-written scanner plus a recursive
-   descent parser is both shorter and gives exact line/column positions for free, which
-   the spec's "clear diagnostic" requirement leans on.
+   Why not ocamllex/menhir: the subset in SPEC 2.1 is small enough that a hand-written
+   scanner plus a recursive descent parser is shorter, gives exact line/column positions
+   for free (SPEC 2.1's "clear diagnostic" requirement leans on them), and streams the
+   file at the measured cost given below.
 
    Memory model (M7-T27 (d), D-0128). The scanner reads the input through a window of
    [window] bytes and holds ONE lexeme of lookahead, which is all the parser (LL(1), it
