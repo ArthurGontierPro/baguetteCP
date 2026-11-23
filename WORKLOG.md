@@ -19,6 +19,7 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
+| M18-coverage-T2 (`diffn`, D-0213) | new `lib/core/prop/diffn.ml`, new `mznlib/fzn_diffn*.mzn`, `lib/flatzinc/compile.ml` (post_diffn only), `lib/core/dune`, new `test/models/diffn_*`, `test/unit/test_diffn*` or a section of `test_prop.ml`, `docs/DECISIONS.md` (D-0213), ROADMAP row T2, CLAUDE.md and ARCHITECTURE §1 module maps | agent-diffn (`wave61-diffn`) | 2026-11-23 |
 
 ## Cross-session requests
 
