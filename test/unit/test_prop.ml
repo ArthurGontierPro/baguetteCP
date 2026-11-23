@@ -8940,6 +8940,310 @@ let test_member_debug_models () =
                f rc)
             (rc = 0))
         models
+
+(* ===================================================== M18-coverage-T1: table
+
+   D-0206. table, by brute force over random small scenes: n in 2..3 positions over 1..4
+   (sometimes a constant, and now and then one variable twice: the [Aliased] packing),
+   2..7 random tuples over 0..5 (so some leave the declared hull), one selector each;
+   random bound narrowings, holes punched with no facts (a ROOT hole), and selectors fixed
+   by the scene. The claims of lib/core/prop/table.ml's header:
+
+   - I-P1: no solution (x and the selectors) inside the current domains is removed, and a
+     conflict only where there is none;
+   - DOMAIN consistency over (x, s) after a fixpoint, when nothing is aliased;
+   - I-P2: a second call changes nothing (aliased scenes too: the call loops to its own
+     fixpoint);
+   - every reason SOUND on its own facts over the DECLARED domains and the scene's holes,
+     and no fact names a selector the propagator moved itself (the reasons are on the
+     letters). *)
+module Table = Baguette_core.Table
+
+let test_table_brute_force () =
+  regular_rng := 2206;
+  let bad = ref 0 and scenes = ref 0 and changed = ref 0 and conflicts = ref 0 in
+  let reasons = ref 0 and first_bad = ref "" and aliased_scenes = ref 0 in
+  let flag what =
+    incr bad;
+    if !first_bad = "" then first_bad := what
+  in
+  for _ = 1 to 1500 do
+    incr scenes;
+    let n = 2 + regular_rnd 2 and nt = 2 + regular_rnd 6 in
+    (* var k < n: x_k; n + t: s_t *)
+    let decls =
+      List.init n (fun k -> (Printf.sprintf "x%d" k, 1, 4))
+      @ List.init nt (fun t -> (Printf.sprintf "s%d" t, 0, 1))
+    in
+    let nv = n + nt in
+    let store = mk_store decls in
+    let alias = regular_rnd 6 = 0 in
+    let pos_var = Array.init n (fun i -> if i = 1 && alias then 0 else i) in
+    let fixed =
+      Array.init n (fun _ -> if regular_rnd 7 = 0 then Some (1 + regular_rnd 4) else None)
+    in
+    let aliased = alias && fixed.(0) = None && fixed.(1) = None in
+    if aliased then incr aliased_scenes;
+    let name_of k = Store.name store (var k) in
+    let xs =
+      Array.init n (fun i ->
+          match fixed.(i) with
+          | Some c -> Table.Fixed c
+          | None ->
+              let k = pos_var.(i) in
+              Table.Cell { var = var k; name = name_of k; dlo = 1; dhi = 4 })
+    in
+    let tuples = Array.init (nt * n) (fun _ -> regular_rnd 6) in
+    let sels = Array.init nt (fun t -> var (n + t)) in
+    let p = Table.make store ~xs ~tuples ~sels in
+    let holes = ref [] and by_scene = Hashtbl.create 4 in
+    for k = 0 to n - 1 do
+      let d = Store.get store (var k) in
+      if regular_rnd 3 = 0 then
+        ignore (Store.set_lo store (var k) (Domain.lo d + 1) placeholder_pruning);
+      if regular_rnd 3 = 0 then
+        ignore (Store.set_hi store (var k) (Domain.hi d - 1) placeholder_pruning);
+      let d = Store.get store (var k) in
+      if regular_rnd 2 = 0 && Domain.hi d - Domain.lo d >= 2 then (
+        let h = Domain.lo d + 1 + regular_rnd (Domain.hi d - Domain.lo d - 1) in
+        holes := (k, h) :: !holes;
+        ignore (Store.remove store (var k) h placeholder_pruning))
+    done;
+    for t = 0 to nt - 1 do
+      match regular_rnd 10 with
+      | 0 ->
+          Hashtbl.replace by_scene (Printf.sprintf "s%d" t) ();
+          ignore (Store.set_hi store (var (n + t)) 0 placeholder_pruning)
+      | 1 ->
+          Hashtbl.replace by_scene (Printf.sprintf "s%d" t) ();
+          ignore (Store.set_lo store (var (n + t)) 1 placeholder_pruning)
+      | _ -> ()
+    done;
+    let declared k = if k < n then (1, 4) else (0, 1) in
+    let rec words k =
+      if k = nv then [ [] ]
+      else
+        let lo, hi = declared k in
+        List.concat_map
+          (fun v -> List.map (fun w -> v :: w) (words (k + 1)))
+          (List.init (hi - lo + 1) (fun d -> lo + d))
+    in
+    let xval a i = match fixed.(i) with Some c -> c | None -> a.(pos_var.(i)) in
+    let sols =
+      List.filter_map
+        (fun w ->
+          let a = Array.of_list w in
+          let sel t = a.(n + t) = 1 in
+          if
+            List.exists sel (List.init nt Fun.id)
+            && List.for_all
+                 (fun t ->
+                   (not (sel t))
+                   || List.for_all
+                        (fun i -> xval a i = tuples.((t * n) + i))
+                        (List.init n Fun.id))
+                 (List.init nt Fun.id)
+          then Some a
+          else None)
+        (words 0)
+    in
+    let used k =
+      k >= n
+      || List.exists (fun i -> fixed.(i) = None && pos_var.(i) = k) (List.init n Fun.id)
+    in
+    let inside a =
+      List.for_all
+        (fun k -> (not (used k)) || Domain.mem (Store.get store (var k)) a.(k))
+        (List.init nv Fun.id)
+    in
+    let on_holes a = List.for_all (fun (k, v) -> a.(k) <> v) !holes in
+    let live0 = List.filter inside sols in
+    let index_of nm =
+      match Store.var_named store nm with Some v -> Var.to_int v | None -> -1
+    in
+    let holds a (fct : Reason.fact) =
+      let v = a.(index_of (Reason.fact_owner fct)) in
+      if Reason.fact_is_lower fct then v >= Reason.fact_value fct
+      else v <= Reason.fact_value fct
+    in
+    let audit what facts claim_ok =
+      incr reasons;
+      List.iter
+        (fun f ->
+          let nm = Reason.fact_owner f in
+          if nm.[0] = 's' && not (Hashtbl.mem by_scene nm) then
+            flag
+              (Printf.sprintf "%s cites the selector %s, which it moved itself" what nm))
+        facts;
+      List.iter
+        (fun a ->
+          if on_holes a && List.for_all (holds a) facts && not (claim_ok a) then
+            flag
+              (Printf.sprintf "%s: a solution satisfies its facts [%s]" what
+                 (Reason.to_string_facts facts)))
+        sols
+    in
+    let from = Store.trail_length store in
+    let before = Store.snapshot store in
+    let outcome = Table.propagate p store in
+    for pos = from to Store.trail_length store - 1 do
+      let e = Store.trail_entry store pos in
+      let k = Var.to_int e.Store.var in
+      let removed =
+        List.filter (fun v -> not (Domain.mem e.Store.now v)) (Domain.to_list e.Store.old)
+      in
+      audit
+        ("the pruning of " ^ Store.name store e.Store.var)
+        (Reason.facts e.Store.reason)
+        (fun a -> not (List.mem a.(k) removed))
+    done;
+    match outcome with
+    | Propagator.Conflict c ->
+        incr conflicts;
+        audit "a conflict" (Reason.facts c.Store.c_reason) (fun _ -> false);
+        if live0 <> [] then flag "a conflict on a scene with a solution"
+    | Propagator.Fixpoint -> (
+        if not (Store.same_domains store before) then incr changed;
+        if not (List.for_all inside live0) then flag "a solution was removed";
+        let live = List.filter inside sols in
+        if not aliased then
+          List.iter
+            (fun k ->
+              if used k then
+                Domain.iter
+                  (fun v ->
+                    if not (List.exists (fun a -> a.(k) = v) live) then
+                      flag
+                        (Printf.sprintf "%s keeps %d, which no solution inside uses"
+                           (name_of k) v))
+                  (Store.get store (var k)))
+            (List.init nv Fun.id);
+        let snap = Store.snapshot store in
+        match Table.propagate p store with
+        | Propagator.Conflict _ -> flag "the second call conflicts"
+        | Propagator.Fixpoint ->
+            if not (Store.same_domains store snap) then flag "the second call prunes")
+  done;
+  if !first_bad <> "" then Printf.printf "     first violation: %s\n" !first_bad;
+  check
+    (Printf.sprintf
+       "table (D-0206): I-P1, domain consistency, I-P2 and every reason SOUND over the \
+        declared domains, %d scenes (%d aliased, %d pruned, %d conflicts, %d reasons, \
+        selector facts all the scene's): no violation"
+       !scenes !aliased_scenes !changed !conflicts !reasons)
+    (!bad = 0 && !changed > 300 && !conflicts > 50 && !reasons > 1000)
+
+(* table end to end on the checker, both encodings. One scene per shape of the header:
+   - table_holes: x1 <> x2 punches holes under decisions, so tuples die by a HOLE (K
+     citing the remover's facts), and indomain_max walks a fall-back: SAT;
+   - table_set: a selector set by C fixes x through E, under a decision: SAT;
+   - table_unsat: two tables chained through y, the sum out of reach (9 at most): UNSAT. *)
+let table_holes_src =
+  {|var 1..4: x1 :: output_var;
+var 1..4: x2 :: output_var;
+var 1..4: x3 :: output_var;
+var bool: s1;
+var bool: s2;
+var bool: s3;
+var bool: s4;
+var bool: s5;
+constraint baguette_table([x1, x2, x3], [4, 4, 1, 3, 4, 2, 4, 3, 3, 2, 1, 4, 1, 2, 2], [s1, s2, s3, s4, s5]);
+constraint int_ne(x1, x2);
+constraint int_ne(x2, x3);
+solve :: int_search([x2, x1, x3], input_order, indomain_max, complete) satisfy;
+|}
+
+let table_set_src =
+  {|var 1..3: x1 :: output_var;
+var 1..3: x2 :: output_var;
+var bool: s1;
+var bool: s2;
+var bool: s3;
+constraint baguette_table([x1, x2], [1, 2, 2, 3, 3, 1], [s1, s2, s3]);
+constraint int_le(2, x1);
+solve :: int_search([s3, x1, x2], input_order, indomain_min, complete) satisfy;
+|}
+
+let table_unsat_src =
+  {|var 1..4: x :: output_var;
+var 1..4: y :: output_var;
+var 1..4: z :: output_var;
+var bool: a1;
+var bool: a2;
+var bool: a3;
+var bool: b1;
+var bool: b2;
+var bool: b3;
+constraint baguette_table([x, y], [1, 2, 2, 3, 3, 4], [a1, a2, a3]);
+constraint baguette_table([y, z], [2, 1, 3, 1, 4, 2], [b1, b2, b3]);
+constraint int_lin_le([-1, -1, -1], [x, y, z], -10);
+solve satisfy;
+|}
+
+let test_table_veripb () =
+  let dir = Filename.temp_file "baguette_table" "" in
+  Sys.remove dir;
+  Sys.mkdir dir 0o700;
+  let saved = !Baguette_proof.Encoding.bits_above in
+  List.iter
+    (fun (enc, bits) ->
+      Baguette_proof.Encoding.bits_above := bits;
+      let solve file src = regular_solve dir ~file:(file ^ "_" ^ enc) src in
+      let _, outcome, opb, pbp = solve "table_holes" table_holes_src in
+      check
+        (Printf.sprintf "table (%s): the holes scene is SAT, its oracle accepts it" enc)
+        (match outcome with Search.Sat _ -> true | _ -> false);
+      run_veripb ~name:(Printf.sprintf "table (%s): the holes scene's proof verifies" enc)
+        ~build:(fun _ -> (opb, pbp));
+      let _, outcome, opb, pbp = solve "table_set" table_set_src in
+      check
+        (Printf.sprintf "table (%s): the set-selector scene is SAT" enc)
+        (match outcome with Search.Sat _ -> true | _ -> false);
+      run_veripb
+        ~name:(Printf.sprintf "table (%s): the set-selector scene's proof verifies" enc)
+        ~build:(fun _ -> (opb, pbp));
+      let _, outcome, opb, pbp = solve "table_unsat" table_unsat_src in
+      check
+        (Printf.sprintf "table (%s): the chained scene is UNSAT" enc)
+        (outcome = Search.Unsat);
+      run_veripb
+        ~name:(Printf.sprintf "table (%s): the chained scene's refutation verifies" enc)
+        ~build:(fun _ -> (opb, pbp)))
+    [ ("order", None); ("bits", Some 0) ];
+  Baguette_proof.Encoding.bits_above := saved
+
+(* The test/models/table_*.fzn under BAGUETTE_DEBUG=1, through member's child (it solves
+   any file): every D-0026 agreement check, every honoured idempotence claim. *)
+let test_table_debug_models () =
+  match bool_models_dir with
+  | None -> check "M18-coverage-T1: test/models/ found (the table debug lane ran)" false
+  | Some d ->
+      let models =
+        List.sort compare
+          (List.filter
+             (fun f ->
+               String.length f > 6
+               && String.sub f 0 6 = "table_"
+               && Filename.check_suffix f ".fzn")
+             (Array.to_list (Sys.readdir d)))
+      in
+      check "M18-coverage-T1: the five table models are there" (List.length models >= 5);
+      List.iter
+        (fun f ->
+          let rc =
+            Sys.command
+              (Printf.sprintf "BAGUETTE_DEBUG=1 %s --member-debug %s >/dev/null 2>&1"
+                 (Filename.quote Sys.executable_name)
+                 (Filename.quote (Filename.concat d f)))
+          in
+          check
+            (Printf.sprintf
+               "M18-coverage-T1: %s solves under BAGUETTE_DEBUG=1, every check passing \
+                (rc %d)"
+               f rc)
+            (rc = 0))
+        models
+
 (* ===================================================== M7-T33: alldiff conflicts learn
 
    D-0156. Until M7-T33 both of all_different's pigeonholes -- stage 1's Hall interval
@@ -9481,6 +9785,10 @@ let () =
   (* M7-T35, D-0189: member under the D-0026 agreement check. *)
   test_member_page_only_lemma ();
   test_member_debug_models ();
+  (* M18-coverage-T1, D-0206: table. *)
+  test_table_brute_force ();
+  test_table_veripb ();
+  test_table_debug_models ();
   if !failures > 0 then (
     Printf.printf "\n%d FAILURE(S)\n" !failures;
     exit 1)

@@ -185,6 +185,7 @@ module Cumulative = Baguette_core.Cumulative
 module Regular = Baguette_core.Regular (* M7-T28, D-0146 *)
 module Inverse = Baguette_core.Inverse (* M7-T28, D-0151 *)
 module Member = Baguette_core.Member (* M7-T28, D-0159 *)
+module Table = Baguette_core.Table (* M18-coverage-T1, D-0206 *)
 module View = Baguette_core.View
 
 (* M2-L12/D-0052: the clause propagator was widened to general order literals and its
@@ -788,6 +789,10 @@ let held_families (m : Model.t) : (int, string list) Hashtbl.t =
           (* M7-T28 (D-0159, D-0170): every line is a [Clause] over the ladders of x
              and y, and so are the threshold lemmas written ahead of some *)
           hold "member" (mb.Model.mem_y :: mb.Model.mem_x)
+      | Model.Table tb ->
+          (* M18-coverage-T1 (D-0206): DEF_t names x's order literals per tuple value,
+             and every line is a [Clause] over x's ladder *)
+          hold "table" tb.Model.tab_x
       | Model.Int_lin_le _ | Model.Int_lin_eq _ | Model.Int_le _ | Model.Int_lt _
       | Model.Int_eq _ | Model.Bool_clause _ | Model.Array_bool_or _
       | Model.Array_bool_and _ | Model.Bool_eq _ | Model.Bool_not _
@@ -873,6 +878,7 @@ let e2e_spec (names : string array) (con : Model.constr) : Baguette_proof.E2e.sp
       E.Min (op x, op y, op m)
   | Model.Array_int_maximum (m, xs) -> E.Array_max (List.map op xs, op m)
   | Model.Array_int_minimum (m, xs) -> E.Array_min (List.map op xs, op m)
+  | Model.Table _ -> E.refuse "table is not covered by --e2e"
   | Model.Inverse iv ->
       E.Inverse
         ( List.map op iv.Model.inv_f,
@@ -1803,6 +1809,86 @@ let compile (m : Model.t) : t =
             p);
       ]
   in
+  (* ------------------------------------------------------------- M18-coverage-T1
+
+     `baguette_table(x, t, s)`, D-0206 section 2: ALO over the selectors, and per tuple
+     one DEF row `k ~s_t + sum_i ([x_i >= t_i] + ~[x_i >= t_i + 1]) >= k`, a literal a
+     declared bound makes true dropped, the row the unit `~s_t` when one is false (a
+     value outside a declared hull, or a constant cell that differs), and no row when
+     none is left. Rows in tuple order, after ALO. *)
+  let post_table pos (tb : Model.table) =
+    let builtin = "baguette_table" in
+    let decl i =
+      let d = Store.get store (Var.of_int i) in
+      (Domain.lo d, Domain.hi d)
+    in
+    let xs = Array.of_list tb.Model.tab_x and ss = Array.of_list tb.Model.tab_s in
+    let n = Array.length xs and nt = Array.length ss in
+    if Array.length tb.Model.tab_t <> n * nt then
+      Error.failf pos
+        "builtin `%s`: %d tuple values for %d tuples of %d; there must be one per cell"
+        builtin (Array.length tb.Model.tab_t) nt n;
+    let letters =
+      List.filter_map
+        (function Model.Var i -> Some i | Model.Const _ -> None)
+        tb.Model.tab_x
+    in
+    let svars =
+      Array.map
+        (function
+          | Model.Var i when decl i = (0, 1) && not (List.mem i letters) -> i
+          | _ ->
+              Error.failf pos
+                "builtin `%s`: a selector is not a Boolean variable declared on 0..1 and \
+                 distinct from x"
+                builtin)
+        ss
+    in
+    if List.length (List.sort_uniq compare (Array.to_list svars)) <> nt then
+      Error.failf pos "builtin `%s`: a selector occurs twice" builtin;
+    let cells =
+      Array.map
+        (function
+          | Model.Const c -> Table.Fixed c
+          | Model.Var i ->
+              let dlo, dhi = decl i in
+              Table.Cell { var = Var.of_int i; name = name_of pos i; dlo; dhi })
+        xs
+    in
+    let slit k = Lit.ge (name_of pos svars.(k)) 1 in
+    ignore (Encoding.add_constraint encoding (Opb.clause (List.init nt slit)) : int);
+    for k = 0 to nt - 1 do
+      match Table.def_lits cells (Array.sub tb.Model.tab_t (k * n) n) with
+      | None ->
+          ignore
+            (Encoding.add_constraint encoding (Opb.clause [ Lit.negate (slit k) ]) : int)
+      | Some [] -> ()
+      | Some ls ->
+          let kk = List.length ls in
+          ignore
+            (Encoding.add_constraint encoding
+               (Opb.ge ((kk, Lit.negate (slit k)) :: List.map (fun l -> (1, l)) ls) kk)
+              : int)
+    done;
+    let aliased = List.length (List.sort_uniq compare letters) <> List.length letters in
+    let p =
+      Table.make store ~xs:cells ~tuples:tb.Model.tab_t ~sels:(Array.map Var.of_int svars)
+    in
+    if aliased then
+      [
+        (fun id ->
+          Propagator.pack ~id
+            (module Table.Aliased : Propagator.S with type t = Table.t)
+            p);
+      ]
+    else
+      [
+        (fun id ->
+          Propagator.pack ~idempotent:true ~id
+            (module Table : Propagator.S with type t = Table.t)
+            p);
+      ]
+  in
   (* ===================================================================== end M7-T28 *)
   (* ------------------------------------------------------------------------ M4-T9
 
@@ -2543,6 +2629,7 @@ let compile (m : Model.t) : t =
             | Model.Regular r -> post_regular pos r (* M7-T28, D-0146 *)
             | Model.Inverse iv -> post_inverse pos iv (* M7-T28, D-0151 *)
             | Model.Member mb -> post_member pos mb (* M7-T28, D-0159 *)
+            | Model.Table tb -> post_table pos tb (* M18-coverage-T1, D-0206 *)
           with Checked.Overflow msg ->
             reject_row pos
               ~what:

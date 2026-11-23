@@ -26612,3 +26612,97 @@ large (rcpsp, QR48) the node falls by 7 to 8 %, and the text's own share by a fi
 
 Revert commit `64305c0` (the code, the test and the module-map line) and the comment wording of the
 D-0209 commit in `writer.ml`; nothing else depends on `Text`. The decision and its numbers are this record.
+
+## D-0206  M18-coverage-T1: `table` as a native propagator over one SELECTOR per tuple, the tuples in the .opb as one row each, every pruning one `rup`
+
+**Status**: DECIDED (agent-table, `wave59-table`, 2026-11-23). No new `Explanation` constructor, no
+default changed for any model that does not call `table`.
+
+### 1. Context
+
+`table` reaches baguette through std's `fzn_table_int.mzn`, which writes one `array_int_element`
+per column over a SHARED index `i in 1..T` (T tuples). That decomposition is a star around `i`, so
+domain consistency on each element is already GAC on the table (Berge-acyclic network): the native
+propagator does not buy pruning strength. What it buys is SIZE. The index carries an order ladder
+and a direct encoding of width T, and each of the n elements writes about 2T rows over it
+(element.ml's header), so a table costs about (2n + 3) T rows and n + 1 propagators whose every
+call walks the index. M18-coverage's census reads 135 Challenge instances with `table`, 52 of them
+refused by the heap budget, 17 % complete; the refusals are the row's motive.
+
+### 2. The design
+
+`mznlib/fzn_table_int.mzn` (and `fzn_table_bool.mzn`) keeps the constraint whole as
+`baguette_table(x, t, s)`: `t` the tuples flattened row-major (T * n integers, a Boolean tuple as
+0/1), `s` one `var bool` SELECTOR per tuple introduced by the library's `let`, as member's selectors
+and regular's state flags are (D-0151, D-0159). The library drops the tuples that leave a declared
+domain (`t[k, j] in dom(x[j])`), which is a domain restriction the flattener does for free, and
+writes `false` for an empty table.
+
+The .opb rows (`compile.ml`'s `post_table`):
+
+```
+ALO      s_1 + ... + s_T >= 1
+DEF_t    k ~s_t + sum_{i} ( [x_i >= t_i] + ~[x_i >= t_i + 1] ) >= k
+```
+
+over the ORDER literals of x, a literal a declared bound makes constant dropped and k the number
+left; a constant-false literal (a value outside a declared hull, or a constant cell that differs)
+makes DEF_t the unit `~s_t`. DEF_t is D-0184's DEF1 shape: `s_t -> x = t`, one row per tuple rather
+than 2n clauses, and it propagates both ways by unit propagation (any of its literals false leaves
+the slack below k, so ~s_t; s_t true forces every literal). Without the selectors every row is true,
+and ALO says some tuple is chosen, so the .opb's solutions projected on x are exactly the table.
+
+### 3. Propagation (DOMAIN on (x, s), [Checking] when x names a variable twice)
+
+One call, at its fixpoint, regular's shapes over a single layer:
+
+- K, a tuple dies: some t_i is not in dom(x_i). `rup ~s_t \/ ~F`, F the WEAKEST bound excluding
+  t_i (x_i >= t_i + 1 or x_i <= t_i - 1), or for an interior hole its remover's facts. Assume s_t
+  and F: DEF_t forces x_i = t_i against the bound, or against the hole's own trace line.
+- C, no live tuple is a conflict (ALO) on every tuple's tail; one live and not set is set to 1 on
+  the others' tails (ALO).
+- E, a selector set to 1 (by C, a decision or a learned clause) fixes every x_i to t_i on its tail
+  (DEF_t). K, C, E repeat until E changes nothing.
+- S, x_i <> v when no live tuple has t_i = v: `rup x_i <> v \/ ~F`, F the union of the tails of the
+  dead tuples with t_i = v, plus the bound fact pinning v when v is a bound (regular's P3). Assume
+  x_i = v and F: every tuple with t_i <> v dies on DEF_t through x_i's ladder, every tuple with
+  t_i = v on its own line, and ALO is empty.
+
+The reasons are kept ON THE LETTERS (D-0151): a tail cites a dead selector's own tail, cached with
+its trail entry, never the selector, unless something other than this instance moved it. The tails
+merge as the strongest fact per letter and direction, so a tail has at most two facts per letter.
+
+Afterwards every value of every variable of the scope extends to a solution: v in x_i through a
+live tuple with t_i = v (S), s_t = 1 through t itself (K), s_t = 0 through another live tuple (or s_t
+is fixed by C). With one variable twice in x, two positions are coupled and a live tuple may
+disagree with itself on that variable, so compile.ml packs that instance `Aliased`, declared
+[Checking] (K kills every tuple a full assignment contradicts).
+
+The scan is compact-table's two devices without its reversible state: a bitset of the live tuples
+built per call from the selectors' store domains (the store is the trail), per (position, value)
+the list of tuples that carry it, and per (position, value) a RESIDUE, the last tuple found to
+support it. A call is O(T + sum_i |tuples supporting dom x_i| / word) for K and O(1) per supported
+value while its residue lives. The selectors ARE the reversible part, which is why no reversible
+bitset is needed; a call does pay O(T) to read them.
+
+### 4. Encodings
+
+The rows name order literals of x per tuple value, so `held_families` holds x on the ORDER encoding
+under `--bits-above 0` (family `table`), as it holds regular's, member's and element's (the
+decomposition held its index and results the same way). The selectors are Booleans. So the default
+encoding and `--bits-above none` give the same .opb for a table's scope; a bits-native table (DEF_t
+as a big-M row over bits) is not built here and is left to whoever finds a table variable wide.
+
+### 5. Options considered
+
+| option | .opb | consequence |
+|---|---|---|
+| keep std's element decomposition | (2n + 3) T rows, index ladder and direct encoding | GAC already, heap refusals stay |
+| selectors as store variables, DEF_t per tuple (chosen) | T + 1 rows, T Booleans | every pruning one `rup`, no lemma, no new constructor; a tuple death is a trail entry and a trace line, as a dead flag of regular is |
+| selectors internal to the propagator (CT's reversible bitset), no store variables | T + 1 rows | a death by an interior HOLE is not RUP from DEF_t (the hole clause and DEF_t need a case split), so it needs D-0184's KILL lemma written ahead per hole-killed tuple, member's `deriving_ahead` machinery, and a reversible state the store does not offer |
+| route `table` to `regular` (a table is a DFA) | the DFA's (n + 1) Q flags | the trie of T tuples has up to n T states: more flags than selectors |
+
+### 6. Revert
+
+The branch `wave59-table`. Deleting `mznlib/fzn_table_int.mzn` and `fzn_table_bool.mzn` alone gives
+back std's decomposition for every model; the builtin can stay accepted.
