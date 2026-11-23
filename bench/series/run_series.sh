@@ -14,7 +14,7 @@
 #   setup    clone at REV, build the release binary (dune -j 16, the recipe of `make release`),
 #            hash it, copy it to DIR/bin, write DIR/series.conf, generate the arm shims
 #   flatten  every edition's instances, flattened ONCE with the clone's mznlib (all arms hard-link
-#            the .fzn), PAR_FLAT at a time
+#            the .fzn), the editions side by side, PAR_FLAT instances in all (default: PAR x arms)
 #   run      the arms side by side, 2026 down to 2011, `PAR` instances at a time PER ARM; veripb on
 #            every finished run (bench/series/veripb_wrap.sh: own cgroup, own time limit)
 #   read     bench/series/read_series.sh: the tables, into DIR/tables
@@ -120,18 +120,27 @@ common_env() {
 }
 
 phase_flatten() {
+  # All editions at once, PAR_FLAT / 16 instances each: one slow instance (a flatten has a 1 200 s
+  # limit) holds up only its own edition and not the fifteen others.
   common_env
   cd "$SRC" || exit 1
   mkdir -p "$DIR/flat"
+  local per=$(( PAR_FLAT / 16 )) pids=() y
+  [ "$per" -ge 1 ] || per=1
   for y in $YEARS; do
     [ -e "$DIR/flat/$y.done" ] && continue
-    log "flatten $y start"
-    PAR=$PAR_FLAT TOTAL_MAX=$PAR_FLAT SOLVE_TIMEOUT=60 FLATTEN_TIMEOUT=1200 CHECK_TIMEOUT=60 \
-      MEM_KB=16777216 BAGUETTE="$DIR/bin/flatten-only.sh" INSTANCES="bench/challenge/$y.lst" \
-      scripts/compare_run.sh /scratch/arthur/mznc "$DIR/flat/$y" > "$DIR/flat/$y.log" 2>&1
-    touch "$DIR/flat/$y.done"
-    log "flatten $y end"
+    (
+      log "flatten $y start"
+      PAR=$per TOTAL_MAX=$per SOLVE_TIMEOUT=60 FLATTEN_TIMEOUT=1200 CHECK_TIMEOUT=60 \
+        MEM_KB=16777216 BAGUETTE="$DIR/bin/flatten-only.sh" INSTANCES="bench/challenge/$y.lst" \
+        scripts/compare_run.sh /scratch/arthur/mznc "$DIR/flat/$y" > "$DIR/flat/$y.log" 2>&1
+      touch "$DIR/flat/$y.done"
+      log "flatten $y end"
+    ) &
+    pids+=($!)
+    echo $! >> "$DIR/flat.pids"
   done
+  for p in "${pids[@]}"; do wait "$p"; done
   touch "$DIR/flat/DONE"
 }
 
