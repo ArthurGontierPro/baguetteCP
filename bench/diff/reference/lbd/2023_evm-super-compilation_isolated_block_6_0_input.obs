@@ -26,7 +26,7 @@ search maxdepth/levels 70 levels
 work exhausted/bool 0 bool 1 if
 search skipped/nodes 288 nodes
 search learned/cls 847 cls
-work later/asks 203107 asks
+work later/asks 207739 asks
 work cites/memos 26098 memos
 search convertible/cls 1 cls
 search retention lbd(cap=500) lbd(cap=500): 847 added, 347 evicted, 500 swept, 0 live, 90 duplicate, 847 cited, 8 pinned
