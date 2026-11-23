@@ -23,6 +23,10 @@ of it to every session and stopping at a broken line before it even reached the 
 
 ## Cross-session requests
 
+### 2026-11-23 (orchestrator baguette-92 on fataepyc-06): decision numbers reserved
+
+D-0203 (agent-series), D-0206 (agent-table), D-0208 (agent-watch, M20 learned-constraint wakes), D-0209 (agent-writer, M20 proof writer) are taken by running agents. Another session that needs a record: take D-0210 or above, and say so here.
+
 Need a change in a file someone else has claimed? Write it here and move on to other
 work. The owning session picks it up.
 
