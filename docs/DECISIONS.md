@@ -26478,3 +26478,44 @@ target after it.
 - Chuffed's per-node figure for LCG is on its own count (nodes + failures).
 - The layer shares are cycles sampled on a loaded node, multiplied by instruction counts, as in D-0169.
   They rank layers. They are not exact instruction counts per layer.
+
+## D-0210  [AUTONOME] M17-bench-series-T5: the 64 GiB observation series on fataepyc-07, arms A and C of one binary
+
+**Status**: DECISION on the harness settings, taken 2026-11-23 before the run (agent-node07, branch
+`wave60-node07`). The results section below is filled when the run ends.
+
+**Context.** D-0204 keeps 16 GiB for the reference series (comparability with the official
+entrants) and asks for one observation series at 64 GiB on the same binary, to say what the
+heap-budget refusals of D-0185 arm A (311 of 314 refusals) become. The node fataepyc-06 carries
+agent-series' 16 GiB series (D-0203, binary `f244c35a`), so this one runs on fataepyc-07, which the
+user opened to baguette campaigns while idle (CLAUDE.md, amended 2026-11-23). Both nodes have the
+same CPU (2 x AMD EPYC 7643, 192 threads, 2 TB), so wall times compare up to load.
+
+**Settings.** agent-series' driver (`bench/series/` at `e1971f6` on `wave58-series`), copied with
+its clone into `/scratch/arthur/node07-64g/` on fataepyc-07 and adapted there, uncommitted (the
+diff is published with the tables as `node07.diff`):
+
+| Knob | 16 GiB series (D-0203) | this series |
+|---|---|---|
+| binary | release `f244c35ac8a1960cd82fd6f39357891d` (`e1971f6`) | the same source built on 07, same md5 |
+| solver address space (`MEM_KB`) | 16 GiB | 64 GiB (`compare_run.sh`'s 32 GB ceiling lifted by an env variable) |
+| `--max-heap-mb` (`MEM_KB/2`) | 8 192 | 32 768 |
+| solver cgroup `MemoryMax` | 32G | 128G |
+| arms | A default + proof, B `-f` + proof, C `--no-proof` | A and C |
+| PAR per arm | 29 | 40 (80 processes) |
+| flattened files | flattened once at `e1971f6` | the same files, copied with rsync |
+| time, proof cap, veripb | 1 200 s, no proof cap, veripb 64G and 3 600 s, verified proofs deleted, 2 000 GB floor | the same |
+
+Options weighed for the memory safety of a node shared with another experiment (two `veripb` of
+45 GB each, ten days old): (a) per-run cgroups only, as on 06: 80 runs x 64 GiB is 5 TB, over the
+node's 2 TB, so the kernel's OOM killer could pick the other experiment's process; (b) a parent
+slice `node07.slice` with `MemoryMax=1400G` over every solver and checker of the series
+(`systemctl --user set-property --runtime`, node-local, gone at reboot), so an overflow kills one
+of OUR runs and never another experiment's, plus a launch gate that holds a solve or a check while
+the node has under 400 GB available or the slice holds over 1 100 GB of anonymous memory; (c) a
+lower PAR. Chosen: (b), because it protects the other experiment whatever the instances do and
+leaves PAR as asked. Its cost: a run killed by the slice's OOM would read as a crash, so the
+slice's `oom_kill` counter is logged every 5 minutes and reported with the tables (0 means no run
+was touched).
+
+**Revert.** Nothing in the repository changes. The adaptation lives in the run directory's clone.
