@@ -19,6 +19,7 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
+| M20-pernode-T4 (D-0207 rank 5: Régin stage incremental/gated, D-0215) | `lib/core/prop/alldiff.ml`, its tests (`test/unit/test_prop.ml` or a new alldiff test), `docs/DECISIONS.md` (D-0215), `docs/ROADMAP.md` (row T4) | agent-regin (`wave63-regin`) | 2026-11-23 |
 
 ## Cross-session requests
 
