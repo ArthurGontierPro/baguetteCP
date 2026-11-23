@@ -19,7 +19,6 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M20-pernode-T2 (D-0214) | `lib/core/prop/element.ml`, then the other globals where mechanical (`alldiff.ml`, `gcc.ml`, `cumulative.ml`, named in D-0214 before touched), `test/unit/test_prop.ml` (the D-0124 BAGUETTE_DEBUG check), `docs/DECISIONS.md` (D-0214), `docs/ROADMAP.md` (row T2). NOT `store.ml`, `explanation.ml` | agent-lazy, branch `wave62-lazy` | 2026-11-23 |
 
 ## Cross-session requests
 
@@ -459,10 +458,13 @@ section 1. Shares are inclusive, of the whole run.
 
 - 2026-11-23, agent-tuning to the owner of `bench/series/` (wave58-series): `run_series.sh` fixes the solve time at 1 200 s and runs every instance of `bench/challenge/<year>.lst`. M19-config-T0 (D-0205, `bench/tuning/set.lst`) needs `--list FILE` (ids to keep, one per line or the first column of a .lst) and `--solve-timeout SECONDS` (300). Not edited by me.
 
+- 2026-11-23, agent-lazy (M20-pernode-T2, D-0214, `wave62-lazy`) to the owner of `lib/core/store.ml` (agent-watch this round): please add three history readers next to `lo_reasons_at`, `remover_at h ~var v` (= `remover h.h_store ~before:h.h_upto`), `at_root_at h pos` and `explanation_at h e`, and drop the copies at the top of `lib/core/prop/element.ml`'s frame section (they read `h.Store.h_store`, which is the only place outside store.ml that does). Then alldiff's `s_holes` can be read from a frame the same way (D-0214 section 6: 5.3 % of a costas node without learning or proof, in the bounds stage alone).
+
 ## Completed
 
 | Task | Session | Date | Summary |
 |---|---|---|---|
+| M20-pernode-T2 (Element, and rootness in Cumulative and Gcc) | agent-lazy (`wave62-lazy`) | 2026-11-23 | **D-0214.** An `Element` pruning records a frame (the domains it read and the trail cut, D-0124) and builds its reason (`Reason.Later`, memoised per pass) and its derivation from it when asked. `Cumulative`/`Gcc` use `Store.at_root`. Byte-identical on 428 model runs and the five D-0207 instances. javarouting -33 % per node without learning or proof, -22 % shipped. The differential lanes differ in the `later/asks` counter only (not re-recorded). test_prop's D-0124 BAGUETTE_DEBUG failure was a test defect, now fixed |
 | M20-pernode-T3 (the arithmetic part) | agent-arith (`wave61-arith`) | 2026-11-23 | **D-0212.** `Linear.make` checks the row once (M1-T23's cap over the frozen bounds) and a row that passes runs plain `+`, `*`, `/`; one that does not keeps `Checked`; BAGUETTE_DEBUG audits both ways and asserts the premise. Byte-identical (418 model runs, five D-0207 instances), diff 347/347, debug 333/333, scaling ok, runtest 4 627 ok 0 FAIL. Per node: shipped -0.1 to -3.2 %, no learning mknap -21.4 % |
 | M22-review-T4 (but the module map), T6 (the seven comments), T7 (the fuzz lane), the report's speed section | review-1123 (laptop session, `review-easy`, gate on fataepyc-07) | 2026-11-23 | CLAUDE.md's context budget measured again (it said 340 KB for docs/, which is 2.5 MB) and its stale-binary section corrected; README's alldiff consistency; seven comments that had become false; `scripts/fuzz_lane.sh`; the report leads with speed (section 2), and T12 sends it to M20-pernode. Byte-identical, gate 2 in the handoff note. |
 | M20-pernode-T5 (the buffer part: proof text through one buffer) | agent-writer (`wave60-writer`) | 2026-11-23 | **D-0209.** New `lib/proof/text.ml`: `Writer`'s lines and `Opb.output_row`'s rows written in one `Text` buffer, integers by digit pairs in place, literal names from a per-variable prefix cache, `pol` tokens counted in the write. `.opb`/`.pbp`/stdout byte-identical on 209 models x 2 flag sets, lane 347/347 and debug 333/333, scaling ok, 4 563 ok. Proved node -7.9 % rcpsp, -7.4 % QR48, -4.5 % javarouting, -1.5 % costas, -0.4 % mknap (instructions). Not merged |
@@ -662,6 +664,12 @@ section 1. Shares are inclusive, of the whole run.
 | M19-config-T0 (the tuning set) | agent-tuning (`wave59-tuning`) | 2026-11-23 | **D-0205.** `bench/tuning/`, 200 instances in 183 families. DONE except the driver hook. |
 
 ## Handoff notes
+
+### 2026-11-23 (agent-lazy, `wave62-lazy`): M20-pernode-T2, D-0214
+
+Element's reasons and the eager part of its derivations are built on demand from a frame (immutable domains plus `Store.history`). The bytes are identical, and javarouting costs -33 % per node without learning or proof and -22 % shipped without proof. Cumulative and Gcc ask rootness by `Store.at_root` (rcpsp -5 %).
+At merge, both differential lanes differ ONLY in the `later/asks` counter on the four element instances (54 runs, and 42 under `--debug`). That is by construction, and the reference should be re-recorded in the merge's own commit.
+Next: `Alldiff`'s `s_holes` from a frame (7 % of a costas node without learning), once `remover_at`/`at_root_at` move from element.ml into store.ml (cross-session request). test_prop's old D-0124 BAGUETTE_DEBUG failure was a test reading a memo, and it is fixed.
 
 ### 2026-11-23 (agent-arith, `wave61-arith`): M20-pernode-T3, the arithmetic part, D-0212
 
