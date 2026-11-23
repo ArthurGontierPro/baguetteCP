@@ -167,8 +167,24 @@ let bit_mem a k = a.(k / wbits) land (1 lsl (k mod wbits)) <> 0
 
 (* The index of the single bit set in [b]. *)
 let bit_index b =
-  let rec go b i = if b = 1 then i else go (b lsr 1) (i + 1) in
-  go b 0
+  let i = ref 0 and b = ref b in
+  if !b land 0xFFFFFFFF = 0 then (
+    b := !b lsr 32;
+    i := !i + 32);
+  if !b land 0xFFFF = 0 then (
+    b := !b lsr 16;
+    i := !i + 16);
+  if !b land 0xFF = 0 then (
+    b := !b lsr 8;
+    i := !i + 8);
+  if !b land 0xF = 0 then (
+    b := !b lsr 4;
+    i := !i + 4);
+  if !b land 0x3 = 0 then (
+    b := !b lsr 2;
+    i := !i + 2);
+  if !b land 0x1 = 0 then incr i;
+  !i
 
 let make store ~xs ~tuples ~sels : t =
   let n = Array.length xs and nt = Array.length sels in
@@ -424,10 +440,10 @@ let exclusion store t k i =
       else if v > hi then (if v <= dhi then add_key t ((2 * s) + 1) (v - 1))
       else add_hole store t i v
 
-(* Step K over every position: kill live AND NOT (tuples dom(x_i) supports). *)
+(* Step K over every position: kill live AND NOT (tuples dom(x_i) supports). Returns the
+   set selectors, read with the live ones (a set selector K would kill is a conflict). *)
 let kill_pass store t =
-  let changed = ref false in
-  ignore (read_live store t : int list);
+  let set = read_live store t in
   for i = 0 to t.n - 1 do
     let lo, hi, mem = cell_dom store t i in
     Array.fill t.mask 0 (Array.length t.mask) 0;
@@ -444,26 +460,27 @@ let kill_pass store t =
         let k = (w * wbits) + bit_index b in
         exclusion store t k i;
         move_sel store t ~set:false k;
-        bit_clear t.live k;
-        changed := true
+        bit_clear t.live k
       done
     done
   done;
-  !changed
+  set
 
-(* Step C on the live bitset K left. *)
+(* Step C on the live bitset K left. Returns the selector it set, if it set one. *)
 let count_pass store t =
-  let count = ref 0 and last = ref (-1) in
-  Array.iteri
-    (fun w word ->
-      let x = ref word in
-      while !x <> 0 do
-        let b = !x land - !x in
-        x := !x lxor b;
+  (* 0, 1 or "2 or more" live tuples, and the one when it is one: a word with two bits
+     set, or a second non-zero word, ends the scan. *)
+  let count = ref 0 and last = ref (-1) and w = ref 0 in
+  let nw = Array.length t.live in
+  while !count < 2 && !w < nw do
+    let word = t.live.(!w) in
+    if word <> 0 then
+      if word land (word - 1) <> 0 then count := 2
+      else (
         incr count;
-        last := (w * wbits) + bit_index b
-      done)
-    t.live;
+        last := (!w * wbits) + bit_index word);
+    incr w
+  done;
   if !count = 0 then (
     start t;
     for k = 0 to t.nt - 1 do
@@ -475,14 +492,16 @@ let count_pass store t =
     for k = 0 to t.nt - 1 do
       if k <> !last then add_sel store t ~set:false k
     done;
-    move_sel store t ~set:true !last)
+    move_sel store t ~set:true !last;
+    [ !last ])
+  else []
 
 (* Step E: a set selector fixes x to its tuple. Over distinct variables every t_i is in
    dom(x_i) (K has run), so no push can fail; with x naming a variable twice, an earlier
    push of the same tuple can have moved it past t_i, and that conflict is built here, on
    the selector's tail and the bound it crossed, rather than left to [Store.apply]'s
    [Failed] arm, whose reason is empty (Store.unattributed_conflict). *)
-let enforce_pass store t =
+let enforce_pass store t set =
   let changed = ref false in
   List.iter
     (fun k ->
@@ -520,7 +539,7 @@ let enforce_pass store t =
               if Domain.hi d > v then
                 push (Reason.at_most ~name ~decl:dhi v) (Store.set_hi store var v))
         t.xs)
-    (read_live store t);
+    set;
   !changed
 
 (* What removing [v] from [d] concludes: the settled bound when [v] is a bound, nothing
@@ -596,13 +615,14 @@ let values store t i =
 let propagate t store =
   try
     let rec round () =
+      (* [t.live] is exact after the last K: C sets but kills nothing, and the last E
+         changed nothing. *)
       let rec settle () =
-        ignore (kill_pass store t : bool);
-        count_pass store t;
-        if enforce_pass store t then settle ()
+        let set = kill_pass store t in
+        let fixed = count_pass store t in
+        if enforce_pass store t (fixed @ set) then settle ()
       in
       settle ();
-      ignore (read_live store t : int list);
       let mark = Store.trail_length store in
       for i = 0 to t.n - 1 do
         values store t i
