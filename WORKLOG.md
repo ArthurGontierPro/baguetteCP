@@ -451,6 +451,8 @@ section 1. Shares are inclusive, of the whole run.
 | **`Encoding` finds a variable by its name at every declaration and every row term** (D-0193 sections 5 and 6): `declare_int_gen`, `find`, `owner` and `hash` are 23.7 % of smelt_11's setup samples, and `Encoding` 34.6 % in all. `Compile` knows each variable's model index; an `Encoding` keyed by it (the name kept for printing) would remove a string hash per term. An interface change, a task of its own | `lib/proof/encoding.ml`, `lib/flatzinc/compile.ml` | agent-review5b (M16-file-review-T5) | open |
 | **`Engine.create` is 13.9 % of smelt_11's setup** (D-0193 section 5, profile in `fataepyc-06:/scratch/arthur/wave55-review5-runs/prof/smelt11.base.attr`): `create_inner`, `index_static`, `scope_of` and `Propagator.pack_inner` | `lib/core/engine.ml` | agent-review5b (M16-file-review-T5) | open |
 
+- 2026-11-23, agent-tuning to the owner of `bench/series/` (wave58-series): `run_series.sh` fixes the solve time at 1 200 s and runs every instance of `bench/challenge/<year>.lst`. M19-config-T0 (D-0205, `bench/tuning/set.lst`) needs `--list FILE` (ids to keep, one per line or the first column of a .lst) and `--solve-timeout SECONDS` (300). Not edited by me.
+
 ## Completed
 
 | Task | Session | Date | Summary |
@@ -645,6 +647,7 @@ section 1. Shares are inclusive, of the whole run.
 | hotfix: the Stack overflow on the ATSP instances (D-0194 §7) | agent-stack (`wave56-stack`) | 2026-11-21 | **D-0197 [AUTONOME].** Not on the exit path: `Learned.make`'s merge recursed once per term (`learned.ml:247`) and PB conflict analysis built a 32 168 204-term row (a ladder 22 M wide). Constant-stack walks in `learned.ml` (+ `List.merge` replaced), `writer.ml` (`Pol.write_with`, `Pol.tokens`), `store.ml`; test in `test_learned.ml` under a 512 KiB fiber stack. Same bytes everywhere (gate on `99cf6b0`). |
 | M6-T2 (re-scope the minor-GC lever after M16) | agent-gc (`wave56-gc`) | 2026-11-21 | **D-0198 [AUTONOME].** No `Bigarray`/`Bytes` move: the trail and the domains are 0.5 to 4.5 % of the words allocated. The nursery at 4 M words (`bin/main.ml`, an eighth of a tight `ulimit -v` at most) and `Justify.sort_pairs` over indices. Instructions -7.1 % (no proof) and -11.7 % (proof) median, byte-identical |
 | hotfix: the heap guard is overshot (`Fatal error: allocation failure during minor GC` or `Out of memory` instead of the M7-T8 refusal) | agent-heapguard (`wave56-heapguard`) | 2026-11-21 | **D-0200 [AUTONOME].** The budget was read only at a major cycle's end, and on a growing heap a cycle outlasts the climb to the address-space limit (1HZ5: 6.6 GB at one cycle end, abort at 14.5 GB before the next). Now also a SIGVTALRM poll every 0.1 s of CPU, under `--max-heap-mb` only, against the last snapshot plus the major words allocated since, confirmed by one forced `Gc.major`; `Out_of_memory` at the top level exits 5. The four instances: 16 of 16 runs (proof and not, default and `s=256k` minor heap) exit 5 at 8 196 to 8 703 MB under an 8 192 MB budget, RSS at most 9.1 GB. No timer without the flag; with it, instructions 0.01 to 0.39 % below main. Two lanes (test_proof, test_endtoend). Not merged; the orchestrator merges |
+| M19-config-T0 (the tuning set) | agent-tuning (`wave59-tuning`) | 2026-11-23 | **D-0205.** `bench/tuning/`, 200 instances in 183 families. DONE except the driver hook. |
 
 ## Handoff notes
 
@@ -794,6 +797,10 @@ Two findings for other rows (D-0194 section 7). `main.exe 2021_ATSP_instance10_0
 - D-0199 recommends the default `--bits-above 0` (order kept behind `none`). No code changed: the orchestrator flips the default in its own commit, with the lane re-record. A middle W (64, 100) does not save `nfc` (widths 421-1 849) and costs `steelmillslab`/`radiation`.
 - Next lever: `nfc` on bits (a fifth of the nodes/s, 4.5x RSS, D-0175 §4), as its own task, possibly a bits-path bug.
 - Finding for D-0198's owner (D-0199 §4): 24 ERROR rows, `allocation failure during minor GC` at 14.2-14.7 GB RSS with `--max-heap-mb 8192`, where D-0175's binary REFUSED; the heap guard no longer bounds RSS.
+
+**M19-config-T0, agent-tuning, 2026-11-23 (branch `wave59-tuning`, not merged).** `bench/tuning/` holds `set.lst` (200 ids, 183 families), `draw_set.py` (the rule, deterministic), `agreement.py` (score, full set against subset) and the README protocol; D-0205 has the rule and the validation.
+The subset ranks A < B and A < C like the full set, but cannot separate B from C at 300 s (gap under about 0.03 of the share is noise). No run was made.
+Next: `bench/series/run_series.sh` needs `--list` and `--solve-timeout` (cross-session request above), then the first tuning run is M19-config-T2 or T1.
 
 ## Handoff notes
 

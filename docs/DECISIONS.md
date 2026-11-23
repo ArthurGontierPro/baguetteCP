@@ -26282,3 +26282,38 @@ yet, so the Challenge's conventions do not bind a solver that logs proofs.
 
 **Revert.** Point 2 is a harness setting (`bench/series/`, `scripts/compare_run.sh`), not solver
 code. Point 1 changes nothing until M19-config-T1 measures.
+
+## D-0205  [AUTONOME] M19-config-T0: the tuning set, 200 Challenge instances drawn by a rule, and the protocol for comparing an idea
+
+**Status**: DECISION on a measurement tool, recorded 2026-11-23 (agent-tuning, branch `wave59-tuning`).
+No campaign was run, the set is computed from D-0185's rows (binary `7c880bce`, 1 200 s, three arms).
+
+**Context.** M19-config rows each need an on/off table, and a full series costs two days. Options:
+(a) the full 1 574 instances at 300 s, about 12 h per arm pair at 87 processes, no choice to make;
+(b) a random 200, cheap but most draws are all-timeout or trivial, so it cannot separate ideas;
+(c) a stratified draw weighted toward instances where configuration matters. Chosen: (c), because
+D-0185 shows 749 of 1 574 instances tie between A and B.
+
+**Rule** (code `bench/tuning/draw_set.py`, details `bench/tuning/README.md`): candidate = in all
+three arms, no FLATTEN-FAIL, not refused by all, not complete within 10 s in every arm. Tier 1
+contested, 2 hard with an incumbent, 3 solved by all over 10 s, 4 nothing to compare. Round r gives
+each family (problem name) its r-th best instance by (tier, md5 of id). Result: 1 222 candidates,
+183 families, 200 instances, tiers 164/15/6/15, 17 families have two instances and the rest one.
+Re-draw: the command in the README; the same inputs give the same list. A re-draw is a new
+D-record, because it changes what past tuning rows were measured on.
+
+**Protocol**: 300 s, with and without proof, a flag against the default of the day, score and
+complete/incumbent counts by `agreement.py`, status changes listed, per-family reading in aggregate.
+The subset proposes, the full series decides, and their verdicts must agree in sign.
+
+**Validation against D-0185** (`agreement.py`): subset and full set both rank C > B > A on the 1 200 s
+rows (shares 0.391/0.367/0.242 vs 0.403/0.337/0.260); B over A is 94+/56- (subset) against 489+/336-
+(full). The subset narrows C against B (gap 0.024 vs 0.066). On the same rows cut at 300 s (an
+optimistic cut) the subset ranks B and C level (0.372 vs 0.369, order B > C) where the full set has
+C ahead (0.395 vs 0.339). The set separates A from B and from C, and does not separate B from C at
+300 s, so a gap under about 0.03 of the share between two arms is noise.
+**Limits**: tier 4 takes 15 slots to keep every attempted family, which costs resolution; the
+set is validated on D-0185's configurations, not on future ideas (restarts, new phases), where the
+agreement is unknown until the first full series (M17) repeats a row.
+
+**Revert**: delete `bench/tuning/`; nothing else depends on it.
