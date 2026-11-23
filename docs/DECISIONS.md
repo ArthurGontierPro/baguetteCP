@@ -26478,3 +26478,137 @@ target after it.
 - Chuffed's per-node figure for LCG is on its own count (nodes + failures).
 - The layer shares are cycles sampled on a loaded node, multiplied by instruction counts, as in D-0169.
   They rank layers. They are not exact instruction counts per layer.
+
+## D-0209  M20-pernode-T5: the proof text through one buffer. Integers and literal names are written in place and each variable's name prefix is rendered once; the .opb and .pbp are byte-identical, and a proved node costs 0.4 to 7.9 % fewer instructions
+
+**Status**: DONE on branch `wave60-writer` (agent-writer, 2026-11-23), not merged. Rank 2 of D-0207
+section 6. Measured on `fataepyc-06` while the Challenge series of 2026-11-23 ran at 87 processes,
+one experiment process at a time, in instructions (`perf stat -e instructions:u`). Runs, scripts and
+profiles in `/scratch/arthur/wt-writer-runs/` (scripts, logs and profiles summaries copied to `/cluster/arthur/baguette-results/writer/`).
+
+### 1. The rule
+
+A new module, `lib/proof/text.ml`, holds one line's bytes: a growable `Bytes` and a write position.
+`Writer` assembles every line the search writes in one `Text.t` and hands it to the channel in one
+call, and `Opb.output_row` does the same for a row of the .opb. Three things are written straight into
+the bytes, with no `Printf`, no intermediate string and no closure per token:
+
+- an integer (`Text.int`): its digits two at a time from a 200-byte table, at their final position,
+  the digit count from a comparison tree. `Lit.add_int` wrote them into a scratch, then blitted the
+  scratch into a `Buffer`.
+- a literal (`Text.lit`): `~` when negative, then the owner's PREFIX (`x_ge_`, `x_eq_` or `x_bit_`, the
+  identifier sanitised), then `m` for a negative value and the digits. The prefix is rendered once per
+  variable and kept in a direct-mapped cache of 16 384 entries, keyed by the identifier string.
+  `Lit.add_sanitized` scanned the identifier (`Lit.sanitize`) once per run of literals of one owner,
+  which on a clause line is once per literal.
+- a `pol` (`Pol.write_with`): the left-spine walk of D-0197 writes `@c<id>` in place on the writer's
+  path (no `id_out` closure), and returns the number of tokens it wrote, which is `Pol.tokens p`. The
+  writer no longer walks every `pol` a second time to count them for `--stats`.
+
+### 2. Why the bytes cannot change
+
+- `Text.int n` is `string_of_int n`: the same digits, and `min_int` goes through `string_of_int` as it
+  did in `Lit.add_int`.
+- `Text.lit l` is `Lit.to_string l`. A prefix is a function of the identifier's CONTENT and a constant.
+  An entry is used only when its identifier is the same string (`==`, or `String.equal` for a copy).
+  OCaml strings are immutable, so the entry holds what would be rendered now. A collision or a miss
+  renders the prefix again and replaces the entry, which costs time and never a byte. The key is the
+  identifier, not the rendered name, so `Lit.sanitize`'s non-injectivity (D-0087) does not reach it:
+  `a-b` and `a_b` have two entries holding equal prefixes.
+- The `pol` walk emits the same tokens in the same order; only where the reference's digits go changed.
+
+Evidence:
+
+- the 209 test models, each under the default flags and under the restart lane's flags (418 runs):
+  md5 of stdout, `.opb` and `.pbp` identical between `before-rel` `7826cf88` (main `e844eb9`, release)
+  and `final-rel` `f3138549` (this branch, release), and every exit code 0;
+- the five instances of section 4: `.opb` and `.pbp` md5 identical, at the base and the full budget
+  (the largest `.pbp` 1.2 GB on javarouting);
+- the differential lane, `--tier all` and `--tier all --debug`, equal to its reference (it records the
+  sha256 of both artefacts, D-0141): 347 of 347 runs equal (84 `bool`, 263 `int`), and the debug pass 333 of 333 (the 14 `pigment15b` runs `bench/diff/debug-skip.tsv` lists are skipped, as on main), both at `-j 1`;
+- `test/unit/test_proof.ml`: `test_m20t5_text_is_the_reference` pins `Text.int` against
+  `string_of_int` over 2 023 values with the extremes, and `Text.lit` and `Text.var` against
+  `Lit.to_string` and `Lit.var_name` over awkward names, copies of a name, two names that sanitise to
+  one, and 5 000 owners in three passes so that entries collide and are rebuilt. The M11 reference
+  tests (`test_m11t5_writer_lines_are_the_reference`, `test_m11t7_output_row_is_the_reference`) pin the
+  writer's lines and the .opb rows against their `Printf` spellings and pass unchanged.
+
+### 3. What was not done, and why
+
+- **Lines flushed in blocks.** Not done. A line kept in the buffer past its rule reaches the file only
+  when the writer drains it, and the channel's lifetime belongs to the callers: `bin/main.ml` closes
+  it in a `Fun.protect` that runs without `conclusion` when the search raises, the SIGTERM handler
+  exits with the line in flight, and most of the 140 `Writer.create` sites in `test/unit/` close their
+  channel without a conclusion and read the file. The file would then depend on how the run ended.
+  The channel's own 64 KB buffer is already the block the kernel sees; what one call per line still
+  costs is the channel's lock and a copy, 0.1 % (mknap) to 2.4 % (rcpsp) of a proved node in the profiles after the change
+  (`Writer.write_buf`, inclusive). It needs the drain at the channel's close, i.e. a change in
+  `bin/main.ml` and in the tests, and is left to whoever takes that on.
+- **The whole name cached per literal.** Not done. It is one string per LITERAL rather than per
+  variable, so a cache bounded by slots thrashes on a wide ladder and an unbounded one holds the width
+  in strings (22 million on D-0197's ATSP). The value's digits are one table read per pair.
+- **Shorter lines** (the rest of the ROADMAP row). They change the bytes, which this task was not
+  allowed to do.
+- **The writer's id tables.** `Writer.fresh_lazy` and `wipe_level` keep the level of every live id in
+  a `Hashtbl` (`tags`), a bucket per id that survives to the major heap. That is 0.1 % (mknap) to 5.7 % (qr3) of the
+  proved node in the profiles, outside the text, and the next lever in `Writer` (a dense array of
+  levels, if its memory on a long run is acceptable).
+
+### 4. Measurement
+
+Instructions per node with proof, D-0207's method: (I - I_base) / (N - N_base), the base being the
+same command stopped at 1 node. The shipped configuration (D-0207's `B proof` column), the same five
+instances and budgets. `before` is main `e844eb9` built release (`7826cf88`), `after` this branch
+(`f3138549`). D-0207's column was measured on `f244c35a` (main `3dc1a81`); `before` reproduces it within
+0.01 % on all five (qr3 1 841 406 against 1 841 404, rcpsp 10 201 565 against 10 201 406).
+
+| instance (D-0207 family, budget) | nodes | before | after | change | `.pbp` |
+|---|---|---|---|---|---|
+| QR48 `qr3` (clauses, full) | 29 779 | 1 841 406 | 1 705 866 | -7.4 % | 214 MB |
+| rcpsp 11, makespan <= 66 (cumulative, full) | 2 010 | 10 201 565 | 9 397 433 | -7.9 % | 89 MB |
+| javarouting `trip_6_3` (element, 20 000) | 20 001 | 24 547 376 | 23 432 672 | -4.5 % | 1 224 MB |
+| costas 14 (alldiff, first solution) | 21 129 | 54 117 421 | 53 310 513 | -1.5 % | 1 131 MB |
+| mknap2-1 (linear, 20 000) | 20 001 | 41 080 428 | 40 920 263 | -0.4 % | 154 MB |
+
+Profiles: `perf record -F 499 --call-graph fp` of the same two sources built on the `baguette-fp`
+switch (`8d576334` before, `0427e6a5` after), one run each. "Writer + Lit + Opb + Text" is the share of
+samples with any frame of those modules on the stack, so the bookkeeping of `fresh_lazy` and
+`wipe_level` is in it; "proof layer" is D-0207's layer (those modules plus `Justify` and `Trace`).
+
+| instance | Writer+Lit+Opb+Text, before -> after | of which the text | of which the id bookkeeping | `write_buf` (one call per line) after | proof layer | GC |
+|---|---|---|---|---|---|---|
+| qr3 | 18.0 -> 15.9 % | 12.6 -> 10.3 % | 5.5 -> 5.7 % | 2.1 % | 34.9 -> 33.4 % | 3.4 -> 3.5 % |
+| rcpsp 66 | 32.2 -> 26.3 % | 27.9 -> 21.6 % | 4.3 -> 4.7 % | 2.4 % | 50.5 -> 45.6 % | 14.8 -> 17.3 % |
+| javarouting | 13.6 -> 12.7 % | 10.9 -> 10.0 % | 2.7 -> 2.8 % | 1.2 % | 37.1 -> 36.5 % | 12.7 -> 13.3 % |
+| costas 14 | 4.4 -> 3.8 % | 3.5 -> 2.9 % | 0.8 -> 0.9 % | 0.5 % | 11.7 -> 11.4 % | 3.7 -> 3.8 % |
+| mknap2-1 | 0.96 -> 0.84 % | 0.85 -> 0.71 % | 0.11 -> 0.13 % | 0.1 % | 1.5 -> 1.4 % | 1.4 -> 1.4 % |
+
+"The id bookkeeping" is the samples whose first writer frame is `fresh_lazy`, or that sit in a
+`Hashtbl` below the first writer frame (`tags`, the audit's tables); "the text" is the rest of the
+writer's samples. Shares are of sampled cycles and rank the parts; the instruction counts above are
+the measurement.
+
+D-0207 estimated -10 % (mknap) to -23 % (rcpsp) for this rank: half of `Writer` + `Lit` and half of
+the proof-mode GC growth. Two things make the measured gain smaller. First, D-0207's 15 to 23 points
+of `Writer` + `Lit` were read on the no-learning proved node (`NL proof`); on the shipped node the
+text is 0.85 % (mknap) to 28 % (rcpsp) of the samples, because learned-row propagation fills costas's
+and mknap's node (rank 1). Second, the GC half is not the text's: the writer allocated little per
+line already since D-0145, and the proof-mode GC comes from the `Pol` trees and `origin` closures
+`Justify` builds and from the `tags` buckets (section 3), whose share did not move. Where the text is
+large (rcpsp, QR48) the node falls by 7 to 8 %, and the text's own share by a fifth to a quarter.
+
+### 5. What it costs in clarity
+
+- One more module (170 lines) and a second rendering of a literal's name: `Lit.to_string` stays THE
+  rendering, and `Text.lit` writes the same bytes from a cache. The two are tied by a test and by a
+  paragraph in `lit.ml`'s header; a change to the naming scheme (PROOF-FORMAT section 3) must change
+  both, and the test is what says so.
+- A global mutable cache. It is a function of the identifiers' content only, so no writer can see
+  another's effect on it except in time, and nothing in it can change a byte.
+- `Lit.add_int` and `Lit.add_sanitized` stay, for `Learned.to_string` (lib/core) and the tests that
+  pin them, so the repository has two integer writers with the same specification.
+
+### 6. How to revert
+
+Revert commit `64305c0` (the code, the test and the module-map line) and the comment wording of the
+D-0209 commit in `writer.ml`; nothing else depends on `Text`. The decision and its numbers are this record.

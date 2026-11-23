@@ -36,8 +36,9 @@
    [Printf], [Lit.to_string] and [string_of_int] wrote, pinned by test_proof.ml's
    reference tests. Lines are NOT held back and flushed in blocks: the channel's own
    buffer is the block, and a line kept in [t.buf] past its rule would be lost by any
-   caller that closes the channel without [conclusion] (bin/main.ml's [Fun.protect],
-   most unit tests) or exits on SIGTERM, so the file would depend on how the run ended.
+   caller that closes the channel without [conclusion] (bin/main.ml's [Fun.protect]
+   when the search raises, test_justify.ml's [emitted] and the other helpers that read
+   the file back) or exits on SIGTERM, so the file would depend on how the run ended.
    The rare rules (`red`, `delc`, `core`, `output`, the conclusion, comments) still go
    through [line]'s format: they are a handful per run. *)
 
