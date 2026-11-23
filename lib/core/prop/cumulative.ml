@@ -237,9 +237,14 @@ type snap = {
   s_hi_root : bool;
 }
 
+(* D-0214: [Store.at_root], one comparison, where [Store.level_of_index sup = 0] was a
+   binary search over the open levels -- the same answer by I-T2 (the marks are monotone,
+   so an entry is at level 0 iff it precedes the first mark), and the move alldiff.ml made
+   in D-0161 (request 1). Asked twice per task per snapshot, the search was 12 % of this
+   module's samples on rcpsp without learning or proof (D-0207's profile). *)
 let established_at_root store v ~lower =
   let sup = if lower then Store.lo_support store v else Store.hi_support store v in
-  sup = Store.no_support || Store.level_of_index store sup = 0
+  sup = Store.no_support || Store.at_root store sup
 
 let snap_of store tk =
   let d = Store.get store tk.x in

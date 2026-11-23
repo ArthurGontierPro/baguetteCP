@@ -26861,3 +26861,201 @@ D-0207's measured hot path; the same rule would apply to them, with their own pa
 
 Revert commit `10d5308` (the code and the tests); the D-record, ROADMAP and WORKLOG commits are text
 only. Nothing else depends on `arith`, `in_range` or the `_plain` divisions.
+
+## D-0214  [AUTONOME] M20-pernode-T2: an `Element` pruning records a FRAME, the domains it read and the trail cut (D-0124's history), and its reason and derivation are built from it when asked. The artefacts are byte-identical, and a javarouting node costs 33 % fewer instructions without learning or proof, 22 % shipped without proof and 7 % with it
+
+**Status**: DONE on branch `wave62-lazy` (agent-lazy, 2026-11-23), not merged. Rank 3 of D-0207
+section 6, ROADMAP M20-pernode-T2. Taken in autonomous mode. It changes no output and no default,
+and it is `[AUTONOME]` because the shape (a frame over D-0124's `Reason.Later`, a per-pass memo of
+the facts, the readers left in `element.ml`) was chosen without asking. Measured on `fataepyc-06`
+while the Challenge series of 2026-11-23 ran, one experiment process at a time, in instructions
+(`perf stat -e instructions:u`). Runs and scripts in `/scratch/arthur/wt-lazy-runs/`, copied to
+`/cluster/arthur/baguette-results/lazy/`.
+
+### 1. Context
+
+D-0207 section 5 item 3 found that `Element` built its reasons at every pruning, with or without proof and
+with or without learning. On javarouting 57 % of its samples were `hole_facts`, `hole_expl`,
+`add_facts` and `residue_cancel`, about 28 % of the node without learning or proof. Two things were
+eager, and only one of them was a reason:
+
+- the REASON, `bound_facts` plus the facts of every hole's remover (`index_hole_facts`,
+  `result_hole_facts`), deduplicated through a hash table, once per pass with a pruning;
+- the DERIVATION's eager part. The derivation itself was already an `Explanation.deferred`, but
+  what it would cite was decided at the pruning, namely one `pos_gone` per dead position (the result's
+  bounds and holes, the remover of the hole, the index's bounds and the puncher of an index hole),
+  and `residue_cancel` over them, which asks the level of each bound's support. A result pruning
+  is O(n_decl), and `filter_result` makes one per value it removes.
+
+Without learning or proof, nothing ever asks for either half. With learning, analysis asks for the
+reasons of the entries a conflict reaches. With proof, the trace asks for each entry of a failed
+branch once.
+
+### 2. The rule, and why the values cannot change
+
+A pruning records a frame `{h; di; dr}`, where `h = Store.history store` is the trail cut at the
+push (D-0124) and `di`, `dr` are the index's and the result BASE's domains, read with `Store.get`. Both
+halves are built from the frame when they are first asked for:
+
+- the reason is `Reason.because_later ~empty:false`, D-0124's channel. Its function checks `h`
+  (`Store.check_history`) and returns a list built once per PASS, as the eager list was: in
+  `filter_result` from the pass's first pruning's frame, in `filter_index` the result's hole facts
+  from the first removal's frame and the bounds from each removal's own (exactly what the eager
+  code shared and what it did not). `empty` is `false` because `bound_facts` always states the
+  index's two bounds;
+- the derivation's eager part (`pos_gone` over the dead positions, `residue_cancel`) moves inside
+  the `Explanation.deferred` that already wrapped the derivation, in a `lazy` the closure keeps, so
+  that a re-forcing after `Justify` releases the thunk cites the same position thunks the first
+  forcing built, as the captured eager list did (BAGUETTE_DEBUG's `same_derivation` compares
+  thunks by identity);
+- what still runs at the pruning is what DECIDES it: which value goes, `removal_conclusion` (the
+  store checks the conclusion at the push), `live_positions`. Conflicts stay eager, as D-0124's
+  did: a conflict is consumed where it is raised.
+
+Why a value built later is the value built then. Every read the eager code made at a pruning is
+one of:
+
+1. a DOMAIN (`Store.get`, `View.lo`/`hi`/`mem`). A `Domain.t` is immutable (the store restores a
+   domain by writing the old value back, lib/core/domain.ml), so the pointer held in the frame IS
+   the domain at the pruning. `View.lo_in`/`hi_in`/`mem_in` are `View.lo`/`hi`/`mem` over a held
+   base domain, the same formulas;
+2. the entry that REMOVED a value (`Store.remover ~before:trail_length`). It is asked later as
+   `Store.remover ~before:upto` (`remover_at`). The trail below a live entry is frozen (I-T1:
+   `undo_to` pops from the top, a popped slot is overwritten, every `apply` allocates a fresh
+   record), so the first entry on the variable whose `now` lost the value is the same entry if it
+   lies below the cut, and is rejected by `~before` if it does not, as it would not have existed
+   then;
+3. whether a trail position is at the ROOT (`level_of_index pos = 0`). For a position below the
+   cut, a level opened since has its mark at or above the cut, and a level closed since would
+   have unwound the trail below the cut, which `check_history` refuses. `Store.at_root` (one
+   comparison against the first mark, D-0161 request 1) is the same answer by I-T2;
+4. which entry SUPPORTS a bound (`lo_support`/`hi_support`). `Store.lo_support_at` walks the
+   support chain back past the cut (D-0124);
+5. an entry's ARENA explanation (`Store.explanation`). The arena is truncated only by a backtrack,
+   to the level's mark, and an entry below the cut keeps its slot while the cut is live.
+
+So the facts, their order, the dead positions, their arms and their residue are the ones the
+eager code computed. Two things that are not values do move, and neither reaches the page:
+
+- `Explanation.deferred` draws a fresh `tid` from a counter, and building the position thunks later
+  changes which numbers they get. A `tid` is an operand's identity in its parent's hash
+  (D-0192). Equality compares operands by identity, so it decides a bucket, never an answer;
+- the one node `pos_gone` built outright, `Explanation.clause [~idx_eq_p]` for an index hole
+  punched at level 0, is now built at the first forcing, and `Explanation.built` consults the
+  hash-consing table when a node is built. A twin written in between is found at the build
+  instead of by `emit_clause`'s claim index at the emission; both answer the twin's line.
+
+SPEC section 1 asks for the same explanation values with and without proof. They are the same
+values in both modes, built at a different moment in each.
+
+The `.opb`, `.pbp` and stdout are byte-identical on the 214 test models under default flags and
+`--bits-above none` (428 runs, before `73513b89`, after `260a505d`), and the stdout and
+proofs of the five D-0207 instances equal (section 4).
+
+### 3. What asks, and what it costs there
+
+- Without learning or proof nothing asks, and a pruning costs two domain reads, one history record
+  (3 words) and one frame (4 words).
+- With proof the trace asks each entry of a failed branch once; the per-pass memo makes the facts
+  cost what they cost eagerly, once per pass. The derivation's eager part moves into the forcing,
+  where it was already paid by every entry the trace writes.
+- With learning, analysis asks the reason of every entry a conflict reaches, through its `cites`
+  memo (D-0124 addendum a3). The memo per pass is shared by the entries of that pass.
+- Under BAGUETTE_DEBUG `Store.check_agreement` forces both halves at the push, so debug runs pay what
+  they paid.
+
+The `lazy` the closures keep holds the dead-position list once forced, as the eager closure held
+it always. Unforced, a pruning keeps a frame and two closures.
+
+### 4. Measurement
+
+Five instances of D-0207 (`/cluster/arthur/baguette-results/pernode2/`), the same flattenings and
+node limits. Instructions per node = (I - I_base) / (N - N_base), base the same command at one
+node. Binaries: shipped release before `73513b89` (main `d99b7b2`), after `260a505d`; the
+no-learning measurement patch (D-0207 `nolearn.patch`, `BAGUETTE_LEARN=off`) before `08fbfc5b`,
+after `f0e1e6fe`. The node, decision and conflict counts of every pair are equal, so is the stdout (the `limit:`
+line's cpu time aside), and so are the `.opb`/`.pbp` of every proved pair.
+
+Thousands of instructions per node, before / after (change). B is the shipped release binary, NL
+the no-learning measurement binary, np `--no-proof`, pf with the proof. rcpsp is `rcpsp11_66` for B
+and `rcpsp11_60` for NL, as in D-0207.
+
+| family | B np | B pf | NL np | NL pf |
+|---|---|---|---|---|
+| javarouting (jr63, 20 000 nodes) | 12 189 / 9 534 (-21.8 %) | 23 042 / 21 481 (-6.8 %) | 7 837 / 5 263 (-32.8 %) | 17 191 / 15 510 (-9.8 %) |
+| rcpsp 11 | 2 551 / 2 424 (-5.0 %) | 9 310 / 9 078 (-2.5 %) | 848 / 778 (-8.3 %) | 6 612 / 6 553 (-0.9 %) |
+| mknap2-1 (20 000 nodes) | 40 149 / 40 149 (0.0 %) | 40 792 / 40 792 (0.0 %) | 524 / 524 (0.0 %) | 960 / 960 (0.0 %) |
+| QR48 | 1 036 / 1 036 (0.0 %) | 1 700 / 1 700 (0.0 %) | 431 / 431 (0.0 %) | 1 071 / 1 071 (0.0 %) |
+| costas 14 | 44 699 / 44 699 (0.0 %) | 53 271 / 53 271 (0.0 %) | 5 821 / 5 821 (0.0 %) | 14 292 / 14 288 (0.0 %) |
+
+Javarouting is the only family with an `element`, and it gains a third of its node without
+learning or proof, more than D-0207's estimate of 28 % because the derivation's eager part
+(`pos_gone`, `residue_cancel`, the `alive` table) went with the reasons. With proof the trace still
+asks for every entry of a failed branch, so the gain shrinks to 7 to 10 %. With learning and no proof
+it stays at 22 %: analysis asks the reasons of the entries a conflict reaches, which are few. rcpsp's
+gain is `Cumulative`'s `Store.at_root` (section 6). The three families with neither propagator are
+unchanged to the instruction, which is the control.
+
+**The differential lane** (`scripts/diff_lane.sh --tier all`, 347 runs, reference of 2026-11-21)
+reports 54 runs that differ, and every one of them differs in ONE item, the work counter
+`later/asks` (`Reason.materialisations`, the `stats: later` line). They are the 13 or 14
+configurations of the four instances that contain an `element` (fox-geese-corn, lot-sizing,
+chessboard, evm-super-compilation). Every other counter, the search and the proof hashes equal the
+reference. The counter counts asks of a `Later` reason, and Element's reasons are `Later` now, so it
+moves by construction (lot-sizing 143 181 to 338 953 asks under the default configuration, the
+entries analysis reaches being element entries). It counts asks rather than work, since the hole facts
+of a pass, the expensive part, are built once however often they are asked for. The reference is NOT re-recorded here (D-0141, a
+re-record belongs to the gated merge, in its own commit). The `--debug` pass (333 runs, BAGUETTE_DEBUG=1) is the same: 42 runs
+differ, all of them in `later/asks` alone, on the three element instances it runs (lot-sizing is in
+`bench/diff/debug-skip.tsv`), and no invariant fired.
+
+**The suites.** `dune runtest --root . --force` under `ulimit -v 4000000` gives 4 698 ok and 0 FAIL.
+`test_prop` under BAGUETTE_DEBUG=1 gives 820 ok and 0 FAIL. The scaling lane (`--enforce`) is green.
+
+### 5. The D-0124 check that failed under BAGUETTE_DEBUG=1 on main
+
+`test_prop`'s "D-0124: and so does the justification, which reads the same history" failed only
+with BAGUETTE_DEBUG=1 (agent-arith's report). The cause is in the test. Under
+BAGUETTE_DEBUG, `Store.check_agreement` forces the justification AT THE PUSH (its reverse arm,
+`reverse_owners`, reads the derivation's top-level weakenings), and `Explanation.force` memoises
+the result in the thunk. The test then unwinds the trail and calls `Explanation.force` again,
+which answers from the memo without running the closure, so the refusal it expects never runs.
+The memo is the derivation rendered while the history was live, which is the right derivation and
+reads nothing, so nothing is wrong in the solver. The check now calls `Explanation.reforce` on the
+thunk, which runs the closure as `Justify`'s release check does, and tests what it names in both
+modes. `test_prop` gives 813 ok without and 814 with BAGUETTE_DEBUG=1 before this record's own tests, 0
+FAIL either way.
+
+### 6. The other globals
+
+From D-0207's profiles (`prof/*.script.gz`, share of all samples of the no-learning, no-proof
+node):
+
+| global | what is eager | share of the node | done here |
+|---|---|---|---|
+| `Element` (javarouting) | reasons and the derivation's eager part, section 1 | 28 % | yes, this record |
+| `Alldiff` (costas) | `snap_of`'s `s_holes`: the remover and rootness of every hole of every variable, at every snapshot. The reasons themselves (`hall_facts`, `prune_reason`, `remove_reason`) are 0.2 % | 7.0 % (5.3 % in the bounds stage, 1.7 % in Régin) | no: listed. The change is the same frame (a history and the held domain, `s_holes` a `lazy`), and it needs `remover_at`/`at_root_at`, which belong in store.ml's history section; store.ml is claimed this round (WORKLOG cross-session request). Byte-identical by construction: `s_holes` holds no `Explanation` |
+| `Cumulative` (rcpsp) | `snap_of`'s `s_lo_root`/`s_hi_root`, by `Store.level_of_index` (a binary search over the open levels) twice per task per pass | 6.7 % (12 % of the propagator) | yes, the cheap form: `Store.at_root`, one comparison, the same answer by I-T2 (alldiff's D-0161 move). Deferring the flags themselves is not worth a frame once they cost a comparison |
+| `Gcc` | the same `established_at_root` per variable per snapshot | not in the five families | yes, the same one-line change |
+| `Regular`, `Inverse`, `Member`, `Maxmin`, `Table`, `Diffn` | not profiled: none is in D-0207's five families | unmeasured | no: listed. `regular.ml`'s reasons recurse into the dead flags' tails (D-0151) and are the next candidate if a profile shows them |
+
+### 7. What it costs in clarity
+
+- One more producer of `Reason.Later`, and I-X6 holds for it by what the readers can see (a
+  history and immutable domains) rather than by when they run. `element.ml`'s header says so, the
+  frame section states the five reads and why each is frozen, and docs/INVARIANTS.md I-X6 names
+  Element as the second producer.
+- Three readers (`remover_at`, `at_root_at`, `explanation_at`) reach the store through
+  `h.Store.h_store`, the only code outside store.ml that does. They are one line each and belong in
+  store.ml (cross-session request).
+- A pass's facts are memoised per pass where D-0124 refused a memo. D-0124 refused it because the
+  memo would keep the per-term list it existed not to keep (memory); here the list is one per pass
+  and was always kept, and the memo is what keeps the cost with proof at the eager cost.
+- `View` gains `lo_in`/`hi_in`/`mem_in`, the three reads over a held base domain.
+
+### 8. How to revert
+
+`git revert` the three commits of `wave62-lazy` that touch `lib/` (`2bfd615` Element's frame,
+`56ca13a` `Store.at_root` in Element, Cumulative and Gcc). The test fix `56522b6` stands on its
+own and should stay. Nothing else depends on them, since no signature outside `element.ml`
+changed and `View` only gained three functions.

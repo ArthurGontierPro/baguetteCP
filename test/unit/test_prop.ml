@@ -3878,8 +3878,16 @@ let test_d0124_unwound_history_is_refused () =
   check "D-0124: the same positions are occupied again" (Store.trail_length store = 1);
   check "D-0124: re-pushed under it, the reason still refuses rather than answer y >= 2"
     (refused_as_ix6 (fun () -> Reason.facts e.Store.reason));
+  (* The CLOSURE is asked, not [Explanation.force]: under BAGUETTE_DEBUG
+     [Store.check_agreement] forces the justification AT THE PUSH (its reverse arm reads the
+     derivation's top-level weakenings), so [force] answers from the memo -- the derivation
+     rendered while the history was live, which is the right one and reads nothing -- and
+     this check failed under BAGUETTE_DEBUG=1 only (D-0214 section 5). [reforce] runs the
+     closure itself, as [Justify]'s release check does, so the check tests what it names in
+     both modes. *)
   check "D-0124: and so does the justification, which reads the same history"
-    (refused_as_ix6 (fun () -> Explanation.force ex))
+    (refused_as_ix6 (fun () ->
+         match ex with Explanation.Deferred th -> Explanation.reforce th | e -> e))
 
 (* A row with no other term has an EMPTY deferred reason, and [Reason.is_empty] must say
    so without materialising: conflict analysis asks it per node (lib/core/analysis.ml's
@@ -4058,6 +4066,82 @@ let test_d0091_element_root_defining () =
                (Reason.because ~concludes:None
                   (Reason.facts c1.Store.c_reason)
                   c1.Store.c_why)))
+
+(* M20-pernode-T2 / D-0214: an element pruning records a FRAME and builds its reason and its
+   derivation when asked. The scene makes the reason carry a hole's PUNCHER's facts: the
+   decision k = 2 lets [int_ne(i, k)] punch the interior hole i <> 2, so position 2 (value 5)
+   dies and the result's pushes rest on that hole, whose remover the frame's history must
+   find. Built twice: materialised straight after the level-1 fixpoint, and after a
+   level-2 decision (c >= 7) has moved c's and i's bounds, which a reader of the live store
+   would now report. Both halves must read the same; then, unwound below the pruning, the
+   reason must refuse (I-X6), as D-0124's [Linear] scene does. *)
+let element_lazy_src =
+  "var 1..4: i;\n\
+   var 1..4: k;\n\
+   var 0..9: c;\n\
+   constraint array_int_element(i, [2, 5, 7, 9], c);\n\
+   constraint int_ne(i, k);\n\
+   solve satisfy;\n"
+
+let element_lazy_scene ~move_after =
+  let t = compile_src element_lazy_src in
+  sink_proof t.Compile.encoding;
+  let st = t.Compile.store and eng = t.Compile.engine in
+  let v n = Option.get (Store.var_named st n) in
+  let dec lit = Reason.because ~concludes:None Reason.none (Explanation.decision lit) in
+  let fixpoint () =
+    match Engine.propagate eng st with
+    | Engine.Fixpoint -> ()
+    | Engine.Conflict _ -> failwith "D-0214: the scene has no conflict"
+  in
+  fixpoint ();
+  Store.new_level st;
+  ignore (Store.set_hi st (v "k") 2 (dec (Lit.le "k" 2)));
+  ignore (Store.set_lo st (v "k") 2 (dec (Lit.ge "k" 2)));
+  let from = Store.trail_length st in
+  fixpoint ();
+  let entries =
+    List.filter_map
+      (fun i ->
+        let e = Store.trail_entry st i in
+        match e.Store.reason with Reason.Later _ -> Some e | Reason.Facts _ -> None)
+      (List.init (Store.trail_length st - from) (fun i -> from + i))
+  in
+  let level1 = Store.trail_length st in
+  if move_after then (
+    Store.new_level st;
+    ignore (Store.set_lo st (v "c") 7 (dec (Lit.ge "c" 7)));
+    fixpoint ());
+  let read =
+    List.map
+      (fun e -> (Reason.to_string e.Store.reason, render_deep (Store.explanation st e)))
+      entries
+  in
+  (st, entries, read, level1)
+
+let test_d0214_element_reason_on_demand () =
+  let st0, entries, read0, _ = element_lazy_scene ~move_after:false in
+  let st1, _, read1, level1 = element_lazy_scene ~move_after:true in
+  check "D-0214: the element's level-1 prunings store their reasons deferred"
+    (entries <> []);
+  check "D-0214: i <> 2 was punched under the decision, by int_ne"
+    (not (Domain.mem (Store.get st0 (Option.get (Store.var_named st0 "i"))) 2));
+  check "D-0214: a reason carries the hole's puncher's facts (k), read from the history"
+    (List.exists (fun (r, _) -> string_contains "k" r) read0);
+  check "D-0214: the level-2 decision really moved c after the prunings"
+    (Domain.lo (Store.get st1 (Option.get (Store.var_named st1 "c"))) >= 7
+    && Store.trail_length st1 > level1);
+  check "D-0214: reasons and derivations materialised later are the ones read at once"
+    (read0 = read1);
+  Store.backtrack st0;
+  check "D-0214: unwound below the prunings, every deferred reason refuses (I-X6)"
+    (List.for_all
+       (fun e ->
+         match Reason.facts e.Store.reason with
+         | exception Invalid_argument m -> string_contains "I-X6" m
+         | exception _ -> false
+         | _ -> false)
+       entries)
 
 (* M11-complexity-T8 / D-0155: [Element.add_facts] replaced a quadratic [List.mem] /
    [@] fold with a hashed accumulator, and the list it returns is the order of a trace
@@ -9868,6 +9952,7 @@ let () =
   test_d0026_linear_pairing ();
   test_d0026_all_declared ();
   test_d0091_element_root_defining ();
+  test_d0214_element_reason_on_demand ();
   test_d0155_element_add_facts_oracle ();
   test_ix6_justification_snapshot ();
   test_ix6_cross_conflict_snapshot ();
