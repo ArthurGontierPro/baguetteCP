@@ -26478,3 +26478,118 @@ target after it.
 - Chuffed's per-node figure for LCG is on its own count (nodes + failures).
 - The layer shares are cycles sampled on a loaded node, multiplied by instruction counts, as in D-0169.
   They rank layers. They are not exact instruction counts per layer.
+
+## D-0208  M20-pernode-T4 (learned part): a learned PB row keeps a WITNESS of quiet, a few non-false literals whose sum rules out every pruning, and checks it before its pass. Same runs in the same order, so the same trees and the same proof
+
+**Status**: DECIDED and implemented on `wave60-watch` by agent-watch, 2026-11-23. Not merged (the
+orchestrator merges after the gate). Measurements in section 6. Reopens D-0052's refusal of
+mutable propagator state for one object, the learned PB row, and says why the reason for that
+refusal does not apply to what is added.
+
+### 1. The problem (D-0207 section 5 item 1, rank 1 of section 6)
+
+A learned PB row (`Pb.Learned_pb`) has no advisor: every bound move of any of its variables queues
+it, and every run recomputes the status of every term from `Store.get`. On costas 14 the rows run
+1 292 times per node for 16.5 runs that prune, on mknap2-1 2 827 times for 0.91, and those runs with
+the engine's work for them are 83 % and 93 % of a node. A learned clause already has two watches
+and an advisor (M6-T20, D-0104; D-0138), which is not the case here.
+
+### 2. The constraint that decides the design: the run ORDER must not move
+
+The task asks for the same propagation result, stdout and node counts on all test models and on the
+differential lane. Fewer wakes is not enough for that. D-0173 is the measurement: resting a satisfied
+learned clause loses no pruning, but it changes the trail entry at which the clause is woken, and
+250 of 301 lane runs differed (another 1UIP clause, another tree). An advisor that DROPS a wake of a
+PB row has the same defect, and it is not a corner case. In the FIFO phase a row woken by a change A
+that cannot make it prune sits at A's place in the queue. If a later change B, made before that place
+comes up, makes it prune, today's engine runs it at A's place, and an engine that dropped A runs it at
+B's place, after every instance queued in between. The two prunings then land in another order, the
+trail differs, and so do the reasons conflict analysis reads.
+
+So the wakes, the queue and the run bracket are kept exactly as they are, and only what a run costs
+changes. Every run is still made, at the same place, and returns the same thing. A run that would
+change nothing answers in O(|W|) instead of O(row).
+
+### 3. The design: a witness of quiet, checked against the live store
+
+For a row `sum a_i l_i >= b` over order literals, group the terms by (variable, polarity), the groups
+`Pb.layout_of` already builds. A WITNESS is a set W of term indices such that
+
+    (C)  every literal of W is non-false under the live domains, and
+         sum_{j in W} a_j  -  max_g ( sum_{j in W, group j = g} a_j )  >=  b.
+
+**(C) implies that a pass changes nothing and does not fail.** Let N_g be the sum of the non-false
+coefficients of group g and N their sum, so the pass's slack is N - b.
+- No conflict: N >= sum_W a_j >= b, so the slack is >= 0.
+- No forcing: `Pb.pass` forces an open term i only when its ladder-effective coefficient exceeds the
+  slack, and effective(i) sums non-false terms of i's own group only, so effective(i) <= N_g with g
+  i's group. And slack = N_g + sum_{h <> g} N_h - b >= N_g + (sum_W a - W_g) - b >= N_g, since every
+  watched term is non-false (N_h >= W_h) and (C) bounds the watched sum outside any one group by b.
+So effective(i) <= slack for every open i, `mark_forceable` finds nothing, and the pass returns
+`Fixpoint` with the store untouched. For a clause-shaped row (b = 1, unit coefficients) (C) is "two
+non-false literals on two different (variable, polarity) groups", the argument `Pb.quiet` already
+makes for degree 1.
+
+**The run.** `Learned_pb.propagate` checks the witness first: if W is set and none of its literals is
+false NOW, (C) holds now (its arithmetic part does not depend on the store), so it returns `Fixpoint`.
+Otherwise it runs the unchanged `Pb.propagate` and, if that returns `Fixpoint`, rebuilds W from the
+live store: satisfied literals first (they stay non-false until a backtrack pops their support), then
+open ones, stopping as soon as (C) holds. If even every non-false literal does not satisfy (C), W is
+left unset and the next run is a full pass. On `Conflict` W is unset.
+
+**Why it is not D-0052's cached counter.** The pb.ml header refused "a cached slack updated on the
+trail", because a number computed under domains the trail has since undone yields a wrong pruning
+whose `rup` is still valid for the F it names. W is not a number and nothing in it is trusted: it is
+a CHOICE of which literals to look at, and every run re-reads those literals from the live store.
+A stale W (literals un-falsified by a backtrack, or falsified since) costs at most one full pass,
+never a wrong answer, because the only thing a skip relies on is (C) evaluated on the current
+domains. So there is no counter on the trail and no undo hook in `Store`, and the option the task
+named (a slack counter on the trail, undone by `Store`) is not taken. That option needs a per-row
+undo record per falsification, i.e. the engine or `Store` telling the row which literal crossed. It
+buys a check in O(1) instead of O(|W|) and costs a new kind of trail entry. W gives the same skips
+without either.
+
+**Why the order is the same, exactly.** The engine is not changed. A row is queued, seeded and run
+when it was before, the run bracket (`Store.run_as`, `check_attribution`, `bump_by_id`) is made as
+before, and the run returns what the full pass would have returned, with the trail untouched. So the
+runs, the effective runs, the trail, the reasons, the proof, the learned constraints and the tree are
+the old ones. The proof is expected byte-identical, and section 6 says whether it was.
+
+### 4. Invariants touched
+
+- I-P2 (fixpoint), I-P6, I-X6: untouched, because a skipped run is one that would change nothing, and
+  every other run is the old pass.
+- I-P7 (the advisor's contract): NOT used. The row's advisor still answers yes to every change; the
+  witness acts inside the run, not on the wake. That is what keeps the order (section 2).
+- New, stated in pb.ml's header and in INVARIANTS as I-P8: **a cached choice may be stored between
+  runs, a cached conclusion may not.** A propagator may remember which literals to look at, if every
+  run that relies on them re-reads them from the live store and the skip it takes is a consequence of
+  what it read. Under BAGUETTE_DEBUG every skip is checked against the pass's read-only half
+  (`Pb.would_act`: the snapshot, the slack and the forceable terms, without assigning), and a skip
+  where the pass would act raises.
+- The D-0052 sentence "no propagator in lib/core/prop/ has a single mutable field" was already false
+  since M6-T20 (the learned clause's watches); pb.ml's header section "No mutable state, and no
+  watched literals" is rewritten to say what is mutable and why each piece is safe.
+
+### 5. What it costs in clarity, and the fallback
+
+- One mutable array and one length per learned PB row, a 40-line witness builder and a 15-line check
+  in pb.ml, and the argument of section 3 in pb.ml's header. `Pb.propagate` (model rows, the clause
+  face, `Learned_clause`) is not changed: the witness is used by `Learned_pb` only, so the model's own
+  rows and every clause keep their code path.
+- What it does NOT remove: the engine's work for the wakes (walk, queue, bracket), which D-0207 put at
+  11.5 M of a costas node and 16.3 M of an mknap node. Removing it needs an advisor that drops wakes,
+  which moves the order (section 2). A version that keeps the order would have to remember the place
+  a dropped wake would have taken in the queue and insert the row there if a later wake finds (C)
+  broken (a FIFO keyed by sequence number). It is possible and is the next step if the remaining
+  engine share is worth it; it is a change to engine.ml's hot loop and is not made here.
+- **The fallback, D-0169 (b)**: if a family's learned rows rarely have a witness (rows that are tight
+  at most nodes), the remaining lever is to stop RUNNING learned constraints that do not prune, while
+  keeping them on the page. That changes trees wherever a learned constraint would have pruned (on
+  costas 16.5 times per node), so it needs a rule for WHEN (by search mode: a fixed search without
+  backjumps, as on the four D-0207 families that never backjump; or adaptive on the effective rate per
+  row, as `Retention`'s counters already measure) and is a default-behaviour change for the user. It
+  is recorded here as the fallback, not implemented.
+
+How to revert: revert the code commit on `wave60-watch` (named in section 6); nothing else depends
+on it.
