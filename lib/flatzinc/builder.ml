@@ -90,6 +90,10 @@ let implemented =
        fzn_member_bool.mzn -- one relation, the second spelling over var bool. *)
     "baguette_member";
     "baguette_member_bool";
+    (* M18-coverage-T1 (D-0206): table, through mznlib/fzn_table_int.mzn and
+       fzn_table_bool.mzn -- one relation, the second spelling over var bool. *)
+    "baguette_table";
+    "baguette_table_bool";
   ]
 
 (* The rest of the SPEC 2.1 table, with the milestone that will bring it in. Listing
@@ -1182,6 +1186,25 @@ let build_constraint env (c : Ast.constraint_item) =
                 Model.mem_x = operands env pos xa;
                 mem_y = operand env pos ya;
                 mem_b = operands env pos ba;
+              }
+        | _ -> Error.failf pos "builtin `%s`: internal arity mismatch" id)
+    (* M18-coverage-T1 (D-0206). `baguette_table(x, t, s)` and `baguette_table_bool(x, t,
+       s)`: the tuples [t] are CONSTANTS (a Boolean tuple is written 0/1 by the library),
+       refused here with a position otherwise; x and the selectors are operands.
+       lib/flatzinc/compile.ml's [post_table] checks the shape. *)
+    | "baguette_table" | "baguette_table_bool" -> (
+        arity 3;
+        match c.Ast.c_args with
+        | [ xa; ta; sa ] ->
+            Model.Table
+              {
+                Model.tab_x = operands env pos xa;
+                tab_t =
+                  Array.of_list
+                    (List.map
+                       (fun op -> as_const pos ~builtin:id ~what:"every tuple value" op)
+                       (operands env pos ta));
+                tab_s = operands env pos sa;
               }
         | _ -> Error.failf pos "builtin `%s`: internal arity mismatch" id)
     (* M4-T10 (D-0096). `baguette_cumulative(s, d, r, cap)`: the durations, resources
