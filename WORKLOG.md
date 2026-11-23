@@ -19,6 +19,7 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
+| M22-review-T1, M22-review-T2 | lib/flatzinc/builder.ml (`lin_terms`), lib/core/prop/cumulative.ml (`make`), test/models/cumulative_fixed_overload_unsat.fzn and its test/expected/ file (new), docs/reports/2026-11-23-code-review.md (new), docs/ROADMAP.md (the new M22-review section), WORKLOG.md | review-1123 (laptop session, branch `review-fixes`, gate on fataepyc-07) | 2026-11-23 |
 
 ## Cross-session requests
 
