@@ -19,6 +19,7 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
+| M20-pernode-T3 (arithmetic part, D-0212) | `lib/core/prop/linear.ml`, `lib/core/checked.ml`, `test/unit/test_prop.ml` (new cases only), `docs/DECISIONS.md` (D-0212), `docs/ROADMAP.md` (row T3) | agent-arith, branch `wave61-arith` | 2026-11-23 |
 
 ## Cross-session requests
 
