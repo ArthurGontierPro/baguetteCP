@@ -66,7 +66,8 @@ arm_field() { printf '%s' "$1" | cut -d: -f"$2"; }
 
 phase_setup() {
   if [ ! -d "$SRC/.git" ]; then git clone -q "$REPO" "$SRC" || exit 1; fi
-  git -C "$SRC" checkout -q "$COMMIT" || exit 1
+  git -C "$SRC" fetch -q origin 2> /dev/null
+  git -C "$SRC" checkout -q --detach "origin/$COMMIT" 2> /dev/null || git -C "$SRC" checkout -q "$COMMIT" || exit 1
   eval "$(opam env --switch=baguette)"
   if [ ! -x "$DIR/bin/main.exe" ]; then
     # The recipe of `make release`, with dune's jobs capped at 16 (the user's make -j rule).
