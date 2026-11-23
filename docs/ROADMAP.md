@@ -648,7 +648,7 @@ on/off table per family. A row that wins goes to T1's decision. Every row names 
 | M19-config-T5 | **The learned database**: Glucose/Kissat tiers (core LBD <= 2, tier 2 <= 6, local by activity), reduce intervals, vivification of learned clauses (CaDiCaL). `tiered` exists (D-0139) and was a wash on the codes set (D-0202): measure it on the tuning set before more work | TODO | `retention.ml` |
 | M19-config-T6 | **Conflict analysis**: recursive clause minimisation (MiniSat), Pumpkin's CPIP stopping criterion, extended nogood propagation and per-variable atom index (M7-T30's notes), chronological backtracking (Nadel and Ryvchin) | TODO | M7-T30 holds the Pumpkin file's pointer |
 | M19-config-T7 | **Optimisation**: large neighbourhood search interleaved on one thread (CP-SAT, OR-tools), core-guided lower bounding (OLL, as CP-SAT and Pumpkin), objective-first branching. Proof story first: LNS only adds solution-improving rows, which VeriPB already has | TODO | Most Challenge instances are optimisation; incumbents are 933 of arm A's rows |
-| M19-config-T8 | **The root**: probing (failed literals), equality merging into views, the LP relaxation (M13-codes-leads-T1, not built by D-0194's sibling M13-T1 spike) | TODO | |
+| M19-config-T8 | **The root**: probing (failed literals), equality merging into views, the LP relaxation (M13-codes-leads-T1, whose spike measured it and did not build it) | TODO | |
 | M19-config-T9 | **The propagation engine**: propagator priorities (cheap first, as Gecode and Chuffed), idempotence, staged propagation | TODO | `engine.ml` |
 
 ## M20-pernode — the speed of a node, after M16
