@@ -20,11 +20,13 @@
 #   read     bench/series/read_series.sh: the tables, into DIR/tables
 #   publish  copy the tables to --results (default /cluster/arthur/baguette-results/series-<DATE>)
 #
-# Settings are D-0133's: 1 200 s solve, 1 200 s flatten, 16 GiB address space for the SOLVER, 16 GB
-# proof cap, --max-heap-mb 8192, each solver run in `systemd-run --user --scope -p MemoryMax=32G`.
+# Settings are D-0133's, except that there is NO proof cap (the user, 2026-11-23): 1 200 s solve,
+# 1 200 s flatten, 16 GiB address space for the SOLVER, --max-heap-mb 8192, each solver run in `systemd-run --user --scope -p MemoryMax=32G`.
 # veripb: MemoryMax=64G, no address-space cap, 3 600 s of checking (D-0203). PAR is per arm, so the
 # processes running at once are PAR x arms, solver or checker alike (a worker runs one at a time):
 # keep it at 92 or below, the user's rule for the node. Verified runs' .opb/.pbp are deleted by the
+# harness (their sizes stay in results.tsv, veripb's peak RSS in log/<id>.baguette.vrss). No solve or
+# check starts while /scratch has under 2 000 GB free (bench/series/space_gate.sh, outside the timeouts)
 # harness (their sizes stay in results.tsv); a REJECTED or CHECK-ERROR run keeps its files.
 #
 # Resumable: run it again with the same arguments. setup and flatten skip what exists, and
@@ -74,7 +76,7 @@ phase_setup() {
     cp "$SRC/_build_release/default/bin/main.exe" "$DIR/bin/main.exe"
   fi
   md5sum "$DIR/bin/main.exe" | cut -d' ' -f1 > "$DIR/bin/binary.md5"
-  cp "$SRC/bench/series/rss_wrap.py" "$SRC/bench/series/veripb_wrap.sh" "$SRC/bench/series/solver_wrap.sh" "$DIR/bin/"
+  cp "$SRC/bench/series/space_gate.sh" "$SRC/bench/series/rss_wrap.py" "$SRC/bench/series/veripb_wrap.sh" "$SRC/bench/series/solver_wrap.sh" "$DIR/bin/"
   for a in "${ARMS[@]}"; do
     l=$(arm_field "$a" 1); p=$(arm_field "$a" 2); f=$(printf '%s' "$a" | cut -d: -f3-)
     cat > "$DIR/bin/baguette-$l.sh" <<SHIM
@@ -101,7 +103,8 @@ FO
     echo "solve_timeout=1200"
     echo "flatten_timeout=1200"
     echo "check_limit=3600"
-    echo "solver_mem=16GiB address space, MemoryMax=32G, --max-heap-mb 8192, proof cap 16 GB"
+    echo "solver_mem=16GiB address space, MemoryMax=32G, --max-heap-mb 8192, NO proof cap (the user, 2026-11-23: MiniZinc has no certified track)"
+    echo "space_floor=no solve or check starts while /scratch has under 2000 GB free"
     echo "check_mem=MemoryMax=64G, no address-space cap, at most 12 proofs of 2 GiB or more at once"
     echo "veripb=$($HOME/.cargo/bin/veripb --version 2>&1 | tail -1)"
     echo "host=$(hostname)"
@@ -153,7 +156,8 @@ arm_driver() {
     BAGUETTE="$DIR/bin/baguette-$l.sh" \
     VERIPB="$DIR/bin/veripb_wrap.sh" SERIES_VERIPB_REAL="$HOME/.cargo/bin/veripb" \
     SERIES_CHECK_LIMIT=3600 SERIES_CHECK_MEMMAX=64G SERIES_SEM_DIR="$DIR/sem" SERIES_BIG_SLOTS=12 \
-    CHECK_TIMEOUT=28800 CHECK_MEM_KB=unlimited
+    CHECK_TIMEOUT=28800 CHECK_MEM_KB=unlimited PROOF_CAP_KB=unlimited \
+    PRE_RUN="$DIR/bin/space_gate.sh" SERIES_MIN_FREE_GB=2000
   for y in $YEARS; do
     if grep -q '^DONE-' "$A/$y/results.tsv" 2> /dev/null; then continue; fi
     if [ ! -e "$A/$y/pair.tsv" ]; then

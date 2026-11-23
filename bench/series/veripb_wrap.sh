@@ -31,8 +31,10 @@ if [ "$size" -ge 2147483648 ] && [ -d "$SEM" ]; then
 fi
 out="$(mktemp "${TMPDIR:-/tmp}/vpw.XXXXXX")"
 start=$SECONDS
+# Peak RSS of veripb to <proof base>.vrss (kept beside the run's log, with the check time in results.tsv).
+vrss="${1%.opb}.vrss"
 timeout -k 30 "$LIMIT" systemd-run --user --scope -q -p MemoryMax="$MEMMAX" -p MemorySwapMax=0 \
-  "$REAL" "$@" > "$out" 2>&1 &
+  /usr/bin/python3 -I "$(dirname "$0")/rss_wrap.py" "$vrss" "$REAL" "$@" > "$out" 2>&1 &
 child=$!
 trap 'kill -TERM "$child" 2>/dev/null; wait "$child" 2>/dev/null; cat "$out"; rm -f "$out"; exit 124' TERM INT
 wait "$child"

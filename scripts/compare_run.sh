@@ -541,6 +541,9 @@ solve_one() {
       cmd+=("$fzn")
       ;;
   esac
+  # PRE_RUN (M17-bench-series-T1): a command run before each solve and before each check, OUTSIDE
+  # their timeouts. A series uses it to hold launches while /scratch is under its free-space floor.
+  [ -n "${PRE_RUN:-}" ] && "$PRE_RUN"
   t0="$(now_ns)"
   (
     ulimit -f "$PROOF_CAP_KB" 2>/dev/null
@@ -568,6 +571,7 @@ solve_one() {
     else
       opb="$(stat -c%s "$L.opb")"
       pbp="$(stat -c%s "$L.pbp")"
+      [ -n "${PRE_RUN:-}" ] && "$PRE_RUN"
       t0="$(now_ns)"
       timeout -k 30 "$CHECK_TIMEOUT" "$VERIPB" "$L.opb" "$L.pbp" > "$L.vp" 2>&1
       rc=$?
@@ -698,7 +702,7 @@ main() {
   fi
   write_conf
   export OUT MZN BAGUETTE CHUFFED GCS GCS_PROVE MEM_KB PROOF_CAP_KB SOLVE_TIMEOUT
-  export FLATTEN_TIMEOUT CHECK_TIMEOUT CHECK_MEM_KB KEEP DATA_TRIES SOLVERS PAIR_SOLVERS TOOL VERIPB
+  export FLATTEN_TIMEOUT CHECK_TIMEOUT CHECK_MEM_KB PRE_RUN KEEP DATA_TRIES SOLVERS PAIR_SOLVERS TOOL VERIPB
   export BAGUETTE_MZN_ID CHUFFED_MZN_ID GCS_MZN_ID COMPAT COMPAT_MZN PAIRS CORPUS INSTANCES
   export -f pair_one solve_one flatten_with check_input emit_input_failures instance_id
   export -f validate_fzn data_candidates emit flat mzn_id_of now_ns secs has_row

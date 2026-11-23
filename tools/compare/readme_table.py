@@ -121,7 +121,7 @@ def outcome_table(c, data):
         ("Complete answer, VeriPB ran out of memory (64 GB)", "check_memory", None),
         ("Complete answer, proof check failed for another reason", "check_other", None),
         ("Timeout at 1 200 s", "timeout", "timeout"),
-        ("Proof larger than the 16 GB cap", "capped", None),
+        ("Proof larger than the harness's cap (none since D-0203)", "capped", None),
         ("Refused, memory budget reached", "refused", "refused"),
         ("Crash", "crash", "crash"),
         ("No cause recorded", "unknown", "unknown"),
@@ -148,7 +148,7 @@ def outcome_table(c, data):
             vals.append((v, s))
         if key in ("check_time", "check_memory", "check_other", "unknown") and not any(v for v, _ in vals):
             continue
-        if key == "capped" and not any(a["proof"] for a in arms):
+        if key == "capped" and not any(v for v, _ in vals):
             continue
         shown_rows += 1
         # Bold the best VERIFIED count; an unverified column is not a competitor.
@@ -232,8 +232,7 @@ def section(tdir, record, previous, notes):
     L += tab
     L.append("")
     L.append("The first rows down to the rejected proofs add up to the %s instances, checked when this table was written. "
-             "A proof larger than the 16 GB cap is the solver's limit, and a check that ran out of time or memory "
-             "is the checker's, so the two are counted apart." % fmt(n))
+             "A check that ran out of time or memory is the checker's limit, not a rejected proof, so it is counted apart." % fmt(n))
     L.append("")
     # Cost of proof.
     first = arms[0]
@@ -246,7 +245,7 @@ def section(tdir, record, previous, notes):
         L += ["| | median ratio (no proof / proof) |", "|---|---|",
               "| wall time | %s |" % pair["wall"], "| peak memory | %s |" % pair.get("rss", "-"),
               "| nodes per second | %s |" % pair.get("nps", "-"), ""]
-        L.append("Without proof, %s instances that hit the memory budget, the 16 GB proof cap or a crash "
+        L.append("Without proof, %s instances that hit the memory budget, the proof cap or a crash "
                  "with proof become ordinary attempts, and %s of them end with a complete answer." % (
                      fmt(pair.get("gained", 0)), fmt(pair["gained_complete"])))
         L.append("")

@@ -4,8 +4,8 @@
 # flags), SERIES_PROOF (1 = keep the harness's `--proof PREFIX`, 0 = drop it and pass --no-proof),
 # SERIES_RSS_WRAP (rss_wrap.py). The solver runs in its own `systemd-run --user --scope -p
 # MemoryMax=32G` under the RSS recorder, which writes `rss_kb=N` to PREFIX.rss. `--stats` is on
-# so the node count is on stderr. The address-space cap (16 GiB) and the proof cap are the
-# harness's, applied in its solver subshell.
+# so the node count is on stderr. The address-space cap (16 GiB) is the harness's, applied in its
+# solver subshell. There is no proof cap in a series (PROOF_CAP_KB=unlimited).
 L=""; prev=""; args=()
 for a in "$@"; do
   [ "$prev" = --proof ] && L="$a"
