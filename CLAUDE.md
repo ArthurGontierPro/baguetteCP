@@ -12,22 +12,24 @@ A constraint programming solver with VeriPB proof logging and higher-order expla
 
 ## Context budget — read this before you open a file
 
-`docs/` is **340 KB ≈ 85k tokens**. `WORKLOG.md` alone is 68 KB ≈ 17k tokens. Reading
-them "to be thorough" costs more than the work you were dispatched to do, and a session
-that spends its context on reading has none left for the task. So the rule is:
+`docs/` is **2.5 MB ≈ 620k tokens** and `WORKLOG.md` alone is ~640 KB ≈ 160k tokens (measured
+2026-11-23; `du -sh docs; wc -c WORKLOG.md docs/*.md` re-measures, and the sizes below grow
+with every wave). Reading them "to be thorough" costs more than the work you were dispatched
+to do, and a session that spends its context on reading has none left for the task. So the
+rule is:
 
 **Never read a file over ~20 KB whole. Scope the read.**
 
 | File | Size | How to read it |
 |---|---|---|
-| `WORKLOG.md` | 68 KB | **The `SessionStart` hook already printed `## Active claims` for you.** Do not re-read the file to get it. For other sections: `sed -n '/^## Cross-session requests/,/^## Completed/p' WORKLOG.md`, or `tail -60` for the latest handoff notes. |
-| `docs/DECISIONS.md` | 126 KB | Never whole. `grep -n 'D-0028' docs/DECISIONS.md` then `sed -n '<start>,<end>p'`. To catch up: `grep -n '^## D-' docs/DECISIONS.md \| tail -20`. |
-| `docs/ROADMAP.md` | 46 KB | Never whole. `grep -n -A8 'M1-T31' docs/ROADMAP.md` for your task's row. |
-| `docs/PROOF-FORMAT.md` | 30 KB | By section, and the sections are stable: §1 the checker, §2 **historical** (the 2.0 grammar D-0046 removed — do not read it for the contract), §2a **the contract**: the 3.0 rules, the `pol` operators and the traps, §3 encoding (normative), §4 per-propagator justification, §5 backtracking/deletion, §6 debugging a rejected proof. Find §4 with `grep -n '^## 4\.' docs/PROOF-FORMAT.md` rather than a pinned line range. |
+| `WORKLOG.md` | ~640 KB | **The `SessionStart` hook already printed `## Active claims` for you.** Do not re-read the file to get it. For other sections: `sed -n '/^## Cross-session requests/,/^## Completed/p' WORKLOG.md`, or `tail -60` for the latest handoff notes. |
+| `docs/DECISIONS.md` | 1.9 MB | Never whole. `grep -n 'D-0028' docs/DECISIONS.md` then `sed -n '<start>,<end>p'`. To catch up: `grep -n '^## D-' docs/DECISIONS.md \| tail -20`. |
+| `docs/ROADMAP.md` | ~370 KB | Never whole. `grep -n -A8 'M1-T31' docs/ROADMAP.md` for your task's row. |
+| `docs/PROOF-FORMAT.md` | 74 KB | By section, and the sections are stable: §1 the checker, §2 **historical** (the 2.0 grammar D-0046 removed — do not read it for the contract), §2a **the contract**: the 3.0 rules, the `pol` operators and the traps, §3 encoding (normative), §4 per-propagator justification, §5 backtracking/deletion, §6 debugging a rejected proof. Find §4 with `grep -n '^## 4\.' docs/PROOF-FORMAT.md` rather than a pinned line range. |
 | `docs/GCS-COMPARISON.md` | 29 KB | Background. Read only if the task is explicitly about the comparison. |
-| `docs/SPEC.md` | 14 KB | Normative. Read the relevant section whole; §2.1 is the FlatZinc subset, §3.2 consistency levels, §3.3 explanations. |
-| `docs/INVARIANTS.md` | 6 KB | Read whole before touching `lib/core/`. It is short on purpose. |
-| `docs/ARCHITECTURE.md` | 8 KB | Read whole if you are changing structure. Its §1 module map was stale for months; **corrected and verified against the tree on 2026-09-18**, and it now agrees with the map below. |
+| `docs/SPEC.md` | 34 KB | Normative. Read the relevant section whole; §2.1 is the FlatZinc subset, §3.2 consistency levels, §3.3 explanations. |
+| `docs/INVARIANTS.md` | 18 KB | Read whole before touching `lib/core/`. |
+| `docs/ARCHITECTURE.md` | 21 KB | Read whole if you are changing structure. Its §1 module map was stale for months; **corrected and verified against the tree on 2026-09-18**, and it now agrees with the map below. |
 | `docs/GLOSSARY.md` | 4 KB | Read whole if the vocabulary is new to you. |
 
 **Module headers are the cheapest documentation in this repo.** Every module in `lib/`
@@ -128,14 +130,15 @@ FAIL scripts/mutate_proof.sh was not found ... NOT ONE mutation lane ran. This i
 `BAGUETTE_ROOT=<checkout>` fixes the mutation harness but not the other two; `--root .`
 fixes all three.
 
-### `dune runtest` does not build the solver, so the model tests can pass on a stale one
+### A script run directly does not build the solver, so it can pass on a stale one
 
-`dune runtest --root .` builds and runs the **test binaries**. It does **not** build
-`bin/main.exe`. So this sequence silently tests the solver you had before your change:
+`dune runtest --root .` now builds `bin/main.exe` as well (`test/unit/dune` depends on it since
+M9-no-proof-T2). A script run on its own does not. So this sequence, after an edit, silently
+tests the solver you had before your change:
 
 ```sh
-dune runtest --root .          # green
-./scripts/run_model_tests.sh   # 34/34 -- against the OLD main.exe
+dune build --root . lib/       # the library changed, the binary was not rebuilt
+./scripts/run_model_tests.sh   # green -- against the OLD main.exe
 ```
 
 `make models` depends on `build`, so `make` is safe — but `make` does not work in a
