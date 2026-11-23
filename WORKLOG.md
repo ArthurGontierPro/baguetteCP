@@ -19,6 +19,8 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
+| M17-bench-series-T5 | `docs/DECISIONS.md` (D-0210, append), `docs/ROADMAP.md` (row T5), `bench/challenge/README.md` (§2 row); runs on fataepyc-07 under `/scratch/arthur/node07-64g/`, tables to `/cluster/arthur/baguette-results/node07-64g/` | agent-node07 | 2026-11-23 |
+| M17-bench-series-T4 | `docs/DECISIONS.md` (D-0211, append), `docs/ROADMAP.md` (row T4), `bench/challenge/README.md` (§2 row); runs on fataepyc-07 under `/scratch/arthur/node07-gcs/`, tables to `/cluster/arthur/baguette-results/node07-gcs/` | agent-node07 | 2026-11-23 |
 
 ## Cross-session requests
 
