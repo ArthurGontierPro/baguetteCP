@@ -464,6 +464,7 @@ section 1. Shares are inclusive, of the whole run.
 
 | Task | Session | Date | Summary |
 |---|---|---|---|
+| M20-pernode-T4 (alldiff's Régin stage, rank 5 of D-0207) | agent-regin (`wave63-regin`) | 2026-11-23 | **D-0215.** A Régin pass that cannot prune is skipped. A matching kept across passes is repaired and one Tarjan pass looks for an edge in no maximum matching, an exact test; otherwise the from-scratch pass runs unchanged. The kept matching is a hint re-read against the live domains (no trail), I-P2 checked under BAGUETTE_DEBUG. Byte-identical on 428 model runs, the five D-0207 instances and two Challenge instances; lanes report the same lines before and after (54 and 42 `later/asks`), scaling ok, runtest 4 700 ok 0 FAIL. Per node without learning or proof: costas -36 %, p1f_13 -51 %, team-assignment -15 %, javarouting -10 %. Not merged |
 | M20-pernode-T2 (Element, and rootness in Cumulative and Gcc) | agent-lazy (`wave62-lazy`) | 2026-11-23 | **D-0214.** An `Element` pruning records a frame (the domains it read and the trail cut, D-0124) and builds its reason (`Reason.Later`, memoised per pass) and its derivation from it when asked. `Cumulative`/`Gcc` use `Store.at_root`. Byte-identical on 428 model runs and the five D-0207 instances. javarouting -33 % per node without learning or proof, -22 % shipped. The differential lanes differ in the `later/asks` counter only (not re-recorded). test_prop's D-0124 BAGUETTE_DEBUG failure was a test defect, now fixed |
 | M20-pernode-T3 (the arithmetic part) | agent-arith (`wave61-arith`) | 2026-11-23 | **D-0212.** `Linear.make` checks the row once (M1-T23's cap over the frozen bounds) and a row that passes runs plain `+`, `*`, `/`; one that does not keeps `Checked`; BAGUETTE_DEBUG audits both ways and asserts the premise. Byte-identical (418 model runs, five D-0207 instances), diff 347/347, debug 333/333, scaling ok, runtest 4 627 ok 0 FAIL. Per node: shipped -0.1 to -3.2 %, no learning mknap -21.4 % |
 | M22-review-T4 (but the module map), T6 (the seven comments), T7 (the fuzz lane), the report's speed section | review-1123 (laptop session, `review-easy`, gate on fataepyc-07) | 2026-11-23 | CLAUDE.md's context budget measured again (it said 340 KB for docs/, which is 2.5 MB) and its stale-binary section corrected; README's alldiff consistency; seven comments that had become false; `scripts/fuzz_lane.sh`; the report leads with speed (section 2), and T12 sends it to M20-pernode. Byte-identical, gate 2 in the handoff note. |
@@ -677,6 +678,12 @@ Gates 91 to 93 ran pinned to four cores with lanes at `-j 4`, because the series
 **Known, not fixed yet**: black-hole is 4.5 times slower at the root since `inverse`'s alldiff lemmas, in `Explanation`'s hashing of `pol` lines (agent-table's finding); `test_prop` under `BAGUETTE_DEBUG=1` fails one D-0124 check on main (agent-lazy is asked for the cause).
 
 **[AUTONOME] decisions**: none yet beyond the agents' own records.
+### 2026-11-23 (agent-regin, `wave63-regin`): M20-pernode-T4, alldiff's Régin stage, D-0215
+
+`regin_pass` asks `cannot_prune` first (a kept matching repaired, one Tarjan pass for an edge in no maximum matching) and runs the unchanged `regin_scratch` only when it could prune or fail. Every artefact is byte-identical, and a costas node costs -36 % without learning or proof, p1f_13 -51 %, but only -3.8 % shipped, where the learned PB rows still dominate.
+The lanes differ from the 2026-11-21 reference in `later/asks` only, with the same lines as main's binary, so the re-record D-0214 asks for covers this branch too.
+Next in alldiff: `s_holes` from a frame (the cross-session request of D-0214 on `store.ml`) and the bounds stage (`List.find_all` in `contained`, now the top symbol of a costas node).
+
 ### 2026-11-23 (agent-lazy, `wave62-lazy`): M20-pernode-T2, D-0214
 
 Element's reasons and the eager part of its derivations are built on demand from a frame (immutable domains plus `Store.history`). The bytes are identical, and javarouting costs -33 % per node without learning or proof and -22 % shipped without proof. Cumulative and Gcc ask rootness by `Store.at_root` (rcpsp -5 %).

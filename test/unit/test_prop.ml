@@ -6410,6 +6410,126 @@ let test_regin_staging () =
      branch every model in this suite takes"
     (d1 = [ 1; 4; 5; 6 ] && d2 = [ 1; 4; 5; 6 ])
 
+(* --------------------------------------------------- (f) THE GATE (D-0215) *)
+
+(* The Regin stage keeps a matching across passes and skips a pass that cannot prune
+   ([Alldiff.cannot_prune]). Two copies of one random scene, one instance gated and one
+   not, receive the same decisions, removals and backtracks; after each, both propagate
+   and must agree on the outcome, on every domain and on every trail entry (variable,
+   domain after, reason literals). Before each propagate, at stage 1's fixpoint, the
+   gate's verdict is held against what the scratch stage then does on the ungated copy:
+   "cannot prune" iff it lands nothing and does not fail, i.e. the gate is EXACT, not just
+   safe. The backtracks are what exercise a kept matching made stale by the store. *)
+let regin_gate_random_scene rnd stats =
+  let n = 2 + Random.State.int rnd 5 in
+  let boxes =
+    List.init n (fun _ ->
+        let lo = Random.State.int rnd 4 in
+        (lo, lo + 1 + Random.State.int rnd 4))
+  in
+  let names = List.init n (Printf.sprintf "v%d") in
+  let copy gate =
+    let e = Encoding.create () in
+    List.iter2 (fun n (lo, hi) -> Encoding.declare_int e n ~lo ~hi) names boxes;
+    List.iter (Encoding.request_direct e) names;
+    let rows = Encoding.add_all_different e names in
+    let store = mk_store (List.map2 (fun n (lo, hi) -> (n, lo, hi)) names boxes) in
+    let p = Alldiff.make ~gate store e ~rows (List.init n var) in
+    sink_proof e;
+    (store, p)
+  in
+  let sa, pa = copy true and sb, pb = copy false in
+  let g = match pa.Alldiff.gate with Some g -> g | None -> failwith "D-0215: no gate" in
+  let agree () =
+    Store.trail_length sa = Store.trail_length sb
+    && List.for_all
+         (fun i -> Domain.equal (Store.get sa (var i)) (Store.get sb (var i)))
+         (List.init n Fun.id)
+    && List.for_all
+         (fun k ->
+           let ea = Store.trail_entry sa k and eb = Store.trail_entry sb k in
+           ea.Store.var = eb.Store.var
+           && Domain.equal ea.Store.now eb.Store.now
+           && Reason.lits ea.Store.reason = Reason.lits eb.Store.reason)
+         (List.init (Store.trail_length sa) Fun.id)
+  in
+  let ok = ref true and live = ref true and steps = ref 0 in
+  while !live && !steps < 14 do
+    incr steps;
+    (match Random.State.int rnd 4 with
+    | 0 ->
+        Store.new_level sa;
+        Store.new_level sb
+    | 1 when Store.level sa > 0 ->
+        Store.backtrack sa;
+        Store.backtrack sb
+    | _ ->
+        let i = Random.State.int rnd n in
+        let d = Store.get sa (var i) in
+        if Domain.size d > 1 then (
+          let vs = Array.of_list (Domain.to_list d) in
+          let v = vs.(Random.State.int rnd (Array.length vs)) in
+          ignore (Store.remove sa (var i) v placeholder_pruning : Store.outcome);
+          ignore (Store.remove sb (var i) v placeholder_pruning : Store.outcome)));
+    let bounds p s =
+      match Alldiff.stage_bounds p s ~moved:false with
+      | _ -> true
+      | exception Alldiff.Found _ -> false
+    in
+    let ok_a = bounds pa sa in
+    let ok_b = bounds pb sb in
+    if ok_a <> ok_b then ok := false;
+    if not (ok_a && ok_b) then
+      if
+        (* Both copies run the same stage 1 on the same store, so a conflict here is
+           common to both; unwind it the way search would. *)
+        Store.level sa = 0
+      then live := false
+      else (
+        Store.backtrack sa;
+        Store.backtrack sb)
+    else
+      let verdict = Alldiff.cannot_prune g pa sa in
+      let before = Store.trail_length sb in
+      let rb = Alldiff.propagate pb sb in
+      let ra = Alldiff.propagate pa sa in
+      let scratch_quiet =
+        (match rb with Propagator.Fixpoint -> true | Propagator.Conflict _ -> false)
+        && Store.trail_length sb = before
+      in
+      if verdict then incr (fst stats) else incr (snd stats);
+      if verdict <> scratch_quiet then ok := false;
+      match (ra, rb) with
+      | Propagator.Fixpoint, Propagator.Fixpoint -> if not (agree ()) then ok := false
+      | Propagator.Conflict _, Propagator.Conflict _ ->
+          if not (agree ()) then ok := false;
+          if Store.level sa = 0 then live := false
+          else (
+            Store.backtrack sa;
+            Store.backtrack sb)
+      | _ -> ok := false
+  done;
+  !ok && agree ()
+
+let test_regin_gate_random () =
+  let rnd = Random.State.make [| 215 |] in
+  let stats = (ref 0, ref 0) in
+  let bad = ref 0 in
+  for _ = 1 to 400 do
+    if not (regin_gate_random_scene rnd stats) then incr bad
+  done;
+  check
+    (Printf.sprintf
+       "regin (f) D-0215: over 400 random scenes the gated stage prunes exactly what the \
+        scratch stage prunes, trail entry for trail entry, and the gate is exact (%d \
+        skips, %d passes it let through, %d scenes disagreeing)"
+       !(fst stats)
+       !(snd stats)
+       !bad)
+    (!bad = 0);
+  check "regin (f) D-0215: the scenes exercise both verdicts"
+    (!(fst stats) > 100 && !(snd stats) > 100)
+
 (* ------------------------------------------------------- (c)/(d) THE CITATION *)
 
 (* Three variables over 1..4 with 2 and 3 taken out of each by an `int_ne`: three
@@ -9983,6 +10103,7 @@ let () =
   test_regin_filtering ();
   test_regin_consistency_oracle ();
   test_regin_staging ();
+  test_regin_gate_random ();
   test_regin_conclusion ();
   test_regin_mixed_currency ();
   test_regin_random_proofs ();
