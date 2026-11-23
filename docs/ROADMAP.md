@@ -587,3 +587,82 @@ table from its output, a history of every series so the progress shows, and a ru
 | M17-bench-series-T2 | **The first series on current main**: default with proof, `-f` with proof, default `--no-proof`, on the bits default; the README table regenerated from it, D-0185's table kept in the history | TODO | Needs T1 |
 | M17-bench-series-T3 | **The history and the rule**: `bench/series/HISTORY.md`, one row per series (date, commit, binary hash, per arm the verified counts, summed score, rank range), and in CLAUDE.md's orchestration section the rule for when a series runs: after a merge that changes the default behaviour, the encoding or the search (a gate with artefact diffs on purpose), and before a paper or a release; not after a byte-identical merge | TODO | Fill D-0185 (`7c880bce`) and D-0175 (`492638b9`, two arms) as the first rows |
 | M17-bench-series-T4 | **A proof-logging reference beside baguette**: GCS with proofs (and Chuffed without, as the speed reference) on the same editions and settings, once per GCS release, so the README can say where baguette stands among proof-logging solvers and not only against the official entrants | TODO | M7-T26 ran GCS on 2025 and 2026 only (D-0103: 76 CAPPED at the 16 GB cap). GCS and Chuffed locations: `bench/challenge/README.md` |
+| M17-bench-series-T5 | **The harness limits are ours to choose (D-0204)**: no proof cap in our series (the time limit stays 1 200 s); decide the solver memory limit (16 GiB today, 314 refusals at the heap budget in D-0185 arm A) by one series at 64 GiB on the same binary, and record what it buys | TODO | The proof cap is removed in T2's series already (the user, 2026-11-23). Watch `/scratch`: without the cap a proof can reach hundreds of GB |
+
+## M18-coverage — the globals that reach baguette decomposed, and the third of the Challenge refused before search
+
+Opened 2026-11-23 at the user's request (D-0204). The census below is `tools/compare/challenge_globals.py`
+over D-0185's arm A (default, with proof, release `7c880bce`), with `regular`, `inverse`, `member`,
+the closed gcc forms and the `count` family counted as native. An instance counts under every global
+its model calls. Two facts frame the milestone. (1) The instances that use only native globals, or
+none, are 836 of 1 600, and baguette completes 20 % of them, so coverage is not the only lever.
+(2) A third of arm A never really ran: 314 REFUSED (heap budget) and 198 CAPPED (16 GB proof cap).
+
+| global (not native) | instances | refused | complete % |
+|---|---|---|---|
+| `diffn` (+ `diffn_nonstrict`) | 140 (+15) | 23 | 20 |
+| `table` | 135 | 52 | 17 |
+| `arg_sort`, `sort`, `arg_max` | 100, 25, 30 | 19, 11, 1 | 28, 9, 7 |
+| `circuit`, `subcircuit` | 95, 32 | 16, 0 | 21, 41 |
+| `value_precede_chain`, `value_precede`, `seq_precede_chain` | 75, 30, 25 | 15, 7, 5 | 10, 6, 55 |
+| `bin_packing_load`, `bin_packing` | 65, 20 | 32, 8 | 18, 58 |
+| `increasing`, `decreasing`, `strictly_decreasing` | 50, 20, 15 | 7, 5, 0 | 17, 27, 13 |
+| `lex_lesseq`, `lex_less`, `lex_greatereq` | 45, 25, 25 | 9, 5, 1 | 14, 25, 58 |
+| `nvalue`, `all_equal`, `alldifferent_except_0` | 40, 40, 37 | 7, 5, 8 | 52, 11, 3 |
+| `VAR-SET` (set variables, out of scope in SPEC §1) | 35 | 14 | 11 |
+
+Each global is its own propagator row with its proof story, opened through `/propagator`, with a
+design record first when the justification is new. After each one lands, re-run the census and the
+M17 series' families that use it; the baseline to beat is the row above.
+
+| ID | Task | Status | Notes |
+|---|---|---|---|
+| M18-coverage-T0 | **The census as a tool**: `challenge_globals.py`'s NATIVE list is stale (it still lacks `regular`, `inverse`, `member`); read it from `mznlib/` instead, and print the table above from any M17 series directory | TODO | Ten minutes, and every later row reads it |
+| M18-coverage-T1 | **`table`** (135 instances, 52 refused): a native GAC propagator (compact-table, as Gecode, OR-tools and Chuffed have), each pruning justified from the tuples. D-0184's in-proof tabulation is the closest proof story | TODO | The refusals say the decomposition is what fills the heap |
+| M18-coverage-T2 | **`diffn`** (155): pairwise non-overlap plus the two cumulative relaxations (Chuffed and Gecode do this), reusing `cumulative.ml`'s time-table and its justification | TODO | |
+| M18-coverage-T3 | **`circuit`, `subcircuit`** (127): alldiff plus the no-subtour check (Chuffed's and Gecode's), the subtour cut justified in the proof. Design record first: a subtour cut is not a single row | TODO | Routing is where `-f` loses most (D-0185 §4), so the native circuit also changes the search question |
+| M18-coverage-T4 | **`bin_packing_load`, `bin_packing`, `_capa`** (85, 40 refused): the load sums as linear rows plus the capacity reasoning (Shaw's propagator, or the cumulative view of it) | TODO | |
+| M18-coverage-T5 | **The ordering and symmetry-breaking globals**: `lex_*`, `value_precede(_chain)`, `seq_precede_chain`, `increasing` and its family (~350 instance mentions). Simple propagators (the lex chain, Law and Lee's precedence), each pruning one `rup` over the order literals. Pairs naturally with M15-symmetry | TODO | Check first that the std decomposition is the cost: some of these rows may be cheap already |
+| M18-coverage-T6 | **`sort`, `arg_sort`, `arg_max`** (155): the decomposition is a sorting network or a big-M family; a native sort (bounds consistent, Mehlhorn and Thiel) | TODO | |
+| M18-coverage-T7 | **The cheap ones**: `alldifferent_except_0` (37, 3 % complete) as alldiff over the non-zero values, `all_equal`, `nvalue` (already 52 %, measure before building) | TODO | |
+| M18-coverage-T8 | **`regular` is native and completes 1 of 98 attempted** (62 incumbents): find out why (search over the state flags, propagation strength, or the size of the flag encoding) before any other regular work | TODO | D-0146 §6 measured 5 -> 18 of 65 at 300 s; this census reads 1 200 s |
+| M18-coverage-T9 | **The refused third**: 314 heap-budget refusals in arm A, most after the encoding (D-0185 §1, cause table). Measure which encodings fill the heap (eager order literals over wide domains, decompositions, the ladder) and whether introducing literals LAZILY, as GCS does for order atoms, removes them. Design record first: lazy literals touch the PB encoding and the proof's naming contract (PROOF-FORMAT §3) | TODO | T2's series (no proof cap) and M17-T5 (64 GiB) say how much of the third is the cap and how much is the encoding |
+| M18-coverage-T10 | **Set variables** (35 instances): stay out of scope (SPEC §1) or support `var set of int` as Boolean arrays through mznlib. A decision for the user, with the payoff measured first | TODO | |
+
+## M19-config — the ideas of other solvers, each behind a flag in baguette, measured to find our best configuration
+
+Opened 2026-11-23 at the user's request (D-0204): test in baguette the ideas that exist in other
+solvers, compare them on the same instances, and take the best configuration as the default, whatever
+the Challenge convention says. One protocol for every row: the idea goes behind a flag (default off),
+its proof story is stated (most search ideas change no proof rule, the solver just writes a different
+search), it runs on M19-config-T0's tuning set with and without proof, and its D-record gives the
+on/off table per family. A row that wins goes to T1's decision. Every row names the solver it comes from.
+
+| ID | Task | Status | Notes |
+|---|---|---|---|
+| M19-config-T0 | **The tuning set and its protocol**: a stratified subset of the Challenge (about 200 instances, every family that baguette attempts, a few per family), 300 s, run through M17's driver, so an idea is measured in hours and not in two days; the full series confirms a winner | TODO | Without it every row below costs a full series |
+| M19-config-T1 | **The default configuration, re-decided by measurement** (reopens D-0154): fixed against `-f` against the best combination of the rows below, on the full M17 series. If a free configuration wins, it becomes the default and the fixed search stays a flag | TODO | D-0185: `-f` is +39 verified answers, better on 489 instances, worse on 336 |
+| M19-config-T2 | **Restarts, always measured with and without phase saving** (the user's intuition, 2026-11-23: restarts without phase saving are poor; the codes set agrees, D-0137 §10.1): Luby (unit), geometric, Glucose's LBD moving averages, Kissat's stable/focused alternation; and the arms that isolate them: annotation + restarts + phase saving, activity without restarts, activity + restarts + phase saving | TODO | `lib/core/restart.ml`, `phase.ml` hold most of them already (M10) |
+| M19-config-T3 | **Phases**: phase saving, solution-guided phase for optimisation (the value of the best solution so far, Chuffed and CP-SAT), Kissat's target and best phases with rephasing | TODO | |
+| M19-config-T4 | **Branching heuristics**: VSIDS/EVSIDS decay, CHB and LRB (Maple), dom/wdeg (Boussemart et al.), activity-based search (Michel and Van Hentenryck), and the Chuffed alternation between annotation and activity that `-f` does | TODO | `activity.ml` |
+| M19-config-T5 | **The learned database**: Glucose/Kissat tiers (core LBD <= 2, tier 2 <= 6, local by activity), reduce intervals, vivification of learned clauses (CaDiCaL). `tiered` exists (D-0139) and was a wash on the codes set (D-0202): measure it on the tuning set before more work | TODO | `retention.ml` |
+| M19-config-T6 | **Conflict analysis**: recursive clause minimisation (MiniSat), Pumpkin's CPIP stopping criterion, extended nogood propagation and per-variable atom index (M7-T30's notes), chronological backtracking (Nadel and Ryvchin) | TODO | M7-T30 holds the Pumpkin file's pointer |
+| M19-config-T7 | **Optimisation**: large neighbourhood search interleaved on one thread (CP-SAT, OR-tools), core-guided lower bounding (OLL, as CP-SAT and Pumpkin), objective-first branching. Proof story first: LNS only adds solution-improving rows, which VeriPB already has | TODO | Most Challenge instances are optimisation; incumbents are 933 of arm A's rows |
+| M19-config-T8 | **The root**: probing (failed literals), equality merging into views, the LP relaxation (M13-codes-leads-T1, not built by D-0194's sibling M13-T1 spike) | TODO | |
+| M19-config-T9 | **The propagation engine**: propagator priorities (cheap first, as Gecode and Chuffed), idempotence, staged propagation | TODO | `engine.ml` |
+
+## M20-pernode — the speed of a node, after M16
+
+Opened 2026-11-23 at the user's request (D-0204). M11 removed the costs that grow with the run and
+M16 reviewed every file (about -7 % per node). baguette is still 70 to 120 times slower per node than
+Gecode on the same tree (D-0169), and about 35 times slower than Chuffed on an older binary (D-0103).
+These rows look for the factors, not the percents.
+
+| ID | Task | Status | Notes |
+|---|---|---|---|
+| M20-pernode-T1 | **Where the factor goes**: the same tree in baguette, Gecode and Chuffed on four or five families (not only QR48), with `perf` per layer (propagation, explanation construction, trail, analysis, proof writing), with and without proof | TODO | D-0169's method, wider |
+| M20-pernode-T2 | **Explanations on demand**: under `--no-proof` and with proof, what keeping every `Explanation` costs, against building a reason only when conflict analysis asks for it (Chuffed's lazy explanations) | TODO | SPEC §1 requires the same explanation values in both modes; a design record if the representation changes |
+| M20-pernode-T3 | **Compiler and runtime**: flambda with `-O3`, unsafe array access in the measured hot loops (with the `BAGUETTE_DEBUG` checks kept), the GC settings per family | TODO | D-0171's release profile is the start |
+| M20-pernode-T4 | **Data structures on the hot path**: domains (sparse sets or bitsets for small domains), watched literals for clauses and PB rows, the event queue, the trail | TODO | |
+| M20-pernode-T5 | **Proof writing**: its share of the time (T1), buffered output without `Printf`, shorter lines, and deleting dead lines earlier | TODO | Without the cap (D-0204) proof size becomes time, not a refusal |
+

@@ -26259,3 +26259,26 @@ checking; together they were 30.1 GB (largest 4.5 GB), `/scratch` at 11 % before
 `keep_all`. The codes set confirms D-0185: `-f` is the free-category setting, 2x on the instances
 the fixed search already solves, and the only arm that refutes o7k2 def. `tiered` gains nothing here
 and breaks `-f`, so it stays off, and `-f` should not be combined with it. Nothing to revert.
+
+## D-0204  The user's decisions of 2026-11-23: past decisions are reopened by measurement, the 16 GB proof cap goes, and the roadmap turns to coverage, configuration and speed
+
+**Status**: DECIDED by the user (2026-11-23), recorded by the orchestrator.
+
+**Context.** The Challenge series of D-0185 ranks baguette last or next to last in most editions,
+with or without proof. The user's words: decisions taken in the past may no longer fit the present
+situation, and if staying on the fixed search is bad, it has to go. MiniZinc has no certified track
+yet, so the Challenge's conventions do not bind a solver that logs proofs.
+
+**Decisions.**
+1. A default is chosen by measurement on the M17 series, not by the Challenge convention. D-0154
+   (the default search stays fixed) is reopened, and M19-config-T1 decides it from the numbers.
+2. The 16 GB proof cap of the harness (`PROOF_CAP_KB`, D-0133's settings) is removed from our
+   series. The time limit (1 200 s) stays, so scores stay comparable with the official entrants.
+   CAPPED disappears as an outcome. The series of D-0203 was told to restart without it.
+3. The roadmap gains three milestones, in this order of priority: M18-coverage (the globals that
+   reach baguette decomposed, and the third of the Challenge that is refused before search),
+   M19-config (the ideas of other solvers, each behind a flag and measured, to find the best
+   configuration), M20-pernode (code speed, after M16).
+
+**Revert.** Point 2 is a harness setting (`bench/series/`, `scripts/compare_run.sh`), not solver
+code. Point 1 changes nothing until M19-config-T1 measures.
