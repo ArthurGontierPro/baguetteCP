@@ -462,6 +462,7 @@ section 1. Shares are inclusive, of the whole run.
 
 | Task | Session | Date | Summary |
 |---|---|---|---|
+| M20-pernode-T3 (the arithmetic part) | agent-arith (`wave61-arith`) | 2026-11-23 | **D-0212.** `Linear.make` checks the row once (M1-T23's cap over the frozen bounds) and a row that passes runs plain `+`, `*`, `/`; one that does not keeps `Checked`; BAGUETTE_DEBUG audits both ways and asserts the premise. Byte-identical (418 model runs, five D-0207 instances), diff 347/347, debug 333/333, scaling ok, runtest 4 627 ok 0 FAIL. Per node: shipped -0.1 to -3.2 %, no learning mknap -21.4 % |
 | M22-review-T4 (but the module map), T6 (the seven comments), T7 (the fuzz lane), the report's speed section | review-1123 (laptop session, `review-easy`, gate on fataepyc-07) | 2026-11-23 | CLAUDE.md's context budget measured again (it said 340 KB for docs/, which is 2.5 MB) and its stale-binary section corrected; README's alldiff consistency; seven comments that had become false; `scripts/fuzz_lane.sh`; the report leads with speed (section 2), and T12 sends it to M20-pernode. Byte-identical, gate 2 in the handoff note. |
 | M20-pernode-T5 (the buffer part: proof text through one buffer) | agent-writer (`wave60-writer`) | 2026-11-23 | **D-0209.** New `lib/proof/text.ml`: `Writer`'s lines and `Opb.output_row`'s rows written in one `Text` buffer, integers by digit pairs in place, literal names from a per-variable prefix cache, `pol` tokens counted in the write. `.opb`/`.pbp`/stdout byte-identical on 209 models x 2 flag sets, lane 347/347 and debug 333/333, scaling ok, 4 563 ok. Proved node -7.9 % rcpsp, -7.4 % QR48, -4.5 % javarouting, -1.5 % costas, -0.4 % mknap (instructions). Not merged |
 | M22-review-T1, M22-review-T2 (the two bugs of the 2026-11-23 review) | review-1123 (laptop session, `review-fixes`, gate on fataepyc-07) | 2026-11-23 | T1: `builder.ml`'s constant fold through `Checked`; `int_lin_le([2^61, 1], [4, x], 0)` printed `x = 0` and VeriPB verified it, it is now refused with the limit named. T2: cumulative reports an overload among fixed tasks (exit 4 before), two regression models. Report, fuzz harness and rows T3 to T13: `docs/reports/2026-11-23-code-review.md`, `tools/fuzz/`. |
@@ -660,6 +661,12 @@ section 1. Shares are inclusive, of the whole run.
 | M19-config-T0 (the tuning set) | agent-tuning (`wave59-tuning`) | 2026-11-23 | **D-0205.** `bench/tuning/`, 200 instances in 183 families. DONE except the driver hook. |
 
 ## Handoff notes
+
+### 2026-11-23 (agent-arith, `wave61-arith`): M20-pernode-T3, the arithmetic part, D-0212
+
+`Linear` rows that pass `Checked.row_fits` at `make` run plain arithmetic (field `arith`, header "Arithmetic" has the precondition, the premise and the proof); artefacts byte-identical everywhere checked. Per node: mknap -21 % without learning but -0.3 % shipped, because the shipped mknap node is learned PB rows (rank 1, T4, comes first).
+The premise is "live bounds inside the bounds `make` froze": a row built through `Linear.make` in the middle of search would break it, and the debug pass (`Audited`) is what catches it. `Ne`, `Reif_lin_eq` and `Interval` still check per operation.
+Under BAGUETTE_DEBUG=1 `test_prop.exe` fails one OLD check, `D-0124: and so does the justification, which reads the same history`, identically on main `7851be6`: not this change, not yet a ROADMAP row.
 
 ### 2026-11-23 (review-1123, laptop session, `review-easy`): speed first, then the rest of M22-review
 

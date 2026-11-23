@@ -26706,3 +26706,158 @@ as a big-M row over bits) is not built here and is left to whoever finds a table
 
 The branch `wave59-table`. Deleting `mznlib/fzn_table_int.mzn` and `fzn_table_bool.mzn` alone gives
 back std's decomposition for every model; the builtin can stay accepted.
+
+## D-0212  [AUTONOME] M20-pernode-T3 (arithmetic): `Linear` checks a row for overflow once, at `make`, and a row that passes runs plain `+`, `*`, `/`. The precondition is M1-T23's cap over the frozen bounds; the artefacts are byte-identical and a node costs 0.1 to 3.2 % fewer instructions shipped and 1 to 21 % without learning (mknap -21 %)
+
+**Status**: DONE on branch `wave61-arith` (agent-arith, 2026-11-23), not merged. Rank 4 of D-0207
+section 6. Taken in autonomous mode: it changes no output and no default, so it is not one of the
+user's decisions, and it is `[AUTONOME]` because the precondition, the debug audit and the scope were
+chosen without asking. Measured on `fataepyc-06` while the Challenge series of 2026-11-23 ran at 87
+processes, one experiment process at a time, in instructions (`perf stat -e instructions:u`). Runs and
+scripts in `/scratch/arthur/wt-arith-runs/`, copied to `/cluster/arthur/baguette-results/arith/`.
+
+### 1. Context
+
+D-0207 section 5 item 4: `Checked` (`mul`, `add`, `floordiv`) is 51 % of `Linear`'s samples on mknap,
+37 % of the no-learning node. Every operation of a run went through a function call that tests its
+operands, and `Checked.mul` divides when an operand is past 2^30. The 2026-11-23 review (section 1.1)
+found a wrong answer that VeriPB verified, caused by one fold in `builder.ml` that skipped `Checked`.
+So the check cannot simply go. It has to move to where it is made once, with a stated reason why
+nothing after it can wrap.
+
+### 2. The rule
+
+For a row  sum_i a_i x_i <= c  built by `Linear.make`, with the bounds `make` freezes for each term
+(`decl_lo_i`, `decl_hi_i`, the store's domain when the row is built) and B_i = max(|decl_lo_i|,
+|decl_hi_i|):
+
+- **Precondition**, checked once in `make`: M = |c| + sum_i |a_i| * B_i <= `Checked.limit` (=
+  max_int / 16), computed in checked arithmetic (`Checked.row_fits`; a sum that itself overflows
+  fails). The verdict is the row's field `arith`: `Plain` if it passes, `Checked_each` if not,
+  `Audited` if it passes and BAGUETTE_DEBUG is on.
+- **Premise**, not checked per run: at every run, every term's live [lo, hi] lies inside its frozen
+  bounds. Every row is built by `lib/flatzinc/compile.ml` before search (or by a unit test), a store
+  write only narrows (I-D3, asserted by `Store.apply` under BAGUETTE_DEBUG), a failed write is not
+  stored (I-D1), and a backtrack restores a state that came after `make` (I-T1, no backtrack goes
+  below level 0). `lib/core/learned.ml`'s rows, built mid-search, freeze the ENCODING's declared
+  bounds instead (its header), which satisfies the premise as well; no code builds them through
+  `Linear` since M2-L13.
+
+On a `Plain` row a run uses `+`, `-`, `*` and `Checked.floordiv_plain` / `ceildiv_plain` (the
+rounding without the two guards; `Checked.floordiv` is now the guards followed by it, so the rounding
+is written once). A `Checked_each` row runs exactly as before. The justification's divisor `-a_j`
+stays `Checked.neg`: it is on the pruning path, not the per-term loop.
+
+### 3. Why no value of a `Plain` run wraps
+
+Under the precondition and the premise, every value a run computes is at most 2M <= max_int / 8 in
+magnitude:
+
+| value | bound | why |
+|---|---|---|
+| `term_min` a_i * v, v = live lo or hi | <= \|a_i\| * B_i <= M | v inside the frozen bounds (premise) |
+| each partial sum of the minima | <= sum_i \|a_i\| * B_i <= M | each summand bounded by its own share, whatever the order |
+| slack = c - total_min | <= \|c\| + sum_i \|a_i\| B_i = M | |
+| max_term = min_i + slack | <= 2M | |
+| floordiv / ceildiv max_term a_i | <= \|max_term\| <= 2M | a_i <> 0 (zero terms skipped), the term is not fixed (skipped before the divisions), dividend is not min_int; the +-1 correction only when \|a_i\| >= 2 |
+
+A coefficient past `limit` passes the precondition only on a term with B_i = 0, i.e. fixed at 0: its
+product is 0 and it never reaches a division. Two's complement `+`, `-`, `*` are exact whenever the
+true result is representable, so every plain result EQUALS the checked one; the trail, the reasons,
+the proof lines and stdout are therefore the same bytes (section 4). The bound 2M is well inside the
+factor of 16/9 `Checked`'s header keeps over its worst path (9M + 6), so no new cap was needed and
+none was changed.
+
+### 4. Byte identity
+
+`.opb`, `.pbp` and stdout of every test model (209), under the default flags and `--bits-above
+none`, 418 runs, hashed with main's release binary `82ad71cb` (main `7851be6`) and this branch's
+`f2691555` (`10d5308`): IDENTICAL on all 418. The five D-0207 instances below: same node count, same
+`.pbp` and `.opb` md5 and same stdout before and after, with proof and without.
+The differential lane (`scripts/diff_lane.sh --tier all -j 4 --bin` the release binary): 347 of 347
+runs equal the reference. Its debug pass (`--debug`, BAGUETTE_DEBUG=1, every in-range row `Audited`):
+333 of 333 equal, no `invariant violated`. The scaling lane (`--enforce`): ok, every line within its
+threshold. `dune runtest --root . --force -j 4` under `ulimit -v 4000000`: 4 627 checks `ok`, 0
+`FAIL` (4 563 before, the 64 new ones are section 6).
+
+### 5. Measurement
+
+Instructions per node, D-0207's method: (I - I_base) / (N - N_base), the base being the same command
+stopped at 1 node, same five instances and budgets. `B` is the shipped binary (learning on),
+`before` main `7851be6` built release (`82ad71cb`), `after` this branch `10d5308` (`f2691555`). `NL`
+is the same two sources plus D-0207's never-committed `nolearn.patch` (`6cdf5b8a`, `4d0fa09f`), run
+with `BAGUETTE_LEARN=off`: the column where model propagation is the node, and where D-0207 measured
+the 37 %.
+
+| instance (D-0207 family, budget) | nodes | B np before | B np after | change | B proof before | B proof after | change |
+|---|---|---|---|---|---|---|---|
+| QR48 `qr3` (clauses, full) | 29 779 | 1 042 698 | 1 036 383 | -0.61 % | 1 705 864 | 1 699 550 | -0.37 % |
+| rcpsp 11, makespan <= 66 (cumulative, full) | 2 010 | 2 632 817 | 2 551 166 | -3.10 % | 9 397 401 | 9 309 537 | -0.93 % |
+| javarouting `trip_6_3` (element, 20 000) | 20 001 | 12 588 507 | 12 190 145 | -3.16 % | 23 434 705 | 23 033 088 | -1.71 % |
+| mknap2-1 (linear, 20 000) | 20 001 | 40 272 476 | 40 149 427 | -0.31 % | 40 920 236 | 40 792 319 | -0.31 % |
+| costas 14 (alldiff, first solution) | 21 129 | 44 740 922 | 44 699 046 | -0.09 % | 53 310 704 | 53 270 521 | -0.08 % |
+
+Without learning (`NL`, `BAGUETTE_LEARN=off`), D-0207's same trees:
+
+| instance | nodes | NL np before | NL np after | change |
+|---|---|---|---|---|
+| QR48 `qr3` | 29 779 | 437 161 | 430 846 | -1.44 % |
+| rcpsp 11, makespan <= 60 (full) | 33 945 | 884 397 | 848 399 | -4.07 % |
+| javarouting `trip_6_3` (20 000) | 20 001 | 8 248 496 | 7 836 315 | -5.00 % |
+| mknap2-1 (20 000) | 20 001 | 666 556 | 524 173 | **-21.36 %** |
+| costas 14 (first solution) | 21 425 | 5 870 876 | 5 820 759 | -0.85 % |
+| mknap2-1 with proof (20 000) | 20 001 | 1 102 498 | 960 175 | -12.91 % |
+
+`before` reproduces D-0207 and D-0209: mknap B np 40 272 476 against D-0207's 40 298 K, NL np 666 556
+against 667 K; B proof is D-0209's `after` column within 0.01 %. The base run (1 node) grew by 16 K to
+2.3 M instructions on the five (the precondition, once per row at `make`), which the per-node figure
+subtracts.
+
+D-0207 section 6 estimated -20 to -35 % on mknap without proof and -10 to -20 % with proof, and those
+are the no-learning figures: -21 % and -13 %. On the shipped binary mknap moves by 0.3 %, because its
+node is 93 % learned PB rows (D-0207 section 5 item 1) and `Linear` is 0.9 % of it; the gain there waits
+for rank 1 (watched learned rows, T4), after which `Linear` is again a large share of the node. The
+families whose `Linear` rows are numerous beside the globals (javarouting, rcpsp) gain 3 to 5 %
+without proof. Costas's 157 `int_lin_eq` are small next to alldiff.
+
+### 6. Tests
+
+`test/unit/test_prop.ml`, `test_linear_in_range`: five coefficient sets (a = limit/4 with a negative
+box, mixed signs over all-negative and straddling boxes, one term at limit/2, two negative coefficients
+on negative boxes, a zero coefficient beside a fixed-at-0 term whose coefficient is max_int/2), each at
+rhs = +-(limit - S) (M = limit, in range) and +-(limit - S + 1) (M = limit + 1, not), 20 rows. Each
+asserts the side of the cap, `Linear.in_range`, that the run leaves EXACTLY the brute-force bounds of
+the row's solutions (evaluated in `Checked`) or a conflict iff there is none (8 prune, 6 conflict),
+and that `propagate` and `Ref_linear.propagate` (the checked specification, M11-complexity-T3) give
+the same outcome and trail from the declared box and from a narrowed one. A row whose products
+overflow is not in range and still raises (M1-T23's test is unchanged). Under BAGUETTE_DEBUG one more
+case builds a row at a narrowed level, backtracks past it and runs it: the audit fails, naming D-0212.
+That case is skipped, and says so, without BAGUETTE_DEBUG. Run under BAGUETTE_DEBUG=1, test_prop
+passes the new cases and fails one old check, `D-0124: and so does the justification, which reads the
+same history`, which fails identically on main `7851be6` under BAGUETTE_DEBUG (not this change).
+
+### 7. BAGUETTE_DEBUG
+
+An `Audited` row computes each operation checked and plain and fails with `invariant violated:
+D-0212` if they differ or if the checked one raises, and asserts the premise at the top of every run.
+The debug pass of the differential lane runs every in-range row that way (section 4).
+
+### 8. What it costs in clarity
+
+One field on `Linear.t`, a three-constructor type, five two-line dispatchers (`add`, `sub`, `mul`,
+`fdiv`, `cdiv`) that the release build inlines (checked with `objdump`: `propagate` and `prune_term`
+call no dispatcher, only `Checked`'s functions in the `Checked_each` arm), and five out-of-line audited
+twins, which exist because the non-flambda inliner refuses a body that builds a closure. `term_min`
+stays the checked specification beside `term_min_in`. The rule and its proof are in `linear.ml`'s
+header, "Arithmetic", and `checked.ml`'s header points to it. The premise is the one thing a future
+caller can break (a row built mid-search through `make`); the header says what to do instead and the
+debug pass catches it.
+
+Not done: `Ne`, `Reif_lin_eq`'s own sums and `Interval` keep `Checked` per operation. They were not in
+D-0207's measured hot path; the same rule would apply to them, with their own paths (2 and 4 in
+`checked.ml`'s header) as the bound.
+
+### 9. How to revert
+
+Revert commit `10d5308` (the code and the tests); the D-record, ROADMAP and WORKLOG commits are text
+only. Nothing else depends on `arith`, `in_range` or the `_plain` divisions.
