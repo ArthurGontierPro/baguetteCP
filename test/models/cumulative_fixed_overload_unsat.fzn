@@ -1,0 +1,10 @@
+% cumulative with two FIXED tasks that overload time 1 between them (starts 0 and 1,
+% durations 2 and 1, one unit each, capacity 1), where the movable task x0 could also run
+% (M22-review-T2). The row for time 1 is false whatever x0 does. Before T2 the propagator
+% pushed x0 past time 1, never looked at that time again, accepted x0 = 2 and the run
+% ended on exit 4 (I-P1). The row has both of x0's literals here, so the refutation is the
+% row plus x0's ladder chain, written as a `pol` before the empty clause.
+predicate baguette_cumulative(array [int] of var int: s,array [int] of int: d,array [int] of int: r,int: b);
+var 0..9: x0 :: output_var;
+constraint baguette_cumulative([x0,1,0],[1,1,2],[1,1,1],1);
+solve satisfy;

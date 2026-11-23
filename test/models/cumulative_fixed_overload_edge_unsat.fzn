@@ -1,0 +1,8 @@
+% The same overload as cumulative_fixed_overload_unsat, with x0 declared from 1, so its
+% window at time 1 starts at its declared bound and the row keeps only x0_ge_2
+% (M22-review-T2). The row is then false on its own, the derivation is the row with an
+% axiom added, and the empty clause closes by unit propagation.
+predicate baguette_cumulative(array [int] of var int: s,array [int] of int: d,array [int] of int: r,int: b);
+var 1..9: x0 :: output_var;
+constraint baguette_cumulative([x0,1,0],[1,1,2],[1,1,1],1);
+solve satisfy;
