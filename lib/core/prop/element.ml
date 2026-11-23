@@ -242,7 +242,7 @@
    (D-0124's channel, the one [Linear] uses); the derivation's [pos_gone] walk, the
    removers it looks up and the residue it cancels move inside the [Explanation.deferred]
    that already wrapped it. Every lookup that used to be "hoisted to its call site" for
-   I-X6 ([Store.remover], [Store.lo_support], [Store.level_of_index]) is now answered by the
+   I-X6 ([Store.remover], [Store.lo_support], the level of an entry) is now answered by the
    history, which can only answer for positions below the pruning, so I-X6 holds by what
    the readers can see rather than by when they run. The frame section below argues why
    the values are the ones the eager code read; the proof bytes are the same on every
@@ -514,7 +514,7 @@ let idx_excl_above t p ~bhi =
        domain then. [dr] is the result BASE's domain, read through [View.lo_in] and its
        twins; for a constant result it is never read;
      - which trail entry REMOVED a value ([remover_at]), its ARENA explanation
-       ([explanation_at]) and the LEVEL of a trail position ([level_at]);
+       ([explanation_at]) and whether a trail position is at the ROOT ([at_root_at]);
      - which entry SUPPORTS a bound ([Store.lo_support_at]/[hi_support_at]).
 
    The last three are answered from [h], the trail cut at the pruning ([Store.history],
@@ -544,7 +544,12 @@ let remover_at (h : Store.history) ~var v =
   Store.remover h.Store.h_store ~before:(Store.history_upto h) ~var v
 
 let explanation_at (h : Store.history) e = Store.explanation h.Store.h_store e
-let level_at (h : Store.history) pos = Store.level_of_index h.Store.h_store pos
+
+(* [Store.at_root] for a position below the cut: one comparison against the first level
+   mark, which does not move while the cut is live (a level opened later has its mark at
+   or above the cut). The eager code asked [Store.level_of_index _ = 0] and [> 0], a binary
+   search with the same answer by I-T2 (D-0161 request 1, alldiff's move). *)
+let at_root_at (h : Store.history) pos = Store.at_root h.Store.h_store pos
 let res_lo t fr = View.lo_in fr.dr t.res
 let res_hi t fr = View.hi_in fr.dr t.res
 let res_mem t fr w = View.mem_in fr.dr t.res w
@@ -613,7 +618,7 @@ let hole_line t fr w =
 let index_hole_clause t fr bp =
   let unit = Lit.negate (Lit.eq t.iname bp) in
   match index_hole_puncher t fr bp with
-  | Some e when level_at fr.h e.Store.pos > 0 ->
+  | Some e when not (at_root_at fr.h e.Store.pos) ->
       let reason = e.Store.reason in
       Explanation.deferred (fun () ->
           Explanation.clause (unit :: List.map Lit.negate (Reason.lits reason)))
@@ -720,7 +725,7 @@ let pos_gone t fr p =
    own answer. *)
 let established_at_root h v ~lower =
   let sup = if lower then Store.lo_support_at h v else Store.hi_support_at h v in
-  sup = Store.no_support || level_at h sup = 0
+  sup = Store.no_support || at_root_at h sup
 
 (* One cancelling line per copy of each residue literal, when established at root;
    otherwise the group contributes nothing and the residue's term stays in the
@@ -1061,7 +1066,7 @@ let conflict_facts t fr =
   let dlo = Domain.lo fr.di and dhi = Domain.hi fr.di in
   let puncher_facts bp =
     match index_hole_puncher t fr bp with
-    | Some e when level_at fr.h e.Store.pos > 0 -> Reason.facts e.Store.reason
+    | Some e when not (at_root_at fr.h e.Store.pos) -> Reason.facts e.Store.reason
     | Some _ | None -> []
   in
   let of_pos p =
