@@ -45,6 +45,8 @@ module Lin_eq = Baguette_core.Lin_eq
 module Engine = Baguette_core.Engine
 module Search = Baguette_core.Search
 module Justify = Baguette_core.Justify
+module Explanation = Baguette_core.Explanation
+module Alldiff = Baguette_core.Alldiff
 
 (* M1-T53: the inner heap guard. test_prop.exe is the binary that reached 14.9 GB RSS on
    2026-09-16 and had to be killed by hand, so a guard that covered only test_output and
@@ -2358,6 +2360,73 @@ let test_d0200_heap_budget_cli () =
         (Array.to_list (Sys.readdir dir));
       Sys.rmdir dir
 
+(* M11-complexity-T18 (D-0216): an all_different's Hall derivations are rebuilt per
+   pruning, and on 2011_black-hole_10 under native `table` 156 removals under a 47-variable
+   Hall set rebuilt 8.3 M pairwise at-most-one nodes at the root, all but about 2 000 of
+   them hash-consing hits (55 G instructions; the element decomposition before it, 12.7 G).
+   [Alldiff.reuse] hands a node back when building it again would return it. The scene: six
+   variables confined to 1..6 (the Hall set) and four more over 1..7, each pushed to 7 by a
+   derivation over the six plus itself, so the four meet on 7 and the root is refuted, and
+   every derivation is forced. With reuse the pairs are the Hall set's once plus each
+   pruned variable's own, without it every pruning rebuilds them all; the proof must be the
+   same bytes either way, and veripb must accept it. *)
+let d0216_src =
+  let b = Buffer.create 512 in
+  for i = 1 to 6 do
+    Buffer.add_string b (Printf.sprintf "var 1..6: h%d;\n" i)
+  done;
+  for i = 1 to 4 do
+    Buffer.add_string b (Printf.sprintf "var 1..7: y%d;\n" i)
+  done;
+  Buffer.add_string b
+    "constraint all_different_int([h1,h2,h3,h4,h5,h6,y1,y2,y3,y4]);\nsolve satisfy;\n";
+  Buffer.contents b
+
+let test_d0216_amo_reuse () =
+  let dir = Filename.temp_file "baguette_d0216" "" in
+  Sys.remove dir;
+  Sys.mkdir dir 0o755;
+  let saved_hc = !Explanation.hashcons and saved_reuse = !Alldiff.amo_reuse in
+  let run reuse =
+    Explanation.set_hashcons true;
+    Alldiff.amo_reuse := reuse;
+    Alldiff.pair_builds := 0;
+    let name = if reuse then "reuse" else "rebuild" in
+    let opb, proof, outcome = el_solve dir name d0216_src in
+    (opb, proof, outcome, !Alldiff.pair_builds)
+  in
+  Fun.protect
+    ~finally:(fun () ->
+      Explanation.set_hashcons saved_hc;
+      Alldiff.amo_reuse := saved_reuse)
+    (fun () ->
+      let _, proof_off, out_off, pairs_off = run false in
+      let opb, proof_on, out_on, pairs_on = run true in
+      let unsat = function Search.Unsat -> true | _ -> false in
+      check "D-0216: the scene is refuted at the root, both ways"
+        (unsat out_off && unsat out_on);
+      check "D-0216: the proof is the same bytes with and without reuse"
+        (String.equal proof_off proof_on);
+      check
+        (Printf.sprintf
+           "D-0216: reuse builds at most half the pairwise at-most-one nodes (%d against \
+            %d)"
+           pairs_on pairs_off)
+        (pairs_off > 0 && 2 * pairs_on <= pairs_off);
+      match veripb_path () with
+      | None ->
+          incr failures;
+          Printf.printf "FAIL D-0216: veripb not found -- the proof was NOT checked.\n"
+      | Some veripb ->
+          let pbp = Filename.concat dir "reuse.pbp" in
+          let rc, log = m6_veripb veripb dir opb pbp in
+          check "D-0216: veripb accepts the proof" (rc = 0);
+          if rc <> 0 then Printf.printf "  veripb said:\n%s\n" log);
+  List.iter
+    (fun f -> Sys.remove (Filename.concat dir f))
+    (Array.to_list (Sys.readdir dir));
+  Sys.rmdir dir
+
 let () =
   print_endline "";
   List.iter run_model models;
@@ -2373,6 +2442,7 @@ let () =
   test_m7t32_std_flags ();
   test_m9t5_default_keeps_proof ();
   test_d0200_heap_budget_cli ();
+  test_d0216_amo_reuse ();
   if !failures > 0 then (
     Printf.printf "\n%d failure(s)\n" !failures;
     exit 1)

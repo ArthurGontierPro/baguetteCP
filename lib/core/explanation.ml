@@ -522,15 +522,20 @@ let hc_hash e =
    only writer is [hc_enter], which replaces), doubled when it holds twice as many nodes
    as buckets, as [Hashtbl] does. It is never iterated, so its layout reaches no byte. *)
 module Hc = struct
-  type tbl = { mutable buckets : t list array; mutable size : int }
+  (* [epoch] counts the times a node LEFT the table (D-0216): a wipe that took one out, a
+     twin that replaced it, a reset. Adding a node displaces no node of another content,
+     so a node seen in the table at an epoch is still there while the epoch has not
+     moved ([reuse_epoch], [rebuilds_to]). *)
+  type tbl = { mutable buckets : t list array; mutable size : int; mutable epoch : int }
 
-  let create n = { buckets = Array.make n []; size = 0 }
+  let create n = { buckets = Array.make n []; size = 0; epoch = 0 }
   let length t = t.size
   let index t h = h land (Array.length t.buckets - 1)
 
   let reset t =
     t.buckets <- Array.make 4096 [];
-    t.size <- 0
+    t.size <- 0;
+    t.epoch <- t.epoch + 1
 
   let find_opt t e =
     let rec go = function
@@ -561,7 +566,9 @@ module Hc = struct
           else match take r with Some r' -> Some (x :: r') | None -> None)
     in
     match take t.buckets.(i) with
-    | Some rest -> t.buckets.(i) <- e :: rest
+    | Some rest ->
+        t.buckets.(i) <- e :: rest;
+        t.epoch <- t.epoch + 1
     | None ->
         t.buckets.(i) <- e :: t.buckets.(i);
         t.size <- t.size + 1;
@@ -572,7 +579,11 @@ module Hc = struct
     let i = index t (hc_hash e) in
     if List.memq e t.buckets.(i) then (
       t.buckets.(i) <- List.filter (fun x -> x != e) t.buckets.(i);
-      t.size <- t.size - 1)
+      t.size <- t.size - 1;
+      t.epoch <- t.epoch + 1)
+
+  (* [e] itself is the node of its content in the table. *)
+  let holds t e = List.memq e t.buckets.(index t (hc_hash e))
 end
 
 (* The table holds the nodes whose LINE is on the page, by the content of the node, and
@@ -691,6 +702,52 @@ let built e =
     count (producer_label () ^ "\t" ^ tag e) (Hc.mem table e);
     e)
   else e
+
+(* ------------------------------------------------- reusing a build (D-0216)
+
+   A build that hits the table costs the build: the operands are made, the summand list
+   is allocated and hashed, and the bucket is compared, all to be handed back a node that
+   already exists. Alldiff's Hall derivations are rebuilt per pruning (D-0172 section 1),
+   so most of their builds are hits: on 2011_black-hole_10 under native `table`, the 156
+   removals one 47-variable Hall set licenses rebuild 8.3 M pairwise at-most-one nodes,
+   nearly all of them hits (78 468 `pol` lines are written in all), 55 G instructions at
+   the root. A caller that builds a node as a DETERMINISTIC function of a key (the same
+   leaves, the same operands obtained the same way) may keep the node it got and hand it
+   back instead of building again, when building again would return that very node. That is the case exactly when the node is the table's
+   node of its content and so is every node it cites: [built] then answers each operand's
+   rebuild and the node's own rebuild with those nodes, one level at a time. [rebuilds_to]
+   checks that, SHALLOWLY: the node and its direct operands. The caller supplies the
+   induction below them by having obtained those operands the same way (a reused node, or
+   a build). A thunk or a decision operand answers [false]: it is cited by identity and a
+   rebuild makes a new one.
+
+   [reuse_epoch] is [Hc]'s count of nodes that left the table, or -1 when no build can hit
+   (hash-consing off, the table empty, or BAGUETTE_MEMO_STATS, whose counts are of builds):
+   a node checked at an epoch is still in the table while the epoch is unchanged, so a
+   caller re-checks only after a node left. Nothing here changes what a build returns, so
+   the bytes are the builds' bytes. *)
+let reuse_epoch () =
+  if !hashcons && (not stats_on) && Hc.length table > 0 then table.Hc.epoch else -1
+
+let operand_held = function
+  | (Clause _ | Linear _ | Cut _ | Combine _ | Resolve _) as e -> Hc.holds table e
+  | Model_row _ -> true
+  | Decision _ | Deferred _ -> false
+
+let summand_held = function
+  | Term (_, e) -> operand_held e
+  | Weaken _ | Defining _ -> true
+  | Linear_term r -> List.for_all operand_held r.lt_cited
+
+let rebuilds_to e =
+  reuse_epoch () >= 0
+  &&
+  match e with
+  | Clause _ | Linear _ -> Hc.holds table e
+  | Cut r -> Hc.holds table e && operand_held r.e1 && operand_held r.e2
+  | Combine r -> Hc.holds table e && List.for_all summand_held r.summands
+  | Resolve r -> Hc.holds table e && List.for_all operand_held r.parts
+  | Model_row _ | Decision _ | Deferred _ -> false
 
 let () =
   if stats_on then

@@ -2211,7 +2211,26 @@ let test_m6t15_position_of () =
         (Printf.sprintf "M6-T15 add_fact_rev case %d: same facts in the same order (%s)" k
            (String.concat " " (List.map Lit.to_string got)))
         (List.equal Lit.equal want got))
-    cases
+    cases;
+  (* D-0216: [dedup_add] against [add_fact_rev] past the bound where it moves to a table:
+     a base and adds over 3 * [dedup_list_max] distinct literals, each added twice and
+     interleaved with the base's, so the switch happens mid-run with duplicates on both
+     sides of it. Same list, same order. *)
+  let span = 3 * Trace.dedup_list_max in
+  let lits =
+    List.init span (fun i -> if i mod 2 = 0 then Lit.ge "x" i else Lit.le "y" i)
+  in
+  let base = List.filteri (fun i _ -> i mod 5 = 0) lits in
+  let adds = List.concat_map (fun l -> [ l; Lit.negate l; l ]) (List.rev lits) in
+  let want = List.rev (List.fold_left Trace.add_fact_rev (List.rev base) adds) in
+  let d = Trace.dedup_of (List.rev base) in
+  List.iter (Trace.dedup_add d) adds;
+  let got = List.rev d.Trace.racc in
+  check
+    (Printf.sprintf
+       "D-0216 dedup_add: the same %d facts in the same order as add_fact_rev"
+       (List.length want))
+    (List.length want > Trace.dedup_list_max && List.equal Lit.equal want got)
 
 (* M11-complexity-T5 (D-0145, D-0140 J3 and J5). [resync] starts its walk at the store's
    low-water mark, and [emit_to_page] reads each entry's level from a cursor over the

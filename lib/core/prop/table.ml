@@ -156,6 +156,10 @@ type t = {
   keys_in : int array;
   mutable nkeys : int;
   mutable others_rev : Reason.fact list;
+  (* [others_rev]'s facts, to keep each once in one lookup (D-0216): [List.mem] over the
+     list was quadratic in the foreign facts of a reason, 50 % of a 2011_black-hole_14 node
+     under the proof. *)
+  others_seen : (Reason.fact, unit) Hashtbl.t;
   mutable stamp : int;
 }
 
@@ -273,6 +277,7 @@ let make store ~xs ~tuples ~sels : t =
     keys_in = Array.make (Int.max (2 * ns) 1) 0;
     nkeys = 0;
     others_rev = [];
+    others_seen = Hashtbl.create 16;
     stamp = 0;
   }
 
@@ -302,7 +307,8 @@ exception Found of Store.conflict
 let start t =
   t.stamp <- t.stamp + 1;
   t.nkeys <- 0;
-  t.others_rev <- []
+  t.others_rev <- [];
+  if Hashtbl.length t.others_seen > 0 then Hashtbl.reset t.others_seen
 
 let is_lower_key key = key land 1 = 0
 
@@ -322,7 +328,10 @@ let add_fact t (f : Reason.fact) =
   | Some s ->
       let key = (2 * s) + if Reason.fact_is_lower f then 0 else 1 in
       add_key t key (Reason.fact_value f)
-  | None -> if not (List.mem f t.others_rev) then t.others_rev <- f :: t.others_rev
+  | None ->
+      if not (Hashtbl.mem t.others_seen f) then (
+        Hashtbl.replace t.others_seen f ();
+        t.others_rev <- f :: t.others_rev)
 
 let add_tail t (tl : tail) =
   let k = tl.keys in
