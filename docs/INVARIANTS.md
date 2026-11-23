@@ -59,6 +59,13 @@ Assertions guarded by `BAGUETTE_DEBUG=1` should check as many of these as is aff
   answers `true`. Two watched non-false literals satisfy it for a clause, and survive
   backtracking without an undo because a domain that widens cannot falsify a literal; a cached
   number (a slack) does not, which is why `pb.ml`'s survey stays.
+- **I-P8** A propagator may cache a CHOICE between runs, never a CONCLUSION (M20-pernode-T4,
+  D-0208). It may remember which literals to read (a learned clause's watches, a learned PB
+  row's witness of quiet `Pb.t.wit`) if every run that relies on them re-reads them from the
+  live store and whatever the run skips follows from what it read. A stale choice costs work,
+  never an answer. A number carried from an earlier run (a slack, a count of false literals) is
+  a conclusion and needs the trail to undo it, which nothing here has. Under `BAGUETTE_DEBUG`
+  every skip of `Learned_pb` is checked against the pass's read-only half (`Pb.would_act`).
 
 ## Proof
 

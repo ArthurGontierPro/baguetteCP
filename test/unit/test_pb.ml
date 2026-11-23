@@ -912,6 +912,131 @@ let test_pass_layout () =
       ("[x>=2] first", [ (big - 1, Lit.ge "x" 2); (big + 1, Lit.ge "x" 1) ]);
     ]
 
+(* ---------------------------------------------------------------------------
+   M20-pernode-T4 (D-0208): the witness of quiet of a learned row.
+
+   A learned row ([Pb.Learned_pb.propagate], which keeps a witness between runs) and the
+   same row run by the plain [Pb.propagate] (which keeps nothing) are driven through the
+   SAME random search on two twin stores: open a level and narrow one variable, propagate
+   both, compare what each run showed, and backtrack to a random level now and then, which
+   is what makes a witness stale. Every run must show the same outcome, trail, reasons,
+   explanations and boxes. The draw must reach every arm: runs the witness answers, runs it
+   does not, prunings, conflicts, and backtracks over a witness.
+
+   (b) is the break: a witness that does NOT satisfy (C), placed by hand where the pass
+   forces, must make the learned run differ from the plain one. Without it the equality of
+   (a) could hold because the comparison sees nothing. *)
+let decision = Reason.because ~concludes:None [] (Explanation.clause [])
+
+let test_witness () =
+  print_endline "\n-- M20-pernode-T4 (D-0208): the witness of quiet changes no run";
+  let boxes = [ ("x", (0, 4)); ("y", (0, 4)); ("z", (0, 1)); ("u", (0, 3)) ] in
+  let decl = decl_of boxes in
+  let nv = List.length boxes in
+  let rng = Random.State.make [| 0x0208 |] in
+  let trials = 1500 in
+  let runs = ref 0 and same = ref 0 and skips = ref 0 and prunes = ref 0 in
+  let conflicts = ref 0 and stale = ref 0 and first_diff = ref None in
+  for trial = 1 to trials do
+    let n = 2 + Random.State.int rng 9 in
+    let raw =
+      List.init n (fun _ ->
+          let nm, (lo, hi) = List.nth boxes (Random.State.int rng nv) in
+          let k = lo + 1 + Random.State.int rng (hi - lo) in
+          let l = if Random.State.bool rng then Lit.ge nm k else Lit.le nm (k - 1) in
+          (1 + Random.State.int rng 4, l))
+    in
+    let total = List.fold_left (fun s (c, _) -> s + c) 0 raw in
+    let degree = 2 + Random.State.int rng (Int.max 1 (total - 1)) in
+    let s_l = store_of boxes and s_r = store_of boxes in
+    let row_l = Option.get (Pb.of_terms s_l ~decl ~degree raw) in
+    let row_r = Option.get (Pb.of_terms s_r ~decl ~degree raw) in
+    let both f = (f s_l, f s_r) in
+    let had_witness = ref false in
+    for _step = 1 to 10 do
+      if Store.level s_l > 0 && Random.State.int rng 4 = 0 then (
+        let lv = Random.State.int rng (Store.level s_l) in
+        if !had_witness then incr stale;
+        ignore (both (fun s -> Store.backtrack_to s lv)))
+      else (
+        ignore (both Store.new_level);
+        let v = Var.of_int (Random.State.int rng nv) in
+        let d = Store.get s_l v in
+        let lo = Domain.lo d and hi = Domain.hi d in
+        let k = lo + Random.State.int rng (hi - lo + 1) in
+        let up = Random.State.bool rng in
+        let narrowed =
+          both (fun s ->
+              if up then Store.set_lo s v k decision else Store.set_hi s v k decision)
+        in
+        match narrowed with
+        | Store.Conflict _, _ | _, Store.Conflict _ ->
+            ignore (both (fun s -> Store.backtrack_to s 0))
+        | _ ->
+            incr runs;
+            if Pb.witness_holds s_l row_l then incr skips;
+            let got = observe_run row_l s_l Pb.Learned_pb.propagate in
+            let want = observe_run row_r s_r Pb.propagate in
+            if got = want then incr same
+            else if !first_diff = None then first_diff := Some trial;
+            had_witness := row_l.Pb.wit_len >= 0;
+            (match want with
+            | `Ran (`Conflict _, _, _) ->
+                incr conflicts;
+                ignore (both (fun s -> Store.backtrack_to s 0))
+            | `Ran (`Fix, _, _) -> ()
+            | `Raised _ -> ());
+            (* A pruning shows as entries the decision did not make: more than one per
+               level on the learned store, counted on the reference. *)
+            if Store.trail_length s_r > Store.level s_r then incr prunes)
+    done
+  done;
+  check_eq
+    (Printf.sprintf
+       "D-0208 (a): %d runs over %d random rows and searches, the learned run (witness) \
+        and the plain pass show the same outcome, trail, reasons, explanations and boxes \
+        (first difference: trial %s)"
+       !runs trials
+       (match !first_diff with None -> "none" | Some i -> string_of_int i))
+    !same !runs;
+  check
+    (Printf.sprintf "D-0208 (a): ...%d of them answered by the witness (> 1000)" !skips)
+    (!skips > 1000);
+  check
+    (Printf.sprintf "D-0208 (a): ...%d of them full passes (> 1000)" (!runs - !skips))
+    (!runs - !skips > 1000);
+  check
+    (Printf.sprintf "D-0208 (a): ...%d conflicts (> 200)" !conflicts)
+    (!conflicts > 200);
+  check
+    (Printf.sprintf "D-0208 (a): ...%d states with prunings (> 1000)" !prunes)
+    (!prunes > 1000);
+  check
+    (Printf.sprintf "D-0208 (a): ...%d backtracks over a witness (> 500)" !stale)
+    (!stale > 500);
+  (* (b) The break. 2*[a>=1] + 1*[b>=1] + 1*[c>=1] >= 2 with a fixed to 0 forces b and c
+     (test (a) of this file). A witness {b, c} has watched sum 2 and largest group 1, so
+     2 - 1 = 1 < 2: it does NOT satisfy (C), and a run that trusts it skips two prunings. *)
+  let scene () = store_of [ ("a", (0, 0)); ("b", (0, 1)); ("c", (0, 1)) ] in
+  let decl3 = decl_of boxes3 in
+  let s_l = scene () and s_r = scene () in
+  let row_l = Option.get (Pb.of_terms s_l ~decl:decl3 ~degree:2 terms3) in
+  let row_r = Option.get (Pb.of_terms s_r ~decl:decl3 ~degree:2 terms3) in
+  row_l.Pb.wit <- [| 1; 2 |];
+  row_l.Pb.wit_len <- 2;
+  let got =
+    if Baguette_core.Debug.enabled then `Debug
+    else `Ran (observe_run row_l s_l Pb.Learned_pb.propagate)
+  in
+  let want = observe_run row_r s_r Pb.propagate in
+  check "D-0208 (b): the reference pass prunes in the break scene"
+    (match want with `Ran (`Fix, _ :: _, _) -> true | _ -> false);
+  check
+    "D-0208 (b): a witness that breaks (C) skips them, and the comparison of (a) sees it"
+    (match got with `Debug -> true | `Ran g -> g <> want);
+  check "D-0208 (b): the would_act check flags the same scene"
+    (Pb.would_act (scene ()) row_r)
+
 let () =
   test_row_beats_clause ();
   test_order_literal_scene ();
@@ -925,6 +1050,7 @@ let () =
   test_break_backjump_on_pb ();
   test_retention_citations ();
   test_pass_layout ();
+  test_witness ();
   if !failures > 0 then (
     Printf.printf "\n%d failure(s)\n" !failures;
     exit 1)
