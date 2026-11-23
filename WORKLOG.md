@@ -662,6 +662,19 @@ section 1. Shares are inclusive, of the whole run.
 
 ## Handoff notes
 
+### FOR THE USER'S RETURN: the autonomous run started 2026-11-23 evening (orchestrator, Fable)
+
+Updated as things land. The plan is the nine steps agreed on 2026-11-23 (speed first, then the CDCL loop, coverage, the refused third, configuration last).
+
+**Merged and gated**: D-0209 (proof text through one buffer, byte-identical, -0.4 to -7.9 % per proved node; gate 91 green, binary `f9656c71`), D-0206 (native `table`, GAC, `.opb` 3 to 16 times smaller on the Challenge's table instances; gate 92 green, binary `47e74079`, the only artefact diffs are the five new table models). Merged, gate 93 running: D-0212 (unchecked arithmetic in `Linear` after one check per row; byte-identical; -21 % on mknap without learning, -0.3 % shipped until D-0208).
+Gates 91 to 93 ran pinned to four cores with lanes at `-j 4`, because the series holds the node.
+
+**Running**: the series on current main without the proof cap (agent-series, D-0203, fataepyc-06); the 64 GiB observation series then GCS and Chuffed (agent-node07, D-0210, D-0211, on fataepyc-07, allowed by the user on 2026-11-23); agent-watch (D-0208, learned constraints woken by watches); agent-diffn (D-0213); agent-lazy (D-0214, Element's reasons on demand).
+
+**Known, not fixed yet**: black-hole is 4.5 times slower at the root since `inverse`'s alldiff lemmas, in `Explanation`'s hashing of `pol` lines (agent-table's finding); `test_prop` under `BAGUETTE_DEBUG=1` fails one D-0124 check on main (agent-lazy is asked for the cause).
+
+**[AUTONOME] decisions**: none yet beyond the agents' own records.
+
 ### 2026-11-23 (agent-arith, `wave61-arith`): M20-pernode-T3, the arithmetic part, D-0212
 
 `Linear` rows that pass `Checked.row_fits` at `make` run plain arithmetic (field `arith`, header "Arithmetic" has the precondition, the premise and the proof); artefacts byte-identical everywhere checked. Per node: mknap -21 % without learning but -0.3 % shipped, because the shipped mknap node is learned PB rows (rank 1, T4, comes first).
