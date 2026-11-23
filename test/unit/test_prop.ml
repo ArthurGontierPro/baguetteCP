@@ -3878,8 +3878,16 @@ let test_d0124_unwound_history_is_refused () =
   check "D-0124: the same positions are occupied again" (Store.trail_length store = 1);
   check "D-0124: re-pushed under it, the reason still refuses rather than answer y >= 2"
     (refused_as_ix6 (fun () -> Reason.facts e.Store.reason));
+  (* The CLOSURE is asked, not [Explanation.force]: under BAGUETTE_DEBUG
+     [Store.check_agreement] forces the justification AT THE PUSH (its reverse arm reads the
+     derivation's top-level weakenings), so [force] answers from the memo -- the derivation
+     rendered while the history was live, which is the right one and reads nothing -- and
+     this check failed under BAGUETTE_DEBUG=1 only (D-0214 section 5). [reforce] runs the
+     closure itself, as [Justify]'s release check does, so the check tests what it names in
+     both modes. *)
   check "D-0124: and so does the justification, which reads the same history"
-    (refused_as_ix6 (fun () -> Explanation.force ex))
+    (refused_as_ix6 (fun () ->
+         match ex with Explanation.Deferred th -> Explanation.reforce th | e -> e))
 
 (* A row with no other term has an EMPTY deferred reason, and [Reason.is_empty] must say
    so without materialising: conflict analysis asks it per node (lib/core/analysis.ml's
