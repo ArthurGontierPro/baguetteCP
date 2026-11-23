@@ -20,7 +20,6 @@ of it to every session and stopping at a broken line before it even reached the 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
 | M22-review-T4 (all but the module map), T6 (false comments in unclaimed files), T7, the speed section | CLAUDE.md (context-budget table, the `dune runtest` section; NOT the module map), README.md, lib/core/domain.ml, lib/core/retention.ml, lib/proof/encoding.ml, lib/flatzinc/lexer.ml, bin/main.ml (comments and the `--proof-comments` help line only), scripts/fuzz_lane.sh (new), scripts/README.md, tools/fuzz/, docs/reports/2026-11-23-code-review.md, docs/ROADMAP.md (M22-review section), WORKLOG.md | review-1123 (laptop session, branch `review-easy`, gate on fataepyc-07) | 2026-11-23 |
-| M20-pernode-T5 (proof text through one buffer, D-0209) | lib/proof/writer.ml, lib/proof/lit.ml, lib/proof/opb.ml, lib/proof/text.ml (new), test/unit/test_proof.ml, CLAUDE.md and docs/ARCHITECTURE.md (module map line only), docs/DECISIONS.md (D-0209), docs/ROADMAP.md (row M20-pernode-T5), WORKLOG.md | agent-writer (fataepyc-06, worktree /scratch/arthur/wt-writer, branch `wave60-writer`) | 2026-11-23 |
 
 ## Cross-session requests
 
@@ -464,6 +463,7 @@ section 1. Shares are inclusive, of the whole run.
 
 | Task | Session | Date | Summary |
 |---|---|---|---|
+| M20-pernode-T5 (the buffer part: proof text through one buffer) | agent-writer (`wave60-writer`) | 2026-11-23 | **D-0209.** New `lib/proof/text.ml`: `Writer`'s lines and `Opb.output_row`'s rows written in one `Text` buffer, integers by digit pairs in place, literal names from a per-variable prefix cache, `pol` tokens counted in the write. `.opb`/`.pbp`/stdout byte-identical on 209 models x 2 flag sets, lane 347/347 and debug 333/333, scaling ok, 4 563 ok. Proved node -7.9 % rcpsp, -7.4 % QR48, -4.5 % javarouting, -1.5 % costas, -0.4 % mknap (instructions). Not merged |
 | M22-review-T1, M22-review-T2 (the two bugs of the 2026-11-23 review) | review-1123 (laptop session, `review-fixes`, gate on fataepyc-07) | 2026-11-23 | T1: `builder.ml`'s constant fold through `Checked`; `int_lin_le([2^61, 1], [4, x], 0)` printed `x = 0` and VeriPB verified it, it is now refused with the limit named. T2: cumulative reports an overload among fixed tasks (exit 4 before), two regression models. Report, fuzz harness and rows T3 to T13: `docs/reports/2026-11-23-code-review.md`, `tools/fuzz/`. |
 | M20-pernode-T1 (where the factor per node goes) | agent-pernode2 (`wave59-pernode2`) | 2026-11-23 | **D-0207.** Five families on the same tree, instructions per node against Gecode and Chuffed, `perf` by layer; measurement only, results in `/cluster/arthur/baguette-results/pernode2/` |
 | D-0199 applied: the default becomes `--bits-above 0` | agent-bitsdefault (`wave56-bitsdefault`) | 2026-11-21 | **D-0201.** Commit A `18d4841` is the default alone (`Encoding.bits_above` = `Some 0`, usage text, SPEC §4.2, PROOF-FORMAT §3). B `5f0dc7a` makes eight unit suites, `check_unlimited.sh` and the model lane's second pass pin `--bits-above none` (207/207 stdout unchanged, so `test/expected/` is untouched). C `d53ce76` re-records the lane (252 + 240 moved, `bits0` unchanged), and the new `order` configuration equals the old `default` byte for byte. D `29d2c08` is the scaling ratchet (every growth fell). E `3e1d67e` pins the e2e controls to order. Gated on a fresh clone. |
@@ -659,6 +659,12 @@ section 1. Shares are inclusive, of the whole run.
 | M19-config-T0 (the tuning set) | agent-tuning (`wave59-tuning`) | 2026-11-23 | **D-0205.** `bench/tuning/`, 200 instances in 183 families. DONE except the driver hook. |
 
 ## Handoff notes
+
+### 2026-11-23 (agent-writer, `wave60-writer`): M20-pernode-T5, the buffer part, D-0209
+
+`lib/proof/text.ml` writes every `.pbp` line and `.opb` row in place (integers by digit pairs, each variable's `x_ge_` prefix rendered once), byte-identical everywhere checked; a proved node -0.4 % (mknap) to -7.9 % (rcpsp) in instructions. Not merged: gate it on a fresh clone.
+Block flushing was NOT done: it needs a `Writer` drain before `close_out` in `bin/main.ml` and in the test helpers that read the file back (D-0209 s3). It is worth at most the `write_buf` share, 0.1 to 2.4 %.
+The next lever in `Writer` is the `tags` `Hashtbl` (one bucket per live id, 0.1 to 5.7 % of the proved node). The text is now small on the shipped node except rcpsp (22 %) and QR48 (10 %). Runs and profiles in `/cluster/arthur/baguette-results/writer/`.
 
 ### 2026-11-23 (review-1123, laptop session, `review-fixes`): the code review, M22-review-T1 and T2
 
