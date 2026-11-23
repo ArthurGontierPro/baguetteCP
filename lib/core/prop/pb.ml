@@ -130,47 +130,29 @@
    precondition its [make] checks -- see clause.ml. An instance built here gets BOUNDS.
 
    ---------------------------------------------------------------------------
-   No cached conclusion; one cached CHOICE (D-0208)
+   No mutable state, and no watched literals
    ---------------------------------------------------------------------------
 
-   [propagate] keeps nothing between calls, and every pass recomputes from [Store.get].
-   D-0052 refused watched literals for the clause row because they would be the first
-   search-dependent mutable propagator state outside [Store]'s undo trail, and refused a
-   counter-based PB propagator (a cached slack updated on the trail) for a second reason:
-   a cached counter that the trail does not undo is the classic way a backtracking PB
-   solver becomes unsound in a way no proof check catches, because the wrong slack yields
-   a pruning whose [rup] is still valid for the F it names. That refusal stands: there is
-   no cached slack here.
+   [t] has no [mutable] field and [propagate] keeps nothing between calls. D-0052
+   refused watched literals for the clause row because they would be the first
+   search-dependent mutable propagator state outside [Store]'s undo trail, and a
+   counter-based PB propagator has the same temptation (a cached slack updated on the
+   trail). It is refused here for the same reason and for a second one: a cached counter
+   that the trail does not undo is the classic way a backtracking PB solver becomes
+   unsound in a way no proof check catches, because the wrong slack yields a pruning
+   whose [rup] is still valid for the F it names.
 
-   What the learned face [Learned_pb] keeps (M20-pernode-T4, D-0208) is a WITNESS OF
-   QUIET, a set W of term indices ([t.wit]) for which
+   Every pass recomputes from [Store.get].
 
-     (C)  every literal of W is non-false, and
-          sum_{j in W} a_j  -  max over groups g of (sum_{j in W, j in g} a_j)  >=  b,
-
-   the groups being the layout's (variable, polarity) groups below. (C) implies that a pass
-   changes nothing and does not fail. No conflict: the non-false sum N is at least the
-   watched sum, which is at least b. No forcing: a term i of group g is forced only when
-   its ladder-effective coefficient exceeds the slack N - b, the effective coefficient
-   counts non-false terms of g only, so it is at most N_g, and N - b = N_g + (sum of the
-   other groups' non-false coefficients) - b >= N_g, because those other groups hold at
-   least the watched sum outside g, which (C) puts at b or more. So effective(i) <= slack.
-
-   The arithmetic half of (C) does not depend on the store, and the first half is READ
-   from the live store at every run, so a run that finds every literal of W non-false
-   knows (C) holds NOW and returns [Fixpoint], as the pass would have, without the pass.
-   W is a choice of which literals to read, never a number carried over: a W made stale by
-   a backtrack or by later prunings costs one full pass, never a wrong answer, which is
-   the difference with the refused counter. The engine is not involved: the row is woken,
-   queued and run exactly as before, so the runs, their order, the trail and the proof
-   are the old ones (D-0208 section 2 says why dropping the wake instead would move the
-   order and the trees). Under BAGUETTE_DEBUG every skip is checked against [would_act],
-   the pass's read-only half. INVARIANTS I-P8 states the rule this follows: a choice may
-   be cached between runs, a conclusion may not.
-
-   The model rows and the clause face ([Clause], [Learned_clause]) do not use W: a
-   degree-1 row has [quiet], the same test made by a walk, and a model row is woken far
-   less often than a learned one.
+   M20-pernode-T4 (D-0208) measured the watched alternative for the LEARNED rows and did
+   not take it. A WITNESS of quiet (a few non-false literals whose sum, minus its largest
+   (variable, polarity) group, reaches the degree; re-read at every run, so a choice and
+   not a cached number) is exact and keeps the run order, but on costas and mknap the
+   learned rows sit so close to propagating that a witness needs 60 to 70 % of the row
+   and exists after fewer than half of the passes, and building it cost more than it
+   saved: +20 and +24 % instructions at 3 000 nodes. What was taken instead is the exact
+   early exit of [pass] ([snapshot]'s [max_open]): one walk instead of three for a run
+   that forces nothing, which is almost every run of a learned row.
 
    ---------------------------------------------------------------------------
    The pass's working memory is not state (M11-complexity-T3, D-0142)
@@ -248,10 +230,23 @@ type status = Sat_lit | Unsat_lit | Open
    The working memory of a pass is not here but in [scratch] below, shared by every row:
    see the header's "The pass's working memory is not state". *)
 type groups = { gid : int array; dom : int array; gfirst : int array }
-type layout = { arr : term array; groups : groups option }
+type layout = { arr : term array; groups : groups option; plain : bool }
 
-let layout_of (terms : term list) : layout =
+(* M20-pernode-T4 (D-0208): [plain] says that no partial sum of the slack can overflow --
+   [-degree] plus any subset of the coefficients, all of which are >= 1 -- so [snapshot]
+   adds with [+] and [Checked.add] could never have raised there. False when the whole
+   coefficient sum, or that sum minus a negative degree, does not fit. *)
+let plain_sums (arr : term array) degree =
+  let total = ref 0 and fits = ref (degree > min_int) in
+  Array.iter
+    (fun tm ->
+      if !total > max_int - tm.coeff then fits := false else total := !total + tm.coeff)
+    arr;
+  !fits && (degree >= 0 || !total <= max_int + degree)
+
+let layout_of (terms : term list) degree : layout =
   let arr = Array.of_list terms in
+  let plain = plain_sums arr degree in
   let n = Array.length arr in
   let key (a : atom) = (2 * Var.to_int a.x) + if a.positive then 1 else 0 in
   let ids = Hashtbl.create (Int.max 1 n) in
@@ -265,7 +260,7 @@ let layout_of (terms : term list) : layout =
           gid.(i) <- !ng;
           incr ng)
     arr;
-  if !ng = n then { arr; groups = None }
+  if !ng = n then { arr; groups = None; plain }
   else
     let dominance i j =
       let c = Int.compare gid.(i) gid.(j) in
@@ -281,7 +276,7 @@ let layout_of (terms : term list) : layout =
     for p = n - 1 downto 0 do
       gfirst.(gid.(dom.(p))) <- p
     done;
-    { arr; groups = Some { gid; dom; gfirst } }
+    { arr; groups = Some { gid; dom; gfirst }; plain }
 
 (* A term's group: its index when every group is a single term. *)
 let group w i = match w.groups with None -> i | Some g -> g.gid.(i)
@@ -298,16 +293,23 @@ type scratch = {
   mutable gbest : int array;
   mutable n_open : int;
       (* How many terms [snapshot] found open, written by every [snapshot]. *)
+  mutable osum : int array;
+      (* Per group, the sum of its OPEN coefficients, written by every [snapshot]. *)
+  mutable max_open : int;
+      (* The largest [osum] of the snapshot, or [max_int] when a group's open sum would
+         not fit (then the fast exit of [pass] is not taken). *)
 }
 
-let scratch = { st = [||]; eff = [||]; gbest = [||]; n_open = 0 }
+let scratch =
+  { st = [||]; eff = [||]; gbest = [||]; n_open = 0; osum = [||]; max_open = 0 }
 
 let ensure_scratch n =
   if Array.length scratch.st < n then (
     let m = Int.max n (2 * Array.length scratch.st) in
     scratch.st <- Array.make m Open;
     scratch.eff <- Array.make m 0;
-    scratch.gbest <- Array.make m 0)
+    scratch.gbest <- Array.make m 0;
+    scratch.osum <- Array.make m 0)
 
 (* M11-complexity-T3 (D-0142, D-0140's E2 (a)): what [quiet]'s walk found, kept for the
    learned clause's watch move (lib/core/prop/clause.ml, [Learned_clause.propagate]). When
@@ -338,12 +340,6 @@ type t = {
   layout : layout Lazy.t;
       (* The pass's layout and working memory, built on the first pass (the header's
          "The pass's working memory is not state"). *)
-  mutable wit : int array;
-  mutable wit_len : int;
-      (* M20-pernode-T4 (D-0208): the WITNESS of quiet of a learned row, term indices
-         [wit.(0) .. wit.(wit_len - 1)], or [wit_len = -1] for none. A choice of literals
-         to read, never a conclusion: see the header's "A witness of quiet". Used by
-         [Learned_pb] only; every other row keeps [-1]. *)
 }
 
 let name = "pb"
@@ -362,9 +358,7 @@ let finish terms degree =
     n_terms = List.length terms;
     atoms = Array.of_list (List.map (fun tm -> tm.a) terms);
     scan = { f1 = -1; f2 = -1 };
-    layout = lazy (layout_of terms);
-    wit = [||];
-    wit_len = -1;
+    layout = lazy (layout_of terms degree);
   }
 
 (* ------------------------------------------------------------------ construction *)
@@ -733,24 +727,61 @@ let quiet store t =
   Var.to_int atoms.(f2).x <> xi || free_off store atoms xi (f2 + 1)
 
 (* The top of a pass: the snapshot F into [scratch.st], the number of open terms into
-   [scratch.n_open], and the slack, summed in term order from [-degree] through
-   [Checked.add]. Reads the store, writes only [scratch]. *)
+   [scratch.n_open], each group's open sum into [scratch.osum] and their largest into
+   [scratch.max_open], and the slack, summed in term order from [-degree] through
+   [Checked.add], or through [+] when the layout's [plain] says no partial sum can
+   overflow. Reads the store, writes only [scratch].
+
+   M20-pernode-T4 (D-0208): [max_open] is the largest ladder-effective coefficient of an
+   open term, exactly. A term i of group g counts the non-false terms of g at least as
+   strong as itself; a satisfied term of g is strictly weaker than any open one (for
+   `x >= k`, satisfied is [k <= lo] and open is [lo < k <= hi]; mirrored for `x <= k - 1`),
+   so what i counts is open terms of g only, and the weakest open term of g counts all of
+   them. So [mark_forceable] finds a forceable term iff [slack < max_open], and [pass]
+   returns at once when [slack >= max_open], which is most runs of a learned row (D-0208
+   section 6). [max_int] means "do not exit early", never "nothing is forceable". *)
 let snapshot store t w =
   let n = t.n_terms in
   ensure_scratch n;
-  let slack = ref (-t.degree) and n_open = ref 0 in
-  for i = 0 to n - 1 do
-    let tm = w.arr.(i) in
-    let s = status store tm.a in
-    scratch.st.(i) <- s;
-    match s with
-    | Unsat_lit -> ()
-    | Open ->
-        incr n_open;
-        slack := Checked.add !slack tm.coeff
-    | Sat_lit -> slack := Checked.add !slack tm.coeff
-  done;
+  let slack = ref (-t.degree) and n_open = ref 0 and mx = ref 0 and fits = ref true in
+  let osum = scratch.osum and plain = w.plain in
+  (match w.groups with
+  | None ->
+      for i = 0 to n - 1 do
+        let tm = w.arr.(i) in
+        let s = status store tm.a in
+        scratch.st.(i) <- s;
+        match s with
+        | Unsat_lit -> ()
+        | Open ->
+            incr n_open;
+            if tm.coeff > !mx then mx := tm.coeff;
+            slack := if plain then !slack + tm.coeff else Checked.add !slack tm.coeff
+        | Sat_lit ->
+            slack := if plain then !slack + tm.coeff else Checked.add !slack tm.coeff
+      done
+  | Some g ->
+      Array.fill osum 0 (Array.length g.gfirst - 1) 0;
+      for i = 0 to n - 1 do
+        let tm = w.arr.(i) in
+        let s = status store tm.a in
+        scratch.st.(i) <- s;
+        match s with
+        | Unsat_lit -> ()
+        | Open ->
+            incr n_open;
+            let gi = g.gid.(i) in
+            let o = osum.(gi) in
+            if o > max_int - tm.coeff then fits := false
+            else (
+              osum.(gi) <- o + tm.coeff;
+              if o + tm.coeff > !mx then mx := o + tm.coeff);
+            slack := if plain then !slack + tm.coeff else Checked.add !slack tm.coeff
+        | Sat_lit ->
+            slack := if plain then !slack + tm.coeff else Checked.add !slack tm.coeff
+      done);
   scratch.n_open <- !n_open;
+  scratch.max_open <- (if !fits then !mx else max_int);
   !slack
 
 let rec propagate t store = if quiet store t then Propagator.Fixpoint else pass t store
@@ -766,7 +797,8 @@ and pass t store =
   let n = t.n_terms in
   let slack = snapshot store t w in
   if slack < 0 then conflict_of t store w
-  else if scratch.n_open = 0 then Propagator.Fixpoint
+  else if scratch.n_open = 0 || (slack >= scratch.max_open && scratch.max_open < max_int)
+  then Propagator.Fixpoint
   else (
     effective_all w;
     if not (mark_forceable w ~slack) then Propagator.Fixpoint
@@ -787,84 +819,6 @@ and pass t store =
       in
       apply false 0)
 
-(* --------------------------------------------- M20-pernode-T4 (D-0208): the witness
-
-   The header's "A witness of quiet" is the argument; these are its three pieces.
-
-   [would_act] is the pass's read-only half: the snapshot, the slack and the forceable
-   terms, without assigning anything. [true] when a pass would conflict or force. It is
-   the BAGUETTE_DEBUG check of every skip the witness takes. *)
-let would_act store t =
-  let w = Lazy.force t.layout in
-  let slack = snapshot store t w in
-  slack < 0
-  || scratch.n_open > 0
-     &&
-     (effective_all w;
-      mark_forceable w ~slack)
-
-(* Every literal of the witness non-false on the live domains. A top-level function of
-   its arguments, so a check allocates nothing. *)
-let rec witness_free store (atoms : atom array) (wit : int array) n i =
-  i >= n
-  || ((not (falsified store atoms.(wit.(i)))) && witness_free store atoms wit n (i + 1))
-
-let witness_holds store t = t.wit_len >= 0 && witness_free store t.atoms t.wit t.wit_len 0
-
-(* Working memory of [build_witness], shared by every row and grown to the longest, on the
-   same argument as [scratch]: every build writes every cell it reads ([gsum] is zeroed
-   over the row's groups first, [wbuf] is read only below the length the build wrote). *)
-let gsum = ref [||]
-let wbuf = ref [||]
-
-(* Choose a witness on the live store: satisfied literals first (they stay non-false until
-   a backtrack pops their support), then open ones, in term order, stopping as soon as
-   (C) holds -- the watched sum minus its largest group's share is at least the degree.
-   No witness ([wit_len = -1]) when every non-false literal together does not reach it,
-   or when the row's whole coefficient sum does not fit in an int: then a pass could
-   raise from [Checked], and a skip must never stand in for a raise. *)
-let build_witness store t =
-  t.wit_len <- -1;
-  let w = Lazy.force t.layout in
-  let n = t.n_terms in
-  let total = ref 0 and fits = ref true in
-  for i = 0 to n - 1 do
-    let c = w.arr.(i).coeff in
-    if !total > max_int - c then fits := false else total := !total + c
-  done;
-  if !fits && !total >= t.degree then (
-    let ng = match w.groups with None -> n | Some g -> Array.length g.gfirst - 1 in
-    if Array.length !gsum < ng then
-      gsum := Array.make (Int.max ng (2 * Array.length !gsum)) 0;
-    if Array.length !wbuf < n then
-      wbuf := Array.make (Int.max n (2 * Array.length !wbuf)) 0;
-    let gs = !gsum and buf = !wbuf in
-    Array.fill gs 0 ng 0;
-    let len = ref 0 and sum = ref 0 and gmax = ref 0 in
-    let take i =
-      let g = group w i and c = w.arr.(i).coeff in
-      gs.(g) <- gs.(g) + c;
-      if gs.(g) > !gmax then gmax := gs.(g);
-      sum := !sum + c;
-      buf.(!len) <- i;
-      incr len
-    in
-    let i = ref 0 in
-    while !sum - !gmax < t.degree && !i < n do
-      if holds store t.atoms.(!i) then take !i;
-      incr i
-    done;
-    i := 0;
-    while !sum - !gmax < t.degree && !i < n do
-      let a = t.atoms.(!i) in
-      if (not (holds store a)) && not (falsified store a) then take !i;
-      incr i
-    done;
-    if !sum - !gmax >= t.degree then (
-      if Array.length t.wit < !len then t.wit <- Array.sub buf 0 !len
-      else Array.blit buf 0 t.wit 0 !len;
-      t.wit_len <- !len))
-
 (* --------------------------------------------------------------------------------
    The learned face: a PB row this search derived, registered mid-search by
    lib/core/search.ml. Named apart from [name] above so that a trace, a fallback reason
@@ -882,22 +836,5 @@ module Learned_pb = struct
   let name = "learned_pb"
   let consistency = consistency
   let vars = vars
-
-  (* D-0208: the witness first, then the unchanged [propagate], then a new witness. A
-     degree-1 row keeps [quiet], which is the same test made by a walk. *)
-  let propagate t store =
-    if t.degree = 1 then propagate t store
-    else if witness_holds store t then (
-      if Debug.enabled then
-        Debug.check "Learned_pb: a witness of quiet skipped a pass that acts (D-0208)"
-          (fun () -> not (would_act store t));
-      Propagator.Fixpoint)
-    else
-      match propagate t store with
-      | Propagator.Fixpoint ->
-          build_witness store t;
-          Propagator.Fixpoint
-      | Propagator.Conflict _ as r ->
-          t.wit_len <- -1;
-          r
+  let propagate = propagate
 end
