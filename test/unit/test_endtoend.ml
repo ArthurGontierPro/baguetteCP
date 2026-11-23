@@ -2362,14 +2362,14 @@ let test_d0200_heap_budget_cli () =
 
 (* M11-complexity-T18 (D-0216): an all_different's Hall derivations are rebuilt per
    pruning, and on 2011_black-hole_10 under native `table` 156 removals under a 47-variable
-   Hall set rebuilt 8.3 M pairwise at-most-one nodes at the root, all but about 2 000 of
-   them hash-consing hits (55 G instructions; the element decomposition before it, 12.7 G).
+   Hall set rebuilt 8.3 M pairwise at-most-one nodes at the root, nearly all of them
+   hash-consing hits (55 G instructions; the element decomposition before it, 12.7 G).
    [Alldiff.reuse] hands a node back when building it again would return it. The scene: six
    variables confined to 1..6 (the Hall set) and four more over 1..7, each pushed to 7 by a
    derivation over the six plus itself, so the four meet on 7 and the root is refuted, and
-   every derivation is forced. With reuse the pairs are the Hall set's once plus each
-   pruned variable's own, without it every pruning rebuilds them all; the proof must be the
-   same bytes either way, and veripb must accept it. *)
+   every derivation is forced. With reuse the Hall set's pairs are built once, without it
+   every pruning rebuilds them; the proof must be the same bytes either way, and veripb
+   must accept it. *)
 let d0216_src =
   let b = Buffer.create 512 in
   for i = 1 to 6 do
@@ -2407,12 +2407,16 @@ let test_d0216_amo_reuse () =
         (unsat out_off && unsat out_on);
       check "D-0216: the proof is the same bytes with and without reuse"
         (String.equal proof_off proof_on);
+      (* The three prunings after the first find the Hall set's own pairs, C(6,2) per
+         value over six values, instead of building them: 3 * 6 * 15 = 270 fewer builds
+         (673 against 403 when written; the rest is the first pruning and the conflict,
+         built once either way). *)
       check
         (Printf.sprintf
-           "D-0216: reuse builds at most half the pairwise at-most-one nodes (%d against \
-            %d)"
+           "D-0216: reuse skips the Hall set's pairs in the three later prunings (%d \
+            against %d, want at least 270 fewer)"
            pairs_on pairs_off)
-        (pairs_off > 0 && 2 * pairs_on <= pairs_off);
+        (pairs_off - pairs_on >= 3 * 6 * 15);
       match veripb_path () with
       | None ->
           incr failures;
