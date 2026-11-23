@@ -65,7 +65,7 @@ stream() { # name script env flags; seeds: SEED*1000 + stream*100 + chunk
   local name="$1" script="$2" env="$3"; shift 3
   IDX=$((IDX + 1))
   for k in $(seq 0 $((CHUNKS - 1))); do
-    echo "$OUT/$name-$k $script $((SEED * 1000 + IDX * 100 + k)) $PER $env $*" >> "$plan"
+    echo "$OUT/$name-$k $script $((SEED * 1000 + IDX * 100 + k)) $PER $env${*:+ $*}" >> "$plan"
   done
 }
 stream default fuzz.py -
@@ -75,17 +75,22 @@ stream search fuzz2.py -
 stream search-free fuzz2.py - -f
 stream search-order fuzz2.py - --bits-above none
 
+# One plan line per call. The line is split here, not by xargs: `xargs -L 1` joins a line
+# that ends in a blank with the next one, which ran two chunks as one with the second's
+# fields as solver flags (found on this script's first run, 2026-11-23).
 run_chunk() {
-  local dir="$1" script="$2" seed="$3" n="$4" env="$5"; shift 5
-  local -a envs=()
+  local -a f envs=()
+  read -r -a f <<< "$1"
+  local dir="${f[0]}" script="${f[1]}" seed="${f[2]}" n="${f[3]}" env="${f[4]}"
+  local -a flags=("${f[@]:5}")
   [ "$env" != "-" ] && IFS=',' read -r -a envs <<< "$env"
-  env "${envs[@]+"${envs[@]}"}" python3 -I "$ROOT/tools/fuzz/$script" "$dir" "$seed" "$n" "$@" \
-    > "$dir.log" 2>&1
+  env "${envs[@]+"${envs[@]}"}" python3 -I "$ROOT/tools/fuzz/$script" "$dir" "$seed" "$n" \
+    "${flags[@]+"${flags[@]}"}" > "$dir.log" 2>&1
 }
 export -f run_chunk
 export ROOT
 start=$(date +%s)
-xargs -P "$JOBS" -L 1 bash -c 'run_chunk "$@"' _ < "$plan"
+xargs -d '\n' -n 1 -P "$JOBS" bash -c 'run_chunk "$1"' _ < "$plan"
 secs=$(( $(date +%s) - start ))
 
 bad=$(find "$OUT" -mindepth 3 -maxdepth 3 -path '*/bad/*' -type d | sort)
