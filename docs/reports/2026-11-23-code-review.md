@@ -3,7 +3,8 @@
 The user asked for a complete and critical review of `main` at `c8be4d0`. This file records what the
 review found and leaves the work as rows of `docs/ROADMAP.md`, milestone **M22-review**. T1 and T2,
 the two bugs, are fixed and merged (section 1). **Beyond them, the main problem is speed** (section 2).
-The user wants it gone, and the review's findings on it go to M20-pernode first. T3 to
+The user wants it gone. M20-pernode-T1's profile (D-0207), which landed the same day, is its measured
+basis, and the review agrees with its ranking. T3 to
 T13 are the other proposals, in the order of section 3. A row marked USER DECISION changes the
 solver's default behaviour and waits for the user, as CLAUDE.md requires.
 
@@ -96,49 +97,49 @@ sample of 40 in the third were UNSAT with at most 2 conflicts), which is why the
 
 ## 2. Speed, the main problem left
 
-After the two bugs, what separates baguette from the solvers it is compared with is speed. The
-project measured it before this review. baguette is 70 to 120 times slower per node than Gecode on
-the same search tree (D-0169), and about 35 times slower than Chuffed on an older binary (D-0103).
-In D-0185's Challenge series, 700 of 1,574 instances timed out at 1,200 s with proof and 314 were
-refused at the 16 GiB heap budget. M20-pernode, opened on 2026-11-23, is where this is attacked,
-and the review's findings below are inputs to it. They come from reading the code and from one
-probe. None is profiled yet, which is M20-pernode-T1's job, so their order is the review's
-estimate of their weight.
+After the two bugs, what separates baguette from the solvers it is compared with is speed.
+M20-pernode-T1 measured it the same day, after the first version of this section was written
+(D-0207, on `fataepyc-06`, instructions per node on the same search tree for five families). Without
+learning or proof baguette is 6 to 55 times Gecode per node, the proof multiplies that by 1.8 to 8.3,
+learning by 1.5 to 60, and the shipped binary is 66 to 592 times Gecode per node. D-0207 is the
+measured basis, and its ranked levers are the plan. The review agrees with them.
 
-The probe is a satisfiable random 3-SAT with 170 variables at ratio 4.26, a pure clause problem.
-It ran on the laptop, against the rule.
+| D-0207 rank | change | M20-pernode row | state on 2026-11-23 |
+|---|---|---|---|
+| 1 | learned constraints woken only through watches (learned PB rows have none today, D-0052) | T4 | agent-watch running (D-0208) |
+| 2 | the proof's text through one buffer, without `Printf` | T5 | agent-writer running (D-0209) |
+| 3 | reasons built on demand in `Element` (and the other globals) | T2 | TODO |
+| 4 | unchecked arithmetic in `Linear` where the row's bounds are checked once at `make` | T3 | TODO |
+| 5 | alldiff's Régin stage made incremental or gated | T4 | TODO |
 
-| Solver | Result |
-|---|---|
-| Chuffed | solved in 0.012 s, 665 failures |
-| Gecode | solved in 0.5 s, 3,821 failures |
-| baguette, default search and `-f` | 2,386 and 2,942 conflicts in 3 s, no solution. Each learned clause is its own engine instance: 105 of them run per node, and 2.8 remove a value |
+What the review adds to D-0207:
 
-What the review found, heaviest first by its estimate:
+1. Learning does not drive the search. The 1UIP clause is learned on top of a depth-first search
+   with nogoods, and the backjump is taken from the decision closure. D-0207 measured the
+   consequence: on four of the five families the default solver never backjumps, so its learned
+   constraints are pure cost there. Whether a fixed search should learn at all is M19-config's
+   question (D-0207 section 6). How learning should drive the search, with backjumps to the learned
+   clause's asserting level, is the design question behind it.
+2. Learned constraints are never deleted by default (`retention.ml:607`), so the cost that rank 1
+   attacks grows with the run, as D-0207 section 7 says of costas and mknap. Rank 1 cuts the cost of
+   each learned constraint, and retention cuts their number. The default is the user's decision
+   (row T12).
+3. A satisfiable pure-clause family for M20's set. The review's 3-SAT probe (170 variables, ratio
+   4.26, run on the laptop against the rule) is solved by Chuffed in 0.012 s, while baguette ran 800
+   to 1,000 conflicts per second and found no solution in 3 s, with 105 learned-clause runs per node
+   for 2.8 that pruned. That agrees with D-0207 section 5 item 1 on QR48.
 
-1. Learned clauses are one engine instance each, woken through the generic engine like a
-   global constraint. Goes to M20-pernode-T4 ("watched literals for clauses and PB rows"): one
-   store for all learned clauses with two watched literals, as SAT solvers keep them, outside the
-   instance queue.
-2. Each conflict does a lot. It runs three analyses (1UIP, the decision closure, PB) and writes
-   the branch's trace, the conflict line, bridges where a settle needs them, a level-0 clause and a
-   decision nogood. The backjump comes from the decision closure, so the 1UIP clause is learned on
-   top of a depth-first search with nogoods instead of driving the search. Goes to M20-pernode-T1,
-   which should measure each part's share and ask which of them the proof really needs.
-3. Each pruning allocates a 12-field trail record, the old and new domain records, a reason
-   closure and a deferred explanation thunk. Goes to M20-pernode-T2 (explanations on demand) and
-   T4 (the trail).
-4. Each node scans every variable to find the unfixed ones (`Search.unfixed`), and the engine
-   has no propagator priorities. Dirty instances run in id order, then a FIFO. Goes to
-   M20-pernode-T4 (the event queue).
-5. Two quadratic paths. alldiff's Hall intervals use the O(n·d²) enumeration (`alldiff.ml:49`),
-   and removing an interior value copies the domain's bitset (`domain.ml:250`). Goes to
-   M20-pernode-T4 (domains).
-6. Learned constraints are never deleted by default (`retention.ml:607`), so this cost grows with
-   every conflict. Changing the default is a USER DECISION (row T12).
+What the profile corrected in the review's first estimates:
 
-The 3-SAT probe belongs in M20-pernode-T1's families. Chuffed solves it in 12 ms, so it isolates
-the clause machinery from everything else.
+- The per-node scan of every variable (`Search.unfixed`) is negligible. The whole search layer is
+  under 70 thousand instructions per node.
+- alldiff's cost is the Régin stage, run on every pass (57 % of alldiff on costas), and not the Hall
+  enumeration the review pointed at (`alldiff.ml:49`).
+- Conflict analysis and learning take 3 to 16 % of a node, so the three analyses per conflict are not
+  a first lever. The engine's wake and dispatch are 15 to 45 % of a node, and they shrink with rank 1.
+- The review listed the core's checked arithmetic among what holds up (section 4). It is also 37 % of
+  a node on mknap. Rank 4 keeps the check where it guards soundness, once per row at `make`, with the
+  compile-time cap as its precondition.
 
 ## 3. The other proposals, in the order to apply them
 
@@ -278,8 +279,8 @@ Byte-identical.
 
 ### T12. Speed: section 2, through M20-pernode, and the retention default (USER DECISION)
 
-The speed findings are section 2 and go to M20-pernode, first in priority. What is left in this
-row is the one decision. Today every learned clause is kept to the end of the search
+The speed work is section 2, through D-0207's ranks in M20-pernode, first in priority. What is
+left in this row is the one decision. Today every learned clause is kept to the end of the search
 (`keep_all`). That default dates from D-0051, measured on 39 small models when learned clauses did
 not propagate. D-0139 built `tiered`, which gave the same answers and was 47 % faster on QR72 with
 proof at equal conflicts, but bought conflicts rather than answers on a Challenge subset, and D-0202
@@ -312,7 +313,8 @@ unchanged.
 ## 4. What holds up
 
 - No exception handler in the tree catches every exception.
-- The core uses checked arithmetic consistently.
+- The core uses checked arithmetic consistently, which keeps it sound, at a cost D-0207 measured
+  (section 2).
 - `Model.check_assignment` handles every constraint constructor explicitly, with no catch-all case. It
   is what kept bug 1.2 from printing a wrong answer.
 - Every fuzzed proof verified, under both encodings and both searches.
