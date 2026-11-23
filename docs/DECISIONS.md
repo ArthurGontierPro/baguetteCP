@@ -26317,3 +26317,164 @@ set is validated on D-0185's configurations, not on future ideas (restarts, new 
 agreement is unknown until the first full series (M17) repeats a row.
 
 **Revert**: delete `bench/tuning/`; nothing else depends on it.
+
+## D-0207  M20-pernode-T1: where the factor per node goes, on five families and the same tree. Without learning baguette is 6 to 55 times Gecode per node, and learning that never backjumps multiplies that by 1.4 to 60. Five ranked levers for T2 to T5
+
+**Status**: DONE (measurement only, no `lib/` or `bin/` change on the branch), recorded 2026-11-23 by
+agent-pernode2 (`wave59-pernode2`). Measured on `fataepyc-06` while the Challenge series of
+2026-11-23 ran at 87 processes (load 2.5 to 89, given per run in `out/*.load`). Every comparison is
+in instructions (`perf stat -e instructions:u`) and in `perf` sample shares, never in wall time.
+Runs, scripts and tables in `/cluster/arthur/baguette-results/pernode2/`.
+
+### 1. Method
+
+**Binaries.** Main `3dc1a81`, `make release` (D-0171): `f244c35a` (column B). A MEASUREMENT binary,
+`a49b56ea` (column NL), is the same source plus three lines in `bin/main.ml` (`nolearn.patch`,
+never committed) that read `BAGUETTE_LEARN=off` into `Search.config.learn = false` and `pb = false`,
+the `Search.no_learning` configuration the unit tests already use. Its proofs are checked
+(`rcpsp11_60` without learning, 33 945 nodes, `s VERIFIED UNSATISFIABLE`). Without it no comparison
+on the same tree exists, because baguette always learns and Gecode never does. Profiles use the same
+two sources built release on the `baguette-fp` switch (D-0145): `e9d6889e` and `a2bad1e4`.
+Gecode 6.4.0 and Chuffed 0.14.0 from the MiniZinc 2.10.1 bundle, each on its own flattening.
+
+**Same tree.** Every model has a complete search annotation and no restart (Chuffed `--restart
+none`). An optimisation model becomes a satisfaction model with the objective bounded below its
+optimum, so the tree is a refutation. Where the tree is too large it is cut at the same node count
+(Gecode `-node L`, baguette `BAGUETTE_NODE_LIMIT=L`), and the failure count at the cut is the check
+that the prefix is the same. Chuffed `--lazy off` is Chuffed without explanations or learning (0
+backjumps on every family), Chuffed LCG is its default with `--restart none`. Chuffed has no node
+limit, so it runs to a time limit and its own count is used. Chuffed LCG counts decisions as nodes
+(the right side of a refuted left branch is an implied literal), so its node figure below is nodes
++ failures, which equals Gecode's on QR48 where both trees agree.
+
+**Per node.** (I - I_base) / (N - N_base), the base being the same command stopped at one node
+(Gecode `-node 1`, baguette `BAGUETTE_NODE_LIMIT=1`) or at 1 ms (Chuffed `-t 1`, whose own node count
+is subtracted). Parsing, compiling and the `.opb` are out.
+
+**Layers.** `perf record -F 499 --call-graph fp`, each sample to the first layer whose frames match,
+in this order (`tools/layers.py`): kernel, GC, setup (no `Search` frame, removed and the rest
+renormalised), proof (`Baguette_proof.*`, `Justify`, `Trace`), conflict analysis and learning
+(`Learn`, `Analysis`, `Pb_analysis`, `Reduce`, `Retention`, `Learned`, `Ladder`, the `Search` learning
+entry points, and the branch nogood `Search.combine_nogoods` without learning), learned-constraint
+propagation (`Clause.propagate` and the learned watches, plus `Pb` on the two families whose `Pb` runs
+can only be learned PB rows), explanation construction (`Explanation`, `Order_reason`, the `Store`
+support queries), model propagation by the first propagator module on the stack (so a `Domain` or
+`Store` write made by a propagator is that propagator's, and so is a reason it builds inline), backtrack,
+engine (queue, wake walk, dispatch, `Store.run_as`), search. Layer x instructions per node is the
+attribution, as in D-0169.
+
+### 2. The five families
+
+| family | instance | baguette's flattening | tree (G = Gecode, CN = Chuffed --lazy off, NL, B) |
+|---|---|---|---|
+| clauses | codes-cp QR48, 3 fixed (D-0169's `f3.fzn`, `g_f3.fzn`) | 1 134 `bool_clause`, 48 `bool2int`, 2 `int_lin_le` | full, UNSAT: 29 779 nodes in all four, 14 890 failures |
+| alldiff | 2011 costas-array, n = 14 | 14 `all_different_int`, 157 `int_lin_eq`, 1 `int_lin_le` | to the first solution: G and CN 21 509, NL 21 425 (-0.4 %), B 21 129 (-1.8 %) |
+| linear | 2014 multi-knapsack `mknap2-1` (60 x 0/1, 30 rows, objective `= z`) | 30 `int_lin_le`, 1 `int_lin_eq` (the objective) | cut at 20 000 nodes: G 9 994 failures, NL and B 9 994 |
+| element | 2013 javarouting `trip_6_3`, objective <= 66 (optimum 67) | 97 `array_int_element`, reified comparisons, 1 `all_different` | cut at 20 000 nodes: G 9 999 failures, NL and B 9 998 |
+| cumulative | 2013 rcpsp `11`, makespan <= 60 (optimum 77) | 4 `cumulative`, 329 `int_lin_le_reif` + 329 `bool_clause` (the disjunctions), 82 `int_lin_le` | full, UNSAT: CN and NL 33 945 nodes. Gecode 17 (its `cumulative` adds edge-finding), B 71 (learning backjumps, 4 skipped) |
+
+The fifth family has no same tree with Gecode, so its same-tree reference is Chuffed `--lazy off`,
+and Gecode's figure is its own tree at makespan <= 66 (1 665 999 nodes, full). B is measured on that
+bound too (2 010 nodes, 73 backjumps) against Chuffed LCG (2 483 node-equivalents), two learning trees
+that are close but not equal.
+
+On the first four families the default solver **never backjumps** (`skipped 0`) and its tree is the
+no-learning tree, to 1.8 % on costas. Learning buys no node there.
+
+### 3. Instructions per node
+
+Thousands of instructions per node. The factor is against Gecode on the same tree (rcpsp: against
+Chuffed `--lazy off` on the same tree, Gecode's own tree in brackets). `--bits-above none` changed no
+figure by more than 0.02 % (QR48 and mknap have no wide variable, costas's differences and the
+others' are small), so it is one column here and the per-run values are in `summary.tsv`.
+
+| family | Gecode | Chuffed --lazy off | Chuffed LCG | NL --no-proof | NL proof | B --no-proof | B proof (shipped) |
+|---|---|---|---|---|---|---|---|
+| QR48 | 28.0 | 15.9 | 31.9 | 437 (16x) | 1 212 (43x) | 1 044 (37x) | 1 841 (66x) |
+| costas 14 | 108 | 154 | 276 | 5 871 (55x) | 15 188 (141x) | 44 736 (416x) | 54 119 (503x) |
+| mknap2-1 | 69.4 | 32.2 | 62.8 | 667 (9.6x) | 1 205 (17x) | 40 298 (581x) | 41 080 (592x) |
+| javarouting | 213 | 143 | 257 | 8 253 (39x) | 18 586 (87x) | 12 586 (59x) | 24 548 (115x) |
+| rcpsp 11 | (149) | 92.7 | 150 (bound 66) | 885 (9.5x) | 7 331 (79x) | 2 636 (bound 66) | 10 201 (bound 66) |
+
+Read across a row, the factor has three parts that multiply. The propagation core without learning
+or proof is 6 to 55 times Gecode. The proof multiplies it by 1.8 to 8.3 (NL proof over NL
+--no-proof). Learning, on trees where it never backjumps, multiplies it by 1.5 (javarouting), 2.4
+(QR48), 7.6 (costas) and 60 (mknap). For comparison Chuffed's learning costs it 1.8 to 2.0 per node
+(LCG over `--lazy off`, on its own trees except QR48).
+
+### 4. Where a node goes (layers, thousands of instructions per node)
+
+| layer | QR48 NL np | QR48 B np | QR48 B pf | costas NL np | costas NL pf | costas B np | mknap NL np | mknap B np | jr63 NL np | jr63 NL pf | jr63 B pf | rcpsp60 NL np | rcpsp60 NL pf | rcpsp66 B pf |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| model propagation | 168 | 157 | 172 | 5 243 | 5 150 | 4 012 | 472 | 362 | 6 360 | 5 619 | 6 104 | 641 | 549 | 1 405 |
+| engine (queue, wake, dispatch) | 196 | 361 | 394 | 381 | 345 | 11 483 | 102 | 16 323 | 1 086 | 1 021 | 1 943 | 175 | 191 | 533 |
+| learned-constraint propagation | 0 | 264 | 222 | 0 | 0 | 26 161 | 0 | 21 358 | 0 | 0 | 967 | 0 | 0 | 315 |
+| conflict analysis + learning | 30 | 170 | 200 | 23 | 31 | 1 735 | 58 | 1 068 | 44 | 52 | 2 085 | 15 | 19 | 421 |
+| explanation construction | 9 | 5 | 14 | 12 | 39 | 22 | 3 | 4 | 74 | 78 | 85 | 6 | 7 | 17 |
+| backtrack/undo | 8 | 12 | 8 | 15 | 21 | 35 | 1 | 4 | 45 | 48 | 71 | 8 | 9 | 6 |
+| proof (justify, trace, writer) | 1 | 8 | 683 | 32 | 7 582 | 196 | 2 | 116 | 15 | 8 854 | 9 278 | 2 | 4 575 | 5 404 |
+| GC + kernel | 11 | 48 | 126 | 146 | 1 997 | 1 019 | 13 | 1 039 | 591 | 2 862 | 3 950 | 24 | 1 964 | 2 089 |
+| search, other | 9 | 13 | 16 | 14 | 19 | 67 | 12 | 20 | 34 | 48 | 61 | 11 | 12 | 5 |
+
+The full table, every column of every family, is `layers_table.txt`. Model propagation by
+propagator: QR48 `Pb` (the model clauses) 134, `Linear` 23. Costas `Alldiff` 5 009, `Linear` 207.
+mknap `Linear` 470. javarouting `Element` 3 287, `Linear` 1 405, `Alldiff` 902, `View` 383. rcpsp
+`Cumulative` 476, `Linear` 128. "Explanation construction" is small because most reasons are built
+INSIDE the propagators and counted there (section 5, item 3).
+
+### 5. What holds the factor
+
+1. **Learned constraints that are run and do not prune.** On costas and mknap the learned PB rows
+   (`Pb.Learned_pb`, 3 267 and 9 988 instances) run 1 292 and 2 827 times per node for 16.5 and 0.91
+   effective runs, and the learned clauses add 227 and 50 runs at 0.02 and 0.01. A learned PB row has
+   no watch (pb.ml, "No mutable state, and no watched literals", D-0052): every change to any of its
+   variables wakes it and the pass recomputes its slack from `Store.get`. Its runs and the engine's
+   work for them are 83 % of a costas node (37.3 M of 44.7 M) and 93 % of an mknap node (37.6 M of
+   40.3 M). On QR48 the learned clauses, which have watches, still run 177 times per node for 0.00
+   effective, 41 % of the node with the engine's share (D-0169 found the same).
+2. **The proof.** Proof minus no-proof without learning is 775 K instructions per node on QR48 (64 %
+   of the proved node), 9.3 M on costas (61 %), 539 K on mknap (45 %), 10.3 M on javarouting (56 %),
+   6.4 M on rcpsp (88 %). By module, in points of the whole proved node: `Writer` and `Lit` (the text)
+   15 to 23, `Justify` 8 to 19, `Explanation` built for a justification up to 13.5 (rcpsp, cumulative's
+   rows), `Encoding` (names and atoms) 4 to 10, `Trace` 1 to 6, and the propagator's own justification
+   code (alldiff's Hall rows 11 on costas). GC and kernel grow with the proof by 3 % (mknap) to 26 %
+   (rcpsp) of the proved node, which is the allocation of lines and the write calls of a 1 GB file.
+3. **Reasons built eagerly inside the globals.** 57 % of `Element`'s samples on javarouting are its
+   hole reasons (`hole_facts`, `hole_expl`, `add_facts`, `residue_cancel`), built at every pruning with
+   or without proof and with or without learning: about 28 % of the no-learning, no-proof node (2.3 M of
+   8.3 M). In alldiff and cumulative the reasons are cheaper (9 % and 2 % of the propagator).
+4. **The propagators themselves.** Alldiff is 85 % of the costas no-learning node (5.0 M), and 57 % of
+   it is the Régin stage (`regin_pass`, `stage_regin`) run on every pass, where Gecode's value-consistent
+   `distinct` reaches the same tree. `Checked` arithmetic (`floordiv`, `add`, `mul`, M1-T23) is 51 % of
+   `Linear`'s samples on mknap, i.e. 37 % of the node. Cumulative rebuilds its profile at every pass
+   (`overloaded`, `row_at`: 20 % of the rcpsp node, `established_at_root` another 6 %).
+5. **The engine.** Waking, queueing and the run bracket are 45 % of the QR48 no-learning node (196 K,
+   seven times Gecode's whole node), 13 % of javarouting's, 15 to 20 % elsewhere, and their cost scales
+   with the runs, which is why it explodes with item 1.
+
+### 6. Ranked proposals for M20-T2 to T5
+
+Gains are read from section 4 and are upper bounds for the layer named. None is measured as an
+implementation here.
+
+| rank | change | task | where it acts | estimated gain |
+|---|---|---|---|---|
+| 1 | **Learned constraints woken only through watches.** A watched slack for learned PB rows (a counter on the trail, undone by `Store`, which reopens D-0052's refusal and needs a design record), a learned clause's watches kept as they are, and the engine waking neither when the change cannot make it unit. With D-0169 (b)'s rule for rows that never prune as the fallback | T4 | section 5 item 1 | shipped (B proof) node: mknap -85 to -90 % (41.1 M to about 4 M), costas -60 to -70 % (54.1 M to about 17 M, the 16.5 effective runs kept), QR48 -20 %, javarouting -5 %. Without proof: mknap -93 %, costas -83 %, QR48 -41 % at most |
+| 2 | **Proof text through one buffer, no `Printf`, no intermediate string.** Integers and names written into a `Bytes` buffer, each literal's name rendered once, lines flushed in blocks | T5 | `Writer`, `Lit`, the GC and write calls of proof mode | half of `Writer`+`Lit` and of the proof-mode GC growth: -10 % (mknap) to -23 % (rcpsp) of a proved node |
+| 3 | **Reasons on demand in `Element`** (and the other globals): the pruning records what it read, the facts are built when analysis or `Justify` asks (Chuffed's lazy explanations) | T2 | section 5 item 3 | javarouting -28 % without learning or proof, about -9 % of the shipped node. SPEC section 1 still requires the same explanation values in both modes, so the reason must be rebuilt identically |
+| 4 | **Unchecked arithmetic where the bounds are proved at compile time.** `Linear`'s coefficients times declared bounds fit in 62 bits on almost every model; check once per row at `make` (keeping M1-T23's cap as the precondition), use plain `+`, `*`, `/` in `walk` and `prune_term` | T3 | `Checked` in `Linear` | mknap -20 to -35 % without proof, -10 to -20 % with proof; rcpsp -5 % |
+| 5 | **Alldiff's Régin stage kept incremental or gated**: the matching kept across passes and repaired, or the stage run only when the bounds stage leaves a value in two domains' Hall interval | T4 | `Alldiff.regin_pass` | costas -30 to -45 % without learning or proof, much less on the shipped node until rank 1 is done |
+
+Not ranked, because it is a configuration and not a speed change: on all four families with a
+same tree, learning never backjumped and cost 1.5 to 60 times per node. M19-config decides whether a
+fixed search should learn at all. The engine (section 5 item 5) shrinks with rank 1 and is the next
+target after it.
+
+### 7. Limits
+
+- Five instances, one per family, and three of them cut at 20 000 nodes. A per-node cost that grows
+  with the learned database (costas, mknap) is larger on a longer run.
+- rcpsp has no same tree with Gecode, and its default-solver column is on another bound.
+- Chuffed's per-node figure for LCG is on its own count (nodes + failures).
+- The layer shares are cycles sampled on a loaded node, multiplied by instruction counts, as in D-0169.
+  They rank layers. They are not exact instruction counts per layer.
