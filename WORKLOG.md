@@ -19,6 +19,7 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
+| M20-pernode-T2 (D-0214) | `lib/core/prop/element.ml`, then the other globals where mechanical (`alldiff.ml`, `gcc.ml`, `cumulative.ml`, named in D-0214 before touched), `test/unit/test_prop.ml` (the D-0124 BAGUETTE_DEBUG check), `docs/DECISIONS.md` (D-0214), `docs/ROADMAP.md` (row T2). NOT `store.ml`, `explanation.ml` | agent-lazy, branch `wave62-lazy` | 2026-11-23 |
 
 ## Cross-session requests
 
