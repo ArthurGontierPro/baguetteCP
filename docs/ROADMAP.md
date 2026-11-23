@@ -680,3 +680,16 @@ reference series.
 | M21-memory-T2 | **The overhead, attributed**: for each large kind, the bytes an ideal flat layout would take against what baguette takes (headers, boxing, lists where arrays belong, `Hashtbl` buckets, closures kept alive), so the claim "OCaml eats memory" gets a number per kind | TODO | Needs T1 |
 | M21-memory-T3 | **The fixes the numbers point at**, one per kind, each measured on the refused instances (how many become attempts at 16 GiB) | TODO | Needs T2; overlaps M18-coverage-T9 (lazy literals) when the encoding is the kind |
 
+
+## M22-review — the code review of 2026-11-23
+
+Opened 2026-11-23 at the user's request, from a review of main `c8be4d0`
+(`docs/reports/2026-11-23-code-review.md`). T1 and T2 are the two bugs the review found, fixed by
+the reviewing session. The rows after them are the review's proposals, for the node session to read
+in the report and apply in order. A row that would change the solver's default behaviour waits for
+the user's decision, as CLAUDE.md requires.
+
+| ID | Task | Status | Notes |
+|---|---|---|---|
+| M22-review-T1 | **An overflow in the front end's constant fold**: `builder.ml`'s `lin_terms` folded a constant operand of `int_lin_*` into the right-hand side with an unchecked `r - coeff * n`, so `int_lin_le([2^61, 1], [4, x], 0)` (no solution) became `x <= 0`, printed `x = 0`, and VeriPB verified it. The fold goes through `Checked` and an overflow refuses the model with a positioned diagnostic, as compile.ml's cap does (D-0029) | WIP | Report section 1.1. The unit test waits for `test/unit/`, claimed by M18-coverage-T1 |
+| M22-review-T2 | **cumulative misses an overload among fixed tasks**: `Cumulative.make` set `ground` only for a row with no movable term, and `pass` reads only the times inside each movable task's window, so fixed tasks overloading a time that a movable task could also cover went unreported. That breaks I-P3, and the run ended on exit 4 (`INTERNAL ... I-P1`) on a model with no solution. Such a time's row is posted without its movable terms, which makes it a ground row | WIP | Report section 1.2, found by the review's differential fuzz. Regression model `cumulative_fixed_overload_unsat` |
