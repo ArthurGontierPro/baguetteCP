@@ -92,6 +92,13 @@
       b in 0..1, whose own magnitude is |c-1| + S + (M+1) <= 3M + 2; and that row
       then goes through path 3, giving <= 3(3M + 2) = 9M + 6.
 
+   Path 1 is also the precondition of D-0212 (M20-pernode-T3): a [Linear] row whose
+   magnitude, taken over the bounds [Linear.make] froze, is at most [limit] runs its
+   propagation in plain [+], [*], [/], because every value path 1 computes is then at
+   most 2M in magnitude while the live bounds stay inside the frozen ones. The proof
+   and the precise statement are in linear.ml's "Arithmetic" section and in D-0212; the
+   check is [row_fits] below, once per row.
+
    So 9M + 6 bounds everything. [limit] is set at [max_int / 16], i.e. a row whose
    magnitude the compiler accepts has at least a factor of 16/9 in hand over the
    largest intermediate any of the four paths computes. (The +6 is absorbed: for
@@ -172,18 +179,31 @@ let sum l = List.fold_left add 0 l
    The only division that overflows is min_int / -1; every other quotient is bounded by
    the dividend. The [q - 1] and [q + 1] corrections cannot overflow either: reaching
    q = max_int or q = min_int needs |b| = 1, and then the remainder is zero and no
-   correction is applied. *)
+   correction is applied.
+
+   [floordiv_plain] and [ceildiv_plain] are the same rounding WITHOUT the two guards, and
+   the checked pair below is the guards followed by them, so the rounding rule exists once.
+   They are exact for every [b <> 0] except [min_int / -1] ([b = 0] still raises OCaml's
+   own [Division_by_zero]). Their one caller outside this module is a row whose every
+   dividend is proved in range at construction (D-0212, lib/core/prop/linear.ml,
+   "Arithmetic"); anything else uses [floordiv] and [ceildiv]. *)
+let[@inline] floordiv_plain a b =
+  let q = a / b and r = a mod b in
+  if r <> 0 && r < 0 <> (b < 0) then q - 1 else q
+
+let[@inline] ceildiv_plain a b =
+  let q = a / b and r = a mod b in
+  if r <> 0 && r < 0 = (b < 0) then q + 1 else q
+
 let floordiv a b =
   if b = 0 then invalid_arg "Checked.floordiv: division by zero";
   if a = min_int && b = -1 then fail "%d / %d overflows a 63-bit int" a b;
-  let q = a / b and r = a mod b in
-  if r <> 0 && r < 0 <> (b < 0) then q - 1 else q
+  floordiv_plain a b
 
 let ceildiv a b =
   if b = 0 then invalid_arg "Checked.ceildiv: division by zero";
   if a = min_int && b = -1 then fail "%d / %d overflows a 63-bit int" a b;
-  let q = a / b and r = a mod b in
-  if r <> 0 && r < 0 = (b < 0) then q + 1 else q
+  ceildiv_plain a b
 
 (* min_int mod -1 is 0 mathematically and is the one input [Stdlib.mod] is not
    guaranteed to survive, so it is answered directly rather than computed. *)
