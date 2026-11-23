@@ -19,6 +19,7 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
+| M17-bench-series-T1, T2 (D-0203) | `bench/series/` (new), `tools/compare/readme_table.py` (new), `scripts/compare_run.sh` (one env var, default unchanged), `README.md` (performance section), `bench/challenge/README.md` (the run's row), `docs/DECISIONS.md` (D-0203 appended), `docs/ROADMAP.md` (M17 T1/T2 rows) | agent-series (branch wave58-series, from f6c62db) | 2026-11-23 |
 
 ## Cross-session requests
 
