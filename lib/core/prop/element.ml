@@ -229,18 +229,30 @@
    Snapshotting and I-X6
    ---------------------------------------------------------------------------
 
-   Every derivation below is built from the domains as they stand at the moment of the
-   pruning and is wrapped in [Explanation.deferred] only at the outermost push site, with
-   the snapshot already taken. Nothing inside a thunk reads a live domain. What the
-   thunks do read is [Encoding]'s constraint ids, which [start_proof] writes once before
-   the first decision and never moves -- the same exemption alldiff.ml's header argues.
-   The one lookup that must happen eagerly is [Store.remover]'s, hoisted to its call site
-   for the reason lib/core/prop/linear.ml's [explain_cross_conflict] spells out.
+   Every derivation below is built from the domains as they stood at the moment of the
+   pruning. Nothing inside a thunk reads a live domain. What the thunks do read is
+   [Encoding]'s constraint ids, which [start_proof] writes once before the first decision
+   and never moves -- the same exemption alldiff.ml's header argues.
 
-   COST (M16-file-review-T2, D-0190). A pass is O(n_decl + w_res). A pruning of the
-   result is O(n_decl) eagerly: one [pos_gone] per dead position, which is what its
-   derivation names, decided at the pruning (I-X6). The table of live positions those
-   walks test against is built once per pass, at its first pruning. *)
+   REASONS ON DEMAND (M20-pernode-T2, D-0214). Since D-0214 a pruning reads nothing it
+   does not need to DECIDE (which value goes, what the push concludes): it records a
+   [frame] -- the index's and the result's domains, which are immutable values, and the
+   trail cut at the push ([Store.history], D-0124) -- and both halves of the pruning are
+   built from that frame when they are first asked for. The reason is a [Reason.Later]
+   (D-0124's channel, the one [Linear] uses); the derivation's [pos_gone] walk, the
+   removers it looks up and the residue it cancels move inside the [Explanation.deferred]
+   that already wrapped it. Every lookup that used to be "hoisted to its call site" for
+   I-X6 ([Store.remover], [Store.lo_support], [Store.level_of_index]) is now answered by the
+   history, which can only answer for positions below the pruning, so I-X6 holds by what
+   the readers can see rather than by when they run. The frame section below argues why
+   the values are the ones the eager code read; the proof bytes are the same on every
+   test model (D-0214 section 2).
+
+   COST (M16-file-review-T2, D-0190; D-0214). A pass is O(n_decl + w_res). A pruning costs
+   two domain reads and one history record; the O(n_decl) walk of the dead positions, and
+   the hole facts, are paid only when a reason or a derivation is asked for (the trace,
+   conflict analysis, or BAGUETTE_DEBUG's agreement check at the push). Without learning
+   or proof nothing asks, which was 28 % of a javarouting node (D-0207). *)
 
 module Lit = Baguette_proof.Lit
 module Encoding = Baguette_proof.Encoding
@@ -487,12 +499,63 @@ let idx_excl_above t p ~bhi =
     :: List.map (fun u -> cite (idx_rung t u)) (range (bhi + 1) (bp - 1)))
     1
 
+(* ---------------------------------------------------------------- the frame (D-0214)
+
+   WHAT A PRUNING RECORDS, so that its reason and its derivation can be built when they are
+   asked for rather than at the pruning. M20-pernode-T2: building them eagerly was 57 % of
+   this module's samples on javarouting, about 28 % of a node without learning or proof
+   (D-0207 section 5 item 3), and most prunings are never asked.
+
+   Everything the eager code read at a pruning was one of four things, and a [frame] holds
+   each of them as of that moment:
+
+     - the index's and the result's DOMAINS ([di], [dr]): immutable values (a [Domain.t] is
+       never written in place, lib/core/domain.ml), so holding the pointer IS holding the
+       domain then. [dr] is the result BASE's domain, read through [View.lo_in] and its
+       twins; for a constant result it is never read;
+     - which trail entry REMOVED a value ([remover_at]), its ARENA explanation
+       ([explanation_at]) and the LEVEL of a trail position ([level_at]);
+     - which entry SUPPORTS a bound ([Store.lo_support_at]/[hi_support_at]).
+
+   The last three are answered from [h], the trail cut at the pruning ([Store.history],
+   D-0124). While the pruning's entry is on the trail every position below it holds the
+   record it held at the push (I-T1), so each of them answers exactly what the live store
+   answered then: [Store.remover] with [~before] at the cut finds the same entry (the first
+   entry on the variable whose [now] lost the value, kept iff it lies below the cut), a
+   level mark below the cut is the same mark, and [support_before] walks back past the
+   cut. So a reason or a derivation rebuilt from the frame is the one the eager code built,
+   value for value; the bytes do not move (D-0214 section 2).
+
+   The three readers below reach the store through [h]. They are what store.ml's history
+   section would export next to [lo_reasons_at], and they are here only because store.ml
+   was claimed when this was written (WORKLOG, cross-session request of 2026-11-23); each
+   is one call on a position below the cut, and none can read past it. *)
+type frame = { h : Store.history; di : Domain.t; dr : Domain.t }
+
+let frame t store =
+  let di = Store.get store t.ibase in
+  {
+    h = Store.history store;
+    di;
+    dr = (match View.base_var t.res with Some rv -> Store.get store rv | None -> di);
+  }
+
+let remover_at (h : Store.history) ~var v =
+  Store.remover h.Store.h_store ~before:(Store.history_upto h) ~var v
+
+let explanation_at (h : Store.history) e = Store.explanation h.Store.h_store e
+let level_at (h : Store.history) pos = Store.level_of_index h.Store.h_store pos
+let res_lo t fr = View.lo_in fr.dr t.res
+let res_hi t fr = View.hi_in fr.dr t.res
+let res_mem t fr w = View.mem_in fr.dr t.res w
+
 (* The line that took [w] out of the result, or [None] when nothing did.
 
-   Read EAGERLY at the call site, never inside a thunk: which trail entry witnesses a
-   hole can change or vanish on a backtrack between now and whenever the explanation is
-   rendered, which is I-X6 and the trap lib/core/prop/linear.ml's
-   [explain_cross_conflict] header describes at length.
+   Read from the frame's HISTORY, never from the live store: which trail entry witnesses a
+   hole can change or vanish on a backtrack between the pruning and whenever the
+   explanation is rendered, which is I-X6 and the trap lib/core/prop/linear.ml's
+   [explain_cross_conflict] header describes at length. Until D-0214 that was ensured by
+   reading it eagerly at the call site; the history answers the same entry later.
 
    The entry this finds always punched a HOLE rather than moved a bound, and that is
    forced by the caller's guard rather than checked here: the caller has already
@@ -505,16 +568,13 @@ let idx_excl_above t p ~bhi =
    variable's own entry history by binary search (D-0088), and it is the SAME entry: the
    walk's predicate (on [ibase], [bp] in [old], not in [now]) is [Store.remover_scan]'s,
    started at the same position, and [Store.remover] agrees with that scan under
-   [BAGUETTE_DEBUG] by physical equality. Read EAGERLY, as the walk was (I-X6). *)
-let index_hole_puncher store t bp =
-  Store.remover store ~before:(Store.trail_length store) ~var:t.ibase bp
+   [BAGUETTE_DEBUG] by physical equality. Read from the frame's history (I-X6, D-0214). *)
+let index_hole_puncher t fr bp = remover_at fr.h ~var:t.ibase bp
 
-let hole_line t store w =
+let hole_line t fr w =
   match View.base_var t.res with
   | None -> None
-  | Some rv ->
-      Option.map (Store.explanation store)
-        (Store.remover store ~before:(Store.trail_length store) ~var:rv w)
+  | Some rv -> Option.map (explanation_at fr.h) (remover_at fr.h ~var:rv w)
 
 (* M7-T21 / D-0084. An interior INDEX hole that this propagator did not punch, as the
    clause a summand may cite.
@@ -538,9 +598,9 @@ let hole_line t store w =
    stay in the row, which is the same globally valid "pruning disjoined with what it
    read" every other arm of [pos_gone] already derives. A level-0 hole keeps the bare unit
    -- it is RUP there, and keeping it leaves every proof that never reaches a deep foreign
-   hole byte-identical. The remover is found EAGERLY, here, at pruning time (I-X6).
+   hole byte-identical. The remover is found from the frame's history (I-X6, D-0214).
 
-   M11-complexity-T11: the puncher is found eagerly, its literals are not. The clause
+   M11-complexity-T11: the puncher is found when this is called, its literals are not. The clause
    used to be materialised here, so every pruning of this instance copied every foreign
    hole's puncher's literals once per dead position -- O(dead x facts) words per entry,
    with facts growing along the branch. On 2011_black-hole_9 (--no-proof, node 40, the
@@ -550,10 +610,10 @@ let hole_line t store w =
    is on the trail -- and the puncher is BELOW this pruning, so it outlives every arena
    slot that can hold this thunk). The literals, their order and the clause are the
    ones the eager call built, so every proof byte is the same. *)
-let index_hole_clause t store bp =
+let index_hole_clause t fr bp =
   let unit = Lit.negate (Lit.eq t.iname bp) in
-  match index_hole_puncher store t bp with
-  | Some e when Store.level_of_index store e.Store.pos > 0 ->
+  match index_hole_puncher t fr bp with
+  | Some e when level_at fr.h e.Store.pos > 0 ->
       let reason = e.Store.reason in
       Explanation.deferred (fun () ->
           Explanation.clause (unit :: List.map Lit.negate (Reason.lits reason)))
@@ -596,11 +656,11 @@ type residue =
    [Search.rests_on_a_clause] routes it the D-0022 way and this module's [pol] is
    decorative FOR THAT CONFLICT. It is not decorative for any conflict that does not --
    which is every conflict a model without a disequality on the index can reach. *)
-let pos_gone t store p =
+let pos_gone t fr p =
   let n = Array.length t.values in
-  (* WHICH ARM is decided now, from the live domains; BUILDING it is deferred, and the
-     split is not stylistic. The arm depends on the store and must be pinned at the
-     moment of the pruning (I-X6). The construction depends on [Encoding]'s constraint
+  (* WHICH ARM is decided from the frame; BUILDING it is deferred, and the split is not
+     stylistic. The arm depends on the store and must be pinned at the moment of the
+     pruning (I-X6), which the frame is (D-0214). The construction depends on [Encoding]'s constraint
      ids, which do not exist at all until [Encoding.start_proof] runs -- a unit test that
      propagates without writing a proof is the ordinary case, and forcing the lookup
      eagerly would make it raise [need]'s diagnostic where nothing is wrong. *)
@@ -608,25 +668,24 @@ let pos_gone t store p =
   if p < 0 || p >= n then (later (fun () -> excl_out t p), R_none)
   else
     let w = t.values.(p) in
-    let rlo = View.lo store t.res and rhi = View.hi store t.res in
+    let rlo = res_lo t fr and rhi = res_hi t fr in
     if w > rhi then
       ( later (fun () -> excl_above t p ~bhi:rhi),
         if w > t.rdhi then R_none else R_res_hi rhi )
     else if w < rlo then
       ( later (fun () -> excl_below t p ~blo:rlo),
         if w < t.rdlo then R_none else R_res_lo rlo )
-    else if not (View.mem store t.res w) then
-      match hole_line t store w with
+    else if not (res_mem t fr w) then
+      match hole_line t fr w with
       | Some hole -> (later (fun () -> excl_hole t p ~hole), R_none)
       | None -> (Explanation.clause [ Lit.negate (Lit.eq t.iname (base_of t p)) ], R_none)
     else
       (* as[p] is still available, so p left dom(idx) for a reason of the index's own. *)
-      let d = Store.get store t.ibase in
       let bp = base_of t p in
-      let dlo = Domain.lo d and dhi = Domain.hi d in
+      let dlo = Domain.lo fr.di and dhi = Domain.hi fr.di in
       if bp < dlo then (later (fun () -> idx_excl_below t p ~blo:dlo), R_idx_lo dlo)
       else if bp > dhi then (later (fun () -> idx_excl_above t p ~bhi:dhi), R_idx_hi dhi)
-      else (index_hole_clause t store bp, R_none)
+      else (index_hole_clause t fr bp, R_none)
 
 (* ---- shape 2: what the live positions force about the result ---- *)
 
@@ -652,13 +711,16 @@ let pos_gone t store p =
    DECISION set is not (D-0064's level rule) -- so, unlike the old blanket "only at
    [Store.level store] = 0", the check below is per LITERAL, not per conflict, and it
    fires above level 0 exactly when the specific bound cited happened to be a root one.
-   Every call site below computes it EAGERLY, never inside an [Explanation.deferred]
-   thunk: the support arrays this reads are live store state that a later backtrack can
-   invalidate, the same reason alldiff.ml's [snap_of] snapshots [s_lo_root]/[s_hi_root]
-   before wrapping anything in [deferred]. *)
-let established_at_root store v ~lower =
-  let sup = if lower then Store.lo_support store v else Store.hi_support store v in
-  sup = Store.no_support || Store.level_of_index store sup = 0
+   It reads a HISTORY, never the store: the support arrays are live store state that a
+   later backtrack can invalidate, which is why alldiff.ml's [snap_of] snapshots
+   [s_lo_root]/[s_hi_root] before wrapping anything in [deferred]. [Store.lo_support_at]
+   walks the support back to below the cut, and a level mark below the cut does not move
+   while the cut is live, so the answer is the one the store gave at the cut (D-0214). The
+   conflict paths pass the live history ([Store.history store]), where it is the store's
+   own answer. *)
+let established_at_root h v ~lower =
+  let sup = if lower then Store.lo_support_at h v else Store.hi_support_at h v in
+  sup = Store.no_support || level_at h sup = 0
 
 (* One cancelling line per copy of each residue literal, when established at root;
    otherwise the group contributes nothing and the residue's term stays in the
@@ -666,9 +728,9 @@ let established_at_root store v ~lower =
    is cited as a contradiction, and under a decision D-0018's nogood closes the branch
    regardless. The values are read off the residues rather than from the store, so the
    line cancelled is the bound the exclusion actually read, and the multiplicity is the
-   number of exclusions that read it. Called EAGERLY (see above), never inside the
-   [Explanation.deferred] its caller wraps around the combine. *)
-let residue_cancel t store ~dead =
+   number of exclusions that read it. Reads the frame only (see above), so it may run
+   inside the [Explanation.deferred] its caller wraps around the combine (D-0214). *)
+let residue_cancel t fr ~dead =
   let rn = match t.rname with Some x -> x | None -> "" in
   let group sel lit_of var_opt ~lower =
     match List.filter_map (fun (_, r) -> sel r) dead with
@@ -677,7 +739,7 @@ let residue_cancel t store ~dead =
         match var_opt with
         | None -> []
         | Some var ->
-            if established_at_root store var ~lower then
+            if established_at_root fr.h var ~lower then
               [ Explanation.defining (List.length vs) (lit_of (List.hd vs)) ]
             else [])
   in
@@ -712,13 +774,13 @@ let int_set l =
 (* M16-file-review-T2 (D-0190): [alive] is [int_set live], built by the caller, so that
    [filter_result] builds it once per pass for its two pushes and every hole it punches,
    where each of them built its own. The same table answers the same [mem]. *)
-let dead_positions t store ~alive =
+let dead_positions t fr ~alive =
   List.filter_map
-    (fun p -> if Int_tbl.mem alive p then None else Some (pos_gone t store p))
+    (fun p -> if Int_tbl.mem alive p then None else Some (pos_gone t fr p))
     t.decl_pos
 
-(* M7-T21 / D-0084: [cancel] is [residue_cancel] over the same [dead], computed EAGERLY
-   by the caller. A pruning's derivation used to keep every residue literal its
+(* M7-T21 / D-0084: [cancel] is [residue_cancel] over the same [dead], computed by the
+   caller from the same frame. A pruning's derivation used to keep every residue literal its
    exclusions carried, root-established or not, on the argument that "only a ROOT
    conflict's derivation is cited as a contradiction". That is true of THIS module's
    conflicts and false of a derivation EMBEDDED in one: [excl_hole] cites the remover of
@@ -737,10 +799,6 @@ let alo_of t ~dead ~cancel =
         @ cancel)
         1)
 
-let alo t store ~live =
-  let dead = dead_positions t store ~alive:(int_set live) in
-  alo_of t ~dead ~cancel:(residue_cancel t store ~dead)
-
 (* [~idx_eq_p \/ ~c_ge_(b+1)] for a live position whose value is at most [b]. *)
 let at_most_from t p ~b =
   Explanation.combine
@@ -755,19 +813,29 @@ let at_least_from t p ~a =
     :: List.map (fun u -> cite (res_rung t u)) (range a (t.values.(p) - 1)))
     1
 
-let push_hi_expl t store ~live ~alive ~b =
-  let dead = dead_positions t store ~alive in
-  let cancel = residue_cancel t store ~dead in
+(* D-0214: the dead positions and the cancellation of their residue, read from the frame
+   when the derivation is first forced rather than at the pruning. The [lazy] is kept by the
+   closure, so a re-forcing after [Justify] releases the thunk cites the same position
+   thunks the first forcing did, exactly as the list the eager code built and captured. *)
+let dead_and_cancel t fr ~alive =
+  lazy
+    (Store.check_history fr.h;
+     let dead = dead_positions t fr ~alive:(Lazy.force alive) in
+     (dead, residue_cancel t fr ~dead))
+
+let push_hi_expl t fr ~live ~alive ~b =
+  let dc = dead_and_cancel t fr ~alive in
   Explanation.deferred (fun () ->
+      let dead, cancel = Lazy.force dc in
       Explanation.combine
         (Explanation.term 1 (alo_of t ~dead ~cancel)
         :: List.map (fun p -> Explanation.term 1 (at_most_from t p ~b)) live)
         (List.length live))
 
-let push_lo_expl t store ~live ~alive ~a =
-  let dead = dead_positions t store ~alive in
-  let cancel = residue_cancel t store ~dead in
+let push_lo_expl t fr ~live ~alive ~a =
+  let dc = dead_and_cancel t fr ~alive in
   Explanation.deferred (fun () ->
+      let dead, cancel = Lazy.force dc in
       Explanation.combine
         (Explanation.term 1 (alo_of t ~dead ~cancel)
         :: List.map (fun p -> Explanation.term 1 (at_least_from t p ~a)) live)
@@ -777,18 +845,20 @@ let push_lo_expl t store ~live ~alive ~a =
    halves arrive with different coefficients ([na] positions below [v], [nb] above), so
    each is padded up to their maximum with its own literal axiom before the division:
    D-0009's weakening, used exactly as alldiff.ml's [pair_amo] uses it. *)
-let hole_expl t store ~live ~alive ~v =
-  let dead = dead_positions t store ~alive in
-  let cancel = residue_cancel t store ~dead in
-  let below = List.filter (fun p -> t.values.(p) < v) live in
-  let above = List.filter (fun p -> t.values.(p) > v) live in
-  let na = List.length below and nb = List.length above in
-  let m = Int.max na nb in
-  if m = 0 then
+let hole_expl t fr ~live ~alive ~v =
+  (* [m = 0] below is exactly [live = []]: [v] is carried by no live position, so every
+     live position is below or above it. Refused here, at the pruning, as before D-0214. *)
+  if live = [] then
     invalid_arg "Element.hole_expl: no live position, which is a conflict and not a hole";
   let rn = match t.rname with Some x -> x | None -> assert false in
-  let pad k lit = if k > 0 then [ Explanation.weaken [ (k, lit) ] ] else [] in
+  let dc = dead_and_cancel t fr ~alive in
   Explanation.deferred (fun () ->
+      let dead, cancel = Lazy.force dc in
+      let below = List.filter (fun p -> t.values.(p) < v) live in
+      let above = List.filter (fun p -> t.values.(p) > v) live in
+      let na = List.length below and nb = List.length above in
+      let m = Int.max na nb in
+      let pad k lit = if k > 0 then [ Explanation.weaken [ (k, lit) ] ] else [] in
       Explanation.combine
         (Explanation.term 1 (alo_of t ~dead ~cancel)
          :: List.map (fun p -> Explanation.term 1 (at_most_from t p ~b:(v - 1))) below
@@ -810,12 +880,11 @@ let hole_expl t store ~live ~alive ~v =
    What closes the gap is [index_hole_facts]/[result_hole_facts] below, which put the
    PUNCHER's reason on this line's tail. Read them before the I-X10 section of the module
    header, whose measurement did not reach this case. *)
-let bound_facts t store =
-  let d = Store.get store t.ibase in
+let bound_facts t fr =
   let idx =
     [
-      Reason.at_least ~name:t.iname ~decl:t.idlo (Domain.lo d);
-      Reason.at_most ~name:t.iname ~decl:t.idhi (Domain.hi d);
+      Reason.at_least ~name:t.iname ~decl:t.idlo (Domain.lo fr.di);
+      Reason.at_most ~name:t.iname ~decl:t.idhi (Domain.hi fr.di);
     ]
   in
   match t.rname with
@@ -823,8 +892,8 @@ let bound_facts t store =
   | Some rn ->
       idx
       @ [
-          Reason.at_least ~name:rn ~decl:t.rdlo (View.lo store t.res);
-          Reason.at_most ~name:rn ~decl:t.rdhi (View.hi store t.res);
+          Reason.at_least ~name:rn ~decl:t.rdlo (res_lo t fr);
+          Reason.at_most ~name:rn ~decl:t.rdhi (res_hi t fr);
         ]
 
 (* ------------------------------------------------------------------ hole facts
@@ -908,29 +977,26 @@ let add_facts seed fs =
       add_to acc fs;
       acc_facts acc
 
-let remover_facts store ~var v =
-  match Store.remover store ~before:(Store.trail_length store) ~var v with
-  | None -> []
-  | Some e -> Reason.facts e.Store.reason
+let remover_facts h ~var v =
+  match remover_at h ~var v with None -> [] | Some e -> Reason.facts e.Store.reason
 
 let holes_of d =
   List.filter (fun v -> not (Domain.mem d v)) (range (Domain.lo d + 1) (Domain.hi d - 1))
 
-let hole_facts store ~var =
+(* [d] is [var]'s domain in the frame [h] belongs to. *)
+let hole_facts h ~var d =
   let acc = fact_acc [] in
-  List.iter
-    (fun v -> add_to acc (remover_facts store ~var v))
-    (holes_of (Store.get store var));
+  List.iter (fun v -> add_to acc (remover_facts h ~var v)) (holes_of d);
   acc_facts acc
 
 (* The facts behind the INDEX's interior holes: what a RESULT pruning read beyond bounds. *)
-let index_hole_facts t store = hole_facts store ~var:t.ibase
+let index_hole_facts t fr = hole_facts fr.h ~var:t.ibase fr.di
 
 (* The facts behind the RESULT's interior holes: what an INDEX pruning read beyond bounds.
    Over the result's BASE domain, so no view value has to be translated back -- the facts
    are the same either way and this needs no [View] inverse. *)
-let result_hole_facts t store =
-  match View.base_var t.res with None -> [] | Some rv -> hole_facts store ~var:rv
+let result_hole_facts t fr =
+  match View.base_var t.res with None -> [] | Some rv -> hole_facts fr.h ~var:rv fr.dr
 
 (* D-0043's conclusion for a value removal, on the INDEX's base variable: a removal at a
    bound settles and concludes the bound it settled to, an interior one concludes a
@@ -977,8 +1043,8 @@ let live_positions t store = List.filter (fun p -> View.mem store t.pos p) t.dec
      - p an interior INDEX hole: [index_hole_clause] carries the puncher's facts negated
        when the puncher acted under a decision, and nothing for a level-0 hole.
 
-   Each arm reads the store exactly as [pos_gone] does (the same [View.lo]/[View.hi],
-   [hole_line]'s [Store.remover], [index_hole_puncher]), and EAGERLY (I-X6).
+   Each arm reads exactly what [pos_gone] reads (the same frame: [res_lo]/[res_hi],
+   [hole_line]'s remover, [index_hole_puncher]), taken at the conflict and used at once.
    A fact at its declared value materialises to no literal, matching an arm that leaves
    none. Root-established residue that [residue_cancel] cancels is still listed: a root
    fact is harmless on a tail (Analysis drops root nodes from every cut), and listing it
@@ -989,15 +1055,13 @@ let live_positions t store = List.filter (fun p -> View.mem store t.pos p) t.dec
    refuses it (test/models/element_learn_hole_sat.fzn). Never set outside that lane. *)
 let break_hole_facts = ref false
 
-let conflict_facts t store =
+let conflict_facts t fr =
   let n = Array.length t.values in
-  let rlo = View.lo store t.res and rhi = View.hi store t.res in
-  let d = Store.get store t.ibase in
-  let dlo = Domain.lo d and dhi = Domain.hi d in
+  let rlo = res_lo t fr and rhi = res_hi t fr in
+  let dlo = Domain.lo fr.di and dhi = Domain.hi fr.di in
   let puncher_facts bp =
-    match index_hole_puncher store t bp with
-    | Some e when Store.level_of_index store e.Store.pos > 0 ->
-        Reason.facts e.Store.reason
+    match index_hole_puncher t fr bp with
+    | Some e when level_at fr.h e.Store.pos > 0 -> Reason.facts e.Store.reason
     | Some _ | None -> []
   in
   let of_pos p =
@@ -1009,10 +1073,10 @@ let conflict_facts t store =
         if w > t.rdhi then [] else [ Reason.at_most ~name:(rn ()) ~decl:t.rdhi rhi ]
       else if w < rlo then
         if w < t.rdlo then [] else [ Reason.at_least ~name:(rn ()) ~decl:t.rdlo rlo ]
-      else if not (View.mem store t.res w) then
+      else if not (res_mem t fr w) then
         match View.base_var t.res with
         | None -> []
-        | Some rv -> if !break_hole_facts then [] else remover_facts store ~var:rv w
+        | Some rv -> if !break_hole_facts then [] else remover_facts fr.h ~var:rv w
       else
         let bp = base_of t p in
         if bp < dlo then [ Reason.at_least ~name:t.iname ~decl:t.idlo dlo ]
@@ -1046,8 +1110,11 @@ let conflict_facts t store =
    negation of a fact listed here, and the `rup` is then unit propagation against that
    one line. *)
 let no_position_conflict t store =
-  let dead = dead_positions t store ~alive:(int_set []) in
-  let cancel = residue_cancel t store ~dead in
+  (* A conflict is consumed where it is raised, so nothing here is deferred (D-0124's
+     "conflicts stay eager"); the frame is only the shared way of reading. *)
+  let fr = frame t store in
+  let dead = dead_positions t fr ~alive:(int_set []) in
+  let cancel = residue_cancel t fr ~dead in
   let why =
     Explanation.deferred (fun () ->
         Explanation.combine
@@ -1059,7 +1126,7 @@ let no_position_conflict t store =
   if Store.level store = 0 then
     Store.conflict store (Reason.because ~concludes:None Reason.none why)
   else
-    let facts = conflict_facts t store in
+    let facts = conflict_facts t fr in
     Store.deriving_ahead store (fun () ->
         Store.conflict store (Reason.because ~concludes:None facts why))
 
@@ -1075,7 +1142,9 @@ let no_position_conflict t store =
 let lo_push_conflict t store ~expl ~a ~h =
   let cite_defining =
     Option.is_some t.rname && a <= t.rdhi
-    && established_at_root store (Option.get (View.base_var t.res)) ~lower:false
+    && established_at_root (Store.history store)
+         (Option.get (View.base_var t.res))
+         ~lower:false
   in
   Explanation.deferred (fun () ->
       if not cite_defining then expl
@@ -1090,7 +1159,9 @@ let lo_push_conflict t store ~expl ~a ~h =
 let hi_push_conflict t store ~expl ~b ~l =
   let cite_defining =
     Option.is_some t.rname && b >= t.rdlo
-    && established_at_root store (Option.get (View.base_var t.res)) ~lower:true
+    && established_at_root (Store.history store)
+         (Option.get (View.base_var t.res))
+         ~lower:true
   in
   Explanation.deferred (fun () ->
       if not cite_defining then expl
@@ -1114,8 +1185,9 @@ let hole_conflict t store ~expl ~v =
     | None -> (false, false)
     | Some _ ->
         let rv = Option.get (View.base_var t.res) in
-        ( v > t.rdlo && established_at_root store rv ~lower:true,
-          v < t.rdhi && established_at_root store rv ~lower:false )
+        let h = Store.history store in
+        ( v > t.rdlo && established_at_root h rv ~lower:true,
+          v < t.rdhi && established_at_root h rv ~lower:false )
   in
   Explanation.deferred (fun () ->
       match t.rname with
@@ -1152,10 +1224,11 @@ let in_order_currency t bw expl =
 
 (* Rule 1: dom(idx) := { p : as[p] in dom(c) }. Returns whether a removal landed.
 
-   EVERY DEDUCTION IN ONE PASS (I-P6, M6-T19). This module takes no snapshot: every
+   EVERY DEDUCTION IN ONE PASS (I-P6, M6-T19). This module takes no pass snapshot: every
    removal reads the store LIVE -- [View.mem] for the position, [d] for the conclusion's
-   shape, [bound_facts]/[result_hole_facts] for the reason -- so continuing after a
-   landed removal reads exactly what a restarted pass would have read. Until M6-T19 the
+   shape, and its own [frame] for the reason ([bound_facts]/[result_hole_facts], built
+   when asked, D-0214) -- so continuing after a landed removal reads exactly what a
+   restarted pass would have read. Until M6-T19 the
    pass restarted at the first removal that landed, so an index with k dead positions
    cost k + 1 walks of [decl_pos]. *)
 let filter_index t store =
@@ -1170,9 +1243,18 @@ let filter_index t store =
   let shares_index =
     match View.base_var t.res with Some rv -> Var.equal rv t.ibase | None -> false
   in
-  let res_holes = lazy (result_hole_facts t store) in
-  let result_holes () =
-    if shares_index then result_hole_facts t store else Lazy.force res_holes
+  (* D-0214: the pass's FIRST removal's frame, and the result's hole facts read from it
+     when a reason first asks -- the list the eager code built at that removal. *)
+  let first = ref None in
+  let res_holes fr =
+    if shares_index then lazy (result_hole_facts t fr)
+    else
+      match !first with
+      | Some l -> l
+      | None ->
+          let l = lazy (result_hole_facts t fr) in
+          first := Some l;
+          l
   in
   List.iter
     (fun p ->
@@ -1183,20 +1265,33 @@ let filter_index t store =
              because the [Failed] arm would hand back this ONE position's derivation and
              that is not contradicting. *)
           if View.size store t.pos <= 1 then raise (Found (no_position_conflict t store));
-          let d = Store.get store t.ibase in
+          let fr = frame t store in
           let bw = base_of t p in
           (* The residue is cancelled where the ROOT established it and kept where a
              decision did: kept, the derived row is the globally valid "pruning
              disjoined with the bounds it read"; cancelled, a root derivation is exact,
              which is what [excl_hole] needs when it embeds this entry's explanation in
-             another instance's root conflict (M7-T21, D-0084; see [alo_of]). *)
-          let expl, r = pos_gone t store p in
-          let cancel = residue_cancel t store ~dead:[ (expl, r) ] in
-          let concludes = removal_conclusion t d bw in
+             another instance's root conflict (M7-T21, D-0084; see [alo_of]).
+
+             D-0214: the conclusion is decided now (the store checks it at the push);
+             the position's line, the cancellation and the facts are read from [fr] when
+             first asked. [gone] is kept by the closure so that a re-forcing cites the same
+             thunk, as the eager pair did. *)
+          let concludes = removal_conclusion t fr.di bw in
+          let gone =
+            lazy
+              (Store.check_history fr.h;
+               let expl, r = pos_gone t fr p in
+               (expl, residue_cancel t fr ~dead:[ (expl, r) ]))
+          in
+          let holes = res_holes fr in
           let j =
-            Reason.because ~concludes
-              (add_facts (bound_facts t store) (result_holes ()))
+            Reason.because_later ~concludes ~empty:false
+              (fun () ->
+                Store.check_history fr.h;
+                add_facts (bound_facts t fr) (Lazy.force holes))
               (Explanation.deferred (fun () ->
+                   let expl, cancel = Lazy.force gone in
                    let exact =
                      if cancel = [] then expl
                      else Explanation.combine (Explanation.term 1 expl :: cancel) 1
@@ -1229,18 +1324,37 @@ let filter_result t store =
      pass. Most passes prune nothing, and this list (one remover's reason per index hole,
      a [Later] materialised for each) was then built for nobody. Nothing in this pass
      writes the store before the first [justified] call, so the list is the one the
-     eager [let] built. *)
-  let facts = lazy (add_facts (bound_facts t store) (index_hole_facts t store)) in
-  let justified ~concludes expl =
-    Reason.because ~concludes (Lazy.force facts) (Explanation.deferred (fun () -> expl))
+     eager [let] built.
+
+     D-0214: and now not even then. The first pruning's FRAME is what the pass keeps, and
+     the list is read from it when a reason is first asked for, then shared by every
+     pruning of the pass, as the eager list was. [empty] is [false]: [bound_facts] states
+     the index's two bounds whatever they are. Each pruning checks its OWN history, the
+     one its entry sits on, which is above the first one's. *)
+  let facts = ref None in
+  let justified fr ~concludes expl =
+    let shared =
+      match !facts with
+      | Some l -> l
+      | None ->
+          let l = lazy (add_facts (bound_facts t fr) (index_hole_facts t fr)) in
+          facts := Some l;
+          l
+    in
+    Reason.because_later ~concludes ~empty:false
+      (fun () ->
+        Store.check_history fr.h;
+        Lazy.force shared)
+      (Explanation.deferred (fun () -> expl))
   in
   (if a > View.lo store t.res then
      let h = View.hi store t.res in
-     let expl = push_lo_expl t store ~live ~alive:(Lazy.force alive) ~a in
+     let fr = frame t store in
+     let expl = push_lo_expl t fr ~live ~alive ~a in
      let concludes =
        Option.map (fun rn -> Reason.at_least ~name:rn ~decl:t.rdlo a) t.rname
      in
-     match View.set_lo store t.res a (justified ~concludes expl) with
+     match View.set_lo store t.res a (justified fr ~concludes expl) with
      | Store.Conflict _ ->
          raise (Found (conflict_of store (lo_push_conflict t store ~expl ~a ~h)))
      | Store.Changed ->
@@ -1249,11 +1363,12 @@ let filter_result t store =
      | Store.Unchanged -> ());
   (if b < View.hi store t.res then
      let l = View.lo store t.res in
-     let expl = push_hi_expl t store ~live ~alive:(Lazy.force alive) ~b in
+     let fr = frame t store in
+     let expl = push_hi_expl t fr ~live ~alive ~b in
      let concludes =
        Option.map (fun rn -> Reason.at_most ~name:rn ~decl:t.rdhi b) t.rname
      in
-     match View.set_hi store t.res b (justified ~concludes expl) with
+     match View.set_hi store t.res b (justified fr ~concludes expl) with
      | Store.Conflict _ ->
          raise (Found (conflict_of store (hi_push_conflict t store ~expl ~b ~l)))
      | Store.Changed ->
@@ -1272,8 +1387,9 @@ let filter_result t store =
       List.iter
         (fun v ->
           if Domain.mem d v && not (Int_tbl.mem carried v) then
-            let expl = hole_expl t store ~live ~alive:(Lazy.force alive) ~v in
-            match View.remove store t.res v (justified ~concludes:None expl) with
+            let fr = frame t store in
+            let expl = hole_expl t fr ~live ~alive ~v in
+            match View.remove store t.res v (justified fr ~concludes:None expl) with
             | Store.Conflict _ ->
                 raise (Found (conflict_of store (hole_conflict t store ~expl ~v)))
             | Store.Changed ->
