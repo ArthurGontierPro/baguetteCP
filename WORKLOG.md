@@ -19,6 +19,7 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
+| M19-config-T0 | `bench/tuning/`, D-0205, ROADMAP row T0 | agent-tuning (wave59-tuning) | 2026-11-23 |
 
 ## Cross-session requests
 
