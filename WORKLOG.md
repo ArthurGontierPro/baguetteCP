@@ -19,6 +19,7 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
+| M20-pernode-T1 | docs/DECISIONS.md (D-0207), docs/ROADMAP.md (T1 row), WORKLOG.md; no lib/ change | agent-pernode2 (wave59-pernode2) | 2026-11-23 |
 
 ## Cross-session requests
 
