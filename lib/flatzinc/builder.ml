@@ -965,12 +965,27 @@ let build_constraint env (c : Ast.constraint_item) =
     let rhs0 =
       as_const pos ~builtin:id ~what:"the right-hand side" (operand env pos ra)
     in
+    (* A constant operand moves to the right-hand side through [Checked] (M22-review-T1,
+       D-0029). Wrapped, the product vanished before compile.ml's cap saw the row, and
+       VeriPB verified an answer to a different model. *)
+    let fold_const r coeff n =
+      let module C = Baguette_core.Checked in
+      match C.sub r (C.mul coeff n) with
+      | v -> v
+      | exception C.Overflow why ->
+          Error.failf pos
+            "builtin `%s`: moving the constant operand %d (coefficient %d) to the \
+             right-hand side overflows the 63-bit integers baguette computes over (%s). \
+             The row is beyond baguette's arithmetic limit, %d (docs/SPEC.md section \
+             2.1, D-0029). Rescale the coefficients."
+            id n coeff why C.limit
+    in
     let terms, rhs =
       List.fold_left2
         (fun (ts, r) coeff op ->
           match op with
           | Model.Var i -> ((coeff, i) :: ts, r)
-          | Model.Const n -> (ts, r - (coeff * n)))
+          | Model.Const n -> (ts, fold_const r coeff n))
         ([], rhs0) coeffs vars
     in
     (List.rev terms, rhs)
