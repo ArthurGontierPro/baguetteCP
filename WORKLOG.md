@@ -19,7 +19,7 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M11-complexity-T18 (D-0216, black-hole root slowdown in `Explanation` hashing) | `lib/core/explanation.ml` (smallest fix, no new constructor), `lib/core/justify.ml` if the cause is there, a test or model, docs/DECISIONS.md (D-0216), docs/ROADMAP.md (row T18) | agent-hash (`wave64-hash`) | 2026-11-23 |
+| M11-complexity-T18 (D-0216, black-hole root slowdown in `Explanation` hashing) | `lib/core/explanation.ml` (smallest fix, no new constructor), `lib/core/prop/alldiff.ml`, `lib/core/prop/table.ml`, `lib/core/trace.ml`, `test/unit/test_endtoend.ml`, `test/unit/test_trace.ml`, docs/DECISIONS.md (D-0216), docs/ROADMAP.md (row T18) | agent-hash (`wave64-hash`) | 2026-11-23 |
 
 ## Cross-session requests
 
