@@ -26479,117 +26479,118 @@ target after it.
 - The layer shares are cycles sampled on a loaded node, multiplied by instruction counts, as in D-0169.
   They rank layers. They are not exact instruction counts per layer.
 
-## D-0208  M20-pernode-T4 (learned part): a learned PB row keeps a WITNESS of quiet, a few non-false literals whose sum rules out every pruning, and checks it before its pass. Same runs in the same order, so the same trees and the same proof
+## D-0208  M20-pernode-T4 (learned part): watching a learned PB row was measured and NOT taken; the pass exits after one walk when nothing is forceable. Same runs in the same order, byte-identical proofs, costas -47 % and mknap -35 % instructions per node without proof
 
-**Status**: DECIDED and implemented on `wave60-watch` by agent-watch, 2026-11-23. Not merged (the
-orchestrator merges after the gate). Measurements in section 6. Reopens D-0052's refusal of
-mutable propagator state for one object, the learned PB row, and says why the reason for that
-refusal does not apply to what is added.
+**Status**: DONE on `wave60-watch` by agent-watch, 2026-11-23, not merged (the orchestrator gates and
+merges). D-0052's refusal of a cached slack is NOT reopened: the design that reopened it was built,
+measured and withdrawn (section 3). Runs in `/scratch/arthur/watch-runs/`.
 
 ### 1. The problem (D-0207 section 5 item 1, rank 1 of section 6)
 
-A learned PB row (`Pb.Learned_pb`) has no advisor: every bound move of any of its variables queues
-it, and every run recomputes the status of every term from `Store.get`. On costas 14 the rows run
-1 292 times per node for 16.5 runs that prune, on mknap2-1 2 827 times for 0.91, and those runs with
-the engine's work for them are 83 % and 93 % of a node. A learned clause already has two watches
-and an advisor (M6-T20, D-0104; D-0138), which is not the case here.
+A learned PB row (`Pb.Learned_pb`) has no advisor: every bound move of one of its variables queues
+it, and every run recomputes every term from `Store.get` in three walks (`snapshot`, `effective_all`,
+`mark_forceable`). On costas 14 the rows run 1 292 times per node, on mknap2-1 2 827 times, and almost
+no run prunes (measured at 3 000 nodes: 4.6 % of the runs on costas, 0.2 % on mknap). With the
+engine's work for them they were 83 % and 93 % of a node. Learned clauses already have two watches
+and an advisor (M6-T20, D-0104, D-0138), and are not changed here.
 
 ### 2. The constraint that decides the design: the run ORDER must not move
 
-The task asks for the same propagation result, stdout and node counts on all test models and on the
-differential lane. Fewer wakes is not enough for that. D-0173 is the measurement: resting a satisfied
-learned clause loses no pruning, but it changes the trail entry at which the clause is woken, and
-250 of 301 lane runs differed (another 1UIP clause, another tree). An advisor that DROPS a wake of a
-PB row has the same defect, and it is not a corner case. In the FIFO phase a row woken by a change A
-that cannot make it prune sits at A's place in the queue. If a later change B, made before that place
-comes up, makes it prune, today's engine runs it at A's place, and an engine that dropped A runs it at
-B's place, after every instance queued in between. The two prunings then land in another order, the
-trail differs, and so do the reasons conflict analysis reads.
+The task required the same stdout and node counts on all test models and on the differential lane.
+Fewer wakes does not give that. D-0173 is the measurement: resting a satisfied learned clause loses no
+pruning, but it changes the trail entry at which the clause is woken, and 250 of 301 lane runs
+differed (another 1UIP clause, another tree). An advisor that DROPS a wake of a PB row has the same
+defect. In the FIFO phase a row woken by a change A that cannot make it prune sits at A's place in the
+queue. If a later change B, made before that place comes up, makes it prune, today's engine runs it
+at A's place and an engine that dropped A runs it at B's place, after every instance queued in
+between. The prunings land in another order, the trail and the reasons differ, and so does the tree.
+So the wakes, the queue and the run bracket stay as they are. Only what a run costs may change, and
+each run must return what it returned before.
 
-So the wakes, the queue and the run bracket are kept exactly as they are, and only what a run costs
-changes. Every run is still made, at the same place, and returns the same thing. A run that would
-change nothing answers in O(|W|) instead of O(row).
+### 3. Measured and withdrawn: a witness of quiet (commit `c99d2b2`, reverted in `3acccc4`)
 
-### 3. The design: a witness of quiet, checked against the live store
+For `sum a_i l_i >= b` with terms grouped by (variable, polarity), a set W of term indices with every
+literal non-false and `sum_W a - max_g (sum_{W, g} a) >= b` proves that a pass can neither force nor
+fail (no conflict: the non-false sum is at least b; no forcing: a term's ladder-effective coefficient
+counts its own group only, and the other groups hold at least b). The row kept W between runs and
+re-read its literals at every run, so a stale W cost a pass and never an answer (a cached CHOICE,
+not D-0052's cached number). It kept the order exactly, the unit test compared it with the plain pass
+over 12 386 runs of random searches with backtracks, and a hand-placed bad witness and the
+BAGUETTE_DEBUG check both caught a broken (C).
 
-For a row `sum a_i l_i >= b` over order literals, group the terms by (variable, polarity), the groups
-`Pb.layout_of` already builds. A WITNESS is a set W of term indices such that
+It was slower. At 3 000 nodes without proof, instructions:
 
-    (C)  every literal of W is non-false under the live domains, and
-         sum_{j in W} a_j  -  max_g ( sum_{j in W, group j = g} a_j )  >=  b.
+| | main | witness | fast exit (section 4) | both |
+|---|---|---|---|---|
+| costas 14 | 32.08 G | 38.67 G (+20.5 %) | 26.56 G (-17.2 %) | 33.81 G |
+| mknap2-1 | 26.11 G | 32.45 G (+24.3 %) | 19.86 G (-23.9 %) | 28.65 G |
 
-**(C) implies that a pass changes nothing and does not fail.** Let N_g be the sum of the non-false
-coefficients of group g and N their sum, so the pass's slack is N - b.
-- No conflict: N >= sum_W a_j >= b, so the slack is >= 0.
-- No forcing: `Pb.pass` forces an open term i only when its ladder-effective coefficient exceeds the
-  slack, and effective(i) sums non-false terms of i's own group only, so effective(i) <= N_g with g
-  i's group. And slack = N_g + sum_{h <> g} N_h - b >= N_g + (sum_W a - W_g) - b >= N_g, since every
-  watched term is non-false (N_h >= W_h) and (C) bounds the watched sum outside any one group by b.
-So effective(i) <= slack for every open i, `mark_forceable` finds nothing, and the pass returns
-`Fixpoint` with the store untouched. For a clause-shaped row (b = 1, unit coefficients) (C) is "two
-non-false literals on two different (variable, polarity) groups", the argument `Pb.quiet` already
-makes for degree 1.
+The learned rows of these families sit close to propagating. A witness needed 61 of 102 literals on
+average on costas and 40 of 58 on mknap, one could be built after 42 % and 72 % of the passes, and it
+answered 11 % and 40 % of the runs. Checking 60 % of a row and rebuilding after every pass costs more
+than the one walk it saves. A slack counter on the trail (the option the task named) would have the
+same denominator problem at a higher price: what decides quiet is the largest open group sum as well
+as the slack (section 4), and keeping a maximum up to date under backtracking needs more than a
+counter. Not built.
 
-**The run.** `Learned_pb.propagate` checks the witness first: if W is set and none of its literals is
-false NOW, (C) holds now (its arithmetic part does not depend on the store), so it returns `Fixpoint`.
-Otherwise it runs the unchanged `Pb.propagate` and, if that returns `Fixpoint`, rebuilds W from the
-live store: satisfied literals first (they stay non-false until a backtrack pops their support), then
-open ones, stopping as soon as (C) holds. If even every non-false literal does not satisfy (C), W is
-left unset and the next run is a full pass. On `Conflict` W is unset.
+### 4. Taken: the pass's exact early exit
 
-**Why it is not D-0052's cached counter.** The pb.ml header refused "a cached slack updated on the
-trail", because a number computed under domains the trail has since undone yields a wrong pruning
-whose `rup` is still valid for the F it names. W is not a number and nothing in it is trusted: it is
-a CHOICE of which literals to look at, and every run re-reads those literals from the live store.
-A stale W (literals un-falsified by a backtrack, or falsified since) costs at most one full pass,
-never a wrong answer, because the only thing a skip relies on is (C) evaluated on the current
-domains. So there is no counter on the trail and no undo hook in `Store`, and the option the task
-named (a slack counter on the trail, undone by `Store`) is not taken. That option needs a per-row
-undo record per falsification, i.e. the engine or `Store` telling the row which literal crossed. It
-buys a check in O(1) instead of O(|W|) and costs a new kind of trail entry. W gives the same skips
-without either.
+The largest ladder-effective coefficient of an OPEN term is exactly the largest per-group sum of open
+coefficients. A term i of group g counts the non-false terms of g at least as strong as itself; a
+satisfied term of g is strictly weaker than every open one (for `x >= k`, satisfied is `k <= lo` and
+open is `lo < k <= hi`; mirrored for `x <= k - 1`), so i counts open terms of g only, and the weakest
+open term of g counts all of them. So `mark_forceable` finds a forceable term iff the slack is below
+that maximum. `Pb.snapshot` computes it in the walk it already made (`scratch.osum`, `max_open`) and
+`Pb.pass` returns `Fixpoint` when `slack >= max_open`, without `effective_all` and `mark_forceable`.
+Overflow is kept exact: a group sum that would not fit sets `max_open` to `max_int`, which never takes
+the exit, so `effective`'s `Checked` raise is still reached where it was. The same walk now sums the
+slack with `+` when the layout's `plain` flag says no partial sum can overflow (the coefficient total
+fits, and so does it minus a negative degree); otherwise through `Checked.add` as before.
 
-**Why the order is the same, exactly.** The engine is not changed. A row is queued, seeded and run
-when it was before, the run bracket (`Store.run_as`, `check_attribution`, `bump_by_id`) is made as
-before, and the run returns what the full pass would have returned, with the trail untouched. So the
-runs, the effective runs, the trail, the reasons, the proof, the learned constraints and the tree are
-the old ones. The proof is expected byte-identical, and section 6 says whether it was.
+Every run returns the same outcome on the same store, so the runs, their order, the trail, the
+reasons, the proof, the learned constraints and the tree are main's. It applies to every `Pb` row, the
+model's and the clause face's too, because `pass` is shared; for those it is the same answer faster.
+It adds no state and touches no invariant: I-P2, I-P6, I-P7 and I-X6 hold as before, and pb.ml's "No
+mutable state" section stands, with a paragraph saying what was measured.
 
-### 4. Invariants touched
+Tests: `test_pb`'s E3a comparison of the layout pass with the list pass (3 000 random rows, prunings,
+conflicts, long groups, the two overflow rows) covers the exit. Two breaks were checked to redden it:
+exiting at `slack + 1 >= max_open` (test (a) and its integer scene fail) and taking
+the largest open COEFFICIENT instead of the group sum (the ladder test and E3a).
 
-- I-P2 (fixpoint), I-P6, I-X6: untouched, because a skipped run is one that would change nothing, and
-  every other run is the old pass.
-- I-P7 (the advisor's contract): NOT used. The row's advisor still answers yes to every change; the
-  witness acts inside the run, not on the wake. That is what keeps the order (section 2).
-- New, stated in pb.ml's header and in INVARIANTS as I-P8: **a cached choice may be stored between
-  runs, a cached conclusion may not.** A propagator may remember which literals to look at, if every
-  run that relies on them re-reads them from the live store and the skip it takes is a consequence of
-  what it read. Under BAGUETTE_DEBUG every skip is checked against the pass's read-only half
-  (`Pb.would_act`: the snapshot, the slack and the forceable terms, without assigning), and a skip
-  where the pass would act raises.
-- The D-0052 sentence "no propagator in lib/core/prop/ has a single mutable field" was already false
-  since M6-T20 (the learned clause's watches); pb.ml's header section "No mutable state, and no
-  watched literals" is rewritten to say what is mutable and why each piece is safe.
+What it costs in clarity: one field in the scratch record, one in the layout, a second copy of the
+snapshot loop for the grouped case, and section 4's argument in `snapshot`'s comment.
 
-### 5. What it costs in clarity, and the fallback
+### 5. What is left, and the fallback
 
-- One mutable array and one length per learned PB row, a 40-line witness builder and a 15-line check
-  in pb.ml, and the argument of section 3 in pb.ml's header. `Pb.propagate` (model rows, the clause
-  face, `Learned_clause`) is not changed: the witness is used by `Learned_pb` only, so the model's own
-  rows and every clause keep their code path.
-- What it does NOT remove: the engine's work for the wakes (walk, queue, bracket), which D-0207 put at
-  11.5 M of a costas node and 16.3 M of an mknap node. Removing it needs an advisor that drops wakes,
-  which moves the order (section 2). A version that keeps the order would have to remember the place
-  a dropped wake would have taken in the queue and insert the row there if a later wake finds (C)
-  broken (a FIFO keyed by sequence number). It is possible and is the next step if the remaining
-  engine share is worth it; it is a change to engine.ml's hot loop and is not made here.
-- **The fallback, D-0169 (b)**: if a family's learned rows rarely have a witness (rows that are tight
-  at most nodes), the remaining lever is to stop RUNNING learned constraints that do not prune, while
-  keeping them on the page. That changes trees wherever a learned constraint would have pruned (on
-  costas 16.5 times per node), so it needs a rule for WHEN (by search mode: a fixed search without
-  backjumps, as on the four D-0207 families that never backjump; or adaptive on the effective rate per
-  row, as `Retention`'s counters already measure) and is a default-behaviour change for the user. It
-  is recorded here as the fallback, not implemented.
+- The engine's work for the wakes (walk, queue, run bracket) is untouched: D-0207 put it at 11.5 M of
+  a costas node and 16.3 M of an mknap node, and it is now the largest share there. Removing it while
+  keeping the order needs a test at WAKE time that is cheap and exact, plus a queue that remembers the
+  place a dropped wake would have taken (a FIFO keyed by sequence number) so that a row found active
+  later is run there. Section 3 says the cheap test does not exist for these rows. So this is the
+  point where the order has to be given up or the work kept.
+- **The fallback, D-0169 (b)**: stop RUNNING learned constraints that do not prune, keeping them on
+  the page. It changes trees wherever a learned row would have pruned (16.5 times per costas node),
+  so it needs a rule for WHEN: by search mode (a fixed search without backjumps, as on the four D-0207
+  families that never backjump), or adaptive on the effective rate per row, which the engine's
+  `runs_by_id`/`eff_by_id` already count. A default-behaviour change, for the user. Not implemented.
 
-How to revert: revert the code commit on `wave60-watch` (named in section 6); nothing else depends
-on it.
+### 6. Measurements
+
+D-0207's five instances, instructions per node, `perf stat -e instructions:u`, one process at a time,
+release binaries (`make release`, D-0171): main `e844eb9` = `7826cf88`, this branch = `4de68ff1`.
+Nodes, answers, every `--stats` and `limit:` counter except the clocks, and the `.pbp` (md5) are
+identical in all ten pairs.
+
+| instance | nodes | --no-proof main | --no-proof branch | proof main | proof branch |
+|---|---|---|---|---|---|
+| QR48 (codes-cp, 3 fixed) | 29 779 | 1.044 M | 1.048 M (+0.4 %) | 1.841 M | 1.844 M (+0.1 %) |
+| costas 14 | 21 129 | 44.74 M | 23.86 M (-46.7 %) | 54.11 M | 33.25 M (-38.6 %) |
+| mknap2-1 (cut 20 000) | 20 001 | 40.30 M | 26.37 M (-34.6 %) | 41.08 M | 27.06 M (-34.1 %) |
+| javarouting trip_6_3 (cut 20 000) | 20 001 | 12.58 M | 12.59 M (+0.0 %) | 24.55 M | 24.58 M (+0.1 %) |
+| rcpsp 11, bound 66 | 2 010 | 2.636 M | 2.499 M (-5.2 %) | 10.25 M | 10.12 M (-1.3 %) |
+
+QR48's +0.4 % is the clause rows (degree 1) paying for the per-group bookkeeping in the snapshot of
+the passes `quiet` does not answer. The gate (unit suite, models, lanes) is in the handoff note.
+
+How to revert: revert `3acccc4`; the record and the withdrawn witness (`c99d2b2`) are history only.
