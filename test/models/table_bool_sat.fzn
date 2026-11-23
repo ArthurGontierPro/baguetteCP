@@ -1,0 +1,20 @@
+% M18-coverage-T1 (D-0206): flattened by MiniZinc 2.10.1 with baguette's mznlib from
+% mznlib/test/table_src_bool_sat.mzn.
+% An exactly-two-of-four table over var bool, with a[1] -> a[4] and not a[2].
+
+predicate baguette_table_bool(array [int] of var bool: x,array [int] of int: t,array [int] of var bool: s);
+array [1..24] of int: X_INTRODUCED_28_ = [1,1,0,0,1,0,1,0,1,0,0,1,0,1,1,0,0,1,0,1,0,0,1,1];
+var bool: X_INTRODUCED_16_;
+var bool: X_INTRODUCED_18_;
+var bool: X_INTRODUCED_19_;
+var bool: X_INTRODUCED_22_ ::var_is_introduced ;
+var bool: X_INTRODUCED_23_ ::var_is_introduced ;
+var bool: X_INTRODUCED_24_ ::var_is_introduced ;
+var bool: X_INTRODUCED_25_ ::var_is_introduced ;
+var bool: X_INTRODUCED_26_ ::var_is_introduced ;
+var bool: X_INTRODUCED_27_ ::var_is_introduced ;
+array [1..4] of var bool: a:: output_array([1..4]) = [X_INTRODUCED_16_,false,X_INTRODUCED_18_,X_INTRODUCED_19_];
+array [1..6] of var bool: X_INTRODUCED_21_ ::var_is_introduced  = [X_INTRODUCED_22_,X_INTRODUCED_23_,X_INTRODUCED_24_,X_INTRODUCED_25_,X_INTRODUCED_26_,X_INTRODUCED_27_];
+constraint baguette_table_bool(a,X_INTRODUCED_28_,X_INTRODUCED_21_);
+constraint bool_clause([X_INTRODUCED_19_],[X_INTRODUCED_16_]);
+solve  satisfy;

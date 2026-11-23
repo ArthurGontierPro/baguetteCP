@@ -142,6 +142,7 @@ type t = {
   slot_dhi : int array;
   slot_of_name : (string, int) Hashtbl.t;
   tails : tail option array; (* per tuple *)
+  aliased : bool; (* x names a variable twice: S can kill a tuple, so the call loops *)
   (* Supports: position i's column spans cmin.(i) .. cmin.(i) + Array.length sup.(i) - 1;
      sup.(i).(v - cmin.(i)) lists the tuples with t_i = v, increasing. *)
   cmin : int array;
@@ -239,6 +240,13 @@ let make store ~xs ~tuples ~sels : t =
     slot_dhi = Array.map (fun (_, _, hi) -> hi) slots;
     slot_of_name;
     tails = Array.make nt None;
+    aliased =
+      ns
+      < Array.length
+          (Array.of_list
+             (List.filter
+                (function Cell _ -> true | Fixed _ -> false)
+                (Array.to_list xs)));
     cmin;
     sup;
     residue = Array.map (Array.map (fun _ -> 0)) sup;
@@ -469,7 +477,11 @@ let count_pass store t =
     done;
     move_sel store t ~set:true !last)
 
-(* Step E: a set selector fixes x to its tuple. *)
+(* Step E: a set selector fixes x to its tuple. Over distinct variables every t_i is in
+   dom(x_i) (K has run), so no push can fail; with x naming a variable twice, an earlier
+   push of the same tuple can have moved it past t_i, and that conflict is built here, on
+   the selector's tail and the bound it crossed, rather than left to [Store.apply]'s
+   [Failed] arm, whose reason is empty (Store.unattributed_conflict). *)
 let enforce_pass store t =
   let changed = ref false in
   List.iter
@@ -480,6 +492,7 @@ let enforce_pass store t =
           | Fixed _ -> ()
           | Cell { var; name; dlo; dhi } ->
               let v = t.tup.((k * t.n) + i) in
+              let s = t.slot.(i) in
               let push concl apply =
                 start t;
                 add_sel store t ~set:true k;
@@ -492,7 +505,15 @@ let enforce_pass store t =
                 | Store.Changed -> changed := true
                 | Store.Unchanged -> ()
               in
+              let crossed key bound =
+                start t;
+                add_sel store t ~set:true k;
+                add_key t key bound;
+                raise (Found (conflict_now store t))
+              in
               let d = Store.get store var in
+              if Domain.hi d < v then crossed ((2 * s) + 1) (v - 1);
+              if Domain.lo d > v then crossed (2 * s) (v + 1);
               if Domain.lo d < v then
                 push (Reason.at_least ~name ~decl:dlo v) (Store.set_lo store var v);
               let d = Store.get store var in
@@ -569,18 +590,26 @@ let values store t i =
             | Store.Changed | Store.Unchanged -> ()))
         (Store.get store var)
 
+(* With x naming a variable twice, S at one position can remove a value another position's
+   live tuple carries, so the call goes round again until S changes nothing; over distinct
+   variables it cannot, and one round is the fixpoint. *)
 let propagate t store =
   try
-    let rec settle () =
-      ignore (kill_pass store t : bool);
-      count_pass store t;
-      if enforce_pass store t then settle ()
+    let rec round () =
+      let rec settle () =
+        ignore (kill_pass store t : bool);
+        count_pass store t;
+        if enforce_pass store t then settle ()
+      in
+      settle ();
+      ignore (read_live store t : int list);
+      let mark = Store.trail_length store in
+      for i = 0 to t.n - 1 do
+        values store t i
+      done;
+      if t.aliased && Store.trail_length store > mark then round ()
     in
-    settle ();
-    ignore (read_live store t : int list);
-    for i = 0 to t.n - 1 do
-      values store t i
-    done;
+    round ();
     Propagator.Fixpoint
   with Found c -> Propagator.Conflict c
 
