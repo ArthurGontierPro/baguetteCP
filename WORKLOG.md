@@ -20,6 +20,7 @@ of it to every session and stopping at a broken line before it even reached the 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
 | M22-review-T4 (all but the module map), T6 (false comments in unclaimed files), T7, the speed section | CLAUDE.md (context-budget table, the `dune runtest` section; NOT the module map), README.md, lib/core/domain.ml, lib/core/retention.ml, lib/proof/encoding.ml, lib/flatzinc/lexer.ml, bin/main.ml (comments and the `--proof-comments` help line only), scripts/fuzz_lane.sh (new), scripts/README.md, tools/fuzz/, docs/reports/2026-11-23-code-review.md, docs/ROADMAP.md (M22-review section), WORKLOG.md | review-1123 (laptop session, branch `review-easy`, gate on fataepyc-07) | 2026-11-23 |
+| M20-pernode-T5 (proof text through one buffer, D-0209) | lib/proof/writer.ml, lib/proof/lit.ml, lib/proof/opb.ml, docs/DECISIONS.md (D-0209), docs/ROADMAP.md (row M20-pernode-T5), WORKLOG.md | agent-writer (fataepyc-06, worktree /scratch/arthur/wt-writer, branch `wave60-writer`) | 2026-11-23 |
 
 ## Cross-session requests
 
