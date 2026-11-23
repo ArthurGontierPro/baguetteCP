@@ -330,6 +330,9 @@ lib/proof/      Baguette_proof
   opb.ml                    writes the .opb model file
   writer.ml                 writes the .pbp proof; owns the constraint-id counter
                             (I-X2: an id you receive is an id you must delete)
+  text.ml                   one line's bytes, for writer.ml and opb.ml: integers and
+                            literal names written in place, each variable's name prefix
+                            rendered once (M20-pernode-T5, D-0209)
   checker.ml                resolves which veripb to use; mirrors scripts/checker.sh
 
 test/unit/                  22 binaries: test_core test_domain test_engine test_prop
