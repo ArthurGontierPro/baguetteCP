@@ -523,7 +523,7 @@ after; say what the change costs in clarity as well as what it gains.
 
 Since November 2026 baguette's runs go to `fataepyc-06` (git remote `node06`, bare repo
 `/cluster/arthur/baguette.git`); `fataepyc-07` carries the user's other experiments (graph solvers,
-`veripb`, Julia harnesses, the codes-cp side project) and is **off limits for baguette runs**. Both
+`veripb`, Julia harnesses, the codes-cp side project) and is **off limits for baguette runs**. **Amended 2026-11-23 (the user): while it is idle, baguette campaigns may run on `fataepyc-07` too**, launched over `ssh` from fataepyc-06 (`/cluster` is NOT shared between the two nodes, the home directory is; `/scratch` is local to each). Its other processes stay untouchable: on that day two `veripb` runs of another experiment had been running for ten days. Check `uptime` and `ps -u arthur` there before every campaign, and stop launching if another experiment starts. Both
 run under the **same user**, often for hours or days, and other sessions share fataepyc-06 too. On 2026-10-28 a session cleaning up its own runs did `pkill -u arthur -f veripb` and
 killed the `veripb` children of an experiment that had been running for hours. It had to be
 restarted from scratch.
