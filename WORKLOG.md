@@ -19,6 +19,7 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
+| M18-coverage-T0, M18-coverage-T1 | tools/compare/challenge_globals.py, lib/core/prop/table.ml (new), lib/core/dune, lib/flatzinc/compile.ml, mznlib/fzn_table_int.mzn, mznlib/fzn_table_bool.mzn, docs/SPEC.md §2.1, docs/DECISIONS.md (D-0206), docs/ARCHITECTURE.md §1, CLAUDE.md map, test/models/table_*, test/unit/, docs/ROADMAP.md (T0, T1 rows) | agent-table (wave59-table) | 2026-11-23 |
 
 ## Cross-session requests
 
