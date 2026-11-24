@@ -1541,6 +1541,137 @@ let table_src =
       "solve :: int_search([x1, y, x2], input_order, indomain_min, complete) satisfy;\n";
     ]
 
+(* circuit (D-0217, M18-coverage-T3): an eight-city tour whose cost must not exceed the
+   optimum (18), as a SATISFACTION problem so that the search meets conflicts and writes
+   its trace, and a tour exists (a refusal below is a judgement on a line, not the rup
+   vacuity of a contradictory database). Two lines of that trace are the targets:
+   - the PREVENT line removing 3 from s5 under s3 = 7 and s7 = 5, a chain that avoids the
+     root, so the positions are not pinned and the line rests on the cut written ahead of
+     it (three GE rows divided by 8);
+   - a POSITION line, p4 >= 6 from s4 = 7 and the pinned p7 >= 7 (END above it).
+   The lines are named by their text, as [member_gap_line] is: a change of the search
+   that moves them makes the lanes say "not in the proof" rather than test another line. *)
+let circuit_src =
+  String.concat ""
+    [
+      "predicate baguette_circuit(array [int] of var int: xs,array [int] of var int: \
+       pos,int: root);\n";
+      "var 1..8: s1 :: output_var;\n";
+      "var 1..8: s2 :: output_var;\n";
+      "var 1..8: s3 :: output_var;\n";
+      "var 1..8: s4 :: output_var;\n";
+      "var 1..8: s5 :: output_var;\n";
+      "var 1..8: s6 :: output_var;\n";
+      "var 1..8: s7 :: output_var;\n";
+      "var 1..8: s8 :: output_var;\n";
+      "var 1..7: p2;\n";
+      "var 1..7: p3;\n";
+      "var 1..7: p4;\n";
+      "var 1..7: p5;\n";
+      "var 1..7: p6;\n";
+      "var 1..7: p7;\n";
+      "var 1..7: p8;\n";
+      "var 0..9: c1;\n";
+      "var 0..9: c2;\n";
+      "var 0..9: c3;\n";
+      "var 0..9: c4;\n";
+      "var 0..9: c5;\n";
+      "var 0..9: c6;\n";
+      "var 0..9: c7;\n";
+      "var 0..9: c8;\n";
+      "constraint array_int_element(s1, [0, 4, 5, 2, 7, 8, 3, 2], c1);\n";
+      "constraint array_int_element(s2, [2, 0, 1, 7, 9, 5, 1, 4], c2);\n";
+      "constraint array_int_element(s3, [9, 9, 0, 6, 5, 3, 2, 5], c3);\n";
+      "constraint array_int_element(s4, [4, 1, 5, 0, 5, 4, 3, 5], c4);\n";
+      "constraint array_int_element(s5, [5, 6, 2, 6, 0, 7, 9, 4], c5);\n";
+      "constraint array_int_element(s6, [3, 4, 8, 5, 2, 0, 9, 5], c6);\n";
+      "constraint array_int_element(s7, [1, 5, 5, 9, 4, 7, 0, 7], c7);\n";
+      "constraint array_int_element(s8, [5, 7, 8, 3, 4, 5, 5, 0], c8);\n";
+      "constraint all_different_int([s1, s2, s3, s4, s5, s6, s7, s8]);\n";
+      "constraint baguette_circuit([s1, s2, s3, s4, s5, s6, s7, s8], [p2, p3, p4, p5, \
+       p6, p7, p8], 1);\n";
+      "constraint int_lin_le([1, 1, 1, 1, 1, 1, 1, 1], [c1, c2, c3, c4, c5, c6, c7, c8], \
+       18);\n";
+      "solve :: int_search([s1, s2, s3, s4, s5, s6, s7, s8], input_order, indomain_min, \
+       complete) satisfy;\n";
+    ]
+
+let circuit_prevent_line =
+  "rup +1 ~s3_ge_7 +1 s3_ge_8 +1 ~s7_ge_5 +1 s7_ge_6 +1 ~s5_ge_3 +1 s5_ge_4 >= 1 ;"
+
+let circuit_position_line = "rup +1 p4_ge_6 +1 ~s4_ge_7 +1 s4_ge_8 +1 ~p7_ge_7 >= 1 ;"
+
+(* A text lane over the honest circuit proof: [mutate lines i] rewrites the proof around
+   line [i], the one whose body is [target], and the result must be refused at the RUP
+   wording. Labels stay bound, so the checker judges a derivation, not the grammar. *)
+let circuit_text_lane c ~proof ~opb ~target ~mutate name =
+  let lane = Printf.sprintf "%s/%s" c.c_tag name in
+  ran c name;
+  let lines = Array.of_list (String.split_on_char '\n' (read_file proof)) in
+  let body l =
+    let l = String.trim l in
+    if String.length l > 0 && l.[0] = '@' then
+      match String.index_opt l ' ' with
+      | Some k -> String.sub l (k + 1) (String.length l - k - 1)
+      | None -> l
+    else l
+  in
+  let at = ref (-1) in
+  Array.iteri (fun i l -> if !at < 0 && body l = target then at := i) lines;
+  if !at < 1 then (
+    incr checks;
+    fail "%s: the target line is not in the proof, so nothing was tested" lane)
+  else
+    match mutate lines !at with
+    | None ->
+        incr checks;
+        fail "%s: the mutation found nothing to corrupt around the target" lane
+    | Some kept ->
+        let pbp = proof ^ "." ^ name ^ ".pbp" in
+        let oc = open_out pbp in
+        output_string oc (String.concat "\n" (Array.to_list kept));
+        close_out oc;
+        let v, out = check_proof { pbp; opb; fired = true } in
+        let rejected = v = Rejected_on_derivation in
+        check (Printf.sprintf "%s: veripb rejects the corrupted proof" lane) rejected;
+        check
+          (Printf.sprintf "%s: ... at the checker's RUP wording" lane)
+          (contains out rup_wording);
+        if not (rejected && contains out rup_wording) then show out
+
+(* The label of a line and its words after it. *)
+let label_and_words l =
+  match String.split_on_char ' ' (String.trim l) with
+  | lab :: rest when String.length lab > 0 && lab.[0] = '@' -> Some (lab, rest)
+  | _ -> None
+
+(* The pol just before line [i] keeps its label and its FIRST operand only. *)
+let circuit_truncate_cut lines i =
+  match label_and_words lines.(i - 1) with
+  | Some (lab, "pol" :: first :: _ :: _) ->
+      let kept = Array.copy lines in
+      kept.(i - 1) <- Printf.sprintf "%s pol %s ;" lab first;
+      Some kept
+  | _ -> None
+
+(* Line [i] loses its last literal (a fact the claim rests on). *)
+let circuit_drop_last lines i =
+  match label_and_words lines.(i) with
+  | Some (lab, "rup" :: words) -> (
+      let rec split acc = function
+        | ">=" :: _ -> List.rev acc
+        | w :: rest -> split (w :: acc) rest
+        | [] -> List.rev acc
+      in
+      match List.rev (split [] words) with
+      | _lit :: _coef :: (_ :: _ :: _ :: _ as keep_rev) ->
+          let kept = Array.copy lines in
+          kept.(i) <-
+            Printf.sprintf "%s rup %s >= 1 ;" lab (String.concat " " (List.rev keep_rev));
+          Some kept
+      | _ -> None)
+  | _ -> None
+
 (* An emitter lane that also asserts the checker's WORDING at full strength: a rejection
    on the grammar would satisfy [Rejected_on_derivation]'s exit status and say nothing
    about the derivation (CLAUDE.md, "assert the checker's wording"). *)
@@ -2556,6 +2687,47 @@ solve :: seq_search([int_search([b, y], input_order, indomain_min, complete), in
         regular_lane c ~build:build_tab
           ~knob:(knob ~site:"trace: ~x2_ge_2" Writer.Mutation.Drop_literal)
           "enforce-fact");
+
+    (* -- M18-coverage-T3: circuit (D-0217) -------------------------------------------
+       [circuit_src] above. Three text lanes over the honest proof, each refused at the
+       RUP wording:
+         cut-truncated  the cut ahead of the prevent line keeps one GE row: the line,
+                        which no unit propagation over the rows reaches, is refused;
+         prevent-fact   the prevent line drops s7 = 5's last literal;
+         position-fact  the position line drops the pinned p7 >= 7. *)
+    let solve_circ ~name =
+      let m = F.Builder.of_string ~file:name circuit_src in
+      let c = Compile.compile m in
+      let opb = Filename.concat dir (name ^ ".opb")
+      and pbp = Filename.concat dir (name ^ ".pbp") in
+      let oc = open_out opb in
+      Encoding.write_opb ~comments:[ "test_mutation: " ^ name ] c.Compile.encoding oc;
+      close_out oc;
+      let oc = open_out pbp in
+      let writer = Writer.create ~comments:true ~audit:true oc in
+      Encoding.start_proof c.Compile.encoding writer;
+      let ctx = Justify.create ~writer ~encoding:c.Compile.encoding in
+      let outcome =
+        Search.solve ~engine:c.Compile.engine ~store:c.Compile.store ~ctx
+          ~check:(fun _ -> true)
+          ?order:c.Compile.order ()
+      in
+      close_out oc;
+      ({ pbp; opb; fired = false }, outcome)
+    in
+    let b, outcome = solve_circ ~name:"circuit" in
+    check "circuit: the solver finds a tour within the bound (the instance is SAT)"
+      (match outcome with Search.Sat _ -> true | Search.Unsat -> false);
+    gated ~tag:"circuit"
+      ~control:(fun () -> control_holds ~tag:"circuit" ~proof:b.pbp)
+      ~declares:[ "cut-truncated"; "prevent-fact"; "position-fact" ]
+      (fun c ->
+        circuit_text_lane c ~proof:b.pbp ~opb:b.opb ~target:circuit_prevent_line
+          ~mutate:circuit_truncate_cut "cut-truncated";
+        circuit_text_lane c ~proof:b.pbp ~opb:b.opb ~target:circuit_prevent_line
+          ~mutate:circuit_drop_last "prevent-fact";
+        circuit_text_lane c ~proof:b.pbp ~opb:b.opb ~target:circuit_position_line
+          ~mutate:circuit_drop_last "position-fact");
 
     (* -- M18-coverage-T2: diffn's relaxations (D-0213) ----------------------------------
        [diffn_lane_src] above. The relaxations are cumulative.ml's, so these lanes
