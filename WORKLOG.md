@@ -19,6 +19,7 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
+| M21-memory-T1, M21-memory-T2 | `docs/DECISIONS.md` (D-0218), `docs/ROADMAP.md` (M21 rows), `WORKLOG.md`; no `lib/` or `bin/` change (instrumentation as a patch in `/cluster/arthur/baguette-results/memory/`) | agent-memory (branch `wave66-memory`) | 2026-11-24 |
 
 ## Cross-session requests
 
