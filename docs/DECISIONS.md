@@ -29300,3 +29300,23 @@ for views didn't work properly." It decides three points and replaces the recomm
    accepts no file cake refuses, and the rewriting is a tool outside the solver (`deview.py` is the
    prototype). Section 8 point 2 (the reader accepts views) is withdrawn.
 3. **A version other than 1 is refused**, so version 2 cannot be read by mistake as version 1.
+
+### 12. The development pair, measured (2026-11-24)
+
+The user downloaded `develop-cp` as a zip whose comment is `62bdc7f5`. Its `cake_pb_cp` (sha256
+`5bf9b04a`, gcc without options) is at `fataepyc-06:/cluster/arthur/cakepb-develop-cp-62bdc7f/`,
+mode 700. **The repository is private, so neither the source nor the binary enters this one.**
+On the 203 `.scp` of section 2, `decide`:
+
+| proof against the development cake's `.opb` | VERIFIED by `cake_pb_cp` |
+|---|---|
+| GCS `main` `d7468618`, `solx` rewritten to `sol` | 198. The 5 others are the names and the `max` of section 2, and all 5 verify once renamed (203) |
+| the same as written | 94 |
+| GCS `cake-selector-conform` `011a2940` | the same 198 |
+| baguette `--e2e` (`1c179467`) | 193. 9 `cumulative` models cite `[cb]`, `root_nested_defining_gcc_unsat` cites `@i[x0][ge2][r]`, a row the new encoder does not write |
+| baguette through `bridge.py` | 197. 6 scheduling models fail |
+
+So GCS `main` and `develop-cp` agree on every model tried. Section 2's scheduling rejections and
+section 10's two failures came from mismatched versions. The views remain: of the 220 GCS files the
+development cake encodes 89, and 191 after `deview.py`. The T2 work on this pair is the 10
+models of the `--e2e` row.
