@@ -466,6 +466,7 @@ section 1. Shares are inclusive, of the whole run.
 
 | Task | Session | Date | Summary |
 |---|---|---|---|
+| M17-bench-series-T3 (history and the rule) | agent-history (`wave72-history`) | 2026-11-24 | `bench/series/HISTORY.md` with seven rows (D-0210, D-0203, D-0185, D-0175 two arms, D-0133, D-0121), and the orchestration bullet in CLAUDE.md. |
 | M17-bench-series-T1, T2 (the series driver and the first series on current main, D-0203) | agent-series (`wave58-series`) | 2026-11-24 | **D-0203.** `bench/series/run_series.sh` (phases setup, flatten, run, read, publish; resumable; veripb in its own 64 GB cgroup and 3 600 s limit; `--list`, `--solve-timeout`, no Chuffed/GCS flatten for baguette arms), `tools/compare/readme_table.py` (writes the README section). Series on release `f244c35a` (bits default, no proof cap, PAR 29 per arm): A 302+74 verified, B (`-f`) 346+95, C (`--no-proof`) 340+86 unverified; summed score 4 043 / 5 799 / 4 428 against D-0185's 2 789 / 3 581 / 3 237; 0 rejected, 0 veripb memory failures, 44 check time-outs; the cap would have cost one verified proof. Tables `/cluster/arthur/baguette-results/series-20261123/` |
 | M21-memory-T1, M21-memory-T2 (where the heap goes, D-0218) | agent-memory2 after agent-memory (`wave66-memory`) | 2026-11-24 | **D-0218.** Measurement only; the probe is `/cluster/arthur/baguette-results/memory/memprobe.patch`, reverted on the branch. OCaml's representation is 2.5 to 4 on record-heavy kinds and the GC's free space 1.5 to 5 on the budget, but the search refusals are what we keep: hole bitsets copied per pruning, 410 to 660 B per trail entry, 270 to 330 B per learned literal kept forever, proof explanations kept after their line. Five ranked fixes for T3 with estimates |
 | M19-config-T10 (the CDCL loop, D-0219) | agent-cdcl (`wave67-cdcl`) | 2026-11-24 | **D-0219 [AUTONOME].** `Search.cdcl` behind `BAGUETTE_CDCL=1`, default OFF and byte-identical; files `lib/core/search.ml`, `lib/core/learn.ml`, `test/unit/test_search_strategy.ml`, D-0219, ROADMAP T10/T11. On: every answer and optimum equal, every proof VERIFIED, mutation lanes refused. Default not changed; recommendation D (T11 first) |
@@ -675,6 +676,10 @@ section 1. Shares are inclusive, of the whole run.
 | M19-config-T0 (the tuning set) | agent-tuning (`wave59-tuning`) | 2026-11-23 | **D-0205.** `bench/tuning/`, 200 instances in 183 families. DONE except the driver hook. |
 
 ## Handoff notes
+
+### 2026-11-24 (agent-history, `wave72-history`): M17-bench-series-T3
+
+HISTORY.md is written from the records. Empty cells are SAT counts D-0210 and D-0121 do not give, and D-0121's commit and binary. D-0210 lives on `wave60-node07`: re-check its row when that branch merges.
 
 ### 2026-11-24 (agent-series, `wave58-series`): M17-bench-series-T1/T2, D-0203
 
