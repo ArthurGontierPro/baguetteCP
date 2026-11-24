@@ -19,7 +19,6 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M21-memory-T1, M21-memory-T2 | `docs/DECISIONS.md` (D-0218), `docs/ROADMAP.md` (M21 rows), `WORKLOG.md`; no `lib/` or `bin/` change (instrumentation as a patch in `/cluster/arthur/baguette-results/memory/`) | agent-memory (branch `wave66-memory`) | 2026-11-24 |
 
 ## Cross-session requests
 
@@ -466,6 +465,7 @@ section 1. Shares are inclusive, of the whole run.
 
 | Task | Session | Date | Summary |
 |---|---|---|---|
+| M21-memory-T1, M21-memory-T2 (where the heap goes, D-0218) | agent-memory2 after agent-memory (`wave66-memory`) | 2026-11-24 | **D-0218.** Measurement only; the probe is `/cluster/arthur/baguette-results/memory/memprobe.patch`, reverted on the branch. OCaml's representation is 2.5 to 4 on record-heavy kinds and the GC's free space 1.5 to 5 on the budget, but the search refusals are what we keep: hole bitsets copied per pruning, 410 to 660 B per trail entry, 270 to 330 B per learned literal kept forever, proof explanations kept after their line. Five ranked fixes for T3 with estimates |
 | M18-coverage-T4 (bin packing, D-0220) | agent-binpack (`wave68-binpack`) | 2026-11-24 | **D-0220 [AUTONOME].** mznlib only: std's bin-packing rows without the bool2int copies (`baguette_bool_lin_eq`/`_le` per bin over std's int_eq_reif indicators, loads restricted to their reachable sums). The refusals measured as search-time heap on four families of five; no outcome change on 20 instances, .opb 0.58 to 1.00, more nodes on 14 of 16 time-outs, 223 other models byte-identical |
 | M18-coverage-T3 (`circuit`, D-0217) | agent-circuit (`wave65-circuit`) | 2026-11-24 | **D-0217 [AUTONOME].** `lib/core/prop/circuit.ml`: mznlib routes `fzn_circuit` to `all_different` plus `baguette_circuit(x, pos, root)`, the .opb defines circuit by MTZ rows over position store variables, prevent + pinned positions, every subtour cut one `pol` ahead; `subcircuit` stays std. 20 instances: .opb 0.44 to 0.998, more nodes on 14 of 15 time-outs (default), p1f-pjs_10 time-out -> OPT, all checked proofs VERIFIED |
 | M18-coverage-T2 (`diffn`, D-0213) | agent-diffn (`wave61-diffn`) | 2026-11-24 | mznlib `fzn_diffn`, `fzn_diffn_nonstrict`: std's pairs plus the two cumulative relaxations over order copies; four models, theorem enumeration and 16 scenes in test_compile, two lanes in test_mutation; maps and PROOF-FORMAT 4. Complete 7 -> 9 of 25 routed Challenge instances, all VERIFIED |
@@ -702,6 +702,10 @@ Gates 96 to 98 green: 218 models byte-identical, lane 347/347, debug 333/333, sc
 Also open: after D-0208 the engine's wake work is the largest share left on costas and mknap; removing it needs the D-0169 (b) rule (rows that never prune are not woken), which changes default behaviour.
 
 **[AUTONOME] decisions**: D-0217 (a normative SPEC 2.1 sentence listing `baguette_circuit` among the builtins, as each native global has); D-0213 (above); D-0216 (alldiff reuses the node a rebuild would return; two dedups hashed; byte-identical); D-0208 (watching withdrawn on measurement).
+### 2026-11-24 (agent-memory2, `wave66-memory`): M21-memory-T1 and T2, where the heap goes (D-0218)
+
+The probe (`memprobe.patch`, kinds walked once in a fixed order, live data split by kind) says the 251 search refusals of arm A are our design: learned constraints kept forever at 270 to 330 B per literal (71 of 148 refusals in the probed families), hole bitsets copied per pruning (36), proof explanations kept alive (14); OCaml multiplies record-heavy kinds by 2.5 to 4 and its GC adds 1.5 to 5 on the heap the budget reads. At the encoding OCaml's factor alone can cross the 8 GiB budget (rcpsp). Results, scripts, tables: `/cluster/arthur/baguette-results/memory/`. For T3: arm A ran before D-0201 (order encoding), and on this main proteindesign, ttp r49 and community no longer refuse within 300 s, so start from a fresh census; ttp r49 passed 8 GiB of peak heap without the budget firing. D-0220's cross-session request asked for the bytes of a learned clause: 27.7 KB for 98 literals on community, 115 KB for 413 on steelmill (D-0218 section 3).
+
 ### 2026-11-24 (agent-binpack, `wave68-binpack`): M18-coverage-T4, bin packing (D-0220)
 
 The bin-packing refusals are not the decomposition: mapping, steelmillslab, team-assignment and gbac are small models whose heap fills during search (learned clauses kept as engine instances, PB analysis on mapping; cross-session request filed), only ihtc is refused at its encoding. So the change is mznlib only: std's rows minus the bool2int copies, through two builtins that ARE int_lin_eq/le over Booleans (SPEC 2.1 sentence), and each load restricted to the sums std's flattening found (without it gbac's loads stay 0..298 and the .opb grows 9x).
