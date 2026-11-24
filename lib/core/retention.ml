@@ -72,8 +72,10 @@
    Learned constraints propagate (M2-L12 for the clause, M2-L13 for the PB row), so a
    learned constraint's use is a real measure. [tiered] (D-0139) ranks its middle tier by
    it ([e_used]), and [fifo] below is the plain age policy. The default stays [keep_all]
-   (D-0051, D-0139 section 6, D-0202). M22-review-T12 proposes measuring [tiered] on the
-   whole Challenge with the default search before the user decides on the default.
+   (D-0051, D-0139 section 6, D-0202, D-0221). D-0221 measured [tiered] on the tuning set
+   and on 42 former heap refusals: one verified answer more of 200, but 6 refusals of 42
+   against 2, because an evicted constraint keeps its bytes ([gate] below keeps the
+   instance's closures and the engine keeps the instance). Re-measure once it does not.
 
    ### LBD is available, and on today's suite it does not discriminate either
 
