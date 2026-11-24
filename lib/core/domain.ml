@@ -191,7 +191,7 @@ let stale h =
 let push lg i v =
   let j = lg.len in
   if j = Array.length lg.vals then (
-    let cap = Stdlib.min lg.span (2 * j) in
+    let cap = Stdlib.max (j + 1) (Stdlib.min lg.span (2 * j)) in
     let grow a = Array.append a (Array.make (cap - j) 0) in
     lg.vals <- grow lg.vals;
     lg.uids <- grow lg.uids);
