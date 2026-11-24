@@ -775,7 +775,37 @@ let linear terms rhs =
          hid = (if hashing () then linear_hash terms rhs else 0);
        })
 
-let model_row id = Model_row id
+(* M21-memory-T3 (D-0223): the citation of a model row is SHARED, one block per id. A
+   counting family cites a ladder as one [Term (1, Model_row id)] per rung, and on
+   2026_tdtsp_10_53 the trees kept alive held 26 M of them, 8 words each (the [Model_row]
+   block, the [Term] block, the list cell) for one integer of content (D-0218 section 5,
+   OCaml's factor 8 on this kind). Interned, a citation costs its list cell. Nothing can
+   tell a shared one from a fresh one: [Model_row] and [Term] are immutable, every reader
+   matches them by structure, and the hash-consing key compares a [Model_row] by its id
+   ([summand_hash], [hc_equal]), never by identity. So the bytes are the same by
+   construction. Ids above [intern_cap] are built fresh, so the table is at most
+   [intern_cap] words. *)
+let intern_cap = 1 lsl 22
+let no_row = Weaken []
+let cited_rows : summand array ref = ref [||]
+
+let cite_row id =
+  if id < 0 || id >= intern_cap then Term (1, Model_row id)
+  else (
+    if id >= Array.length !cited_rows then (
+      let a =
+        Array.make (Stdlib.min intern_cap (Stdlib.max 1024 (2 * (id + 1)))) no_row
+      in
+      Array.blit !cited_rows 0 a 0 (Array.length !cited_rows);
+      cited_rows := a);
+    match Array.unsafe_get !cited_rows id with
+    | Term _ as s -> s
+    | _ ->
+        let s = Term (1, Model_row id) in
+        Array.unsafe_set !cited_rows id s;
+        s)
+
+let model_row id = match cite_row id with Term (_, m) -> m | _ -> Model_row id
 let weaken lits = Weaken lits
 
 (* [defining c l]: cite, [c] times, the line that establishes [l]. The coefficient is
@@ -822,7 +852,10 @@ let cut e1 e2 c1 c2 =
          hid = (if hashing () then cut_hash e1 e2 c1 c2 else 0);
        })
 
-let term coeff e = Term (coeff, citable "term" e)
+let term coeff e =
+  match e with
+  | Model_row id when coeff = 1 -> cite_row id
+  | _ -> Term (coeff, citable "term" e)
 
 (* [resolve parts]: the parts are cited (summed) and so cannot be decisions; two is the
    least that can resolve on anything (D-0134 section 2.2). *)
