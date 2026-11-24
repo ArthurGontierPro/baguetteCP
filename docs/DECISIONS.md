@@ -29241,3 +29241,22 @@ default, which is GCS's situation too. (3) Which cake and GCS are pinned, deferr
 ### 7. Revert
 
 T1 to T3 are separate merges, each byte-identical on the FlatZinc path, so each reverts alone.
+
+### 8. Update of 2026-11-24: the reader first, no refactor (decided by the user with Ciaran McCreesh)
+
+A `.scp` reader goes into baguette, and for the moment GCS or baguette produces the `.scp` from other
+languages. They accept that each solver writes its own constraints, and that a formally verified
+source format should come later and be none of the existing ones. This replaces the order of sections 4
+and 5: `Problem` and `Lower` (T1, T2) are not started. The reader builds `Model.t` directly, with its
+own small `lower.ml` for the auxiliaries, which can become `Lower` later. `builder.ml` is not touched.
+
+What was measured for it is `docs/reports/2026-11-24-scp-coverage.md`. Its three consequences:
+
+1. **The parity of constraint sets is the work.** A reader for what baguette propagates reads 137 of
+   the 297 `.scp` files GCS writes for the Challenge models, and 287 with the decompositions MiniZinc
+   does today. The largest are the variable `element`, the variable `cumulative` and `disjunctive2d`.
+2. **GCS's `.scp` is not cake's.** GCS writes views, cake has no view term, so 115 of 220 files are
+   refused by cake and 9 after the rewriting of comparisons. The rewriting is done by a separate
+   tool, or by GCS. The reader accepts views in any case, which costs nothing (`View`).
+3. **`--e2e` follows the reader, family by family.** A constraint the prefix does not cover is refused
+   by name under `--e2e` and solved without it.
