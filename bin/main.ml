@@ -103,9 +103,6 @@ module Justify = Baguette_core.Justify
 module Writer = Baguette_proof.Writer
 module Encoding = Baguette_proof.Encoding
 module Checked = Baguette_core.Checked
-module Propagator = Baguette_core.Propagator
-module Domain = Baguette_core.Domain
-module Explanation = Baguette_core.Explanation
 
 type options = {
   model : string;
@@ -1637,111 +1634,6 @@ let report_mzn_stats (st : Search.stats) ~(engine : Engine.t) ~init_time ~solve_
   print_string "%%%mzn-stat-end\n";
   flush stdout
 
-
-(* M21-memory-T1 (D-0218), PATCH ONLY: the roots of each kind, in attribution order. *)
-module MP = Baguette_proof.Memprobe
-
-let memprobe_compiled (c : Compile.t) =
-  if MP.enabled then begin
-    let st = c.Compile.store and e = c.Compile.engine and enc = c.Compile.encoding in
-    let r = Obj.repr in
-    MP.register "store.domains" (fun () -> [ r st.Store.domains; r st.Store.initial ]);
-    MP.register "store.names" (fun () -> [ r st.Store.names; r st.Store.by_name ]);
-    MP.register "encoding.ints" (fun () -> [ r enc.Encoding.ints ]);
-    MP.register "store.bound_hist" (fun () ->
-        [ r st.Store.lo_sup; r st.Store.hi_sup; r st.Store.lo_hist; r st.Store.lo_hn;
-          r st.Store.hi_hist; r st.Store.hi_hn; r st.Store.all_hist; r st.Store.all_hn;
-          r st.Store.low_water; r st.Store.starts ]);
-    (* placeholders, so the hash-consing table and the search's own state are charged
-       before the propagators that may reach into them *)
-    MP.register "expl.hashcons" (fun () -> []);
-    MP.register "writer.live" (fun () -> []);
-    MP.register "writer.tags_lvl" (fun () -> []);
-    MP.register "writer.buf" (fun () -> []);
-    let fam = Hashtbl.create 16 in
-    let order = ref [] in
-    Array.iteri
-      (fun i (inst : Propagator.instance) ->
-        if i < e.Engine.count then begin
-          let k = inst.Propagator.inst_name in
-          if not (Hashtbl.mem fam k) then order := k :: !order;
-          Hashtbl.replace fam k (inst :: (try Hashtbl.find fam k with Not_found -> []))
-        end)
-      e.Engine.instances;
-    List.iter
-      (fun k ->
-        MP.register ("prop." ^ k) (fun () ->
-            List.map Obj.repr (try Hashtbl.find fam k with Not_found -> []));
-        MP.count ("prop.n." ^ k) (fun () ->
-            List.length (try Hashtbl.find fam k with Not_found -> []));
-        MP.count ("prop.scope." ^ k) (fun () ->
-            List.fold_left
-              (fun a (i : Propagator.instance) -> a + List.length i.Propagator.inst_vars)
-              0
-              (try Hashtbl.find fam k with Not_found -> [])))
-      (List.rev !order);
-    (* the subscriptions, then the trail, then the learned constraints, all AFTER the model's
-       instances: a trail entry's deferred reason and a learned instance's closures reach
-       into the engine and the model's propagators, and charged first they would swallow
-       every model instance *)
-    MP.register "engine.watch" (fun () ->
-        [ r e.Engine.watchers; r e.Engine.triggers; r e.Engine.scopes;
-          r e.Engine.wake_static; r e.Engine.dyn_ids; r e.Engine.dyn_len; r e.Engine.wv1;
-          r e.Engine.wv2; r e.Engine.wp1; r e.Engine.wp2; r e.Engine.rest_levels ]);
-    MP.register "store.trail" (fun () -> [ r st.Store.trail; r st.Store.marks ]);
-    MP.register "store.reasons" (fun () -> [ r st.Store.reasons ]);
-    MP.register "search.trace" (fun () -> []);
-    MP.register "search.retention" (fun () -> []);
-    MP.register "learned.engine" (fun () -> []);
-    MP.register "engine.rest" (fun () -> [ r e ]);
-    MP.register "store.rest" (fun () -> [ r st ]);
-    MP.register "encoding.rest" (fun () -> [ r enc ]);
-    MP.count "vars" (fun () -> Array.length st.Store.domains);
-    MP.count "domain_values" (fun () ->
-        Array.fold_left
-          (fun a (d : Domain.t) -> a + (d.Domain.hi - d.Domain.lo + 1))
-          0 st.Store.initial);
-    MP.count "vars_with_holes" (fun () ->
-        Array.fold_left
-          (fun a (d : Domain.t) -> if d.Domain.holes = None then a else a + 1)
-          0 st.Store.domains);
-    MP.count "hist_entries" (fun () ->
-        Array.fold_left (fun a x -> a + Array.length x) 0 st.Store.all_hist
-        + Array.fold_left (fun a x -> a + Array.length x) 0 st.Store.lo_hist
-        + Array.fold_left (fun a x -> a + Array.length x) 0 st.Store.hi_hist);
-    MP.count "trail_len" (fun () -> st.Store.trail_len);
-    MP.count "trail_cap" (fun () -> Array.length st.Store.trail);
-    MP.count "arena_len" (fun () -> st.Store.reasons.Explanation.Arena.len);
-    MP.count "arena_cap" (fun () -> Array.length st.Store.reasons.Explanation.Arena.items);
-    MP.count "props" (fun () -> e.Engine.count);
-    MP.count "watchers_bindings" (fun () -> Hashtbl.length e.Engine.watchers);
-    MP.count "watchers_entries" (fun () ->
-        Hashtbl.fold (fun _ l a -> a + List.length l) e.Engine.watchers 0);
-    MP.count "enc.ladder_clauses" (fun () -> enc.Encoding.ladder_clauses);
-    MP.count "enc.bits_vars" (fun () -> enc.Encoding.bits_vars);
-    MP.count "enc.n_atoms" (fun () -> enc.Encoding.n_atoms);
-    MP.count "enc.ints" (fun () -> Encoding.Names.length enc.Encoding.ints);
-    MP.count "enc.direct_values" (fun () -> enc.Encoding.direct_values);
-    MP.probe "compile"
-  end
-
-let memprobe_ctx (ctx : Justify.ctx) =
-  if MP.enabled then begin
-    let r = Obj.repr in
-    let w = ctx.Justify.writer in
-    MP.register "expl.hashcons" (fun () ->
-        [ r Explanation.table; r !Explanation.hc_by_level ]);
-    MP.register "writer.live" (fun () -> [ r w.Writer.live; r w.Writer.model ]);
-    MP.register "writer.tags_lvl" (fun () -> [ r w.Writer.tags; r w.Writer.by_lvl ]);
-    MP.register "writer.buf" (fun () -> [ r w.Writer.buf ]);
-    MP.register "writer.rest" (fun () -> [ r w ]);
-    MP.register "justify.ctx" (fun () -> [ r ctx ]);
-    MP.count "writer.live" (fun () -> Writer.live_count w);
-    MP.count "writer.tags" (fun () -> Writer.Itbl.length w.Writer.tags);
-    MP.count "hashcons" (fun () -> Explanation.Hc.length Explanation.table);
-    MP.probe "proofopen"
-  end
-
 let solve opts (m : Model.t) =
   (* M7-T27 (b), D-0123 family C: the .opb's rows go to disk as they are minted, never
      to the heap. With --proof the body is written to PREFIX.opb.rows and [write_opb]
@@ -1766,7 +1658,6 @@ let solve opts (m : Model.t) =
   let compiled = Timing.phase "compile" (fun () -> Compile.compile m) in
   let store = compiled.Compile.store in
   let encoding = compiled.Compile.encoding in
-  memprobe_compiled compiled;
   if opts.stats then report_encoding_cost (Encoding.cost encoding);
   (* I-X5: the .opb is complete and on disk before any proof rule can cite it. The
      comment names the BASENAME, not the path -- M1-T37, see this file's header. *)
@@ -1810,7 +1701,6 @@ let solve opts (m : Model.t) =
         let ctx = Justify.create ~writer ~encoding in
         (proof_oc, ctx))
   in
-  memprobe_ctx ctx;
   let check assignment =
     Model.check_assignment m (assignment_values m store assignment)
   in
@@ -1819,8 +1709,6 @@ let solve opts (m : Model.t) =
      up under a flag is a counter no test exercises. --stats decides whether it is
      PRINTED, not whether it is kept. *)
   let stats = Search.stats_create () in
-  Baguette_proof.Memprobe.register "search.stats" (fun () -> [ Obj.repr stats ]);
-  Baguette_proof.Memprobe.register "compile.rest" (fun () -> [ Obj.repr compiled ]);
   (* M7-T32: where `-s`'s initTime ends and its solveTime starts. *)
   let t_search = ref 0. in
   (* M6-T9. An outer `timeout` kills with SIGTERM, and a killed run used to leave
@@ -2146,11 +2034,6 @@ let () =
       prerr_endline (Fz_error.to_string e);
       exit exit_usage
   | Ok m -> (
-      Baguette_proof.Memprobe.register "frontend.model" (fun () -> [ Obj.repr m ]);
-      Baguette_proof.Memprobe.count "model.vars" (fun () -> Array.length m.Model.vars);
-      Baguette_proof.Memprobe.count "model.constraints" (fun () ->
-          List.length m.Model.constraints);
-      Baguette_proof.Memprobe.probe "parse";
       refuse_enumeration opts m;
       match Fz_error.catch (fun () -> solve opts m) with
       | Ok () -> exit exit_ok
