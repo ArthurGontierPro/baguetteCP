@@ -19,6 +19,7 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
+| M21-memory-T3 (fix 2 of D-0218: hole bitsets trailed by value, D-0222) | `lib/core/domain.ml`, `lib/core/store.ml`, the history readers of `lib/core/prop/element.ml`, `docs/INVARIANTS.md` (I-T1), `docs/ARCHITECTURE.md` §2-§3, tests | agent-holes (`wave70-holes`) | 2026-11-24 |
 
 ## Cross-session requests
 
