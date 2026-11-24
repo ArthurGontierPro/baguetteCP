@@ -654,6 +654,9 @@ type stats = {
       (* Per learned instance (offset as [learned_kinds]): has it pruned at least once. *)
   mutable lo_clauses_pruning : int;
   mutable lo_pb_pruning : int;
+  mutable lo_fallback : int;
+      (* CDCL loop: conflicts the 1UIP walk gave no clause for (a factless conflict at the
+         conflict level), refuted by the branch nogood instead ([cdcl]). *)
   mutable lo_direct : int;
       (* CDCL loop: assertions no consumer made, pushed from the clause ([cdcl]). *)
 }
@@ -732,6 +735,7 @@ let stats_create () =
     lo_clauses_pruning = 0;
     lo_pb_pruning = 0;
     lo_direct = 0;
+    lo_fallback = 0;
   }
 
 let stats_learned s = List.rev s.learned_rev
@@ -870,13 +874,14 @@ let report_learning s =
     Printf.eprintf
       "cdcl-stats: loop=%s nodes=%d decisions=%d conflicts=%d learned=%d resumes=%d \
        skipped=%d far=%d jump_max=%d asserting=%d/%d clause_instances=%d \
-       clauses_pruning=%d pb_instances=%d pb_pruning=%d units=%d unit_prunes=%d direct=%d\n\
+       clauses_pruning=%d pb_instances=%d pb_pruning=%d units=%d unit_prunes=%d \
+       direct=%d fallback=%d\n\
        %!"
       (if s.cdcl_run then "cdcl" else "dfs")
       s.nodes s.decisions s.conflicts s.n_learned s.lo_resumes s.lo_skipped s.lo_far
       s.lo_jump_max s.lo_asserting s.lo_checked s.n_clause_instances s.lo_clauses_pruning
       s.n_pb_instances s.lo_pb_pruning (List.length s.globals_rev) s.n_global_prunes
-      s.lo_direct
+      s.lo_direct s.lo_fallback
 
 (* Does this pair of counts satisfy the identity above? [exhausted] is whether the
    search closed its whole tree. Public because [solve] checks it only under
@@ -3821,10 +3826,14 @@ and explore_ge store engine ctx trace stats cfg order decisions v k lit =
    Nothing here is a new proof rule or a new [Explanation] constructor.
 
    When the 1UIP walk gives nothing ([Learn.at_conflict] answers [None], or learning is
-   off), the clause is the branch nogood over every decision -- the line [dfs] writes
-   there, RUP for the same reason -- introduced and propagated as a learned clause; its
-   asserting level is the second-deepest decision's, so it asserts the negation of the
-   last decision: chronological backtracking, in this loop's terms.
+   off, or the conflict is factless at its level, as a pigeonhole emptying a domain is),
+   the clause is the branch nogood over every decision, minimised -- the line [dfs] writes
+   there, RUP for the same reason. It is NOT made a learned clause: on a 450-level
+   rotating-workforce search that put 16 000 clauses of 450 literals on the engine in a
+   minute and exhausted the 8 GB heap (D-0219 section 6). It is filed at its asserting
+   level, the second-deepest decision's, and the negation of the last decision is pushed
+   there from it, its other literals' negations as the facts: chronological backtracking
+   in this loop's terms, with the line living exactly as long as the assertion on it.
 
    COMPLETENESS is MiniSat's argument: each learned clause is false under the trail at the
    conflict and asserting at its target, so the assignment sequence grows strictly in the
@@ -3871,21 +3880,6 @@ let top_literal (levelled : (Lit.t * int) list) =
               (fun (l, v) (l', v') -> if v' > v then (l', v') else (l, v))
               (l0, v0) rest))
 
-(* The branch nogood as a learned clause, for a conflict the 1UIP walk gave nothing for.
-   On the page at level 0 through [Learned.introduce], held by [Retention] like a 1UIP
-   clause, and given its consumer. *)
-let introduce_nogood engine store ctx stats cfg (ng : nogood) =
-  let lits = List.map fst ng in
-  let row = Learned.of_clause lits in
-  let origin =
-    if Writer.is_null ctx.Justify.writer then ""
-    else "M19-config-T10 decision nogood as a learned clause"
-  in
-  let cid = Learned.introduce ctx row ~origin in
-  stats.learned_rev <- cid :: stats.learned_rev;
-  ignore (Retention.add stats.db ~cid ~row ~lbd:(List.length ng) ~origin);
-  register_learned engine store ctx stats ~rest_satisfied:cfg.rest_satisfied ~cid ~lits
-
 (* The assertion a consumer did not make, made from the clause: [lit] with the negation of
    every other literal as its facts. Its trace line is the clause itself, which is on the
    page at level 0. *)
@@ -3904,8 +3898,8 @@ let assert_directly ctx store (lit : Lit.t) (lits : Lit.t list) =
   | _ ->
       failwith
         (Printf.sprintf
-           "Search.cdcl: the learned clause asserting %s was not propagated and cannot \
-            be asserted from its facts; going on would re-take the decision and loop"
+           "Search.cdcl: the clause asserting %s cannot be asserted from its facts; \
+            going on would re-take the decision and loop"
            (Lit.to_string lit))
 
 (* The order's next choice, exactly as [dfs] asks it, or [None] when everything is fixed. *)
@@ -3993,16 +3987,25 @@ let cdcl engine store ctx trace stats cfg (order : order) : node =
        raise Limit_hit);
     state_conflict ctx trace c;
     ignore (bridges ctx trace stats store !decisions : Lit.t list);
+    let learned = learn_at_conflict ~closure:false engine store ctx trace stats cfg c in
     let levelled =
-      match learn_at_conflict ~closure:false engine store ctx trace stats cfg c with
+      match learned with
       | Some (l, _) -> Learn.levelled l
-      | None ->
-          let ng = minimise stats cfg.policy (levelled_nogood !decisions ~top:d) in
-          introduce_nogood engine store ctx stats cfg ng;
-          ng
+      | None -> minimise stats cfg.policy (levelled_nogood !decisions ~top:d)
     in
     stats.lo_pending <- Some (List.map fst levelled, d);
     let b, asserting = asserting_level ~entry levelled in
+    let fallback = Option.is_none learned in
+    if fallback then (
+      (* The branch nogood, [dfs]'s line, filed at the level it asserts at: it lives
+         exactly as long as the assertion resting on it. Level 0 is never wiped, so a
+         nogood filed there is deleted at the end with the assignment clauses. *)
+      stats.lo_fallback <- stats.lo_fallback + 1;
+      let cid =
+        Justify.with_level ctx b (fun () ->
+            Justify.emit ctx (Explanation.clause (List.map fst levelled)))
+      in
+      if b = 0 then stats.assign_clauses_rev <- cid :: stats.assign_clauses_rev);
     if b >= d && not asserting then
       failwith "Search.cdcl: a learned clause neither asserts nor sends the search lower";
     let target =
@@ -4019,10 +4022,16 @@ let cdcl engine store ctx trace stats cfg (order : order) : node =
        assertion is not checked, only the levels skipped are counted. *)
     if target <> b then stats.lo_pending <- Some ([], d);
     observe_resume stats store ~sk:(Stdlib.max 0 (d - 1 - target));
-    expect :=
+    let assertion =
       if asserting && target = b then
         Option.map (fun l -> (l, List.map fst levelled)) (top_literal levelled)
       else None
+    in
+    if fallback then (
+      (* No instance carries the nogood, so its assertion is pushed here, now. *)
+      expect := None;
+      Option.iter (fun (l, lits) -> assert_directly ctx store l lits) assertion)
+    else expect := assertion
   in
   let result = ref None in
   while Option.is_none !result do
