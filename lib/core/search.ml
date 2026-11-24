@@ -2420,6 +2420,7 @@ let pb_at_conflict engine store ctx stats cfg (c : Store.conflict) ~clause_conve
   if not (cfg.learn && cfg.pb) then None
   else (
     stats.n_pb_attempts <- stats.n_pb_attempts + 1;
+    Baguette_proof.Memprobe.phase := "pb_analysis";
     match
       (* D-0153: a row with a bits term is instantiated through its bridges. *)
       Pb_analysis.analyse ~stop:(inner_stop cfg) ~bits:(Pb_analysis.bits_of_ctx ctx) store
@@ -2942,7 +2943,8 @@ let ensure_decision_atom ctx lit =
 
 let rec learn_at_conflict engine store ctx trace stats cfg (c : Store.conflict) =
   if not cfg.learn then None
-  else
+  else (
+    Baguette_proof.Memprobe.phase := "learn_clause";
     match
       Learn.at_conflict ~policy:cfg.policy store c ~vars_of:(Engine.vars_of engine)
         ~decl:(Learned.decl_of_encoding ctx.Justify.encoding)
@@ -3014,7 +3016,7 @@ let rec learn_at_conflict engine store ctx trace stats cfg (c : Store.conflict) 
             (* THE BREAK. See [config.backjump_on_pb]: the row's levels are not a
                dependency set, so the nogood this filter produces claims the conflict
                rests on fewer decisions than it does. *)
-            Some pb)
+            Some pb))
 
 and dfs engine store ctx trace stats cfg (order : order) (decisions : Lit.t list) : node =
   (* M2-L12 step 1: the learned units, applied before anything else at this node. See
@@ -3040,6 +3042,7 @@ and dfs engine store ctx trace stats cfg (order : order) (decisions : Lit.t list
       raise Limit_hit
   | Engine.Conflict c -> (
       stats.conflicts <- stats.conflicts + 1;
+      Baguette_proof.Memprobe.phase := "conflict";
       (* M2-T7: [c] carries the reporting instance's id ([c.Store.c_prop]) as well as its
          explanation and its bound facts. M2-L3's resolution starts from exactly this
          constraint. *)
@@ -3661,6 +3664,22 @@ let search_core ~(engine : Engine.t) ~(store : Store.t) ~(ctx : Justify.ctx) ?tr
   Baguette_proof.Memprobe.register "search.trace" (fun () -> [ Obj.repr trace ]);
   Baguette_proof.Memprobe.count "learned.n_live" (fun () -> Retention.size stats.db);
   Baguette_proof.Memprobe.count "trace.n_done" (fun () -> trace.Trace.n_done);
+  Baguette_proof.Memprobe.register "learned.engine" (fun () ->
+      let l = ref [] in
+      for i = engine.Engine.count - 1 downto max 0 stats.first_learned_id do
+        l := Obj.repr engine.Engine.instances.(i) :: !l
+      done;
+      !l);
+  Baguette_proof.Memprobe.count "learned.n_engine" (fun () ->
+      max 0 (engine.Engine.count - stats.first_learned_id));
+  Baguette_proof.Memprobe.count "learned.scope_vars" (fun () ->
+      let n = ref 0 in
+      for i = max 0 stats.first_learned_id to engine.Engine.count - 1 do
+        n := !n + List.length engine.Engine.instances.(i).Propagator.inst_vars
+      done;
+      !n);
+  Baguette_proof.Memprobe.count "search.conflicts" (fun () -> stats.conflicts);
+  Baguette_proof.Memprobe.count "search.nodes" (fun () -> stats.nodes);
   (* M2-L12: and the learned units, for the same reason -- a [stats] may outlive a
      [solve], and a global from a previous search cites a constraint this one's writer
      knows nothing about.

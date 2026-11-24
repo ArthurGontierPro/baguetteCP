@@ -1652,13 +1652,12 @@ let memprobe_compiled (c : Compile.t) =
         [ r st.Store.lo_sup; r st.Store.hi_sup; r st.Store.lo_hist; r st.Store.lo_hn;
           r st.Store.hi_hist; r st.Store.hi_hn; r st.Store.all_hist; r st.Store.all_hn;
           r st.Store.low_water; r st.Store.starts ]);
-    MP.register "store.trail" (fun () -> [ r st.Store.trail; r st.Store.marks ]);
-    MP.register "store.reasons" (fun () -> [ r st.Store.reasons ]);
     (* placeholders, so the hash-consing table and the search's own state are charged
        before the propagators that may reach into them *)
     MP.register "expl.hashcons" (fun () -> []);
-    MP.register "search.retention" (fun () -> []);
-    MP.register "search.trace" (fun () -> []);
+    MP.register "writer.live" (fun () -> []);
+    MP.register "writer.tags_lvl" (fun () -> []);
+    MP.register "writer.buf" (fun () -> []);
     let fam = Hashtbl.create 16 in
     let order = ref [] in
     Array.iteri
@@ -1681,10 +1680,19 @@ let memprobe_compiled (c : Compile.t) =
               0
               (try Hashtbl.find fam k with Not_found -> [])))
       (List.rev !order);
+    (* the subscriptions, then the trail, then the learned constraints, all AFTER the model's
+       instances: a trail entry's deferred reason and a learned instance's closures reach
+       into the engine and the model's propagators, and charged first they would swallow
+       every model instance *)
     MP.register "engine.watch" (fun () ->
         [ r e.Engine.watchers; r e.Engine.triggers; r e.Engine.scopes;
           r e.Engine.wake_static; r e.Engine.dyn_ids; r e.Engine.dyn_len; r e.Engine.wv1;
           r e.Engine.wv2; r e.Engine.wp1; r e.Engine.wp2; r e.Engine.rest_levels ]);
+    MP.register "store.trail" (fun () -> [ r st.Store.trail; r st.Store.marks ]);
+    MP.register "store.reasons" (fun () -> [ r st.Store.reasons ]);
+    MP.register "search.trace" (fun () -> []);
+    MP.register "search.retention" (fun () -> []);
+    MP.register "learned.engine" (fun () -> []);
     MP.register "engine.rest" (fun () -> [ r e ]);
     MP.register "store.rest" (fun () -> [ r st ]);
     MP.register "encoding.rest" (fun () -> [ r enc ]);

@@ -36,6 +36,10 @@ let count label get =
     counters := List.filter (fun (l, _) -> l <> label) !counters @ [ (label, get) ]
 
 let nodes = ref 0
+
+(* What the search was doing at the last marker (set in Search: conflict, learn_clause,
+   pb_analysis; "propagate" at each node). Printed with every probe. *)
+let phase = ref "front"
 let t0 = Sys.time ()
 
 (* ONE pass over the roots, in order, with a visited set outside the OCaml heap (a
@@ -170,11 +174,15 @@ let shape_name key =
   in
   Printf.sprintf "%s/%s" t (if size = 4095 then "big" else string_of_int size)
 
+let in_probe = ref false
+
 let probe tag =
-  if enabled then begin
+  if enabled && not !in_probe then begin
+    in_probe := true;
     let oc = Lazy.force oc in
     let t_start = Sys.time () in
     let hdr = Printf.sprintf "%s\t%.1f\t%d" tag (t_start -. t0) !nodes in
+    Printf.fprintf oc "phase\t%s\t%s\n" hdr !phase;
     let q = Gc.quick_stat () in
     Printf.fprintf oc "gc\t%s\theap_words_quick\t%d\n" hdr q.Gc.heap_words;
     Printf.fprintf oc "gc\t%s\ttop_heap_words_quick\t%d\n" hdr q.Gc.top_heap_words;
@@ -214,6 +222,14 @@ let probe tag =
           (fun i (k, n) ->
             if i < 12 then
               Printf.fprintf oc "shape\t%s\t%s\t%s\t%d\n" hdr r.label (shape_name k) n)
+          l;
+        (* and the 8 heaviest shapes by words (count * (size + 1)), "big" counted at 4096 *)
+        let w (k, n) = n * ((k mod 4096) + 1) in
+        let l = List.sort (fun a b -> compare (w b) (w a)) l in
+        List.iteri
+          (fun i (k, n) ->
+            if i < 8 then
+              Printf.fprintf oc "wshape\t%s\t%s\t%s\t%d\n" hdr r.label (shape_name k) n)
           l)
       !roots;
     Printf.fprintf oc "kind\t%s\tunattributed\t%d\n" hdr (st.Gc.live_words - !total);
@@ -222,26 +238,22 @@ let probe tag =
         let v = try g () with _ -> -1 in
         Printf.fprintf oc "count\t%s\t%s\t%d\n" hdr l v)
       !counters;
-    Printf.fprintf oc "probe_seconds\t%s\t%.1f\n%!" hdr (Sys.time () -. t_start)
+    Printf.fprintf oc "probe_seconds\t%s\t%.1f\n%!" hdr (Sys.time () -. t_start);
+    in_probe := false
   end
 
 let gib = 1024 * 1024 * 1024 / 8
-let thresholds = ref [ 1 * gib; 2 * gib; 4 * gib; 8 * gib; 16 * gib; 32 * gib ]
-let pending : string option ref = ref None
+let thresholds = ref [ gib / 2; 1 * gib; 2 * gib; 4 * gib; 8 * gib; 16 * gib; 32 * gib ]
 
-let () =
-  if enabled then begin
-    ignore
-      (Gc.create_alarm (fun () ->
-           let h = (Gc.quick_stat ()).Gc.heap_words in
-           match !thresholds with
-           | t :: rest when h >= t ->
-               let rec drop = function t :: r when h >= t -> drop r | r -> r in
-               thresholds := drop rest;
-               pending := Some (Printf.sprintf "heap%dG" (t / gib))
-           | _ -> ()));
-    at_exit (fun () -> probe "exit")
-  end
+(* BAGUETTE_MEMPROBE_STOP_GIB=g: after the probe at the g GiB crossing, exit (rc 0, no exit
+   probe). The refusal point is 16 GiB; walking a heap past it costs minutes per probe. *)
+let stop_gib =
+  match Sys.getenv_opt "BAGUETTE_MEMPROBE_STOP_GIB" with
+  | Some s -> ( try int_of_string s with _ -> max_int)
+  | None -> max_int
+
+let stopped = ref false
+let pending : string option ref = ref None
 
 let tick () =
   if enabled then
@@ -249,11 +261,46 @@ let tick () =
     | None -> ()
     | Some tag ->
         pending := None;
-        probe tag
+        probe tag;
+        let g =
+          try Scanf.sscanf tag "heap%dG" (fun g -> g) with _ -> 0
+        in
+        if g >= stop_gib then begin
+          stopped := true;
+          Printf.fprintf (Lazy.force oc) "stop\t%s\n%!" tag;
+          exit 0
+        end
 
 let node n =
   if enabled then begin
     nodes := n;
-    if n = 1 then probe "node1" else if n = 1000 then probe "node1000";
+    phase := "node";
+    if n = 1 || n = 1000 || n = 10_000 || n = 100_000 || n = 1_000_000 || n = 10_000_000
+    then probe (Printf.sprintf "node%d" n);
     tick ()
   end
+
+let in_alarm = Sys.getenv_opt "BAGUETTE_MEMPROBE_IN_ALARM" = Some "1"
+
+let () =
+  if enabled then begin
+    ignore
+      (Gc.create_alarm (fun () ->
+           let h = (Gc.quick_stat ()).Gc.heap_words in
+           (match !thresholds with
+           | t :: rest when h >= t ->
+               let rec drop t = function t' :: r when h >= t' -> drop t' r | r -> (t, r) in
+               let t, r = drop t rest in
+               thresholds := r;
+               pending :=
+                 Some
+                   (if t < gib then Printf.sprintf "heap%dM" (t * 8 / 1024 / 1024)
+                    else Printf.sprintf "heap%dG" (t / gib))
+           | _ -> ());
+         (* BAGUETTE_MEMPROBE_IN_ALARM=1: probe here, at the end of the major cycle, rather
+            than at the next tick. A heap that crosses a threshold inside ONE step (a
+            conflict analysis) never reaches a tick before the budget refuses it. *)
+         if in_alarm && !pending <> None && not !in_probe then tick ()));
+    at_exit (fun () -> if not !stopped then probe "exit")
+  end
+
