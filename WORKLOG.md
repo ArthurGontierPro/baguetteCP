@@ -19,6 +19,7 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
+| M18-coverage-T3 | `lib/core/prop/circuit.ml` (new), `lib/core/dune`, `lib/flatzinc/compile.ml`, `mznlib/fzn_circuit.mzn`, `mznlib/fzn_subcircuit.mzn`, `test/unit/test_circuit*`, `test/models/circuit_*`, `docs/DECISIONS.md` (D-0217), `docs/ROADMAP.md` (T3 row), `docs/PROOF-FORMAT.md` §4, `docs/ARCHITECTURE.md` §1, `CLAUDE.md` (module map) | agent-circuit (`wave65-circuit`) | 2026-11-24 |
 
 ## Cross-session requests
 
