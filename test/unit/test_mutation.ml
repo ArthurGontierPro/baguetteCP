@@ -1672,6 +1672,172 @@ let circuit_drop_last lines i =
       | _ -> None)
   | _ -> None
 
+(* bin packing (D-0220, M18-coverage-T4): eight items into three bins whose capacities sum
+   to the total weight, two disequalities, as a SATISFACTION problem so that the search
+   meets conflicts (25) and writes its trace, and a packing exists (a refusal below is a
+   judgement on a line, not the rup vacuity of a contradictory database). The indicators
+   are written as mznlib writes them, one int_eq_reif per (item, bin). [bp_capa_src] is the
+   `bin_packing_capa` shape, one `baguette_bool_lin_le` per bin; [bp_load_src] the
+   `bin_packing_load` shape, one `baguette_bool_lin_eq` per bin against a load variable
+   bounded by the capacity. The target lines are a bin row's own prunings, named by their
+   text as [circuit_prevent_line] is:
+   - capa: item 3 (weight 5) kept out of bin 1 (capacity 12) once items 1 and 2 (6 + 5) are in;
+   - load: l1 >= 11 once items 1 and 2 are in bin 1. *)
+let bp_capa_src =
+  String.concat ""
+    [
+      "predicate baguette_bool_lin_le(array [int] of int: a, array [int] of var bool: x, \
+       int: c);\n";
+      "var 1..3: x1 :: output_var;\n";
+      "var 1..3: x2 :: output_var;\n";
+      "var 1..3: x3 :: output_var;\n";
+      "var 1..3: x4 :: output_var;\n";
+      "var 1..3: x5 :: output_var;\n";
+      "var 1..3: x6 :: output_var;\n";
+      "var 1..3: x7 :: output_var;\n";
+      "var 1..3: x8 :: output_var;\n";
+      "var bool: e1_1;\n";
+      "var bool: e1_2;\n";
+      "var bool: e1_3;\n";
+      "var bool: e2_1;\n";
+      "var bool: e2_2;\n";
+      "var bool: e2_3;\n";
+      "var bool: e3_1;\n";
+      "var bool: e3_2;\n";
+      "var bool: e3_3;\n";
+      "var bool: e4_1;\n";
+      "var bool: e4_2;\n";
+      "var bool: e4_3;\n";
+      "var bool: e5_1;\n";
+      "var bool: e5_2;\n";
+      "var bool: e5_3;\n";
+      "var bool: e6_1;\n";
+      "var bool: e6_2;\n";
+      "var bool: e6_3;\n";
+      "var bool: e7_1;\n";
+      "var bool: e7_2;\n";
+      "var bool: e7_3;\n";
+      "var bool: e8_1;\n";
+      "var bool: e8_2;\n";
+      "var bool: e8_3;\n";
+      "constraint int_eq_reif(x1, 1, e1_1);\n";
+      "constraint int_eq_reif(x1, 2, e1_2);\n";
+      "constraint int_eq_reif(x1, 3, e1_3);\n";
+      "constraint int_eq_reif(x2, 1, e2_1);\n";
+      "constraint int_eq_reif(x2, 2, e2_2);\n";
+      "constraint int_eq_reif(x2, 3, e2_3);\n";
+      "constraint int_eq_reif(x3, 1, e3_1);\n";
+      "constraint int_eq_reif(x3, 2, e3_2);\n";
+      "constraint int_eq_reif(x3, 3, e3_3);\n";
+      "constraint int_eq_reif(x4, 1, e4_1);\n";
+      "constraint int_eq_reif(x4, 2, e4_2);\n";
+      "constraint int_eq_reif(x4, 3, e4_3);\n";
+      "constraint int_eq_reif(x5, 1, e5_1);\n";
+      "constraint int_eq_reif(x5, 2, e5_2);\n";
+      "constraint int_eq_reif(x5, 3, e5_3);\n";
+      "constraint int_eq_reif(x6, 1, e6_1);\n";
+      "constraint int_eq_reif(x6, 2, e6_2);\n";
+      "constraint int_eq_reif(x6, 3, e6_3);\n";
+      "constraint int_eq_reif(x7, 1, e7_1);\n";
+      "constraint int_eq_reif(x7, 2, e7_2);\n";
+      "constraint int_eq_reif(x7, 3, e7_3);\n";
+      "constraint int_eq_reif(x8, 1, e8_1);\n";
+      "constraint int_eq_reif(x8, 2, e8_2);\n";
+      "constraint int_eq_reif(x8, 3, e8_3);\n";
+      "constraint baguette_bool_lin_le([6, 5, 5, 5, 4, 4, 3, 2], [e1_1, e2_1, e3_1, \
+       e4_1, e5_1, e6_1, e7_1, e8_1], 12);\n";
+      "constraint baguette_bool_lin_le([6, 5, 5, 5, 4, 4, 3, 2], [e1_2, e2_2, e3_2, \
+       e4_2, e5_2, e6_2, e7_2, e8_2], 11);\n";
+      "constraint baguette_bool_lin_le([6, 5, 5, 5, 4, 4, 3, 2], [e1_3, e2_3, e3_3, \
+       e4_3, e5_3, e6_3, e7_3, e8_3], 11);\n";
+      "constraint int_ne(x2, x3);\n";
+      "constraint int_ne(x7, x6);\n";
+      "solve :: int_search([x1, x2, x3, x4, x5, x6, x7, x8], input_order, indomain_min, \
+       complete) satisfy;\n";
+    ]
+
+let bp_load_src =
+  String.concat ""
+    [
+      "predicate baguette_bool_lin_eq(array [int] of int: a, array [int] of var bool: x, \
+       var int: y);\n";
+      "var 0..12: l1;\n";
+      "var 0..12: l2;\n";
+      "var 0..12: l3;\n";
+      "var 1..3: x1 :: output_var;\n";
+      "var 1..3: x2 :: output_var;\n";
+      "var 1..3: x3 :: output_var;\n";
+      "var 1..3: x4 :: output_var;\n";
+      "var 1..3: x5 :: output_var;\n";
+      "var 1..3: x6 :: output_var;\n";
+      "var 1..3: x7 :: output_var;\n";
+      "var 1..3: x8 :: output_var;\n";
+      "var bool: e1_1;\n";
+      "var bool: e1_2;\n";
+      "var bool: e1_3;\n";
+      "var bool: e2_1;\n";
+      "var bool: e2_2;\n";
+      "var bool: e2_3;\n";
+      "var bool: e3_1;\n";
+      "var bool: e3_2;\n";
+      "var bool: e3_3;\n";
+      "var bool: e4_1;\n";
+      "var bool: e4_2;\n";
+      "var bool: e4_3;\n";
+      "var bool: e5_1;\n";
+      "var bool: e5_2;\n";
+      "var bool: e5_3;\n";
+      "var bool: e6_1;\n";
+      "var bool: e6_2;\n";
+      "var bool: e6_3;\n";
+      "var bool: e7_1;\n";
+      "var bool: e7_2;\n";
+      "var bool: e7_3;\n";
+      "var bool: e8_1;\n";
+      "var bool: e8_2;\n";
+      "var bool: e8_3;\n";
+      "constraint int_eq_reif(x1, 1, e1_1);\n";
+      "constraint int_eq_reif(x1, 2, e1_2);\n";
+      "constraint int_eq_reif(x1, 3, e1_3);\n";
+      "constraint int_eq_reif(x2, 1, e2_1);\n";
+      "constraint int_eq_reif(x2, 2, e2_2);\n";
+      "constraint int_eq_reif(x2, 3, e2_3);\n";
+      "constraint int_eq_reif(x3, 1, e3_1);\n";
+      "constraint int_eq_reif(x3, 2, e3_2);\n";
+      "constraint int_eq_reif(x3, 3, e3_3);\n";
+      "constraint int_eq_reif(x4, 1, e4_1);\n";
+      "constraint int_eq_reif(x4, 2, e4_2);\n";
+      "constraint int_eq_reif(x4, 3, e4_3);\n";
+      "constraint int_eq_reif(x5, 1, e5_1);\n";
+      "constraint int_eq_reif(x5, 2, e5_2);\n";
+      "constraint int_eq_reif(x5, 3, e5_3);\n";
+      "constraint int_eq_reif(x6, 1, e6_1);\n";
+      "constraint int_eq_reif(x6, 2, e6_2);\n";
+      "constraint int_eq_reif(x6, 3, e6_3);\n";
+      "constraint int_eq_reif(x7, 1, e7_1);\n";
+      "constraint int_eq_reif(x7, 2, e7_2);\n";
+      "constraint int_eq_reif(x7, 3, e7_3);\n";
+      "constraint int_eq_reif(x8, 1, e8_1);\n";
+      "constraint int_eq_reif(x8, 2, e8_2);\n";
+      "constraint int_eq_reif(x8, 3, e8_3);\n";
+      "constraint baguette_bool_lin_eq([6, 5, 5, 5, 4, 4, 3, 2], [e1_1, e2_1, e3_1, \
+       e4_1, e5_1, e6_1, e7_1, e8_1], l1);\n";
+      "constraint int_le(l1, 12);\n";
+      "constraint baguette_bool_lin_eq([6, 5, 5, 5, 4, 4, 3, 2], [e1_2, e2_2, e3_2, \
+       e4_2, e5_2, e6_2, e7_2, e8_2], l2);\n";
+      "constraint int_le(l2, 11);\n";
+      "constraint baguette_bool_lin_eq([6, 5, 5, 5, 4, 4, 3, 2], [e1_3, e2_3, e3_3, \
+       e4_3, e5_3, e6_3, e7_3, e8_3], l3);\n";
+      "constraint int_le(l3, 11);\n";
+      "constraint int_ne(x2, x3);\n";
+      "constraint int_ne(x7, x6);\n";
+      "solve :: int_search([x1, x2, x3, x4, x5, x6, x7, x8], input_order, indomain_min, \
+       complete) satisfy;\n";
+    ]
+
+let bp_capa_line = "rup +1 ~e3_1_ge_1 +1 ~e1_1_ge_1 +1 ~e2_1_ge_1 >= 1 ;"
+let bp_load_line = "rup +1 l1_ge_11 +1 ~e1_1_ge_1 +1 ~e2_1_ge_1 >= 1 ;"
+
 (* An emitter lane that also asserts the checker's WORDING at full strength: a rejection
    on the grammar would satisfy [Rejected_on_derivation]'s exit status and say nothing
    about the derivation (CLAUDE.md, "assert the checker's wording"). *)
@@ -2728,6 +2894,47 @@ solve :: seq_search([int_search([b, y], input_order, indomain_min, complete), in
           ~mutate:circuit_drop_last "prevent-fact";
         circuit_text_lane c ~proof:b.pbp ~opb:b.opb ~target:circuit_position_line
           ~mutate:circuit_drop_last "position-fact");
+
+    (* -- M18-coverage-T4: bin packing (D-0220) -------------------------------------------
+       [bp_capa_src] and [bp_load_src] above. Two text lanes over the honest proofs, each
+       refused at the RUP wording: the bin row's pruning line loses its last literal (a
+       fact it rests on), so the claim is no longer implied by the row:
+         capa-row-fact  item 3 out of bin 1 without item 2 in it;
+         load-row-fact  l1 >= 11 without item 2 in bin 1. *)
+    let solve_bp ~name src =
+      let m = F.Builder.of_string ~file:name src in
+      let c = Compile.compile m in
+      let opb = Filename.concat dir (name ^ ".opb")
+      and pbp = Filename.concat dir (name ^ ".pbp") in
+      let oc = open_out opb in
+      Encoding.write_opb ~comments:[ "test_mutation: " ^ name ] c.Compile.encoding oc;
+      close_out oc;
+      let oc = open_out pbp in
+      let writer = Writer.create ~comments:true ~audit:true oc in
+      Encoding.start_proof c.Compile.encoding writer;
+      let ctx = Justify.create ~writer ~encoding:c.Compile.encoding in
+      let outcome =
+        Search.solve ~engine:c.Compile.engine ~store:c.Compile.store ~ctx
+          ~check:(fun _ -> true)
+          ?order:c.Compile.order ()
+      in
+      close_out oc;
+      ({ pbp; opb; fired = false }, outcome)
+    in
+    let bc, oc_ = solve_bp ~name:"binpack_capa" bp_capa_src in
+    let bl, ol_ = solve_bp ~name:"binpack_load" bp_load_src in
+    check "binpack: both instances are SAT"
+      (match (oc_, ol_) with Search.Sat _, Search.Sat _ -> true | _ -> false);
+    gated ~tag:"binpack"
+      ~control:(fun () ->
+        control_holds ~tag:"binpack" ~proof:bc.pbp
+        && control_holds ~tag:"binpack" ~proof:bl.pbp)
+      ~declares:[ "capa-row-fact"; "load-row-fact" ]
+      (fun c ->
+        circuit_text_lane c ~proof:bc.pbp ~opb:bc.opb ~target:bp_capa_line
+          ~mutate:circuit_drop_last "capa-row-fact";
+        circuit_text_lane c ~proof:bl.pbp ~opb:bl.opb ~target:bp_load_line
+          ~mutate:circuit_drop_last "load-row-fact");
 
     (* -- M18-coverage-T2: diffn's relaxations (D-0213) ----------------------------------
        [diffn_lane_src] above. The relaxations are cumulative.ml's, so these lanes
