@@ -27329,7 +27329,19 @@ identical in all ten pairs.
 | javarouting trip_6_3 (cut 20 000) | 20 001 | 12.58 M | 12.59 M (+0.0 %) | 24.55 M | 24.58 M (+0.1 %) |
 | rcpsp 11, bound 66 | 2 010 | 2.636 M | 2.499 M (-5.2 %) | 10.25 M | 10.12 M (-1.3 %) |
 
+**Again after merging main `f4f6391`** (D-0209, D-0212, D-0214, D-0215 in), main = `cba056a8`, the
+branch at `2dbab13` = `99bad850`, same protocol (four jobs at a time; instruction counts do not depend
+on load). Nodes, answers, counters and `.pbp` md5 again identical in all ten pairs.
+
+| instance | --no-proof main | --no-proof branch | proof main | proof branch |
+|---|---|---|---|---|
+| QR48 | 1.036 M | 1.040 M (+0.4 %) | 1.700 M | 1.703 M (+0.2 %) |
+| costas 14 | 42.99 M | 22.12 M (-48.6 %) | 51.46 M | 30.58 M (-40.6 %) |
+| mknap2-1 | 40.15 M | 26.19 M (-34.8 %) | 40.79 M | 26.85 M (-34.2 %) |
+| javarouting trip_6_3 | 8.933 M | 8.937 M (+0.0 %) | 20.87 M | 20.87 M (-0.0 %) |
+| rcpsp 11, bound 66 | 2.424 M | 2.287 M (-5.6 %) | 9.078 M | 8.910 M (-1.9 %) |
+
 QR48's +0.4 % is the clause rows (degree 1) paying for the per-group bookkeeping in the snapshot of
-the passes `quiet` does not answer. The gate (unit suite, models, lanes) is in the handoff note.
+the passes `quiet` does not answer. Gate on `2dbab13` (main `f4f6391` merged in): `dune runtest --force` 4 700 ok, 0 FAIL, peak RSS 155 MB; 214 models, stdout, `.opb` and `.pbp` equal to main's binary; `run_model_tests.sh` 214/214; differential lane 347/347 and debug 333/333; scaling lane ok (all at -j 4). Before the merge, on `b911ebe`: 4 561 ok, 209 models equal, lanes 347/347 and 333/333, scaling ok.
 
 How to revert: revert `3acccc4`; the record and the withdrawn witness (`c99d2b2`) are history only.
