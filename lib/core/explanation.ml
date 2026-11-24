@@ -117,6 +117,25 @@
    bookkeeping, since the node is the same value for every derivation that holds it.
 
    -------------------------------------------------------------------------------
+   M21-memory-T3 / docs/DECISIONS.md D-0223: a row's citation is shared, and what keeps
+   a written tree alive
+   -------------------------------------------------------------------------------
+
+   [model_row id] and [term 1 (model_row id)] return ONE block per id (below
+   [intern_cap]): the citations a counting family's derivation is made of (one per ladder
+   rung it walks) cost their list cell, not eight words. The bytes are the same by
+   construction, see [cite_row].
+
+   What D-0223 found holding written trees (99 % of tdtsp_10_53's live heap, D-0218) is
+   not the hash-consing table but a WRAPPER: a thunk whose closure returns another
+   thunk ([Element]'s [justified]). Forcing the wrapper memoises the tree on the INNER
+   thunk, the release above drops the wrapper's copy only, and the wrapper's closure
+   keeps the inner thunk for the life of the trail entry. Not memoising the inner thunk
+   frees it, but a released wrapper is written again after a wipe, and the tree rebuilt
+   then finds lines the kept one did not: fewer `pol` lines, other bytes, and the
+   closure's cost again. D-0223 measures that rule and leaves it to the user.
+
+   -------------------------------------------------------------------------------
    M1-T12 / docs/DECISIONS.md D-0013: [Model_row], [Combine], [Weaken]
    -------------------------------------------------------------------------------
 
