@@ -19,7 +19,6 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M11-complexity-T18 (D-0216, black-hole root slowdown in `Explanation` hashing) | `lib/core/explanation.ml` (smallest fix, no new constructor), `lib/core/prop/alldiff.ml`, `lib/core/prop/table.ml`, `lib/core/trace.ml`, `test/unit/test_endtoend.ml`, `test/unit/test_trace.ml`, docs/DECISIONS.md (D-0216), docs/ROADMAP.md (row T18) | agent-hash (`wave64-hash`) | 2026-11-23 |
 
 ## Cross-session requests
 
@@ -465,6 +464,7 @@ section 1. Shares are inclusive, of the whole run.
 
 | Task | Session | Date | Summary |
 |---|---|---|---|
+| M11-complexity-T18 (black-hole's root cost under native `table`) | agent-hash (`wave64-hash`) | 2026-11-24 | **D-0216 [AUTONOME].** 156 removals under a 47-variable Hall set rebuilt 8.3 M pairwise at-most-one nodes at black-hole_10's root, all found again in the hash-consing table; `Alldiff.reuse` hands back what a rebuild would return (`Explanation.rebuilds_to`, a removal epoch), `row` in one lookup, `Table.add_fact` and `Trace.settle_facts` dedup through tables. 642 test-model runs byte-identical (default, `--bits-above none`, HASHCONS=0), lanes 347/347 and debug 333/333 for both binaries, scaling green, 4 705 ok. bh10 55.1 -> 7.3 G, a bh14 node 7.74 -> 2.36 G, D-0207's five within 0.6 %. Not merged |
 | M20-pernode-T4 (alldiff's Régin stage, rank 5 of D-0207) | agent-regin (`wave63-regin`) | 2026-11-23 | **D-0215.** A Régin pass that cannot prune is skipped. A matching kept across passes is repaired and one Tarjan pass looks for an edge in no maximum matching, an exact test; otherwise the from-scratch pass runs unchanged. The kept matching is a hint re-read against the live domains (no trail), I-P2 checked under BAGUETTE_DEBUG. Byte-identical on 428 model runs, the five D-0207 instances and two Challenge instances; lanes report the same lines before and after (54 and 42 `later/asks`), scaling ok, runtest 4 700 ok 0 FAIL. Per node without learning or proof: costas -36 %, p1f_13 -51 %, team-assignment -15 %, javarouting -10 %. Not merged |
 | M20-pernode-T2 (Element, and rootness in Cumulative and Gcc) | agent-lazy (`wave62-lazy`) | 2026-11-23 | **D-0214.** An `Element` pruning records a frame (the domains it read and the trail cut, D-0124) and builds its reason (`Reason.Later`, memoised per pass) and its derivation from it when asked. `Cumulative`/`Gcc` use `Store.at_root`. Byte-identical on 428 model runs and the five D-0207 instances. javarouting -33 % per node without learning or proof, -22 % shipped. The differential lanes differ in the `later/asks` counter only (not re-recorded). test_prop's D-0124 BAGUETTE_DEBUG failure was a test defect, now fixed |
 | M20-pernode-T3 (the arithmetic part) | agent-arith (`wave61-arith`) | 2026-11-23 | **D-0212.** `Linear.make` checks the row once (M1-T23's cap over the frozen bounds) and a row that passes runs plain `+`, `*`, `/`; one that does not keeps `Checked`; BAGUETTE_DEBUG audits both ways and asserts the premise. Byte-identical (418 model runs, five D-0207 instances), diff 347/347, debug 333/333, scaling ok, runtest 4 627 ok 0 FAIL. Per node: shipped -0.1 to -3.2 %, no learning mknap -21.4 % |
@@ -679,6 +679,11 @@ Gates 91 to 93 ran pinned to four cores with lanes at `-j 4`, because the series
 **Known, not fixed yet**: black-hole is 4.5 times slower at the root since `inverse`'s alldiff lemmas, in `Explanation`'s hashing of `pol` lines (agent-table's finding); `test_prop` under `BAGUETTE_DEBUG=1` fails one D-0124 check on main (agent-lazy is asked for the cause).
 
 **[AUTONOME] decisions**: none yet beyond the agents' own records.
+### 2026-11-24 (agent-hash, `wave64-hash`): M11-complexity-T18, black-hole's root cost, D-0216
+
+Not a hash defect: table's GAC exposes a 47-variable Hall set at black-hole's root, and each of its 156 removals rebuilt 53 016 pairwise at-most-one nodes that D-0172's table then found; `Alldiff.reuse` now hands back the nodes a rebuild would return, and the quadratic dedups in `Table.add_fact` and `Trace.settle_facts` (70 % of a bh14 node) are hashed. Every byte the same; bh10 55.1 -> 7.3 G, bh14 163 -> 672 nodes in 300 s.
+The `--time-limit` overrun was the stop's latency of one trace entry (D-0149's poll, `fired=332.94s` on main, 300.04 s now), filed as M11-complexity-T19. `Alldiff.pair_builds`/`amo_reuse` are test hooks for M22-review-T9's list.
+
 ### 2026-11-23 (agent-regin, `wave63-regin`): M20-pernode-T4, alldiff's Régin stage, D-0215
 
 `regin_pass` asks `cannot_prune` first (a kept matching repaired, one Tarjan pass for an edge in no maximum matching) and runs the unchanged `regin_scratch` only when it could prune or fail. Every artefact is byte-identical, and a costas node costs -36 % without learning or proof, p1f_13 -51 %, but only -3.8 % shipped, where the learned PB rows still dominate.
