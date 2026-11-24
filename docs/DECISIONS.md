@@ -29260,3 +29260,19 @@ What was measured for it is `docs/reports/2026-11-24-scp-coverage.md`. Its three
    tool, or by GCS. The reader accepts views in any case, which costs nothing (`View`).
 3. **`--e2e` follows the reader, family by family.** A constraint the prefix does not cover is refused
    by name under `--e2e` and solved without it.
+
+### 9. Which cake and which GCS (2026-11-24, read in the sources, not built)
+
+- **cake**: CakeML branch `cp_enc_new` at `930601d6` (2026-11-20, public on GitHub), shipped
+  prebuilt as CakePB-dev `develop-cp` `62bdc7f` (private). GCS's `workflow2_testing.md` names that
+  pair as required since 2026-11-23.
+- **GCS**: branch `cake-selector-conform` at `011a2940` (2026-11-23), `main` plus 4 commits, which
+  contains `cake-optional-mindist` and `scp-chain-strict-lanes`. `cake-zero-one-names` is not in it.
+- `cp_enc_new` adds `binpacking`, `mdd`, `min_distance` and the optional tasks to the keywords,
+  so section 8's "cake lacks `binpacking`" holds for the public release only. `subcircuit`,
+  `reachable` and `tree` are still absent. Its cumulative uses `sb`/`sa`/`sact`/`scc`/`scap_`.
+- **Views are not in it.** `sexp_varc` is the same on `cp_enc_new` and `master`: an atom, else
+  "invalid sexpression at var/const position". GCS's document says so too.
+- Moving baguette's `--e2e` to this cake means rewriting PROOF-FORMAT 3b: the cumulative
+  block, and whatever "Emit fewer redundant rows" (`91fe2e2b8`) and "Leave out terms and rows the
+  declared bounds exclude" (`aaefa85ea`) drop.
