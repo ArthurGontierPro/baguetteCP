@@ -29050,13 +29050,24 @@ that the proof has established is the obvious next step, and needs the id to cit
   400` under `timeout -k 30 120`), 180 runs: no rejected proof, 6 checks over 1 200 s, 8 runs stopped before the
   search began (no proof to end). On the 97 stopped optimisation runs with an incumbent whose
   objective the script could read, the checker's upper bound is the last value printed.
+- The harness (branch commit `b07f0c5`, same binary), end to end through the series' wrappers
+  (`solver_wrap.sh`, `rss_wrap.py`, `veripb_wrap.sh`): 35 instances of 2012, 2016 and 2023 in three
+  modes (default, `-f`, default with a 3 GB heap budget), `SOLVE_TIMEOUT=40`, 105 rows. 55 stopped
+  runs with a solution, 55 `VERIFIED-INCUMBENT` (54 killed by `timeout`, 1 stopped by the heap
+  budget, 2023 roster-shifts). The check of those 55 took 125 s on average and 620 s at most, for
+  40 s of solving. 25 stopped or refused runs without a solution, not checked. 25 answers, 23
+  `VERIFIED` (19 OPT, 4 SAT) and 2 `TIMEOUT-CHECK` (2016 oocsp_racks). No `REJECTED`,
+  `VERIFIED-WEAK`, `VERIFIED-PARTIAL` or `CHECK-ERROR`. The 36th instance (2016 cryptanalysis) does
+  not flatten.
 
 ### 6. Limits
 
 SIGKILL and the kernel's OOM killer cannot be caught. `timeout -k 30` leaves 30 s after SIGTERM for
 the line in progress. A signal before the search has begun ends the process as before. The harness
-(`scripts/compare_run.sh`) does not yet check the proofs of killed runs. That is the next step, with
-the per-edition time limits the user mentioned.
+(`scripts/compare_run.sh`) checks the proof of a killed run that printed a solution; `CHECK_STOPPED=0`
+turns that off, because the check adds up to the check limit per stopped run. A killed run without a
+solution is not checked. The check limit is the one answers have, so a long stopped proof can end
+`TIMEOUT-CHECK`. The per-edition time limits the user mentioned are not done.
 
 ### 7. Revert
 

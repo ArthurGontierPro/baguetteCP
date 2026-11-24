@@ -689,6 +689,8 @@ To merge: `search.ml` and `bin/main.ml` overlap agent-chrono's `wave71-chrono` (
 Runs: `fataepyc-07:/scratch/arthur/interrupt/`.
 For the orchestrator, before the next series: a heap stop with an incumbent now exits 0, so `compare.py` files it SAT with an objective. `arms_compare.py` and `challenge_rank.py` read that as an incumbent, but `readme_table.py` would have counted it under "Satisfiable, proof verified" (corrected on this branch; `bench/tuning/agreement.py` line 29, which an earlier note named, is right as it is). The harness half is on this branch too: `compare_run.sh` checks a killed run's proof when it printed a solution (`CHECK_STOPPED=0` turns it off), and the readers tell an answer, a verified solution and an unverified one apart.
 
+End to end on 105 rows (D-0225 section 5): 55 of 55 stopped solutions `VERIFIED-INCUMBENT`, through the series' wrappers. Cost: 125 s of check on average for 40 s of solving, so a 1 200 s series will check much longer; `CHECK_STOPPED=0` turns it off. At the merge with main at `dd499b2`, one append conflict at the end of `docs/DECISIONS.md` (D-0225 against D-0221): keep both. Release the two M6-T24 claim rows then.
+
 ### 2026-11-24 (readme-session, laptop): 900 s for the editions 2011 to 2014
 
 The user would like the next series to use 900 s on 2011 to 2014 (perhaps, not decided). `run_series.sh --solve-timeout` is one value for the whole series, and `read_series.sh` calls `challenge_rank.py` without `--timeout` (default 1 200 s), so both need a per-edition value. Read from the official results: the largest recorded time is 900 s for 2011 to 2014, 1 200 s (to 1 209) after.
