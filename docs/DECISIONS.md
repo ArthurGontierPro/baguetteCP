@@ -29276,3 +29276,14 @@ What was measured for it is `docs/reports/2026-11-24-scp-coverage.md`. Its three
 - Moving baguette's `--e2e` to this cake means rewriting PROOF-FORMAT 3b: the cumulative
   block, and whatever "Emit fewer redundant rows" (`91fe2e2b8`) and "Leave out terms and rows the
   declared bounds exclude" (`aaefa85ea`) drop.
+
+### 10. The public pair, measured (2026-11-24)
+
+`develop-cp` is private and the user has no access to it. The pair of public versions of the same
+week is cake CakePB `438b8f83` (2026-08-21, the one PROOF-FORMAT 3b is written for) and GCS
+`87b24555` (2026-08-19). On the 203 `.scp` of section 2 (`bench/inputs_spike/w.sh`, `decide`, `solx`
+rewritten to `sol`), the GCS proof is VERIFIED by `cake_pb_cp` on **196** (103 SAT, 83 UNSAT, 10
+BOUNDS) and as written on 93. The 7 others: 4 names shared by a variable and a constraint and 1 `max`, both
+to change in `fzn2scp.py`, then `diffn_opt` (a label cake has not) and `inverse_offset_sat` (an empty
+`pol`), not investigated. baguette's `--e2e` is VERIFIED on the 203. Recommended as the reference
+until the development cake is public.
