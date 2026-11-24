@@ -28648,3 +28648,84 @@ The code is three commits on `wave67-cdcl`: `e9108c1` (the loop, the observables
 `92c9e1f` (the fallback) and this record's commit. With the switch off nothing they add runs except
 the observables' counters (one byte per learned instance, one evaluation of the learned clause per
 resume), so reverting is `git revert` of the three, or simply not setting `BAGUETTE_CDCL`.
+
+## D-0224  [AUTONOME] M19-config-T11, then T2 to T4 measured on the CDCL loop: chronological backtracking for long jumps under `--cdcl` (`--chrono N`), with the asserted literal recorded at the level the search goes back to. The trail stays ordered by level, no `Store`, `Engine` or proof-rule change; the learned clause's own instance re-asserts it after a later backtrack through the engine's existing re-seed of young instances
+
+**Status**: IN PROGRESS on branch `wave71-chrono` (agent-chrono, 2026-11-24). ROADMAP M19-config-T11,
+T2, T3, T4. Taken in autonomous mode. The solver's default is NOT changed here (M19-config-T1 decides
+it on a full series). Results in `/cluster/arthur/baguette-results/chrono/`.
+
+### 1. Design (written before the code)
+
+**What is to be removed.** D-0219 section 6: after a conflict at level `d` the loop backjumps to the
+learned clause's asserting level `b`, the fixed order then re-takes the decisions of the levels
+`b+1 .. d-1` it undid, with their propagation, and on a deep optimisation search that re-descent is
+most of the work (flowshop-workers 24 decisions per conflict against `dfs`'s 9).
+
+**The three candidates.**
+
+| candidate | what it does | what it needs here | verdict |
+|---|---|---|---|
+| D-0137's `--reuse-trail` | at a RESTART, keep the levels whose decision still outscores every unfixed variable (van der Tak et al. 2011) | nothing | not this problem: it acts on restarts, under `--search activity` only, never on a conflict's backjump |
+| trail saving (Hickey and Bacchus, SAT 2020) | keep the undone segment `b+1 .. d`, and when the search re-takes its first decision, replay the saved propagations while their reasons still hold | to re-push a trail entry WITH ITS EXPLANATION after the store has been unwound below it: a D-0124 `Later` reason or a D-0214 frame reads a `Store.history` that `Store.check_history` refuses once the trail is cut below it, so a replay needs a new store API (held by agent-holes) and a re-derivation of every reason it carries | not built: the replay is a second propagation path through `Store` and the explanations, which are the two things other sessions hold today |
+| chronological backtracking (Nadel and Ryvchin, SAT 2018) | when the jump would skip more than `T` levels, go back ONE level (to `top - 1`, `top` the clause's highest level) instead of to `b`, and assert the UIP's negation there | see below: nothing new from the store or the proof | **built** |
+
+**The variant built, and why it needs no new trail machinery.** Nadel and Ryvchin assign the
+asserted literal at its TRUE level `b` while it sits above level-`b+1` entries on the trail (out of
+order), and on a later backtrack to `t >= b` they keep such literals. Here the trail is strictly
+ordered by level (I-T2) and `Store` is held by another session, so the asserted literal is recorded
+at the level the search goes back to, `c = top - 1`: an ordinary propagation of the learned clause
+at level `c`, as Möhle and Biere (SAT 2019) call the "imprecise" assignment level. Every level the
+loop reads (`Learn.levelled`, the asserting level, the 1UIP walk) is the RECORDED one, and the
+argument that a learned clause is implied never read a level at all, so the only cost is precision:
+a literal recorded above its true level makes a later clause's asserting level, and its LBD, higher
+than they had to be.
+
+What Nadel and Ryvchin's out-of-order trail buys is that the literal survives a later backtrack to
+any `t` in `[b, c)`. Here it is popped there with level `c`, and the clause is then unit again with
+nothing to wake it (its false watch sits at level `<= b`, which was not popped): a "missed lower
+implication". The engine already re-seeds it. `Engine.propagate`'s rule (b) (M6-T18, M6-T22) seeds
+every instance BORN after the last fixpoint the backtrack left standing, because such an instance
+has never run on that state; the learned clause was born at the conflict, after every fixpoint of
+levels `<= c`, so the next `propagate` after a backtrack to `t < c` runs it, and it asserts the
+literal again at `t`, its own reason, its own trace line. It is then stamped with the new
+fixpoint's epoch and the same holds for the next backtrack below `t`. The PB row learned beside
+the clause is an instance too and is covered the same way. `BAGUETTE_DEBUG`'s `check_fixpoint` (I-P2)
+re-runs every instance at every fixpoint and would raise on a missed implication: the unit lane and
+the model tests under `--debug` are the check.
+
+Two kinds of assertion have no instance and are handled in the loop:
+
+- the learned UNIT is a global applied at every node (`apply_globals`), so nothing is missed;
+- the FALLBACK (D-0219 section 4: no 1UIP clause, the branch nogood filed at its asserting level `b`,
+  its assertion pushed from it by `assert_directly`) is kept on a short list, and after every
+  backjump to a `t` with `b <= t < ` its recorded level it is pushed again at `t`, from the same
+  line, which is still live because it is filed at `b <= t`. An entry is dropped when `t < b` (its
+  other literals are popped too) or when it is pushed at its true level.
+
+**Not chronological**: a clause that does not assert (its two highest levels tie, the
+branch-and-bound case of D-0219 section 4) goes where D-0219 sends it; a restart's target still wins
+when it is lower (`min`). The jump is taken whole when it skips at most `T` levels, as Nadel and
+Ryvchin's threshold (their `T = 100`); `T = 0` makes every conflict chronological, which on a fixed
+search is `dfs`'s tree with the sibling a propagation.
+
+**The proof.** The lines written are the same learned clauses, the same conflict lines and the same
+bridges, in the same order; the assertion's trace line is the same `rup` against the level-0 clause,
+filed at `c` instead of `b`. What changes is the DELETIONS: a backjump wipes the levels above its
+target (`Justify.wipe_level (c + 1)`), so a chronological step deletes the lines of level `top` only
+and the lines of `b+1 .. c` stay live as long as their entries stay on the trail, to be wiped when
+those levels are undone or at the end (I-X2 unchanged: every id still deleted exactly once). A
+re-assertion after a later backtrack is a new trail entry with a new trace line, written lazily at
+the next conflict as every entry's is. No new rule kind, no new `Explanation` constructor, no change
+to `Store`, `Engine`, `Trace` or `Justify`.
+
+**Completeness.** Möhle and Biere's argument with recorded levels: at each conflict the loop goes back
+to a level `t` in `[b, top - 1]` where the clause is unit and adds its literal at `t`, so the vector
+of per-level assignment counts grows strictly in the lexicographic order (levels below `t`
+untouched, level `t` one longer) and is bounded; restarts are spaced by the restart policy as before.
+
+**The switch.** Under the loop only: `config.chrono : int option`, `None` off (D-0219's loop,
+byte-identical), `Some t` chronological when the jump would skip more than `t` levels. CLI
+`--chrono T` (needs `--cdcl`, a usage error otherwise), environment `BAGUETTE_CHRONO=T`. `--cdcl` is
+added to the CLI (D-0219's cross-session request), `BAGUETTE_CDCL=1` kept. `dfs` and the default
+are byte-identical by construction: the code is inside `Search.cdcl` and the CLI parsing.
