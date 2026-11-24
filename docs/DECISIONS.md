@@ -27856,11 +27856,11 @@ What it does not show: a completion change beyond p1f-pjs_10 in 300 s. The routi
 asks, and a propagated position bound (section 7's MTZ relaxation) if a profile says the
 pruning, not the search, is what is missing.
 
-## D-0220  [AUTONOME] M18-coverage-T4: `bin_packing_load`, `bin_packing_capa` and `bin_packing` kept whole by mznlib as one builtin over one INDICATOR Boolean per (item, bin) pair. The .opb defines the indicators by `table`'s rows (one table of one column per item, D-0206) and the loads by one linear row per bin over them; every pruning is an existing `Table` or `Linear` one. No new propagator, no new `Explanation` constructor
+## D-0220  [AUTONOME] M18-coverage-T4: `bin_packing_load`, `bin_packing_capa` and `bin_packing` through mznlib, std's rows without the bool2int copies: one linear row per bin over the indicators `bin[i] = b` themselves (std's int_eq_reif Booleans, read as 0..1). No new propagator, no new `Explanation` constructor, no `lib/core` change. The refusals were measured first: four families of five fill the heap during search, not at the encoding
 
 **Status**: IN PROGRESS (agent-binpack, `wave68-binpack`, 2026-11-24). Revert: delete
 `mznlib/fzn_bin_packing_load.mzn`, `fzn_bin_packing_capa.mzn` and `fzn_bin_packing.mzn`; every model
-then flattens to std's decomposition again, byte for byte, and the builtin is dead code.
+then flattens to std's decomposition again, byte for byte, and the two builtins are dead code.
 
 ### 1. Context, and what the refusals measured to be
 
@@ -27894,78 +27894,85 @@ for the size of the encoding, and there the decomposition is the bulk of it. A n
 bin-packing changes the first kind only through the shape of the reasons the search learns
 from; it is not the lever for it, and section 6 says where that lever is.
 
-### 2. The design: indicators defined by `table`, loads by `Linear`
+### 2. The design: std's rows, minus the copies
 
-`mznlib/fzn_bin_packing_load.mzn` keeps std's `sum(load) = sum(w)` line and replaces the rest by
-one call `baguette_bin_packing_load(load, b0, bin, w, si, sv, s)`: `load` the loads of the bins
-`b0, b0 + 1, ...`, `s` one `var bool` INDICATOR per pair (item `si[k]`, bin `sv[k]`) with
-`sv[k]` in `dom(bin[si[k]])` and in the bin range, introduced by the library's `let` as table's
-selectors are; items of weight 0 get no indicator and only the range restriction.
-`fzn_bin_packing_capa.mzn` and `fzn_bin_packing.mzn` call `baguette_bin_packing_capa(capa, b0,
-bin, w, si, sv, s)` with constant capacities (`bin_packing` with `c` for every bin of
-`lb_array(bin)..ub_array(bin)`, std's own range). The .opb rows (`compile.ml`'s
-`post_bin_packing`):
+std's rows are already the natural definition: per bin, `load_b = sum_i w_i [bin_i = b]` over
+the items' value indicators, with no auxiliary but the indicators. What std adds on top is a
+`bool2int` COPY of every indicator, because MiniZinc's `int_lin_eq` takes integers. The design
+removes the copy and nothing else.
+
+`mznlib/fzn_bin_packing_load.mzn` keeps std's `sum(load) = sum(weight)` and range restriction,
+and writes per bin
 
 ```
-per item i, one table of one column over bin_i (D-0206's rows, n = 1):
-  ALO_i     sum_{k: si[k] = i} s_k >= 1
-  DEF_k     2 ~s_k + [bin_i >= v] + ~[bin_i >= v + 1] >= 2      (s_k -> bin_i = v, v = sv[k])
-per bin b:
-  LOAD_b    sum_{k: sv[k] = b} w_{si[k]} s_k - load_b = 0        (two rows, as int_lin_eq)
-  CAPA_b    sum_{k: sv[k] = b} w_{si[k]} s_k <= capa_b           (the _capa form)
+baguette_bool_lin_eq([w_i | i in items_b], [bin_i = b | i in items_b], load_b)
+load_b in sum(min(0, w_i))..sum(max(0, w_i))          (i in items_b)
 ```
 
-WHY THIS IS A DEFINITION. DEF_k makes two indicators of one item exclusive (they name two
-values of bin_i), ALO_i makes one of them true, so in every solution of the .opb exactly one
-indicator per item is set and it is `s_k = [bin_i = sv[k]]`; bin_i takes one of its listed bins,
-which is std's range restriction. LOAD_b is then std's `load[b] = sum_i w_i [bin[i] = b]`
-verbatim. The .opb's solutions projected on (load, bin) are exactly the bin packings; s is a
-function of bin. The only row not of that kind is `sum(load) = sum(w)`, which std writes itself
-and which follows from the others; it is the decomposition's own line, kept as it was, not a
-consequence the solver computed, so D-0213 section 3's open question does not arise.
+`items_b` the items of nonzero weight whose domain holds b. `bin_i = b` is the SAME Boolean std's
+`bool2int(bin_i = b)` reads: an `int_eq_reif` the flattener writes once and shares, by common
+subexpression elimination, with any other constraint that says `bin_i = b` (steelmillslab's
+colour constraint does, for every pair). `fzn_bin_packing_capa.mzn` writes
+`baguette_bool_lin_le(w, [bin_i = b | ...], capacity_b)` per bin, and `fzn_bin_packing.mzn` the
+same with `capacity` over std's own range `lb_array(bin)..ub_array(bin)` (std writes that row
+counting the items NOT in b, `>= W - capacity`; it is the same row negated and shifted by W).
 
-Against std, per pair: 1 row instead of about 6, 1 variable instead of 2, no instance (one per
-item instead of two per pair).
+`baguette_bool_lin_eq(a, x, y)` is `sum a_i x_i = y` and `baguette_bool_lin_le(a, x, c)` is
+`sum a_i x_i <= c`, the Booleans read as the integers 0 and 1 (D-0007): the builder turns each
+into the `Int_lin_eq` / `Int_lin_le` it is, so the row, the propagator (`Lin_eq`, `Linear`), the
+overflow cap, the oracle (`Model.check_assignment`) and the proof are the existing ones. The
+FlatZinc builtins `bool_lin_eq` / `bool_lin_le` have that meaning, but mznlib/redefinitions.mzn
+decomposes them through bool2int for every model; prefixed names keep this change to bin
+packing (section 5).
+
+The load restriction is the one choice that is not std's text: std's flattening finds those
+bounds by itself, because there each load is the variable its own `int_lin_eq` DEFINES, and
+MiniZinc intersects a defined variable's domain with the bounds of its definition. Here nothing
+defines the load and, without the line, it keeps its declared domain: on gbac reduced_UD6 a load
+stayed 0..298 where std had 0..18, the `int_times` squares built from it became 0..93 025, and
+the .opb went from 11 k to 99 k rows. The line restates what the flattener computed for std, as
+a domain restriction of the model (trusted as the flattening is), not a row the solver derives.
+
+WHY THIS IS STILL THE DEFINITION. Every row is std's: `sum(load) = sum(weight)`, the range
+restriction, and per bin the same linear row over the same indicators, with the integer copy
+`I = bool2int(B)` replaced by B itself (I = B in every solution of std's rows, so the .opb's
+solutions projected on the model's variables are the same). The load restriction excludes no
+solution (a load is a sum of a subset of its bin's items).
+
+Per pair, against std: 1 variable and about 2 rows and 1 propagator instance fewer (the
+bool2int), the same int_eq_reif. On the 10 x 5 toy: 342 -> 242 .opb rows under `--bits-above 0`,
+437 -> 337 under `none`, and the same solution printed (the search order is unchanged: the copies
+were never branched before the indicators).
 
 ### 3. Propagation and proof: all of it existing
 
-- One `Table` instance per item (GAC on (bin_i, s_i.)), every pruning one `rup` against ALO/DEF
-  and bin_i's ladder (D-0206 section 3): a bin removed from bin_i kills its indicator, a dead
-  indicator removes its bin, a set indicator fixes bin_i, one live indicator is set.
-- One `Lin_eq` (or `Linear`) instance per bin over the indicators and the load: bounds on the
-  load from the indicators fixed and still possible, an indicator set to 0 when its weight no
-  longer fits under the load's upper bound, set to 1 when the bin cannot reach its lower bound
-  without it. Each pruning is `Linear`'s own justification (order: one `rup`; a bits load: the
-  bits arm's `pol`, D-0132).
-- std's total row as an ordinary `int_lin_eq`.
-
-That is std's propagation strength plus the exclusivity of an item's indicators as one GAC
-instance rather than pairwise reified equalities. Shaw's 2004 rules (no-fit by subset sums, the
-lower bound on the number of bins, load bounds from the other bins' slack) are not built here:
-section 1 says the refusals are not a propagation question, and the measurement (section 8)
-decides whether they are worth a propagator of their own.
+The indicators keep int_eq_reif's propagator and proof (reif_lin_eq.ml, D-0057; over a bits
+item its two-half `pol`, D-0134 section 8). Each bin's row is a `Lin_eq` (two `Linear`
+instances) or a `Linear`: load bounds from the indicators fixed and still possible, an
+indicator set to 0 when its weight no longer fits, set to 1 when the bin cannot reach its lower
+bound without it, each pruning `Linear`'s own justification (order: one `rup`; a bits load: the
+bits arm's `pol`, D-0132). That is std's propagation exactly, with one link fewer between an
+indicator and its row. Shaw's 2004 rules (no-fit by subset sums, the lower bound on the number
+of bins, load bounds from the other bins' slack) are not built: section 1 says the refusals are
+not a propagation question, and section 8's measurement does not ask for them.
 
 ### 4. Encodings
 
-bin is held on the ORDER encoding (family `binpack` in `held_families`), as table's scope is,
-because DEF_k names its order literals per value. The indicators are Booleans. The loads are
-linear terms and stay eligible for bits: under the default `--bits-above 0` a load is a bits
-variable, LOAD_b has O(log width) literals for it and `Linear`'s bits arm justifies its bounds.
-Under `--bits-above none` everything is order, and the rows are the same over the load's ladder.
-std's decomposition held nothing (int_eq_reif over a bits scope is reif_lin_eq's two-half
-`pol`), so under the default encoding an item variable that was bits becomes order: its ladder is
-its domain width, which mznlib's bins bound (the bin range).
+Nothing is held. The items keep whatever encoding the rest of the model gives them (bits by
+default; int_eq_reif over bits is reif_lin_eq's bits face), the loads are linear terms (bits by
+default), the indicators Booleans. `--bits-above none` gives the same rows over the ladders.
 
-### 5. Options considered
+### 5. Options considered, and the one built first and dropped
 
-| option | .opb per pair | consequence |
+| option | per pair | measured |
 |---|---|---|
-| keep std | about 6 rows, 2 variables, 2 instances | the ihtc refusal stays |
-| `bool_lin_eq` as a builtin, std's int_eq_reif kept | about 4 rows, 1 variable, 1 instance | removes only the bool2int copy |
-| indicators defined by table, loads by Linear (chosen) | 1 row, 1 variable, a table instance per item | no new propagator, no new constructor, std's strength or more |
-| no indicator: LOAD_b over `[bin_i >= b] + ~[bin_i >= b+1]` | 0 rows | unit propagation counts both literals of an unfixed item (2 w_i where the truth is w_i), so a load pruning is not RUP from the row; every pruning would need a `pol` with the item's ladder, and a dedicated propagator |
-| direct literals `[bin_i = b]` in LOAD_b, a dedicated propagator | the direct encoding's channel rows | a bits load's bound is not RUP over a row (D-0127), so the propagator would re-implement `Linear`'s bits arm |
-| Shaw's propagator over any of these | as the row above it | stronger pruning, unmeasured need (section 3) |
+| keep std | int_eq_reif + bool2int: 2 variables, about 6 rows, 2 instances | the baseline |
+| std's rows without the copy (chosen) | int_eq_reif: 1 variable, about 4 rows, 1 instance | rows 0.86 to 1.0 of std, section 8 |
+| indicators as FRESH Booleans defined by `table`'s rows (one table of one column per item, D-0206: ALO plus `2 ~s + [bin >= v] + ~[bin >= v+1] >= 2`), loads by `Linear`; bins held on order | 1 variable, 1 row, a table instance per item | built first. team-assignment 105 k -> 68 k rows, but steelmillslab 102 k -> 117 k rows and 18 -> 149 MB: holding the bins on order turned every OTHER linear row over them (12 k int_eq_reif of the colour constraint, which CSE no longer shares with fresh indicators) from 7 bits into 111 ladder literals. Dropped |
+| no indicator, `[bin >= b] + ~[bin >= b+1]` in the row | 0 rows | unit propagation counts both literals of an unfixed item (2 w where the truth is w), so no load pruning is RUP from the row; every pruning a `pol` with the item's ladder, a dedicated propagator |
+| direct literals `[bin = b]` in the row, a dedicated propagator | the direct encoding's channel rows | a bits load's bound is not RUP over a row (D-0127): the propagator would re-implement `Linear`'s bits arm |
+| native `bool_lin_eq` / `bool_lin_le` for every model (drop their bool2int redefinition) | the same, everywhere | changes every model that sums Booleans; a default-wide change left as a proposal (M18 or M19 row) |
+| Shaw's propagator over the chosen rows | as chosen | stronger pruning, not what the refusals measured to need |
 
 ### 6. What this does not fix
 
