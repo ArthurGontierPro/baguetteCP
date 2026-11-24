@@ -685,6 +685,16 @@ The series on `f244c35a` is done and the README section is regenerated from it (
 
 Updated as things land. The plan is the nine steps agreed on 2026-11-23 (speed first, then the CDCL loop, coverage, the refused third, configuration last).
 
+**THE NEW SERIES (D-0203, merged; README regenerated)**, release `f244c35a` (bits default, no proof cap, BEFORE all the speed and coverage merges below), sixteen editions, no proof rejected:
+
+| arm | OPT+UNSAT / SAT verified | summed score | D-0185's score |
+|---|---|---|---|
+| default, with proof | 302 / 74 | 4 043 | 2 789 |
+| `-f`, with proof | 346 / 95 | 5 799 | 3 581 |
+| default, `--no-proof` (unverified) | 340 / 86 | 4 428 | 3 237 |
+
+`-f` scored in the fixed category would rank 3rd in five editions and 2nd in 2020; it wins on 670 instances and loses on 327. Proof logging costs 0.47 of the time at the median. At 64 GiB (D-0210, on fataepyc-07, same binary): REFUSED 164 -> 60 but only 302 -> 304 verified answers, so 16 GiB stays a fair reference. **This is the strongest case yet for M19-config-T1 (the default search): it is held until agent-chrono's arms on the CDCL loop are in (D-0224), then decided on these numbers.**
+
 **Merged and gated** (gates 91 to 95 green, pinned to four cores with lanes at `-j 4` because the series holds the node; last binary `75b1e984`):
 - D-0209, the proof text through one buffer: byte-identical, -0.4 to -7.9 % per proved node (gate 91).
 - D-0206, native `table` (GAC, one `rup` per pruning): `.opb` 3 to 16 times smaller on the Challenge's table instances (gate 92; the only artefact diffs are the five new models).
