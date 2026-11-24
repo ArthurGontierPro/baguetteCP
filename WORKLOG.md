@@ -19,6 +19,7 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
+| M19-config-T11, then T2 to T4 measured on the CDCL loop (D-0224) | `lib/core/search.ml`, `lib/core/learn.ml`, `lib/core/restart.ml`, `lib/core/phase.ml`, `lib/core/activity.ml`, `bin/main.ml` (the `--cdcl` request), `test/unit/test_search_strategy.ml`, ROADMAP M19-config-T2/T3/T4/T11 | agent-chrono (`wave71-chrono`) | 2026-11-24 |
 
 ## Cross-session requests
 
