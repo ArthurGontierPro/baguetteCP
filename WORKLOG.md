@@ -25,7 +25,7 @@ of it to every session and stopping at a broken line before it even reached the 
 
 ### 2026-11-23 (orchestrator baguette-92 on fataepyc-06): decision numbers reserved
 
-D-0203 (agent-series), D-0206 (agent-table), D-0208 (agent-watch, M20 learned-constraint wakes), D-0209 (agent-writer, M20 proof writer) are taken by running agents. D-0210 (agent-node07, M17-T5, the 64 GiB observation series) and D-0211 (agent-node07, M17-T4, GCS and Chuffed) too. D-0212 (agent-arith, M20-pernode-T3) too. Another session that needs a record: take D-0214 or above, and say so here. D-0213 is agent-diffn (M18-coverage-T2).
+D-0203 (agent-series), D-0206 (agent-table), D-0208 (agent-watch, M20 learned-constraint wakes), D-0209 (agent-writer, M20 proof writer) are taken by running agents. D-0210 (agent-node07, M17-T5, the 64 GiB observation series) and D-0211 (agent-node07, M17-T4, GCS and Chuffed) too. D-0212 (agent-arith, M20-pernode-T3) too. Another session that needs a record: take D-0217 or above, and say so here. D-0216 is agent-hash (black-hole root slowdown in Explanation hashing). D-0215 is agent-regin (M20-pernode-T4, alldiff). D-0214 is agent-lazy (M20-pernode-T2, Element). D-0213 is agent-diffn (M18-coverage-T2).
 
 Need a change in a file someone else has claimed? Write it here and move on to other
 work. The owning session picks it up.
@@ -459,10 +459,15 @@ section 1. Shares are inclusive, of the whole run.
 
 - 2026-11-23, agent-tuning to the owner of `bench/series/` (wave58-series): `run_series.sh` fixes the solve time at 1 200 s and runs every instance of `bench/challenge/<year>.lst`. M19-config-T0 (D-0205, `bench/tuning/set.lst`) needs `--list FILE` (ids to keep, one per line or the first column of a .lst) and `--solve-timeout SECONDS` (300). Not edited by me.
 
+- 2026-11-23, agent-lazy (M20-pernode-T2, D-0214, `wave62-lazy`) to the owner of `lib/core/store.ml` (agent-watch this round): please add three history readers next to `lo_reasons_at`, `remover_at h ~var v` (= `remover h.h_store ~before:h.h_upto`), `at_root_at h pos` and `explanation_at h e`, and drop the copies at the top of `lib/core/prop/element.ml`'s frame section (they read `h.Store.h_store`, which is the only place outside store.ml that does). Then alldiff's `s_holes` can be read from a frame the same way (D-0214 section 6: 5.3 % of a costas node without learning or proof, in the bounds stage alone).
+
 ## Completed
 
 | Task | Session | Date | Summary |
 |---|---|---|---|
+| M20-pernode-T4 (alldiff's Régin stage, rank 5 of D-0207) | agent-regin (`wave63-regin`) | 2026-11-23 | **D-0215.** A Régin pass that cannot prune is skipped. A matching kept across passes is repaired and one Tarjan pass looks for an edge in no maximum matching, an exact test; otherwise the from-scratch pass runs unchanged. The kept matching is a hint re-read against the live domains (no trail), I-P2 checked under BAGUETTE_DEBUG. Byte-identical on 428 model runs, the five D-0207 instances and two Challenge instances; lanes report the same lines before and after (54 and 42 `later/asks`), scaling ok, runtest 4 700 ok 0 FAIL. Per node without learning or proof: costas -36 %, p1f_13 -51 %, team-assignment -15 %, javarouting -10 %. Not merged |
+| M20-pernode-T2 (Element, and rootness in Cumulative and Gcc) | agent-lazy (`wave62-lazy`) | 2026-11-23 | **D-0214.** An `Element` pruning records a frame (the domains it read and the trail cut, D-0124) and builds its reason (`Reason.Later`, memoised per pass) and its derivation from it when asked. `Cumulative`/`Gcc` use `Store.at_root`. Byte-identical on 428 model runs and the five D-0207 instances. javarouting -33 % per node without learning or proof, -22 % shipped. The differential lanes differ in the `later/asks` counter only (not re-recorded). test_prop's D-0124 BAGUETTE_DEBUG failure was a test defect, now fixed |
+| M20-pernode-T3 (the arithmetic part) | agent-arith (`wave61-arith`) | 2026-11-23 | **D-0212.** `Linear.make` checks the row once (M1-T23's cap over the frozen bounds) and a row that passes runs plain `+`, `*`, `/`; one that does not keeps `Checked`; BAGUETTE_DEBUG audits both ways and asserts the premise. Byte-identical (418 model runs, five D-0207 instances), diff 347/347, debug 333/333, scaling ok, runtest 4 627 ok 0 FAIL. Per node: shipped -0.1 to -3.2 %, no learning mknap -21.4 % |
 | M22-review-T4 (but the module map), T6 (the seven comments), T7 (the fuzz lane), the report's speed section | review-1123 (laptop session, `review-easy`, gate on fataepyc-07) | 2026-11-23 | CLAUDE.md's context budget measured again (it said 340 KB for docs/, which is 2.5 MB) and its stale-binary section corrected; README's alldiff consistency; seven comments that had become false; `scripts/fuzz_lane.sh`; the report leads with speed (section 2), and T12 sends it to M20-pernode. Byte-identical, gate 2 in the handoff note. |
 | M20-pernode-T5 (the buffer part: proof text through one buffer) | agent-writer (`wave60-writer`) | 2026-11-23 | **D-0209.** New `lib/proof/text.ml`: `Writer`'s lines and `Opb.output_row`'s rows written in one `Text` buffer, integers by digit pairs in place, literal names from a per-variable prefix cache, `pol` tokens counted in the write. `.opb`/`.pbp`/stdout byte-identical on 209 models x 2 flag sets, lane 347/347 and debug 333/333, scaling ok, 4 563 ok. Proved node -7.9 % rcpsp, -7.4 % QR48, -4.5 % javarouting, -1.5 % costas, -0.4 % mknap (instructions). Not merged |
 | M22-review-T1, M22-review-T2 (the two bugs of the 2026-11-23 review) | review-1123 (laptop session, `review-fixes`, gate on fataepyc-07) | 2026-11-23 | T1: `builder.ml`'s constant fold through `Checked`; `int_lin_le([2^61, 1], [4, x], 0)` printed `x = 0` and VeriPB verified it, it is now refused with the limit named. T2: cumulative reports an overload among fixed tasks (exit 4 before), two regression models. Report, fuzz harness and rows T3 to T13: `docs/reports/2026-11-23-code-review.md`, `tools/fuzz/`. |
@@ -661,6 +666,41 @@ section 1. Shares are inclusive, of the whole run.
 | M19-config-T0 (the tuning set) | agent-tuning (`wave59-tuning`) | 2026-11-23 | **D-0205.** `bench/tuning/`, 200 instances in 183 families. DONE except the driver hook. |
 
 ## Handoff notes
+
+### FOR THE USER'S RETURN: the autonomous run started 2026-11-23 evening (orchestrator, Fable)
+
+Updated as things land. The plan is the nine steps agreed on 2026-11-23 (speed first, then the CDCL loop, coverage, the refused third, configuration last).
+
+**Merged and gated** (gates 91 to 95 green, pinned to four cores with lanes at `-j 4` because the series holds the node; last binary `75b1e984`):
+- D-0209, the proof text through one buffer: byte-identical, -0.4 to -7.9 % per proved node (gate 91).
+- D-0206, native `table` (GAC, one `rup` per pruning): `.opb` 3 to 16 times smaller on the Challenge's table instances (gate 92; the only artefact diffs are the five new models).
+- D-0212, plain arithmetic in `Linear` after one check per row: byte-identical, -21 % on mknap without learning, -0.3 % shipped until D-0208 (gate 93).
+- D-0214, Element's reasons on demand: byte-identical artefacts, javarouting -22 % per node shipped without proof; the lane's `later/asks` counter changed on the element instances, so the reference was re-recorded in its own commit (`841fd1a`, every proof verified) (gate 94, then 95).
+- D-0215, alldiff's Régin stage gated by an exact test: byte-identical, costas -36 % without learning, p1f_13 -57 % shipped (gate 95).
+The shipped gains on costas and mknap stay small until D-0208, because learned constraints are 83 to 93 % of their nodes.
+
+**Running**: the series on current main without the proof cap (agent-series, D-0203, fataepyc-06); the 64 GiB observation series then GCS and Chuffed (agent-node07, D-0210, D-0211, on fataepyc-07, allowed by the user on 2026-11-23); agent-watch (D-0208, learned constraints woken by watches); agent-diffn (D-0213); agent-hash (D-0216, the black-hole root slowdown).
+
+**Known, not fixed yet**: black-hole is 4.5 times slower at the root since `inverse`'s alldiff lemmas, in `Explanation`'s hashing of `pol` lines (agent-table's finding). The `test_prop` debug failure was a test defect, fixed in D-0214.
+
+**[AUTONOME] decisions**: none yet beyond the agents' own records.
+### 2026-11-23 (agent-regin, `wave63-regin`): M20-pernode-T4, alldiff's Régin stage, D-0215
+
+`regin_pass` asks `cannot_prune` first (a kept matching repaired, one Tarjan pass for an edge in no maximum matching) and runs the unchanged `regin_scratch` only when it could prune or fail. Every artefact is byte-identical, and a costas node costs -36 % without learning or proof, p1f_13 -51 %, but only -3.8 % shipped, where the learned PB rows still dominate.
+The lanes differ from the 2026-11-21 reference in `later/asks` only, with the same lines as main's binary, so the re-record D-0214 asks for covers this branch too.
+Next in alldiff: `s_holes` from a frame (the cross-session request of D-0214 on `store.ml`) and the bounds stage (`List.find_all` in `contained`, now the top symbol of a costas node).
+
+### 2026-11-23 (agent-lazy, `wave62-lazy`): M20-pernode-T2, D-0214
+
+Element's reasons and the eager part of its derivations are built on demand from a frame (immutable domains plus `Store.history`). The bytes are identical, and javarouting costs -33 % per node without learning or proof and -22 % shipped without proof. Cumulative and Gcc ask rootness by `Store.at_root` (rcpsp -5 %).
+At merge, both differential lanes differ ONLY in the `later/asks` counter on the four element instances (54 runs, and 42 under `--debug`). That is by construction, and the reference should be re-recorded in the merge's own commit.
+Next: `Alldiff`'s `s_holes` from a frame (7 % of a costas node without learning), once `remover_at`/`at_root_at` move from element.ml into store.ml (cross-session request). test_prop's old D-0124 BAGUETTE_DEBUG failure was a test reading a memo, and it is fixed.
+
+### 2026-11-23 (agent-arith, `wave61-arith`): M20-pernode-T3, the arithmetic part, D-0212
+
+`Linear` rows that pass `Checked.row_fits` at `make` run plain arithmetic (field `arith`, header "Arithmetic" has the precondition, the premise and the proof); artefacts byte-identical everywhere checked. Per node: mknap -21 % without learning but -0.3 % shipped, because the shipped mknap node is learned PB rows (rank 1, T4, comes first).
+The premise is "live bounds inside the bounds `make` froze": a row built through `Linear.make` in the middle of search would break it, and the debug pass (`Audited`) is what catches it. `Ne`, `Reif_lin_eq` and `Interval` still check per operation.
+Under BAGUETTE_DEBUG=1 `test_prop.exe` fails one OLD check, `D-0124: and so does the justification, which reads the same history`, identically on main `7851be6`: not this change, not yet a ROADMAP row.
 
 ### 2026-11-23 (review-1123, laptop session, `review-easy`): speed first, then the rest of M22-review
 

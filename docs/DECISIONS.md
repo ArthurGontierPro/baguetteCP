@@ -26707,6 +26707,517 @@ as a big-M row over bits) is not built here and is left to whoever finds a table
 The branch `wave59-table`. Deleting `mznlib/fzn_table_int.mzn` and `fzn_table_bool.mzn` alone gives
 back std's decomposition for every model; the builtin can stay accepted.
 
+## D-0212  [AUTONOME] M20-pernode-T3 (arithmetic): `Linear` checks a row for overflow once, at `make`, and a row that passes runs plain `+`, `*`, `/`. The precondition is M1-T23's cap over the frozen bounds; the artefacts are byte-identical and a node costs 0.1 to 3.2 % fewer instructions shipped and 1 to 21 % without learning (mknap -21 %)
+
+**Status**: DONE on branch `wave61-arith` (agent-arith, 2026-11-23), not merged. Rank 4 of D-0207
+section 6. Taken in autonomous mode: it changes no output and no default, so it is not one of the
+user's decisions, and it is `[AUTONOME]` because the precondition, the debug audit and the scope were
+chosen without asking. Measured on `fataepyc-06` while the Challenge series of 2026-11-23 ran at 87
+processes, one experiment process at a time, in instructions (`perf stat -e instructions:u`). Runs and
+scripts in `/scratch/arthur/wt-arith-runs/`, copied to `/cluster/arthur/baguette-results/arith/`.
+
+### 1. Context
+
+D-0207 section 5 item 4: `Checked` (`mul`, `add`, `floordiv`) is 51 % of `Linear`'s samples on mknap,
+37 % of the no-learning node. Every operation of a run went through a function call that tests its
+operands, and `Checked.mul` divides when an operand is past 2^30. The 2026-11-23 review (section 1.1)
+found a wrong answer that VeriPB verified, caused by one fold in `builder.ml` that skipped `Checked`.
+So the check cannot simply go. It has to move to where it is made once, with a stated reason why
+nothing after it can wrap.
+
+### 2. The rule
+
+For a row  sum_i a_i x_i <= c  built by `Linear.make`, with the bounds `make` freezes for each term
+(`decl_lo_i`, `decl_hi_i`, the store's domain when the row is built) and B_i = max(|decl_lo_i|,
+|decl_hi_i|):
+
+- **Precondition**, checked once in `make`: M = |c| + sum_i |a_i| * B_i <= `Checked.limit` (=
+  max_int / 16), computed in checked arithmetic (`Checked.row_fits`; a sum that itself overflows
+  fails). The verdict is the row's field `arith`: `Plain` if it passes, `Checked_each` if not,
+  `Audited` if it passes and BAGUETTE_DEBUG is on.
+- **Premise**, not checked per run: at every run, every term's live [lo, hi] lies inside its frozen
+  bounds. Every row is built by `lib/flatzinc/compile.ml` before search (or by a unit test), a store
+  write only narrows (I-D3, asserted by `Store.apply` under BAGUETTE_DEBUG), a failed write is not
+  stored (I-D1), and a backtrack restores a state that came after `make` (I-T1, no backtrack goes
+  below level 0). `lib/core/learned.ml`'s rows, built mid-search, freeze the ENCODING's declared
+  bounds instead (its header), which satisfies the premise as well; no code builds them through
+  `Linear` since M2-L13.
+
+On a `Plain` row a run uses `+`, `-`, `*` and `Checked.floordiv_plain` / `ceildiv_plain` (the
+rounding without the two guards; `Checked.floordiv` is now the guards followed by it, so the rounding
+is written once). A `Checked_each` row runs exactly as before. The justification's divisor `-a_j`
+stays `Checked.neg`: it is on the pruning path, not the per-term loop.
+
+### 3. Why no value of a `Plain` run wraps
+
+Under the precondition and the premise, every value a run computes is at most 2M <= max_int / 8 in
+magnitude:
+
+| value | bound | why |
+|---|---|---|
+| `term_min` a_i * v, v = live lo or hi | <= \|a_i\| * B_i <= M | v inside the frozen bounds (premise) |
+| each partial sum of the minima | <= sum_i \|a_i\| * B_i <= M | each summand bounded by its own share, whatever the order |
+| slack = c - total_min | <= \|c\| + sum_i \|a_i\| B_i = M | |
+| max_term = min_i + slack | <= 2M | |
+| floordiv / ceildiv max_term a_i | <= \|max_term\| <= 2M | a_i <> 0 (zero terms skipped), the term is not fixed (skipped before the divisions), dividend is not min_int; the +-1 correction only when \|a_i\| >= 2 |
+
+A coefficient past `limit` passes the precondition only on a term with B_i = 0, i.e. fixed at 0: its
+product is 0 and it never reaches a division. Two's complement `+`, `-`, `*` are exact whenever the
+true result is representable, so every plain result EQUALS the checked one; the trail, the reasons,
+the proof lines and stdout are therefore the same bytes (section 4). The bound 2M is well inside the
+factor of 16/9 `Checked`'s header keeps over its worst path (9M + 6), so no new cap was needed and
+none was changed.
+
+### 4. Byte identity
+
+`.opb`, `.pbp` and stdout of every test model (209), under the default flags and `--bits-above
+none`, 418 runs, hashed with main's release binary `82ad71cb` (main `7851be6`) and this branch's
+`f2691555` (`10d5308`): IDENTICAL on all 418. The five D-0207 instances below: same node count, same
+`.pbp` and `.opb` md5 and same stdout before and after, with proof and without.
+The differential lane (`scripts/diff_lane.sh --tier all -j 4 --bin` the release binary): 347 of 347
+runs equal the reference. Its debug pass (`--debug`, BAGUETTE_DEBUG=1, every in-range row `Audited`):
+333 of 333 equal, no `invariant violated`. The scaling lane (`--enforce`): ok, every line within its
+threshold. `dune runtest --root . --force -j 4` under `ulimit -v 4000000`: 4 627 checks `ok`, 0
+`FAIL` (4 563 before, the 64 new ones are section 6).
+
+### 5. Measurement
+
+Instructions per node, D-0207's method: (I - I_base) / (N - N_base), the base being the same command
+stopped at 1 node, same five instances and budgets. `B` is the shipped binary (learning on),
+`before` main `7851be6` built release (`82ad71cb`), `after` this branch `10d5308` (`f2691555`). `NL`
+is the same two sources plus D-0207's never-committed `nolearn.patch` (`6cdf5b8a`, `4d0fa09f`), run
+with `BAGUETTE_LEARN=off`: the column where model propagation is the node, and where D-0207 measured
+the 37 %.
+
+| instance (D-0207 family, budget) | nodes | B np before | B np after | change | B proof before | B proof after | change |
+|---|---|---|---|---|---|---|---|
+| QR48 `qr3` (clauses, full) | 29 779 | 1 042 698 | 1 036 383 | -0.61 % | 1 705 864 | 1 699 550 | -0.37 % |
+| rcpsp 11, makespan <= 66 (cumulative, full) | 2 010 | 2 632 817 | 2 551 166 | -3.10 % | 9 397 401 | 9 309 537 | -0.93 % |
+| javarouting `trip_6_3` (element, 20 000) | 20 001 | 12 588 507 | 12 190 145 | -3.16 % | 23 434 705 | 23 033 088 | -1.71 % |
+| mknap2-1 (linear, 20 000) | 20 001 | 40 272 476 | 40 149 427 | -0.31 % | 40 920 236 | 40 792 319 | -0.31 % |
+| costas 14 (alldiff, first solution) | 21 129 | 44 740 922 | 44 699 046 | -0.09 % | 53 310 704 | 53 270 521 | -0.08 % |
+
+Without learning (`NL`, `BAGUETTE_LEARN=off`), D-0207's same trees:
+
+| instance | nodes | NL np before | NL np after | change |
+|---|---|---|---|---|
+| QR48 `qr3` | 29 779 | 437 161 | 430 846 | -1.44 % |
+| rcpsp 11, makespan <= 60 (full) | 33 945 | 884 397 | 848 399 | -4.07 % |
+| javarouting `trip_6_3` (20 000) | 20 001 | 8 248 496 | 7 836 315 | -5.00 % |
+| mknap2-1 (20 000) | 20 001 | 666 556 | 524 173 | **-21.36 %** |
+| costas 14 (first solution) | 21 425 | 5 870 876 | 5 820 759 | -0.85 % |
+| mknap2-1 with proof (20 000) | 20 001 | 1 102 498 | 960 175 | -12.91 % |
+
+`before` reproduces D-0207 and D-0209: mknap B np 40 272 476 against D-0207's 40 298 K, NL np 666 556
+against 667 K; B proof is D-0209's `after` column within 0.01 %. The base run (1 node) grew by 16 K to
+2.3 M instructions on the five (the precondition, once per row at `make`), which the per-node figure
+subtracts.
+
+D-0207 section 6 estimated -20 to -35 % on mknap without proof and -10 to -20 % with proof, and those
+are the no-learning figures: -21 % and -13 %. On the shipped binary mknap moves by 0.3 %, because its
+node is 93 % learned PB rows (D-0207 section 5 item 1) and `Linear` is 0.9 % of it; the gain there waits
+for rank 1 (watched learned rows, T4), after which `Linear` is again a large share of the node. The
+families whose `Linear` rows are numerous beside the globals (javarouting, rcpsp) gain 3 to 5 %
+without proof. Costas's 157 `int_lin_eq` are small next to alldiff.
+
+### 6. Tests
+
+`test/unit/test_prop.ml`, `test_linear_in_range`: five coefficient sets (a = limit/4 with a negative
+box, mixed signs over all-negative and straddling boxes, one term at limit/2, two negative coefficients
+on negative boxes, a zero coefficient beside a fixed-at-0 term whose coefficient is max_int/2), each at
+rhs = +-(limit - S) (M = limit, in range) and +-(limit - S + 1) (M = limit + 1, not), 20 rows. Each
+asserts the side of the cap, `Linear.in_range`, that the run leaves EXACTLY the brute-force bounds of
+the row's solutions (evaluated in `Checked`) or a conflict iff there is none (8 prune, 6 conflict),
+and that `propagate` and `Ref_linear.propagate` (the checked specification, M11-complexity-T3) give
+the same outcome and trail from the declared box and from a narrowed one. A row whose products
+overflow is not in range and still raises (M1-T23's test is unchanged). Under BAGUETTE_DEBUG one more
+case builds a row at a narrowed level, backtracks past it and runs it: the audit fails, naming D-0212.
+That case is skipped, and says so, without BAGUETTE_DEBUG. Run under BAGUETTE_DEBUG=1, test_prop
+passes the new cases and fails one old check, `D-0124: and so does the justification, which reads the
+same history`, which fails identically on main `7851be6` under BAGUETTE_DEBUG (not this change).
+
+### 7. BAGUETTE_DEBUG
+
+An `Audited` row computes each operation checked and plain and fails with `invariant violated:
+D-0212` if they differ or if the checked one raises, and asserts the premise at the top of every run.
+The debug pass of the differential lane runs every in-range row that way (section 4).
+
+### 8. What it costs in clarity
+
+One field on `Linear.t`, a three-constructor type, five two-line dispatchers (`add`, `sub`, `mul`,
+`fdiv`, `cdiv`) that the release build inlines (checked with `objdump`: `propagate` and `prune_term`
+call no dispatcher, only `Checked`'s functions in the `Checked_each` arm), and five out-of-line audited
+twins, which exist because the non-flambda inliner refuses a body that builds a closure. `term_min`
+stays the checked specification beside `term_min_in`. The rule and its proof are in `linear.ml`'s
+header, "Arithmetic", and `checked.ml`'s header points to it. The premise is the one thing a future
+caller can break (a row built mid-search through `make`); the header says what to do instead and the
+debug pass catches it.
+
+Not done: `Ne`, `Reif_lin_eq`'s own sums and `Interval` keep `Checked` per operation. They were not in
+D-0207's measured hot path; the same rule would apply to them, with their own paths (2 and 4 in
+`checked.ml`'s header) as the bound.
+
+### 9. How to revert
+
+Revert commit `10d5308` (the code and the tests); the D-record, ROADMAP and WORKLOG commits are text
+only. Nothing else depends on `arith`, `in_range` or the `_plain` divisions.
+
+## D-0214  [AUTONOME] M20-pernode-T2: an `Element` pruning records a FRAME, the domains it read and the trail cut (D-0124's history), and its reason and derivation are built from it when asked. The artefacts are byte-identical, and a javarouting node costs 33 % fewer instructions without learning or proof, 22 % shipped without proof and 7 % with it
+
+**Status**: DONE on branch `wave62-lazy` (agent-lazy, 2026-11-23), not merged. Rank 3 of D-0207
+section 6, ROADMAP M20-pernode-T2. Taken in autonomous mode. It changes no output and no default,
+and it is `[AUTONOME]` because the shape (a frame over D-0124's `Reason.Later`, a per-pass memo of
+the facts, the readers left in `element.ml`) was chosen without asking. Measured on `fataepyc-06`
+while the Challenge series of 2026-11-23 ran, one experiment process at a time, in instructions
+(`perf stat -e instructions:u`). Runs and scripts in `/scratch/arthur/wt-lazy-runs/`, copied to
+`/cluster/arthur/baguette-results/lazy/`.
+
+### 1. Context
+
+D-0207 section 5 item 3 found that `Element` built its reasons at every pruning, with or without proof and
+with or without learning. On javarouting 57 % of its samples were `hole_facts`, `hole_expl`,
+`add_facts` and `residue_cancel`, about 28 % of the node without learning or proof. Two things were
+eager, and only one of them was a reason:
+
+- the REASON, `bound_facts` plus the facts of every hole's remover (`index_hole_facts`,
+  `result_hole_facts`), deduplicated through a hash table, once per pass with a pruning;
+- the DERIVATION's eager part. The derivation itself was already an `Explanation.deferred`, but
+  what it would cite was decided at the pruning, namely one `pos_gone` per dead position (the result's
+  bounds and holes, the remover of the hole, the index's bounds and the puncher of an index hole),
+  and `residue_cancel` over them, which asks the level of each bound's support. A result pruning
+  is O(n_decl), and `filter_result` makes one per value it removes.
+
+Without learning or proof, nothing ever asks for either half. With learning, analysis asks for the
+reasons of the entries a conflict reaches. With proof, the trace asks for each entry of a failed
+branch once.
+
+### 2. The rule, and why the values cannot change
+
+A pruning records a frame `{h; di; dr}`, where `h = Store.history store` is the trail cut at the
+push (D-0124) and `di`, `dr` are the index's and the result BASE's domains, read with `Store.get`. Both
+halves are built from the frame when they are first asked for:
+
+- the reason is `Reason.because_later ~empty:false`, D-0124's channel. Its function checks `h`
+  (`Store.check_history`) and returns a list built once per PASS, as the eager list was: in
+  `filter_result` from the pass's first pruning's frame, in `filter_index` the result's hole facts
+  from the first removal's frame and the bounds from each removal's own (exactly what the eager
+  code shared and what it did not). `empty` is `false` because `bound_facts` always states the
+  index's two bounds;
+- the derivation's eager part (`pos_gone` over the dead positions, `residue_cancel`) moves inside
+  the `Explanation.deferred` that already wrapped the derivation, in a `lazy` the closure keeps, so
+  that a re-forcing after `Justify` releases the thunk cites the same position thunks the first
+  forcing built, as the captured eager list did (BAGUETTE_DEBUG's `same_derivation` compares
+  thunks by identity);
+- what still runs at the pruning is what DECIDES it: which value goes, `removal_conclusion` (the
+  store checks the conclusion at the push), `live_positions`. Conflicts stay eager, as D-0124's
+  did: a conflict is consumed where it is raised.
+
+Why a value built later is the value built then. Every read the eager code made at a pruning is
+one of:
+
+1. a DOMAIN (`Store.get`, `View.lo`/`hi`/`mem`). A `Domain.t` is immutable (the store restores a
+   domain by writing the old value back, lib/core/domain.ml), so the pointer held in the frame IS
+   the domain at the pruning. `View.lo_in`/`hi_in`/`mem_in` are `View.lo`/`hi`/`mem` over a held
+   base domain, the same formulas;
+2. the entry that REMOVED a value (`Store.remover ~before:trail_length`). It is asked later as
+   `Store.remover ~before:upto` (`remover_at`). The trail below a live entry is frozen (I-T1:
+   `undo_to` pops from the top, a popped slot is overwritten, every `apply` allocates a fresh
+   record), so the first entry on the variable whose `now` lost the value is the same entry if it
+   lies below the cut, and is rejected by `~before` if it does not, as it would not have existed
+   then;
+3. whether a trail position is at the ROOT (`level_of_index pos = 0`). For a position below the
+   cut, a level opened since has its mark at or above the cut, and a level closed since would
+   have unwound the trail below the cut, which `check_history` refuses. `Store.at_root` (one
+   comparison against the first mark, D-0161 request 1) is the same answer by I-T2;
+4. which entry SUPPORTS a bound (`lo_support`/`hi_support`). `Store.lo_support_at` walks the
+   support chain back past the cut (D-0124);
+5. an entry's ARENA explanation (`Store.explanation`). The arena is truncated only by a backtrack,
+   to the level's mark, and an entry below the cut keeps its slot while the cut is live.
+
+So the facts, their order, the dead positions, their arms and their residue are the ones the
+eager code computed. Two things that are not values do move, and neither reaches the page:
+
+- `Explanation.deferred` draws a fresh `tid` from a counter, and building the position thunks later
+  changes which numbers they get. A `tid` is an operand's identity in its parent's hash
+  (D-0192). Equality compares operands by identity, so it decides a bucket, never an answer;
+- the one node `pos_gone` built outright, `Explanation.clause [~idx_eq_p]` for an index hole
+  punched at level 0, is now built at the first forcing, and `Explanation.built` consults the
+  hash-consing table when a node is built. A twin written in between is found at the build
+  instead of by `emit_clause`'s claim index at the emission; both answer the twin's line.
+
+SPEC section 1 asks for the same explanation values with and without proof. They are the same
+values in both modes, built at a different moment in each.
+
+The `.opb`, `.pbp` and stdout are byte-identical on the 214 test models under default flags and
+`--bits-above none` (428 runs, before `73513b89`, after `260a505d`), and the stdout and
+proofs of the five D-0207 instances equal (section 4).
+
+### 3. What asks, and what it costs there
+
+- Without learning or proof nothing asks, and a pruning costs two domain reads, one history record
+  (3 words) and one frame (4 words).
+- With proof the trace asks each entry of a failed branch once; the per-pass memo makes the facts
+  cost what they cost eagerly, once per pass. The derivation's eager part moves into the forcing,
+  where it was already paid by every entry the trace writes.
+- With learning, analysis asks the reason of every entry a conflict reaches, through its `cites`
+  memo (D-0124 addendum a3). The memo per pass is shared by the entries of that pass.
+- Under BAGUETTE_DEBUG `Store.check_agreement` forces both halves at the push, so debug runs pay what
+  they paid.
+
+The `lazy` the closures keep holds the dead-position list once forced, as the eager closure held
+it always. Unforced, a pruning keeps a frame and two closures.
+
+### 4. Measurement
+
+Five instances of D-0207 (`/cluster/arthur/baguette-results/pernode2/`), the same flattenings and
+node limits. Instructions per node = (I - I_base) / (N - N_base), base the same command at one
+node. Binaries: shipped release before `73513b89` (main `d99b7b2`), after `260a505d`; the
+no-learning measurement patch (D-0207 `nolearn.patch`, `BAGUETTE_LEARN=off`) before `08fbfc5b`,
+after `f0e1e6fe`. The node, decision and conflict counts of every pair are equal, so is the stdout (the `limit:`
+line's cpu time aside), and so are the `.opb`/`.pbp` of every proved pair.
+
+Thousands of instructions per node, before / after (change). B is the shipped release binary, NL
+the no-learning measurement binary, np `--no-proof`, pf with the proof. rcpsp is `rcpsp11_66` for B
+and `rcpsp11_60` for NL, as in D-0207.
+
+| family | B np | B pf | NL np | NL pf |
+|---|---|---|---|---|
+| javarouting (jr63, 20 000 nodes) | 12 189 / 9 534 (-21.8 %) | 23 042 / 21 481 (-6.8 %) | 7 837 / 5 263 (-32.8 %) | 17 191 / 15 510 (-9.8 %) |
+| rcpsp 11 | 2 551 / 2 424 (-5.0 %) | 9 310 / 9 078 (-2.5 %) | 848 / 778 (-8.3 %) | 6 612 / 6 553 (-0.9 %) |
+| mknap2-1 (20 000 nodes) | 40 149 / 40 149 (0.0 %) | 40 792 / 40 792 (0.0 %) | 524 / 524 (0.0 %) | 960 / 960 (0.0 %) |
+| QR48 | 1 036 / 1 036 (0.0 %) | 1 700 / 1 700 (0.0 %) | 431 / 431 (0.0 %) | 1 071 / 1 071 (0.0 %) |
+| costas 14 | 44 699 / 44 699 (0.0 %) | 53 271 / 53 271 (0.0 %) | 5 821 / 5 821 (0.0 %) | 14 292 / 14 288 (0.0 %) |
+
+Javarouting is the only family with an `element`, and it gains a third of its node without
+learning or proof, more than D-0207's estimate of 28 % because the derivation's eager part
+(`pos_gone`, `residue_cancel`, the `alive` table) went with the reasons. With proof the trace still
+asks for every entry of a failed branch, so the gain shrinks to 7 to 10 %. With learning and no proof
+it stays at 22 %: analysis asks the reasons of the entries a conflict reaches, which are few. rcpsp's
+gain is `Cumulative`'s `Store.at_root` (section 6). The three families with neither propagator are
+unchanged to the instruction, which is the control.
+
+**The differential lane** (`scripts/diff_lane.sh --tier all`, 347 runs, reference of 2026-11-21)
+reports 54 runs that differ, and every one of them differs in ONE item, the work counter
+`later/asks` (`Reason.materialisations`, the `stats: later` line). They are the 13 or 14
+configurations of the four instances that contain an `element` (fox-geese-corn, lot-sizing,
+chessboard, evm-super-compilation). Every other counter, the search and the proof hashes equal the
+reference. The counter counts asks of a `Later` reason, and Element's reasons are `Later` now, so it
+moves by construction (lot-sizing 143 181 to 338 953 asks under the default configuration, the
+entries analysis reaches being element entries). It counts asks rather than work, since the hole facts
+of a pass, the expensive part, are built once however often they are asked for. The reference is NOT re-recorded here (D-0141, a
+re-record belongs to the gated merge, in its own commit). The `--debug` pass (333 runs, BAGUETTE_DEBUG=1) is the same: 42 runs
+differ, all of them in `later/asks` alone, on the three element instances it runs (lot-sizing is in
+`bench/diff/debug-skip.tsv`), and no invariant fired.
+
+**The suites.** `dune runtest --root . --force` under `ulimit -v 4000000` gives 4 698 ok and 0 FAIL.
+`test_prop` under BAGUETTE_DEBUG=1 gives 820 ok and 0 FAIL. The scaling lane (`--enforce`) is green.
+
+### 5. The D-0124 check that failed under BAGUETTE_DEBUG=1 on main
+
+`test_prop`'s "D-0124: and so does the justification, which reads the same history" failed only
+with BAGUETTE_DEBUG=1 (agent-arith's report). The cause is in the test. Under
+BAGUETTE_DEBUG, `Store.check_agreement` forces the justification AT THE PUSH (its reverse arm,
+`reverse_owners`, reads the derivation's top-level weakenings), and `Explanation.force` memoises
+the result in the thunk. The test then unwinds the trail and calls `Explanation.force` again,
+which answers from the memo without running the closure, so the refusal it expects never runs.
+The memo is the derivation rendered while the history was live, which is the right derivation and
+reads nothing, so nothing is wrong in the solver. The check now calls `Explanation.reforce` on the
+thunk, which runs the closure as `Justify`'s release check does, and tests what it names in both
+modes. `test_prop` gives 813 ok without and 814 with BAGUETTE_DEBUG=1 before this record's own tests, 0
+FAIL either way.
+
+### 6. The other globals
+
+From D-0207's profiles (`prof/*.script.gz`, share of all samples of the no-learning, no-proof
+node):
+
+| global | what is eager | share of the node | done here |
+|---|---|---|---|
+| `Element` (javarouting) | reasons and the derivation's eager part, section 1 | 28 % | yes, this record |
+| `Alldiff` (costas) | `snap_of`'s `s_holes`: the remover and rootness of every hole of every variable, at every snapshot. The reasons themselves (`hall_facts`, `prune_reason`, `remove_reason`) are 0.2 % | 7.0 % (5.3 % in the bounds stage, 1.7 % in Régin) | no: listed. The change is the same frame (a history and the held domain, `s_holes` a `lazy`), and it needs `remover_at`/`at_root_at`, which belong in store.ml's history section; store.ml is claimed this round (WORKLOG cross-session request). Byte-identical by construction: `s_holes` holds no `Explanation` |
+| `Cumulative` (rcpsp) | `snap_of`'s `s_lo_root`/`s_hi_root`, by `Store.level_of_index` (a binary search over the open levels) twice per task per pass | 6.7 % (12 % of the propagator) | yes, the cheap form: `Store.at_root`, one comparison, the same answer by I-T2 (alldiff's D-0161 move). Deferring the flags themselves is not worth a frame once they cost a comparison |
+| `Gcc` | the same `established_at_root` per variable per snapshot | not in the five families | yes, the same one-line change |
+| `Regular`, `Inverse`, `Member`, `Maxmin`, `Table`, `Diffn` | not profiled: none is in D-0207's five families | unmeasured | no: listed. `regular.ml`'s reasons recurse into the dead flags' tails (D-0151) and are the next candidate if a profile shows them |
+
+### 7. What it costs in clarity
+
+- One more producer of `Reason.Later`, and I-X6 holds for it by what the readers can see (a
+  history and immutable domains) rather than by when they run. `element.ml`'s header says so, the
+  frame section states the five reads and why each is frozen, and docs/INVARIANTS.md I-X6 names
+  Element as the second producer.
+- Three readers (`remover_at`, `at_root_at`, `explanation_at`) reach the store through
+  `h.Store.h_store`, the only code outside store.ml that does. They are one line each and belong in
+  store.ml (cross-session request).
+- A pass's facts are memoised per pass where D-0124 refused a memo. D-0124 refused it because the
+  memo would keep the per-term list it existed not to keep (memory); here the list is one per pass
+  and was always kept, and the memo is what keeps the cost with proof at the eager cost.
+- `View` gains `lo_in`/`hi_in`/`mem_in`, the three reads over a held base domain.
+
+### 8. How to revert
+
+`git revert` the three commits of `wave62-lazy` that touch `lib/` (`2bfd615` Element's frame,
+`56ca13a` `Store.at_root` in Element, Cumulative and Gcc). The test fix `56522b6` stands on its
+own and should stay. Nothing else depends on them, since no signature outside `element.ml`
+changed and `View` only gained three functions.
+
+## D-0215  [AUTONOME] M20-pernode-T4 (rank 5 of D-0207): alldiff's Régin stage skips a pass that cannot prune. A matching kept across passes is repaired and one Tarjan pass looks for an edge in no maximum matching; the test is exact, the from-scratch pass runs unchanged whenever it finds one, and the artefacts are byte-identical. A costas node costs 36 % fewer instructions without learning or proof
+
+**Status**: DONE on branch `wave63-regin` (agent-regin, 2026-11-23), not merged. Rank 5 of D-0207
+section 6, ROADMAP M20-pernode-T4. Taken in autonomous mode. It changes no output and no default.
+It is `[AUTONOME]` because the shape (a gate in front of the unchanged scratch pass, rather than an
+incremental pass that replaces it) was chosen without asking. Measured on `fataepyc-06` while the
+Challenge series of 2026-11-23 ran, one experiment process at a time, in instructions (`perf stat
+-e instructions:u`). Runs and scripts in `/scratch/arthur/regin-runs/`, copied to
+`/cluster/arthur/baguette-results/regin/`.
+
+### 1. Context
+
+D-0207 section 5 item 4 found that `Alldiff` is 85 % of a costas node without learning or proof, and 57 % of
+it is the Régin stage, run from scratch on every pass. A pass sorts the union of the domains,
+rebuilds a maximum matching by Kuhn's algorithm, and then, for every variable `u`, walks the
+alternating graph from `u` (O(n^2) membership tests) and asks whether a free value is reachable
+(O(n d) more per `u`). On a costas node almost every pass finds nothing, because the stage is called once
+after stage 1 reaches its fixpoint, and once more after every pass that removed something, to
+establish that nothing is left. Gecode and Chuffed keep their matching across calls and repair it.
+
+### 2. The rule
+
+`regin_pass` asks `cannot_prune` first, and runs the old pass (now `regin_scratch`, unchanged)
+only when the answer is no.
+
+1. **Repair.** The instance keeps a matching (`g_val`, `g_owner`) from its last call. Every
+   matched edge whose value has left its variable's live domain is dropped, and every unmatched
+   variable is re-augmented (Kuhn, a free value tried first). If one cannot be, no matching
+   saturates the scope (a partial matching with no augmenting path from `i` cannot be extended to
+   cover `i`, Berge), and the answer is "may prune".
+2. **Tarjan.** Over the variables, `i -> j` when `i` holds the value matched to `j`, and `i`
+   marked when it holds a free value. By Régin's characterisation, an edge `(y, v)` outside the
+   matching lies in some maximum matching iff `v` is free, or `y` and `v`'s partner `j` share a
+   strongly connected component (an even alternating cycle), or `j` reaches a free value (an even
+   alternating path). The only edge that can fail all three is an edge into a component Tarjan has
+   already closed and that reaches no free value, and the search stops at the first such edge.
+
+The answer is exact both ways. `regin_scratch` removes `v` from `y` iff the edge `(y, v)` is in no
+maximum matching, because its `ink` walk from `v`'s partner `j` finds the least tight set containing `j`,
+which excludes `y` exactly when `j` reaches neither `y` nor a free value. And a scratch pass that
+removes nothing has no effect at all, since it pushes nothing and what it reads (`snap_of`, the trail's
+removers) is read only. Its conflict branch is reached iff no matching saturates the scope, which
+step 1 detects. So "cannot prune" holds iff the scratch pass would land nothing and not fail, and
+skipping it changes the speed and nothing else.
+
+`Propagator.count_pass` is still counted once per Régin pass, gated or not, so every counter the
+differential lane compares is unchanged.
+
+### 3. Why the bytes cannot change
+
+The gate only ever decides whether to run `regin_scratch`, and `regin_scratch` is the old code:
+it rebuilds its own matching from scratch, in the same value order, and never sees the kept one.
+Every removal it makes, their order, the `halls` and `vals` of each, and the pigeonhole's `seen`
+set are functions of the domains alone, as they were. A gating that skipped a pass which would
+have pruned would move proof lines. The exactness argument above is why none is skipped, and the
+BAGUETTE_DEBUG check below is what would see one.
+
+### 4. The state across passes, and backtracking
+
+The kept matching is a HINT, not a fact about the store, and it needs neither a trail entry nor a
+validity stamp. Step 1 re-reads every matched edge against the live domain at the start of every
+pass. After a backtrack the domains are wider (I-T1), so every kept edge still exists and the
+matching is still a matching. After a descent the edges that left are the ones step 1 drops. On a
+restart, or a different store handed to the same instance (the consistency oracle, a test), the
+same re-read applies. A stale hint costs augmentations, never an answer. The invariant that covers
+the answer is I-P2. Under BAGUETTE_DEBUG, whenever the gate says "cannot prune", `regin_pass` runs
+`regin_scratch` as well and raises `invariant violated: I-P2 (D-0215)` if it lands anything or
+fails. The scratch pass that lands nothing pushes nothing, so the check is invisible to the
+artefacts and to the counters.
+
+A scope whose declared span exceeds `max_gate_span` (2^16 values) gets no gate and runs from
+scratch as before, since the gate indexes values by slot. Such a scope already pays a list of every
+value per scratch pass.
+
+### 5. Tests
+
+`test_prop` (f), `test_regin_gate_random`, runs 400 random scenes of 2 to 6 variables over small
+windows, two copies of each, one instance gated and one not (`Alldiff.make ~gate:false`). Both
+receive the same decisions, value removals and backtracks (14 steps), and after each step both
+propagate and must agree on the outcome, every domain and every trail entry (variable, domain
+after, reason literals). Before each propagate, at stage 1's fixpoint, the gate's verdict is held
+against what the scratch stage then does on the ungated copy, so the test checks that the gate is
+exact and not only safe. Over the 400 scenes the gate skipped 5 147 passes and let 215 through, and every one of the 215 then pruned or failed. Breaking the gate (`Prunable` answered "cannot prune")
+fails both checks of (f), six earlier Régin checks of `test_prop` ((a), (b), (e) and the sweep), and,
+under BAGUETTE_DEBUG=1, the I-P2 check of section 4.
+
+### 6. Measurement
+
+Five instances of D-0207 (`/cluster/arthur/baguette-results/pernode2/`), the same flattenings and
+node limits, and two other Challenge instances whose flattening holds many `all_different_int`:
+2015 `p1f_13` (146 of them) and 2018 `team-assignment_data3_6_28` (7), both cut at 5 000 nodes.
+Instructions per node = (I - I_base) / (N - N_base), base the same command at one node. The binaries are the
+shipped release before `260a505d` (main `f355e42`), after `cba056a8`, and with the no-learning measurement
+patch (D-0207 `nolearn.patch`, `BAGUETTE_LEARN=off`) before `f0e1e6fe`, after `5414468f`. The
+before binaries are byte for byte D-0214's "after" binaries, so the five instances' before column is
+D-0214's measurement (`/scratch/arthur/wt-lazy-runs/out/*.final.*`, copied to
+`/cluster/arthur/baguette-results/regin/before-d0214/`). Re-run here, costas NL np gave
+5 820 916 per node again, to the instruction. The two other instances were run before and after
+here. The node, decision and conflict counts of every pair are equal, every `stats:` counter line is
+equal, the stdout is equal (the `limit:` line's cpu time aside), and so are the `.opb`/`.pbp` of
+every proved pair.
+
+Thousands of instructions per node, before / after (change). B is the shipped release binary, NL
+the no-learning measurement binary, np `--no-proof`, pf with the proof. rcpsp is `rcpsp11_66` for B
+and `rcpsp11_60` for NL, as in D-0207. p1f's B run solves at 1 047 nodes.
+
+| instance | B np | B pf | NL np | NL pf |
+|---|---|---|---|---|
+| costas 14 | 44 699 / 42 994 (-3.8 %) | 53 271 / 51 460 (-3.4 %) | 5 821 / 3 718 (-36.1 %) | 14 288 / 12 021 (-15.9 %) |
+| javarouting (jr63, 20 000 nodes) | 9 534 / 8 933 (-6.3 %) | 21 481 / 20 863 (-2.9 %) | 5 263 / 4 719 (-10.3 %) | 15 510 / 14 934 (-3.7 %) |
+| p1f 13 (5 000 nodes) | 8 608 / 3 660 (-57.5 %) | 11 080 / 6 016 (-45.7 %) | 6 445 / 3 151 (-51.1 %) | 8 870 / 5 452 (-38.5 %) |
+| team-assignment 3_6_28 (5 000 nodes) | 23 001 / 21 298 (-7.4 %) | 51 773 / 49 999 (-3.4 %) | 6 430 / 5 463 (-15.0 %) | 33 312 / 32 344 (-2.9 %) |
+| rcpsp 11 | 2 424 / 2 424 (0.0 %) | 9 078 / 9 078 (0.0 %) | 778 / 778 (0.0 %) | 6 553 / 6 556 (+0.04 %) |
+| mknap2-1 (20 000 nodes) | 40 149 / 40 149 (0.0 %) | 40 792 / 40 792 (0.0 %) | 524 / 524 (0.0 %) | 960 / 960 (0.0 %) |
+| QR48 | 1 036 / 1 036 (0.0 %) | 1 700 / 1 700 (0.0 %) | 431 / 431 (0.0 %) | 1 071 / 1 071 (0.0 %) |
+
+Costas without learning or proof loses 36 % of its node, inside D-0207's estimate of 30 to 45 %.
+With learning the learned PB rows still hold 83 % of the node (D-0207 section 5 item 1), so the gain
+is 3 to 4 % there until rank 1 is done, as D-0207 predicted. `p1f` is the instance where the stage
+weighed most, with 146 `all_different` in its flattening, and half of its node goes with or
+without learning. javarouting has one `all_different` beside its `element`s. The
+three families without an `all_different` are the control, unchanged to the instruction but for
+rcpsp NL pf (+0.04 %, 2 700 instructions per node in a 6.5 M node that writes a proof).
+
+**The artefacts on the test models.** The `.opb`, `.pbp` and stdout are byte-identical on the 214
+test models under default flags and `--bits-above none` (428 runs, every one exit 0 with both
+files, before `260a505d`, after `cba056a8`).
+
+**The differential lane** (`scripts/diff_lane.sh --tier all`, 347 runs) was run with the before
+and the after binary against the same reference, the one of 2026-11-21 that D-0214's `later/asks`
+re-record has not replaced yet. Both report the same 54 differing runs, all in `later/asks` (D-0214's
+counter), and the 54 report lines are identical to the character, counts included. The `--debug`
+pass (333 runs, BAGUETTE_DEBUG=1, so the I-P2 check of section 4 ran at every gated pass) is the same:
+42 identical lines before and after, all `later/asks`, and no invariant fired. Nothing is
+re-recorded here.
+
+**The suites.** `dune runtest --root . --force` under `ulimit -v 4000000` gives 4 700 ok and 0 FAIL
+(D-0214's 4 698 plus this record's two). `test_prop` under BAGUETTE_DEBUG=1 gives 822 ok and 0 FAIL.
+The scaling lane (`--enforce`, after binary) is green.
+
+### 7. What it costs in clarity
+
+- Régin's stage now has two algorithms where it had one, the exact test and the scratch pass
+  behind it. The scratch pass is untouched, so what produces prunings and proofs is still the
+  evident one D-0061 and M4-T2 chose. The gate is a pure function of the domains plus a hint,
+  about 130 lines, and its correctness argument is in the code comment above `cannot_prune`.
+- One mutable record per instance (`gate`), the first cross-pass state in `alldiff.ml`. It holds
+  no fact about the store, which is what keeps it off the trail.
+- A pass that prunes pays the gate and the scratch pass. The pass after it is gated, so a call
+  that prunes costs one scratch pass where it cost two.
+
+### 8. How to revert
+
+`git revert` the code commit of `wave63-regin` (`2545a19`), which touches `alldiff.ml` and
+`test_prop.ml` only. No signature changed. `make` gained an optional `?gate` (default on), and
+`regin_pass` keeps its name and type. Turning the gate off without reverting is `~gate:false` at
+the two `Alldiff.make` calls in `compile.ml`.
+
 ## D-0213  [AUTONOME] M18-coverage-T2: `diffn` keeps std's pairwise disjunctions and gains its two CUMULATIVE RELAXATIONS on `cumulative.ml`, over ORDER copies of the coordinates. No new propagator, no new `Explanation` constructor; the relaxations' capacity rows are model rows that mznlib states, not lemmas the proof derives
 
 **Status**: DECIDED (agent-diffn, `wave61-diffn`, 2026-11-23), in autonomous mode. Section 3 is the

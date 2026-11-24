@@ -128,6 +128,27 @@ let mem store v value =
   | Const c -> Int.equal c value
   | Affine { base; map } -> Domain.mem (Store.get store base) (Lit.unapply map value)
 
+(* [lo], [hi] and [mem] over the BASE's domain [d] as it stood at some earlier moment,
+   rather than as the store holds it now: the reads a propagator replays from the frame it
+   froze at a pruning, so that the reason can be built later and still be the one the
+   pruning read (D-0214, lib/core/prop/element.ml). Domains are immutable, so a [Domain.t]
+   held since then IS the domain then. The same formulas as the three above; [d] is not
+   read for a constant. *)
+let lo_in (d : Domain.t) = function
+  | Const c -> c
+  | Affine { map; _ } ->
+      if map.Lit.negated then Lit.apply map (Domain.hi d) else Lit.apply map (Domain.lo d)
+
+let hi_in (d : Domain.t) = function
+  | Const c -> c
+  | Affine { map; _ } ->
+      if map.Lit.negated then Lit.apply map (Domain.lo d) else Lit.apply map (Domain.hi d)
+
+let mem_in (d : Domain.t) v value =
+  match v with
+  | Const c -> Int.equal c value
+  | Affine { map; _ } -> Domain.mem d (Lit.unapply map value)
+
 let is_fixed store = function
   | Const _ -> true
   | Affine { base; _ } -> Domain.is_fixed (Store.get store base)
