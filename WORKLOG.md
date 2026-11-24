@@ -21,7 +21,6 @@ of it to every session and stopping at a broken line before it even reached the 
 |---|---|---|---|
 | M6-T24, the harness (proofs of stopped runs checked, three kinds of answer; on `wave73-interrupt`) | `scripts/compare_run.sh`, `tools/compare/compare.py`, `tools/compare/readme_table.py`, `tools/compare/arms_compare.py` and `bench/tuning/agreement.py` (small), `bench/series/*.sh` if needed | interrupt-session (laptop) | 2026-11-24 |
 | M6-T24 (an interrupted run ends its proof: signals, heap budget, time limit; D-0225) | `lib/proof/writer.ml`, `lib/proof/encoding.ml` (the heap refusal's exit only), `lib/core/search.ml` (`record_improving`, `conclude_stopped`, `optimise`'s set-up, short edits: agent-chrono holds the file on `wave71-chrono`), `bin/main.ml` (the signal handlers and the resource arms, short edits, same holder), `test/unit/test_endtoend.ml`, `test/unit/test_proof.ml`, SPEC 2.2 and 4.3, PROOF-FORMAT 5, INVARIANTS I-X2, ROADMAP row | interrupt-session (laptop, `wave73-interrupt`) | 2026-11-24 |
-| M22-review-T4, the module map and the facts of CLAUDE.md and ARCHITECTURE.md (docs only) | `CLAUDE.md`, `docs/ARCHITECTURE.md` section 1 | docs-session (laptop) | 2026-11-24 |
 
 ## Cross-session requests
 
@@ -470,6 +469,7 @@ section 1. Shares are inclusive, of the whole run.
 
 | Task | Session | Date | Summary |
 |---|---|---|---|
+| M22-review-T4 (module map and facts) | docs-session (laptop) | 2026-11-24 | Docs only, CLAUDE.md and ARCHITECTURE.md section 1: `reason.ml` and `e2e.ml` in the maps, alldiff's level, sizes and counts, M2-T8 no longer "in progress", the CDCL switch. |
 | M19-config-T5 (retention default, review T12, D-0221) | agent-retention (`wave69-retention`) | 2026-11-24 | **D-0221 [AUTONOME], no change.** Tuning set at 300 s and 42 former heap refusals at 1 200 s, binary `4dde0987`: `tiered` 20 verified against 19 (proof) and 33 against 30 (no proof) of 200, but 6 heap refusals of 42 against 2. The rule fails, `keep_all` stays. Eviction frees no memory (the gated instance stays in the engine), filed |
 | M22-review-T4 (README, the limit of 2011 to 2014) | readme-session (laptop) | 2026-11-24 | `README.md` only: the Challenge's limit was 900 s from 2011 to 2014 and the series used 1 200 s. |
 | M22-review-T4 (README, free category) | readme-session (laptop) | 2026-11-24 | `README.md` only: the rank of `-f` in the free-search category, read from `series-20261123/rank_B_*.txt`. |
@@ -685,6 +685,14 @@ section 1. Shares are inclusive, of the whole run.
 | M19-config-T0 (the tuning set) | agent-tuning (`wave59-tuning`) | 2026-11-23 | **D-0205.** `bench/tuning/`, 200 instances in 183 families. DONE except the driver hook. |
 
 ## Handoff notes
+
+### 2026-11-24 (docs-session, laptop): M22-review-T4, the module map, and what an audit of the records found
+
+Every `.ml` of `lib/` is now in both maps. T4's row can be closed. Left to their owners, because open branches edit the same rows:
+- **D-0226 is taken twice**: `wave73-evict` (reserved in Cross-session requests) and `wave74-inputs` (M23-inputs, committed locally and on its branch). `wave74-inputs` merges second in that number, so it renumbers to D-0228 or above.
+- ROADMAP: M19-config-T10 says "not merged" (it is in main), M19-config-T11 says TODO (built on `wave71-chrono`), M21-memory-T3 says TODO (fix 2 merged, fix 4 gated on `wave70-release`, fix 1 claimed), M4-T9 has a DONE row and a WIP row (the second is the old text).
+- The claims of agent-chrono, agent-release, agent-evict and agent-node07 are on their branches only, so the `SessionStart` hook does not show them.
+- The worktree `/scratch/arthur/wt-evict` has no file newer than its claim (15:17 UTC, read at 16:35), and `wave70-release` has its lanes green (16:22) with its record and WORKLOG uncommitted.
 
 ### 2026-11-24 (readme-session, laptop): 900 s for the editions 2011 to 2014
 
