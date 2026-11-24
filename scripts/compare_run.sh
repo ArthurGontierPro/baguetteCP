@@ -195,7 +195,7 @@ COMPAT_MZN="${COMPAT_MZN:-$ROOT/mznlib/compat_mzn1.mzn}"
 TOTAL_MAX="${TOTAL_MAX:-48}"   # the cap on PAR x |SOLVERS|; raise it only on a node reserved for the run
 MEM_KB_MAX=32000000
 # The three libraries the data pairing consults: ALWAYS all three (see "the instance").
-PAIR_SOLVERS="baguette chuffed gcs"
+PAIR_SOLVERS="${PAIR_SOLVERS:-baguette chuffed gcs}"   # a run of baguette arms alone may set PAIR_SOLVERS=baguette (bench/series)
 
 die() {
   echo "compare_run: $*" >&2

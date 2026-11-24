@@ -26,6 +26,7 @@ while IFS= read -r a; do
   opts=(--no-chuffed); [ "$p" = noproof ] && opts+=(--trust-unverified)
   isfree=0; case " $f " in *" -f "*) isfree=1 ;; esac
   for y in $(seq 2026 -1 2011); do
+    [ -d "$DIR/$l/$y" ] || continue   # an edition with no instance of a --list run
     if [ "$isfree" = 1 ]; then
       python3 -I tools/compare/challenge_rank.py "$AR/$y.json" "bench/challenge/$y.lst" "$DIR/$l/$y" "${opts[@]}" --category=free --as="baguette-$l-free" > "$T/rank_${l}_$y.txt" 2>&1
       python3 -I tools/compare/challenge_rank.py "$AR/$y.json" "bench/challenge/$y.lst" "$DIR/$l/$y" "${opts[@]}" --as="baguette-$l-in-fd" > "$T/rank_${l}fd_$y.txt" 2>&1

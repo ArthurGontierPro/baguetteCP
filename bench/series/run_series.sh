@@ -3,12 +3,21 @@
 #
 #   bench/series/run_series.sh --name NAME --commit REV --par N [--arm LABEL:proof|noproof:FLAGS ...]
 #                              [--repo URL] [--dir DIR] [--results DIR] [--phase PHASE]
+#                              [--list FILE] [--solve-timeout S] [--pair-all]
 #
 # An arm is `LABEL:proof:FLAGS` (a proof is logged and veripb checks it) or `LABEL:noproof:FLAGS`
 # (`--no-proof`; the answers are UNVERIFIED). FLAGS are baguette's, e.g. `-f`, may be empty.
 # Default arms: `A:proof:`  `B:proof:-f`  `C:noproof:`.  REV must be on --repo (default: the hub
 # /cluster/arthur/baguette.git), so push the branch first. The driver and its helpers are those of
 # the CLONE at REV, so a series measures one commit end to end, mznlib included.
+#
+# --list FILE      run only the instances listed: FILE's rows whose first column is an instance id
+#                  (`#` lines skipped; the format of bench/tuning/set.lst); the editions with none are
+#                  skipped. Ids are those of bench/challenge/<year>.lst.
+# --solve-timeout  seconds of solving per instance (default 1 200, D-0133).
+# --pair-all       flatten with the Chuffed and GCS libraries too, as compare_run.sh does by default.
+#                  Not needed here (every arm is baguette), so it is off: the data file of an instance
+#                  comes from bench/challenge/<year>.lst anyway.
 #
 # Phases, each idempotent, in order (--phase runs one of them):
 #   setup    clone at REV, build the release binary (dune -j 16, the recipe of `make release`),
@@ -34,7 +43,7 @@
 # writes DIR/pid, each arm driver DIR/<LABEL>.pid, the monitor DIR/monitor.pid. To stop a series,
 # `kill $(cat DIR/pid DIR/*.pid)`, nothing else, and `ps` first.
 set -u
-NAME=""; COMMIT=""; PAR=""; REPO=/cluster/arthur/baguette.git; DIR=""; RESULTS=""; PHASE=all
+NAME=""; COMMIT=""; PAR=""; REPO=/cluster/arthur/baguette.git; DIR=""; RESULTS=""; PHASE=all; LIST=""; SOLVE_T=1200; PAIR_ALL=0
 ARMS=()
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -46,6 +55,9 @@ while [ $# -gt 0 ]; do
     --dir) DIR="$2"; shift 2 ;;
     --results) RESULTS="$2"; shift 2 ;;
     --phase) PHASE="$2"; shift 2 ;;
+    --list) LIST="$2"; shift 2 ;;
+    --solve-timeout) SOLVE_T="$2"; shift 2 ;;
+    --pair-all) PAIR_ALL=1; shift ;;
     *) echo "run_series: unknown argument $1" >&2; exit 2 ;;
   esac
 done
@@ -61,6 +73,16 @@ NARMS=${#ARMS[@]}
 TOTAL=$((PAR * NARMS))
 [ "$TOTAL" -le 92 ] || { echo "run_series: PAR x arms = $TOTAL exceeds 92" >&2; exit 2; }
 PAR_FLAT="${PAR_FLAT:-$TOTAL}"
+[ "$PAIR_ALL" = 1 ] || export PAIR_SOLVERS=baguette
+# The instance list of an edition: bench/challenge/<year>.lst, or only the rows of --list.
+inst_list() {
+  if [ -z "$LIST" ]; then echo "bench/challenge/$1.lst"; return; fi
+  mkdir -p "$DIR/lists"
+  awk -F'\t' 'NR == FNR { if ($1 !~ /^#/ && $1 != "") keep[$1] = 1; next } /^#/ || ($1 in keep)' \
+    "$LIST" "$SRC/bench/challenge/$1.lst" > "$DIR/lists/$1.lst"
+  echo "$DIR/lists/$1.lst"
+}
+year_has_rows() { [ -z "$LIST" ] || grep -qv '^#' "$(inst_list "$1")"; }
 log() { echo "=== $(date -Is) $*" | tee -a "$DIR/log/driver.log"; }
 arm_field() { printf '%s' "$1" | cut -d: -f"$2"; }
 
@@ -101,7 +123,9 @@ FO
     echo "binary_md5=$(cat "$DIR/bin/binary.md5")"
     echo "par=$PAR"
     echo "total_par=$TOTAL"
-    echo "solve_timeout=1200"
+    echo "solve_timeout=$SOLVE_T"
+    echo "list=${LIST:-all}"
+    echo "pair_all=$PAIR_ALL"
     echo "flatten_timeout=1200"
     echo "check_limit=3600"
     echo "solver_mem=16GiB address space, MemoryMax=32G, --max-heap-mb 8192, NO proof cap (the user, 2026-11-23: MiniZinc has no certified track)"
@@ -133,6 +157,7 @@ phase_flatten() {
   [ "$per" -ge 1 ] || per=1
   for y in $YEARS; do
     [ -e "$DIR/flat/$y.done" ] && continue
+    year_has_rows "$y" || { touch "$DIR/flat/$y.done"; continue; }
     (
       log "flatten $y start"
       PAR=$per TOTAL_MAX=$per SOLVE_TIMEOUT=60 FLATTEN_TIMEOUT=1200 CHECK_TIMEOUT=60 \
@@ -153,13 +178,14 @@ arm_driver() {
   mkdir -p "$A"; echo $BASHPID > "$DIR/$l.pid"
   common_env
   cd "$SRC" || exit 1
-  export PAR TOTAL_MAX=$PAR SOLVE_TIMEOUT=1200 FLATTEN_TIMEOUT=1200 MEM_KB=16777216 \
+  export PAR TOTAL_MAX=$PAR SOLVE_TIMEOUT=$SOLVE_T FLATTEN_TIMEOUT=1200 MEM_KB=16777216 \
     BAGUETTE="$DIR/bin/baguette-$l.sh" \
     VERIPB="$DIR/bin/veripb_wrap.sh" SERIES_VERIPB_REAL="$HOME/.cargo/bin/veripb" \
     SERIES_CHECK_LIMIT=3600 SERIES_CHECK_MEMMAX=64G SERIES_SEM_DIR="$DIR/sem" SERIES_BIG_SLOTS=12 \
     CHECK_TIMEOUT=28800 CHECK_MEM_KB=unlimited PROOF_CAP_KB=unlimited \
     PRE_RUN="$DIR/bin/space_gate.sh" SERIES_MIN_FREE_GB=2000
   for y in $YEARS; do
+    year_has_rows "$y" || continue
     if grep -q '^DONE-' "$A/$y/results.tsv" 2> /dev/null; then continue; fi
     if [ ! -e "$A/$y/pair.tsv" ]; then
       mkdir -p "$A/$y/work" "$A/$y/log"
@@ -170,7 +196,7 @@ arm_driver() {
       for f in "$DIR/flat/$y/work/"*.baguette.fzn; do [ -e "$f" ] && ln -f "$f" "$A/$y/work/"; done
     fi
     log "arm $l $y start"
-    INSTANCES="bench/challenge/$y.lst" scripts/compare_run.sh /scratch/arthur/mznc "$A/$y" > "$A/$y.log" 2>&1
+    INSTANCES="$(inst_list "$y")" scripts/compare_run.sh /scratch/arthur/mznc "$A/$y" > "$A/$y.log" 2>&1
     log "arm $l $y end rc=$?"
   done
   touch "$A/DONE"
