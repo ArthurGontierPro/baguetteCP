@@ -26559,3 +26559,50 @@ Options weighed:
   (checked byte for byte on M7-T26's tables).
 
 **Revert.** Nothing in the solver changes. The two tool options are additive (`git revert 09af6a7`).
+
+### D-0210, results (2026-11-24)
+
+Run 2026-11-23 15:09 to 2026-11-24 11:30 on fataepyc-07, binary `f244c35ac8a1960cd82fd6f39357891d`
+(built on 07 from `e1971f6`, same md5 as agent-series'), arms A and C at PAR 40. 0 REJECTED, 0
+CHECK-ERROR. The slice never held over 927 GB (page cache included), its `oom_kill` stayed 0, so
+no run was killed by the safety net; `/scratch` never went under 9 547 GB free. Tables, the
+adaptation diff and the comparison with 16 GiB: `/cluster/arthur/baguette-results/node07-64g/`
+(`compare16/` holds the comparison and its script).
+
+**Same CPU, comparable times.** Both nodes are 2 x AMD EPYC 7643. On the instances complete at both
+sizes, wall time at 64 GiB on 07 over 16 GiB on 06 is 0.96 [0.89, 1.03] in A (n = 375) and 0.99
+[0.88, 1.07] in C (n = 425), nodes per second 1.05: within the noise of load, 07 a little faster.
+
+**What the 16 GiB refusals become** (16 GiB = agent-series' series on the same binary, D-0203):
+
+| At 64 GiB | A, proof (164 refused at 16) | C, `--no-proof` (157) |
+|---|---|---|
+| complete | 3 OPT, all three proofs TIMEOUT-CHECK (3 600 s), so not verified | 2 OPT (unverified, no proof) |
+| timeout with an incumbent | 73 | 89 |
+| timeout without one | 28 | 18 |
+| refused again, heap budget (32 GiB now) | 59 | 47 |
+| refused again, front end (`rc=2`, the same error) | 1 | 1 |
+
+Of the 163 heap-budget refusals of A, 103 now search to the limit, and 59 fill the 32 GiB budget
+again: their peak RSS at 64 GiB is p50 32.1 GiB. More memory turns a refusal into a search, rarely
+into an answer: 3 + 2 completions for 4x the memory. The proofs grow with it, and the three new
+OPT of A are not checkable within 3 600 s.
+
+**Totals and score.** A: OPT+UNSAT verified 302 -> 304, REFUSED 164 -> 60, TIMEOUT 1 017 -> 1 114,
+one OPT lost at the limit (`2014_mqueens_n11`, 1 167 s at 16 GiB). C: OPT+UNSAT 340 -> 344, REFUSED
+157 -> 48. The fixed-category score summed over the sixteen editions (each arm inserted alone among
+the official entrants, `challenge_rank.py`) goes from 4 043 to 4 323 in A and from 4 428 to 4 782 in
+C, nearly all from incumbents on formerly refused instances. A's rank improves in six editions
+(2013 10 -> 8, 2017 12 -> 11, 2019 7 -> 6, 2020 5 -> 4, 2021 7 -> 6, 2023 7 -> 5).
+
+**Peak RSS** (all runs, GiB): at 64 GiB p50 2.8, p90 16.1, p99 34.0, max 38.7 (A); at 16 GiB p50 2.8,
+p90 8.3, p99 8.9, max 10.3. The median run is untouched; the top decile is the heap budget itself.
+
+**Against D-0185's arm A** (binary `7c880bce`, 314 refusals): at 64 GiB with `f244c35a`, 15 complete
+VERIFIED, 5 complete TIMEOUT-CHECK, 199 timeout with an incumbent, 41 without, 54 refused again.
+More than half of that gain is the binary: D-0185 to D-0203 already took the refusals from 314 to 164 at 16 GiB.
+
+**For M21-memory.** 60 instances need more than 32 GiB of heap (59 in A), and the 101 that searched
+reached the limit without an answer in all but 3 cases. Memory is not what stands between baguette
+and an answer on these instances. All 59 die after the encoding, on the Gc alarm, 36 of them with
+a width warning (`refusal_causes_A.txt`): the size of the encoding is what to attack there.
