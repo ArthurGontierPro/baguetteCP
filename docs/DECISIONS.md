@@ -28844,5 +28844,5 @@ not the search's.
 | Da | 7 s, 9 620 c, 22 G | none | 48 c | none, none |
 
 Under restarts the loop is two to ten times cheaper than `dfs` on QR48 (where `dfs`'s restarts throw
-away a tree the nogoods were closing) and solves costas under every restart policy where `dfs` with
-phase saving does not.
+away a tree the nogoods were closing) and solves costas under every restart policy, where `dfs` under
+activity with phase saving (`Dalp`, `Dabp`) does not.
