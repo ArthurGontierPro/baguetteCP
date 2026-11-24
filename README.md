@@ -15,14 +15,15 @@ Written in OCaml 5, single-threaded, deterministic.
 | Input | FlatZinc over integers and Booleans (`docs/SPEC.md` §2.1), directly or through MiniZinc with its own library `mznlib/` |
 | Problems | satisfaction, minimisation, maximisation, every improving solution (`-i`, or `-a` on an optimisation model) |
 | Proof | VeriPB 3.0, checked by VeriPB 3.0.2. The proof covers the encoding, every propagation, every learned constraint and the final claim (UNSAT, a solution, or optimality bounds) |
-| End-to-end verification | under `--e2e`, the proof can also be checked against the `.opb` produced by `cake_pb_cp`, CakeML's verified encoder, so the encoding of the model is no longer trusted. 197 of the 207 test models verify this way (`make e2e`) |
+| End-to-end verification | under `--e2e`, the proof can also be checked against the `.opb` produced by `cake_pb_cp`, CakeML's verified encoder, so the encoding of the model is no longer trusted. At the last recorded run (D-0201), 197 of the 207 test models of that day verified this way and 10 were skipped (`make e2e`). The suite has 228 models since |
 | Integer encoding | order encoding, or a binary (bits) encoding for wide domains. Bits is the default (`--bits-above 0`), `--bits-above none` gives the order encoding everywhere |
 | Linear and arithmetic | `int_lin_le`, `int_lin_eq`, `int_lin_ne` and their reified forms, `int_le`, `int_lt`, `int_eq`, `int_ne` and their reified forms, `int_times`, `int_div`, `int_mod`, `int_abs`, `int_min`, `int_max` |
 | Booleans | `bool_clause`, `array_bool_and`, `array_bool_or`, `bool_eq`, `bool_not`, `bool2int`, and the rest of the Boolean family through `mznlib` |
-| Global constraints, native | `all_different_int` (domain consistent: Hall intervals on the bounds, then a matching over the values), `global_cardinality` (open, closed, low/up), `array_int_element`, `array_int_maximum`/`minimum`, `cumulative` and `disjunctive` (time-table), `regular` (domain consistent), `inverse`, `member` |
+| Global constraints, native | `all_different_int` (domain consistent: Hall intervals on the bounds, then a matching over the values), `global_cardinality` (open, closed, low/up), `array_int_element`, `array_int_maximum`/`minimum`, `cumulative` and `disjunctive` (time-table), `regular` and `table` (domain consistent), `inverse`, `member`, `circuit` (with Chuffed's no-subtour rule) |
+| Global constraints, through `mznlib` | `bin_packing`, `bin_packing_capa` and `bin_packing_load` (one linear row per bin), `diffn` and `diffn_nonstrict` (pairwise rows plus two `cumulative` relaxations). The capacity rows of the two relaxations are rows of the model, so the proof uses them without deriving them (D-0213) |
 | Learning | 1UIP clause learning with minimisation, and pseudo-Boolean conflict analysis (linear combination plus division or rounding), with a swappable retention policy for the learned database |
 | Explanations | each pruning carries a declarative reason (an `Explanation` value), turned into `pol` or `rup` steps only when the proof needs them. Reasons are hash-consed so shared sub-proofs are written once |
-| Search | the model's search annotation by default (first-fail, smallest value when there is none). Free search with `-f` (activity order alternating with the annotation, Luby restarts, phase saving) |
+| Search | the model's search annotation by default (first-fail, smallest value when there is none). Free search with `-f` (activity order alternating with the annotation, Luby restarts, phase saving). A conflict-driven search, where the learned clause decides the backjump, is available with `BAGUETTE_CDCL=1` and off by default (D-0219) |
 | Without proof | `--no-proof` runs the same search without writing a proof, as a measurement tool. Its answers are unverified |
 | Limits | `--time-limit`, `--max-heap-mb` (a clean refusal before memory runs out), caps on encoding size |
 | Symmetries | `tools/symmetry/` finds model symmetries with dejavu, outside the solver (`make sym`) |
@@ -71,14 +72,31 @@ The other entrants do not log proofs. baguette's score summed over the sixteen e
 
 The series before this one, D-0185 (release `7c880bce`, order encoding by default, 16 GB proof cap), verified 323 answers with proof in the default arm and 362 under `-f`, and completed 380 without proof.
 
-Two caveats.
+How to read these numbers.
 
 - This series ran the binary `f244c35a`, which has the bits encoding as its default (D-0201) and no
-  proof cap, but predates the speed and coverage work merged since (D-0206, D-0208, D-0209, D-0212
-  to D-0217 and D-0220). A series on a later binary will move these numbers, and the next one is
-  due after the next merge that changes the encoding or the search.
+  proof cap, but predates the coverage, speed and correctness work merged since (D-0206, D-0208,
+  D-0209, D-0212 to D-0217, D-0220, and the integer-overflow fix of M22-review-T1). The effect of that
+  work on the Challenge is not measured yet. On the benchmarks of D-0208, a node costs 49 % fewer
+  instructions on costas and 35 % fewer on multi-knapsack without proof (41 % and 34 % with proof),
+  and between 6 % fewer and 0.4 % more on the three others.
+- The scores rose from 2 789 to 4 043 (with proof), from 3 581 to 5 799 (`-f`) and from 3 237 to 4 428
+  (without proof). The bits encoding and earlier reductions of the proof size changed together
+  between the two series, so their shares cannot be separated. Removing the proof cap explains at
+  most one of the verified answers.
+- The solver has 16 GiB of address space, and it refuses an instance when its own heap reaches 8 GiB.
+  With 64 GiB and a heap of 32 GiB, the same binary refuses 60 instances instead of 164 with proof,
+  but verifies 304 optimal or UNSAT answers instead of 302 (D-0210,
+  in `bench/series/HISTORY.md`).
 - Free search is stronger in aggregate but not on every model. It wins on 670 instances and loses
-  on 327 (578 ties), so the default stays the fixed search (D-0185 §5, D-0203).
+  on 327 (578 ties). The default is the fixed search, and whether it stays so is an open question
+  (M19-config-T1). The ranks above place `-f` among the fixed-search entrants. Among the
+  free-search entrants, which are two to three times as many, the series before this one ranked it
+  much lower (D-0185).
+- A node is still expensive. Before D-0208, a proved node cost from 66 to 592 times the instructions
+  of a Gecode node on four problems where the two trees agree to within 2 % (D-0207).
+
+`bench/series/HISTORY.md` has one row per series.
 
 ## Getting started
 
@@ -149,6 +167,7 @@ writes a proof the checker verifies, as the default search does.
 | `docs/DECISIONS.md` | why things are the way they are |
 | `docs/GLOSSARY.md` | vocabulary |
 | `bench/challenge/README.md` | how the Challenge runs are made and where they are kept |
+| `bench/series/HISTORY.md` | the results of every Challenge series |
 | `scripts/README.md` | the operating manual for the compute node (runs, gates, lanes) |
 
 Contributors, Claude sessions included, start with `CLAUDE.md`.

@@ -19,7 +19,6 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M22-review-T4 (README part) | `README.md` | readme-session (laptop) | 2026-11-24 |
 
 ## Cross-session requests
 
@@ -467,6 +466,7 @@ section 1. Shares are inclusive, of the whole run.
 
 | Task | Session | Date | Summary |
 |---|---|---|---|
+| M22-review-T4 (README part; the module map is still open) | readme-session (laptop) | 2026-11-24 | `README.md` only: the new globals, the CDCL switch, the dated e2e count, and the caveats under the Challenge table. |
 | M17-bench-series-T3 (history and the rule) | agent-history (`wave72-history`) | 2026-11-24 | `bench/series/HISTORY.md` with seven rows (D-0210, D-0203, D-0185, D-0175 two arms, D-0133, D-0121), and the orchestration bullet in CLAUDE.md. |
 | M17-bench-series-T1, T2 (the series driver and the first series on current main, D-0203) | agent-series (`wave58-series`) | 2026-11-24 | **D-0203.** `bench/series/run_series.sh` (phases setup, flatten, run, read, publish; resumable; veripb in its own 64 GB cgroup and 3 600 s limit; `--list`, `--solve-timeout`, no Chuffed/GCS flatten for baguette arms), `tools/compare/readme_table.py` (writes the README section). Series on release `f244c35a` (bits default, no proof cap, PAR 29 per arm): A 302+74 verified, B (`-f`) 346+95, C (`--no-proof`) 340+86 unverified; summed score 4 043 / 5 799 / 4 428 against D-0185's 2 789 / 3 581 / 3 237; 0 rejected, 0 veripb memory failures, 44 check time-outs; the cap would have cost one verified proof. Tables `/cluster/arthur/baguette-results/series-20261123/` |
 | M21-memory-T1, M21-memory-T2 (where the heap goes, D-0218) | agent-memory2 after agent-memory (`wave66-memory`) | 2026-11-24 | **D-0218.** Measurement only; the probe is `/cluster/arthur/baguette-results/memory/memprobe.patch`, reverted on the branch. OCaml's representation is 2.5 to 4 on record-heavy kinds and the GC's free space 1.5 to 5 on the budget, but the search refusals are what we keep: hole bitsets copied per pruning, 410 to 660 B per trail entry, 270 to 330 B per learned literal kept forever, proof explanations kept after their line. Five ranked fixes for T3 with estimates |
@@ -677,6 +677,11 @@ section 1. Shares are inclusive, of the whole run.
 | M19-config-T0 (the tuning set) | agent-tuning (`wave59-tuning`) | 2026-11-23 | **D-0205.** `bench/tuning/`, 200 instances in 183 families. DONE except the driver hook. |
 
 ## Handoff notes
+
+### 2026-11-24 (readme-session, laptop): M22-review-T4, the README part
+
+Docs only, at the user's request. The caveats under the Challenge table are hand-written: the next `readme_table.py --readme` replaces the whole section, so carry them over through `--notes`.
+The summary below says `-f` ranks 3rd in five editions; the README's table gives six (2024, 2023, 2022, 2019, 2018, 2012). The e2e count (197 of 207) dates from D-0201 and the suite now has 228 models.
 
 ### 2026-11-24 (agent-history, `wave72-history`): M17-bench-series-T3
 
