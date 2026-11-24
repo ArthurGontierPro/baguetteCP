@@ -28729,3 +28729,30 @@ byte-identical), `Some t` chronological when the jump would skip more than `t` l
 `--chrono T` (needs `--cdcl`, a usage error otherwise), environment `BAGUETTE_CHRONO=T`. `--cdcl` is
 added to the CLI (D-0219's cross-session request), `BAGUETTE_CDCL=1` kept. `dfs` and the default
 are byte-identical by construction: the code is inside `Search.cdcl` and the CLI parsing.
+
+### 2. The threshold, chosen on a pilot
+
+Built as section 1 says (`440b579`), release md5 `f35ba693` for the pilot (`f404f013` after `dune
+fmt`, the same code, for everything after it). Fixed search, `--no-proof`, 300 s, the loop alone (`L`)
+against `--chrono T`. Seconds, G instructions (`perf stat -e instructions:u`), nodes, conflicts, and
+the number of conflicts that went back chronologically:
+
+| instance | L | T 0 | T 5 | T 10 | T 20 | T 30 | T 50 | T 100 |
+|---|---|---|---|---|---|---|---|---|
+| 2012 tpp 7_5_30_1 (OPT) | 134 s, 788 G, 218 357 n, 5 805 c | 68 s, 387 G | 70 s | 71 s | 70 s, 401 G, 159 869 n, 5 825 c, 235 chrono | 70 s | 132 s (35 chrono) | 131 s |
+| 2019 nside EASY_200_50 (OPT) | 115 s, 429 G, 10 961 n, 441 c | 53 s, 202 G | 57 s | 64 s | 82 s, 304 G, 7 242 n, 443 c, 118 chrono | 99 s | 111 s (0) | 113 s |
+| 2021 flowshop-workers ex6 | 3211, no proof of optimality, 536 645 n, 22 571 c | 3211, 143 199 c | 3211 | 3211 | **OPT 3201, 261 s**, 1 001 G, 205 320 n, 96 277 c, 71 670 chrono | **OPT 3201, 218 s** | 3211 | 3211 |
+| 2022 rotating-workforce e-80 (SAT) | 1.7 s | 2.1 s | 1.6 s | 1.6 s | 1.6 s | 1.6 s | 1.6 s | 1.6 s |
+| QR48 f3 (UNSAT), costas 14 (SAT) | 6.2 s, 153 s | same tree, no jump to cut | | | same | | | |
+
+On QR48 and costas no jump skips a level (D-0219 section 6: the asserting level is the level below),
+so the threshold changes nothing there. On tpp and nside every threshold up to 30 halves the time
+(the re-descent is gone: nodes -27 % and -34 % at `T = 20` for the same conflicts). On flowshop-workers
+the small thresholds trade the re-descent for something worse: at `T = 0` every conflict goes back
+one level and the run makes 143 199 conflicts in 300 s, one per node, without closing the optimum.
+The literal recorded at its imprecise level makes the next clause's asserting level high, so the
+jumps that remain are short and the conflicts many; only 20 and 30 prove the optimum. D-0219's
+`dfs` proved it in 167 s. `T = 20` is taken for the campaign: the best of the thresholds that close
+all three optimisation instances on tpp and nside, second on flowshop. Nadel and Ryvchin's 100 is
+the loop without the option here (the jumps that hurt are 20 to 60 levels long). This was chosen on
+four instances that are in the tuning set, so the tuning set is not an independent test of `T`.
