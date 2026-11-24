@@ -19,6 +19,7 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
+| M21-memory-T3 (fix 4 of D-0218: explanations released after their line, D-0223) | `lib/core/justify.ml`, `lib/core/explanation.ml`, tests of them | agent-release (`wave70-release`) | 2026-11-24 |
 
 ## Cross-session requests
 
