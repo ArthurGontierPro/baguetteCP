@@ -19,6 +19,7 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
+| M19-config-T10 | `lib/core/search.ml`, `lib/core/learn.ml`, `lib/core/analysis.ml`, `lib/core/trace.ml`, `test/unit/test_cdcl.ml` (new) + `test/unit/dune`, `docs/DECISIONS.md` (D-0219), `docs/ROADMAP.md` (row) | agent-cdcl (wave67-cdcl) | 2026-11-24 |
 
 ## Cross-session requests
 
