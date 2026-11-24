@@ -687,6 +687,11 @@ section 1. Shares are inclusive, of the whole run.
 
 ## Handoff notes
 
+### 2026-11-24 (docs-session, laptop): the `-f --no-proof` arm runs on fataepyc-04 (D-0229)
+
+Started 17:20 UTC with the user's agreement, launcher `/scratch/arthur/series-go.sh` on fataepyc-04 (pid in `series-go.pid`), 46 in parallel per binary. Old binary `f244c35a` on D-0203's flattened files (`/scratch/arthur/series-20261123-binA`), main `36e8cc0` (binary `ef2f76c8`) on its own flattening (`/scratch/arthur/series-20261124`), which starts when that flattening ends. Settings of D-0203 (1 200 s, 16 GiB address space, 8 GiB heap), arm label D in both. Tables go to `/cluster/arthur/baguette-results/series-20261124-fnoproof/`. fataepyc-04 was booked by the user; nothing else of ours runs there.
+Correction to CLAUDE.md's node section: `/cluster` is the same directory on fataepyc-04, 06 and 07 (same inode, read 2026-11-24).
+
 ### 2026-11-24 (docs-session, laptop): M22-review-T4, the module map, and what an audit of the records found
 
 Every `.ml` of `lib/` is now in both maps. T4's row can be closed. Left to their owners, because open branches edit the same rows:
