@@ -28983,3 +28983,121 @@ way. Instances without holes do not move.
 - The set-bit reads of past versions (section 6) could be answered from the log directly by
   `Store.remover` (the slot of the value gives the entry), saving the binary search's reads. Not
   done: the remover's equivalence with its scan (D-0088) would need restating for it.
+
+## D-0226  M23-inputs: a relational `Problem` between the readers and the solver, `.scp` as a second input, every other language translated to `.scp` outside the solver
+
+Status: PLAN (measured, no solver code; the user asked for the plan on 2026-11-24)
+Date: 2026-11-24
+Task: M23-inputs (branch `wave74-inputs`)
+Touches: this record, `docs/ROADMAP.md` (M23), `bench/inputs_spike/`. Results:
+`/cluster/arthur/baguette-results/inputs-20261124/`.
+
+### 1. What the user asked
+
+A benchmark in which one problem, written once as a `.scp`, has two proofs, one from baguette and
+one from GCS. Then `.scp` as an input of baguette whose proof goes through the end-to-end chain of
+M14, and a front end that is easy to adapt to other languages (XCSP3, CPMpy, Essence). Which
+versions of cake and GCS to pin is deferred by the user, because it is a question of names.
+
+### 2. One `.scp`, two proofs, today
+
+`tools/e2e/fzn2scp.py` translates 203 of the 228 test models. On each, `baguette --e2e` (md5
+`1c179467`, `73abf84`) and `glasgow_scp_solver` (GCS `d7468618`, 2026-11-10) read the same problem,
+and both proofs are elaborated against the one `.opb` of `cake_pb_cp` (CakePB `438b8f83`), then
+checked by it. baguette is VERIFIED on 203, GCS on 88 as it stands, and on 189 once `solx` is
+rewritten to `sol`. The 14 left:
+
+| GCS side | models | cause |
+|---|---|---|
+| `cumulative`, `disjunctive`, `diffn` | 9 | cake replaced its cumulative encoder on 2026-09-19 (CakePB-dev `a402078`), GCS follows those names, and the public CakePB is of 2026-08-21. With GCS `87b24555` (2026-08-19) 7 of the 9 verify in `enumerate` |
+| "Duplicate variable name 'c1'" | 4 | `fzn2scp.py` names constraint and variable alike |
+| unknown keyword `max` | 1 | the reader of GCS has `array_max` only |
+
+`solx` is GCS's choice of `(prob_type enumerate)`, the only type it writes for a satisfaction
+problem. Replayed so, 100 of the 101 models verify and one runs past 60 s. Two things will break on
+our side when the pair moves. The prefix of D-0195 cites the old cumulative encoding, and the
+unmerged GCS branch `cake-zero-one-names` renames the bit of a 0..1 variable to `z[B]`.
+
+### 3. Is `.scp` expressive enough?
+
+**The language.** Integer variables with bounds, conditions `(x op v)`, linear constraints and
+comparisons plain, `_if` and `_iff`, `plus minus multiply divide modulus abs min max`, `and or
+parity`, and about thirty globals (D-0174 section 2 lists them). It has no Booleans (0..1 integers), no holes
+(an `in` constraint), no nested expressions (flattened into auxiliary variables), no search
+annotation and no output item. A problem over bounded integers is therefore always expressible, at
+worst by decomposition. The question is what the decomposition loses.
+
+**Measured on XCSP25**, the 450 instances of the COP25 and CSP25 tracks (35 families), loaded by
+CPMpy 1.1.1 and flattened with the globals cake has kept whole (`bench/inputs_spike/probe.py`).
+**This counts forms. No `.scp` was written and nothing was solved.**
+
+| question | instances |
+|---|---|
+| loaded and flattened | 445 of 450 (5 exceed 8 GB or stop in the loader) |
+| every flat form has a `.scp` form | 408 counted by the probe. The other 37 (3 families) hold only `and(...) = b` and `(x = v) = b`, read by hand on one instance per family. They are `and` and `equals_iff` |
+| a global loses its keyword (`alldifferent_lists`, `subcircuit` with a start) or stands under a reification cake lacks (`table`, `allequal`) | 46 |
+| `lex_chain_lesseq` becomes `lex_less_equal` per row, `NotInDomain` becomes domain facts | 71 and 33, no strength expected to be lost |
+| auxiliary variables, total over original, over the 408 | median 1.34, 90th percentile 37, worst 1 799. The instances above 10 are 66, in 7 families, for example CrazyFrog (296 to 2 966 variables) and RamseyPartition (60 to 930, one `nvalue` per constraint) |
+| largest domain at most 64, at most 1 000 | 232, 384 |
+
+The 222 of those 408 whose flat constraints are all among baguette's families (upper bound. A table
+or an element with variable entries, or a cumulative with variable durations, is counted as
+covered) need no new propagator. The others need, by instances, `lex_less_equal` (59), `mod` (55),
+`strictly_increasing` (49), `short_table` (38), `nvalue` (29), `negative_table` (22), `decreasing`
+(15), `alldifferent_except_n` (9). `increasing` and `decreasing` are linear rows.
+
+**What limits coverage is baguette's family list, before the language.** For the classes `.scp`
+drops (about a tenth of the XCSP25 instances lose a global), the fallback is a decomposition,
+visible to GCS too, so a comparison stays fair.
+
+### 4. Options for the front end
+
+| option | consequence |
+|---|---|
+| A. one parser per language in OCaml, each building `Model.t` | each must redo what `mznlib` does (flags, selectors, positions, index shifts). An XCSP3 front end in GCS is 2 293 lines without its XML library |
+| B. `.scp` as the only internal type | FlatZinc loses Booleans, holes, search and outputs, or they travel beside it |
+| **C (recommended). a relational type `Problem`, readers `.fzn` and `.scp`, everything else translated to `.scp` outside** | one lowering, two small readers, one translator (CPMpy to `.scp`) for CPMpy and XCSP3. Essence reaches FlatZinc by Savile Row |
+
+Three facts in the tree frame it. (1) `Model.cstr` holds auxiliaries a reader cannot have
+(`r_flags`, `mem_b`, `tab_s`, `cir_pos`), because `mznlib` declared them. (2) Others are created in
+`builder.ml` while it reads syntax (`aux` of the arithmetic family, the copies of gcc), and domains
+are inferred there over `Ast` (D-0083). (3) `Compile.e2e_spec` already maps each `Model.cstr` to a
+cake keyword, so a reader is its inverse.
+
+**The design.**
+
+```
+fzn  -> Lexer, Parser, Builder --+
+                                 +-> Problem --Lower--> Model.t --Compile--> store, encoding, proof
+scp  -> Sexp, Scp_reader --------+
+CPMpy, XCSP3  -> tools/cpm2scp (Python) -> .scp        Essence -> Savile Row -> .fzn
+```
+
+- `Problem.t`: variables (name, bounds, holes), relations with a **name**, an objective, plus what
+  only FlatZinc has (search, outputs). No auxiliary, no FlatZinc spelling. A constraint carries the
+  auxiliaries the input already declared as `Given of operand list`, or `Fresh`.
+- `Lower`: the only place that creates a variable, infers a domain, or decomposes. It is incremental,
+  one constraint at a time, so D-0128's memory bound holds.
+- A family is one module with its relation, its meaning (what `Model.check_assignment` reads), its
+  lowering, its posting and its `E2e.spec`. Adding a constraint touches one file. This is the
+  front-end half of M22-review-T10, which it replaces for `builder.ml` and `compile.ml`.
+- The trust story of M14 does not move. The proof is checked against the `.opb` cake derives from
+  the `.scp`, so a misreading in `Scp_reader` yields a refused proof or a correct proof of the
+  `.scp`, never a wrong verified answer. A translator to `.scp` is trusted, as `fzn2scp.py` is.
+
+### 5. Order of creation is the risk of the refactoring
+
+The order in which variables are created fixes names and default branching, so an auxiliary that
+moves changes the search. On the FlatZinc path `Lower` must create them in today's order, and the
+byte-identity lanes are the proof of it (`make diff`, the model tests, `make e2e`). On the `.scp`
+path the auxiliaries come after the variables of the file.
+
+### 6. What is left to the user
+
+(1) `SPEC` 1 and 2 say the input is FlatZinc. `.scp` is experimental until T3 is done, then a
+normative sentence is proposed. (2) A `.scp` has no search annotation, so a run on it takes the
+default, which is GCS's situation too. (3) Which cake and GCS are pinned, deferred.
+
+### 7. Revert
+
+T1 to T3 are separate merges, each byte-identical on the FlatZinc path, so each reverts alone.
