@@ -19,7 +19,6 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M18-coverage-T4 | `mznlib/` (bin_packing*), `lib/flatzinc/compile.ml`, `lib/core/prop/` (a bin-packing module if needed), `test/models/binpack_*`, `test/unit/` (new tests), `docs/DECISIONS.md` (D-0220), `docs/SPEC.md` §2.1, `docs/ROADMAP.md` T4 row | agent-binpack (`wave68-binpack`) | 2026-11-24 |
 
 ## Cross-session requests
 
@@ -466,6 +465,7 @@ section 1. Shares are inclusive, of the whole run.
 
 | Task | Session | Date | Summary |
 |---|---|---|---|
+| M18-coverage-T4 (bin packing, D-0220) | agent-binpack (`wave68-binpack`) | 2026-11-24 | **D-0220 [AUTONOME].** mznlib only: std's bin-packing rows without the bool2int copies (`baguette_bool_lin_eq`/`_le` per bin over std's int_eq_reif indicators, loads restricted to their reachable sums). The refusals measured as search-time heap on four families of five; no outcome change on 20 instances, .opb 0.58 to 1.00, more nodes on 14 of 16 time-outs, 223 other models byte-identical |
 | M18-coverage-T3 (`circuit`, D-0217) | agent-circuit (`wave65-circuit`) | 2026-11-24 | **D-0217 [AUTONOME].** `lib/core/prop/circuit.ml`: mznlib routes `fzn_circuit` to `all_different` plus `baguette_circuit(x, pos, root)`, the .opb defines circuit by MTZ rows over position store variables, prevent + pinned positions, every subtour cut one `pol` ahead; `subcircuit` stays std. 20 instances: .opb 0.44 to 0.998, more nodes on 14 of 15 time-outs (default), p1f-pjs_10 time-out -> OPT, all checked proofs VERIFIED |
 | M18-coverage-T2 (`diffn`, D-0213) | agent-diffn (`wave61-diffn`) | 2026-11-24 | mznlib `fzn_diffn`, `fzn_diffn_nonstrict`: std's pairs plus the two cumulative relaxations over order copies; four models, theorem enumeration and 16 scenes in test_compile, two lanes in test_mutation; maps and PROOF-FORMAT 4. Complete 7 -> 9 of 25 routed Challenge instances, all VERIFIED |
 | M11-complexity-T18 (black-hole's root cost under native `table`) | agent-hash (`wave64-hash`) | 2026-11-24 | **D-0216 [AUTONOME].** 156 removals under a 47-variable Hall set rebuilt 8.3 M pairwise at-most-one nodes at black-hole_10's root, all found again in the hash-consing table; `Alldiff.reuse` hands back what a rebuild would return (`Explanation.rebuilds_to`, a removal epoch), `row` in one lookup, `Table.add_fact` and `Trace.settle_facts` dedup through tables. 642 test-model runs byte-identical (default, `--bits-above none`, HASHCONS=0), lanes 347/347 and debug 333/333 for both binaries, scaling green, 4 705 ok. bh10 55.1 -> 7.3 G, a bh14 node 7.74 -> 2.36 G, D-0207's five within 0.6 %. Not merged |
@@ -696,6 +696,11 @@ Gates 96 to 98 green: 218 models byte-identical, lane 347/347, debug 333/333, sc
 Also open: after D-0208 the engine's wake work is the largest share left on costas and mknap; removing it needs the D-0169 (b) rule (rows that never prune are not woken), which changes default behaviour.
 
 **[AUTONOME] decisions**: D-0213 (above); D-0216 (alldiff reuses the node a rebuild would return; two dedups hashed; byte-identical); D-0208 (watching withdrawn on measurement).
+### 2026-11-24 (agent-binpack, `wave68-binpack`): M18-coverage-T4, bin packing (D-0220)
+
+The bin-packing refusals are not the decomposition: mapping, steelmillslab, team-assignment and gbac are small models whose heap fills during search (learned clauses kept as engine instances, PB analysis on mapping; cross-session request filed), only ihtc is refused at its encoding. So the change is mznlib only: std's rows minus the bool2int copies, through two builtins that ARE int_lin_eq/le over Booleans (SPEC 2.1 sentence), and each load restricted to the sums std's flattening found (without it gbac's loads stay 0..298 and the .opb grows 9x).
+On 20 instances (`/cluster/arthur/baguette-results/wave68-binpack/`): no outcome change, .opb 0.58 (team-assignment) to 1.00 (mapping), more nodes on 14 of 16 time-outs, all 6 checked proofs VERIFIED; ihtc i06 still refused. A table-defined indicator design was built and dropped (D-0220 section 5); a native `bool_lin_eq`/`_le` for every model is the obvious next step and changes other models, so it is only proposed there.
+
 ### 2026-11-24 (agent-circuit, `wave65-circuit`): M18-coverage-T3, native circuit (D-0217)
 
 `circuit` is native: mznlib keeps `all_different` and adds `baguette_circuit(x, pos, root)`; the .opb defines it by MTZ rows over one position store variable per non-root node (bits by default), the propagator is CHECKING plus Chuffed's prevent, and every subtour cut is ONE `pol` (rows around the cycle, `n d`) written ahead. No new constructor, nothing changes for a model without circuit (218 test models byte-identical).

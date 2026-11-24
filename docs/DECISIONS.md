@@ -27858,7 +27858,7 @@ pruning, not the search, is what is missing.
 
 ## D-0220  [AUTONOME] M18-coverage-T4: `bin_packing_load`, `bin_packing_capa` and `bin_packing` through mznlib, std's rows without the bool2int copies: one linear row per bin over the indicators `bin[i] = b` themselves (std's int_eq_reif Booleans, read as 0..1). No new propagator, no new `Explanation` constructor, no `lib/core` change. The refusals were measured first: four families of five fill the heap during search, not at the encoding
 
-**Status**: IN PROGRESS (agent-binpack, `wave68-binpack`, 2026-11-24). Revert: delete
+**Status**: DECIDED (agent-binpack, `wave68-binpack`, 2026-11-24). Revert: delete
 `mznlib/fzn_bin_packing_load.mzn`, `fzn_bin_packing_capa.mzn` and `fzn_bin_packing.mzn`; every model
 then flattens to std's decomposition again, byte for byte, and the two builtins are dead code.
 
@@ -27890,9 +27890,9 @@ conflict, through the learned-clause database (keep-all, D-0051) and, on mapping
 analysis. The M17 series (`/scratch/arthur/series-20261123`, current main, bits default, 8 GiB)
 already shows most of them as time-outs rather than refusals: 6 of the 55 instances of these
 families are still REFUSED there (three ihtc, one steelmill, two mapping). Only ihtc is refused
-for the size of the encoding, and there the decomposition is the bulk of it. A native
-bin-packing changes the first kind only through the shape of the reasons the search learns
-from; it is not the lever for it, and section 6 says where that lever is.
+for the size of the encoding, and there the decomposition is a large part of it. A smaller
+bin-packing changes the first kind only through the cost of a node and the reasons the search
+learns from; it is not the lever for it, and section 6 says where that lever is.
 
 ### 2. The design: std's rows, minus the copies
 
@@ -27983,6 +27983,45 @@ at 8 000 steelmill nodes) and the per-instance cost of a learned clause register
 instance (M21-memory, agent-memory), and on mapping the cost of PB conflict analysis over the
 load rows' large weights (M19-config). They are recorded in WORKLOG's cross-session requests.
 
-### 7. Measurement
+### 7. Revert
 
-Written after the run (section 8).
+Delete the three mznlib files (section header). Nothing else depends on them; the builtins stay
+accepted and cost nothing unused. SPEC 2.1 gains the `baguette_bool_lin_eq` / `_le` sentence (a
+normative addition, the user's to decide outside autonomous mode); reverting the record reverts it.
+
+### 8. Measurement (2026-11-24)
+
+20 Challenge instances calling the three globals, 6 families (mapping 4, gbac 4, steelmillslab
+4, team-assignment 4, kidney-exchange 2, ihtc-2024-marte 2), old = release of main `3df912f`
+(md5 `def46188`) flattened with main's mznlib (std's decomposition), new = release of
+`wave68-binpack` (md5 `4dde0987`) with its mznlib, 300 s, `--max-heap-mb 8192` (the M17
+series' budget), with proof, the two arms side by side, veripb 900 s on every run that
+completed. Table, driver and logs: `/cluster/arthur/baguette-results/wave68-binpack/`
+(`summary.tsv`).
+
+- Outcomes: none changes. The three that complete (steelmillslab 2019 bench_19_6, team-assignment
+  2022 data1_4_6, kidney-exchange 2019 3_20_0.25_5) are OPT in both arms, 6 of 6 proofs
+  VERIFIED. ihtc i06 is REFUSED at the heap budget in both (110 s new, 117 s old); no refusal
+  becomes an attempt. The mapping instances reach 5.5 to 8.5 GB in 300 s in both arms
+  (section 1: search, not the encoding).
+- `.opb` bytes, new / old: team-assignment 0.58 to 0.61, ihtc 0.92 and 0.95, steelmillslab and
+  kidney-exchange 0.96 to 0.97, gbac 0.97 to 0.99, mapping 1.00 (its indicators are shared with
+  the `flows != 0 <-> flow_processor = j` channel, so only the copies go).
+- Nodes in 300 s on the 16 time-outs: more on 14 (steelmillslab 13_0 x1.50, team-assignment
+  2022 data2_6_15 x1.38, gbac reduced_UD6 x1.30, ihtc i03 x1.25), fewer on 2 (gbac csplib12
+  x0.95, kidney 2023 x0.98). Incumbents: better on 3 (gbac reduced_UD6 9 277 -> 9 072, reduced_UD2
+  by 1, team-assignment data2_5_6 948 -> 960, maximised), worse on 2 (team-assignment data3_6_28
+  7 093 -> 7 083, gbac UD4 by 1), the same on the other 10 that print one.
+- The completed runs: team-assignment data1_4_6 295 s against 275 s (150 k nodes against 160 k),
+  kidney 73 s against 66 s, steelmillslab 237 s against 240 s.
+- Root, node-limited (4 000 nodes, `--no-proof`): steelmillslab 13_0 16.6 s against 22.3 s,
+  team-assignment data3_6_28 14.2 s against 17.6 s, gbac reduced_UD6 5.2 s against 7.0 s, the
+  same RSS: a node is cheaper, its memory the same.
+- The 223 models of test/models that do not call the builtins are byte-identical across the
+  two binaries (stdout, .opb and .pbp hashed, `bytes-hashes-*.tsv`).
+
+What it does not show: a completion or refusal change. That was section 1's prediction: the
+refusals of four families are the search's heap (WORKLOG cross-session request, M21-memory,
+the retention policy), and ihtc's root is 5.1 GB of which the copies were 0.8 GB. Shaw's
+rules are not asked for by these numbers either; they would change the search, and the
+search's memory is what fills the heap.
