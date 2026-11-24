@@ -121,10 +121,11 @@
    a written tree alive
    -------------------------------------------------------------------------------
 
-   [model_row id] and [term 1 (model_row id)] return ONE block per id (below
-   [intern_cap]): the citations a counting family's derivation is made of (one per ladder
-   rung it walks) cost their list cell, not eight words. The bytes are the same by
-   construction, see [cite_row].
+   [model_row id] and [term 1 (model_row id)] return ONE block per id for the ids the
+   writer had handed out when [Justify.create] ran (the .opb's rows and the proof's opening
+   lines): the citations a counting family's derivation is made of (one per ladder rung it
+   walks) cost their list cell, not eight words. The bytes are the same by construction,
+   see [cite_row].
 
    What D-0223 found holding written trees (99 % of tdtsp_10_53's live heap, D-0218) is
    not the hash-consing table but a WRAPPER: a thunk whose closure returns another
@@ -802,19 +803,25 @@ let linear terms rhs =
    tell a shared one from a fresh one: [Model_row] and [Term] are immutable, every reader
    matches them by structure, and the hash-consing key compares a [Model_row] by its id
    ([summand_hash], [hc_equal]), never by identity. So the bytes are the same by
-   construction. Ids above [intern_cap] are built fresh, and a chunk of 4 096 slots is
-   allocated only where an id is cited. *)
-let intern_cap = 1 lsl 24
-let chunk_bits = 12
+   construction. *)
+let intern_cap = 1 lsl 22
+let chunk_bits = 8
 let no_row = Weaken []
 
-(* Two levels, so that only the id ranges actually cited are allocated: a ladder's rungs are
-   consecutive ids, and a single array grown to the largest id cited was a 32 MB block that
-   every major cycle scanned (rcpsp11_60: +2.9 % instructions per proved node, D-0223). *)
+(* Only the ids below [intern_below] are shared: the .opb's rows and the lines the proof
+   opens with, which is what a ladder citation names, cited again by derivation after
+   derivation. [Justify.create] sets it from the writer it is given; before that (and under
+   `--no-proof`, where nothing is written) it is 0 and every citation is built fresh, as
+   before D-0223. A line the search derives is cited by few derivations, and sharing it costs
+   more than it saves: interning every id was +2.0 % instructions on rcpsp11_60 with the
+   proof, and kept one citation alive per id ever cited (+93 MB on travelling-thief r49 at
+   1 000 nodes). Two levels, chunks of 256 allocated where an id is cited; ids at or above
+   [intern_cap] (4 M) are built fresh. *)
+let intern_below = ref 0
 let cited_rows : summand array array = Array.make (intern_cap lsr chunk_bits) [||]
 
 let cite_row id =
-  if id < 0 || id >= intern_cap then Term (1, Model_row id)
+  if id < 0 || id >= !intern_below then Term (1, Model_row id)
   else
     let k = id lsr chunk_bits in
     let chunk =
@@ -832,6 +839,10 @@ let cite_row id =
         let s = Term (1, Model_row id) in
         Array.unsafe_set chunk i s;
         s
+
+(* [Justify.create]: share the citations of every id the writer has handed out so far. *)
+let intern_up_to n =
+  intern_below := Stdlib.max !intern_below (Stdlib.min intern_cap (n + 1))
 
 let model_row id = match cite_row id with Term (_, m) -> m | _ -> Model_row id
 let weaken lits = Weaken lits

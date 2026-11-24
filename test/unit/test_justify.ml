@@ -2350,11 +2350,14 @@ let test_index_long_keys_m11t5 () =
 
 (* M21-memory-T3 (D-0223): a model row's citation is one shared block per id, and nothing
    that reads a derivation can tell. Checked: [term 1 (model_row id)] is physically one
-   value however often it is built, [model_row id] is the one inside it, an id above the
-   cap and a coefficient other than 1 are built fresh, and a derivation of shared
+   value however often it is built, [model_row id] is the one inside it, an id handed out
+   after [Justify.create], an id above the cap and a coefficient other than 1 are built
+   fresh, and a derivation of shared
    citations writes exactly the lines of the same derivation spelled with fresh blocks.
    The bytes are compared with hash-consing on and off. *)
 let test_intern_m21t3 () =
+  (* what [Justify.create] does with a writer that has handed out ids up to 100 *)
+  Explanation.intern_up_to 100;
   let shared = Explanation.term 1 (Explanation.model_row 7) in
   check "m21t3 intern: [term 1 (model_row id)] is one block per id"
     (shared == Explanation.term 1 (Explanation.model_row 7));
@@ -2365,6 +2368,10 @@ let test_intern_m21t3 () =
   check "m21t3 intern: another coefficient is built fresh"
     (Explanation.term 2 (Explanation.model_row 7)
     != Explanation.term 2 (Explanation.model_row 7));
+  let late = !Explanation.intern_below + 3 in
+  check "m21t3 intern: an id the writer had not handed out at [create] is built fresh"
+    (Explanation.term 1 (Explanation.model_row late)
+    != Explanation.term 1 (Explanation.model_row late));
   let big = Explanation.intern_cap + 5 in
   check "m21t3 intern: an id above the cap is built fresh, and is the same citation"
     (match Explanation.term 1 (Explanation.model_row big) with
