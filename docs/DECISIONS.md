@@ -26519,3 +26519,43 @@ slice's `oom_kill` counter is logged every 5 minutes and reported with the table
 was touched).
 
 **Revert.** Nothing in the repository changes. The adaptation lives in the run directory's clone.
+
+## D-0211  [AUTONOME] M17-bench-series-T4: GCS with proofs and Chuffed without, the sixteen editions on fataepyc-07, ranked against baguette verified answer for verified answer
+
+**Status**: DECISION on the harness settings, taken 2026-11-24 before the run (agent-node07, branch
+`wave60-node07`). The results section below is filled when the run ends.
+
+**Context.** M17-bench-series-T4 asks where baguette stands among proof-logging solvers. M7-T26 ran
+GCS on 2025 and 2026 only, under the 16 GB proof cap that D-0204 removed (136 of 200 runs CAPPED).
+The reference for baguette is agent-series' 16 GiB series (D-0203, binary `f244c35a`, arms A, B, C).
+
+**Settings.** Arm G = GCS `fzn-glasgow` (md5 `ebffdc08`, the build of M7-T26, identical on both
+nodes) with `--prove`, veripb on every finished run; arm H = Chuffed of the MiniZinc 2.10.1 bundle
+(md5 `d3079869`), fixed search, `-a` on optimisation, no proof. D-0203's 16 GiB settings: 1 200 s,
+16 GiB address space, a `MemoryMax=32G` cgroup per run (a wrapper runs each solver under
+`systemd-run` and the RSS recorder, as `solver_wrap.sh` does for baguette), no proof cap, veripb
+64G and 3 600 s, verified proofs deleted, 2 000 GB floor. The instances and their data are those of
+agent-series' flatten (`pair.tsv`, `flatten.tsv` at `e1971f6`), and each solver re-flattens its own
+`.fzn` with its own library and that recorded data, so the three solvers see the same instances.
+Run directory `/scratch/arthur/node07-gcs/` on fataepyc-07, harness `scripts/compare_run.sh` at
+`e1971f6` with the adaptations of D-0210 plus the one below (`node07.diff`).
+
+Options weighed:
+- **GCS's parallelism.** M7-T26 measured GCS writing 16 GB of proof in 200 s at the median and in
+  100 s at p10, so a run that reaches the time limit leaves 100 to 200 GB on disk until it ends.
+  PAR 40 could hold 8 TB at once on a 9.8 TB disk shared with another experiment; the floor of
+  2 000 GB only holds new launches. Chosen: PAR 32 for GCS (6 TB at worst) and 40 for Chuffed,
+  whose runs write nothing. The PAR does not enter any score, each run has its own core.
+- **A checker that dies of memory on a proof of hundreds of GB.** The harness keeps the files of a
+  CHECK-ERROR as evidence. Kept, such GCS proofs would fill the disk in a few hours. Chosen: a
+  CHECK-ERROR whose cause is the checker's own memory (`veripb_wrap.sh`, exit 97) has its proof
+  deleted (`SERIES_DROP_CHECKER_MEMORY=1`), its row stays. A REJECTED proof is still kept.
+- **Order.** Campaign 1 (D-0210) still had arm A running. Chuffed starts when its arm C is done
+  and GCS when its arm A is, so the node never carries more than 80 of our runs.
+- **Ranking.** `challenge_rank.py` takes GCS rows as printed and `arms_compare.py` reads only
+  baguette's. Both gain an opt-in (commit `09af6a7`): `--solver=gcs --demote-gcs` demotes an
+  unverified GCS OPT or UNSAT as baguette's is, and an arm `NAME=DIR@gcs` reads GCS's rows, whose
+  complete answers count only VERIFIED. Without the new flag and syntax, both outputs are unchanged
+  (checked byte for byte on M7-T26's tables).
+
+**Revert.** Nothing in the solver changes. The two tool options are additive (`git revert 09af6a7`).
