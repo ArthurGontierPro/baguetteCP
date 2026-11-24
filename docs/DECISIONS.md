@@ -28031,7 +28031,7 @@ search's memory is what fills the heap.
 **Status**: MEASURED (agent-memory2, resuming agent-memory, `wave66-memory`, 2026-11-24). Nothing to
 revert, the branch lands documentation only. The instrumentation, its runs and their scripts are in
 `fataepyc-06:/cluster/arthur/baguette-results/memory/`: `memprobe.patch` (applies to this branch and
-to main `38f4aa3`), `scripts/` (flatten, run, queue and table scripts), `runs/` (every probe file,
+to main `838f668`), `scripts/` (flatten, run, queue and table scripts), `runs/` (every probe file,
 `time -v` and stderr), `tables/` (`kinds-v4.tsv` per kind and element, `refpoints-v4.tsv`,
 `rss.tsv`, `gc.tsv`).
 
@@ -28091,7 +28091,7 @@ SIZE, in both directions as measured (section 8), and a probed run's RSS include
 the probe gives the LIVE data and its split.
 
 **Runs.** fataepyc-06, 4 runs at a time, each in its own `systemd-run --scope -p MemoryMax=80G`,
-`--max-heap-mb 65536`, 300 s, flattened with this branch's mznlib (main `38f4aa3` merged). Dev build
+`--max-heap-mb 65536`, 300 s, flattened with this branch's mznlib (main `838f668` merged). Dev build
 of this branch with the patch applied: probe binary `c0f9f294` (md5); the RSS arms used `3eb4db60`,
 the same source without the reordering, the probe off. Chuffed and Gecode are the MiniZinc 2.10.1
 bundle's `fzn-chuffed` and `fzn-gecode` on their own flattening, 300 s.
