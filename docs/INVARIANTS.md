@@ -144,7 +144,7 @@ Assertions guarded by `BAGUETTE_DEBUG=1` should check as many of these as is aff
   is gone, and a wrong emptiness flag. D-0124 says why the memory made this worth it.
 
   **Element is the second producer, since M20-pernode-T2 (D-0214), and for time, not
-  memory.** A pruning records a FRAME -- the domains it read, which are immutable values,
+  memory.** A pruning records a FRAME -- the domains it read (versions that read as they were while the history is live, I-T1 since D-0222),
   and the history -- and builds both halves from it when asked. The readers a frame
   needs beyond D-0124's (`remover` before the cut, the level of a position below it, an
   entry's arena explanation) take the history and no store. `test_d0214_*` checks that
