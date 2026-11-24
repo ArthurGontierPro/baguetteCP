@@ -27391,8 +27391,9 @@ there is no compact PB statement of "one Hamiltonian cycle" from which each cut 
 `mznlib/fzn_circuit.mzn` keeps `all_different(succ)` (native, alldiff.ml), the domain
 restrictions `succ_i in S` and `succ_i != i` (as std; the flattener writes them as declared holes),
 and adds one call `baguette_circuit(succ, pos, l)`: `l = min(S)` is the ROOT, `pos` one
-`var 1..n-1` per node, introduced by the library's `let` (table's selectors, D-0206), the root's
-entry included but never read (its position is the constant 0). The .opb rows
+`var 1..n-1` per node OTHER than the root, introduced by the library's `let` (table's selectors,
+D-0206); the root's position is the constant 0 and has no variable, so search never meets one
+that nothing constrains. The .opb rows
 (`compile.ml`'s `post_circuit`), with G(u, v) = `n ~[succ_u >= v] + n [succ_u >= v+1]` the
 arc's GUARD over succ_u's ORDER literals (a literal a declared bound makes constant dropped):
 
@@ -27469,7 +27470,7 @@ or the SCC argument), recorded here as the reason T3 ships `circuit` only.
 
 ### 6. Measurement
 
-See section 6 below, written after the run.
+Written after the run, at the end of this record (section 8).
 
 ### 7. What was ruled out
 
@@ -27480,3 +27481,7 @@ See section 6 below, written after the run.
   each would need the bits arm's `pol` of linear.ml; the gain over P is the MTZ LP bound, small
   for a CP search, and it can come later as its own row.
 - Holding pos on the order encoding at every W: O(n^3) literals by default.
+
+SPEC 2.1 gains the `baguette_circuit` sentence (a normative addition, the user's to decide outside
+autonomous mode): it states the relation `Model.check_assignment` and test_compile's oracle check,
+the positions included, exactly as D-0206 did for `baguette_table`. Reverting the record reverts it.
