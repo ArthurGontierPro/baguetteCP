@@ -32,7 +32,7 @@ Floats, set variables and multi-objective optimisation are out of scope (`docs/S
 
 ## Performance on the MiniZinc Challenge
 
-All sixteen editions of the MiniZinc Challenge (2011 to 2026, 1 600 instances, 1 575 flattened), run with the Challenge's own settings: 1 200 s per instance, 16 GiB of memory, one thread, on an AMD EPYC 7643. An answer with a proof counts only when VeriPB verifies the proof. Measured on 2026-11-23/24 (`docs/DECISIONS.md` D-0203, release binary `f244c35a`, commit `e1971f6`).
+All sixteen editions of the MiniZinc Challenge (2011 to 2026, 1 600 instances, 1 575 flattened), run with 1 200 s per instance, 16 GiB of memory and one thread, on an AMD EPYC 7643. The Challenge's own limit is 1 200 s since 2015, and it was 900 s from 2011 to 2014. An answer with a proof counts only when VeriPB verifies the proof. Measured on 2026-11-23/24 (`docs/DECISIONS.md` D-0203, release binary `f244c35a`, commit `e1971f6`).
 
 | Outcome per instance | Default search, with proof | Free search `-f`, with proof | Default search, `--no-proof` |
 |---|---|---|---|
@@ -84,6 +84,10 @@ How to read these numbers.
   (without proof). The bits encoding and earlier reductions of the proof size changed together
   between the two series, so their shares cannot be separated. Removing the proof cap explains at
   most one of the verified answers.
+- The editions 2011 to 2014 had a limit of 900 s and baguette ran them with 1 200 s, so their ranks and
+  scores favour baguette. Five instances were completed after 900 s, counting the default and the
+  `-f` arms with proof. The incumbents found after 900 s cannot be separated. A fair
+  comparison on these four editions needs a run at 900 s.
 - The solver has 16 GiB of address space, and it refuses an instance when its own heap reaches 8 GiB.
   With 64 GiB and a heap of 32 GiB, the same binary refuses 60 instances instead of 164 with proof,
   but verifies 304 optimal or UNSAT answers instead of 302 (D-0210,

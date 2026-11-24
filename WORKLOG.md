@@ -466,6 +466,7 @@ section 1. Shares are inclusive, of the whole run.
 
 | Task | Session | Date | Summary |
 |---|---|---|---|
+| M22-review-T4 (README, the limit of 2011 to 2014) | readme-session (laptop) | 2026-11-24 | `README.md` only: the Challenge's limit was 900 s from 2011 to 2014 and the series used 1 200 s. |
 | M22-review-T4 (README, free category) | readme-session (laptop) | 2026-11-24 | `README.md` only: the rank of `-f` in the free-search category, read from `series-20261123/rank_B_*.txt`. |
 | M21-memory-T3, fix 2 (hole bitsets by value, D-0222) | agent-holes (`wave70-holes`) | 2026-11-24 | **D-0222 [AUTONOME] (I-T1's wording).** A hole set is a VERSION of a per-variable log (`domain.ml`): a removal appends 16 B instead of copying the bitset, `Store.undo_to` truncates through `Domain.undo`, a version from an undone branch raises `Domain.Stale_version`. Element's three history readers moved into `store.ml` (D-0214's request). Byte-identical (456 model runs, lanes 347/347 and debug, scaling green, 5 175 unit checks); live heap wordpress 32.95 -> 4.58 G at node 1, ttp r49 5.14 -> 3.16 G at node 1 000, is 4.96 -> 1.65 G; javarouting +2.1 % per node, costas +0.9 %, 0 elsewhere |
 | M22-review-T4 (README part; the module map is still open) | readme-session (laptop) | 2026-11-24 | `README.md` only: the new globals, the CDCL switch, the dated e2e count, and the caveats under the Challenge table. |
@@ -679,6 +680,10 @@ section 1. Shares are inclusive, of the whole run.
 | M19-config-T0 (the tuning set) | agent-tuning (`wave59-tuning`) | 2026-11-23 | **D-0205.** `bench/tuning/`, 200 instances in 183 families. DONE except the driver hook. |
 
 ## Handoff notes
+
+### 2026-11-24 (readme-session, laptop): 900 s for the editions 2011 to 2014
+
+The user would like the next series to use 900 s on 2011 to 2014 (perhaps, not decided). `run_series.sh --solve-timeout` is one value for the whole series, and `read_series.sh` calls `challenge_rank.py` without `--timeout` (default 1 200 s), so both need a per-edition value. Read from the official results: the largest recorded time is 900 s for 2011 to 2014, 1 200 s (to 1 209) after.
 
 ### 2026-11-24 (readme-session, laptop): the free-category ranks in the README
 
