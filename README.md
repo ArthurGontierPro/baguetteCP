@@ -90,11 +90,23 @@ How to read these numbers.
   in `bench/series/HISTORY.md`).
 - Free search is stronger in aggregate but not on every model. It wins on 670 instances and loses
   on 327 (578 ties). The default is the fixed search, and whether it stays so is an open question
-  (M19-config-T1). The ranks above place `-f` among the fixed-search entrants. Among the
-  free-search entrants, which are two to three times as many, the series before this one ranked it
-  much lower (D-0185).
+  (M19-config-T1). The `-f` row above is there to compare the arms against the same opponents. It
+  is not a legal entry, because the fixed category requires the model's annotation to be followed.
+  The ranks of `-f` in its own category are below.
 - A node is still expensive. Before D-0208, a proved node cost from 66 to 592 times the instructions
   of a Gecode node on four problems where the two trees agree to within 2 % (D-0207).
+- The scoring script reproduces the organisers' pairwise scores exactly for 2013 to 2026, but not for
+  2012 (816 of 81 200 differ) and 2011 (137 of 60 000), so the ranks and the part of the summed
+  scores from these two editions are approximate, in every series.
+
+Rank of `-f` with proof in the free-search category, against that year's official free-search
+entrants, from the same runs (`rank_B_<year>.txt` of the series). The entrants include baguette.
+
+| Edition | 2026 | 2025 | 2024 | 2023 | 2022 | 2021 | 2020 | 2019 | 2018 | 2017 | 2016 | 2015 | 2014 | 2013 | 2012 | 2011 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| entrants | 27 | 21 | 22 | 18 | 19 | 17 | 17 | 14 | 15 | 22 | 23 | 19 | 17 | 18 | 17 | 14 |
+| `-f`, with proof | 18 | 16 | 9 | 7 | 15 | 13 | 8 | 6 | 8 | 15 | 15 | 15 | 9 | 8 | 4 | 6 |
+| the series before (D-0185) | 23 | 19 | 22 | 12 | 18 | 16 | 14 | 11 | 13 | 22 | 19 | 18 | 15 | 14 | 12 | 8 |
 
 `bench/series/HISTORY.md` has one row per series.
 
