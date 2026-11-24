@@ -27855,3 +27855,173 @@ What it does not show: a completion change beyond p1f-pjs_10 in 300 s. The routi
 (vrp, vrplc, tsptw) stay time-outs; their next lever is the search question D-0185 section 4
 asks, and a propagated position bound (section 7's MTZ relaxation) if a profile says the
 pruning, not the search, is what is missing.
+
+## D-0220  [AUTONOME] M18-coverage-T4: `bin_packing_load`, `bin_packing_capa` and `bin_packing` through mznlib, std's rows without the bool2int copies: one linear row per bin over the indicators `bin[i] = b` themselves (std's int_eq_reif Booleans, read as 0..1). No new propagator, no new `Explanation` constructor, no `lib/core` change. The refusals were measured first: four families of five fill the heap during search, not at the encoding
+
+**Status**: DECIDED (agent-binpack, `wave68-binpack`, 2026-11-24). Revert: delete
+`mznlib/fzn_bin_packing_load.mzn`, `fzn_bin_packing_capa.mzn` and `fzn_bin_packing.mzn`; every model
+then flattens to std's decomposition again, byte for byte, and the two builtins are dead code.
+
+### 1. Context, and what the refusals measured to be
+
+std's `fzn_bin_packing_load(load, bin, w)` is `sum(load) = sum(w)`, `bin[i]` in the bin range,
+and per bin `load[b] = sum_i w_i * bool2int(bin[i] = b)`. It flattens, per (item, bin) pair whose
+bin is in the item's domain, to an `int_eq_reif` (a Boolean B and its reified rows), a
+`bool2int` (a second, 0..1 integer copy of B and its two rows) and one term of an `int_lin_eq`
+per bin. `bin_packing_capa` is the same with `<= capacity[b]`, and `bin_packing(c, bin, w)` is
+`sum_i w_i * bool2int(bin[i] != b) >= W - c` per bin of the hull. On a 10 x 5 toy that is 6 .opb
+rows, 2 variables and 2 propagator instances per pair (measured, `--bits-above 0` and `none`).
+
+The census (D-0185's arm A, order encoding, before D-0201) counts 32 of 65 `bin_packing_load`
+instances and 8 of 20 `bin_packing` REFUSED at the heap budget. Step 1 measured why, on the
+release binary of main `3df912f` (md5 `def46188`), flattened with main's mznlib:
+
+| instance | .fzn | .opb rows | RSS at the root | RSS later | what grows |
+|---|---|---|---|---|---|
+| 2015 mapping mesh3x3_2 | 0.17 MB | 86 k | 66 MB | 2.9 GB at 1 021 conflicts (60 s, `--no-proof`) | PB conflict analysis: with `BAGUETTE_PB_ANALYSIS=off` the same 2 000 nodes take 1.5 s and 124 MB instead of 60 s and 2.9 GB |
+| 2017 steelmillslab 13_0 | 5.7 MB | 102 k | 128 MB | 1.06 GB at 8 000 nodes, 2.9 GB at 12 000 | learned clauses kept as engine instances: `BAGUETTE_PROPAGATE_LEARNED=off` gives 383 MB at 8 000 nodes; 3 832 of 4 105 learned clauses have >= 16 literals |
+| 2018 team-assignment data3_6_28 | 2.9 MB | 105 k | 89 MB | 1.26 GB at 12 000 nodes | the same shape as steelmill |
+| 2016 gbac reduced_UD6 | 0.18 MB | 11 k | small | 0.17 GB at 4 000 nodes | PB analysis is 2.5x the time, little memory |
+| 2025 ihtc-2024-marte i06 | 289 MB | 4.2 M | **5.9 GB**, compile 50 s | refused at 8 GB in the M17 series | the encoding itself: 433 k `int_eq_reif`, 180 k `bool2int` |
+
+So the refusals are of two kinds. On four families of five (mapping, steelmillslab,
+team-assignment, gbac) the model is small and the heap fills DURING SEARCH, at 0.3 to 2.8 MB per
+conflict, through the learned-clause database (keep-all, D-0051) and, on mapping, PB conflict
+analysis. The M17 series (`/scratch/arthur/series-20261123`, current main, bits default, 8 GiB)
+already shows most of them as time-outs rather than refusals: 6 of the 55 instances of these
+families are still REFUSED there (three ihtc, one steelmill, two mapping). Only ihtc is refused
+for the size of the encoding, and there the decomposition is a large part of it. A smaller
+bin-packing changes the first kind only through the cost of a node and the reasons the search
+learns from; it is not the lever for it, and section 6 says where that lever is.
+
+### 2. The design: std's rows, minus the copies
+
+std's rows are already the natural definition: per bin, `load_b = sum_i w_i [bin_i = b]` over
+the items' value indicators, with no auxiliary but the indicators. What std adds on top is a
+`bool2int` COPY of every indicator, because MiniZinc's `int_lin_eq` takes integers. The design
+removes the copy and nothing else.
+
+`mznlib/fzn_bin_packing_load.mzn` keeps std's `sum(load) = sum(weight)` and range restriction,
+and writes per bin
+
+```
+baguette_bool_lin_eq([w_i | i in items_b], [bin_i = b | i in items_b], load_b)
+load_b in sum(min(0, w_i))..sum(max(0, w_i))          (i in items_b)
+```
+
+`items_b` the items of nonzero weight whose domain holds b. `bin_i = b` is the SAME Boolean std's
+`bool2int(bin_i = b)` reads: an `int_eq_reif` the flattener writes once and shares, by common
+subexpression elimination, with any other constraint that says `bin_i = b` (steelmillslab's
+colour constraint does, for every pair). `fzn_bin_packing_capa.mzn` writes
+`baguette_bool_lin_le(w, [bin_i = b | ...], capacity_b)` per bin, and `fzn_bin_packing.mzn` the
+same with `capacity` over std's own range `lb_array(bin)..ub_array(bin)` (std writes that row
+counting the items NOT in b, `>= W - capacity`; it is the same row negated and shifted by W).
+
+`baguette_bool_lin_eq(a, x, y)` is `sum a_i x_i = y` and `baguette_bool_lin_le(a, x, c)` is
+`sum a_i x_i <= c`, the Booleans read as the integers 0 and 1 (D-0007): the builder turns each
+into the `Int_lin_eq` / `Int_lin_le` it is, so the row, the propagator (`Lin_eq`, `Linear`), the
+overflow cap, the oracle (`Model.check_assignment`) and the proof are the existing ones. The
+FlatZinc builtins `bool_lin_eq` / `bool_lin_le` have that meaning, but mznlib/redefinitions.mzn
+decomposes them through bool2int for every model; prefixed names keep this change to bin
+packing (section 5).
+
+The load restriction is the one choice that is not std's text: std's flattening finds those
+bounds by itself, because there each load is the variable its own `int_lin_eq` DEFINES, and
+MiniZinc intersects a defined variable's domain with the bounds of its definition. Here nothing
+defines the load and, without the line, it keeps its declared domain: on gbac reduced_UD6 a load
+stayed 0..298 where std had 0..18, the `int_times` squares built from it became 0..93 025, and
+the .opb went from 11 k to 99 k rows. The line restates what the flattener computed for std, as
+a domain restriction of the model (trusted as the flattening is), not a row the solver derives.
+
+WHY THIS IS STILL THE DEFINITION. Every row is std's: `sum(load) = sum(weight)`, the range
+restriction, and per bin the same linear row over the same indicators, with the integer copy
+`I = bool2int(B)` replaced by B itself (I = B in every solution of std's rows, so the .opb's
+solutions projected on the model's variables are the same). The load restriction excludes no
+solution (a load is a sum of a subset of its bin's items).
+
+Per pair, against std: 1 variable and about 2 rows and 1 propagator instance fewer (the
+bool2int), the same int_eq_reif. On the 10 x 5 toy: 342 -> 242 .opb rows under `--bits-above 0`,
+437 -> 337 under `none`, and the same solution printed (the search order is unchanged: the copies
+were never branched before the indicators).
+
+### 3. Propagation and proof: all of it existing
+
+The indicators keep int_eq_reif's propagator and proof (reif_lin_eq.ml, D-0057; over a bits
+item its two-half `pol`, D-0134 section 8). Each bin's row is a `Lin_eq` (two `Linear`
+instances) or a `Linear`: load bounds from the indicators fixed and still possible, an
+indicator set to 0 when its weight no longer fits, set to 1 when the bin cannot reach its lower
+bound without it, each pruning `Linear`'s own justification (order: one `rup`; a bits load: the
+bits arm's `pol`, D-0132). That is std's propagation exactly, with one link fewer between an
+indicator and its row. Shaw's 2004 rules (no-fit by subset sums, the lower bound on the number
+of bins, load bounds from the other bins' slack) are not built: section 1 says the refusals are
+not a propagation question, and section 8's measurement does not ask for them.
+
+### 4. Encodings
+
+Nothing is held. The items keep whatever encoding the rest of the model gives them (bits by
+default; int_eq_reif over bits is reif_lin_eq's bits face), the loads are linear terms (bits by
+default), the indicators Booleans. `--bits-above none` gives the same rows over the ladders.
+
+### 5. Options considered, and the one built first and dropped
+
+| option | per pair | measured |
+|---|---|---|
+| keep std | int_eq_reif + bool2int: 2 variables, about 6 rows, 2 instances | the baseline |
+| std's rows without the copy (chosen) | int_eq_reif: 1 variable, about 4 rows, 1 instance | rows 0.86 to 1.0 of std, section 8 |
+| indicators as FRESH Booleans defined by `table`'s rows (one table of one column per item, D-0206: ALO plus `2 ~s + [bin >= v] + ~[bin >= v+1] >= 2`), loads by `Linear`; bins held on order | 1 variable, 1 row, a table instance per item | built first. team-assignment 105 k -> 68 k rows, but steelmillslab 102 k -> 117 k rows and 18 -> 149 MB: holding the bins on order turned every OTHER linear row over them (12 k int_eq_reif of the colour constraint, which CSE no longer shares with fresh indicators) from 7 bits into 111 ladder literals. Dropped |
+| no indicator, `[bin >= b] + ~[bin >= b+1]` in the row | 0 rows | unit propagation counts both literals of an unfixed item (2 w where the truth is w), so no load pruning is RUP from the row; every pruning a `pol` with the item's ladder, a dedicated propagator |
+| direct literals `[bin = b]` in the row, a dedicated propagator | the direct encoding's channel rows | a bits load's bound is not RUP over a row (D-0127): the propagator would re-implement `Linear`'s bits arm |
+| native `bool_lin_eq` / `bool_lin_le` for every model (drop their bool2int redefinition) | the same, everywhere | changes every model that sums Booleans; a default-wide change left as a proposal (M18 or M19 row) |
+| Shaw's propagator over the chosen rows | as chosen | stronger pruning, not what the refusals measured to need |
+
+### 6. What this does not fix
+
+The four families whose heap fills during search keep that behaviour unless the reasons change
+its rate. Two levers are outside this task's files: the learned-constraint database
+(`retention.ml`, held by review-1123; `BAGUETTE_RETENTION=lbd:1000` gave 845 MB against 1 057 MB
+at 8 000 steelmill nodes) and the per-instance cost of a learned clause registered as an engine
+instance (M21-memory, agent-memory), and on mapping the cost of PB conflict analysis over the
+load rows' large weights (M19-config). They are recorded in WORKLOG's cross-session requests.
+
+### 7. Revert
+
+Delete the three mznlib files (section header). Nothing else depends on them; the builtins stay
+accepted and cost nothing unused. SPEC 2.1 gains the `baguette_bool_lin_eq` / `_le` sentence (a
+normative addition, the user's to decide outside autonomous mode); reverting the record reverts it.
+
+### 8. Measurement (2026-11-24)
+
+20 Challenge instances calling the three globals, 6 families (mapping 4, gbac 4, steelmillslab
+4, team-assignment 4, kidney-exchange 2, ihtc-2024-marte 2), old = release of main `3df912f`
+(md5 `def46188`) flattened with main's mznlib (std's decomposition), new = release of
+`wave68-binpack` (md5 `4dde0987`) with its mznlib, 300 s, `--max-heap-mb 8192` (the M17
+series' budget), with proof, the two arms side by side, veripb 900 s on every run that
+completed. Table, driver and logs: `/cluster/arthur/baguette-results/wave68-binpack/`
+(`summary.tsv`).
+
+- Outcomes: none changes. The three that complete (steelmillslab 2019 bench_19_6, team-assignment
+  2022 data1_4_6, kidney-exchange 2019 3_20_0.25_5) are OPT in both arms, 6 of 6 proofs
+  VERIFIED. ihtc i06 is REFUSED at the heap budget in both (110 s new, 117 s old); no refusal
+  becomes an attempt. The mapping instances reach 5.5 to 8.5 GB in 300 s in both arms
+  (section 1: search, not the encoding).
+- `.opb` bytes, new / old: team-assignment 0.58 to 0.61, ihtc 0.92 and 0.95, steelmillslab and
+  kidney-exchange 0.96 to 0.97, gbac 0.97 to 0.99, mapping 1.00 (its indicators are shared with
+  the `flows != 0 <-> flow_processor = j` channel, so only the copies go).
+- Nodes in 300 s on the 16 time-outs: more on 14 (steelmillslab 13_0 x1.50, team-assignment
+  2022 data2_6_15 x1.38, gbac reduced_UD6 x1.30, ihtc i03 x1.25), fewer on 2 (gbac csplib12
+  x0.95, kidney 2023 x0.98). Incumbents: better on 3 (gbac reduced_UD6 9 277 -> 9 072, reduced_UD2
+  by 1, team-assignment data2_5_6 948 -> 960, maximised), worse on 2 (team-assignment data3_6_28
+  7 093 -> 7 083, gbac UD4 by 1), the same on the other 10 that print one.
+- The completed runs: team-assignment data1_4_6 295 s against 275 s (150 k nodes against 160 k),
+  kidney 73 s against 66 s, steelmillslab 237 s against 240 s.
+- Root, node-limited (4 000 nodes, `--no-proof`): steelmillslab 13_0 16.6 s against 22.3 s,
+  team-assignment data3_6_28 14.2 s against 17.6 s, gbac reduced_UD6 5.2 s against 7.0 s, the
+  same RSS: a node is cheaper, its memory the same.
+- The 223 models of test/models that do not call the builtins are byte-identical across the
+  two binaries (stdout, .opb and .pbp hashed, `bytes-hashes-*.tsv`).
+
+What it does not show: a completion or refusal change. That was section 1's prediction: the
+refusals of four families are the search's heap (WORKLOG cross-session request, M21-memory,
+the retention policy), and ihtc's root is 5.1 GB of which the copies were 0.8 GB. Shaw's
+rules are not asked for by these numbers either; they would change the search, and the
+search's memory is what fills the heap.
