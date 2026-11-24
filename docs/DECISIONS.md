@@ -27363,3 +27363,120 @@ lanes were re-run green on the merged binary; the measurement above is on the pr
 
 Delete `mznlib/fzn_diffn.mzn` and `mznlib/fzn_diffn_nonstrict.mzn`: every model flattens to std's
 decomposition again, byte for byte. No OCaml depends on them.
+
+## D-0217  [AUTONOME] M18-coverage-T3: `circuit` as a native propagator over MTZ position variables. The .opb defines the constraint with std's own auxiliary idea (one position per node, `succ_u = v -> pos_v = pos_u + 1`), and every subtour pruning is DERIVED in the proof, one `pol` that sums the rows around the cycle and divides by n. `subcircuit` stays on std's decomposition
+
+**Status**: DECIDED (agent-circuit, `wave65-circuit`, 2026-11-24). No new `Explanation` constructor,
+no change to a model that does not call `circuit`. Revert: delete `mznlib/fzn_circuit.mzn` (every
+model flattens to std's decomposition again, byte for byte); the OCaml is then dead code.
+
+### 1. Context
+
+`circuit(succ)` reaches baguette through std's `fzn_circuit.mzn`: `all_different(succ)`,
+`all_different(order)`, `succ_i != i`, `order[l] = 1` and `order[succ_i] = (order_i = n ? 1 :
+order_i + 1)`, an `array_var_int_element` per node that std decomposes further into reified
+equalities. Nothing in it reasons about a CHAIN, so a partial assignment that closes a subtour is
+only refuted once the order variables run out of values, many levels later. M18-coverage's census
+reads 95 Challenge instances with `circuit` (21 % complete) and 32 with `subcircuit` (41 %), and
+D-0185 section 4 found routing to be where free search loses most. Chuffed and Gecode run alldiff
+on the successors plus the no-subtour check ("prevent": the arc from the end of a chain back to
+its start is forbidden unless the chain covers every node).
+
+The proof question is the one T3's row names: a subtour cut is not a single row. "Not all arcs of
+the cycle C" is implied by circuit, but no model row says it, and with only `succ` in the .opb
+there is no compact PB statement of "one Hamiltonian cycle" from which each cut follows.
+
+### 2. The encoding: MTZ positions, the definition of the constraint
+
+`mznlib/fzn_circuit.mzn` keeps `all_different(succ)` (native, alldiff.ml), the domain
+restrictions `succ_i in S` and `succ_i != i` (as std; the flattener writes them as declared holes),
+and adds one call `baguette_circuit(succ, pos, l)`: `l = min(S)` is the ROOT, `pos` one
+`var 1..n-1` per node, introduced by the library's `let` (table's selectors, D-0206), the root's
+entry included but never read (its position is the constant 0). The .opb rows
+(`compile.ml`'s `post_circuit`), with G(u, v) = `n ~[succ_u >= v] + n [succ_u >= v+1]` the
+arc's GUARD over succ_u's ORDER literals (a literal a declared bound makes constant dropped):
+
+```
+GE(u, v)   G(u, v) + pos_v - pos_u >= 1          u, v != root      succ_u = v -> pos_v >= pos_u + 1
+LE(u, v)   G(u, v) + pos_u - pos_v >= -1         u, v != root      succ_u = v -> pos_v <= pos_u + 1
+LE(r, v)   G(r, v) - pos_v >= -1                 u = root          succ_r = v -> pos_v <= 1
+END(u)     G(u, r) + pos_u >= n - 1              v = root          succ_u = r -> pos_u >= n - 1
+```
+
+for every v in succ_u's declared domain, v != u, v in S. pos is expanded by
+`Encoding.linear_terms_int_lin_le`, so it is a bits variable under the default `--bits-above 0`
+(every row O(log n) literals) and an order variable under `--bits-above none` (O(n) literals per
+row, O(n^3) in all: section 6 measures it). succ is held on the order encoding (`circuit` joins
+`held_families`; alldiff holds it already).
+
+WHY THIS IS A DEFINITION AND NOT A RELAXATION. With `all_different(succ)` and no self-loop, succ
+is a permutation. GE alone excludes every cycle that avoids the root (summed around such a cycle,
+the positions cancel and `0 >= k`), so the permutation is one cycle: that is Miller, Tucker and
+Zemlin's formulation, and it is std's `order` idea with the wrap made explicit at the root. LE and
+END exclude nothing GE does not: given a Hamiltonian cycle, `pos_v` = the distance from the root
+satisfies all four rows, so no circuit is lost. They are there so that a cycle THROUGH the root
+also has a one-line cut (section 3). The .opb's solutions projected on succ are exactly the
+circuits; pos is a function of succ. Nothing posted is a consequence the solver computed, so the
+open question of D-0213 section 3 (implied rows posted as model rows) does not arise here.
+
+### 3. The cut, one `pol`
+
+A cycle C = c_0 -> c_1 -> ... -> c_{k-1} -> c_0 with k < n:
+
+- C avoids the root: sum GE over its k arcs. Every pos cancels, and `n * sum(guards) >= k`.
+- C passes through the root, c_0 = r: sum LE(r, c_1), LE(c_1, c_2), ..., LE(c_{k-2}, c_{k-1}) and
+  END(c_{k-1}). Every pos cancels, and `n * sum(guards) >= (n - 1) - (k - 1) = n - k`.
+
+Either way `n d` leaves `sum(guards) >= 1`, the clause "some arc of C is not taken" over succ's
+order literals: one [Combine] of [Model_row] terms with divisor n (D-0013), no new constructor.
+
+### 4. Propagation (CHECKING, plus Chuffed's `prevent`)
+
+One call, looped until no new arc is fixed:
+
+- P, prevent: for each maximal chain s -> ... -> e of FIXED arcs, k nodes, k < n, e unfixed,
+  remove s from succ_e. The reason is the chain's arcs (two bound facts each), the derivation the
+  cut over C = chain + (e -> s), made under `Store.deriving_ahead`: Trace writes the `pol` ahead
+  and the trace line `rup claim \/ ~facts` follows from it (assume succ_e = s and the facts, every
+  guard of the cut is false). A [Needs_derivation] family under I-X10, as alldiff and gcc.
+  A closed cycle of fixed arcs shorter than n is a conflict on its arcs, same derivation.
+  When the fixed arcs do not form disjoint paths (two arcs into one node, alldiff's to refute),
+  P is skipped for that call.
+- H, positions: along a fixed arc, a PINNED position pins the other one. `succ_r = v` gives
+  `pos_v <= 1`, `succ_u = r` gives `pos_u >= n - 1` (each one row, the arc as facts); `succ_u = v`
+  with pos_u fixed at a gives pos_v = a + 1 (GE and LE, the arc and pos_u's two bound facts), and
+  with pos_v fixed at b gives pos_u = b - 1. Each pruning is one `rup` against one row
+  ([Single_row]). Only pinned premises are used ON PURPOSE: under the bits encoding, unit
+  propagation turns `x >= c` and `x <= c` into every bit of x (top bit down, one of the two
+  inequalities forces it), and `x >= c`, `x <= c - 1` into a conflict, so these lines are RUP
+  over bits; a premise that is only a bound is not, in general (section 7).
+
+Consistency: CHECKING on (succ, pos). With every variable fixed, every row is one arc between two
+pinned positions, and H refutes a violated one. P is the stronger reasoning Chuffed's circuit has
+without its SCC check; the matching's pruning on succ is alldiff's own. When the whole circuit is
+fixed, H fixes every position from the root, so the positions never need search there. They can
+still be branched on (every store variable is a search candidate, as std's `order` already was),
+which is no worse than the decomposition this replaces. The advisor wakes the instance only on a
+FIXED variable (I-P7: P and H read fixed arcs and pinned positions only).
+
+### 5. `subcircuit` does not follow cheaply, and stays on std
+
+In a subcircuit a short cycle is legal; what is forbidden is a second one. "C is closed and the
+node x outside it is in" refutes only through x's own cycle, which no chain names, so the cut is
+not one sum of rows over a known cycle: it needs a start-node selector per node and an argument
+over an unknown second cycle. That is a different design (a start variable as std's `firstin`,
+or the SCC argument), recorded here as the reason T3 ships `circuit` only.
+
+### 6. Measurement
+
+See section 6 below, written after the run.
+
+### 7. What was ruled out
+
+- Positions as proof-only auxiliaries (not store variables): a `sol` line is propagated by the
+  checker, and over the order encoding unit propagation does not pin a position from a linear
+  row, so the solution would have to list them, which needs the encoding module (claimed).
+- A propagated MTZ relaxation (bounds on pos from bounds): over bits its lines are not RUP, and
+  each would need the bits arm's `pol` of linear.ml; the gain over P is the MTZ LP bound, small
+  for a CP search, and it can come later as its own row.
+- Holding pos on the order encoding at every W: O(n^3) literals by default.
