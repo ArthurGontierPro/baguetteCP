@@ -19,7 +19,6 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M21-memory-T3 (fix 2 of D-0218: hole bitsets trailed by value, D-0222) | `lib/core/domain.ml`, `lib/core/store.ml`, the history readers of `lib/core/prop/element.ml`, `docs/INVARIANTS.md` (I-T1), `docs/ARCHITECTURE.md` §2-§3, tests | agent-holes (`wave70-holes`) | 2026-11-24 |
 
 ## Cross-session requests
 
@@ -466,6 +465,7 @@ section 1. Shares are inclusive, of the whole run.
 
 | Task | Session | Date | Summary |
 |---|---|---|---|
+| M21-memory-T3, fix 2 (hole bitsets by value, D-0222) | agent-holes (`wave70-holes`) | 2026-11-24 | **D-0222 [AUTONOME] (I-T1's wording).** A hole set is a VERSION of a per-variable log (`domain.ml`): a removal appends 16 B instead of copying the bitset, `Store.undo_to` truncates through `Domain.undo`, a version from an undone branch raises `Domain.Stale_version`. Element's three history readers moved into `store.ml` (D-0214's request). Byte-identical (456 model runs, lanes 347/347 and debug, scaling green, 5 175 unit checks); live heap wordpress 32.95 -> 4.58 G at node 1, ttp r49 5.14 -> 3.16 G at node 1 000, is 4.96 -> 1.65 G; javarouting +2.1 % per node, costas +0.9 %, 0 elsewhere |
 | M21-memory-T1, M21-memory-T2 (where the heap goes, D-0218) | agent-memory2 after agent-memory (`wave66-memory`) | 2026-11-24 | **D-0218.** Measurement only; the probe is `/cluster/arthur/baguette-results/memory/memprobe.patch`, reverted on the branch. OCaml's representation is 2.5 to 4 on record-heavy kinds and the GC's free space 1.5 to 5 on the budget, but the search refusals are what we keep: hole bitsets copied per pruning, 410 to 660 B per trail entry, 270 to 330 B per learned literal kept forever, proof explanations kept after their line. Five ranked fixes for T3 with estimates |
 | M18-coverage-T4 (bin packing, D-0220) | agent-binpack (`wave68-binpack`) | 2026-11-24 | **D-0220 [AUTONOME].** mznlib only: std's bin-packing rows without the bool2int copies (`baguette_bool_lin_eq`/`_le` per bin over std's int_eq_reif indicators, loads restricted to their reachable sums). The refusals measured as search-time heap on four families of five; no outcome change on 20 instances, .opb 0.58 to 1.00, more nodes on 14 of 16 time-outs, 223 other models byte-identical |
 | M18-coverage-T3 (`circuit`, D-0217) | agent-circuit (`wave65-circuit`) | 2026-11-24 | **D-0217 [AUTONOME].** `lib/core/prop/circuit.ml`: mznlib routes `fzn_circuit` to `all_different` plus `baguette_circuit(x, pos, root)`, the .opb defines circuit by MTZ rows over position store variables, prevent + pinned positions, every subtour cut one `pol` ahead; `subcircuit` stays std. 20 instances: .opb 0.44 to 0.998, more nodes on 14 of 15 time-outs (default), p1f-pjs_10 time-out -> OPT, all checked proofs VERIFIED |
@@ -705,6 +705,12 @@ Gates 96 to 98 green: 218 models byte-identical, lane 347/347, debug 333/333, sc
 Also open: after D-0208 the engine's wake work is the largest share left on costas and mknap; removing it needs the D-0169 (b) rule (rows that never prune are not woken), which changes default behaviour.
 
 **[AUTONOME] decisions**: D-0217 (a normative SPEC 2.1 sentence listing `baguette_circuit` among the builtins, as each native global has); D-0213 (above); D-0216 (alldiff reuses the node a rebuild would return; two dedups hashed; byte-identical); D-0208 (watching withdrawn on measurement).
+### 2026-11-24 (agent-holes, `wave70-holes`): M21-memory-T3 fix 2, hole bitsets by value (D-0222)
+
+- A domain's holes are a version of a per-variable log shared with its successors; undo truncates it, and I-T1 now says a version read after its branch was undone raises (`[AUTONOME]`, D-0222 section 4). Byte-identical everywhere; the trail lost its bitset copies (wordpress 32 G at node 1, now 3.8 G of trail entries; ttp 3.47 -> 1.44 G; is 4.41 -> 1.10 G).
+- wordpress is still refused at 8 GiB: 6 M root removals of about 640 B of trail entry each, fix 4's (D-0223) object. is and ttp r49 are not refused at 8 GiB on this main, before or after (1 200 s runs).
+- Time: set-bit reads of PAST versions (Element's lazy reasons, `Store.remover`) cost javarouting +2.1 % per node and costas +0.9 %; D-0222 section 7 names the next lever (`remover` from the log). Element's history readers are in `store.ml` now; alldiff's `s_holes` can use them (D-0214's request).
+
 ### 2026-11-24 (agent-memory2, `wave66-memory`): M21-memory-T1 and T2, where the heap goes (D-0218)
 
 The probe (`memprobe.patch`, kinds walked once in a fixed order, live data split by kind) says the 251 search refusals of arm A are our design: learned constraints kept forever at 270 to 330 B per literal (71 of 148 refusals in the probed families), hole bitsets copied per pruning (36), proof explanations kept alive (14); OCaml multiplies record-heavy kinds by 2.5 to 4 and its GC adds 1.5 to 5 on the heap the budget reads. At the encoding OCaml's factor alone can cross the 8 GiB budget (rcpsp). Results, scripts, tables: `/cluster/arthur/baguette-results/memory/`. For T3: arm A ran before D-0201 (order encoding), and on this main proteindesign, ttp r49 and community no longer refuse within 300 s, so start from a fresh census; ttp r49 passed 8 GiB of peak heap without the budget firing. D-0220's cross-session request asked for the bytes of a learned clause: 27.7 KB for 98 literals on community, 115 KB for 413 on steelmill (D-0218 section 3).
