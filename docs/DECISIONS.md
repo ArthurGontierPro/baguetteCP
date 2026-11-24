@@ -29287,3 +29287,16 @@ BOUNDS) and as written on 93. The 7 others: 4 names shared by a variable and a c
 to change in `fzn2scp.py`, then `diffn_opt` (a label cake has not) and `inverse_offset_sat` (an empty
 `pol`), not investigated. baguette's `--e2e` is VERIFIED on the 203. Recommended as the reference
 until the development cake is public.
+
+### 11. Ciaran McCreesh's answer (2026-11-24, reported by the user)
+
+"Use the develop-cp branch for now, against GCS main. Views don't exist in the current version, but
+will hopefully be in version 2. The main difficulty is that when we did version 1, proof logging
+for views didn't work properly." It decides three points and replaces the recommendation of section 10.
+
+1. **The target is cake `develop-cp` with GCS `main`.** The pair of section 10 stays as the working pair
+   while the user has no access, and the `--e2e` lane of main (PROOF-FORMAT 3b) is not moved by T1.
+2. **A version 1 `.scp` has no views.** The reader refuses a view by name and position, so baguette
+   accepts no file cake refuses, and the rewriting is a tool outside the solver (`deview.py` is the
+   prototype). Section 8 point 2 (the reader accepts views) is withdrawn.
+3. **A version other than 1 is refused**, so version 2 cannot be read by mistake as version 1.
