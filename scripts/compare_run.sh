@@ -195,7 +195,7 @@ COMPAT_MZN="${COMPAT_MZN:-$ROOT/mznlib/compat_mzn1.mzn}"
 TOTAL_MAX="${TOTAL_MAX:-48}"   # the cap on PAR x |SOLVERS|; raise it only on a node reserved for the run
 MEM_KB_MAX=32000000
 # The three libraries the data pairing consults: ALWAYS all three (see "the instance").
-PAIR_SOLVERS="baguette chuffed gcs"
+PAIR_SOLVERS="${PAIR_SOLVERS:-baguette chuffed gcs}"   # a run of baguette arms alone may set PAIR_SOLVERS=baguette (bench/series)
 
 die() {
   echo "compare_run: $*" >&2
@@ -498,7 +498,11 @@ solve_one() {
   W="$OUT/work/$id"
   L="$OUT/log/$id.$s"
   fzn="$W.$s.fzn"
-  ulimit -v "$MEM_KB" 2>/dev/null
+  # CHECK_MEM_KB (M17-bench-series-T1): the address-space cap of everything in this function
+  # except the solver, which is lowered to MEM_KB below. Default unset = MEM_KB, so the
+  # checker shares the solver's cap as before. A series sets it (`unlimited`) and bounds
+  # veripb by its own cgroup instead, so a checker memory failure is not the solver's cap.
+  ulimit -v "${CHECK_MEM_KB:-$MEM_KB}" 2>/dev/null
   fl="$(awk -F'\t' -v i="$id" -v s="$s" '$1 == i && $2 == s' "$OUT/flatten.tsv" | tail -1)"
   sense="$(printf '%s' "$fl" | cut -f5)"
   obj="$(printf '%s' "$fl" | cut -f6)"
@@ -537,9 +541,13 @@ solve_one() {
       cmd+=("$fzn")
       ;;
   esac
+  # PRE_RUN (M17-bench-series-T1): a command run before each solve and before each check, OUTSIDE
+  # their timeouts. A series uses it to hold launches while /scratch is under its free-space floor.
+  [ -n "${PRE_RUN:-}" ] && "$PRE_RUN"
   t0="$(now_ns)"
   (
     ulimit -f "$PROOF_CAP_KB" 2>/dev/null
+    ulimit -v "$MEM_KB" 2>/dev/null
     exec timeout -k 30 "$SOLVE_TIMEOUT" "${cmd[@]}"
   ) > "$L.out" 2> "$L.err"
   rc=$?
@@ -563,6 +571,7 @@ solve_one() {
     else
       opb="$(stat -c%s "$L.opb")"
       pbp="$(stat -c%s "$L.pbp")"
+      [ -n "${PRE_RUN:-}" ] && "$PRE_RUN"
       t0="$(now_ns)"
       timeout -k 30 "$CHECK_TIMEOUT" "$VERIPB" "$L.opb" "$L.pbp" > "$L.vp" 2>&1
       rc=$?
@@ -693,7 +702,7 @@ main() {
   fi
   write_conf
   export OUT MZN BAGUETTE CHUFFED GCS GCS_PROVE MEM_KB PROOF_CAP_KB SOLVE_TIMEOUT
-  export FLATTEN_TIMEOUT CHECK_TIMEOUT KEEP DATA_TRIES SOLVERS PAIR_SOLVERS TOOL VERIPB
+  export FLATTEN_TIMEOUT CHECK_TIMEOUT CHECK_MEM_KB PRE_RUN KEEP DATA_TRIES SOLVERS PAIR_SOLVERS TOOL VERIPB
   export BAGUETTE_MZN_ID CHUFFED_MZN_ID GCS_MZN_ID COMPAT COMPAT_MZN PAIRS CORPUS INSTANCES
   export -f pair_one solve_one flatten_with check_input emit_input_failures instance_id
   export -f validate_fzn data_candidates emit flat mzn_id_of now_ns secs has_row

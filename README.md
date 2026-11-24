@@ -31,58 +31,54 @@ Floats, set variables and multi-objective optimisation are out of scope (`docs/S
 
 ## Performance on the MiniZinc Challenge
 
-All sixteen editions of the MiniZinc Challenge (2011 to 2026, 1 600 instances, 1 574 flattened),
-run with the Challenge's own settings: 1 200 s per instance, 16 GiB of memory, one thread, on an
-AMD EPYC 7643. An answer with a proof counts only when VeriPB verifies the proof. Measured on
-2026-11-20/22 (`docs/DECISIONS.md` D-0185, release binary `7c880bce`, main `10b3507`).
+All sixteen editions of the MiniZinc Challenge (2011 to 2026, 1 600 instances, 1 575 flattened), run with the Challenge's own settings: 1 200 s per instance, 16 GiB of memory, one thread, on an AMD EPYC 7643. An answer with a proof counts only when VeriPB verifies the proof. Measured on 2026-11-23/24 (`docs/DECISIONS.md` D-0203, release binary `f244c35a`, commit `e1971f6`).
 
 | Outcome per instance | Default search, with proof | Free search `-f`, with proof | Default search, `--no-proof` |
 |---|---|---|---|
-| Optimal or UNSAT, proof verified | 251 | **265** | 296 (unverified) |
-| Satisfiable, proof verified | 72 | **97** | 84 (unverified) |
-| Complete answer, proof check did not finish (VeriPB memory or time) | 35 | 32 | not applicable |
-| Timeout at 1 200 s | 700 | 668 | 780 |
-| Proof larger than the 16 GB cap | 198 | 173 | not applicable |
-| Refused, memory budget reached | 314 | 336 | 398 |
-| Crash | 4 | 3 | 16 |
+| Optimal or UNSAT, proof verified | 302 | **346** | 340 (unverified) |
+| Satisfiable, proof verified | 74 | **95** | 86 (unverified) |
+| Complete answer, VeriPB hit its time limit (3 600 s) | 18 | 26 | not applicable |
+| Timeout at 1 200 s | 1 017 | 970 | 992 |
+| Refused, memory budget reached | 164 | 138 | 157 |
+| Crash | 0 | 0 | 0 |
 | **Proofs rejected by VeriPB** | **0** | **0** | not applicable |
-| Optimisation runs that printed an objective value (optimal ones included) | 933 | 992 | 1 013 |
+| Optimisation runs that printed an objective value (optimal ones included) | 1 060 | 1 149 | 1 079 |
 
-The first seven rows add up to the 1 574 instances. The crashes are allocation failures against
-the 16 GiB limit, which the memory guard of D-0200 now turns into clean refusals.
+The first rows down to the rejected proofs add up to the 1 575 instances, checked when this table was written. A check that ran out of time or memory is the checker's limit, not a rejected proof, so it is counted apart.
 
-What proof logging costs, over the instances both runs complete, comparing the run without proof
-to the run with proof:
+What proof logging costs, over the instances both runs complete, comparing the run without proof to the run with proof:
 
 | | median ratio (no proof / proof) |
 |---|---|
-| wall time | 0.64 |
-| peak memory | 0.96 |
-| nodes per second | 1.27 |
+| wall time | 0.47 |
+| peak memory | 0.91 |
+| nodes per second | 1.50 |
 
-So proof logging costs time and disk, not memory. Without proof, 113 instances that hit the
-memory budget or the 16 GB proof cap become ordinary attempts, and 8 of them end with a complete answer.
+Without proof, 41 instances that hit the memory budget or a crash with proof become ordinary attempts, and 2 of them end with a complete answer.
 
-Rank in the fixed-search category of each edition, scored against that year's official entrants
-by `tools/compare/challenge_rank.py`:
+The 817 verified proofs (all proof arms) have a median size of 198 MB, the largest is 23.6 GB and together they were 793.0 GB. They are deleted once checked, their sizes stay in the tables.
+
+Rank in the fixed-search category of each edition, scored against that year's official entrants by `tools/compare/challenge_rank.py` (the free-search arm is scored in this category too, so the rows compare):
 
 | Edition | 2026 | 2025 | 2024 | 2023 | 2022 | 2021 | 2020 | 2019 | 2018 | 2017 | 2016 | 2015 | 2014 | 2013 | 2012 | 2011 |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | entrants | 13 | 10 | 9 | 7 | 7 | 7 | 6 | 8 | 8 | 12 | 11 | 9 | 11 | 11 | 10 | 8 |
-| with proof | 12 | 10 | 9 | 7 | 7 | 7 | 6 | 7 | 6 | 12 | 8 | 9 | 11 | 10 | 8 | 8 |
-| without proof | 11 | 10 | 9 | 7 | 7 | 7 | 6 | 7 | 6 | 12 | 7 | 9 | 9 | 10 | 6 | 7 |
+| with proof | 11 | 10 | 9 | 7 | 7 | 7 | 5 | 7 | 6 | 12 | 7 | 9 | 9 | 10 | 5 | 7 |
+| `-f`, with proof | 7 | 9 | 3 | 3 | 3 | 6 | 2 | 3 | 3 | 8 | 5 | 7 | 5 | 5 | 3 | 4 |
+| without proof | 11 | 10 | 9 | 5 | 7 | 6 | 4 | 6 | 6 | 11 | 7 | 9 | 7 | 8 | 5 | 7 |
 
-The other entrants do not log proofs. baguette's score summed over the sixteen editions is 2 789
-with proof and 3 237 without.
+The other entrants do not log proofs. baguette's score summed over the sixteen editions is 4 043 with proof, 5 799 with proof under `-f`, 4 428 without proof.
+
+The series before this one, D-0185 (release `7c880bce`, order encoding by default, 16 GB proof cap), verified 323 answers with proof in the default arm and 362 under `-f`, and completed 380 without proof.
 
 Two caveats.
 
-- This series ran before the bits encoding became the default (D-0201), so every column above
-  uses the order encoding. On an earlier binary the bits encoding raised the summed score with
-  proof from 2 712 to 3 441 and cut the proofs over the cap from 214 to 68 (D-0175). A series on
-  the current default has not been run yet.
-- Free search is stronger in aggregate but not on every model. It wins on 489 instances and loses
-  on 336, mostly routing models, so the default stays the fixed search (D-0185 §5).
+- This series ran the binary `f244c35a`, which has the bits encoding as its default (D-0201) and no
+  proof cap, but predates the speed and coverage work merged since (D-0206, D-0208, D-0209, D-0212
+  to D-0217 and D-0220). A series on a later binary will move these numbers, and the next one is
+  due after the next merge that changes the encoding or the search.
+- Free search is stronger in aggregate but not on every model. It wins on 670 instances and loses
+  on 327 (578 ties), so the default stays the fixed search (D-0185 §5, D-0203).
 
 ## Getting started
 
