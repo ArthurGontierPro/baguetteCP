@@ -291,7 +291,10 @@ lib/core/       Baguette_core
     cumulative.ml           cumulative (and disjunctive as cap 1, r 1): time-table filtering
                             over gcc's window indicators, one capacity row per time point,
                             CHECKING; the first Needs_derivation family whose CONFLICTS carry
-                            facts, so they can be learned from (M4-T10, D-0096)
+                            facts, so they can be learned from (M4-T10, D-0096). Also diffn's
+                            two RELAXATIONS: mznlib/fzn_diffn.mzn keeps std's pairs and adds
+                            cumulative over order copies of x and of y (no module of its
+                            own; the capacity rows are model rows, M18-coverage-T2, D-0213)
     regular.ml              regular (DFA) through mznlib's baguette_regular, DOMAIN
                             consistent over the letters and (n+1)*Q STATE FLAGS (store
                             variables, so a dead state is a trail entry); every pruning one

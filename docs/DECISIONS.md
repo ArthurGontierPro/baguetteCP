@@ -27217,3 +27217,149 @@ The scaling lane (`--enforce`, after binary) is green.
 `test_prop.ml` only. No signature changed. `make` gained an optional `?gate` (default on), and
 `regin_pass` keeps its name and type. Turning the gate off without reverting is `~gate:false` at
 the two `Alldiff.make` calls in `compile.ml`.
+
+## D-0213  [AUTONOME] M18-coverage-T2: `diffn` keeps std's pairwise disjunctions and gains its two CUMULATIVE RELAXATIONS on `cumulative.ml`, over ORDER copies of the coordinates. No new propagator, no new `Explanation` constructor; the relaxations' capacity rows are model rows that mznlib states, not lemmas the proof derives
+
+**Status**: DECIDED (agent-diffn, `wave61-diffn`, 2026-11-23), in autonomous mode. Section 3 is the
+decision the user would have been asked: it widens what the `.opb` asserts beyond what a FlatZinc
+builtin states, by one theorem. Revert in section 7.
+
+### 1. Context
+
+M18-coverage's census: 140 Challenge instances call `diffn` and 15 `diffn_nonstrict`, 23 refused,
+20 % complete. Twelve families (carpet-cutting, filters, cargo, rectangle-packing, accap,
+code-generator, pillars-and-planks, perfect_square, yumi-dynamic, yumi-static, stripboard,
+rect-euler). std's `fzn_diffn` is the pairwise disjunction: per pair `i < j`
+
+```
+x_i + dx_i <= x_j \/ y_i + dy_i <= y_j \/ x_j + dx_j <= x_i \/ y_j + dy_j <= y_i
+```
+
+flattened to four `int_lin_le_reif` and one `bool_clause` (`diffn_nonstrict` adds the four
+`d = 0` escapes). baguette already carries all of it: `reif_lin_le.ml` and `clause.ml`, every
+pruning justified. What that decomposition cannot see is a COLUMN: on `perfect_square` the squares
+over one x-coordinate must stack inside the strip's height, and each pair alone never says so.
+Chuffed's and Gecode's diffn propagators add exactly this, the two cumulative relaxations.
+
+### 2. The design (mznlib only: `mznlib/fzn_diffn.mzn`, `fzn_diffn_nonstrict.mzn`)
+
+`fzn_diffn(x, y, dx, dy)` = std's pairwise disjunction, verbatim, plus
+
+```
+cumulative(x', lb(dx), lb(dy), Hy)     Hy = max_T (ub(y_i) + ub(dy_i)) - min_T lb(y_i)
+cumulative(y', lb(dy), lb(dx), Wx)     Wx = the same over x and dx
+```
+
+over the rectangles `T` with `lb(dx_i) > 0` and `lb(dy_i) > 0`, both routed to `baguette_cumulative`
+(`lib/core/prop/cumulative.ml`, D-0096). **Why it holds**: at an integer x-coordinate `t`, the
+rectangles of `T` whose x-interval contains `t` pairwise overlap in x (both contain `t`, both widths
+positive), so diffn makes them pairwise disjoint in y; disjoint y-intervals inside the window
+`[min lb(y), max (ub(y) + ub(dy)))` have lengths adding up to at most its length `Hy`, and each length
+is at least `lb(dy_i)`. With both sides' lower bounds positive, `diffn_nonstrict`'s escape is
+closed, so the same holds for it. A rectangle outside `T` covers no `t` (width 0) or weighs 0.
+
+A projection is posted only when it can prune (`sum_T lb(dy) > Hy`) and under cumulative's own
+horizon test (`late - early <= 5000`, mznlib/fzn_cumulative.mzn); otherwise it is omitted and the
+model is std's.
+
+**The copies.** `cumulative.ml`'s capacity rows hold their starts on the ORDER encoding
+(compile.ml's `held_families`), and the default puts every eligible variable on bits (D-0201). Fed
+the coordinates themselves, the relaxation would pull them onto the order encoding, and with them
+the 4 n(n-1)/2 big-M reified rows, whose length then grows with the width. So each projection reads
+a COPY `c_i` over `x_i`'s bounds, tied by two `int_lin_le` rows (`c - x <= 0`, `x - c <= 0`; MiniZinc
+merges `c = x` and `int_lin_eq` into an alias, two inequalities it leaves alone). Measured on
+`2021_perfect_square_102` (25 squares, coordinates 0..352), 60 s, dev binary `47e74079`: holding the
+coordinates on order gives a 41.8 MB `.opb` and 14 342 nodes; the copies give 4.3 MB and 13 772
+nodes; std alone (bits) 1.3 MB and 48 666 nodes, at maximum depth 599 against 47. Under
+`--bits-above none` everything is on order and a copy costs one more ladder and two rows.
+
+**Consistency.** The pairwise part is what it was: each disjunct a `Reif_lin_le` (BOUNDS on its
+row, the reifier fixed by entailment), the clause fixing the last disjunct. Each projection is
+`cumulative.ml`'s time-table, [Checking]. With every coordinate fixed, the pairwise rows alone refute
+any overlap, so the whole is [Checking]; the relaxations add the time-table's pruning on top. Not
+bounds consistency (NP-hard), not energetic reasoning, not the sweep.
+
+**Justification.** Every pruning is an existing family's, with its existing derivation: the
+disjuncts' `Reif_lin_le`/`Linear` `pol`s, the clause's `rup`, the copies' `Linear` `pol`s, and the
+time-table pushes as D-0096's derive-ahead `pol` over the capacity row, the at-least-one indicators
+of the compulsory tasks and the ladder (I-X10 `Needs_derivation`, unchanged). No new `Explanation`
+constructor, no new proof rule, no OCaml in `lib/`. The same derivations run under the default
+encoding (the coordinates on bits, the copies on order) and under `--bits-above none`.
+
+### 3. [AUTONOME] The trust: the capacity rows are model rows
+
+The two cumulatives are CONSEQUENCES of diffn, and as mznlib writes them they are FlatZinc
+constraints, so their capacity rows enter the `.opb` as model rows and the checker never re-derives
+them. A wrong capacity (an `Hy` one too small) would make the `.opb` stronger than the model and the
+checker would verify a wrong UNSAT or optimum. D-0146 section 3.2 refused that for consequences the
+SOLVER computes in compile.ml (regular's backward chains are root lemmas for this reason). The
+options:
+
+| option | what the checker verifies | cost | consequence |
+|---|---|---|---|
+| (a) mznlib states the relaxations (chosen) | everything after the FlatZinc, as for every mznlib redefinition | none in the proof | the trusted base gains section 2's theorem and the 15 lines that compute `T`, `Hy`, `Wx`; D-0146's gcc_closed `sum(count) = |x|` is the precedent |
+| (b) the capacity rows as root lemmas | the rows too | the argument is two-dimensional: `sum_i dy_i I_i(t) <= Hy` is not RUP from the pairwise rows, and a cutting-planes derivation goes through a product `I^x_i(t) I^y_i(u)` per cell, i.e. an extension variable per rectangle and cell and a pairwise at-most-one per cell, O(n^2 W H) lines | perfect_square_102: 25 x 359 x 359 cells, out of reach |
+| (c) each push derived from the pairwise rows | the push | a push is a one-dimensional packing infeasibility; its certificate is a per-y-point at-most-one over the k compulsory rectangles (k^2 conditional `rup`s each) summed over the window, O(k^2 H) lines per push | the proof grows by orders of magnitude per node |
+| (d) no relaxation | as today | none | the census row stays where it is |
+
+(a) is chosen because it is the only one that buys the pruning, because mznlib is already the
+trusted translation of every global (its `fzn_table_int` drops tuples by `dom`, its `fzn_cumulative`
+picks a decomposition), and because the theorem is short and is CHECKED by brute force in
+`test/unit/test_compile.ml` (every placement of small random rectangle sets that satisfies the
+pairwise disjunction satisfies both capacity rows as mznlib computes them, strict and non-strict,
+fixed and variable sizes). It is reversible in one file (section 7). The user may prefer (d) for
+the proof's sake; this record is where to say so.
+
+### 4. Options considered for the pairwise part
+
+| option | rows per pair | consequence |
+|---|---|---|
+| std's decomposition (kept) | 4 Booleans, 8 big-M rows, 4 `Reif` instances, 1 clause | no new code; full reification writes the `~b -> ~row` half nobody needs |
+| a native pair propagator over HALF-reified rows (`b_k -> alt_k`, the selectors as store variables as table's are, D-0206) | 4 Booleans, 4 rows, one instance for all pairs | half the rows and n(n-1)/2 * 5 fewer instances; the same pruning (a disjunct dies on bounds, the last one is enforced). Not built: the relaxation is the missing pruning, the pairs are a size lever. The next row if section 6 shows the pairs dominate |
+| route to `cumulative` alone when one side is the strip's full height | 0 | only some instances; not diffn |
+
+### 5. Tests
+
+`mznlib/test/diffn_src_{sat,unsat,nonstrict_sat,opt}.mzn` with their flattened artefacts in
+`test/models/` and `test/expected/` (MUST-EMIT `baguette_cumulative`, SOLVES-AS, proofs VERIFIED);
+`test_compile.ml`'s theorem check and scenes brute-forced by a geometric oracle that knows no
+relaxation, solved and checked by veripb on both encodings; `test_mutation.ml` lanes on a
+satisfiable scene where a relaxation push is load-bearing.
+
+### 6. Measurement
+
+34 Challenge instances of the twelve families, each flattened twice with one release binary
+(`6f305958`, main `8e1d1d9`'s sources, which this branch does not change): "old" with main's
+mznlib (std's diffn), "new" with this branch's (`08a8f9b`). 300 s, one process at a time beside
+the 87-process series, `--max-heap-mb 8192`, veripb 3.0.2 with 900 s on every run that ended; a
+time-out's proof has no conclusion and was not checked. Driver, table and logs:
+`/cluster/arthur/baguette-results/wave61-diffn/` (`summary.tsv`).
+
+**Reach.** 25 of the 34 post a relaxation. The nine that do not (cargo x2, carpet-cutting `.08`
+and `.18`, yumi-static x2, yumi-dynamic, rect-euler, stripboard `w20_h15`) fail a guard
+(horizon over 5000, or the tasks fit the window) and flatten to std's model up to renumbering;
+eight were not run, carpet `.08` ran by a driver slip and is the same model (3983 both ways).
+
+| on the 25 | old | new |
+|---|---|---|
+| complete answers, all VERIFIED | 7 (4 filters OPT, stripboard w10 OPT, rpp18 SAT, code-generator regno OPT) | **9**: the same 7, plus `2020_pillars-and-planks_p-d12` OPT 5 (18 020 nodes, 118 G instructions; old timed out at 65 370 nodes) and `2021_perfect_square_205` SAT |
+| answers lost, proofs rejected | | none, none |
+| incumbents on the time-outs | | equal on 6, worse on 2 (accap3 118 -> 120, accap8 3750 -> 3757, minimised) |
+| nodes in 300 s, the 16 time-outs both ways | | fewer on 11 (perfect_square_102 0.45x, use_return_register 0.56x, pillars p-d10 0.77x, accap 0.81x); 0.91 to 1.18x elsewhere |
+| `.opb` | | larger on 14 of 16: perfect squares 1.3 -> 4.1 and 1.4 -> 6.0 MB (the copies' ladders), accap8 30 -> 175 MB; within 5 % on the code-generator and carpet-cutting instances |
+
+On the filters that complete both ways the relaxations cut the tree: `2013_ar_2_3` 1 517 -> 121
+nodes, `2012_fir_1_1` 2 587 -> 709, `2012_ar_1_2` 6 834 -> 4 423, at about 1.3 to 3 times the
+instructions per node. Reading: the relaxation buys the packing families (perfect_square,
+pillars-and-planks, filters) and costs nothing in answers elsewhere; per node it is dearer
+(cumulative's derivations over the copies' ladders, and on accap8 a window wide enough that the
+copies' order ladders are 145 MB of `.opb`). The pairwise half (section 4's native pair
+propagator) and a tighter width guard for the copies are the next levers; neither is built.
+
+After the merge of main at `f4f6391` (D-0212, D-0214, D-0215), the suite and the 218 model
+lanes were re-run green on the merged binary; the measurement above is on the pre-merge binary.
+
+### 7. Revert
+
+Delete `mznlib/fzn_diffn.mzn` and `mznlib/fzn_diffn_nonstrict.mzn`: every model flattens to std's
+decomposition again, byte for byte. No OCaml depends on them.
