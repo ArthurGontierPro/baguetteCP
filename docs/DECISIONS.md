@@ -27485,3 +27485,35 @@ Written after the run, at the end of this record (section 8).
 SPEC 2.1 gains the `baguette_circuit` sentence (a normative addition, the user's to decide outside
 autonomous mode): it states the relation `Model.check_assignment` and test_compile's oracle check,
 the positions included, exactly as D-0206 did for `baguette_table`. Reverting the record reverts it.
+
+### 8. Measurement (2026-11-24)
+
+20 Challenge instances that call `circuit`, 11 families (stochastic-vrp, cvrp, is, p1f, p1f-pjs,
+vrplc, vrp-submission, yumi-static, tsptw, atp-stage2), old = main `25f3a89` release with its
+mznlib (std's decomposition), new = `wave65-circuit` release with its mznlib, 300 s, default
+search and `-f`, the two arms of a run side by side on the shared node, veripb 900 s on every
+run that ended. Binaries' md5, the driver, the table and the logs are in
+`/cluster/arthur/baguette-results/wave65-circuit/` (`summary.tsv`). Every instance routes
+(one `baguette_circuit` call each, 36 to 66 on p1f and p1f-pjs).
+
+- `.opb` rows lower on 19 of 20 (0.44 to 0.98 of old; atp-stage2 instance6 is a 9-row model).
+  p1f_13 312 k -> 136 k rows, 64 MB -> 21 MB; tsptw n80 661 k -> 371 k.
+- Default search. One outcome changes: 2020_p1f-pjs_10 goes from a time-out (incumbent 334) to
+  OPT 300, VERIFIED. The other four that complete (stochastic-vrp c6 OPT, 2025_is OPT, p1f_13
+  UNSAT, atp-stage2 OPT) complete in both arms, every proof VERIFIED (9 of 9 checked). Of 15
+  time-outs, 14 reach more nodes in 300 s (cvrp P-n16-k8 5.6 k -> 27.6 k, vrp-submission
+  78 k -> 127 k) and one fewer (2015_is, 825 -> 745, where circuit is a small part of the
+  model); the incumbent is the same on 6 of the 7 that print one and worse on 2015_is.
+- `-f`. No outcome changes (the same five complete, 10 of 10 checked proofs VERIFIED). Of 15
+  time-outs, 11 reach more nodes and 4 fewer; the incumbent is better on 4 of 8 that print
+  one (2019 stochastic-vrp c8 188 -> 176, vrp-submission 318 -> 304, cvrp P-n16-k8 519 -> 512,
+  vrplc 2023 432 -> 429) and the same on the other 4. p1f-pjs_10 completes in both arms,
+  in 21.6 k nodes against 16.2 k: prevent changes the search there, and costs it nodes.
+- Instructions per node: median 0.59 of old (default) and 0.73 (`-f`), the smaller rows.
+- The non-circuit models of test/models are byte-identical across the two binaries (218 of 218,
+  stdout, .opb and .pbp hashed, `bytes-hashes.tsv`).
+
+What it does not show: a completion change beyond p1f-pjs_10 in 300 s. The routing instances
+(vrp, vrplc, tsptw) stay time-outs; their next lever is the search question D-0185 section 4
+asks, and a propagated position bound (section 7's MTZ relaxation) if a profile says the
+pruning, not the search, is what is missing.
