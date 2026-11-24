@@ -26,7 +26,21 @@
    D-0197: a [Pol.t] is walked down its left spine in constant stack ([Pol.write_with],
    [Pol.tokens]): [Pol.sum] builds one [Add] per operand, and a `pol` can have millions.
    The mutation knob's walks ([rewrite_first], [cited_ids]) still recurse; they run on
-   the test models only. *)
+   the test models only.
+
+   D-0209 (M20-pernode-T5): every line the search writes is assembled in ONE [Text.t]
+   ([t.buf]) and handed to the channel in one call. Integers ([Text.int]) and literal
+   names ([Text.lit]) are written into its bytes in place, with no [Printf], no
+   intermediate string and no closure per reference; a literal's owner prefix
+   ("x_ge_") is rendered once per variable and cached in [Text]. The bytes are the ones
+   [Printf], [Lit.to_string] and [string_of_int] wrote, pinned by test_proof.ml's
+   reference tests. Lines are NOT held back and flushed in blocks: the channel's own
+   buffer is the block, and a line kept in [t.buf] past its rule would be lost by any
+   caller that closes the channel without [conclusion] (bin/main.ml's [Fun.protect]
+   when the search raises, test_justify.ml's [emitted] and the other helpers that read
+   the file back) or exits on SIGTERM, so the file would depend on how the run ended.
+   The rare rules (`red`, `delc`, `core`, `output`, the conclusion, comments) still go
+   through [line]'s format: they are a handful per run. *)
 
 type cid = int
 
@@ -89,9 +103,8 @@ module Pol = struct
      D-0023 -- an id our counter got wrong is then a hard "label not assigned" error
      rather than a silently different constraint. The positional rendering this used to
      sit beside went with format 2.0 (D-0046); there is no unlabelled `pol` any more. *)
-  (* M11-complexity-T5 (D-0145, D-0140 W4): the integers go through [Lit.add_int], which
-     writes [string_of_int]'s bytes without the format interpreter "%d" used to cost per
-     operator; [id_out] writes one constraint reference. *)
+  (* M11-complexity-T5 (D-0145, D-0140 W4): the integers are written without the format
+     interpreter "%d" used to cost per operator (now by [Text.int], D-0209). *)
   (* D-0197: the LEFT SPINE is walked by a loop, not by recursion. [sum] and [lin_comb]
      build left-deep trees, one [Add] per operand, so a `pol` of n operands is a spine n
      deep, and a recursion down it is n stack frames: a PB conflict row lifted onto the
@@ -100,7 +113,14 @@ module Pol = struct
      [Add], which [sum] keeps small, is still written by recursion. Same bytes in the same
      order: the leftmost leaf, then each operator with its right operand, innermost first,
      which is reverse Polish. *)
-  let rec write_with b id_out p =
+  (* M20-pernode-T5 (D-0209): written into a [Text.t] rather than a [Buffer.t], so the
+     integers and the literal names go straight into the line's bytes ([Text.int],
+     [Text.lit]). [cite] is [None] on the writer's own path, where a reference is "@c"
+     and its decimal written in place with no closure called, and [Some f] where a
+     caller renders references its own way ([to_string_cited]). One walker for both, so
+     the two cannot disagree. It returns the number of tokens it wrote, which is
+     [tokens p]: the writer counts while it writes instead of walking the tree twice. *)
+  let rec write_with (b : Text.t) cite p =
     let rec spine ops = function
       | (Id _ | Axiom _) as leaf -> (leaf, ops)
       | (Add (a, _) | Mul (a, _) | Div (a, _) | Sat a | Weaken (a, _)) as op ->
@@ -108,47 +128,50 @@ module Pol = struct
     in
     let leaf, ops = spine [] p in
     (match leaf with
-    | Id c -> id_out b c
-    | Axiom l -> Buffer.add_string b (Lit.to_string l)
+    | Id c -> (
+        match cite with
+        | None ->
+            Text.string b "@c";
+            Text.int b c
+        | Some f -> Text.string b (f c))
+    | Axiom l -> Text.lit b l
     | _ -> assert false);
-    List.iter
-      (function
-        | Add (_, c) ->
-            Buffer.add_char b ' ';
-            write_with b id_out c;
-            Buffer.add_string b " +"
-        | Mul (_, k) ->
-            Buffer.add_char b ' ';
-            Lit.add_int b k;
-            Buffer.add_string b " *"
-        | Div (_, k) ->
-            Buffer.add_char b ' ';
-            Lit.add_int b k;
-            Buffer.add_string b " d"
-        | Sat _ -> Buffer.add_string b " s"
-        | Weaken (_, v) ->
-            Buffer.add_char b ' ';
-            Buffer.add_string b (Lit.var_name v);
-            Buffer.add_string b " w"
-        | Id _ | Axiom _ -> assert false)
-      ops
+    let rec walk n = function
+      | [] -> n
+      | Add (_, c) :: ops ->
+          Text.char b ' ';
+          let k = write_with b cite c in
+          Text.string b " +";
+          walk (n + k + 1) ops
+      | Mul (_, k) :: ops ->
+          Text.char b ' ';
+          Text.int b k;
+          Text.string b " *";
+          walk (n + 2) ops
+      | Div (_, k) :: ops ->
+          Text.char b ' ';
+          Text.int b k;
+          Text.string b " d";
+          walk (n + 2) ops
+      | Sat _ :: ops ->
+          Text.string b " s";
+          walk (n + 1) ops
+      | Weaken (_, v) :: ops ->
+          Text.char b ' ';
+          Text.var b v;
+          Text.string b " w";
+          walk (n + 2) ops
+      | (Id _ | Axiom _) :: _ -> assert false
+    in
+    walk 1 ops
 
-  let write_cited b cite p = write_with b (fun b c -> Buffer.add_string b (cite c)) p
-
-  (* [write_cited b Opb.label_of], with each reference written as "@c" and its decimal
-     straight into [b] rather than through [Printf.sprintf "@c%d"]. The writer's own
-     path; the bytes are [to_string_cited ~cite:Opb.label_of]'s. *)
-  let write_labelled b p =
-    write_with b
-      (fun b c ->
-        Buffer.add_string b "@c";
-        Lit.add_int b c)
-      p
+  (* The writer's own path: every reference "@c<id>", [Opb.label_of]'s bytes. *)
+  let write_labelled b p = write_with b None p
 
   let to_string_cited ~cite p =
-    let b = Buffer.create 64 in
-    write_cited b cite p;
-    Buffer.contents b
+    let b = Text.create 64 in
+    ignore (write_with b (Some cite) p : int);
+    Text.contents b
 
   (* How many tokens the rendered expression carries: one per operand or operator, so
      the word count of [to_string_cited]'s output. This is what [--stats] reports per
@@ -397,12 +420,13 @@ type t = {
          page, the tokens over every `pol` ([Pol.tokens]), the widest single `pol` and the
          [~origin] that wrote it -- so a Theta(w)-token `pol` is visible by name, not only
          as a slow check. Counted on what is written, after the mutation knob. *)
-  buf : Buffer.t;
+  buf : Text.t;
       (* M11-complexity-T5 (D-0145, D-0140 W2 and W4): the line being written. A rule
          is assembled here and handed to the channel in ONE call ([put_line]), instead
          of a [Printf] format with "\n" appended per line, a string per piece and about
          four copies of a `pol`. In OCaml 5 every write to a channel takes the channel's
-         lock, so one call per line is also the cheapest way to write it (D-0143). *)
+         lock, so one call per line is also the cheapest way to write it (D-0143).
+         M20-pernode-T5 (D-0209): a [Text.t], so integers and names are written in place. *)
 }
 
 let audit_enabled () =
@@ -436,7 +460,7 @@ let create ?(comments = false) ?audit ?(null = false) oc =
     pol_tokens = 0;
     pol_tokens_max = 0;
     pol_widest = (fun () -> "");
-    buf = Buffer.create 256;
+    buf = Text.create 256;
   }
 
 (* A writer that emits ONE deliberately wrong step, for the mutation gate. Off is not
@@ -598,21 +622,21 @@ let line t fmt =
 let buf_keep = 1 lsl 20
 
 let line_buf t =
-  Buffer.clear t.buf;
+  Text.clear t.buf;
   t.buf
 
 let write_buf t =
   let b = t.buf in
-  Buffer.add_char b '\n';
+  Text.char b '\n';
   (if not !emit_clock then (
      incr emit_lines;
-     Buffer.output_buffer t.oc b)
+     Text.output t.oc b)
    else
      let t0 = emit_now () in
-     Buffer.output_buffer t.oc b;
+     Text.output t.oc b;
      incr emit_lines;
      emit_us := !emit_us + (emit_now () - t0));
-  if Buffer.length b > buf_keep then Buffer.reset b
+  Text.shrink b ~keep:buf_keep
 
 let put_line t =
   if t.finished then invalid_arg "Writer: the proof has already ended";
@@ -622,65 +646,48 @@ let put_comment t = if not t.null then write_buf t
 
 (* "@c<id> ", the label a rule that yields [id] is prefixed with ([label_for]). *)
 let add_label b id =
-  Buffer.add_string b "@c";
-  Lit.add_int b id;
-  Buffer.add_char b ' '
+  Text.string b "@c";
+  Text.int b id;
+  Text.char b ' '
 
 (* "@c<id>", a citation ([cite]). *)
 let add_cite b id =
-  Buffer.add_string b "@c";
-  Lit.add_int b id
+  Text.string b "@c";
+  Text.int b id
 
 (* [lits_to_string lits] appended to [b]: the literals separated by one space.
 
-   M16-file-review-T4 (D-0192): each literal is written by [Lit.add_sanitized], which
-   writes [Lit.to_string]'s bytes without building the string, and a run of literals of
-   one variable sanitises its name once, as [add_constr_body] does. A `sol`/`soli` line
-   lists every literal of every variable (Encoding.assignment_lits), so a run is a
-   variable's whole ladder: 2014_openshop_gp10-4 spent a third of its search writing
-   them, one string allocated and one name scanned per literal. *)
+   M16-file-review-T4 (D-0192): each literal is written without building its string,
+   and its owner's name is not scanned again per literal. A `sol`/`soli` line lists
+   every literal of every variable (Encoding.assignment_lits): 2014_openshop_gp10-4
+   spent a third of its search writing them, one string allocated and one name scanned
+   per literal. Since D-0209 the literal is [Text.lit], whose owner prefix is rendered
+   once per variable for the whole run rather than once per run of one variable. *)
 let add_lits b lits =
-  let last = ref "" and last' = ref "" in
   List.iteri
     (fun i (l : Lit.t) ->
-      if i > 0 then Buffer.add_char b ' ';
-      let x = Lit.owner l.Lit.v in
-      let x' =
-        if x == !last then !last'
-        else
-          let x' = Lit.sanitize x in
-          last := x;
-          last' := x';
-          x'
-      in
-      Lit.add_sanitized b x' l)
+      if i > 0 then Text.char b ' ';
+      Text.lit b l)
     lits
 
 (* [Opb.constr_body c] appended to [b], byte for byte: per term the signed coefficient
    ("+" for a >= 0, as "%+d" writes it), the literal and a space, then the relation and
-   the degree. A run of terms over one variable sanitises its name once, as
-   [Opb.output_row] does ([Lit.add_sanitized] writes [Lit.to_string]'s bytes). *)
+   the degree. Each literal is [Text.lit], [Lit.to_string]'s bytes from its owner's
+   cached prefix (D-0209). *)
 let add_constr_body b (c : Opb.constr) =
-  let last = ref "" and last' = ref "" in
-  List.iter
-    (fun (a, (l : Lit.t)) ->
-      if a >= 0 then Buffer.add_char b '+';
-      Lit.add_int b a;
-      Buffer.add_char b ' ';
-      let x = Lit.owner l.Lit.v in
-      let x' =
-        if x == !last then !last'
-        else
-          let x' = Lit.sanitize x in
-          last := x;
-          last' := x';
-          x'
-      in
-      Lit.add_sanitized b x' l;
-      Buffer.add_char b ' ')
-    c.Opb.terms;
-  Buffer.add_string b (match c.Opb.rel with Opb.Ge -> ">= " | Opb.Eq -> "= ");
-  Lit.add_int b c.Opb.rhs
+  let rec terms = function
+    | [] -> ()
+    | (a, l) :: rest ->
+        if a >= 0 then Text.char b '+';
+        Text.int b a;
+        Text.char b ' ';
+        Text.lit b l;
+        Text.char b ' ';
+        terms rest
+  in
+  terms c.Opb.terms;
+  Text.string b (match c.Opb.rel with Opb.Ge -> ">= " | Opb.Eq -> "= ");
+  Text.int b c.Opb.rhs
 
 (* A rule, terminated by `;`. Rules whose body already carries one -- [rup] and the
    OPB constraint rendering it uses -- go through [line] directly: a second `;` is a
@@ -843,8 +850,8 @@ let set_level t l =
   (* "% level <l>", as [always_comment t "level %d" l] wrote it (D-0145: one per
      decision, so not through a format). *)
   let b = line_buf t in
-  Buffer.add_string b "% level ";
-  Lit.add_int b l;
+  Text.string b "% level ";
+  Text.int b l;
   put_comment t;
   t.level <- l
 
@@ -1037,18 +1044,18 @@ let runs ids =
    the model suite, is worth more than the bytes. *)
 let del_id t id =
   let b = line_buf t in
-  Buffer.add_string b "del id ";
+  Text.string b "del id ";
   add_cite b id;
-  Buffer.add_string b " ;";
+  Text.string b " ;";
   put_line t
 
 let del_range t lo hi =
   let b = line_buf t in
-  Buffer.add_string b "del range ";
+  Text.string b "del range ";
   add_cite b lo;
-  Buffer.add_char b ' ';
+  Text.char b ' ';
   add_cite b hi;
-  Buffer.add_string b " ;";
+  Text.string b " ;";
   put_line t
 
 let del_run t (lo, hi) =
@@ -1381,21 +1388,21 @@ let pol_lazy t ~origin p =
   else
     (* [corrupt_pol] is the identity for every writer [create] built. *)
     let p = corrupt_pol t ~origin p in
-    let n = Pol.tokens p in
+    (* "@c<id> pol <expression> ;", in [t.buf] (D-0145: it was the label, then "pol "
+       and the expression concatenated, then [rule]'s format, four copies). The token
+       count is the walk's own (D-0209), [Pol.tokens p]. *)
+    let id = t.next_id + 1 in
+    let b = line_buf t in
+    add_label b id;
+    Text.string b "pol ";
+    let n = Pol.write_labelled b p in
+    Text.string b " ;";
+    put_line t;
     t.n_pol <- t.n_pol + 1;
     t.pol_tokens <- t.pol_tokens + n;
     if n > t.pol_tokens_max then (
       t.pol_tokens_max <- n;
       t.pol_widest <- origin);
-    (* "@c<id> pol <expression> ;", in [t.buf] (D-0145: it was the label, then "pol "
-       and the expression concatenated, then [rule]'s format, four copies). *)
-    let id = t.next_id + 1 in
-    let b = line_buf t in
-    add_label b id;
-    Buffer.add_string b "pol ";
-    Pol.write_labelled b p;
-    Buffer.add_string b " ;";
-    put_line t;
     let id' = fresh_lazy t ~origin in
     assert (id = id');
     id
@@ -1416,9 +1423,9 @@ let rup_lazy t ~origin c =
     (* "@c<id> rup <body> ;" in [t.buf], one call to the channel (D-0145, W2). *)
     let b = line_buf t in
     add_label b id;
-    Buffer.add_string b "rup ";
+    Text.string b "rup ";
     add_constr_body b c;
-    Buffer.add_string b " ;";
+    Text.string b " ;";
     put_line t;
     fresh_lazy t ~origin
 
@@ -1473,11 +1480,11 @@ let implied_lazy t ~origin ~hint c =
     (* "@c<id> ia <body> : @c<hint> ;" (D-0145). *)
     let b = line_buf t in
     add_label b id;
-    Buffer.add_string b "ia ";
+    Text.string b "ia ";
     add_constr_body b c;
-    Buffer.add_string b " : ";
+    Text.string b " : ";
     add_cite b hint;
-    Buffer.add_string b " ;";
+    Text.string b " ;";
     put_line t;
     fresh_lazy t ~origin
 
@@ -1524,13 +1531,13 @@ let delete_many t ids =
   | _ when t.null -> ()
   | _ ->
       let b = line_buf t in
-      Buffer.add_string b "del id ";
+      Text.string b "del id ";
       List.iteri
         (fun i id ->
-          if i > 0 then Buffer.add_char b ' ';
+          if i > 0 then Text.char b ' ';
           add_cite b id)
         ids;
-      Buffer.add_string b " ;";
+      Text.string b " ;";
       put_line t;
       List.iter (Itbl.remove t.tags) ids;
       List.iter (forget t) ids
@@ -1598,9 +1605,9 @@ let solution t lits =
     (* "sol <lits> ;" in [t.buf] (D-0145, D-0140 W6: it was the whole assignment as one
        [String.concat], then [Printf], then [rule]'s format). *)
     let b = line_buf t in
-    Buffer.add_string b "sol ";
+    Text.string b "sol ";
     add_lits b lits;
-    Buffer.add_string b " ;";
+    Text.string b " ;";
     put_line t)
 
 (* [solx] records a solution *and* adds the clause excluding it; that clause is an
@@ -1655,12 +1662,12 @@ let improving t ~origin lits =
     (match !e2e_soli with
     | None -> add_label b id
     | Some _ ->
-        Buffer.add_string b "@O[c";
-        Lit.add_int b id;
-        Buffer.add_string b "] ");
-    Buffer.add_string b "soli ";
+        Text.string b "@O[c";
+        Text.int b id;
+        Text.string b "] ");
+    Text.string b "soli ";
     add_lits b lits;
-    Buffer.add_string b " ;";
+    Text.string b " ;";
     put_line t;
     Option.iter (fun f -> line t "%s" (f id)) !e2e_soli;
     let id = fresh t ~origin in

@@ -719,7 +719,42 @@ let evaluate (m : M.t) (assign : int array) =
               (fun k _ -> operand (List.nth mb.M.mem_b k) = 1)
               (List.map operand mb.M.mem_x)
           in
-          named <> [] && List.for_all (( = ) (operand mb.M.mem_y)) named)
+          named <> [] && List.for_all (( = ) (operand mb.M.mem_y)) named
+      (* M18-coverage-T1 (D-0206), written apart from [Model.check_assignment]: the
+         tuples the selectors name, all equal to x, and at least one of them. *)
+      | M.Table tb ->
+          let x = List.map operand tb.M.tab_x in
+          let n = List.length x in
+          let named =
+            List.filteri (fun k _ -> operand (List.nth tb.M.tab_s k) = 1) tb.M.tab_s
+            |> List.length
+          in
+          named > 0
+          && List.for_all
+               (fun k ->
+                 operand (List.nth tb.M.tab_s k) = 0
+                 || List.for_all2 ( = ) x
+                      (List.init n (fun i -> tb.M.tab_t.((k * n) + i))))
+               (List.init (List.length tb.M.tab_s) Fun.id)
+      (* M18-coverage-T3 (D-0217), written apart from [Model.check_assignment]: the
+         successors are a permutation of the nodes, the orbit of the root is all of them,
+         and every position is the step at which the orbit reaches its node. *)
+      | M.Circuit c ->
+          let x = Array.of_list (List.map operand c.M.cir_x) in
+          let p = Array.of_list (List.map operand c.M.cir_pos) in
+          let n = Array.length x and r = c.M.cir_root in
+          let in_s v = v >= r && v < r + n in
+          let perm =
+            Array.for_all in_s x
+            && List.sort compare (Array.to_list x) = List.init n (fun i -> r + i)
+          in
+          perm
+          &&
+          let orbit = List.init n (fun d -> d) in
+          let node_at = Array.make n r in
+          List.iter (fun d -> if d > 0 then node_at.(d) <- x.(node_at.(d - 1) - r)) orbit;
+          List.length (List.sort_uniq compare (Array.to_list node_at)) = n
+          && List.for_all (fun d -> d = 0 || p.(node_at.(d) - r - 1) = d) orbit)
     m.M.constraints
 
 (* Brute force over the declared box: the independent oracle for the expected answer.
@@ -784,12 +819,14 @@ let assignment_array (m : M.t) (a : Search.assignment) =
    annotated model run through here is searched the way the annotation says and its
    proof is checked in that shape -- M7-T2 obligation (c). [~order] overrides it, and
    exists for the break lane below. *)
-let run_model_with ?order ?mutate ?(expect_reject = false) ~title ~src () =
+let run_model_with ?order ?mutate ?(expect_reject = false) ?expect_sat ~title ~src () =
   let m = build src in
   let c = Compile.compile m in
   let order = match order with Some o -> Some o | None -> c.Compile.order in
-  let expected = brute_force m in
-  let expect_sat = expected <> None in
+  (* M18-coverage-T2: [?expect_sat] replaces the box enumeration by the caller's own
+     oracle, for scenes whose Booleans make the box too large to walk (diffn's four
+     reifiers per pair) and whose oracle must not read the model anyway. *)
+  let expect_sat = match expect_sat with Some b -> b | None -> brute_force m <> None in
   let dir = Filename.temp_file "baguette_compile" "" in
   Sys.remove dir;
   Sys.mkdir dir 0o700;
@@ -2278,6 +2315,160 @@ let test_member_models () =
     (member_src ~ints ~bools:(sels 1) ~call:"baguette_member([x1, x2], y, [b1, b1])"
        ~extra:[] ())
 
+(* M18-coverage-T1 (D-0206): `baguette_table`, end to end, as [test_member_models] does
+   it: each scene brute-forced over its declared box, the selectors included, solved, and
+   its proof checked. The scenes cover what [post_table] folds: a constant in x (equal,
+   and differing: the row `~s_t`), a tuple outside a declared hull (`~s_t`), a variable
+   twice in x (the [Aliased] packing), holes punched by int_ne, an empty table, and the
+   Boolean spelling. Then the refusals, by their message. *)
+let test_table_models () =
+  let r4 = "1..4" in
+  let sels n = List.init n (fun k -> Printf.sprintf "s%d" (k + 1)) in
+  let call xs tups =
+    let n = List.length tups in
+    Printf.sprintf "baguette_table([%s], [%s], [%s])" xs
+      (String.concat ", " (List.map string_of_int (List.concat tups)))
+      (String.concat ", " (sels n))
+  in
+  let tups = [ [ 1; 2; 3 ]; [ 2; 2; 4 ]; [ 3; 1; 1 ]; [ 4; 4; 2 ]; [ 2; 3; 1 ] ] in
+  run_model ~title:"table: SAT, x1 + x3 >= 6 picks (2, 2, 4) or (4, 4, 2)"
+    ~src:
+      (member_src
+         ~ints:[ ("x1", r4); ("x2", r4); ("x3", r4) ]
+         ~bools:(sels 5) ~call:(call "x1, x2, x3" tups)
+         ~extra:[ "int_lin_le([-1, -1], [x1, x3], -6)"; "int_ne(x2, x3)" ]
+         ());
+  run_model ~title:"table: UNSAT, x2 <> 2, 4 and x3 <> 1"
+    ~src:
+      (member_src
+         ~ints:[ ("x1", r4); ("x2", r4); ("x3", r4) ]
+         ~bools:(sels 5) ~call:(call "x1, x2, x3" tups)
+         ~extra:[ "int_ne(x2, 2)"; "int_ne(x2, 4)"; "int_ne(x3, 1)" ]
+         ());
+  run_model ~title:"table: SAT, a constant in x matches two tuples, differs from three"
+    ~src:
+      (member_src
+         ~ints:[ ("x1", r4); ("x3", r4) ]
+         ~bools:(sels 5) ~call:(call "x1, 2, x3" tups) ~extra:[ "int_ne(x1, 1)" ] ());
+  run_model ~title:"table: UNSAT, every tuple leaves a declared hull (rows ~s_t alone)"
+    ~src:
+      (member_src
+         ~ints:[ ("x1", "1..2"); ("x2", "3..4") ]
+         ~bools:(sels 3)
+         ~call:(call "x1, x2" [ [ 1; 2 ]; [ 3; 3 ]; [ 0; 4 ] ])
+         ~extra:[] ());
+  run_model
+    ~title:
+      "table: SAT, x1 twice in x (Aliased), (2, 2, 4) and (4, 4, 2) agree with themselves"
+    ~src:
+      (member_src
+         ~ints:[ ("x1", r4); ("y", r4) ]
+         ~bools:(sels 5) ~call:(call "x1, x1, y" tups) ~extra:[] ());
+  run_model ~title:"table: UNSAT, x1 twice in x and y <> 4"
+    ~src:
+      (member_src
+         ~ints:[ ("x1", r4); ("y", r4) ]
+         ~bools:(sels 5) ~call:(call "x1, x1, y" tups)
+         ~extra:[ "int_ne(y, 4)"; "int_ne(x1, 4)" ]
+         ());
+  run_model ~title:"table: UNSAT, an empty table"
+    ~src:
+      (member_src ~ints:[ ("x1", r4) ] ~call:"baguette_table([x1], [], [])" ~extra:[] ());
+  run_model ~title:"table: SAT, the Boolean spelling, exactly one of three, not p1"
+    ~src:
+      (member_src ~ints:[]
+         ~bools:([ "p1"; "p2"; "p3" ] @ sels 3)
+         ~call:
+           "baguette_table_bool([p1, p2, p3], [1, 0, 0, 0, 1, 0, 0, 0, 1], [s1, s2, s3])"
+         ~extra:[ "bool_clause([], [p1])"; "bool_clause([], [p2])" ]
+         ());
+  let ints = [ ("x1", r4); ("x2", r4) ] in
+  expect_rejected "table: a tuple count other than one value per cell is refused"
+    ~needles:[ "baguette_table"; "one per cell" ]
+    (member_src ~ints ~bools:(sels 2)
+       ~call:"baguette_table([x1, x2], [1, 2, 3], [s1, s2])" ~extra:[] ());
+  expect_rejected "table: a selector declared wider than 0..1 is refused"
+    ~needles:[ "baguette_table"; "not a Boolean variable declared on 0..1" ]
+    (member_src
+       ~ints:(ints @ [ ("c", "0..2") ])
+       ~bools:(sels 1) ~call:"baguette_table([x1, x2], [1, 2, 3, 4], [s1, c])" ~extra:[]
+       ());
+  expect_rejected "table: a selector that is also one of the x is refused"
+    ~needles:[ "baguette_table"; "distinct from x" ]
+    (member_src
+       ~ints:[ ("x1", "0..1") ]
+       ~bools:(sels 1) ~call:"baguette_table([x1, s1], [0, 1, 1, 0], [s1, x1])" ~extra:[]
+       ());
+  expect_rejected "table: a selector given twice is refused"
+    ~needles:[ "baguette_table"; "a selector occurs twice" ]
+    (member_src ~ints ~bools:(sels 1)
+       ~call:"baguette_table([x1, x2], [1, 2, 3, 4], [s1, s1])" ~extra:[] ());
+  expect_rejected "table: a variable among the tuples is refused"
+    ~needles:[ "baguette_table"; "every tuple value must be a constant" ]
+    (member_src ~ints ~bools:(sels 1) ~call:"baguette_table([x1, x2], [1, x2], [s1])"
+       ~extra:[] ())
+
+(* M18-coverage-T3 (D-0217): `baguette_circuit`, end to end, as [test_table_models]: each
+   scene brute-forced over its declared box, the positions included, solved, and its
+   proof checked. The scenes cover what [post_circuit] folds: successors declared over
+   the whole node range (R's unit rows: the self-loop), a successor declared outside S
+   (the bound unit rows), a constant successor, a root other than 1, a cycle closed
+   through the root and one closed away from it, with and without all_different. Then
+   the refusals, by their message. *)
+let test_circuit_models () =
+  let ints4 ?(lo = 1) dom =
+    List.init 4 (fun k -> (Printf.sprintf "s%d" (k + lo), dom))
+    @ List.init 3 (fun k -> (Printf.sprintf "p%d" (k + lo + 1), "1..3"))
+  in
+  let call ?(lo = 1) succ =
+    Printf.sprintf "baguette_circuit([%s], [%s], %d)" succ
+      (String.concat ", " (List.init 3 (fun k -> Printf.sprintf "p%d" (k + lo + 1))))
+      lo
+  in
+  let s4 = "s1, s2, s3, s4" in
+  run_model ~title:"circuit: SAT, four nodes declared 1..4 (self-loops by R's unit rows)"
+    ~src:(member_src ~ints:(ints4 "1..4") ~call:(call s4) ~extra:[ "int_ne(s1, 2)" ] ());
+  run_model ~title:"circuit: UNSAT, 1 and 2 point among themselves (through the root)"
+    ~src:
+      (member_src ~ints:(ints4 "1..4") ~call:(call s4)
+         ~extra:[ "int_le(s1, 2)"; "int_le(s2, 2)" ]
+         ());
+  run_model ~title:"circuit: UNSAT, 3 and 4 point among themselves (away from the root)"
+    ~src:
+      (member_src ~ints:(ints4 "1..4") ~call:(call s4)
+         ~extra:
+           [ "int_le(3, s3)"; "int_le(3, s4)"; "all_different_int([s1, s2, s3, s4])" ]
+         ());
+  run_model
+    ~title:"circuit: SAT, successors declared 0..5, outside S (the bound unit rows)"
+    ~src:(member_src ~ints:(ints4 "0..5") ~call:(call s4) ~extra:[ "int_le(s4, 2)" ] ());
+  run_model ~title:"circuit: SAT, root 3, a constant successor (node 4 -> 6)"
+    ~src:
+      (member_src ~ints:(ints4 ~lo:3 "3..6") ~call:(call ~lo:3 "s3, 6, s5, s6")
+         ~extra:[ "int_ne(s3, 5)" ] ());
+  run_model ~title:"circuit: UNSAT, root 3 and constants closing 4 -> 5 -> 4"
+    ~src:
+      (member_src ~ints:(ints4 ~lo:3 "3..6") ~call:(call ~lo:3 "s3, 5, 4, s6") ~extra:[]
+         ());
+  expect_rejected "circuit: a position count other than n - 1 is refused"
+    ~needles:[ "baguette_circuit"; "there must be n - 1" ]
+    (member_src ~ints:(ints4 "1..4")
+       ~call:"baguette_circuit([s1, s2, s3, s4], [p2, p3], 1)" ~extra:[] ());
+  expect_rejected "circuit: a position declared outside 1..n-1 is refused"
+    ~needles:[ "baguette_circuit"; "a position declared outside 1..3" ]
+    (member_src
+       ~ints:(ints4 "1..4" @ [ ("q", "0..3") ])
+       ~call:"baguette_circuit([s1, s2, s3, s4], [p2, p3, q], 1)" ~extra:[] ());
+  expect_rejected "circuit: a position that is also a successor is refused"
+    ~needles:[ "baguette_circuit"; "also a successor" ]
+    (member_src ~ints:(ints4 "1..3")
+       ~call:"baguette_circuit([s1, s2, s3, p2], [p2, p3, p4], 1)" ~extra:[] ());
+  expect_rejected "circuit: a variable root is refused"
+    ~needles:[ "baguette_circuit"; "the root must be a constant" ]
+    (member_src
+       ~ints:(ints4 "1..4" @ [ ("r", "1..1") ])
+       ~call:"baguette_circuit([s1, s2, s3, s4], [p2, p3, p4], r)" ~extra:[] ())
+
 (* M16-file-review-T5 (D-0193): under [Discard_rows] (`--no-proof`) the objective's .opb
    line is not built, because nothing reads it; under the sinks that write the .opb it is
    there, the order encoding of the objective variable. *)
@@ -2301,6 +2492,542 @@ let test_objective_line_by_sink () =
       check "objective: the .opb line under Retain_rows is the variable's 5 rungs"
         (List.length o.Opb.obj_terms = 5)
   | _ -> check "objective: an .opb line under Retain_rows" false
+
+(* M18-coverage-T2 (D-0213): diffn's two cumulative relaxations.
+
+   mznlib/fzn_diffn.mzn adds, beside std's pairwise disjunction,
+
+     cumulative(x, lb(dx), lb(dy), Hy)   and   cumulative(y, lb(dy), lb(dx), Wx)
+
+   over the rectangles T with lb(dx) > 0 and lb(dy) > 0, Hy = max_T (ub(y) + ub(dy)) -
+   min_T lb(y). Those rows are MODEL rows: the checker never re-derives them (D-0213
+   section 3), so the theorem they rest on is checked here instead, by enumeration.
+   [diffn_relax] restates mznlib's formula; [diffn_pairs_ok] is the predicate's own
+   definition (std's, strict and non-strict), written geometrically. *)
+
+type drect = { xd : int * int; yd : int * int; wd : int * int; hd : int * int }
+
+(* One projection's (tasks, capacity) as mznlib computes it: [along] picks the
+   coordinate and size the cumulative runs over, [across] the other pair. A task is
+   (index, duration, resource). *)
+let diffn_projection (rs : drect array) ~along ~across =
+  let t =
+    List.filter
+      (fun i -> fst (snd (along rs.(i))) > 0 && fst (snd (across rs.(i))) > 0)
+      (List.init (Array.length rs) Fun.id)
+  in
+  match t with
+  | [] | [ _ ] -> None
+  | _ ->
+      let hi =
+        List.fold_left
+          (fun a i ->
+            let (_, cu), (_, du) = across rs.(i) in
+            max a (cu + du))
+          min_int t
+      and lo = List.fold_left (fun a i -> min a (fst (fst (across rs.(i))))) max_int t in
+      Some
+        ( List.map (fun i -> (i, fst (snd (along rs.(i))), fst (snd (across rs.(i))))) t,
+          hi - lo )
+
+let along_x r = (r.xd, r.wd)
+let along_y r = (r.yd, r.hd)
+
+(* A projection's row at every integer t, for one placement [s] of the coordinates
+   along it: the tasks running at t weigh at most [cap]. *)
+let diffn_row_holds tasks cap (s : int array) =
+  let lo = List.fold_left (fun a (i, _, _) -> min a s.(i)) max_int tasks
+  and hi = List.fold_left (fun a (i, d, _) -> max a (s.(i) + d)) min_int tasks in
+  let ok = ref true in
+  for t = lo to hi - 1 do
+    let load =
+      List.fold_left
+        (fun a (i, d, r) -> if s.(i) <= t && t < s.(i) + d then a + r else a)
+        0 tasks
+    in
+    if load > cap then ok := false
+  done;
+  !ok
+
+let diffn_pairs_ok ~strict (x : int array) (y : int array) (w : int array) (h : int array)
+    =
+  let n = Array.length x in
+  let ok = ref true in
+  for i = 0 to n - 1 do
+    for j = i + 1 to n - 1 do
+      let sep =
+        x.(i) + w.(i) <= x.(j)
+        || y.(i) + h.(i) <= y.(j)
+        || x.(j) + w.(j) <= x.(i)
+        || y.(j) + h.(j) <= y.(i)
+      in
+      let escape = (not strict) && (w.(i) = 0 || w.(j) = 0 || h.(i) = 0 || h.(j) = 0) in
+      if not (sep || escape) then ok := false
+    done
+  done;
+  !ok
+
+(* Every placement and every size inside the declared box that satisfies the pairwise
+   disjunction satisfies both projections' rows. [cap_shift] = -1 is the control: the
+   same enumeration with every capacity one too small must find a violation on some
+   scene, or the enumeration is not looking. Returns (placements checked, violations). *)
+let diffn_theorem_scene ~strict ~cap_shift (rs : drect array) =
+  let n = Array.length rs in
+  let px = diffn_projection rs ~along:along_x ~across:along_y
+  and py = diffn_projection rs ~along:along_y ~across:along_x in
+  let x = Array.make n 0
+  and y = Array.make n 0
+  and w = Array.make n 0
+  and h = Array.make n 0 in
+  let seen = ref 0 and bad = ref 0 in
+  let doms =
+    Array.concat
+      [
+        Array.map (fun r -> r.xd) rs;
+        Array.map (fun r -> r.yd) rs;
+        Array.map (fun r -> r.wd) rs;
+        Array.map (fun r -> r.hd) rs;
+      ]
+  in
+  let set k v =
+    let a = [| x; y; w; h |].(k / n) in
+    a.(k mod n) <- v
+  in
+  let rec go k =
+    if k = 4 * n then (
+      if diffn_pairs_ok ~strict x y w h then (
+        incr seen;
+        let holds p s =
+          match p with
+          | None -> true
+          | Some (tasks, cap) -> diffn_row_holds tasks (cap + cap_shift) s
+        in
+        if not (holds px x && holds py y) then incr bad))
+    else
+      let lo, hi = doms.(k) in
+      for v = lo to hi do
+        set k v;
+        go (k + 1)
+      done
+  in
+  go 0;
+  (!seen, !bad)
+
+let diffn_random_rect st ~fixed =
+  let dom lo span = (lo, lo + Random.State.int st (span + 1)) in
+  let size () =
+    if fixed then
+      let v = 1 + Random.State.int st 3 in
+      (v, v)
+    else dom (Random.State.int st 3) 1
+  in
+  {
+    xd = dom (Random.State.int st 2) 2;
+    yd = dom (Random.State.int st 2) 2;
+    wd = size ();
+    hd = size ();
+  }
+
+(* M18-coverage-T4 (D-0220): bin packing through `baguette_bool_lin_eq` and
+   `baguette_bool_lin_le`, end to end, as [test_circuit_models]: the scenes are written the
+   way mznlib/fzn_bin_packing_load.mzn and fzn_bin_packing_capa.mzn write them (one
+   int_eq_reif indicator per (item, bin) pair of the item's domain, the range restriction,
+   one row per bin over the indicators; the loads' restriction to their reachable sums is
+   mznlib's and implied, so it is left out here), solved
+   under both encodings, the proof checked each time. The fixed scenes are brute-forced over
+   their declared box; the random ones, whose box the indicators and loads make too wide to
+   walk, take [?expect_sat] from an oracle written apart from the model: enumerate the bins
+   only, sum the weights per bin, compare with the load's declared domain or the capacity.
+   Then the refusals, by their message. *)
+type bp_scene = {
+  bp_doms : (int * int) list; (* item i's declared bin domain *)
+  bp_ws : int list;
+  bp_bins : int * int; (* the bin range b0..b1 *)
+  bp_load : (int * int) list option; (* Some: the loads' declared domains; None: capa *)
+  bp_capa : int list;
+  bp_extra : string list;
+}
+
+let bp_src sc =
+  let b0, b1 = sc.bp_bins in
+  let n = List.length sc.bp_doms in
+  let items = List.init n Fun.id in
+  let bins = List.init (b1 - b0 + 1) (fun k -> b0 + k) in
+  let w i = List.nth sc.bp_ws i in
+  let dom i = List.nth sc.bp_doms i in
+  let pairs b =
+    List.filter
+      (fun i ->
+        let lo, hi = dom i in
+        w i <> 0 && lo <= b && b <= hi)
+      items
+  in
+  let ind i b = Printf.sprintf "e%d_%d" (i + 1) (b - b0) in
+  let decl =
+    List.map
+      (fun i ->
+        let lo, hi = dom i in
+        Printf.sprintf "var %d..%d: x%d :: output_var;\n" lo hi (i + 1))
+      items
+    @ (match sc.bp_load with
+      | Some ls ->
+          List.mapi
+            (fun k (lo, hi) ->
+              Printf.sprintf "var %d..%d: l%d :: output_var;\n" lo hi (k + 1))
+            ls
+      | None -> [])
+    @ List.concat_map
+        (fun b ->
+          List.map (fun i -> Printf.sprintf "var bool: %s;\n" (ind i b)) (pairs b))
+        bins
+  in
+  let cons =
+    List.concat_map
+      (fun b ->
+        List.map
+          (fun i -> Printf.sprintf "int_eq_reif(x%d, %d, %s)" (i + 1) b (ind i b))
+          (pairs b))
+      bins
+    @ List.concat_map
+        (fun i ->
+          [
+            Printf.sprintf "int_le(%d, x%d)" b0 (i + 1);
+            Printf.sprintf "int_le(x%d, %d)" (i + 1) b1;
+          ])
+        items
+    @ List.mapi
+        (fun k b ->
+          let ps = pairs b in
+          let ws = String.concat ", " (List.map (fun i -> string_of_int (w i)) ps) in
+          let es = String.concat ", " (List.map (fun i -> ind i b) ps) in
+          match sc.bp_load with
+          | Some _ -> Printf.sprintf "baguette_bool_lin_eq([%s], [%s], l%d)" ws es (k + 1)
+          | None ->
+              Printf.sprintf "baguette_bool_lin_le([%s], [%s], %d)" ws es
+                (List.nth sc.bp_capa k))
+        bins
+    @ sc.bp_extra
+  in
+  String.concat ""
+    ([
+       "predicate baguette_bool_lin_eq(array [int] of int: a, array [int] of var bool: \
+        x, var int: y);\n";
+       "predicate baguette_bool_lin_le(array [int] of int: a, array [int] of var bool: \
+        x, int: c);\n";
+     ]
+    @ decl
+    @ List.map (fun c -> "constraint " ^ c ^ ";\n") cons
+    @ [ "solve satisfy;\n" ])
+
+(* The oracle, apart from the model: some assignment of the bins inside their declared
+   domains and the bin range whose per-bin weight sums lie inside the loads' declared
+   domains (or under the capacities). [bp_extra] is not read: random scenes have none. *)
+let bp_oracle sc =
+  let b0, b1 = sc.bp_bins in
+  let m = b1 - b0 + 1 in
+  let rec go acc = function
+    | [] -> (
+        let load = Array.make m 0 in
+        List.iter2 (fun b w -> load.(b - b0) <- load.(b - b0) + w) (List.rev acc) sc.bp_ws;
+        match sc.bp_load with
+        | Some ls ->
+            List.for_all2 (fun (lo, hi) x -> lo <= x && x <= hi) ls (Array.to_list load)
+        | None -> List.for_all2 (fun c x -> x <= c) sc.bp_capa (Array.to_list load))
+    | (lo, hi) :: rest ->
+        List.exists
+          (fun v -> go (v :: acc) rest)
+          (List.filter
+             (fun v -> v >= b0 && v <= b1)
+             (List.init (hi - lo + 1) (fun d -> lo + d)))
+  in
+  go [] sc.bp_doms
+
+let test_bin_packing_models () =
+  let both ~title ?expect_sat src =
+    List.iter
+      (fun (w, tag) ->
+        with_bits_above w (fun () ->
+            run_model_with ?expect_sat ~title:(Printf.sprintf "%s [%s]" title tag) ~src ()))
+      [ (None, "order"); (Some 0, "bits") ]
+  in
+  let a =
+    {
+      bp_doms = [ (1, 2); (1, 2); (1, 2) ];
+      bp_ws = [ 2; 1; 1 ];
+      bp_bins = (1, 2);
+      bp_load = Some [ (0, 4); (0, 4) ];
+      bp_capa = [];
+      bp_extra = [ "int_le(3, l1)" ];
+    }
+  in
+  both ~title:"bin_packing_load: SAT, three items, bin 1 loaded to 3 or more" (bp_src a);
+  both ~title:"bin_packing_load: UNSAT, both loads at least 3 of a total 4"
+    (bp_src { a with bp_extra = [ "int_le(3, l1)"; "int_le(3, l2)" ] });
+  let c =
+    {
+      bp_doms = [ (1, 2); (1, 2); (1, 2) ];
+      bp_ws = [ 3; 3; 3 ];
+      bp_bins = (1, 2);
+      bp_load = None;
+      bp_capa = [ 4; 5 ];
+      bp_extra = [];
+    }
+  in
+  both ~title:"bin_packing_capa: UNSAT, three 3s into capacities 4 and 5" (bp_src c);
+  both ~title:"bin_packing_capa: SAT, three 3s into capacities 4 and 6"
+    (bp_src { c with bp_capa = [ 4; 6 ] });
+  both ~title:"bin_packing_load: SAT, domains wider than the bins and a zero weight"
+    (bp_src
+       {
+         a with
+         bp_doms = [ (0, 2); (1, 3); (2, 2) ];
+         bp_ws = [ 2; 0; 1 ];
+         bp_extra = [ "int_le(2, l1)" ];
+       });
+  (* the builtin's own folding: a constant indicator, a constant load, a negative weight *)
+  let fold call =
+    String.concat ""
+      [
+        "predicate baguette_bool_lin_eq(array [int] of int: a, array [int] of var bool: \
+         x, var int: y);\n";
+        "predicate baguette_bool_lin_le(array [int] of int: a, array [int] of var bool: \
+         x, int: c);\n";
+        "var bool: p :: output_var;\n\
+         var bool: q :: output_var;\n\
+         var 0..4: y :: output_var;\n";
+        Printf.sprintf "constraint %s;\n" call;
+        "solve satisfy;\n";
+      ]
+  in
+  both ~title:"baguette_bool_lin_eq: a constant indicator and a constant sum"
+    (fold "baguette_bool_lin_eq([2, 3, 1], [p, true, q], 4)");
+  both
+    ~title:"baguette_bool_lin_eq: UNSAT, a constant false indicator and a constant sum"
+    (fold "baguette_bool_lin_eq([2, 3, 1], [p, false, q], 4)");
+  both ~title:"baguette_bool_lin_eq: a negative weight against a variable sum"
+    (fold "baguette_bool_lin_eq([3, -1, 2], [p, q, true], y)");
+  both ~title:"baguette_bool_lin_le: UNSAT, a constant true indicator over the bound"
+    (fold "baguette_bool_lin_le([2, 3], [p, true], 2)");
+  (* random scenes: 2 or 3 items, 2 or 3 bins, weights 0..3, domains around the range *)
+  let st = Random.State.make [| 220 |] in
+  let sat = ref 0 and unsat = ref 0 in
+  for k = 1 to 24 do
+    let n = 2 + Random.State.int st 2 and m = 2 + Random.State.int st 2 in
+    let b0 = Random.State.int st 2 in
+    let doms =
+      List.init n (fun _ ->
+          let lo = b0 - 1 + Random.State.int st 2 in
+          (lo, lo + Random.State.int st (m + 1)))
+    in
+    let ws = List.init n (fun _ -> Random.State.int st 4) in
+    let load = Random.State.bool st in
+    let sc =
+      {
+        bp_doms = doms;
+        bp_ws = ws;
+        bp_bins = (b0, b0 + m - 1);
+        bp_load =
+          (if load then
+             Some
+               (List.init m (fun _ ->
+                    let lo = Random.State.int st 3 in
+                    (lo, lo + Random.State.int st 4)))
+           else None);
+        bp_capa = List.init m (fun _ -> Random.State.int st 5);
+        bp_extra = [];
+      }
+    in
+    let expect = bp_oracle sc in
+    if expect then incr sat else incr unsat;
+    both ~expect_sat:expect
+      ~title:
+        (Printf.sprintf "bin packing, random scene %d (%s, %d items, %d bins)" k
+           (if load then "load" else "capa")
+           n m)
+      (bp_src sc)
+  done;
+  check "bin packing: the random scenes are not all of one answer" (!sat > 0 && !unsat > 0);
+  let hdr =
+    "predicate baguette_bool_lin_eq(array [int] of int: a, array [int] of var bool: x, \
+     var int: y);\n\
+     predicate baguette_bool_lin_le(array [int] of int: a, array [int] of var bool: x, \
+     int: c);\n\
+     var bool: p;\n\
+     var bool: q;\n\
+     var 0..4: y;\n\
+     var 0..4: z;\n"
+  in
+  expect_rejected "baguette_bool_lin_eq: a variable coefficient is refused"
+    ~needles:[ "baguette_bool_lin_eq"; "every coefficient must be a constant" ]
+    (hdr ^ "constraint baguette_bool_lin_eq([z, 1], [p, q], y);\nsolve satisfy;\n");
+  expect_rejected "baguette_bool_lin_le: a variable bound is refused"
+    ~needles:[ "baguette_bool_lin_le"; "the right-hand side must be a constant" ]
+    (hdr ^ "constraint baguette_bool_lin_le([1, 1], [p, q], y);\nsolve satisfy;\n");
+  expect_rejected
+    "baguette_bool_lin_eq: coefficient and Boolean arrays of different lengths"
+    ~needles:[ "baguette_bool_lin_eq"; "the coefficient array has 1 element(s)" ]
+    (hdr ^ "constraint baguette_bool_lin_eq([1], [p, q], y);\nsolve satisfy;\n")
+
+let test_diffn_relaxation_theorem () =
+  let st = Random.State.make [| 2013 |] in
+  let seen = ref 0 and bad = ref 0 and control_caught = ref 0 and scenes = ref 0 in
+  for k = 0 to 199 do
+    let strict = k mod 2 = 0 and fixed = k mod 4 < 2 in
+    let n = 2 + Random.State.int st 2 in
+    let rs = Array.init n (fun _ -> diffn_random_rect st ~fixed) in
+    let s, b = diffn_theorem_scene ~strict ~cap_shift:0 rs in
+    incr scenes;
+    seen := !seen + s;
+    bad := !bad + b;
+    let _, cb = diffn_theorem_scene ~strict ~cap_shift:(-1) rs in
+    if cb > 0 then incr control_caught
+  done;
+  check
+    (Printf.sprintf
+       "diffn relaxation: %d placements satisfying the pairs over %d random scenes \
+        (strict and non-strict, fixed and variable sizes) all satisfy both projections' \
+        rows"
+       !seen !scenes)
+    (!bad = 0 && !seen > 1000);
+  check
+    (Printf.sprintf
+       "diffn relaxation control: a capacity one too small is violated on %d of %d scenes"
+       !control_caught !scenes)
+    (!control_caught > 0)
+
+(* End to end: FlatZinc scenes written the way mznlib flattens them -- the four reified
+   disjuncts and the clause per pair, the order COPIES tied by two int_lin_le rows, and
+   baguette_cumulative over the copies when the projection can prune -- brute-forced by
+   the geometric oracle over the coordinates alone (the oracle knows no relaxation, so a
+   relaxation stronger than diffn turns a SAT into a disagreement), solved, and the proof
+   checked by veripb on the default bits encoding and under --bits-above none. *)
+let diffn_src (rs : (int * int * int * int * int * int) array) =
+  let n = Array.length rs in
+  let b = Buffer.create 1024 in
+  let p fmt = Printf.bprintf b fmt in
+  p
+    "predicate baguette_cumulative(array [int] of var int: s,array [int] of int: d,array \
+     [int] of int: r,int: b);\n";
+  Array.iteri
+    (fun i (xl, xu, yl, yu, _, _) ->
+      p "var %d..%d: x%d :: output_var;\nvar %d..%d: y%d :: output_var;\n" xl xu i yl yu i)
+    rs;
+  for i = 0 to n - 1 do
+    for j = i + 1 to n - 1 do
+      for k = 1 to 4 do
+        p "var bool: b%d_%d_%d;\n" i j k
+      done
+    done
+  done;
+  let copy c i lo hi =
+    if lo = hi then string_of_int lo
+    else (
+      p "var %d..%d: %s%d;\n" lo hi c i;
+      Printf.sprintf "%s%d" c i)
+  in
+  let proj ~cname ~coord ~sz ~across ~asz =
+    let cap =
+      Array.fold_left (fun a r -> max a (snd (across r) + asz r)) min_int rs
+      - Array.fold_left (fun a r -> min a (fst (across r))) max_int rs
+    in
+    let total = Array.fold_left (fun a r -> a + asz r) 0 rs in
+    if total <= cap then None
+    else
+      let starts =
+        Array.to_list
+          (Array.mapi (fun i r -> copy cname i (fst (coord r)) (snd (coord r))) rs)
+      in
+      Some
+        (Printf.sprintf "baguette_cumulative([%s], [%s], [%s], %d)"
+           (String.concat ", " starts)
+           (String.concat ", "
+              (Array.to_list (Array.map (fun r -> string_of_int (sz r)) rs)))
+           (String.concat ", "
+              (Array.to_list (Array.map (fun r -> string_of_int (asz r)) rs)))
+           cap)
+  in
+  let xc (xl, xu, _, _, _, _) = (xl, xu) and yc (_, _, yl, yu, _, _) = (yl, yu) in
+  let wf (_, _, _, _, w, _) = w and hf (_, _, _, _, _, h) = h in
+  let px = proj ~cname:"cx" ~coord:xc ~sz:wf ~across:yc ~asz:hf in
+  let py = proj ~cname:"cy" ~coord:yc ~sz:hf ~across:xc ~asz:wf in
+  for i = 0 to n - 1 do
+    for j = i + 1 to n - 1 do
+      let w_ = wf rs.(i) and h_ = hf rs.(i) and wj = wf rs.(j) and hj = hf rs.(j) in
+      p "constraint int_lin_le_reif([1, -1], [x%d, x%d], %d, b%d_%d_1);\n" i j (-w_) i j;
+      p "constraint int_lin_le_reif([1, -1], [y%d, y%d], %d, b%d_%d_2);\n" i j (-h_) i j;
+      p "constraint int_lin_le_reif([1, -1], [x%d, x%d], %d, b%d_%d_3);\n" j i (-wj) i j;
+      p "constraint int_lin_le_reif([1, -1], [y%d, y%d], %d, b%d_%d_4);\n" j i (-hj) i j;
+      p "constraint bool_clause([b%d_%d_1, b%d_%d_2, b%d_%d_3, b%d_%d_4], []);\n" i j i j
+        i j i j
+    done
+  done;
+  let tie c v i lo hi =
+    if lo < hi then (
+      p "constraint int_lin_le([1, -1], [%s%d, %s%d], 0);\n" c i v i;
+      p "constraint int_lin_le([-1, 1], [%s%d, %s%d], 0);\n" c i v i)
+  in
+  if px <> None then Array.iteri (fun i r -> tie "cx" "x" i (fst (xc r)) (snd (xc r))) rs;
+  if py <> None then Array.iteri (fun i r -> tie "cy" "y" i (fst (yc r)) (snd (yc r))) rs;
+  List.iter (function Some c -> p "constraint %s;\n" c | None -> ()) [ px; py ];
+  p "solve :: int_search([%s], input_order, indomain_min, complete) satisfy;\n"
+    (String.concat ", "
+       (List.init n (fun i -> Printf.sprintf "x%d" i)
+       @ List.init n (fun i -> Printf.sprintf "y%d" i)));
+  (Buffer.contents b, px <> None || py <> None)
+
+let diffn_oracle (rs : (int * int * int * int * int * int) array) =
+  let n = Array.length rs in
+  let x = Array.make n 0 and y = Array.make n 0 in
+  let w = Array.map (fun (_, _, _, _, w, _) -> w) rs
+  and h = Array.map (fun (_, _, _, _, _, h) -> h) rs in
+  let found = ref false in
+  let rec go k =
+    if not !found then
+      if k = 2 * n then (if diffn_pairs_ok ~strict:true x y w h then found := true)
+      else
+        let xl, xu, yl, yu, _, _ = rs.(k mod n) in
+        let lo, hi = if k < n then (xl, xu) else (yl, yu) in
+        for v = lo to hi do
+          (if k < n then x else y).(k mod n) <- v;
+          go (k + 1)
+        done
+  in
+  go 0;
+  !found
+
+let test_diffn_models () =
+  let st = Random.State.make [| 213 |] in
+  let relaxed = ref 0 and sat = ref 0 and unsat = ref 0 in
+  for k = 1 to 16 do
+    let n = 3 + Random.State.int st 2 in
+    let bw = 3 + Random.State.int st 3 and bh = 3 + Random.State.int st 2 in
+    let rs =
+      Array.init n (fun _ ->
+          let w = 1 + Random.State.int st (min 3 bw)
+          and h = 1 + Random.State.int st (min 3 bh) in
+          let xl = Random.State.int st 2 and yl = 0 in
+          (min xl (bw - w), bw - w, yl, bh - h, w, h))
+    in
+    let src, has_relax = diffn_src rs in
+    let expect = diffn_oracle rs in
+    if has_relax then incr relaxed;
+    if expect then incr sat else incr unsat;
+    List.iter
+      (fun (enc, w) ->
+        with_bits_above w (fun () ->
+            run_model_with ~expect_sat:expect
+              ~title:
+                (Printf.sprintf "diffn scene %d (%d rectangles in %dx%d, %s, %s)" k n bw
+                   bh
+                   (if has_relax then "relaxed" else "pairs only")
+                   enc)
+              ~src ()))
+      [ ("bits", Some 0); ("order", None) ]
+  done;
+  check
+    (Printf.sprintf "diffn scenes: %d of 16 post a relaxation, %d SAT and %d UNSAT"
+       !relaxed !sat !unsat)
+    (!relaxed >= 8 && !sat > 0 && !unsat > 0)
 
 let () =
   print_endline "";
@@ -2330,6 +3057,11 @@ let () =
   test_bits_mixed_row_is_the_opb_row ();
   test_inverse_models ();
   test_member_models ();
+  test_table_models ();
+  test_circuit_models ();
+  test_bin_packing_models ();
+  test_diffn_relaxation_theorem ();
+  test_diffn_models ();
   if !failures > 0 then (
     Printf.printf "\n%d failure(s)\n" !failures;
     exit 1)

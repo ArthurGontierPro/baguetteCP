@@ -90,7 +90,7 @@ search maxdepth/levels 33 levels
 work exhausted/bool 0 bool 1 if
 search skipped/nodes 117 nodes
 search learned/cls 1395 cls
-work later/asks 148917 asks
+work later/asks 197324 asks
 work cites/memos 41063 memos
 search convertible/cls 1 cls
 search retention keep-all keep-all: 1395 added, 0 evicted, 1395 swept, 0 live, 6 duplicate, 1376 cited, 0 pinned

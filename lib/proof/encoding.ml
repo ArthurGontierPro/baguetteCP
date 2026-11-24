@@ -533,8 +533,8 @@ and choice = { ch_sels : string list; ch_pick : (string -> int) -> int }
    hand and cannot be given one. Its diagnostic still has to name a variable, because
    "out of memory" is not a diagnostic. So [create] parks the encoding here and the
    alarm reads the counters back out. Nothing else may read it -- every other caller
-   already holds the [t] it means, and a second, ambient handle on the encoding is
-   exactly the kind of shared mutable state this library does not otherwise have.
+   already holds the [t] it means. It is one of the library's process-wide mutable
+   values, which M22-review-T11 proposes to remove.
 
    Last [create] wins, which is right: the CLI makes one, and a test that makes several
    is describing the one it is currently filling. *)

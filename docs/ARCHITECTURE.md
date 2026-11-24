@@ -107,6 +107,13 @@ lib/core/       Baguette_core
                             views (M4-T9, D-0095). Over a bits variable, one big-M
                             SELECTOR row per operand + a clause, each pruning one
                             Resolve `pol` (M8-bits-encoding-T3, D-0134)
+    cumulative.ml           cumulative (and disjunctive as cap 1, r 1): time-table filtering
+                            over gcc's window indicators, one capacity row per time point,
+                            CHECKING; the first Needs_derivation family whose CONFLICTS carry
+                            facts, so they can be learned from (M4-T10, D-0096). Also diffn's
+                            two RELAXATIONS: mznlib/fzn_diffn.mzn keeps std's pairs and adds
+                            cumulative over order copies of x and of y (no module of its
+                            own; the capacity rows are model rows, M18-coverage-T2, D-0213)
     regular.ml              regular (DFA), DOMAIN consistent (Pesant's layered graph) over
                             the letters AND (n+1)*Q state flags the mznlib route introduces;
                             every pruning one rup against its rows plus the backward-chain
@@ -123,6 +130,15 @@ lib/core/       Baguette_core
                             line that walks a hole behind threshold lemmas written ahead, a
                             value of y two holes exclude behind a lemma per position and the
                             OR row (M7-T28, D-0159)
+    table.ml                table(x, T) through mznlib's baguette_table: DOMAIN consistent over
+                            x and one SELECTOR per tuple (store variables, as member's), one
+                            DEF row s_t -> x = t per tuple; every pruning one rup with its
+                            reasons on the letters (M18-coverage-T1, D-0206)
+    circuit.ml              circuit through mznlib's baguette_circuit, beside all_different:
+                            CHECKING plus Chuffed's PREVENT over MTZ POSITION store variables
+                            (succ_u = v -> pos_v = pos_u + 1 in the .opb, the definition); a
+                            subtour cut is ONE pol, the rows around the cycle divided by n,
+                            written ahead (M18-coverage-T3, D-0217)
     linear.ml               int_lin_le. THE REFERENCE PROPAGATOR -- copy this shape
     lin_eq.ml               int_lin_eq (two model rows, see D-0011)
     ne.ml                   int_lin_ne and int_ne (VALUE consistency)
@@ -143,6 +159,9 @@ lib/proof/      Baguette_proof
   opb.ml                    writes the .opb model file
   writer.ml                 writes the .pbp proof; owns the constraint-id counter
                             (I-X2: an id you receive is an id you must delete)
+  text.ml                   one line's bytes, for writer.ml and opb.ml: integers and
+                            literal names written in place, each variable's name prefix
+                            rendered once (M20-pernode-T5, D-0209)
   checker.ml                resolves which veripb to use; mirrors scripts/checker.sh
 ```
 

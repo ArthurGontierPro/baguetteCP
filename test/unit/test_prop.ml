@@ -3878,8 +3878,16 @@ let test_d0124_unwound_history_is_refused () =
   check "D-0124: the same positions are occupied again" (Store.trail_length store = 1);
   check "D-0124: re-pushed under it, the reason still refuses rather than answer y >= 2"
     (refused_as_ix6 (fun () -> Reason.facts e.Store.reason));
+  (* The CLOSURE is asked, not [Explanation.force]: under BAGUETTE_DEBUG
+     [Store.check_agreement] forces the justification AT THE PUSH (its reverse arm reads the
+     derivation's top-level weakenings), so [force] answers from the memo -- the derivation
+     rendered while the history was live, which is the right one and reads nothing -- and
+     this check failed under BAGUETTE_DEBUG=1 only (D-0214 section 5). [reforce] runs the
+     closure itself, as [Justify]'s release check does, so the check tests what it names in
+     both modes. *)
   check "D-0124: and so does the justification, which reads the same history"
-    (refused_as_ix6 (fun () -> Explanation.force ex))
+    (refused_as_ix6 (fun () ->
+         match ex with Explanation.Deferred th -> Explanation.reforce th | e -> e))
 
 (* A row with no other term has an EMPTY deferred reason, and [Reason.is_empty] must say
    so without materialising: conflict analysis asks it per node (lib/core/analysis.ml's
@@ -4058,6 +4066,82 @@ let test_d0091_element_root_defining () =
                (Reason.because ~concludes:None
                   (Reason.facts c1.Store.c_reason)
                   c1.Store.c_why)))
+
+(* M20-pernode-T2 / D-0214: an element pruning records a FRAME and builds its reason and its
+   derivation when asked. The scene makes the reason carry a hole's PUNCHER's facts: the
+   decision k = 2 lets [int_ne(i, k)] punch the interior hole i <> 2, so position 2 (value 5)
+   dies and the result's pushes rest on that hole, whose remover the frame's history must
+   find. Built twice: materialised straight after the level-1 fixpoint, and after a
+   level-2 decision (c >= 7) has moved c's and i's bounds, which a reader of the live store
+   would now report. Both halves must read the same; then, unwound below the pruning, the
+   reason must refuse (I-X6), as D-0124's [Linear] scene does. *)
+let element_lazy_src =
+  "var 1..4: i;\n\
+   var 1..4: k;\n\
+   var 0..9: c;\n\
+   constraint array_int_element(i, [2, 5, 7, 9], c);\n\
+   constraint int_ne(i, k);\n\
+   solve satisfy;\n"
+
+let element_lazy_scene ~move_after =
+  let t = compile_src element_lazy_src in
+  sink_proof t.Compile.encoding;
+  let st = t.Compile.store and eng = t.Compile.engine in
+  let v n = Option.get (Store.var_named st n) in
+  let dec lit = Reason.because ~concludes:None Reason.none (Explanation.decision lit) in
+  let fixpoint () =
+    match Engine.propagate eng st with
+    | Engine.Fixpoint -> ()
+    | Engine.Conflict _ -> failwith "D-0214: the scene has no conflict"
+  in
+  fixpoint ();
+  Store.new_level st;
+  ignore (Store.set_hi st (v "k") 2 (dec (Lit.le "k" 2)));
+  ignore (Store.set_lo st (v "k") 2 (dec (Lit.ge "k" 2)));
+  let from = Store.trail_length st in
+  fixpoint ();
+  let entries =
+    List.filter_map
+      (fun i ->
+        let e = Store.trail_entry st i in
+        match e.Store.reason with Reason.Later _ -> Some e | Reason.Facts _ -> None)
+      (List.init (Store.trail_length st - from) (fun i -> from + i))
+  in
+  let level1 = Store.trail_length st in
+  if move_after then (
+    Store.new_level st;
+    ignore (Store.set_lo st (v "c") 7 (dec (Lit.ge "c" 7)));
+    fixpoint ());
+  let read =
+    List.map
+      (fun e -> (Reason.to_string e.Store.reason, render_deep (Store.explanation st e)))
+      entries
+  in
+  (st, entries, read, level1)
+
+let test_d0214_element_reason_on_demand () =
+  let st0, entries, read0, _ = element_lazy_scene ~move_after:false in
+  let st1, _, read1, level1 = element_lazy_scene ~move_after:true in
+  check "D-0214: the element's level-1 prunings store their reasons deferred"
+    (entries <> []);
+  check "D-0214: i <> 2 was punched under the decision, by int_ne"
+    (not (Domain.mem (Store.get st0 (Option.get (Store.var_named st0 "i"))) 2));
+  check "D-0214: a reason carries the hole's puncher's facts (k), read from the history"
+    (List.exists (fun (r, _) -> string_contains "k" r) read0);
+  check "D-0214: the level-2 decision really moved c after the prunings"
+    (Domain.lo (Store.get st1 (Option.get (Store.var_named st1 "c"))) >= 7
+    && Store.trail_length st1 > level1);
+  check "D-0214: reasons and derivations materialised later are the ones read at once"
+    (read0 = read1);
+  Store.backtrack st0;
+  check "D-0214: unwound below the prunings, every deferred reason refuses (I-X6)"
+    (List.for_all
+       (fun e ->
+         match Reason.facts e.Store.reason with
+         | exception Invalid_argument m -> string_contains "I-X6" m
+         | exception _ -> false
+         | _ -> false)
+       entries)
 
 (* M11-complexity-T8 / D-0155: [Element.add_facts] replaced a quadratic [List.mem] /
    [@] fold with a hashed accumulator, and the list it returns is the order of a trace
@@ -6326,6 +6410,126 @@ let test_regin_staging () =
      branch every model in this suite takes"
     (d1 = [ 1; 4; 5; 6 ] && d2 = [ 1; 4; 5; 6 ])
 
+(* --------------------------------------------------- (f) THE GATE (D-0215) *)
+
+(* The Regin stage keeps a matching across passes and skips a pass that cannot prune
+   ([Alldiff.cannot_prune]). Two copies of one random scene, one instance gated and one
+   not, receive the same decisions, removals and backtracks; after each, both propagate
+   and must agree on the outcome, on every domain and on every trail entry (variable,
+   domain after, reason literals). Before each propagate, at stage 1's fixpoint, the
+   gate's verdict is held against what the scratch stage then does on the ungated copy:
+   "cannot prune" iff it lands nothing and does not fail, i.e. the gate is EXACT, not just
+   safe. The backtracks are what exercise a kept matching made stale by the store. *)
+let regin_gate_random_scene rnd stats =
+  let n = 2 + Random.State.int rnd 5 in
+  let boxes =
+    List.init n (fun _ ->
+        let lo = Random.State.int rnd 4 in
+        (lo, lo + 1 + Random.State.int rnd 4))
+  in
+  let names = List.init n (Printf.sprintf "v%d") in
+  let copy gate =
+    let e = Encoding.create () in
+    List.iter2 (fun n (lo, hi) -> Encoding.declare_int e n ~lo ~hi) names boxes;
+    List.iter (Encoding.request_direct e) names;
+    let rows = Encoding.add_all_different e names in
+    let store = mk_store (List.map2 (fun n (lo, hi) -> (n, lo, hi)) names boxes) in
+    let p = Alldiff.make ~gate store e ~rows (List.init n var) in
+    sink_proof e;
+    (store, p)
+  in
+  let sa, pa = copy true and sb, pb = copy false in
+  let g = match pa.Alldiff.gate with Some g -> g | None -> failwith "D-0215: no gate" in
+  let agree () =
+    Store.trail_length sa = Store.trail_length sb
+    && List.for_all
+         (fun i -> Domain.equal (Store.get sa (var i)) (Store.get sb (var i)))
+         (List.init n Fun.id)
+    && List.for_all
+         (fun k ->
+           let ea = Store.trail_entry sa k and eb = Store.trail_entry sb k in
+           ea.Store.var = eb.Store.var
+           && Domain.equal ea.Store.now eb.Store.now
+           && Reason.lits ea.Store.reason = Reason.lits eb.Store.reason)
+         (List.init (Store.trail_length sa) Fun.id)
+  in
+  let ok = ref true and live = ref true and steps = ref 0 in
+  while !live && !steps < 14 do
+    incr steps;
+    (match Random.State.int rnd 4 with
+    | 0 ->
+        Store.new_level sa;
+        Store.new_level sb
+    | 1 when Store.level sa > 0 ->
+        Store.backtrack sa;
+        Store.backtrack sb
+    | _ ->
+        let i = Random.State.int rnd n in
+        let d = Store.get sa (var i) in
+        if Domain.size d > 1 then (
+          let vs = Array.of_list (Domain.to_list d) in
+          let v = vs.(Random.State.int rnd (Array.length vs)) in
+          ignore (Store.remove sa (var i) v placeholder_pruning : Store.outcome);
+          ignore (Store.remove sb (var i) v placeholder_pruning : Store.outcome)));
+    let bounds p s =
+      match Alldiff.stage_bounds p s ~moved:false with
+      | _ -> true
+      | exception Alldiff.Found _ -> false
+    in
+    let ok_a = bounds pa sa in
+    let ok_b = bounds pb sb in
+    if ok_a <> ok_b then ok := false;
+    if not (ok_a && ok_b) then
+      if
+        (* Both copies run the same stage 1 on the same store, so a conflict here is
+           common to both; unwind it the way search would. *)
+        Store.level sa = 0
+      then live := false
+      else (
+        Store.backtrack sa;
+        Store.backtrack sb)
+    else
+      let verdict = Alldiff.cannot_prune g pa sa in
+      let before = Store.trail_length sb in
+      let rb = Alldiff.propagate pb sb in
+      let ra = Alldiff.propagate pa sa in
+      let scratch_quiet =
+        (match rb with Propagator.Fixpoint -> true | Propagator.Conflict _ -> false)
+        && Store.trail_length sb = before
+      in
+      if verdict then incr (fst stats) else incr (snd stats);
+      if verdict <> scratch_quiet then ok := false;
+      match (ra, rb) with
+      | Propagator.Fixpoint, Propagator.Fixpoint -> if not (agree ()) then ok := false
+      | Propagator.Conflict _, Propagator.Conflict _ ->
+          if not (agree ()) then ok := false;
+          if Store.level sa = 0 then live := false
+          else (
+            Store.backtrack sa;
+            Store.backtrack sb)
+      | _ -> ok := false
+  done;
+  !ok && agree ()
+
+let test_regin_gate_random () =
+  let rnd = Random.State.make [| 215 |] in
+  let stats = (ref 0, ref 0) in
+  let bad = ref 0 in
+  for _ = 1 to 400 do
+    if not (regin_gate_random_scene rnd stats) then incr bad
+  done;
+  check
+    (Printf.sprintf
+       "regin (f) D-0215: over 400 random scenes the gated stage prunes exactly what the \
+        scratch stage prunes, trail entry for trail entry, and the gate is exact (%d \
+        skips, %d passes it let through, %d scenes disagreeing)"
+       !(fst stats)
+       !(snd stats)
+       !bad)
+    (!bad = 0);
+  check "regin (f) D-0215: the scenes exercise both verdicts"
+    (!(fst stats) > 100 && !(snd stats) > 100)
+
 (* ------------------------------------------------------- (c)/(d) THE CITATION *)
 
 (* Three variables over 1..4 with 2 and 3 taken out of each by an `int_ne`: three
@@ -7939,6 +8143,191 @@ let test_linear_scratch () =
   check (Printf.sprintf "E7: ...%d of them prune (> 300)" !prunes) (!prunes > 300);
   check (Printf.sprintf "E7: ...%d of them conflict (> 300)" !conflicts) (!conflicts > 300)
 
+(* ===================================================== M20-pernode-T3 (D-0212)
+
+   A row that passes D-0212's precondition runs in plain [+], [*], [/]; one that does not
+   keeps every operation checked. The precondition is M1-T23's cap on the row's magnitude
+   M = |c| + sum_i |a_i| * max(|lo_i|, |hi_i|) over the bounds [make] froze. Pinned here
+   AT the boundary, with coefficients near the cap and negative bounds:
+
+   - for each row, the precondition's verdict: M = limit is in range, M = limit + 1 is not
+     ([Linear.in_range]);
+   - on both sides, the run is EXACT: the bounds it leaves are the brute-force bounds of
+     the row's solutions (one linear row's bounds propagation is exact on its own box),
+     and a conflict is reported iff there is no solution. The brute force evaluates in
+     [Checked], so it cannot wrap in agreement with the propagator;
+   - on both sides, [Linear.propagate] and [Ref_linear.propagate] (the checked
+     specification) give the same outcome and trail, from the declared box and from a
+     narrowed one (the premise: live bounds inside the frozen ones).
+
+   Each coefficient set is run at rhs = +-(limit - S) (M = limit) and +-(limit - S + 1)
+   (M = limit + 1), S being sum_i |a_i| * B_i. *)
+let test_linear_in_range () =
+  print_endline "\n-- M20-pernode-T3 (D-0212): plain arithmetic for rows in range";
+  let l = Checked.limit in
+  let sets =
+    [
+      ("a = limit/4 on [-3,2], 1 on [-1,4]", [ l / 4; 1 ], [ (-3, 2); (-1, 4) ]);
+      ( "mixed signs, all-negative and straddling bounds",
+        [ -(l / 16); l / 32; 7 ],
+        [ (-4, -1); (-2, 3); (-5, 5) ] );
+      ("one term, a = limit/2 on [-1,1]", [ l / 2 ], [ (-1, 1) ]);
+      ( "two negative coefficients on negative boxes",
+        [ -(l / 8); -(l / 8) ],
+        [ (-3, -1); (-2, -1) ] );
+      ( "a zero coefficient and a fixed-at-0 term",
+        [ l / 3; 0; max_int / 2 ],
+        [ (-2, 1); (-9, 9); (0, 0) ] );
+    ]
+  in
+  let observe store r =
+    let out =
+      match r with
+      | exception e -> "raised " ^ Printexc.to_string e
+      | Propagator.Fixpoint -> "fix"
+      | Propagator.Conflict c -> "conflict " ^ Reason.to_string c.Store.c_reason
+    in
+    let trail =
+      List.init (Store.trail_length store) (fun i ->
+          let e = Store.trail_entry store i in
+          Printf.sprintf "%d:%d..%d:%s" (Var.to_int e.Store.var) (Domain.lo e.Store.now)
+            (Domain.hi e.Store.now)
+            (Reason.to_string e.Store.reason))
+    in
+    (out, trail)
+  in
+  let rows = ref 0 and inside = ref 0 and outside = ref 0 and exact = ref 0 in
+  let same = ref 0 and narrowed_same = ref 0 and pruned = ref 0 and conflicted = ref 0 in
+  List.iter
+    (fun (what, coeffs, ranges) ->
+      let s =
+        List.fold_left2
+          (fun acc a (lo, hi) ->
+            Checked.add acc (Checked.mul (abs a) (max (abs lo) (abs hi))))
+          0 coeffs ranges
+      in
+      let bounds =
+        List.mapi (fun i (lo, hi) -> (Printf.sprintf "x%d" i, lo, hi)) ranges
+      in
+      let raw = List.mapi (fun i a -> (a, var i)) coeffs in
+      List.iter
+        (fun (rhs, want_in) ->
+          incr rows;
+          let name = Printf.sprintf "D-0212 %s, rhs %d" what rhs in
+          let m =
+            Checked.row_magnitude
+              (List.map2 (fun a (lo, hi) -> (a, lo, hi)) coeffs ranges)
+              rhs
+          in
+          check
+            (name ^ ": M is the intended side of the cap")
+            (m = Some (if want_in then l else l + 1));
+          let row = Linear.make ~row_id:1 (mk_store bounds) raw rhs in
+          check
+            (name ^ ": in_range is the precondition's verdict")
+            (Linear.in_range row = want_in);
+          if want_in then incr inside else incr outside;
+          (* exact, against the brute force *)
+          let sols =
+            List.filter
+              (fun xs ->
+                List.fold_left2
+                  (fun acc a x -> Checked.add acc (Checked.mul a x))
+                  0 coeffs xs
+                <= rhs)
+              (cartesian ranges)
+          in
+          let st = mk_store bounds in
+          let r = Linear.propagate row st in
+          let ok =
+            match (r, sols) with
+            | Propagator.Conflict _, [] ->
+                incr conflicted;
+                true
+            | Propagator.Conflict _, _ :: _ -> false
+            | Propagator.Fixpoint, [] -> false
+            | Propagator.Fixpoint, _ :: _ ->
+                if Store.trail_length st > 0 then incr pruned;
+                List.for_all
+                  (fun i ->
+                    let vals = List.map (fun xs -> List.nth xs i) sols in
+                    let d = Store.get st (var i) in
+                    Domain.lo d = List.fold_left Int.min max_int vals
+                    && Domain.hi d = List.fold_left Int.max min_int vals)
+                  (List.init (List.length coeffs) Fun.id)
+          in
+          check (name ^ ": the run leaves exactly the brute-force bounds") ok;
+          if ok then incr exact;
+          (* the same outcome and trail as the checked specification, declared box *)
+          let s1 = mk_store bounds and s2 = mk_store bounds in
+          if
+            observe s1 (Linear.propagate row s1)
+            = observe s2 (Ref_linear.propagate row s2)
+          then incr same
+          else
+            check (name ^ ": same outcome and trail as Ref_linear (declared box)") false;
+          (* and from a box narrowed below the frozen bounds, the premise's case *)
+          let narrow () =
+            let s = mk_store bounds in
+            Store.new_level s;
+            List.iter
+              (fun (i, (lo, hi)) ->
+                if hi > lo then (
+                  ignore
+                    (Store.set_lo s (var i)
+                       (lo + ((hi - lo + 1) / 3))
+                       placeholder_pruning);
+                  ignore
+                    (Store.set_hi s (var i) (hi - ((hi - lo) / 4)) placeholder_pruning)))
+              (List.mapi (fun i r -> (i, r)) ranges);
+            s
+          in
+          let n1 = narrow () and n2 = narrow () in
+          if
+            observe n1 (Linear.propagate row n1)
+            = observe n2 (Ref_linear.propagate row n2)
+          then incr narrowed_same
+          else
+            check (name ^ ": same outcome and trail as Ref_linear (narrowed box)") false)
+        [ (l - s, true); (-(l - s), true); (l - s + 1, false); (-(l - s + 1), false) ])
+    sets;
+  check
+    (Printf.sprintf "D-0212: %d boundary rows, %d in range and %d just outside" !rows
+       !inside !outside)
+    (!inside = !outside && !inside > 0);
+  check
+    (Printf.sprintf "D-0212: all %d runs exact (%d prune, %d conflict)" !rows !pruned
+       !conflicted)
+    (!exact = !rows && !pruned > 0 && !conflicted > 0);
+  check
+    (Printf.sprintf "D-0212: all %d rows agree with Ref_linear, declared and narrowed"
+       !rows)
+    (!same = !rows && !narrowed_same = !rows);
+  (* Far outside: the checked path still raises rather than wraps (M1-T23), and the row
+     says it is not in range. *)
+  let store = mk_store [ ("x", 3, 4) ] in
+  let far = Linear.make ~row_id:1 store [ (-2305843009213693952, var 0) ] 0 in
+  check "D-0212: a row whose products overflow is not in range"
+    (not (Linear.in_range far));
+  (* Under BAGUETTE_DEBUG an in-range row is AUDITED, and the audit asserts the premise.
+     A row built at a narrowed level, then run after the backtrack that widens its
+     variables past the bounds it froze, breaks it and must fail loudly. Without
+     BAGUETTE_DEBUG the row runs plain and this case is not observable, so it is skipped
+     and said so. *)
+  if Baguette_core.Debug.enabled then (
+    let st = mk_store [ ("x", -5, 5); ("y", -5, 5) ] in
+    Store.new_level st;
+    ignore (Store.set_lo st (var 0) 0 placeholder_pruning);
+    let row = Linear.make ~row_id:1 st [ (1, var 0); (1, var 1) ] 3 in
+    Store.backtrack_to st 0;
+    let fired =
+      match Linear.propagate row st with
+      | _ -> false
+      | exception Failure msg -> contains_sub ~needle:"D-0212" msg
+    in
+    check "D-0212 (BAGUETTE_DEBUG): a run outside the frozen bounds fails the audit" fired)
+  else print_endline "  (the BAGUETTE_DEBUG audit case is skipped: BAGUETTE_DEBUG is off)"
+
 (* ======================================================================== M7-T28
 
    regular (D-0146). Two questions, the module header's two claims:
@@ -8940,6 +9329,640 @@ let test_member_debug_models () =
                f rc)
             (rc = 0))
         models
+
+(* ===================================================== M18-coverage-T1: table
+
+   D-0206. table, by brute force over random small scenes: n in 2..3 positions over 1..4
+   (sometimes a constant, and now and then one variable twice: the [Aliased] packing),
+   2..7 random tuples over 0..5 (so some leave the declared hull), one selector each;
+   random bound narrowings, holes punched with no facts (a ROOT hole), and selectors fixed
+   by the scene. The claims of lib/core/prop/table.ml's header:
+
+   - I-P1: no solution (x and the selectors) inside the current domains is removed, and a
+     conflict only where there is none;
+   - DOMAIN consistency over (x, s) after a fixpoint, when nothing is aliased;
+   - I-P2: a second call changes nothing (aliased scenes too: the call loops to its own
+     fixpoint);
+   - every reason SOUND on its own facts over the DECLARED domains and the scene's holes,
+     and no fact names a selector the propagator moved itself (the reasons are on the
+     letters). *)
+module Table = Baguette_core.Table
+
+let test_table_brute_force () =
+  regular_rng := 2206;
+  let bad = ref 0 and scenes = ref 0 and changed = ref 0 and conflicts = ref 0 in
+  let reasons = ref 0 and first_bad = ref "" and aliased_scenes = ref 0 in
+  let flag what =
+    incr bad;
+    if !first_bad = "" then first_bad := what
+  in
+  for _ = 1 to 1500 do
+    incr scenes;
+    let n = 2 + regular_rnd 2 and nt = 2 + regular_rnd 6 in
+    (* var k < n: x_k; n + t: s_t *)
+    let decls =
+      List.init n (fun k -> (Printf.sprintf "x%d" k, 1, 4))
+      @ List.init nt (fun t -> (Printf.sprintf "s%d" t, 0, 1))
+    in
+    let nv = n + nt in
+    let store = mk_store decls in
+    let alias = regular_rnd 6 = 0 in
+    let pos_var = Array.init n (fun i -> if i = 1 && alias then 0 else i) in
+    let fixed =
+      Array.init n (fun _ -> if regular_rnd 7 = 0 then Some (1 + regular_rnd 4) else None)
+    in
+    let aliased = alias && fixed.(0) = None && fixed.(1) = None in
+    if aliased then incr aliased_scenes;
+    let name_of k = Store.name store (var k) in
+    let xs =
+      Array.init n (fun i ->
+          match fixed.(i) with
+          | Some c -> Table.Fixed c
+          | None ->
+              let k = pos_var.(i) in
+              Table.Cell { var = var k; name = name_of k; dlo = 1; dhi = 4 })
+    in
+    let tuples = Array.init (nt * n) (fun _ -> regular_rnd 6) in
+    let sels = Array.init nt (fun t -> var (n + t)) in
+    let p = Table.make store ~xs ~tuples ~sels in
+    let holes = ref [] and by_scene = Hashtbl.create 4 in
+    for k = 0 to n - 1 do
+      let d = Store.get store (var k) in
+      if regular_rnd 3 = 0 then
+        ignore (Store.set_lo store (var k) (Domain.lo d + 1) placeholder_pruning);
+      if regular_rnd 3 = 0 then
+        ignore (Store.set_hi store (var k) (Domain.hi d - 1) placeholder_pruning);
+      let d = Store.get store (var k) in
+      if regular_rnd 2 = 0 && Domain.hi d - Domain.lo d >= 2 then (
+        let h = Domain.lo d + 1 + regular_rnd (Domain.hi d - Domain.lo d - 1) in
+        holes := (k, h) :: !holes;
+        ignore (Store.remove store (var k) h placeholder_pruning))
+    done;
+    for t = 0 to nt - 1 do
+      match regular_rnd 10 with
+      | 0 ->
+          Hashtbl.replace by_scene (Printf.sprintf "s%d" t) ();
+          ignore (Store.set_hi store (var (n + t)) 0 placeholder_pruning)
+      | 1 ->
+          Hashtbl.replace by_scene (Printf.sprintf "s%d" t) ();
+          ignore (Store.set_lo store (var (n + t)) 1 placeholder_pruning)
+      | _ -> ()
+    done;
+    let declared k = if k < n then (1, 4) else (0, 1) in
+    let rec words k =
+      if k = nv then [ [] ]
+      else
+        let lo, hi = declared k in
+        List.concat_map
+          (fun v -> List.map (fun w -> v :: w) (words (k + 1)))
+          (List.init (hi - lo + 1) (fun d -> lo + d))
+    in
+    let xval a i = match fixed.(i) with Some c -> c | None -> a.(pos_var.(i)) in
+    let sols =
+      List.filter_map
+        (fun w ->
+          let a = Array.of_list w in
+          let sel t = a.(n + t) = 1 in
+          if
+            List.exists sel (List.init nt Fun.id)
+            && List.for_all
+                 (fun t ->
+                   (not (sel t))
+                   || List.for_all
+                        (fun i -> xval a i = tuples.((t * n) + i))
+                        (List.init n Fun.id))
+                 (List.init nt Fun.id)
+          then Some a
+          else None)
+        (words 0)
+    in
+    let used k =
+      k >= n
+      || List.exists (fun i -> fixed.(i) = None && pos_var.(i) = k) (List.init n Fun.id)
+    in
+    let inside a =
+      List.for_all
+        (fun k -> (not (used k)) || Domain.mem (Store.get store (var k)) a.(k))
+        (List.init nv Fun.id)
+    in
+    let on_holes a = List.for_all (fun (k, v) -> a.(k) <> v) !holes in
+    let live0 = List.filter inside sols in
+    let index_of nm =
+      match Store.var_named store nm with Some v -> Var.to_int v | None -> -1
+    in
+    let holds a (fct : Reason.fact) =
+      let v = a.(index_of (Reason.fact_owner fct)) in
+      if Reason.fact_is_lower fct then v >= Reason.fact_value fct
+      else v <= Reason.fact_value fct
+    in
+    let audit what facts claim_ok =
+      incr reasons;
+      List.iter
+        (fun f ->
+          let nm = Reason.fact_owner f in
+          if nm.[0] = 's' && not (Hashtbl.mem by_scene nm) then
+            flag
+              (Printf.sprintf "%s cites the selector %s, which it moved itself" what nm))
+        facts;
+      List.iter
+        (fun a ->
+          if on_holes a && List.for_all (holds a) facts && not (claim_ok a) then
+            flag
+              (Printf.sprintf "%s: a solution satisfies its facts [%s]" what
+                 (Reason.to_string_facts facts)))
+        sols
+    in
+    let from = Store.trail_length store in
+    let before = Store.snapshot store in
+    let outcome = Table.propagate p store in
+    for pos = from to Store.trail_length store - 1 do
+      let e = Store.trail_entry store pos in
+      let k = Var.to_int e.Store.var in
+      let removed =
+        List.filter (fun v -> not (Domain.mem e.Store.now v)) (Domain.to_list e.Store.old)
+      in
+      audit
+        ("the pruning of " ^ Store.name store e.Store.var)
+        (Reason.facts e.Store.reason)
+        (fun a -> not (List.mem a.(k) removed))
+    done;
+    match outcome with
+    | Propagator.Conflict c ->
+        incr conflicts;
+        audit "a conflict" (Reason.facts c.Store.c_reason) (fun _ -> false);
+        if live0 <> [] then flag "a conflict on a scene with a solution"
+    | Propagator.Fixpoint -> (
+        if not (Store.same_domains store before) then incr changed;
+        if not (List.for_all inside live0) then flag "a solution was removed";
+        let live = List.filter inside sols in
+        if not aliased then
+          List.iter
+            (fun k ->
+              if used k then
+                Domain.iter
+                  (fun v ->
+                    if not (List.exists (fun a -> a.(k) = v) live) then
+                      flag
+                        (Printf.sprintf "%s keeps %d, which no solution inside uses"
+                           (name_of k) v))
+                  (Store.get store (var k)))
+            (List.init nv Fun.id);
+        let snap = Store.snapshot store in
+        match Table.propagate p store with
+        | Propagator.Conflict _ -> flag "the second call conflicts"
+        | Propagator.Fixpoint ->
+            if not (Store.same_domains store snap) then flag "the second call prunes")
+  done;
+  if !first_bad <> "" then Printf.printf "     first violation: %s\n" !first_bad;
+  check
+    (Printf.sprintf
+       "table (D-0206): I-P1, domain consistency, I-P2 and every reason SOUND over the \
+        declared domains, %d scenes (%d aliased, %d pruned, %d conflicts, %d reasons, \
+        selector facts all the scene's): no violation"
+       !scenes !aliased_scenes !changed !conflicts !reasons)
+    (!bad = 0 && !changed > 300 && !conflicts > 50 && !reasons > 1000)
+
+(* table end to end on the checker, both encodings. One scene per shape of the header:
+   - table_holes: x1 <> x2 punches holes under decisions, so tuples die by a HOLE (K
+     citing the remover's facts), and indomain_max walks a fall-back: SAT;
+   - table_set: a selector set by C fixes x through E, under a decision: SAT;
+   - table_unsat: two tables chained through y, the sum out of reach (9 at most): UNSAT. *)
+let table_holes_src =
+  {|var 1..4: x1 :: output_var;
+var 1..4: x2 :: output_var;
+var 1..4: x3 :: output_var;
+var bool: s1;
+var bool: s2;
+var bool: s3;
+var bool: s4;
+var bool: s5;
+constraint baguette_table([x1, x2, x3], [4, 4, 1, 3, 4, 2, 4, 3, 3, 2, 1, 4, 1, 2, 2], [s1, s2, s3, s4, s5]);
+constraint int_ne(x1, x2);
+constraint int_ne(x2, x3);
+solve :: int_search([x2, x1, x3], input_order, indomain_max, complete) satisfy;
+|}
+
+let table_set_src =
+  {|var 1..3: x1 :: output_var;
+var 1..3: x2 :: output_var;
+var bool: s1;
+var bool: s2;
+var bool: s3;
+constraint baguette_table([x1, x2], [1, 2, 2, 3, 3, 1], [s1, s2, s3]);
+constraint int_le(2, x1);
+solve :: int_search([s3, x1, x2], input_order, indomain_min, complete) satisfy;
+|}
+
+let table_unsat_src =
+  {|var 1..4: x :: output_var;
+var 1..4: y :: output_var;
+var 1..4: z :: output_var;
+var bool: a1;
+var bool: a2;
+var bool: a3;
+var bool: b1;
+var bool: b2;
+var bool: b3;
+constraint baguette_table([x, y], [1, 2, 2, 3, 3, 4], [a1, a2, a3]);
+constraint baguette_table([y, z], [2, 1, 3, 1, 4, 2], [b1, b2, b3]);
+constraint int_lin_le([-1, -1, -1], [x, y, z], -10);
+solve satisfy;
+|}
+
+let test_table_veripb () =
+  let dir = Filename.temp_file "baguette_table" "" in
+  Sys.remove dir;
+  Sys.mkdir dir 0o700;
+  let saved = !Baguette_proof.Encoding.bits_above in
+  List.iter
+    (fun (enc, bits) ->
+      Baguette_proof.Encoding.bits_above := bits;
+      let solve file src = regular_solve dir ~file:(file ^ "_" ^ enc) src in
+      let _, outcome, opb, pbp = solve "table_holes" table_holes_src in
+      check
+        (Printf.sprintf "table (%s): the holes scene is SAT, its oracle accepts it" enc)
+        (match outcome with Search.Sat _ -> true | _ -> false);
+      run_veripb ~name:(Printf.sprintf "table (%s): the holes scene's proof verifies" enc)
+        ~build:(fun _ -> (opb, pbp));
+      let _, outcome, opb, pbp = solve "table_set" table_set_src in
+      check
+        (Printf.sprintf "table (%s): the set-selector scene is SAT" enc)
+        (match outcome with Search.Sat _ -> true | _ -> false);
+      run_veripb
+        ~name:(Printf.sprintf "table (%s): the set-selector scene's proof verifies" enc)
+        ~build:(fun _ -> (opb, pbp));
+      let _, outcome, opb, pbp = solve "table_unsat" table_unsat_src in
+      check
+        (Printf.sprintf "table (%s): the chained scene is UNSAT" enc)
+        (outcome = Search.Unsat);
+      run_veripb
+        ~name:(Printf.sprintf "table (%s): the chained scene's refutation verifies" enc)
+        ~build:(fun _ -> (opb, pbp)))
+    [ ("order", None); ("bits", Some 0) ];
+  Baguette_proof.Encoding.bits_above := saved
+
+(* The test/models/table_*.fzn under BAGUETTE_DEBUG=1, through member's child (it solves
+   any file): every D-0026 agreement check, every honoured idempotence claim. *)
+let test_table_debug_models () =
+  match bool_models_dir with
+  | None -> check "M18-coverage-T1: test/models/ found (the table debug lane ran)" false
+  | Some d ->
+      let models =
+        List.sort compare
+          (List.filter
+             (fun f ->
+               String.length f > 6
+               && String.sub f 0 6 = "table_"
+               && Filename.check_suffix f ".fzn")
+             (Array.to_list (Sys.readdir d)))
+      in
+      check "M18-coverage-T1: the five table models are there" (List.length models >= 5);
+      List.iter
+        (fun f ->
+          let rc =
+            Sys.command
+              (Printf.sprintf "BAGUETTE_DEBUG=1 %s --member-debug %s >/dev/null 2>&1"
+                 (Filename.quote Sys.executable_name)
+                 (Filename.quote (Filename.concat d f)))
+          in
+          check
+            (Printf.sprintf
+               "M18-coverage-T1: %s solves under BAGUETTE_DEBUG=1, every check passing \
+                (rc %d)"
+               f rc)
+            (rc = 0))
+        models
+
+(* ===================================================== M18-coverage-T3: circuit
+
+   D-0217. circuit, by brute force over random small scenes: n in 3..4 nodes, root 1,
+   successors declared 1..n (so R's unit rows are exercised: the self-loop and nothing
+   outside S), now and then a constant successor, positions 1..n-1; random bound
+   narrowings, holes punched with no facts (ROOT holes) and variables fixed by the scene,
+   so that chains of fixed arcs form. The oracle is the .opb's relation written apart
+   from lib/core/prop/circuit.ml: every successor in S and not its own node, and along
+   every arc pos_v = pos_u + 1, pos_v = 1 out of the root, pos_u = n - 1 into it (the
+   root's position 0). all_different is NOT part of it: the instance's own constraint is
+   the rows. The claims of the header:
+
+   - I-P1: no solution inside the current domains is removed, a conflict only where there
+     is none;
+   - CHECKING: a fixpoint with every variable of the scope fixed is a solution;
+   - I-P2: a second call changes nothing;
+   - every reason SOUND on its own facts over the DECLARED domains and the scene's holes;
+   - P fires: some successor loses a value on two or more facts (a chain). *)
+module Circuit = Baguette_core.Circuit
+
+let test_circuit_brute_force () =
+  regular_rng := 2217;
+  let bad = ref 0 and scenes = ref 0 and changed = ref 0 and conflicts = ref 0 in
+  let reasons = ref 0 and first_bad = ref "" and chains = ref 0 and checked = ref 0 in
+  let flag what =
+    incr bad;
+    if !first_bad = "" then first_bad := what
+  in
+  for _ = 1 to 1500 do
+    incr scenes;
+    let n = 3 + regular_rnd 2 in
+    (* var k < n: the successor of node k + 1; n + k - 1 (k >= 1): its position *)
+    let decls =
+      List.init n (fun k -> (Printf.sprintf "s%d" (k + 1), 1, n))
+      @ List.init (n - 1) (fun k -> (Printf.sprintf "p%d" (k + 2), 1, n - 1))
+    in
+    let nv = (2 * n) - 1 in
+    let store = mk_store decls in
+    let fixed =
+      Array.init n (fun _ ->
+          if regular_rnd 12 = 0 then Some (1 + regular_rnd n) else None)
+    in
+    let name_of k = Store.name store (var k) in
+    let succ =
+      Array.init n (fun k ->
+          match fixed.(k) with
+          | Some c -> Circuit.Fixed c
+          | None -> Circuit.Cell { var = var k; name = name_of k; dlo = 1; dhi = n })
+    in
+    let pos =
+      Array.init (n - 1) (fun k ->
+          Circuit.Cell { var = var (n + k); name = name_of (n + k); dlo = 1; dhi = n - 1 })
+    in
+    (* No proof here: any id >= 0 stands for a declared arc's row. *)
+    let ge = Array.make (n * n) 0 and le = Array.make (n * n) 0 in
+    let p = Circuit.make ~root:1 ~succ ~pos ~ge ~le in
+    let holes = ref [] in
+    for k = 0 to nv - 1 do
+      let d = Store.get store (var k) in
+      (match regular_rnd 8 with
+      | 0 -> ignore (Store.set_lo store (var k) (Domain.lo d + 1) placeholder_pruning)
+      | 1 -> ignore (Store.set_hi store (var k) (Domain.hi d - 1) placeholder_pruning)
+      | (2 | 3 | 4) when k < n || regular_rnd 3 = 0 ->
+          let v = Domain.lo d + regular_rnd (Domain.hi d - Domain.lo d + 1) in
+          ignore (Store.set_lo store (var k) v placeholder_pruning);
+          ignore (Store.set_hi store (var k) v placeholder_pruning)
+      | _ -> ());
+      let d = Store.get store (var k) in
+      if regular_rnd 4 = 0 && Domain.hi d - Domain.lo d >= 2 then (
+        let h = Domain.lo d + 1 + regular_rnd (Domain.hi d - Domain.lo d - 1) in
+        holes := (k, h) :: !holes;
+        ignore (Store.remove store (var k) h placeholder_pruning))
+    done;
+    let declared k = if k < n then (1, n) else (1, n - 1) in
+    let rec words k =
+      if k = nv then [ [] ]
+      else
+        let lo, hi = declared k in
+        List.concat_map
+          (fun v -> List.map (fun w -> v :: w) (words (k + 1)))
+          (List.init (hi - lo + 1) (fun d -> lo + d))
+    in
+    let sval a k = match fixed.(k) with Some c -> c | None -> a.(k) in
+    let pval a node = if node = 1 then 0 else a.(n + node - 2) in
+    let sols =
+      List.filter
+        (fun a ->
+          List.for_all
+            (fun k ->
+              let u = k + 1 and v = sval a k in
+              v >= 1 && v <= n && v <> u
+              &&
+              if v = 1 then pval a u = n - 1
+              else if u = 1 then pval a v = 1
+              else pval a v = pval a u + 1)
+            (List.init n Fun.id))
+        (List.map Array.of_list (words 0))
+    in
+    let used k = k >= n || fixed.(k) = None in
+    let inside a =
+      List.for_all
+        (fun k -> (not (used k)) || Domain.mem (Store.get store (var k)) a.(k))
+        (List.init nv Fun.id)
+    in
+    let on_holes a = List.for_all (fun (k, v) -> a.(k) <> v) !holes in
+    let live0 = List.filter inside sols in
+    let index_of nm =
+      match Store.var_named store nm with Some v -> Var.to_int v | None -> -1
+    in
+    let holds a (fct : Reason.fact) =
+      let v = a.(index_of (Reason.fact_owner fct)) in
+      if Reason.fact_is_lower fct then v >= Reason.fact_value fct
+      else v <= Reason.fact_value fct
+    in
+    let audit what facts claim_ok =
+      incr reasons;
+      List.iter
+        (fun a ->
+          if on_holes a && List.for_all (holds a) facts && not (claim_ok a) then
+            flag
+              (Printf.sprintf "%s: a solution satisfies its facts [%s]" what
+                 (Reason.to_string_facts facts)))
+        sols
+    in
+    let from = Store.trail_length store in
+    let before = Store.snapshot store in
+    let outcome = Circuit.propagate p store in
+    for at = from to Store.trail_length store - 1 do
+      let e = Store.trail_entry store at in
+      let k = Var.to_int e.Store.var in
+      let removed =
+        List.filter (fun v -> not (Domain.mem e.Store.now v)) (Domain.to_list e.Store.old)
+      in
+      let facts = Reason.facts e.Store.reason in
+      if k < n && List.length facts >= 2 then incr chains;
+      audit
+        ("the pruning of " ^ Store.name store e.Store.var)
+        facts
+        (fun a -> not (List.mem a.(k) removed))
+    done;
+    match outcome with
+    | Propagator.Conflict c ->
+        incr conflicts;
+        audit "a conflict" (Reason.facts c.Store.c_reason) (fun _ -> false);
+        if live0 <> [] then flag "a conflict on a scene with a solution"
+    | Propagator.Fixpoint -> (
+        if not (Store.same_domains store before) then incr changed;
+        if not (List.for_all inside live0) then flag "a solution was removed";
+        if
+          List.for_all
+            (fun k -> (not (used k)) || Domain.is_fixed (Store.get store (var k)))
+            (List.init nv Fun.id)
+        then (
+          incr checked;
+          if List.filter inside sols = [] then flag "a fixed scope that is no solution");
+        let snap = Store.snapshot store in
+        match Circuit.propagate p store with
+        | Propagator.Conflict _ -> flag "the second call conflicts"
+        | Propagator.Fixpoint ->
+            if not (Store.same_domains store snap) then flag "the second call prunes")
+  done;
+  if !first_bad <> "" then Printf.printf "     first violation: %s\n" !first_bad;
+  check
+    (Printf.sprintf
+       "circuit (D-0217): I-P1, checking, I-P2 and every reason SOUND over the declared \
+        domains, %d scenes (%d pruned, %d conflicts, %d reasons, %d chain prunings, %d \
+        fixed scopes): no violation"
+       !scenes !changed !conflicts !reasons !chains !checked)
+    (!bad = 0 && !changed > 300 && !conflicts > 50 && !reasons > 1000 && !chains > 50
+   && !checked > 10)
+
+(* circuit end to end on the checker, both encodings, with all_different beside it as
+   mznlib posts it. The successors are declared 1..n, so R's unit rows are on the page.
+   - circuit_sat: input order, indomain_min, so every successor first tries the start of
+     its chain, which P has removed (a prevent line under a decision each): SAT;
+   - circuit_root_unsat: nodes 1, 2, 3 can only point among themselves, a cycle THROUGH
+     the root (LE and END summed): UNSAT;
+   - circuit_noroot_unsat: nodes 4, 5, 6 likewise, a cycle that avoids it (GE): UNSAT;
+   - circuit_tour: below. The two UNSAT scenes close their cycle by the position rows
+     (H) and all_different before any prevent line is needed; the tour is the scene
+     whose trace carries the cuts. *)
+let circuit_sat_src =
+  {|var 1..5: s1 :: output_var;
+var 1..5: s2 :: output_var;
+var 1..5: s3 :: output_var;
+var 1..5: s4 :: output_var;
+var 1..5: s5 :: output_var;
+var 1..4: p2;
+var 1..4: p3;
+var 1..4: p4;
+var 1..4: p5;
+constraint all_different_int([s1, s2, s3, s4, s5]);
+constraint baguette_circuit([s1, s2, s3, s4, s5], [p2, p3, p4, p5], 1);
+solve :: int_search([s1, s2, s3, s4, s5], input_order, indomain_min, complete) satisfy;
+|}
+
+let circuit_unsat_src ~closed =
+  let dom k =
+    if List.mem k closed then
+      Printf.sprintf "{%s}"
+        (String.concat "," (List.map string_of_int (List.filter (( <> ) k) closed)))
+    else "1..6"
+  in
+  String.concat ""
+    (List.init 6 (fun i ->
+         Printf.sprintf "var %s: s%d :: output_var;\n" (dom (i + 1)) (i + 1))
+    @ List.init 5 (fun i -> Printf.sprintf "var 1..5: p%d;\n" (i + 2))
+    @ [
+        "constraint all_different_int([s1, s2, s3, s4, s5, s6]);\n";
+        "constraint baguette_circuit([s1, s2, s3, s4, s5, s6], [p2, p3, p4, p5, p6], 1);\n";
+        "solve :: int_search([s1, s2, s3, s4, s5, s6], input_order, indomain_min, \
+         complete) satisfy;\n";
+      ])
+
+(* An eight-city tour whose cost may not exceed the optimum, as satisfaction: the search
+   meets conflicts, so its trace carries prevent lines and the cuts ahead of them (test_
+   mutation.ml's circuit lanes use the same scene). *)
+let circuit_tour_src =
+  {|predicate baguette_circuit(array [int] of var int: xs,array [int] of var int: pos,int: root);
+var 1..8: s1 :: output_var;
+var 1..8: s2 :: output_var;
+var 1..8: s3 :: output_var;
+var 1..8: s4 :: output_var;
+var 1..8: s5 :: output_var;
+var 1..8: s6 :: output_var;
+var 1..8: s7 :: output_var;
+var 1..8: s8 :: output_var;
+var 1..7: p2;
+var 1..7: p3;
+var 1..7: p4;
+var 1..7: p5;
+var 1..7: p6;
+var 1..7: p7;
+var 1..7: p8;
+var 0..9: c1;
+var 0..9: c2;
+var 0..9: c3;
+var 0..9: c4;
+var 0..9: c5;
+var 0..9: c6;
+var 0..9: c7;
+var 0..9: c8;
+constraint array_int_element(s1, [0, 4, 5, 2, 7, 8, 3, 2], c1);
+constraint array_int_element(s2, [2, 0, 1, 7, 9, 5, 1, 4], c2);
+constraint array_int_element(s3, [9, 9, 0, 6, 5, 3, 2, 5], c3);
+constraint array_int_element(s4, [4, 1, 5, 0, 5, 4, 3, 5], c4);
+constraint array_int_element(s5, [5, 6, 2, 6, 0, 7, 9, 4], c5);
+constraint array_int_element(s6, [3, 4, 8, 5, 2, 0, 9, 5], c6);
+constraint array_int_element(s7, [1, 5, 5, 9, 4, 7, 0, 7], c7);
+constraint array_int_element(s8, [5, 7, 8, 3, 4, 5, 5, 0], c8);
+constraint all_different_int([s1, s2, s3, s4, s5, s6, s7, s8]);
+constraint baguette_circuit([s1, s2, s3, s4, s5, s6, s7, s8], [p2, p3, p4, p5, p6, p7, p8], 1);
+constraint int_lin_le([1, 1, 1, 1, 1, 1, 1, 1], [c1, c2, c3, c4, c5, c6, c7, c8], 18);
+solve :: int_search([s1, s2, s3, s4, s5, s6, s7, s8], input_order, indomain_min, complete) satisfy;
+|}
+
+let test_circuit_veripb () =
+  let dir = Filename.temp_file "baguette_circuit" "" in
+  Sys.remove dir;
+  Sys.mkdir dir 0o700;
+  let saved = !Baguette_proof.Encoding.bits_above in
+  List.iter
+    (fun (enc, bits) ->
+      Baguette_proof.Encoding.bits_above := bits;
+      let solve file src = regular_solve dir ~file:(file ^ "_" ^ enc) src in
+      let _, outcome, opb, pbp = solve "circuit_sat" circuit_sat_src in
+      check
+        (Printf.sprintf "circuit (%s): the chain scene is SAT, its oracle accepts it" enc)
+        (match outcome with Search.Sat _ -> true | _ -> false);
+      run_veripb
+        ~name:(Printf.sprintf "circuit (%s): the chain scene's proof verifies" enc)
+        ~build:(fun _ -> (opb, pbp));
+      let _, outcome, opb, pbp = solve "circuit_tour" circuit_tour_src in
+      check
+        (Printf.sprintf "circuit (%s): the bounded tour scene is SAT" enc)
+        (match outcome with Search.Sat _ -> true | _ -> false);
+      check
+        (Printf.sprintf "circuit (%s): its proof carries cuts (a pol divided by 8)" enc)
+        (contains_sub ~needle:" 8 d ;" (read_file pbp));
+      run_veripb
+        ~name:(Printf.sprintf "circuit (%s): the bounded tour scene's proof verifies" enc)
+        ~build:(fun _ -> (opb, pbp));
+      List.iter
+        (fun (what, closed) ->
+          let _, outcome, opb, pbp =
+            solve ("circuit_" ^ what) (circuit_unsat_src ~closed)
+          in
+          check
+            (Printf.sprintf "circuit (%s): the %s scene is UNSAT" enc what)
+            (outcome = Search.Unsat);
+          run_veripb
+            ~name:
+              (Printf.sprintf "circuit (%s): the %s scene's refutation verifies" enc what)
+            ~build:(fun _ -> (opb, pbp)))
+        [ ("root_unsat", [ 1; 2; 3 ]); ("noroot_unsat", [ 4; 5; 6 ]) ])
+    [ ("order", None); ("bits", Some 0) ];
+  Baguette_proof.Encoding.bits_above := saved
+
+(* The test/models/circuit_*.fzn under BAGUETTE_DEBUG=1, through member's child (it
+   solves any file): every D-0026 agreement check, every advisor answer (I-P7). *)
+let test_circuit_debug_models () =
+  match bool_models_dir with
+  | None -> check "M18-coverage-T3: test/models/ found (the circuit debug lane ran)" false
+  | Some d ->
+      let models =
+        List.sort compare
+          (List.filter
+             (fun f ->
+               String.length f > 8
+               && String.sub f 0 8 = "circuit_"
+               && Filename.check_suffix f ".fzn")
+             (Array.to_list (Sys.readdir d)))
+      in
+      check "M18-coverage-T3: the four circuit models are there" (List.length models >= 4);
+      List.iter
+        (fun f ->
+          let rc =
+            Sys.command
+              (Printf.sprintf "BAGUETTE_DEBUG=1 %s --member-debug %s >/dev/null 2>&1"
+                 (Filename.quote Sys.executable_name)
+                 (Filename.quote (Filename.concat d f)))
+          in
+          check
+            (Printf.sprintf
+               "M18-coverage-T3: %s solves under BAGUETTE_DEBUG=1, every check passing \
+                (rc %d)"
+               f rc)
+            (rc = 0))
+        models
+
 (* ===================================================== M7-T33: alldiff conflicts learn
 
    D-0156. Until M7-T33 both of all_different's pigeonholes -- stage 1's Hall interval
@@ -9379,6 +10402,7 @@ let () =
   test_d0026_linear_pairing ();
   test_d0026_all_declared ();
   test_d0091_element_root_defining ();
+  test_d0214_element_reason_on_demand ();
   test_d0155_element_add_facts_oracle ();
   test_ix6_justification_snapshot ();
   test_ix6_cross_conflict_snapshot ();
@@ -9409,6 +10433,7 @@ let () =
   test_regin_filtering ();
   test_regin_consistency_oracle ();
   test_regin_staging ();
+  test_regin_gate_random ();
   test_regin_conclusion ();
   test_regin_mixed_currency ();
   test_regin_random_proofs ();
@@ -9470,6 +10495,7 @@ let () =
   test_cumulative_search ();
   (* M11-complexity-T3, D-0142: Linear's scratch array. *)
   test_linear_scratch ();
+  test_linear_in_range ();
   (* M7-T28, D-0146: regular. *)
   test_regular_brute_force ();
   test_regular_letter_reasons ();
@@ -9481,6 +10507,14 @@ let () =
   (* M7-T35, D-0189: member under the D-0026 agreement check. *)
   test_member_page_only_lemma ();
   test_member_debug_models ();
+  (* M18-coverage-T1, D-0206: table. *)
+  test_table_brute_force ();
+  test_table_veripb ();
+  test_table_debug_models ();
+  (* M18-coverage-T3, D-0217: circuit. *)
+  test_circuit_brute_force ();
+  test_circuit_veripb ();
+  test_circuit_debug_models ();
   if !failures > 0 then (
     Printf.printf "\n%d FAILURE(S)\n" !failures;
     exit 1)

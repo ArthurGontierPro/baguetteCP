@@ -95,6 +95,22 @@ type inverse = {
    (lib/core/prop/member.ml's header). *)
 type member = { mem_x : operand list; mem_y : operand; mem_b : operand list }
 
+(* M18-coverage-T1 (D-0206). `baguette_table(x, t, s)` (and `baguette_table_bool`, over
+   0..1), std's fzn_table_int / fzn_table_bool through mznlib/fzn_table_int.mzn: [tab_t]
+   is the tuples flattened row-major, [List.length tab_s] of them of [List.length tab_x]
+   values each, and [tab_s] the SELECTOR Booleans the library introduces, one per tuple.
+   They are PART OF THE RELATION: some selector is set, and every set selector names a
+   tuple equal to x (lib/core/prop/table.ml's header). *)
+type table = { tab_x : operand list; tab_t : int array; tab_s : operand list }
+
+(* M18-coverage-T3 (D-0217). `baguette_circuit(xs, pos, root)`, std's fzn_circuit through
+   mznlib/fzn_circuit.mzn: [cir_x] the successors of the nodes root, root + 1, ...,
+   [cir_pos] the POSITIONS of the nodes other than the root (root + 1 first), which the
+   library introduces and which are PART OF THE RELATION: the successors form one cycle
+   through every node and each position is its node's distance from the root along it
+   (lib/core/prop/circuit.ml's header). *)
+type circuit = { cir_x : operand list; cir_pos : operand list; cir_root : int }
+
 type cstr =
   | Int_lin_le of (int * int) list * int (* sum coeff*x_i <= rhs *)
   | Int_lin_eq of (int * int) list * int (* sum coeff*x_i  = rhs *)
@@ -217,6 +233,10 @@ type cstr =
   | Inverse of inverse
   (* M7-T28 (D-0159): see [member] above. *)
   | Member of member
+  (* M18-coverage-T1 (D-0206): see [table] above. *)
+  | Table of table
+  (* M18-coverage-T3 (D-0217): see [circuit] above. *)
+  | Circuit of circuit
 
 (* [c_id] is the FlatZinc builtin as written (`int_max`, `array_int_maximum`, ...), or "" for
    a constraint no FlatZinc item wrote (the `int_eq` tying a gcc copy, D-0146 section 2). Two
@@ -382,6 +402,15 @@ let string_of_cstr t = function
       Printf.sprintf "member([%s], %s)"
         (String.concat ", " (List.map (string_of_operand t) mb.mem_x))
         (string_of_operand t mb.mem_y)
+  | Table tb ->
+      Printf.sprintf "table([%s], %d tuples)"
+        (String.concat ", " (List.map (string_of_operand t) tb.tab_x))
+        (List.length tb.tab_s)
+  | Circuit c ->
+      Printf.sprintf "circuit([%s] from %d, positions [%s])"
+        (String.concat ", " (List.map (string_of_operand t) c.cir_x))
+        c.cir_root
+        (String.concat ", " (List.map (string_of_operand t) c.cir_pos))
 
 let to_string t =
   let b = Buffer.create 256 in
@@ -770,6 +799,40 @@ let check_assignment (t : t) (values : int array) : bool =
         List.length mb.mem_x = List.length mb.mem_b
         && List.exists (fun b -> value b = 1) mb.mem_b
         && List.for_all2 (fun x b -> value b = 0 || value x = y) mb.mem_x mb.mem_b
+    (* M18-coverage-T1 (D-0206), over x AND the selectors: one selector is set and every
+       set selector's tuple is x. *)
+    | Table tb ->
+        let n = List.length tb.tab_x in
+        let xv = Array.of_list (List.map value tb.tab_x) in
+        Array.length tb.tab_t = n * List.length tb.tab_s
+        && List.exists (fun s -> value s = 1) tb.tab_s
+        && List.for_all
+             (fun (k, s) ->
+               value s = 0
+               || Array.for_all Fun.id
+                    (Array.init n (fun i -> xv.(i) = tb.tab_t.((k * n) + i))))
+             (List.mapi (fun k s -> (k, s)) tb.tab_s)
+    (* M18-coverage-T3 (D-0217), over the successors AND the positions: walking from the
+       root visits every node once and comes back, and the node reached after d steps
+       has position d. *)
+    | Circuit c ->
+        let n = List.length c.cir_x in
+        let xv = Array.of_list (List.map value c.cir_x) in
+        let pv = Array.of_list (List.map value c.cir_pos) in
+        let r = c.cir_root in
+        let seen = Array.make n false in
+        let rec walk node d =
+          if d = n then node = r
+          else
+            let k = node - r in
+            k >= 0 && k < n
+            && (not seen.(k))
+            && (k = 0 || pv.(k - 1) = d)
+            &&
+            (seen.(k) <- true;
+             walk xv.(k) (d + 1))
+        in
+        n >= 2 && Array.length pv = n - 1 && walk r 0
   in
   let domains_ok =
     let ok = ref true in

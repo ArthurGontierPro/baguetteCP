@@ -118,6 +118,12 @@ type t = {
       (* the id of a row with NO literal that is false -- fixed-start load alone exceeds
          the capacity -- which nothing can be pushed against; reported as the conflict
          `pol <cid>` on the first run, [Linear]'s ground-contradiction route. *)
+  overload : (int * int) option;
+      (* M22-review-T2: the id and time of a row WITH literals whose fixed-start load
+         alone exceeds the capacity ([avail < 0]). It is false whatever the movable tasks
+         do, but [pass] only reads times inside a movable task's own window, so nothing
+         reported it. [propagate] does, on the first run: the row plus each task's free
+         [I_k >= 0] ([drop_summands]) closes to [0 >= -avail]. *)
 }
 
 let name = "cumulative"
@@ -182,12 +188,12 @@ let make store enc ~cap (specs : (start * int * int) list) =
     @ Array.to_list (Array.map (fun tk -> tk.dhi + tk.dur) tasks)
   in
   match starts with
-  | [] -> { tasks; rows = [||]; t0 = 0; enc; ground = None }
+  | [] -> { tasks; rows = [||]; t0 = 0; enc; ground = None; overload = None }
   | _ ->
       let t0 = List.fold_left Int.min max_int starts in
       let t1 = List.fold_left Int.max min_int ends in
       let rows = Array.make (Int.max 0 (t1 - t0)) None in
-      let ground = ref None in
+      let ground = ref None and overload = ref None in
       for t = t0 to t1 - 1 do
         let fixed_load =
           List.fold_left
@@ -209,9 +215,10 @@ let make store enc ~cap (specs : (start * int * int) list) =
           let terms = merge_terms (List.rev !terms) in
           let cid = Encoding.add_constraint enc (Opb.le terms (avail - !folded)) in
           rows.(t - t0) <- Some { rt = t; avail; cid };
-          if terms = [] && !folded > avail && !ground = None then ground := Some cid)
+          if terms = [] && !folded > avail && !ground = None then ground := Some cid
+          else if avail < 0 && !overload = None then overload := Some (cid, t))
       done;
-      { tasks; rows; t0; enc; ground = !ground }
+      { tasks; rows; t0; enc; ground = !ground; overload = !overload }
 
 let row_at t time =
   let i = time - t.t0 in
@@ -230,9 +237,14 @@ type snap = {
   s_hi_root : bool;
 }
 
+(* D-0214: [Store.at_root], one comparison, where [Store.level_of_index sup = 0] was a
+   binary search over the open levels -- the same answer by I-T2 (the marks are monotone,
+   so an entry is at level 0 iff it precedes the first mark), and the move alldiff.ml made
+   in D-0161 (request 1). Asked twice per task per snapshot, the search was 12 % of this
+   module's samples on rcpsp without learning or proof (D-0207's profile). *)
 let established_at_root store v ~lower =
   let sup = if lower then Store.lo_support store v else Store.hi_support store v in
-  sup = Store.no_support || Store.level_of_index store sup = 0
+  sup = Store.no_support || Store.at_root store sup
 
 let snap_of store tk =
   let d = Store.get store tk.x in
@@ -579,7 +591,20 @@ let propagate t store =
            (Reason.because ~concludes:None Reason.none
               (Explanation.combine [ cite 1 cid ] 1)))
   | None -> (
-      try
-        loop t store;
-        Propagator.Fixpoint
-      with Found c -> Propagator.Conflict c)
+      match t.overload with
+      | Some (cid, time) ->
+          let snaps = Array.to_list (Array.map (snap_of store) t.tasks) in
+          let frees =
+            List.concat_map
+              (fun s -> if in_row s ~time then drop_summands t s ~time else [])
+              snaps
+          in
+          Propagator.Conflict
+            (Store.conflict store
+               (Reason.because ~concludes:None Reason.none
+                  (Explanation.combine (cite 1 cid :: frees) 1)))
+      | None -> (
+          try
+            loop t store;
+            Propagator.Fixpoint
+          with Found c -> Propagator.Conflict c))

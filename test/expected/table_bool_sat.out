@@ -1,0 +1,2 @@
+a = array1d(1..4, [false, false, true, true]);
+----------

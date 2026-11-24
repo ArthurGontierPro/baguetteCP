@@ -185,6 +185,8 @@ module Cumulative = Baguette_core.Cumulative
 module Regular = Baguette_core.Regular (* M7-T28, D-0146 *)
 module Inverse = Baguette_core.Inverse (* M7-T28, D-0151 *)
 module Member = Baguette_core.Member (* M7-T28, D-0159 *)
+module Table = Baguette_core.Table (* M18-coverage-T1, D-0206 *)
+module Circuit = Baguette_core.Circuit (* M18-coverage-T3, D-0217 *)
 module View = Baguette_core.View
 
 (* M2-L12/D-0052: the clause propagator was widened to general order literals and its
@@ -788,6 +790,14 @@ let held_families (m : Model.t) : (int, string list) Hashtbl.t =
           (* M7-T28 (D-0159, D-0170): every line is a [Clause] over the ladders of x
              and y, and so are the threshold lemmas written ahead of some *)
           hold "member" (mb.Model.mem_y :: mb.Model.mem_x)
+      | Model.Table tb ->
+          (* M18-coverage-T1 (D-0206): DEF_t names x's order literals per tuple value,
+             and every line is a [Clause] over x's ladder *)
+          hold "table" tb.Model.tab_x
+      | Model.Circuit c ->
+          (* M18-coverage-T3 (D-0217): every arc's guard is over succ's order literals;
+             the positions are linear terms and stay eligible for bits *)
+          hold "circuit" c.Model.cir_x
       | Model.Int_lin_le _ | Model.Int_lin_eq _ | Model.Int_le _ | Model.Int_lt _
       | Model.Int_eq _ | Model.Bool_clause _ | Model.Array_bool_or _
       | Model.Array_bool_and _ | Model.Bool_eq _ | Model.Bool_not _
@@ -873,6 +883,8 @@ let e2e_spec (names : string array) (con : Model.constr) : Baguette_proof.E2e.sp
       E.Min (op x, op y, op m)
   | Model.Array_int_maximum (m, xs) -> E.Array_max (List.map op xs, op m)
   | Model.Array_int_minimum (m, xs) -> E.Array_min (List.map op xs, op m)
+  | Model.Table _ -> E.refuse "table is not covered by --e2e"
+  | Model.Circuit _ -> E.refuse "circuit is not covered by --e2e"
   | Model.Inverse iv ->
       E.Inverse
         ( List.map op iv.Model.inv_f,
@@ -1803,6 +1815,207 @@ let compile (m : Model.t) : t =
             p);
       ]
   in
+  (* ------------------------------------------------------------- M18-coverage-T1
+
+     `baguette_table(x, t, s)`, D-0206 section 2: ALO over the selectors, and per tuple
+     one DEF row `k ~s_t + sum_i ([x_i >= t_i] + ~[x_i >= t_i + 1]) >= k`, a literal a
+     declared bound makes true dropped, the row the unit `~s_t` when one is false (a
+     value outside a declared hull, or a constant cell that differs), and no row when
+     none is left. Rows in tuple order, after ALO. *)
+  let post_table pos (tb : Model.table) =
+    let builtin = "baguette_table" in
+    let decl i =
+      let d = Store.get store (Var.of_int i) in
+      (Domain.lo d, Domain.hi d)
+    in
+    let xs = Array.of_list tb.Model.tab_x and ss = Array.of_list tb.Model.tab_s in
+    let n = Array.length xs and nt = Array.length ss in
+    if Array.length tb.Model.tab_t <> n * nt then
+      Error.failf pos
+        "builtin `%s`: %d tuple values for %d tuples of %d; there must be one per cell"
+        builtin (Array.length tb.Model.tab_t) nt n;
+    let letters =
+      List.filter_map
+        (function Model.Var i -> Some i | Model.Const _ -> None)
+        tb.Model.tab_x
+    in
+    let svars =
+      Array.map
+        (function
+          | Model.Var i when decl i = (0, 1) && not (List.mem i letters) -> i
+          | _ ->
+              Error.failf pos
+                "builtin `%s`: a selector is not a Boolean variable declared on 0..1 and \
+                 distinct from x"
+                builtin)
+        ss
+    in
+    if List.length (List.sort_uniq compare (Array.to_list svars)) <> nt then
+      Error.failf pos "builtin `%s`: a selector occurs twice" builtin;
+    let cells =
+      Array.map
+        (function
+          | Model.Const c -> Table.Fixed c
+          | Model.Var i ->
+              let dlo, dhi = decl i in
+              Table.Cell { var = Var.of_int i; name = name_of pos i; dlo; dhi })
+        xs
+    in
+    let slit k = Lit.ge (name_of pos svars.(k)) 1 in
+    ignore (Encoding.add_constraint encoding (Opb.clause (List.init nt slit)) : int);
+    for k = 0 to nt - 1 do
+      match Table.def_lits cells (Array.sub tb.Model.tab_t (k * n) n) with
+      | None ->
+          ignore
+            (Encoding.add_constraint encoding (Opb.clause [ Lit.negate (slit k) ]) : int)
+      | Some [] -> ()
+      | Some ls ->
+          let kk = List.length ls in
+          ignore
+            (Encoding.add_constraint encoding
+               (Opb.ge ((kk, Lit.negate (slit k)) :: List.map (fun l -> (1, l)) ls) kk)
+              : int)
+    done;
+    let aliased = List.length (List.sort_uniq compare letters) <> List.length letters in
+    let p =
+      Table.make store ~xs:cells ~tuples:tb.Model.tab_t ~sels:(Array.map Var.of_int svars)
+    in
+    if aliased then
+      [
+        (fun id ->
+          Propagator.pack ~id
+            (module Table.Aliased : Propagator.S with type t = Table.t)
+            p);
+      ]
+    else
+      [
+        (fun id ->
+          Propagator.pack ~idempotent:true ~id
+            (module Table : Propagator.S with type t = Table.t)
+            p);
+      ]
+  in
+  (* ------------------------------------------------------------- M18-coverage-T3
+
+     `baguette_circuit(succ, pos, root)`, D-0217 section 2 and lib/core/prop/circuit.ml's
+     header: per node u and declared successor v (v <> u, v in S), GE(u, v) and LE(u, v)
+     when neither is the root, LE(r, v) from the root, END(u) into it, the guard
+     `n ~[succ_u >= v] + n [succ_u >= v+1]` over succ_u's order literals, and pos
+     expanded as any linear term. A declared value outside S, or u itself, gets a unit
+     row (mznlib's restrictions usually leave none); a constant successor that is one is
+     the empty row. Rows node by node, values increasing, GE before LE. *)
+  let post_circuit pos (c : Model.circuit) =
+    let builtin = "baguette_circuit" in
+    let xs = Array.of_list c.Model.cir_x and ps = Array.of_list c.Model.cir_pos in
+    let n = Array.length xs and root = c.Model.cir_root in
+    if n < 2 then Error.failf pos "builtin `%s`: fewer than two nodes" builtin;
+    if Array.length ps <> n - 1 then
+      Error.failf pos "builtin `%s`: %d positions for %d nodes; there must be n - 1"
+        builtin (Array.length ps) n;
+    let cell_of = function
+      | Model.Const k -> Circuit.Fixed k
+      | Model.Var i ->
+          let d = Store.get store (Var.of_int i) in
+          Circuit.Cell
+            {
+              var = Var.of_int i;
+              name = name_of pos i;
+              dlo = Domain.lo d;
+              dhi = Domain.hi d;
+            }
+    in
+    let succ = Array.map cell_of xs and pcells = Array.map cell_of ps in
+    let pvars =
+      List.filter_map
+        (function Model.Var i -> Some i | Model.Const _ -> None)
+        c.Model.cir_pos
+    and svars =
+      List.filter_map
+        (function Model.Var i -> Some i | Model.Const _ -> None)
+        c.Model.cir_x
+    in
+    if
+      List.length (List.sort_uniq compare pvars) <> List.length pvars
+      || List.exists (fun i -> List.mem i svars) pvars
+    then
+      Error.failf pos
+        "builtin `%s`: a position occurs twice, or is also a successor; the library \
+         introduces them fresh"
+        builtin;
+    (* The big-M of the guards is n, valid only over positions inside 1..n-1. *)
+    Array.iter
+      (function
+        | Circuit.Fixed k ->
+            if k < 1 || k > n - 1 then
+              Error.failf pos "builtin `%s`: a constant position outside 1..%d" builtin
+                (n - 1)
+        | Circuit.Cell { dlo; dhi; _ } ->
+            if dlo < 1 || dhi > n - 1 then
+              Error.failf pos
+                "builtin `%s`: a position declared outside 1..%d (the library declares \
+                 them 1..n-1)"
+                builtin (n - 1))
+      pcells;
+    let add row = Encoding.add_constraint encoding (Opb.normalise row) in
+    (* sum n * guard + sum coeff * pos >= rhs, pos given as (coeff, node offset). *)
+    let row ~guard ~pterms ~rhs =
+      let vterms, fixed =
+        List.fold_left
+          (fun (vt, fx) (co, k) ->
+            match pcells.(k - 1) with
+            | Circuit.Fixed v -> (vt, fx + (co * v))
+            | Circuit.Cell { name; _ } -> ((co, name) :: vt, fx))
+          ([], 0) pterms
+      in
+      let lits, const = Encoding.linear_terms_int_lin_le encoding (List.rev vterms) in
+      Opb.ge (List.map (fun g -> (n, g)) guard @ lits) (rhs - const - fixed)
+    in
+    let ge = Array.make (n * n) (-1) and le = Array.make (n * n) (-1) in
+    Array.iteri
+      (fun k sc ->
+        let self = root + k in
+        let declared v =
+          match sc with
+          | Circuit.Fixed c -> v = c
+          | Circuit.Cell { var; _ } -> Domain.mem (Store.get store var) v
+        in
+        (* The values R removes, each its own unit row. *)
+        (match sc with
+        | Circuit.Fixed c ->
+            if c < root || c > root + n - 1 || c = self then
+              ignore (Encoding.add_constraint encoding (Opb.clause []) : int)
+        | Circuit.Cell { name; dlo; dhi; _ } ->
+            if dlo < root then
+              ignore
+                (Encoding.add_constraint encoding (Opb.clause [ Lit.ge name root ]) : int);
+            if dhi > root + n - 1 then
+              ignore
+                (Encoding.add_constraint encoding
+                   (Opb.clause [ Lit.negate (Lit.ge name (root + n)) ])
+                  : int);
+            if declared self then
+              ignore
+                (Encoding.add_constraint encoding (Opb.clause (Circuit.guard sc self))
+                  : int));
+        for j = 0 to n - 1 do
+          let v = root + j in
+          if j <> k && declared v then
+            let guard = Circuit.guard sc v in
+            if j = 0 then le.(k * n) <- add (row ~guard ~pterms:[ (1, k) ] ~rhs:(n - 1))
+            else if k = 0 then le.(j) <- add (row ~guard ~pterms:[ (-1, j) ] ~rhs:(-1))
+            else (
+              ge.((k * n) + j) <- add (row ~guard ~pterms:[ (1, j); (-1, k) ] ~rhs:1);
+              le.((k * n) + j) <- add (row ~guard ~pterms:[ (1, k); (-1, j) ] ~rhs:(-1)))
+        done)
+      succ;
+    let p = Circuit.make ~root ~succ ~pos:pcells ~ge ~le in
+    [
+      (fun id ->
+        Propagator.pack ~advise:Circuit.advisor ~id
+          (module Circuit : Propagator.S with type t = Circuit.t)
+          p);
+    ]
+  in
   (* ===================================================================== end M7-T28 *)
   (* ------------------------------------------------------------------------ M4-T9
 
@@ -2543,6 +2756,8 @@ let compile (m : Model.t) : t =
             | Model.Regular r -> post_regular pos r (* M7-T28, D-0146 *)
             | Model.Inverse iv -> post_inverse pos iv (* M7-T28, D-0151 *)
             | Model.Member mb -> post_member pos mb (* M7-T28, D-0159 *)
+            | Model.Table tb -> post_table pos tb (* M18-coverage-T1, D-0206 *)
+            | Model.Circuit c -> post_circuit pos c (* M18-coverage-T3, D-0217 *)
           with Checked.Overflow msg ->
             reject_row pos
               ~what:
