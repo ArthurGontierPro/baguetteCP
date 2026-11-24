@@ -28025,3 +28025,295 @@ refusals of four families are the search's heap (WORKLOG cross-session request, 
 the retention policy), and ihtc's root is 5.1 GB of which the copies were 0.8 GB. Shaw's
 rules are not asked for by these numbers either; they would change the search, and the
 search's memory is what fills the heap.
+
+## D-0218  M21-memory-T1/T2: where the heap goes. OCaml's own representation costs a factor 2.5 to 4 on record-heavy kinds and the GC's free space a factor 1.5 to 5 on the budget, but the search refusals come from what we KEEP: a hole bitset copied per pruning, a deferred explanation of 0.5 KB per trail entry, a learned clause of 27 KB (96 literals) kept forever, a front-end model and per-instance closures nobody frees. Measurement only, `lib/` and `bin/` unchanged (the probe is a patch)
+
+**Status**: MEASURED (agent-memory2, resuming agent-memory, `wave66-memory`, 2026-11-24). Nothing to
+revert, the branch lands documentation only. The instrumentation, its runs and their scripts are in
+`fataepyc-06:/cluster/arthur/baguette-results/memory/`: `memprobe.patch` (applies to this branch and
+to main `838f668`), `scripts/` (flatten, run, queue and table scripts), `runs/` (every probe file,
+`time -v` and stderr), `tables/` (`kinds-v4.tsv` per kind and element, `refpoints-v4.tsv`,
+`rss.tsv`, `gc.tsv`).
+
+### 1. The question, and what a refusal measures
+
+The user asked whether baguette's memory is OCaml's overhead or our data structures, with sound
+structures the overhead should be small. The trigger is D-0185's arm A, where 314 of 1 574 Challenge
+instances are REFUSED at the heap budget. Two facts about that budget come first, because they
+change what "refused" means.
+
+- The series runs every solver under `ulimit -v` 16 GiB and gives baguette `--max-heap-mb` of
+  HALF that (`scripts/compare_run.sh`, `MEM_KB / 1024 / 2`). A refusal is an OCaml major heap of
+  8 GiB, not 16.
+- The budget reads `Gc.quick_stat().heap_words`, plus the major words allocated since the last
+  cycle (D-0200). That is the size of the major heap, live data AND the free space the GC has not
+  given back. OCaml 5.1 has no compaction. So the budget also counts the GC's slack.
+
+Of the 314, 251 had written more than 10 MB of proof when they died (they died in the SEARCH), and
+63 had not (49 of them before the `.opb` was complete, i.e. in the encoding or the root
+propagation). Read from `results_A.tsv`, column 9.
+
+### 2. Method
+
+**The probe** (`memprobe.patch`, `lib/proof/memprobe.ml` plus registrations in `bin/main.ml`,
+`lib/core/search.ml`, `lib/core/engine.ml`; inert unless `BAGUETTE_MEMPROBE=<file>`). At a probe
+point it runs `Gc.full_major`, reads `Gc.stat` (live words, heap words, blocks) and walks the heap
+from named ROOTS, one KIND per list of roots, with `Obj` and an explicit stack. The visited set is
+a Bigarray outside the OCaml heap (open addressing on the block address, valid because OCaml 5.1's
+major heap does not move and the minor heap is empty right after `full_major`), so the probe does
+not grow what it measures.
+
+**Double counting.** The kinds are walked in a fixed order over ONE visited set, so a block shared
+by two kinds is charged to the first that reaches it, and the sum of the kinds plus `unattributed`
+(live words minus that sum) is exactly the live heap. The order is data first, then the model's
+propagator instances, then what the search adds: front-end model, domains, names, the encoding's
+per-variable records, the bound history (D-0124), the hash-consing table, the proof writer's live
+set and tags, the model's instances by family, the subscriptions, the trail and its reasons, the
+trace, the learned-constraint database, the learned engine instances, then the rest of each record.
+The order matters and the first version had it wrong: with the learned constraints before the
+model's instances, a learned instance's closures reach the engine and swallowed every model
+instance (steiner's 83 learned clauses showed 1.3 GB). The runs reported here use the corrected
+order (binary `c0f9f294`); the first binary's runs are kept only where the order cannot matter
+(the compile probe, before any trail or learned constraint exists, and the RSS arms, which run
+without the probe).
+
+For each kind the probe also records the block-shape histogram (tag, size), the twelve most
+frequent and the eight heaviest. That is what says a kind is list cells, Hashtbl buckets, closures
+or byte strings, and it is the evidence section 5 splits on.
+
+**Probe points.** After parsing, after the encoding, after the proof is opened, at nodes 1, 1 000,
+10 000 and 100 000 (the conflict count is recorded with each), at every crossing of 0.5, 1, 2, 4,
+8 and 16 GiB of major heap (taken inside the GC alarm, because one root propagation or one conflict
+analysis can cross several thresholds without reaching a node), and at exit. A run stops after its
+16 GiB probe. Each probe costs a full major cycle, which changes the GC's pacing and so the heap's
+SIZE, in both directions as measured (section 8), and a probed run's RSS includes the visited set
+(16 bytes per live block). Heap sizes and peak RSS are therefore taken from separate unprobed runs;
+the probe gives the LIVE data and its split.
+
+**Runs.** fataepyc-06, 4 runs at a time, each in its own `systemd-run --scope -p MemoryMax=80G`,
+`--max-heap-mb 65536`, 300 s, flattened with this branch's mznlib (main `838f668` merged). Dev build
+of this branch with the patch applied: probe binary `c0f9f294` (md5); the RSS arms used `3eb4db60`,
+the same source without the reordering, the probe off. Chuffed and Gecode are the MiniZinc 2.10.1
+bundle's `fzn-chuffed` and `fzn-gecode` on their own flattening, 300 s.
+
+Instances: eight refused in arm A, chosen across the two moments (wordpress 7, travelling-thief r49,
+rcpsp-wet-diverse j90 and ihtc i06 die early, proteindesign 1HZ5 9aa, community-detection Sampson,
+tdtsp 10_53 and mapping mesh3x3_2 die in the search), steelmillslab 13_0 (a time-out whose heap grows,
+D-0220), four that solve (travelling-thief r46, steiner t4_k4_N10, code-generator pegwit, mrcpsp
+j30_25_5), and one instance of eight more refused families for the census (vrp, groupsplitter, is,
+cargo, grid-colouring, pattern-set-mining, roster-shifts-bool, rel2onto), with proof only.
+
+### 3. T1: what the heap holds when it reaches the budget
+
+With proof, as in arm A. "At" is the probe that stands for the refusal (the first whose major heap
+reached 8 GiB, else the last). Live is after a full major cycle. Kinds as in section 2. The last
+column is the peak major heap of an UNPROBED run of the same binary (`top_heap_words`, proof,
+300 s), because the probe's forced cycles change the heap's size (section 8).
+
+| instance | dies in | probe | live | what is live | unprobed peak heap |
+|---|---|---|---|---|---|
+| wordpress 7 | root propagation, node 1 | 16 GiB crossing, 23 s | 33.0 G | trail 98 % (32.3 G of hole bitsets, a 122 KB copy per pruning), writer live set 2 % | refused at 64 GiB in 55 s (without proof) |
+| travelling-thief r49 | root, then search | node 1 000 | 5.1 G | trail 68 % (2.1 M entries: 2.09 G hole bitsets, 1.38 G entries and their deferred reasons), writer live set 13 %, justify 6 %, trace 5 % | 15.0 G |
+| proteindesign 1HZ5 9aa | search | node 224 | 1.45 G | trail 49 % (0.43 G hole bitsets), writer live set 13 %, justify 6 %, trace 5 % | 5.0 G (no longer refused on this main, section 8) |
+| tdtsp 10_53 | search | node 27 | 3.2 G | proof-side explanations 99 % (trail 55 %, hash-consed nodes 44 %), about 1 400 cited model rows per pruning; the probed run passes 16 G of heap at node 268 | 32.2 G |
+| community-detection Sampson | search | 174 k conflicts | 4.8 G | learned clauses 100 % (instances 78 %, their subscriptions 12 %, the database's key strings 10 %) | 8.4 G |
+| mapping mesh3x3_2 | search | exit, 1 919 conflicts | 3.4 G | learned PB rows 79 %, hash-consed explanation nodes 17 % | (RSS 6.4 G without proof) |
+| steelmillslab 13_0 (time-out) | search | exit | 1.2 G | learned clauses 88 % | (RSS 4.1 G without proof) |
+| rcpsp-wet-diverse j90 | the encoding | after the encoding | 7.5 G | model instances 51 % (array_bool_and 37 %), subscriptions 18 %, front-end model 10 %, integer-variable records 9 %, engine arrays 7 % | refused at 8 GiB in the encoding, 119 s |
+| ihtc i06 | the encoding | after the encoding | 4.4 G | subscriptions 17 %, int_lin_le 16 %, front-end model 11 %, integer-variable records 10 %, int_eq_reif 10 %, array_bool_and 10 % | refused at 8 GiB in the encoding, 128 s; 23.5 G at 64 GiB |
+
+Per element, the same runs (bytes as stored, headers and everything reachable included):
+
+| element | measured | where |
+|---|---|---|
+| a trail entry, without hole bitsets | 410 to 660 B (steelmill 497, mapping 504, ttp r49 645) | every run |
+| an interior removal on a variable of span s | s / 8 B more (122 KB on wordpress's 974 300-wide variable, about 1 KB on ttp) | the bitset is copied, never mutated (`domain.ml`, I-T1) |
+| a learned clause or PB row, per literal | 270 to 330 B (community 98 literals and 27.8 KB per clause, steelmill 413 and 115 KB, ttp 129 and 35 KB, mapping 1 976 terms and 0.65 MB per PB row) | every learning run |
+| a model instance | array_bool_and 800 B (2.3 variables), int_eq_reif 920 B, bool2int 280 B, bool_clause 830 to 1 180 B, int_lin_le 280 to 360 B per term | the encoding |
+| a subscription (variable, instance) | 104 to 143 B for a model instance, 34 B for a learned one | the encoding, the search |
+| an integer variable (encoding record, domain, name) | about 345 B | the encoding |
+| a FlatZinc constraint, kept after the encoding | 310 to 400 B | the front end |
+| a live proof id (writer) | 131 to 150 B (tdtsp, mapping) | proof runs |
+| an explanation node citing model rows | 40 B per cited row | tdtsp, mapping |
+
+The eager ORDER literals are not in this list because they are not in the heap. wordpress declares
+15.3 M ladder clauses and its heap after the encoding is 4 MB: the ladder is written to the `.opb`
+and its literals are names computed on demand. What lives per value is only a direct encoding's
+three hash tables (proteindesign, 47 MB for 159 k variables) and the hole bitsets above.
+
+**As a function of conflicts.** The learning families grow linearly and do not stop, because
+keep-all never deletes (D-0051): community 27.8 KB per conflict (1.36 G at 50 k conflicts, 7.9 G at
+283 k), steelmill 115 KB, ttp 35 KB, mapping 0.65 MB per learned PB row plus 0.15 MB of hash-consed
+explanation nodes, which is D-0220's 0.3 to 2.8 MB per conflict once the GC's free space is added.
+The trail families (wordpress, ttp, proteindesign) reach their size at the root and stay flat.
+
+### 4. Peak RSS against Chuffed and Gecode, and the bits encoding
+
+Unprobed, `--no-proof`, 300 s (MB; baguette default is `--bits-above` default, "order" is
+`--bits-above none`):
+
+| instance | baguette | baguette order | Chuffed | Gecode |
+|---|---|---|---|---|
+| wordpress 7 | 67 245 (refused at 64 GiB, 55 s) | 67 844 (refused) | 522 | 26 |
+| travelling-thief r49 | 7 427 | 48 126 | 146 | 33 |
+| proteindesign 1HZ5 9aa | 3 484 | 3 481 | 849 | 45 |
+| community-detection Sampson | 11 293 | 11 714 | 159 | 25 |
+| tdtsp 10_53 | 834 | 1 859 | 118 | 27 |
+| rcpsp-wet-diverse j90 | 29 798 | 30 375 | 4 772 | 2 807 |
+| mapping mesh3x3_2 | 6 418 | 14 439 | 86 | 26 |
+| ihtc i06 | 10 986 | 70 968 (killed) | 11 143 | 664 |
+| steelmillslab 13_0 | 4 067 | 2 361 | 565 | 68 |
+| travelling-thief r46 (solved) | 820 | 42 275 | 58 | 28 |
+| steiner t4_k4_N10 (solved) | 2 361 | 2 360 | 868 | 125 |
+| code-generator pegwit (solved) | 2 843 | 2 846 | 551 | 294 |
+| mrcpsp j30_25_5 (solved) | 822 | 841 | 11 | 26 |
+
+Chuffed, the eager LCG solver, is as large as baguette on ihtc (both about 11 GB) and within 6x on
+rcpsp: an encoding of millions of constraints costs a C++ solver too. Where baguette is 40 to 130
+times Chuffed (wordpress, ttp r49, community, mapping, mrcpsp) the difference is the search's
+memory, not the model's. Gecode, copying with recomputation and no learning, stays under 300 MB
+everywhere but the two encoding-heavy instances. The bits encoding (D-0201's default) is what keeps
+ttp and ihtc in reach at all: the order encoding takes ttp r46 from 0.8 to 42 GB and ihtc past
+64 GiB.
+
+### 5. T2: the overhead, attributed
+
+**The ideal, stated.** For each kind, what a C++ solver of the same family stores per element:
+
+| element | ideal (C++) | whose layout |
+|---|---|---|
+| trail entry | 16 B: the literal or the variable and its old bound (2 x int32), a reason reference (8 B) | Chuffed's `trail` plus its `Reason` |
+| interior value removal | 16 B: a trail entry; the domain's bitset is mutated in place and restored from the entry | Gecode and Chuffed both trail the change, not the domain |
+| learned clause of w literals | 28 + 4w B: header, activity, int32 literals, two 8-byte watches | Chuffed `Clause` |
+| learned PB row of n terms | 16 + 8n B: int32 coefficient and literal per term | RoundingSat's constraint store |
+| model propagator instance | 32 + 8 B per scope variable | a Gecode propagator and its view array |
+| subscription (variable, instance) | 8 B | Gecode's subscription array |
+| integer variable | 32 B: bounds, ladder base id, hole-set pointer, flags | |
+| FlatZinc constraint after the encoding | 0 B: the parser's tree is freed once the solver is built | Chuffed, Gecode |
+| cited model row in a kept explanation | 4 B: an int32 id | |
+| major heap over live data | 1.1 to 1.3: malloc's own fragmentation | |
+
+**The split.** A kind's measured bytes A are compared with C, the bytes the SAME design would take in
+C++: every block's header and the pointer that reaches it removed (2 words per block, which is what a
+list cell, a boxed record in an array, a `Hashtbl` bucket, a closure or a variant constructor costs
+over its contents), every other word stored at 4 bytes, a byte string's bytes kept as they are. A/C
+is OCaml's representation (computed per kind from the probe's word and block counts, column
+`ocaml_factor` of `tables/kinds-v4.tsv`). C/I, against the ideal I above, is our design: what we keep, how many
+times, and for how long. A/I = A/C x C/I.
+
+| kind | share of the live heap at refusal | A per element | A/I | OCaml's (A/C) | ours (C/I) | what "ours" is |
+|---|---|---|---|---|---|---|
+| hole bitsets copied per removal | wordpress 98 %, ttp r49 41 %, proteindesign 30 % | s/8 B per removal (122 KB on wordpress) | 60 (ttp) to 7 600 (wordpress) | 1.0 | all of it | `Domain.remove` copies the bitset (I-T1), and the trail keeps every copy (`old` and `now` of each entry) |
+| trail entry and its deferred reason | ttp r49 27 %, proteindesign 20 %, code-generator 12 % | 410 to 660 B | 25 to 40 | 2.8 to 3.8 | 8 to 11 | each entry keeps two `Domain.t` records, a `Reason` record and a deferred explanation of 3 to 4 closures and a lazy that capture the propagator's snapshot |
+| learned clauses and PB rows | community 100 %, steelmill 88 %, mapping 79 %, tdtsp (no proof) 76 % | 270 to 330 B per literal | 66 (clause, community) | 3.2 | 21 | the row held as OCaml terms more than once (the `Learned.t` term list, the propagator's literals, the proof row), a canonical key string of 27 B per literal kept only to count duplicates (`Retention.add`), one subscription per literal (no watched literals, D-0052) where Chuffed has two per clause; and keep-all (D-0051), which multiplies the COUNT, not counted in this column |
+| proof-side explanations kept alive | tdtsp 99 %, mapping 17 %, ttp r49 24 % (writer live set, justify, trace), proteindesign 24 % | 40 B per cited row; 131 to 150 B per live proof id | 10 (cited row) | 7.9 | 1.3 per element, unbounded in count | a `Model_row of int` is a 2-word block in a 3-word list cell for 4 bytes of content; and the explanations stay on the trail and in the hash-consing table after their line is written |
+| model propagator instances | rcpsp 51 %, ihtc 50 %, steiner 44 % | array_bool_and 800 B, int_lin_le 280 to 360 B per term | 16 (array_bool_and), 38 (a linear term) | 4.0 to 4.1 | 4 to 9 | every instance carries four closures, a lazy and prebuilt literal lists for its proof rows; a linear row is held as a term list, arrays and its PB row |
+| subscriptions | rcpsp 18 %, ihtc 17 %, steiner 15 %, code-generator 13 % | 104 to 143 B | 13 to 18 | 2.9 to 3.3 | 5 to 6 | three indexes over the same pairs (`watchers` as a `Hashtbl` of lists, `triggers`, `scopes`) |
+| integer variable records | 8 to 10 % at the encoding | about 345 B | 11 | 2.6 | 4 | a 16-field record and three hash tables created per variable, empty or not |
+| front-end model | rcpsp 10 %, ihtc 11 %, steiner 9 % | 310 to 400 B per constraint | no ideal (0) | 3.4 | all of it | `Model.t` stays reachable from `main.ml` for the solution check and the output |
+| GC free space, counted by the budget | about 2 x live at the encoding (ihtc refused at 9.2 G of heap, 4.4 G live once encoded), 1.7 to 5 x in the search (unprobed peak heap over live: community 1.7, ttp r49 2.9, proteindesign 3.5, ihtc 5.1; groupsplitter 5.4 and rel2onto 8.8 within probed runs) | | 1.5 to 4 against malloc's 1.1 to 1.3 | most of it | the churn: a 122 KB bitset per pruning is garbage at the next | OCaml 5.1 has no compaction and keeps `space_overhead` 120. `o=40` cuts the unprobed peak heap by 48 % (proteindesign, 5.0 to 2.6 G), 32 % (ttp r49, 15.0 to 10.1 G), 19 % (community), 17 % (tdtsp) for 18, 11, 7 and 13 % fewer nodes in 300 s, and nothing at the encoding (ihtc and rcpsp are refused at 8 GiB with it as without it) |
+
+**Read per refusal, the two factors do not weigh the same at the two moments.**
+
+- At the ENCODING, OCaml's factor alone can cross the budget. rcpsp-wet-diverse has 7.5 G live
+  after the encoding; divided kind by kind by its OCaml factor that is 2.3 G, and its heap would sit
+  well under 8 GiB. Our design adds 4 to 9 on top (instance closures, three subscription indexes,
+  the kept model), and Gecode builds the same model in 2.8 G and Chuffed in 4.8 G.
+- In the SEARCH, our design decides. The growing kinds grow without bound (keep-all, a copy per
+  pruning, explanations kept after use) and OCaml's factor only changes the slope: community's
+  learned clauses take 27.7 KB per conflict in OCaml and would take 8.7 KB in C++ with the same
+  design, which at its 280 k conflicts in 300 s still crosses 8 GiB within the 1 200 s of a run.
+  wordpress's bitsets are flat bytes (OCaml factor 1.0) and need 33 G at node 1 in any language.
+- The GC's free space decides on its own where the live data is small and the allocation churn is
+  large: groupsplitter's probed run reaches 18 G of heap with 3.4 G live, rel2onto 2.2 G with 0.4 G.
+
+### 6. The answer to the user's question
+
+OCaml's representation is real but bounded. A record, a list cell, a boxed literal or a closure
+costs its header and the pointer that reaches it, and every field is a 64-bit word. On our
+record-heavy kinds that multiplies the bytes by 2.5 to 4 (8 for an explanation made of
+`Model_row of int` cells), and by 1.0 on byte strings. The GC adds its own factor on top. The
+budget counts the major heap, and OCaml 5.1 lets that heap sit at 1.5 to 5 times the live data in
+our runs, up to 9 on a small heap (ihtc 23.5 GB of heap for 4.6 GB live, groupsplitter 18 GB for 3.4 GB, rel2onto 2.2 GB
+for 0.4 GB), with no compaction to give it back. But the factors that make the 251 search
+refusals are ours. What we keep is 8 to 7 600 times what a C++ solver keeps before OCaml touches
+it: a hole bitset copied per pruning and kept on the trail, four closures and a lazy per trail entry, a
+learned clause held as several copies plus a key string plus one subscription per literal, kept
+forever, and every proof explanation kept after its line is written. Those kinds GROW, and a
+constant factor of 3 only moves the conflict at which they cross 8 GiB.
+
+At the encoding the balance is different. There OCaml's factor of 3 to 4 alone is enough to put
+rcpsp-wet-diverse over the budget (7.5 GB live, 2.3 GB in a C++ layout of the same design), and
+our per-instance design adds another 4 to 9.
+
+### 7. The census, and the fixes ranked for M21-memory-T3
+
+One instance was probed in each of seventeen refused families, which hold 140 of the 314 refusals
+of arm A (team-assignment's 8 more follow D-0220's measurement, the steelmill shape). The
+mechanism that fills the heap, by family:
+
+| mechanism | families (refusals in arm A) | refusals |
+|---|---|---|
+| learned constraints, kept forever | vrp 15, community-detection 11, mapping 11, team-assignment 8, cargo 7, pattern-set-mining 7, grid-colouring 6, roster-shifts-bool 5, steelmillslab 1 | 71 |
+| hole bitsets copied per pruning | proteindesign12 15, is 11, wordpress 5, travelling-thief 5 | 36 |
+| GC free space over a small live heap | groupsplitter 14, rel2onto 5 | 19 |
+| proof explanations kept alive | tdtsp 14 | 14 |
+| the encoding's objects | rcpsp-wet-diverse 5, ihtc-2024-marte 3 | 8 |
+
+The other 166 refusals are in families not probed. The fixes, ranked by the refusals they would
+bring under the 8 GiB budget. The estimates extrapolate one instance to its family and say so;
+each needs T3's measurement on the refused set.
+
+1. **Learned constraints: a flat representation, and a bound on the count.** Store a learned row
+   once, as a packed int array (int32 literal codes in `Bytes` or a Bigarray), drop the canonical
+   key string (a 64-bit hash finds the duplicates), and give the clause two watched literals
+   instead of one subscription per literal. That takes a literal from about 283 B to 15 to 20 B, a
+   factor 15. And bound the count: keep-all (D-0051) is the reason the slope never stops, which is
+   exactly D-0221's question (agent-retention, running). Either alone moves the crossing; both
+   together bring the measured families under 8 GiB for a 1 200 s run (community at its rate of
+   about 1.1 M conflicts in 1 200 s needs 2.2 GB in the flat layout). Estimate 50 to 71 refusals.
+   Overlap: D-0221 for the count, D-0052 (no watched literals, a decision to revisit with
+   numbers), D-0220's cross-session request (this is its "bytes of a learned clause").
+2. **Hole bitsets: trail the removed value, not a copy of the domain.** A mutable bitset per
+   variable and an undo entry per removal (16 B), which is what I-T1's "a [t] must never share
+   mutable state" forbids today, so it is an invariant change and needs its decision. wordpress
+   drops from 33 GB at node 1 to the size of its model, is from 5.0 to about 1.7 GB live, ttp r49's
+   trail from 3.5 to 1.4 GB. Estimate 25 to 36. No overlap with M18-coverage-T9: lazy literals
+   change the `.opb`, not the domain.
+3. **The GC's free space.** Two parts. (a) The budget reads the heap SIZE (heap words plus the
+   words allocated since, D-0200), so a run whose live data is 3.4 GB is refused at 8 GiB of heap.
+   Reading the live words after a major cycle would refuse on what the run holds. (b)
+   `space_overhead` 120 is OCaml's default, not a choice; `o=40` cut the peak heap by 17 to 48 %
+   on four instances for 7 to 18 % fewer nodes (section 5), and does nothing for a refusal in the
+   encoding. Estimate 20 to 40 (groupsplitter, rel2onto, and the families of fixes 1 and 2 near the
+   line). The cheapest fix of the five, and one that changes no proof.
+4. **Proof explanations: release a forced explanation once its line is written**, keep the
+   constraint id, and cite rows as an int array rather than a list of `Model_row` blocks (from 40
+   to 4 B per cited row, OCaml's factor 8 on this kind). tdtsp holds 3.2 GB of them at node 27.
+   Estimate 10 to 14, and it shrinks the justify, trace and writer kinds (10 to 25 % of the proof
+   runs' live heap) everywhere.
+5. **The encoding's objects.** A propagator instance without its four closures, lazy and prebuilt
+   literal lists (from 800 to about 100 B for array_bool_and); one subscription index as int arrays
+   instead of three (from 104 to 143 B to 8 to 16 B); integer-variable records without three empty
+   hash tables (from 345 to about 64 B); and the front-end model freed after the encoding (10 % at once).
+   rcpsp-wet-diverse's 7.5 GB would fall to about 2 GB. Estimate 8 measured, and a share of the 63
+   refusals of arm A that die before writing 10 MB of proof. This is the one kind where OCaml's
+   factor matters by itself, so this is where flat arrays pay most.
+
+Fixes 1 and 2 are the two whose numbers are largest and least uncertain. Fix 3 is the cheapest.
+
+### 8. What this does not show
+
+- The probe changes the GC's pacing: forced major cycles lowered ihtc's heap from 23.5 to 5 GB and
+  raised proteindesign's (9.9 GB probed, 5.0 GB unprobed). Live numbers and the split come from
+  the probe, heap SIZES only from unprobed runs (`OCAMLRUNPARAM=v=0x400`'s `top_heap_words`).
+- Dev build, not the release binary of the series. Layouts are identical; speeds are not, so a
+  "refused at 300 s" is not the series' 1 200 s.
+- Arm A ran on `10b3507`, before D-0201 made the bits encoding the default. On this main, at
+  `--max-heap-mb 8192` and 300 s, proteindesign (5.0 GB peak heap, 18 solutions), travelling-thief
+  r49 (10.6 GB peak, and the budget did not fire, a discrepancy for T3 to read) and
+  community-detection run to the time limit, while rcpsp-wet-diverse and ihtc are still refused in
+  the encoding. Some of the 314 are therefore already gone, and T3
+  has to start from a fresh census on main. The numbers here stand as a measurement of the kinds.
+- The census extrapolates one instance per family, and covers 148 of 314.
+- Chuffed and Gecode ran on their own flattening, without proof.
