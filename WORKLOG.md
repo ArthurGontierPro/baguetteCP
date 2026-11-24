@@ -19,6 +19,7 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
+| M18-coverage-T4 | `mznlib/` (bin_packing*), `lib/flatzinc/compile.ml`, `lib/core/prop/` (a bin-packing module if needed), `test/models/binpack_*`, `test/unit/` (new tests), `docs/DECISIONS.md` (D-0220), `docs/SPEC.md` §2.1, `docs/ROADMAP.md` T4 row | agent-binpack (`wave68-binpack`) | 2026-11-24 |
 
 ## Cross-session requests
 
