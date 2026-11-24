@@ -27572,3 +27572,131 @@ bounded memo table and its key. The two deduplications are the usual list-plus-t
 `git revert 894b295` (the code) and `ae0454d` (the test's assertion). Reuse alone can be turned
 off without reverting by setting `Alldiff.amo_reuse := false`; no signature changed outside the
 additions.
+
+## D-0208  M20-pernode-T4 (learned part): watching a learned PB row was measured and NOT taken; the pass exits after one walk when nothing is forceable. Same runs in the same order, byte-identical proofs, costas -47 % and mknap -35 % instructions per node without proof
+
+**Status**: DONE on `wave60-watch` by agent-watch, 2026-11-23, not merged (the orchestrator gates and
+merges). D-0052's refusal of a cached slack is NOT reopened: the design that reopened it was built,
+measured and withdrawn (section 3). Runs in `/scratch/arthur/watch-runs/`.
+
+### 1. The problem (D-0207 section 5 item 1, rank 1 of section 6)
+
+A learned PB row (`Pb.Learned_pb`) has no advisor: every bound move of one of its variables queues
+it, and every run recomputes every term from `Store.get` in three walks (`snapshot`, `effective_all`,
+`mark_forceable`). On costas 14 the rows run 1 292 times per node, on mknap2-1 2 827 times, and almost
+no run prunes (measured at 3 000 nodes: 4.6 % of the runs on costas, 0.2 % on mknap). With the
+engine's work for them they were 83 % and 93 % of a node. Learned clauses already have two watches
+and an advisor (M6-T20, D-0104, D-0138), and are not changed here.
+
+### 2. The constraint that decides the design: the run ORDER must not move
+
+The task required the same stdout and node counts on all test models and on the differential lane.
+Fewer wakes does not give that. D-0173 is the measurement: resting a satisfied learned clause loses no
+pruning, but it changes the trail entry at which the clause is woken, and 250 of 301 lane runs
+differed (another 1UIP clause, another tree). An advisor that DROPS a wake of a PB row has the same
+defect. In the FIFO phase a row woken by a change A that cannot make it prune sits at A's place in the
+queue. If a later change B, made before that place comes up, makes it prune, today's engine runs it
+at A's place and an engine that dropped A runs it at B's place, after every instance queued in
+between. The prunings land in another order, the trail and the reasons differ, and so does the tree.
+So the wakes, the queue and the run bracket stay as they are. Only what a run costs may change, and
+each run must return what it returned before.
+
+### 3. Measured and withdrawn: a witness of quiet (commit `c99d2b2`, reverted in `3acccc4`)
+
+For `sum a_i l_i >= b` with terms grouped by (variable, polarity), a set W of term indices with every
+literal non-false and `sum_W a - max_g (sum_{W, g} a) >= b` proves that a pass can neither force nor
+fail (no conflict: the non-false sum is at least b; no forcing: a term's ladder-effective coefficient
+counts its own group only, and the other groups hold at least b). The row kept W between runs and
+re-read its literals at every run, so a stale W cost a pass and never an answer (a cached CHOICE,
+not D-0052's cached number). It kept the order exactly, the unit test compared it with the plain pass
+over 12 386 runs of random searches with backtracks, and a hand-placed bad witness and the
+BAGUETTE_DEBUG check both caught a broken (C).
+
+It was slower. At 3 000 nodes without proof, instructions:
+
+| | main | witness | fast exit (section 4) | both |
+|---|---|---|---|---|
+| costas 14 | 32.08 G | 38.67 G (+20.5 %) | 26.56 G (-17.2 %) | 33.81 G |
+| mknap2-1 | 26.11 G | 32.45 G (+24.3 %) | 19.86 G (-23.9 %) | 28.65 G |
+
+The learned rows of these families sit close to propagating. A witness needed 61 of 102 literals on
+average on costas and 40 of 58 on mknap, one could be built after 42 % and 72 % of the passes, and it
+answered 11 % and 40 % of the runs. Checking 60 % of a row and rebuilding after every pass costs more
+than the one walk it saves. A slack counter on the trail (the option the task named) would have the
+same denominator problem at a higher price: what decides quiet is the largest open group sum as well
+as the slack (section 4), and keeping a maximum up to date under backtracking needs more than a
+counter. Not built.
+
+### 4. Taken: the pass's exact early exit
+
+The largest ladder-effective coefficient of an OPEN term is exactly the largest per-group sum of open
+coefficients. A term i of group g counts the non-false terms of g at least as strong as itself; a
+satisfied term of g is strictly weaker than every open one (for `x >= k`, satisfied is `k <= lo` and
+open is `lo < k <= hi`; mirrored for `x <= k - 1`), so i counts open terms of g only, and the weakest
+open term of g counts all of them. So `mark_forceable` finds a forceable term iff the slack is below
+that maximum. `Pb.snapshot` computes it in the walk it already made (`scratch.osum`, `max_open`) and
+`Pb.pass` returns `Fixpoint` when `slack >= max_open`, without `effective_all` and `mark_forceable`.
+Overflow is kept exact: a group sum that would not fit sets `max_open` to `max_int`, which never takes
+the exit, so `effective`'s `Checked` raise is still reached where it was. The same walk now sums the
+slack with `+` when the layout's `plain` flag says no partial sum can overflow (the coefficient total
+fits, and so does it minus a negative degree); otherwise through `Checked.add` as before.
+
+Every run returns the same outcome on the same store, so the runs, their order, the trail, the
+reasons, the proof, the learned constraints and the tree are main's. It applies to every `Pb` row, the
+model's and the clause face's too, because `pass` is shared; for those it is the same answer faster.
+It adds no state and touches no invariant: I-P2, I-P6, I-P7 and I-X6 hold as before, and pb.ml's "No
+mutable state" section stands, with a paragraph saying what was measured.
+
+Tests: `test_pb`'s E3a comparison of the layout pass with the list pass (3 000 random rows, prunings,
+conflicts, long groups, the two overflow rows) covers the exit. Two breaks were checked to redden it:
+exiting at `slack + 1 >= max_open` (test (a) and its integer scene fail) and taking
+the largest open COEFFICIENT instead of the group sum (the ladder test and E3a).
+
+What it costs in clarity: one field in the scratch record, one in the layout, a second copy of the
+snapshot loop for the grouped case, and section 4's argument in `snapshot`'s comment.
+
+### 5. What is left, and the fallback
+
+- The engine's work for the wakes (walk, queue, run bracket) is untouched: D-0207 put it at 11.5 M of
+  a costas node and 16.3 M of an mknap node, and it is now the largest share there. Removing it while
+  keeping the order needs a test at WAKE time that is cheap and exact, plus a queue that remembers the
+  place a dropped wake would have taken (a FIFO keyed by sequence number) so that a row found active
+  later is run there. Section 3 says the cheap test does not exist for these rows. So this is the
+  point where the order has to be given up or the work kept.
+- **The fallback, D-0169 (b)**: stop RUNNING learned constraints that do not prune, keeping them on
+  the page. It changes trees wherever a learned row would have pruned (16.5 times per costas node),
+  so it needs a rule for WHEN: by search mode (a fixed search without backjumps, as on the four D-0207
+  families that never backjump), or adaptive on the effective rate per row, which the engine's
+  `runs_by_id`/`eff_by_id` already count. A default-behaviour change, for the user. Not implemented.
+
+### 6. Measurements
+
+D-0207's five instances, instructions per node, `perf stat -e instructions:u`, one process at a time,
+release binaries (`make release`, D-0171): main `e844eb9` = `7826cf88`, this branch = `4de68ff1`.
+Nodes, answers, every `--stats` and `limit:` counter except the clocks, and the `.pbp` (md5) are
+identical in all ten pairs.
+
+| instance | nodes | --no-proof main | --no-proof branch | proof main | proof branch |
+|---|---|---|---|---|---|
+| QR48 (codes-cp, 3 fixed) | 29 779 | 1.044 M | 1.048 M (+0.4 %) | 1.841 M | 1.844 M (+0.1 %) |
+| costas 14 | 21 129 | 44.74 M | 23.86 M (-46.7 %) | 54.11 M | 33.25 M (-38.6 %) |
+| mknap2-1 (cut 20 000) | 20 001 | 40.30 M | 26.37 M (-34.6 %) | 41.08 M | 27.06 M (-34.1 %) |
+| javarouting trip_6_3 (cut 20 000) | 20 001 | 12.58 M | 12.59 M (+0.0 %) | 24.55 M | 24.58 M (+0.1 %) |
+| rcpsp 11, bound 66 | 2 010 | 2.636 M | 2.499 M (-5.2 %) | 10.25 M | 10.12 M (-1.3 %) |
+
+**Again after merging main `f4f6391`** (D-0209, D-0212, D-0214, D-0215 in), main = `cba056a8`, the
+branch at `2dbab13` = `99bad850`, same protocol (four jobs at a time; instruction counts do not depend
+on load). Nodes, answers, counters and `.pbp` md5 again identical in all ten pairs.
+
+| instance | --no-proof main | --no-proof branch | proof main | proof branch |
+|---|---|---|---|---|
+| QR48 | 1.036 M | 1.040 M (+0.4 %) | 1.700 M | 1.703 M (+0.2 %) |
+| costas 14 | 42.99 M | 22.12 M (-48.6 %) | 51.46 M | 30.58 M (-40.6 %) |
+| mknap2-1 | 40.15 M | 26.19 M (-34.8 %) | 40.79 M | 26.85 M (-34.2 %) |
+| javarouting trip_6_3 | 8.933 M | 8.937 M (+0.0 %) | 20.87 M | 20.87 M (-0.0 %) |
+| rcpsp 11, bound 66 | 2.424 M | 2.287 M (-5.6 %) | 9.078 M | 8.910 M (-1.9 %) |
+
+QR48's +0.4 % is the clause rows (degree 1) paying for the per-group bookkeeping in the snapshot of
+the passes `quiet` does not answer. Gate on `2dbab13` (main `f4f6391` merged in): `dune runtest --force` 4 700 ok, 0 FAIL, peak RSS 155 MB; 214 models, stdout, `.opb` and `.pbp` equal to main's binary; `run_model_tests.sh` 214/214; differential lane 347/347 and debug 333/333; scaling lane ok (all at -j 4). Before the merge, on `b911ebe`: 4 561 ok, 209 models equal, lanes 347/347 and 333/333, scaling ok.
+
+How to revert: revert `3acccc4`; the record and the withdrawn witness (`c99d2b2`) are history only.
