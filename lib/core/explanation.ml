@@ -844,7 +844,11 @@ let cite_row id =
 let intern_up_to n =
   intern_below := Stdlib.max !intern_below (Stdlib.min intern_cap (n + 1))
 
-let model_row id = match cite_row id with Term (_, m) -> m | _ -> Model_row id
+let model_row id =
+  if id >= 0 && id < !intern_below then
+    match cite_row id with Term (_, m) -> m | _ -> Model_row id
+  else Model_row id
+
 let weaken lits = Weaken lits
 
 (* [defining c l]: cite, [c] times, the line that establishes [l]. The coefficient is
