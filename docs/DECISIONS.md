@@ -28921,7 +28921,10 @@ copied to `/cluster/arthur/baguette-results/holes/`.
 exit code, `.opb` and `.pbp`, 456 md5 triples, identical. The five D-0207 instances' `.pbp`
 identical. Differential lane 347 of 347 equal, `--debug` pass 333 of 333 (the 14 of
 `bench/diff/debug-skip.tsv` skipped, as on main); scaling lane green (5 lines, every growth below its baseline);
-`dune runtest --root . --force` under `ulimit -v 4000000`: 5 175 ok, 0 FAIL.
+`dune runtest --root . --force` under `ulimit -v 4000000`: 5 175 ok, 0 FAIL; the 228 models
+pass `run_model_tests.sh` with every proof verified. After merging main `5e1ea8a` (D-0219's
+`search.ml`): dev `1c179467` against main's `cc46f5dd`, the 456 triples identical again, lane
+347 of 347, `--debug` 333 of 333, scaling green, 5 225 ok and 0 FAIL, 228 models.
 
 **Memory, D-0218's instances** (live heap from the probe, proof arm, `--max-heap-mb 65536`;
 peak RSS unprobed, `--no-proof`, 300 s):
