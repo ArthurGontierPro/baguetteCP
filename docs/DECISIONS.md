@@ -27496,7 +27496,8 @@ run that ended. Binaries' md5, the driver, the table and the logs are in
 `/cluster/arthur/baguette-results/wave65-circuit/` (`summary.tsv`). Every instance routes
 (one `baguette_circuit` call each, 36 to 66 on p1f and p1f-pjs).
 
-- `.opb` rows lower on 19 of 20 (0.44 to 0.98 of old; atp-stage2 instance6 is a 9-row model).
+- `.opb` rows lower on all 20 (0.44 to 0.998 of old; 2015_is is the 0.998, its circuit a small
+  part of 1.7 M rows).
   p1f_13 312 k -> 136 k rows, 64 MB -> 21 MB; tsptw n80 661 k -> 371 k.
 - Default search. One outcome changes: 2020_p1f-pjs_10 goes from a time-out (incumbent 334) to
   OPT 300, VERIFIED. The other four that complete (stochastic-vrp c6 OPT, 2025_is OPT, p1f_13
