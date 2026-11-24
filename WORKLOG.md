@@ -683,7 +683,7 @@ The shipped gains on costas and mknap stay small until D-0208, because learned c
 
 **Known, not fixed yet**: black-hole is 4.5 times slower at the root since `inverse`'s alldiff lemmas, in `Explanation`'s hashing of `pol` lines (agent-table's finding). The `test_prop` debug failure was a test defect, fixed in D-0214.
 
-**Open for you**: D-0213 (`diffn` through mznlib, merged, gate 96 running): the two cumulative relaxations' capacity rows are MODEL rows in the `.opb`, trusted as MiniZinc's flattening is, and checked by enumeration in `test_compile.ml`; deriving them in the proof costs O(n^2 W H) lines. Deleting the two `mznlib/fzn_diffn*.mzn` files reverts it. 7 -> 9 complete answers on 25 instances at 300 s, `.opb` up to 5.8 times larger on some.
+**Open for you**: D-0213 (`diffn` through mznlib, merged, gate 96 green: same binary `75b1e984`, 218 models identical, lanes equal): the two cumulative relaxations' capacity rows are MODEL rows in the `.opb`, trusted as MiniZinc's flattening is, and checked by enumeration in `test_compile.ml`; deriving them in the proof costs O(n^2 W H) lines. Deleting the two `mznlib/fzn_diffn*.mzn` files reverts it. 7 -> 9 complete answers on 25 instances at 300 s, `.opb` up to 5.8 times larger on some.
 
 **[AUTONOME] decisions**: D-0213 (above).
 ### 2026-11-24 (agent-diffn, `wave61-diffn`): M18-coverage-T2, diffn's relaxations (D-0213)
