@@ -28756,3 +28756,93 @@ jumps that remain are short and the conflicts many; only 20 and 30 prove the opt
 all three optimisation instances on tpp and nside, second on flowshop. Nadel and Ryvchin's 100 is
 the loop without the option here (the jumps that hurt are 20 to 60 levels long). This was chosen on
 four instances that are in the tuning set, so the tuning set is not an independent test of `T`.
+
+### 3. Checks (code at `440b579`)
+
+With the switch OFF (the default, and `--cdcl` without `--chrono`):
+
+- All 228 test models, both encodings: stdout, exit code, `.opb` and `.pbp` byte-identical to main
+  `4fbbf56`'s binary (dev builds, md5 `cc46f5dd` main, `3b5eed72` branch), 456 of 456
+  (`/scratch/arthur/chrono-runs/ident/`).
+- `dune runtest --root . --force` under `ulimit -v 4000000`: 5 283 ok, 0 FAIL, peak RSS 155 MB (the
+  61 more than D-0219's 5 222 are this row's and main's since).
+- `diff_lane.sh --tier all -j 4`: 347 of 347 equal the reference; with `--debug`: 333 of 333
+  (`BAGUETTE_DEBUG`, 14 skipped by `debug-skip.tsv` as on main). `scaling_lane.sh --enforce -j 4`:
+  every line within its threshold.
+- Without `--chrono` the loop is D-0219's: the unit lane checks that no chronological step and no
+  re-push happens in its twelve old arms.
+
+With the loop and chronological backtracking ON:
+
+- `scripts/run_model_tests.sh` under `BAGUETTE_CDCL=1 BAGUETTE_CHRONO=20`: 223 of 228 pass, every
+  proof VERIFIED on both encodings; the five others are D-0219's five (three satisfiable models print
+  another solution, each `VERIFIED SATISFIABLE` on both encodings, two optimisation models print
+  other intermediate solutions and the expected optimum, `VERIFIED BOUNDS 6 <= obj <= 6` and
+  `3 <= obj <= 3`). Every answer agrees with `dfs`.
+- The same under `BAGUETTE_CHRONO=0 BAGUETTE_DEBUG=1` (every conflict chronological, I-P2 checked at
+  every fixpoint, so a missed re-assertion would raise): 224 pass, the three satisfiable models as
+  above, and `cumulative_fixed_overload_edge_unsat` stops on a `BAGUETTE_DEBUG` invariant
+  (`D-0026: the reason and the justification are about the same pruning`) that fires identically on
+  main's own binary with the default search: a pre-existing finding of M22-review-T2's model, not of
+  this row (WORKLOG cross-session request). Without `BAGUETTE_DEBUG` it is UNSAT and verified.
+- Unit lane `test_cdcl_loop`: four more arms (`chrono:0`, `chrono:1`, `chrono:0` with learning off,
+  `chrono:0` with Luby and phase saving) on pigeonhole 5/4, queens 8, queens 6 optimisation: same
+  answer as `dfs`, proof VERIFIED, every id deleted (audit on), no rule kind the `dfs` proof lacks,
+  every learned clause unit where the search resumed, no direct assertion; 18 chronological steps
+  over them. Also under `BAGUETTE_DEBUG=1`: 280 ok.
+- `test_mutation.exe` under `BAGUETTE_CDCL=1 BAGUETTE_CHRONO=20`: 156 ok, every corruption refused.
+
+### 4. Measured: the 3-SAT probes and D-0207's five (campaign binary `f404f013`, `--no-proof`)
+
+The arms. Loop arms (`--cdcl`): `Lfix` fixed search; `Cfix` fixed search with `--chrono 20`; and with
+`--chrono 20`: `Cf` `-f` (alternate, Luby, phase saving), `Calp` activity + Luby + phase saving,
+`Cal` activity + Luby, `Cabp` activity + LBD restarts (`--restarts lbd`) + phase saving, `Ca` activity
+alone. `dfs` arms with the same flags: `Dfix`, `Df`, `Dalp`, `Dal`, `Dabp`, `Da`. Run while the node's
+load was 50 to 93 (other sessions' series), 20 of these at a time, so compare instructions and
+conflicts more than seconds.
+
+**3-SAT, 32 probes, 120 s** (Chuffed answers all 32 in under 20 s, 17 satisfiable and 15 UNSAT):
+
+| arm | answered of 32 | SAT / UNSAT | seconds, sum | conflicts per s (median) | G instr per s |
+|---|---|---|---|---|---|
+| Lfix | 12 | 12 / 0 | 2 762 | 428 | 1.53 |
+| Cfix | 13 | 12 / 1 | 2 740 | 443 | 1.57 |
+| Cf | 17 | 12 / 5 | 2 225 | 471 | 1.51 |
+| Calp | 23 | 14 / 9 | 1 422 | 620 | 1.75 |
+| Cal | **24** | 15 / 9 | 1 343 | 696 | 1.87 |
+| Cabp | **24** | 15 / 9 | 1 248 | 1 046 | 2.03 |
+| Ca | 23 | 15 / 8 | 1 346 | 779 | 1.90 |
+| Dfix | 13 | 12 / 1 | 2 822 | 397 | 1.52 |
+| Df | 16 | 13 / 3 | 2 346 | 382 | 1.44 |
+| Dalp | 21 | 14 / 7 | 1 602 | 442 | 1.47 |
+| Dal | 20 | 13 / 7 | 1 686 | 348 | 1.41 |
+| Dabp | 21 | 14 / 7 | 1 477 | 367 | 1.46 |
+| Da | **24** | 15 / 9 | 1 226 | 1 000 | 2.04 |
+
+Eight probes (seven of the 250-variable ones and `r3_200_7`) are answered by no arm. Under every
+restart policy the loop answers more than `dfs` with the same flags (23 to 24 against 20 to 21) and
+makes 1.4 to 2.8 times the conflicts per second; without restarts the two are equal (24). Chuffed's
+32 are out of reach at 0.4 to 1 thousand conflicts a second: that gap is M20's (cost per conflict),
+not the search's.
+
+**D-0207's five, 300 s** (seconds, conflicts, G instructions):
+
+| arm | QR48 f3 (UNSAT) | costas 14 (SAT) | rcpsp 11 <= 60 (UNSAT) | mknap2-1, javarouting <= 66 |
+|---|---|---|---|---|
+| Lfix | 7 s, 14 890 c, 27 G | 196 s, 10 573 c, 456 G | 17 c | none, none |
+| Cfix | same as Lfix (no jump to cut) | same | 17 c | none, none |
+| Cf | 10 s, 16 208 c, 31 G | 5 s, 1 810 c, 22 G | 19 c | none, none |
+| Calp | **4 s, 9 335 c, 18 G** | **2 s, 875 c, 9 G** | 46 c | none, none |
+| Cal | 7 s, 10 235 c, 23 G | 22 s, 4 538 c, 72 G | 28 c | none, none |
+| Cabp | 5 s, 10 474 c, 20 G | 9 s, 2 778 c, 37 G | 46 c | none, none |
+| Ca | 12 s, 12 708 c, 27 G | none | 28 c | none, none |
+| Dfix | 7 s, 14 890 c, 31 G | 198 s, 10 561 c, 468 G | 34 c | none, none |
+| Df | 52 s, 32 281 c, 108 G | 4 s, 1 535 c, 18 G | 44 c | none, none |
+| Dalp | 19 s, 17 735 c, 45 G | none | 29 c | none, none |
+| Dal | 39 s, 24 159 c, 79 G | 60 s, 6 372 c, 148 G | 48 c | none, none |
+| Dabp | 22 s, 21 000 c, 58 G | none | 29 c | none, none |
+| Da | 7 s, 9 620 c, 22 G | none | 48 c | none, none |
+
+Under restarts the loop is two to ten times cheaper than `dfs` on QR48 (where `dfs`'s restarts throw
+away a tree the nogoods were closing) and solves costas under every restart policy where `dfs` with
+phase saving does not.
