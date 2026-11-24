@@ -5,15 +5,35 @@
    path and holes are only populated by the propagators that actually punch them.
 
    The hole set is a bitset ([Bytes.t]) rather than a balanced set, because SPEC section
-   3.1 requires membership in O(1) and permits hole removal to be O(size). It is used
-   *immutably*: [remove] copies the bitset before setting a bit. That costs O(size) per
-   interior removal, which the spec allows, and it is what makes the trail correct - the
-   store restores a domain by writing back the old [t], so a [t] must never share mutable
-   state with its successors (invariant I-T1).
+   3.1 requires membership in O(1). Since M21-memory-T3 (D-0222) it is NOT copied per
+   removal: a domain's holes are a VERSION of a per-variable LOG that its successors
+   share. The log is one mutable bitset (every hole any version of the lineage has) plus
+   the removals in the order they were made; a version is "the log's base holes and its
+   first [k] removals". Removing a value from the NEWEST version sets one bit and appends
+   one entry (16 bytes), where the copy cost span / 8 bytes per pruning and the trail
+   kept every copy: 98 % of wordpress's live heap at its refusal (D-0218). Removing from
+   an older version forks a new log (one copy, what every removal used to pay), so the
+   value semantics a caller sees are those of a persistent set.
+
+   What that costs is I-T1's old guarantee that a [t] shares no mutable state with its
+   successors. The new one (docs/INVARIANTS.md I-T1, D-0222 section 4): [undo] -- called
+   by [Store.undo_to] for every entry it pops -- truncates the log back to the version the
+   entry restores, so a [t] answers exactly the set it was made with for as long as no
+   trail entry older than it has been undone, and a read after that raises
+   [Stale_version] rather than answering. Each version carries the uid of its last log
+   slot, which a truncation and a refill never reproduce, so the refusal is exact.
+
+   Reading the newest version is the bit test after two compares. Reading an older one
+   (a trail entry's [old]/[now], a pass's snapshot, an Element frame, a D-0124 history)
+   is the bit test, and when the bit is set, "was it logged at or after [k]?": a scan of
+   at most [deep_scan] entries, else [pos], an int32 per value built on the first deep
+   read of that log and kept up to date after. So every read is O(1) once [pos] exists,
+   and [pos] exists only for a log something read deep in its past.
 
    M16-file-review-T1 (D-0186), the costs that grow with the WIDTH, and why none of them
    is on a per-entry path of the engine: [remove] of an interior value copies the bitset
-   (O(span / 8), so punching every hole of a domain along one branch is O(span^2 / 8));
+   (O(span / 8), so punching every hole of a domain along one branch is O(span^2 / 8);
+   O(1) since D-0222, which appends to the log instead);
    [size] of a domain with holes counts the bits between the bounds (O(span / 8)), and
    [Search.first_fail] asks it per candidate per node; [classify] of a hole entry walks
    the bounds (O(width)) and is asked by the proof side ([Trace]) only, the engine reading
@@ -27,11 +47,35 @@
      I-D3  a domain only ever shrinks - every operation here returns a subset *)
 
 (* Bit [i] of [bits] stands for the value [base + i]. [span] is how many values the
-   bitset covers; it is fixed when the bitset is first allocated, at which point it spans
+   bitset covers; it is fixed when the log is first allocated, at which point it spans
    exactly the bounds then in force. Since domains only shrink (I-D3), every later value
    of the domain is inside [base, base + span). Bits outside the current bounds may be
-   stale; [mem] tests the bounds first, so they are harmless. *)
-type holes = { base : int; span : int; bits : Bytes.t }
+   stale; [mem] tests the bounds first, so they are harmless.
+
+   THE LOG (D-0222). [bits] holds the BASE holes (those the log was created with, by a
+   fork or [affine]; never cleared) and the values [vals.(0 .. len - 1)], each removed by
+   one [push] in that order. [uids.(j)] is slot [j]'s stamp, drawn from [next_uid] and
+   never reused within the log; [top_uid] is the newest slot's (0 when [len = 0]). [pos]
+   is empty, or an int32 per value: the slot that logged it, -1 for a base hole, garbage
+   where the bit is clear (never read there). The arrays grow by doubling and are never
+   shrunk; [len] is at most [span], because a value is logged only while its bit is
+   clear. *)
+type log = {
+  base : int;
+  span : int;
+  bits : Bytes.t;
+  mutable vals : int array;
+  mutable uids : int array;
+  mutable len : int;
+  mutable top_uid : int;
+  mutable next_uid : int;
+  mutable pos : Bytes.t;
+}
+
+(* A version of [log]: its base holes and the first [k] logged values. [uid] is the stamp
+   of slot [k - 1] (0 for [k = 0]), which is how a version knows it has been truncated
+   away: see [valid]. Immutable, four words. *)
+type holes = { log : log; k : int; uid : int }
 type t = { lo : int; hi : int; holes : holes option }
 type result = Unchanged | Changed of t | Failed
 
@@ -62,6 +106,11 @@ type change =
 
 exception Bad_domain of string
 
+(* A read of a version whose log has been truncated below it (D-0222, I-T1): the domain
+   belonged to a branch the trail has undone. Raised rather than answered, because the
+   answer would be the present's, not the version's. *)
+exception Stale_version of string
+
 (* Above this many values we decline to allocate a hole bitset and simply do not record
    the hole. Declining to prune is sound (we only ever keep values, never remove ones we
    should have kept); it just makes the domain weaker. Bound moves never need the bitset,
@@ -84,6 +133,12 @@ let set_bit bits i =
   Bytes.unsafe_set bits byte
     (Char.unsafe_chr (Char.code (Bytes.unsafe_get bits byte) lor (1 lsl (i land 7))))
 
+let clear_bit bits i =
+  let byte = i lsr 3 in
+  Bytes.unsafe_set bits byte
+    (Char.unsafe_chr
+       (Char.code (Bytes.unsafe_get bits byte) land lnot (1 lsl (i land 7)) land 0xff))
+
 (* Number of set bits in the inclusive bit range [i0, i1]. *)
 let count_bits bits i0 i1 =
   if i1 < i0 then 0
@@ -100,6 +155,106 @@ let count_bits bits i0 i1 =
       done;
       total := !total + popcount8.(Char.code (Bytes.get bits b1) land tail_mask);
       !total
+
+(* --------------------------------------------------------------- the log (D-0222) *)
+
+let fresh_log ~base ~span ~bits =
+  {
+    base;
+    span;
+    bits;
+    vals = Array.make 4 0;
+    uids = Array.make 4 0;
+    len = 0;
+    top_uid = 0;
+    next_uid = 1;
+    pos = Bytes.empty;
+  }
+
+(* The version the store holds after its last removal: every slot of the log is its. *)
+let is_newest h = h.k = h.log.len && h.uid = h.log.top_uid
+
+(* Not truncated away: slot [k - 1] still holds the removal this version ended with. A
+   version of [k = 0] is the base holes, which no truncation touches. *)
+let valid h =
+  h.k <= h.log.len && (h.k = 0 || Array.unsafe_get h.log.uids (h.k - 1) = h.uid)
+
+let stale h =
+  raise
+    (Stale_version
+       (Printf.sprintf
+          "I-T1 (D-0222): a domain version of %d removals was read after its log was \
+           truncated to %d (its branch was undone)"
+          h.k h.log.len))
+
+(* Append [v] (bit index [i], clear) and return the version that ends with it. *)
+let push lg i v =
+  let j = lg.len in
+  if j = Array.length lg.vals then (
+    let cap = Stdlib.min lg.span (2 * j) in
+    let grow a = Array.append a (Array.make (cap - j) 0) in
+    lg.vals <- grow lg.vals;
+    lg.uids <- grow lg.uids);
+  let uid = lg.next_uid in
+  lg.next_uid <- uid + 1;
+  Array.unsafe_set lg.vals j v;
+  Array.unsafe_set lg.uids j uid;
+  lg.len <- j + 1;
+  lg.top_uid <- uid;
+  set_bit lg.bits i;
+  if Bytes.length lg.pos > 0 then Bytes.set_int32_le lg.pos (4 * i) (Int32.of_int j);
+  { log = lg; k = j + 1; uid }
+
+(* Pop every slot at or above [k], clearing its bit. *)
+let truncate lg k =
+  if k < lg.len then (
+    for j = lg.len - 1 downto k do
+      clear_bit lg.bits (Array.unsafe_get lg.vals j - lg.base)
+    done;
+    lg.len <- k;
+    lg.top_uid <- (if k = 0 then 0 else lg.uids.(k - 1)))
+
+(* Above this many slots past a version, a deep read builds [pos] rather than scan. *)
+let deep_scan = 8
+
+let build_pos lg =
+  let p = Bytes.make (4 * lg.span) '\255' in
+  for j = 0 to lg.len - 1 do
+    Bytes.set_int32_le p (4 * (lg.vals.(j) - lg.base)) (Int32.of_int j)
+  done;
+  lg.pos <- p
+
+(* Bit [i] is set: was its value logged at or after slot [h.k]? (Then it is not a hole of
+   [h].) *)
+let logged_after h i =
+  let lg = h.log in
+  if lg.len - h.k <= deep_scan then (
+    let v = lg.base + i in
+    let found = ref false and j = ref h.k in
+    while (not !found) && !j < lg.len do
+      if Array.unsafe_get lg.vals !j = v then found := true;
+      incr j
+    done;
+    !found)
+  else (
+    if Bytes.length lg.pos = 0 then build_pos lg;
+    Int32.to_int (Bytes.get_int32_le lg.pos (4 * i)) >= h.k)
+
+(* Is bit [i] (in range) a hole of version [h]? *)
+let hole_in h i =
+  if is_newest h then get_bit h.log.bits i
+  else if not (valid h) then stale h
+  else get_bit h.log.bits i && not (logged_after h i)
+
+(* A fresh bitset holding exactly [h]'s holes: the log's, minus what came after [k]. *)
+let materialise h =
+  if not (valid h) then stale h;
+  let lg = h.log in
+  let bits = Bytes.copy lg.bits in
+  for j = h.k to lg.len - 1 do
+    clear_bit bits (lg.vals.(j) - lg.base)
+  done;
+  bits
 
 (* ------------------------------------------------------------- construction *)
 
@@ -119,8 +274,8 @@ let is_hole d v =
   match d.holes with
   | None -> false
   | Some h ->
-      let i = v - h.base in
-      i >= 0 && i < h.span && get_bit h.bits i
+      let i = v - h.log.base in
+      i >= 0 && i < h.log.span && hole_in h i
 
 let mem d v = v >= d.lo && v <= d.hi && not (is_hole d v)
 let value d = if is_fixed d then Some d.lo else None
@@ -130,9 +285,20 @@ let size d =
   match d.holes with
   | None -> width
   | Some h ->
-      let i0 = max 0 (d.lo - h.base) in
-      let i1 = min (h.span - 1) (d.hi - h.base) in
-      width - count_bits h.bits i0 i1
+      let lg = h.log in
+      let i0 = max 0 (d.lo - lg.base) in
+      let i1 = min (lg.span - 1) (d.hi - lg.base) in
+      let n = count_bits lg.bits i0 i1 in
+      if is_newest h then width - n
+      else (
+        (* the log's count less the values logged after [k] within the bounds *)
+        if not (valid h) then stale h;
+        let later = ref 0 in
+        for j = h.k to lg.len - 1 do
+          let i = Array.unsafe_get lg.vals j - lg.base in
+          if i >= i0 && i <= i1 then incr later
+        done;
+        width - (n - !later))
 
 let has_holes d = match d.holes with None -> false | Some _ -> size d < d.hi - d.lo + 1
 
@@ -190,6 +356,15 @@ let equal a b =
    already asserted by the time the engine gets here. If it is not - if a bound somehow
    widened - the widened side reports as "did not move" rather than lying about a
    literal that did not become true. *)
+(* Same bounds, so anything that went is strictly interior. Walk downwards and prepend,
+   so the list comes out ascending without a reversal. *)
+let classify_walk ~old ~now =
+  let removed = ref [] in
+  for v = now.hi downto now.lo do
+    if is_hole now v && not (is_hole old v) then removed := v :: !removed
+  done;
+  match !removed with [] -> NoChange | vs -> Holes vs
+
 let classify ~old ~now =
   if old.lo <> now.lo || old.hi <> now.hi then
     Bound
@@ -198,13 +373,26 @@ let classify ~old ~now =
         hi = (if now.hi < old.hi then Some now.hi else None);
       }
   else
-    (* Same bounds, so anything that went is strictly interior. Walk downwards and
-       prepend, so the list comes out ascending without a reversal. *)
-    let removed = ref [] in
-    for v = now.hi downto now.lo do
-      if is_hole now v && not (is_hole old v) then removed := v :: !removed
-    done;
-    match !removed with [] -> NoChange | vs -> Holes vs
+    match (old.holes, now.holes) with
+    | Some ho, Some hn when ho.log == hn.log && ho.k <= hn.k && valid ho && valid hn ->
+        (* D-0222: one log, so what [now] has and [old] has not is exactly the slots
+           [ho.k .. hn.k - 1] (a logged value was clear in every version before it, and
+           base holes are in both). Usually one slot. Same answer as the walk below,
+           which BAGUETTE_DEBUG cross-checks, without walking the width. *)
+        let lg = hn.log in
+        let removed = ref [] in
+        for j = ho.k to hn.k - 1 do
+          let v = lg.vals.(j) in
+          if v >= now.lo && v <= now.hi then removed := v :: !removed
+        done;
+        let r =
+          match List.sort_uniq Int.compare !removed with [] -> NoChange | vs -> Holes vs
+        in
+        if Debug.enabled then
+          Debug.check "D-0222: classify from the log agrees with the walk" (fun () ->
+              r = classify_walk ~old ~now);
+        r
+    | _ -> classify_walk ~old ~now
 
 (* The bridge between the two vocabularies: the [change] that applying [r] to [d] makes.
    [Failed] is not a change - the empty domain is never stored (I-D1), so there is no
@@ -243,23 +431,50 @@ let settle d =
     done;
     Changed { d with lo = !l; hi = !h }
 
-(* Copy-on-write hole insertion. [None] means "declined" - see [max_hole_span]. *)
+(* Hole insertion, by appending to the log (D-0222). [None] means "declined" - see
+   [max_hole_span]. A domain with no hole yet gets a fresh log spanning its bounds; one
+   whose version is the newest of its log extends it in place; one whose version is OLDER
+   (a caller removing twice from the same value, or a store sharing a log another store
+   extended) forks: a fresh log whose base holes are that version's set, one copy of the
+   bitset, which is what every removal paid before D-0222. *)
+(* How many removals forked a log, for the test that a store never does (every removal
+   it makes is from its own newest version, because [undo] truncates). *)
+let forks = ref 0
+
 let with_hole d v =
   match d.holes with
   | Some h ->
-      let i = v - h.base in
-      if i < 0 || i >= h.span then None
+      let lg = h.log in
+      let i = v - lg.base in
+      if i < 0 || i >= lg.span then None
       else
-        let bits = Bytes.copy h.bits in
-        set_bit bits i;
-        Some { d with holes = Some { h with bits } }
+        let lg =
+          if is_newest h then lg
+          else (
+            incr forks;
+            fresh_log ~base:lg.base ~span:lg.span ~bits:(materialise h))
+        in
+        Some { d with holes = Some (push lg i v) }
   | None ->
       let span = d.hi - d.lo + 1 in
       if span > max_hole_span then None
       else
-        let bits = Bytes.make ((span + 7) / 8) '\000' in
-        set_bit bits (v - d.lo);
-        Some { d with holes = Some { base = d.lo; span; bits } }
+        let lg = fresh_log ~base:d.lo ~span ~bits:(Bytes.make ((span + 7) / 8) '\000') in
+        Some { d with holes = Some (push lg (v - d.lo) v) }
+
+(* The trail's half of D-0222: [Store.undo_to] pops an entry that replaced [old] by [now]
+   and calls this before writing [old] back. If [now]'s version is past [old]'s on the
+   same log, the slots between are this entry's (or a later pop's leftovers) and go; if
+   [now] holds a log [old] does not (the entry's removal created or forked it), that log
+   dies with the entry and is emptied, so a version of it read later refuses. An entry
+   that moved a bound shares its version with [old] and costs this one comparison. *)
+let undo ~old ~now =
+  match now.holes with
+  | None -> ()
+  | Some hn -> (
+      match old.holes with
+      | Some ho when ho.log == hn.log -> if hn.k > ho.k then truncate hn.log ho.k
+      | Some _ | None -> truncate hn.log 0)
 
 let set_lo d v =
   if v <= d.lo then Unchanged else if v > d.hi then Failed else settle { d with lo = v }
@@ -331,20 +546,23 @@ let affine d ~negated ~offset =
     raise (Bad_domain "affine: negating min_int");
   let l = (if negated then -d.hi else d.lo) + offset
   and h = (if negated then -d.lo else d.hi) + offset in
+  let fresh base span bits =
+    let lg = fresh_log ~base ~span ~bits in
+    Some { log = lg; k = 0; uid = 0 }
+  in
   match d.holes with
   | None -> { lo = l; hi = h; holes = None }
   | Some hs when not negated ->
-      {
-        lo = l;
-        hi = h;
-        holes = Some { hs with base = hs.base + offset; bits = Bytes.copy hs.bits };
-      }
+      let lg = hs.log in
+      { lo = l; hi = h; holes = fresh (lg.base + offset) lg.span (materialise hs) }
   | Some hs ->
-      (* Old bit [i] stands for [hs.base + i], whose image is [offset - hs.base - i].
-         So the image's bitset is the old one reversed, over the mirrored base. *)
-      let base = offset - (hs.base + hs.span - 1) in
-      let bits = Bytes.make (Bytes.length hs.bits) '\000' in
-      for j = 0 to hs.span - 1 do
-        if get_bit hs.bits (hs.span - 1 - j) then set_bit bits j
+      (* Old bit [i] stands for [base + i], whose image is [offset - base - i]. So the
+         image's bitset is the old one reversed, over the mirrored base. *)
+      let lg = hs.log in
+      let old_bits = materialise hs in
+      let base = offset - (lg.base + lg.span - 1) in
+      let bits = Bytes.make (Bytes.length old_bits) '\000' in
+      for j = 0 to lg.span - 1 do
+        if get_bit old_bits (lg.span - 1 - j) then set_bit bits j
       done;
-      { lo = l; hi = h; holes = Some { base; span = hs.span; bits } }
+      { lo = l; hi = h; holes = fresh base lg.span bits }
