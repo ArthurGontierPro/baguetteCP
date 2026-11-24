@@ -690,6 +690,8 @@ Gates 96 to 98 green: 218 models byte-identical, lane 347/347, debug 333/333, sc
 
 **Running**: the series on current main without the proof cap (agent-series, D-0203, fataepyc-06); the 64 GiB observation series then GCS and Chuffed (agent-node07, D-0210, D-0211, on fataepyc-07, allowed by the user on 2026-11-23); agent-cdcl (D-0219, M19-config-T10, the CDCL loop behind `BAGUETTE_CDCL`, default off); agent-retention (D-0221, the retention default); agent-memory (D-0218, M21-memory-T1/T2).
 
+**Stalled agents (2026-11-24)**: agent-watch, agent-diffn and agent-memory each stopped for hours waiting on a monitor that never woke them. The first two were nudged and finished. agent-memory (stalled 01:44 to 07:48 UTC) was stopped, its work saved as a WIP commit (`b7d7859` on `wave66-memory`), and agent-memory2 resumed from it with the instruction to poll its runs itself.
+
 **Known, not fixed yet**: black-hole is 4.5 times slower at the root since `inverse`'s alldiff lemmas, in `Explanation`'s hashing of `pol` lines (agent-table's finding). The `test_prop` debug failure was a test defect, fixed in D-0214.
 
 - D-0220, `bin_packing`, `_capa`, `_load` through mznlib as one linear row per bin (no `lib/core` change, a SPEC 2.1 sentence): `.opb` 0.58 to 1.00 of old (gate 100 green, binary `9eb03179`, the only artefact diffs are the five new models, lanes equal). **Its finding matters more than its change**: the heap-budget refusals of mapping, steelmillslab, team-assignment and gbac come from the SEARCH (learned clauses kept for ever, PB conflict analysis), not from the encoding. agent-retention (D-0221) measures the retention default because of it.
