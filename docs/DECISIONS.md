@@ -28317,3 +28317,334 @@ Fixes 1 and 2 are the two whose numbers are largest and least uncertain. Fix 3 i
   has to start from a fresh census on main. The numbers here stand as a measurement of the kinds.
 - The census extrapolates one instance per family, and covers 148 of 314.
 - Chuffed and Gecode ran on their own flattening, without proof.
+
+## D-0219  [AUTONOME] M19-config-T10: learning that drives the search. The CDCL loop of lazy clause generation (1UIP clause, backjump to its asserting level, the clause propagates there, no branch nogood) is built behind `BAGUETTE_CDCL=1`, default OFF and byte-identical. No new proof rule and no new `Explanation` constructor
+
+**Status**: DONE on branch `wave67-cdcl` (agent-cdcl, 2026-11-24), not merged. ROADMAP
+M19-config-T10. Taken in autonomous mode: the design choices of section 4 and the recommendation of
+section 7 were made without asking. The solver's default is NOT changed here. Measured on
+`fataepyc-06` while the Challenge series of 2026-11-23 ran (load 64 to 94 on 192 cores), at most two
+experiment processes at a time, compared on conflicts, nodes and instructions
+(`perf stat -e instructions:u`). Runs and scripts in `/scratch/arthur/cdcl-runs/`, copied to
+`/cluster/arthur/baguette-results/wave67-cdcl/`.
+
+### 1. What happens at a conflict today
+
+Read in `lib/core/search.ml` (`dfs`'s conflict arm, `branch_split`, `branch_assign`),
+`lib/core/learn.ml` (header, `at_conflict`), `lib/core/analysis.ml` (`analyse`, `one_uip`,
+`dependency_levels`), `lib/core/trace.ml` (header, `resync`), and the records D-0018 (nogoods over a
+logged trace), M2-L3 and D-0044/D-0045 (the 1UIP clause and its lifetime), M2-L12/D-0054 (its
+consumer), M2-L15 (the PB row's levels) and D-0137 (restarts). A conflict at level `d > 0`:
+
+1. `Trace.emit` writes one `rup` line for every trail entry not yet written, decision-free, filed at
+   the entry's level.
+2. The conflict's own line (`rup` over its facts, or its derivation when it has none).
+3. `bridges`: one line per decision that settled past a hole (D-0070).
+4. `learn_at_conflict`: the 1UIP walk at the conflict level (`Analysis.one_uip`), the semantic
+   minimisation, and a SECOND walk over every level, `Analysis.dependency_levels`, the decision
+   closure. The clause goes on the page as a `rup` at level 0 (`Learned.introduce`), is held by
+   `Retention`, and gets a consumer (`Clause.Learned_clause`, or a global unit), so it propagates
+   from then on. PB analysis derives and registers a learned PB row beside it.
+5. The restart schedule is asked (opt-in).
+6. The BRANCH NOGOOD: the decision literals filtered by the closure's levels (plus the decisions a
+   bridge rests on), a `rup` filed at the deepest level it names.
+7. `NFail` goes up. A frame whose level the nogood does not name skips its sibling (conflict-directed
+   backjumping). The frame owning the deepest named level, if this was its first child, reopens its
+   level and pushes the NEGATED DECISION as a new assumption; if it was the second child, it resolves
+   the two nogoods on its decision (`combine_nogoods`, one more `rup`) and returns the resolvent up.
+
+So the search returns to the deepest level the decision closure names. The last decision is in the
+cone of almost every conflict, so that level is the conflict level itself and the search goes back
+one level, chronologically: no sibling is skipped (D-0207 section 2, four families of five). Where it
+resumes, the learned clause is usually UNIT (section 3 measures it: it has one literal at level `d`
+and the others below), but nothing propagates it there. The next act is the sibling decision, pushed
+at level `d`. When the 1UIP literal is the decision itself, which is the common case, that sibling
+decision IS the clause's assertion, made as an assumption: the clause is satisfied by it and never
+propagates, and the sibling's own failure must still be resolved through the nogoods. When the 1UIP
+literal is implied, the clause propagates at level `d` under the sibling decision. Either way the
+learned clause does not choose where the search goes. That is the sense of the review's sentence
+(`docs/reports/2026-11-23-code-review.md` section 2 item 1).
+
+### 2. Why the backjump is the closure's and not the clause's
+
+`learn.ml`'s header gives two reasons. The first was that nothing propagated the learned clause
+(D-0044 fork (ii)), so a backjump to its asserting level would re-reach the same fixpoint, re-take
+the decision and loop. M2-L12 gave the clause a consumer and that reason is gone. The second is that
+the levels of a 1UIP cut are not a dependency set over DECISIONS, and the branch nogood is a clause
+over decisions whose job is to tell a frame that its sibling is refuted. That reason is right, and
+it is a property of the nogood architecture rather than of learning. M2-L15 re-asked it for the PB
+row and measured the same answer. CDCL does not need a decisions-only nogood at all: a backjump to
+the asserting level `b` is licensed by the learned clause itself, because at `b` the clause is unit
+and its propagation is the step the sibling decision used to be. Nothing is "skipped" that a clause
+has not refuted, because nothing above `b` is claimed explored. The decisions above `b` are simply
+undone and re-taken (or not) by the order.
+
+### 3. Measured: what the learned clause does today
+
+Binary: `wave67-cdcl` `e9108c1`, release, md5 `c176592b` (with the switch off it is byte-identical to
+main `dfdf57c`, md5 `00a6b267`, section 5). `--no-proof`, 300 s (120 s for 3-SAT), the observables
+under `BAGUETTE_CDCL_STATS=1`. "Unit at resume" is the share of learned clauses with every literal
+false but one, that one unassigned, where the search goes on after the conflict. "Ever prunes" is the
+share of learned-clause instances that pruned at least once in the run.
+
+| instance (search) | conflicts | levels skipped | unit at resume | ever prunes |
+|---|---|---|---|---|
+| QR48 f3 (annotated) | 14 890 | 0 | 76 % | 0 % (0 of 14 889) |
+| costas 14 (annotated) | 10 561 | 0 | 65 % | 1.6 % |
+| mknap2-1 (annotated, 300 s cut) | 13 539 | 0 | 61 % | 1.5 % |
+| javarouting trip_6_3, obj <= 66 (300 s cut) | 38 431 | 2 | 81 % | 59 % |
+| rcpsp 11, makespan <= 60 | 34 | 2 | 64 % | 94 % |
+| 3-SAT, 10 instances (first-fail, 120 s) | 1 884 to 51 189 | 4 to 22 % of the conflicts | 49 to 56 % | 60 to 72 % |
+| tuning: 2011 bacp-28 (300 s) | 82 256 | 770 | 59 % | 72 % |
+| tuning: 2011 pattern-set-mining sonar-k2 | 38 464 | 0 | 93 % | 10 % |
+| tuning: 2011 table-layout en-1250 | 197 | 791 | 64 % | 68 % |
+| tuning: 2012 mspsp hard_01 | 29 509 | 7 805 | 41 % | 80 % |
+| tuning: 2012 tpp 7_5_30_1 | 4 972 | 153 435 | 55 % | 31 % |
+| tuning: 2013 javarouting trip_8_1 | 27 424 | 2 | 77 % | 50 % |
+| tuning: 2013 nonogram dom_12 | 36 812 | 388 | 70 % | 55 % |
+| tuning: 2013 rubik 7-cube | 28 184 | 2 160 | 65 % | 60 % |
+| tuning: 2014 mqueens n11 | 31 550 | 3 | 78 % | 55 % |
+| tuning: 2014 spot5 412 | 20 824 | 6 | 39 % | 16 % |
+
+Levels skipped counts every sibling a backjump left unexplored, so one conflict can skip many (tpp).
+
+The first three rows are D-0207's "never backjumps". They also show the second half of the review's
+point: on QR48 not one of 14 889 learned clauses ever pruned, and on costas and mknap under 2 %. They
+are unit where the search resumes in two cases of three, but the next act there is the sibling
+decision, and when the 1UIP literal is the decision, which it is in a fixed search on these
+families, the decision satisfies the clause before anything can propagate it.
+
+The 3-SAT probe: 32 random instances at ratio 4.26 (8 seeds each at 150, 170, 200 and 250
+variables), Chuffed 0.14 (`fzn-chuffed`, default) answers all within 20 s, 17 satisfiable and 15
+UNSAT. Ten of them (eight satisfiable, two UNSAT) are the probe here, as `bool_clause` FlatZinc with
+no annotation (`/scratch/arthur/cdcl-runs/sat3/`, generator beside it).
+
+### 4. Design
+
+The loop is MiniSat's `search` and Chuffed's, as `Search.cdcl` (its header states it in full):
+
+    propagate
+    conflict at the entry level  -> close_root_conflict: the empty clause, UNSAT
+    conflict above it            -> trace, conflict line, bridges, the 1UIP clause (level 0, rup),
+                                    backjump to its asserting level b, go round: the clause's
+                                    instance is newborn, so the next propagate seeds it, and it
+                                    asserts the negation of the 1UIP fact at b
+    fixpoint, something unfixed  -> the order's choice, ONE side, as a decision on a new level
+    fixpoint, all fixed          -> a solution (branch and bound: install the bound, go round)
+
+The asserting level is the second-highest level of the minimised clause's literals (`Learn.levelled`,
+new, the same minimisation read with its levels), the entry level for a unit. A clause whose two
+highest levels tie is not asserting. That happens only when the conflict lies below the current
+level (the branch-and-bound bound, installed at a solution, is the case that occurs). The loop then
+goes back to that level, where the clause's own instance reports the conflict again and the walk
+produces an asserting clause, each such step strictly lower. When the 1UIP walk gives nothing (or
+learning is off), the clause is the branch nogood over all decisions, the line `dfs` writes there and
+`rup` for the same reason, introduced and propagated as a learned clause. It asserts the negation of
+the last decision at the level below: chronological backtracking in this loop's terms.
+
+How it coexists with what exists:
+
+- **The fixed annotation order** is asked again after every backjump, so the decisions between `b`
+  and the conflict are re-taken in order where their variables are still unfixed, as Chuffed does
+  under a fixed search. Only one side of a split is ever a decision. The other side is what a learned
+  clause asserts. `indomain_median`'s assignment is its two decisions on two levels, with no
+  assignment clause and no re-entry (D-0077's machinery is `dfs`'s only).
+- **Optimisation**: `record_improving` is called as `dfs` calls it and the loop goes round. The
+  bound conflicts at the next propagate and is analysed like any conflict.
+- **`-n`/`-a`**: refused on a satisfaction model (D-0150), and on an optimisation model `-a` is `-i`.
+  Nothing to change.
+- **Restarts** (D-0137): `restart_after_conflict` is asked after the clause is learned, and the
+  target is the lower of the asserting level and the restart's. Phase saving (through `undo_level`)
+  and the activity bumps are unchanged. `NRestart` is not used: the loop has no frames to unwind.
+- **PB learning**: `pb_at_conflict` runs and registers its row as before. The backjump reads the
+  clause's levels, never the row's (M2-L15).
+- **The proof**: the learned clause is the `rup` line it already was. The branch nogoods and the
+  `combine_nogoods` resolvents are not written at all, because the learned clauses refute the tree
+  and the last conflict, at the entry level, closes with the `rup >= 1` the root conflict has always
+  written (I-X7). A backjump is one writer step and one wipe of every level above the target
+  (`Justify.wipe_level` retires the levels at or above its argument). The trace lines of the levels
+  at or below the target stay on the page and `Trace.resync` finds them written, so they are not
+  written again, which is new: `dfs` keeps them too, but it never goes back more than the levels it
+  closes. `Trace` records exactly what it recorded. A learned clause's propagation at `b` gets the
+  ordinary trace line, `rup` against the clause, which is at level 0. I-X2: the learned clauses are
+  retired by `Retention` at the end, as before.
+- **No new `Explanation` constructor and no new proof rule.** The rule kinds of every proof the loop
+  writes in the unit lane are a subset of `dfs`'s on the same model (checked).
+- **A guard** (`expect`): at the fixpoint after an asserting backjump the loop checks that the 1UIP
+  literal holds. If no consumer made it true (a declined registration), it pushes the literal from
+  the clause, the other literals' negations as its facts, so a missing consumer costs a weaker
+  propagation, never a loop. Counted (`direct`). It fired 0 times in every run of this record.
+- **The switch**: `config.cdcl`, read from `BAGUETTE_CDCL` in `Search.default_config` (anything but
+  unset, `0`/`off`, `1`/`on` exits 2), so `bin/main.ml`, held by another session, needs no change. A
+  `--cdcl` flag is requested in `WORKLOG.md`. Under the switch the clause's consumer is on whatever
+  `BAGUETTE_PROPAGATE_LEARNED` says, since without it the loop would loop. M1-T36's node identity is
+  about a binary tree walked once and `stats_consistent` answers true for a CDCL run.
+- **Observables** (both loops, printed on stderr under `BAGUETTE_CDCL_STATS=1`, read by nothing):
+  resumes, levels skipped (in `dfs` the siblings left unexplored between the conflict and the resume,
+  in the loop `d - 1 - b`), whether the learned clause is unit where the search resumes (read off the
+  store before anything propagates), and the share of learned clause and PB instances that ever
+  prune (one byte per instance, set from the trail as `count_learned_activity` already reads it).
+
+### 5. Checks
+
+Run twice: on `e9108c1` against main `dfdf57c`, and on the branch with main `838f668` merged in
+(`8bd1b57` plus this record) against main `838f668`'s binary. The figures are the second run's.
+
+With the switch OFF (the default):
+
+- All 228 test models, both encodings (default and `--bits-above none`): stdout, exit code, `.opb`
+  and `.pbp` byte-identical to main's binary, 456 of 456 (`/scratch/arthur/cdcl-runs/ident/`).
+- `dune runtest --root . --force` under `ulimit -v 4000000`: 5 222 ok, 0 FAIL (peak RSS 155 MB on
+  the first run).
+- `make diff ARGS="--tier all -j 4"`: 347 of 347 runs equal the reference.
+- `make scaling ARGS="-j 4"`: every line within its threshold.
+- The unit observables (`lo_*`, `cdcl_run`) are read by nothing but the stderr line, which is printed
+  only under `BAGUETTE_CDCL_STATS=1`.
+
+With the switch ON (`BAGUETTE_CDCL=1`):
+
+- `scripts/run_model_tests.sh`: 223 of 228 pass, every proof verified on both encodings, and the
+  `--no-proof` run byte-identical to the proved one. The five others print other solutions: three
+  satisfiable models (`element_foreign_hole_rup_sat`, `gcc_count_lower_rup_sat`,
+  `gcc_saturate_hole_sat`), each solution checked by `Model.check_assignment` (I-S1) and its proof
+  `VERIFIED SATISFIABLE` on both encodings, and two optimisation models (`binpack_opt`,
+  `binpack_load_opt`) whose intermediate solutions differ and whose optimum is the expected one
+  (`VERIFIED BOUNDS 3 <= obj <= 3`, `6 <= obj <= 6`). Every UNSAT and every optimum agrees.
+- `test/unit/test_search_strategy.ml`, new lane `test_cdcl_loop`: pigeonhole 5/4 (UNSAT), queens 8
+  (SAT) and queens 6 with an objective (OPT 2), each under the loop alone, the loop with learning off
+  (the decision-nogood fallback), the loop with Luby restarts and phase saving, and the loop under
+  `-f`'s three strategies. Every run: same answer as `dfs`, proof VERIFIED, every id deleted (audit
+  on), no rule kind the `dfs` proof lacks, every learned clause unit at its resume, no direct
+  assertion. Over the twelve runs the loop skipped levels at 81 resumes.
+- `test_mutation.exe` under `BAGUETTE_CDCL=1`: 156 ok, 0 FAIL, every corruption refused, as without
+  the switch (156 ok).
+- Every finished proved run of section 6 is `VERIFIED` by veripb 3.0.2 (`d5644ca4`).
+
+### 6. Measured: the loop against `dfs`
+
+Binary for sections 3 and 6: `e9108c1` release, md5 `c176592b`; the ten runs the fallback change of
+`92c9e1f` concerns were run again on its release build, md5 `334eb79a` (below). Off is
+`BAGUETTE_CDCL=0`, on is `=1`, the same binary. `perf stat -e instructions:u` in G, two processes at
+a time. Full tables: `/cluster/arthur/baguette-results/wave67-cdcl/` (`small/`, `tune/`, `tune2/`,
+`np.md`, `f.md`, `pf.md`, `table.py`, `compare.py`).
+
+**D-0207's five and the 3-SAT probe, fixed search, `--no-proof`** (off / on):
+
+| instance | answer | conflicts | nodes | instructions |
+|---|---|---|---|---|
+| QR48 f3 | UNSAT both, 8.6 s / 6.2 s | 14 890 / 14 890 | 29 779 / 14 890 | 31.1 / 26.6 |
+| costas 14 | first solution both, 190 s / 164 s | 10 561 / 10 573 | 21 129 / 10 582 | 468 / 456 |
+| mknap2-1 (300 s) | none / none | 13 539 / 14 137 | 27 090 / 14 149 | 965 / 957 |
+| javarouting <= 66 (300 s) | none / none | 38 431 / 38 184 | 76 871 / 38 512 | 862 / 748 |
+| rcpsp 11 <= 60 | UNSAT both | 34 / 17 | 71 / 29 | 0.3 / 0.3 |
+| 3-SAT, the 5 satisfiable both solve | same 5 | -5 to +6 % | -37 to -43 % | -4 to -14 % |
+| 3-SAT r3_150_1 (UNSAT, 120 s) | none / UNSAT 109 s | 43 595 / 49 834 | | |
+| 3-SAT, the 4 others (120 s) | none / none | 5 to 16 % more conflicts in the 120 s | | |
+
+On these families the fixed-search tree is the same tree: the 1UIP literal is the last decision on
+almost every conflict, its asserting level is the level below, and asserting it there is what the
+sibling decision did. What changes is that the sibling is now a propagation and not a node (half the
+nodes), and every learned clause prunes once (QR48: 14 888 of 14 888, against 0). The cost per
+conflict falls by 2 to 14 %. Same with proof (on against off): QR48 205 against 214 MB of proof, costas 1 158 against
+1 131 MB, and every proof of a complete run VERIFIED (17 of the 30 proved runs here, 2 more on the
+subset below, none rejected).
+
+**The same under `-f`** (activity and annotation alternating, Luby restarts, phase saving): QR48
+16 208 conflicts and 8.3 s against 32 281 and 44.6 s, rcpsp 19 against 44 conflicts, r3_150_1
+refuted in 46 s against none in 120 s, r3_170_6 0.24 s against 0.90 s. Against: r3_200_1 and
+r3_250_3 are found by `dfs` in 1.4 s and 0.1 s and not by the loop in 120 s, costas 1 810 against
+1 535 conflicts. On satisfiable 3-SAT the answer at this size is a matter of where the restarts land,
+on both sides. Chuffed answers every one of the 32 in under 20 s: the loop is necessary for that and
+far from sufficient, the rest being T2 to T4 (restarts, phases, the heuristic) and the cost per
+conflict (M20).
+
+**The tuning subset.** Forty instances, every fifth row of `bench/tuning/set.lst` (`subset40.lst`:
+one per family, 2011 to 2026, 35 of tier 1). Fixed search on all forty, `-f` on the twenty odd rows,
+proof on ten of those. 300 s, 16 GiB, `--max-heap-mb 8192`. "Better" is the Challenge order:
+complete beats incomplete, then the faster complete, then the better incumbent.
+
+| arm | on better | off better | equal | complete off / on (verified) |
+|---|---|---|---|---|
+| fixed search, `--no-proof`, 40 | 6 | 6 | 28 | 7 / 6 |
+| `-f`, `--no-proof`, 20 | 6 | 5 | 9 | 5 / 5 |
+| fixed search, proof, 10 | 3 | 2 | 5 | 1 / 1 (both VERIFIED) |
+
+The instances that changed, fixed search:
+
+| instance | off | on | conflicts off / on | nodes off / on |
+|---|---|---|---|---|
+| 2022 rotating-workforce e-80 | SAT 84 s | SAT 1.6 s | 14 489 / 316 | 29 328 / 733 |
+| 2026 sdn-chain d30n600-7 | none | incumbent 22 | 6 560 / 4 274 | 17 962 / 429 065 |
+| 2014 spot5 412, 2019 stack-cuttingstock d7, 2023 multi-agent-graph-coverage, 2025 mondoku | incumbent | better incumbent | | |
+| 2021 flowshop-workers ex6 | OPT 3201 167 s | none | 25 300 / 20 784 | 221 927 / 500 521 |
+| 2012 tpp 7_5_30_1 | OPT 74 s | OPT 156 s | 4 972 / 5 805 | 163 378 / 218 357 |
+| 2019 nside EASY_200_50 | OPT 61 s | OPT 138 s | 512 / 441 | 5 205 / 10 961 |
+| 2013 rubik 7-cube, 2019 amaze | SAT | SAT, 10 % slower | | |
+| 2017 steelmillslab 14_1 | incumbent 5 | incumbent 9 | | |
+
+Under `-f`: table-layout 2 s against 9 s, flowshop-workers 210 s against 236 s, amaze, jp-encoding,
+compression and kitchen better; tpp, concert-hall-cap, radiation, vrp-submission and
+multi-agent-graph-coverage worse. With proof, rotating-workforce is SAT in 7.7 s (193 MB, VERIFIED)
+against 226 s (3 GB, VERIFIED), and flowshop-workers again finds nothing where `dfs` finds 3211.
+
+What the losses have in common is the column the gains do not have: NODES PER CONFLICT. On
+flowshop-workers the loop takes 24 decisions per conflict against 9, on nside 25 against 10, on tpp
+38 against 33. A backjump undoes levels whose decisions the fixed order then takes again, with their
+propagation, and on a deep optimisation search that re-descent is most of the work. That is
+Chuffed's behaviour too under a fixed search, and the standard answer is chronological backtracking
+for long jumps (Nadel and Ryvchin, SAT 2018) or trail saving, neither of which this row builds.
+
+**A fault found by the campaign, and fixed** (`92c9e1f`). In the first version a conflict the 1UIP
+walk gave nothing for (a factless conflict at its level) made the branch nogood a permanent learned
+clause. On rotating-workforce under `-f` that put 16 000 clauses of up to 450 literals on the engine
+in a minute and the run died on the 8 GB heap budget at 262 s (exit 5). On mondoku, concert-hall and oocsp
+it was 98 %, 69 % and 57 % of the conflicts. The nogood is now `dfs`'s line filed at its asserting level
+with the assertion pushed from it (section 4). Re-run on `334eb79a`: rotating-workforce `-f` runs
+its 300 s (188 860 conflicts, no answer, as `dfs`), concert-hall fixed search does 305 785
+conflicts in 300 s against 108 370, mondoku 1 131 372 against 143 434. Those reruns are the
+numbers in the tables above.
+
+### 7. Recommendation: the default stays `dfs` for now
+
+The choices taken here without asking, most consequential first:
+
+1. **The loop is a second search beside `dfs`, not a rewrite of it.** `dfs` keeps every line and every
+   counter it had, so the default is byte-identical by construction and the switch is reversible by
+   construction. The cost is two searches to maintain until the default is decided.
+2. **The conflict without a 1UIP clause is refuted by `dfs`'s nogood filed at its asserting level**,
+   not by a learned clause (section 6, the heap fault). It is chronological backtracking on those
+   conflicts.
+3. **The switch is an environment variable read in `Search.default_config`**, because `bin/main.ml`
+   is held. `--cdcl` is requested in `WORKLOG.md`.
+4. **The subset**: every fifth row of the tuning set, `-f` on half of it, proof on a quarter, because
+   two processes at a time at 300 s leave about seven hours for the campaign.
+
+The options for the default, for the user:
+
+| option | what changes | measured | cost |
+|---|---|---|---|
+| A. `dfs` stays the default, the loop opt-in (this branch) | nothing | | the learned clauses of a fixed search still prune once in a hundred on QR48, costas, mknap |
+| B. the loop is the default everywhere | every tree with a conflict, every proof, the diff lane's reference, three satisfiable test models answer another solution, SPEC 3.4 gets the sentence below | fixed search 6 better, 6 worse, 28 equal of 40, one complete answer lost (flowshop-workers); QR48 -14 % instructions | the re-descent after a long backjump on deep optimisation searches |
+| C. the loop is the default under `-f` only | `-f`'s trees and proofs | 6 better, 5 worse, 9 equal of 20, no complete answer lost | a sample of twenty, inside the noise the tuning README states |
+| D. A now, then the loop with chronological backtracking for long jumps (M19-config-T11), restarts, phases and the heuristic re-measured on it (T2 to T4), and B or C decided on the full series | nothing now | | one more row |
+
+**Recommendation: D.** The loop does what the review asked of it (the learned clause drives the
+search, and every learned clause prunes), it is sound on everything measured, and on a fixed search it
+is the same tree at a lower cost per conflict on D-0207's families. But on the subset it is a tie, it
+loses one complete answer for a reason that is understood and has a standard remedy, and the
+strategies it exists to serve (T2 to T4) have not been measured on it. Making it the default now would
+change every proof for a tie.
+
+If B or C is chosen, the SPEC 3.4 sentence proposed: "With `--cdcl` (`BAGUETTE_CDCL=1`), a conflict
+does not return to the parent decision: the search learns the 1UIP clause, backjumps to the level
+where it asserts, and propagates it there. The variable and value choices at each decision are those
+above; only the second branch of a split is no longer a decision, it is what a learned clause asserts.
+Every backjump is reflected in the proof as the deletion of the levels it undoes, and UNSAT is the
+empty clause derived at the root."
+
+### 8. How to revert
+
+The code is three commits on `wave67-cdcl`: `e9108c1` (the loop, the observables, the unit lane),
+`92c9e1f` (the fallback) and this record's commit. With the switch off nothing they add runs except
+the observables' counters (one byte per learned instance, one evaluation of the learned clause per
+resume), so reverting is `git revert` of the three, or simply not setting `BAGUETTE_CDCL`.
