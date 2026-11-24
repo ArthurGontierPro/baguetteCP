@@ -24,7 +24,7 @@ of it to every session and stopping at a broken line before it even reached the 
 
 ### 2026-11-23 (orchestrator baguette-92 on fataepyc-06): decision numbers reserved
 
-D-0203 (agent-series), D-0206 (agent-table), D-0208 (agent-watch, M20 learned-constraint wakes), D-0209 (agent-writer, M20 proof writer) are taken by running agents. D-0210 (agent-node07, M17-T5, the 64 GiB observation series) and D-0211 (agent-node07, M17-T4, GCS and Chuffed) too. D-0212 (agent-arith, M20-pernode-T3) too. Another session that needs a record: take D-0217 or above, and say so here. D-0216 is agent-hash (black-hole root slowdown in Explanation hashing). D-0215 is agent-regin (M20-pernode-T4, alldiff). D-0214 is agent-lazy (M20-pernode-T2, Element). D-0213 is agent-diffn (M18-coverage-T2).
+D-0203 (agent-series), D-0206 (agent-table), D-0208 (agent-watch, M20 learned-constraint wakes), D-0209 (agent-writer, M20 proof writer) are taken by running agents. D-0210 (agent-node07, M17-T5, the 64 GiB observation series) and D-0211 (agent-node07, M17-T4, GCS and Chuffed) too. D-0212 (agent-arith, M20-pernode-T3) too. Another session that needs a record: take D-0218 or above, and say so here. D-0217 is agent-circuit (M18-coverage-T3). D-0216 is agent-hash (black-hole root slowdown in Explanation hashing). D-0215 is agent-regin (M20-pernode-T4, alldiff). D-0214 is agent-lazy (M20-pernode-T2, Element). D-0213 is agent-diffn (M18-coverage-T2).
 
 Need a change in a file someone else has claimed? Write it here and move on to other
 work. The owning session picks it up.
@@ -683,7 +683,9 @@ The shipped gains on costas and mknap stay small until D-0208, because learned c
 
 **Known, not fixed yet**: black-hole is 4.5 times slower at the root since `inverse`'s alldiff lemmas, in `Explanation`'s hashing of `pol` lines (agent-table's finding). The `test_prop` debug failure was a test defect, fixed in D-0214.
 
-**[AUTONOME] decisions**: none yet beyond the agents' own records.
+**Open for you**: D-0213 (`diffn` through mznlib, merged, gate 96 running): the two cumulative relaxations' capacity rows are MODEL rows in the `.opb`, trusted as MiniZinc's flattening is, and checked by enumeration in `test_compile.ml`; deriving them in the proof costs O(n^2 W H) lines. Deleting the two `mznlib/fzn_diffn*.mzn` files reverts it. 7 -> 9 complete answers on 25 instances at 300 s, `.opb` up to 5.8 times larger on some.
+
+**[AUTONOME] decisions**: D-0213 (above).
 ### 2026-11-24 (agent-diffn, `wave61-diffn`): M18-coverage-T2, diffn's relaxations (D-0213)
 
 `mznlib/fzn_diffn.mzn` and `fzn_diffn_nonstrict.mzn` keep std's pairwise disjunction and add the two cumulative relaxations on `cumulative.ml` over order copies of the coordinates; no OCaml in `lib/`, so the binary and every existing artefact are byte-identical. [AUTONOME] the capacity rows are model rows (D-0213 section 3, the trust is a theorem checked by enumeration in test_compile; revert by deleting the two files).
