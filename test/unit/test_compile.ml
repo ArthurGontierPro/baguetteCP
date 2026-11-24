@@ -735,7 +735,26 @@ let evaluate (m : M.t) (assign : int array) =
                  operand (List.nth tb.M.tab_s k) = 0
                  || List.for_all2 ( = ) x
                       (List.init n (fun i -> tb.M.tab_t.((k * n) + i))))
-               (List.init (List.length tb.M.tab_s) Fun.id))
+               (List.init (List.length tb.M.tab_s) Fun.id)
+      (* M18-coverage-T3 (D-0217), written apart from [Model.check_assignment]: the
+         successors are a permutation of the nodes, the orbit of the root is all of them,
+         and every position is the step at which the orbit reaches its node. *)
+      | M.Circuit c ->
+          let x = Array.of_list (List.map operand c.M.cir_x) in
+          let p = Array.of_list (List.map operand c.M.cir_pos) in
+          let n = Array.length x and r = c.M.cir_root in
+          let in_s v = v >= r && v < r + n in
+          let perm =
+            Array.for_all in_s x
+            && List.sort compare (Array.to_list x) = List.init n (fun i -> r + i)
+          in
+          perm
+          &&
+          let orbit = List.init n (fun d -> d) in
+          let node_at = Array.make n r in
+          List.iter (fun d -> if d > 0 then node_at.(d) <- x.(node_at.(d - 1) - r)) orbit;
+          List.length (List.sort_uniq compare (Array.to_list node_at)) = n
+          && List.for_all (fun d -> d = 0 || p.(node_at.(d) - r - 1) = d) orbit)
     m.M.constraints
 
 (* Brute force over the declared box: the independent oracle for the expected answer.
@@ -2389,6 +2408,67 @@ let test_table_models () =
     (member_src ~ints ~bools:(sels 1) ~call:"baguette_table([x1, x2], [1, x2], [s1])"
        ~extra:[] ())
 
+(* M18-coverage-T3 (D-0217): `baguette_circuit`, end to end, as [test_table_models]: each
+   scene brute-forced over its declared box, the positions included, solved, and its
+   proof checked. The scenes cover what [post_circuit] folds: successors declared over
+   the whole node range (R's unit rows: the self-loop), a successor declared outside S
+   (the bound unit rows), a constant successor, a root other than 1, a cycle closed
+   through the root and one closed away from it, with and without all_different. Then
+   the refusals, by their message. *)
+let test_circuit_models () =
+  let ints4 ?(lo = 1) dom =
+    List.init 4 (fun k -> (Printf.sprintf "s%d" (k + lo), dom))
+    @ List.init 3 (fun k -> (Printf.sprintf "p%d" (k + lo + 1), "1..3"))
+  in
+  let call ?(lo = 1) succ =
+    Printf.sprintf "baguette_circuit([%s], [%s], %d)" succ
+      (String.concat ", " (List.init 3 (fun k -> Printf.sprintf "p%d" (k + lo + 1))))
+      lo
+  in
+  let s4 = "s1, s2, s3, s4" in
+  run_model ~title:"circuit: SAT, four nodes declared 1..4 (self-loops by R's unit rows)"
+    ~src:(member_src ~ints:(ints4 "1..4") ~call:(call s4) ~extra:[ "int_ne(s1, 2)" ] ());
+  run_model ~title:"circuit: UNSAT, 1 and 2 point among themselves (through the root)"
+    ~src:
+      (member_src ~ints:(ints4 "1..4") ~call:(call s4)
+         ~extra:[ "int_le(s1, 2)"; "int_le(s2, 2)" ]
+         ());
+  run_model ~title:"circuit: UNSAT, 3 and 4 point among themselves (away from the root)"
+    ~src:
+      (member_src ~ints:(ints4 "1..4") ~call:(call s4)
+         ~extra:
+           [ "int_le(3, s3)"; "int_le(3, s4)"; "all_different_int([s1, s2, s3, s4])" ]
+         ());
+  run_model
+    ~title:"circuit: SAT, successors declared 0..5, outside S (the bound unit rows)"
+    ~src:(member_src ~ints:(ints4 "0..5") ~call:(call s4) ~extra:[ "int_le(s4, 2)" ] ());
+  run_model ~title:"circuit: SAT, root 3, a constant successor (node 4 -> 6)"
+    ~src:
+      (member_src ~ints:(ints4 ~lo:3 "3..6") ~call:(call ~lo:3 "s3, 6, s5, s6")
+         ~extra:[ "int_ne(s3, 5)" ] ());
+  run_model ~title:"circuit: UNSAT, root 3 and constants closing 4 -> 5 -> 4"
+    ~src:
+      (member_src ~ints:(ints4 ~lo:3 "3..6") ~call:(call ~lo:3 "s3, 5, 4, s6") ~extra:[]
+         ());
+  expect_rejected "circuit: a position count other than n - 1 is refused"
+    ~needles:[ "baguette_circuit"; "there must be n - 1" ]
+    (member_src ~ints:(ints4 "1..4")
+       ~call:"baguette_circuit([s1, s2, s3, s4], [p2, p3], 1)" ~extra:[] ());
+  expect_rejected "circuit: a position declared outside 1..n-1 is refused"
+    ~needles:[ "baguette_circuit"; "a position declared outside 1..3" ]
+    (member_src
+       ~ints:(ints4 "1..4" @ [ ("q", "0..3") ])
+       ~call:"baguette_circuit([s1, s2, s3, s4], [p2, p3, q], 1)" ~extra:[] ());
+  expect_rejected "circuit: a position that is also a successor is refused"
+    ~needles:[ "baguette_circuit"; "also a successor" ]
+    (member_src ~ints:(ints4 "1..3")
+       ~call:"baguette_circuit([s1, s2, s3, p2], [p2, p3, p4], 1)" ~extra:[] ());
+  expect_rejected "circuit: a variable root is refused"
+    ~needles:[ "baguette_circuit"; "the root must be a constant" ]
+    (member_src
+       ~ints:(ints4 "1..4" @ [ ("r", "1..1") ])
+       ~call:"baguette_circuit([s1, s2, s3, s4], [p2, p3, p4], r)" ~extra:[] ())
+
 (* M16-file-review-T5 (D-0193): under [Discard_rows] (`--no-proof`) the objective's .opb
    line is not built, because nothing reads it; under the sinks that write the .opb it is
    there, the order encoding of the objective variable. *)
@@ -2738,6 +2818,7 @@ let () =
   test_inverse_models ();
   test_member_models ();
   test_table_models ();
+  test_circuit_models ();
   test_diffn_relaxation_theorem ();
   test_diffn_models ();
   if !failures > 0 then (

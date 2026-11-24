@@ -315,6 +315,11 @@ lib/core/       Baguette_core
                             x and one SELECTOR per tuple (store variables, as member's), one
                             DEF row s_t -> x = t per tuple; every pruning one rup with its
                             reasons on the letters (M18-coverage-T1, D-0206)
+    circuit.ml              circuit through mznlib's baguette_circuit, beside all_different:
+                            CHECKING plus Chuffed's PREVENT over MTZ POSITION store variables
+                            (succ_u = v -> pos_v = pos_u + 1 in the .opb, the definition); a
+                            subtour cut is ONE pol, the rows around the cycle divided by n,
+                            written ahead (M18-coverage-T3, D-0217)
     linear.ml               int_lin_le. THE REFERENCE PROPAGATOR — copy this shape.
     lin_eq.ml               int_lin_eq (two model rows, see D-0011)
     ne.ml                   int_lin_ne and int_ne (VALUE consistency)
