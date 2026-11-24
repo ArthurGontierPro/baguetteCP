@@ -23,12 +23,17 @@
    [Stale_version] rather than answering. Each version carries the uid of its last log
    slot, which a truncation and a refill never reproduce, so the refusal is exact.
 
-   Reading the newest version is the bit test after two compares. Reading an older one
-   (a trail entry's [old]/[now], a pass's snapshot, an Element frame, a D-0124 history)
-   is the bit test, and when the bit is set, "was it logged at or after [k]?": a scan of
-   at most [deep_scan] entries, else [pos], an int32 per value built on the first deep
-   read of that log and kept up to date after. So every read is O(1) once [pos] exists,
-   and [pos] exists only for a log something read deep in its past.
+   Every read tests the bit first, with the loads the copying representation made (the
+   version carries the log's base, span and bitset): a clear bit is a hole of no valid
+   version, which answers every read of a value still in the domain. A set bit is a hole
+   of the newest version (two compares), and of an older one (a trail entry's
+   [old]/[now], a pass's snapshot, an Element frame, a D-0124 history) iff it was logged
+   before [k]: a scan of at most [deep_scan] entries, else [pos], an int32 per value
+   built on the first deep read of that log and kept up to date after. So every read is
+   O(1) once [pos] exists, and [pos] exists only for a log something read deep in its
+   past. What this costs in time is the set-bit reads of older versions, which Element's
+   lazy reasons make by the thousand per node: +2 % of javarouting's instructions per
+   node, +1 % of costas's, nothing elsewhere (D-0222 section 6).
 
    M16-file-review-T1 (D-0186), the costs that grow with the WIDTH, and why none of them
    is on a per-entry path of the engine: [remove] of an interior value copies the bitset
@@ -74,8 +79,11 @@ type log = {
 
 (* A version of [log]: its base holes and the first [k] logged values. [uid] is the stamp
    of slot [k - 1] (0 for [k = 0]), which is how a version knows it has been truncated
-   away: see [valid]. Immutable, four words. *)
-type holes = { log : log; k : int; uid : int }
+   away: see [valid]. [hbase], [hspan] and [hbits] are the log's own (immutable) fields,
+   copied so that [is_hole] -- the read every [mem] makes -- costs the loads it cost
+   before D-0222 and not one more through [log] (3 words a version, measured on
+   javarouting, D-0222 section 6). Immutable, seven words. *)
+type holes = { log : log; k : int; uid : int; hbase : int; hspan : int; hbits : Bytes.t }
 type t = { lo : int; hi : int; holes : holes option }
 type result = Unchanged | Changed of t | Failed
 
@@ -125,7 +133,7 @@ let popcount8 =
       let rec go i acc = if i = 0 then acc else go (i lsr 1) (acc + (i land 1)) in
       go i 0)
 
-let get_bit bits i =
+let[@inline] get_bit bits i =
   Char.code (Bytes.unsafe_get bits (i lsr 3)) land (1 lsl (i land 7)) <> 0
 
 let set_bit bits i =
@@ -163,8 +171,8 @@ let fresh_log ~base ~span ~bits =
     base;
     span;
     bits;
-    vals = Array.make 4 0;
-    uids = Array.make 4 0;
+    vals = [||];
+    uids = [||];
     len = 0;
     top_uid = 0;
     next_uid = 1;
@@ -172,11 +180,11 @@ let fresh_log ~base ~span ~bits =
   }
 
 (* The version the store holds after its last removal: every slot of the log is its. *)
-let is_newest h = h.k = h.log.len && h.uid = h.log.top_uid
+let[@inline] is_newest h = h.k = h.log.len && h.uid = h.log.top_uid
 
 (* Not truncated away: slot [k - 1] still holds the removal this version ended with. A
    version of [k = 0] is the base holes, which no truncation touches. *)
-let valid h =
+let[@inline] valid h =
   h.k <= h.log.len && (h.k = 0 || Array.unsafe_get h.log.uids (h.k - 1) = h.uid)
 
 let stale h =
@@ -191,7 +199,8 @@ let stale h =
 let push lg i v =
   let j = lg.len in
   if j = Array.length lg.vals then (
-    let cap = Stdlib.max (j + 1) (Stdlib.min lg.span (2 * j)) in
+    (* from empty: a log made by [affine] or a fork may never be appended to *)
+    let cap = Stdlib.max (j + 1) (Stdlib.min lg.span (Stdlib.max 4 (2 * j))) in
     let grow a = Array.append a (Array.make (cap - j) 0) in
     lg.vals <- grow lg.vals;
     lg.uids <- grow lg.uids);
@@ -203,7 +212,7 @@ let push lg i v =
   lg.top_uid <- uid;
   set_bit lg.bits i;
   if Bytes.length lg.pos > 0 then Bytes.set_int32_le lg.pos (4 * i) (Int32.of_int j);
-  { log = lg; k = j + 1; uid }
+  { log = lg; k = j + 1; uid; hbase = lg.base; hspan = lg.span; hbits = lg.bits }
 
 (* Pop every slot at or above [k], clearing its bit. *)
 let truncate lg k =
@@ -240,11 +249,10 @@ let logged_after h i =
     if Bytes.length lg.pos = 0 then build_pos lg;
     Int32.to_int (Bytes.get_int32_le lg.pos (4 * i)) >= h.k)
 
-(* Is bit [i] (in range) a hole of version [h]? *)
-let hole_in h i =
-  if is_newest h then get_bit h.log.bits i
-  else if not (valid h) then stale h
-  else get_bit h.log.bits i && not (logged_after h i)
+(* Bit [i] (in range) is set: is it a hole of version [h]? Of the newest version, yes;
+   of an older one iff it was logged before [k]; a STALE version refuses. *)
+let set_bit_is_hole h i =
+  is_newest h || if valid h then not (logged_after h i) else stale h
 
 (* A fresh bitset holding exactly [h]'s holes: the log's, minus what came after [k]. *)
 let materialise h =
@@ -270,13 +278,22 @@ let lo d = d.lo
 let hi d = d.hi
 let is_fixed d = d.lo = d.hi
 
-let is_hole d v =
+let[@inline] is_hole d v =
   match d.holes with
   | None -> false
   | Some h ->
-      let i = v - h.log.base in
-      i >= 0 && i < h.log.span && hole_in h i
+      (* The bit first: a clear bit is a hole of no valid version (bits only gain values
+         along the log), which answers the common read -- a value still in the domain --
+         with the loads the copying representation made. A stale version is refused on
+         a set bit; on a clear one only [check_version] (which D-0222's test asks of
+         every photograph from an undone branch) sees it, to keep this path as it was. *)
+      let i = v - h.hbase in
+      i >= 0 && i < h.hspan && get_bit h.hbits i && set_bit_is_hole h i
 
+(* Raise [Stale_version] if [d]'s holes are a version its log has truncated away. A read
+   refuses by itself on a set bit; this asks on any (the test of D-0222 asks it of every
+   photograph from an undone branch). *)
+let check_version d = match d.holes with Some h when not (valid h) -> stale h | _ -> ()
 let mem d v = v >= d.lo && v <= d.hi && not (is_hole d v)
 let value d = if is_fixed d then Some d.lo else None
 
@@ -468,7 +485,7 @@ let with_hole d v =
    [now] holds a log [old] does not (the entry's removal created or forked it), that log
    dies with the entry and is emptied, so a version of it read later refuses. An entry
    that moved a bound shares its version with [old] and costs this one comparison. *)
-let undo ~old ~now =
+let[@inline] undo ~old ~now =
   match now.holes with
   | None -> ()
   | Some hn -> (
@@ -548,7 +565,7 @@ let affine d ~negated ~offset =
   and h = (if negated then -d.lo else d.hi) + offset in
   let fresh base span bits =
     let lg = fresh_log ~base ~span ~bits in
-    Some { log = lg; k = 0; uid = 0 }
+    Some { log = lg; k = 0; uid = 0; hbase = base; hspan = span; hbits = bits }
   in
   match d.holes with
   | None -> { lo = l; hi = h; holes = None }

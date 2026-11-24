@@ -1870,12 +1870,15 @@ let d0222_walk ~photo_forks =
           if not (reads_as (Store.get s (Var.of_int i)) cur.(i)) then
             fail (Printf.sprintf "run %d: a fork disturbed the store" run)
       | _ -> ());
-      (* a photograph from an undone branch reads exactly or refuses *)
+      (* a photograph from an undone branch is refused as stale, or reads exactly *)
       List.iter
         (fun (_, ds, rs) ->
           Array.iteri
             (fun i r ->
-              match reads_as ds.(i) r with
+              match
+                Domain.check_version ds.(i);
+                reads_as ds.(i) r
+              with
               | true -> ()
               | false ->
                   fail (Printf.sprintf "run %d: a stale photo answered wrongly" run)
