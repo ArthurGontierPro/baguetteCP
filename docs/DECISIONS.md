@@ -27572,3 +27572,456 @@ bounded memo table and its key. The two deduplications are the usual list-plus-t
 `git revert 894b295` (the code) and `ae0454d` (the test's assertion). Reuse alone can be turned
 off without reverting by setting `Alldiff.amo_reuse := false`; no signature changed outside the
 additions.
+
+## D-0208  M20-pernode-T4 (learned part): watching a learned PB row was measured and NOT taken; the pass exits after one walk when nothing is forceable. Same runs in the same order, byte-identical proofs, costas -47 % and mknap -35 % instructions per node without proof
+
+**Status**: DONE on `wave60-watch` by agent-watch, 2026-11-23, not merged (the orchestrator gates and
+merges). D-0052's refusal of a cached slack is NOT reopened: the design that reopened it was built,
+measured and withdrawn (section 3). Runs in `/scratch/arthur/watch-runs/`.
+
+### 1. The problem (D-0207 section 5 item 1, rank 1 of section 6)
+
+A learned PB row (`Pb.Learned_pb`) has no advisor: every bound move of one of its variables queues
+it, and every run recomputes every term from `Store.get` in three walks (`snapshot`, `effective_all`,
+`mark_forceable`). On costas 14 the rows run 1 292 times per node, on mknap2-1 2 827 times, and almost
+no run prunes (measured at 3 000 nodes: 4.6 % of the runs on costas, 0.2 % on mknap). With the
+engine's work for them they were 83 % and 93 % of a node. Learned clauses already have two watches
+and an advisor (M6-T20, D-0104, D-0138), and are not changed here.
+
+### 2. The constraint that decides the design: the run ORDER must not move
+
+The task required the same stdout and node counts on all test models and on the differential lane.
+Fewer wakes does not give that. D-0173 is the measurement: resting a satisfied learned clause loses no
+pruning, but it changes the trail entry at which the clause is woken, and 250 of 301 lane runs
+differed (another 1UIP clause, another tree). An advisor that DROPS a wake of a PB row has the same
+defect. In the FIFO phase a row woken by a change A that cannot make it prune sits at A's place in the
+queue. If a later change B, made before that place comes up, makes it prune, today's engine runs it
+at A's place and an engine that dropped A runs it at B's place, after every instance queued in
+between. The prunings land in another order, the trail and the reasons differ, and so does the tree.
+So the wakes, the queue and the run bracket stay as they are. Only what a run costs may change, and
+each run must return what it returned before.
+
+### 3. Measured and withdrawn: a witness of quiet (commit `c99d2b2`, reverted in `3acccc4`)
+
+For `sum a_i l_i >= b` with terms grouped by (variable, polarity), a set W of term indices with every
+literal non-false and `sum_W a - max_g (sum_{W, g} a) >= b` proves that a pass can neither force nor
+fail (no conflict: the non-false sum is at least b; no forcing: a term's ladder-effective coefficient
+counts its own group only, and the other groups hold at least b). The row kept W between runs and
+re-read its literals at every run, so a stale W cost a pass and never an answer (a cached CHOICE,
+not D-0052's cached number). It kept the order exactly, the unit test compared it with the plain pass
+over 12 386 runs of random searches with backtracks, and a hand-placed bad witness and the
+BAGUETTE_DEBUG check both caught a broken (C).
+
+It was slower. At 3 000 nodes without proof, instructions:
+
+| | main | witness | fast exit (section 4) | both |
+|---|---|---|---|---|
+| costas 14 | 32.08 G | 38.67 G (+20.5 %) | 26.56 G (-17.2 %) | 33.81 G |
+| mknap2-1 | 26.11 G | 32.45 G (+24.3 %) | 19.86 G (-23.9 %) | 28.65 G |
+
+The learned rows of these families sit close to propagating. A witness needed 61 of 102 literals on
+average on costas and 40 of 58 on mknap, one could be built after 42 % and 72 % of the passes, and it
+answered 11 % and 40 % of the runs. Checking 60 % of a row and rebuilding after every pass costs more
+than the one walk it saves. A slack counter on the trail (the option the task named) would have the
+same denominator problem at a higher price: what decides quiet is the largest open group sum as well
+as the slack (section 4), and keeping a maximum up to date under backtracking needs more than a
+counter. Not built.
+
+### 4. Taken: the pass's exact early exit
+
+The largest ladder-effective coefficient of an OPEN term is exactly the largest per-group sum of open
+coefficients. A term i of group g counts the non-false terms of g at least as strong as itself; a
+satisfied term of g is strictly weaker than every open one (for `x >= k`, satisfied is `k <= lo` and
+open is `lo < k <= hi`; mirrored for `x <= k - 1`), so i counts open terms of g only, and the weakest
+open term of g counts all of them. So `mark_forceable` finds a forceable term iff the slack is below
+that maximum. `Pb.snapshot` computes it in the walk it already made (`scratch.osum`, `max_open`) and
+`Pb.pass` returns `Fixpoint` when `slack >= max_open`, without `effective_all` and `mark_forceable`.
+Overflow is kept exact: a group sum that would not fit sets `max_open` to `max_int`, which never takes
+the exit, so `effective`'s `Checked` raise is still reached where it was. The same walk now sums the
+slack with `+` when the layout's `plain` flag says no partial sum can overflow (the coefficient total
+fits, and so does it minus a negative degree); otherwise through `Checked.add` as before.
+
+Every run returns the same outcome on the same store, so the runs, their order, the trail, the
+reasons, the proof, the learned constraints and the tree are main's. It applies to every `Pb` row, the
+model's and the clause face's too, because `pass` is shared; for those it is the same answer faster.
+It adds no state and touches no invariant: I-P2, I-P6, I-P7 and I-X6 hold as before, and pb.ml's "No
+mutable state" section stands, with a paragraph saying what was measured.
+
+Tests: `test_pb`'s E3a comparison of the layout pass with the list pass (3 000 random rows, prunings,
+conflicts, long groups, the two overflow rows) covers the exit. Two breaks were checked to redden it:
+exiting at `slack + 1 >= max_open` (test (a) and its integer scene fail) and taking
+the largest open COEFFICIENT instead of the group sum (the ladder test and E3a).
+
+What it costs in clarity: one field in the scratch record, one in the layout, a second copy of the
+snapshot loop for the grouped case, and section 4's argument in `snapshot`'s comment.
+
+### 5. What is left, and the fallback
+
+- The engine's work for the wakes (walk, queue, run bracket) is untouched: D-0207 put it at 11.5 M of
+  a costas node and 16.3 M of an mknap node, and it is now the largest share there. Removing it while
+  keeping the order needs a test at WAKE time that is cheap and exact, plus a queue that remembers the
+  place a dropped wake would have taken (a FIFO keyed by sequence number) so that a row found active
+  later is run there. Section 3 says the cheap test does not exist for these rows. So this is the
+  point where the order has to be given up or the work kept.
+- **The fallback, D-0169 (b)**: stop RUNNING learned constraints that do not prune, keeping them on
+  the page. It changes trees wherever a learned row would have pruned (16.5 times per costas node),
+  so it needs a rule for WHEN: by search mode (a fixed search without backjumps, as on the four D-0207
+  families that never backjump), or adaptive on the effective rate per row, which the engine's
+  `runs_by_id`/`eff_by_id` already count. A default-behaviour change, for the user. Not implemented.
+
+### 6. Measurements
+
+D-0207's five instances, instructions per node, `perf stat -e instructions:u`, one process at a time,
+release binaries (`make release`, D-0171): main `e844eb9` = `7826cf88`, this branch = `4de68ff1`.
+Nodes, answers, every `--stats` and `limit:` counter except the clocks, and the `.pbp` (md5) are
+identical in all ten pairs.
+
+| instance | nodes | --no-proof main | --no-proof branch | proof main | proof branch |
+|---|---|---|---|---|---|
+| QR48 (codes-cp, 3 fixed) | 29 779 | 1.044 M | 1.048 M (+0.4 %) | 1.841 M | 1.844 M (+0.1 %) |
+| costas 14 | 21 129 | 44.74 M | 23.86 M (-46.7 %) | 54.11 M | 33.25 M (-38.6 %) |
+| mknap2-1 (cut 20 000) | 20 001 | 40.30 M | 26.37 M (-34.6 %) | 41.08 M | 27.06 M (-34.1 %) |
+| javarouting trip_6_3 (cut 20 000) | 20 001 | 12.58 M | 12.59 M (+0.0 %) | 24.55 M | 24.58 M (+0.1 %) |
+| rcpsp 11, bound 66 | 2 010 | 2.636 M | 2.499 M (-5.2 %) | 10.25 M | 10.12 M (-1.3 %) |
+
+**Again after merging main `f4f6391`** (D-0209, D-0212, D-0214, D-0215 in), main = `cba056a8`, the
+branch at `2dbab13` = `99bad850`, same protocol (four jobs at a time; instruction counts do not depend
+on load). Nodes, answers, counters and `.pbp` md5 again identical in all ten pairs.
+
+| instance | --no-proof main | --no-proof branch | proof main | proof branch |
+|---|---|---|---|---|
+| QR48 | 1.036 M | 1.040 M (+0.4 %) | 1.700 M | 1.703 M (+0.2 %) |
+| costas 14 | 42.99 M | 22.12 M (-48.6 %) | 51.46 M | 30.58 M (-40.6 %) |
+| mknap2-1 | 40.15 M | 26.19 M (-34.8 %) | 40.79 M | 26.85 M (-34.2 %) |
+| javarouting trip_6_3 | 8.933 M | 8.937 M (+0.0 %) | 20.87 M | 20.87 M (-0.0 %) |
+| rcpsp 11, bound 66 | 2.424 M | 2.287 M (-5.6 %) | 9.078 M | 8.910 M (-1.9 %) |
+
+QR48's +0.4 % is the clause rows (degree 1) paying for the per-group bookkeeping in the snapshot of
+the passes `quiet` does not answer. Gate on `2dbab13` (main `f4f6391` merged in): `dune runtest --force` 4 700 ok, 0 FAIL, peak RSS 155 MB; 214 models, stdout, `.opb` and `.pbp` equal to main's binary; `run_model_tests.sh` 214/214; differential lane 347/347 and debug 333/333; scaling lane ok (all at -j 4). Before the merge, on `b911ebe`: 4 561 ok, 209 models equal, lanes 347/347 and 333/333, scaling ok.
+
+How to revert: revert `3acccc4`; the record and the withdrawn witness (`c99d2b2`) are history only.
+
+## D-0217  [AUTONOME] M18-coverage-T3: `circuit` as a native propagator over MTZ position variables. The .opb defines the constraint with std's own auxiliary idea (one position per node, `succ_u = v -> pos_v = pos_u + 1`), and every subtour pruning is DERIVED in the proof, one `pol` that sums the rows around the cycle and divides by n. `subcircuit` stays on std's decomposition
+
+**Status**: DECIDED (agent-circuit, `wave65-circuit`, 2026-11-24). No new `Explanation` constructor,
+no change to a model that does not call `circuit`. Revert: delete `mznlib/fzn_circuit.mzn` (every
+model flattens to std's decomposition again, byte for byte); the OCaml is then dead code.
+
+### 1. Context
+
+`circuit(succ)` reaches baguette through std's `fzn_circuit.mzn`: `all_different(succ)`,
+`all_different(order)`, `succ_i != i`, `order[l] = 1` and `order[succ_i] = (order_i = n ? 1 :
+order_i + 1)`, an `array_var_int_element` per node that std decomposes further into reified
+equalities. Nothing in it reasons about a CHAIN, so a partial assignment that closes a subtour is
+only refuted once the order variables run out of values, many levels later. M18-coverage's census
+reads 95 Challenge instances with `circuit` (21 % complete) and 32 with `subcircuit` (41 %), and
+D-0185 section 4 found routing to be where free search loses most. Chuffed and Gecode run alldiff
+on the successors plus the no-subtour check ("prevent": the arc from the end of a chain back to
+its start is forbidden unless the chain covers every node).
+
+The proof question is the one T3's row names: a subtour cut is not a single row. "Not all arcs of
+the cycle C" is implied by circuit, but no model row says it, and with only `succ` in the .opb
+there is no compact PB statement of "one Hamiltonian cycle" from which each cut follows.
+
+### 2. The encoding: MTZ positions, the definition of the constraint
+
+`mznlib/fzn_circuit.mzn` keeps `all_different(succ)` (native, alldiff.ml), the domain
+restrictions `succ_i in S` and `succ_i != i` (as std; the flattener writes them as declared holes),
+and adds one call `baguette_circuit(succ, pos, l)`: `l = min(S)` is the ROOT, `pos` one
+`var 1..n-1` per node OTHER than the root, introduced by the library's `let` (table's selectors,
+D-0206); the root's position is the constant 0 and has no variable, so search never meets one
+that nothing constrains. The .opb rows
+(`compile.ml`'s `post_circuit`), with G(u, v) = `n ~[succ_u >= v] + n [succ_u >= v+1]` the
+arc's GUARD over succ_u's ORDER literals (a literal a declared bound makes constant dropped):
+
+```
+GE(u, v)   G(u, v) + pos_v - pos_u >= 1          u, v != root      succ_u = v -> pos_v >= pos_u + 1
+LE(u, v)   G(u, v) + pos_u - pos_v >= -1         u, v != root      succ_u = v -> pos_v <= pos_u + 1
+LE(r, v)   G(r, v) - pos_v >= -1                 u = root          succ_r = v -> pos_v <= 1
+END(u)     G(u, r) + pos_u >= n - 1              v = root          succ_u = r -> pos_u >= n - 1
+```
+
+for every v in succ_u's declared domain, v != u, v in S. pos is expanded by
+`Encoding.linear_terms_int_lin_le`, so it is a bits variable under the default `--bits-above 0`
+(every row O(log n) literals) and an order variable under `--bits-above none` (O(n) literals per
+row, O(n^3) in all: section 6 measures it). succ is held on the order encoding (`circuit` joins
+`held_families`; alldiff holds it already).
+
+WHY THIS IS A DEFINITION AND NOT A RELAXATION. With `all_different(succ)` and no self-loop, succ
+is a permutation. GE alone excludes every cycle that avoids the root (summed around such a cycle,
+the positions cancel and `0 >= k`), so the permutation is one cycle: that is Miller, Tucker and
+Zemlin's formulation, and it is std's `order` idea with the wrap made explicit at the root. LE and
+END exclude nothing GE does not: given a Hamiltonian cycle, `pos_v` = the distance from the root
+satisfies all four rows, so no circuit is lost. They are there so that a cycle THROUGH the root
+also has a one-line cut (section 3). The .opb's solutions projected on succ are exactly the
+circuits; pos is a function of succ. Nothing posted is a consequence the solver computed, so the
+open question of D-0213 section 3 (implied rows posted as model rows) does not arise here.
+
+### 3. The cut, one `pol`
+
+A cycle C = c_0 -> c_1 -> ... -> c_{k-1} -> c_0 with k < n:
+
+- C avoids the root: sum GE over its k arcs. Every pos cancels, and `n * sum(guards) >= k`.
+- C passes through the root, c_0 = r: sum LE(r, c_1), LE(c_1, c_2), ..., LE(c_{k-2}, c_{k-1}) and
+  END(c_{k-1}). Every pos cancels, and `n * sum(guards) >= (n - 1) - (k - 1) = n - k`.
+
+Either way `n d` leaves `sum(guards) >= 1`, the clause "some arc of C is not taken" over succ's
+order literals: one [Combine] of [Model_row] terms with divisor n (D-0013), no new constructor.
+
+### 4. Propagation (CHECKING, plus Chuffed's `prevent`)
+
+One call, looped until no new arc is fixed:
+
+- P, prevent: for each maximal chain s -> ... -> e of FIXED arcs, k nodes, k < n, e unfixed,
+  remove s from succ_e. The reason is the chain's arcs (two bound facts each), the derivation the
+  cut over C = chain + (e -> s), made under `Store.deriving_ahead`: Trace writes the `pol` ahead
+  and the trace line `rup claim \/ ~facts` follows from it (assume succ_e = s and the facts, every
+  guard of the cut is false). A [Needs_derivation] family under I-X10, as alldiff and gcc.
+  A closed cycle of fixed arcs shorter than n is a conflict on its arcs, same derivation.
+  When the fixed arcs do not form disjoint paths (two arcs into one node, alldiff's to refute),
+  P is skipped for that call.
+- H, positions: along a fixed arc, a PINNED position pins the other one. `succ_r = v` gives
+  `pos_v <= 1`, `succ_u = r` gives `pos_u >= n - 1` (each one row, the arc as facts); `succ_u = v`
+  with pos_u fixed at a gives pos_v = a + 1 (GE and LE, the arc and pos_u's two bound facts), and
+  with pos_v fixed at b gives pos_u = b - 1. Each pruning is one `rup` against one row
+  ([Single_row]). Only pinned premises are used ON PURPOSE: under the bits encoding, unit
+  propagation turns `x >= c` and `x <= c` into every bit of x (top bit down, one of the two
+  inequalities forces it), and `x >= c`, `x <= c - 1` into a conflict, so these lines are RUP
+  over bits; a premise that is only a bound is not, in general (section 7).
+
+Consistency: CHECKING on (succ, pos). With every variable fixed, every row is one arc between two
+pinned positions, and H refutes a violated one. P is the stronger reasoning Chuffed's circuit has
+without its SCC check; the matching's pruning on succ is alldiff's own. When the whole circuit is
+fixed, H fixes every position from the root, so the positions never need search there. They can
+still be branched on (every store variable is a search candidate, as std's `order` already was),
+which is no worse than the decomposition this replaces. The advisor wakes the instance only on a
+FIXED variable (I-P7: P and H read fixed arcs and pinned positions only).
+
+### 5. `subcircuit` does not follow cheaply, and stays on std
+
+In a subcircuit a short cycle is legal; what is forbidden is a second one. "C is closed and the
+node x outside it is in" refutes only through x's own cycle, which no chain names, so the cut is
+not one sum of rows over a known cycle: it needs a start-node selector per node and an argument
+over an unknown second cycle. That is a different design (a start variable as std's `firstin`,
+or the SCC argument), recorded here as the reason T3 ships `circuit` only.
+
+### 6. Measurement
+
+Written after the run, at the end of this record (section 8).
+
+### 7. What was ruled out
+
+- Positions as proof-only auxiliaries (not store variables): a `sol` line is propagated by the
+  checker, and over the order encoding unit propagation does not pin a position from a linear
+  row, so the solution would have to list them, which needs the encoding module (claimed).
+- A propagated MTZ relaxation (bounds on pos from bounds): over bits its lines are not RUP, and
+  each would need the bits arm's `pol` of linear.ml; the gain over P is the MTZ LP bound, small
+  for a CP search, and it can come later as its own row.
+- Holding pos on the order encoding at every W: O(n^3) literals by default.
+
+SPEC 2.1 gains the `baguette_circuit` sentence (a normative addition, the user's to decide outside
+autonomous mode): it states the relation `Model.check_assignment` and test_compile's oracle check,
+the positions included, exactly as D-0206 did for `baguette_table`. Reverting the record reverts it.
+
+### 8. Measurement (2026-11-24)
+
+20 Challenge instances that call `circuit`, 11 families (stochastic-vrp, cvrp, is, p1f, p1f-pjs,
+vrplc, vrp-submission, yumi-static, tsptw, atp-stage2), old = main `25f3a89` release with its
+mznlib (std's decomposition), new = `wave65-circuit` release with its mznlib, 300 s, default
+search and `-f`, the two arms of a run side by side on the shared node, veripb 900 s on every
+run that ended. Binaries' md5, the driver, the table and the logs are in
+`/cluster/arthur/baguette-results/wave65-circuit/` (`summary.tsv`). Every instance routes
+(one `baguette_circuit` call each, 36 to 66 on p1f and p1f-pjs).
+
+- `.opb` rows lower on all 20 (0.44 to 0.998 of old; 2015_is is the 0.998, its circuit a small
+  part of 1.7 M rows).
+  p1f_13 312 k -> 136 k rows, 64 MB -> 21 MB; tsptw n80 661 k -> 371 k.
+- Default search. One outcome changes: 2020_p1f-pjs_10 goes from a time-out (incumbent 334) to
+  OPT 300, VERIFIED. The other four that complete (stochastic-vrp c6 OPT, 2025_is OPT, p1f_13
+  UNSAT, atp-stage2 OPT) complete in both arms, every proof VERIFIED (9 of 9 checked). Of 15
+  time-outs, 14 reach more nodes in 300 s (cvrp P-n16-k8 5.6 k -> 27.6 k, vrp-submission
+  78 k -> 127 k) and one fewer (2015_is, 825 -> 745, where circuit is a small part of the
+  model); the incumbent is the same on 6 of the 7 that print one and worse on 2015_is.
+- `-f`. No outcome changes (the same five complete, 10 of 10 checked proofs VERIFIED). Of 15
+  time-outs, 11 reach more nodes and 4 fewer; the incumbent is better on 4 of 8 that print
+  one (2019 stochastic-vrp c8 188 -> 176, vrp-submission 318 -> 304, cvrp P-n16-k8 519 -> 512,
+  vrplc 2023 432 -> 429) and the same on the other 4. p1f-pjs_10 completes in both arms,
+  in 21.6 k nodes against 16.2 k: prevent changes the search there, and costs it nodes.
+- Instructions per node: median 0.59 of old (default) and 0.73 (`-f`), the smaller rows.
+- The non-circuit models of test/models are byte-identical across the two binaries (218 of 218,
+  stdout, .opb and .pbp hashed, `bytes-hashes.tsv`).
+
+What it does not show: a completion change beyond p1f-pjs_10 in 300 s. The routing instances
+(vrp, vrplc, tsptw) stay time-outs; their next lever is the search question D-0185 section 4
+asks, and a propagated position bound (section 7's MTZ relaxation) if a profile says the
+pruning, not the search, is what is missing.
+
+## D-0220  [AUTONOME] M18-coverage-T4: `bin_packing_load`, `bin_packing_capa` and `bin_packing` through mznlib, std's rows without the bool2int copies: one linear row per bin over the indicators `bin[i] = b` themselves (std's int_eq_reif Booleans, read as 0..1). No new propagator, no new `Explanation` constructor, no `lib/core` change. The refusals were measured first: four families of five fill the heap during search, not at the encoding
+
+**Status**: DECIDED (agent-binpack, `wave68-binpack`, 2026-11-24). Revert: delete
+`mznlib/fzn_bin_packing_load.mzn`, `fzn_bin_packing_capa.mzn` and `fzn_bin_packing.mzn`; every model
+then flattens to std's decomposition again, byte for byte, and the two builtins are dead code.
+
+### 1. Context, and what the refusals measured to be
+
+std's `fzn_bin_packing_load(load, bin, w)` is `sum(load) = sum(w)`, `bin[i]` in the bin range,
+and per bin `load[b] = sum_i w_i * bool2int(bin[i] = b)`. It flattens, per (item, bin) pair whose
+bin is in the item's domain, to an `int_eq_reif` (a Boolean B and its reified rows), a
+`bool2int` (a second, 0..1 integer copy of B and its two rows) and one term of an `int_lin_eq`
+per bin. `bin_packing_capa` is the same with `<= capacity[b]`, and `bin_packing(c, bin, w)` is
+`sum_i w_i * bool2int(bin[i] != b) >= W - c` per bin of the hull. On a 10 x 5 toy that is 6 .opb
+rows, 2 variables and 2 propagator instances per pair (measured, `--bits-above 0` and `none`).
+
+The census (D-0185's arm A, order encoding, before D-0201) counts 32 of 65 `bin_packing_load`
+instances and 8 of 20 `bin_packing` REFUSED at the heap budget. Step 1 measured why, on the
+release binary of main `3df912f` (md5 `def46188`), flattened with main's mznlib:
+
+| instance | .fzn | .opb rows | RSS at the root | RSS later | what grows |
+|---|---|---|---|---|---|
+| 2015 mapping mesh3x3_2 | 0.17 MB | 86 k | 66 MB | 2.9 GB at 1 021 conflicts (60 s, `--no-proof`) | PB conflict analysis: with `BAGUETTE_PB_ANALYSIS=off` the same 2 000 nodes take 1.5 s and 124 MB instead of 60 s and 2.9 GB |
+| 2017 steelmillslab 13_0 | 5.7 MB | 102 k | 128 MB | 1.06 GB at 8 000 nodes, 2.9 GB at 12 000 | learned clauses kept as engine instances: `BAGUETTE_PROPAGATE_LEARNED=off` gives 383 MB at 8 000 nodes; 3 832 of 4 105 learned clauses have >= 16 literals |
+| 2018 team-assignment data3_6_28 | 2.9 MB | 105 k | 89 MB | 1.26 GB at 12 000 nodes | the same shape as steelmill |
+| 2016 gbac reduced_UD6 | 0.18 MB | 11 k | small | 0.17 GB at 4 000 nodes | PB analysis is 2.5x the time, little memory |
+| 2025 ihtc-2024-marte i06 | 289 MB | 4.2 M | **5.9 GB**, compile 50 s | refused at 8 GB in the M17 series | the encoding itself: 433 k `int_eq_reif`, 180 k `bool2int` |
+
+So the refusals are of two kinds. On four families of five (mapping, steelmillslab,
+team-assignment, gbac) the model is small and the heap fills DURING SEARCH, at 0.3 to 2.8 MB per
+conflict, through the learned-clause database (keep-all, D-0051) and, on mapping, PB conflict
+analysis. The M17 series (`/scratch/arthur/series-20261123`, current main, bits default, 8 GiB)
+already shows most of them as time-outs rather than refusals: 6 of the 55 instances of these
+families are still REFUSED there (three ihtc, one steelmill, two mapping). Only ihtc is refused
+for the size of the encoding, and there the decomposition is a large part of it. A smaller
+bin-packing changes the first kind only through the cost of a node and the reasons the search
+learns from; it is not the lever for it, and section 6 says where that lever is.
+
+### 2. The design: std's rows, minus the copies
+
+std's rows are already the natural definition: per bin, `load_b = sum_i w_i [bin_i = b]` over
+the items' value indicators, with no auxiliary but the indicators. What std adds on top is a
+`bool2int` COPY of every indicator, because MiniZinc's `int_lin_eq` takes integers. The design
+removes the copy and nothing else.
+
+`mznlib/fzn_bin_packing_load.mzn` keeps std's `sum(load) = sum(weight)` and range restriction,
+and writes per bin
+
+```
+baguette_bool_lin_eq([w_i | i in items_b], [bin_i = b | i in items_b], load_b)
+load_b in sum(min(0, w_i))..sum(max(0, w_i))          (i in items_b)
+```
+
+`items_b` the items of nonzero weight whose domain holds b. `bin_i = b` is the SAME Boolean std's
+`bool2int(bin_i = b)` reads: an `int_eq_reif` the flattener writes once and shares, by common
+subexpression elimination, with any other constraint that says `bin_i = b` (steelmillslab's
+colour constraint does, for every pair). `fzn_bin_packing_capa.mzn` writes
+`baguette_bool_lin_le(w, [bin_i = b | ...], capacity_b)` per bin, and `fzn_bin_packing.mzn` the
+same with `capacity` over std's own range `lb_array(bin)..ub_array(bin)` (std writes that row
+counting the items NOT in b, `>= W - capacity`; it is the same row negated and shifted by W).
+
+`baguette_bool_lin_eq(a, x, y)` is `sum a_i x_i = y` and `baguette_bool_lin_le(a, x, c)` is
+`sum a_i x_i <= c`, the Booleans read as the integers 0 and 1 (D-0007): the builder turns each
+into the `Int_lin_eq` / `Int_lin_le` it is, so the row, the propagator (`Lin_eq`, `Linear`), the
+overflow cap, the oracle (`Model.check_assignment`) and the proof are the existing ones. The
+FlatZinc builtins `bool_lin_eq` / `bool_lin_le` have that meaning, but mznlib/redefinitions.mzn
+decomposes them through bool2int for every model; prefixed names keep this change to bin
+packing (section 5).
+
+The load restriction is the one choice that is not std's text: std's flattening finds those
+bounds by itself, because there each load is the variable its own `int_lin_eq` DEFINES, and
+MiniZinc intersects a defined variable's domain with the bounds of its definition. Here nothing
+defines the load and, without the line, it keeps its declared domain: on gbac reduced_UD6 a load
+stayed 0..298 where std had 0..18, the `int_times` squares built from it became 0..93 025, and
+the .opb went from 11 k to 99 k rows. The line restates what the flattener computed for std, as
+a domain restriction of the model (trusted as the flattening is), not a row the solver derives.
+
+WHY THIS IS STILL THE DEFINITION. Every row is std's: `sum(load) = sum(weight)`, the range
+restriction, and per bin the same linear row over the same indicators, with the integer copy
+`I = bool2int(B)` replaced by B itself (I = B in every solution of std's rows, so the .opb's
+solutions projected on the model's variables are the same). The load restriction excludes no
+solution (a load is a sum of a subset of its bin's items).
+
+Per pair, against std: 1 variable and about 2 rows and 1 propagator instance fewer (the
+bool2int), the same int_eq_reif. On the 10 x 5 toy: 342 -> 242 .opb rows under `--bits-above 0`,
+437 -> 337 under `none`, and the same solution printed (the search order is unchanged: the copies
+were never branched before the indicators).
+
+### 3. Propagation and proof: all of it existing
+
+The indicators keep int_eq_reif's propagator and proof (reif_lin_eq.ml, D-0057; over a bits
+item its two-half `pol`, D-0134 section 8). Each bin's row is a `Lin_eq` (two `Linear`
+instances) or a `Linear`: load bounds from the indicators fixed and still possible, an
+indicator set to 0 when its weight no longer fits, set to 1 when the bin cannot reach its lower
+bound without it, each pruning `Linear`'s own justification (order: one `rup`; a bits load: the
+bits arm's `pol`, D-0132). That is std's propagation exactly, with one link fewer between an
+indicator and its row. Shaw's 2004 rules (no-fit by subset sums, the lower bound on the number
+of bins, load bounds from the other bins' slack) are not built: section 1 says the refusals are
+not a propagation question, and section 8's measurement does not ask for them.
+
+### 4. Encodings
+
+Nothing is held. The items keep whatever encoding the rest of the model gives them (bits by
+default; int_eq_reif over bits is reif_lin_eq's bits face), the loads are linear terms (bits by
+default), the indicators Booleans. `--bits-above none` gives the same rows over the ladders.
+
+### 5. Options considered, and the one built first and dropped
+
+| option | per pair | measured |
+|---|---|---|
+| keep std | int_eq_reif + bool2int: 2 variables, about 6 rows, 2 instances | the baseline |
+| std's rows without the copy (chosen) | int_eq_reif: 1 variable, about 4 rows, 1 instance | rows 0.86 to 1.0 of std, section 8 |
+| indicators as FRESH Booleans defined by `table`'s rows (one table of one column per item, D-0206: ALO plus `2 ~s + [bin >= v] + ~[bin >= v+1] >= 2`), loads by `Linear`; bins held on order | 1 variable, 1 row, a table instance per item | built first. team-assignment 105 k -> 68 k rows, but steelmillslab 102 k -> 117 k rows and 18 -> 149 MB: holding the bins on order turned every OTHER linear row over them (12 k int_eq_reif of the colour constraint, which CSE no longer shares with fresh indicators) from 7 bits into 111 ladder literals. Dropped |
+| no indicator, `[bin >= b] + ~[bin >= b+1]` in the row | 0 rows | unit propagation counts both literals of an unfixed item (2 w where the truth is w), so no load pruning is RUP from the row; every pruning a `pol` with the item's ladder, a dedicated propagator |
+| direct literals `[bin = b]` in the row, a dedicated propagator | the direct encoding's channel rows | a bits load's bound is not RUP over a row (D-0127): the propagator would re-implement `Linear`'s bits arm |
+| native `bool_lin_eq` / `bool_lin_le` for every model (drop their bool2int redefinition) | the same, everywhere | changes every model that sums Booleans; a default-wide change left as a proposal (M18 or M19 row) |
+| Shaw's propagator over the chosen rows | as chosen | stronger pruning, not what the refusals measured to need |
+
+### 6. What this does not fix
+
+The four families whose heap fills during search keep that behaviour unless the reasons change
+its rate. Two levers are outside this task's files: the learned-constraint database
+(`retention.ml`, held by review-1123; `BAGUETTE_RETENTION=lbd:1000` gave 845 MB against 1 057 MB
+at 8 000 steelmill nodes) and the per-instance cost of a learned clause registered as an engine
+instance (M21-memory, agent-memory), and on mapping the cost of PB conflict analysis over the
+load rows' large weights (M19-config). They are recorded in WORKLOG's cross-session requests.
+
+### 7. Revert
+
+Delete the three mznlib files (section header). Nothing else depends on them; the builtins stay
+accepted and cost nothing unused. SPEC 2.1 gains the `baguette_bool_lin_eq` / `_le` sentence (a
+normative addition, the user's to decide outside autonomous mode); reverting the record reverts it.
+
+### 8. Measurement (2026-11-24)
+
+20 Challenge instances calling the three globals, 6 families (mapping 4, gbac 4, steelmillslab
+4, team-assignment 4, kidney-exchange 2, ihtc-2024-marte 2), old = release of main `3df912f`
+(md5 `def46188`) flattened with main's mznlib (std's decomposition), new = release of
+`wave68-binpack` (md5 `4dde0987`) with its mznlib, 300 s, `--max-heap-mb 8192` (the M17
+series' budget), with proof, the two arms side by side, veripb 900 s on every run that
+completed. Table, driver and logs: `/cluster/arthur/baguette-results/wave68-binpack/`
+(`summary.tsv`).
+
+- Outcomes: none changes. The three that complete (steelmillslab 2019 bench_19_6, team-assignment
+  2022 data1_4_6, kidney-exchange 2019 3_20_0.25_5) are OPT in both arms, 6 of 6 proofs
+  VERIFIED. ihtc i06 is REFUSED at the heap budget in both (110 s new, 117 s old); no refusal
+  becomes an attempt. The mapping instances reach 5.5 to 8.5 GB in 300 s in both arms
+  (section 1: search, not the encoding).
+- `.opb` bytes, new / old: team-assignment 0.58 to 0.61, ihtc 0.92 and 0.95, steelmillslab and
+  kidney-exchange 0.96 to 0.97, gbac 0.97 to 0.99, mapping 1.00 (its indicators are shared with
+  the `flows != 0 <-> flow_processor = j` channel, so only the copies go).
+- Nodes in 300 s on the 16 time-outs: more on 14 (steelmillslab 13_0 x1.50, team-assignment
+  2022 data2_6_15 x1.38, gbac reduced_UD6 x1.30, ihtc i03 x1.25), fewer on 2 (gbac csplib12
+  x0.95, kidney 2023 x0.98). Incumbents: better on 3 (gbac reduced_UD6 9 277 -> 9 072, reduced_UD2
+  by 1, team-assignment data2_5_6 948 -> 960, maximised), worse on 2 (team-assignment data3_6_28
+  7 093 -> 7 083, gbac UD4 by 1), the same on the other 10 that print one.
+- The completed runs: team-assignment data1_4_6 295 s against 275 s (150 k nodes against 160 k),
+  kidney 73 s against 66 s, steelmillslab 237 s against 240 s.
+- Root, node-limited (4 000 nodes, `--no-proof`): steelmillslab 13_0 16.6 s against 22.3 s,
+  team-assignment data3_6_28 14.2 s against 17.6 s, gbac reduced_UD6 5.2 s against 7.0 s, the
+  same RSS: a node is cheaper, its memory the same.
+- The 223 models of test/models that do not call the builtins are byte-identical across the
+  two binaries (stdout, .opb and .pbp hashed, `bytes-hashes-*.tsv`).
+
+What it does not show: a completion or refusal change. That was section 1's prediction: the
+refusals of four families are the search's heap (WORKLOG cross-session request, M21-memory,
+the retention policy), and ihtc's root is 5.1 GB of which the copies were 0.8 GB. Shaw's
+rules are not asked for by these numbers either; they would change the search, and the
+search's memory is what fills the heap.

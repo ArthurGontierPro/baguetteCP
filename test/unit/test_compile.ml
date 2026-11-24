@@ -735,7 +735,26 @@ let evaluate (m : M.t) (assign : int array) =
                  operand (List.nth tb.M.tab_s k) = 0
                  || List.for_all2 ( = ) x
                       (List.init n (fun i -> tb.M.tab_t.((k * n) + i))))
-               (List.init (List.length tb.M.tab_s) Fun.id))
+               (List.init (List.length tb.M.tab_s) Fun.id)
+      (* M18-coverage-T3 (D-0217), written apart from [Model.check_assignment]: the
+         successors are a permutation of the nodes, the orbit of the root is all of them,
+         and every position is the step at which the orbit reaches its node. *)
+      | M.Circuit c ->
+          let x = Array.of_list (List.map operand c.M.cir_x) in
+          let p = Array.of_list (List.map operand c.M.cir_pos) in
+          let n = Array.length x and r = c.M.cir_root in
+          let in_s v = v >= r && v < r + n in
+          let perm =
+            Array.for_all in_s x
+            && List.sort compare (Array.to_list x) = List.init n (fun i -> r + i)
+          in
+          perm
+          &&
+          let orbit = List.init n (fun d -> d) in
+          let node_at = Array.make n r in
+          List.iter (fun d -> if d > 0 then node_at.(d) <- x.(node_at.(d - 1) - r)) orbit;
+          List.length (List.sort_uniq compare (Array.to_list node_at)) = n
+          && List.for_all (fun d -> d = 0 || p.(node_at.(d) - r - 1) = d) orbit)
     m.M.constraints
 
 (* Brute force over the declared box: the independent oracle for the expected answer.
@@ -2389,6 +2408,67 @@ let test_table_models () =
     (member_src ~ints ~bools:(sels 1) ~call:"baguette_table([x1, x2], [1, x2], [s1])"
        ~extra:[] ())
 
+(* M18-coverage-T3 (D-0217): `baguette_circuit`, end to end, as [test_table_models]: each
+   scene brute-forced over its declared box, the positions included, solved, and its
+   proof checked. The scenes cover what [post_circuit] folds: successors declared over
+   the whole node range (R's unit rows: the self-loop), a successor declared outside S
+   (the bound unit rows), a constant successor, a root other than 1, a cycle closed
+   through the root and one closed away from it, with and without all_different. Then
+   the refusals, by their message. *)
+let test_circuit_models () =
+  let ints4 ?(lo = 1) dom =
+    List.init 4 (fun k -> (Printf.sprintf "s%d" (k + lo), dom))
+    @ List.init 3 (fun k -> (Printf.sprintf "p%d" (k + lo + 1), "1..3"))
+  in
+  let call ?(lo = 1) succ =
+    Printf.sprintf "baguette_circuit([%s], [%s], %d)" succ
+      (String.concat ", " (List.init 3 (fun k -> Printf.sprintf "p%d" (k + lo + 1))))
+      lo
+  in
+  let s4 = "s1, s2, s3, s4" in
+  run_model ~title:"circuit: SAT, four nodes declared 1..4 (self-loops by R's unit rows)"
+    ~src:(member_src ~ints:(ints4 "1..4") ~call:(call s4) ~extra:[ "int_ne(s1, 2)" ] ());
+  run_model ~title:"circuit: UNSAT, 1 and 2 point among themselves (through the root)"
+    ~src:
+      (member_src ~ints:(ints4 "1..4") ~call:(call s4)
+         ~extra:[ "int_le(s1, 2)"; "int_le(s2, 2)" ]
+         ());
+  run_model ~title:"circuit: UNSAT, 3 and 4 point among themselves (away from the root)"
+    ~src:
+      (member_src ~ints:(ints4 "1..4") ~call:(call s4)
+         ~extra:
+           [ "int_le(3, s3)"; "int_le(3, s4)"; "all_different_int([s1, s2, s3, s4])" ]
+         ());
+  run_model
+    ~title:"circuit: SAT, successors declared 0..5, outside S (the bound unit rows)"
+    ~src:(member_src ~ints:(ints4 "0..5") ~call:(call s4) ~extra:[ "int_le(s4, 2)" ] ());
+  run_model ~title:"circuit: SAT, root 3, a constant successor (node 4 -> 6)"
+    ~src:
+      (member_src ~ints:(ints4 ~lo:3 "3..6") ~call:(call ~lo:3 "s3, 6, s5, s6")
+         ~extra:[ "int_ne(s3, 5)" ] ());
+  run_model ~title:"circuit: UNSAT, root 3 and constants closing 4 -> 5 -> 4"
+    ~src:
+      (member_src ~ints:(ints4 ~lo:3 "3..6") ~call:(call ~lo:3 "s3, 5, 4, s6") ~extra:[]
+         ());
+  expect_rejected "circuit: a position count other than n - 1 is refused"
+    ~needles:[ "baguette_circuit"; "there must be n - 1" ]
+    (member_src ~ints:(ints4 "1..4")
+       ~call:"baguette_circuit([s1, s2, s3, s4], [p2, p3], 1)" ~extra:[] ());
+  expect_rejected "circuit: a position declared outside 1..n-1 is refused"
+    ~needles:[ "baguette_circuit"; "a position declared outside 1..3" ]
+    (member_src
+       ~ints:(ints4 "1..4" @ [ ("q", "0..3") ])
+       ~call:"baguette_circuit([s1, s2, s3, s4], [p2, p3, q], 1)" ~extra:[] ());
+  expect_rejected "circuit: a position that is also a successor is refused"
+    ~needles:[ "baguette_circuit"; "also a successor" ]
+    (member_src ~ints:(ints4 "1..3")
+       ~call:"baguette_circuit([s1, s2, s3, p2], [p2, p3, p4], 1)" ~extra:[] ());
+  expect_rejected "circuit: a variable root is refused"
+    ~needles:[ "baguette_circuit"; "the root must be a constant" ]
+    (member_src
+       ~ints:(ints4 "1..4" @ [ ("r", "1..1") ])
+       ~call:"baguette_circuit([s1, s2, s3, s4], [p2, p3, p4], r)" ~extra:[] ())
+
 (* M16-file-review-T5 (D-0193): under [Discard_rows] (`--no-proof`) the objective's .opb
    line is not built, because nothing reads it; under the sinks that write the .opb it is
    there, the order encoding of the objective variable. *)
@@ -2547,6 +2627,246 @@ let diffn_random_rect st ~fixed =
     wd = size ();
     hd = size ();
   }
+
+(* M18-coverage-T4 (D-0220): bin packing through `baguette_bool_lin_eq` and
+   `baguette_bool_lin_le`, end to end, as [test_circuit_models]: the scenes are written the
+   way mznlib/fzn_bin_packing_load.mzn and fzn_bin_packing_capa.mzn write them (one
+   int_eq_reif indicator per (item, bin) pair of the item's domain, the range restriction,
+   one row per bin over the indicators; the loads' restriction to their reachable sums is
+   mznlib's and implied, so it is left out here), solved
+   under both encodings, the proof checked each time. The fixed scenes are brute-forced over
+   their declared box; the random ones, whose box the indicators and loads make too wide to
+   walk, take [?expect_sat] from an oracle written apart from the model: enumerate the bins
+   only, sum the weights per bin, compare with the load's declared domain or the capacity.
+   Then the refusals, by their message. *)
+type bp_scene = {
+  bp_doms : (int * int) list; (* item i's declared bin domain *)
+  bp_ws : int list;
+  bp_bins : int * int; (* the bin range b0..b1 *)
+  bp_load : (int * int) list option; (* Some: the loads' declared domains; None: capa *)
+  bp_capa : int list;
+  bp_extra : string list;
+}
+
+let bp_src sc =
+  let b0, b1 = sc.bp_bins in
+  let n = List.length sc.bp_doms in
+  let items = List.init n Fun.id in
+  let bins = List.init (b1 - b0 + 1) (fun k -> b0 + k) in
+  let w i = List.nth sc.bp_ws i in
+  let dom i = List.nth sc.bp_doms i in
+  let pairs b =
+    List.filter
+      (fun i ->
+        let lo, hi = dom i in
+        w i <> 0 && lo <= b && b <= hi)
+      items
+  in
+  let ind i b = Printf.sprintf "e%d_%d" (i + 1) (b - b0) in
+  let decl =
+    List.map
+      (fun i ->
+        let lo, hi = dom i in
+        Printf.sprintf "var %d..%d: x%d :: output_var;\n" lo hi (i + 1))
+      items
+    @ (match sc.bp_load with
+      | Some ls ->
+          List.mapi
+            (fun k (lo, hi) ->
+              Printf.sprintf "var %d..%d: l%d :: output_var;\n" lo hi (k + 1))
+            ls
+      | None -> [])
+    @ List.concat_map
+        (fun b ->
+          List.map (fun i -> Printf.sprintf "var bool: %s;\n" (ind i b)) (pairs b))
+        bins
+  in
+  let cons =
+    List.concat_map
+      (fun b ->
+        List.map
+          (fun i -> Printf.sprintf "int_eq_reif(x%d, %d, %s)" (i + 1) b (ind i b))
+          (pairs b))
+      bins
+    @ List.concat_map
+        (fun i ->
+          [
+            Printf.sprintf "int_le(%d, x%d)" b0 (i + 1);
+            Printf.sprintf "int_le(x%d, %d)" (i + 1) b1;
+          ])
+        items
+    @ List.mapi
+        (fun k b ->
+          let ps = pairs b in
+          let ws = String.concat ", " (List.map (fun i -> string_of_int (w i)) ps) in
+          let es = String.concat ", " (List.map (fun i -> ind i b) ps) in
+          match sc.bp_load with
+          | Some _ -> Printf.sprintf "baguette_bool_lin_eq([%s], [%s], l%d)" ws es (k + 1)
+          | None ->
+              Printf.sprintf "baguette_bool_lin_le([%s], [%s], %d)" ws es
+                (List.nth sc.bp_capa k))
+        bins
+    @ sc.bp_extra
+  in
+  String.concat ""
+    ([
+       "predicate baguette_bool_lin_eq(array [int] of int: a, array [int] of var bool: \
+        x, var int: y);\n";
+       "predicate baguette_bool_lin_le(array [int] of int: a, array [int] of var bool: \
+        x, int: c);\n";
+     ]
+    @ decl
+    @ List.map (fun c -> "constraint " ^ c ^ ";\n") cons
+    @ [ "solve satisfy;\n" ])
+
+(* The oracle, apart from the model: some assignment of the bins inside their declared
+   domains and the bin range whose per-bin weight sums lie inside the loads' declared
+   domains (or under the capacities). [bp_extra] is not read: random scenes have none. *)
+let bp_oracle sc =
+  let b0, b1 = sc.bp_bins in
+  let m = b1 - b0 + 1 in
+  let rec go acc = function
+    | [] -> (
+        let load = Array.make m 0 in
+        List.iter2 (fun b w -> load.(b - b0) <- load.(b - b0) + w) (List.rev acc) sc.bp_ws;
+        match sc.bp_load with
+        | Some ls ->
+            List.for_all2 (fun (lo, hi) x -> lo <= x && x <= hi) ls (Array.to_list load)
+        | None -> List.for_all2 (fun c x -> x <= c) sc.bp_capa (Array.to_list load))
+    | (lo, hi) :: rest ->
+        List.exists
+          (fun v -> go (v :: acc) rest)
+          (List.filter
+             (fun v -> v >= b0 && v <= b1)
+             (List.init (hi - lo + 1) (fun d -> lo + d)))
+  in
+  go [] sc.bp_doms
+
+let test_bin_packing_models () =
+  let both ~title ?expect_sat src =
+    List.iter
+      (fun (w, tag) ->
+        with_bits_above w (fun () ->
+            run_model_with ?expect_sat ~title:(Printf.sprintf "%s [%s]" title tag) ~src ()))
+      [ (None, "order"); (Some 0, "bits") ]
+  in
+  let a =
+    {
+      bp_doms = [ (1, 2); (1, 2); (1, 2) ];
+      bp_ws = [ 2; 1; 1 ];
+      bp_bins = (1, 2);
+      bp_load = Some [ (0, 4); (0, 4) ];
+      bp_capa = [];
+      bp_extra = [ "int_le(3, l1)" ];
+    }
+  in
+  both ~title:"bin_packing_load: SAT, three items, bin 1 loaded to 3 or more" (bp_src a);
+  both ~title:"bin_packing_load: UNSAT, both loads at least 3 of a total 4"
+    (bp_src { a with bp_extra = [ "int_le(3, l1)"; "int_le(3, l2)" ] });
+  let c =
+    {
+      bp_doms = [ (1, 2); (1, 2); (1, 2) ];
+      bp_ws = [ 3; 3; 3 ];
+      bp_bins = (1, 2);
+      bp_load = None;
+      bp_capa = [ 4; 5 ];
+      bp_extra = [];
+    }
+  in
+  both ~title:"bin_packing_capa: UNSAT, three 3s into capacities 4 and 5" (bp_src c);
+  both ~title:"bin_packing_capa: SAT, three 3s into capacities 4 and 6"
+    (bp_src { c with bp_capa = [ 4; 6 ] });
+  both ~title:"bin_packing_load: SAT, domains wider than the bins and a zero weight"
+    (bp_src
+       {
+         a with
+         bp_doms = [ (0, 2); (1, 3); (2, 2) ];
+         bp_ws = [ 2; 0; 1 ];
+         bp_extra = [ "int_le(2, l1)" ];
+       });
+  (* the builtin's own folding: a constant indicator, a constant load, a negative weight *)
+  let fold call =
+    String.concat ""
+      [
+        "predicate baguette_bool_lin_eq(array [int] of int: a, array [int] of var bool: \
+         x, var int: y);\n";
+        "predicate baguette_bool_lin_le(array [int] of int: a, array [int] of var bool: \
+         x, int: c);\n";
+        "var bool: p :: output_var;\n\
+         var bool: q :: output_var;\n\
+         var 0..4: y :: output_var;\n";
+        Printf.sprintf "constraint %s;\n" call;
+        "solve satisfy;\n";
+      ]
+  in
+  both ~title:"baguette_bool_lin_eq: a constant indicator and a constant sum"
+    (fold "baguette_bool_lin_eq([2, 3, 1], [p, true, q], 4)");
+  both
+    ~title:"baguette_bool_lin_eq: UNSAT, a constant false indicator and a constant sum"
+    (fold "baguette_bool_lin_eq([2, 3, 1], [p, false, q], 4)");
+  both ~title:"baguette_bool_lin_eq: a negative weight against a variable sum"
+    (fold "baguette_bool_lin_eq([3, -1, 2], [p, q, true], y)");
+  both ~title:"baguette_bool_lin_le: UNSAT, a constant true indicator over the bound"
+    (fold "baguette_bool_lin_le([2, 3], [p, true], 2)");
+  (* random scenes: 2 or 3 items, 2 or 3 bins, weights 0..3, domains around the range *)
+  let st = Random.State.make [| 220 |] in
+  let sat = ref 0 and unsat = ref 0 in
+  for k = 1 to 24 do
+    let n = 2 + Random.State.int st 2 and m = 2 + Random.State.int st 2 in
+    let b0 = Random.State.int st 2 in
+    let doms =
+      List.init n (fun _ ->
+          let lo = b0 - 1 + Random.State.int st 2 in
+          (lo, lo + Random.State.int st (m + 1)))
+    in
+    let ws = List.init n (fun _ -> Random.State.int st 4) in
+    let load = Random.State.bool st in
+    let sc =
+      {
+        bp_doms = doms;
+        bp_ws = ws;
+        bp_bins = (b0, b0 + m - 1);
+        bp_load =
+          (if load then
+             Some
+               (List.init m (fun _ ->
+                    let lo = Random.State.int st 3 in
+                    (lo, lo + Random.State.int st 4)))
+           else None);
+        bp_capa = List.init m (fun _ -> Random.State.int st 5);
+        bp_extra = [];
+      }
+    in
+    let expect = bp_oracle sc in
+    if expect then incr sat else incr unsat;
+    both ~expect_sat:expect
+      ~title:
+        (Printf.sprintf "bin packing, random scene %d (%s, %d items, %d bins)" k
+           (if load then "load" else "capa")
+           n m)
+      (bp_src sc)
+  done;
+  check "bin packing: the random scenes are not all of one answer" (!sat > 0 && !unsat > 0);
+  let hdr =
+    "predicate baguette_bool_lin_eq(array [int] of int: a, array [int] of var bool: x, \
+     var int: y);\n\
+     predicate baguette_bool_lin_le(array [int] of int: a, array [int] of var bool: x, \
+     int: c);\n\
+     var bool: p;\n\
+     var bool: q;\n\
+     var 0..4: y;\n\
+     var 0..4: z;\n"
+  in
+  expect_rejected "baguette_bool_lin_eq: a variable coefficient is refused"
+    ~needles:[ "baguette_bool_lin_eq"; "every coefficient must be a constant" ]
+    (hdr ^ "constraint baguette_bool_lin_eq([z, 1], [p, q], y);\nsolve satisfy;\n");
+  expect_rejected "baguette_bool_lin_le: a variable bound is refused"
+    ~needles:[ "baguette_bool_lin_le"; "the right-hand side must be a constant" ]
+    (hdr ^ "constraint baguette_bool_lin_le([1, 1], [p, q], y);\nsolve satisfy;\n");
+  expect_rejected
+    "baguette_bool_lin_eq: coefficient and Boolean arrays of different lengths"
+    ~needles:[ "baguette_bool_lin_eq"; "the coefficient array has 1 element(s)" ]
+    (hdr ^ "constraint baguette_bool_lin_eq([1], [p, q], y);\nsolve satisfy;\n")
 
 let test_diffn_relaxation_theorem () =
   let st = Random.State.make [| 2013 |] in
@@ -2738,6 +3058,8 @@ let () =
   test_inverse_models ();
   test_member_models ();
   test_table_models ();
+  test_circuit_models ();
+  test_bin_packing_models ();
   test_diffn_relaxation_theorem ();
   test_diffn_models ();
   if !failures > 0 then (

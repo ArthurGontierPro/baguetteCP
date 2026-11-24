@@ -1,0 +1,21 @@
+% M18-coverage-T3 (D-0217): flattened by MiniZinc 2.10.1 with baguette's mznlib from
+% mznlib/test/circuit_src_sat.mzn.
+% Five nodes, every successor first tried at its smallest value: each chain's closing
+% arc back to its start is removed by prevent before the search can try it.
+
+
+predicate all_different_int(array [int] of var int: x);
+predicate baguette_circuit(array [int] of var int: xs,array [int] of var int: pos,int: root);
+var 2..5: X_INTRODUCED_16_;
+var {1,3,4,5}: X_INTRODUCED_17_;
+var {1,2,5}: X_INTRODUCED_18_;
+var {1,2,3,5}: X_INTRODUCED_19_;
+var 1..4: X_INTRODUCED_20_;
+var 1..4: X_INTRODUCED_22_ ::var_is_introduced ;
+var 1..4: X_INTRODUCED_23_ ::var_is_introduced ;
+var 1..4: X_INTRODUCED_24_ ::var_is_introduced ;
+var 1..4: X_INTRODUCED_25_ ::var_is_introduced ;
+array [1..5] of var int: s:: output_array([1..5]) = [X_INTRODUCED_16_,X_INTRODUCED_17_,X_INTRODUCED_18_,X_INTRODUCED_19_,X_INTRODUCED_20_];
+constraint all_different_int(s);
+constraint baguette_circuit([X_INTRODUCED_16_,X_INTRODUCED_17_,X_INTRODUCED_18_,X_INTRODUCED_19_,X_INTRODUCED_20_],[X_INTRODUCED_22_,X_INTRODUCED_23_,X_INTRODUCED_24_,X_INTRODUCED_25_],1);
+solve :: int_search(s,input_order,indomain_min,complete) satisfy;
