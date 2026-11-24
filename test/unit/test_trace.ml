@@ -1176,6 +1176,14 @@ let ix10_table =
        tuple is cited through the tail of its own earlier trace line (D-0151), a line
        already on the page. test_mutation.ml's table lanes are the load-bearing claims. *)
     ("table.ml", Single_row);
+    (* M18-coverage-T3 (D-0217): circuit. Needs_derivation: a PREVENT pruning (the arc
+       from a chain's end back to its start) and a closed short cycle's conflict rest on
+       the subtour cut, n-1 or fewer MTZ rows summed and divided by n, which unit
+       propagation over the rows does not reach once the positions are not pinned. Made
+       under [Store.deriving_ahead], so Trace writes the `pol` ahead of the line. The
+       position prunings (H) and the restrictions (R) are single-row `rup`s. test_
+       mutation.ml's circuit lanes are the load-bearing claims (cut-truncated refused). *)
+    ("circuit.ml", Needs_derivation);
   ]
 
 (* (a) CLOSURE. OCaml cannot reflect over its own modules, so the only way to notice a
@@ -1238,15 +1246,17 @@ let test_ix10_closure () =
       let needs =
         List.map fst (List.filter (fun (_, c) -> c = Needs_derivation) ix10_table)
       in
-      if needs <> [ "alldiff.ml"; "gcc.ml"; "cumulative.ml"; "member.ml" ] then
+      if needs <> [ "alldiff.ml"; "gcc.ml"; "cumulative.ml"; "member.ml"; "circuit.ml" ]
+      then
         Printf.printf
           "     Needs_derivation is now %s. test_ix10_derive_ahead below drives\n\
-          \     `alldiff.ml`, `gcc.ml`, `cumulative.ml` and `member.ml` and nothing\n\
+          \     `alldiff.ml`, `gcc.ml`, `cumulative.ml`, `member.ml`, `circuit.ml`, \
+           nothing\n\
           \     else, so any other family here is classified but UNCHECKED: give it a\n\
           \     scene there. See D-0040.\n"
           (String.concat ", " needs);
       check "I-X10 closure: every Needs_derivation family is one the content check drives"
-        (needs = [ "alldiff.ml"; "gcc.ml"; "cumulative.ml"; "member.ml" ])
+        (needs = [ "alldiff.ml"; "gcc.ml"; "cumulative.ml"; "member.ml"; "circuit.ml" ])
 
 (* (b) CONTENT. The closure check is a name list; on its own it would pass forever even
    if I-X10 were false. This asserts the checker's actual verdict on the shape a
@@ -1494,6 +1504,52 @@ solve :: int_search([x3, w1, w2, w3, y, x1, x2], input_order, indomain_max, comp
 |}
 
 let ix10_member_line = "rup +1 ~y_ge_2 +1 y_ge_3 +1 ~x3_ge_3 >= 1 ;"
+
+(* M18-coverage-T3 (D-0217): an eight-city tour bounded by its optimum, as satisfaction
+   (test_mutation.ml's circuit scene). The line is the PREVENT pruning of 3 from s5 under
+   s3 = 7 and s7 = 5, a chain that avoids the root: no unit propagation over the MTZ rows
+   reaches it, and the cut (three GE rows divided by 8) is written ahead of it. *)
+let ix10_circuit_source =
+  {|predicate baguette_circuit(array [int] of var int: xs,array [int] of var int: pos,int: root);
+var 1..8: s1 :: output_var;
+var 1..8: s2 :: output_var;
+var 1..8: s3 :: output_var;
+var 1..8: s4 :: output_var;
+var 1..8: s5 :: output_var;
+var 1..8: s6 :: output_var;
+var 1..8: s7 :: output_var;
+var 1..8: s8 :: output_var;
+var 1..7: p2;
+var 1..7: p3;
+var 1..7: p4;
+var 1..7: p5;
+var 1..7: p6;
+var 1..7: p7;
+var 1..7: p8;
+var 0..9: c1;
+var 0..9: c2;
+var 0..9: c3;
+var 0..9: c4;
+var 0..9: c5;
+var 0..9: c6;
+var 0..9: c7;
+var 0..9: c8;
+constraint array_int_element(s1, [0, 4, 5, 2, 7, 8, 3, 2], c1);
+constraint array_int_element(s2, [2, 0, 1, 7, 9, 5, 1, 4], c2);
+constraint array_int_element(s3, [9, 9, 0, 6, 5, 3, 2, 5], c3);
+constraint array_int_element(s4, [4, 1, 5, 0, 5, 4, 3, 5], c4);
+constraint array_int_element(s5, [5, 6, 2, 6, 0, 7, 9, 4], c5);
+constraint array_int_element(s6, [3, 4, 8, 5, 2, 0, 9, 5], c6);
+constraint array_int_element(s7, [1, 5, 5, 9, 4, 7, 0, 7], c7);
+constraint array_int_element(s8, [5, 7, 8, 3, 4, 5, 5, 0], c8);
+constraint all_different_int([s1, s2, s3, s4, s5, s6, s7, s8]);
+constraint baguette_circuit([s1, s2, s3, s4, s5, s6, s7, s8], [p2, p3, p4, p5, p6, p7, p8], 1);
+constraint int_lin_le([1, 1, 1, 1, 1, 1, 1, 1], [c1, c2, c3, c4, c5, c6, c7, c8], 18);
+solve :: int_search([s1, s2, s3, s4, s5, s6, s7, s8], input_order, indomain_min, complete) satisfy;
+|}
+
+let ix10_circuit_line =
+  "rup +1 ~s3_ge_7 +1 s3_ge_8 +1 ~s7_ge_5 +1 s7_ge_6 +1 ~s5_ge_3 +1 s5_ge_4 >= 1 ;"
 
 let ix10_gcc_source =
   {|var 1..4: q;
@@ -2346,6 +2402,8 @@ let () =
     ~src:ix10_cumul_source ~claim:ix10_cumul_line ~outcome:`Sat ();
   test_ix10_derive_ahead ~use_order:true ~tag:"(M7-T28, a member value two holes exclude)"
     ~src:ix10_member_source ~claim:ix10_member_line ~outcome:`Sat ();
+  test_ix10_derive_ahead ~use_order:true ~tag:"(M18-coverage-T3, a circuit prevent)"
+    ~src:ix10_circuit_source ~claim:ix10_circuit_line ~outcome:`Sat ();
   test_m7t21_element ();
   test_is4_gate ();
   test_m6t15_position_of ();

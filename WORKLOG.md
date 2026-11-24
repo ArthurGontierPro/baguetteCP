@@ -25,7 +25,7 @@ of it to every session and stopping at a broken line before it even reached the 
 
 ### 2026-11-23 (orchestrator baguette-92 on fataepyc-06): decision numbers reserved
 
-D-0203 (agent-series), D-0206 (agent-table), D-0208 (agent-watch, M20 learned-constraint wakes), D-0209 (agent-writer, M20 proof writer) are taken by running agents. D-0210 (agent-node07, M17-T5, the 64 GiB observation series) and D-0211 (agent-node07, M17-T4, GCS and Chuffed) too. D-0212 (agent-arith, M20-pernode-T3) too. Another session that needs a record: take D-0220 or above, and say so here. D-0219 is agent-cdcl (M19-config-T10). D-0218 is agent-memory (M21-memory-T1, T2). D-0217 is agent-circuit (M18-coverage-T3). D-0216 is agent-hash (black-hole root slowdown in Explanation hashing). D-0215 is agent-regin (M20-pernode-T4, alldiff). D-0214 is agent-lazy (M20-pernode-T2, Element). D-0213 is agent-diffn (M18-coverage-T2).
+D-0203 (agent-series), D-0206 (agent-table), D-0208 (agent-watch, M20 learned-constraint wakes), D-0209 (agent-writer, M20 proof writer) are taken by running agents. D-0210 (agent-node07, M17-T5, the 64 GiB observation series) and D-0211 (agent-node07, M17-T4, GCS and Chuffed) too. D-0212 (agent-arith, M20-pernode-T3) too. Another session that needs a record: take D-0221 or above, and say so here. D-0220 is agent-binpack (M18-coverage-T4). D-0219 is agent-cdcl (M19-config-T10). D-0218 is agent-memory (M21-memory-T1, T2). D-0217 is agent-circuit (M18-coverage-T3). D-0216 is agent-hash (black-hole root slowdown in Explanation hashing). D-0215 is agent-regin (M20-pernode-T4, alldiff). D-0214 is agent-lazy (M20-pernode-T2, Element). D-0213 is agent-diffn (M18-coverage-T2).
 
 Need a change in a file someone else has claimed? Write it here and move on to other
 work. The owning session picks it up.
@@ -466,6 +466,7 @@ section 1. Shares are inclusive, of the whole run.
 
 | Task | Session | Date | Summary |
 |---|---|---|---|
+| M18-coverage-T3 (`circuit`, D-0217) | agent-circuit (`wave65-circuit`) | 2026-11-24 | **D-0217 [AUTONOME].** `lib/core/prop/circuit.ml`: mznlib routes `fzn_circuit` to `all_different` plus `baguette_circuit(x, pos, root)`, the .opb defines circuit by MTZ rows over position store variables, prevent + pinned positions, every subtour cut one `pol` ahead; `subcircuit` stays std. 20 instances: .opb 0.44 to 0.998, more nodes on 14 of 15 time-outs (default), p1f-pjs_10 time-out -> OPT, all checked proofs VERIFIED |
 | M18-coverage-T2 (`diffn`, D-0213) | agent-diffn (`wave61-diffn`) | 2026-11-24 | mznlib `fzn_diffn`, `fzn_diffn_nonstrict`: std's pairs plus the two cumulative relaxations over order copies; four models, theorem enumeration and 16 scenes in test_compile, two lanes in test_mutation; maps and PROOF-FORMAT 4. Complete 7 -> 9 of 25 routed Challenge instances, all VERIFIED |
 | M11-complexity-T18 (black-hole's root cost under native `table`) | agent-hash (`wave64-hash`) | 2026-11-24 | **D-0216 [AUTONOME].** 156 removals under a 47-variable Hall set rebuilt 8.3 M pairwise at-most-one nodes at black-hole_10's root, all found again in the hash-consing table; `Alldiff.reuse` hands back what a rebuild would return (`Explanation.rebuilds_to`, a removal epoch), `row` in one lookup, `Table.add_fact` and `Trace.settle_facts` dedup through tables. 642 test-model runs byte-identical (default, `--bits-above none`, HASHCONS=0), lanes 347/347 and debug 333/333 for both binaries, scaling green, 4 705 ok. bh10 55.1 -> 7.3 G, a bh14 node 7.74 -> 2.36 G, D-0207's five within 0.6 %. Not merged |
 | M20-pernode-T4 (the learned-constraint part, rank 1 of D-0207) | agent-watch (`wave60-watch`) | 2026-11-24 | **D-0208.** A watched witness for learned PB rows was built, measured (+20/+24 % at 3 000 nodes: the rows sit near propagation) and withdrawn; `Pb.pass` exits after one walk when the slack reaches the largest open group sum (exact). Same runs, byte-identical proofs. After merging main `f4f6391`: costas -48.6/-40.6 %, mknap -34.8/-34.2 % per node (no proof/proof), QR48 +0.4 %. Gate on `2dbab13`: runtest 4700 ok 0 FAIL (peak 155 MB), 214 models x 3 artefacts equal to main `cba056a8`, model tests 214/214, lanes 347/347 and 333/333 (-j 4), scaling ok |
@@ -681,15 +682,26 @@ Updated as things land. The plan is the nine steps agreed on 2026-11-23 (speed f
 - D-0212, plain arithmetic in `Linear` after one check per row: byte-identical, -21 % on mknap without learning, -0.3 % shipped until D-0208 (gate 93).
 - D-0214, Element's reasons on demand: byte-identical artefacts, javarouting -22 % per node shipped without proof; the lane's `later/asks` counter changed on the element instances, so the reference was re-recorded in its own commit (`841fd1a`, every proof verified) (gate 94, then 95).
 - D-0215, alldiff's Régin stage gated by an exact test: byte-identical, costas -36 % without learning, p1f_13 -57 % shipped (gate 95).
-The shipped gains on costas and mknap stay small until D-0208, because learned constraints are 83 to 93 % of their nodes.
+- D-0213, `diffn` through mznlib onto `cumulative` (no `lib/` change): 7 -> 9 complete on 25 instances at 300 s (gate 96, same binary).
+- D-0216, the black-hole root slowdown (alldiff rebuilt 53 016 pairwise nodes per removal of a large Hall set, exposed by `table`): byte-identical, black-hole_10 55.1 G -> 7.3 G instructions (gate 97, binary `6604872c`).
+- D-0208, learned PB rows: WATCHING them was built, measured (+20 % on costas) and withdrawn, D-0052 stands; kept an exact early exit in `Pb.pass`: byte-identical, costas -49 % per node, mknap -35 % (gate 98, binary `d81c3612`).
+Gates 96 to 98 green: 218 models byte-identical, lane 347/347, debug 333/333, scaling ok.
 
-**Running**: the series on current main without the proof cap (agent-series, D-0203, fataepyc-06); the 64 GiB observation series then GCS and Chuffed (agent-node07, D-0210, D-0211, on fataepyc-07, allowed by the user on 2026-11-23); agent-watch (D-0208, learned constraints woken by watches); agent-diffn (D-0213); agent-hash (D-0216, the black-hole root slowdown).
+**Running**: the series on current main without the proof cap (agent-series, D-0203, fataepyc-06); the 64 GiB observation series then GCS and Chuffed (agent-node07, D-0210, D-0211, on fataepyc-07, allowed by the user on 2026-11-23); agent-cdcl (D-0219, M19-config-T10, the CDCL loop behind `BAGUETTE_CDCL`, default off); agent-circuit (D-0217); agent-memory (D-0218, M21-memory-T1/T2).
 
 **Known, not fixed yet**: black-hole is 4.5 times slower at the root since `inverse`'s alldiff lemmas, in `Explanation`'s hashing of `pol` lines (agent-table's finding). The `test_prop` debug failure was a test defect, fixed in D-0214.
 
 **Open for you**: D-0213 (`diffn` through mznlib, merged, gate 96 green: same binary `75b1e984`, 218 models identical, lanes equal): the two cumulative relaxations' capacity rows are MODEL rows in the `.opb`, trusted as MiniZinc's flattening is, and checked by enumeration in `test_compile.ml`; deriving them in the proof costs O(n^2 W H) lines. Deleting the two `mznlib/fzn_diffn*.mzn` files reverts it. 7 -> 9 complete answers on 25 instances at 300 s, `.opb` up to 5.8 times larger on some.
 
-**[AUTONOME] decisions**: D-0213 (above).
+Also open: after D-0208 the engine's wake work is the largest share left on costas and mknap; removing it needs the D-0169 (b) rule (rows that never prune are not woken), which changes default behaviour.
+
+**[AUTONOME] decisions**: D-0213 (above); D-0216 (alldiff reuses the node a rebuild would return; two dedups hashed; byte-identical); D-0208 (watching withdrawn on measurement).
+### 2026-11-24 (agent-circuit, `wave65-circuit`): M18-coverage-T3, native circuit (D-0217)
+
+`circuit` is native: mznlib keeps `all_different` and adds `baguette_circuit(x, pos, root)`; the .opb defines it by MTZ rows over one position store variable per non-root node (bits by default), the propagator is CHECKING plus Chuffed's prevent, and every subtour cut is ONE `pol` (rows around the cycle, `n d`) written ahead. No new constructor, nothing changes for a model without circuit (218 test models byte-identical).
+On 20 instances (`/cluster/arthur/baguette-results/wave65-circuit/`): .opb 0.44 to 0.998 of old, more nodes in 300 s on most time-outs, p1f-pjs_10 time-out -> OPT, 4 better incumbents under `-f`, every checked proof VERIFIED. `subcircuit` stays std's (D-0217 §5 says why); a propagated MTZ position bound is the next lever if a profile asks for pruning rather than search.
+The mutation and I-X10 lanes pin two proof lines by their text (test_mutation.ml `circuit_prevent_line`, test_trace.ml `ix10_circuit_line`): a change of the search that moves them makes those lanes say "not in the proof", which means re-pin, not weaken.
+
 ### 2026-11-24 (agent-diffn, `wave61-diffn`): M18-coverage-T2, diffn's relaxations (D-0213)
 
 `mznlib/fzn_diffn.mzn` and `fzn_diffn_nonstrict.mzn` keep std's pairwise disjunction and add the two cumulative relaxations on `cumulative.ml` over order copies of the coordinates; no OCaml in `lib/`, so the binary and every existing artefact are byte-identical. [AUTONOME] the capacity rows are model rows (D-0213 section 3, the trust is a theorem checked by enumeration in test_compile; revert by deleting the two files).

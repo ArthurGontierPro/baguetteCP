@@ -9633,6 +9633,336 @@ let test_table_debug_models () =
             (rc = 0))
         models
 
+(* ===================================================== M18-coverage-T3: circuit
+
+   D-0217. circuit, by brute force over random small scenes: n in 3..4 nodes, root 1,
+   successors declared 1..n (so R's unit rows are exercised: the self-loop and nothing
+   outside S), now and then a constant successor, positions 1..n-1; random bound
+   narrowings, holes punched with no facts (ROOT holes) and variables fixed by the scene,
+   so that chains of fixed arcs form. The oracle is the .opb's relation written apart
+   from lib/core/prop/circuit.ml: every successor in S and not its own node, and along
+   every arc pos_v = pos_u + 1, pos_v = 1 out of the root, pos_u = n - 1 into it (the
+   root's position 0). all_different is NOT part of it: the instance's own constraint is
+   the rows. The claims of the header:
+
+   - I-P1: no solution inside the current domains is removed, a conflict only where there
+     is none;
+   - CHECKING: a fixpoint with every variable of the scope fixed is a solution;
+   - I-P2: a second call changes nothing;
+   - every reason SOUND on its own facts over the DECLARED domains and the scene's holes;
+   - P fires: some successor loses a value on two or more facts (a chain). *)
+module Circuit = Baguette_core.Circuit
+
+let test_circuit_brute_force () =
+  regular_rng := 2217;
+  let bad = ref 0 and scenes = ref 0 and changed = ref 0 and conflicts = ref 0 in
+  let reasons = ref 0 and first_bad = ref "" and chains = ref 0 and checked = ref 0 in
+  let flag what =
+    incr bad;
+    if !first_bad = "" then first_bad := what
+  in
+  for _ = 1 to 1500 do
+    incr scenes;
+    let n = 3 + regular_rnd 2 in
+    (* var k < n: the successor of node k + 1; n + k - 1 (k >= 1): its position *)
+    let decls =
+      List.init n (fun k -> (Printf.sprintf "s%d" (k + 1), 1, n))
+      @ List.init (n - 1) (fun k -> (Printf.sprintf "p%d" (k + 2), 1, n - 1))
+    in
+    let nv = (2 * n) - 1 in
+    let store = mk_store decls in
+    let fixed =
+      Array.init n (fun _ ->
+          if regular_rnd 12 = 0 then Some (1 + regular_rnd n) else None)
+    in
+    let name_of k = Store.name store (var k) in
+    let succ =
+      Array.init n (fun k ->
+          match fixed.(k) with
+          | Some c -> Circuit.Fixed c
+          | None -> Circuit.Cell { var = var k; name = name_of k; dlo = 1; dhi = n })
+    in
+    let pos =
+      Array.init (n - 1) (fun k ->
+          Circuit.Cell { var = var (n + k); name = name_of (n + k); dlo = 1; dhi = n - 1 })
+    in
+    (* No proof here: any id >= 0 stands for a declared arc's row. *)
+    let ge = Array.make (n * n) 0 and le = Array.make (n * n) 0 in
+    let p = Circuit.make ~root:1 ~succ ~pos ~ge ~le in
+    let holes = ref [] in
+    for k = 0 to nv - 1 do
+      let d = Store.get store (var k) in
+      (match regular_rnd 8 with
+      | 0 -> ignore (Store.set_lo store (var k) (Domain.lo d + 1) placeholder_pruning)
+      | 1 -> ignore (Store.set_hi store (var k) (Domain.hi d - 1) placeholder_pruning)
+      | (2 | 3 | 4) when k < n || regular_rnd 3 = 0 ->
+          let v = Domain.lo d + regular_rnd (Domain.hi d - Domain.lo d + 1) in
+          ignore (Store.set_lo store (var k) v placeholder_pruning);
+          ignore (Store.set_hi store (var k) v placeholder_pruning)
+      | _ -> ());
+      let d = Store.get store (var k) in
+      if regular_rnd 4 = 0 && Domain.hi d - Domain.lo d >= 2 then (
+        let h = Domain.lo d + 1 + regular_rnd (Domain.hi d - Domain.lo d - 1) in
+        holes := (k, h) :: !holes;
+        ignore (Store.remove store (var k) h placeholder_pruning))
+    done;
+    let declared k = if k < n then (1, n) else (1, n - 1) in
+    let rec words k =
+      if k = nv then [ [] ]
+      else
+        let lo, hi = declared k in
+        List.concat_map
+          (fun v -> List.map (fun w -> v :: w) (words (k + 1)))
+          (List.init (hi - lo + 1) (fun d -> lo + d))
+    in
+    let sval a k = match fixed.(k) with Some c -> c | None -> a.(k) in
+    let pval a node = if node = 1 then 0 else a.(n + node - 2) in
+    let sols =
+      List.filter
+        (fun a ->
+          List.for_all
+            (fun k ->
+              let u = k + 1 and v = sval a k in
+              v >= 1 && v <= n && v <> u
+              &&
+              if v = 1 then pval a u = n - 1
+              else if u = 1 then pval a v = 1
+              else pval a v = pval a u + 1)
+            (List.init n Fun.id))
+        (List.map Array.of_list (words 0))
+    in
+    let used k = k >= n || fixed.(k) = None in
+    let inside a =
+      List.for_all
+        (fun k -> (not (used k)) || Domain.mem (Store.get store (var k)) a.(k))
+        (List.init nv Fun.id)
+    in
+    let on_holes a = List.for_all (fun (k, v) -> a.(k) <> v) !holes in
+    let live0 = List.filter inside sols in
+    let index_of nm =
+      match Store.var_named store nm with Some v -> Var.to_int v | None -> -1
+    in
+    let holds a (fct : Reason.fact) =
+      let v = a.(index_of (Reason.fact_owner fct)) in
+      if Reason.fact_is_lower fct then v >= Reason.fact_value fct
+      else v <= Reason.fact_value fct
+    in
+    let audit what facts claim_ok =
+      incr reasons;
+      List.iter
+        (fun a ->
+          if on_holes a && List.for_all (holds a) facts && not (claim_ok a) then
+            flag
+              (Printf.sprintf "%s: a solution satisfies its facts [%s]" what
+                 (Reason.to_string_facts facts)))
+        sols
+    in
+    let from = Store.trail_length store in
+    let before = Store.snapshot store in
+    let outcome = Circuit.propagate p store in
+    for at = from to Store.trail_length store - 1 do
+      let e = Store.trail_entry store at in
+      let k = Var.to_int e.Store.var in
+      let removed =
+        List.filter (fun v -> not (Domain.mem e.Store.now v)) (Domain.to_list e.Store.old)
+      in
+      let facts = Reason.facts e.Store.reason in
+      if k < n && List.length facts >= 2 then incr chains;
+      audit
+        ("the pruning of " ^ Store.name store e.Store.var)
+        facts
+        (fun a -> not (List.mem a.(k) removed))
+    done;
+    match outcome with
+    | Propagator.Conflict c ->
+        incr conflicts;
+        audit "a conflict" (Reason.facts c.Store.c_reason) (fun _ -> false);
+        if live0 <> [] then flag "a conflict on a scene with a solution"
+    | Propagator.Fixpoint -> (
+        if not (Store.same_domains store before) then incr changed;
+        if not (List.for_all inside live0) then flag "a solution was removed";
+        if
+          List.for_all
+            (fun k -> (not (used k)) || Domain.is_fixed (Store.get store (var k)))
+            (List.init nv Fun.id)
+        then (
+          incr checked;
+          if List.filter inside sols = [] then flag "a fixed scope that is no solution");
+        let snap = Store.snapshot store in
+        match Circuit.propagate p store with
+        | Propagator.Conflict _ -> flag "the second call conflicts"
+        | Propagator.Fixpoint ->
+            if not (Store.same_domains store snap) then flag "the second call prunes")
+  done;
+  if !first_bad <> "" then Printf.printf "     first violation: %s\n" !first_bad;
+  check
+    (Printf.sprintf
+       "circuit (D-0217): I-P1, checking, I-P2 and every reason SOUND over the declared \
+        domains, %d scenes (%d pruned, %d conflicts, %d reasons, %d chain prunings, %d \
+        fixed scopes): no violation"
+       !scenes !changed !conflicts !reasons !chains !checked)
+    (!bad = 0 && !changed > 300 && !conflicts > 50 && !reasons > 1000 && !chains > 50
+   && !checked > 10)
+
+(* circuit end to end on the checker, both encodings, with all_different beside it as
+   mznlib posts it. The successors are declared 1..n, so R's unit rows are on the page.
+   - circuit_sat: input order, indomain_min, so every successor first tries the start of
+     its chain, which P has removed (a prevent line under a decision each): SAT;
+   - circuit_root_unsat: nodes 1, 2, 3 can only point among themselves, a cycle THROUGH
+     the root (LE and END summed): UNSAT;
+   - circuit_noroot_unsat: nodes 4, 5, 6 likewise, a cycle that avoids it (GE): UNSAT;
+   - circuit_tour: below. The two UNSAT scenes close their cycle by the position rows
+     (H) and all_different before any prevent line is needed; the tour is the scene
+     whose trace carries the cuts. *)
+let circuit_sat_src =
+  {|var 1..5: s1 :: output_var;
+var 1..5: s2 :: output_var;
+var 1..5: s3 :: output_var;
+var 1..5: s4 :: output_var;
+var 1..5: s5 :: output_var;
+var 1..4: p2;
+var 1..4: p3;
+var 1..4: p4;
+var 1..4: p5;
+constraint all_different_int([s1, s2, s3, s4, s5]);
+constraint baguette_circuit([s1, s2, s3, s4, s5], [p2, p3, p4, p5], 1);
+solve :: int_search([s1, s2, s3, s4, s5], input_order, indomain_min, complete) satisfy;
+|}
+
+let circuit_unsat_src ~closed =
+  let dom k =
+    if List.mem k closed then
+      Printf.sprintf "{%s}"
+        (String.concat "," (List.map string_of_int (List.filter (( <> ) k) closed)))
+    else "1..6"
+  in
+  String.concat ""
+    (List.init 6 (fun i ->
+         Printf.sprintf "var %s: s%d :: output_var;\n" (dom (i + 1)) (i + 1))
+    @ List.init 5 (fun i -> Printf.sprintf "var 1..5: p%d;\n" (i + 2))
+    @ [
+        "constraint all_different_int([s1, s2, s3, s4, s5, s6]);\n";
+        "constraint baguette_circuit([s1, s2, s3, s4, s5, s6], [p2, p3, p4, p5, p6], 1);\n";
+        "solve :: int_search([s1, s2, s3, s4, s5, s6], input_order, indomain_min, \
+         complete) satisfy;\n";
+      ])
+
+(* An eight-city tour whose cost may not exceed the optimum, as satisfaction: the search
+   meets conflicts, so its trace carries prevent lines and the cuts ahead of them (test_
+   mutation.ml's circuit lanes use the same scene). *)
+let circuit_tour_src =
+  {|predicate baguette_circuit(array [int] of var int: xs,array [int] of var int: pos,int: root);
+var 1..8: s1 :: output_var;
+var 1..8: s2 :: output_var;
+var 1..8: s3 :: output_var;
+var 1..8: s4 :: output_var;
+var 1..8: s5 :: output_var;
+var 1..8: s6 :: output_var;
+var 1..8: s7 :: output_var;
+var 1..8: s8 :: output_var;
+var 1..7: p2;
+var 1..7: p3;
+var 1..7: p4;
+var 1..7: p5;
+var 1..7: p6;
+var 1..7: p7;
+var 1..7: p8;
+var 0..9: c1;
+var 0..9: c2;
+var 0..9: c3;
+var 0..9: c4;
+var 0..9: c5;
+var 0..9: c6;
+var 0..9: c7;
+var 0..9: c8;
+constraint array_int_element(s1, [0, 4, 5, 2, 7, 8, 3, 2], c1);
+constraint array_int_element(s2, [2, 0, 1, 7, 9, 5, 1, 4], c2);
+constraint array_int_element(s3, [9, 9, 0, 6, 5, 3, 2, 5], c3);
+constraint array_int_element(s4, [4, 1, 5, 0, 5, 4, 3, 5], c4);
+constraint array_int_element(s5, [5, 6, 2, 6, 0, 7, 9, 4], c5);
+constraint array_int_element(s6, [3, 4, 8, 5, 2, 0, 9, 5], c6);
+constraint array_int_element(s7, [1, 5, 5, 9, 4, 7, 0, 7], c7);
+constraint array_int_element(s8, [5, 7, 8, 3, 4, 5, 5, 0], c8);
+constraint all_different_int([s1, s2, s3, s4, s5, s6, s7, s8]);
+constraint baguette_circuit([s1, s2, s3, s4, s5, s6, s7, s8], [p2, p3, p4, p5, p6, p7, p8], 1);
+constraint int_lin_le([1, 1, 1, 1, 1, 1, 1, 1], [c1, c2, c3, c4, c5, c6, c7, c8], 18);
+solve :: int_search([s1, s2, s3, s4, s5, s6, s7, s8], input_order, indomain_min, complete) satisfy;
+|}
+
+let test_circuit_veripb () =
+  let dir = Filename.temp_file "baguette_circuit" "" in
+  Sys.remove dir;
+  Sys.mkdir dir 0o700;
+  let saved = !Baguette_proof.Encoding.bits_above in
+  List.iter
+    (fun (enc, bits) ->
+      Baguette_proof.Encoding.bits_above := bits;
+      let solve file src = regular_solve dir ~file:(file ^ "_" ^ enc) src in
+      let _, outcome, opb, pbp = solve "circuit_sat" circuit_sat_src in
+      check
+        (Printf.sprintf "circuit (%s): the chain scene is SAT, its oracle accepts it" enc)
+        (match outcome with Search.Sat _ -> true | _ -> false);
+      run_veripb
+        ~name:(Printf.sprintf "circuit (%s): the chain scene's proof verifies" enc)
+        ~build:(fun _ -> (opb, pbp));
+      let _, outcome, opb, pbp = solve "circuit_tour" circuit_tour_src in
+      check
+        (Printf.sprintf "circuit (%s): the bounded tour scene is SAT" enc)
+        (match outcome with Search.Sat _ -> true | _ -> false);
+      check
+        (Printf.sprintf "circuit (%s): its proof carries cuts (a pol divided by 8)" enc)
+        (contains_sub ~needle:" 8 d ;" (read_file pbp));
+      run_veripb
+        ~name:(Printf.sprintf "circuit (%s): the bounded tour scene's proof verifies" enc)
+        ~build:(fun _ -> (opb, pbp));
+      List.iter
+        (fun (what, closed) ->
+          let _, outcome, opb, pbp =
+            solve ("circuit_" ^ what) (circuit_unsat_src ~closed)
+          in
+          check
+            (Printf.sprintf "circuit (%s): the %s scene is UNSAT" enc what)
+            (outcome = Search.Unsat);
+          run_veripb
+            ~name:
+              (Printf.sprintf "circuit (%s): the %s scene's refutation verifies" enc what)
+            ~build:(fun _ -> (opb, pbp)))
+        [ ("root_unsat", [ 1; 2; 3 ]); ("noroot_unsat", [ 4; 5; 6 ]) ])
+    [ ("order", None); ("bits", Some 0) ];
+  Baguette_proof.Encoding.bits_above := saved
+
+(* The test/models/circuit_*.fzn under BAGUETTE_DEBUG=1, through member's child (it
+   solves any file): every D-0026 agreement check, every advisor answer (I-P7). *)
+let test_circuit_debug_models () =
+  match bool_models_dir with
+  | None -> check "M18-coverage-T3: test/models/ found (the circuit debug lane ran)" false
+  | Some d ->
+      let models =
+        List.sort compare
+          (List.filter
+             (fun f ->
+               String.length f > 8
+               && String.sub f 0 8 = "circuit_"
+               && Filename.check_suffix f ".fzn")
+             (Array.to_list (Sys.readdir d)))
+      in
+      check "M18-coverage-T3: the four circuit models are there" (List.length models >= 4);
+      List.iter
+        (fun f ->
+          let rc =
+            Sys.command
+              (Printf.sprintf "BAGUETTE_DEBUG=1 %s --member-debug %s >/dev/null 2>&1"
+                 (Filename.quote Sys.executable_name)
+                 (Filename.quote (Filename.concat d f)))
+          in
+          check
+            (Printf.sprintf
+               "M18-coverage-T3: %s solves under BAGUETTE_DEBUG=1, every check passing \
+                (rc %d)"
+               f rc)
+            (rc = 0))
+        models
+
 (* ===================================================== M7-T33: alldiff conflicts learn
 
    D-0156. Until M7-T33 both of all_different's pigeonholes -- stage 1's Hall interval
@@ -10181,6 +10511,10 @@ let () =
   test_table_brute_force ();
   test_table_veripb ();
   test_table_debug_models ();
+  (* M18-coverage-T3, D-0217: circuit. *)
+  test_circuit_brute_force ();
+  test_circuit_veripb ();
+  test_circuit_debug_models ();
   if !failures > 0 then (
     Printf.printf "\n%d FAILURE(S)\n" !failures;
     exit 1)

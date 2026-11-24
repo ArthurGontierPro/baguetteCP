@@ -94,6 +94,8 @@ let implemented =
        fzn_table_bool.mzn -- one relation, the second spelling over var bool. *)
     "baguette_table";
     "baguette_table_bool";
+    (* M18-coverage-T3 (D-0217): circuit, through mznlib/fzn_circuit.mzn. *)
+    "baguette_circuit";
   ]
 
 (* The rest of the SPEC 2.1 table, with the milestone that will bring it in. Listing
@@ -1201,6 +1203,20 @@ let build_constraint env (c : Ast.constraint_item) =
                 Model.mem_x = operands env pos xa;
                 mem_y = operand env pos ya;
                 mem_b = operands env pos ba;
+              }
+        | _ -> Error.failf pos "builtin `%s`: internal arity mismatch" id)
+    (* M18-coverage-T3 (D-0217). `baguette_circuit(xs, pos, root)`: the root is a
+       CONSTANT, refused here with a position otherwise; lib/flatzinc/compile.ml's
+       [post_circuit] checks the shape (n successors, n - 1 positions). *)
+    | "baguette_circuit" -> (
+        arity 3;
+        match c.Ast.c_args with
+        | [ xa; pa; ra ] ->
+            Model.Circuit
+              {
+                Model.cir_x = operands env pos xa;
+                cir_pos = operands env pos pa;
+                cir_root = as_const pos ~builtin:id ~what:"the root" (operand env pos ra);
               }
         | _ -> Error.failf pos "builtin `%s`: internal arity mismatch" id)
     (* M18-coverage-T1 (D-0206). `baguette_table(x, t, s)` and `baguette_table_bool(x, t,
