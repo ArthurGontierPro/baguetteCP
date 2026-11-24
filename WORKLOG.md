@@ -687,6 +687,7 @@ section 1. Shares are inclusive, of the whole run.
 SIGTERM, SIGINT, SIGXCPU and the heap budget end the proof, `BOUNDS <declared floor> <last value printed>` on an optimisation run. Built and measured (D-0225 section 5), NOT merged.
 To merge: `search.ml` and `bin/main.ml` overlap agent-chrono's `wave71-chrono` (short edits in `record_improving`, `conclude_stopped`, `optimise`, the signal handler, `config.stop`). After the merge the differential reference must be re-recorded (226 plain and 214 debug runs differ by the conclusion line only). Next: the harness checks the proofs of killed runs, per-edition limits (900 s before 2015).
 Runs: `fataepyc-07:/scratch/arthur/interrupt/`.
+For the orchestrator, before the next series: a heap stop with an incumbent now exits 0, so `compare.py` files it SAT with an objective. `arms_compare.py` and `challenge_rank.py` read that as an incumbent, but `readme_table.py` (its `COMPLETE` set) would count it under "Satisfiable, proof verified", and `bench/tuning/agreement.py` line 29 has the same test. The user wants, in the end, both counted: the best solution of a stopped run, and its proof checked.
 
 ### 2026-11-24 (readme-session, laptop): 900 s for the editions 2011 to 2014
 
