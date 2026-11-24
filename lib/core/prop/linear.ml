@@ -126,6 +126,53 @@
    of 16/9 over the largest intermediate anything computes from the row. The raise is
    for callers that build a [Linear.t] directly, which is what every unit test does.
 
+   M20-pernode-T3 (D-0212): the check is made ONCE PER ROW, at [make], and a run of a row
+   that passed it uses plain [+], [*] and [Checked.floordiv_plain]/[ceildiv_plain]. The
+   checked operations were 51 % of this module's samples on mknap, 37 % of the node
+   (D-0207 section 5 item 4). The rule, stated where it is used:
+
+     PRECONDITION (checked in [make], the field [arith]). Over the frozen bounds
+       [decl_lo_i, decl_hi_i] of the terms, with B_i = max(|decl_lo_i|, |decl_hi_i|),
+         M = |rhs| + sum_i |a_i| * B_i  <=  Checked.limit = max_int / 16
+       computed in checked arithmetic ([Checked.row_fits]; a sum that itself overflows
+       fails it).
+
+     PREMISE (not checked per run, asserted under BAGUETTE_DEBUG). At every run, every
+       term's live [lo, hi] lies inside its frozen [decl_lo, decl_hi]. It holds because
+       [make] freezes the store's domain as it is when the row is built, which is before
+       search (every caller builds its rows in lib/flatzinc/compile.ml or in a test), a
+       store write only narrows (I-D3, asserted by [Store.apply]) and a failed write is
+       not stored (I-D1), and a backtrack restores a state that came after [make]
+       (I-T1: no backtrack goes below the level [make] ran at, level 0).
+
+     PROOF that no value of a run leaves [-2M, 2M], hence none wraps (2M <= max_int / 8):
+       - [term_min]: a_i * v with v = lo or hi inside [decl_lo_i, decl_hi_i], so
+         |a_i * v| <= |a_i| * B_i <= M.
+       - every partial sum of the minima: at most sum_i |a_i| * B_i <= M in magnitude,
+         whatever the order (each summand is bounded by its own share).
+       - slack = rhs - total_min: |slack| <= |rhs| + sum_i |a_i| * B_i = M.
+       - max_term = min_i + slack: <= 2M in magnitude.
+       - the divisions run on a term that is not fixed (fixed terms are skipped before
+         them) and has a_i <> 0 (zero terms are skipped by the walk), so the divisor is
+         not 0, and the dividend max_term is not min_int; the quotient is at most
+         |max_term| <= 2M, and its rounding correction (only when |a_i| >= 2) keeps it so.
+       - the divisor of the justification, -a_i, is taken on the pruning path only and
+         stays checked; a coefficient past [limit] is only possible on a term with
+         B_i = 0, which is fixed and never reaches it.
+     Two's complement [+] and [*] are exact when the true result is representable, so on
+     such a row every plain result EQUALS the checked one, which is why the artefacts are
+     byte-identical (D-0212 section 4).
+
+   A row that fails the precondition keeps every operation checked ([Checked_each]),
+   exactly as before D-0212, and still raises [Checked.Overflow] rather than wraps.
+   Under BAGUETTE_DEBUG a row that passed runs [Audited]: every operation is computed
+   checked AND plain, a disagreement or an [Overflow] fails as an invariant violation
+   naming D-0212, and the PREMISE is asserted at the top of every run. The
+   precondition is the only thing that selects the plain path, and the debug pass is
+   the only thing that checks the premise at run time: a new caller that builds a row
+   in the middle of search would break the premise, and must build it [Checked_each]
+   or freeze the ENCODING's declared bounds, as lib/core/learned.ml's header describes.
+
    ---------------------------------------------------------------------------
    Cost of a run (M16-file-review-T2, D-0190)
    ---------------------------------------------------------------------------
@@ -154,7 +201,14 @@ type term = { coeff : int; x : Var.t; decl_lo : int; decl_hi : int }
    (M16-file-review-T2, D-0190: a run used to be [List.length] and two [List.iteri], a
    closure call per term on the hottest loop of a linear-heavy model). [make] builds both
    and nothing else builds a [t]. *)
-type t = { terms : term list; arr : term array; rhs : int; row_id : int }
+type t = { terms : term list; arr : term array; rhs : int; row_id : int; arith : arith }
+
+(* How a run of this row does its arithmetic (D-0212, the header's "Arithmetic"). Chosen
+   once, at [make], and never changed. [Plain]: the row passed the precondition, every
+   operation of a run is the native one. [Checked_each]: it did not, every operation goes
+   through [Checked] as before D-0212. [Audited]: it passed and BAGUETTE_DEBUG is on, every
+   operation is made both ways and they must agree. *)
+and arith = Plain | Checked_each | Audited
 
 (* M11-complexity-T3 (D-0142, E7): SCRATCH for [propagate], one slot per term, where a run
    keeps each term's minimum while it walks the row. It only spares the run the two lists
@@ -187,8 +241,17 @@ let make ~row_id store raw_terms rhs =
         { coeff; x; decl_lo = Domain.lo d; decl_hi = Domain.hi d })
       raw_terms
   in
-  { terms; arr = Array.of_list terms; rhs; row_id }
+  let in_range =
+    Checked.row_fits (List.map (fun tm -> (tm.coeff, tm.decl_lo, tm.decl_hi)) terms) rhs
+  in
+  let arith =
+    if not in_range then Checked_each else if Debug.enabled then Audited else Plain
+  in
+  { terms; arr = Array.of_list terms; rhs; row_id; arith }
 
+(* Whether the row passed D-0212's precondition, i.e. runs without a check per operation
+   (or, under BAGUETTE_DEBUG, audited). test_prop.ml pins the boundary on it. *)
+let in_range t = match t.arith with Plain | Audited -> true | Checked_each -> false
 let base_explanation t = Explanation.model_row t.row_id
 let vars t = List.map (fun tm -> tm.x) t.terms
 
@@ -281,6 +344,77 @@ let term_min store (tm : term) =
   let d = Store.get store tm.x in
   if tm.coeff >= 0 then Checked.mul tm.coeff (Domain.lo d)
   else Checked.mul tm.coeff (Domain.hi d)
+
+(* ------------------------------------------------- a run's arithmetic (D-0212)
+
+   The four operations a run makes, in the row's [arith] mode. [Plain] is the native
+   operator, which the header's PROOF shows exact on a row that passed the precondition;
+   [Checked_each] is [Checked]'s; [Audited] is both, compared. The [match] is one test on
+   an immediate and is inlined (release builds without -opaque); the audited arm is a
+   call, out of line, because only a debug run takes it. [term_min] above stays the
+   checked specification: test_prop.ml's [Ref_linear] runs it against [propagate]. *)
+let audit_failed op a b why =
+  failwith
+    (Printf.sprintf
+       "invariant violated: D-0212: %d %s %d in a row that passed the precondition: %s" a
+       op b why)
+
+let audited op checked plain a b =
+  match checked a b with
+  | v -> if v <> plain a b then audit_failed op a b "plain and checked disagree" else v
+  | exception Checked.Overflow why -> audit_failed op a b why
+
+(* One out-of-line function per audited operation, so that the arms below hold a plain
+   call and nothing that builds a closure: ocamlopt's non-flambda inliner refuses a body
+   that defines a function, and [( + )] passed as a value is one. *)
+let audited_add a b = audited "+" Checked.add ( + ) a b
+let audited_sub a b = audited "-" Checked.sub ( - ) a b
+let audited_mul a b = audited "*" Checked.mul ( * ) a b
+let audited_fdiv a b = audited "floordiv" Checked.floordiv Checked.floordiv_plain a b
+let audited_cdiv a b = audited "ceildiv" Checked.ceildiv Checked.ceildiv_plain a b
+
+let[@inline] add m a b =
+  match m with
+  | Plain -> a + b
+  | Checked_each -> Checked.add a b
+  | Audited -> audited_add a b
+
+let[@inline] sub m a b =
+  match m with
+  | Plain -> a - b
+  | Checked_each -> Checked.sub a b
+  | Audited -> audited_sub a b
+
+let[@inline] mul m a b =
+  match m with
+  | Plain -> a * b
+  | Checked_each -> Checked.mul a b
+  | Audited -> audited_mul a b
+
+let[@inline] fdiv m a b =
+  match m with
+  | Plain -> Checked.floordiv_plain a b
+  | Checked_each -> Checked.floordiv a b
+  | Audited -> audited_fdiv a b
+
+let[@inline] cdiv m a b =
+  match m with
+  | Plain -> Checked.ceildiv_plain a b
+  | Checked_each -> Checked.ceildiv a b
+  | Audited -> audited_cdiv a b
+
+(* [term_min] in the row's mode: the same product, the same bound read. *)
+let[@inline] term_min_in m store (tm : term) =
+  let d = Store.get store tm.x in
+  if tm.coeff >= 0 then mul m tm.coeff (Domain.lo d) else mul m tm.coeff (Domain.hi d)
+
+(* The PREMISE of the header's proof, asserted at the top of every [Audited] run. *)
+let inside_frozen_bounds t store =
+  Array.for_all
+    (fun tm ->
+      let d = Store.get store tm.x in
+      Domain.lo d >= tm.decl_lo && Domain.hi d <= tm.decl_hi)
+    t.arr
 
 (* ------------------------------------------- what holds an earlier bound up *)
 
@@ -763,7 +897,8 @@ let cross_conflict t store (tm : term) snaps =
    search before any backtrack, so there is nothing to defer and a closure that outlived
    the backtrack would only have [check_history] to answer with. *)
 let prune_term t store mins ~slack idx (tm : term) =
-  let max_term = Checked.add mins.(idx) slack in
+  let m = t.arith in
+  let max_term = add m mins.(idx) slack in
   let d = Store.get store tm.x in
   (* M16-file-review-T2 (D-0190): a FIXED term cannot move, so its two divisions are not
      made. With [lo = hi = v] and [slack >= 0] (this walk runs only then), a positive
@@ -773,7 +908,7 @@ let prune_term t store mins ~slack idx (tm : term) =
      [max_int]). [max_term] is still computed first, so an overflow raises where it did. *)
   if Domain.lo d = Domain.hi d then None
   else if tm.coeff > 0 then
-    let new_hi = floordiv max_term tm.coeff in
+    let new_hi = fdiv m max_term tm.coeff in
     if new_hi < Domain.hi d then
       let h = Store.history store in
       let exclude = Some idx in
@@ -787,7 +922,7 @@ let prune_term t store mins ~slack idx (tm : term) =
       | Store.Changed | Store.Unchanged -> None
     else None
   else
-    let new_lo = ceildiv max_term tm.coeff in
+    let new_lo = cdiv m max_term tm.coeff in
     if new_lo > Domain.lo d then
       let h = Store.history store in
       let exclude = Some idx in
@@ -810,20 +945,31 @@ let prune_term t store mins ~slack idx (tm : term) =
    M16-file-review-T2 (D-0190): the three walks are loops over [t.arr], the terms in the
    order of [t.terms], so each visits the terms in the order its [List] form did, makes
    the same [Checked] operations in the same order, and the pruning walk stops after the
-   first cross-row conflict exactly as the [List.iteri] did by skipping every later term. *)
+   first cross-row conflict exactly as the [List.iteri] did by skipping every later term.
+
+   M20-pernode-T3 (D-0212): "[Checked] operations" above now means the row's [arith] mode.
+   A [Checked_each] row makes exactly those operations; a [Plain] row makes the native
+   ones in the same order, which give the same values (the header's PROOF), so the trail,
+   the reasons and the proof lines are the same bytes. *)
 let propagate t store =
+  let m = t.arith in
+  (match m with
+  | Audited ->
+      Debug.check "D-0212: a row in range runs inside its frozen bounds" (fun () ->
+          inside_frozen_bounds t store)
+  | Plain | Checked_each -> ());
   let arr = t.arr in
   let n = Array.length arr in
   let mins = mins_for n in
   for i = 0 to n - 1 do
-    mins.(i) <- term_min store arr.(i)
+    mins.(i) <- term_min_in m store arr.(i)
   done;
   let total_min = ref 0 in
   for i = 0 to n - 1 do
-    total_min := Checked.add !total_min mins.(i)
+    total_min := add m !total_min mins.(i)
   done;
   let total_min = !total_min in
-  let slack = Checked.sub t.rhs total_min in
+  let slack = sub m t.rhs total_min in
   if slack < 0 then
     let snaps = row_snaps store t.terms ~exclude:None in
     Propagator.Conflict

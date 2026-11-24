@@ -129,6 +129,14 @@ Assertions guarded by `BAGUETTE_DEBUG=1` should check as many of these as is aff
   (`test_d0124_*`) catch a reason citing a later bound, a reason read after its history
   is gone, and a wrong emptiness flag. D-0124 says why the memory made this worth it.
 
+  **Element is the second producer, since M20-pernode-T2 (D-0214), and for time, not
+  memory.** A pruning records a FRAME -- the domains it read, which are immutable values,
+  and the history -- and builds both halves from it when asked. The readers a frame
+  needs beyond D-0124's (`remover` before the cut, the level of a position below it, an
+  entry's arena explanation) take the history and no store. `test_d0214_*` checks that
+  the reason and the derivation read later are the ones read at once, after the bounds
+  moved, and that the reason refuses once unwound.
+
 - **I-X7** What `conclusion UNSAT` cites is a line the checker has itself established is a
   contradiction. Since D-0131 (M8-bits-encoding-T5) that line is always an explicitly
   derived empty clause, `rup >= 1` over the root's trace (D-0022's shape); the `pol` chain

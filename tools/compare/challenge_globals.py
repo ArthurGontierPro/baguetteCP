@@ -2,17 +2,24 @@
 """M7-T26. Which global constraints the Challenge editions use, against what baguette
 propagates natively, joined with baguette's outcome on each instance (D-0122).
 
-    challenge_globals.py <archive> <lists-dir> [<runs-dir>] [--min=20]
+    challenge_globals.py <archive> <lists-dir> [<runs-dir>] [--min=20] [--arm=A] [--mznlib=DIR]
 
 <archive>   ~/mznc-archive (probs/mznc<Y>_probs.tar.gz)
 <lists-dir> bench/challenge (the <Y>.lst files, M7-T26)
-<runs-dir>  a directory holding <Y>/results.tsv from scripts/compare_run.sh; without it
-            only the usage census is printed.
+<runs-dir>  a directory holding <Y>/results.tsv from scripts/compare_run.sh, or a series
+            directory whose ARMS hold it (<runs-dir>/<arm>/<Y>/results.tsv, as M10-T5's
+            /scratch/arthur/m10t5 and the M17 series); --arm picks the arm, default the
+            first in name order. Without <runs-dir> only the usage census is printed.
+--mznlib    the library the NATIVE set is read from; default the mznlib/ of this checkout.
 
 An instance "uses" a global when its model, or a .mzn it includes from its own directory,
-calls it outside a comment. A NATIVE global is one mznlib routes to a baguette propagator
-(cumulative, disjunctive, alldifferent, global_cardinality and _low_up, maximum/minimum,
-element); every other global reaches baguette decomposed by the MiniZinc standard library.
+calls it outside a comment. A NATIVE global is one mznlib routes to a baguette propagator,
+and the set is READ FROM mznlib/ (M18-coverage-T0), never listed here: every
+fzn_<g>[_int|_bool|_set].mzn names <g>, and a body-less array_int_<g> declaration (the
+FlatZinc builtin kept whole, as maximum/minimum) names <g>. `element` is the one native
+with no mznlib file, because array_int_element is a FlatZinc builtin (SPEC 2.1) that std
+already emits. Every other global reaches baguette decomposed by the MiniZinc standard
+library.
 `VAR-SET` and `VAR-FLOAT` mark models declaring such variables (also decomposed, or refused).
 
 Outcome columns are baguette's harness statuses. REFUSED is the FRONT END refusing the
@@ -41,9 +48,28 @@ lex_lesseq lex_greater lex_greatereq lex2 strict_lex2 link_set_to_booleans maxim
 member network_flow network_flow_cost nvalue partition_set range regular regular_nfa roots
 sliding_sum sort arg_sort sum_pred table value_precede value_precede_chain arg_max arg_min
 geost geost_bb piecewise_linear span seq_precede_chain symmetric_all_different""".split()
-NATIVE = {"cumulative", "cumulatives", "disjunctive", "disjunctive_strict", "alldifferent",
-          "all_different", "global_cardinality", "global_cardinality_low_up", "maximum",
-          "minimum", "element"}
+# MiniZinc's own aliases: the census matches either spelling in a model.
+ALIASES = {"all_different": ["alldifferent"]}
+FZN_FILE = re.compile(r"^fzn_(\w+?)(?:_int|_bool|_set)?\.mzn$")
+BODYLESS_BUILTIN = re.compile(r"^predicate\s+array_int_(\w+)\s*\([^=]*?\)\s*;", re.M | re.S)
+
+
+def native_from_mznlib(d):
+    """The globals mznlib routes to a propagator: its fzn_ files, the FlatZinc builtins it
+    redeclares body-less, and array_int_element, which std emits as it is."""
+    out = {"element"}
+    for f in sorted(os.listdir(d)):
+        m = FZN_FILE.match(f)
+        if m:
+            out.add(m.group(1))
+        if f.endswith(".mzn"):
+            out.update(BODYLESS_BUILTIN.findall(open(os.path.join(d, f)).read()))
+    for g in list(out):
+        out.update(ALIASES.get(g, []))
+    return out
+
+
+NATIVE = set()
 CALL = re.compile(r"\b(" + "|".join(sorted(set(GLOBALS), key=len, reverse=True)) + r")\s*\(")
 SETVAR = re.compile(r"\bvar\s+set\s+of\b")
 FLOATVAR = re.compile(r"\bvar\s+float\b")
@@ -88,6 +114,18 @@ def census(archive, lists, year):
     return uses
 
 
+def arm_dir(runs, arm):
+    """<runs> itself when it holds <Y>/results.tsv, else its arm <arm> (or the first arm)."""
+    has = lambda d: any(os.path.exists(os.path.join(d, str(y), "results.tsv")) for y in range(2011, 2027))
+    if has(runs):
+        return runs
+    arms = sorted(a for a in os.listdir(runs) if os.path.isdir(os.path.join(runs, a)) and has(os.path.join(runs, a)))
+    if not arms or (arm and arm not in arms):
+        sys.exit("challenge_globals: no <Y>/results.tsv under %s%s (arms: %s)"
+                 % (runs, " for arm " + arm if arm else "", " ".join(arms) or "none"))
+    return os.path.join(runs, arm or arms[0])
+
+
 def outcomes(runs, year):
     out = {}
     p = os.path.join(runs, str(year), "results.tsv")
@@ -111,6 +149,11 @@ def main(argv):
     archive, lists = args[0], args[1]
     runs = args[2] if len(args) > 2 else None
     minimum = int(opts.get("min", 20))
+    here = os.path.dirname(os.path.abspath(__file__))
+    NATIVE.update(native_from_mznlib(opts.get("mznlib", os.path.join(here, "..", "..", "mznlib"))))
+    if runs:
+        runs = arm_dir(runs, opts.get("arm"))
+        print("# outcomes from %s" % runs)
     per_year = {}
     for y in range(2011, 2027):
         if os.path.exists(os.path.join(lists, "%d.lst" % y)):

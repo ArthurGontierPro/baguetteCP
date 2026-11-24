@@ -10,6 +10,7 @@
 
 module Lit = Baguette_proof.Lit
 module Opb = Baguette_proof.Opb
+module Text = Baguette_proof.Text
 module Writer = Baguette_proof.Writer
 module Pol = Baguette_proof.Writer.Pol
 module Encoding = Baguette_proof.Encoding
@@ -4531,6 +4532,91 @@ let test_m11t7_discarded_rows_count_the_same () =
    [Printf], [Opb.constr_to_string] and [Lit.to_string], over random rows of awkward
    names and extreme values, a random `pol` of every operator, deletions, level markers
    and solutions. *)
+(* M20-pernode-T5 (D-0209): [Text] writes [string_of_int]'s and [Lit.to_string]'s bytes in
+   place, the owner's prefix from a direct-mapped cache. Pinned against the references
+   over the extremes, over names that need sanitising, over a second COPY of a name (a
+   hit by [String.equal], not [==]), over two owners that sanitise to one name, and over
+   enough distinct owners (5 000 against 16 384 slots, in three passes) that slots
+   collide and entries are evicted and rebuilt. *)
+let test_m20t5_text_is_the_reference () =
+  let values =
+    [
+      0;
+      1;
+      9;
+      10;
+      99;
+      100;
+      101;
+      999;
+      1000;
+      9999;
+      10000;
+      12345;
+      99999;
+      100000;
+      -1;
+      -9;
+      -10;
+      -100;
+      -12345;
+      max_int;
+      min_int;
+      min_int + 1;
+      max_int - 1;
+    ]
+    @ List.init 2000 (fun i -> (i * 7919) - 5000)
+  in
+  let bad = ref 0 in
+  List.iter
+    (fun v ->
+      let b = Text.create 1 in
+      Text.int b v;
+      if Text.contents b <> string_of_int v then incr bad)
+    values;
+  check_eq "m20t5: Text.int is string_of_int" ~expected:"0" ~got:(string_of_int !bad);
+  let names =
+    [
+      "x";
+      "";
+      "X_INTRODUCED_12_";
+      "$ne0";
+      "a.b";
+      "a-b";
+      "a_b";
+      "q[3]";
+      "_";
+      String.make 1 'y' ^ "yy";
+      "yyy";
+      "a_very_long_identifier_with_many_bytes_123";
+    ]
+  in
+  let owners = names @ List.map (fun x -> Bytes.to_string (Bytes.of_string x)) names in
+  let many = List.init 5000 (fun i -> Printf.sprintf "X_INTRODUCED_%d_" i) in
+  let bad = ref 0 in
+  let one x v =
+    List.iter
+      (fun l ->
+        List.iter
+          (fun l ->
+            let b = Text.create 1 in
+            Text.lit b l;
+            if Text.contents b <> Lit.to_string l then incr bad)
+          [ l; Lit.negate l ])
+      [ Lit.ge x v; Lit.eq x v; Lit.bit x (abs (v mod 64)) ];
+    let b = Text.create 1 in
+    Text.var b (Lit.Ge (x, v));
+    if Text.contents b <> Lit.var_name (Lit.Ge (x, v)) then incr bad
+  in
+  for _ = 1 to 3 do
+    List.iter
+      (fun x -> List.iter (one x) [ 0; 1; -3; 99; max_int; min_int; min_int + 1 ])
+      owners;
+    List.iter (fun x -> one x 17) many
+  done;
+  check_eq "m20t5: Text.lit is Lit.to_string, through hits, copies and evictions"
+    ~expected:"0" ~got:(string_of_int !bad)
+
 let test_m11t5_writer_lines_are_the_reference () =
   let st = Random.State.make [| 4145 |] in
   let names = [| "x"; "X_INTRODUCED_12_"; "$ne0"; "a.b"; "a-b"; "q[3]"; "_" |] in
@@ -4834,6 +4920,7 @@ let () =
   test_m11t7_expand_one_pass ();
   test_m11t7_discarded_rows_count_the_same ();
   test_m11t5_writer_lines_are_the_reference ();
+  test_m20t5_text_is_the_reference ();
   test_m11t5_lazy_origin ();
   test_m11t5_wipe_order ();
   test_m14t3_e2e_contract ();

@@ -67,33 +67,13 @@
    were taken, because a figure in this repository that says only what it is has twice
    turned out to be wrong.
 
-   ### Activity is not a heuristic here; it is the constant zero
+   ### Activity
 
-   An activity policy scores a learned constraint by how often it takes part in a later
-   conflict. Taking part requires propagating.
-
-   **THAT PREMISE IS SPENT, AND THE PARAGRAPH BELOW IS WHAT IT USED TO SAY.** It read:
-   "No learned constraint in this solver propagates. [Learned.instance] exists and builds
-   a [Linear] instance, and nothing in lib/ calls it ... every learned constraint has
-   activity 0, for the whole search, always", and it recorded 0 citations of a learned id
-   on every one of the then-39 models, with the note that "the day a learned constraint
-   does start propagating, the assertion fails and this paragraph is what changes". That
-   day was M2-L12 for the learned CLAUSE and M2-L13 for the learned PB ROW.
-   [Learned.instance] no longer exists; [Learned.pb_instance] replaces it, builds a
-   lib/core/prop/pb.ml instance over the order literals the row already names, and
-   [Search.register_learned_pb] calls it on every learned row. Citations are no longer 0:
-   swept over the 44-model suite on 2026-09-18 this build registers 103 learned PB
-   instances and cites each one.
-
-   What the verdict below rests on is therefore NOT "activity is constant" any more. It
-   rests on the argument M2-L12 replaced it with -- D-0051's reversal condition is spent
-   and [keep_all] stands on a new argument -- and on the SOFT cap: a cited constraint is
-   refused eviction, and M2-L13 only adds citations to a mechanism that already existed
-   for them. An activity policy is now computable and is not written; that is a gap to
-   record, not a claim to make.
-
-   An activity policy over a constant is FIFO with a heuristic's name on it. [fifo] below
-   is therefore the activity policy, spelled as what it actually is.
+   Learned constraints propagate (M2-L12 for the clause, M2-L13 for the PB row), so a
+   learned constraint's use is a real measure. [tiered] (D-0139) ranks its middle tier by
+   it ([e_used]), and [fifo] below is the plain age policy. The default stays [keep_all]
+   (D-0051, D-0139 section 6, D-0202). M22-review-T12 proposes measuring [tiered] on the
+   whole Challenge with the default search before the user decides on the default.
 
    ### LBD is available, and on today's suite it does not discriminate either
 

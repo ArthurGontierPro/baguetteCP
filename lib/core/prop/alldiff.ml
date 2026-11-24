@@ -26,6 +26,14 @@
    its counting naturally ends on. [in_order_currency] is the conversion and its comment
    is the argument; docs/PROOF-FORMAT.md section 4's all_different row is the contract.
 
+   STAGE 2 IS GATED (M20-pernode-T4, D-0215). A Regin pass that cannot prune is skipped,
+   and the test is exact: [cannot_prune] repairs a matching KEPT across passes (Régin's
+   incremental matching, as Gecode and Chuffed keep theirs) and runs one Tarjan pass for
+   an edge that lies in no maximum matching. When there is one, or no matching saturates
+   the scope, the from-scratch pass [regin_scratch] runs exactly as before, so every
+   pruning, its order and its justification are the ones it always made; the kept matching
+   is a hint re-read against the live domains, never a fact, and needs no trail.
+
    ---------------------------------------------------------------------------
    Filtering: Hall intervals
    ---------------------------------------------------------------------------
@@ -266,9 +274,40 @@ type term = {
   rungs : (int -> int option) Lazy.t;
 }
 
+(* The state [cannot_prune] keeps across passes (D-0215): a matching, and the scratch its
+   two searches reuse. NOTHING HERE IS A FACT ABOUT THE STORE. [g_val]/[g_owner] are a
+   HINT, re-validated against the live domains at the start of every pass, so no trail
+   entry and no stamp restores it on backtrack -- see [cannot_prune] for why none is
+   needed. Values are slots [v - g_base] of the declared span. *)
+type gate = {
+  g_base : int;
+  (* [g_val.(i)]: the value matched to term [i], or [g_base - 1] for none. *)
+  g_val : int array;
+  (* [g_owner.(v - g_base)]: the term matched to [v], or [-1]. [g_owner.(k) = i] iff
+     [g_val.(i) = g_base + k], kept in step by [assign] and the repair. *)
+  g_owner : int array;
+  (* The augmenting search's visited marks, per value slot, against [g_stamp]. *)
+  g_seen : int array;
+  mutable g_stamp : int;
+  (* The live domains of the pass, read once. *)
+  g_doms : Domain.t array;
+  (* Tarjan's per-term index, low-link, on-stack flag and stack; [g_reach.(i)]: [i]'s
+     component reaches a free value, final once that component is closed. *)
+  g_index : int array;
+  g_low : int array;
+  g_onstack : bool array;
+  g_reach : bool array;
+  g_stack : int array;
+  mutable g_sp : int;
+}
+
 type t = {
   terms : term array;
   enc : Encoding.t;
+  (* The Regin gate (D-0215), [None] when the scope's declared span exceeds
+     [max_gate_span] or the caller turned it off; the stage then runs from scratch on
+     every pass, as it did before. *)
+  gate : gate option;
   (* The var-value-pair count above which [propagate] returns after stage 1 -- see the
      staging comment at the bottom of this file. *)
   cutoff : int;
@@ -299,11 +338,42 @@ let consistency = Propagator.Domain
 (* GCS's measured threshold, in var-value pairs. *)
 let default_cutoff = 256
 
+(* The widest declared span the gate indexes by value (D-0215): two int arrays of this
+   length per instance. A wider scope runs the stage from scratch, which costs a list of
+   every value per pass anyway. *)
+let max_gate_span = 1 lsl 16
+
+let make_gate terms =
+  let n = Array.length terms in
+  if n = 0 then None
+  else
+    let base = Array.fold_left (fun a tm -> Int.min a tm.decl_lo) max_int terms in
+    let top = Array.fold_left (fun a tm -> Int.max a tm.decl_hi) min_int terms in
+    let span = top - base + 1 in
+    if span > max_gate_span then None
+    else
+      Some
+        {
+          g_base = base;
+          g_val = Array.make n (base - 1);
+          g_owner = Array.make span (-1);
+          g_seen = Array.make span 0;
+          g_stamp = 0;
+          g_doms = Array.make n (Domain.singleton base);
+          g_index = Array.make n (-1);
+          g_low = Array.make n 0;
+          g_onstack = Array.make n false;
+          g_reach = Array.make n false;
+          g_stack = Array.make n 0;
+          g_sp = 0;
+        }
+
 (* [rows] is what [Encoding.add_all_different] returned, and the encoding is the live
    one: see the module header on I-X6. Reads each variable's domain, so it must be
    called before anything has narrowed it -- the same requirement, for the same D-0010
    reason, that [Linear.make] and [Ne.make] state. *)
-let make ?(cutoff = default_cutoff) ?(lemma_rows = []) store enc ~rows vars =
+let make ?(cutoff = default_cutoff) ?(lemma_rows = []) ?(gate = true) store enc ~rows vars
+    =
   let tbl = Hashtbl.create (2 * List.length rows) in
   List.iter
     (fun ((x, z, v), cid) ->
@@ -331,7 +401,14 @@ let make ?(cutoff = default_cutoff) ?(lemma_rows = []) store enc ~rows vars =
            })
          vars)
   in
-  { terms; enc; cutoff; rows = tbl; lemmas }
+  {
+    terms;
+    enc;
+    gate = (if gate then make_gate terms else None);
+    cutoff;
+    rows = tbl;
+    lemmas;
+  }
 
 let vars t = Array.to_list (Array.map (fun tm -> tm.x) t.terms)
 
@@ -1187,17 +1264,19 @@ let remove_one t store ~moved ~halls ~vals ~y_tm value =
       moved := true
   | Store.Unchanged -> ()
 
-(* One Regin pass. Returns whether a removal landed. ONE SNAPSHOT, EVERY DEDUCTION (I-P6,
+(* One Regin pass FROM SCRATCH: the matching rebuilt, every tight set enumerated. Its
+   output -- which removals land, in which order, with which [halls] and [vals] -- is the
+   contract D-0215 keeps byte for byte, and [regin_pass] runs it whenever [cannot_prune]
+   does not rule it out. Returns whether a removal landed. ONE SNAPSHOT, EVERY DEDUCTION (I-P6,
    M6-T19): [doms], the matching and the components are computed once and every removal
    they justify is applied. The argument is [pass]'s, in this module's second currency:
    a removal only ever takes a value OUTSIDE its tight set, so no matching edge and no
    set membership is ever removed by this pass, and a set that is tight over the stale
    domains is tight over the live ones, which are subsets of them. *)
-let regin_pass t store =
+let regin_scratch t store =
   let n = Array.length t.terms in
   let moved = ref false in
   if n > 0 then (
-    Propagator.count_pass ();
     let doms = Array.map (fun tm -> Store.get store tm.x) t.terms in
     let values =
       Array.of_list
@@ -1270,7 +1349,7 @@ let regin_pass t store =
         | Store.Conflict c -> raise (Found c)
         | Store.Changed | Store.Unchanged ->
             invalid_arg
-              "Alldiff.regin_pass: the emptying push did not fail, so the pigeonhole \
+              "Alldiff.regin_scratch: the emptying push did not fail, so the pigeonhole \
                derivation would be attached to a change that landed")
     | None ->
         List.iter
@@ -1318,6 +1397,165 @@ let regin_pass t store =
                 (range 0 (n - 1)))
           (range 0 (n - 1)));
   !moved
+
+(* ------------------------------------------------------ THE REGIN GATE (D-0215) *)
+
+(* [regin_scratch] removes a value [v] from [y] exactly when the edge (y, v) lies in NO
+   maximum matching (completeness: its [ink] enumeration finds the least tight set
+   holding [v]'s partner, which excludes [y]), and a pass that removes nothing has no
+   effect at all: it pushes nothing, and what it reads ([snap_of]) is read only. So when
+   every edge lies in SOME maximum matching the pass is a no-op, and [cannot_prune] says
+   so in O(n + sum of domain sizes), against the O(n^2 d) of the scratch pass:
+
+   1. REPAIR the matching kept from the last call. An edge whose value has left its
+      variable's domain is dropped; every variable left unmatched is re-augmented (Kuhn,
+      a free value first). If one cannot be, NO matching saturates the scope -- a
+      partial matching with no augmenting path from [i] is the Berge argument -- and the
+      answer is "may prune": the scratch pass rebuilds its own matching and reports the
+      pigeonhole with the very [seen] set it always did.
+   2. TARJAN over the variables, [i -> j] when [i] holds [j]'s matched value, plus a
+      sink for "holds a free value". Régin's characterisation: an edge (y, v) outside
+      the matching is in some maximum matching iff v is free, or v's partner [j] and [y]
+      share a strongly connected component (an even alternating cycle), or [j] reaches a
+      free value (an even alternating path). So the one unusable edge is an edge INTO an
+      already closed component that reaches no free value, and the search stops at the
+      first one ([Prunable]).
+
+   The answer is EXACT both ways: "cannot prune" holds iff the scratch pass would land
+   nothing. Only "cannot prune" skips anything, and the scratch pass is what runs
+   otherwise, so the gate can change the speed and nothing else: the matching it keeps
+   is never handed to the scratch pass, whose output is a function of the domains alone.
+
+   WHY NO TRAIL (the question every cross-pass state must answer). The kept matching is
+   not a fact about the store. Step 1 re-reads every matched edge against the live
+   domain, so a matching that a backtrack, a restart, or a different store has made
+   stale costs a repair and never an answer: after a backtrack the domains are WIDER
+   (I-T1), every kept edge still exists and the matching is still valid, and after a
+   descent the edges that left are the ones step 1 drops. The invariant that covers the
+   answer is I-P2 through the BAGUETTE_DEBUG check in [regin_pass]: whenever the gate
+   says "cannot prune", the scratch pass runs as well and must land nothing. *)
+
+exception Prunable
+
+let assign g i v =
+  g.g_val.(i) <- v;
+  g.g_owner.(v - g.g_base) <- i
+
+(* Kuhn's augmenting search from term [i], visited marks against [g_stamp]: a free value
+   of [i]'s domain if there is one, else a value whose partner can move. *)
+let rec augment g i =
+  let d = g.g_doms.(i) in
+  let hi = Domain.hi d in
+  let rec free v =
+    v <= hi
+    && (Domain.mem d v
+        && g.g_owner.(v - g.g_base) < 0
+        &&
+        (assign g i v;
+         true)
+       || free (v + 1))
+  in
+  let rec deep v =
+    v <= hi
+    &&
+    let k = v - g.g_base in
+    Domain.mem d v
+    && g.g_seen.(k) <> g.g_stamp
+    && (g.g_seen.(k) <- g.g_stamp;
+        augment g g.g_owner.(k))
+    &&
+    (assign g i v;
+     true)
+    || deep (v + 1)
+  in
+  free (Domain.lo d) || deep (Domain.lo d)
+
+(* Tarjan from term [i]; raises [Prunable] at the first edge into a closed component
+   that reaches no free value. A closed [j] is never in [i]'s component: had [j] reached
+   [i], Tarjan would not have closed [j] before [i]. *)
+let rec visit g counter i =
+  g.g_index.(i) <- !counter;
+  g.g_low.(i) <- !counter;
+  incr counter;
+  g.g_stack.(g.g_sp) <- i;
+  g.g_sp <- g.g_sp + 1;
+  g.g_onstack.(i) <- true;
+  g.g_reach.(i) <- false;
+  let d = g.g_doms.(i) and mine = g.g_val.(i) in
+  for v = Domain.lo d to Domain.hi d do
+    if v <> mine && Domain.mem d v then
+      let j = g.g_owner.(v - g.g_base) in
+      if j < 0 then g.g_reach.(i) <- true
+      else (
+        if g.g_index.(j) < 0 then (
+          visit g counter j;
+          g.g_low.(i) <- Int.min g.g_low.(i) g.g_low.(j))
+        else if g.g_onstack.(j) then g.g_low.(i) <- Int.min g.g_low.(i) g.g_index.(j);
+        if not g.g_onstack.(j) then
+          if g.g_reach.(j) then g.g_reach.(i) <- true else raise Prunable)
+  done;
+  if g.g_low.(i) = g.g_index.(i) then (
+    (* Close [i]'s component: everything above [i] on the stack. It reaches a free value
+       if any member does, directly or through a closed component. *)
+    let first = ref (g.g_sp - 1) in
+    while g.g_stack.(!first) <> i do
+      decr first
+    done;
+    let reach = ref false in
+    for p = !first to g.g_sp - 1 do
+      if g.g_reach.(g.g_stack.(p)) then reach := true
+    done;
+    for p = !first to g.g_sp - 1 do
+      let m = g.g_stack.(p) in
+      g.g_onstack.(m) <- false;
+      g.g_reach.(m) <- !reach
+    done;
+    g.g_sp <- !first)
+
+let cannot_prune g t store =
+  let n = Array.length t.terms in
+  for i = 0 to n - 1 do
+    let d = Store.get store t.terms.(i).x in
+    g.g_doms.(i) <- d;
+    let v = g.g_val.(i) in
+    if v >= g.g_base && not (Domain.mem d v) then (
+      g.g_owner.(v - g.g_base) <- -1;
+      g.g_val.(i) <- g.g_base - 1)
+  done;
+  let saturated = ref true in
+  for i = 0 to n - 1 do
+    if !saturated && g.g_val.(i) < g.g_base then (
+      g.g_stamp <- g.g_stamp + 1;
+      if not (augment g i) then saturated := false)
+  done;
+  !saturated
+  &&
+  (Array.fill g.g_index 0 n (-1);
+   Array.fill g.g_onstack 0 n false;
+   g.g_sp <- 0;
+   let counter = ref 0 in
+   match
+     for i = 0 to n - 1 do
+       if g.g_index.(i) < 0 then visit g counter i
+     done
+   with
+   | () -> true
+   | exception Prunable -> false)
+
+(* One Regin pass: the gate, and the scratch pass behind it. [count_pass] is counted here
+   once per pass as before, so every counter the lanes compare is unchanged. *)
+let regin_pass t store =
+  if Array.length t.terms = 0 then false
+  else (
+    Propagator.count_pass ();
+    match t.gate with
+    | Some g when cannot_prune g t store ->
+        Debug.check "I-P2 (D-0215): the Regin gate said a pass cannot prune" (fun () ->
+            match regin_scratch t store with
+            | moved -> not moved
+            | exception Found _ -> false);
+        false
+    | Some _ | None -> regin_scratch t store)
 
 (* Stage 1, unchanged: Hall intervals over bounds. Returns whether it moved anything, so
    [propagate] can decide whether to go on to stage 2. *)

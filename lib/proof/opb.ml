@@ -272,41 +272,34 @@ let label_of i = Printf.sprintf "@c%d" i
    are [constr_to_string]'s, which test/unit/test_proof.ml checks row by row. The buffer
    is reused from row to row; it holds the longest row written so far (about 0.5 MB on
    openshop), and is shrunk back when one row has made it larger than [row_buf_keep]. *)
-let row_buf = Buffer.create 4096
+(* M20-pernode-T5 (D-0209): the buffer is a [Text.t], so the integers and the literal
+   names are written in place, the names from [Text]'s per-owner prefixes. That cache
+   replaces the run-of-one-owner memo this function kept. *)
+let row_buf = Text.create 4096
 let row_buf_keep = 1 lsl 22
 
 let output_row oc i c =
   match c.rel with
   | Ge ->
       let b = row_buf in
-      Buffer.clear b;
+      Text.clear b;
       (* [label_of i], without [Printf]: "@c" and the decimal. *)
-      Buffer.add_string b "@c";
-      Lit.add_int b i;
-      Buffer.add_char b ' ';
-      let cache = ref None in
+      Text.string b "@c";
+      Text.int b i;
+      Text.char b ' ';
       List.iter
         (fun (a, (l : Lit.t)) ->
-          if a >= 0 then Buffer.add_char b '+';
-          Lit.add_int b a;
-          Buffer.add_char b ' ';
-          let x = Lit.owner l.Lit.v in
-          let x' =
-            match !cache with
-            | Some (y, y') when y == x -> y'
-            | _ ->
-                let x' = Lit.sanitize x in
-                cache := Some (x, x');
-                x'
-          in
-          Lit.add_sanitized b x' l;
-          Buffer.add_char b ' ')
+          if a >= 0 then Text.char b '+';
+          Text.int b a;
+          Text.char b ' ';
+          Text.lit b l;
+          Text.char b ' ')
         c.terms;
-      Buffer.add_string b ">= ";
-      Lit.add_int b c.rhs;
-      Buffer.add_string b " ;\n";
-      Buffer.output_buffer oc b;
-      if Buffer.length b > row_buf_keep then Buffer.reset b
+      Text.string b ">= ";
+      Text.int b c.rhs;
+      Text.string b " ;\n";
+      Text.output oc b;
+      Text.shrink b ~keep:row_buf_keep
   | Eq ->
       invalid_arg
         "Opb.output_row: an `=` row cannot carry a label -- it is two constraints to the \

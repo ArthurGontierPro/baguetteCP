@@ -195,12 +195,11 @@ let usage () =
   prerr_endline
     "                    .pbp, and stderr says so. A previous run's files of the";
   prerr_endline "                    same name are overwritten. --no-proof writes none.";
-  prerr_endline "  --proof-comments  enable the proof writer's comment lines. As of M1,";
-  prerr_endline "                    no shipped model reaches a call site that emits one,";
-  prerr_endline "                    so this flag is currently a no-op on every model in";
-  prerr_endline "                    test/models/: .opb and .pbp are byte-identical with";
-  prerr_endline "                    and without it. It will start mattering once the";
-  prerr_endline "                    direct-encoding path (M4) lands (see M1-T48).";
+  prerr_endline "  --proof-comments  enable the proof writer's comment lines. No shipped";
+  prerr_endline
+    "                    model reaches a call site that emits one, so on every";
+  prerr_endline "                    model in test/models/ the .opb and .pbp are";
+  prerr_endline "                    byte-identical with and without it (M1-T48).";
   prerr_endline
     "  --all             on an optimisation model, every improving solution (printed";
   prerr_endline
@@ -2206,11 +2205,12 @@ let () =
 
              Three deliberate choices:
 
-             * It is attached to [solve] and nowhere else. The front end computes no
-               arithmetic that could overflow (nothing in lexer.ml, parser.ml,
-               builder.ml or model.ml mentions Checked), so [Builder.of_file] cannot
-               raise this; [Compile.compile], [Search.solve] and the encoding can, and
-               all three are inside [solve].
+             * It is attached to [solve] and nowhere else. [Builder.of_file] cannot
+               raise this: builder.ml computes through Checked and turns an overflow
+               into a positioned diagnostic ([lin_terms], M22-review-T1) or drops the
+               fact ([facts_of], [infer_bounds]); lexer.ml, parser.ml and model.ml
+               compute nothing that can overflow. [Compile.compile], [Search.solve] and
+               the encoding can, and all three are inside [solve].
 
              * It exits 4 (INTERNAL), not 3 (unsupported model), even though the model
                that triggered it really is over the arithmetic limit. Compile's own cap

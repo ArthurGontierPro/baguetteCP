@@ -2,9 +2,11 @@
 
 The user asked for a complete and critical review of `main` at `c8be4d0`. This file records what the
 review found and leaves the work as rows of `docs/ROADMAP.md`, milestone **M22-review**. T1 and T2,
-the two bugs, are fixed and merged (section 1). T3 to T13 are proposals for the node session to apply
-in the order of section 2. A row marked USER DECISION changes the solver's default behaviour and waits
-for the user, as CLAUDE.md requires.
+the two bugs, are fixed and merged (section 1). **Beyond them, the main problem is speed** (section 2).
+The user wants it gone. M20-pernode-T1's profile (D-0207), which landed the same day, is its measured
+basis, and the review agrees with its ranking. T3 to
+T13 are the other proposals, in the order of section 3. A row marked USER DECISION changes the
+solver's default behaviour and waits for the user, as CLAUDE.md requires.
 
 How the review was done. Every module of `lib/` and `bin/` was measured. The core was read (store,
 engine, explanation, justify, trace, search, learning, retention), along with the proof side
@@ -93,7 +95,53 @@ cumulative, disjunctive, regular, inverse, member, count, `in`, lex_less and tab
 within −4..4. Every proof verified. The first three streams decide most models at the root (34 of a
 sample of 40 in the third were UNSAT with at most 2 conflicts), which is why the fourth exists.
 
-## 2. Proposals, in the order to apply them
+## 2. Speed, the main problem left
+
+After the two bugs, what separates baguette from the solvers it is compared with is speed.
+M20-pernode-T1 measured it the same day, after the first version of this section was written
+(D-0207, on `fataepyc-06`, instructions per node on the same search tree for five families). Without
+learning or proof baguette is 6 to 55 times Gecode per node, the proof multiplies that by 1.8 to 8.3,
+learning by 1.5 to 60, and the shipped binary is 66 to 592 times Gecode per node. D-0207 is the
+measured basis, and its ranked levers are the plan. The review agrees with them.
+
+| D-0207 rank | change | M20-pernode row | state on 2026-11-23 |
+|---|---|---|---|
+| 1 | learned constraints woken only through watches (learned PB rows have none today, D-0052) | T4 | agent-watch running (D-0208) |
+| 2 | the proof's text through one buffer, without `Printf` | T5 | agent-writer running (D-0209) |
+| 3 | reasons built on demand in `Element` (and the other globals) | T2 | TODO |
+| 4 | unchecked arithmetic in `Linear` where the row's bounds are checked once at `make` | T3 | TODO |
+| 5 | alldiff's Régin stage made incremental or gated | T4 | TODO |
+
+What the review adds to D-0207:
+
+1. Learning does not drive the search. The 1UIP clause is learned on top of a depth-first search
+   with nogoods, and the backjump is taken from the decision closure. D-0207 measured the
+   consequence: on four of the five families the default solver never backjumps, so its learned
+   constraints are pure cost there. Whether a fixed search should learn at all is M19-config's
+   question (D-0207 section 6). How learning should drive the search, with backjumps to the learned
+   clause's asserting level, is the design question behind it.
+2. Learned constraints are never deleted by default (`retention.ml:607`), so the cost that rank 1
+   attacks grows with the run, as D-0207 section 7 says of costas and mknap. Rank 1 cuts the cost of
+   each learned constraint, and retention cuts their number. The default is the user's decision
+   (row T12).
+3. A satisfiable pure-clause family for M20's set. The review's 3-SAT probe (170 variables, ratio
+   4.26, run on the laptop against the rule) is solved by Chuffed in 0.012 s, while baguette ran 800
+   to 1,000 conflicts per second and found no solution in 3 s, with 105 learned-clause runs per node
+   for 2.8 that pruned. That agrees with D-0207 section 5 item 1 on QR48.
+
+What the profile corrected in the review's first estimates:
+
+- The per-node scan of every variable (`Search.unfixed`) is negligible. The whole search layer is
+  under 70 thousand instructions per node.
+- alldiff's cost is the Régin stage, run on every pass (57 % of alldiff on costas), and not the Hall
+  enumeration the review pointed at (`alldiff.ml:49`).
+- Conflict analysis and learning take 3 to 16 % of a node, so the three analyses per conflict are not
+  a first lever. The engine's wake and dispatch are 15 to 45 % of a node, and they shrink with rank 1.
+- The review listed the core's checked arithmetic among what holds up (section 4). It is also 37 % of
+  a node on mknap. Rank 4 keeps the check where it guards soundness, once per row at `make`, with the
+  compile-time cap as its precondition.
+
+## 3. The other proposals, in the order to apply them
 
 "Byte-identical" below means the gate's model comparison shows 0 artefact differences and both diff
 lanes equal their references. Every row gets a gate before it merges.
@@ -106,6 +154,10 @@ refused by `compile.ml`'s cap; constant products that are large but cancel (`[2^
 `[2, 2]`) are accepted, because exact arithmetic got them right.
 
 ### T4. Facts in CLAUDE.md and the README
+
+Done on 2026-11-23 except the module map, which M18-coverage-T1 holds: the sizes below are in
+CLAUDE.md with the command that re-measures them, the `dune runtest` section is corrected, and the
+README gives alldifferent's consistency. What is left is the module map's three facts.
 
 Every session loads `CLAUDE.md`, and its context-budget table is off by a factor of 2.5 to 15.
 
@@ -147,6 +199,9 @@ stale facts are listed below.
 
 ### T6. Comments that are false, and the rule for module headers
 
+The seven comments below were corrected on 2026-11-23. What is left is the rule, applied file by
+file.
+
 These comments are false today:
 - `domain.ml:185` says the engine calls `classify` once per trail entry on its hot path. It does not.
 - `bin/main.ml:198`, the `--proof-comments` help, describes M4 as future work.
@@ -168,6 +223,9 @@ most comment: `search.ml` (2,094 comment lines for 1,632 code lines), `encoding.
 `engine.ml` and `writer.ml`. Comments only, so the result is byte-identical.
 
 ### T7. The differential fuzz as a lane
+
+Done on 2026-11-23 as `scripts/fuzz_lane.sh` (six streams, at most 16 jobs, a summary and every
+disagreement kept). What is left is the list of additions at the end of this section.
 
 `tools/fuzz/` holds the review's harness as it ran (`fuzz.py`, `fuzz2.py`). It writes its own `.msc`
 for the binary under test (`FUZZ_BIN`). It needs `minizinc`, which is not on `PATH` on the nodes
@@ -219,35 +277,16 @@ There are 56 top-level mutable globals: 14 in `encoding.ml`, 11 in `explanation.
 The goal is that two solves in one process share nothing and tests stop resetting globals by hand.
 Byte-identical.
 
-### T12. Performance, measured before anything changes
+### T12. Speed: section 2, through M20-pernode, and the retention default (USER DECISION)
 
-For each item, profile on the lane, make the change, measure before and after with the diff and
-scaling lanes, and write a D-record. Link the work to M20-pernode and M21-memory.
-
-- Learned clauses are one engine instance each. On a satisfiable random 3-SAT (170 variables, ratio
-  4.26), the results were:
-
-  | Solver | Result |
-  |---|---|
-  | Chuffed | solved in 0.012 s, 665 failures |
-  | Gecode | solved in 0.5 s, 3,821 failures |
-  | baguette | 2,386 conflicts in 3 s (2,942 with `-f`), no solution; 105 learned-clause instances run per node, of which 2.8 pruned |
-
-  A clause store inside the engine with two watched literals, as SAT solvers keep it, is the usual
-  answer.
-- Each conflict runs three analyses (1UIP, decision closure, PB). It writes the branch trace, the
-  conflict line, bridges where a settle needs them, a level-0 clause and a decision nogood. Measure
-  each one's share of the time and of the proof's bytes before changing any.
-- The learned database is never reduced by default (`retention.ml:607`, `keep_all`). D-0185's Challenge
-  series counted 198 proofs over the 16 GB cap and 314 refusals at the heap budget. Measure `lbd` and
-  `tiered` with the default search at the Challenge scale. Changing the default is a USER DECISION.
-- `alldiff.ml:49` runs the O(n·d²) Hall-interval enumeration, which its header calls an experiment for
-  small domains. Replace it with Puget's or López-Ortiz's O(n log n) algorithm.
-- Removing an interior value copies the domain's bitset (`domain.ml:250`), so removing every hole of
-  one domain along a branch is quadratic in its width. Measure how often it happens on the Challenge
-  first.
-- The engine has no propagator priorities (`engine.ml:1893`). Dirty instances run in id order, then a
-  FIFO. Try running clauses and linear rows before the globals.
+The speed work is section 2, through D-0207's ranks in M20-pernode, first in priority. What is
+left in this row is the one decision. Today every learned clause is kept to the end of the search
+(`keep_all`). That default dates from D-0051, measured on 39 small models when learned clauses did
+not propagate. D-0139 built `tiered`, which gave the same answers and was 47 % faster on QR72 with
+proof at equal conflicts, but bought conflicts rather than answers on a Challenge subset, and D-0202
+found it neutral on the codes set. Nobody has measured it on the whole Challenge with the default
+search. The proposal is to run that series and to agree the rule now: the default becomes
+`tiered` if verified answers rise and the heap-budget refusals do not.
 
 ### T13. Where a proof goes by default (USER DECISION)
 
@@ -271,10 +310,11 @@ one directory then never share a name, the names sort by time, and a later run n
 earlier proof. A direct run keeps `./MODEL.opb` and `.pbp`, and `--proof` and `--no-proof` are
 unchanged.
 
-## 3. What holds up
+## 4. What holds up
 
 - No exception handler in the tree catches every exception.
-- The core uses checked arithmetic consistently.
+- The core uses checked arithmetic consistently, which keeps it sound, at a cost D-0207 measured
+  (section 2).
 - `Model.check_assignment` handles every constraint constructor explicitly, with no catch-all case. It
   is what kept bug 1.2 from printing a wrong answer.
 - Every fuzzed proof verified, under both encodings and both searches.

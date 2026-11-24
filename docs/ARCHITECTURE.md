@@ -123,6 +123,10 @@ lib/core/       Baguette_core
                             line that walks a hole behind threshold lemmas written ahead, a
                             value of y two holes exclude behind a lemma per position and the
                             OR row (M7-T28, D-0159)
+    table.ml                table(x, T) through mznlib's baguette_table: DOMAIN consistent over
+                            x and one SELECTOR per tuple (store variables, as member's), one
+                            DEF row s_t -> x = t per tuple; every pruning one rup with its
+                            reasons on the letters (M18-coverage-T1, D-0206)
     linear.ml               int_lin_le. THE REFERENCE PROPAGATOR -- copy this shape
     lin_eq.ml               int_lin_eq (two model rows, see D-0011)
     ne.ml                   int_lin_ne and int_ne (VALUE consistency)
@@ -143,6 +147,9 @@ lib/proof/      Baguette_proof
   opb.ml                    writes the .opb model file
   writer.ml                 writes the .pbp proof; owns the constraint-id counter
                             (I-X2: an id you receive is an id you must delete)
+  text.ml                   one line's bytes, for writer.ml and opb.ml: integers and
+                            literal names written in place, each variable's name prefix
+                            rendered once (M20-pernode-T5, D-0209)
   checker.ml                resolves which veripb to use; mirrors scripts/checker.sh
 ```
 

@@ -133,6 +133,7 @@ Launch it detached (section 3) and poll `gateNN.status`.
 | `check_fmt.sh`, `check_test_widths.py`, `check_determinism.sh`, `check_unlimited.sh` | The static checks of `make check` |
 | `compare_selftest.sh`, `corpus_selftest.sh` | Self-tests of the two harnesses |
 | `shrink.sh` | Shrinks a failing model |
+| `fuzz_lane.sh` | The differential fuzz (M22-review-T7): random small models, baguette against Gecode through MiniZinc, every proof checked and every solution re-checked. Not a gate: a disagreement becomes a model in `test/models/`. `scripts/fuzz_lane.sh -j 16 -n 100 /scratch/arthur/<run>` on a node |
 | `bootstrap.sh` | Installs the toolchain on a fresh machine; safe to re-run |
 
 ## 8. The release binary (M11-complexity-T16, D-0171)

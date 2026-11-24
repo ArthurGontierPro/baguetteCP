@@ -1446,6 +1446,25 @@ let member_src =
    than retargeting it. *)
 let member_gap_line = "rup +1 ~y_ge_2 +1 y_ge_3 +1 ~x4_ge_4 +1 ~x3_ge_3 >= 1 ;"
 
+(* table (D-0206, M18-coverage-T1): x1 decided first at its minimum. x1 = 1 kills the
+   three tuples that need x1 >= 2 (one trace line each, on the bound), sets s1 on their
+   tails (C), and s1 fixes x2 = 1 (E), which int_ne(x1, x2) refutes; x1 = 2 then solves.
+   SATISFIABLE, so a refusal below is a judgement on a line, not the rup vacuity of a
+   contradictory database (CLAUDE.md, proof discipline). *)
+let table_src =
+  String.concat ""
+    [
+      "predicate baguette_table(array [int] of var int: x,array [int] of int: t,array \
+       [int] of var bool: s);\n";
+      "var 1..3: x1 :: output_var;\n\
+       var 1..3: x2 :: output_var;\n\
+       var 1..3: y :: output_var;\n";
+      "var bool: s1;\nvar bool: s2;\nvar bool: s3;\nvar bool: s4;\n";
+      "constraint baguette_table([x1, x2], [1, 1, 2, 3, 3, 1, 3, 2], [s1, s2, s3, s4]);\n";
+      "constraint int_le(x2, y);\nconstraint int_ne(x1, x2);\n";
+      "solve :: int_search([x1, y, x2], input_order, indomain_min, complete) satisfy;\n";
+    ]
+
 (* An emitter lane that also asserts the checker's WORDING at full strength: a rejection
    on the grammar would satisfy [Rejected_on_derivation]'s exit status and say nothing
    about the derivation (CLAUDE.md, "assert the checker's wording"). *)
@@ -2413,6 +2432,54 @@ solve :: seq_search([int_search([b, y], input_order, indomain_min, complete), in
           ~knob:(knob ~site:"clause(~b3_ge_1 ~y_ge_2 y_ge_3" Writer.Mutation.Drop_literal)
           "gap-lemma";
         member_no_ahead_lane c ~proof:b.pbp ~opb:b.opb);
+
+    (* -- M18-coverage-T1: table (D-0206) ---------------------------------------------
+       [table_src] above. Three lanes, each one trace line's tail fact dropped and
+       refused at the RUP wording:
+         kill-fact     s2's death under x1 <= 1 (K): s2 /\ x = (2, 3) is then possible;
+         set-fact      s1 := 1 on the other tuples' tails (C): ~s1 is then possible;
+         enforce-fact  x2 <= 1 from s1 (E): x2 = 3 is then possible. *)
+    let solve_tab ?mutation ~name () =
+      let m = F.Builder.of_string ~file:name table_src in
+      let c = Compile.compile m in
+      let opb = Filename.concat dir (name ^ ".opb")
+      and pbp = Filename.concat dir (name ^ ".pbp") in
+      let oc = open_out opb in
+      Encoding.write_opb ~comments:[ "test_mutation: " ^ name ] c.Compile.encoding oc;
+      close_out oc;
+      let oc = open_out pbp in
+      let writer =
+        match mutation with
+        | None -> Writer.create ~comments:true ~audit:true oc
+        | Some mutation -> Writer.create_mutated ~comments:false ~audit:true ~mutation oc
+      in
+      Encoding.start_proof c.Compile.encoding writer;
+      let ctx = Justify.create ~writer ~encoding:c.Compile.encoding in
+      let outcome =
+        Search.solve ~engine:c.Compile.engine ~store:c.Compile.store ~ctx
+          ~check:(fun _ -> true)
+          ?order:c.Compile.order ()
+      in
+      close_out oc;
+      ({ pbp; opb; fired = Writer.mutation_fired writer }, outcome)
+    in
+    let b, outcome = solve_tab ~name:"table" () in
+    check "table: the solver solves it (the instance is what we think it is)"
+      (match outcome with Search.Sat _ -> true | Search.Unsat -> false);
+    let build_tab ~name ~mutation = fst (solve_tab ~mutation ~name ()) in
+    gated ~tag:"table"
+      ~control:(fun () -> control_holds ~tag:"table" ~proof:b.pbp)
+      ~declares:[ "kill-fact"; "set-fact"; "enforce-fact" ]
+      (fun c ->
+        regular_lane c ~build:build_tab
+          ~knob:(knob ~site:"trace: ~s2_ge_1" Writer.Mutation.Drop_literal)
+          "kill-fact";
+        regular_lane c ~build:build_tab
+          ~knob:(knob ~site:"trace: s1_ge_1" Writer.Mutation.Drop_literal)
+          "set-fact";
+        regular_lane c ~build:build_tab
+          ~knob:(knob ~site:"trace: ~x2_ge_2" Writer.Mutation.Drop_literal)
+          "enforce-fact");
 
     (* -- M7-T34: member over big-M rows (D-0170) -----------------------------------------
        [member_chase_src] above. Three text lanes, each deleting ONE threshold lemma of a
