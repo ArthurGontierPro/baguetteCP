@@ -623,8 +623,39 @@ type stats = {
          node entry. Read by the CLI's `limit:` line and by the lane that pins the
          poll. *)
   mutable stopped_in_trace : bool;
-      (* M6-T23 (D-0149): the run was stopped by a poll inside a conflict's
-         [Trace.emit]. Read by the CLI's `limit:` line ([at=trace]). *)
+  (* M6-T23 (D-0149): the run was stopped by a poll inside a conflict's
+     [Trace.emit]. Read by the CLI's `limit:` line ([at=trace]). *)
+  (* ------------------------------------------- M19-config-T10 (D-0219), both searches *)
+  mutable cdcl_run : bool;
+      (* This solve ran the CDCL loop ([cdcl]) rather than [dfs]. M1-T36's identity is a
+         statement about a binary tree walked once, which the CDCL loop does not build,
+         so [stats_consistent] answers [true] for such a run instead of a false alarm. *)
+  mutable lo_resumes : int;
+      (* Conflicts after which the search went on below the root: the frame that explores
+         a second child ([dfs]), or the level the CDCL loop backjumps to. *)
+  mutable lo_skipped : int;
+      (* Over those, the levels skipped: in [dfs], the siblings left unexplored between
+         the conflict and the resume ([skipped] and [assign_backjumps]); in the CDCL loop,
+         the levels undone beyond the chronological one, [d - 1 - b] for a conflict at
+         level [d] that backjumps to [b]. 0 on every resume of a search that never
+         backjumps. *)
+  mutable lo_skip_mark : int; (* [skipped + assign_backjumps] at the pending conflict *)
+  mutable lo_far : int; (* resumes with [lo_skipped] > 0 *)
+  mutable lo_jump_max : int;
+  mutable lo_checked : int;
+      (* Learned clauses evaluated at the resume point, against the store as it stands
+         there, before anything is propagated. *)
+  mutable lo_asserting : int;
+      (* Of those, the ones with every literal false but one, and that one unassigned:
+         the clause is UNIT where the search resumes. *)
+  mutable lo_pending : (Lit.t list * int) option;
+      (* The last learned clause and its conflict level, until a resume reads it. *)
+  mutable lo_pruned : Bytes.t;
+      (* Per learned instance (offset as [learned_kinds]): has it pruned at least once. *)
+  mutable lo_clauses_pruning : int;
+  mutable lo_pb_pruning : int;
+  mutable lo_direct : int;
+      (* CDCL loop: assertions no consumer made, pushed from the clause ([cdcl]). *)
 }
 
 let stats_create () =
@@ -688,6 +719,19 @@ let stats_create () =
     level_diffs_rev = [];
     stopped_in_propagation = false;
     stopped_in_trace = false;
+    cdcl_run = false;
+    lo_resumes = 0;
+    lo_skipped = 0;
+    lo_skip_mark = 0;
+    lo_far = 0;
+    lo_jump_max = 0;
+    lo_checked = 0;
+    lo_asserting = 0;
+    lo_pending = None;
+    lo_pruned = Bytes.empty;
+    lo_clauses_pruning = 0;
+    lo_pb_pruning = 0;
+    lo_direct = 0;
   }
 
 let stats_learned s = List.rev s.learned_rev
@@ -762,6 +806,78 @@ let set_learned_kind s id k =
       s.learned_kinds <- b);
     Bytes.set s.learned_kinds i k)
 
+(* ------------------------------------------------ M19-config-T10 (D-0219): observables
+
+   What a learned clause does where the search resumes after its conflict, measured the
+   same way on [dfs] and on the CDCL loop so that the two can be put side by side. None
+   of it is read by the search; it is printed by [report_learning] under
+   BAGUETTE_CDCL_STATS=1 and changes no byte of stdout or of the proof. *)
+
+(* The truth of an order literal in the store as it stands: [1] true, [-1] false, [0]
+   unassigned. A literal of another kind answers [0]: a learned clause has none (its
+   literals are negated bound facts, [Reason.lit_of_fact]). *)
+let lit_status store (l : Lit.t) =
+  match l.Lit.v with
+  | Lit.Ge (nm, k) -> (
+      match Store.var_named store nm with
+      | None -> 0
+      | Some x ->
+          let d = Store.get store x in
+          let t = if Domain.lo d >= k then 1 else if Domain.hi d < k then -1 else 0 in
+          if l.Lit.positive then t else -t)
+  | Lit.Eq _ | Lit.Bit _ -> 0
+
+(* A resume after the pending conflict, [sk] levels skipped, the store standing at the
+   resume point. *)
+let observe_resume stats store ~sk =
+  match stats.lo_pending with
+  | None -> ()
+  | Some (lits, _) ->
+      stats.lo_pending <- None;
+      stats.lo_resumes <- stats.lo_resumes + 1;
+      stats.lo_skipped <- stats.lo_skipped + sk;
+      if sk > 0 then stats.lo_far <- stats.lo_far + 1;
+      if sk > stats.lo_jump_max then stats.lo_jump_max <- sk;
+      if lits <> [] then (
+        stats.lo_checked <- stats.lo_checked + 1;
+        match List.filter (fun l -> lit_status store l >= 0) lits with
+        | [ l ] when lit_status store l = 0 ->
+            stats.lo_asserting <- stats.lo_asserting + 1
+        | _ -> ())
+
+let dfs_skipped stats = stats.skipped + stats.assign_backjumps - stats.lo_skip_mark
+
+let mark_pruned stats id ~pb =
+  let i = id - stats.first_learned_id in
+  if i >= 0 then (
+    let n = Bytes.length stats.lo_pruned in
+    if i >= n then (
+      let b = Bytes.make (Stdlib.max (i + 1) (Stdlib.max 64 (2 * n))) '\000' in
+      Bytes.blit stats.lo_pruned 0 b 0 n;
+      stats.lo_pruned <- b);
+    if Char.equal (Bytes.get stats.lo_pruned i) '\000' then (
+      Bytes.set stats.lo_pruned i '\001';
+      if pb then stats.lo_pb_pruning <- stats.lo_pb_pruning + 1
+      else stats.lo_clauses_pruning <- stats.lo_clauses_pruning + 1))
+
+(* One stderr line, under BAGUETTE_CDCL_STATS=1 only (stderr is otherwise forbidden
+   without --time, M1-T49). *)
+let report_learning_enabled =
+  match Sys.getenv_opt "BAGUETTE_CDCL_STATS" with Some ("1" | "on") -> true | _ -> false
+
+let report_learning s =
+  if report_learning_enabled then
+    Printf.eprintf
+      "cdcl-stats: loop=%s nodes=%d decisions=%d conflicts=%d learned=%d resumes=%d \
+       skipped=%d far=%d jump_max=%d asserting=%d/%d clause_instances=%d \
+       clauses_pruning=%d pb_instances=%d pb_pruning=%d units=%d unit_prunes=%d direct=%d\n\
+       %!"
+      (if s.cdcl_run then "cdcl" else "dfs")
+      s.nodes s.decisions s.conflicts s.n_learned s.lo_resumes s.lo_skipped s.lo_far
+      s.lo_jump_max s.lo_asserting s.lo_checked s.n_clause_instances s.lo_clauses_pruning
+      s.n_pb_instances s.lo_pb_pruning (List.length s.globals_rev) s.n_global_prunes
+      s.lo_direct
+
 (* Does this pair of counts satisfy the identity above? [exhausted] is whether the
    search closed its whole tree. Public because [solve] checks it only under
    BAGUETTE_DEBUG and the tests must be able to check it always. *)
@@ -793,7 +909,8 @@ let stats_activity s =
   match s.strat with Some { st_activity = Some a; _ } -> Some a | _ -> None
 
 let stats_consistent s ~exhausted =
-  if exhausted then s.nodes = stats_expected_nodes s
+  if s.cdcl_run then true
+  else if exhausted then s.nodes = stats_expected_nodes s
   else s.nodes <= stats_expected_nodes s
 
 (* ------------------------------------------------------- the branching order (M2-T11)
@@ -1730,6 +1847,13 @@ type config = {
   reuse_trail : bool;
       (* M10-T3: partial restarts under [Activity_order] (D-0137 section 1.1). Ignored
          with any other order, where the rule is not defined. OFF. *)
+  cdcl : bool;
+      (* M19-config-T10 (D-0219): run the CDCL loop ([cdcl]) instead of [dfs]: on a
+         conflict, learn the 1UIP clause, backjump to its asserting level and let it
+         propagate there. OFF by default; BAGUETTE_CDCL=1 turns it on (read here, so
+         that every caller building on [default_config] -- bin/main.ml included -- gets
+         it without a CLI change). Forces the learned clause's consumer on whatever
+         [propagate_learned] says. *)
 }
 
 let default_config =
@@ -1757,6 +1881,17 @@ let default_config =
     phase_saving = false;
     search = Annotated;
     reuse_trail = false;
+    cdcl =
+      (* Anything but unset, 0/off or 1/on FAILS, the discipline of bin/main.ml's other
+         measurement knobs: a run that silently used the default because the spelling
+         was wrong is the trap CLAUDE.md records twice. *)
+      (match Sys.getenv_opt "BAGUETTE_CDCL" with
+      | None | Some ("" | "0" | "off") -> false
+      | Some ("1" | "on") -> true
+      | Some v ->
+          prerr_endline
+            (Printf.sprintf "baguette: BAGUETTE_CDCL=%S is not a setting. Use 1 or 0." v);
+          exit 2);
   }
 
 let no_learning = { default_config with learn = false; pb = false }
@@ -2555,9 +2690,12 @@ let count_learned_activity stats store ~since (o : Engine.outcome) : Engine.outc
      exactly when neither list held it. *)
   let classify id =
     let k = learned_kind stats id in
-    if Char.equal k kind_pb then stats.n_pb_prunes <- stats.n_pb_prunes + 1
-    else if Char.equal k kind_clause then
-      stats.n_clause_prunes <- stats.n_clause_prunes + 1
+    if Char.equal k kind_pb then (
+      stats.n_pb_prunes <- stats.n_pb_prunes + 1;
+      mark_pruned stats id ~pb:true)
+    else if Char.equal k kind_clause then (
+      stats.n_clause_prunes <- stats.n_clause_prunes + 1;
+      mark_pruned stats id ~pb:false)
   in
   for i = since to Store.trail_length store - 1 do
     classify (Store.trail_entry store i).Store.prop
@@ -2940,11 +3078,67 @@ let close_restarted ctx ~lvl =
 let ensure_decision_atom ctx lit =
   if not (Writer.is_null ctx.Justify.writer) then Justify.ensure_lit ctx lit
 
-let rec learn_at_conflict engine store ctx trace stats cfg (c : Store.conflict) =
+(* The conflict's own line, the D-0018 order's second step: [dfs]'s conflict arm and the
+   CDCL loop's (M19-config-T10) both call it, after the trace and before the bridges.
+   Moved here unchanged from [dfs] so that the two searches state a conflict by one rule. *)
+let state_conflict ctx trace (c : Store.conflict) =
+  match Trace.conflict_line ctx trace c with
+  | Some _ -> ()
+  | None -> (
+      (* M4-T2 / D-0040, the same remedy [Trace.derive_ahead] applies to a
+         PRUNING, applied to a conflict.
+
+         A conflict states itself one of two ways. With bound facts,
+         [Trace.conflict_line] writes `rup ~fact ... >= 1` -- "these bounds are
+         jointly impossible" -- and the nogood unit-propagates along it. With
+         NO facts it writes nothing, and until M4-T2 nothing else did either: the
+         nogood was left to reach the contradiction by unit propagation over the
+         model rows alone. For a disequality conflicting with everything fixed
+         that works, which is why it shipped; for a COUNTING conflict it does
+         not, and 3.0.2 refuses the nogood.
+
+         A factless conflict is exactly the shape [Store.apply]'s [Failed] arm
+         produces -- the pigeonhole, realised as a pruning that empties a domain,
+         which lib/core/prop/alldiff.ml's [pass] and [regin_pass] both use
+         BECAUSE a `rup` over its facts would be a counting argument claimed as
+         reverse unit propagation. So the derivation is the statement, and it is
+         emitted here: under a decision it does not close to [0 >= 1] (the bounds
+         a decision set are not cancelled, by D-0037), and what it derives instead
+         is "not all of these bounds hold" -- which is a row, derived rather than
+         asserted, that the nogood's [rup] can propagate against.
+
+         Found by the M4-T2 random sweep, on a branch whose Regin conflict left
+         the nogood with nothing to propagate along. *)
+      match Explanation.force c.Store.c_why with
+      (* M8-bits-encoding-T3 (D-0134): a [Resolve] states its clause by `pol`
+         + `ia`; over bits the nogood cannot reach it by unit propagation. *)
+      | Explanation.Combine _ | Explanation.Cut _ | Explanation.Resolve { parts = _; _ }
+        ->
+          ignore (Justify.emit ctx c.Store.c_why : Writer.cid)
+      | _ ->
+          (* A conflict whose derivation IS a clause already states itself in the
+             currency the nogood propagates in -- [int_ne] with every variable
+             fixed is the case, and its nogood has always been RUP without help.
+             Emitting it here would put a redundant line on the page and, worse,
+             would state that clause in the claim index, which changes what a
+             LATER [Explanation.Clause] resolves to and so changes proofs that
+             have nothing to do with this. Measured: it made one int_lin_ne
+             nogood standalone-RUP, which test_matrix.ml's own check is there to
+             forbid. What needs stating is a conflict whose derivation is
+             ARITHMETIC, and that is what this arm selects. *)
+          ())
+
+(* M19-config-T10 (D-0219): answers the learned clause as well as the levels, and takes
+   [~closure]: the CDCL loop passes [false] (it backjumps on the clause, see
+   [Learn.at_conflict]) and [dfs] [true], which is the walk it always made. With
+   [~closure:false] the M2-L15 comparison is not made, having nothing to compare. *)
+let rec learn_at_conflict ?(closure = true) engine store ctx trace stats cfg
+    (c : Store.conflict) : (Learn.t * int list) option =
   if not cfg.learn then None
   else
     match
-      Learn.at_conflict ~policy:cfg.policy store c ~vars_of:(Engine.vars_of engine)
+      Learn.at_conflict ~policy:cfg.policy ~closure store c
+        ~vars_of:(Engine.vars_of engine)
         ~decl:(Learned.decl_of_encoding ctx.Justify.encoding)
     with
     | None -> None
@@ -2992,7 +3186,10 @@ let rec learn_at_conflict engine store ctx trace stats cfg (c : Store.conflict) 
            evicted, so the entry has to exist first -- and BEFORE [reduce], so that a
            policy cannot evict on this very call a constraint the next line is about to
            give a consumer. *)
-        if cfg.propagate_learned then
+        (* M19-config-T10: the CDCL loop needs the clause to propagate whatever the
+           knob says -- an asserting backjump with no consumer re-takes the decision and
+           re-derives the conflict ([Learn]'s header, the loop argument). *)
+        if cfg.propagate_learned || cfg.cdcl then
           register_learned engine store ctx stats ~rest_satisfied:cfg.rest_satisfied ~cid
             ~lits:(Learn.lits l);
         ignore (Retention.reduce stats.db ctx);
@@ -3003,18 +3200,18 @@ let rec learn_at_conflict engine store ctx trace stats cfg (c : Store.conflict) 
         (* M2-L15. The comparison happens on EVERY build, including the default one that
            acts on none of it: the whole finding of this row is a pair of numbers, and a
            measurement taken only under the break knob is a measurement of the break. *)
-        let closure = Learn.levels l in
+        let levels = Learn.levels l in
         (match pb_levels with
-        | None -> ()
-        | Some (pb, asserting_level) ->
-            pb_level_verdict stats ~closure ~pb ~asserting_level);
+        | Some (pb, asserting_level) when closure ->
+            pb_level_verdict stats ~closure:levels ~pb ~asserting_level
+        | Some _ | None -> ());
         match (cfg.backjump_on_pb, pb_levels) with
-        | false, _ | _, None -> Some closure
+        | false, _ | _, None -> Some (l, levels)
         | true, Some (pb, _) ->
             (* THE BREAK. See [config.backjump_on_pb]: the row's levels are not a
                dependency set, so the nogood this filter produces claims the conflict
                rests on fewer decisions than it does. *)
-            Some pb)
+            Some (l, pb))
 
 and dfs engine store ctx trace stats cfg (order : order) (decisions : Lit.t list) : node =
   (* M2-L12 step 1: the learned units, applied before anything else at this node. See
@@ -3072,57 +3269,19 @@ and dfs engine store ctx trace stats cfg (order : order) (decisions : Lit.t list
            with Trace.Stopped ->
              stats.stopped_in_trace <- true;
              raise Limit_hit);
-          (match Trace.conflict_line ctx trace c with
-          | Some _ -> ()
-          | None -> (
-              (* M4-T2 / D-0040, the same remedy [Trace.derive_ahead] applies to a
-                 PRUNING, applied to a conflict.
-
-                 A conflict states itself one of two ways. With bound facts,
-                 [Trace.conflict_line] writes `rup ~fact ... >= 1` -- "these bounds are
-                 jointly impossible" -- and the nogood unit-propagates along it. With
-                 NO facts it writes nothing, and until M4-T2 nothing else did either: the
-                 nogood was left to reach the contradiction by unit propagation over the
-                 model rows alone. For a disequality conflicting with everything fixed
-                 that works, which is why it shipped; for a COUNTING conflict it does
-                 not, and 3.0.2 refuses the nogood.
-
-                 A factless conflict is exactly the shape [Store.apply]'s [Failed] arm
-                 produces -- the pigeonhole, realised as a pruning that empties a domain,
-                 which lib/core/prop/alldiff.ml's [pass] and [regin_pass] both use
-                 BECAUSE a `rup` over its facts would be a counting argument claimed as
-                 reverse unit propagation. So the derivation is the statement, and it is
-                 emitted here: under a decision it does not close to [0 >= 1] (the bounds
-                 a decision set are not cancelled, by D-0037), and what it derives instead
-                 is "not all of these bounds hold" -- which is a row, derived rather than
-                 asserted, that the nogood's [rup] can propagate against.
-
-                 Found by the M4-T2 random sweep, on a branch whose Regin conflict left
-                 the nogood with nothing to propagate along. *)
-              match Explanation.force c.Store.c_why with
-              (* M8-bits-encoding-T3 (D-0134): a [Resolve] states its clause by `pol`
-                 + `ia`; over bits the nogood cannot reach it by unit propagation. *)
-              | Explanation.Combine _ | Explanation.Cut _
-              | Explanation.Resolve { parts = _; _ } ->
-                  ignore (Justify.emit ctx c.Store.c_why : Writer.cid)
-              | _ ->
-                  (* A conflict whose derivation IS a clause already states itself in the
-                     currency the nogood propagates in -- [int_ne] with every variable
-                     fixed is the case, and its nogood has always been RUP without help.
-                     Emitting it here would put a redundant line on the page and, worse,
-                     would state that clause in the claim index, which changes what a
-                     LATER [Explanation.Clause] resolves to and so changes proofs that
-                     have nothing to do with this. Measured: it made one int_lin_ne
-                     nogood standalone-RUP, which test_matrix.ml's own check is there to
-                     forbid. What needs stating is a conflict whose derivation is
-                     ARITHMETIC, and that is what this arm selects. *)
-                  ()));
+          state_conflict ctx trace c;
           (* M1-T55: and then the bridge for any decision on this path that settled past
              a hole, which is the step the nogood's own [rup] needs and has until now
              been left to find for itself. It goes after the trace (D-0021) and before
              the nogood, at the nogood's own level, so the same [w] retires both. *)
           let protected = bridges ctx trace stats store decisions in
-          let keep = learn_at_conflict engine store ctx trace stats cfg c in
+          let learned = learn_at_conflict engine store ctx trace stats cfg c in
+          stats.lo_pending <-
+            Some
+              ( (match learned with Some (l, _) -> Learn.lits l | None -> []),
+                Store.level store );
+          stats.lo_skip_mark <- stats.skipped + stats.assign_backjumps;
+          let keep = Option.map snd learned in
           match restart_after_conflict stats store c decisions with
           | Some t ->
               (* M10-T2 (D-0137 section 1): a restart to level [t], 0 unless the trail
@@ -3294,6 +3453,7 @@ and branch_split engine store ctx trace stats cfg order decisions (dec : decisio
       close_level ctx ~lvl ~nogood:cid1;
       NFail (ng1, cid1)
   | NFail (ng1, _cid1) -> (
+      observe_resume stats store ~sk:(dfs_skipped stats);
       Store.new_level store;
       let lvl2 = Store.level store in
       if Debug.enabled then
@@ -3480,6 +3640,7 @@ and branch_assign engine store ctx trace stats cfg order decisions (a : assign) 
       close_level ctx ~lvl:lvl_a ~nogood:cid;
       NFail (ng, cid)
   | NFail (ng, _cid) ->
+      observe_resume stats store ~sk:(dfs_skipped stats);
       let neg_ge = Lit.negate dec_ge and neg_le = Lit.negate dec_le in
       (* THE WEAKENING'S ONE PRECONDITION, ASSERTED RATHER THAN ARGUED.
          C1 is sound because it is a SUPERSET of [ng], and it is a superset only if the
@@ -3618,6 +3779,298 @@ and explore_ge store engine ctx trace stats cfg order decisions v k lit =
       check_decision_landed store lvl outcome;
       dfs engine store ctx trace stats cfg order (lit :: decisions)
 
+(* ------------------------------------------------- M19-config-T10: THE CDCL LOOP
+
+   docs/DECISIONS.md D-0219 is the record. Opt-in ([config.cdcl], BAGUETTE_CDCL=1); the
+   default search is [dfs] above, untouched.
+
+   WHAT [dfs] DOES AT A CONFLICT, AND WHY IT RARELY JUMPS. It learns the 1UIP clause and
+   lets it propagate, but the search itself is a binary tree walked once: the conflict's
+   NOGOOD is the decisions filtered by the decision closure, the frame owning the deepest
+   level it names explores its sibling, and the sibling is the negated DECISION, pushed
+   as an assumption at the same level. When the 1UIP is the last decision, which is the
+   common case, the sibling decision satisfies the learned clause and the clause never
+   propagates; when the closure names the last level, which is almost always, nothing is
+   skipped (D-0207 section 2: no skip on four families of five).
+
+   WHAT THIS LOOP DOES INSTEAD, the loop of MiniSat's [search] and of Chuffed:
+
+     propagate;
+     conflict at the entry level   -> the empty clause, UNSAT ([close_root_conflict]);
+     conflict above it             -> trace, conflict line, bridges, the 1UIP clause on
+                                      the page at level 0 (as [dfs] writes it), then
+                                      BACKJUMP to the clause's asserting level (its
+                                      second-highest level) and go round: the clause is
+                                      unit there and its instance, newborn and therefore
+                                      seeded by the next [propagate], asserts the UIP's
+                                      negation;
+     fixpoint, something unfixed   -> the order's choice, ONE side, as a decision on a
+                                      new level ([Split]'s first side, or [Assign]'s two
+                                      levels); the other side is never pushed as a
+                                      decision, it is what a learned clause asserts;
+     fixpoint, all fixed           -> a solution; under branch and bound the bound is
+                                      installed and the loop goes round, as [dfs] re-enters.
+
+   THE PROOF. Per conflict: the trace lines not yet written, the conflict's line, the
+   bridges and the learned clause, in [dfs]'s order, and no nogood: the learned clauses
+   are what refute the tree, and the last conflict, at the entry level, closes with the
+   `rup >= 1` the root conflict has always written. A backjump is one writer step and one
+   wipe of every level above the target ([Justify.wipe_level] retires the levels >= its
+   argument). The learned clause is filed at level 0, so no wipe takes it; the lines of
+   the levels at or below the target stay, and [Trace.resync] finds them still written.
+   Nothing here is a new proof rule or a new [Explanation] constructor.
+
+   When the 1UIP walk gives nothing ([Learn.at_conflict] answers [None], or learning is
+   off), the clause is the branch nogood over every decision -- the line [dfs] writes
+   there, RUP for the same reason -- introduced and propagated as a learned clause; its
+   asserting level is the second-deepest decision's, so it asserts the negation of the
+   last decision: chronological backtracking, in this loop's terms.
+
+   COMPLETENESS is MiniSat's argument: each learned clause is false under the trail at the
+   conflict and asserting at its target, so the assignment sequence grows strictly in the
+   lexicographic order and no state repeats; learned clauses are kept by [Retention] and
+   a clause with a consumer is cited, so none that a trail entry rests on is evicted.
+   A clause that is NOT asserting (its two deepest literals share a level, possible only
+   when the conflict is below the current level, e.g. the branch-and-bound bound) sends
+   the search to that level, where its instance reports the conflict again and the walk
+   produces an asserting clause. [expect] checks the assertion at the next fixpoint and,
+   if no consumer made it, pushes it here from the clause itself, so a declined
+   registration costs a weaker propagation, never a loop. *)
+
+(* Undo every level above [b] and retire their lines. *)
+let backjump ctx stats store b =
+  if Store.level store > b then (
+    while Store.level store > b do
+      undo_level stats store
+    done;
+    Writer.set_level ctx.Justify.writer b;
+    Justify.wipe_level ctx (b + 1))
+
+(* The level a learned clause asserts at, and whether it is asserting there: the
+   second-highest level of its literals (the entry level for a unit), asserting iff the
+   highest level is held by one literal only. A clause whose two highest levels tie
+   sends the search to that level and is not asserting. Never below [entry]. *)
+let asserting_level ~entry (levelled : (Lit.t * int) list) =
+  let top, second =
+    List.fold_left
+      (fun (a, b) (_, l) -> if l > a then (l, a) else if l > b then (a, l) else (a, b))
+      (-1, -1) levelled
+  in
+  if top < 0 then (entry, false)
+  else if second = top then (Stdlib.max entry top, false)
+  else (Stdlib.max entry second, top > entry)
+
+(* The clause's literal at its highest level: the one the backjump leaves unassigned. *)
+let top_literal (levelled : (Lit.t * int) list) =
+  match levelled with
+  | [] -> None
+  | (l0, v0) :: rest ->
+      Some
+        (fst
+           (List.fold_left
+              (fun (l, v) (l', v') -> if v' > v then (l', v') else (l, v))
+              (l0, v0) rest))
+
+(* The branch nogood as a learned clause, for a conflict the 1UIP walk gave nothing for.
+   On the page at level 0 through [Learned.introduce], held by [Retention] like a 1UIP
+   clause, and given its consumer. *)
+let introduce_nogood engine store ctx stats cfg (ng : nogood) =
+  let lits = List.map fst ng in
+  let row = Learned.of_clause lits in
+  let origin =
+    if Writer.is_null ctx.Justify.writer then ""
+    else "M19-config-T10 decision nogood as a learned clause"
+  in
+  let cid = Learned.introduce ctx row ~origin in
+  stats.learned_rev <- cid :: stats.learned_rev;
+  ignore (Retention.add stats.db ~cid ~row ~lbd:(List.length ng) ~origin);
+  register_learned engine store ctx stats ~rest_satisfied:cfg.rest_satisfied ~cid ~lits
+
+(* The assertion a consumer did not make, made from the clause: [lit] with the negation of
+   every other literal as its facts. Its trace line is the clause itself, which is on the
+   page at level 0. *)
+let assert_directly ctx store (lit : Lit.t) (lits : Lit.t list) =
+  let decl = Learned.decl_of_encoding ctx.Justify.encoding in
+  let others = List.filter (fun l -> not (Lit.equal l lit)) lits in
+  let facts = List.filter_map (fun l -> fact_of_decision decl (Lit.negate l)) others in
+  let fact = fact_of_decision decl lit in
+  match (lit.Lit.v, fact, Store.var_named store (Lit.owner lit.Lit.v)) with
+  | Lit.Ge (_, k), Some f, Some x when List.length facts = List.length others ->
+      let j = Reason.because ~concludes:(Some f) facts (Explanation.clause lits) in
+      ignore
+        (if lit.Lit.positive then Store.set_lo store x k j
+         else Store.set_hi store x (k - 1) j
+          : Store.outcome)
+  | _ ->
+      failwith
+        (Printf.sprintf
+           "Search.cdcl: the learned clause asserting %s was not propagated and cannot \
+            be asserted from its facts; going on would re-take the decision and loop"
+           (Lit.to_string lit))
+
+(* The order's next choice, exactly as [dfs] asks it, or [None] when everything is fixed. *)
+let next_choice (order : order) store =
+  match match staged_of order with Some st -> st store | None -> None with
+  | Some c -> Some c
+  | None ->
+      let cands = unfixed store in
+      if Array.length cands > 0 then Some (order store cands) else None
+
+let cdcl engine store ctx trace stats cfg (order : order) : node =
+  let entry = Store.level store in
+  stats.cdcl_run <- true;
+  (* The decision literals of the open levels above [entry], newest first, one per level:
+     [dfs]'s [decisions], kept here because there is no recursion to carry it. *)
+  let decisions = ref [] in
+  let drop_to b =
+    let rec go n l =
+      if n <= 0 then l else match l with [] -> [] | _ :: r -> go (n - 1) r
+    in
+    decisions := go (List.length !decisions - (b - entry)) !decisions
+  in
+  (* The literal the last backjump left to be asserted, with its clause. *)
+  let expect = ref None in
+  let decide (c : choice) =
+    let push lit outcome lvl =
+      (match (outcome : Store.outcome) with
+      | Store.Changed -> ()
+      | Store.Unchanged | Store.Conflict _ ->
+          invalid_arg
+            (Printf.sprintf "Search.cdcl: the decision %s did not narrow"
+               (Lit.to_string lit)));
+      check_decision_landed store lvl outcome;
+      decisions := lit :: !decisions
+    in
+    let open_level () =
+      Store.new_level store;
+      let lvl = Store.level store in
+      Writer.set_level ctx.Justify.writer lvl;
+      lvl
+    in
+    let assume x lit ~lower k =
+      let lvl = open_level () in
+      let j = Reason.because ~concludes:None Reason.none (Explanation.decision lit) in
+      push lit (if lower then Store.set_lo store x k j else Store.set_hi store x k j) lvl
+    in
+    stats.nodes <- stats.nodes + 1;
+    (match c with
+    | Split dec ->
+        let v = dec.d_var in
+        let d = Store.get store v in
+        let k = dec.d_split in
+        if k < Domain.lo d || k >= Domain.hi d then
+          invalid_arg
+            (Printf.sprintf "Search.cdcl: the order split %s at %d, outside [%d, %d)"
+               (Store.name store v) k (Domain.lo d) (Domain.hi d));
+        let lit = Lit.ge (Store.name store v) (k + 1) in
+        ensure_decision_atom ctx lit;
+        stats.decisions <- stats.decisions + 1;
+        if dec.d_high_first then assume v lit ~lower:true (k + 1)
+        else assume v (Lit.negate lit) ~lower:false k
+    | Assign a ->
+        let v = a.a_var and m = a.a_value in
+        let d = Store.get store v in
+        if not (Domain.mem d m && Domain.lo d < m && m < Domain.hi d) then
+          invalid_arg
+            (Printf.sprintf "Search.cdcl: %s = %d is not a strictly interior member of %s"
+               (Store.name store v) m (Domain.to_string d));
+        let name = Store.name store v in
+        let dec_ge = Lit.ge name m and dec_le = Lit.le name m in
+        ensure_decision_atom ctx dec_ge;
+        ensure_decision_atom ctx dec_le;
+        stats.decisions <- stats.decisions + 2;
+        stats.assigns <- stats.assigns + 1;
+        assume v dec_ge ~lower:true m;
+        assume v dec_le ~lower:false m);
+    let depth = Store.level store - entry in
+    if depth > stats.max_depth then stats.max_depth <- depth
+  in
+  let conflict (c : Store.conflict) =
+    let d = Store.level store in
+    (try Trace.emit ~stop:(inner_stop cfg) ctx trace store
+     with Trace.Stopped ->
+       stats.stopped_in_trace <- true;
+       raise Limit_hit);
+    state_conflict ctx trace c;
+    ignore (bridges ctx trace stats store !decisions : Lit.t list);
+    let levelled =
+      match learn_at_conflict ~closure:false engine store ctx trace stats cfg c with
+      | Some (l, _) -> Learn.levelled l
+      | None ->
+          let ng = minimise stats cfg.policy (levelled_nogood !decisions ~top:d) in
+          introduce_nogood engine store ctx stats cfg ng;
+          ng
+    in
+    stats.lo_pending <- Some (List.map fst levelled, d);
+    let b, asserting = asserting_level ~entry levelled in
+    if b >= d && not asserting then
+      failwith "Search.cdcl: a learned clause neither asserts nor sends the search lower";
+    let target =
+      match restart_after_conflict stats store c !decisions with
+      | Some t ->
+          let t = Stdlib.max entry t in
+          stats.restart_targets <- stats.restart_targets + t;
+          Stdlib.min b t
+      | None -> b
+    in
+    backjump ctx stats store target;
+    drop_to target;
+    (* A restart below the asserting level is not a resume the clause is unit at: its
+       assertion is not checked, only the levels skipped are counted. *)
+    if target <> b then stats.lo_pending <- Some ([], d);
+    observe_resume stats store ~sk:(Stdlib.max 0 (d - 1 - target));
+    expect :=
+      if asserting && target = b then
+        Option.map (fun l -> (l, List.map fst levelled)) (top_literal levelled)
+      else None
+  in
+  let result = ref None in
+  while Option.is_none !result do
+    if cfg.stop () then raise Limit_hit;
+    let trail_before = Store.trail_length store in
+    match
+      count_learned_activity stats store ~since:trail_before
+        (match apply_globals store stats with
+        | Some c -> Engine.Conflict c
+        | None when cfg.stop_poll_runs > 0 ->
+            Engine.propagate ~stop:cfg.stop ~poll_runs:cfg.stop_poll_runs engine store
+        | None -> Engine.propagate engine store)
+    with
+    | exception Engine.Stopped ->
+        stats.stopped_in_propagation <- true;
+        raise Limit_hit
+    | Engine.Conflict c ->
+        expect := None;
+        stats.conflicts <- stats.conflicts + 1;
+        if Store.level store <= entry then
+          result := Some (NFail ([], close_root_conflict ctx trace store c))
+        else conflict c
+    | Engine.Fixpoint -> (
+        match !expect with
+        | Some (lit, lits) when lit_status store lit <> 1 ->
+            expect := None;
+            stats.lo_direct <- stats.lo_direct + 1;
+            assert_directly ctx store lit lits
+        | Some _ | None -> (
+            expect := None;
+            match next_choice order store with
+            | Some ch -> decide ch
+            | None -> (
+                let asn = extract_assignment store in
+                let finish () =
+                  backjump ctx stats store entry;
+                  decisions := [];
+                  result := Some (NSat asn)
+                in
+                match cfg.bnb with
+                | None -> finish ()
+                | Some b -> (
+                    match record_improving ctx store stats b asn with
+                    | `Proved -> finish ()
+                    | `Continue -> ()))))
+  done;
+  match !result with Some r -> r | None -> assert false
+
 (* ------------------------------------------------------------------------------ API *)
 
 (* The tree walk itself, shared by [solve] and [optimise] (M5-T1).
@@ -3679,6 +4132,7 @@ let search_core ~(engine : Engine.t) ~(store : Store.t) ~(ctx : Justify.ctx) ?tr
      [solve], and the engine it is about to be pointed at is not the one it last saw. *)
   stats.first_learned_id <- Engine.next_id engine;
   stats.learned_kinds <- Bytes.empty;
+  stats.lo_pruned <- Bytes.empty;
   stats.nodes <- stats.nodes + 1;
   (* M10-search-strategy (D-0137): the opt-in strategies' state, per solve, and the order
      they wrap. With every one of them off this is [None] and [order] is the caller's,
@@ -3725,9 +4179,14 @@ let search_core ~(engine : Engine.t) ~(store : Store.t) ~(ctx : Justify.ctx) ?tr
              "BAGUETTE_TEST_VALUE_CHOICE=%s: the only value is `median` (D-0148)" other)
   in
   let result =
-    try dfs engine store ctx trace stats config order []
-    with Limit_hit -> raise (Interrupted (trace, stats))
+    try
+      if config.cdcl then cdcl engine store ctx trace stats config order
+      else dfs engine store ctx trace stats config order []
+    with Limit_hit ->
+      report_learning stats;
+      raise (Interrupted (trace, stats))
   in
+  report_learning stats;
   Debug.check "I-S3: decision level on return equals level on entry" (fun () ->
       Store.level store = entry_level);
   (* M1-T36's identity, stated above [type stats]. [Unsat] means the tree was

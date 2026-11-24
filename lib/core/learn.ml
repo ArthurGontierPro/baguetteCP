@@ -297,6 +297,10 @@ type t = {
          that is the whole of what the predicate is for: D-0054 took it out of the
          propagation path, so this is a statistic about the SHAPE of the cut and never a
          gate on whether it may propagate. *)
+  l_levelled : (Lit.t * int) list;
+      (* M19-config-T10 (D-0219): [l_lits] with the decision level of each literal, in the
+         same order. The CDCL loop reads its ASSERTING level off it (the second-highest
+         level), which the decision closure's [l_levels] is not. *)
   l_lbd : int;
       (* M2-L4's retention score: the number of distinct decision levels the MINIMISED
          clause's literals sit at -- Glucose's "literal block distance". Taken after
@@ -313,6 +317,7 @@ let cut t = t.l_cut
 let levels t = t.l_levels
 let converts t = t.l_converts
 let lbd t = t.l_lbd
+let levelled t = t.l_levelled
 
 (* Analyse one conflict both ways. [None] when either walk fails or when the 1UIP walk
    produced nothing to learn; the caller then behaves exactly as it did before this row
@@ -325,7 +330,11 @@ let lbd t = t.l_lbd
    closure's level set over memoised citations rather than by re-walking the facts at
    every conflict (D-0124's second addendum); a closure that does not close is its
    [Error], and not a dependency set. *)
-let at_conflict ?(policy = Strongest) store (c : Store.conflict)
+(* M19-config-T10 (D-0219): [~closure:false] skips the decision closure and leaves
+   [l_levels] empty. The CDCL loop backjumps on the clause's own asserting level and never
+   reads the closure, so it does not pay for the second walk, and an [Error] of that walk
+   no longer costs it the clause. The default is the walk, as before. *)
+let at_conflict ?(policy = Strongest) ?(closure = true) store (c : Store.conflict)
     ~(vars_of : int -> Var.t list option) ~(decl : string -> (int * int) option) :
     t option =
   match Analysis.analyse store c ~vars_of ~criterion:Analysis.one_uip with
@@ -333,7 +342,7 @@ let at_conflict ?(policy = Strongest) store (c : Store.conflict)
   | Ok cut -> (
       if not (Analysis.postcondition_holds Analysis.one_uip cut) then None
       else
-        match Analysis.dependency_levels store c ~vars_of with
+        match if closure then Analysis.dependency_levels store c ~vars_of else Ok [] with
         | Error _ -> None
         | Ok levels ->
             (* One minimisation, read two ways. [Analysis.lits_levelled] is
@@ -354,6 +363,7 @@ let at_conflict ?(policy = Strongest) store (c : Store.conflict)
                   l_cut = cut;
                   l_levels = levels;
                   l_converts = Learned.to_linear_row cl ~decl <> None;
+                  l_levelled = levelled;
                   l_lbd = List.length (List.sort_uniq Int.compare (List.map snd levelled));
                 })
 
