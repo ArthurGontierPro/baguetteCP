@@ -27328,7 +27328,36 @@ satisfiable scene where a relaxation push is load-bearing.
 
 ### 6. Measurement
 
-(Filled in below when measured.)
+34 Challenge instances of the twelve families, each flattened twice with one release binary
+(`6f305958`, main `8e1d1d9`'s sources, which this branch does not change): "old" with main's
+mznlib (std's diffn), "new" with this branch's (`08a8f9b`). 300 s, one process at a time beside
+the 87-process series, `--max-heap-mb 8192`, veripb 3.0.2 with 900 s on every run that ended; a
+time-out's proof has no conclusion and was not checked. Driver, table and logs:
+`/cluster/arthur/baguette-results/wave61-diffn/` (`summary.tsv`).
+
+**Reach.** 25 of the 34 post a relaxation. The nine that do not (cargo x2, carpet-cutting `.08`
+and `.18`, yumi-static x2, yumi-dynamic, rect-euler, stripboard `w20_h15`) fail a guard
+(horizon over 5000, or the tasks fit the window) and flatten to std's model up to renumbering;
+eight were not run, carpet `.08` ran by a driver slip and is the same model (3983 both ways).
+
+| on the 25 | old | new |
+|---|---|---|
+| complete answers, all VERIFIED | 7 (4 filters OPT, stripboard w10 OPT, rpp18 SAT, code-generator regno OPT) | **9**: the same 7, plus `2020_pillars-and-planks_p-d12` OPT 5 (18 020 nodes, 118 G instructions; old timed out at 65 370 nodes) and `2021_perfect_square_205` SAT |
+| answers lost, proofs rejected | | none, none |
+| incumbents on the time-outs | | equal on 6, worse on 2 (accap3 118 -> 120, accap8 3750 -> 3757, minimised) |
+| nodes in 300 s, the 16 time-outs both ways | | fewer on 11 (perfect_square_102 0.45x, use_return_register 0.56x, pillars p-d10 0.77x, accap 0.81x); 0.91 to 1.18x elsewhere |
+| `.opb` | | larger on 14 of 16: perfect squares 1.3 -> 4.1 and 1.4 -> 6.0 MB (the copies' ladders), accap8 30 -> 175 MB; within 5 % on the code-generator and carpet-cutting instances |
+
+On the filters that complete both ways the relaxations cut the tree: `2013_ar_2_3` 1 517 -> 121
+nodes, `2012_fir_1_1` 2 587 -> 709, `2012_ar_1_2` 6 834 -> 4 423, at about 1.3 to 3 times the
+instructions per node. Reading: the relaxation buys the packing families (perfect_square,
+pillars-and-planks, filters) and costs nothing in answers elsewhere; per node it is dearer
+(cumulative's derivations over the copies' ladders, and on accap8 a window wide enough that the
+copies' order ladders are 145 MB of `.opb`). The pairwise half (section 4's native pair
+propagator) and a tighter width guard for the copies are the next levers; neither is built.
+
+After the merge of main at `f4f6391` (D-0212, D-0214, D-0215), the suite and the 218 model
+lanes were re-run green on the merged binary; the measurement above is on the pre-merge binary.
 
 ### 7. Revert
 
