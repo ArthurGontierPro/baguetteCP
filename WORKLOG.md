@@ -679,15 +679,20 @@ Updated as things land. The plan is the nine steps agreed on 2026-11-23 (speed f
 - D-0212, plain arithmetic in `Linear` after one check per row: byte-identical, -21 % on mknap without learning, -0.3 % shipped until D-0208 (gate 93).
 - D-0214, Element's reasons on demand: byte-identical artefacts, javarouting -22 % per node shipped without proof; the lane's `later/asks` counter changed on the element instances, so the reference was re-recorded in its own commit (`841fd1a`, every proof verified) (gate 94, then 95).
 - D-0215, alldiff's Régin stage gated by an exact test: byte-identical, costas -36 % without learning, p1f_13 -57 % shipped (gate 95).
-The shipped gains on costas and mknap stay small until D-0208, because learned constraints are 83 to 93 % of their nodes.
+- D-0213, `diffn` through mznlib onto `cumulative` (no `lib/` change): 7 -> 9 complete on 25 instances at 300 s (gate 96, same binary).
+- D-0216, the black-hole root slowdown (alldiff rebuilt 53 016 pairwise nodes per removal of a large Hall set, exposed by `table`): byte-identical, black-hole_10 55.1 G -> 7.3 G instructions (gate 97, binary `6604872c`).
+- D-0208, learned PB rows: WATCHING them was built, measured (+20 % on costas) and withdrawn, D-0052 stands; kept an exact early exit in `Pb.pass`: byte-identical, costas -49 % per node, mknap -35 % (gate 98, binary `d81c3612`).
+Gates 96 to 98 green: 218 models byte-identical, lane 347/347, debug 333/333, scaling ok.
 
-**Running**: the series on current main without the proof cap (agent-series, D-0203, fataepyc-06); the 64 GiB observation series then GCS and Chuffed (agent-node07, D-0210, D-0211, on fataepyc-07, allowed by the user on 2026-11-23); agent-watch (D-0208, learned constraints woken by watches); agent-diffn (D-0213); agent-hash (D-0216, the black-hole root slowdown).
+**Running**: the series on current main without the proof cap (agent-series, D-0203, fataepyc-06); the 64 GiB observation series then GCS and Chuffed (agent-node07, D-0210, D-0211, on fataepyc-07, allowed by the user on 2026-11-23); agent-cdcl (D-0219, M19-config-T10, the CDCL loop behind `BAGUETTE_CDCL`, default off); agent-circuit (D-0217); agent-memory (D-0218, M21-memory-T1/T2).
 
 **Known, not fixed yet**: black-hole is 4.5 times slower at the root since `inverse`'s alldiff lemmas, in `Explanation`'s hashing of `pol` lines (agent-table's finding). The `test_prop` debug failure was a test defect, fixed in D-0214.
 
 **Open for you**: D-0213 (`diffn` through mznlib, merged, gate 96 green: same binary `75b1e984`, 218 models identical, lanes equal): the two cumulative relaxations' capacity rows are MODEL rows in the `.opb`, trusted as MiniZinc's flattening is, and checked by enumeration in `test_compile.ml`; deriving them in the proof costs O(n^2 W H) lines. Deleting the two `mznlib/fzn_diffn*.mzn` files reverts it. 7 -> 9 complete answers on 25 instances at 300 s, `.opb` up to 5.8 times larger on some.
 
-**[AUTONOME] decisions**: D-0213 (above).
+Also open: after D-0208 the engine's wake work is the largest share left on costas and mknap; removing it needs the D-0169 (b) rule (rows that never prune are not woken), which changes default behaviour.
+
+**[AUTONOME] decisions**: D-0213 (above); D-0216 (alldiff reuses the node a rebuild would return; two dedups hashed; byte-identical); D-0208 (watching withdrawn on measurement).
 ### 2026-11-24 (agent-diffn, `wave61-diffn`): M18-coverage-T2, diffn's relaxations (D-0213)
 
 `mznlib/fzn_diffn.mzn` and `fzn_diffn_nonstrict.mzn` keep std's pairwise disjunction and add the two cumulative relaxations on `cumulative.ml` over order copies of the coordinates; no OCaml in `lib/`, so the binary and every existing artefact are byte-identical. [AUTONOME] the capacity rows are model rows (D-0213 section 3, the trust is a theorem checked by enumeration in test_compile; revert by deleting the two files).
