@@ -802,27 +802,36 @@ let linear terms rhs =
    tell a shared one from a fresh one: [Model_row] and [Term] are immutable, every reader
    matches them by structure, and the hash-consing key compares a [Model_row] by its id
    ([summand_hash], [hc_equal]), never by identity. So the bytes are the same by
-   construction. Ids above [intern_cap] are built fresh, so the table is at most
-   [intern_cap] words. *)
-let intern_cap = 1 lsl 22
+   construction. Ids above [intern_cap] are built fresh, and a chunk of 4 096 slots is
+   allocated only where an id is cited. *)
+let intern_cap = 1 lsl 24
+let chunk_bits = 12
 let no_row = Weaken []
-let cited_rows : summand array ref = ref [||]
+
+(* Two levels, so that only the id ranges actually cited are allocated: a ladder's rungs are
+   consecutive ids, and a single array grown to the largest id cited was a 32 MB block that
+   every major cycle scanned (rcpsp11_60: +2.9 % instructions per proved node, D-0223). *)
+let cited_rows : summand array array = Array.make (intern_cap lsr chunk_bits) [||]
 
 let cite_row id =
   if id < 0 || id >= intern_cap then Term (1, Model_row id)
-  else (
-    if id >= Array.length !cited_rows then (
-      let a =
-        Array.make (Stdlib.min intern_cap (Stdlib.max 1024 (2 * (id + 1)))) no_row
-      in
-      Array.blit !cited_rows 0 a 0 (Array.length !cited_rows);
-      cited_rows := a);
-    match Array.unsafe_get !cited_rows id with
+  else
+    let k = id lsr chunk_bits in
+    let chunk =
+      match Array.unsafe_get cited_rows k with
+      | [||] ->
+          let c = Array.make (1 lsl chunk_bits) no_row in
+          Array.unsafe_set cited_rows k c;
+          c
+      | c -> c
+    in
+    let i = id land ((1 lsl chunk_bits) - 1) in
+    match Array.unsafe_get chunk i with
     | Term _ as s -> s
     | _ ->
         let s = Term (1, Model_row id) in
-        Array.unsafe_set !cited_rows id s;
-        s)
+        Array.unsafe_set chunk i s;
+        s
 
 let model_row id = match cite_row id with Term (_, m) -> m | _ -> Model_row id
 let weaken lits = Weaken lits
