@@ -19,6 +19,7 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
+| M22-review-T4 (README part) | `README.md` | readme-session (laptop) | 2026-11-24 |
 
 ## Cross-session requests
 
