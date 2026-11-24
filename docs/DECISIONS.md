@@ -27364,6 +27364,343 @@ lanes were re-run green on the merged binary; the measurement above is on the pr
 Delete `mznlib/fzn_diffn.mzn` and `mznlib/fzn_diffn_nonstrict.mzn`: every model flattens to std's
 decomposition again, byte for byte. No OCaml depends on them.
 
+## D-0216  [AUTONOME] M11-complexity-T18: black-hole's root cost under native `table` was alldiff rebuilding its Hall derivations at every pruning, 8.3 M pairwise at-most-one nodes built only to be found in D-0172's table, each resolving its lemma through three string-keyed lookups. The nodes a rebuild would return are now handed back, and two quadratic deduplications go (table's foreign facts, a trace settle's). Every byte the same; black-hole_10 55.1 G to 7.3 G instructions, a black-hole_14 node 7.74 G to 2.36 G
+
+**Status**: DONE on branch `wave64-hash` (agent-hash, 2026-11-23/24), not merged. ROADMAP
+M11-complexity-T18. Taken in autonomous mode. It changes no output and no default. It is
+`[AUTONOME]` for three choices made without asking, listed in section 8. Measured on
+`fataepyc-06` while the Challenge series of 2026-11-23 ran, one experiment process at a time,
+in instructions (`perf stat -e instructions:u`). Runs and scripts in
+`/scratch/arthur/wave64-hash-runs/`, copied to `/cluster/arthur/baguette-results/wave64-hash/`.
+Binaries: base = main `3582a86` (release, md5 `cba056a8`), new = `wave64-hash` `894b295`
+(release, md5 `f5928600`; the commits after it touch tests and docs only).
+
+### 1. Context
+
+D-0206 (agent-table) measured `table` as a native propagator and found black-hole slower: on
+`2011_black-hole_10` 12.7 G instructions at the root with std's decomposition (102
+`array_int_element`) against 56.5 G with the native `table` (51 `baguette_table`), one node
+either way, and `2011_black-hole_14` killed by the series' `timeout -k 30 330` around
+`--time-limit 300`. Its profile put the cost in `Explanation`'s hash-consing (`same_summands`,
+`caml_hash`) for the `all_different` that `inverse` posts, and `table.ml` at 0.04 %.
+
+### 2. The profile, and the cause
+
+The frame-pointer switch (`baguette-fp`, D-0145) on black-hole_10 with the proof, `perf script`
+stacks aggregated by caller (inclusive shares of all samples):
+
+| frame | share |
+|---|---|
+| `Search.close_root_conflict` (one root conflict, its derivation ahead) | 94.4 % |
+| `Alldiff.remove_summands` (the derivations of value removals) | 92.0 % |
+| `Alldiff.pair_amo` (one pairwise at-most-one node) | 62.3 % |
+| `Alldiff.row` (the pair's lemma id) | 46.6 % |
+| `Explanation.built` (the hash-consing lookup) | 28.0 % |
+| `Alldiff.halves` (the pair's channelling ids) | 13.5 % |
+
+The `caml_hash` and `compare_val` the flat profile shows are `Hashtbl` on a
+`(string, string, int)` key inside `Alldiff.row`, which a flat `perf report` cannot attribute
+(D-0145's trap), and `same_summands` is the table's equality answering hits. Nothing in the
+hash-consing itself is degenerate: the content hash is computed once per node from the operands'
+stored hashes (D-0192), the equality compares operands by identity and does not descend, and a
+count of `Alldiff.row`'s lemma tables showed buckets of at most 6.
+
+The cause is the NUMBER of builds. Counted with a throwaway counter: the root's derivation
+forces 312 removal derivations, 156 of them under a Hall set of 47 variables over 47 values.
+Each of those rebuilds, per value, the at-most-one over the 47 plus the removed variable,
+C(48,2) = 1 128 pairs, by D-0027's induction ([amo]'s `grow`): 47 x 1 128 = 53 016 pair builds
+per removal, 8 344 362 in all. Every removal after the first finds almost all of them in the
+table, so the proof is small (78 468 `pol` lines), but each build pays its operands, its summand
+list and its lookup before it is answered. For an `all_different` that `inverse` implies,
+`Alldiff.row` made it worse: its `rows` table is empty, so each pair paid a miss in it, then
+`Hashtbl.mem` and `Hashtbl.find` in `lemmas`, three hashes of two strings each.
+
+### 3. Why table's arrival exposed it
+
+The same count on the decomposed model (the old arm's `.fzn`): 160 forced removals, ALL under a
+Hall set of 4, 74 026 pair builds. With the native `table` the 4-set's removals are still there
+(156), and 156 removals under a 47-set appear. `table` is GAC on each pair of consecutive
+positions, where the element decomposition propagates through index channels; at the root it
+narrows the positions' domains far enough that the Régin stage of the `inverse`'s alldiff finds
+the complement of the 4-set, 47 positions confined to 47 cards, and removes every value it
+licenses. Each removal's derivation is over the whole Hall set (M4-T2), so the cost of one is
+quadratic in 47 per value, and the total is cubic. Nothing changed in `Explanation`; what
+changed is what alldiff sees: a 47-variable Hall set that the weaker decomposition never exposed
+at the root.
+
+### 4. The fix
+
+1. **Reuse of the at-most-one nodes (`alldiff.ml`, `explanation.ml`).** A build that the table
+   answers returns a node that already exists. [amo]'s builds are a deterministic function of a
+   key: a pair's node of (x, z, v), a step's of the at-most-one it extends (by identity, which
+   fixes its variables and their order) and (u, v). `Alldiff.reuse` keeps the node each key's
+   last build returned, in a bounded table per instance (buckets, as many as four times the
+   instance's (variable, value) pairs within 1 024 to 65 536, emptied when full), and hands it
+   back when building again would return that very node. That holds exactly when the node is
+   the table's node of its content and so is every node it cites: `built` then answers each
+   operand's rebuild and the node's own with those nodes. `Explanation.rebuilds_to` checks it
+   shallowly (the node and its direct operands, a thunk or a decision operand answering false),
+   and the caller supplies the induction below by having obtained the operands the same way.
+   `Explanation.reuse_epoch` is the hash-consing table's count of nodes that LEFT it (a wipe that
+   removed one, a twin replaced, a reset): adding a node displaces no node of another content,
+   so a node checked at an epoch is still there while the epoch is unchanged, and an entry is
+   re-checked only after a node left. It answers -1 (no reuse) when hash-consing is off, when the
+   table is empty (`--no-proof`, before the first line) and under BAGUETTE_MEMO_STATS, whose
+   counts are of builds. A removal under a Hall set of m now builds the removed variable's m
+   pairs per value and finds the rest. `grow` keeps its covered variables reversed (a cons per
+   step instead of `have @ [u]`), and maps them back to the old order only when it builds.
+2. **`Alldiff.row` in one lookup per table**: `rows` is skipped when empty, and `lemmas` is read
+   with one `find_opt`.
+3. **`Table.add_fact`'s foreign facts** (facts on variables outside the table's scope, the
+   removers' and the selectors') were deduplicated by `List.mem` over the reason under way,
+   quadratic in a reason's facts. A hash table beside the list keeps the same first-occurrence
+   list. Found by the black-hole_14 profile below, where it was half of a proved node.
+4. **`Trace.settle_facts`** deduplicated each remover's literals against the tail by
+   `List.exists` (`add_fact_rev`), quadratic in the tail. One accumulator now runs over the
+   whole settle and moves to a table past 32 facts, the list walk kept below that bound, where
+   it is cheaper than hashing. `add_fact_rev` stays as test_trace's oracle.
+
+### 5. Why the bytes cannot change
+
+(1) returns only nodes a build would have returned, so every node the derivation contains, and
+the order in which `Justify` meets them, is the build's; skipping a build skips its allocation
+and lookup, which reach no byte (a node's `hid` is its content hash, and thunk ids are not
+minted by [amo]). A key whose node no longer rebuilds to itself, or a key not found, costs a
+build. (2) is the same lookups in fewer hashes. (3) and (4) build the same lists, element for
+element, since `Hashtbl` compares with structural equality and `Lit.equal` and the facts'
+equality are structural. Under BAGUETTE_HASHCONS=0 no build hits and (1) is off, so the bytes
+are D-0172's old ones.
+
+### 6. Measured
+
+Instructions with the proof, `perf stat -e instructions:u`, release binaries. Per node is
+(I(N nodes) - I(1 node)) / (N - 1), `BAGUETTE_NODE_LIMIT`. "reuse only" is the branch with (1)
+and (2) and without (3) and (4) (md5 `b7a32c5c`).
+
+| run | base | reuse only | new |
+|---|---|---|---|
+| black-hole_10, whole run (the root refutes it) | 55.10 G | 7.53 G | 7.33 G (-86.7 %) |
+| black-hole_10, BAGUETTE_HASHCONS=0 | 210.18 G | 199.92 G | |
+| black-hole_14, root (1 node) | 3.913 G | 3.912 G | 3.915 G |
+| black-hole_14, per node over 100 nodes | 7.742 G | 7.234 G (-6.6 %) | 2.356 G (-69.6 %) |
+| black-hole_14, nodes in `--time-limit 300` | 163 (stop fired at 332.94 s) | 163 (309.43 s) | 672 (300.04 s) |
+
+The old arm of D-0206 (std's decomposition, main `3dc1a81`) took 12.7 G on black-hole_10, so the
+native `table` is now cheaper at the root than the decomposition it replaced. On black-hole_14
+the reuse alone moves a node by 6.6 % only: in the search, the black-hole_14 profile of the
+reuse-only binary put `Table.add_fact` at 64 % of a node (its `List.mem`, 50 % in
+`compare_val`), and after (3) `Trace.add_fact_rev`'s `List.exists` at 19 %; the alldiff
+derivations are 25 % of what is left. bh14 `.pbp` md5 at 1 and 100 nodes equal between base and
+new (`97adb9a2`, `6a963b6c`), and bh10's stdout, `.opb` and `.pbp` byte for byte, with and
+without hash-consing.
+
+D-0207's five instances (scripts as in `pernode2/`, here `pern.sh`; qr3 and rcpsp11_60 to the
+end, costas14 at 3 000 nodes, mknap2-1 and jr63 at 20 000), instructions per node, base -> new:
+
+| instance | with proof | without proof |
+|---|---|---|
+| qr3 | 1 699 548 -> 1 699 549 (0.0 %) | 1 036 384 -> 1 036 382 (0.0 %) |
+| costas14 | 17 290 255 -> 17 191 608 (-0.6 %) | 8 622 060 -> 8 622 019 (0.0 %) |
+| mknap2-1 | 40 792 329 -> 40 792 298 (0.0 %) | 40 149 346 -> 40 149 367 (0.0 %) |
+| jr63 | 20 867 228 -> 20 822 984 (-0.2 %) | 8 933 177 -> 8 933 178 (0.0 %) |
+| rcpsp11_60 | 10 267 264 -> 10 269 360 (+0.0 %) | 1 831 744 -> 1 831 717 (0.0 %) |
+
+Stdout and `.pbp` md5 equal on all ten pairs. costas and javarouting gain a little with the
+proof, where their alldiff derivations are written; nothing else moved.
+
+**The artefacts.** All 214 test models, base and new, under default flags, `--bits-above none`
+and BAGUETTE_HASHCONS=0: 642 pairs, every exit code, stdout, `.opb` and `.pbp` md5 equal.
+
+**The lanes.** Differential lane `--tier all -j 4` against the branch's reference (main's
+`841fd1a`, re-recorded after D-0214): new 347 of 347 equal, base 347 of 347 equal. `--debug`
+pass: new 333 of 333, base 333 of 333. Scaling lane `--enforce`: ok, every line within its
+threshold.
+
+**The suites.** `dune runtest --root . --force -j 4` under `ulimit -v 4000000`: 4 705 ok, 0
+FAIL, peak RSS 155 MB.
+
+### 7. The `--time-limit` overrun on black-hole_14
+
+`--time-limit` is the search's `stop` (D-0136), asked at node entry, every 128 completed
+propagator runs inside `Engine.propagate` (D-0136), inside PB conflict analysis and once per
+trail ENTRY in `Trace.emit_to_page` (D-0149). One entry's lines, its derivation ahead included,
+are atomic for the stop. Reproduced with `--time-limit 300` and no outer kill: the base binary
+reports `at=trace fired=332.94s` (163 nodes, exit at 333.3 s), so the stop was asked 33 s late,
+inside one trace emission whose entry forced alldiff derivations at the old cost. The series'
+`timeout -k 30 330` killed it 3 s before it would have stopped. The reuse-only binary (md5 `b7a32c5c`)
+fired at 309.43 s, with the same 163 nodes. The final binary fired at 300.04 s, after 672 nodes.
+
+So the overrun was not a second defect in the stop: the stop is asked where D-0149 put it, and
+the latency is the cost of one trace entry, which the fix cuts. It is still unbounded in
+principle, since one entry's derivation ahead can be arbitrarily expensive. Polling inside a
+derivation would need `Justify` to abandon a derivation half written (its lines are whole and
+cited by nothing, so the page would stay a valid prefix, but it touches `justify.ml`'s
+exception paths and the thunk state). Filed as ROADMAP M11-complexity-T19, not fixed here.
+
+### 8. The autonomous choices
+
+1. **The scope grew to `table.ml` and `trace.ml`.** The task named `Explanation`; the profile of
+   black-hole_14's search showed the alldiff part at 11 % of a node and two quadratic
+   deduplications at 70 %, both byte-neutral and local. Claimed (WORKLOG) before editing; neither
+   file was held by another session.
+2. **Two test hooks in `alldiff.ml`**, `pair_builds` (a counter) and `amo_reuse` (a switch the
+   regression lane turns off to compare the proof both ways). Neither is read by the solver.
+   M22-review-T9 wants test machinery out of the production modules; this adds two refs to that
+   list rather than a new mechanism.
+3. **The time-limit latency is filed, not fixed** (section 7).
+
+### 9. Tests
+
+`test_endtoend`: six variables confined to 1..6 and four more over 1..7 under one
+`all_different`, refuted at the root through four Hall prunings and a conflict. Solved with
+reuse on and off: the same proof text, veripb accepts it, and reuse skips at least the 270 pair
+builds the three later prunings would repeat (403 against 673). Before the fix the two runs
+would build the same 673. `test_trace`: `dedup_add` against `add_fact_rev` over 96 literals with
+duplicates on both sides of the switch to the table, the same 192-fact list.
+
+### 10. What it costs in clarity
+
+One new idea in `Explanation`, stated in its header section: a caller may keep a node and reuse
+it while `rebuilds_to` says a rebuild would return it. The argument is an induction the caller
+must keep (operands obtained the same way), which is the price of a shallow check; a deep one
+would walk the whole at-most-one chain at every step and cost what it saves. `Alldiff` gains a
+bounded memo table and its key. The two deduplications are the usual list-plus-table pattern
+(D-0155's for element), each with its reason in the comment.
+
+### 11. How to revert
+
+`git revert 894b295` (the code) and `ae0454d` (the test's assertion). Reuse alone can be turned
+off without reverting by setting `Alldiff.amo_reuse := false`; no signature changed outside the
+additions.
+
+## D-0208  M20-pernode-T4 (learned part): watching a learned PB row was measured and NOT taken; the pass exits after one walk when nothing is forceable. Same runs in the same order, byte-identical proofs, costas -47 % and mknap -35 % instructions per node without proof
+
+**Status**: DONE on `wave60-watch` by agent-watch, 2026-11-23, not merged (the orchestrator gates and
+merges). D-0052's refusal of a cached slack is NOT reopened: the design that reopened it was built,
+measured and withdrawn (section 3). Runs in `/scratch/arthur/watch-runs/`.
+
+### 1. The problem (D-0207 section 5 item 1, rank 1 of section 6)
+
+A learned PB row (`Pb.Learned_pb`) has no advisor: every bound move of one of its variables queues
+it, and every run recomputes every term from `Store.get` in three walks (`snapshot`, `effective_all`,
+`mark_forceable`). On costas 14 the rows run 1 292 times per node, on mknap2-1 2 827 times, and almost
+no run prunes (measured at 3 000 nodes: 4.6 % of the runs on costas, 0.2 % on mknap). With the
+engine's work for them they were 83 % and 93 % of a node. Learned clauses already have two watches
+and an advisor (M6-T20, D-0104, D-0138), and are not changed here.
+
+### 2. The constraint that decides the design: the run ORDER must not move
+
+The task required the same stdout and node counts on all test models and on the differential lane.
+Fewer wakes does not give that. D-0173 is the measurement: resting a satisfied learned clause loses no
+pruning, but it changes the trail entry at which the clause is woken, and 250 of 301 lane runs
+differed (another 1UIP clause, another tree). An advisor that DROPS a wake of a PB row has the same
+defect. In the FIFO phase a row woken by a change A that cannot make it prune sits at A's place in the
+queue. If a later change B, made before that place comes up, makes it prune, today's engine runs it
+at A's place and an engine that dropped A runs it at B's place, after every instance queued in
+between. The prunings land in another order, the trail and the reasons differ, and so does the tree.
+So the wakes, the queue and the run bracket stay as they are. Only what a run costs may change, and
+each run must return what it returned before.
+
+### 3. Measured and withdrawn: a witness of quiet (commit `c99d2b2`, reverted in `3acccc4`)
+
+For `sum a_i l_i >= b` with terms grouped by (variable, polarity), a set W of term indices with every
+literal non-false and `sum_W a - max_g (sum_{W, g} a) >= b` proves that a pass can neither force nor
+fail (no conflict: the non-false sum is at least b; no forcing: a term's ladder-effective coefficient
+counts its own group only, and the other groups hold at least b). The row kept W between runs and
+re-read its literals at every run, so a stale W cost a pass and never an answer (a cached CHOICE,
+not D-0052's cached number). It kept the order exactly, the unit test compared it with the plain pass
+over 12 386 runs of random searches with backtracks, and a hand-placed bad witness and the
+BAGUETTE_DEBUG check both caught a broken (C).
+
+It was slower. At 3 000 nodes without proof, instructions:
+
+| | main | witness | fast exit (section 4) | both |
+|---|---|---|---|---|
+| costas 14 | 32.08 G | 38.67 G (+20.5 %) | 26.56 G (-17.2 %) | 33.81 G |
+| mknap2-1 | 26.11 G | 32.45 G (+24.3 %) | 19.86 G (-23.9 %) | 28.65 G |
+
+The learned rows of these families sit close to propagating. A witness needed 61 of 102 literals on
+average on costas and 40 of 58 on mknap, one could be built after 42 % and 72 % of the passes, and it
+answered 11 % and 40 % of the runs. Checking 60 % of a row and rebuilding after every pass costs more
+than the one walk it saves. A slack counter on the trail (the option the task named) would have the
+same denominator problem at a higher price: what decides quiet is the largest open group sum as well
+as the slack (section 4), and keeping a maximum up to date under backtracking needs more than a
+counter. Not built.
+
+### 4. Taken: the pass's exact early exit
+
+The largest ladder-effective coefficient of an OPEN term is exactly the largest per-group sum of open
+coefficients. A term i of group g counts the non-false terms of g at least as strong as itself; a
+satisfied term of g is strictly weaker than every open one (for `x >= k`, satisfied is `k <= lo` and
+open is `lo < k <= hi`; mirrored for `x <= k - 1`), so i counts open terms of g only, and the weakest
+open term of g counts all of them. So `mark_forceable` finds a forceable term iff the slack is below
+that maximum. `Pb.snapshot` computes it in the walk it already made (`scratch.osum`, `max_open`) and
+`Pb.pass` returns `Fixpoint` when `slack >= max_open`, without `effective_all` and `mark_forceable`.
+Overflow is kept exact: a group sum that would not fit sets `max_open` to `max_int`, which never takes
+the exit, so `effective`'s `Checked` raise is still reached where it was. The same walk now sums the
+slack with `+` when the layout's `plain` flag says no partial sum can overflow (the coefficient total
+fits, and so does it minus a negative degree); otherwise through `Checked.add` as before.
+
+Every run returns the same outcome on the same store, so the runs, their order, the trail, the
+reasons, the proof, the learned constraints and the tree are main's. It applies to every `Pb` row, the
+model's and the clause face's too, because `pass` is shared; for those it is the same answer faster.
+It adds no state and touches no invariant: I-P2, I-P6, I-P7 and I-X6 hold as before, and pb.ml's "No
+mutable state" section stands, with a paragraph saying what was measured.
+
+Tests: `test_pb`'s E3a comparison of the layout pass with the list pass (3 000 random rows, prunings,
+conflicts, long groups, the two overflow rows) covers the exit. Two breaks were checked to redden it:
+exiting at `slack + 1 >= max_open` (test (a) and its integer scene fail) and taking
+the largest open COEFFICIENT instead of the group sum (the ladder test and E3a).
+
+What it costs in clarity: one field in the scratch record, one in the layout, a second copy of the
+snapshot loop for the grouped case, and section 4's argument in `snapshot`'s comment.
+
+### 5. What is left, and the fallback
+
+- The engine's work for the wakes (walk, queue, run bracket) is untouched: D-0207 put it at 11.5 M of
+  a costas node and 16.3 M of an mknap node, and it is now the largest share there. Removing it while
+  keeping the order needs a test at WAKE time that is cheap and exact, plus a queue that remembers the
+  place a dropped wake would have taken (a FIFO keyed by sequence number) so that a row found active
+  later is run there. Section 3 says the cheap test does not exist for these rows. So this is the
+  point where the order has to be given up or the work kept.
+- **The fallback, D-0169 (b)**: stop RUNNING learned constraints that do not prune, keeping them on
+  the page. It changes trees wherever a learned row would have pruned (16.5 times per costas node),
+  so it needs a rule for WHEN: by search mode (a fixed search without backjumps, as on the four D-0207
+  families that never backjump), or adaptive on the effective rate per row, which the engine's
+  `runs_by_id`/`eff_by_id` already count. A default-behaviour change, for the user. Not implemented.
+
+### 6. Measurements
+
+D-0207's five instances, instructions per node, `perf stat -e instructions:u`, one process at a time,
+release binaries (`make release`, D-0171): main `e844eb9` = `7826cf88`, this branch = `4de68ff1`.
+Nodes, answers, every `--stats` and `limit:` counter except the clocks, and the `.pbp` (md5) are
+identical in all ten pairs.
+
+| instance | nodes | --no-proof main | --no-proof branch | proof main | proof branch |
+|---|---|---|---|---|---|
+| QR48 (codes-cp, 3 fixed) | 29 779 | 1.044 M | 1.048 M (+0.4 %) | 1.841 M | 1.844 M (+0.1 %) |
+| costas 14 | 21 129 | 44.74 M | 23.86 M (-46.7 %) | 54.11 M | 33.25 M (-38.6 %) |
+| mknap2-1 (cut 20 000) | 20 001 | 40.30 M | 26.37 M (-34.6 %) | 41.08 M | 27.06 M (-34.1 %) |
+| javarouting trip_6_3 (cut 20 000) | 20 001 | 12.58 M | 12.59 M (+0.0 %) | 24.55 M | 24.58 M (+0.1 %) |
+| rcpsp 11, bound 66 | 2 010 | 2.636 M | 2.499 M (-5.2 %) | 10.25 M | 10.12 M (-1.3 %) |
+
+**Again after merging main `f4f6391`** (D-0209, D-0212, D-0214, D-0215 in), main = `cba056a8`, the
+branch at `2dbab13` = `99bad850`, same protocol (four jobs at a time; instruction counts do not depend
+on load). Nodes, answers, counters and `.pbp` md5 again identical in all ten pairs.
+
+| instance | --no-proof main | --no-proof branch | proof main | proof branch |
+|---|---|---|---|---|
+| QR48 | 1.036 M | 1.040 M (+0.4 %) | 1.700 M | 1.703 M (+0.2 %) |
+| costas 14 | 42.99 M | 22.12 M (-48.6 %) | 51.46 M | 30.58 M (-40.6 %) |
+| mknap2-1 | 40.15 M | 26.19 M (-34.8 %) | 40.79 M | 26.85 M (-34.2 %) |
+| javarouting trip_6_3 | 8.933 M | 8.937 M (+0.0 %) | 20.87 M | 20.87 M (-0.0 %) |
+| rcpsp 11, bound 66 | 2.424 M | 2.287 M (-5.6 %) | 9.078 M | 8.910 M (-1.9 %) |
+
+QR48's +0.4 % is the clause rows (degree 1) paying for the per-group bookkeeping in the snapshot of
+the passes `quiet` does not answer. Gate on `2dbab13` (main `f4f6391` merged in): `dune runtest --force` 4 700 ok, 0 FAIL, peak RSS 155 MB; 214 models, stdout, `.opb` and `.pbp` equal to main's binary; `run_model_tests.sh` 214/214; differential lane 347/347 and debug 333/333; scaling lane ok (all at -j 4). Before the merge, on `b911ebe`: 4 561 ok, 209 models equal, lanes 347/347 and 333/333, scaling ok.
+
+How to revert: revert `3acccc4`; the record and the withdrawn witness (`c99d2b2`) are history only.
+
 ## D-0217  [AUTONOME] M18-coverage-T3: `circuit` as a native propagator over MTZ position variables. The .opb defines the constraint with std's own auxiliary idea (one position per node, `succ_u = v -> pos_v = pos_u + 1`), and every subtour pruning is DERIVED in the proof, one `pol` that sums the rows around the cycle and divides by n. `subcircuit` stays on std's decomposition
 
 **Status**: DECIDED (agent-circuit, `wave65-circuit`, 2026-11-24). No new `Explanation` constructor,

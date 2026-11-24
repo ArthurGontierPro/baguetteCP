@@ -321,6 +321,24 @@ type t = {
      does not exist until [Encoding.start_proof] has written the lemma. Empty for every
      all_different the model posts. *)
   lemmas : (string * string * int, Encoding.lemma) Hashtbl.t;
+  (* D-0216: the at-most-one nodes [amo] built, kept to be handed back when building them
+     again would return them ([reuse]). Buckets of entries, allocated at the first use
+     with a proof; [amo_count] entries. *)
+  mutable amo_memo : amo_entry list array;
+  mutable amo_count : int;
+}
+
+(* One entry of [amo_memo]: the key of a build (the at-most-one it extends, or [no_prev]
+   for a pair; the pair's first variable, or -1; the variable added; the value), the node
+   that build returned, and the table epoch at which [Explanation.rebuilds_to] last held
+   for it (-1: not checked since the build). *)
+and amo_entry = {
+  k_prev : Explanation.t;
+  k_a : int;
+  k_u : int;
+  k_v : int;
+  mutable k_node : Explanation.t;
+  mutable k_seen : int;
 }
 
 let name = "all_different_int"
@@ -408,6 +426,8 @@ let make ?(cutoff = default_cutoff) ?(lemma_rows = []) ?(gate = true) store enc 
     cutoff;
     rows = tbl;
     lemmas;
+    amo_memo = [||];
+    amo_count = 0;
   }
 
 let vars t = Array.to_list (Array.map (fun tm -> tm.x) t.terms)
@@ -513,19 +533,22 @@ let cid_of what = function
             forced without one means the two have drifted apart."
            what)
 
+(* One lookup per table (D-0216): an all_different an `inverse` implies has no model rows,
+   and its every pair went through three hashes of the (string, string, int) key here. *)
 let row t s1 s2 v =
-  match Hashtbl.find_opt t.rows (s1.s_name, s2.s_name, v) with
+  let key = (s1.s_name, s2.s_name, v) in
+  match if Hashtbl.length t.rows = 0 then None else Hashtbl.find_opt t.rows key with
   | Some id -> id
-  | None when Hashtbl.mem t.lemmas (s1.s_name, s2.s_name, v) ->
-      cid_of "the pairwise root lemma"
-        (Encoding.root_lemma_id t.enc (Hashtbl.find t.lemmas (s1.s_name, s2.s_name, v)))
-  | None ->
-      invalid_arg
-        (Printf.sprintf
-           "Alldiff: no model row for %s <> %d \\/ %s <> %d. Encoding.add_all_different \
-            posts one per pair per SHARED declared value, so this means the pair's \
-            declared domains do not both contain %d."
-           s1.s_name v s2.s_name v v)
+  | None -> (
+      match Hashtbl.find_opt t.lemmas key with
+      | Some h -> cid_of "the pairwise root lemma" (Encoding.root_lemma_id t.enc h)
+      | None ->
+          invalid_arg
+            (Printf.sprintf
+               "Alldiff: no model row for %s <> %d \\/ %s <> %d. \
+                Encoding.add_all_different posts one per pair per SHARED declared value, \
+                so this means the pair's declared domains do not both contain %d."
+               s1.s_name v s2.s_name v v))
 
 let model_row id = Explanation.model_row id
 let cite id = Explanation.term 1 (model_row id)
@@ -545,7 +568,14 @@ let cite id = Explanation.term 1 (model_row id)
    Padding each side up to coefficient 2 with its own literal axiom (D-0009: an axiom
    asserts nothing, and here it only adds a term) makes the shape uniform, and one
    division by 2 gives the line. *)
+(* D-0216, for test_endtoend's regression lane: how many pairwise at-most-one nodes were
+   built, and a switch that turns [reuse] off so the lane can compare the proof both ways.
+   Neither is read by the solver. *)
+let pair_builds = ref 0
+let amo_reuse = ref true
+
 let pair_amo t sx sz v =
+  incr pair_builds;
   let halves s =
     List.filter_map Fun.id
       [ Encoding.direct_lo_id t.enc s.s_name v; Encoding.direct_hi_id t.enc s.s_name v ]
@@ -574,23 +604,99 @@ let pair_amo t sx sz v =
    [ss] has at least two members; the caller handles the shorter cases, and the one-member
    case is not a weaker line but a different rule (a bare literal axiom) -- see
    [core_summands]. *)
+(* D-0216: the node [build] returns, or the one the same key's last build returned when
+   building again would return that very node ([Explanation.rebuilds_to]). [amo]'s builds
+   are deterministic in the key: a pair's node in (x, z, v) through [pair_amo]'s ids, a
+   step's in the at-most-one it extends (by identity, which fixes the variables it covers
+   and their order) and in (u, v). A step's operands are that at-most-one, obtained
+   through this function, and pairs, which [rebuilds_to] checks, so its induction holds.
+   A removal under a Hall set of m variables over m values rebuilt, per value, the m+1
+   variables' (m+1)m/2 pairs, all but y's m of them hits of the table (2011_black-hole_10:
+   156 removals with m = 47, 8.3 M pairs); it now builds y's m pairs and finds the rest
+   here, unless a node left the table since. A key not found, or a node that no longer
+   rebuilds to itself, costs a build, never a wrong node. *)
+let no_prev = Explanation.model_row (-1)
+
+let reuse t ~prev ~a ~u v build =
+  let epoch = if !amo_reuse then Explanation.reuse_epoch () else -1 in
+  if epoch < 0 then build ()
+  else (
+    (* As many buckets as the instance has (variable, value) pairs, times four, within
+       [1 024, 65 536]; emptied when it holds as many entries as buckets, which bounds the
+       nodes it keeps alive past their lines. *)
+    if Array.length t.amo_memo = 0 then (
+      let span =
+        Array.fold_left (fun w tm -> max w (tm.decl_hi - tm.decl_lo + 1)) 1 t.terms
+      in
+      let want = min 65536 (max 1024 (4 * Array.length t.terms * span)) in
+      let size = ref 1024 in
+      while !size < want do
+        size := 2 * !size
+      done;
+      t.amo_memo <- Array.make !size []);
+    (* The key's fields are small consecutive ints (variable ids, values); a
+       multiplicative mix and a fold of the high bits spread them over the low bits the
+       bucket is taken from. *)
+    let h =
+      Explanation.operand_id prev lxor (a * 0x2545F491) lxor (u * 0x9E3779B1)
+      lxor (v * 0x632BE5AB)
+    in
+    let h = h lxor (h lsr 29) lxor (h lsr 13) in
+    let b = h land (Array.length t.amo_memo - 1) in
+    let rec find = function
+      | [] -> None
+      | e :: rest ->
+          if e.k_prev == prev && e.k_a = a && e.k_u = u && e.k_v = v then Some e
+          else find rest
+    in
+    match find t.amo_memo.(b) with
+    | Some e
+      when e.k_seen = epoch
+           || Explanation.rebuilds_to e.k_node
+              &&
+              (e.k_seen <- epoch;
+               true) ->
+        e.k_node
+    | Some e ->
+        let node = build () in
+        e.k_node <- node;
+        e.k_seen <- -1;
+        node
+    | None ->
+        let node = build () in
+        if t.amo_count >= Array.length t.amo_memo then (
+          Array.fill t.amo_memo 0 (Array.length t.amo_memo) [];
+          t.amo_count <- 0);
+        t.amo_memo.(b) <-
+          { k_prev = prev; k_a = a; k_u = u; k_v = v; k_node = node; k_seen = -1 }
+          :: t.amo_memo.(b);
+        t.amo_count <- t.amo_count + 1;
+        node)
+
 let amo t ss v =
   match ss with
   | [] | [ _ ] -> invalid_arg "Alldiff.amo: at least two variables"
   | first :: second :: rest ->
-      let rec grow acc have = function
+      let id s = Var.to_int s.s_var in
+      (* [rhave] is the variables covered so far, last first; [m] their number. *)
+      let rec grow acc rhave m = function
         | [] -> acc
         | u :: more ->
-            let m = List.length have in
             let step =
-              Explanation.combine
-                (Explanation.term (m - 1) acc
-                :: List.map (fun s -> Explanation.term 1 (pair_amo t u s v)) have)
-                m
+              reuse t ~prev:acc ~a:(-1) ~u:(id u) v (fun () ->
+                  Explanation.combine
+                    (Explanation.term (m - 1) acc
+                    :: List.rev_map (fun s -> Explanation.term 1 (pair_amo t u s v)) rhave
+                    )
+                    m)
             in
-            grow step (have @ [ u ]) more
+            grow step (u :: rhave) (m + 1) more
       in
-      grow (pair_amo t first second v) [ first; second ] rest
+      let base =
+        reuse t ~prev:no_prev ~a:(id first) ~u:(id second) v (fun () ->
+            pair_amo t first second v)
+      in
+      grow base [ second; first ] 2 rest
 
 (* "x cannot take v", for a v outside x's CURRENT window but inside its declared one,
    as a globally valid line carrying the bound it rests on as a literal:
