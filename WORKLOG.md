@@ -684,8 +684,9 @@ Updated as things land. The plan is the nine steps agreed on 2026-11-23 (speed f
 - D-0216, the black-hole root slowdown (alldiff rebuilt 53 016 pairwise nodes per removal of a large Hall set, exposed by `table`): byte-identical, black-hole_10 55.1 G -> 7.3 G instructions (gate 97, binary `6604872c`).
 - D-0208, learned PB rows: WATCHING them was built, measured (+20 % on costas) and withdrawn, D-0052 stands; kept an exact early exit in `Pb.pass`: byte-identical, costas -49 % per node, mknap -35 % (gate 98, binary `d81c3612`).
 Gates 96 to 98 green: 218 models byte-identical, lane 347/347, debug 333/333, scaling ok.
+- D-0217, native `circuit` (alldiff plus MTZ position rows as the definition, a subtour pruning on one `pol`): `.opb` 0.44 to 0.998 of old, median 0.59 instructions per node, p1f-pjs_10 timeout -> verified optimum; `subcircuit` not done; a SPEC 2.1 sentence added for `baguette_circuit` (gate 99 green, binary `d4a356f6`, the only artefact diffs are the five new circuit models, lanes equal).
 
-**Running**: the series on current main without the proof cap (agent-series, D-0203, fataepyc-06); the 64 GiB observation series then GCS and Chuffed (agent-node07, D-0210, D-0211, on fataepyc-07, allowed by the user on 2026-11-23); agent-cdcl (D-0219, M19-config-T10, the CDCL loop behind `BAGUETTE_CDCL`, default off); agent-circuit (D-0217); agent-memory (D-0218, M21-memory-T1/T2).
+**Running**: the series on current main without the proof cap (agent-series, D-0203, fataepyc-06); the 64 GiB observation series then GCS and Chuffed (agent-node07, D-0210, D-0211, on fataepyc-07, allowed by the user on 2026-11-23); agent-cdcl (D-0219, M19-config-T10, the CDCL loop behind `BAGUETTE_CDCL`, default off); agent-binpack (D-0220, M18-coverage-T4); agent-memory (D-0218, M21-memory-T1/T2).
 
 **Known, not fixed yet**: black-hole is 4.5 times slower at the root since `inverse`'s alldiff lemmas, in `Explanation`'s hashing of `pol` lines (agent-table's finding). The `test_prop` debug failure was a test defect, fixed in D-0214.
 
@@ -693,7 +694,7 @@ Gates 96 to 98 green: 218 models byte-identical, lane 347/347, debug 333/333, sc
 
 Also open: after D-0208 the engine's wake work is the largest share left on costas and mknap; removing it needs the D-0169 (b) rule (rows that never prune are not woken), which changes default behaviour.
 
-**[AUTONOME] decisions**: D-0213 (above); D-0216 (alldiff reuses the node a rebuild would return; two dedups hashed; byte-identical); D-0208 (watching withdrawn on measurement).
+**[AUTONOME] decisions**: D-0217 (a normative SPEC 2.1 sentence listing `baguette_circuit` among the builtins, as each native global has); D-0213 (above); D-0216 (alldiff reuses the node a rebuild would return; two dedups hashed; byte-identical); D-0208 (watching withdrawn on measurement).
 ### 2026-11-24 (agent-circuit, `wave65-circuit`): M18-coverage-T3, native circuit (D-0217)
 
 `circuit` is native: mznlib keeps `all_different` and adds `baguette_circuit(x, pos, root)`; the .opb defines it by MTZ rows over one position store variable per non-root node (bits by default), the propagator is CHECKING plus Chuffed's prevent, and every subtour cut is ONE `pol` (rows around the cycle, `n d`) written ahead. No new constructor, nothing changes for a model without circuit (218 test models byte-identical).
