@@ -1676,6 +1676,245 @@ let test_level_start_count () =
        !shared)
     (!shared > 100)
 
+(* ------------------------------------------------------ D-0222: the hole log *)
+
+(* M21-memory-T3 (D-0222): a domain's holes are a VERSION of a log its successors share,
+   and [Store.undo_to] truncates the log. This drives a store at random (levels, bound
+   moves, interior removals, fixes, backtracks) beside a REFERENCE that is the old
+   representation -- a bounds pair and a hole array COPIED per removal, which is what the
+   trail used to keep -- and checks, after every step, that every live domain, every live
+   trail entry's [old] and [now] (and [classify] of the pair), and every domain
+   photographed earlier and still below the trail read back exactly as the reference
+   does. A photograph from an undone branch must either read exactly or raise
+   [Domain.Stale_version], never answer wrongly; and a removal from an older version (the
+   fork) must give the reference's answer without disturbing the store. Widths stay at
+   40 values (the suite shares the node). *)
+type rdom = { rlo : int; rhi : int; rh : bool array }
+
+let r_mem r v = v >= r.rlo && v <= r.rhi && not r.rh.(v)
+
+let r_settle r =
+  let l = ref r.rlo in
+  while !l <= r.rhi && r.rh.(!l) do
+    incr l
+  done;
+  if !l > r.rhi then `Failed
+  else
+    let h = ref r.rhi in
+    while r.rh.(!h) do
+      decr h
+    done;
+    `Changed { r with rlo = !l; rhi = !h }
+
+let r_remove r v =
+  if not (r_mem r v) then `Unchanged
+  else if v = r.rlo then r_settle { r with rlo = v + 1 }
+  else if v = r.rhi then r_settle { r with rhi = v - 1 }
+  else
+    let rh = Array.copy r.rh in
+    rh.(v) <- true;
+    r_settle { r with rh }
+
+let r_set_lo r v =
+  if v <= r.rlo then `Unchanged
+  else if v > r.rhi then `Failed
+  else r_settle { r with rlo = v }
+
+let r_set_hi r v =
+  if v >= r.rhi then `Unchanged
+  else if v < r.rlo then `Failed
+  else r_settle { r with rhi = v }
+
+let r_fix r v =
+  if not (r_mem r v) then `Failed
+  else if r.rlo = r.rhi then `Unchanged
+  else `Changed { rlo = v; rhi = v; rh = Array.make (Array.length r.rh) false }
+
+let r_list r = List.filter (r_mem r) (List.init (r.rhi - r.rlo + 1) (fun i -> r.rlo + i))
+
+let r_classify ~old ~now =
+  if old.rlo <> now.rlo || old.rhi <> now.rhi then
+    Domain.Bound
+      {
+        lo = (if now.rlo > old.rlo then Some now.rlo else None);
+        hi = (if now.rhi < old.rhi then Some now.rhi else None);
+      }
+  else
+    match List.filter (fun v -> r_mem old v && not (r_mem now v)) (r_list old) with
+    | [] -> Domain.NoChange
+    | vs -> Domain.Holes vs
+
+(* Exactly the reference's set, by every reader a caller has. *)
+let reads_as d r =
+  Domain.lo d = r.rlo
+  && Domain.hi d = r.rhi
+  && Domain.to_list d = r_list r
+  && Domain.size d = List.length (r_list r)
+  && Domain.holes_list d
+     = List.filter
+         (fun v -> not (r_mem r v))
+         (List.init (r.rhi - r.rlo + 1) (fun i -> r.rlo + i))
+  && List.for_all
+       (fun v -> Domain.mem d v = r_mem r v)
+       (List.init (Array.length r.rh + 2) (fun i -> i - 1))
+
+let d0222_walk ~photo_forks =
+  let width = 40 and nv = 4 in
+  let rng = Random.State.make [| 2026; 11; 24 |] in
+  let why = Reason.because ~concludes:None Reason.none (Explanation.model_row 1) in
+  let bad = ref None and steps = ref 0 and forks = ref 0 and stale_raised = ref 0 in
+  let fail w = if !bad = None then bad := Some w in
+  for run = 1 to 150 do
+    let init =
+      Array.init nv (fun _ -> { rlo = 0; rhi = width - 1; rh = Array.make width false })
+    in
+    let s =
+      Store.create
+        ~names:(Array.init nv (Printf.sprintf "v%d"))
+        ~domains:(Array.init nv (fun _ -> Domain.make 0 (width - 1)))
+    in
+    let cur = Array.copy init in
+    (* the reference trail: (var, old, now), oldest first, and the level marks *)
+    let rtrail = ref [||] and rlen = ref 0 and marks = ref [] in
+    (* photographs: (trail length when taken, the store's domains, the reference's) *)
+    let photos = ref [] and dead = ref [] in
+    for _ = 1 to 250 do
+      incr steps;
+      let x = Random.State.int rng nv in
+      let v = Random.State.int rng (width + 2) - 1 in
+      let k = Random.State.int rng 100 in
+      (if k < 12 then (
+         Store.new_level s;
+         marks := !rlen :: !marks)
+       else if k < 20 && !marks <> [] then (
+         let target = Random.State.int rng (List.length !marks) in
+         Store.backtrack_to s target;
+         let rec drop l n = if n = 0 then l else drop (List.tl l) (n - 1) in
+         let keep = drop !marks (List.length !marks - target) in
+         let len =
+           (* the mark of level [target + 1], i.e. the trail length at that new_level *)
+           List.nth !marks (List.length !marks - target - 1)
+         in
+         for i = !rlen - 1 downto len do
+           let x, old, _ = !rtrail.(i) in
+           cur.(x) <- old
+         done;
+         rlen := len;
+         marks := keep;
+         let live, gone = List.partition (fun (p, _, _) -> p <= len) !photos in
+         photos := live;
+         dead := gone @ !dead)
+       else if k < 25 then photos := (!rlen, Store.snapshot s, Array.copy cur) :: !photos
+       else
+         let r = cur.(x) in
+         let forks0 = !Domain.forks in
+         let refr, out =
+           if k < 75 then (r_remove r v, Store.remove s (Var.of_int x) v why)
+           else if k < 85 then (r_set_lo r v, Store.set_lo s (Var.of_int x) v why)
+           else if k < 95 then (r_set_hi r v, Store.set_hi s (Var.of_int x) v why)
+           else (r_fix r v, Store.fix s (Var.of_int x) v why)
+         in
+         if (not photo_forks) && !Domain.forks <> forks0 then
+           fail
+             (Printf.sprintf "run %d: the store forked a log (an undo did not truncate)"
+                run);
+         match (refr, out) with
+         | `Changed r', Store.Changed ->
+             if !rlen = Array.length !rtrail then
+               rtrail := Array.append !rtrail (Array.make (1 + !rlen) (0, r, r));
+             !rtrail.(!rlen) <- (x, r, r');
+             incr rlen;
+             cur.(x) <- r'
+         | `Unchanged, Store.Unchanged | `Failed, Store.Conflict _ -> ()
+         | _ -> fail (Printf.sprintf "run %d: outcome differs on v%d at %d" run x v));
+      (* every live domain *)
+      Array.iteri
+        (fun i r ->
+          if not (reads_as (Store.get s (Var.of_int i)) r) then
+            fail
+              (Printf.sprintf "run %d: live v%d reads %s" run i
+                 (Domain.to_string (Store.get s (Var.of_int i)))))
+        cur;
+      (* every live trail entry *)
+      if Store.trail_length s <> !rlen then
+        fail (Printf.sprintf "run %d: trail length" run);
+      for i = 0 to !rlen - 1 do
+        let e = Store.trail_entry s i and _, ro, rn = !rtrail.(i) in
+        if not (reads_as e.Store.old ro && reads_as e.Store.now rn) then
+          fail (Printf.sprintf "run %d: entry %d reads differently" run i)
+        else if
+          Domain.classify ~old:e.Store.old ~now:e.Store.now <> r_classify ~old:ro ~now:rn
+        then fail (Printf.sprintf "run %d: entry %d classifies differently" run i)
+      done;
+      (* every photograph still below the trail, and a fork from one *)
+      List.iter
+        (fun (_, ds, rs) ->
+          Array.iteri
+            (fun i r ->
+              if not (reads_as ds.(i) r) then
+                fail (Printf.sprintf "run %d: photo of v%d" run i))
+            rs)
+        !photos;
+      (match !photos with
+      | (_, ds, rs) :: _ when photo_forks ->
+          let i = Random.State.int rng nv and w = Random.State.int rng width in
+          let ok =
+            match (Domain.remove ds.(i) w, r_remove rs.(i) w) with
+            | Domain.Changed d', `Changed r' ->
+                incr forks;
+                reads_as d' r' && reads_as ds.(i) rs.(i)
+            | Domain.Unchanged, `Unchanged | Domain.Failed, `Failed -> true
+            | _ -> false
+          in
+          if not ok then fail (Printf.sprintf "run %d: a removal from a photograph" run);
+          if not (reads_as (Store.get s (Var.of_int i)) cur.(i)) then
+            fail (Printf.sprintf "run %d: a fork disturbed the store" run)
+      | _ -> ());
+      (* a photograph from an undone branch is refused as stale, or reads exactly *)
+      List.iter
+        (fun (_, ds, rs) ->
+          Array.iteri
+            (fun i r ->
+              match
+                Domain.check_version ds.(i);
+                reads_as ds.(i) r
+              with
+              | true -> ()
+              | false ->
+                  fail (Printf.sprintf "run %d: a stale photo answered wrongly" run)
+              | exception Domain.Stale_version _ -> incr stale_raised)
+            rs)
+        !dead;
+      dead := []
+    done
+  done;
+  (!bad, !steps, !forks, !stale_raised)
+
+(* Two walks. The first also removes from photographs, which extends a log in place when
+   the photographed version is still its newest (the store then forks on its next
+   removal, correctly); the second does not, and asserts the store never forks: every
+   removal it makes is from its own newest version, because [Domain.undo] truncates.
+   Without the truncation every answer is still exact (a version reads past the stale
+   slots), so only the second walk sees it go: that was measured by disabling it. *)
+let test_d0222_hole_log_random () =
+  let report name (bad, steps, forks, stale) =
+    check name
+      (match bad with
+      | None -> true
+      | Some w ->
+          Printf.printf "     first offender: %s\n" w;
+          false);
+    Printf.printf
+      "     (%d steps, %d removals from photographs, %d stale reads refused)\n" steps
+      forks stale
+  in
+  let ((_, _, forks, stale) as a) = d0222_walk ~photo_forks:true in
+  report "D-0222: the hole log restores and reads back what copying did (random)" a;
+  check "D-0222: the random walk removed from photographs and met stale versions"
+    (forks > 100 && stale > 10);
+  report "D-0222: a store never forks a log, because undo truncates (random)"
+    (d0222_walk ~photo_forks:false)
+
 let () =
   match Array.to_list Sys.argv with
   | _ :: "--agreeing-push" :: _ -> disagreeing_push ~agree:true ()
@@ -1687,6 +1926,7 @@ let () =
   | _ ->
       test_domains ();
       test_store ();
+      test_d0222_hole_log_random ();
       test_explanations ();
       test_attribution ();
       test_reason ();

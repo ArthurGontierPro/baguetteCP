@@ -179,7 +179,11 @@ arithmetic must get the value already checked from its caller, or do its own.
 `Domain.t` is a bounds pair plus an optional hole set:
 
 - `lo`, `hi` as ints — the common case, and the only thing most propagators read
-- a bitset of removed values, allocated lazily, only when a hole is actually punched
+- a bitset of removed values, allocated lazily, only when a hole is actually punched.
+  Since D-0222 the bitset belongs to a per-variable LOG that also records the removals in
+  order, and a domain holds a VERSION of it (the first `k` removals): a removal appends
+  16 bytes instead of copying the bitset, and a past version reads through the log (O(1)
+  once a position table is built on the first deep read)
 
 Rationale: the overwhelming majority of propagation in a linear-heavy FlatZinc workload
 is bounds reasoning. Paying for a full bitset per variable up front is wasted memory and
@@ -195,8 +199,12 @@ literals became true.
 the variable and its previous `Domain.t`, and `backtrack_to level` replays them in
 reverse. Decision levels are marks into that array.
 
-Domains are immutable values, so a saved entry shares no mutable state with the domain
-that replaced it. That is what makes I-T1 hold without deep copying.
+Domains were immutable values until D-0222, so a saved entry shared no mutable state with
+the domain that replaced it, and I-T1 held by copying the hole bitset per removal. Since
+D-0222 a saved entry shares its variable's hole LOG with the domain that replaced it, and
+`undo_to` calls `Domain.undo`, which truncates the log back to the version the entry
+restores; a domain from an undone branch raises `Domain.Stale_version` when read (I-T1's
+second half).
 
 Each entry records the **explanation id** of the change, so conflict analysis can walk
 back through the reasons. Explanations live in a side arena (`Explanation.Arena`), not

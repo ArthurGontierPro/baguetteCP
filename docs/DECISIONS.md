@@ -28790,3 +28790,196 @@ redone.
 
 No change to the solver, to a SPEC sentence or to `Explanation.t`. The README's performance section is now
 this table, produced by `readme_table.py`, with D-0185 kept as the one-line pointer to the previous series.
+
+## D-0222  [AUTONOME] M21-memory-T3 (fix 2 of D-0218): a hole set is a VERSION of a per-variable hole log, trailed by value. A removal appends the value to the log (16 B) instead of copying the bitset (span / 8 B), undoing its entry truncates the log, and I-T1 now reads "restores the state, and a version the log has truncated refuses to be read"
+
+**Status**: DECIDED (agent-holes, `wave70-holes`, 2026-11-24). Taken in mode autonome: it changes
+the wording of invariant I-T1, which CLAUDE.md reserves to the user. Revert: revert the commits of
+`wave70-holes` that touch `lib/core/domain.ml` and `lib/core/store.ml` (the code commit is one
+commit, named in section 6); the trail goes back to holding a copy per pruning, and nothing else
+depends on the log.
+
+### 1. Context
+
+D-0218 measured that at a refusal the hole bitsets COPIED per pruning are 98 % of the live heap on
+wordpress 7 (32.3 GB, a 122 KB copy per pruning of a 974 300-wide variable) and 41 % on
+travelling-thief r49, 60 to 7 600 times a flat layout. The cause is `Domain.with_hole`: a
+`Domain.t` was immutable, so punching a hole copied the whole bitset, and the trail kept both
+copies of every removal (`old` and `now`). Gecode and Chuffed trail the change, not the set.
+
+Immutability was load-bearing, and not only for the trail. Four readers hold a `Domain.t` and read
+it LATER, after the store has moved on:
+
+1. a trail entry's `old` and `now`, read by `Trace` (`classify`, `settled_over_lo`), by
+   `Store.remover` (a binary search over the variable's entries, `mem` on each `now`) and by the
+   history readers of D-0124 (`lo_at`, `lo_reasons_at`);
+2. a propagator's snapshot within a pass (I-P6), read after the pass's own pushes;
+3. an `Element` frame (D-0214), which keeps the index's and the result's domains and builds the
+   reason and the derivation from them when asked, possibly much later in the branch;
+4. tests, which treat `Domain` as a persistent value (remove twice from the same domain, compare).
+
+So "a mutable bitset per variable and an undo entry per removal", D-0218's sketch, is not enough
+by itself: those readers would see holes punched after they took their copy.
+
+### 2. Options
+
+| option | bytes per removal | read of a past domain | what breaks |
+|---|---|---|---|
+| (a) keep the copy (today) | span / 8 (122 KB on wordpress) | O(1) | the heap: 33 GB at node 1 on wordpress |
+| (b) one mutable bitset per variable, the removed value on the trail | 16 | IMPOSSIBLE: a past domain is gone | the four readers above; every lazy reason of `Element` and every settle walk would read the present |
+| (c) a persistent chunked set (path copying in a 32-ary trie of 64-bit words) | about 3 nodes of 32 words, 0.8 KB on wordpress | O(log span) | nothing, but it is 50 times (b) and every live `mem` pays the trie walk |
+| (d) a VERSIONED log: one mutable bitset per variable lineage plus the stack of removals in order; a domain holds (log, k), "the first k removals" | 16 in the log + the 7-word version record | O(1) on the newest version; O(1) on a past one through a position table built on first need | stale versions (from an undone branch) can no longer answer, so they must refuse |
+
+(d) taken. It is (b) with the history kept as a stack and a domain as a prefix of it, which is
+exactly "replaying the entries backwards from the live domain", indexed so that the replay costs
+nothing per read.
+
+### 3. The representation
+
+```
+log     = { base; span; bits : Bytes.t      (* live set: base holes + every logged value *)
+          ; vals : int array; uids : int array; len; top_uid; next_uid
+          ; pos : Bytes.t                   (* int32 per value, built on first deep read *) }
+holes   = { log; k; uid; hbase; hspan; hbits } (* a version: base holes + vals.(0 .. k-1);
+                                                the last three are the log's, copied *)
+Domain.t = { lo; hi; holes : holes option } (* unchanged shape; None allocates nothing *)
+```
+
+- **Remove from the newest version** (`k = len`, `uid = top_uid`, the store's case): set the bit,
+  append the value and a fresh uid, return the version `k + 1`. O(1) amortised, no copy.
+- **Remove from an older version** (a test's second removal from the same domain, a scratch store
+  sharing a log): FORK, a new log whose base bits are that version's set (one copy of the bitset,
+  what every removal paid before). Correct for any caller, as a persistent value is, and never
+  taken by a solve: the store always extends its own current domain, which is the newest version
+  unless something outside the store extended the same log (only `Engine.oracle_accepts`'s
+  scratch store does, under `BAGUETTE_CONSISTENCY` only).
+- **Undo** (`Domain.undo ~old ~now`, called by `Store.undo_to` for each popped entry): when `now`'s
+  version is past `old`'s on the same log, truncate the log back to `old`'s `k` (clear the bits of
+  the popped values); when `now` holds a log `old` does not, truncate that log to 0. An entry that
+  moved a bound only shares its version with `old` and costs one comparison.
+- **Every read tests the bit first**, with the loads the copying representation made (the version
+  record carries the log's base, span and bitset, 3 words, so that `mem` does not pay a load
+  through the log): a clear bit is a hole of no valid version (bits only gain values along the
+  log), which answers every read of a value still in the domain. A set bit is a hole of the
+  NEWEST version (`k = len`, `uid = top_uid`), and of an older one iff its position in the log is
+  below `k`: a scan of the at most 8 entries past `k`, else `pos`, an int32 per value built on
+  first need (O(span), 4 B per value, maintained by every later append). Base holes have
+  position -1. `size` is the popcount less the values logged after `k` within the bounds.
+- **Validity**: a version is valid iff `k <= len` and the uid at slot `k - 1` is its own. Uids are
+  per log and never reused, so a version from an undone branch fails the test even after the log
+  has been refilled to the same length. A read of an invalid version raises
+  `Domain.Stale_version` on every set bit, and `Domain.check_version` raises on any: a refusal
+  with a name rather than a wrong answer, the move `Store.check_history` makes for a history
+  (D-0124). A clear-bit read of a stale version is NOT checked, because that is the read every
+  `mem` of a live value makes (section 6 measured the check there).
+- **Bounds-only fast path** (ARCHITECTURE §2): a domain with no hole has `holes = None`, as
+  before. `set_lo`, `set_hi` and `fix` allocate exactly what they allocated. A version is created
+  only by an interior removal.
+- `classify` on a pair sharing a log and its bounds answers from the log segment `[k_old, k_now)`
+  (sorted, filtered to the bounds) instead of walking the width; the walk stays as the fallback and
+  as the `BAGUETTE_DEBUG` cross-check.
+
+### 4. I-T1, the new wording (the decision the user would have taken)
+
+Before: "`backtrack_to l` restores every domain to exactly its state when level `l` was opened",
+and `domain.ml` added "a [t] must never share mutable state with its successors".
+
+After: "`backtrack_to l` restores every domain to exactly its state when level `l` was opened. A
+domain's holes are a VERSION of a log its successors share (D-0222): a `Domain.t` read back
+answers exactly the set it had when it was made for as long as no trail entry older than it has
+been undone, and once one has, reading it raises `Domain.Stale_version` instead of answering."
+
+The second sentence replaces the old "never share mutable state" and is what the four readers of
+section 1 rely on. Each reads below a live cut by its own rule: a trail entry is read while it is
+on the trail; a history only while `check_history` accepts it (D-0124); a pass's snapshot within
+the pass, before any backtrack; an `Element` frame through its history. So the refusal is never
+hit by a correct reader, and a wrong reader is now loud where before it read a frozen past.
+
+### 5. What a history read costs (D-0124, D-0214)
+
+`Linear`'s lazy reasons read bounds only (`lo_at`, `hi_at`, and `settled_over_lo`'s `mem` walk
+near a bound): O(1) per read as before, plus O(1) per `mem` whose bit is set. `Element`'s frame
+reads `mem` and `iter` on a past version of the index and the result: O(1) per value once `pos`
+exists, O(8) before. `Store.remover` (D-0088's binary search) reads `mem` on O(log n) past
+versions: O(log n) as before. `pos` is built once per log that a deep read touches, never on a
+log only read at its newest version, which is every log a solve without `Element`, alldiff's
+hole stage or a settle over a hole ever reads.
+
+The three history readers D-0214 left in `element.ml` (`remover_at`, `explanation_at`,
+`at_root_at`, its cross-session request of 2026-11-23) move into `store.ml` next to
+`lo_reasons_at`, where the history type is defined; `element.ml` no longer reads
+`h.Store.h_store`.
+
+### 6. Measurements (fataepyc-06, shared, at most four processes)
+
+Binaries: before = main `a964127` (dev `9eb03179`, release `4dde0987`, probe `c0f9f294`, which
+is D-0218's probe binary byte for byte); after = this branch (dev `213dc2b7`, release `edd5e30e`,
+probe `312023d7`). Run outputs, scripts and probe files: `fataepyc-06:/scratch/arthur/holes-runs/`,
+copied to `/cluster/arthur/baguette-results/holes/`.
+
+**Artefacts.** The 228 test models under default flags and under `--bits-above none`: stdout and
+exit code, `.opb` and `.pbp`, 456 md5 triples, identical. The five D-0207 instances' `.pbp`
+identical. Differential lane 347 of 347 equal, `--debug` pass 333 of 333 (the 14 of
+`bench/diff/debug-skip.tsv` skipped, as on main); scaling lane green (5 lines, every growth below its baseline);
+`dune runtest --root . --force` under `ulimit -v 4000000`: 5 175 ok, 0 FAIL; the 228 models
+pass `run_model_tests.sh` with every proof verified. After merging main `5e1ea8a` (D-0219's
+`search.ml`): dev `1c179467` against main's `cc46f5dd`, the 456 triples identical again, lane
+347 of 347, `--debug` 333 of 333, scaling green, 5 225 ok and 0 FAIL, 228 models.
+
+**Memory, D-0218's instances** (live heap from the probe, proof arm, `--max-heap-mb 65536`;
+peak RSS unprobed, `--no-proof`, 300 s):
+
+| instance | live heap before | live heap after | trail before / after | peak RSS before / after |
+|---|---|---|---|---|
+| wordpress 7 | 32.95 G at node 1 (refused there) | 4.58 G at node 1, 20.0 G at node 64 | 32.29 G / 3.80 G at node 1 | 68.0 GB, refused at 64 GiB in 56 s / 36.1 GB, 300 s, 23 122 nodes |
+| travelling-thief r49 | 5.14 G at node 1 000 | 3.16 G at node 1 000 | 3.47 G / 1.44 G | 7.83 GB / 4.76 GB |
+| is A3PZaPjnUz | 4.96 G at exit (604 nodes) | 1.65 G at exit (964 nodes) | 4.41 G / 1.10 G | 6.20 GB / 2.90 GB (both solve in 30 s) |
+| proteindesign 1HZ5 9aa | 1.20 G at exit (916 nodes) | 0.79 G at exit (950 nodes) | 0.71 G / 0.29 G | 3.47 GB / 2.18 GB |
+
+The trail no longer holds a bitset per pruning: wordpress's 6 M root removals cost their trail
+entries (0/12, 0/5 and the four closures of a deferred reason, about 640 B each, 3.8 G), not
+32 G of copies. What wordpress still keeps is fix 4's (D-0218 section 7, agent-release, D-0223),
+and with the proof the writer's live set.
+
+**At the 8 GiB budget** (`--max-heap-mb 8192`, proof on, the series' 1 200 s): is completes
+before (8 min 39 s, 8.9 GB RSS) and after (7 min 37 s, 7.5 GB); travelling-thief r49 runs to the
+time limit before (9 058 nodes, 8.86 GB) and after (8 984 nodes, 8.59 GB). Neither is refused on
+this main, before or after, so their arm-A refusals (D-0185) are already gone, as D-0218 section 8
+warned. wordpress is still refused at 8 GiB, in 43 s at node 1 (trail entries and the proof
+writer), and at 64 GiB without proof it now runs 300 s where it was refused in 56 s.
+
+**Time, instructions per node** on D-0207's five instances (release binaries, D-0207's method:
+`perf stat -e instructions:u`, a 1-node base run subtracted, same node counts before and after):
+
+| instance | --no-proof before / after | proof before / after |
+|---|---|---|
+| qr3 | 1 040.3 k / 1 040.3 k (0 %) | 1 702.7 k / 1 702.4 k (0 %) |
+| costas14 | 22 118 k / 22 311 k (+0.9 %) | 30 618 k / 30 847 k (+0.7 %) |
+| mknap2-1 | 26 187 k / 26 187 k (0 %) | 26 852 k / 26 852 k (0 %) |
+| jr63 (javarouting, Element) | 8 937 k / 9 126 k (+2.1 %) | 20 829 k / 21 103 k (+1.3 %) |
+| rcpsp11_60 | 1 833 k / 1 833 k (0 %) | 10 269 k / 10 269 k (0 %) |
+
+The first version of the code cost jr63 +4.4 % and costas +1.7 %. An instruction profile of jr63
+(sampled at 1 M instructions, 179 k samples) put it in `is_hole`: a load through the log on every
+read, a call per read, and a validity check on reads of a value still in the domain. The version
+now carries the log's bitset, tests the bit before anything else and inlines the helpers, which
+brings every clear-bit read back to the old cost (`mem` + `is_hole` + `get_bit` 13 407 samples
+before, 13 474 after). What remains is the set-bit read of an OLDER version (`set_bit_is_hole`
+and `logged_after`, 2 515 of the 3 789 extra samples): Element's lazy reasons read the holes of a
+frame's domain and `Store.remover` binary-searches the entries on a variable, each a set bit of a
+past version, thousands per node. Always building `pos` instead of scanning was measured and is
+not faster (9 139 k against 9 126 k). Pass-wide snapshots of costas's alldiff cost +0.9 % the same
+way. Instances without holes do not move.
+
+### 7. What this does not do
+
+- It does not bring wordpress under 8 GiB: its 6 M root removals are 6 M trail entries of about
+  640 B, which is fix 4's object (release the deferred explanations, D-0223) and the trail entry's
+  own shape (ARCHITECTURE §3's twelve fields).
+- A log created by a first removal dies with that removal's undo, and the next first removal on
+  the same variable allocates a fresh one (its bitset is span / 8 bytes, once per first removal
+  instead of once per removal). Recycling it per variable would need the store to keep a spare
+  log per variable; not done, not measured to matter.
+- The set-bit reads of past versions (section 6) could be answered from the log directly by
+  `Store.remover` (the slot of the value gives the entry), saving the binary search's reads. Not
+  done: the remover's equivalence with its scan (D-0088) would need restating for it.
