@@ -18,6 +18,8 @@
 %
 % A circuit over one node is false (xs[l] != l), as std's.
 
+include "all_different.mzn";
+
 predicate baguette_circuit(
   array [int] of var int: xs,
   array [int] of var int: pos,
