@@ -28648,3 +28648,145 @@ The code is three commits on `wave67-cdcl`: `e9108c1` (the loop, the observables
 `92c9e1f` (the fallback) and this record's commit. With the switch off nothing they add runs except
 the observables' counters (one byte per learned instance, one evaluation of the learned clause per
 resume), so reverting is `git revert` of the three, or simply not setting `BAGUETTE_CDCL`.
+
+## D-0203  [AUTONOME] M17-bench-series-T1/T2: the series driver (`bench/series/`), and the first series on the bits default without a proof cap. Default 302 + 74 verified, `-f` 346 + 95, no proof 340 + 86 (unverified). Summed score 4 043, 5 799 and 4 428 against D-0185's 2 789, 3 581 and 3 237. No proof rejected, no checker memory failure
+
+**Status**: **MEASUREMENT** and a **tool**, with one decision of the user (no proof cap). Recorded
+2026-11-24 (agent-series, branch `wave58-series`). Run on `fataepyc-06` from 2026-11-23 13:28 to
+2026-11-24 11:35 UTC (flatten before it, from 12:20). Binary **`f244c35ac8a1960cd82fd6f39357891d`**,
+the RELEASE build (`dune build --profile release -j 16`, the recipe of `make release`) of the
+series clone at `f827518`. That is main `f6c62db` plus the series tooling and no change under `lib/`
+or `bin/`, so it is the solver of D-0201 and D-0202's release `f244c35a`. The clone was moved to
+`e1971f6` for the harness settings below, which the binary does not depend on. It predates the
+speed and coverage work merged since (D-0206, D-0208, D-0209, D-0212 to D-0217, D-0220).
+
+### 1. The tool (T1)
+
+`bench/series/run_series.sh --name N --commit REV --par P [--arm LABEL:proof|noproof:FLAGS ...]`
+does what agent-m10t5 did by hand for D-0185, in phases that can each be re-run
+(`--phase setup|flatten|run|read|publish`): a fresh clone at REV, the release build and its md5,
+every edition flattened once with that clone's `mznlib` (the editions side by side, because one
+flatten of 1 200 s held up the next edition in a first sequential try), the arms side by side, the
+tables (`read_series.sh`, with `challenge_rank.py`, `arms_compare.py` and `refusal_causes.py`), and
+a copy of the tables to `/cluster/arthur/baguette-results/series-<name>/`. Resumable: `compare_run.sh`
+skips every (instance, solver) that has a row. Pidfiles only (`DIR/pid`, `DIR/<arm>.pid`,
+`monitor.pid`). `tools/compare/readme_table.py SERIES_DIR` writes the README's performance section
+from the tables and, with `--readme`, replaces it in place, so the README is regenerated and not
+copied by hand. The outcome table's rows are asserted to add up to the instance count.
+
+What differs from D-0185's drivers, and why:
+
+| | D-0185 | this series |
+|---|---|---|
+| veripb's memory | the solver's `ulimit -v` 16 GiB covered it (21 CHECK-ERROR were veripb memory) | its own cgroup, `systemd-run --user --scope -p MemoryMax=64G`, no address-space cap (`CHECK_MEM_KB=unlimited`, a new variable of `compare_run.sh`; the solver's 16 GiB is applied in its own subshell) |
+| veripb's time | 3 600 s, the same `timeout` as the harness | 3 600 s of CHECKING, `bench/series/veripb_wrap.sh`; the harness's own `timeout` is 28 800 s and is a net |
+| a checker memory failure | CHECK-ERROR | exit 97 and `Error: SERIES-CHECKER-MEMORY`, counted apart by `readme_table.py`. **None occurred** |
+| a check over the limit | TIMEOUT-CHECK | TIMEOUT-CHECK, unchanged, counted apart from REJECTED |
+| large checks | no limit | at most 12 proofs of 2 GiB or more checked at once (12 x 64 GB under a 2 TB node) |
+| veripb's cost | check time only | check time, and peak RSS in `log/<id>.baguette.vrss` |
+| proof cap | 16 GB | **none**, the user's decision of 2026-11-23: MiniZinc has no certified track, so the cap is our own harness choice and must not limit us |
+| `/scratch` | not watched | no solve or check starts while `/scratch` has under 2 000 GB free (`space_gate.sh`, run outside the timeouts). It never held, the minimum free being 10.1 TB |
+| PAR | 12 per arm, 36 in all | **29 per arm, 87 in all**, so three development agents could each run one process beside it under the user's 92 |
+
+Settings kept from D-0133: 1 200 s solve and flatten, 16 GiB address space for the solver, each
+solver run in its own `systemd-run --user --scope -p MemoryMax=32G` with `--stats` and the peak-RSS
+recorder. **The heap budget actually used is 8 GiB** (`--max-heap-mb 8192`, which the harness derives as
+`MEM_KB / 1024 / 2`): D-0218 found that this is what the 163 refusals below hit, and not the 16 GiB the
+setting is called. D-0185 had the same value, so the comparison is like for like.
+
+Arms, the same three as D-0185: **A** default with proof, **B** `-f` (`--search alternate --restarts
+luby`, D-0154) with proof, **C** default `--no-proof` (unverified, never counted as verified).
+Run directories `/scratch/arthur/series-20261123/{A,B,C}/<YEAR>/` (13 GB, no proof left: the harness
+deletes a VERIFIED run's `.opb`/`.pbp`, and there was no REJECTED and no CHECK-ERROR run to keep).
+Tables, drivers, `series.conf` and `monitor.log` (a line every 5 minutes) are in
+`/cluster/arthur/baguette-results/series-20261123/`.
+
+**Load during the run** (`monitor.log`, 266 lines, one per 5 minutes): this series ran 87 solver or checker
+processes at most. The count of `main.exe` and `veripb` processes of the user, which includes other agents'
+runs, peaked at 97 and the 5-minute load at 99 (45 to 90 most of the time). Free memory never fell under 1.58 TB
+and `/scratch` free stayed between 10.1 and 10.6 TB, far above the 2 TB floor. `--list FILE`, `--solve-timeout S` (agent-tuning's
+request) and `--pair-all` were added after the run, and by default a baguette-only series no longer
+flattens with the Chuffed and GCS libraries (`PAIR_SOLVERS=baguette`): the data file of each instance comes
+from `bench/challenge/<year>.lst`, so the three arms here kept their instances, but this is the one change
+whose effect on the set of instances flattened (1 575 here, 1 574 in D-0185) was not measured.
+
+### 2. Result, per arm (1 575 instances flattened out of 1 600)
+
+| outcome | A | B (`-f`) | C (`--no-proof`) |
+|---|---|---|---|
+| optimal or UNSAT, proof verified | 302 | 346 | 340 (unverified) |
+| satisfiable, proof verified | 74 | 95 | 86 (unverified) |
+| complete, check hit the 3 600 s limit | 18 | 26 | n/a |
+| complete, veripb out of memory (64 GB) | **0** | **0** | n/a |
+| timeout at 1 200 s | 1 017 | 970 | 992 |
+| refused, heap budget | 164 | 138 | 157 |
+| crash | 0 | 0 | 0 |
+| **rejected by veripb** | **0** | **0** | n/a |
+| objective value printed | 1 060 | 1 149 | 1 079 |
+
+The rows add up to 1 575 in each arm (asserted by `readme_table.py`). **CAPPED does not occur**, by
+construction. 116 runs of arm A and 84 of arm B wrote a proof file above 16 GB before they ended, and of
+those exactly **one** (arm A) was a complete answer that veripb verified (23.6 GB), one more a complete
+answer whose check timed out. So the cap that cost D-0185 198 and 173 runs would, on this binary, have cost
+one verified answer, because the proofs are far smaller (below) and the runs that write that much mostly
+time out anyway. The largest verified proof is 23.6 GB. The 817 verified proofs have a median of 198 MB and
+were 793 GB together, all deleted after their check.
+
+veripb: the median check of a verified proof took 46 s (A) and 42 s (B), 32 and 31 checks took more than
+1 200 s, the longest 3 493 s and 3 440 s, and the peak RSS was 26.8 GB (A) and 34.6 GB (B), under the 64 GB
+cgroup, which is why no check died of memory. The 44 TIMEOUT-CHECK (18 + 26) are the checker's time limit.
+
+Proof logging, on the 376 instances A and C both complete: wall time of C over A **0.47** (median, quartiles
+0.35 and 0.67; summed 53 764 s to 28 197 s), peak memory 0.91, nodes per second 1.50 (D-0185 had 0.64, 0.96 and
+1.27). Without proof 41 instances that hit the heap budget or a crash with proof become ordinary attempts, and
+2 of them end with a complete answer. `-f` against the fixed search, B over A: 670 instances better, 327 worse,
+578 equal; wall ratio 1.01 over 337 complete in both; nodes per second 1.05.
+
+Score in the fixed-search category (`challenge_rank.py`, summed over the sixteen editions): **A 4 043, B
+5 799, C 4 428**, B scored in the fixed category so that the three compare. Rank per edition, in the README
+table: A equals or improves D-0185's rank in every edition (2026 from 12 to 11, 2020 from 6 to 5, 2012 from 8 to 5).
+
+### 3. Against D-0185, arm by arm
+
+| | D-0185 (`7c880bce`, order, 16 GB cap) | this series (`f244c35a`, bits, no cap) |
+|---|---|---|
+| A verified complete (opt+UNSAT, sat) | 251 + 72 = 323 | 302 + 74 = **376** |
+| A refused / timeout / capped / crash | 314 / 700 / 198 / 4 | 164 / 1 017 / 0 / 0 |
+| A summed score | 2 789 | **4 043** |
+| B verified complete | 265 + 97 = 362 | 346 + 95 = **441** |
+| B refused / timeout / capped / crash | 336 / 668 / 173 / 3 | 138 / 970 / 0 / 0 |
+| B summed score (fixed category) | 3 581 | **5 799** |
+| C complete (unverified) | 296 + 84 = 380 | 340 + 86 = **426** |
+| C refused / timeout / crash | 398 / 780 / 16 | 157 / 992 / 0 |
+| C summed score | 3 237 | **4 428** |
+| check did not finish | 35 (A), 32 (B) | 18 (A), 26 (B), none by memory |
+
+What changed what. The three arms ran the same binary, so each pair of columns differs by the same two
+causes and the comparison cannot split them, because no arm ran the order encoding on this binary:
+
+- **The bits default (D-0201) and the work before it** (M16 and the proof-size reductions that came with it)
+  moved instances out of REFUSED and CAPPED. Refusals fell by 150 to 241 per arm, mostly to TIMEOUT, which is
+  why the timeout row rises (700 to 1 017) while the verified rows rise too. A proof now rarely reaches 16 GB.
+  D-0175 measured the same direction on two arms of an earlier binary (summed score with proof 2 712 to 3 441,
+  proofs over the cap 214 to 68).
+- **Removing the cap** accounts for at most the one verified 23.6 GB proof above, and for the 116 and 84 runs
+  that wrote more than 16 GB. It is not what lifted the table.
+- The check failures fell (35 to 18 in A) because veripb no longer runs under the solver's 16 GiB, and none
+  died of memory. Those 21 CHECK-ERROR of D-0185 were its address-space cap.
+
+The 64 GiB observation series on `fataepyc-07`, which asks what the heap-budget refusals become with more memory,
+is agent-node07's (D-0210, branch `wave60-node07`). It compares its arms with these. It is cited here and not
+redone.
+
+### 4. Decisions and how to revert
+
+1. **No proof cap** is the user's, 2026-11-23. Revert by `PROOF_CAP_KB=16000000` in `arm_driver`
+   (`run_series.sh`).
+2. **PAR 29 per arm**, the orchestrator's, so three agents fit under 92.
+3. [AUTONOME] veripb under its own limits (64 GB MemoryMax, 3 600 s) and `CHECK_MEM_KB`. Revert by not
+   setting `CHECK_MEM_KB`; the default of `compare_run.sh` is unchanged.
+4. [AUTONOME] flatten the editions side by side, and a baguette-only series flattens with the baguette library
+   only (`--pair-all` restores the three).
+
+No change to the solver, to a SPEC sentence or to `Explanation.t`. The README's performance section is now
+this table, produced by `readme_table.py`, with D-0185 kept as the one-line pointer to the previous series.

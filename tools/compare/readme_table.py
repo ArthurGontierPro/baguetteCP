@@ -245,7 +245,7 @@ def section(tdir, record, previous, notes):
         L += ["| | median ratio (no proof / proof) |", "|---|---|",
               "| wall time | %s |" % pair["wall"], "| peak memory | %s |" % pair.get("rss", "-"),
               "| nodes per second | %s |" % pair.get("nps", "-"), ""]
-        L.append("Without proof, %s instances that hit the memory budget, the proof cap or a crash "
+        L.append("Without proof, %s instances that hit the memory budget or a crash "
                  "with proof become ordinary attempts, and %s of them end with a complete answer." % (
                      fmt(pair.get("gained", 0)), fmt(pair["gained_complete"])))
         L.append("")
