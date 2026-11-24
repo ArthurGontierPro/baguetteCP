@@ -682,6 +682,12 @@ section 1. Shares are inclusive, of the whole run.
 
 ## Handoff notes
 
+### 2026-11-24 (interrupt-session, `wave73-interrupt`): M6-T24, an interrupted run ends its proof (D-0225)
+
+SIGTERM, SIGINT, SIGXCPU and the heap budget end the proof, `BOUNDS <declared floor> <last value printed>` on an optimisation run. Built and measured (D-0225 section 5), NOT merged.
+To merge: `search.ml` and `bin/main.ml` overlap agent-chrono's `wave71-chrono` (short edits in `record_improving`, `conclude_stopped`, `optimise`, the signal handler, `config.stop`). After the merge the differential reference must be re-recorded (226 plain and 214 debug runs differ by the conclusion line only). Next: the harness checks the proofs of killed runs, per-edition limits (900 s before 2015).
+Runs: `fataepyc-07:/scratch/arthur/interrupt/`.
+
 ### 2026-11-24 (readme-session, laptop): 900 s for the editions 2011 to 2014
 
 The user would like the next series to use 900 s on 2011 to 2014 (perhaps, not decided). `run_series.sh --solve-timeout` is one value for the whole series, and `read_series.sh` calls `challenge_rank.py` without `--timeout` (default 1 200 s), so both need a per-edition value. Read from the official results: the largest recorded time is 900 s for 2011 to 2014, 1 200 s (to 1 209) after.

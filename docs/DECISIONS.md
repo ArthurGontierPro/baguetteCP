@@ -29034,13 +29034,30 @@ lower bound the search never derived". The objective's declared bound is enough.
 The lower bound is the declared one. RoundingSat concludes the bound its search derived. A root bound
 that the proof has established is the obvious next step, and needs the id to cite.
 
-### 5. Limits
+### 5. Measurements (`fataepyc-07`, binary `aa2e192d`, branch commit `777cb9d`, base `1c179467`)
+
+- `make check` rc 0, peak RSS 155 MB. 228 test models against the base: stdout, exit code, `.opb`
+  and `.pbp` equal. Scaling lane ok. No test model is stopped, so none was expected to change.
+- Differential lane: 226 of 347 runs (plain) and 214 of 333 (debug) differ from the reference, every
+  one by the `.pbp` hash alone. Of the plain runs' 226, the proofs of the base and of the branch are
+  equal once the `conclusion` line is set aside, `NONE` becomes `BOUNDS`, and VeriPB accepts each
+  (135 with an incumbent, 91 with INF). The reference is to be re-recorded after the merge, in
+  its own commit (D-0141).
+- 200 real signals (SIGTERM, SIGINT, SIGXCPU, single and double) at random instants on three models,
+  on the laptop: 199 stopped in the search, 1 before it, no rejected proof (the last 120 under
+  `veripb -c`, 24 + 6 of them ended in the handler).
+- 60 Challenge instances in three modes (`timeout -k 30 40`, the same with `-f`, `--max-heap-mb
+  400` under `timeout -k 30 120`), 180 runs: no rejected proof, 6 checks over 1 200 s, 8 runs stopped before the
+  search began (no proof to end). On the 97 stopped optimisation runs with an incumbent whose
+  objective the script could read, the checker's upper bound is the last value printed.
+
+### 6. Limits
 
 SIGKILL and the kernel's OOM killer cannot be caught. `timeout -k 30` leaves 30 s after SIGTERM for
 the line in progress. A signal before the search has begun ends the process as before. The harness
 (`scripts/compare_run.sh`) does not yet check the proofs of killed runs. That is the next step, with
 the per-edition time limits the user mentioned.
 
-### 6. Revert
+### 7. Revert
 
 The branch `wave73-interrupt`. Nothing else depends on it.
