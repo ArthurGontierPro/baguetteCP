@@ -19,6 +19,7 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
+| M19-config-T5 (review T12, D-0221) | `lib/core/retention.ml` (default only, if the measurement says so), `docs/DECISIONS.md` (D-0221), `docs/ROADMAP.md` (its row), `docs/SPEC.md`/README wording only if they name the default | agent-retention, branch `wave69-retention` | 2026-11-24 |
 
 ## Cross-session requests
 
