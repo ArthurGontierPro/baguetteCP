@@ -25,7 +25,7 @@ of it to every session and stopping at a broken line before it even reached the 
 
 ### 2026-11-23 (orchestrator baguette-92 on fataepyc-06): decision numbers reserved
 
-D-0203 (agent-series), D-0206 (agent-table), D-0208 (agent-watch, M20 learned-constraint wakes), D-0209 (agent-writer, M20 proof writer) are taken by running agents. D-0210 (agent-node07, M17-T5, the 64 GiB observation series) and D-0211 (agent-node07, M17-T4, GCS and Chuffed) too. D-0212 (agent-arith, M20-pernode-T3) too. Another session that needs a record: take D-0224 or above, and say so here. D-0222 is agent-holes (M21-memory-T3, hole bitsets on the trail), D-0223 is agent-release (M21-memory-T3, explanations released after their line). D-0221 is agent-retention (M19-config-T5, the retention default). D-0220 is agent-binpack (M18-coverage-T4). D-0219 is agent-cdcl (M19-config-T10). D-0218 is agent-memory (M21-memory-T1, T2). D-0217 is agent-circuit (M18-coverage-T3). D-0216 is agent-hash (black-hole root slowdown in Explanation hashing). D-0215 is agent-regin (M20-pernode-T4, alldiff). D-0214 is agent-lazy (M20-pernode-T2, Element). D-0213 is agent-diffn (M18-coverage-T2).
+D-0203 (agent-series), D-0206 (agent-table), D-0208 (agent-watch, M20 learned-constraint wakes), D-0209 (agent-writer, M20 proof writer) are taken by running agents. D-0210 (agent-node07, M17-T5, the 64 GiB observation series) and D-0211 (agent-node07, M17-T4, GCS and Chuffed) too. D-0212 (agent-arith, M20-pernode-T3) too. Another session that needs a record: take D-0225 or above, and say so here. D-0224 is agent-chrono (M19-config-T11, then T2 to T4 on the loop). D-0222 is agent-holes (M21-memory-T3, hole bitsets on the trail), D-0223 is agent-release (M21-memory-T3, explanations released after their line). D-0221 is agent-retention (M19-config-T5, the retention default). D-0220 is agent-binpack (M18-coverage-T4). D-0219 is agent-cdcl (M19-config-T10). D-0218 is agent-memory (M21-memory-T1, T2). D-0217 is agent-circuit (M18-coverage-T3). D-0216 is agent-hash (black-hole root slowdown in Explanation hashing). D-0215 is agent-regin (M20-pernode-T4, alldiff). D-0214 is agent-lazy (M20-pernode-T2, Element). D-0213 is agent-diffn (M18-coverage-T2).
 
 Need a change in a file someone else has claimed? Write it here and move on to other
 work. The owning session picks it up.
@@ -457,6 +457,7 @@ section 1. Shares are inclusive, of the whole run.
 | **`Encoding` finds a variable by its name at every declaration and every row term** (D-0193 sections 5 and 6): `declare_int_gen`, `find`, `owner` and `hash` are 23.7 % of smelt_11's setup samples, and `Encoding` 34.6 % in all. `Compile` knows each variable's model index; an `Encoding` keyed by it (the name kept for printing) would remove a string hash per term. An interface change, a task of its own | `lib/proof/encoding.ml`, `lib/flatzinc/compile.ml` | agent-review5b (M16-file-review-T5) | open |
 | **`Engine.create` is 13.9 % of smelt_11's setup** (D-0193 section 5, profile in `fataepyc-06:/scratch/arthur/wave55-review5-runs/prof/smelt11.base.attr`): `create_inner`, `index_static`, `scope_of` and `Propagator.pack_inner` | `lib/core/engine.ml` | agent-review5b (M16-file-review-T5) | open |
 | **Bin-packing families fill the heap during search, not at the encoding** (D-0220 section 1, M18-coverage-T4): on steelmillslab 13_0 the RSS grows 128 MB -> 1.06 GB in 8 000 nodes and `BAGUETTE_PROPAGATE_LEARNED=off` gives 383 MB (3 832 of 4 105 learned clauses have >= 16 literals, all kept as engine instances under keep-all); on mapping mesh3x3_2 PB conflict analysis costs 2.8 MB and 60 ms per conflict (`BAGUETTE_PB_ANALYSIS=off`: 2 000 nodes in 1.5 s and 124 MB against 60 s and 2.9 GB). Wanted: the per-instance bytes of a learned clause (M21-memory) and a retention policy or PB-analysis guard that bounds this; the probes are in `fataepyc-06:/scratch/arthur/binpack-work/probe/` | `lib/core/retention.ml`, `lib/core/search.ml`, `lib/core/pb_analysis.ml` | agent-binpack (M18-coverage-T4) | open |
+| **`--cdcl` on the command line** (M19-config-T10, D-0219): the CDCL loop is `Search.config.cdcl`, read today from `BAGUETTE_CDCL=1` in `Search.default_config` because `bin/main.ml` is held (review-1123). Please add `--cdcl` setting `cdcl = true` in the config `main.ml` builds (next to `restarts`), document it in the usage text as opt-in, and keep the variable working until D-0219's default question is decided. No other change: under the switch `propagate_learned` is forced on inside `Search` | `bin/main.ml` | agent-cdcl (`wave67-cdcl`) | open |
 
 - 2026-11-23, agent-tuning to the owner of `bench/series/` (wave58-series): `run_series.sh` fixes the solve time at 1 200 s and runs every instance of `bench/challenge/<year>.lst`. M19-config-T0 (D-0205, `bench/tuning/set.lst`) needs `--list FILE` (ids to keep, one per line or the first column of a .lst) and `--solve-timeout SECONDS` (300). Not edited by me.
 
@@ -466,7 +467,11 @@ section 1. Shares are inclusive, of the whole run.
 
 | Task | Session | Date | Summary |
 |---|---|---|---|
+| M22-review-T4 (README part; the module map is still open) | readme-session (laptop) | 2026-11-24 | `README.md` only: the new globals, the CDCL switch, the dated e2e count, and the caveats under the Challenge table. |
+| M17-bench-series-T3 (history and the rule) | agent-history (`wave72-history`) | 2026-11-24 | `bench/series/HISTORY.md` with seven rows (D-0210, D-0203, D-0185, D-0175 two arms, D-0133, D-0121), and the orchestration bullet in CLAUDE.md. |
+| M17-bench-series-T1, T2 (the series driver and the first series on current main, D-0203) | agent-series (`wave58-series`) | 2026-11-24 | **D-0203.** `bench/series/run_series.sh` (phases setup, flatten, run, read, publish; resumable; veripb in its own 64 GB cgroup and 3 600 s limit; `--list`, `--solve-timeout`, no Chuffed/GCS flatten for baguette arms), `tools/compare/readme_table.py` (writes the README section). Series on release `f244c35a` (bits default, no proof cap, PAR 29 per arm): A 302+74 verified, B (`-f`) 346+95, C (`--no-proof`) 340+86 unverified; summed score 4 043 / 5 799 / 4 428 against D-0185's 2 789 / 3 581 / 3 237; 0 rejected, 0 veripb memory failures, 44 check time-outs; the cap would have cost one verified proof. Tables `/cluster/arthur/baguette-results/series-20261123/` |
 | M21-memory-T1, M21-memory-T2 (where the heap goes, D-0218) | agent-memory2 after agent-memory (`wave66-memory`) | 2026-11-24 | **D-0218.** Measurement only; the probe is `/cluster/arthur/baguette-results/memory/memprobe.patch`, reverted on the branch. OCaml's representation is 2.5 to 4 on record-heavy kinds and the GC's free space 1.5 to 5 on the budget, but the search refusals are what we keep: hole bitsets copied per pruning, 410 to 660 B per trail entry, 270 to 330 B per learned literal kept forever, proof explanations kept after their line. Five ranked fixes for T3 with estimates |
+| M19-config-T10 (the CDCL loop, D-0219) | agent-cdcl (`wave67-cdcl`) | 2026-11-24 | **D-0219 [AUTONOME].** `Search.cdcl` behind `BAGUETTE_CDCL=1`, default OFF and byte-identical; files `lib/core/search.ml`, `lib/core/learn.ml`, `test/unit/test_search_strategy.ml`, D-0219, ROADMAP T10/T11. On: every answer and optimum equal, every proof VERIFIED, mutation lanes refused. Default not changed; recommendation D (T11 first) |
 | M18-coverage-T4 (bin packing, D-0220) | agent-binpack (`wave68-binpack`) | 2026-11-24 | **D-0220 [AUTONOME].** mznlib only: std's bin-packing rows without the bool2int copies (`baguette_bool_lin_eq`/`_le` per bin over std's int_eq_reif indicators, loads restricted to their reachable sums). The refusals measured as search-time heap on four families of five; no outcome change on 20 instances, .opb 0.58 to 1.00, more nodes on 14 of 16 time-outs, 223 other models byte-identical |
 | M18-coverage-T3 (`circuit`, D-0217) | agent-circuit (`wave65-circuit`) | 2026-11-24 | **D-0217 [AUTONOME].** `lib/core/prop/circuit.ml`: mznlib routes `fzn_circuit` to `all_different` plus `baguette_circuit(x, pos, root)`, the .opb defines circuit by MTZ rows over position store variables, prevent + pinned positions, every subtour cut one `pol` ahead; `subcircuit` stays std. 20 instances: .opb 0.44 to 0.998, more nodes on 14 of 15 time-outs (default), p1f-pjs_10 time-out -> OPT, all checked proofs VERIFIED |
 | M18-coverage-T2 (`diffn`, D-0213) | agent-diffn (`wave61-diffn`) | 2026-11-24 | mznlib `fzn_diffn`, `fzn_diffn_nonstrict`: std's pairs plus the two cumulative relaxations over order copies; four models, theorem enumeration and 16 scenes in test_compile, two lanes in test_mutation; maps and PROOF-FORMAT 4. Complete 7 -> 9 of 25 routed Challenge instances, all VERIFIED |
@@ -674,9 +679,33 @@ section 1. Shares are inclusive, of the whole run.
 
 ## Handoff notes
 
+### 2026-11-24 (readme-session, laptop): M22-review-T4, the README part
+
+Docs only, at the user's request. The caveats under the Challenge table are hand-written: the next `readme_table.py --readme` replaces the whole section, so carry them over through `--notes`.
+The summary below says `-f` ranks 3rd in five editions; the README's table gives six (2024, 2023, 2022, 2019, 2018, 2012). The e2e count (197 of 207) dates from D-0201 and the suite now has 228 models.
+
+### 2026-11-24 (agent-history, `wave72-history`): M17-bench-series-T3
+
+HISTORY.md is written from the records. Empty cells are SAT counts D-0210 and D-0121 do not give, and D-0121's commit and binary. D-0210 lives on `wave60-node07`: re-check its row when that branch merges.
+
+### 2026-11-24 (agent-series, `wave58-series`): M17-bench-series-T1/T2, D-0203
+
+The series on `f244c35a` is done and the README section is regenerated from it (`python3 -I tools/compare/readme_table.py /cluster/arthur/baguette-results/series-20261123 --record D-0203 --previous ... --notes ... --readme README.md`). Next series: `bench/series/run_series.sh --name <date> --commit <rev> --par 29`, push the branch first; `--list FILE` and `--solve-timeout S` are in for agent-tuning.
+`/scratch/arthur/series-20261123/` holds the run directories (13 GB), the clone and the binary; nothing runs. M17-T3 (HISTORY.md) can take this row: commit `e1971f6`, binary `f244c35a`, scores 4 043 / 5 799 / 4 428.
+
 ### FOR THE USER'S RETURN: the autonomous run started 2026-11-23 evening (orchestrator, Fable)
 
 Updated as things land. The plan is the nine steps agreed on 2026-11-23 (speed first, then the CDCL loop, coverage, the refused third, configuration last).
+
+**THE NEW SERIES (D-0203, merged; README regenerated)**, release `f244c35a` (bits default, no proof cap, BEFORE all the speed and coverage merges below), sixteen editions, no proof rejected:
+
+| arm | OPT+UNSAT / SAT verified | summed score | D-0185's score |
+|---|---|---|---|
+| default, with proof | 302 / 74 | 4 043 | 2 789 |
+| `-f`, with proof | 346 / 95 | 5 799 | 3 581 |
+| default, `--no-proof` (unverified) | 340 / 86 | 4 428 | 3 237 |
+
+`-f` scored in the fixed category would rank 3rd in five editions and 2nd in 2020; it wins on 670 instances and loses on 327. Proof logging costs 0.47 of the time at the median. At 64 GiB (D-0210, on fataepyc-07, same binary): REFUSED 164 -> 60 but only 302 -> 304 verified answers, so 16 GiB stays a fair reference. **This is the strongest case yet for M19-config-T1 (the default search): it is held until agent-chrono's arms on the CDCL loop are in (D-0224), then decided on these numbers.**
 
 **Merged and gated** (gates 91 to 95 green, pinned to four cores with lanes at `-j 4` because the series holds the node; last binary `75b1e984`):
 - D-0209, the proof text through one buffer: byte-identical, -0.4 to -7.9 % per proved node (gate 91).
@@ -690,7 +719,7 @@ Updated as things land. The plan is the nine steps agreed on 2026-11-23 (speed f
 Gates 96 to 98 green: 218 models byte-identical, lane 347/347, debug 333/333, scaling ok.
 - D-0217, native `circuit` (alldiff plus MTZ position rows as the definition, a subtour pruning on one `pol`): `.opb` 0.44 to 0.998 of old, median 0.59 instructions per node, p1f-pjs_10 timeout -> verified optimum; `subcircuit` not done; a SPEC 2.1 sentence added for `baguette_circuit` (gate 99 green, binary `d4a356f6`, the only artefact diffs are the five new circuit models, lanes equal).
 
-**Running**: the series on current main without the proof cap (agent-series, D-0203, fataepyc-06); the 64 GiB observation series then GCS and Chuffed (agent-node07, D-0210, D-0211, on fataepyc-07, allowed by the user on 2026-11-23); agent-cdcl (D-0219, M19-config-T10, the CDCL loop behind `BAGUETTE_CDCL`, default off); agent-retention (D-0221, the retention default); agent-holes (D-0222) and agent-release (D-0223), M21-memory-T3.
+**Running**: (the 16 GiB series, agent-series, D-0203, finished 2026-11-24 11:35 UTC) the 64 GiB observation series then GCS and Chuffed (agent-node07, D-0210, D-0211, on fataepyc-07, allowed by the user on 2026-11-23); agent-chrono (D-0224, M19-config-T11 then T2 to T4 on the loop); agent-retention (D-0221, the retention default); agent-holes (D-0222) and agent-release (D-0223), M21-memory-T3.
 
 **Stalled agents (2026-11-24)**: agent-watch, agent-diffn and agent-memory each stopped for hours waiting on a monitor that never woke them. The first two were nudged and finished. agent-memory (stalled 01:44 to 07:48 UTC) was stopped, its work saved as a WIP commit (`b7d7859` on `wave66-memory`), and agent-memory2 resumed from it with the instruction to poll its runs itself.
 
@@ -700,6 +729,8 @@ Gates 96 to 98 green: 218 models byte-identical, lane 347/347, debug 333/333, sc
 
 - D-0218 (docs only), the answer to "does OCaml eat memory": OCaml costs a bounded factor of 2.5 to 4 on record-heavy kinds and its GC keeps 1.5 to 5 times the live data in the heap the budget reads; but the 251 search refusals come from what WE keep, factors 8 to 7 600 over a flat layout: the hole bitset copied per pruning on the trail (wordpress 98 % of the live heap), learned rows at 270 to 330 B per literal kept for ever (steelmill 88 %, mapping 79 %), proof explanations kept after their line (tdtsp 99 %). Five ranked fixes; agent-holes (D-0222) and agent-release (D-0223) run on fixes 2 and 4, D-0221 covers part of fix 1. Caveats it found: the series refuses at 8 GiB of heap, not 16 (`MEM_KB/2`); on ttp r49 the heap reached 10.6 GB at an 8 GiB budget and the guard did not fire (to look at).
 
+- D-0219 (the CDCL loop, step 3 of the plan), merged, gate 101 green (binary `cc46f5dd`, 228 models byte-identical, lanes equal): a second search beside `dfs` behind `BAGUETTE_CDCL=1`, DEFAULT OFF and byte-identical, no new proof rule. What it measured first: today QR48 learns 14 889 clauses and NOT ONE ever prunes (costas, mknap under 2 %). With the loop: the same tree with half the nodes on D-0207's families and every learned clause pruning; rotating-workforce SAT in 1.6 s against 84 s; on 40 tuning instances a TIE (6 better, 6 worse), one complete answer lost (flowshop-workers) by re-descending after long backjumps. The default stays `dfs`; agent-chrono (D-0224) builds chronological backtracking for long jumps and measures restarts, phases and the heuristic on the loop over the whole tuning set. (agent-cdcl stalled after writing its record; the orchestrator committed and merged it.)
+
 **Open for you**: D-0213 (`diffn` through mznlib, merged, gate 96 green: same binary `75b1e984`, 218 models identical, lanes equal): the two cumulative relaxations' capacity rows are MODEL rows in the `.opb`, trusted as MiniZinc's flattening is, and checked by enumeration in `test_compile.ml`; deriving them in the proof costs O(n^2 W H) lines. Deleting the two `mznlib/fzn_diffn*.mzn` files reverts it. 7 -> 9 complete answers on 25 instances at 300 s, `.opb` up to 5.8 times larger on some.
 
 Also open: after D-0208 the engine's wake work is the largest share left on costas and mknap; removing it needs the D-0169 (b) rule (rows that never prune are not woken), which changes default behaviour.
@@ -708,6 +739,10 @@ Also open: after D-0208 the engine's wake work is the largest share left on cost
 ### 2026-11-24 (agent-memory2, `wave66-memory`): M21-memory-T1 and T2, where the heap goes (D-0218)
 
 The probe (`memprobe.patch`, kinds walked once in a fixed order, live data split by kind) says the 251 search refusals of arm A are our design: learned constraints kept forever at 270 to 330 B per literal (71 of 148 refusals in the probed families), hole bitsets copied per pruning (36), proof explanations kept alive (14); OCaml multiplies record-heavy kinds by 2.5 to 4 and its GC adds 1.5 to 5 on the heap the budget reads. At the encoding OCaml's factor alone can cross the 8 GiB budget (rcpsp). Results, scripts, tables: `/cluster/arthur/baguette-results/memory/`. For T3: arm A ran before D-0201 (order encoding), and on this main proteindesign, ttp r49 and community no longer refuse within 300 s, so start from a fresh census; ttp r49 passed 8 GiB of peak heap without the budget firing. D-0220's cross-session request asked for the bytes of a learned clause: 27.7 KB for 98 literals on community, 115 KB for 413 on steelmill (D-0218 section 3).
+### 2026-11-24 (agent-cdcl, `wave67-cdcl`): M19-config-T10, the CDCL loop (D-0219)
+
+`BAGUETTE_CDCL=1` runs `Search.cdcl`: 1UIP clause, backjump to its asserting level, the clause propagates there, no branch nogood; a factless conflict is refuted by `dfs`'s nogood filed at its asserting level. Off, every artefact is byte-identical to main; on, every answer, optimum and proof checks (D-0219 section 5). `BAGUETTE_CDCL_STATS=1` prints the learning observables of either loop on stderr.
+Measured (D-0219 sections 3 and 6): on a fixed search the loop builds the same tree on D-0207's families with half the nodes and every learned clause pruning; on 40 tuning instances it is a tie (6/6/28) and loses flowshop-workers to re-descent after long backjumps; under `-f` 6/5/9. The default is the user's: recommendation D, i.e. M19-config-T11 (chronological backtracking for long jumps) and T2 to T4 re-measured on the loop first. `--cdcl` is a cross-session request on `bin/main.ml`.
 
 ### 2026-11-24 (agent-binpack, `wave68-binpack`): M18-coverage-T4, bin packing (D-0220)
 
