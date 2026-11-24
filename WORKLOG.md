@@ -19,7 +19,6 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M18-coverage-T3 | `lib/core/prop/circuit.ml` (new), `lib/core/dune`, `lib/flatzinc/compile.ml`, `mznlib/fzn_circuit.mzn`, `mznlib/fzn_subcircuit.mzn`, `test/unit/test_circuit*`, `test/models/circuit_*`, `docs/DECISIONS.md` (D-0217), `docs/ROADMAP.md` (T3 row), `docs/PROOF-FORMAT.md` §4, `docs/ARCHITECTURE.md` §1, `CLAUDE.md` (module map) | agent-circuit (`wave65-circuit`) | 2026-11-24 |
 
 ## Cross-session requests
 
@@ -465,6 +464,7 @@ section 1. Shares are inclusive, of the whole run.
 
 | Task | Session | Date | Summary |
 |---|---|---|---|
+| M18-coverage-T3 (`circuit`, D-0217) | agent-circuit (`wave65-circuit`) | 2026-11-24 | **D-0217 [AUTONOME].** `lib/core/prop/circuit.ml`: mznlib routes `fzn_circuit` to `all_different` plus `baguette_circuit(x, pos, root)`, the .opb defines circuit by MTZ rows over position store variables, prevent + pinned positions, every subtour cut one `pol` ahead; `subcircuit` stays std. 20 instances: .opb 0.44 to 0.998, more nodes on 14 of 15 time-outs (default), p1f-pjs_10 time-out -> OPT, all checked proofs VERIFIED |
 | M18-coverage-T2 (`diffn`, D-0213) | agent-diffn (`wave61-diffn`) | 2026-11-24 | mznlib `fzn_diffn`, `fzn_diffn_nonstrict`: std's pairs plus the two cumulative relaxations over order copies; four models, theorem enumeration and 16 scenes in test_compile, two lanes in test_mutation; maps and PROOF-FORMAT 4. Complete 7 -> 9 of 25 routed Challenge instances, all VERIFIED |
 | M20-pernode-T4 (alldiff's Régin stage, rank 5 of D-0207) | agent-regin (`wave63-regin`) | 2026-11-23 | **D-0215.** A Régin pass that cannot prune is skipped. A matching kept across passes is repaired and one Tarjan pass looks for an edge in no maximum matching, an exact test; otherwise the from-scratch pass runs unchanged. The kept matching is a hint re-read against the live domains (no trail), I-P2 checked under BAGUETTE_DEBUG. Byte-identical on 428 model runs, the five D-0207 instances and two Challenge instances; lanes report the same lines before and after (54 and 42 `later/asks`), scaling ok, runtest 4 700 ok 0 FAIL. Per node without learning or proof: costas -36 %, p1f_13 -51 %, team-assignment -15 %, javarouting -10 %. Not merged |
 | M20-pernode-T2 (Element, and rootness in Cumulative and Gcc) | agent-lazy (`wave62-lazy`) | 2026-11-23 | **D-0214.** An `Element` pruning records a frame (the domains it read and the trail cut, D-0124) and builds its reason (`Reason.Later`, memoised per pass) and its derivation from it when asked. `Cumulative`/`Gcc` use `Store.at_root`. Byte-identical on 428 model runs and the five D-0207 instances. javarouting -33 % per node without learning or proof, -22 % shipped. The differential lanes differ in the `later/asks` counter only (not re-recorded). test_prop's D-0124 BAGUETTE_DEBUG failure was a test defect, now fixed |
@@ -687,6 +687,12 @@ The shipped gains on costas and mknap stay small until D-0208, because learned c
 **Open for you**: D-0213 (`diffn` through mznlib, merged, gate 96 running): the two cumulative relaxations' capacity rows are MODEL rows in the `.opb`, trusted as MiniZinc's flattening is, and checked by enumeration in `test_compile.ml`; deriving them in the proof costs O(n^2 W H) lines. Deleting the two `mznlib/fzn_diffn*.mzn` files reverts it. 7 -> 9 complete answers on 25 instances at 300 s, `.opb` up to 5.8 times larger on some.
 
 **[AUTONOME] decisions**: D-0213 (above).
+### 2026-11-24 (agent-circuit, `wave65-circuit`): M18-coverage-T3, native circuit (D-0217)
+
+`circuit` is native: mznlib keeps `all_different` and adds `baguette_circuit(x, pos, root)`; the .opb defines it by MTZ rows over one position store variable per non-root node (bits by default), the propagator is CHECKING plus Chuffed's prevent, and every subtour cut is ONE `pol` (rows around the cycle, `n d`) written ahead. No new constructor, nothing changes for a model without circuit (218 test models byte-identical).
+On 20 instances (`/cluster/arthur/baguette-results/wave65-circuit/`): .opb 0.44 to 0.998 of old, more nodes in 300 s on most time-outs, p1f-pjs_10 time-out -> OPT, 4 better incumbents under `-f`, every checked proof VERIFIED. `subcircuit` stays std's (D-0217 §5 says why); a propagated MTZ position bound is the next lever if a profile asks for pruning rather than search.
+The mutation and I-X10 lanes pin two proof lines by their text (test_mutation.ml `circuit_prevent_line`, test_trace.ml `ix10_circuit_line`): a change of the search that moves them makes those lanes say "not in the proof", which means re-pin, not weaken.
+
 ### 2026-11-24 (agent-diffn, `wave61-diffn`): M18-coverage-T2, diffn's relaxations (D-0213)
 
 `mznlib/fzn_diffn.mzn` and `fzn_diffn_nonstrict.mzn` keep std's pairwise disjunction and add the two cumulative relaxations on `cumulative.ml` over order copies of the coordinates; no OCaml in `lib/`, so the binary and every existing artefact are byte-identical. [AUTONOME] the capacity rows are model rows (D-0213 section 3, the trust is a theorem checked by enumeration in test_compile; revert by deleting the two files).
