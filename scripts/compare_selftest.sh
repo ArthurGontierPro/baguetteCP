@@ -240,6 +240,102 @@ else
   fail "the run wrote into the corpus: $(find "$D/corpus" -type f ! -name '*.mzn' | tr '\n' ' ')"
 fi
 
+# M6-T24 (D-0225): a run killed by `timeout` with a solution printed has its proof checked, and
+# the value it printed compared with the proof's. A knapsack whose optimality proof takes far
+# longer than the limit; then the verdicts a real run cannot be made to reach, on fake output.
+python3 - "$D/k.mzn" <<'P'
+import sys
+n, rows, seed = 40, 8, 12345
+def rnd(lo, hi):
+    global seed
+    seed = (seed * 1103515245 + 12345) & 0x3fffffff
+    return lo + ((seed >> 8) % (hi - lo + 1))
+v = [rnd(1, 4) for _ in range(n)]
+x = ",".join("k_x%d" % i for i in range(n))
+o = ["var 0..1: k_x%d :: output_var;" % i for i in range(n)]
+o.append("var 0..%d: k_obj :: output_var;" % sum(v))
+for _ in range(rows):
+    w = [rnd(3, 30) for _ in range(n)]
+    o.append("constraint int_lin_le(%s,[%s],%d);" % (w, x, sum(w) // 2))
+o.append("constraint int_lin_eq(%s,[%s,k_obj],0);" % (v + [-1], x))
+o.append("solve :: int_search([%s],first_fail,indomain_min,complete) maximize k_obj;" % x)
+open(sys.argv[1], "w").write("\n".join(o) + "\n")
+P
+# $1 output dir, $2 CHECK_STOPPED, $3 MEM_KB (the harness gives the solver a heap of half)
+stopped_run() {
+  mkdir -p "$D/ks/2099/ks" "$1"
+  cp "$D/k.mzn" "$D/ks/2099/ks/ks.mzn"
+  env MZN="$MZN" BAGUETTE="$BAGUETTE" CHUFFED="$D/bin/chuffed-shim" GCS="$D/bin/gcs-shim" \
+    GCS_MSC_DIR="$D/msc" EXTRA_MSC_DIR="$D/msc" CHUFFED_MZN_ID=org.selftest.chuffed-shim \
+    GCS_MZN_ID=org.selftest.gcs-shim SOLVERS=baguette PAIR_SOLVERS=baguette \
+    SOLVE_TIMEOUT=3 CHECK_TIMEOUT=120 MEM_KB="$3" PROOF_CAP_KB=1000000 CHECK_STOPPED="$2" \
+    "$ROOT/scripts/compare_run.sh" "$D/ks" "$1" > "$1.log" 2>&1
+  awk -F'\t' '$2 == "baguette" {print $3 " " $10}' "$1/results.tsv"
+}
+for c in "1 TIMEOUT VERIFIED-INCUMBENT" "0 TIMEOUT NOT-CHECKED"; do
+  # shellcheck disable=SC2086
+  set -- $c
+  got="$(stopped_run "$D/out-ks$1" "$1" 4000000)"
+  [ "$got" = "$2 $3" ] && echo "ok   a run killed at the timeout, CHECK_STOPPED=$1 -> $got" \
+    || fail "a run killed at the timeout, CHECK_STOPPED=$1: expected '$2 $3', got '$got'"
+done
+# $1 status $2 objective $3 checker line $4 expected verdict
+expect_stopped() {
+  local got
+  echo "$3" > "$D/fake.vp"
+  got="$(python3 "$ROOT/tools/compare/compare.py" verdict 0 "$D/fake.vp" "$1" "$2" | cut -f1)"
+  [ "$got" = "$4" ] && echo "ok   verdict $1 $2 over '$3' -> $got" \
+    || fail "verdict $1 $2 over '$3': expected $4, got $got"
+}
+expect_stopped TIMEOUT min:29 "s VERIFIED BOUNDS 0 <= obj <= 29" VERIFIED-INCUMBENT
+expect_stopped TIMEOUT max:29 "s VERIFIED BOUNDS -40 <= obj <= -29" VERIFIED-INCUMBENT
+expect_stopped SAT min:29 "s VERIFIED BOUNDS 0 <= obj <= 29" VERIFIED-INCUMBENT
+expect_stopped TIMEOUT min:28 "s VERIFIED BOUNDS 0 <= obj <= 29" VERIFIED-WEAK
+expect_stopped TIMEOUT max:29 "s VERIFIED BOUNDS -40 <= obj <= 29" VERIFIED-WEAK
+expect_stopped TIMEOUT min:- "s VERIFIED BOUNDS 0 <= obj <= 29" VERIFIED-WEAK
+expect_stopped TIMEOUT min:29 "s VERIFIED BOUNDS 0 <= obj <= INF" VERIFIED-PARTIAL
+expect_stopped SAT min:29 "s VERIFIED NO CONCLUSION" VERIFIED-PARTIAL
+expect_stopped SAT - "s VERIFIED SATISFIABLE" VERIFIED
+expect_stopped OPT min:29 "s VERIFIED BOUNDS 29 <= obj <= 29" VERIFIED
+expect_stopped OPT min:29 "s VERIFIED BOUNDS 0 <= obj <= 29" VERIFIED-WEAK
+
+# The README table over one row of each kind: every row in one line of the table (it asserts
+# that they add up), and no stopped run among the answers.
+mkdir -p "$D/series"
+printf 'arm=A:proof:\nstarted=2099-01-01T00:00:00\nended=2099-01-02T00:00:00\nbinary_md5=0\ncommit=0\n' > "$D/series/series.conf"
+row() { printf '%s\tbaguette\t%s\t1\t%s\t1\t1\t1\t1\t%s\t1\t\n' "$1" "$2" "$3" "$4"; }
+{
+  row a OPT min:1 VERIFIED
+  row b SAT - VERIFIED
+  row c SAT min:1 VERIFIED-INCUMBENT
+  row d TIMEOUT max:1 VERIFIED-INCUMBENT
+  row e TIMEOUT min:1 TIMEOUT-CHECK
+  row f TIMEOUT min:1 NOT-CHECKED
+  row g SAT min:- NO-PROOF
+  row h TIMEOUT min:- NOT-CHECKED
+  row i TIMEOUT - NOT-CHECKED
+  row j REFUSED min:- NOT-CHECKED
+  row k TIMEOUT min:1 REJECTED
+  row l TIMEOUT min:1 VERIFIED-WEAK
+  row m OPT min:1 TIMEOUT-CHECK
+} > "$D/series/results_A.tsv"
+python3 "$ROOT/tools/compare/readme_table.py" "$D/series" > "$D/table.md" 2> "$D/table.err" \
+  || fail "readme_table.py failed: $(tail -1 "$D/table.err")"
+expect_row() {
+  local got
+  got="$(awk -F' \\| ' -v l="| $1" '$1 == l {gsub(/[ |*]/, "", $2); print $2}' "$D/table.md")"
+  [ "$got" = "$2" ] && echo "ok   table row '$1' = $got" || fail "table row '$1': expected $2, got '$got'"
+}
+expect_row "Optimal or UNSAT, proof verified" 1
+expect_row "Satisfiable, proof verified" 1
+expect_row "Complete answer, VeriPB hit its time limit (3 600 s)" 1
+expect_row "Solution found, not proved optimal, proof verified" 2
+expect_row "Solution found, not proved optimal, proof not verified" 3
+expect_row "Solution found, the proof records another value" 1
+expect_row "Timeout at 1 200 s, no solution" 2
+expect_row "Refused, memory budget reached" 1
+expect_row "**Proofs rejected by VeriPB**" 1
+
 # Every status the harness can assign that this corpus reaches, listed once.
 echo "     statuses reached: $(grep -v '^DONE-' "$R" | cut -f3 | sort -u | tr '\n' ' ')"
 echo "     verdicts reached: $(grep -v '^DONE-' "$R" | cut -f10 | sort -u | tr '\n' ' ')"
