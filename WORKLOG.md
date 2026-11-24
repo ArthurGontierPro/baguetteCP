@@ -19,7 +19,6 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M17-bench-series-T3 | bench/series/HISTORY.md, CLAUDE.md (orchestration bullet), docs/ROADMAP.md, WORKLOG.md | agent-history (wave72-history) | 2026-11-24 |
 
 ## Cross-session requests
 
@@ -467,6 +466,7 @@ section 1. Shares are inclusive, of the whole run.
 
 | Task | Session | Date | Summary |
 |---|---|---|---|
+| M17-bench-series-T3 (history and the rule) | agent-history (`wave72-history`) | 2026-11-24 | `bench/series/HISTORY.md` with seven rows (D-0210, D-0203, D-0185, D-0175 two arms, D-0133, D-0121), and the orchestration bullet in CLAUDE.md. |
 | M17-bench-series-T1, T2 (the series driver and the first series on current main, D-0203) | agent-series (`wave58-series`) | 2026-11-24 | **D-0203.** `bench/series/run_series.sh` (phases setup, flatten, run, read, publish; resumable; veripb in its own 64 GB cgroup and 3 600 s limit; `--list`, `--solve-timeout`, no Chuffed/GCS flatten for baguette arms), `tools/compare/readme_table.py` (writes the README section). Series on release `f244c35a` (bits default, no proof cap, PAR 29 per arm): A 302+74 verified, B (`-f`) 346+95, C (`--no-proof`) 340+86 unverified; summed score 4 043 / 5 799 / 4 428 against D-0185's 2 789 / 3 581 / 3 237; 0 rejected, 0 veripb memory failures, 44 check time-outs; the cap would have cost one verified proof. Tables `/cluster/arthur/baguette-results/series-20261123/` |
 | M21-memory-T1, M21-memory-T2 (where the heap goes, D-0218) | agent-memory2 after agent-memory (`wave66-memory`) | 2026-11-24 | **D-0218.** Measurement only; the probe is `/cluster/arthur/baguette-results/memory/memprobe.patch`, reverted on the branch. OCaml's representation is 2.5 to 4 on record-heavy kinds and the GC's free space 1.5 to 5 on the budget, but the search refusals are what we keep: hole bitsets copied per pruning, 410 to 660 B per trail entry, 270 to 330 B per learned literal kept forever, proof explanations kept after their line. Five ranked fixes for T3 with estimates |
 | M19-config-T10 (the CDCL loop, D-0219) | agent-cdcl (`wave67-cdcl`) | 2026-11-24 | **D-0219 [AUTONOME].** `Search.cdcl` behind `BAGUETTE_CDCL=1`, default OFF and byte-identical; files `lib/core/search.ml`, `lib/core/learn.ml`, `test/unit/test_search_strategy.ml`, D-0219, ROADMAP T10/T11. On: every answer and optimum equal, every proof VERIFIED, mutation lanes refused. Default not changed; recommendation D (T11 first) |
@@ -676,6 +676,10 @@ section 1. Shares are inclusive, of the whole run.
 | M19-config-T0 (the tuning set) | agent-tuning (`wave59-tuning`) | 2026-11-23 | **D-0205.** `bench/tuning/`, 200 instances in 183 families. DONE except the driver hook. |
 
 ## Handoff notes
+
+### 2026-11-24 (agent-history, `wave72-history`): M17-bench-series-T3
+
+HISTORY.md is written from the records. Empty cells are SAT counts D-0210 and D-0121 do not give, and D-0121's commit and binary. D-0210 lives on `wave60-node07`: re-check its row when that branch merges.
 
 ### 2026-11-24 (agent-series, `wave58-series`): M17-bench-series-T1/T2, D-0203
 
@@ -6006,7 +6010,6 @@ worktree. Baseline before dispatch was `6761435`, `make check` green at 1625 uni
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M17-bench-series-T3 | bench/series/HISTORY.md, CLAUDE.md (orchestration bullet), docs/ROADMAP.md, WORKLOG.md | agent-history (wave72-history) | 2026-11-24 |
 | M6-T17 | agent-wipe | 2026-10-02 | `Writer.wipe_level` and `Justify.wipe_level` (memo and stated index) walk per-level buckets instead of folding whole tables; same `del` lines, same order. 396 artefacts byte-identical over 132 models. |
 | M2-T16 | **everything except `bench/**`** — the 2.0 removal lands atomically | agent-drop | 2026-09-18 |
 | M2-L8 | `bench/**` only; read-only over `lib/` and `test/` | agent-bench | 2026-09-18 |
@@ -6018,13 +6021,11 @@ D-0068, the first full corpus run. `lib/proof/encoding.ml` goes to agent-guard; 
 needs it, that is a `
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M17-bench-series-T3 | bench/series/HISTORY.md, CLAUDE.md (orchestration bullet), docs/ROADMAP.md, WORKLOG.md | agent-history (wave72-history) | 2026-11-24 |
 
 ## Cross-session requests` row, not an edit.
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M17-bench-series-T3 | bench/series/HISTORY.md, CLAUDE.md (orchestration bullet), docs/ROADMAP.md, WORKLOG.md | agent-history (wave72-history) | 2026-11-24 |
 
 
 _(M2-L3 released 2026-09-18 by agent-learn3 — see `## Completed` and `## M2-L3 handoff`.)_
@@ -6073,7 +6074,6 @@ through the engine.
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M17-bench-series-T3 | bench/series/HISTORY.md, CLAUDE.md (orchestration bullet), docs/ROADMAP.md, WORKLOG.md | agent-history (wave72-history) | 2026-11-24 |
 | M6-T9 | `bin/main.ml`, `lib/core/search.ml` (all but the variable-selection functions), `lib/core/engine.ml`, `lib/core/retention.ml`, `lib/core/pb_analysis.ml`, `lib/core/learn.ml`, `test/unit/{test_engine,test_endtoend,test_output}.ml`, `test/models/*` (new lanes only), `bench/**`, `scripts/corpus_run.sh` (**additive only**: a `SOLVER_ARGS` pass-through and the classification of a clean `--time-limit` exit; `scripts/corpus_selftest.sh` stays green and `--report` on `corpus-out-w30` stays byte-identical), `docs/DECISIONS.md` (D-0080, append); node clone `/scratch/arthur/baguette-perf`, runs under `/scratch/arthur/perf-out-*` | agent-perf | 2026-10-01 |
 | M6-T4 (+ M5-T3 absorbed) | `scripts/compare_run.sh` (new), `scripts/compare_selftest.sh` (new), `scripts/corpus_run.sh` **read-only** (copy what you need; it is agent-perf's this wave), `tools/**`, `bench/README.md` (new section, append), `bench/corpus/**` (new), `docs/DECISIONS.md` (D-0081, append); node: `/scratch/arthur/gcs`, `/scratch/arthur/baguette-compare`, `/scratch/arthur/compare-out-*` | agent-compare | 2026-10-01 |
 | M7-T17 + M7-T18 | `lib/core/trace.ml`, `lib/core/store.ml`, `lib/core/propagator.ml`, `lib/core/prop/{gcc,alldiff,element}.ml`, `lib/proof/encoding.ml`, `lib/flatzinc/compile.ml` (gcc region + `request_direct` sites), `lib/flatzinc/builder.ml` (gcc dispatch arm), `test/unit/{test_trace,test_prop,test_compile}.ml`, `test/models/gcc_*` + expected, `docs/PROOF-FORMAT.md` (§4 gcc row), `docs/DECISIONS.md` (D-0082, append); node clone `/scratch/arthur/baguette-gcc2` | agent-gcc2 | 2026-10-01 |
@@ -6134,7 +6134,6 @@ store change it is a cross-session row. `lib/core/trace.ml`, `lib/core/prop/elem
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M17-bench-series-T3 | bench/series/HISTORY.md, CLAUDE.md (orchestration bullet), docs/ROADMAP.md, WORKLOG.md | agent-history (wave72-history) | 2026-11-24 |
 | M6-T10 | `lib/core/justify.ml`, `bin/main.ml`, `bin/dune`, `docs/SPEC.md` §2.2, `test/unit/test_justify.ml` | orchestrator | 2026-10-02 |
 | M6-T11 | `lib/core/analysis.ml`, `lib/core/store.ml`, `lib/proof/lit.ml`, `lib/proof/encoding.ml`, (`lib/core/learned.ml`, `lib/core/prop/pb.ml` only for a local fix), `test/unit/{test_analysis,test_core,test_proof}.ml`, `bench/**`, `docs/DECISIONS.md` (D-0085, append) | agent-speed | 2026-10-02 |
 | M6-T12 | `lib/proof/writer.ml`, `lib/core/search.ml` (`conclude_stopped` only), `scripts/corpus_selftest.sh`, `test/unit/test_proof.ml` | agent-tidy | 2026-10-02 |
@@ -6155,7 +6154,6 @@ alldiff row.
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M17-bench-series-T3 | bench/series/HISTORY.md, CLAUDE.md (orchestration bullet), docs/ROADMAP.md, WORKLOG.md | agent-history (wave72-history) | 2026-11-24 |
 | M7-T22 | `lib/core/search.ml` (root arm only), `lib/core/prop/alldiff.ml`, `lib/core/prop/element.ml` (if needed), `test/unit/{test_trace,test_prop,test_learn}.ml`, new `test/models/*` + expected, `bench/fuzz/**`, `docs/PROOF-FORMAT.md` (§4 alldiff row), `docs/DECISIONS.md` (D-0086, append) | agent-root | 2026-10-02 |
 
 **Wave thirty-four, dispatched 2026-10-02 (orchestrator), after wave 33 merged.** One row,
@@ -6168,7 +6166,6 @@ bookkeeping — NOT the solve loop's proof logic), `lib/proof/opb.ml`, `mznlib/*
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M17-bench-series-T3 | bench/series/HISTORY.md, CLAUDE.md (orchestration bullet), docs/ROADMAP.md, WORKLOG.md | agent-history (wave72-history) | 2026-11-24 |
 | M6-T13 | `lib/core/search.ml` (variable selection + candidate bookkeeping), `lib/proof/opb.ml`, `mznlib/**`, `test/unit/{test_proof,test_compile,test_engine}.ml`, new `test/models/*` + expected, `bench/**`, `docs/DECISIONS.md` (D-0087, append) | agent-speed2 | 2026-10-02 |
 
 **State at the end of 2026-10-02 (orchestrator).** Waves 31 to 34 are merged whole, every merge
@@ -6229,7 +6226,6 @@ jobs only — the w35 corpus sweep and the baguette-only comparison are still ru
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M17-bench-series-T3 | bench/series/HISTORY.md, CLAUDE.md (orchestration bullet), docs/ROADMAP.md, WORKLOG.md | agent-history (wave72-history) | 2026-11-24 |
 | M6-T14 | `lib/core/store.ml`, `lib/core/analysis.ml`, `lib/core/pb_analysis.ml` (if needed), `test/unit/{test_core,test_analysis}.ml`, `bench/**`, `docs/DECISIONS.md` (D-0088, append) | agent-speed3 | 2026-10-02 |
 
 **Wave thirty-six, dispatched 2026-10-02 (orchestrator).** Two rows from D-0088's requests:
@@ -6244,7 +6240,6 @@ measurement record of the w31/w35 runs). Seams: agent-speed4 holds `lib/core/tra
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M17-bench-series-T3 | bench/series/HISTORY.md, CLAUDE.md (orchestration bullet), docs/ROADMAP.md, WORKLOG.md | agent-history (wave72-history) | 2026-11-24 |
 | M6-T15 | `lib/core/trace.ml`, `lib/core/store.ml` (entry position only, if needed), `test/unit/test_trace.ml`, `bench/**`, `docs/DECISIONS.md` (D-0090, append) | agent-speed4 | 2026-10-02 |
 | M6-T8 | `lib/core/prop/element.ml`, `lib/core/prop/alldiff.ml`, `lib/core/debug.ml`, `lib/core/engine.ml` (agreement-check call site only), `test/unit/{test_prop,test_core}.ml`, `docs/DECISIONS.md` (D-0091, append) | agent-debug | 2026-10-02 |
 
@@ -6256,7 +6251,6 @@ agent-debug holds `lib/core/prop/{element,alldiff}.ml`, `lib/core/debug.ml`, `li
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M17-bench-series-T3 | bench/series/HISTORY.md, CLAUDE.md (orchestration bullet), docs/ROADMAP.md, WORKLOG.md | agent-history (wave72-history) | 2026-11-24 |
 | M6-T16 | `lib/core/analysis.ml`, `test/unit/test_analysis.ml`, `bench/**`, `docs/DECISIONS.md` (D-0092, append) | agent-speed5 | 2026-10-02 |
 
 **READ 2026-10-02 evening — D-0093.** **Two final runs of the week were launched on `fataepyc-07` on 2026-10-02 by the
@@ -6288,7 +6282,6 @@ gets that far. Nobody edits `mznlib/test/check_mznlib.sh` itself (it iterates `*
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M17-bench-series-T3 | bench/series/HISTORY.md, CLAUDE.md (orchestration bullet), docs/ROADMAP.md, WORKLOG.md | agent-history (wave72-history) | 2026-11-24 |
 | M2-T6 | `lib/core/engine.ml`, `lib/core/propagator.ml`, `bin/main.ml` (stats region + `limit:` lines), `scripts/corpus_run.sh` (additive: new `limit:` keys in `summarise_limit`), `test/unit/{test_engine,test_endtoend}.ml`, `docs/ARCHITECTURE.md` §5, `docs/DECISIONS.md` (D-0094, append), `bench/**` | agent-wake | 2026-10-02 |
 | M6-T17 | `lib/proof/writer.ml` (`wipe_level`), `lib/core/justify.ml` (`wipe_level`), `test/unit/{test_proof,test_justify}.ml` | agent-wipe | 2026-10-02 |
 | M4-T10 | `docs/DECISIONS.md` (D-0096, append) FIRST; then `lib/core/prop/cumulative.ml` (new), `mznlib/fzn_cumulative*.mzn`, `mznlib/test/*cumul*.mzn`, `test/unit/test_prop.ml` (its own scenes), new `test/models/*`, `docs/PROOF-FORMAT.md` §4 row; dispatch arms and dune line by request | agent-cumulative | 2026-10-02 |
@@ -6305,7 +6298,6 @@ dispatch arms will be granted there by the orchestrator at merge, in a different
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M17-bench-series-T3 | bench/series/HISTORY.md, CLAUDE.md (orchestration bullet), docs/ROADMAP.md, WORKLOG.md | agent-history (wave72-history) | 2026-11-24 |
 | M6-T18 | `lib/core/engine.ml`, `lib/core/store.ml`, `lib/core/search.ml` (propagate call sites only), `lib/core/propagator.ml`, `lib/flatzinc/compile.ml` (`~idempotent` only), `test/unit/{test_engine,test_core}.ml`, `bench/**`, `docs/ARCHITECTURE.md` §5, `docs/DECISIONS.md` (D-0098, append) | agent-seed | 2026-10-02 |
 
 **Wave thirty-nine, second row, 2026-10-02 (orchestrator).** M7-T24 (agent-gcc3, `wave39-gcc3`),
@@ -6317,7 +6309,6 @@ re-measurement runs on a throwaway node copy.
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M17-bench-series-T3 | bench/series/HISTORY.md, CLAUDE.md (orchestration bullet), docs/ROADMAP.md, WORKLOG.md | agent-history (wave72-history) | 2026-11-24 |
 | M7-T24 | `lib/core/prop/gcc.ml`, `test/unit/{test_prop,test_trace}.ml`, new `test/models/gcc_*` + expected, `docs/PROOF-FORMAT.md` (§4 gcc row), `docs/DECISIONS.md` (D-0099, append) | agent-gcc3 | 2026-10-02 |
 
 **Wave forty, dispatched 2026-10-02 (orchestrator), after waves 38 and 39 merged whole (`main`
@@ -6333,7 +6324,6 @@ checker of record is VeriPB source `d5644ca4` (D-0100); rejection header "Checki
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M17-bench-series-T3 | bench/series/HISTORY.md, CLAUDE.md (orchestration bullet), docs/ROADMAP.md, WORKLOG.md | agent-history (wave72-history) | 2026-11-24 |
 | M7-T25 | `lib/core/prop/element.ml`, `test/unit/{test_prop,test_trace,test_learn}.ml` (own scenes), new `test/models/*` + expected, `docs/PROOF-FORMAT.md` (§4 element row), `docs/DECISIONS.md` (D-0101, append) | agent-elearn | 2026-10-02 |
 | M4-T5 | `docs/DECISIONS.md` (D-0102, append) FIRST; then `lib/core/trace.ml`, `lib/core/justify.ml`, `lib/proof/writer.ml`, `lib/core/learn.ml`, `test/unit/{test_proof,test_justify,test_trace}.ml`, `bench/**` | agent-hints | 2026-10-02 |
 | M6-T20 | `lib/core/propagator.ml` (advise), `lib/core/engine.ml` (advisor hook, counter, debug check), `lib/core/prop/clause.ml` (Learned_clause watches), `lib/core/search.ml` (register_learned pack), `bin/main.ml` (stats), `docs/INVARIANTS.md` (I-P7, append), `docs/DECISIONS.md` (D-0104, appended) | solo-opt | 2026-10-27 |
