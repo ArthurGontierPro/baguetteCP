@@ -19,6 +19,20 @@ Assertions guarded by `BAGUETTE_DEBUG=1` should check as many of these as is aff
 
 - **I-T1** `backtrack_to l` restores every domain to exactly its state when level `l` was
   opened. Testable directly: snapshot, descend, backtrack, compare.
+
+  **Since D-0222 ([AUTONOME], M21-memory-T3) a domain's holes are a VERSION of a log its
+  successors share**, so the second half is now part of the invariant: a `Domain.t` read
+  back answers exactly the set it had when it was made for as long as no trail entry older
+  than it has been undone, and once one has, reading it raises `Domain.Stale_version`
+  instead of answering. Before D-0222 the same sentence was "a `Domain.t` never shares
+  mutable state with its successors", bought by copying the bitset per removal (98 % of
+  wordpress's heap at its refusal, D-0218). Every reader of a past domain reads below a live
+  cut by its own rule (a trail entry while it is on the trail, a history while
+  `check_history` accepts it, a pass's snapshot within the pass, an `Element` frame through
+  its history), so the refusal is never hit by a correct reader. `test_core.ml`'s
+  `test_d0222_hole_log_random` drives a store beside the copying representation and checks
+  every live domain, every live entry's `old`/`now`, every earlier photograph and every
+  stale one (exact or refused, never wrong), and that a store never forks a log.
 - **I-T2** Trail entries are strictly ordered by level; the level marks are monotone.
 - **I-T3** Every trail entry has an explanation index that resolves. No orphan reasons.
 
