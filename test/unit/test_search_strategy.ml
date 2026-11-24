@@ -242,6 +242,7 @@ let pigeons =
   Buffer.contents b
 
 type run = {
+  stats : Search.stats;
   answer : string; (* "SAT", "UNSAT", or "OPT v" *)
   verdict : string;
   proof : string;
@@ -309,6 +310,7 @@ let solve_with dir name src (config : Search.config) =
         else "REJECTED: " ^ out
   in
   {
+    stats;
     answer;
     verdict;
     proof = read_file pbp;
@@ -678,8 +680,85 @@ let test_marks_and_unfixed () =
        !holes)
     (!ff_ok && !holes > 100)
 
+(* ------------------------------------------- M19-config-T10 (D-0219): the CDCL loop
+
+   The loop against [dfs] on the same three models, through the real checker: same answer
+   (satisfiability, optimum), proof VERIFIED, every id deleted (I-X2, audit on), no rule
+   kind the [dfs] proof lacks (the loop adds no proof rule), and the loop's own claims
+   measured: it ran ([cdcl_run]), every learned clause was UNIT where the search resumed
+   (asserting = checked, read off the store before propagation), and somewhere it skipped
+   levels. With learning off it falls back to the decision nogood as a learned clause,
+   which must verify too. The base is [cdcl = false] explicitly, so the lane means the
+   same whatever BAGUETTE_CDCL the suite runs under. *)
+let test_cdcl_loop () =
+  check "M19-config-T10: the CDCL loop is OFF unless BAGUETTE_CDCL turns it on"
+    (Sys.getenv_opt "BAGUETTE_CDCL" <> None || not Search.default_config.Search.cdcl);
+  let dir = Filename.temp_file "baguette_cdcl" "" in
+  Sys.remove dir;
+  Sys.mkdir dir 0o700;
+  let off = { Search.default_config with Search.cdcl = false } in
+  let on = { off with Search.cdcl = true } in
+  let configs =
+    [
+      ("cdcl", on);
+      ("cdcl+nolearn", { on with Search.learn = false; Search.pb = false });
+      ( "cdcl+luby:1+phase",
+        { on with Search.restarts = Restart.Luby 1; Search.phase_saving = true } );
+      ( "cdcl+alternate+luby:1+phase",
+        {
+          on with
+          Search.search = Search.Alternate;
+          Search.restarts = Restart.Luby 1;
+          Search.phase_saving = true;
+        } );
+    ]
+  in
+  let far = ref 0 in
+  List.iter
+    (fun (name, src) ->
+      let base = solve_with dir (name ^ "_dfs") src off in
+      let base_kinds = rule_kinds base.proof in
+      List.iter
+        (fun (cname, config) ->
+          let tag =
+            Printf.sprintf "%s_%s" name
+              (String.map (function ':' | '+' -> '_' | c -> c) cname)
+          in
+          let r = solve_with dir tag src config in
+          let st = r.stats in
+          far := !far + st.Search.lo_far;
+          check
+            (Printf.sprintf "M19-T10 %s %s: same answer as dfs (%s), proof %s" name cname
+               r.answer r.verdict)
+            (r.answer = base.answer && contains r.verdict "VERIFIED"
+            && contains r.verdict "UNSATISFIABLE" = contains base.verdict "UNSATISFIABLE"
+            );
+          check
+            (Printf.sprintf "M19-T10 %s %s: every id received is deleted" name cname)
+            (r.live = 0);
+          let extra =
+            List.filter (fun k -> not (List.mem k base_kinds)) (rule_kinds r.proof)
+          in
+          check
+            (Printf.sprintf "M19-T10 %s %s: no rule kind the dfs proof lacks%s" name cname
+               (if extra = [] then "" else ": " ^ String.concat "," extra))
+            (extra = []);
+          check
+            (Printf.sprintf
+               "M19-T10 %s %s: the loop ran, %d conflicts, learned clauses unit at the \
+                resume %d/%d, %d direct assertions"
+               name cname st.Search.conflicts st.Search.lo_asserting st.Search.lo_checked
+               st.Search.lo_direct)
+            (st.Search.cdcl_run && st.Search.conflicts > 0
+            && st.Search.lo_asserting = st.Search.lo_checked
+            && st.Search.lo_direct = 0))
+        configs)
+    [ ("pigeons54", pigeons); ("queens8", queens 8); ("queens6opt", queens ~opt:true 6) ];
+  check (Printf.sprintf "M19-T10: the loop skipped levels at %d resumes" !far) (!far > 0)
+
 let () =
   print_endline "";
+  test_cdcl_loop ();
   test_learned_kinds ();
   test_level_set ();
   test_marks_and_unfixed ();

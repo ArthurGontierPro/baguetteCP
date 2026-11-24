@@ -438,6 +438,12 @@ Recorded from the user's own words, November 2026. Each rule names when it does 
   run that has not finished is not made.
 - **The user decides** what changes the solver's default behaviour, a normative SPEC sentence, or
   `Explanation.t`. Give the options as a short table of consequences and a recommendation.
+- **Run a Challenge series after a change that moves the solver on purpose** (recorded from the user's
+  words of 2026-11-23): a merge that changes the default behaviour, the encoding or the
+  search, so a gate whose artefact differences were intended or a lane re-recorded because the
+  search changed, and before a paper or a release. Not after a byte-identical merge. Each series
+  adds its row to `bench/series/HISTORY.md` and regenerates the README's performance section
+  (`tools/compare/readme_table.py`).
 - **How to report.** The user writes French, sometimes English; answer in the language of the
   message. Short and structured: what is done, what runs, what waits for a decision. A concrete
   example before a formula. When the user asks whether a claim holds under a criterion they
