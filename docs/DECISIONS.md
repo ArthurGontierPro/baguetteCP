@@ -28983,3 +28983,64 @@ way. Instances without holes do not move.
 - The set-bit reads of past versions (section 6) could be answered from the log directly by
   `Store.remover` (the slot of the value gives the entry), saving the binary search's reads. Not
   done: the remover's equivalence with its scan (D-0088) would need restating for it.
+
+## D-0225  M6-T24: an interrupted run ends its proof. A signal or the heap budget closes it where it stands, and an optimisation run concludes `BOUNDS <declared floor> <incumbent>` instead of NONE or a truncated file
+
+**Status**: DECIDED with the user (2026-11-24), built on `wave73-interrupt` (interrupt-session). It
+amends SPEC 2.2, which had fixed `conclusion NONE` for every stopped run without considering an
+optimisation run that has an answer in hand.
+
+### 1. Context
+
+Of the 1 575 instances of D-0203's arm B, 970 ended at the time limit, 755 of them with a solution
+printed, and 138 at the heap budget, 46 of them with a solution printed. None of these proofs had a
+conclusion, because the harness kills the solver and M6-T9's SIGTERM handler only wrote its counters.
+The comment in `search.ml` said that claiming the incumbent as a BOUNDS upper bound "would need a
+lower bound the search never derived". The objective's declared bound is enough.
+
+### 2. What was measured before writing code (VeriPB 3.0.2, source d5644ca4)
+
+- `conclusion BOUNDS <declared floor> <last soli value>` in place of NONE, on a stopped proof of a
+  small minimisation, a maximisation and a minimisation over a domain with a negative bound, both
+  encodings, two stopping points each: accepted 12 of 12. `hi - 1` and `BOUNDS hi hi` are refused
+  in each of the 12.
+- The three final lines after an arbitrary line of a stopped proof, nothing deleted: accepted at 278
+  of 278 points of four proofs. So a proof can be ended between any two lines.
+
+### 3. The design
+
+- One line is one critical section (`Writer.enter`/`leave` around each output to the channel), and
+  an improving solution's printing and its `soli` line are one (`Writer.guarded`). An interruption
+  asks `Writer.when_idle`, which runs now or at the end of the section. An exception out of a write
+  leaves the writer not idle for good, and such a proof is left incomplete.
+- A first SIGTERM, SIGINT or SIGXCPU raises a flag that `config.stop` reads beside the clock, so
+  the search ends as under `--time-limit`, everything deleted and audited. A second signal, or five
+  seconds without a stop, ends the proof where it stands.
+- The heap budget ends the proof where it stands and then exits: 0 with an incumbent, 5 without, as
+  before. `Out_of_memory` and the synchronous resource exceptions do the same from the search's
+  handler.
+- The verdict is one function (`Writer.interrupted_verdict`): BOUNDS for an optimisation search, NONE
+  otherwise and under `--e2e`, where the implied floor of CakeML's objective is not established.
+
+### 4. Options
+
+| option | consequence |
+|---|---|
+| NONE for every stop, as before | a stopped optimisation run verifies no answer |
+| the flag only (RoundingSat's default: the handler sets `asynch_interrupt`, the solver throws at its polls, and an incumbent gives `BOUNDS lb ub`) | nothing for the heap budget, whose handler has no later poll to wait for, and a late poll loses the proof |
+| the flag, then the proof ended in the handler when no line is half written (chosen) | both, at the cost of one counter per line |
+| a soft heap threshold below the hard one | covers less: 2017 groupsplitter goes from 4.4 to 9.9 GB inside one propagation stretch (D-0200) |
+
+The lower bound is the declared one. RoundingSat concludes the bound its search derived. A root bound
+that the proof has established is the obvious next step, and needs the id to cite.
+
+### 5. Limits
+
+SIGKILL and the kernel's OOM killer cannot be caught. `timeout -k 30` leaves 30 s after SIGTERM for
+the line in progress. A signal before the search has begun ends the process as before. The harness
+(`scripts/compare_run.sh`) does not yet check the proofs of killed runs. That is the next step, with
+the per-edition time limits the user mentioned.
+
+### 6. Revert
+
+The branch `wave73-interrupt`. Nothing else depends on it.

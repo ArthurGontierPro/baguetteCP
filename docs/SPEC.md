@@ -177,8 +177,15 @@ search space is exhausted, by `--time-limit` or by a node limit. It then prints
 "nothing proved". On an optimisation model every improving solution has already been
 printed as it was found (§3.4 / M5-T1), so a stopped optimisation run ends after its last
 `----------` with **no** `==========`: the incumbent stands, its optimality is not claimed.
-The proof of a stopped run ends with `conclusion NONE` (§4.3) and must still be accepted by
-the checker; it proves every line it contains and nothing about the answer. A stopped run
+*(Amended 2026-11-24, M6-T24, D-0225.)* A run may also be stopped by SIGTERM, SIGINT or
+SIGXCPU, or by its heap budget once the search has begun. However it was stopped, its proof
+is ended and must still be accepted by the checker. On a satisfaction model it ends with
+`conclusion NONE` (§4.3), it proves every line it contains and nothing about the answer. On an
+optimisation model it ends with `conclusion BOUNDS <lo> <hi>` in the checker's units (a
+maximisation is negated): `<lo>` is the objective's declared bound, which the `.opb` implies by
+itself, and `<hi>` is the value of the last solution printed, or INF when none was. Under
+`--e2e` it ends with `conclusion NONE`. A heap budget that stops a run with no solution printed
+is still exit 5; with one it is a stopped run. A stopped run
 exits 0, and says what it was doing on stderr (`limit:`), which is how a harness tells it
 from a run killed from outside.
 

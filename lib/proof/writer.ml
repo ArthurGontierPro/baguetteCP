@@ -353,6 +353,14 @@ type entry = { origin : unit -> string; level : int }
    on 2011_black-hole_9 at node 40 cost 24 bytes each there. *)
 type run = { lo : cid; mutable hi : cid }
 
+(* M6-T24 (D-0225). What an interrupted run is entitled to conclude, in the CHECKER's
+   units (negated for a maximisation). The floor is the objective's DECLARED one, which
+   the .opb implies by itself: nothing about the search is claimed. The incumbent is the
+   value of the last `soli` line, which the checker recorded. *)
+type stop_verdict =
+  | Nothing_known
+  | Floor_and_incumbent of { floor : int; incumbent : int option }
+
 type t = {
   oc : out_channel;
   mutable next_id : cid;
@@ -399,6 +407,14 @@ type t = {
   comments : bool;
   mutable level : int;
   mutable finished : bool;
+  mutable busy : int;
+      (* M6-T24 (D-0225): > 0 while a line is going to the channel, or inside [guarded].
+         A signal handler must not write then; [when_idle] is how it waits. *)
+  mutable on_idle : (unit -> unit) option;
+      (* M6-T24: what [when_idle] was asked to run as soon as [busy] is back to 0. *)
+  mutable stop_verdict : unit -> stop_verdict;
+      (* M6-T24: what [conclude_interrupted] claims. [Nothing_known] until an
+         optimisation search says otherwise ([set_stop_verdict]). *)
   mutable n_model : int;
       (* how many constraints [f] loaded, so ids 1..n_model are the model rows. Kept
          because [Swap_citation] needs the live set and the model rows are the half of
@@ -451,6 +467,9 @@ let create ?(comments = false) ?audit ?(null = false) oc =
     comments;
     level = 0;
     finished = false;
+    busy = 0;
+    on_idle = None;
+    stop_verdict = (fun () -> Nothing_known);
     n_model = 0;
     mutation = None;
     mutation_hits = 0;
@@ -593,20 +612,65 @@ let emitted_us () = !emit_us
    ([emitted_lines] x one clock read) can be subtracted from [emitted_us]. *)
 let emitted_lines () = !emit_lines
 
+(* ------------------------- interruption (M6-T24, D-0225) -------------------
+
+   A run can be stopped from outside (a signal, the heap budget) at an arbitrary
+   point, and the proof it has written is still a valid prefix: every line on the page
+   was accepted on its own. So it can be ENDED there, with the three final lines, as
+   soon as no line is half written. That last condition is all this section is about.
+
+   [busy] counts the writes in progress. It is raised around each line's output to the
+   channel -- and not around the building of a line in [t.buf], which touches no
+   channel: a line abandoned there was never on the page. [when_idle t f] runs [f] now
+   if nothing is being written, and otherwise as soon as the line in progress is out.
+
+   An exception out of a write leaves [busy] raised for good, on purpose: a line may be
+   half on the channel, so no later line could be read and [when_idle] must never run. *)
+
+let enter t = t.busy <- t.busy + 1
+
+let leave t =
+  t.busy <- t.busy - 1;
+  if t.busy = 0 then
+    match t.on_idle with
+    | None -> ()
+    | Some f ->
+        t.on_idle <- None;
+        f ()
+
+let when_idle t f = if t.busy = 0 then f () else t.on_idle <- Some f
+
+(* True when no write is in progress: what a handler that cannot wait asks (an
+   [Out_of_memory] caught at the top level has no later point to defer to). *)
+let idle t = t.busy = 0
+
+(* [f ()] with the interruption deferred to its end. For a step whose two halves must
+   both happen: printing an improving solution and logging it ([Search.record_improving]),
+   or the three lines of a conclusion. If [f] raises, whatever was waiting keeps
+   waiting: the exception is the caller's business. *)
+let guarded t f =
+  enter t;
+  match f () with
+  | v ->
+      leave t;
+      v
+  | exception e ->
+      t.busy <- t.busy - 1;
+      raise e
+
 let line t fmt =
   if t.finished then invalid_arg "Writer: the proof has already ended";
   (* M9-no-proof-T2: the null writer consumes the format and writes nothing, and
      [emit_lines] stays where it was, so --time's `emitln` reads 0. *)
   if t.null then Printf.ifprintf t.oc (fmt ^^ "\n")
-  else if not !emit_clock then (
-    incr emit_lines;
-    Printf.fprintf t.oc (fmt ^^ "\n"))
   else
-    let t0 = emit_now () in
+    let t0 = if !emit_clock then emit_now () else 0 in
+    enter t;
     Printf.kfprintf
       (fun _ ->
         incr emit_lines;
-        emit_us := !emit_us + (emit_now () - t0))
+        if !emit_clock then emit_us := !emit_us + (emit_now () - t0);
+        leave t)
       t.oc (fmt ^^ "\n")
 
 (* M6-T22 / D-0138 wrote [rup], nearly every line a search writes (1.29 M of QR48's
@@ -628,6 +692,7 @@ let line_buf t =
 let write_buf t =
   let b = t.buf in
   Text.char b '\n';
+  enter t;
   (if not !emit_clock then (
      incr emit_lines;
      Text.output t.oc b)
@@ -636,7 +701,8 @@ let write_buf t =
      Text.output t.oc b;
      incr emit_lines;
      emit_us := !emit_us + (emit_now () - t0));
-  Text.shrink b ~keep:buf_keep
+  Text.shrink b ~keep:buf_keep;
+  leave t
 
 let put_line t =
   if t.finished then invalid_arg "Writer: the proof has already ended";
@@ -714,22 +780,24 @@ let label_for _t id = Opb.label_of id ^ " "
    take a caller emitting far more suppressed comments than rules to matter. *)
 let comment t fmt =
   if t.null then Printf.ifprintf t.oc ("%% " ^^ fmt ^^ "\n")
-  else if not !emit_clock then
-    if t.comments then (
-      incr emit_lines;
-      Printf.fprintf t.oc ("%% " ^^ fmt ^^ "\n"))
-    else Printf.ifprintf t.oc ("%% " ^^ fmt ^^ "\n")
-  else
-    let t0 = emit_now () in
-    let stop _ = emit_us := !emit_us + (emit_now () - t0) in
-    if t.comments then
-      Printf.kfprintf
-        (fun oc ->
-          incr emit_lines;
-          stop oc)
+  else if not t.comments then
+    if not !emit_clock then Printf.ifprintf t.oc ("%% " ^^ fmt ^^ "\n")
+    else
+      let t0 = emit_now () in
+      Printf.ikfprintf
+        (fun _ -> emit_us := !emit_us + (emit_now () - t0))
         t.oc
         ("%% " ^^ fmt ^^ "\n")
-    else Printf.ikfprintf stop t.oc ("%% " ^^ fmt ^^ "\n")
+  else
+    let t0 = if !emit_clock then emit_now () else 0 in
+    enter t;
+    Printf.kfprintf
+      (fun _ ->
+        incr emit_lines;
+        if !emit_clock then emit_us := !emit_us + (emit_now () - t0);
+        leave t)
+      t.oc
+      ("%% " ^^ fmt ^^ "\n")
 
 (* A comment that is emitted whether or not --proof-comments is on. Used for the
    few markers that make a proof navigable at all -- and for the level markers
@@ -737,15 +805,14 @@ let comment t fmt =
    model with 196 decisions it is 196 of the proof's lines. *)
 let always_comment t fmt =
   if t.null then Printf.ifprintf t.oc ("%% " ^^ fmt ^^ "\n")
-  else if not !emit_clock then (
-    incr emit_lines;
-    Printf.fprintf t.oc ("%% " ^^ fmt ^^ "\n"))
   else
-    let t0 = emit_now () in
+    let t0 = if !emit_clock then emit_now () else 0 in
+    enter t;
     Printf.kfprintf
       (fun _ ->
         incr emit_lines;
-        emit_us := !emit_us + (emit_now () - t0))
+        if !emit_clock then emit_us := !emit_us + (emit_now () - t0);
+        leave t)
       t.oc
       ("%% " ^^ fmt ^^ "\n")
 
@@ -1774,7 +1841,7 @@ type verdict =
 (* [output NONE] is required by the checker before [conclusion]; the doc's rule table
    does not mention it. NONE is the honest guarantee: we do not emit an output
    formula, so we claim nothing about one. *)
-let conclusion ?(output = "NONE") t v =
+let conclusion ?(output = "NONE") ?(audit = true) t v =
   (* [sol] first: it is a derivation rule and [output] must be the line immediately
      before [conclusion] (SPEC section 4.3).
 
@@ -1799,6 +1866,9 @@ let conclusion ?(output = "NONE") t v =
      to audit; it only stops accepting rules, as a finished proof does. *)
   if t.null then t.finished <- true
   else (
+    (* M6-T24: the three lines are one step to an interruption, which then finds
+       [finished] set and has nothing left to write. *)
+    enter t;
     (match v with Sat lits -> solution t lits | _ -> ());
     rule t (Printf.sprintf "output %s" output);
     (match v with
@@ -1836,4 +1906,37 @@ let conclusion ?(output = "NONE") t v =
        let t0 = emit_now () in
        flush t.oc;
        emit_us := !emit_us + (emit_now () - t0));
-    check_audit t)
+    leave t;
+    if audit then check_audit t)
+
+(* M6-T24 (D-0225). The conclusion of a run that was stopped: `BOUNDS <floor> <best>` on
+   an optimisation run, `BOUNDS <floor> INF` when it has no incumbent yet, and NONE on a
+   satisfaction run, which stops at its first solution and so has nothing in hand. The
+   lower bound cites no id: the .opb implies it. *)
+let interrupted_verdict t =
+  match t.stop_verdict () with
+  | Nothing_known -> No_conclusion
+  (* Under --e2e the proof is checked against CakeML's .opb, whose objective is over its
+     own bits. That the declared floor is implied THERE has not been established, so
+     nothing is claimed. *)
+  | Floor_and_incumbent _ when Option.is_some !e2e_soli -> No_conclusion
+  | Floor_and_incumbent { floor; incumbent } ->
+      Bounds
+        { lower = Some floor; lower_id = None; upper = incumbent; upper_assignment = [] }
+
+let set_stop_verdict t f = t.stop_verdict <- f
+
+(* Whether the proof records a solution of an optimisation run, i.e. whether a stopped run
+   has an answer to return. Not read off [interrupted_verdict], which claims nothing under
+   --e2e. *)
+let has_incumbent t =
+  match t.stop_verdict () with
+  | Floor_and_incumbent { incumbent = Some _; _ } -> true
+  | Floor_and_incumbent { incumbent = None; _ } | Nothing_known -> false
+
+(* End the proof where it stands. I-X2 is not audited: the live ids of the interrupted
+   branch are not deleted, and the checker does not ask for it. The caller must be
+   [idle], or come through [when_idle]. Idempotent, and nothing to do for a proof that
+   has already ended. *)
+let conclude_interrupted t =
+  if not t.finished then conclusion ~audit:false t (interrupted_verdict t)

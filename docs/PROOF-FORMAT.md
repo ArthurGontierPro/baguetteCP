@@ -884,6 +884,14 @@ received is an id you are responsible for deleting", and nobody receives those;
 `conclusion UNSAT : <cid>`, and the lower-bound id in `BOUNDS`, count as discharged by
 the conclusion, since they cannot be deleted before being referenced.
 
+**An interrupted proof** *(M6-T24, D-0225)*. Every line on the page is accepted on its own, so
+the proof can be ended after any of them: `output NONE`, the conclusion, `end`. Nothing has
+to be deleted first. `Writer.when_idle` waits for the line in progress, and `Writer.guarded`
+makes an improving solution's printing and its `soli` line one step. The conclusion is
+`BOUNDS <declared floor> <incumbent>` (no id cited, the floor is implied by the `.opb`), where
+`<incumbent>` must be the last `soli` value: 3.0.2 refuses another with *"The claimed upper
+bound of 28 mismatches the best recorded upper bound of 29."*
+
 ## 6. Debugging a rejected proof
 
 1. Run with `--proof-comments` — every rule is preceded by a `*` comment naming the
