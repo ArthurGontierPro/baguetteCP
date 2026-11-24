@@ -12,8 +12,8 @@ A constraint programming solver with VeriPB proof logging and higher-order expla
 
 ## Context budget — read this before you open a file
 
-`docs/` is **2.5 MB ≈ 620k tokens** and `WORKLOG.md` alone is ~640 KB ≈ 160k tokens (measured
-2026-11-23; `du -sh docs; wc -c WORKLOG.md docs/*.md` re-measures, and the sizes below grow
+`docs/` is **2.7 MB ≈ 680k tokens** and `WORKLOG.md` alone is ~680 KB ≈ 170k tokens (measured
+2026-11-24; `du -sh docs; wc -c WORKLOG.md docs/*.md` re-measures, and the sizes below grow
 with every wave). Reading them "to be thorough" costs more than the work you were dispatched
 to do, and a session that spends its context on reading has none left for the task. So the
 rule is:
@@ -22,14 +22,14 @@ rule is:
 
 | File | Size | How to read it |
 |---|---|---|
-| `WORKLOG.md` | ~640 KB | **The `SessionStart` hook already printed `## Active claims` for you.** Do not re-read the file to get it. For other sections: `sed -n '/^## Cross-session requests/,/^## Completed/p' WORKLOG.md`, or `tail -60` for the latest handoff notes. |
-| `docs/DECISIONS.md` | 1.9 MB | Never whole. `grep -n 'D-0028' docs/DECISIONS.md` then `sed -n '<start>,<end>p'`. To catch up: `grep -n '^## D-' docs/DECISIONS.md \| tail -20`. |
-| `docs/ROADMAP.md` | ~370 KB | Never whole. `grep -n -A8 'M1-T31' docs/ROADMAP.md` for your task's row. |
-| `docs/PROOF-FORMAT.md` | 74 KB | By section, and the sections are stable: §1 the checker, §2 **historical** (the 2.0 grammar D-0046 removed — do not read it for the contract), §2a **the contract**: the 3.0 rules, the `pol` operators and the traps, §3 encoding (normative), §4 per-propagator justification, §5 backtracking/deletion, §6 debugging a rejected proof. Find §4 with `grep -n '^## 4\.' docs/PROOF-FORMAT.md` rather than a pinned line range. |
+| `WORKLOG.md` | ~680 KB | **The `SessionStart` hook already printed `## Active claims` for you.** Do not re-read the file to get it. For other sections: `sed -n '/^## Cross-session requests/,/^## Completed/p' WORKLOG.md`, or `tail -60` for the latest handoff notes. |
+| `docs/DECISIONS.md` | 2.1 MB | Never whole. `grep -n 'D-0028' docs/DECISIONS.md` then `sed -n '<start>,<end>p'`. To catch up: `grep -n '^## D-' docs/DECISIONS.md \| tail -20`. |
+| `docs/ROADMAP.md` | ~390 KB | Never whole. `grep -n -A8 'M1-T31' docs/ROADMAP.md` for your task's row. |
+| `docs/PROOF-FORMAT.md` | 77 KB | By section, and the sections are stable: §1 the checker, §2 **historical** (the 2.0 grammar D-0046 removed — do not read it for the contract), §2a **the contract**: the 3.0 rules, the `pol` operators and the traps, §3 encoding (normative), §4 per-propagator justification, §5 backtracking/deletion, §6 debugging a rejected proof. Find §4 with `grep -n '^## 4\.' docs/PROOF-FORMAT.md` rather than a pinned line range. |
 | `docs/GCS-COMPARISON.md` | 29 KB | Background. Read only if the task is explicitly about the comparison. |
-| `docs/SPEC.md` | 34 KB | Normative. Read the relevant section whole; §2.1 is the FlatZinc subset, §3.2 consistency levels, §3.3 explanations. |
-| `docs/INVARIANTS.md` | 18 KB | Read whole before touching `lib/core/`. |
-| `docs/ARCHITECTURE.md` | 21 KB | Read whole if you are changing structure. Its §1 module map was stale for months; **corrected and verified against the tree on 2026-09-18**, and it now agrees with the map below. |
+| `docs/SPEC.md` | 37 KB | Normative. Read the relevant section whole; §2.1 is the FlatZinc subset, §3.2 consistency levels, §3.3 explanations. |
+| `docs/INVARIANTS.md` | 20 KB | Read whole before touching `lib/core/`. |
+| `docs/ARCHITECTURE.md` | 24 KB | Read whole if you are changing structure. Its §1 module map was stale for months; **corrected on 2026-09-18, re-verified against the tree on 2026-11-24**, and it now agrees with the map below. |
 | `docs/GLOSSARY.md` | 4 KB | Read whole if the vocabulary is new to you. |
 
 **Module headers are the cheapest documentation in this repo.** Every module in `lib/`
@@ -213,13 +213,15 @@ lib/flatzinc/   Baguette_flatzinc
 
 lib/core/       Baguette_core
   var.ml                    variable identity (abstract int)
-  domain.ml                 bounds pair + lazily allocated hole set (ARCH §2)
+  domain.ml                 bounds pair + lazily allocated hole set, a VERSION of a
+                            per-variable hole log since D-0222 (ARCH §2)
   store.ml                  backtrackable store: domains + undo trail (ARCH §3)
+  reason.ml                 WHICH FACTS justify a pruning, as declarative data, and
+                            [justified], the one value a mutator takes (D-0026)
   explanation.ml    *****   THE Explanation ADT. Read SPEC §3.3 + ARCH §4 first.
                             D-0003 is RESOLVED (by D-0026): reasons are declarative
-                            data, justifications are cutting planes. M2-T8 is the
-                            reshaping D-0003 used to promise, and it is IN PROGRESS --
-                            check `## Active claims` before touching this file. Still
+                            data, justifications are cutting planes (M2-T8, DONE).
+                            Check `## Active claims` before touching this file. Still
                             no new constructor without a decision record.
   justify.ml                Explanation.t -> VeriPB rules -> constraint id. Lives in
                             core, not proof, because proof cannot see Explanation.
@@ -247,15 +249,17 @@ lib/core/       Baguette_core
   retention.ml              the learned-constraint DATABASE, and the SINGLE owner of a
                             learned constraint's lifetime. Policies are swappable
                             (`keep_all`, `fifo`, `lbd`) and the default is `keep_all`
-                            BY MEASUREMENT, not by omission -- see D-0051 (M2-L4)
+                            BY MEASUREMENT, not by omission -- D-0051, D-0221 (M2-L4)
   view.ml                   VIEWS (+-x + k) and constants-as-variables, as a RENDERING
                             onto the base's order literals -- no PB variables of its
                             own, no name, so no sanitize table (M4-T0, D-0058)
-  propagator.ml             the PROPAGATOR module type (51 lines — read it whole)
+  propagator.ml             the PROPAGATOR module type (218 lines — read it whole)
   engine.ml                 propagate-to-fixpoint loop and the queue (ARCH §5)
   search.ml                 DFS, branching, backtracking, every step proof-logged.
                             Restarts are opt-in (SPEC 3.4, D-0137): NRestart t unwinds
-                            to level t and re-enters that node, no new proof rule
+                            to level t and re-enters that node, no new proof rule.
+                            CDCL loop `Search.cdcl` beside `dfs`: BAGUETTE_CDCL=1, OFF
+                            by default (D-0219)
   restart.ml                WHEN to restart: Luby, geometric, Glucose's LBD average
                             (with a Luby floor), the stable alternation (M10-T2)
   phase.ml                  phase saving: the value a variable was last fixed at,
@@ -274,10 +278,10 @@ lib/core/       Baguette_core
                             MODEL: guarded linear rows over M3-reified Booleans, so every
                             pruning is Linear's and no Explanation constructor was needed
                             (M4-T4b, D-0060)
-    alldiff.ml              all_different_int, BOUNDS consistent, with the multi-row Hall
-                            justification. Stage 1 of two; M4-T2 sequences beside it.
-                            The row that proved Combine/Weaken/Model_row carry a real
-                            global (M4-T1, D-0061)
+    alldiff.ml              all_different_int, DOMAIN consistent, two stages: Hall
+                            intervals on the bounds with the multi-row Hall justification
+                            (M4-T1, D-0061), then a maximum matching that prunes values
+                            (M4-T2), skipped when it cannot prune (D-0215)
     gcc.ml                  global_cardinality by interval CAPACITY -- alldiff generalised;
                             counting rows over the ORDER encoding (M7-T16, D-0078)
     element.ml              array_int_element over a constant array, DOMAIN consistent.
@@ -345,21 +349,25 @@ lib/proof/      Baguette_proof
   text.ml                   one line's bytes, for writer.ml and opb.ml: integers and
                             literal names written in place, each variable's name prefix
                             rendered once (M20-pernode-T5, D-0209)
+  e2e.ml                    the END-TO-END PREFIX under --e2e: derives each of baguette's
+                            rows from cake_pb_cp's verified .opb; nothing in it is
+                            trusted, every line is checked (M14-T3, D-0187)
   checker.ml                resolves which veripb to use; mirrors scripts/checker.sh
 
-test/unit/                  22 binaries: test_core test_domain test_engine test_prop
+test/unit/                  24 binaries: test_core test_domain test_engine test_prop
                             test_proof test_justify test_trace test_flatzinc
                             test_compile test_endtoend test_matrix test_mutation
                             test_output test_random test_interval test_learned
                             test_learn test_analysis test_ladder test_retention test_clause test_pb test_consistency
                             test_search_strategy (M10: restarts, phases, activity)
   mem_guard.ml              NOT a test binary: the shared Gc-alarm heap guard every
-                            suite installs (M1-T53). All 22 announce arming under
+                            suite installs (M1-T53). All 24 announce arming under
                             BAGUETTE_TEST_HEAP_CAP_ANNOUNCE=1
-test/models/                85 .fzn models   test/expected/  their expected outputs
+test/models/                228 .fzn models  test/expected/  their expected outputs
 scripts/                    checker.sh verify_proof.sh run_model_tests.sh shrink.sh
                             mutate_proof.sh check_test_widths.py check_fmt.sh
-                            bootstrap.sh
+                            check_determinism.sh bootstrap.sh; the lanes (diff, scaling,
+                            e2e, sym, fuzz)_lane.sh; compare_run.sh (Challenge runs)
 ```
 
 ## Commands

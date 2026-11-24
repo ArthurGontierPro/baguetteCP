@@ -28983,6 +28983,146 @@ way. Instances without holes do not move.
 - The set-bit reads of past versions (section 6) could be answered from the log directly by
   `Store.remover` (the slot of the value gives the entry), saving the binary search's reads. Not
   done: the remover's equivalence with its scan (D-0088) would need restating for it.
+## D-0221  [AUTONOME] M19-config-T5 (review T12): the retention default measured on the tuning set and on 42 heap refusals. `tiered` gains one verified answer of 200 and refuses 6 of the 42 where `keep_all` refuses 2, so the review's rule fails and the default stays `keep_all`. An evicted learned constraint frees no memory today, which is why
+
+**Status**: DECIDED, no change (agent-retention, `wave69-retention`, 2026-11-24). Nothing to revert:
+no line of `lib/` changed. The option table in section 4 is for the user.
+
+### 1. Method
+
+Release binary of main `b42faa1`, md5 `4dde0987` (the same as D-0220's). Flattened files of the
+M17 series (`/scratch/arthur/series-20261123/flat/<YEAR>/work/`), D-0133's settings: 16 GiB address
+space, `--max-heap-mb 8192`, each run in its own `systemd-run --user --scope -p MemoryMax=32G`,
+peak RSS by `rss_wrap.py`. veripb 3.0.2 on every finished run with a proof, in its own scope at
+64 GB and 3 600 s (two checks reached the limit and are counted apart, and there is no REJECTED and no CHECK-ERROR). The
+row format is `scripts/compare_run.sh`'s, so `bench/tuning/agreement.py` reads it. Driver, lists,
+rows and reports: `/cluster/arthur/baguette-results/retention/`.
+
+Arms: `K` the default (`keep_all`), `T` `BAGUETTE_RETENTION=tiered` (D-0139's parameters), `L`
+`lbd:5000` (D-0139's last cap), `TP` `tiered` with `BAGUETTE_PB_ANALYSIS=off` (information only);
+`-p` with proof, `-n` `--no-proof`, `f` with `-f`.
+
+- (a) the tuning set (`bench/tuning/set.lst`, 200 instances) at 300 s, the twelve arms.
+- (b) 42 instances REFUSED at the heap budget AFTER the encoding was printed in D-0185's arm A,
+  the 40 whose refusal came latest (798 to 1 193 s, at most two per family) plus
+  `2016_mapping_ring_1` and `2017_steelmillslab_bench_16_10` (D-0220's two cases), at 1 200 s, eight
+  arms (no `L-n`, `TP-n`, `Kf-n`, `Tf-n`).
+
+### 2. Results
+
+"compl" is a verified complete answer (trusted under `-n`), "inc" an incumbent without one, REF
+a heap-budget refusal (all 84 refusals of both sets are the M7-T8 heap message, and 12 of the tuning
+set's come before the search). RSS in MB, median / p90 / max. Conflicts per second as a median
+over runs.
+
+Tuning set (a), 300 s:
+
+| arm | compl | inc | REF | TIMEOUT | RSS MB | confl/s |
+|---|---|---|---|---|---|---|
+| K-p | 19 | 124 | 4 | 177 | 1356 / 6450 / 9084 | 52.6 |
+| T-p | 20 | 124 | 4 | 176 | 1389 / 6285 / 9396 | 58.0 |
+| L-p | 18 | 125 | 4 | 178 | 1303 / 6286 / 9505 | 56.9 |
+| TP-p | 22 | 123 | 5 | 173 | 1426 / 5673 / 9506 | 65.6 |
+| Kf-p | 36 | 125 | 4 | 159 | 1276 / 6292 / 11057 | 42.6 |
+| Tf-p | 37 | 124 | 4 | 157 | 1274 / 6257 / 11061 | 46.1 |
+| K-n | 30 | 119 | 5 | 165 | 1423 / 5226 / 8958 | 92.9 |
+| T-n | 33 | 117 | 5 | 162 | 1447 / 5184 / 8960 | 109.4 |
+| L-n | 26 | 121 | 4 | 170 | 1410 / 4902 / 8961 | 105.1 |
+| TP-n | 35 | 116 | 6 | 159 | 1552 / 4812 / 8924 | 136.5 |
+| Kf-n | 45 | 119 | 4 | 151 | 1167 / 5185 / 11589 | 90.8 |
+| Tf-n | 43 | 120 | 4 | 153 | 1258 / 5146 / 11590 | 95.0 |
+
+Score (`agreement.py`, two arms): T-p over K-p 0.505 / 0.495 (16 wins, 14 losses, 170 ties), Tf-p
+over Kf-p 0.550 / 0.450 (50 / 30), T-n over K-n 0.525 (22 / 12), Tf-n under Kf-n 0.49 (38 / 41).
+Six proof arms together: Tf-p 0.205, Kf-p 0.194, TP-p 0.161, T-p 0.153, K-p 0.151, L-p 0.136. By
+D-0205's calibration, a difference under 0.03 of the share is noise on this set, so only Tf over Kf
+and `lbd` (8 wins and 28 losses against K-p, 8 / 43 without proof) are signals. The one answer T-p
+gains is `2013_rubik_7-cube`. Tf-p gains costas-array_16 and gfd-schedule n100 and loses solbat
+sb_15_15_7_1 and pennies-opt n7. Per family, T-p against K-p wins atp-stage2, gbac, lot-sizing,
+steelmillslab and three more, and loses 27 families by one instance each (spot5, valve-network,
+EchoSched, mrcpsp, ...), and no edition moves by more than two.
+
+Set (b), 42 former refusals, 1 200 s:
+
+| arm | compl | inc | REF | TIMEOUT | RSS MB | confl/s |
+|---|---|---|---|---|---|---|
+| K-p | 1 | 32 | **2** | 39 | 7336 / 8711 / 9560 | 30.6 |
+| T-p | 1 | 33 | **6** | 35 | 7481 / 8794 / 9542 | 38.5 |
+| L-p | 1 | 32 | 4 | 37 | 5986 / 8718 / 9541 | 37.4 |
+| TP-p | 1 | 33 | 4 | 37 | 7675 / 8767 / 9558 | 67.9 |
+| Kf-p | 6 | 32 | 3 | 33 | 4920 / 8906 / 12442 | 35.1 |
+| Tf-p | 6 | 32 | 3 | 33 | 4980 / 8901 / 12472 | 34.7 |
+| K-n | 1 | 32 | 3 | 38 | 6748 / 8616 / 9081 | 42.8 |
+| T-n | 1 | 33 | 6 | 35 | 6610 / 8553 / 9047 | 45.8 |
+
+The first fact is that current main (bits default, D-0201, and the M20 per-node work) already turns
+40 of these 42 into attempts: K-p refuses only tdtsp inst_10_35_20 and mapping ring_1, and 32 of the
+42 have an incumbent. `tiered` refuses four more (community-detection Strike.s2.k8, peacable_queens
+40 and pq_n19, sdn-chain d26n600-5), all of which `keep_all` runs to the time limit. The six
+answers of `-f` (two roster, cargo challenge24, grid-colouring 7_8, sdn-chain d26n600-5,
+steelmillslab 16_10) are `-f`'s, found by both retentions. Pairwise, T-p beats K-p 8 to 4, Tf-p
+loses to Kf-p 8 to 10, T-n loses to K-n 7 to 8.
+
+Paired by instance over runs that both time out (`paired.report`): `tiered`'s conflicts per second
+are 1.01 times `keep_all`'s on the tuning set and 1.09 on set (b), and its peak RSS is 1.00 times
+on both. `tiered` does not lower the peak memory of a single run. Section 5 says why.
+
+### 3. The rule, applied
+
+The review's rule is that `tiered` becomes the default if verified answers rise and heap-budget refusals
+do not. On the default configuration (fixed search, proof) answers go 19 to 20 on the tuning set
+(one instance, within noise) and 1 to 1 on set (b), and refusals go 4 to 4 and **2 to 6**. Without
+the proof, 30 to 33 answers and 5 to 5 refusals, then 3 to 6 refusals on set (b). The rule fails
+on refusals in both modes. Under `-f` it holds narrowly (36 to 37 answers, 4 = 4 and 3 = 3
+refusals, score 0.550 on the tuning set and 0.476 on set (b)), but `-f` is not the default (D-0185
+left that to the user). The result is mixed, so nothing changes, and the diff lane needs no
+re-record.
+
+### 4. Options for the user
+
+| Option | Consequence |
+|---|---|
+| Keep `keep_all` (taken) | No change. Refusals as measured: 4 of 200 at 300 s, 2 of the 42 at 1 200 s |
+| `tiered` now | +1 verified answer of 200 with proof, +3 without; 4 more heap refusals of 42 at 1 200 s, because eviction frees nothing (section 5) and `tiered` runs about 9 % more conflicts per second there, so it fills the same heap sooner |
+| `tiered` with `-f`, if the user adopts `-f` | the one pair where the rule holds: +1 answer, equal refusals, 0.550 of the tuning score; 0.476 on set (b) |
+| `tiered` after the engine frees evicted instances (WORKLOG request of this date) | the only version that can lower the heap. Re-measure set (b) then |
+| `lbd:5000` | dominated: 8 wins and 28 losses against `keep_all` with proof |
+
+Recommended: keep `keep_all`, and re-run set (b) and the tuning set with `T` and `K` once evicted
+instances are released. `tiered` is the right policy once eviction frees memory. Today it only
+saves time per conflict, and on the long runs that time turns into a heap refusal.
+
+### 5. Why eviction frees nothing, and what PB analysis costs on mapping
+
+2015 mapping mesh3x3_2, `--no-proof`. A temporary build of `retention.ml` printing `Gc.stat`
+and `Obj.reachable_words` of the database at each trace line (not committed) gives, at 1 200 learned
+constraints: live heap 109.7 M words under `keep_all` and **109.7 M words under
+`tiered:first=100,inc=50`**, which has evicted 455 of them. The database itself holds 32.8 M and
+27.7 M words. The live heap grows about 135 k words (1 MB) per learned constraint late in the run.
+The cause is in `Retention.gate`, which returns `{inst with run; inst_advise}`, so the gated instance
+keeps `inst_row`, `inst_watched` and the inner `run`, all closures over the `Pb` instance, and the
+engine keeps the gated instance in its watch lists for ever (D-0139's request, open since). An
+evicted row stops propagating and stops costing proof lines, and keeps every byte. Fixing it needs a
+removal in `lib/core/engine.ml`, agent-cdcl's file this wave, so it is filed as a cross-session request.
+
+Time (`perf record -e cycles:u --call-graph fp`, the `baguette-fp` switch, same source, 75 s):
+`Pb.pass` is 49 % of the cycles inclusive, of which `Pb.status` 30 % and `Pb.snapshot` 17 % self.
+Every wake of a learned PB row walks all its terms, and the learned rows of a 20 s proof are 886, median
+10 terms, p90 457, max 458. PB conflict analysis is 34 % (`Pb_analysis.step` 29 %, `slack_at` 11 %,
+`falsified_at` 8 %), GC about 12 %. In 60 s the default runs 1 028 conflicts at 2.96 GB, and with
+`BAGUETTE_PB_ANALYSIS=off` 23 668 conflicts at 0.47 GB. So on mapping the cost is the learned PB
+rows themselves, about 450 terms each, walked whole at every wake and kept whole after eviction,
+rather than one huge row (D-0197's 32 M-term ladder row was ATSP). Under `OCAMLRUNPARAM=o=20` the
+heap is 134 M words at 602 conflicts against 237 M at 710 with the default, so about half the heap
+is collectable slack and half is live. The two levers (a removal from the engine, and a term cap
+or no propagator registration for learned PB rows above some size) are filed for after agent-cdcl
+and not attempted here. D-0218 (merged while this ran) attributes 79 % of mapping's live heap to
+learned PB rows (1 976 terms and 0.65 MB per row over a longer run) and names a bound on the count
+as half of its recommendation 1. This section is the reason that half does nothing today: a bound
+on the count evicts rows whose bytes stay reachable, so recommendation 1 needs the engine removal
+first, or the flat layout alone. `TP` (PB analysis off) is the best fixed arm on the tuning set (22 and 35
+answers against 19 and 30) and turns mapping ring_1 from a refusal into a time-out, which says the
+guard is worth measuring.
 
 ## D-0226  M23-inputs: a relational `Problem` between the readers and the solver, `.scp` as a second input, every other language translated to `.scp` outside the solver
 
