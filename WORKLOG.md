@@ -19,7 +19,6 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M19-config-T10 | `lib/core/search.ml`, `lib/core/learn.ml`, `lib/core/analysis.ml`, `lib/core/trace.ml`, `test/unit/test_cdcl.ml` (new) + `test/unit/dune`, `docs/DECISIONS.md` (D-0219), `docs/ROADMAP.md` (row) | agent-cdcl (wave67-cdcl) | 2026-11-24 |
 
 ## Cross-session requests
 
@@ -467,6 +466,7 @@ section 1. Shares are inclusive, of the whole run.
 
 | Task | Session | Date | Summary |
 |---|---|---|---|
+| M19-config-T10 (the CDCL loop, D-0219) | agent-cdcl (`wave67-cdcl`) | 2026-11-24 | **D-0219 [AUTONOME].** `Search.cdcl` behind `BAGUETTE_CDCL=1`, default OFF and byte-identical; files `lib/core/search.ml`, `lib/core/learn.ml`, `test/unit/test_search_strategy.ml`, D-0219, ROADMAP T10/T11. On: every answer and optimum equal, every proof VERIFIED, mutation lanes refused. Default not changed; recommendation D (T11 first) |
 | M18-coverage-T4 (bin packing, D-0220) | agent-binpack (`wave68-binpack`) | 2026-11-24 | **D-0220 [AUTONOME].** mznlib only: std's bin-packing rows without the bool2int copies (`baguette_bool_lin_eq`/`_le` per bin over std's int_eq_reif indicators, loads restricted to their reachable sums). The refusals measured as search-time heap on four families of five; no outcome change on 20 instances, .opb 0.58 to 1.00, more nodes on 14 of 16 time-outs, 223 other models byte-identical |
 | M18-coverage-T3 (`circuit`, D-0217) | agent-circuit (`wave65-circuit`) | 2026-11-24 | **D-0217 [AUTONOME].** `lib/core/prop/circuit.ml`: mznlib routes `fzn_circuit` to `all_different` plus `baguette_circuit(x, pos, root)`, the .opb defines circuit by MTZ rows over position store variables, prevent + pinned positions, every subtour cut one `pol` ahead; `subcircuit` stays std. 20 instances: .opb 0.44 to 0.998, more nodes on 14 of 15 time-outs (default), p1f-pjs_10 time-out -> OPT, all checked proofs VERIFIED |
 | M18-coverage-T2 (`diffn`, D-0213) | agent-diffn (`wave61-diffn`) | 2026-11-24 | mznlib `fzn_diffn`, `fzn_diffn_nonstrict`: std's pairs plus the two cumulative relaxations over order copies; four models, theorem enumeration and 16 scenes in test_compile, two lanes in test_mutation; maps and PROOF-FORMAT 4. Complete 7 -> 9 of 25 routed Challenge instances, all VERIFIED |
@@ -703,6 +703,11 @@ Gates 96 to 98 green: 218 models byte-identical, lane 347/347, debug 333/333, sc
 Also open: after D-0208 the engine's wake work is the largest share left on costas and mknap; removing it needs the D-0169 (b) rule (rows that never prune are not woken), which changes default behaviour.
 
 **[AUTONOME] decisions**: D-0217 (a normative SPEC 2.1 sentence listing `baguette_circuit` among the builtins, as each native global has); D-0213 (above); D-0216 (alldiff reuses the node a rebuild would return; two dedups hashed; byte-identical); D-0208 (watching withdrawn on measurement).
+### 2026-11-24 (agent-cdcl, `wave67-cdcl`): M19-config-T10, the CDCL loop (D-0219)
+
+`BAGUETTE_CDCL=1` runs `Search.cdcl`: 1UIP clause, backjump to its asserting level, the clause propagates there, no branch nogood; a factless conflict is refuted by `dfs`'s nogood filed at its asserting level. Off, every artefact is byte-identical to main; on, every answer, optimum and proof checks (D-0219 section 5). `BAGUETTE_CDCL_STATS=1` prints the learning observables of either loop on stderr.
+Measured (D-0219 sections 3 and 6): on a fixed search the loop builds the same tree on D-0207's families with half the nodes and every learned clause pruning; on 40 tuning instances it is a tie (6/6/28) and loses flowshop-workers to re-descent after long backjumps; under `-f` 6/5/9. The default is the user's: recommendation D, i.e. M19-config-T11 (chronological backtracking for long jumps) and T2 to T4 re-measured on the loop first. `--cdcl` is a cross-session request on `bin/main.ml`.
+
 ### 2026-11-24 (agent-binpack, `wave68-binpack`): M18-coverage-T4, bin packing (D-0220)
 
 The bin-packing refusals are not the decomposition: mapping, steelmillslab, team-assignment and gbac are small models whose heap fills during search (learned clauses kept as engine instances, PB analysis on mapping; cross-session request filed), only ihtc is refused at its encoding. So the change is mznlib only: std's rows minus the bool2int copies, through two builtins that ARE int_lin_eq/le over Booleans (SPEC 2.1 sentence), and each load restricted to the sums std's flattening found (without it gbac's loads stay 0..298 and the .opb grows 9x).
