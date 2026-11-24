@@ -161,7 +161,7 @@ phase_flatten() {
     (
       log "flatten $y start"
       PAR=$per TOTAL_MAX=$per SOLVE_TIMEOUT=60 FLATTEN_TIMEOUT=1200 CHECK_TIMEOUT=60 \
-        MEM_KB=16777216 BAGUETTE="$DIR/bin/flatten-only.sh" INSTANCES="bench/challenge/$y.lst" \
+        MEM_KB=16777216 BAGUETTE="$DIR/bin/flatten-only.sh" INSTANCES="$(inst_list "$y")" \
         scripts/compare_run.sh /scratch/arthur/mznc "$DIR/flat/$y" > "$DIR/flat/$y.log" 2>&1
       touch "$DIR/flat/$y.done"
       log "flatten $y end"
