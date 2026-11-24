@@ -1975,6 +1975,7 @@ let propagate ?stop ?(poll_runs = default_poll_runs) (t : t) (store : Store.t) :
             t.poll_left <- t.poll_left - 1;
             if t.poll_left <= 0 then (
               t.poll_left <- poll_runs;
+              Baguette_proof.Memprobe.tick ();
               if stop () then (
                 stopped := true;
                 (* M6-T22: the slots and the queue this abandons, cleared. *)

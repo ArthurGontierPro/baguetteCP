@@ -3268,6 +3268,7 @@ and branch_split engine store ctx trace stats cfg order decisions (dec : decisio
   let lvl = Store.level store in
   Writer.set_level ctx.Justify.writer lvl;
   stats.nodes <- stats.nodes + 1;
+  Baguette_proof.Memprobe.node stats.nodes;
   let r1 = first store engine ctx trace stats cfg order decisions v k lit in
   undo_level stats store;
   match r1 with
@@ -3301,6 +3302,7 @@ and branch_split engine store ctx trace stats cfg order decisions (dec : decisio
             lvl2 = lvl);
       Writer.set_level ctx.Justify.writer lvl;
       stats.nodes <- stats.nodes + 1;
+      Baguette_proof.Memprobe.node stats.nodes;
       let r2 = second store engine ctx trace stats cfg order decisions v k lit in
       undo_level stats store;
       match r2 with
@@ -3447,6 +3449,7 @@ and branch_assign engine store ctx trace stats cfg order decisions (a : assign) 
   (* One child dispatched, for two decisions taken. [stats_expected_nodes] carries the
      correction; see [stats.assigns]. *)
   stats.nodes <- stats.nodes + 1;
+  Baguette_proof.Memprobe.node stats.nodes;
   push "upper"
     (Store.set_hi store v m
        (Reason.because ~concludes:None Reason.none (Explanation.decision dec_le)))
@@ -3654,6 +3657,10 @@ let search_core ~(engine : Engine.t) ~(store : Store.t) ~(ctx : Justify.ctx) ?tr
      not in [stats_create] because the policy lives on [config] and a [stats] is allowed
      to outlive a [solve]. *)
   stats.db <- Retention.create ~policy:config.retention ();
+  Baguette_proof.Memprobe.register "search.retention" (fun () -> [ Obj.repr stats.db ]);
+  Baguette_proof.Memprobe.register "search.trace" (fun () -> [ Obj.repr trace ]);
+  Baguette_proof.Memprobe.count "learned.n_live" (fun () -> Retention.size stats.db);
+  Baguette_proof.Memprobe.count "trace.n_done" (fun () -> trace.Trace.n_done);
   (* M2-L12: and the learned units, for the same reason -- a [stats] may outlive a
      [solve], and a global from a previous search cites a constraint this one's writer
      knows nothing about.
@@ -3680,6 +3687,7 @@ let search_core ~(engine : Engine.t) ~(store : Store.t) ~(ctx : Justify.ctx) ?tr
   stats.first_learned_id <- Engine.next_id engine;
   stats.learned_kinds <- Bytes.empty;
   stats.nodes <- stats.nodes + 1;
+  Baguette_proof.Memprobe.node stats.nodes;
   (* M10-search-strategy (D-0137): the opt-in strategies' state, per solve, and the order
      they wrap. With every one of them off this is [None] and [order] is the caller's,
      physically, so the default search is the pre-M10 code path. *)
