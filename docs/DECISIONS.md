@@ -29320,3 +29320,17 @@ So GCS `main` and `develop-cp` agree on every model tried. Section 2's schedulin
 section 10's two failures came from mismatched versions. The views remain: of the 220 GCS files the
 development cake encodes 89, and 191 after `deview.py`. The T2 work on this pair is the 10
 models of the `--e2e` row.
+
+### 13. Views wait for cake (decided by the user, 2026-11-25)
+
+No model is rewritten to fit version 1 of the `.scp` when the rewriting weakens a solver. `deview.py`
+stays in `bench/inputs_spike/` as the measurement it was, and T6 is dropped. Nothing is asked of
+`fzn-glasgow`. Until version 2, baguette's reader refuses a view (section 11 point 2), and the files GCS
+and baguette share are those without one. Of the 297 GCS files, 124 hold no view in a constraint
+(comparisons, `circuit`, `subcircuit` and `binpacking` arguments), of which a reader takes 33 with the
+shapes of `E2e.spec` today, 50 with the general conditions and `_iff`, 74 with every family baguette
+propagates, 123 with the decompositions. When version 2 exists, the reader takes its views through
+`View`, so `lib/scp/` keeps the term type open for them.
+
+This does not bear on baguette's own `.scp`. `fzn2scp.py` writes the linear constraints as MiniZinc
+wrote them and has no views.

@@ -36,3 +36,9 @@ for nm,s in(("1a",s1),("1b",s1b),("2",s2)):
     for r in X:
         for o in {toks(k)[0] for k in r["shapes"] if not s(k)}: c[o]+=1
     print(nm,"blocked by",c.most_common(14))
+def view(k):
+    op,a=toks(k)
+    return any(x.startswith("[?+") for x in a) or (op in("circuit","subcircuit","binpacking") and "list" in a[0]) or "?+" in k
+NV=[r for r in X if not any(view(k) for k in r["shapes"])]
+print("no view:",len(NV),"of",len(X))
+for nm,s in(("1a",s1),("1b",s1b),("2",s2),("3",s3)): print("no view and",nm,sum(all(s(k) for k in r["shapes"]) for r in NV))
