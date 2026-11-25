@@ -29334,3 +29334,28 @@ propagates, 123 with the decompositions. When version 2 exists, the reader takes
 
 This does not bear on baguette's own `.scp`. `fzn2scp.py` writes the linear constraints as MiniZinc
 wrote them and has no views.
+
+### 14. The plan is the parser alone (the user, 2026-11-25)
+
+Replaces the plans of sections 4, 8 and 13. `.scp` text to `Model.t`, in a new library
+`lib/scp/` that depends on `lib/flatzinc/` for `Model`, `Pos` and `Error`. Conventions read in
+cake's parser and checked on the development build (2026-11-25):
+
+- cake accepts `enumerate` with a proof that only exhibits one solution (`s VERIFIED SATISFIABLE`
+  on five models), so `enumerate` is read and one solution is searched, as for `decide`. A run that
+  finds none says UNSAT.
+- cake accepts an undeclared name and a `lb > ub`. The reader refuses both, because neither is
+  a model anyone means.
+- cake refuses a `;` comment. So does the reader.
+
+Tests: (1) `fzn2scp.py` of each of the 203 test models gives the verdict and the optimum of the `.fzn`
+run, except the 7 with `member` (written with `equals_if`); (2) every solution found is checked by
+`tools/e2e/scpsem.py`, which reads only the `.scp`; (3) the hand-written `scp_cases` of GCS, whose
+name says sat, unsat or opt; (4) random small files against `scpsem.py`; (5) the GCS
+files without a view; (6) mutations of the reader: an off-by-one in `element` and `circuit`,
+a swapped `less_equal`, a dropped constraint, each caught by one of the above.
+
+A constraint is accepted only if baguette propagates it or if its rewriting is exact (`increasing`,
+`plus`, `greater_*`, a strict comparison over integers). `lin_equals_iff` is the one near case:
+two `lin_less_equal_iff` and an `and`, as `mznlib` does today. It is out until the user says.
+
