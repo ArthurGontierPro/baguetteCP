@@ -689,7 +689,7 @@ section 1. Shares are inclusive, of the whole run.
 
 ### 2026-11-25 (docs-session, laptop): the `-f --no-proof` arm is done (D-0229)
 
-Tables in `/cluster/arthur/baguette-results/series-20261124-fnoproof/`, which now has an index (`baguette-results/README.md`). Nothing of it runs on fataepyc-04 any more, and the run directories there (`/scratch/arthur/series-20261124`, `series-20261123-binA`) can be deleted. The README's performance table is still D-0203, since the arm has no proof. Only the bullet on the merged work changed.
+Tables in `/cluster/arthur/baguette-results/series-20261124-fnoproof/`, which now has an index (`baguette-results/README.md`). Nothing of it runs on fataepyc-04 any more, and its run directories there were deleted on 2026-11-25 (the raw outputs with them), so fataepyc-04 can be released. The README's performance table is still D-0203, since the arm has no proof. Only the bullet on the merged work changed.
 
 ### 2026-11-24 (docs-session, laptop): M22-review-T4, the module map, and what an audit of the records found
 
