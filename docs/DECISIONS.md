@@ -29123,3 +29123,53 @@ on the count evicts rows whose bytes stay reachable, so recommendation 1 needs t
 first, or the flat layout alone. `TP` (PB analysis off) is the best fixed arm on the tuning set (22 and 35
 answers against 19 and 30) and turns mapping ring_1 from a refusal into a time-out, which says the
 guard is worth measuring.
+
+## D-0229  M17-bench-series: the arm `-f --no-proof` on the sixteen editions, on the binary of D-0203 and on main `36e8cc0`. Complete answers 401 against 420 (unverified), refusals 125 against 84, score 6 288 against 6 590 in the fixed category, no answer lost and no contradiction with the other arms
+
+**Status**: MEASURED (2026-11-24/25), asked for by the user. No solver code changes.
+
+**Context.** D-0203 has three arms and not `-f` without proof, so the cost of proof logging was known
+for the default search only, and the effect on the Challenge of the work merged since `f244c35a`
+was not measured. Two runs, side by side on fataepyc-04 (booked by the user, idle otherwise), 46
+solvers in parallel each, 17:20 to 04:04 UTC.
+
+| | reference | main |
+|---|---|---|
+| Commit, release binary | `e1971f6`, `f244c35a` (D-0203's) | `36e8cc0` (its `lib/` is gate 102's, plus a comment of D-0221), `ef2f76c8` |
+| Instances | D-0203's flattened files | flattened with its own mznlib, 1 575 of 1 600 in both |
+
+Settings of D-0203 otherwise. 1 200 s, 16 GiB of address space, `--max-heap-mb 8192`, flags
+`-f --no-proof --stats`, all sixteen editions at 1 200 s. Not in main at that commit were
+`wave70-release`, `wave71-chrono`, `wave73-evict` and `wave73-interrupt`.
+
+**Results.** Counts are the harness's and the answers of a `--no-proof` run are UNVERIFIED. B is
+D-0203's arm `-f` with proof, on fataepyc-06 under more load.
+
+| | B | reference | main |
+|---|---|---|---|
+| OPT + UNSAT | 363 (346 verified) | 401 | 420 |
+| SAT | 104 (95 verified) | 108 | 112 |
+| TIMEOUT | 970 | 941 | 959 |
+| REFUSED | 138 | 125 | 84 |
+| objective printed | 1 149 | 1 171 | 1 211 |
+| score, fixed category | 5 799 | 6 288 | 6 590 |
+| score, free category | 11 821 | 12 848 | 13 552 |
+
+- Main against the reference. 19 complete answers more and none lost. Objectives better on 188, worse on 64,
+  equal on 963. Of the 125 refused by the reference, 41 time out and 9 are optimal in main, and
+  main refuses 9 that the reference did not. One SAT lost, `2011_black-hole_9`, and 5 gained. Median wall ratio 1.00 (340
+  instances complete in both and taking at least 1 s). So the gain is in memory and coverage, and not in the time of the
+  instances already solved.
+- Reference against B, the cost of the proof under `-f`. Median wall ratio 0.45 (315 instances), 40
+  complete answers more without proof and 2 the other way. The node and its load differ, so part of the ratio
+  can be theirs.
+- No two of the five arms (A, B, C, reference, main) contradict each other on an optimum, an
+  UNSAT or an objective value.
+- Ranks of main, 2026 down to 2011. Fixed category 6, 4, 3, 3, 3, 4, 2, 3, 3, 7, 3, 6, 4, 4, 3, 4. Free
+  category 13, 10, 9, 5, 13, 11, 8, 4, 8, 12, 10, 10, 5, 5, 3, 5. The 2011 and 2012 ranks are approximate, and
+  2011 to 2014 ran at 1 200 s against an official 900 s.
+
+Tables and the comparison script (`cross_arms.py`, `cross_arms.txt`) are in
+`/cluster/arthur/baguette-results/series-20261124-fnoproof/`. Raw solver outputs were not kept, at the user's request.
+The 8 GiB heap budget is half of the address space by the harness's rule (`compare_run.sh`), which was never
+calibrated (M7-T14). A larger budget inside 16 GiB is not measured.

@@ -21,7 +21,6 @@ of it to every session and stopping at a broken line before it even reached the 
 |---|---|---|---|
 | M6-T24, the harness (proofs of stopped runs checked, three kinds of answer; on `wave73-interrupt`) | `scripts/compare_run.sh`, `tools/compare/compare.py`, `tools/compare/readme_table.py`, `tools/compare/arms_compare.py` and `bench/tuning/agreement.py` (small), `bench/series/*.sh` if needed | interrupt-session (laptop) | 2026-11-24 |
 | M6-T24 (an interrupted run ends its proof: signals, heap budget, time limit; D-0225) | `lib/proof/writer.ml`, `lib/proof/encoding.ml` (the heap refusal's exit only), `lib/core/search.ml` (`record_improving`, `conclude_stopped`, `optimise`'s set-up, short edits: agent-chrono holds the file on `wave71-chrono`), `bin/main.ml` (the signal handlers and the resource arms, short edits, same holder), `test/unit/test_endtoend.ml`, `test/unit/test_proof.ml`, SPEC 2.2 and 4.3, PROOF-FORMAT 5, INVARIANTS I-X2, ROADMAP row | interrupt-session (laptop, `wave73-interrupt`) | 2026-11-24 |
-| M17-bench-series, the arm `-f --no-proof` on the sixteen editions, on fataepyc-04 (booked by the user); D-0229 reserved. No file of the repo until the record | `fataepyc-04:/scratch/arthur/series-20261124-*` | docs-session (laptop) | 2026-11-24 |
 
 ## Cross-session requests
 
@@ -470,6 +469,7 @@ section 1. Shares are inclusive, of the whole run.
 
 | Task | Session | Date | Summary |
 |---|---|---|---|
+| M17-bench-series, the arm `-f --no-proof` on two binaries (D-0229) | docs-session (laptop) | 2026-11-25 | **D-0229.** Reference `f244c35a` 401 + 108, 125 refused, score 6 288. Main `36e8cc0` 420 + 112, 84 refused, score 6 590 (fixed category, all unverified). 19 complete answers gained and none lost, no contradiction between the arms. HISTORY.md, the Challenge README and one README bullet updated. |
 | M22-review-T4 (module map and facts) | docs-session (laptop) | 2026-11-24 | Docs only, CLAUDE.md and ARCHITECTURE.md section 1: `reason.ml` and `e2e.ml` in the maps, alldiff's level, sizes and counts, M2-T8 no longer "in progress", the CDCL switch. |
 | M19-config-T5 (retention default, review T12, D-0221) | agent-retention (`wave69-retention`) | 2026-11-24 | **D-0221 [AUTONOME], no change.** Tuning set at 300 s and 42 former heap refusals at 1 200 s, binary `4dde0987`: `tiered` 20 verified against 19 (proof) and 33 against 30 (no proof) of 200, but 6 heap refusals of 42 against 2. The rule fails, `keep_all` stays. Eviction frees no memory (the gated instance stays in the engine), filed |
 | M22-review-T4 (README, the limit of 2011 to 2014) | readme-session (laptop) | 2026-11-24 | `README.md` only: the Challenge's limit was 900 s from 2011 to 2014 and the series used 1 200 s. |
@@ -687,10 +687,9 @@ section 1. Shares are inclusive, of the whole run.
 
 ## Handoff notes
 
-### 2026-11-24 (docs-session, laptop): the `-f --no-proof` arm runs on fataepyc-04 (D-0229)
+### 2026-11-25 (docs-session, laptop): the `-f --no-proof` arm is done (D-0229)
 
-Started 17:20 UTC with the user's agreement, launcher `/scratch/arthur/series-go.sh` on fataepyc-04 (pid in `series-go.pid`), 46 in parallel per binary. Old binary `f244c35a` on D-0203's flattened files (`/scratch/arthur/series-20261123-binA`), main `36e8cc0` (binary `ef2f76c8`) on its own flattening (`/scratch/arthur/series-20261124`), which starts when that flattening ends. Settings of D-0203 (1 200 s, 16 GiB address space, 8 GiB heap), arm label D in both. Tables go to `/cluster/arthur/baguette-results/series-20261124-fnoproof/`. fataepyc-04 was booked by the user; nothing else of ours runs there.
-Correction to CLAUDE.md's node section: `/cluster` is the same directory on fataepyc-04, 06 and 07 (same inode, read 2026-11-24).
+Tables in `/cluster/arthur/baguette-results/series-20261124-fnoproof/`, which now has an index (`baguette-results/README.md`). Nothing of it runs on fataepyc-04 any more, and the run directories there (`/scratch/arthur/series-20261124`, `series-20261123-binA`) can be deleted. The README's performance table is still D-0203, since the arm has no proof. Only the bullet on the merged work changed.
 
 ### 2026-11-24 (docs-session, laptop): M22-review-T4, the module map, and what an audit of the records found
 

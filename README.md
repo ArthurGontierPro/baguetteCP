@@ -76,8 +76,10 @@ How to read these numbers.
 
 - This series ran the binary `f244c35a`, which has the bits encoding as its default (D-0201) and no
   proof cap, but predates the coverage, speed and correctness work merged since (D-0206, D-0208,
-  D-0209, D-0212 to D-0217, D-0220, and the integer-overflow fix of M22-review-T1). The effect of that
-  work on the Challenge is not measured yet. On the benchmarks of D-0208, a node costs 49 % fewer
+  D-0209, D-0212 to D-0217, D-0220, D-0222, and the integer-overflow fix of M22-review-T1). Measured
+  with `-f --no-proof` (unverified, same settings), that work brings 401 complete answers to 420,
+  125 refusals to 84 and the summed score from 6 288 to 6 590 in the fixed category (D-0229). It is
+  not measured with proof yet. On the benchmarks of D-0208, a node costs 49 % fewer
   instructions on costas and 35 % fewer on multi-knapsack without proof (41 % and 34 % with proof),
   and between 6 % fewer and 0.4 % more on the three others.
 - The scores rose from 2 789 to 4 043 (with proof), from 3 581 to 5 799 (`-f`) and from 3 237 to 4 428
