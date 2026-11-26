@@ -29176,7 +29176,7 @@ calibrated (M7-T14). A larger budget inside 16 GiB is not measured.
 
 ## D-0224  [AUTONOME] M19-config-T11, then T2 to T4 measured on the CDCL loop: chronological backtracking for long jumps under `--cdcl` (`--chrono N`), with the asserted literal recorded at the level the search goes back to. The trail stays ordered by level, no `Store`, `Engine` or proof-rule change; the learned clause's own instance re-asserts it after a later backtrack through the engine's existing re-seed of young instances
 
-**Status**: IN PROGRESS on branch `wave71-chrono` (agent-chrono, 2026-11-24). ROADMAP M19-config-T11,
+**Status**: DONE on branch `wave71-chrono` (agent-chrono, 2026-11-24 to 26), not merged. ROADMAP M19-config-T11,
 T2, T3, T4. Taken in autonomous mode. The solver's default is NOT changed here (M19-config-T1 decides
 it on a full series). Results in `/cluster/arthur/baguette-results/chrono/`.
 
@@ -29437,3 +29437,89 @@ phase saving gains 3 complete answers on the loop (41 -> 44) and loses 4 on `dfs
 3-SAT probes it changes one answer either way (section 4). Activity without restarts is the worst arm on both searches (0.057). Every
 activity arm is below `-f` by 0.02 of the share or more, on both searches: the alternation with the
 annotation is what carries `-f` on this set, as D-0185 found on the full series.
+
+### 6. Measured: the tuning set with proof (the two best loop arms, `Cfix`, and `dfs`)
+
+The two loop arms with the best share in section 5, `Cf` and (tied at 0.078, more complete answers)
+`Cal`, plus `Cfix` (Part 1's arm) and the two `dfs` references `Dfix` (the default) and `Df`. Same
+binary and settings, with `--proof`; veripb 3.0.2 (`d5644ca4`) on every run that printed a complete
+answer, in its own 64 GiB scope, 3 600 s; verified proofs deleted. 1 000 runs on 2026-11-26, up to 60
+at a time, the node's total under 88. A complete answer counts only when VERIFIED.
+
+| arm | verified complete | incumbent only | nothing | died | share (5 arms) | conflicts/s | vs `DfixP` | vs `DfP` | families vs `DfixP` | families vs `DfP` |
+|---|---|---|---|---|---|---|---|---|---|---|
+| CfixP | 20 | 121 | 53 | 5 | 0.174 | 57 | 24+ 28- | 49+ 99- | 19 / 25 | |
+| CfP | 32 | 128 | 34 | 5 | **0.236** | 45 | 93+ 48- | 59+ 63- | 81 / 39 | 53 / 56 |
+| CalP | 31 | 120 | 40 | 8 | 0.175 | 56 | 78+ 80- | 51+ 97- | 70 / 70 | |
+| DfixP | 19 | 124 | 51 | 5 | 0.179 | 54 | | 52+ 97- | | |
+| DfP | **37** | 123 | 34 | 5 | **0.236** | 44 | 97+ 52- | | 86 / 44 | |
+
+Not one proof rejected: 139 checked, 137 VERIFIED (94 `BOUNDS a <= obj <= a`, 40 `SATISFIABLE`,
+5 `BOUNDS INF <= obj <= INF`), two over the 3 600 s check (smelt_4 under `CfP`, an optimum found in
+285 s, and oocsp racks_030 under `DfP`) and one still being checked when this was written
+(sdn-chain d30n600-7 under `CalP`). The proof costs the loop what it costs `dfs`: over the 188
+instances where both made 50 conflicts, `CfP` writes 1.04 times `DfP`'s bytes per conflict at 0.99
+times its conflicts per second (`CfixP` against `DfixP`: 1.04 and 1.03), so chronological
+backtracking's longer-lived trace lines cost nothing measurable.
+
+With proof, `-f` on the loop and on `dfs` are a tie on the score (0.236 both) and `dfs` has five more
+verified answers (37 against 32: it keeps gfd-schedule, nside EASY, evm BDARUMA, pennies, word-equations,
+products-and-shelves, stripboard and solbat, the loop keeps steelmillslab 14_1, test-scheduling t30
+and oocsp racks, whose `DfP` proof did not check in time). Without proof the same two arms gave the
+loop three more (51 against 48). The two signs disagree, and on this set both differences are a few
+instances of the 200: `-f` against `-f` the loop and `dfs` are not separated. `CfixP` against `DfixP`
+is a tie as without proof (20 against 19 verified).
+
+### 7. Recommendation, and the option table for M19-config-T1
+
+The choices taken here without asking, most consequential first:
+
+1. **Chronological backtracking records the literal at the level the search goes back to**, not at
+   its true level (Nadel and Ryvchin's out-of-order trail needs `Store` and I-T2 changed). The
+   engine's re-seeding of young instances supplies what the out-of-order trail would keep. Reverting
+   is not passing `--chrono`.
+2. **The threshold is 20 levels**, chosen on four instances of the tuning set (section 2), so the set
+   is not an independent test of it. N&R's 100 is the loop without the option here.
+3. **`--chrono` is a separate flag and NOT on by default under `--cdcl`**, although Cfix beats Lfix
+   (21+ 13-, 3 more complete answers): `--cdcl` alone stays D-0219's loop, so the record of that row
+   stays reproducible and the switch is reversible by construction. Proposed for when the loop is
+   decided: `--cdcl` implies `--chrono 20`.
+4. **The proof arms were five, not three** (the two best loop arms, `Cfix`, and both `dfs`
+   references): the node was free, and the decision below needs `Cf` against `Df` with proof.
+5. **`--cdcl` was added to the CLI** (D-0219's request), `BAGUETTE_CDCL` kept.
+
+The options for the default (M19-config-T1 decides on the full series; nothing changes here):
+
+| option | search | restarts | phases | tuning set, no proof (share, complete) | with proof (verified) | cost |
+|---|---|---|---|---|---|---|
+| A. today | `dfs`, annotation | none | none | 0.078, 34 | 19 | |
+| B. `-f` (D-0185's proposal) | `dfs`, annotation/activity alternating | Luby 100 | phase saving | 0.098, 48 | **37** | every proof and tree changes; 336 instances worse on the full series (D-0185) |
+| C. the loop under `-f` | `--cdcl --chrono 20`, alternating | Luby 100 | phase saving | **0.099, 51** | 32 | as B, plus the loop is the default search (two searches to keep or `dfs` retired) |
+| D. the loop, fixed | `--cdcl --chrono 20`, annotation | none | none | 0.078, 35 | 20 | every proof changes for a tie with A |
+| E. the loop, activity | `--cdcl --chrono 20`, activity | Luby or LBD | phase saving | 0.077, 44 (Luby), 0.073, 40 (LBD) | 31 (Luby, no phase) | loses to `-f` on both searches by 0.02 |
+
+**Recommendation.** For the full series of M19-config-T1: **search `-f` (B or C), restarts Luby on
+D-0137's unit, phase saving on**. B against C is not decided by this set: a tie on the score with
+and without proof, three more complete answers for the loop without proof and five fewer with
+proof. Run both on the full series, with proof, and choose C only if it does not lose verified
+answers there; its case is the 3-SAT probes (24 against 21 of 32 under LBD restarts, 2 to 3 times
+the conflicts per second under restarts) and QR48 (4 s against 19 s under activity + Luby +
+phase), i.e. instances where learning, not propagation, does the work. If the loop is kept, it
+should run with `--chrono 20` (option D is the cheapest form of that statement: a tie with `dfs`
+on a fixed search, where D-0219's loop alone was behind). An activity-only order (E) is not a
+candidate: every activity arm is below `-f` on both searches, and activity without restarts is the
+worst arm of all (0.057). Phase saving: keep it with restarts on the loop (+3 complete answers); on
+`dfs` it cost 4 under activity + Luby, so it is not a free addition there.
+
+Proposed SPEC 3.4 sentence if C is chosen, added to D-0219's: "With `--chrono T`, a backjump that
+would undo more than T levels goes back one level instead and asserts the learned literal there."
+
+### 8. How to revert
+
+The code is one commit, `440b579` (`Search.cdcl`'s chronological step and fallback re-push, the
+`chrono` field and `BAGUETTE_CHRONO`, the CLI's `--cdcl` and `--chrono`, four unit-lane arms). With
+neither `--chrono` nor `BAGUETTE_CHRONO` nothing it adds runs except two counters, so reverting is
+`git revert 440b579` or not passing the flag. Results and scripts: `/scratch/arthur/chrono-runs/`
+(the campaign `camp/`, the pilot `pilot*/`, the identity and lane re-runs `recheck/`), copied to
+`/cluster/arthur/baguette-results/chrono/` without proofs; `tools/analyse.py camp/tune <arms> --ref
+<arm> --fam bench/tuning/set.lst` reprints sections 5 and 6.
