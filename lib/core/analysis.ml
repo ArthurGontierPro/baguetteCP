@@ -699,11 +699,20 @@ exception Bad of error
    produce a cut with a wrong antecedent in it. M2-T7 stamps the field and
    [Engine.check_attribution] checks it at the moment of the pruning; this checks it again
    at the moment it is USED, which is the check that makes the field load-bearing here
-   rather than decorative. *)
+   rather than decorative.
+
+   [watches] is [List.exists (Var.equal var)] without the partial application, which
+   allocated a closure per check (D-0236: -0.3 % per node on elitserien handball12, -0.6 %
+   on costas13). The check is still O(arity); an O(1) "does instance i watch v" belongs
+   to [Engine] (D-0191's request). *)
+let rec watches var = function
+  | [] -> false
+  | v :: vs -> Var.equal v var || watches var vs
+
 let check_attribution store ~(vars_of : int -> Var.t list option) ~at ~prop ~var =
   if prop <> Store.no_prop then
     match vars_of prop with
-    | Some vs when List.exists (Var.equal var) vs -> ()
+    | Some vs when watches var vs -> ()
     | _ -> raise (Bad (Misattributed { at; claimed = prop; var = Store.name store var }))
 
 let analyse ?(scope = At_conflict_level) store (c : Store.conflict)
