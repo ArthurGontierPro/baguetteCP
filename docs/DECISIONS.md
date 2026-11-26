@@ -29173,3 +29173,121 @@ Tables and the comparison script (`cross_arms.py`, `cross_arms.txt`) are in
 `/cluster/arthur/baguette-results/series-20261124-fnoproof/`. Raw solver outputs were not kept, at the user's request.
 The 8 GiB heap budget is half of the address space by the harness's rule (`compare_run.sh`), which was never
 calibrated (M7-T14). A larger budget inside 16 GiB is not measured.
+
+## D-0226  [AUTONOME] M21-memory-T3 fix 1, the learned-row layout, and a PB size guard (M19-config-T5 re-measured). An evicted learned constraint now LEAVES THE ENGINE and the GC reclaims it; a learned row is held as flat arrays; two switches cap learned PB rows by length, default off. Default artefacts byte-identical
+
+**Status**: DECIDED (agent-evict, `wave73-evict`, 2026-11-26). Taken in mode autonome: it adds a
+field to `Propagator.instance` and states a new owner rule for a learned constraint's runtime
+lifetime. Revert: revert the code commits named in section 7 (each is self-contained: fix 1 and the
+layout are one commit, the guard switches another). Nothing else depends on them.
+Results, scripts, binaries and campaign rows: `fataepyc-06:/cluster/arthur/baguette-results/evict/`.
+
+### 1. Context
+
+D-0221 section 5 found that an eviction freed nothing: on 2015 mapping mesh3x3_2 the live heap was
+109.7 M words with and without 455 evictions, because `Retention.gate` returned `{inst with run;
+inst_advise}` (the gated record still held `inst_row`, `inst_watched` and the inner `run`, all
+closures over the `Pb` instance) and the engine kept that record in its slot and every wake list
+for the whole run. D-0218 section 5 put learned rows at 270 to 330 B per literal, 79 to 100 % of the
+live heap at refusal on mapping, steelmill and community, and listed where: the term list, the
+propagator's own copies, the proof row, a canonical key string, one subscription per literal. D-0221
+also profiled mapping: `Pb.pass` 49 % of the cycles (every wake walks every term; p90 457 terms) and
+PB conflict analysis 34 %. D-0197 section 6 had left a row-length cap as an open question.
+
+### 2. Fix 1: an evicted learned constraint leaves the engine
+
+**The change.** `Propagator.instance` gains one field, `inst_attach : (unit -> unit) -> unit`.
+`Engine.add` calls it once with the function that removes the instance from that engine;
+`Propagator.pack` and every other constructor set it to `attach_never`, which drops the function.
+`Retention.gate`'s wrapper keeps it (`g_leave`), and `Retention.reduce` calls it in the step that
+switches the gate off, releases the citation and retires the id. `Engine.remove t id` puts a
+tombstone in the slot (same id and name, no variable, `run` = `Fixpoint`, advisor `false`), takes
+a self-watching instance out of the watched-literal index and the resting levels at once, and
+leaves its ids in `wake_static` and `watchers` until the next `propagate`, which filters every list
+a removed id named once (`pending`, `purge`). `mark_dirty` refuses a removed id, so no wake, seed,
+release or newborn rule runs it again.
+
+**Who owns a learned constraint's lifetime now.** `retention.ml`'s header said the database is the
+single owner of the PROOF id. It is now the single owner of the runtime instance as well: the
+engine holds a gated instance on the database's behalf, for exactly as long as the database holds
+its id, and only the database can end that (the removal function is reachable only from the gate;
+the engine never removes anything by itself). Under `keep_all` there is no gate, so nothing is
+removed and the default is byte-identical by construction. The proof side is unchanged: the `del`
+is still `Retention.retire`'s, once (I-X2), and an instance is removed only when the lock rule of
+D-0139 already let it be evicted, so no trail entry and no pending PB analysis names it (I-X3).
+
+**Why the search cannot move.** The removed instance's run was already `Fixpoint` and its advisor
+already `false` (the gate switched them off first), so what goes is runs and asks that changed
+nothing. Those are WORK counters; no trail entry, no proof line, no SEARCH counter changes.
+
+**Measured.** 2015 mapping mesh3x3_2, `--no-proof`, `BAGUETTE_NODE_LIMIT=2500`, live words after a
+full major collection every 100 learned constraints (`BAGUETTE_RETENTION_TRACE_HEAP=1`, added by
+this record; the base binary was built from main plus that probe only):
+
+| binary | policy | live words at 1 200 learned | at 2 400 | peak RSS |
+|---|---|---|---|---|
+| main + probe | keep_all | 109.6 M | 250.6 M | 2.19 GB |
+| main + probe | tiered:first=100,inc=50 | 109.6 M | 243.2 M | 2.15 GB |
+| fix 1 | keep_all | 109.7 M | 250.7 M | 2.19 GB |
+| fix 1 | tiered:first=100,inc=50 | **83.3 M** | **94.9 M** | **1.38 GB** |
+
+Same stdout, same nodes (2 501), conflicts (1 242), learned and retention lines in all four. Under
+`tiered` the live heap at 2 400 learned (929 live, 1 471 evicted) falls by 61 %.
+
+### 3. Fix 2: a learned row is flat
+
+**The change.** `Pb.t` (the propagator of every learned PB row and, through `Clause`, of every
+clause) holds one array per field: `coef`, `xv` (variables), `kv` (thresholds), `pv` (polarity
+bytes), `dlo`/`dhi` (declared bounds) and `lits` (the proof literal of each term, from which the
+name is read), plus `expl_all`, the scan and the lazy layout (now only the groups). The `atom` and
+`term` records stay as the construction and test view (`atom_at`, `terms`); no pass reads one.
+`Clause.Learned_clause` lost its own atom array and reads the row by index. `of_terms` keeps the
+literal it is handed, so a learned row and its propagator share their literals.
+`Learned.pb_instance`'s `inst_row` closure reads the row back off the instance's arrays instead of
+capturing a second copy of the `Learned.t`. `Pb.vars` lists each variable once (a row lifted onto a
+ladder names a variable once per rung; every reader of `inst_vars` treats it as a set). The duplicate
+count in `Retention` is keyed on `Learned.hash`, a 63-bit hash of exactly what `Learned.to_string`
+renders, so no entry keeps the row's text (27 B per literal). The count is a measurement: a
+collision makes it one too high, with probability about 2^-62 per pair of rows.
+
+Per term, the propagator went from a list cell, a `term` record, an `atom` record (six fields),
+an array slot in the term array, the atom array and the layout, a cell and a literal record in a
+separate literal list (about 230 B on the 64-bit heap) to 49 B of arrays, plus the cell of
+`expl_all`'s list.
+
+**What was NOT changed, and why.** (a) `expl_all` stays eager: `Explanation.clause` hash-conses
+against the WRITTEN nodes (D-0192), so the node it returns depends on when it is built, and a lazy
+build would change the proof. (b) The `Learned.t` row is still held by the citation text
+`lib/core/search.ml` registers (`Retention.cite_lazy`'s closure), which this branch may not edit
+(agent-chrono and interrupt-session hold `search.ml`); since the literals are shared, that costs
+the row's term list and not a second set of literals. (c) The engine's subscription indexes
+(`watchers`, read only by tests, and `wake_static`) are unchanged in shape.
+
+**Measured**, same runs as section 2:
+
+| binary | policy | live words at 1 200 learned | at 2 400 | words per learned constraint, 1 200 to 2 400 | peak RSS |
+|---|---|---|---|---|---|
+| main + probe | keep_all | 109.6 M | 250.6 M | 117.5 k | 2.19 GB |
+| fix 1 + 2 | keep_all | **65.2 M** | **138.0 M** | **60.7 k** | **1.33 GB** |
+| fix 1 + 2 | tiered:first=100,inc=50 | 50.6 M | **50.7 M** | | **0.88 GB** |
+
+Under the default, the live heap at 2 400 learned falls by 45 % and the growth per learned
+constraint by 48 %; with `tiered` the heap no longer grows between 1 200 and 2 400 learned. Same
+stdout and search counters as main. CPU to 2 400 learned: 159 s to 132 s under `keep_all` (a full
+collection per 100 learned in both, so this is a GC figure as much as a pass figure).
+
+**What it cost in time, and the fix to that.** The first flat version was SLOWER per node:
++4.4 % instructions on QR48 (qr3, 20 000 nodes, `--no-proof`), +4.2 % on mknap2-1, +1.4 % on
+costas14, and the scaling lane failed on QR72 (+2.8 % of the late cost, threshold 0.5 %). A term had
+become three bounds-checked array reads where it was one array read and three field loads, the
+learned clause read the row through cross-module accessors (calls under dune's `-opaque` dev
+profile), and a first attempt at removing the checks through a polymorphic `uget` helper made it
+worse on the reads it touched (the helper's body tests for a float array). The hot reads are now
+typed `Array.unsafe_get` at each site, with the invariant stated in `pb.ml` (every per-term array
+has length `n_terms`, every index is a term index), and `Learned_clause` reads `Pb.t`'s arrays
+directly. Against main, same node counts: qr3 +0.48 %, mknap2-1 -0.44 %, costas14 -1.31 %
+(instructions, dev build). The scaling lane is green: QR72 growth 1 550 213 instructions per node
+against main's 1 528 859 and a baseline of 1 534 727 (threshold 1 553 280), the other lines 2.6 to
+9.7 % under their baselines. What the layout costs in clarity: a term is no longer one value that
+can be passed around; code that wants one asks for `atom_at` (allocating), and the pass reads three
+arrays by index under an invariant the type does not carry.
