@@ -1,0 +1,23 @@
+% M18-coverage-T7 (D-0233): flattened by MiniZinc 2.10.1 with baguette's mznlib from
+% mznlib/test/alldiff_except0_src_sat.mzn.
+% alldifferent_except_0 needs no mznlib file: std's fzn_alldifferent_except writes
+% global_cardinality(xs, dom_array(xs) diff {0}, 0, 1) when every variable is bounded, and
+% mznlib/fzn_global_cardinality_low_up.mzn routes that to baguette's gcc. This model pins it.
+
+
+predicate baguette_global_cardinality(array [int] of var int: x,array [int] of int: cover,array [int] of var int: counts);
+array [1..3] of int: X_INTRODUCED_23_ = [1,2,3];
+array [1..2] of int: X_INTRODUCED_30_ = [1,-1];
+var 2..3: X_INTRODUCED_17_;
+var 0..3: X_INTRODUCED_18_;
+var 0..3: X_INTRODUCED_19_;
+var 1..3: X_INTRODUCED_20_;
+var 0..1: X_INTRODUCED_24_ ::var_is_introduced ;
+var 0..1: X_INTRODUCED_25_ ::var_is_introduced ;
+var 0..1: X_INTRODUCED_26_ ::var_is_introduced ;
+array [1..5] of var int: x:: output_array([1..5]) = [0,X_INTRODUCED_17_,X_INTRODUCED_18_,X_INTRODUCED_19_,X_INTRODUCED_20_];
+array [1..3] of var int: X_INTRODUCED_27_ ::var_is_introduced  = [X_INTRODUCED_24_,X_INTRODUCED_25_,X_INTRODUCED_26_];
+constraint baguette_global_cardinality(x,X_INTRODUCED_23_,X_INTRODUCED_27_);
+constraint int_lin_eq([1,1,1,1],[X_INTRODUCED_17_,X_INTRODUCED_18_,X_INTRODUCED_19_,X_INTRODUCED_20_],6);
+constraint int_lin_le(X_INTRODUCED_30_,[X_INTRODUCED_18_,X_INTRODUCED_19_],-1);
+solve  satisfy;

@@ -1,0 +1,20 @@
+% M18-coverage-T7 (D-0233): flattened by MiniZinc 2.10.1 with baguette's mznlib from
+% mznlib/test/alldiff_except0_src_unsat.mzn.
+% Four of five variables are kept off 0 and three values are left for them: pigeonhole on
+% the non-zero values, through baguette's gcc (see alldiff_except0_src_sat.mzn).
+
+
+predicate baguette_global_cardinality(array [int] of var int: x,array [int] of int: cover,array [int] of var int: counts);
+array [1..3] of int: X_INTRODUCED_23_ = [1,2,3];
+var 1..3: X_INTRODUCED_16_;
+var 1..3: X_INTRODUCED_17_;
+var 1..3: X_INTRODUCED_18_;
+var 1..3: X_INTRODUCED_19_;
+var 0..3: X_INTRODUCED_20_;
+var 0..1: X_INTRODUCED_24_ ::var_is_introduced ;
+var 0..1: X_INTRODUCED_25_ ::var_is_introduced ;
+var 0..1: X_INTRODUCED_26_ ::var_is_introduced ;
+array [1..5] of var int: x:: output_array([1..5]) = [X_INTRODUCED_16_,X_INTRODUCED_17_,X_INTRODUCED_18_,X_INTRODUCED_19_,X_INTRODUCED_20_];
+array [1..3] of var int: X_INTRODUCED_27_ ::var_is_introduced  = [X_INTRODUCED_24_,X_INTRODUCED_25_,X_INTRODUCED_26_];
+constraint baguette_global_cardinality(x,X_INTRODUCED_23_,X_INTRODUCED_27_);
+solve  satisfy;
