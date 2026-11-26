@@ -19,6 +19,7 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
+| M23-inputs-T1..T5 | `lib/scp/` (new), `lib/flatzinc/arith_aux.ml` (new), `lib/flatzinc/builder.ml` (arithmetic auxiliaries extracted, T4), `bin/main.ml` (reader by extension, help text), `bin/dune`, `test/scp/` (new), `test/unit/test_scp.ml` (new), `test/unit/dune`, `scripts/run_scp_tests.sh` (new), `Makefile` (scp lane), `docs/DECISIONS.md` (D-0230), `docs/ROADMAP.md` (M23 rows), `docs/ARCHITECTURE.md` §1, `CLAUDE.md` module map, `tools/e2e/scpsem.py` | agent-scp (branch `wave76-scp`) | 2026-11-26 |
 
 ## Cross-session requests
 
