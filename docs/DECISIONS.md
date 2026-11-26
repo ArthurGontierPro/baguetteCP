@@ -30820,3 +30820,123 @@ Commits on `wave73-evict`: `9265a42` fix 1 and the flat row; `0c51c8a` the guard
 `92e8e99` header comments; `c5ac012` the hot reads (instructions back to main's); `dc2a493` and
 `552771d` this record; `1f77a89` the merge of main `be07823`; `d9e57e3` **the default** (revert
 this one alone to return to `keep_all`); `dd46e34` the merge of main `20170b8`.
+
+## D-0232  [AUTONOME] M18-coverage-T8: why `regular` completes so little. The census counts a satisfaction model's SAT as an incumbent (28 of 103 are complete, not 2); against Chuffed the gap is elitserien and tppv (alldiff, not regular), rotating-workforce (gcc's factless conflicts, 82 to 99.9 % of conflicts learn nothing) and regular's own cost per node, which the call now pays only on the layers that moved (same trees and proofs, 30 to 49 % fewer instructions)
+
+**Status**: DONE on `wave78-regular` (agent-regular, 2026-11-26), not merged. Base: main `d18f679`,
+release binary `b266d78d`; branch binary `d1df685b` (release). Node fataepyc-06, 300 s runs at
+16 in parallel or fewer, 16 GiB address space, `MemoryMax=32G`, `--max-heap-mb 8192`. Runs, tables,
+perf reports, the throwaway instrumentation patch and the Chuffed runs:
+`/cluster/arthur/baguette-results/regular/`.
+
+### 1. What the census number means
+
+M18-coverage's census (`tools/compare/challenge_globals.py`, m10t5 arm A) reads `regular` as 110
+instances, 12 refused, 1 OPT+UNSAT and 62 "incumbents". Its `complete%` counts OPT+UNSAT only, so a
+SAT answer on a SATISFACTION model, which is the complete answer, is an incumbent. On D-0203's series
+(arm A, with proof) the 110 instances split as follows, a SAT with no objective being counted complete:
+
+| arm | complete (OPT+UNSAT) | satisfaction solved | incumbent | empty time-out | refused |
+|---|---|---|---|---|---|
+| A (default, proof) | 2 | 26 | 48 | 27 | 7 |
+| B (`-f`, proof) | 2 | 31 | 49 | 22 | 6 |
+| C (`--no-proof`) | 4 | 29 | 43 | 24 | 10 |
+| Chuffed (D-0211, no proof) | 29 | 40 | 27 | 14 | 0 |
+| GCS (D-0211, proof) | 13 | 19 | 34 | 31 | 2 (11 other) |
+
+So baguette solves 28 of 103 attempted (27 %), not 1 of 98, and Chuffed 69 of 110. The census
+tool's split is a TODO row (M18-coverage-T12).
+
+### 2. Where the 41 instances between baguette (arm A) and Chuffed are, and why
+
+Per family, solved A / Chuffed, then the measurement on a 21-instance sample (`sample.txt`: 6
+elitserien, 3 tppv, 5 rotating-workforce, 3 peacable, 2 nonograms, 1 pentominoes, 1 work-task).
+"Unlearned" is the share of conflicts that produced no learned clause, from a throwaway build that
+counts why `Learn.at_conflict` answers `None` (30 s runs); "time" is `perf record` (fp build, no
+proof, 40 s or 5 000 nodes).
+
+| family (instances) | A / Chuffed | where the time goes | unlearned | cause |
+|---|---|---|---|---|
+| elitserien (20) | 1 / 20 | alldiff 60 % (Regin stage), regular 2 % | under 1 % | NOT regular. handball12: Chuffed 7 207 nodes in 1.7 s, baguette 29 083 nodes in 237 s (122 nodes/s against 4 160); std's decomposition of regular does the same (OPT at 281 s) |
+| traveling-tppv (15) | 0 / 5 | alldiff 29 %, learning 20 %, element 9 %, regular 3 % | 0 | NOT regular; Chuffed needs 820 to 1 140 s on circ8 and solves no circ14/20 |
+| rotating-workforce (15) | 1 / 6 | regular 42 to 86 % (before the fix), gcc 5 to 8 % | **82 to 99.9 %**, every one a factless `global_cardinality` conflict (`Learn` returns an empty cut) | gcc's conflicts carry no facts, so the search is plain DFS: rws e-30-s-9 1.05 M nodes, 78 clauses learned, no answer; Chuffed answers in 121 791 nodes, 4 s. Then regular's cost per node |
+| peacable (10) + generalized (5) | 1 / 3 | clause 27 %, regular 6 % (pq_n7) | 0 (pq), **99 %** (gpq, gcc) | optimisation; gcc on gpq. Not regular |
+| work-task-variation (5) | 0 / 0 | 3 refused: the heap during SEARCH (`cost` over 0..1 967 436), after solutions | 23 % (gcc) | not regular |
+| nonogram (20) | 12 / 16 | **regular 32 to 78 %** | 0 | regular's cost per node: hard_01 232 nodes/s, Chuffed 1 266 |
+| pentominoes (20) | 13 / 19 | (solved in seconds when not refused) | 0 | 2 zayenz size 20 REFUSED at the front end: 280 to 320 MB `.fzn`, 3.7 to 4.3 M state flags declared by mznlib, heap full after 3 200 clauses. Encoding size |
+
+**Search over the state flags: ruled out.** A throwaway counter of decisions by variable kind, 20 000
+nodes on 6 instances, default and `-f` (whose activity order ranks every unfixed variable): 0
+decisions on a state flag in 12 runs of 10 000 to 11 400 decisions each.
+
+**Native against std's decomposition** (mznlib without `fzn_regular*.mzn`, same binary, `--no-proof`,
+300 s): no status changes on 20 of 21, except rws e-80-s-1 which std answers at 36 s and native at 80
+s (another tree). Where regular dominates, native is faster per node: rotating 1780 146 046 against
+21 407 nodes, 1242 91 857 against 14 227, nonogram_hard 69 692 against 34 271, dom_10 89 099 against
+45 035. Elsewhere the two are within noise. The native propagator helps; it is not the cause.
+
+### 3. The fix in reach: regular's call is incremental
+
+`propagate` rescanned every layer, every edge and every flag at every call, with a `Store.get` per
+test (`dead`, `is_set`: about 6 + 2S loads per flag per call). The new rule (module header, "The call
+is INCREMENTAL"): every condition the five steps test is local to a layer or to the edges of one
+letter, and all of them hold at the end of a call that returns `Fixpoint`. A later call compares each
+flag's state with a byte cache of that fixpoint, and each letter's domain by physical equality
+(`Domain.t` is immutable), and skips the conditions whose inputs did not move. Its own writes mark
+their layer or letter dirty, so the passes see their own deaths as before. Hence the same prunings in
+the same order with the same reasons. The passes read the cached bytes instead of the store, and the
+edge loops read a flattened edge table and a per-letter membership table. After a conflict, the
+layers that call wrote are marked stale and re-read. An aliased word keeps the full scan. Under
+`BAGUETTE_DEBUG` every call first checks that the cache is the store's and that every skipped
+condition holds (`skipped_hold`).
+
+Two versions were measured and dropped on the way: physical comparison of the FLAG domains (an
+array of `Domain.t`) made rotating 1780 12 % slower (no layer is clean there after a conflict, and
+the array's write barrier promoted every new domain), and a version that still invalidated
+everything after a conflict.
+
+| measured | base `b266d78d` | branch `d1df685b` |
+|---|---|---|
+| instructions, 5 000 nodes, same tree: nonogram_hard_01 | 87.8 G | 45.0 G (-49 %) |
+| rotating-workforce Example1780 | 68.0 G | 44.8 G (-34 %) |
+| nonogram_dom_10 | 14.9 G | 10.4 G (-30 %) |
+| 300 s `--no-proof`, nodes/s: rotating 1780, 1242 | 487, 306 | 707, 478 |
+| nonogram_hard_01, dom_10 | 232, 297 | 319, 320 |
+| rws e-25-s-7, e-30-s-9, e-80-s-1 (time to answer) | 4 728, 3 513 n/s, 80 s | 5 579, 4 152 n/s, 62 s |
+| 300 s with proof, nodes/s: rotating 1780, 1242, nonogram_hard | 243, 193, 142 | 282, 236, 179 |
+| statuses on the sample, both arms | | unchanged (no instance crosses 300 s) |
+
+Wall-clock rates were taken under a node load of 40 to 55, so they are indicative; the
+instruction counts at a node limit are the measurement. regular's remaining share on nonogram_hard
+is 62 % of the run (forward pass 25 %, the change scan 12 %, kills and their reasons 14 %), and the
+GC 17 %, most of it the reasons' allocations.
+
+**Identity.** On the 21-instance sample at 2 000 nodes with proof, the `.opb`, the `.pbp` and stdout
+are byte-identical to the base binary's (`ident/md5-2000nodes.txt`). On the 232 test models,
+stdout, `.opb` and `.pbp` are byte-identical. `BAGUETTE_DEBUG=1` at 400 nodes on nonogram_dom_10,
+nonogram_hard_01, rotating 1780 and rws e-30-s-9: no invariant raised. No differential-lane
+instance calls `regular` (none of the 25 corpus files), so the lane cannot see this module: see
+the handoff note.
+
+### 4. What is left, and where
+
+1. **gcc's conflicts with facts** (M18-coverage-T11, added): alldiff's Hall conflicts carry their
+   facts under a decision since M7-T33 (D-0156); gcc's rule A conflict is still the factless
+   emptying push. That is the rotating-workforce and generalized-peacable blocker (82 to 99.9 % of
+   conflicts unlearned), and work-task-variation's 23 %.
+2. **elitserien** is alldiff's cost per node (60 %) and 4 times Chuffed's nodes: an M20-pernode
+   question, not a regular one.
+3. **The flag encoding's size**: mznlib declares (n + 1) * Q flags in the `.fzn`, and most are
+   STATICALLY dead, unreachable from q0 or not co-reachable to F even with every letter over the
+   whole alphabet (`deadflags.py`, in the results directory): live are 47.6 % of zayenz size 20
+   far's 3.7 M, 54.0 % of zayenz size 10's 127 k, 31.2 % of rotating 1780's 8 162, 32.3 % of
+   nonogram_hard_01's 62 928, 11.0 % of elitserien handball12's 9 408 and 71.4 % of
+   nonogram_non_awful_1's 91 560. Each dead flag is a declared variable, its FWD rows and a root
+   kill line, and the call scans it. Leaving them out (mznlib declaring only the live pairs, or
+   compile.ml stating them 0 as part of the flags' definition) changes the .opb and the naming
+   contract, so it is a design record of its own, not done here.
+
+### 5. Decision and revert
+
+[AUTONOME] The incremental call is kept: it changes no search, no proof and no answer, so it is not
+a change of default behaviour. Revert: `git revert` of `772ac90` alone.

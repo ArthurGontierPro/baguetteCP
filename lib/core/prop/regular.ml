@@ -140,7 +140,33 @@
    reason costs the sum of the tails it recurses into (each at most two facts per letter)
    and allocates only what it hands the store: the dedup is stamps on per-instance scratch
    arrays indexed by (slot, direction), never a hash of a fact (D-0146 section 5 measured
-   that hashing at a quarter of the run). *)
+   that hashing at a quarter of the run).
+
+   ---------------------------------------------------------------------------
+   The call is INCREMENTAL (D-0232): a pass skips what cannot have changed
+   ---------------------------------------------------------------------------
+
+   Every condition the five steps test is LOCAL. Step 1 and step 5 read one layer's
+   flags; steps 2 to 4 read the edges of letter i, that is layer i's flags, letter i's
+   domain and layer i + 1's flags. When a call returns [Fixpoint], every such condition
+   holds in the state it leaves (the idempotence argument above). So a later call need
+   only test the conditions whose inputs differ from that state: a layer whose flags all
+   have the state the fixpoint left is CLEAN, a letter whose domain is physically the one
+   it left is clean, and step 1/5 skip a clean layer, steps 2 to 4 the edges of a clean
+   letter between two clean layers. Everything the call itself writes marks its layer or
+   letter dirty, so the passes see their own deaths exactly as the full scan did: the
+   prunings, their order, their reasons and therefore the trace are the full scan's,
+   byte for byte. That is the soundness argument and the test (D-0232 measures proof
+   identity at a node limit on the Challenge sample): the skip changes WHICH conditions
+   are tested, never what a tested one concludes.
+
+   What it costs: one state byte per flag ([st], also the read the passes make instead of
+   a [Store.get] per test), one domain reference per letter, and one comparison per flag
+   per call. After a conflict the layers the call wrote are marked [stale] (their bytes
+   hold writes the backtrack undoes) and read afresh. An ALIASED word scans everything,
+   always: a removal at one layer moves a letter another layer reads, after that layer's
+   pass. Under BAGUETTE_DEBUG every call first checks that the bytes are the store's and
+   that every condition it is about to skip holds ([skipped_hold]). *)
 
 module Lit = Baguette_proof.Lit
 
@@ -178,6 +204,22 @@ type t = {
   slot_dhi : int array;
   slot_of_name : (string, int) Hashtbl.t; (* for a remover's facts, named by string *)
   tails : tail option array; (* per flag: the tail of the last line this instance wrote *)
+  (* The incremental call (D-0232): what the last call that reached its fixpoint LEFT --
+     each flag's state, each letter's domain (compared by physical equality) -- and what
+     this call found or made dirty. *)
+  incremental : bool; (* false for an aliased word: every call scans every layer *)
+  mutable valid : bool; (* [st]/[xsnap] hold a fixpoint's state *)
+  st : Bytes.t; (* (n + 1) * nq, as [flags]: the fixpoint's states, then this call's *)
+  stale : bool array; (* n + 1: [st] of layer i holds a call that ended in a conflict *)
+  xsnap : Domain.t array; (* n, letter i's domain; unused for a [Fixed] cell *)
+  ldirty : bool array; (* n + 1: a flag of layer i moved *)
+  xdirty : bool array; (* n: letter i moved *)
+  (* [out] flattened for the edge loops: state q's edges are oi.(q - 1) .. oi.(q) - 1,
+     symbol ok.(e) (v - smin) to state ot.(e). *)
+  oi : int array;
+  ok : int array;
+  ot : int array;
+  inx : bool array; (* w: the symbols in the current letter's domain *)
   (* Scratch, reused by every call: nothing in it survives a call. *)
   reach : bool array; (* (n + 1) * nq *)
   sup : bool array; (* w: a symbol some live edge of the current layer carries *)
@@ -190,6 +232,8 @@ type t = {
   mutable others_rev : Reason.fact list;
   mutable stamp : int;
 }
+
+let free = '\001'
 
 let step t q v =
   let k = v - t.smin in
@@ -245,6 +289,10 @@ let make store ~xs ~nq ~smin ~delta ~q0 ~final ~flags : t =
   in
   let slots = Array.of_list (List.rev !names) in
   let ns = Array.length slots in
+  let nletters =
+    Array.fold_left (fun c x -> match x with Letter _ -> c + 1 | Fixed _ -> c) 0 xs
+  in
+  let any = Store.get store flags.(0) in
   {
     n;
     nq;
@@ -265,6 +313,20 @@ let make store ~xs ~nq ~smin ~delta ~q0 ~final ~flags : t =
     slot_dhi = Array.map (fun (_, _, hi) -> hi) slots;
     slot_of_name;
     tails = Array.make ((n + 1) * nq) None;
+    incremental = nletters = ns;
+    valid = false;
+    stale = Array.make (n + 1) false;
+    xsnap = Array.make n any;
+    ldirty = Array.make (n + 1) true;
+    xdirty = Array.make n true;
+    st = Bytes.make ((n + 1) * nq) free;
+    oi =
+      (let a = Array.make (nq + 1) 0 in
+       Array.iteri (fun q es -> a.(q + 1) <- a.(q) + Array.length es) out;
+       a);
+    ok = Array.concat (Array.to_list (Array.map (Array.map (fun (v, _) -> v - smin)) out));
+    ot = Array.concat (Array.to_list (Array.map (Array.map snd) out));
+    inx = Array.make (Int.max w 1) false;
     reach = Array.make ((n + 1) * nq) false;
     sup = Array.make (Int.max w 1) false;
     best = Array.make (Int.max (2 * ns) 1) 0;
@@ -278,8 +340,17 @@ let make store ~xs ~nq ~smin ~delta ~q0 ~final ~flags : t =
 let vars t = t.vars
 let fid t i q = (i * t.nq) + q - 1
 let flag t i q = t.flags.(fid t i q)
-let dead store t i q = Domain.hi (Store.get store (flag t i q)) = 0
-let is_set store t i q = Domain.lo (Store.get store (flag t i q)) = 1
+
+(* A flag's state, as [st] caches it for the call ([detect] fills it from the store, and
+   every write of this instance updates it). *)
+let dead_c = '\000'
+let set_c = '\002'
+
+let state_of d =
+  if Domain.hi d = 0 then dead_c else if Domain.lo d = 1 then set_c else free
+
+let dead _store t i q = Bytes.unsafe_get t.st (fid t i q) = dead_c
+let is_set _store t i q = Bytes.unsafe_get t.st (fid t i q) = set_c
 let dead_fact t i q = Reason.at_most ~name:t.fnames.(fid t i q) ~decl:1 0
 let set_fact t i q = Reason.at_least ~name:t.fnames.(fid t i q) ~decl:0 1
 
@@ -429,12 +500,14 @@ let kill store t i q =
     let concl = dead_fact t i q in
     let claim = Option.to_list (Reason.lit_of_fact concl) in
     let v = flag t i q in
+    t.ldirty.(i) <- true;
     match
       Store.set_hi store v 0
         (Reason.because ~concludes:(Some concl) fs (clause_expl claim fs))
     with
     | Store.Conflict c -> raise (Found c)
     | Store.Changed ->
+        Bytes.unsafe_set t.st (fid t i q) dead_c;
         let e = Store.trail_entry store (Store.hi_support store v) in
         t.tails.(fid t i q) <- Some { entry = e; keys = packed; others }
     | Store.Unchanged -> ()
@@ -455,31 +528,32 @@ let check_layer store t i =
    and n. *)
 let fixed_flags store t =
   for i = 0 to t.n do
-    let first = ref 0 in
-    for q = 1 to t.nq do
-      if is_set store t i q then
-        if !first = 0 then first := q
-        else (
-          start t;
-          add_flag store t ~set:true i !first;
-          add_flag store t ~set:true i q;
-          raise (Found (conflict_now store t)))
-    done;
-    if !first > 0 then
-      for r = 1 to t.nq do
-        if r <> !first && not (dead store t i r) then (
-          start t;
-          add_flag store t ~set:true i !first;
-          kill store t i r)
-      done
+    if t.ldirty.(i) then (
+      let first = ref 0 in
+      for q = 1 to t.nq do
+        if is_set store t i q then
+          if !first = 0 then first := q
+          else (
+            start t;
+            add_flag store t ~set:true i !first;
+            add_flag store t ~set:true i q;
+            raise (Found (conflict_now store t)))
+      done;
+      if !first > 0 then
+        for r = 1 to t.nq do
+          if r <> !first && not (dead store t i r) then (
+            start t;
+            add_flag store t ~set:true i !first;
+            kill store t i r)
+        done)
   done;
   for q = 1 to t.nq do
-    if q <> t.q0 && not (dead store t 0 q) then (
+    if t.ldirty.(0) && q <> t.q0 && not (dead store t 0 q) then (
       start t;
       kill store t 0 q)
   done;
   for q = 1 to t.nq do
-    if (not t.final.(q - 1)) && not (dead store t t.n q) then (
+    if t.ldirty.(t.n) && (not t.final.(q - 1)) && not (dead store t t.n q) then (
       start t;
       kill store t t.n q)
   done
@@ -516,24 +590,35 @@ let forward_reason store t i q' =
   add_exclusion t i ~nlo:!nlo ~nhi:!nhi
 
 (* Step 2. *)
+(* Letter i's domain over the symbols, into [inx], read by the edge loops below. *)
+let load_letter t mem =
+  for k = 0 to t.w - 1 do
+    Array.unsafe_set t.inx k (mem (t.smin + k))
+  done
+
+(* Layers i and i + 1 and letter i: what every pass over the edges of layer i reads. *)
+let touched t i = t.ldirty.(i) || t.xdirty.(i) || t.ldirty.(i + 1)
+
 let forward store t =
-  check_layer store t 0;
+  if t.ldirty.(0) then check_layer store t 0;
   for i = 0 to t.n - 1 do
-    let _, _, mem = letter_dom store t i in
-    let base = (i + 1) * t.nq in
-    Array.fill t.reach base t.nq false;
-    for q = 1 to t.nq do
-      if not (dead store t i q) then
-        Array.iter
-          (fun (v, tq) -> if mem v then t.reach.(base + tq - 1) <- true)
-          t.out.(q - 1)
-    done;
-    for q' = 1 to t.nq do
-      if (not t.reach.(base + q' - 1)) && not (dead store t (i + 1) q') then (
-        forward_reason store t i q';
-        kill store t (i + 1) q')
-    done;
-    check_layer store t (i + 1)
+    if touched t i then (
+      let _, _, mem = letter_dom store t i in
+      load_letter t mem;
+      let base = (i + 1) * t.nq in
+      Array.fill t.reach base t.nq false;
+      for q = 1 to t.nq do
+        if not (dead store t i q) then
+          for e = t.oi.(q - 1) to t.oi.(q) - 1 do
+            if Array.unsafe_get t.inx t.ok.(e) then t.reach.(base + t.ot.(e) - 1) <- true
+          done
+      done;
+      for q' = 1 to t.nq do
+        if (not t.reach.(base + q' - 1)) && not (dead store t (i + 1) q') then (
+          forward_reason store t i q';
+          kill store t (i + 1) q')
+      done;
+      check_layer store t (i + 1))
   done
 
 (* P2's reason for s(i,q): per value of letter i, no successor -> nothing; the successor
@@ -558,19 +643,28 @@ let backward_reason store t i q =
 (* Step 3. *)
 let backward store t =
   for i = t.n - 1 downto 0 do
-    let _, _, mem = letter_dom store t i in
-    for q = 1 to t.nq do
-      if not (dead store t i q) then
-        let live =
-          Array.exists
-            (fun (v, tq) -> mem v && not (dead store t (i + 1) tq))
-            t.out.(q - 1)
-        in
-        if not live then (
-          backward_reason store t i q;
-          kill store t i q)
-    done;
-    check_layer store t i
+    if touched t i then (
+      let _, _, mem = letter_dom store t i in
+      load_letter t mem;
+      for q = 1 to t.nq do
+        if not (dead store t i q) then
+          let live =
+            let e = ref t.oi.(q - 1) and stop = t.oi.(q) in
+            while
+              !e < stop
+              && not
+                   (Array.unsafe_get t.inx t.ok.(!e)
+                   && not (dead store t (i + 1) t.ot.(!e)))
+            do
+              incr e
+            done;
+            !e < stop
+          in
+          if not live then (
+            backward_reason store t i q;
+            kill store t i q)
+      done;
+      check_layer store t i)
   done
 
 (* What removing [v] from [d] concludes: the settled bound when [v] is a bound
@@ -615,14 +709,15 @@ let values store t i =
   | Fixed _ -> ()
   | Letter { var; name; dlo; dhi } ->
       let d0 = Store.get store var in
+      load_letter t (Domain.mem d0);
       Array.fill t.sup 0 (Array.length t.sup) false;
       for q = 1 to t.nq do
         if not (dead store t i q) then
-          Array.iter
-            (fun (v, tq) ->
-              if Domain.mem d0 v && not (dead store t (i + 1) tq) then
-                t.sup.(v - t.smin) <- true)
-            t.out.(q - 1)
+          for e = t.oi.(q - 1) to t.oi.(q) - 1 do
+            let k = t.ok.(e) in
+            if Array.unsafe_get t.inx k && not (dead store t (i + 1) t.ot.(e)) then
+              t.sup.(k) <- true
+          done
       done;
       let supported v =
         let k = v - t.smin in
@@ -642,6 +737,7 @@ let values store t i =
               (if v > dlo then [ Lit.negate (Lit.ge name v) ] else [])
               @ if v < dhi then [ Lit.ge name (v + 1) ] else []
             in
+            t.xdirty.(i) <- true;
             match
               Store.remove store var v
                 (Reason.because
@@ -655,44 +751,165 @@ let values store t i =
 (* Step 5: a layer with one live state fixes its flag (ALO_i), on the rest's tails. *)
 let fix_singletons store t =
   for i = 0 to t.n do
-    let live = ref 0 and count = ref 0 in
-    for q = 1 to t.nq do
-      if not (dead store t i q) then (
-        incr count;
-        live := q)
-    done;
-    if !count = 1 && not (is_set store t i !live) then (
-      let q = !live in
-      start t;
-      for r = 1 to t.nq do
-        if r <> q then add_flag store t ~set:false i r
+    if t.ldirty.(i) then (
+      let live = ref 0 and count = ref 0 in
+      for q = 1 to t.nq do
+        if not (dead store t i q) then (
+          incr count;
+          live := q)
       done;
-      let fs, packed, others = finish t in
-      let concl = set_fact t i q in
-      let v = flag t i q in
-      match
-        Store.set_lo store v 1
-          (Reason.because ~concludes:(Some concl) fs
-             (clause_expl (Option.to_list (Reason.lit_of_fact concl)) fs))
-      with
-      | Store.Conflict c -> raise (Found c)
-      | Store.Changed ->
-          let e = Store.trail_entry store (Store.lo_support store v) in
-          t.tails.(fid t i q) <- Some { entry = e; keys = packed; others }
-      | Store.Unchanged -> ())
+      if !count = 1 && not (is_set store t i !live) then (
+        let q = !live in
+        start t;
+        for r = 1 to t.nq do
+          if r <> q then add_flag store t ~set:false i r
+        done;
+        let fs, packed, others = finish t in
+        let concl = set_fact t i q in
+        let v = flag t i q in
+        match
+          Store.set_lo store v 1
+            (Reason.because ~concludes:(Some concl) fs
+               (clause_expl (Option.to_list (Reason.lit_of_fact concl)) fs))
+        with
+        | Store.Conflict c -> raise (Found c)
+        | Store.Changed ->
+            Bytes.unsafe_set t.st (fid t i q) set_c;
+            let e = Store.trail_entry store (Store.lo_support store v) in
+            t.tails.(fid t i q) <- Some { entry = e; keys = packed; others }
+        | Store.Unchanged -> ()))
   done
 
+(* ------------------------------------------------------ the incremental call (D-0232) *)
+
+(* Which layers and letters moved since the last call that reached its fixpoint. A flag
+   is compared by its state, which is the whole of a 0..1 domain; a letter by PHYSICAL
+   equality with the domain that call left ([Domain.t] is immutable, so the same value is
+   the same set, and a different value with the same set, after a backtrack and a redo,
+   only costs a rescan; nothing is read through [xsnap], so a version a backtrack
+   truncated is compared, never asked: Domain's header, [Stale_version]). Before the
+   first fixpoint, and always for an aliased word, everything is dirty. A dirty layer's
+   [st] is read afresh from the store. *)
+let detect store t =
+  let fill i =
+    t.stale.(i) <- false;
+    for k = i * t.nq to (i * t.nq) + t.nq - 1 do
+      Bytes.unsafe_set t.st k (state_of (Store.get store t.flags.(k)))
+    done
+  in
+  if not (t.incremental && t.valid) then (
+    Array.fill t.ldirty 0 (t.n + 1) true;
+    Array.fill t.xdirty 0 t.n true;
+    for i = 0 to t.n do
+      fill i
+    done)
+  else (
+    for i = 0 to t.n do
+      let base = i * t.nq in
+      let q = ref 0 in
+      if not t.stale.(i) then
+        while
+          !q < t.nq
+          && state_of (Store.get store t.flags.(base + !q))
+             = Bytes.unsafe_get t.st (base + !q)
+        do
+          incr q
+        done;
+      t.ldirty.(i) <- !q < t.nq;
+      if !q < t.nq then fill i
+    done;
+    for i = 0 to t.n - 1 do
+      t.xdirty.(i) <-
+        (match t.xs.(i) with
+        | Fixed _ -> false
+        | Letter { var; _ } -> Store.get store var != t.xsnap.(i))
+    done)
+
+(* The fixpoint just reached becomes the reference: [st] already holds it (every write of
+   this call updated it), and the letters this call found or made dirty are re-read. *)
+let refresh store t =
+  for i = 0 to t.n - 1 do
+    if t.xdirty.(i) then
+      match t.xs.(i) with
+      | Fixed _ -> ()
+      | Letter { var; _ } -> t.xsnap.(i) <- Store.get store var
+  done;
+  t.valid <- true
+
+(* BAGUETTE_DEBUG's audit of the skip: every condition a pass would test on a layer it
+   skips holds now, read-only. Steps 1 and 5 on a clean layer, steps 2 to 4 on the edges
+   of a clean letter between clean layers. *)
+let skipped_hold store t =
+  let dead store t i q = Domain.hi (Store.get store (flag t i q)) = 0 in
+  let is_set store t i q = Domain.lo (Store.get store (flag t i q)) = 1 in
+  let live i =
+    List.filter (fun q -> not (dead store t i q)) (List.init t.nq (fun q -> q + 1))
+  in
+  let layer_ok i =
+    t.ldirty.(i)
+    ||
+    let l = live i in
+    let set = List.filter (is_set store t i) l in
+    l <> []
+    && (match set with [] -> true | [ q ] -> l = [ q ] | _ -> false)
+    && (List.length l <> 1 || set <> [])
+    && (i <> 0 || List.for_all (fun q -> q = t.q0) l)
+    && (i <> t.n || List.for_all (fun q -> t.final.(q - 1)) l)
+  in
+  let edges_ok i =
+    touched t i
+    ||
+    let _, _, mem = letter_dom store t i in
+    let into = Array.make t.nq false and sup = Array.make t.w false in
+    let src_ok =
+      List.for_all
+        (fun q ->
+          Array.fold_left
+            (fun ok (v, tq) ->
+              if mem v && not (dead store t (i + 1) tq) then (
+                into.(tq - 1) <- true;
+                sup.(v - t.smin) <- true;
+                true)
+              else ok)
+            false
+            t.out.(q - 1))
+        (live i)
+    in
+    let lo, hi, _ = letter_dom store t i in
+    src_ok
+    && List.for_all (fun q' -> into.(q' - 1)) (live (i + 1))
+    && List.for_all
+         (fun v -> (not (mem v)) || (v >= t.smin && v < t.smin + t.w && sup.(v - t.smin)))
+         (List.init (hi - lo + 1) (fun k -> lo + k))
+  in
+  let cached k = Bytes.get t.st k = state_of (Store.get store t.flags.(k)) in
+  List.for_all cached (List.init (Bytes.length t.st) Fun.id)
+  && List.for_all layer_ok (List.init (t.n + 1) Fun.id)
+  && List.for_all edges_ok (List.init t.n Fun.id)
+
 let propagate t store =
+  detect store t;
+  if Debug.enabled then
+    Debug.check
+      "regular (D-0232): the cached flag states are the store's, and a layer the \
+       incremental call skips is at its fixpoint" (fun () -> skipped_hold store t);
   try
     fixed_flags store t;
     forward store t;
     backward store t;
     for i = 0 to t.n - 1 do
-      values store t i
+      if touched t i then values store t i
     done;
     fix_singletons store t;
+    refresh store t;
     Propagator.Fixpoint
-  with Found c -> Propagator.Conflict c
+  with Found c ->
+    (* [st] holds this call's writes on its dirty layers, which the backtrack will undo
+       and the next call must not compare against: those layers are read afresh. *)
+    for i = 0 to t.n do
+      if t.ldirty.(i) then t.stale.(i) <- true
+    done;
+    Propagator.Conflict c
 
 let name = "regular"
 let consistency = Propagator.Domain
