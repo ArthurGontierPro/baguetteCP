@@ -6511,6 +6511,102 @@ let regin_gate_random_scene rnd stats =
   done;
   !ok && agree ()
 
+(* --------------------------------------- (g) THE QUIET-BOUNDS SKIP (D-0235) *)
+
+(* Stage 1 skips a pass whose bound vector is one a scan once found quiet ([Alldiff.pass]),
+   and its scans snapshot lazily. Two copies of one random scene, one with the skip and
+   one without ([?quiet:false]), receive the same decisions, bound moves, removals and
+   backtracks; both propagate after each and must agree on the outcome, every domain and
+   every trail entry (variable, domain after, reason literals). Bound moves are what make
+   stage 1 push, so they are drawn as often as removals; the backtracks are what bring a
+   bound vector back to one the skip has seen. *)
+let quiet_random_scene rnd =
+  let n = 2 + Random.State.int rnd 6 in
+  let boxes =
+    List.init n (fun _ ->
+        let lo = Random.State.int rnd 4 in
+        (lo, lo + 1 + Random.State.int rnd 5))
+  in
+  let names = List.init n (Printf.sprintf "v%d") in
+  let copy quiet =
+    let e = Encoding.create () in
+    List.iter2 (fun n (lo, hi) -> Encoding.declare_int e n ~lo ~hi) names boxes;
+    List.iter (Encoding.request_direct e) names;
+    let rows = Encoding.add_all_different e names in
+    let store = mk_store (List.map2 (fun n (lo, hi) -> (n, lo, hi)) names boxes) in
+    let p = Alldiff.make ~quiet store e ~rows (List.init n var) in
+    sink_proof e;
+    (store, p)
+  in
+  let sa, pa = copy true and sb, pb = copy false in
+  let agree () =
+    Store.trail_length sa = Store.trail_length sb
+    && List.for_all
+         (fun i -> Domain.equal (Store.get sa (var i)) (Store.get sb (var i)))
+         (List.init n Fun.id)
+    && List.for_all
+         (fun k ->
+           let ea = Store.trail_entry sa k and eb = Store.trail_entry sb k in
+           ea.Store.var = eb.Store.var
+           && Domain.equal ea.Store.now eb.Store.now
+           && Reason.lits ea.Store.reason = Reason.lits eb.Store.reason)
+         (List.init (Store.trail_length sa) Fun.id)
+  in
+  let both f =
+    ignore (f sa : Store.outcome);
+    ignore (f sb : Store.outcome)
+  in
+  let ok = ref true and live = ref true and steps = ref 0 in
+  while !live && !steps < 16 do
+    incr steps;
+    (match Random.State.int rnd 5 with
+    | 0 ->
+        Store.new_level sa;
+        Store.new_level sb
+    | 1 when Store.level sa > 0 ->
+        Store.backtrack sa;
+        Store.backtrack sb
+    | k ->
+        let i = Random.State.int rnd n in
+        let d = Store.get sa (var i) in
+        if Domain.size d > 1 then
+          let vs = Array.of_list (Domain.to_list d) in
+          let v = vs.(Random.State.int rnd (Array.length vs)) in
+          if k = 2 then both (fun s -> Store.remove s (var i) v placeholder_pruning)
+          else if k = 3 && v > Domain.lo d then
+            both (fun s -> Store.set_lo s (var i) v placeholder_pruning)
+          else if v < Domain.hi d then
+            both (fun s -> Store.set_hi s (var i) v placeholder_pruning));
+    let ra = Alldiff.propagate pa sa in
+    let rb = Alldiff.propagate pb sb in
+    match (ra, rb) with
+    | Propagator.Fixpoint, Propagator.Fixpoint -> if not (agree ()) then ok := false
+    | Propagator.Conflict _, Propagator.Conflict _ ->
+        if not (agree ()) then ok := false;
+        if Store.level sa = 0 then live := false
+        else (
+          Store.backtrack sa;
+          Store.backtrack sb)
+    | _ -> ok := false
+  done;
+  !ok && agree ()
+
+let test_alldiff_quiet_random () =
+  let rnd = Random.State.make [| 235 |] in
+  let bad = ref 0 in
+  Alldiff.quiet_skips := 0;
+  for _ = 1 to 400 do
+    if not (quiet_random_scene rnd) then incr bad
+  done;
+  check
+    (Printf.sprintf
+       "alldiff (g) D-0235: over 400 random scenes stage 1 with the quiet-bounds skip \
+        prunes exactly what it prunes without it, trail entry for trail entry (%d passes \
+        skipped, %d scenes disagreeing)"
+       !Alldiff.quiet_skips !bad)
+    (!bad = 0);
+  check "alldiff (g) D-0235: the scenes exercise the skip" (!Alldiff.quiet_skips > 100)
+
 let test_regin_gate_random () =
   let rnd = Random.State.make [| 215 |] in
   let stats = (ref 0, ref 0) in
@@ -10685,6 +10781,7 @@ let () =
   test_regin_consistency_oracle ();
   test_regin_staging ();
   test_regin_gate_random ();
+  test_alldiff_quiet_random ();
   test_regin_conclusion ();
   test_regin_mixed_currency ();
   test_regin_random_proofs ();
