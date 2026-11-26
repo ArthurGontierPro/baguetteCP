@@ -284,8 +284,8 @@ let () =
           !Explanation.reforced_emit)
 
 (* An integer mix, for the claim index's keys (M11-complexity-T5,
-   D-0145). A name is hashed with [Hashtbl.hash], the C string hash, which allocates
-   nothing. *)
+   D-0145). A name is hashed with [String.hash], the C string hash, which allocates
+   nothing (and returns what [Hashtbl.hash] did, without its dispatch, D-0236). *)
 let mix h x = (h * 31) + x
 
 let finish h =
@@ -299,7 +299,7 @@ let lit_hash (l : Lit.t) =
     | Lit.Eq (x, v) -> (1, x, v)
     | Lit.Bit (x, i) -> (2, x, i)
   in
-  mix (mix (mix (Hashtbl.hash x) v) k) (Bool.to_int l.Lit.positive)
+  mix (mix (mix (String.hash x) v) k) (Bool.to_int l.Lit.positive)
 
 (* A claim that is already on the page: the id of the line stating it and the level that
    line was written at. See the module header's "claim index". *)
@@ -345,13 +345,10 @@ end)
    and the C string hash. It was the polymorphic [Hashtbl], whose lookup compares a key
    with [compare] (the C [compare_val] walking both strings), a quarter of [intern]'s
    cost on soccer. The same answer for every name: the polymorphic equality on two
-   strings is [String.equal], and the hash is the one [Hashtbl.hash] computed. *)
-module Names = Hashtbl.Make (struct
-  type t = string
-
-  let equal = String.equal
-  let hash (s : string) = Hashtbl.hash s
-end)
+   strings is [String.equal], and the hash is the one [Hashtbl.hash] computed.
+   M20-pernode-T4 (D-0236): it is [Name_tbl], the same table hashed by [String.hash],
+   which returns that value without the generic hash's dispatch. *)
+module Names = Baguette_proof.Name_tbl
 
 (* M16-file-review-T4 (D-0192): the table of [combine_origin]'s shapes, keyed by the two
    integers packed as one, the count in the high bits. It was a [Writer.Itbl], whose hash
@@ -388,7 +385,10 @@ type ctx = {
       (* M16-file-review-T4 (D-0192): per interned name, '\001' once [validate_lit] has
          found it declared in [encoding]. A name is never undeclared ([Encoding] only adds
          to its table), so the answer [Encoding.is_declared] gave once is the answer it
-         would give again, and the check costs one lookup where it cost two. *)
+         would give again, and the check costs one lookup where it cost two.
+         M20-pernode-T4 (D-0236): '\002' when the variable is declared on the BITS
+         encoding, read by [validate_lit] in place of an [Encoding.is_bits] per literal; a
+         variable's encoding is fixed at its declaration, so that answer is stable too. *)
   combine_origins : (unit -> string) Shapes.t;
       (* M11-complexity-T12 (D-0166): one origin closure per (summands, divisor) shape,
          shared by every [Combine] line of that shape; see [combine_origin]. *)
@@ -677,15 +677,25 @@ let ensure_lit ctx (l : Lit.t) =
 let validate_lit ctx (l : Lit.t) =
   let w = pack_word ctx l in
   let i = w lsr 3 in
-  if Bytes.unsafe_get ctx.declared i = '\000' then (
-    let owner = Lit.owner l.Lit.v in
-    if not (Encoding.is_declared ctx.encoding owner) then
-      invalid_arg
-        (Printf.sprintf
-           "Justify: literal %s refers to variable %s not declared in this encoding"
-           (Lit.to_string l) owner);
-    Bytes.unsafe_set ctx.declared i '\001');
-  ensure_lit ctx l;
+  let d = Bytes.unsafe_get ctx.declared i in
+  let d =
+    if d <> '\000' then d
+    else
+      let owner = Lit.owner l.Lit.v in
+      if not (Encoding.is_declared ctx.encoding owner) then
+        invalid_arg
+          (Printf.sprintf
+             "Justify: literal %s refers to variable %s not declared in this encoding"
+             (Lit.to_string l) owner);
+      let d = if Encoding.is_bits ctx.encoding owner then '\002' else '\001' in
+      Bytes.unsafe_set ctx.declared i d;
+      d
+  in
+  (* [ensure_lit], with its [Encoding.is_bits] read off [declared] (D-0236). *)
+  (match l.Lit.v with
+  | Lit.Ge (x, v) when d = '\002' ->
+      ignore (Encoding.ensure_atom ctx.encoding ctx.writer x v : Writer.cid * Writer.cid)
+  | Lit.Ge _ | Lit.Eq _ | Lit.Bit _ -> ());
   w
 
 let validate_lits ctx lits = List.iter (fun l -> ignore (validate_lit ctx l : int)) lits
