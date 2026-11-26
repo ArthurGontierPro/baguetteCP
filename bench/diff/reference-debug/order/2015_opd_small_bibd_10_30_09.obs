@@ -36,6 +36,7 @@ work limit.props 369364
 work limit.eff 76886
 work limit.contra 461
 search limit.at node
+search limit.signal none
 search nodes/nodes 1501 nodes
 search decisions/decs 1033 decs
 search conflicts/nodes 467 nodes
@@ -108,4 +109,4 @@ search bridges/pairs 0 pairs
 search boundlines/pairs 0 pairs
 search bitsprune/lines 0 lines
 opb 934ac5cf4caac1cf25fb652af59f204da2ceb63138ccba94d281e46fd477f1a2
-pbp 8288cd29200e32faddbdf99c0985b264da344d0baa7b794fe6ae539a91924b21
+pbp 3acf1b6980cebd119bbb935eac635bc5b21f2d6c9e3bc677028f4d67d0bfa351
