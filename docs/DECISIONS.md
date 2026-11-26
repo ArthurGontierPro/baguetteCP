@@ -31038,7 +31038,9 @@ times on the time to OPT.
 with and without the skip, 3 935 skipped passes, fails when the skip compares the lower bounds
 only). The 232 test models: `.opb`, `.pbp`, stdout and exit code identical, base `eaa02008` against
 branch `d1a13b12`. Differential lane `--tier all`: 347 of 347 equal; `--debug`: 333 of 333 equal
-(`BAGUETTE_MEM_CAP_KB=33554432`). Scaling lane: see the handoff note.
+(`BAGUETTE_MEM_CAP_KB=33554432`). Scaling lane (dev build `50898a4e`, `-j 8`): ok, all 5 lines
+within their thresholds. The suite and the binaries were re-run and re-hashed after merging main
+`3841144` (WORKLOG only): the same `d1a13b12`/`50898a4e`, 5 416 ok, 0 FAIL.
 
 **Clarity cost.** `pass` became `pass` (the quiet test) and `pass_scan` (the scan, with a lazy
 snapshot array, a dirty mark, live bound copies and two mark arrays); `regin_scratch` holds a
