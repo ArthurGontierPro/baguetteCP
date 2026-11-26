@@ -1595,6 +1595,17 @@ let regin_scratch t store =
               "Alldiff.regin_scratch: the emptying push did not fail, so the pigeonhole \
                derivation would be attached to a change that landed")
     | None ->
+        (* [has_free.(i)]: [i]'s domain holds a value the matching leaves free. A function
+           of the matching and [doms] alone, so computed once per pass rather than once
+           per member of every set [ink] (D-0235: it allocated a list of every value per
+           member per set). *)
+        let has_free =
+          Array.init n (fun i ->
+              let rec any vi =
+                vi < nv && ((mvar.(vi) = -1 && holds i vi) || any (vi + 1))
+              in
+              any 0)
+        in
         List.iter
           (fun u ->
             (* [ink]: {u} and everything reachable from it. *)
@@ -1613,13 +1624,8 @@ let regin_scratch t store =
             (* A free value anywhere in the set means it is not tight: the set can
                absorb one more value than it has members. *)
             let free_reachable =
-              List.exists
-                (fun i ->
-                  ink.(i)
-                  && List.exists
-                       (fun vi -> mvar.(vi) = -1 && holds i vi)
-                       (range 0 (nv - 1)))
-                (range 0 (n - 1))
+              let rec any i = i < n && ((ink.(i) && has_free.(i)) || any (i + 1)) in
+              any 0
             in
             if not free_reachable then
               let vals =
