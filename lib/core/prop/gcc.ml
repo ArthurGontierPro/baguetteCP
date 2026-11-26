@@ -1251,7 +1251,11 @@ let pass t store =
   List.iter (fun k -> Int_tbl.replace cover_at k.k_cov.cv k) caps;
   let los = List.sort_uniq Int.compare (List.map (fun s -> s.s_lo) snaps) in
   let his = List.sort_uniq Int.compare (List.map (fun s -> s.s_hi) snaps) in
-  let push ~a ~b ~halls ~caps_ab ~y ~lower x bound =
+  (* [member] answers "is this snapshot in [halls]" in O(1) -- a set the caller builds
+     once per interval, or rule (a)'s [fixed_at v] -- so that a push's facts cost
+     O(scope) (D-0234: measured at 17 % of gcc-benchmark l42_3's samples as a
+     [List.exists] by name over [halls] per scope variable). *)
+  let push ~a ~b ~halls ~member ~caps_ab ~y ~lower x bound =
     apply ~ahead:true ~who:(y.s_name, y.s_dlo, y.s_dhi) ~lower (View.of_var x) bound
       (Reason.because
          ~concludes:
@@ -1260,9 +1264,7 @@ let pass t store =
                else Reason.at_most ~name:y.s_name ~decl:y.s_dhi bound))
          (capacity_facts
             ~scope:(List.filter (in_scope_of ~a ~b) snaps)
-            ~read:(fun s ->
-              String.equal s.s_name y.s_name
-              || List.exists (fun h -> String.equal h.s_name s.s_name) halls)
+            ~read:(fun s -> Var.equal s.s_var y.s_var || member s)
             ~caps:caps_ab)
          (prune_expl t ~a ~b ~snaps ~halls ~caps:caps_ab ~y ~lower ~bound))
   in
@@ -1285,9 +1287,11 @@ let pass t store =
            (fun y ->
              if not (is_fixed y) then
                if y.s_lo = v then
-                 push ~a:v ~b:v ~halls:fixed ~caps_ab:[ k ] ~y ~lower:true y.s_var (v + 1)
+                 push ~a:v ~b:v ~halls:fixed ~member:is_fixed ~caps_ab:[ k ] ~y
+                   ~lower:true y.s_var (v + 1)
                else if y.s_hi = v then
-                 push ~a:v ~b:v ~halls:fixed ~caps_ab:[ k ] ~y ~lower:false y.s_var (v - 1)
+                 push ~a:v ~b:v ~halls:fixed ~member:is_fixed ~caps_ab:[ k ] ~y
+                   ~lower:false y.s_var (v - 1)
                else if
                  (* LIVE, not [y]'s snapshot bounds: an earlier push of this pass may have
                     moved a bound of [y] onto [v], and a removal AT a bound is a bound
@@ -1392,19 +1396,27 @@ let pass t store =
               in
               let ordered = folded @ rest in
               let n = List.length ordered in
+              let set_of l =
+                let tbl = Int_tbl.create 16 in
+                List.iter (fun s -> Int_tbl.replace tbl (Var.to_int s.s_var) ()) l;
+                fun s -> Int_tbl.mem tbl (Var.to_int s.s_var)
+              in
               if n > cap then
                 let halls = List.filteri (fun i _ -> i < cap) ordered in
                 let y = List.nth ordered cap in
-                push ~a ~b ~halls ~caps_ab ~y ~lower:true y.s_var (b + 1)
+                push ~a ~b ~halls ~member:(set_of halls) ~caps_ab ~y ~lower:true y.s_var
+                  (b + 1)
               else if n = cap then
+                let member = set_of ordered in
                 List.iter
                   (fun y ->
-                    if not (List.exists (fun s -> String.equal s.s_name y.s_name) ordered)
-                    then
+                    if not (member y) then
                       if a <= y.s_lo && y.s_lo <= b then
-                        push ~a ~b ~halls:ordered ~caps_ab ~y ~lower:true y.s_var (b + 1)
+                        push ~a ~b ~halls:ordered ~member ~caps_ab ~y ~lower:true y.s_var
+                          (b + 1)
                       else if a <= y.s_hi && y.s_hi <= b then
-                        push ~a ~b ~halls:ordered ~caps_ab ~y ~lower:false y.s_var (a - 1))
+                        push ~a ~b ~halls:ordered ~member ~caps_ab ~y ~lower:false y.s_var
+                          (a - 1))
                   snaps)
         his)
     los;
