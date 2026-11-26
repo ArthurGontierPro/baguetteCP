@@ -30193,6 +30193,13 @@ With the loop and chronological backtracking ON:
   over them. Also under `BAGUETTE_DEBUG=1`: 280 ok.
 - `test_mutation.exe` under `BAGUETTE_CDCL=1 BAGUETTE_CHRONO=20`: 156 ok, every corruption refused.
 
+Re-run after merging main `5935d7e` and then main at the `wave76-scp` merge (`c1c2c93`, which brings
+D-0225's signal handling and D-0230's `.scp` reader into `bin/main.ml` and `search.ml`): identity
+456 of 456 against that main's binary (`9bfe10d3` against `bbbd0630`), `dune runtest --root . --force`
+5 399 ok and 0 FAIL (peak RSS 161 MB), diff lane 347 of 347 and 333 of 333 under `--debug`, scaling
+lane ok, the model tests under `--cdcl --chrono 20` the same 223 plus D-0219's five, all ten of
+their proofs VERIFIED.
+
 ### 4. Measured: the 3-SAT probes and D-0207's five (campaign binary `f404f013`, `--no-proof`)
 
 The arms. Loop arms (`--cdcl`): `Lfix` fixed search; `Cfix` fixed search with `--chrono 20`; and with
