@@ -447,6 +447,25 @@ let established_at_root store v ~lower =
 
 let range a b = List.init (Int.max 0 (b - a + 1)) (fun i -> a + i)
 
+(* Membership of a Hall VALUE SET, by binary search over its values sorted once
+   (M20-pernode-T4, D-0235). Every [keep] of a Regin set used to be [List.mem v vals]:
+   OCaml's [List.mem] is POLYMORPHIC equality, a [caml_compare] call per element, and
+   [hall_facts] asks it once per hole of every Hall member for every removal, which made
+   [compare_val] the single largest symbol of elitserien handball12's profile (10 %). The
+   answer is the same predicate, so every reason and every derivation is unchanged. *)
+let mem_of vals =
+  let a = Array.of_list vals in
+  Array.sort Int.compare a;
+  fun v ->
+    let rec go lo hi =
+      lo < hi
+      &&
+      let mid = (lo + hi) lsr 1 in
+      let w = a.(mid) in
+      if w = v then true else if w < v then go (mid + 1) hi else go lo mid
+    in
+    go 0 (Array.length a)
+
 (* The entry that took [value] out of [var], or [None].
 
    What decides whether a hole may be cited as a unit is the LEVEL it was established at,
@@ -789,7 +808,7 @@ let alo_over t s ~keep =
    variable can take gets nothing, because there is no term to cancel. *)
 let core_summands t ~vals ~halls ~extra =
   let all = halls @ Option.to_list extra in
-  let keep v = List.mem v vals in
+  let keep = mem_of vals in
   List.map (fun s -> Explanation.term 1 (alo_over t s ~keep)) halls
   @ List.concat_map
       (fun v ->
@@ -982,8 +1001,7 @@ let remove_summands t ~vals ~halls ~y ~value =
         if w = value then None else Some (Explanation.weaken [ (1, Lit.eq y.s_name w) ]))
       mine
 
-let remove_expl t ~vals ~halls ~y ~value =
-  let keep v = List.mem v vals in
+let remove_expl t ~keep ~vals ~halls ~y ~value =
   Explanation.deferred (fun () ->
       Explanation.combine
         (remove_summands t ~vals ~halls ~y ~value @ hall_cancels ~keep ~halls)
@@ -1002,7 +1020,7 @@ let remove_expl t ~vals ~halls ~y ~value =
    ROOT's arrangement since M7-T33; under a decision the same derivation is the
    conflict's, with its facts, written ahead of its line ([push_conflict], D-0156). *)
 let conflict_expl t ~vals ~halls =
-  let keep v = List.mem v vals in
+  let keep = mem_of vals in
   Explanation.deferred (fun () ->
       Explanation.combine
         (core_summands t ~vals ~halls ~extra:None @ hall_cancels ~keep ~halls)
@@ -1044,10 +1062,12 @@ let prune_reason ~keep halls y ~lower =
    terms away, so [Explanation.top_weaken_owners] names [y] and D-0026's agreement check
    requires the reason to name it too. A tail with a fact the derivation did not need is
    a WEAKER trace line, which is sound; a tail missing one is I-P5. *)
-let remove_reason ~keep halls y =
+let remove_reason_of y hall_facts =
   Reason.at_least ~name:y.s_name ~decl:y.s_dlo y.s_lo
   :: Reason.at_most ~name:y.s_name ~decl:y.s_dhi y.s_hi
-  :: hall_facts ~keep halls
+  :: hall_facts
+
+let remove_reason ~keep halls y = remove_reason_of y (hall_facts ~keep halls)
 
 (* ------------------------------------------- M7-T33: a conflict carries its facts
 
@@ -1352,14 +1372,13 @@ let in_order_currency t y value expl =
    stale premises, but the SHAPE of the entry -- a hole clause for an interior value, the
    bound landed on for a value at the bound ([removal_conclusion]) -- must be decided
    against the domain the store is about to change. *)
-let remove_one t store ~moved ~halls ~vals ~y_tm value =
-  let y = snap_of store y_tm in
+let remove_one t store ~moved ~halls ~vals ~keep ~facts ~y ~y_tm value =
   let d = Store.get store y_tm.x in
-  let keep v = List.mem v vals in
   let concludes = removal_conclusion y d value in
-  let expl = remove_expl t ~vals ~halls ~y ~value in
+  let expl = remove_expl t ~keep ~vals ~halls ~y ~value in
   let j =
-    Reason.because ~concludes (remove_reason ~keep halls y)
+    Reason.because ~concludes
+      (remove_reason_of y (Lazy.force facts))
       (if Option.is_none concludes then in_order_currency t y value expl else expl)
   in
   (* A Regin hole counts too: [deriving_ahead], as for a Hall bound move. *)
@@ -1367,8 +1386,9 @@ let remove_one t store ~moved ~halls ~vals ~y_tm value =
   | Store.Conflict c -> raise (Found c)
   | Store.Changed ->
       Propagator.count_deduction ();
-      moved := true
-  | Store.Unchanged -> ()
+      moved := true;
+      true
+  | Store.Unchanged -> false
 
 (* One Regin pass FROM SCRATCH: the matching rebuilt, every tight set enumerated. Its
    output -- which removals land, in which order, with which [halls] and [vals] -- is the
@@ -1413,10 +1433,22 @@ let regin_scratch t store =
         let seen = Array.make (Int.max 1 nv) false in
         if not (augment i seen) then failed := Some (i, seen)
     done;
-    let snaps_of pick =
-      List.filter_map
-        (fun i -> if pick i then Some (snap_of store t.terms.(i)) else None)
-        (range 0 (n - 1))
+    (* THE SNAPSHOT CACHE (M20-pernode-T4, D-0235). [snap i] is [snap_of store
+       t.terms.(i)] as the store stands NOW, and it is kept until a removal lands on
+       [i]: a snapshot reads [i]'s domain, its two supports and the remover of each of
+       its holes, and within this pass only a removal ON [i] changes any of them (the
+       remover of a hole that exists is the entry that made it, however long the trail
+       has grown since). Until D-0235 every tight set snapshotted every member again, and
+       every removal snapshotted its [y], with a [Store.remover] search per hole each
+       time: 16 % of elitserien handball12's instructions. *)
+    let cache = Array.make n None in
+    let snap i =
+      match cache.(i) with
+      | Some s -> s
+      | None ->
+          let s = snap_of store t.terms.(i) in
+          cache.(i) <- Some s;
+          s
     in
     match !failed with
     | Some (x0, seen) -> (
@@ -1430,10 +1462,9 @@ let regin_scratch t store =
             (range 0 (nv - 1))
         in
         let halls =
-          snap_of store t.terms.(x0)
+          snap x0
           :: List.filter_map
-               (fun vi ->
-                 if seen.(vi) then Some (snap_of store t.terms.(mvar.(vi))) else None)
+               (fun vi -> if seen.(vi) then Some (snap mvar.(vi)) else None)
                (range 0 (nv - 1))
         in
         let x0_tm = t.terms.(x0) in
@@ -1445,7 +1476,7 @@ let regin_scratch t store =
           raise
             (Found
                (push_conflict store
-                  ~facts:(hall_facts ~keep:(fun v -> List.mem v vals) halls)
+                  ~facts:(hall_facts ~keep:(mem_of vals) halls)
                   (conflict_expl t ~vals ~halls)));
         let j =
           Reason.because ~concludes:None Reason.none (conflict_expl t ~vals ~halls)
@@ -1491,14 +1522,24 @@ let regin_scratch t store =
                      (fun i -> if ink.(i) then Some values.(mval.(i)) else None)
                      (range 0 (n - 1)))
               in
-              let halls = snaps_of (fun i -> ink.(i)) in
+              (* Built at the first removal that lands, from the cache: see the
+                 comment above [snap]. *)
+              let halls = lazy (List.filter_map (fun i -> if ink.(i) then Some (snap i) else None) (range 0 (n - 1))) in
+              let keep = mem_of vals in
+              let facts = lazy (hall_facts ~keep (Lazy.force halls)) in
               List.iter
                 (fun y ->
                   if not ink.(y) then
                     List.iter
                       (fun v ->
-                        if Domain.mem doms.(y) v then
-                          remove_one t store ~moved ~halls ~vals ~y_tm:t.terms.(y) v)
+                        if
+                          Domain.mem doms.(y) v
+                          && Domain.mem (Store.get store t.terms.(y).x) v
+                        then
+                          if
+                            remove_one t store ~moved ~halls:(Lazy.force halls) ~vals
+                              ~keep ~facts ~y:(snap y) ~y_tm:t.terms.(y) v
+                          then cache.(y) <- None)
                       vals)
                 (range 0 (n - 1)))
           (range 0 (n - 1)));
