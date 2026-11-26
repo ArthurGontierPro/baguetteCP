@@ -19,7 +19,6 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M18-coverage-T11 | lib/core/prop/gcc.ml, its tests (test/unit/test_prop.ml gcc section, new test/models/gcc_conflict_learn*.fzn + expected), docs/DECISIONS.md (D-0234), ROADMAP row | agent-gcc (wave80-gcc, /scratch/arthur/wt-gcc) | 2026-11-26 |
 
 ## Cross-session requests
 
@@ -473,6 +472,7 @@ section 1. Shares are inclusive, of the whole run.
 
 | Task | Session | Date | Summary |
 |---|---|---|---|
+| M18-coverage-T11, gcc's conflicts carry their facts (D-0234) | agent-gcc (`wave80-gcc`, not merged) | 2026-11-26 | **D-0234 [AUTONOME].** Under a decision every gcc push that would empty its target is the conflict, with its facts plus the crossed bound, derived ahead; the reasons name only the facts their derivation leaves. Every gcc conflict learns now; rws e-80-s-1 SAT in 1 s (was 71 s); no new answer at 300 s on 34 gcc users, instructions per node x1.1 to x3.3. |
 | M20-pernode-T4, alldiff's cost per call (D-0235) | agent-alldiff (`wave81-alldiff`, not merged) | 2026-11-26 | **D-0235 [AUTONOME].** Regin removals share a snapshot cache and one fact list per tight set; stage 1 snapshots lazily and skips quiet bound vectors. Same trees and bytes; elitserien handball12 -61 % instructions per node without proof, -25 % with; to OPT 232.5 -> 109.9 s |
 | M18-coverage-T8, why `regular` completes little (D-0232) | agent-regular (`wave78-regular`, not merged) | 2026-11-26 | **D-0232 [AUTONOME].** The census counts a satisfaction SAT as an incumbent (28 of 103 solved, Chuffed 69 of 110). Gap: elitserien (alldiff), tppv, rotating-workforce (gcc's factless conflicts), nonograms (regular's cost per node). regular's call is incremental: same trees and proofs, -30 to -49 % instructions. T11 (gcc) and T12 (census) added |
 | M21-memory-T3 fix 1, the learned-row layout, a PB size guard; M19-config-T5 re-measured (D-0226) | agent-evict (`wave73-evict`, not merged) | 2026-11-26 | **D-0226 [AUTONOME].** An evicted learned constraint leaves the engine (`Engine.remove` via `Propagator.inst_attach`), a learned row is flat arrays, its duplicate key a hash: byte-identical, mapping live heap -45 % (`keep_all`) and -79 % (`tiered`) at 2 400 learned. `BAGUETTE_PB_MAX_TERMS` / `BAGUETTE_PB_PROPAGATE_MAX` cap learned PB rows, default off. The retention default becomes `tiered` (own commit `d9e57e3`): answers 20 -> 25 and 1 -> 1, refusals 3 -> 2 and 1 -> 1 |
@@ -702,6 +702,10 @@ section 1. Shares are inclusive, of the whole run.
 | M18-coverage-T7 (the cheap globals) | agent-cheap (`wave79-cheap`) | 2026-11-26 | **D-0233 [AUTONOME].** mznlib only: `fzn_alldifferent_except` as at most one indicator per value (1 -> 2 complete of 37, gcc's route measured worse), `fzn_nvalue` without the bool2int copies, `fzn_all_equal_int_reif` as a chain (outcomes unchanged). Seven test models, SPEC 2.1 row |
 
 ## Handoff notes
+
+### 2026-11-26 (agent-gcc, `wave80-gcc`, D-0234): gcc's conflicts carry their facts, not merged
+
+Every gcc conflict (rule A's pigeonhole, rule C's shortfall and surplus, stale pushes) is now, under a decision, a `Store.conflict` with the push's facts plus the crossed live bound, made under `deriving_ahead`. The root is unchanged. Reasons name only the facts their derivation leaves (`both_bounds`, `excluding_bound`, `named_only`), which also shortens every gcc pruning's `rup` tail, so 20 test-model proofs differ and all 20 verify. The diff lane differs on its three gcc users (42 of 347 runs, 28 of 333 under `--debug`) and is NOT re-recorded, which is for after the gated merge. Learning now runs on rotating-workforce and gpq but does not pay yet, because the clauses are wide (63 to 65 literals on gpq) and a node costs 1.6 to 2.2 times the instructions. The next factless family is `int_lin_ne` (gcc-benchmark l42_3). Results are in `/cluster/arthur/baguette-results/gcc/`.
 
 - 2026-11-26, agent-cheap (M18-coverage-T7, D-0233, `wave79-cheap`, not merged): three mznlib files, no `lib/` change. `alldifferent_except_0` was already native (std writes gcc); it now goes as one `baguette_bool_lin_le(..., 1)` per non-zero value over the `x = v` indicators, Chuffed's shape, which measured better than gcc (concert-hall-cap 2018.02 now OPT and VERIFIED, 10 incumbents better and none worse, 0.71 of the instructions per node). `nvalue` without the `bool2int` copies and the reified `all_equal` as a chain change no outcome (speck 0.67 to 0.92 of the instructions per node). Lanes unchanged by construction. Open: liner's seven ROOT heap refusals (not these globals), why gcc's conflicts learn worse than plain rows (a question for gcc.ml on every gcc model), and the root-conflict crash under `--proof` in Cross-session requests (a 3-variable model, main's bug). Results `fataepyc-06:/cluster/arthur/baguette-results/cheap/`.
 
