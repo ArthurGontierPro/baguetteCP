@@ -30619,9 +30619,15 @@ the handoff note.
    conflicts unlearned), and work-task-variation's 23 %.
 2. **elitserien** is alldiff's cost per node (60 %) and 4 times Chuffed's nodes: an M20-pernode
    question, not a regular one.
-3. **The flag encoding's size** for the zayenz pentominoes: mznlib declares (n + 1) * Q flags in
-   the `.fzn`. Statically dead flags (unreachable from q0 or not co-reachable to F through the
-   declared domains) could be left out by mznlib or compile.ml; not measured.
+3. **The flag encoding's size**: mznlib declares (n + 1) * Q flags in the `.fzn`, and most are
+   STATICALLY dead, unreachable from q0 or not co-reachable to F even with every letter over the
+   whole alphabet (`deadflags.py`, in the results directory): live are 47.6 % of zayenz size 20
+   far's 3.7 M, 54.0 % of zayenz size 10's 127 k, 31.2 % of rotating 1780's 8 162, 32.3 % of
+   nonogram_hard_01's 62 928, 11.0 % of elitserien handball12's 9 408 and 71.4 % of
+   nonogram_non_awful_1's 91 560. Each dead flag is a declared variable, its FWD rows and a root
+   kill line, and the call scans it. Leaving them out (mznlib declaring only the live pairs, or
+   compile.ml stating them 0 as part of the flags' definition) changes the .opb and the naming
+   contract, so it is a design record of its own, not done here.
 
 ### 5. Decision and revert
 
