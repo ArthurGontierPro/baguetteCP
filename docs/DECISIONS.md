@@ -31053,3 +31053,137 @@ in one scope is handled ([twins]) but no shipped model exercises it.
 [AUTONOME] Kept: no search, proof or answer changes, so no default behaviour changes. Revert:
 `git revert` of `e250b69`, `93ecf93`, `ffd540a`, `5fda8c5`, `d549e65` and the test commit `560ae93`
 (and the header commit `65004ef`).
+
+## D-0233  [AUTONOME] M18-coverage-T7: `alldifferent_except_0` as at most one indicator per non-zero value (Chuffed's shape) in place of std's gcc, `nvalue` without the `bool2int` copies, the reified `all_equal` as a chain. Three mznlib files, no new builtin, no `lib/` change. Measured on the 105 Challenge instances that call the three globals
+
+**Status**: DECIDED (agent-cheap, `wave79-cheap`, 2026-11-26). Revert: delete `mznlib/fzn_alldifferent_except.mzn`,
+`mznlib/fzn_nvalue.mzn` and `mznlib/fzn_all_equal_int_reif.mzn` (each alone reverts its global to std's text,
+byte for byte), the seven test models they brought and the SPEC 2.1 row. The binary does not change: every build of
+this branch has main's bytes (section 3, last paragraph).
+
+### 1. What reached baguette before, measured first
+
+The census (ROADMAP M18) counts the three globals as not native: `nvalue` 40 instances, 52 % complete,
+`all_equal` 40, 11 %, `alldifferent_except_0` 37, 3 %. Read from the models and from main's mznlib flattening
+(MiniZinc 2.10.1), the three cases are not alike.
+
+- `alldifferent_except_0` was ALREADY native. std's `fzn_alldifferent_except` writes, when every variable is
+  bounded, `global_cardinality(xs, dom_array(xs) diff except, 0, 1)`, which `mznlib/fzn_global_cardinality_low_up.mzn`
+  routes to baguette's gcc with one 0..1 count variable per value. Every one of the 37 instances flattens that way.
+  The census counts it decomposed because it reads names, not flattenings.
+- `all_equal` at the top level costs nothing. The flattener aliases the variables of an equality between two
+  variables, so no constraint reaches the solver. Only the REIFIED form survives, `b <-> forall (i < j) (xs[i] = xs[j])`,
+  in speck-optimisation (`all_equal(..) -> all_equal(..)`, `not all_equal(..)`), harmony (`not all_equal` over windows
+  of three) and yumi-dynamic 2024. Yumi-static's instances flatten byte-identically under every route of this record.
+  Seven yumi instances fail to flatten in std itself (`maximum of empty set`), for Chuffed as well.
+- `nvalue` is std's `n = sum_v bool2int(exists_i (xs[i] = v))`: per value an `array_bool_or` and a `bool2int` copy of it,
+  per (variable, value) an `int_eq_reif`, and one `int_lin_eq` over the copies.
+
+The low completion rates are the families'. On arithmetic-target the cost is `int_div` and `int_times` (1.2 M and
+1.0 M instances, 273 000 propagator runs per node, gcc 1.3), on hitori and seat-moving the learned clauses, and the
+seven liner-sf-repositioning instances are refused at the heap budget at the ROOT (one node, 98 propagator runs,
+8 GB) on every route tried here, so their cause is elsewhere in the model (domains up to 0..771 667) and stays open.
+
+### 2. Options, per global
+
+| global | option | per value or per call | measured (section 3) |
+|---|---|---|---|
+| `alldifferent_except_0` | std's gcc (the baseline) | a count variable and a counting row per value | 1 complete of 37 |
+| | **at most one indicator per value** (chosen): `baguette_bool_lin_le([1, ...], [xs[i] = v \| ...], 1)` over std's `int_eq_reif` indicators, D-0220's builtin; Chuffed's own library gives the std call this shape (`bool_sum_le`) | an `int_eq_reif` per (variable, value), shared by CSE, and one row per value | 2 complete, 10 incumbents better and none worse, 0.71 of the instructions per node |
+| | std's pairwise fallback (`(x in S /\ y in S) \/ x != y`) | n (n - 1) / 2 reified disequalities | 1 complete, 1.25 of the instructions per node, concert's incumbents unchanged or worse |
+| | a native `alldiff` restricted to the non-zero values (Hall intervals and Régin's matching) | a variant of `alldiff.ml`, whose model rows are pairwise disequalities that would each need the exception | not built: gcc is already a Hall-rule propagator here and it lost to the plain rows. The cost is the reasons the search learns from, not the pruning (gcc is 1 to 3 runs per node on these instances) |
+| `nvalue` | std | as above | the baseline |
+| | **std's rows without the `bool2int` copies** (chosen), D-0220's move: `baguette_bool_lin_eq([1, ...], [taken_v \| v ...], n)` and `n in 0..min(\|xs\|, #values)` | one variable, two rows and one propagator fewer per value | neutral: 0.97 to 1.03 of the instructions per node, the same outcomes |
+| | a native nvalue (the lower bound by disjoint domains, Beldiceanu's) | a new propagator and justification | not built: the decomposition is EXACT for n (n's bounds and the value Booleans propagate both ways) and the instances that time out are not waiting on n (gfd-schedule's misses are its scheduling part) |
+| reified `all_equal` | std's pairwise | n (n - 1) / 2 reified equalities | the baseline |
+| | **the chain** `b <-> forall (i > first) (xs[i] = xs[first])` (chosen) | n - 1 | speck 0.67 to 0.92 of the instructions per node, the same answers. And a stronger negation, see the file's header |
+| | a native all_equal | | not built: the unreified form never reaches the solver |
+
+Why the indicator rows beat gcc on concert-hall-cap is a reading, not a measurement: the indicators `xs[i] = v` are
+Booleans the rest of the model already uses (CSE shares them), so a learned clause over them generalises where one
+over gcc's order-literal reasons does not. The search differs from the first thousands of nodes (stdout at 3 000
+nodes differs on 7 of 25).
+
+### 3. Measurement (2026-11-26)
+
+All 112 instances of D-0185's census that call one of the three, flattened with MiniZinc 2.10.1 once per route
+(105 flatten, 7 yumi fail in std). One binary for every arm, release `b266d78d` (main `20170b8`, the same source
+under `lib/` and `bin/` as `ef56549` but for D-0226, which this record does not depend on). 300 s, `--max-heap-mb
+8192`, 16 GiB address space, MemoryMax 32 G, 8 runs per arm in parallel on fataepyc-06 under the load of a gate
+and two agents. With proof, veripb on every COMPLETE run (the timed-out proofs were checked only for the first 17
+baseline runs and are not counted). Node-limited arms: `BAGUETTE_NODE_LIMIT=3000`, `--no-proof`, `perf stat -e
+instructions:u`, deterministic. Tables, scripts and every `.err` with its stats: `fataepyc-06:/cluster/arthur/baguette-results/cheap/`.
+
+`alldifferent_except_0`, 37 instances.
+
+| arm | complete (verified) | incumbent only | refused | incumbents vs gcc |
+|---|---|---|---|---|
+| gcc, proof | 1 (1) | 15 | 7 | |
+| at-most-one, proof | 2 (2) | 16 | 7 | 10 better, 0 worse |
+| gcc, no proof | 1 | 16 | 5 | |
+| at-most-one, no proof | 2 | 16 | 6 | 7 better, 1 worse |
+| pairwise, no proof | 1 | 18 | 5 | 4 better, 2 worse |
+| Chuffed (M17-T4, 1 200 s) | 12 within 300 s, 14 in all | | | |
+
+The new completion is concert-hall-cap 2018.02, OPT 48 278 (Chuffed's value) in 136 s with proof, VERIFIED, where
+gcc times out at 39 050. The better incumbents are concert-hall-cap (2018: 06, 148, 318, 2024: 04, 100_20, 150_20,
+200_20, the last three from none or from 1 455 773 to 1 576 652) and seat-moving (10-20-05 139 to 134, 10-13-00 298
+to 294, minimised). Instructions per node at 3 000 nodes, at-most-one over gcc: geomean 0.708 over 25 instances
+(concert 0.035 to 1.70, seat-moving 0.62 to 1.27, hitori 0.88 to 1.00). In the 300 s runs concert does FEWER nodes
+per second (2018.02: 2 271 to 941 without proof) because it searches elsewhere, and seat-moving more (15-20-00:
+288 to 495). Flattened size, constraints at-most-one over gcc: concert 1.3 to 1.7, liner 1.2 to 1.4, seat-moving
+1.12 to 1.16, hitori and arithmetic-target 1.01.
+
+`nvalue` and the reified `all_equal`, 68 instances (gfd-schedule 20, physician-scheduling 5, word-equations 5,
+ihtc 5, workforce-alloc 5, speck 5, harmony 5, peaceable queens 5, yumi 13).
+
+| arm | complete (verified) | incumbent only |
+|---|---|---|
+| std, proof | 18 (18) | 39 |
+| this record, proof | 18 (18) | 39 |
+| std, no proof | 19 | 39 |
+| this record, no proof | 19 | 39 |
+| Chuffed (1 200 s) | 22 within 300 s, 25 in all | |
+
+No outcome changes. Instructions per node at 3 000 nodes, geomean 0.976 over 44 changed instances, the same stdout
+on 43: nvalue's families 0.97 to 1.03, speck 0.67 to 0.92, harmony 1.00 to 1.05. Nodes in 300 s on the timeouts
+moved by 0.91 to 1.29 where the inputs changed and by 0.82 to 1.30 on the instances whose flattening is
+byte-identical, so the timed arms cannot tell these two changes from the node's load. The deterministic arm is the
+measurement.
+
+Peaceable queens is the one surprise: the model calls `all_equal` only at the top level, yet the chain changes its
+flattening (n13_q5 10 860 to 17 286 constraints, n25_q4 72 614 to 47 610), and the file with std's pairwise body
+gives std's bytes back, so the reified predicate IS reached somewhere inside std's decomposition of the model's
+symmetry breaking. Not found. The outcomes are the same (TIMEOUT with the same incumbents), instructions per node
+1.18 and 0.89.
+
+Correctness, beside the seven test models: a differential fuzz of 600 random small models (nvalue with bounds on
+n, reified all_equal under negation and implication, alldifferent_except_0 over domains with and without 0, random
+side constraints, an objective), each solved by Chuffed through std and by baguette through this mznlib with veripb
+on the proof. 599 agree with VERIFIED proofs. The 600th crashed baguette, and it is not this record's: minimised, it
+is a three-variable model with no global at all (`x0 in 0..3`, `x1, x2 in 2..3`, `x1 != x0`, `x2 != x1`, `x2 < x0`)
+on which main's binary raises `Encoding.ensure_atom ... asked for after the root contradiction` from
+`Search.close_root_conflict` under `--proof` with the bits encoding. Recorded in WORKLOG's cross-session requests,
+reproducer in the results directory.
+
+Confirmed after merging main `ef56549` (D-0226, retention `tiered` by default), release `2397635e`, the ten concert-hall-cap instances with proof, gcc against at-most-one: 0 -> 1 complete (2018.02, OPT 48 278 in 70 s, VERIFIED), 8 incumbents better (06, 148, 318, 2024 .04, 100_20 and 150_20 from none, 200_20 1 455 773 -> 1 576 652), none worse, 2018.03 and 60_50 unchanged.
+
+Checks on the branch merged with main `e0c793a` (D-0235). Its binaries are main's bytes, dev `50898a4e` and release `d1a13b12`, both built here from each checkout, so every existing test model's artefacts are main's. `dune runtest --root . --force` 5 416 ok and 0 FAIL, `run_model_tests.sh` 239 models (232 + this record's 7) with proofs VERIFIED, `check_mznlib.sh` 58 ok, the differential lane `--tier all` 347 of 347 equal and `--debug` 333 of 333, the scaling lane ok, the lanes under `BAGUETTE_MEM_CAP_KB=33554432`. Before that merge (main `ef56549`, dev `4ce3e72e`) the same checks gave 5 414 ok, 239 models, 347 of 347 and 333 of 333. No lane instance calls these globals and every lane input is pre-flattened, so nothing there could move.
+
+### 4. SPEC 2.1
+
+One row added to the M18 builtins table (the D-0217 and D-0220 precedent), normative because it says what reaches
+the solver: `nvalue` through `baguette_bool_lin_eq`, the reified `all_equal` as the chain, `alldifferent_except_0`
+and `all_different(xs, S)` as one `baguette_bool_lin_le(..., 1)` per value outside `S`. No new builtin, so no new
+sentence of semantics. The user's to confirm outside autonomous mode.
+
+### 5. What is left open
+
+- liner-sf-repositioning's seven root refusals (section 1). Not a coverage question.
+- The reason gcc's conflicts learn worse than the indicator rows on concert-hall-cap. If it is the reasons' literals,
+  gcc itself (M7-T16) would gain from the same currency on every gcc model. A measurement for whoever holds gcc.ml.
+- nvalue's stronger lower bound, should a family ever wait on n.
+- The census tool reads names. `tools/compare/challenge_globals.py` will now count `alldifferent_except_0`, `nvalue`
+  and `all_equal` as native only if it reads the `fzn_alldifferent_except`, `fzn_nvalue` and `fzn_all_equal_int_reif`
+  files the way it reads the others, which it does for `fzn_<g>` names. `alldifferent_except` is the file's name, so
+  `alldifferent_except_0` stays listed apart. Left as is.
