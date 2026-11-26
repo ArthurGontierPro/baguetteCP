@@ -30940,3 +30940,114 @@ the handoff note.
 
 [AUTONOME] The incremental call is kept: it changes no search, no proof and no answer, so it is not
 a change of default behaviour. Revert: `git revert` of `772ac90` alone.
+
+## D-0235  [AUTONOME] M20-pernode-T4 on all_different: a call stops paying for what cannot have changed. The Regin pass caches each term's snapshot until a removal lands on it and builds a tight set's facts once, stage 1 snapshots lazily and skips a pass on a bound vector it once found quiet. Same trees, byte-identical artefacts; elitserien handball12 -61 % instructions per node without proof, -25 % with
+
+**Status**: DONE on `wave81-alldiff` (agent-alldiff, 2026-11-26), not merged. Base: main `d7a78cc`
+(code of `84e241b`), release binary `eaa02008`; branch release binary `d1a13b12`, dev build
+`50898a4e`. Node fataepyc-06 at load 30 to 51 (other sessions' runs). Runs, profiles, scripts and
+the five sample `.fzn`: `/cluster/arthur/baguette-results/alldiff/`.
+
+### 1. Method
+
+D-0207's: `perf stat -e instructions:u` at a fixed node budget (`BAGUETTE_NODE_LIMIT`), per node =
+(I(N) - I(1)) / N, the 1-node run taken with the base binary; `perf record --call-graph fp` on the
+`baguette-fp` switch for the shares. Samples: D-0232's elitserien handball12 and handball9 and tppv
+circ8bbal and circ14cnonbal (native flattening of D-0232), and D-0207's costas13 (which completes in
+1 504 nodes, so its per-node figure is over 1 503 nodes). Every step was checked at the budget with
+`--proof`: md5 of `.opb`, `.pbp` and stdout, and the nodes/conflicts/learned counters, equal to the
+base binary's on all five.
+
+### 2. Where alldiff's instructions went (base, no proof, inclusive share of all samples)
+
+| instance (nodes) | alldiff | Regin scratch | of which removals | stage 1 pass | snapshots (`snap_of`) | top self symbol |
+|---|---|---|---|---|---|---|
+| elitserien handball12 (1 000) | 63.6 % | 46.1 % | 42.0 % (reason 36.9 %) | 14.8 % | 16.2 % (`hole_cite` 9.3 %) | `compare_val` 10.0 % (`List.mem` over the Hall values) |
+| tppv circ14cnonbal (1 000) | 46.0 % | 6.8 % | | 37.7 % | 23.4 % (`hole_cite` 9.1 %) | |
+| tppv circ8bbal (3 000) | 33.2 % | | | 27.7 % | 14.3 % | |
+| costas13 (3 000) | 52.6 % | 12.2 % | | 37.2 % | 18.1 % | |
+
+Three causes. (a) A Regin removal rebuilt its tight set's whole fact list (`hall_facts`), with a
+polymorphic `List.mem v vals` per hole of every Hall member, and re-snapshotted every member and the
+pruned variable; the facts are the same for every removal under one set. (b) Every stage 1 pass
+snapshotted every term (holes, a `Store.remover` search per hole, two root tests) before looking
+at a single interval, and most passes find nothing. (c) The tight-interval arm compared names in
+O(n) per term and listed the contained terms by a filter of the scope per interval.
+
+### 3. The fixes, each measured (instructions per node, no proof; artefacts identical at each step)
+
+| step (commit) | rule (all in `lib/core/prop/alldiff.ml`) | h12 @300 | tppv14 @500 | tppv8 @2000 | costas13 |
+|---|---|---|---|---|---|
+| base | | 34.89 M | 14.65 M | 6.47 M | 4.77 M |
+| 1 `e250b69` | Regin: snapshot cache until a removal lands on the term, one `hall_facts` per tight set (lazy), only values still in the live domain go to the store, `mem_of` (binary search) for every `keep` | 17.32 M | 14.33 M | 6.43 M | 4.69 M |
+| 2 `93ecf93` | stage 1: `pass_scan` snapshots a term when first read and forces the pushed term's snapshot before a push lands; containment counted by a pointer walk; `pass` skips a bound vector a scan found quiet | 12.53 M | 9.48 M | 5.47 M | 3.77 M |
+| 3 `ffd540a` | a term is looked up in the Hall set through `canon` (first index with its name), not by string comparison | 12.39 M | 9.02 M | 5.41 M | 3.71 M |
+| 4 `5fda8c5` | Regin: each term's "holds a free value" once per pass, not per member of every enumerated set | 12.11 M | 8.87 M | 5.39 M | 3.62 M |
+| 5 `d549e65` | stage 1: contained terms marked in an array and listed only for a push; live bounds from the pass's own copy, updated at each landed push | 11.92 M | 8.24 M | 5.13 M | 3.50 M |
+
+At larger budgets, final against base: handball12 at 3 000 nodes 36.61 M -> 14.28 M (-61 %) without
+proof, at 1 500 nodes with proof 112.35 M -> 84.73 M (-25 %). With proof at the table's budgets:
+h12 89.24 -> 64.78 M, tppv14 29.42 -> 23.04 M, tppv8 17.46 -> 16.01 M, costas13 12.07 -> 10.70 M.
+
+**Why each is sound.** The module header's "THE COST PER CALL" paragraph and the comment at each
+site. In short: a snapshot reads the term's domain, its two supports and its holes' removers, and
+within one call only a push or removal on that term (or on a term naming the same variable,
+[twins]) changes them, so a cached snapshot is the one the eager code took; the pass-start
+snapshot is forced before any push on the term, so a lazy read returns pass-start values. Whether
+a stage 1 scan moves anything or raises is a function of the bound vector alone, so a quiet vector
+stays quiet; it is a hint compared against the live bounds, never a fact, and needs no trail.
+`Store.remove` of a value already gone answers `Unchanged` with no side effect, so not calling it
+changes nothing but the count of thunks built (their hash-consing ids, which equality never reads;
+the bytes confirm it). BAGUETTE_DEBUG re-runs the scan behind every quiet skip.
+
+**Withdrawn, measured**: routing the pairs of an at-most-one STEP through `reuse` (D-0216's memo),
+so the pruned variable's m pairs are found rather than rebuilt. Same bytes, but handball12 with
+proof went 64.79 -> 68.90 M per node (+6 %): the memo fills and is emptied more often. Not kept.
+
+### 4. What is left (final binary, no proof, inclusive shares)
+
+| instance | alldiff | of which stage 1 / Regin scratch / gate | learning (`Learn.at_conflict`) |
+|---|---|---|---|
+| elitserien handball12 | 19.9 % | 7.9 / 7.7 / 4.3 % | 32.5 % (`Analysis.dependency_levels` 19.6 %, `Store.var_named` 7.4 %) |
+| tppv circ14cnonbal | 29.1 % | 19.3 / 6.7 % / - | 8.4 % |
+| costas13 | 37.0 % | 19.0 / 13.1 / 4.4 % | 17.1 % |
+
+Stage 1 still runs a full scan whenever a bound of the scope moved: on handball12 15 484 of 58 941
+passes are skipped, on costas 1 405 of 33 700. An incremental Hall scan that keeps the push order is
+the next item inside alldiff. Outside it: the learning side resolves every fact's owner by NAME
+(`Store.var_named`, a string hash, 7.4 % of handball12), and with the proof `Encoding.find` by name
+is 8 % (Trace, `Justify.validate_lit`, alldiff's `pair_amo`); both are cross-session requests.
+
+### 5. Throughput (300 s, wall-clock rates under load 35 to 51)
+
+| instance | no proof, base -> branch | with proof, base -> branch |
+|---|---|---|
+| elitserien handball12 | OPT both, 29 762 nodes, 232.5 s -> 109.9 s (128 -> 271 nodes/s) | 12 857 -> 16 710 nodes (43 -> 56 /s) |
+| elitserien handball9 | 30 330 -> 58 284 nodes (101 -> 194 /s) | 14 399 -> 16 226 (48 -> 54 /s) |
+| tppv circ8bbal | 145 666 -> 186 991 (486 -> 623 /s) | 60 486 -> 63 790 (202 -> 213 /s) |
+| tppv circ14cnonbal | 114 799 -> 164 262 (383 -> 548 /s) | 48 192 -> 60 141 (161 -> 200 /s) |
+| costas13 | SAT in 1 504 nodes, 1.48 -> 1.09 s | 4.17 -> 3.50 s |
+
+Against Chuffed on handball12 (D-0232: 7 207 nodes in 1.7 s, 4 160 nodes/s): baguette without proof
+is now 271 nodes/s, a factor 15 per node (34 before), and its tree is 4.1 times Chuffed's, so 65
+times on the time to OPT.
+
+### 6. Checks
+
+`dune runtest --root . --force` 5 416 ok, 0 FAIL (a new lane, test_prop's (g): 400 random scenes
+with and without the skip, 3 935 skipped passes, fails when the skip compares the lower bounds
+only). The 232 test models: `.opb`, `.pbp`, stdout and exit code identical, base `eaa02008` against
+branch `d1a13b12`. Differential lane `--tier all`: 347 of 347 equal; `--debug`: 333 of 333 equal
+(`BAGUETTE_MEM_CAP_KB=33554432`). Scaling lane: see the handoff note.
+
+**Clarity cost.** `pass` became `pass` (the quiet test) and `pass_scan` (the scan, with a lazy
+snapshot array, a dirty mark, live bound copies and two mark arrays); `regin_scratch` holds a
+snapshot cache with its invalidation rule; `t` gained `quiet`, `quiet_on`, `canon` and `repeats`.
+About 250 lines, most of them comments stating the rule each cache relies on. A variable repeated
+in one scope is handled ([twins]) but no shipped model exercises it.
+
+### 7. Decision and revert
+
+[AUTONOME] Kept: no search, proof or answer changes, so no default behaviour changes. Revert:
+`git revert` of `e250b69`, `93ecf93`, `ffd540a`, `5fda8c5`, `d549e65` and the test commit `560ae93`
+(and the header commit `65004ef`).
