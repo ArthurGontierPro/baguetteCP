@@ -1,0 +1,30 @@
+% M18-coverage-T11 / D-0234: a global_cardinality RULE A conflict under a decision now LEARNS.
+%
+% Deciding k <= 2 makes the three int_le push x1, x2, x3 <= 2 before the global_cardinality
+% they wake runs (FIFO: each watches k and one x), so the interval [1, 2], whose capacity is
+% hi(c1) + hi(c2) = 2, holds three variables. Until M18-coverage-T11 that pigeonhole was a
+% push that must fail, paired with Reason.none, so the branch closed on the full decision
+% nogood and nothing was learned. Now it is reported with its facts -- both bounds of the
+% confined set and of the surplus variable, x1..x3 <= 2 -- and its derivation is written
+% ahead of `rup ~facts >= 1` (Store.deriving_ahead), so 1UIP learning resolves from it.
+%
+% t is in the scope and its upper bound 3 is a (root) bound that is not its declared one,
+% so it has a literal. The counting clears t's indicator with a literal axiom and reads
+% nothing about t: the conflict NAMES t but carries none of its literals (D-0234's tight
+% facts). test_prop.ml's M18-coverage-T11 section pins that.
+%
+% SAT, so the database is not contradictory and every rup on the page is really checked
+% (D-0053, D-0066/D-0073).
+var 1..4: k :: output_var;
+var 1..4: x1 :: output_var;
+var 1..4: x2 :: output_var;
+var 1..4: x3 :: output_var;
+var 1..4: t :: output_var;
+var 0..1: c1;
+var 0..1: c2;
+constraint int_le(x1,k);
+constraint int_le(x2,k);
+constraint int_le(x3,k);
+constraint int_le(t,3);
+constraint fzn_global_cardinality([x1,x2,x3,t],[1,2],[c1,c2]);
+solve :: int_search([k,x1,x2,x3,t], input_order, indomain_min, complete) satisfy;
