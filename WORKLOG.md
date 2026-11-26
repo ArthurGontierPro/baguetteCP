@@ -21,6 +21,7 @@ of it to every session and stopping at a broken line before it even reached the 
 |---|---|---|---|
 | M18-coverage-T7 | mznlib/ (alldifferent_except_0, all_equal, nvalue), new module under lib/core/prop/ if needed, lib/core/dune, the new families in lib/flatzinc/builder.ml and compile.ml, test/, module maps (CLAUDE.md, ARCHITECTURE §1) if a module is added | agent-cheap (wave79-cheap, /scratch/arthur/wt-cheap) | 2026-11-26 |
 | M18-coverage-T11 | lib/core/prop/gcc.ml, its tests (test/unit/test_prop.ml gcc section, new test/models/gcc_conflict_learn*.fzn + expected), docs/DECISIONS.md (D-0234), ROADMAP row | agent-gcc (wave80-gcc, /scratch/arthur/wt-gcc) | 2026-11-26 |
+| M20-pernode-T4 (alldiff) | lib/core/prop/alldiff.ml and its tests (test/unit/test_prop.ml or test_consistency.ml alldiff cases) | agent-alldiff (wave81-alldiff, /scratch/arthur/wt-alldiff) | 2026-11-26 |
 
 ## Cross-session requests
 
