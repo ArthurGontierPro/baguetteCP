@@ -19,6 +19,7 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
+| M18-coverage-T6 (D-0240) | `sort`, `arg_sort`, `arg_max`/`arg_min`: new `lib/core/prop/` modules if needed, `lib/core/dune`, `mznlib/` redefinitions for these constraints, these families only in `lib/flatzinc/builder.ml` and `compile.ml`, new tests and models, the module maps (CLAUDE.md, ARCHITECTURE §1) if a module is added. `maxmin.ml` only if arg_max needs a short local addition (will be said here) | agent-sort (`wave86-sort`) | 2026-11-26 |
 
 ## Cross-session requests
 
