@@ -49,7 +49,7 @@ search limit.pb-learned 0
 search limit.db 731
 search limit.maxdepth 29
 search limit.incumbent 14
-work limit.props 856854
+work limit.props 858444
 work limit.eff 197269
 work limit.contra 735
 search limit.at node
@@ -61,8 +61,8 @@ search maxdepth/levels 29 levels
 work exhausted/bool 0 bool 1 if
 search skipped/nodes 10 nodes
 search learned/cls 731 cls
-work later/asks 490475 asks
-work cites/memos 18159 memos
+work later/asks 490469 asks
+work cites/memos 18157 memos
 search convertible/cls 0 cls
 search retention tiered(core<=2,mid<=6,first=2000,inc=300,mid_every=10000) tiered(core<=2,mid<=6,first=2000,inc=300,mid_every=10000): 731 added, 0 evicted, 731 swept, 0 live, 0 duplicate, 724 cited, 0 pinned, 0 reductions, 0 detached, 0 locked
 search lbd 1:7,3:64,4:51,5:4,6:1,7:6,8:67,9:81,10:121,11:121,12:107,13:54,14:31,15:15,16:1
@@ -78,7 +78,7 @@ search pb-inst-no/rows 0 rows
 search pb-prune/prunes 0 prunes
 search pb-confl/confl 0 confl
 search minimised/lits 1648 lits
-search i-s4-cross/lines 24627 lines
+search i-s4-cross/lines 24590 lines
 search pb-tried/confl 731 confl
 search pb-learned/rows 0 rows
 search pb-fallback/confl 731 confl
@@ -100,7 +100,7 @@ search lvl-assert/confl 0 confl
 work array_bool_and/inst 2081 inst 209.6 runs/node 34.57 eff/node
 work bool_clause/inst 988 inst 126.5 runs/node 24.35 eff/node
 work int_lin_le_reif/inst 508 inst 105.8 runs/node 33.13 eff/node
-work learned_clause/inst 724 inst 34.3 runs/node 1.19 eff/node
+work learned_clause/inst 724 inst 35.3 runs/node 1.19 eff/node
 work int_ne_reif/inst 147 inst 20.3 runs/node 7.84 eff/node
 work bool_not/inst 384 inst 18.1 runs/node 5.51 eff/node
 work int_le_reif/inst 148 inst 17.8 runs/node 7.48 eff/node
@@ -109,17 +109,17 @@ work int_eq_reif/inst 51 inst 8.8 runs/node 3.45 eff/node
 work bool2int/inst 49 inst 5.1 runs/node 2.92 eff/node
 work int_lin_le/inst 8 inst 4.4 runs/node 0.73 eff/node
 work global_cardinality/inst 1 inst 3.7 runs/node 1.94 eff/node
-work props/runs 856854 runs
+work props/runs 858444 runs
 work eff/runs 197269 runs
 work contra/runs 735 runs
 work passes/snaps 266991 snaps
 work deductions/chgs 22169 chgs
-work wakes/wakes 1224173 wakes
+work wakes/wakes 1222340 wakes
 work masked/wakes 22124 wakes
 work vetoed/wakes 4047 wakes
-work advised/wakes 15575 wakes
-work seeded/runs 97190 runs
-work skipped/slots 7093920 slots
+work advised/wakes 11140 wakes
+work seeded/runs 98105 runs
+work skipped/slots 7093005 slots
 search rup/lines 206815 lines
 search pol/lines 7532 lines
 search pol-tokens/tokens 918090 tokens
@@ -131,4 +131,4 @@ search boundlines/pairs 49 pairs
 search bitsprune/lines 4201 lines
 search atoms/prune/atoms 0.007 atoms
 opb 8b89a20d08c2b177f0f119aaf4b41450cab180d782901252654b2495a0d2a9fa
-pbp bab177d1daaa4ce599e80928950d1be3b69665abba55932ef8116ad0d6ed8215
+pbp f8e16348b97c9b8b684b719ce5bcca05f4ecda0fcd6c7391760743db2a11f459

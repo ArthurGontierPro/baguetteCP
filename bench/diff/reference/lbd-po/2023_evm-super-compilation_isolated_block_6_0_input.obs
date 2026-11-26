@@ -10,9 +10,9 @@ search choices/groups 0 groups
 search limit.nodes 2001
 search limit.decisions 1575
 search limit.conflicts 425
-search limit.learned 419
+search limit.learned 425
 search limit.pb-learned 0
-search limit.db 419
+search limit.db 425
 search limit.maxdepth 96
 search limit.incumbent none
 work limit.props 211223
@@ -26,13 +26,13 @@ search conflicts/nodes 425 nodes
 search maxdepth/levels 96 levels
 work exhausted/bool 0 bool 1 if
 search skipped/nodes 1100 nodes
-search learned/cls 419 cls
-work later/asks 33201 asks
-work cites/memos 3382 memos
+search learned/cls 425 cls
+work later/asks 33460 asks
+work cites/memos 3652 memos
 search convertible/cls 0 cls
-search retention lbd(cap=500) lbd(cap=500): 419 added, 0 evicted, 419 swept, 0 live, 359 duplicate, 0 cited, 0 pinned
-search lbd 1:1,2:7,3:24,4:143,5:1,6:233,8:1,9:1,10:1,11:1,12:2,13:1,14:1,15:2
-search width 1:1,2:2,3:29,8:376,16:11
+search retention lbd(cap=500) lbd(cap=500): 425 added, 0 evicted, 425 swept, 0 live, 359 duplicate, 0 cited, 0 pinned
+search lbd 1:1,2:7,3:24,4:143,5:1,6:233,7:1,8:2,9:2,10:5,11:1,12:2,13:1,15:2
+search width 1:1,2:2,3:29,8:376,15:1,16:16
 search globals/units 0 units
 search glob-prune/prunes 0 prunes
 search glob-confl/confl 0 confl
@@ -43,13 +43,13 @@ search pb-inst/inst 0 inst
 search pb-inst-no/rows 0 rows
 search pb-prune/prunes 0 prunes
 search pb-confl/confl 0 confl
-search minimised/lits 30 lits
-search i-s4-cross/lines 2448 lines
-search pb-tried/confl 419 confl
+search minimised/lits 2 lits
+search i-s4-cross/lines 2526 lines
+search pb-tried/confl 425 confl
 search pb-learned/rows 0 rows
-search pb-fallback/confl 419 confl
+search pb-fallback/confl 425 confl
 search pb-why first fallback reason: no PB row for instance int_eq_reif
-work pb-whys/recd 64 recd 50 x
+work pb-whys/recd 64 recd 44 x
 search pb-steps/pivots 0 pivots
 search pb-convert/rows 0 rows
 search pb-stronger/rows 0 rows
@@ -87,7 +87,7 @@ work vetoed/wakes 424 wakes
 work advised/wakes 0 wakes
 work seeded/runs 83613 runs
 work skipped/slots 14358387 slots
-search rup/lines 38153 lines
+search rup/lines 38165 lines
 search pol/lines 24109 lines
 search pol-tokens/tokens 297813 tokens
 search pol-widest/tokens 331 tokens
@@ -98,4 +98,4 @@ search boundlines/pairs 75 pairs
 search bitsprune/lines 22550 lines
 search atoms/prune/atoms 0.056 atoms
 opb 959ea28ada0978cbc4002e5b4eb908cf85326ee143da085be66a3be94d68eda0
-pbp 3e0b0a8eea233f62b77f3114467a64bd08a9f2a4610f268e7c57132d52f5ceaf
+pbp db80f92d0cf9a2274db20e67e3881312daeaf346264935cad1dd99d2925b8bf9

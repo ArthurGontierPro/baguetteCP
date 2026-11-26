@@ -49,7 +49,7 @@ search limit.pb-learned 0
 search limit.db 500
 search limit.maxdepth 29
 search limit.incumbent 14
-work limit.props 859668
+work limit.props 861117
 work limit.eff 199555
 work limit.contra 733
 search limit.at node
@@ -61,8 +61,8 @@ search maxdepth/levels 29 levels
 work exhausted/bool 0 bool 1 if
 search skipped/nodes 10 nodes
 search learned/cls 729 cls
-work later/asks 497449 asks
-work cites/memos 18109 memos
+work later/asks 497443 asks
+work cites/memos 18107 memos
 search convertible/cls 0 cls
 search retention lbd(cap=500) lbd(cap=500): 729 added, 229 evicted, 500 swept, 0 live, 10 duplicate, 722 cited, 1 pinned
 search lbd 1:7,3:63,4:49,5:4,6:1,7:6,8:67,9:81,10:121,11:121,12:103,13:47,14:37,15:19,16:3
@@ -78,7 +78,7 @@ search pb-inst-no/rows 0 rows
 search pb-prune/prunes 0 prunes
 search pb-confl/confl 0 confl
 search minimised/lits 1682 lits
-search i-s4-cross/lines 24555 lines
+search i-s4-cross/lines 24518 lines
 search pb-tried/confl 729 confl
 search pb-learned/rows 0 rows
 search pb-fallback/confl 729 confl
@@ -100,7 +100,7 @@ search lvl-assert/confl 0 confl
 work array_bool_and/inst 2081 inst 210.6 runs/node 34.81 eff/node
 work bool_clause/inst 988 inst 127.3 runs/node 24.56 eff/node
 work int_lin_le_reif/inst 508 inst 107.9 runs/node 33.89 eff/node
-work learned_clause/inst 722 inst 31.3 runs/node 1.15 eff/node
+work learned_clause/inst 722 inst 32.3 runs/node 1.15 eff/node
 work int_ne_reif/inst 147 inst 20.6 runs/node 7.91 eff/node
 work int_le_reif/inst 148 inst 18.0 runs/node 7.56 eff/node
 work bool_not/inst 384 inst 18.0 runs/node 5.46 eff/node
@@ -109,17 +109,17 @@ work int_eq_reif/inst 51 inst 8.9 runs/node 3.51 eff/node
 work bool2int/inst 49 inst 5.2 runs/node 2.99 eff/node
 work int_lin_le/inst 8 inst 4.3 runs/node 0.72 eff/node
 work global_cardinality/inst 1 inst 3.7 runs/node 1.93 eff/node
-work props/runs 859668 runs
+work props/runs 861117 runs
 work eff/runs 199555 runs
 work contra/runs 733 runs
 work passes/snaps 267741 snaps
 work deductions/chgs 22340 chgs
-work wakes/wakes 1230243 wakes
+work wakes/wakes 1228840 wakes
 work masked/wakes 22393 wakes
 work vetoed/wakes 4092 wakes
-work advised/wakes 14773 wakes
-work seeded/runs 94683 runs
-work skipped/slots 7096521 slots
+work advised/wakes 10949 wakes
+work seeded/runs 95525 runs
+work skipped/slots 7095679 slots
 search rup/lines 208581 lines
 search pol/lines 7471 lines
 search pol-tokens/tokens 918851 tokens
@@ -131,4 +131,4 @@ search boundlines/pairs 49 pairs
 search bitsprune/lines 4253 lines
 search atoms/prune/atoms 0.007 atoms
 opb 8b89a20d08c2b177f0f119aaf4b41450cab180d782901252654b2495a0d2a9fa
-pbp 8d0effcdcb927fa5a9e0407c5da347e0c20bcd33cd36ebc8724d4dd5b12d8ef7
+pbp 2e1927e895971cd92e17ab801b8cee315bc9ac0e485b85ea0ba0bc674bd2c6ac
