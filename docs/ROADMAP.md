@@ -714,7 +714,7 @@ the solver's default behaviour waits for the user's decision, as CLAUDE.md requi
 
 ## M23-inputs — a parser for `.scp`
 
-Opened 2026-11-24 at the user's request, replanned on 2026-11-25 as the parser alone (D-0226 section 14).
+Opened 2026-11-24 at the user's request, replanned on 2026-11-25 as the parser alone (D-0228 section 14).
 The grammar is that of `cake_pb_cp` (`cp_parseScript.sml`, CakeML `cp_enc_new` `930601d6`), version 1.
 No refactor, no decomposition, no view, no end-to-end work. A file the parser does not read entirely is
 refused, never read in part. The FlatZinc path stays byte-identical.
@@ -725,4 +725,4 @@ refused, never read in part. The FlatZinc path stays byte-identical.
 | M23-inputs-T2 | **`lib/scp/reader.ml`, the frame and the arithmetic**: `version 1`, variables, `decide`/`enumerate`/`minimize`/`maximize`, `lin_*`, comparisons, `and`/`or`, conditions, `plus`, `minus`, `neg`, `increasing` and its kin. `bin/main.ml` picks the reader by the extension | TODO | Stricter than cake on purpose: an undeclared name, a repeated name, `lb > ub` and a view are refused, with the position |
 | M23-inputs-T3 | **Globals without a new variable**: `all_different`, gcc (open, closed), `count` of a constant, `array_max`/`min`, `max`/`min`, `element` on constants, `inverse`, `in` on constants, `abs`, `cumulative` on constants | TODO | cake numbers positions from 0 where FlatZinc counts from 1 |
 | M23-inputs-T4 | **Globals with auxiliary variables**: `regular`, `table`, `circuit`, `in` on variables, `multiply`, `divide`. The variables `mznlib` declares are created after the file's, with the same shape | TODO | Extracts the arithmetic auxiliaries of `builder.ml` as a shared helper, byte-identical |
-| M23-inputs-T5 | **Acceptance**: the test lanes of D-0226 section 14, a SPEC sentence, CLI help | TODO | Proofs of every run accepted by veripb |
+| M23-inputs-T5 | **Acceptance**: the test lanes of D-0228 section 14, a SPEC sentence, CLI help | TODO | Proofs of every run accepted by veripb |

@@ -29124,7 +29124,7 @@ first, or the flat layout alone. `TP` (PB analysis off) is the best fixed arm on
 answers against 19 and 30) and turns mapping ring_1 from a refusal into a time-out, which says the
 guard is worth measuring.
 
-## D-0226  M23-inputs: a relational `Problem` between the readers and the solver, `.scp` as a second input, every other language translated to `.scp` outside the solver
+## D-0228  M23-inputs: a relational `Problem` between the readers and the solver, `.scp` as a second input, every other language translated to `.scp` outside the solver
 
 Status: PLAN (measured, no solver code; the user asked for the plan on 2026-11-24)
 Date: 2026-11-24

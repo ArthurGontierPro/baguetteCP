@@ -1,6 +1,6 @@
 # Constraint coverage: GCS, baguette, `cake_pb_cp`
 
-2026-11-24, branch `wave74-inputs`, for M23-inputs (D-0226 section 8). Sources: cake from
+2026-11-24, branch `wave74-inputs`, for M23-inputs (D-0228 section 8). Sources: cake from
 `cp_parseScript.sml` at CakeML master (identical to `14856fcf` that day). GCS from `gcs/scp_reader.cc`
 and `minizinc/fzn_glasgow.cc` at `d7468618`. baguette from `lib/flatzinc/builder.ml`, `mznlib/` and
 `E2e.spec` at `dd499b2`. **N** = own propagator, **D** = decomposed by MiniZinc's library or ours,
