@@ -19,6 +19,7 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
+| M22-review-bugs (D-0237, ensure_atom after the root contradiction) | `lib/core/search.ml` (root-conflict path), `lib/core/justify.ml`, `lib/proof/encoding.ml` (atom introduction only), `test/models/root_bits_*`, `test/expected/root_bits_*` | agent-rootbug (`wave83-rootbug`) | 2026-11-26 |
 
 ## Cross-session requests
 
