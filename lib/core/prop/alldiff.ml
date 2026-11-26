@@ -329,6 +329,10 @@ type t = {
   (* D-0235: a bound vector on which stage 1 once moved nothing ([pass]). A hint, never
      a fact about the store, so no trail restores it. *)
   quiet : quiet;
+  (* D-0235: [canon.(i)] is the first term index with term [i]'s name, so that "is [i]
+     in this set of terms" is the NAME comparison [pass] always made, as an array read.
+     [canon.(i) = i] unless a variable occurs twice in the scope. *)
+  canon : int array;
 }
 
 and quiet = { q_lo : int array; q_hi : int array; mutable q_valid : bool }
@@ -433,6 +437,12 @@ let make ?(cutoff = default_cutoff) ?(lemma_rows = []) ?(gate = true) store enc 
     lemmas;
     amo_memo = [||];
     amo_count = 0;
+    canon =
+      Array.map
+        (fun tm ->
+          let rec first j = if terms.(j).name = tm.name then j else first (j + 1) in
+          first 0)
+        terms;
     quiet =
       {
         q_lo = Array.make (Array.length terms) 0;
@@ -1189,6 +1199,8 @@ let pass_scan t store ~lo0 ~hi0 =
         s
   in
   let live i = if dirty.(i) then snap_of store t.terms.(i) else snap i in
+  (* [inset.(canon.(i))]: term [i]'s NAME is a member of the Hall set being scanned. *)
+  let inset = Array.make nt false in
   let los = List.sort_uniq Int.compare (Array.to_list lo0) in
   let his = Array.of_list (List.sort_uniq Int.compare (Array.to_list hi0)) in
   (* The terms by ascending upper bound, so that the number of terms inside [a, b] is a
@@ -1251,7 +1263,7 @@ let pass_scan t store ~lo0 ~hi0 =
           done;
           let k = b - a + 1 in
           let n = !inside in
-          if b >= a && n >= k then
+          if b >= a && n >= k then (
             (* The contained terms in [t.terms] order, as [contained] listed them. *)
             let idx =
               List.filter (fun i -> a <= lo0.(i) && hi0.(i) <= b) (range 0 (nt - 1))
@@ -1293,21 +1305,24 @@ let pass_scan t store ~lo0 ~hi0 =
                  variable of the scope used to be snapshotted (its holes, two root tests)
                  and compared by name with the Hall set, for every tight interval. *)
               (* D-0235: the Hall set is snapshotted only when a push needs it, and a
-                 term is compared with it by name before it is snapshotted -- the same
-                 test, [s_name] being the term's [name]. *)
-              Array.iteri
-                (fun yi tm ->
-                  let d = Store.get store tm.x in
-                  let lo = Domain.lo d and hi = Domain.hi d in
-                  if (a <= lo && lo <= b) || (a <= hi && hi <= b) then
-                    if not (List.exists (fun i -> t.terms.(i).name = tm.name) idx) then
-                      let y = live yi in
-                      let halls = List.map snap idx in
-                      if a <= y.s_lo && y.s_lo <= b then
-                        push ~halls ~a ~b ~y ~yi ~lower:true (b + 1)
-                      else if a <= y.s_hi && y.s_hi <= b then
-                        push ~halls ~a ~b ~y ~yi ~lower:false (a - 1))
-                t.terms)
+                 term is looked for in it before it is snapshotted, through [inset] over
+                 [canon] -- the same test as the name comparison it replaces, which was
+                 O(n) string comparisons per term of every tight interval. *)
+              List.iter (fun i -> inset.(t.canon.(i)) <- true) idx;
+            Array.iteri
+              (fun yi tm ->
+                let d = Store.get store tm.x in
+                let lo = Domain.lo d and hi = Domain.hi d in
+                if (a <= lo && lo <= b) || (a <= hi && hi <= b) then
+                  if not inset.(t.canon.(yi)) then
+                    let y = live yi in
+                    let halls = List.map snap idx in
+                    if a <= y.s_lo && y.s_lo <= b then
+                      push ~halls ~a ~b ~y ~yi ~lower:true (b + 1)
+                    else if a <= y.s_hi && y.s_hi <= b then
+                      push ~halls ~a ~b ~y ~yi ~lower:false (a - 1))
+              t.terms;
+            List.iter (fun i -> inset.(t.canon.(i)) <- false) idx))
         his)
     los;
   !moved
