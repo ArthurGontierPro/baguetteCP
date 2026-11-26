@@ -29704,7 +29704,8 @@ Touches: `lib/scp/` (new: `sexp.ml`, `reader.ml`, `dune`), `lib/flatzinc/arith_a
 reader by extension, `--e2e` refused on a `.scp`, the help text), `bin/dune`, `test/scp/` (26
 models and their outputs), `test/unit/test_scp.ml`, `scripts/run_scp_tests.sh`, `make scp` (in
 `make test`), `tools/scp/` (`validate.py`, `fzn_lane.sh`, `random_lane.py`, `mutate.sh`),
-`tools/e2e/scpsem.py` (the T4 forms), the two module maps.
+`tools/e2e/scpsem.py` (the T4 forms), the two module maps. Results:
+`/cluster/arthur/baguette-results/scp-20261126/`.
 
 ### 1. What was built
 
