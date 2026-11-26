@@ -21,6 +21,7 @@ of it to every session and stopping at a broken line before it even reached the 
 |---|---|---|---|
 | M6-T24, the harness (proofs of stopped runs checked, three kinds of answer; on `wave73-interrupt`) | `scripts/compare_run.sh`, `tools/compare/compare.py`, `tools/compare/readme_table.py`, `tools/compare/arms_compare.py` and `bench/tuning/agreement.py` (small), `bench/series/*.sh` if needed | interrupt-session (laptop) | 2026-11-24 |
 | M6-T24 (an interrupted run ends its proof: signals, heap budget, time limit; D-0225) | `lib/proof/writer.ml`, `lib/proof/encoding.ml` (the heap refusal's exit only), `lib/core/search.ml` (`record_improving`, `conclude_stopped`, `optimise`'s set-up, short edits: agent-chrono holds the file on `wave71-chrono`), `bin/main.ml` (the signal handlers and the resource arms, short edits, same holder), `test/unit/test_endtoend.ml`, `test/unit/test_proof.ml`, SPEC 2.2 and 4.3, PROOF-FORMAT 5, INVARIANTS I-X2, ROADMAP row | interrupt-session (laptop, `wave73-interrupt`) | 2026-11-24 |
+| M17-bench-series (D-0227): the Challenge series on current main on fataepyc-07, arms A-D; veripb_wrap.sh Errno 22 fix | `bench/series/veripb_wrap.sh`, `bench/series/HISTORY.md`, README performance section, `docs/DECISIONS.md` (append), `docs/ROADMAP.md` (notes) | agent-series2 (`wave74-series2`) | 2026-11-26 |
 
 ## Cross-session requests
 
