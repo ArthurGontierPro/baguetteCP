@@ -29324,9 +29324,28 @@ the explanations are learned PB rows (mapping), trail reasons and trace facts (p
 travelling-thief), not row citations: A neither gains nor costs there. black-hole_9 and cable
 (alldiff's Hall derivations, D-0172's instances) gain 4 and 7 % of peak RSS.
 
-Instructions per node, D-0207's five instances (scripts as D-0216's `pern.sh`):
+Instructions per node, D-0207's five instances and one more (scripts as D-0216's `pern.sh`):
 
-{PN_TABLE}
+| instance | proof | nodes | instructions per node, base -> new | change | `.pbp` |
+|---|---|---|---|---|---|
+| qr3 | yes | 29 779 | 1 705 689 -> 1 704 018 | -0.1 % | same |
+| qr3 | no | 29 779 | 1 042 667 -> 1 043 743 | +0.1 % | |
+| costas14 | yes | 3 001 | 15 218 932 -> 14 937 987 | -1.8 % | same |
+| costas14 | no | 3 001 | 6 588 696 -> 6 593 595 | +0.1 % | |
+| mknap2-1 | yes | 20 001 | 26 862 460 -> 26 857 921 | -0.0 % | same |
+| mknap2-1 | no | 20 001 | 26 208 453 -> 26 192 124 | -0.1 % | |
+| jr63 | yes | 20 001 | 20 826 319 -> 20 752 551 | -0.4 % | same |
+| jr63 | no | 20 001 | 8 948 307 -> 8 949 456 | +0.0 % | |
+| rcpsp11_60 | yes | 71 | 10 124 824 -> 10 301 729 | +1.7 % | same |
+| rcpsp11_60 | no | 71 | 1 810 484 -> 1 818 688 | +0.5 % | |
+| rcpsp11_66 (added) | yes | 2 010 | 8 999 525 -> 8 860 272 | -1.5 % | same |
+| rcpsp11_66 (added) | no | 2 010 | 2 292 143 -> 2 296 145 | +0.2 % | |
+
+Release binaries `f9eb775a` (main `5e1ea8a`) and `b4b05ac9` (`ba7f0df`), `perf stat -e
+instructions:u`, (I - I at 1 node) / (nodes - 1). No proved node is slower but rcpsp11_60's, a
+71-node run whose whole cost is 1.06 G instructions; the same family at 2 010 nodes is 1.5 %
+faster, which is why rcpsp11_66 was added. The `--no-proof` columns, where nothing is shared, move
+by 0.0 to 0.5 %: one comparison per `term`.
 
 ### 5. Checked
 
@@ -29344,6 +29363,13 @@ On the merged tip `943eada` (main `5e1ea8a` merged in), fataepyc-06, lanes at `-
 
 The two earlier versions of A (every id interned, section 4) passed the same checks on their own
 binaries (`f411b51f`, `60d6c6d8`).
+
+**After main moved** (D-0222 rewrote `domain.ml` and `store.ml`, D-0221, D-0225, D-0229), main
+`b736947` merged into the branch as `92e5da7`, the checks again at `-j 16`, dev `00fe8a1a` (main)
+against `2def9d72` (the tip): the 228 models 0 differences of 2 736 in the three configurations;
+`dune runtest --root . --force` 5 241 ok, 0 FAIL; lane 347 of 347, debug 333 of 333; scaling
+rc 0. tdtsp_10_53 at 250 nodes, release `ef2f76c8` against `6b2369e8`: peak RSS 16 485 -> 6 729 MB,
+wall 138 -> 118 s, the same `.pbp`.
 
 ### 6. What it costs in clarity
 
