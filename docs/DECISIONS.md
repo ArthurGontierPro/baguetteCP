@@ -31885,8 +31885,10 @@ None proposed. Nothing new reaches the solver: std's decompositions emit only bu
 - A native `sort` (Mehlhorn and Thiel), if a model ever reaches baguette with one. Section 3 says it would pay on
   `sort` from n = 16. It is a new propagator family with its justification in both encodings; nothing in the
   sixteen editions asks for it today.
-- Tower's cost per node is not arg_max's alone (10 350 clauses and 2 070 reified rows per 70 handsets): a profile
-  by propagator would say whether a native `arg_max` could pay at all.
+- Tower's cost per node is not arg_max's alone (10 350 clauses and 2 070 reified rows per 70 handsets). A flat
+  `perf` profile of `070_070_15_070-04` at 3 000 nodes puts `Linear` at 18 % (propagate, prune_term, walk), which
+  holds arg_max's reified rows and the model's own, the engine's queue and wakes at about 15 %, `Pb` at 6 %. A
+  profile by propagator instance would say whether a native `arg_max` could pay at all.
 - Tower 085-09's OPT 85 proof: re-checked by `runs/v085/` in the results directory (veripb, 5 400 s).
 - The census tool counts names. `tools/compare/challenge_globals.py` lists `sort`, `arg_sort` and `arg_max` as not
   native, which is right, but the ROADMAP's 155 overstates what any route could change by ten to one.
