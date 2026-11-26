@@ -1,0 +1,51 @@
+% M18-coverage-T6 (D-0240): flattened by MiniZinc 2.10.1 with baguette's mznlib from
+% mznlib/test/argmin_src_bool_unsat.mzn.
+% arg_min over var bool asked to be at least t, a variable in 3..4 (so that the flattener
+% cannot settle it): the first false position is then 3 or 4, so c[1] and c[2] are true,
+% which c[1] != c[2] forbids; and c all true puts arg_min at the FIRST position, 1, which
+% the bound forbids too. No solution, and the refutation needs the tie-break rows
+% `i > j -> c[j] /\ not m`.
+
+
+array [1..2] of int: X_INTRODUCED_38_ = [-1,1];
+var bool: X_INTRODUCED_16_:: is_defined_var;
+var bool: X_INTRODUCED_17_;
+var bool: X_INTRODUCED_18_;
+var bool: X_INTRODUCED_19_;
+var 1..4: X_INTRODUCED_20_ ::var_is_introduced ;
+var bool: X_INTRODUCED_21_ ::var_is_introduced :: is_defined_var;
+var bool: X_INTRODUCED_23_ ::var_is_introduced :: is_defined_var;
+var bool: X_INTRODUCED_24_ ::var_is_introduced :: is_defined_var;
+var bool: X_INTRODUCED_25_ ::var_is_introduced :: is_defined_var;
+var bool: X_INTRODUCED_26_ ::var_is_introduced :: is_defined_var;
+var bool: X_INTRODUCED_28_ ::var_is_introduced :: is_defined_var;
+var bool: X_INTRODUCED_29_ ::var_is_introduced :: is_defined_var;
+var bool: X_INTRODUCED_30_ ::var_is_introduced :: is_defined_var;
+var bool: X_INTRODUCED_32_ ::var_is_introduced :: is_defined_var;
+var bool: X_INTRODUCED_33_ ::var_is_introduced :: is_defined_var;
+var bool: X_INTRODUCED_34_ ::var_is_introduced :: is_defined_var;
+var bool: X_INTRODUCED_36_ ::var_is_introduced :: is_defined_var;
+var 3..4: t;
+array [1..4] of var bool: c:: output_array([1..4]) = [X_INTRODUCED_16_,X_INTRODUCED_17_,X_INTRODUCED_18_,X_INTRODUCED_19_];
+constraint bool_clause([X_INTRODUCED_21_,X_INTRODUCED_23_],[X_INTRODUCED_16_]);
+constraint bool_clause([X_INTRODUCED_25_,X_INTRODUCED_26_],[]);
+constraint bool_clause([X_INTRODUCED_21_,X_INTRODUCED_28_],[X_INTRODUCED_17_]);
+constraint bool_clause([X_INTRODUCED_29_,X_INTRODUCED_30_],[]);
+constraint bool_clause([X_INTRODUCED_21_,X_INTRODUCED_32_],[X_INTRODUCED_18_]);
+constraint bool_clause([X_INTRODUCED_33_,X_INTRODUCED_34_],[]);
+constraint bool_clause([X_INTRODUCED_21_,X_INTRODUCED_36_],[X_INTRODUCED_19_]);
+constraint int_lin_le(X_INTRODUCED_38_,[X_INTRODUCED_20_,t],0);
+constraint bool_not(X_INTRODUCED_17_,X_INTRODUCED_16_):: defines_var(X_INTRODUCED_16_);
+constraint bool_not(X_INTRODUCED_21_,X_INTRODUCED_24_):: defines_var(X_INTRODUCED_24_);
+constraint array_bool_and([X_INTRODUCED_16_,X_INTRODUCED_17_,X_INTRODUCED_18_,X_INTRODUCED_19_],X_INTRODUCED_21_):: defines_var(X_INTRODUCED_21_);
+constraint int_ne_reif(X_INTRODUCED_20_,1,X_INTRODUCED_23_):: defines_var(X_INTRODUCED_23_);
+constraint array_bool_and([X_INTRODUCED_16_,X_INTRODUCED_24_],X_INTRODUCED_25_):: defines_var(X_INTRODUCED_25_);
+constraint int_le_reif(X_INTRODUCED_20_,1,X_INTRODUCED_26_):: defines_var(X_INTRODUCED_26_);
+constraint int_ne_reif(X_INTRODUCED_20_,2,X_INTRODUCED_28_):: defines_var(X_INTRODUCED_28_);
+constraint array_bool_and([X_INTRODUCED_17_,X_INTRODUCED_24_],X_INTRODUCED_29_):: defines_var(X_INTRODUCED_29_);
+constraint int_le_reif(X_INTRODUCED_20_,2,X_INTRODUCED_30_):: defines_var(X_INTRODUCED_30_);
+constraint int_ne_reif(X_INTRODUCED_20_,3,X_INTRODUCED_32_):: defines_var(X_INTRODUCED_32_);
+constraint array_bool_and([X_INTRODUCED_18_,X_INTRODUCED_24_],X_INTRODUCED_33_):: defines_var(X_INTRODUCED_33_);
+constraint int_le_reif(X_INTRODUCED_20_,3,X_INTRODUCED_34_):: defines_var(X_INTRODUCED_34_);
+constraint int_ne_reif(X_INTRODUCED_20_,4,X_INTRODUCED_36_):: defines_var(X_INTRODUCED_36_);
+solve  satisfy;
