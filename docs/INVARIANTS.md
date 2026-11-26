@@ -78,7 +78,9 @@ Assertions guarded by `BAGUETTE_DEBUG=1` should check as many of these as is aff
 
 - **I-X1** Every emitted rule is accepted by VeriPB. Non-negotiable; it is the product.
 - **I-X2** Constraint ids are deleted exactly once. Checked at `conclusion` time under
-  `BAGUETTE_PROOF_AUDIT=1`: the live set must be empty.
+  `BAGUETTE_PROOF_AUDIT=1`: the live set must be empty. A proof ended where it stands
+  (`Writer.conclude_interrupted`, M6-T24) is exempt: the ids of the interrupted branch stay
+  live, which the checker accepts. A clean stop is not exempt.
   **The audit cannot witness a double delete** — a second `forget` is a no-op, so the live
   set is empty either way, and the checker is the first thing that complains, a long way
   from the mistake. The guard that *can* see it is `Retention.retire` plus

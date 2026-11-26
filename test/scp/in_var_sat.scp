@@ -1,0 +1,8 @@
+( (version 1)
+  (variables (a 0 5) (b 0 5) (c 0 5) (y 3 9))
+  (constraints
+    (c1 in (a b 7 c) y)
+    (c2 not_equals y 7)
+    (c3 less_than a 3)
+    (c4 less_than b 3))
+  (prob_type decide) )

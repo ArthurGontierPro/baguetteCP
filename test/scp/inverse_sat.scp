@@ -1,0 +1,7 @@
+( (version 1)
+  (variables (f1 0 2) (f2 0 2) (f3 0 2) (g1 1 3) (g2 1 3) (g3 1 3))
+  (constraints
+    (c1 inverse ((f1 f2 f3) 1) ((g1 g2 g3) 0))
+    (c2 equals f1 2)
+    (c3 not_equals g1 2))
+  (prob_type decide) )

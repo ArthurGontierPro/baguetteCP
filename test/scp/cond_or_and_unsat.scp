@@ -1,0 +1,7 @@
+( (version 1)
+  (variables (x 0 3) (y 0 3) (b 0 1))
+  (constraints
+    (c1 or ((x = 1) (y = 2)) (b = 1))
+    (c2 and ((x != 1) (y != 2)) (1 = 1))
+    (c3 equals b 1))
+  (prob_type decide) )

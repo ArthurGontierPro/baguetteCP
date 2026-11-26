@@ -1,0 +1,6 @@
+( (version 1)
+  (variables (x 0 9) (y -1 1) (q 0 9))
+  (constraints
+    (c1 divide x y q)
+    (c2 equals y 0))
+  (prob_type decide) )

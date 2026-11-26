@@ -6,7 +6,12 @@ log/<id>.baguette.{err,rss}), all arms over the same instance lists and the same
 arm wrappers of D-0185 run the solver under a small RSS recorder that writes `rss_kb=N` to
 <proof base>.rss, and pass `--stats`, so the node count is on stderr.
 
-    arms_compare.py <repo> NAME=DIR [NAME=DIR ...] [--pair X Y ...] [--trust NAME] [--tsv OUT]
+    arms_compare.py <repo> NAME=DIR[@SOLVER] [NAME=DIR[@SOLVER] ...] [--pair X Y ...] [--trust NAME] [--tsv OUT]
+
+An arm reads the rows of one solver of compare_run.sh, `baguette` unless `@SOLVER` names another
+(`@gcs`, `@chuffed`: M17-bench-series-T4, D-0211), its logs being log/<id>.<SOLVER>.{err,rss}. A
+GCS arm's complete answers count only VERIFIED, as baguette's; a Chuffed arm has no proof, so it
+must be named by --trust.
 
 Prints, for each arm, per edition and in total: complete answers (OPT/UNSAT), how many of them
 are VERIFIED, satisfaction problems solved (SAT on a model without an objective), incumbents (an
@@ -54,7 +59,7 @@ def families(repo):
     return fam
 
 
-def read_arm(root, trust):
+def read_arm(root, trust, solver="baguette"):
     rows, done = {}, {}
     for y in YEARS:
         d = os.path.join(root, y)
@@ -68,11 +73,11 @@ def read_arm(root, trust):
                 done[y] = True
                 continue
             f = line.rstrip("\n").split("\t")
-            if len(f) < 12 or f[1] != "baguette":
+            if len(f) < 12 or f[1] != solver:
                 continue
             r = dict(id=f[0], year=y, status=f[2], wall=f[3], obj=f[4], nsols=f[5], pbp=f[8],
                      verdict=f[9], detail=f[11], trust=trust)
-            L = os.path.join(d, "log", f[0] + ".baguette")
+            L = os.path.join(d, "log", f[0] + "." + solver)
             try:
                 err = open(L + ".err", errors="replace").read()
             except OSError:
@@ -129,15 +134,21 @@ def counts(rows):
         c["rejected"] += r["verdict"] == "REJECTED" or s == "REJECTED"
         # CHECK-ERROR is not a refused proof: on these runs it is veripb dying against the
         # harness's MEM_KB (`ulimit -v` covers the checker too), rc 134. Kept apart from REJECTED.
-        c["check_error"] += r["verdict"] == "CHECK-ERROR"
-        c["timeout_check"] += r["verdict"] == "TIMEOUT-CHECK"
+        # M6-T24 (D-0225): a check of a STOPPED run's proof is counted apart from a check of
+        # an answer's, so check_error and timeout_check keep meaning what they meant.
+        stopped = not (s in ("OPT", "UNSAT") or (s == "SAT" and r["obj"] == "-"))
+        c["check_error"] += r["verdict"] == "CHECK-ERROR" and not stopped
+        c["timeout_check"] += r["verdict"] == "TIMEOUT-CHECK" and not stopped
+        c["incumbent_verified"] += r["verdict"] == "VERIFIED-INCUMBENT"
+        c["incumbent_check_unfinished"] += stopped and r["verdict"] in ("CHECK-ERROR", "TIMEOUT-CHECK")
         c[s] += 1
     return c
 
 
 COLS = ["opt_unsat", "opt_unsat_verified", "sat_solved", "sat_solved_verified", "incumbent",
         "incumbent_not_opt", "TIMEOUT", "CAPPED", "REFUSED", "ERROR", "UNKNOWN", "FLATTEN-FAIL",
-        "rejected", "check_error", "timeout_check"]
+        "rejected", "check_error", "timeout_check", "incumbent_verified",
+        "incumbent_check_unfinished"]
 
 
 def verdict(x, y):
@@ -241,7 +252,7 @@ def main(argv):
         print(__doc__)
         return 0
     repo = argv[1]
-    arms, pairs, tsv, trusted = [], [], None, set()
+    arms, pairs, tsv, trusted, solvers = [], [], None, set(), {}
     i = 2
     while i < len(argv):
         a = argv[i]
@@ -258,7 +269,9 @@ def main(argv):
             i += 2
             continue
         n, d = a.split("=", 1)
+        d, _, sv = d.partition("@")
         arms.append((n, d))
+        solvers[n] = sv or "baguette"
         i += 1
     fam = families(repo)
     data = {}
@@ -267,7 +280,7 @@ def main(argv):
     allrows = {n: {} for n, _ in arms}
     done = {}
     for n, d in arms:
-        allrows[n], done[n] = read_arm(d, n in trusted)
+        allrows[n], done[n] = read_arm(d, n in trusted, solvers[n])
     for y in YEARS:
         cells = []
         for n, _ in arms:

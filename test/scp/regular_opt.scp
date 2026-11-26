@@ -1,0 +1,6 @@
+( (version 1)
+  (variables (x1 0 2) (x2 0 2) (x3 0 2) (x4 0 2) (t 0 8))
+  (constraints
+    (c1 regular (x1 x2 x3 x4) 3 (((0 0) (1 1)) ((2 2) (0 0)) ((1 1))) (1 2))
+    (c2 lin_equals (1 x1 1 x2 1 x3 1 x4 -1 t) 0))
+  (prob_type (maximize t)) )

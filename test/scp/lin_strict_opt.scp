@@ -1,0 +1,8 @@
+( (version 1)
+  (variables (x 0 9) (y 0 9) (s 0 30))
+  (constraints
+    (c1 lin_less_than (3 x 2 y) 20)
+    (c2 lin_greater_than (1 x -1 y) 0)
+    (c3 lin_greater_equal (1 x 1 y) s)
+    (c4 greater_than y 2))
+  (prob_type (maximize s)) )
