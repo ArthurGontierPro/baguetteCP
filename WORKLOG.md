@@ -19,7 +19,6 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M19-config-T11, then T2 to T4 measured on the CDCL loop (D-0224) | `lib/core/search.ml`, `lib/core/learn.ml`, `lib/core/restart.ml`, `lib/core/phase.ml`, `lib/core/activity.ml`, `bin/main.ml` (the `--cdcl` request), `test/unit/test_search_strategy.ml`, ROADMAP M19-config-T2/T3/T4/T11 | agent-chrono (`wave71-chrono`) | 2026-11-24 |
 | M6-T24, the harness (proofs of stopped runs checked, three kinds of answer; on `wave73-interrupt`) | `scripts/compare_run.sh`, `tools/compare/compare.py`, `tools/compare/readme_table.py`, `tools/compare/arms_compare.py` and `bench/tuning/agreement.py` (small), `bench/series/*.sh` if needed | interrupt-session (laptop) | 2026-11-24 |
 | M6-T24 (an interrupted run ends its proof: signals, heap budget, time limit; D-0225) | `lib/proof/writer.ml`, `lib/proof/encoding.ml` (the heap refusal's exit only), `lib/core/search.ml` (`record_improving`, `conclude_stopped`, `optimise`'s set-up, short edits: agent-chrono holds the file on `wave71-chrono`), `bin/main.ml` (the signal handlers and the resource arms, short edits, same holder), `test/unit/test_endtoend.ml`, `test/unit/test_proof.ml`, SPEC 2.2 and 4.3, PROOF-FORMAT 5, INVARIANTS I-X2, ROADMAP row | interrupt-session (laptop, `wave73-interrupt`) | 2026-11-24 |
 
@@ -472,6 +471,7 @@ section 1. Shares are inclusive, of the whole run.
 
 | Task | Session | Date | Summary |
 |---|---|---|---|
+| M19-config-T11, T2 to T4 on the CDCL loop (D-0224) | agent-chrono (`wave71-chrono`) | 2026-11-26 | **D-0224 [AUTONOME], default unchanged.** `--chrono T` under `--cdcl` (chronological backtracking for jumps over T levels, T = 20), and `--cdcl` on the CLI. Off: byte-identical (456/456, diff 347/347 and 333/333 debug, scaling ok, 5 286 ok). Tuning set, 13 arms: loop `-f` 0.099 / 51 complete against `dfs -f` 0.098 / 48 without proof, 0.236 / 32 against 0.236 / 37 verified with proof; recommendation `-f` for T1, B against C on the full series |
 | M17-bench-series, the arm `-f --no-proof` on two binaries (D-0229) | docs-session (laptop) | 2026-11-25 | **D-0229.** Reference `f244c35a` 401 + 108, 125 refused, score 6 288. Main `36e8cc0` 420 + 112, 84 refused, score 6 590 (fixed category, all unverified). 19 complete answers gained and none lost, no contradiction between the arms. HISTORY.md, the Challenge README and one README bullet updated. |
 | M22-review-T4 (module map and facts) | docs-session (laptop) | 2026-11-24 | Docs only, CLAUDE.md and ARCHITECTURE.md section 1: `reason.ml` and `e2e.ml` in the maps, alldiff's level, sizes and counts, M2-T8 no longer "in progress", the CDCL switch. |
 | M19-config-T5 (retention default, review T12, D-0221) | agent-retention (`wave69-retention`) | 2026-11-24 | **D-0221 [AUTONOME], no change.** Tuning set at 300 s and 42 former heap refusals at 1 200 s, binary `4dde0987`: `tiered` 20 verified against 19 (proof) and 33 against 30 (no proof) of 200, but 6 heap refusals of 42 against 2. The rule fails, `keep_all` stays. Eviction frees no memory (the gated instance stays in the engine), filed |
@@ -689,6 +689,11 @@ section 1. Shares are inclusive, of the whole run.
 | M19-config-T0 (the tuning set) | agent-tuning (`wave59-tuning`) | 2026-11-23 | **D-0205.** `bench/tuning/`, 200 instances in 183 families. DONE except the driver hook. |
 
 ## Handoff notes
+
+### 2026-11-26 (agent-chrono, `wave71-chrono`, D-0224): chronological backtracking on the CDCL loop, and T2 to T4 measured on it
+
+`--cdcl --chrono 20` removes the re-descent D-0219 found (flowshop-workers proved optimal, tpp and nside twice as fast) and makes the loop tie `dfs` on a fixed search; `--chrono` is a separate flag, off by default even under `--cdcl`. No `Store`/`Engine`/proof change: the engine's re-seed of young instances re-asserts what a later backtrack pops (BAGUETTE_DEBUG checked).
+On the tuning set `-f` wins on both searches and the loop against `dfs` under `-f` is a tie (+3 complete without proof, -5 verified with proof): M19-config-T1 should run both on the full series with proof. Results in `/cluster/arthur/baguette-results/chrono/`; finding for M22-review-T2's owner in Cross-session requests (`BAGUETTE_DEBUG` on `cumulative_fixed_overload_edge_unsat`).
 
 ### 2026-11-25 (docs-session, laptop): the `-f --no-proof` arm is done (D-0229)
 
