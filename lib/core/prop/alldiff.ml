@@ -326,7 +326,12 @@ type t = {
      with a proof; [amo_count] entries. *)
   mutable amo_memo : amo_entry list array;
   mutable amo_count : int;
+  (* D-0235: a bound vector on which stage 1 once moved nothing ([pass]). A hint, never
+     a fact about the store, so no trail restores it. *)
+  quiet : quiet;
 }
+
+and quiet = { q_lo : int array; q_hi : int array; mutable q_valid : bool }
 
 (* One entry of [amo_memo]: the key of a build (the at-most-one it extends, or [no_prev]
    for a pair; the pair's first variable, or -1; the variable added; the value), the node
@@ -428,6 +433,12 @@ let make ?(cutoff = default_cutoff) ?(lemma_rows = []) ?(gate = true) store enc 
     lemmas;
     amo_memo = [||];
     amo_count = 0;
+    quiet =
+      {
+        q_lo = Array.make (Array.length terms) 0;
+        q_hi = Array.make (Array.length terms) 0;
+        q_valid = false;
+      };
   }
 
 let vars t = Array.to_list (Array.map (fun tm -> tm.x) t.terms)
@@ -1130,9 +1141,6 @@ let push_conflict store ~facts why =
 
 (* ------------------------------------------------------------------- propagation *)
 
-(* The variables whose current window sits inside [a, b]. *)
-let contained snaps ~a ~b = List.filter (fun s -> a <= s.s_lo && s.s_hi <= b) snaps
-
 exception Found of Store.conflict
 
 (* One pass: every candidate interval, in a fixed order, pushing what it can. Returns
@@ -1158,16 +1166,40 @@ exception Found of Store.conflict
    confined inside the interval -- which empties it, and that is the pigeonhole the
    store reports as a conflict. The next pass, which [stage_bounds] runs until a pass
    changes nothing, recovers whatever this one missed. *)
-let pass t store =
-  Propagator.count_pass ();
+let pass_scan t store ~lo0 ~hi0 =
+  let nt = Array.length t.terms in
   let moved = ref false in
-  let snaps = Array.to_list (Array.map (snap_of store) t.terms) in
-  let los = List.sort_uniq Int.compare (List.map (fun s -> s.s_lo) snaps) in
-  let his = List.sort_uniq Int.compare (List.map (fun s -> s.s_hi) snaps) in
+  (* THE PASS-START SNAPSHOTS, TAKEN WHEN FIRST READ (M20-pernode-T4, D-0235). [snap i]
+     is the snapshot [snap_of] took of every term at the start of the pass until D-0235;
+     it is now taken the first time the pass reads it, which is the same value as long
+     as nothing has changed term [i] in between -- a snapshot reads [i]'s domain, its two
+     supports and the remover of each of its holes, and within a pass only a push ON
+     [i] moves any of them. So the one rule is: a push forces the pushed term's snapshot
+     BEFORE it lands ([dirty] marks it after). A pass that reaches no Hall interval
+     snapshots nothing, where it used to snapshot every term with a [Store.remover]
+     search per hole: 19 to 23 % of elitserien, tppv and costas instructions. [live i]
+     is the snapshot of the store as it stands now, which the [n = k] arm reads. *)
+  let cache = Array.make nt None and dirty = Array.make nt false in
+  let snap i =
+    match cache.(i) with
+    | Some s -> s
+    | None ->
+        let s = snap_of store t.terms.(i) in
+        cache.(i) <- Some s;
+        s
+  in
+  let live i = if dirty.(i) then snap_of store t.terms.(i) else snap i in
+  let los = List.sort_uniq Int.compare (Array.to_list lo0) in
+  let his = Array.of_list (List.sort_uniq Int.compare (Array.to_list hi0)) in
+  (* The terms by ascending upper bound, so that the number of terms inside [a, b] is a
+     pointer walked along [his] for each [a] rather than a filter of the scope per
+     interval. *)
+  let by_hi = Array.init nt Fun.id in
+  Array.stable_sort (fun i j -> Int.compare hi0.(i) hi0.(j)) by_hi;
   (* One push, with both halves of D-0026 built from the same snapshot. Returns through
      [Found]/[Moved]; a push that changes nothing (the bound is already there) falls
      through, which is how [Unchanged] can happen at all here. *)
-  let push ~halls ~a ~b ~y ~lower x bound =
+  let push ~halls ~a ~b ~y ~yi ~lower bound =
     (* M7-T33 (D-0156): the push that would EMPTY [y] -- [pass]'s pigeonhole arm, or an
        [n = k] push whose live [y] is now confined -- is the conflict, reported with its
        facts under a decision (see [push_conflict]). [y]'s bounds here are the ones the
@@ -1190,27 +1222,40 @@ let pass t store =
         (prune_reason ~keep:(fun v -> a <= v && v <= b) halls y ~lower)
         (prune_expl t ~a ~b ~halls ~y ~lower)
     in
+    (* The rule above: [yi]'s pass-start snapshot is taken before the push can land. *)
+    ignore (snap yi);
     (* [deriving_ahead]: a Hall pruning counts several disequality rows, so its trace
        line is RUP only after its derivation (I-X10, D-0040). M7-T17 / D-0082 made this
        the trigger; it used to be [Encoding.has_direct] of [x]. *)
     match
       Store.deriving_ahead store (fun () ->
-          if lower then Store.set_lo store x bound j else Store.set_hi store x bound j)
+          if lower then Store.set_lo store y.s_var bound j
+          else Store.set_hi store y.s_var bound j)
     with
     | Store.Conflict c -> raise (Found c)
     | Store.Changed ->
         Propagator.count_deduction ();
+        dirty.(yi) <- true;
         moved := true
     | Store.Unchanged -> ()
   in
   List.iter
     (fun a ->
-      List.iter
+      let inside = ref 0 and p = ref 0 in
+      Array.iter
         (fun b ->
-          if b >= a then
-            let all_in = contained snaps ~a ~b in
-            let k = b - a + 1 in
-            let n = List.length all_in in
+          (* [inside]: the terms whose pass-start window lies in [a, b]. *)
+          while !p < nt && hi0.(by_hi.(!p)) <= b do
+            if lo0.(by_hi.(!p)) >= a then incr inside;
+            incr p
+          done;
+          let k = b - a + 1 in
+          let n = !inside in
+          if b >= a && n >= k then
+            (* The contained terms in [t.terms] order, as [contained] listed them. *)
+            let idx =
+              List.filter (fun i -> a <= lo0.(i) && hi0.(i) <= b) (range 0 (nt - 1))
+            in
             (* THE PIGEONHOLE, REALISED AS A PRUNING THAT EMPTIES A DOMAIN, and that is
                not a roundabout way to call [Store.conflict] -- it is what makes the
                conflict provable.
@@ -1237,31 +1282,77 @@ let pass t store =
                set and the (k+1)th is the variable pushed out of it. Which [k] is
                immaterial to soundness and fixed by [t.terms] order for determinism. *)
             if n > k then
-              let halls = List.filteri (fun i _ -> i < k) all_in in
-              let y = List.nth all_in k in
-              push ~halls ~a ~b ~y ~lower:true y.s_var (b + 1)
-            else if n = k then
+              let halls = List.map snap (List.filteri (fun i _ -> i < k) idx) in
+              let yi = List.nth idx k in
+              push ~halls ~a ~b ~y:(snap yi) ~yi ~lower:true (b + 1)
+            else
               (* M16-file-review-T2 (D-0190): a variable is snapshotted, and looked for in
                  the Hall set, only once its LIVE bounds show it can be pushed: [y.s_lo]
                  and [y.s_hi] are those bounds, read again by [snap_of] from the same
                  store, so the same variables are pushed with the same snapshots. Every
                  variable of the scope used to be snapshotted (its holes, two root tests)
                  and compared by name with the Hall set, for every tight interval. *)
-              Array.iter
-                (fun tm ->
+              (* D-0235: the Hall set is snapshotted only when a push needs it, and a
+                 term is compared with it by name before it is snapshotted -- the same
+                 test, [s_name] being the term's [name]. *)
+              Array.iteri
+                (fun yi tm ->
                   let d = Store.get store tm.x in
                   let lo = Domain.lo d and hi = Domain.hi d in
                   if (a <= lo && lo <= b) || (a <= hi && hi <= b) then
-                    let y = snap_of store tm in
-                    if not (List.exists (fun s -> s.s_name = y.s_name) all_in) then
+                    if not (List.exists (fun i -> t.terms.(i).name = tm.name) idx) then
+                      let y = live yi in
+                      let halls = List.map snap idx in
                       if a <= y.s_lo && y.s_lo <= b then
-                        push ~halls:all_in ~a ~b ~y ~lower:true tm.x (b + 1)
+                        push ~halls ~a ~b ~y ~yi ~lower:true (b + 1)
                       else if a <= y.s_hi && y.s_hi <= b then
-                        push ~halls:all_in ~a ~b ~y ~lower:false tm.x (a - 1))
+                        push ~halls ~a ~b ~y ~yi ~lower:false (a - 1))
                 t.terms)
         his)
     los;
   !moved
+
+(* THE QUIET-BOUNDS SKIP (M20-pernode-T4, D-0235). Whether [pass_scan] moves anything or
+   raises is a function of the scope's BOUNDS alone: every interval, every containment,
+   every push and every emptying test reads [lo]/[hi] and nothing else (holes enter only
+   the reasons and derivations of a push that lands). So a bound vector on which a scan
+   once moved nothing is QUIET for good, and a pass that starts on it is skipped. The
+   vector is not a fact about the store and needs no trail: after a backtrack, a restart
+   or a descent the test compares the live bounds with it and runs the scan whenever
+   they differ. Most wake-ups of a domain-consistent alldiff are interior holes, which
+   leave the bounds where the last call's final pass found them quiet. [count_pass] is
+   counted as before, so the [snaps] counter the lanes compare is unchanged.
+   BAGUETTE_DEBUG runs the scan behind every skip and requires it to move nothing. *)
+let pass t store =
+  Propagator.count_pass ();
+  let nt = Array.length t.terms in
+  let lo0 = Array.make nt 0 and hi0 = Array.make nt 0 in
+  Array.iteri
+    (fun i tm ->
+      let d = Store.get store tm.x in
+      lo0.(i) <- Domain.lo d;
+      hi0.(i) <- Domain.hi d)
+    t.terms;
+  let q = t.quiet in
+  let quiet = ref q.q_valid in
+  let i = ref 0 in
+  while !quiet && !i < nt do
+    if lo0.(!i) <> q.q_lo.(!i) || hi0.(!i) <> q.q_hi.(!i) then quiet := false;
+    incr i
+  done;
+  if !quiet then (
+    Debug.check "I-P2 (D-0235): stage 1 skipped a pass on quiet bounds" (fun () ->
+        match pass_scan t store ~lo0 ~hi0 with
+        | moved -> not moved
+        | exception Found _ -> false);
+    false)
+  else
+    let moved = pass_scan t store ~lo0 ~hi0 in
+    if not moved then (
+      Array.blit lo0 0 q.q_lo 0 nt;
+      Array.blit hi0 0 q.q_hi 0 nt;
+      q.q_valid <- true);
+    moved
 
 (* ================================================== M4-T2: stage 2, Regin's matching
 
@@ -1524,7 +1615,12 @@ let regin_scratch t store =
               in
               (* Built at the first removal that lands, from the cache: see the
                  comment above [snap]. *)
-              let halls = lazy (List.filter_map (fun i -> if ink.(i) then Some (snap i) else None) (range 0 (n - 1))) in
+              let halls =
+                lazy
+                  (List.filter_map
+                     (fun i -> if ink.(i) then Some (snap i) else None)
+                     (range 0 (n - 1)))
+              in
               let keep = mem_of vals in
               let facts = lazy (hall_facts ~keep (Lazy.force halls)) in
               List.iter
