@@ -1,0 +1,10 @@
+( (version 1)
+  (variables (a 0 9) (b 0 9) (c 0 9) (m 0 9) (n 0 9) (p 0 9) (r 0 9))
+  (constraints
+    (c1 array_max (a b c) m)
+    (c2 array_min (a b c) n)
+    (c3 max a b p)
+    (c4 min b c r)
+    (c5 lin_equals (1 a 1 b 1 c) 12)
+    (c6 all_different (a b c)))
+  (prob_type (minimize m)) )

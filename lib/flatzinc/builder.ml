@@ -1082,29 +1082,10 @@ let build_constraint env (c : Ast.constraint_item) =
     env.naux <- n + 1;
     new_var env (Printf.sprintf "X_INTRODUCED_arith_%d" n) Model.Dbool pos
   in
-  (* `b <-> x >= 0`, and only when the declared domain of x leaves the sign open. *)
-  let sign_bool (x : Model.operand) =
-    match x with
-    | Model.Const _ -> None
-    | Model.Var i ->
-        let lo, hi = var_bounds i in
-        if lo >= 0 || hi < 0 then None else Some (fresh_bool ())
-  in
-  (* `b_v <-> y >= v` for every v strictly inside y's declared domain, smallest first.
-     Written as a loop and not [List.init], because [List.init]'s evaluation order is
-     unspecified and [fresh_bool] has a side effect: a proof whose variable numbering
-     changes between runs is a proof nobody can diff. *)
-  let ladder_bools (y : Model.operand) =
-    match y with
-    | Model.Const _ -> []
-    | Model.Var j ->
-        let lo, hi = var_bounds j in
-        let acc = ref [] in
-        for v = lo + 1 to hi do
-          acc := (v, fresh_bool ()) :: !acc
-        done;
-        List.rev !acc
-  in
+  (* The sign and ladder Booleans, and the three constructors that carry them, are
+     [Arith_aux]'s, shared with lib/scp/reader.ml (M23-inputs-T4, D-0230): this builder
+     supplies the bounds it reads and the Booleans it names. *)
+  let actx = { Arith_aux.bounds = var_bounds; fresh = fresh_bool } in
   let arity3 f =
     arity 3;
     match c.Ast.c_args with
@@ -1342,47 +1323,11 @@ let build_constraint env (c : Ast.constraint_item) =
     | "int_le_reif" -> cmp_reif (fun a b r -> Model.Int_le_reif (a, b, r))
     | "int_eq_reif" -> cmp_reif (fun a b r -> Model.Int_eq_reif (a, b, r))
     | "int_ne_reif" -> cmp_reif (fun a b r -> Model.Int_ne_reif (a, b, r))
-    (* M4. `int_times(x, c, z)` with a constant second factor is c*x = z, an ordinary
-       linear equality, so it needs neither ladder nor sign and gets neither.
-       `int_div` keeps its sign split whatever the divisor is, because truncation
-       toward zero is what the sign decides (D-0033); it drops both auxiliaries only
-       when both operands are constants and the quotient is a number. *)
-    | "int_times" ->
-        arity3 (fun x y z ->
-            (* M8-bits-encoding-T3 continuation (D-0134 section 10): the case split runs
-               over the SECOND operand -- one guard Boolean and two to four rows per value
-               of its declared domain (lib/core/prop/arith.ml) -- and x * y = z is
-               symmetric, so the NARROWER operand goes second. On the Challenge the shape
-               that matters is `int_times(b, y, z)` with b in 0..1 and y up to 0..10000
-               (mapping, carpet-cutting): split over y it is 10 001 groups, split over b it
-               is two. A tie keeps the order the model wrote, so a model whose operands
-               are equally wide, or whose first is the wider, is posted exactly as before.
-               Not done for int_div, which is not symmetric. *)
-            let width = function
-              | Model.Const _ -> 0
-              | Model.Var i ->
-                  let lo, hi = var_bounds i in
-                  hi - lo
-            in
-            let x, y = if width x < width y then (y, x) else (x, y) in
-            let aux =
-              match y with
-              | Model.Const _ -> { Model.x_sign = None; y_ge = [] }
-              | Model.Var _ ->
-                  let x_sign = sign_bool x in
-                  { Model.x_sign; y_ge = ladder_bools y }
-            in
-            Model.Int_times (x, y, z, aux))
-    | "int_div" ->
-        arity3 (fun x y q ->
-            let aux =
-              match (x, y) with
-              | Model.Const _, Model.Const _ -> { Model.x_sign = None; y_ge = [] }
-              | _ -> { Model.x_sign = sign_bool x; y_ge = ladder_bools y }
-            in
-            Model.Int_div (x, y, q, aux))
-    | "int_abs" ->
-        cmp (fun x z -> Model.Int_abs (x, z, { Model.x_sign = sign_bool x; y_ge = [] }))
+    (* M4: `int_times`, `int_div`, `int_abs`. Which auxiliaries each creates, and in
+       which order, is [Arith_aux]'s (its header and its comments on [times] and [div]). *)
+    | "int_times" -> arity3 (Arith_aux.times actx)
+    | "int_div" -> arity3 (Arith_aux.div actx)
+    | "int_abs" -> cmp (Arith_aux.abs actx)
     | other -> unsupported_builtin pos other
   in
   { Model.k; Model.c_pos = pos; c_id = c.Ast.c_id }

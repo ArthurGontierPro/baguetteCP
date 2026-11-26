@@ -1,0 +1,8 @@
+; M23-inputs (D-0228 section 14, D-0230): the `.scp` reader. It depends on what
+; lib/flatzinc depends on, and on lib/flatzinc itself for Model, Pos and Error: its
+; output is the same Model.t the FlatZinc builder produces, so compile.ml and everything
+; after it are unchanged. Nothing in lib/flatzinc depends on it.
+
+(library
+ (name baguette_scp)
+ (libraries baguette_core baguette_proof baguette_flatzinc))

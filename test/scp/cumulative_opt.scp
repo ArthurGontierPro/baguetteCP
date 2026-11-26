@@ -1,0 +1,8 @@
+( (version 1)
+  (variables (s1 0 10) (s2 0 10) (s3 0 10) (e 0 20))
+  (constraints
+    (c1 cumulative (s1 s2 s3) (3 2 4) (2 1 2) 3)
+    (c2 lin_less_equal (1 s1 -1 e) -3)
+    (c3 lin_less_equal (1 s2 -1 e) -2)
+    (c4 lin_less_equal (1 s3 -1 e) -4))
+  (prob_type (minimize e)) )

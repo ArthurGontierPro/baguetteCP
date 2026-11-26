@@ -65,6 +65,15 @@ def classify(r, proof):
     s, v = r["status"], r["verdict"]
     if s in INPUT:
         return None
+    # M6-T24 (D-0225): a run stopped with a solution. TIMEOUT, or SAT on an OPTIMISATION model
+    # (a heap-budget stop with an incumbent exits 0): never an answer, whatever its proof says.
+    # A SAT row of an optimisation model is one even when no value could be read ("min:-").
+    if (s == "TIMEOUT" and has_value(r)) or (s == "SAT" and ":" in r["obj"]):
+        if v == "REJECTED":
+            return "rejected"
+        if v == "VERIFIED-WEAK":
+            return "incumbent_weak"
+        return "incumbent_verified" if v == "VERIFIED-INCUMBENT" else "incumbent_unverified"
     if s in COMPLETE:
         if not proof:
             return "complete_unverified_" + ("sat" if s == "SAT" else "opt")
@@ -120,7 +129,10 @@ def outcome_table(c, data):
         ("Complete answer, VeriPB hit its time limit (3 600 s)", "check_time", None),
         ("Complete answer, VeriPB ran out of memory (64 GB)", "check_memory", None),
         ("Complete answer, proof check failed for another reason", "check_other", None),
-        ("Timeout at 1 200 s", "timeout", "timeout"),
+        ("Solution found, not proved optimal, proof verified", "incumbent_verified", None),
+        ("Solution found, not proved optimal, proof not verified", "incumbent_unverified", "incumbent_unverified"),
+        ("Solution found, the proof records another value", "incumbent_weak", None),
+        ("Timeout at 1 200 s, no solution", "timeout", "timeout"),
         ("Proof larger than the harness's cap (none since D-0203)", "capped", None),
         ("Refused, memory budget reached", "refused", "refused"),
         ("Crash", "crash", "crash"),
@@ -146,7 +158,7 @@ def outcome_table(c, data):
                 v = cols[i].get(nokey, 0)
                 s = fmt(v) + (" (unverified)" if nokey.startswith("complete") else "")
             vals.append((v, s))
-        if key in ("check_time", "check_memory", "check_other", "unknown") and not any(v for v, _ in vals):
+        if key in ("check_time", "check_memory", "check_other", "unknown", "incumbent_weak") and not any(v for v, _ in vals):
             continue
         if key == "capped" and not any(v for v, _ in vals):
             continue

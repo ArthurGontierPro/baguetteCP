@@ -31,9 +31,10 @@
   test_clause
   test_pb
   test_consistency
-  test_search_strategy)
+  test_search_strategy
+  test_scp)
  ; M9-no-proof-T2: test_endtoend's CLI lane runs bin/main.exe, so `dune runtest` must
  ; build it first -- without this line the lane would test whatever binary happened to be
  ; on disk, which is the stale-binary trap CLAUDE.md records twice.
  (deps ../../bin/main.exe)
- (libraries baguette_core baguette_proof baguette_flatzinc))
+ (libraries baguette_core baguette_proof baguette_flatzinc baguette_scp))

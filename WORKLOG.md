@@ -19,15 +19,13 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M6-T24, the harness (proofs of stopped runs checked, three kinds of answer; on `wave73-interrupt`) | `scripts/compare_run.sh`, `tools/compare/compare.py`, `tools/compare/readme_table.py`, `tools/compare/arms_compare.py` and `bench/tuning/agreement.py` (small), `bench/series/*.sh` if needed | interrupt-session (laptop) | 2026-11-24 |
-| M6-T24 (an interrupted run ends its proof: signals, heap budget, time limit; D-0225) | `lib/proof/writer.ml`, `lib/proof/encoding.ml` (the heap refusal's exit only), `lib/core/search.ml` (`record_improving`, `conclude_stopped`, `optimise`'s set-up, short edits: agent-chrono holds the file on `wave71-chrono`), `bin/main.ml` (the signal handlers and the resource arms, short edits, same holder), `test/unit/test_endtoend.ml`, `test/unit/test_proof.ml`, SPEC 2.2 and 4.3, PROOF-FORMAT 5, INVARIANTS I-X2, ROADMAP row | interrupt-session (laptop, `wave73-interrupt`) | 2026-11-24 |
 | M21-memory-T3 fix 1 (an evicted learned constraint leaves the engine), learned-row layout, learned PB row size guard, M19-config-T5 re-measure; D-0226 | `lib/core/engine.ml`, `lib/core/retention.ml`, `lib/core/learned.ml`, `lib/core/prop/pb.ml`, `lib/core/prop/clause.ml`, `lib/core/pb_analysis.ml`, `lib/core/propagator.ml` (one field: the engine hands an instance its removal), their tests, ROADMAP rows M21-memory-T3 and M19-config-T5 | agent-evict (fataepyc-06, `wave73-evict`) | 2026-11-24 |
 
 ## Cross-session requests
 
 ### 2026-11-23 (orchestrator baguette-92 on fataepyc-06): decision numbers reserved
 
-D-0203 (agent-series), D-0206 (agent-table), D-0208 (agent-watch, M20 learned-constraint wakes), D-0209 (agent-writer, M20 proof writer) are taken by running agents. D-0210 (agent-node07, M17-T5, the 64 GiB observation series) and D-0211 (agent-node07, M17-T4, GCS and Chuffed) too. D-0212 (agent-arith, M20-pernode-T3) too. D-0226 is agent-evict (the engine drops evicted learned instances, learned PB row cost). Another session that needs a record: take D-0230 or above, and say so here (D-0227 is kept for the orchestrator, D-0228 for `wave74-inputs`' renumbering, D-0229 is the `-f --no-proof` series on fataepyc-04). D-0225 is interrupt-session (M6-T24, laptop). D-0224 is agent-chrono (M19-config-T11, then T2 to T4 on the loop). D-0222 is agent-holes (M21-memory-T3, hole bitsets on the trail), D-0223 is agent-release (M21-memory-T3, explanations released after their line). D-0221 is agent-retention (M19-config-T5, the retention default). D-0220 is agent-binpack (M18-coverage-T4). D-0219 is agent-cdcl (M19-config-T10). D-0218 is agent-memory (M21-memory-T1, T2). D-0217 is agent-circuit (M18-coverage-T3). D-0216 is agent-hash (black-hole root slowdown in Explanation hashing). D-0215 is agent-regin (M20-pernode-T4, alldiff). D-0214 is agent-lazy (M20-pernode-T2, Element). D-0213 is agent-diffn (M18-coverage-T2).
+D-0203 (agent-series), D-0206 (agent-table), D-0208 (agent-watch, M20 learned-constraint wakes), D-0209 (agent-writer, M20 proof writer) are taken by running agents. D-0210 (agent-node07, M17-T5, the 64 GiB observation series) and D-0211 (agent-node07, M17-T4, GCS and Chuffed) too. D-0212 (agent-arith, M20-pernode-T3) too. D-0226 is agent-evict (the engine drops evicted learned instances, learned PB row cost). Another session that needs a record: take D-0231 or above, and say so here; D-0230 is agent-scp (M23-inputs, the reader) (D-0227 is agent-series2, the series on current main on fataepyc-07, D-0228 is M23-inputs' plan (renumbered, merged), D-0229 is the `-f --no-proof` series on fataepyc-04). D-0225 is interrupt-session (M6-T24, laptop). D-0224 is agent-chrono (M19-config-T11, then T2 to T4 on the loop). D-0222 is agent-holes (M21-memory-T3, hole bitsets on the trail), D-0223 is agent-release (M21-memory-T3, explanations released after their line). D-0221 is agent-retention (M19-config-T5, the retention default). D-0220 is agent-binpack (M18-coverage-T4). D-0219 is agent-cdcl (M19-config-T10). D-0218 is agent-memory (M21-memory-T1, T2). D-0217 is agent-circuit (M18-coverage-T3). D-0216 is agent-hash (black-hole root slowdown in Explanation hashing). D-0215 is agent-regin (M20-pernode-T4, alldiff). D-0214 is agent-lazy (M20-pernode-T2, Element). D-0213 is agent-diffn (M18-coverage-T2).
 
 Need a change in a file someone else has claimed? Write it here and move on to other
 work. The owning session picks it up.
@@ -470,6 +468,10 @@ section 1. Shares are inclusive, of the whole run.
 
 | Task | Session | Date | Summary |
 |---|---|---|---|
+| M23-inputs-T1..T5 (the `.scp` reader, D-0230) | agent-scp (`wave76-scp`, not merged) | 2026-11-26 | **D-0230.** `lib/scp/` reads cake_pb_cp's `.scp` (version 1) into the same `Model.t`; refuses with a position what baguette does not propagate. Spike: 196 of 203 read and VERIFIED in 60 s, 7 refused (`equals_if`). FlatZinc artefacts byte-identical (456 of 456). |
+| M17-bench-series-T4 (GCS with proofs, Chuffed, D-0211) | agent-node07 (`wave60-node07`) | 2026-11-26 | **D-0211.** Sixteen editions on fataepyc-07 at D-0203's settings. Verified complete answers: baguette A 376, GCS 141 (279 printed, 135 TIMEOUT-CHECK); summed score baguette A 4 043, GCS 2 792, Chuffed 8 466. `arms_compare.py` reads `NAME=DIR@gcs`, `challenge_rank.py --demote-gcs` (additive). Tables `/cluster/arthur/baguette-results/node07-gcs/` |
+| M17-bench-series-T5 (64 GiB observation series, D-0210) | agent-node07 (`wave60-node07`) | 2026-11-26 | **D-0210.** Arms A and C of `f244c35a` at 64 GiB (32 GiB heap) on fataepyc-07. Of A's 164 refusals at 16 GiB: 3 OPT (TIMEOUT-CHECK), 101 search to the limit, 60 refused again. Tables `/cluster/arthur/baguette-results/node07-64g/` |
+| M21-memory-T3, fix 4 of D-0218 (D-0223) | agent-release (`wave70-release`) | 2026-11-24 | **D-0223 [AUTONOME].** What held tdtsp's explanation trees is `Element`'s wrapper thunk (the inner thunk memoises the tree its wrapper's release drops), not the hash-consing table (1 MB). Landed, byte-identical: a model row's citation is one shared block per id (`Explanation.cite_row`), tdtsp at 250 nodes 16.6 -> 6.7 GB peak RSS. Releasing the inner tree is measured, not landed (other bytes on tdtsp, +16 to +37 % time): `baguette-results/release/handed.patch` |
 | M17-bench-series, the arm `-f --no-proof` on two binaries (D-0229) | docs-session (laptop) | 2026-11-25 | **D-0229.** Reference `f244c35a` 401 + 108, 125 refused, score 6 288. Main `36e8cc0` 420 + 112, 84 refused, score 6 590 (fixed category, all unverified). 19 complete answers gained and none lost, no contradiction between the arms. HISTORY.md, the Challenge README and one README bullet updated. |
 | M22-review-T4 (module map and facts) | docs-session (laptop) | 2026-11-24 | Docs only, CLAUDE.md and ARCHITECTURE.md section 1: `reason.ml` and `e2e.ml` in the maps, alldiff's level, sizes and counts, M2-T8 no longer "in progress", the CDCL switch. |
 | M19-config-T5 (retention default, review T12, D-0221) | agent-retention (`wave69-retention`) | 2026-11-24 | **D-0221 [AUTONOME], no change.** Tuning set at 300 s and 42 former heap refusals at 1 200 s, binary `4dde0987`: `tiered` 20 verified against 19 (proof) and 33 against 30 (no proof) of 200, but 6 heap refusals of 42 against 2. The rule fails, `keep_all` stays. Eviction frees no memory (the gated instance stays in the engine), filed |
@@ -599,6 +601,8 @@ section 1. Shares are inclusive, of the whole run.
 | M7-T11 | agent-holes | 2026-09-23 | Set domains accepted: one order-ladder row per hole in the `.opb` (the MIRROR of the rung, D-0072), hull in the store, one `Ne` instance per hole. `reject_set_domain` removed, not weakened |
 | M10-search-strategy-T5, M9-no-proof-T3, M7-T30 (the sixteen editions in three arms: default, `-f`, `--no-proof`) | agent-m10t5 (`wave55-m10t5`) | 2026-11-22 | **D-0185.** Release binary `7c880bce` (`10b3507`, order default, before D-0201). Verified OPT+UNSAT+SAT: A 323, B (`-f`) 362, C unverified 380; 0 REJECTED, 21 CHECK-ERROR are veripb against the 16 GiB `ulimit -v`. Fixed-category score sum A 2 789, C (no proof, trusted) 3 237; B 15 of 16 editions above A if scored in fixed. Default stays fixed ([AUTONOME], proposal only). Tables in `/cluster/arthur/baguette-results/m10t5/` |
 | M10-search-strategy-T5: codes set under `-f` and `tiered` | agent-m10t5b (`wave57-m10t5b`) | 2026-11-22 | **D-0202.** Release `f244c35a`, 60 runs, 30 proofs VERIFIED, none rejected. `-f` solves o7k2 def, 2x slower on QR; `tiered` a wash; both together lose QR72. Proposal only, no default change. |
+| M6-T24, the harness (proofs of stopped runs checked, three kinds of answer; on `wave73-interrupt`) | interrupt-session (`wave73-interrupt`), merged by the orchestrator | 2026-11-26 | **D-0225.** The session ended before merging; branch recovered and merged, lane re-recorded after it. |
+| M6-T24 (an interrupted run ends its proof: signals, heap budget, time limit; D-0225) | interrupt-session (`wave73-interrupt`), merged by the orchestrator | 2026-11-26 | **D-0225.** The session ended before merging; branch recovered and merged, lane re-recorded after it. |
 
 | M2-L3 | agent-learn3 | 2026-09-18 | 1UIP clause learning over order literals, proof-only (**D-0044 fork (ii)**), with conflict-directed backjumping over the **decision closure** and its `rup` derivation at level 0. **I-S4's cross-level debt is discharged** and the check is wider than the invariant's wording. Backjump measured: 31 -> 9 nodes on `backjump_unsat.fzn`. **M1-T66 stays OPEN**: with `Search.bridges` disabled, 35/35 models still pass and no checker rejects — a learned clause citing across levels did NOT make the bridge load-bearing. 1833 unit checks, 267 matrix, 44 mutation, 35/35 models, determinism 35/35 byte-identical |
 | M2-T14 | agent-fmt2 | 2026-09-18 | Format-2.0 vacuity sweep. Three more instances of the M2-L0 defect found and fixed (test_proof 3.0-only lanes resolving 2.2.2 via `$VERIPB`; D-0030's certification in test_mutation writing a 3.0 proof against an env-format `.opb`; 20 blanked-trace controls asserting on exit status alone). Test (c) now checks the claim index by content, so it runs under both formats. |
@@ -688,6 +692,16 @@ section 1. Shares are inclusive, of the whole run.
 
 ## Handoff notes
 
+### 2026-11-26 (agent-scp, fataepyc-06): M23-inputs T1 to T5 are done on `wave76-scp`, not merged (D-0230)
+
+`baguette foo.scp` reads CakeML's `.scp` (version 1) through `lib/scp/` into the same `Model.t`; `make scp` is in `make test`, and `tools/scp/` holds the agreement, random and mutation lanes (each answer judged against the `.scp` alone by `validate.py`). The SPEC sentence is only proposed (D-0230 section 6): the user decides.
+Finding for whoever owns `lib/core/prop/regular.ml`: a CONSTANT letter outside the symbol range crashes `forward_reason` (index out of bounds), reproduced from FlatZinc on main (D-0230 section 7); the reader sidesteps it, the propagator is unchanged.
+
+### 2026-11-26 (agent-node07, fataepyc-07): M17-bench-series-T5 and T4 are done (D-0210, D-0211)
+
+More memory turns baguette's heap refusals into searches, rarely into answers (3 of 164 at 64 GiB, none verifiable in an hour). Against GCS, verified answer for verified answer, baguette is ahead (376 to 141, score 4 043 to 2 792); GCS is faster on what both solve and refuses almost nothing, but writes ~100 MB/s of proof, so half its complete answers cannot be checked in 3 600 s.
+`bench/series/veripb_wrap.sh` misses a veripb that dies at its cgroup with `OSError: [Errno 22]` (3 GCS checks; their 125 GB of proof are kept on fataepyc-07 under `/scratch/arthur/node07-gcs/G/{2023,2024}/log/`, delete when no longer wanted). The `node07.slice` parent cgroup with a launch gate on memory and a HOLD file (D-0210, `node07-gcs/node07-hold.sh` in the tables) is how both campaigns shared fataepyc-07 with another experiment.
+
 ### 2026-11-25 (docs-session, laptop): the `-f --no-proof` arm is done (D-0229)
 
 Tables in `/cluster/arthur/baguette-results/series-20261124-fnoproof/`, which now has an index (`baguette-results/README.md`). Nothing of it runs on fataepyc-04 any more, and its run directories there were deleted on 2026-11-25 (the raw outputs with them), so fataepyc-04 can be released. The README's performance table is still D-0203, since the arm has no proof. Only the bullet on the merged work changed.
@@ -699,6 +713,14 @@ Every `.ml` of `lib/` is now in both maps. T4's row can be closed. Left to their
 - ROADMAP: M19-config-T10 says "not merged" (it is in main), M19-config-T11 says TODO (built on `wave71-chrono`), M21-memory-T3 says TODO (fix 2 merged, fix 4 gated on `wave70-release`, fix 1 claimed), M4-T9 has a DONE row and a WIP row (the second is the old text).
 - The claims of agent-chrono, agent-release, agent-evict and agent-node07 are on their branches only, so the `SessionStart` hook does not show them.
 - The worktree `/scratch/arthur/wt-evict` has no file newer than its claim (15:17 UTC, read at 16:35), and `wave70-release` has its lanes green (16:22) with its record and WORKLOG uncommitted.
+### 2026-11-24 (interrupt-session, `wave73-interrupt`): M6-T24, an interrupted run ends its proof (D-0225)
+
+SIGTERM, SIGINT, SIGXCPU and the heap budget end the proof, `BOUNDS <declared floor> <last value printed>` on an optimisation run. Built and measured (D-0225 section 5), NOT merged.
+To merge: `search.ml` and `bin/main.ml` overlap agent-chrono's `wave71-chrono` (short edits in `record_improving`, `conclude_stopped`, `optimise`, the signal handler, `config.stop`). After the merge the differential reference must be re-recorded (226 plain and 214 debug runs differ by the conclusion line only). Next: the harness checks the proofs of killed runs, per-edition limits (900 s before 2015).
+Runs: `fataepyc-07:/scratch/arthur/interrupt/`.
+For the orchestrator, before the next series: a heap stop with an incumbent now exits 0, so `compare.py` files it SAT with an objective. `arms_compare.py` and `challenge_rank.py` read that as an incumbent, but `readme_table.py` would have counted it under "Satisfiable, proof verified" (corrected on this branch; `bench/tuning/agreement.py` line 29, which an earlier note named, is right as it is). The harness half is on this branch too: `compare_run.sh` checks a killed run's proof when it printed a solution (`CHECK_STOPPED=0` turns it off), and the readers tell an answer, a verified solution and an unverified one apart.
+
+End to end on 105 rows (D-0225 section 5): 55 of 55 stopped solutions `VERIFIED-INCUMBENT`, through the series' wrappers. Cost: 125 s of check on average for 40 s of solving, so a 1 200 s series will check much longer; `CHECK_STOPPED=0` turns it off. At the merge with main at `dd499b2`, one append conflict at the end of `docs/DECISIONS.md` (D-0225 against D-0221): keep both. Release the two M6-T24 claim rows then.
 
 ### 2026-11-24 (readme-session, laptop): 900 s for the editions 2011 to 2014
 
@@ -727,6 +749,13 @@ The series on `f244c35a` is done and the README section is regenerated from it (
 
 Updated as things land. The plan is the nine steps agreed on 2026-11-23 (speed first, then the CDCL loop, coverage, the refused third, configuration last).
 
+**2026-11-26, merged after the usage limit** (gate 104 GREEN on `6c9cf97` for the last two, binary `9bfe10d3`: make check, 228 test models byte-identical against gate 103's binary, lane 347 of 347, debug lane 333 of 333, scaling; gate 103 green on D-0225, binary `8934e442`, 228 test models byte-identical, the lanes differing by 226 `.pbp` hashes only, re-recorded in its own commit):
+
+- **D-0225** (wave73-interrupt, decided with the user): an interrupted run ends its proof with `BOUNDS`.
+- **D-0223** [AUTONOME] (wave70-release, merge `99c451a`): one shared block per cited model row. tdtsp_10_53 at 250 nodes 16.6 -> 6.6 GB peak RSS, proofs byte-identical, -1.8 % to +1.7 % instructions per node. NOT landed and FOR THE USER: truly releasing Element's explanations (live heap -97 % on tdtsp) changes the proof (111 fewer `pol` lines in 100 nodes) and costs +16 to +37 % time; the patch is `/cluster/arthur/baguette-results/release/handed.patch`.
+- **D-0230** [AUTONOME] (wave76-scp, merge `dd5dbcd`): the `.scp` reader `lib/scp/`, M23-inputs T1 to T5. 196 of the spike's 203 files read and solved with a verified proof; 64 of GCS's 297 Challenge `.scp` read (96 refused at a view, 137 at a constraint). FOR THE USER: the SPEC sentence it proposes is not written into SPEC; `equals_if` and `lin_equals_iff` are refused.
+- **Bug found by agent-scp on main, open**: `lib/core/prop/regular.ml` crashes when a letter is a constant outside the automaton's symbols (reproduces from a hand-written FlatZinc file).
+
 **THE NEW SERIES (D-0203, merged; README regenerated)**, release `f244c35a` (bits default, no proof cap, BEFORE all the speed and coverage merges below), sixteen editions, no proof rejected:
 
 | arm | OPT+UNSAT / SAT verified | summed score | D-0185's score |
@@ -736,6 +765,17 @@ Updated as things land. The plan is the nine steps agreed on 2026-11-23 (speed f
 | default, `--no-proof` (unverified) | 340 / 86 | 4 428 | 3 237 |
 
 `-f` scored in the fixed category would rank 3rd in five editions and 2nd in 2020; it wins on 670 instances and loses on 327. Proof logging costs 0.47 of the time at the median. At 64 GiB (D-0210, on fataepyc-07, same binary): REFUSED 164 -> 60 but only 302 -> 304 verified answers, so 16 GiB stays a fair reference. **This is the strongest case yet for M19-config-T1 (the default search): it is held until agent-chrono's arms on the CDCL loop are in (D-0224), then decided on these numbers.**
+
+**AGAINST THE OTHER PROOF-LOGGING SOLVER (D-0211, merged)**: GCS with proofs and Chuffed without, same sixteen editions and settings, on fataepyc-07.
+
+| | baguette (proof) | GCS (proof) | baguette (no proof) | Chuffed (no proof) |
+|---|---|---|---|---|
+| OPT+UNSAT verified | 302 | 97 (210 printed) | 340 printed | 634 printed |
+| SAT verified | 74 | 44 (69 printed) | 86 printed | 136 printed |
+| complete, check timed out at 3 600 s | 18 | 135 | | |
+| score, 16 editions | 4 043 | 2 792 | 4 428 | 8 466 |
+
+baguette has 376 verified complete answers against GCS's 141 and scores above it in 15 of 16 editions; GCS is faster on the 126 instances both complete (0.80 of the time, a tenth of the memory) but half of its answers cannot be checked in an hour (its proofs grow at about 100 MB/s). Chuffed scores about twice baguette. Left on fataepyc-07: 125 GB of GCS proofs kept as evidence of a harness bug (`bench/series/veripb_wrap.sh` records a veripb memory death `OSError: [Errno 22]` as CHECK-ERROR), under `/scratch/arthur/node07-gcs/G/{2023,2024}/log/`; they can be deleted.
 
 **Merged and gated** (gates 91 to 95 green, pinned to four cores with lanes at `-j 4` because the series holds the node; last binary `75b1e984`):
 - D-0209, the proof text through one buffer: byte-identical, -0.4 to -7.9 % per proved node (gate 91).
@@ -770,6 +810,10 @@ Gates 96 to 98 green: 218 models byte-identical, lane 347/347, debug 333/333, sc
 Also open: after D-0208 the engine's wake work is the largest share left on costas and mknap; removing it needs the D-0169 (b) rule (rows that never prune are not woken), which changes default behaviour.
 
 **[AUTONOME] decisions**: D-0222 (invariant I-T1 reworded: reading a domain version of an undone branch raises instead of answering); D-0219 (the CDCL loop is a second search beside `dfs`, default off; the default stays `dfs` until measured); D-0217 (a normative SPEC 2.1 sentence listing `baguette_circuit` among the builtins, as each native global has); D-0213 (above); D-0216 (alldiff reuses the node a rebuild would return; two dedups hashed; byte-identical); D-0208 (watching withdrawn on measurement).
+### 2026-11-24 (agent-release, `wave70-release`): M21-memory-T3, fix 4 of D-0218 (D-0223 [AUTONOME])
+
+What held tdtsp's written explanations (99 % of its live heap) is `Element`'s wrapper thunk: forcing it memoises the tree on the INNER thunk, which outlives the wrapper's release (D-0168); the hash-consing table held 1 MB, and D-0218's 44 % was its walk order. Landed, byte-identical on 228 models x 3 configurations, lane 347/347 and debug, scaling ok: a model row's citation is one shared block per id (`Explanation.cite_row`), tdtsp at 250 nodes 16.6 -> 6.7 GB peak RSS and -21 % wall; nothing gained where explanations are not row citations (mapping, proteindesign, travelling-thief).
+For the user (D-0223 section 3): releasing the inner tree (`/cluster/arthur/baguette-results/release/handed.patch`) takes tdtsp's live heap -97 % but changes its proof (a re-written tree finds lines the kept one did not) and costs +16 to +37 % time; with it the lane is 347/347 and the 228 models unchanged. Next: citations as an int array (a new summand constructor, a decision) and D-0218's fix 3, since the heap the budget reads stays far above the live data.
 ### 2026-11-24 (agent-retention, `wave69-retention`): M19-config-T5, the retention default (D-0221)
 
 Measured `keep_all`, `tiered`, `lbd:5000` and `tiered` without PB analysis on the tuning set (300 s) and on 42 instances D-0185 refused at the heap during search (1 200 s), binary `4dde0987`, results in `/cluster/arthur/baguette-results/retention/`. `tiered` gains one verified answer of 200 with proof and refuses 6 of the 42 where `keep_all` refuses 2, so the default is unchanged and the diff lane needs nothing.

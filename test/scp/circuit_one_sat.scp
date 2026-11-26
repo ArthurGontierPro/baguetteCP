@@ -1,0 +1,5 @@
+( (version 1)
+  (variables (a -3 3))
+  (constraints
+    (c1 circuit (a)))
+  (prob_type decide) )

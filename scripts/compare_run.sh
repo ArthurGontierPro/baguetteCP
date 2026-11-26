@@ -121,7 +121,12 @@
 #                  D-0100) + a "Caused by" that is not a grammar
 #                  complaint -- the wording, not the exit status (CLAUDE.md, M2-T14)
 #   CHECK-ERROR    anything else the checker said; TIMEOUT-CHECK  CHECK_TIMEOUT
-#   NO-PROOF       clean exit, no .opb/.pbp;  NOT-CHECKED  the run did not finish
+#   VERIFIED-INCUMBENT  (baguette, M6-T24/D-0225) the run was stopped -- TIMEOUT, or SAT on
+#                  an optimisation model -- and its proof's upper bound is the value it
+#                  printed last; VERIFIED-PARTIAL when the proof claims no solution,
+#                  VERIFIED-WEAK when it claims another value
+#   NO-PROOF       clean exit, no .opb/.pbp;  NOT-CHECKED  the run did not finish, or
+#                  (baguette) it was stopped with no solution printed, or CHECK_STOPPED=0
 #
 # The agreement verdict per instance (AGREE / DISAGREE / INCOMPLETE) is computed by
 # `--report` from the table, so a resumed or merged table is judged as a whole.
@@ -137,6 +142,8 @@
 #   PAR         jobs PER SOLVER, default 16; PAR x |SOLVERS| is capped at TOTAL_MAX (48)
 #   MEM_KB      per-process address-space cap, capped 32 GB (default 32000000)
 #   PROOF_CAP_KB  per-file size cap (ulimit -f), default 16000000 (~16 GB)
+#   CHECK_STOPPED (default 1): check the proof of a baguette run killed by the solve timeout,
+#               when a solution was printed and the proof has its end line. 0: NOT-CHECKED
 #   SOLVE_TIMEOUT / FLATTEN_TIMEOUT / CHECK_TIMEOUT   (default 300 / 120 / 900)
 #   MZN         minizinc               (default: PATH)
 #   BAGUETTE    (default _build/default/bin/main.exe; a measured series uses the release
@@ -174,6 +181,7 @@ PROOF_CAP_KB="${PROOF_CAP_KB:-16000000}"
 SOLVE_TIMEOUT="${SOLVE_TIMEOUT:-300}"
 FLATTEN_TIMEOUT="${FLATTEN_TIMEOUT:-120}"
 CHECK_TIMEOUT="${CHECK_TIMEOUT:-900}"
+CHECK_STOPPED="${CHECK_STOPPED:-1}"
 MZN="${MZN:-minizinc}"
 BAGUETTE="${BAGUETTE:-$ROOT/_build/default/bin/main.exe}"
 CHUFFED="${CHUFFED:-}"
@@ -560,9 +568,14 @@ solve_one() {
   detail="$(printf '%s' "$cls" | cut -f4-)"
 
   case "$s" in baguette | gcs)
+    # M6-T24 (D-0225): a run killed by `timeout` ends its proof, so it can be checked.
+    ended=0
+    [ "$CHECK_STOPPED" = 1 ] && [ "$s" = baguette ] && [ "$status" = TIMEOUT ] && [ "$nsols" -gt 0 ] \
+      && [ -s "$L.opb" ] && [ -s "$L.pbp" ] \
+      && tail -c 40 "$L.pbp" | grep -q '^end pseudo-Boolean proof' && ended=1
     if [ "$s" = gcs ] && [ "$GCS_PROVE" != 1 ]; then
       verdict=-
-    elif [ "$rc" -ne 0 ]; then
+    elif [ "$rc" -ne 0 ] && [ "$ended" = 0 ]; then
       verdict=NOT-CHECKED
       [ -s "$L.pbp" ] && pbp="$(stat -c%s "$L.pbp")"
       [ -s "$L.opb" ] && opb="$(stat -c%s "$L.opb")"
@@ -577,7 +590,9 @@ solve_one() {
       rc=$?
       t1="$(now_ns)"
       check_s="$(secs "$t0" "$t1")"
-      line="$(python3 "$TOOL" verdict "$rc" "$L.vp" "$status")"
+      told=-
+      [ "$s" = baguette ] && told="$objective"
+      line="$(python3 "$TOOL" verdict "$rc" "$L.vp" "$status" "$told")"
       verdict="$(printf '%s' "$line" | cut -f1)"
       detail="${detail:+$detail; }$(printf '%s' "$line" | cut -f2-)"
     fi
@@ -672,6 +687,7 @@ write_conf() {
     echo "solve_timeout=$SOLVE_TIMEOUT"
     echo "flatten_timeout=$FLATTEN_TIMEOUT"
     echo "check_timeout=$CHECK_TIMEOUT"
+    echo "check_stopped=$CHECK_STOPPED"
     echo "par_per_solver=$PAR"
     echo "mem_kb=$MEM_KB"
     echo "proof_cap_kb=$PROOF_CAP_KB"
@@ -702,7 +718,7 @@ main() {
   fi
   write_conf
   export OUT MZN BAGUETTE CHUFFED GCS GCS_PROVE MEM_KB PROOF_CAP_KB SOLVE_TIMEOUT
-  export FLATTEN_TIMEOUT CHECK_TIMEOUT CHECK_MEM_KB PRE_RUN KEEP DATA_TRIES SOLVERS PAIR_SOLVERS TOOL VERIPB
+  export FLATTEN_TIMEOUT CHECK_TIMEOUT CHECK_STOPPED CHECK_MEM_KB PRE_RUN KEEP DATA_TRIES SOLVERS PAIR_SOLVERS TOOL VERIPB
   export BAGUETTE_MZN_ID CHUFFED_MZN_ID GCS_MZN_ID COMPAT COMPAT_MZN PAIRS CORPUS INSTANCES
   export -f pair_one solve_one flatten_with check_input emit_input_failures instance_id
   export -f validate_fzn data_candidates emit flat mzn_id_of now_ns secs has_row

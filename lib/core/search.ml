@@ -146,16 +146,18 @@ exception Unsound_solution of assignment
 
    By the time it is raised the proof has ALREADY ENDED, validly: everything the search
    derived is on the page (its learned constraints included), every id this solve was
-   handed has been deleted (I-X2), and the last three lines are `output NONE`,
-   `conclusion NONE`, `end pseudo-Boolean proof`. veripb accepts that and reports
-   `VERIFIED NO CONCLUSION` -- so a stopped run still yields a CHECKED record of every
-   line it wrote, which is the evidence M6-T9 exists to produce.
+   handed has been deleted (I-X2), and the last three lines are `output NONE`, the
+   conclusion, `end pseudo-Boolean proof`. The conclusion is NONE on a satisfaction run
+   (veripb reports `VERIFIED NO CONCLUSION`) and BOUNDS on an optimisation run (M6-T24) --
+   so a stopped run still yields a CHECKED record of every line it wrote, which is the
+   evidence M6-T9 exists to produce.
 
    [best] is an optimisation run's incumbent and its objective value in model units,
-   [None] for a satisfaction run or an optimisation run that found nothing. It is
-   reported, not concluded: every improving solution has already been printed by
-   [b_on_solution] as it was found, and claiming it as a BOUNDS upper bound would need a
-   lower bound the search never derived. *)
+   [None] for a satisfaction run or an optimisation run that found nothing. Every
+   improving solution has already been printed by [b_on_solution] as it was found. Its
+   value is the proof's upper bound, and the lower bound that BOUNDS needs is the
+   objective's declared one, which the .opb implies: the search has derived no better one
+   to cite (M6-T24, D-0225). *)
 exception Stopped of { best : (assignment * int) option }
 
 (* Internal: raised at node entry by [dfs] when [config.stop] says so, and caught by
@@ -2888,38 +2890,44 @@ let record_improving ctx store stats (b : bnb) (asn : assignment) : [ `Continue 
          "Search.record_improving: objective %s is not fixed at a solution node (%d..%d)"
          o.o_name (Domain.lo d) (Domain.hi d));
   let value = Domain.lo d in
-  b.b_on_solution asn;
-  (* M9-no-proof-T4 (D-0161): under `--no-proof` the null writer's [improving] mints its
-     id and reads nothing else, so the full literal family of every variable was built
-     for no reader -- 29 % of 2014_openshop_gp10-4's instructions at 10 000 nodes, where
-     every improving solution spells out each order ladder. The id is minted by the same
-     call either way; nothing in the search reads [lits]. *)
   let null = Writer.is_null ctx.Justify.writer in
-  let lits =
-    if null then []
-    else
-      let bindings = List.map (fun (v, x) -> (Store.name store v, x)) asn in
-      Encoding.assignment_lits ctx.Justify.encoding bindings
-  in
-  (* `soli` and not `sol`: `sol` adds nothing, and the constraint this line yields is the
-     entire reason the bound below is derivable. It is also the reason the solution is
-     handed over in full -- the checker PROPAGATES a logged solution, which is what lets
-     it fill in the encoding auxiliaries (the `_neN` selectors of PROOF-FORMAT section 3)
-     that nothing in the solver knows a value for. See [Writer.verdict]'s note on why the
-     inline `conclusion SAT : <assignment>` form is unusable for the same reason. *)
-  (* AT LEVEL 0, for the reason [Learned.introduce] is at level 0 (D-0045's addendum):
-     the improving constraint holds everywhere in the tree from the moment it is derived,
-     and a `w` at the level the solution happened to be found at would retire it out from
-     under every later bound that rests on it. Found by measurement, not by foresight --
-     emitted at the current level, the checker refused the conclusion with "The claimed
-     upper bound of 2 mismatches the best recorded upper bound of 4", because wiping the
-     constraint took the recorded bound with it. *)
+  (* M6-T24 (D-0225): the solution is printed and logged in one step to an interruption,
+     so the last value printed is the last one the proof records. *)
   let cid =
-    Justify.with_level ctx 0 (fun () ->
-        Writer.improving ctx.Justify.writer ~origin:"M5-T1 improving solution" lits)
+    Writer.guarded ctx.Justify.writer @@ fun () ->
+    b.b_on_solution asn;
+    (* M9-no-proof-T4 (D-0161): under `--no-proof` the null writer's [improving] mints its
+       id and reads nothing else, so the full literal family of every variable was built
+       for no reader -- 29 % of 2014_openshop_gp10-4's instructions at 10 000 nodes, where
+       every improving solution spells out each order ladder. The id is minted by the same
+       call either way; nothing in the search reads [lits]. *)
+    let lits =
+      if null then []
+      else
+        let bindings = List.map (fun (v, x) -> (Store.name store v, x)) asn in
+        Encoding.assignment_lits ctx.Justify.encoding bindings
+    in
+    (* `soli` and not `sol`: `sol` adds nothing, and the constraint this line yields is the
+       entire reason the bound below is derivable. It is also the reason the solution is
+       handed over in full -- the checker PROPAGATES a logged solution, which is what lets
+       it fill in the encoding auxiliaries (the `_neN` selectors of PROOF-FORMAT section 3)
+       that nothing in the solver knows a value for. See [Writer.verdict]'s note on why the
+       inline `conclusion SAT : <assignment>` form is unusable for the same reason. *)
+    (* AT LEVEL 0, for the reason [Learned.introduce] is at level 0 (D-0045's addendum):
+       the improving constraint holds everywhere in the tree from the moment it is derived,
+       and a `w` at the level the solution happened to be found at would retire it out from
+       under every later bound that rests on it. Found by measurement, not by foresight --
+       emitted at the current level, the checker refused the conclusion with "The claimed
+       upper bound of 2 mismatches the best recorded upper bound of 4", because wiping the
+       constraint took the recorded bound with it. *)
+    let cid =
+      Justify.with_level ctx 0 (fun () ->
+          Writer.improving ctx.Justify.writer ~origin:"M5-T1 improving solution" lits)
+    in
+    b.b_soli_ids <- cid :: b.b_soli_ids;
+    b.b_best <- Some (asn, value);
+    cid
   in
-  b.b_soli_ids <- cid :: b.b_soli_ids;
-  b.b_best <- Some (asn, value);
   let at_limit, lit =
     match o.o_dir with
     | Minimise -> (value <= o.o_decl_lo, Lit.le o.o_name (value - 1))
@@ -4310,22 +4318,23 @@ let retire_learned ctx stats =
 (* M6-T9. The proof's end when [config.stop] fired: the same three I-X2 sweeps as the
    other two endings, then every id still live -- the prunings and nogoods of the levels
    the interrupted branch had open, which no [w] will now retire -- and then
-   `conclusion NONE`, which cites nothing and so discharges nothing.
+   the conclusion, which cites nothing and so discharges nothing.
 
    The store is left at whatever level the search had reached. Nothing reads it again:
    the caller's next act is to report and exit, and [Search] already does not support a
    second solve on the same engine (see [search_core]).
 
    The three lines, the finish, the flush and the I-X2 audit are all
-   [Writer.conclusion Writer.No_conclusion] (M6-T12), so a stopped run is audited exactly
-   as a finished one is. *)
+   [Writer.conclusion] (M6-T12), so a stopped run is audited exactly as a finished one is.
+   What it claims is [Writer.interrupted_verdict], shared with the proof that is ended
+   where it stands (M6-T24). *)
 let conclude_stopped ctx trace stats =
   let w = ctx.Justify.writer in
   retire_learned ctx stats;
   retire_assign_clauses ctx stats;
   retire_trace ctx trace;
   (match Writer.live_ids w with [] -> () | ids -> Writer.delete_many w ids);
-  Writer.conclusion w Writer.No_conclusion
+  Writer.conclusion w (Writer.interrupted_verdict w)
 
 (* Depth-first search from the store's current decision level (I-S3: the level on
    return equals the level on entry -- true here by construction, since every
@@ -4465,6 +4474,18 @@ let optimise ~(engine : Engine.t) ~(store : Store.t) ~(ctx : Justify.ctx)
       b_floor = None;
     }
   in
+  (* M6-T24 (D-0225): what a stop concludes from here on. The floor is the DECLARED bound,
+     which the .opb implies on its own. *)
+  Writer.set_stop_verdict ctx.Justify.writer (fun () ->
+      let page v = match objective.o_dir with Minimise -> v | Maximise -> -v in
+      Writer.Floor_and_incumbent
+        {
+          floor =
+            (match objective.o_dir with
+            | Minimise -> objective.o_decl_lo
+            | Maximise -> -objective.o_decl_hi);
+          incumbent = Option.map (fun (_, v) -> page v) b.b_best;
+        });
   let result, trace, stats =
     try
       search_core ~engine ~store ~ctx ?trace ?stats ~order
