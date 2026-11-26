@@ -34,7 +34,19 @@
       passing 0 would have made the backjump a second owner silently. It is now a fact
       about the writer.
 
-   So there is exactly one deleter of a learned id, and it is [retire] below. Everything
+   So there is exactly one deleter of a learned id, and it is [retire] below.
+
+   **And since D-0226 the RUNTIME side has the same owner.** A learned constraint with a
+   propagator is in two places: its id on the page, and its instance in the engine. Before
+   D-0226 only the first ended at an eviction; the engine kept the instance (switched off
+   by [gate], but with every closure and byte of the propagator) until the end of the run.
+   Now [Engine.add] hands the gated instance the function that removes it
+   ([Propagator.inst_attach]), [gate] keeps that function, and [reduce] calls it in the
+   same step that turns the gate off and retires the id. The engine holds a gated instance
+   on this database's behalf and for exactly as long as this database holds its id; no
+   other caller can remove it (the function is reachable only from the gate), and the
+   engine never removes anything on its own. Under [keep_all] there is no gate, so nothing
+   is ever removed and the default build is byte-identical. Everything
    else in this module routes through it -- eviction, the end-of-search sweep, and the
    test harness alike -- which is what makes "deleted exactly once" (I-X2) a property of
    one function with one membership test rather than of an argument about call order.
@@ -74,8 +86,9 @@
    it ([e_used]), and [fifo] below is the plain age policy. The default stays [keep_all]
    (D-0051, D-0139 section 6, D-0202, D-0221). D-0221 measured [tiered] on the tuning set
    and on 42 former heap refusals: one verified answer more of 200, but 6 refusals of 42
-   against 2, because an evicted constraint keeps its bytes ([gate] below keeps the
-   instance's closures and the engine keeps the instance). Re-measure once it does not.
+   against 2, because an evicted constraint kept its bytes ([gate] kept the instance's
+   closures and the engine kept the instance). D-0226 made an eviction take the instance
+   out of the engine and re-measured the question; see its record for the table.
 
    ### LBD is available, and on today's suite it does not discriminate either
 
@@ -820,10 +833,11 @@ let cited_by t cid = Option.map Lazy.force (Hashtbl.find_opt t.cited cid)
      learned constraint is sound, it is redundant by construction.
 
    WHEN a gated constraint may be evicted is the proof's question, and the answer is
-   [locked_instances] below. The engine keeps the dead instance in its watcher lists (a
-   removal API would be lib/core/engine.ml's, which is not this module's; D-0139 records
-   the request), so a dead instance still costs one closure call per wake on its
-   variables -- and no run, which is where a learned clause's per-node cost was.
+   [locked_instances] below. Since D-0226 the eviction also takes the instance out of the
+   engine ([g_leave], handed over by [Engine.add] through [Propagator.inst_attach]): its
+   slot, its wake entries and, with them, every closure over the propagator become
+   garbage. Until then the engine kept the switched-off instance for the rest of the run,
+   with all its bytes (D-0221 section 5).
 
    Under [keep_all] ([p_detaches = false]) the instance is returned UNCHANGED, so the
    default build runs the very closures it ran before this function existed. *)

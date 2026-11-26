@@ -164,7 +164,7 @@
    rungs that is quadratic in a group, and D-0140 (E3) measured the learned PB rows at
    73 % of a no-proof node on 2011 cyclic-rcpsp. The pass now runs over a [layout] built
    once per row, on its first pass ([t.layout] is lazy, so a row [quiet] always answers
-   never builds one): the terms as an array, each term's (variable, polarity) GROUP, and
+   never builds one): each term's (variable, polarity) GROUP, and
    each group's terms strongest threshold first. With it [effective] is one walk per group
    and the strongest forceable threshold one slot per group, so a pass is O(row) and
    allocates nothing unless it prunes or conflicts.
@@ -787,7 +787,7 @@ let forced t w ~slack i =
    runs that change nothing, so every run that does change something happens in the same
    order on the same domains, and the trail and the proof are the same.
 
-   M11-complexity-T3 (D-0142, E2 (a)): the walk is over [t.atoms] with top-level
+   M11-complexity-T3 (D-0142, E2 (a)): the walk is over the row's arrays with top-level
    functions, so it builds no closure per call, and it records the first two non-false
    literals in [t.scan], which is what lets a learned clause move its watches without a
    walk of its own. The predicate is the one above, split at the second non-false literal:

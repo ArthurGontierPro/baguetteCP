@@ -387,7 +387,8 @@ end
    derived -- which is exactly the distinction [Retention]'s citation guard is about. *)
 module Learned_clause = struct
   (* M6-T20 / D-0104: the clause plus TWO WATCHED LITERALS, the first mutable propagator
-     state in lib/core/prop/ and the one kind I-P7 admits. [w1] and [w2] index [atoms];
+     state in lib/core/prop/ and the one kind I-P7 admits. [w1] and [w2] are term
+     indices of [pb];
      after a run both are non-false unless the clause was unit or failed, and a widening
      domain cannot falsify a literal, so backtracking never has to restore them.
 
@@ -433,7 +434,7 @@ module Learned_clause = struct
   }
 
   (* Place the two watches at [w1] and [w2], with their flat copies (the record's header);
-     a watch that does not move keeps the copy it has. An index outside [atoms] (the [-1]
+     a watch that does not move keeps the copy it has. An index outside the row (the [-1]
      [rewatch]'s [best] answers for a one-literal clause with its literal false) gets
      [x = -1], which no variable is. *)
   let set_watches t w1 w2 =
