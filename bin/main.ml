@@ -152,11 +152,23 @@ let exit_resource = Encoding.exit_resource
 
 let usage () =
   prerr_endline
-    "usage: baguette MODEL.fzn [--proof PREFIX | --no-proof] [--proof-comments] [--all] \
-     [--time] [--stats] [--max-order-width N] [--max-direct-values N] [--width-warn N] \
-     [--max-encoding-clauses N] [--max-heap-mb N] [--bits-above W] [--time-limit S] \
-     [--restarts POLICY] [--phase-saving] [--search ORDER] [--reuse-trail] [-a] [-i] [-n \
-     N] [-f] [-t MS] [-r SEED] [-p N] [-s] [-v]";
+    "usage: baguette MODEL.fzn|MODEL.scp [--proof PREFIX | --no-proof] \
+     [--proof-comments] [--all] [--time] [--stats] [--max-order-width N] \
+     [--max-direct-values N] [--width-warn N] [--max-encoding-clauses N] [--max-heap-mb \
+     N] [--bits-above W] [--time-limit S] [--restarts POLICY] [--phase-saving] [--search \
+     ORDER] [--reuse-trail] [-a] [-i] [-n N] [-f] [-t MS] [-r SEED] [-p N] [-s] [-v]";
+  prerr_endline "";
+  prerr_endline
+    "  MODEL.scp (M23-inputs, D-0230): the .scp format of CakeML's cake_pb_cp, version";
+  prerr_endline
+    "                    1, read by lib/scp/ into the same model a .fzn becomes. A";
+  prerr_endline
+    "                    constraint baguette does not propagate is refused with its";
+  prerr_endline
+    "                    position, never read in part; `enumerate` searches one";
+  prerr_endline
+    "                    solution, as `decide`; every variable of the file is printed";
+  prerr_endline "                    as `name = value;`. --e2e is refused on a .scp.";
   prerr_endline "";
   prerr_endline
     "  The MiniZinc standard flags (M7-T32, D-0150; tools/baguette.msc declares them):";
@@ -237,8 +249,12 @@ let usage () =
   prerr_endline "                    one as found) WITHOUT `==========`; stderr carries";
   prerr_endline "                    one `limit: ` summary line, plus --stats/--time as";
   prerr_endline "                    usual; the proof ends `conclusion NONE`, which";
-  prerr_endline "                    veripb checks and reports as VERIFIED NO CONCLUSION.";
+  prerr_endline "                    veripb checks and reports as VERIFIED NO CONCLUSION,";
+  prerr_endline "                    or on an optimisation model `conclusion BOUNDS`,";
+  prerr_endline "                    the declared bound and the best solution printed.";
   prerr_endline "                    Exit status 0: a stopped run is not a failure.";
+  prerr_endline "                    SIGTERM, SIGINT and SIGXCPU stop a run the same way";
+  prerr_endline "                    (M6-T24), and a second one ends the proof at once.";
   prerr_endline
     "  --no-proof        (M9-no-proof-T2, D-0126) solve WITHOUT a proof. Off by";
   prerr_endline "                    default, and a MEASUREMENT INSTRUMENT: the answer it";
@@ -347,7 +363,8 @@ let usage () =
   prerr_endline "  exit status       0 solved (SAT or UNSAT) or stopped by --time-limit,";
   prerr_endline "                    2 usage or bad model,";
   prerr_endline "                    3 unsupported model, 4 internal invariant failure,";
-  prerr_endline "                    5 a resource budget above was exhausted.";
+  prerr_endline "                    5 a resource budget above was exhausted (0 when the";
+  prerr_endline "                    search had printed a solution: a stopped run).";
   prerr_endline "";
   prerr_endline
     "  --bits-above W    (M8-bits-encoding-T2, D-0130/D-0132) put every ELIGIBLE integer";
@@ -1199,16 +1216,31 @@ let report_encoding_cost (c : Encoding.cost) =
    the .pbp part-written. The guard cannot tell a reader which from inside [Encoding],
    and half a proof that veripb happens to parse is the worst outcome available here,
    so the binary says the cautious thing whenever --proof was asked for. *)
-let warn_partial_proof opts =
-  match opts.proof_prefix with
-  | None -> ()
-  | Some p ->
-      Printf.eprintf
-        "  A proof was being written: %s.opb / %s.pbp are INCOMPLETE -- the run stopped \
-         while\n\
-        \  writing them. Do not check them and do not keep them; they are not a proof of\n\
-        \  anything. Re-run with a larger budget, or with none.\n"
-        p p
+(* M6-T24 (D-0225): [Some code] when a resource arm ended the proof before raising, with
+   the status to exit with. The proof is then complete and there is nothing to warn of. *)
+let proof_ended : int option ref = ref None
+
+let exit_out_of_resource opts =
+  let warn_partial_proof () =
+    match opts.proof_prefix with
+    | None -> ()
+    | Some p ->
+        Printf.eprintf
+          "  A proof was being written: %s.opb / %s.pbp are INCOMPLETE -- the run \
+           stopped while\n\
+          \  writing them. Do not check them and do not keep them; they are not a proof of\n\
+          \  anything. Re-run with a larger budget, or with none.\n"
+          p p
+  in
+  let code =
+    match !proof_ended with
+    | Some code -> code
+    | None ->
+        warn_partial_proof ();
+        exit_resource
+  in
+  flush stderr;
+  exit code
 
 (* M8-bits-encoding-T5 (D-0131). The SHAPE of the proof that was just written, on
    stderr under --stats: how many lines are `pol` and how many `rup`, and the tokens the
@@ -1585,12 +1617,12 @@ let wall () = Unix.gettimeofday () -. wall_start
    finaliser's ([wall] minus [fired]). NaN until then, and on a node-limit stop. *)
 let stop_fired_at = ref Float.nan
 
-let report_limit opts (st : Search.stats) ~(engine : Engine.t) ~best =
+let report_limit opts (st : Search.stats) ~(engine : Engine.t) ~best ~signal =
   let c = Engine.counters engine in
   Printf.eprintf
     "limit: reached time-limit=%s cpu=%.2fs wall=%.2fs nodes=%d decisions=%d \
      conflicts=%d learned=%d pb-learned=%d db=%d maxdepth=%d incumbent=%s props=%d \
-     eff=%d contra=%d at=%s fired=%s\n\
+     eff=%d contra=%d at=%s fired=%s signal=%s\n\
      %!"
     (match opts.time_limit with None -> "none" | Some s -> Printf.sprintf "%gs" s)
     (Sys.time ()) (wall ()) st.Search.nodes st.Search.decisions st.Search.conflicts
@@ -1607,6 +1639,7 @@ let report_limit opts (st : Search.stats) ~(engine : Engine.t) ~best =
      else if st.Search.stopped_in_trace then "trace" (* M6-T23, D-0149 *)
      else "node")
     (if Float.is_nan !stop_fired_at then "none" else Printf.sprintf "%.2fs" !stop_fired_at)
+    (Option.value ~default:"none" signal)
 
 (* M7-T32 (D-0150). MiniZinc's statistics format, on STDOUT under `-s` only: one
    `%%%mzn-stat: name=value` line each and `%%%mzn-stat-end`, printed once, after the
@@ -1709,30 +1742,79 @@ let solve opts (m : Model.t) =
      up under a flag is a counter no test exercises. --stats decides whether it is
      PRINTED, not whether it is kept. *)
   let stats = Search.stats_create () in
+  let writer = ctx.Justify.writer in
+  (* M6-T24 (D-0225). An incumbent the proof records, i.e. one a stopped run can return. *)
+  let have_incumbent () = Writer.has_incumbent writer in
   (* M7-T32: where `-s`'s initTime ends and its solveTime starts. *)
   let t_search = ref 0. in
-  (* M6-T9. An outer `timeout` kills with SIGTERM, and a killed run used to leave
-     nothing behind: at_exit never ran, so a TIMEOUT-SOLVE row could not say what the
-     run was doing. This handler writes the same counters as the `limit:` line, tagged
-     `killed`, and exits 143 (128 + SIGTERM); at_exit then prints --time as usual. It
-     does NOT end the proof: a signal lands at an arbitrary point, possibly mid-line,
-     and only [Search]'s node-entry stop can conclude NONE soundly. The partial .pbp is
-     not a proof and the harness does not check it. *)
-  Sys.set_signal Sys.sigterm
+  (* M6-T9, M6-T24 (D-0225). A run stopped from outside. SIGTERM (an outer `timeout`),
+     SIGINT and SIGXCPU do not exit: the first one raises [stop_signal], which
+     [config.stop] reads with the clock, so the search ends at its next poll exactly as
+     under --time-limit -- proof ended, `limit:` line, exit 0. If it has not stopped
+     [signal_grace] seconds later, or a second signal comes (MiniZinc sends SIGINT then
+     SIGTERM), the proof is ended where it stands, as soon as no line is half written
+     ([Writer.when_idle]): a valid prefix plus the three final lines. The `killed` line
+     is then the report, with the counters the clean stop would have printed.
+
+     RoundingSat does the same (a flag read by its search, and the bounds it has in the
+     conclusion). Nothing can be done about SIGKILL. *)
+  let stop_signal = ref None in
+  let signal_name s =
+    if s = Sys.sigterm then "TERM"
+    else if s = Sys.sigint then "INT"
+    else if s = Sys.sigxcpu then "XCPU"
+    else string_of_int s
+  in
+  let killed_line name =
+    Printf.eprintf
+      "limit: killed signal=%s phase=%s cpu=%.2fs wall=%.2fs nodes=%d decisions=%d \
+       conflicts=%d learned=%d pb-learned=%d maxdepth=%d props=%d eff=%d contra=%d\n\
+       %!"
+      name !Timing.current (Sys.time ()) (wall ()) stats.Search.nodes
+      stats.Search.decisions stats.Search.conflicts stats.Search.n_learned
+      stats.Search.n_pb_learned stats.Search.max_depth
+      (Engine.counters compiled.Compile.engine).Engine.c_runs
+      (Engine.counters compiled.Compile.engine).Engine.c_effectful
+      (Engine.counters compiled.Compile.engine).Engine.c_contra
+  in
+  (* Ends the proof and the process. [Writer.when_idle] makes sure no line and no
+     improving solution is half out. Nothing to do for a proof that has ended: the run is
+     about to report its answer by itself. *)
+  let stop_now report code =
+    Writer.when_idle writer (fun () ->
+        if not (Writer.is_finished writer) then (
+          let code = code () in
+          Writer.conclude_interrupted writer;
+          report ();
+          if code = exit_ok && not (have_incumbent ()) then
+            print_string "=====UNKNOWN=====\n";
+          exit code))
+  in
+  let signal_grace = 5. in
+  let on_signal s =
+    let first = Option.is_none !stop_signal in
+    stop_signal := Some (signal_name s);
+    if first then
+      ignore
+        (Unix.setitimer Unix.ITIMER_REAL
+           { Unix.it_interval = 0.; it_value = signal_grace })
+    else stop_now (fun () -> killed_line (signal_name s)) (fun () -> exit_ok)
+  in
+  List.iter
+    (fun s -> Sys.set_signal s (Sys.Signal_handle on_signal))
+    [ Sys.sigterm; Sys.sigint; Sys.sigxcpu ];
+  Sys.set_signal Sys.sigalrm
     (Sys.Signal_handle
        (fun _ ->
-         Printf.eprintf
-           "limit: killed signal=TERM phase=%s cpu=%.2fs wall=%.2fs nodes=%d \
-            decisions=%d conflicts=%d learned=%d pb-learned=%d maxdepth=%d props=%d \
-            eff=%d contra=%d\n\
-            %!"
-           !Timing.current (Sys.time ()) (wall ()) stats.Search.nodes
-           stats.Search.decisions stats.Search.conflicts stats.Search.n_learned
-           stats.Search.n_pb_learned stats.Search.max_depth
-           (Engine.counters compiled.Compile.engine).Engine.c_runs
-           (Engine.counters compiled.Compile.engine).Engine.c_effectful
-           (Engine.counters compiled.Compile.engine).Engine.c_contra;
-         exit 143));
+         match !stop_signal with
+         | Some name -> stop_now (fun () -> killed_line name) (fun () -> exit_ok)
+         | None -> ()));
+  (* M6-T24: the heap budget ends the proof before it exits. A run that has an incumbent
+     has an answer to return, so it ends as a stopped run (exit 0); one that has none is
+     still exit 5. *)
+  let resource_code () = if have_incumbent () then exit_ok else exit_resource in
+  (Encoding.resource_exit :=
+     fun () -> stop_now (fun () -> killed_line "heap-budget") resource_code);
   let outcome =
     Fun.protect
       ~finally:(fun () -> Timing.phase "pbpclose" (fun () -> close_out proof_oc))
@@ -1767,9 +1849,16 @@ let solve opts (m : Model.t) =
                            (if Float.is_nan !stop_fired_at then stop_fired_at := w;
                             true)
                    in
+                   let by_signal () =
+                     Option.is_some !stop_signal
+                     &&
+                     (if Float.is_nan !stop_fired_at then stop_fired_at := wall ();
+                      true)
+                   in
                    match node_limit () with
-                   | None -> by_time
-                   | Some n -> fun () -> stats.Search.nodes > n || by_time ());
+                   | None -> fun () -> by_signal () || by_time ()
+                   | Some n ->
+                       fun () -> stats.Search.nodes > n || by_signal () || by_time ());
               }
             in
             let r =
@@ -1796,7 +1885,18 @@ let solve opts (m : Model.t) =
                              (Output.solution m (assignment_values m store assignment));
                            flush stdout)
                          ())
-              with Search.Stopped { best } -> `Stopped best
+              with
+              | Search.Stopped { best } -> `Stopped best
+              | (Out_of_memory | Encoding.Heap_too_large _ | Encoding.Encoding_too_large _)
+                as e ->
+                  (* M6-T24: the synchronous resource arms, caught where the proof can
+                     still be ended. [Writer.idle] is false when the exception came out of
+                     a write, and the proof is then left as it is, incomplete. *)
+                  if Writer.idle writer then (
+                    let code = resource_code () in
+                    Writer.conclude_interrupted writer;
+                    proof_ended := Some code);
+                  raise e
             in
             Timing.emit_us := Writer.emitted_us () - e0;
             Timing.emit_lines := Writer.emitted_lines () - l0;
@@ -1818,7 +1918,8 @@ let solve opts (m : Model.t) =
     | `Stopped _ -> false
   in
   (match outcome with
-  | `Stopped best -> report_limit opts stats ~engine:compiled.Compile.engine ~best
+  | `Stopped best ->
+      report_limit opts stats ~engine:compiled.Compile.engine ~best ~signal:!stop_signal
   | _ -> ());
   Timing.phase "output" (fun () ->
       (match outcome with
@@ -2023,8 +2124,21 @@ let () =
     exit exit_usage);
   report_std_flags opts;
   Timing.record "args" (Timing.now () - t_main);
+  (* The reader, by the file's extension (M23-inputs-T2, D-0230): `.scp` is CakeML's
+     format, read by lib/scp/ into the same Model.t; anything else is FlatZinc, as before.
+     The end-to-end chain (--e2e, M14) is FlatZinc's alone: D-0228 section 14 leaves it
+     out for a .scp, so the flag is refused rather than run against a translation of a
+     file that was never FlatZinc. *)
+  let is_scp = Filename.check_suffix opts.model ".scp" in
+  if is_scp && opts.e2e then (
+    prerr_endline
+      "baguette: --e2e is not available on a .scp input (D-0228 section 14, D-0230)";
+    exit exit_usage);
+  let read_model path =
+    if is_scp then Baguette_scp.Reader.of_file path else Builder.of_file path
+  in
   match
-    Timing.phase "parse" (fun () -> Fz_error.catch (fun () -> Builder.of_file opts.model))
+    Timing.phase "parse" (fun () -> Fz_error.catch (fun () -> read_model opts.model))
   with
   | exception Out_of_memory ->
       prerr_string (Encoding.out_of_memory_message ());
@@ -2077,25 +2191,19 @@ let () =
              exit 134 it replaces. [Encoding] refuses before it allocates, so there is
              no partial encoding and no partial proof to warn about. *)
           prerr_string (Encoding.overrun_message o);
-          warn_partial_proof opts;
-          flush stderr;
-          exit exit_resource
+          exit_out_of_resource opts
       | exception Out_of_memory ->
           (* D-0200. One allocation the runtime could not map: the one failure of this
              kind that can be caught. "Fatal error: allocation failure during minor GC"
              cannot be, which is why the budget's poll exists. *)
           prerr_string (Encoding.out_of_memory_message ());
-          warn_partial_proof opts;
-          flush stderr;
-          exit exit_resource
+          exit_out_of_resource opts
       | exception Encoding.Heap_too_large o ->
           (* The reactive guard, caught synchronously at a declaration. Its sibling --
              the Gc alarm -- cannot come through here: it fires at an arbitrary point
              and exits with this same status itself. Same wording either way. *)
           prerr_string (Encoding.heap_message o);
-          warn_partial_proof opts;
-          flush stderr;
-          exit exit_resource
+          exit_out_of_resource opts
       | exception Encoding.Width_too_large (x, lo, hi) ->
           (* M1-T54 / D-0041. The sibling of the [Unrepresentable] arm below, and exit 4
              for the same reason: lib/flatzinc/compile.ml refuses an over-wide declared

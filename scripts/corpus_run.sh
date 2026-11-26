@@ -632,7 +632,8 @@ $(head -c 120 "$L.mzn.err" | tr '\t\n\r' '   ')"
     cp -f "$L.err" "$OUT/err/$id.err" 2>/dev/null
     [ -s "$L.rss" ] && rsskb="$(tail -1 "$L.rss" | tr -dc 0-9)"
     sdetail="$(limit_detail "$L.err" "$rsskb")"
-    [ "$rc" -eq 0 ] && grep -q '^limit: reached' "$L.err" && stopped=1
+    # M6-T24 (D-0225): `killed` too, a run the second signal or the heap budget ended.
+    [ "$rc" -eq 0 ] && grep -qE '^limit: (reached|killed)' "$L.err" && stopped=1
   fi
   case "$rc" in
     0) ;;
@@ -693,11 +694,17 @@ $(head -c 120 "$L.mzn.err" | tr '\t\n\r' '   ')"
   timeout "$CHECK_TIMEOUT" "$VERIPB" "$L.opb" "$L.pbp" > "$L.vp" 2>&1
   rc=$?
   if [ "$rc" -eq 0 ]; then
-    # M6-T9. A stopped run's proof concludes NONE and the checker must say so; if
-    # it ever says more, the row still lands here but the detail leads with it.
+    # M6-T9. A stopped run's proof concludes NONE, or on an optimisation model a pair of
+    # bounds that differ (M6-T24, D-0225: the declared floor and the incumbent), and the
+    # checker must say so; if it ever says more, the row still lands here but the detail
+    # leads with it.
     if [ "$stopped" = "1" ]; then
-      grep -q 'VERIFIED NO CONCLUSION' "$L.vp" \
-        || sdetail="CHECKER-CONCLUDED-MORE-THAN-NONE: $(tail -1 "$L.vp") $sdetail"
+      if ! awk '/VERIFIED NO CONCLUSION/ { ok = 1 }
+                /VERIFIED BOUNDS/ { for (i = 1; i < NF; i++) if ($i == "BOUNDS") { lo = $(i + 1); hi = $(i + 5) }
+                                    if (lo != hi) ok = 1 }
+                END { exit !ok }' "$L.vp"; then
+        sdetail="CHECKER-CONCLUDED-MORE-THAN-STOPPED: $(tail -1 "$L.vp") $sdetail"
+      fi
       emit "$id" "UNKNOWN-LIMIT" "$sz" "$pbp" "$sdetail"
       cleanup_one "$L"
       return

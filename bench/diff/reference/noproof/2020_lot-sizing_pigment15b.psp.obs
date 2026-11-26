@@ -19,6 +19,7 @@ work limit.props 1003917
 work limit.eff 201626
 work limit.contra 1565
 search limit.at node
+search limit.signal none
 search nodes/nodes 2501 nodes
 search decisions/decs 2230 decs
 search conflicts/nodes 1565 nodes

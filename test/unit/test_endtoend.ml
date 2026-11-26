@@ -1419,9 +1419,48 @@ let test_m6_time_limit () =
        check_bool_m6 "M6-T9 opt: every id deleted, the soli ids included (I-X2)"
          (live = []);
        let rc, out = m6_veripb veripb dir opb pbp in
+       (* M6-T24 (D-0225): the declared floor and the incumbent, where it was NONE. *)
+       let v = match r with Some (Some (_, v)) -> v | _ -> -1 in
        check_bool_m6 "M6-T9 opt: veripb -c accepts the stopped optimisation proof"
-         (rc = 0 && m6_says out "VERIFIED NO CONCLUSION");
-       if rc <> 0 then print_endline out);
+         (rc = 0 && m6_says out (Printf.sprintf "VERIFIED BOUNDS 0 <= obj <= %d" v));
+       if rc <> 0 then print_endline out;
+       (* THE BREAKS: a bound that was not derived and a value that was not found are both
+          refused, so the line above is a claim the checker weighs. *)
+       let proof = read_file pbp in
+       let said = Printf.sprintf "conclusion BOUNDS 0 %d ;" v in
+       let refuses claim wording =
+         let i =
+           let rec find i =
+             if i + String.length said > String.length proof then
+               failwith "M6-T24: no BOUNDS conclusion in the stopped proof"
+             else if String.sub proof i (String.length said) = said then i
+             else find (i + 1)
+           in
+           find 0
+         in
+         let pbp2 = Filename.concat dir "opt_broken.pbp" in
+         let oc = open_out pbp2 in
+         output_string oc
+           (String.sub proof 0 i ^ claim
+           ^ String.sub proof
+               (i + String.length said)
+               (String.length proof - i - String.length said));
+         close_out oc;
+         let rc, out = m6_veripb veripb dir opb pbp2 in
+         if not (rc <> 0 && m6_says out wording) then print_endline out;
+         rc <> 0 && m6_says out wording
+       in
+       check_bool_m6 "M6-T24 BREAK: a value never found is refused as the upper bound"
+         (refuses
+            (Printf.sprintf "conclusion BOUNDS 0 %d ;" (v - 1))
+            (Printf.sprintf
+               "The claimed upper bound of %d mismatches the best recorded upper bound \
+                of %d."
+               (v - 1) v));
+       check_bool_m6 "M6-T24 BREAK: optimality of the incumbent is refused"
+         (refuses
+            (Printf.sprintf "conclusion BOUNDS %d %d ;" v v)
+            "Constraint not syntactically implied by any constraint in the database."));
       List.iter
         (fun f -> try Sys.remove (Filename.concat dir f) with _ -> ())
         (Array.to_list (Sys.readdir dir));
@@ -2298,6 +2337,126 @@ let d0200_pigeons =
   Buffer.add_string b "solve satisfy;\n";
   Buffer.contents b
 
+(* M6-T24 (D-0225): REAL signals to the real binary, at instants nothing controls. A
+   knapsack whose proof of optimality takes far longer than the test, so every stop lands
+   in the search with an incumbent printed. One signal is the clean stop, two at once end
+   the proof where it stands, and the heap budget does the same from its own handler.
+   Asserted for each: exit 0, a proof veripb accepts with BOUNDS, whose upper bound is the
+   last objective value printed, and no `==========`. Which of the two stop paths a pair
+   of signals took is not asserted: the first may have stopped the run already. *)
+let m6_t24_knapsack =
+  let n = 40 and rows = 8 in
+  let seed = ref 12345 in
+  let next lo hi =
+    seed := ((!seed * 1103515245) + 12345) land 0x3fffffff;
+    lo + ((!seed lsr 8) mod (hi - lo + 1))
+  in
+  let b = Buffer.create 4096 in
+  let vars = String.concat "," (List.init n (Printf.sprintf "x%d")) in
+  let ints l = String.concat "," (List.map string_of_int l) in
+  for i = 0 to n - 1 do
+    Buffer.add_string b (Printf.sprintf "var 0..1: x%d :: output_var;\n" i)
+  done;
+  let value = List.init n (fun _ -> next 1 4) in
+  Buffer.add_string b
+    (Printf.sprintf "var 0..%d: obj :: output_var;\n" (List.fold_left ( + ) 0 value));
+  for _ = 1 to rows do
+    let w = List.init n (fun _ -> next 3 30) in
+    Buffer.add_string b
+      (Printf.sprintf "constraint int_lin_le([%s],[%s],%d);\n" (ints w) vars
+         (List.fold_left ( + ) 0 w / 2))
+  done;
+  Buffer.add_string b
+    (Printf.sprintf "constraint int_lin_eq([%s,-1],[%s,obj],0);\n" (ints value) vars);
+  Buffer.add_string b
+    (Printf.sprintf
+       "solve :: int_search([%s],first_fail,indomain_min,complete) maximize obj;\n" vars);
+  Buffer.contents b
+
+let test_m6_t24_interrupt_cli () =
+  match (m9_binary (), veripb_path ()) with
+  | None, _ ->
+      incr failures;
+      print_endline
+        "FAIL M6-T24: bin/main.exe was not found above the test's cwd, so the signal \
+         lane was NOT run. Build bin/ first (`dune build bin/`)."
+  | _, None ->
+      incr failures;
+      print_endline "FAIL M6-T24: veripb not found. A missing checker is a failure."
+  | Some binary, Some veripb ->
+      let binary =
+        if Filename.is_relative binary then Filename.concat (Sys.getcwd ()) binary
+        else binary
+      in
+      let dir = Filename.temp_file "baguette_m6t24" "" in
+      Sys.remove dir;
+      Sys.mkdir dir 0o700;
+      let file f = Filename.concat dir f in
+      let oc = open_out (file "k.fzn") in
+      output_string oc m6_t24_knapsack;
+      close_out oc;
+      let last_obj o =
+        List.fold_left
+          (fun acc l -> try Scanf.sscanf l "obj = %d;" (fun v -> Some v) with _ -> acc)
+          None (String.split_on_char '\n' o)
+      in
+      let case name flags how =
+        let cmd =
+          Printf.sprintf "%s %s %s --proof %s > %s 2> %s" (Filename.quote binary) flags
+            (Filename.quote (file "k.fzn"))
+            (Filename.quote (file "p"))
+            (Filename.quote (file "out"))
+            (Filename.quote (file "err"))
+        in
+        let rc = Sys.command (how cmd) in
+        let o = read_file (file "out") and e = read_file (file "err") in
+        check
+          (Printf.sprintf "M6-T24 %s: the stopped run exits 0 (got %d)" name rc)
+          (rc = 0);
+        check
+          (Printf.sprintf "M6-T24 %s: an answer was printed, and not as optimal" name)
+          (last_obj o <> None && not (m6_says o "=========="));
+        check
+          (Printf.sprintf "M6-T24 %s: stderr says it was stopped" name)
+          (m6_says e "limit: ");
+        let vrc, out = m6_veripb veripb dir (file "p.opb") (file "p.pbp") in
+        let want =
+          match last_obj o with
+          | Some v -> Printf.sprintf "<= obj <= %d" (-v)
+          | None -> "no value printed"
+        in
+        check
+          (Printf.sprintf "M6-T24 %s: veripb -c accepts the proof, BOUNDS ... %s" name
+             want)
+          (vrc = 0 && m6_says out "VERIFIED BOUNDS" && m6_says out want);
+        if vrc <> 0 then print_endline out
+      in
+      (* [exec] so that $! is baguette's own pid. The signal waits for a first printed
+         solution and not for a fixed time, so a loaded machine cannot make it early. *)
+      let signalled sigs cmd =
+        Printf.sprintf
+          "(exec %s) & p=$!; n=0; until grep -q -e ---------- %s 2>/dev/null || [ $n -ge \
+           600 ]; do sleep 0.1; n=$((n+1)); done; sleep 0.3; %s wait $p"
+          cmd
+          (Filename.quote (file "out"))
+          (String.concat " "
+             (List.map (fun s -> Printf.sprintf "kill -%s $p 2>/dev/null;" s) sigs))
+      in
+      case "one SIGTERM" "" (signalled [ "TERM" ]);
+      case "one SIGINT" "" (signalled [ "INT" ]);
+      case "one SIGXCPU, -f" "-f" (signalled [ "XCPU" ]);
+      case "SIGINT then SIGTERM" "" (signalled [ "INT"; "TERM" ]);
+      case "SIGTERM twice, order encoding" "--bits-above none"
+        (signalled [ "TERM"; "TERM" ]);
+      (* The grace timer's own signal, sent by hand: the handler it shares. *)
+      case "SIGTERM then SIGALRM" "" (signalled [ "TERM"; "ALRM" ]);
+      case "--time-limit" "--time-limit 2" Fun.id;
+      case "the heap budget" "--max-heap-mb 16" (fun cmd -> "OCAMLRUNPARAM=s=256k " ^ cmd);
+      List.iter
+        (fun f -> Sys.remove (Filename.concat dir f))
+        (Array.to_list (Sys.readdir dir));
+      Sys.rmdir dir
+
 let test_d0200_heap_budget_cli () =
   match m9_binary () with
   | None ->
@@ -2446,6 +2605,7 @@ let () =
   test_m7t32_std_flags ();
   test_m9t5_default_keeps_proof ();
   test_d0200_heap_budget_cli ();
+  test_m6_t24_interrupt_cli ();
   test_d0216_amo_reuse ();
   if !failures > 0 then (
     Printf.printf "\n%d failure(s)\n" !failures;

@@ -1225,23 +1225,32 @@ let check_heap_at t ~what ~blo ~bhi =
 (* The asynchronous refusal, shared by the alarm and by [poll_heap] (D-0200): the same
    message and the same exit, so a harness cannot tell which of the two caught the run and
    has no reason to. *)
+(* M6-T24 (D-0225): what the refusal does after its message. The binary replaces it once
+   the proof's header is on the page, by ending the proof first; before that point there
+   is nothing to end. It may return (the writer is mid-line, and the exit waits for the
+   line): [refusing] then keeps the next poll from repeating the message. *)
+let resource_exit : (unit -> unit) ref = ref (fun () -> exit exit_resource)
+let refusing = ref false
+
 let refuse_heap ~limit w =
-  let size, widest =
-    match !live with None -> (0, None) | Some t -> (encoding_size t, t.widest)
-  in
-  !warn_sink
-    (heap_message
-       {
-         o_what = "";
-         o_kind = "MB of OCaml heap";
-         o_lo = 0;
-         o_hi = 0;
-         o_adds = size;
-         o_already = w;
-         o_limit = limit;
-         o_widest = widest;
-       });
-  exit exit_resource
+  if not !refusing then (
+    refusing := true;
+    let size, widest =
+      match !live with None -> (0, None) | Some t -> (encoding_size t, t.widest)
+    in
+    !warn_sink
+      (heap_message
+         {
+           o_what = "";
+           o_kind = "MB of OCaml heap";
+           o_lo = 0;
+           o_hi = 0;
+           o_adds = size;
+           o_already = w;
+           o_limit = limit;
+           o_widest = widest;
+         });
+    !resource_exit ())
 
 (* The reactive backstop, as a [Gc] alarm -- mem_guard.ml's shape (M1-T53), in the
    solver rather than in a test binary.

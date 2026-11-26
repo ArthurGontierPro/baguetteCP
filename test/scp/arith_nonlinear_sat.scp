@@ -1,0 +1,9 @@
+( (version 1)
+  (variables (x -4 4) (y -3 3) (p -12 12) (q -4 4) (a 0 4))
+  (constraints
+    (c1 multiply x y p)
+    (c2 divide x y q)
+    (c3 abs x a)
+    (c4 equals p -6)
+    (c5 less_than q 0))
+  (prob_type decide) )

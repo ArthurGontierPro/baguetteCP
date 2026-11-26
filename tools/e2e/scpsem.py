@@ -40,6 +40,21 @@ The semantics, transcribed from cpScript.sml (CakeML master, 2026-11):
   regular (X1 ...) n ((edges_0) ...) (f ...)
                                some run from state 0 along edges (v q') of EL q trans, every
                                state < n, ends in a final state      (regular_sem, nfa_accepts)
+  and, for the reader of M23-inputs (D-0230), each checked once its variables are assigned:
+  gacglobalcardinalityclosed, boundsglobalcardinality[closed]   the gcc above, closed: every
+                               Xi is one of the vi                (global_cardinality_sem)
+  count (X1 ...) Y Z           Z = #{i : Xi = Y}                  (count_sem)
+  plus X Y Z, minus X Y Z      X + Y = Z, X - Y = Z               (binop_sem)
+  neg X Y                      -X = Y                             (unop_sem Negative)
+  multiply X Y Z               X * Y = Z                          (nlop_sem Mult)
+  divide X Y Z                 Y != 0 and X quot Y = Z, truncated (nlop_sem Div)
+  increasing, strictly_increasing, decreasing, strictly_decreasing (X1 ...)
+                               SORTED by <=, <, >=, >             (sorted_sem)
+  table ((t11 ...) ...) (X1 ...)   every row of length n, some row matches, `*` any value
+                                                                  (table_sem)
+  circuit (X1 ...)             every Xi in 0..n-1, and from every i the successors return
+                               to i after n steps and not before  (circuit_sem)
+  `enumerate` is read as `decide`: the set of solutions is the same.
 Any other keyword, or a `_if` form other than a comparison's, is refused (exit 2). The
 prob_type is `decide`, or `(minimize X)` / `(maximize X)` (T8, D-0182), whose solutions are
 the same set: the objective only adds the line `objective minimize|maximize NAME` at the end,
@@ -92,7 +107,7 @@ def load(path):
     if (pt and len(pt) == 1 and isinstance(pt[0], list) and len(pt[0]) == 2
             and pt[0][0] in ("minimize", "maximize") and isinstance(pt[0][1], str)):
         objective = (pt[0][0], pt[0][1])
-    elif pt != ["decide"]:
+    elif pt not in (["decide"], ["enumerate"]):
         raise Refused(f"prob_type {pt}")
     bounds = {v: (int(lo), int(hi)) for v, lo, hi in sec["variables"]}
     cons = []
@@ -117,6 +132,14 @@ def load(path):
         if kw == "element":
             lst, (y, off), z = args
             cons.append(("elem", [term(a) for a in lst], term(y), int(off), term(z)))
+            continue
+        fn = FN.get(kw)
+        if fn is not None:
+            arity, flat, check = fn
+            if len(args) != arity:
+                raise Refused(f"{name}: {kw} takes {arity} arguments")
+            ts, shape = flat(args, term)
+            cons.append(("fn", check, ts, shape))
             continue
         if kw == "gacglobalcardinality":
             xs, vs, cs = args
@@ -179,7 +202,67 @@ def load(path):
     return bounds, cons, objective
 
 
+def _quot(x, y):
+    q = abs(x) // abs(y)
+    return q if (x >= 0) == (y >= 0) else -q
+
+
+def _circuit(xs):
+    n = len(xs)
+    if not all(0 <= x < n for x in xs):
+        return False
+    for i in range(n):
+        j = i
+        for k in range(1, n):
+            j = xs[j]
+            if j == i:
+                return False
+    return True
+
+
+def _table(rows, xs):
+    return all(len(r) == len(xs) for r in rows) and any(
+        all(t is None or t == x for t, x in zip(r, xs)) for r in rows)
+
+
+def _list(a, term):
+    return [term(x) for x in a]
+
+
+# keyword -> (arity, args -> (terms, shape), (values, shape) -> bool). The terms are
+# flattened; the shape is what the check needs to cut them back up.
+FN = {
+    "plus": (3, lambda a, t: (_list(a, t), None), lambda v, _: v[0] + v[1] == v[2]),
+    "minus": (3, lambda a, t: (_list(a, t), None), lambda v, _: v[0] - v[1] == v[2]),
+    "neg": (2, lambda a, t: (_list(a, t), None), lambda v, _: -v[0] == v[1]),
+    "multiply": (3, lambda a, t: (_list(a, t), None), lambda v, _: v[0] * v[1] == v[2]),
+    "divide": (3, lambda a, t: (_list(a, t), None),
+               lambda v, _: v[1] != 0 and _quot(v[0], v[1]) == v[2]),
+    "count": (3, lambda a, t: (_list(a[0], t) + [t(a[1]), t(a[2])], None),
+              lambda v, _: v[-1] == sum(1 for x in v[:-2] if x == v[-2])),
+    "circuit": (1, lambda a, t: (_list(a[0], t), None), lambda v, _: _circuit(v)),
+    "table": (2, lambda a, t: (_list(a[1], t),
+                               [[None if e == "*" else int(e) for e in r] for r in a[0]]),
+              lambda v, rows: _table(rows, v)),
+}
+for _kw, _op in (("increasing", operator.le), ("strictly_increasing", operator.lt),
+                 ("decreasing", operator.ge), ("strictly_decreasing", operator.gt)):
+    FN[_kw] = (1, lambda a, t: (_list(a[0], t), None),
+               (lambda op: lambda v, _: all(op(x, y) for x, y in zip(v, v[1:])))(_op))
+for _kw in ("gacglobalcardinalityclosed", "boundsglobalcardinality",
+            "boundsglobalcardinalityclosed"):
+    FN[_kw] = (3, lambda a, t: (_list(a[0], t) + _list(a[2], t),
+                                ([int(x) for x in a[1]], len(a[0]))),
+               (lambda closed: lambda v, sh: len(sh[0]) == len(v) - sh[1] and all(
+                   c == sum(1 for x in v[:sh[1]] if x == val)
+                   for val, c in zip(sh[0], v[sh[1]:]))
+                and (not closed or all(x in sh[0] for x in v[:sh[1]])))(
+                   _kw.endswith("closed")))
+
+
 def terms_of(c):
+    if c[0] == "fn":
+        return c[2]
     if c[0] == "imp":
         return [c[1][0], c[3], c[4]]
     if c[0] == "elem":
@@ -267,7 +350,7 @@ def solve(bounds, cons, max_nodes):
                 return lo <= yhi and ylo <= hi
             return True
         vals = [val(t) for t in terms_of(c)]
-        if c[0] in ("imp", "elem", "gcc", "ext", "inv", "abs", "cumul", "reg"):
+        if c[0] in ("imp", "elem", "gcc", "ext", "inv", "abs", "cumul", "reg", "fn"):
             # T5's forms are checked once every variable they name is assigned
             if any(v is None for v in vals):
                 return True
@@ -280,6 +363,8 @@ def solve(bounds, cons, max_nodes):
         return vals[-1] in vals[:-1]
 
     def global_holds(c):
+        if c[0] == "fn":
+            return c[1]([val(t) for t in c[2]], c[3])
         if c[0] == "imp":
             return (not holds(c[1])) or c[2](val(c[3]), val(c[4]))
         if c[0] == "elem":

@@ -1,0 +1,7 @@
+( (version 1)
+  (variables (x 0 4) (y -2 3) (z 0 9))
+  (constraints
+    (c1 lin_equals (1 x 2 y -1 z) -3)
+    (c2 lin_not_equals (1 x 1 y) 2)
+    (c3 not_equals z 1))
+  (prob_type enumerate) )

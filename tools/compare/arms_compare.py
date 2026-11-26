@@ -134,15 +134,21 @@ def counts(rows):
         c["rejected"] += r["verdict"] == "REJECTED" or s == "REJECTED"
         # CHECK-ERROR is not a refused proof: on these runs it is veripb dying against the
         # harness's MEM_KB (`ulimit -v` covers the checker too), rc 134. Kept apart from REJECTED.
-        c["check_error"] += r["verdict"] == "CHECK-ERROR"
-        c["timeout_check"] += r["verdict"] == "TIMEOUT-CHECK"
+        # M6-T24 (D-0225): a check of a STOPPED run's proof is counted apart from a check of
+        # an answer's, so check_error and timeout_check keep meaning what they meant.
+        stopped = not (s in ("OPT", "UNSAT") or (s == "SAT" and r["obj"] == "-"))
+        c["check_error"] += r["verdict"] == "CHECK-ERROR" and not stopped
+        c["timeout_check"] += r["verdict"] == "TIMEOUT-CHECK" and not stopped
+        c["incumbent_verified"] += r["verdict"] == "VERIFIED-INCUMBENT"
+        c["incumbent_check_unfinished"] += stopped and r["verdict"] in ("CHECK-ERROR", "TIMEOUT-CHECK")
         c[s] += 1
     return c
 
 
 COLS = ["opt_unsat", "opt_unsat_verified", "sat_solved", "sat_solved_verified", "incumbent",
         "incumbent_not_opt", "TIMEOUT", "CAPPED", "REFUSED", "ERROR", "UNKNOWN", "FLATTEN-FAIL",
-        "rejected", "check_error", "timeout_check"]
+        "rejected", "check_error", "timeout_check", "incumbent_verified",
+        "incumbent_check_unfinished"]
 
 
 def verdict(x, y):

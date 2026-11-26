@@ -117,6 +117,26 @@
    bookkeeping, since the node is the same value for every derivation that holds it.
 
    -------------------------------------------------------------------------------
+   M21-memory-T3 / docs/DECISIONS.md D-0223: a row's citation is shared, and what keeps
+   a written tree alive
+   -------------------------------------------------------------------------------
+
+   [model_row id] and [term 1 (model_row id)] return ONE block per id for the ids the
+   writer had handed out when [Justify.create] ran (the .opb's rows and the proof's opening
+   lines): the citations a counting family's derivation is made of (one per ladder rung it
+   walks) cost their list cell, not eight words. The bytes are the same by construction,
+   see [cite_row].
+
+   What D-0223 found holding written trees (99 % of tdtsp_10_53's live heap, D-0218) is
+   not the hash-consing table but a WRAPPER: a thunk whose closure returns another
+   thunk ([Element]'s [justified]). Forcing the wrapper memoises the tree on the INNER
+   thunk, the release above drops the wrapper's copy only, and the wrapper's closure
+   keeps the inner thunk for the life of the trail entry. Not memoising the inner thunk
+   frees it, but a released wrapper is written again after a wipe, and the tree rebuilt
+   then finds lines the kept one did not: fewer `pol` lines, other bytes, and the
+   closure's cost again. D-0223 measures that rule and leaves it to the user.
+
+   -------------------------------------------------------------------------------
    M1-T12 / docs/DECISIONS.md D-0013: [Model_row], [Combine], [Weaken]
    -------------------------------------------------------------------------------
 
@@ -775,7 +795,60 @@ let linear terms rhs =
          hid = (if hashing () then linear_hash terms rhs else 0);
        })
 
-let model_row id = Model_row id
+(* M21-memory-T3 (D-0223): the citation of a model row is SHARED, one block per id. A
+   counting family cites a ladder as one [Term (1, Model_row id)] per rung, and on
+   2026_tdtsp_10_53 the trees kept alive held 26 M of them, 8 words each (the [Model_row]
+   block, the [Term] block, the list cell) for one integer of content (D-0218 section 5,
+   OCaml's factor 8 on this kind). Interned, a citation costs its list cell. Nothing can
+   tell a shared one from a fresh one: [Model_row] and [Term] are immutable, every reader
+   matches them by structure, and the hash-consing key compares a [Model_row] by its id
+   ([summand_hash], [hc_equal]), never by identity. So the bytes are the same by
+   construction. *)
+let intern_cap = 1 lsl 22
+let chunk_bits = 8
+let no_row = Weaken []
+
+(* Only the ids below [intern_below] are shared: the .opb's rows and the lines the proof
+   opens with, which is what a ladder citation names, cited again by derivation after
+   derivation. [Justify.create] sets it from the writer it is given; before that (and under
+   `--no-proof`, where nothing is written) it is 0 and every citation is built fresh, as
+   before D-0223. A line the search derives is cited by few derivations, and sharing it costs
+   more than it saves: interning every id was +2.0 % instructions on rcpsp11_60 with the
+   proof, and kept one citation alive per id ever cited (+93 MB on travelling-thief r49 at
+   1 000 nodes). Two levels, chunks of 256 allocated where an id is cited; ids at or above
+   [intern_cap] (4 M) are built fresh. *)
+let intern_below = ref 0
+let cited_rows : summand array array = Array.make (intern_cap lsr chunk_bits) [||]
+
+let cite_row id =
+  if id < 0 || id >= !intern_below then Term (1, Model_row id)
+  else
+    let k = id lsr chunk_bits in
+    let chunk =
+      match Array.unsafe_get cited_rows k with
+      | [||] ->
+          let c = Array.make (1 lsl chunk_bits) no_row in
+          Array.unsafe_set cited_rows k c;
+          c
+      | c -> c
+    in
+    let i = id land ((1 lsl chunk_bits) - 1) in
+    match Array.unsafe_get chunk i with
+    | Term _ as s -> s
+    | _ ->
+        let s = Term (1, Model_row id) in
+        Array.unsafe_set chunk i s;
+        s
+
+(* [Justify.create]: share the citations of every id the writer has handed out so far. *)
+let intern_up_to n =
+  intern_below := Stdlib.max !intern_below (Stdlib.min intern_cap (n + 1))
+
+let model_row id =
+  if id >= 0 && id < !intern_below then
+    match cite_row id with Term (_, m) -> m | _ -> Model_row id
+  else Model_row id
+
 let weaken lits = Weaken lits
 
 (* [defining c l]: cite, [c] times, the line that establishes [l]. The coefficient is
@@ -822,7 +895,10 @@ let cut e1 e2 c1 c2 =
          hid = (if hashing () then cut_hash e1 e2 c1 c2 else 0);
        })
 
-let term coeff e = Term (coeff, citable "term" e)
+let term coeff e =
+  match e with
+  | Model_row id when coeff = 1 -> cite_row id
+  | _ -> Term (coeff, citable "term" e)
 
 (* [resolve parts]: the parts are cited (summed) and so cannot be decisions; two is the
    least that can resolve on anything (D-0134 section 2.2). *)

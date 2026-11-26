@@ -29366,3 +29366,686 @@ exits after its RSS reached `MemoryMax`, whatever its message.
 complete: geometric mean time ratio 0.94 in 2011, 1.25 in 2016, 0.64 in 2021, 0.42 in 2026 (the
 official machines differ by edition). Fataepyc-07 and fataepyc-06 are the same CPU (D-0210), so
 GCS's and Chuffed's times compare with baguette's directly.
+
+
+## D-0225  M6-T24: an interrupted run ends its proof. A signal or the heap budget closes it where it stands, and an optimisation run concludes `BOUNDS <declared floor> <incumbent>` instead of NONE or a truncated file
+
+**Status**: DECIDED with the user (2026-11-24), built on `wave73-interrupt` (interrupt-session). It
+amends SPEC 2.2, which had fixed `conclusion NONE` for every stopped run without considering an
+optimisation run that has an answer in hand.
+
+### 1. Context
+
+Of the 1 575 instances of D-0203's arm B, 970 ended at the time limit, 755 of them with a solution
+printed, and 138 at the heap budget, 46 of them with a solution printed. None of these proofs had a
+conclusion, because the harness kills the solver and M6-T9's SIGTERM handler only wrote its counters.
+The comment in `search.ml` said that claiming the incumbent as a BOUNDS upper bound "would need a
+lower bound the search never derived". The objective's declared bound is enough.
+
+### 2. What was measured before writing code (VeriPB 3.0.2, source d5644ca4)
+
+- `conclusion BOUNDS <declared floor> <last soli value>` in place of NONE, on a stopped proof of a
+  small minimisation, a maximisation and a minimisation over a domain with a negative bound, both
+  encodings, two stopping points each: accepted 12 of 12. `hi - 1` and `BOUNDS hi hi` are refused
+  in each of the 12.
+- The three final lines after an arbitrary line of a stopped proof, nothing deleted: accepted at 278
+  of 278 points of four proofs. So a proof can be ended between any two lines.
+
+### 3. The design
+
+- One line is one critical section (`Writer.enter`/`leave` around each output to the channel), and
+  an improving solution's printing and its `soli` line are one (`Writer.guarded`). An interruption
+  asks `Writer.when_idle`, which runs now or at the end of the section. An exception out of a write
+  leaves the writer not idle for good, and such a proof is left incomplete.
+- A first SIGTERM, SIGINT or SIGXCPU raises a flag that `config.stop` reads beside the clock, so
+  the search ends as under `--time-limit`, everything deleted and audited. A second signal, or five
+  seconds without a stop, ends the proof where it stands.
+- The heap budget ends the proof where it stands and then exits: 0 with an incumbent, 5 without, as
+  before. `Out_of_memory` and the synchronous resource exceptions do the same from the search's
+  handler.
+- The verdict is one function (`Writer.interrupted_verdict`): BOUNDS for an optimisation search, NONE
+  otherwise and under `--e2e`, where the implied floor of CakeML's objective is not established.
+
+### 4. Options
+
+| option | consequence |
+|---|---|
+| NONE for every stop, as before | a stopped optimisation run verifies no answer |
+| the flag only (RoundingSat's default: the handler sets `asynch_interrupt`, the solver throws at its polls, and an incumbent gives `BOUNDS lb ub`) | nothing for the heap budget, whose handler has no later poll to wait for, and a late poll loses the proof |
+| the flag, then the proof ended in the handler when no line is half written (chosen) | both, at the cost of one counter per line |
+| a soft heap threshold below the hard one | covers less: 2017 groupsplitter goes from 4.4 to 9.9 GB inside one propagation stretch (D-0200) |
+
+The lower bound is the declared one. RoundingSat concludes the bound its search derived. A root bound
+that the proof has established is the obvious next step, and needs the id to cite.
+
+### 5. Measurements (`fataepyc-07`, binary `aa2e192d`, branch commit `777cb9d`, base `1c179467`)
+
+- `make check` rc 0, peak RSS 155 MB. 228 test models against the base: stdout, exit code, `.opb`
+  and `.pbp` equal. Scaling lane ok. No test model is stopped, so none was expected to change.
+- Differential lane: 226 of 347 runs (plain) and 214 of 333 (debug) differ from the reference, every
+  one by the `.pbp` hash alone. Of the plain runs' 226, the proofs of the base and of the branch are
+  equal once the `conclusion` line is set aside, `NONE` becomes `BOUNDS`, and VeriPB accepts each
+  (135 with an incumbent, 91 with INF). The reference is to be re-recorded after the merge, in
+  its own commit (D-0141).
+- 200 real signals (SIGTERM, SIGINT, SIGXCPU, single and double) at random instants on three models,
+  on the laptop: 199 stopped in the search, 1 before it, no rejected proof (the last 120 under
+  `veripb -c`, 24 + 6 of them ended in the handler).
+- 60 Challenge instances in three modes (`timeout -k 30 40`, the same with `-f`, `--max-heap-mb
+  400` under `timeout -k 30 120`), 180 runs: no rejected proof, 6 checks over 1 200 s, 8 runs stopped before the
+  search began (no proof to end). On the 97 stopped optimisation runs with an incumbent whose
+  objective the script could read, the checker's upper bound is the last value printed.
+- The harness (branch commit `b07f0c5`, same binary), end to end through the series' wrappers
+  (`solver_wrap.sh`, `rss_wrap.py`, `veripb_wrap.sh`): 35 instances of 2012, 2016 and 2023 in three
+  modes (default, `-f`, default with a 3 GB heap budget), `SOLVE_TIMEOUT=40`, 105 rows. 55 stopped
+  runs with a solution, 55 `VERIFIED-INCUMBENT` (54 killed by `timeout`, 1 stopped by the heap
+  budget, 2023 roster-shifts). The check of those 55 took 125 s on average and 620 s at most, for
+  40 s of solving. 25 stopped or refused runs without a solution, not checked. 25 answers, 23
+  `VERIFIED` (19 OPT, 4 SAT) and 2 `TIMEOUT-CHECK` (2016 oocsp_racks). No `REJECTED`,
+  `VERIFIED-WEAK`, `VERIFIED-PARTIAL` or `CHECK-ERROR`. The 36th instance (2016 cryptanalysis) does
+  not flatten.
+
+### 6. Limits
+
+SIGKILL and the kernel's OOM killer cannot be caught. `timeout -k 30` leaves 30 s after SIGTERM for
+the line in progress. A signal before the search has begun ends the process as before. The harness
+(`scripts/compare_run.sh`) checks the proof of a killed run that printed a solution; `CHECK_STOPPED=0`
+turns that off, because the check adds up to the check limit per stopped run. A killed run without a
+solution is not checked. The check limit is the one answers have, so a long stopped proof can end
+`TIMEOUT-CHECK`. The per-edition time limits the user mentioned are not done.
+
+### 7. Revert
+
+The branch `wave73-interrupt`. Nothing else depends on it.
+
+## D-0228  M23-inputs: a relational `Problem` between the readers and the solver, `.scp` as a second input, every other language translated to `.scp` outside the solver
+
+Status: PLAN (measured, no solver code; the user asked for the plan on 2026-11-24)
+Date: 2026-11-24
+Task: M23-inputs (branch `wave74-inputs`)
+Touches: this record, `docs/ROADMAP.md` (M23), `bench/inputs_spike/`. Results:
+`/cluster/arthur/baguette-results/inputs-20261124/`.
+
+### 1. What the user asked
+
+A benchmark in which one problem, written once as a `.scp`, has two proofs, one from baguette and
+one from GCS. Then `.scp` as an input of baguette whose proof goes through the end-to-end chain of
+M14, and a front end that is easy to adapt to other languages (XCSP3, CPMpy, Essence). Which
+versions of cake and GCS to pin is deferred by the user, because it is a question of names.
+
+### 2. One `.scp`, two proofs, today
+
+`tools/e2e/fzn2scp.py` translates 203 of the 228 test models. On each, `baguette --e2e` (md5
+`1c179467`, `73abf84`) and `glasgow_scp_solver` (GCS `d7468618`, 2026-11-10) read the same problem,
+and both proofs are elaborated against the one `.opb` of `cake_pb_cp` (CakePB `438b8f83`), then
+checked by it. baguette is VERIFIED on 203, GCS on 88 as it stands, and on 189 once `solx` is
+rewritten to `sol`. The 14 left:
+
+| GCS side | models | cause |
+|---|---|---|
+| `cumulative`, `disjunctive`, `diffn` | 9 | cake replaced its cumulative encoder on 2026-09-19 (CakePB-dev `a402078`), GCS follows those names, and the public CakePB is of 2026-08-21. With GCS `87b24555` (2026-08-19) 7 of the 9 verify in `enumerate` |
+| "Duplicate variable name 'c1'" | 4 | `fzn2scp.py` names constraint and variable alike |
+| unknown keyword `max` | 1 | the reader of GCS has `array_max` only |
+
+`solx` is GCS's choice of `(prob_type enumerate)`, the only type it writes for a satisfaction
+problem. Replayed so, 100 of the 101 models verify and one runs past 60 s. Two things will break on
+our side when the pair moves. The prefix of D-0195 cites the old cumulative encoding, and the
+unmerged GCS branch `cake-zero-one-names` renames the bit of a 0..1 variable to `z[B]`.
+
+### 3. Is `.scp` expressive enough?
+
+**The language.** Integer variables with bounds, conditions `(x op v)`, linear constraints and
+comparisons plain, `_if` and `_iff`, `plus minus multiply divide modulus abs min max`, `and or
+parity`, and about thirty globals (D-0174 section 2 lists them). It has no Booleans (0..1 integers), no holes
+(an `in` constraint), no nested expressions (flattened into auxiliary variables), no search
+annotation and no output item. A problem over bounded integers is therefore always expressible, at
+worst by decomposition. The question is what the decomposition loses.
+
+**Measured on XCSP25**, the 450 instances of the COP25 and CSP25 tracks (35 families), loaded by
+CPMpy 1.1.1 and flattened with the globals cake has kept whole (`bench/inputs_spike/probe.py`).
+**This counts forms. No `.scp` was written and nothing was solved.**
+
+| question | instances |
+|---|---|
+| loaded and flattened | 445 of 450 (5 exceed 8 GB or stop in the loader) |
+| every flat form has a `.scp` form | 408 counted by the probe. The other 37 (3 families) hold only `and(...) = b` and `(x = v) = b`, read by hand on one instance per family. They are `and` and `equals_iff` |
+| a global loses its keyword (`alldifferent_lists`, `subcircuit` with a start) or stands under a reification cake lacks (`table`, `allequal`) | 46 |
+| `lex_chain_lesseq` becomes `lex_less_equal` per row, `NotInDomain` becomes domain facts | 71 and 33, no strength expected to be lost |
+| auxiliary variables, total over original, over the 408 | median 1.34, 90th percentile 37, worst 1 799. The instances above 10 are 66, in 7 families, for example CrazyFrog (296 to 2 966 variables) and RamseyPartition (60 to 930, one `nvalue` per constraint) |
+| largest domain at most 64, at most 1 000 | 232, 384 |
+
+The 222 of those 408 whose flat constraints are all among baguette's families (upper bound. A table
+or an element with variable entries, or a cumulative with variable durations, is counted as
+covered) need no new propagator. The others need, by instances, `lex_less_equal` (59), `mod` (55),
+`strictly_increasing` (49), `short_table` (38), `nvalue` (29), `negative_table` (22), `decreasing`
+(15), `alldifferent_except_n` (9). `increasing` and `decreasing` are linear rows.
+
+**What limits coverage is baguette's family list, before the language.** For the classes `.scp`
+drops (about a tenth of the XCSP25 instances lose a global), the fallback is a decomposition,
+visible to GCS too, so a comparison stays fair.
+
+### 4. Options for the front end
+
+| option | consequence |
+|---|---|
+| A. one parser per language in OCaml, each building `Model.t` | each must redo what `mznlib` does (flags, selectors, positions, index shifts). An XCSP3 front end in GCS is 2 293 lines without its XML library |
+| B. `.scp` as the only internal type | FlatZinc loses Booleans, holes, search and outputs, or they travel beside it |
+| **C (recommended). a relational type `Problem`, readers `.fzn` and `.scp`, everything else translated to `.scp` outside** | one lowering, two small readers, one translator (CPMpy to `.scp`) for CPMpy and XCSP3. Essence reaches FlatZinc by Savile Row |
+
+Three facts in the tree frame it. (1) `Model.cstr` holds auxiliaries a reader cannot have
+(`r_flags`, `mem_b`, `tab_s`, `cir_pos`), because `mznlib` declared them. (2) Others are created in
+`builder.ml` while it reads syntax (`aux` of the arithmetic family, the copies of gcc), and domains
+are inferred there over `Ast` (D-0083). (3) `Compile.e2e_spec` already maps each `Model.cstr` to a
+cake keyword, so a reader is its inverse.
+
+**The design.**
+
+```
+fzn  -> Lexer, Parser, Builder --+
+                                 +-> Problem --Lower--> Model.t --Compile--> store, encoding, proof
+scp  -> Sexp, Scp_reader --------+
+CPMpy, XCSP3  -> tools/cpm2scp (Python) -> .scp        Essence -> Savile Row -> .fzn
+```
+
+- `Problem.t`: variables (name, bounds, holes), relations with a **name**, an objective, plus what
+  only FlatZinc has (search, outputs). No auxiliary, no FlatZinc spelling. A constraint carries the
+  auxiliaries the input already declared as `Given of operand list`, or `Fresh`.
+- `Lower`: the only place that creates a variable, infers a domain, or decomposes. It is incremental,
+  one constraint at a time, so D-0128's memory bound holds.
+- A family is one module with its relation, its meaning (what `Model.check_assignment` reads), its
+  lowering, its posting and its `E2e.spec`. Adding a constraint touches one file. This is the
+  front-end half of M22-review-T10, which it replaces for `builder.ml` and `compile.ml`.
+- The trust story of M14 does not move. The proof is checked against the `.opb` cake derives from
+  the `.scp`, so a misreading in `Scp_reader` yields a refused proof or a correct proof of the
+  `.scp`, never a wrong verified answer. A translator to `.scp` is trusted, as `fzn2scp.py` is.
+
+### 5. Order of creation is the risk of the refactoring
+
+The order in which variables are created fixes names and default branching, so an auxiliary that
+moves changes the search. On the FlatZinc path `Lower` must create them in today's order, and the
+byte-identity lanes are the proof of it (`make diff`, the model tests, `make e2e`). On the `.scp`
+path the auxiliaries come after the variables of the file.
+
+### 6. What is left to the user
+
+(1) `SPEC` 1 and 2 say the input is FlatZinc. `.scp` is experimental until T3 is done, then a
+normative sentence is proposed. (2) A `.scp` has no search annotation, so a run on it takes the
+default, which is GCS's situation too. (3) Which cake and GCS are pinned, deferred.
+
+### 7. Revert
+
+T1 to T3 are separate merges, each byte-identical on the FlatZinc path, so each reverts alone.
+
+### 8. Update of 2026-11-24: the reader first, no refactor (decided by the user with Ciaran McCreesh)
+
+A `.scp` reader goes into baguette, and for the moment GCS or baguette produces the `.scp` from other
+languages. They accept that each solver writes its own constraints, and that a formally verified
+source format should come later and be none of the existing ones. This replaces the order of sections 4
+and 5: `Problem` and `Lower` (T1, T2) are not started. The reader builds `Model.t` directly, with its
+own small `lower.ml` for the auxiliaries, which can become `Lower` later. `builder.ml` is not touched.
+
+What was measured for it is `docs/reports/2026-11-24-scp-coverage.md`. Its three consequences:
+
+1. **The parity of constraint sets is the work.** A reader for what baguette propagates reads 137 of
+   the 297 `.scp` files GCS writes for the Challenge models, and 287 with the decompositions MiniZinc
+   does today. The largest are the variable `element`, the variable `cumulative` and `disjunctive2d`.
+2. **GCS's `.scp` is not cake's.** GCS writes views, cake has no view term, so 115 of 220 files are
+   refused by cake and 9 after the rewriting of comparisons. The rewriting is done by a separate
+   tool, or by GCS. The reader accepts views in any case, which costs nothing (`View`).
+3. **`--e2e` follows the reader, family by family.** A constraint the prefix does not cover is refused
+   by name under `--e2e` and solved without it.
+
+### 9. Which cake and which GCS (2026-11-24, read in the sources, not built)
+
+- **cake**: CakeML branch `cp_enc_new` at `930601d6` (2026-11-20, public on GitHub), shipped
+  prebuilt as CakePB-dev `develop-cp` `62bdc7f` (private). GCS's `workflow2_testing.md` names that
+  pair as required since 2026-11-23.
+- **GCS**: branch `cake-selector-conform` at `011a2940` (2026-11-23), `main` plus 4 commits, which
+  contains `cake-optional-mindist` and `scp-chain-strict-lanes`. `cake-zero-one-names` is not in it.
+- `cp_enc_new` adds `binpacking`, `mdd`, `min_distance` and the optional tasks to the keywords,
+  so section 8's "cake lacks `binpacking`" holds for the public release only. `subcircuit`,
+  `reachable` and `tree` are still absent. Its cumulative uses `sb`/`sa`/`sact`/`scc`/`scap_`.
+- **Views are not in it.** `sexp_varc` is the same on `cp_enc_new` and `master`: an atom, else
+  "invalid sexpression at var/const position". GCS's document says so too.
+- Moving baguette's `--e2e` to this cake means rewriting PROOF-FORMAT 3b: the cumulative
+  block, and whatever "Emit fewer redundant rows" (`91fe2e2b8`) and "Leave out terms and rows the
+  declared bounds exclude" (`aaefa85ea`) drop.
+
+### 10. The public pair, measured (2026-11-24)
+
+`develop-cp` is private and the user has no access to it. The pair of public versions of the same
+week is cake CakePB `438b8f83` (2026-08-21, the one PROOF-FORMAT 3b is written for) and GCS
+`87b24555` (2026-08-19). On the 203 `.scp` of section 2 (`bench/inputs_spike/w.sh`, `decide`, `solx`
+rewritten to `sol`), the GCS proof is VERIFIED by `cake_pb_cp` on **196** (103 SAT, 83 UNSAT, 10
+BOUNDS) and as written on 93. The 7 others: 4 names shared by a variable and a constraint and 1 `max`, both
+to change in `fzn2scp.py`, then `diffn_opt` (a label cake has not) and `inverse_offset_sat` (an empty
+`pol`), not investigated. baguette's `--e2e` is VERIFIED on the 203. Recommended as the reference
+until the development cake is public.
+
+### 11. Ciaran McCreesh's answer (2026-11-24, reported by the user)
+
+"Use the develop-cp branch for now, against GCS main. Views don't exist in the current version, but
+will hopefully be in version 2. The main difficulty is that when we did version 1, proof logging
+for views didn't work properly." It decides three points and replaces the recommendation of section 10.
+
+1. **The target is cake `develop-cp` with GCS `main`.** The pair of section 10 stays as the working pair
+   while the user has no access, and the `--e2e` lane of main (PROOF-FORMAT 3b) is not moved by T1.
+2. **A version 1 `.scp` has no views.** The reader refuses a view by name and position, so baguette
+   accepts no file cake refuses, and the rewriting is a tool outside the solver (`deview.py` is the
+   prototype). Section 8 point 2 (the reader accepts views) is withdrawn.
+3. **A version other than 1 is refused**, so version 2 cannot be read by mistake as version 1.
+
+### 12. The development pair, measured (2026-11-24)
+
+The user downloaded `develop-cp` as a zip whose comment is `62bdc7f5`. Its `cake_pb_cp` (sha256
+`5bf9b04a`, gcc without options) is at `fataepyc-06:/cluster/arthur/cakepb-develop-cp-62bdc7f/`,
+mode 700. **The repository is private, so neither the source nor the binary enters this one.**
+On the 203 `.scp` of section 2, `decide`:
+
+| proof against the development cake's `.opb` | VERIFIED by `cake_pb_cp` |
+|---|---|
+| GCS `main` `d7468618`, `solx` rewritten to `sol` | 198. The 5 others are the names and the `max` of section 2, and all 5 verify once renamed (203) |
+| the same as written | 94 |
+| GCS `cake-selector-conform` `011a2940` | the same 198 |
+| baguette `--e2e` (`1c179467`) | 193. 9 `cumulative` models cite `[cb]`, `root_nested_defining_gcc_unsat` cites `@i[x0][ge2][r]`, a row the new encoder does not write |
+| baguette through `bridge.py` | 197. 6 scheduling models fail |
+
+So GCS `main` and `develop-cp` agree on every model tried. Section 2's scheduling rejections and
+section 10's two failures came from mismatched versions. The views remain: of the 220 GCS files the
+development cake encodes 89, and 191 after `deview.py`. The T2 work on this pair is the 10
+models of the `--e2e` row.
+
+### 13. Views wait for cake (decided by the user, 2026-11-25)
+
+No model is rewritten to fit version 1 of the `.scp` when the rewriting weakens a solver. `deview.py`
+stays in `bench/inputs_spike/` as the measurement it was, and T6 is dropped. Nothing is asked of
+`fzn-glasgow`. Until version 2, baguette's reader refuses a view (section 11 point 2), and the files GCS
+and baguette share are those without one. Of the 297 GCS files, 124 hold no view in a constraint
+(comparisons, `circuit`, `subcircuit` and `binpacking` arguments), of which a reader takes 33 with the
+shapes of `E2e.spec` today, 50 with the general conditions and `_iff`, 74 with every family baguette
+propagates, 123 with the decompositions. When version 2 exists, the reader takes its views through
+`View`, so `lib/scp/` keeps the term type open for them.
+
+This does not bear on baguette's own `.scp`. `fzn2scp.py` writes the linear constraints as MiniZinc
+wrote them and has no views.
+
+### 14. The plan is the parser alone (the user, 2026-11-25)
+
+Replaces the plans of sections 4, 8 and 13. `.scp` text to `Model.t`, in a new library
+`lib/scp/` that depends on `lib/flatzinc/` for `Model`, `Pos` and `Error`. Conventions read in
+cake's parser and checked on the development build (2026-11-25):
+
+- cake accepts `enumerate` with a proof that only exhibits one solution (`s VERIFIED SATISFIABLE`
+  on five models), so `enumerate` is read and one solution is searched, as for `decide`. A run that
+  finds none says UNSAT.
+- cake accepts an undeclared name and a `lb > ub`. The reader refuses both, because neither is
+  a model anyone means.
+- cake refuses a `;` comment. So does the reader.
+
+Tests: (1) `fzn2scp.py` of each of the 203 test models gives the verdict and the optimum of the `.fzn`
+run, except the 7 with `member` (written with `equals_if`); (2) every solution found is checked by
+`tools/e2e/scpsem.py`, which reads only the `.scp`; (3) the hand-written `scp_cases` of GCS, whose
+name says sat, unsat or opt; (4) random small files against `scpsem.py`; (5) the GCS
+files without a view; (6) mutations of the reader: an off-by-one in `element` and `circuit`,
+a swapped `less_equal`, a dropped constraint, each caught by one of the above.
+
+A constraint is accepted only if baguette propagates it or if its rewriting is exact (`increasing`,
+`plus`, `greater_*`, a strict comparison over integers). `lin_equals_iff` is the one near case:
+two `lin_less_equal_iff` and an `and`, as `mznlib` does today. It is out until the user says.
+
+## D-0223  [AUTONOME] M21-memory-T3 (fix 4 of D-0218): what kept written explanations alive on tdtsp is not the hash-consing table but the INNER thunk of `Element`'s wrapper, which memoises the tree the wrapper's release lets go of. Releasing it frees 97 % of the live heap but changes the proof (a re-written tree finds lines the kept one did not) and costs +16 to +37 % time, so it is measured and left to the user. What lands is byte-identical: a model row's citation is one shared block per id, tdtsp_10_53 at 250 nodes 16.6 to 6.6 GB peak RSS and 136 to 115 s
+
+**Status**: DONE for the byte-identical part (A), on `wave70-release`, not merged. Option B is a
+design with its measurement, NOT landed: it changes proof bytes, which the dispatch forbids
+merging and which is the user's call (CLAUDE.md, "the user decides"). Taken in autonomous mode,
+hence the tag: the decision is to land A and not B.
+Date: 2026-11-24
+Task: M21-memory-T3, the part D-0218 section 7 ranks as fix 4 (agent-release). Touches
+`lib/core/explanation.ml` (`cite_row`, `intern_up_to`, `model_row`, `term`, the header),
+`lib/core/justify.ml` (one line in `create`), `test/unit/test_justify.ml` (`test_intern_m21t3`).
+Runs and patches: `fataepyc-06:/cluster/arthur/baguette-results/release/`.
+
+### 1. The question
+
+D-0218 measured tdtsp_10_53 with proof at 3.2 GB live at node 27, 99 % of it "proof-side
+explanations" (trail 55 %, hash-consed nodes 44 %), and asked to release what can no longer be
+cited: a node whose line is deleted or whose trail entry is gone, the table made weak, or cleared at
+restarts.
+
+### 2. What keeps them alive, measured
+
+D-0218's probe charges a block to the first kind that reaches it, and a thunk's closure reaches its
+FRAME, whose history reaches the store, and from the store everything. So "hash-consed nodes 44 %"
+and "trail 55 %" were the walk order, not the holders. The probe was rerun (memprobe.patch plus five
+kinds, `x.*`, and the store, engine and encoding records marked visited before the walk, so that no
+kind reaches through them; `probe-kinds.patch`), on main `a964127`, tdtsp_10_53 with proof, at the
+1 GiB crossing (node 26, 1.68 GB live):
+
+| holder | live |
+|---|---|
+| the hash-consing table (2 961 written nodes) | 1 MB |
+| trees memoised on thunks that were forced and never released | 1 628 MB |
+| of which: reached only from RELEASED arena thunks, through their closures | 1 606 MB |
+| eager explanations on the arena | 0 |
+
+The memoised thunks, by where they were forced and where they were built (a temporary call-site
+record): 1 156 of the 1 353 are `Linear` derivations and 17 reified `Resolve`s, forced by the
+trace's bits-arm test (`trace.ml` 761) and never written, about 3 summands each, a few MB in all;
+180 are `Element.hole_expl` thunks forced inside another thunk's forcing (`compute`), 134 of them
+with about 490 summands, and they are the 1.6 GB. Each summand
+is a `Term (1, Model_row rung)`: the result variable's domain is 0..23 039 wide and a derivation
+cites the ladder rungs between two bounds.
+
+The mechanism. `Element.filter_result`'s `justified` hands the store
+`Explanation.deferred (fun () -> expl)`, a WRAPPER around the pruning's own thunk `expl`
+(`filter_index`'s thunk has the same shape when it cancels nothing: it returns the position's
+thunk from its `gone` lazy). Forcing the wrapper runs `force expl` inside `compute`, which memoises the tree on
+`expl`. `Justify.emit_thunk` writes the wrapper and releases it (D-0168), which drops the
+wrapper's `forced`, but the wrapper's closure keeps `expl` and `expl` keeps the tree, for as long
+as the trail entry stands. The table and the line on the node (D-0172) hold nothing of it.
+
+### 3. Option B, the release: designed, measured, not landed
+
+**The rule.** A thunk returned by another thunk's closure is computed FOR the wrapper and not
+memoised on itself (`compute` calls `handed`: an inner thunk unforced and unreleased is computed
+without setting its `forced`; one already forced or released is answered as `force` answers). The
+wrapper's `forced` is then the only holder, and its release frees the tree. Patch:
+`handed.patch`, with its test (`test_wrapper_m21t3`, which fails on main and passes with it).
+
+**Memory.** tdtsp_10_53 at the same probe point: live 1.68 GB to 0.10 GB; at 31 nodes 3.39 to
+0.11 GB. Unprobed at 250 nodes: top heap 16.2 to 8.1 GiB, peak RSS 17.0 to 8.5 GB.
+
+**Why a later identical explanation is still written correctly.** A released wrapper asked for
+again is forced again through its closure, which rebuilds the tree from its snapshot (I-X6), the
+same derivation; this is D-0168's rule for every other thunk, and BAGUETTE_DEBUG compares the two.
+
+**Why it changes the bytes.** A released wrapper IS asked for again, and written again: tdtsp at
+100 nodes writes 60 726 thunks a second time after a wipe of their line (main,
+`BAGUETTE_MEMO_STATS`). On main the second
+writing uses the tree the inner thunk kept, whose nodes all have dead lines, so every node is
+written again. Rebuilt, each node goes through the hash-consing table at the rebuild, and the
+nodes `Element` builds are 71 % identical to one already written (D-0172's table:
+`at_most_from (p, b)` for the same position and bound), so a rebuilt node is often a node whose
+line is on the page and is cited instead of written. At 100 nodes: 241 050 `pol` lines become
+240 939, first difference at line 280 996; stdout and `.opb` the same. The proof is a little
+smaller and as valid, but it is not main's proof.
+
+**Why it costs time.** The rebuild runs `Element`'s closure again where main reused the kept
+tree: tdtsp +16 % at 100 nodes (28.6 to 33.1 s, dev build), +37 % at 250 (152 to 209 s).
+
+**On the differential lane** B gives 347 of 347 runs equal to main's reference (`dev-handed`,
+md5 `e863aa8c`, `--tier all`): none of the lane's instances writes a released wrapper again where
+the rebuilt tree meets a line the kept one did not, so the byte change is confined to instances
+like tdtsp, whose `Element` derivations are large, rebuilt identically, and written again after
+wipes. On the 228 test models B writes main's bytes too: 0 differences of 2 736 (stdout, exit code,
+`.opb`, `.pbp`; default, `--bits-above none`, `BAGUETTE_HASHCONS=0`).
+
+So B trades memory for time and bytes. A version that keeps main's bytes would have to rebuild a
+tree that MISSES the table exactly where the kept tree's nodes missed it at their first build,
+which is the kept tree again. The user's choice:
+
+| option | memory on tdtsp | time | bytes |
+|---|---|---|---|
+| B as measured | live -97 %, peak RSS -50 % | +16 to +37 % on tdtsp | fewer `pol` lines where a released wrapper is written again and its rebuild finds lines (tdtsp; 0 of 347 lane runs, 0 of 228 models) |
+| B plus a cheaper element closure (keep the dead list's derivations, rebuild only the head) | as B | to be measured | as B |
+| not B (this branch) | A's | A's | main's |
+
+Recommendation: not B now. Its time cost falls on the family it frees, and the 14 tdtsp refusals of
+arm A are better served first by A (below) and by D-0218's fix 3 (the budget reads the live heap):
+under B the live heap is 0.1 GB while the heap the budget reads is still 8 GiB of the GC's free
+space.
+
+### 4. Option A, landed: a row's citation is one block per id
+
+`Explanation.model_row id` and `Explanation.term 1 (model_row id)` return one shared block per id
+for the ids the writer had handed out when `Justify.create` ran: the `.opb`'s rows and the lines
+the proof opens with (`intern_below`, set from `Writer.last_id`; capped at 2^22). Every other id,
+and a coefficient other than 1, is built fresh, and so is everything under `--no-proof`, where no
+id is handed out. A cited row then costs its list cell, 3 words, where it cost 8 (the `Model_row`
+block, the `Term` block, the cell): D-0218 section 5's OCaml factor 8 on this kind, down to 3.
+The table is two levels, 256-slot chunks allocated where an id is cited.
+
+**Why every byte is the same, by construction.** `Model_row` and `Term` are immutable. Every reader
+matches them by structure (`emit_summand`, `cited_ids`, `lits`, `same_derivation`,
+`Store.drop_page_only_lemmas`), and the hash-consing key and equality compare a `Model_row` by its
+id (`summand_hash`, `hc_equal`), never by identity, so no lookup can answer differently for a
+shared block than for a fresh one. Nothing is released and nothing is re-derived, so the question
+of a later identical explanation does not arise: it is written exactly as before.
+
+**Why only the opening ids.** Two earlier versions on this branch interned every id below 2^22.
+The first kept one array grown to the largest id cited; both kept one citation alive per id ever
+cited, which on travelling-thief r49 (whose proof ids pass 2^21) was +93 MB of peak heap at 1 000
+nodes for no sharing, since a line the search derives is cited by few derivations. A ladder
+citation names an `.opb` row, cited again by derivation after derivation; those are the ids kept.
+
+**What it costs.** One table entry (a pointer, and the shared 5-word citation) per opening id that
+is cited, bounded by the `.opb`'s size; one comparison per `term` and `model_row` for the rest. On
+the short rcpsp11_60 run (71 nodes, 1.06 G instructions) the interned versions measured +2 % of
+the whole run, and -1.6 % on rcpsp11_66 (2 010 nodes, 18.4 G): the collector's pacing at a fixed
+point, not a cost per node (section 5's table).
+
+**Measured** (release binaries of the merged tip: base `f9eb775a` = main `5e1ea8a`, new
+`3913bed9` = `943eada`; peak RSS from `time -v`, top heap from `OCAMLRUNPARAM=v=0x400`, live from
+the probe at exit, whose base and new are main `a964127` with and without the change, `de10d53f`
+and `fa491f68`):
+
+| instance (proof) | nodes | peak RSS (MB) | top heap (MB) | live at exit (MB, probed run) | wall (s, shared node) | `.pbp` |
+|---|---|---|---|---|---|---|
+| tdtsp_10_53 | 250 | 16 611 -> 6 639 (-60 %) | 16 569 -> 6 594 | 15 267 -> 5 867 (-62 %) | 136.4 -> 115.3 (-15 %) | same |
+| mapping mesh3x3_2 | 2 000 | 3 281 -> 3 282 | 3 249 -> 3 250 | | 67.4 -> 67.6 | same |
+| proteindesign 1HZ5 9aa | 500 | 4 678 -> 4 619 | 4 753 -> 4 747 | | 138.1 -> 138.8 | same |
+| travelling-thief r49 | 1 000 | 11 117 -> 11 105 | 11 807 -> 11 797 | 4 336 -> 4 337 | 157.4 -> 157.4 | same |
+| black-hole_9 | 40 | 1 301 -> 1 255 (-4 %) | 1 236 -> 1 195 | | 56.7 -> 56.6 | same |
+| cable_tree_wiring R046 | 300 | 314 -> 291 (-7 %) | 263 -> 239 | | 6.7 -> 7.0 | same |
+
+tdtsp is the instance whose explanations are ladder citations, and there the kind falls by the
+factor 8/3 the layout predicts. On D-0218's three other instances with a visible explanation share
+the explanations are learned PB rows (mapping), trail reasons and trace facts (proteindesign,
+travelling-thief), not row citations: A neither gains nor costs there. black-hole_9 and cable
+(alldiff's Hall derivations, D-0172's instances) gain 4 and 7 % of peak RSS.
+
+Instructions per node, D-0207's five instances and one more (scripts as D-0216's `pern.sh`):
+
+| instance | proof | nodes | instructions per node, base -> new | change | `.pbp` |
+|---|---|---|---|---|---|
+| qr3 | yes | 29 779 | 1 705 689 -> 1 704 018 | -0.1 % | same |
+| qr3 | no | 29 779 | 1 042 667 -> 1 043 743 | +0.1 % | |
+| costas14 | yes | 3 001 | 15 218 932 -> 14 937 987 | -1.8 % | same |
+| costas14 | no | 3 001 | 6 588 696 -> 6 593 595 | +0.1 % | |
+| mknap2-1 | yes | 20 001 | 26 862 460 -> 26 857 921 | -0.0 % | same |
+| mknap2-1 | no | 20 001 | 26 208 453 -> 26 192 124 | -0.1 % | |
+| jr63 | yes | 20 001 | 20 826 319 -> 20 752 551 | -0.4 % | same |
+| jr63 | no | 20 001 | 8 948 307 -> 8 949 456 | +0.0 % | |
+| rcpsp11_60 | yes | 71 | 10 124 824 -> 10 301 729 | +1.7 % | same |
+| rcpsp11_60 | no | 71 | 1 810 484 -> 1 818 688 | +0.5 % | |
+| rcpsp11_66 (added) | yes | 2 010 | 8 999 525 -> 8 860 272 | -1.5 % | same |
+| rcpsp11_66 (added) | no | 2 010 | 2 292 143 -> 2 296 145 | +0.2 % | |
+
+Release binaries `f9eb775a` (main `5e1ea8a`) and `b4b05ac9` (`ba7f0df`), `perf stat -e
+instructions:u`, (I - I at 1 node) / (nodes - 1). No proved node is slower but rcpsp11_60's, a
+71-node run whose whole cost is 1.06 G instructions; the same family at 2 010 nodes is 1.5 %
+faster, which is why rcpsp11_66 was added. The `--no-proof` columns, where nothing is shared, move
+by 0.0 to 0.5 %: one comparison per `term`.
+
+### 5. Checked
+
+On the merged tip `943eada` (main `5e1ea8a` merged in), fataepyc-06, lanes at `-j 4`:
+
+- The 228 test models, stdout, exit code, `.opb` and `.pbp`, dev binaries `cc46f5dd` (main
+  `5e1ea8a`) and `1b58aaab` (the tip), in three configurations (default, `--bits-above none`,
+  `BAGUETTE_HASHCONS=0`): 0 differences of 2 736.
+- `dune runtest --root . --force` under `ulimit -v 4000000`: 5 238 ok, 0 FAIL, peak RSS 158 MB.
+- Differential lane `--tier all`: 347 of 347 runs equal the reference. Debug pass: 333 of 333.
+- Scaling lane: every line within its threshold (rc 0).
+- `test_intern_m21t3`, under both hash-consing modes: the citation is one block per id, an id
+  handed out after `Justify.create` is built fresh, and a derivation of shared citations writes
+  the lines of the same derivation spelled with fresh blocks.
+
+The two earlier versions of A (every id interned, section 4) passed the same checks on their own
+binaries (`f411b51f`, `60d6c6d8`).
+
+**After main moved** (D-0222 rewrote `domain.ml` and `store.ml`, D-0221, D-0225, D-0229), main
+`b736947` merged into the branch as `92e5da7`, the checks again at `-j 16`, dev `00fe8a1a` (main)
+against `2def9d72` (the tip): the 228 models 0 differences of 2 736 in the three configurations;
+`dune runtest --root . --force` 5 241 ok, 0 FAIL; lane 347 of 347, debug 333 of 333; scaling
+rc 0. tdtsp_10_53 at 250 nodes, release `ef2f76c8` against `6b2369e8`: peak RSS 16 485 -> 6 729 MB,
+wall 138 -> 118 s, the same `.pbp`.
+
+### 6. What it costs in clarity
+
+One idea in `Explanation`: two smart constructors may return a value already returned before. The
+argument that this is invisible is stated where the table is (`cite_row`) and rests on the type
+being immutable and hashed by id; a future reader that compared citations by `==` would break it
+silently, which the comment says. And one piece of global state: the bound `Justify.create` sets
+from the writer it is given, which only ever widens and only decides what is shared, never what is
+written.
+
+### 7. What is left
+
+- The 3 words per cited row that remain are the list cell. An int array of ids would take a row
+  to 4 bytes (D-0218 section 7, fix 4), but it is a new summand constructor, so a decision record
+  and the user's.
+- Option B, section 3.
+- The `Linear` trees the trace's bits-arm test forces and keeps (`trace.ml` 761): small here, a
+  memo nobody reads unless the entry is cited again; `trace.ml` is agent-cdcl's.
+
+### 8. How to revert
+
+`git revert ba7f0df 943eada 175e84b 3f01089 3c6fece` (the code and its header, newest first), and
+the test goes with `3c6fece` and `943eada`. Nothing outside `Explanation` and one line of
+`Justify.create` changed; `intern_cap`, `intern_below`, `intern_up_to` and `cite_row` are
+additions.
+
+## D-0230  [AUTONOME] M23-inputs-T1..T5: the `.scp` reader, `lib/scp/`. What it reads, what it refuses and why, the choices D-0228 section 14 left open, and the lanes that judge it
+
+Status: DONE on branch `wave76-scp` (not merged). Mode autonome: the choices marked [AUTONOME]
+below were taken without the user and are each reversible on their own.
+Date: 2026-11-26
+Task: M23-inputs-T1 to T5 (D-0228 section 14 is the plan; this record does not rewrite it)
+Touches: `lib/scp/` (new: `sexp.ml`, `reader.ml`, `dune`), `lib/flatzinc/arith_aux.ml` (new),
+`lib/flatzinc/builder.ml` (the arithmetic auxiliaries moved to `Arith_aux`), `bin/main.ml` (the
+reader by extension, `--e2e` refused on a `.scp`, the help text), `bin/dune`, `test/scp/` (26
+models and their outputs), `test/unit/test_scp.ml`, `scripts/run_scp_tests.sh`, `make scp` (in
+`make test`), `tools/scp/` (`validate.py`, `fzn_lane.sh`, `random_lane.py`, `mutate.sh`),
+`tools/e2e/scpsem.py` (the T4 forms), the two module maps. Results:
+`/cluster/arthur/baguette-results/scp-20261126/`.
+
+### 1. What was built
+
+`foo.scp` on the command line is read by `Baguette_scp.Reader.of_file`, everything else by the
+FlatZinc builder as before. The reader produces the same `Model.t` (`lib/flatzinc/model.ml`), so
+`compile.ml` and everything after it are unchanged and a `.scp` run has the proof, the search and
+the checks (I-S1) of a FlatZinc run. The grammar and the meaning of each constraint are read in
+CakeML's `cp_parseScript.sml` and `cpScript.sml` at `cp_enc_new` `930601d6` (downloaded from the
+public repository on 2026-11-26), version 1.
+
+### 2. T1, `sexp.ml`: iterative, linear, one item at a time
+
+The text is pulled through a fixed 64 KiB buffer. `Sexp.read` builds one form with an explicit
+stack of the lists still open (two functions that call each other in tail position), so the depth
+of nesting costs heap, never stack: the unit test reads a form nested 1 000 000 deep. The reader
+walks the frame `( (version 1) (variables ...) (constraints ...) (prob_type ...) )` token by token
+and calls `Sexp.read` once per variable and once per constraint, which it converts at once, so the
+tree alive at any moment is one item's and the file is never in memory as text or as a tree.
+
+Measured: a generated 300 MB `.scp` (1 000 000 variables, 1 829 932 four-term linear rows) reads
+in 19.1 s to its `Model.t`, peak RSS 1.07 GB, under `ulimit -v 4000000` (a throwaway executable
+calling `Reader.of_file`, not kept).
+
+Refused by the s-expression reader, with the position: an unbalanced list, a `)` with nothing
+open, anything after the one form, an empty file, a `;` (cake has no comment and refuses it,
+D-0228 section 14), a double quote, a control byte. An integer is cake's `mlint$fromString`: an
+optional `-` or `~`, then decimal digits; beyond 63 bits it is refused.
+
+### 3. The choices D-0228 left open
+
+| choice | taken | why | revert |
+|---|---|---|---|
+| **[AUTONOME] a variable declared `0 1`** | a `Model.Dbool` | `Encoding.declare_bool` is `declare_int 0..1`, so the encoding is the same, and the Boolean builtins `compile.ml` posts (`bool_clause`, `array_bool_or`, the reifiers) accept only a Dbool. Printed as an integer all the same | `reader.ml`, `variable` |
+| **[AUTONOME] what is printed** | every variable of the file, in its order, `name = value;`, then SPEC 2.2's separators | a `.scp` has no output item; this is what GCS prints and what `validate.py` reads back | `reader.ml`, `of_lexer` |
+| `enumerate` | one solution, as `decide` | D-0228 section 14 | |
+| **[AUTONOME] a condition `(Z op v)`** | over a constant: true or false; over a 0..1 variable: that variable or its negation; over any other variable: one auxiliary Boolean defined by `b <-> Z op v` (`int_le_reif`, `int_eq_reif`, `int_ne_reif` against a constant), memoised per condition | exact, and no new constructor. A negated 0..1 variable that must stand as a positive Boolean is one auxiliary `bool_not(b, nb)`, memoised. `(b = 0) <-> C` is written `b <-> not C` and needs none | `cond`, `lit_operand` |
+| **[AUTONOME] `_if` (half reification)** | refused | baguette has no half reification, and the rewriting through a full one adds a variable section 14 does not admit. It is why `fzn2scp.py`'s 7 `member` models are refused (section 14 expects them out) | |
+| `lin_equals_iff`, `lin_not_equals_iff` over a variable condition | refused | D-0228 section 14. Over a constant condition they are the plain row or its negation, read | |
+| **[AUTONOME] a condition whose variable occurs in the comparison it reifies** | refused by the reader | `compile.ml` refuses `b <-> C(b)` (not a definition); the reader says so with the constraint's position rather than as a refusal of a builtin the file never wrote. Found by the random lane (5 of 1 200 files) | `self_reif` |
+| `in` over constants, closed global cardinality, `circuit`'s range | the variable's DOMAIN is restricted, as mznlib's `x in S` is in FlatZinc; a 0..1 variable keeps its Dbool and gets `x = v`; an empty restriction posts the false clause | exact. A constraint read before the restriction was sized on the wider domain, which is sound: every auxiliary it made over a value the domain lost is fixed by its own definition | `restrict` |
+| **[AUTONOME] where auxiliaries come from** | after the file's variables, in the order the constraints ask, named `scp_<kind>_<n>` (`_` appended until the name is not the file's) | D-0228 section 5 | |
+| `element` | constant array only; index `Y - off + 1`, through one auxiliary `i` with `i - Y = 1 - off` when `off` is not 1 | `array_int_element` counts from 1, cake's `(Y off)` is position `Y - off` from 0; the auxiliary is the one exact way without a view | |
+| `regular` | cake's automaton is an NFA from state 0; read when it is deterministic, states shifted by one, `(n + 1) * Q` flags as mznlib declares them; an edge or a final state `>= nstates` is dead (cake's `nfa_accepts`), an empty word is `0 in finals`, no edge or no final state is false; a nondeterministic one is refused | determinising is exact but can blow up, and is not reading | |
+| **[AUTONOME] a constant letter of `regular` outside the symbols** | the constraint is false | it labels no edge; see section 7 for why the reader must say so itself | `dead_letter` |
+| `table` | plain rows; the rows whose values are all in their variable's domain kept, one selector each (mznlib's `keep`); `*` refused, a row of the wrong length refused (cake makes the constraint false) | | |
+| `circuit` | mznlib's `fzn_circuit` on the index set `0..n-1`, root 0: `all_different`, each `x_i` in `0..n-1` and `!= i`, the `n - 1` positions on `1..n-1`. `n = 1` is `x_0 = 0` (cake's `circuit_sem` admits it; mznlib's library makes it false), `n = 0` is true | cake's meaning, not mznlib's, where they differ | |
+| `cumulative` | durations, heights and capacity constant and non-negative, else refused | baguette's propagator takes constants; cake makes a negative height infeasible and D-0195 never asked baguette to agree | |
+| `count` | of a constant value, as a one-value `global_cardinality`; a variable value refused | section 14's list | |
+| `multiply`, `divide`, `abs` | `Arith_aux`, the helper `builder.ml` now uses, so the same constraint has the same auxiliaries | cake's `Div` is `quot` with `y != 0`, which is `int_div` (D-0033) | |
+| **[AUTONOME] `disjunctive`** | refused | not in section 14's list; baguette posts it as a cumulative only through mznlib | |
+| refused by name | `modulus parity element_2d nvalue among at_most_one all_equal all_different_except symmetric_all_different binpacking knapsack min_distance negative_table smart_table lex_* mdd disjunctive* cumulative_optional sort arg_sort value_precede seq_precede_chain` | each says why (baguette decomposes it in FlatZinc, or has no such constraint) | |
+| **[AUTONOME] a variable name that reads as an integer** | refused | cake would read it as a constant wherever it appears | |
+| **[AUTONOME] `--e2e` on a `.scp`** | refused (exit 2) | section 14: no end-to-end work, and the chain translates the `.fzn` | `bin/main.ml` |
+| the proof's default name | `foo.scp` gives `./foo.scp.opb` and `.pbp` | `default_proof_prefix` is outside the place the reader is picked; the `.scp` stays in the name, so it is never the model's own name | |
+
+The other refusals are those of section 14 and D-0228 section 11, each with its position: an
+undeclared name, a repeated variable or constraint name, `lb > ub`, a view (a list where a variable
+or an integer is expected), a version other than 1.
+
+### 4. T4's extraction, byte-identical
+
+`builder.ml`'s `sign_bool`, `ladder_bools` and the bodies of `int_times`, `int_div`, `int_abs` moved
+VERBATIM to `lib/flatzinc/arith_aux.ml`, with the bounds and the fresh Boolean passed in. Verbatim
+because OCaml leaves the order of a record's fields and of a function's arguments unspecified, and
+the variable numbering, so the proof, depends on it. Measured: stdout, `.opb` and `.pbp` md5 of the
+228 test models under default flags and under `--bits-above none`, main `b51b851` (md5 `8934e442`)
+against the branch (`7197957c` after the extraction, `432322a3` the final binary): 456 of 456
+identical, each time. The determinism check (`make determinism`, 228 models) passes on the branch.
+
+### 5. The lanes (D-0228 section 14, tests 1 to 6)
+
+| test | lane | result |
+|---|---|---|
+| unit | `test_scp` (in `dune runtest`) | the s-expression cases (positions, unbalanced, stray text, empty, `;`, quote, control byte, 1 MB atom, depth 10^6, 50 000 atoms across the buffer, integers) and every refusal of section 3 with its line and column; the accepted forms build the constructors of section 3 |
+| (1)(2) | `tools/scp/fzn_lane.sh`: `fzn2scp.py` of each test model, the `.scp` solved with a proof, the `.fzn` by the same binary, the answer judged by `validate.py` | 203 of the 228 test models are translated (25 hold a builtin `fzn2scp.py` does not cover). 196 read, and on each the `.scp` and the `.fzn` give the same answer (101 SAT, 84 UNSAT, 11 optima equal), every `.scp` proof VERIFIED; `validate.py` OK on 194, and on 2 the enumeration ran past 2 000 000 nodes (no verdict, not a failure). 7 refused, `equals_if`, the `member` models section 14 expects out |
+| (3) | GCS's `scp_cases` (198 hand-written files, GCS `d7468618`) | 103 read: 58 SAT, 42 UNSAT, 3 optima, every proof VERIFIED, every answer judged OK by `validate.py` and none against its file's name. 91 refused by the reader, by construct: `lex_*` 14, `modulus` 12, `smart_table` and `lex_smart_table` 10, `value_precede` and `seq_precede_chain` 7, `cumulative` with a variable duration, height or capacity 4, `disjunctive*` 4 and `disjunctive2d*` 4, `element` over variables 3, `element_2d` 3, `nvalue` 3, `among` 3, `all_different_except` 3, `_if` 2, `count` of a variable 2, `symmetric_all_different`, `sort`, `arg_sort`, `parity`, `negative_table`, `knapsack`, `at_most_one`, `all_equal` 2 each, `lin_equals_iff` 1. 4 refused by `compile.ml` (exit 3): a domain near 2^60, beyond baguette's arithmetic limit, as the same `.fzn` would be |
+| (4) | `tools/scp/random_lane.py`, seeds 1, 2, 3, 400 files each, every family of section 3 | 1 200 files: 103 optima, 201 SAT, 891 UNSAT, all judged OK by `validate.py` with every proof VERIFIED; 5 refused (a condition reifying its own variable, which led to that refusal). Before the `regular` guard of section 7, 3 of the first 400 crashed: that is how section 7 was found |
+| (5) | the 297 `.scp` GCS wrote for the Challenge models (`corpus-gcs-scp.tgz`, D-0228 section 13), 60 s each | 297 files. 64 read: 16 solved in 60 s with the proof VERIFIED (8 SAT, 8 optima), 46 with no answer in 60 s, 2 stopped by the 4 GB cap after reading (`2017_crosswords` exit 5, `2013_proteindesign12` an OCaml abort `allocation failure during minor GC`, both in the encoding of wide domains). 96 refused at a view (D-0228 section 11). 137 refused at a constraint, the first one in the file: `element` over variables 66, `lin_equals_iff` 11, `lex_*` 11, `binpacking` 8, `all_different_except` 6, `disjunctive2d_strict` 5, `cumulative` over variables 5, `modulus` 4, `value_precede`, `subcircuit`, `count` of a variable 3 each, `parity`, `knapsack`, `disjunctive_strict`, the optional disjunctives 2 each, `tree`, `seq_precede_chain`, `nvalue`, `all_equal` 1 each. Run with the binary before the `regular` guard of section 7, which none of the 297 reaches |
+| (6) | `tools/scp/mutate.sh`: an off-by-one in `element` and in `circuit`, a swapped `less_equal`, a dropped `all_different` | each of the four is caught: the `element` one by the models lane (the FlatZinc files all use offset 1), the `circuit` one by the models and random lanes, the other two by all three |
+| models | `make scp`: the 26 `test/scp/` models, output against `test/scp/expected/`, proof VERIFIED, answer judged by `validate.py`, `--no-proof` identical | 26 of 26 |
+
+`validate.py` reads the `.scp` through `tools/e2e/scpsem.py` (CakeML's semantics transcribed apart
+from `lib/scp/`, extended here with the T4 forms) and enumerates its solutions: UNSAT must have
+none, a solution printed must be one of them, an optimum must be theirs. That is the check the
+proof cannot make, since a misread constraint has a valid proof of the wrong problem.
+
+**The 203 `.scp` of the spike** (`/scratch/arthur/scp-gcs-20261124/out/*.scp`, `fzn2scp.py`'s,
+D-0228 section 2), one or two at a time, 60 s each:
+
+| | files |
+|---|---|
+| read | 196 |
+| refused, `equals_if` (the `member` models, D-0228 section 14) | 7 |
+| solved in 60 s with a proof VERIFIED by veripb | 196 (101 SAT, 83 UNSAT, 12 optimisation: 11 optima and one with no solution) |
+
+### 6. The SPEC sentence proposed (not written into SPEC: the user decides)
+
+For SPEC section 1, after "the input is a FlatZinc file": *"A file whose name ends in `.scp` is
+read instead as version 1 of the `.scp` format of CakeML's `cake_pb_cp` (D-0228, D-0230). Every
+constraint of such a file is one baguette propagates or one whose rewriting into the constraints of
+section 2.1 is exact; any other is refused with its position, and the file is never read in part.
+`decide` and `enumerate` search one solution, `minimize` and `maximize` the optimum, and every
+variable of the file is printed as `name = value;` in the order of the file."* Until then `.scp`
+is experimental, as D-0228 section 6 says.
+
+### 7. Finding outside the claim: `regular` crashes on a constant letter outside its symbols
+
+`lib/core/prop/regular.ml`, `forward_reason`, indexes `t.preds` with `v - t.smin` over the letter's
+alphabet hull, and a CONSTANT letter outside `smin .. smin + w - 1` makes that index out of bounds:
+`Fatal error: exception Invalid_argument("index out of bounds")`. Reproduced on main `b51b851`
+from FlatZinc: `baguette_regular([x, 4], 1, 0, [1], 1, [1], [s1, s2, s3])` with `x` in 0..1.
+MiniZinc does not reach it (`fzn_regular` constrains every letter to `1..S` first), a hand-written
+`.fzn` or a `.scp` does. The reader reads such a constraint as false (it is: the letter labels no
+edge), so the `.scp` path never reaches the crash; the propagator itself is not changed here (not
+claimed). A TODO for `regular.ml`'s owner: treat an out-of-range constant letter as a dead word.
+
+### 8. Revert
+
+Each commit reverts alone. The extraction (`M23-inputs-T4: the arithmetic auxiliaries ...`) is
+byte-identical on the FlatZinc path, and the reader is reached only through a `.scp` file name, so
+reverting `lib/scp/` and the two lines of `bin/main.ml` leaves FlatZinc runs exactly as they are.

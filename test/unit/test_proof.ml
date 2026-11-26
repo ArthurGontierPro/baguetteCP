@@ -3628,6 +3628,75 @@ let test_no_conclusion () =
       |> Array.iter (fun f -> try Sys.remove (Filename.concat dir f) with _ -> ());
       try Sys.rmdir dir with _ -> ())
 
+(* ------------------------------------------------------------------ *)
+(* M6-T24 (D-0225): ending an interrupted proof                        *)
+(* ------------------------------------------------------------------ *)
+
+let test_interrupted () =
+  let last3 s =
+    let lines = String.split_on_char '\n' s |> List.filter (fun l -> l <> "") in
+    let n = List.length lines in
+    String.concat "|" (List.filteri (fun i _ -> i >= n - 3) lines)
+  in
+  let none = "output NONE ;|conclusion NONE ;|end pseudo-Boolean proof ;" in
+  (* A live id does not stop it, audit on: I-X2 is for a proof the search ended. *)
+  let s, r =
+    emitted ~audit:true (fun w ->
+        Writer.header w ~n_model_constraints:1;
+        let _live = Writer.pol w ~origin:"live reason" (Pol.id 1) in
+        Writer.conclude_interrupted w;
+        Writer.conclude_interrupted w)
+  in
+  check "M6-T24: a live id does not fail the audit, and the second call is a no-op"
+    (r = Ok ());
+  check_eq "M6-T24: no verdict set, the proof ends NONE" ~expected:none ~got:(last3 s);
+  let ends floor incumbent =
+    let s, _ =
+      emitted (fun w ->
+          Writer.header w ~n_model_constraints:1;
+          Writer.set_stop_verdict w (fun () ->
+              Writer.Floor_and_incumbent { floor; incumbent });
+          Writer.conclude_interrupted w)
+    in
+    last3 s
+  in
+  check_eq "M6-T24: an incumbent is the upper bound"
+    ~expected:"output NONE ;|conclusion BOUNDS -5 49 ;|end pseudo-Boolean proof ;"
+    ~got:(ends (-5) (Some 49));
+  check_eq "M6-T24: no incumbent, the upper bound is INF"
+    ~expected:"output NONE ;|conclusion BOUNDS 0 INF ;|end pseudo-Boolean proof ;"
+    ~got:(ends 0 None);
+  (* Deferral: a request inside [guarded] runs at its end, once, and not before. *)
+  let log = ref [] in
+  let s, _ =
+    emitted (fun w ->
+        Writer.header w ~n_model_constraints:1;
+        Writer.guarded w (fun () ->
+            Writer.when_idle w (fun () ->
+                log := "ended" :: !log;
+                Writer.conclude_interrupted w);
+            check "M6-T24: the writer is not idle inside [guarded]" (not (Writer.idle w));
+            ignore (Writer.pol w ~origin:"a line inside" (Pol.id 1));
+            log := "inside" :: !log);
+        check "M6-T24: it is idle after, and the proof has ended"
+          (Writer.idle w && Writer.is_finished w))
+  in
+  check "M6-T24: the request waited for the section's end" (!log = [ "ended"; "inside" ]);
+  check_eq "M6-T24: the line inside is before the end" ~expected:none ~got:(last3 s);
+  (* An exception out of [guarded] gives the section back without running the request. *)
+  let ran = ref false in
+  let _ =
+    emitted (fun w ->
+        Writer.header w ~n_model_constraints:1;
+        (try
+           Writer.guarded w (fun () ->
+               Writer.when_idle w (fun () -> ran := true);
+               failwith "inside")
+         with Failure _ -> ());
+        check "M6-T24: idle again after an exception in [guarded]" (Writer.idle w))
+  in
+  check "M6-T24: ... and the request did not run" (not !ran)
+
 (* ------------------------------------- M7-T27 (b) / D-0123: the .opb is streamed *)
 
 (* Build the same encoding under [policy], with the ambient setting restored whatever
@@ -4890,6 +4959,7 @@ let () =
   test_v3_wipe_level_against_checker ();
   test_v3_veripb ();
   test_no_conclusion ();
+  test_interrupted ();
   test_pol_states_its_conclusion ();
   test_learned_survives_the_backjump ();
   test_reif_rows ();

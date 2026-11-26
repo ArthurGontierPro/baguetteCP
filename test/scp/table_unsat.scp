@@ -1,0 +1,6 @@
+( (version 1)
+  (variables (x 0 3) (y 0 3))
+  (constraints
+    (c1 table ((0 1) (1 2) (2 3)) (x y))
+    (c2 table ((1 1) (2 2) (3 3)) (x y)))
+  (prob_type decide) )
