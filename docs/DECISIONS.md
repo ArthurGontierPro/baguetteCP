@@ -31445,7 +31445,7 @@ test_prop section go with `28e0cba`.
 ## D-0236  [AUTONOME] M20-pernode-T4, the learning path: a name is hashed once where it was hashed per use. One-entry memos in `Store.var_named` and `Encoding.find`, the bits flag of a literal read off Justify's interned name, the decision closure's cells as a dense array, `String.hash` for every name table. Same trees, byte-identical artefacts; elitserien handball12 -8.1 % instructions per node without proof, -9.6 % with
 
 **Status**: DONE on `wave82-names` (agent-names, 2026-11-26), not merged. Base: main `121a1ce`
-(whose `lib/` is `e0c793a`'s), binary md5 `50898a4e`; branch binary `8f4cefb9`. Node fataepyc-06 at
+(whose `lib/` is `e0c793a`'s), binary md5 `50898a4e`; branch binary `8f4cefb9` (`b6344345` after merging main `d25f15e`). Node fataepyc-06 at
 load 15 to 30 (other sessions' runs). Runs, profiles, scripts and the four sample `.fzn`:
 `/cluster/arthur/baguette-results/names/`.
 
@@ -31564,6 +31564,12 @@ the default configuration and under `--bits-above none` (478 pairs, every exit c
 Differential lane `--tier all -j 8`: 347 of 347 equal; `--debug`: 333 of 333 equal
 (`BAGUETTE_MEM_CAP_KB=33554432`). Scaling lane (`-j 8`, the branch binary): ok, all 5 lines within
 their thresholds. Main has since taken wave80-gcc (D-0234), which changes the search on gcc models and makes the lane reference stale until it is re-recorded; the checks are re-run after merging main past that re-recording (below).
+
+After merging main `d25f15e` (D-0234 and its lane re-recording): main binary `96af57d4`, branch
+binary `b6344345`. `dune runtest --root . --force` 5 460 ok, 0 FAIL, peak RSS 155 MB. The 241 test
+models identical (`.opb`, `.pbp`, stdout, exit code) in both configurations (482 pairs).
+Differential lane `--tier all -j 8` 347 of 347 equal, `--debug` 333 of 333 equal
+(`BAGUETTE_MEM_CAP_KB=33554432`); scaling lane ok, 5 of 5 lines within their thresholds.
 
 **Clarity cost.** One new module, `lib/proof/name_tbl.ml` (a functor application and the
 argument that its hash is `Hashtbl.hash`'s), in both module maps. Two one-entry memos with the
