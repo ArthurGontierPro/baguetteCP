@@ -538,12 +538,8 @@ let add_node nodes n =
    they replaced, at every step. [create ()] with no level and no [expandable] keeps the
    old merge-only behaviour, which test_analysis.ml compares against [add_node]. *)
 module Frontier = struct
-  module H = Hashtbl.Make (struct
-    type t = string
-
-    let equal = String.equal
-    let hash (s : string) = Hashtbl.hash s
-  end)
+  (* The table keyed by a name, [String.equal] and [String.hash] (D-0236). *)
+  module H = Baguette_proof.Name_tbl
 
   type cell = { mutable cur : node; seq : int; mutable alive : bool }
   type entry = { e_support : int; e_seq : int; e_cell : cell; e_node : node }

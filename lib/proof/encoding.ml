@@ -278,13 +278,10 @@ and repr = Order | Bits of { n : int; lb_row : cid; ub_row : cid }
    per probe, D-0080's "hashing per literal" on wide compiles, and [find] runs on every
    literal [ge]/[le]/[eq] commits). Same hash function as the generic table
    ([Hashtbl.hash]) and the same resizing, so the same bucket layout and iteration order;
-   nothing iterates these two anyway. *)
-module Names = Hashtbl.Make (struct
-  type t = string
-
-  let equal = String.equal
-  let hash (s : string) = Hashtbl.hash s
-end)
+   nothing iterates these two anyway. M20-pernode-T4 (D-0236): it is [Name_tbl], the same
+   table hashed by [String.hash], which returns [Hashtbl.hash]'s value without the generic
+   hash's dispatch; [find] was 10.5 % of elitserien handball12 with the proof. *)
+module Names = Name_tbl
 
 (* ---------------------------------------------------------------------------
    M7-T27 (b): the .opb is STREAMED, and its header is COUNTED, not scanned
