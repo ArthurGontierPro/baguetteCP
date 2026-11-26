@@ -19,6 +19,7 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
+| M18-coverage-T5 (D-0239): lex_*, value_precede(_chain), seq_precede_chain, increasing/decreasing | new `lib/core/prop/` modules if needed, `lib/core/dune`, `mznlib/` files for these globals, their families in `lib/flatzinc/builder.ml` and `compile.ml`, tests and test models, the two module maps if a module is added | agent-lex (wave85-lex, /scratch/arthur/wt-lex) | 2026-11-26 |
 
 ## Cross-session requests
 
