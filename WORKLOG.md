@@ -19,6 +19,7 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
+| M18-coverage-T8 | lib/core/prop/regular.ml, mznlib/ regular files, regular part of lib/flatzinc/compile.ml | agent-regular (wave78-regular, /scratch/arthur/wt-regular) | 2026-11-26 |
 
 ## Cross-session requests
 
