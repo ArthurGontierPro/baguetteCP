@@ -19,8 +19,6 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M6-T24, the harness (proofs of stopped runs checked, three kinds of answer; on `wave73-interrupt`) | `scripts/compare_run.sh`, `tools/compare/compare.py`, `tools/compare/readme_table.py`, `tools/compare/arms_compare.py` and `bench/tuning/agreement.py` (small), `bench/series/*.sh` if needed | interrupt-session (laptop) | 2026-11-24 |
-| M6-T24 (an interrupted run ends its proof: signals, heap budget, time limit; D-0225) | `lib/proof/writer.ml`, `lib/proof/encoding.ml` (the heap refusal's exit only), `lib/core/search.ml` (`record_improving`, `conclude_stopped`, `optimise`'s set-up, short edits: agent-chrono holds the file on `wave71-chrono`), `bin/main.ml` (the signal handlers and the resource arms, short edits, same holder), `test/unit/test_endtoend.ml`, `test/unit/test_proof.ml`, SPEC 2.2 and 4.3, PROOF-FORMAT 5, INVARIANTS I-X2, ROADMAP row | interrupt-session (laptop, `wave73-interrupt`) | 2026-11-24 |
 
 ## Cross-session requests
 
@@ -600,6 +598,8 @@ section 1. Shares are inclusive, of the whole run.
 | M7-T11 | agent-holes | 2026-09-23 | Set domains accepted: one order-ladder row per hole in the `.opb` (the MIRROR of the rung, D-0072), hull in the store, one `Ne` instance per hole. `reject_set_domain` removed, not weakened |
 | M10-search-strategy-T5, M9-no-proof-T3, M7-T30 (the sixteen editions in three arms: default, `-f`, `--no-proof`) | agent-m10t5 (`wave55-m10t5`) | 2026-11-22 | **D-0185.** Release binary `7c880bce` (`10b3507`, order default, before D-0201). Verified OPT+UNSAT+SAT: A 323, B (`-f`) 362, C unverified 380; 0 REJECTED, 21 CHECK-ERROR are veripb against the 16 GiB `ulimit -v`. Fixed-category score sum A 2 789, C (no proof, trusted) 3 237; B 15 of 16 editions above A if scored in fixed. Default stays fixed ([AUTONOME], proposal only). Tables in `/cluster/arthur/baguette-results/m10t5/` |
 | M10-search-strategy-T5: codes set under `-f` and `tiered` | agent-m10t5b (`wave57-m10t5b`) | 2026-11-22 | **D-0202.** Release `f244c35a`, 60 runs, 30 proofs VERIFIED, none rejected. `-f` solves o7k2 def, 2x slower on QR; `tiered` a wash; both together lose QR72. Proposal only, no default change. |
+| M6-T24, the harness (proofs of stopped runs checked, three kinds of answer; on `wave73-interrupt`) | interrupt-session (`wave73-interrupt`), merged by the orchestrator | 2026-11-26 | **D-0225.** The session ended before merging; branch recovered and merged, lane re-recorded after it. |
+| M6-T24 (an interrupted run ends its proof: signals, heap budget, time limit; D-0225) | interrupt-session (`wave73-interrupt`), merged by the orchestrator | 2026-11-26 | **D-0225.** The session ended before merging; branch recovered and merged, lane re-recorded after it. |
 
 | M2-L3 | agent-learn3 | 2026-09-18 | 1UIP clause learning over order literals, proof-only (**D-0044 fork (ii)**), with conflict-directed backjumping over the **decision closure** and its `rup` derivation at level 0. **I-S4's cross-level debt is discharged** and the check is wider than the invariant's wording. Backjump measured: 31 -> 9 nodes on `backjump_unsat.fzn`. **M1-T66 stays OPEN**: with `Search.bridges` disabled, 35/35 models still pass and no checker rejects — a learned clause citing across levels did NOT make the bridge load-bearing. 1833 unit checks, 267 matrix, 44 mutation, 35/35 models, determinism 35/35 byte-identical |
 | M2-T14 | agent-fmt2 | 2026-09-18 | Format-2.0 vacuity sweep. Three more instances of the M2-L0 defect found and fixed (test_proof 3.0-only lanes resolving 2.2.2 via `$VERIPB`; D-0030's certification in test_mutation writing a 3.0 proof against an env-format `.opb`; 20 blanked-trace controls asserting on exit status alone). Test (c) now checks the claim index by content, so it runs under both formats. |
@@ -705,6 +705,14 @@ Every `.ml` of `lib/` is now in both maps. T4's row can be closed. Left to their
 - ROADMAP: M19-config-T10 says "not merged" (it is in main), M19-config-T11 says TODO (built on `wave71-chrono`), M21-memory-T3 says TODO (fix 2 merged, fix 4 gated on `wave70-release`, fix 1 claimed), M4-T9 has a DONE row and a WIP row (the second is the old text).
 - The claims of agent-chrono, agent-release, agent-evict and agent-node07 are on their branches only, so the `SessionStart` hook does not show them.
 - The worktree `/scratch/arthur/wt-evict` has no file newer than its claim (15:17 UTC, read at 16:35), and `wave70-release` has its lanes green (16:22) with its record and WORKLOG uncommitted.
+### 2026-11-24 (interrupt-session, `wave73-interrupt`): M6-T24, an interrupted run ends its proof (D-0225)
+
+SIGTERM, SIGINT, SIGXCPU and the heap budget end the proof, `BOUNDS <declared floor> <last value printed>` on an optimisation run. Built and measured (D-0225 section 5), NOT merged.
+To merge: `search.ml` and `bin/main.ml` overlap agent-chrono's `wave71-chrono` (short edits in `record_improving`, `conclude_stopped`, `optimise`, the signal handler, `config.stop`). After the merge the differential reference must be re-recorded (226 plain and 214 debug runs differ by the conclusion line only). Next: the harness checks the proofs of killed runs, per-edition limits (900 s before 2015).
+Runs: `fataepyc-07:/scratch/arthur/interrupt/`.
+For the orchestrator, before the next series: a heap stop with an incumbent now exits 0, so `compare.py` files it SAT with an objective. `arms_compare.py` and `challenge_rank.py` read that as an incumbent, but `readme_table.py` would have counted it under "Satisfiable, proof verified" (corrected on this branch; `bench/tuning/agreement.py` line 29, which an earlier note named, is right as it is). The harness half is on this branch too: `compare_run.sh` checks a killed run's proof when it printed a solution (`CHECK_STOPPED=0` turns it off), and the readers tell an answer, a verified solution and an unverified one apart.
+
+End to end on 105 rows (D-0225 section 5): 55 of 55 stopped solutions `VERIFIED-INCUMBENT`, through the series' wrappers. Cost: 125 s of check on average for 40 s of solving, so a 1 200 s series will check much longer; `CHECK_STOPPED=0` turns it off. At the merge with main at `dd499b2`, one append conflict at the end of `docs/DECISIONS.md` (D-0225 against D-0221): keep both. Release the two M6-T24 claim rows then.
 
 ### 2026-11-24 (readme-session, laptop): 900 s for the editions 2011 to 2014
 

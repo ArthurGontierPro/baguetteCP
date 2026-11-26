@@ -171,7 +171,24 @@ INF_BOUNDS_RE = re.compile(r"BOUNDS INF <= \S+ <= INF")
 GRAMMAR_RE = re.compile(r"pars(e|ing)|syntax|unexpected|expected .* found|unknown rule", re.I)
 
 
-def verdict(rc, vpf, status):
+def stopped_verdict(s, objective):
+    """M6-T24 (D-0225). The verdict of an accepted proof of baguette's that did not finish
+    an optimisation: VERIFIED-INCUMBENT when its upper bound IS the last value printed (in
+    the checker's units: a maximisation is negated), VERIFIED-WEAK when it is another one,
+    VERIFIED-PARTIAL when the proof claims no solution (NONE, or an INF upper bound). Its
+    own names, so that no reader of VERIFIED takes a stopped run for an answer."""
+    m = BOUNDS_RE.search(s)
+    if not m or m.group(2) == "INF":
+        return "VERIFIED-PARTIAL"
+    sense, _, val = objective.partition(":")
+    try:
+        want = int(val) if sense == "min" else -int(val)
+        return "VERIFIED-INCUMBENT" if int(m.group(2)) == want else "VERIFIED-WEAK"
+    except ValueError:  # nothing printed, and the proof claims a value
+        return "VERIFIED-WEAK"
+
+
+def verdict(rc, vpf, status, objective="-"):
     rc = int(rc)
     t = read(vpf)
     if rc == 124 or rc == 137:
@@ -180,6 +197,11 @@ def verdict(rc, vpf, status):
     slines = [l.strip() for l in t.splitlines() if l.startswith("s VERIFIED")]
     if rc == 0 and slines:
         s = slines[-1]
+        # A run that ended without an answer: TIMEOUT, or SAT on an optimisation model (a
+        # heap-budget stop with an incumbent). [objective] is passed for baguette only.
+        if objective != "-" and status in ("TIMEOUT", "SAT"):
+            print("%s\t%s" % (stopped_verdict(s, objective), flat(s)))
+            return 0
         # VERIFIED means the checker accepted; VERIFIED-WEAK means it accepted a proof
         # whose CONCLUSION does not establish what the solver printed. The second is a
         # soundness-relevant finding about the solver's output, not about the proof.
@@ -457,15 +479,15 @@ def report(outdirs, pinned=None, timeout=None):
 
     print()
     print("== proofs by solver")
-    vs = ["VERIFIED", "VERIFIED-WEAK", "REJECTED", "TIMEOUT-CHECK", "CHECK-ERROR",
+    vs = ["VERIFIED", "VERIFIED-INCUMBENT", "VERIFIED-PARTIAL", "VERIFIED-WEAK", "REJECTED", "TIMEOUT-CHECK", "CHECK-ERROR",
           "NO-PROOF", "NOT-CHECKED"]
     ps = [s for s in solvers if s in PROOF_SOLVERS]
-    print("  %-14s" % "verdict" + "".join("%10s" % s for s in ps))
+    print("  %-18s" % "verdict" + "".join("%10s" % s for s in ps))
     for v in vs:
         cnt = [sum(1 for r in allrows if r["solver"] == s and r["check_verdict"] == v)
                for s in ps]
         if any(cnt):
-            print("  %-14s" % v + "".join("%10d" % c for c in cnt))
+            print("  %-18s" % v + "".join("%10d" % c for c in cnt))
 
     print()
     vc = {}
@@ -650,7 +672,7 @@ def main(a):
     if cmd == "classify":
         return classify(*rest[:7])
     if cmd == "verdict":
-        return verdict(*rest[:3])
+        return verdict(*rest[:4])
     if cmd == "report":
         pinned = None
         if "--pinned" in rest:

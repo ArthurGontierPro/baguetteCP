@@ -29366,3 +29366,93 @@ exits after its RSS reached `MemoryMax`, whatever its message.
 complete: geometric mean time ratio 0.94 in 2011, 1.25 in 2016, 0.64 in 2021, 0.42 in 2026 (the
 official machines differ by edition). Fataepyc-07 and fataepyc-06 are the same CPU (D-0210), so
 GCS's and Chuffed's times compare with baguette's directly.
+
+
+## D-0225  M6-T24: an interrupted run ends its proof. A signal or the heap budget closes it where it stands, and an optimisation run concludes `BOUNDS <declared floor> <incumbent>` instead of NONE or a truncated file
+
+**Status**: DECIDED with the user (2026-11-24), built on `wave73-interrupt` (interrupt-session). It
+amends SPEC 2.2, which had fixed `conclusion NONE` for every stopped run without considering an
+optimisation run that has an answer in hand.
+
+### 1. Context
+
+Of the 1 575 instances of D-0203's arm B, 970 ended at the time limit, 755 of them with a solution
+printed, and 138 at the heap budget, 46 of them with a solution printed. None of these proofs had a
+conclusion, because the harness kills the solver and M6-T9's SIGTERM handler only wrote its counters.
+The comment in `search.ml` said that claiming the incumbent as a BOUNDS upper bound "would need a
+lower bound the search never derived". The objective's declared bound is enough.
+
+### 2. What was measured before writing code (VeriPB 3.0.2, source d5644ca4)
+
+- `conclusion BOUNDS <declared floor> <last soli value>` in place of NONE, on a stopped proof of a
+  small minimisation, a maximisation and a minimisation over a domain with a negative bound, both
+  encodings, two stopping points each: accepted 12 of 12. `hi - 1` and `BOUNDS hi hi` are refused
+  in each of the 12.
+- The three final lines after an arbitrary line of a stopped proof, nothing deleted: accepted at 278
+  of 278 points of four proofs. So a proof can be ended between any two lines.
+
+### 3. The design
+
+- One line is one critical section (`Writer.enter`/`leave` around each output to the channel), and
+  an improving solution's printing and its `soli` line are one (`Writer.guarded`). An interruption
+  asks `Writer.when_idle`, which runs now or at the end of the section. An exception out of a write
+  leaves the writer not idle for good, and such a proof is left incomplete.
+- A first SIGTERM, SIGINT or SIGXCPU raises a flag that `config.stop` reads beside the clock, so
+  the search ends as under `--time-limit`, everything deleted and audited. A second signal, or five
+  seconds without a stop, ends the proof where it stands.
+- The heap budget ends the proof where it stands and then exits: 0 with an incumbent, 5 without, as
+  before. `Out_of_memory` and the synchronous resource exceptions do the same from the search's
+  handler.
+- The verdict is one function (`Writer.interrupted_verdict`): BOUNDS for an optimisation search, NONE
+  otherwise and under `--e2e`, where the implied floor of CakeML's objective is not established.
+
+### 4. Options
+
+| option | consequence |
+|---|---|
+| NONE for every stop, as before | a stopped optimisation run verifies no answer |
+| the flag only (RoundingSat's default: the handler sets `asynch_interrupt`, the solver throws at its polls, and an incumbent gives `BOUNDS lb ub`) | nothing for the heap budget, whose handler has no later poll to wait for, and a late poll loses the proof |
+| the flag, then the proof ended in the handler when no line is half written (chosen) | both, at the cost of one counter per line |
+| a soft heap threshold below the hard one | covers less: 2017 groupsplitter goes from 4.4 to 9.9 GB inside one propagation stretch (D-0200) |
+
+The lower bound is the declared one. RoundingSat concludes the bound its search derived. A root bound
+that the proof has established is the obvious next step, and needs the id to cite.
+
+### 5. Measurements (`fataepyc-07`, binary `aa2e192d`, branch commit `777cb9d`, base `1c179467`)
+
+- `make check` rc 0, peak RSS 155 MB. 228 test models against the base: stdout, exit code, `.opb`
+  and `.pbp` equal. Scaling lane ok. No test model is stopped, so none was expected to change.
+- Differential lane: 226 of 347 runs (plain) and 214 of 333 (debug) differ from the reference, every
+  one by the `.pbp` hash alone. Of the plain runs' 226, the proofs of the base and of the branch are
+  equal once the `conclusion` line is set aside, `NONE` becomes `BOUNDS`, and VeriPB accepts each
+  (135 with an incumbent, 91 with INF). The reference is to be re-recorded after the merge, in
+  its own commit (D-0141).
+- 200 real signals (SIGTERM, SIGINT, SIGXCPU, single and double) at random instants on three models,
+  on the laptop: 199 stopped in the search, 1 before it, no rejected proof (the last 120 under
+  `veripb -c`, 24 + 6 of them ended in the handler).
+- 60 Challenge instances in three modes (`timeout -k 30 40`, the same with `-f`, `--max-heap-mb
+  400` under `timeout -k 30 120`), 180 runs: no rejected proof, 6 checks over 1 200 s, 8 runs stopped before the
+  search began (no proof to end). On the 97 stopped optimisation runs with an incumbent whose
+  objective the script could read, the checker's upper bound is the last value printed.
+- The harness (branch commit `b07f0c5`, same binary), end to end through the series' wrappers
+  (`solver_wrap.sh`, `rss_wrap.py`, `veripb_wrap.sh`): 35 instances of 2012, 2016 and 2023 in three
+  modes (default, `-f`, default with a 3 GB heap budget), `SOLVE_TIMEOUT=40`, 105 rows. 55 stopped
+  runs with a solution, 55 `VERIFIED-INCUMBENT` (54 killed by `timeout`, 1 stopped by the heap
+  budget, 2023 roster-shifts). The check of those 55 took 125 s on average and 620 s at most, for
+  40 s of solving. 25 stopped or refused runs without a solution, not checked. 25 answers, 23
+  `VERIFIED` (19 OPT, 4 SAT) and 2 `TIMEOUT-CHECK` (2016 oocsp_racks). No `REJECTED`,
+  `VERIFIED-WEAK`, `VERIFIED-PARTIAL` or `CHECK-ERROR`. The 36th instance (2016 cryptanalysis) does
+  not flatten.
+
+### 6. Limits
+
+SIGKILL and the kernel's OOM killer cannot be caught. `timeout -k 30` leaves 30 s after SIGTERM for
+the line in progress. A signal before the search has begun ends the process as before. The harness
+(`scripts/compare_run.sh`) checks the proof of a killed run that printed a solution; `CHECK_STOPPED=0`
+turns that off, because the check adds up to the check limit per stopped run. A killed run without a
+solution is not checked. The check limit is the one answers have, so a long stopped proof can end
+`TIMEOUT-CHECK`. The per-edition time limits the user mentioned are not done.
+
+### 7. Revert
+
+The branch `wave73-interrupt`. Nothing else depends on it.
