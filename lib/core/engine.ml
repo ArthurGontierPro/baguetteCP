@@ -879,8 +879,8 @@ let next_id t = t.count
    - every instance leaves [wake_static] and [watchers] at the next [propagate]
      ([pending], [purge]): one filter per variable for all the ids removed since, which is
      what a reduction evicting hundreds of rows over the same ladders needs;
-   - [mark_dirty] refuses it, so no seed, wake, release or newborn rule runs it again. A
-     FULL seed (every slot, after a backtrack below every recorded fixpoint) still steps
+   - the newborn rule refuses it ([mark_born]) and no wake list or resting level names it,
+     so no seed, wake, release or newborn rule runs it again. A FULL seed (every slot, after a backtrack below every recorded fixpoint) still steps
      on the slot and runs the tombstone, which does nothing.
 
    Why the search cannot see it. [remove] is called between two [propagate] calls (by the
@@ -1922,9 +1922,15 @@ let heap_pop t =
 
 (* Mark [id] dirty for this call's seed: the flag and the heap together. *)
 let mark_dirty t id =
-  if not (t.dirty.(id) || t.removed.(id)) then (
+  if not t.dirty.(id) then (
     t.dirty.(id) <- true;
     heap_push t id)
+
+(* D-0226: [mark_dirty] for the newborn rule, the one route by which a REMOVED id could
+   still be marked: [remove] takes an id out of every wake list and out of the resting
+   levels, but not out of [newborns] and [births], which only a fixpoint rewrites. The
+   wake and seed paths keep the plain [mark_dirty], with no test added to them. *)
+let mark_born t id = if not t.removed.(id) then mark_dirty t id
 
 let seed_dirty t store ~since ~epoch =
   let n = t.count in
@@ -2030,10 +2036,10 @@ let propagate ?stop ?(poll_runs = default_poll_runs) (t : t) (store : Store.t) :
           | (since, e) :: _ ->
               seed_dirty t store ~since ~epoch:e;
               (* Rule (b): every id with [born > e], read off [births] (M6-T22). *)
-              List.iter (mark_dirty t) t.newborns;
+              List.iter (mark_born t) t.newborns;
               let rec young = function
                 | (b, ids) :: rest when b > e ->
-                    List.iter (mark_dirty t) ids;
+                    List.iter (mark_born t) ids;
                     young rest
                 | _ -> ()
               in

@@ -437,21 +437,26 @@ module Learned_clause = struct
      a watch that does not move keeps the copy it has. An index outside the row (the [-1]
      [rewatch]'s [best] answers for a one-literal clause with its literal false) gets
      [x = -1], which no variable is. *)
+  (* Term [i]'s polarity, read off [pb]'s polarity bytes here rather than through
+     [Pb.positive_at]: dune's dev profile compiles with [-opaque], so a cross-module
+     accessor is a call, and these run on every watch move (D-0226 measured the calls). *)
+  let positive (pb : Pb.t) i = Bytes.unsafe_get pb.Pb.pv i <> '\000'
+
   let set_watches t w1 w2 =
     let n = Pb.width t.pb in
     if w1 <> t.w1 then (
       t.w1 <- w1;
       if w1 >= 0 && w1 < n then (
-        t.x1 <- Var.to_int (Pb.var_at t.pb w1);
-        t.k1 <- Pb.k_at t.pb w1;
-        t.p1 <- Pb.positive_at t.pb w1)
+        t.x1 <- Var.to_int t.pb.Pb.xv.(w1);
+        t.k1 <- t.pb.Pb.kv.(w1);
+        t.p1 <- positive t.pb w1)
       else t.x1 <- -1);
     if w2 <> t.w2 then (
       t.w2 <- w2;
       if w2 >= 0 && w2 < n then (
-        t.x2 <- Var.to_int (Pb.var_at t.pb w2);
-        t.k2 <- Pb.k_at t.pb w2;
-        t.p2 <- Pb.positive_at t.pb w2)
+        t.x2 <- Var.to_int t.pb.Pb.xv.(w2);
+        t.k2 <- t.pb.Pb.kv.(w2);
+        t.p2 <- positive t.pb w2)
       else t.x2 <- -1)
 
   let name = "learned_clause"
@@ -466,9 +471,8 @@ module Learned_clause = struct
      see [Store.hi_below] for why the support of the current bound is a later position
      than the crossing, and how that difference broke the first draft. *)
   let falsified_at store t i =
-    let x = Pb.var_at t.pb i and k = Pb.k_at t.pb i in
-    if Pb.positive_at t.pb i then Store.hi_below store x k
-    else Store.lo_at_least store x k
+    let x = t.pb.Pb.xv.(i) and k = t.pb.Pb.kv.(i) in
+    if positive t.pb i then Store.hi_below store x k else Store.lo_at_least store x k
 
   (* Two watches, chosen so that I-P7 holds through every backtrack:
 
@@ -528,8 +532,8 @@ module Learned_clause = struct
     for i = 0 to n - 1 do
       for j = i + 1 to n - 1 do
         if
-          Var.to_int (Pb.var_at pb i) = Var.to_int (Pb.var_at pb j)
-          && Pb.positive_at pb i = Pb.positive_at pb j
+          Var.to_int pb.Pb.xv.(i) = Var.to_int pb.Pb.xv.(j)
+          && positive pb i = positive pb j
         then ok := false
       done
     done;
@@ -586,8 +590,8 @@ module Learned_clause = struct
      LOWER-bound move. That is [Propagator.watch_hi]/[watch_lo]'s whole claim, and it is
      true of every order literal. *)
   let watch_of t i =
-    if Pb.positive_at t.pb i then Propagator.watch_hi (Pb.var_at t.pb i)
-    else Propagator.watch_lo (Pb.var_at t.pb i)
+    if positive t.pb i then Propagator.watch_hi t.pb.Pb.xv.(i)
+    else Propagator.watch_lo t.pb.Pb.xv.(i)
 
   let watched t () =
     if t.rest >= 0 then (watch_of t t.rest, Propagator.rests)

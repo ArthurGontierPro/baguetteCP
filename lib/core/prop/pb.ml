@@ -371,6 +371,15 @@ let pb_lit a = if a.positive then Lit.ge a.name a.k else Lit.le a.name (a.k - 1)
 let var_at t i = t.xv.(i)
 let k_at t i = t.kv.(i)
 let positive_at t i = Bytes.unsafe_get t.pv i <> '\000'
+
+(* THE HOT READS (D-0226) skip the bounds check: every per-term array of a [t] has length
+   [n_terms], built so by [finish] and never resized, and every index the walks below pass
+   is a term index ([0 .. n_terms - 1] by its loop bound, by the layout's [dom], or by
+   [quiet]'s [< n] tests). The flat layout made a term three array reads where it was one
+   array read and three field loads, and the checks on them were measurable on QR48
+   (+4 % instructions per node before this). They are written [Array.unsafe_get] at each
+   site, never through a polymorphic helper: a helper's body is compiled for any array, so
+   it would test for a float array on every read, which the typed site does not. *)
 let coeff_at t i = t.coef.(i)
 
 let name_at t i =
@@ -550,7 +559,7 @@ let holds store a =
 
 (* The three above on term [i] of [t], reading its arrays (D-0226). Same tests. *)
 let status_at store t i =
-  let d = Store.get store t.xv.(i) and k = t.kv.(i) in
+  let d = Store.get store (Array.unsafe_get t.xv i) and k = Array.unsafe_get t.kv i in
   if positive_at t i then
     if d.Domain.lo >= k then Sat_lit else if d.Domain.hi < k then Unsat_lit else Open
   else if d.Domain.hi < k then Sat_lit
@@ -558,12 +567,14 @@ let status_at store t i =
   else Open
 
 let falsified_at store t i =
-  let d = Store.get store t.xv.(i) in
-  if positive_at t i then d.Domain.hi < t.kv.(i) else d.Domain.lo >= t.kv.(i)
+  let d = Store.get store (Array.unsafe_get t.xv i) in
+  if positive_at t i then d.Domain.hi < Array.unsafe_get t.kv i
+  else d.Domain.lo >= Array.unsafe_get t.kv i
 
 let holds_at store t i =
-  let d = Store.get store t.xv.(i) in
-  if positive_at t i then d.Domain.lo >= t.kv.(i) else d.Domain.hi < t.kv.(i)
+  let d = Store.get store (Array.unsafe_get t.xv i) in
+  if positive_at t i then d.Domain.lo >= Array.unsafe_get t.kv i
+  else d.Domain.hi < Array.unsafe_get t.kv i
 
 let is_false = function Unsat_lit -> true | Sat_lit | Open -> false
 let is_open = function Open -> true | Sat_lit | Unsat_lit -> false
@@ -702,7 +713,8 @@ let effective_all t w =
          term is non-false, and from 0 a single positive addend cannot overflow. *)
       for i = 0 to t.n_terms - 1 do
         scratch.gbest.(i) <- (if positive_at t i then min_int else max_int);
-        scratch.eff.(i) <- (if is_false scratch.st.(i) then 0 else t.coef.(i))
+        scratch.eff.(i) <-
+          (if is_false scratch.st.(i) then 0 else Array.unsafe_get t.coef i)
       done
   | Some g ->
       for gi = 0 to Array.length g.gfirst - 2 do
@@ -711,12 +723,12 @@ let effective_all t w =
           (if positive_at t g.dom.(g.gfirst.(gi)) then min_int else max_int);
         let sum = ref 0 and fits = ref true and p = ref g.gfirst.(gi) in
         while !p < stop do
-          let k = t.kv.(g.dom.(!p)) in
+          let k = Array.unsafe_get t.kv g.dom.(!p) in
           let q = ref !p in
-          while !q < stop && t.kv.(g.dom.(!q)) = k do
+          while !q < stop && Array.unsafe_get t.kv g.dom.(!q) = k do
             let j = g.dom.(!q) in
             (if not (is_false scratch.st.(j)) then
-               let c = t.coef.(j) in
+               let c = Array.unsafe_get t.coef j in
                if !sum > max_int - c then fits := false else sum := !sum + c);
             incr q
           done;
@@ -746,7 +758,7 @@ let mark_forceable t w ~slack =
       if scratch.eff.(i) < 0 then scratch.eff.(i) <- effective t i;
       if scratch.eff.(i) > slack then (
         any := true;
-        let k = t.kv.(i) and g = group w i in
+        let k = Array.unsafe_get t.kv i and g = group w i in
         if positive_at t i then (if k > scratch.gbest.(g) then scratch.gbest.(g) <- k)
         else if k < scratch.gbest.(g) then scratch.gbest.(g) <- k))
   done;
@@ -755,7 +767,7 @@ let mark_forceable t w ~slack =
 let forced t w ~slack i =
   is_open scratch.st.(i)
   && scratch.eff.(i) > slack
-  && t.kv.(i) = scratch.gbest.(group w i)
+  && Array.unsafe_get t.kv i = scratch.gbest.(group w i)
 
 (* One pass, then repeat while the store moved.
 
@@ -800,7 +812,8 @@ let rec next_free store t i =
 
 let rec free_off store t xi i =
   let j = next_free store t i in
-  j < t.n_terms && (Var.to_int t.xv.(j) <> xi || free_off store t xi (j + 1))
+  j < t.n_terms
+  && (Var.to_int (Array.unsafe_get t.xv j) <> xi || free_off store t xi (j + 1))
 
 let quiet store t =
   t.degree = 1
@@ -814,8 +827,8 @@ let quiet store t =
   t.scan.f2 <- f2;
   f2 < n
   &&
-  let xi = Var.to_int t.xv.(f1) in
-  Var.to_int t.xv.(f2) <> xi || free_off store t xi (f2 + 1)
+  let xi = Var.to_int (Array.unsafe_get t.xv f1) in
+  Var.to_int (Array.unsafe_get t.xv f2) <> xi || free_off store t xi (f2 + 1)
 
 (* The top of a pass: the snapshot F into [scratch.st], the number of open terms into
    [scratch.n_open], each group's open sum into [scratch.osum] and their largest into
@@ -839,7 +852,7 @@ let snapshot store t w =
   (match w.groups with
   | None ->
       for i = 0 to n - 1 do
-        let c = coef.(i) in
+        let c = Array.unsafe_get coef i in
         let s = status_at store t i in
         scratch.st.(i) <- s;
         match s with
@@ -853,7 +866,7 @@ let snapshot store t w =
   | Some g ->
       Array.fill osum 0 (Array.length g.gfirst - 1) 0;
       for i = 0 to n - 1 do
-        let c = coef.(i) in
+        let c = Array.unsafe_get coef i in
         let s = status_at store t i in
         scratch.st.(i) <- s;
         match s with
