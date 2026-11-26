@@ -32,7 +32,7 @@ Floats, set variables and multi-objective optimisation are out of scope (`docs/S
 
 ## Performance on the MiniZinc Challenge
 
-All sixteen editions of the MiniZinc Challenge (2011 to 2026, 1 600 instances, 1 575 flattened), run with the Challenge's own settings: 1 200 s per instance, 16 GiB of memory, one thread, on an AMD EPYC 7643. An answer with a proof counts only when VeriPB verifies the proof. Measured on 2026-11-23/24 (`docs/DECISIONS.md` D-0203, release binary `f244c35a`, commit `e1971f6`).
+All sixteen editions of the MiniZinc Challenge (2011 to 2026, 1 600 instances, 1 575 flattened), run with 1 200 s per instance, 16 GiB of memory and one thread, on an AMD EPYC 7643. The Challenge's own limit is 1 200 s since 2015, and it was 900 s from 2011 to 2014. An answer with a proof counts only when VeriPB verifies the proof. Measured on 2026-11-23/24 (`docs/DECISIONS.md` D-0203, release binary `f244c35a`, commit `e1971f6`).
 
 | Outcome per instance | Default search, with proof | Free search `-f`, with proof | Default search, `--no-proof` |
 |---|---|---|---|
@@ -76,25 +76,43 @@ How to read these numbers.
 
 - This series ran the binary `f244c35a`, which has the bits encoding as its default (D-0201) and no
   proof cap, but predates the coverage, speed and correctness work merged since (D-0206, D-0208,
-  D-0209, D-0212 to D-0217, D-0220, and the integer-overflow fix of M22-review-T1). The effect of that
-  work on the Challenge is not measured yet. On the benchmarks of D-0208, a node costs 49 % fewer
+  D-0209, D-0212 to D-0217, D-0220, D-0222, and the integer-overflow fix of M22-review-T1). Measured
+  with `-f --no-proof` (unverified, same settings), that work brings 401 complete answers to 420,
+  125 refusals to 84 and the summed score from 6 288 to 6 590 in the fixed category (D-0229). It is
+  not measured with proof yet. On the benchmarks of D-0208, a node costs 49 % fewer
   instructions on costas and 35 % fewer on multi-knapsack without proof (41 % and 34 % with proof),
   and between 6 % fewer and 0.4 % more on the three others.
 - The scores rose from 2 789 to 4 043 (with proof), from 3 581 to 5 799 (`-f`) and from 3 237 to 4 428
   (without proof). The bits encoding and earlier reductions of the proof size changed together
   between the two series, so their shares cannot be separated. Removing the proof cap explains at
   most one of the verified answers.
+- The editions 2011 to 2014 had a limit of 900 s and baguette ran them with 1 200 s, so their ranks and
+  scores favour baguette. Five instances were completed after 900 s, counting the default and the
+  `-f` arms with proof. The incumbents found after 900 s cannot be separated. A fair
+  comparison on these four editions needs a run at 900 s.
 - The solver has 16 GiB of address space, and it refuses an instance when its own heap reaches 8 GiB.
   With 64 GiB and a heap of 32 GiB, the same binary refuses 60 instances instead of 164 with proof,
   but verifies 304 optimal or UNSAT answers instead of 302 (D-0210,
   in `bench/series/HISTORY.md`).
 - Free search is stronger in aggregate but not on every model. It wins on 670 instances and loses
   on 327 (578 ties). The default is the fixed search, and whether it stays so is an open question
-  (M19-config-T1). The ranks above place `-f` among the fixed-search entrants. Among the
-  free-search entrants, which are two to three times as many, the series before this one ranked it
-  much lower (D-0185).
+  (M19-config-T1). The `-f` row above is there to compare the arms against the same opponents. It
+  is not a legal entry, because the fixed category requires the model's annotation to be followed.
+  The ranks of `-f` in its own category are below.
 - A node is still expensive. Before D-0208, a proved node cost from 66 to 592 times the instructions
   of a Gecode node on four problems where the two trees agree to within 2 % (D-0207).
+- The scoring script reproduces the organisers' pairwise scores exactly for 2013 to 2026, but not for
+  2012 (816 of 81 200 differ) and 2011 (137 of 60 000), so the ranks and the part of the summed
+  scores from these two editions are approximate, in every series.
+
+Rank of `-f` with proof in the free-search category, against that year's official free-search
+entrants, from the same runs (`rank_B_<year>.txt` of the series). The entrants include baguette.
+
+| Edition | 2026 | 2025 | 2024 | 2023 | 2022 | 2021 | 2020 | 2019 | 2018 | 2017 | 2016 | 2015 | 2014 | 2013 | 2012 | 2011 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| entrants | 27 | 21 | 22 | 18 | 19 | 17 | 17 | 14 | 15 | 22 | 23 | 19 | 17 | 18 | 17 | 14 |
+| `-f`, with proof | 18 | 16 | 9 | 7 | 15 | 13 | 8 | 6 | 8 | 15 | 15 | 15 | 9 | 8 | 4 | 6 |
+| the series before (D-0185) | 23 | 19 | 22 | 12 | 18 | 16 | 14 | 11 | 13 | 22 | 19 | 18 | 15 | 14 | 12 | 8 |
 
 `bench/series/HISTORY.md` has one row per series.
 
