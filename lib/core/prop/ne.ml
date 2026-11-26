@@ -352,6 +352,55 @@ let removal_conclusion tm w d =
     Some (Reason.at_most ~name:tm.name ~decl:tm.decl_hi !v))
   else None
 
+(* ---------------------------------------------------------------------------
+   The reason of a CONFLICT (M18-coverage-ne, D-0238)
+   ---------------------------------------------------------------------------
+
+   Until D-0238 an all-fixed violation was reported with [Reason.none]. Sound -- the
+   nogood is globally valid, search.ml's D-0040 arm writes it and the decision nogood
+   closes the branch -- but [Learn.at_conflict] then had an EMPTY cut and learned nothing:
+   on gcc-benchmark l42_3, 9 019 of 9 714 conflicts at 20 000 nodes (D-0234 section 4).
+
+   THE RULE: under a decision, the conflict's reason is every term's [Reason.fixed_at] at
+   its fixed value -- the two bound facts [x >= v] and [x <= v], whose negations are
+   [Encoding.ne_clause_lits]'s two halves -- each fact once (a variable may appear in two
+   terms). [Trace.conflict_line] then writes `rup ~facts >= 1`, which is LITERALLY the
+   nogood [explain] states for the same pairs, so:
+
+     - over the ORDER encoding it is reverse unit propagation against the A/B pair, for
+       the reason the header's property 2 gives, and needs nothing on the page ahead of it;
+     - over a BITS scope [t.rows] is set, the justification is the [Resolve] `pol`, and
+       the trace's bits arm writes that `pol` and pins it by `ia` to the same clause.
+
+   The reason and the justification name the same variables (the clause's, or the
+   Resolve's linear terms), so D-0026's agreement check holds by construction. A fact at a
+   declared bound has no literal ([Reason.lit_of_fact] answers [None]) and drops, exactly
+   as the clause's constant half does.
+
+   AT THE ROOT NOTHING CHANGES: the conflict stays factless there, as gcc's does (D-0234),
+   because a root conflict is closed by search.ml's root arm over the derivation and has
+   nothing to learn. The forwarding arm in [propagate]'s one-unfixed case is unreachable
+   (see there) and still forwards [Store.apply]'s factless conflict.
+
+   [distinct] is gcc.ml's and alldiff.ml's [distinct_facts] once more; a shared one belongs
+   in reason.ml, which this row does not own. *)
+let distinct facts =
+  let seen = Hashtbl.create 8 in
+  List.filter
+    (fun f ->
+      if Hashtbl.mem seen f then false
+      else (
+        Hashtbl.replace seen f ();
+        true))
+    facts
+
+let conflict_reason pairs =
+  distinct
+    (List.concat_map
+       (fun (tm, v) ->
+         Reason.fixed_at ~name:tm.name ~decl_lo:tm.decl_lo ~decl_hi:tm.decl_hi v)
+       pairs)
+
 (* ------------------------------------------------------------------- propagation *)
 
 (* Whether [tm]'s variable is fixed: [Domain.value]'s [Some] test without the [Some]
@@ -393,15 +442,16 @@ let propagate t store =
       (* I-P3, checking: with everything fixed, fail iff the constraint is violated. *)
       if sum_of store t.terms <> t.rhs then Propagator.Fixpoint
       else
-        (* [Reason.none], deliberately and now visibly: an all-fixed violation records no
-           bound facts, so [Trace.conflict_line] writes no line for it. The clause IS the
-           explanation here (every variable is fixed, so the nogood is the whole story),
-           and a reason line restating it would be a second copy of the same claim. Before
-           M2-T8 this was the default argument and said nothing. *)
+        (* M18-coverage-ne (D-0238): under a decision the conflict carries the fixing
+           facts, so 1UIP learning has a cut to walk; at the root it stays factless and
+           every root refutation is byte for byte what it was. See [conflict_reason]. *)
+        let pairs = all_pairs store t.terms in
+        let reason =
+          if Store.level store > 0 then conflict_reason pairs else Reason.none
+        in
         Propagator.Conflict
           (Store.conflict store
-             (Reason.because ~concludes:None Reason.none
-                (explain ?rows:t.rows (all_pairs store t.terms))))
+             (Reason.because ~concludes:None reason (explain ?rows:t.rows pairs)))
   | [ idx ] -> (
       let tm = List.nth t.terms idx in
       let others = others_except t.terms idx in
