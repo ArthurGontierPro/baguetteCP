@@ -31278,6 +31278,13 @@ as a loop.
 - F2 with a placeholder variable in place of the option: 0.3 % worse on handball12 with the proof.
   The option form keeps the `Some` the table returned, so a miss allocates nothing more.
 
+**Cycles and time: much less than the instructions.** elitserien handball12 to its optimum
+without the proof (29 762 nodes, both binaries, same answer): instructions -7.3 % (514.4 G -> 476.6 G),
+`cycles:u` -1.8 % (250.1 G -> 245.7 G), CPU time 110.6 s for both (run side by side at load 25). At
+the 3 000-node budget, three runs each: cycles -5 % (25.06 G -> 23.82 G on average). What went is
+instructions that were cheap in cycles (a hash over a string already in cache, a closure call),
+so the per-node instruction figure overstates the time gained here.
+
 ### 4. What is left (branch binary, inclusive shares)
 
 - `Store.var_named` is still 5.3 % of handball12 and 4.3 % of qr2 without the proof (shares
