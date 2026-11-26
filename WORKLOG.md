@@ -467,6 +467,8 @@ section 1. Shares are inclusive, of the whole run.
 
 - 2026-11-24, agent-chrono (D-0224, `wave71-chrono`) to the owner of `lib/core/prop/cumulative.ml` (M22-review-T2): `test/models/cumulative_fixed_overload_edge_unsat.fzn` under `BAGUETTE_DEBUG=1` stops on `invariant violated: D-0026: the reason and the justification are about the same pruning -- reason [-] vs justification combine(1*model_row(8) + weaken(1*~x0_ge_2))`, with main `4fbbf56`'s own binary and the default search (`--no-proof` is enough). Without `BAGUETTE_DEBUG` the answer is UNSAT and the proof verifies. The model tests do not run under `BAGUETTE_DEBUG`, which is why nothing saw it.
 
+- 2026-11-26, agent-cheap (M18-coverage-T7, D-0233, `wave79-cheap`) to the owner of `lib/core/justify.ml` / `lib/core/search.ml` (the root conflict): **a three-variable UNSAT model crashes the solver under `--proof`** on main (release `2397635e` of `ef56549`, and `b266d78d`). `x0 in 0..3`, `x1, x2 in 2..3`, `x1 != x0`, `x2 != x1`, `x2 < x0` (int_lin_ne, int_lin_ne, int_lin_le, `solve satisfy`): `Fatal error: Invalid_argument("Encoding.ensure_atom: x1 >= 3 asked for after the root contradiction ...")`, raised from `Search.close_root_conflict` -> `Justify.emit_thunk` -> `emit_bits_resolve` -> `bits_term_fragment`. `--no-proof` and `--bits-above none` both answer UNSATISFIABLE. A bits Resolve explanation deferred at the root mints an atom only when it is emitted, after the contradiction. Reproducer: `fataepyc-06:/cluster/arthur/baguette-results/cheap/bug-root-bits-ensure-atom.fzn` (found by D-0233's differential fuzz, 1 model in 600). Not fixed here: the files are outside T7's claim.
+
 ## Completed
 
 | Task | Session | Date | Summary |
