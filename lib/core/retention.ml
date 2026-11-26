@@ -83,8 +83,8 @@
 
    Learned constraints propagate (M2-L12 for the clause, M2-L13 for the PB row), so a
    learned constraint's use is a real measure. [tiered] (D-0139) ranks its middle tier by
-   it ([e_used]), and [fifo] below is the plain age policy. The default stays [keep_all]
-   (D-0051, D-0139 section 6, D-0202, D-0221). D-0221 measured [tiered] on the tuning set
+   it ([e_used]), and [fifo] below is the plain age policy. The default was [keep_all]
+   (D-0051, D-0139 section 6, D-0202, D-0221) until D-0226 made it [tiered]. D-0221 measured [tiered] on the tuning set
    and on 42 former heap refusals: one verified answer more of 200, but 6 refusals of 42
    against 2, because an evicted constraint kept its bytes ([gate] kept the instance's
    closures and the engine kept the instance). D-0226 made an eviction take the instance
@@ -602,8 +602,16 @@ let tiered ?(params = default_tier_params) () =
    checker, which is where the eviction path is exercised.
 
    D-0139 re-measured the question on the codes set and a Challenge subset, with
-   [tiered]; its recommendation is in docs/DECISIONS.md and the decision is M10-T5's. *)
-let default = keep_all
+   [tiered]; its recommendation is in docs/DECISIONS.md and the decision is M10-T5's.
+
+   **D-0226 ([AUTONOME]) made [tiered] the default**, with D-0139's parameters. Once an
+   eviction took the instance out of the engine (D-0226 fix 1), the review's rule held on
+   both of D-0221's sets: verified answers 20 to 25 on the tuning set and 1 to 1 on the 42
+   heap cases, heap-budget refusals 3 to 2 and 1 to 1, the peak RSS of a run that times out
+   0.67 and 0.59 times [keep_all]'s. `BAGUETTE_RETENTION=off` (or [keep_all]) is the default
+   before it, exactly. The paragraphs above that say "the default is [keep_all]" are the
+   history of the measurements, kept as they were. *)
+let default = tiered ()
 
 (* Every policy, at one cap. For a test that wants to run the axis rather than a point
    on it. *)

@@ -394,12 +394,15 @@ let usage () =
   prerr_endline "                    rather than a silent `none`.";
   prerr_endline "";
   prerr_endline
-    "  BAGUETTE_RETENTION=off|fifo:N|lbd:N|tiered[:K=N,...]  the learned-constraint";
+    "  BAGUETTE_RETENTION=off|keep_all|fifo:N|lbd:N|tiered[:K=N,...]  the \
+     learned-constraint";
   prerr_endline
     "                    retention policy; tiered (D-0139) takes keys core, mid,";
   prerr_endline "                    first, inc and mid_every, e.g. tiered:first=500";
   prerr_endline
-    "                    (M2-L4). Default `off`: measured, see lib/core/retention.ml.";
+    "                    (M2-L4). Default `tiered` since D-0226; `off` (or `keep_all`)";
+  prerr_endline
+    "                    keeps every learned constraint, the default before it.";
   prerr_endline
     "  BAGUETTE_PB_ANALYSIS=on|off  off is the clause path only: no PB conflict analysis";
   prerr_endline
@@ -1014,8 +1017,8 @@ let retention_policy () =
   let bad v =
     prerr_endline
       (Printf.sprintf
-         "baguette: BAGUETTE_RETENTION=%S is not a policy. Use off, fifo:N or lbd:N, \
-          where N is the database cap, or \
+         "baguette: BAGUETTE_RETENTION=%S is not a policy. Use off (or keep_all), fifo:N \
+          or lbd:N, where N is the database cap, or \
           tiered[:core=2,mid=6,first=2000,inc=300,mid_every=10000] (D-0139)."
          v);
     exit 2
@@ -1052,7 +1055,7 @@ let retention_policy () =
   in
   match Sys.getenv_opt "BAGUETTE_RETENTION" with
   | None -> Retention.default
-  | Some "off" -> Retention.keep_all
+  | Some ("off" | "keep_all") -> Retention.keep_all
   | Some "tiered" -> tiered "tiered" ""
   | Some v when String.length v > 7 && String.sub v 0 7 = "tiered:" ->
       tiered v (String.sub v 7 (String.length v - 7))
