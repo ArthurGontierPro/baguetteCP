@@ -19,7 +19,7 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M21-memory-T3 fix 1 (an evicted learned constraint leaves the engine), learned-row layout, learned PB row size guard, M19-config-T5 re-measure; D-0226 | `lib/core/engine.ml`, `lib/core/retention.ml`, `lib/core/learned.ml`, `lib/core/prop/pb.ml`, `lib/core/prop/clause.ml`, `lib/core/pb_analysis.ml`, `lib/core/propagator.ml` (one field: the engine hands an instance its removal), their tests, ROADMAP rows M21-memory-T3 and M19-config-T5 | agent-evict (fataepyc-06, `wave73-evict`) | 2026-11-24 |
+| M21-memory-T3 fix 1 (an evicted learned constraint leaves the engine), learned-row layout, learned PB row size guard, M19-config-T5 re-measure; D-0226 | `lib/core/engine.ml`, `lib/core/retention.ml`, `lib/core/learned.ml`, `lib/core/prop/pb.ml`, `lib/core/prop/clause.ml`, `lib/core/pb_analysis.ml`, `lib/core/propagator.ml` (one field: the engine hands an instance its removal), `bin/main.ml` (the `keep_all` alias of BAGUETTE_RETENTION, one line and the usage text), their tests, ROADMAP rows M21-memory-T3 and M19-config-T5 | agent-evict (fataepyc-06, `wave73-evict`) | 2026-11-24 |
 
 ## Cross-session requests
 
