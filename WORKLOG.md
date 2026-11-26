@@ -748,7 +748,7 @@ The series on `f244c35a` is done and the README section is regenerated from it (
 
 Updated as things land. The plan is the nine steps agreed on 2026-11-23 (speed first, then the CDCL loop, coverage, the refused third, configuration last).
 
-**2026-11-26, merged after the usage limit** (gate 104 pending for the last two; gate 103 green on D-0225, binary `8934e442`, 228 test models byte-identical, the lanes differing by 226 `.pbp` hashes only, re-recorded in its own commit):
+**2026-11-26, merged after the usage limit** (gate 104 GREEN on `6c9cf97` for the last two, binary `9bfe10d3`: make check, 228 test models byte-identical against gate 103's binary, lane 347 of 347, debug lane 333 of 333, scaling; gate 103 green on D-0225, binary `8934e442`, 228 test models byte-identical, the lanes differing by 226 `.pbp` hashes only, re-recorded in its own commit):
 
 - **D-0225** (wave73-interrupt, decided with the user): an interrupted run ends its proof with `BOUNDS`.
 - **D-0223** [AUTONOME] (wave70-release, merge `99c451a`): one shared block per cited model row. tdtsp_10_53 at 250 nodes 16.6 -> 6.6 GB peak RSS, proofs byte-identical, -1.8 % to +1.7 % instructions per node. NOT landed and FOR THE USER: truly releasing Element's explanations (live heap -97 % on tdtsp) changes the proof (111 fewer `pol` lines in 100 nodes) and costs +16 to +37 % time; the patch is `/cluster/arthur/baguette-results/release/handed.patch`.
