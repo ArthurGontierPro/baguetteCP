@@ -1,0 +1,42 @@
+% M18-coverage-T5 (D-0239): flattened by MiniZinc 2.10.1 with baguette's mznlib from
+% mznlib/test/lex_src_less_unsat.mzn.
+% x <lex y and y <=lex x over 0..2 cannot both hold: refuted by search over the flags.
+
+
+array [1..3] of int: X_INTRODUCED_28_ = [-1,1,2];
+array [1..2] of int: X_INTRODUCED_30_ = [-1,1];
+array [1..4] of int: X_INTRODUCED_31_ = [3,-1,1,-3];
+array [1..3] of int: X_INTRODUCED_33_ = [-1,1,-3];
+array [1..3] of int: X_INTRODUCED_36_ = [-1,1,-2];
+array [1..4] of int: X_INTRODUCED_38_ = [-3,-1,1,3];
+array [1..3] of int: X_INTRODUCED_41_ = [3,-1,1];
+array [1..3] of int: X_INTRODUCED_55_ = [-3,-1,1];
+var 0..2: X_INTRODUCED_16_;
+var 0..2: X_INTRODUCED_17_;
+var 0..2: X_INTRODUCED_18_;
+var 0..2: X_INTRODUCED_19_;
+var 0..2: X_INTRODUCED_20_;
+var 0..2: X_INTRODUCED_21_;
+var 0..1: X_INTRODUCED_24_ ::var_is_introduced ;
+var 0..1: X_INTRODUCED_25_ ::var_is_introduced ;
+var 0..1: X_INTRODUCED_44_ ::var_is_introduced ;
+var 0..1: X_INTRODUCED_45_ ::var_is_introduced ;
+array [1..3] of var int: x:: output_array([1..3]) = [X_INTRODUCED_16_,X_INTRODUCED_17_,X_INTRODUCED_18_];
+array [1..3] of var int: y:: output_array([1..3]) = [X_INTRODUCED_19_,X_INTRODUCED_20_,X_INTRODUCED_21_];
+constraint int_lin_le(X_INTRODUCED_30_,[X_INTRODUCED_19_,X_INTRODUCED_16_],0);
+constraint int_lin_le(X_INTRODUCED_33_,[X_INTRODUCED_19_,X_INTRODUCED_16_,X_INTRODUCED_24_],-1);
+constraint int_lin_le(X_INTRODUCED_28_,[X_INTRODUCED_20_,X_INTRODUCED_17_,X_INTRODUCED_24_],2);
+constraint int_lin_le(X_INTRODUCED_31_,[X_INTRODUCED_24_,X_INTRODUCED_20_,X_INTRODUCED_17_,X_INTRODUCED_25_],2);
+constraint int_lin_le(X_INTRODUCED_36_,[X_INTRODUCED_17_,X_INTRODUCED_20_,X_INTRODUCED_24_],0);
+constraint int_lin_le(X_INTRODUCED_38_,[X_INTRODUCED_24_,X_INTRODUCED_17_,X_INTRODUCED_20_,X_INTRODUCED_25_],2);
+constraint int_lin_le(X_INTRODUCED_41_,[X_INTRODUCED_25_,X_INTRODUCED_21_,X_INTRODUCED_18_],2);
+constraint int_lin_le(X_INTRODUCED_36_,[X_INTRODUCED_18_,X_INTRODUCED_21_,X_INTRODUCED_25_],0);
+constraint int_lin_le(X_INTRODUCED_30_,[X_INTRODUCED_16_,X_INTRODUCED_19_],0);
+constraint int_lin_le(X_INTRODUCED_33_,[X_INTRODUCED_16_,X_INTRODUCED_19_,X_INTRODUCED_44_],-1);
+constraint int_lin_le(X_INTRODUCED_28_,[X_INTRODUCED_17_,X_INTRODUCED_20_,X_INTRODUCED_44_],2);
+constraint int_lin_le(X_INTRODUCED_31_,[X_INTRODUCED_44_,X_INTRODUCED_17_,X_INTRODUCED_20_,X_INTRODUCED_45_],2);
+constraint int_lin_le(X_INTRODUCED_36_,[X_INTRODUCED_20_,X_INTRODUCED_17_,X_INTRODUCED_44_],0);
+constraint int_lin_le(X_INTRODUCED_38_,[X_INTRODUCED_44_,X_INTRODUCED_20_,X_INTRODUCED_17_,X_INTRODUCED_45_],2);
+constraint int_lin_le(X_INTRODUCED_28_,[X_INTRODUCED_18_,X_INTRODUCED_21_,X_INTRODUCED_45_],2);
+constraint int_lin_le(X_INTRODUCED_55_,[X_INTRODUCED_45_,X_INTRODUCED_21_,X_INTRODUCED_18_],-1);
+solve  satisfy;
