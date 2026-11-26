@@ -502,6 +502,37 @@ let same_clause a b =
    in is exactly the old one. *)
 let add_fact_rev racc l = if List.exists (Lit.equal l) racc then racc else l :: racc
 
+(* D-0216: [add_fact_rev] over a whole settle, the same list, with the membership test
+   moved to a table once the accumulator holds more than [dedup_list_max] facts. The walk
+   was quadratic in a tail's facts: on 2011_black-hole_14 under native `table`, a settle
+   over many holes brings each remover's facts, and [List.exists] was 19 % of a proved
+   node. Below the bound the list walk is kept, which is cheaper than hashing a short
+   tail. [Lit.equal] is structural equality, which is what the table compares. *)
+let dedup_list_max = 32
+
+type dedup = {
+  mutable racc : Lit.t list;
+  mutable n : int;
+  mutable seen : (Lit.t, unit) Hashtbl.t option;
+}
+
+let dedup_of racc = { racc; n = List.length racc; seen = None }
+
+let dedup_add d l =
+  match d.seen with
+  | Some h ->
+      if not (Hashtbl.mem h l) then (
+        Hashtbl.replace h l ();
+        d.racc <- l :: d.racc)
+  | None ->
+      if not (List.exists (Lit.equal l) d.racc) then (
+        d.racc <- l :: d.racc;
+        d.n <- d.n + 1;
+        if d.n > dedup_list_max then (
+          let h = Hashtbl.create (4 * dedup_list_max) in
+          List.iter (fun x -> Hashtbl.replace h x ()) d.racc;
+          d.seen <- Some h))
+
 (* The old walk, kept one wave as [position_of]'s [BAGUETTE_DEBUG] cross-check and as
    test_trace's oracle (M6-T15, D-0090). Remove it with the check. *)
 let position_of_scan t (e : Store.entry) =
@@ -556,25 +587,20 @@ let settle_facts t store ~before ~var holes base =
   | [] -> (base, [])
   | _ ->
       (* Both accumulators reversed, reversed once at the end (M6-T15): same order out. *)
-      let racc, rcited =
+      let d = dedup_of (List.rev base) in
+      let rcited =
         List.fold_left
-          (fun (racc, rcited) v ->
+          (fun rcited v ->
             match Store.remover store ~before ~var v with
-            | None -> (racc, rcited)
-            | Some e ->
-                let racc =
-                  List.fold_left add_fact_rev racc (Reason.lits e.Store.reason)
-                in
-                let rcited =
-                  match hole_line_of t e v with
-                  | None -> rcited
-                  | Some w -> (v, w) :: rcited
-                in
-                (racc, rcited))
-          (List.rev base, [])
-          holes
+            | None -> rcited
+            | Some e -> (
+                List.iter (dedup_add d) (Reason.lits e.Store.reason);
+                match hole_line_of t e v with
+                | None -> rcited
+                | Some w -> (v, w) :: rcited))
+          [] holes
       in
-      (List.rev racc, List.rev rcited)
+      (List.rev d.racc, List.rev rcited)
 
 (* Record one I-S4 edge and, under BAGUETTE_DEBUG, fail at the citation rather than at
    the checker. [Debug.check] is the live gate; [i_s4_violations] is the same verdict as

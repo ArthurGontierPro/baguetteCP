@@ -90,6 +90,18 @@ let implemented =
        fzn_member_bool.mzn -- one relation, the second spelling over var bool. *)
     "baguette_member";
     "baguette_member_bool";
+    (* M18-coverage-T1 (D-0206): table, through mznlib/fzn_table_int.mzn and
+       fzn_table_bool.mzn -- one relation, the second spelling over var bool. *)
+    "baguette_table";
+    "baguette_table_bool";
+    (* M18-coverage-T3 (D-0217): circuit, through mznlib/fzn_circuit.mzn. *)
+    "baguette_circuit";
+    (* M18-coverage-T4 (D-0220): bin_packing_load, bin_packing_capa and bin_packing,
+       through mznlib/fzn_bin_packing_load.mzn, fzn_bin_packing_capa.mzn and
+       fzn_bin_packing.mzn: one linear row per bin over the indicators `bin[i] = b`,
+       which are std's own int_eq_reif Booleans, read as 0..1 without a bool2int copy. *)
+    "baguette_bool_lin_eq";
+    "baguette_bool_lin_le";
   ]
 
 (* The rest of the SPEC 2.1 table, with the milestone that will bring it in. Listing
@@ -1104,6 +1116,30 @@ let build_constraint env (c : Ast.constraint_item) =
     | "int_lin_le" -> lin (fun ts r -> Model.Int_lin_le (ts, r))
     | "int_lin_eq" -> lin (fun ts r -> Model.Int_lin_eq (ts, r))
     | "int_lin_ne" -> lin (fun ts r -> Model.Int_lin_ne (ts, r))
+    (* M18-coverage-T4 (D-0220). `baguette_bool_lin_le(as, bs, c)` is `int_lin_le` and
+       `baguette_bool_lin_eq(as, bs, y)` is `sum as * bs = y` as an `int_lin_eq`, the
+       Booleans read as the integers 0 and 1 (D-0007), so no bool2int copy and no row of
+       their own: they ARE linear rows, with every check a linear row has. *)
+    | "baguette_bool_lin_le" -> lin (fun ts r -> Model.Int_lin_le (ts, r))
+    | "baguette_bool_lin_eq" -> (
+        arity 3;
+        match c.Ast.c_args with
+        | [ ca; va; ya ] ->
+            let terms, rhs = lin_terms ca va (Ast.Int 0) in
+            let terms, rhs =
+              match operand env pos ya with
+              | Model.Var y -> (terms @ [ (-1, y) ], rhs)
+              | Model.Const k -> (
+                  match Baguette_core.Checked.add rhs k with
+                  | v -> (terms, v)
+                  | exception Baguette_core.Checked.Overflow why ->
+                      Error.failf pos
+                        "builtin `%s`: moving the constant %d to the right-hand side \
+                         overflows (%s)"
+                        id k why)
+            in
+            Model.Int_lin_eq (terms, rhs)
+        | _ -> Error.failf pos "builtin `%s`: internal arity mismatch" id)
     | "int_le" -> cmp (fun a b -> Model.Int_le (a, b))
     | "int_lt" -> cmp (fun a b -> Model.Int_lt (a, b))
     | "int_eq" -> cmp (fun a b -> Model.Int_eq (a, b))
@@ -1197,6 +1233,39 @@ let build_constraint env (c : Ast.constraint_item) =
                 Model.mem_x = operands env pos xa;
                 mem_y = operand env pos ya;
                 mem_b = operands env pos ba;
+              }
+        | _ -> Error.failf pos "builtin `%s`: internal arity mismatch" id)
+    (* M18-coverage-T3 (D-0217). `baguette_circuit(xs, pos, root)`: the root is a
+       CONSTANT, refused here with a position otherwise; lib/flatzinc/compile.ml's
+       [post_circuit] checks the shape (n successors, n - 1 positions). *)
+    | "baguette_circuit" -> (
+        arity 3;
+        match c.Ast.c_args with
+        | [ xa; pa; ra ] ->
+            Model.Circuit
+              {
+                Model.cir_x = operands env pos xa;
+                cir_pos = operands env pos pa;
+                cir_root = as_const pos ~builtin:id ~what:"the root" (operand env pos ra);
+              }
+        | _ -> Error.failf pos "builtin `%s`: internal arity mismatch" id)
+    (* M18-coverage-T1 (D-0206). `baguette_table(x, t, s)` and `baguette_table_bool(x, t,
+       s)`: the tuples [t] are CONSTANTS (a Boolean tuple is written 0/1 by the library),
+       refused here with a position otherwise; x and the selectors are operands.
+       lib/flatzinc/compile.ml's [post_table] checks the shape. *)
+    | "baguette_table" | "baguette_table_bool" -> (
+        arity 3;
+        match c.Ast.c_args with
+        | [ xa; ta; sa ] ->
+            Model.Table
+              {
+                Model.tab_x = operands env pos xa;
+                tab_t =
+                  Array.of_list
+                    (List.map
+                       (fun op -> as_const pos ~builtin:id ~what:"every tuple value" op)
+                       (operands env pos ta));
+                tab_s = operands env pos sa;
               }
         | _ -> Error.failf pos "builtin `%s`: internal arity mismatch" id)
     (* M4-T10 (D-0096). `baguette_cumulative(s, d, r, cap)`: the durations, resources

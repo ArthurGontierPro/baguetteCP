@@ -26,7 +26,7 @@ search maxdepth/levels 25 levels
 work exhausted/bool 0 bool 1 if
 search skipped/nodes 0 nodes
 search learned/cls 1598 cls
-work later/asks 140492 asks
+work later/asks 327766 asks
 work cites/memos 31520 memos
 search convertible/cls 0 cls
 search retention fifo(cap=500) fifo(cap=500): 1598 added, 1098 evicted, 500 swept, 0 live, 186 duplicate, 1598 cited, 882 pinned

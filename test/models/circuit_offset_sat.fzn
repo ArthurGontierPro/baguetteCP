@@ -1,0 +1,22 @@
+% M18-coverage-T3 (D-0217): flattened by MiniZinc 2.10.1 with baguette's mznlib from
+% mznlib/test/circuit_src_offset_sat.mzn.
+% The index set 3..7 (the root is node 3) and one successor fixed by the model.
+
+
+predicate all_different_int(array [int] of var int: x);
+predicate baguette_circuit(array [int] of var int: xs,array [int] of var int: pos,int: root);
+array [1..2] of int: X_INTRODUCED_28_ = [-1,1];
+var 4..7: X_INTRODUCED_17_;
+var {3,4,6,7}: X_INTRODUCED_19_;
+var {3,4,5,7}: X_INTRODUCED_20_;
+var 3..6: X_INTRODUCED_21_;
+var 1..4: X_INTRODUCED_24_ ::var_is_introduced ;
+var 1..4: X_INTRODUCED_25_ ::var_is_introduced ;
+var 1..4: X_INTRODUCED_26_ ::var_is_introduced ;
+var 1..4: X_INTRODUCED_27_ ::var_is_introduced ;
+array [1..5] of var int: X_INTRODUCED_16_:: output_array([1..5]) = [X_INTRODUCED_17_,6,X_INTRODUCED_19_,X_INTRODUCED_20_,X_INTRODUCED_21_];
+array [1..5] of var int: X_INTRODUCED_23_ ::var_is_introduced  = [X_INTRODUCED_17_,6,X_INTRODUCED_19_,X_INTRODUCED_20_,X_INTRODUCED_21_];
+constraint all_different_int(X_INTRODUCED_23_);
+constraint baguette_circuit([X_INTRODUCED_17_,6,X_INTRODUCED_19_,X_INTRODUCED_20_,X_INTRODUCED_21_],[X_INTRODUCED_24_,X_INTRODUCED_25_,X_INTRODUCED_26_,X_INTRODUCED_27_],3);
+constraint int_lin_le(X_INTRODUCED_28_,[X_INTRODUCED_17_,X_INTRODUCED_19_],-1);
+solve  satisfy;

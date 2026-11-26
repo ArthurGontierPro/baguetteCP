@@ -19,6 +19,20 @@ Assertions guarded by `BAGUETTE_DEBUG=1` should check as many of these as is aff
 
 - **I-T1** `backtrack_to l` restores every domain to exactly its state when level `l` was
   opened. Testable directly: snapshot, descend, backtrack, compare.
+
+  **Since D-0222 ([AUTONOME], M21-memory-T3) a domain's holes are a VERSION of a log its
+  successors share**, so the second half is now part of the invariant: a `Domain.t` read
+  back answers exactly the set it had when it was made for as long as no trail entry older
+  than it has been undone, and once one has, reading it raises `Domain.Stale_version`
+  instead of answering. Before D-0222 the same sentence was "a `Domain.t` never shares
+  mutable state with its successors", bought by copying the bitset per removal (98 % of
+  wordpress's heap at its refusal, D-0218). Every reader of a past domain reads below a live
+  cut by its own rule (a trail entry while it is on the trail, a history while
+  `check_history` accepts it, a pass's snapshot within the pass, an `Element` frame through
+  its history), so the refusal is never hit by a correct reader. `test_core.ml`'s
+  `test_d0222_hole_log_random` drives a store beside the copying representation and checks
+  every live domain, every live entry's `old`/`now`, every earlier photograph and every
+  stale one (exact or refused, never wrong), and that a store never forks a log.
 - **I-T2** Trail entries are strictly ordered by level; the level marks are monotone.
 - **I-T3** Every trail entry has an explanation index that resolves. No orphan reasons.
 
@@ -128,6 +142,14 @@ Assertions guarded by `BAGUETTE_DEBUG=1` should check as many of these as is aff
   signature move `explain_cross_conflict ~opposite` makes. Three tests in `test_prop.ml`
   (`test_d0124_*`) catch a reason citing a later bound, a reason read after its history
   is gone, and a wrong emptiness flag. D-0124 says why the memory made this worth it.
+
+  **Element is the second producer, since M20-pernode-T2 (D-0214), and for time, not
+  memory.** A pruning records a FRAME -- the domains it read (versions that read as they were while the history is live, I-T1 since D-0222),
+  and the history -- and builds both halves from it when asked. The readers a frame
+  needs beyond D-0124's (`remover` before the cut, the level of a position below it, an
+  entry's arena explanation) take the history and no store. `test_d0214_*` checks that
+  the reason and the derivation read later are the ones read at once, after the bounds
+  moved, and that the reason refuses once unwound.
 
 - **I-X7** What `conclusion UNSAT` cites is a line the checker has itself established is a
   contradiction. Since D-0131 (M8-bits-encoding-T5) that line is always an explicitly

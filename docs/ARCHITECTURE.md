@@ -7,7 +7,7 @@ freely — but changes to §4 (explanations) need a decision record.
 
 ## 1. Module map
 
-*Verified against the tree on 2026-09-18, and re-verified the same day after M2-L11.* **That first verification missed six modules** -- the whole M2L learning vertical (`learned`, `learn`, `analysis`, `reduce`, `pb_analysis`) plus `ladder` -- which is worth knowing about a map that says it was checked: it was checked against the propagators and not against `lib/core`'s root. They are listed below now. This section was stale for long enough that
+*Verified against the tree on 2026-09-18, re-verified the same day after M2-L11, and again on 2026-11-24 (M22-review-T4).* **That first verification missed six modules** -- the whole M2L learning vertical (`learned`, `learn`, `analysis`, `reduce`, `pb_analysis`) plus `ladder` -- which is worth knowing about a map that says it was checked: it was checked against the propagators and not against `lib/core`'s root. They are listed below now. This section was stale for long enough that
 `CLAUDE.md` carried its own replacement map and told readers to trust that one over this —
 it listed three propagators that have never existed (`alldiff`, `element`, `clause`) and
 omitted eleven modules that do, including `reason.ml`, which half of `lib/core` now depends
@@ -28,7 +28,8 @@ lib/flatzinc/   Baguette_flatzinc
 
 lib/core/       Baguette_core
   var.ml                    variable identity (abstract int)
-  domain.ml                 bounds pair + lazily allocated hole set (section 2)
+  domain.ml                 bounds pair + lazily allocated hole set, a VERSION of a
+                            per-variable hole log since D-0222 (section 2)
   store.ml                  backtrackable store: domains + undo trail (section 3)
   reason.ml                 WHICH FACTS justify a pruning, as declarative data, and
                             [justified] -- the one value a mutator takes. D-0026's
@@ -62,16 +63,18 @@ lib/core/       Baguette_core
   retention.ml              the learned-constraint DATABASE, and the SINGLE owner of a
                             learned constraint's lifetime. Policies are swappable
                             (`keep_all`, `fifo`, `lbd`) and the default is `keep_all`
-                            BY MEASUREMENT, not by omission -- see D-0051 (M2-L4)
+                            BY MEASUREMENT, not by omission -- D-0051, D-0221 (M2-L4)
   view.ml                   VIEWS (+-x + k) and constants-as-variables, as a RENDERING
                             onto the base's order literals -- no PB variables of its
                             own, no name, so no sanitize table (M4-T0, D-0058)
-  propagator.ml             the PROPAGATOR module type (65 lines -- read it whole)
+  propagator.ml             the PROPAGATOR module type (218 lines -- read it whole)
   engine.ml                 propagate-to-fixpoint loop and the queue (section 5)
   search.ml                 DFS, branching, backtracking, every step proof-logged.
                             Restarts are OPT-IN (SPEC 3.4, D-0137): a restart is the
                             node outcome NRestart t, the backjump unwinding to level t
-                            and re-entering that node -- no new proof rule
+                            and re-entering that node -- no new proof rule.
+                            CDCL loop `Search.cdcl` beside `dfs`: BAGUETTE_CDCL=1, OFF
+                            by default (D-0219)
   restart.ml                WHEN to restart: the policies (Luby, geometric, Glucose's
                             LBD average with a Luby floor, the stable alternation) as
                             a pure state machine over conflicts (M10-T2, D-0137)
@@ -92,10 +95,10 @@ lib/core/       Baguette_core
                             MODEL: guarded linear rows over M3-reified Booleans, so every
                             pruning is Linear's and no Explanation constructor was needed
                             (M4-T4b, D-0060)
-    alldiff.ml              all_different_int, BOUNDS consistent, with the multi-row Hall
-                            justification. Stage 1 of two; M4-T2 sequences beside it.
-                            The row that proved Combine/Weaken/Model_row carry a real
-                            global (M4-T1, D-0061)
+    alldiff.ml              all_different_int, DOMAIN consistent, two stages: Hall
+                            intervals on the bounds with the multi-row Hall justification
+                            (M4-T1, D-0061), then a maximum matching that prunes values
+                            (M4-T2), skipped when it cannot prune (D-0215)
     element.ml              array_int_element, DOMAIN consistent; the index is a
                             VIEW rather than an auxiliary (M4-T3, D-0058)
     gcc.ml                  global_cardinality: all_different's generalisation, by
@@ -107,6 +110,13 @@ lib/core/       Baguette_core
                             views (M4-T9, D-0095). Over a bits variable, one big-M
                             SELECTOR row per operand + a clause, each pruning one
                             Resolve `pol` (M8-bits-encoding-T3, D-0134)
+    cumulative.ml           cumulative (and disjunctive as cap 1, r 1): time-table filtering
+                            over gcc's window indicators, one capacity row per time point,
+                            CHECKING; the first Needs_derivation family whose CONFLICTS carry
+                            facts, so they can be learned from (M4-T10, D-0096). Also diffn's
+                            two RELAXATIONS: mznlib/fzn_diffn.mzn keeps std's pairs and adds
+                            cumulative over order copies of x and of y (no module of its
+                            own; the capacity rows are model rows, M18-coverage-T2, D-0213)
     regular.ml              regular (DFA), DOMAIN consistent (Pesant's layered graph) over
                             the letters AND (n+1)*Q state flags the mznlib route introduces;
                             every pruning one rup against its rows plus the backward-chain
@@ -123,6 +133,15 @@ lib/core/       Baguette_core
                             line that walks a hole behind threshold lemmas written ahead, a
                             value of y two holes exclude behind a lemma per position and the
                             OR row (M7-T28, D-0159)
+    table.ml                table(x, T) through mznlib's baguette_table: DOMAIN consistent over
+                            x and one SELECTOR per tuple (store variables, as member's), one
+                            DEF row s_t -> x = t per tuple; every pruning one rup with its
+                            reasons on the letters (M18-coverage-T1, D-0206)
+    circuit.ml              circuit through mznlib's baguette_circuit, beside all_different:
+                            CHECKING plus Chuffed's PREVENT over MTZ POSITION store variables
+                            (succ_u = v -> pos_v = pos_u + 1 in the .opb, the definition); a
+                            subtour cut is ONE pol, the rows around the cycle divided by n,
+                            written ahead (M18-coverage-T3, D-0217)
     linear.ml               int_lin_le. THE REFERENCE PROPAGATOR -- copy this shape
     lin_eq.ml               int_lin_eq (two model rows, see D-0011)
     ne.ml                   int_lin_ne and int_ne (VALUE consistency)
@@ -143,6 +162,12 @@ lib/proof/      Baguette_proof
   opb.ml                    writes the .opb model file
   writer.ml                 writes the .pbp proof; owns the constraint-id counter
                             (I-X2: an id you receive is an id you must delete)
+  text.ml                   one line's bytes, for writer.ml and opb.ml: integers and
+                            literal names written in place, each variable's name prefix
+                            rendered once (M20-pernode-T5, D-0209)
+  e2e.ml                    the END-TO-END PREFIX under --e2e: derives each of baguette's
+                            rows from cake_pb_cp's verified .opb; nothing in it is
+                            trusted, every line is checked (M14-T3, D-0187)
   checker.ml                resolves which veripb to use; mirrors scripts/checker.sh
 ```
 
@@ -160,7 +185,11 @@ arithmetic must get the value already checked from its caller, or do its own.
 `Domain.t` is a bounds pair plus an optional hole set:
 
 - `lo`, `hi` as ints — the common case, and the only thing most propagators read
-- a bitset of removed values, allocated lazily, only when a hole is actually punched
+- a bitset of removed values, allocated lazily, only when a hole is actually punched.
+  Since D-0222 the bitset belongs to a per-variable LOG that also records the removals in
+  order, and a domain holds a VERSION of it (the first `k` removals): a removal appends
+  16 bytes instead of copying the bitset, and a past version reads through the log (O(1)
+  once a position table is built on the first deep read)
 
 Rationale: the overwhelming majority of propagation in a linear-heavy FlatZinc workload
 is bounds reasoning. Paying for a full bitset per variable up front is wasted memory and
@@ -176,8 +205,12 @@ literals became true.
 the variable and its previous `Domain.t`, and `backtrack_to level` replays them in
 reverse. Decision levels are marks into that array.
 
-Domains are immutable values, so a saved entry shares no mutable state with the domain
-that replaced it. That is what makes I-T1 hold without deep copying.
+Domains were immutable values until D-0222, so a saved entry shared no mutable state with
+the domain that replaced it, and I-T1 held by copying the hole bitset per removal. Since
+D-0222 a saved entry shares its variable's hole LOG with the domain that replaced it, and
+`undo_to` calls `Domain.undo`, which truncates the log back to the version the entry
+restores; a domain from an undone branch raises `Domain.Stale_version` when read (I-T1's
+second half).
 
 Each entry records the **explanation id** of the change, so conflict analysis can walk
 back through the reasons. Explanations live in a side arena (`Explanation.Arena`), not

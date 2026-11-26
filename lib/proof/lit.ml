@@ -2,7 +2,12 @@
 
    Naming here is normative: see docs/PROOF-FORMAT.md section 3. Proofs are read by
    humans debugging rejected steps, and grep-ability against the FlatZinc model is the
-   whole point of a stable scheme. Do not introduce a second one. *)
+   whole point of a stable scheme. Do not introduce a second one.
+
+   [to_string] is THE rendering. The proof writers do not call it on their hot path:
+   [Text.lit] writes the same bytes into a line in place, from a per-owner prefix it
+   caches (D-0209), and test/unit/test_proof.ml pins the two together. A change to a name
+   here is a change to both, and the test is what says so. *)
 
 type pbvar =
   | Ge of string * int (* x_ge_v : x >= v, the order encoding *)
