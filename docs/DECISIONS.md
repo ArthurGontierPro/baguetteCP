@@ -29456,3 +29456,239 @@ solution is not checked. The check limit is the one answers have, so a long stop
 ### 7. Revert
 
 The branch `wave73-interrupt`. Nothing else depends on it.
+
+## D-0228  M23-inputs: a relational `Problem` between the readers and the solver, `.scp` as a second input, every other language translated to `.scp` outside the solver
+
+Status: PLAN (measured, no solver code; the user asked for the plan on 2026-11-24)
+Date: 2026-11-24
+Task: M23-inputs (branch `wave74-inputs`)
+Touches: this record, `docs/ROADMAP.md` (M23), `bench/inputs_spike/`. Results:
+`/cluster/arthur/baguette-results/inputs-20261124/`.
+
+### 1. What the user asked
+
+A benchmark in which one problem, written once as a `.scp`, has two proofs, one from baguette and
+one from GCS. Then `.scp` as an input of baguette whose proof goes through the end-to-end chain of
+M14, and a front end that is easy to adapt to other languages (XCSP3, CPMpy, Essence). Which
+versions of cake and GCS to pin is deferred by the user, because it is a question of names.
+
+### 2. One `.scp`, two proofs, today
+
+`tools/e2e/fzn2scp.py` translates 203 of the 228 test models. On each, `baguette --e2e` (md5
+`1c179467`, `73abf84`) and `glasgow_scp_solver` (GCS `d7468618`, 2026-11-10) read the same problem,
+and both proofs are elaborated against the one `.opb` of `cake_pb_cp` (CakePB `438b8f83`), then
+checked by it. baguette is VERIFIED on 203, GCS on 88 as it stands, and on 189 once `solx` is
+rewritten to `sol`. The 14 left:
+
+| GCS side | models | cause |
+|---|---|---|
+| `cumulative`, `disjunctive`, `diffn` | 9 | cake replaced its cumulative encoder on 2026-09-19 (CakePB-dev `a402078`), GCS follows those names, and the public CakePB is of 2026-08-21. With GCS `87b24555` (2026-08-19) 7 of the 9 verify in `enumerate` |
+| "Duplicate variable name 'c1'" | 4 | `fzn2scp.py` names constraint and variable alike |
+| unknown keyword `max` | 1 | the reader of GCS has `array_max` only |
+
+`solx` is GCS's choice of `(prob_type enumerate)`, the only type it writes for a satisfaction
+problem. Replayed so, 100 of the 101 models verify and one runs past 60 s. Two things will break on
+our side when the pair moves. The prefix of D-0195 cites the old cumulative encoding, and the
+unmerged GCS branch `cake-zero-one-names` renames the bit of a 0..1 variable to `z[B]`.
+
+### 3. Is `.scp` expressive enough?
+
+**The language.** Integer variables with bounds, conditions `(x op v)`, linear constraints and
+comparisons plain, `_if` and `_iff`, `plus minus multiply divide modulus abs min max`, `and or
+parity`, and about thirty globals (D-0174 section 2 lists them). It has no Booleans (0..1 integers), no holes
+(an `in` constraint), no nested expressions (flattened into auxiliary variables), no search
+annotation and no output item. A problem over bounded integers is therefore always expressible, at
+worst by decomposition. The question is what the decomposition loses.
+
+**Measured on XCSP25**, the 450 instances of the COP25 and CSP25 tracks (35 families), loaded by
+CPMpy 1.1.1 and flattened with the globals cake has kept whole (`bench/inputs_spike/probe.py`).
+**This counts forms. No `.scp` was written and nothing was solved.**
+
+| question | instances |
+|---|---|
+| loaded and flattened | 445 of 450 (5 exceed 8 GB or stop in the loader) |
+| every flat form has a `.scp` form | 408 counted by the probe. The other 37 (3 families) hold only `and(...) = b` and `(x = v) = b`, read by hand on one instance per family. They are `and` and `equals_iff` |
+| a global loses its keyword (`alldifferent_lists`, `subcircuit` with a start) or stands under a reification cake lacks (`table`, `allequal`) | 46 |
+| `lex_chain_lesseq` becomes `lex_less_equal` per row, `NotInDomain` becomes domain facts | 71 and 33, no strength expected to be lost |
+| auxiliary variables, total over original, over the 408 | median 1.34, 90th percentile 37, worst 1 799. The instances above 10 are 66, in 7 families, for example CrazyFrog (296 to 2 966 variables) and RamseyPartition (60 to 930, one `nvalue` per constraint) |
+| largest domain at most 64, at most 1 000 | 232, 384 |
+
+The 222 of those 408 whose flat constraints are all among baguette's families (upper bound. A table
+or an element with variable entries, or a cumulative with variable durations, is counted as
+covered) need no new propagator. The others need, by instances, `lex_less_equal` (59), `mod` (55),
+`strictly_increasing` (49), `short_table` (38), `nvalue` (29), `negative_table` (22), `decreasing`
+(15), `alldifferent_except_n` (9). `increasing` and `decreasing` are linear rows.
+
+**What limits coverage is baguette's family list, before the language.** For the classes `.scp`
+drops (about a tenth of the XCSP25 instances lose a global), the fallback is a decomposition,
+visible to GCS too, so a comparison stays fair.
+
+### 4. Options for the front end
+
+| option | consequence |
+|---|---|
+| A. one parser per language in OCaml, each building `Model.t` | each must redo what `mznlib` does (flags, selectors, positions, index shifts). An XCSP3 front end in GCS is 2 293 lines without its XML library |
+| B. `.scp` as the only internal type | FlatZinc loses Booleans, holes, search and outputs, or they travel beside it |
+| **C (recommended). a relational type `Problem`, readers `.fzn` and `.scp`, everything else translated to `.scp` outside** | one lowering, two small readers, one translator (CPMpy to `.scp`) for CPMpy and XCSP3. Essence reaches FlatZinc by Savile Row |
+
+Three facts in the tree frame it. (1) `Model.cstr` holds auxiliaries a reader cannot have
+(`r_flags`, `mem_b`, `tab_s`, `cir_pos`), because `mznlib` declared them. (2) Others are created in
+`builder.ml` while it reads syntax (`aux` of the arithmetic family, the copies of gcc), and domains
+are inferred there over `Ast` (D-0083). (3) `Compile.e2e_spec` already maps each `Model.cstr` to a
+cake keyword, so a reader is its inverse.
+
+**The design.**
+
+```
+fzn  -> Lexer, Parser, Builder --+
+                                 +-> Problem --Lower--> Model.t --Compile--> store, encoding, proof
+scp  -> Sexp, Scp_reader --------+
+CPMpy, XCSP3  -> tools/cpm2scp (Python) -> .scp        Essence -> Savile Row -> .fzn
+```
+
+- `Problem.t`: variables (name, bounds, holes), relations with a **name**, an objective, plus what
+  only FlatZinc has (search, outputs). No auxiliary, no FlatZinc spelling. A constraint carries the
+  auxiliaries the input already declared as `Given of operand list`, or `Fresh`.
+- `Lower`: the only place that creates a variable, infers a domain, or decomposes. It is incremental,
+  one constraint at a time, so D-0128's memory bound holds.
+- A family is one module with its relation, its meaning (what `Model.check_assignment` reads), its
+  lowering, its posting and its `E2e.spec`. Adding a constraint touches one file. This is the
+  front-end half of M22-review-T10, which it replaces for `builder.ml` and `compile.ml`.
+- The trust story of M14 does not move. The proof is checked against the `.opb` cake derives from
+  the `.scp`, so a misreading in `Scp_reader` yields a refused proof or a correct proof of the
+  `.scp`, never a wrong verified answer. A translator to `.scp` is trusted, as `fzn2scp.py` is.
+
+### 5. Order of creation is the risk of the refactoring
+
+The order in which variables are created fixes names and default branching, so an auxiliary that
+moves changes the search. On the FlatZinc path `Lower` must create them in today's order, and the
+byte-identity lanes are the proof of it (`make diff`, the model tests, `make e2e`). On the `.scp`
+path the auxiliaries come after the variables of the file.
+
+### 6. What is left to the user
+
+(1) `SPEC` 1 and 2 say the input is FlatZinc. `.scp` is experimental until T3 is done, then a
+normative sentence is proposed. (2) A `.scp` has no search annotation, so a run on it takes the
+default, which is GCS's situation too. (3) Which cake and GCS are pinned, deferred.
+
+### 7. Revert
+
+T1 to T3 are separate merges, each byte-identical on the FlatZinc path, so each reverts alone.
+
+### 8. Update of 2026-11-24: the reader first, no refactor (decided by the user with Ciaran McCreesh)
+
+A `.scp` reader goes into baguette, and for the moment GCS or baguette produces the `.scp` from other
+languages. They accept that each solver writes its own constraints, and that a formally verified
+source format should come later and be none of the existing ones. This replaces the order of sections 4
+and 5: `Problem` and `Lower` (T1, T2) are not started. The reader builds `Model.t` directly, with its
+own small `lower.ml` for the auxiliaries, which can become `Lower` later. `builder.ml` is not touched.
+
+What was measured for it is `docs/reports/2026-11-24-scp-coverage.md`. Its three consequences:
+
+1. **The parity of constraint sets is the work.** A reader for what baguette propagates reads 137 of
+   the 297 `.scp` files GCS writes for the Challenge models, and 287 with the decompositions MiniZinc
+   does today. The largest are the variable `element`, the variable `cumulative` and `disjunctive2d`.
+2. **GCS's `.scp` is not cake's.** GCS writes views, cake has no view term, so 115 of 220 files are
+   refused by cake and 9 after the rewriting of comparisons. The rewriting is done by a separate
+   tool, or by GCS. The reader accepts views in any case, which costs nothing (`View`).
+3. **`--e2e` follows the reader, family by family.** A constraint the prefix does not cover is refused
+   by name under `--e2e` and solved without it.
+
+### 9. Which cake and which GCS (2026-11-24, read in the sources, not built)
+
+- **cake**: CakeML branch `cp_enc_new` at `930601d6` (2026-11-20, public on GitHub), shipped
+  prebuilt as CakePB-dev `develop-cp` `62bdc7f` (private). GCS's `workflow2_testing.md` names that
+  pair as required since 2026-11-23.
+- **GCS**: branch `cake-selector-conform` at `011a2940` (2026-11-23), `main` plus 4 commits, which
+  contains `cake-optional-mindist` and `scp-chain-strict-lanes`. `cake-zero-one-names` is not in it.
+- `cp_enc_new` adds `binpacking`, `mdd`, `min_distance` and the optional tasks to the keywords,
+  so section 8's "cake lacks `binpacking`" holds for the public release only. `subcircuit`,
+  `reachable` and `tree` are still absent. Its cumulative uses `sb`/`sa`/`sact`/`scc`/`scap_`.
+- **Views are not in it.** `sexp_varc` is the same on `cp_enc_new` and `master`: an atom, else
+  "invalid sexpression at var/const position". GCS's document says so too.
+- Moving baguette's `--e2e` to this cake means rewriting PROOF-FORMAT 3b: the cumulative
+  block, and whatever "Emit fewer redundant rows" (`91fe2e2b8`) and "Leave out terms and rows the
+  declared bounds exclude" (`aaefa85ea`) drop.
+
+### 10. The public pair, measured (2026-11-24)
+
+`develop-cp` is private and the user has no access to it. The pair of public versions of the same
+week is cake CakePB `438b8f83` (2026-08-21, the one PROOF-FORMAT 3b is written for) and GCS
+`87b24555` (2026-08-19). On the 203 `.scp` of section 2 (`bench/inputs_spike/w.sh`, `decide`, `solx`
+rewritten to `sol`), the GCS proof is VERIFIED by `cake_pb_cp` on **196** (103 SAT, 83 UNSAT, 10
+BOUNDS) and as written on 93. The 7 others: 4 names shared by a variable and a constraint and 1 `max`, both
+to change in `fzn2scp.py`, then `diffn_opt` (a label cake has not) and `inverse_offset_sat` (an empty
+`pol`), not investigated. baguette's `--e2e` is VERIFIED on the 203. Recommended as the reference
+until the development cake is public.
+
+### 11. Ciaran McCreesh's answer (2026-11-24, reported by the user)
+
+"Use the develop-cp branch for now, against GCS main. Views don't exist in the current version, but
+will hopefully be in version 2. The main difficulty is that when we did version 1, proof logging
+for views didn't work properly." It decides three points and replaces the recommendation of section 10.
+
+1. **The target is cake `develop-cp` with GCS `main`.** The pair of section 10 stays as the working pair
+   while the user has no access, and the `--e2e` lane of main (PROOF-FORMAT 3b) is not moved by T1.
+2. **A version 1 `.scp` has no views.** The reader refuses a view by name and position, so baguette
+   accepts no file cake refuses, and the rewriting is a tool outside the solver (`deview.py` is the
+   prototype). Section 8 point 2 (the reader accepts views) is withdrawn.
+3. **A version other than 1 is refused**, so version 2 cannot be read by mistake as version 1.
+
+### 12. The development pair, measured (2026-11-24)
+
+The user downloaded `develop-cp` as a zip whose comment is `62bdc7f5`. Its `cake_pb_cp` (sha256
+`5bf9b04a`, gcc without options) is at `fataepyc-06:/cluster/arthur/cakepb-develop-cp-62bdc7f/`,
+mode 700. **The repository is private, so neither the source nor the binary enters this one.**
+On the 203 `.scp` of section 2, `decide`:
+
+| proof against the development cake's `.opb` | VERIFIED by `cake_pb_cp` |
+|---|---|
+| GCS `main` `d7468618`, `solx` rewritten to `sol` | 198. The 5 others are the names and the `max` of section 2, and all 5 verify once renamed (203) |
+| the same as written | 94 |
+| GCS `cake-selector-conform` `011a2940` | the same 198 |
+| baguette `--e2e` (`1c179467`) | 193. 9 `cumulative` models cite `[cb]`, `root_nested_defining_gcc_unsat` cites `@i[x0][ge2][r]`, a row the new encoder does not write |
+| baguette through `bridge.py` | 197. 6 scheduling models fail |
+
+So GCS `main` and `develop-cp` agree on every model tried. Section 2's scheduling rejections and
+section 10's two failures came from mismatched versions. The views remain: of the 220 GCS files the
+development cake encodes 89, and 191 after `deview.py`. The T2 work on this pair is the 10
+models of the `--e2e` row.
+
+### 13. Views wait for cake (decided by the user, 2026-11-25)
+
+No model is rewritten to fit version 1 of the `.scp` when the rewriting weakens a solver. `deview.py`
+stays in `bench/inputs_spike/` as the measurement it was, and T6 is dropped. Nothing is asked of
+`fzn-glasgow`. Until version 2, baguette's reader refuses a view (section 11 point 2), and the files GCS
+and baguette share are those without one. Of the 297 GCS files, 124 hold no view in a constraint
+(comparisons, `circuit`, `subcircuit` and `binpacking` arguments), of which a reader takes 33 with the
+shapes of `E2e.spec` today, 50 with the general conditions and `_iff`, 74 with every family baguette
+propagates, 123 with the decompositions. When version 2 exists, the reader takes its views through
+`View`, so `lib/scp/` keeps the term type open for them.
+
+This does not bear on baguette's own `.scp`. `fzn2scp.py` writes the linear constraints as MiniZinc
+wrote them and has no views.
+
+### 14. The plan is the parser alone (the user, 2026-11-25)
+
+Replaces the plans of sections 4, 8 and 13. `.scp` text to `Model.t`, in a new library
+`lib/scp/` that depends on `lib/flatzinc/` for `Model`, `Pos` and `Error`. Conventions read in
+cake's parser and checked on the development build (2026-11-25):
+
+- cake accepts `enumerate` with a proof that only exhibits one solution (`s VERIFIED SATISFIABLE`
+  on five models), so `enumerate` is read and one solution is searched, as for `decide`. A run that
+  finds none says UNSAT.
+- cake accepts an undeclared name and a `lb > ub`. The reader refuses both, because neither is
+  a model anyone means.
+- cake refuses a `;` comment. So does the reader.
+
+Tests: (1) `fzn2scp.py` of each of the 203 test models gives the verdict and the optimum of the `.fzn`
+run, except the 7 with `member` (written with `equals_if`); (2) every solution found is checked by
+`tools/e2e/scpsem.py`, which reads only the `.scp`; (3) the hand-written `scp_cases` of GCS, whose
+name says sat, unsat or opt; (4) random small files against `scpsem.py`; (5) the GCS
+files without a view; (6) mutations of the reader: an off-by-one in `element` and `circuit`,
+a swapped `less_equal`, a dropped constraint, each caught by one of the above.
+
+A constraint is accepted only if baguette propagates it or if its rewriting is exact (`increasing`,
+`plus`, `greater_*`, a strict comparison over integers). `lin_equals_iff` is the one near case:
+two `lin_less_equal_iff` and an `and`, as `mznlib` does today. It is out until the user says.
+
