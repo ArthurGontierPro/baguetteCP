@@ -31058,9 +31058,8 @@ in one scope is handled ([twins]) but no shipped model exercises it.
 
 **Status**: DECIDED (agent-cheap, `wave79-cheap`, 2026-11-26). Revert: delete `mznlib/fzn_alldifferent_except.mzn`,
 `mznlib/fzn_nvalue.mzn` and `mznlib/fzn_all_equal_int_reif.mzn` (each alone reverts its global to std's text,
-byte for byte), the seven test models they brought and the SPEC 2.1 row. The binary does not change: the release
-of this branch is `2397635e`, the same bytes as main `ef56549`'s release built in the same place, and the dev build
-is `4ce3e72e`, gate 107's.
+byte for byte), the seven test models they brought and the SPEC 2.1 row. The binary does not change: every build of
+this branch has main's bytes (section 3, last paragraph).
 
 ### 1. What reached baguette before, measured first
 
@@ -31169,7 +31168,7 @@ reproducer in the results directory.
 
 Confirmed after merging main `ef56549` (D-0226, retention `tiered` by default), release `2397635e`, the ten concert-hall-cap instances with proof, gcc against at-most-one: 0 -> 1 complete (2018.02, OPT 48 278 in 70 s, VERIFIED), 8 incumbents better (06, 148, 318, 2024 .04, 100_20 and 150_20 from none, 200_20 1 455 773 -> 1 576 652), none worse, 2018.03 and 60_50 unchanged.
 
-Checks on the merged branch (dev binary `4ce3e72e`, gate 107's bytes, so every existing test model's artefacts are main's): `dune runtest --root . --force` 5 414 ok and 0 FAIL, `run_model_tests.sh` 239 models (232 + this record's 7) with proofs VERIFIED, `check_mznlib.sh` 58 ok, the differential lane `--tier all` 347 of 347 equal and `--debug` 333 of 333, the scaling lane ok, all three under `BAGUETTE_MEM_CAP_KB=33554432`. No lane instance calls these globals and every lane input is pre-flattened, so nothing there could move.
+Checks on the branch merged with main `e0c793a` (D-0235). Its binaries are main's bytes, dev `50898a4e` and release `d1a13b12`, both built here from each checkout, so every existing test model's artefacts are main's. `dune runtest --root . --force` 5 416 ok and 0 FAIL, `run_model_tests.sh` 239 models (232 + this record's 7) with proofs VERIFIED, `check_mznlib.sh` 58 ok, the differential lane `--tier all` 347 of 347 equal and `--debug` 333 of 333, the scaling lane ok, the lanes under `BAGUETTE_MEM_CAP_KB=33554432`. Before that merge (main `ef56549`, dev `4ce3e72e`) the same checks gave 5 414 ok, 239 models, 347 of 347 and 333 of 333. No lane instance calls these globals and every lane input is pre-flattened, so nothing there could move.
 
 ### 4. SPEC 2.1
 
