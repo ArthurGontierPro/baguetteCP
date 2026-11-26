@@ -858,24 +858,38 @@ let to_linear_row t ~decl =
 
    [~id] must be [Engine.next_id] of the engine it is about to be added to -- [Engine.add]
    checks that and says why. *)
+(* M21-memory-T3 (D-0226): the PROPAGATION cap, off by default ([0]). With [N > 0] a
+   learned PB row of more than [N] terms gets no instance: it stays on the page, held by the
+   database and citable by PB analysis as before, and only its wakes go (lib/core/search.ml
+   counts it as declined). The other half of D-0226's guard; [Pb_analysis.max_terms] is the
+   one that does not derive the row at all. CHANGES the search, so a switch. *)
+let propagate_max_terms =
+  match Option.bind (Sys.getenv_opt "BAGUETTE_PB_PROPAGATE_MAX") int_of_string_opt with
+  | Some n when n > 0 -> n
+  | _ -> 0
+
 let pb_instance ~id ~row_id ?(bump = 0) store ~decl t : Propagator.instance option =
   let degree = t.degree in
-  Option.map
-    (fun p ->
-      (* M21-memory-T3 (D-0226): the row is read back off the instance's own arrays, so the
-         closure holds the instance and the degree on the page, not a second copy of the
-         row. Same pairs in the same order: [Pb.of_terms] keeps every term of a [make]d row
-         (all coefficients >= 1) in its order, with the literal it was given. *)
-      let row _store =
-        Some
-          {
-            Propagator.r_terms = Pb.raw_terms p;
-            Propagator.r_degree = degree;
-            Propagator.r_cid = row_id;
-          }
-      in
-      Propagator.pack ~id ~row (module Pb.Learned_pb : Propagator.S with type t = Pb.t) p)
-    (Pb.of_terms store ~decl ~degree:(degree + bump) (raw_terms t))
+  if propagate_max_terms > 0 && List.length t.terms > propagate_max_terms then None
+  else
+    Option.map
+      (fun p ->
+        (* M21-memory-T3 (D-0226): the row is read back off the instance's own arrays, so the
+           closure holds the instance and the degree on the page, not a second copy of the
+           row. Same pairs in the same order: [Pb.of_terms] keeps every term of a [make]d row
+           (all coefficients >= 1) in its order, with the literal it was given. *)
+        let row _store =
+          Some
+            {
+              Propagator.r_terms = Pb.raw_terms p;
+              Propagator.r_degree = degree;
+              Propagator.r_cid = row_id;
+            }
+        in
+        Propagator.pack ~id ~row
+          (module Pb.Learned_pb : Propagator.S with type t = Pb.t)
+          p)
+      (Pb.of_terms store ~decl ~degree:(degree + bump) (raw_terms t))
 
 (* The declared-domain lookup an [Encoding] provides, in the shape [pb_instance] wants.
    Kept here rather than in [Encoding] because it is this module's question: [Encoding]

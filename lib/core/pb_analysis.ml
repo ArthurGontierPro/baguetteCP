@@ -697,6 +697,10 @@ type fallback =
   | Stopped
       (** M6-T23 (D-0149): the search's stop (the time limit) fired during the
           analysis, which was abandoned so that the stop lands at the next node *)
+  | Too_long of int
+      (** M21-memory-T3 (D-0226): the row this analysis carries has more terms than
+          [max_terms] allows (the count is the row's), so the conflict is learned as its
+          clause alone. Only under BAGUETTE_PB_MAX_TERMS. *)
   | Mixed_row of string
       (** M8-bits-encoding (D-0153): a row with a bits term whose blocks could not be
           instantiated (lib/core/ladder.ml, "The bits arm"), with what could not be
@@ -718,6 +722,25 @@ let fallback_to_string = function
   | Diverged n -> Printf.sprintf "did not terminate after %d eliminations" n
   | Stopped -> "the search's stop fired during the analysis"
   | Mixed_row m -> Printf.sprintf "a mixed row's bits block was not instantiated: %s" m
+  | Too_long n -> Printf.sprintf "the row has %d terms, over BAGUETTE_PB_MAX_TERMS" n
+
+(* M21-memory-T3 (D-0226): THE SIZE GUARD, off by default ([0]). With [N > 0] the analysis
+   gives up as soon as the row it carries -- the conflict row, or the row after any
+   elimination -- has more than [N] terms, and the conflict is learned as the 1UIP clause
+   alone, which the search learns anyway (PB analysis is ADDITIVE, lib/core/search.ml's
+   [pb] note). So the guard WEAKENS a long PB row to its clause: no row of more than [N]
+   terms is derived, put on the page, held by the database or propagated, and the
+   eliminations that would have built one are not done.
+
+   Why it exists: on 2015 mapping mesh3x3_2 the learned PB rows have a median of 10 terms
+   and a p90 of 457 (D-0221 section 5), every wake of one walks all of them ([Pb.pass]), and
+   PB analysis plus those walks are 83 % of the cycles. D-0197 section 6 asked for a row
+   length cap. This CHANGES the search, so it is a switch, and D-0226 has the measurement and
+   the option table. Read once, at start-up, like every BAGUETTE_* switch of lib/core. *)
+let max_terms =
+  match Option.bind (Sys.getenv_opt "BAGUETTE_PB_MAX_TERMS") int_of_string_opt with
+  | Some n when n > 0 -> n
+  | _ -> 0
 
 type t = {
   row : Learned.t;  (** the learned PB inequality *)
@@ -1130,6 +1153,9 @@ let analyse ?(stop = fun () -> false) ?(bits = Ladder.no_bits) store (c : Store.
     if not (slack_at (view row0 at_of0 0) conflict_level < 0) then
       raise (Give_up Not_conflicting);
     let rec loop row at_of_row expl steps pivots antecedents rows lifts =
+      (if max_terms > 0 then
+         let n = List.length (Learned.terms row) in
+         if n > max_terms then raise (Give_up (Too_long n)));
       let v = view row at_of_row steps in
       if criterion.stop v then
         if steps = 0 then raise (Give_up Nothing_to_learn)
