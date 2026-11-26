@@ -30494,8 +30494,8 @@ the user or the orchestrator decides what the gate runs. To adopt it, add a loop
 ### 5. Checks
 
 Binary of this branch `549eb3f` md5 `bc2ad3e6d2c049d6a03d0f4c96caeec9`, against main `44e41d7`'s
-`bbbd0630fc3b769e052cfb1bb0e52f20` (both built on fataepyc-06). Main did not move before the
-release, so the merge of `origin/main` is empty.
+`bbbd0630fc3b769e052cfb1bb0e52f20` (both built on fataepyc-06). The merge of `origin/main` at the
+release brought `63aedc3`, a WORKLOG line only, and the rebuilt binary has the same md5.
 
 | check | result |
 |---|---|
