@@ -30049,7 +30049,7 @@ claimed). A TODO for `regular.ml`'s owner: treat an out-of-range constant letter
 Each commit reverts alone. The extraction (`M23-inputs-T4: the arithmetic auxiliaries ...`) is
 byte-identical on the FlatZinc path, and the reader is reached only through a `.scp` file name, so
 reverting `lib/scp/` and the two lines of `bin/main.ml` leaves FlatZinc runs exactly as they are.
-## D-0226  [AUTONOME] M21-memory-T3 fix 1, the learned-row layout, and a PB size guard (M19-config-T5 re-measured). An evicted learned constraint now LEAVES THE ENGINE and the GC reclaims it; a learned row is held as flat arrays; two switches cap learned PB rows by length, default off. Default artefacts byte-identical
+## D-0226  [AUTONOME] M21-memory-T3 fix 1, the learned-row layout, and a PB size guard (M19-config-T5 re-measured). An evicted learned constraint now LEAVES THE ENGINE and the GC reclaims it; a learned row is held as flat arrays; two switches cap learned PB rows by length, default off; the retention default becomes `tiered`, in its own commit. Default artefacts byte-identical (the retention line of `--stats` aside)
 
 **Status**: DECIDED (agent-evict, `wave73-evict`, 2026-11-26). Taken in mode autonome: it adds a
 field to `Propagator.instance`, states a new owner rule for a learned constraint's runtime
@@ -30331,3 +30331,13 @@ Binaries are dev builds unless named; md5s are in `bin/` of the results director
   (test_retention: the payload of an evicted instance is reclaimed by a full collection, kept under
   `keep_all`, never run again, a second removal refused) and the read-back check of the learned
   instance's row (test_learned).
+- **The default change** (its own commit, binary `1753892b`): on the 228 test models stdout, `.opb`,
+  `.pbp` and the node count are byte-identical under the default and under `--bits-above none`
+  (`tiered` evicts nothing before 2 000 learned constraints); only the `--stats` retention line
+  names the new policy, and `BAGUETTE_RETENTION=off` reproduces the old default's artefacts,
+  that line included, on all 228. Unit suites 5 353 `ok`, 0 `FAIL`; model tests 228 passed.
+
+Commits on `wave73-evict`: `9265a42` fix 1 and the flat row; `0c51c8a` the guard switches;
+`92e8e99` header comments; `c5ac012` the hot reads (instructions back to main's); `dc2a493` and
+`552771d` this record; `1f77a89` the merge of main `be07823`; `d9e57e3` **the default** (revert
+this one alone to return to `keep_all`).
