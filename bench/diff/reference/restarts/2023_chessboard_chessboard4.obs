@@ -54,8 +54,8 @@ search limit.pb-learned 0
 search limit.db 631
 search limit.maxdepth 16
 search limit.incumbent 14
-work limit.props 2239570
-work limit.eff 477101
+work limit.props 2240249
+work limit.eff 477098
 work limit.contra 635
 search limit.at node
 search limit.signal none
@@ -66,8 +66,8 @@ search maxdepth/levels 16 levels
 work exhausted/bool 0 bool 1 if
 search skipped/nodes 3 nodes
 search learned/cls 631 cls
-work later/asks 287382 asks
-work cites/memos 70617 memos
+work later/asks 287380 asks
+work cites/memos 70616 memos
 search convertible/cls 0 cls
 search retention tiered(core<=2,mid<=6,first=2000,inc=300,mid_every=10000) tiered(core<=2,mid<=6,first=2000,inc=300,mid_every=10000): 631 added, 0 evicted, 631 swept, 0 live, 0 duplicate, 623 cited, 0 pinned, 0 reductions, 0 detached, 0 locked
 search lbd 1:8,3:7,4:23,5:12,6:15,7:51,8:84,9:107,10:104,11:93,12:74,13:32,14:21
@@ -83,7 +83,7 @@ search pb-inst-no/rows 0 rows
 search pb-prune/prunes 0 prunes
 search pb-confl/confl 0 confl
 search minimised/lits 79 lits
-search i-s4-cross/lines 23998 lines
+search i-s4-cross/lines 23882 lines
 search pb-tried/confl 631 confl
 search pb-learned/rows 0 rows
 search pb-fallback/confl 631 confl
@@ -105,7 +105,7 @@ search lvl-assert/confl 0 confl
 search restarts/runs 192 runs
 search unexplored/nodes 1588 nodes
 search kept/levels 0 levels
-search phases/vals 461874 vals
+search phases/vals 461870 vals
 search phase-used/decs 1865 decs
 work array_bool_and/inst 2081 inst 339.0 runs/node 48.07 eff/node
 work bool_clause/inst 988 inst 190.6 runs/node 27.34 eff/node
@@ -114,25 +114,25 @@ work bool_not/inst 384 inst 47.5 runs/node 15.17 eff/node
 work int_ne_reif/inst 147 inst 33.5 runs/node 13.21 eff/node
 work int_le_reif/inst 148 inst 32.6 runs/node 13.10 eff/node
 work array_int_element/inst 98 inst 25.3 runs/node 11.92 eff/node
-work learned_clause/inst 623 inst 23.0 runs/node 0.86 eff/node
+work learned_clause/inst 623 inst 23.2 runs/node 0.86 eff/node
 work int_eq_reif/inst 51 inst 12.6 runs/node 4.83 eff/node
 work bool2int/inst 49 inst 9.0 runs/node 4.65 eff/node
 work int_lin_le/inst 8 inst 5.2 runs/node 1.36 eff/node
 work global_cardinality/inst 1 inst 5.0 runs/node 2.48 eff/node
-work props/runs 2239570 runs
-work eff/runs 477101 runs
+work props/runs 2240249 runs
+work eff/runs 477098 runs
 work contra/runs 635 runs
-work passes/snaps 111937 snaps
-work deductions/chgs 53663 chgs
-work wakes/wakes 2785418 wakes
-work masked/wakes 14301 wakes
+work passes/snaps 111942 snaps
+work deductions/chgs 53667 chgs
+work wakes/wakes 2785663 wakes
+work masked/wakes 14286 wakes
 work vetoed/wakes 5907 wakes
-work advised/wakes 6362 wakes
-work seeded/runs 150968 runs
-work skipped/slots 12631446 slots
-search rup/lines 497516 lines
-search pol/lines 10698 lines
-search pol-tokens/tokens 1466582 tokens
+work advised/wakes 5467 wakes
+work seeded/runs 151372 runs
+work skipped/slots 12631042 slots
+search rup/lines 497515 lines
+search pol/lines 10699 lines
+search pol-tokens/tokens 1466739 tokens
 search pol-widest/tokens 2357 tokens
 search atoms/atoms 37 atoms
 search atomlinks/lines 70 lines
@@ -141,4 +141,4 @@ search boundlines/pairs 49 pairs
 search bitsprune/lines 5462 lines
 search atoms/prune/atoms 0.007 atoms
 opb 8b89a20d08c2b177f0f119aaf4b41450cab180d782901252654b2495a0d2a9fa
-pbp 98a2e21d3ecc7b49a5ad5c3dec5087cd1a5a50611221a87ec55e7a6185d2990d
+pbp 8ab90a11546ad72c4cb065a9492ae20a656662f2ecc847030345f1196ea21f57
