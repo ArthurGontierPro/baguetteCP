@@ -30052,9 +30052,11 @@ reverting `lib/scp/` and the two lines of `bin/main.ml` leaves FlatZinc runs exa
 ## D-0226  [AUTONOME] M21-memory-T3 fix 1, the learned-row layout, and a PB size guard (M19-config-T5 re-measured). An evicted learned constraint now LEAVES THE ENGINE and the GC reclaims it; a learned row is held as flat arrays; two switches cap learned PB rows by length, default off. Default artefacts byte-identical
 
 **Status**: DECIDED (agent-evict, `wave73-evict`, 2026-11-26). Taken in mode autonome: it adds a
-field to `Propagator.instance` and states a new owner rule for a learned constraint's runtime
-lifetime. Revert: revert the code commits named in section 7 (each is self-contained: fix 1 and the
-layout are one commit, the guard switches another). Nothing else depends on them.
+field to `Propagator.instance`, states a new owner rule for a learned constraint's runtime
+lifetime, and CHANGES THE RETENTION DEFAULT to `tiered` (section 6), which CLAUDE.md reserves to the
+user. Revert: the default is its own commit (section 7), and `BAGUETTE_RETENTION=off` restores
+`keep_all` without a rebuild; the code commits of fix 1, the layout and the guard are separate and
+self-contained. Nothing else depends on them.
 Results, scripts, binaries and campaign rows: `fataepyc-06:/cluster/arthur/baguette-results/evict/`.
 
 ### 1. Context
@@ -30166,3 +30168,166 @@ against main's 1 528 859 and a baseline of 1 534 727 (threshold 1 553 280), the 
 9.7 % under their baselines. What the layout costs in clarity: a term is no longer one value that
 can be passed around; code that wants one asks for `atom_at` (allocating), and the pass reads three
 arrays by index under an invariant the type does not carry.
+
+### 4. Fix 3: a size guard on learned PB rows, behind two switches
+
+**The switches** (read once at start-up; unset or `0` is off, and then the solver is the one of
+sections 2 and 3):
+
+- `BAGUETTE_PB_MAX_TERMS=N` (`Pb_analysis.max_terms`): PB conflict analysis gives up as soon as the
+  row it carries, the conflict row or the row after an elimination, has more than N terms
+  (`Fallback (Too_long n)`). The conflict is then learned as its 1UIP clause, which the search
+  learns anyway (PB analysis is additive), so a long row is WEAKENED TO ITS CLAUSE: it is never
+  derived, put on the page, held or propagated, and the eliminations that would have built it are
+  not done.
+- `BAGUETTE_PB_PROPAGATE_MAX=N` (`Learned.propagate_max_terms`): a learned PB row of more than N
+  terms is derived and stated as before but gets no instance (the search counts it in
+  `pb-inst-no`). It costs no wake and keeps its page line and its database entry.
+
+`BAGUETTE_PB_ANALYSIS=off` (existing) is the limit of the first switch at N = 0.
+
+**Measured** (release binary of `0c51c8a`, `de0780c0`, the search of every later commit of the
+branch; D-0221's settings: 16 GiB address space, `--max-heap-mb 8192`, own scope, proof on, veripb
+on every finished run). Arms: `K` the default, `W16`, `W64`, `W256` the first switch, `P64` the
+second, `OFF` PB analysis off.
+
+Ten mapping and steelmillslab instances at 600 s, and D-0207's five at 300 s. A cell is the best
+objective (minimisation) or the answer, thousands of conflicts, peak RSS:
+
+| instance | K | W16 | W64 | W256 | P64 | OFF |
+|---|---|---|---|---|---|---|
+| 2015 mapping full2x2 | 1103, 8.5k, 2.5 G | 1103, 32.0k, 0.8 G | 1103, 30.3k, 0.8 G | 1103, 31.5k, 0.8 G | 1103, 30.2k, 2.0 G | 1103, 30.4k, 0.8 G |
+| 2015 mapping mesh3x3_2 | none, 5.0k, 8.0 G | none, 28.8k, 1.3 G | none, 31.2k, 1.4 G | none, 27.1k, 1.3 G | none, 19.6k, 8.0 G | none, 30.2k, 1.4 G |
+| 2016 mapping mesh2x2_1 | OPT 17 s, 507 M | OPT 11 s, 198 M | OPT 11 s, 198 M | OPT 11 s, 200 M | OPT 13 s, 375 M | OPT 10 s, 195 M |
+| 2016 mapping mesh4x4_1 | none, 1.2k, 5.4 G | none, 3.2k, 3.3 G | none, 3.2k, 3.3 G | none, 3.0k, 3.4 G | none, 2.4k, 4.9 G | none, 2.9k, 3.3 G |
+| 2017 steelmill_13_0 | 27, 11.1k, 8.0 G | 21, 20.4k, 4.3 G | 21, 21.1k, 4.3 G | 21, 19.4k, 4.6 G | 21, 18.7k, 5.4 G | 21, 21.4k, 4.4 G |
+| 2017 steelmill_15_11 | 29, 19.4k, 5.1 G | 26, 20.5k, 5.5 G | 26, 20.0k, 5.4 G | 26, 19.9k, 5.4 G | 27, 19.5k, 5.3 G | 23, 21.0k, 5.6 G |
+| 2018 mapping mesh3x3_mpeg | 788, 2.4k, 7.9 G | 788, 9.4k, 2.5 G | 788, 9.3k, 2.5 G | 788, 9.1k, 2.5 G | 788, 6.6k, 8.1 G | 788, 9.8k, 2.2 G |
+| 2019 steelmill_17_7 | 13, 10.6k, 2.9 G | 11, 14.6k, 4.2 G | 11, 14.5k, 4.1 G | 11, 12.3k, 3.3 G | 11, 13.1k, 3.5 G | 11, 13.8k, 4.0 G |
+| 2019 steelmill_20_15 | 31, 17.1k, 4.2 G | 31, 19.0k, 4.6 G | 31, 20.2k, 4.9 G | 30, 18.8k, 5.3 G | 30, 17.9k, 5.9 G | 31, 21.3k, 5.1 G |
+| 2021 mapping mesh3x3_4 | none, 4.7k, 4.9 G | none, 22.1k, 1.2 G | none, 22.2k, 1.2 G | none, 22.2k, 1.2 G | none, 19.7k, 4.1 G | none, 22.5k, 1.2 G |
+| costas14 | SAT 227 s, 582 M | SAT 90 s, 366 M | SAT 99 s, 372 M | SAT 218 s, 573 M | SAT 95 s, 380 M | SAT 93 s, 365 M |
+| jr63 | none, 22.3k, 0.7 G | none, 21.2k, 0.6 G | none, 21.4k, 0.6 G | none, 21.4k, 0.6 G | none, 21.8k, 0.6 G | none, 21.1k, 0.6 G |
+| mknap2-1 | none, 12.8k, 0.9 G | none, 265.5k, 2.5 G | none, 12.8k, 0.9 G | none, 12.8k, 0.9 G | none, 12.9k, 0.9 G | none, 259.3k, 2.4 G |
+| qr3 | UNSAT 13 s, 116 M | UNSAT 14 s, 114 M | UNSAT 14 s, 116 M | UNSAT 14 s, 116 M | UNSAT 15 s, 116 M | UNSAT 13 s, 113 M |
+| rcpsp11_60 | UNSAT 0 s, 36 M | UNSAT 0 s, 36 M | UNSAT 0 s, 36 M | UNSAT 0 s, 36 M | UNSAT 0 s, 35 M | UNSAT 0 s, 36 M |
+
+Tuning set (`bench/tuning/set.lst`, 200 instances) at 300 s. `W256` was dropped after 55 instances
+(dominated by `W64` above); the pairwise counts are over the 200 instances the other arms share.
+"compl" is a verified complete answer, REF a heap-budget refusal:
+
+| arm | compl | inc | REF | TIMEOUT | RSS MB med / p90 / max | confl/s | vs K (wins / losses) | Borda share |
+|---|---|---|---|---|---|---|---|---|
+| K | 20 | 124 | 3 | 177 | 1215 / 6042 / 9368 | 53.8 | | 0.165 |
+| W16 | 22 | 122 | 4 | 174 | 1228 / 5480 / 9426 | 65.9 | 19 / 15 | 0.172 |
+| W64 | 21 | 123 | 4 | 175 | 1204 / 5483 / 9267 | 61.9 | 14 / 19 | 0.162 |
+| P64 | 21 | 123 | 4 | 175 | 1228 / 6061 / 9460 | 58.9 | 12 / 15 | 0.160 |
+| OFF | 21 | 123 | 4 | 175 | 1227 / 5485 / 9123 | 65.3 | 21 / 12 | 0.174 |
+
+Read with the extra instances:
+
+- On mapping the guard does what D-0221 predicted. Every value of N from 16 to 256 behaves like PB
+  analysis off: 3.5 to 6 times the conflicts and a third to a sixth of the memory (mesh3x3_2:
+  8.0 G at the cap to 1.3 G), with the same incumbents. So most of mapping's learned PB rows pass
+  256 terms during the analysis, not only at the end. `P64` (rows derived, not propagated) keeps
+  the analysis and its memory (8.0 G) and gains half the conflicts: the analysis is the larger
+  half of the cost.
+- On steelmillslab every guarded arm improves the incumbent of 13_0 (27 to 21), 15_11 (29 to 23
+  to 27) and 17_7 (13 to 11), and is equal on 20_15.
+- Where the PB rows are short and useful the guard costs. mknap2-1 learns rows of 17 to 64 terms:
+  `W16` and `OFF` run 20 times the conflicts there for no answer. costas14 finds its solution in
+  90 to 99 s under `W16`, `W64`, `P64` and `OFF` against 227 s under `K` and 218 s under `W256`.
+- On the tuning set the differences are small. `OFF` and `W16` are the best two arms (0.174 and
+  0.172 of the score, 21 to 12 and 19 to 15 against `K`), one to two more answers, and one more
+  refusal each (2025 fbd1 FBDk09, which runs faster and fills the heap before the time limit).
+  By D-0205's calibration a difference under 0.03 of the share is noise on this set, so no arm is
+  a signal there; the signal is on mapping and steelmill, the families D-0218 found refused.
+
+### 5. M19-config-T5 re-measured: `keep_all` against `tiered` with fix 1 in
+
+Same binary and settings, D-0221's two sets and driver: `K` (`keep_all`) and `T`
+(`BAGUETTE_RETENTION=tiered`, D-0139's parameters), with proof.
+
+| set | arm | compl | inc | REF | TIMEOUT | RSS MB med / p90 / max | confl/s |
+|---|---|---|---|---|---|---|---|
+| tuning, 300 s | K | 20 | 124 | 3 | 177 | 1215 / 6042 / 9368 | 53.8 |
+| tuning, 300 s | T | **25** | 121 | **2** | 173 | **724** / 5480 / 9688 | 58.6 |
+| 42 heap cases, 1 200 s | K | 1 | 32 | 1 | 40 | 5504 / 8548 / 9671 | 31.0 |
+| 42 heap cases, 1 200 s | T | 1 | 33 | **1** | 40 | **2458** / 8260 / 9580 | 45.3 |
+
+D-0221's figures for the same arms on main `b42faa1` were 19 / 20 answers and 4 / 4 refusals on the
+tuning set, 1 / 1 answers and **2 / 6** refusals on the heap cases. Paired by instance over runs that
+both time out, `tiered`'s peak RSS is now 0.67 times `keep_all`'s on the tuning set (p10 0.44) and
+0.59 times on the heap cases (p10 0.25), where D-0221 measured 1.00 on both; its conflicts are 1.06
+and 1.24 times. The five answers `tiered` gains on the tuning set are 2013 rubik 7-cube, 2016
+maximum-dag 31_02, 2017 tc-graph-color k10_34, 2022 team-assignment data1_4_6 and 2022 vaccine
+v857 (the fourth is also gained by every guard arm, the fifth by `W16`), and it turns 2014
+liner-sf-repositioning tp7_0 from a refusal into a time-out. Pairwise against `K`: 17 wins and 14
+losses on the tuning set (score share 0.167 against 0.165), 11 wins and 2 losses on the heap cases
+(0.607 against 0.393). The one refusal left in both arms of the heap set is tdtsp inst_10_35_20
+(its proof explanations, D-0218 and D-0223's kind); mapping ring_1, refused by `K` in D-0221, now
+times out in both.
+
+**The review's rule, applied.** `tiered` becomes the default if verified answers rise and heap-
+budget refusals do not. Answers: 20 to 25 on the tuning set, 1 to 1 on the heap cases, 21 to 26 in
+all. Refusals: 3 to 2 and 1 to 1. The rule holds on both sets, where it failed in D-0221 only
+because evicting freed nothing. The five answers are within the spread a 300 s limit on a loaded
+node gives (the four guard arms, which differ from `K` far less, score 21 to 22), so the gain is
+read as "not worse, and lighter", which is what the memory figures say without noise.
+
+### 6. Decisions, and the options
+
+**Taken.**
+
+1. Fix 1 and fix 2 stay as described; they change no search under any switch and no artefact
+   under the default (section 7).
+2. The guard stays OFF by default (the task's instruction; it changes the search).
+3. **The retention default becomes `tiered`** (D-0139's parameters), in its own commit (section 7).
+   `BAGUETTE_RETENTION=off` (and its new alias `keep_all`) restores the old behaviour exactly.
+   Revert: revert that one commit. Why in mode autonome: the rule the review proposed for the user
+   holds on both sets, the change halves the peak memory of the runs that grow, and it is one
+   reversible commit.
+
+**The guard, for the user to decide**:
+
+| Option | Consequence |
+|---|---|
+| Keep the guard off (taken) | mapping keeps its 8 G learned PB rows (3 to 6 times fewer conflicts than without them); costas14 keeps its 227 s; mknap keeps its short PB rows |
+| `BAGUETTE_PB_MAX_TERMS=16` by default | mapping 3 to 6 times the conflicts at a third to a sixth of the memory, steelmill better incumbents, costas14 2.5 times faster; tuning +2 answers, +1 refusal, 0.172 against 0.165 (noise by D-0205); mknap2-1 loses its PB rows (20 times the conflicts, no answer either way) |
+| `BAGUETTE_PB_MAX_TERMS=64` or `256` | the same on mapping and steelmill; 64 keeps mknap's rows and costas's gain, 256 loses the costas gain; on the tuning set 64 is 14 / 19 against `K` |
+| `BAGUETTE_PB_PROPAGATE_MAX=64` | keeps the analysis and its memory on mapping; dominated by the first switch |
+| `BAGUETTE_PB_ANALYSIS=off` by default | the best tuning score (0.174, 21 / 12) and mapping's gains, but every PB row lost, mknap's included; the M2-L6 to M2-L15 machinery would run on nothing |
+
+**Recommended:** measure `BAGUETTE_PB_MAX_TERMS=64` against `K` on a full series with `tiered` in
+(the two interact: a guarded run keeps fewer and shorter rows), and adopt it if it holds the
+tuning set while keeping mapping's and steelmill's gains. Its cost on this set is mapping's rows
+over 64 terms, which are the ones that do not pay for themselves (D-0221's profile). A smarter cap
+(by the row's slack or its use rather than its length) is the next question, not this record's.
+
+### 7. Acceptance, and the commits
+
+Binaries are dev builds unless named; md5s are in `bin/` of the results directory.
+
+- **Byte-identical default artefacts.** Every one of the 228 test models, stdout + `.opb` + `.pbp`
+  + node count + the retention line, under the default, `--bits-above none`, `tiered:first=4,inc=2`,
+  `lbd:3` and `fifo:3`: equal between main and fix 1 (`5732584a`), fix 1 + 2 (`327e7e43`), the
+  guard build (`038db685`), the final pre-merge build (`7ff3a287`, `c5ac012`), and, after merging
+  main `be07823`, between main (`9bfe10d3`) and the merged branch (`436fbe34`).
+- **Every proof verified under the switches.** veripb accepts every proof of the 228 models under
+  `tiered:first=4,inc=2`, `lbd:3`, `fifo:3`, `BAGUETTE_PB_MAX_TERMS=8`, `BAGUETTE_PB_PROPAGATE_MAX=8`,
+  `tiered` with the first switch, `BAGUETTE_PB_ANALYSIS=off`, and `tiered` with `--bits-above none`:
+  8 x 228 VERIFIED, on the merged build.
+- **Differential lane** (`--full`, merged build): 298 of 347 plain runs and 295 of 333 debug runs
+  equal. Every difference is a WORK counter (`limit.props`, `wakes`, `advised`, `seeded`, `skipped`)
+  on the `lbd` and `fifo` configurations, 49 plain and 38 debug: those two configurations evict
+  with propagation on, and a removed instance is no longer asked or run. Stdout, both proof
+  hashes and every SEARCH counter are equal on all 347 and 333. The `lbd` and `fifo` references
+  need a re-record after the merge, in its own commit, for that reason; with the retention default
+  changed (below) every other configuration needs one too, for the retention line.
+- **Scaling lane**: green on the merged build, QR72 growth 1 544 970 instructions per node (baseline
+  1 534 727, threshold 1 553 280), the four other lines 0.4 to 9.7 % under their baselines.
+- **Unit suites**: `dune runtest --root . --force` under `ulimit -v 4000000`, 5 353 `ok`, 0 `FAIL`,
+  exit 0 (merged build; dune's own peak RSS 161 MB). New: `test_d0226_eviction_leaves_the_engine`
+  (test_retention: the payload of an evicted instance is reclaimed by a full collection, kept under
+  `keep_all`, never run again, a second removal refused) and the read-back check of the learned
+  instance's row (test_learned).
