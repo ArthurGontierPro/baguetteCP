@@ -333,6 +333,8 @@ type t = {
      in this set of terms" is the NAME comparison [pass] always made, as an array read.
      [canon.(i) = i] unless a variable occurs twice in the scope. *)
   canon : int array;
+  (* Whether some variable occurs twice in the scope ([canon.(i) <> i] for some [i]). *)
+  repeats : bool;
 }
 
 and quiet = { q_lo : int array; q_hi : int array; mutable q_valid : bool }
@@ -428,6 +430,13 @@ let make ?(cutoff = default_cutoff) ?(lemma_rows = []) ?(gate = true) store enc 
            })
          vars)
   in
+  let canon =
+    Array.map
+      (fun tm ->
+        let rec first j = if terms.(j).name = tm.name then j else first (j + 1) in
+        first 0)
+      terms
+  in
   {
     terms;
     enc;
@@ -437,12 +446,8 @@ let make ?(cutoff = default_cutoff) ?(lemma_rows = []) ?(gate = true) store enc 
     lemmas;
     amo_memo = [||];
     amo_count = 0;
-    canon =
-      Array.map
-        (fun tm ->
-          let rec first j = if terms.(j).name = tm.name then j else first (j + 1) in
-          first 0)
-        terms;
+    canon;
+    repeats = Array.exists Fun.id (Array.mapi (fun i c -> c <> i) canon);
     quiet =
       {
         q_lo = Array.make (Array.length terms) 0;
@@ -452,6 +457,17 @@ let make ?(cutoff = default_cutoff) ?(lemma_rows = []) ?(gate = true) store enc 
   }
 
 let vars t = Array.to_list (Array.map (fun tm -> tm.x) t.terms)
+
+(* [f j] for every term [j] naming term [i]'s variable, [i] included: a change to [i]'s
+   domain is a change to theirs, so whatever is cached per term is invalidated for all of
+   them (D-0235). One term per variable unless the scope repeats one. *)
+let twins t i f =
+  if not t.repeats then f i
+  else
+    let c = t.canon.(i) in
+    for j = 0 to Array.length t.terms - 1 do
+      if t.canon.(j) = c then f j
+    done
 
 (* Whether the trail entry supporting this bound was pushed at level 0, or the bound has
    never moved: the level the bound BELONGS to, not the one in force now. Stays EAGER,
@@ -1200,7 +1216,11 @@ let pass_scan t store ~lo0 ~hi0 =
   in
   let live i = if dirty.(i) then snap_of store t.terms.(i) else snap i in
   (* [inset.(canon.(i))]: term [i]'s NAME is a member of the Hall set being scanned. *)
-  let inset = Array.make nt false in
+  let inset = Array.make nt false and inmask = Array.make nt false in
+  (* [lo_l]/[hi_l]: the LIVE bounds. Only this pass's own pushes change the store while
+     it runs, so the pass-start bounds updated at each push that lands are what
+     [Store.get] would read, without reading it per term per tight interval. *)
+  let lo_l = Array.copy lo0 and hi_l = Array.copy hi0 in
   let los = List.sort_uniq Int.compare (Array.to_list lo0) in
   let his = Array.of_list (List.sort_uniq Int.compare (Array.to_list hi0)) in
   (* The terms by ascending upper bound, so that the number of terms inside [a, b] is a
@@ -1234,8 +1254,9 @@ let pass_scan t store ~lo0 ~hi0 =
         (prune_reason ~keep:(fun v -> a <= v && v <= b) halls y ~lower)
         (prune_expl t ~a ~b ~halls ~y ~lower)
     in
-    (* The rule above: [yi]'s pass-start snapshot is taken before the push can land. *)
-    ignore (snap yi);
+    (* The rule above: the pass-start snapshot of [yi], and of any term naming the same
+       variable, is taken before the push can land. *)
+    twins t yi (fun j -> ignore (snap j));
     (* [deriving_ahead]: a Hall pruning counts several disequality rows, so its trace
        line is RUP only after its derivation (I-X10, D-0040). M7-T17 / D-0082 made this
        the trigger; it used to be [Encoding.has_direct] of [x]. *)
@@ -1247,7 +1268,11 @@ let pass_scan t store ~lo0 ~hi0 =
     | Store.Conflict c -> raise (Found c)
     | Store.Changed ->
         Propagator.count_deduction ();
-        dirty.(yi) <- true;
+        let d = Store.get store y.s_var in
+        twins t yi (fun j ->
+            dirty.(j) <- true;
+            lo_l.(j) <- Domain.lo d;
+            hi_l.(j) <- Domain.hi d);
         moved := true
     | Store.Unchanged -> ()
   in
@@ -1264,10 +1289,13 @@ let pass_scan t store ~lo0 ~hi0 =
           let k = b - a + 1 in
           let n = !inside in
           if b >= a && n >= k then (
-            (* The contained terms in [t.terms] order, as [contained] listed them. *)
-            let idx =
-              List.filter (fun i -> a <= lo0.(i) && hi0.(i) <= b) (range 0 (nt - 1))
-            in
+            (* The contained terms, marked in [inmask]; [idx ()] lists them in
+               [t.terms] order, as [contained] listed them, for a push that needs them. *)
+            for q = 0 to !p - 1 do
+              let i = by_hi.(q) in
+              if lo0.(i) >= a then inmask.(i) <- true
+            done;
+            let idx () = List.filter (fun i -> inmask.(i)) (range 0 (nt - 1)) in
             (* THE PIGEONHOLE, REALISED AS A PRUNING THAT EMPTIES A DOMAIN, and that is
                not a roundabout way to call [Store.conflict] -- it is what makes the
                conflict provable.
@@ -1294,10 +1322,11 @@ let pass_scan t store ~lo0 ~hi0 =
                set and the (k+1)th is the variable pushed out of it. Which [k] is
                immaterial to soundness and fixed by [t.terms] order for determinism. *)
             if n > k then
+              let idx = idx () in
               let halls = List.map snap (List.filteri (fun i _ -> i < k) idx) in
               let yi = List.nth idx k in
               push ~halls ~a ~b ~y:(snap yi) ~yi ~lower:true (b + 1)
-            else
+            else (
               (* M16-file-review-T2 (D-0190): a variable is snapshotted, and looked for in
                  the Hall set, only once its LIVE bounds show it can be pushed: [y.s_lo]
                  and [y.s_hi] are those bounds, read again by [snap_of] from the same
@@ -1308,21 +1337,24 @@ let pass_scan t store ~lo0 ~hi0 =
                  term is looked for in it before it is snapshotted, through [inset] over
                  [canon] -- the same test as the name comparison it replaces, which was
                  O(n) string comparisons per term of every tight interval. *)
-              List.iter (fun i -> inset.(t.canon.(i)) <- true) idx;
-            Array.iteri
-              (fun yi tm ->
-                let d = Store.get store tm.x in
-                let lo = Domain.lo d and hi = Domain.hi d in
+              for i = 0 to nt - 1 do
+                if inmask.(i) then inset.(t.canon.(i)) <- true
+              done;
+              for yi = 0 to nt - 1 do
+                let lo = lo_l.(yi) and hi = hi_l.(yi) in
                 if (a <= lo && lo <= b) || (a <= hi && hi <= b) then
                   if not inset.(t.canon.(yi)) then
                     let y = live yi in
-                    let halls = List.map snap idx in
+                    let halls = List.map snap (idx ()) in
                     if a <= y.s_lo && y.s_lo <= b then
                       push ~halls ~a ~b ~y ~yi ~lower:true (b + 1)
                     else if a <= y.s_hi && y.s_hi <= b then
-                      push ~halls ~a ~b ~y ~yi ~lower:false (a - 1))
-              t.terms;
-            List.iter (fun i -> inset.(t.canon.(i)) <- false) idx))
+                      push ~halls ~a ~b ~y ~yi ~lower:false (a - 1)
+              done;
+              for i = 0 to nt - 1 do
+                if inmask.(i) then inset.(t.canon.(i)) <- false
+              done);
+            Array.fill inmask 0 nt false))
         his)
     los;
   !moved
@@ -1656,7 +1688,7 @@ let regin_scratch t store =
                           if
                             remove_one t store ~moved ~halls:(Lazy.force halls) ~vals
                               ~keep ~facts ~y:(snap y) ~y_tm:t.terms.(y) v
-                          then cache.(y) <- None)
+                          then twins t y (fun j -> cache.(j) <- None))
                       vals)
                 (range 0 (n - 1)))
           (range 0 (n - 1)));
