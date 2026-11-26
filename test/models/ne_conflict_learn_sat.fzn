@@ -1,0 +1,18 @@
+% M18-coverage-ne / D-0238: an int_lin_ne conflict under a decision now LEARNS.
+%
+% x = k and y = k are int_lin_eq rows that both watch k, so the decision k <= 1 fixes x and
+% y in one engine pass (FIFO) and x + y <> 2 then sees every term fixed with the sum on 2:
+% a conflict of int_lin_ne's own. Until M18-coverage-ne it was reported with Reason.none,
+% so the branch closed on the decision nogood and nothing was learned. Now it carries the
+% fixing facts x <= 1 and y <= 1 (x >= 1 and y >= 1 are the declared bounds and have no
+% literal), the trace writes the nogood as `rup +1 x_ge_2 +1 y_ge_2 >= 1 ;` (RUP against the
+% A/B pair over the order encoding, the `pol` and its `ia` over bits), and 1UIP learns
+% k >= 2. SAT (D-0053), at k = x = y = 2. test/unit/test_prop.ml's M18-coverage-ne section
+% runs the same scene by hand and under search in both encodings.
+var 1..4: k :: output_var;
+var 1..4: x :: output_var;
+var 1..4: y :: output_var;
+constraint int_lin_eq([1,-1],[x,k],0);
+constraint int_lin_eq([1,-1],[y,k],0);
+constraint int_lin_ne([1,1],[x,y],2);
+solve :: int_search([k,x,y], input_order, indomain_min, complete) satisfy;

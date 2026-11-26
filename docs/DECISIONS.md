@@ -31584,3 +31584,200 @@ pin the memos, with their breaks measured.
 [AUTONOME] Kept: no search, proof or answer changes, so no default behaviour changes. Revert:
 `git revert` of `d787fa3` (F1), `ea1bb63` (F2), `335aeb3` (F3), `522bf0e` (F4), `211f8e8` (F5),
 with the tests `f9578c2` and the module maps `ef6d128`.
+
+## D-0238  [AUTONOME] M18-coverage-ne: int_lin_ne's conflicts carry their fixing facts under a decision, so they learn. Measured first: across 507 Challenge instances it is the only family whose conflicts are factless (18 instances, 7 families), learned_pb aside (9 conflicts)
+
+**Status**: DONE on `wave84-ne` (agent-ne, 2026-11-26), not merged. Measured against main `f700fb2`
+(binary `96af57d4`, the gate 111 binary) with the branch's `a97075e4` (`80525a0`; unchanged by the
+merge of main `d25f15e`). Node fataepyc-06, 300 s runs at 12 in parallel, 16 GiB address space,
+`MemoryMax=32G`, `--max-heap-mb 8192`. Runs, tables and scripts: `/cluster/arthur/baguette-results/ne/`.
+Touches: `lib/core/prop/ne.ml` only on the solver side; `test/unit/test_prop.ml` (the
+M18-coverage-ne section), `test/models/ne_conflict_learn_sat.fzn` and its expected output, and two
+tests whose scene moved with the search (section 5).
+
+### 1. The survey: which conflicts learn nothing
+
+A throwaway build of main (`f2f3d735`, never committed) counts, at `Search.learn_at_conflict`, each
+conflict under a decision by the kind of the propagator that raised it and by what `Learn.at_conflict`
+answered: learned, not learned with facts, not learned and factless. 20 000 nodes or 240 s, no proof,
+on the 201 instances of the tuning set (`bench/tuning/set.lst`) plus gcc-benchmark l42_3, then on the
+306 other Challenge instances that call `int_lin_ne` or `int_ne` (351 of the 1 575 do). 507 instances,
+495 with a conflict under a decision, 3 506 537 such conflicts.
+
+| kind | conflicts | learn | not learned, with facts | factless | instances with a factless one |
+|---|---|---|---|---|---|
+| int_lin_le | 838 855 | 834 826 | 4 029 | 0 | 0 |
+| learned_clause | 680 534 | 679 120 | 1 414 | 0 | 0 |
+| int_eq_reif | 415 514 | 413 493 | 2 021 | 0 | 0 |
+| bool_clause | 258 504 | 257 899 | 605 | 0 | 0 |
+| int_ne_reif | 209 579 | 209 219 | 360 | 0 | 0 |
+| int_lin_le_reif | 192 332 | 191 945 | 387 | 0 | 0 |
+| all_different_int | 164 630 | 164 570 | 60 | 0 | 0 |
+| bool2int | 134 749 | 134 086 | 663 | 0 | 0 |
+| array_int_element | 99 464 | 98 989 | 475 | 0 | 0 |
+| global_cardinality | 92 008 | 91 956 | 52 | 0 | 0 |
+| array_bool_and | 88 886 | 88 585 | 301 | 0 | 0 |
+| **learned_pb** | 85 131 | 85 015 | 107 | **9** | 3 |
+| (no instance id) | 45 282 | 45 282 | 0 | 0 | 0 |
+| **int_lin_ne** | 41 671 | **0** | 0 | **41 671** | 18 |
+| 13 other kinds (int_le_reif, regular, bool_not, int_times, inverse, int_abs, int_div, cumulative, min, member, max, bool_or, bool_eq) | 159 398 | 159 015 | 383 | 0 | 0 |
+
+Findings.
+
+- **int_lin_ne is the one family with the defect.** Every one of its conflicts was factless, so none
+  learned. 18 instances in 7 families: tc-graph-color (5 instances, 26 414 conflicts, 36 to 97 % of
+  each instance's conflicts), gcc-benchmark l42_3 (9 019 of 9 714), on-call-rostering (3 instances,
+  6 134; 4s-23d 3 256 of 9 909, 10s-100d-C 2 875 of 9 580), elitserien (5 instances, 82),
+  community-detection (19), fbd1 (2), harmony (1).
+- **int_ne never conflicts** in the sample, though 300 instances post it: with two terms, the first
+  fixed one prunes the other before both can be fixed in one pass.
+- **learned_pb has 9 factless conflicts** in 3 instances (rcpsp-wet 7, depot-placement 1, ghoulomb 1).
+  Listed, not fixed: `pb.ml` is not this row's.
+- `(no instance id)`: 45 282 conflicts whose `c_prop` is not an engine instance. All learn, so
+  attribution is the only question there; not this row's.
+- "Not learned, with facts" is 0.3 % of all conflicts (10 857): the 1UIP walk stops without a literal
+  at the conflict level (`postcondition`, D-0234 section 4). Spread over every kind, not a defect of one.
+
+### 2. The rule
+
+Under a decision, an all-fixed `int_lin_ne` / `int_ne` violation is reported with every term's
+`Reason.fixed_at` at its fixed value, each fact once (`Ne.conflict_reason`), in place of `Reason.none`.
+The negations of those facts are exactly the clause `Ne.explain` already states for the same pairs, so
+`Trace.conflict_line` writes the nogood itself: `rup ~facts >= 1`, RUP against the A/B pair alone over
+the order encoding (I-X10's enumeration, nothing written ahead), and over a bits scope the trace's
+bits arm writes the existing `Resolve` `pol` pinned by `ia` to the same clause. At the root the
+conflict stays factless, as gcc's does, so every root refutation is byte-identical.
+
+No new `Explanation` constructor and nothing outside `ne.ml` on the solver side: the justification is
+unchanged, what was missing was the `Reason` half, which `Reason.because` carries. D-0026's check holds
+by construction because the reason and the justification name the same variables. The other conflict
+arm (the last unfixed term losing its only value) is unreachable, as the module already said: an
+unfixed term holds two values and loses one. It still forwards `Store.apply`'s factless conflict.
+
+### 3. Measurements
+
+**Share of conflicts that learn**, same counter on the branch (20 000 nodes, no proof): on the 18
+instances the int_lin_ne conflicts are 7 908, of which 7 907 learn (one has facts and ends at the
+postcondition). Per instance, all conflicts that learn, base then new:
+
+| instance | int_lin_ne conflicts (learned), base | new | all conflicts learned, base | new |
+|---|---|---|---|---|
+| tc-graph-color k2_42 | 9 702 (0) | 76 (76) | 283 / 9 985 (3 %) | 493 / 493 (100 %), UNSAT at 1 035 nodes |
+| tc-graph-color k10_31 | 5 145 (0) | 2 752 (2 752) | 48 % | 100 % |
+| tc-graph-color k10_34 | 3 585 (0) | 1 454 (1 454) | 64 % | 100 % |
+| tc-graph-color k5_05 | 4 173 (0) | 1 879 (1 879) | 58 % | 100 % |
+| tc-graph-color k9_39 | 3 809 (0) | 1 032 (1 032) | 62 % | 100 % |
+| gcc-benchmark l42_3 | 9 019 (0) | 20 (20) | 695 / 9 714 (7 %) | 4 705 / 4 705 (100 %) |
+| on-call-rostering 4s-23d | 3 256 (0) | 289 (289) | 67 % | 100 % |
+| on-call-rostering 10s-100d-C | 2 875 (0) | 363 (363) | 70 % | 100 % |
+| the 10 others (elitserien, cd, harmony, fbd1, ocr 4s-10d) | 1 to 63 each (0) | all learn | 89 to 100 % | 91 to 100 % |
+
+**Instructions per node**, `perf stat -e instructions:u` at 20 000 nodes, no proof (`ipn-table.md`).
+The trees differ from the first learned clause on, so this is the cost of the search each binary makes.
+
+| instance | base M/node | new M/node | ratio |
+|---|---|---|---|
+| gcc-benchmark l42_3 | 5.64 | 3.03 | x0.54 |
+| tc-graph-color k10_31 | 1.00 | 1.77 | x1.77 |
+| tc-graph-color k10_34 | 1.55 | 2.02 | x1.30 |
+| tc-graph-color k2_42 | 0.80 | 1.43 (1 035 nodes, UNSAT) | x1.79 |
+| tc-graph-color k5_05 | 1.21 | 1.60 | x1.32 |
+| tc-graph-color k9_39 | 1.83 | 2.22 | x1.21 |
+| on-call-rostering 4s-23d | 2.49 | 3.50 | x1.41 |
+| on-call-rostering 10s-100d-C | 4.36 | 4.62 | x1.06 |
+| elitserien (5), cd adjourn, harmony ode, fbd1 FBDk06, ocr 4s-10d | | | x1.00 to x1.01 |
+
+FBDk07 does not reach 20 000 nodes in 900 s on either binary. On l42_3 the factor-3 cost D-0234 measured
+is half undone: gcc ran 10.8 times per node there because every ne conflict closed on the decision
+nogood. Where it costs (tc-graph-color, x1.2 to x1.8), the work that grows is the learning that now
+runs, as on gcc's instances.
+
+**300 s, 18 instances** (`table-300s.md`), the 18 of section 1. Complete answers:
+
+| arm | base | new |
+|---|---|---|
+| no proof | 4 | 7 |
+| proof | 2 | 4 |
+
+New answers: tc-graph-color k2_42 UNSAT in 1 035 nodes, under 1 s (base UNKNOWN after 2.06 M nodes
+without proof), on-call-rostering 4s-23d OPT 2 in 215 s without proof and 266 s with (base SOL 2),
+tc-graph-color k5_05 OPT 273 in 232 s without proof (base SOL 273). tc-graph-color k10_34's optimum
+in 65 s then 140 s with proof (base 119 s and 290 s). No answer is lost. Slower: elitserien handball7
+OPT in 185 s against 170 s without proof (29 347 against 29 359 nodes, x1.00 instructions per node at
+20 000 nodes, so the run's own variance), community-detection adjourn OPT in 235 s against 227 s.
+Incumbents, new against base on the same arm: with proof k5_05 273 against 274 (better) and k9_39 489
+where base found none; every other incumbent equal. Nodes/s fall on tc-graph-color (k10_31 1 894 to
+1 085 without proof) and are equal elsewhere within 5 %.
+
+### 4. Checks (on the tip merged with main `b156f0d`, binary `505217da`, against main's `b6344345`)
+
+- `dune runtest --root . --force` under 4 GB: 5 483 ok, 0 FAIL. `run_model_tests.sh`: 242 passed,
+  0 failed. Before the merge with `b156f0d` (D-0236), on `a97075e4`: 5 479 ok, 0 FAIL, 242 passed.
+- The 242 test models against main's binary, in BOTH encodings (default bits at 0, and
+  `--bits-above none`): 20 artefact differences in each, the same 20 models, every one a `.pbp`
+  (stdout, exit code and `.opb` identical everywhere), and veripb verifies all 40 (13 SAT, 7 UNSAT in
+  each). They are the models where an int_lin_ne / int_ne conflict happens under a decision (bits_ne,
+  ne_conflict, member, gcc, median, nvalue, all_equal_reif, element and search-split scenes): the
+  branch writes the conflict's nogood as a trace line and a learned clause where the decision nogood
+  closed the branch (nvalue_unsat 2 011 then 2 041 lines over order, bits_ne_unsat 68 then 99).
+  The same 20 differed against main `f700fb2`'s `96af57d4` before the merge.
+- Every test model (242) solved under `BAGUETTE_DEBUG=1` in both encodings with proof: rc 0 on all
+  484, stdout equal to the non-debug run, every proof verified. gcc-benchmark l42_3 at 1 500 nodes under
+  `BAGUETTE_DEBUG=1` with proof, in both encodings (binary `afe9ce13`, the same source before `make fmt`): no invariant, 333 of 333 conflicts learn, both
+  proofs verify.
+- The campaign's proofs: every complete answer verified on both binaries (ocr 4s-10d OPT on each,
+  tc-graph-color k10_34 OPT 433 on each, and on the branch ocr 4s-23d OPT 2 and k2_42 UNSAT, the
+  latter as `BOUNDS INF <= obj <= INF`), and four 300 s time-outs of the branch (l42_3, k10_31, k9_39,
+  ocr 10s-100d-C, 2.5 to 5.8 GB, 8 minutes and 3.4 GB peak for the checker at most) verify too.
+  141 GB of proofs written by the campaign, deleted after checking.
+- Differential lane (`--tier all -j 8`, 32 GB): 14 of 347 runs differ, exactly tc-graph-color k5_05
+  (the corpus's one int_lin_ne user with conflicts) in all 14 configurations. Kinds: search counters
+  in 14, proof hash in 13, work counters in 14, stdout in 1: under `alternate` the branch finds a
+  solution at the 8 000-node budget where main ends UNKNOWN (objective 552, a minimisation; both
+  proofs verify, `BOUNDS 102 <= obj <= 552` against `102 <= obj <= INF`). `noproof` differs in search
+  and work counters only. Identical lists before and after the merge with `b156f0d`. Not re-recorded.
+- Debug pass (`--debug --tier all -j 8`): 14 of 333 runs differ, tc-graph-color k5_05 in all 14
+  configurations (search 14, hash 13, work 14, no stdout, no exit code), and no invariant fired.
+  pigment15b's 14 debug runs are skipped by `bench/diff/debug-skip.tsv` as on main. Identical lists before and after the merge with `b156f0d`.
+- Scaling lane (`-j 8`): ok, every line within its threshold, rc 0, before and after the merge.
+
+### 5. Two tests whose scene moved
+
+Both are scenes that relied on an int_lin_ne / int_ne conflict NOT learning. Neither check is
+weakened: the property each protects is still exercised and still checked.
+
+- `test_matrix.ml` check 3 ("every nogood needs the trace, none is standalone-RUP"), on
+  int_lin_ne/sat-after-failure. The branch now LEARNS `~e_ge_1 e_ge_2 ~f_ge_2 ~g_ge_3`, a 1UIP clause
+  that names its root facts as literals and is therefore RUP against the `.opb` alone. A learned
+  clause is neither of check 3's two kinds: it is decision-free (so it need not fail standalone) and
+  may rest on trace lines (so it need not pass). It is now excluded from both, through
+  `Search.stats.learned_rev`. The decision nogoods are held to the check unchanged, and the label
+  now says how many were checked (1 on each of the seven SAT cells).
+- `test_learn.ml` a2, the weakest-threshold minimisation break, pinned to a scene where the reduction
+  fires. The settle scene at seed 12 no longer reaches it: once its int_ne conflicts learn, NO seed
+  of 0..300 makes the reduction fire there (19 did on main, every one with the break rejected).
+  The holes scene fires on 6 seeds of 0..300 (75, 80, 144, 154, 204, 290), each with the break
+  rejected; a2 is re-pinned to holes at seed 75. The normative-order finding stays on the settle
+  scene and still holds.
+
+Both failed on the first full run with the change (5 475 ok, 3 FAIL) and pass after.
+
+### 6. Decision, what is left, revert
+
+[AUTONOME] Kept. A factless conflict was the defect D-0234 named, the fix stays inside the module and
+changes no flag, no SPEC sentence and no `Explanation.t`, and the measurement is one-sided on
+answers (3 new complete answers, none lost). The cost is the learning that now runs, x1.2 to x1.8
+instructions per node on tc-graph-color, while l42_3 halves.
+
+Left open:
+
+1. **learned_pb's 9 factless conflicts** (rcpsp-wet 7, depot-placement 1, ghoulomb 1). Small, and in
+   `pb.ml`.
+2. **45 282 conflicts with no instance id** (`c_prop` outside the engine's table). They learn, but the
+   survey cannot say whose they are.
+3. A shared `Reason.distinct` for `ne.ml`, `gcc.ml` and `alldiff.ml` (reason.ml is not this row's).
+4. Learned clauses keep root-level literals (`~e_ge_1` in section 5's clause, e >= 1 at the root).
+   Sound, but wider than needed; `learn.ml`'s, not this row's.
+
+Revert: `git revert bdd564a 80525a0` (the two re-pinned tests first, then the rule, its test section
+and the model). The rule alone is the `if Store.level store > 0` line in `Ne.propagate`.
