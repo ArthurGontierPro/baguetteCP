@@ -743,6 +743,17 @@ Updated as things land. The plan is the nine steps agreed on 2026-11-23 (speed f
 
 `-f` scored in the fixed category would rank 3rd in five editions and 2nd in 2020; it wins on 670 instances and loses on 327. Proof logging costs 0.47 of the time at the median. At 64 GiB (D-0210, on fataepyc-07, same binary): REFUSED 164 -> 60 but only 302 -> 304 verified answers, so 16 GiB stays a fair reference. **This is the strongest case yet for M19-config-T1 (the default search): it is held until agent-chrono's arms on the CDCL loop are in (D-0224), then decided on these numbers.**
 
+**AGAINST THE OTHER PROOF-LOGGING SOLVER (D-0211, merged)**: GCS with proofs and Chuffed without, same sixteen editions and settings, on fataepyc-07.
+
+| | baguette (proof) | GCS (proof) | baguette (no proof) | Chuffed (no proof) |
+|---|---|---|---|---|
+| OPT+UNSAT verified | 302 | 97 (210 printed) | 340 printed | 634 printed |
+| SAT verified | 74 | 44 (69 printed) | 86 printed | 136 printed |
+| complete, check timed out at 3 600 s | 18 | 135 | | |
+| score, 16 editions | 4 043 | 2 792 | 4 428 | 8 466 |
+
+baguette has 376 verified complete answers against GCS's 141 and scores above it in 15 of 16 editions; GCS is faster on the 126 instances both complete (0.80 of the time, a tenth of the memory) but half of its answers cannot be checked in an hour (its proofs grow at about 100 MB/s). Chuffed scores about twice baguette. Left on fataepyc-07: 125 GB of GCS proofs kept as evidence of a harness bug (`bench/series/veripb_wrap.sh` records a veripb memory death `OSError: [Errno 22]` as CHECK-ERROR), under `/scratch/arthur/node07-gcs/G/{2023,2024}/log/`; they can be deleted.
+
 **Merged and gated** (gates 91 to 95 green, pinned to four cores with lanes at `-j 4` because the series holds the node; last binary `75b1e984`):
 - D-0209, the proof text through one buffer: byte-identical, -0.4 to -7.9 % per proved node (gate 91).
 - D-0206, native `table` (GAC, one `rup` per pruning): `.opb` 3 to 16 times smaller on the Challenge's table instances (gate 92; the only artefact diffs are the five new models).
