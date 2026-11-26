@@ -19,7 +19,6 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M23-inputs-T1..T5 | `lib/scp/` (new), `lib/flatzinc/arith_aux.ml` (new), `lib/flatzinc/builder.ml` (arithmetic auxiliaries extracted, T4), `bin/main.ml` (reader by extension, help text), `bin/dune`, `test/scp/` (new), `test/unit/test_scp.ml` (new), `test/unit/dune`, `scripts/run_scp_tests.sh` (new), `Makefile` (scp lane), `docs/DECISIONS.md` (D-0230), `docs/ROADMAP.md` (M23 rows), `docs/ARCHITECTURE.md` §1, `CLAUDE.md` module map, `tools/e2e/scpsem.py` | agent-scp (branch `wave76-scp`) | 2026-11-26 |
 
 ## Cross-session requests
 
@@ -468,6 +467,7 @@ section 1. Shares are inclusive, of the whole run.
 
 | Task | Session | Date | Summary |
 |---|---|---|---|
+| M23-inputs-T1..T5 (the `.scp` reader, D-0230) | agent-scp (`wave76-scp`, not merged) | 2026-11-26 | **D-0230.** `lib/scp/` reads cake_pb_cp's `.scp` (version 1) into the same `Model.t`; refuses with a position what baguette does not propagate. Spike: 196 of 203 read and VERIFIED in 60 s, 7 refused (`equals_if`). FlatZinc artefacts byte-identical (456 of 456). |
 | M17-bench-series-T4 (GCS with proofs, Chuffed, D-0211) | agent-node07 (`wave60-node07`) | 2026-11-26 | **D-0211.** Sixteen editions on fataepyc-07 at D-0203's settings. Verified complete answers: baguette A 376, GCS 141 (279 printed, 135 TIMEOUT-CHECK); summed score baguette A 4 043, GCS 2 792, Chuffed 8 466. `arms_compare.py` reads `NAME=DIR@gcs`, `challenge_rank.py --demote-gcs` (additive). Tables `/cluster/arthur/baguette-results/node07-gcs/` |
 | M17-bench-series-T5 (64 GiB observation series, D-0210) | agent-node07 (`wave60-node07`) | 2026-11-26 | **D-0210.** Arms A and C of `f244c35a` at 64 GiB (32 GiB heap) on fataepyc-07. Of A's 164 refusals at 16 GiB: 3 OPT (TIMEOUT-CHECK), 101 search to the limit, 60 refused again. Tables `/cluster/arthur/baguette-results/node07-64g/` |
 | M17-bench-series, the arm `-f --no-proof` on two binaries (D-0229) | docs-session (laptop) | 2026-11-25 | **D-0229.** Reference `f244c35a` 401 + 108, 125 refused, score 6 288. Main `36e8cc0` 420 + 112, 84 refused, score 6 590 (fixed category, all unverified). 19 complete answers gained and none lost, no contradiction between the arms. HISTORY.md, the Challenge README and one README bullet updated. |
@@ -689,6 +689,11 @@ section 1. Shares are inclusive, of the whole run.
 | M19-config-T0 (the tuning set) | agent-tuning (`wave59-tuning`) | 2026-11-23 | **D-0205.** `bench/tuning/`, 200 instances in 183 families. DONE except the driver hook. |
 
 ## Handoff notes
+
+### 2026-11-26 (agent-scp, fataepyc-06): M23-inputs T1 to T5 are done on `wave76-scp`, not merged (D-0230)
+
+`baguette foo.scp` reads CakeML's `.scp` (version 1) through `lib/scp/` into the same `Model.t`; `make scp` is in `make test`, and `tools/scp/` holds the agreement, random and mutation lanes (each answer judged against the `.scp` alone by `validate.py`). The SPEC sentence is only proposed (D-0230 section 6): the user decides.
+Finding for whoever owns `lib/core/prop/regular.ml`: a CONSTANT letter outside the symbol range crashes `forward_reason` (index out of bounds), reproduced from FlatZinc on main (D-0230 section 7); the reader sidesteps it, the propagator is unchanged.
 
 ### 2026-11-26 (agent-node07, fataepyc-07): M17-bench-series-T5 and T4 are done (D-0210, D-0211)
 
