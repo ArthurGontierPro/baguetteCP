@@ -661,6 +661,13 @@ type stats = {
          conflict level), refuted by the branch nogood instead ([cdcl]). *)
   mutable lo_direct : int;
       (* CDCL loop: assertions no consumer made, pushed from the clause ([cdcl]). *)
+  mutable lo_chrono : int;
+      (* M19-config-T11 (D-0224): conflicts after which the loop went back to the level
+         below the clause's highest one instead of jumping to its asserting level, the
+         jump skipping more than [config.chrono] levels. *)
+  mutable lo_repushed : int;
+      (* M19-config-T11: fallback assertions pushed again after a later backtrack left
+         their nogood unit ([cdcl]'s [repush]). *)
 }
 
 let stats_create () =
@@ -738,6 +745,8 @@ let stats_create () =
     lo_pb_pruning = 0;
     lo_direct = 0;
     lo_fallback = 0;
+    lo_chrono = 0;
+    lo_repushed = 0;
   }
 
 let stats_learned s = List.rev s.learned_rev
@@ -877,13 +886,13 @@ let report_learning s =
       "cdcl-stats: loop=%s nodes=%d decisions=%d conflicts=%d learned=%d resumes=%d \
        skipped=%d far=%d jump_max=%d asserting=%d/%d clause_instances=%d \
        clauses_pruning=%d pb_instances=%d pb_pruning=%d units=%d unit_prunes=%d \
-       direct=%d fallback=%d\n\
+       direct=%d fallback=%d chrono=%d repushed=%d\n\
        %!"
       (if s.cdcl_run then "cdcl" else "dfs")
       s.nodes s.decisions s.conflicts s.n_learned s.lo_resumes s.lo_skipped s.lo_far
       s.lo_jump_max s.lo_asserting s.lo_checked s.n_clause_instances s.lo_clauses_pruning
       s.n_pb_instances s.lo_pb_pruning (List.length s.globals_rev) s.n_global_prunes
-      s.lo_direct s.lo_fallback
+      s.lo_direct s.lo_fallback s.lo_chrono s.lo_repushed
 
 (* Does this pair of counts satisfy the identity above? [exhausted] is whether the
    search closed its whole tree. Public because [solve] checks it only under
@@ -1861,6 +1870,13 @@ type config = {
          that every caller building on [default_config] -- bin/main.ml included -- gets
          it without a CLI change). Forces the learned clause's consumer on whatever
          [propagate_learned] says. *)
+  chrono : int option;
+      (* M19-config-T11 (D-0224): under [cdcl] only. [Some t]: when the backjump to the
+         learned clause's asserting level would skip more than [t] levels, go back to the
+         level below the clause's highest one instead and assert the literal there
+         (chronological backtracking for long jumps, Nadel and Ryvchin 2018, the literal
+         recorded at that level). [None] (the default): D-0219's loop exactly. Ignored by
+         [dfs]. BAGUETTE_CHRONO=T, or the CLI's --chrono T. *)
 }
 
 let default_config =
@@ -1899,6 +1915,20 @@ let default_config =
           prerr_endline
             (Printf.sprintf "baguette: BAGUETTE_CDCL=%S is not a setting. Use 1 or 0." v);
           exit 2);
+    chrono =
+      (* The same discipline: a non-negative integer, or unset/off. *)
+      (match Sys.getenv_opt "BAGUETTE_CHRONO" with
+      | None | Some ("" | "off") -> None
+      | Some v -> (
+          match int_of_string_opt v with
+          | Some t when t >= 0 -> Some t
+          | _ ->
+              prerr_endline
+                (Printf.sprintf
+                   "baguette: BAGUETTE_CHRONO=%S is not a setting. Use a level count >= \
+                    0 or off."
+                   v);
+              exit 2));
   }
 
 let no_learning = { default_config with learn = false; pb = false }
@@ -3852,7 +3882,23 @@ and explore_ge store engine ctx trace stats cfg order decisions v k lit =
    the search to that level, where its instance reports the conflict again and the walk
    produces an asserting clause. [expect] checks the assertion at the next fixpoint and,
    if no consumer made it, pushes it here from the clause itself, so a declined
-   registration costs a weaker propagation, never a loop. *)
+   registration costs a weaker propagation, never a loop.
+
+   M19-config-T11 (D-0224): CHRONOLOGICAL BACKTRACKING FOR LONG JUMPS, [config.chrono].
+   With [Some t], a conflict whose asserting backjump would skip more than [t] levels goes
+   back to [top - 1] instead ([top] the clause's highest level), where the clause is unit
+   too, and its literal is asserted THERE, recorded at that level: the trail stays ordered
+   by level (I-T2) and every level read afterwards is the recorded one, which is sound
+   because nothing that makes a learned clause implied reads a level; a recorded level
+   above the true one only makes later jumps shorter. Why it pays: a fixed order re-takes
+   every decision a long jump undid (D-0219 section 6). What it would miss, a later
+   backtrack to [t] in [b, top - 1) popping the literal while its clause stays unit, the
+   engine does not miss: the clause's instance was born after every fixpoint of those
+   levels, so [Engine.propagate]'s rule (b) seeds it again after any such backtrack and it
+   asserts the literal at [t] (BAGUETTE_DEBUG's I-P2 check would see it otherwise). The
+   fallback assertion has no instance, so [repush] does the same for it from its nogood,
+   which is filed at [b] and so still live. A clause that does not assert, a restart
+   target below, or a jump of at most [t] levels: as above, unchanged. *)
 
 (* Undo every level above [b] and retire their lines. *)
 let backjump ctx stats store b =
@@ -3932,6 +3978,27 @@ let cdcl engine store ctx trace stats cfg (order : order) : node =
   in
   (* The literal the last backjump left to be asserted, with its clause. *)
   let expect = ref None in
+  (* M19-config-T11: the fallback assertions made chronologically, above their true level
+     [b]: (literal, nogood, b, recorded level). See [repush]. *)
+  let chrono_fallbacks = ref [] in
+  (* After a backjump to [t]: a fallback assertion recorded above [t] whose nogood is
+     still unit ([b <= t]) is pushed again at [t] from the same line, which is filed at
+     [b] and so still on the page; one whose [b] was popped is dropped, its nogood's other
+     literals with it; one pushed at its true level needs no more care. *)
+  let repush t =
+    if !chrono_fallbacks <> [] then
+      chrono_fallbacks :=
+        List.filter_map
+          (fun ((lit, lits, b, at) as e) ->
+            if t < b then None
+            else if at <= t then Some e
+            else (
+              if lit_status store lit = 0 then (
+                stats.lo_repushed <- stats.lo_repushed + 1;
+                assert_directly ctx store lit lits);
+              if t = b then None else Some (lit, lits, b, t)))
+          !chrono_fallbacks
+  in
   let decide (c : choice) =
     let push lit outcome lvl =
       (match (outcome : Store.outcome) with
@@ -4016,29 +4083,44 @@ let cdcl engine store ctx trace stats cfg (order : order) : node =
       if b = 0 then stats.assign_clauses_rev <- cid :: stats.assign_clauses_rev);
     if b >= d && not asserting then
       failwith "Search.cdcl: a learned clause neither asserts nor sends the search lower";
+    (* M19-config-T11: where the clause is unit and the search goes back to, [b] or, for a
+       jump over more than [cfg.chrono] levels, the level below the clause's top. *)
+    let back =
+      match cfg.chrono with
+      | Some thr when asserting ->
+          let top = List.fold_left (fun a (_, l) -> Stdlib.max a l) entry levelled in
+          if top - 1 - b > thr then top - 1 else b
+      | Some _ | None -> b
+    in
     let target =
       match restart_after_conflict stats store c !decisions with
       | Some t ->
           let t = Stdlib.max entry t in
           stats.restart_targets <- stats.restart_targets + t;
-          Stdlib.min b t
-      | None -> b
+          Stdlib.min back t
+      | None -> back
     in
     backjump ctx stats store target;
     drop_to target;
+    repush target;
+    if target <> b && target = back then stats.lo_chrono <- stats.lo_chrono + 1;
     (* A restart below the asserting level is not a resume the clause is unit at: its
        assertion is not checked, only the levels skipped are counted. *)
-    if target <> b then stats.lo_pending <- Some ([], d);
+    if target <> back then stats.lo_pending <- Some ([], d);
     observe_resume stats store ~sk:(Stdlib.max 0 (d - 1 - target));
     let assertion =
-      if asserting && target = b then
+      if asserting && target = back then
         Option.map (fun l -> (l, List.map fst levelled)) (top_literal levelled)
       else None
     in
     if fallback then (
       (* No instance carries the nogood, so its assertion is pushed here, now. *)
       expect := None;
-      Option.iter (fun (l, lits) -> assert_directly ctx store l lits) assertion)
+      Option.iter
+        (fun (l, lits) ->
+          assert_directly ctx store l lits;
+          if target > b then chrono_fallbacks := (l, lits, b, target) :: !chrono_fallbacks)
+        assertion)
     else expect := assertion
   in
   let result = ref None in
@@ -4077,6 +4159,7 @@ let cdcl engine store ctx trace stats cfg (order : order) : node =
                 let finish () =
                   backjump ctx stats store entry;
                   decisions := [];
+                  chrono_fallbacks := [];
                   result := Some (NSat asn)
                 in
                 match cfg.bnb with

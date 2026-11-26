@@ -697,10 +697,22 @@ let test_cdcl_loop () =
   Sys.remove dir;
   Sys.mkdir dir 0o700;
   let off = { Search.default_config with Search.cdcl = false } in
-  let on = { off with Search.cdcl = true } in
+  let on = { off with Search.cdcl = true; Search.chrono = None } in
+  (* M19-config-T11 (D-0224): the same checks with chronological backtracking for long
+     jumps, at thresholds 0 (every conflict goes back one level) and 1, with the fallback
+     (learning off) whose assertions are pushed again from their nogood after a later
+     backtrack, and under restarts. *)
+  let chrono t = { on with Search.chrono = Some t } in
   let configs =
     [
       ("cdcl", on);
+      ("cdcl+chrono:0", chrono 0);
+      ("cdcl+chrono:1", chrono 1);
+      ( "cdcl+chrono:0+nolearn",
+        { (chrono 0) with Search.learn = false; Search.pb = false } );
+      ( "cdcl+chrono:0+luby:1+phase",
+        { (chrono 0) with Search.restarts = Restart.Luby 1; Search.phase_saving = true }
+      );
       ("cdcl+nolearn", { on with Search.learn = false; Search.pb = false });
       ( "cdcl+luby:1+phase",
         { on with Search.restarts = Restart.Luby 1; Search.phase_saving = true } );
@@ -713,7 +725,7 @@ let test_cdcl_loop () =
         } );
     ]
   in
-  let far = ref 0 in
+  let far = ref 0 and chronos = ref 0 and repushed = ref 0 in
   List.iter
     (fun (name, src) ->
       let base = solve_with dir (name ^ "_dfs") src off in
@@ -727,6 +739,13 @@ let test_cdcl_loop () =
           let r = solve_with dir tag src config in
           let st = r.stats in
           far := !far + st.Search.lo_far;
+          chronos := !chronos + st.Search.lo_chrono;
+          repushed := !repushed + st.Search.lo_repushed;
+          if config.Search.chrono = None then
+            check
+              (Printf.sprintf "M19-T11 %s %s: no chronological step without --chrono" name
+                 cname)
+              (st.Search.lo_chrono = 0 && st.Search.lo_repushed = 0);
           check
             (Printf.sprintf "M19-T10 %s %s: same answer as dfs (%s), proof %s" name cname
                r.answer r.verdict)
@@ -754,7 +773,13 @@ let test_cdcl_loop () =
             && st.Search.lo_direct = 0))
         configs)
     [ ("pigeons54", pigeons); ("queens8", queens 8); ("queens6opt", queens ~opt:true 6) ];
-  check (Printf.sprintf "M19-T10: the loop skipped levels at %d resumes" !far) (!far > 0)
+  check (Printf.sprintf "M19-T10: the loop skipped levels at %d resumes" !far) (!far > 0);
+  check
+    (Printf.sprintf
+       "M19-T11: chronological steps taken in place of a long jump: %d (fallback \
+        assertions pushed again: %d)"
+       !chronos !repushed)
+    (!chronos > 0)
 
 let () =
   print_endline "";
