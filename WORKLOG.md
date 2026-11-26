@@ -19,7 +19,6 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M21-memory-T3 (fix 4 of D-0218: explanations released after their line, D-0223) | `lib/core/justify.ml`, `lib/core/explanation.ml`, tests of them | agent-release (`wave70-release`) | 2026-11-24 |
 
 ## Cross-session requests
 
@@ -467,6 +466,7 @@ section 1. Shares are inclusive, of the whole run.
 
 | Task | Session | Date | Summary |
 |---|---|---|---|
+| M21-memory-T3, fix 4 of D-0218 (D-0223) | agent-release (`wave70-release`) | 2026-11-24 | **D-0223 [AUTONOME].** What held tdtsp's explanation trees is `Element`'s wrapper thunk (the inner thunk memoises the tree its wrapper's release drops), not the hash-consing table (1 MB). Landed, byte-identical: a model row's citation is one shared block per id (`Explanation.cite_row`), tdtsp at 250 nodes 16.6 -> 6.7 GB peak RSS. Releasing the inner tree is measured, not landed (other bytes on tdtsp, +16 to +37 % time): `baguette-results/release/handed.patch` |
 | M22-review-T4 (README part; the module map is still open) | readme-session (laptop) | 2026-11-24 | `README.md` only: the new globals, the CDCL switch, the dated e2e count, and the caveats under the Challenge table. |
 | M17-bench-series-T3 (history and the rule) | agent-history (`wave72-history`) | 2026-11-24 | `bench/series/HISTORY.md` with seven rows (D-0210, D-0203, D-0185, D-0175 two arms, D-0133, D-0121), and the orchestration bullet in CLAUDE.md. |
 | M17-bench-series-T1, T2 (the series driver and the first series on current main, D-0203) | agent-series (`wave58-series`) | 2026-11-24 | **D-0203.** `bench/series/run_series.sh` (phases setup, flatten, run, read, publish; resumable; veripb in its own 64 GB cgroup and 3 600 s limit; `--list`, `--solve-timeout`, no Chuffed/GCS flatten for baguette arms), `tools/compare/readme_table.py` (writes the README section). Series on release `f244c35a` (bits default, no proof cap, PAR 29 per arm): A 302+74 verified, B (`-f`) 346+95, C (`--no-proof`) 340+86 unverified; summed score 4 043 / 5 799 / 4 428 against D-0185's 2 789 / 3 581 / 3 237; 0 rejected, 0 veripb memory failures, 44 check time-outs; the cap would have cost one verified proof. Tables `/cluster/arthur/baguette-results/series-20261123/` |
@@ -736,6 +736,11 @@ Gates 96 to 98 green: 218 models byte-identical, lane 347/347, debug 333/333, sc
 Also open: after D-0208 the engine's wake work is the largest share left on costas and mknap; removing it needs the D-0169 (b) rule (rows that never prune are not woken), which changes default behaviour.
 
 **[AUTONOME] decisions**: D-0217 (a normative SPEC 2.1 sentence listing `baguette_circuit` among the builtins, as each native global has); D-0213 (above); D-0216 (alldiff reuses the node a rebuild would return; two dedups hashed; byte-identical); D-0208 (watching withdrawn on measurement).
+### 2026-11-24 (agent-release, `wave70-release`): M21-memory-T3, fix 4 of D-0218 (D-0223 [AUTONOME])
+
+What held tdtsp's written explanations (99 % of its live heap) is `Element`'s wrapper thunk: forcing it memoises the tree on the INNER thunk, which outlives the wrapper's release (D-0168); the hash-consing table held 1 MB, and D-0218's 44 % was its walk order. Landed, byte-identical on 228 models x 3 configurations, lane 347/347 and debug, scaling ok: a model row's citation is one shared block per id (`Explanation.cite_row`), tdtsp at 250 nodes 16.6 -> 6.7 GB peak RSS and -21 % wall; nothing gained where explanations are not row citations (mapping, proteindesign, travelling-thief).
+For the user (D-0223 section 3): releasing the inner tree (`/cluster/arthur/baguette-results/release/handed.patch`) takes tdtsp's live heap -97 % but changes its proof (a re-written tree finds lines the kept one did not) and costs +16 to +37 % time; with it the lane is 347/347 and the 228 models unchanged. Next: citations as an int array (a new summand constructor, a decision) and D-0218's fix 3, since the heap the budget reads stays far above the live data.
+
 ### 2026-11-24 (agent-memory2, `wave66-memory`): M21-memory-T1 and T2, where the heap goes (D-0218)
 
 The probe (`memprobe.patch`, kinds walked once in a fixed order, live data split by kind) says the 251 search refusals of arm A are our design: learned constraints kept forever at 270 to 330 B per literal (71 of 148 refusals in the probed families), hole bitsets copied per pruning (36), proof explanations kept alive (14); OCaml multiplies record-heavy kinds by 2.5 to 4 and its GC adds 1.5 to 5 on the heap the budget reads. At the encoding OCaml's factor alone can cross the 8 GiB budget (rcpsp). Results, scripts, tables: `/cluster/arthur/baguette-results/memory/`. For T3: arm A ran before D-0201 (order encoding), and on this main proteindesign, ttp r49 and community no longer refuse within 300 s, so start from a fresh census; ttp r49 passed 8 GiB of peak heap without the budget firing. D-0220's cross-session request asked for the bytes of a learned clause: 27.7 KB for 98 literals on community, 115 KB for 413 on steelmill (D-0218 section 3).
