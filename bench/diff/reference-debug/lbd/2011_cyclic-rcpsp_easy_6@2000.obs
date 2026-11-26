@@ -58,7 +58,7 @@ search limit.pb-learned 5
 search limit.db 500
 search limit.maxdepth 32
 search limit.incumbent 664
-work limit.props 1489836
+work limit.props 1489795
 work limit.eff 73014
 work limit.contra 699
 search limit.at node
@@ -119,17 +119,17 @@ work bool2int/inst 81 inst 2.0 runs/node 0.99 eff/node
 work cumulative/inst 1 inst 1.9 runs/node 0.01 eff/node
 work all_different_int/inst 1 inst 1.8 runs/node 0.52 eff/node
 work learned_pb/inst 5 inst 1.0 runs/node 0.00 eff/node
-work props/runs 1489836 runs
+work props/runs 1489795 runs
 work eff/runs 73014 runs
 work contra/runs 699 runs
 work passes/snaps 11336 snaps
 work deductions/chgs 2191 chgs
-work wakes/wakes 2747358 wakes
+work wakes/wakes 2732404 wakes
 work masked/wakes 0 wakes
 work vetoed/wakes 59830 wakes
-work advised/wakes 237442 wakes
-work seeded/runs 126655 runs
-work skipped/slots 3294371 slots
+work advised/wakes 216461 wakes
+work seeded/runs 126614 runs
+work skipped/slots 3294412 slots
 search rup/lines 16810 lines
 search pol/lines 535156 lines
 search pol-tokens/tokens 23325807 tokens

@@ -75,10 +75,10 @@ work eff/runs 79362 runs
 work contra/runs 742 runs
 work passes/snaps 0 snaps
 work deductions/chgs 0 chgs
-work wakes/wakes 434762 wakes
+work wakes/wakes 421390 wakes
 work masked/wakes 0 wakes
 work vetoed/wakes 37640 wakes
-work advised/wakes 14649 wakes
+work advised/wakes 1277 wakes
 work seeded/runs 31321 runs
 work skipped/slots 1110139 slots
 search rup/lines 52478 lines

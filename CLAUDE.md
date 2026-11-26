@@ -256,9 +256,11 @@ lib/core/       Baguette_core
                             can propagate: lifts a Linear reason onto the ladder rungs
                             that actually carry its strength (M2-L11, D-0028/D-0010)
   retention.ml              the learned-constraint DATABASE, and the SINGLE owner of a
-                            learned constraint's lifetime. Policies are swappable
-                            (`keep_all`, `fifo`, `lbd`) and the default is `keep_all`
-                            BY MEASUREMENT, not by omission -- D-0051, D-0221 (M2-L4)
+                            learned constraint's lifetime, its proof id AND its engine
+                            instance (an eviction removes both, D-0226). Policies are
+                            swappable (`keep_all`, `fifo`, `lbd`, `tiered`) and the default
+                            is `tiered` BY MEASUREMENT since D-0226 (`keep_all` before:
+                            D-0051, D-0221) (M2-L4)
   view.ml                   VIEWS (+-x + k) and constants-as-variables, as a RENDERING
                             onto the base's order literals -- no PB variables of its
                             own, no name, so no sanitize table (M4-T0, D-0058)

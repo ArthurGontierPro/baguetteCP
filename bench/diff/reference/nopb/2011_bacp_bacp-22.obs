@@ -8,43 +8,43 @@ search bits/vars 61 vars
 search bitsrows/lines 122 lines
 search choices/groups 0 groups
 search limit.nodes 6001
-search limit.decisions 3007
-search limit.conflicts 2993
-search limit.learned 2993
+search limit.decisions 3008
+search limit.conflicts 2992
+search limit.learned 2992
 search limit.pb-learned 0
-search limit.db 2993
+search limit.db 2047
 search limit.maxdepth 32
 search limit.incumbent none
-work limit.props 1246069
-work limit.eff 143523
-work limit.contra 2993
+work limit.props 1201330
+work limit.eff 144324
+work limit.contra 2992
 search limit.at node
 search limit.signal none
 search nodes/nodes 6001 nodes
-search decisions/decs 3007 decs
-search conflicts/nodes 2993 nodes
+search decisions/decs 3008 decs
+search conflicts/nodes 2992 nodes
 search maxdepth/levels 32 levels
 work exhausted/bool 0 bool 1 if
 search skipped/nodes 3 nodes
-search learned/cls 2993 cls
-work later/asks 100780 asks
-work cites/memos 73848 memos
+search learned/cls 2992 cls
+work later/asks 101550 asks
+work cites/memos 74369 memos
 search convertible/cls 0 cls
-search retention keep-all keep-all: 2993 added, 0 evicted, 2993 swept, 0 live, 0 duplicate, 2993 cited, 0 pinned
-search lbd 5:23,6:106,7:266,8:387,9:477,10:580,11:531,12:336,13:144,14:114,15:29
-search width 11:2,12:20,13:93,14:111,15:82,16:2685
+search retention tiered(core<=2,mid<=6,first=2000,inc=300,mid_every=10000) tiered(core<=2,mid<=6,first=2000,inc=300,mid_every=10000): 2992 added, 945 evicted, 2047 swept, 0 live, 26 duplicate, 2992 cited, 0 pinned, 1 reductions, 945 detached, 0 locked
+search lbd 5:23,6:105,7:264,8:380,9:476,10:581,11:533,12:340,13:147,14:115,15:28
+search width 11:2,12:20,13:93,14:111,15:84,16:2682
 search globals/units 0 units
 search glob-prune/prunes 0 prunes
 search glob-confl/confl 0 confl
-search cls-inst/inst 2993 inst
+search cls-inst/inst 2992 inst
 search cls-decl/cls 0 cls
-search cls-prune/prunes 2802 prunes
+search cls-prune/prunes 2784 prunes
 search pb-inst/inst 0 inst
 search pb-inst-no/rows 0 rows
 search pb-prune/prunes 0 prunes
 search pb-confl/confl 0 confl
 search minimised/lits 0 lits
-search i-s4-cross/lines 44429 lines
+search i-s4-cross/lines 44372 lines
 search pb-tried/confl 0 confl
 search pb-learned/rows 0 rows
 search pb-fallback/confl 0 confl
@@ -61,31 +61,31 @@ search lvl-wide/confl 0 confl
 search lvl-incomp/confl 0 confl
 search lvl-empty/confl 0 confl
 search lvl-assert/confl 0 confl
-work learned_clause/inst 2993 inst 84.2 runs/node 0.47 eff/node
-work int_eq_reif/inst 500 inst 41.4 runs/node 6.49 eff/node
-work int_le_reif/inst 450 inst 33.8 runs/node 3.88 eff/node
-work int_lin_le/inst 135 inst 29.6 runs/node 2.75 eff/node
-work bool2int/inst 950 inst 18.7 runs/node 10.33 eff/node
-work props/runs 1246069 runs
-work eff/runs 143523 runs
-work contra/runs 2993 runs
+work learned_clause/inst 2992 inst 76.0 runs/node 0.46 eff/node
+work int_eq_reif/inst 500 inst 41.6 runs/node 6.52 eff/node
+work int_le_reif/inst 450 inst 34.0 runs/node 3.90 eff/node
+work int_lin_le/inst 135 inst 29.7 runs/node 2.77 eff/node
+work bool2int/inst 950 inst 18.8 runs/node 10.39 eff/node
+work props/runs 1201330 runs
+work eff/runs 144324 runs
+work contra/runs 2992 runs
 work passes/snaps 0 snaps
 work deductions/chgs 0 chgs
-work wakes/wakes 1328046 wakes
-work masked/wakes 11152 wakes
-work vetoed/wakes 29654 wakes
-work advised/wakes 55809 wakes
-work seeded/runs 165527 runs
-work skipped/slots 20999613 slots
-search rup/lines 78201 lines
-search pol/lines 95217 lines
-search pol-tokens/tokens 6368492 tokens
+work wakes/wakes 1284344 wakes
+work masked/wakes 11262 wakes
+work vetoed/wakes 29895 wakes
+work advised/wakes 52602 wakes
+work seeded/runs 153093 runs
+work skipped/slots 21012024 slots
+search rup/lines 78537 lines
+search pol/lines 95823 lines
+search pol-tokens/tokens 6420094 tokens
 search pol-widest/tokens 196 tokens
 search atoms/atoms 454 atoms
 search atomlinks/lines 679 lines
 search bridges/pairs 1606 pairs
 search boundlines/pairs 747 pairs
-search bitsprune/lines 94538 lines
+search bitsprune/lines 95144 lines
 search atoms/prune/atoms 0.005 atoms
 opb 9b1cacead48d373abfde2131d0428b342d3fb2f772b2f455e9491e8bffec1287
-pbp 1267220ca1091ae88a43eaf925996c63ab7da2d5962feee4bfc6f0b88d210513
+pbp 53772b3105f874e89e4f47dfe99e796aae10f1114b498d5f2d9f7c20107a4229

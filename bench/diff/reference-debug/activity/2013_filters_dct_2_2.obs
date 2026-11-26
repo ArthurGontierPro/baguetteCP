@@ -33,7 +33,7 @@ search learned/cls 463 cls
 work later/asks 329226 asks
 work cites/memos 7140 memos
 search convertible/cls 115 cls
-search retention keep-all keep-all: 463 added, 0 evicted, 463 swept, 0 live, 21 duplicate, 462 cited, 0 pinned
+search retention tiered(core<=2,mid<=6,first=2000,inc=300,mid_every=10000) tiered(core<=2,mid<=6,first=2000,inc=300,mid_every=10000): 463 added, 0 evicted, 463 swept, 0 live, 21 duplicate, 462 cited, 0 pinned, 0 reductions, 0 detached, 0 locked
 search lbd 1:2,2:8,3:45,4:135,5:141,6:73,7:38,8:11,9:6,10:2,12:1,14:1
 search width 1:2,2:2,3:8,4:7,5:52,6:32,7:256,8:42,9:24,10:10,11:9,12:11,13:2,14:2,15:1,16:3
 search globals/units 2 units
