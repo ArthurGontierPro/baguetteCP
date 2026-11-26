@@ -34,6 +34,22 @@
    pruning, its order and its justification are the ones it always made; the kept matching
    is a hint re-read against the live domains, never a fact, and needs no trail.
 
+   THE COST PER CALL (M20-pernode-T4, D-0235). Four rules keep a call from paying for
+   what cannot have changed, each stated and argued where it lives, none changing a
+   pruning, its order, its reason or its derivation (the artefacts are byte-identical):
+
+     - [pass] skips a stage 1 pass whose BOUND vector is one a scan once found quiet: the
+       scan's outcome is a function of the bounds alone (BAGUETTE_DEBUG re-runs it);
+     - [pass_scan] snapshots a term when it first reads it, and forces the snapshot of a
+       term before pushing it, so it reads what the eager pass-start snapshot read;
+     - [regin_scratch] keeps a term's snapshot until a removal lands on it, builds a
+       tight set's facts once for all its removals, and hands the store only values
+       still in the live domain ([Store.remove] answers [Unchanged] for the others);
+     - Hall-set membership is a binary search ([mem_of]), never polymorphic [List.mem].
+
+   None of these caches outlives the call except [quiet], which is a hint about a bound
+   vector and not about the store, so nothing here needs the trail.
+
    ---------------------------------------------------------------------------
    Filtering: Hall intervals
    ---------------------------------------------------------------------------
@@ -1506,10 +1522,14 @@ let in_order_currency t y value expl =
 
 (* One removal, with both halves of D-0026 built from the same snapshot, returning
    through [Found] exactly as [pass]'s [push] does and recording a landed removal in
-   [moved]. [y] and [d] are read LIVE here, not from the pass's snapshot: I-P6 allows
-   stale premises, but the SHAPE of the entry -- a hole clause for an interior value, the
-   bound landed on for a value at the bound ([removal_conclusion]) -- must be decided
-   against the domain the store is about to change. *)
+   [moved], and answering whether it landed. [y] and [d] are LIVE here, not the pass's
+   snapshot: I-P6 allows stale premises, but the SHAPE of the entry -- a hole clause for
+   an interior value, the bound landed on for a value at the bound ([removal_conclusion])
+   -- must be decided against the domain the store is about to change. [y] comes from
+   [regin_scratch]'s cache, which is the live snapshot by its invalidation rule, and
+   [facts] is the tight set's [hall_facts], shared by every removal under that set
+   (D-0235); the caller hands over only a value still in [y]'s live domain, so every
+   call reaches the store. *)
 let remove_one t store ~moved ~halls ~vals ~keep ~facts ~y ~y_tm value =
   let d = Store.get store y_tm.x in
   let concludes = removal_conclusion y d value in
