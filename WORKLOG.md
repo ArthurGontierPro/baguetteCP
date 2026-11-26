@@ -467,6 +467,7 @@ section 1. Shares are inclusive, of the whole run.
 
 | Task | Session | Date | Summary |
 |---|---|---|---|
+| M23-inputs-T1..T5 (the `.scp` reader, D-0230) | agent-scp (`wave76-scp`, not merged) | 2026-11-26 | **D-0230.** `lib/scp/` reads cake_pb_cp's `.scp` (version 1) into the same `Model.t`; refuses with a position what baguette does not propagate. Spike: 196 of 203 read and VERIFIED in 60 s, 7 refused (`equals_if`). FlatZinc artefacts byte-identical (456 of 456). |
 | M17-bench-series-T4 (GCS with proofs, Chuffed, D-0211) | agent-node07 (`wave60-node07`) | 2026-11-26 | **D-0211.** Sixteen editions on fataepyc-07 at D-0203's settings. Verified complete answers: baguette A 376, GCS 141 (279 printed, 135 TIMEOUT-CHECK); summed score baguette A 4 043, GCS 2 792, Chuffed 8 466. `arms_compare.py` reads `NAME=DIR@gcs`, `challenge_rank.py --demote-gcs` (additive). Tables `/cluster/arthur/baguette-results/node07-gcs/` |
 | M17-bench-series-T5 (64 GiB observation series, D-0210) | agent-node07 (`wave60-node07`) | 2026-11-26 | **D-0210.** Arms A and C of `f244c35a` at 64 GiB (32 GiB heap) on fataepyc-07. Of A's 164 refusals at 16 GiB: 3 OPT (TIMEOUT-CHECK), 101 search to the limit, 60 refused again. Tables `/cluster/arthur/baguette-results/node07-64g/` |
 | M21-memory-T3, fix 4 of D-0218 (D-0223) | agent-release (`wave70-release`) | 2026-11-24 | **D-0223 [AUTONOME].** What held tdtsp's explanation trees is `Element`'s wrapper thunk (the inner thunk memoises the tree its wrapper's release drops), not the hash-consing table (1 MB). Landed, byte-identical: a model row's citation is one shared block per id (`Explanation.cite_row`), tdtsp at 250 nodes 16.6 -> 6.7 GB peak RSS. Releasing the inner tree is measured, not landed (other bytes on tdtsp, +16 to +37 % time): `baguette-results/release/handed.patch` |
@@ -689,6 +690,11 @@ section 1. Shares are inclusive, of the whole run.
 | M19-config-T0 (the tuning set) | agent-tuning (`wave59-tuning`) | 2026-11-23 | **D-0205.** `bench/tuning/`, 200 instances in 183 families. DONE except the driver hook. |
 
 ## Handoff notes
+
+### 2026-11-26 (agent-scp, fataepyc-06): M23-inputs T1 to T5 are done on `wave76-scp`, not merged (D-0230)
+
+`baguette foo.scp` reads CakeML's `.scp` (version 1) through `lib/scp/` into the same `Model.t`; `make scp` is in `make test`, and `tools/scp/` holds the agreement, random and mutation lanes (each answer judged against the `.scp` alone by `validate.py`). The SPEC sentence is only proposed (D-0230 section 6): the user decides.
+Finding for whoever owns `lib/core/prop/regular.ml`: a CONSTANT letter outside the symbol range crashes `forward_reason` (index out of bounds), reproduced from FlatZinc on main (D-0230 section 7); the reader sidesteps it, the propagator is unchanged.
 
 ### 2026-11-26 (agent-node07, fataepyc-07): M17-bench-series-T5 and T4 are done (D-0210, D-0211)
 

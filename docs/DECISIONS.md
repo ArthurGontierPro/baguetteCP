@@ -29914,3 +29914,138 @@ written.
 the test goes with `3c6fece` and `943eada`. Nothing outside `Explanation` and one line of
 `Justify.create` changed; `intern_cap`, `intern_below`, `intern_up_to` and `cite_row` are
 additions.
+
+## D-0230  [AUTONOME] M23-inputs-T1..T5: the `.scp` reader, `lib/scp/`. What it reads, what it refuses and why, the choices D-0228 section 14 left open, and the lanes that judge it
+
+Status: DONE on branch `wave76-scp` (not merged). Mode autonome: the choices marked [AUTONOME]
+below were taken without the user and are each reversible on their own.
+Date: 2026-11-26
+Task: M23-inputs-T1 to T5 (D-0228 section 14 is the plan; this record does not rewrite it)
+Touches: `lib/scp/` (new: `sexp.ml`, `reader.ml`, `dune`), `lib/flatzinc/arith_aux.ml` (new),
+`lib/flatzinc/builder.ml` (the arithmetic auxiliaries moved to `Arith_aux`), `bin/main.ml` (the
+reader by extension, `--e2e` refused on a `.scp`, the help text), `bin/dune`, `test/scp/` (26
+models and their outputs), `test/unit/test_scp.ml`, `scripts/run_scp_tests.sh`, `make scp` (in
+`make test`), `tools/scp/` (`validate.py`, `fzn_lane.sh`, `random_lane.py`, `mutate.sh`),
+`tools/e2e/scpsem.py` (the T4 forms), the two module maps. Results:
+`/cluster/arthur/baguette-results/scp-20261126/`.
+
+### 1. What was built
+
+`foo.scp` on the command line is read by `Baguette_scp.Reader.of_file`, everything else by the
+FlatZinc builder as before. The reader produces the same `Model.t` (`lib/flatzinc/model.ml`), so
+`compile.ml` and everything after it are unchanged and a `.scp` run has the proof, the search and
+the checks (I-S1) of a FlatZinc run. The grammar and the meaning of each constraint are read in
+CakeML's `cp_parseScript.sml` and `cpScript.sml` at `cp_enc_new` `930601d6` (downloaded from the
+public repository on 2026-11-26), version 1.
+
+### 2. T1, `sexp.ml`: iterative, linear, one item at a time
+
+The text is pulled through a fixed 64 KiB buffer. `Sexp.read` builds one form with an explicit
+stack of the lists still open (two functions that call each other in tail position), so the depth
+of nesting costs heap, never stack: the unit test reads a form nested 1 000 000 deep. The reader
+walks the frame `( (version 1) (variables ...) (constraints ...) (prob_type ...) )` token by token
+and calls `Sexp.read` once per variable and once per constraint, which it converts at once, so the
+tree alive at any moment is one item's and the file is never in memory as text or as a tree.
+
+Measured: a generated 300 MB `.scp` (1 000 000 variables, 1 829 932 four-term linear rows) reads
+in 19.1 s to its `Model.t`, peak RSS 1.07 GB, under `ulimit -v 4000000` (a throwaway executable
+calling `Reader.of_file`, not kept).
+
+Refused by the s-expression reader, with the position: an unbalanced list, a `)` with nothing
+open, anything after the one form, an empty file, a `;` (cake has no comment and refuses it,
+D-0228 section 14), a double quote, a control byte. An integer is cake's `mlint$fromString`: an
+optional `-` or `~`, then decimal digits; beyond 63 bits it is refused.
+
+### 3. The choices D-0228 left open
+
+| choice | taken | why | revert |
+|---|---|---|---|
+| **[AUTONOME] a variable declared `0 1`** | a `Model.Dbool` | `Encoding.declare_bool` is `declare_int 0..1`, so the encoding is the same, and the Boolean builtins `compile.ml` posts (`bool_clause`, `array_bool_or`, the reifiers) accept only a Dbool. Printed as an integer all the same | `reader.ml`, `variable` |
+| **[AUTONOME] what is printed** | every variable of the file, in its order, `name = value;`, then SPEC 2.2's separators | a `.scp` has no output item; this is what GCS prints and what `validate.py` reads back | `reader.ml`, `of_lexer` |
+| `enumerate` | one solution, as `decide` | D-0228 section 14 | |
+| **[AUTONOME] a condition `(Z op v)`** | over a constant: true or false; over a 0..1 variable: that variable or its negation; over any other variable: one auxiliary Boolean defined by `b <-> Z op v` (`int_le_reif`, `int_eq_reif`, `int_ne_reif` against a constant), memoised per condition | exact, and no new constructor. A negated 0..1 variable that must stand as a positive Boolean is one auxiliary `bool_not(b, nb)`, memoised. `(b = 0) <-> C` is written `b <-> not C` and needs none | `cond`, `lit_operand` |
+| **[AUTONOME] `_if` (half reification)** | refused | baguette has no half reification, and the rewriting through a full one adds a variable section 14 does not admit. It is why `fzn2scp.py`'s 7 `member` models are refused (section 14 expects them out) | |
+| `lin_equals_iff`, `lin_not_equals_iff` over a variable condition | refused | D-0228 section 14. Over a constant condition they are the plain row or its negation, read | |
+| **[AUTONOME] a condition whose variable occurs in the comparison it reifies** | refused by the reader | `compile.ml` refuses `b <-> C(b)` (not a definition); the reader says so with the constraint's position rather than as a refusal of a builtin the file never wrote. Found by the random lane (5 of 1 200 files) | `self_reif` |
+| `in` over constants, closed global cardinality, `circuit`'s range | the variable's DOMAIN is restricted, as mznlib's `x in S` is in FlatZinc; a 0..1 variable keeps its Dbool and gets `x = v`; an empty restriction posts the false clause | exact. A constraint read before the restriction was sized on the wider domain, which is sound: every auxiliary it made over a value the domain lost is fixed by its own definition | `restrict` |
+| **[AUTONOME] where auxiliaries come from** | after the file's variables, in the order the constraints ask, named `scp_<kind>_<n>` (`_` appended until the name is not the file's) | D-0228 section 5 | |
+| `element` | constant array only; index `Y - off + 1`, through one auxiliary `i` with `i - Y = 1 - off` when `off` is not 1 | `array_int_element` counts from 1, cake's `(Y off)` is position `Y - off` from 0; the auxiliary is the one exact way without a view | |
+| `regular` | cake's automaton is an NFA from state 0; read when it is deterministic, states shifted by one, `(n + 1) * Q` flags as mznlib declares them; an edge or a final state `>= nstates` is dead (cake's `nfa_accepts`), an empty word is `0 in finals`, no edge or no final state is false; a nondeterministic one is refused | determinising is exact but can blow up, and is not reading | |
+| **[AUTONOME] a constant letter of `regular` outside the symbols** | the constraint is false | it labels no edge; see section 7 for why the reader must say so itself | `dead_letter` |
+| `table` | plain rows; the rows whose values are all in their variable's domain kept, one selector each (mznlib's `keep`); `*` refused, a row of the wrong length refused (cake makes the constraint false) | | |
+| `circuit` | mznlib's `fzn_circuit` on the index set `0..n-1`, root 0: `all_different`, each `x_i` in `0..n-1` and `!= i`, the `n - 1` positions on `1..n-1`. `n = 1` is `x_0 = 0` (cake's `circuit_sem` admits it; mznlib's library makes it false), `n = 0` is true | cake's meaning, not mznlib's, where they differ | |
+| `cumulative` | durations, heights and capacity constant and non-negative, else refused | baguette's propagator takes constants; cake makes a negative height infeasible and D-0195 never asked baguette to agree | |
+| `count` | of a constant value, as a one-value `global_cardinality`; a variable value refused | section 14's list | |
+| `multiply`, `divide`, `abs` | `Arith_aux`, the helper `builder.ml` now uses, so the same constraint has the same auxiliaries | cake's `Div` is `quot` with `y != 0`, which is `int_div` (D-0033) | |
+| **[AUTONOME] `disjunctive`** | refused | not in section 14's list; baguette posts it as a cumulative only through mznlib | |
+| refused by name | `modulus parity element_2d nvalue among at_most_one all_equal all_different_except symmetric_all_different binpacking knapsack min_distance negative_table smart_table lex_* mdd disjunctive* cumulative_optional sort arg_sort value_precede seq_precede_chain` | each says why (baguette decomposes it in FlatZinc, or has no such constraint) | |
+| **[AUTONOME] a variable name that reads as an integer** | refused | cake would read it as a constant wherever it appears | |
+| **[AUTONOME] `--e2e` on a `.scp`** | refused (exit 2) | section 14: no end-to-end work, and the chain translates the `.fzn` | `bin/main.ml` |
+| the proof's default name | `foo.scp` gives `./foo.scp.opb` and `.pbp` | `default_proof_prefix` is outside the place the reader is picked; the `.scp` stays in the name, so it is never the model's own name | |
+
+The other refusals are those of section 14 and D-0228 section 11, each with its position: an
+undeclared name, a repeated variable or constraint name, `lb > ub`, a view (a list where a variable
+or an integer is expected), a version other than 1.
+
+### 4. T4's extraction, byte-identical
+
+`builder.ml`'s `sign_bool`, `ladder_bools` and the bodies of `int_times`, `int_div`, `int_abs` moved
+VERBATIM to `lib/flatzinc/arith_aux.ml`, with the bounds and the fresh Boolean passed in. Verbatim
+because OCaml leaves the order of a record's fields and of a function's arguments unspecified, and
+the variable numbering, so the proof, depends on it. Measured: stdout, `.opb` and `.pbp` md5 of the
+228 test models under default flags and under `--bits-above none`, main `b51b851` (md5 `8934e442`)
+against the branch (`7197957c` after the extraction, `432322a3` the final binary): 456 of 456
+identical, each time. The determinism check (`make determinism`, 228 models) passes on the branch.
+
+### 5. The lanes (D-0228 section 14, tests 1 to 6)
+
+| test | lane | result |
+|---|---|---|
+| unit | `test_scp` (in `dune runtest`) | the s-expression cases (positions, unbalanced, stray text, empty, `;`, quote, control byte, 1 MB atom, depth 10^6, 50 000 atoms across the buffer, integers) and every refusal of section 3 with its line and column; the accepted forms build the constructors of section 3 |
+| (1)(2) | `tools/scp/fzn_lane.sh`: `fzn2scp.py` of each test model, the `.scp` solved with a proof, the `.fzn` by the same binary, the answer judged by `validate.py` | 203 of the 228 test models are translated (25 hold a builtin `fzn2scp.py` does not cover). 196 read, and on each the `.scp` and the `.fzn` give the same answer (101 SAT, 84 UNSAT, 11 optima equal), every `.scp` proof VERIFIED; `validate.py` OK on 194, and on 2 the enumeration ran past 2 000 000 nodes (no verdict, not a failure). 7 refused, `equals_if`, the `member` models section 14 expects out |
+| (3) | GCS's `scp_cases` (198 hand-written files, GCS `d7468618`) | 103 read: 58 SAT, 42 UNSAT, 3 optima, every proof VERIFIED, every answer judged OK by `validate.py` and none against its file's name. 91 refused by the reader, by construct: `lex_*` 14, `modulus` 12, `smart_table` and `lex_smart_table` 10, `value_precede` and `seq_precede_chain` 7, `cumulative` with a variable duration, height or capacity 4, `disjunctive*` 4 and `disjunctive2d*` 4, `element` over variables 3, `element_2d` 3, `nvalue` 3, `among` 3, `all_different_except` 3, `_if` 2, `count` of a variable 2, `symmetric_all_different`, `sort`, `arg_sort`, `parity`, `negative_table`, `knapsack`, `at_most_one`, `all_equal` 2 each, `lin_equals_iff` 1. 4 refused by `compile.ml` (exit 3): a domain near 2^60, beyond baguette's arithmetic limit, as the same `.fzn` would be |
+| (4) | `tools/scp/random_lane.py`, seeds 1, 2, 3, 400 files each, every family of section 3 | 1 200 files: 103 optima, 201 SAT, 891 UNSAT, all judged OK by `validate.py` with every proof VERIFIED; 5 refused (a condition reifying its own variable, which led to that refusal). Before the `regular` guard of section 7, 3 of the first 400 crashed: that is how section 7 was found |
+| (5) | the 297 `.scp` GCS wrote for the Challenge models (`corpus-gcs-scp.tgz`, D-0228 section 13), 60 s each | 297 files. 64 read: 16 solved in 60 s with the proof VERIFIED (8 SAT, 8 optima), 46 with no answer in 60 s, 2 stopped by the 4 GB cap after reading (`2017_crosswords` exit 5, `2013_proteindesign12` an OCaml abort `allocation failure during minor GC`, both in the encoding of wide domains). 96 refused at a view (D-0228 section 11). 137 refused at a constraint, the first one in the file: `element` over variables 66, `lin_equals_iff` 11, `lex_*` 11, `binpacking` 8, `all_different_except` 6, `disjunctive2d_strict` 5, `cumulative` over variables 5, `modulus` 4, `value_precede`, `subcircuit`, `count` of a variable 3 each, `parity`, `knapsack`, `disjunctive_strict`, the optional disjunctives 2 each, `tree`, `seq_precede_chain`, `nvalue`, `all_equal` 1 each. Run with the binary before the `regular` guard of section 7, which none of the 297 reaches |
+| (6) | `tools/scp/mutate.sh`: an off-by-one in `element` and in `circuit`, a swapped `less_equal`, a dropped `all_different` | each of the four is caught: the `element` one by the models lane (the FlatZinc files all use offset 1), the `circuit` one by the models and random lanes, the other two by all three |
+| models | `make scp`: the 26 `test/scp/` models, output against `test/scp/expected/`, proof VERIFIED, answer judged by `validate.py`, `--no-proof` identical | 26 of 26 |
+
+`validate.py` reads the `.scp` through `tools/e2e/scpsem.py` (CakeML's semantics transcribed apart
+from `lib/scp/`, extended here with the T4 forms) and enumerates its solutions: UNSAT must have
+none, a solution printed must be one of them, an optimum must be theirs. That is the check the
+proof cannot make, since a misread constraint has a valid proof of the wrong problem.
+
+**The 203 `.scp` of the spike** (`/scratch/arthur/scp-gcs-20261124/out/*.scp`, `fzn2scp.py`'s,
+D-0228 section 2), one or two at a time, 60 s each:
+
+| | files |
+|---|---|
+| read | 196 |
+| refused, `equals_if` (the `member` models, D-0228 section 14) | 7 |
+| solved in 60 s with a proof VERIFIED by veripb | 196 (101 SAT, 83 UNSAT, 12 optimisation: 11 optima and one with no solution) |
+
+### 6. The SPEC sentence proposed (not written into SPEC: the user decides)
+
+For SPEC section 1, after "the input is a FlatZinc file": *"A file whose name ends in `.scp` is
+read instead as version 1 of the `.scp` format of CakeML's `cake_pb_cp` (D-0228, D-0230). Every
+constraint of such a file is one baguette propagates or one whose rewriting into the constraints of
+section 2.1 is exact; any other is refused with its position, and the file is never read in part.
+`decide` and `enumerate` search one solution, `minimize` and `maximize` the optimum, and every
+variable of the file is printed as `name = value;` in the order of the file."* Until then `.scp`
+is experimental, as D-0228 section 6 says.
+
+### 7. Finding outside the claim: `regular` crashes on a constant letter outside its symbols
+
+`lib/core/prop/regular.ml`, `forward_reason`, indexes `t.preds` with `v - t.smin` over the letter's
+alphabet hull, and a CONSTANT letter outside `smin .. smin + w - 1` makes that index out of bounds:
+`Fatal error: exception Invalid_argument("index out of bounds")`. Reproduced on main `b51b851`
+from FlatZinc: `baguette_regular([x, 4], 1, 0, [1], 1, [1], [s1, s2, s3])` with `x` in 0..1.
+MiniZinc does not reach it (`fzn_regular` constrains every letter to `1..S` first), a hand-written
+`.fzn` or a `.scp` does. The reader reads such a constraint as false (it is: the letter labels no
+edge), so the `.scp` path never reaches the crash; the propagator itself is not changed here (not
+claimed). A TODO for `regular.ml`'s owner: treat an out-of-range constant letter as a dead word.
+
+### 8. Revert
+
+Each commit reverts alone. The extraction (`M23-inputs-T4: the arithmetic auxiliaries ...`) is
+byte-identical on the FlatZinc path, and the reader is reached only through a `.scp` file name, so
+reverting `lib/scp/` and the two lines of `bin/main.ml` leaves FlatZinc runs exactly as they are.

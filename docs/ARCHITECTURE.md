@@ -22,9 +22,18 @@ lib/flatzinc/   Baguette_flatzinc
   lexer.ml parser.ml        hand-written scanner + recursive descent (D-0006)
   model.ml                  the front end's output: vars, domains, constraints
   builder.ml                ast -> Model.t, and the normative rules of SPEC 2.1
+  arith_aux.ml              the arithmetic family's sign and ladder Booleans, shared by
+                            builder.ml and lib/scp/reader.ml (M23-inputs-T4, D-0230)
   compile.ml                Model.t -> store + PB encoding + propagator instances;
                             this is the flatzinc -> core edge
   output.ml                 solution printing in FlatZinc output format (SPEC 2.2)
+
+lib/scp/        Baguette_scp (M23-inputs, D-0228 section 14, D-0230)
+  sexp.ml                   .scp text -> s-expressions with positions: iterative, linear,
+                            through a 64 KiB buffer, one item's tree alive at a time
+  reader.ml                 .scp (cake_pb_cp's grammar, version 1) -> the same Model.t
+                            builder.ml produces; refuses with a position what baguette
+                            does not propagate. Depends on lib/flatzinc for Model
 
 lib/core/       Baguette_core
   var.ml                    variable identity (abstract int)

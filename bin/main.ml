@@ -152,11 +152,23 @@ let exit_resource = Encoding.exit_resource
 
 let usage () =
   prerr_endline
-    "usage: baguette MODEL.fzn [--proof PREFIX | --no-proof] [--proof-comments] [--all] \
-     [--time] [--stats] [--max-order-width N] [--max-direct-values N] [--width-warn N] \
-     [--max-encoding-clauses N] [--max-heap-mb N] [--bits-above W] [--time-limit S] \
-     [--restarts POLICY] [--phase-saving] [--search ORDER] [--reuse-trail] [-a] [-i] [-n \
-     N] [-f] [-t MS] [-r SEED] [-p N] [-s] [-v]";
+    "usage: baguette MODEL.fzn|MODEL.scp [--proof PREFIX | --no-proof] \
+     [--proof-comments] [--all] [--time] [--stats] [--max-order-width N] \
+     [--max-direct-values N] [--width-warn N] [--max-encoding-clauses N] [--max-heap-mb \
+     N] [--bits-above W] [--time-limit S] [--restarts POLICY] [--phase-saving] [--search \
+     ORDER] [--reuse-trail] [-a] [-i] [-n N] [-f] [-t MS] [-r SEED] [-p N] [-s] [-v]";
+  prerr_endline "";
+  prerr_endline
+    "  MODEL.scp (M23-inputs, D-0230): the .scp format of CakeML's cake_pb_cp, version";
+  prerr_endline
+    "                    1, read by lib/scp/ into the same model a .fzn becomes. A";
+  prerr_endline
+    "                    constraint baguette does not propagate is refused with its";
+  prerr_endline
+    "                    position, never read in part; `enumerate` searches one";
+  prerr_endline
+    "                    solution, as `decide`; every variable of the file is printed";
+  prerr_endline "                    as `name = value;`. --e2e is refused on a .scp.";
   prerr_endline "";
   prerr_endline
     "  The MiniZinc standard flags (M7-T32, D-0150; tools/baguette.msc declares them):";
@@ -2112,8 +2124,21 @@ let () =
     exit exit_usage);
   report_std_flags opts;
   Timing.record "args" (Timing.now () - t_main);
+  (* The reader, by the file's extension (M23-inputs-T2, D-0230): `.scp` is CakeML's
+     format, read by lib/scp/ into the same Model.t; anything else is FlatZinc, as before.
+     The end-to-end chain (--e2e, M14) is FlatZinc's alone: D-0228 section 14 leaves it
+     out for a .scp, so the flag is refused rather than run against a translation of a
+     file that was never FlatZinc. *)
+  let is_scp = Filename.check_suffix opts.model ".scp" in
+  if is_scp && opts.e2e then (
+    prerr_endline
+      "baguette: --e2e is not available on a .scp input (D-0228 section 14, D-0230)";
+    exit exit_usage);
+  let read_model path =
+    if is_scp then Baguette_scp.Reader.of_file path else Builder.of_file path
+  in
   match
-    Timing.phase "parse" (fun () -> Fz_error.catch (fun () -> Builder.of_file opts.model))
+    Timing.phase "parse" (fun () -> Fz_error.catch (fun () -> read_model opts.model))
   with
   | exception Out_of_memory ->
       prerr_string (Encoding.out_of_memory_message ());

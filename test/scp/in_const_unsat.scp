@@ -1,0 +1,6 @@
+( (version 1)
+  (variables (x 0 9))
+  (constraints
+    (c1 in (1 3 5) x)
+    (c2 in (2 4) x))
+  (prob_type decide) )
