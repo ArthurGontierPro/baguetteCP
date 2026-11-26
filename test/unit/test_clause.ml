@@ -576,7 +576,7 @@ let old_quiet store (t : Clause.t) =
     | (tm : Pb.term) :: rest ->
         if free tm then other (Var.to_int tm.a.x) rest else first rest
   in
-  first t.Pb.terms
+  first (Pb.terms t)
 
 let test_one_walk () =
   let module Pb = Baguette_core.Pb in

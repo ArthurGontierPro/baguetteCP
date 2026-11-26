@@ -12,10 +12,10 @@ search limit.decisions 7250
 search limit.conflicts 3623
 search limit.learned 3623
 search limit.pb-learned 0
-search limit.db 3623
+search limit.db 3193
 search limit.maxdepth 608
 search limit.incumbent none
-work limit.props 976699
+work limit.props 975014
 work limit.eff 117769
 work limit.contra 3623
 search limit.at node
@@ -30,7 +30,7 @@ search learned/cls 3623 cls
 work later/asks 147123 asks
 work cites/memos 31140 memos
 search convertible/cls 6 cls
-search retention keep-all keep-all: 3623 added, 0 evicted, 3623 swept, 0 live, 0 duplicate, 3623 cited, 0 pinned
+search retention tiered(core<=2,mid<=6,first=2000,inc=300,mid_every=10000) tiered(core<=2,mid<=6,first=2000,inc=300,mid_every=10000): 3623 added, 430 evicted, 3193 swept, 0 live, 0 duplicate, 3623 cited, 1 pinned, 1 reductions, 430 detached, 1 locked
 search lbd 3:2,4:435,5:761,6:968,7:384,8:437,9:219,10:230,11:83,12:81,13:5,15:1,16:17
 search width 5:407,6:615,7:512,8:649,9:382,10:421,11:199,12:28,13:138,14:236,15:11,16:25
 search globals/units 0 units
@@ -69,18 +69,18 @@ search kept/levels 73954 levels
 search activity/bumps 27923 bumps
 work int_lin_le_reif/inst 1200 inst 81.5 runs/node 10.30 eff/node
 work bool_clause/inst 300 inst 8.8 runs/node 1.32 eff/node
-work learned_clause/inst 3623 inst 7.4 runs/node 0.16 eff/node
-work props/runs 976699 runs
+work learned_clause/inst 3623 inst 7.2 runs/node 0.16 eff/node
+work props/runs 975014 runs
 work eff/runs 117769 runs
 work contra/runs 3623 runs
 work passes/snaps 0 snaps
 work deductions/chgs 0 chgs
-work wakes/wakes 1234210 wakes
+work wakes/wakes 1193523 wakes
 work masked/wakes 0 wakes
 work vetoed/wakes 0 wakes
-work advised/wakes 416025 wakes
-work seeded/runs 478955 runs
-work skipped/slots 29921306 slots
+work advised/wakes 375296 wakes
+work seeded/runs 478120 runs
+work skipped/slots 29922141 slots
 search rup/lines 24047 lines
 search pol/lines 115952 lines
 search pol-tokens/tokens 1120718 tokens
@@ -92,4 +92,4 @@ search boundlines/pairs 0 pairs
 search bitsprune/lines 106252 lines
 search atoms/prune/atoms 0.048 atoms
 opb 5abb69b059ed1d30fac25178ad21541608e0d2424eb24616c6e484fa95be70a5
-pbp df8988d22dca62f8be814f5285af262965775984465974f584331b9431c8ff92
+pbp 1ad9e72b055e29f05fcab8107cdb46cb7e2e7ad75061454c8ad47ae95ff0c820

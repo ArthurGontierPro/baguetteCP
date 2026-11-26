@@ -15,7 +15,7 @@ search limit.pb-learned 0
 search limit.db 500
 search limit.maxdepth 70
 search limit.incumbent none
-work limit.props 760740
+work limit.props 760650
 work limit.eff 185079
 work limit.contra 607
 search limit.at node
@@ -77,17 +77,17 @@ work global_cardinality/inst 1 inst 1.8 runs/node 0.90 eff/node
 work int_lin_ne/inst 19 inst 1.6 runs/node 0.01 eff/node
 work int_ne/inst 24 inst 0.3 runs/node 0.01 eff/node
 work bool_eq/inst 28 inst 0.2 runs/node 0.04 eff/node
-work props/runs 760740 runs
+work props/runs 760650 runs
 work eff/runs 185079 runs
 work contra/runs 607 runs
 work passes/snaps 198273 snaps
 work deductions/chgs 18469 chgs
-work wakes/wakes 1457295 wakes
+work wakes/wakes 1453508 wakes
 work masked/wakes 21743 wakes
 work vetoed/wakes 1114 wakes
-work advised/wakes 88105 wakes
-work seeded/runs 81432 runs
-work skipped/slots 11151475 slots
+work advised/wakes 83338 wakes
+work seeded/runs 81342 runs
+work skipped/slots 11151565 slots
 search rup/lines 104467 lines
 search pol/lines 116173 lines
 search pol-tokens/tokens 1293172 tokens

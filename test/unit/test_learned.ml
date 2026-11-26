@@ -235,7 +235,10 @@ let test_oracle_round_trip () =
       done
     done
   done;
-  let agree = ref 0 and disagree = ref 0 and oracle_disagree = ref 0 in
+  let agree = ref 0
+  and disagree = ref 0
+  and oracle_disagree = ref 0
+  and row_mismatch = ref 0 in
   List.iter
     (fun ((xl, xh), (yl, yh)) ->
       let mk () = store_of [ ("x", (xl, xh)); ("y", (yl, yh)) ] in
@@ -256,6 +259,15 @@ let test_oracle_round_trip () =
       (* the same row, round-tripped through Learned.t *)
       let s2 = mk () in
       let i2 = Option.get (Learned.pb_instance ~id:0 ~row_id:1 s2 ~decl learned) in
+      (* D-0226: the row the instance exposes is read back off its flat arrays; it must be
+         the row on the page, pair for pair and at the page's degree. *)
+      (match i2.Propagator.inst_row s2 with
+      | Some r
+        when r.Propagator.r_terms = Learned.raw_terms learned
+             && r.Propagator.r_degree = Learned.degree learned
+             && r.Propagator.r_cid = 1 ->
+          ()
+      | _ -> incr row_mismatch);
       let c2 = run_to_fixpoint i2 s2 in
       if c1 = c2 && domains_of s1 = domains_of s2 then incr agree else incr disagree;
       (* and both against the oracle *)
@@ -270,6 +282,8 @@ let test_oracle_round_trip () =
     (!disagree = 0 && !agree = List.length !boxes);
   check "(a) and the model row itself agrees with the brute-force oracle (I-P1)"
     (!oracle_disagree = 0);
+  check "D-0226: the learned instance's row is the row on the page, read off its arrays"
+    (!row_mismatch = 0);
   (* The boundary the module header states, asserted rather than left as prose: an
      interior threshold on an integer variable has no linear form. *)
   let interior = Learned.of_clause [ Lit.ge "x" 3; Lit.ge "y" 2 ] in

@@ -387,7 +387,8 @@ end
    derived -- which is exactly the distinction [Retention]'s citation guard is about. *)
 module Learned_clause = struct
   (* M6-T20 / D-0104: the clause plus TWO WATCHED LITERALS, the first mutable propagator
-     state in lib/core/prop/ and the one kind I-P7 admits. [w1] and [w2] index [atoms];
+     state in lib/core/prop/ and the one kind I-P7 admits. [w1] and [w2] are term
+     indices of [pb];
      after a run both are non-false unless the clause was unit or failed, and a widening
      domain cannot falsify a literal, so backtracking never has to restore them.
 
@@ -414,11 +415,12 @@ module Learned_clause = struct
      because [ask] reads nothing else and is asked once per wake of every clause watching
      the moved variable (27 % of 2013 rcpsp_11's samples were [ask] itself, a chain of
      four dependent loads: the record, [atoms], the atom, the domain). They are a COPY of
-     [atoms.(w1)] and [atoms.(w2)], written only by [set_watches], which is the one place
-     [w1] and [w2] are written; a test that places the watches by hand calls it too. *)
+     term [w1]'s and term [w2]'s fields of [pb], written only by [set_watches], which is
+     the one place [w1] and [w2] are written; a test that places the watches by hand
+     calls it too. Since D-0226 there is no atom array: [pb]'s own flat arrays are read
+     by index. *)
   type nonrec t = {
     pb : Pb.t;
-    atoms : Pb.atom array;
     mutable w1 : int;
     mutable w2 : int;
     mutable x1 : int;
@@ -432,32 +434,35 @@ module Learned_clause = struct
   }
 
   (* Place the two watches at [w1] and [w2], with their flat copies (the record's header);
-     a watch that does not move keeps the copy it has. An index outside [atoms] (the [-1]
+     a watch that does not move keeps the copy it has. An index outside the row (the [-1]
      [rewatch]'s [best] answers for a one-literal clause with its literal false) gets
      [x = -1], which no variable is. *)
+  (* Term [i]'s polarity, read off [pb]'s polarity bytes here rather than through
+     [Pb.positive_at]: dune's dev profile compiles with [-opaque], so a cross-module
+     accessor is a call, and these run on every watch move (D-0226 measured the calls). *)
+  let positive (pb : Pb.t) i = Bytes.unsafe_get pb.Pb.pv i <> '\000'
+
   let set_watches t w1 w2 =
-    let n = Array.length t.atoms in
+    let n = Pb.width t.pb in
     if w1 <> t.w1 then (
       t.w1 <- w1;
       if w1 >= 0 && w1 < n then (
-        let a = t.atoms.(w1) in
-        t.x1 <- Var.to_int a.Pb.x;
-        t.k1 <- a.Pb.k;
-        t.p1 <- a.Pb.positive)
+        t.x1 <- Var.to_int t.pb.Pb.xv.(w1);
+        t.k1 <- t.pb.Pb.kv.(w1);
+        t.p1 <- positive t.pb w1)
       else t.x1 <- -1);
     if w2 <> t.w2 then (
       t.w2 <- w2;
       if w2 >= 0 && w2 < n then (
-        let a = t.atoms.(w2) in
-        t.x2 <- Var.to_int a.Pb.x;
-        t.k2 <- a.Pb.k;
-        t.p2 <- a.Pb.positive)
+        t.x2 <- Var.to_int t.pb.Pb.xv.(w2);
+        t.k2 <- t.pb.Pb.kv.(w2);
+        t.p2 <- positive t.pb w2)
       else t.x2 <- -1)
 
   let name = "learned_clause"
   let consistency = consistency
   let vars t = vars t.pb
-  let false_at store t i = Pb.falsified store t.atoms.(i)
+  let false_at store t i = Pb.falsified_at store t.pb i
 
   (* The trail position of the entry that FALSIFIED literal [i], which must be false:
      a positive atom `x >= k` became false when [hi x] first moved below [k], a
@@ -466,9 +471,8 @@ module Learned_clause = struct
      see [Store.hi_below] for why the support of the current bound is a later position
      than the crossing, and how that difference broke the first draft. *)
   let falsified_at store t i =
-    let a = t.atoms.(i) in
-    if a.Pb.positive then Store.hi_below store a.Pb.x a.Pb.k
-    else Store.lo_at_least store a.Pb.x a.Pb.k
+    let x = t.pb.Pb.xv.(i) and k = t.pb.Pb.kv.(i) in
+    if positive t.pb i then Store.hi_below store x k else Store.lo_at_least store x k
 
   (* Two watches, chosen so that I-P7 holds through every backtrack:
 
@@ -490,7 +494,7 @@ module Learned_clause = struct
      was falsified EARLIER than an unwatched literal is un-falsified after it, and the
      clause goes unit unwatched. *)
   let rewatch store t =
-    let n = Array.length t.atoms in
+    let n = Pb.width t.pb in
     let best ~not_ =
       (* Any non-false literal other than [not_]; failing that, the latest-falsified.
          Ranks are computed only when every candidate is false. *)
@@ -522,28 +526,26 @@ module Learned_clause = struct
      one variable are fine: BOUNDS cannot punch the hole between them, so a run with both
      open does nothing. [Learn.minimise] merges every same-slot pair of the 1UIP clause, and
      that clause is the only one [Search] registers here; checked under BAGUETTE_DEBUG. *)
-  let one_per_slot (atoms : Pb.atom array) =
-    let n = Array.length atoms in
+  let one_per_slot (pb : Pb.t) =
+    let n = Pb.width pb in
     let ok = ref true in
     for i = 0 to n - 1 do
       for j = i + 1 to n - 1 do
         if
-          Var.to_int atoms.(i).Pb.x = Var.to_int atoms.(j).Pb.x
-          && atoms.(i).Pb.positive = atoms.(j).Pb.positive
+          Var.to_int pb.Pb.xv.(i) = Var.to_int pb.Pb.xv.(j)
+          && positive pb i = positive pb j
         then ok := false
       done
     done;
     !ok
 
   let make ?(rest_satisfied = false) (pb : Pb.t) =
-    let atoms = pb.Pb.atoms in
-    let n = Array.length atoms in
+    let n = Pb.width pb in
     Debug.check "Learned_clause: one literal per (variable, polarity) (D-0142 section 5)"
-      (fun () -> one_per_slot atoms);
+      (fun () -> one_per_slot pb);
     let t =
       {
         pb;
-        atoms;
         w1 = -1;
         w2 = -1;
         x1 = -1;
@@ -559,7 +561,7 @@ module Learned_clause = struct
     set_watches t 0 (if n > 1 then 1 else 0);
     t
 
-  let true_at store t i = Pb.holds store t.atoms.(i)
+  let true_at store t i = Pb.holds_at store t.pb i
 
   (* I-P7: queue only when a WATCHED literal on [v] has just become false. Written
      without a local closure (M6-T22): this is asked once per wake, and the closure the
@@ -587,12 +589,13 @@ module Learned_clause = struct
      false once [hi x < k], so only an UPPER-bound move falsifies it; `x <= k - 1` only a
      LOWER-bound move. That is [Propagator.watch_hi]/[watch_lo]'s whole claim, and it is
      true of every order literal. *)
-  let watch_of (a : Pb.atom) =
-    if a.Pb.positive then Propagator.watch_hi a.Pb.x else Propagator.watch_lo a.Pb.x
+  let watch_of t i =
+    if positive t.pb i then Propagator.watch_hi t.pb.Pb.xv.(i)
+    else Propagator.watch_lo t.pb.Pb.xv.(i)
 
   let watched t () =
-    if t.rest >= 0 then (watch_of t.atoms.(t.rest), Propagator.rests)
-    else (watch_of t.atoms.(t.w1), watch_of t.atoms.(t.w2))
+    if t.rest >= 0 then (watch_of t t.rest, Propagator.rests)
+    else (watch_of t t.w1, watch_of t t.w2)
 
   (* The advisor [Propagator.pack] takes: both halves of one object. Each a closure of
      its own arity over [t] (M16-file-review-T2, D-0190): [ask t], a partial application,
@@ -611,7 +614,7 @@ module Learned_clause = struct
      [f2], and its latest-falsified arm is never reached. [keep] is [rewatch]'s own test.
      So the two watches are the ones [rewatch] would choose, by its own definition. *)
   let rewatch_quiet store t (s : Pb.scan) =
-    let n = Array.length t.atoms in
+    let n = Pb.width t.pb in
     let best ~not_ = if s.Pb.f1 <> not_ then s.Pb.f1 else s.Pb.f2 in
     let keep i = i >= 0 && i < n && not (false_at store t i) in
     let w1 = if keep t.w1 then t.w1 else best ~not_:t.w2 in

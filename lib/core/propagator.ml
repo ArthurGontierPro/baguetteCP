@@ -152,9 +152,18 @@ type instance = {
          claim is re-run and checked at the moment it is relied on
          ([Engine.check_claim]). The default is [false]: an instance that has not
          stated the claim is re-woken, which is never unsound, only slower. *)
+  inst_attach : (unit -> unit) -> unit;
+      (* M21-memory-T3 (D-0226). [Engine.add] calls it ONCE, with the function that takes
+         this instance out of that engine: its slot, its subscriptions and the closures
+         it holds, so that the GC can reclaim them. An instance that may be removed keeps
+         the function and calls it when its owner says so; that is [Retention.gate]'s
+         wrapper, whose owner is the learned-constraint database, and nothing else. The
+         default, [attach_never], drops it: a model propagator lives as long as its
+         engine. *)
 }
 
 let no_row : Store.t -> pb_row option = fun _ -> None
+let attach_never : (unit -> unit) -> unit = fun _ -> ()
 let advise_always : Store.t -> Var.t -> bool = fun _ _ -> true
 
 (* M6-T20 / M6-T22: what [pack]'s [?advise] takes -- the advisor ([inst_advise]) and,
@@ -199,6 +208,7 @@ let pack (type a) ?(row = no_row) ?(advise = no_advisor) ?(idempotent = false) ~
     inst_advise = advise.ask;
     inst_watched = advise.watched;
     inst_idempotent = idempotent;
+    inst_attach = attach_never;
   }
 
 (* ------------------------------------------------------------ M6-T19: pass counters
