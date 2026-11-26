@@ -29371,3 +29371,69 @@ not the search's.
 Under restarts the loop is two to ten times cheaper than `dfs` on QR48 (where `dfs`'s restarts throw
 away a tree the nogoods were closing) and solves costas under every restart policy, where `dfs` under
 activity with phase saving (`Dalp`, `Dabp`) does not.
+
+### 5. Measured: the whole tuning set, 13 arms, `--no-proof` (binary `f404f013`)
+
+`bench/tuning/set.lst`, 200 instances, 300 s, 16 GiB scope, `--max-heap-mb 8192`, the arms of
+section 4. 2 600 runs, 20 to 40 at a time on `fataepyc-06` (load 40 to 93 from other series), from
+2026-11-24 11:32 to the night of the 25th. Status and verdicts as `tools/compare/compare.py classify`
+and `arms_compare.verdict` (the Challenge order); without proof every complete answer is trusted,
+unverified. "Share" is the Borda score of `agreement.py` over the 13 arms (1 per arm beaten, 0.5 per
+tie, over the total); `bench/tuning/README.md` says a difference under about 0.03 is noise.
+`died` = heap refusal or error. Conflicts per second and G instructions per second are medians over
+runs longer than 1 s. "vs" = instances better / worse in the Challenge order.
+
+| arm | complete | incumbent only | nothing | died | share | conflicts/s | G instr/s | vs `Dfix` | vs `Df` | vs `dfs` same flags |
+|---|---|---|---|---|---|---|---|---|---|---|
+| Lfix (loop, fixed) | 32 | 117 | 45 | 6 | 0.077 | 104 | 3.55 | 24+ 28- | 52+ 105- | (Dfix) 24+ 28- |
+| **Cfix** (loop, fixed, `--chrono 20`) | 35 | 114 | 44 | 7 | 0.078 | 109 | 3.59 | 30+ 26- | 53+ 102- | (Dfix) 30+ 26- |
+| **Cf** (`-f`) | **51** | 115 | 29 | 5 | **0.099** | 93 | 3.67 | **103+ 45-** | **69+ 60-** | (Df) 69+ 60- |
+| Calp (activity, Luby, phase) | 44 | 115 | 35 | 6 | 0.077 | 92 | 4.07 | 78+ 88- | 46+ 105- | (Dalp) 63+ 61- |
+| Cal (activity, Luby, no phase) | 41 | 118 | 34 | 7 | 0.078 | 106 | 4.00 | 83+ 79- | 53+ 100- | (Dal) 50+ 62- |
+| Cabp (activity, LBD, phase) | 40 | 115 | 39 | 6 | 0.073 | 97 | 4.00 | 77+ 89- | 46+ 105- | (Dabp) 69+ 66- |
+| Ca (activity, no restarts) | 29 | 110 | 55 | 6 | 0.057 | 92 | 3.76 | 55+ 106- | 32+ 126- | (Da) 54+ 47- |
+| Dfix (`dfs`, the default) | 34 | 117 | 43 | 6 | 0.078 | 100 | 3.45 | | 53+ 103- | |
+| Df | 48 | 119 | 28 | 5 | 0.098 | 97 | 3.72 | 103+ 53- | | |
+| Dalp | 38 | 118 | 38 | 6 | 0.077 | 97 | 3.86 | 79+ 87- | 44+ 106- | |
+| Dal | 42 | 118 | 33 | 7 | 0.078 | 89 | 3.88 | 85+ 77- | 52+ 98- | |
+| Dabp | 41 | 120 | 33 | 6 | 0.073 | 91 | 3.96 | 78+ 85- | 47+ 109- | |
+| Da | 30 | 105 | 59 | 6 | 0.057 | 84 | 3.64 | 50+ 107- | 34+ 127- | |
+
+Families (183; a family counts once, by the sum of its instances' verdicts), won / lost:
+
+| arm | against `Dfix` | against `Df` |
+|---|---|---|
+| Lfix | 22 / 25 | 43 / 93 |
+| Cfix | 27 / 23 | 46 / 92 |
+| Cf | **91 / 38** | **61 / 53** |
+| Calp | 70 / 76 | 43 / 94 |
+| Cal | 73 / 68 | 47 / 89 |
+| Cabp | 68 / 79 | 40 / 95 |
+| Ca | 48 / 96 | 27 / 112 |
+| Df | 92 / 44 | |
+| Dal | 76 / 66 | 47 / 89 |
+
+By edition (instances won / lost), `Cf` against `Df` is ahead in 10 editions of 16 and behind in 5
+(2018, 2019, 2023, 2025, 2026), and against `Dfix` ahead in every edition but 2021 and 2026 (ties).
+`analyse.py` in the results directory prints the full per-edition tables.
+
+**Part 1 on the fixed search** (`Lfix` -> `Cfix`): 21 instances better, 13 worse, 3 more complete
+answers (mspsp hard_01, flowshop-workers ex6 and network_50 proved optimal, rubik 7-cube solved; sudoku_opt
+p90 loses its proof of optimality at 297 s against 294 s), and the loop with it goes from 24+ 28- to
+30+ 26- against `dfs`. Against `Dfix` the complete answers it gains are mspsp, ghoulomb 3-9-16,
+test-scheduling t30 (101 s), hrc exp2-1 and network_50; it loses steelmillslab 14_1, tc-graph-color
+k10_34, sudoku_opt p90 and gametes nl7. So on a fixed search the loop with chronological backtracking
+is `dfs`'s equal on the set (share 0.078 both, 35 against 34 complete), where D-0219's loop alone was
+slightly behind; the re-descent was the loop's deficit, and removing it does not make a fixed search
+better than `dfs`, because on most of the set the jump is the chronological one anyway (D-0219 section 3).
+
+**The strategies on the loop** (T2 to T4), each against `dfs` with the same flags: the loop wins
+under `-f` (69+ 60-, 51 against 48 complete, share 0.099 against 0.098: inside the README's noise on
+the share, outside it on complete answers and families won), under activity + Luby + phase saving
+(63+ 61-, 44 against 38 complete), under LBD restarts (69+ 66-) and without restarts (54+ 47-); it
+loses under activity + Luby without phase saving (50+ 62-, 41 against 42). The user's intuition holds
+on the loop as on `dfs`, and on the 3-SAT probes (section 4) less: with Luby restarts, phase saving
+gains 3 complete answers on the loop (41 -> 44) and loses 4 on `dfs` (42 -> 38); the answers it buys are
+different instances. Activity without restarts is the worst arm on both searches (0.057). Every
+activity arm is below `-f` by 0.02 of the share or more, on both searches: the alternation with the
+annotation is what carries `-f` on this set, as D-0185 found on the full series.
