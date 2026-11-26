@@ -50,7 +50,9 @@ Our statuses -> the Challenge's (compare_run.sh's vocabulary, see its header):
   the limit (`--timeout`, default 1200 s) otherwise, as the official data does.
   A baguette completeness claim (OPT, UNSAT) whose proof is not VERIFIED is DEMOTED
   (OPT -> S, UNSAT -> UNK) unless --trust-unverified; both counts are printed. Chuffed
-  and GCS rows are taken as printed.
+  and GCS rows are taken as printed, except that --demote-gcs demotes a GCS completeness
+  claim on the same rule as baguette's (M17-bench-series-T4, D-0211: "verified answer for
+  verified answer"; rank GCS with --solver=gcs).
 
 Python 3.8+, standard library only (imports compare.py from its own directory).
 """
@@ -323,6 +325,7 @@ def main(argv):
                   else "%s-ours-%s" % (solver, category))
     timeout_s = int(opt("timeout", "1200"))
     demote = not opt("trust-unverified")
+    demote_gcs = bool(opt("demote-gcs"))
     showall = opt("all")
 
     R = load_results(results_path)
@@ -357,7 +360,7 @@ def main(argv):
                     missing.append("idx %d" % i)
                 elif r is None:
                     missing.append(li["id"])
-                a = our_answer(r, kind, timeout_s, rule, demote and s == "baguette")
+                a = our_answer(r, kind, timeout_s, rule, demote and (s == "baguette" or (s == "gcs" and demote_gcs)))
                 ours[i] = a[:3]
                 if r is not None:
                     hs[r["status"]] = hs.get(r["status"], 0) + 1
