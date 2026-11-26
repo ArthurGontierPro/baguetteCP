@@ -2348,6 +2348,66 @@ let test_index_long_keys_m11t5 () =
   in
   expect_ok "m11t5 index: no exception" r
 
+(* M21-memory-T3 (D-0223): a model row's citation is one shared block per id, and nothing
+   that reads a derivation can tell. Checked: [term 1 (model_row id)] is physically one
+   value however often it is built, [model_row id] is the one inside it, an id handed out
+   after [Justify.create], an id above the cap and a coefficient other than 1 are built
+   fresh, and a derivation of shared
+   citations writes exactly the lines of the same derivation spelled with fresh blocks.
+   The bytes are compared with hash-consing on and off. *)
+let test_intern_m21t3 () =
+  (* what [Justify.create] does with a writer that has handed out ids up to 100 *)
+  Explanation.intern_up_to 100;
+  let shared = Explanation.term 1 (Explanation.model_row 7) in
+  check "m21t3 intern: [term 1 (model_row id)] is one block per id"
+    (shared == Explanation.term 1 (Explanation.model_row 7));
+  check "m21t3 intern: [model_row id] is the one it cites"
+    (match shared with
+    | Explanation.Term (1, m) -> m == Explanation.model_row 7
+    | _ -> false);
+  check "m21t3 intern: another coefficient is built fresh"
+    (Explanation.term 2 (Explanation.model_row 7)
+    != Explanation.term 2 (Explanation.model_row 7));
+  let late = !Explanation.intern_below + 3 in
+  check "m21t3 intern: an id the writer had not handed out at [create] is built fresh"
+    (Explanation.term 1 (Explanation.model_row late)
+    != Explanation.term 1 (Explanation.model_row late));
+  let big = Explanation.intern_cap + 5 in
+  check "m21t3 intern: an id above the cap is built fresh, and is the same citation"
+    (match Explanation.term 1 (Explanation.model_row big) with
+    | Explanation.Term (1, Explanation.Model_row i) -> i = big
+    | _ -> false);
+  let derivation ~fresh cx cy =
+    let row id =
+      if fresh then Explanation.Term (1, Explanation.Model_row id)
+      else Explanation.term 1 (Explanation.model_row id)
+    in
+    Explanation.combine
+      [
+        Explanation.term 1 (Explanation.combine [ row cx; row cy ] 1);
+        row cy;
+        row cx;
+        Explanation.term 2 (Explanation.model_row cy);
+      ]
+      2
+  in
+  let write ~fresh =
+    emitted (fun w ->
+        let _, ctx, cx, cy = build_two_ctx w in
+        Writer.set_level w 1;
+        let a = Justify.emit ctx (derivation ~fresh cx cy) in
+        let b = Justify.emit ctx (derivation ~fresh cx cy) in
+        ignore (a, b);
+        Writer.set_level w 2;
+        Justify.wipe_level ctx 1)
+  in
+  let fresh_text, rf = write ~fresh:true in
+  let shared_text, rs = write ~fresh:false in
+  expect_ok "m21t3 intern: fresh citations written" rf;
+  expect_ok "m21t3 intern: shared citations written" rs;
+  check_eq "m21t3 intern: shared citations write the fresh blocks' lines"
+    ~expected:fresh_text ~got:shared_text
+
 let () =
   test_model_row ();
   test_decision_has_no_id ();
@@ -2371,6 +2431,8 @@ let () =
   with_hashcons false test_representations_m11t12;
   with_hashcons false test_release_m11t13;
   test_hashcons_holds_m11t15 ();
+  with_hashcons false test_intern_m21t3;
+  with_hashcons true test_intern_m21t3;
   run_veripb ~name:"justify: a Linear explanation, checked end to end"
     ~build:build_linear_proof;
   run_veripb ~name:"justify: a Cut of two Linears, checked end to end"

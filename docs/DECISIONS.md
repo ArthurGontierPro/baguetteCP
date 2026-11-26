@@ -29692,3 +29692,225 @@ A constraint is accepted only if baguette propagates it or if its rewriting is e
 `plus`, `greater_*`, a strict comparison over integers). `lin_equals_iff` is the one near case:
 two `lin_less_equal_iff` and an `and`, as `mznlib` does today. It is out until the user says.
 
+## D-0223  [AUTONOME] M21-memory-T3 (fix 4 of D-0218): what kept written explanations alive on tdtsp is not the hash-consing table but the INNER thunk of `Element`'s wrapper, which memoises the tree the wrapper's release lets go of. Releasing it frees 97 % of the live heap but changes the proof (a re-written tree finds lines the kept one did not) and costs +16 to +37 % time, so it is measured and left to the user. What lands is byte-identical: a model row's citation is one shared block per id, tdtsp_10_53 at 250 nodes 16.6 to 6.6 GB peak RSS and 136 to 115 s
+
+**Status**: DONE for the byte-identical part (A), on `wave70-release`, not merged. Option B is a
+design with its measurement, NOT landed: it changes proof bytes, which the dispatch forbids
+merging and which is the user's call (CLAUDE.md, "the user decides"). Taken in autonomous mode,
+hence the tag: the decision is to land A and not B.
+Date: 2026-11-24
+Task: M21-memory-T3, the part D-0218 section 7 ranks as fix 4 (agent-release). Touches
+`lib/core/explanation.ml` (`cite_row`, `intern_up_to`, `model_row`, `term`, the header),
+`lib/core/justify.ml` (one line in `create`), `test/unit/test_justify.ml` (`test_intern_m21t3`).
+Runs and patches: `fataepyc-06:/cluster/arthur/baguette-results/release/`.
+
+### 1. The question
+
+D-0218 measured tdtsp_10_53 with proof at 3.2 GB live at node 27, 99 % of it "proof-side
+explanations" (trail 55 %, hash-consed nodes 44 %), and asked to release what can no longer be
+cited: a node whose line is deleted or whose trail entry is gone, the table made weak, or cleared at
+restarts.
+
+### 2. What keeps them alive, measured
+
+D-0218's probe charges a block to the first kind that reaches it, and a thunk's closure reaches its
+FRAME, whose history reaches the store, and from the store everything. So "hash-consed nodes 44 %"
+and "trail 55 %" were the walk order, not the holders. The probe was rerun (memprobe.patch plus five
+kinds, `x.*`, and the store, engine and encoding records marked visited before the walk, so that no
+kind reaches through them; `probe-kinds.patch`), on main `a964127`, tdtsp_10_53 with proof, at the
+1 GiB crossing (node 26, 1.68 GB live):
+
+| holder | live |
+|---|---|
+| the hash-consing table (2 961 written nodes) | 1 MB |
+| trees memoised on thunks that were forced and never released | 1 628 MB |
+| of which: reached only from RELEASED arena thunks, through their closures | 1 606 MB |
+| eager explanations on the arena | 0 |
+
+The memoised thunks, by where they were forced and where they were built (a temporary call-site
+record): 1 156 of the 1 353 are `Linear` derivations and 17 reified `Resolve`s, forced by the
+trace's bits-arm test (`trace.ml` 761) and never written, about 3 summands each, a few MB in all;
+180 are `Element.hole_expl` thunks forced inside another thunk's forcing (`compute`), 134 of them
+with about 490 summands, and they are the 1.6 GB. Each summand
+is a `Term (1, Model_row rung)`: the result variable's domain is 0..23 039 wide and a derivation
+cites the ladder rungs between two bounds.
+
+The mechanism. `Element.filter_result`'s `justified` hands the store
+`Explanation.deferred (fun () -> expl)`, a WRAPPER around the pruning's own thunk `expl`
+(`filter_index`'s thunk has the same shape when it cancels nothing: it returns the position's
+thunk from its `gone` lazy). Forcing the wrapper runs `force expl` inside `compute`, which memoises the tree on
+`expl`. `Justify.emit_thunk` writes the wrapper and releases it (D-0168), which drops the
+wrapper's `forced`, but the wrapper's closure keeps `expl` and `expl` keeps the tree, for as long
+as the trail entry stands. The table and the line on the node (D-0172) hold nothing of it.
+
+### 3. Option B, the release: designed, measured, not landed
+
+**The rule.** A thunk returned by another thunk's closure is computed FOR the wrapper and not
+memoised on itself (`compute` calls `handed`: an inner thunk unforced and unreleased is computed
+without setting its `forced`; one already forced or released is answered as `force` answers). The
+wrapper's `forced` is then the only holder, and its release frees the tree. Patch:
+`handed.patch`, with its test (`test_wrapper_m21t3`, which fails on main and passes with it).
+
+**Memory.** tdtsp_10_53 at the same probe point: live 1.68 GB to 0.10 GB; at 31 nodes 3.39 to
+0.11 GB. Unprobed at 250 nodes: top heap 16.2 to 8.1 GiB, peak RSS 17.0 to 8.5 GB.
+
+**Why a later identical explanation is still written correctly.** A released wrapper asked for
+again is forced again through its closure, which rebuilds the tree from its snapshot (I-X6), the
+same derivation; this is D-0168's rule for every other thunk, and BAGUETTE_DEBUG compares the two.
+
+**Why it changes the bytes.** A released wrapper IS asked for again, and written again: tdtsp at
+100 nodes writes 60 726 thunks a second time after a wipe of their line (main,
+`BAGUETTE_MEMO_STATS`). On main the second
+writing uses the tree the inner thunk kept, whose nodes all have dead lines, so every node is
+written again. Rebuilt, each node goes through the hash-consing table at the rebuild, and the
+nodes `Element` builds are 71 % identical to one already written (D-0172's table:
+`at_most_from (p, b)` for the same position and bound), so a rebuilt node is often a node whose
+line is on the page and is cited instead of written. At 100 nodes: 241 050 `pol` lines become
+240 939, first difference at line 280 996; stdout and `.opb` the same. The proof is a little
+smaller and as valid, but it is not main's proof.
+
+**Why it costs time.** The rebuild runs `Element`'s closure again where main reused the kept
+tree: tdtsp +16 % at 100 nodes (28.6 to 33.1 s, dev build), +37 % at 250 (152 to 209 s).
+
+**On the differential lane** B gives 347 of 347 runs equal to main's reference (`dev-handed`,
+md5 `e863aa8c`, `--tier all`): none of the lane's instances writes a released wrapper again where
+the rebuilt tree meets a line the kept one did not, so the byte change is confined to instances
+like tdtsp, whose `Element` derivations are large, rebuilt identically, and written again after
+wipes. On the 228 test models B writes main's bytes too: 0 differences of 2 736 (stdout, exit code,
+`.opb`, `.pbp`; default, `--bits-above none`, `BAGUETTE_HASHCONS=0`).
+
+So B trades memory for time and bytes. A version that keeps main's bytes would have to rebuild a
+tree that MISSES the table exactly where the kept tree's nodes missed it at their first build,
+which is the kept tree again. The user's choice:
+
+| option | memory on tdtsp | time | bytes |
+|---|---|---|---|
+| B as measured | live -97 %, peak RSS -50 % | +16 to +37 % on tdtsp | fewer `pol` lines where a released wrapper is written again and its rebuild finds lines (tdtsp; 0 of 347 lane runs, 0 of 228 models) |
+| B plus a cheaper element closure (keep the dead list's derivations, rebuild only the head) | as B | to be measured | as B |
+| not B (this branch) | A's | A's | main's |
+
+Recommendation: not B now. Its time cost falls on the family it frees, and the 14 tdtsp refusals of
+arm A are better served first by A (below) and by D-0218's fix 3 (the budget reads the live heap):
+under B the live heap is 0.1 GB while the heap the budget reads is still 8 GiB of the GC's free
+space.
+
+### 4. Option A, landed: a row's citation is one block per id
+
+`Explanation.model_row id` and `Explanation.term 1 (model_row id)` return one shared block per id
+for the ids the writer had handed out when `Justify.create` ran: the `.opb`'s rows and the lines
+the proof opens with (`intern_below`, set from `Writer.last_id`; capped at 2^22). Every other id,
+and a coefficient other than 1, is built fresh, and so is everything under `--no-proof`, where no
+id is handed out. A cited row then costs its list cell, 3 words, where it cost 8 (the `Model_row`
+block, the `Term` block, the cell): D-0218 section 5's OCaml factor 8 on this kind, down to 3.
+The table is two levels, 256-slot chunks allocated where an id is cited.
+
+**Why every byte is the same, by construction.** `Model_row` and `Term` are immutable. Every reader
+matches them by structure (`emit_summand`, `cited_ids`, `lits`, `same_derivation`,
+`Store.drop_page_only_lemmas`), and the hash-consing key and equality compare a `Model_row` by its
+id (`summand_hash`, `hc_equal`), never by identity, so no lookup can answer differently for a
+shared block than for a fresh one. Nothing is released and nothing is re-derived, so the question
+of a later identical explanation does not arise: it is written exactly as before.
+
+**Why only the opening ids.** Two earlier versions on this branch interned every id below 2^22.
+The first kept one array grown to the largest id cited; both kept one citation alive per id ever
+cited, which on travelling-thief r49 (whose proof ids pass 2^21) was +93 MB of peak heap at 1 000
+nodes for no sharing, since a line the search derives is cited by few derivations. A ladder
+citation names an `.opb` row, cited again by derivation after derivation; those are the ids kept.
+
+**What it costs.** One table entry (a pointer, and the shared 5-word citation) per opening id that
+is cited, bounded by the `.opb`'s size; one comparison per `term` and `model_row` for the rest. On
+the short rcpsp11_60 run (71 nodes, 1.06 G instructions) the interned versions measured +2 % of
+the whole run, and -1.6 % on rcpsp11_66 (2 010 nodes, 18.4 G): the collector's pacing at a fixed
+point, not a cost per node (section 5's table).
+
+**Measured** (release binaries of the merged tip: base `f9eb775a` = main `5e1ea8a`, new
+`3913bed9` = `943eada`; peak RSS from `time -v`, top heap from `OCAMLRUNPARAM=v=0x400`, live from
+the probe at exit, whose base and new are main `a964127` with and without the change, `de10d53f`
+and `fa491f68`):
+
+| instance (proof) | nodes | peak RSS (MB) | top heap (MB) | live at exit (MB, probed run) | wall (s, shared node) | `.pbp` |
+|---|---|---|---|---|---|---|
+| tdtsp_10_53 | 250 | 16 611 -> 6 639 (-60 %) | 16 569 -> 6 594 | 15 267 -> 5 867 (-62 %) | 136.4 -> 115.3 (-15 %) | same |
+| mapping mesh3x3_2 | 2 000 | 3 281 -> 3 282 | 3 249 -> 3 250 | | 67.4 -> 67.6 | same |
+| proteindesign 1HZ5 9aa | 500 | 4 678 -> 4 619 | 4 753 -> 4 747 | | 138.1 -> 138.8 | same |
+| travelling-thief r49 | 1 000 | 11 117 -> 11 105 | 11 807 -> 11 797 | 4 336 -> 4 337 | 157.4 -> 157.4 | same |
+| black-hole_9 | 40 | 1 301 -> 1 255 (-4 %) | 1 236 -> 1 195 | | 56.7 -> 56.6 | same |
+| cable_tree_wiring R046 | 300 | 314 -> 291 (-7 %) | 263 -> 239 | | 6.7 -> 7.0 | same |
+
+tdtsp is the instance whose explanations are ladder citations, and there the kind falls by the
+factor 8/3 the layout predicts. On D-0218's three other instances with a visible explanation share
+the explanations are learned PB rows (mapping), trail reasons and trace facts (proteindesign,
+travelling-thief), not row citations: A neither gains nor costs there. black-hole_9 and cable
+(alldiff's Hall derivations, D-0172's instances) gain 4 and 7 % of peak RSS.
+
+Instructions per node, D-0207's five instances and one more (scripts as D-0216's `pern.sh`):
+
+| instance | proof | nodes | instructions per node, base -> new | change | `.pbp` |
+|---|---|---|---|---|---|
+| qr3 | yes | 29 779 | 1 705 689 -> 1 704 018 | -0.1 % | same |
+| qr3 | no | 29 779 | 1 042 667 -> 1 043 743 | +0.1 % | |
+| costas14 | yes | 3 001 | 15 218 932 -> 14 937 987 | -1.8 % | same |
+| costas14 | no | 3 001 | 6 588 696 -> 6 593 595 | +0.1 % | |
+| mknap2-1 | yes | 20 001 | 26 862 460 -> 26 857 921 | -0.0 % | same |
+| mknap2-1 | no | 20 001 | 26 208 453 -> 26 192 124 | -0.1 % | |
+| jr63 | yes | 20 001 | 20 826 319 -> 20 752 551 | -0.4 % | same |
+| jr63 | no | 20 001 | 8 948 307 -> 8 949 456 | +0.0 % | |
+| rcpsp11_60 | yes | 71 | 10 124 824 -> 10 301 729 | +1.7 % | same |
+| rcpsp11_60 | no | 71 | 1 810 484 -> 1 818 688 | +0.5 % | |
+| rcpsp11_66 (added) | yes | 2 010 | 8 999 525 -> 8 860 272 | -1.5 % | same |
+| rcpsp11_66 (added) | no | 2 010 | 2 292 143 -> 2 296 145 | +0.2 % | |
+
+Release binaries `f9eb775a` (main `5e1ea8a`) and `b4b05ac9` (`ba7f0df`), `perf stat -e
+instructions:u`, (I - I at 1 node) / (nodes - 1). No proved node is slower but rcpsp11_60's, a
+71-node run whose whole cost is 1.06 G instructions; the same family at 2 010 nodes is 1.5 %
+faster, which is why rcpsp11_66 was added. The `--no-proof` columns, where nothing is shared, move
+by 0.0 to 0.5 %: one comparison per `term`.
+
+### 5. Checked
+
+On the merged tip `943eada` (main `5e1ea8a` merged in), fataepyc-06, lanes at `-j 4`:
+
+- The 228 test models, stdout, exit code, `.opb` and `.pbp`, dev binaries `cc46f5dd` (main
+  `5e1ea8a`) and `1b58aaab` (the tip), in three configurations (default, `--bits-above none`,
+  `BAGUETTE_HASHCONS=0`): 0 differences of 2 736.
+- `dune runtest --root . --force` under `ulimit -v 4000000`: 5 238 ok, 0 FAIL, peak RSS 158 MB.
+- Differential lane `--tier all`: 347 of 347 runs equal the reference. Debug pass: 333 of 333.
+- Scaling lane: every line within its threshold (rc 0).
+- `test_intern_m21t3`, under both hash-consing modes: the citation is one block per id, an id
+  handed out after `Justify.create` is built fresh, and a derivation of shared citations writes
+  the lines of the same derivation spelled with fresh blocks.
+
+The two earlier versions of A (every id interned, section 4) passed the same checks on their own
+binaries (`f411b51f`, `60d6c6d8`).
+
+**After main moved** (D-0222 rewrote `domain.ml` and `store.ml`, D-0221, D-0225, D-0229), main
+`b736947` merged into the branch as `92e5da7`, the checks again at `-j 16`, dev `00fe8a1a` (main)
+against `2def9d72` (the tip): the 228 models 0 differences of 2 736 in the three configurations;
+`dune runtest --root . --force` 5 241 ok, 0 FAIL; lane 347 of 347, debug 333 of 333; scaling
+rc 0. tdtsp_10_53 at 250 nodes, release `ef2f76c8` against `6b2369e8`: peak RSS 16 485 -> 6 729 MB,
+wall 138 -> 118 s, the same `.pbp`.
+
+### 6. What it costs in clarity
+
+One idea in `Explanation`: two smart constructors may return a value already returned before. The
+argument that this is invisible is stated where the table is (`cite_row`) and rests on the type
+being immutable and hashed by id; a future reader that compared citations by `==` would break it
+silently, which the comment says. And one piece of global state: the bound `Justify.create` sets
+from the writer it is given, which only ever widens and only decides what is shared, never what is
+written.
+
+### 7. What is left
+
+- The 3 words per cited row that remain are the list cell. An int array of ids would take a row
+  to 4 bytes (D-0218 section 7, fix 4), but it is a new summand constructor, so a decision record
+  and the user's.
+- Option B, section 3.
+- The `Linear` trees the trace's bits-arm test forces and keeps (`trace.ml` 761): small here, a
+  memo nobody reads unless the entry is cited again; `trace.ml` is agent-cdcl's.
+
+### 8. How to revert
+
+`git revert ba7f0df 943eada 175e84b 3f01089 3c6fece` (the code and its header, newest first), and
+the test goes with `3c6fece` and `943eada`. Nothing outside `Explanation` and one line of
+`Justify.create` changed; `intern_cap`, `intern_below`, `intern_up_to` and `cite_row` are
+additions.

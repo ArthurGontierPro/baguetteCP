@@ -409,6 +409,10 @@ let serials = ref 0
 
 let create ~writer ~encoding =
   incr serials;
+  (* M21-memory-T3 (D-0223): the rows of the .opb and the lines the proof opened with are
+     the ids a derivation cites again and again; their citations are shared from here on.
+     A null writer has handed out no id, so nothing is shared under `--no-proof`. *)
+  if not (Writer.is_null writer) then Explanation.intern_up_to (Writer.last_id writer);
   {
     writer;
     encoding;
