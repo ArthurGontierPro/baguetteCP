@@ -19,6 +19,7 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
+| M18-coverage-ne (D-0238): int_lin_ne/int_ne conflicts carry their facts | `lib/core/prop/ne.ml`, its tests (`test/unit/test_prop.ml` ne cases, new test models) | agent-ne (wave84-ne, /scratch/arthur/wt-ne) | 2026-11-26 |
 
 ## Cross-session requests
 
