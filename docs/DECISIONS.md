@@ -30801,7 +30801,22 @@ Binaries are dev builds unless named; md5s are in `bin/` of the results director
   names the new policy, and `BAGUETTE_RETENTION=off` reproduces the old default's artefacts,
   that line included, on all 228. Unit suites 5 353 `ok`, 0 `FAIL`; model tests 228 passed.
 
+- **After merging main `20170b8`** (branch binary `4ce3e72e`, main `bc2ad3e6`, 232 test models):
+  with `BAGUETTE_RETENTION=off` every artefact and the retention line equal main's under the
+  default and `--bits-above none`; under the new default stdout, `.opb`, `.pbp` and node counts
+  equal main's and only the retention line differs; `tiered:first=4,inc=2`, `lbd:3` and `fifo:3`
+  equal main's entirely. veripb accepts every proof under the new default and under the eight
+  switch settings above (9 x 232). Unit suites 5 414 `ok`, 0 `FAIL`; model tests 232 passed. The
+  differential lane run through a wrapper that sets `BAGUETTE_RETENTION=off` when no policy is
+  given: 298 / 347 and 295 / 333 equal, the differences again the `lbd` / `fifo` WORK counters
+  only. Run plainly (the new default): 295 / 347 and 274 / 333 differ, the retention line
+  everywhere and, where `tiered` evicts within the node budget, the search (decisions, the
+  database, one stdout on `2013_rcpsp_11@10000 [nopb]`): that is the change, and the reason the
+  lane needs its re-record. The scaling lane is green and the default change moves it the other
+  way: late-minus-early growth per node QR72 0.94 M (baseline 1.53 M), parity-learning 0.44 M
+  (1.97 M), rcpsp_11 3.25 M (5.64 M), so its baseline can be ratcheted at the re-record.
+
 Commits on `wave73-evict`: `9265a42` fix 1 and the flat row; `0c51c8a` the guard switches;
 `92e8e99` header comments; `c5ac012` the hot reads (instructions back to main's); `dc2a493` and
 `552771d` this record; `1f77a89` the merge of main `be07823`; `d9e57e3` **the default** (revert
-this one alone to return to `keep_all`).
+this one alone to return to `keep_all`); `dd46e34` the merge of main `20170b8`.

@@ -701,7 +701,7 @@ section 1. Shares are inclusive, of the whole run.
 ### 2026-11-26 (agent-evict, fataepyc-06): D-0226 on `wave73-evict`, not merged
 
 An evicted learned constraint now leaves the engine and its bytes go (fix 1), learned rows are flat (fix 2), and two switches cap learned PB rows by length (default off; on mapping and steelmill they cut memory 3 to 6 times, on the tuning set they are noise). With fix 1 `tiered` passes the review's rule and is the default in its own commit `d9e57e3`; `BAGUETTE_RETENTION=off` (or `keep_all`) restores the old default exactly.
-At the merge: re-record the differential lane in its own commit (every configuration's retention line names `tiered`; `lbd` and `fifo` also changed WORK counters only, from fix 1), and the gate. `Engine.remove` is the only removal path, reachable only through `Retention.gate`; results, scripts and binaries in `/cluster/arthur/baguette-results/evict/`.
+At the merge: re-record the differential lane in its own commit (the retention line names `tiered`, `tiered` changes the search where it evicts within the node budget, and `lbd`/`fifo` changed WORK counters only, from fix 1), and the scaling baseline can be ratcheted (QR72 growth 0.94 M against 1.53 M). `Engine.remove` is the only removal path, reachable only through `Retention.gate`; results, scripts and binaries in `/cluster/arthur/baguette-results/evict/`.
 
 ### 2026-11-26 (agent-bugs, `wave77-bugs`, D-0231): the `regular` crash and the `cumulative` debug invariant are fixed, not merged
 
