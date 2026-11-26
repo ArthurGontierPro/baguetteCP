@@ -30331,21 +30331,20 @@ at a time, the node's total under 88. A complete answer counts only when VERIFIE
 
 | arm | verified complete | incumbent only | nothing | died | share (5 arms) | conflicts/s | vs `DfixP` | vs `DfP` | families vs `DfixP` | families vs `DfP` |
 |---|---|---|---|---|---|---|---|---|---|---|
-| CfixP | 20 | 121 | 53 | 5 | 0.174 | 57 | 24+ 28- | 49+ 99- | 19 / 25 | |
-| CfP | 32 | 128 | 34 | 5 | **0.236** | 45 | 93+ 48- | 59+ 63- | 81 / 39 | 53 / 56 |
-| CalP | 31 | 120 | 40 | 8 | 0.175 | 56 | 78+ 80- | 51+ 97- | 70 / 70 | |
-| DfixP | 19 | 124 | 51 | 5 | 0.179 | 54 | | 52+ 97- | | |
-| DfP | **37** | 123 | 34 | 5 | **0.236** | 44 | 97+ 52- | | 86 / 44 | |
+| CfixP | 20 | 121 | 54 | 5 | 0.173 | 57 | 24+ 28- | 49+ 100- | 19 / 25 | 43 / 90 |
+| CfP | 32 | 129 | 34 | 5 | **0.236** | 43 | 94+ 48- | 59+ 64- | 82 / 39 | 53 / 56 |
+| CalP | 31 | 121 | 40 | 8 | 0.176 | 56 | 79+ 80- | 52+ 97- | 71 / 70 | 47 / 87 |
+| DfixP | 19 | 124 | 52 | 5 | 0.178 | 54 | | 52+ 98- | | 44 / 87 |
+| DfP | **37** | 124 | 34 | 5 | **0.237** | 44 | 98+ 52- | | 87 / 44 | |
 
-Not one proof rejected: 139 checked, 137 VERIFIED (94 `BOUNDS a <= obj <= a`, 40 `SATISFIABLE`,
-5 `BOUNDS INF <= obj <= INF`), two over the 3 600 s check (smelt_4 under `CfP`, an optimum found in
-285 s, and oocsp racks_030 under `DfP`) and one still being checked when this was written
-(sdn-chain d30n600-7 under `CalP`). The proof costs the loop what it costs `dfs`: over the 188
+Not one proof rejected: 140 checked, 137 VERIFIED (94 `BOUNDS a <= obj <= a`, 40 `SATISFIABLE`,
+5 `BOUNDS INF <= obj <= INF`), three over the 3 600 s check (smelt_4 under `CfP`, an optimum found in
+285 s, oocsp racks_030 under `DfP`, sdn-chain d30n600-7 under `CalP`), counted as their incumbent. The proof costs the loop what it costs `dfs`: over the 188
 instances where both made 50 conflicts, `CfP` writes 1.04 times `DfP`'s bytes per conflict at 0.99
 times its conflicts per second (`CfixP` against `DfixP`: 1.04 and 1.03), so chronological
 backtracking's longer-lived trace lines cost nothing measurable.
 
-With proof, `-f` on the loop and on `dfs` are a tie on the score (0.236 both) and `dfs` has five more
+With proof, `-f` on the loop and on `dfs` are a tie on the score (0.236 and 0.237) and `dfs` has five more
 verified answers (37 against 32: it keeps gfd-schedule, nside EASY, evm BDARUMA, pennies, word-equations,
 products-and-shelves, stripboard and solbat, the loop keeps steelmillslab 14_1, test-scheduling t30
 and oocsp racks, whose `DfP` proof did not check in time). Without proof the same two arms gave the
