@@ -31781,3 +31781,112 @@ Left open:
 
 Revert: `git revert bdd564a 80525a0` (the two re-pinned tests first, then the rule, its test section
 and the model). The rule alone is the `if Store.level store > 0` line in `Ne.propagate`.
+
+## D-0240  [AUTONOME] M18-coverage-T6: `sort`, `arg_sort`, `arg_max` and `arg_min` stay on std's decompositions. Of the 155 Challenge instances that name them, 15 (tower) reach the solver with one, always `arg_max` over var int; three routes for it without std's scaled copies were measured and each costs more per node. No native sort is built: no instance needs one. Eight test models pin std's routes
+
+**Status**: DECIDED (agent-sort, `wave86-sort`, 2026-11-26). No `lib/`, `bin/` or `mznlib/*.mzn` change, so
+nothing to revert in the solver. The branch adds eight test models (`mznlib/test/{argmax,argmin,sort,argsort}_src_*.mzn`,
+their `test/models/*.fzn` and `test/expected/*.out`); deleting them reverts it. The route measured and dropped is
+commit `d4a4857` (reverted by `cfbac28`), kept for whoever reopens it.
+
+### 1. What reaches baguette, measured first
+
+The ROADMAP's 155 counts names in models (100 `arg_sort`, 25 `sort`, 30 `arg_max`, 5 `arg_min` in MZNC_connect, which
+also calls `arg_max`). To see what reaches the solver, every one of the 155 was flattened (MiniZinc 2.10.1) with a
+PROBE library, main's `mznlib/` plus body-less `fzn_sort`, `fzn_arg_sort_int`, `fzn_maximum_arg_{int,bool}` and
+`fzn_minimum_arg_{int,bool}`, so that any call over variables shows up by name in the `.fzn`.
+
+- 150 flattened. 15 call `fzn_maximum_arg_int`, all of them tower (2020 tower_challenge 5, 2022 and 2025 tower 10):
+  `tower[h] = arg_max(t in TOWER)(signal_strength(t, h))`, one call per handset (50 to 284 calls) over the 10 to 50
+  towers. The other 135 call none of the six.
+- 5 did not finish flattening in 12 minutes (gt-sort 3, test-scheduling 2) and were stopped. Their calls are on data,
+  read from the models (`reverse(sort(c))` over a parameter array, `reverse(arg_sort(duration))`), and their siblings
+  that did flatten (gt-sort 2, test-scheduling 8) call none.
+- Every `sort` and `arg_sort` call in the sixteen editions is over parameters: an order of the data (racp, nside,
+  steelmillslab, zephyrus, rotating-workforce, concert-hall-cap, rel2onto, warehouse, chessboard, roster-sickness's
+  and roster-shifts-bool's `assert`, hoist's bound), a search annotation (tsptw) or the output (atp-stage2). The same
+  holds for `arg_max` in hitori, evm-super-compilation and MZNC_connect (`let { int: ... = arg_max(...) }`).
+
+So no Challenge instance reaches baguette with a variable `sort` or `arg_sort`, and `arg_max` reaches it on tower only.
+
+What std gives baguette there. `fzn_maximum_arg_int` writes `w[j] = n * x[j] + (u - j)`, one `int_lin_eq` per
+position, `Mx = max(w)` (an `array_int_maximum`, native since D-0095) and `(idx != j) = (Mx > w[j])`, one
+`int_lin_le_reif` per position whose Boolean IS idx's `int_ne_reif` indicator (the flattener aliases them). The
+`(u - j)` term makes the first position of the maximum win. On tower the copies are 15 times wider than x (x in
+0..1134, w up to 17 000, Mx up to 332 916), which is what the ROADMAP row called the big-M family.
+
+### 2. Options
+
+| constraint | option | measured (section 3) |
+|---|---|---|
+| `arg_max`, `arg_min` | std's copies (kept) | the baseline |
+| | A. `m = max(xs)` over xs itself, `idx = j -> xs[j] >= m`, `idx > j -> xs[j] < m` (`d4a4857`) | 1.45 times the instructions per node; at 300 s 3 incumbents better, 8 worse, 1 OPT lost |
+| | B. one reified `top[j] = (xs[j] >= m)`, `idx = j -> top[j]`, `top[j] -> idx <= j` | 1.26 times per node; 0 better, 5 worse of 8 |
+| | C. std's own row without the copies: `(idx = j) = (n * xs[j] + idx >= n * m + j)`, exact because `max(w) = n * m + u - idx` | 1.09 times per node (1.45 to 1.52 on the three widest instances) |
+| | a native `arg_max` | not built: std's route is ONE reified row per position, aliased with the indicator, and under the bits default the copies' width costs nothing measurable (C, which removes only the width, does not win). A native module would save the rows' propagation but needs its own justification in both encodings for 15 instances on which Chuffed, through the same std decomposition, completes 2 in 1 200 s |
+| `sort` | std: a permutation `p`, `all_different(p)`, `increasing(ys)`, `ys[p[i]] = xs[i]` as `array_var_int_element`, which `mznlib/redefinitions.mzn` writes as `(p[i] = k) -> (ys[k] = xs[i])`, n^2 implications (kept) | no instance; correct on 600 fuzz models |
+| | a native bounds-consistent sort (Mehlhorn and Thiel) | not built: no instance reaches it. Section 3's synthetic models show where it would help |
+| `arg_sort` | std: `all_different(p)` and per adjacent pair `xs[p[j]] <= xs[p[j + 1]]` with the tie on `p`, two var elements per pair (kept) | no instance; correct on the same fuzz |
+
+Why A and B lose is a reading, not a measurement: std's tie-break costs no constraint (it is the `(u - j)` of a row
+that is already there), while A and B pay for it with a second reified comparison or two clauses and an `idx <= j`
+literal per position (tower `070_070_15_070-04`, 15 191 constraints under std, 19 123 under A, 18 157 under B, 15 190
+under C).
+
+### 3. Measurement (2026-11-26)
+
+One release binary for every arm, main `2fff866`, md5 `9194b0f8` (dev `505217da`, identical to the dev binary of
+origin/main `7e98ce5`). fataepyc-06, 300 s, `--max-heap-mb 8192`, 16 GiB address space, MemoryMax 32G, 4 runs per
+arm in parallel, 16 or fewer in all. With proof, veripb on complete runs (the first 4 of each proof arm were also
+checked when they timed out, and all 8 ran out of the checker's 900 s). Deterministic arm: `BAGUETTE_NODE_LIMIT=3000`,
+`--no-proof`, `perf stat -e instructions:u`. Tables, scripts and `.err` files: `/cluster/arthur/baguette-results/sort/`.
+
+Instructions per node at 3 000 nodes over the 15 tower instances, against std (the stdout differs on every one, so
+the trees differ and the ratio mixes per-node cost with where the search goes): A 1.450 (1.33 to 1.76), B 1.263
+(1.12 to 1.63), C 1.090 (0.92 to 1.52).
+
+At 300 s, objective is maximised:
+
+| arm | complete | incumbents vs std |
+|---|---|---|
+| std, no proof | 2 (050_050_10_050-03 OPT 45, 070_070_15_085-09 OPT 85) | |
+| A, no proof | 1 (050-03) | 3 better (the three widest, 300_300 and 500_500), 8 worse, 4 same |
+| B, no proof (stopped after 8) | 0 | 0 better, 5 worse, 3 same |
+| std, proof (14 of 15 finished) | 1 (085-09 OPT 85 in 244 s, the check ran out of 900 s) | |
+| A, proof (stopped after 12) | 0 | 3 better, 7 worse, 2 same |
+| Chuffed (D-0211, 1 200 s) | 2 (050-03 OPT 45 in 113 s, 070-02 OPT 70 in 392 s) | |
+
+Tower 085-09 is a find of its own: std's route in baguette proves OPT 85 in 67 s without proof and 244 s with it,
+where Chuffed stops at 58 after 1 200 s. Its proof is being re-checked with a 5 400 s budget (section 5).
+
+Correctness, the routes kept. A differential fuzz against Chuffed, each model solved by Chuffed through std and by
+baguette (dev `505217da`) through the same library, veripb on every proof: 1 000 random small `arg_max`/`arg_min`
+models (int and bool, index sets offset by 0 to 2, ties, side constraints, an objective) agree on every optimum or
+UNSAT, 1 000 proofs VERIFIED; 600 `sort` (both spellings) and `arg_sort` models agree, 600 VERIFIED. Route A passed
+the same 1 000 after one fix (its bool form let every position follow an all-false or all-true array).
+
+Synthetic `sort` and `arg_sort` (no Challenge instance has one), 12 generated models, n = 8, 16, 32, 60 s, baguette
+std route against Chuffed (std route too) and Gecode (native `sort`, std `arg_sort`): n = 8, Chuffed and Gecode
+complete all four, baguette three without proof (not sort_8_0, 237 against 209) and one with it. n = 16 and 32,
+`sort`: Gecode completes or leads (702 OPT, 972 OPT, 2 958, 3 284, minimised), baguette and Chuffed both behind
+(1 176, 1 797, 7 024, 6 018 for baguette; Chuffed completes 16_0 at 702 and otherwise 1 860, 9 046, 8 864).
+`arg_sort` n = 16: Gecode 156 and 181, Chuffed 369 and 346, baguette 392 and 459; n = 32: baguette 2 036 and 2 138,
+Chuffed 2 389 and none, Gecode none and 1 429. So a native sort is where Gecode's lead comes from on `sort`; on the
+same decomposition baguette is ahead of Chuffed on three of the four and behind on 16_0.
+
+### 4. SPEC 2.1
+
+None proposed. Nothing new reaches the solver: std's decompositions emit only builtins SPEC 2.1 already has
+(`int_lin_eq`, `int_lin_le_reif`, `int_ne_reif`, `array_int_maximum`, `all_different_int` and the reified rows of
+`array_var_int_element`'s redefinition).
+
+### 5. What is left open
+
+- A native `sort` (Mehlhorn and Thiel), if a model ever reaches baguette with one. Section 3 says it would pay on
+  `sort` from n = 16. It is a new propagator family with its justification in both encodings; nothing in the
+  sixteen editions asks for it today.
+- Tower's cost per node is not arg_max's alone (10 350 clauses and 2 070 reified rows per 70 handsets): a profile
+  by propagator would say whether a native `arg_max` could pay at all.
+- Tower 085-09's OPT 85 proof: re-checked by `runs/v085/` in the results directory (veripb, 5 400 s).
+- The census tool counts names. `tools/compare/challenge_globals.py` lists `sort`, `arg_sort` and `arg_max` as not
+  native, which is right, but the ROADMAP's 155 overstates what any route could change by ten to one.
