@@ -28649,6 +28649,531 @@ The code is three commits on `wave67-cdcl`: `e9108c1` (the loop, the observables
 the observables' counters (one byte per learned instance, one evaluation of the learned clause per
 resume), so reverting is `git revert` of the three, or simply not setting `BAGUETTE_CDCL`.
 
+## D-0203  [AUTONOME] M17-bench-series-T1/T2: the series driver (`bench/series/`), and the first series on the bits default without a proof cap. Default 302 + 74 verified, `-f` 346 + 95, no proof 340 + 86 (unverified). Summed score 4 043, 5 799 and 4 428 against D-0185's 2 789, 3 581 and 3 237. No proof rejected, no checker memory failure
+
+**Status**: **MEASUREMENT** and a **tool**, with one decision of the user (no proof cap). Recorded
+2026-11-24 (agent-series, branch `wave58-series`). Run on `fataepyc-06` from 2026-11-23 13:28 to
+2026-11-24 11:35 UTC (flatten before it, from 12:20). Binary **`f244c35ac8a1960cd82fd6f39357891d`**,
+the RELEASE build (`dune build --profile release -j 16`, the recipe of `make release`) of the
+series clone at `f827518`. That is main `f6c62db` plus the series tooling and no change under `lib/`
+or `bin/`, so it is the solver of D-0201 and D-0202's release `f244c35a`. The clone was moved to
+`e1971f6` for the harness settings below, which the binary does not depend on. It predates the
+speed and coverage work merged since (D-0206, D-0208, D-0209, D-0212 to D-0217, D-0220).
+
+### 1. The tool (T1)
+
+`bench/series/run_series.sh --name N --commit REV --par P [--arm LABEL:proof|noproof:FLAGS ...]`
+does what agent-m10t5 did by hand for D-0185, in phases that can each be re-run
+(`--phase setup|flatten|run|read|publish`): a fresh clone at REV, the release build and its md5,
+every edition flattened once with that clone's `mznlib` (the editions side by side, because one
+flatten of 1 200 s held up the next edition in a first sequential try), the arms side by side, the
+tables (`read_series.sh`, with `challenge_rank.py`, `arms_compare.py` and `refusal_causes.py`), and
+a copy of the tables to `/cluster/arthur/baguette-results/series-<name>/`. Resumable: `compare_run.sh`
+skips every (instance, solver) that has a row. Pidfiles only (`DIR/pid`, `DIR/<arm>.pid`,
+`monitor.pid`). `tools/compare/readme_table.py SERIES_DIR` writes the README's performance section
+from the tables and, with `--readme`, replaces it in place, so the README is regenerated and not
+copied by hand. The outcome table's rows are asserted to add up to the instance count.
+
+What differs from D-0185's drivers, and why:
+
+| | D-0185 | this series |
+|---|---|---|
+| veripb's memory | the solver's `ulimit -v` 16 GiB covered it (21 CHECK-ERROR were veripb memory) | its own cgroup, `systemd-run --user --scope -p MemoryMax=64G`, no address-space cap (`CHECK_MEM_KB=unlimited`, a new variable of `compare_run.sh`; the solver's 16 GiB is applied in its own subshell) |
+| veripb's time | 3 600 s, the same `timeout` as the harness | 3 600 s of CHECKING, `bench/series/veripb_wrap.sh`; the harness's own `timeout` is 28 800 s and is a net |
+| a checker memory failure | CHECK-ERROR | exit 97 and `Error: SERIES-CHECKER-MEMORY`, counted apart by `readme_table.py`. **None occurred** |
+| a check over the limit | TIMEOUT-CHECK | TIMEOUT-CHECK, unchanged, counted apart from REJECTED |
+| large checks | no limit | at most 12 proofs of 2 GiB or more checked at once (12 x 64 GB under a 2 TB node) |
+| veripb's cost | check time only | check time, and peak RSS in `log/<id>.baguette.vrss` |
+| proof cap | 16 GB | **none**, the user's decision of 2026-11-23: MiniZinc has no certified track, so the cap is our own harness choice and must not limit us |
+| `/scratch` | not watched | no solve or check starts while `/scratch` has under 2 000 GB free (`space_gate.sh`, run outside the timeouts). It never held, the minimum free being 10.1 TB |
+| PAR | 12 per arm, 36 in all | **29 per arm, 87 in all**, so three development agents could each run one process beside it under the user's 92 |
+
+Settings kept from D-0133: 1 200 s solve and flatten, 16 GiB address space for the solver, each
+solver run in its own `systemd-run --user --scope -p MemoryMax=32G` with `--stats` and the peak-RSS
+recorder. **The heap budget actually used is 8 GiB** (`--max-heap-mb 8192`, which the harness derives as
+`MEM_KB / 1024 / 2`): D-0218 found that this is what the 163 refusals below hit, and not the 16 GiB the
+setting is called. D-0185 had the same value, so the comparison is like for like.
+
+Arms, the same three as D-0185: **A** default with proof, **B** `-f` (`--search alternate --restarts
+luby`, D-0154) with proof, **C** default `--no-proof` (unverified, never counted as verified).
+Run directories `/scratch/arthur/series-20261123/{A,B,C}/<YEAR>/` (13 GB, no proof left: the harness
+deletes a VERIFIED run's `.opb`/`.pbp`, and there was no REJECTED and no CHECK-ERROR run to keep).
+Tables, drivers, `series.conf` and `monitor.log` (a line every 5 minutes) are in
+`/cluster/arthur/baguette-results/series-20261123/`.
+
+**Load during the run** (`monitor.log`, 266 lines, one per 5 minutes): this series ran 87 solver or checker
+processes at most. The count of `main.exe` and `veripb` processes of the user, which includes other agents'
+runs, peaked at 97 and the 5-minute load at 99 (45 to 90 most of the time). Free memory never fell under 1.58 TB
+and `/scratch` free stayed between 10.1 and 10.6 TB, far above the 2 TB floor. `--list FILE`, `--solve-timeout S` (agent-tuning's
+request) and `--pair-all` were added after the run, and by default a baguette-only series no longer
+flattens with the Chuffed and GCS libraries (`PAIR_SOLVERS=baguette`): the data file of each instance comes
+from `bench/challenge/<year>.lst`, so the three arms here kept their instances, but this is the one change
+whose effect on the set of instances flattened (1 575 here, 1 574 in D-0185) was not measured.
+
+### 2. Result, per arm (1 575 instances flattened out of 1 600)
+
+| outcome | A | B (`-f`) | C (`--no-proof`) |
+|---|---|---|---|
+| optimal or UNSAT, proof verified | 302 | 346 | 340 (unverified) |
+| satisfiable, proof verified | 74 | 95 | 86 (unverified) |
+| complete, check hit the 3 600 s limit | 18 | 26 | n/a |
+| complete, veripb out of memory (64 GB) | **0** | **0** | n/a |
+| timeout at 1 200 s | 1 017 | 970 | 992 |
+| refused, heap budget | 164 | 138 | 157 |
+| crash | 0 | 0 | 0 |
+| **rejected by veripb** | **0** | **0** | n/a |
+| objective value printed | 1 060 | 1 149 | 1 079 |
+
+The rows add up to 1 575 in each arm (asserted by `readme_table.py`). **CAPPED does not occur**, by
+construction. 116 runs of arm A and 84 of arm B wrote a proof file above 16 GB before they ended, and of
+those exactly **one** (arm A) was a complete answer that veripb verified (23.6 GB), one more a complete
+answer whose check timed out. So the cap that cost D-0185 198 and 173 runs would, on this binary, have cost
+one verified answer, because the proofs are far smaller (below) and the runs that write that much mostly
+time out anyway. The largest verified proof is 23.6 GB. The 817 verified proofs have a median of 198 MB and
+were 793 GB together, all deleted after their check.
+
+veripb: the median check of a verified proof took 46 s (A) and 42 s (B), 32 and 31 checks took more than
+1 200 s, the longest 3 493 s and 3 440 s, and the peak RSS was 26.8 GB (A) and 34.6 GB (B), under the 64 GB
+cgroup, which is why no check died of memory. The 44 TIMEOUT-CHECK (18 + 26) are the checker's time limit.
+
+Proof logging, on the 376 instances A and C both complete: wall time of C over A **0.47** (median, quartiles
+0.35 and 0.67; summed 53 764 s to 28 197 s), peak memory 0.91, nodes per second 1.50 (D-0185 had 0.64, 0.96 and
+1.27). Without proof 41 instances that hit the heap budget or a crash with proof become ordinary attempts, and
+2 of them end with a complete answer. `-f` against the fixed search, B over A: 670 instances better, 327 worse,
+578 equal; wall ratio 1.01 over 337 complete in both; nodes per second 1.05.
+
+Score in the fixed-search category (`challenge_rank.py`, summed over the sixteen editions): **A 4 043, B
+5 799, C 4 428**, B scored in the fixed category so that the three compare. Rank per edition, in the README
+table: A equals or improves D-0185's rank in every edition (2026 from 12 to 11, 2020 from 6 to 5, 2012 from 8 to 5).
+
+### 3. Against D-0185, arm by arm
+
+| | D-0185 (`7c880bce`, order, 16 GB cap) | this series (`f244c35a`, bits, no cap) |
+|---|---|---|
+| A verified complete (opt+UNSAT, sat) | 251 + 72 = 323 | 302 + 74 = **376** |
+| A refused / timeout / capped / crash | 314 / 700 / 198 / 4 | 164 / 1 017 / 0 / 0 |
+| A summed score | 2 789 | **4 043** |
+| B verified complete | 265 + 97 = 362 | 346 + 95 = **441** |
+| B refused / timeout / capped / crash | 336 / 668 / 173 / 3 | 138 / 970 / 0 / 0 |
+| B summed score (fixed category) | 3 581 | **5 799** |
+| C complete (unverified) | 296 + 84 = 380 | 340 + 86 = **426** |
+| C refused / timeout / crash | 398 / 780 / 16 | 157 / 992 / 0 |
+| C summed score | 3 237 | **4 428** |
+| check did not finish | 35 (A), 32 (B) | 18 (A), 26 (B), none by memory |
+
+What changed what. The three arms ran the same binary, so each pair of columns differs by the same two
+causes and the comparison cannot split them, because no arm ran the order encoding on this binary:
+
+- **The bits default (D-0201) and the work before it** (M16 and the proof-size reductions that came with it)
+  moved instances out of REFUSED and CAPPED. Refusals fell by 150 to 241 per arm, mostly to TIMEOUT, which is
+  why the timeout row rises (700 to 1 017) while the verified rows rise too. A proof now rarely reaches 16 GB.
+  D-0175 measured the same direction on two arms of an earlier binary (summed score with proof 2 712 to 3 441,
+  proofs over the cap 214 to 68).
+- **Removing the cap** accounts for at most the one verified 23.6 GB proof above, and for the 116 and 84 runs
+  that wrote more than 16 GB. It is not what lifted the table.
+- The check failures fell (35 to 18 in A) because veripb no longer runs under the solver's 16 GiB, and none
+  died of memory. Those 21 CHECK-ERROR of D-0185 were its address-space cap.
+
+The 64 GiB observation series on `fataepyc-07`, which asks what the heap-budget refusals become with more memory,
+is agent-node07's (D-0210, branch `wave60-node07`). It compares its arms with these. It is cited here and not
+redone.
+
+### 4. Decisions and how to revert
+
+1. **No proof cap** is the user's, 2026-11-23. Revert by `PROOF_CAP_KB=16000000` in `arm_driver`
+   (`run_series.sh`).
+2. **PAR 29 per arm**, the orchestrator's, so three agents fit under 92.
+3. [AUTONOME] veripb under its own limits (64 GB MemoryMax, 3 600 s) and `CHECK_MEM_KB`. Revert by not
+   setting `CHECK_MEM_KB`; the default of `compare_run.sh` is unchanged.
+4. [AUTONOME] flatten the editions side by side, and a baguette-only series flattens with the baguette library
+   only (`--pair-all` restores the three).
+
+No change to the solver, to a SPEC sentence or to `Explanation.t`. The README's performance section is now
+this table, produced by `readme_table.py`, with D-0185 kept as the one-line pointer to the previous series.
+
+## D-0222  [AUTONOME] M21-memory-T3 (fix 2 of D-0218): a hole set is a VERSION of a per-variable hole log, trailed by value. A removal appends the value to the log (16 B) instead of copying the bitset (span / 8 B), undoing its entry truncates the log, and I-T1 now reads "restores the state, and a version the log has truncated refuses to be read"
+
+**Status**: DECIDED (agent-holes, `wave70-holes`, 2026-11-24). Taken in mode autonome: it changes
+the wording of invariant I-T1, which CLAUDE.md reserves to the user. Revert: revert the commits of
+`wave70-holes` that touch `lib/core/domain.ml` and `lib/core/store.ml` (the code commit is one
+commit, named in section 6); the trail goes back to holding a copy per pruning, and nothing else
+depends on the log.
+
+### 1. Context
+
+D-0218 measured that at a refusal the hole bitsets COPIED per pruning are 98 % of the live heap on
+wordpress 7 (32.3 GB, a 122 KB copy per pruning of a 974 300-wide variable) and 41 % on
+travelling-thief r49, 60 to 7 600 times a flat layout. The cause is `Domain.with_hole`: a
+`Domain.t` was immutable, so punching a hole copied the whole bitset, and the trail kept both
+copies of every removal (`old` and `now`). Gecode and Chuffed trail the change, not the set.
+
+Immutability was load-bearing, and not only for the trail. Four readers hold a `Domain.t` and read
+it LATER, after the store has moved on:
+
+1. a trail entry's `old` and `now`, read by `Trace` (`classify`, `settled_over_lo`), by
+   `Store.remover` (a binary search over the variable's entries, `mem` on each `now`) and by the
+   history readers of D-0124 (`lo_at`, `lo_reasons_at`);
+2. a propagator's snapshot within a pass (I-P6), read after the pass's own pushes;
+3. an `Element` frame (D-0214), which keeps the index's and the result's domains and builds the
+   reason and the derivation from them when asked, possibly much later in the branch;
+4. tests, which treat `Domain` as a persistent value (remove twice from the same domain, compare).
+
+So "a mutable bitset per variable and an undo entry per removal", D-0218's sketch, is not enough
+by itself: those readers would see holes punched after they took their copy.
+
+### 2. Options
+
+| option | bytes per removal | read of a past domain | what breaks |
+|---|---|---|---|
+| (a) keep the copy (today) | span / 8 (122 KB on wordpress) | O(1) | the heap: 33 GB at node 1 on wordpress |
+| (b) one mutable bitset per variable, the removed value on the trail | 16 | IMPOSSIBLE: a past domain is gone | the four readers above; every lazy reason of `Element` and every settle walk would read the present |
+| (c) a persistent chunked set (path copying in a 32-ary trie of 64-bit words) | about 3 nodes of 32 words, 0.8 KB on wordpress | O(log span) | nothing, but it is 50 times (b) and every live `mem` pays the trie walk |
+| (d) a VERSIONED log: one mutable bitset per variable lineage plus the stack of removals in order; a domain holds (log, k), "the first k removals" | 16 in the log + the 7-word version record | O(1) on the newest version; O(1) on a past one through a position table built on first need | stale versions (from an undone branch) can no longer answer, so they must refuse |
+
+(d) taken. It is (b) with the history kept as a stack and a domain as a prefix of it, which is
+exactly "replaying the entries backwards from the live domain", indexed so that the replay costs
+nothing per read.
+
+### 3. The representation
+
+```
+log     = { base; span; bits : Bytes.t      (* live set: base holes + every logged value *)
+          ; vals : int array; uids : int array; len; top_uid; next_uid
+          ; pos : Bytes.t                   (* int32 per value, built on first deep read *) }
+holes   = { log; k; uid; hbase; hspan; hbits } (* a version: base holes + vals.(0 .. k-1);
+                                                the last three are the log's, copied *)
+Domain.t = { lo; hi; holes : holes option } (* unchanged shape; None allocates nothing *)
+```
+
+- **Remove from the newest version** (`k = len`, `uid = top_uid`, the store's case): set the bit,
+  append the value and a fresh uid, return the version `k + 1`. O(1) amortised, no copy.
+- **Remove from an older version** (a test's second removal from the same domain, a scratch store
+  sharing a log): FORK, a new log whose base bits are that version's set (one copy of the bitset,
+  what every removal paid before). Correct for any caller, as a persistent value is, and never
+  taken by a solve: the store always extends its own current domain, which is the newest version
+  unless something outside the store extended the same log (only `Engine.oracle_accepts`'s
+  scratch store does, under `BAGUETTE_CONSISTENCY` only).
+- **Undo** (`Domain.undo ~old ~now`, called by `Store.undo_to` for each popped entry): when `now`'s
+  version is past `old`'s on the same log, truncate the log back to `old`'s `k` (clear the bits of
+  the popped values); when `now` holds a log `old` does not, truncate that log to 0. An entry that
+  moved a bound only shares its version with `old` and costs one comparison.
+- **Every read tests the bit first**, with the loads the copying representation made (the version
+  record carries the log's base, span and bitset, 3 words, so that `mem` does not pay a load
+  through the log): a clear bit is a hole of no valid version (bits only gain values along the
+  log), which answers every read of a value still in the domain. A set bit is a hole of the
+  NEWEST version (`k = len`, `uid = top_uid`), and of an older one iff its position in the log is
+  below `k`: a scan of the at most 8 entries past `k`, else `pos`, an int32 per value built on
+  first need (O(span), 4 B per value, maintained by every later append). Base holes have
+  position -1. `size` is the popcount less the values logged after `k` within the bounds.
+- **Validity**: a version is valid iff `k <= len` and the uid at slot `k - 1` is its own. Uids are
+  per log and never reused, so a version from an undone branch fails the test even after the log
+  has been refilled to the same length. A read of an invalid version raises
+  `Domain.Stale_version` on every set bit, and `Domain.check_version` raises on any: a refusal
+  with a name rather than a wrong answer, the move `Store.check_history` makes for a history
+  (D-0124). A clear-bit read of a stale version is NOT checked, because that is the read every
+  `mem` of a live value makes (section 6 measured the check there).
+- **Bounds-only fast path** (ARCHITECTURE §2): a domain with no hole has `holes = None`, as
+  before. `set_lo`, `set_hi` and `fix` allocate exactly what they allocated. A version is created
+  only by an interior removal.
+- `classify` on a pair sharing a log and its bounds answers from the log segment `[k_old, k_now)`
+  (sorted, filtered to the bounds) instead of walking the width; the walk stays as the fallback and
+  as the `BAGUETTE_DEBUG` cross-check.
+
+### 4. I-T1, the new wording (the decision the user would have taken)
+
+Before: "`backtrack_to l` restores every domain to exactly its state when level `l` was opened",
+and `domain.ml` added "a [t] must never share mutable state with its successors".
+
+After: "`backtrack_to l` restores every domain to exactly its state when level `l` was opened. A
+domain's holes are a VERSION of a log its successors share (D-0222): a `Domain.t` read back
+answers exactly the set it had when it was made for as long as no trail entry older than it has
+been undone, and once one has, reading it raises `Domain.Stale_version` instead of answering."
+
+The second sentence replaces the old "never share mutable state" and is what the four readers of
+section 1 rely on. Each reads below a live cut by its own rule: a trail entry is read while it is
+on the trail; a history only while `check_history` accepts it (D-0124); a pass's snapshot within
+the pass, before any backtrack; an `Element` frame through its history. So the refusal is never
+hit by a correct reader, and a wrong reader is now loud where before it read a frozen past.
+
+### 5. What a history read costs (D-0124, D-0214)
+
+`Linear`'s lazy reasons read bounds only (`lo_at`, `hi_at`, and `settled_over_lo`'s `mem` walk
+near a bound): O(1) per read as before, plus O(1) per `mem` whose bit is set. `Element`'s frame
+reads `mem` and `iter` on a past version of the index and the result: O(1) per value once `pos`
+exists, O(8) before. `Store.remover` (D-0088's binary search) reads `mem` on O(log n) past
+versions: O(log n) as before. `pos` is built once per log that a deep read touches, never on a
+log only read at its newest version, which is every log a solve without `Element`, alldiff's
+hole stage or a settle over a hole ever reads.
+
+The three history readers D-0214 left in `element.ml` (`remover_at`, `explanation_at`,
+`at_root_at`, its cross-session request of 2026-11-23) move into `store.ml` next to
+`lo_reasons_at`, where the history type is defined; `element.ml` no longer reads
+`h.Store.h_store`.
+
+### 6. Measurements (fataepyc-06, shared, at most four processes)
+
+Binaries: before = main `a964127` (dev `9eb03179`, release `4dde0987`, probe `c0f9f294`, which
+is D-0218's probe binary byte for byte); after = this branch (dev `213dc2b7`, release `edd5e30e`,
+probe `312023d7`). Run outputs, scripts and probe files: `fataepyc-06:/scratch/arthur/holes-runs/`,
+copied to `/cluster/arthur/baguette-results/holes/`.
+
+**Artefacts.** The 228 test models under default flags and under `--bits-above none`: stdout and
+exit code, `.opb` and `.pbp`, 456 md5 triples, identical. The five D-0207 instances' `.pbp`
+identical. Differential lane 347 of 347 equal, `--debug` pass 333 of 333 (the 14 of
+`bench/diff/debug-skip.tsv` skipped, as on main); scaling lane green (5 lines, every growth below its baseline);
+`dune runtest --root . --force` under `ulimit -v 4000000`: 5 175 ok, 0 FAIL; the 228 models
+pass `run_model_tests.sh` with every proof verified. After merging main `5e1ea8a` (D-0219's
+`search.ml`): dev `1c179467` against main's `cc46f5dd`, the 456 triples identical again, lane
+347 of 347, `--debug` 333 of 333, scaling green, 5 225 ok and 0 FAIL, 228 models.
+
+**Memory, D-0218's instances** (live heap from the probe, proof arm, `--max-heap-mb 65536`;
+peak RSS unprobed, `--no-proof`, 300 s):
+
+| instance | live heap before | live heap after | trail before / after | peak RSS before / after |
+|---|---|---|---|---|
+| wordpress 7 | 32.95 G at node 1 (refused there) | 4.58 G at node 1, 20.0 G at node 64 | 32.29 G / 3.80 G at node 1 | 68.0 GB, refused at 64 GiB in 56 s / 36.1 GB, 300 s, 23 122 nodes |
+| travelling-thief r49 | 5.14 G at node 1 000 | 3.16 G at node 1 000 | 3.47 G / 1.44 G | 7.83 GB / 4.76 GB |
+| is A3PZaPjnUz | 4.96 G at exit (604 nodes) | 1.65 G at exit (964 nodes) | 4.41 G / 1.10 G | 6.20 GB / 2.90 GB (both solve in 30 s) |
+| proteindesign 1HZ5 9aa | 1.20 G at exit (916 nodes) | 0.79 G at exit (950 nodes) | 0.71 G / 0.29 G | 3.47 GB / 2.18 GB |
+
+The trail no longer holds a bitset per pruning: wordpress's 6 M root removals cost their trail
+entries (0/12, 0/5 and the four closures of a deferred reason, about 640 B each, 3.8 G), not
+32 G of copies. What wordpress still keeps is fix 4's (D-0218 section 7, agent-release, D-0223),
+and with the proof the writer's live set.
+
+**At the 8 GiB budget** (`--max-heap-mb 8192`, proof on, the series' 1 200 s): is completes
+before (8 min 39 s, 8.9 GB RSS) and after (7 min 37 s, 7.5 GB); travelling-thief r49 runs to the
+time limit before (9 058 nodes, 8.86 GB) and after (8 984 nodes, 8.59 GB). Neither is refused on
+this main, before or after, so their arm-A refusals (D-0185) are already gone, as D-0218 section 8
+warned. wordpress is still refused at 8 GiB, in 43 s at node 1 (trail entries and the proof
+writer), and at 64 GiB without proof it now runs 300 s where it was refused in 56 s.
+
+**Time, instructions per node** on D-0207's five instances (release binaries, D-0207's method:
+`perf stat -e instructions:u`, a 1-node base run subtracted, same node counts before and after):
+
+| instance | --no-proof before / after | proof before / after |
+|---|---|---|
+| qr3 | 1 040.3 k / 1 040.3 k (0 %) | 1 702.7 k / 1 702.4 k (0 %) |
+| costas14 | 22 118 k / 22 311 k (+0.9 %) | 30 618 k / 30 847 k (+0.7 %) |
+| mknap2-1 | 26 187 k / 26 187 k (0 %) | 26 852 k / 26 852 k (0 %) |
+| jr63 (javarouting, Element) | 8 937 k / 9 126 k (+2.1 %) | 20 829 k / 21 103 k (+1.3 %) |
+| rcpsp11_60 | 1 833 k / 1 833 k (0 %) | 10 269 k / 10 269 k (0 %) |
+
+The first version of the code cost jr63 +4.4 % and costas +1.7 %. An instruction profile of jr63
+(sampled at 1 M instructions, 179 k samples) put it in `is_hole`: a load through the log on every
+read, a call per read, and a validity check on reads of a value still in the domain. The version
+now carries the log's bitset, tests the bit before anything else and inlines the helpers, which
+brings every clear-bit read back to the old cost (`mem` + `is_hole` + `get_bit` 13 407 samples
+before, 13 474 after). What remains is the set-bit read of an OLDER version (`set_bit_is_hole`
+and `logged_after`, 2 515 of the 3 789 extra samples): Element's lazy reasons read the holes of a
+frame's domain and `Store.remover` binary-searches the entries on a variable, each a set bit of a
+past version, thousands per node. Always building `pos` instead of scanning was measured and is
+not faster (9 139 k against 9 126 k). Pass-wide snapshots of costas's alldiff cost +0.9 % the same
+way. Instances without holes do not move.
+
+### 7. What this does not do
+
+- It does not bring wordpress under 8 GiB: its 6 M root removals are 6 M trail entries of about
+  640 B, which is fix 4's object (release the deferred explanations, D-0223) and the trail entry's
+  own shape (ARCHITECTURE §3's twelve fields).
+- A log created by a first removal dies with that removal's undo, and the next first removal on
+  the same variable allocates a fresh one (its bitset is span / 8 bytes, once per first removal
+  instead of once per removal). Recycling it per variable would need the store to keep a spare
+  log per variable; not done, not measured to matter.
+- The set-bit reads of past versions (section 6) could be answered from the log directly by
+  `Store.remover` (the slot of the value gives the entry), saving the binary search's reads. Not
+  done: the remover's equivalence with its scan (D-0088) would need restating for it.
+## D-0221  [AUTONOME] M19-config-T5 (review T12): the retention default measured on the tuning set and on 42 heap refusals. `tiered` gains one verified answer of 200 and refuses 6 of the 42 where `keep_all` refuses 2, so the review's rule fails and the default stays `keep_all`. An evicted learned constraint frees no memory today, which is why
+
+**Status**: DECIDED, no change (agent-retention, `wave69-retention`, 2026-11-24). Nothing to revert:
+no line of `lib/` changed. The option table in section 4 is for the user.
+
+### 1. Method
+
+Release binary of main `b42faa1`, md5 `4dde0987` (the same as D-0220's). Flattened files of the
+M17 series (`/scratch/arthur/series-20261123/flat/<YEAR>/work/`), D-0133's settings: 16 GiB address
+space, `--max-heap-mb 8192`, each run in its own `systemd-run --user --scope -p MemoryMax=32G`,
+peak RSS by `rss_wrap.py`. veripb 3.0.2 on every finished run with a proof, in its own scope at
+64 GB and 3 600 s (two checks reached the limit and are counted apart, and there is no REJECTED and no CHECK-ERROR). The
+row format is `scripts/compare_run.sh`'s, so `bench/tuning/agreement.py` reads it. Driver, lists,
+rows and reports: `/cluster/arthur/baguette-results/retention/`.
+
+Arms: `K` the default (`keep_all`), `T` `BAGUETTE_RETENTION=tiered` (D-0139's parameters), `L`
+`lbd:5000` (D-0139's last cap), `TP` `tiered` with `BAGUETTE_PB_ANALYSIS=off` (information only);
+`-p` with proof, `-n` `--no-proof`, `f` with `-f`.
+
+- (a) the tuning set (`bench/tuning/set.lst`, 200 instances) at 300 s, the twelve arms.
+- (b) 42 instances REFUSED at the heap budget AFTER the encoding was printed in D-0185's arm A,
+  the 40 whose refusal came latest (798 to 1 193 s, at most two per family) plus
+  `2016_mapping_ring_1` and `2017_steelmillslab_bench_16_10` (D-0220's two cases), at 1 200 s, eight
+  arms (no `L-n`, `TP-n`, `Kf-n`, `Tf-n`).
+
+### 2. Results
+
+"compl" is a verified complete answer (trusted under `-n`), "inc" an incumbent without one, REF
+a heap-budget refusal (all 84 refusals of both sets are the M7-T8 heap message, and 12 of the tuning
+set's come before the search). RSS in MB, median / p90 / max. Conflicts per second as a median
+over runs.
+
+Tuning set (a), 300 s:
+
+| arm | compl | inc | REF | TIMEOUT | RSS MB | confl/s |
+|---|---|---|---|---|---|---|
+| K-p | 19 | 124 | 4 | 177 | 1356 / 6450 / 9084 | 52.6 |
+| T-p | 20 | 124 | 4 | 176 | 1389 / 6285 / 9396 | 58.0 |
+| L-p | 18 | 125 | 4 | 178 | 1303 / 6286 / 9505 | 56.9 |
+| TP-p | 22 | 123 | 5 | 173 | 1426 / 5673 / 9506 | 65.6 |
+| Kf-p | 36 | 125 | 4 | 159 | 1276 / 6292 / 11057 | 42.6 |
+| Tf-p | 37 | 124 | 4 | 157 | 1274 / 6257 / 11061 | 46.1 |
+| K-n | 30 | 119 | 5 | 165 | 1423 / 5226 / 8958 | 92.9 |
+| T-n | 33 | 117 | 5 | 162 | 1447 / 5184 / 8960 | 109.4 |
+| L-n | 26 | 121 | 4 | 170 | 1410 / 4902 / 8961 | 105.1 |
+| TP-n | 35 | 116 | 6 | 159 | 1552 / 4812 / 8924 | 136.5 |
+| Kf-n | 45 | 119 | 4 | 151 | 1167 / 5185 / 11589 | 90.8 |
+| Tf-n | 43 | 120 | 4 | 153 | 1258 / 5146 / 11590 | 95.0 |
+
+Score (`agreement.py`, two arms): T-p over K-p 0.505 / 0.495 (16 wins, 14 losses, 170 ties), Tf-p
+over Kf-p 0.550 / 0.450 (50 / 30), T-n over K-n 0.525 (22 / 12), Tf-n under Kf-n 0.49 (38 / 41).
+Six proof arms together: Tf-p 0.205, Kf-p 0.194, TP-p 0.161, T-p 0.153, K-p 0.151, L-p 0.136. By
+D-0205's calibration, a difference under 0.03 of the share is noise on this set, so only Tf over Kf
+and `lbd` (8 wins and 28 losses against K-p, 8 / 43 without proof) are signals. The one answer T-p
+gains is `2013_rubik_7-cube`. Tf-p gains costas-array_16 and gfd-schedule n100 and loses solbat
+sb_15_15_7_1 and pennies-opt n7. Per family, T-p against K-p wins atp-stage2, gbac, lot-sizing,
+steelmillslab and three more, and loses 27 families by one instance each (spot5, valve-network,
+EchoSched, mrcpsp, ...), and no edition moves by more than two.
+
+Set (b), 42 former refusals, 1 200 s:
+
+| arm | compl | inc | REF | TIMEOUT | RSS MB | confl/s |
+|---|---|---|---|---|---|---|
+| K-p | 1 | 32 | **2** | 39 | 7336 / 8711 / 9560 | 30.6 |
+| T-p | 1 | 33 | **6** | 35 | 7481 / 8794 / 9542 | 38.5 |
+| L-p | 1 | 32 | 4 | 37 | 5986 / 8718 / 9541 | 37.4 |
+| TP-p | 1 | 33 | 4 | 37 | 7675 / 8767 / 9558 | 67.9 |
+| Kf-p | 6 | 32 | 3 | 33 | 4920 / 8906 / 12442 | 35.1 |
+| Tf-p | 6 | 32 | 3 | 33 | 4980 / 8901 / 12472 | 34.7 |
+| K-n | 1 | 32 | 3 | 38 | 6748 / 8616 / 9081 | 42.8 |
+| T-n | 1 | 33 | 6 | 35 | 6610 / 8553 / 9047 | 45.8 |
+
+The first fact is that current main (bits default, D-0201, and the M20 per-node work) already turns
+40 of these 42 into attempts: K-p refuses only tdtsp inst_10_35_20 and mapping ring_1, and 32 of the
+42 have an incumbent. `tiered` refuses four more (community-detection Strike.s2.k8, peacable_queens
+40 and pq_n19, sdn-chain d26n600-5), all of which `keep_all` runs to the time limit. The six
+answers of `-f` (two roster, cargo challenge24, grid-colouring 7_8, sdn-chain d26n600-5,
+steelmillslab 16_10) are `-f`'s, found by both retentions. Pairwise, T-p beats K-p 8 to 4, Tf-p
+loses to Kf-p 8 to 10, T-n loses to K-n 7 to 8.
+
+Paired by instance over runs that both time out (`paired.report`): `tiered`'s conflicts per second
+are 1.01 times `keep_all`'s on the tuning set and 1.09 on set (b), and its peak RSS is 1.00 times
+on both. `tiered` does not lower the peak memory of a single run. Section 5 says why.
+
+### 3. The rule, applied
+
+The review's rule is that `tiered` becomes the default if verified answers rise and heap-budget refusals
+do not. On the default configuration (fixed search, proof) answers go 19 to 20 on the tuning set
+(one instance, within noise) and 1 to 1 on set (b), and refusals go 4 to 4 and **2 to 6**. Without
+the proof, 30 to 33 answers and 5 to 5 refusals, then 3 to 6 refusals on set (b). The rule fails
+on refusals in both modes. Under `-f` it holds narrowly (36 to 37 answers, 4 = 4 and 3 = 3
+refusals, score 0.550 on the tuning set and 0.476 on set (b)), but `-f` is not the default (D-0185
+left that to the user). The result is mixed, so nothing changes, and the diff lane needs no
+re-record.
+
+### 4. Options for the user
+
+| Option | Consequence |
+|---|---|
+| Keep `keep_all` (taken) | No change. Refusals as measured: 4 of 200 at 300 s, 2 of the 42 at 1 200 s |
+| `tiered` now | +1 verified answer of 200 with proof, +3 without; 4 more heap refusals of 42 at 1 200 s, because eviction frees nothing (section 5) and `tiered` runs about 9 % more conflicts per second there, so it fills the same heap sooner |
+| `tiered` with `-f`, if the user adopts `-f` | the one pair where the rule holds: +1 answer, equal refusals, 0.550 of the tuning score; 0.476 on set (b) |
+| `tiered` after the engine frees evicted instances (WORKLOG request of this date) | the only version that can lower the heap. Re-measure set (b) then |
+| `lbd:5000` | dominated: 8 wins and 28 losses against `keep_all` with proof |
+
+Recommended: keep `keep_all`, and re-run set (b) and the tuning set with `T` and `K` once evicted
+instances are released. `tiered` is the right policy once eviction frees memory. Today it only
+saves time per conflict, and on the long runs that time turns into a heap refusal.
+
+### 5. Why eviction frees nothing, and what PB analysis costs on mapping
+
+2015 mapping mesh3x3_2, `--no-proof`. A temporary build of `retention.ml` printing `Gc.stat`
+and `Obj.reachable_words` of the database at each trace line (not committed) gives, at 1 200 learned
+constraints: live heap 109.7 M words under `keep_all` and **109.7 M words under
+`tiered:first=100,inc=50`**, which has evicted 455 of them. The database itself holds 32.8 M and
+27.7 M words. The live heap grows about 135 k words (1 MB) per learned constraint late in the run.
+The cause is in `Retention.gate`, which returns `{inst with run; inst_advise}`, so the gated instance
+keeps `inst_row`, `inst_watched` and the inner `run`, all closures over the `Pb` instance, and the
+engine keeps the gated instance in its watch lists for ever (D-0139's request, open since). An
+evicted row stops propagating and stops costing proof lines, and keeps every byte. Fixing it needs a
+removal in `lib/core/engine.ml`, agent-cdcl's file this wave, so it is filed as a cross-session request.
+
+Time (`perf record -e cycles:u --call-graph fp`, the `baguette-fp` switch, same source, 75 s):
+`Pb.pass` is 49 % of the cycles inclusive, of which `Pb.status` 30 % and `Pb.snapshot` 17 % self.
+Every wake of a learned PB row walks all its terms, and the learned rows of a 20 s proof are 886, median
+10 terms, p90 457, max 458. PB conflict analysis is 34 % (`Pb_analysis.step` 29 %, `slack_at` 11 %,
+`falsified_at` 8 %), GC about 12 %. In 60 s the default runs 1 028 conflicts at 2.96 GB, and with
+`BAGUETTE_PB_ANALYSIS=off` 23 668 conflicts at 0.47 GB. So on mapping the cost is the learned PB
+rows themselves, about 450 terms each, walked whole at every wake and kept whole after eviction,
+rather than one huge row (D-0197's 32 M-term ladder row was ATSP). Under `OCAMLRUNPARAM=o=20` the
+heap is 134 M words at 602 conflicts against 237 M at 710 with the default, so about half the heap
+is collectable slack and half is live. The two levers (a removal from the engine, and a term cap
+or no propagator registration for learned PB rows above some size) are filed for after agent-cdcl
+and not attempted here. D-0218 (merged while this ran) attributes 79 % of mapping's live heap to
+learned PB rows (1 976 terms and 0.65 MB per row over a longer run) and names a bound on the count
+as half of its recommendation 1. This section is the reason that half does nothing today: a bound
+on the count evicts rows whose bytes stay reachable, so recommendation 1 needs the engine removal
+first, or the flat layout alone. `TP` (PB analysis off) is the best fixed arm on the tuning set (22 and 35
+answers against 19 and 30) and turns mapping ring_1 from a refusal into a time-out, which says the
+guard is worth measuring.
+
+## D-0229  M17-bench-series: the arm `-f --no-proof` on the sixteen editions, on the binary of D-0203 and on main `36e8cc0`. Complete answers 401 against 420 (unverified), refusals 125 against 84, score 6 288 against 6 590 in the fixed category, no answer lost and no contradiction with the other arms
+
+**Status**: MEASURED (2026-11-24/25), asked for by the user. No solver code changes.
+
+**Context.** D-0203 has three arms and not `-f` without proof, so the cost of proof logging was known
+for the default search only, and the effect on the Challenge of the work merged since `f244c35a`
+was not measured. Two runs, side by side on fataepyc-04 (booked by the user, idle otherwise), 46
+solvers in parallel each, 17:20 to 04:04 UTC.
+
+| | reference | main |
+|---|---|---|
+| Commit, release binary | `e1971f6`, `f244c35a` (D-0203's) | `36e8cc0` (its `lib/` is gate 102's, plus a comment of D-0221), `ef2f76c8` |
+| Instances | D-0203's flattened files | flattened with its own mznlib, 1 575 of 1 600 in both |
+
+Settings of D-0203 otherwise. 1 200 s, 16 GiB of address space, `--max-heap-mb 8192`, flags
+`-f --no-proof --stats`, all sixteen editions at 1 200 s. Not in main at that commit were
+`wave70-release`, `wave71-chrono`, `wave73-evict` and `wave73-interrupt`.
+
+**Results.** Counts are the harness's and the answers of a `--no-proof` run are UNVERIFIED. B is
+D-0203's arm `-f` with proof, on fataepyc-06 under more load.
+
+| | B | reference | main |
+|---|---|---|---|
+| OPT + UNSAT | 363 (346 verified) | 401 | 420 |
+| SAT | 104 (95 verified) | 108 | 112 |
+| TIMEOUT | 970 | 941 | 959 |
+| REFUSED | 138 | 125 | 84 |
+| objective printed | 1 149 | 1 171 | 1 211 |
+| score, fixed category | 5 799 | 6 288 | 6 590 |
+| score, free category | 11 821 | 12 848 | 13 552 |
+
+- Main against the reference. 19 complete answers more and none lost. Objectives better on 188, worse on 64,
+  equal on 963. Of the 125 refused by the reference, 41 time out and 9 are optimal in main, and
+  main refuses 9 that the reference did not. One SAT lost, `2011_black-hole_9`, and 5 gained. Median wall ratio 1.00 (340
+  instances complete in both and taking at least 1 s). So the gain is in memory and coverage, and not in the time of the
+  instances already solved.
+- Reference against B, the cost of the proof under `-f`. Median wall ratio 0.45 (315 instances), 40
+  complete answers more without proof and 2 the other way. The node and its load differ, so part of the ratio
+  can be theirs.
+- No two of the five arms (A, B, C, reference, main) contradict each other on an optimum, an
+  UNSAT or an objective value.
+- Ranks of main, 2026 down to 2011. Fixed category 6, 4, 3, 3, 3, 4, 2, 3, 3, 7, 3, 6, 4, 4, 3, 4. Free
+  category 13, 10, 9, 5, 13, 11, 8, 4, 8, 12, 10, 10, 5, 5, 3, 5. The 2011 and 2012 ranks are approximate, and
+  2011 to 2014 ran at 1 200 s against an official 900 s.
+
+Tables and the comparison script (`cross_arms.py`, `cross_arms.txt`) are in
+`/cluster/arthur/baguette-results/series-20261124-fnoproof/`. Raw solver outputs were not kept, at the user's request.
+The 8 GiB heap budget is half of the address space by the harness's rule (`compare_run.sh`), which was never
+calibrated (M7-T14). A larger budget inside 16 GiB is not measured.
+
 ## D-0224  [AUTONOME] M19-config-T11, then T2 to T4 measured on the CDCL loop: chronological backtracking for long jumps under `--cdcl` (`--chrono N`), with the asserted literal recorded at the level the search goes back to. The trail stays ordered by level, no `Store`, `Engine` or proof-rule change; the learned clause's own instance re-asserts it after a later backtrack through the engine's existing re-seed of young instances
 
 **Status**: IN PROGRESS on branch `wave71-chrono` (agent-chrono, 2026-11-24). ROADMAP M19-config-T11,

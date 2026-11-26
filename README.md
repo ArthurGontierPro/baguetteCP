@@ -15,14 +15,15 @@ Written in OCaml 5, single-threaded, deterministic.
 | Input | FlatZinc over integers and Booleans (`docs/SPEC.md` §2.1), directly or through MiniZinc with its own library `mznlib/` |
 | Problems | satisfaction, minimisation, maximisation, every improving solution (`-i`, or `-a` on an optimisation model) |
 | Proof | VeriPB 3.0, checked by VeriPB 3.0.2. The proof covers the encoding, every propagation, every learned constraint and the final claim (UNSAT, a solution, or optimality bounds) |
-| End-to-end verification | under `--e2e`, the proof can also be checked against the `.opb` produced by `cake_pb_cp`, CakeML's verified encoder, so the encoding of the model is no longer trusted. 197 of the 207 test models verify this way (`make e2e`) |
+| End-to-end verification | under `--e2e`, the proof can also be checked against the `.opb` produced by `cake_pb_cp`, CakeML's verified encoder, so the encoding of the model is no longer trusted. At the last recorded run (D-0201), 197 of the 207 test models of that day verified this way and 10 were skipped (`make e2e`). The suite has 228 models since |
 | Integer encoding | order encoding, or a binary (bits) encoding for wide domains. Bits is the default (`--bits-above 0`), `--bits-above none` gives the order encoding everywhere |
 | Linear and arithmetic | `int_lin_le`, `int_lin_eq`, `int_lin_ne` and their reified forms, `int_le`, `int_lt`, `int_eq`, `int_ne` and their reified forms, `int_times`, `int_div`, `int_mod`, `int_abs`, `int_min`, `int_max` |
 | Booleans | `bool_clause`, `array_bool_and`, `array_bool_or`, `bool_eq`, `bool_not`, `bool2int`, and the rest of the Boolean family through `mznlib` |
-| Global constraints, native | `all_different_int` (domain consistent: Hall intervals on the bounds, then a matching over the values), `global_cardinality` (open, closed, low/up), `array_int_element`, `array_int_maximum`/`minimum`, `cumulative` and `disjunctive` (time-table), `regular` (domain consistent), `inverse`, `member` |
+| Global constraints, native | `all_different_int` (domain consistent: Hall intervals on the bounds, then a matching over the values), `global_cardinality` (open, closed, low/up), `array_int_element`, `array_int_maximum`/`minimum`, `cumulative` and `disjunctive` (time-table), `regular` and `table` (domain consistent), `inverse`, `member`, `circuit` (with Chuffed's no-subtour rule) |
+| Global constraints, through `mznlib` | `bin_packing`, `bin_packing_capa` and `bin_packing_load` (one linear row per bin), `diffn` and `diffn_nonstrict` (pairwise rows plus two `cumulative` relaxations). The capacity rows of the two relaxations are rows of the model, so the proof uses them without deriving them (D-0213) |
 | Learning | 1UIP clause learning with minimisation, and pseudo-Boolean conflict analysis (linear combination plus division or rounding), with a swappable retention policy for the learned database |
 | Explanations | each pruning carries a declarative reason (an `Explanation` value), turned into `pol` or `rup` steps only when the proof needs them. Reasons are hash-consed so shared sub-proofs are written once |
-| Search | the model's search annotation by default (first-fail, smallest value when there is none). Free search with `-f` (activity order alternating with the annotation, Luby restarts, phase saving) |
+| Search | the model's search annotation by default (first-fail, smallest value when there is none). Free search with `-f` (activity order alternating with the annotation, Luby restarts, phase saving). A conflict-driven search, where the learned clause decides the backjump, is available with `BAGUETTE_CDCL=1` and off by default (D-0219) |
 | Without proof | `--no-proof` runs the same search without writing a proof, as a measurement tool. Its answers are unverified |
 | Limits | `--time-limit`, `--max-heap-mb` (a clean refusal before memory runs out), caps on encoding size |
 | Symmetries | `tools/symmetry/` finds model symmetries with dejavu, outside the solver (`make sym`) |
@@ -31,58 +32,89 @@ Floats, set variables and multi-objective optimisation are out of scope (`docs/S
 
 ## Performance on the MiniZinc Challenge
 
-All sixteen editions of the MiniZinc Challenge (2011 to 2026, 1 600 instances, 1 574 flattened),
-run with the Challenge's own settings: 1 200 s per instance, 16 GiB of memory, one thread, on an
-AMD EPYC 7643. An answer with a proof counts only when VeriPB verifies the proof. Measured on
-2026-11-20/22 (`docs/DECISIONS.md` D-0185, release binary `7c880bce`, main `10b3507`).
+All sixteen editions of the MiniZinc Challenge (2011 to 2026, 1 600 instances, 1 575 flattened), run with 1 200 s per instance, 16 GiB of memory and one thread, on an AMD EPYC 7643. The Challenge's own limit is 1 200 s since 2015, and it was 900 s from 2011 to 2014. An answer with a proof counts only when VeriPB verifies the proof. Measured on 2026-11-23/24 (`docs/DECISIONS.md` D-0203, release binary `f244c35a`, commit `e1971f6`).
 
 | Outcome per instance | Default search, with proof | Free search `-f`, with proof | Default search, `--no-proof` |
 |---|---|---|---|
-| Optimal or UNSAT, proof verified | 251 | **265** | 296 (unverified) |
-| Satisfiable, proof verified | 72 | **97** | 84 (unverified) |
-| Complete answer, proof check did not finish (VeriPB memory or time) | 35 | 32 | not applicable |
-| Timeout at 1 200 s | 700 | 668 | 780 |
-| Proof larger than the 16 GB cap | 198 | 173 | not applicable |
-| Refused, memory budget reached | 314 | 336 | 398 |
-| Crash | 4 | 3 | 16 |
+| Optimal or UNSAT, proof verified | 302 | **346** | 340 (unverified) |
+| Satisfiable, proof verified | 74 | **95** | 86 (unverified) |
+| Complete answer, VeriPB hit its time limit (3 600 s) | 18 | 26 | not applicable |
+| Timeout at 1 200 s | 1 017 | 970 | 992 |
+| Refused, memory budget reached | 164 | 138 | 157 |
+| Crash | 0 | 0 | 0 |
 | **Proofs rejected by VeriPB** | **0** | **0** | not applicable |
-| Optimisation runs that printed an objective value (optimal ones included) | 933 | 992 | 1 013 |
+| Optimisation runs that printed an objective value (optimal ones included) | 1 060 | 1 149 | 1 079 |
 
-The first seven rows add up to the 1 574 instances. The crashes are allocation failures against
-the 16 GiB limit, which the memory guard of D-0200 now turns into clean refusals.
+The first rows down to the rejected proofs add up to the 1 575 instances, checked when this table was written. A check that ran out of time or memory is the checker's limit, not a rejected proof, so it is counted apart.
 
-What proof logging costs, over the instances both runs complete, comparing the run without proof
-to the run with proof:
+What proof logging costs, over the instances both runs complete, comparing the run without proof to the run with proof:
 
 | | median ratio (no proof / proof) |
 |---|---|
-| wall time | 0.64 |
-| peak memory | 0.96 |
-| nodes per second | 1.27 |
+| wall time | 0.47 |
+| peak memory | 0.91 |
+| nodes per second | 1.50 |
 
-So proof logging costs time and disk, not memory. Without proof, 113 instances that hit the
-memory budget or the 16 GB proof cap become ordinary attempts, and 8 of them end with a complete answer.
+Without proof, 41 instances that hit the memory budget or a crash with proof become ordinary attempts, and 2 of them end with a complete answer.
 
-Rank in the fixed-search category of each edition, scored against that year's official entrants
-by `tools/compare/challenge_rank.py`:
+The 817 verified proofs (all proof arms) have a median size of 198 MB, the largest is 23.6 GB and together they were 793.0 GB. They are deleted once checked, their sizes stay in the tables.
+
+Rank in the fixed-search category of each edition, scored against that year's official entrants by `tools/compare/challenge_rank.py` (the free-search arm is scored in this category too, so the rows compare):
 
 | Edition | 2026 | 2025 | 2024 | 2023 | 2022 | 2021 | 2020 | 2019 | 2018 | 2017 | 2016 | 2015 | 2014 | 2013 | 2012 | 2011 |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | entrants | 13 | 10 | 9 | 7 | 7 | 7 | 6 | 8 | 8 | 12 | 11 | 9 | 11 | 11 | 10 | 8 |
-| with proof | 12 | 10 | 9 | 7 | 7 | 7 | 6 | 7 | 6 | 12 | 8 | 9 | 11 | 10 | 8 | 8 |
-| without proof | 11 | 10 | 9 | 7 | 7 | 7 | 6 | 7 | 6 | 12 | 7 | 9 | 9 | 10 | 6 | 7 |
+| with proof | 11 | 10 | 9 | 7 | 7 | 7 | 5 | 7 | 6 | 12 | 7 | 9 | 9 | 10 | 5 | 7 |
+| `-f`, with proof | 7 | 9 | 3 | 3 | 3 | 6 | 2 | 3 | 3 | 8 | 5 | 7 | 5 | 5 | 3 | 4 |
+| without proof | 11 | 10 | 9 | 5 | 7 | 6 | 4 | 6 | 6 | 11 | 7 | 9 | 7 | 8 | 5 | 7 |
 
-The other entrants do not log proofs. baguette's score summed over the sixteen editions is 2 789
-with proof and 3 237 without.
+The other entrants do not log proofs. baguette's score summed over the sixteen editions is 4 043 with proof, 5 799 with proof under `-f`, 4 428 without proof.
 
-Two caveats.
+The series before this one, D-0185 (release `7c880bce`, order encoding by default, 16 GB proof cap), verified 323 answers with proof in the default arm and 362 under `-f`, and completed 380 without proof.
 
-- This series ran before the bits encoding became the default (D-0201), so every column above
-  uses the order encoding. On an earlier binary the bits encoding raised the summed score with
-  proof from 2 712 to 3 441 and cut the proofs over the cap from 214 to 68 (D-0175). A series on
-  the current default has not been run yet.
-- Free search is stronger in aggregate but not on every model. It wins on 489 instances and loses
-  on 336, mostly routing models, so the default stays the fixed search (D-0185 §5).
+How to read these numbers.
+
+- This series ran the binary `f244c35a`, which has the bits encoding as its default (D-0201) and no
+  proof cap, but predates the coverage, speed and correctness work merged since (D-0206, D-0208,
+  D-0209, D-0212 to D-0217, D-0220, D-0222, and the integer-overflow fix of M22-review-T1). Measured
+  with `-f --no-proof` (unverified, same settings), that work brings 401 complete answers to 420,
+  125 refusals to 84 and the summed score from 6 288 to 6 590 in the fixed category (D-0229). It is
+  not measured with proof yet. On the benchmarks of D-0208, a node costs 49 % fewer
+  instructions on costas and 35 % fewer on multi-knapsack without proof (41 % and 34 % with proof),
+  and between 6 % fewer and 0.4 % more on the three others.
+- The scores rose from 2 789 to 4 043 (with proof), from 3 581 to 5 799 (`-f`) and from 3 237 to 4 428
+  (without proof). The bits encoding and earlier reductions of the proof size changed together
+  between the two series, so their shares cannot be separated. Removing the proof cap explains at
+  most one of the verified answers.
+- The editions 2011 to 2014 had a limit of 900 s and baguette ran them with 1 200 s, so their ranks and
+  scores favour baguette. Five instances were completed after 900 s, counting the default and the
+  `-f` arms with proof. The incumbents found after 900 s cannot be separated. A fair
+  comparison on these four editions needs a run at 900 s.
+- The solver has 16 GiB of address space, and it refuses an instance when its own heap reaches 8 GiB.
+  With 64 GiB and a heap of 32 GiB, the same binary refuses 60 instances instead of 164 with proof,
+  but verifies 304 optimal or UNSAT answers instead of 302 (D-0210,
+  in `bench/series/HISTORY.md`).
+- Free search is stronger in aggregate but not on every model. It wins on 670 instances and loses
+  on 327 (578 ties). The default is the fixed search, and whether it stays so is an open question
+  (M19-config-T1). The `-f` row above is there to compare the arms against the same opponents. It
+  is not a legal entry, because the fixed category requires the model's annotation to be followed.
+  The ranks of `-f` in its own category are below.
+- A node is still expensive. Before D-0208, a proved node cost from 66 to 592 times the instructions
+  of a Gecode node on four problems where the two trees agree to within 2 % (D-0207).
+- The scoring script reproduces the organisers' pairwise scores exactly for 2013 to 2026, but not for
+  2012 (816 of 81 200 differ) and 2011 (137 of 60 000), so the ranks and the part of the summed
+  scores from these two editions are approximate, in every series.
+
+Rank of `-f` with proof in the free-search category, against that year's official free-search
+entrants, from the same runs (`rank_B_<year>.txt` of the series). The entrants include baguette.
+
+| Edition | 2026 | 2025 | 2024 | 2023 | 2022 | 2021 | 2020 | 2019 | 2018 | 2017 | 2016 | 2015 | 2014 | 2013 | 2012 | 2011 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| entrants | 27 | 21 | 22 | 18 | 19 | 17 | 17 | 14 | 15 | 22 | 23 | 19 | 17 | 18 | 17 | 14 |
+| `-f`, with proof | 18 | 16 | 9 | 7 | 15 | 13 | 8 | 6 | 8 | 15 | 15 | 15 | 9 | 8 | 4 | 6 |
+| the series before (D-0185) | 23 | 19 | 22 | 12 | 18 | 16 | 14 | 11 | 13 | 22 | 19 | 18 | 15 | 14 | 12 | 8 |
+
+`bench/series/HISTORY.md` has one row per series.
 
 ## Getting started
 
@@ -153,6 +185,7 @@ writes a proof the checker verifies, as the default search does.
 | `docs/DECISIONS.md` | why things are the way they are |
 | `docs/GLOSSARY.md` | vocabulary |
 | `bench/challenge/README.md` | how the Challenge runs are made and where they are kept |
+| `bench/series/HISTORY.md` | the results of every Challenge series |
 | `scripts/README.md` | the operating manual for the compute node (runs, gates, lanes) |
 
 Contributors, Claude sessions included, start with `CLAUDE.md`.

@@ -5,9 +5,13 @@
    made it, so conflict analysis can walk backwards through reasons (invariant I-T3).
 
    Invariant I-T1 is the one worth testing directly: backtrack_to restores every domain
-   to exactly its state when the level was opened. The reason it holds here is that
-   [Domain.t] is immutable - an entry keeps the old value, and restoring is a single
-   array write with no aliasing between the saved and the current domain.
+   to exactly its state when the level was opened. An entry keeps the old value, and
+   restoring is an array write plus [Domain.undo], which truncates the variable's hole
+   log back to that value's version (D-0222): a [Domain.t]'s holes are a version of a log
+   its successors share, so the trail holds a removed value (16 bytes in the log) where it
+   held a copy of the bitset per pruning (98 % of wordpress's heap at its refusal,
+   D-0218). Every domain an entry, a history or a frame holds stays readable while that
+   entry is on the trail; a domain from an undone branch raises [Domain.Stale_version].
 
    M16-file-review-T1 (D-0186): a [Debug.check] on a path taken per trail entry ([apply],
    [push_entry], [check_agreement], [remover]) sits under [if Debug.enabled]. Its
@@ -48,7 +52,8 @@ type mark = { trail_mark : int; reason_mark : int }
    the pruning established, and that literal is a function of the new bound, which
    nothing else on the trail records. D-0018's own consequence list says so; recording
    it is what makes lib/core/trace.ml possible at all. It costs one word and no work --
-   [Domain.t] is immutable and [apply] already holds the value it is about to store.
+   [Domain.t] reads as it was while the entry is on the trail (D-0222) and [apply]
+   already holds the value it is about to store.
 
    [reason] is the *other* half of that trace line: the bound facts the propagator
    actually read, negated into the clause's tail. It is deliberately NOT
@@ -168,7 +173,8 @@ type t = {
   domains : Domain.t array;
   initial : Domain.t array;
       (* M16-file-review-T1 (D-0186): the domains the store was created with, read by
-         [created_domain]. A copy of the array, sharing the immutable records. *)
+         [created_domain]. A copy of the array, sharing the records; a created domain is
+         the oldest version of its log, which no undo truncates (D-0222). *)
   names : string array;
   (* M6-T11 (D-0085): the name -> variable index behind [var_named] and [name_rep],
      built on first use rather than in [create], because [Engine.oracle_accepts] builds a
@@ -1029,6 +1035,7 @@ let undo_to t target =
   while t.trail_len > target do
     let e = t.trail.(t.trail_len - 1) in
     let i = Var.to_int e.var in
+    Domain.undo ~old:e.old ~now:e.now;
     t.domains.(i) <- e.old;
     t.lo_sup.(i) <- e.sup_lo;
     t.hi_sup.(i) <- e.sup_hi;
@@ -1402,6 +1409,19 @@ let lo_reasons_at h v =
 let hi_reasons_at h v =
   reasons_under h.h_store v ~support:(hi_support_at h v) ~settled:(fun (e : entry) ->
       settled_over_hi e.old ~cur:(Domain.hi e.now))
+
+(* M20-pernode-T2 (D-0214), moved here by M21-memory-T3 (D-0222) at D-0214's request:
+   the three readers an Element FRAME needs beyond the bound ones above, each one call on
+   a position below the cut, so none can read past it. [remover_at] is [remover] with
+   [~before] at the cut: the first entry on [var] whose [now] lost [v], kept iff it lies
+   below the cut, which is the entry the live store named at the push. [explanation_at]
+   is the arena explanation of an entry the history holds (its arena slot is live while
+   the entry is). [at_root_at] is [at_root] for a position below the cut: the first level
+   mark does not move while the cut is live, since a level opened later has its mark at or
+   above it. *)
+let remover_at h ~var v = remover h.h_store ~before:h.h_upto ~var v
+let explanation_at h e = explanation h.h_store e
+let at_root_at h pos = at_root h.h_store pos
 
 (* The decision level the entry at trail position [i] belongs to: the number of open
    level marks at or below it (I-T2 makes the marks monotone, so this is a count, not a

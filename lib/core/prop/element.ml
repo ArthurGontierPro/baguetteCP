@@ -236,7 +236,8 @@
 
    REASONS ON DEMAND (M20-pernode-T2, D-0214). Since D-0214 a pruning reads nothing it
    does not need to DECIDE (which value goes, what the push concludes): it records a
-   [frame] -- the index's and the result's domains, which are immutable values, and the
+   [frame] -- the index's and the result's domains (versions that read as they were while
+   the pruning's entry is on the trail, D-0222), and the
    trail cut at the push ([Store.history], D-0124) -- and both halves of the pruning are
    built from that frame when they are first asked for. The reason is a [Reason.Later]
    (D-0124's channel, the one [Linear] uses); the derivation's [pos_gone] walk, the
@@ -509,9 +510,9 @@ let idx_excl_above t p ~bhi =
    Everything the eager code read at a pruning was one of four things, and a [frame] holds
    each of them as of that moment:
 
-     - the index's and the result's DOMAINS ([di], [dr]): immutable values (a [Domain.t] is
-       never written in place, lib/core/domain.ml), so holding the pointer IS holding the
-       domain then. [dr] is the result BASE's domain, read through [View.lo_in] and its
+     - the index's and the result's DOMAINS ([di], [dr]): VERSIONS (D-0222, a [Domain.t]'s
+       holes are a prefix of a log that only grows while the pruning's entry is on the
+       trail, lib/core/domain.ml), so holding the pointer IS holding the domain then. [dr] is the result BASE's domain, read through [View.lo_in] and its
        twins; for a constant result it is never read;
      - which trail entry REMOVED a value ([remover_at]), its ARENA explanation
        ([explanation_at]) and whether a trail position is at the ROOT ([at_root_at]);
@@ -526,10 +527,10 @@ let idx_excl_above t p ~bhi =
    cut. So a reason or a derivation rebuilt from the frame is the one the eager code built,
    value for value; the bytes do not move (D-0214 section 2).
 
-   The three readers below reach the store through [h]. They are what store.ml's history
-   section would export next to [lo_reasons_at], and they are here only because store.ml
-   was claimed when this was written (WORKLOG, cross-session request of 2026-11-23); each
-   is one call on a position below the cut, and none can read past it. *)
+   The three readers ([Store.remover_at], [Store.explanation_at], [Store.at_root_at])
+   live in store.ml's history section since M21-memory-T3 (D-0222), as D-0214's
+   cross-session request of 2026-11-23 asked; each is one call on a position below the
+   cut, and none can read past it. *)
 type frame = { h : Store.history; di : Domain.t; dr : Domain.t }
 
 let frame t store =
@@ -540,16 +541,9 @@ let frame t store =
     dr = (match View.base_var t.res with Some rv -> Store.get store rv | None -> di);
   }
 
-let remover_at (h : Store.history) ~var v =
-  Store.remover h.Store.h_store ~before:(Store.history_upto h) ~var v
-
-let explanation_at (h : Store.history) e = Store.explanation h.Store.h_store e
-
-(* [Store.at_root] for a position below the cut: one comparison against the first level
-   mark, which does not move while the cut is live (a level opened later has its mark at
-   or above the cut). The eager code asked [Store.level_of_index _ = 0] and [> 0], a binary
-   search with the same answer by I-T2 (D-0161 request 1, alldiff's move). *)
-let at_root_at (h : Store.history) pos = Store.at_root h.Store.h_store pos
+let remover_at = Store.remover_at
+let explanation_at = Store.explanation_at
+let at_root_at = Store.at_root_at
 let res_lo t fr = View.lo_in fr.dr t.res
 let res_hi t fr = View.hi_in fr.dr t.res
 let res_mem t fr w = View.mem_in fr.dr t.res w
