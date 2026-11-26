@@ -29431,9 +29431,9 @@ better than `dfs`, because on most of the set the jump is the chronological one 
 under `-f` (69+ 60-, 51 against 48 complete, share 0.099 against 0.098: inside the README's noise on
 the share, outside it on complete answers and families won), under activity + Luby + phase saving
 (63+ 61-, 44 against 38 complete), under LBD restarts (69+ 66-) and without restarts (54+ 47-); it
-loses under activity + Luby without phase saving (50+ 62-, 41 against 42). The user's intuition holds
-on the loop as on `dfs`, and on the 3-SAT probes (section 4) less: with Luby restarts, phase saving
-gains 3 complete answers on the loop (41 -> 44) and loses 4 on `dfs` (42 -> 38); the answers it buys are
-different instances. Activity without restarts is the worst arm on both searches (0.057). Every
+loses under activity + Luby without phase saving (50+ 62-, 41 against 42). The user's intuition
+(restarts without phase saving are poor) holds on the loop and not on `dfs`: with Luby restarts,
+phase saving gains 3 complete answers on the loop (41 -> 44) and loses 4 on `dfs` (42 -> 38). On the
+3-SAT probes it changes one answer either way (section 4). Activity without restarts is the worst arm on both searches (0.057). Every
 activity arm is below `-f` by 0.02 of the share or more, on both searches: the alternation with the
 annotation is what carries `-f` on this set, as D-0185 found on the full series.
