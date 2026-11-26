@@ -19,7 +19,6 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M22-review-bugs (D-0231) | `lib/core/prop/regular.ml`, `lib/core/prop/cumulative.ml`, new `test/models/regular_const_*`/`regular_*_outside*` + expected, `docs/DECISIONS.md` (D-0231) | agent-bugs (`wave77-bugs`) | 2026-11-26 |
 
 ## Cross-session requests
 
@@ -470,6 +469,7 @@ section 1. Shares are inclusive, of the whole run.
 
 | Task | Session | Date | Summary |
 |---|---|---|---|
+| M22-review-bugs, two bugs on main (D-0231) | agent-bugs (`wave77-bugs`, not merged) | 2026-11-26 | **D-0231 [AUTONOME].** `regular` no longer crashes on a constant letter outside its symbols (`alphabet_hull` intersects a constant with the symbols as it did a variable), four models. `cumulative`'s overload conflict writes the clearing of its free tasks one level down (`cleared_row`, shared with the push), so `BAGUETTE_DEBUG` passes on `cumulative_fixed_overload_edge_unsat`. The justification's shape was wrong, the reason was right. All 232 models pass under `BAGUETTE_DEBUG=1`. Lanes unchanged |
 | M19-config-T11, T2 to T4 on the CDCL loop (D-0224) | agent-chrono (`wave71-chrono`) | 2026-11-26 | **D-0224 [AUTONOME], default unchanged.** `--chrono T` under `--cdcl` (chronological backtracking for jumps over T levels, T = 20), and `--cdcl` on the CLI. Off: byte-identical (456/456, diff 347/347 and 333/333 debug, scaling ok, 5 286 ok). Tuning set, 13 arms: loop `-f` 0.099 / 51 complete against `dfs -f` 0.098 / 48 without proof, 0.236 / 32 against 0.237 / 37 verified with proof; recommendation `-f` for T1, B against C on the full series |
 | M23-inputs-T1..T5 (the `.scp` reader, D-0230) | agent-scp (`wave76-scp`, not merged) | 2026-11-26 | **D-0230.** `lib/scp/` reads cake_pb_cp's `.scp` (version 1) into the same `Model.t`; refuses with a position what baguette does not propagate. Spike: 196 of 203 read and VERIFIED in 60 s, 7 refused (`equals_if`). FlatZinc artefacts byte-identical (456 of 456). |
 | M17-bench-series-T4 (GCS with proofs, Chuffed, D-0211) | agent-node07 (`wave60-node07`) | 2026-11-26 | **D-0211.** Sixteen editions on fataepyc-07 at D-0203's settings. Verified complete answers: baguette A 376, GCS 141 (279 printed, 135 TIMEOUT-CHECK); summed score baguette A 4 043, GCS 2 792, Chuffed 8 466. `arms_compare.py` reads `NAME=DIR@gcs`, `challenge_rank.py --demote-gcs` (additive). Tables `/cluster/arthur/baguette-results/node07-gcs/` |
@@ -694,6 +694,10 @@ section 1. Shares are inclusive, of the whole run.
 | M19-config-T0 (the tuning set) | agent-tuning (`wave59-tuning`) | 2026-11-23 | **D-0205.** `bench/tuning/`, 200 instances in 183 families. DONE except the driver hook. |
 
 ## Handoff notes
+
+### 2026-11-26 (agent-bugs, `wave77-bugs`, D-0231): the `regular` crash and the `cumulative` debug invariant are fixed, not merged
+
+`regular` with a constant letter outside the symbols answers UNSAT with a verified proof instead of an exception (D-0230 section 7's TODO, the `.scp` reader's workaround can stay or go). The overload conflict of `cumulative` broke D-0026's reverse check by its shape only, and the fix adds a copy line to the proofs of the two overload models (both verify). This answers agent-chrono's cross-session request. Every test model now passes under `BAGUETTE_DEBUG=1`, and D-0231 section 4 proposes a debug pass in `run_model_tests.sh` (about 3 s, measured), not added. The gate should find the diff lane, its debug pass and the scaling lane unchanged (347/347, 333/333, ok on binary `bc2ad3e6`). CLAUDE.md's "228 .fzn models" is now 232 (M22-review-T4's line).
 
 ### 2026-11-26 (agent-chrono, `wave71-chrono`, D-0224): chronological backtracking on the CDCL loop, and T2 to T4 measured on it
 
