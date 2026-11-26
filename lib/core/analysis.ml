@@ -538,12 +538,8 @@ let add_node nodes n =
    they replaced, at every step. [create ()] with no level and no [expandable] keeps the
    old merge-only behaviour, which test_analysis.ml compares against [add_node]. *)
 module Frontier = struct
-  module H = Hashtbl.Make (struct
-    type t = string
-
-    let equal = String.equal
-    let hash (s : string) = Hashtbl.hash s
-  end)
+  (* The table keyed by a name, [String.equal] and [String.hash] (D-0236). *)
+  module H = Baguette_proof.Name_tbl
 
   type cell = { mutable cur : node; seq : int; mutable alive : bool }
   type entry = { e_support : int; e_seq : int; e_cell : cell; e_node : node }
@@ -703,11 +699,20 @@ exception Bad of error
    produce a cut with a wrong antecedent in it. M2-T7 stamps the field and
    [Engine.check_attribution] checks it at the moment of the pruning; this checks it again
    at the moment it is USED, which is the check that makes the field load-bearing here
-   rather than decorative. *)
+   rather than decorative.
+
+   [watches] is [List.exists (Var.equal var)] without the partial application, which
+   allocated a closure per check (D-0236: -0.3 % per node on elitserien handball12, -0.6 %
+   on costas13). The check is still O(arity); an O(1) "does instance i watch v" belongs
+   to [Engine] (D-0191's request). *)
+let rec watches var = function
+  | [] -> false
+  | v :: vs -> Var.equal v var || watches var vs
+
 let check_attribution store ~(vars_of : int -> Var.t list option) ~at ~prop ~var =
   if prop <> Store.no_prop then
     match vars_of prop with
-    | Some vs when List.exists (Var.equal var) vs -> ()
+    | Some vs when watches var vs -> ()
     | _ -> raise (Bad (Misattributed { at; claimed = prop; var = Store.name store var }))
 
 let analyse ?(scope = At_conflict_level) store (c : Store.conflict)
@@ -1111,6 +1116,69 @@ module Heap = struct
       Some top
 end
 
+(* The closure's CELLS, slot -> the citation the cell holds, as a DENSE array indexed by
+   slot rather than a hash table (M20-pernode-T4, D-0236). A slot is [2 * v + direction]
+   for a store variable [v], so [2 * Store.n_vars] cells cover every key; [Slot_tbl] cost
+   a hash, a closure call and a [Some] per probe, 3 to 4 % of elitserien handball12's
+   instructions without the proof.
+
+   The arrays are a SCRATCH kept between conflicts, because allocating and clearing
+   [2 * n] cells per conflict would cost what the table did. A cell is current only if its
+   [stamp] is the walk's [epoch], which [open_walk] bumps, so nothing is cleared and a
+   cell written by an earlier conflict, or for another store, reads as empty. [touched]
+   lists the slots written in this walk, once each, which is what the final fold reads.
+   One walk at a time: [dependency_levels] is the only user and does not re-enter itself
+   (its debug cross-check runs [analyse], which does not use this). Citations are
+   non-negative ([pack]), so [-1] is the empty cell. Nothing reads the cells in an order
+   that reaches an output: the levels are sorted at the end, as they were from the
+   table's fold. *)
+module Cells = struct
+  type t = {
+    mutable cit : int array;
+    mutable stamp : int array;
+    mutable epoch : int;
+    mutable touched : int array;
+    mutable n_touched : int;
+  }
+
+  let empty = -1
+
+  let scratch =
+    { cit = [||]; stamp = [||]; epoch = 0; touched = Array.make 64 0; n_touched = 0 }
+
+  let open_walk ~n_slots =
+    let s = scratch in
+    if Array.length s.cit < n_slots then (
+      s.cit <- Array.make n_slots empty;
+      s.stamp <- Array.make n_slots 0);
+    s.epoch <- s.epoch + 1;
+    s.n_touched <- 0;
+    s
+
+  let find s k = if s.stamp.(k) = s.epoch then s.cit.(k) else empty
+
+  let set s k c =
+    if s.stamp.(k) <> s.epoch then (
+      s.stamp.(k) <- s.epoch;
+      if s.n_touched = Array.length s.touched then (
+        let bigger = Array.make (2 * s.n_touched) 0 in
+        Array.blit s.touched 0 bigger 0 s.n_touched;
+        s.touched <- bigger);
+      s.touched.(s.n_touched) <- k;
+      s.n_touched <- s.n_touched + 1);
+    s.cit.(k) <- c
+
+  let remove s k = s.cit.(k) <- empty
+
+  let fold_live s f acc =
+    let acc = ref acc in
+    for i = 0 to s.n_touched - 1 do
+      let c = s.cit.(s.touched.(i)) in
+      if c <> empty then acc := f c !acc
+    done;
+    !acc
+end
+
 (* The decision levels the conflict rests on, descending, level 0 dropped: what
    [decision_levels] reads off the decision closure, see the section header. [Error]
    when the graph is corrupt or the walk does not close, as [analyse] reports them. *)
@@ -1119,9 +1187,8 @@ let dependency_levels store (c : Store.conflict) ~(vars_of : int -> Var.t list o
   let check = check_attribution store ~vars_of in
   let max_resolutions = Store.trail_length store + 1 in
   let resolutions = ref 0 in
-  (* Slot -> the citation its cell holds. Looked up and never iterated for an ordered
-     result: the levels are sorted at the end. Keyed through [Slot_tbl], see there. *)
-  let cells = Slot_tbl.create 64 in
+  (* Slot -> the citation its cell holds, see [Cells]. *)
+  let cells = Cells.open_walk ~n_slots:(2 * Store.n_vars store) in
   let heap = Heap.create () in
   let slot c =
     let e = Store.trail_entry store (cite_pos c) in
@@ -1129,24 +1196,22 @@ let dependency_levels store (c : Store.conflict) ~(vars_of : int -> Var.t list o
   in
   let insert c =
     let k = slot c in
-    match Slot_tbl.find_opt cells k with
-    | Some held when cite_pos held >= cite_pos c -> ()
-    | _ ->
-        Slot_tbl.replace cells k c;
-        if not (cite_root c) then Heap.push heap c
+    let held = Cells.find cells k in
+    if held <> Cells.empty && cite_pos held >= cite_pos c then ()
+    else (
+      Cells.set cells k c;
+      if not (cite_root c) then Heap.push heap c)
   in
   let rec loop () =
     match Heap.pop heap with
     | None -> ()
     | Some c ->
         let k = slot c in
-        (match Slot_tbl.find_opt cells k with
-        | Some held when held = c ->
-            if !resolutions >= max_resolutions then raise (Bad (Diverged !resolutions));
-            incr resolutions;
-            Slot_tbl.remove cells k;
-            Array.iter insert (cites_of store ~check (cite_pos c))
-        | _ -> ());
+        if Cells.find cells k = c then (
+          if !resolutions >= max_resolutions then raise (Bad (Diverged !resolutions));
+          incr resolutions;
+          Cells.remove cells k;
+          Array.iter insert (cites_of store ~check (cite_pos c)));
         loop ()
   in
   try
@@ -1163,7 +1228,7 @@ let dependency_levels store (c : Store.conflict) ~(vars_of : int -> Var.t list o
     let levels =
       List.rev
         (List.sort_uniq Int.compare
-           (Slot_tbl.fold (fun _ c acc -> cite_level c :: acc) cells []))
+           (Cells.fold_live cells (fun c acc -> cite_level c :: acc) []))
     in
     Debug.check
       "M7-T27 (a3): the memoised closure names the levels the walk over facts does"

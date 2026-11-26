@@ -31441,3 +31441,146 @@ Left open:
 Revert: `git revert 31c06e1 28e0cba 5afb37e` (the O(1) membership, the tight facts, the rule), or
 `28e0cba` and `31c06e1` alone to keep learning with the wide reasons. The two test models and the
 test_prop section go with `28e0cba`.
+
+## D-0236  [AUTONOME] M20-pernode-T4, the learning path: a name is hashed once where it was hashed per use. One-entry memos in `Store.var_named` and `Encoding.find`, the bits flag of a literal read off Justify's interned name, the decision closure's cells as a dense array, `String.hash` for every name table. Same trees, byte-identical artefacts; elitserien handball12 -8.1 % instructions per node without proof, -9.6 % with
+
+**Status**: DONE on `wave82-names` (agent-names, 2026-11-26), not merged. Base: main `121a1ce`
+(whose `lib/` is `e0c793a`'s), binary md5 `50898a4e`; branch binary `8f4cefb9` (`b6344345` after merging main `d25f15e`). Node fataepyc-06 at
+load 15 to 30 (other sessions' runs). Runs, profiles, scripts and the four sample `.fzn`:
+`/cluster/arthur/baguette-results/names/`.
+
+### 1. Method
+
+D-0207's and D-0235's: `perf stat -e instructions:u` at a fixed node budget
+(`BAGUETTE_NODE_LIMIT`), per node = (I(N) - I(1)) / (nodes - 1), the 1-node run taken with the
+base binary; `perf record -e instructions:u --call-graph fp` on the `baguette-fp` switch for the
+shares. Samples: elitserien handball12 (3 000 nodes), tppv circ14cnonbal (2 000), costas13
+(completes in 1 504 nodes) and qr2 (20 000), D-0235's `.fzn`. Every step was checked at the budget
+with and without `--proof`: md5 of `.opb`, `.pbp` and stdout, and the nodes/conflicts/learned
+counters, equal to the base binary's on all four. Call counts came from a throwaway counting
+build, not committed.
+
+Two things the profiles taught that the next session should know. (a) Concurrent `perf record`
+runs on this node fail silently (one of eight wrote a `perf.data`), so profiles run one at a time.
+(b) An instruction-sampled share overstates a short hot function: `Store.var_named` showed 6.9 % of
+handball12 and the open-addressing index of section 4, which halves its cost per call in a
+micro-benchmark, measured -0.9 %. The per-node deltas below are the measurement, the shares
+only rank.
+
+### 2. Where the learning path's instructions went (inclusive share of all instructions)
+
+| instance, proof | learning (`Learn.at_conflict`) | `dependency_levels` | `analyse` | `var_named` | `Encoding.find` | `Encoding.is_bits` | `Justify.validate_lit` | `caml_hash` |
+|---|---|---|---|---|---|---|---|---|
+| handball12, no | 33.5 -> 28.0 | 22.3 -> 17.5 | 10.3 -> 9.5 | 7.0 -> 5.3 | - | - | - | 3.4 -> 0.9 |
+| tppv circ14, no | 8.2 -> 6.2 | 6.3 -> 4.1 | 1.4 -> 1.6 | 0.4 -> 0.4 | - | - | - | 0.3 -> 0.2 |
+| costas13, no | 15.6 -> 12.3 | 9.0 -> 6.8 | 5.1 -> 4.1 | 1.7 -> 0.9 | - | - | - | 0.9 -> 0.2 |
+| qr2, no | 19.5 -> 17.8 | 8.8 -> 8.4 | 9.4 -> 8.1 | 4.5 -> 4.3 | - | - | - | 2.1 -> 0.9 |
+| handball12, yes | 7.1 -> 6.1 | 5.0 -> 3.9 | 2.2 -> 2.2 | 1.5 -> 1.1 | 9.7 -> 4.9 | 8.2 -> 3.5 | 7.3 -> 4.0 | 6.8 -> 3.5 |
+| tppv circ14, yes | 3.0 -> 2.4 | 2.6 -> 1.9 | 0.6 -> 0.6 | 0.2 -> 0.2 | 4.6 -> 3.0 | 2.2 -> 0.8 | 3.4 -> 2.2 | 3.3 -> 2.2 |
+| costas13, yes | 6.0 -> 4.9 | 3.4 -> 2.6 | 1.9 -> 1.7 | 1.0 -> 0.4 | 3.5 -> 1.5 | - | 1.8 -> 1.8 | 3.8 -> 2.0 |
+| qr2, yes | 11.6 -> 11.2 | 5.5 -> 5.0 | 5.2 -> 5.4 | 2.7 -> 2.9 | 1.6 -> 1.4 | - | 5.8 -> 5.4 | 4.4 -> 2.7 |
+
+Without the proof the name lookups sit in `Analysis.locate`, once per fact a cut or a closure
+locates (handball12: 9.4 M per 3 000 nodes, 5.7 M from the closure's memo builds and 3.7 M from
+1UIP nodes). With the proof they sit in the encoding: 74.8 M `Encoding.find` per 3 000 nodes on
+handball12, mostly `Encoding.is_bits` from `Trace.bits_arm` (one per fact of every traced entry)
+and from `Justify.ensure_lit` (one per literal of every line). In the closure itself the
+`Slot_tbl` of cells was the largest item after the lookups.
+
+### 3. The fixes, each measured (instructions per node, artefacts identical at each step)
+
+| step | handball12 no / proof | tppv circ14 | costas13 | qr2 |
+|---|---|---|---|---|
+| F1a `Name_tbl`: the name tables hashed by `String.hash` (`Store` index, `Encoding.Names`, `Analysis.Frontier`) | -1.5 / -1.7 | -0.4 / -1.0 | -0.8 / -0.7 | -0.8 / -0.6 |
+| F1b one-entry memo in `Store.var_named` (`store.ml`, `var_named`) | -2.4 / -0.5 | -0.1 / -0.1 | -1.2 / -0.7 | +0.2 / +0.1 |
+| F2 one-entry memo in `Encoding.find` (`encoding.ml`, `find`) | -0.1 / -3.0 | -0.1 / -2.3 | -0.1 / -1.5 | 0.0 / +0.1 |
+| F3 the closure's cells as a dense scratch (`analysis.ml`, `Cells`) | -4.1 / -1.0 | -2.2 / -1.2 | -0.6 / +0.1 | -0.8 / -0.4 |
+| F4 Justify: bits flag in `declared`, `String.hash` (`justify.ml`, `validate_lit`) | 0.0 / -3.6 | 0.0 / -1.7 | 0.0 / -0.3 | 0.0 / -0.8 |
+| F5 `check_attribution` without a closure (`analysis.ml`, `watches`) | -0.3 / 0.0 | +0.1 / 0.0 | -0.6 / -0.9 | 0.0 / 0.0 |
+| **total, base -> branch** | **-8.1 / -9.6** | **-2.7 / -6.0** | **-3.3 / -4.0** | **-1.3 / -1.6** |
+
+In absolute terms, per node: handball12 16.41 M -> 15.08 M without proof and 78.71 M -> 71.18 M
+with; tppv circ14 10.16 M -> 9.89 M and 25.06 M -> 23.55 M; costas13 4.09 M -> 3.95 M and 11.86 M ->
+11.38 M; qr2 1.10 M -> 1.08 M and 1.92 M -> 1.89 M.
+
+**Why each is sound.** F1a: `String.hash` returns `Hashtbl.hash`'s value on every string (both
+are `caml_hash_mix_string` under seed 0 with the same final mix, checked on 100 000 names and in
+`test_proof.ml`), so every table keeps its bucket layout and iteration order; what goes is the
+generic hash's dispatch and the polymorphic compare. F1b and F2: a name never changes variable
+(the store's index is built once from `names`, and `Encoding.ints` never rebinds a name, a second
+declaration raises `Redeclared`), only a found answer is remembered, and a hit needs the name to
+be PHYSICALLY the remembered variable's name, so a hit returns what the table would and an equal
+copy just misses. The counts that make them pay: 47 % of handball12's `var_named` calls and 39 %
+of its `Encoding.find` calls were physical repeats of the call before (a reason's two facts on one
+variable, alldiff's `at_least`/`at_most` of one snapshot), and none was equal without being
+physical. F3: a slot is `2 * v + direction` for a store variable, so `2 * n_vars` cells cover
+every key; the arrays are kept across conflicts and an epoch stamp makes an old cell read as
+empty, so nothing is cleared; the levels are sorted at the end, so the fold's order reaches
+nothing. F4: a variable's encoding is fixed at its declaration, so the `is_bits` answer cached per
+interned name is the one `Encoding.is_bits` would give at every later literal, and the atom is
+minted under the same condition and in the same order as before. F5 is the same test written
+as a loop.
+
+**Withdrawn, measured.**
+- The memo of F1b keeping the last NAME (a string field) instead of the index: on a miss the
+  string store is a `caml_modify`, and qr2, where consecutive facts never repeat a variable, went
+  from -0.8 % to 0.0 %. The index form tests `names.(i) == name` and writes an int.
+- An open-addressing index for `Store.var_named` (an `int array` probed linearly, a word-wise
+  multiplicative hash written in OCaml, no C call and no `Some`): -0.9 % / -0.2 % on handball12,
+  -0.6 % / -0.4 % on costas13, -0.8 % / -0.4 % on qr2, +0.1 % on tppv. Withdrawn for about 60
+  lines of hash function and table for under a point.
+- F2 with a placeholder variable in place of the option: 0.3 % worse on handball12 with the proof.
+  The option form keeps the `Some` the table returned, so a miss allocates nothing more.
+
+**Cycles and time: much less than the instructions.** elitserien handball12 to its optimum
+without the proof (29 762 nodes, both binaries, same answer): instructions -7.3 % (514.4 G -> 476.6 G),
+`cycles:u` -1.8 % (250.1 G -> 245.7 G), CPU time 110.6 s for both (run side by side at load 25). At
+the 3 000-node budget, three runs each: cycles -5 % (25.06 G -> 23.82 G on average). What went is
+instructions that were cheap in cycles (a hash over a string already in cache, a closure call),
+so the per-node instruction figure overstates the time gained here.
+
+### 4. What is left (branch binary, inclusive shares)
+
+- `Store.var_named` is still 5.3 % of handball12 and 4.3 % of qr2 without the proof (shares
+  overstated, see section 1). The lever is the one D-0235 named: a `Reason.fact` that CARRIES its
+  variable. Not done here, because a fact is built at about 120 producer sites in 17 files (gcc.ml
+  among them, held by agent-gcc), and element.ml keys a `Fact_tbl` on a fact's structure, so a new
+  field changes its equality. A request to the owners of `lib/core/prop/` is in WORKLOG.
+- `Analysis.check_attribution` is O(arity) per citation and per node (`List.exists` over the
+  instance's variables): 1.7 % of handball12 measured by switching it off. An O(1) "does instance i
+  watch v" belongs to `Engine` (D-0191's request, open).
+- With the proof, `Trace.bits_arm` still asks `Encoding.is_bits` per fact (3.5 % of handball12),
+  and alldiff's `pair_amo` asks `Encoding.direct_hi_id`/`direct_lo_id` by name. `Explanation.lit_hash`
+  still calls `Hashtbl.hash` on a name (0.9 %); `explanation.ml` was outside this task.
+- The closure (`dependency_levels`) remains 17.5 % of handball12 without the proof: the memo
+  builds (`cites_of`, one `locate` per fact on an entry's first visit) and the heap.
+
+### 5. Checks
+
+On the branch merged with main `121a1ce`: `dune runtest --root . --force` 5 420 ok, 0 FAIL (the
+4 new checks included), peak RSS 155 MB. The 239 test models (232 plus those wave79-cheap added):
+`.opb`, `.pbp`, stdout and exit code identical, main `50898a4e` against the branch `8f4cefb9`, in
+the default configuration and under `--bits-above none` (478 pairs, every exit code 0).
+Differential lane `--tier all -j 8`: 347 of 347 equal; `--debug`: 333 of 333 equal
+(`BAGUETTE_MEM_CAP_KB=33554432`). Scaling lane (`-j 8`, the branch binary): ok, all 5 lines within
+their thresholds. Main has since taken wave80-gcc (D-0234), which changes the search on gcc models and makes the lane reference stale until it is re-recorded; the checks are re-run after merging main past that re-recording (below).
+
+After merging main `d25f15e` (D-0234 and its lane re-recording): main binary `96af57d4`, branch
+binary `b6344345`. `dune runtest --root . --force` 5 460 ok, 0 FAIL, peak RSS 155 MB. The 241 test
+models identical (`.opb`, `.pbp`, stdout, exit code) in both configurations (482 pairs).
+Differential lane `--tier all -j 8` 347 of 347 equal, `--debug` 333 of 333 equal
+(`BAGUETTE_MEM_CAP_KB=33554432`); scaling lane ok, 5 of 5 lines within their thresholds.
+
+**Clarity cost.** One new module, `lib/proof/name_tbl.ml` (a functor application and the
+argument that its hash is `Hashtbl.hash`'s), in both module maps. Two one-entry memos with the
+rule that makes them exact stated at the field and at the function (`Store.named_last`,
+`Encoding.found_last`). `Analysis.Cells`, a process-wide scratch with an epoch, about 50 lines
+with its header: the one piece of mutable state between conflicts this adds, used by one function
+that does not re-enter itself. Justify's `declared` byte now has three values. Two unit checks
+pin the memos, with their breaks measured.
+
+### 6. Decision and revert
+
+[AUTONOME] Kept: no search, proof or answer changes, so no default behaviour changes. Revert:
+`git revert` of `d787fa3` (F1), `ea1bb63` (F2), `335aeb3` (F3), `522bf0e` (F4), `211f8e8` (F5),
+with the tests `f9578c2` and the module maps `ef6d128`.

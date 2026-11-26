@@ -1394,7 +1394,27 @@ let test_var_named_index () =
          Option.equal Var.equal
            (Some (Store.name_rep s v))
            (Store.var_named s (Store.name s v)))
-       (List.init n Fun.id))
+       (List.init n Fun.id));
+  (* M20-pernode-T4 (D-0236): [var_named]'s one-entry memo hits when the name asked is
+     PHYSICALLY [names.(i)] for the [i] it answered last. Asked twice in a row (a hit),
+     interleaved (a miss), with the store's own strings and with equal copies, it gives
+     the scan's answer every time, duplicates included. Break, measured: a memo that
+     skips the physical test (answers its last index whenever it has one) fails this check
+     and two above. *)
+  let ok = ref true in
+  let ask nm =
+    if not (Option.equal Var.equal (Store.var_named s nm) (Store.var_named_scan s nm))
+    then ok := false
+  in
+  List.iter
+    (fun i ->
+      let nm = Store.name s (Var.of_int i) in
+      ask nm;
+      ask nm;
+      ask (Bytes.to_string (Bytes.of_string nm));
+      ask "absent")
+    [ 0; 3; 3; 1; 0; 5; 2; 4; 4; 3 ];
+  check "var_named memo: every answer is the scan's, hits and misses alike" !ok
 
 (* M6-T14 (D-0088): [Store.bound_support] (binary search over a variable's bound
    history) against [Analysis.scan_support] (the downward trail walk it replaced), for

@@ -25,6 +25,7 @@
    stack, since a summand list is as long as the ladders it crosses. *)
 
 module Lit = Baguette_proof.Lit
+module Name_tbl = Baguette_proof.Name_tbl
 
 (* The propagator instance that made a change, as the [id] of [Propagator.instance]
    (lib/core/propagator.ml) -- the id that already existed and that [Engine] already
@@ -180,7 +181,12 @@ type t = {
      built on first use rather than in [create], because [Engine.oracle_accepts] builds a
      scratch store per tuple and never asks for a name. Names are fixed at creation
      ([names] is a private copy nothing writes), so the index never goes stale. *)
-  by_name : ((string, int) Hashtbl.t * int array) Lazy.t;
+  by_name : (int Name_tbl.t * int array) Lazy.t;
+  (* M20-pernode-T4 (D-0236): the variable [var_named] answered last, or [-1] before the
+     first answer. A one-entry memo in front of [by_name], tested by PHYSICAL equality
+     against [names], see [var_named]. An int, so that writing it is a plain store and not
+     a [caml_modify]: a string field cost more on a miss than the hits saved (D-0236). *)
+  mutable named_last : int;
   reasons : Explanation.Arena.t;
   lo_sup : int array;
   hi_sup : int array;
@@ -295,14 +301,14 @@ let dummy_mark = { trail_mark = 0; reason_mark = 0 }
    variables of one name (nothing in [Compile] produces one; a hand-built test store
    could) still gets the same answer. *)
 let build_name_index names =
-  let tbl = Hashtbl.create ((2 * Array.length names) + 1) in
+  let tbl = Name_tbl.create ((2 * Array.length names) + 1) in
   let rep =
     Array.mapi
       (fun i nm ->
-        match Hashtbl.find_opt tbl nm with
+        match Name_tbl.find_opt tbl nm with
         | Some j -> j
         | None ->
-            Hashtbl.add tbl nm i;
+            Name_tbl.add tbl nm i;
             i)
       names
   in
@@ -333,6 +339,7 @@ let create ~names ~domains =
     initial = Array.copy domains;
     names;
     by_name;
+    named_last = -1;
     reasons = Explanation.Arena.create ();
     lo_sup = Array.make nv no_support;
     hi_sup = Array.make nv no_support;
@@ -605,11 +612,32 @@ let push_mark t m =
    all call it on the conflict path, and D-0080 measured it at 11 % of a 60 s profile on
    2018 rotating-workforce. It is now one hash lookup into an index built on first use.
    [var_named_scan] is the old definition, kept as the specification the index is tested
-   against (test_core.ml). *)
+   against (test_core.ml).
+
+   M20-pernode-T4 (D-0236): the index is a [Name_tbl], keyed by [String.equal] and hashed
+   by [String.hash] -- the value [Hashtbl.hash] gave, without the generic hash's dispatch
+   or the polymorphic compare. [Analysis.locate] asks it once per fact it locates, and it
+   was 7.3 % of elitserien handball12's instructions without the proof.
+
+   And in front of the index, a ONE-ENTRY MEMO: the variable [i] answered last, and a hit
+   when the name asked is PHYSICALLY ([==]) the string [names.(i)]. Sound because [i]
+   came out of the index, so it is the first variable bearing [names.(i)], which is what
+   the index answers for any string equal to it; a name that is equal without being that
+   very string just misses. It pays because a reason names one variable twice in a row
+   more often than not -- [Reason.fixed_at]'s two halves, alldiff's [at_least]/[at_most]
+   of one snapshot -- and producers name a variable by [name t v], i.e. by the string in
+   [names] (D-0236 counted 47 % of elitserien handball12's lookups as physical repeats of
+   the one before, and none that was equal without being physical). A miss costs a load
+   and a comparison of pointers. *)
 let var_named t name =
-  match Hashtbl.find_opt (fst (Lazy.force t.by_name)) name with
-  | Some i -> Some (Var.of_int i)
-  | None -> None
+  let last = t.named_last in
+  if last >= 0 && t.names.(last) == name then Some (Var.of_int last)
+  else
+    match Name_tbl.find_opt (fst (Lazy.force t.by_name)) name with
+    | Some i ->
+        t.named_last <- i;
+        Some (Var.of_int i)
+    | None -> None
 
 let var_named_scan t name =
   let n = Array.length t.names in

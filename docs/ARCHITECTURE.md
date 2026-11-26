@@ -179,6 +179,9 @@ lib/proof/      Baguette_proof
   e2e.ml                    the END-TO-END PREFIX under --e2e: derives each of baguette's
                             rows from cake_pb_cp's verified .opb; nothing in it is
                             trusted, every line is checked (M14-T3, D-0187)
+  name_tbl.ml               the table keyed by a FlatZinc identifier: String.equal and
+                            String.hash (Hashtbl.hash's value without its dispatch), for
+                            Encoding, Justify and Store's name index (M20-pernode-T4, D-0236)
   checker.ml                resolves which veripb to use; mirrors scripts/checker.sh
 ```
 
