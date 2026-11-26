@@ -20,7 +20,6 @@ of it to every session and stopping at a broken line before it even reached the 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
 | M18-coverage-T8 | lib/core/prop/regular.ml, mznlib/ regular files, regular part of lib/flatzinc/compile.ml | agent-regular (wave78-regular, /scratch/arthur/wt-regular) | 2026-11-26 |
-| M18-coverage-T7 | mznlib/ (alldifferent_except_0, all_equal, nvalue), new module under lib/core/prop/ if needed, lib/core/dune, the new families in lib/flatzinc/builder.ml and compile.ml, test/, module maps (CLAUDE.md, ARCHITECTURE §1) if a module is added | agent-cheap (wave79-cheap, /scratch/arthur/wt-cheap) | 2026-11-26 |
 
 ## Cross-session requests
 
@@ -697,8 +696,11 @@ section 1. Shares are inclusive, of the whole run.
 | M6-T2 (re-scope the minor-GC lever after M16) | agent-gc (`wave56-gc`) | 2026-11-21 | **D-0198 [AUTONOME].** No `Bigarray`/`Bytes` move: the trail and the domains are 0.5 to 4.5 % of the words allocated. The nursery at 4 M words (`bin/main.ml`, an eighth of a tight `ulimit -v` at most) and `Justify.sort_pairs` over indices. Instructions -7.1 % (no proof) and -11.7 % (proof) median, byte-identical |
 | hotfix: the heap guard is overshot (`Fatal error: allocation failure during minor GC` or `Out of memory` instead of the M7-T8 refusal) | agent-heapguard (`wave56-heapguard`) | 2026-11-21 | **D-0200 [AUTONOME].** The budget was read only at a major cycle's end, and on a growing heap a cycle outlasts the climb to the address-space limit (1HZ5: 6.6 GB at one cycle end, abort at 14.5 GB before the next). Now also a SIGVTALRM poll every 0.1 s of CPU, under `--max-heap-mb` only, against the last snapshot plus the major words allocated since, confirmed by one forced `Gc.major`; `Out_of_memory` at the top level exits 5. The four instances: 16 of 16 runs (proof and not, default and `s=256k` minor heap) exit 5 at 8 196 to 8 703 MB under an 8 192 MB budget, RSS at most 9.1 GB. No timer without the flag; with it, instructions 0.01 to 0.39 % below main. Two lanes (test_proof, test_endtoend). Not merged; the orchestrator merges |
 | M19-config-T0 (the tuning set) | agent-tuning (`wave59-tuning`) | 2026-11-23 | **D-0205.** `bench/tuning/`, 200 instances in 183 families. DONE except the driver hook. |
+| M18-coverage-T7 (the cheap globals) | agent-cheap (`wave79-cheap`) | 2026-11-26 | **D-0233 [AUTONOME].** mznlib only: `fzn_alldifferent_except` as at most one indicator per value (1 -> 2 complete of 37, gcc's route measured worse), `fzn_nvalue` without the bool2int copies, `fzn_all_equal_int_reif` as a chain (outcomes unchanged). Seven test models, SPEC 2.1 row |
 
 ## Handoff notes
+
+- 2026-11-26, agent-cheap (M18-coverage-T7, D-0233, `wave79-cheap`, not merged): three mznlib files, no `lib/` change. `alldifferent_except_0` was already native (std writes gcc); it now goes as one `baguette_bool_lin_le(..., 1)` per non-zero value over the `x = v` indicators, Chuffed's shape, which measured better than gcc (concert-hall-cap 2018.02 now OPT and VERIFIED, 10 incumbents better and none worse, 0.71 of the instructions per node). `nvalue` without the `bool2int` copies and the reified `all_equal` as a chain change no outcome (speck 0.67 to 0.92 of the instructions per node). Lanes unchanged by construction. Open: liner's seven ROOT heap refusals (not these globals), why gcc's conflicts learn worse than plain rows (a question for gcc.ml on every gcc model), and the root-conflict crash under `--proof` in Cross-session requests (a 3-variable model, main's bug). Results `fataepyc-06:/cluster/arthur/baguette-results/cheap/`.
 
 ### 2026-11-26 (agent-evict, fataepyc-06): D-0226 on `wave73-evict`, not merged
 

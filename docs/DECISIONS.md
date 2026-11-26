@@ -30934,6 +30934,10 @@ on which main's binary raises `Encoding.ensure_atom ... asked for after the root
 `Search.close_root_conflict` under `--proof` with the bits encoding. Recorded in WORKLOG's cross-session requests,
 reproducer in the results directory.
 
+Confirmed after merging main `ef56549` (D-0226, retention `tiered` by default), release `2397635e`, the ten concert-hall-cap instances with proof, gcc against at-most-one: 0 -> 1 complete (2018.02, OPT 48 278 in 70 s, VERIFIED), 8 incumbents better (06, 148, 318, 2024 .04, 100_20 and 150_20 from none, 200_20 1 455 773 -> 1 576 652), none worse, 2018.03 and 60_50 unchanged.
+
+Checks on the merged branch (dev binary `4ce3e72e`, gate 107's bytes, so every existing test model's artefacts are main's): `dune runtest --root . --force` 5 414 ok and 0 FAIL, `run_model_tests.sh` 239 models (232 + this record's 7) with proofs VERIFIED, `check_mznlib.sh` 58 ok, the differential lane `--tier all` 347 of 347 equal and `--debug` 333 of 333, the scaling lane ok, all three under `BAGUETTE_MEM_CAP_KB=33554432`. No lane instance calls these globals and every lane input is pre-flattened, so nothing there could move.
+
 ### 4. SPEC 2.1
 
 One row added to the M18 builtins table (the D-0217 and D-0220 precedent), normative because it says what reaches
