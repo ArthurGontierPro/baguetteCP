@@ -1,0 +1,7 @@
+( (version 1)
+  (variables (a 0 3) (b 0 3) (c 0 3))
+  (constraints
+    (c1 increasing (a b c))
+    (c2 strictly_decreasing (3 c))
+    (c3 lin_equals (1 a 1 b 1 c) 5))
+  (prob_type decide) )

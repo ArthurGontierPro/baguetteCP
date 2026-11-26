@@ -1,0 +1,9 @@
+( (version 1)
+  (variables (x -5 5) (y -5 5) (s -10 10) (d -10 10) (n -5 5))
+  (constraints
+    (c1 plus x y s)
+    (c2 minus x y d)
+    (c3 neg x n)
+    (c4 greater_equal d 3)
+    (c5 less_equal n -1))
+  (prob_type (maximize s)) )

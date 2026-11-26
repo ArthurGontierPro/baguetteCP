@@ -1,0 +1,12 @@
+( (version 1)
+  (variables (x 0 9) (y 0 9) (b 0 1) (c 0 1) (d 0 1))
+  (constraints
+    (r1 less_equal_iff (b = 1) x y)
+    (r2 equals_iff (x >= 5) c d)
+    (r3 lin_less_equal_iff (c = 0) (1 x 1 y) 6)
+    (r4 not_equals_iff (y < 3) x 4)
+    (r5 greater_than_iff (d != 1) y x)
+    (r6 or ((b = 0) (x > 7) (c = 1)) (1 = 1))
+    (r7 and ((b = 1) (y >= 2)) (d = 0))
+    (r8 equals x 6))
+  (prob_type decide) )

@@ -1,0 +1,7 @@
+( (version 1)
+  (variables (x 0 3) (y 0 3) (z 0 3))
+  (constraints
+    (c1 table ((0 1 2) (1 2 3) (2 9 1) (3 3 3)) (x y z))
+    (c2 not_equals x z)
+    (c3 greater_than x 0))
+  (prob_type decide) )

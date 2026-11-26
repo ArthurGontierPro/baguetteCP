@@ -1,0 +1,8 @@
+( (version 1)
+  (variables (x 0 9) (y 0 9) (b 0 1))
+  (constraints
+    (c1 in (1 4 6 9) x)
+    (c2 in (2 4 7) y)
+    (c3 in (1 5) b)
+    (c4 lin_equals (1 x 1 y) 11))
+  (prob_type decide) )

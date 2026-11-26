@@ -130,6 +130,15 @@ let shape pos kw expected =
   Error.failf pos
     "constraint `%s` expects %s, as cake_pb_cp reads it (cp_parseScript.sml)" kw expected
 
+(* `b <-> C(b)`: compile.ml refuses a reifier that occurs in the constraint it reifies,
+   because it is not a definition of b. Said here, by the reader, with the constraint's
+   position, rather than as a refusal of a builtin the file never wrote. *)
+let self_reif pos kw =
+  refuse pos kw
+    "the variable of the condition occurs in the comparison it reifies, and baguette's \
+     reified constraints take a reifier that is defined by them, not one they also \
+     constrain"
+
 (* ------------------------------------------------------------------ atoms *)
 
 let atom_int p a = Sexp.int_of_atom p a
@@ -454,6 +463,7 @@ let one_constraint st pos kw (args : Sexp.t list) =
           | Ltrue -> post st pos kw (plain c)
           | Lfalse -> post st pos kw (plain (negation c))
           | Lpos b | Lneg b -> (
+              if List.exists (fun (_, i) -> i = b) ts then self_reif pos kw;
               let c = match lit with Lneg _ -> negation c | _ -> c in
               match le c with
               | Some (ts, r) ->
@@ -780,36 +790,48 @@ let one_constraint st pos kw (args : Sexp.t list) =
             let smin = List.fold_left (fun a (_, v, _) -> min a v) max_int edges in
             let smax = List.fold_left (fun a (_, v, _) -> max a v) min_int edges in
             let w = ck pos kw (fun () -> Checked.add (Checked.sub smax smin) 1) in
+            (* A constant letter that labels no edge kills every run, so the constraint is
+               false. Said here because lib/core/prop/regular.ml raises on a constant
+               letter outside the symbol range (an index out of bounds in
+               [forward_reason], reproduced from FlatZinc on main: D-0230 section 7). *)
+            let dead_letter = function
+              | Model.Const v -> v < smin || v > smax
+              | Model.Var _ -> false
+            in
             if w > 1_000_000 || nq * w > 10_000_000 then
               refuse pos kw "a transition table of %d states over %d symbols is too large"
                 nq w;
-            let delta = Array.make (nq * w) 0 in
-            List.iter
-              (fun (q, v, t) ->
-                let k = (q * w) + (v - smin) in
-                if delta.(k) <> 0 && delta.(k) <> t + 1 then
-                  refuse pos kw
-                    "state %d has two edges on the symbol %d: a nondeterministic \
-                     automaton, and baguette's regular takes a deterministic one"
-                    q v;
-                delta.(k) <- t + 1)
-              edges;
-            let n = List.length xs in
-            let flags = List.init ((n + 1) * nq) (fun _ -> ()) in
-            let flags = List.map (fun () -> Model.Var (fresh_bool st pos "flag")) flags in
-            post st pos kw
-              (Model.Regular
-                 {
-                   Model.r_xs = xs;
-                   r_nq = nq;
-                   r_smin = smin;
-                   r_delta = delta;
-                   r_q0 = 1;
-                   r_final =
-                     Array.of_list
-                       (List.sort_uniq compare (List.map (fun f -> f + 1) finals));
-                   r_flags = flags;
-                 })
+            if List.exists dead_letter xs then post_false st pos kw
+            else
+              let delta = Array.make (nq * w) 0 in
+              List.iter
+                (fun (q, v, t) ->
+                  let k = (q * w) + (v - smin) in
+                  if delta.(k) <> 0 && delta.(k) <> t + 1 then
+                    refuse pos kw
+                      "state %d has two edges on the symbol %d: a nondeterministic \
+                       automaton, and baguette's regular takes a deterministic one"
+                      q v;
+                  delta.(k) <- t + 1)
+                edges;
+              let n = List.length xs in
+              let flags = List.init ((n + 1) * nq) (fun _ -> ()) in
+              let flags =
+                List.map (fun () -> Model.Var (fresh_bool st pos "flag")) flags
+              in
+              post st pos kw
+                (Model.Regular
+                   {
+                     Model.r_xs = xs;
+                     r_nq = nq;
+                     r_smin = smin;
+                     r_delta = delta;
+                     r_q0 = 1;
+                     r_final =
+                       Array.of_list
+                         (List.sort_uniq compare (List.map (fun f -> f + 1) finals));
+                     r_flags = flags;
+                   })
       | _ -> shape pos kw "(X1 ... Xn) nstates ((edges_0) ...) (f1 ... fk)")
   (* ---- misc *)
   | "circuit" ->
@@ -857,8 +879,10 @@ let one_constraint st pos kw (args : Sexp.t list) =
               match lit with
               | Ltrue -> post st pos kw (cmp_cstr c x y)
               | Lfalse -> post st pos kw (cmp_cstr (negation c) x y)
-              | Lpos b -> post st pos kw (cmp_reif pos kw c x y (Model.Var b))
-              | Lneg b -> post st pos kw (cmp_reif pos kw (negation c) x y (Model.Var b)))
+              | Lpos b | Lneg b ->
+                  if x = Model.Var b || y = Model.Var b then self_reif pos kw;
+                  let c = match lit with Lneg _ -> negation c | _ -> c in
+                  post st pos kw (cmp_reif pos kw c x y (Model.Var b)))
           | _ -> shape pos kw "X Y after its optional condition"))
 
 (* The keywords cake knows that this reader refuses by name, so the message can say

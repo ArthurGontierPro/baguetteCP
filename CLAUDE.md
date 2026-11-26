@@ -207,9 +207,18 @@ lib/flatzinc/   Baguette_flatzinc
   lexer.ml parser.ml        hand-written scanner + recursive descent (D-0006)
   model.ml                  the front end's output: vars, domains, constraints
   builder.ml                ast -> Model.t, and the normative rules of SPEC 2.1
+  arith_aux.ml              the arithmetic family's sign and ladder Booleans, shared by
+                            builder.ml and lib/scp/reader.ml (M23-inputs-T4, D-0230)
   compile.ml                Model.t -> store + PB encoding + propagator instances;
                             this is the flatzinc -> core edge
   output.ml                 solution printing in FlatZinc output format
+
+lib/scp/        Baguette_scp (M23-inputs, D-0228 section 14, D-0230)
+  sexp.ml                   .scp text -> s-expressions with positions: iterative, linear,
+                            through a 64 KiB buffer, one item's tree alive at a time
+  reader.ml                 .scp (cake_pb_cp's grammar, version 1) -> the same Model.t
+                            builder.ml produces; refuses with a position what baguette
+                            does not propagate. Depends on lib/flatzinc for Model
 
 lib/core/       Baguette_core
   var.ml                    variable identity (abstract int)
@@ -354,20 +363,25 @@ lib/proof/      Baguette_proof
                             trusted, every line is checked (M14-T3, D-0187)
   checker.ml                resolves which veripb to use; mirrors scripts/checker.sh
 
-test/unit/                  24 binaries: test_core test_domain test_engine test_prop
+test/unit/                  25 binaries: test_core test_domain test_engine test_prop
                             test_proof test_justify test_trace test_flatzinc
                             test_compile test_endtoend test_matrix test_mutation
                             test_output test_random test_interval test_learned
                             test_learn test_analysis test_ladder test_retention test_clause test_pb test_consistency
                             test_search_strategy (M10: restarts, phases, activity)
+                            test_scp (M23-inputs: the .scp reader)
   mem_guard.ml              NOT a test binary: the shared Gc-alarm heap guard every
-                            suite installs (M1-T53). All 24 announce arming under
+                            suite installs (M1-T53). All 25 announce arming under
                             BAGUETTE_TEST_HEAP_CAP_ANNOUNCE=1
 test/models/                228 .fzn models  test/expected/  their expected outputs
+test/scp/                   26 .scp models   test/scp/expected/  theirs (M23-inputs, D-0230)
 scripts/                    checker.sh verify_proof.sh run_model_tests.sh shrink.sh
                             mutate_proof.sh check_test_widths.py check_fmt.sh
                             check_determinism.sh bootstrap.sh; the lanes (diff, scaling,
-                            e2e, sym, fuzz)_lane.sh; compare_run.sh (Challenge runs)
+                            e2e, sym, fuzz)_lane.sh; compare_run.sh (Challenge runs);
+                            run_scp_tests.sh (the .scp models, `make scp`)
+tools/scp/                  the .scp lanes: validate.py (an answer against the .scp alone),
+                            fzn_lane.sh, random_lane.py, mutate.sh (D-0230)
 ```
 
 ## Commands
