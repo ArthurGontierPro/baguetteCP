@@ -4616,7 +4616,9 @@ let test_m11t7_discarded_rows_count_the_same () =
 let test_m20t4_find_memo () =
   let e = Encoding.create () in
   let names = [| "x"; "y"; "X_INTRODUCED_12_"; "X_INTRODUCED_21_" |] in
+  (* width-ok-begin: four variables of width 5, i ranges over 0..3 *)
   Array.iteri (fun i nm -> Encoding.declare_int e nm ~lo:i ~hi:(i + 5)) names;
+  (* width-ok-end *)
   let ok = ref true in
   let ask nm i = if Encoding.domain e nm <> (i, i + 5) then ok := false in
   List.iter
