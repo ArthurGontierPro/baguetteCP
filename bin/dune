@@ -1,7 +1,7 @@
 (executable
  (name main)
  (public_name baguette)
- (libraries unix baguette_core baguette_proof baguette_flatzinc))
+ (libraries unix baguette_core baguette_proof baguette_flatzinc baguette_scp))
 
 ; `unix` is here for TWO calls: Unix.gettimeofday, the wall clock --time-limit is checked
 ; against (M6-T10), and Unix.setitimer, the heap budget's CPU-time poll (D-0200). Everything --time reports is still Sys.time, process CPU; see the
