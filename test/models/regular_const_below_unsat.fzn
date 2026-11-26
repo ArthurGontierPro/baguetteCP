@@ -1,0 +1,12 @@
+% M22-review-bugs (D-0231): a CONSTANT first letter below the automaton's symbols (1..2),
+% so layer 1 dies forward with nothing to cite. The constraint is false.
+predicate baguette_regular(array [int] of var int: x,int: Q,int: smin,array [int] of int: d,int: q0,array [int] of int: F,array [int] of var bool: s);
+var 1..2: x :: output_var;
+var bool: s1;
+var bool: s2;
+var bool: s3;
+var bool: s4;
+var bool: s5;
+var bool: s6;
+constraint baguette_regular([-2, x], 2, 1, [1, 2, 2, 0], 1, [1, 2], [s1, s2, s3, s4, s5, s6]);
+solve satisfy;

@@ -1,0 +1,12 @@
+% M22-review-bugs (D-0231): letter VARIABLES whose domains run past the symbols 1..2 on
+% both sides (x in -1..4, y in 0..3) around a constant letter inside them. Symbol 1 keeps
+% the one state, symbol 2 fails, so the only word is [1, 1, 1].
+predicate baguette_regular(array [int] of var int: x,int: Q,int: smin,array [int] of int: d,int: q0,array [int] of int: F,array [int] of var bool: s);
+var -1..4: x :: output_var;
+var 0..3: y :: output_var;
+var bool: s1;
+var bool: s2;
+var bool: s3;
+var bool: s4;
+constraint baguette_regular([x, 1, y], 1, 1, [1, 0], 1, [1], [s1, s2, s3, s4]);
+solve satisfy;

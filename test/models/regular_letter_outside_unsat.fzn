@@ -1,0 +1,10 @@
+% M22-review-bugs (D-0231): a letter VARIABLE whose whole domain (5..6) lies outside the
+% symbols 1..2, so it labels no edge and the constraint is false.
+predicate baguette_regular(array [int] of var int: x,int: Q,int: smin,array [int] of int: d,int: q0,array [int] of int: F,array [int] of var bool: s);
+var 1..2: x :: output_var;
+var 5..6: y :: output_var;
+var bool: s1;
+var bool: s2;
+var bool: s3;
+constraint baguette_regular([x, y], 1, 1, [1, 1], 1, [1], [s1, s2, s3]);
+solve satisfy;
