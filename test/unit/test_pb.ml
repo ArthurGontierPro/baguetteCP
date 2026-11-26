@@ -709,7 +709,7 @@ module Explanation = Baguette_core.Explanation
 
 module Ref_pass = struct
   let survey store (t : Pb.t) =
-    List.map (fun (tm : Pb.term) -> (tm, Pb.status store tm.a)) t.terms
+    List.map (fun (tm : Pb.term) -> (tm, Pb.status store tm.a)) (Pb.terms t)
 
   let slack_of degree surveyed =
     List.fold_left
