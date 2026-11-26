@@ -61,8 +61,8 @@ search maxdepth/levels 43 levels
 work exhausted/bool 0 bool 1 if
 search skipped/nodes 10 nodes
 search learned/cls 1232 cls
-work later/asks 125150 asks
-work cites/memos 23529 memos
+work later/asks 125146 asks
+work cites/memos 23527 memos
 search convertible/cls 3 cls
 search retention lbd(cap=500) lbd(cap=500): 1232 added, 732 evicted, 500 swept, 0 live, 673 duplicate, 0 cited, 0 pinned
 search lbd 1:7,3:387,4:299,6:1,7:5,8:35,9:72,10:77,11:92,12:82,13:90,14:54,15:13,16:18
@@ -78,7 +78,7 @@ search pb-inst-no/rows 0 rows
 search pb-prune/prunes 0 prunes
 search pb-confl/confl 0 confl
 search minimised/lits 5415 lits
-search i-s4-cross/lines 22353 lines
+search i-s4-cross/lines 22316 lines
 search pb-tried/confl 1232 confl
 search pb-learned/rows 0 rows
 search pb-fallback/confl 1232 confl
@@ -130,4 +130,4 @@ search boundlines/pairs 49 pairs
 search bitsprune/lines 3844 lines
 search atoms/prune/atoms 0.008 atoms
 opb 8b89a20d08c2b177f0f119aaf4b41450cab180d782901252654b2495a0d2a9fa
-pbp 62cd9f1dcadd5398f68d81ac62b8fd971b8f62d013a3ff36575b84c9bee73e5d
+pbp d2c48ae3303a53919a5eb75cd6fae59687cbbe97bf7c56e6d22c287a0de2b5a4

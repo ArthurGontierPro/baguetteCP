@@ -31188,6 +31188,260 @@ sentence of semantics. The user's to confirm outside autonomous mode.
   files the way it reads the others, which it does for `fzn_<g>` names. `alldifferent_except` is the file's name, so
   `alldifferent_except_0` stays listed apart. Left as is.
 
+## D-0234  [AUTONOME] M18-coverage-T11: global_cardinality's conflicts carry their facts under a decision, derived ahead, as all_different's do since D-0156, and its reasons name only the facts their derivation leaves
+
+**Status**: DONE on `wave80-gcc` (agent-gcc, 2026-11-26), not merged. Measured against main `84e241b`
+(binary `2b00a3ac`) with the branch's `8f4f8edd` (`28e0cba`); checked again after merging main
+`121a1ce` (binary `50898a4e`), branch tip binary `96af57d4`. Node
+fataepyc-06, 300 s runs at 16 in parallel, 16 GiB address space, `MemoryMax=32G`,
+`--max-heap-mb 8192`. Runs, tables and scripts: `/cluster/arthur/baguette-results/gcc/`.
+Touches: `lib/core/prop/gcc.ml` only on the solver side; `test/unit/test_prop.ml` (the
+M18-coverage-T11 section), `test/models/gcc_conflict_learn_sat.fzn`,
+`test/models/gcc_count_conflict_learn_sat.fzn` and their expected outputs.
+
+### 1. The finding (D-0232 section 2)
+
+Every conflict of `gcc.ml` reached the store as a push that must fail. That covers rule A's
+pigeonhole (|H| > cap, the surplus confined variable pushed past its own top), rule C's shortfall and
+surplus (a count pushed past its opposite bound), and the stale pushes of either rule that land on a variable an
+earlier push of the same pass had confined. `Store.apply`'s `Failed` arm pairs each with
+`Reason.none`, so `Learn.at_conflict` got an empty cut and the branch closed on the decision
+nogood. On rotating-workforce 82 to 99.9 % of the conflicts learned nothing.
+
+### 2. The rule
+
+One rule for every push of the module, in `pass`'s `apply`, which every rule-A, rule-C and rule-(b)
+push already goes through. A push whose bound crosses the LIVE opposite bound of its target is,
+under a decision, not made. It is reported as the conflict with `Store.conflict` under
+`Store.deriving_ahead`, with the push's own facts plus that crossed bound (`conflict_facts`, each
+fact once). `Trace.conflict_line` then writes the push's derivation first and `rup ~facts >= 1`
+after it, which is cumulative's arrangement (D-0096) and all_different's (D-0156).
+
+The line is unit propagation against that one derivation, because every literal the derivation
+leaves in its row is the negation of a listed fact:
+
+| what the derivation leaves | where it comes from | the fact |
+|---|---|---|
+| a bound of a confined variable, or of the count, that a decision moved | `alo_summands`, `high_row` (`bound_cancels` cancels root ones only) | that bound, from the push's reason |
+| a non-taker's excluding bound (rule C, rule (b)) | `zero_summands` | that bound |
+| a fixed taker's two bounds (rule C lower) | `fixed_leftovers` | both |
+| rule A pigeonhole: the surplus variable's residue `y_ge_(hi(y)+1)` | `prune_expl`'s chain from the snapshot top | `y <= hi(y)`, already in the reason (y is the target) |
+| every other emptying push: a VALID bound (`y >= b+1`, `c <= may`, `c >= must`) the live store contradicts | the push's own derivation | the CROSSED bound, read live: unit propagation walks the ladder rungs from it |
+
+A constant count has no literal and needs none, because its derivation takes the declared-range arm of
+`ladder_at_most` / `ladder_at_least`, which is already contradicting.
+
+The test reads the store live (`View.lo` / `View.hi`), so it agrees with `Store.apply`'s `Failed`
+exactly, because `set_lo` to a bound at or below `hi` always lands on a value. AT THE ROOT NOTHING
+CHANGES in the conflict. The push runs and fails as before, and its derivation closes to `0 >= 1`.
+
+No new `Explanation` constructor, and nothing outside `gcc.ml` changed on the solver side.
+`Store.conflict`, `Store.deriving_ahead` and the trace's `c_ahead` path are the ones all_different,
+cumulative and element already use. No constructor is needed because the conflict's derivation is
+the push's own `Combine`, unchanged, and what it lacked was facts on the `Reason` side, which
+`Reason.because` carries.
+
+### 3. The tight facts, and why they are a second commit
+
+With the rule alone (`5afb37e`), every gcc conflict on the sample learned, but the reasons were
+`scope_facts`', which state every variable of the scope at both its current bounds. That is the right SCOPE,
+since D-0026's reverse arm requires the reason to name every variable the derivation weakens at the
+top level, and too many FACTS, because a variable whose terms the counting clears for free (a ladder chain
+in `drop_summands` / `free_summands`, literal axioms in `cost_summands`) is a fact the trace line
+does not need and a literal 1UIP must resolve or keep.
+
+`28e0cba` names each variable of the scope in one of three ways, from the same snapshot.
+`both_bounds` where the derivation leaves both (rule A's confined set and target, rule C's fixed
+takers), `excluding_bound` where it leaves one (the non-takers of rule C and rule (b)), and
+`named_only` otherwise, which is the fact `x >= decl_lo(x)`. It has no literal (`Reason.lit_of_fact`
+answers `None`), costs nothing, and keeps D-0026's reverse arm satisfied. That is how `gcc.ml`
+already named a count (`at_least cdlo`). The counts are named, and stated at the one bound a rule
+reads (the top for rule A and (a), the bottom for rule (b), none for rule C).
+
+The trace lines stay RUP where they were. The ahead lines (rule A, rule C's lower push, rule (a)'s
+hole) because every literal their derivation leaves is still the negation of a listed fact. The two
+that are RUP against one model row alone (rule C's upper push, rule (b)) because a variable that
+holds the value contributes at most 1 to that row's slack whether or not its bounds are asserted,
+and the argument their comments already made never used those bounds. This changes the trace lines of
+gcc PRUNINGS too, at every level, which is why it is its own commit. Reverting `28e0cba` alone
+returns to wide reasons with learning kept.
+
+Measured at 60 s without proof, rule only against rule plus tight facts, rws e-30-s-9 ran 1 151
+against 1 636 nodes/s, e-25-s-7 1 209 against 1 406, Example1780 483 against 509, gpq n8_q3 2 115 against 2 289,
+work-task seed-3 280 against 262. Learned-clause widths barely move (16 literals or more in 97 to
+99.9 % of clauses either way), so the width comes from the rest of the cut.
+
+### 4. Measurements
+
+Binaries: base `2b00a3ac` (main `84e241b`), new `8f4f8edd` (`28e0cba`). The tip `31c06e1`
+(`d5e3bee4`) only replaces a by-name membership test with a set (section 3's cost, below). It gives the
+same stdout and counters at 20 000 nodes on gcc-benchmark l42_3, 8 % fewer instructions there, and its
+20 test-model proofs are byte-identical to `8f4f8edd`'s.
+
+**Share of conflicts that learn.** No gcc conflict is factless any more. A throwaway build that counts
+why `Learn.at_conflict` answers `None` (D-0232's patch) ran 20 000 nodes. On gpq n8_q3 9 967 of
+9 976 conflicts learn (the 9 others are gcc conflicts with facts whose 1UIP walk ends without a single
+literal at the conflict level, `postcondition`). On rws e-30-s-9 and Example1242 all of them learn,
+and on work-task seed-3 9 724 of 9 762 (int_lin_le, learned_clause, bool_clause, int_eq_reif and 7 gcc ones, all with facts).
+On gcc-benchmark l42_3 the 9 019 conflicts still unlearned are **int_lin_ne's**, factless, not gcc's
+(695 gcc conflicts now learn there, against 0 before). That is the next family with D-0232's defect.
+
+**300 s, 34 instances** (`table-300s.md`), namely 10 rotating-workforce, 4 generalized peacable queens, 3
+work-task-variation, and 17 other gcc users from the census. Cells are answer, last objective,
+nodes, learned / conflicts, nodes/s.
+
+| instance | base np | new np | base p | new p |
+|---|---|---|---|---|
+| 2016_gbac_reduced_UD6-gbac | SOL 8492 77459 n, 100% learn, 258 n/s | SOL 8533 73035 n, 100% learn, 243 n/s | SOL 9018 51785 n, 100% learn, 173 n/s | SOL 9017 52480 n, 100% learn, 175 n/s |
+| 2017_cd Strike.s6.k5 | SOL 53 389584 n, 100% learn, 1297 n/s | SOL 53 395708 n, 100% learn, 1317 n/s | SOL 53 235403 n, 100% learn, 784 n/s | SOL 53 243214 n, 100% learn, 810 n/s |
+| 2018_chc 02 | SOL 42126 1158619 n, 15% learn, 3860 n/s | SOL 39050 704462 n, 100% learn, 2346 n/s | SOL 39050 595152 n, 15% learn, 1983 n/s | SOL 39050 474043 n, 100% learn, 1579 n/s |
+| 2018_rw Example1014 | UNKNOWN 76843 n, 39% learn, 256 n/s | UNKNOWN 63542 n, 100% learn, 212 n/s | UNKNOWN 25529 n, 33% learn, 85 n/s | UNKNOWN 27155 n, 100% learn, 90 n/s |
+| 2018_rw Example103 | UNKNOWN 211865 n, 0% learn, 706 n/s | UNKNOWN 117510 n, 100% learn, 392 n/s | UNKNOWN 132239 n, 0% learn, 441 n/s | UNKNOWN 73226 n, 100% learn, 244 n/s |
+| 2018_rw Example1780 | UNKNOWN 196828 n, 8% learn, 656 n/s | UNKNOWN 134188 n, 100% learn, 447 n/s | UNKNOWN 77821 n, 8% learn, 259 n/s | UNKNOWN 68669 n, 100% learn, 229 n/s |
+| 2018_seat-moving_sm-10-12-00 | SOL 554 185370 n, 100% learn, 618 n/s | SOL 554 179547 n, 100% learn, 598 n/s | SOL 645 89676 n, 100% learn, 299 n/s | SOL 645 94457 n, 100% learn, 315 n/s |
+| 2018_seat-moving_sm-10-20-05 | SOL 134 218074 n, 99% learn, 727 n/s | SOL 132 224010 n, 100% learn, 746 n/s | SOL 137 100433 n, 99% learn, 335 n/s | SOL 132 123627 n, 100% learn, 412 n/s |
+| 2019_lot-sizing_pigment15a.psp | SOL 1195 23563 n, 98% learn, 79 n/s | SOL 1195 19995 n, 100% learn, 67 n/s | SOL 1195 20388 n, 98% learn, 68 n/s | SOL 1195 17588 n, 100% learn, 59 n/s |
+| 2019_rw Example1174 | UNKNOWN 87115 n, 39% learn, 290 n/s | UNKNOWN 95876 n, 100% learn, 319 n/s | UNKNOWN 35344 n, 37% learn, 118 n/s | UNKNOWN 44608 n, 100% learn, 149 n/s |
+| 2019_rw Example1242 | UNKNOWN 131472 n, 16% learn, 438 n/s | UNKNOWN 95495 n, 100% learn, 318 n/s | UNKNOWN 66574 n, 17% learn, 222 n/s | UNKNOWN 53358 n, 100% learn, 178 n/s |
+| 2022_gpq n11_q5 | SOL 1 558462 n, 1% learn, 1861 n/s | SOL 1 224052 n, 100% learn, 746 n/s | SOL 1 195238 n, 1% learn, 651 n/s | SOL 1 133585 n, 100% learn, 445 n/s |
+| 2022_gpq n13_q5 | SOL 0 605275 n, 0% learn, 2017 n/s | SOL 0 198155 n, 100% learn, 660 n/s | SOL 0 176181 n, 0% learn, 587 n/s | SOL 0 114557 n, 100% learn, 382 n/s |
+| 2022_gpq n8_q3 | SOL 4 1509254 n, 1% learn, 5030 n/s | SOL 3 614817 n, 100% learn, 2047 n/s | SOL 3 508332 n, 1% learn, 1694 n/s | SOL 3 323276 n, 100% learn, 1077 n/s |
+| 2022_gpq n9_q5 | SOL 2 989991 n, 1% learn, 3299 n/s | SOL 1 317534 n, 100% learn, 1058 n/s | SOL 1 302757 n, 1% learn, 1009 n/s | SOL 1 165928 n, 100% learn, 553 n/s |
+| rws e-100-s-2 | UNKNOWN 284706 n, 0% learn, 949 n/s | UNKNOWN 166960 n, 100% learn, 556 n/s | UNKNOWN 98165 n, 1% learn, 326 n/s | UNKNOWN 76643 n, 100% learn, 255 n/s |
+| rws e-25-s-7 | UNKNOWN 1388265 n, 0% learn, 4627 n/s | UNKNOWN 316401 n, 100% learn, 1054 n/s | UNKNOWN 534494 n, 0% learn, 1781 n/s | UNKNOWN 219238 n, 100% learn, 730 n/s |
+| rws e-30-s-9 | UNKNOWN 1055042 n, 0% learn, 3517 n/s | UNKNOWN 380736 n, 100% learn, 1269 n/s | UNKNOWN 356201 n, 0% learn, 1187 n/s | UNKNOWN 199486 n, 100% learn, 665 n/s |
+| rws e-80-s-1 | SOL 29328 n, 2% learn, 412 n/s (71s) | SOL 1003 n, 100% learn, 697 n/s (1s) | SOL 29328 n, 2% learn, 138 n/s (212s) | SOL 1003 n, 100% learn, 145 n/s (7s) |
+| rws e-90-s-2 | UNKNOWN 287321 n, 0% learn, 957 n/s | UNKNOWN 182399 n, 100% learn, 608 n/s | UNKNOWN 109957 n, 0% learn, 366 n/s | UNKNOWN 76749 n, 100% learn, 255 n/s |
+| 2022_vaccine_v946 | UNKNOWN 1130313 n, 1% learn, 3767 n/s | UNKNOWN 401184 n, 100% learn, 1337 n/s | UNKNOWN 320536 n, 2% learn, 1068 n/s | UNKNOWN 196566 n, 100% learn, 655 n/s |
+| 2023_chessboard_chessboard3 | SOL 48 257427 n, 91% learn, 858 n/s | SOL 48 232931 n, 100% learn, 776 n/s | SOL 45 126769 n, 93% learn, 422 n/s | SOL 45 127497 n, 100% learn, 425 n/s |
+| 2023_pennies-opt_n7 | OPT 7 76396 n, 83% learn, 307 n/s (249s) | OPT 7 56147 n, 100% learn, 260 n/s (216s) | SOL 6 54227 n, 84% learn, 181 n/s | SOL 6 47882 n, 100% learn, 160 n/s |
+| 2023_pennies-opt_n9 | SOL 8 44691 n, 81% learn, 149 n/s | SOL 8 35778 n, 100% learn, 119 n/s | SOL 8 28816 n, 80% learn, 96 n/s | SOL 8 23363 n, 100% learn, 78 n/s |
+| 2024_cd Zakhary.s12.k3 | SOL 426148 410037 n, 100% learn, 1365 n/s | SOL 426148 402769 n, 100% learn, 1341 n/s | SOL 405634 148436 n, 100% learn, 494 n/s | SOL 405634 149172 n, 100% learn, 497 n/s |
+| 2024_compression_bin_8 | SOL 26 332460 n, 100% learn, 1108 n/s | SOL 26 329221 n, 100% learn, 1097 n/s | SOL 26 112798 n, 100% learn, 376 n/s | SOL 26 103984 n, 100% learn, 346 n/s |
+| 2025_hitori_h5-1 | OPT 17 828 n, 100% learn, 1840 n/s (0s) | OPT 17 828 n, 100% learn, 1882 n/s (0s) | OPT 17 828 n, 100% learn, 872 n/s (1s) | OPT 17 828 n, 100% learn, 828 n/s (1s) |
+| 2025_mondoku_10-10-6 | SOL 4 390285 n, 7% learn, 1301 n/s | SOL 2 238973 n, 100% learn, 796 n/s | SOL 4 249565 n, 6% learn, 832 n/s | SOL 2 188484 n, 100% learn, 628 n/s |
+| 2025_wtv seed-1-l16-o14-w12-b15 | SOL 2298 59642 n, 87% learn, 199 n/s | SOL 2278 56054 n, 99% learn, 187 n/s | SOL 2789 13620 n, 85% learn, 45 n/s | SOL 2791 13039 n, 99% learn, 43 n/s |
+| 2025_wtv seed-3-l10-o8-w12-b15 | SOL 3205 83954 n, 82% learn, 280 n/s | SOL 3205 75912 n, 100% learn, 253 n/s | SOL 3315 16104 n, 80% learn, 54 n/s | SOL 3217 17742 n, 100% learn, 59 n/s |
+| 2025_wtv seed-8-l12-o10-w10-b15 | SOL 2103 117911 n, 46% learn, 393 n/s | SOL 2097 88776 n, 100% learn, 296 n/s | SOL 2349 19114 n, 45% learn, 64 n/s | SOL 2159 19517 n, 99% learn, 65 n/s |
+| 2026_gccb i24 | SOL 363 n, - learn, 136 n/s (3s) | SOL 363 n, - learn, 133 n/s (3s) | SOL 363 n, - learn, 126 n/s (3s) | SOL 363 n, - learn, 123 n/s (3s) |
+| 2026_gccb l35_1 | UNSAT 1 n, 0% learn, 50 n/s (0s) | UNSAT 1 n, 0% learn, 50 n/s (0s) | UNSAT 1 n, 0% learn, 33 n/s (0s) | UNSAT 1 n, 0% learn, 33 n/s (0s) |
+| 2026_gccb l42_3 | UNKNOWN 891998 n, 0% learn, 2973 n/s | UNKNOWN 267373 n, 1% learn, 891 n/s | UNKNOWN 427013 n, 0% learn, 1423 n/s | UNKNOWN 180225 n, 1% learn, 601 n/s |
+
+Complete answers are 5 and 5 without proof, 4 and 4 with. The one that moved is rws e-80-s-1, SAT in
+71 s then 1 s without proof and 212 s then 7 s with (29 328 nodes then 1 003). pennies-opt n7's
+optimum took 249 s then 216 s. **No new instance is solved.** The 9 other rotating-workforce
+instances still end UNKNOWN, rws e-30-s-9 included (Chuffed answers in 121 791 nodes, 4 s).
+Incumbents, new against base on the same arm, are 4 better without proof (seat-moving sm-10-20-05,
+mondoku, work-task seed-1 and seed-8) and 4 worse (gbac UD6, concert-hall-cap 02, gpq n8_q3 4 then 3,
+gpq n9_q5 2 then 1), the rest equal. With proof 5 are better (gbac UD6, sm-10-20-05, mondoku,
+work-task seed-3 and seed-8) and 1 worse (work-task seed-1, 2 789 then 2 791).
+
+**Instructions per node**, `perf stat -e instructions:u` at 20 000 nodes, no proof (`ipn-table.md`).
+The trees differ from the first learned clause on, so this is the cost of the search each binary
+makes. It is not the cost of one conflict.
+
+| instance | base M/node | new M/node | ratio | learned / conflicts, base | new |
+|---|---|---|---|---|---|
+| Example1780 | 10.11 | 11.34 | x1.12 | 936/9985 | 9935/9935 |
+| Example1242 | 13.88 | 17.02 | x1.23 | 1939/9972 | 9912/9912 |
+| gpq n8_q3 | 1.05 | 2.11 | x2.01 | 218/9977 | 9967/9976 |
+| gpq n9_q5 | 1.68 | 3.66 | x2.18 | 318/9972 | 9965/9972 |
+| rws e-25-s-7 | 1.43 | 3.08 | x2.16 | 43/9957 | 7979/7979 |
+| rws e-30-s-9 | 1.92 | 3.12 | x1.63 | 76/9947 | 6690/6690 |
+| work-task seed-3 | 18.12 | 19.21 | x1.06 | 7943/9763 | 9724/9762 |
+| gcc-benchmark l42_3 | 1.88 | 6.13 (5.64 at the tip `d5e3bee4`) | x3.26 (x3.0) | 0/9957 | 695/9714 |
+
+Where it goes, from `perf record` at the same budget with the samples grouped by module. The gcc
+propagator costs the same (gpq n8_q3 319 then 321 samples, rws e-30-s-9 165 then 231), and so does
+regular (313 then 347 on gpq). What grows is the learning that now runs, namely learned-clause
+propagation (`Pb.falsified_at`, `Pb.next_free`), the 1UIP walk (`Analysis`, 0.2 to 4.2 % of
+samples), the store and the runtime's hashing
+and GC. The learning side (`Analysis`, `Learn`, `Pb`, `Learned`, `Retention`) is 13.7 % of gpq
+n8_q3's samples, 5.6 % of rws e-30-s-9's, 4.6 % of Example1242's, 0.8 % of l42_3's. On l42_3 the
+factor 3 is the tree, where gcc runs 10.8 times per node instead of 4.5. The conflict itself costs
+what the failed push cost, which is the same derivation (built only with a proof) plus one list of
+facts.
+
+Learning does not pay on rotating-workforce and gpq yet because the clauses are wide. gpq's gcc
+conflicts carry 63 to 65 literals (the capacity argument names every confined cell), and on every
+sampled instance 97 to 99.9 % of learned clauses have 16 literals or more, LBD 16 or more. A
+pigeonhole over many variables is a wide nogood. What gives Chuffed its 121 791 nodes on rws
+e-30-s-9 is not measured here.
+
+### 5. Checks (on the merged tip, binary `96af57d4`, against main `121a1ce`'s `50898a4e`)
+
+- `dune runtest --root . --force` under 4 GB: 5 456 ok, 0 FAIL (5 454 before the merge).
+  `run_model_tests.sh`: 241 passed, 0 failed.
+- The 241 test models against main's binary: 20 artefact differences, every one a `.pbp` (stdout,
+  exit code and `.opb` identical everywhere), and veripb verifies all 20. They are the gcc users
+  (`at_least`, `at_most`, `count`, `exactly` route there) and the two new scenes, of two kinds:
+  shorter `rup` tails on gcc prunings (the tight facts, root refutations included, e.g.
+  gcc_forced_root_unsat 388 then 348 bytes) and, under a decision, a conflict now written as `pol`,
+  `rup ~facts >= 1` and a learned clause where the decision nogood was (gcc_shim_unsat 415 then 567
+  lines).
+- Every gcc test model (26) solved and verified under `BAGUETTE_DEBUG=1`; rws e-30-s-9, gpq n8_q3 and
+  gcc-benchmark l42_3 at 1 500 nodes under `BAGUETTE_DEBUG=1` with proof (binary `d5e3bee4`;
+  `gcc.ml` is unchanged by the merge): no invariant, proofs verify.
+- The campaign's proofs: every complete answer verified on both binaries (rws e-80-s-1 SAT, hitori
+  h5-1 OPT, gcc-benchmark i24 SAT and l35_1 UNSAT), and four 300 s time-outs of the new binary (gpq
+  n9_q5, rws e-30-s-9, Example103, pennies-opt n7, 2.6 to 3.7 GB) verify too.
+- Differential lane (`--tier all -j 8`, 32 GB): 42 of 347 runs differ, exactly the three gcc users
+  of the corpus (lot-sizing pigment15b, chessboard4, evm isolated_block_6) in all 14 configurations.
+  Kinds: search counters in 41 (decisions, learned, `i-s4-cross` lines), proof hash in 39, work
+  counters in 42, stdout in 1 (pigment15b under `alternate`: objective 1 698 then 1 704 at the node
+  budget, a minimisation, so worse). chessboard4 `noproof` differs in work counters only. Not
+  re-recorded.
+- Debug pass (`--debug --tier all -j 8`): 28 of 333 runs differ, chessboard4 and evm
+  isolated_block_6 in all 14 configurations (search 27, hash 26, work 28, no stdout and no exit
+  code), and no invariant fired. pigment15b's 14 debug runs are skipped by `bench/diff/debug-skip.tsv`
+  as on main.
+- Scaling lane (`-j 8`): ok, every line within its threshold, rc 0.
+
+### 6. Lanes
+
+`test/unit/test_prop.ml`, the M18-coverage-T11 section, on two SAT scenes (D-0053) that are also
+model tests. In each a decision on `k` acts through single-variable propagators that all watch `k`,
+so the conflict is gcc's by construction.
+
+- (a) by hand: rule A (`k <= 2` confines x1..x3 to [1, 2], capacity 2) and rule C (`k <= 2` leaves
+  one taker of 3 and lifts `c3 >= 2`): the conflict is gcc's, `c_ahead`, carries the named facts,
+  carries NO literal of the variable the counting does not read (`t`, root-bounded at 3; `x3`, a
+  taker), lists no fact twice, satisfies `Store.agreement_holds` (D-0026), and `Learn.at_conflict`
+  returns `Some`. The root pigeonhole is still factless.
+- (b) under search, audit on: each learns 2 clauses (0 before) and its proof verifies. Rule A's line
+  `rup +1 x1_ge_3 +1 x2_ge_3 +1 x3_ge_3 >= 1 ;` is refused standalone (I-X10), without its `pol`, without
+  the surplus variable's bound, and without a confined variable's bound. Rule C's line
+  `rup +1 x1_ge_3 +1 x2_ge_3 +1 ~c3_ge_2 >= 1 ;` verifies standalone (it is RUP against its one model
+  row, and the lane asserts that), and is refused without the crossed bound `c3 >= 2` and without a
+  non-taker's bound. Every refusal is asserted on the RUP wording and on the line number.
+
+### 7. Decision, what is left, revert
+
+[AUTONOME] Kept. A conflict without facts was a defect against the design every other family
+follows (D-0040's arm is meant as the fallback), the row asked for it, and it is what lets
+rws e-80-s-1 answer in 1 s. The cost is real. On rotating-workforce and
+gpq the search is now 1UIP over wide clauses at 1.6 to 2.2 times the instructions per node, with
+no new answer at 300 s and two gpq incumbents lower without proof. That is not a change of default
+configuration (no flag, no SPEC sentence, no `Explanation.t`), so it needed no question.
+
+Left open:
+
+1. **int_lin_ne's factless conflicts** (gcc-benchmark l42_3: 9 019 of 9 714 conflicts unlearned at
+   20 000 nodes). The same defect in another family.
+2. **Wide pigeonhole nogoods.** gpq's gcc conflicts carry 63 to 65 literals. A narrower
+   explanation (the smallest sub-interval whose confined set already exceeds its capacity, or
+   Chuffed-style lazy explanation by the count variables) would be a row of its own.
+3. **The learning machinery's cost per node** (learned-clause propagation, `Pb.falsified_at` and
+   `Pb.next_free`, hashing by name in the store), which every family now pays on these instances.
+4. `BAGUETTE_DEBUG` on work-task seed-3 dies in the GC at the 16 GB cap even at 300 nodes (peak
+   14.7 GB), base and branch alike. It is not this row's.
+5. A shared `Reason.distinct` for `gcc.ml` and `alldiff.ml`'s `distinct_facts` (reason.ml is not
+   this row's file).
+
+Revert: `git revert 31c06e1 28e0cba 5afb37e` (the O(1) membership, the tight facts, the rule), or
+`28e0cba` and `31c06e1` alone to keep learning with the wide reasons. The two test models and the
+test_prop section go with `28e0cba`.
+
 ## D-0236  [AUTONOME] M20-pernode-T4, the learning path: a name is hashed once where it was hashed per use. One-entry memos in `Store.var_named` and `Encoding.find`, the bits flag of a literal read off Justify's interned name, the decision closure's cells as a dense array, `String.hash` for every name table. Same trees, byte-identical artefacts; elitserien handball12 -8.1 % instructions per node without proof, -9.6 % with
 
 **Status**: DONE on `wave82-names` (agent-names, 2026-11-26), not merged. Base: main `121a1ce`

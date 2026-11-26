@@ -30,8 +30,8 @@ search maxdepth/levels 100 levels
 work exhausted/bool 0 bool 1 if
 search skipped/nodes 0 nodes
 search learned/cls 1418 cls
-work later/asks 540625 asks
-work cites/memos 26335 memos
+work later/asks 540619 asks
+work cites/memos 26326 memos
 search convertible/cls 0 cls
 search retention tiered(core<=2,mid<=6,first=2000,inc=300,mid_every=10000) tiered(core<=2,mid<=6,first=2000,inc=300,mid_every=10000): 1892 added, 0 evicted, 1892 swept, 0 live, 20 duplicate, 1891 cited, 0 pinned, 0 reductions, 0 detached, 0 locked
 search lbd 1:1,2:58,3:164,4:402,5:317,6:310,7:113,8:52,16:1
@@ -47,7 +47,7 @@ search pb-inst-no/rows 0 rows
 search pb-prune/prunes 146 prunes
 search pb-confl/confl 20 confl
 search minimised/lits 4730 lits
-search i-s4-cross/lines 11714 lines
+search i-s4-cross/lines 11708 lines
 search pb-tried/confl 1418 confl
 search pb-learned/rows 474 rows
 search pb-fallback/confl 944 confl
@@ -70,7 +70,7 @@ search lvl-why first disagreement: closure {27,26,25} vs pb {27,25} (pb asserts 
 search restarts/runs 381 runs
 search unexplored/nodes 424 nodes
 search kept/levels 23831 levels
-search activity/bumps 15351 bumps
+search activity/bumps 15350 bumps
 work learned_pb/inst 474 inst 242.4 runs/node 0.04 eff/node
 work int_ne_reif/inst 195 inst 110.4 runs/node 11.57 eff/node
 work learned_clause/inst 1417 inst 53.7 runs/node 0.29 eff/node
@@ -87,10 +87,10 @@ work eff/runs 80951 runs
 work contra/runs 1417 runs
 work passes/snaps 23036 snaps
 work deductions/chgs 192615 chgs
-work wakes/wakes 3050407 wakes
+work wakes/wakes 3050443 wakes
 work masked/wakes 541237 wakes
 work vetoed/wakes 42732 wakes
-work advised/wakes 323966 wakes
+work advised/wakes 324008 wakes
 work seeded/runs 703706 runs
 work skipped/slots 5203937 slots
 search rup/lines 253381 lines
@@ -104,4 +104,4 @@ search boundlines/pairs 58 pairs
 search bitsprune/lines 49136 lines
 search atoms/prune/atoms 0.009 atoms
 opb 926f703a84a5f1d1471d3302b80f05ea02e7ea89abd9f202ecae5f09c58c25bf
-pbp ba4a75f5530027c786bc7d5b5626aa7eeb3c7cc7941fc8b266920d543b4a62db
+pbp 9c693bb0c8047063f507a3c45a7c0543c610462613bd5767025b17668a8927ee
