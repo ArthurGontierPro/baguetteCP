@@ -19,7 +19,6 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M18-coverage-T8 | lib/core/prop/regular.ml, mznlib/ regular files, regular part of lib/flatzinc/compile.ml | agent-regular (wave78-regular, /scratch/arthur/wt-regular) | 2026-11-26 |
 | M18-coverage-T7 | mznlib/ (alldifferent_except_0, all_equal, nvalue), new module under lib/core/prop/ if needed, lib/core/dune, the new families in lib/flatzinc/builder.ml and compile.ml, test/, module maps (CLAUDE.md, ARCHITECTURE §1) if a module is added | agent-cheap (wave79-cheap, /scratch/arthur/wt-cheap) | 2026-11-26 |
 
 ## Cross-session requests
@@ -471,6 +470,7 @@ section 1. Shares are inclusive, of the whole run.
 
 | Task | Session | Date | Summary |
 |---|---|---|---|
+| M18-coverage-T8, why `regular` completes little (D-0232) | agent-regular (`wave78-regular`, not merged) | 2026-11-26 | **D-0232 [AUTONOME].** The census counts a satisfaction SAT as an incumbent (28 of 103 solved, Chuffed 69 of 110). Gap: elitserien (alldiff), tppv, rotating-workforce (gcc's factless conflicts), nonograms (regular's cost per node). regular's call is incremental: same trees and proofs, -30 to -49 % instructions. T11 (gcc) and T12 (census) added |
 | M21-memory-T3 fix 1, the learned-row layout, a PB size guard; M19-config-T5 re-measured (D-0226) | agent-evict (`wave73-evict`, not merged) | 2026-11-26 | **D-0226 [AUTONOME].** An evicted learned constraint leaves the engine (`Engine.remove` via `Propagator.inst_attach`), a learned row is flat arrays, its duplicate key a hash: byte-identical, mapping live heap -45 % (`keep_all`) and -79 % (`tiered`) at 2 400 learned. `BAGUETTE_PB_MAX_TERMS` / `BAGUETTE_PB_PROPAGATE_MAX` cap learned PB rows, default off. The retention default becomes `tiered` (own commit `d9e57e3`): answers 20 -> 25 and 1 -> 1, refusals 3 -> 2 and 1 -> 1 |
 | M22-review-bugs, two bugs on main (D-0231) | agent-bugs (`wave77-bugs`, not merged) | 2026-11-26 | **D-0231 [AUTONOME].** `regular` no longer crashes on a constant letter outside its symbols (`alphabet_hull` intersects a constant with the symbols as it did a variable), four models. `cumulative`'s overload conflict writes the clearing of its free tasks one level down (`cleared_row`, shared with the push), so `BAGUETTE_DEBUG` passes on `cumulative_fixed_overload_edge_unsat`. The justification's shape was wrong, the reason was right. All 232 models pass under `BAGUETTE_DEBUG=1`. Lanes unchanged |
 | M19-config-T11, T2 to T4 on the CDCL loop (D-0224) | agent-chrono (`wave71-chrono`) | 2026-11-26 | **D-0224 [AUTONOME], default unchanged.** `--chrono T` under `--cdcl` (chronological backtracking for jumps over T levels, T = 20), and `--cdcl` on the CLI. Off: byte-identical (456/456, diff 347/347 and 333/333 debug, scaling ok, 5 286 ok). Tuning set, 13 arms: loop `-f` 0.099 / 51 complete against `dfs -f` 0.098 / 48 without proof, 0.236 / 32 against 0.237 / 37 verified with proof; recommendation `-f` for T1, B against C on the full series |
@@ -697,6 +697,10 @@ section 1. Shares are inclusive, of the whole run.
 | M19-config-T0 (the tuning set) | agent-tuning (`wave59-tuning`) | 2026-11-23 | **D-0205.** `bench/tuning/`, 200 instances in 183 families. DONE except the driver hook. |
 
 ## Handoff notes
+
+### 2026-11-26 (agent-regular, `wave78-regular`, D-0232): `regular` measured, its call made incremental, not merged
+
+The census's "1 of 98" counts SAT on satisfaction models as incumbents (T12); the real gap to Chuffed is elitserien (alldiff's cost per node, regular 2 %), rotating-workforce and generalized-peacable (gcc's factless conflicts, 82 to 99.9 % of conflicts learn nothing: T11, the next lever) and the nonograms (regular's cost per node). `regular.ml` now skips the layers whose flags and letter did not move since its last fixpoint: test models and 21 Challenge instances at 2 000 nodes byte-identical, so nothing to re-record; `BAGUETTE_DEBUG` audits every skip. No differential-lane instance calls `regular`: adding one (nonogram_dom_10, rws e-30-s-9) would cover it. Results: `/cluster/arthur/baguette-results/regular/`.
 
 ### 2026-11-26 (agent-evict, fataepyc-06): D-0226 on `wave73-evict`, not merged
 
