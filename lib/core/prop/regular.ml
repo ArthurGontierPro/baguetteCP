@@ -485,11 +485,16 @@ let fixed_flags store t =
   done
 
 (* The alphabet's values within letter i's declared hull: the only values whose edges a
-   reason has to account for (a value outside the alphabet fails from every state). *)
+   reason has to account for (a value outside the alphabet fails from every state). The
+   range is EMPTY (lo > hi) when the hull misses the alphabet, a constant letter outside
+   it included: such a letter labels no edge, every state of layer i + 1 dies forward
+   with nothing to cite, and its line is `rup` against FWD(i, q, {c}) = ~s(i,q) for every
+   q and ALO_i (D-0231; [Fixed c] used to return (c, c) and [forward_reason] indexed
+   [preds] out of bounds with it). *)
 let alphabet_hull t i =
   let a = t.smin and b = t.smin + t.w - 1 in
   match t.xs.(i) with
-  | Fixed c -> (c, c)
+  | Fixed c -> (Int.max a c, Int.min b c)
   | Letter { dlo; dhi; _ } -> (Int.max a dlo, Int.min b dhi)
 
 (* P1's reason for s(i+1,q'): per value of letter i, its predecessors on q' all dead ->

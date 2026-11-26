@@ -30405,3 +30405,111 @@ neither `--chrono` nor `BAGUETTE_CHRONO` nothing it adds runs except two counter
 (the campaign `camp/`, the pilot `pilot*/`, the identity and lane re-runs `recheck/`), copied to
 `/cluster/arthur/baguette-results/chrono/` without proofs; `tools/analyse.py camp/tune <arms> --ref
 <arm> --fam bench/tuning/set.lst` reprints sections 5 and 6.
+
+## D-0231  [AUTONOME] M22-review-bugs: `regular` with a constant letter outside its symbols no longer crashes, and `cumulative`'s overload conflict writes the clearing of its free tasks one level down, which is what `BAGUETTE_DEBUG` asked for. A debug pass over the test models is proposed, not added
+
+**Status**: DONE on `wave77-bugs` (agent-bugs, 2026-11-26), not merged. Two bugs found by other
+agents on main `44e41d7`, neither in a claimed file.
+
+### 1. `regular`: a constant letter outside the symbols
+
+**Cause.** `Regular.alphabet_hull` (lib/core/prop/regular.ml) intersected a letter VARIABLE's
+declared hull with the symbols `smin .. smin + w - 1`, but returned `(c, c)` for a constant `c`.
+`forward_reason` then read `preds.((q' - 1) * w + c - smin)`, out of bounds when `c` is not a
+symbol, and the solver stopped on `Invalid_argument("index out of bounds")` (exit 2). D-0230
+section 7 found it through the `.scp` reader, which reads such a constraint as false and never
+reaches the propagator. MiniZinc does not produce it (`fzn_regular` constrains every letter to
+`1..S`), a hand-written `.fzn` does.
+
+**Fix.** A constant is intersected with the symbols as a variable is, so its range is empty when
+it is not a symbol. Every state of the next layer then dies forward with nothing to cite. Its
+line is `rup`, because the model already has `FWD(i, q, {c}) = ~s(i,q)` for every `q` (compile.ml's
+`post_regular` drops the constant halves) and `ALO_i`. `backward_reason` used `step`, which was
+already range-checked, and the letter variables were already right (measured below).
+
+**Models**, all with veripb `VERIFIED`, and all passing under `BAGUETTE_DEBUG=1`:
+
+| model | what | main `44e41d7` | this branch |
+|---|---|---|---|
+| `regular_const_above_unsat` | the constant 4 after symbol 0 only (D-0230's example) | exception, exit 2 | UNSAT |
+| `regular_const_below_unsat` | the first letter -2 below the symbols 1..2 | exception, exit 2 | UNSAT |
+| `regular_letter_outside_sat` | letter variables over -1..4 and 0..3 around a constant inside the symbols 1..2 | SAT | SAT, same |
+| `regular_letter_outside_unsat` | a letter variable over 5..6, wholly outside 1..2 | UNSAT | UNSAT, same |
+
+Both UNSAT-by-constant models are refuted by unit propagation on the `.opb` alone, so their
+proofs are verified over a contradictory database. They test that the solver answers and writes
+a proof the checker reads, not the strength of the dead-flag line (CLAUDE.md, "rup is vacuous
+over a contradictory database"). No satisfiable model can reach the path, because the constraint
+is false as soon as one constant letter is outside the symbols.
+
+### 2. `cumulative`: the overload conflict and D-0026's reverse check
+
+**Cause.** M22-review-T2 added the OVERLOAD conflict (fixed-start load alone above the capacity at
+a time a movable task may cover) as `combine(row + free I_k >= 0 of each task in the row)`, with
+`Reason.none`. On `cumulative_fixed_overload_edge_unsat` the task's window is clipped at its
+declared lower bound, so its free `I_k >= 0` is a literal axiom, a `Weaken` at the TOP level of
+the derivation. `Store.agreement_holds`' reverse arm reads a top-level `Weaken` as a bound the
+pruning read and asks the reason to name it, and it does not.
+
+**Which side was wrong.** The justification, in its shape. The reason is right. The overload is
+false whatever the movable tasks do, so it rests on no branch fact, and naming the task would
+only lengthen a learned clause. The derivation was sound (the proof verified) but broke the rule
+`prune_expl` already states and follows for the push. A free indicator reads no bound, so its
+clearing goes one level down, as a sub-derivation of its own. The overload had been written
+next to the push without it. The other overload model (`cumulative_fixed_overload_unsat`) did
+not trip the check only because its free indicator is a ladder rung, a `Term`, not a `Weaken`.
+
+**Fix.** One helper, `cleared_row` (cumulative.ml, after `drop_summands`), builds "the row with
+these tasks cleared" for both the push and the overload, and its comment carries the rule. The
+overload's justification is `combine [cleared_row ...] 1`.
+
+**What it changes in proofs.** The two overload models only, both still `VERIFIED`:
+`cumulative_fixed_overload_unsat` gains a copy line (`pol @c11 ;`, the outer combine of one
+term). `cumulative_fixed_overload_edge_unsat` had NO derivation on main, because
+`Search.close_root_conflict` skips the derivation of a conflict that is one row weakened
+(`weakened_row_only`, the checker refutes it unaided). The nested shape is no longer that
+shape, so it now writes the two `pol` lines before `rup >= 1`. Both are valid lines that the
+checker could have done without. The alternatives were worse. Teaching `weakened_row_only` to
+look through a single `Term` changes search.ml for one case. Naming the task in the reason by a
+declared-bound fact, which materialises to nothing, would satisfy the check without answering
+it.
+
+### 3. Every test model under `BAGUETTE_DEBUG=1`
+
+All 232 models (228 on main plus the four above), with proof, 300 s and `ulimit -v 4000000`
+each. Main's binary trips 1 invariant (`cumulative_fixed_overload_edge_unsat`) plus the two crashes
+of section 1. On this branch 232 of 232 exit 0, no invariant. Nothing else to fix or list.
+
+### 4. Proposed, not added: a debug pass in `scripts/run_model_tests.sh`
+
+Measured serially on fataepyc-06 (load ~60 of 192) over all 232 models, 3.2 s wall under
+`BAGUETTE_DEBUG=1 --no-proof`, 2.9 s without debug, 3.6 s under debug with proof. A pass that runs
+each model once under `BAGUETTE_DEBUG=1 --no-proof` and fails on a non-zero exit or on
+`invariant violated` would add about 3 s to `make check`, and would have caught this bug the day
+M22-review-T2 merged it (the diff lane's `--debug` pass, which gates every merge, did not report
+it). Not added here because `run_model_tests.sh` is outside this claim and
+the user or the orchestrator decides what the gate runs. To adopt it, add a loop beside the
+`--no-proof` pass (line ~166) and count its failures with the others.
+
+### 5. Checks
+
+Binary of this branch `549eb3f` md5 `bc2ad3e6d2c049d6a03d0f4c96caeec9`, against main `44e41d7`'s
+`bbbd0630fc3b769e052cfb1bb0e52f20` (both built on fataepyc-06). The merge of `origin/main` at the
+release brought `63aedc3`, a WORKLOG line only, and the rebuilt binary has the same md5.
+
+| check | result |
+|---|---|
+| `dune runtest --root . --force` (`ulimit -v 4000000`) | 5 399 ok, 0 FAIL, peak RSS 161 MB |
+| `scripts/run_model_tests.sh` | 232 passed, 0 failed |
+| `check_determinism.sh`, width lint, `@fmt` | identical across two runs on 232 models, no wide domain, clean |
+| artefact identity against main, the 228 existing models (`.opb`, `.pbp`, stdout, exit code) | 226 byte-identical; the `.pbp` of the two cumulative overload models differs as section 2 says |
+| `diff_lane.sh --tier all -j 8` (`BAGUETTE_MEM_CAP_KB=33554432`) | 347 of 347 equal the reference |
+| `diff_lane.sh --debug --tier all -j 8` | 333 of 333 equal (14 skipped by `debug-skip.tsv` as on main) |
+| `scaling_lane.sh -j 8` | ok, every line within its threshold |
+
+No lane changed, so nothing needs re-recording.
+
+### 6. Revert
+
+`git revert` of the two code commits on `wave77-bugs` (regular.ml, cumulative.ml), each alone.
+The four models go with the first.
