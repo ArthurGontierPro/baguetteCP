@@ -345,6 +345,9 @@ type t = {
   (* D-0235: a bound vector on which stage 1 once moved nothing ([pass]). A hint, never
      a fact about the store, so no trail restores it. *)
   quiet : quiet;
+  (* Whether [pass] may skip on [quiet] ([make]'s [?quiet], for test_prop's differential
+     lane; every solver instance has it on). *)
+  quiet_on : bool;
   (* D-0235: [canon.(i)] is the first term index with term [i]'s name, so that "is [i]
      in this set of terms" is the NAME comparison [pass] always made, as an array read.
      [canon.(i) = i] unless a variable occurs twice in the scope. *)
@@ -417,8 +420,8 @@ let make_gate terms =
    one: see the module header on I-X6. Reads each variable's domain, so it must be
    called before anything has narrowed it -- the same requirement, for the same D-0010
    reason, that [Linear.make] and [Ne.make] state. *)
-let make ?(cutoff = default_cutoff) ?(lemma_rows = []) ?(gate = true) store enc ~rows vars
-    =
+let make ?(cutoff = default_cutoff) ?(lemma_rows = []) ?(gate = true) ?(quiet = true)
+    store enc ~rows vars =
   let tbl = Hashtbl.create (2 * List.length rows) in
   List.iter
     (fun ((x, z, v), cid) ->
@@ -464,6 +467,7 @@ let make ?(cutoff = default_cutoff) ?(lemma_rows = []) ?(gate = true) store enc 
     amo_count = 0;
     canon;
     repeats = Array.exists Fun.id (Array.mapi (fun i c -> c <> i) canon);
+    quiet_on = quiet;
     quiet =
       {
         q_lo = Array.make (Array.length terms) 0;
@@ -1386,6 +1390,9 @@ let pass_scan t store ~lo0 ~hi0 =
    leave the bounds where the last call's final pass found them quiet. [count_pass] is
    counted as before, so the [snaps] counter the lanes compare is unchanged.
    BAGUETTE_DEBUG runs the scan behind every skip and requires it to move nothing. *)
+(* How many passes [pass] skipped, for test_prop's lane; not read by the solver. *)
+let quiet_skips = ref 0
+
 let pass t store =
   Propagator.count_pass ();
   let nt = Array.length t.terms in
@@ -1397,13 +1404,14 @@ let pass t store =
       hi0.(i) <- Domain.hi d)
     t.terms;
   let q = t.quiet in
-  let quiet = ref q.q_valid in
+  let quiet = ref (t.quiet_on && q.q_valid) in
   let i = ref 0 in
   while !quiet && !i < nt do
     if lo0.(!i) <> q.q_lo.(!i) || hi0.(!i) <> q.q_hi.(!i) then quiet := false;
     incr i
   done;
   if !quiet then (
+    incr quiet_skips;
     Debug.check "I-P2 (D-0235): stage 1 skipped a pass on quiet bounds" (fun () ->
         match pass_scan t store ~lo0 ~hi0 with
         | moved -> not moved
