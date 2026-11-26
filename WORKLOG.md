@@ -748,6 +748,13 @@ The series on `f244c35a` is done and the README section is regenerated from it (
 
 Updated as things land. The plan is the nine steps agreed on 2026-11-23 (speed first, then the CDCL loop, coverage, the refused third, configuration last).
 
+**2026-11-26, merged after the usage limit** (gate 104 pending for the last two; gate 103 green on D-0225, binary `8934e442`, 228 test models byte-identical, the lanes differing by 226 `.pbp` hashes only, re-recorded in its own commit):
+
+- **D-0225** (wave73-interrupt, decided with the user): an interrupted run ends its proof with `BOUNDS`.
+- **D-0223** [AUTONOME] (wave70-release, merge `99c451a`): one shared block per cited model row. tdtsp_10_53 at 250 nodes 16.6 -> 6.6 GB peak RSS, proofs byte-identical, -1.8 % to +1.7 % instructions per node. NOT landed and FOR THE USER: truly releasing Element's explanations (live heap -97 % on tdtsp) changes the proof (111 fewer `pol` lines in 100 nodes) and costs +16 to +37 % time; the patch is `/cluster/arthur/baguette-results/release/handed.patch`.
+- **D-0230** [AUTONOME] (wave76-scp, merge `dd5dbcd`): the `.scp` reader `lib/scp/`, M23-inputs T1 to T5. 196 of the spike's 203 files read and solved with a verified proof; 64 of GCS's 297 Challenge `.scp` read (96 refused at a view, 137 at a constraint). FOR THE USER: the SPEC sentence it proposes is not written into SPEC; `equals_if` and `lin_equals_iff` are refused.
+- **Bug found by agent-scp on main, open**: `lib/core/prop/regular.ml` crashes when a letter is a constant outside the automaton's symbols (reproduces from a hand-written FlatZinc file).
+
 **THE NEW SERIES (D-0203, merged; README regenerated)**, release `f244c35a` (bits default, no proof cap, BEFORE all the speed and coverage merges below), sixteen editions, no proof rejected:
 
 | arm | OPT+UNSAT / SAT verified | summed score | D-0185's score |
