@@ -29283,9 +29283,9 @@ again: their peak RSS at 64 GiB is p50 32.1 GiB. More memory turns a refusal int
 into an answer: 3 + 2 completions for 4x the memory. The proofs grow with it, and the three new
 OPT of A are not checkable within 3 600 s.
 
-**Totals and score.** A: OPT+UNSAT verified 302 -> 304, REFUSED 164 -> 60, TIMEOUT 1 017 -> 1 114,
-one OPT lost at the limit (`2014_mqueens_n11`, 1 167 s at 16 GiB). C: OPT+UNSAT 340 -> 344, REFUSED
-157 -> 48. The fixed-category score summed over the sixteen editions (each arm inserted alone among
+**Totals and score.** A: OPT+UNSAT verified 302 -> 304, SAT verified 74 -> 76, REFUSED 164 -> 60, TIMEOUT 1 017 -> 1 114,
+one OPT lost at the limit (`2014_mqueens_n11`, 1 167 s at 16 GiB). C: OPT+UNSAT 340 -> 344, SAT 86 -> 86
+(unverified), REFUSED 157 -> 48. The fixed-category score summed over the sixteen editions (each arm inserted alone among
 the official entrants, `challenge_rank.py`) goes from 4 043 to 4 323 in A and from 4 428 to 4 782 in
 C, nearly all from incumbents on formerly refused instances. A's rank improves in six editions
 (2013 10 -> 8, 2017 12 -> 11, 2019 7 -> 6, 2020 5 -> 4, 2021 7 -> 6, 2023 7 -> 5).
@@ -29301,3 +29301,68 @@ More than half of that gain is the binary: D-0185 to D-0203 already took the ref
 reached the limit without an answer in all but 3 cases. Memory is not what stands between baguette
 and an answer on these instances. All 59 die after the encoding, on the Gc alarm, 36 of them with
 a width warning (`refusal_causes_A.txt`): the size of the encoding is what to attack there.
+
+### D-0211, results (2026-11-26)
+
+Run on fataepyc-07: Chuffed (arm H, PAR 40) 2026-11-24 03:07 to 13:00, GCS (arm G, PAR 32)
+2026-11-24 11:31 to 2026-11-25 16:38. Launches were HELD from 14:45 to 15:07 on 2026-11-24, while
+another session's merge gate and its real-instance runs (`/scratch/arthur/interrupt`,
+`wave73-interrupt`) ran on the node; the hold sat in the launch gate, outside the timeouts, and
+killed nothing (`hold.log`). `/scratch` never went under 4 328 GB free. Tables, ranks, the
+comparison and the drivers: `/cluster/arthur/baguette-results/node07-gcs/`.
+
+18 instances are flattened by no library (pair.tsv: "no library flattened any"), so neither arm has
+a row for them and five editions (2016, 2021, 2022, 2024, 2025) carry no DONE marker. The rankers
+count a missing row as UNK, as they count baguette's FLATTEN-FAIL on the same instances.
+
+**Outcomes** (baguette = D-0203's arms on the same binary `f244c35a` and the same flattened files):
+
+| | baguette A (proof) | GCS (proof) | baguette C (`--no-proof`) | Chuffed (no proof) |
+|---|---|---|---|---|
+| OPT+UNSAT, verified | 302 | 97 (of 210 printed) | 340 printed | 634 printed |
+| SAT on a satisfaction model, verified | 74 | 44 (of 69 printed) | 86 printed | 136 printed |
+| complete but proof TIMEOUT-CHECK (3 600 s) | 18 | 135 | | |
+| CHECK-ERROR (veripb at its 64 GiB) | 0 | 3 | | |
+| REFUSED / ERROR | 164 / 0 | 5 / 52 | 157 / 0 | 0 / 5 |
+| score summed over 16 editions, fixed category | 4 043 | 2 792 (2 891 as printed) | 4 428 | 8 466 |
+| rank range against the official entrants | 5 to 12 | 6 to 12 | 4 to 11 | 1 to 4 |
+
+**Verified answer for verified answer** (`arms_compare.py`, GCS read with `@gcs`, an unverified
+complete answer falling back to its incumbent): baguette has 376 verified complete answers and GCS
+141. Even trusting every GCS answer it printed, GCS has 279. Per instance in the Challenge's order,
+baguette is better on 630 instances, GCS on 373, and 579 tie; 250 are complete in baguette only
+and 15 in GCS only. Inserted alone among the official entrants (`challenge_rank.py --solver=gcs
+--demote-gcs`), GCS scores below baguette A in 15 of 16 editions, all but 2025 (272 against 234). So
+among the proof-logging solvers measured here, baguette is ahead of GCS at these settings. The
+Chuffed, which logs nothing, scores about twice what baguette A scores.
+
+**Where GCS is better.** On the 126 instances complete in both, GCS's wall time over baguette's is
+0.80 at the median [0.25, 1.67], and its peak RSS 0.11 [0.04, 0.44]. GCS refuses almost nothing
+(149 attempts gained over baguette's refusals). It loses on the proof: GCS writes its proof at
+the speed it searches, about 100 MB/s, and the proof is not bounded by the search's result:
+
+| GCS proof (`.pbp`) | n | p50 | p90 | max |
+|---|---|---|---|---|
+| VERIFIED | 141 | 0.3 GB | 10.1 GB | 44.7 GB |
+| TIMEOUT-CHECK | 135 | 30.1 GB | 113 GB | 280 GB |
+| not checked (timeout, error) | 1 290 | 117 GB | 208 GB | 405 GB |
+
+163 TB of GCS proof were written over the campaign. Half of GCS's complete answers (135 of 279)
+cannot be checked in an hour, against 18 of 394 for baguette, whose proofs are p50 4.0 GB, p90
+14.1 GB, max 47.8 GB and are checked in 43 s at the median (GCS's verified ones: 126 s).
+
+**GCS errors.** 42 `std::bad_alloc` at the 16 GiB address space, 5 "unexpected problem", 4
+segmentation faults (rc 139), 1 abort. GCS's peak RSS reaches 16.0 GiB, its p90 is 2.5 GiB.
+
+**A finding for `bench/series/veripb_wrap.sh`.** The three CHECK-ERROR are veripb reaching its
+64 GiB cgroup (peak RSS 66 977 MB in `.vrss`) and dying with `OSError: [Errno 22] Invalid
+argument`, an exit the wrapper does not recognise as a memory death. They are therefore not
+SERIES-CHECKER-MEMORY, and their proofs (3.5, 31 and 91 GB) were kept, on fataepyc-07 under
+`/scratch/arthur/node07-gcs/G/{2023,2024}/log/`. The slice's `oom_kill` counter (3) counts these
+three, so no solver was killed by the safety net. The wrapper should also match a checker that
+exits after its RSS reached `MemoryMax`, whatever its message.
+
+**Chuffed as a scale.** Our Chuffed against the official `chuffed-fd` on the instances both
+complete: geometric mean time ratio 0.94 in 2011, 1.25 in 2016, 0.64 in 2021, 0.42 in 2026 (the
+official machines differ by edition). Fataepyc-07 and fataepyc-06 are the same CPU (D-0210), so
+GCS's and Chuffed's times compare with baguette's directly.

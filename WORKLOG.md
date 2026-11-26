@@ -21,8 +21,6 @@ of it to every session and stopping at a broken line before it even reached the 
 |---|---|---|---|
 | M6-T24, the harness (proofs of stopped runs checked, three kinds of answer; on `wave73-interrupt`) | `scripts/compare_run.sh`, `tools/compare/compare.py`, `tools/compare/readme_table.py`, `tools/compare/arms_compare.py` and `bench/tuning/agreement.py` (small), `bench/series/*.sh` if needed | interrupt-session (laptop) | 2026-11-24 |
 | M6-T24 (an interrupted run ends its proof: signals, heap budget, time limit; D-0225) | `lib/proof/writer.ml`, `lib/proof/encoding.ml` (the heap refusal's exit only), `lib/core/search.ml` (`record_improving`, `conclude_stopped`, `optimise`'s set-up, short edits: agent-chrono holds the file on `wave71-chrono`), `bin/main.ml` (the signal handlers and the resource arms, short edits, same holder), `test/unit/test_endtoend.ml`, `test/unit/test_proof.ml`, SPEC 2.2 and 4.3, PROOF-FORMAT 5, INVARIANTS I-X2, ROADMAP row | interrupt-session (laptop, `wave73-interrupt`) | 2026-11-24 |
-| M17-bench-series-T5 | `docs/DECISIONS.md` (D-0210, append), `docs/ROADMAP.md` (row T5), `bench/challenge/README.md` (§2 row); runs on fataepyc-07 under `/scratch/arthur/node07-64g/`, tables to `/cluster/arthur/baguette-results/node07-64g/` | agent-node07 | 2026-11-23 |
-| M17-bench-series-T4 | `docs/DECISIONS.md` (D-0211, append), `docs/ROADMAP.md` (row T4), `bench/challenge/README.md` (§2 row), `tools/compare/arms_compare.py` and `tools/compare/challenge_rank.py` (additive: an arm of another solver, and GCS demoted like baguette on request); runs on fataepyc-07 under `/scratch/arthur/node07-gcs/`, tables to `/cluster/arthur/baguette-results/node07-gcs/` | agent-node07 | 2026-11-23 |
 
 ## Cross-session requests
 
@@ -471,6 +469,8 @@ section 1. Shares are inclusive, of the whole run.
 
 | Task | Session | Date | Summary |
 |---|---|---|---|
+| M17-bench-series-T4 (GCS with proofs, Chuffed, D-0211) | agent-node07 (`wave60-node07`) | 2026-11-26 | **D-0211.** Sixteen editions on fataepyc-07 at D-0203's settings. Verified complete answers: baguette A 376, GCS 141 (279 printed, 135 TIMEOUT-CHECK); summed score baguette A 4 043, GCS 2 792, Chuffed 8 466. `arms_compare.py` reads `NAME=DIR@gcs`, `challenge_rank.py --demote-gcs` (additive). Tables `/cluster/arthur/baguette-results/node07-gcs/` |
+| M17-bench-series-T5 (64 GiB observation series, D-0210) | agent-node07 (`wave60-node07`) | 2026-11-26 | **D-0210.** Arms A and C of `f244c35a` at 64 GiB (32 GiB heap) on fataepyc-07. Of A's 164 refusals at 16 GiB: 3 OPT (TIMEOUT-CHECK), 101 search to the limit, 60 refused again. Tables `/cluster/arthur/baguette-results/node07-64g/` |
 | M17-bench-series, the arm `-f --no-proof` on two binaries (D-0229) | docs-session (laptop) | 2026-11-25 | **D-0229.** Reference `f244c35a` 401 + 108, 125 refused, score 6 288. Main `36e8cc0` 420 + 112, 84 refused, score 6 590 (fixed category, all unverified). 19 complete answers gained and none lost, no contradiction between the arms. HISTORY.md, the Challenge README and one README bullet updated. |
 | M22-review-T4 (module map and facts) | docs-session (laptop) | 2026-11-24 | Docs only, CLAUDE.md and ARCHITECTURE.md section 1: `reason.ml` and `e2e.ml` in the maps, alldiff's level, sizes and counts, M2-T8 no longer "in progress", the CDCL switch. |
 | M19-config-T5 (retention default, review T12, D-0221) | agent-retention (`wave69-retention`) | 2026-11-24 | **D-0221 [AUTONOME], no change.** Tuning set at 300 s and 42 former heap refusals at 1 200 s, binary `4dde0987`: `tiered` 20 verified against 19 (proof) and 33 against 30 (no proof) of 200, but 6 heap refusals of 42 against 2. The rule fails, `keep_all` stays. Eviction frees no memory (the gated instance stays in the engine), filed |
@@ -688,6 +688,11 @@ section 1. Shares are inclusive, of the whole run.
 | M19-config-T0 (the tuning set) | agent-tuning (`wave59-tuning`) | 2026-11-23 | **D-0205.** `bench/tuning/`, 200 instances in 183 families. DONE except the driver hook. |
 
 ## Handoff notes
+
+### 2026-11-26 (agent-node07, fataepyc-07): M17-bench-series-T5 and T4 are done (D-0210, D-0211)
+
+More memory turns baguette's heap refusals into searches, rarely into answers (3 of 164 at 64 GiB, none verifiable in an hour). Against GCS, verified answer for verified answer, baguette is ahead (376 to 141, score 4 043 to 2 792); GCS is faster on what both solve and refuses almost nothing, but writes ~100 MB/s of proof, so half its complete answers cannot be checked in 3 600 s.
+`bench/series/veripb_wrap.sh` misses a veripb that dies at its cgroup with `OSError: [Errno 22]` (3 GCS checks; their 125 GB of proof are kept on fataepyc-07 under `/scratch/arthur/node07-gcs/G/{2023,2024}/log/`, delete when no longer wanted). The `node07.slice` parent cgroup with a launch gate on memory and a HOLD file (D-0210, `node07-gcs/node07-hold.sh` in the tables) is how both campaigns shared fataepyc-07 with another experiment.
 
 ### 2026-11-25 (docs-session, laptop): the `-f --no-proof` arm is done (D-0229)
 
