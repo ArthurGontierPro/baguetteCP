@@ -30049,6 +30049,470 @@ claimed). A TODO for `regular.ml`'s owner: treat an out-of-range constant letter
 Each commit reverts alone. The extraction (`M23-inputs-T4: the arithmetic auxiliaries ...`) is
 byte-identical on the FlatZinc path, and the reader is reached only through a `.scp` file name, so
 reverting `lib/scp/` and the two lines of `bin/main.ml` leaves FlatZinc runs exactly as they are.
+
+## D-0224  [AUTONOME] M19-config-T11, then T2 to T4 measured on the CDCL loop: chronological backtracking for long jumps under `--cdcl` (`--chrono N`), with the asserted literal recorded at the level the search goes back to. The trail stays ordered by level, no `Store`, `Engine` or proof-rule change; the learned clause's own instance re-asserts it after a later backtrack through the engine's existing re-seed of young instances
+
+**Status**: DONE on branch `wave71-chrono` (agent-chrono, 2026-11-24 to 26), not merged. ROADMAP M19-config-T11,
+T2, T3, T4. Taken in autonomous mode. The solver's default is NOT changed here (M19-config-T1 decides
+it on a full series). Results in `/cluster/arthur/baguette-results/chrono/`.
+
+### 1. Design (written before the code)
+
+**What is to be removed.** D-0219 section 6: after a conflict at level `d` the loop backjumps to the
+learned clause's asserting level `b`, the fixed order then re-takes the decisions of the levels
+`b+1 .. d-1` it undid, with their propagation, and on a deep optimisation search that re-descent is
+most of the work (flowshop-workers 24 decisions per conflict against `dfs`'s 9).
+
+**The three candidates.**
+
+| candidate | what it does | what it needs here | verdict |
+|---|---|---|---|
+| D-0137's `--reuse-trail` | at a RESTART, keep the levels whose decision still outscores every unfixed variable (van der Tak et al. 2011) | nothing | not this problem: it acts on restarts, under `--search activity` only, never on a conflict's backjump |
+| trail saving (Hickey and Bacchus, SAT 2020) | keep the undone segment `b+1 .. d`, and when the search re-takes its first decision, replay the saved propagations while their reasons still hold | to re-push a trail entry WITH ITS EXPLANATION after the store has been unwound below it: a D-0124 `Later` reason or a D-0214 frame reads a `Store.history` that `Store.check_history` refuses once the trail is cut below it, so a replay needs a new store API (held by agent-holes) and a re-derivation of every reason it carries | not built: the replay is a second propagation path through `Store` and the explanations, which are the two things other sessions hold today |
+| chronological backtracking (Nadel and Ryvchin, SAT 2018) | when the jump would skip more than `T` levels, go back ONE level (to `top - 1`, `top` the clause's highest level) instead of to `b`, and assert the UIP's negation there | see below: nothing new from the store or the proof | **built** |
+
+**The variant built, and why it needs no new trail machinery.** Nadel and Ryvchin assign the
+asserted literal at its TRUE level `b` while it sits above level-`b+1` entries on the trail (out of
+order), and on a later backtrack to `t >= b` they keep such literals. Here the trail is strictly
+ordered by level (I-T2) and `Store` is held by another session, so the asserted literal is recorded
+at the level the search goes back to, `c = top - 1`: an ordinary propagation of the learned clause
+at level `c`, as Möhle and Biere (SAT 2019) call the "imprecise" assignment level. Every level the
+loop reads (`Learn.levelled`, the asserting level, the 1UIP walk) is the RECORDED one, and the
+argument that a learned clause is implied never read a level at all, so the only cost is precision:
+a literal recorded above its true level makes a later clause's asserting level, and its LBD, higher
+than they had to be.
+
+What Nadel and Ryvchin's out-of-order trail buys is that the literal survives a later backtrack to
+any `t` in `[b, c)`. Here it is popped there with level `c`, and the clause is then unit again with
+nothing to wake it (its false watch sits at level `<= b`, which was not popped): a "missed lower
+implication". The engine already re-seeds it. `Engine.propagate`'s rule (b) (M6-T18, M6-T22) seeds
+every instance BORN after the last fixpoint the backtrack left standing, because such an instance
+has never run on that state; the learned clause was born at the conflict, after every fixpoint of
+levels `<= c`, so the next `propagate` after a backtrack to `t < c` runs it, and it asserts the
+literal again at `t`, its own reason, its own trace line. It is then stamped with the new
+fixpoint's epoch and the same holds for the next backtrack below `t`. The PB row learned beside
+the clause is an instance too and is covered the same way. `BAGUETTE_DEBUG`'s `check_fixpoint` (I-P2)
+re-runs every instance at every fixpoint and would raise on a missed implication: the unit lane and
+the model tests under `--debug` are the check.
+
+Two kinds of assertion have no instance and are handled in the loop:
+
+- the learned UNIT is a global applied at every node (`apply_globals`), so nothing is missed;
+- the FALLBACK (D-0219 section 4: no 1UIP clause, the branch nogood filed at its asserting level `b`,
+  its assertion pushed from it by `assert_directly`) is kept on a short list, and after every
+  backjump to a `t` with `b <= t < ` its recorded level it is pushed again at `t`, from the same
+  line, which is still live because it is filed at `b <= t`. An entry is dropped when `t < b` (its
+  other literals are popped too) or when it is pushed at its true level.
+
+**Not chronological**: a clause that does not assert (its two highest levels tie, the
+branch-and-bound case of D-0219 section 4) goes where D-0219 sends it; a restart's target still wins
+when it is lower (`min`). The jump is taken whole when it skips at most `T` levels, as Nadel and
+Ryvchin's threshold (their `T = 100`); `T = 0` makes every conflict chronological, which on a fixed
+search is `dfs`'s tree with the sibling a propagation.
+
+**The proof.** The lines written are the same learned clauses, the same conflict lines and the same
+bridges, in the same order; the assertion's trace line is the same `rup` against the level-0 clause,
+filed at `c` instead of `b`. What changes is the DELETIONS: a backjump wipes the levels above its
+target (`Justify.wipe_level (c + 1)`), so a chronological step deletes the lines of level `top` only
+and the lines of `b+1 .. c` stay live as long as their entries stay on the trail, to be wiped when
+those levels are undone or at the end (I-X2 unchanged: every id still deleted exactly once). A
+re-assertion after a later backtrack is a new trail entry with a new trace line, written lazily at
+the next conflict as every entry's is. No new rule kind, no new `Explanation` constructor, no change
+to `Store`, `Engine`, `Trace` or `Justify`.
+
+**Completeness.** Möhle and Biere's argument with recorded levels: at each conflict the loop goes back
+to a level `t` in `[b, top - 1]` where the clause is unit and adds its literal at `t`, so the vector
+of per-level assignment counts grows strictly in the lexicographic order (levels below `t`
+untouched, level `t` one longer) and is bounded; restarts are spaced by the restart policy as before.
+
+**The switch.** Under the loop only: `config.chrono : int option`, `None` off (D-0219's loop,
+byte-identical), `Some t` chronological when the jump would skip more than `t` levels. CLI
+`--chrono T` (needs `--cdcl`, a usage error otherwise), environment `BAGUETTE_CHRONO=T`. `--cdcl` is
+added to the CLI (D-0219's cross-session request), `BAGUETTE_CDCL=1` kept. `dfs` and the default
+are byte-identical by construction: the code is inside `Search.cdcl` and the CLI parsing.
+
+### 2. The threshold, chosen on a pilot
+
+Built as section 1 says (`440b579`), release md5 `f35ba693` for the pilot (`f404f013` after `dune
+fmt`, the same code, for everything after it). Fixed search, `--no-proof`, 300 s, the loop alone (`L`)
+against `--chrono T`. Seconds, G instructions (`perf stat -e instructions:u`), nodes, conflicts, and
+the number of conflicts that went back chronologically:
+
+| instance | L | T 0 | T 5 | T 10 | T 20 | T 30 | T 50 | T 100 |
+|---|---|---|---|---|---|---|---|---|
+| 2012 tpp 7_5_30_1 (OPT) | 134 s, 788 G, 218 357 n, 5 805 c | 68 s, 387 G | 70 s | 71 s | 70 s, 401 G, 159 869 n, 5 825 c, 235 chrono | 70 s | 132 s (35 chrono) | 131 s |
+| 2019 nside EASY_200_50 (OPT) | 115 s, 429 G, 10 961 n, 441 c | 53 s, 202 G | 57 s | 64 s | 82 s, 304 G, 7 242 n, 443 c, 118 chrono | 99 s | 111 s (0) | 113 s |
+| 2021 flowshop-workers ex6 | 3211, no proof of optimality, 536 645 n, 22 571 c | 3211, 143 199 c | 3211 | 3211 | **OPT 3201, 261 s**, 1 001 G, 205 320 n, 96 277 c, 71 670 chrono | **OPT 3201, 218 s** | 3211 | 3211 |
+| 2022 rotating-workforce e-80 (SAT) | 1.7 s | 2.1 s | 1.6 s | 1.6 s | 1.6 s | 1.6 s | 1.6 s | 1.6 s |
+| QR48 f3 (UNSAT), costas 14 (SAT) | 6.2 s, 153 s | same tree, no jump to cut | | | same | | | |
+
+On QR48 and costas no jump skips a level (D-0219 section 6: the asserting level is the level below),
+so the threshold changes nothing there. On tpp and nside every threshold up to 30 halves the time
+(the re-descent is gone: nodes -27 % and -34 % at `T = 20` for the same conflicts). On flowshop-workers
+the small thresholds trade the re-descent for something worse: at `T = 0` every conflict goes back
+one level and the run makes 143 199 conflicts in 300 s, one per node, without closing the optimum.
+The literal recorded at its imprecise level makes the next clause's asserting level high, so the
+jumps that remain are short and the conflicts many; only 20 and 30 prove the optimum. D-0219's
+`dfs` proved it in 167 s. `T = 20` is taken for the campaign: the best of the thresholds that close
+all three optimisation instances on tpp and nside, second on flowshop. Nadel and Ryvchin's 100 is
+the loop without the option here (the jumps that hurt are 20 to 60 levels long). This was chosen on
+four instances that are in the tuning set, so the tuning set is not an independent test of `T`.
+
+### 3. Checks (code at `440b579`)
+
+With the switch OFF (the default, and `--cdcl` without `--chrono`):
+
+- All 228 test models, both encodings: stdout, exit code, `.opb` and `.pbp` byte-identical to main
+  `4fbbf56`'s binary (dev builds, md5 `cc46f5dd` main, `3b5eed72` branch), 456 of 456
+  (`/scratch/arthur/chrono-runs/ident/`).
+- `dune runtest --root . --force` under `ulimit -v 4000000`: 5 283 ok, 0 FAIL, peak RSS 155 MB (the
+  61 more than D-0219's 5 222 are this row's and main's since).
+- `diff_lane.sh --tier all -j 4`: 347 of 347 equal the reference; with `--debug`: 333 of 333
+  (`BAGUETTE_DEBUG`, 14 skipped by `debug-skip.tsv` as on main). `scaling_lane.sh --enforce -j 4`:
+  every line within its threshold.
+- Without `--chrono` the loop is D-0219's: the unit lane checks that no chronological step and no
+  re-push happens in its twelve old arms.
+
+With the loop and chronological backtracking ON:
+
+- `scripts/run_model_tests.sh` under `BAGUETTE_CDCL=1 BAGUETTE_CHRONO=20`: 223 of 228 pass, every
+  proof VERIFIED on both encodings; the five others are D-0219's five (three satisfiable models print
+  another solution, each `VERIFIED SATISFIABLE` on both encodings, two optimisation models print
+  other intermediate solutions and the expected optimum, `VERIFIED BOUNDS 6 <= obj <= 6` and
+  `3 <= obj <= 3`). Every answer agrees with `dfs`.
+- The same under `BAGUETTE_CHRONO=0 BAGUETTE_DEBUG=1` (every conflict chronological, I-P2 checked at
+  every fixpoint, so a missed re-assertion would raise): 224 pass, the three satisfiable models as
+  above, and `cumulative_fixed_overload_edge_unsat` stops on a `BAGUETTE_DEBUG` invariant
+  (`D-0026: the reason and the justification are about the same pruning`) that fires identically on
+  main's own binary with the default search: a pre-existing finding of M22-review-T2's model, not of
+  this row (WORKLOG cross-session request). Without `BAGUETTE_DEBUG` it is UNSAT and verified.
+- Unit lane `test_cdcl_loop`: four more arms (`chrono:0`, `chrono:1`, `chrono:0` with learning off,
+  `chrono:0` with Luby and phase saving) on pigeonhole 5/4, queens 8, queens 6 optimisation: same
+  answer as `dfs`, proof VERIFIED, every id deleted (audit on), no rule kind the `dfs` proof lacks,
+  every learned clause unit where the search resumed, no direct assertion; 18 chronological steps
+  over them. Also under `BAGUETTE_DEBUG=1`: 280 ok.
+- `test_mutation.exe` under `BAGUETTE_CDCL=1 BAGUETTE_CHRONO=20`: 156 ok, every corruption refused.
+
+Re-run after merging main `5935d7e` and then main at the `wave76-scp` merge (`c1c2c93`, which brings
+D-0225's signal handling and D-0230's `.scp` reader into `bin/main.ml` and `search.ml`): identity
+456 of 456 against that main's binary (`9bfe10d3` against `bbbd0630`), `dune runtest --root . --force`
+5 399 ok and 0 FAIL (peak RSS 161 MB), diff lane 347 of 347 and 333 of 333 under `--debug`, scaling
+lane ok, the model tests under `--cdcl --chrono 20` the same 223 plus D-0219's five, all ten of
+their proofs VERIFIED.
+
+### 4. Measured: the 3-SAT probes and D-0207's five (campaign binary `f404f013`, `--no-proof`)
+
+The arms. Loop arms (`--cdcl`): `Lfix` fixed search; `Cfix` fixed search with `--chrono 20`; and with
+`--chrono 20`: `Cf` `-f` (alternate, Luby, phase saving), `Calp` activity + Luby + phase saving,
+`Cal` activity + Luby, `Cabp` activity + LBD restarts (`--restarts lbd`) + phase saving, `Ca` activity
+alone. `dfs` arms with the same flags: `Dfix`, `Df`, `Dalp`, `Dal`, `Dabp`, `Da`. Run while the node's
+load was 50 to 93 (other sessions' series), 20 of these at a time, so compare instructions and
+conflicts more than seconds.
+
+**3-SAT, 32 probes, 120 s** (Chuffed answers all 32 in under 20 s, 17 satisfiable and 15 UNSAT):
+
+| arm | answered of 32 | SAT / UNSAT | seconds, sum | conflicts per s (median) | G instr per s |
+|---|---|---|---|---|---|
+| Lfix | 12 | 12 / 0 | 2 762 | 428 | 1.53 |
+| Cfix | 13 | 12 / 1 | 2 740 | 443 | 1.57 |
+| Cf | 17 | 12 / 5 | 2 225 | 471 | 1.51 |
+| Calp | 23 | 14 / 9 | 1 422 | 620 | 1.75 |
+| Cal | **24** | 15 / 9 | 1 343 | 696 | 1.87 |
+| Cabp | **24** | 15 / 9 | 1 248 | 1 046 | 2.03 |
+| Ca | 23 | 15 / 8 | 1 346 | 779 | 1.90 |
+| Dfix | 13 | 12 / 1 | 2 822 | 397 | 1.52 |
+| Df | 16 | 13 / 3 | 2 346 | 382 | 1.44 |
+| Dalp | 21 | 14 / 7 | 1 602 | 442 | 1.47 |
+| Dal | 20 | 13 / 7 | 1 686 | 348 | 1.41 |
+| Dabp | 21 | 14 / 7 | 1 477 | 367 | 1.46 |
+| Da | **24** | 15 / 9 | 1 226 | 1 000 | 2.04 |
+
+Eight probes (seven of the 250-variable ones and `r3_200_7`) are answered by no arm. Under every
+restart policy the loop answers more than `dfs` with the same flags (17 to 24 against 16 to 21) and
+makes 1.2 to 2.9 times the conflicts per second; without restarts the two are equal (24). Chuffed's
+32 are out of reach at 0.4 to 1 thousand conflicts a second: that gap is M20's (cost per conflict),
+not the search's.
+
+**D-0207's five, 300 s** (seconds, conflicts, G instructions):
+
+| arm | QR48 f3 (UNSAT) | costas 14 (SAT) | rcpsp 11 <= 60 (UNSAT) | mknap2-1, javarouting <= 66 |
+|---|---|---|---|---|
+| Lfix | 7 s, 14 890 c, 27 G | 196 s, 10 573 c, 456 G | 17 c | none, none |
+| Cfix | same as Lfix (no jump to cut) | same | 17 c | none, none |
+| Cf | 10 s, 16 208 c, 31 G | 5 s, 1 810 c, 22 G | 19 c | none, none |
+| Calp | **4 s, 9 335 c, 18 G** | **2 s, 875 c, 9 G** | 46 c | none, none |
+| Cal | 7 s, 10 235 c, 23 G | 22 s, 4 538 c, 72 G | 28 c | none, none |
+| Cabp | 5 s, 10 474 c, 20 G | 9 s, 2 778 c, 37 G | 46 c | none, none |
+| Ca | 12 s, 12 708 c, 27 G | none | 28 c | none, none |
+| Dfix | 7 s, 14 890 c, 31 G | 198 s, 10 561 c, 468 G | 34 c | none, none |
+| Df | 52 s, 32 281 c, 108 G | 4 s, 1 535 c, 18 G | 44 c | none, none |
+| Dalp | 19 s, 17 735 c, 45 G | none | 29 c | none, none |
+| Dal | 39 s, 24 159 c, 79 G | 60 s, 6 372 c, 148 G | 48 c | none, none |
+| Dabp | 22 s, 21 000 c, 58 G | none | 29 c | none, none |
+| Da | 7 s, 9 620 c, 22 G | none | 48 c | none, none |
+
+Under restarts the loop is two to ten times cheaper than `dfs` on QR48 (where `dfs`'s restarts throw
+away a tree the nogoods were closing) and solves costas under every restart policy, where `dfs` under
+activity with phase saving (`Dalp`, `Dabp`) does not.
+
+### 5. Measured: the whole tuning set, 13 arms, `--no-proof` (binary `f404f013`)
+
+`bench/tuning/set.lst`, 200 instances, 300 s, 16 GiB scope, `--max-heap-mb 8192`, the arms of
+section 4. 2 600 runs, 20 to 40 at a time on `fataepyc-06` (load 40 to 93 from other series), from
+2026-11-24 11:32 to the night of the 25th. Status and verdicts as `tools/compare/compare.py classify`
+and `arms_compare.verdict` (the Challenge order); without proof every complete answer is trusted,
+unverified. "Share" is the Borda score of `agreement.py` over the 13 arms (1 per arm beaten, 0.5 per
+tie, over the total); `bench/tuning/README.md` says a difference under about 0.03 is noise.
+`died` = heap refusal or error. Conflicts per second and G instructions per second are medians over
+runs longer than 1 s. "vs" = instances better / worse in the Challenge order.
+
+| arm | complete | incumbent only | nothing | died | share | conflicts/s | G instr/s | vs `Dfix` | vs `Df` | vs `dfs` same flags |
+|---|---|---|---|---|---|---|---|---|---|---|
+| Lfix (loop, fixed) | 32 | 117 | 45 | 6 | 0.077 | 104 | 3.55 | 24+ 28- | 52+ 105- | (Dfix) 24+ 28- |
+| **Cfix** (loop, fixed, `--chrono 20`) | 35 | 114 | 44 | 7 | 0.078 | 109 | 3.59 | 30+ 26- | 53+ 102- | (Dfix) 30+ 26- |
+| **Cf** (`-f`) | **51** | 115 | 29 | 5 | **0.099** | 93 | 3.67 | **103+ 45-** | **69+ 60-** | (Df) 69+ 60- |
+| Calp (activity, Luby, phase) | 44 | 115 | 35 | 6 | 0.077 | 92 | 4.07 | 78+ 88- | 46+ 105- | (Dalp) 63+ 61- |
+| Cal (activity, Luby, no phase) | 41 | 118 | 34 | 7 | 0.078 | 106 | 4.00 | 83+ 79- | 53+ 100- | (Dal) 50+ 62- |
+| Cabp (activity, LBD, phase) | 40 | 115 | 39 | 6 | 0.073 | 97 | 4.00 | 77+ 89- | 46+ 105- | (Dabp) 69+ 66- |
+| Ca (activity, no restarts) | 29 | 110 | 55 | 6 | 0.057 | 92 | 3.76 | 55+ 106- | 32+ 126- | (Da) 54+ 47- |
+| Dfix (`dfs`, the default) | 34 | 117 | 43 | 6 | 0.078 | 100 | 3.45 | | 53+ 103- | |
+| Df | 48 | 119 | 28 | 5 | 0.098 | 97 | 3.72 | 103+ 53- | | |
+| Dalp | 38 | 118 | 38 | 6 | 0.077 | 97 | 3.86 | 79+ 87- | 44+ 106- | |
+| Dal | 42 | 118 | 33 | 7 | 0.078 | 89 | 3.88 | 85+ 77- | 52+ 98- | |
+| Dabp | 41 | 120 | 33 | 6 | 0.073 | 91 | 3.96 | 78+ 85- | 47+ 109- | |
+| Da | 30 | 105 | 59 | 6 | 0.057 | 84 | 3.64 | 50+ 107- | 34+ 127- | |
+
+Families (183; a family counts once, by the sum of its instances' verdicts), won / lost:
+
+| arm | against `Dfix` | against `Df` |
+|---|---|---|
+| Lfix | 22 / 25 | 43 / 93 |
+| Cfix | 27 / 23 | 46 / 92 |
+| Cf | **91 / 38** | **61 / 53** |
+| Calp | 70 / 76 | 43 / 94 |
+| Cal | 73 / 68 | 47 / 89 |
+| Cabp | 68 / 79 | 40 / 95 |
+| Ca | 48 / 96 | 27 / 112 |
+| Df | 92 / 44 | |
+| Dal | 76 / 66 | 47 / 89 |
+
+By edition (instances won / lost), `Cf` against `Df` is ahead in 10 editions of 16 and behind in 5
+(2018, 2019, 2023, 2025, 2026), and against `Dfix` ahead in every edition but 2021 and 2026 (ties).
+`analyse.py` in the results directory prints the full per-edition tables.
+
+**Part 1 on the fixed search** (`Lfix` -> `Cfix`): 21 instances better, 13 worse, 3 more complete
+answers (mspsp hard_01, flowshop-workers ex6 and network_50 proved optimal, rubik 7-cube solved; sudoku_opt
+p90 loses its proof of optimality at 297 s against 294 s), and the loop with it goes from 24+ 28- to
+30+ 26- against `dfs`. Against `Dfix` the complete answers it gains are mspsp, ghoulomb 3-9-16,
+test-scheduling t30 (101 s), hrc exp2-1 and network_50; it loses steelmillslab 14_1, tc-graph-color
+k10_34, sudoku_opt p90 and gametes nl7. So on a fixed search the loop with chronological backtracking
+is `dfs`'s equal on the set (share 0.078 both, 35 against 34 complete), where D-0219's loop alone was
+slightly behind; the re-descent was the loop's deficit, and removing it does not make a fixed search
+better than `dfs`, because on most of the set the jump is the chronological one anyway (D-0219 section 3).
+
+**The strategies on the loop** (T2 to T4), each against `dfs` with the same flags: the loop wins
+under `-f` (69+ 60-, 51 against 48 complete, share 0.099 against 0.098: inside the README's noise on
+the share, outside it on complete answers and families won), under activity + Luby + phase saving
+(63+ 61-, 44 against 38 complete), under LBD restarts (69+ 66-) and without restarts (54+ 47-); it
+loses under activity + Luby without phase saving (50+ 62-, 41 against 42). The user's intuition
+(restarts without phase saving are poor) holds on the loop and not on `dfs`: with Luby restarts,
+phase saving gains 3 complete answers on the loop (41 -> 44) and loses 4 on `dfs` (42 -> 38). On the
+3-SAT probes it changes one answer either way (section 4). Activity without restarts is the worst arm on both searches (0.057). Every
+activity arm is below `-f` by 0.02 of the share or more, on both searches: the alternation with the
+annotation is what carries `-f` on this set, as D-0185 found on the full series.
+
+### 6. Measured: the tuning set with proof (the two best loop arms, `Cfix`, and `dfs`)
+
+The two loop arms with the best share in section 5, `Cf` and (tied at 0.078, more complete answers)
+`Cal`, plus `Cfix` (Part 1's arm) and the two `dfs` references `Dfix` (the default) and `Df`. Same
+binary and settings, with `--proof`; veripb 3.0.2 (`d5644ca4`) on every run that printed a complete
+answer, in its own 64 GiB scope, 3 600 s; verified proofs deleted. 1 000 runs on 2026-11-26, up to 60
+at a time, the node's total under 88. A complete answer counts only when VERIFIED.
+
+| arm | verified complete | incumbent only | nothing | died | share (5 arms) | conflicts/s | vs `DfixP` | vs `DfP` | families vs `DfixP` | families vs `DfP` |
+|---|---|---|---|---|---|---|---|---|---|---|
+| CfixP | 20 | 121 | 54 | 5 | 0.173 | 57 | 24+ 28- | 49+ 100- | 19 / 25 | 43 / 90 |
+| CfP | 32 | 129 | 34 | 5 | **0.236** | 43 | 94+ 48- | 59+ 64- | 82 / 39 | 53 / 56 |
+| CalP | 31 | 121 | 40 | 8 | 0.176 | 56 | 79+ 80- | 52+ 97- | 71 / 70 | 47 / 87 |
+| DfixP | 19 | 124 | 52 | 5 | 0.178 | 54 | | 52+ 98- | | 44 / 87 |
+| DfP | **37** | 124 | 34 | 5 | **0.237** | 44 | 98+ 52- | | 87 / 44 | |
+
+Not one proof rejected: 140 checked, 137 VERIFIED (94 `BOUNDS a <= obj <= a`, 40 `SATISFIABLE`,
+5 `BOUNDS INF <= obj <= INF`), three over the 3 600 s check (smelt_4 under `CfP`, an optimum found in
+285 s, oocsp racks_030 under `DfP`, sdn-chain d30n600-7 under `CalP`), counted as their incumbent. The proof costs the loop what it costs `dfs`: over the 188
+instances where both made 50 conflicts, `CfP` writes 1.04 times `DfP`'s bytes per conflict at 0.99
+times its conflicts per second (`CfixP` against `DfixP`: 1.04 and 1.03), so chronological
+backtracking's longer-lived trace lines cost nothing measurable.
+
+With proof, `-f` on the loop and on `dfs` are a tie on the score (0.236 and 0.237) and `dfs` has five more
+verified answers (37 against 32: it keeps gfd-schedule, nside EASY, evm BDARUMA, pennies, word-equations,
+products-and-shelves, stripboard and solbat, the loop keeps steelmillslab 14_1, test-scheduling t30
+and oocsp racks, whose `DfP` proof did not check in time). Without proof the same two arms gave the
+loop three more (51 against 48). The two signs disagree, and on this set both differences are a few
+instances of the 200: `-f` against `-f` the loop and `dfs` are not separated. `CfixP` against `DfixP`
+is a tie as without proof (20 against 19 verified).
+
+### 7. Recommendation, and the option table for M19-config-T1
+
+The choices taken here without asking, most consequential first:
+
+1. **Chronological backtracking records the literal at the level the search goes back to**, not at
+   its true level (Nadel and Ryvchin's out-of-order trail needs `Store` and I-T2 changed). The
+   engine's re-seeding of young instances supplies what the out-of-order trail would keep. Reverting
+   is not passing `--chrono`.
+2. **The threshold is 20 levels**, chosen on four instances of the tuning set (section 2), so the set
+   is not an independent test of it. N&R's 100 is the loop without the option here.
+3. **`--chrono` is a separate flag and NOT on by default under `--cdcl`**, although Cfix beats Lfix
+   (21+ 13-, 3 more complete answers): `--cdcl` alone stays D-0219's loop, so the record of that row
+   stays reproducible and the switch is reversible by construction. Proposed for when the loop is
+   decided: `--cdcl` implies `--chrono 20`.
+4. **The proof arms were five, not three** (the two best loop arms, `Cfix`, and both `dfs`
+   references): the node was free, and the decision below needs `Cf` against `Df` with proof.
+5. **`--cdcl` was added to the CLI** (D-0219's request), `BAGUETTE_CDCL` kept.
+
+The options for the default (M19-config-T1 decides on the full series; nothing changes here):
+
+| option | search | restarts | phases | tuning set, no proof (share, complete) | with proof (verified) | cost |
+|---|---|---|---|---|---|---|
+| A. today | `dfs`, annotation | none | none | 0.078, 34 | 19 | |
+| B. `-f` (D-0185's proposal) | `dfs`, annotation/activity alternating | Luby 100 | phase saving | 0.098, 48 | **37** | every proof and tree changes; 336 instances worse on the full series (D-0185) |
+| C. the loop under `-f` | `--cdcl --chrono 20`, alternating | Luby 100 | phase saving | **0.099, 51** | 32 | as B, plus the loop is the default search (two searches to keep or `dfs` retired) |
+| D. the loop, fixed | `--cdcl --chrono 20`, annotation | none | none | 0.078, 35 | 20 | every proof changes for a tie with A |
+| E. the loop, activity | `--cdcl --chrono 20`, activity | Luby or LBD | phase saving | 0.077, 44 (Luby), 0.073, 40 (LBD) | 31 (Luby, no phase) | loses to `-f` on both searches by 0.02 |
+
+**Recommendation.** For the full series of M19-config-T1: **search `-f` (B or C), restarts Luby on
+D-0137's unit, phase saving on**. B against C is not decided by this set: a tie on the score with
+and without proof, three more complete answers for the loop without proof and five fewer with
+proof. Run both on the full series, with proof, and choose C only if it does not lose verified
+answers there; its case is the 3-SAT probes (24 against 21 of 32 under LBD restarts, 1.2 to 2.9 times
+the conflicts per second under restarts) and QR48 (4 s against 19 s under activity + Luby +
+phase), i.e. instances where learning, not propagation, does the work. If the loop is kept, it
+should run with `--chrono 20` (option D is the cheapest form of that statement: a tie with `dfs`
+on a fixed search, where D-0219's loop alone was behind). An activity-only order (E) is not a
+candidate: every activity arm is below `-f` on both searches, and activity without restarts is the
+worst arm of all (0.057). Phase saving: keep it with restarts on the loop (+3 complete answers); on
+`dfs` it cost 4 under activity + Luby, so it is not a free addition there.
+
+Proposed SPEC 3.4 sentence if C is chosen, added to D-0219's: "With `--chrono T`, a backjump that
+would undo more than T levels goes back one level instead and asserts the learned literal there."
+
+### 8. How to revert
+
+The code is one commit, `440b579` (`Search.cdcl`'s chronological step and fallback re-push, the
+`chrono` field and `BAGUETTE_CHRONO`, the CLI's `--cdcl` and `--chrono`, four unit-lane arms). With
+neither `--chrono` nor `BAGUETTE_CHRONO` nothing it adds runs except two counters, so reverting is
+`git revert 440b579` or not passing the flag. Results and scripts: `/scratch/arthur/chrono-runs/`
+(the campaign `camp/`, the pilot `pilot*/`, the identity and lane re-runs `recheck/`), copied to
+`/cluster/arthur/baguette-results/chrono/` without proofs; `tools/analyse.py camp/tune <arms> --ref
+<arm> --fam bench/tuning/set.lst` reprints sections 5 and 6.
+
+## D-0231  [AUTONOME] M22-review-bugs: `regular` with a constant letter outside its symbols no longer crashes, and `cumulative`'s overload conflict writes the clearing of its free tasks one level down, which is what `BAGUETTE_DEBUG` asked for. A debug pass over the test models is proposed, not added
+
+**Status**: DONE on `wave77-bugs` (agent-bugs, 2026-11-26), not merged. Two bugs found by other
+agents on main `44e41d7`, neither in a claimed file.
+
+### 1. `regular`: a constant letter outside the symbols
+
+**Cause.** `Regular.alphabet_hull` (lib/core/prop/regular.ml) intersected a letter VARIABLE's
+declared hull with the symbols `smin .. smin + w - 1`, but returned `(c, c)` for a constant `c`.
+`forward_reason` then read `preds.((q' - 1) * w + c - smin)`, out of bounds when `c` is not a
+symbol, and the solver stopped on `Invalid_argument("index out of bounds")` (exit 2). D-0230
+section 7 found it through the `.scp` reader, which reads such a constraint as false and never
+reaches the propagator. MiniZinc does not produce it (`fzn_regular` constrains every letter to
+`1..S`), a hand-written `.fzn` does.
+
+**Fix.** A constant is intersected with the symbols as a variable is, so its range is empty when
+it is not a symbol. Every state of the next layer then dies forward with nothing to cite. Its
+line is `rup`, because the model already has `FWD(i, q, {c}) = ~s(i,q)` for every `q` (compile.ml's
+`post_regular` drops the constant halves) and `ALO_i`. `backward_reason` used `step`, which was
+already range-checked, and the letter variables were already right (measured below).
+
+**Models**, all with veripb `VERIFIED`, and all passing under `BAGUETTE_DEBUG=1`:
+
+| model | what | main `44e41d7` | this branch |
+|---|---|---|---|
+| `regular_const_above_unsat` | the constant 4 after symbol 0 only (D-0230's example) | exception, exit 2 | UNSAT |
+| `regular_const_below_unsat` | the first letter -2 below the symbols 1..2 | exception, exit 2 | UNSAT |
+| `regular_letter_outside_sat` | letter variables over -1..4 and 0..3 around a constant inside the symbols 1..2 | SAT | SAT, same |
+| `regular_letter_outside_unsat` | a letter variable over 5..6, wholly outside 1..2 | UNSAT | UNSAT, same |
+
+Both UNSAT-by-constant models are refuted by unit propagation on the `.opb` alone, so their
+proofs are verified over a contradictory database. They test that the solver answers and writes
+a proof the checker reads, not the strength of the dead-flag line (CLAUDE.md, "rup is vacuous
+over a contradictory database"). No satisfiable model can reach the path, because the constraint
+is false as soon as one constant letter is outside the symbols.
+
+### 2. `cumulative`: the overload conflict and D-0026's reverse check
+
+**Cause.** M22-review-T2 added the OVERLOAD conflict (fixed-start load alone above the capacity at
+a time a movable task may cover) as `combine(row + free I_k >= 0 of each task in the row)`, with
+`Reason.none`. On `cumulative_fixed_overload_edge_unsat` the task's window is clipped at its
+declared lower bound, so its free `I_k >= 0` is a literal axiom, a `Weaken` at the TOP level of
+the derivation. `Store.agreement_holds`' reverse arm reads a top-level `Weaken` as a bound the
+pruning read and asks the reason to name it, and it does not.
+
+**Which side was wrong.** The justification, in its shape. The reason is right. The overload is
+false whatever the movable tasks do, so it rests on no branch fact, and naming the task would
+only lengthen a learned clause. The derivation was sound (the proof verified) but broke the rule
+`prune_expl` already states and follows for the push. A free indicator reads no bound, so its
+clearing goes one level down, as a sub-derivation of its own. The overload had been written
+next to the push without it. The other overload model (`cumulative_fixed_overload_unsat`) did
+not trip the check only because its free indicator is a ladder rung, a `Term`, not a `Weaken`.
+
+**Fix.** One helper, `cleared_row` (cumulative.ml, after `drop_summands`), builds "the row with
+these tasks cleared" for both the push and the overload, and its comment carries the rule. The
+overload's justification is `combine [cleared_row ...] 1`.
+
+**What it changes in proofs.** The two overload models only, both still `VERIFIED`:
+`cumulative_fixed_overload_unsat` gains a copy line (`pol @c11 ;`, the outer combine of one
+term). `cumulative_fixed_overload_edge_unsat` had NO derivation on main, because
+`Search.close_root_conflict` skips the derivation of a conflict that is one row weakened
+(`weakened_row_only`, the checker refutes it unaided). The nested shape is no longer that
+shape, so it now writes the two `pol` lines before `rup >= 1`. Both are valid lines that the
+checker could have done without. The alternatives were worse. Teaching `weakened_row_only` to
+look through a single `Term` changes search.ml for one case. Naming the task in the reason by a
+declared-bound fact, which materialises to nothing, would satisfy the check without answering
+it.
+
+### 3. Every test model under `BAGUETTE_DEBUG=1`
+
+All 232 models (228 on main plus the four above), with proof, 300 s and `ulimit -v 4000000`
+each. Main's binary trips 1 invariant (`cumulative_fixed_overload_edge_unsat`) plus the two crashes
+of section 1. On this branch 232 of 232 exit 0, no invariant. Nothing else to fix or list.
+
+### 4. Proposed, not added: a debug pass in `scripts/run_model_tests.sh`
+
+Measured serially on fataepyc-06 (load ~60 of 192) over all 232 models, 3.2 s wall under
+`BAGUETTE_DEBUG=1 --no-proof`, 2.9 s without debug, 3.6 s under debug with proof. A pass that runs
+each model once under `BAGUETTE_DEBUG=1 --no-proof` and fails on a non-zero exit or on
+`invariant violated` would add about 3 s to `make check`, and would have caught this bug the day
+M22-review-T2 merged it (the diff lane's `--debug` pass, which gates every merge, did not report
+it). Not added here because `run_model_tests.sh` is outside this claim and
+the user or the orchestrator decides what the gate runs. To adopt it, add a loop beside the
+`--no-proof` pass (line ~166) and count its failures with the others.
+
+### 5. Checks
+
+Binary of this branch `549eb3f` md5 `bc2ad3e6d2c049d6a03d0f4c96caeec9`, against main `44e41d7`'s
+`bbbd0630fc3b769e052cfb1bb0e52f20` (both built on fataepyc-06). The merge of `origin/main` at the
+release brought `63aedc3`, a WORKLOG line only, and the rebuilt binary has the same md5.
+
+| check | result |
+|---|---|
+| `dune runtest --root . --force` (`ulimit -v 4000000`) | 5 399 ok, 0 FAIL, peak RSS 161 MB |
+| `scripts/run_model_tests.sh` | 232 passed, 0 failed |
+| `check_determinism.sh`, width lint, `@fmt` | identical across two runs on 232 models, no wide domain, clean |
+| artefact identity against main, the 228 existing models (`.opb`, `.pbp`, stdout, exit code) | 226 byte-identical; the `.pbp` of the two cumulative overload models differs as section 2 says |
+| `diff_lane.sh --tier all -j 8` (`BAGUETTE_MEM_CAP_KB=33554432`) | 347 of 347 equal the reference |
+| `diff_lane.sh --debug --tier all -j 8` | 333 of 333 equal (14 skipped by `debug-skip.tsv` as on main) |
+| `scaling_lane.sh -j 8` | ok, every line within its threshold |
+
+No lane changed, so nothing needs re-recording.
+
+### 6. Revert
+
+`git revert` of the two code commits on `wave77-bugs` (regular.ml, cumulative.ml), each alone.
+The four models go with the first.
 ## D-0226  [AUTONOME] M21-memory-T3 fix 1, the learned-row layout, and a PB size guard (M19-config-T5 re-measured). An evicted learned constraint now LEAVES THE ENGINE and the GC reclaims it; a learned row is held as flat arrays; two switches cap learned PB rows by length, default off; the retention default becomes `tiered`, in its own commit. Default artefacts byte-identical (the retention line of `--stats` aside)
 
 **Status**: DECIDED (agent-evict, `wave73-evict`, 2026-11-26). Taken in mode autonome: it adds a

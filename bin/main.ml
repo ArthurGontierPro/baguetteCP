@@ -120,6 +120,8 @@ type options = {
   phase_saving : bool; (* M10-search-strategy-T2, D-0137: --phase-saving *)
   search : Search.search_mode; (* M10-search-strategy-T3, D-0137: --search *)
   reuse_trail : bool; (* M10-search-strategy-T3, D-0137: --reuse-trail *)
+  cdcl : bool; (* M19-config-T10/T11, D-0219/D-0224: --cdcl, or BAGUETTE_CDCL=1 *)
+  chrono : int option; (* M19-config-T11, D-0224: --chrono T, or BAGUETTE_CHRONO=T *)
   (* M7-T32, D-0150: the MiniZinc standard flags. See the header. *)
   intermediate : bool; (* -i: every improving solution; printed anyway *)
   n_solutions : int option; (* -n N; N > 1 on a satisfaction model is refused *)
@@ -156,7 +158,8 @@ let usage () =
      [--proof-comments] [--all] [--time] [--stats] [--max-order-width N] \
      [--max-direct-values N] [--width-warn N] [--max-encoding-clauses N] [--max-heap-mb \
      N] [--bits-above W] [--time-limit S] [--restarts POLICY] [--phase-saving] [--search \
-     ORDER] [--reuse-trail] [-a] [-i] [-n N] [-f] [-t MS] [-r SEED] [-p N] [-s] [-v]";
+     ORDER] [--reuse-trail] [--cdcl] [--chrono T] [-a] [-i] [-n N] [-f] [-t MS] [-r \
+     SEED] [-p N] [-s] [-v]";
   prerr_endline "";
   prerr_endline
     "  MODEL.scp (M23-inputs, D-0230): the .scp format of CakeML's cake_pb_cp, version";
@@ -317,6 +320,20 @@ let usage () =
   prerr_endline
     "                    whose decision still outscores every unfixed variable";
   prerr_endline "                    (partial restarts, van der Tak et al. 2011).";
+  prerr_endline
+    "  --cdcl            (M19-config-T10, D-0219) opt-in: the CDCL loop instead of the";
+  prerr_endline
+    "                    default depth-first search: learn the 1UIP clause, backjump";
+  prerr_endline
+    "                    to its asserting level and let it propagate there. Same as";
+  prerr_endline "                    BAGUETTE_CDCL=1.";
+  prerr_endline
+    "  --chrono T        (M19-config-T11, D-0224) with --cdcl: a backjump that would";
+  prerr_endline
+    "                    skip more than T levels goes back one level instead and";
+  prerr_endline "                    asserts the learned literal there (chronological";
+  prerr_endline "                    backtracking, Nadel and Ryvchin 2018). Same as";
+  prerr_endline "                    BAGUETTE_CHRONO=T. Off by default.";
   prerr_endline "";
   prerr_endline "  --max-order-width N   refuse any variable whose DECLARED width";
   prerr_endline "                    exceeds N. DEFAULT: none -- the default build has no";
@@ -485,6 +502,8 @@ let parse_args argv =
   let phase_saving = ref false in
   let search = ref Search.Annotated in
   let reuse_trail = ref false in
+  let cdcl = ref Search.default_config.Search.cdcl in
+  let chrono = ref Search.default_config.Search.chrono in
   (* M7-T32 (D-0150). [restarts_given] and [search_given] let `-f` fill only what was
      not asked for explicitly, in either order on the command line. *)
   let restarts_given = ref false and search_given = ref false in
@@ -563,6 +582,17 @@ let parse_args argv =
       | "--reuse-trail" ->
           reuse_trail := true;
           go (i + 1)
+      | "--cdcl" ->
+          cdcl := true;
+          go (i + 1)
+      | "--chrono" ->
+          if i + 1 >= Array.length argv then usage ();
+          (match int_of_string_opt argv.(i + 1) with
+          | Some t when t >= 0 -> chrono := Some t
+          | _ ->
+              Printf.eprintf "--chrono: %S is not a level count >= 0\n" argv.(i + 1);
+              usage ());
+          go (i + 2)
       | "--time-limit" ->
           if i + 1 >= Array.length argv then usage ();
           (match float_of_string_opt argv.(i + 1) with
@@ -669,6 +699,13 @@ let parse_args argv =
   (* M9-no-proof-T2 (D-0126): the two flags contradict each other, and a silent choice
      between them is the trap CLAUDE.md records twice -- a measurement whose flag was
      never in force. A usage error, exit 2, and no file is touched. *)
+  (* M19-config-T11 (D-0224): the threshold is the loop's; under the default search it
+     would be silently ignored, the trap CLAUDE.md records twice. *)
+  if !chrono <> None && not !cdcl then (
+    prerr_endline
+      "baguette: --chrono (or BAGUETTE_CHRONO) sets how far the CDCL loop backjumps, and \
+       needs --cdcl (or BAGUETTE_CDCL=1).";
+    exit exit_usage);
   if !no_proof && !proof_prefix <> None then (
     prerr_endline
       "baguette: --no-proof and --proof PREFIX contradict each other: one asks for no \
@@ -703,6 +740,8 @@ let parse_args argv =
         phase_saving = !phase_saving;
         search = !search;
         reuse_trail = !reuse_trail;
+        cdcl = !cdcl;
+        chrono = !chrono;
         intermediate = !intermediate;
         n_solutions = !n_solutions;
         seed = !seed;
@@ -1840,6 +1879,8 @@ let solve opts (m : Model.t) =
                 phase_saving = opts.phase_saving;
                 search = opts.search;
                 reuse_trail = opts.reuse_trail;
+                cdcl = opts.cdcl;
+                chrono = opts.chrono;
                 stop =
                   (let by_time =
                      match opts.time_limit with

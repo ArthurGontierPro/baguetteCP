@@ -326,6 +326,21 @@ let drop_summands t s ~time =
     [ Explanation.weaken [ (c, Lit.ge s.s_name a') ] ]
   else []
 
+(* The row [cid] at [time] with every task of [free] CLEARED, as a summand: the row
+   alone when nothing is to clear, else a sub-derivation of its own.  A free
+   `I_k >= 0` is a ladder chain or a literal axiom and reads no bound of k, so the
+   clearing is a consequence of the model alone and k is in no reason.  It sits ONE
+   LEVEL DOWN because D-0026's reverse check (store.ml's [agreement_holds]) asks the
+   reason to name every variable weakened at the TOP level, which is right for a
+   weakening that stands for a bound the pruning read and is not what these are.  The
+   push ([prune_expl]) and the overload ([propagate]) both build it here: D-0231 found
+   the overload writing the clearing at the top level, which the check refused on
+   test/models/cumulative_fixed_overload_edge_unsat.fzn while the proof verified. *)
+let cleared_row t ~cid ~time free =
+  match List.concat_map (fun s -> drop_summands t s ~time) free with
+  | [] -> cite 1 cid
+  | drops -> Explanation.term 1 (Explanation.combine (cite 1 cid :: drops) 1)
+
 (* D-0010's currency: gcc's [ladder_lift] restated in LINEAR size.
 
    The lift turns the single literal a push concludes into the ladder statement another
@@ -385,18 +400,9 @@ let prune_expl t ~row ~halls ~others ~y ~lower ~bound =
       let low_side = a' > y.s_dlo and high_side = b' < y.s_dhi in
       let want_low = lower || a - 1 < y.s_lo in
       let want_high = (not lower) || time + 1 > y.s_hi in
-      (* The row with every non-compulsory, non-target task CLEARED, as a
-         sub-derivation of its own: a consequence of the model alone, since a free
-         `I_k >= 0` is a ladder chain or a literal axiom and reads no bound of k.  That
-         is why those tasks are not in the pruning's reason (see [push]), and why the
-         clearing sits one level down: D-0026's reverse check asks the reason to name
-         every variable weakened at the TOP level, which is right for a weakening that
-         stands for a bound the pruning read and is not what these are. *)
-      let free =
-        match List.concat_map (fun s -> drop_summands t s ~time) others with
-        | [] -> cite 1 row.cid
-        | drops -> Explanation.term 1 (Explanation.combine (cite 1 row.cid :: drops) 1)
-      in
+      (* The row with every non-compulsory, non-target task cleared ([cleared_row]):
+         why those tasks are not in the pruning's reason (see [push]). *)
+      let free = cleared_row t ~cid:row.cid ~time others in
       let counted =
         Explanation.combine
           (free
@@ -594,15 +600,11 @@ let propagate t store =
       match t.overload with
       | Some (cid, time) ->
           let snaps = Array.to_list (Array.map (snap_of store) t.tasks) in
-          let frees =
-            List.concat_map
-              (fun s -> if in_row s ~time then drop_summands t s ~time else [])
-              snaps
-          in
+          let free = List.filter (fun s -> in_row s ~time) snaps in
           Propagator.Conflict
             (Store.conflict store
                (Reason.because ~concludes:None Reason.none
-                  (Explanation.combine (cite 1 cid :: frees) 1)))
+                  (Explanation.combine [ cleared_row t ~cid ~time free ] 1)))
       | None -> (
           try
             loop t store;
