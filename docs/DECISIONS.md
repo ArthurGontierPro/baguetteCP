@@ -29345,8 +29345,8 @@ conflicts more than seconds.
 | Da | **24** | 15 / 9 | 1 226 | 1 000 | 2.04 |
 
 Eight probes (seven of the 250-variable ones and `r3_200_7`) are answered by no arm. Under every
-restart policy the loop answers more than `dfs` with the same flags (23 to 24 against 20 to 21) and
-makes 1.4 to 2.8 times the conflicts per second; without restarts the two are equal (24). Chuffed's
+restart policy the loop answers more than `dfs` with the same flags (17 to 24 against 16 to 21) and
+makes 1.2 to 2.9 times the conflicts per second; without restarts the two are equal (24). Chuffed's
 32 are out of reach at 0.4 to 1 thousand conflicts a second: that gap is M20's (cost per conflict),
 not the search's.
 
@@ -29502,7 +29502,7 @@ The options for the default (M19-config-T1 decides on the full series; nothing c
 D-0137's unit, phase saving on**. B against C is not decided by this set: a tie on the score with
 and without proof, three more complete answers for the loop without proof and five fewer with
 proof. Run both on the full series, with proof, and choose C only if it does not lose verified
-answers there; its case is the 3-SAT probes (24 against 21 of 32 under LBD restarts, 2 to 3 times
+answers there; its case is the 3-SAT probes (24 against 21 of 32 under LBD restarts, 1.2 to 2.9 times
 the conflicts per second under restarts) and QR48 (4 s against 19 s under activity + Luby +
 phase), i.e. instances where learning, not propagation, does the work. If the loop is kept, it
 should run with `--chrono 20` (option D is the cheapest form of that statement: a tie with `dfs`
