@@ -4607,6 +4607,34 @@ let test_m11t7_discarded_rows_count_the_same () =
    hit by [String.equal], not [==]), over two owners that sanitise to one name, and over
    enough distinct owners (5 000 against 16 384 slots, in three passes) that slots
    collide and entries are evicted and rebuilt. *)
+(* M20-pernode-T4 (D-0236): [Encoding.find] keeps the variable it answered last and hits
+   when the name asked is PHYSICALLY that variable's name. Asked in every order, with the
+   declared strings and with equal copies that are not those strings, it answers what the
+   table answers; [Name_tbl]'s hash is [Hashtbl.hash]'s value, which is what keeps every
+   name table's layout as it was. Break, measured: a memo that skips the physical test
+   fails the first two checks. *)
+let test_m20t4_find_memo () =
+  let e = Encoding.create () in
+  let names = [| "x"; "y"; "X_INTRODUCED_12_"; "X_INTRODUCED_21_" |] in
+  Array.iteri (fun i nm -> Encoding.declare_int e nm ~lo:i ~hi:(i + 5)) names;
+  let ok = ref true in
+  let ask nm i = if Encoding.domain e nm <> (i, i + 5) then ok := false in
+  List.iter
+    (fun i ->
+      ask names.(i) i;
+      ask names.(i) i;
+      ask (Bytes.to_string (Bytes.of_string names.(i))) i)
+    [ 0; 1; 1; 0; 2; 3; 2; 2; 0; 3 ];
+  check "M20-T4: Encoding.find's memo answers what the table does, in any order" !ok;
+  check "M20-T4: an undeclared name still raises after a hit"
+    (match Encoding.find e "z" with
+    | _ -> false
+    | exception Encoding.Undeclared "z" -> true);
+  check "M20-T4: Name_tbl's hash is Hashtbl.hash's value"
+    (List.for_all
+       (fun nm -> String.hash nm = Hashtbl.hash nm)
+       (("" :: Array.to_list names) @ List.init 200 (fun i -> Printf.sprintf "v_%d_" i)))
+
 let test_m20t5_text_is_the_reference () =
   let values =
     [
@@ -4991,6 +5019,7 @@ let () =
   test_m11t7_discarded_rows_count_the_same ();
   test_m11t5_writer_lines_are_the_reference ();
   test_m20t5_text_is_the_reference ();
+  test_m20t4_find_memo ();
   test_m11t5_lazy_origin ();
   test_m11t5_wipe_order ();
   test_m14t3_e2e_contract ();
