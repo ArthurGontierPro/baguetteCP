@@ -19,6 +19,7 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
+| M22-review-bugs (D-0231) | `lib/core/prop/regular.ml`, `lib/core/prop/cumulative.ml`, new `test/models/regular_const_*`/`regular_*_outside*` + expected, `docs/DECISIONS.md` (D-0231) | agent-bugs (`wave77-bugs`) | 2026-11-26 |
 
 ## Cross-session requests
 
