@@ -341,6 +341,15 @@ type t = {
           at least the highest non-empty level, or [-1]. [releasing] is id -> released by
           a backtrack and not run since; [released] holds those ids (and possibly some
           whose flag a run has cleared since). *)
+  mutable removed : bool array;
+      (** M21-memory-T3 (D-0226): id -> taken out of this engine by [remove]. Its slot in
+          [instances] holds a [tombstone], it is in no wake list once [purge] has run, and
+          it is never marked dirty again. Indexed by id and grown by [add] like [dirty]. *)
+  mutable pending : int list;
+      (** M21-memory-T3 (D-0226): removed ids whose [wake_static] and [watchers] entries
+          are still there, purged together by [purge] at the start of the next
+          [propagate], so that a reduction evicting k rows walks each variable's list once
+          and not k times. Their [scopes] entry is what says which lists to purge. *)
   mutable declined : (int * Var.t) list;
       (** M11-complexity-T3 (D-0142 section 1): under BAGUETTE_DEBUG only, the asks the
           advisors declined during the current wake walk or seed, newest first, waiting
@@ -362,6 +371,7 @@ let vacant : Propagator.instance =
     inst_advise = Propagator.advise_always;
     inst_watched = None;
     inst_idempotent = false;
+    inst_attach = Propagator.attach_never;
   }
 
 (* M6-T22: [a] with room for index [id], doubling, the new slots [fill]. *)
@@ -582,10 +592,13 @@ let release_rests t ~from mark =
   for l = t.rest_top downto max 0 from do
     List.iter
       (fun id ->
-        t.resting.(id) <- false;
-        t.releasing.(id) <- true;
-        t.released <- id :: t.released;
-        mark id)
+        (* Every id filed here is resting, except one [remove] took out since (D-0226),
+           which is dropped: it will never run again. *)
+        if t.resting.(id) then (
+          t.resting.(id) <- false;
+          t.releasing.(id) <- true;
+          t.released <- id :: t.released;
+          mark id))
       t.rest_levels.(l);
     t.rest_levels.(l) <- []
   done;
@@ -782,6 +795,8 @@ let create ?(trigger = default_trigger) (instances : Propagator.instance list) :
       rest_top = -1;
       releasing = Array.make (Array.length triggers) false;
       released = [];
+      removed = Array.make (Array.length triggers) false;
+      pending = [];
       declined = [];
     }
   in
@@ -843,6 +858,97 @@ let vetoes_self t id = id >= 0 && id < Array.length t.veto && t.veto.(id)
    derived it for itself would silently stop agreeing the day that stops being true. *)
 let next_id t = t.count
 
+(* ------------------------------------------- M21-memory-T3 (D-0226): REMOVING an instance
+
+   Until D-0226 an instance, once added, stayed in this engine for good: its slot held the
+   record and its closures, and its id sat in the wake lists of every variable of its
+   scope. [Retention.gate] could switch a learned constraint off (its run became
+   [Fixpoint], its advisor [false]), but the engine kept the switched-off instance and,
+   through its closures, the whole propagator, so an eviction freed no byte (D-0221
+   section 5: 109.7 M live words with and without 455 evictions on mapping mesh3x3_2).
+
+   [remove t id] takes instance [id] out:
+
+   - its slot gets a [tombstone]: the same id and name (so [family_table] counts what it
+     counted), no variable, a [run] that is [Fixpoint] and an advisor that is [false]. The
+     record [add] stored, and with it every closure over the propagator, is unreachable
+     from here;
+   - a self-watching instance leaves the watched-literal index at once ([dyn_remove], the
+     same two-slot removal [sync_watched] makes) and leaves the resting levels by its
+     [resting] flag ([release_rests] drops an id whose flag is down);
+   - every instance leaves [wake_static] and [watchers] at the next [propagate]
+     ([pending], [purge]): one filter per variable for all the ids removed since, which is
+     what a reduction evicting hundreds of rows over the same ladders needs;
+   - [mark_dirty] refuses it, so no seed, wake, release or newborn rule runs it again. A
+     FULL seed (every slot, after a backtrack below every recorded fixpoint) still steps
+     on the slot and runs the tombstone, which does nothing.
+
+   Why the search cannot see it. [remove] is called between two [propagate] calls (by the
+   database's reduction, at a conflict), on an instance whose [run] is already
+   [Fixpoint] and whose advisor already answers [false]: the gate turned both off first.
+   Such an instance pushes no trail entry and conflicts never, so every run it would have
+   made, and every wake it would have been asked about, changed nothing; what goes is
+   exactly those runs and asks, i.e. WORK counters (runs, seeded, wakes, advised), never a
+   trail entry or a proof line. The trail entries it made earlier are gone too: the
+   database removes only an instance no entry on the trail names ([Retention]'s locked
+   rule), and [Analysis] and [Pb_analysis] reach an instance only through such an entry or
+   through the last conflict, which is locked as well. *)
+
+let tombstone (inst : Propagator.instance) : Propagator.instance =
+  {
+    vacant with
+    Propagator.id = inst.Propagator.id;
+    inst_name = inst.Propagator.inst_name;
+    inst_advise = (fun _ _ -> false);
+  }
+
+let remove t id =
+  if id < 0 || id >= t.count || t.removed.(id) then
+    invalid_arg
+      (Printf.sprintf
+         "Engine.remove: #%d is not an instance of this engine (count %d) or was removed \
+          already; an instance leaves once (D-0226)"
+         id t.count);
+  t.removed.(id) <- true;
+  t.instances.(id) <- tombstone t.instances.(id);
+  let o1 = t.wv1.(id) and o2 = t.wv2.(id) in
+  if o1 >= 0 then dyn_remove t o1 t.wp1.(id);
+  if o2 >= 0 && o2 <> o1 then dyn_remove t o2 t.wp2.(id);
+  t.wv1.(id) <- -1;
+  t.wv2.(id) <- -1;
+  t.wp1.(id) <- -1;
+  t.wp2.(id) <- -1;
+  t.resting.(id) <- false;
+  t.releasing.(id) <- false;
+  t.pending <- id :: t.pending
+
+let removed t id = id >= 0 && id < t.count && t.removed.(id)
+
+(* The wake lists of every variable a [pending] id named, filtered once. Order inside a
+   list is kept ([List.filter]), so the walks wake the remaining ids in the order they
+   did. *)
+let purge t =
+  let vars = Hashtbl.create 64 in
+  List.iter
+    (fun id ->
+      Array.iter (fun x -> Hashtbl.replace vars x ()) t.scopes.(id);
+      t.scopes.(id) <- [||])
+    t.pending;
+  t.pending <- [];
+  let keep id = not t.removed.(id) in
+  Hashtbl.iter
+    (fun x () ->
+      if x < Array.length t.wake_static then
+        t.wake_static.(x) <- List.filter keep t.wake_static.(x);
+      let v = Var.of_int x in
+      match Hashtbl.find_opt t.watchers v with
+      | None -> ()
+      | Some l -> (
+          match List.filter keep l with
+          | [] -> Hashtbl.remove t.watchers v
+          | l' -> Hashtbl.replace t.watchers v l'))
+    vars
+
 (* Register one more propagator instance, AFTER [create] -- M2-L1's half of "instantiate
    a learned constraint as a Linear instance registered with the engine".
 
@@ -889,6 +995,7 @@ let add ?(trigger = default_trigger) (t : t) (inst : Propagator.instance) =
   t.in_queue <- room t.in_queue id false;
   t.resting <- room t.resting id false;
   t.releasing <- room t.releasing id false;
+  t.removed <- room t.removed id false;
   index_static t inst;
   t.instances.(id) <- indexed t inst;
   let scope = scope_of inst in
@@ -913,7 +1020,10 @@ let add ?(trigger = default_trigger) (t : t) (inst : Propagator.instance) =
   t.born <- room t.born id unborn;
   t.born.(id) <- unborn;
   t.newborns <- id :: t.newborns;
-  t.heap <- room t.heap id 0
+  t.heap <- room t.heap id 0;
+  (* D-0226: the instance is told how to leave. Every instance but a gated learned one
+     drops the function ([Propagator.attach_never]). *)
+  inst.Propagator.inst_attach (fun () -> remove t id)
 
 (* The variables an instance watches, or [None] if this engine has no such instance.
 
@@ -1812,7 +1922,7 @@ let heap_pop t =
 
 (* Mark [id] dirty for this call's seed: the flag and the heap together. *)
 let mark_dirty t id =
-  if not t.dirty.(id) then (
+  if not (t.dirty.(id) || t.removed.(id)) then (
     t.dirty.(id) <- true;
     heap_push t id)
 
@@ -1892,6 +2002,7 @@ let check_skip (inst : Propagator.instance) (store : Store.t) : unit =
    variables a run actually changed. *)
 let propagate ?stop ?(poll_runs = default_poll_runs) (t : t) (store : Store.t) : outcome =
   let n = n_instances t in
+  if t.pending <> [] then purge t;
   if n = 0 then Fixpoint
   else
     (* M6-T22: [t]'s own, all false on entry; this call clears what it sets, on every

@@ -947,6 +947,7 @@ let test_d_mid_demotion () =
       inst_advise = Baguette_core.Propagator.advise_always;
       inst_watched = None;
       inst_idempotent = false;
+      inst_attach = Baguette_core.Propagator.attach_never;
     }
   in
   let gated = Retention.gate db store ~cid:m_busy inst in
@@ -1004,6 +1005,7 @@ let test_d_gate () =
       inst_advise = P.advise_always;
       inst_watched = None;
       inst_idempotent = false;
+      inst_attach = Baguette_core.Propagator.attach_never;
     }
   in
   let store =
@@ -1064,6 +1066,89 @@ let test_d_gate () =
   close_page ~title:"(d) gate" pg db;
   check "(d) gate: added = evicted + swept"
     (Retention.n_added db = Retention.n_evicted db + Retention.n_swept db)
+
+(* M21-memory-T3 (D-0226): an evicted gated constraint LEAVES THE ENGINE. Before D-0226 the
+   engine kept the switched-off instance, and through its closures every byte of the
+   propagator (D-0221 section 5). The propagator's payload is watched through a weak pointer:
+   under [keep_all] it stays reachable for as long as the engine does, and after an eviction
+   under [fifo:0] the next [propagate] purges it and a full collection reclaims it. *)
+let d0226_instance ~id ~calls (w : int array Weak.t) : Baguette_core.Propagator.instance =
+  let module P = Baguette_core.Propagator in
+  let payload = Array.make 64 id in
+  Weak.set w 0 (Some payload);
+  {
+    P.id;
+    inst_name = "fake";
+    inst_consistency = P.Checking;
+    inst_vars = [ Baguette_core.Var.of_int 0 ];
+    run =
+      (fun _ ->
+        incr calls;
+        ignore (Sys.opaque_identity payload);
+        P.Fixpoint);
+    inst_row = P.no_row;
+    inst_advise = P.advise_always;
+    inst_watched = None;
+    inst_idempotent = false;
+    inst_attach = P.attach_never;
+  }
+
+let test_d0226_eviction_leaves_the_engine () =
+  let module Engine = Baguette_core.Engine in
+  let scene policy prefix =
+    let store =
+      Store.create ~names:[| "a" |] ~domains:[| Baguette_core.Domain.make 0 3 |]
+    in
+    let engine = Engine.create [] in
+    let pg = open_page prefix in
+    let db = Retention.create ~policy () in
+    let row = learned_row 1 in
+    let cid = Learned.introduce pg.pg_ctx row ~origin:"D-0226" in
+    ignore (Retention.add db ~cid ~row ~lbd:3 ~origin:"D-0226");
+    let calls = ref 0 and w = Weak.create 1 in
+    let id = Engine.next_id engine in
+    Engine.add engine (Retention.gate db store ~cid (d0226_instance ~id ~calls w));
+    Retention.cite db ~cid ~by:"D-0226 fake";
+    ignore (Engine.propagate engine store);
+    (store, engine, pg, db, cid, id, calls, w)
+  in
+  (* keep_all: nothing leaves. *)
+  let store, engine, pg, db, _, id, calls, w =
+    scene Retention.keep_all "baguette_d0226k"
+  in
+  check "D-0226 keep_all: the instance ran" (!calls = 1);
+  ignore (Retention.reduce db pg.pg_ctx);
+  ignore (Engine.propagate engine store);
+  Gc.full_major ();
+  check "D-0226 keep_all: nothing is removed and the payload stays reachable"
+    ((not (Engine.removed engine id)) && Weak.check w 0);
+  close_page ~title:"D-0226 keep_all" pg db;
+  (* fifo:0: evicted, removed, purged, reclaimed. *)
+  let store, engine, pg, db, cid, id, calls, w =
+    scene (Retention.fifo ~cap:0) "baguette_d0226f"
+  in
+  check "D-0226 fifo:0: the instance ran once before the reduction" (!calls = 1);
+  check "D-0226 fifo:0: the reduction evicts it" (Retention.reduce db pg.pg_ctx = [ cid ]);
+  check "D-0226 fifo:0: ...and the engine no longer holds it" (Engine.removed engine id);
+  Store.new_level store;
+  ignore
+    (Store.set_hi store (Baguette_core.Var.of_int 0) 2
+       (Baguette_core.Reason.because ~concludes:None Baguette_core.Reason.none
+          (Baguette_core.Explanation.model_row 1)));
+  ignore (Engine.propagate engine store);
+  Store.backtrack store;
+  ignore (Engine.propagate engine store);
+  check "D-0226 fifo:0: a removed instance is never run again, woken or seeded"
+    (!calls = 1);
+  Gc.full_major ();
+  check "D-0226 fifo:0: the propagator's payload is reclaimed by the GC"
+    (not (Weak.check w 0));
+  check "D-0226 fifo:0: a second removal of the same id is refused"
+    (try
+       Engine.remove engine id;
+       false
+     with Invalid_argument _ -> true);
+  close_page ~title:"D-0226 fifo:0" pg db
 
 (* The policy through a real search. On the M2-L4 build (no consumer) it evicts and the
    proof is accepted. On the shipped build every learned constraint has a consumer, and
@@ -1189,6 +1274,7 @@ let () =
   test_d_tiers_on_schedule ();
   test_d_mid_demotion ();
   test_d_gate ();
+  test_d0226_eviction_leaves_the_engine ();
   test_d_tiered_in_a_search ();
   if !failures > 0 then (
     Printf.printf "\n%d FAILURE(S)\n" !failures;

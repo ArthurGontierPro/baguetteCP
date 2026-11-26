@@ -280,16 +280,14 @@ end)
 
 (* One learned constraint the database holds.
 
-   [e_key] is the constraint's canonical rendering ([Learned.to_string], which sorts and
-   merges in [Learned.make]), used for the duplicate MEASUREMENT below and for nothing
-   else -- it is not part of any policy. [e_seq] is introduction order and is unique,
-   which is what makes every sort here total.
+   [e_seq] is introduction order and is unique, which is what makes every sort here
+   total.
 
-   M11-complexity-T4 (D-0152, D-0140 R4) tried keying the duplicate count on the row
-   itself, to drop the rendering. It kept the bytes and cost no instruction, but the
-   table then held every learned ROW (about twelve words per term) where it held the
-   row's text, and the peak RSS rose 6 to 8 % at 10 000 nodes on four of D-0140's
-   instances. Reverted; the text is the cheaper key to hold. *)
+   The duplicate MEASUREMENT below ([keys], [n_duplicate]) is keyed on the row's HASH
+   ([Learned.hash]) since D-0226. It was keyed on the row's canonical text, held in every
+   entry and in [keys] for the whole run, 27 bytes per literal kept only to be compared
+   (D-0218 section 5). M11-complexity-T4 (D-0152) had tried keying on the row itself and
+   reverted it because the table then held every row; a hash holds one word. *)
 type tier = Core | Mid | Local
 
 let tier_to_string = function Core -> "core" | Mid -> "mid" | Local -> "local"
@@ -298,14 +296,20 @@ let tier_to_string = function Core -> "core" | Mid -> "mid" | Local -> "local"
    the search handed it to [gate] -- the engine instance [g_inst] and the switch that
    turns it off. A [gate]d constraint is the only kind of CITED constraint a policy may
    evict; see [gate] and [reduce]. *)
-type gate = { g_inst : int; mutable g_dead : bool }
+type gate = {
+  g_inst : int;
+  mutable g_dead : bool;
+  mutable g_leave : unit -> unit;
+      (* M21-memory-T3 (D-0226): what takes the instance out of the engine that holds it,
+         handed over by [Engine.add] through [Propagator.inst_attach]; [ignore] before
+         that and after it has been called. *)
+}
 
 type entry = {
   e_cid : Writer.cid;
   e_lbd : int;
   e_size : int; (* terms in the row; 1 is a unit clause *)
   e_seq : int;
-  e_key : string;
   e_origin : string;
   mutable e_tier : tier;
       (* D-0139. Set from [e_lbd] at [add] under [tiered] ([Local] under every other
@@ -645,8 +649,9 @@ type t = {
          is LAZY (D-0152, D-0140 S2): it names every literal of the citing instance and
          is read only by the [Cited] message and [cited_by], so it is rendered when one
          of them asks, from the same values, and never otherwise. *)
-  keys : (string, Writer.cid) Hashtbl.t;
-      (* Canonical row text -> the first id that stated it. Lookup only, and MEASUREMENT
+  keys : (int, Writer.cid) Hashtbl.t;
+      (* The row's hash ([Learned.hash], D-0226; its canonical TEXT until then) -> the
+         first id that stated it. Lookup only, and MEASUREMENT
          only: it feeds [n_duplicate] and no policy reads it. M1-T59 found duplicate
          `rup` lines harmless per-proof; a retention policy that evicts and lets the same
          clause be re-learned is how they stop being harmless, so the count is kept where
@@ -703,10 +708,19 @@ let was_retired t cid = Hashtbl.mem t.gone cid
    stdout-identity lane never see it. *)
 let trace_every = ref 0
 
+(* M21-memory-T3 (D-0226): and, under BAGUETTE_RETENTION_TRACE_HEAP=1 as well, the live
+   words of the heap after a full major collection, which is how D-0226 measured what an
+   eviction frees. A full collection per trace line: measurement only, never a default. *)
+let trace_heap = ref (Sys.getenv_opt "BAGUETTE_RETENTION_TRACE_HEAP" = Some "1")
+
 let trace t =
   if !trace_every > 0 && t.n_added mod !trace_every = 0 then
-    Printf.eprintf "retention-trace: added=%d live=%d evicted=%d pinned=%d cpu=%.2f\n%!"
+    Printf.eprintf "retention-trace: added=%d live=%d evicted=%d pinned=%d cpu=%.2f%s\n%!"
       t.n_added t.n_live t.n_evicted t.n_pinned (Sys.time ())
+      (if !trace_heap then (
+         Gc.full_major ();
+         Printf.sprintf " live_words=%d" (Gc.stat ()).Gc.live_words)
+       else "")
 
 (* Register a learned constraint. The id must be one [Learned.introduce] or
    [Pb_analysis.introduce] just handed back, and registering it is what transfers I-X2's
@@ -725,7 +739,7 @@ let add t ~cid ~(row : Learned.t) ~lbd ~origin =
     raise
       (Double_delete
          (Printf.sprintf "retention: id %d was already retired and cannot be re-added" cid));
-  let key = Learned.to_string row in
+  let key = Learned.hash row in
   (match Hashtbl.find_opt t.keys key with
   | Some _ -> t.n_duplicate <- t.n_duplicate + 1
   | None -> Hashtbl.replace t.keys key cid);
@@ -735,7 +749,6 @@ let add t ~cid ~(row : Learned.t) ~lbd ~origin =
       e_lbd = lbd;
       e_size = List.length (Learned.lits row);
       e_seq = t.next_seq;
-      e_key = key;
       e_origin = origin;
       e_tier =
         (match t.policy.p_tiers with Some prm -> tier_of_lbd prm lbd | None -> Local);
@@ -826,7 +839,7 @@ let gate t store ~cid (inst : Propagator.instance) : Propagator.instance =
                  database does not hold; register the constraint with [add] first"
                 inst.Propagator.id cid))
     | Some e ->
-        let g = { g_inst = inst.Propagator.id; g_dead = false } in
+        let g = { g_inst = inst.Propagator.id; g_dead = false; g_leave = ignore } in
         e.e_gate <- Some g;
         t.store <- Some store;
         let inner_run = inst.Propagator.run
@@ -848,6 +861,7 @@ let gate t store ~cid (inst : Propagator.instance) : Propagator.instance =
           inst with
           Propagator.run;
           inst_advise = (fun s v -> (not g.g_dead) && inner_advise s v);
+          inst_attach = (fun leave -> g.g_leave <- leave);
         }
 
 (* The engine ids whose constraint the proof may still need, at the moment of a
@@ -1056,6 +1070,11 @@ let reduce t ctx =
           match e.e_gate with
           | Some g when Hashtbl.mem t.cited e.e_cid ->
               g.g_dead <- true;
+              (* D-0226: and out of the engine, which held the instance and so every
+                 byte of the propagator until this record. *)
+              let leave = g.g_leave in
+              g.g_leave <- ignore;
+              leave ();
               Hashtbl.remove t.cited e.e_cid;
               t.n_detached <- t.n_detached + 1
           | _ -> ())

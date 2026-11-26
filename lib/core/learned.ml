@@ -610,6 +610,30 @@ let to_string t =
 (* The constraint as the .opb/.pbp writes it. [Opb.ge] is already the checkers' own
    normal form for a ">=" and [make] has already made every coefficient positive, so
    there is nothing to negate here. *)
+(* M21-memory-T3 (D-0226): a 63-bit hash of the row, a function of exactly what [to_string]
+   renders (the degree, then every coefficient and literal in [make]'s order), for
+   [Retention]'s duplicate count, which used to keep the rendered text of every row (27
+   bytes per literal) only to compare it. Two different rows share a hash with
+   probability about 2^-62 per pair, so over a million learned rows the count is wrong
+   with probability under 10^-6; the count is a measurement and steers nothing. *)
+let hash t =
+  let mix h x = h * 1000003 lxor x in
+  let lit_code (l : Lit.t) =
+    let tag, nm, v =
+      match l.Lit.v with
+      | Lit.Ge (nm, v) -> (0, nm, v)
+      | Lit.Eq (nm, v) -> (1, nm, v)
+      | Lit.Bit (nm, v) -> (2, nm, v)
+    in
+    mix
+      (mix (mix (Hashtbl.hash nm) (String.length nm)) v)
+      ((2 * tag) + if l.Lit.positive then 1 else 0)
+  in
+  List.fold_left
+    (fun h tm -> mix (mix h tm.coeff) (lit_code tm.lit))
+    (mix 17 t.degree) t.terms
+  land max_int
+
 let to_opb t = Opb.ge (List.map (fun tm -> (tm.coeff, tm.lit)) t.terms) t.degree
 
 (* Put the learned constraint on the page and hand back its id.
@@ -835,18 +859,23 @@ let to_linear_row t ~decl =
    [~id] must be [Engine.next_id] of the engine it is about to be added to -- [Engine.add]
    checks that and says why. *)
 let pb_instance ~id ~row_id ?(bump = 0) store ~decl t : Propagator.instance option =
-  let row _store =
-    Some
-      {
-        Propagator.r_terms = raw_terms t;
-        Propagator.r_degree = t.degree;
-        Propagator.r_cid = row_id;
-      }
-  in
+  let degree = t.degree in
   Option.map
     (fun p ->
+      (* M21-memory-T3 (D-0226): the row is read back off the instance's own arrays, so the
+         closure holds the instance and the degree on the page, not a second copy of the
+         row. Same pairs in the same order: [Pb.of_terms] keeps every term of a [make]d row
+         (all coefficients >= 1) in its order, with the literal it was given. *)
+      let row _store =
+        Some
+          {
+            Propagator.r_terms = Pb.raw_terms p;
+            Propagator.r_degree = degree;
+            Propagator.r_cid = row_id;
+          }
+      in
       Propagator.pack ~id ~row (module Pb.Learned_pb : Propagator.S with type t = Pb.t) p)
-    (Pb.of_terms store ~decl ~degree:(t.degree + bump) (raw_terms t))
+    (Pb.of_terms store ~decl ~degree:(degree + bump) (raw_terms t))
 
 (* The declared-domain lookup an [Encoding] provides, in the shape [pb_instance] wants.
    Kept here rather than in [Encoding] because it is this module's question: [Encoding]
