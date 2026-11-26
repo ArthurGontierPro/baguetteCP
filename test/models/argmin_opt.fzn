@@ -1,60 +1,44 @@
 % M18-coverage-T6 (D-0240): flattened by MiniZinc 2.10.1 with baguette's mznlib from
 % mznlib/test/argmin_src_opt.mzn.
-% arg_min over an array indexed from 0 (the index set's offset is the decomposition's
-% l..u, not 1..n), inside an objective: maximise the index of the minimum under a floor
-% on the sum. The best answer puts the minimum last, and the tie rule (the FIRST position
-% of the minimum) forbids any earlier position from equalling it.
+% std's arg_min pinned through baguette (copies n * y[j] + j and array_int_minimum over
+% them), over an array indexed from 0, inside an objective: maximise the index of the
+% minimum under a floor on the sum. The best answer puts the minimum last, and the tie rule
+% (the FIRST position of the minimum) forbids any earlier position from equalling it.
 
 
 predicate all_different_int(array [int] of var int: x);
-array [1..2] of int: X_INTRODUCED_24_ = [1,-1];
-array [1..2] of int: X_INTRODUCED_27_ = [-1,1];
-array [1..4] of int: X_INTRODUCED_44_ = [-1,-1,-1,-1];
+array [1..2] of int: X_INTRODUCED_31_ = [1,-4];
+array [1..4] of int: X_INTRODUCED_38_ = [-1,-1,-1,-1];
 var 1..4: X_INTRODUCED_17_;
 var 1..4: X_INTRODUCED_18_;
 var 1..4: X_INTRODUCED_19_;
 var 2..4: X_INTRODUCED_20_;
 var 0..3: X_INTRODUCED_21_ ::var_is_introduced ;
-var 1..4: X_INTRODUCED_23_ ::var_is_introduced :: is_defined_var;
-var bool: X_INTRODUCED_25_ ::var_is_introduced :: is_defined_var;
-var bool: X_INTRODUCED_26_ ::var_is_introduced :: is_defined_var;
-var bool: X_INTRODUCED_28_ ::var_is_introduced :: is_defined_var;
-var bool: X_INTRODUCED_29_ ::var_is_introduced :: is_defined_var;
+var 4..16: X_INTRODUCED_23_ ::var_is_introduced :: is_defined_var;
+var 5..17: X_INTRODUCED_24_ ::var_is_introduced :: is_defined_var;
+var 6..18: X_INTRODUCED_25_ ::var_is_introduced :: is_defined_var;
+var 7..19: X_INTRODUCED_26_ ::var_is_introduced :: is_defined_var;
+var 4..19: X_INTRODUCED_29_ ::var_is_introduced :: is_defined_var;
 var bool: X_INTRODUCED_30_ ::var_is_introduced :: is_defined_var;
-var bool: X_INTRODUCED_31_ ::var_is_introduced :: is_defined_var;
 var bool: X_INTRODUCED_32_ ::var_is_introduced :: is_defined_var;
 var bool: X_INTRODUCED_33_ ::var_is_introduced :: is_defined_var;
 var bool: X_INTRODUCED_34_ ::var_is_introduced :: is_defined_var;
-var bool: X_INTRODUCED_35_ ::var_is_introduced :: is_defined_var;
-var bool: X_INTRODUCED_36_ ::var_is_introduced :: is_defined_var;
-var bool: X_INTRODUCED_37_ ::var_is_introduced :: is_defined_var;
-var bool: X_INTRODUCED_38_ ::var_is_introduced :: is_defined_var;
-var bool: X_INTRODUCED_39_ ::var_is_introduced :: is_defined_var;
 array [1..4] of var int: X_INTRODUCED_16_:: output_array([1..4]) = [X_INTRODUCED_17_,X_INTRODUCED_18_,X_INTRODUCED_19_,X_INTRODUCED_20_];
-array [1..4] of var int: X_INTRODUCED_22_ ::var_is_introduced  = [X_INTRODUCED_17_,X_INTRODUCED_18_,X_INTRODUCED_19_,X_INTRODUCED_20_];
-array [1..2] of var int: X_INTRODUCED_42_ ::var_is_introduced  = [X_INTRODUCED_17_,X_INTRODUCED_18_];
-constraint array_int_minimum(X_INTRODUCED_23_,X_INTRODUCED_22_):: defines_var(X_INTRODUCED_23_);
-constraint bool_clause([X_INTRODUCED_25_,X_INTRODUCED_26_],[]);
-constraint bool_clause([X_INTRODUCED_28_,X_INTRODUCED_29_],[]);
-constraint bool_clause([X_INTRODUCED_30_,X_INTRODUCED_31_],[]);
-constraint bool_clause([X_INTRODUCED_32_,X_INTRODUCED_33_],[]);
-constraint bool_clause([X_INTRODUCED_34_,X_INTRODUCED_35_],[]);
-constraint bool_clause([X_INTRODUCED_36_,X_INTRODUCED_37_],[]);
-constraint bool_clause([X_INTRODUCED_38_,X_INTRODUCED_39_],[]);
-constraint all_different_int(X_INTRODUCED_42_);
-constraint int_lin_le(X_INTRODUCED_44_,[X_INTRODUCED_17_,X_INTRODUCED_18_,X_INTRODUCED_19_,X_INTRODUCED_20_],-11);
-constraint int_lin_le_reif(X_INTRODUCED_24_,[X_INTRODUCED_17_,X_INTRODUCED_23_],0,X_INTRODUCED_25_):: defines_var(X_INTRODUCED_25_);
-constraint int_ne_reif(X_INTRODUCED_21_,0,X_INTRODUCED_26_):: defines_var(X_INTRODUCED_26_);
-constraint int_lin_le_reif(X_INTRODUCED_27_,[X_INTRODUCED_17_,X_INTRODUCED_23_],-1,X_INTRODUCED_28_):: defines_var(X_INTRODUCED_28_);
-constraint int_le_reif(X_INTRODUCED_21_,0,X_INTRODUCED_29_):: defines_var(X_INTRODUCED_29_);
-constraint int_lin_le_reif(X_INTRODUCED_24_,[X_INTRODUCED_18_,X_INTRODUCED_23_],0,X_INTRODUCED_30_):: defines_var(X_INTRODUCED_30_);
-constraint int_ne_reif(X_INTRODUCED_21_,1,X_INTRODUCED_31_):: defines_var(X_INTRODUCED_31_);
-constraint int_lin_le_reif(X_INTRODUCED_27_,[X_INTRODUCED_18_,X_INTRODUCED_23_],-1,X_INTRODUCED_32_):: defines_var(X_INTRODUCED_32_);
-constraint int_le_reif(X_INTRODUCED_21_,1,X_INTRODUCED_33_):: defines_var(X_INTRODUCED_33_);
-constraint int_lin_le_reif(X_INTRODUCED_24_,[X_INTRODUCED_19_,X_INTRODUCED_23_],0,X_INTRODUCED_34_):: defines_var(X_INTRODUCED_34_);
-constraint int_ne_reif(X_INTRODUCED_21_,2,X_INTRODUCED_35_):: defines_var(X_INTRODUCED_35_);
-constraint int_lin_le_reif(X_INTRODUCED_27_,[X_INTRODUCED_19_,X_INTRODUCED_23_],-1,X_INTRODUCED_36_):: defines_var(X_INTRODUCED_36_);
-constraint int_le_reif(X_INTRODUCED_21_,2,X_INTRODUCED_37_):: defines_var(X_INTRODUCED_37_);
-constraint int_lin_le_reif(X_INTRODUCED_24_,[X_INTRODUCED_20_,X_INTRODUCED_23_],0,X_INTRODUCED_38_):: defines_var(X_INTRODUCED_38_);
-constraint int_ne_reif(X_INTRODUCED_21_,3,X_INTRODUCED_39_):: defines_var(X_INTRODUCED_39_);
+array [1..4] of var int: X_INTRODUCED_28_ ::var_is_introduced  = [X_INTRODUCED_23_,X_INTRODUCED_24_,X_INTRODUCED_25_,X_INTRODUCED_26_];
+array [1..2] of var int: X_INTRODUCED_36_ ::var_is_introduced  = [X_INTRODUCED_17_,X_INTRODUCED_18_];
+constraint array_int_minimum(X_INTRODUCED_29_,X_INTRODUCED_28_):: defines_var(X_INTRODUCED_29_);
+constraint int_lin_le_reif(X_INTRODUCED_31_,[X_INTRODUCED_29_,X_INTRODUCED_17_],-1,X_INTRODUCED_30_);
+constraint int_lin_le_reif(X_INTRODUCED_31_,[X_INTRODUCED_29_,X_INTRODUCED_18_],0,X_INTRODUCED_32_);
+constraint int_lin_le_reif(X_INTRODUCED_31_,[X_INTRODUCED_29_,X_INTRODUCED_19_],1,X_INTRODUCED_33_);
+constraint int_lin_le_reif(X_INTRODUCED_31_,[X_INTRODUCED_29_,X_INTRODUCED_20_],2,X_INTRODUCED_34_);
+constraint all_different_int(X_INTRODUCED_36_);
+constraint int_lin_le(X_INTRODUCED_38_,[X_INTRODUCED_17_,X_INTRODUCED_18_,X_INTRODUCED_19_,X_INTRODUCED_20_],-11);
+constraint int_lin_eq([4,-1],[X_INTRODUCED_17_,X_INTRODUCED_23_],0):: defines_var(X_INTRODUCED_23_);
+constraint int_lin_eq([4,-1],[X_INTRODUCED_18_,X_INTRODUCED_24_],-1):: defines_var(X_INTRODUCED_24_);
+constraint int_lin_eq([4,-1],[X_INTRODUCED_19_,X_INTRODUCED_25_],-2):: defines_var(X_INTRODUCED_25_);
+constraint int_lin_eq([4,-1],[X_INTRODUCED_20_,X_INTRODUCED_26_],-3):: defines_var(X_INTRODUCED_26_);
+constraint int_ne_reif(X_INTRODUCED_21_,0,X_INTRODUCED_30_):: defines_var(X_INTRODUCED_30_);
+constraint int_ne_reif(X_INTRODUCED_21_,1,X_INTRODUCED_32_):: defines_var(X_INTRODUCED_32_);
+constraint int_ne_reif(X_INTRODUCED_21_,2,X_INTRODUCED_33_):: defines_var(X_INTRODUCED_33_);
+constraint int_ne_reif(X_INTRODUCED_21_,3,X_INTRODUCED_34_):: defines_var(X_INTRODUCED_34_);
 solve  maximize X_INTRODUCED_21_;

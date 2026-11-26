@@ -1,10 +1,11 @@
 % Provenance model for test/models/argmax_sat.fzn (M18-coverage-T6, D-0240).
-% arg_max over four variables where a TIE is forced: x[2] = x[4] and both reach the
-% maximum, so the index is 2, the first of them; x[1] is kept below. The maximum is
-% array_int_maximum over x itself, and no scaled copy of x is introduced (std's
-% decomposition defines one int_lin_eq copy n * x[j] + (u - j) per position).
+% std's arg_max pinned through baguette: w[j] = n * x[j] + (u - j), one int_lin_eq per
+% position, array_int_maximum over the w, and (i != j) = (max(w) > w[j]) as one reified row
+% aliased with i's indicator. D-0240 measured three routes without the copies and kept this
+% one. A TIE is forced: x[2] = x[4] and both reach the maximum, so the index is 2, the first
+% of them; x[1] is kept below.
 % MUST-EMIT: array_int_maximum
-% MUST-NOT-EMIT: int_lin_eq
+% MUST-EMIT: int_lin_le_reif
 % SOLVES-AS: argmax_sat
 include "globals.mzn";
 array [1..4] of var 0..5: x;

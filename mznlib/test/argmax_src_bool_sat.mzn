@@ -1,9 +1,10 @@
 % Provenance model for test/models/argmax_bool_sat.fzn (M18-coverage-T6, D-0240).
-% arg_max and arg_min over var bool. b has no true position (its sum is 0), so arg_max(b)
-% is the FIRST position, 2 (std's answer: every scaled copy is equal there and the first
-% wins); c's first false position is pinned to 4 by its index, so c[2] and c[3] are true.
-% MUST-EMIT: array_bool_and
-% MUST-NOT-EMIT: array_int_maximum
+% std's arg_max and arg_min over var bool pinned through baguette: integer copies
+% n * b[j] + (u - j) and array_int_maximum (resp. minimum) over them. b has no true position
+% (its sum is 0), so arg_max(b) is the FIRST position, 2; c's first false position is
+% pinned to 4 by its index, so c[2] and c[3] are true.
+% MUST-EMIT: array_int_maximum
+% MUST-EMIT: array_int_minimum
 % SOLVES-AS: argmax_bool_sat
 include "globals.mzn";
 array [2..4] of var bool: b;
