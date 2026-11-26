@@ -19,7 +19,6 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M18-coverage-ne (D-0238): int_lin_ne/int_ne conflicts carry their facts | `lib/core/prop/ne.ml`, its tests (`test/unit/test_prop.ml` ne cases, new test models; `test/unit/test_matrix.ml` check 3, `test/unit/test_learn.ml` a2 scene) | agent-ne (wave84-ne, /scratch/arthur/wt-ne) | 2026-11-26 |
 
 ## Cross-session requests
 
@@ -475,6 +474,7 @@ section 1. Shares are inclusive, of the whole run.
 
 | Task | Session | Date | Summary |
 |---|---|---|---|
+| M18-coverage-ne, int_lin_ne's conflicts carry their facts (D-0238) | agent-ne (`wave84-ne`, not merged) | 2026-11-26 | **D-0238 [AUTONOME].** Survey of 507 Challenge instances: int_lin_ne is the one family whose conflicts were factless (41 671, 18 instances, 7 families; learned_pb 9). Under a decision its all-fixed conflict now carries every term's fixing facts, so the trace writes the nogood and 1UIP learns; root unchanged. 300 s on the 18: complete answers 4 then 7 without proof, 2 then 4 with (tc-graph-color k2_42 UNSAT in 1 035 nodes, ocr 4s-23d OPT, k5_05 OPT), none lost; x1.2 to x1.8 instructions per node on tc-graph-color, x0.54 on gcc-benchmark l42_3. Lanes: 14 of 347 and 14 of 333 differ, tc-graph-color k5_05 only, not re-recorded. |
 | M20-pernode-T4, the learning path's name lookups (D-0236) | agent-names (`wave82-names`, not merged) | 2026-11-26 | **D-0236 [AUTONOME].** One-entry memos in `Store.var_named` and `Encoding.find` (hit when the name is physically the last answer's), Justify's interned name carries a literal's bits flag, the decision closure's cells a dense scratch by slot, `String.hash` for every name table (`lib/proof/name_tbl.ml`), `check_attribution` without a closure. Same trees, byte-identical artefacts. Per node without / with proof: handball12 -8.1 / -9.6 %, tppv circ14 -2.7 / -6.0 %, costas13 -3.3 / -4.0 %, qr2 -1.3 / -1.6 %; cycles move less (handball12 to OPT: instructions -7.3 %, cycles -1.8 %) |
 | M18-coverage-T11, gcc's conflicts carry their facts (D-0234) | agent-gcc (`wave80-gcc`, not merged) | 2026-11-26 | **D-0234 [AUTONOME].** Under a decision every gcc push that would empty its target is the conflict, with its facts plus the crossed bound, derived ahead; the reasons name only the facts their derivation leaves. Every gcc conflict learns now; rws e-80-s-1 SAT in 1 s (was 71 s); no new answer at 300 s on 34 gcc users, instructions per node x1.1 to x3.3. |
 | M20-pernode-T4, alldiff's cost per call (D-0235) | agent-alldiff (`wave81-alldiff`, not merged) | 2026-11-26 | **D-0235 [AUTONOME].** Regin removals share a snapshot cache and one fact list per tight set; stage 1 snapshots lazily and skips quiet bound vectors. Same trees and bytes; elitserien handball12 -61 % instructions per node without proof, -25 % with; to OPT 232.5 -> 109.9 s |
@@ -706,6 +706,10 @@ section 1. Shares are inclusive, of the whole run.
 | M18-coverage-T7 (the cheap globals) | agent-cheap (`wave79-cheap`) | 2026-11-26 | **D-0233 [AUTONOME].** mznlib only: `fzn_alldifferent_except` as at most one indicator per value (1 -> 2 complete of 37, gcc's route measured worse), `fzn_nvalue` without the bool2int copies, `fzn_all_equal_int_reif` as a chain (outcomes unchanged). Seven test models, SPEC 2.1 row |
 
 ## Handoff notes
+
+### 2026-11-26 (agent-ne, `wave84-ne`, D-0238): int_lin_ne's conflicts carry their facts, not merged
+
+`Ne.propagate`'s all-fixed violation, under a decision, now reports every term's `Reason.fixed_at` (each fact once) instead of `Reason.none`; at the root it stays factless. The trace line is the module's own nogood (`rup ~facts >= 1` over order, the existing Resolve `pol` + `ia` over bits), so no derivation ahead and no new constructor. Two tests whose scene relied on ne conflicts not learning were adapted, not weakened: test_matrix check 3 no longer counts a 1UIP learned clause as a nogood, and test_learn a2 is re-pinned to the holes scene at seed 75 (D-0238 section 5). The merge needs a lane re-record: tc-graph-color k5_05 differs in all 14 configurations of both passes, one stdout change (`alternate` now finds objective 552 at the budget). Open, for other owners: learned_pb's 9 factless conflicts (pb.ml), 45 282 conflicts with no instance id, a shared `Reason.distinct`, learned clauses that keep root literals. Results: `/cluster/arthur/baguette-results/ne/`.
 
 ### 2026-11-26 (agent-names, `wave82-names`, D-0236): the learning path's name lookups, not merged
 
