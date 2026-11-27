@@ -31902,3 +31902,77 @@ None proposed. Nothing new reaches the solver: std's decompositions emit only bu
   profile by propagator instance would say whether a native `arg_max` could pay at all.
 - The census tool counts names. `tools/compare/challenge_globals.py` lists `sort`, `arg_sort` and `arg_max` as not
   native, which is right, but the ROADMAP's 155 overstates what any route could change by ten to one.
+## D-0237  [AUTONOME] M22-review-bugs: a factless root conflict's derivation may mint atoms, so `close_root_conflict` closes the atoms after it. A three-variable UNSAT model died in `Encoding.ensure_atom` under the default (bits) encoding
+
+**Status**: DONE on `wave83-rootbug` (agent-rootbug, then agent-rootbug2, 2026-11-27), not merged.
+Main `a67493a` (binary `505217da`) merged in. Branch binary `db155bd7`. Touches
+`lib/core/search.ml` (`close_root_conflict` only) and four test models. Amends D-0130 section 5.4.
+
+### 1. The bug
+
+agent-cheap's fuzz found it (`/cluster/arthur/baguette-results/cheap/bug-root-bits-ensure-atom.fzn`).
+With `x0 in 0..3` (bits), `x1, x2 in 2..3` (width 1, so order), `x1 != x0`, `x2 != x1` and `x2 < x0`,
+root propagation fixes `x2 = 2`, `x0 = 3` and `x1 = 3`, and `x1 != x0` fails with every term fixed.
+At the root `ne.ml` records no facts for that conflict (D-0238 changed this under a decision only), so
+`Trace.conflict_line` writes nothing and `close_root_conflict` writes the conflict's derivation itself,
+a `Resolve` over the bits row. That derivation cites the order bridge of `x1 >= 3`, which nothing had
+minted, and `Encoding.ensure_atom` refused it because `close_atoms` had been called just before. The
+run died with `Invalid_argument`. `--no-proof` and `--bits-above none` answered UNSAT.
+
+### 2. Options
+
+| option | consequence |
+|---|---|
+| A. close the atoms after the factless derivation, before the empty clause | the crash goes. Atoms minted by that derivation may be written over a database unit propagation already refutes, so their check is vacuous there (section 3) |
+| B. keep the close before the derivation and let `ensure_atom` mint order bridges (`rup`) when closed, never a bits `red` pair | fixes every case measured (section 3) but leaves a crash for a bits pair, which nothing rules out, and adds a second rule to the guard |
+| C. make `ne.ml` record its fixing facts at the root too | not this row's file. The derivation would still cite the same atoms, so it does not remove the cause |
+| D. skip the derivation at the root and close on `rup >= 1` alone | refused where the derivation is load-bearing (2 of the 16 cases below, and test_prop's regin (c) of D-0134) |
+
+Chosen: **A**, the agent-rootbug commit `f7140c7`, kept as written except its comment, which claimed
+that the contradiction reaches the page only with the derivation. Section 3 measured that this is
+usually false.
+
+### 3. Why it is sound, and what is checked there
+
+Soundness does not depend on the database. Every rule VeriPB accepts is sound over any database, a
+`red` included (the redundance theorem), so a line minted over a contradictory database cannot make an
+UNSAT verdict wrong. D-0053 and D-0066 are about the strength of the check, because over a database
+that unit propagation already refutes, a `rup` or `red` is accepted whatever it says.
+
+Measured on the 16 models main `121a1ce` died on (the four `test/models/root_bits_*` and 12 seeds of
+the fuzz of section 4). For each, main's partial proof stops exactly where the derivation would mint,
+and that prefix followed by `rup >= 1` was given to VeriPB 3.0.2.
+
+- In 14 of 16 the prefix is accepted, so the database is already UP-contradictory before the
+  derivation. Its lines are unchecked there, and closing earlier would not have changed that. It only
+  turned the run into a crash.
+- In 2 of 16 (fuzz seeds 1247 and 3250) the prefix is refused at the added line. The derivation is
+  load-bearing, and its lines are checked against a database that is not yet contradictory.
+- On all 16 the minted lines were order bridges (`rup`, no witness), 15 of them on width-1 variables,
+  where B1' is a tautology. No bits `red` pair was minted there. Option A would mint one if a case
+  needed it. Its two lines are fixed by the atom being fresh, whatever the database, and the mint
+  code is the one `test_mutation`'s bits lanes (`bits_sat`, `bits_reif`) check over satisfiable models.
+
+D-0130 section 5.4 said that `ensure_atom` "must never run after a contradiction has been derived at
+level 0" and that this holds structurally. It now reads that nothing mints once the refutation is
+written, the guard closing just before the empty clause. A root conflict's derivation belongs to the
+refutation. The measurement also shows that the guard never promised a non-contradictory database,
+because the root's trace can make the database UP-contradictory before the solver sees the conflict.
+
+### 4. Tests and the hunt for siblings
+
+- Four models, each dying on main under the default encoding and UNSAT with a verified proof on the
+  branch, in both encodings and under `BAGUETTE_DEBUG=1`: `root_bits_ensure_atom_unsat` (the
+  reproducer), `root_bits_ne_lt_unsat` (`int_ne` and `int_lt`), `root_bits_ne_row_unsat` (linear rows
+  fix both terms), `root_bits_ne_const_unsat` (comparisons with constants).
+- Differential fuzz, every model under `--proof` in both encodings with each proof checked by VeriPB,
+  `--no-proof` compared byte for byte with the proved run, verdicts and optima compared across the
+  encodings. Harness and results in `/cluster/arthur/baguette-results/rootbug2/`. A generator aimed at root conflicts over
+  mixed order and bits variables (`gen2.py`), 20 000 models: main dies on 24 (all `ensure_atom` after
+  the root contradiction), the branch on 0, and those 24 are UNSAT. agent-rootbug's `gen.py`, 5 000
+  models: 0 issues on main and on the branch. `scripts/fuzz_lane.sh -n 300 --seed 7` (Gecode as the
+  reference, six streams): 1 800 models, 0 disagreements.
+
+### 5. Revert
+
+`git revert f7140c7 81dff27` restores the close before the derivation. The four models then fail.

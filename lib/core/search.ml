@@ -2119,11 +2119,29 @@ let close_root_conflict ctx trace store (c : Store.conflict) =
   Trace.emit ctx trace store;
   let line = Trace.conflict_line ctx trace c in
   (* M8-bits-encoding-T2 (D-0130 section 5.4, D-0053): nothing may mint an atom once the
-     root contradiction is on the page. Nothing below names a literal; the guard is for
-     whatever comes after. *)
-  Encoding.close_atoms ctx.Justify.encoding;
+     refutation is written. The guard closes just before the empty clause, which names
+     no literal, and AFTER a factless conflict's derivation, because that derivation may
+     name atoms nothing earlier minted (D-0237): an all-fixed disequality's [Resolve]
+     over a bits row (ne.ml records no facts for it at the root) cites the atoms of
+     every term's fixed value, and an ORDER variable's bridge is minted only where a
+     bits derivation first cites it. Closing before it made the default run die in
+     [Encoding.ensure_atom] on a model the order encoding refutes.
+
+     Minting there is sound. Every line VeriPB accepts is sound over any database, a
+     `red` included (the redundance theorem), so a mint cannot make the UNSAT verdict
+     wrong. What D-0053 warns about is the CHECK: over a database unit propagation
+     already refutes, the lines are accepted whatever they say. Measured on 16 models
+     main 121a1ce died on (test/models/root_bits_*, and 12 fuzz seeds): in 14 the
+     database is already UP-contradictory before the derivation, so its lines are
+     unchecked there, as closing earlier would not have changed; in 2 it is not, and
+     the derivation is load-bearing for the `rup >= 1`. Every line minted on these 16
+     was an order bridge (a `rup`, no witness), never a bits `red` pair. The mint code
+     is the one test_mutation's bits lanes check over satisfiable models. *)
+  let close () = Encoding.close_atoms ctx.Justify.encoding in
   match Explanation.force e with
-  | Explanation.Clause { lits = []; _ } -> Justify.emit ctx e
+  | Explanation.Clause { lits = []; _ } ->
+      close ();
+      Justify.emit ctx e
   | forced ->
       (match (line, forced) with
       (* M8-bits-encoding-T3 (D-0134): a [Resolve] -- a choice derivation over bits,
@@ -2137,6 +2155,7 @@ let close_root_conflict ctx trace store (c : Store.conflict) =
              weakened, which the checker refutes unaided. *)
           ignore (Justify.emit ctx e : Writer.cid)
       | _ -> ());
+      close ();
       Justify.emit ctx (Explanation.clause [])
 
 (* ------------------------------------------------- a decision that settled at a hole

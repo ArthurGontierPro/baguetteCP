@@ -1,0 +1,11 @@
+% M22-review-bugs (D-0237): the reproducer with int_ne and int_lt in place of the linear
+% rows. x2 < x0 fixes x2 = 2 and x0 = 3 (on bits), x2 != x1 fixes x1 = 3, and x1 != x0
+% fails at the root with every term fixed, its derivation naming the order bridge of
+% x1 >= 3, which nothing minted before.
+var 0..3: x0 :: output_var;
+var 2..3: x1 :: output_var;
+var 2..3: x2 :: output_var;
+constraint int_ne(x1,x0);
+constraint int_ne(x2,x1);
+constraint int_lt(x2,x0);
+solve satisfy;

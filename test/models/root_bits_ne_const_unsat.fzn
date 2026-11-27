@@ -1,0 +1,9 @@
+% M22-review-bugs (D-0237): the bounds come from comparisons with constants (int_lt,
+% int_le), then x0 != x1 fails at the root with both fixed at 2: x0 on bits, x1 on the
+% order ladder, its atom x1 >= 2 first named by the conflict's derivation.
+var 2..4: x0 :: output_var;
+var 1..2: x1 :: output_var;
+constraint int_lt(x0,3);
+constraint int_le(2,x1);
+constraint int_ne(x0,x1);
+solve satisfy;
