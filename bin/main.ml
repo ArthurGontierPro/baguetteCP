@@ -510,6 +510,10 @@ let usage () =
     "                    before the first decision and asserts the negation of one";
   prerr_endline
     "                    that fails (failed-literal probing, D-0250). Default off.";
+  prerr_endline "                    BAGUETTE_PROBE_BUDGET (propagator runs, 5000000),";
+  prerr_endline "                    BAGUETTE_PROBE_CPU (seconds, 10; 0 for none) and";
+  prerr_endline
+    "                    BAGUETTE_PROBE_WIDTH (largest domain probed, 64) bound it.";
   prerr_endline
     "  BAGUETTE_REST_SATISFIED=on|off  a satisfied learned clause rests on its true";
   prerr_endline "                    literal until a backtrack (D-0173). Default off.";
