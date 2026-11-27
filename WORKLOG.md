@@ -19,7 +19,6 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M22-review-bugs: wide domains, the memory cap and the time limit (D-0263) | `lib/flatzinc/compile.ml`, `lib/proof/encoding.ml`, `lib/proof/opb.ml`, `lib/core/checked.ml`, time-limit and heap-budget plumbing outside `bin/main.ml` (minimal line in `bin/main.ml` if needed), tests and models | agent-wide (branch wave108-wide) | 2026-11-27 |
 
 ## Cross-session requests
 
@@ -499,6 +498,7 @@ section 1. Shares are inclusive, of the whole run.
 
 | Task | Session | Date | Summary |
 |---|---|---|---|
+| M22-review-bugs, wide domains: the memory cap and the time limit (D-0263) | agent-wide (`wave108-wide`, not merged) | 2026-11-27 | **D-0263 [AUTONOME].** `--time-limit` honoured before the search (lib/proof/deadline.ml: weighted ticks, at the limit + 1 s; a stop in `start_proof` ends the proof, before it there is none and stderr says so) and as a backstop in one long search step; `Encoding.reserve` refuses (exit 5) before allocating a direct encoding, an int_times/int_div case split or maximum's per-value rows when a LOWER bound of their live heap passes --max-heap-mb, ulimit -v or memory+swap (on by default, own commit `22510357`); the case split's ladder lookup was quadratic (`4ebf1f43`). Files: deadline.ml (new), encoding.ml, opb.ml, writer.ml, arith.ml, arith_aux.ml, builder.ml, reader.ml, compile.ml, maxmin.ml, bin/main.ml (minimal), test_endtoend.ml, SPEC, CLAUDE.md, ARCHITECTURE.md |
 | M17-bench-series, the series on main `6c9cf97` with four arms (D-0227) | agent-series2 (`wave74-series2`, not merged) | 2026-11-27 | **D-0227 [AUTONOME].** Binary `fa2d4ee4`, fataepyc-07, PAR 22 x 4. Verified 311 + 79 (A), 356 + 98 (B) against 302 + 74 and 346 + 95 in D-0203, refusals 164 to 65 and 138 to 55, scores 4 442, 6 277, 4 922 (C), 6 803 (D), no proof rejected. The `rss_wrap.py` Errno 22 fix, README section, HISTORY row. |
 | M22-review-bugs, retention deleted a constraint a line still to be written rested on (D-0257) | agent-retbug (`wave103-retbug`, not merged) | 2026-11-27 | **D-0257 [AUTONOME].** Under `--cdcl` the reduction a learned clause's own `add` triggered evicted it (its instance had not propagated, so no lock saw it); the loop then asserted the UIP from the clause itself and that trace line was refused (costas14, D-0256 s5). `Retention.hold`/`release_held`: the CDCL loop's clause is held until the next conflict's trace is written; invariant I-X11; two BAGUETTE_DEBUG checks. `dfs` not exposed (argued, and 1 450 proofs with forced evictions all verified); default artefacts byte-identical (models 268/268, diff 347/347 and 333/333). `--cdcl` refused before / after: test models 32/0 of 1 340, diff corpus 56/0 of 216, fuzz 11/0 of 600, tuning sample 4/0, costas14 VERIFIED. Factor lane exit 0 |
 | M17-bench-series-T6, the per-node factor lane (D-0256) | agent-factor (`wave102-factor`, not merged) | 2026-11-27 | **D-0256 [AUTONOME].** `scripts/factor_lane.sh` (`make factor`), `bench/factor/`: D-0207's six files plus three planted 3-SAT, default and `--cdcl` with and without proof against Gecode, per node on the same tree else per failure, every proof checked. Not a gate. Reference on main `3e60e8c`, release `c79a6b06`. Found `--cdcl --proof` REJECTED on costas14 (request below). |
@@ -753,6 +753,10 @@ section 1. Shares are inclusive, of the whole run.
 | M22-review-bugs (gcc repeated cover, rejected proof on the default) | agent-gccdup (`wave105-gccdup`) | 2026-11-27 | **D-0260 [AUTONOME].** No answer was wrong (14 000 grid runs against a brute-force oracle and Gecode). Cause: gcc.ml's HIGH-row memo keyed on the cover VALUE, so rule (a) justified one count's pruning by another count's row (since `ecae5c7`, main `1e6363c` 2026-10-02). Fix `9b5ef85`: `Builder.merge_gcc_cover_repeats` keeps one occurrence per value and ties the later counts by `int_lin_eq` rows in the model; compile.ml refuses a repeated cover. Tests `628c91b`. Not merged. |
 
 ## Handoff notes
+
+### 2026-11-27 (agent-wide, `wave108-wide`, D-0263): wide domains, the time limit and the memory cap, not merged
+
+`bin/main.ml` changed in a few places (agent-free holds it): `module Deadline`, `exit_time_limit` and `exit_will_not_fit`, the arm before the parse, two exception arms after the parse and after `solve`, a `try` around `Encoding.start_proof`, and `Deadline.on_reached` set at the search's start; expect a merge there. A new width-proportional structure must call `Encoding.reserve` with a coefficient below its measured live words, and add a line to test_endtoend.ml's lower-bound test. What is left (row expansion over a wide order variable, alldiff's Hall derivations over wide domains) is M18-coverage-T9's, D-0263 section 6.
 
 ### 2026-11-27 (agent-gccdup, `wave105-gccdup`, D-0260): a repeated gcc cover value, rejected proof fixed at the front end, not merged
 

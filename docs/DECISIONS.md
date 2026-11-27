@@ -34323,3 +34323,176 @@ the `limit` stream's `-t` runs depend on the wall clock (its `BAGUETTE_NODE_LIMI
 Drop `tools/fuzz/streams.py`, `triage.py`, `shrink_mzn.py`, `bench/fuzz/found/`, and restore
 `scripts/fuzz_lane.sh`, `bench/fuzz/README.md` and the `scripts/README.md` row from `c9b1b70`. The
 2026-11-23 streams keep their seeds (the stream index still counts them first).
+
+## D-0263  [AUTONOME] M22-review-bugs, wide domains on the default configuration: `--time-limit` is honoured before the search (at the limit plus 1 s) and, as a backstop, inside one long search step; an encoding whose LOWER-bound heap estimate exceeds the memory the run has is refused before it is allocated (exit 5, on by default); the int_times/int_div case split is no longer quadratic in its width
+
+**Status**: DONE on `wave108-wide` (agent-wide, 2026-11-27), not merged. Base: main `7c9f8371`, binary md5
+`852e292b`. Final binary `0ef89af2` (commit `a15fdaf8`; the fuzz and the gate also ran on `333c015a`, commit
+`9e6489bc`, which lacks only the last commit). Runs in `/scratch/arthur/wide-runs/`. The two
+findings are D-0258 section 4's (`bench/fuzz/found/wide_alldiff_memcap.fzn`,
+`bench/fuzz/found/wide_times_timelimit_overrun.fzn`). ROADMAP: no row added (M22-review-bugs).
+
+### 1. The two mechanisms, measured
+
+**The time limit.** `--time-limit` was read by the search only (`config.stop`: every node, every 128
+propagator runs, inside a conflict's trace). Nothing before the search looked at a clock: the parse,
+the compile, the `.opb` splice and `Encoding.start_proof` (the direct encodings, written into the
+`.pbp`). On the times model (`int_times(x1, x0, x1)`, `x0` of width 2^21, `x1` of 2^24, both on bits)
+the base binary was killed by `timeout 150` still in the compile, `.opb.rows` at 1.7 GB, no output.
+Scaled down (`x0` of width 2^14 and 2^16): compile 4.1 s and 56.5 s CPU, a factor 14 for a width
+factor 4. `perf`: 22 % `compare_val`, 12 % `caml_compare`, 10 % `List.assoc_opt`, from
+`lib/core/prop/arith.ml`'s `at_least`/`at_most`, which looked the case's guard Boolean up in the
+front end's association list once per value: the case split was QUADRATIC in the case variable's
+width. With a table (`Arith.lookup`, byte-identical) the compile is linear (0.78 s, 3.2 s). The root
+propagation of the same model is still quadratic (2.2 s, 43 s: every change of `x1` wakes the 4w rows)
+but it is polled, and stops at the limit (`at=propagation`, 5.04 s under `--time-limit 5`).
+
+**The memory.** Live words after a full major collection, read at the end of `proofopen` (a probe
+binary, never committed), slope per unit between widths:
+
+| structure | per | with the proof | `--no-proof` |
+|---|---|---|---|
+| direct encoding (all_different, element, inverse) | value | 61 to 75 words | 13 to 24 |
+| case split of int_times / int_div (z constant, z narrow, x = z, div) | value of the case variable | 437 to 775 | 411 to 743 |
+| per-value rows of array_int_maximum over an order scope | threshold | 56 | 34 |
+
+So the alldiff model (2^21 + 2^24 values) needs 9 to 11 GB live, the times model (2^21 cases) 7 to
+13 GB, under the fuzz lane's `ulimit -v 4000000`. The order ladder itself costs no heap per rung (it is
+streamed since D-0123). The heap budget (M7-T8, D-0071) is OFF by default (D-0065), and both of its
+halves read the heap as it IS, at a declaration or a cycle end, never what a declaration is about to
+allocate. The base alldiff run ended `Out_of_memory` (caught, exit 5) at 65 s once and `Fatal error:
+allocation failure during minor GC` (exit 134) in D-0258's run.
+
+### 2. The contract
+
+SPEC "A stopped run": a run stopped by `--time-limit` prints `=====UNKNOWN=====` when it printed no
+solution, a `limit:` line, exits 0, and its proof is ENDED and accepted by the checker (`conclusion
+NONE` or `BOUNDS`); the fuzz `limit` stream checks exactly that. SPEC 3.1: the default build refuses
+no model for its width (D-0065), and a resource overrun is exit 5 with a diagnostic, never the
+runtime's abort. Both findings departed from it: no stop at all, and exit 134 naming nothing.
+
+### 3. The fixes
+
+1. **`Arith.lookup`** (`4ebf1f43`): the ladder lookup by `Hashtbl`, first pair of a value as
+   `List.assoc_opt` gave. Byte-identical (the 6 test models with int_times/int_div, the 281 model
+   tests, both diff lanes).
+2. **`lib/proof/deadline.ml`** (`62610481`, `9e6489bc`): the phases before the search call
+   `Deadline.tick w` with a weight (a committed `.opb` row 64, a row or a proof line its bytes, a value
+   of a direct encoding 64, a Boolean of an arithmetic ladder 64, a block of the splice its bytes);
+   the clock is read once per 2^20 units. `bin/main.ml` arms it at the limit PLUS `Deadline.grace` =
+   1 s. A stop before the `.opb` is complete prints `=====UNKNOWN=====`, `limit: reached ... at=<phase>
+   proof=incomplete`, exit 0, and says on stderr that the proof is INCOMPLETE (or that none was
+   written); a stop inside `start_proof` ENDS the proof (`Writer.conclude_interrupted`; VeriPB: `s
+   VERIFIED NO CONCLUSION`, tested). From the search on, the search's own poll stops the run at the
+   limit, and the deadline stays armed as a BACKSTOP that stops the run as a second signal does
+   (`stop_now`, `limit: killed signal=time-limit`), ticked by proof lines only.
+   *Why the grace*: without it a short limit stops the run in the compile and costs it the proof
+   (the `limit` stream runs `-t 1` to `-t 20` ms; start-up alone is 4 ms). *One rule for the proof*:
+   a stopped run's proof is ended and checked whenever the `.opb` is complete; before that there is
+   no model file, and stderr says so in exit 5's and exit 6's word (INCOMPLETE). SPEC amended.
+3. **`Encoding.reserve`** (`22510357`, own commit, the default-changing one; `9e6489bc` adds maximum):
+   before a structure proportional to a declared width is allocated, a LOWER bound of its live heap
+   is added to a process-wide total, and the run is refused (exit 5, `Encoding.Will_not_fit`) when the
+   total exceeds the smallest of what the run was GIVEN: `--max-heap-mb`, the address space
+   (RLIMIT_AS, `/proc/self/limits`), memory plus swap (`/proc/meminfo`). Reserved per unit: a direct
+   value 30 words with the proof, 10 without (at `request_direct`, compile time, before `start_proof`
+   materialises it); an arithmetic case 300 (in `Arith_aux.ladder_bools`, in the PARSE, before its
+   Booleans exist: a case width of 2^24 dies in the parse otherwise); a maximum/minimum threshold 20
+   (in `Maxmin.make`, before its array). The diagnostic names the variable, its position (direct and
+   arithmetic), its declared domain, the structure, the estimate and the source of the limit.
+   *Why on by default*: the coefficients are below every measured shape (the table above, and the
+   in-process test's own measure, which is lower with the proof: 35, 435, 115), so a refused run is
+   one whose live heap would have passed what it was given: it could not have finished. D-0065's
+   objection (a figure a machine chose is not a property of the solver) does not apply: the limit is
+   the run's own. *Why not a default `--max-heap-mb`* (corpus_run's `HEAP_MB=auto`, half the address
+   space): it would arm the reactive guard by default and refuse runs whose heap sits between half
+   and all of `ulimit -v` and that finish today; proposed, not done (a one-line change in
+   `Encoding.limits_from_env` if the user wants it). SPEC 3.1 amended.
+
+**Cost on normal models** (instructions, `perf stat -e instructions:u`, `BAGUETTE_NODE_LIMIT=3000`,
+three repetitions within 5 000 instructions, base `852e292b` against the final build's code at
+`cff2e916`): handball12 +0.032 % with the proof, +0.024 % without; costas13 +0.021 % / -0.002 %. Their
+stdout, `.opb` and `.pbp` are byte-identical. The first version called `Deadline.tick` per proof line
+and cost +0.13 % on handball12 with the proof; a proof line now tests `Deadline.armed` inline. Under
+`--time-limit` the per-line tick is paid in the search too (the backstop). The scaling lane: section 5.
+What it costs in clarity: one more module (deadline.ml, 80 lines, its rule in its header), a `tick`
+at six sites, and one reservation per width-proportional structure, which a new such structure must
+add (the lower-bound test names the three).
+
+### 4. The fuzz counts (`scripts/fuzz_lane.sh --streams wide,limit -n 2000 --seed 2 -j 16`)
+
+Base `852e292b` (main `7c9f8371`) reproduces D-0258's `main2` exactly; after, `333c015a`:
+
+| `wide`, 2 000 models | before | after |
+|---|---|---|
+| MEMCAP (`Fatal error: allocation failure`, exit 134) | **109** | **2** |
+| past `--time-limit 10` and the 30 s timeout | **264** | **1** (0 with `0ef89af2`, below) |
+| `ok`: answered, or stopped by the limit with no claim (agreeing with Gecode where it answers) | 1 111 | 1 348 |
+| exit 5 (`resource`) | 12 | 146 |
+| refused exit 3 / exit 2 (literal past 2^62) / not flattenable | 130 / 88 / 286 | 129 / 88 / 286 |
+| `limit` stream: disagreements | 0 | 0 (1 593 runs stopped, 2 397 finished) |
+
+Where each of the 373 went, by rerunning `333c015a` on every case the base run kept (`attr/summary2`):
+
+| base verdict | refused by the estimate | stopped by the time limit | answered | still failing |
+|---|---|---|---|---|
+| MEMCAP (109) | 102 | 6 (5 `at=compile`, 1 by the search backstop, 3205_42) | 0 | 1 MEMCAP (3206_229) |
+| timeout (264) | 35 | 227 (219 `at=compile`, 1 `at=opb`, 7 `at=proofopen`, the proof ended) | 1 | 1 (3203_246) |
+
+So the estimate removes 137 of the 373 and the time limit 233 (227 + 6), the quadratic lookup one more
+(answered, no longer stopped), and 2 are left. 3203_246 is a 140 MB `.fzn` whose one set domain lists
+16.7 M values: the parse (15.2 s) is not ticked, and the set's hole computation sorted it for 17 s
+without a tick; with the tick of `a15fdaf8` it stops at 16.8 s (`at=compile`), inside the lane's 30 s.
+The second MEMCAP of the after run, 3201_243, was an exit 5 (`Out_of_memory` caught) in the base run
+and a `Fatal error` in this one, the same death at a different allocation: section 6.
+The rerun of both streams with `0ef89af2` (867 s at -j 16): `wide` MEMCAP 2 (3201_243, 3206_229), past the
+time limit **0**, `ok` 1 349, exit 5 146; `limit` 0 disagreements (1 608 stopped, 2 382 finished).
+
+### 5. Behaviour on existing models
+
+| check | `333c015a` | `0ef89af2` |
+|---|---|---|
+| `dune runtest --root . --force` (`ulimit -v 4000000`) | 5 660 ok, 0 FAIL | 5 660 ok, 0 FAIL |
+| `scripts/run_model_tests.sh` | 281 passed, proofs verified | 281 passed |
+| `scripts/check_determinism.sh` | 281 identical | 281 identical |
+| `scripts/diff_lane.sh --tier all -j 8` | 347 of 347 equal | 347 of 347 equal |
+| `... --debug` | 333 of 333 equal | 333 of 333 equal |
+| `scripts/scaling_lane.sh -j 8` | ok | ok |
+| `check_fmt.sh`, `check_test_widths.py` | ok | ok |
+
+Byte-identical to the base on the 281 test models (stdout, `.opb`, `.pbp`; `cmp.sh`, `5c596acc`), on
+handball12 and costas13 at 3 000 nodes, and on both diff lanes. The tests added (test_endtoend.ml,
+19 checks): the deadline stops a compile and a `start_proof` (whose ended proof veripb accepts as NO
+CONCLUSION) and does nothing disarmed or before its time; the estimate is a lower bound for each of
+the three structures in both modes (widths 200 and 999); a direct encoding past a 0 MB budget is
+refused at its request with nothing requested; the binary refuses an int_times over 0..999 under
+`--max-heap-mb 1` with exit 5, the wording, the variable, the position and no `.opb`, and answers it
+without a budget.
+
+The 60 widest instances of D-0185's corpus (1 574 flattened `.fzn`, widest declared domain 66 M to
+7.5 G), base and final at `BAGUETTE_NODE_LIMIT=100`, `--max-heap-mb 8192` under `ulimit -v 16 GiB`
+(the Challenge harness): 51 exit 0 both with identical stdout, 4
+exit 5 both (the heap budget), 1 exit 2 both, 1 timeout both, and 3 `2022_arithmetic-target` instances
+that timed out in the base (300 s) and exit 5 after. They are not solved runs turned into refusals:
+the base never left their compile, which was the quadratic case split; the build with only the lookup
+fixed (`788594069`) reaches the heap budget on two of them at 93 s and 135 s (8 207 and 8 315 MB, exit
+5), and the third ends by the heap budget in the final build too. The estimate refuses the two at
+parse time (8 336 MB reserved for the 8 192 MB budget).
+
+### 6. What is left for M18-coverage-T9
+
+The estimate covers the structures that are proportional to a width AND live for the run. It does not
+cover what the order encoding makes proportional per ROW: a linear row over a wide order-encoded
+variable expands to one literal per value, built in full before it is streamed (the two `wide`
+models still killed at the cap, 3201_243 and 3206_229: a maximum or a disequality over a 2^24-wide
+variable that all_different holds on the order encoding; their peak is transient lists and buffers
+of single rows, which no lower bound of LIVE structures sees). Nor the alldiff Hall derivations over
+wide domains (3205_42: 540 MB of proof in one propagator run; the backstop now stops it at 11 s).
+Lazy order literals (T9) remove the expansion itself.
+
+### 7. Reverting
+
+Each piece is its own commit: `4ebf1f43` (the lookup), `62610481` (the deadline), `22510357` (the
+reservation, default-changing), `d4e41fb3` and `f457d9bc` (tests, label rename), `2d8827a4` (SPEC and
+module maps), `cff2e916` (cost), `9e6489bc` (backstop, maximum). Reverting `22510357` with `9e6489bc`'s
+maxmin hunk restores the default exactly.
