@@ -19,7 +19,6 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M17-bench-series (D-0227): the Challenge series on current main on fataepyc-07, arms A-D; veripb_wrap.sh Errno 22 fix | `bench/series/veripb_wrap.sh`, `bench/series/HISTORY.md`, README performance section, `docs/DECISIONS.md` (append), `docs/ROADMAP.md` (notes) | agent-series2 (`wave74-series2`) | 2026-11-26 |
 
 ## Cross-session requests
 
@@ -479,6 +478,7 @@ section 1. Shares are inclusive, of the whole run.
 
 | Task | Session | Date | Summary |
 |---|---|---|---|
+| M17-bench-series, the series on main `6c9cf97` with four arms (D-0227) | agent-series2 (`wave74-series2`, not merged) | 2026-11-27 | **D-0227 [AUTONOME].** Binary `fa2d4ee4`, fataepyc-07, PAR 22 x 4. Verified 311 + 79 (A), 356 + 98 (B) against 302 + 74 and 346 + 95 in D-0203, refusals 164 to 65 and 138 to 55, scores 4 442, 6 277, 4 922 (C), 6 803 (D), no proof rejected. The `rss_wrap.py` Errno 22 fix, README section, HISTORY row. |
 | M17-bench-series-T6, the per-node factor lane (D-0256) | agent-factor (`wave102-factor`, not merged) | 2026-11-27 | **D-0256 [AUTONOME].** `scripts/factor_lane.sh` (`make factor`), `bench/factor/`: D-0207's six files plus three planted 3-SAT, default and `--cdcl` with and without proof against Gecode, per node on the same tree else per failure, every proof checked. Not a gate. Reference on main `3e60e8c`, release `c79a6b06`. Found `--cdcl --proof` REJECTED on costas14 (request below). |
 | M19-config-T8, probing at the root (D-0250) | agent-probe (`wave96-probe`, not merged) | 2026-11-27 | **D-0250 [AUTONOME].** `lib/core/probe.ml`: a failed bound literal is a failed one-decision node, its unit nogood filed at level 0, its negation asserted there; `BAGUETTE_PROBE=off|root`, default off (byte-identical, 259 models). Tuning set: share 0.507/0.492 without proof, 0.520/0.480 with proof, one verified optimum lost by time, so the default stays off. Dev binary `20a74b84`: runtest --force 5615 ok 0 FAIL (peak 174 MB), models 259, determinism 259, diff lane 347/347 and debug 333/333 equal, scaling ok |
 | M18-coverage-T14 follow-ups (D-0255) | agent-gccsum (`wave100-gccsum`, not merged) | 2026-11-27 | **D-0255 [AUTONOME].** Routes unchanged by measurement: native gcc plus the row between the counts loses to std's decomposition for variable counts (2/14 at 300 s, a verified answer lost), low_up alternatives move no tree at 20 000 nodes. Fixed a wrong UNSAT under a repeated cover value (`99d0e39`, header `ee6e580`), seven test models |
@@ -728,6 +728,12 @@ section 1. Shares are inclusive, of the whole run.
 | M18-coverage-T5 (the ordering globals) | agent-lex (`wave85-lex`) | 2026-11-27 | **D-0239 [AUTONOME].** mznlib only: `lex_lesseq`/`lex_less`, int and Bool, as four linear rows per position over std's chain flag; 26 -> 27 complete of 92 with proof, nodes/s x1.02 to 1.04; precedence globals keep std's (T13 added); `increasing` already native. |
 | M18-coverage-T14 (gcc with variable counts) | agent-gccvar (`wave93-gccvar`) | 2026-11-27 | **D-0247 [AUTONOME].** mznlib only in the kept route: a `global_cardinality` whose counts are not all fixed goes to std's count decomposition (`4c5df61`), constant counts and the closed form stay native; +3 verified complete with proof over the 40 Challenge instances it reaches, none lost. Route (a), rule C over holes, built, verified and dropped (`d94f08f`, reverted `fa32d4b`). Not merged |
 ## Handoff notes
+
+### 2026-11-27 (agent-series2, `wave74-series2`, D-0227): the four-arm series on main `6c9cf97`, not merged
+
+Series of 2026-11-26/27 on fataepyc-07 (binary `fa2d4ee4`, commit `73b4cab`, no `lib/` change): A 311 + 79 verified, B 356 + 98, C 352 + 92, D 419 + 111, refusals down to 65, 55, 44 and 41, no rejected proof and no checker memory death. Tables in `/cluster/arthur/baguette-results/series-20261126/`, README section regenerated, HISTORY row added.
+The Errno 22 of D-0211 was `rss_wrap.py` failing to re-raise SIGKILL (fixed, with the proof deletion on a checker memory death in `veripb_wrap.sh`, tested on one kept GCS proof). The run directories are on 07 and 06 under `/scratch/arthur/series-20261126/` (51 GB on 06, no proof), deletable.
+Run with `CHECK_STOPPED=0` as the orchestrator asked, so the comparison with D-0203 keeps its length. Next series after a search change should keep the same four arms and this setting, and could add a 900 s run of 2011 to 2014.
 
 ### 2026-11-27 (agent-factor, `wave102-factor`, D-0256): the per-node factor lane, not merged
 

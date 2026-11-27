@@ -33705,3 +33705,131 @@ changes on the branch), `dune runtest --root . --force` 5 590 ok, 0 FAIL, peak R
 comments and docs only): `scripts/diff_lane.sh --tier all -j 8` 347 of 347 runs equal the reference,
 `--debug` 333 of 333, `scripts/scaling_lane.sh -j 8` ok (every line within its threshold), `scripts/check_determinism.sh` 271 models identical across two runs. The diff lane's corpus is
 pre-flattened FlatZinc, so no mznlib change can reach it.
+
+## D-0227  [AUTONOME] M17-bench-series: the Challenge series on main `6c9cf97` with the four arms, on fataepyc-07. Verified with proof 311 + 79 (default) and 356 + 98 (`-f`) against 302 + 74 and 346 + 95 in D-0203, refusals 164 to 65 and 138 to 55, summed score 4 442, 6 277, 4 922 and 6 803, no proof rejected
+
+**Status**: **MEASUREMENT**, plus a harness fix. Recorded 2026-11-27 (agent-series2, branch `wave74-series2`).
+Nothing under `lib/` or `bin/` changes. The decision of this record is the harness setting `CHECK_STOPPED=0`
+(below), asked for by the orchestrator, and the fix of `bench/series/rss_wrap.py` and `veripb_wrap.sh`.
+
+### 1. What ran
+
+| | |
+|---|---|
+| Solver | release build `fa2d4ee4115a80ea08258bc139ec5750` of commit `73b4cab`, which is main `6c9cf97` (D-0225 interrupt, D-0223, D-0230 and the lane re-record) plus the merge of main into this branch, no change under `lib/` or `bin/` |
+| Node | fataepyc-07 (192 threads, 2 TB), run directory `/scratch/arthur/series-20261126/`, flattened with this clone's mznlib (identical to `f97a62b`'s, `git diff f97a62b 6c9cf97 -- mznlib` is empty), 1 575 of 1 600 flattened, as in D-0203 |
+| Arms | A default with proof, B `-f` with proof, C default `--no-proof`, D `-f --no-proof` |
+| Settings | those of D-0203: 1 200 s, 16 GiB address space, heap budget 8 GiB, `MemoryMax=32G` per run, no proof cap, veripb under its own 64 GB cgroup and a 3 600 s limit, verified proofs deleted (sizes kept), 2 000 GB floor on `/scratch`. PAR 22 per arm, 88 workers |
+| New setting | `CHECK_STOPPED=0`, so the proofs of runs the time limit stopped are not checked. That keeps the length of the run and the comparison with D-0203 (whose harness did not check them). D-0225 files a heap stop with an incumbent as an exit 0 run, and the harness counts it as an incumbent, with its proof checked when it ends by itself (row "solution found, not proved optimal, proof verified": 45 and 25) |
+| Time | 2026-11-26 14:30 UTC to 2026-11-27 19:53 UTC (29.4 h). The monitor's maximum was 92 `main.exe` or `veripb` processes, which includes the two `veripb` of another experiment that ran on the node for 13 days before and during the series (untouched). `/scratch` free never went under 9 471 GB |
+
+A first setup of the same clone at `f97a62b` (binary `ef2f76c8`) built before the orchestrator held the series for the
+merge of `wave73-interrupt`. Its driver was stopped by PID after the flatten started, before any arm ran, and the binary
+was removed and rebuilt from `73b4cab`. No row of that first setup exists.
+
+Tables, drivers and `monitor.log`: `/cluster/arthur/baguette-results/series-20261126/` (the run directories without proofs
+stay on 07 and 06 under `/scratch/arthur/series-20261126/`).
+
+### 2. The harness fix (D-0211's finding)
+
+The `OSError: [Errno 22] Invalid argument` that killed three GCS checks was not veripb's. It was `rss_wrap.py`, the
+peak-RSS recorder that runs veripb: to exit "as the child did" it called `signal.signal(sig, SIG_DFL)` before re-raising the
+child's signal, and that call fails for SIGKILL, which is the signal the cgroup sends at `MemoryMax`. So a memory kill read as
+an ordinary exit 1 with a traceback, and `veripb_wrap.sh` did not recognise it. Fixed in `rss_wrap.py` (the failing call is
+tolerated, the signal is re-raised) so the wrapper sees status 137 and returns 97, which `readme_table.py` counts as the
+checker's memory death. `veripb_wrap.sh` also accepts an exit with `Errno 22` when veripb's peak RSS was within 5 % of
+`MemoryMax`, and deletes the `.opb` and `.pbp` of a memory death (`SERIES_DROP_CHECKER_MEMORY=0` keeps them), which D-0211
+described and which the repository did not implement. Tested on a kept 3.7 GB GCS proof of
+`/scratch/arthur/node07-gcs/G/2023/log/` with `MemoryMax=6G` (exit 97, the message `SERIES-CHECKER-MEMORY`) and on a tiny proof at 6 MB (exit 97, the files
+deleted). The 125 GB of kept GCS proofs of those two directories were then deleted. **This series had no checker memory death**
+(check-error 0 in every arm), so the fix was exercised by the test and not by the run.
+
+### 3. Result, per arm (1 575 instances flattened out of 1 600)
+
+| | A | B (`-f`) | C (`--no-proof`) | D (`-f --no-proof`) |
+|---|---|---|---|---|
+| OPT or UNSAT | 331 (311 verified) | 382 (356) | 352 (unverified) | 419 (unverified) |
+| SAT on a satisfaction model | 84 (79) | 107 (98) | 92 | 111 |
+| complete, check hit 3 600 s | 25 | 35 | n/a | n/a |
+| incumbent, proof verified | 45 | 25 | n/a | n/a |
+| incumbent, not verified | 739 | 800 | 783 | 809 |
+| TIMEOUT, no solution | 311 | 206 | 304 | 195 |
+| REFUSED (heap budget) | 65 | 55 | 44 | 41 |
+| REJECTED, CHECK-ERROR, ERROR | 0, 0, 0 | 0, 0, 0 | 0 | 0 |
+| score, fixed category, summed | 4 442 | 6 277 | 4 922 | 6 803 |
+| rank range against the entrants | 4 to 11 | 2 to 8 | 2 to 10 | 2 to 7 |
+
+**No proof was rejected**, no arm contradicts another on an optimum or on OPT against UNSAT or SAT (checked over the four
+`results_<arm>.tsv`).
+
+### 4. Against D-0203, arm by arm
+
+| | D-0203 (`f244c35a`) | this series | change |
+|---|---|---|---|
+| A, verified OPT+UNSAT / SAT | 302 / 74 | 311 / 79 | +9 / +5 |
+| A, refused, score | 164, 4 043 | 65, 4 442 | -99, +399 |
+| B, verified | 346 / 95 | 356 / 98 | +10 / +3 |
+| B, refused, score | 138, 5 799 | 55, 6 277 | -83, +478 |
+| C, complete | 340 / 86 | 352 / 92 | +12 / +6 |
+| C, refused, score | 157, 4 428 | 44, 4 922 | -113, +494 |
+| D, complete (D-0229, main `36e8cc0`) | 420 / 112 | 419 / 111 | -1 / -1 |
+| D, refused, score (D-0229) | 84, 6 590 | 41, 6 803 | -43, +213 |
+| D (D-0229 reference, `f244c35a`) | 401 / 108, 125, 6 288 | | +18 / +3, -84, +515 |
+
+(`arms_compare.py`, oldA against newA and so on, over the same 1 575 instances; the full output is `/cluster/arthur/baguette-results/series-20261126/arms_vs_d0203.txt`.)
+
+- A against D-0203's A. The status transitions are 58 REFUSED to SAT, 37 REFUSED to TIMEOUT, 14 TIMEOUT to SAT,
+  11 TIMEOUT to OPT, 6 REFUSED to OPT, 2 TIMEOUT to REFUSED and 1 OPT to TIMEOUT (`2017_hrc_exp1-1-5145`). 1 446
+  instances are unchanged. Wall time over the 375 complete in both is 0.95 [0.84, 1.06], nodes per second 1.04, peak RSS 1.01. Per
+  instance in the Challenge's order newA wins 270, loses 110, ties 1 195. B and C read the same (0.95 on 440 and 422
+  instances, 328 and 281 wins, 143 and 119 losses). So the gain is in memory and coverage and not in the time of the instances
+  already solved, as in D-0229. 101, 83 and 114 attempts are gained from refusals in A, B and C.
+- Against D-0229 the arm D is level on complete answers (530 against 532) and has half the refusals (41 against 84).
+  The 213 points are incumbents. The D-0229 main run was on fataepyc-04 and this one on 07 under the same CPU, so the one
+  complete answer less is within the noise of load.
+- Check limit. 25 and 35 complete answers could not be checked in 3 600 s (18 and 26 in D-0203). Their number
+  rises with the answers that complete.
+- Ranks in the fixed category, 2026 down to 2011. A 11, 10, 9, 5, 7, 6, 4, 6, 6, 11, 7, 9, 8, 7, 5, 7 (D-0203: 11, 10, 9, 7, 7, 7, 5, 7, 6, 12, 7, 9, 9, 10, 5, 7).
+  B 6, 5, 3, 3, 3, 3, 2, 3, 3, 8, 3, 7, 4, 4, 3, 4 (D-0203: 7, 9, 3, 3, 3, 6, 2, 3, 3, 8, 5, 7, 5, 5, 3, 4).
+  C 10, 9, 7, 4, 7, 3, 2, 3, 6, 9, 7, 7, 7, 6, 5, 7. D 5, 4, 3, 3, 3, 3, 2, 3, 3, 7, 3, 6, 3, 4, 3, 4.
+  The 2011 and 2012 ranks are approximate, and 2011 to 2014 ran at 1 200 s against an official 900 s.
+  In the free category B ranks 16, 11, 9, 5, 15, 11, 8, 5, 8, 12, 14, 12, 7, 6, 4, 6 (D-0203: 18, 16, 9, 7, 15, 13, 8, 6, 8, 15, 15, 15, 9, 8, 4, 6) and D 13, 10, 9, 5, 12, 8, 7, 3, 8, 12, 10, 10, 5, 4, 4, 4.
+- Free search over default, with proof. B wins 715 instances, loses 349, ties 511 (D-0203 reads 670, 327, 578).
+
+**Per family (A against D-0203's A, wins and losses of 5 instances per family).** Clean sweeps of five to zero are `tpp` (2012, 2016),
+`celar` 2013, `stochastic-vrp` 2014, `groupsplitter` (2017, 2019, 2025), `tdtsp` 2017, `team-assignment` 2022,
+`travelling-thief` 2023 and `is` 2025. Most of them were refusals. The families that lose are `gfd-schedule` (2016 minus 4, 2018 minus 3), `accap` (2024 minus 4,
+2019 minus 3), `ship-schedule` 2012 and `rubik` 2013 (each minus 3), on the quality of an incumbent after the limit, which the 1.0 median
+node rate does not explain and which changes with the search that the learned-constraint retention (`tiered`, D-0226) and the other
+merges moved. B and C have the same shape (`nonogram`, `l2p`, `solbat`, `rcpsp` lose a little). I did not trace one of these losses to a commit.
+
+### 5. The new globals (`table`, `circuit`, `diffn`, `bin_packing` through mznlib)
+
+Instances that use them, found in the flattened files for `table` (133 instances, `baguette_table`) and `circuit` (88,
+`baguette_circuit`), and in the model source for `diffn` (145, the file says `diffn`) and `bin_packing` (75, the source
+says `bin_packing`, so these two counts include models whose call is in an included file or never reached). Complete answers
+(OPT, UNSAT, SAT on a satisfaction model) in D-0203 against here, and refusals:
+
+| | instances | A complete | B complete | C complete | refused in A, D-0203 to here |
+|---|---|---|---|---|---|
+| `table` | 133 | 18 to 24 | 16 to 23 | 19 to 30 | 48 to 11 |
+| `circuit` | 88 | 18 to 20 | 15 to 17 | 19 to 21 | 9 to 1 |
+| `diffn` | 138 present in both | 28 to 33 | 41 to 46 | 28 to 35 | 6 to 6 |
+| `bin_packing` | 75 | 15 to 16 | 18 to 20 | 16 to 19 | 7 to 5 |
+
+No complete answer was lost in any of these groups. `table` carries the largest part of the 99 refusals fewer in A (it removed 37 of the group's 48),
+which is the memory of the old decomposition. The groups overlap, and the other work of D-0208 to D-0222 enters each of them, so the
+table is where the change shows and not a measure of one propagator. Not separated here.
+
+### 6. What this does not say
+
+- Not measured: a series at 900 s for 2011 to 2014, and the effect of one merge alone. The commit under test carries the
+  work of D-0206 to D-0230 together.
+- The 25 and 35 checks that hit their limit are complete answers of the solver, not counted as verified.
+- The run was not repeated, so the noise of one run is unknown. The wall ratio of 0.95 over three arms is the best indication
+  that the node's load does not move the times much.
+
+### 7. Revert
+
+Nothing in the solver changes. The harness fix reverts with `git revert` of `f97a62b` (`bench/series/rss_wrap.py`,
+`bench/series/veripb_wrap.sh`).
