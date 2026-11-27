@@ -247,6 +247,11 @@ type t = {
      gets [wake_on_any]: an unknown instance is one whose reads are unknown, and the safe
      answer for an unknown reader is always "wake it". *)
   mutable triggers : trigger array;
+  mutable trig_bits : Bytes.t;
+      (** M20-pernode-T4 (D-0243): [triggers] as one byte per id, bit 1 [on_bound] and bit
+          2 [on_holes], for the wake walk's mask ([wants]): a byte read where it called
+          [trigger_of] and read a record. Written with [triggers], at [create] and [add],
+          and grown with it, filled as [wake_on_any] is. *)
   ctr : counters;  (** M2-T6: this engine's run counters, see [counters]. *)
   mutable runs_by_id : int array;
       (** M6-T20, MEASUREMENT ONLY: runs and effectful runs PER INSTANCE, indexed by id
@@ -395,6 +400,18 @@ let room a id fill =
     let b = Array.make (max (id + 1) (2 * n)) fill in
     Array.blit a 0 b 0 n;
     b
+
+(* D-0243: a trigger as the byte [trig_bits] holds, and that table grown to [n] ids,
+   filled with [wake_on_any]'s byte as [room] fills [triggers]. *)
+let trig_byte trig = (if trig.on_bound then 1 else 0) lor if trig.on_holes then 2 else 0
+
+let bits_room b n =
+  let m = Bytes.length b in
+  if n <= m then b
+  else
+    let c = Bytes.make n (Char.chr (trig_byte wake_on_any)) in
+    Bytes.blit b 0 c 0 m;
+    c
 
 (* M6-T22 / D-0138: an instance's scope as the sorted set of its variables' ints. *)
 let scope_of (inst : Propagator.instance) =
@@ -813,6 +830,8 @@ let create ?(trigger = default_trigger) (instances : Propagator.instance list) :
       count = List.length instances;
       watchers;
       triggers;
+      trig_bits =
+        Bytes.init (Array.length triggers) (fun i -> Char.chr (trig_byte triggers.(i)));
       ctr = counters_create ();
       runs_by_id = Array.make (Array.length triggers) 0;
       eff_by_id = Array.make (Array.length triggers) 0;
@@ -1069,6 +1088,8 @@ let add ?(trigger = default_trigger) (t : t) (inst : Propagator.instance) =
     scope;
   t.triggers <- room t.triggers id wake_on_any;
   t.triggers.(id) <- trigger inst;
+  t.trig_bits <- bits_room t.trig_bits (Array.length t.triggers);
+  Bytes.set t.trig_bits id (Char.chr (trig_byte t.triggers.(id)));
   t.veto <- room t.veto id false;
   t.veto.(id) <- honours_claim inst;
   t.scopes <- room t.scopes id [||];
@@ -1233,6 +1254,16 @@ let hi_moved (e : Store.entry) = Domain.hi e.now <> Domain.hi e.old
    [Bound] record and its two options allocated per entry the engine looked at. *)
 let wakes_on_kind trig ~bound = if bound then trig.on_bound else trig.on_holes
 
+(* D-0243: [wakes_on_kind (trigger_of t id) ~bound], off [trig_bits]: one byte read
+   where it was a call and a record read. Same answer, [3] being [wake_on_any]'s byte
+   for an id the table does not cover, as [trigger_of] answers [wake_on_any]. *)
+let wakes_id t id ~bound =
+  ((if id >= 0 && id < Bytes.length t.trig_bits then
+      Char.code (Bytes.unsafe_get t.trig_bits id)
+    else 3)
+  land if bound then 1 else 2)
+  <> 0
+
 (* E1 (D-0142), under BAGUETTE_DEBUG only: the instances of the directional slots of
    [e.var] that this entry does NOT ask ([lo]/[hi] false) are recorded as declined asks, so that
    [check_declined] treats them exactly as it treated them when every watcher of the
@@ -1246,7 +1277,7 @@ let record_unasked ?(skip = fun _ -> false) t (e : Store.entry) ~lo ~hi ~self =
   let record sl =
     for j = 0 to t.dyn_len.(sl) - 1 do
       let id = t.dyn_ids.(sl).(j) in
-      if id <> self && (not (skip id)) && wakes_on_kind (trigger_of t id) ~bound then
+      if id <> self && (not (skip id)) && wakes_id t id ~bound then
         t.declined <- (id, e.Store.var) :: t.declined
     done
   in
@@ -1309,7 +1340,7 @@ let wants t store ~vetoed ~self_id id bound v =
   if vetoed && id = self_id then (
     t.ctr.c_vetoed <- t.ctr.c_vetoed + 1;
     false)
-  else if wakes_on_kind (trigger_of t id) ~bound then (
+  else if wakes_id t id ~bound then (
     incr wakes;
     t.ctr.c_wakes <- t.ctr.c_wakes + 1;
     advises t store id v)
@@ -2003,7 +2034,7 @@ let seed_dirty t store ~since ~epoch =
   let n = t.count in
   if Debug.enabled then t.declined <- [];
   let mark bound v id =
-    if id >= 0 && id < n && wakes_on_kind (trigger_of t id) ~bound then
+    if id >= 0 && id < n && wakes_id t id ~bound then
       (* An instance born after the fixpoint at [epoch] has never run on this
          state: [propagate] seeds it whatever it says, so its advisor is not
          asked -- and under BAGUETTE_DEBUG not checked, since a run of it is
