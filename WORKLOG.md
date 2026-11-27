@@ -19,6 +19,7 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
+| M22-review-T4 third pass (D-0254 addendum if needed) | comments of lib/core/search.ml, lib/core/probe.ml, bin/main.ml (and its usage text, own commit); tools/ script headers; README.md, CLAUDE.md, docs/ARCHITECTURE.md section 1 (probe and switches); docs/REFERENCES.md (not gcc.ml, mznlib/) | agent-docs, wave101-docs3 | 2026-11-27 |
 
 ## Cross-session requests
 
