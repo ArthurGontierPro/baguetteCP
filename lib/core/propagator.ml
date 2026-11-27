@@ -115,7 +115,9 @@ let watch_var (w : watch) = Var.of_int (w / 3)
    indexes the instance under [w] alone, and wakes it again at the first propagation after
    a backtrack that popped the bound holding the literal up (see [Engine.rest_on]). Never
    a real slot: those are [>= 0]. D-0173 (M11-complexity-T17) measured that the learned
-   clauses which "could not prune" were satisfied ones, and introduced this. *)
+   clauses which "could not prune" were satisfied ones, and introduced this. Resting is
+   OFF by default, because it changes the order prunings land in and so the trees and the
+   proofs: BAGUETTE_REST_SATISFIED=on turns it on. *)
 let rests : watch = -1
 
 (* The engine holds a heterogeneous collection of propagators, so it needs them erased to
