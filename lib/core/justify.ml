@@ -728,13 +728,13 @@ let new_line ctx cid =
   Explanation.Line { cid; level; epoch = ctx.epoch; owner = ctx.serial }
 
 (* What a node's line answers. Without hash-consing it is what the identity memo
-   answered. With it (the default; BAGUETTE_HASHCONS=0 is without) a node is every build of the same content, so
-   its line is cited by builds that would each have written their own, and it answers
-   only when it is at or below the writer's current level: the claim index's condition 2
-   (M2-T9), for the same reason -- an id handed back is kept by the caller for as long as
-   the CURRENT level lives (a nogood, a thunk's line), and `w l` retires levels [>= l], so
-   only a line at or below that level is sure to outlive it. A deeper line is answered by
-   a new one, which the node then remembers. *)
+   answered. With it (the default; BAGUETTE_HASHCONS=0 is without) a node is every build
+   of the same content, so its line is cited by builds that would each have written their
+   own, and it answers only when it is at or below the writer's current level: the claim
+   index's condition 2 (M2-T9), for the same reason -- an id handed back is kept by the
+   caller for as long as the CURRENT level lives (a nogood, a thunk's line), and `w l`
+   retires levels [>= l], so only a line at or below that level is sure to outlive it. A
+   deeper line is answered by a new one, which the node then remembers. *)
 let node_answer ctx (e : Explanation.t) =
   match Explanation.node_line e with
   | Explanation.No_line -> None

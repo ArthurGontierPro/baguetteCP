@@ -287,10 +287,10 @@ type t =
    M11-complexity-T15 (the DAG spike): the five constructors a line is written for
    ([Clause], [Linear], [Cut], [Combine], [Resolve]) carry that line ([line]: [No_line]
    until [Justify] writes one, the same record a thunk keeps) and an identity [hid] (its
-   content hash; 0 under BAGUETTE_HASHCONS=0, see "hash-consing" below). The memo that was a table in
-   [Justify] keyed by physical identity is this field: a node remembers its own line, so
-   a lookup is a field read and nothing outside the node holds it. Build them through
-   the smart constructors; a pattern reads the fields it needs and ends in [_]. *)
+   content hash; 0 under BAGUETTE_HASHCONS=0, see "hash-consing" below). The memo that was
+   a table in [Justify] keyed by physical identity is this field: a node remembers its own
+   line, so a lookup is a field read and nothing outside the node holds it. Build them
+   through the smart constructors; a pattern reads the fields it needs and ends in [_]. *)
 
 and summand =
   | Term of int * t

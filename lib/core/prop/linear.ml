@@ -24,33 +24,31 @@
    [x_i] itself (tightening hi(x_i) never moves lo(x_i), and vice versa for a_i < 0). So a
    single pass over all terms already reaches the bounds-consistent fixpoint; there is no
    need to loop back over the terms already visited. That is what makes [propagate]
-   idempotent at the interface (I-P3) after just one pass: calling it again recomputes the
+   idempotent at the interface (I-P2) after just one pass: calling it again recomputes the
    same slack (now possibly larger, since a variable may have been tightened) and finds
-   nothing left to push.
+   nothing left to push. [Propagator.pack]'s idempotence claim cites this paragraph.
 
-   Declared bounds (docs/DECISIONS.md D-0010): a bound fact has to be stated in the order
-   encoding's own currency, x = lo_decl + sum_{v=lo_decl+1}^{hi_decl} [x >= v], which needs
-   the variable's *declared* domain, not just its current one. [make] therefore reads each
-   variable's domain out of the store at construction time and freezes it into [term] -
-   this has to happen before anything (including this propagator, on a later call) has
-   narrowed it.
+   Declared bounds: a bound fact is stated in the order encoding's own currency, as a
+   chain of order literals, x = lo_decl + sum_{v=lo_decl+1}^{hi_decl} [x >= v] (D-0010),
+   which needs the variable's *declared* domain, not just its current one. [make]
+   therefore reads each variable's domain out of the store at construction time and
+   freezes it into [term] - this has to happen before anything (including this propagator,
+   on a later call) has narrowed it.
 
    [make] also takes [~row_id], the id (a Baguette_proof.Writer.cid, i.e. plain [int] --
    this module has no reason to depend on [Baguette_proof.Writer] just for its type) the
-   .opb already gave this instance's own row. D-0011: one instance justifies against
-   exactly one row, and that row is posted to the encoding before any propagator ever
-   runs, so the id is available at construction time; passing it in beats resolving it
-   later through an ambient [Justify.ctx], which is exactly the trap D-0013 hit (see
-   [Explanation.Model_row]'s header in lib/core/explanation.ml).
+   .opb already gave this instance's own row. One instance justifies against exactly one
+   row (D-0011), and that row is posted to the encoding before any propagator ever runs,
+   so the id is available at construction time. Passing it in beats resolving it later
+   through an ambient [Justify.ctx], which named whichever row happened to be current and
+   so justified some prunings against the wrong row (the trap D-0013 hit; see
+   [Explanation.Model_row]'s comment in lib/core/explanation.ml).
 
-   It is **required**, as of M1-T31. It was optional while nothing wired a model to the
-   engine (D-0010's note), and the fallback was [Explanation.Trivial] -- "whatever row
-   [ctx.model_id] currently points at". That fallback is what made the ambient row
-   reachable at all, so removing it and deleting [Trivial] are one change: with no
-   caller able to omit the id and no constructor able to mean "the current row", a
-   [Justify.ctx] has nowhere left to keep an ambient row and does not have the field.
-   A test that has no real row and does not care which one it names should pass a
-   made-up id and say so, rather than leave the question open.
+   The id is REQUIRED: no caller can omit it and no explanation constructor can mean "the
+   current row", so a [Justify.ctx] has no ambient row at all. A test that has no real
+   row and does not care which one it names passes a made-up id and says so. (Until
+   M1-T31 it was optional and the fallback was the [Explanation.Trivial] constructor,
+   deleted with it by D-0037.)
 
    ---------------------------------------------------------------------------
    Proof step this justifies -- docs/DECISIONS.md D-0013, "weaken, divide, add"
@@ -62,26 +60,29 @@
      Combine (Term (1, Model_row row_id) :: [ other_i's summand | i <> j, a_i <> 0 ],
               abs a_j)
 
-   where, for each other term i:
+   where each other term i contributes one summand, an [Explanation.Linear_term]: the
+   snapshot of what the row read for that term, which lib/core/justify.ml renders. For the
+   order encoding the rendering is one of two (D-0132 moved it there, byte for byte):
      - if [x_i]'s current bound *relevant to this row* (lo if a_i >= 0, hi if a_i < 0)
-       is still its *declared* one, [i]'s summand is [Weaken chain] -- the full
-       declared-width axiom chain [Order_reason.weaken_declared] builds, scaled by
-       [a_i]. An axiom cannot assert a bound (D-0009), but weakening one away needs no
-       assertion: it is sound regardless of what [x_i] turns out to be.
+       is still its *declared* one, the full declared-width axiom chain
+       [Order_reason.weaken_declared] builds, scaled by [a_i]. An axiom cannot assert a
+       bound (D-0009: a bound fact in a [pol] needs a constraint id, not a literal), but
+       weakening one away needs no assertion: it is sound whatever [x_i] turns out to be.
      - otherwise [x_i]'s current bound was itself established by an earlier trail
        entry (bounds only ever tighten, so if it is not declared, something set it):
-       [i]'s summand is [Term (abs a_i, that entry's explanation)] -- cite it, do not
-       re-derive it. [lo_rests_on]/[hi_rests_on] below locate it, in O(1), out of
-       [Store.lo_support] (M2-T8).
+       [Term (abs a_i, that entry's explanation)] -- cite it, do not re-derive it.
+       [lo_rests_on]/[hi_rests_on] below locate it, in O(1), out of [Store.lo_support].
+   For the bits encoding, [Justify] cites the term's bridge or bound line instead.
 
-   The second bullet hides a premise, and M1-T44 is what happens when it is false:
-   *the cited entry's explanation establishes the entry's recorded bound*. It does not
-   when [Domain.settle] walked that bound past a hole (see [Store.settled_over_lo]),
-   because the hole is a disequality's doing and the row's own derivation says nothing
-   about it. Those entries therefore cite the hole's reason as well, which is what makes
-   the dependency list honest -- and, since a [Clause] is what a hole's reason is,
-   what makes [Search.rests_on_a_clause] route the conflict the D-0022 way instead of
-   citing a chain that cannot close.
+   The second bullet hides a premise: *the cited entry's explanation establishes the
+   entry's recorded bound*. It does not when [Domain.settle] walked that bound past a
+   hole (see [Store.settled_over_lo]), because the hole is a disequality's doing and the
+   row's own derivation says nothing about it (M1-T44 found it). Those entries therefore
+   cite the hole's reason as well, which is what makes the dependency list honest. Since
+   a hole's reason is a [Clause], the derivation is then no longer purely numeric, and
+   [Search.rests_on_a_clause] routes a root conflict to the empty clause instead of
+   citing a chain that cannot close (D-0022: a root conflict is its own contradiction
+   only if its derivation is numeric).
 
    Dividing the sum by [abs a_j] is D-0013 step 4 (and the "one division"
    docs/PROOF-FORMAT.md section 4 promises): [j]'s own terms are the only ones left
@@ -181,8 +182,9 @@
    prunings, each a loop over [t.arr] (the terms as an array, beside the list the
    snapshots walk), with no closure built unless something prunes. A FIXED term is
    skipped by the pruning walk before its divisions, because it cannot move ([prune_term]
-   has the argument). A pruning costs O(1) eagerly and its reason and justification are
-   materialised later, O(n) each (D-0124). Integers are compared with [Int.max],
+   has the argument). A pruning costs O(1) eagerly: its reason and justification are
+   materialised later, O(n) each, from a [Store.history] taken at the push (D-0124, see
+   [justified_at]). Integers are compared with [Int.max],
    [Int.min] and [Int.compare] here and in every module of prop/ that copies this shape:
    the polymorphic [Stdlib.max] and [compare] reach [compare_val] through a C call, even
    on two ints. *)
@@ -210,15 +212,15 @@ type t = { terms : term list; arr : term array; rhs : int; row_id : int; arith :
    operation is made both ways and they must agree. *)
 and arith = Plain | Checked_each | Audited
 
-(* M11-complexity-T3 (D-0142, E7): SCRATCH for [propagate], one slot per term, where a run
-   keeps each term's minimum while it walks the row. It only spares the run the two lists
-   it used to allocate (the minima and their [List.combine] with the terms). It is ONE
-   array for every row, grown to the longest, not one per row: `int_times` posts a guarded
-   row per value of its case variable, and a per-row array raised smelt_2's memory by
-   15 % before node 1. Sharing it is safe because it carries nothing between runs (every
-   run writes every slot it reads before reading it) and two runs never overlap: a run
-   calls nothing that runs a propagator ([Store] mutators only record, the engine wakes
-   after the run), and the solver runs one propagator at a time on one domain. *)
+(* SCRATCH for [propagate], one slot per term, where a run keeps each term's minimum while
+   it walks the row. It is ONE array for every row, grown to the longest, not one per row:
+   `int_times` posts a guarded row per value of its case variable, and a per-row array
+   raised smelt_2's memory by 15 % before node 1. Sharing it is safe because it carries
+   nothing between runs (every run writes every slot it reads before reading it) and two
+   runs never overlap: a run calls nothing that runs a propagator ([Store] mutators only
+   record, the engine wakes after the run), and the solver runs one propagator at a time
+   on one domain. It spares a run the two lists it used to allocate (item E7 of D-0142,
+   M11-complexity-T3). *)
 let mins_scratch = ref [||]
 
 let mins_for n =
@@ -421,17 +423,15 @@ let inside_frozen_bounds t store =
 (* "What established [x]'s current lower bound?", asked of the store, guarded by *this
    instance's own frozen declared bound*.
 
-   [[]] means "still the declared bound, so weaken the term away" (D-0009: an axiom
-   cannot assert a bound but it can weaken one away). Anything else is the derivation to
-   cite, plus one per hole its settle walked over (M1-T44, I-X9).
+   [[]] means "still the declared bound, so weaken the term away" (an axiom cannot assert
+   a bound but it can weaken one away, D-0009). Anything else is the derivation to cite,
+   plus one per hole its settle walked over (M1-T44, and I-X9: an explanation justifies
+   the bound as recorded on the trail).
 
-   M2-T8 / D-0026: these two lines are what is left of [find_lo_reason] and
-   [find_hi_reason], which scanned the trail downwards from the newest entry, once per
-   term per pruning -- O(n * |trail|) per pruning and the most expensive thing left in
-   [lib/]. [Store.lo_support] answers the same question in O(1) from an array [Store.apply]
-   maintains, and [Store.check_invariants] asserts that array against the trail rather
-   than leaving the equivalence argued; [Store.lo_support]'s own header carries the
-   argument, including why the direction of the old scan was load-bearing (M1-T28).
+   [Store.lo_support] answers in O(1) from an array [Store.apply] maintains, and
+   [Store.check_invariants] asserts that array against the trail; [Store.lo_support]'s own
+   header carries the equivalence argument. Before M2-T8 (D-0026) this was
+   [find_lo_reason]/[find_hi_reason], a downward trail scan per term per pruning.
 
    The guard stays HERE and not in [Store], because it is about the propagator and not
    about the store: [decl_lo] is what this instance froze at [make] time, which is not the
@@ -439,12 +439,11 @@ let inside_frozen_bounds t store =
    the propagator. Dropping the guard would make such a test cite an entry where the old
    code weakened, so it is behaviour and not decoration.
 
-   M1-T63: the declared-hole hedge this module used to carry is NOT here any more. A hole
-   the variable was declared with (a test's [Domain_helper.of_list]) has no trail entry
-   to cite, and the one surviving statement of what happens then is [Store.remover]'s
-   header, which also names the gate that makes it unreachable (lib/flatzinc/compile.ml's
-   [reject_set_domain], refusing [Model.Dset] outright). M2-T8 deleted this module's copy
-   along with [find_lo_reason]/[find_hi_reason]; do not reinstate it here. *)
+   A hole the variable was DECLARED with (a test's [Domain_helper.of_list]) has no trail
+   entry to cite. What happens then is stated once, in [Store.remover]'s header, with the
+   gate that keeps it out of the CLI (lib/flatzinc/compile.ml gives a set domain its hull
+   and one [Ne] per hole). Do not add a hedge for it here; M1-T63 removed this module's
+   copy. *)
 let lo_rests_on store v ~decl_lo =
   if Domain.lo (Store.get store v) <= decl_lo then [] else Store.lo_reasons store v
 
@@ -462,28 +461,28 @@ let hi_rests_on store v ~decl_hi =
    rendered: the snapshot pins down *this* row's own reason to cite, not whatever happens
    to be current later (I-X6).
 
-   One record, where M1-T50 left three constructors:
+   One record:
 
      - [value] is the bound relevant to this term's sign -- lo for [coeff >= 0], hi for
        [coeff < 0], D-0013's own case split, the same one [term_min] makes -- as it stood
        at the moment of the pruning. For a term still at its declared bound it *is* the
        declared bound, and [Reason.lits] then materialises no literal for it, because at
        the declared bound the order encoding's statement is the constant true
-       (docs/PROOF-FORMAT.md section 3). That is the whole of what the old [Snap_weaken]
-       constructor said.
+       (docs/PROOF-FORMAT.md section 3).
      - [cited] is the derivations to cite, or [[]] for "weaken this term away instead".
-       It is empty in three cases that used to be two constructors and a fallback: the
-       bound is declared; the bound rests on a search *decision*, which has no constraint
-       id and never will (M1-T50, D-0009, D-0037) so the honest rendering is to weaken it
-       away and let the D-0018 trace line carry the decision's literal; or the bookkeeping
+       It is empty in three cases: the bound is declared; the bound rests on a search
+       *decision*, which has no constraint id and never will (D-0037: a decision is an
+       assumption, not a model row), so the honest rendering is to weaken it away and let
+       the branch's trace line carry the decision's literal (D-0018); or the bookkeeping
        found nothing, which should be unreachable and weakens rather than guesses.
 
-   The old [Snap_weaken] and [Snap_assume] had, by their own comment, "identical
-   arithmetic" and "differ only in [facts_of_snaps]" -- i.e. they differed only in whether
-   the fact has a literal, which is exactly what [value] vs the declared bound already
-   says. Collapsing them is not a tidy-up: two constructors that must render identically
-   into one place and differently into another are two chances to get the pairing wrong,
-   and the pairing is what D-0026 exists to make structural. *)
+   It is one record and not one constructor per case because the cases render
+   identically into the justification and differ only in whether the reason's fact has
+   a literal, which [value] against the declared bound already says. Two constructors
+   that must render alike in one place and differently in another are two chances to get
+   the pairing wrong, and the pairing of reason and justification is what D-0026 makes
+   structural. (M1-T50 had three constructors, [Snap_weaken], [Snap_assume] and a
+   fallback.) *)
 type source_snap = {
   coeff : int;
   name : string;
@@ -514,7 +513,7 @@ let rests_on_a_decision reasons =
 
 (* [None] only for a zero coefficient (an absent term, contributing nothing).
 
-   M7-T27 (a), D-0124: reads a [Store.history], not the store. A history is the trail
+   It reads a [Store.history], not the store (D-0124, M7-T27 (a)). A history is the trail
    cut at one position, and [Store.lo_at]/[lo_reasons_at] answer for that cut exactly
    what [Domain.lo (Store.get store x)]/[Store.lo_reasons] answer live when the cut is
    now -- so this is the same snapshot as before, with the moment it describes carried
@@ -537,8 +536,9 @@ let snapshot_at (h : Store.history) (tm : term) : source_snap option =
   else
     (* A bound that rests on a decision keeps its [value] and drops its [cited] -- the
        pruning does depend on the decision, so dropping the fact would make the trace
-       line an unconditional claim, which is the exact I-P5 failure [int_ne] shipped
-       between M1-T9 and M1-T17. M1-T50's [Snap_assume] is this line. *)
+       line an unconditional claim. [int_ne] shipped exactly that failure between M1-T9
+       and M1-T17 (I-P5: every bound move carries the facts its trace line negates, now
+       part of I-P4). *)
     let citable rests = if rests_on_a_decision rests then [] else rests in
     let value = value_at h tm in
     let cited =
@@ -574,10 +574,11 @@ let snapshot_source store (tm : term) = snapshot_at (Store.history store) tm
 
 (* --------------------------------------- the two halves, from one snapshot *)
 
-(* D-0026's reason half: the bound this term contributes to "these facts imply that
-   bound". Declarative data -- no literal is built here, and none can be, because
-   [Reason.bound_for_coeff] takes ints and a name. [Reason.lits] is where it becomes a
-   literal, and where a term still at its declared bound drops out. *)
+(* The reason half (D-0026 splits a pruning into a reason, which facts, and a
+   justification, how the checker is convinced): the bound this term contributes to
+   "these facts imply that bound". Declarative data -- no literal is built here, and none
+   can be, because [Reason.bound_for_coeff] takes ints and a name. [Reason.lits] is where
+   it becomes a literal, and where a term still at its declared bound drops out. *)
 let fact_of_snap s =
   Reason.bound_for_coeff ~coeff:s.coeff ~name:s.name ~decl_lo:s.decl_lo ~decl_hi:s.decl_hi
     s.value
@@ -591,17 +592,18 @@ let fact_of_snap s =
    cancel the row's coefficient the way the bound's own chain-sum does, so the [Combine]
    is no longer the self-contained numeric chain D-0013 describes; it is still a sound
    [pol] (a [pol] derives whatever it derives), and the reason it may stop closing on its
-   own is precisely D-0022's, which is why [Search.rests_on_a_clause] -- reading exactly
-   these summands -- then routes the conflict to its empty-clause close instead of citing
-   the chain. D-0022 settled the same trade the other way round for a clause folded in as
-   a bound, and for the same reason: weakening it away would erase the signal and still
-   not close. *)
-(* M8-bits-encoding-T2 (D-0132 section 2.4): the term goes into the [Combine] as the
-   snapshot itself, [Explanation.Linear_term], and the two renderings above -- the axiom
-   chain [Order_reason.weaken_declared] builds for [cited = []], one [Term] at
-   [abs coeff] per cited explanation otherwise -- are now lib/core/justify.ml's
-   [emit_summand], byte for byte for the order encoding. Nothing here knows which
-   encoding carries [s.name], which is D-0130 section 3.1's contract made a type. *)
+   own is precisely D-0022's (see the header), which is why [Search.rests_on_a_clause] --
+   reading exactly these summands -- then routes the conflict to its empty-clause close
+   instead of citing the chain. D-0022 settled the same trade the other way round for a
+   clause folded in as a bound, and for the same reason: weakening it away would erase the
+   signal and still not close. *)
+(* The term goes into the [Combine] as the snapshot itself, [Explanation.Linear_term],
+   and the two renderings above -- the axiom chain [Order_reason.weaken_declared] builds
+   for [cited = []], one [Term] at [abs coeff] per cited explanation otherwise -- are
+   lib/core/justify.ml's [emit_summand], byte for byte for the order encoding (D-0132
+   section 2.4, M8-bits-encoding-T2). Nothing here knows which encoding carries
+   [s.name]: no propagator may spell a representation, which is D-0130 section 3.1's
+   substrate contract made a type. *)
 let summands_of_snap s =
   [
     Explanation.linear_term ~coeff:s.coeff ~name:s.name ~decl_lo:s.decl_lo
@@ -690,14 +692,14 @@ let classify s =
    most prunings are never asked. The thunk closes over [snaps] and [base] only -- no
    store, no live domain (I-X6).
 
-   M2-L0/D-0043: [~concludes] is the third half-that-is-not-a-half -- WHAT this pruning
-   derived, as a [Reason.fact]. It is passed in rather than computed here because this
-   function serves four sites and only two of them conclude a bound: the two pushes below
-   conclude exactly the bound they hand [Store.set_hi]/[set_lo], and the two conflict
-   paths conclude falsity, which is not a bound, so they pass [None] and are seen doing
-   it. It is NOT derivable from [snaps] -- [snaps] is what was read, the conclusion is
-   what came out -- which is exactly why D-0043 puts it on [justified] and not in the
-   reason. *)
+   [~concludes] is the third half-that-is-not-a-half -- WHAT this pruning derived, as a
+   [Reason.fact], carried on [Reason.justified] (D-0043, M2-L0). It is passed in rather
+   than computed here because this function serves four sites and only two of them
+   conclude a bound: the two pushes below conclude exactly the bound they hand
+   [Store.set_hi]/[set_lo], and the two conflict paths conclude falsity, which is not a
+   bound, so they pass [None] and are seen doing it. It is NOT derivable from [snaps] --
+   [snaps] is what was read, the conclusion is what came out -- which is exactly why
+   D-0043 puts it on [justified] and not in the reason. *)
 let combine_of_snaps base snaps divisor =
   Explanation.combine
     (Explanation.term 1 base :: List.concat_map summands_of_snap snaps)
@@ -709,12 +711,13 @@ let justified_of_snaps ~concludes base snaps divisor : Reason.justified =
 
 (* -------------------------------------- the same pairing, materialised later (D-0124)
 
-   THE function behind every bound push since M7-T27 (a). Same two halves, same single
-   source -- but the source is now [snaps], a function over a [Store.history] taken at
-   the push, and the per-term list exists only while one half is being rendered. What
-   the trail retains per pruning is this closure: the row's own term list (shared with
-   the instance), an index, a history handle. D-0123 measured the alternative at
-   16.9 M snapshot records and 14.9 M facts live on the trail after four nodes.
+   THE function behind every bound push. Same two halves, same single source -- but the
+   source is [snaps], a function over a [Store.history] taken at the push, and the
+   per-term list exists only while one half is being rendered. What the trail retains per
+   pruning is this closure: the row's own term list (shared with the instance), an index,
+   a history handle. The eager alternative, one snapshot per term at every push, held
+   16.9 M snapshot records and 14.9 M facts live on the trail after four nodes (D-0123,
+   which found the memory wall; D-0124 built this).
 
    The two halves agree because they are two readings of ONE function over FROZEN
    input: [value_at] decides each term's value for both ([fact_at] states it,
@@ -780,31 +783,25 @@ let opposite_rests_on store (tm : term) =
   if tm.coeff > 0 then lo_rests_on store tm.x ~decl_lo:tm.decl_lo
   else hi_rests_on store tm.x ~decl_hi:tm.decl_hi
 
-(* docs/DECISIONS.md D-0018 and invariant I-X6 are explicit that a [Deferred] thunk must
-   close over a *snapshot* and never read live store state: the whole reason the trace can
-   be written later, when a branch fails, rather than eagerly at every pruning, is that a
-   reason forced late still renders the derivation as of the moment it was made. This
-   function used to call [find_lo_reason]/[find_hi_reason] from inside the thunk, i.e. it
-   looked at whatever trail entry happened to witness the opposite bound at *force* time.
-   It was harmless in practice only because search forces a conflict's explanation
-   immediately; under conflict analysis (M2-T3), or under any change that defers the
-   rendering past a backtrack, it would have cited a reason that no longer holds -- and
-   the symptom would have been a rejected line somewhere else entirely, which is exactly
-   the trap D-0018 quotes from GCS. M1-T13 hoisted the lookup out of the thunk and it has
-   stayed out; only building the [Combine] is deferred.
+(* A [Deferred] thunk closes over a *snapshot* and never reads live store state
+   (invariant I-X6, from D-0018). That is what lets the trace be written later, when a
+   branch fails, rather than eagerly at every pruning: a reason forced late still renders
+   the derivation as of the moment it was made. A thunk that looked up the opposite bound
+   at FORCE time would, once the rendering is deferred past a backtrack (conflict
+   analysis does that), cite a reason that no longer holds, and the symptom would be a
+   rejected line somewhere else entirely. So the lookup is made at the push
+   ([opposite_rests_on] above) and only building the [Combine] is deferred.
 
-   It takes [~opposite] and NOT the store, which is the point of the signature and not a
-   tidy-up. M1-T13's hoist left a [store] in scope one line above a thunk that must not
-   read it, so the discipline was one careless edit from being undone and *nothing in the
-   suite could see that edit*: measured 2026-09-17, moving the two lines above back inside
-   the thunk reddens **zero** checks across every unit binary, keeps all 34 models green
-   and leaves all 102 proof artefacts byte-identical. With no store here there is nothing
-   live to read, which is how lib/core/reason.ml discharges the same obligation on the
-   reason half -- by the type rather than by a reviewer noticing. Putting the store back
-   is now a visible change to a signature, and
-   [test_prop.ml]'s [test_ix6_cross_conflict_snapshot] is the check that sees it: it
+   It takes [~opposite] and NOT the store, and that signature is the enforcement: with no
+   store here there is nothing live to read, which is how lib/core/reason.ml discharges
+   the same obligation on the reason half. The type is needed because nothing else sees
+   the mistake: measured 2026-09-17, moving the lookup back inside the thunk reddened zero
+   checks across every unit binary, kept all 34 models green and left all 102 proof
+   artefacts byte-identical. [test_prop.ml]'s [test_ix6_cross_conflict_snapshot] now
    forces one cross-row conflict at two moments with another row taking over the cited
-   bound in between, and it fires on the *derivation being wrong*, not on a crash.
+   bound in between, and fires on the *derivation being wrong*, not on a crash. (M1-T13
+   moved the lookup out of the thunk; this function used to call [find_lo_reason] inside
+   it.)
 
    WHY NO MODEL COVERS THIS, measured 2026-09-17. The only route into this path is a row
    that names the same variable twice (test_matrix.ml's white-box cross-row scene:
@@ -817,18 +814,16 @@ let opposite_rests_on store (tm : term) =
    it, whose proof is a single [pol]. So this function is reachable only from a library
    caller today, which is the other half of why breaking it moved no artefact, and it is
    why a test/models/ instance cannot stand in for the unit test above. *)
-(* M8-bits-encoding-T2 (D-0132 section 2.4): the shape changed from "this row's own
-   derivation plus the opposite bound's derivation, added" to the same [Combine] every
-   other conflict of this module builds -- the row, every term as a [Linear_term], and
-   the crossed term AT THE OPPOSITE BOUND with [cited = opposite], divisor 1. The two
-   are the same contradiction (the crossed term's own coefficient cancels against the
-   opposite derivation either way, and the degree lands on [|a| (l - u) > 0]), and the
-   new one is what the bits arm can render: every term is a bridge citation, including
-   the crossed one. The ORDER rendering of a cross conflict is not written at all since
-   D-0131 (a cross conflict always carries the opposite bound as a fact, so its
-   [Trace.conflict_line] is a `rup`), so no artefact moves at `--bits-above none`.
-   [opposite_value] is read at the push, never inside the thunk -- the same discipline as
-   [~opposite] below. *)
+(* The cross conflict's derivation is the same [Combine] every other conflict of this
+   module builds -- the row, every term as a [Linear_term] -- plus the crossed term AT THE
+   OPPOSITE BOUND with [cited = opposite], divisor 1. The crossed term's own coefficient
+   cancels against the opposite derivation and the degree lands on [|a| (l - u) > 0]. This
+   shape, rather than "the row's own derivation plus the opposite bound's, added" which
+   is the same contradiction, is the one the bits arm can render, because every term is a
+   bridge citation, including the crossed one (D-0132 section 2.4). The ORDER rendering of
+   a cross conflict is never written: a cross conflict carries the opposite bound as a
+   fact, so its [Trace.conflict_line] is a `rup` (D-0131). [opposite_value] is read at the
+   push, never inside the thunk, for the reason above. *)
 let explain_cross_conflict ~base ~snaps ~crossed:(tm : term) ~name ~opposite_value
     ~opposite =
   Explanation.deferred (fun () ->
@@ -856,21 +851,18 @@ let explain_cross_conflict ~base ~snaps ~crossed:(tm : term) ~name ~opposite_val
 
 (* ------------------------------------------------------------------------ propagate *)
 
-(* Every push below hands [Store] ONE value carrying both halves of docs/DECISIONS.md
-   D-0018: the justification (the [pol] the checker is shown when a derivation is
-   demanded) and the reason (the bound facts the trace line's clause negates). They come
-   from one [justified_of_snaps] call over one [row_snaps] result, so they cannot drift
-   apart -- and as of M2-T8 there is no signature here that could carry one without the
-   other (I-P4 and I-P5 are one obligation, D-0026).
+(* Every push below hands [Store] ONE value carrying both halves of a pruning: the
+   justification (the [pol] the checker is shown when a derivation is demanded) and the
+   reason (the bound facts the trace line's clause negates, D-0018). They come from one
+   [justified_at] call over one history, so they cannot drift apart, and there is no
+   signature here that could carry one without the other (I-P4, D-0026).
 
-   Both conflict paths build their [Store.conflict] from a [Reason.justified] too, for
-   D-0018 point 3: a
-   conflict has no trail entry, so its own reason line carries the facts itself. M2-T7
-   turned that from a [Store.record_conflict_facts] call immediately before the return
-   into a field of the returned value, which removes the window between arming the facts
-   and returning the conflict that the old one-shot slot's comment had to argue about.
-   Neither path names this instance's id: [Store.conflict] stamps whoever the engine said
-   was running. *)
+   Both conflict paths build their [Store.conflict] from a [Reason.justified] too: a
+   conflict has no trail entry, so its own reason line carries the facts itself (D-0018
+   point 3). The facts are a field of the returned value, so there is no window between
+   arming them and returning the conflict (M2-T7 replaced a one-shot slot,
+   [Store.record_conflict_facts]). Neither path names this instance's id:
+   [Store.conflict] stamps whoever the engine said was running. *)
 (* The cross-row conflict of [tm] (D-0013 step 5), as [Store.conflict] hands it back: the
    row's own reason, plus the opposing bound this new one ran into. Both halves are
    snapshotted here, not inside the thunk, for the reason [explain_cross_conflict] above
@@ -889,7 +881,7 @@ let cross_conflict t store (tm : term) snaps =
 (* One term's pruning, if its bound moves: [Some] the cross-row conflict it ran into, or
    [None]. [mins.(idx)] is the term's minimum as the run's first walk read it.
 
-   D-0124: the history is taken HERE, immediately before the push, so it holds exactly
+   The history is taken HERE, immediately before the push, so it holds exactly
    what a snapshot taken here would have read -- including the entries earlier terms of
    this same run pushed. On [Conflict] nothing was pushed, the history is still the
    present, and the cross-row conflict materialises the same snapshot eagerly: a
@@ -900,12 +892,12 @@ let prune_term t store mins ~slack idx (tm : term) =
   let m = t.arith in
   let max_term = add m mins.(idx) slack in
   let d = Store.get store tm.x in
-  (* M16-file-review-T2 (D-0190): a FIXED term cannot move, so its two divisions are not
-     made. With [lo = hi = v] and [slack >= 0] (this walk runs only then), a positive
-     coefficient gives [new_hi = v + floor(slack / a) >= hi] and a negative one
-     [new_lo = v - floor(slack / |a|) <= lo]: neither test below passes, and neither
-     division can raise (the divisor is not 0, and [min_int / -1] would need [hi] past
-     [max_int]). [max_term] is still computed first, so an overflow raises where it did. *)
+  (* A FIXED term cannot move, so its two divisions are not made (D-0190). With [lo = hi =
+     v] and [slack >= 0] (this walk runs only then), a positive coefficient gives [new_hi
+     = v + floor(slack / a) >= hi] and a negative one [new_lo = v - floor(slack / |a|) <=
+     lo]: neither test below passes, and neither division can raise (the divisor is not 0,
+     and [min_int / -1] would need [hi] past [max_int]). [max_term] is still computed
+     first, so an overflow raises where it did. *)
   if Domain.lo d = Domain.hi d then None
   else if tm.coeff > 0 then
     let new_hi = fdiv m max_term tm.coeff in
@@ -937,20 +929,12 @@ let prune_term t store mins ~slack idx (tm : term) =
       | Store.Changed | Store.Unchanged -> None
     else None
 
-(* M11-complexity-T3 (D-0142, E7): the minima go into the scratch in term order, as
-   [List.map] computed them, and are summed afterwards in the same order from 0 through
-   [Checked.add], as [Checked.sum] did; so every value, and an overflow's message, is the
-   one the lists gave. The pruning walk then reads the minimum of term [idx] at [idx].
-
-   M16-file-review-T2 (D-0190): the three walks are loops over [t.arr], the terms in the
-   order of [t.terms], so each visits the terms in the order its [List] form did, makes
-   the same [Checked] operations in the same order, and the pruning walk stops after the
-   first cross-row conflict exactly as the [List.iteri] did by skipping every later term.
-
-   M20-pernode-T3 (D-0212): "[Checked] operations" above now means the row's [arith] mode.
-   A [Checked_each] row makes exactly those operations; a [Plain] row makes the native
-   ones in the same order, which give the same values (the header's PROOF), so the trail,
-   the reasons and the proof lines are the same bytes. *)
+(* Three walks over [t.arr], in the order of [t.terms]: the minima into the scratch, their
+   sum from 0, then the prunings, which stop at the first cross-row conflict. Every
+   operation is made in the row's [arith] mode and in the same order as the list-based
+   code it replaced, so every value, an overflow's message, the trail, the reasons and the
+   proof lines are the same bytes (the header's PROOF for a [Plain] row). The scratch is
+   D-0142's item E7; the arrays are D-0190's; the [arith] mode is D-0212's. *)
 let propagate t store =
   let m = t.arith in
   (match m with
