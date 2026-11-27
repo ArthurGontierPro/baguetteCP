@@ -1,0 +1,5 @@
+p = true;
+x = array1d(1..4, [false, true, true, true]);
+w = array1d(1..3, [true, false, true]);
+z = array1d(1..5, [true, true, true, false, false]);
+----------
