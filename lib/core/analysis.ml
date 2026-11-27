@@ -996,6 +996,10 @@ type min_config = {
   min_root : bool;
   min_recursive : bool;
   min_level_filter : bool;
+  min_local : bool;
+      (* With [min_recursive]: look ONE step back only, MiniSat's "local" mode. A fact is
+         derivable when it is at its declared bound, set at level 0 or implied by a cut node;
+         no other entry is expanded. The same argument, a shorter replay, a cheaper test. *)
   min_break_unchecked : bool;
 }
 
@@ -1004,6 +1008,7 @@ let min_off =
     min_root = false;
     min_recursive = false;
     min_level_filter = true;
+    min_local = false;
     min_break_unchecked = false;
   }
 
@@ -1091,7 +1096,7 @@ let minimise_cut ?(config = min_off) store (cut : t) : min_result =
       pos = Store.no_support
       || Store.level_of_index store pos = 0
       || by_cut g ~slot ~before ~top
-      || entry_derivable pos ~is_lower:(Reason.fact_is_lower g)
+      || ((not config.min_local) && entry_derivable pos ~is_lower:(Reason.fact_is_lower g))
     and entry_derivable pos ~is_lower =
       let key = (2 * pos) + if is_lower then 1 else 0 in
       match Int_tbl_min.find_opt memo key with

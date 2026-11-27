@@ -294,7 +294,8 @@ let minimise ?(policy = Strongest) (lits : Lit.t list) : Lit.t list =
 
 (* WHICH of [Analysis.minimise_cut]'s rules run, read once from BAGUETTE_MINIMISE (D-0241):
    [off] none, [root] the level-0 rule, [rec] the level-0 rule and the recursive one with
-   the abstract-level filter, [rec-nofilter] the same without the filter (a measurement
+   the abstract-level filter, [local] the level-0 rule and the recursive one looking one
+   step back only, [rec-nofilter] the recursive one without the filter (a measurement
    arm). Anything else FAILS, the discipline of BAGUETTE_CDCL: a run that silently used
    the default because the spelling was wrong is the trap CLAUDE.md records twice. The
    rules, and why the learned clause stays the `rup` it was, are [Analysis.minimise_cut]'s
@@ -304,6 +305,7 @@ type minimisation =
   | Min_root
   | Min_rec
   | Min_rec_nofilter
+  | Min_local
   | Min_break_unchecked
 (* the break: [Analysis.min_config]'s [min_break_unchecked]. Tests only, so no
    spelling of BAGUETTE_MINIMISE selects it. *)
@@ -315,6 +317,7 @@ let minimisation_name = function
   | Min_root -> "root"
   | Min_rec -> "rec"
   | Min_rec_nofilter -> "rec-nofilter"
+  | Min_local -> "local"
   | Min_break_unchecked -> "break-unchecked"
 
 let min_config = function
@@ -328,6 +331,8 @@ let min_config = function
         min_recursive = true;
         min_level_filter = false;
       }
+  | Min_local ->
+      { Analysis.min_off with min_root = true; min_recursive = true; min_local = true }
   | Min_break_unchecked -> { Analysis.min_off with min_break_unchecked = true }
 
 let minimisation =
@@ -338,11 +343,12 @@ let minimisation =
     | Some "root" -> Min_root
     | Some ("rec" | "1" | "on") -> Min_rec
     | Some "rec-nofilter" -> Min_rec_nofilter
+    | Some "local" -> Min_local
     | Some v ->
         prerr_endline
           (Printf.sprintf
-             "baguette: BAGUETTE_MINIMISE=%S is not a setting. Use off, root, rec or \
-              rec-nofilter."
+             "baguette: BAGUETTE_MINIMISE=%S is not a setting. Use off, root, local, rec \
+              or rec-nofilter."
              v);
         exit 2)
 
@@ -356,6 +362,7 @@ type min_stats = {
   mutable ms_root : int; (* ... false at the root *)
   mutable ms_rec : int; (* ... removed by the recursive rule on top of [root] *)
   mutable ms_rec_nofilter : int; (* ... the same without the abstract-level filter *)
+  mutable ms_local : int; (* ... by the one-step (local) rule on top of [root] *)
   mutable ms_dominated : int; (* ... removed by [minimise] (same variable, same side) *)
   mutable ms_learned : int; (* literals of the clauses as learned *)
   ms_hist_before : int array;
@@ -380,6 +387,7 @@ let min_stats =
     ms_root = 0;
     ms_rec = 0;
     ms_rec_nofilter = 0;
+    ms_local = 0;
     ms_dominated = 0;
     ms_learned = 0;
     ms_hist_before = Array.make hist_buckets 0;
@@ -397,13 +405,13 @@ let print_min_stats () =
          (Array.to_list (Array.mapi (fun i n -> (i, n)) h)))
   in
   Printf.eprintf
-    "minimise: setting=%s clauses=%d lits=%d root=%d rec=%d rec_nofilter=%d dominated=%d \
-     learned=%d\n\
+    "minimise: setting=%s clauses=%d lits=%d root=%d rec=%d rec_nofilter=%d local=%d \
+     dominated=%d learned=%d\n\
      minimise-hist-before: %s\n\
      minimise-hist-after: %s\n\
      %!"
     (minimisation_name !minimisation)
-    s.ms_clauses s.ms_lits s.ms_root s.ms_rec s.ms_rec_nofilter s.ms_dominated
+    s.ms_clauses s.ms_lits s.ms_root s.ms_rec s.ms_rec_nofilter s.ms_local s.ms_dominated
     s.ms_learned (hist s.ms_hist_before) (hist s.ms_hist_after)
 
 let () = if min_stats_on then at_exit print_min_stats
@@ -482,6 +490,7 @@ let measure_minimisation store raw policy =
     s.ms_root <- s.ms_root + root;
     s.ms_rec <- s.ms_rec + (count Min_rec - root);
     s.ms_rec_nofilter <- s.ms_rec_nofilter + (count Min_rec_nofilter - root);
+    s.ms_local <- s.ms_local + (count Min_local - root);
     s.ms_dominated <-
       s.ms_dominated
       + (w - List.length (minimise_with policy (Analysis.lits_levelled raw))))
