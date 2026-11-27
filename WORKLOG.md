@@ -19,6 +19,7 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
+| M19-config (D-0252, held-out comparison of BAGUETTE_MINIMISE=rec and BAGUETTE_PRIORITY=classes, measurement only) | docs/DECISIONS.md (append), bench/tuning/draw_set.py (an --exclude option), bench/tuning/heldout.lst (new), WORKLOG.md | agent-compare (wave97-compare) | 2026-11-27 |
 
 ## Cross-session requests
 
