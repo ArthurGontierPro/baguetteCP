@@ -19,7 +19,6 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M18-coverage-T13 (D-0244) | `mznlib/` files for value_precede / value_precede_chain / seq_precede_chain; a new `lib/core/prop/` module + `lib/core/dune` only if measurement justifies it; the family's entries in `lib/flatzinc/builder.ml` and `compile.ml`; test models for the family; `docs/DECISIONS.md` (D-0244), `docs/ROADMAP.md` (its row) | agent-precede (wave90-precede) | 2026-11-27 |
 
 ## Cross-session requests
 
@@ -478,6 +477,7 @@ section 1. Shares are inclusive, of the whole run.
 
 | Task | Session | Date | Summary |
 |---|---|---|---|
+| M18-coverage-T13, `value_precede_chain` against Chuffed (D-0244) | agent-precede (`wave90-precede`, not merged) | 2026-11-27 | **D-0244 [AUTONOME].** Measured, nothing built. Chuffed over std's precede decomposition explores the same trees as over its native `seq_precede`, and baguette with the chain dropped completes nothing more. Mondoku's gap is gcc with variable counts (std's `count` decomposition completes 10-10-6 in 3 938 nodes, verified proof), code-generator/concert-hall-cap/community-detection per-node cost, test-scheduling learning. T14 added |
 | M20-pernode-T4, conflict analysis's name lookup (D-0245) | agent-locate (`wave91-locate`, not merged) | 2026-11-27 | **D-0245 [AUTONOME].** `Store.var_named` through a direct-mapped memo of 4 096 cells (98 % of handball12's lookups hit), `Analysis.locate` reads it as an int. Same trees, byte-identical artefacts; instructions per node without / with proof: handball12 -2.5 / -0.5 %, tppv circ14 -0.8 / -0.1 %, costas13 -0.9 / -0.2 %, qr2 -3.9 / -2.2 %. The attribution check through `Engine.in_scope` measured neutral and withdrawn. |
 | M19-config-T6, clause minimisation (D-0241) | agent-minim (`wave87-minim`, not merged) | 2026-11-27 | **D-0241 [AUTONOME].** `Analysis.minimise_cut` drops root-level literals (`root`) and the literals the kept ones re-derive (`rec`, MiniSat's over order literals, a trail-order guard for the ladder's forward edges), behind `BAGUETTE_MINIMISE=off|root|local|rec`, default `off`. Learned width -27 %, every proof verifies, +3 complete answers on the tuning set at 300 s, share 0.010 to 0.015 below `off` (noise): the default waits for the full series. Switch off: artefacts byte-identical to main |
 | M20-pernode-T4, the engine's wake path (D-0243) | agent-wakes (`wave89-wakes`, not merged) | 2026-11-27 | **D-0243 [AUTONOME].** `wake_static` a flat int array per variable walked from its last cell down (the old list's order), the merge two loops, `wants`/`advises` top level and inlined, `advise_always` answered without its call, the trigger mask off `trig_bits` (one byte per id), and `check_attribution` through `attr_ok`, a memo of positive answers that `purge` resets. Same trees: 518 test-model runs, diff lane 347 + 333 debug equal; scaling ok; runtest 5 495 ok, 0 FAIL. Instructions per node without / with proof: handball12 -2.0 / -0.5 %, circ14 -2.2 / -0.9 %, costas13 -3.0 / -0.3 %, qr2 -5.0 / -2.9 % (release `ef11db7f` -> `1ee55030`). Withdrawn: the walk's result in a buffer. |
@@ -717,6 +717,10 @@ section 1. Shares are inclusive, of the whole run.
 
 | M18-coverage-T5 (the ordering globals) | agent-lex (`wave85-lex`) | 2026-11-27 | **D-0239 [AUTONOME].** mznlib only: `lex_lesseq`/`lex_less`, int and Bool, as four linear rows per position over std's chain flag; 26 -> 27 complete of 92 with proof, nodes/s x1.02 to 1.04; precedence globals keep std's (T13 added); `increasing` already native. |
 ## Handoff notes
+
+### 2026-11-27 (agent-precede, `wave90-precede`, D-0244): the precede gap is not the chain, nothing built, not merged
+
+Docs only (D-0244, the ROADMAP row, T14). Chuffed over std's `value_precede_chain` decomposition completes the same 22 instances as native, nodes within 1.4 % on 21. baguette with the chain dropped: instructions per node unchanged except concert-hall-cap (-17 to -40 %), no new complete. Per family: mondoku is `global_cardinality` with VARIABLE counts (rule C of gcc.ml counts windows, not domains; std's decomposition for those calls only completes 10-10-6 in 4 271 nodes where baguette does not in 240 000), code-generator is per-node cost (37 to 70 Mi/node, 50 to 80 times Chuffed), concert-hall-cap and test-scheduling need learning in Chuffed too. Material: `/cluster/arthur/baguette-results/precede/` (README.md). Next: M18-coverage-T14.
 
 ### 2026-11-27 (agent-locate, `wave91-locate`, D-0245): conflict analysis's name lookup, not merged
 
