@@ -7,6 +7,15 @@
    proof-only), D-0024 (what `wipe_level` imitates); docs/INVARIANTS.md I-X2 and I-X3;
    docs/PROOF-FORMAT.md section 5.
 
+   The default policy is [tiered] (three LBD tiers, Glucose's schedule), chosen by D-0226
+   on measurement: once an eviction also takes the instance out of the engine, [tiered]
+   verified 25 answers of the tuning set where [keep_all] verified 20, and the peak memory
+   of a run that times out fell to 0.6 to 0.7 times [keep_all]'s. `BAGUETTE_RETENTION`
+   selects another policy (`off` or `keep_all`, `fifo:N`, `lbd:N`, `tiered:PARAMS`); `off`
+   gives back the proofs written before D-0226 byte for byte. Section 2 below records the
+   earlier measurements, under which [keep_all] was the default (D-0051, D-0139); its
+   "the default is [keep_all]" sentences are that history.
+
    ===========================================================================
    1. WHO OWNS A LEARNED CONSTRAINT'S LIFETIME
    ===========================================================================
@@ -46,7 +55,7 @@
    on this database's behalf and for exactly as long as this database holds its id; no
    other caller can remove it (the function is reachable only from the gate), and the
    engine never removes anything on its own. Under [keep_all] there is no gate, so nothing
-   is ever removed and the default build is byte-identical. Everything
+   is ever removed and the proof is the one written before D-0226. Everything
    else in this module routes through it -- eviction, the end-of-search sweep, and the
    test harness alike -- which is what makes "deleted exactly once" (I-X2) a property of
    one function with one membership test rather than of an argument about call order.

@@ -116,8 +116,9 @@
    the hole's reason into the bound move that CONSUMED it -- which is exactly the shape
    [Store.lo_reasons]/[hi_reasons] already has for the proof side (M1-T44, I-X9): the
    entry that moved the bound, plus one contribution per hole [Domain.settle] walked
-   over. [expand] does the same walk over [Store.settled_over_lo]/[settled_over_hi] and
-   [Store.remover], and records every fold it performs in [folds].
+   over. [analyse]'s [hole_facts] does the same walk over
+   [Store.settled_over_lo]/[settled_over_hi] and [Store.remover], and records every fold
+   it performs in [folds].
 
    It is recorded rather than merely performed because a hole dropped silently is
    invisible: the cut still looks well formed, still holds on the trail, and is simply

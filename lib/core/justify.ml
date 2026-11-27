@@ -728,7 +728,7 @@ let new_line ctx cid =
   Explanation.Line { cid; level; epoch = ctx.epoch; owner = ctx.serial }
 
 (* What a node's line answers. Without hash-consing it is what the identity memo
-   answered. With it (BAGUETTE_HASHCONS=1) a node is every build of the same content, so
+   answered. With it (the default; BAGUETTE_HASHCONS=0 is without) a node is every build of the same content, so
    its line is cited by builds that would each have written their own, and it answers
    only when it is at or below the writer's current level: the claim index's condition 2
    (M2-T9), for the same reason -- an id handed back is kept by the caller for as long as

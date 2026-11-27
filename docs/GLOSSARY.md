@@ -95,8 +95,8 @@ a model constraint. An explanation cites it by id (`Explanation.Model_row`). Con
 a derived line of the `.pbp`.
 
 **Needs derivation** — a propagator family whose prunings are not RUP against the `.opb`
-alone, because they rest on a counting argument over several rows (all_different's Hall
-intervals, gcc's capacity pushes, cumulative). Such a pruning is made under
+alone, because they rest on a counting argument over several rows: `alldiff`, `gcc`, `cumulative`,
+`member` and `circuit`, per `test/unit/test_trace.ml`'s I-X10 table. Such a pruning is made under
 `Store.deriving_ahead`, and its `pol` derivation is written ahead of its trace line so that
 the line becomes RUP (I-X10, D-0040, D-0082).
 

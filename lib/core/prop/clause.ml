@@ -54,9 +54,10 @@
    not punch the hole. So the declared level here is BOUNDS (docs/SPEC.md 3.2), and
    SPEC 3.2 makes the declared level the bound on what an explanation may claim.
 
-   Chasing the hole would need [Store.remove_with_facts], of which I-X10 records [Ne] is
-   the sole caller in lib/, and would trip D-0019 point 3. D-0052 says do not, and this
-   module does not.
+   Chasing the hole would need [Store.remove], and a reason that mentions a hole is the
+   case D-0019 point 3 names as the one that forces the direct encoding (a hole cannot be
+   negated into a clause without a literal for `x = v`). D-0052 decided that the clause
+   row does not chase it, and this module does not.
 
    **[Bool_clause] below still declares DOMAIN, and that declaration is still true**:
    its [make] rejects any variable not declared over [0, 1] (D-0007), a [0, 1] variable

@@ -234,9 +234,12 @@ Assertions guarded by `BAGUETTE_DEBUG=1` should check as many of these as is aff
   enumeration over the whole set — `Linear`, `Lin_eq`, `Int_le`, `Int_lt`, `Int_eq` (one
   `int_lin_le` row each), `Ne` (`int_lin_ne`'s two big-M rows, the `_neN` selector filled
   in by the checker's own unit propagation), `Bool2int` and `Bool_clause` (channelling and
-  clause rows). `Ne` is also the **only** thing that punches a hole: it is the sole caller
-  of `Store.remove_with_facts` in `lib/`; `Store.remove`/`Store.fix` have no `lib` callers
-  at all; `Domain.settle` only walks bounds past holes that already exist; and no
+  clause rows). Within that set `Ne` is also the **only** family that punches a hole
+  (`Store.remove`; `remove_with_facts` was folded into it by M2-T8). The families added
+  since that punch holes (`alldiff`, `gcc`, `element` through its view, `reif_lin_eq`,
+  `regular`, `table`, `member`, `inverse`, `circuit`) are classified one by one in
+  `test/unit/test_trace.ml`'s I-X10 table. `Domain.settle` only walks bounds past holes
+  that already exist; and no
   function in `lib/` builds a declared domain with gaps: `compile.ml` gives the store a set
   domain's hull and one `Ne` per hole (D-0072), and `Domain.of_list`, which had no `lib`
   caller, moved to the test helper `test/unit/domain_helper.ml` (M22-review-T5).

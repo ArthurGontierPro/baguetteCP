@@ -114,8 +114,9 @@
 
    Forcing `x >= v` true moves [lo]; forcing it false moves [hi]. Those are the only two
    mutators this module calls, so it can only ever move bounds. It cannot punch an
-   interior hole -- that would need [Store.remove_with_facts], of which I-X10 records
-   [Ne] is the sole caller in lib/, and D-0052 told the clause row not to reach for it.
+   interior hole -- that would need [Store.remove], a hole the row's own trace line does
+   not unit-propagate (I-X10), and D-0052 decided that the clause row does not reach for
+   it.
 
    BOUNDS is also the honest level for a second reason that is about PB and not about
    holes: **the slack rule is not domain consistent even over the literals it does
@@ -431,7 +432,7 @@ let finish (coefs : int list) (atoms : atom list) (lits : Lit.t list) degree =
    [None] for a [Lit.Eq] literal: the direct encoding is a set of 0-1 variables with no
    order to read a bound off (D-0019, D-0040), so a positive [Eq] would have to FIX a
    variable and a negative one would have to punch an interior hole. Both are outside
-   what BOUNDS may claim and the second needs [Store.remove_with_facts] (I-X10). [None]
+   what BOUNDS may claim and the second needs [Store.remove] (I-X10). [None]
    too for a name this store or this encoding does not know: the honest answer is to
    decline the whole instance rather than to guess a box. A 1UIP cut and a PB row can
    both contain such a literal, so this is a case that really arises and is counted by
