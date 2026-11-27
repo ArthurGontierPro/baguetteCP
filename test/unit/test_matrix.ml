@@ -911,8 +911,9 @@ let run_instance inst =
   let ctx = Justify.create ~writer ~encoding in
   let trace = Trace.create ~history:true () in
   let entry_level = Store.level store in
+  let stats = Search.stats_create () in
   let outcome =
-    try Search.solve ~engine ~store ~ctx ~check:(independent_check m) ~trace ()
+    try Search.solve ~engine ~store ~ctx ~check:(independent_check m) ~trace ~stats ()
     with Search.Unsound_solution a ->
       fail "%s: I-P1/I-S1 -- the search returned an assignment the model rejects" tag;
       ignore a;
@@ -926,6 +927,15 @@ let run_instance inst =
   let rules = numbered_rules ~n_model proof in
   let trace_ids = Trace.emitted_ids trace in
   let is_trace id = List.mem id trace_ids in
+  (* M18-coverage-ne (D-0238): a 1UIP LEARNED clause is neither of check 3's two kinds.
+     It is decision-free -- globally valid, derived at level 0 -- so it need not fail
+     standalone the way a nogood with a decision folded into it must; and it may rest on
+     trace lines, so it need not pass standalone either. It became visible here when
+     int_lin_ne's conflicts started carrying their facts: int_lin_ne/sat-after-failure
+     now learns `~e_ge_1 e_ge_2 ~f_ge_2 ~g_ge_3`, which names its root facts as literals
+     and is therefore RUP against the .opb alone. The decision nogoods are still held to
+     the check, unchanged. *)
+  let is_learned id = List.mem id stats.Search.learned_rev in
   let branched = opens_level 1 proof in
 
   (* ---- the answer, from brute force, never hand-written *)
@@ -1055,14 +1065,17 @@ let run_instance inst =
 
   (* ---- the discriminating check: each trace line on its own against the .opb, and
      each nogood NOT on its own. See the header, check 3. *)
-  let bad_trace = ref [] and bad_nogood = ref [] in
+  let bad_trace = ref [] and bad_nogood = ref [] and n_nogood = ref 0 in
   List.iter
     (fun (id, _, line) ->
       match standalone ~dir ~opb ~n_model line with
       | None -> ()
       | Some ok ->
           if is_trace id then (if not ok then bad_trace := (id, line) :: !bad_trace)
-          else if ok then bad_nogood := (id, line) :: !bad_nogood)
+          else if is_learned id then ()
+          else (
+            incr n_nogood;
+            if ok then bad_nogood := (id, line) :: !bad_nogood))
     rules;
   if trace_ids <> [] then (
     check
@@ -1077,7 +1090,8 @@ let run_instance inst =
      propagation measures the checker's luck, not our proof. *)
   if expect_sat && trace_ids <> [] then (
     check
-      (tag ^ ": every nogood needs the trace -- none is standalone-RUP")
+      (Printf.sprintf "%s: every nogood needs the trace -- none of %d is standalone-RUP"
+         tag !n_nogood)
       (!bad_nogood = []);
     List.iter
       (fun (id, line) ->

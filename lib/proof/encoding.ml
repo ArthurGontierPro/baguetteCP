@@ -278,13 +278,10 @@ and repr = Order | Bits of { n : int; lb_row : cid; ub_row : cid }
    per probe, D-0080's "hashing per literal" on wide compiles, and [find] runs on every
    literal [ge]/[le]/[eq] commits). Same hash function as the generic table
    ([Hashtbl.hash]) and the same resizing, so the same bucket layout and iteration order;
-   nothing iterates these two anyway. *)
-module Names = Hashtbl.Make (struct
-  type t = string
-
-  let equal = String.equal
-  let hash (s : string) = Hashtbl.hash s
-end)
+   nothing iterates these two anyway. M20-pernode-T4 (D-0236): it is [Name_tbl], the same
+   table hashed by [String.hash], which returns [Hashtbl.hash]'s value without the generic
+   hash's dispatch; [find] was 10.5 % of elitserien handball12 with the proof. *)
+module Names = Name_tbl
 
 (* ---------------------------------------------------------------------------
    M7-T27 (b): the .opb is STREAMED, and its header is COUNTED, not scanned
@@ -433,6 +430,9 @@ type t = {
          it from all of [ints] on every call (O(vars) per auxiliary, O(vars * rows) per
          compile). Never shrinks, because [ints] never does. *)
   mutable decl_rev : string list;
+  mutable found_last : ivar option;
+      (* M20-pernode-T4 (D-0236): the variable [find] answered last. A one-entry memo in
+         front of [ints], see [find]. *)
   mutable sink : sink;
   occurs : Occurs.t; (* the distinct variable names of every committed row *)
   mutable renamed_rev : string list; (* `name x -> x'` comments, newest first *)
@@ -545,6 +545,7 @@ let create () =
     ints = Names.create 64;
     taken = Names.create 64;
     decl_rev = [];
+    found_last = None;
     sink =
       (match !row_sink with
       | Retain_rows -> Retain []
@@ -585,8 +586,27 @@ let create () =
   live := Some t;
   t
 
+(* M20-pernode-T4 (D-0236): a ONE-ENTRY MEMO in front of the table, hit when [x] is
+   PHYSICALLY ([==]) the name of the variable answered last. Sound because [ints] never
+   rebinds a name ([declare_int_gen] and [declare_int_bits] raise [Redeclared] rather than
+   replace) and only a found variable is remembered, so a hit returns what the table
+   would; an equal string that is not that very one just misses. It pays because a
+   caller names one variable several times in a row -- [Trace.bits_arm] over a reason's
+   facts, a literal's [Justify.validate_lit] then its rendering -- with the string the
+   store and the encoding share: on elitserien handball12 with the proof, 39 % of 25 000
+   lookups per node were physical repeats of the one before, and none was equal without
+   being physical. The memo keeps the [Some] the table returned, so a miss allocates
+   nothing more than it did; a version that kept a placeholder variable instead of an
+   option measured 0.3 % worse. *)
 let find t x =
-  match Names.find_opt t.ints x with Some v -> v | None -> raise (Undeclared x)
+  match t.found_last with
+  | Some v when v.name == x -> v
+  | _ -> (
+      match Names.find_opt t.ints x with
+      | Some v as found ->
+          t.found_last <- found;
+          v
+      | None -> raise (Undeclared x))
 
 let is_declared t x = Names.mem t.ints x
 

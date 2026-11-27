@@ -148,10 +148,14 @@
    the pruning and must stay.
 
    With |H| > cap the degree is |H| - cap >= 1 and the row is contradicting.  It is
-   REPORTED the way all_different reports its pigeonhole: by pushing one surplus
-   confined variable out of the interval it is confined to, so [Store.apply]'s [Failed]
-   arm pairs the derivation with [Reason.none] and no `rup` conflict line claims a
-   counting argument as reverse unit propagation (I-X10, D-0040).
+   REPORTED the way all_different reports its pigeonhole.  AT THE ROOT, by pushing one
+   surplus confined variable out of the interval it is confined to, so [Store.apply]'s
+   [Failed] arm pairs the derivation with [Reason.none] and no `rup` conflict line claims
+   a counting argument as reverse unit propagation (I-X10, D-0040).  UNDER A DECISION,
+   since M18-coverage-T11 (D-0234), the same push is the conflict itself, with its facts
+   and its derivation written ahead of `rup ~facts >= 1`, so 1UIP learns from it -- and so
+   is every other push of this module that would empty its target (rule C's shortfall
+   and surplus included).  See "a conflict carries its facts" above [pass].
 
    ---------------------------------------------------------------------------
    Rule C -- the count variables' own bounds
@@ -244,7 +248,7 @@
        [Store.apply]'s [Failed] arm returns for the one-value variable, derivation
        included.
      - THE REASONS.  A one-value variable's facts are all at its declared bounds, so
-       [Reason.lits] already drops every one of them; for a constant [scope_facts] names
+       [Reason.lits] already drops every one of them; for a constant [count_named] names
        none at all, because there is no name to put in a reason's scope.  The trace
        lines are therefore the same lines.
 
@@ -730,26 +734,69 @@ let prune_expl t ~a ~b ~snaps ~halls ~caps ~y ~lower ~bound =
    [pol] lines were 30 KB in all.  See D-0099. *)
 let in_scope_of ~a ~b s = List.exists (fun v -> declares s v) (range a b)
 
-let scope_facts ~snaps ~caps =
-  List.concat_map
-    (fun s ->
-      [
-        Reason.at_least ~name:s.s_name ~decl:s.s_dlo s.s_lo;
-        Reason.at_most ~name:s.s_name ~decl:s.s_dhi s.s_hi;
-      ])
-    snaps
-  @ List.concat_map
-      (fun k ->
-        if View.is_const k.k_cov.cx then
-          (* A constant has no literal and no name; it was read, but there is no fact
-             about it that the proof could negate, and its bounds never moved. *)
-          []
-        else
-          [
-            Reason.at_most ~name:k.k_cov.cname ~decl:k.k_cov.cdhi k.k_hi;
-            Reason.at_least ~name:k.k_cov.cname ~decl:k.k_cov.cdlo k.k_cov.cdlo;
-          ])
-      caps
+(* M18-coverage-T11 (D-0234): THE FACTS A DERIVATION LEAVES, and only those.
+
+   Until M18-coverage-T11 one function, [scope_facts], named every variable of the scope
+   at BOTH its current bounds, and the counts at their upper one. That is the right
+   SCOPE -- D-0026's reverse arm requires the reason to name every variable whose literal
+   the derivation weakens at the top level -- and the wrong set of FACTS: a fact of a
+   variable whose terms the derivation clears for free (a ladder chain, a literal axiom)
+   is a fact the trace line does not need, and since M18-coverage-T11 lets gcc's
+   conflicts reach 1UIP, every such fact is a literal 1UIP has to resolve away or keep.
+   Measured (D-0234, 60 s, no proof): with those facts on the conflicts, rws e-30-s-9 ran
+   at 1 151 nodes/s and e-25-s-7 at 1 209; with the facts below, 1 636 and 1 406.
+
+   So each rule names its scope with three kinds of entry, from the same snapshot:
+
+     - [both_bounds] for a variable whose two bound literals the derivation LEAVES in its
+       row where a decision moved them -- rule A's confined variables and its target
+       (their [alo_summands] / [prune_expl] chains), rule C's fixed takers
+       ([fixed_leftovers]);
+     - [excluding_bound] for a variable whose ONE bound clears the value -- rule C's and
+       rule (b)'s [gone] ([zero_summands] leaves exactly that bound);
+     - [named_only] for every other variable of the scope: its terms are cleared by a
+       ladder chain ([drop_summands], [free_summands]) or by literal axioms
+       ([cost_summands]), which read nothing, and it is NAMED, by the fact that it is
+       at least its declared minimum -- a fact with no literal ([Reason.lit_of_fact]
+       answers [None]), which costs the trace line and the learned clause nothing and
+       keeps the reverse arm of D-0026 satisfied. That is how this module has always
+       named a count (`at_least cdlo`, [count_named]).
+
+   The trace lines stay RUP where they were: the ahead lines (rule A, rule C's lower
+   push, rule (a)'s hole) because every literal their derivation leaves is the negation of
+   a fact still listed; the two that are RUP against one model row alone (rule C's upper
+   push, rule (b)) because a variable that holds the value contributes at most 1 to that
+   row's slack whether or not its bounds are asserted -- the argument their comments
+   already make never used those bounds. *)
+let named_only s = Reason.at_least ~name:s.s_name ~decl:s.s_dlo s.s_dlo
+
+let both_bounds s =
+  [
+    Reason.at_least ~name:s.s_name ~decl:s.s_dlo s.s_lo;
+    Reason.at_most ~name:s.s_name ~decl:s.s_dhi s.s_hi;
+  ]
+
+let excluding_bound s v =
+  if v < s.s_lo then Reason.at_least ~name:s.s_name ~decl:s.s_dlo s.s_lo
+  else Reason.at_most ~name:s.s_name ~decl:s.s_dhi s.s_hi
+
+(* A count is named (at its declared minimum, no literal) and, where the rule reads it,
+   at the one bound it reads. A constant has no name. *)
+let count_named k ~read =
+  if View.is_const k.k_cov.cx then []
+  else
+    Reason.at_least ~name:k.k_cov.cname ~decl:k.k_cov.cdlo k.k_cov.cdlo
+    ::
+    (match read with
+    | `Hi -> [ Reason.at_most ~name:k.k_cov.cname ~decl:k.k_cov.cdhi k.k_hi ]
+    | `Lo -> [ Reason.at_least ~name:k.k_cov.cname ~decl:k.k_cov.cdlo k.k_lo ]
+    | `Nothing -> [])
+
+(* Rule A and rule (a): the confined set and the target at both bounds, every other
+   variable of the scope named, the counts at their upper bound. *)
+let capacity_facts ~scope ~read ~caps =
+  List.concat_map (fun s -> if read s then both_bounds s else [ named_only s ]) scope
+  @ List.concat_map (fun k -> count_named k ~read:`Hi) caps
 
 (* ----------------------------------------------------------- rule C: the count bounds *)
 
@@ -1008,6 +1055,76 @@ let forced_expl t ~k ~v ~poss ~gone ~y ~lower =
 
 exception Found of Store.conflict
 
+(* ------------------------------------- M18-coverage-T11: a conflict carries its facts
+
+   Until M18-coverage-T11 every conflict of this module -- rule A's pigeonhole (|H| > cap,
+   one surplus confined variable pushed past its own top), rule C's shortfall and surplus
+   (a count pushed past its opposite bound), and a stale push of either rule that lands on
+   a variable an earlier push of the pass had already confined -- reached the store as a
+   pruning that must fail, and [Store.apply]'s [Failed] arm paired the derivation with
+   [Reason.none] at every depth. Sound (search.ml's D-0040 arm writes the derivation and
+   the decision nogood closes the branch), but [Learn.at_conflict] got an EMPTY cut, and on
+   rotating-workforce 82 to 99.9 % of the conflicts learned nothing (D-0232 section 2:
+   rws e-30-s-9, 1.05 M nodes and 78 clauses, where Chuffed answers in 121 791 nodes).
+
+   THE RULE (D-0234), all_different's of M7-T33 (D-0156) restated once for every push of
+   this module, in [pass]'s [apply]: a push whose bound crosses the LIVE opposite bound of
+   its target is, under a decision, not made; it is reported as the conflict, under
+   [Store.deriving_ahead], with the push's own facts plus that crossed bound
+   ([conflict_facts]). [Trace.conflict_line] then writes the push's derivation first and
+   `rup ~facts >= 1` after it (cumulative's arrangement, D-0096). The line is unit
+   propagation against that one derivation, because every literal the derivation leaves
+   in its row is the negation of a listed fact:
+
+     - a bound of a variable or count the counting read, left where a decision moved it
+       ([bound_cancels] cancels root ones only) -- the push's own facts, which state
+       exactly those bounds ([capacity_facts], [both_bounds], [excluding_bound]);
+     - the pushed target's residue. For rule A's pigeonhole it is [y_ge_(hi(y)+1)], left
+       by [prune_expl]'s chain from the snapshot top, and y's snapshot top is already in
+       [capacity_facts] (y is the target). For every other emptying push the
+       derivation proves a VALID bound (`y >= b + 1`, `c <= may`, `c >= must`) that the
+       live store contradicts, and the live opposite bound -- the crossed fact -- falsifies
+       it through the ladder rungs, which unit propagation walks. That is the fact
+       [Store.apply]'s [Failed] arm says a conflict line needs and a pruning's reason does
+       not carry. A constant count has no literal and none is needed: its derivation
+       takes the declared-range arm of [ladder_at_most] / [ladder_at_least], which is
+       already contradicting.
+
+   AT THE ROOT NOTHING CHANGES: the push runs and fails as before, its derivation closes
+   to [0 >= 1] where every bound it read is root-established and cancelled, and every root
+   refutation is byte-identical. The test reads the store LIVE ([View.lo] / [View.hi]), so
+   it agrees with [Store.apply]'s [Failed] exactly: [set_lo] to a bound at or below [hi]
+   always lands on a value (a hole moves it up to the next one, at most [hi]).
+
+   No new [Explanation] constructor, no change outside this module: [Store.conflict],
+   [Store.deriving_ahead] and the trace's c_ahead path are the ones all_different,
+   cumulative and element already use. *)
+
+(* Each fact once, first occurrence kept: the crossed bound often IS one of the push's
+   facts (rule A's pigeonhole, whose snapshot top is still live), and a conflict line is a
+   clause, so a repeat is a longer line saying the same thing. alldiff.ml has the same
+   function; a shared one belongs in reason.ml, which this row does not own. *)
+let distinct_facts facts =
+  let seen = Hashtbl.create 16 in
+  List.filter
+    (fun f ->
+      if Hashtbl.mem seen f then false
+      else (
+        Hashtbl.replace seen f ();
+        true))
+    facts
+
+(* The bound a push to [lower]'s side crosses, read live: the target's top for a lower
+   push, its bottom for an upper one. [x] is a plain variable (rule A, rule (b), a count
+   variable) or a constant count, which has no literal to name. *)
+let conflict_facts store (j : Reason.justified) ~name ~dlo ~dhi x ~lower =
+  distinct_facts
+    (Reason.facts j.Reason.reason
+    @
+    if View.is_const x then []
+    else if lower then [ Reason.at_most ~name ~decl:dhi (View.hi store x) ]
+    else [ Reason.at_least ~name ~decl:dlo (View.lo store x) ])
+
 (* The snapshot's window holds [v] / is exactly [v]: the two tests rule C and rules (a)
    and (b) sort a value's variables by. *)
 let holds_v v s = s.s_lo <= v && v <= s.s_hi
@@ -1027,22 +1144,37 @@ let rule_c t store ~dvs ~caps ~apply =
       let dv = dvs.(j) in
       let may = c.cconst + count_where (holds_v v) dv in
       let must = c.cconst + count_where (fixed_at v) dv in
-      let facts = lazy (scope_facts ~snaps:dv ~caps:[ k ]) in
       (if may < k.k_hi then
          let poss = List.filter (holds_v v) dv in
          let gone = List.filter (fun s -> not (holds_v v s)) dv in
-         apply ~ahead:false ~lower:false c.cx may
+         (* D-0234: a taker is cleared by two literal axioms, a non-taker by the bound
+            that excludes [v]. *)
+         let facts =
+           List.map
+             (fun s -> if holds_v v s then named_only s else excluding_bound s v)
+             dv
+           @ count_named k ~read:`Nothing
+         in
+         apply ~ahead:false ~who:(c.cname, c.cdlo, c.cdhi) ~lower:false c.cx may
            (Reason.because
               ~concludes:(Some (Reason.at_most ~name:c.cname ~decl:c.cdhi may))
-              (Lazy.force facts)
+              facts
               (close_upper t ~k ~may (c_upper_expl t ~k ~poss ~gone ~may))));
       if must > k.k_lo then
         let fixed = List.filter (fixed_at v) dv in
         let others = List.filter (fun s -> not (fixed_at v s)) dv in
-        apply ~ahead:true ~lower:true c.cx must
+        (* D-0234: a fixed taker leaves its two bounds, every other indicator clears on
+           a free rung. *)
+        let facts =
+          List.concat_map
+            (fun s -> if fixed_at v s then both_bounds s else [ named_only s ])
+            dv
+          @ count_named k ~read:`Nothing
+        in
+        apply ~ahead:true ~who:(c.cname, c.cdlo, c.cdhi) ~lower:true c.cx must
           (Reason.because
              ~concludes:(Some (Reason.at_least ~name:c.cname ~decl:c.cdlo must))
-             (Lazy.force facts)
+             facts
              (close_lower t ~k ~must (c_lower_expl t ~k ~fixed ~others ~must))))
     caps;
   ignore store
@@ -1088,7 +1220,20 @@ let pass t store =
      such variable it verifies, which is why no M7-T16 scene saw it). So the lower push
      runs under [deriving_ahead], and [c_lower_expl]'s [free_summands] -- exactly those
      rungs -- go on the page ahead of it. *)
-  let apply ?(ahead = false) ~lower x bound j =
+  let apply ?(ahead = false) ~who:(name, dlo, dhi) ~lower x bound j =
+    (* M18-coverage-T11 (D-0234): a push that would EMPTY its target is, under a
+       decision, the conflict itself, with its facts and its derivation ahead -- see
+       [conflict_facts]. At the root it runs and fails as before. *)
+    (if
+       Store.level store > 0
+       && if lower then bound > View.hi store x else bound < View.lo store x
+     then
+       let facts = conflict_facts store j ~name ~dlo ~dhi x ~lower in
+       raise
+         (Found
+            (Store.deriving_ahead store (fun () ->
+                 Store.conflict store
+                   (Reason.because ~concludes:None facts j.Reason.justification)))));
     (* Through [View] so that rule C's count may be a constant (M7-T18); rule A's [x] is
        always [View.of_var], whose mutators ARE [Store]'s. *)
     let prune () =
@@ -1106,14 +1251,21 @@ let pass t store =
   List.iter (fun k -> Int_tbl.replace cover_at k.k_cov.cv k) caps;
   let los = List.sort_uniq Int.compare (List.map (fun s -> s.s_lo) snaps) in
   let his = List.sort_uniq Int.compare (List.map (fun s -> s.s_hi) snaps) in
-  let push ~a ~b ~halls ~caps_ab ~y ~lower x bound =
-    apply ~ahead:true ~lower (View.of_var x) bound
+  (* [member] answers "is this snapshot in [halls]" in O(1) -- a set the caller builds
+     once per interval, or rule (a)'s [fixed_at v] -- so that a push's facts cost
+     O(scope) (D-0234: measured at 17 % of gcc-benchmark l42_3's samples as a
+     [List.exists] by name over [halls] per scope variable). *)
+  let push ~a ~b ~halls ~member ~caps_ab ~y ~lower x bound =
+    apply ~ahead:true ~who:(y.s_name, y.s_dlo, y.s_dhi) ~lower (View.of_var x) bound
       (Reason.because
          ~concludes:
            (Some
               (if lower then Reason.at_least ~name:y.s_name ~decl:y.s_dlo bound
                else Reason.at_most ~name:y.s_name ~decl:y.s_dhi bound))
-         (scope_facts ~snaps:(List.filter (in_scope_of ~a ~b) snaps) ~caps:caps_ab)
+         (capacity_facts
+            ~scope:(List.filter (in_scope_of ~a ~b) snaps)
+            ~read:(fun s -> Var.equal s.s_var y.s_var || member s)
+            ~caps:caps_ab)
          (prune_expl t ~a ~b ~snaps ~halls ~caps:caps_ab ~y ~lower ~bound))
   in
   (* M7-T24, rules (a) and (b): one cover value at a time, before the interval search,
@@ -1135,9 +1287,11 @@ let pass t store =
            (fun y ->
              if not (is_fixed y) then
                if y.s_lo = v then
-                 push ~a:v ~b:v ~halls:fixed ~caps_ab:[ k ] ~y ~lower:true y.s_var (v + 1)
+                 push ~a:v ~b:v ~halls:fixed ~member:is_fixed ~caps_ab:[ k ] ~y
+                   ~lower:true y.s_var (v + 1)
                else if y.s_hi = v then
-                 push ~a:v ~b:v ~halls:fixed ~caps_ab:[ k ] ~y ~lower:false y.s_var (v - 1)
+                 push ~a:v ~b:v ~halls:fixed ~member:is_fixed ~caps_ab:[ k ] ~y
+                   ~lower:false y.s_var (v - 1)
                else if
                  (* LIVE, not [y]'s snapshot bounds: an earlier push of this pass may have
                     moved a bound of [y] onto [v], and a removal AT a bound is a bound
@@ -1149,7 +1303,7 @@ let pass t store =
                then
                  let j =
                    Reason.because ~concludes:None
-                     (scope_facts ~snaps:dv ~caps:[ k ])
+                     (capacity_facts ~scope:dv ~read:is_fixed ~caps:[ k ])
                      (hole_expl t ~v ~snaps ~halls:fixed ~caps:[ k ] ~y)
                  in
                  match
@@ -1171,17 +1325,17 @@ let pass t store =
             (fun y ->
               if not (is_fixed y) then
                 let lower = y.s_lo < v in
+                (* D-0234: a non-candidate at the bound that excludes [v], every
+                   candidate (the target too) named only -- literal axioms clear them --
+                   and the count at the lower bound the rule reads. *)
                 let facts =
-                  scope_facts ~snaps:dv ~caps:[]
-                  @
-                  if View.is_const c.cx then []
-                  else
-                    [
-                      Reason.at_least ~name:c.cname ~decl:c.cdlo k.k_lo;
-                      Reason.at_most ~name:c.cname ~decl:c.cdhi k.k_hi;
-                    ]
+                  List.map
+                    (fun s -> if holds s then named_only s else excluding_bound s v)
+                    dv
+                  @ count_named k ~read:`Lo
                 in
-                apply ~ahead:false ~lower (View.of_var y.s_var) v
+                apply ~ahead:false ~who:(y.s_name, y.s_dlo, y.s_dhi) ~lower
+                  (View.of_var y.s_var) v
                   (Reason.because
                      ~concludes:
                        (Some
@@ -1242,19 +1396,27 @@ let pass t store =
               in
               let ordered = folded @ rest in
               let n = List.length ordered in
+              let set_of l =
+                let tbl = Int_tbl.create 16 in
+                List.iter (fun s -> Int_tbl.replace tbl (Var.to_int s.s_var) ()) l;
+                fun s -> Int_tbl.mem tbl (Var.to_int s.s_var)
+              in
               if n > cap then
                 let halls = List.filteri (fun i _ -> i < cap) ordered in
                 let y = List.nth ordered cap in
-                push ~a ~b ~halls ~caps_ab ~y ~lower:true y.s_var (b + 1)
+                push ~a ~b ~halls ~member:(set_of halls) ~caps_ab ~y ~lower:true y.s_var
+                  (b + 1)
               else if n = cap then
+                let member = set_of ordered in
                 List.iter
                   (fun y ->
-                    if not (List.exists (fun s -> String.equal s.s_name y.s_name) ordered)
-                    then
+                    if not (member y) then
                       if a <= y.s_lo && y.s_lo <= b then
-                        push ~a ~b ~halls:ordered ~caps_ab ~y ~lower:true y.s_var (b + 1)
+                        push ~a ~b ~halls:ordered ~member ~caps_ab ~y ~lower:true y.s_var
+                          (b + 1)
                       else if a <= y.s_hi && y.s_hi <= b then
-                        push ~a ~b ~halls:ordered ~caps_ab ~y ~lower:false y.s_var (a - 1))
+                        push ~a ~b ~halls:ordered ~member ~caps_ab ~y ~lower:false y.s_var
+                          (a - 1))
                   snaps)
         his)
     los;

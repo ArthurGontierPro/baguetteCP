@@ -516,9 +516,17 @@ let test_asserting_level_matches_reference () =
    `stats.n_min_dropped` is 0 on every one of them -- because the decision closure has
    already reduced the nogood to one level per variable per direction before minimisation
    sees it, which is [Analysis.add_node]'s strongest-per-slot merge doing this row's work
-   one layer up. Under other orders it does fire, and this is one of them: seed 12 on the
-   settle scene drops a literal, the proof still verifies, and keeping the weakest
+   one layer up. Under other orders it does fire, and this is one of them: seed 75 on the
+   holes scene drops a literal, the proof still verifies, and keeping the weakest
    threshold instead makes the checker reject it.
+
+   Re-pinned by M18-coverage-ne (D-0238). Until then the scene was the settle scene at seed
+   12. Once int_ne's conflicts carry their facts, the settle scene's int_ne conflicts
+   learn, the search takes another path, and on NO seed of 0..300 does the reduction fire
+   there any more (measured; before, 19 of those seeds fired, each with the break
+   rejected). On the holes scene 6 seeds of 0..300 fire (75, 80, 144, 154, 204, 290) and
+   every one of them has its weakest-threshold break rejected. The break and what it
+   protects are unchanged; only the scene that reaches it moved.
 
    A fresh [Random.State] per decision, so the order is a deterministic function of the
    seed and of nothing else -- a break lane pinned to a seed has to be reproducible from
@@ -527,8 +535,8 @@ let seeded_order seed store cands =
   Search.random_order (Random.State.make [| seed |]) store cands
 
 let test_minimise_break_in_a_proof () =
-  let order = seeded_order 12 in
-  let r, dir, opb, pbp = run ~order settle_src in
+  let order = seeded_order 75 in
+  let r, dir, opb, pbp = run ~order holes_src in
   check "a2: the scene the break needs really does minimise something"
     (r.r_stats.Search.n_min_dropped > 0);
   expect_accepted ~title:"a2: the minimised proof" ~dir ~opb ~pbp;
@@ -536,7 +544,7 @@ let test_minimise_break_in_a_proof () =
   let _, dir2, opb2, pbp2 =
     run ~order
       ~config:{ Search.default_config with Search.policy = Learn.Weakest }
-      settle_src
+      holes_src
   in
   expect_rejected ~title:"a2 BREAK: weakest-threshold minimisation" ~dir:dir2 ~opb:opb2
     ~pbp:pbp2;
