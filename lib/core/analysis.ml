@@ -937,6 +937,210 @@ let to_string t =
     (String.concat "," (List.map string_of_int (cited_levels t)))
     t.resolutions (List.length t.folds)
 
+(* ------------------------------------- clause minimisation (M19-config-T6, D-0241) *)
+
+(* SHORTER LEARNED CLAUSES, by two rules applied to a finished cut. Each removal drops a
+   node of the cut whose fact the checker re-derives for itself, by unit propagation,
+   from the facts that stay -- so the learned clause stays the `rup` it was (D-0018), and
+   the proof writes nothing new.
+
+   ROOT. A node whose bound was established at level 0 is dropped. Its fact holds at the
+   root, and its literal in the clause is false there forever: the clause is the same
+   constraint on every node the search will visit, only wider. The checker re-derives the
+   fact because every level-0 trail entry has its trace line on the page (lib/core/trace.ml,
+   "Level-0 prunings get a line too") or rests on one model row (I-X10), and level-0 lines
+   are never retired by a `w`. D-0238 section 5's `~e_ge_1` is the example.
+
+   RECURSIVE (MiniSat's, Sorensson and Biere 2009, over order literals). A node above level
+   0 and below the conflict level is dropped when every fact its supporting entry read
+   ([Reason.facts], plus the holes it settled over, as [analyse] expands them) is
+   DERIVABLE:
+     - at its declared bound, or established at level 0, or
+     - implied by a cut node of the same slot (ladder order: [x >= 7] implies [x >= 3])
+       that is either established strictly BEFORE the entry reading the fact, or kept, or
+     - established by an entry that is not a root and whose own facts are all derivable,
+       recursively, and memoised per (entry, direction).
+   The checker's unit propagation replays exactly that: the kept literals' negations are
+   assumed, each derivable fact is the claim of a trace line all of whose other literals
+   are already falsified, and the removed node's line then propagates its fact. That is
+   the same replay a node the 1UIP walk resolved away gets, at a lower level; the lines
+   are on the page because [Trace] writes the whole trail when a branch fails, and they
+   are live because the clause is written before the `w` that retires any of their
+   levels (I-S4, [Learn.support_check]).
+
+   WHY "STRICTLY BEFORE, OR KEPT". The ladder gives a forward edge the SAT version does
+   not have: [x >= 7] can be established AFTER the entry that read [x >= 3]. Two cut
+   nodes could then each be implied through the other (y >= 2 read x >= 3; x >= 7 read
+   y >= 2) and both be dropped, which is a wrong clause. Allowing a cut node as a
+   justifier only when its entry precedes the reader's, or when it is kept (decided
+   before, since nodes are decided in DECREASING trail order), makes every edge between
+   two dropped nodes point strictly backwards on the trail: no cycle, and the induction
+   on trail position is the soundness argument. Inside the recursion only the first
+   half applies, which keeps the memo a property of the entry alone.
+
+   THE ABSTRACT-LEVEL FILTER (MiniSat's): an intermediate entry at a level no cut node
+   sits at fails at once. In SAT that is exact; here an entry at level j can read only
+   facts from below j, so the filter is a heuristic that may miss a removal and never
+   allows a wrong one ([~level_filter:false] measures what it misses).
+
+   The conflict level is never touched: under 1UIP it holds one node, the asserting one,
+   and dropping it would leave a clause that asserts nothing. A cut taken at level 0 is
+   returned as it is (its clause is the root refutation's business). *)
+
+(* [min_break_unchecked] is the BREAK, as [Learn.Weakest] is minimisation's: it drops every
+   node strictly between level 0 and the conflict level without asking whether it is
+   derivable, so the clause claims more than the trail supports and the checker must refuse
+   it. It exists for test/unit/test_learn.ml's lane, which shows the line really rests on
+   the literals the rules keep (D-0066: a `rup` line can be vacuous). *)
+type min_config = {
+  min_root : bool;
+  min_recursive : bool;
+  min_level_filter : bool;
+  min_break_unchecked : bool;
+}
+
+let min_off =
+  {
+    min_root = false;
+    min_recursive = false;
+    min_level_filter = true;
+    min_break_unchecked = false;
+  }
+
+type min_result = {
+  mr_cut : t;
+  mr_root : int; (* literal-bearing nodes dropped by ROOT *)
+  mr_recursive : int; (* ... and by RECURSIVE *)
+  mr_supports : int list;
+      (* trail positions of the entries the removals rest on, for [Learn.supports] *)
+}
+
+let has_lit n = Reason.lit_of_fact n.fact <> None
+
+(* A node's identity among the cut's: its entry and its direction (one entry moves one
+   variable, and may move both of its bounds). *)
+let node_key n = (2 * n.support) + if Reason.fact_is_lower n.fact then 1 else 0
+
+module Int_tbl_min = Hashtbl.Make (Int)
+
+(* [a]'s fact implies [g], on one slot. *)
+let implies_fact (a : Reason.fact) (g : Reason.fact) =
+  if Reason.fact_is_lower g then fact_value a >= fact_value g
+  else fact_value a <= fact_value g
+
+let minimise_cut ?(config = min_off) store (cut : t) : min_result =
+  let unchanged = { mr_cut = cut; mr_root = 0; mr_recursive = 0; mr_supports = [] } in
+  if
+    cut.conflict_level = 0
+    || (not config.min_root) && (not config.min_recursive)
+       && not config.min_break_unchecked
+  then unchanged
+  else
+    let cl = cut.conflict_level in
+    let by_slot = Slot_tbl.create 64 in
+    List.iter (fun n -> if n.slot >= 0 then Slot_tbl.replace by_slot n.slot n) cut.nodes;
+    let abstract l = 1 lsl (l land 61) in
+    let levels_mask = List.fold_left (fun m n -> m lor abstract n.level) 0 cut.nodes in
+    (* Decided so far, by node support: [true] dropped, absent undecided or kept. *)
+    let dropped = Int_tbl_min.create 16 in
+    let kept = Int_tbl_min.create 16 in
+    let memo = Int_tbl_min.create 64 in
+    let used = ref [] in
+    let entry_facts (e : Store.entry) ~at ~is_lower =
+      let holes =
+        if is_lower then Store.settled_over_lo e.Store.old ~cur:(Domain.lo e.Store.now)
+        else Store.settled_over_hi e.Store.old ~cur:(Domain.hi e.Store.now)
+      in
+      Reason.facts e.Store.reason
+      @ List.concat_map
+          (fun h ->
+            match Store.remover store ~before:at ~var:e.Store.var h with
+            | None -> []
+            | Some (r : Store.entry) -> Reason.facts r.Store.reason)
+          holes
+    in
+    (* Does a cut node on [g]'s slot imply [g] and may it justify a reader at [before]? *)
+    let by_cut g ~slot ~before ~top =
+      slot >= 0
+      &&
+      match Slot_tbl.find_opt by_slot slot with
+      | None -> false
+      | Some m ->
+          m.support <> Store.no_support && implies_fact m.fact g
+          && (m.support < before || (top && Int_tbl_min.mem kept (node_key m)))
+    in
+    let rec derivable g ~before ~top =
+      let pos, _, slot = locate store ~before g in
+      pos = Store.no_support
+      || Store.level_of_index store pos = 0
+      || by_cut g ~slot ~before ~top
+      || entry_derivable pos ~is_lower:(Reason.fact_is_lower g)
+    and entry_derivable pos ~is_lower =
+      let key = (2 * pos) + if is_lower then 1 else 0 in
+      match Int_tbl_min.find_opt memo key with
+      | Some b -> b
+      | None ->
+          let e = Store.trail_entry store pos in
+          let lvl = Store.level_of_index store pos in
+          let ok =
+            (not (rests_on_nothing store pos e))
+            && ((not config.min_level_filter) || levels_mask land abstract lvl <> 0)
+            &&
+            (* Provisionally false: the recursion only goes backwards, so this is never
+               read before it is overwritten, and it bounds the walk if it ever were. *)
+            (Int_tbl_min.replace memo key false;
+             List.for_all
+               (fun f -> derivable f ~before:pos ~top:false)
+               (entry_facts e ~at:pos ~is_lower))
+          in
+          Int_tbl_min.replace memo key ok;
+          if ok then used := pos :: !used;
+          ok
+    in
+    let n_root = ref 0 and n_rec = ref 0 in
+    (* Nodes in DECREASING support order; see the header for why. *)
+    let order = List.stable_sort (fun a b -> Int.compare b.support a.support) cut.nodes in
+    List.iter
+      (fun n ->
+        if n.support = Store.no_support || not (has_lit n) then ()
+        else if n.level = 0 then
+          if config.min_root then (
+            Int_tbl_min.replace dropped (node_key n) ();
+            incr n_root)
+          else Int_tbl_min.replace kept (node_key n) ()
+        else if config.min_break_unchecked && n.level < cl then (
+          Int_tbl_min.replace dropped (node_key n) ();
+          incr n_rec)
+        else if
+          config.min_recursive && n.level < cl && (not n.root)
+          &&
+          let e = Store.trail_entry store n.support in
+          List.for_all
+            (fun f -> derivable f ~before:n.support ~top:true)
+            (entry_facts e ~at:n.support ~is_lower:(Reason.fact_is_lower n.fact))
+        then (
+          Int_tbl_min.replace dropped (node_key n) ();
+          used := n.support :: !used;
+          incr n_rec)
+        else Int_tbl_min.replace kept (node_key n) ())
+      order;
+    if !n_root = 0 && !n_rec = 0 then unchanged
+    else
+      let nodes =
+        List.filter
+          (fun n ->
+            n.support = Store.no_support
+            || (not (has_lit n))
+            || not (Int_tbl_min.mem dropped (node_key n)))
+          cut.nodes
+      in
+      {
+        mr_cut = { cut with nodes };
+        mr_root = !n_root;
+        mr_recursive = !n_rec;
+        mr_supports = List.rev !used;
+      }
+
 (* ------------------------------------- the dependency levels, memoised (M7-T27 a3) *)
 
 (* [dependency_levels] is [decision_levels] of [analyse ~scope:Everywhere
