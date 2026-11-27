@@ -710,7 +710,7 @@ section 1. Shares are inclusive, of the whole run.
 
 ### 2026-11-27 (agent-lex, `wave85-lex`, D-0239): lex as linear rows through mznlib, not merged
 
-`fzn_lex_lesseq_int`/`fzn_lex_less_int` (and `_bool`, over `baguette_bool_lin_le`) write std's chain `b[i] <-> (x[i] <= y[i] /\ (x[i] < y[i] \/ b[i + 1]))` as four rows per position over a 0..1 flag, in place of two `int_lin_le_reif`, an `array_bool_and` and three clauses. Same solutions as std, binary unchanged (dev `505217da`), six new test models, a 600-model fuzz against Chuffed all agree. On 92 lex instances: 26 -> 27 complete with proof, a few per cent more nodes per second, smaller models. The SPEC row is a proposal. Open: `value_precede_chain` against Chuffed (M18-coverage-T13), and a node-limited arm over the lex set. Runs in `/cluster/arthur/baguette-results/lex/`.
+`fzn_lex_lesseq_int`/`fzn_lex_less_int` (and `_bool`, over `baguette_bool_lin_le`) write std's chain `b[i] <-> (x[i] <= y[i] /\ (x[i] < y[i] \/ b[i + 1]))` as four rows per position over a 0..1 flag, in place of two `int_lin_le_reif`, an `array_bool_and` and three clauses. Same solutions as std, binary unchanged (dev `505217da`), five new test models, a 600-model fuzz against Chuffed all agree. On 92 lex instances: 26 -> 27 complete with proof, a few per cent more nodes per second, smaller models. The SPEC row is a proposal. Open: `value_precede_chain` against Chuffed (M18-coverage-T13), and a node-limited arm over the lex set. Runs in `/cluster/arthur/baguette-results/lex/`.
 
 ### 2026-11-26 (agent-ne, `wave84-ne`, D-0238): int_lin_ne's conflicts carry their facts, not merged
 

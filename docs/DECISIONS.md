@@ -31786,7 +31786,7 @@ and the model). The rule alone is the `if Store.level store > 0` line in `Ne.pro
 
 **Status**: DECIDED (agent-lex, `wave85-lex`, 2026-11-27). Revert: delete `mznlib/fzn_lex_lesseq_int.mzn`,
 `fzn_lex_less_int.mzn`, `fzn_lex_lesseq_bool.mzn` and `fzn_lex_less_bool.mzn` (each pair alone gives its type std's
-text back), the six test models they brought and the SPEC 2.1 row. The binary does not change: the branch's builds
+text back), the five test models they brought and the SPEC 2.1 row. The binary does not change: the branch's builds
 are main's bytes (dev `505217da`, release `9194b0f8`).
 
 ### 1. What reached baguette before, measured first
@@ -31866,7 +31866,7 @@ So the route is neutral to slightly positive on outcomes, a few per cent faster 
 kept because it is the same constraint as std's (b determined, solutions one for one), it removes about five
 propagator instances per position for four rows, and it is mznlib only.
 
-Correctness, beside the six test models (`lex_lesseq_sat`, `lex_less_unsat`, `lex_chain_opt`, `lex_length_sat`,
+Correctness, beside the five test models (`lex_lesseq_sat`, `lex_less_unsat`, `lex_chain_opt`, `lex_length_sat`,
 `lex_bool_sat`, each VERIFIED in both encodings and under BAGUETTE_DEBUG=1): an exhaustive comparison of the rows
 against std's lex on 260 random small pairs (int, different lengths, negative bounds; gecode `-a`, projected solution
 sets equal), 100 Boolean pairs with constants and a shared cell, and a differential fuzz of 600 random models (150
