@@ -2597,9 +2597,8 @@ let test_d0216_amo_reuse () =
    variables); y1..y3 over 1..6 lose 1, 3 and 5 to Regin under that one set. Their sum
    at most 8 then leaves them {2, 4} between three, and the root conflict cites the
    removals of 1 and 3 from each, which forces their derivations. The proof must be the
-   same bytes with and without the memos ([Alldiff.amo_lines] too, which shares the
-   at-most-one lines of the removals from one y), the memos must be what the later
-   removals used, and veripb must accept the proof. *)
+   same bytes with and without the memo, the memo must be what the later removals used,
+   and veripb must accept the proof. *)
 let d0242_src =
   "var 1..5: h1;\n\
    var 1..5: h2;\n\
@@ -2645,10 +2644,9 @@ let test_d0242_alo_reuse () =
       check
         (Printf.sprintf
            "D-0242: the eight removals after the first reuse the set's at-least-one \
-            lines, and later removals from one y its at-most-one lines (%d hits with the \
-            memos, %d without; 8 + 6 when no node leaves the table in between)"
+            lines (%d hits with the memo, %d without)"
            hits_on hits_off)
-        (hits_on > 8 && hits_off = 0);
+        (hits_on >= 8 && hits_off = 0);
       match veripb_path () with
       | None ->
           incr failures;

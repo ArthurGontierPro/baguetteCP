@@ -62,10 +62,9 @@
        its intervals over the same permutations;
      - [regin_scratch] skips a tight set that no outside term meets, by a count, and
        marks the scope's values rather than sorting their lists;
-     - the derivations a tight set or interval justifies share its at-least-one lines,
-       and the removals from one [y] its at-most-one lines ([alo_lines], [amo_lines]),
-       under D-0216's rule that a node is handed back only when building it again would
-       return it.
+     - the derivations a tight set or interval justifies share its at-least-one lines
+       ([alo_lines]), under D-0216's rule that a node is handed back only when building
+       it again would return it.
 
    [by_lo]/[by_hi] outlive the call, and they are permutations re-sorted from the live
    bounds at every pass, so they need no trail either. The memos live in a derivation's
@@ -899,26 +898,24 @@ let alo_over t s ~keep =
    A value only one variable in scope can take gets a literal axiom instead of an
    at-most-one line: "at most one of {x} takes v" IS ~x_eq_v >= 0, and a value no
    variable can take gets nothing, because there is no term to cancel. *)
-(* WHAT THE REMOVALS OF ONE REGIN SET SHARE, BUILT ONCE (M20-pernode-T4, D-0242). Every
-   removal a tight set justifies sums the same at-least-one line per member, from the
-   same snapshots and the same [keep], and every removal from the same [y] under it sums
-   the same at-most-one line per value too: only [y]'s leftovers (which value goes)
-   differ. A memo hands back what the first forced derivation built, when building it
-   again would return those very nodes, under D-0216's rule ([Explanation.reuse_epoch]):
+(* WHAT THE DERIVATIONS OF ONE TIGHT SET SHARE, BUILT ONCE (M20-pernode-T4, D-0242). Every
+   derivation a tight set (a Regin set, or a stage 1 interval) justifies sums the same
+   at-least-one line per member, from the same snapshots and the same [keep]: only the
+   at-most-one lines (which [y] joins) and [y]'s leftovers differ. [alo_lines] hands back
+   the lines the first forced derivation built, when building them again would return
+   those very nodes, by D-0216's rule ([Explanation.rebuilds_to], checked again only after
+   a node left the table, [Explanation.reuse_epoch]): an at-least-one line's operands are
+   model rows, the [excl] chains (whose own operands are model rows) and hole clauses, so
+   the shallow check is the whole induction. Otherwise, and always when hash-consing or
+   [amo_reuse] is off (test_endtoend compares the bytes both ways), they are built, which
+   is what every derivation did. The same nodes either way, so the same bytes.
+   [memo_hits] counts what the memo handed back.
 
-     - the at-least-one lines ([alo_lines], per set) are checked by
-       [Explanation.rebuilds_to] once a node has left the table since: their operands are
-       model rows, the [excl] chains (whose own operands are model rows) and hole
-       clauses, so the shallow check is the whole induction;
-     - the at-most-one summands ([amo_lines], per set and [y]) are kept only while NO
-       node has left the table since they were built, and only if none left during their
-       build: an at-most-one is a chain [m] steps deep, which a shallow check does not
-       cover, and with every node of the chain still in the table a build returns each
-       of them again (the builds are deterministic in their operands, D-0216's argument).
-
-   Otherwise, and always when hash-consing or [amo_reuse] is off (test_endtoend compares
-   the bytes both ways), they are built, which is what every removal did. The same nodes
-   either way, so the same bytes. [memo_hits] counts what the two memos handed back. *)
+   WITHDRAWN (D-0242 section 3): the same memo for the at-most-one lines of the removals
+   from one [y], kept while no node left the table. Same bytes in every normal run, but
+   under BAGUETTE_DEBUG (which forces and re-forces derivations) it changed the proof of
+   2018 soccer-computational, so "no node left" does not establish what a rebuild
+   returns, and only the [rebuilds_to] rule is used. *)
 type 'a memo = { mutable m_val : 'a option; mutable m_seen : int }
 
 let memo () = { m_val = None; m_seen = -1 }
@@ -944,19 +941,7 @@ let alo_lines t ~vals ~halls memo =
       memo.m_seen <- -1;
       nodes
 
-let amo_lines build memo =
-  let epoch = memo_epoch () in
-  match memo.m_val with
-  | Some summands when epoch >= 0 && memo.m_seen = epoch ->
-      incr memo_hits;
-      summands
-  | _ ->
-      let summands = build () in
-      memo.m_val <- Some summands;
-      memo.m_seen <- (if epoch >= 0 && memo_epoch () = epoch then epoch else -1);
-      summands
-
-let core_summands ?alo ?amo:amo_memo t ~vals ~halls ~extra =
+let core_summands ?alo t ~vals ~halls ~extra =
   let all = halls @ Option.to_list extra in
   let amos () =
     List.concat_map
@@ -972,7 +957,7 @@ let core_summands ?alo ?amo:amo_memo t ~vals ~halls ~extra =
   | None ->
       let keep = mem_of vals in
       List.map (fun s -> Explanation.term 1 (alo_over t s ~keep)) halls)
-  @ match amo_memo with Some memo -> amo_lines amos memo | None -> amos ()
+  @ amos ()
 
 (* The bound literals [alo_window] leaves in the row, cancelled by the lines that
    already state those bounds. Until M4-T7 this was the one place in this module where
@@ -1149,18 +1134,18 @@ let prune_expl ?alo t ~a ~b ~halls ~y ~lower =
 
    which is the pruning, disjoined with the facts it rests on -- the [Ne] shape, sound at
    any level. Nothing here is new machinery: it is [core_summands] plus [Weaken]. *)
-let remove_summands ?alo ?amo t ~vals ~halls ~y ~value =
+let remove_summands ?alo t ~vals ~halls ~y ~value =
   let mine = List.filter (fun w -> y.s_dlo <= w && w <= y.s_dhi) vals in
-  core_summands ?alo ?amo t ~vals ~halls ~extra:(Some y)
+  core_summands ?alo t ~vals ~halls ~extra:(Some y)
   @ List.filter_map
       (fun w ->
         if w = value then None else Some (Explanation.weaken [ (1, Lit.eq y.s_name w) ]))
       mine
 
-let remove_expl ?alo ?amo t ~keep ~vals ~halls ~y ~value =
+let remove_expl ?alo t ~keep ~vals ~halls ~y ~value =
   Explanation.deferred (fun () ->
       Explanation.combine
-        (remove_summands ?alo ?amo t ~vals ~halls ~y ~value @ hall_cancels ~keep ~halls)
+        (remove_summands ?alo t ~vals ~halls ~y ~value @ hall_cancels ~keep ~halls)
         1)
 
 (* THE PIGEONHOLE over a value SET, which is the M4-T2 shape of the sentence this
@@ -1737,10 +1722,10 @@ let in_order_currency t y value expl =
    [facts] is the tight set's [hall_facts], shared by every removal under that set
    (D-0235); the caller hands over only a value still in [y]'s live domain, so every
    call reaches the store. *)
-let remove_one t store ~moved ~halls ~vals ~keep ~facts ~alo ~amo ~y ~y_tm value =
+let remove_one t store ~moved ~halls ~vals ~keep ~facts ~alo ~y ~y_tm value =
   let d = Store.get store y_tm.x in
   let concludes = removal_conclusion y d value in
-  let expl = remove_expl ~alo ~amo t ~keep ~vals ~halls ~y ~value in
+  let expl = remove_expl ~alo t ~keep ~vals ~halls ~y ~value in
   let j =
     Reason.because ~concludes
       (remove_reason_of y (Lazy.force facts))
@@ -1952,9 +1937,6 @@ let regin_scratch t store =
               List.iter
                 (fun y ->
                   if not ink.(y) then
-                    (* [y]'s at-most-one lines depend on its variable and declared range
-                       only, not on the snapshot a landed removal renews. *)
-                    let amo = memo () in
                     List.iter
                       (fun v ->
                         if
@@ -1963,7 +1945,7 @@ let regin_scratch t store =
                         then
                           if
                             remove_one t store ~moved ~halls:(Lazy.force halls) ~vals
-                              ~keep ~facts ~alo ~amo ~y:(snap y) ~y_tm:t.terms.(y) v
+                              ~keep ~facts ~alo ~y:(snap y) ~y_tm:t.terms.(y) v
                           then twins t y (fun j -> cache.(j) <- None))
                       vals)
                 (range 0 (n - 1))
