@@ -537,6 +537,8 @@ saving the checker a search.
 
 ## 6. Open questions
 
-Tracked as `OPEN` entries in `docs/DECISIONS.md`. The significant one at the time of
-writing is **D-0003: what "higher-order explanation" means for this project** — it has
-two live readings and they lead to different code. Resolve it before M3.
+Tracked as `OPEN` entries in `docs/DECISIONS.md`. The one this section named when it was
+written, **D-0003: what "higher-order explanation" means for this project**, was resolved
+by D-0026 on 2026-09-16: which facts justify a pruning is declarative data
+(`lib/core/reason.ml`), and how the checker is convinced is a cutting-planes expression
+that may cite other explanations (`lib/core/explanation.ml`).
