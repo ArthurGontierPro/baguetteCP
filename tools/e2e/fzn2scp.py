@@ -57,7 +57,11 @@ starts `UNCOVERED:` and names the first construct it cannot translate):
                                  cs_j = #{k : xs_k = cover_j}
                                               (c gacglobalcardinality (x1 ...) (v1 ...) (c1 ...))
                                  the OPEN form (clsd = F): mznlib's closed variants add their
-                                 own `in` constraints, which arrive as set domains
+                                 own `in` constraints, which arrive as set domains. A cover
+                                 that repeats a value is stated MERGED (D-0262), as baguette's
+                                 front end states it (D-0260): the first occurrence kept, each
+                                 later count tied to the first's, (cN_tie<j> equals c_i c_j),
+                                 nothing when the two counts are the same term
   array_int_maximum(y, xs)       y = max xs                (c array_max (x1 ...) y)
   array_int_minimum(y, xs)       y = min xs                (c array_min (x1 ...) y)
   int_max(a, b, z), int_min      z = max(a, b)             (c max a b z), (c min a b z)
@@ -663,8 +667,24 @@ def emit(m):
             xs, cover, cs = m.array(args[0]), m.ints(args[1]), m.array(args[2])
             if len(cover) != len(cs):
                 raise Uncovered(f"{name}: {len(cover)} cover values for {len(cs)} counts")
+            # D-0262: a cover that repeats a value is stated MERGED, as baguette's front end
+            # states it since D-0260 (Builder.merge_gcc_cover_repeats): the first occurrence
+            # kept, each later count TIED to the first's, `(cN_tie<j> equals first later)`,
+            # nothing when the two are the same term. Equivalent: both sides say the count is
+            # the number of x equal to that value. Without it cake's rows are labelled by the
+            # original positions and baguette's by the merged ones, and a value after the
+            # repeat was pinned against the wrong cake row
+            first, kept, ties = {}, [], []
+            for j, (v, c) in enumerate(zip(cover, cs)):
+                if v in first:
+                    if tm(first[v]) != tm(c):
+                        ties.append(f"({cn}_tie{j} equals {tm(first[v])} {tm(c)})")
+                else:
+                    first[v] = c
+                    kept.append((v, c))
             cons.append(f"({cn} gacglobalcardinality ({' '.join(tm(x) for x in xs)}) "
-                        f"({' '.join(map(str, cover))}) ({' '.join(tm(c) for c in cs)}))")
+                        f"({' '.join(str(v) for v, _ in kept)}) ({' '.join(tm(c) for _, c in kept)}))")
+            cons.extend(ties)
         elif name in ("array_int_maximum", "array_int_minimum"):
             if len(args) != 2:
                 raise Uncovered(f"{name} with {len(args)} arguments")

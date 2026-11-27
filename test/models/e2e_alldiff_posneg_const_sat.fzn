@@ -1,0 +1,12 @@
+% D-0262, from the D-0262 grid: all_different([x, 4, -1, z]), the found model's constants in the
+% other order (D-0258 reported that order as verifying; on a model of its own it fails too, the
+% guess is not order dependent but row dependent). Before D-0262 --e2e defined a constant pair's
+% selector from a row any candidate implies, as another pair's flag. Unique solution: x = 2,
+% z = 3.
+var 0..2: x :: output_var;
+var 1..3: z :: output_var;
+array [1..4] of var int: A :: var_is_introduced = [x,4,-1,z];
+constraint all_different_int(A);
+constraint int_le(2,x);
+constraint int_le(3,z);
+solve satisfy;

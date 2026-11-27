@@ -28,8 +28,12 @@ back into MiniZinc instead (FlatZinc is MiniZinc syntax): the predicate declarat
 replaced by the definitions below, `globals.mzn` is included, every decision variable gets
 `:: add_to_output`, and `minizinc --solver <gecode|cp-sat> -a --output-mode dzn` flattens it
 against the REFERENCE solver's own library and enumerates. The definitions are the
-standard library's globals where one exists (global_cardinality, inverse over the two index
-sets), and SPEC 2.1's sentence for member, which has no standard global with selectors.
+standard library's globals where one exists (inverse over the two index sets), and SPEC
+2.1's sentence for member, which has no standard global with selectors. global_cardinality is
+its sentence too, each count the number of x equal to its cover value (D-0262): CP-SAT's own
+global_cardinality admits NO solution when the cover repeats a value (gcc([1,1], [1,1],
+[2,2]), test/models/gcc_low_up_closed_dupcover_src_sat: Gecode and cake's semantics admit
+x = [1,1]), which the validation reported as DIFFER against a right translation.
 They share nothing with tools/e2e/fzn2scp.py; member's reading of SPEC is the one place the
 two are written from the same sentence.
 
@@ -52,7 +56,8 @@ ADECL = re.compile(r"^(\s*array\s*\[\s*1\s*\.\.\s*(\d+)\s*\]\s*of\s+var\s+[^:=;]
 REFERENCE = {
     "baguette_global_cardinality":
         "predicate baguette_global_cardinality(array [int] of var int: x, array [int] of int: cover,"
-        " array [int] of var int: counts) = global_cardinality(x, cover, counts);",
+        " array [int] of var int: counts) = forall (j in index_set(cover)) (counts[j] ="
+        " sum (i in index_set(x)) (bool2int(x[i] = cover[j])));",
     "baguette_inverse":
         "predicate baguette_inverse(array [int] of var int: f, int: fmin, array [int] of var int: g,"
         " int: gmin) = inverse(array1d(fmin..fmin + length(f) - 1, f),"
