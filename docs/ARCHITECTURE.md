@@ -94,6 +94,11 @@ lib/core/       Baguette_core
   activity.ml               the ACTIVITY heuristic: one VSIDS score per variable,
                             learned-clause bumps, EVSIDS decay, first-fail tie-break
                             (M10-T3, D-0137)
+  probe.ml                  PROBING at the root (failed literals): each bound literal of a
+                            small domain pushed on level 1 and propagated; a failure is a
+                            failed one-decision node, its nogood filed at level 0 and its
+                            negation asserted there. BAGUETTE_PROBE=off|root, budget in
+                            propagator runs (M19-config-T8, D-0250)
   checked.ml                checked integer arithmetic + the overflow cap
   interval.ml               interval arithmetic: mul, square, div of bounds
   debug.ml                  BAGUETTE_DEBUG-gated invariant checks
