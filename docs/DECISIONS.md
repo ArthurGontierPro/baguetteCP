@@ -32712,3 +32712,91 @@ FAIL; `scripts/run_model_tests.sh` 259 passed, 0 failed, every proof accepted; `
 
 [AUTONOME] Kept: no search, proof or answer changes, so no default behaviour changes. Revert: `git revert
 55f1a7f 9f70b38`.
+
+## D-0244  [AUTONOME] M18-coverage-T13: the `value_precede_chain` gap against Chuffed is not the precede chain. Chuffed over std's decomposition explores the same trees as over its native `seq_precede` (the same 22 complete, nodes within 1.4 % on 21 of them), and dropping the chain makes baguette complete nothing more. The gap is, per family, `global_cardinality` with variable counts (mondoku), per-node cost (code-generator, concert-hall-cap, community-detection) and learning (test-scheduling, concert-hall-cap). Nothing built
+
+**Status**: DECIDED (agent-precede, `wave90-precede`, 2026-11-27). Nothing in `lib/`, `mznlib/` or the tests
+changed, so there is nothing to revert. The measurement material is in `/cluster/arthur/baguette-results/precede/`
+(README.md first).
+
+### 1. Context
+
+D-0239 section 3 measured, with proof and within 300 s, 6 complete of 70 `value_precede_chain` instances against
+Chuffed's 22 (mondoku 1 against 5, concert-hall-cap 1 against 4, community-detection 0 against 3, code-generator 2
+against 6), and left open whether the global is the cause. M18-coverage-T13 asked for the cause before any native
+`seq_precede` (Law and Lee).
+
+The instances are the 24 of agent-lex's 70 (`/cluster/arthur/baguette-results/lex/inst.lst`) where Chuffed
+completes and baguette with proof does not (18), plus the 6 baguette completes (controls). Flattened with MiniZinc
+2.10.1 in five ways. `base` is main's mznlib. `drop` is main's mznlib with `fzn_value_precede_chain_int`,
+`fzn_seq_precede_chain_int` and `fzn_value_precede_int` defined as `true`. `chuffed` is Chuffed's own mznlib (native
+`chuffed_seq_precede`). `chstd` is Chuffed's mznlib with std's two precede files put back. `stdgcc` is main's mznlib
+without baguette's `fzn_global_cardinality*.mzn`, so std's `count` decomposition (the 10 instances that call gcc).
+The `drop` arm relaxes the model, so its answers are not results. It is a cost probe only.
+
+Binaries. Measurement binary `184504fc` (main `402d9cb`, release profile). The proof arm reruns the same binary.
+agent-lex's timed numbers quoted below are binary `9194b0f8` (main `2fff866`). The branch after merging main
+(`5008e6e`) builds `ef23c899`, main's gate-121 binary, and the branch changes no code.
+
+### 2. Is it the chain? No
+
+| arm | what it shows |
+|---|---|
+| Chuffed native against Chuffed over std's decomposition (learning on, 300 s) | the 22 instances Chuffed completes natively, it completes over std's decomposition too (peaceable n8 and community mexican time out natively and were not rerun). Node counts agree within 1.4 % on 21 of the 22 and within 5 % on mondoku 20-18-9 (2 338 657 native, 2 222 752 std, 168 s against 135 s). The decomposition gives Chuffed the same search |
+| baguette `base` against `drop`, 3 000 nodes, no proof, `perf stat instructions:u` | instructions per node unchanged on code-generator (52.3, 70.1, 56.3, 36.6 Mi/node both), community-detection (2.1, 5.4, 2.8 both, Polblogs 194 against 205), test-scheduling (5.2, 19.1 against 18.6), mondoku (1.2 against 1.1, 3.5 both). Only concert-hall-cap moves: 1.55 to 1.28, 1.56 to 1.14, 2.87 to 1.72 Mi/node (17 to 40 %), where the chain is half the model |
+| baguette `drop`, 300 s, no proof | completes the same instances `base` completes without proof (code-generator update_br_prob 203 s and control_flow_insn_p 164 s, which agent-lex's base also completed without proof) and nothing else. Not one concert-hall-cap, mondoku or community-detection instance completes with the chain gone |
+
+So a native `seq_precede` cannot close the gap. Concert-hall-cap's 17 to 40 % per node is the most the chain costs
+anywhere, and the next two sections show that family is 10 to 30 times slower per node than Chuffed, so the chain
+is not its bottleneck either.
+
+### 3. Where the gap is, per family
+
+Chuffed's rate is its node count over its wall time on a completed run (`-s`, learning on). baguette's is agent-lex's
+no-proof run (nodes over 300 s). `--no-learn` is Chuffed with nogood learning off.
+
+| family | baguette nodes/s, Mi/node | Chuffed nodes, nodes/s | Chuffed `--no-learn` | cause |
+|---|---|---|---|---|
+| mondoku 10-10-6, 12-12-8, 14-14-8 | 689 to 844, 1.2 to 1.6 | 1 234 to 6 884, solved in under 1 s | completes (3 584 to 80 703 nodes) | **propagation of `global_cardinality` with variable counts.** Chuffed without learning needs 3 584 nodes on 10-10-6, baguette does not finish in 240 000. With std's `count` decomposition (`stdgcc`) baguette completes 10-10-6 in 3 938 nodes (2 s) and 12-12-8 in 11 000 (13 s). The split arms say which call: baguette's gcc kept for fixed counts and std's for variable ones completes 10-10-6 in 4 271 nodes, the reverse does not in 98 258 |
+| mondoku 20-18-9 | 729, 3.5 | 2 338 657, 13 903/s | times out | the same plus learning and per-node cost. `stdgcc` does not complete it |
+| code-generator (4) | 34 to 80, 37 to 70 | 22 689 to 125 712, 2 900 to 4 400/s | 1 of 4 completes | **per-node cost on models of 300 000 to 570 000 constraints**, 50 to 80 times Chuffed's. baguette needs fewer nodes (13 682 against 33 927 on update_br_prob) and completes two of the four without proof (153 s, 187 s). With proof the per-node cost grows further and they time out |
+| concert-hall-cap 03, 148, 318 | 1 031 to 1 867, 1.5 to 2.9 | 0.8 M to 2.9 M, 17 000 to 31 500/s | times out | **learning and per-node cost**. Chuffed needs learning here and explores 10 to 30 times more nodes per second |
+| community-detection Sampson, adjourn, Polblogs | 22 to 2 763, 2.1 to 194 | 6 485 to 9.8 M, 1 000 to 41 000/s | Sampson and Polblogs complete | **per-node cost.** Sampson without learning takes Chuffed 14 M nodes in 216 s, about 15 times baguette's rate. gcc is not it here: adjourn under `stdgcc` explores the identical 214 817 nodes |
+| test-scheduling t30m10r3-15, t50m20r10-17 | 262 to 680, 5.2 to 19.1 | 84 646 and 209 034, solved in 2 s and 10 s | times out | **learning.** The chain is one trivial `array_int_maximum` in these models (std's `value_precede_chain` over a single value). Without learning Chuffed does not complete either |
+| peaceable queens n8 | 2 640, 2.1 | times out at 300 s (315 s in agent-lex's 1 200 s run) | times out | outside the 300 s window for both |
+
+### 4. Completes with proof, before and after
+
+Nothing was built, so before and after are the same binary. Rerun with proof on the 24 instances, binary
+`184504fc`, 300 s, veripb 3.0.2 on every proof that ended: 4 complete with a VERIFIED proof (mondoku 8-8-4 0.9 s, test-scheduling t30m10r10-5 49 s, concert-hall-cap 02 79 s, code-generator find_regno_partial 24 s), code-generator pegwit OPT in 39 s whose check ran out of veripb's 900 s (as in agent-lex's run), and test-scheduling t20m10r10-17 timed out at 111 206 nodes where agent-lex's run completed at 116 505 in 230 s (the node's load average was above 30 throughout). The 18 gap instances: 0 complete, as in agent-lex's run. For the next task's benefit, the `stdgcc`
+flattening with proof: mondoku 10-10-6 OPT in 5.9 s (3 938 nodes) and 12-12-8 OPT in 35.4 s (11 000 nodes), both VERIFIED, 8-8-4 VERIFIED in 0.5 s (338 nodes against 1 945). Mondoku 14-14-8 and 20-18-9, the four community-detection instances and peaceable n8 time out. That is +2 mondoku complete with proof, the size of what T14 can expect on this family.
+
+Proof volume written: 97 GB over 34 runs (the largest 7.1 GB, community-detection mexican) (deleted once checked).
+
+### 5. Decision
+
+[AUTONOME] Build nothing for the precede family. std's decomposition is already lean (D-0239 section 1) and gives
+Chuffed the same search as its native propagator, and baguette's gaps on these instances are elsewhere. The ROADMAP
+row is closed as measured, with no code.
+
+### 6. What is next
+
+- **gcc with variable counts reads windows, not domains.** Rule C of `lib/core/prop/gcc.ml` counts the possible
+  takers of `v` with `holds_v` (`lo <= v <= hi`), so a value removed from the inside of a domain still counts,
+  and the count's upper bound stays loose. Mondoku's `occurences = global_cardinality(puzzle[.., h], Colors)` feed
+  a `max - min` objective through these counts, and std's per-value `int_eq_reif` decomposition, which reads the
+  holes, closes 10-10-6 and 12-12-8. This is the hypothesis the split arm points to, not yet a measured fact
+  about rule C itself. Proposed as a TODO row (M18-coverage-T14), with two routes to measure: rule C over
+  `Domain.mem` (the hole as the free `- e_i >= 0` term, from the direct literal's two order literals), or routing
+  gcc with variable counts to std's decomposition in mznlib, measured over every gcc instance of the Challenge
+  lists, since the change reaches beyond this family.
+- **Per-node cost on very large models** (code-generator, 37 to 282 Mi/node at 300 000 to 570 000 constraints).
+  Belongs to M20-pernode. A profile of one code-generator instance at a node limit is the first step.
+- **Learning.** test-scheduling and concert-hall-cap need nogood learning in Chuffed. baguette's CDCL loop is off
+  by default (D-0219). A probe on mondoku 10-10-6 with `BAGUETTE_CDCL=1` did not finish in 90 s (103 069 nodes,
+  incumbent 2), consistent with the gcc diagnosis there. Its effect on test-scheduling and concert-hall-cap was
+  not measured here.
+
+### 7. Verification
+
+Worktree `/scratch/arthur/wt-precede` at the merge `5008e6e` plus this record (docs only): `scripts/check_fmt.sh` clean; `check_test_widths.py` clean; `dune build --root . bin/` (`ef23c899`) then `dune runtest --root . --force -j 8` under `ulimit -v 4000000`: 5 544 ok, 0 FAIL; `scripts/run_model_tests.sh` 259 passed, 0 failed; `scripts/check_determinism.sh` 259 models identical. No `lib/` change, so no diff lane. No model artefact changed.
