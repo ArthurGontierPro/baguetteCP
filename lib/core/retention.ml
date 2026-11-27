@@ -68,6 +68,11 @@
    id ended at an eviction: the engine kept the instance until the end of the run,
    switched off by [gate] but with every closure and byte of the propagator.
 
+   **WHEN an id may go is invariant I-X11 (D-0257): not while a line not yet written may
+   rest on it.** [reduce] never evicts such a constraint, and the search names the ones it
+   cannot see on the trail ([hold]). The engine instance and the `del` leave together, as
+   above; what I-X11 decides is whether they leave at this reduction at all.
+
    ### The double-delete this prevents is not the backjump's
 
    D-0045's addendum warns about the policy and the backjump both wanting a learned id
@@ -715,6 +720,14 @@ type t = {
          byte-identical `rup` twice, judged duplicate lines harmless within one proof; a
          retention policy that evicts and lets the same clause be re-learned is how they
          stop being harmless, so the count is kept where a later row can see it. *)
+  mutable held : Writer.cid list;
+      (* D-0257. The constraints a line NOT YET WRITTEN will rest on although no trail
+         entry names their instance: the clause the CDCL loop will assert from itself at
+         its next fixpoint ([Search.cdcl]'s [expect]). Locked by [reduce] like
+         [locked_instances]' two kinds, until [release_held]. A list, newest first, at
+         most one id in practice; never iterated for an emitted byte. See [hold]. *)
+  mutable n_held_refused : int;
+      (* D-0257. Evictions a hold refused, counted also in [n_locked]. Not printed. *)
 }
 
 let create ?(policy = default) () =
@@ -739,6 +752,8 @@ let create ?(policy = default) () =
     gone = Hashtbl.create 64;
     cited = Hashtbl.create 16;
     keys = Hashtbl.create 64;
+    held = [];
+    n_held_refused = 0;
   }
 
 let live t = List.rev_map (fun e -> e.e_cid) t.live_rev
@@ -861,6 +876,39 @@ let uncite t ~cid = Hashtbl.remove t.cited cid
 let release_all t = Hashtbl.reset t.cited
 let cited_by t cid = Option.map Lazy.force (Hashtbl.find_opt t.cited cid)
 
+(* ------------------------------------- a line the search will write from it (D-0257)
+
+   [hold t ~cid] says: a line not yet on the page will rest on [cid], and no trail entry
+   names its instance, so [locked_instances] cannot see it. [reduce] then refuses to evict
+   [cid] until [release_held]. The one caller is the CDCL loop ([Search.cdcl], D-0219):
+   after a conflict it backjumps and, at the next fixpoint, asserts the learned clause's
+   UIP literal FROM THE CLAUSE ITSELF when no consumer did ([assert_directly]), and that
+   entry's trace line, written at the next conflict, is RUP only against the clause. When
+   the clause's own instance was evicted by the reduction its own [add] triggered, which is
+   exactly when no consumer asserts it, the line came out after the `del`: costas14's
+   rejected line 7483531 (D-0256 section 5). The search releases at the next conflict
+   once [Trace.emit] has written every line the trail owes, the assertion's among them; a
+   conflict before the fixpoint drops the assertion, so it is never written later.
+
+   Releasing is a statement about lines, not about the trail: once the assertion's line is
+   on the page, the clause can go, because VeriPB keeps a derived line whatever happens to
+   its premises (the same argument [locked_instances] gives for a line already written).
+   [dfs] never holds: no line of [dfs] rests on a learned constraint except through the
+   constraint's own instance (lock 1) or the conflict being analysed (lock 2). *)
+let hold t ~cid =
+  if not (holds t cid) then
+    raise
+      (Not_owned
+         (Printf.sprintf
+            "retention: [hold] on id %d, which this database does not hold; a line \
+             resting on it would cite a deleted constraint"
+            cid));
+  t.held <- cid :: t.held
+
+let release_held t = t.held <- []
+let held t = t.held
+let n_held_refused t = t.n_held_refused
+
 (* ------------------------------------------- a consumer that CAN be detached (D-0139)
 
    [gate] is what lets a policy evict a constraint that has a consumer. The search hands
@@ -947,10 +995,20 @@ let gate t store ~cid (inst : Propagator.instance) : Propagator.instance =
       engine stops at the first conflict), so protecting it is exact; when the conflict
       came from elsewhere, protecting a stale id costs one entry one reduction.
 
-   Every other reference to a learned id is a line already written (its validity does
-   not depend on its premises staying -- VeriPB's database keeps derived constraints) or
-   a level-0 unit, which [tiered] never proposes (LBD 1) and which is cited without a
-   gate, so no policy can evict it. Under [BAGUETTE_PROOF_AUDIT] and the checker, every
+   3. A HELD CONSTRAINT ([hold], D-0257): a line still to be written rests on it and no
+      trail entry names its instance, because the search will push that entry itself.
+      Today that is the CDCL loop's assertion from the clause just learned. [reduce]
+      checks it apart from this function, since it needs neither a gate nor a citation.
+
+   The rule the three kinds implement is invariant I-X11 (docs/INVARIANTS.md): A LEARNED
+   CONSTRAINT STAYS ON THE PAGE WHILE A LINE NOT YET WRITTEN MAY REST ON IT. Every other
+   reference to a learned id is a line already written (its validity does not depend on
+   its premises staying -- VeriPB's database keeps derived constraints) or a level-0
+   unit, which [tiered] never proposes (LBD 1) and which is cited without a gate, so no
+   policy can evict it. D-0257 found the case kinds 1 and 2 missed: the CDCL loop evicted
+   the clause it had just learned (its instance had not yet propagated, so nothing locked
+   it), then asserted the clause's literal from the clause itself, and the trace line of
+   that assertion was refused on costas14. Under [BAGUETTE_PROOF_AUDIT] and the checker, every
    proof the D-0139 hook build emitted over the 173 test models verified, under five
    schedules down to a reduction per learned constraint. Half 1 is load-bearing: without
    it `colour_unsat` is rejected ("Trying to access constraint with ID 175 that has
@@ -1070,6 +1128,40 @@ let retire ?(unchecked = false) t ctx ~why (ids : Writer.cid list) =
    constraints keep growing past the cap (cited consumers without a gate) makes the run
    quadratic in them. Under `lbd:500` no lane instance ends with more than 526 live
    constraints (the end sweep's count), so there n stays near the cap. *)
+(* BAGUETTE_DEBUG only (D-0257): at the moment an eviction is about to write its `del`,
+   recheck from scratch that no line still to be written can rest on a victim, without
+   the shortcuts [reduce] takes (the early exit of [locked_instances], the [wanted]
+   filter): the victim is not held, and when it has a gated instance, that instance is
+   not the last gated conflict and stamps no entry of the WHOLE trail. A failure is
+   raised here, at the `del`, instead of by the checker at the line that cites it, which
+   on costas14 was 7.5 million lines and 100 s of checking later. *)
+let check_no_consumer t (victims : entry list) =
+  let on_trail = Int_tbl.create 64 in
+  (match t.store with
+  | None -> ()
+  | Some s ->
+      for i = 0 to Store.trail_length s - 1 do
+        Int_tbl.replace on_trail (Store.trail_entry s i).Store.prop ()
+      done);
+  List.iter
+    (fun e ->
+      Debug.check
+        (Printf.sprintf
+           "D-0257/I-X11: learned id %d is evicted while the search holds it for a line \
+            not yet written"
+           e.e_cid) (fun () -> not (List.mem e.e_cid t.held));
+      match e.e_gate with
+      | None -> ()
+      | Some g ->
+          Debug.check
+            (Printf.sprintf
+               "D-0257/I-X11: learned id %d is evicted while its instance #%d is the \
+                reason of a trail entry or the last conflict"
+               e.e_cid g.g_inst) (fun () ->
+              (not (Hashtbl.mem t.cited e.e_cid))
+              || not (Int_tbl.mem on_trail g.g_inst || g.g_inst = t.last_conflict)))
+    victims
+
 let reduce t ctx =
   if not (t.ev.due ~added:t.n_added ~live:t.n_live) then []
   else
@@ -1113,7 +1205,13 @@ let reduce t ctx =
     let evictable, pinned =
       List.partition
         (fun e ->
-          if not (Hashtbl.mem t.cited e.e_cid) then true
+          (* D-0257: a held constraint is locked whatever its gate says; it may have no
+             gate and no citation at all (a clause [Clause.of_lits] declined). *)
+          if t.held <> [] && List.mem e.e_cid t.held then (
+            t.n_locked <- t.n_locked + 1;
+            t.n_held_refused <- t.n_held_refused + 1;
+            false)
+          else if not (Hashtbl.mem t.cited e.e_cid) then true
           else
             match (e.e_gate, locked) with
             | Some g, Some l ->
@@ -1128,6 +1226,7 @@ let reduce t ctx =
     let ids = List.map (fun e -> e.e_cid) evictable in
     if ids = [] then []
     else (
+      if Debug.enabled then check_no_consumer t evictable;
       List.iter
         (fun e ->
           match e.e_gate with

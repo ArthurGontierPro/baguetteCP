@@ -272,6 +272,24 @@ Assertions guarded by `BAGUETTE_DEBUG=1` should check as many of these as is aff
   That the enumeration stays complete as propagators are added is **argued**, and the
   closure gate is what converts it into a check.
 
+- **I-X11** A learned constraint stays on the page while a line not yet written may rest on
+  it (D-0257). Its `del` is written only when no such line remains: the trace line of a trail
+  entry its instance pushed (lazy, written at the next conflict), the conflict being analysed
+  (whose row the PB path resolves), or a line the search will write from it itself, such as
+  the CDCL loop's assertion of the UIP from the clause just learned. A line already written
+  needs nothing: VeriPB keeps a derived constraint whatever happens to its premises.
+  `Retention.reduce` enforces it with three locks (`locked_instances`' two, and `hold` for
+  the third), and BAGUETTE_DEBUG rechecks it twice: at the `del`, without the shortcuts the
+  locks take (`Retention.check_no_consumer`), and at the CDCL loop's direct assertion, which
+  raises if the clause it rests on is no longer held. It is I-X3 seen from the deletion
+  rather than from the trail: I-X3 says a deleted reason is cited by no live entry, I-X11
+  says the deletion waits for entries that do not exist yet. **Measured**: before D-0257 the
+  CDCL loop evicted the clause it had just learned (its instance had not propagated, so no
+  lock saw it), asserted from the clause directly, and VeriPB refused that line on costas14
+  and on 7 of the 268 test models under an eviction at every learned constraint.
+  **Argued** for the default search: [dfs] pushes nothing from a learned constraint except
+  through its own instance, so locks 1 and 2 cover it; D-0257 also measured it.
+
 - **I-S4** A trace line that cites a hole is supported only while that hole's own line is
   live, so **the cited line must outlive the citing line**. Since M1-T57 a settle line is
   RUP against the `.opb` *plus* earlier trace lines rather than standalone (D-0039,
