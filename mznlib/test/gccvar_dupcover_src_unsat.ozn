@@ -1,3 +1,0 @@
-output ["x = ",showDzn(x),";\n","c = ",showDzn(c),";\n"];
-array [1..2] of int: c;
-array [1..2] of int: x;

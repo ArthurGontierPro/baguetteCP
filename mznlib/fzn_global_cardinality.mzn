@@ -82,7 +82,10 @@
 % global_cardinality(x, [1,1], c) with x = [1,1] holds with c = [2,2] (Gecode agrees),
 % and std's row 2 >= c1 + c2 made it UNSAT, a wrong answer 4c5df61 introduced (the
 % native route before it answered SAT). The guard is a par test, so a cover of distinct
-% values flattens byte for byte as before. Models: mznlib/test/gccvar_dupcover_src_*.
+% values gets the same rows as before. MiniZinc 2.10.1's output for them is not byte for
+% byte the same: its common-subexpression choices move with any edit of these files
+% (12 of 98 Challenge instances shifted here, blocks-world among them although it never
+% reaches this branch; D-0255 section 2). Models: mznlib/test/gccvar_dupcover_src_*.
 %
 % To revert: restore the body below to its first two lines (the bounds and the
 % baguette_global_cardinality call) for every call.
