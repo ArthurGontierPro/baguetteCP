@@ -32967,6 +32967,149 @@ rejected when M7-T11 tried it (D-0072); the gate that kept it out of the solver 
 (D-0248)` restores the crash with exit 2; the removal reverts on its own commit
 (`M22-review-T5: Domain.of_list and change_of move ...`).
 
+## D-0250  [AUTONOME] M19-config-T8, probing at the root: a bound literal of a small domain that fails under propagation is a failed one-decision node, its unit nogood filed at level 0 and its negation asserted there, behind `BAGUETTE_PROBE=off|root`. No new rule, no new `Explanation` constructor; every proof verifies under `root`. On the tuning set it gains 0.015 of the share without proof (+6 complete answers, none lost) and 0.040 with proof, but loses one verified complete answer by time, so the default stays `off`
+
+**Status**: DONE on `wave96-probe` (agent-probe, 2026-11-27), not merged. Base: main `f4863c6`. First item of
+M19-config-T8 only; equality merging into views and the LP relaxation stay open.
+
+### 1. Context
+
+The ROADMAP row lists three root techniques; this record builds and measures the first, probing (failed
+literals: Freeman's POSIT, Lynce and Marques-Silva; Chuffed's and CP-SAT's root probing). baguette's root is
+its propagation fixpoint and nothing else, so a value whose assignment fails at once under propagation is
+discovered again on every branch that tries it.
+
+### 2. What was built
+
+`lib/core/probe.ml` (new) and one function in `lib/core/search.ml` (`probe_root`, called by `search_core`
+before `dfs` or `cdcl`). Under `BAGUETTE_PROBE=root`, after the root fixpoint and before the first decision:
+for every unfixed variable whose domain spans at most 64 values, in store order, the two BOUND literals
+`x <= lo` and `x >= hi` (a Boolean's two polarities) are each pushed on level 1 as a decision and propagated.
+A fixpoint undoes the level. A conflict is a failed literal: the level's trace, the conflict's line and the
+bridges are written exactly as at a failed node (the search lends `state_conflict`, `bridges` and
+`close_root_conflict`, so the two stay one rule), then the unit clause `~l` at level 0, then the level is
+undone and wiped, and `~l` is pushed at level 0 with that clause as its explanation and `Reason.none`, then the
+root propagates again; a conflict there is the root conflict. A failed bound moves, so passes repeat while a
+pass failed something (bounds shaving). Budget: 5 M propagator runs (`Engine.runs`, deterministic) backed by
+a 10 s CPU cap (not deterministic, fires only where one run is expensive), overridable by
+`BAGUETTE_PROBE_BUDGET`, `BAGUETTE_PROBE_CPU`, `BAGUETTE_PROBE_WIDTH`; `BAGUETTE_PROBE_STATS=1` prints the
+census line on stderr. A misspelt switch exits 2. `off` never calls the pass.
+
+**The proof.** A probe is `Search.branch_split`'s first child at the root, so D-0018 gives its nogood `~l` as
+`rup`: negating it asserts `l`, and the trace lines just written (decision free, "facts -> claim") unit
+propagate the level's prunings up to the falsified conflict line. The only change is the FILING level, 0
+rather than 1, legitimate because the clause names no level-0 decision; `Justify.with_level 0` keeps it from
+the wipe of level 1. The negation is then a level-0 pruning on a clause with no facts, D-0077's assignment
+clause at p = 0: `Trace` writes its line `~l` (past a hole, the settled bound with the holes' facts, I-X9) as
+it writes any level-0 line, and the clause id goes on `stats.assign_clauses_rev`, which
+`retire_assign_clauses` deletes at the end of the search (I-X2). No rule and no `Explanation.t` constructor
+is added. Necessary assignments (a literal implied by both polarities) were left out: their proof needs the
+two implications as clauses, so the SURVIVING levels' traces written too, which is not the failed-node shape.
+
+**SPEC 3.4.** The tree is still the annotation's, explored once; probing removes root values every solution
+avoids, as a stronger root propagator would, takes no decision the search reports and changes no choice rule.
+It is a propagation, so 3.4's "anything else MUST be refused" does not bear on it. Proposed sentence for 3.4,
+NOT written into SPEC.md (the user decides normative text): *"Probing at the root (`BAGUETTE_PROBE=root`,
+D-0250) is opt-in. Before the first decision it pushes bound literals of small domains one at a time and
+propagates; a literal that fails is removed from the root domain, and the removal is written as the unit
+clause of that failed one-decision node. It takes no decision the search reports and substitutes no
+strategy."*
+
+### 3. Census, the tuning set at the root only (`BAGUETTE_NODE_LIMIT=1`, `--no-proof`)
+
+Three budgets on the 200 instances (`camp/census.txt` per instance): 100 k runs (`cdef`, release binary
+`a9ed53ad`), unbounded (`cinf`, same binary, stopped by the 300 s limit) and the chosen default, 5 M runs and
+10 s CPU (`cnew`, binary `059aabe6`).
+
+| budget | probe line | instances with a failed literal | literals failed | probed | budget hit | CPU median / p90 / max |
+|---|---|---|---|---|---|---|
+| 100 k runs | 200 | 84 | 1 770 | 85 163 | 175 | 0.06 / 0.57 / 291 s |
+| unbounded | 197 | 154 | 205 360 | 11 965 084 | 0 (32 stopped at 300 s) | 7.6 / 294 / 300 s |
+| 5 M runs, 10 s | 198 | 144 | 39 908 | 1 367 602 | 115 | 1.8 / 8.1 / 36 s |
+
+Run to completion, the pass costs a median 3.8 M runs and 0.7 s, but runs are not time: 2011_pentominoes_04
+spends 0.19 s a probe at 23 runs each (291 s under 100 k runs), black-hole 14 half a second; hence the CPU cap.
+No instance is refuted at the root by probing. The most failed literals at the default: ma-path-finding
+g16_p20_a30 4 633, stable-goods s-d16 4 250, jp-encoding data900 3 662, prize-collecting 32-4-8-2 1 682,
+network 50 1 608. The two instances with no probe line never reach the search in any arm (arithmetic-target
+8657 at the 420 s guard, ihtc-2024-marte i11 at the 8 GB heap budget, exit 5). Both caps are read between two
+probes, so one propagation can overrun them: the 36 s maximum is MZNC connect 0083, 41 M runs in the pass.
+
+### 4. Correctness under `root`
+
+- `off` against main: the 259 test models, stdout, exit status, `.opb` and `.pbp`, dev binaries `1527731a`
+  (main) and ``32fa42d3` (tip `4c78e12`; the off path is unchanged since, and section 8's lanes check the final tip)`: 0 differences (`art-off/`).
+- `root`: `scripts/run_model_tests.sh` 253 / 259 identical stdout; the six others (argmin_opt, argsort_opt,
+  opt_max_sat, opt_min_sat: other intermediate solutions, same optimum; bits_search_sat, count_rel_sat: another
+  first solution) have their proofs checked by hand: VERIFIED with the same verdict and bound. Every one of the
+  259 proofs VERIFIED, and again under `BAGUETTE_DEBUG=1` (no invariant fired). The expected outputs were not
+  touched: they record the default.
+- `test_search_strategy.ml` (`test_probe`, 25 checks): three models built so that one probe sees what the
+  root does not (a settle past a hole, a Boolean implication, a pigeonhole refuted with no decision); same
+  answer off and root, VERIFIED, every id deleted, M1-T36's identity, and on the two SATISFIABLE ones every
+  derived unit line flipped is refused by veripb with the full RUP wording (the D-0053 / D-0066 trap: the
+  line is checked, not vacuous).
+
+### 5. The tuning set at 300 s (D-0205), release binary `059aabe6` (`552d52c`), same binary both arms
+
+| arms | complete | verified | incumbent | nothing | died | share | verdicts |
+|---|---|---|---|---|---|---|---|
+| offN / rootN | 41 / 47 | - | 116 / 111 | 40 / 39 | 3 / 3 | 0.492 / 0.507 | root 27+ / 24- |
+| offP / rootP | 32 / 35 | 31 / 34 | 118 / 120 | 47 / 42 | 3 / 3 | 0.480 / 0.520 | root 31+ / 23- |
+
+Status changes without proof, all gains: amaze2 2012-06-28 (a solution, 15 s), still-life-wastage 11, ptv
+pax_period_20_5b, stable-goods s-d7 (and a better objective), network 50 and mondoku 10-10-6 (optimal). With
+proof: gains amaze2 (VERIFIED solution), sudoku_opt p90 (VERIFIED optimum), sudoku_fixed p89 (VERIFIED
+solution), mondoku 10-10-6 (VERIFIED optimum), hoist PU_1_2_2 and stable-goods s-d7 (a solution); one loss,
+flowshop-workers 5stat_ex6, whose VERIFIED optimum `off` proves at 296 s and `root` does not reach by 300 s.
+Its pass fails no literal (9 532 probes, 1.4 s), so the tree is the same and the loss is the pass's time at
+the edge of the limit. 67 proofs of complete answers checked: 65 VERIFIED, 0 rejected, two check timeouts at 3 600 s
+(smelt 4, both arms). Material: `camp/t300-table-{N,P}.txt`, `camp/t300-status.txt`.
+
+### 6. Decision
+
+[AUTONOME] D-0205's rule keeps an idea as default only if it gains on score and loses no verified complete
+answer. Without proof `root` gains 0.015 of the share, under the 0.03 noise, with six more complete answers
+and none lost; with proof it gains 0.040, over the noise, and three more verified complete answers, but loses
+one (flowshop-workers ex6, by time). **The default stays `off`.** The rule is applied as written, as D-0241 did
+with three more complete answers and a score within the noise; the case for `root` is the strongest of the
+M19 rows so far and goes to the full series (D-0205: the subset proposes, the full series decides). No
+default commit, so the diff lanes need no re-record and the 347 lane runs are unchanged by construction.
+
+### 7. What is left (follow-ups, not opened as rows)
+
+- The full Challenge series with `BAGUETTE_PROBE=root` against `off`, which decides; if it agrees in sign
+  the default change is one line (`mode_of_env`'s `None` arm) in its own commit, then the diff lanes count.
+- A cheaper pass where nothing fails: flowshop-workers spends 1.4 s probing 9 532 literals for nothing. Stop
+  the pass after a first sweep of K probes with no failure, or scale the CPU cap by the time limit (the
+  search's stop does not say it; `bin/main.ml` would pass it).
+- Necessary assignments (a literal both polarities imply) and learning from a probe's conflict (its 1UIP
+  clause is at times stronger than `~l`): both need the surviving level's trace or a learned constraint per
+  failure, so they are a second step, measured behind the same switch.
+- Equality merging into views and the LP relaxation, the row's other two items.
+
+### 8. Verification on the tip, default `off` (`552d52c`, dev binary `20a74b84`)
+
+`scripts/check_fmt.sh` clean; `check_test_widths.py` no wide domain; `dune runtest --root . --force` 5 615 ok,
+0 FAIL (peak 174 MB); `run_model_tests.sh` 259 passed, 0 failed; `check_determinism.sh` 259 models identical
+across two runs; `diff_lane.sh --tier all -j 8` 347 of 347 runs equal the reference, `--debug` 333 of 333
+(the debug-skip list's), never `--update`; `scaling_lane.sh -j 8` every line within its threshold.
+
+Under `root`: the 259 model proofs VERIFIED, also with `BAGUETTE_DEBUG=1` (section 4). Challenge sample at
+2 000 nodes (D-0241's 238 instances, both encodings, binary `059aabe6`, every proof checked): see the addendum below.
+
+Proof volume written: t300 1.43 TB (the sample's in the addendum), every proof deleted after its check.
+Material: `/cluster/arthur/baguette-results/probe/` (README.md).
+
+**Revert**: `git revert` of the `M19-config-T8` code commits (`443bdd8`, `42420ab`, `552d52c`) and the test
+commit (`4c78e12`); with the default `off`, removing the switch changes no artefact.
+**Addendum (2026-11-27, the sample and the volume).** Challenge sample at 2 000 nodes under `root`, D-0241's 238
+instances on both encodings, release binary `059aabe6`, every proof checked: 421 VERIFIED, **0 rejected**, 30
+check timeouts at 3 600 s, 9 checks killed at 32 GB, 16 runs without a proof (11 solver timeouts, 5 heap budget),
+the same shape as D-0246's sample (423 / 0 / 28 / 9 / 16). Proof volume written by this record: about 3.6 TB
+(t300 1.43 TB; the sample 0.75 TB by its recorded sizes plus 1.42 TB of unchecked leftovers, 90 files, logged in
+`ver-leftover.txt`), all deleted. The map commit `0b92cac` reverts with the code commits.
+
 ## D-0251  [AUTONOME] The open items of 2026-11-27 the user handed back: three decided, two sent to a held-out comparison
 
 **Status**: DECIDED (orchestrator, 2026-11-27). The user's words, on being given the list of open decisions: "Je n'ai pas
@@ -32994,3 +33137,1189 @@ The rule, fixed before the numbers exist. A switch becomes the default if and on
 pairwise share against `off` is at least 0.47 (D-0205's 0.03 noise band). Each instance whose answer is lost is listed. A
 default change is its own commit, followed by a lane re-record in its own commit and a gate. If neither passes, both stay
 `off` and the question is closed until one of the follow-ups of D-0241 section 7 or D-0246 section 6 changes the code.
+
+## D-0247  [AUTONOME] M18-coverage-T14: `global_cardinality` with variable counts goes to std's count decomposition in mznlib (route b), constant counts stay native. Rule C over holes (route a) was built, verified and dropped: it barely changes a tree and loses on score. What closes mondoku is the implied row between counts, not the holes
+
+**Status**: DECIDED (agent-gccvar, `wave93-gccvar`, 2026-11-27), not merged. The default changes in ONE commit,
+`4c5df61` (mznlib only, no solver code). Route (a) is `d94f08f` and its revert `fa32d4b`. Material:
+`/cluster/arthur/baguette-results/gccvar/` (README first).
+
+### 1. Context
+
+D-0244 section 3 measured that baguette does not finish mondoku 10-10-6 in 240 000 nodes while std's `count`
+decomposition for the variable-count calls finishes it in 4 271, and proposed as the cause that rule C of
+`lib/core/prop/gcc.ml` counts a value's possible takers by their window (`holds_v`), so a hole never lowers a count's
+upper bound. M18-coverage-T14 asked to measure that route against routing variable counts to std's decomposition,
+over every gcc instance of the Challenge lists.
+
+### 2. Census
+
+The 1 575 instances of the 2026-11-23 series lists (2011 to 2026), flattened again by MiniZinc 2.10.1 against this
+branch's base (main `a6602f0`). 205 of them called `baguette_global_cardinality` in the series' own flattening, but
+52 of those came through std's `alldifferent_except` (a gcc_low_up), which mznlib now routes elsewhere. On today's
+mznlib **153 instances in 27 families call gcc**: 55 with constant counts only, **98 with at least one variable
+count**. Of the 98, **40 reach a three-argument `global_cardinality` with variable counts** (521 calls: oocsp_racks
+10, mondoku 5, blocks-world 5 (the closed form), generalized-peacable-queens 5, chessboard 5, compression 5,
+warehouse 5) and 58 only `global_cardinality_low_up`, whose counts mznlib declares on constant bounds (gbac 19,
+community-detection 20, vaccine 5, evm-super-compilation 5, nside 3, gcc-benchmark 5, and one more). Script
+`census.py`, tables `census-*.tsv`, lists `routed.ids` (40), `lowup.ids` (58), `users.ids` (153).
+
+### 3. The two routes, and the one that decides mondoku
+
+**(a) rule C over `Domain.mem`** (`d94f08f`). A variable whose window holds `v` around a hole is no longer a
+possible taker; its indicator is cleared by the hole's own line, the remover's explanation from `Store.remover`
+(element.ml's `excl_hole`: the order clause of D-0086 with the remover's residue), the remover's facts join the
+push's reason, and a push that clears a hole is derived ahead (the hole clause is binary, so the line is not RUP
+against the counting row alone). Rule (b) got the same reading. A unit test (hi(n) falls from 3 to 1 under a
+decided `w`, ahead, the reason names `w`'s two bounds, D-0026 agreement) and three models, all proofs VERIFIED;
+dropping the remover's facts makes veripb 3.0.2 reject both SAT and OPT proofs ("Checking error at" lines 49 and 58),
+so the facts are load-bearing.
+
+**(b) std's decomposition for variable counts** (mznlib, constant counts stay native).
+
+**The probe that changed the diagnosis** (mondoku 10-10-6, no proof, 100 s): route (a) alone does NOT finish
+(140 163 nodes). Main's binary over main's mznlib PLUS std's implied row `length(x) >= sum(counts)` and nothing else
+finishes in 4 745 nodes (2.8 s); with route (a) too, 4 723; route (b), 4 271. So the inference mondoku lacks is the
+propagation BETWEEN counts (a count's upper bound from the others' lower bounds), which gcc.ml does not make and the
+implied row does, not the holes. D-0244's hypothesis was the wrong one, and its "split arm" measured the row.
+
+### 4. Measurements
+
+Binaries (release profile, `make release`'s command): main `a23edcfd` (main `a6602f0`, the base of every arm except
+A), route (a) `7fea1d0f` (`d94f08f`). Arms: base; A = route (a) over main's mznlib; B = route (b); S = native plus the
+implied row only; BC = native plus std's count rows; AS = A plus the row; SL = S plus the same row for low_up's
+counts; AB = A plus B. 16 at a time on fataepyc-06 (load 15 to 55 from other campaigns), 16 GiB address space,
+`MemoryMax=32G`, `--max-heap-mb 8192`, veripb 3.0.2 with 900 s on every proof that ended. Score: `agreement.py`
+(Challenge order, Borda), no-proof arms trusted.
+
+Node limit 20 000 (300 s cap), no proof. On all 153 users A grows the same tree as main wherever both stop on the
+node limit, except gbac UD8 (incumbent 10 128 against 10 127); the other differences are runs cut by the 300 s cap.
+On the 40: complete base 8, A 8, B 10, S 10, BC 10, AS 10; better incumbents against base B 10 (0 worse), S 3 (1),
+BC 2 (2), AS 2 (2). SL and ASL on the 98 add mondoku (+2) and nothing else.
+
+300 s, the 40 that route (b) reaches:
+
+| arm | no proof: complete, score share, wins/losses vs base | with proof: complete (verified), share, wins/losses |
+|---|---|---|
+| base | 9, 0.212 | 9 (8), 0.227 |
+| A | 10, 0.210, 2/3 | 9 (8), 0.219, 1/2 |
+| **B** | **11, 0.329, 15/1** | **11 (11), 0.296, 11/3** |
+| S | 11, 0.248, 5/0 | 11 (10), 0.258, 5/1 |
+| BC | 11, scores below B (1 win, 14 losses against B) | not run |
+| AB | 11, AB over B 2/2 | 11 (11), AB over B 2/1 |
+
+B's gains: mondoku 10-10-6 OPT in 2 s (6 s with proof, 4 271 nodes) and 12-12-8 in 13 s (27 s), both VERIFIED;
+oocsp_racks 100_r1, SAT in 22 s in every arm, whose proof check runs out of veripb's 900 s under base, A and S and
+VERIFIES under B; better incumbents on peaceable queens n9_q5, n11_q5, n13_q5, n25_q4 (B explores 4 to 5 times fewer
+nodes and still finds better), mondoku 14-14-8 (2 against 5) and 20-18-9 (4 or 5 against 11), warehouse olal41, olil4,
+oly20 and wlp02 (where main has no incumbent, or is refused by the 8 GiB heap budget on wlp02's 3 219-variable gcc).
+B's losses, all three with proof: two oocsp_racks answers found by both arms, 1.2 s and 2.7 s later under B
+(UNSAT 030_f7 in 10.2 s against 9.0 s, SAT 2018 100_r1 in 20.4 s against 17.7 s), and warehouse olil4, where the
+proof-logging run hit the 8 GiB heap budget at 127 s with 75 730 against main's 75 636 at 300 s. Without proof the
+one loss is the same 2018 100_r1, 13.1 s against 11.8 s. **No complete answer of any arm is lost by B**, with or
+without proof.
+
+300 s, the 58 low_up-only instances (only route (a) reaches them): no proof A 7 wins 8 losses over the 98 (score
+share 0.495); with proof 4 wins 8 losses (0.480), +1 verified complete (vaccine v857 OPT in 254 s) and one OPT lost
+(community-detection rnd_n100_e5000, 284 s under main and over 300 s under A, a check that timed out anyway).
+
+AB (route a on top of route b) ties B within the set's noise (D-0205's README: under 0.03 of the share), so route
+(a) adds nothing once route (b) is in.
+
+Proof volume written: 978 GB over 316 proof runs (largest 19.6 GB, warehouse wlp22), every proof deleted once
+checked.
+
+### 5. Decision
+
+[AUTONOME] **Route (b)**, in `mznlib/fzn_global_cardinality.mzn`: when some count is a variable, std's count
+decomposition with its implied row; when every count is fixed, the native propagator as before. By D-0205's rule it
+gains on score with and without proof and loses no verified complete answer. The closed form
+(`fzn_global_cardinality_closed.mzn`) now calls the bodyless predicate itself and stays native: it already posts
+`sum(count) = |x|`, the row that decides mondoku, and blocks-world, the only family using it, finds nothing in
+300 s either way. low_up stays native (not routed, not measured as a route). `gcc_shim_{sat,unsat}.fzn` (MiniZinc 1's
+two-argument shim, variable counts) were regenerated as their header instructs; outputs unchanged, proofs VERIFIED.
+
+**Route (a) is not kept** (`fa32d4b` reverts the solver half of `d94f08f`): it changes the tree on almost no
+Challenge instance, costs per node, and loses on score in both modes. Its three models stay as hole scenes.
+
+Clarity: the change is twelve lines of MiniZinc and a header; no solver code moves. What it costs is that gcc.ml's
+variable-count path is now reached only from low_up and from hand-written FlatZinc, so its D-0078 argument (the
+interval capacity the decomposition cannot reach) holds for fixed counts and low_up only.
+
+Revert: `git revert 4c5df61` (and `2bfeea9`, the two route tests, whose MUST-NOT-EMIT would then fail).
+
+### 6. What is left (no ROADMAP row added: the autonomous run's cap is reached)
+
+- **Count-to-count propagation in gcc.ml**: `hi(c_v) <= |x| - sum_{u != v} lo(c_u)` (and the mirror over the
+  variables that can only take cover values) is what the implied row gives Linear. A native rule would serve low_up
+  and fixed-count calls too; measured nowhere yet.
+- **low_up through the same route**: its counts are variables declared on constant bounds; S's row for them (SL)
+  changed nothing at 20 000 nodes, the full decomposition was not measured.
+- **gcc's cost on large scopes**: warehouse wlp02 (3 219 variables, counts 101 wide) exhausts the 8 GiB heap under the
+  native propagator in 150 s without proof, and on olal41 and olil4 B's per-value rows run about twice as many nodes in 300 s as the native propagator.
+
+### 7. Verification
+
+Worktree `/scratch/arthur/wt-gccvar` at `2bfeea9`: `scripts/check_fmt.sh` clean; `check_test_widths.py` clean;
+`dune build --root . bin/` (`ef23c899`, the dev build) and the release build `a23edcfd`, byte-identical to main's,
+since no solver code changes; `dune runtest --root . --force` 5 544 ok, 0 FAIL, peak RSS 170 MB;
+`scripts/run_model_tests.sh` 264 models passed with proofs verified; `scripts/check_determinism.sh` 264 identical;
+`mznlib/test/check_mznlib.sh` (MiniZinc 2.10.1) 73 ok; `scripts/diff_lane.sh --tier all -j 8` 347 of 347 runs equal
+the reference and `--debug` 333 of 333 (the lane's corpus is pre-flattened FlatZinc and the solver is unchanged,
+so route (b) cannot reach it); `scripts/scaling_lane.sh -j 8` ok. Route (a)'s own commit passed the same gate
+(5 555 ok, 262 models, determinism) before it was dropped; its only change to an existing artefact was
+`gcc_saturate_hole_unsat.pbp`, VERIFIED. Existing test artefacts changed by the kept route:
+`test/models/gcc_shim_{sat,unsat}.fzn` (bodies regenerated, outputs and verdicts unchanged); new:
+`gccvar_hole_{root_unsat,dec_sat,opt}` and `gccvar_src_{unsat,opt}`, all VERIFIED.
+
+## D-0253  [AUTONOME] M22-review-T4, the documentation pass: references in comments stand alone, docs/REFERENCES.md indexes them, and comments state the rule before the history
+
+**Status**: DONE on `wave98-docs` (agent-docs, 2026-11-27), comments and documents only. Taken in
+mode autonome on the user's request of 2026-11-27 ("bring every document, README and comment up
+to date, and rewrite the comments that teach poorly or that cite a reference without saying what
+it refers to").
+
+### 1. What was decided
+
+| Item | Options | Choice | Why | Revert |
+|---|---|---|---|---|
+| A reference in a comment (`D-0123`, `M6-T22`, `I-P3`) | delete references; keep them bare; keep them with a sentence that stands alone | KEEP, and at its first mention in each file the sentence says what the record established | the reference is how history is found; the sentence is what a reader needs without opening a 2.4 MB file | the pass's commits on `wave98-docs`, each `M22-review-T4:` |
+| An index of the references | none; a hand-written glossary of records; a generated table | `docs/REFERENCES.md`, generated once (title of each record, roadmap row of each task, first line of each invariant, shortened), a snapshot of 2026-11-27 | 392 distinct references are cited in `lib/` and `bin/`; a one-line meaning per id is enough to read a comment, and the record stays the authority | delete the file and its two links (README, CLAUDE.md) |
+| Order of a comment | as written (often history first) | rule or invariant, why it is sound, one example, history in one line with its reference | the user's instruction; most long comments put their point last | per file, the commit |
+| Section titles | by task (`M11-complexity-T3 (D-0142, E1): ...`) | by concept, the reference after | a title is read by someone who does not know the task numbers | per file |
+
+No code changed: every edit is inside a comment, a Markdown document or a script's header
+comment. The gate below shows the same binary behaviour (same model answers, same diff-lane
+artefacts).
+
+### 2. Findings recorded rather than fixed
+
+- `scripts/shrink.sh` relies on a `--disable-propagator` flag that `bin/main.ml` never
+  implemented; the solver refuses it (exit 2), so the script cannot localise a rejected step.
+  Its header says so now. Fixing it is code (a flag, or a script that uses another switch).
+- `scripts/bootstrap.sh` builds the opam switch with `-j "$(nproc)"`, 192 on fataepyc-06, where
+  the node rule is at most 16 parallel jobs. A one-time setup, but it is code: not changed.
+
+- `docs/PROOF-FORMAT.md` section 3, "The consistency clauses are in the `.opb`" (normative),
+  says no derivation cites a ladder id and `Encoding.consistency_id` has no caller in `lib/`.
+  `lib/core/ladder.ml`, `cumulative.ml` and `search.ml` (under `pb_ladder`) call it now. Left
+  for the user: the sentence is normative and its consequence (the ladder is load-bearing for
+  RUP) still holds.
+- Dead functions named in their comments: `Encoding.is_direct_row` (its caller went with
+  D-0131), `Justify.lit_hash`, `Writer.solx` and `Writer.obju` have no caller in `lib/` or `bin/`.
+
+### 3. What is done and what is left
+
+Done: README.md, CLAUDE.md (sizes, map, switches, counts), ARCHITECTURE.md sections 1, 3 and
+4, GLOSSARY.md (23 terms), INVARIANTS.md I-X10, SPEC.md section 6 (non-normative),
+PROOF-FORMAT.md section 4 (three missing rows), scripts/README.md, bench/README.md, twelve
+script headers, every module header of `lib/` checked, and the comments of propagator.ml,
+linear.ml, explanation.ml, reason.ml, store.ml, domain.ml, engine.ml, justify.ml,
+encoding.ml, writer.ml and every propagator but gcc.ml rewritten (the bodies of maxmin,
+arith, cumulative, regular, table, circuit, inverse and member had their references made
+self-standing, not a full rewrite).
+
+Left for a second pass: `lib/core/prop/gcc.ml`, `lib/flatzinc/compile.ml`,
+`lib/flatzinc/builder.ml`, `mznlib/`, `lib/core/search.ml`, `bin/main.ml` (held by other
+agents during this pass); the learning modules (`analysis.ml`, `learn.ml`, `learned.ml`,
+`pb_analysis.ml`, `reduce.ml`, `retention.ml` beyond its default, `ladder.ml`, `trace.ml`),
+`view.ml`, `lib/flatzinc/` and `lib/scp/` beyond their headers, and `tools/` beyond the check
+for dead paths.
+
+## D-0254  [AUTONOME] M22-review-T4, second documentation pass: the remaining modules' comments, docs/REFERENCES.md extended, and the four findings of D-0253 settled (a PROOF-FORMAT sentence corrected, bootstrap capped at 16 jobs, shrink.sh's missing mode removed, three dead functions removed)
+
+**Status**: DONE on `wave99-docs2` (agent-docs, 2026-11-27). The findings of D-0253 section 2 were
+decided by the orchestrator, to whom the user handed such decisions back (D-0251); this record
+says what was done and how to revert each.
+
+### 1. PROOF-FORMAT section 3, "The consistency clauses are in the `.opb`" (normative paragraph)
+
+The code is checked by veripb on every test, so the sentence was the stale side. Old bullet:
+
+> **No derivation this project emits ever cites a ladder id.** `Encoding.consistency_id`
+> has **no** caller in `lib/` or `bin/` at all — only `test/unit/test_proof.ml` — and the
+> one place in `lib/` that reads the id table, `derive_at_most_one`, is itself called only
+> from that same test file. Read from the emission side, the ladder looks like dead weight.
+
+New bullet:
+
+> **Derivations cite ladder ids, and the ladder would be needed even if none did.**
+> `Encoding.consistency_id` is cited by PB conflict analysis, which lifts a reason row onto
+> the rungs that carry its strength (`lib/core/ladder.ml`, called from `lib/core/search.ml`
+> under `pb_ladder`, on by default, M2-L11), and by the `pol` derivations of the counting
+> families: `element` (M4-T3), `gcc` (M7-T16, D-0078), `cumulative` (M4-T10, D-0096) and
+> `all_different` through `consistency_ids` (M7-T33). `derive_at_most_one` is still called
+> only from `test/unit/test_proof.ml`. (When this section was written for M1-T25, no
+> derivation cited a ladder id and the ladder looked like dead weight from the emission
+> side; M2-L11 was the first citer, on 2026-09-18.)
+
+The paragraph's normative conclusion (the ladder rows are in the `.opb` and are load-bearing for
+the checker's unit propagation) is unchanged. Verified with `git log -S` on each citer. Revert:
+the commit `M22-review-T4 (D-0254): the three findings of D-0253 ...`.
+
+### 2. `scripts/bootstrap.sh`
+
+`opam switch create -j "$(nproc)"` (192 on fataepyc-06) became `-j "${JOBS}"`, `JOBS = min(nproc,
+16)`, also exported as `OPAMJOBS` and passed to `opam install`, the node rule being no `-j`
+above 16. `bash -n` clean. Revert: the same commit.
+
+### 3. `scripts/shrink.sh`
+
+Its mode "disable one propagator at a time" needed a solver flag `--disable-propagator`, planned
+for M1-T7 and never added; `bin/main.ml` refuses it (exit 2), so the script always ended on "no
+single propagator accounts for it". The flag was NOT added. The mode and its `PROPAGATORS`
+variable are removed. What still works: the script solves the model with `--proof`, runs the
+checker, exits 0 when the proof is accepted, 1 when the solver fails (with its stderr), 2 without
+a checker, 3 when the proof is rejected, printing the checker's last lines and pointing at
+PROOF-FORMAT section 6. Tested on `trivial_sat.fzn` (exit 0) and a missing file (exit 1).
+`scripts/README.md`'s row says the same. Revert: the same commit.
+
+### 4. Dead code
+
+Grepped over `lib/`, `bin/`, `test/`, `tools/`, `scripts/` and `bench/`:
+
+| Function | Callers | Done |
+|---|---|---|
+| `Encoding.is_direct_row` | none; its only caller, `search.ml`'s `rests_on_a_clause`, went with D-0131 | REMOVED, with the table `direct_cids` it read, which four sites wrote and nothing else read |
+| `Justify.lit_hash` | none (`Explanation.lit_hash` is the one in use) | REMOVED |
+| `Writer.solution_excluding` (`solx`) | `test/unit/test_proof.ml` calls it to pin VeriPB 3.0's refusal of `solx` without a preserved set | KEPT |
+| `Writer.objective_update` (`obju`) | `test/unit/test_proof.ml`'s M5 gate greps for its definition to prove the "no caller" search ran | KEPT |
+
+One commit (`M22-review-T4 (D-0254): remove dead code ...`), the only one of this pass that
+changes code; `samecode.sh` reports DIFF on `encoding.ml` and `justify.ml` for it, as expected.
+Revert that commit to restore them.
+
+### 5. Comments
+
+The method of D-0253, with two additions the orchestrator asked for: every rewritten `.ml`
+file was compared with origin/main by `ocamlc -dsource` (parsed code identical) AND by a
+lost-token script that lists the numbers, references, bracketed names and backquoted words
+present in the old comments and absent from the new ones; each listed token was read and is a
+stale name corrected, a rewording or a quotation rewrapped. Sub-agents drafted the rewrites;
+each group's diff was reviewed with both scripts before its commit, and one sub-agent claim
+was corrected in review (`Learned.retire` has callers in `test/unit/test_learned.ml`).
+
+Done: `lib/flatzinc/` (all nine files including `compile.ml` and `builder.ml`), `lib/scp/`,
+the headers of the 15 mznlib files that needed it (only `%` lines changed), `analysis.ml`,
+`learn.ml`, `reduce.ml`, `pb_analysis.ml`, `learned.ml`, `ladder.ml`, `retention.ml`,
+`trace.ml`, `view.ml`, `restart.ml`, `phase.ml`, `activity.ml`, `checked.ml`, `interval.ml`,
+`debug.ml`, `prop/gcc.ml`, and the bodies of `maxmin`, `arith`, `cumulative`, `regular`,
+`table`, `circuit`, `inverse` and `member`. `docs/REFERENCES.md` now also indexes the
+references of `mznlib/`.
+
+Left: `lib/core/search.ml`, `lib/core/probe.ml` and `bin/main.ml` (agent-probe's), and
+`tools/` beyond the check for dead paths. Claims the sub-agents could not verify and left as
+written: builder.ml's note that a singleton-declared variable in a root-UNSAT row crashes
+`Justify.emit`; pb_analysis.ml's `level_of` returning 0 for a literal its declared domain
+falsifies (the code may give 1 when level 0 has no trail entry); analysis.ml's "2^30 trail
+positions in 15 GB" (the laptop's figure).
+
+## D-0256  [AUTONOME] M17-bench-series-T6, the per-node factor as a lane: `scripts/factor_lane.sh`. Today baguette spends 30 to 143 times Gecode's instructions per node without proof on D-0207's families (57 to 196 with), a quarter of what it spent on 2026-11-23 on alldiff and linear; on planted 3-SAT `--cdcl` walks Chuffed's tree and answers, at 38 times Chuffed's instructions per failure; and `--cdcl`'s proof on costas14 is REJECTED
+
+**Status**: DONE on `wave102-factor` (agent-factor, 2026-11-27), not merged. Base: main `3e60e8c`. No
+change under `lib/` or `bin/`. The measured binary is the release build of that source,
+`c79a6b0683eb6ce2c2245335e4ddde2d`. Runs in `/scratch/arthur/factor-runs/` (run1, run2, repro, st).
+
+### 1. What was built, and the choices made without the user
+
+`scripts/factor_lane.sh` (`make factor`), `bench/factor/` (plan, instances, generator, table script,
+README, `reference.tsv`), a section of `scripts/README.md` and a per-node table under
+`bench/series/HISTORY.md`. The lane's header is its manual. For each instance it runs baguette in four
+configurations (default and `--cdcl`, each with and without proof) and the reference, each twice (a
+base run stopped at one node, and the measured run), under `perf stat -e instructions:u`, and reports
+(I - I_base) / (U - U_base) per node or per failure, the factor over the reference and a geometric mean
+per family. Every proof, base runs included, is checked by the checker `scripts/checker.sh` resolves
+and deleted.
+
+| Choice | Options considered | Taken | Why | Revert |
+|---|---|---|---|---|
+| The instances | re-flatten D-0207's models with today's `mznlib`; reuse its files | reuse the six files of `pernode2/fzn/`, gzipped, bytes unchanged | the comparison with D-0207 is then on the same input; every file names its flattening command in its header | replace the files and re-record |
+| Budgets | D-0207's (full, or 20 000 nodes); smaller ones to shorten the lane | D-0207's | same trees as its table; the lane still ends in 6.5 to 8 minutes at -j 8 | change `plan.tsv`, re-record |
+| The unit | always the node; always the failure; the node only on the same tree | the node when baguette's nodes AND failures are within 2 % of the reference's, else the failure on each solver's own tree, always the failure under `--cdcl` | a per-node figure on two different trees compares two different searches; `--cdcl` counts no node for an implied right branch (as Chuffed LCG, D-0207 section 1) | `SAME_TREE` in `table.py` |
+| The reference | Gecode everywhere; D-0207's per family | Gecode, except rcpsp11_60 against Chuffed `--lazy off` (D-0207's same tree); rcpsp11_66 against Gecode cut at 20 000 nodes, per failure (Chuffed `--lazy off` runs past 60 s) | the reference D-0207 aligned is kept; no reference that does not finish | `plan.tsv` |
+| The 3-SAT family | uniform random near the threshold (SAT not certain); planted | planted, 200 variables, ratio 4.26, seeds 1 to 3 all kept, chosen before any run | satisfiable by construction; Chuffed answers in 0.06 to 0.20 s | `gen_3sat.py`, `plan.tsv` |
+| The binary | the dev build (the gates'); release | release (`_build_release`, `make factor` builds it) | D-0207 measured release; release runs fewer instructions per node (D-0171), so dev would inflate the factor | `BIN=` |
+| A proof the checker refuses | fail and record nothing; fail and record | the lane exits 1; `--record` still writes the reference, with that line's verdict in it | the counts were measured; the failure stays visible in the rc and in the file | `table.py`, the `record` branch |
+| The checker's cap | the solver's 4 GB `ulimit -v`; its own | 32 GB (`FACTOR_CHECK_CAP_KB`), the solver keeps 4 GB | veripb died at 4 GB on jr63's `--cdcl` proof (2.3 GB, "memory allocation of 1107296272 bytes failed"); it peaks at 4.3 GB RSS there; the diff lane met the same on openshop | the variable |
+
+Not a gate: a factor that moves never fails the lane; a crashed run or a proof not verified does (rc 1).
+
+### 2. Today's factors (run2, binary `c79a6b06`, fataepyc-06, 389 s at -j 8)
+
+Thousands of user instructions per unit, `n` per node on the same tree, `f` per failure, and the
+factor over the reference on the same unit. The reference column is per node and per failure.
+
+| instance | family | reference | default, proof | default, `--no-proof` | `--cdcl`, proof | `--cdcl --no-proof` |
+|---|---|---|---|---|---|---|
+| costas14 | alldiff | G 108 / 215 | 21 026/n (196x) | 13 145/n (122x) | 47 763/f (222x) | 31 532/f (147x) |
+| jr63 | element | G 213 / 425 | 19 681/n (92.6x) | 8 101/n (38.1x) | 37 775/f (88.8x) | 15 995/f (37.6x) |
+| mknap2-1 | linear | G 69.4 / 139 | 10 602/n (153x) | 9 929/n (143x) | 25 305/f (182x) | 24 117/f (174x) |
+| qr3 | clauses | G 28.0 / 56.0 | 1 603/n (57.3x) | 851/n (30.4x) | 2 889/f (51.6x) | 1 493/f (26.7x) |
+| sat3_200_1 | sat3 | G 83.7 / 168 | 2 602/f (15.5x) | 1 929/f (11.5x) | 2 591/f (15.5x) | 1 935/f (11.6x) |
+| sat3_200_2 | sat3 | G 75.7 / 152 | 1 867/f (12.3x) | 1 257/f (8.29x) | 1 698/f (11.2x) | 1 130/f (7.46x) |
+| sat3_200_3 | sat3 | G 78.2 / 157 | 1 900/f (12.1x) | 1 284/f (8.20x) | 1 750/f (11.2x) | 1 174/f (7.49x) |
+| rcpsp11_66 | cumulative | G 145 / 291 (own tree, cut) | 19 765/f (68.0x) | 4 644/f (16.0x) | 26 174/f (90.1x) | 4 185/f (14.4x) |
+| rcpsp11_60 | cumulative | CN 92.7 / 185 | 24 373/f (132x) | 3 712/f (20.0x) | 37 764/f (204x) | 4 215/f (22.7x) |
+
+Geometric mean per family (default proof / default no-proof / `--cdcl` proof / `--cdcl` no-proof):
+alldiff 196 / 122 / 222 / 147, element 92.6 / 38.1 / 88.8 / 37.6, linear 153 / 143 / 182 / 174,
+clauses 57.3 / 30.4 / 51.6 / 26.7, sat3 13.2 / 9.22 / 12.5 / 8.64, cumulative 94.6 / 17.9 / 135 / 18.1.
+
+Read across. The proof multiplies the no-proof cost by 1.07 (mknap) to 6.6 (rcpsp11_60). Per failure,
+`--cdcl` costs 0.88 to 1.21 times what the default costs per failure on the four families with a same
+tree (qr3 0.88, jr63 0.99, costas14 1.20, mknap2-1 1.21 without proof; 0.90 to 1.19 with), and it
+needs about half the nodes, so on these fixed searches the CDCL loop is neither cheaper nor dearer per
+unit of search.
+
+### 3. Next to D-0207, same instance and same tree
+
+D-0207 section 3's B columns (main `3dc1a81`, release `f244c35a`) against today's default columns, per
+node, thousands of instructions. Gecode's figures are the same to the third digit both days (28.0,
+108, 69.4, 213), which also shows the reference did not move. The trees are D-0207's: same node and
+failure counts on qr3, mknap2-1, jr63 (one failure fewer) and rcpsp, ten nodes more on costas14
+(21 139 against 21 129).
+
+| instance | D-0207 proof | today proof | change | D-0207 no-proof | today no-proof | change |
+|---|---|---|---|---|---|---|
+| qr3 | 1 841 (66x) | 1 603 (57x) | -13 % | 1 044 (37x) | 851 (30x) | -18 % |
+| costas14 | 54 119 (503x) | 21 026 (196x) | -61 % | 44 736 (416x) | 13 145 (122x) | -71 % |
+| mknap2-1 | 41 080 (592x) | 10 602 (153x) | -74 % | 40 298 (581x) | 9 929 (143x) | -75 % |
+| jr63 | 24 548 (115x) | 19 681 (93x) | -20 % | 12 586 (59x) | 8 101 (38x) | -36 % |
+| rcpsp11_66 (B's own tree, 2 010 nodes) | 10 201 | 9 538 | -6.5 % | 2 636 | 2 241 | -15 % |
+| rcpsp11_60 (B's own tree, 71 nodes) | 11 579 | 12 010 | +3.7 % | 2 007 | 1 829 | -8.9 % |
+
+The rcpsp lines are per node on baguette's own tree, as D-0207 gave them, read from the lane's raw
+counts (`/scratch/arthur/factor-runs/pernode.py`). The large falls are where D-0207 section 5 put the
+cost: learned rows that run and do not prune (costas14, mknap2-1, its item 1) and alldiff's Régin stage
+(item 4). Since 2026-11-23 main merged, among others, D-0209 (proof text), D-0226 (evicted learned
+constraints leave the engine, `tiered` retention by default), D-0235 and D-0242 (alldiff), D-0236,
+D-0243 and D-0245 (names, the wake path, analysis). The lane does not attribute the fall to one of
+them; a profile would (D-0207 section 4's method). The factor that remains is still 30 to 143 without
+proof, and the no-learning core D-0207 measured at 6 to 55 cannot be measured on main, which has no
+switch that turns learning off.
+
+### 4. The 3-SAT family: baguette no longer "gives nothing", and the gap is per node
+
+The review's probe (170 variables, ratio 4.26, uniform, on the laptop) found Chuffed at 0.012 s and
+baguette with nothing in 3 s. On the planted family at 200 variables:
+
+| seed | Chuffed LCG | Chuffed `--lazy off` / Gecode | baguette default | baguette `--cdcl` | `--cdcl`, activity, Luby, phase saving | learned constraints off |
+|---|---|---|---|---|---|---|
+| 1 | 15 140 nodes, 0.20 s | 2 297 604 nodes, 3.1 s / 37.9 s | 27 291 nodes, 8.2 s | 15 316 nodes, 6.7 s | 6 294 nodes, 1.5 s | nothing in 60 s (1.03 M nodes) |
+| 2 | 2 256, 0.06 s | 625 529, 0.8 s / 9.6 s | 3 269, 0.55 s | 2 131, 0.50 s | 1 677, 0.35 s | 272 194, 14.8 s |
+| 3 | 3 123, 0.06 s | 553 460, 0.7 s / 9.1 s | 5 572, 0.92 s | 3 358, 0.82 s | 3 727, 0.76 s | 244 575, 14.1 s |
+
+Wall times at load about 40, so load-dependent; the node counts are not. Every answer is a solution
+(`----------`), and the six proved runs (default and `--cdcl`) verify `s VERIFIED SATISFIABLE`.
+"Learned constraints off" is `BAGUETTE_PROPAGATE_LEARNED=off` (learned constraints proof-only), the
+closest main has to no learning.
+
+What it shows. With learning, baguette answers every instance; the default needs 1.8 times Chuffed's
+nodes on seed 1 and `--cdcl` 1.01 times (15 316 against 15 140, 11 572 against 11 374 failures): the
+CDCL loop of D-0219 builds Chuffed's tree. Without its learned constraints propagating, baguette
+behaves like Gecode and does not answer seed 1 in a minute. So what separates baguette from Chuffed on
+this family is the cost of a failure: Chuffed LCG spends 51.1 thousand instructions per failure on seed
+1 (`perf stat`, base `-t 1` subtracted), `--cdcl --no-proof` 1 935 thousand (38 times) and `--cdcl`
+with proof 2 591 thousand (51 times). Against Gecode's no-learning failure the factor is 8 to 12
+without proof, the lowest of all families, because a clause propagator is where baguette is closest to a
+SAT solver. The planted distribution is easier than the review's uniform probe, so "answers in seconds"
+is about this family, not that instance.
+
+### 5. `--cdcl` with proof on costas14: the proof is REJECTED
+
+`--cdcl --proof` on costas14 writes a proof veripb 3.0.2 refuses, every time (run1, run2, and a run on
+its own): "Checking error at p.pbp:7483531", the `rup` of `@c7410917`, "not implied by reverse unit
+propagation". The line follows the backtrack from level 8 to level 7, which writes `del id @c5108422
+@c5115524 ...` (line 7483526, older learned constraints) and `del range @c7410425 @c7410916` (line
+7483528). Measured on the kept proof:
+
+- the `del range` line keeping its last id (`@c7410915` as its end): still refused at 7483531;
+- both deletion lines removed: the whole proof verifies (`s VERIFIED SATISFIABLE`, 103 s);
+- only the `del id` line removed, the `del range` kept: verifies (`s VERIFIED SATISFIABLE`, 101 s).
+
+So a learned constraint deleted by that `del id` line is still needed by the next derivation. The
+default search's proof on the same instance verifies, and so do the other 35 proofs of the lane,
+`--cdcl` ones included (jr63's 2.3 GB one with the 32 GB cap).
+
+The same run with `BAGUETTE_RETENTION=off` (keep every learned constraint: 13 383 added, 0 evicted,
+against `tiered`'s 13 477 added and 7 396 evicted, six reductions) writes a proof that verifies (`s
+VERIFIED SATISFIABLE`, 10 582 nodes). That points at a retention eviction. It is evidence and not
+proof, because without evictions the tree differs a little (10 582 nodes against 10 594).
+
+Hypothesis, not checked in the code: `tiered` retention (D-0226's default) evicts a learned constraint
+that is still the reason of a literal on the trail (a locked clause, which MiniSat never deletes), and
+the CDCL loop, where a learned clause propagates at its asserting level and stays a reason across the
+backjump, is where that happens. `--cdcl` is opt-in, and every proof of the default search in this lane
+verifies, but the default uses the same retention, so the owner should check it too. Filed under
+`## Cross-session requests` for whoever owns `search.ml` and `retention.ml` next. Reproduce:
+`main.exe --cdcl --proof P --stats costas14.b.fzn` (from `bench/factor/fzn/`), then `veripb P.opb P.pbp`.
+
+### 6. Stability and duration
+
+Two runs of the lane (run1 at load 43, run2 at load 10 to 30, the same binary) over 90 measured
+processes: the instruction counts differ by a median of 0.0000 % and at most 0.018 % (a Gecode base
+run); the costs per unit by at most 0.0006 %, the factors by at most 0.0024 %. The lane is a
+measurement, not a sample. Duration 389 s at -j 8 (run2); run1 took 463 s with its jr63 check killed
+early at the old 4 GB cap, so a run at load 40 should take about 8 minutes. The longest chain is jr63
+`--cdcl` with proof (about 160 s) then the check of its 2.3 GB proof (229 s, 4.3 GB RSS). The solver's
+peak RSS is 650 MB (jr63 `--cdcl`, proof).
+
+### 7. What the lane cannot measure
+
+- Time. Instructions miss what is bound by memory rather than work (D-0207 section 7, D-0138's 13 % of
+  cycles in a copy); a change that only improves locality shows up here as nothing.
+- A factor on different trees: per failure, it compares the cost of a failure in two different searches
+  (rcpsp, sat3, every `--cdcl` line). The `tree` column says which lines are like for like.
+- Learning's effect on the tree, which is the other half of solving speed; the node counts are printed,
+  and section 4 needed a separate run with no budget to say whether baguette answers.
+- The no-learning core of D-0207 (its NL columns): main has no switch that turns learning off.
+- Growth with the learned database beyond the budgets: per-node cost on a cut tree is an average over a
+  small database (the scaling lane measures the growth).
+- Nine instances. A family mean of one instance is that instance.
+
+### 8. Reverting
+
+Drop `scripts/factor_lane.sh`, `bench/factor/`, the `factor` target and its README section, and the
+per-node table of `bench/series/HISTORY.md` (all on `wave102-factor`). Nothing else depends on them.
+
+## D-0255  [AUTONOME] M18-coverage-T14, D-0247's two follow-ups: the row between the counts posted beside the native propagator loses to std's decomposition for variable counts, and low_up stays native (no alternative moves a tree). On the way, a wrong UNSAT under a repeated cover value, fixed in mznlib
+
+**Status**: DECIDED (agent-gccsum, `wave100-gccsum`, 2026-11-27), not merged. The fix is ONE commit,
+`99d0e39` (mznlib only); the measured routes change nothing. Material: `/cluster/arthur/baguette-results/gccsum/`
+(README first).
+
+### 1. Context
+
+D-0247 section 6 left two questions. (1) Native gcc does not propagate between the counts
+(`hi(c_v) <= |x| - sum_{u != v} lo(c_u)`, and its mirror over the x that can only take cover values), which is
+what std's implied row gives `Linear` and what closes mondoku. Posting that row beside the native propagator
+would serve every variable-count call with no new rule in gcc.ml: does it beat routing variable counts to std's
+decomposition? (2) `global_cardinality_low_up` (58 Challenge instances) stays native: does the same class of
+inference, or std's decomposition, do better there?
+
+### 2. A wrong UNSAT under a repeated cover value (found while building the arms, fixed first)
+
+`global_cardinality(x, [1,1], c)` with x = [1,1] holds with c = [2,2]: each copy of the value counts the same
+tally. Gecode answers SAT. Main answered UNSAT, because std's implied row `|x| >= sum(c)`, which 4c5df61 (D-0247)
+brought into the variable-count route, sums the repeat twice. Before 4c5df61 the native route answered SAT, so
+D-0247 introduced it. Same check on every form, main's mznlib against the one before 4c5df61 against Gecode
+(script `dupcover.sh`): fixed counts SAT/SAT/SAT, closed three-argument form SAT/SAT/SAT (its `sum = |x|` row was
+already guarded), low_up SAT/SAT/SAT, **low_up_closed UNSAT/UNSAT/SAT**: std's par check `|x| in
+sum(lb)..sum(ub)`, copied into mznlib since D-0146, has the same flaw. Chuffed, which runs std's text, gives the
+wrong answer on four of the five. alldifferent_except and nvalue (D-0233) iterate over sets of values and have no
+such row. Fix (`99d0e39`): both rows are posted only when `card(array2set(cover)) = length(cover)`, a par test, so
+a cover of distinct values gets the same rows as before. Not the same bytes, though: MiniZinc 2.10.1's
+common-subexpression output moves with ANY edit of these files. Of the 98 Challenge instances of section 3, 86
+flatten identically (X_INTRODUCED names and output annotations normalised) and 12 differ (from 1 line on warehouse
+olal41 to 15 000 on chessboard n39_2), blocks-world among them although it never reaches the changed branch, and
+the same guard bound in a `let` moved 20 others (`cmpfix*.txt`). `ee6e580` corrects the header that claimed byte
+identity. Solved at 20 000 nodes, the 12 give main's status and incumbent on every instance that reaches the
+limit; the two that differ are nside runs the 300 s cap cut first (`tables/nl-fix.txt`). The arms of section 3
+were flattened with main's mznlib, before the fix. Four models, sat with an unsat twin for each form (`gccvar_dupcover_src_*`,
+`gcc_low_up_closed_dupcover_src_*`), outputs as Gecode's, proofs VERIFIED, both unsat twins decided by the
+solver, not by the flattener. That commit's gate: 5 590 ok, 0 FAIL (peak RSS 170 MB), 268 models, mznlib 77 ok.
+
+### 3. Arms and measurements
+
+One binary for every arm, main's release build `456603e1` (main `c651bbb`, `make release`'s command); the arms
+differ by their mznlib only (`mklibs.sh`), each instance flattened again by MiniZinc 2.10.1:
+
+- **M**: main (variable counts to std's decomposition with its implied row; low_up native).
+- **S**: variable counts to the native propagator plus ONE row `sum(counts) in L..|x|`, L = number of x whose
+  declared domain lies inside the cover (|x| in the closed case, so it is also the mirror rule), guarded on a
+  distinct cover.
+- **BC**: native plus std's count rows and implied row (arm (iii): the decomposition with the native capacity
+  reasoning beside it).
+- **LS**: low_up native plus the same row over its declared counts. **LD**: low_up through std's decomposition.
+  **LDN**: low_up native plus std's decomposition.
+
+Stages, 32 at a time on fataepyc-06 (load 4 to 30 from other work), 16 GiB address space, `MemoryMax=32G`,
+`--max-heap-mb 8192`, veripb 3.0.2 with 900 s on every proof that ended; score by `agreement.py` (no-proof arms
+trusted): nl = `BAGUETTE_NODE_LIMIT=20000` capped at 300 s; t300 and p300 = 300 s without and with proof.
+
+Question 1, the 40 instances D-0247's route reaches (mondoku's five among them):
+
+| arm | nl: share, W/L vs M | t300: complete, share, W/L vs M | p300: complete (verified), share, W/L vs M |
+|---|---|---|---|
+| **M** | 0.433 | 11, 0.438 | 11 (11), 0.425 |
+| S | 0.304, 1/12 | 11, 0.296, 2/14 | 11 (10), 0.296, 2/12 |
+| BC | 0.263, 0/13 | 11, 0.267, 0/13 | 11 (11), 0.279, 0/12 |
+
+Mondoku: 10-10-6 and 12-12-8 are OPT in every arm (12-12-8 in 12.5 s under M, 18.9 s S, 17.9 s BC; with proof
+24.9, 30.9, 29.3 s, all VERIFIED), and on 14-14-8 and 20-18-9 M's incumbents are the best (2 and 4 against S's 3
+and 10). The row closes mondoku as D-0247 measured; what S lacks is elsewhere: the per-value rows read holes
+and are cheaper per node on peaceable queens (S explores 3.5 times more nodes in 300 s and finds worse), and the
+native propagator is what exhausts the heap on warehouse (wlp02, wlp22, oly20 REFUSED or without incumbent under
+S and BC, answered under M). S loses oocsp_racks 100_r1's verified answer (its check runs out of 900 s, as
+D-0247's S did). BC is below S.
+
+Question 2, the 58 low_up-only instances:
+
+| arm | nl: share, W/L vs M | t300: share, W/L vs M | p300: complete (verified), share, W/L vs M |
+|---|---|---|---|
+| **M** | 0.257 | 0.253 | 9 (8), 0.316 |
+| LS | 0.251, 0/2 | 0.244, 2/3 | 9 (8), 0.368, 8/1 |
+| LD | 0.243, 1/2 | 0.273, 6/2 | 9 (8), 0.316, 4/5 |
+| LDN | 0.249, 1/3 | 0.230, 1/6 | not run (below LD 0/8 at t300) |
+
+At 20 000 nodes every arm reaches the incumbent M reaches on all 46 instances stopped at the limit; the nl
+losses are runs the 300 s cap cut first. The node sums over the instances both complete differ by under 0.1 %
+for LS, so the row prunes almost nothing there: low_up's counts sit on constant bounds and only rise from
+x being fixed, which rule C already sees. LD's per-value rows read holes (the class route (a) of D-0247 aimed
+at) and shorten one tree, evm-super-compilation BDARUMA (37 183 nodes against 68 241), without changing an
+answer. LS's 8/1 with proof is all incumbents at the 300 s cut, so I ran M and LS again with proof on those 8
+instances, paired: M's own incumbent moved on 7 of 8 between its two runs, and LS's second run beat M's second
+on 3, lost 1, tied 4. That spread, and the identical trees at the node limit, make the with-proof gain node rate
+under load, not inference. LD gains 0.020 without proof, under D-0205's noise of 0.03, and ties with proof.
+No arm gains or loses a complete answer against M in either mode.
+
+Load-bearing check on the route kept (CLAUDE.md, proof discipline): three models where the implied row decides,
+`gccvar_sum_src_{unsat,sat,opt}` (`6944d6e`), outputs as Gecode's, proofs VERIFIED. Replacing the row in the
+.opb by `>= 0` (`droprow.py`, the label kept so later ids do not move) makes veripb 3.0.2 reject all three
+("Checking error at" lines 4, 38 and 33); the satisfiable one is rejected at a line of its search after a
+conflict the row caused, so the row is load-bearing over a satisfiable model.
+
+Proof volume written: 1 071 GB over 310 proof runs (`p300` 991 GB, `p300b` 80 GB) (largest 19.6 GB, warehouse wlp22 under S), every proof
+deleted once checked.
+
+### 4. Decision
+
+[AUTONOME] **Nothing changes in the routes.** Variable counts keep std's decomposition (M beats S and BC in all
+three stages, and S loses a verified answer); low_up stays native (neither LS nor LD gains by D-0205's rule in
+both modes, and neither moves a tree at the node limit). The only behaviour change is the soundness fix of
+section 2, in its own commit, which no Challenge instance reaches (every cover there has distinct values). The
+mznlib headers of `fzn_global_cardinality.mzn` and `fzn_global_cardinality_low_up.mzn` now cite these
+measurements. A native count-to-count rule in gcc.ml is not built: the row that would be its exact effect
+measures no gain on the calls it would serve (fixed counts have nothing to propagate between, low_up's are LS).
+
+Revert: `git revert 99d0e39` restores both unguarded rows (and the wrong UNSAT; the four dupcover models then
+fail). The test commit `6944d6e` is independent.
+
+### 5. Verification
+
+Worktree `/scratch/arthur/wt-gccsum`. On `ee6e580` (the branch head before this record): `scripts/check_fmt.sh`
+clean, `check_test_widths.py` clean, `dune build --root . bin/` gives `e2d7c833` (main's dev build: no solver code
+changes on the branch), `dune runtest --root . --force` 5 590 ok, 0 FAIL, peak RSS 170 MB,
+`scripts/run_model_tests.sh` 271 models passed (264 + the seven of D-0255), `mznlib/test/check_mznlib.sh`
+(MiniZinc 2.10.1) 80 ok. On `6944d6e` (the same solver and test models; the later commits change mznlib
+comments and docs only): `scripts/diff_lane.sh --tier all -j 8` 347 of 347 runs equal the reference,
+`--debug` 333 of 333, `scripts/scaling_lane.sh -j 8` ok (every line within its threshold), `scripts/check_determinism.sh` 271 models identical across two runs. The diff lane's corpus is
+pre-flattened FlatZinc, so no mznlib change can reach it.
+
+## D-0227  [AUTONOME] M17-bench-series: the Challenge series on main `6c9cf97` with the four arms, on fataepyc-07. Verified with proof 311 + 79 (default) and 356 + 98 (`-f`) against 302 + 74 and 346 + 95 in D-0203, refusals 164 to 65 and 138 to 55, summed score 4 442, 6 277, 4 922 and 6 803, no proof rejected
+
+**Status**: **MEASUREMENT**, plus a harness fix. Recorded 2026-11-27 (agent-series2, branch `wave74-series2`).
+Nothing under `lib/` or `bin/` changes. The decision of this record is the harness setting `CHECK_STOPPED=0`
+(below), asked for by the orchestrator, and the fix of `bench/series/rss_wrap.py` and `veripb_wrap.sh`.
+
+### 1. What ran
+
+| | |
+|---|---|
+| Solver | release build `fa2d4ee4115a80ea08258bc139ec5750` of commit `73b4cab`, which is main `6c9cf97` (D-0225 interrupt, D-0223, D-0230 and the lane re-record) plus the merge of main into this branch, no change under `lib/` or `bin/` |
+| Node | fataepyc-07 (192 threads, 2 TB), run directory `/scratch/arthur/series-20261126/`, flattened with this clone's mznlib (identical to `f97a62b`'s, `git diff f97a62b 6c9cf97 -- mznlib` is empty), 1 575 of 1 600 flattened, as in D-0203 |
+| Arms | A default with proof, B `-f` with proof, C default `--no-proof`, D `-f --no-proof` |
+| Settings | those of D-0203: 1 200 s, 16 GiB address space, heap budget 8 GiB, `MemoryMax=32G` per run, no proof cap, veripb under its own 64 GB cgroup and a 3 600 s limit, verified proofs deleted (sizes kept), 2 000 GB floor on `/scratch`. PAR 22 per arm, 88 workers |
+| New setting | `CHECK_STOPPED=0`, so the proofs of runs the time limit stopped are not checked. That keeps the length of the run and the comparison with D-0203 (whose harness did not check them). D-0225 files a heap stop with an incumbent as an exit 0 run, and the harness counts it as an incumbent, with its proof checked when it ends by itself (row "solution found, not proved optimal, proof verified": 45 and 25) |
+| Time | 2026-11-26 14:30 UTC to 2026-11-27 19:53 UTC (29.4 h). The monitor's maximum was 92 `main.exe` or `veripb` processes, which includes the two `veripb` of another experiment that ran on the node for 13 days before and during the series (untouched). `/scratch` free never went under 9 471 GB |
+
+A first setup of the same clone at `f97a62b` (binary `ef2f76c8`) built before the orchestrator held the series for the
+merge of `wave73-interrupt`. Its driver was stopped by PID after the flatten started, before any arm ran, and the binary
+was removed and rebuilt from `73b4cab`. No row of that first setup exists.
+
+Tables, drivers and `monitor.log`: `/cluster/arthur/baguette-results/series-20261126/` (the run directories without proofs
+stay on 07 and 06 under `/scratch/arthur/series-20261126/`).
+
+### 2. The harness fix (D-0211's finding)
+
+The `OSError: [Errno 22] Invalid argument` that killed three GCS checks was not veripb's. It was `rss_wrap.py`, the
+peak-RSS recorder that runs veripb: to exit "as the child did" it called `signal.signal(sig, SIG_DFL)` before re-raising the
+child's signal, and that call fails for SIGKILL, which is the signal the cgroup sends at `MemoryMax`. So a memory kill read as
+an ordinary exit 1 with a traceback, and `veripb_wrap.sh` did not recognise it. Fixed in `rss_wrap.py` (the failing call is
+tolerated, the signal is re-raised) so the wrapper sees status 137 and returns 97, which `readme_table.py` counts as the
+checker's memory death. `veripb_wrap.sh` also accepts an exit with `Errno 22` when veripb's peak RSS was within 5 % of
+`MemoryMax`, and deletes the `.opb` and `.pbp` of a memory death (`SERIES_DROP_CHECKER_MEMORY=0` keeps them), which D-0211
+described and which the repository did not implement. Tested on a kept 3.7 GB GCS proof of
+`/scratch/arthur/node07-gcs/G/2023/log/` with `MemoryMax=6G` (exit 97, the message `SERIES-CHECKER-MEMORY`) and on a tiny proof at 6 MB (exit 97, the files
+deleted). The 125 GB of kept GCS proofs of those two directories were then deleted. **This series had no checker memory death**
+(check-error 0 in every arm), so the fix was exercised by the test and not by the run.
+
+### 3. Result, per arm (1 575 instances flattened out of 1 600)
+
+| | A | B (`-f`) | C (`--no-proof`) | D (`-f --no-proof`) |
+|---|---|---|---|---|
+| OPT or UNSAT | 331 (311 verified) | 382 (356) | 352 (unverified) | 419 (unverified) |
+| SAT on a satisfaction model | 84 (79) | 107 (98) | 92 | 111 |
+| complete, check hit 3 600 s | 25 | 35 | n/a | n/a |
+| incumbent, proof verified | 45 | 25 | n/a | n/a |
+| incumbent, not verified | 739 | 800 | 783 | 809 |
+| TIMEOUT, no solution | 311 | 206 | 304 | 195 |
+| REFUSED (heap budget) | 65 | 55 | 44 | 41 |
+| REJECTED, CHECK-ERROR, ERROR | 0, 0, 0 | 0, 0, 0 | 0 | 0 |
+| score, fixed category, summed | 4 442 | 6 277 | 4 922 | 6 803 |
+| rank range against the entrants | 4 to 11 | 2 to 8 | 2 to 10 | 2 to 7 |
+
+**No proof was rejected**, no arm contradicts another on an optimum or on OPT against UNSAT or SAT (checked over the four
+`results_<arm>.tsv`).
+
+### 4. Against D-0203, arm by arm
+
+| | D-0203 (`f244c35a`) | this series | change |
+|---|---|---|---|
+| A, verified OPT+UNSAT / SAT | 302 / 74 | 311 / 79 | +9 / +5 |
+| A, refused, score | 164, 4 043 | 65, 4 442 | -99, +399 |
+| B, verified | 346 / 95 | 356 / 98 | +10 / +3 |
+| B, refused, score | 138, 5 799 | 55, 6 277 | -83, +478 |
+| C, complete | 340 / 86 | 352 / 92 | +12 / +6 |
+| C, refused, score | 157, 4 428 | 44, 4 922 | -113, +494 |
+| D, complete (D-0229, main `36e8cc0`) | 420 / 112 | 419 / 111 | -1 / -1 |
+| D, refused, score (D-0229) | 84, 6 590 | 41, 6 803 | -43, +213 |
+| D (D-0229 reference, `f244c35a`) | 401 / 108, 125, 6 288 | | +18 / +3, -84, +515 |
+
+(`arms_compare.py`, oldA against newA and so on, over the same 1 575 instances; the full output is `/cluster/arthur/baguette-results/series-20261126/arms_vs_d0203.txt`.)
+
+- A against D-0203's A. The status transitions are 58 REFUSED to SAT, 37 REFUSED to TIMEOUT, 14 TIMEOUT to SAT,
+  11 TIMEOUT to OPT, 6 REFUSED to OPT, 2 TIMEOUT to REFUSED and 1 OPT to TIMEOUT (`2017_hrc_exp1-1-5145`). 1 446
+  instances are unchanged. Wall time over the 375 complete in both is 0.95 [0.84, 1.06], nodes per second 1.04, peak RSS 1.01. Per
+  instance in the Challenge's order newA wins 270, loses 110, ties 1 195. B and C read the same (0.95 on 440 and 422
+  instances, 328 and 281 wins, 143 and 119 losses). So the gain is in memory and coverage and not in the time of the instances
+  already solved, as in D-0229. 101, 83 and 114 attempts are gained from refusals in A, B and C.
+- Against D-0229 the arm D is level on complete answers (530 against 532) and has half the refusals (41 against 84).
+  The 213 points are incumbents. The D-0229 main run was on fataepyc-04 and this one on 07 under the same CPU, so the one
+  complete answer less is within the noise of load.
+- Check limit. 25 and 35 complete answers could not be checked in 3 600 s (18 and 26 in D-0203). Their number
+  rises with the answers that complete.
+- Ranks in the fixed category, 2026 down to 2011. A 11, 10, 9, 5, 7, 6, 4, 6, 6, 11, 7, 9, 8, 7, 5, 7 (D-0203: 11, 10, 9, 7, 7, 7, 5, 7, 6, 12, 7, 9, 9, 10, 5, 7).
+  B 6, 5, 3, 3, 3, 3, 2, 3, 3, 8, 3, 7, 4, 4, 3, 4 (D-0203: 7, 9, 3, 3, 3, 6, 2, 3, 3, 8, 5, 7, 5, 5, 3, 4).
+  C 10, 9, 7, 4, 7, 3, 2, 3, 6, 9, 7, 7, 7, 6, 5, 7. D 5, 4, 3, 3, 3, 3, 2, 3, 3, 7, 3, 6, 3, 4, 3, 4.
+  The 2011 and 2012 ranks are approximate, and 2011 to 2014 ran at 1 200 s against an official 900 s.
+  In the free category B ranks 16, 11, 9, 5, 15, 11, 8, 5, 8, 12, 14, 12, 7, 6, 4, 6 (D-0203: 18, 16, 9, 7, 15, 13, 8, 6, 8, 15, 15, 15, 9, 8, 4, 6) and D 13, 10, 9, 5, 12, 8, 7, 3, 8, 12, 10, 10, 5, 4, 4, 4.
+- Free search over default, with proof. B wins 715 instances, loses 349, ties 511 (D-0203 reads 670, 327, 578).
+
+**Per family (A against D-0203's A, wins and losses of 5 instances per family).** Clean sweeps of five to zero are `tpp` (2012, 2016),
+`celar` 2013, `stochastic-vrp` 2014, `groupsplitter` (2017, 2019, 2025), `tdtsp` 2017, `team-assignment` 2022,
+`travelling-thief` 2023 and `is` 2025. Most of them were refusals. The families that lose are `gfd-schedule` (2016 minus 4, 2018 minus 3), `accap` (2024 minus 4,
+2019 minus 3), `ship-schedule` 2012 and `rubik` 2013 (each minus 3), on the quality of an incumbent after the limit, which the 1.0 median
+node rate does not explain and which changes with the search that the learned-constraint retention (`tiered`, D-0226) and the other
+merges moved. B and C have the same shape (`nonogram`, `l2p`, `solbat`, `rcpsp` lose a little). I did not trace one of these losses to a commit.
+
+### 5. The new globals (`table`, `circuit`, `diffn`, `bin_packing` through mznlib)
+
+Instances that use them, found in the flattened files for `table` (133 instances, `baguette_table`) and `circuit` (88,
+`baguette_circuit`), and in the model source for `diffn` (145, the file says `diffn`) and `bin_packing` (75, the source
+says `bin_packing`, so these two counts include models whose call is in an included file or never reached). Complete answers
+(OPT, UNSAT, SAT on a satisfaction model) in D-0203 against here, and refusals:
+
+| | instances | A complete | B complete | C complete | refused in A, D-0203 to here |
+|---|---|---|---|---|---|
+| `table` | 133 | 18 to 24 | 16 to 23 | 19 to 30 | 48 to 11 |
+| `circuit` | 88 | 18 to 20 | 15 to 17 | 19 to 21 | 9 to 1 |
+| `diffn` | 138 present in both | 28 to 33 | 41 to 46 | 28 to 35 | 6 to 6 |
+| `bin_packing` | 75 | 15 to 16 | 18 to 20 | 16 to 19 | 7 to 5 |
+
+No complete answer was lost in any of these groups. `table` carries the largest part of the 99 refusals fewer in A (it removed 37 of the group's 48),
+which is the memory of the old decomposition. The groups overlap, and the other work of D-0208 to D-0222 enters each of them, so the
+table is where the change shows and not a measure of one propagator. Not separated here.
+
+### 6. What this does not say
+
+- Not measured: a series at 900 s for 2011 to 2014, and the effect of one merge alone. The commit under test carries the
+  work of D-0206 to D-0230 together.
+- The 25 and 35 checks that hit their limit are complete answers of the solver, not counted as verified.
+- The run was not repeated, so the noise of one run is unknown. The wall ratio of 0.95 over three arms is the best indication
+  that the node's load does not move the times much.
+
+### 7. Revert
+
+Nothing in the solver changes. The harness fix reverts with `git revert` of `f97a62b` (`bench/series/rss_wrap.py`,
+`bench/series/veripb_wrap.sh`).
+
+## D-0259  [AUTONOME] M19-config-T1: the free search (`-f`) becomes the default, the fixed search stays behind a flag
+
+**Status**: DECIDED (orchestrator, 2026-11-27), NOT YET IMPLEMENTED: the implementation waits for D-0257's fix to merge (it
+holds `lib/core/search.ml`) and goes in its own commit. Reopens D-0154, as ROADMAP row M19-config-T1 says.
+
+### 1. Context
+
+M19-config-T1: "fixed against `-f` against the best combination, on the full M17 series. If a free configuration wins, it
+becomes the default and the fixed search stays a flag." The user, on 2026-11-27, about open default decisions: either the
+orchestrator decides or a comparison on a heterogeneous set does. The full series is that comparison: 1 575 flattened
+instances, 16 Challenge editions, about 180 families.
+
+### 2. The evidence (D-0227, release `fa2d4ee4`, fataepyc-07, with proof, every answer counted only if veripb verified it)
+
+| | A: default (fixed) | B: `-f` |
+|---|---|---|
+| OPT + UNSAT, verified | 311 | 356 |
+| SAT on satisfaction models, verified | 79 | 98 |
+| incumbents | 1 101 | 1 192 |
+| refused | 65 | 55 |
+| Challenge score | 4 442 | 6 277 |
+| rank range over the editions | 4 to 11 | 2 to 8 |
+
+Without proof the same order holds: C 352 + 92, 4 922 points; D (`-f --no-proof`) 419 + 111, 6 803 points. B has at least as
+many OPT + UNSAT as A in 15 of the 16 editions (2021 is the exception: 12 against 10). Two earlier series said the same
+(D-0185: +39 verified answers; D-0203), and D-0224 recommends `-f` from the tuning set.
+
+What `-f` costs, instance by instance (B against A, `arms.txt` in `/cluster/arthur/baguette-results/series-20261126/`):
+79 instances go from TIMEOUT to OPT and 31 go from OPT to TIMEOUT. A model whose author wrote a good search annotation can
+lose its proof of optimality under `-f`; those 31 are listed in `pairs.tsv` (rows `A B ... OPT TIMEOUT`).
+
+### 3. Options
+
+| Option | Consequence |
+|---|---|
+| keep the fixed search as default | the user who runs `baguette model.fzn` gets the weaker configuration on 3 instances of 4 where they differ; `-f` remains what MiniZinc passes on request |
+| `-f` as default, fixed behind a flag (CHOSEN) | +45 verified OPT + UNSAT and +19 verified SAT on the series; 31 optima lost unless the user asks for the fixed search; the model tests and the lanes must cover both |
+| a portfolio (fixed first for a share of the time, then free) | might keep the 31 and the 79; not built, not measured: left as the follow-up |
+
+### 4. The choice and its conditions
+
+`-f` becomes the default. Conditions on the implementation, which is its own commit so that reverting it reverts nothing else:
+
+- the fixed search stays reachable by a flag (`--fixed-search`), documented in the usage text and the README; `-f` stays
+  accepted and means what the default now means, so MiniZinc's driver keeps working;
+- nothing is weakened: the existing model tests and both diff lanes keep their recorded references by passing the fixed
+  flag (their bytes must not move, which proves the fixed path is untouched), and the default gets its own model-test pass
+  (every proof verified, answers compared on status and objective, not on which solution is printed) and its own lane
+  references, recorded in a separate commit after a gate;
+- the SPEC sentence that says restarts and the free search are opt-in (3.4, D-0137) is rewritten to say they are the
+  default and the fixed search is the option; old and new text quoted in the implementation's record;
+- the held-out comparison of D-0252 measured its switches under the fixed default. Whether `rec`, `classes` or `probe`
+  should be on is asked again under the new default before any of them changes.
+
+### 5. Revert
+
+Revert the implementation's default commit (one line once the flag exists). This record then stands as history.
+
+## D-0257  [AUTONOME] M22-review-bugs, retention deleted a learned clause a line still to be written rested on: under `--cdcl` the reduction a clause's own `add` triggered could evict it, and the loop then asserted from the deleted clause. The clause is now HELD until its assertion's line is on the page (new invariant I-X11). The default search (`dfs`) was not exposed and its artefacts are byte-identical
+
+**Status**: DECIDED (agent-retbug, `wave103-retbug`, 2026-11-27). Taken in mode autonome: it adds an
+invariant (I-X11) and a lock to retention. It changes no default behaviour: the hold is taken only by
+the CDCL loop, which is opt-in (`--cdcl`, D-0219). Revert: the fix is commit `881263e` alone (revert
+it to return to main's behaviour); nothing else depends on it. Work files, scripts and result tables:
+`fataepyc-06:/cluster/arthur/baguette-results/retbug/`.
+
+### 1. The mechanism
+
+D-0256 section 5 found `main.exe --cdcl --proof` on costas14 refused at line 7 483 531, a `rup`, and
+that removing the `del id` line written just before it made the proof verify. Reproduced on main
+`f128d89` (dev binary `55028ee3`): the `del id` (line 7 483 526, 1 955 ids, written by a `tiered`
+reduction) ends with `@c7410916`, **the clause learned at that very conflict** (line 7 483 524). The
+refused line `@c7410917`, written right after the backjump to level 7, is that clause's assertion: its
+57 literals are the clause's 56 with the asserted bound settled past a hole.
+
+In order, at one conflict of the CDCL loop (`Search.cdcl`, `learn_at_conflict`):
+
+1. the 1UIP clause is written at level 0, registered (`Retention.add`), given a gated instance
+   (`register_learned`), and `Retention.reduce` runs;
+2. `reduce` locks the instances that stamp an entry of the trail and the last conflicting instance
+   (`locked_instances`, D-0139). The new clause's instance has not propagated yet, so **nothing locks
+   it**; `tiered` ranks it like any other local entry (new entries start "used", CaDiCaL's grace,
+   which only orders the ranking) and, when more than half the local tier is used, it falls in the
+   evicted half. The eviction turns the gate off, takes the instance out of the engine (D-0226) and
+   writes `del id ... @c7410916`;
+3. the loop backjumps to the asserting level and goes round. No instance asserts the UIP, so at the
+   fixpoint `expect` finds it unassigned and `assert_directly` pushes it **from the clause itself**,
+   with `Explanation.clause lits` and no instance on the entry;
+4. at the next conflict `Trace.emit` writes that entry's line, `rup` of the clause (the trace clause of
+   an assertion is the asserting clause), RUP only against `@c7410916`, which is gone: "not implied
+   by reverse unit propagation".
+
+Locks 1 and 2 see a consumer only through the instance on a trail entry or the last conflict. The CDCL
+loop's direct assertion is a third consumer, which no lock saw. The engine side was right: the
+instance was gone and asserted nothing. The proof side deleted a line that a line not yet written
+needed.
+
+The hypothesis of D-0256 ("a locked clause, the reason of a literal still on the trail, is evicted")
+is refuted in that form: no entry on the trail rested on the clause at the eviction. The entry was
+pushed after it.
+
+Smallest reproduction: `test/models/gccvar_hole_dec_sat.fzn` (7 variables, domains of at most 3
+values) under `--cdcl` with `BAGUETTE_RETENTION=tiered:first=1,inc=0,core=0,mid=0,mid_every=1` (a
+reduction at every learned constraint, half the local tier each time): a 332-line proof refused at line
+142 (`rup +1 ~n_ge_1 +1 ~w_ge_2 +1 w_ge_3`), the clause `@c88` having been deleted on line 131.
+
+### 2. Was the default search exposed? No
+
+**By argument.** `dfs` writes a line that rests on a learned constraint in three ways only: the trace
+line of an entry its gated instance pushed (lock 1 holds it while the entry is on the trail, and
+`Trace.emit` writes every line the trail owes before any `reduce`, which only runs inside conflict
+handling); the PB path resolving the conflicting instance's row (lock 2); a learned unit, applied as
+a global and cited without a gate, so never evicted. `dfs` never pushes an entry from a learned
+constraint other than through its own instance: `assert_directly` and `expect` exist only in `cdcl`,
+and `dfs`'s other direct pushes (the assignment hole, D-0075) rest on its own nogood, which retention
+does not own. A clause evicted before its instance propagates is simply never used.
+
+**By measurement** (base binary `55028ee3` unless said, every proof checked by VeriPB 3.0.2):
+
+Two retention settings were used: the default `tiered`, and `tiered` made to reduce at every learned
+constraint (`first=1,inc=0,core=0,mid=0,mid_every=1`, "every") or early
+(`first=50,inc=10,core=1,mid=3,mid_every=100`, "early"). "Evicting" counts runs whose `--stats`
+retention line has at least one eviction.
+
+| set | search | binary | runs | evicting | verified |
+|---|---|---|---|---|---|
+| 268 test models, "every" | `dfs` | main | 268 | 84 | **268** |
+| 268 test models, "every", BAGUETTE_DEBUG | `dfs`, `--restarts luby:1 --phase-saving`, `-f` | fix | 804 | 231 | **804**, 0 debug failures |
+| diff corpus (27 instances, its node budgets), default `tiered` and "early" | `dfs` and the lane's six other `dfs` configurations (restarts, activity, alternate, rest, bits0, nopb) | main | 378 | **263** (27 instances) | **378** |
+| fuzz lane, 600 models, seed 7, "every" | `dfs` (its six streams, `-f` among them) | main | 600 | | 0 disagreements |
+| tuning sample, 35 instances, 300 s | `dfs`, default `tiered` | fix | 35 | | 24 VERIFIED, none refused (11 not finished) |
+| 268 test models, "every" | `--cdcl`, `--chrono 0`, `--chrono 1`, `--restarts luby:1 --phase-saving`, `-f` | main | 1 340 | 294 | 1 308: **32 REJECTED** |
+| the same | the same, BAGUETTE_DEBUG | fix | 1 340 | 285 | **1 340**, 0 debug failures |
+| diff corpus, default `tiered` and "early" | `--cdcl`, `--chrono 0`, `--chrono 2`, `--restarts luby:1` | main | 216 | 165 | 160: **56 REJECTED** (12 under the default `tiered`) |
+| the same | the same | fix | 216 | 164 | **216** |
+| fuzz lane, 600 models, "every" | `BAGUETTE_CDCL=1` | main | 600 | | **11 PROOF-REJECTED** |
+| the same | the same | fix | 600 | | 0 disagreements |
+| costas14.b (D-0256's instance) | `--cdcl`, default `tiered` | main / fix | 1 / 1 | 7 396 / 7 395 evicted | REJECTED at 7 483 531 / **VERIFIED** (1.18 GB proof) |
+
+So `dfs` verified every one of its 1 450 proofs (578 of them with evictions, restarts and `-f`
+included) plus the fuzz lane's 600 models; `--cdcl` was refused on all three corpora before the fix and on none after it, `--chrono`
+and restarts included. `-f` and restarts re-enter levels in `dfs` (SPEC 3.4) without pushing anything
+from a learned constraint, so they do not change the argument.
+
+**Since when `--cdcl` was exposed.** The direct assertion is in the loop since its first commit
+(`e9108c1`, D-0219), and a gated instance is evictable since D-0139 (main `36c1312`), so `--cdcl` under
+`lbd`, `fifo` or `tiered` was exposed from D-0219 on. With the default retention since `d9e57e3`
+(D-0226 made `tiered` the default). `--cdcl` is opt-in; no default run was affected.
+
+### 3. The fix and its rule
+
+**Rule (I-X11): a learned constraint stays on the page while a line not yet written may rest on it.**
+Locks 1 and 2 are the two consumers retention can see; the third is declared by the search:
+
+- `Retention.hold t ~cid`: [reduce] never evicts a held id (it may have no gate and no citation, a
+  clause `Clause.of_lits` declined); counted in `n_locked`, and apart in `n_held_refused`;
+- `Retention.release_held t`: the holds end.
+
+The learning path holds the 1UIP clause when `cfg.cdcl`, after `add` and before its `reduce` (so the
+PB row's `reduce` of the same conflict cannot evict it either), and `cdcl`'s `conflict` releases right
+after `Trace.emit`: every line the trail owes is then on the page, the assertion's included, or the
+assertion was dropped by this conflict before the fixpoint (`expect := None`) and will never be
+written. Sound because a line already written needs nothing (VeriPB keeps a derived constraint
+whatever happens to its premises), which is the same argument lock 1 rests on.
+
+Why a hold and not a delayed `del` (the other option the request named): delaying every eviction's
+`del` to the next reduction would also have been sound, but it moves the `del` lines of every run that
+evicts, the default `dfs` included, so every diff-lane run that evicts would have changed bytes for a
+bug `dfs` does not have. The hold changes `--cdcl` runs only, keeps D-0226's engine eviction (the
+instance leaves the engine at the same reduction as before for every other constraint), and costs one
+list test per proposed victim. A MiniSat-style lock (the asserted entry carries the clause) would need
+the entry to name a constraint id, which `Store.entry` does not carry; the hold says the same thing
+from the side that knows it.
+
+With the hold, the clause's own instance stays in the engine and asserts the UIP at the next
+`propagate`, as it does whenever no eviction falls on it, so `assert_directly` is reached only for a
+clause with no instance (on gccvar_hole_dec_sat: 2 direct assertions on main, 0 with the fix).
+
+**Debug invariants (BAGUETTE_DEBUG=1).** `Retention.check_no_consumer` rechecks at every eviction,
+before its `del` is written, without the shortcuts `locked_instances` takes (its early exit, the
+`wanted` filter): no victim is held, and no evicted gated instance stamps an entry of the whole trail
+or is the last conflict. And the CDCL loop checks, at a direct assertion, that the clause it asserts
+from is still held. With the hold call removed, the second fires on gccvar_hole_dec_sat ("D-0257/I-X11:
+the CDCL loop asserts from a learned clause no longer held") at the fixpoint after the `del`, before
+any line rests on it; without BAGUETTE_DEBUG the same run is refused by the checker at line 142.
+
+### 4. What it costs
+
+**The default search: nothing.** `dfs` never holds, so its artefacts are byte-identical to main's
+(268 of 268 models, 347 of 347 diff-lane runs, 333 of 333 under `--debug`), and D-0226's measurement
+(tuning set 20 to 25 answers verified, median RSS of a timed-out run 1 215 to 724 MB) is untouched:
+the code path it measured is the one that runs. The one new cost on that path is a test `t.held <> []`
+per proposed victim, in a reduction that runs every few hundred learned constraints.
+
+**Re-measured on D-0226's tuning sample** anyway (35 instances: the 25 that D-0226's `keep_all` or
+`tiered` verified, and 10 of its time-outs; 300 s, `--max-heap-mb 8192`, `ulimit -v` 16 GiB, scope
+`MemoryMax=32G`, peak RSS by `/usr/bin/time`, every finished proof checked):
+
+| arm | finished | verified | refused | RSS MB median (finished runs) | RSS paired to its control |
+|---|---|---|---|---|---|
+| `dfs`, `keep_all` (fix binary) | 24 | 22 (2 checks timed out at 1 800 s) | 0 | 283 | |
+| `dfs`, `tiered` (fix binary) | 25 | **24** (1 check timed out) | 0 | 270 | 0.999 of `keep_all` (0.32 to 1.01) |
+| `--cdcl`, `tiered`, main | 24 | 20 | **4** | 267 | |
+| `--cdcl`, `tiered`, fix | 24 | **24** | 0 | 269 | 1.000 of main (0.99 to 1.03) |
+
+The killed runs wrote no RSS (`time -o` dies with them), so the RSS columns are over finished runs
+only, which is why their medians sit far below D-0226's time-out medians; the paired ratio is the
+comparison that means something here. `dfs`'s `tiered` still verifies more than `keep_all` (24 to
+22), D-0226's direction. Under `--cdcl` the fix turns the 4 refused proofs (2016 maximum-dag 31_02,
+2017 tc-graph-color k10_34, 2019 amaze 2012-03-19, 2025 EchoSched 12-12-0-1_7) into verified ones, at
+the same memory and the same wall time (median ratio 1.000 on the 24 finished runs). The search
+changes a little (26 of 35 runs end on the same conflict count) because a held clause stays in the
+engine one conflict longer and so asserts and propagates; `n_held_refused` counts those refusals.
+
+### 5. Tests
+
+- `test/unit/test_retention.ml`, `test_d0257_hold_mechanics`: under `lbd:0` (an empty database asked
+  at every reduction) a held clause survives two reductions, is evicted by the first after
+  `release_held`, and `hold` refuses an id the database does not hold; the page verifies.
+- `test_d0257_cdcl_assertion_survives`: gccvar_hole_dec_sat's scene through `Search.solve` with
+  `cdcl = true`, the model's annotated order and `tiered` reducing at every learned constraint; the
+  policy evicts, a hold refuses at least one eviction, the audit is clean, no id is deleted twice, and
+  VeriPB accepts the proof. **Break measured**: with the `hold` call removed the lane goes red, and
+  VeriPB refuses the proof at line 142, "not implied by reverse unit propagation".
+- No new model in `test/models/`: the model tests run the default search, which is not exposed, and a
+  model cannot carry `--cdcl` or a retention setting. The scene is the existing
+  `gccvar_hole_dec_sat.fzn`, verbatim in the test.
+
+### 6. Lanes
+
+Final binary: dev `e75fab1a` (commit `881263e`), release `ff0bf742`. The figures of section 2 for the
+fix were taken with `555506d6` and `bin-fix2` = `e75fab1a`; `555506d6` differs from it only by
+ocamlformat's layout and comments.
+
+| check | result |
+|---|---|
+| `scripts/check_fmt.sh`, `check_test_widths.py` | ok, ok |
+| `dune runtest --root . --force` (4 GB cap) | rc 0, 5 628 ok, 0 FAIL |
+| `scripts/run_model_tests.sh` | 268 passed, 0 failed |
+| `scripts/check_determinism.sh` | 268 models identical across two runs |
+| the 268 models, default flags, main against fix | stdout, `.opb`, `.pbp` and exit code identical on 268 of 268 |
+| `diff_lane.sh --tier all -j 8` | **347 of 347 equal the reference**: no re-record |
+| `diff_lane.sh --tier all --debug -j 8` | 333 of 333 equal |
+| `scaling_lane.sh -j 8` | ok, every line within its threshold |
+| `factor_lane.sh -j 8` (release) | **exit 0** (1 on main, this bug): 90 runs, 36 proofs VERIFIED, costas14 `--cdcl --proof` among them (10 594 nodes, as D-0256 recorded) |
+
+### 7. Reverting
+
+Revert `881263e` (retention's hold, the two calls in `search.ml`, the debug checks, the two tests and
+I-X11). `--cdcl` then deletes clauses it asserts from again; `BAGUETTE_RETENTION=off` avoids it
+without a rebuild. Nothing else depends on it.
+
+## D-0260  [AUTONOME] M22-review-bugs: a gcc cover that repeats a value got a rejected proof on the default configuration. No answer was wrong. The cover is now merged at the front end, the later counts tied by linear equalities in the model
+
+**Status**: DECIDED and implemented (agent-gccdup, `wave105-gccdup`, 2026-11-27), not merged. The fix is ONE commit,
+`9b5ef85`. Material: `/cluster/arthur/baguette-results/gccdup/` (the grid, the bisect, the scripts, `binaries.md5`).
+
+### 1. The finding
+
+The fuzz lane (D-0258, branch `wave104-fuzz`) shrank two models, `global_cardinality_low_up` through mznlib with the
+cover `[2,2,2]` over `[x0,x0,x0]` (UNSAT) and over `[x1,x0,x0,x0]` (SAT). Baguette's answers are right (Gecode
+agrees) and veripb 3.0.2 REJECTED both proofs on the default configuration, at a `rup` (line 80 of the UNSAT one,
+`rup ~x0_ge_2 x0_ge_3 X_INTRODUCED_22__ge_1`). Reproduced on main `a599c97` (binary `55028ee3`), in both encodings
+(`--bits-above none` and the default, a gcc scope stays order in both). Under `-f` both proofs verify on main, because the
+search never reaches the aliasing there, which is luck and not a guard. With the fix the twelve repeated-cover test
+models verify under `-f` too.
+
+### 2. No answer was wrong
+
+A grid of tiny cases compared baguette with a brute-force oracle and with Gecode 6.4.0 (`grid.py`). Six forms
+(fixed counts, variable counts, closed with variable and with fixed counts, low_up, low_up_closed), arrays of 1 to 4
+entries over 1 to 4 variables in 0..3 with repeats, covers of 1 to 5 values with repeats, bounds and count domains in
+0..3, repeated count variables too. Each case is solved in both encodings, a SAT answer is checked against the oracle,
+every proof goes to veripb.
+
+| run | cases | rows (x2 configs) | wrong status | bad solution | Gecode against the oracle | proof rejected |
+|---|---|---|---|---|---|---|
+| main, uniform | 3 000 | 6 000 | 0 | 0 | agrees | 0 |
+| main, dense repeats | 4 000 | 8 000 | 0 | 0 | agrees | 26 (13 cases) |
+| fix, uniform | 3 000 | 6 000 | 0 | 0 | agrees | 0 |
+| fix, dense repeats | 4 000 | 8 000 | 0 | 0 | agrees | 0 |
+
+The 13 rejected cases are all `global_cardinality_low_up` with a repeated cover value, in both encodings, eight UNSAT
+and five SAT. None was found for the closed forms or for fixed counts (section 4 says why fixed counts are safe and
+why the closed forms are exposed in principle).
+
+### 3. The mechanism
+
+`gcc.ml` keeps a memo of HIGH rows (`high_row_shared`, M7-T24) keyed on the cover VALUE, the count's upper bound and
+whether that bound is a root one. Rule (a) (a saturated value is removed from everyone else) walks every cover ENTRY.
+With two counts for one value at the same upper bound, the second count's pruning was handed the first count's memo
+entry, a deferred derivation over the FIRST count's row and ladder, while its reason named the SECOND count's bound.
+Where that bound was set by a decision and the first count's was not, the trace line is not RUP from what was derived,
+and veripb says so. Reduced by hand (`ingr.sh`):
+
+| ingredient | proof |
+|---|---|
+| repeated cover, distinct variables (`[x0,x1,x2]`, cover `[2,2,2]`) | REJECTED, sat and unsat |
+| distinct cover, repeated variable | verified |
+| both (the fuzz pair) | REJECTED |
+
+So the repeated cover is the cause and the repeated variable is not needed. Confirmed by keying the memo on the cover
+row instead of the value (a throwaway edit, not kept): all four rejected models then verify.
+
+### 4. Forms and encodings exposed
+
+Every form that hands a repeated cover with a VARIABLE count to the native propagator: low_up and low_up_closed (counts
+declared on the bounds), closed with variable counts, and before D-0247 (2026-11-27) the plain form with variable counts.
+Fixed counts are not exposed: a constant count's HIGH row is its model row and a root fact, so two constants with the
+same value derive the same fact from either row, and two different constants have different memo keys. Both encodings
+are exposed equally, because a gcc scope stays on the order encoding at every `--bits-above`.
+
+### 5. Since when
+
+- The memo keyed on the value: `c70852a` (M7-T24, 2026-10-02). Rule A, its only user then, reads one entry per value
+  (`cover_at`), so nothing aliased.
+- Rule (a), the first per-entry user: `ecae5c7` (2026-10-02, the bisect's first bad commit between `c70852a` and
+  `53e77ea`, `bisect-steps.txt`). On main since the merge `1e6363c` (wave39-gcc3, 2026-10-02). `a445bbb` (M7-T16) and
+  `c70852a` verify the distinct-variable pair.
+- The fuzz shape (a repeated variable as well) reached the propagator from `53e77ea` (D-0146, on main since `b13ce94`,
+  2026-11-19). Before it a repeated variable was refused.
+
+Every Challenge series since 2026-10-02 ran an exposed binary, and none was affected. Over the 205 series instances that
+call gcc (D-0247's re-flattening, `/scratch/arthur/gccvar/fzn-base/`), `scancover.py` finds 2 017 calls and no cover with
+a repeated value, which confirms agent-gccsum's sentence (D-0255) for the whole gcc census and not only its 98 instances.
+
+### 6. The fix and its rule
+
+Options considered:
+
+| option | consequence |
+|---|---|
+| key the memo and `cover_at` on the cover entry in `gcc.ml` | two lines, but every rule of a 1 500-line module would have to be re-read for other value-keyed assumptions, now and after every change |
+| normalise at the front end (chosen) | gcc.ml never sees a repeated cover, the same trade D-0146 made for a repeated variable |
+| refuse the shape | a valid MiniZinc model refused |
+
+The rule (header of `merge_gcc_cover_repeats` in `lib/flatzinc/builder.ml`). For i < j with `cover[i] = cover[j]`, the
+constraint is equivalent to itself without position j plus `counts[j] = counts[i]`, because both sides say counts[j] is
+the number of x equal to that value. So the first occurrence of each value is kept and every later count is tied to the
+first one's count by an `int_lin_eq` (no variable added, so solutions print unchanged). The tie is a model constraint, so
+its rows are in the .opb and every proof step that uses it cites a row the checker has. The tie by kind: the same
+variable twice, nothing. Var and var, `a - b = 0`. Var and constant, `a = k`. Equal constants, nothing. Different
+constants, the false row `0 = k' - k` (UNSAT at the root, as the original). It is an `Int_lin_eq` with `c_id = ""`, not an
+`Int_eq`, because compile.ml's `--e2e` path reads an `Int_eq (Var, Var)` with an empty `c_id` as a gcc COPY. Under
+`--e2e` a tie is therefore refused ("a constraint no FlatZinc item states"). `Builder.normalise_gcc` composes it with
+`split_gcc_repeats` and both front ends call it (`builder.ml`'s `finish`, `lib/scp/reader.ml`). `post_global_cardinality`
+refuses a repeated cover value that reaches it anyway, and `gcc.ml`'s header states the two preconditions. No new
+`Explanation.t` constructor, no gcc rule changed.
+
+Cost. The ties are `Lin_eq`, bounds consistent, and gcc pushes only bounds on counts, so no propagation is lost. A model
+with no repeated cover value is returned physically unchanged.
+
+### 7. Tests (commit `628c91b`)
+
+- `test/models/gcc_lu_dupcover_repeatvar_{sat,unsat}.fzn`, the fuzz pair; `gcc_dupcover_distinctvars_{sat,unsat}.fzn`,
+  the one-ingredient pair. All four rejected on main, verified with the fix.
+- `mznlib/test/gcc_dupcover_{low_up,fixed,closed}_src_{sat,unsat}.mzn` and their flattened artefacts in `test/models/`,
+  expected outputs checked against Gecode. The two low_up ones are grid cases 1823 and 2143 and were rejected on main.
+  The fixed and closed ones pin the tie kinds (equal constants, different constants, var and constant, var and var).
+- `test_compile.ml` (`test_gcc_cover_repeats`): the tie table row by row, the unchanged model, and compile.ml's guard.
+- `test_endtoend.ml` (`test_gcc_cover_ties_are_load_bearing`), the load-bearing check on a SATISFIABLE model. Each tie
+  row of the .opb is weakened to a tautology in turn (label kept) and the unchanged proof re-checked. At least one must be
+  judged with the RUP wording. Measured with the CLI, 4 of the 8 tie rows of that scene are load-bearing, and 5 of 8 on
+  `gcc_dupcover_low_up_src_sat` (`loadbearing.sh`).
+
+### 8. Verification (binary `5b04070c`, fataepyc-06)
+
+| check | verdict |
+|---|---|
+| `scripts/check_fmt.sh`, `scripts/check_test_widths.py` | clean |
+| `dune runtest --root . --force` (ulimit -v 4000000) | 5 628 ok, 0 FAIL |
+| `scripts/run_model_tests.sh` | 281 models passed (271 + the 10 new), proofs verified, order encoding too |
+| `scripts/check_determinism.sh` | 281 models identical across two runs |
+| `mznlib/test/check_mznlib.sh` (MiniZinc 2.10.1) | 86 ok, 0 failed |
+| every pre-existing test model, main `55028ee3` against `5b04070c` | 269 of 271 byte-identical (stdout, .opb, .pbp); the two D-0255 `gcc_low_up_closed_dupcover_src_*` change, as they must (their cover repeats a value), same output, proofs verified |
+| `scripts/diff_lane.sh --tier all -j 8` | 347 of 347 equal the reference |
+| the same with `--debug` | 333 of 333 equal |
+| `scripts/scaling_lane.sh -j 8` | ok, every line within its threshold |
+
+### 9. Revert
+
+`git revert 9b5ef85` restores the rejected proofs and leaves the tests failing, which is the point of them. Reverting
+`628c91b` as well removes the tests.
+
+## D-0258  [AUTONOME] M22-review-T7, the fuzz lane's additions: six new streams (globals, search configurations, `-i`, cut runs, end-to-end, wide domains), each with its acceptance test; on main they find a REJECTED proof of `global_cardinality_low_up` on the DEFAULT configuration, `--e2e` and bridge defects on `maximum`/`minimum` and on a gcc over a repeated variable, and wide domains that leave the memory cap or the time limit
+
+**Status**: DONE on `wave104-fuzz` (agent-fuzz, 2026-11-27), not merged. Base: main `c9b1b70`. No change
+under `lib/`, `bin/` or `mznlib/`. Binary under test: `dune build --root . bin/` of that source, md5
+`55028ee3`; the D-0257 reference is `origin/wave103-retbug` (`881263e`), md5 `e75fab1a`. Runs in
+`/scratch/arthur/fuzz-runs/` (`acc1`, `main2`, `full1`).
+
+### 1. What was built
+
+`tools/fuzz/streams.py` (six streams, each a function of its seed), wired into
+`scripts/fuzz_lane.sh` beside the six of 2026-11-23 (`--streams` selects, `--mznlib` flattens with
+another mznlib/), and two helpers: `tools/fuzz/triage.py` (re-judge kept cases under another binary)
+and `tools/fuzz/shrink_mzn.py` (delete constraints while a verdict, or an end-to-end failure text,
+holds). `bench/fuzz/README.md` describes every stream, its acceptance test and the exit statuses;
+`bench/fuzz/found/` keeps every new disagreement as a `.fzn` with a one-line header.
+
+Choices made without the user:
+
+- **Baguette runs on the `.fzn`, flattened once per model** (`minizinc -c` with baguette's mznlib), not
+  through MiniZinc: the `configs` stream runs 18 configurations of one model, and one flattening is
+  what makes 2 000 models of it cost 20 minutes. Its output goes through the `.ozn` (solns2out),
+  because a variable MiniZinc fixes is not in the `.fzn` output: the first version read the raw
+  `.fzn` output and reported 13 false OBJ-MISMATCHes in the acceptance run (the objective was fixed).
+- **The proof's conclusion is checked against the answer** (PROOF-CONCLUSION): `s VERIFIED
+  UNSATISFIABLE` for UNSAT, `SATISFIABLE` for a solution, `NO CONCLUSION` for a cut satisfaction run,
+  and `BOUNDS lo <= .. <= hi` with lo = hi = the optimum (negated for `maximize`) for OPT, hi = the
+  last printed objective and lo below Gecode's optimum for a cut optimisation run. The 2026-11-23
+  streams only looked for `VERIFIED`.
+- **No tie-break by a third solver.** On a STATUS- or OBJ-MISMATCH the note records Chuffed's and
+  CP-SAT's answers, for the triage only. Measured: on the acceptance models of section 2 Chuffed
+  answers the same wrong UNSAT as mznlib before D-0255 (it uses std's repeated-cover row), so a
+  majority vote would have hidden the defect the stream exists to find.
+- **Two shapes on which Gecode is the outlier are not generated**: `circuit` over one node (std's
+  decomposition and Chuffed: false since `x[1] != 1`; Gecode: true; baguette follows std), and a
+  `cumulative` task of duration 0 whose resource exceeds the capacity (Gecode 6.4.0: UNSAT; Chuffed,
+  CP-SAT, HiGHS: SAT; baguette: SAT). The capacity is drawn at least as large as every task's
+  largest resource. Both were found by the stream itself (seed 2 model 17, and seed 1705 model 163).
+- **The forced eviction is D-0257's knob, not a new one**: `BAGUETTE_RETENTION=tiered:core=0,mid=0,
+  first=1,inc=0,mid_every=1` ("an eviction at every learned constraint", the parameters of D-0257's
+  unit test), plus `fifo:1` and `lbd:1`. No solver code was copied.
+- **The `wide` stream runs `--time-limit 10`** under a 30 s outer timeout and does not check proofs:
+  the row asks for a front-end stream. Exit 3, 5, or 2 with a positioned diagnostic (a literal past
+  2^62, "does not fit in an OCaml int") are refusals; `Fatal error: allocation failure` or
+  `Out_of_memory` is MEMCAP; an outer timeout goes to `slow/`.
+- **Generator bias toward satisfiable models**: values of tables, element arrays, covers and counts
+  are drawn from a witness assignment most of the time, so that about half the `globals` models are
+  satisfiable (1 028 UNSAT of 1 969 in `main2`); a `rup` over a contradictory database proves little
+  (D-0066), so an UNSAT-heavy stream is weak evidence.
+
+### 2. The acceptance tests
+
+| Stream | Test | Result |
+|---|---|---|
+| `globals` | flattened with the mznlib of `99d0e39~1` (before D-0255), 2 000 models (`fuzz_lane.sh --streams globals --mznlib <old> --seed 1 -n 2000`, 164 s at -j 16) | FOUND: 11 wrong UNSAT, all `global_cardinality` (variable counts, `_closed`, `low_up_closed`) with a repeated cover value; the first by model index is model 54 of seed 1703 (`global_cardinality([x3], [3,0,0], [c1,x2,x1])`), the first chunk's at model 189 of seed 1700. All 11 answer right with current mznlib (`triage.py`) |
+| `configs` | on main `c9b1b70`, before D-0257 | FOUND at the first model: `streams.py configs OUT 1 1`, model 0 of seed 1 (a 6-variable integer optimisation), REJECTED under `cdcl-ret-evict`, `cdcl-ret-fifo1` and `cdcl-ret-lbd1` at line 800; VERIFIED (`BOUNDS 2 <= obj <= 2`) by the `wave103-retbug` build |
+| `incr`, `limit`, `e2e`, `wide` | no known defect of their kind to rediscover | not applicable; each found something or ran clean (section 3) |
+
+### 3. The run on main (`main2`, seed 2, 2 000 models per stream, -j 16)
+
+| Stream | Models | Result |
+|---|---|---|
+| `globals` | 2 000 (31 not flattenable by MiniZinc, both sides) | 0 disagreements; 1 028 UNSAT, 559 SAT, 382 OPT |
+| `configs` | 2 000 x 18 configurations (5 not flattenable) | 499 REJECTED proofs kept, on 423 models. 482 on 422 models are `--cdcl` with an early eviction (422 `cdcl-ret-lbd1`, 35 `-evict`, 25 `-fifo1`): every one VERIFIED by the `wave103-retbug` build, so D-0257's defect. The other 17 are one model, seed 2802 model 122, under 17 configurations including `default`: the ALARM of section 4. No CONFIG-MISMATCH, no wrong answer |
+| `incr` | 2 000 optimisation models, plain and `-i` | 0 disagreements (11 not flattenable) |
+| `limit` | 2 000 models, 2 cut runs each | 0 disagreements: 1 554 runs stopped by the limit, 2 436 finished; every stopped run printed no `==========`/UNSAT, its solutions held, VeriPB's NO CONCLUSION or BOUNDS contained Gecode's optimum |
+| `e2e` | 2 000 models, bridged and `--e2e` | 1 936 bridged and 1 955 solver-path VERIFIED, agreeing with Gecode; 36/43 SKIPPED; 30 FAIL on 30 models (section 4) |
+| `wide` | 2 000 models (285 MiniZinc cannot flatten, 1 flattening past 60 s) | no wrong answer: 1 111 answered and agreed with Gecode where Gecode answers (its literals stop at 2^31); 230 refused cleanly (130 exit 3 "the encoding must compute inside the representable range", 12 exit 5, 88 exit 2 "integer literal ... does not fit in an OCaml int"); **109 MEMCAP** (`Fatal error: allocation failure` at 4 GB: 57 with `int_times` only, 7 with `all_different` only, 45 with both) and **264 runs past `--time-limit 10` and the 30 s timeout** (216 of them with an `all_different`). Section 4 |
+
+### 4. The disagreements, classified
+
+| Class | Where | Kept as | What |
+|---|---|---|---|
+| **Rejected proof, DEFAULT configuration (new, alarm)** | `configs` seed 2802 model 122, all 17 configurations but one | `found/gcc_lu_dupcover_repeatvar_{unsat,sat}.fzn` | `var 0..3: x0; global_cardinality([x0,x0,x0], [2,2,2], [1,0,0], [2,1,1])`: UNSAT, right, but VeriPB refuses line 80 (`rup ~x0_ge_2 x0_ge_3 X_INTRODUCED_22__ge_1`); the SAT twin (`x1` added) is refused at line 202. Fails on main and on `wave103-retbug`. Dispatched: agent-gccdup, D-0260 |
+| Rejected proof, `--cdcl` with an early eviction (known) | `configs`, 482 cases | not kept (D-0257's) | D-0257's defect; all VERIFIED by its build |
+| Rejected proof, `--e2e` (new, opt-in) | `e2e` seed 3103 model 124, seed 3102 model 191, and `full1` seed 4100 model 8 | `found/e2e_solver_max_const_{first,last}_sat.fzn`, `found/e2e_solver_alldiff_negconst_sat.fzn` | `array_int_maximum(x0, [1, x2])`, `x0` in 1..2, `x2` in -1..1: the solver-written prefix is refused against cake's `.opb` ("Checking error", line 48); with `[x2, 1]` the `.pbp` does not even parse. `x2` in 0..1 verifies; plain `--proof` and the bridged path VERIFY. A signed member of a `maximum` (model 191 is `maximum(x3, [x0, x1])` with `x0` declared -1..2). And `all_different_int([x1,-1,4,x5])` (`x1` in 1..4, `x5` in 1..3) is refused at line 90, where `[x1,4,-1,x5]`, `[x1,0,4,x5]` and `[x1,-1,x5]` verify: an order-dependent handling of constant members. Owner: `lib/proof/e2e.ml` |
+| Bridge defect (new, tooling) | `e2e`, 20 bridged FAILs | `found/e2e_bridge_gcc_repeat_var_sat.fzn`, `found/e2e_bridge_gcc_empty_cover_repeat_var_sat.fzn` | a `global_cardinality` over an array that repeats a variable (also with an EMPTY cover, which MiniZinc flattens to one): `tools/e2e/bridge.py` cites `@L[X_INTRODUCED_gcc_copy_0_ge_k]`, a label it never assigned, and VeriPB refuses to parse the bridged `.pbp`. The `--e2e` path VERIFIES. Every one of the 20 has a gcc over a repeated variable (checked on all 20 by their constraints, shrunk on four) |
+| Bridge defect (new, tooling) | `e2e`, 4 bridged FAILs | `found/e2e_bridge_max_negconst_sat.fzn`, `found/e2e_bridge_min_signed_sat.fzn` | `array_int_maximum` over an array with a fixed negative member, `array_int_minimum` with a constant 0 and signed members: the bridged `.pbp` is refused ("Checking error"); the `--e2e` path and plain `--proof` VERIFY |
+| Bridge coverage gap (tooling) | `e2e`, 4 bridged FAILs | not kept | "cake's objective is not one variable's bit sum": `bridge.py` refuses an objective it does not cover, and chain.sh reports FAIL where SKIPPED would be the honest word |
+| Memory cap, default configuration (new, front end) | `wide`, 109 of 2 000 | `found/wide_alldiff_memcap.fzn` | `all_different` over two variables of width 2^21 and 2^24: `Fatal error: allocation failure during minor GC` at 4 GB after 47 s, the runtime's abort and not exit 5, because the heap budget (M7-T8, D-0071) is off by default; `--max-heap-mb 3000` gives exit 5 |
+| Time limit overrun, default configuration (new, front end) | `wide`, 264 of 2 000 | `found/wide_times_timelimit_overrun.fzn` | `int_times` over the same two variables: `--time-limit 10` is not honoured, no output at 100 s wall; `--max-heap-mb 3000` ends it with exit 5 at 94 s. The encoding phase does not look at the clock |
+| Gecode outliers (reference) | `globals` | not kept; generator changed (section 1) | one-node `circuit`, zero-duration `cumulative` task over capacity |
+| Fuzzer's own bug, fixed | `acc1` | not kept | 13 OBJ-MISMATCHes from reading the raw `.fzn` output (section 1); exit 2 with a positioned diagnostic first classed CRASH (88 wide cases in `main2`, all "does not fit in an OCaml int"); a MiniZinc flattening past 60 s first classed FLATTEN-ERROR (1); a run killed by the timeout or the cap left its `p.opb.rows` behind (5 GB each on four wide chunks), now removed after every run |
+
+Not a disagreement, but stated: the `configs` stream says nothing about the default search's
+retention beyond its 2 000 models (every non-`--cdcl` eviction configuration VERIFIED except on the
+gcc model), and the e2e stream's models are those `fzn2scp.py` covers.
+
+### 5. The default-size lane
+
+`scripts/fuzz_lane.sh -j 16 -n 100 --seed 3` (all twelve streams; 13 models per chunk, so 104 per stream, 1 248 models) took **238 s** at -j 16, beside `main2` at load 40 to 50, and exits 1: 34 disagreements kept, 14 timeouts. 27 are D-0257's (`--cdcl` with an early eviction; all VERIFIED by its build), 5 MEMCAP and the 14 timeouts are `wide`'s, one is the bridge's gcc-over-a-repeated-variable defect, and one is NEW: `--e2e` on `all_different_int([x1,-1,4,x5])` (section 4). The six 2026-11-23 streams ran clean. The `main2` run of the six new streams at 2 000 models each took 3 045 s (51 min), most of it the `wide` stream's timeouts and memory exhaustions.
+
+### 6. What is not built
+
+Nothing of the row is left unbuilt. Limits, stated: the `-i` stream checks optimisation models only
+(`-a`/`-n` on satisfaction models are refused by design, D-0150); the `wide` stream does not check
+proofs (the row asks for a front-end stream) and compares answers only when Gecode, whose literals stop
+at 2^31, answers; the `e2e` stream compares the chain's verdict with Gecode, and does not re-run its
+controls (`scripts/e2e_lane.sh` does). A stream is a function of the seed, the binary and mznlib, but
+the `limit` stream's `-t` runs depend on the wall clock (its `BAGUETTE_NODE_LIMIT` runs do not).
+
+### 7. Reverting
+
+Drop `tools/fuzz/streams.py`, `triage.py`, `shrink_mzn.py`, `bench/fuzz/found/`, and restore
+`scripts/fuzz_lane.sh`, `bench/fuzz/README.md` and the `scripts/README.md` row from `c9b1b70`. The
+2026-11-23 streams keep their seeds (the stream index still counts them first).

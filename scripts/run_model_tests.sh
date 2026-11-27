@@ -2,6 +2,14 @@
 # Solve every model in test/models/, compare stdout against test/expected/,
 # and verify the emitted proof with veripb.
 #
+#   scripts/run_model_tests.sh          (no arguments; `make models` runs it)
+#
+# The solver is $BAGUETTE, default _build/default/bin/main.exe, and this script does NOT
+# build it: run `dune build --root . bin/` first or it tests the binary you had. Each
+# model prints one PASS/FAIL/XFAIL line and the run ends on a summary line. Exit 0 when
+# nothing failed and no model listed in test/models/PENDING unexpectedly passed; 1
+# otherwise; 2 when the solver is not built or no checker is found.
+#
 # A model that produces the right answer with a proof veripb rejects is a FAILURE.
 #
 # M9-no-proof-T2 (D-0126): and then solve it AGAIN under `--no-proof`, and require stdout

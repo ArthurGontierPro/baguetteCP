@@ -10,7 +10,7 @@ how to run them, gate a merge with them and re-record them.
 |---|---|
 | The laptop (WSL2, 15 GB shared by every session) | Building and typechecking only: `dune build --build-dir=<scratch> lib/ bin/ test/ @fmt`. Flattening a model with MiniZinc is fine. The user forbids running tests, models, benchmarks or the solver there (2026-10-23: "trop nul et imprévisible", and CLAUDE.md's 14.9 GB RSS incident). |
 | `fataepyc-06` (192 cores, 2 TB, shared) | Every run: suites, lanes, gates, measurements, Challenge series. |
-| `fataepyc-07` | The user's other experiments (codes-cp, graph solvers, re-verifications). **Never run baguette there.** Reading its files is fine when the user asks. |
+| `fataepyc-07` | The user's other experiments (codes-cp, graph solvers, re-verifications), which are untouchable. Baguette campaigns may run there only while it is idle, launched over `ssh` from `fataepyc-06` after checking `uptime` and `ps -u arthur` (the user, 2026-11-23); stop launching as soon as another experiment starts. `/scratch` is local to each node. |
 
 On `fataepyc-06`:
 
@@ -132,8 +132,11 @@ Launch it detached (section 3) and poll `gateNN.status`.
 | `compare_run.sh`, `corpus_run.sh` | baguette against Chuffed and GCS, and corpus walks; both pass `--proof` (`bench/challenge/README.md`) |
 | `check_fmt.sh`, `check_test_widths.py`, `check_determinism.sh`, `check_unlimited.sh` | The static checks of `make check` |
 | `compare_selftest.sh`, `corpus_selftest.sh` | Self-tests of the two harnesses |
-| `shrink.sh` | Shrinks a failing model |
-| `fuzz_lane.sh` | The differential fuzz (M22-review-T7): random small models, baguette against Gecode through MiniZinc, every proof checked and every solution re-checked. Not a gate: a disagreement becomes a model in `test/models/`. `scripts/fuzz_lane.sh -j 16 -n 100 /scratch/arthur/<run>` on a node |
+| `shrink.sh` | Solves one model and says whether its proof is rejected, with the checker's last lines. Its propagator-by-propagator mode needed a `--disable-propagator` flag the solver never had and was removed (D-0254) |
+| `run_scp_tests.sh` | The `.scp` models of `test/scp/` against `test/scp/expected/`, every proof checked (`make scp`, part of `make test`) |
+| `factor_lane.sh` | The per-node factor (`make factor`, section 11): instructions per node against Gecode, four configurations, every proof checked. Information, not a gate |
+| `e2e_lane.sh`, `sym_lane.sh` | The end-to-end and symmetry lanes, sections 9 and 10. Node only, not in `make check` |
+| `fuzz_lane.sh` | The differential fuzz (M22-review-T7, D-0258): twelve streams of random small models, baguette against Gecode, every proof checked (and its conclusion compared with the answer), every solution re-checked; the six of D-0258 add the globals, 18 search configurations (`--cdcl`, `--chrono`, `-f`, the opt-in knobs, retention forced to evict), `-i`, cut runs, the end-to-end chain and domains wider than 2^20. Not a gate: a disagreement is kept as `bench/fuzz/found/<name>.fzn` and filed (`bench/fuzz/README.md`). `scripts/fuzz_lane.sh -j 16 -n 100 /scratch/arthur/<run>` on a node; `--streams` picks some, `tools/fuzz/triage.py` re-judges kept cases under another binary |
 | `bootstrap.sh` | Installs the toolchain on a fresh machine; safe to re-run |
 
 ## 8. The release binary (M11-complexity-T16, D-0171)
@@ -238,3 +241,26 @@ seconds; QR48 (`--big`) about five minutes, most of it the run without breaking 
 Nothing in `tools/symmetry/` is trusted: a wrong generator, orbit or witness is a line veripb
 refuses. Only 0/1 variables are broken on (the cut has to be a FlatZinc constraint without new
 variables), and optimisation models are refused (M15-symmetry-T4).
+
+## 11. The per-node factor lane (M17-bench-series-T6, D-0256)
+
+`make factor ARGS="-j 8 /scratch/arthur/<run>"`, or `scripts/factor_lane.sh [-j N] [--bin PATH]
+[--record] [--only ID,...] [OUTDIR]`. Node only (perf, the MiniZinc bundle's `fzn-gecode` and
+`fzn-chuffed`), not in `check`, and NOT A GATE: a factor that moves never fails it; a crashed run or
+a proof the checker does not verify does (rc 1). It measures the release binary, as D-0207 did.
+
+For each instance of `bench/factor/plan.tsv` (D-0207's five families on its own files, plus a
+planted 3-SAT family), baguette's user instructions per node in four configurations (default and
+`--cdcl`, each with and without proof) and the reference's (Gecode, or Chuffed `--lazy off` where
+that is the same tree), each from a run at the plan's budget minus a run stopped at one node. The
+unit is the node when both trees are the same (nodes and failures within 2 %), else the failure.
+The factor is baguette over the reference, with a geometric mean per family. Output in OUTDIR:
+`factor.tsv`, `factor.txt` (also printed), with the comparison against `bench/factor/reference.tsv`
+and a ready `bench/series/HISTORY.md` row; the proofs are checked and deleted as they come.
+
+Run it at each Challenge series and add its row to HISTORY's per-node factor table. Re-record the
+reference (`--record`) after a merge that moves the factor on purpose, in its own commit. Every run
+is under `systemd-run --user --scope -p MemoryMax=32G`, `ulimit -v` and a timeout, with its PID in
+`OUTDIR/runs/<run>/pid` while it runs and the lane's in `OUTDIR/lane.pid`. Instructions are
+load-independent (two runs at loads 43 and 10 differed by at most 0.02 % per run, D-0256), so it
+runs on a loaded node. It takes 6.5 to 8 minutes at -j 8 and peaks at 4.3 GB (the checker on jr63).

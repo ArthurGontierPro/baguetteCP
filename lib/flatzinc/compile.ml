@@ -6,6 +6,15 @@
    test/unit/test_endtoend.ml does by hand over its own miniature model type; that file
    is the worked example this one follows.
 
+   The file reads top to bottom in the order [compile] runs. Term handling and source
+   positions; the rejections, each one a message a person holding a .fzn reads; the
+   declaration helpers (a domain's hull and its holes, the name-collision check); the
+   [pack_*] functions, which close a propagator over the id the engine will know it by;
+   [held_families], which decides which variables must stay on the order encoding;
+   [e2e_spec] for `--e2e`; and [compile] itself, which declares every variable, writes
+   the objective line, posts each constraint through one [post_*] function per family,
+   and adds one instance per declared hole.
+
    ---------------------------------------------------------------------------
    Variable identity is load-bearing. Do not reorder anything here.
    ---------------------------------------------------------------------------
@@ -20,19 +29,20 @@
    The CLI depends on that identity and cannot detect its violation. It turns a
    [Search.assignment] -- a [(Var.t * int) list] -- back into an [int array] indexed by
    *model* variable index, and hands that array both to the independent re-check of
-   invariant I-S1 and to the FlatZinc output printer. If the two numberings disagree,
-   the re-check validates a permuted assignment (which for a symmetric-looking model can
+   invariant I-S1 (every printed solution satisfies every constraint, re-checked against
+   the model) and to the FlatZinc output printer. If the two numberings disagree, the
+   re-check validates a permuted assignment (which for a symmetric-looking model can
    easily still satisfy every constraint) and the solver prints a wrong answer with a
    proof the checker accepts. There is no test that catches a permutation after the
    fact; the only defence is that the array is built here, once, by a plain
    [Array.map] over [m.vars], and that nothing filters, sorts or deduplicates it.
 
    The same order is used for [Encoding.declare_int], so the .opb's variable names line
-   up with the store's too -- and D-0010 records why those two must agree beyond mere
-   tidiness: a propagator's explanation states a bound relative to the variable's
-   *declared* bound, which it reads from the store, while the model row's constant comes
-   from the encoding's declared bound. A mismatch there produces a proof that justifies
-   a different constraint from the one the solver propagated.
+   up with the store's too. That agreement is more than tidiness. A bound fact is a
+   chain of order literals counted from the variable's declared bound (D-0010), and a
+   propagator's explanation reads that declared bound from the store while the model
+   row's constant comes from the encoding's declared bound. A mismatch there produces a
+   proof that justifies a different constraint from the one the solver propagated.
 
    ---------------------------------------------------------------------------
    One propagator instance per model row (D-0011)
@@ -42,8 +52,9 @@
    falls back to the ambient row, which carries no payload and therefore cannot
    say *which* row it meant; D-0011 records why no routing scheme downstream can
    recover it (the trail stores [{ var; old; why }] and no propagator identity), and
-   D-0015 records that test_endtoend.ml shipped exactly that bug by computing the ids
-   and then discarding them. So:
+   D-0015, the record that gave an explanation a named row of its own, records that
+   test_endtoend.ml shipped exactly that bug by computing the ids and then discarding
+   them. So:
 
    - [Int_lin_le] is one row and one [Linear.t].
    - [Int_lin_eq] is *two* rows -- the `<=` row and the `>=` row, the latter posted from
@@ -53,13 +64,15 @@
      expansion these rows need.
    - [Int_lin_ne] is *two* rows and *one* instance -- the one asymmetric shape here,
      and deliberately so. The rows are [Encoding.add_int_lin_ne]'s A/B pair over a
-     shared auxiliary Boolean, because a disequality is not a single PB inequality; the
-     single [Ne.t] cites *neither* of them, and the pair of ids is dropped rather than
-     stored. lib/core/prop/ne.ml's header is the argument: every explanation that
-     propagator builds is a [Clause] stating its own content in full, so it never names
-     a row, and D-0011's hazard -- the ambient row, meaning "whatever
-     ctx.model_id points at" -- cannot arise. Handing [Ne.make] a row id it does not
-     use would be worse than dropping one: it would imply a citation that never happens.
+     shared auxiliary Boolean, because a disequality is not a single PB inequality.
+     Over a scope with no bits variable the single [Ne.t] cites *neither* of them, and
+     the pair of ids is dropped rather than stored. lib/core/prop/ne.ml's header is the
+     argument: every explanation that propagator builds is a [Clause] stating its own
+     content in full, so it never names a row, and D-0011's hazard -- the ambient row,
+     meaning "whatever ctx.model_id points at" -- cannot arise. Handing [Ne.make] a row
+     id it does not use would be worse than dropping one: it would imply a citation
+     that never happens. Over a scope with a bits variable the instance does derive its
+     prunings through the pair, so it is given both ids ([post_ne], D-0134 section 6).
    - [Int_le] / [Int_lt] / [Int_eq] are the same shapes over `a - b`, and [Int_ne] is
      the [Int_lin_ne] shape over `a - b`, packed under [Ne.Int_ne] rather than [Ne] so
      the instance reports the builtin the model actually wrote.
@@ -73,8 +86,9 @@
    [normalise_terms], whose single result feeds both [Encoding.add_int_lin_le] (the row
    in the .opb) and [Linear.make] (the propagator). Normalising twice, or normalising
    one side only, is how the row and the propagator come to state different constraints;
-   veripb would then accept a proof of something the solver never did, which is the
-   failure mode D-0009 records.
+   veripb would then accept a proof of something the solver never did. That is the
+   failure mode D-0009 records, where every line was accepted and the derivation still
+   justified nothing, because it only restated a model row.
 
    ---------------------------------------------------------------------------
    Nothing is silently ignored (SPEC 2.1, normative)
@@ -88,16 +102,18 @@
    variable they mention and fall back to [Pos.unknown] when they mention none.
 
    ---------------------------------------------------------------------------
-   The arithmetic cap (roadmap M1-T23)
+   The arithmetic cap: no accepted model can overflow (roadmap M1-T23)
    ---------------------------------------------------------------------------
 
    This file is where the checked arithmetic in lib/core/prop/ stops being a runtime
    tripwire and becomes a property of every model the CLI accepts. Two checks, on the
-   two things that multiply:
+   two things that multiply, both made in [compile]:
 
-     [check_declared_bound]  every declared bound satisfies |bound| <= Checked.limit
-     [check_row]             every posted row satisfies
-                               |rhs| + sum_i |a_i| * max(|lo_i|, |hi_i|) <= Checked.limit
+     declared bounds   every declared bound satisfies |bound| <= Checked.limit
+                       ([Checked.bound_fits]; refused by [reject_declared_bound])
+     [check_row]       every posted row satisfies
+                         |rhs| + sum_i |a_i| * max(|lo_i|, |hi_i|) <= Checked.limit
+                       ([Checked.row_fits]; refused by [reject_row])
 
    Neither implies the other. A huge coefficient over a two-value domain overflows
    with no large bound anywhere; and a variable that appears in no constraint at all
@@ -111,30 +127,39 @@
    thirteen orders of magnitude above the width at which D-0028's measured cost (a
    justification is Theta(declared width) per other term per pruning: 29.8 MB in one
    `pol` line at w = 10^6) becomes unusable. The two caps have different
-   justifications and different right answers, and D-0029 point 3 keeps them apart
-   deliberately. The declared-bound check below exists because a bound is one of the
-   two things that multiply, and for no other reason.
+   justifications and different right answers: the overflow cap is a soundness
+   requirement, the width cap a decision about what proof size is worth producing, and
+   D-0029 point 3 keeps them apart deliberately. The declared-bound check exists
+   because a bound is one of the two things that multiply, and for no other reason.
 
-   The checks run *before* the row is posted, which is the whole point. The gap
-   M1-T23 closed was not that a propagator pruned wrongly -- it was that
-   [Encoding.linear_terms_int_lin_le] folds the constant sum_i a_i * lo_i with the
-   same wrapping arithmetic the propagator's slack uses, so the .opb row and the
-   solver agreed on a model that was not the one in the .fzn, and veripb had nothing
-   to disagree with. lib/proof/ cannot defend itself against that (a row has to be
+   The checks run *before* the row is posted, because nothing downstream can catch a
+   wrapped row. [Encoding.linear_terms_int_lin_le] folds the constant sum_i a_i * lo_i
+   with the same wrapping arithmetic the propagator's slack uses, so the .opb row and
+   the solver would agree on a model that is not the one in the .fzn, and veripb would
+   have nothing to disagree with; that was the gap M1-T23 closed, and no propagator
+   pruned wrongly in it. lib/proof/ cannot defend itself against that (a row has to be
    written; there is no "decline" for an artefact). Refusing the model here is what
    defends it, and refusing it *here* rather than at the first propagation is what
    keeps [Checked.Overflow] off the search path entirely.
 
    ---------------------------------------------------------------------------
-   The width cap (roadmap M1-T54, decided in D-0041; SPEC 3.1 is normative)
+   The width cap, off by default (roadmap M1-T54, decided in D-0041)
    ---------------------------------------------------------------------------
 
-   The separate decision D-0028 point 3 asked for, and the one the section above is
-   careful not to be. A third check, on the thing that is *expanded* rather than the
-   two things that multiply:
+   A third check, on the thing that is *expanded* rather than the two things that
+   multiply: a declared domain on the order encoding is refused when its width is not
+   representable or exceeds the width limit the user asked for. D-0041 made this a
+   refusal because a proof nobody can store is not an answer; D-0028 point 3 had asked
+   for it as a decision separate from the overflow cap above. SPEC 3.1 is normative.
 
-     [reject_declared_width]  every declared domain satisfies
-                                hi - lo <= Encoding.max_order_width
+     [reject_declared_width]  every order-encoded declared domain satisfies
+                                not (Encoding.order_width_exceeds ~lo ~hi)
+
+   Since M7-T1 no width limit is in force by default (D-0065 turned the hardware limits
+   into options that default off): [Encoding.order_width_limit] is [None] unless
+   `--max-order-width` or BAGUETTE_MAX_ORDER_WIDTH sets it, and a requested limit
+   defaults to [Encoding.max_order_width]. A width that is not even an int is refused
+   unconditionally. A variable on the bits encoding has no ladder and is not checked.
 
    The cap and its derivation live in lib/proof/encoding.ml, beside the ladder they
    bound, and are NAMED from here rather than restated. What this file adds is the
@@ -142,7 +167,9 @@
    user-facing refusal is here -- exit 3, like every other rejection in this file --
    and [Encoding.Width_too_large] is the backstop for a caller that does not come
    through this door: a second front end, or a test. That is the two-layer shape of
-   M1-T32 / I-X8, and it is here for the same reason.
+   M1-T32 / I-X8 (Compile is the door that refuses, and Encoding/Opb check their own
+   arithmetic anyway, so no row whose arithmetic wrapped is ever committed to the
+   .opb), and it is here for the same reason.
 
    The exception is deliberately NOT [Encoding.Unrepresentable]. bin/main.ml's arm for
    that one exits 4 and tells the reader baguette's own invariant has failed, which is
@@ -151,12 +178,13 @@
    model, with the model's exit code.
 
    ---------------------------------------------------------------------------
-   What the setup costs, and what of it is this file's (M16-file-review-T5, D-0193)
+   The setup's cost, and which part of it is this file's (M16-file-review-T5, D-0193)
    ---------------------------------------------------------------------------
 
    On the Challenge's costliest setups [compile]'s own code is a few percent; the rest
    is what it calls ([Encoding]'s declarations and rows, [Engine.create], the globals'
-   [make]). Its own rules: [normalise_terms] answers a short row over distinct
+   [make]); the review of the setup that read the front end file by file (D-0193)
+   measured that split. Its own rules: [normalise_terms] answers a short row over distinct
    variables without a table; the name check is one sized [Model.Names]; and under
    [Discard_rows] (`--no-proof`) the objective's .opb line, one term per rung of the
    objective, is not built, because the header that would print it is never written.
@@ -182,18 +210,27 @@ module Element = Baguette_core.Element
 module Gcc = Baguette_core.Gcc
 module Maxmin = Baguette_core.Maxmin
 module Cumulative = Baguette_core.Cumulative
-module Regular = Baguette_core.Regular (* M7-T28, D-0146 *)
-module Inverse = Baguette_core.Inverse (* M7-T28, D-0151 *)
-module Member = Baguette_core.Member (* M7-T28, D-0159 *)
-module Table = Baguette_core.Table (* M18-coverage-T1, D-0206 *)
-module Circuit = Baguette_core.Circuit (* M18-coverage-T3, D-0217 *)
+
+(* The globals mznlib keeps whole instead of letting std decompose them. Each is one
+   native propagator over rows this file posts: [Regular], a DFA as layered state flags
+   whose every pruning is one `rup` (M7-T28, D-0146); [Inverse], channel rows between
+   the two arrays (M7-T28, D-0151); [Member], one selector per position (M7-T28,
+   D-0159); [Table], one selector per tuple (M18-coverage-T1, D-0206); [Circuit], MTZ
+   position variables and a subtour cut (M18-coverage-T3, D-0217). *)
+module Regular = Baguette_core.Regular
+module Inverse = Baguette_core.Inverse
+module Member = Baguette_core.Member
+module Table = Baguette_core.Table
+module Circuit = Baguette_core.Circuit
 module View = Baguette_core.View
 
-(* M2-L12/D-0052: the clause propagator was widened to general order literals and its
-   file renamed [Clause]. The Boolean face this front end builds is [Clause.make] plus
-   the submodules below, which still declare DOMAIN because their [0, 1] restriction
-   makes that true; the widened module itself declares BOUNDS. Aliased under the old name
-   so that every call site here keeps saying which builtin it is packing. *)
+(* [Bool_clause] is lib/core/prop/clause.ml under its old name, kept so that every call
+   site here still says which builtin it is packing. The Boolean face this front end
+   builds is [Clause.make] plus the submodules below, which declare DOMAIN because their
+   [0, 1] restriction makes that true; the module itself declares BOUNDS, because it
+   propagates clauses over general order literals. It was widened to them and renamed
+   by M2-L12 (D-0052: a clause over order literals is a widening of bool_clause, not a
+   new propagator family). *)
 module Bool_clause = Baguette_core.Clause
 module Bool2int = Baguette_core.Bool2int
 module Reif_lin_le = Baguette_core.Reif_lin_le
@@ -210,21 +247,22 @@ type t = {
   engine : Baguette_core.Engine.t;
   encoding : Baguette_proof.Encoding.t;
   objective : Baguette_core.Search.objective option;
-      (* M5-T1. [None] is `solve satisfy;` and every pre-M5 model. [Some] is what
-         [bin/main.ml] hands to [Search.optimise], resolved HERE rather than there
-         because the declared bounds the branch-and-bound floor case turns on
-         (lib/core/search.ml, [type bnb] note (2)) are this module's -- they are the
-         bounds the .opb objective line was written against, not whatever the store's
-         have narrowed to by the time anyone asks. *)
+      (* [None] is `solve satisfy;`. [Some] is the objective of a branch and bound
+         (M5-T1) that [bin/main.ml] hands to [Search.optimise]. It is resolved HERE
+         rather than there because the declared bounds the branch-and-bound floor case
+         turns on (lib/core/search.ml, the "BRANCH AND BOUND" section above
+         [type bnb], note (2)) are this module's: they are the bounds the .opb
+         objective line was written against, not whatever the store's have narrowed to
+         by the time anyone asks. *)
   order : Baguette_core.Search.order option;
-      (* M7-T2. [None] is a model with no search annotation, and it is not merely a
-         default: it is the same value [Search.solve]'s [?order] already defaults to
+      (* [None] is a model with no search annotation, and it is not merely a default:
+         it is the same value [Search.solve]'s [?order] already defaults to
          ([spec_order]), so an unannotated model branches byte-for-byte as it did before
-         this field existed. [Some] is the annotation, HONOURED -- docs/SPEC.md 3.4 says
-         it must be, and until M7-T2 the only way to honour it was to refuse the model.
-         Resolved here, beside the objective, for the same reason: the annotation names
-         model variable INDICES, and this module is the one that promises the store is
-         built in [Model.vars] order. *)
+         this field existed. [Some] is the annotation, HONOURED, because docs/SPEC.md 3.4
+         says it must be; until M7-T2 (honour search annotations) the only way to honour
+         it was to refuse the model. Resolved here, beside the objective, for the same
+         reason: the annotation names model variable INDICES, and this module is the one
+         that promises the store is built in [Model.vars] order. *)
 }
 
 (* ------------------------------------------------------------------- term handling *)
@@ -252,13 +290,14 @@ let normalise_terms_by_table (terms : (int * int) list) : (int * int) list =
          let c = Hashtbl.find coeff i in
          if c = 0 then None else Some (c, i))
 
-(* M16-file-review-T5 (D-0193): a row whose variables are pairwise distinct -- nearly
-   every row a flattener writes -- has nothing to merge, so its result is its own terms
-   with the zero coefficients dropped, which is what the table below computes for it (each
-   index occurs once, so its entry is its coefficient and the order is the input's). Up to
-   [distinct_scan_max] terms that is decided by comparing the indices pairwise, where the
-   table cost one polymorphic [Hashtbl] of 16 buckets per constraint; a longer row keeps
-   the table, so the scan stays O(k^2) for k <= 8. *)
+(* The fast path of [normalise_terms]. A row whose variables are pairwise distinct --
+   nearly every row a flattener writes -- has nothing to merge, so its result is its own
+   terms with the zero coefficients dropped, which is what the table above computes for
+   it (each index occurs once, so its entry is its coefficient and the order is the
+   input's). Up to [distinct_scan_max] terms that is decided by comparing the indices
+   pairwise, where the table cost one polymorphic [Hashtbl] of 16 buckets per
+   constraint; a longer row keeps the table, so the scan stays O(k^2) for k <= 8. From
+   the setup review (M16-file-review-T5, D-0193). *)
 let distinct_scan_max = 8
 
 let rec indices_distinct = function
@@ -312,21 +351,22 @@ let rec search_pos (m : Model.t) (s : Model.search) =
    there, and exit non-zero. Each one asserts on its message in test_compile.ml, so
    the wording is part of the tested surface, not decoration. *)
 
-(* M7-T11 REMOVED `reject_set_domain`, which used to refuse `var {1,3,5}: x` here.
+(* A set domain such as `var {1,3,5}: x` is accepted, and there is no rejection for it
+   here. [Encoding.declare_int_with_holes] gives each hole a representation, one clause
+   in the same order ladder and of the mirror polarity; see that function's header for
+   the direction and why getting it backwards would be silently unsound. The holes go
+   into the .opb as ladder rows and into the solver as propagators (D-0072).
 
-   It was not weakened; the thing it was protecting against was fixed. Its message said
-   exactly what was missing -- "`Encoding.declare_int` takes only ~lo and ~hi, so the
-   holes in a set domain have no representation in the .opb" -- and so encoding the hull
-   instead would have been a RELAXATION: the solver could report UNSAT and hand veripb a
-   refutation of an .opb that is satisfiable.
+   Until M7-T11 a `reject_set_domain` refused such a domain, and it was removed, not
+   weakened: the thing it protected against was fixed. Its message said exactly what was
+   missing -- "`Encoding.declare_int` takes only ~lo and ~hi, so the holes in a set
+   domain have no representation in the .opb" -- and so encoding the hull alone would
+   have been a RELAXATION: the solver could report UNSAT and hand veripb a refutation of
+   an .opb that is satisfiable. With the holes in the .opb the hull is no longer a
+   relaxation, so the refusal had nothing left to protect. *)
 
-   [Encoding.declare_int_with_holes] now gives the holes a representation, one clause
-   each, in the same order ladder and of the mirror polarity. See that function's header
-   for the direction and why getting it backwards would be silently unsound, and D-0072
-   for the decision. With the holes in the .opb the hull is no longer a relaxation, so
-   the refusal has nothing left to protect. *)
-
-(* M5-T1 narrowed this from "every objective" to "an objective that is not a variable".
+(* An objective must be a variable. M5-T1 (branch and bound) narrowed this refusal from
+   "every objective" to "an objective that is not a variable".
 
    `solve minimize 3;` is legal FlatZinc and it is refused rather than answered, because
    the artefact it would need cannot be built: `conclusion BOUNDS` requires the .opb to
@@ -344,13 +384,17 @@ let reject_constant_objective pos what value =
      %d..%d: obj;` and write `solve %s obj;`."
     what value value value what
 
-(* M7-T2 kept this, and that is the point of it. [Search] now implements input_order and
-   first_fail over indomain_min and indomain_max, which is what the MiniZinc challenge
-   corpus overwhelmingly asks for -- but the tail (smallest, largest, dom_w_deg,
-   indomain_split, indomain_median, ...) is NOT implemented, and a model asking for one
-   is refused BY NAME rather than quietly given something else. docs/SPEC.md section 3.4
-   says the annotation MUST be honoured when present; silently substituting a strategy
-   solves a different problem and reports it as this one's answer. *)
+(* NOT CALLED: the refusal of an unimplemented search annotation is made in
+   lib/flatzinc/builder.ml, which reads the annotation and refuses BY NAME a variable
+   choice, a value choice or a `*_search` it does not know, so a [Model.search] that
+   reaches this file is always one [phases_of_search] can honour. The variable choices
+   implemented are input_order, first_fail, anti_first_fail, smallest and largest; the
+   value choices indomain (as indomain_min), indomain_min, indomain_max, indomain_split
+   and indomain_median. The rule this function was written for still holds, in the
+   builder: docs/SPEC.md section 3.4 says the annotation MUST be honoured when present,
+   and silently substituting a strategy solves a different problem and reports it as
+   this one's answer. Its message below lists only the first two choices of each kind,
+   which is what M7-T2 (honour search annotations) implemented when it kept it. *)
 let reject_search pos ~annotation =
   Error.failf pos
     "unsupported search annotation %s: baguette implements the `input_order` and \
@@ -361,11 +405,13 @@ let reject_search pos ~annotation =
      different problem. Remove the annotation, or write one of the implemented forms."
     annotation
 
-(* M2-T1 / M2-T2. The Boolean row's builtins take `var bool` arguments, and a `var bool`
-   is the one domain [Encoding.declare_bool] gives the order encoding on [0, 1]
-   (docs/PROOF-FORMAT.md section 3, "Booleans"). A `var 0..1` is *not* accepted in its
-   place: FlatZinc types a Boolean and a zero-one integer differently, and the difference
-   is not cosmetic here -- lib/core/prop/bool_clause.ml spells every literal as
+(* The Boolean builtins (bool_clause, array_bool_or and array_bool_and from M2-T1;
+   bool_eq, bool_not and the first argument of bool2int from M2-T2) take `var bool`
+   arguments, and a `var bool` is the one domain [Encoding.declare_bool]
+   gives the order encoding on [0, 1] (docs/PROOF-FORMAT.md section 3, "Booleans"). A
+   `var 0..1` is *not* accepted in its place: FlatZinc types a Boolean and a zero-one
+   integer differently, and the difference is not cosmetic here --
+   lib/core/prop/clause.ml (bool_clause.ml before M2-L12) spells every literal as
    [Lit.bool_true] / [Lit.bool_false], and SPEC 2.2 prints a `bool` output as
    `false`/`true` under its *declared* type. Accepting an int would make the propagator's
    literals and the declaration disagree about what the variable is. *)
@@ -388,10 +434,10 @@ let reject_non_bool_const pos ~builtin ~what n =
      `false` fold to 1 and 0; no other value is a Boolean."
     builtin what n
 
-(* roadmap M1-T23. The two arithmetic rejections. [Checked.limit] and the 9M + 6
-   envelope it is chosen against are derived in lib/core/checked.ml's header; the
-   message repeats the figure rather than the derivation because the person reading it
-   is holding a model, not the solver. *)
+(* The two rejections of the arithmetic cap (roadmap M1-T23, the module header's
+   section on it). [Checked.limit] and the 9M + 6 envelope it is chosen against are
+   derived in lib/core/checked.ml's header; the message repeats the figure rather than the
+   derivation because the person reading it is holding a model, not the solver. *)
 
 let reject_declared_bound (v : Model.var) lo hi =
   Error.failf v.Model.v_pos
@@ -405,13 +451,12 @@ let reject_declared_bound (v : Model.var) lo hi =
      or shift the domain towards zero."
     v.Model.v_name lo hi Checked.limit
 
-(* M1-T54, from D-0028 point 3 and decided in D-0041. The width rejection. The cap
-   itself lives in
-   [Encoding] -- next to the ladder it bounds, with its derivation -- and is named from
-   here rather than copied: nothing in this tree has cost more than two statements of one
-   envelope drifting apart (D-0029's [Arith] copy is a copy only because lib/proof cannot
-   name lib/core; lib/flatzinc names lib/proof, so there is no excuse for a second
-   constant here).
+(* The width rejection (M1-T54, from D-0028 point 3 and decided in D-0041; the module
+   header's width-cap section). The cap itself lives in [Encoding] -- next to the
+   ladder it bounds, with its derivation -- and is named from here rather than copied:
+   nothing in this tree has cost more than two statements of one envelope drifting
+   apart (D-0029's [Arith] copy is a copy only because lib/proof cannot name lib/core;
+   lib/flatzinc names lib/proof, so there is no excuse for a second constant here).
 
    Two readers, two messages. [Encoding.Width_too_large] is what a caller that did not
    come through here gets; this is the one a person holding a .fzn gets, and it says
@@ -448,10 +493,11 @@ let reject_row pos ~what ~magnitude =
     | None -> "larger than a 63-bit int can hold")
     Checked.limit
 
-(* M7-T2. [Model.search] is a list of annotations and [Seq] nests, so the whole thing
-   flattens to a list of [Search.phase] consulted in order -- which is exactly
-   `seq_search`'s meaning, and it is why nesting needs no representation here: a
-   `seq_search` inside a `seq_search` is the concatenation of their phases.
+(* The search annotation as phases (M7-T2). [Model.search] is a list of annotations and
+   [Seq] nests, so the whole thing flattens to a list of [Search.phase] consulted in order
+   -- which is exactly `seq_search`'s meaning, and it is why nesting needs no
+   representation here: a `seq_search` inside a `seq_search` is the concatenation of their
+   phases.
 
    A variable the annotation never mentions still has to be branched on, and
    [Search.sequence] falls back to [Search.spec_order] for those. That fallback is the
@@ -486,9 +532,9 @@ let rec phases_of_search (m : Model.t) (s : Model.search) :
         | Model.Indomain_min -> Baguette_core.Search.indomain_min
         | Model.Indomain_max -> Baguette_core.Search.indomain_max
         | Model.Indomain_split -> Baguette_core.Search.indomain_split
-        (* M7-T12. The only value choice that can return an [Assign]; see
-           [Search.indomain_median] for the dispatch and D-0077 for why the shape
-           exists. *)
+        (* The only value choice that can return an [Assign] decision (M7-T12): see
+           [Search.indomain_median] for the dispatch, and D-0077 for why that shape
+           exists (an assignment's disjunctive sibling is discharged by derivation). *)
         | Model.Indomain_median -> Baguette_core.Search.indomain_median
       in
       [
@@ -500,9 +546,10 @@ let rec phases_of_search (m : Model.t) (s : Model.search) :
       ]
 
 (* [None] when the model carries no search annotation, which must stay
-   indistinguishable from the pre-M7-T2 behaviour: [Search.solve]'s [?order] then
-   defaults to [spec_order], the same function, rather than to a [sequence] with an empty
-   phase list that would merely delegate to it. Same tree, same proof. *)
+   indistinguishable from the behaviour before annotations were honoured (M7-T2):
+   [Search.solve]'s [?order] then defaults to [spec_order], the same function, rather than
+   to a [sequence] with an empty phase list that would merely delegate to it. Same tree,
+   same proof. *)
 let order_of_model (m : Model.t) : Baguette_core.Search.order option =
   match List.concat_map (phases_of_search m) m.Model.search with
   | [] -> None
@@ -588,15 +635,20 @@ let check_name_collisions (m : Model.t) =
    end, with a single [List.mapi]. *)
 type pending = int -> Propagator.instance
 
-(* M2-L6: every [Linear.t] in this solver is packed here -- including both halves of an
+(* Every [Linear.t] in this solver is packed here -- including both halves of an
    [int_lin_eq] (D-0011) and the [int_le]/[int_lt]/[int_eq] shapes that delegate -- so
-   teaching [Linear] its own PB row is taught once, here, and reaches all of them. *)
-(* [~mixed] (M8-bits-encoding-T2, D-0132 section 2.7; D-0153): [None] for a row with no
-   term on the bits encoding, [Some bits_n] for a row with one. T2 packed the latter
-   WITHOUT its PB row, because [Linear.pb_row] spelled the order expansion and the .opb
-   holds the bits; since D-0153 the row is spelled as the .opb holds it
-   ([Linear.pb_row ~bits_n]) and PB conflict analysis instantiates its bits blocks
-   through their bridges before it resolves (lib/core/ladder.ml, "The bits arm"). *)
+   handing [Linear] its own PB row ([~row:]) is done once, here, and reaches all of
+   them. PB conflict analysis (M2-L6) reads that row to eliminate a pivot by linear
+   combination instead of falling back to clause learning. *)
+(* [~mixed]: [None] for a row with no term on the bits encoding (an integer as the
+   binary digits of its offset from [lo], lib/proof/encoding.ml), [Some bits_n] for a
+   row with one; [bits_n] is [Encoding.bits_n], which tells the row which of its
+   variables are on bits. The PB row is spelled as the .opb holds it
+   ([Linear.pb_row ~bits_n]), and PB conflict analysis instantiates its bits blocks
+   through their bridges before it resolves (D-0153; lib/core/ladder.ml, "The bits
+   arm"). When the bits encoding was first built for linear rows (M8-bits-encoding-T2,
+   D-0132 section 2.7) such a row was packed WITHOUT its PB row, because
+   [Linear.pb_row] then spelled the order expansion and the .opb held the bits. *)
 let linear_row ~mixed (lin : Linear.t) =
   match mixed with
   | None -> fun store -> Some (Linear.pb_row store lin)
@@ -616,11 +668,11 @@ let pack_lin_ne (p : Ne.t) : pending =
 let pack_ne (p : Ne.t) : pending =
  fun id -> Propagator.pack ~id (module Ne.Int_ne : Propagator.S with type t = Ne.t) p
 
-(* The five packings of one clause propagator (M2-T1). [Bool_clause] and its four
-   submodules share [t], [make], [vars] and [propagate] outright and differ only in the
-   [name] the packed instance reports, exactly as [Ne] and [Ne.Int_ne] do: an instance
-   says which builtin the model actually wrote, which is what a trace line or a failure
-   message has to say to be worth reading. A clause decomposition means several
+(* The five packings of one clause propagator (the Boolean builtins, M2-T1). [Bool_clause]
+   and its four submodules share [t], [make], [vars] and [propagate] outright and differ
+   only in the [name] the packed instance reports, exactly as [Ne] and [Ne.Int_ne] do: an
+   instance says which builtin the model actually wrote, which is what a trace line or a
+   failure message has to say to be worth reading. A clause decomposition means several
    instances carry the same name, which is correct -- they came from one builtin. *)
 let pack_clause_as (type a) (module P : Propagator.S with type t = a) (p : a) : pending =
  fun id -> Propagator.pack ~id (module P) p
@@ -643,11 +695,13 @@ let pack_array_bool_and (p : Bool_clause.t) : pending =
 let pack_bool_eq (p : Bool_clause.t) : pending =
   pack_clause_as (module Bool_clause.Bool_eq : Propagator.S with type t = Bool_clause.t) p
 
-(* M3-T4: the reification dispatcher's four faces. One [Reif.t] per reified builtin,
-   packed under the builtin the model wrote (the [Ne] / [Ne.Int_ne] rule again), and
-   WITHOUT [~row:]: an instance here stands for two or four rows and [Propagator.pb_row]
-   promises exactly one, so the honest answer is the default [None] and M2-L6's clause
-   fallback. lib/core/prop/reif.ml's header carries the argument. *)
+(* The reification dispatcher's four faces (M3-T4: the author of a reification supplies
+   enforce-hold, enforce-not-hold and entailment, and lib/core/prop/reif.ml does the
+   rest). One [Reif.t] per reified builtin, packed under the builtin the model wrote
+   (the [Ne] / [Ne.Int_ne] rule again), and WITHOUT [~row:]: an instance here stands for
+   two or four rows and [Propagator.pb_row] promises exactly one, so the honest answer
+   is the default [None] and M2-L6's clause fallback. lib/core/prop/reif.ml's header
+   carries the argument. *)
 let pack_reif_as (type a) (module P : Propagator.S with type t = a) (p : a) : pending =
  fun id -> Propagator.pack ~id (module P) p
 
@@ -679,17 +733,23 @@ let pack_bool_not (p : Bool_clause.t) : pending =
 let pack_bool2int (p : Bool2int.t) : pending =
  fun id -> Propagator.pack ~id (module Bool2int : Propagator.S with type t = Bool2int.t) p
 
-(* M4-T4b. Every row of the arithmetic family is a [Linear] over a row the .opb really
-   contains, so these pack exactly as [pack_linear] does -- [~row:] included, because
+(* int_times, int_div and int_abs (M4-T4b) are a case split held in the model: guarded
+   linear rows over reified Booleans. Every row of the arithmetic family is therefore a
+   [Linear] over a row the .opb really contains, so these pack exactly as [pack_linear]
+   does -- [~row:] included, because
    each one IS one row and M2-L6 can resolve it. What differs is only the [name] the
    instance reports, which is the builtin the model wrote rather than `int_lin_le`;
    lib/core/prop/arith.ml's faces exist for that and nothing else. *)
 let pack_arith_row (module P : Propagator.S with type t = Linear.t) ~mixed
     (lin : Linear.t) : pending =
  fun id ->
-  (* M6-T18: a ROW face is [Linear] and makes [pack_linear]'s idempotence claim; the
-     guard faces below are reifications and do not (lib/core/propagator.ml, above
-     [pack]). [~mixed] as in [pack_linear]. *)
+  (* A ROW face is [Linear] and makes [pack_linear]'s idempotence claim (one run reaches
+     the instance's own fixpoint, so the engine need not re-wake it off its own
+     prunings); the guard faces below are reifications and do not. The claim is made
+     here, at the packing site, because only this site knows which face it packs: the
+     table by packed name it replaced (M6-T18) could not tell a row face from a guard
+     face, which share a builtin name (lib/core/propagator.ml, above [pack]). [~mixed]
+     as in [pack_linear]. *)
   Propagator.pack ~id ~idempotent:true ~row:(linear_row ~mixed lin) (module P) lin
 
 let pack_times_row ~mixed (p : Linear.t) : pending =
@@ -701,15 +761,17 @@ let pack_div_row ~mixed (p : Linear.t) : pending =
 let pack_abs_row ~mixed (p : Linear.t) : pending =
   pack_arith_row (module Arith.Abs_row : Propagator.S with type t = Linear.t) ~mixed p
 
-(* M8-bits-encoding-T3 continuation (D-0134 section 9): `bool2int(b, x)` over a BITS
-   integer. lib/core/prop/bool2int.ml justifies its four pushes with [Clause]s, RUP over
-   its two rows and x's LADDER, and a bits x has no ladder (no bound crosses a bits row
-   by unit propagation, D-0127). So over a bits x the channelling is posted as what it
-   is, the equality x = b: the same two rows in the same order, each with a [Linear]
+(* `bool2int(b, x)` over a BITS integer is posted as the equality x = b, with a
+   [Linear] instance per row (D-0134 section 9, from the bits encoding's full substrate,
+   M8-bits-encoding-T3). The reason: lib/core/prop/bool2int.ml justifies its four pushes
+   with [Clause]s, RUP over its two rows and x's LADDER, and a bits x has no ladder; no
+   bound crosses a bits row by unit propagation, as the checker measurements of D-0127
+   showed. So the same two rows are posted in the same order, each with a [Linear]
    instance -- whose pushes are Bool2int's four, one per row and bound -- justified by
-   [Linear]'s bits `pol` (D-0132). This face is the [Arith] faces' device: the instance
-   reports the builtin the model wrote. Defined here and not in bool2int.ml because the
-   choice is the compiler's, made from the scope, as [post_maxmin]'s shape is. *)
+   [Linear]'s bits `pol` (D-0132, the bits encoding for linear rows). This face is the
+   [Arith] faces' device: the instance reports the builtin the model wrote. Defined here
+   and not in bool2int.ml because the choice is the compiler's, made from the scope, as
+   [post_maxmin]'s shape is. *)
 module Bool2int_row : Propagator.S with type t = Linear.t = struct
   type t = Linear.t
 
@@ -725,37 +787,47 @@ let pack_bool2int_row ~bits_n (p : Linear.t) : pending =
     ~mixed:(Some bits_n) p
 
 (* ---------------------------------------------------------------------------
-   M8-bits-encoding-T2: eligibility for the bits encoding, by SCOPE (D-0130 section 3.4,
-   D-0132 section 2.7)
+   Eligibility for the bits encoding, by SCOPE (M8-bits-encoding-T2; D-0130 section
+   3.4, D-0132 section 2.7)
    ---------------------------------------------------------------------------
 
-   The width half is [Encoding.wants_bits]. The scope half is this: a variable is held
-   on the order encoding, whatever `--bits-above` says, when any row the model will post
-   over it names its order literals per value or when a propagator over it justifies
-   with a [Clause] -- because the .opb is closed before the first proof line (I-X5), a
-   `red` is a proof line, and a `red` whose atom already occurs in a model row has a
-   goal the fresh-atom witness cannot discharge; and because a `rup` over a bits row is
-   refused at every width (D-0127). The families, by the name `--stats` reports:
+   A variable goes on the bits encoding when it is eligible by width AND by scope. The
+   width half is [Encoding.wants_bits]. The scope half is this function: a variable is
+   held on the order encoding, whatever `--bits-above` says, when any row the model will
+   post over it names its order literals per value or when a propagator over it
+   justifies with a [Clause]. Two reasons. The .opb is closed before the first proof line
+   (I-X5: the .opb is written before any .pbp rule references it), a bits variable's
+   order atoms are minted in the proof by a `red`, and a `red` whose atom already occurs
+   in a model row has a goal the fresh-atom witness cannot discharge. And a `rup` over a
+   bits row is refused at every width (D-0127, the checker measured alone on both
+   encodings). The families, by the name `--stats` reports:
 
      alldiff      all_different_int: the direct encoding and the pairwise clause rows
      gcc          global_cardinality: the counting rows over the order encoding
      element      array_int_element: the index's direct encoding, the result's rows
      cumulative   the capacity rows over gcc's window indicators
      holes        a declared set domain: the hole rows are ladder rows
+     regular      the transition rows over each letter's ladder
+     inverse      the channel rows over both arrays' ladders
+     member       every line a [Clause] over the ladders of x and y
+     table        each tuple's DEF row over x's order literals
+     circuit      each arc's guard over succ's order literals
 
    Eligible: int_lin_le/eq, int_le/lt/eq, int_lin_le_reif/int_le_reif (every face of
    lib/core/prop/reif_lin_le.ml is a [Linear] instance), int_times/div/abs (guarded
    linear rows and [Linear] instances), the clause family's rows (bools, width 1), and
    since M8-bits-encoding-T3 array_int_maximum/minimum: a scope with a bits variable
    posts the SELECTOR shape instead of one clause row per threshold value
-   (lib/core/prop/maxmin.ml, D-0134), so nothing in it names an order literal per
-   value and nothing holds it; int_ne/int_lin_ne, whose nogood over a bits scope is
-   D-0130 section 7.4's two-half `pol` through the A/B pair (lib/core/prop/ne.ml); and
-   int_eq_reif/int_ne_reif, whose two [Clause] pieces over a bits scope are the same
-   two halves with the reifier as one more term (lib/core/prop/reif_lin_eq.ml, D-0134
-   section 8) and whose other faces are [Linear] instances; and bool2int, posted over a
-   bits integer as its two rows with a [Linear] each ([Bool2int_row], D-0134 section 9)
-   rather than as lib/core/prop/bool2int.ml's [Clause]-justified instance.
+   (lib/core/prop/maxmin.ml; D-0134, the bits encoding's full substrate), so nothing in
+   it names an order literal per value and nothing holds it; int_ne/int_lin_ne, whose
+   nogood over a bits scope is D-0130 section 7.4's two-half `pol` through the A/B pair
+   (lib/core/prop/ne.ml); and int_eq_reif/int_ne_reif, whose two [Clause] pieces over a
+   bits scope are the same two halves with the reifier as one more term
+   (lib/core/prop/reif_lin_eq.ml, D-0134 section 8) and whose other faces are [Linear]
+   instances; and bool2int, posted over a bits integer as its two rows with a [Linear]
+   each ([Bool2int_row], D-0134 section 9) rather than as lib/core/prop/bool2int.ml's
+   [Clause]-justified instance.
+
    Computed from the model BEFORE any declaration, which is the only moment the scope
    is known and the encoding is empty. *)
 let held_families (m : Model.t) : (int, string list) Hashtbl.t =
@@ -782,21 +854,22 @@ let held_families (m : Model.t) : (int, string list) Hashtbl.t =
       | Model.Global_cardinality (xs, _, counts) -> hold "gcc" (xs @ counts)
       | Model.Cumulative (ss, _, _, _) -> hold "cumulative" ss
       | Model.Array_int_element (idx, _, res) -> hold "element" [ idx; res ]
-      | Model.Regular r -> hold "regular" r.Model.r_xs (* M7-T28: rows over x's ladder *)
+      | Model.Regular r -> hold "regular" r.Model.r_xs (* rows over x's ladder *)
       | Model.Inverse iv ->
-          (* M7-T28 (D-0151): the channel rows are over both arrays' ladders *)
+          (* the channel rows are over both arrays' ladders (D-0151) *)
           hold "inverse" (iv.Model.inv_f @ iv.Model.inv_g)
       | Model.Member mb ->
-          (* M7-T28 (D-0159, D-0170): every line is a [Clause] over the ladders of x
-             and y, and so are the threshold lemmas written ahead of some *)
+          (* every line is a [Clause] over the ladders of x and y, and so are the
+             threshold lemmas written ahead of some (D-0159; D-0170, the rows over the
+             declared overlap) *)
           hold "member" (mb.Model.mem_y :: mb.Model.mem_x)
       | Model.Table tb ->
-          (* M18-coverage-T1 (D-0206): DEF_t names x's order literals per tuple value,
-             and every line is a [Clause] over x's ladder *)
+          (* DEF_t names x's order literals per tuple value, and every line is a
+             [Clause] over x's ladder (D-0206) *)
           hold "table" tb.Model.tab_x
       | Model.Circuit c ->
-          (* M18-coverage-T3 (D-0217): every arc's guard is over succ's order literals;
-             the positions are linear terms and stay eligible for bits *)
+          (* every arc's guard is over succ's order literals; the positions are linear
+             terms and stay eligible for bits (D-0217) *)
           hold "circuit" c.Model.cir_x
       | Model.Int_lin_le _ | Model.Int_lin_eq _ | Model.Int_le _ | Model.Int_lt _
       | Model.Int_eq _ | Model.Bool_clause _ | Model.Array_bool_or _
@@ -822,17 +895,21 @@ let pack_div_guard (p : Reif_lin_le.t) : pending =
 let pack_abs_guard (p : Reif_lin_le.t) : pending =
   pack_reif_as (module Arith.Abs_guard : Propagator.S with type t = Reif_lin_le.t) p
 
-(* M14-e2e-verification-T3 (D-0187). The cake constraint tools/e2e/fzn2scp.py writes for
-   a FlatZinc constraint, over the variables' FlatZinc names: the second half of what
-   [Baguette_proof.E2e] needs to derive this constraint's rows from cake_pb_cp's .opb. The
-   builder keeps a linear row's variable terms as written and folds its constants into the
-   right-hand side, which is what cake does with the translator's constants in place
-   (mk_lin_constraint_ge), so the terms go across unchanged. A builtin outside the covered
-   families is refused here, before any row is posted. Only called under `--e2e`.
+(* The cake constraint tools/e2e/fzn2scp.py writes for a FlatZinc constraint, over the
+   variables' FlatZinc names. Only called under `--e2e`, the end-to-end mode in which
+   baguette writes a proof prefix that derives each of its own rows from cake_pb_cp's
+   verified .opb, so that nothing in the prefix is trusted (M14-e2e-verification-T3,
+   D-0187). This spec is the second half of what [Baguette_proof.E2e] needs for that
+   derivation. The builder keeps a linear row's variable terms as written and folds its
+   constants into the right-hand side, which is what cake does with the translator's
+   constants in place (mk_lin_constraint_ge), so the terms go across unchanged. A
+   builtin outside the covered families is refused here, before any row is posted.
 
-   T3b (D-0188): T5's globals. [c_id] tells `int_max(x, y, z)` (cake's `max`) from
-   `array_int_maximum(z, [x, y])` (cake's `array_max`), which build the same [cstr]; the
-   int_eq tying a gcc copy has [c_id = ""] and no .scp counterpart (D-0188 section 3.3). *)
+   The globals (element, gcc, maximum and minimum, member, inverse) came with
+   M14-e2e-verification-T3b (D-0188, each global's rows derived by one `pol`). [c_id]
+   tells `int_max(x, y, z)` (cake's `max`) from `array_int_maximum(z, [x, y])` (cake's
+   `array_max`), which build the same [cstr]; the int_eq tying a gcc copy has [c_id = ""]
+   and no .scp counterpart (D-0188 section 3.3). *)
 let e2e_spec (names : string array) (con : Model.constr) : Baguette_proof.E2e.spec =
   let module E = Baguette_proof.E2e in
   let op = function Model.Var i -> E.Var names.(i) | Model.Const n -> E.Const n in
@@ -863,7 +940,8 @@ let e2e_spec (names : string array) (con : Model.constr) : Baguette_proof.E2e.sp
   | Model.Int_le_reif (a, b, r) -> E.Le_iff ((op r, 1), op a, op b)
   | Model.Int_eq_reif (a, b, r) -> E.Eq_iff ((op r, 1), op a, op b)
   | Model.Int_ne_reif (a, b, r) -> E.Ne_iff ((op r, 1), op a, op b)
-  (* T6 (D-0195): int_times and int_div stay outside the chain (section 2.4) *)
+  (* int_times and int_div stay outside the chain; int_abs, cumulative and regular are
+     in (D-0195 section 2.4, the far families) *)
   | Model.Int_times _ -> E.refuse "int_times is not covered by --e2e"
   | Model.Int_div _ -> E.refuse "int_div is not covered by --e2e"
   | Model.Int_abs (x, z, _) -> E.Abs (op x, op z)
@@ -897,7 +975,8 @@ let e2e_spec (names : string array) (con : Model.constr) : Baguette_proof.E2e.sp
           op mb.Model.mem_y )
 
 let compile (m : Model.t) : t =
-  (* M5-T1. Resolved to a model variable index and a direction, or refused. The
+  (* The objective (branch and bound, M5-T1), resolved to a model variable index and a
+     direction, or refused. The
      ENCODING half of it happens further down, once the variable is declared: an
      objective line is the order encoding of that variable and cannot be written before
      it exists. *)
@@ -917,21 +996,22 @@ let compile (m : Model.t) : t =
   (* Variables, in Model.vars order, into both the store and the encoding. Read the
      module header before touching this. *)
   let bounds = Array.map bounds_of_domain m.Model.vars in
-  (* M1-T23, half one of the cap: a bound large enough to overflow when multiplied is
-     refused at its declaration, where the diagnostic can name the variable. A `var
-     bool` is (0, 1) and a set domain was already rejected above, so in practice this
-     only ever fires on a `Drange`. *)
+  (* The arithmetic cap, half one (M1-T23, the module header): a bound large enough to
+     overflow when multiplied is refused at its declaration, where the diagnostic can
+     name the variable. A `var bool` is (0, 1), so in practice this fires on a `Drange`
+     or on the hull of a set domain, which is what [bounds_of_domain] returns for it. *)
   Array.iteri
     (fun i (v : Model.var) ->
       let lo, hi = bounds.(i) in
       if not (Checked.bound_fits lo && Checked.bound_fits hi) then
         reject_declared_bound v lo hi)
     m.Model.vars;
-  (* M1-T54: the width cap, on the user-facing path, where the diagnostic can carry a
-     position. A separate pass and not a second clause in the loop above, because the
-     two caps answer different questions and share nothing but their subject: one is
-     about arithmetic that cannot be computed (a soundness requirement, D-0029), this
-     one about a proof that cannot be stored (a cost decision, D-0028).
+  (* The width cap (M1-T54, the module header; off unless a limit was asked for), on
+     the user-facing path, where the diagnostic can carry a position. A separate pass and
+     not a second clause in the loop above, because the two caps answer different
+     questions and share nothing but their subject: one is about arithmetic that cannot be
+     computed (a soundness requirement, D-0029), this one about a proof that cannot be
+     stored (a cost decision, D-0028).
 
      It runs AFTER the arithmetic pass and the ordering is load-bearing twice over.
      First, every bound here has passed [Checked.bound_fits], so |lo|, |hi| <=
@@ -941,14 +1021,17 @@ let compile (m : Model.t) : t =
      arithmetic one, which is the harder error: narrowing a 10^18-wide domain to 10 000
      would not have made it representable.
 
+     It also runs after [on_bits] is decided, and skips a variable on bits: the width
+     cap is the ORDER ladder's, and a bits variable has none.
+
      It also runs BEFORE [Store.create] and [Encoding.create], so a refused model
      allocates neither a domain nor a ladder. That, rather than the diagnostic, is what
      distinguishes this check from `ulimit -v` and [Mem_guard], which can only kill a
      run already in progress. *)
-  (* M8-bits-encoding-T2: which variables go on bits -- eligible by width
-     ([Encoding.wants_bits]) and by scope ([held_families]) -- decided here, before the
-     width refusal (which is the ORDER ladder's and does not apply to a bits variable)
-     and before any declaration. *)
+  (* Which variables go on bits (M8-bits-encoding-T2): eligible by width
+     ([Encoding.wants_bits]) and by scope ([held_families]), and never a `var bool`.
+     Decided here, before the width refusal (which is the ORDER ladder's and does not
+     apply to a bits variable) and before any declaration. *)
   let held = held_families m in
   let on_bits =
     Array.mapi
@@ -967,7 +1050,8 @@ let compile (m : Model.t) : t =
     m.Model.vars;
   let names = Array.map (fun (v : Model.var) -> v.Model.v_name) m.Model.vars in
   (* The store gets the HULL, holes and all, and the holes are then taken out by a
-     propagator rather than being baked into the declared domain (M7-T11, D-0072).
+     propagator rather than being baked into the declared domain (M7-T11, D-0072; see
+     [hole_instances] at the end of [compile]).
 
      [Domain.of_list] would put them in directly and that was the first thing tried. It
      is WRONG, and silently so: a hole that is in the store but in no propagator has no
@@ -992,8 +1076,10 @@ let compile (m : Model.t) : t =
         | Some fs -> List.iter (Encoding.note_held_back encoding) (List.rev fs)
         | None -> ())
     m.Model.vars;
-  (* M14-e2e-verification-T3b (D-0188 section 3.3): the prefix defines a gcc copy's ladder
-     as its original's, so it is told the pairs before the copy is declared *)
+  (* Under `--e2e`, the prefix defines a gcc copy's ladder as its original's (a copy is
+     the variable [Builder.split_gcc_repeats] put in place of a repeat, tied to it by an
+     int_eq with no [c_id]), so it is told the pairs before the copy is declared
+     (D-0188 section 3.3) *)
   if Encoding.e2e_on encoding then
     List.iter
       (fun (c : Model.constr) ->
@@ -1003,10 +1089,11 @@ let compile (m : Model.t) : t =
               ~orig:m.Model.vars.(i).Model.v_name
         | _ -> ())
       m.Model.constraints;
-  (* M14-e2e-verification-T6 (D-0195): the Booleans the .scp has no counterpart for, which
-     the prefix DEFINES instead of declaring: a regular state flag as cake's own flag of the
-     same constraint `c<k>` (k counted as in the loop that posts the rows), an int_abs sign
-     guard as x_ge_0 *)
+  (* Under `--e2e`, the Booleans the .scp has no counterpart for, which the prefix
+     DEFINES instead of declaring: a regular state flag as cake's own flag of the same
+     constraint `c<k>` (k counted as in the loop that posts the rows), an int_abs sign
+     guard as x_ge_0 (M14-e2e-verification-T6, D-0195: the far families brought into
+     the end-to-end chain) *)
   (if Encoding.e2e_on encoding then
      let k = ref 0 in
      List.iter
@@ -1038,15 +1125,18 @@ let compile (m : Model.t) : t =
       | _ when on_bits.(i) -> Encoding.declare_int_bits encoding v.Model.v_name ~lo ~hi
       | Model.Dbool -> Encoding.declare_bool encoding v.Model.v_name
       | Model.Dset (_ :: _) ->
-          (* M7-T11: one clause per hole, of the mirror polarity to the ladder rung at
-             the same value. [Encoding] validates that each hole is strictly interior
-             and counts the clauses against M7-T8's encoding budget. *)
+          (* One clause per hole, of the mirror polarity to the ladder rung at the same
+             value (M7-T11). [Encoding] validates that each hole is strictly interior
+             and counts the clauses against the encoding budget, the resource guard
+             M7-T8 added so that an over-large encoding is diagnosed, not a fatal
+             error. *)
           Encoding.declare_int_with_holes encoding v.Model.v_name
             ~holes:(holes_of_domain v) ~lo ~hi
       | _ -> Encoding.declare_int encoding v.Model.v_name ~lo ~hi)
     m.Model.vars;
 
-  (* M5-T1/M5-T2: the .opb `min:` line, which `conclusion BOUNDS` cannot do without.
+  (* The .opb `min:` line, which `conclusion BOUNDS` (the proof's statement of proved
+     optimality, M5-T2) cannot do without; branch and bound itself is M5-T1.
 
      It is the objective variable's own order encoding and nothing else -- under
      SPEC 4.2, x = lo + sum_{v = lo+1}^{hi} [x >= v] -- so it is built by the same
@@ -1066,8 +1156,8 @@ let compile (m : Model.t) : t =
         let name = names.(i) in
         let lo, hi = bounds.(i) in
         let coeff = match dir with Search.Minimise -> 1 | Search.Maximise -> -1 in
-        (* M16-file-review-T5 (D-0193): under [Discard_rows] (`--no-proof`) the line is
-           not built. Its one reader is the .opb's header ([Encoding.write_opb]), which
+        (* Under [Discard_rows] (`--no-proof`) the line is not built (the setup review,
+           D-0193). Its one reader is the .opb's header ([Encoding.write_opb]), which
            that sink never writes, and its length is the objective's width: one term
            per rung, 52 million on wmsmc-int, where building it was the whole setup
            (140 G instructions of 140 G). *)
@@ -1100,7 +1190,8 @@ let compile (m : Model.t) : t =
   let opb_terms pos terms = List.map (fun (c, i) -> (c, name_of pos i)) terms in
   let prop_terms terms = List.map (fun (c, i) -> (c, Var.of_int i)) terms in
 
-  (* M1-T23, half two of the cap. Called by every [post_*] below, on the *normalised*
+  (* The arithmetic cap, half two (M1-T23). Called by every [post_*] below, on the
+     *normalised*
      term list -- the same list the row and the propagator are built from, so the
      magnitude measured is the magnitude of what is actually posted. Merging duplicate
      variables can only shrink it (|a + b| <= |a| + |b|), so checking after
@@ -1128,12 +1219,13 @@ let compile (m : Model.t) : t =
       reject_row pos ~what ~magnitude:(Checked.row_magnitude tb rhs)
   in
 
-  (* M8-bits-encoding-T2: does this row carry a term on the bits encoding? Decides
-     [pack_linear]'s [~mixed]. *)
+  (* Does this row carry a term on the bits encoding? Decides [pack_linear]'s
+     [~mixed]. *)
   let mixed nterms =
     Encoding.n_bits_vars encoding > 0 && List.exists (fun (_, i) -> on_bits.(i)) nterms
   in
-  (* ...and the same answer as [pack_linear]'s [~mixed] wants it (D-0153). *)
+  (* ...and the same answer in the form [pack_linear]'s [~mixed] wants it, the lookup
+     that spells the PB row as the .opb holds it (D-0153). *)
   let row_bits nterms = if mixed nterms then Some (Encoding.bits_n encoding) else None in
   (* One row + one instance. [nterms] is the *same* normalised list on both sides. *)
   let post_le_as ~pack ~what pos nterms rhs =
@@ -1164,14 +1256,14 @@ let compile (m : Model.t) : t =
   let post_ne pos nterms rhs ~pack =
     check_row pos ~what:"this disequality" nterms rhs;
     let ab = Encoding.add_int_lin_ne encoding (opb_terms pos nterms) rhs in
-    (* M8-bits-encoding-T3 (D-0134 section 6): over a bits scope the pair's ids are the
-       instance's, its prunings derived through them (lib/core/prop/ne.ml); otherwise
-       dropped, as the module header says. *)
+    (* Over a bits scope the pair's ids are the instance's, its prunings derived through
+       them (lib/core/prop/ne.ml, D-0134 section 6); otherwise dropped, as the module
+       header says. *)
     let rows = if mixed nterms then Some ab else None in
     [ pack (Ne.make ?rows store (prop_terms nterms) rhs) ]
   in
 
-  (* ---------------------------------------------------------- M4-T1, all_different
+  (* ------------------------------------------------------------- all_different (M4-T1)
 
      One [Alldiff] instance over the DISTINCT variable operands, plus the pairwise
      clause rows [Encoding.add_all_different] posts for them, plus a request for the
@@ -1184,7 +1276,7 @@ let compile (m : Model.t) : t =
 
      - A CONSTANT operand. `all_different([x, y, 3])` is `all_different([x, y])` plus
        `x <> 3` and `y <> 3`, and the disequalities go through the ordinary [post_ne]
-       path so they get the rows and the propagator M1 already has for them. Nothing
+       path so they get the rows and the propagator every disequality has. Nothing
        in the .opb or in [Alldiff] then has to know that a value can be occupied by
        something with no encoding of its own.
      - A REPEATED variable. `all_different([x, y, x])` is unsatisfiable outright, and
@@ -1235,10 +1327,19 @@ let compile (m : Model.t) : t =
     in
     decompose [] xs @ global
   in
-  (* ------------------------------------------------------------------------ M7-T16
+  (* ------------------------------------------------------- global_cardinality (M7-T16)
 
      `fzn_global_cardinality(xs, cover, counts)`: the COUNTING ROWS
-     lib/core/prop/gcc.ml's derivations are built over, and the propagator instance.
+     lib/core/prop/gcc.ml's derivations are built over, and the propagator instance
+     (D-0078: the counting row lives in the order encoding, and the interval capacity is
+     what a decomposition cannot reach).
+
+     WHICH CALLS ARRIVE HERE. mznlib/fzn_global_cardinality.mzn sends a call whose counts
+     are all fixed to this propagator and a call with a variable count to std's `count`
+     decomposition instead (M18-coverage-T14, D-0247: the native propagator misses the
+     propagation between counts, and the decomposition's implied row closes instances it
+     cannot). The closed and low_up forms stay native with variable counts, so this code
+     still handles both kinds of count.
 
      THE ROWS ARE OVER THE ORDER ENCODING, and that is forced rather than chosen. A
      tally is naturally a sum over the DIRECT encoding, but the direct encoding does not
@@ -1258,20 +1359,26 @@ let compile (m : Model.t) : t =
      domain STARTS at v contributes the constant 1 rather than a literal, which is
      [ones].
 
-     TWO REFUSALS, both of them here rather than in the propagator, because this is
+     THREE REFUSALS, all of them here rather than in the propagator, because this is
      where a source position is in hand:
 
        - a cover and a counts array of different lengths;
-       - (M7-T16 refused a CONSTANT count here as well. M7-T18 lifted that: a constant
-         is the count view [View.const k], whose row is the one-value variable's row
-         with an empty ladder, and it is no longer refused);
+       - the same value twice in the cover (D-0260). gcc.ml keys its capacity table and
+         its memo of HIGH rows on the value, and with two counts for one value the memo
+         justified the second count's pruning by the first count's row, which veripb
+         rejected. A GUARD as well: [Builder.merge_gcc_cover_repeats] keeps the first
+         occurrence of each value and ties the other counts to its count with a linear
+         equality in the model, so a parsed model never reaches it;
        - the same variable twice in [xs]. Its tally contribution would be 2 and every
          cancellation in gcc.ml assumes 1. all_different can let a repeat through
          because its pairwise decomposition refutes it; there is no such decomposition
-         here, so it is refused rather than mis-counted. SINCE M7-T29 (D-0146) THIS IS A
-         GUARD, NOT A PATH: [Builder.split_gcc_repeats] replaces every repeat by a copy
-         tied with `int_eq` in the model itself, so a parsed model never reaches it; a
-         [Model.t] built by other means still meets the refusal rather than a miscount. *)
+         here, so it is refused rather than mis-counted. THIS IS A GUARD, NOT A PATH:
+         [Builder.split_gcc_repeats] replaces every repeat by a copy tied with `int_eq`
+         in the model itself (M7-T29, D-0146), so a parsed model never reaches it; a
+         [Model.t] built by other means still meets the refusal rather than a miscount.
+
+     A CONSTANT count is not refused: it is the count view [View.const k], whose row is
+     the one-value variable's row with an empty ladder (M7-T18; M7-T16 refused it). *)
   let post_global_cardinality pos (xs : Model.operand list) (cover : int array)
       (counts : Model.operand list) =
     if Array.length cover <> List.length counts then
@@ -1302,12 +1409,20 @@ let compile (m : Model.t) : t =
         "builtin `fzn_global_cardinality`: the same variable appears more than once in \
          the array. Its contribution to a tally would be more than one, which every \
          cancellation in lib/core/prop/gcc.ml assumes it is not";
+    if List.length (List.sort_uniq compare (Array.to_list cover)) <> Array.length cover
+    then
+      Error.failf pos
+        "builtin `fzn_global_cardinality`: the cover names the same value more than \
+         once. lib/core/prop/gcc.ml keys its capacity table and its memo of HIGH rows on \
+         the value, so a second count for it would be justified by the first one's row \
+         (D-0260)";
     let consts = List.filter_map fixed_value xs in
     let cover_rows =
       List.mapi
         (fun j cnt ->
           let v = cover.(j) in
-          (* M7-T18: a CONSTANT count is the count VIEW [View.const k] (D-0058), and its
+          (* A CONSTANT count is the count VIEW [View.const k] (M7-T18; D-0058, a view
+             is a rendering onto its base's literals, with none of its own), and its
              row is the one-value variable's row: [cdlo = cdhi = k], so the ladder term
              below is empty and [k] sits on the degree side. See gcc.ml's header,
              "Constant counts". *)
@@ -1341,24 +1456,25 @@ let compile (m : Model.t) : t =
           (v, cview, const_v, ge_cid, le_cid))
         counts
     in
-    (* NO [request_direct] CALL (M7-T17, D-0082).
+    (* NO [request_direct] CALL. Nothing in lib/core/prop/gcc.ml names a direct literal
+       -- the whole point of the order-encoded counting rows above is that it does not
+       have to (D-0078). A pruning that needs a derivation written ahead of its trace
+       line says so itself: gcc.ml's rule A sets [Store.entry]'s [ahead] at its own
+       pruning call, through [Store.deriving_ahead] (M7-T17, D-0082: derive-ahead is a
+       property of the propagator, not of the encoding).
 
-       Nothing in lib/core/prop/gcc.ml names a direct literal -- the whole point of the
-       order-encoded counting rows above is that it does not have to (D-0078). M7-T16
-       requested the direct encoding here anyway, purely to arm lib/core/trace.ml's
-       [derive_ahead], which then triggered on [Encoding.has_direct] of the pruned
-       variable; without it gcc's trace lines went out as bare `rup` and 3.0.2 refused
-       them. That cost the scope's width-proportional `red` lines (+13% on
-       `2008_debruijn_binary`). The trigger is now [Store.entry]'s [ahead], set by
-       gcc.ml's rule A at its own pruning call through [Store.deriving_ahead], so the
-       encoding nothing read is gone with the call. *)
+       M7-T16 requested the direct encoding here anyway, purely to arm
+       lib/core/trace.ml's [derive_ahead], which then triggered on [Encoding.has_direct]
+       of the pruned variable; without it gcc's trace lines went out as bare `rup` and
+       3.0.2 refused them. That cost the scope's width-proportional `red` lines (+13% on
+       `2008_debruijn_binary`), and the encoding nothing read went with the call. *)
     let p = Gcc.make store encoding ~cover:cover_rows (List.map Var.of_int movable) in
     [ (fun id -> Propagator.pack ~id (module Gcc : Propagator.S with type t = Gcc.t) p) ]
   in
-  (* ======================================================================== M7-T28
+  (* =============================================================== regular (M7-T28)
 
-     `baguette_regular(x, Q, smin, d, q0, F, s)` (D-0146 section 3; the one block this
-     row adds to this file, with its dispatch and bits-hold arms below). The rows are
+     `baguette_regular(x, Q, smin, d, q0, F, s)` (D-0146 section 3): a DFA over the
+     letters x, with (n + 1) * Q state flags s as store variables. The rows are
      lib/core/prop/regular.ml's header, posted in this order:
 
        ALO_i, AMO_i   for every layer i = 0..n (the flags' exactly-one)
@@ -1526,7 +1642,7 @@ let compile (m : Model.t) : t =
             p);
       ]
   in
-  (* ------------------------------------------------------------------------ M7-T28
+  (* --------------------------------------------------------------- inverse (M7-T28)
 
      `baguette_inverse(f, fmin, g, gmin)` (D-0146 section 7, D-0151 section 2): the
      CHANNEL rows lib/core/prop/inverse.ml's header states, over the order literals of
@@ -1605,7 +1721,8 @@ let compile (m : Model.t) : t =
     let p = Inverse.make ~f ~fmin ~g ~gmin in
     (* Idempotent only when no variable occurs twice across the two arrays: an aliased
        variable is two cells one removal changes at once, and the second pass can then
-       owe the first one more (the header's I-P2 argument is per cell). *)
+       owe the first one more (inverse.ml's header argues I-P2, the fixpoint invariant
+       that a second run changes nothing, per cell). *)
     let ops =
       List.filter_map
         (function Model.Var i -> Some i | Model.Const _ -> None)
@@ -1685,11 +1802,12 @@ let compile (m : Model.t) : t =
         p)
     :: (stage2 iv.Model.inv_f @ stage2 iv.Model.inv_g)
   in
-  (* ------------------------------------------------------------------------ M7-T28
+  (* ---------------------------------------------------------------- member (M7-T28)
 
      `baguette_member(x, y, b)` (D-0151 section 3, D-0159, D-0170): the rows
      lib/core/prop/member.ml's header states, in this order -- OR over the selectors, then
-     per position k, [a, b] the overlap of the two DECLARED hulls (M7-T34):
+     per position k, [a, b] the overlap of the two DECLARED hulls (M7-T34, member
+     without width-proportional rows):
 
        ~b_k \/ [x_k >= a]   ~b_k \/ ~[x_k >= b+1]   ~b_k \/ [y >= a]   ~b_k \/ ~[y >= b+1]
        F_k   sum_{v=a+1..b} ([x_k >= v] + ~[y >= v]) + (b - a) ~b_k >= b - a
@@ -1697,9 +1815,10 @@ let compile (m : Model.t) : t =
 
      a constant literal folded (a clause it makes true not written), a big-M row only when
      b > a, and the single row `~b_k` when the hulls are disjoint. At most six rows per
-     position whatever the width; the threshold clauses D-0159 posted here, two per value
-     of the overlap, are now lemmas member.ml writes into the proof where a line needs
-     one. A position whose x_k IS y has no rows: b_k is free.
+     position whatever the width (D-0170). The threshold clauses, two per value of the
+     overlap, are not posted: they are lemmas member.ml writes into the proof where a
+     line needs one (D-0159 posted them here). A position whose x_k IS y has no rows:
+     b_k is free.
 
      Refused with a position: a selector count other than one per position, and a
      selector that is not a Boolean variable declared on 0..1, distinct from the others
@@ -1815,13 +1934,13 @@ let compile (m : Model.t) : t =
             p);
       ]
   in
-  (* ------------------------------------------------------------- M18-coverage-T1
+  (* ------------------------------------------------------- table (M18-coverage-T1)
 
-     `baguette_table(x, t, s)`, D-0206 section 2: ALO over the selectors, and per tuple
-     one DEF row `k ~s_t + sum_i ([x_i >= t_i] + ~[x_i >= t_i + 1]) >= k`, a literal a
-     declared bound makes true dropped, the row the unit `~s_t` when one is false (a
-     value outside a declared hull, or a constant cell that differs), and no row when
-     none is left. Rows in tuple order, after ALO. *)
+     `baguette_table(x, t, s)`, D-0206 section 2, one selector s_t per tuple: ALO over the
+     selectors, and per tuple one DEF row `k ~s_t + sum_i ([x_i >= t_i] + ~[x_i >= t_i +
+     1]) >= k`, a literal a declared bound makes true dropped, the row the unit `~s_t`
+     when one is false (a value outside a declared hull, or a constant cell that differs),
+     and no row when none is left. Rows in tuple order, after ALO. *)
   let post_table pos (tb : Model.table) =
     let builtin = "baguette_table" in
     let decl i =
@@ -1895,15 +2014,17 @@ let compile (m : Model.t) : t =
             p);
       ]
   in
-  (* ------------------------------------------------------------- M18-coverage-T3
+  (* ----------------------------------------------------- circuit (M18-coverage-T3)
 
      `baguette_circuit(succ, pos, root)`, D-0217 section 2 and lib/core/prop/circuit.ml's
-     header: per node u and declared successor v (v <> u, v in S), GE(u, v) and LE(u, v)
-     when neither is the root, LE(r, v) from the root, END(u) into it, the guard
-     `n ~[succ_u >= v] + n [succ_u >= v+1]` over succ_u's order literals, and pos
-     expanded as any linear term. A declared value outside S, or u itself, gets a unit
-     row (mznlib's restrictions usually leave none); a constant successor that is one is
-     the empty row. Rows node by node, values increasing, GE before LE. *)
+     header: the successors succ, and MTZ position variables pos for the n - 1 nodes other
+     than the root (succ_u = v -> pos_v = pos_u + 1). The rows: per node u and declared
+     successor v (v <> u, v in S), GE(u, v) and LE(u, v) when neither is the root, LE(r,
+     v) from the root, END(u) into it, the guard `n ~[succ_u >= v] + n [succ_u >= v+1]`
+     over succ_u's order literals, and pos expanded as any linear term. A declared value
+     outside S, or u itself, gets a unit row (mznlib's restrictions usually leave none); a
+     constant successor that is one is the empty row. Rows node by node, values
+     increasing, GE before LE. *)
   let post_circuit pos (c : Model.circuit) =
     let builtin = "baguette_circuit" in
     let xs = Array.of_list c.Model.cir_x and ps = Array.of_list c.Model.cir_pos in
@@ -2016,11 +2137,11 @@ let compile (m : Model.t) : t =
           p);
     ]
   in
-  (* ===================================================================== end M7-T28 *)
-  (* ------------------------------------------------------------------------ M4-T9
+  (* ============================================ end of the mznlib globals (M7-T28 on) *)
+  (* ------------------------------------------------------------ maximum, minimum (M4-T9)
 
      `array_int_maximum(m, xs)` / `array_int_minimum(m, xs)`, as lib/core/prop/maxmin.ml's
-     header splits it (D-0095):
+     header splits it (D-0095, a propagator over one clause row per threshold):
 
        - the CONJUNCTIVE half, one ordinary `int_lin_le` row and [Linear] instance per
          operand: `x_i - m <= 0` for a maximum, `m - x_i <= 0` for a minimum. These are
@@ -2035,8 +2156,8 @@ let compile (m : Model.t) : t =
      increasing threshold -- because the order they are appended is the order of the ids
      the proof cites.
 
-     M8-bits-encoding-T3 (D-0134 sections 2.1, 2.5): when a variable of the scope is on
-     the bits encoding, the disjunctive half is the SELECTOR shape instead -- one big-M
+     When a variable of the scope is on the bits encoding, the disjunctive half is the
+     SELECTOR shape instead (M8-bits-encoding-T3, D-0134 sections 2.1, 2.5) -- one big-M
      row per operand over a fresh `$mxN` and one clause over the selectors, posted by
      [Encoding.add_choice] from [Maxmin.selector_rows] after the linear rows, and the
      ids handed back to the instance. The group's pick ([Maxmin.chosen]) reads the
@@ -2099,12 +2220,13 @@ let compile (m : Model.t) : t =
     in
     linear @ [ pack ]
   in
-  (* ------------------------------------------------------------------------ M4-T10
+  (* ------------------------------------------------------------- cumulative (M4-T10)
 
-     `baguette_cumulative(s, d, r, cap)` (D-0096). The capacity rows are built and
-     posted by [Cumulative.make] itself -- one row per time point whose may-load exceeds
-     the capacity, over the starts' ORDER literals, no auxiliary -- so this arm only
-     maps operands and refuses negative constants with a position. *)
+     `baguette_cumulative(s, d, r, cap)` (D-0096: time-table filtering over capacity
+     rows on the order literals; disjunctive is its unit case). The capacity rows are
+     built and posted by [Cumulative.make] itself -- one row per time point whose may-load
+     exceeds the capacity, over the starts' ORDER literals, no auxiliary -- so this arm
+     only maps operands and refuses negative constants with a position. *)
   let post_cumulative pos (ss : Model.operand list) (ds : int array) (rs : int array) cap
       =
     if cap < 0 then
@@ -2142,25 +2264,25 @@ let compile (m : Model.t) : t =
           p);
     ]
   in
-  (* ------------------------------------------------------------------------ M4-T3
+  (* --------------------------------------------------------------- element (M4-T3)
 
      `array_int_element(idx, as, c)`, with `as` a constant array and a 1-BASED index.
 
      THE INDEX IS A VIEW (D-0058): [View.shift (View.of_var idx) (-1)] is the 0-based
      array offset, and lib/core/prop/element.ml prunes through it straight into [idx]'s
      own domain. There is no auxiliary variable and no channelling row -- which is the
-     whole of what M4-T0 bought and what the aux-variable shape would have cost, since a
-     channel is a bounds-consistent step and element's [Domain] claim would not survive
-     one.
+     whole of what views (+-x + k, M4-T0) bought and what the aux-variable shape would
+     have cost, since a channel is a bounds-consistent step and element's [Domain] claim
+     would not survive one.
 
      A CONSTANT INDEX is decomposed here and never reaches the propagator, so that module
      has one degenerate case instead of two: in range it is the equality `c = as[k]`,
-     which the ordinary [post_eq] path posts with the rows and the propagator M1 already
-     has; out of range it is the empty row `0 <= -1`, the same ground contradiction
-     [post_ne] gives `x - x <> 0` (lib/core/prop/ne.ml's `ne_self_unsat`), refuted by one
-     [pol] over a row the .opb really holds. A constant RESULT is not decomposed: it is a
-     [View.Const], which the propagator and [Encoding.view_ge] both handle as the
-     arithmetic they already are.
+     which the ordinary [post_eq] path posts with the rows and the propagators every
+     equality has; out of range it is the empty row `0 <= -1`, the same ground
+     contradiction [post_ne] gives `x - x <> 0` (lib/core/prop/ne.ml's `ne_self_unsat`),
+     refuted by one [pol] over a row the .opb really holds. A constant RESULT is not
+     decomposed: it is a [View.Const], which the propagator and [Encoding.view_ge] both
+     handle as the arithmetic they already are.
 
      ONE [request_direct] CALL, and the one that is NOT here is the measured half.
 
@@ -2169,20 +2291,24 @@ let compile (m : Model.t) : t =
      a view's `=` is the BASE's, so the request is for [idx] itself and never for the
      view.
 
-     The RESULT gets none. It was requested here at first, on the argument that
-     lib/core/trace.ml's [derive_ahead] gated on [Encoding.has_direct] of the PRUNED
-     variable (it no longer does: M7-T17, D-0082) and that a result pruning would therefore need its [pol] written out ahead
-     of its trace line (I-X10, D-0040). MEASURED 2026-09-21: dropping the call reddens
-     NOTHING -- all six element models and a scene built specifically to need it (an
-     index HOLE punched by an `int_ne`, so the result's pruning rests on something
-     [Reason.t] cannot state) verify unchanged. The result's trace lines are RUP against
-     this constraint's own rows with no derivation ahead of them, which is the [Ne]
-     situation and the reason element is classified [Single_row] rather than
-     [Needs_derivation]. So the call is gone, and with it the result's whole direct
-     encoding -- width-proportional, which is exactly the cost D-0028 and D-0058 measure.
-     An argument for a proof line that no proof needs is the thing this project's rules
-     are about; it is recorded here rather than deleted so the next reader does not make
-     it again. *)
+     The RESULT gets none, because its trace lines are RUP against this constraint's own
+     rows with no derivation ahead of them. That is the [Ne] situation, and the reason
+     element is a [Single_row] family rather than a [Needs_derivation] one in the
+     classification test/unit/test_trace.ml and lib/core/prop/element.ml use. Leaving
+     the call out saves the result's whole direct encoding -- width-proportional, which
+     is exactly the cost D-0028 and D-0058 measure.
+
+     It was requested here at first, on the argument that lib/core/trace.ml's
+     [derive_ahead] gated on [Encoding.has_direct] of the PRUNED variable (it no longer
+     does: M7-T17, D-0082) and that a result pruning would therefore need its [pol]
+     written out ahead of its trace line (I-X10: every trace line a propagator emits is
+     RUP against the .opb plus the lines before it; D-0040, where a pruning is not RUP
+     on its own, an explicit derivation is written ahead of its line). MEASURED
+     2026-09-21: dropping the call reddens NOTHING -- all six element models and a scene
+     built specifically to need it (an index HOLE punched by an `int_ne`, so the result's
+     pruning rests on something [Reason.t] cannot state) verify unchanged. An argument for
+     a proof line that no proof needs is the thing this project's rules are about; it is
+     recorded here rather than deleted so the next reader does not make it again. *)
   let post_array_int_element pos (idx : Model.operand) (values : int array)
       (res : Model.operand) =
     match idx with
@@ -2214,7 +2340,7 @@ let compile (m : Model.t) : t =
         ]
   in
 
-  (* ------------------------------------------------------------- M2, Booleans *)
+  (* ------------------------------------------------------------- Booleans (M2) *)
 
   (* An operand a Boolean builtin requires to be Boolean. Checked *here*, not in
      lib/flatzinc/builder.ml, because this is the first place the variable declarations
@@ -2235,10 +2361,12 @@ let compile (m : Model.t) : t =
     op
   in
 
-  (* ------------------------------------------------------------- M3, reification
+  (* ------------------------------------------------------------- reification (M3)
 
      Every reified builtin below is one call to [post_reif_le] or [post_reif_eq]. That
-     is roadmap M3-T4's whole claim made concrete on this side of the boundary: the
+     is roadmap M3-T4's whole claim (the author of a reification supplies only
+     enforce-hold, enforce-not-hold and entailment) made concrete on this side of the
+     boundary: the
      five propagation cases of `b <-> C` are the dispatcher's
      (lib/core/prop/reif.ml), and what is left here is posting the rows and choosing
      an author. `int_ne_reif` differs from `int_eq_reif` by ONE argument, [~positive],
@@ -2247,15 +2375,16 @@ let compile (m : Model.t) : t =
      The degenerate cases are not an afterthought. A FlatZinc model is entitled to say
      `int_le_reif(x, y, b)` where the declared domains already settle `x <= y`, and
      then `b <-> C` is not a reification: it is `b = 1`. [Encoding]'s reification doors
-     refuse such a condition by name ([Reif_constant], M3-T1's own check, which
-     [reif_rows] makes for the identical reason) rather than emit two rows one of which
+     refuse such a condition by name ([Encoding.Reif_constant], the check of M3-T1's
+     red-based reification definitions, which [Encoding.reif_rows] makes for the
+     identical reason) rather than emit two rows one of which
      no longer mentions the reifier, so the decision is made HERE, from the same
      declared bounds, and the model keeps its meaning: a unit row fixing the reifier,
      and one [Linear] instance over it. *)
 
   (* The span of a normalised term list over the DECLARED domains -- the two numbers
      every big-M below is computed from. Call [check_row] first: this is where the
-     products live that M1-T23's cap is sized for. *)
+     products live that the arithmetic cap (M1-T23) is sized for. *)
   let term_span nterms =
     List.fold_left
       (fun (lo, hi) (c, i) ->
@@ -2265,10 +2394,11 @@ let compile (m : Model.t) : t =
       (0, 0) nterms
   in
   (* The reifier as a variable index, with the two things that make it one checked
-     here rather than inside [Encoding]: it is a `var bool` (D-0007), and it does not
-     occur in its own condition. `b <-> C(b)` is not a definition -- [reif_rows] raises
-     [Reif_in_condition] for it -- and a term list mentioning the reifier would also
-     collide with the guard term the rows below append. *)
+     here rather than inside [Encoding]: it is a `var bool` (a Boolean is the order
+     encoding on [0, 1], D-0007), and it does not occur in its own condition.
+     `b <-> C(b)` is not a definition -- [Encoding.reif_rows] raises
+     [Encoding.Reif_in_condition] for it -- and a term list mentioning the reifier would
+     also collide with the guard term the rows below append. *)
   let reifier_index pos ~builtin nterms r =
     match bool_operand pos ~builtin ~what:"the reifier" r with
     | Model.Const n -> Either.Left (n = 1)
@@ -2283,7 +2413,8 @@ let compile (m : Model.t) : t =
   (* One unit row and one [Linear] instance fixing a Boolean to [v]. The row is posted
      because `conclusion SAT` re-checks the assignment against the .opb, so the .opb has
      to be the model; the instance is posted because nothing else would establish the
-     value, and it justifies itself the ordinary D-0013 way over its own row. *)
+     value, and it justifies itself the ordinary D-0013 way over its own row (a bounds
+     conflict or pruning justified by weakening, dividing and adding). *)
   let post_fixed_bool pos ri v =
     let nterms = if v = 1 then [ (-1, ri) ] else [ (1, ri) ] in
     let rhs = if v = 1 then -1 else 0 in
@@ -2384,7 +2515,7 @@ let compile (m : Model.t) : t =
 
      and the order-encoding expansion of that, over variables declared on [0, 1], is
      literally the clause: `+1 x_1_ge_1 ... +1 ~y_1_ge_1 ... >= 1`. That is what makes
-     lib/core/prop/bool_clause.ml's [rup] close in a single unit propagation, and it is
+     lib/core/prop/clause.ml's [rup] close in a single unit propagation, and it is
      why nothing here needs [Opb.clause]: one door into the .opb means one expansion to
      keep right.
 
@@ -2439,7 +2570,9 @@ let compile (m : Model.t) : t =
      proof cites. Getting that wrong would not fail to compile and would not fail a
      unit test -- it would shift every later id.
 
-     One instance per clause is D-0027 point 3's default and loses nothing here: unit
+     One instance per clause is D-0027 point 3's default (D-0011 is a rule about naming
+     rows, not about counting them, so several instances per builtin are allowed) and
+     loses nothing here: unit
      propagation over these clauses is domain consistent for the whole reified
      constraint, which a fused propagator could not improve on. *)
   let clause ~builtin ~pack pos lits =
@@ -2528,7 +2661,7 @@ let compile (m : Model.t) : t =
         post_eq pos (normalise_terms terms) rhs
   in
 
-  (* ---------------------------------------------------------------- M4, arithmetic
+  (* ---------------------------------------------------------------- arithmetic (M4)
 
      lib/core/prop/arith.ml's header is the specification of what is posted here and
      why; this is the wiring. Three things about it are worth stating on this side of
@@ -2547,9 +2680,9 @@ let compile (m : Model.t) : t =
      door and no second big-M to keep in step with [Encoding]'s.
 
      Third, the rows themselves go through [Encoding.add_int_lin_le] and [Linear.make]
-     over the SAME normalised term list, exactly as [post_le] does, so M1-T23's cap
-     measures what is actually posted and [Model_row] names a row [Linear.pb_row] can
-     reproduce. *)
+     over the SAME normalised term list, exactly as [post_le] does, so the arithmetic
+     cap (M1-T23) measures what is actually posted and [Model_row] names a row
+     [Linear.pb_row] can reproduce. *)
   let aff_of (op : Model.operand) : Arith.aff =
     match op with Model.Const n -> Arith.aff_const n | Model.Var i -> Arith.aff_var i
   in
@@ -2628,9 +2761,9 @@ let compile (m : Model.t) : t =
                ~ge:aux.Model.y_ge)
   in
   (* q = x div y. There is no linear path here at any arity: truncation toward zero is
-     decided by the sign of x (D-0033), so even a constant divisor keeps its sign
-     split. A constant divisor only collapses the ladder to one case, which
-     [Arith.Case_const] already is. *)
+     decided by the sign of x (D-0033: division rounds toward zero as a relation), so even
+     a constant divisor keeps its sign split. A constant divisor only collapses the ladder
+     to one case, which [Arith.Case_const] already is. *)
   let post_int_div pos x y q aux =
     let builtin = "int_div" in
     let defs = post_aux_defs pos ~builtin ~pack:pack_div_guard x y aux in
@@ -2680,10 +2813,13 @@ let compile (m : Model.t) : t =
      contradictory units on its own auxiliary Boolean; [Ne.propagate] finds every one of
      its (zero) terms fixed with the sum at the value it must avoid and conflicts with an
      empty [Clause]; and the refutation veripb accepts is `rup >= 1 ;`, closed the
-     D-0022/I-X7 way because it rests on a clause. That model is
-     test/models/ne_self_unsat.fzn. *)
-  (* M14-e2e-verification-T3: the .scp name of the k-th constraint is `c<k>`, k counted
-     from 1 in file order (tools/e2e/fzn2scp.py), which is [m.constraints]' order. *)
+     D-0022/I-X7 way because it rests on a clause (a root conflict is its own
+     contradiction only when its derivation is numeric, so a clause-based one is closed
+     by a `rup` of the empty constraint, which `conclusion UNSAT` then cites). That
+     model is test/models/ne_self_unsat.fzn. *)
+  (* Under `--e2e`, the .scp name of the k-th constraint is `c<k>`, k counted from 1 in
+     file order (tools/e2e/fzn2scp.py), which is [m.constraints]' order
+     (M14-e2e-verification-T3). *)
   let e2e_k = ref 0 in
   let instances =
     List.concat_map
@@ -2697,7 +2833,8 @@ let compile (m : Model.t) : t =
         (* [check_row] is the diagnostic path and covers every row this arm posts, but
            the arithmetic that happens *before* a row exists -- merging duplicate
            coefficients, folding a constant operand into the right-hand side, negating
-           an equality's terms -- is checked too (M1-T23) and can raise first, on
+           an equality's terms -- is checked too (the arithmetic cap, M1-T23) and can
+           raise first, on
            inputs so large that no magnitude can be reported. Converting that to the
            same positioned [Error.failf] is what stops an overflowing model from
            leaving the CLI with an escaping exception instead of a diagnostic. *)
@@ -2769,7 +2906,7 @@ let compile (m : Model.t) : t =
         r)
       m.Model.constraints
   in
-  (* M7-T11: the declared holes of a set domain, as propagator instances.
+  (* The declared holes of a set domain, as propagator instances (M7-T11).
 
      One [Ne] per hole, over the single term (+1, x) with right-hand side the hole, so
      the instance's whole job is "x <> h". [Ne] cites no row id (its header says why)

@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
-"""Compare the translator's .scp with the reference reading of the .fzn (M14-e2e-verification-T2).
+"""Compare the translator's .scp with the reference reading of the .fzn, for one model.
 
 Usage: python3 -I validate.py SCPSEM.out NAMES BAGUETTE.out REF.out [REF.out ...]
+
+Written for M14-e2e-verification-T2, the first end-to-end lane. The verdict is the printed
+line, not the exit status: exit 0 whenever a verdict is printed, 64 with the usage line on
+stderr when fewer than four arguments are given.
 
 SCPSEM.out is tools/e2e/scpsem.py on the .scp (cake's semantics, read from the .scp alone);
 each REF.out is tools/e2e/fzn_solutions.py on the .fzn (a MiniZinc reference solver). The
@@ -10,10 +14,11 @@ solution set the .scp admits, over every translated variable, and baguette's pri
 solution (its output variables only) extends to one of them, or baguette said UNSAT and the
 set is empty. Prints one line: `AGREE n=N refs=...`, `DIFFER ...`, or `UNCHECKED ...`.
 
-With an objective (T8, D-0182) both sides end with `objective DIR NAME`: the .scp's
-prob_type read by scpsem.py (NAME by the names table), and the .fzn's solve item read by the
-reference script. They must name the same direction and variable, and baguette's printed
-solution (its last, the one it claims optimal) must reach the optimum of the set under it.
+With an objective (M14-e2e-verification-T8, D-0182, objectives in the end-to-end chain) both
+sides end with `objective DIR NAME`: the .scp's prob_type read by scpsem.py (NAME by the
+names table), and the .fzn's solve item read by the reference script. They must name the
+same direction and variable, and baguette's printed solution (its last, the one it claims
+optimal) must reach the optimum of the set under it.
 The solution sets alone cannot see a swapped direction or objective variable, which is why
 the objective is compared as text AND by its optimum. AGREE then ends with `opt=V`.
 """

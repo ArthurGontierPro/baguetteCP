@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""baguette's answer on a .scp, judged against the .scp alone (M23-inputs-T5, D-0230).
+"""baguette's answer on a .scp, judged against the .scp alone. Written for M23-inputs-T5, the
+acceptance of baguette's .scp reader (lib/scp/, recorded in D-0230).
 
 Usage: python3 -I validate.py MODEL.scp BAGUETTE_STDOUT [NAMES] [MAX_NODES]
 
@@ -14,7 +15,8 @@ it); without it, every name is its own.
 
 Prints one line, `OK <kind>`, `WRONG <why>`, `TOOBIG` (the enumeration ran past
 MAX_NODES, default 2 000 000: no verdict) or `REFUSED <why>` (scpsem does not read the
-file), and exits 0 on OK and TOOBIG, 1 on WRONG, 2 on REFUSED.
+file), and exits 0 on OK and TOOBIG, 1 on WRONG, 2 on REFUSED, 64 (this text on stderr) when
+the argument count is wrong.
 """
 import os
 import sys

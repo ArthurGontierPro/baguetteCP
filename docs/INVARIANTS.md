@@ -234,9 +234,12 @@ Assertions guarded by `BAGUETTE_DEBUG=1` should check as many of these as is aff
   enumeration over the whole set — `Linear`, `Lin_eq`, `Int_le`, `Int_lt`, `Int_eq` (one
   `int_lin_le` row each), `Ne` (`int_lin_ne`'s two big-M rows, the `_neN` selector filled
   in by the checker's own unit propagation), `Bool2int` and `Bool_clause` (channelling and
-  clause rows). `Ne` is also the **only** thing that punches a hole: it is the sole caller
-  of `Store.remove_with_facts` in `lib/`; `Store.remove`/`Store.fix` have no `lib` callers
-  at all; `Domain.settle` only walks bounds past holes that already exist; and no
+  clause rows). Within that set `Ne` is also the **only** family that punches a hole
+  (`Store.remove`; `remove_with_facts` was folded into it by M2-T8). The families added
+  since that punch holes (`alldiff`, `gcc`, `element` through its view, `reif_lin_eq`,
+  `regular`, `table`, `member`, `inverse`, `circuit`) are classified one by one in
+  `test/unit/test_trace.ml`'s I-X10 table. `Domain.settle` only walks bounds past holes
+  that already exist; and no
   function in `lib/` builds a declared domain with gaps: `compile.ml` gives the store a set
   domain's hull and one `Ne` per hole (D-0072), and `Domain.of_list`, which had no `lib`
   caller, moved to the test helper `test/unit/domain_helper.ml` (M22-review-T5).
@@ -268,6 +271,24 @@ Assertions guarded by `BAGUETTE_DEBUG=1` should check as many of these as is aff
   *Status, in I-S4's register*: the enumeration and both Hall measurements are **measured**.
   That the enumeration stays complete as propagators are added is **argued**, and the
   closure gate is what converts it into a check.
+
+- **I-X11** A learned constraint stays on the page while a line not yet written may rest on
+  it (D-0257). Its `del` is written only when no such line remains: the trace line of a trail
+  entry its instance pushed (lazy, written at the next conflict), the conflict being analysed
+  (whose row the PB path resolves), or a line the search will write from it itself, such as
+  the CDCL loop's assertion of the UIP from the clause just learned. A line already written
+  needs nothing: VeriPB keeps a derived constraint whatever happens to its premises.
+  `Retention.reduce` enforces it with three locks (`locked_instances`' two, and `hold` for
+  the third), and BAGUETTE_DEBUG rechecks it twice: at the `del`, without the shortcuts the
+  locks take (`Retention.check_no_consumer`), and at the CDCL loop's direct assertion, which
+  raises if the clause it rests on is no longer held. It is I-X3 seen from the deletion
+  rather than from the trail: I-X3 says a deleted reason is cited by no live entry, I-X11
+  says the deletion waits for entries that do not exist yet. **Measured**: before D-0257 the
+  CDCL loop evicted the clause it had just learned (its instance had not propagated, so no
+  lock saw it), asserted from the clause directly, and VeriPB refused that line on costas14
+  and on 7 of the 268 test models under an eviction at every learned constraint.
+  **Argued** for the default search: [dfs] pushes nothing from a learned constraint except
+  through its own instance, so locks 1 and 2 cover it; D-0257 also measured it.
 
 - **I-S4** A trace line that cites a hole is supported only while that hole's own line is
   live, so **the cited line must outlive the citing line**. Since M1-T57 a settle line is

@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
-# M7-T1. The lane that proves the width refusal is gone, that the SIGNAL that replaced
-# it fires, and that the refusal is still reachable on request.
+# The lane that proves the width refusal is gone, that the SIGNAL that replaced it
+# fires, and that the refusal is still reachable on request (M7-T1, `make unlimit`).
+#
+#   scripts/check_unlimited.sh              the seven lanes below
+#   scripts/check_unlimited.sh --self-test  proves each assertion can fail; runs first
+#
+# Prints one line per lane and `check_unlimited: ok`; exit 0 when every lane holds, 1
+# when one fails (the count is printed). Needs the built solver and veripb.
 #
 # ---------------------------------------------------------------- why a script
 #

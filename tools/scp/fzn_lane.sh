@@ -1,7 +1,12 @@
 #!/usr/bin/env bash
-# The FlatZinc/.scp agreement lane of M23-inputs (D-0228 section 14 tests 1 and 2, D-0230).
+# The FlatZinc/.scp agreement lane: baguette's .scp reader (lib/scp/) against its own FlatZinc
+# front end, on the test models. These are tests 1 and 2 of the plan in D-0228 section 14 (the
+# record that made .scp baguette's second input, milestone M23-inputs); D-0230 records the
+# reader and its lanes.
 #
 # Usage: tools/scp/fzn_lane.sh [OUTDIR]     (BAGUETTE=binary, J=parallel runs, default 4)
+#   OUTDIR defaults to test/out/scp-fzn; BAGUETTE to _build/default/bin/main.exe, which this
+#   script does NOT build.
 #
 # For every test model tools/e2e/fzn2scp.py translates: the .scp is solved by baguette
 # with a proof, and the proof must be VERIFIED; the .fzn is solved by the same binary;
@@ -10,6 +15,8 @@
 # tools/scp/validate.py. One line per model in OUTDIR/res.txt, the totals on stdout. A
 # model the reader refuses is listed as REFUSED with the reason; the plan expects the 7
 # `member` models (fzn2scp writes them with `equals_if`, D-0228 section 14) and no other.
+# Exit 0 when no model FAILs (the first 20 FAIL lines are printed otherwise, and the exit is
+# 1); 1 too when no proof checker is found.
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SOLVER="${BAGUETTE:-${ROOT}/_build/default/bin/main.exe}"

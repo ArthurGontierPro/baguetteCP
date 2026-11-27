@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""opb2lp.py -- the root LP relaxation of a baguette .opb, and what it would fix (M13-codes-leads-T1, D-0183).
+"""opb2lp.py -- the root LP relaxation of a baguette .opb, and what it would fix. Written for
+M13-codes-leads-T1 (a linear relaxation as a presolve step); D-0183 records the measurement made
+before any solver code: nothing on the codes, a bound on a third of the Challenge sample.
 
 A STUDY instrument, not part of the solver. It reads the PB model baguette writes (PROOF-FORMAT §3:
 order literals `x_ge_v`, bits `x_bit_i`, plain Booleans, the ladder rows, every model row as `>=`,
@@ -20,7 +22,10 @@ the objective as a `min:` line over the objective's order literals), relaxes eve
 
 usage: opb2lp.py MODEL.opb [--ub UB] [--lp-out F.lp] [--cert K --cutoff @label --cert-out F]
                            [--name NAME] [--time-limit S]
-prints one JSON object on stdout.
+       (and --ub2, --denom, --mip-root S, --mip-only, --sol-out F: see each option's help)
+prints one JSON object on stdout. Exit 0 once it is printed (an infeasible LP is a result in
+the object, not a status); 1 on an .opb it cannot read (an unsupported relation) or a certificate
+through an `=` row, on a Python exception; 2 (argparse) on a usage error.
 """
 import sys, os, time, json, argparse, math
 from bisect import bisect_right

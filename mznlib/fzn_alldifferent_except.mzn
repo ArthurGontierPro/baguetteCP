@@ -1,15 +1,18 @@
-% M18-coverage-T7 (docs/DECISIONS.md D-0233): alldifferent_except_0, and all_different(xs, S),
-% as AT MOST ONE indicator per value outside the exception set.
+% M18-coverage-T7 (docs/DECISIONS.md D-0233, which chose the three cheap globals' shapes
+% by measurement on the 105 Challenge instances that call them): alldifferent_except_0,
+% and all_different(xs, S), as AT MOST ONE indicator per value outside the exception set.
 %
-% MiniZinc 2.10.1's std/fzn_alldifferent_except.mzn writes, when every variable is bounded,
-%   global_cardinality(xs, A, [0 | v in A], [1 | v in A])        A = dom_array(xs) diff except
-% which mznlib/fzn_global_cardinality_low_up.mzn routes to baguette's gcc with one 0..1 count
-% variable per value. Here the same constraint is written per value v of A as
+% MiniZinc 2.10.1's std/fzn_alldifferent_except.mzn writes, when every variable is
+% bounded,
+%   global_cardinality(xs, A, [0 | v in A], [1 | v in A])   A = dom_array(xs) diff except
+% which mznlib/fzn_global_cardinality_low_up.mzn routes to baguette's gcc with one 0..1
+% count variable per value. Here the same constraint is written per value v of A as
 %   baguette_bool_lin_le([1, ...], [xs[i] = v | i where v in dom(xs[i])], 1)
-% an int_lin_le over the indicators `xs[i] = v` themselves (docs/SPEC.md 2.1, D-0220's
-% builtin). It is the shape Chuffed's own library gives the same std call (bool_sum_le over
-% the same indicators), and it measured better than the gcc route on the Challenge instances
-% that call alldifferent_except_0 (D-0233 section 3): the indicators are std's int_eq_reif
+% an int_lin_le over the indicators `xs[i] = v` themselves (docs/SPEC.md 2.1; the builtin
+% D-0220 added for bin packing, Booleans read as 0..1 with no bool2int copy). It is the
+% shape Chuffed's own library gives the same std call (bool_sum_le over the same
+% indicators), and it measured better than the gcc route on the Challenge instances that
+% call alldifferent_except_0 (D-0233 section 3): the indicators are std's int_eq_reif
 % Booleans, shared by common-subexpression elimination with the rest of the model, and the
 % learned constraints are written over them.
 %

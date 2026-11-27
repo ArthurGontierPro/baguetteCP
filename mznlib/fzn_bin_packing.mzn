@@ -2,10 +2,10 @@
 %
 % MiniZinc 2.10.1's std/fzn_bin_packing.mzn is, for every bin b of
 % lb_array(bin)..ub_array(bin), `sum(i) (weight[i] * bool2int(bin[i] != b)) >= W -
-% capacity` (W the total weight), i.e. the load of b is at most `capacity`. Here it is that
-% inequality over the indicators `bin[i] = b` themselves (fzn_bin_packing_load.mzn says
-% why), one `baguette_bool_lin_le(w, [bin[i] = b | ...], capacity)` per bin of the same
-% range. std's form counts the items NOT in b; the two are the same row, negated and
+% capacity` (W the total weight), i.e. the load of b is at most `capacity`. Here it is
+% that inequality over the indicators `bin[i] = b` themselves (fzn_bin_packing_load.mzn
+% says why), one `baguette_bool_lin_le(w, [bin[i] = b | ...], capacity)` per bin of the
+% same range. std's form counts the items NOT in b; the two are the same row, negated and
 % shifted by W, and the indicators are the same Booleans.
 
 predicate baguette_bool_lin_le(array [int] of int: a, array [int] of var bool: x, int: c);

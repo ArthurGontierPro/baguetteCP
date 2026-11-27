@@ -30,7 +30,7 @@ CAP := $(if $(filter none unlimited 0,$(MEM_CAP_KB)),:,ulimit -v $(MEM_CAP_KB)) 
 # Passed down so a script invoked from a recipe agrees with the recipe.
 export BAGUETTE_MEM_CAP_KB = $(MEM_CAP_KB)
 
-.PHONY: build release test unit models scp check fmt fmt-check lint determinism unlimit selftests clean proof bootstrap bench diff scaling e2e sym
+.PHONY: build release test unit models scp check fmt fmt-check lint determinism unlimit selftests clean proof bootstrap bench diff scaling factor e2e sym
 
 build:
 	dune build
@@ -192,6 +192,17 @@ diff: build
 
 scaling: build
 	$(CAP) ./scripts/scaling_lane.sh --enforce $(ARGS)
+
+# The PER-NODE FACTOR lane (M17-bench-series-T6, D-0256): baguette's instructions per node (per
+# failure where the trees differ) against Gecode's on the same instance, in four configurations
+# (default and --cdcl, with and without proof), every proof checked. INFORMATION, never a gate:
+# it fails only on a crashed run or a rejected proof. Node only (perf, the MiniZinc bundle). It
+# measures the RELEASE binary, as D-0207 did. No $(CAP) on the recipe: the lane caps each solver run
+# at BAGUETTE_MEM_CAP_KB itself, and the checker at 32 GB, which a 4 GB cap on the lane would forbid.
+#   make factor ARGS="-j 8 /scratch/arthur/<run>"            # compared with bench/factor/reference.tsv
+#   make factor ARGS="--record -j 8 /scratch/arthur/<run>"   # re-record it, in its own commit
+factor: release
+	BIN=_build_release/default/bin/main.exe ./scripts/factor_lane.sh $(ARGS)
 
 # The END-TO-END lane (M14-e2e-verification-T2, D-0176): the covered test models through
 # CakeML's verified encoder and checker, the mutation controls, and the translator against

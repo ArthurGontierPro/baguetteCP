@@ -1,20 +1,25 @@
 (* pb_analysis.ml: PSEUDO-BOOLEAN conflict analysis -- eliminate the pivot by linear
-   combination and reduction, with the M2-L3 clause path as the fallback (M2-L6, D-0044).
+   combination and reduction, with 1UIP clause learning (lib/core/learn.ml, M2-L3) as the
+   fallback (M2-L6).
 
    Consistency level: none -- this is not a propagator. Governing records:
-   docs/DECISIONS.md D-0044 and its 2026-09-18 amendment; docs/INVARIANTS.md I-X6
-   (frozen reads), I-X8 / D-0029 (coefficient growth must raise), I-S4 (a cited line must
-   outlive the line citing it).
+   docs/DECISIONS.md D-0044 (the learned object is a PB inequality with the clause as
+   its degree-1 case, and the reduction rule is a swappable component) and its 2026-09-18
+   amendment (the cut is a second swappable axis, and a guarantee of one rule is not a
+   property of the type); docs/INVARIANTS.md I-X6 (an explanation reads a frozen
+   snapshot, never live domains), I-X8 / D-0029 (coefficient growth past the cap raises
+   [Checked.Overflow], never wraps), I-S4 (a cited line must outlive the line citing
+   it).
 
    ---------------------------------------------------------------------------
    What this does that lib/core/learn.ml cannot
    ---------------------------------------------------------------------------
 
-   M2-L3 resolves the IMPLICATION GRAPH: nodes are bound facts, and what comes out is a
-   clause, the negation of a conjunction. That is sound and it is what a SAT solver does,
-   but it throws away the arithmetic. A row like [3x + 3y + z >= 5] enters conflict
-   analysis as "these bounds are inconsistent" and leaves as a disjunction of negated
-   bounds, which is a much weaker statement than the row itself.
+   Clause learning resolves the IMPLICATION GRAPH: nodes are bound facts, and what comes
+   out is a clause, the negation of a conjunction. That is sound and it is what a SAT
+   solver does, but it throws away the arithmetic. A row like [3x + 3y + z >= 5] enters
+   conflict analysis as "these bounds are inconsistent" and leaves as a disjunction of
+   negated bounds, which is a much weaker statement than the row itself.
 
    This module resolves the ROWS. The conflicting constraint and every reason are taken as
    the pseudo-Boolean inequalities the .opb literally contains ([Propagator.pb_row], which
@@ -22,11 +27,12 @@
 
        C' = 1 * C  +  a * reduce(R)
 
-   where [a] is the pivot's coefficient in [C] and [reduce] is M2-L5's component, which
-   brings the pivot's coefficient in [R] down to 1 so the addition cancels it exactly.
-   What comes out is a general PB inequality, and that is the whole justification for this
-   row existing: it can be STRICTLY STRONGER than the clause the same conflict yields --
-   see "Why the PB row can propagate where the clause cannot" below.
+   where [a] is the pivot's coefficient in [C] and [reduce] is the reduction component of
+   lib/core/reduce.ml (M2-L5), which weakens and divides [R] so that the pivot's
+   coefficient in it is 1 and the addition cancels the pivot exactly. What comes out is
+   a general PB inequality, and that is the whole justification for this module: it can
+   be STRICTLY STRONGER than the clause the same conflict yields -- see "Where the PB row
+   has a linear reading and the clause has none" below.
 
    ---------------------------------------------------------------------------
    Koops et al. (CP 2025), sections 5 and 6 -- what was taken from them
@@ -78,7 +84,8 @@
    [assertive_slack] below is therefore stated in slack and counts nothing. It stops when
    the row conflicts or propagates under the assignment WITH THE CONFLICT LEVEL UNDONE,
    which is a question about coefficients and degrees; the number of conflict-level
-   literals never enters it. M2-L2 deliberately scoped its 1UIP assertion to
+   literals never enters it. The implication-graph cut of lib/core/analysis.ml (M2-L2)
+   deliberately scoped its 1UIP assertion to
    [Analysis.one_uip]'s own [postcondition] and left [Analysis.conflict_side] accepting
    two conflict-level literals precisely so that this row would not have to re-generalise
    it. It has not been re-generalised: [Analysis.one_uip] is untouched and its
@@ -112,52 +119,56 @@
    store is read, but only for values the trail already fixes; nothing here can see a
    domain the propagation did not see. That is I-X6 on this half.
 
-   The cost was a downward scan of the trail per literal query, four to five queries per
-   term per elimination. Since M11-complexity-T4 (D-0144) [falsified_before] answers from
-   the variable's bound history in O(log moves), with the same answers, and
-   [bounds_before] stays as the specification it is checked against under
-   [BAGUETTE_DEBUG]. Still never a live read.
+   [falsified_before] answers from the variable's bound history in O(log moves), with
+   the same answers, and [bounds_before] stays as the specification it is checked against
+   under [BAGUETTE_DEBUG]. Still never a live read. The scan it replaced was a downward
+   walk of the trail per literal query, four to five queries per term per elimination
+   (M11-complexity-T4, D-0144: learning and PB analysis without their quadratic
+   lists).
 
    ---------------------------------------------------------------------------
-   Why the PB row can propagate where the clause cannot -- D-0044's fork, from the
-   other side
+   Where the PB row has a linear reading and the clause has none (D-0044's fork, from
+   the other side)
    ---------------------------------------------------------------------------
 
-   D-0044's amendment and lib/core/learned.ml's header say [to_linear_row] returns [None]
-   on a threshold strictly INSIDE an integer variable's ladder, and that a 1UIP cut over
-   integer variables produces exactly those. Re-measured 2026-09-18 (M2-L4), by solving
-   every model in test/models/ with `--stats` and summing the `learned` and `convertible`
-   lines: **13 of 88** learned clauses convert, concentrated in the Boolean models. That
-   is why M2-L3 took fork (ii), proof-only.
+   A PB row resolved from model rows can often be read back as an integer linear row
+   ([Learned.to_linear_row] accepts it) over a conflict whose 1UIP clause has no such
+   reading. The reason is uniformity. [Encoding.linear_terms_int_lin_le] gives every rung
+   of a variable's ladder the SAME coefficient, so a model row's expansion is
+   ladder-UNIFORM; a positive linear combination of ladder-uniform rows is
+   ladder-uniform; and [Reduce.round_to_one] keeps a non-falsified literal exactly when
+   its coefficient is divisible by the divisor, at [a / d] -- so a uniform run survives a
+   division as a uniform run. A clause, by contrast, names single thresholds, and
+   [to_linear_row] returns [None] on a threshold strictly INSIDE an integer variable's
+   ladder (D-0044's amendment, lib/core/learned.ml's header).
 
-   The denominator was 86 here until M2-L4 re-ran it, and was stale by
-   `ladder_lift_unsat`'s two clauses, neither of which converts. The numerator was and is
-   right. Stated because the correction is the same shape as the two M2-L11 made: a
-   figure copied forward across a row that added a model.
+   "Can often" is not "always": the falsified literals kept by a reduction are an
+   arbitrary subset of a ladder and break uniformity at once. So this is not a theorem
+   and is not claimed as one -- it is a possibility the clause path does not have, and
+   [Search.n_pb_converts] (`pb-convert` in `--stats`) measures how often it is realised
+   rather than asserting that it is. Since M2-L13 the answer steers nothing: every
+   learned row propagates through lib/core/prop/pb.ml whether or not it converts.
 
-   A PB row resolved from model rows is a different object and it can land on the right
-   side of that test. [Encoding.linear_terms_int_lin_le] gives every rung of a variable's
-   ladder the SAME coefficient, so a model row's expansion is ladder-UNIFORM; a positive
-   linear combination of ladder-uniform rows is ladder-uniform; and [Reduce.round_to_one]
-   keeps a non-falsified literal exactly when its coefficient is divisible by the divisor,
-   at [a / d] -- so a uniform run survives a division as a uniform run. Where every step
-   happens to preserve uniformity, [Learned.to_linear_row] ACCEPTS the result, and the
-   learned object is a real [Linear] instance that prunes, over a conflict whose clause
-   [to_linear_row] refuses.
-
-   "Where every step happens to" is doing real work in that sentence: the falsified
-   literals kept by a reduction are an arbitrary subset of a ladder and break uniformity
-   at once. So this is not a theorem and is not claimed as one -- it is a possibility the
-   clause path does not have, and [Search]'s counters measure how often it is realised
-   rather than asserting that it is.
+   The clause side, measured 2026-09-18 (M2-L4) by solving every model in test/models/
+   with `--stats` and summing the `learned` and `convertible` lines: **13 of 88** learned
+   clauses convert, concentrated in the Boolean models. That is why clause learning
+   (M2-L3) first took fork (ii) of D-0044's amendment and kept its clauses proof-only,
+   until M2-L13 gave every learned row a propagator. The denominator was 86 here until
+   M2-L4 re-ran it, stale by `ladder_lift_unsat`'s two clauses, neither of which
+   converts; the numerator was and is right. Stated because the correction is the same
+   shape as the two M2-L11 made below: a figure copied forward across a task that added
+   a model.
 
    ---------------------------------------------------------------------------
-   I-S4, for a [pol] -- the debt lib/core/learn.ml left here explicitly
+   I-S4 for a [pol]: a PB derivation cites only lines that outlive it
    ---------------------------------------------------------------------------
 
-   learn.ml's header discharges I-S4's "outlives" half for its own [rup] by observing that
-   a [rup] names no id, and then says: "A [pol] citing a hole line across levels WOULD be
-   a violation, and M2-L6's reduction steps are the first thing that could write one."
+   A derivation built here cites model rows and level-0 bridge rows and nothing else, so
+   every line it cites outlives the line citing it (I-S4). lib/core/learn.ml's header
+   discharges I-S4's "outlives" half for its own [rup] by observing that a [rup] names no
+   id, and then hands the question here: "A [pol] citing a hole line across levels WOULD
+   be a violation, and the reduction steps of PB conflict analysis (M2-L6) are the first
+   thing that could write one."
 
    They do not write one, and the reason is structural rather than lucky. Every leaf of a
    derivation this module builds is an [Explanation.Model_row] carrying a
@@ -168,19 +179,22 @@
    rather than a reader having to take this paragraph's word for it, and [Search] checks
    it under [Debug].
 
-   M8-bits-encoding (D-0153) adds ONE kind of leaf, and it keeps the discharge: a row
-   with a bits term is instantiated through its atoms' bridges and its bound rows
-   (lib/core/ladder.ml, "The bits arm"). The bound rows are .opb rows. A bridge is a
+   The bits encoding adds ONE kind of leaf, and it keeps the discharge: a row with a bits
+   term is instantiated through its atoms' bridges and its bound rows (lib/core/ladder.ml,
+   "The bits arm"; M8-bits-encoding, D-0153). The bound rows are .opb rows. A bridge is a
    `red` line, minted by [Encoding.ensure_atom] at LEVEL 0 and never deleted before the
-   conclusion (D-0132 section 2.8) -- so it, too, is retired by no `w`, and outlives
-   every line that cites it. Still no hole line, trace line or conflict-level id.
+   conclusion (D-0132 section 2.8, the bits encoding for [Linear]) -- so it, too, is
+   deleted by no backjump ([Writer.wipe_level], which imitates the `w` command VeriPB
+   3.0 lacks, deletes only ids tagged at the levels it undoes), and outlives every line
+   that cites it. Still no hole line, trace line or conflict-level id.
 
    ---------------------------------------------------------------------------
-   MEASURED, M2-L6: our integer propagator is STRONGER than PB propagation on the
-   same row -- and M2-L11 has since made it a ROW
+   The integer propagator is STRONGER than PB propagation on the same row, and the
+   ladder lift that answers it
    ---------------------------------------------------------------------------
 
-   This is the finding of the row and it was not anticipated by D-0044.
+   Measured while building this module (M2-L6), and not anticipated by D-0044. The answer
+   is the ladder lift of lib/core/ladder.ml (M2-L11).
 
    [Reduce]'s postcondition requires that the reason row PROPAGATED the pivot, i.e. that
    its slack under the assignment at the propagation was below the pivot's coefficient.
@@ -203,9 +217,10 @@
    So [Postcondition_failed] is not a defect in [Reduce] and not a defect in
    [bounds_before]. It is the honest report that the reason for this pruning is the model
    row PLUS a ladder chain, which is exactly what [Linear] already builds as an
-   [Explanation] ([Order_reason.weaken_declared], D-0010). M2-L11 gives the same chain to
-   THIS module as a row -- lib/core/ladder.ml -- and [step] below retries the reduction on
-   the lifted row when the bare one fails.
+   [Explanation] ([Order_reason.weaken_declared]; D-0010, a bound fact is a chain of
+   order literals). M2-L11 gives the same chain to THIS module as a row --
+   lib/core/ladder.ml -- and [step] below retries the reduction on the lifted row when
+   the bare one fails.
 
    Where the PB path does succeed without any of that -- test/models/backjump_lineq_unsat
    .fzn, 3 of 3 conflicts, no fallback -- it is because the prunings there are at ladder
@@ -230,21 +245,25 @@
    The fallback is permanent, and it is most of the traffic
    ---------------------------------------------------------------------------
 
-   D-0044 records that the M2-L3 clause path is permanent and not transitional, because
-   IntSat, HaifaCSP and LLG all need the same fallback. [fallback] below is the reason
-   why, enumerated, and every constructor is a measured outcome rather than an error:
+   D-0044 records that the clause path is permanent and not transitional, because the
+   other solvers that learn linear constraints (IntSat, HaifaCSP, Pumpkin's LLG) all need
+   the same fallback. [fallback] below is the reason why, enumerated, and every
+   constructor is a measured outcome rather than an error. The most frequent are
+   [No_pivot] and [No_row] (26 and 21 of 50 in the count above):
 
-     - [No_row] dominates. [Ne], [Bool_clause] and [Bool2int] expose no PB row, because a
+     - [No_pivot]: no falsified conflict-level literal established by a propagation is
+       left; what remains rests on DECISIONS, which nothing can resolve away.
+     - [No_row]: [Ne], [Bool_clause] and [Bool2int] expose no PB row, because a
        disequality is a pair of big-M rows and a clause propagator is not a single
        inequality either. Any conflict whose conflicting constraint or whose first
        resolvable reason is one of those falls back immediately.
      - [Not_conflicting] is the condition D-0044 names in its own sentence. With
        [division] or [round_to_one] it should not fire -- both reduce to slack zero, and
        adding a slack-zero row to a conflicting one keeps it conflicting -- so a
-       non-trivial count here is evidence about a NEW reduction (M2-L7's saturation) and
-       not about this loop. It is checked every step regardless, because "should not fire"
-       is exactly the kind of claim that stops being true when the component it rests on
-       is swapped.
+       non-trivial count here is evidence about a NEW reduction (saturation was one, task
+       M2-L7, closed unbuilt) and not about this loop. It is checked every step
+       regardless, because "should not fire" is exactly the kind of claim that stops being
+       true when the component it rests on is swapped.
      - [Overflow] is I-X8 / D-0029. Coefficients multiply here and nowhere else in the
        solver, so this is where growth past [Checked]'s cap is met. It RAISES inside
        [Learned.combine] and is caught here, which is the only place it may be caught:
@@ -258,10 +277,11 @@
    Determinism
    ---------------------------------------------------------------------------
 
-   No [Hashtbl] is iterated and every list is built in a fixed order: the row's terms come
-   from [Learned.make], which sorts, and the pivot is chosen by a total order on trail
-   positions. scripts/check_determinism.sh requires two runs to emit a byte-identical
-   proof, and a learned row whose terms came out of a hash table is the way that breaks. *)
+   No [Hashtbl] is iterated and every list is built in a fixed order: the row's terms
+   come from [Learned.make], which sorts, and the pivot is chosen by a total order on
+   trail positions. scripts/check_determinism.sh requires two runs to emit a
+   byte-identical proof, and a learned row whose terms came out of a hash table is the
+   way that breaks. *)
 
 module Lit = Baguette_proof.Lit
 module Opb = Baguette_proof.Opb
@@ -310,12 +330,15 @@ let bounds_before store ~at v =
 (* Is [l] falsified by the assignment as of just before trail position [at]?
 
    [[x >= k]] is false exactly when [hi x < k]; its negation is false exactly when
-   [lo x >= k]. An [Eq] literal (the direct encoding, D-0019/D-0040) has no bound to read
-   and is reported NOT falsified, which is the safe direction: [Reduce] weakens away what
-   is not falsified, and weakening a literal that happens to be falsified only raises the
-   slack, which [Reduce]'s own postcondition then rejects -- a fallback, not a wrong row.
-   No [Linear.pb_row] contains one, so this arm is unreached today and is written to be
-   unreachable-and-safe rather than unreachable-and-absent. *)
+   [lo x >= k]. An [Eq] literal (the direct encoding, which the solver does not reason
+   on: D-0019, D-0040) has no bound to read and is reported NOT falsified, which is the
+   safe direction: [Reduce] weakens away what is not falsified, and weakening a literal
+   that happens to be falsified only raises the slack, which [Reduce]'s own
+   postcondition then rejects -- a fallback, not a wrong row. No [Linear.pb_row]
+   contains one, so this arm is unreached today and is written to be
+   unreachable-and-safe rather than unreachable-and-absent. A [Bit] literal is answered
+   the same way; the bits arm of lib/core/ladder.ml removes every bit from a row before
+   the analysis resolves on it. *)
 let falsified_before_scan store ~at (l : Lit.t) =
   match l.Lit.v with
   | Lit.Eq _ | Lit.Bit _ -> false
@@ -329,8 +352,9 @@ let falsified_before_scan store ~at (l : Lit.t) =
 (* [Store.var_named store] that remembers the last name it answered, by the name's
    physical identity: a row asks about one variable's literals in a run, all carrying the
    one string the store named it with, and the hash is then paid once per run. Any other
-   string, equal or not, is looked up. D-0157 built it into [falsified_before]; D-0191
-   gives the analysis's [falsified_at] memo the same lookup (see [falsified_at_with]). *)
+   string, equal or not, is looked up. [falsified_before] uses it (D-0157), and so does
+   the analysis's [falsified_at] memo (see [falsified_at_with]; M16-file-review-T3,
+   D-0191, which took the hashing costs out of learning). *)
 let var_named_last store =
   let last = ref None in
   fun name ->
@@ -341,10 +365,11 @@ let var_named_last store =
         last := Some (name, v);
         v
 
-(* M11-complexity-T4 (D-0140 P1, D-0144): the same answer as [falsified_before_scan]
-   above, case for case, from [v]'s bound history in O(log moves) instead of the two trail
-   walks of [bounds_before]. [Reduce] and [Ladder] ask it four to five times per term per
-   elimination, so the walk was paid trail-length times that per PB step.
+(* The same answer as [falsified_before_scan] above, case for case, from [v]'s bound
+   history in O(log moves) instead of the two trail walks of [bounds_before]. [Reduce]
+   and [Ladder] ask it four to five times per term per elimination, so the walk was paid
+   trail-length times that per PB step (M11-complexity-T4, D-0144, item P1 of the cost
+   inventory D-0140).
 
    [[x >= k]] is false before [at] iff [hi x <= k - 1] then, i.e. iff that bound had been
    established strictly below [at] or held from the start. A bound only tightens along the
@@ -363,9 +388,9 @@ let var_named_last store =
    scan stays as the [BAGUETTE_DEBUG] cross-check, as [falsified_at_scan] does for
    [falsified_at].
 
-   M11-complexity-T9 (D-0157): applied to [store] and [~at] alone it is a predicate that
-   remembers the last name it looked up, by the name's physical identity, in front of
-   [Store.var_named]'s hash: a step asks it of one reason's terms over and over, and
+   Applied to [store] and [~at] alone it is a predicate that remembers the last name it
+   looked up, by the name's physical identity, in front of [Store.var_named]'s hash
+   (M11-complexity-T9, D-0157). A step asks it of one reason's terms over and over, and
    [Ladder.instantiate]'s binary search asks it of one variable's atoms O(log w) times in
    a row. A name is a name: the same string answers the same variable. *)
 let falsified_before store ~at =
@@ -398,25 +423,28 @@ let falsified_now store (l : Lit.t) =
   falsified_before store ~at:(Store.trail_length store) l
 
 (* The trail position at which [l] became falsified, or [Store.no_support] when it is not
-   falsified or was already falsified by its declared domain. Used to pick the pivot (the
-   most recently falsified conflict-level literal) and to find the entry whose instance
-   is the reason. A literal falsified by the declared domain alone has no entry and is
-   therefore never a pivot, which is right: nothing propagated it. *)
+   falsified. A literal its declared domain already falsifies is reported at position 0
+   (see the cases below). Used to pick the pivot (the most recently falsified
+   conflict-level literal) and to find the entry whose instance is the reason. A literal
+   falsified by the declared domain alone has no entry of its own and must never be a
+   pivot, since nothing propagated it. It is not one: position 0 is a root entry, below
+   any conflict level PB analysis runs at, or, when the root has none, the decision that
+   opened level 1, which has no reason and which [pivot_of] therefore skips. *)
 let falsified_at_scan store (l : Lit.t) =
-  (* M6-T9. ONE pass over the trail, not the O(trail^2) of asking [falsified_before] at
-     every position (each of which scanned the trail again). Measured on a real
-     instance (MiniZinc Challenge 2011 costas-array, 15.dzn): PB analysis was 5.8 s of a
-     15 s run at 0.44 s a conflict, nearly all of it here. The answer is the SAME
-     position the quadratic form returned, case for case, and the proof artefacts of
-     the whole model suite are byte-identical across the change (D-0080):
+  (* ONE pass over the trail, not the O(trail^2) of asking [falsified_before] at every
+     position (each of which scanned the trail again). Measured on a real instance
+     (MiniZinc Challenge 2011 costas-array, 15.dzn): PB analysis was 5.8 s of a 15 s run
+     at 0.44 s a conflict, nearly all of it here (M6-T9, the study of why corpus
+     instances time out). The answer is the SAME position the quadratic form returned,
+     case for case, and the proof artefacts of the whole model suite are byte-identical
+     across the change (D-0080, the profile of where a 300 s run goes):
 
        - [v] has no trail entry: the domain is the store's, constant over the trail, so
          the first position (0) if it falsifies [l], else none;
        - the NEWEST entry's [now] does not falsify [l]: not falsified now, none;
-       - the OLDEST entry's [old] already falsifies [l]: position 0, exactly as before.
-         The header above says "no_support" for this declared-domain case; the code
-         this replaces returned 0 here, and so does this -- a behaviour change is not
-         this row's to make (a DECISIONS entry would be);
+       - the OLDEST entry's [old] already falsifies [l]: position 0, exactly as the
+         quadratic form returned (a change of that answer would need a decision
+         record);
        - otherwise the first entry on [v] whose [now] falsifies [l]. Between two
          entries on [v] the reconstructed domain does not move, so no other position
          can be the first. *)
@@ -451,17 +479,18 @@ let falsified_at_scan store (l : Lit.t) =
               in
               go !first)
 
-(* M6-T14 (D-0088): the same position as [falsified_at_scan] above, case for case, from
-   [v]'s bound history in O(log moves) instead of one pass over the whole trail per
-   literal. [fals] reads only the bounds, so the scan's cases collapse: not falsified
-   now -> none; otherwise the first bound-mover on [v] whose [now] falsifies, which
-   [Store.var_support] returns unless the declared bound already falsified (the scan's
-   "position 0" cases, a moverless [v] included). An empty trail is the scan's own
-   [none] and is kept. The scan stays one wave as the [BAGUETTE_DEBUG] cross-check. *)
+(* The same position as [falsified_at_scan] above, case for case, from [v]'s bound
+   history in O(log moves) instead of one pass over the whole trail per literal
+   (M6-T14, D-0088: per-variable trail histories replace the trail scans). [fals] reads
+   only the bounds, so the scan's cases collapse: not falsified now -> none; otherwise the
+   first bound-mover on [v] whose [now] falsifies, which [Store.var_support] returns
+   unless the declared bound already falsified (the scan's "position 0" cases, a moverless
+   [v] included). An empty trail is the scan's own [none] and is kept. The scan stays one
+   wave as the [BAGUETTE_DEBUG] cross-check. *)
 (* [falsified_at] with the name lookup handed in: [analyse] passes [var_named_last],
    because the rows it reads put a wide variable's order literals side by side, all
-   under one name. M16-file-review-T3 (D-0191): [Store.var_named] there was 5.5 % of
-   2019_fox-geese-corn's samples. The lookup returns what [Store.var_named] returns, so
+   under one name. [Store.var_named] there was 5.5 % of 2019_fox-geese-corn's samples
+   (D-0191). The lookup returns what [Store.var_named] returns, so
    the position is the same. *)
 let falsified_at_with ~var_named store (l : Lit.t) =
   let at =
@@ -543,12 +572,13 @@ let asserts_at v lvl =
          v.c_level_of tm.Learned.lit > lvl && tm.Learned.coeff > s)
        (Learned.terms v.c_row)
 
-(* ------------------------------------------------- M2-L15: the levels the ROW names
+(* ------------------------------------------------------- the levels the ROW names
 
-   Two quantities, and the whole of M2-L15 is that neither is a dependency set. They are
-   computed here because this is where the frozen [view] is, and they are carried on [t]
-   as DATA for lib/core/search.ml to compare against the decision closure's. Nothing in
-   this module acts on them.
+   Two quantities, and neither is a dependency set: that is the finding of M2-L15
+   (backjumping on the PB row; D-0056, the backjump rests on the decision closure and a
+   PB row cannot supply one). They are computed here because this is where the frozen
+   [view] is, and they are carried on [t] as DATA for lib/core/search.ml to compare
+   against the decision closure's. Nothing in this module acts on them.
 
    [row_levels] is the set of decision levels at which this row's literals became
    falsified -- the PB analogue of [Analysis.cited_levels], level 0 dropped for the same
@@ -583,9 +613,9 @@ let asserting_level_reference v =
   in
   scan 0
 
-(* M11-complexity-T4 (D-0140 P2, D-0144): [asserting_level_reference] above, in one pass
-   over the terms instead of one per level -- it was levels x terms, once per learned row,
-   and the levels are the search depth.
+(* [asserting_level_reference] above, in one pass over the terms instead of one per
+   level: the reference is levels x terms, once per learned row, and the levels are the
+   search depth (M11-complexity-T4, D-0144).
 
    At level [lvl] the unfalsified terms are those with [c_level_of > lvl], so the slack
    sum at [lvl + 1] is the one at [lvl] minus the coefficients falsified exactly at
@@ -724,19 +754,21 @@ let fallback_to_string = function
   | Mixed_row m -> Printf.sprintf "a mixed row's bits block was not instantiated: %s" m
   | Too_long n -> Printf.sprintf "the row has %d terms, over BAGUETTE_PB_MAX_TERMS" n
 
-(* M21-memory-T3 (D-0226): THE SIZE GUARD, off by default ([0]). With [N > 0] the analysis
-   gives up as soon as the row it carries -- the conflict row, or the row after any
-   elimination -- has more than [N] terms, and the conflict is learned as the 1UIP clause
-   alone, which the search learns anyway (PB analysis is ADDITIVE, lib/core/search.ml's
-   [pb] note). So the guard WEAKENS a long PB row to its clause: no row of more than [N]
-   terms is derived, put on the page, held by the database or propagated, and the
-   eliminations that would have built one are not done.
+(* THE SIZE GUARD on learned PB rows, off by default ([0]); M21-memory-T3, D-0226. With
+   [N > 0] the analysis gives up as soon as the row it carries -- the conflict row, or
+   the row after any elimination -- has more than [N] terms, and the conflict is learned
+   as the 1UIP clause alone, which the search learns anyway (PB analysis is ADDITIVE,
+   lib/core/search.ml's [pb] note). So the guard WEAKENS a long PB row to its clause: no
+   row of more than [N] terms is derived, put on the page, held by the database or
+   propagated, and the eliminations that would have built one are not done.
 
    Why it exists: on 2015 mapping mesh3x3_2 the learned PB rows have a median of 10 terms
-   and a p90 of 457 (D-0221 section 5), every wake of one walks all of them ([Pb.pass]), and
-   PB analysis plus those walks are 83 % of the cycles. D-0197 section 6 asked for a row
-   length cap. This CHANGES the search, so it is a switch, and D-0226 has the measurement and
-   the option table. Read once, at start-up, like every BAGUETTE_* switch of lib/core. *)
+   and a p90 of 457 (D-0221 section 5, the measurement of the retention default), every
+   wake of one walks all of them ([Pb.pass]), and PB analysis plus those walks are 83 % of
+   the cycles. D-0197 section 6 (the record of the stack overflow on 32-million-term rows)
+   asked for a row length cap. This CHANGES the search, so it is a switch, and D-0226 has
+   the measurement and the option table. Read once, at start-up, like every BAGUETTE_*
+   switch of lib/core. *)
 let max_terms =
   match Option.bind (Sys.getenv_opt "BAGUETTE_PB_MAX_TERMS") int_of_string_opt with
   | Some n when n > 0 -> n
@@ -751,24 +783,24 @@ type t = {
   criterion_name : string;
   antecedents : int list;  (** constraint ids the derivation cites, first-seen order *)
   antecedent_rows : Learned.t list;
-      (** the same rows as data, in the same order. Carried so that the row's test (e)
+      (** the same rows as data, in the same order. Carried so that M2-L6's test (e)
           can brute-force the entailment -- "these premises imply this conclusion" --
           rather than take the [pol] on trust. A cutting-planes derivation is sound at
           EVERY 0-1 point, not only at the ladder-consistent ones, so that oracle is
           never vacuous even when the model itself is unsatisfiable.
 
-          M2-L11: the LADDER rows a lift cites are in here too, and they must be. Without
-          them the premise set is not ladder-closed, and the conclusion genuinely is not
-          entailed by it -- which is the whole finding this row answers, restated as an
-          oracle failure. *)
+          The LADDER rows a lift cites ([Ladder.lift], M2-L11) are in here too, and they
+          must be. Without them the premise set is not ladder-closed, and the conclusion
+          genuinely is not entailed by it -- which is the whole finding the ladder lift
+          answers, restated as an oracle failure. *)
   ladder_rungs : int;
-      (** M2-L11: ladder rows cited across all eliminations, i.e. how much of the reason
-          came from the order encoding rather than from the model row. 0 means this
-          analysis is exactly the one M2-L6 would have produced. *)
+      (** ladder rows cited by [Ladder.lift] across all eliminations, i.e. how much of
+          the reason came from the order encoding rather than from the model row. 0
+          means this analysis is exactly the one it would be without the lift. *)
   bits_bridges : int;
-      (** M8-bits-encoding (D-0153): bridge and bound rows cited to instantiate bits
-          blocks, over the conflict row and every reason. 0 means no row of this analysis
-          had a bits term. *)
+      (** bridge and bound rows cited to instantiate bits blocks (D-0153), over the
+          conflict row and every reason. 0 means no row of this analysis had a bits
+          term. *)
   levels : int list;
       (** M2-L15: the decision levels this row's literals are falsified at, DESCENDING,
           level 0 dropped -- the same shape and ordering as [Analysis.decision_levels] so
@@ -782,8 +814,8 @@ type t = {
 
 type result = Learned_row of t | Fallback of fallback
 
-(* Monomorphic tables for the analysis (M11-complexity-T4, D-0144): a literal keyed through
-   [Lit.equal], an id through [Int.equal], never the polymorphic compare. *)
+(* Monomorphic tables for the analysis (M11-complexity-T4, D-0144): a literal keyed
+   through [Lit.equal], an id through [Int.equal], never the polymorphic compare. *)
 module Lit_tbl = Hashtbl.Make (struct
   type t = Lit.t
 
@@ -793,8 +825,8 @@ end)
 
 module Int_tbl = Hashtbl.Make (Int)
 
-(* M11-complexity-T9 (D-0157): a question about literals, remembered for ONE ROW's
-   literals by their physical identity, in row order.
+(* A question about literals, remembered for ONE ROW's literals by their physical
+   identity, in row order (M11-complexity-T9, D-0157).
 
    Each elimination reads the row it holds several times over -- the pivot choice, the
    criterion's slack and its propagation test, the conflict check after the combination
@@ -843,8 +875,8 @@ let row_memo_bool (lits : Lit.t array) (p : Lit.t -> bool) : Lit.t -> bool =
   let m = row_memo lits (fun l -> if p l then 1 else 0) in
   fun l -> m l = 1
 
-(* M16-file-review-T3 (D-0191): the array is made with a STATIC literal and then filled,
-   never with one of the row's own. [Array.make] of more than 256 words whose initial
+(* The array is made with a STATIC literal and then filled, never with one of the row's
+   own (D-0191). [Array.make] of more than 256 words whose initial
    value is a young block runs a whole minor collection first (the runtime will not
    create that many major-to-minor pointers at once), and a row's literals are young: a
    combination or [Learned.of_pb_row] has just built them. A conflict row over a few
@@ -899,11 +931,12 @@ let cited_ids (e : Explanation.t) : int list =
     | Explanation.Term (_, e) -> go e
     | Explanation.Weaken _ -> ()
     | Explanation.Linear_term r -> List.iter go r.lt_cited
-    (* M4-T7. A [Defining] cites the id of the line establishing a literal, resolved from
-       [Justify]'s claim index at emit time -- which is exactly the trace-line citation
-       the I-S4 discharge above says this module never makes, and which this function
-       could not report even if it did. Nothing here builds one; if that changes, the
-       discharge has to be rewritten before this case can. *)
+    (* A [Defining] cites the id of the line establishing a literal, resolved from
+       [Justify]'s claim index at emit time (M4-T7 let an explanation ask for that id) --
+       which is exactly the trace-line citation the I-S4 discharge above says this module
+       never makes, and which this function could not report even if it did. Nothing here
+       builds one; if that changes, the discharge has to be rewritten before this case
+       can. *)
     | Explanation.Defining (_, l) ->
         invalid_arg
           (Printf.sprintf
@@ -940,19 +973,20 @@ let analyse ?(stop = fun () -> false) ?(bits = Ladder.no_bits) store (c : Store.
     ~(reduction : Reduce.t) ~(criterion : criterion) : result =
   let conflict_level = Store.level store in
   let max_steps = Store.trail_length store + 1 in
-  (* M6-T9. The trail does not move while [analyse] runs, so [falsified_at] is a pure
-     function of the literal for the whole call; asked once per term per step by the
-     pivot and once per term per criterion check by [level_of], it is memoised here.
+  (* The trail does not move while [analyse] runs, so [falsified_at] is a pure function
+     of the literal for the whole call; asked once per term per step by the pivot and
+     once per term per criterion check by [level_of], it is memoised here (M6-T9).
      [Lit.t] holds no closure and nothing mutable, so structural hashing is sound; the
      table is only ever looked up, never iterated, so no emitted byte depends on its
-     order. M11-complexity-T4 (D-0140 P2, D-0144): keyed through [Lit.equal] rather than
-     the polymorphic compare of a plain [Hashtbl]; [Lit.equal] is structural equality on
-     the same record, so the same lookups hit. *)
-  (* M16-file-review-T3 (D-0191): replaced, empty, by one sized at the conflict row once
-     that row is known and longer than 64 (below), because a table that grows re-hashes
-     every literal it holds at each doubling: a third of the memo's cost on
+     order. It is keyed through [Lit.equal] rather than the polymorphic compare of a
+     plain [Hashtbl] (M11-complexity-T4, D-0144); [Lit.equal] is structural equality on
+     the same record, so the same lookups hit.
+
+     The table made here is replaced, empty, by one sized at the conflict row once that
+     row is known and longer than 64 (below), because a table that grows re-hashes every
+     literal it holds at each doubling: a third of the memo's cost on
      2019_fox-geese-corn, some of whose conflict rows run past 256 literals (see
-     [lits_array]). Nothing reads it before then. *)
+     [lits_array]; D-0191). Nothing reads it before then. *)
   let fat_memo = ref (Lit_tbl.create 64) in
   let var_named = var_named_last store in
   let falsified_at store l =
@@ -963,8 +997,8 @@ let analyse ?(stop = fun () -> false) ?(bits = Ladder.no_bits) store (c : Store.
         Lit_tbl.add !fat_memo l i;
         i
   in
-  (* M11-complexity-T4 (D-0140 P2, D-0144): the ids [antecedents] already holds, so that
-     the dedup below is a lookup instead of a [List.mem] over the list so far. *)
+  (* The ids [antecedents] already holds, so that the dedup below is a lookup instead of
+     a [List.mem] over the list so far (D-0144). *)
   let cited = Int_tbl.create 16 in
   (* [antecedents], [rows] and [pivots] are carried REVERSED through the loop and turned
      round once when it stops (M11-complexity-T4, D-0144: they were appended with [@],
@@ -975,12 +1009,13 @@ let analyse ?(stop = fun () -> false) ?(bits = Ladder.no_bits) store (c : Store.
       Int_tbl.replace cited cid ();
       (cid :: antecedents, r :: rows))
   in
-  (* M8-bits-encoding (D-0153): a row with a bits term is INSTANTIATED before anything
-     resolves on it -- every bits block replaced through its bridge at the bound in force
-     under [falsified], or at [pivot]'s own atom for the pruned block (lib/core/ladder.ml,
-     "The bits arm"). A row with none is returned as it is, with the model row as its
-     derivation, which is every row at [--bits-above none]: the analysis is then the one
-     it was, line for line. The rows added are returned as [(id, row)] premises. *)
+  (* A row with a bits term is INSTANTIATED before anything resolves on it (D-0153) --
+     every bits block replaced through its bridge at the bound in force under [falsified],
+     or at [pivot]'s own atom for the pruned block (lib/core/ladder.ml, "The bits arm"). A
+     row with none is returned as it is, with the model row as its derivation, which is
+     every row at [--bits-above none]: the analysis is then the one it would be without
+     the bits arm, line for line.
+     The rows added are returned as [(id, row)] premises. *)
   let bridges = ref 0 in
   let instantiated r0 ~cid ~pivot ~falsified =
     if not (Ladder.has_bits r0) then (r0, Explanation.model_row cid, [])
@@ -993,10 +1028,10 @@ let analyse ?(stop = fun () -> false) ?(bits = Ladder.no_bits) store (c : Store.
             Ladder.derive_instantiated i (Explanation.model_row cid),
             List.map (fun (_, id, r) -> (id, r)) i.Ladder.added )
   in
-  (* M11-complexity-T9 (D-0157): a row is read through [row_memo] over its own
-     literals -- [at_of] below -- built once per row and shared by every read of it: the
-     pivot choice, the conflict check after the combination that made it, and the
-     criterion's view. The view's [c_level_of] is [falsified_at]'s level, as it was. *)
+  (* A row is read through [row_memo] over its own literals -- [at_of] below -- built
+     once per row and shared by every read of it: the pivot choice, the conflict check
+     after the combination that made it, and the criterion's view (D-0157). The view's
+     [c_level_of] is [falsified_at]'s level. *)
   let at_of row = row_memo (lits_array row) (falsified_at store) in
   let view row at_of steps =
     {
@@ -1013,8 +1048,9 @@ let analyse ?(stop = fun () -> false) ?(bits = Ladder.no_bits) store (c : Store.
      that rests on facts (a decision rests on none and is never resolved away -- the same
      root rule lib/core/analysis.ml states), and the most RECENT such, which is what makes
      the walk terminate: every elimination's pivot is strictly below the last. Returned
-     with its coefficient in the row (D-0157): a row names a literal once ([Learned.make]),
-     so this is the coefficient [coeff_of row l] found by a second scan of the row. *)
+     with its coefficient in the row (D-0157): a row names a literal once
+     ([Learned.make]), so this is the coefficient [coeff_of row l] would find by a second
+     scan of the row. *)
   let pivot_of row at_of =
     List.fold_left
       (fun best (tm : Learned.term) ->
@@ -1070,12 +1106,13 @@ let analyse ?(stop = fun () -> false) ?(bits = Ladder.no_bits) store (c : Store.
                   (Postcondition_failed
                      (Reduce.slack o.Reduce.reduced ~falsified, o.Reduce.divisor))
         in
-        (* M2-L11. The bare model row often does NOT PB-propagate the pivot our integer
-           propagator legitimately deduced, because the strength is in the order
-           encoding's ladder implications and those are separate .opb rows (D-0028). The
-           bare row is tried FIRST and unchanged -- so every conflict M2-L6 already
-           handled takes exactly the derivation it took before, and this row is purely
-           additive -- and the lift is the retry when it fails. See lib/core/ladder.ml.
+        (* The ladder lift (lib/core/ladder.ml, M2-L11) is a RETRY. The bare model row
+           often does NOT PB-propagate the pivot our integer propagator legitimately
+           deduced, because the strength is in the order encoding's ladder implications
+           and those are separate .opb rows (D-0028). The bare row is tried FIRST and
+           unchanged -- so a conflict the bare row handles takes exactly the derivation it
+           would take without the lift, and the lift is purely additive -- and the lift is
+           the retry when it fails.
 
            A lift that does not help is not an error: the ORIGINAL failure is reported, so
            [pb_fallback_rev]'s diagnosis still names the condition that actually stopped
@@ -1196,19 +1233,18 @@ let analyse ?(stop = fun () -> false) ?(bits = Ladder.no_bits) store (c : Store.
     loop row0 at_of0 expl0 0 [] antecedents0 rows0 0
   with
   | Give_up f -> Fallback f
-  (* M6-T9. The combination and the ladder lift were already wrapped (above), but the
-     SLACK of a combined row is a sum too, and the criterion asks for it on every step
-     ([slack_at] via [stop]/[asserts_at]). On 2014_rectangle-packing (MiniZinc
-     Challenge) that sum passed 2^62 and the raise reached bin/main.ml's
-     internal-overflow arm, exit 4, ending the run -- the opposite of the rule this
-     module states: overflow is a fallback, never an abandoned solve. Anything that
-     overflows anywhere in the walk is now that fallback. *)
+  (* Anything that overflows anywhere in the walk is a fallback, never an abandoned
+     solve. The combination and the ladder lift are wrapped above, but the SLACK of a
+     combined row is a sum too, and the criterion asks for it on every step ([slack_at]
+     via [stop]/[asserts_at]). On 2014_rectangle-packing (MiniZinc Challenge) that sum
+     passed 2^62 and the raise reached bin/main.ml's internal-overflow arm, exit 4,
+     ending the run, before this catch existed (M6-T9). *)
   | Checked.Overflow m -> Fallback (Overflow m)
 
 (* ------------------------------------------------------- the proof side *)
 
-(* M8-bits-encoding (D-0153): what [analyse] is told about the bits encoding, read off the
-   context the proof is written through. [Ladder.no_bits] when no variable is on bits,
+(* What [analyse] is told about the bits encoding (D-0153), read off the context the
+   proof is written through. [Ladder.no_bits] when no variable is on bits,
    which is every run at [--bits-above none], so the closure below is never built there.
    [bridge] is [Encoding.ensure_atom]: it MINTS the atom's `red` pair at level 0 the first
    time the atom is named (lib/core/ladder.ml, "It MINTS, unlike [lift]"). *)
@@ -1248,8 +1284,8 @@ let bits_of_ctx (ctx : Justify.ctx) : Ladder.bits =
        test, and it is available only because the learned object is a [pol] -- the clause
        path's [rup] has nothing to state.
 
-   I-X2: the id handed back is an id the caller must delete. Nothing else will, because
-   no [w] retires level 0. *)
+   I-X2: the id handed back is an id the caller must delete (lib/core/retention.ml does).
+   Nothing else will, because no backjump's deletions reach level 0. *)
 let introduce ctx (t : t) : Writer.cid =
   Justify.with_level ctx 0 (fun () ->
       Justify.emit_stating ctx ~claim:(Learned.to_opb t.row) t.derivation)
@@ -1261,8 +1297,12 @@ let to_string (t : t) =
     (String.concat "," (List.map string_of_int t.antecedents))
 
 (* ---------------------------------------------------------------------------
-   What is left, for whoever takes M2-L7 or the next PB row
+   What is left on the PB row: one strength not taken, two questions answered
    ---------------------------------------------------------------------------
+
+   This note was written for whoever took M2-L7 (saturation as a second reduction, since
+   closed unbuilt) or the next PB task. Item 1 is still open; items 2 and 3 are answered
+   and say how.
 
    1. PARTIAL WEAKENING, per Koops et al. section 3 (see the header). A third [Reduce.t],
       not a change here: weaken a non-falsified literal's coefficient DOWN to the largest
@@ -1284,14 +1324,14 @@ let to_string (t : t) =
       closure is RIGHT and not merely safe.** This note used to hand the question on,
       because M2-L13 made a PB row propagate and "that would change the calculation" had
       stopped being hypothetical. It did change the calculation -- just not on this side
-      of it. See lib/core/search.ml's [pb_level_verdict], which has the argument in full.
-      A DECISION RECORD IS OWED for this and is not written here: M2-L15 does not own
-      docs/DECISIONS.md and a number pinned from a worktree is a number a concurrent
-      session may already have taken.
+      of it. See lib/core/search.ml's [pb_level_verdict], which has the argument in full;
+      the decision record is D-0056 (the backjump rests on the decision closure, and a PB
+      row cannot supply one).
 
       The quantity this module can offer is [levels] and [asserting_level] above, and
       neither is in the currency the backjump is stated in. lib/core/search.ml's backjump
-      is not "undo to level B and resume": it is a FILTER on the branch nogood, and the
+      in the default DFS loop is not "undo to level B and resume": it is a FILTER on the
+      branch nogood, and the
       nogood is a clause over DECISION literals that the checker RUP-verifies. Dropping a
       level from it is claiming the conflict does not rest on that decision, which is a
       claim about the decision closure and about nothing else. A PB row's [levels] answers

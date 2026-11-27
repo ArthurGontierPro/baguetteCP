@@ -1,11 +1,14 @@
 (* activity.ml: the ACTIVITY heuristic over integer variables -- conflict-driven variable
-   selection in the VSIDS family (M10-search-strategy-T3, docs/DECISIONS.md D-0137
-   section 4).
+   selection in the VSIDS family. Built by M10-search-strategy-T3 (the activity heuristic
+   behind a flag) under docs/DECISIONS.md D-0137 section 4. D-0137 put restarts, phase
+   saving and this heuristic behind flags, none of them adding a rule to the proof.
 
    Consistency level: none -- this is not a propagator. Governing records: D-0137 section
    4 (what is scored, what is bumped, the decay, the tie-break), section 1.1 (the trail
-   reuse rule it answers for partial restarts); docs/SPEC.md 3.4 (opt-in:
-   `--search activity` / `--search alternate`).
+   reuse rule of partial restarts, which keeps a level while its decision variable scores
+   strictly above the best variable unfixed at the conflict, and reads that best score
+   from [best_score]); docs/SPEC.md 3.4 (opt-in: `--search activity` / `--search
+   alternate`).
 
    ---------------------------------------------------------------------------
    What is scored, and why the variable and not the literal
@@ -40,7 +43,8 @@
    The scan in [select] is linear in the candidates, as [Search.unfixed] already is per
    node. A binary heap keyed on the score is the optimisation if a profile ever shows
    the scan; it would have to be told about every fix and unfix, which the store does
-   not report, and that is why it is not here. M16-file-review-T3 (D-0191) measured it:
+   not report, and that is why it is not here. The file-by-file review of the learning
+   modules (M16-file-review-T3, D-0191) measured it:
    under `--search activity` it is 0.2 % of the median lane instance's samples and 13 %
    of 2011_roster's, whose thousands of candidates are tied at score 0 for most of the
    run, so every one is also asked its [Domain.size]. The heap is the lever there and it

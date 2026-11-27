@@ -24,7 +24,8 @@
 % carries their capacity rows as model rows and the checker does not re-derive
 % them.  That is the trust every mznlib redefinition already carries (the
 % FlatZinc is what the proof is about); the argument above is the theorem it
-% rests on, and test/unit/test_diffn.ml checks it by brute force.
+% rests on, and test/unit/test_compile.ml checks it by brute force
+% (test_diffn_relaxation_theorem).
 %
 % A projection is posted only when it can prune (its tasks' resources add up
 % past its capacity) and under cumulative's own horizon test (late - early <=

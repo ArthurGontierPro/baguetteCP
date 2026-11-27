@@ -1041,6 +1041,99 @@ let el_moved_src =
    constraint array_int_element(j, [3, 4], c);\n\
    solve satisfy;\n"
 
+(* D-0260: the TIES of a merged gcc cover are load-bearing on a SATISFIABLE model.
+   [Builder.merge_gcc_cover_repeats] keeps one occurrence per cover value and ties every
+   later count to the first one's with a linear equality in the .opb; the proof's steps
+   about a later count rest on those rows. CLAUDE.md, "Proof discipline": a `rup` is shown
+   real by a later line resting on it, not by the model's answer, so the scene is
+   satisfiable and the break is the TIE ROW weakened to a tautology in the .opb (label
+   kept), one at a time: at least one such break must be judged by the checker with its
+   RUP wording. The scene is test/models/gcc_dupcover_low_up_src_sat.fzn with its counts
+   renamed k1..k5 (the cover [2,2,2,2,2] over [x3,x1,3,x3]); measured on 3.0.2 with the
+   CLI, 4 of its 8 tie rows are load-bearing. *)
+let gcc_tie_src =
+  "predicate baguette_global_cardinality(array [int] of var int: x,array [int] of int: \
+   cover,array [int] of var int: counts);\n\
+   var 0..3: x1:: output_var;\n\
+   var 0..3: x3:: output_var;\n\
+   var 1..3: k1;\n\
+   var 0..1: k2;\n\
+   var 0..2: k3;\n\
+   var 0..1: k4;\n\
+   var 1..2: k5;\n\
+   constraint baguette_global_cardinality([x3,x1,3,x3],[2,2,2,2,2],[k1,k2,k3,k4,k5]);\n\
+   solve satisfy;\n"
+
+let test_gcc_cover_ties_are_load_bearing () =
+  match veripb_path () with
+  | None ->
+      incr failures;
+      print_endline
+        "FAIL D-0260 load-bearing: veripb not found, so NOTHING about the gcc cover ties \
+         was established. A missing checker is a failure, never a skip."
+  | Some checker ->
+      let dir = Filename.temp_file "baguette_gcc_tie" "" in
+      Sys.remove dir;
+      Sys.mkdir dir 0o700;
+      let opb, proof, outcome = el_solve dir "gcctie" gcc_tie_src in
+      check "D-0260: the merged-cover scene is SATISFIABLE"
+        (match outcome with Search.Sat _ -> true | _ -> false);
+      let lines = String.split_on_char '\n' proof in
+      let ok, _ = m5_run_lines checker dir "gcctie_ok" opb lines in
+      check "D-0260 BREAK CONTROL: the unmodified proof is accepted" ok;
+      let opb_rows = String.split_on_char '\n' (read_file opb) in
+      (* A tie row names two DIFFERENT counts k1..k5; a count's own ladder row names one. *)
+      let names_of row =
+        List.sort_uniq compare
+          (List.filter_map
+             (fun w ->
+               let w =
+                 if String.length w > 0 && w.[0] = '~' then
+                   String.sub w 1 (String.length w - 1)
+                 else w
+               in
+               if String.length w >= 2 && w.[0] = 'k' && w.[1] >= '1' && w.[1] <= '5' then
+                 Some (String.sub w 0 2)
+               else None)
+             (String.split_on_char ' ' row))
+      in
+      let is_tie row =
+        String.length row > 2
+        && String.sub row 0 2 = "@c"
+        && List.length (names_of row) = 2
+      in
+      let ties = List.filter is_tie opb_rows in
+      check "D-0260: the .opb holds the tie rows (4 ties, 2 rows each)"
+        (List.length ties = 8);
+      let judged =
+        List.filteri
+          (fun i victim ->
+            let weakened =
+              List.map
+                (fun r ->
+                  if r == victim then
+                    match String.rindex_opt r '>' with
+                    | Some j -> String.sub r 0 j ^ ">= -1000 ;"
+                    | None -> r
+                  else r)
+                opb_rows
+            in
+            let mopb = Filename.concat dir (Printf.sprintf "gcctie_w%d.opb" i) in
+            let oc = open_out mopb in
+            output_string oc (String.concat "\n" weakened);
+            close_out oc;
+            let ok, out =
+              m5_run_lines checker dir (Printf.sprintf "gcctie_w%d" i) mopb lines
+            in
+            (not ok) && m5_says out rup_wording)
+          ties
+      in
+      check
+        "D-0260: at least one tie row, weakened to a tautology, makes the checker REJECT \
+         the proof with its RUP wording: the ties carry the proof, on a satisfiable \
+         model"
+        (judged <> [])
+
 let test_element_derivation_is_load_bearing () =
   match veripb_path () with
   | None ->
@@ -2746,6 +2839,7 @@ let () =
   test_m5_branch_and_bound ();
   test_m5_derivation_is_load_bearing ();
   test_element_derivation_is_load_bearing ();
+  test_gcc_cover_ties_are_load_bearing ();
   test_m6_time_limit ();
   test_m6_t21_stop_in_propagation ();
   test_m7t27_streamed_proof_verifies ();

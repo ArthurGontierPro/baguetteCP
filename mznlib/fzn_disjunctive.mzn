@@ -5,7 +5,8 @@
 % A zero-duration task is unconstrained here exactly as it is in cumulative
 % (both drop it).  Anything else gets std's pairwise decomposition, verbatim.
 %
-% A STRENGTH NOTE, measured in the M4-T10 handoff rather than assumed: for unit
+% A STRENGTH NOTE, measured in the handoff of M4-T10 (the task that built the
+% cumulative propagator) rather than assumed: for unit
 % capacity the pairwise disjunctions propagate precedences that time-table does
 % not see before compulsory parts exist.  The trade is n^2 reified disjunctions
 % for one row per time point.

@@ -6,7 +6,11 @@
 % fzn_global_cardinality.mzn's header explains are no substitute for gcc's
 % interval-capacity rule (D-0078).  So this file does what that one does: it states
 % each count as a variable and hands the call to the bodyless
-% `baguette_global_cardinality', which lib/core/prop/gcc.ml receives.
+% `baguette_global_cardinality', which lib/core/prop/gcc.ml receives.  Kept by
+% measurement against std's decomposition and against native plus the row
+% sum(counts) <= |x| over the 58 Challenge instances that call only low_up (D-0255):
+% neither changes an incumbent at 20 000 nodes, and at 300 s none beats this route by
+% more than main's own run-to-run spread.
 %
 % EACH COUNT IS DECLARED ON ITS OWN BOUNDS, max(0, lbound[i])..min(|x|, ubound[i]).
 % That is the low_up constraint itself, not a heuristic: count i must lie in

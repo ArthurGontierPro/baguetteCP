@@ -1,9 +1,14 @@
 (* restart.ml: WHEN the search restarts -- the restart policies, as data and a small state
-   machine (M10-search-strategy-T2, docs/DECISIONS.md D-0137 sections 1 and 2).
+   machine. Built by M10-search-strategy-T2 (restarts and phase saving behind flags) under
+   docs/DECISIONS.md D-0137 sections 1 and 2. D-0137 decided that a restart is the
+   backjump this solver already writes, taken to a chosen level, so it adds no rule to
+   the proof.
 
    Consistency level: none -- this is not a propagator. Governing records: D-0137 (the
-   policies, their parameters, the termination argument), D-0045 (the question it answers
-   for the flags), docs/SPEC.md 3.4 (restarts are opt-in, the default is [No_restarts]).
+   policies, their parameters, the termination argument), D-0045 (the open question
+   whether SPEC 3.4 should keep restarts disabled once learning works, which D-0137
+   answers by putting them behind flags), docs/SPEC.md 3.4 (restarts are opt-in, the
+   default is [No_restarts]).
 
    ---------------------------------------------------------------------------
    What this module decides, and what it does not
@@ -53,8 +58,9 @@
 
    The alternative termination argument -- every learned clause is new, so the database
    cannot stop growing -- is NOT relied on: it holds only while retention keeps everything
-   and every learned clause has an instance, and M10-search-strategy-T4 (D-0139) may change
-   the first. *)
+   and every learned clause has an instance. The first stopped holding by default when
+   M10-search-strategy-T4 (D-0139) made the learned database evictable and D-0226 made
+   the evicting [tiered] policy the default (lib/core/retention.ml). *)
 
 type policy =
   | No_restarts

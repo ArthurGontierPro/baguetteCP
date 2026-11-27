@@ -1,17 +1,26 @@
 #!/usr/bin/env python3
-"""Every solution of a FlatZinc model, by Gecode's FlatZinc interpreter (M14-e2e-verification-T2).
+"""Every solution of a FlatZinc model, by a reference FlatZinc interpreter (Gecode's, or
+OR-Tools' CP-SAT). Written for M14-e2e-verification-T2, the first end-to-end lane.
 
 Usage: python3 -I fzn_solutions.py FZN_GECODE MODEL.fzn NAMES WORKDIR [TIMEOUT_S]
+
+FZN_GECODE is the path of `fzn-gecode` or `fzn-cp-sat`; `minizinc` is looked up in the same
+directory. WORKDIR is a path PREFIX: the model's copy is written to WORKDIR.allout.fzn (or
+.mzn). TIMEOUT_S defaults to 120. Exit 0 when the solutions, or `timeout`, are printed; 1 when
+the reference exits non-zero or prints a solution that lacks a variable of NAMES or repeats
+one (the reason on stderr); 64 with a usage line on stderr when the argument count is wrong.
 
 The reference half of the translator's test (tools/e2e/scpsem.py is the other half): the
 model as MiniZinc's reference CP solver reads it, so neither baguette's front end nor the
 translator is involved. Every declared decision variable is made an output (a copy of the
 model with `:: output_var` / `:: output_array([1..n])` added where it was missing), then
-`fzn-gecode -a` enumerates. Prints `count N` and one line per solution over the variables
-of NAMES (the translator's variables, by FlatZinc name), in scpsem.py's format; `timeout`
+`fzn-gecode -a` (or `fzn-cp-sat -a`) enumerates. Prints `count N` and one line per solution
+over the variables of NAMES (the translator's variables, by FlatZinc name), in scpsem.py's
+format; `timeout`
 when Gecode did not finish.
 
-baguette's own predicates (T5, D-0180; T6's regular and cumulative, D-0195). A .fzn flattened against baguette's mznlib calls
+baguette's own predicates (the globals of M14-e2e-verification-T5, D-0180, and the far
+families of T6, regular and cumulative, D-0195). A .fzn flattened against baguette's mznlib calls
 `baguette_global_cardinality`, `baguette_inverse`, `baguette_member(_bool)`, and the test
 models call `fzn_global_cardinality` directly; neither reference knows those names as
 FlatZinc builtins ("Registry: Constraint ... not found", measured). Such a model is turned
@@ -24,9 +33,10 @@ sets), and SPEC 2.1's sentence for member, which has no standard global with sel
 They share nothing with tools/e2e/fzn2scp.py; member's reading of SPEC is the one place the
 two are written from the same sentence.
 
-An objective (T8, D-0182). `solve [ann] minimize|maximize ID;` is replaced by `solve
-satisfy;` so that `-a` enumerates EVERY solution rather than the improving ones, and the
-line `objective minimize|maximize ID` is printed at the end, ID read from the .fzn as the
+An objective (M14-e2e-verification-T8, D-0182, objectives in the end-to-end chain).
+`solve [ann] minimize|maximize ID;` is replaced by `solve satisfy;` so that `-a` enumerates
+EVERY solution rather than the improving ones, and the line `objective minimize|maximize ID`
+is printed at the end, ID read from the .fzn as the
 reference has it: validate.py takes the optimum over the set from it, independently of the
 translator's prob_type.
 """

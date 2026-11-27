@@ -1,7 +1,15 @@
-(* reduce.ml: REDUCTION as a named, swappable component (M2-L5, D-0044).
+(* reduce.ml: REDUCTION, the step of PB conflict analysis that weakens a reason row and
+   divides it so that the literal being resolved on has coefficient 1, as a named,
+   swappable component. Two rules are provided, [division] and [round_to_one]; the PB
+   analysis of lib/core/pb_analysis.ml is handed one of them ([Search] passes
+   [round_to_one]) and never learns which.
 
-   Consistency level: none -- this is not a propagator. Spec section: none yet; the
-   governing record is docs/DECISIONS.md D-0044 and its 2026-09-18 amendment.
+   Consistency level: none -- this is not a propagator. Spec section: none yet. The
+   governing record is docs/DECISIONS.md D-0044, which decided that the learned object is
+   a PB inequality with the clause as its degree-1 case and that the reduction rule is a
+   swappable component, and its 2026-09-18 amendment, which made the cut a second
+   pluggable axis and said that a guarantee of the first rule is not one of the type.
+   Task M2-L5 built this module.
 
    ---------------------------------------------------------------------------
    What reduction is, and why it is a component rather than a function
@@ -21,9 +29,10 @@
    give two further rules at least as strong again. Whoever plugs the next one in should
    not have to touch lib/core/analysis.ml to do it.
 
-   The shape follows lib/core/analysis.ml's [criterion] (M2-L2): a record carrying its
-   own [postcondition], with the instances collected in [reductions]. That is deliberate
-   and for the same reason -- see "Each reduction carries its own postcondition" below.
+   The shape follows lib/core/analysis.ml's [criterion], the swappable rule that chooses
+   where the implication graph is cut (M2-L2): a record carrying its own
+   [postcondition], with the instances collected in [reductions]. That is deliberate and
+   for the same reason -- see "Each reduction carries its own postcondition" below.
 
    ---------------------------------------------------------------------------
    The two rules, stated exactly
@@ -62,7 +71,7 @@
    Each reduction carries its own postcondition
    ---------------------------------------------------------------------------
 
-   D-0044's amendment made this point for M2-L2's stopping criterion and it applies here
+   D-0044's amendment made this point for the cut's stopping criterion and it applies here
    unchanged: a guarantee that happens to hold for the rule we implemented first is not a
    property of the TYPE. What both rules here do guarantee is the conflicting invariant --
    the reduced row still propagates the pivot, equivalently still has negative slack once
@@ -73,20 +82,23 @@
    What is NOT shared is how much they keep. [division]'s reduced row mentions nothing
    but the pivot and falsified literals; [round_to_one]'s keeps every non-falsified
    literal whose coefficient is a multiple of the divisor. Each states its own half, so a
-   future rule -- saturation (M2-L7), MIR, Lomis et al. -- can state something else
-   without a test asserting [round_to_one]'s guarantee about it.
+   future rule -- saturation, MIR, Lomis et al. -- can state something else without a
+   test asserting [round_to_one]'s guarantee about it.
 
    ---------------------------------------------------------------------------
-   How M2-L7 plugs saturation in without touching the analysis
+   How a new rule plugs in without touching the analysis
    ---------------------------------------------------------------------------
 
    [outcome] carries [derive], a function from the explanation that derives the ORIGINAL
    row to the explanation that derives the REDUCED one. Both rules here build the same
    shape, [Combine ([Term (1, e); Weaken ws], d)] -- D-0044's table read off the ADT --
-   but nothing in the type says so. Saturation's outcome is [weakened = []],
-   [divisor = 1] and [derive = fun e -> Saturate e] once that constructor exists, and it
-   is then just another value in [reductions]. No signature moves and lib/core/analysis.ml
-   never learns which rule it is holding.
+   but nothing in the type says so. Saturation, for instance, would be [weakened = []],
+   [divisor = 1] and [derive = fun e -> Saturate e], and then just another value in
+   [reductions]. No signature moves and lib/core/analysis.ml never learns which rule it
+   is holding. That example stays hypothetical: [Explanation.t] has no [Saturate]
+   constructor, and the task that would have added one (M2-L7) was closed by the user on
+   2026-11-19 (D-0050's addendum) because no instance or proof needed it and saturation
+   loses to division in the literature.
 
    NOTHING HERE ADDS A CONSTRUCTOR TO lib/core/explanation.ml, and M2-L5 did not need
    one. That is D-0044's table, confirmed against the code: [Weaken lits] followed by
@@ -99,8 +111,10 @@
    [view] is shown the row, the pivot and a PREDICATE, and nothing else -- the same line
    lib/core/analysis.ml's [view] draws for the same reason. A reduction that could reach
    the store could read live state and render a derivation as of now rather than as of
-   the moment of the propagation, which is the wrong side of I-X6. The caller (M2-L6)
-   owns freezing that predicate; this module cannot un-freeze it.
+   the moment of the propagation, which breaks I-X6 (an explanation reads a snapshot
+   taken at the propagation, never live domains). The caller, the PB conflict analysis of
+   lib/core/pb_analysis.ml (M2-L6), owns freezing that predicate; this module cannot
+   un-freeze it.
 
    The predicate must be consistent: [falsified l] and [falsified (Lit.negate l)] must
    not both be true. Nothing here checks that -- it is a question about an assignment,
@@ -115,7 +129,9 @@ module Lit = Baguette_proof.Lit
    literal whose coefficient exceeds the slack.
 
    [Checked] is used because a reduced row's degree is a difference of sums of
-   coefficients and M1-T23's cap is what keeps that from wrapping silently. *)
+   coefficients, and OCaml's [int] wraps silently: lib/core/checked.ml raises on overflow
+   instead, and the cap it places on declared domains at compile time (M1-T23) keeps
+   that raise off the normal path. *)
 let slack (row : Learned.t) ~(falsified : Lit.t -> bool) : int =
   let sum =
     List.fold_left
@@ -125,8 +141,9 @@ let slack (row : Learned.t) ~(falsified : Lit.t -> bool) : int =
   in
   Checked.sub sum (Learned.degree row)
 
-(* A literal-keyed table through [Lit.equal], never the polymorphic compare
-   (M11-complexity-T4, D-0144). *)
+(* A literal-keyed table through [Lit.equal], never the polymorphic compare, which is
+   slower and blind to the type (M11-complexity-T4, D-0144, the task that took the
+   quadratic lists out of learning and PB analysis). *)
 module Lit_tbl = Hashtbl.Make (struct
   type t = Lit.t
 
@@ -192,8 +209,8 @@ type t = {
 (* The derivation both rules build: add the literal axioms, then divide. Skipped
    entirely when there is nothing to do -- [Explanation.combine] refuses an empty
    [Weaken] summand, and a [Combine] of one term divided by 1 is a [pol] line that
-   restates its operand, which is a line docs/PROOF-FORMAT.md section 2 would rather not
-   see written. *)
+   restates its operand, which is a line the proof does not need (the [pol] rules are in
+   docs/PROOF-FORMAT.md section 2a). *)
 let derivation ~weakened ~divisor (e : Explanation.t) : Explanation.t =
   match (weakened, divisor) with
   | [], 1 -> e
@@ -278,10 +295,11 @@ let round_to_one : t =
       (fun v o ->
         conflicting_invariant v o
         &&
-        (* M11-complexity-T4 (D-0140 P2, D-0144): [coeff_of o.reduced] was a scan of the
-           reduced row per term of [v.row], row^2 per elimination. The reduced row's
-           coefficients are now read once into a table, keeping the FIRST term per literal
-           as [coeff_of]'s [find_map] does, so every lookup answers what the scan did. *)
+        (* The reduced row's coefficients are read once into a table, keeping the FIRST
+           term per literal as [coeff_of]'s [find_map] does, so every lookup answers what
+           a [coeff_of] scan would, and the check is linear in the row. A [coeff_of]
+           scan per term of [v.row] was row^2 per elimination; item P2 of D-0140's
+           inventory of costs that grow with the run, removed by D-0144. *)
         let reduced = Lit_tbl.create 64 in
         List.iter
           (fun (tm : Learned.term) ->
@@ -298,8 +316,8 @@ let round_to_one : t =
           (Learned.terms v.row));
   }
 
-(* Every reduction this solver has, in the order D-0044 ranks them. M2-L7 appends
-   saturation here and nothing else changes. *)
+(* Every reduction this solver has, in the order D-0044 ranks them, weakest first. A new
+   rule is appended here and nothing else changes. *)
 let reductions : t list = [ division; round_to_one ]
 
 let find (name : string) : t option =

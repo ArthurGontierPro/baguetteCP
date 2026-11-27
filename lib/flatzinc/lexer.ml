@@ -5,28 +5,31 @@
    for free (SPEC 2.1's "clear diagnostic" requirement leans on them), and streams the
    file at the measured cost given below.
 
-   Memory model (M7-T27 (d), D-0128). The scanner reads the input through a window of
-   [window] bytes and holds ONE lexeme of lookahead, which is all the parser (LL(1), it
-   never backs up) needs. Nothing is proportional to the file: not the text, which is
-   never in memory whole, and not the tokens. Before this, [tokenize] read the file into
-   a string and minted a list of positioned lexemes for the whole of it before the parser
-   saw the first one -- about 100 bytes per token, which on a 460 MB `.fzn` of 80 M
-   tokens is the 8 GiB the Challenge budget allowed, spent before the first variable was
-   declared (D-0123's family A).
+   Memory model: the streaming front end (D-0128, task M7-T27 (d)). The scanner reads
+   the input through a window of [window] bytes and holds ONE lexeme of lookahead, which
+   is all the parser (LL(1), it never backs up) needs. Nothing is proportional to the
+   file: not the text, which is never in memory whole, and not the tokens. The reason is
+   measured. The scanner this replaced, [tokenize], read the file into a string and
+   minted a list of positioned lexemes for the whole of it before the parser saw the
+   first one, about 100 bytes per token, which on a 460 MB `.fzn` of 80 M tokens is the
+   8 GiB the Challenge budget allowed, spent before the first variable was declared. That
+   token array was "family A", the first of the three memory walls D-0123 measured on the
+   Challenge's largest files.
 
    A token that straddles the window's edge is copied through a Buffer; one that does
    not is taken straight out of the window. The window is 64 KiB by default and a
    parameter, so a test can shrink it to a few bytes and exercise every straddle.
 
-   Cost (M16-file-review-T5, D-0193). The scanner is O(bytes), and the constant is what
-   the Challenge's largest files pay first: on smelt_11 (136 MB, 18.4 M tokens) it was
-   530 instructions per token before this review and is 330 after. Three rules keep it there. A run of
-   identifier or digit bytes is read against [classes], one table load per byte, never
-   through a predicate closure. An integer is folded into its value where its digits
-   lie, and only one that straddles the window or does not fit goes through a string
-   and [int_of_string_opt], which decides both. A token's start is two ints, and the
-   [Pos.t] is made by [pos] when someone asks. What is left per token is the
-   identifier's string (the parser keeps it) and one [caml_modify] for [tok]. *)
+   Cost. The scanner is O(bytes), and the constant is what the Challenge's largest files
+   pay first. Three rules keep it low. A run of identifier or digit bytes is read against
+   [classes], one table load per byte, never through a predicate closure. An integer is
+   folded into its value where its digits lie, and only one that straddles the window or
+   does not fit goes through a string and [int_of_string_opt], which decides both. A
+   token's start is two ints, and the [Pos.t] is made by [pos] when someone asks. What is
+   left per token is the identifier's string (the parser keeps it) and one [caml_modify]
+   for [tok]. On smelt_11 (136 MB, 18.4 M tokens) the three took the scanner from 530
+   instructions per token to 330 (the front end's file-by-file cost review,
+   M16-file-review-T5, D-0193). *)
 
 type token =
   (* keywords *)
@@ -136,9 +139,9 @@ type t = {
   (* the one lexeme of lookahead: [tok] is the current token and [tok_line],
      [tok_col] where it starts. [EOF] is sticky: once reached, [advance] does nothing.
 
-     The start is two ints and not a [Pos.t] (M16-file-review-T5, D-0193): a [Pos.t]
-     per token was an allocation and a [caml_modify] per token, for a position the
-     parser asks for once per item and on an error. [pos] builds it on demand, the
+     The start is two ints and not a [Pos.t], because a [Pos.t] per token was an
+     allocation and a [caml_modify] per token, for a position the parser asks for once
+     per item and on an error (D-0193). [pos] builds it on demand, the
      same record [here] made, so every diagnostic reads as before. *)
   mutable tok : token;
   mutable tok_line : int;
@@ -196,11 +199,11 @@ let newline t =
   t.line <- t.line + 1;
   t.bol <- t.base + t.pos + 1
 
-(* Character classes, one table load per byte (M16-file-review-T5, D-0193). [take_while]
-   took the class as a closure and called it once per byte, through [is_ident_char],
-   which calls [is_ident_start] and [is_digit]: three calls a byte, about two thirds of
-   the lexer's time on a Challenge `.fzn`. The table answers exactly what those
-   predicates answer, byte for byte (bit 1: [is_digit]; bit 2: [is_ident_char]). *)
+(* Character classes, one table load per byte. The table answers exactly what the
+   predicates above answer, byte for byte (bit 1: [is_digit]; bit 2: [is_ident_char]).
+   It replaced a closure that [take_while] called once per byte, through
+   [is_ident_char], which calls [is_ident_start] and [is_digit]: three calls a byte,
+   about two thirds of the lexer's time on a Challenge `.fzn` (D-0193). *)
 let cls_digit = 1
 let cls_ident = 2
 
@@ -234,13 +237,13 @@ let take_while t cls =
     done;
     Buffer.contents b
 
-(* An integer literal's value, read off the digits where they lie (M16-file-review-T5,
-   D-0193): no string is made for it unless it does not fit or straddles the window's
-   edge. [None] is "use [take_while] and [int_of_string_opt]", which is the path for
-   both of those cases, so the value accepted and the text quoted by the diagnostic are
-   [int_of_string_opt]'s. Over decimal digits alone [int_of_string_opt] accepts exactly
-   the values up to [max_int]; [acc <= (max_int - d) / 10] is that bound before the
-   multiplication can wrap. The cursor moves only when [Some] is returned. *)
+(* An integer literal's value, read off the digits where they lie (D-0193): no string is
+   made for it unless it does not fit or straddles the window's edge. [None] is "use
+   [take_while] and [int_of_string_opt]", which is the path for both of those cases, so
+   the value accepted and the text quoted by the diagnostic are [int_of_string_opt]'s.
+   Over decimal digits alone [int_of_string_opt] accepts exactly the values up to
+   [max_int]; [acc <= (max_int - d) / 10] is that bound before the multiplication can
+   wrap. The cursor moves only when [Some] is returned. *)
 let take_int_in_window t =
   let buf = t.buf and len = t.len in
   let rec go i acc =
@@ -302,7 +305,7 @@ let rec scan t =
           | None -> Error (take_while t cls_digit)
         in
         (* `1..2` is a range, `1.0` is a float literal and floats are out of scope
-           (SPEC 1). Distinguish by looking at the character after the dot. *)
+           (SPEC section 1). Distinguish by looking at the character after the dot. *)
         if has1 t && peek t = '.' && not (has2 t && peek2 t = '.') then
           Error.failf (pos t)
             "floating-point literals are not supported: SPEC 2.1 restricts types to bool \

@@ -1,10 +1,18 @@
 #!/usr/bin/env python3
-"""M8-bits-encoding-T4 continuation (D-0199): read the four arms (none, w0, w64, w100) of the targeted
-middle-W check, one compare_run.sh output dir per (arm, year, id) under <root>/<arm>/<year>/<id>/.
+"""Read the four arms (none, w0, w64, w100) of the targeted middle-W check of the bits encoding,
+one compare_run.sh output dir per (arm, year, id) under <root>/<arm>/<year>/<id>/. W is the
+solver's --bits-above: an eligible variable declared wider than W gets the bits (binary)
+encoding instead of the order encoding; `none` never uses bits. A one-off analysis of the
+continuation of M8-bits-encoding-T4 (the measurement that chose the default W), recorded as
+D-0199: a middle W wins back 4 of the 14 complete answers the order encoding had over W = 0.
 
 Usage: python3 -I m8t4b_analyze.py [<root>=/scratch/arthur/m8t4b] [<repo>=.]   (read-only on the runs)
-Writes <root>/per_instance.tsv and, per arm and edition, <root>/merged/<arm>/<year>/{results,flatten}.tsv
-(the selected instances only, plus the DONE line) for challenge_rank.py, then prints the tables."""
+Reads <root>/selection.tsv (m8t4b_select.py's output) and the flatten tables of D-0175's run,
+/scratch/arthur/m8t4/flat/<year>/flatten.tsv (a fixed path). Writes <root>/per_instance.tsv
+and, per arm and edition, <root>/merged/<arm>/<year>/{results,flatten}.tsv (the selected instances
+only, plus the DONE line) for challenge_rank.py, then prints the tables on stdout. Exit 0; a
+missing selection.tsv or flatten table stops on a Python exception (status 1). <repo> is
+read but not used."""
 import glob, os, re, sys
 from collections import Counter, defaultdict
 

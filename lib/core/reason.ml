@@ -1,7 +1,8 @@
 (* Reasons: WHICH FACTS justify a pruning, as declarative data.
 
-   docs/DECISIONS.md D-0026 resolved D-0003 by layering two questions that had been
-   answered by one type. This module is the first half; [Explanation] is the second.
+   A pruning answers two questions, and since D-0026 (which settled D-0003, "what does
+   higher-order explanation mean here?") two types answer them. This module is the
+   first; [Explanation] is the second.
 
      - A *reason* -- which facts justify this pruning -- is declarative data over a
        variable scope, materialised into [Lit.t]s in exactly one place ([lits] below).
@@ -9,8 +10,8 @@
        it is materialised, never in a captured environment.
      - A *justification* -- how the checker is convinced -- stays the reified
        cutting-planes expression in lib/core/explanation.ml: [Combine] with a divisor,
-       [Weaken], [Model_row], [Term] recursing. That higher-order content is D-0026's
-       (a)-claim and is untouched by this module.
+       [Weaken], [Model_row], [Term] recursing. That higher-order content is what D-0026
+       calls its (a)-claim, and this module does not touch it.
 
    D-0026's worked example: for `2x + 3y <= 10` with `y >= 2` deriving `x <= 2`, the
    *reason* is the fact `y >= 2`; the *justification* is "add 3 times that fact to the
@@ -20,9 +21,11 @@
    Why one fact type covers every propagator in lib/
    ---------------------------------------------------------------------------
 
-   Before this module there were five producers of the [unit -> Lit.t list] thunk that
-   [Store.entry] used to carry, and *every literal any of them produced was a bound
-   fact*:
+   Every literal a reason needs is a BOUND FACT, `x >= v` or `x <= v`, so one shape,
+   [{name; value; decl}] in a direction, covers every propagator, and the rule that drops
+   a fact at its declared bound lives once, in [lit_of_fact]. The evidence, from before
+   this module, when [Store.entry] carried a [unit -> Lit.t list] thunk: its five
+   producers all produced bound facts.
 
      - [Linear.facts_of_snaps]  -- [Lit.ge]/[Lit.le] at a term's current bound, dropped
                                    when that bound is still the declared one;
@@ -33,15 +36,14 @@
                                      exactly [Lit.le name 0] or [Lit.ge name 1];
      - [Store.no_facts] -- the empty list, i.e. [none] here.
 
-   So there is one shape, [{name; value; decl}] in a direction, and three copies of the
-   "drop it at the declared bound" rule collapse into [lit_of_fact]. That rule is not
-   cosmetic: at the declared bound the order encoding's statement is the constant true
-   (docs/PROOF-FORMAT.md section 3, [Encoding.ge]'s [Holds]), there is no literal to
-   name, and a false disjunct in a trace line's tail is not a weakening -- it is a
-   wrong line. Having it in one place is the point of "materialised in exactly one
+   Three of them carried their own copy of the "drop it at the declared bound" rule. The
+   rule is not cosmetic: at the declared bound the order encoding's statement is the
+   constant true (docs/PROOF-FORMAT.md section 3, [Encoding.ge]'s [Holds]), there is no
+   literal to name, and a false disjunct in a trace line's tail is not a weakening -- it
+   is a wrong line. Having it in one place is the point of "materialised in exactly one
    place"; having it in three was how [Bool_clause] came to carry a comment explaining
-   that it is the one that must *not* drop (it never can: a `var bool`'s literal is
-   false only because a bound moved).
+   that it is the one that must *not* drop (it never can: a `var bool`'s literal is false
+   only because a bound moved).
 
    ---------------------------------------------------------------------------
    Non-narrowable, and what that rules out
@@ -61,7 +63,7 @@
    and a reason must be spellable without holding the store.
 
    ---------------------------------------------------------------------------
-   M7-T27 (a), D-0124: a reason may be MATERIALISED LATER, from the trail's history
+   A reason may be MATERIALISED LATER, from the trail's history (D-0124, M7-T27 (a))
    ---------------------------------------------------------------------------
 
    [t] has two arms. [Facts] is the list above, built at the push. [Later] is a function
@@ -74,17 +76,18 @@
    [Facts] one does, and nothing that may have changed since is readable through it.
 
    Why it exists: a [Linear] pruning's reason is one fact per OTHER term of its row, and
-   on the Challenge rows D-0123 measured (4 000 to 8 000 terms, about two prunings per
-   effective run) building those eagerly held 15 M facts and as many snapshot records on
-   the trail after four search nodes, 1.2 GB per node. D-0026's "not a closure per
-   pruning" was written against a closure over the LIVE store (GCS's [Narrowable*], and
-   I-X6's own failure mode); a closure over a frozen history is laziness in WHEN the
-   reason is materialised, which is what D-0026 asked for, with the captured environment
-   a snapshot by construction rather than by copying. Nothing here memoises: a reason is
-   asked for once by the trace and once per cut by analysis, and what a memo would keep
-   is exactly the per-term list this arm exists not to keep. [empty] is carried so that
-   [is_empty], which analysis asks per node, stays O(1); [Store.check_agreement] checks
-   it against the materialisation under BAGUETTE_DEBUG. *)
+   on the Challenge rows D-0123 measured when it located the memory wall (4 000 to 8 000
+   terms, about two prunings per effective run) building those eagerly held 15 M
+   facts and as many snapshot records on the trail after four search nodes, 1.2 GB per
+   node. D-0026's "not a closure per pruning" was written against a closure over the LIVE
+   store (GCS's [Narrowable*], and I-X6's own failure mode); a closure over a frozen
+   history is laziness in WHEN the reason is materialised, which is what D-0026 asked for,
+   with the captured environment a snapshot by construction rather than by copying.
+   Nothing here memoises: a reason is asked for once by the trace and once per cut by
+   analysis, and what a memo would keep is exactly the per-term list this arm exists not
+   to keep. [empty] is carried so that [is_empty], which analysis asks per node, stays
+   O(1); [Store.check_agreement] checks it against the materialisation under
+   BAGUETTE_DEBUG. *)
 
 module Lit = Baguette_proof.Lit
 
@@ -101,12 +104,12 @@ type fact =
 type t = Facts of fact list | Later of later
 and later = { compute : unit -> fact list; empty : bool }
 
-(* M7-T27 (a3). How many times a [Later] has been materialised since start-up: the number
-   D-0124's addenda attributed by hand with a throwaway counter, kept because the memo of
-   the decision closure (lib/core/analysis.ml, [dependency_levels]) is justified by it
-   moving. Read by the CLI under --stats and pinned by test_analysis.ml, which asks the
-   same conflict twice and requires the second ask not to move it. A process-wide
-   counter and not a per-store one, as [Store.history] reads are: a count, not state. *)
+(* How many times a [Later] has been materialised since start-up. It is kept because the
+   memo of the decision closure (lib/core/analysis.ml, [dependency_levels], M7-T27 (a3))
+   is justified by this count moving; D-0124's addenda first measured it by hand. Read by
+   the CLI under --stats and pinned by test_analysis.ml, which asks the same conflict
+   twice and requires the second ask not to move it. A process-wide counter and not a
+   per-store one, as [Store.history] reads are: a count, not state. *)
 let materialisations = ref 0
 
 (* THE one place a stored reason becomes the facts it stands for. A [Later] reads its
@@ -122,12 +125,12 @@ let of_facts l = Facts l
 
 (* "This change rests on no facts at all."
 
-   Not a default argument anywhere -- that is the whole of what I-P5 collapsing into
-   I-P4 buys. [Store.set_lo] used to mean [no_facts] silently and [set_lo_with_facts]
-   was the opt-in, which is how [int_ne] pruned factlessly from M1-T9 to M1-T17 and how
-   [Store.remove] stayed factless until M1-T17 gave it a sibling. Now there is one
-   mutator per bound and a caller with no facts has to write [none] and be seen doing
-   it. It is the honest answer in exactly two places: a search decision (nothing derived
+   Never a default argument: there is one mutator per bound, and a caller with no facts
+   writes [none] and is seen doing it. That is what folding I-P5 (every bound move
+   carries the facts its trace line negates) into I-P4 (every change carries an
+   explanation) buys. When [Store.set_lo] meant "no facts" silently and
+   [set_lo_with_facts] was the opt-in, [int_ne] pruned factlessly from M1-T9 to M1-T17.
+   [none] is the honest answer in exactly two places: a search decision (nothing derived
    it -- its literal enters the proof negated, in the branch nogood, D-0018/D-0037) and
    a test that is not exercising the proof. *)
 let none : fact list = []
@@ -172,9 +175,9 @@ let lits r = lits_of_facts (facts r)
    scope is a property of what the propagator *read*, not of what the encoding happens
    to have a literal for.
 
-   [Store.apply]'s D-0026 agreement check reads this, and M2-T3's conflict analysis is
-   meant to walk a reason's variables without materialising a single literal -- which is
-   why this is here and not derived from [lits]. *)
+   [Store.apply]'s agreement check (the two halves of D-0026 must name the same variables)
+   reads this, and conflict analysis walks a reason's variables without materialising a
+   single literal -- which is why this is here and not derived from [lits]. *)
 let owners r =
   let t = facts r in
   let seen = Hashtbl.create 8 in
@@ -193,9 +196,9 @@ let owners r =
 let fact_owner = function At_least { name; _ } | At_most { name; _ } -> name
 let fact_is_lower = function At_least _ -> true | At_most _ -> false
 
-(* The value the fact freezes. Added by M2-L0 for the conclusion check in [Store.apply],
-   which is the first consumer that needs to compare a fact against a *number* rather
-   than only ask which variable and which direction it is about. *)
+(* The value the fact freezes. The conclusion check in [Store.apply] reads it, the one
+   consumer that compares a fact against a *number* rather than only asking which
+   variable and which direction it is about (M2-L0). *)
 let fact_value = function At_least { value; _ } | At_most { value; _ } -> value
 
 let fact_to_string = function
@@ -214,20 +217,20 @@ let to_string r = to_string_facts (facts r)
 (* What a propagator hands over when it changes a domain: the reason AND the
    justification, together, in one value.
 
-   This is D-0026's "I-P4 and I-P5 collapse into one obligation". They were two:
-   I-P4 said every change carries an [Explanation.t] (enforced -- [Store.apply] took
-   one positionally), and I-P5 said every bound-moving mutator takes [~facts]
-   (unenforced -- the facts were an extra argument on an opt-in sibling function, and
-   the plain mutator silently meant [no_facts]). One value carrying both makes the
-   second half a type error: there is no mutator that takes a justification alone, and
-   [none] has to be written out.
+   One value carrying both makes a pruning without its facts a type error: there is no
+   mutator that takes a justification alone, and [none] has to be written out. This is
+   D-0026's "I-P4 and I-P5 collapse into one obligation". They were two: I-P4, every
+   change carries an [Explanation.t], was enforced ([Store.apply] took one
+   positionally); I-P5, every bound-moving mutator takes [~facts], was not (the facts
+   were an extra argument on an opt-in sibling function, and the plain mutator silently
+   meant [no_facts]).
 
    The two halves are separate *types* rather than one, because they answer D-0026's
    two different questions about the same pruning, and they are one *value* because a
    pruning has exactly one of each and nothing may pair them up later from two places.
 
    ---------------------------------------------------------------------------
-   [concludes]: WHAT this pruning derived -- docs/DECISIONS.md D-0043
+   [concludes]: WHAT this pruning derived (D-0043)
    ---------------------------------------------------------------------------
 
    The third field answers the question the other two do not. [reason] says which facts
@@ -284,7 +287,8 @@ type justified = { reason : t; justification : Explanation.t; concludes : fact o
 let because ~concludes reason justification =
   { reason = Facts reason; justification; concludes }
 
-(* D-0124: the same channel with the reason's facts built on demand. [compute] must read
+(* The same channel with the reason's facts built on demand (D-0124, see the header's
+   "materialised later"). [compute] must read
    a [Store.history] taken at the push and nothing live (see the module header); [empty]
    must equal [compute () = []], which [Store.check_agreement] asserts under
    BAGUETTE_DEBUG. [~empty] is required rather than defaulted for the reason [~concludes]

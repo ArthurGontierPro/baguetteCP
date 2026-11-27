@@ -230,7 +230,8 @@ type run = {
    the policy's own mechanics have no eviction to measure. [false] is the M2-L4 build in
    which they do -- the same binary, one config field -- and it is the side M2-L4's
    original assertions are kept verbatim on. *)
-let run ?(policy = Retention.keep_all) ?(propagate_learned = true) src =
+let run ?(policy = Retention.keep_all) ?(propagate_learned = true)
+    ?(cdcl = Search.default_config.Search.cdcl) ?(annotated = false) src =
   let m = F.Builder.of_string ~file:"test" src in
   let c = Compile.compile m in
   let dir = scratch "baguette_retention" in
@@ -249,7 +250,9 @@ let run ?(policy = Retention.keep_all) ?(propagate_learned = true) src =
        (Search.solve ~engine:c.Compile.engine ~store:c.Compile.store ~ctx
           ~check:(fun _ -> true)
           ~stats
-          ~config:{ Search.default_config with retention = policy; propagate_learned }
+          ?order:(if annotated then c.Compile.order else None)
+          ~config:
+            { Search.default_config with retention = policy; propagate_learned; cdcl }
           ())
    with Writer.Audit_failed r -> audit_error := Some r);
   close_out oc;
@@ -1189,6 +1192,87 @@ let test_d_tiered_in_a_search () =
         [ false; true ])
     scenes
 
+(* D-0257 [AUTONOME], M22-review-bugs: a HELD constraint is not evicted, whatever the
+   policy asks, until [release_held]; then it is. [lbd:0] asks for an empty database at
+   every reduction, so the hold is the only thing keeping the clause, and the release is
+   what lets it go. The proof must verify either way. *)
+let test_d0257_hold_mechanics () =
+  let pg = open_page "baguette_ret_d0257" in
+  let db = Retention.create ~policy:(Retention.lbd ~cap:0) () in
+  let row = learned_row 1 in
+  let cid = Learned.introduce pg.pg_ctx row ~origin:"D-0257 lane" in
+  ignore (Retention.add db ~cid ~row ~lbd:3 ~origin:"D-0257 lane");
+  Retention.hold db ~cid;
+  let ev1 = Retention.reduce db pg.pg_ctx in
+  check "D-0257: a held constraint survives a reduction that asks for an empty database"
+    (ev1 = [] && Retention.holds db cid);
+  let _, ev2 = learn pg db 2 ~lbd:3 in
+  check "D-0257: still held across the next constraint's reduction"
+    (Retention.holds db cid && not (List.mem cid ev2));
+  Retention.release_held db;
+  let _, ev3 = learn pg db 3 ~lbd:3 in
+  check "D-0257: released, the next reduction evicts it" (List.mem cid ev3);
+  check "D-0257: [hold] refuses an id the database does not hold"
+    (try
+       Retention.hold db ~cid;
+       false
+     with Retention.Not_owned _ -> true);
+  close_page ~title:"D-0257 hold" pg db
+
+(* test/models/gccvar_hole_dec_sat.fzn, verbatim but for its comments: seven variables,
+   domains of at most three values. D-0257's smallest reproduction: under the CDCL loop
+   with [tiered] made to reduce at every learned constraint (core 0, mid 0, first 1,
+   inc 0, mid_every 1), main f128d89 evicted the clause just learned in the reduction its
+   own [add] triggered; the loop then asserted its UIP from the clause itself, and that
+   trace line (`rup ~n_ge_1 ~w_ge_2 w_ge_3`, line 142 of 332) was refused, "not implied by
+   reverse unit propagation", because the clause it rests on was deleted on line 131. *)
+let d0257_src =
+  {|var 1..3: w :: output_var;
+var 1..3: x :: output_var;
+var 1..3: y :: output_var;
+var 0..2: n :: output_var;
+var 1..3: q1 :: output_var;
+var 1..3: q2 :: output_var;
+var 1..3: q3 :: output_var;
+constraint int_ne(x,w);
+constraint int_ne(y,w);
+constraint fzn_global_cardinality([x,y],[2],[n]);
+constraint int_ne(q1,q2);
+constraint int_ne(q1,q3);
+constraint int_ne(q2,q3);
+constraint int_lin_le([1,1,1,-1],[q1,q2,q3,n],5);
+solve :: int_search([w,q1,q2,q3,x,y,n], input_order, indomain_median) satisfy;
+|}
+
+(* The end-to-end lane: the scene above through [Search.solve] with [cdcl = true], and
+   the checker over the proof, in the model's own search order (its annotation, as the
+   CLI runs it; the scene needs it). Not vacuous on two counts, each checked: the policy
+   evicted, and a hold refused at least one eviction ([n_held_refused]). With the hold,
+   the clause's own instance survives and asserts the UIP, so the direct assertion of the
+   bug (2 of them on main) is no longer reached at all. Measured on 2026-11-27: with the
+   [hold] call in lib/core/search.ml's [learn_at_conflict] removed, this lane's proof is
+   REJECTED. *)
+let test_d0257_cdcl_assertion_survives () =
+  let policy =
+    Retention.tiered
+      ~params:{ Retention.core = 0; mid = 0; first = 1; inc = 0; mid_every = 1 }
+      ()
+  in
+  let r = run ~policy ~cdcl:true ~annotated:true d0257_src in
+  let db = r.r_db in
+  let title s = "D-0257 cdcl+tiered(first=1): " ^ s in
+  check (title "the CDCL loop ran") r.r_stats.Search.cdcl_run;
+  check (title "the policy evicted (the lane is not vacuous)") (Retention.n_evicted db > 0);
+  check
+    (title "a hold refused an eviction (without it, the clause just learned goes)")
+    (Retention.n_held_refused db > 0);
+  check (title "no audit failure") (r.r_audit_error = None);
+  check
+    (title "no id is cited by two `del` rules")
+    (not (has_duplicate (del_citations r.r_proof)));
+  expect_accepted ~title:(title "the proof") ~dir:r.r_dir ~opb:r.r_opb ~pbp:r.r_pbp;
+  cleanup r.r_dir
+
 (* M11-complexity-T4 (D-0152, D-0140 S2). A lazy citation renders the text it was given,
    when [cited_by] (or a [Cited] message) asks, and not before. *)
 let test_s2_lazy_cite () =
@@ -1276,6 +1360,8 @@ let () =
   test_d_gate ();
   test_d0226_eviction_leaves_the_engine ();
   test_d_tiered_in_a_search ();
+  test_d0257_hold_mechanics ();
+  test_d0257_cdcl_assertion_survives ();
   if !failures > 0 then (
     Printf.printf "\n%d FAILURE(S)\n" !failures;
     exit 1)

@@ -1,9 +1,10 @@
 (* The single error type of the FlatZinc front end.
 
-   Lexer, parser and builder all raise [Error]. Callers that want an exit code rather
-   than an exception use [catch] / [to_string]; bin/main.ml is expected to print
-   [to_string] on stderr and exit non-zero (SPEC 2.1: an unsupported builtin must exit
-   non-zero, never be skipped). *)
+   Lexer, parser, builder and compile.ml all raise [Error], and so does the .scp reader
+   (lib/scp/reader.ml). Callers that want an exit code rather than an exception use
+   [catch] and [to_string]: bin/main.ml prints [to_string] on stderr and exits non-zero,
+   because SPEC 2.1 requires an unsupported builtin to exit non-zero, never to be
+   skipped. *)
 
 type t = { pos : Pos.t; msg : string }
 

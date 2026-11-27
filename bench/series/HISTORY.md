@@ -19,6 +19,7 @@ Arms: A default with proof, B `-f` with proof, C default `--no-proof`, D `-f --n
 
 | Date | Record | Commit | Binary | Differing settings | A (default, proof) | B (`-f`, proof) | C (default, `--no-proof`) | D (`-f`, `--no-proof`) |
 |---|---|---|---|---|---|---|---|---|
+| 2026-11-26 to 27 | D-0227, series-20261126 | `73b4cab` (main `6c9cf97` plus the series branch, no change under `lib/` or `bin/`) | `fa2d4ee4` | D-0203's settings, fataepyc-07, PAR 22 per arm, 88 in all; `CHECK_STOPPED=0` | 311 / 79 / 65 / 4 442 / 4 to 11 | 356 / 98 / 55 / 6 277 / 2 to 8 | 352 / 92 / 44 / 4 922 / 2 to 10 (unverified) | 419 / 111 / 41 / 6 803 / 2 to 7 (unverified) |
 | 2026-11-24 to 25 | D-0229, series-20261124-fnoproof, main | `36e8cc0` | `ef2f76c8` | D-0203's settings, fataepyc-04, 46 in parallel beside the next row | not run | not run | not run | 420 / 112 / 84 / 6 590 / 2 to 7 (unverified) |
 | 2026-11-24 to 25 | D-0229, series-20261124-fnoproof, reference | `e1971f6` | `f244c35a` | D-0203's settings and flattened files, fataepyc-04, 46 in parallel beside the previous row | not run | not run | not run | 401 / 108 / 125 / 6 288 / 2 to 8 (unverified) |
 | 2026-11-23 to 24 | D-0210, observation, 64 GiB, fataepyc-07 | `e1971f6` (harness), same source as D-0203 | `f244c35a` | bits default, no proof cap, 64 GiB address space, `--max-heap-mb 32768`; arms A and C only, PAR 40 | 304 / 76 / 60 / 4 323 / 4 to 11 (3 more OPT complete but TIMEOUT-CHECK) | not run | 344 / 86 / 48 / 4 782 / 2 to 11 (unverified) | not run |
@@ -53,3 +54,19 @@ Notes on the rows.
   binary of D-0121 is not recorded there.
 - Scores and ranks are only comparable between rows with the same entrants and the same scoring
   script, and the counts only between rows that share a proof cap (see Differing settings).
+
+## Per-node factor, one row per run of `scripts/factor_lane.sh` (M17-bench-series-T6, D-0256)
+
+Run at each series (`make factor`), newest first. A cell is the geometric mean over the family's
+instances of baguette's instructions per unit over the reference's, in four configurations:
+**default with proof / default `--no-proof` / `--cdcl` with proof / `--cdcl --no-proof`**. The
+unit is the node where the trees are the same and the failure elsewhere (always for `--cdcl`);
+the lane's `factor.txt` says which, per instance. The instances and references are
+`bench/factor/plan.tsv` (alldiff costas14, element jr63, linear mknap2-1, clauses QR48 with 3
+fixed, sat3 three planted 3-SAT at 200 variables, cumulative rcpsp 11 at 60 and 66). Copy the row
+the lane prints. A row whose lane failed says why in Settings.
+
+| Date | Record | Commit | Binary | Settings | alldiff | element | linear | clauses | sat3 | cumulative |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 2026-11-27 | D-0256 | `3e60e8c` (main; the branch adds only the lane) | `c79a6b06` (release) | fataepyc-06, -j 8, 389 s; lane rc 1: costas14's `--cdcl` proof REJECTED | 196 / 122 / 222 / 147 | 92.6 / 38.1 / 88.8 / 37.6 | 153 / 143 / 182 / 174 | 57.3 / 30.4 / 51.6 / 26.7 | 13.2 / 9.22 / 12.5 / 8.64 | 94.6 / 17.9 / 135 / 18.1 |
+| 2026-11-23 | D-0207 (by hand, before the lane) | `3dc1a81` | `f244c35a` (release) | the same files; default only; per node on the same tree, cumulative not given | 503 / 416 / not run / not run | 115 / 59 / not run / not run | 592 / 581 / not run / not run | 66 / 37 / not run / not run | not run | not given |

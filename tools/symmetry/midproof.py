@@ -1,8 +1,17 @@
 #!/usr/bin/env python3
-"""midproof.py MERGED.pbp EXTRA.chain.json OUT.pbp [--level L] [--at F] [--stc] [--first K]
--- the proof-side probe of M15-symmetry-T3 (D-0181): can a symmetry-breaking cut be introduced in
-the MIDDLE of baguette's proof, at the point a search would decide to use it, rather than at the
-head before any learned constraint exists?
+"""The proof-side probe: can a symmetry-breaking cut be introduced in the MIDDLE of baguette's
+proof, at the point a search would decide to use it, rather than at the head before any learned
+constraint exists? Written for M15-symmetry-T3 (symmetry breaking that follows the search);
+D-0181 records the answer, what VeriPB accepts in the middle of a proof.
+
+    midproof.py MERGED.pbp EXTRA.chain.json OUT.pbp [--level L] [--at F] [--stc] [--subproof]
+                [--first K] [--as-rup]
+
+Writes OUT.pbp and one summary line on stdout; exit 0. It stops with a `midproof: ...` message
+and status 1 when level L has no cut with a swap or baguette's part has no labelled line, and
+argparse's 2 on a usage error. --first K inserts only the first K cuts (0, the default: all);
+--as-rup writes the inserted cuts as bare `rup` lines, the control: if VeriPB accepts them they
+are implied where they stand, and a `red` there proves nothing.
 
 MERGED.pbp is symmerge.py's output (the cuts of a chain at the head, then baguette's proof, whose
 lines all carry @labels, so a new labelled line can go anywhere). EXTRA.chain.json is another
@@ -17,8 +26,9 @@ an order loaded mid-proof. Two uses:
   - EXTRA = the same chain one level deeper (symchain --depth D+1), L = D: a chain EXTENDED during
     the search. Its witness fixes every earlier point, so the earlier cuts map onto cuts.
   - EXTRA = a chain from another base (symchain --vars starting elsewhere), L = 0: a chain CHANGED
-    during the search. Its witness need not fix the first chain's points: the mix that D-0179 and
-    the ROADMAP row say `red` must refuse.
+    during the search. Its witness need not fix the first chain's points: the mix that D-0179
+    (the static pipeline, whose cuts are proved by `red` with a swap) and the ROADMAP row say
+    `red` must refuse.
 
 --stc writes `strengthening_to_core on ;` right after the `f` line, before the head's cuts. In that
 mode VeriPB 3.0.2 checks a `red` only against the CORE, not against the derived constraints
