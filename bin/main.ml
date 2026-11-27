@@ -1,91 +1,117 @@
 (* The baguette CLI.
-     baguette MODEL.fzn [--proof PREFIX | --no-proof] [--proof-comments] [--all] [--time]
+     baguette MODEL.fzn|MODEL.scp [--proof PREFIX | --no-proof] [options]
+   ([usage] lists every option and every environment switch.)
 
-   docs/ARCHITECTURE.md gives this file one job -- "parse args, wire everything, print
-   results" -- and the wiring is the whole of M1-T14. Everything below it already
-   worked; none of it was reachable from a command line, which is why all five models
-   in test/models/ were xfail while the engine underneath them solved and emitted
-   proofs veripb accepted.
+   This file has one job, which docs/ARCHITECTURE.md states as "parse args, wire
+   everything, print results": it reads the command line, runs the library's pipeline
+   and maps each outcome to an output and an exit status. It computes nothing of its
+   own. Wiring the CLI (.fzn in, solution and proof out) was M1-T14; before it the
+   engine already solved the models in test/models/ and emitted proofs veripb accepted,
+   but nothing reached it from a command line.
 
    The pipeline, in the order it must happen:
 
-     Builder.of_file   .fzn text            -> Model.t
+     Builder.of_file / Reader.of_file  .fzn or .scp text -> Model.t
      Compile.compile   Model.t              -> store, engine, encoding
-     Encoding.write_opb                     -> PREFIX.opb        (I-X5: before the proof
-                                                                  references it)
+     Encoding.write_opb                     -> PREFIX.opb   (I-X5: the .opb is complete
+                                                             on disk before any proof
+                                                             rule cites it)
      Encoding.start_proof                   -> the proof's `f N` header
-     Search.solve                           -> Sat assignment | Unsat, proof written
-     Output.solution / Output.unsatisfiable -> stdout, SPEC 2.2
+     Search.solve / Search.optimise         -> an answer, the proof written as it goes
+     Output.solution / Output.unsatisfiable -> stdout, in the format SPEC 2.2 pins
 
-   Two things here are less obvious than they look.
+   The file in order: the exit statuses; [usage]; the option parser [parse_args] and
+   where a run without --proof writes its proof; the --time instrument ([Timing]); the
+   index bridge from solver variables to model variables; the measurement knobs read
+   from the environment; the --stats reports; [solve], which runs the pipeline above;
+   the MiniZinc standard flags; and the main program, which sizes the minor heap,
+   arms the heap budget, picks the reader and turns each exception into its exit
+   status.
+
+   Four things here are less obvious than they look.
 
    **The variable-index bridge.** [Search.assignment] is a [(Var.t * int) list] over the
    solver's own variable identities; [Model.check_assignment] and [Output.solution] both
    want an [int array] indexed by *model* variable index. Those two index spaces coincide
    only because [Compile.compile] builds the store in [Model.vars] order and promises to
    keep doing so. [assignment_values] below is where they meet, and it re-checks the
-   promise rather than assuming it: an off-by-one here would print a wrong answer that
-   the independent check (I-S1) would then happily confirm, because it would be checking
-   the same permuted array.
+   promise rather than assuming it. An off-by-one here would print a wrong answer that
+   the independent solution check would then confirm (I-S1: every printed solution
+   satisfies every constraint, re-checked by [Model.check_assignment] outside the
+   propagators), because it would be checking the same permuted array.
 
    **A run without --proof writes its proof and KEEPS it** (M9-no-proof-T5, D-0163, the
-   user's decision of 2026-11-19). docs/SPEC.md 1: "The proof is not a debugging aid. It
-   is a primary output", so the default run writes PREFIX.opb and PREFIX.pbp under a name
-   [default_proof_prefix] takes from the model -- `./foo.opb` and `./foo.pbp` for
-   `foo.fzn`, in the current directory -- and leaves them there. `--proof PREFIX` chooses
-   the name. Until T5 such a run wrote the .pbp to a temporary file and deleted it (and
-   no .opb at all), so the answer it printed came with a proof nobody could check.
+   user's decision of 2026-11-19). docs/SPEC.md section 1 says "The proof is not a
+   debugging aid. It is a primary output", so the default run writes PREFIX.opb and
+   PREFIX.pbp under a name [default_proof_prefix] takes from the model (`./foo.opb` and
+   `./foo.pbp` for `foo.fzn`, in the current directory) and leaves them there.
+   `--proof PREFIX` chooses the name. Before T5 such a run wrote the .pbp to a temporary
+   file and deleted it, and wrote no .opb at all, so its answer came with a proof nobody
+   could check.
 
-   **Except under `--no-proof` (M9-no-proof-T2, D-0126), which is off by default and is
-   a MEASUREMENT INSTRUMENT, not a mode of the solver.** It keeps every Explanation (the
-   mutators take one by type, I-P4), the learning and the independent solution check
-   I-S1, and skips what makes bytes: the .opb rows ([Encoding.row_sink] at
-   [Discard_rows], and the ladder loop short-circuited to its count), the .pbp (a
-   [Writer.t] over [Filename.null] built by [Writer.create ~null:true], whose every rule
-   mints its id and writes nothing), every justification and trace ([Justify] and
-   [Trace] return at their entry under that writer, before forcing anything), the
-   proof-side deletion of learned rows and the audit I-X2. [Encoding.start_proof] is
-   still called, through that writer, because element and alldiff embed its
-   [Writer.fresh] ids in their explanations and D-0126's id rule wants those identical
-   in both modes. Since D-0161 it mints the root lemmas' ids without reading the lemmas,
-   and [Search] no longer builds what only a proof line reads (an improving solution's
-   literal family, a decision's bits atom, I-S4's walk over the cut). What it prints is
-   UNVERIFIED and SPEC 1 says it is not a result;
-   `--stats` says so on stderr. `make check` proves every model AND runs it again under
-   this flag: stdout and the exit code must be byte-identical
-   (scripts/run_model_tests.sh), which is the one direct test that proof logging never
-   steers the search.
+   **Except under `--no-proof` (M9-no-proof-T2), which is off by default and is a
+   MEASUREMENT INSTRUMENT, not a mode of the solver** (D-0126: a solve without a proof
+   exists only to measure what the proof costs). It keeps every Explanation (I-P4: every
+   domain change carries one, and the mutators take one by type), the learning and the
+   independent solution check I-S1. It skips what makes bytes: the .opb rows
+   ([Encoding.row_sink] at [Discard_rows], and the ladder loop short-circuited to its
+   count), the .pbp (a [Writer.t] over [Filename.null] built by
+   [Writer.create ~null:true], whose every rule mints its id and writes nothing), every
+   justification and trace ([Justify] and [Trace] return at their entry under that
+   writer, before forcing anything), the proof-side deletion of learned rows and the
+   audit I-X2 (every constraint id minted is deleted exactly once, checked at the
+   conclusion). [Encoding.start_proof] is still called, through that writer, because
+   element and alldiff embed its [Writer.fresh] ids in their explanations and D-0126's
+   id rule wants those ids identical in both modes. Since the --no-proof audit (D-0161,
+   which removed what the null writer still paid for) it mints the root lemmas' ids
+   without reading the lemmas, and [Search] no longer builds what only a proof line
+   reads: an improving solution's literal family, a decision's bits atom, and the walk
+   over the cut that I-S4 needs (a trace line citing a hole is supported only while that
+   hole's own line is live). What such a run prints is UNVERIFIED and SPEC section 1
+   says it is not a result; `--stats` says so on stderr. `make check` proves every model
+   AND runs it again under this flag, and stdout and the exit code must be
+   byte-identical (scripts/run_model_tests.sh). That comparison is the one direct test
+   that proof logging never steers the search.
 
    **The .opb comment names the model's BASENAME, not the path it was given** (M1-T37).
-   `.opb` bytes are the one column M3-T5 found trustworthy at every row, and while the
-   header read `"baguette: " ^ opts.model` that column was not a property of the model at
-   all: the same file measured as `test/models/x.fzn` and as `/tmp/x.fzn` produced .opb
-   files ~16 bytes apart, so two people's byte counts could legitimately disagree about
-   the same model. The basename is kept rather than the comment dropped because a human
-   holding a .opb and a .pbp in a temp directory still needs to know which model they
-   belong to, and the *directory* is the one part of the path that person already knows:
-   they typed it. bench/run_bench.sh checks this property on every run -- see
-   `opb_path_independence` there -- so the dependence cannot come back unnoticed.
+   The .opb's size must be a property of the model alone. Its byte count is the one
+   column the proof benchmark (M3-T5, which reports .opb bytes, .pbp bytes and checker
+   seconds separately) found trustworthy at every row, and while the header read
+   `"baguette: " ^ opts.model` that column depended on where the file lived: the same
+   file measured as `test/models/x.fzn` and as `/tmp/x.fzn` produced .opb files about
+   16 bytes apart. The basename is kept, rather than the comment dropped, because a
+   person holding a .opb and a .pbp in a temporary directory still needs to know which
+   model they belong to, and the directory is the one part of the path that person
+   already knows (they typed it). bench/run_bench.sh checks this property on every run
+   (`opb_path_independence` there), so the dependence cannot come back unnoticed.
 
    **The MiniZinc standard flags** (M7-T32, D-0150, SPEC 2.2). `minizinc --solver
    baguette` passes a solver only the flags its `tools/baguette.msc` declares in
    `stdFlags`, always BEFORE the model file, and each one here is a thin mapping onto a
-   long option that already existed: `-t MS` is `--time-limit MS/1000`; `-s` is `--stats`
-   plus a `%%%mzn-stat:` block on stdout at the end of the run (the one way stdout
-   differs with a flag, and only with this one); `-f` is `--search alternate --restarts
-   luby --phase-saving` for whichever of the three was not given explicitly (Chuffed's
-   free search, D-0137 section 4; the refused proofs that made it unsafe were M7-T31's,
-   fixed by D-0148, and the default search stays the fixed one by the user's choice, D-0154);
-   `-i` and, on an optimisation model, `-a` ask for every improving solution, which this
-   CLI prints anyway, each with its own `soli` line in the proof; `-r SEED` is accepted
-   and unused (nothing on the CLI's path draws a random number); `-p N` is accepted and
-   the run uses one thread; `-v` says on stderr what the flags became. REFUSED, exit 3,
-   after the model is read: `-a` and `-n N > 1` on a SATISFACTION model, because
-   enumerating solutions needs a proof shape for "no other solution" that the writer
-   does not have (VeriPB 3.0's `solx` needs a preserved set, see [Writer]) and a search
-   that continues past a solution, which [Search.solve] does not do. The .msc therefore
-   declares `-i` and not `-a`, and MiniZinc itself then answers `-a` on a satisfaction
-   model with "Solver does not support all solutions". *)
+   long option that already existed.
+
+     -t MS     is `--time-limit MS/1000`.
+     -s        is `--stats` plus a `%%%mzn-stat:` block on stdout at the end of the run,
+               the one way a flag changes stdout.
+     -f        is `--search alternate --restarts luby --phase-saving`, for whichever of
+               the three was not given explicitly. That is Chuffed's free search, the
+               annotation's order alternating with the activity order under restarts
+               (D-0137 section 4). It was unsafe while the checker refused some branch
+               nogoods under restarts with a dynamic order (M7-T31), until D-0148 fixed
+               the decision closure; the default search stays the fixed one by the
+               user's choice (D-0154).
+     -i        and, on an optimisation model, `-a` ask for every improving solution,
+               which this CLI prints anyway, each with its own `soli` line in the proof.
+     -r SEED   is accepted and unused: nothing on the CLI's path draws a random number.
+     -p N      is accepted, and the run uses one thread.
+     -v        says on stderr what the flags became.
+
+   REFUSED with exit 3, after the model is read: `-a` and `-n N` with N > 1 on a
+   SATISFACTION model. Enumerating solutions needs a proof shape for "no other
+   solution" that the writer does not have (VeriPB 3.0's `solx` needs a preserved set,
+   see [Writer]) and a search that continues past a solution, which [Search.solve] does
+   not do. The .msc therefore declares `-i` and not `-a`, and MiniZinc itself answers
+   `-a` on a satisfaction model with "Solver does not support all solutions". *)
 
 module Model = Baguette_flatzinc.Model
 module Builder = Baguette_flatzinc.Builder
@@ -116,12 +142,19 @@ type options = {
   stats : bool;
   time_limit : float option;
   no_proof : bool; (* M9-no-proof-T2: solve without a proof -- see the header *)
-  restarts : Restart.policy; (* M10-search-strategy-T2, D-0137: --restarts *)
-  phase_saving : bool; (* M10-search-strategy-T2, D-0137: --phase-saving *)
-  search : Search.search_mode; (* M10-search-strategy-T3, D-0137: --search *)
-  reuse_trail : bool; (* M10-search-strategy-T3, D-0137: --reuse-trail *)
-  cdcl : bool; (* M19-config-T10/T11, D-0219/D-0224: --cdcl, or BAGUETTE_CDCL=1 *)
-  chrono : int option; (* M19-config-T11, D-0224: --chrono T, or BAGUETTE_CHRONO=T *)
+  (* The opt-in search strategies (D-0137): restarts and phase saving (M10-search-
+     strategy-T2), the activity order and trail reuse (M10-search-strategy-T3). *)
+  restarts : Restart.policy; (* --restarts *)
+  phase_saving : bool; (* --phase-saving *)
+  search : Search.search_mode; (* --search *)
+  reuse_trail : bool; (* --reuse-trail *)
+  cdcl : bool;
+      (* --cdcl, or BAGUETTE_CDCL=1: the CDCL loop, in which the learned clause drives
+         the search by backjumping to its asserting level (M19-config-T10/T11, D-0219) *)
+  chrono : int option;
+  (* --chrono T, or BAGUETTE_CHRONO=T: under --cdcl, a backjump over more than T
+     levels goes back one level instead (chronological backtracking,
+     M19-config-T11, D-0224) *)
   (* M7-T32, D-0150: the MiniZinc standard flags. See the header. *)
   intermediate : bool; (* -i: every improving solution; printed anyway *)
   n_solutions : int option; (* -n N; N > 1 on a satisfaction model is refused *)
@@ -130,30 +163,51 @@ type options = {
   mzn_stats : bool; (* -s: --stats and the %%%mzn-stat block on stdout *)
   verbose : bool; (* -v: the flags' mapping, on stderr *)
   e2e : bool;
-      (* M14-e2e-verification-T3, D-0187: --e2e, the proof is written to be checked
-         against cake_pb_cp's .opb, its prefix deriving this run's .opb from it *)
+      (* --e2e: the proof is written to be checked against the .opb of cake_pb_cp, the
+         verified CakeML encoder, and its prefix derives this run's .opb from that one
+         (M14-e2e-verification-T3, D-0187) *)
 }
 
-(* Exit codes. 0 covers both SAT and UNSAT: an UNSAT model is a successful run that
-   proved something, not a failure, and scripts/run_model_tests.sh reads a non-zero exit
-   as the solver having fallen over. *)
+(* Exit statuses. Each names a kind of outcome a harness must tell apart from the
+   others, so a new kind of failure gets its own number rather than sharing one.
+
+     0  the run answered: SAT, UNSAT, an optimum, or a run stopped by --time-limit, by
+        BAGUETTE_NODE_LIMIT, by a signal, or by the heap budget once it has an incumbent.
+        The proof is ended in every one of these cases.
+     2  usage: a bad command line or environment value, a missing model file, a model
+        the reader cannot parse, --e2e on a .scp. An uncaught OCaml exception also
+        exits 2, which is the runtime's own status and why the arms in the main program
+        exist.
+     3  unsupported: a legal model this solver declines with a diagnostic (a builtin it
+        does not implement, a domain the encoding cannot express, enumeration on a
+        satisfaction model, a construct --e2e does not cover).
+     4  internal: an invariant this binary states about itself failed (an unsound
+        propagator, the proof audit, a compile-time cap with a hole).
+     5  resource: the run needed more than the budget it was given ([exit_resource]).
+     6  write: a file could not be written ([exit_write]).
+
+   0 covers UNSAT as well as SAT because an UNSAT model is a successful run that proved
+   something, and scripts/run_model_tests.sh reads a non-zero exit as the solver having
+   fallen over. *)
 let exit_ok = 0
 let exit_usage = 2
 let exit_unsupported = 3
 let exit_internal = 4
 
-(* M7-T8 / D-0071. A RESOURCE overrun: the run asked for more of the machine than the
-   budget it was given allows. Distinct from all four above on purpose. It is not 3,
-   because the model is legal FlatZinc that a bigger budget would answer; it is not 4,
-   because no invariant failed; and it is emphatically not the exit 134 of the OCaml
-   runtime's own `Fatal error: allocation failure`, which is what D-0068's corpus run
-   saw nine times and could not tell apart from a crash. The number lives in
-   [Encoding] because the Gc alarm exits with it directly, and this binding is here so
-   that a reader of this table sees all five. *)
+(* Exit 5, a RESOURCE overrun: the run asked for more of the machine than the budget it
+   was given allows. The budgets are the graceful resource guard of M7-T8 (D-0071), off
+   by default: a predictive one, --max-encoding-clauses, which refuses an encoding
+   before allocating it, and a reactive one, --max-heap-mb, which watches the OCaml
+   heap. It is not 3, because the model is legal input that a bigger budget would
+   answer; it is not 4, because no invariant failed; and it is above all not the exit
+   134 of the OCaml runtime's own `Fatal error: allocation failure`, which the first
+   full corpus run (D-0068) saw nine times and could not tell apart from a crash. The
+   number lives in [Encoding] because the Gc alarm exits with it directly, and this
+   binding is here so that this table shows all six statuses. *)
 let exit_resource = Encoding.exit_resource
 
-(* M22-review-T5 (D-0248). A WRITE failed: the proof's directory does not exist, or the
-   disk is full. Not 5, because campaigns count 5 as the heap budget
+(* Exit 6, a WRITE failed: the proof's directory does not exist, or the disk is full
+   (M22-review-T5, D-0248). Not 5, because campaigns count 5 as the heap budget
    (scripts/corpus_run.sh's REFUSED-RESOURCE) and its remedy, a larger budget, is not
    this one's; not 4, because no invariant failed; and not the 2 an uncaught [Sys_error]
    used to exit with, which is also usage's. See [exit_write_failed]. *)
@@ -482,8 +536,8 @@ let usage () =
   exit exit_usage
 
 (* A limit from the command line or the environment. A value that is neither an integer
-   nor `none` is a usage error and not a silent `none`: a mistyped budget that quietly
-   means "no budget" is exactly the failure this row exists to stop. *)
+   nor `none` is a usage error and not a silent `none`, because a mistyped budget that
+   quietly means "no budget" is exactly the failure a budget exists to stop. *)
 let set_limit what r v =
   match Encoding.limit_of_string ~what v with
   | l -> r := l
@@ -493,10 +547,10 @@ let set_limit what r v =
         what v;
       usage ()
 
-(* M9-no-proof-T5 (D-0163). WHERE A RUN WITHOUT --proof WRITES ITS PROOF, decided here and
-   nowhere else. The user decided on 2026-11-19 that such a run writes its proof and KEEPS
-   it. The DIRECTORY is still the user's to confirm: what follows is the proposal on
-   record, and changing it is an edit to [default_proof_prefix] alone.
+(* Where a run without --proof writes its proof (M9-no-proof-T5, D-0163). It is decided
+   here and nowhere else. The user decided on 2026-11-19 that such a run writes its proof
+   and KEEPS it. The DIRECTORY is still the user's to confirm: what follows is the
+   proposal on record, and changing it is an edit to [default_proof_prefix] alone.
 
      baguette DIR/foo.fzn            ->  ./foo.opb and ./foo.pbp, in the CURRENT directory
      baguette /tmp/mznfileXYZ.fzn    ->  ./baguette-proof.opb and .pbp, and a stderr note
@@ -509,14 +563,14 @@ let set_limit what r v =
    temporary `mznfile<random>.fzn` and passes only that path after the flags (measured on
    MiniZinc 2.10.1: neither the argv, the environment nor the .fzn names the .mzn), so a
    name from the model would be a new meaningless name on every run. A fixed name in the
-   current directory is the next best thing; the note on stderr gives its full path,
+   current directory is the next best thing, and the note on stderr gives its full path
    because the user never typed it. `--proof PREFIX` and `--no-proof` are both extraFlags
    of tools/baguette.msc, so a MiniZinc user can name the proof or skip it.
 
-   A file of the same name is OVERWRITTEN, as `--proof PREFIX` always has done: it is the
-   output of a previous run, like a compiler's. Two runs of the same model, or two MiniZinc
-   runs, in the same directory at the same time therefore write over each other; give each
-   its own --proof. *)
+   A file of the same name is OVERWRITTEN, as `--proof PREFIX` always has done, because
+   it is the output of a previous run, like a compiler's. Two runs of the same model, or
+   two MiniZinc runs, in the same directory at the same time therefore write over each
+   other; give each its own --proof. *)
 let mzn_temp_model model =
   let b = Filename.basename model in
   String.starts_with ~prefix:"mznfile" b && Filename.check_suffix b ".fzn"
@@ -527,8 +581,20 @@ let default_proof_prefix model =
   else if Filename.check_suffix b ".fzn" then Filename.chop_suffix b ".fzn"
   else b
 
+(* The command line, into [options]. Two rules hold for every option.
+
+   The environment is read first and the command line second, so a flag beats the
+   environment variable of the same limit ([Encoding.limits_from_env] reads
+   BAGUETTE_MAX_ORDER_WIDTH, _MAX_DIRECT_VALUES, _WIDTH_WARN, _BITS_ABOVE,
+   _MAX_ENCODING_CLAUSES and _MAX_HEAP_MB).
+
+   A value that does not parse is a usage error, exit 2, and never a silent default.
+   A measurement run whose flag was silently not in force compares the default against
+   itself and reads as "no change"; CLAUDE.md records that trap twice (a before/after
+   that used the same binary on both sides). The same rule holds for the
+   contradictions checked after the loop: --no-proof with --proof, --chrono without
+   --cdcl, --e2e without --proof. *)
 let parse_args argv =
-  (* The environment first, the command line second, so a flag beats an env var. *)
   (try Encoding.limits_from_env ()
    with Encoding.Bad_limit (what, v) ->
      Printf.eprintf
@@ -549,8 +615,8 @@ let parse_args argv =
   let reuse_trail = ref false in
   let cdcl = ref Search.default_config.Search.cdcl in
   let chrono = ref Search.default_config.Search.chrono in
-  (* M7-T32 (D-0150). [restarts_given] and [search_given] let `-f` fill only what was
-     not asked for explicitly, in either order on the command line. *)
+  (* [restarts_given] and [search_given] let `-f` fill only what was not asked for
+     explicitly, in either order on the command line (the standard flags, M7-T32). *)
   let restarts_given = ref false and search_given = ref false in
   let intermediate = ref false in
   let n_solutions = ref None in
@@ -561,7 +627,7 @@ let parse_args argv =
   let verbose = ref false in
   let e2e = ref false in
   (* A standard flag's integer argument. Malformed is a usage error, as everywhere in
-     this parser: a flag that was not in force is the trap CLAUDE.md records twice. *)
+     this parser. *)
   let int_arg flag ~ok ~what i =
     if i + 1 >= Array.length argv then usage ();
     match int_of_string_opt argv.(i + 1) with
@@ -596,9 +662,8 @@ let parse_args argv =
       | "--e2e" ->
           e2e := true;
           go (i + 1)
-      (* M10-search-strategy-T2 (D-0137). A malformed policy is a usage error, never a
-         silent `none`: a measurement whose flag was not in force is the trap CLAUDE.md
-         records twice. *)
+      (* The opt-in search strategies (M10-search-strategy-T2 and T3, D-0137). A
+         malformed policy is a usage error, never a silent `none`. *)
       | "--restarts" ->
           if i + 1 >= Array.length argv then usage ();
           (match Restart.of_string argv.(i + 1) with
@@ -648,11 +713,14 @@ let parse_args argv =
                 argv.(i + 1);
               usage ());
           go (i + 2)
-      (* M7-T1. The three tunables whose DEFAULT is now off. They mutate Encoding's refs
-         rather than riding in [options], because the front end consults them during
-         [Compile.compile] and the .opb writer consults them again later: there is no
-         single call site to thread them through, and a ref that the CLI sets once,
-         before anything is compiled, is honest about that. *)
+      (* The encoding's width limits. The two refusals are off by default since M7-T1
+         turned the old hard caps into options (D-0065: the hardware limits become
+         options, defaulting off); --width-warn is a warning and defaults to the old
+         cap, 10000. They set Encoding's refs rather than riding in [options], because
+         the front end consults them during [Compile.compile] and the .opb writer
+         consults them again later. There is no single call site to thread them
+         through, and a ref that the CLI sets once, before anything is compiled, is
+         honest about that. *)
       | "--max-order-width" ->
           if i + 1 >= Array.length argv then usage ();
           set_limit "--max-order-width" Encoding.order_width_limit argv.(i + 1);
@@ -665,9 +733,10 @@ let parse_args argv =
           if i + 1 >= Array.length argv then usage ();
           set_limit "--width-warn" Encoding.width_warn_threshold argv.(i + 1);
           go (i + 2)
-      (* M7-T8, the same shape and for the same reason: consulted deep inside
-         [Compile] and again by the Gc alarm, with no single call site to thread
-         through. Default none, per D-0065. *)
+      (* The two resource budgets (M7-T8, exit 5 when exceeded), set as refs for the
+         same reason: they are consulted deep inside [Compile] and again by the Gc
+         alarm, with no single call site to thread through. Default none, per
+         D-0065. *)
       | "--max-encoding-clauses" ->
           if i + 1 >= Array.length argv then usage ();
           set_limit "--max-encoding-clauses" Encoding.encoding_budget argv.(i + 1);
@@ -676,14 +745,15 @@ let parse_args argv =
           if i + 1 >= Array.length argv then usage ();
           set_limit "--max-heap-mb" Encoding.heap_limit_mb argv.(i + 1);
           go (i + 2)
-      (* M8-bits-encoding-T2 (D-0130 section 10): the same shape, consulted by [Compile]
-         at every declaration. [set_limit] gives it `none`'s spelling and the typo
-         refusal of the other five. *)
+      (* The threshold above which an integer goes on the bits encoding, its binary
+         digits instead of one Boolean per value (M8-bits-encoding-T2, D-0130 section
+         10). The same shape, consulted by [Compile] at every declaration; [set_limit]
+         gives it `none`'s spelling and the typo refusal of the other five. *)
       | "--bits-above" ->
           if i + 1 >= Array.length argv then usage ();
           set_limit "--bits-above" Encoding.bits_above argv.(i + 1);
           go (i + 2)
-      (* M7-T32 (D-0150): the MiniZinc standard flags. See the header. *)
+      (* The MiniZinc standard flags (M7-T32, D-0150), mapped as the header says. *)
       | "-a" ->
           all_solutions := true;
           go (i + 1)
@@ -729,10 +799,11 @@ let parse_args argv =
           go (i + 1)
   in
   go 1;
-  (* M7-T32: `-f` is Chuffed's free search, the alternation of the annotation with the
-     activity order under restarts (D-0137 section 4), with phase saving as Chuffed's SAT
-     layer has it and Luby on D-0137's unit of 100 conflicts (section 0). An explicit
-     --search or --restarts wins wherever it sits on the line. *)
+  (* `-f` is Chuffed's free search: the annotation's order alternating with the activity
+     order under restarts (D-0137 section 4), with phase saving as Chuffed's SAT layer
+     has it, and Luby restarts on D-0137's unit of 100 conflicts (section 0,
+     [Restart.default_unit]). An explicit --search or --restarts wins wherever it sits
+     on the line. *)
   if !free_search then (
     if not !search_given then search := Search.Alternate;
     (if not !restarts_given then
@@ -741,16 +812,16 @@ let parse_args argv =
          | Ok p -> p
          | Error msg -> failwith ("Restart.of_string \"luby\": " ^ msg));
     phase_saving := true);
-  (* M9-no-proof-T2 (D-0126): the two flags contradict each other, and a silent choice
-     between them is the trap CLAUDE.md records twice -- a measurement whose flag was
-     never in force. A usage error, exit 2, and no file is touched. *)
-  (* M19-config-T11 (D-0224): the threshold is the loop's; under the default search it
-     would be silently ignored, the trap CLAUDE.md records twice. *)
+  (* --chrono sets a threshold of the CDCL loop (M19-config-T11, D-0224). Under the
+     default search it would be silently ignored, so it is refused. *)
   if !chrono <> None && not !cdcl then (
     prerr_endline
       "baguette: --chrono (or BAGUETTE_CHRONO) sets how far the CDCL loop backjumps, and \
        needs --cdcl (or BAGUETTE_CDCL=1).";
     exit exit_usage);
+  (* The two flags contradict each other, and a silent choice between them would leave
+     a measurement whose flag was never in force (M9-no-proof-T2). A usage error, exit
+     2, and no file is touched. *)
   if !no_proof && !proof_prefix <> None then (
     prerr_endline
       "baguette: --no-proof and --proof PREFIX contradict each other: one asks for no \
@@ -796,25 +867,28 @@ let parse_args argv =
         e2e = !e2e;
       }
 
-(* --------------------------------------------------------- timing (M1-T35) *)
+(* ------------------------------------- --time: the solver's own CPU phases (M1-T35) *)
 
-(* Why this exists. M3-T5 measured a process floor of 4.0 ms to start this binary and
-   4.6 ms to start the checker, and then found 15 of the 18 models in the suite sitting
-   AT that floor with 9-66% spread. Their "solve ms" column is a timing of `exec`, not
-   of this solver, and until the solver could report its own numbers no timing claim
-   about it was supportable from the model suite in either direction -- which is why
-   bench/README.md says D-0026's falsifier cannot be run.
+(* --time prints, on stderr, how much process CPU each phase of the run took, so that
+   solve time can be told apart from process start-up (M1-T35). Why that is needed: the
+   proof benchmark (M3-T5) measured a floor of 4.0 ms to start this binary and 4.6 ms
+   to start the checker, and found 15 of the 18 models in the suite sitting AT that
+   floor with 9-66% spread. Their "solve ms" column timed `exec`, not this solver, and
+   until the solver could report its own numbers no timing claim about it was
+   supportable from the model suite in either direction. That is why bench/README.md
+   says D-0026's falsifier cannot be run (D-0026 made reasons declarative data and
+   predicted it would cost no speed; M3-T5 was to test that prediction).
 
    ---------------------------------------------------------------------------
    The clock is CPU time, not wall time
    ---------------------------------------------------------------------------
 
-   Every number [--time] reports is [Sys.time], process CPU. (The one exception is the
-   --time-limit CHECK and the `wall=` field beside `cpu=` on the `limit:` lines: M6-T10
-   made the limit wall-clock -- bin/dune now links `unix` for Unix.gettimeofday and
-   nothing else -- because the harnesses kill on wall time and a CPU limit under load
-   loses that race and leaves no stats behind. A limit and a measurement want different
-   clocks.) For the measurements, CPU is the better instrument rather than a compromise,
+   Every number [--time] reports is [Sys.time], process CPU. The one exception is the
+   --time-limit CHECK and the `wall=` field beside `cpu=` on the `limit:` lines, which
+   read the wall clock since M6-T10 (bin/dune links `unix` for Unix.gettimeofday and
+   nothing else). The harnesses kill on wall time, and a CPU limit under load loses
+   that race and leaves no stats behind; a limit and a measurement want different
+   clocks. For the measurements, CPU is the better instrument rather than a compromise,
    and both halves of that were measured on this switch rather than assumed:
 
      * RESOLUTION. The smallest non-zero delta of [Sys.time] over 2000 consecutive
@@ -822,8 +896,8 @@ let parse_args argv =
        that [Sys.time] used to have; this runtime reaches clock_gettime.
      * WHAT IT COUNTS. CLOCK_PROCESS_CPUTIME_ID: user + system CPU consumed by this
        process since the process was created. So it EXCLUDES every moment the process
-       spent off the CPU -- descheduled behind another session's `dune build`, or
-       blocked on I/O -- which is precisely the noise bench/README.md warns about; and
+       spent off the CPU (descheduled behind another session's `dune build`, or
+       blocked on I/O), which is precisely the noise bench/README.md warns about. And
        it INCLUDES the CPU burned before OCaml ever reached this file, which is what
        makes [startup] below measurable at all.
      * THE ALTERNATIVE WAS WORSE. /proc/self/schedstat reports nanoseconds and looks
@@ -833,27 +907,27 @@ let parse_args argv =
    Two consequences, to be repeated wherever these numbers are quoted:
 
    1. A CPU number and a wall number are different measurements. On a busy machine CPU
-      is BELOW wall and the difference is time the process was not running; it is not an
-      error bar and the two must not be averaged.
+      is BELOW wall, and the difference is time the process was not running. It is not
+      an error bar, and the two must not be averaged.
    2. [startup] IS process start-up. It is reported so that it can be subtracted, not
-      folded in. D-0023 and D-0025 are both retractions of speed claims, and the way to
-      avoid a third is to publish the contaminated part as its own number.
+      folded in. D-0023 (the move to VeriPB 3.0) and D-0025 (its default flip) both
+      retracted a speed claim, and the way to avoid a third is to publish the
+      contaminated part as its own number.
 
    ---------------------------------------------------------------------------
-   What [search] used to fuse, and what it still does (M1-T47)
+   The [search] phase split into proof emission and the rest (M1-T47)
    ---------------------------------------------------------------------------
 
-   [search] used to be propagation, search AND the proof lines emitted during them,
-   with no way to tell them apart from here: every emission point is below
-   [Search.solve]. M1-T47 put the accumulator where the emission actually happens --
-   [Writer.emitted_us], around the writer's own output calls -- so [search] now splits
-   into two reported rows, [emit] and [propag].
+   The [search] phase is propagation, search AND the proof lines emitted during them,
+   and every emission point is below [Search.solve], out of this file's reach. So the
+   writer keeps its own accumulator around its output calls ([Writer.emitted_us]), and
+   [search] is reported as two more rows, [emit] and [propag] (M1-T47 separated proof
+   emission time from propagation time this way).
 
-   THEY ARE BOUNDS, NOT FIGURES, and the reason is specific rather than ritual.
-   [Writer] accumulates the time it spends WRITING a line; the time spent BUILDING
-   that line's body -- Pol.to_string_cited, Opb.constr_to_string, the Printf.sprintf
-   at each rule's call site -- is spent before the writer's output call is entered and
-   is not in [emit]. So:
+   THEY ARE BOUNDS, NOT FIGURES. [Writer] accumulates the time it spends WRITING a
+   line; the time spent BUILDING that line's body (Pol.to_string_cited,
+   Opb.constr_to_string, the Printf.sprintf at each rule's call site) is spent before
+   the writer's output call is entered and is not in [emit]. So:
 
      emit   is a LOWER bound on what proof emission costs during the search;
      propag is search - emit, an UPPER bound on what propagation and search cost.
@@ -879,9 +953,9 @@ module Timing = struct
   let phases : (string * int) list ref = ref []
   let record name us = if !on then phases := (name, us) :: !phases
 
-  (* M1-T47. Derived rows: they are a SPLIT of [search], not phases of their own, so
-     they are deliberately not in [phases] -- putting them there would make the sum
-     that produces [other] count the search twice. [emit_lines] is a count, not a
+  (* The derived rows [emit] and [propag]. They are a SPLIT of [search], not phases of
+     their own, so they are deliberately not in [phases]: putting them there would make
+     the sum that produces [other] count the search twice. [emit_lines] is a count, not a
      duration, and is printed with a `lines` unit so that nothing reading `$4 == "us"`
      picks it up as a timing. *)
   let emit_us = ref 0
@@ -890,8 +964,8 @@ module Timing = struct
 
   (* The cost of ONE [Sys.time] read, in nanoseconds, measured on this machine under
      this load rather than taken from a table. It is what [emit] and [propag] each
-     carry once per emitted line, and on a 545-line proof it is half of [emit] -- far
-     too large to leave folded in silently.
+     carry once per emitted line. On a 545-line proof it is half of [emit], far too
+     large to leave folded in silently.
 
      Called from [report], AFTER every number the report prints has been taken, so the
      ~0.4 ms it costs lands in no phase and contaminates nothing. That placement is
@@ -900,10 +974,10 @@ module Timing = struct
 
      MINIMUM OF BURSTS, NOT A MEAN, for the reason bench/README.md section 2 gives for
      every other number in this project: a mean folds in whatever else the machine was
-     doing, and four sessions build on this one. A single 512-read burst was tried
-     first and ranged 836..1871 ns across five consecutive runs of the same model --
-     which would have made the published correction swing by a factor of two. Nine
-     bursts of 256, minimum taken, holds inside a few percent. *)
+     doing, and several sessions build on the same machine. Nine bursts of 256 reads,
+     minimum taken, holds inside a few percent. A single 512-read burst was tried first
+     and ranged 836..1871 ns across five consecutive runs of the same model, which
+     would have made the published correction swing by a factor of two. *)
   let clock_tick_ns () =
     let n = 256 and bursts = 9 in
     let best = ref max_int in
@@ -918,13 +992,13 @@ module Timing = struct
     done;
     !best
 
-  (* Free when timing is off: one dereference and the call itself. A phase whose body
-     raises records nothing, which is why the report prints an `other` row instead of
-     pretending the rows always add up. *)
-  (* M6-T9: the phase in flight, for the SIGTERM line in [solve]. One store per phase,
-     on or off; it is read by nothing else. *)
+  (* The phase in flight, for the `limit: killed` line [solve] prints on a signal
+     (M6-T9). One store per phase, on or off; it is read by nothing else. *)
   let current = ref "startup"
 
+  (* Free when timing is off: one store, one dereference and the call itself. A phase
+     whose body raises records nothing, which is why the report prints an `other` row
+     instead of pretending the rows always add up. *)
   let phase name f =
     current := name;
     if not !on then f ()
@@ -1052,13 +1126,13 @@ let assignment_values m store (assignment : Search.assignment) =
     seen;
   values
 
-(* ------------------------------------------------------------------ running *)
+(* ----------------------------------------------------- the proof channel and audit *)
 
-(* The proof channel: PREFIX.pbp, which the run keeps (M9-no-proof-T5, see the header and
+(* The proof channel: PREFIX.pbp, which the run keeps (see the header and
    [default_proof_prefix]). *)
 let open_proof_channel opts =
-  (* M9-no-proof-T2: the null channel. Nothing is written through it -- the writer over
-     it is [Writer.create ~null:true] and every rule returns before rendering -- and it
+  (* Under --no-proof, the null channel. Nothing is written through it (the writer over
+     it is [Writer.create ~null:true] and every rule returns before rendering); it
      exists so that the writer has a channel to be over and the pipeline below keeps its
      one shape. [parse_args] has already refused `--no-proof` beside `--proof`, and gives
      every other run a prefix. *)
@@ -1068,25 +1142,33 @@ let open_proof_channel opts =
   | None -> invalid_arg "open_proof_channel: no prefix outside --no-proof"
 
 let audit_enabled () =
-  (* The library defaults this off and turns it on with BAGUETTE_PROOF_AUDIT=1
-     (docs/ARCHITECTURE.md section 6). The CLI inverts that default deliberately: I-X2
-     is cheap at these sizes, it has already caught one real defect (D-0015), and a user
-     running the solver should get the check without having known to ask for it. *)
+  (* The I-X2 audit: every constraint id the writer mints is deleted exactly once,
+     checked at the conclusion. The library defaults it off and turns it on with
+     BAGUETTE_PROOF_AUDIT=1 (docs/ARCHITECTURE.md section 6). The CLI inverts that
+     default deliberately, and BAGUETTE_PROOF_AUDIT=0 turns it off: the audit is cheap
+     at these sizes, it has already caught one real defect (D-0015: a root
+     refutation's intermediate steps left undeleted at level 0), and a user running the
+     solver should get the check without having known to ask for it. *)
   match Sys.getenv_opt "BAGUETTE_PROOF_AUDIT" with Some "0" -> false | _ -> true
 
-(* ------------------------------------------------- the retention policy (M2-L4) *)
+(* ----------------------------------------------- measurement knobs (environment) *)
 
-(* [Search.config.retention], from the environment.
+(* The search's measurement knobs, read from the environment when [solve] builds its
+   [Search.config]. They are environment variables rather than flags because each is a
+   MEASUREMENT knob, not a user-facing choice: it exists so that a cost can be measured
+   with a feature on and off, by anyone, on the same binary. Unset, each one gives the
+   library's default, so a normal run is unaffected. Every one follows [parse_args]'s
+   rule: a value that does not parse FAILS with exit 2 rather than falling back to the
+   default. Other switches are read where they act (BAGUETTE_CDCL and BAGUETTE_CHRONO by
+   [Search.default_config], the encoding limits by [Encoding.limits_from_env],
+   BAGUETTE_HASHCONS, BAGUETTE_PROBE and the rest by their own modules); [usage] lists
+   them all.
 
-   An environment variable rather than a flag because it is a MEASUREMENT knob and not a
-   user-facing choice: M2-L4's test (c) measures .pbp bytes and checker time with the
-   policy on and off, and a measurement nobody else can re-run is a measurement this
-   project has already been burned by. The default is [Retention.default], so a normal
-   run never reads this.
-
-   Unparseable input FAILS rather than falling back to the default. A measurement run
-   that silently used the default because the spelling was wrong is exactly the
-   "byte-identical before and after" trap CLAUDE.md records twice. *)
+   [retention_policy] is [Search.config.retention], the learned-constraint database's
+   eviction policy (M2-L4 made the policies swappable): BAGUETTE_RETENTION, plus
+   BAGUETTE_RETENTION_TRACE=N for a trace of the database. The default is
+   [Retention.default], `tiered` since D-0226. M2-L4's test (c) measures .pbp bytes and
+   checker time with the policy on and off. *)
 let retention_policy () =
   (match Sys.getenv_opt "BAGUETTE_RETENTION_TRACE" with
   | None -> ()
@@ -1107,7 +1189,8 @@ let retention_policy () =
          v);
     exit 2
   in
-  (* D-0139: `tiered`, or `tiered:` followed by comma-separated KEY=N overriding
+  (* The tiered policy (D-0139: the database made evictable in three tiers by
+     LBD): `tiered`, or `tiered:` followed by comma-separated KEY=N overriding
      [Retention.default_tier_params] (keys core, mid, first, inc, mid_every). An unknown
      key, a repeated one or a bad number FAILS, by the same rule as the rest. *)
   let tiered v spec =
@@ -1156,12 +1239,11 @@ let retention_policy () =
           | "lbd", Some n -> Retention.lbd ~cap:n
           | _ -> bad v))
 
-(* [Search.config.pb], from the environment (M6-T9), with the same discipline as the two
-   knobs either side of it. `off` is [Search.no_pb]: every conflict goes down the M2-L3
-   clause path and PB conflict analysis is never asked. It exists so that D-0062's cost --
-   an order of magnitude on width_sat_depth, accepted when PB analysis was wired in --
-   can be measured on real instances rather than argued about. A measurement knob, not a
-   user-facing choice; anything but on/off/unset FAILS. *)
+(* [Search.config.pb], BAGUETTE_PB_ANALYSIS=on|off (M6-T9). `off`, which is
+   [Search.no_pb], sends every conflict down the clause path (1UIP clause learning over
+   order literals, M2-L3) and never asks PB conflict analysis. It exists so that PB
+   analysis's accepted cost, an order of magnitude on width_sat_depth when it was wired
+   in (D-0062), can be measured on real instances rather than argued about. *)
 let pb_analysis () =
   match Sys.getenv_opt "BAGUETTE_PB_ANALYSIS" with
   | None | Some "on" -> true
@@ -1172,12 +1254,11 @@ let pb_analysis () =
            "baguette: BAGUETTE_PB_ANALYSIS=%S is not a setting. Use on or off." v);
       exit 2
 
-(* M6-T9. BAGUETTE_NODE_LIMIT=N stops the search exactly as --time-limit does, at the
-   first node entry past N nodes. A MEASUREMENT knob: a CPU-time stop lands on a
-   different node on every run, so two binaries cannot be compared byte for byte under
-   it; a node stop lands on the same node every time, so "the proofs of the same N-node
-   prefix are identical" is a checkable claim about a performance change. Anything but
-   a non-negative integer FAILS, as with the other knobs. *)
+(* BAGUETTE_NODE_LIMIT=N stops the search exactly as --time-limit does, at the first
+   node entry past N nodes (M6-T9). A time stop lands on a different node on every run,
+   so two binaries cannot be compared byte for byte under it; a node stop lands on the
+   same node every time, so "the proofs of the same N-node prefix are identical" is a
+   checkable claim about a performance change. *)
 let node_limit () =
   match Sys.getenv_opt "BAGUETTE_NODE_LIMIT" with
   | None -> None
@@ -1192,12 +1273,10 @@ let node_limit () =
                v);
           exit 2)
 
-(* [Search.config.propagate_learned], from the environment, for the same reason and with
-   the same discipline as [retention_policy] above: M2-L12 has to be able to measure a
-   build in which every learned constraint is proof-only, which is what this project was
-   before that row. BAGUETTE_PROPAGATE_LEARNED=off is that build. Anything other than
-   "off" or unset FAILS; a measurement run that silently used the default because the
-   spelling was wrong is the trap CLAUDE.md records twice. *)
+(* [Search.config.propagate_learned], BAGUETTE_PROPAGATE_LEARNED=on|off. `off` is the
+   build in which every learned constraint is proof-only, written to the proof and never
+   propagated, which is what this solver was before M2-L12 made learned units and
+   clauses propagate; M2-L12 has to be able to measure against it. *)
 let propagate_learned () =
   match Sys.getenv_opt "BAGUETTE_PROPAGATE_LEARNED" with
   | None | Some "on" -> true
@@ -1208,10 +1287,12 @@ let propagate_learned () =
            "baguette: BAGUETTE_PROPAGATE_LEARNED=%S is not a setting. Use on or off." v);
       exit 2
 
-(* [Search.config.rest_satisfied] (M11-complexity-T17, D-0173), with the same discipline:
-   anything other than on, off or unset FAILS. A measurement knob for a default-behaviour
-   change the user decides: on, learned clauses rest while satisfied (same pruning, another
-   propagation order, so other trees and proofs). *)
+(* [Search.config.rest_satisfied], BAGUETTE_REST_SATISFIED=on|off (M11-complexity-T17).
+   On, a satisfied learned clause rests on its true literal until a backtrack: D-0173
+   found that the learned clauses which "cannot prune" are the satisfied ones. The
+   pruning is the same but the propagation order differs, so the trees and proofs do
+   too, which makes it a change of default behaviour for the user to decide; the
+   default is off. *)
 let rest_satisfied () =
   match Sys.getenv_opt "BAGUETTE_REST_SATISFIED" with
   | None -> Search.default_config.Search.rest_satisfied
@@ -1223,33 +1304,17 @@ let rest_satisfied () =
            "baguette: BAGUETTE_REST_SATISFIED=%S is not a setting. Use on or off." v);
       exit 2
 
-(* --------------------------------------------------- search-tree counters (M1-T36) *)
+(* -------------------------------------------------- --stats: the reports on stderr *)
 
-(* [Search.stats] rendered on stderr, one `stats: ` line each, under --stats.
+(* What the encoding cost, on stderr under --stats. This is the counter half of the
+   diagnostic that replaced the width refusal when M7-T1 made it an option. The warning
+   half fires as a variable is declared ([Encoding.declare_int]) and does not wait to
+   be asked. This half is here because the TOTAL is the number the per-variable cap
+   never bounded: a thousand variables at width 9 999 was always ten million clauses
+   and always slipped through.
 
-   WHY THIS IS NOT FOLDED INTO --time. The two instruments cost different things and
-   must be separable for that reason. --time takes a [Sys.time] per phase and one per
-   emitted proof line, and bench/run_bench.sh therefore runs it on its own dedicated
-   repeats so that none of it lands in a number printed as "solve ms" (M1-T47). This
-   costs three int increments per node and no clock reads, so it can be left on during
-   a timed run -- which is the whole point: the tree size and the time have to be
-   readable off the SAME run before "the same tree costs no more" (D-0026) means
-   anything.
-
-   STDERR ONLY, like the timings, because SPEC 2.2 pins stdout byte for byte.
-
-   The unit word is the third field and it is `nodes`/`decs`/`levels`, never `us`, so
-   that anything reading the timing report's `$4 == "us"` cannot pick these up as
-   durations -- the same discipline `emitln` follows with its `lines` unit. *)
-(* M7-T1. What the encoding cost, on stderr under --stats.
-
-   This is the counter half of the diagnostic that replaced the width refusal. The
-   warning half fires in Encoding.declare_int and does not wait to be asked; this half
-   is here because the TOTAL is the number the per-variable cap never bounded, and said
-   so in its own comment: a thousand variables at width 9 999 was always ten million
-   clauses and always slipped through.
-
-   Written for a reader who has not read D-0028, per the same rule as the warning. *)
+   Its text is written for a reader who has not read D-0028 (a justification's size is
+   proportional to the declared domain width), by the same rule as the warning. *)
 let report_encoding_cost (c : Encoding.cost) =
   prerr_endline
     "stats: encoding cost (M7-T1). Baguette writes every integer variable out as one";
@@ -1281,9 +1346,10 @@ let report_encoding_cost (c : Encoding.cost) =
     (Encoding.encoding_budget_string ());
   Printf.eprintf "stats: %-10s %10s        --max-heap-mb (MB of OCaml heap)\n" "heap"
     (Encoding.heap_limit_string ());
-  (* M8-bits-encoding-T2 (D-0130 section 10). How many variables went on bits, how many
-     bound rows that cost, and how many eligible-by-width variables the scope rule held
-     back, by family -- the line D-0130 section 12 says a comparison must read. *)
+  (* How many variables went on the bits encoding (M8-bits-encoding-T2, D-0130 section
+     10), how many bound rows that cost, and how many eligible-by-width variables the
+     scope rule held back, by family: the line D-0130 section 12 says a comparison must
+     read. *)
   Printf.eprintf
     "stats: %-10s %10d vars   bits-encoded (--bits-above %s); held back: %s\n" "bits"
     c.Encoding.c_bits_vars
@@ -1293,19 +1359,25 @@ let report_encoding_cost (c : Encoding.cost) =
     | hs -> String.concat ", " (List.map (fun (f, n) -> Printf.sprintf "%s: %d" f n) hs));
   Printf.eprintf "stats: %-10s %10d lines  bound rows (2 per bits variable)\n" "bitsrows"
     c.Encoding.c_bits_rows;
-  (* M8-bits-encoding-T3 (D-0134 section 2.5): choice groups posted -- one per maxmin
-     scope with a bits variable, each n selector rows and one clause. *)
+  (* Choice groups posted, one per maxmin scope with a bits variable, each n selector
+     rows and one clause (maxmin over bits, M8-bits-encoding-T3, D-0134 section 2.5). *)
   Printf.eprintf "stats: %-10s %10d groups selector rows + clause (maxmin over bits)\n"
     "choices" c.Encoding.c_choices
 
-(* M7-T8. A resource overrun can fire at a DECLARATION, before any file exists, or at
-   [ensure_direct], which runs inside [start_proof] with the .opb already on disk and
-   the .pbp part-written. The guard cannot tell a reader which from inside [Encoding],
-   and half a proof that veripb happens to parse is the worst outcome available here,
-   so the binary says the cautious thing whenever --proof was asked for. *)
-(* M6-T24 (D-0225): [Some code] when a resource arm ended the proof before raising, with
-   the status to exit with. The proof is then complete and there is nothing to warn of. *)
+(* ------------------------------------------- ending a run: resource and write failure *)
+
+(* [Some code] when a resource arm ended the proof before raising, with the status to
+   exit with. The proof is then complete and there is nothing to warn of. Ending the
+   proof is M6-T24's rule (D-0225): an interrupted run closes its proof where it stands,
+   with the strongest conclusion it has. *)
 let proof_ended : int option ref = ref None
+
+(* Exit 5, or 0 when the proof was ended with an incumbent. A resource overrun (M7-T8)
+   can fire at a DECLARATION, before any file exists, or at [ensure_direct], which runs
+   inside [start_proof] with the .opb already on disk and the .pbp part-written. The
+   guard cannot tell a reader which from inside [Encoding], and half a proof that
+   veripb happens to parse is the worst outcome available here, so unless the proof was
+   ended the binary says the cautious thing whenever a proof was being written. *)
 
 let exit_out_of_resource opts =
   let warn_partial_proof () =
@@ -1329,13 +1401,13 @@ let exit_out_of_resource opts =
   flush stderr;
   exit code
 
-(* M22-review-T5 (D-0248). A write that failed, reported in one line instead of the
-   runtime's `Fatal error: exception Sys_error`. What [solve] writes is the .opb, its
-   .opb.rows body, the .pbp, the e2e prefix and stdout, and OCaml reports a failure of any
-   of them as [Sys_error], or as [Fun.Finally_raised (Sys_error _)] when it is the .pbp's
-   [close_out] in [solve]'s [finally], which flushes the last of the buffer. A full disk
-   names no file ("No space left on device"), so the line names the proof's. The final
-   answer is printed after that [close_out] and a stopped run's marker after its
+(* Exit 6: a write that failed, reported in one line instead of the runtime's
+   `Fatal error: exception Sys_error` (M22-review-T5, D-0248). What [solve] writes is the
+   .opb, its .opb.rows body, the .pbp, the e2e prefix and stdout, and OCaml reports a
+   failure of any of them as [Sys_error], or as [Fun.Finally_raised (Sys_error _)] when it
+   is the .pbp's [close_out] in [solve]'s [finally], which flushes the last of the buffer.
+   A full disk names no file ("No space left on device"), so the line names the proof's.
+   The final answer is printed after that [close_out] and a stopped run's marker after its
    conclusion's flush, so a run that ends here has printed no verdict on a proof that is
    not there; an optimisation run may have printed improving solutions before it, as a
    stopped one does. The proof is left as it is, incomplete, and the line says so. *)
@@ -1350,19 +1422,7 @@ let exit_write_failed opts msg =
   flush stderr;
   exit exit_write
 
-(* M8-bits-encoding-T5 (D-0131). The SHAPE of the proof that was just written, on
-   stderr under --stats: how many lines are `pol` and how many `rup`, and the tokens the
-   `pol` lines carry, in total and at the widest one, with that one's origin.
-
-   Written for a reader who has not read D-0127: VeriPB 3.0.2 checks a `rup` by unit
-   propagation, which is linear in what it walks, and a `pol` by cutting-planes
-   arithmetic whose every `+` costs the size of the accumulator -- so a `pol` of
-   Theta(w) tokens over a variable of declared width w is the one line in a proof whose
-   check time grows faster than its byte count. After D-0131 the solver writes its
-   ladder walks as `rup`; what is left as `pol` is a derivation the checker cannot
-   reach by propagation (a counting global's, a learned PB row's), and this report is
-   how a wide one is seen by name. *)
-(* M8-bits-encoding-T2 (D-0130 section 10): what the bits arm minted into the proof.
+(* What the bits arm minted into the proof (M8-bits-encoding-T2, D-0130 section 10).
    Every count is a level-0 line retired by the conclusion's sweep. [atoms/prune] is
    GCS's quadratic made visible: atoms minted per bits-arm pruning line written. *)
 let report_atoms (a : Encoding.atom_stats) =
@@ -1383,6 +1443,18 @@ let report_atoms (a : Encoding.atom_stats) =
       "atoms/prune"
       (float_of_int a.Encoding.a_atoms /. float_of_int a.Encoding.a_bits_prunings)
 
+(* The SHAPE of the proof that was just written, on stderr under --stats: how many
+   lines are `pol` and how many `rup`, and the tokens the `pol` lines carry, in total and
+   at the widest one, with that one's origin (M8-bits-encoding-T5, D-0131).
+
+   Why the shape matters, as D-0127 measured it on the checker: VeriPB 3.0.2 checks a
+   `rup` by unit propagation, which is linear in what it walks, and a `pol` by
+   cutting-planes arithmetic whose every `+` costs the size of the accumulator. So a
+   `pol` of Theta(w) tokens over a variable of declared width w is the one line in a
+   proof whose check time grows faster than its byte count. Since D-0131 the solver
+   writes its ladder walks as `rup`; what is left as `pol` is a derivation the checker
+   cannot reach by propagation (a counting global's, a learned PB row's), and this
+   report is how a wide one is seen by name. *)
 let report_proof_shapes (sh : Writer.shape_stats) =
   prerr_endline
     "stats: proof-line shapes (M8-bits-encoding-T5, D-0131). A `rup` is checked by unit";
@@ -1400,8 +1472,8 @@ let report_proof_shapes (sh : Writer.shape_stats) =
     Printf.eprintf "stats: %-10s %10d tokens in the widest `pol` -- %s\n" "pol-widest"
       sh.Writer.pol_tokens_max sh.Writer.pol_widest
 
-(* M9-no-proof-T2 (D-0126). The line that says what this run is NOT, printed in place of
-   the proof-shape and atom reports: those would read all zeros here, which to anyone
+(* Under --no-proof, the line that says what this run is NOT, printed in place of the
+   proof-shape and atom reports: those would read all zeros here, which to anyone
    grepping `stats:` looks like a proof with no `pol` in it rather than no proof. *)
 let report_no_proof () =
   Printf.eprintf "stats: %-10s %10d %-6s %s\n" "no-proof" 1 "bool"
@@ -1412,8 +1484,9 @@ let report_no_proof () =
     "stats: proof costs is what the same run WITH a proof costs beyond this one. No";
   prerr_endline "stats: proof-shape or atom counters: nothing was written."
 
-(* M10-search-strategy (D-0137): the opt-in strategies' counters, printed only when one
-   of them is on, so that a default run's --stats is unchanged line for line. *)
+(* The opt-in search strategies' counters (restarts, phase saving, the activity order,
+   D-0137), printed only when one of them is on, so that a default run's --stats is
+   unchanged line for line. *)
 let search_name = function
   | Search.Annotated -> "annotation"
   | Search.Activity_order -> "activity"
@@ -1447,6 +1520,24 @@ let report_strategy opts (st : Search.stats) =
         Printf.eprintf "stats: %-10s %10d decs   %s\n" "phase-used" (Phase.n_used ph)
           "decisions whose value a saved phase chose")
 
+(* [Search.stats] rendered on stderr, one `stats: ` line each, under --stats: the
+   search-tree counters (M1-T36: a real node counter in Search) and the learning
+   counters after them.
+
+   WHY THIS IS NOT FOLDED INTO --time. The two instruments cost different things and
+   must be separable for that reason. --time takes a [Sys.time] per phase and one per
+   emitted proof line, and bench/run_bench.sh therefore runs it on its own dedicated
+   repeats so that none of it lands in a number printed as "solve ms" (M1-T47). These
+   counters cost three int increments per node and no clock reads, so they can be left
+   on during a timed run. That is the point: the tree size and the time have to be
+   readable off the SAME run before "the same tree costs no more" (D-0026's prediction)
+   means anything.
+
+   STDERR ONLY, like the timings, because SPEC 2.2 pins stdout byte for byte.
+
+   The unit word is the third field and it is `nodes`/`decs`/`levels`, never `us`, so
+   that anything reading the timing report's `$4 == "us"` cannot pick these up as
+   durations. `emitln` follows the same discipline with its `lines` unit. *)
 let report_stats (st : Search.stats) ~exhausted =
   prerr_endline
     "stats: baguette search-tree counters (M1-T36). Counted by Search itself, not read";
@@ -1464,11 +1555,6 @@ let report_stats (st : Search.stats) ~exhausted =
   Printf.eprintf "stats: %-10s %10d %-6s %s\n" "exhausted"
     (if exhausted then 1 else 0)
     "bool" "1 if the search closed its whole tree (UNSAT), 0 if it stopped at a solution";
-  (* The identity these counters have to satisfy, stated above [Search.stats] and
-     checked here on every --stats run rather than only under BAGUETTE_DEBUG. Binary
-     branching with every push landing means an exhausted tree visits both sides of
-     every decision. If this line ever prints, one of the counters is counting the
-     wrong event and no number above may be quoted. *)
   Printf.eprintf "stats: %-10s %10d nodes  %s\n" "skipped" st.Search.skipped
     "siblings NOT explored: one per backjump (M2-L3). 0 means no backjump happened";
   Printf.eprintf "stats: %-10s %10d cls    %s\n" "learned" st.Search.n_learned
@@ -1496,12 +1582,14 @@ let report_stats (st : Search.stats) ~exhausted =
     (String.concat ","
        (List.map (fun (w, n) -> Printf.sprintf "%d:%d" w n) (Search.stats_width st)))
     "M2-L12: learned-clause WIDTH histogram, `lits:count`; the last bucket is `>=`";
-  (* M2-L12. [glob-prune] is the one to read: a learned unit that never moves a bound is
-     a bound the search had already re-derived for itself, so a build with units applied
-     and this counter at 0 would have changed nothing. [cls-inst] is step 2's population
-     and [glob-decl]/[cls-decl] are the literals neither step could take (a [Lit.Eq], or
-     a name the encoding does not declare) -- printed because "step 1 captured the unit
-     population" is a claim they can refute. *)
+  (* Learned constraints that propagate (M2-L12): step 1 applies learned unit clauses
+     as level-0 bounds, step 2 registers multi-literal learned clauses as engine
+     instances. [glob-prune] is the one to read: a learned unit that never moves a bound
+     is a bound the search had already re-derived for itself, so a build with units
+     applied and this counter at 0 would have changed nothing. [cls-inst] is step 2's
+     population, and [cls-decl] counts the clauses neither step could take (a [Lit.Eq],
+     or a name the encoding does not declare). It is printed because "step 1 captured
+     the unit population" is a claim it can refute. *)
   Printf.eprintf "stats: %-10s %10d units  %s\n" "globals"
     (List.length (Search.stats_globals st))
     "M2-L12: distinct learned UNITS in force as global bound tightenings";
@@ -1516,13 +1604,14 @@ let report_stats (st : Search.stats) ~exhausted =
     "...learned clauses neither step could instantiate (a Lit.Eq, or an unknown name)";
   Printf.eprintf "stats: %-10s %10d prunes %s\n" "cls-prune" st.Search.n_clause_prunes
     "...bounds those clause instances actually MOVED. M2-L12 measured 0 suite-wide";
-  (* M2-L13 / D-0054. The learned PB ROW as a runtime consumer -- the solving-side
-     object, instantiated by Pb.of_terms over the order literals it already names and
-     NOT by Learned.to_linear_row, which is the proof-side gate this row removed. Do not
-     read `pb-convert` as a success measure for it: that counter IS the gate. Read these.
-     `pb-prune` and `pb-confl` are the honest pair, counted off the trail (M2-T7 stamps
-     every entry with the instance that pushed it), and they are what M2-L12's measured
-     zero has to be compared against. *)
+  (* The learned PB ROW as a propagator (M2-L13). D-0054 separated the two objects a
+     learned row is: a proof line, and a runtime propagator over the order literals it
+     already names, built by Pb.of_terms. It is NOT built by Learned.to_linear_row, the
+     proof-side gate M2-L13 removed, so do not read `pb-convert` as a success measure
+     for it: that counter IS the gate. `pb-prune` and `pb-confl` are the honest pair,
+     counted off the trail (since M2-T7 every trail entry carries the instance that
+     pushed it), and they are what M2-L12's measured zero (`cls-prune`) has to be
+     compared against. *)
   Printf.eprintf "stats: %-10s %10d inst   %s\n" "pb-inst" st.Search.n_pb_instances
     "M2-L13: learned PB rows registered as engine instances (Pb.Learned_pb)";
   Printf.eprintf "stats: %-10s %10d rows   %s\n" "pb-inst-no" st.Search.n_pb_inst_declined
@@ -1535,9 +1624,12 @@ let report_stats (st : Search.stats) ~exhausted =
     "literals semantic minimisation removed from nogoods (M2-L3); 0 means it never fired";
   Printf.eprintf "stats: %-10s %10d lines  %s\n" "i-s4-cross" st.Search.i_s4_crossings
     "hole lines above level 0 a level-0 learned clause rests on -- data, not a fault";
-  (* M2-L6. [pb-fallback] is the one to read first: the clause path is PERMANENT
-     (D-0044), so a build in which PB analysis never succeeded would be green in every
-     other counter here. A rate of 1.00 means the PB path did nothing on this model. *)
+  (* PB conflict analysis (M2-L6: eliminate the pivot by linear combination and
+     reduction, with the clause path as fallback). [pb-fallback] is the one to read
+     first. The clause path is PERMANENT (D-0044: the learned object is a PB inequality
+     and a clause is its degenerate case, so the clause path always remains), and a
+     build in which PB analysis never succeeded would be green in every other counter
+     here. A rate of 1.00 means the PB path did nothing on this model. *)
   Printf.eprintf "stats: %-10s %10d confl  %s\n" "pb-tried" st.Search.n_pb_attempts
     "conflicts PB conflict analysis was asked about (M2-L6)";
   Printf.eprintf "stats: %-10s %10d rows   %s\n" "pb-learned" st.Search.n_pb_learned
@@ -1549,11 +1641,12 @@ let report_stats (st : Search.stats) ~exhausted =
   if Search.stats_pb_fallbacks st <> [] then
     Printf.eprintf "stats: %-10s %10s        first fallback reason: %s\n" "pb-why" ""
       (List.hd (Search.stats_pb_fallbacks st));
-  (* M8-bits-encoding-T3 (D-0134 section 11): every reason among the RECORDED fallbacks
-     (the first [Search.pb_reason_cap]), counted, most frequent first. A row with a bits
-     term offers no PB row (D-0132 section 2.7), so over bits the clause path's share
-     moves to "no PB row for instance int_lin_le" and its kin; this is the line that
-     says by how much, which `pb-why` (the first reason only) cannot. *)
+  (* Every reason among the RECORDED fallbacks (the first [Search.pb_reason_cap]),
+     counted, most frequent first (M8-bits-encoding-T3, D-0134 section 11). A row with
+     a bits term offers no PB row (D-0132 section 2.7, the bits encoding for Linear), so
+     over bits the clause path's share moves to "no PB row for instance int_lin_le" and
+     its kin. This is the line that says by how much, which `pb-why` (the first reason
+     only) cannot. *)
   (match Search.stats_pb_fallbacks st with
   | [] -> ()
   | reasons ->
@@ -1578,13 +1671,15 @@ let report_stats (st : Search.stats) ~exhausted =
      contradiction";
   Printf.eprintf "stats: %-10s %10d rows   %s\n" "pb-stronger" st.Search.n_pb_stronger
     "...of those, where the SAME conflict's clause does NOT convert. M2-L6 test (a)";
-  (* M2-L11 test (b). READ THIS BESIDE [pb-convert] AND [pb-stronger], NEVER INSTEAD OF
+  (* [pb-nondeg], M2-L11's test (b). M2-L11 gave PB analysis the order ladder chain as
+     a row, the reason Linear actually uses, so that a learned inequality can be
+     non-trivial. READ THIS BESIDE [pb-convert] AND [pb-stronger], NEVER INSTEAD OF
      EITHER. A learned row that is the EMPTY CONTRADICTION is strictly stronger than the
-     clause it replaces and still useless as a propagation result; it also CONVERTS -- to
-     a zero-term Linear -- so neither [pb-convert] nor [pb-stronger] can tell the two
-     apart. That is deliberate and it is what test_ladder.ml's degenerate control pins;
-     [pb-nondeg] is the counter that can, so a claim that PB learning improved is a claim
-     about this line.
+     clause it replaces and still useless as a propagation result; it also CONVERTS (to
+     a zero-term Linear), so neither [pb-convert] nor [pb-stronger] can tell the two
+     apart. That is deliberate, and it is what test_ladder.ml's degenerate control pins.
+     [pb-nondeg] is the counter that can, so a claim that PB learning improved is a
+     claim about this line.
 
      Re-measured 2026-09-18 (M2-L4), by solving every model in test/models/ with `--stats`
      and summing each line -- not read off an earlier note, which is how the figure this
@@ -1597,30 +1692,30 @@ let report_stats (st : Search.stats) ~exhausted =
      whose two halves add to 0 >= k in one elimination. So 26 of the 36 are conversions
      that could actually propagate, and the same 10 inflate [pb-stronger].
 
-     The text here previously read "26 of 36 NON-degenerate on the same 38 models". Two
-     things were wrong with it and they pull in opposite directions: the suite is 39
-     models, not 38, and the non-degenerate count is 28 of 38 LEARNED ROWS, not 26 of 36
-     CONVERSIONS. 26 of 36 is a real figure about a different question -- the one in the
-     paragraph above.
+     So the non-degenerate count is 28 of 38 LEARNED ROWS, and 26 of 36 is the count of
+     CONVERSIONS that could propagate, a different question. (An earlier version of this
+     note read "26 of 36 NON-degenerate on the same 38 models", mixing the two, on a
+     miscounted suite.)
 
-     [pb-lifted] says whether lib/core/ladder.ml fired at all: the lift is a retry after
-     the bare model row fails, so 0 here means this build derives exactly what M2-L6
-     derived. *)
+     [pb-lifted] says whether lib/core/ladder.ml fired at all. The lift is a retry after
+     the bare model row fails, so 0 here means this build derives exactly what PB
+     analysis derived before M2-L11. *)
   Printf.eprintf "stats: %-10s %10d rows   %s\n" "pb-nondeg" st.Search.n_pb_nondegenerate
     "...learned PB rows that are NOT the empty contradiction. M2-L11 test (b)";
   Printf.eprintf "stats: %-10s %10d rows   %s\n" "pb-lifted" st.Search.n_pb_lifted
     "...learned by resolving against model row PLUS a ladder chain (M2-L11); 0 = M2-L6";
   Printf.eprintf "stats: %-10s %10d rungs  %s\n" "pb-rungs" st.Search.n_pb_rungs
     "order-encoding ladder rows those analyses cited, summed (D-0028)";
-  (* M2-L15. The backjump's own level set, against the one the learned PB row names.
-     REPORTED AND NOT ACTED ON: lib/core/search.ml's [pb_level_verdict] has the argument,
-     and the short form is that the nogood is a clause over DECISIONS, so only the
-     decision closure answers the question the filter asks. [lvl-narrow] is the dangerous
-     arm -- the PB set is a strict subset and would license a jump the closure does not --
-     and every count in it is a conflict at which [Search.backjump_on_pb] emits a clause
-     veripb refuses. [lvl-assert] is the SAT solver's backjump level looking deeper than
-     the closure's deepest decision, i.e. exactly the temptation Le Berre et al.
-     (arXiv 2107.13085) warn carries no guarantee over PB. *)
+  (* The backjump's own level set, against the one the learned PB row names (M2-L15,
+     backjumping on the PB row). REPORTED AND NOT ACTED ON: lib/core/search.ml's
+     [pb_level_verdict] has the argument, and the short form is that the nogood is a
+     clause over DECISIONS, so only the decision closure answers the question the filter
+     asks. [lvl-narrow] is the dangerous arm -- the PB set is a strict subset and would
+     license a jump the closure does not -- and every count in it is a conflict at which
+     [Search.backjump_on_pb] emits a clause veripb refuses. [lvl-assert] is the SAT
+     solver's backjump level looking deeper than the closure's deepest decision, which is
+     exactly the temptation Le Berre et al. (arXiv 2107.13085) warn carries no guarantee
+     over PB. *)
   Printf.eprintf "stats: %-10s %10d confl  %s\n" "lvl-cmp" st.Search.n_level_compared
     "conflicts where BOTH a decision closure and a PB row existed to compare (M2-L15)";
   Printf.eprintf "stats: %-10s %10d confl  %s\n" "lvl-same" st.Search.n_level_same
@@ -1644,7 +1739,13 @@ let report_stats (st : Search.stats) ~exhausted =
     Printf.eprintf "stats: I-S4 VIOLATED %d time(s); first: %s\n"
       (List.length (Search.stats_i_s4_broken st))
       (List.hd (Search.stats_i_s4_broken st));
-  (* The identity, now with M2-L3's one extra term. See [Search.stats_consistent]. *)
+  (* The identity these counters have to satisfy, stated above [Search.stats] and
+     checked here on every --stats run rather than only under BAGUETTE_DEBUG: nodes =
+     2 * decisions + 1 - skipped on an exhausted tree, <= on a stopped one. Binary
+     branching with every push landing means an exhausted tree visits both sides of
+     every decision, and each backjump skips one sibling (the `- skipped` term,
+     M2-L3). If this line ever prints, one of the counters is counting the wrong event
+     and no number above may be quoted. See [Search.stats_consistent]. *)
   if not (Search.stats_consistent st ~exhausted) then
     Printf.eprintf
       "stats: INCONSISTENT -- nodes=%d is not %s 2 * decisions + 1 - skipped = %d. The \
@@ -1653,15 +1754,18 @@ let report_stats (st : Search.stats) ~exhausted =
       (if exhausted then "=" else "<=")
       (Search.stats_expected_nodes st)
 
-(* M2-T6. The engine's propagation counters, on stderr under --stats: the three GCS
-   prints under `-s` (propagations, effectfulPropagations, contradictingPropagations),
-   defined in [Engine.counters] so that the two solvers' figures can be divided by the
-   same thing. Counted by the engine, not read from the proof (M1-T36). *)
+(* The engine's propagation counters, on stderr under --stats (M2-T6, which also added
+   the self-wake veto counted as `vetoed`). The first three are the ones GCS prints
+   under `-s` (propagations, effectfulPropagations, contradictingPropagations), defined
+   in [Engine.counters] so that the two solvers' figures can be divided by the same
+   thing. Counted by the engine, not read from the proof, as the search-tree counters
+   are. *)
 module Engine = Baguette_core.Engine
 
 let report_engine_counters ?families (c : Engine.counters) ~nodes =
   let per n = if nodes > 0 then float_of_int n /. float_of_int nodes else 0.0 in
-  (* M6-T20: which FAMILY the runs belong to, per node, most runs first. *)
+  (* Which FAMILY the runs belong to, per node, most runs first (M6-T20, which found
+     learned clauses running on every bound change of every variable they name). *)
   (match families with
   | None -> ()
   | Some rows ->
@@ -1682,8 +1786,10 @@ let report_engine_counters ?families (c : Engine.counters) ~nodes =
     "eff" c.Engine.c_effectful (per c.Engine.c_effectful);
   Printf.eprintf "stats: %-10s %10d runs   ...that returned Conflict\n" "contra"
     c.Engine.c_contra;
-  (* M6-T19 / I-P6: how many snapshots the multi-deduction propagators took, against
-     how many domain changes they made. Before M6-T19 passes = deductions + calls. *)
+  (* How many snapshots the multi-deduction propagators took, against how many domain
+     changes they made. I-P6 (M6-T19): a pass photographs the store once and makes
+     every deduction from that one snapshot. Before M6-T19 a pass restarted after every
+     pruning, so passes = deductions + calls. *)
   let pc = Baguette_core.Propagator.pass_counters in
   Printf.eprintf
     "stats: %-10s %10d snaps  passes of alldiff/cumulative/gcc/element, one snapshot \
@@ -1709,21 +1815,25 @@ let report_engine_counters ?families (c : Engine.counters) ~nodes =
      the old seeded\n"
     "skipped" c.Engine.c_skipped
 
-(* M6-T10. The wall clock --time-limit is checked against, counted from this module's
-   initialisation, i.e. process start to within the runtime's own start-up. [Sys.time]
+(* The wall clock --time-limit is checked against (M6-T10), counted from this module's
+   initialisation, which is process start to within the runtime's own start-up. [Sys.time]
    stays the clock of every measurement (see the clock comment above). *)
 let wall_start = Unix.gettimeofday ()
 let wall () = Unix.gettimeofday () -. wall_start
 
-(* M6-T9. One line, always (not gated on --stats), so that a results file built from
-   stderr alone can say what a stopped run was doing. Space-separated `key=value`
-   fields after the `limit:` tag; scripts/corpus_run.sh copies it into its detail
-   column, so a field renamed here is a column renamed there. [cpu_s] is Sys.time at the
-   moment of the report, the same clock the limit was checked against. *)
-(* M6-T21: the wall clock at which the stop first said yes, so the `limit:` line can
-   split an overshoot into the stop's latency ([fired] minus the limit) and the
-   finaliser's ([wall] minus [fired]). NaN until then, and on a node-limit stop. *)
+(* The wall clock at which the stop first said yes (M6-T21, the overshoot study), so
+   the `limit:` line can split an overshoot into the stop's latency ([fired] minus the
+   limit) and the finaliser's ([wall] minus [fired]). NaN until then, and on a
+   node-limit stop. *)
 let stop_fired_at = ref Float.nan
+
+(* The `limit:` line of a stopped run (M6-T9: a --time-limit that stops cleanly and
+   reports stats and incumbent). One line, always (not gated on --stats), so that a
+   results file built from stderr alone can say what a stopped run was doing.
+   Space-separated `key=value` fields follow the `limit:` tag, and
+   scripts/corpus_run.sh copies them into its detail column, so a field renamed here is
+   a column renamed there. `cpu=` is Sys.time at the moment of the report; `wall=` is
+   the clock the limit was checked against. *)
 
 let report_limit opts (st : Search.stats) ~(engine : Engine.t) ~best ~signal =
   let c = Engine.counters engine in
@@ -1742,22 +1852,24 @@ let report_limit opts (st : Search.stats) ~(engine : Engine.t) ~best ~signal =
     st.Search.max_depth
     (match best with None -> "none" | Some (_, v) -> string_of_int v)
     c.Engine.c_runs c.Engine.c_effectful c.Engine.c_contra
-    (* M6-T21: where the stop landed -- a node entry, or a poll inside propagation. *)
+    (* Where the stop landed: a node entry, a poll inside propagation (M6-T21), or a
+       poll inside a conflict's trace (M6-T23, D-0149: the stop was never asked there,
+       and a run overshot its limit by more than 300 s). *)
     (if st.Search.stopped_in_propagation then "propagation"
-     else if st.Search.stopped_in_trace then "trace" (* M6-T23, D-0149 *)
+     else if st.Search.stopped_in_trace then "trace"
      else "node")
     (if Float.is_nan !stop_fired_at then "none" else Printf.sprintf "%.2fs" !stop_fired_at)
     (Option.value ~default:"none" signal)
 
-(* M7-T32 (D-0150). MiniZinc's statistics format, on STDOUT under `-s` only: one
-   `%%%mzn-stat: name=value` line each and `%%%mzn-stat-end`, printed once, after the
-   run's last marker. The names are the FlatZinc specification's standard ones, each
-   read from a counter `--stats` already prints on stderr, so nothing here is counted
-   twice: failures are the search's conflicts, nogoods its learned clause and PB rows,
+(* MiniZinc's statistics format, on STDOUT under `-s` only (the standard flags, M7-T32):
+   one `%%%mzn-stat: name=value` line each and `%%%mzn-stat-end`, printed once, after the
+   run's last marker. The names are the FlatZinc specification's standard ones, each read
+   from a counter `--stats` already prints on stderr, so nothing here is counted twice:
+   failures are the search's conflicts, nogoods its learned clause and PB rows,
    propagations the propagator runs off the queue. No nSolutions: MiniZinc's solns2out
-   counts the solutions itself and prints that line after this block. initTime is the wall clock from
-   process start to the search's entry (parse, compile, the .opb, the proof's header);
-   solveTime is the wall clock of the search after it. *)
+   counts the solutions itself and prints that line after this block. initTime is the wall
+   clock from process start to the search's entry (parse, compile, the .opb, the proof's
+   header); solveTime is the wall clock of the search after it. *)
 let report_mzn_stats (st : Search.stats) ~(engine : Engine.t) ~init_time ~solve_time
     ~objective =
   let c = Engine.counters engine in
@@ -1775,15 +1887,21 @@ let report_mzn_stats (st : Search.stats) ~(engine : Engine.t) ~init_time ~solve_
   print_string "%%%mzn-stat-end\n";
   flush stdout
 
+(* -------------------------------------------------------------------- the run *)
+
+(* The pipeline of the header, for one model: compile, write the .opb, open the proof,
+   search, print the answer, then the reports. Every exception it raises is mapped to
+   an exit status by the main program. *)
 let solve opts (m : Model.t) =
-  (* M7-T27 (b), D-0123 family C: the .opb's rows go to disk as they are minted, never
-     to the heap. With --proof the body is written to PREFIX.opb.rows and [write_opb]
-     splices it under the header, then removes it; under --no-proof there is no .opb to
-     write and the rows are dropped at the door. Every other run has a prefix
-     (M9-no-proof-T5). Set BEFORE [Compile.compile], which is
-     where [Encoding.create] runs. The at_exit is for the runs that end in [exit 5] or
-     an uncaught exception with the body half-written: the .opb is INCOMPLETE then
-     anyway ([incomplete_proof_warning]), and the body should not outlive it. *)
+  (* The .opb's rows go to disk as they are minted, never to the heap: the heap was one
+     of the three places M7-T27 found the memory wall (D-0123, family C). With a proof
+     prefix the body is written to PREFIX.opb.rows and [write_opb] splices it under the
+     header, then removes it; under --no-proof there is no .opb to write and the rows
+     are dropped at the door. Set BEFORE [Compile.compile], which is where
+     [Encoding.create] runs. The at_exit is for the runs that end in exit 5 or an
+     uncaught exception with the body half-written: the .opb is INCOMPLETE then anyway
+     (the warning of [exit_out_of_resource]), and the body should not outlive it. The
+     same holds for the --e2e prefix file. *)
   (match opts.proof_prefix with
   | Some prefix ->
       let rows = prefix ^ ".opb.rows" in
@@ -1800,11 +1918,9 @@ let solve opts (m : Model.t) =
   let store = compiled.Compile.store in
   let encoding = compiled.Compile.encoding in
   if opts.stats then report_encoding_cost (Encoding.cost encoding);
-  (* I-X5: the .opb is complete and on disk before any proof rule can cite it. The
-     comment names the BASENAME, not the path -- M1-T37, see this file's header. *)
-  (* M9-no-proof-T5: the MiniZinc case of [default_proof_prefix] names a file the user
-     never typed, so say where it is. Printed after the model is read, so a refused model
-     names no file it did not write. *)
+  (* The MiniZinc case of [default_proof_prefix] names a file the user never typed, so
+     say where it is. Printed after the model is read, so a refused model names no file
+     it did not write. *)
   (match opts.proof_prefix with
   | Some p when opts.proof_note ->
       let p = if Filename.is_relative p then Filename.concat (Sys.getcwd ()) p else p in
@@ -1814,6 +1930,8 @@ let solve opts (m : Model.t) =
          %!"
         p p
   | _ -> ());
+  (* I-X5: the .opb is complete and on disk before any proof rule can cite it. Its
+     comment names the model's BASENAME, not the path (M1-T37, see the header). *)
   Timing.phase "opb" (fun () ->
       match opts.proof_prefix with
       | Some prefix ->
@@ -1830,35 +1948,36 @@ let solve opts (m : Model.t) =
           Writer.create ~comments:opts.proof_comments ~audit:(audit_enabled ())
             ~null:opts.no_proof proof_oc
         in
-        (* D-0172: with no line ever written there is nothing to share, so a build is not
-           hash-consed (nor given an identity) at all under --no-proof. *)
+        (* Explanations are hash-consed so that a rebuilt derivation shares one proof
+           line (D-0172). With no line ever written there is nothing to share, so under
+           --no-proof a build is not hash-consed, nor given an identity, at all. *)
         if opts.no_proof then Baguette_core.Explanation.set_hashcons false;
         Encoding.start_proof encoding writer;
-        (* Every propagator instance carries its own row id (D-0011/D-0015). This used
-           to install a [model_id] thunk that raised, because [Explanation.Trivial]
-           could still reach the proof layer and there was no honest way to guess
-           which row it meant. M1-T31 removed the field: there is no ambient row to
-           install, so there is nothing to guard here. *)
+        (* The context needs no model row: every propagator instance carries its own
+           row id (D-0011: one propagator instance, one model row; D-0015 made the row
+           part of the Explanation). M1-T31 removed the ambient row and the
+           [Explanation.Trivial] constructor that needed it, which this call used to
+           guard with a raising [model_id] thunk. *)
         let ctx = Justify.create ~writer ~encoding in
         (proof_oc, ctx))
   in
   let check assignment =
     Model.check_assignment m (assignment_values m store assignment)
   in
-  (* M1-T36. Always allocated and always threaded: the counters cost three increments
-     per node whether or not anyone asks to see them, and a counter that is only wired
-     up under a flag is a counter no test exercises. --stats decides whether it is
-     PRINTED, not whether it is kept. *)
+  (* The search-tree counters, always allocated and always threaded: they cost three
+     increments per node whether or not anyone asks to see them, and a counter that is
+     only wired up under a flag is a counter no test exercises. --stats decides whether it
+     is PRINTED, not whether it is kept. *)
   let stats = Search.stats_create () in
   let writer = ctx.Justify.writer in
-  (* M6-T24 (D-0225). An incumbent the proof records, i.e. one a stopped run can return. *)
+  (* An incumbent the proof records, which is one a stopped run can return (D-0225). *)
   let have_incumbent () = Writer.has_incumbent writer in
-  (* M7-T32: where `-s`'s initTime ends and its solveTime starts. *)
+  (* Where `-s`'s initTime ends and its solveTime starts. *)
   let t_search = ref 0. in
-  (* M6-T9, M6-T24 (D-0225). A run stopped from outside. SIGTERM (an outer `timeout`),
-     SIGINT and SIGXCPU do not exit: the first one raises [stop_signal], which
+  (* A run stopped from outside (M6-T9, M6-T24, D-0225). SIGTERM (an outer `timeout`),
+     SIGINT and SIGXCPU do not exit. The first one sets [stop_signal], which
      [config.stop] reads with the clock, so the search ends at its next poll exactly as
-     under --time-limit -- proof ended, `limit:` line, exit 0. If it has not stopped
+     under --time-limit: proof ended, `limit:` line, exit 0. If it has not stopped
      [signal_grace] seconds later, or a second signal comes (MiniZinc sends SIGINT then
      SIGTERM), the proof is ended where it stands, as soon as no line is half written
      ([Writer.when_idle]): a valid prefix plus the three final lines. The `killed` line
@@ -1917,9 +2036,9 @@ let solve opts (m : Model.t) =
          match !stop_signal with
          | Some name -> stop_now (fun () -> killed_line name) (fun () -> exit_ok)
          | None -> ()));
-  (* M6-T24: the heap budget ends the proof before it exits. A run that has an incumbent
-     has an answer to return, so it ends as a stopped run (exit 0); one that has none is
-     still exit 5. *)
+  (* The heap budget also ends the proof before it exits (M6-T24). A run that has an
+     incumbent has an answer to return, so it ends as a stopped run (exit 0); one that has
+     none is still exit 5. *)
   let resource_code () = if have_incumbent () then exit_ok else exit_resource in
   (Encoding.resource_exit :=
      fun () -> stop_now (fun () -> killed_line "heap-budget") resource_code);
@@ -1928,10 +2047,11 @@ let solve opts (m : Model.t) =
       ~finally:(fun () -> Timing.phase "pbpclose" (fun () -> close_out proof_oc))
       (fun () ->
         Timing.phase "search" (fun () ->
-            (* M1-T47. Writer's accumulator is process-wide and cumulative -- it has
-               already counted Encoding.start_proof, which ran in [proofopen] -- so
-               what belongs to [search] is the DIFFERENCE across this call and not the
-               total. Sampled inside the phase so that the two brackets nest. *)
+            (* Writer's emission accumulator (the [emit] row of --time) is process-wide
+               and cumulative: it has already counted Encoding.start_proof, which ran in
+               [proofopen]. So what belongs to [search] is the DIFFERENCE across this
+               call and not the total. Sampled inside the phase so that the two brackets
+               nest. *)
             let e0 = Writer.emitted_us () and l0 = Writer.emitted_lines () in
             t_search := wall ();
             let config =
@@ -1979,14 +2099,15 @@ let solve opts (m : Model.t) =
                       (Search.solve ~engine:compiled.Compile.engine ~store ~ctx ~check
                          ~stats ~config ?order:compiled.Compile.order ())
                 | Some objective ->
-                    (* M5-T1. Each improving solution is printed AS IT IS FOUND, which is
-                       the FlatZinc convention SPEC 2.2 describes -- a running report, so
-                       that a user who interrupts a long optimisation has still been told
-                       the best answer so far. The consequence for --time is that the
-                       solution printing of an optimisation run is inside the `search`
-                       phase and not inside `output`, where a satisfaction run's is; the
-                       `output` phase then holds only the final marker. That is the honest
-                       placement, since the printing really does happen there. *)
+                    (* Each improving solution is printed AS IT IS FOUND (branch and
+                       bound, M5-T1), which is the FlatZinc convention SPEC 2.2 describes:
+                       a running report, so that a user who interrupts a long optimisation
+                       has still been told the best answer so far. The consequence for
+                       --time is that the solution printing of an optimisation run is
+                       inside the `search` phase and not inside `output`, where a
+                       satisfaction run's is; the `output` phase then holds only the final
+                       marker. That is the honest placement, since the printing really
+                       does happen there. *)
                     `Optimise
                       (Search.optimise ~engine:compiled.Compile.engine ~store ~ctx ~check
                          ~stats ~config ~objective ?order:compiled.Compile.order
@@ -1999,8 +2120,8 @@ let solve opts (m : Model.t) =
               | Search.Stopped { best } -> `Stopped best
               | (Out_of_memory | Encoding.Heap_too_large _ | Encoding.Encoding_too_large _)
                 as e ->
-                  (* M6-T24: the synchronous resource arms, caught where the proof can
-                     still be ended. [Writer.idle] is false when the exception came out of
+                  (* The synchronous resource arms, caught where the proof can still be
+                     ended (M6-T24). [Writer.idle] is false when the exception came out of
                      a write, and the proof is then left as it is, incomplete. *)
                   if Writer.idle writer then (
                     let code = resource_code () in
@@ -2043,12 +2164,11 @@ let solve opts (m : Model.t) =
          written establishes that. *)
       | `Optimise (Search.Opt _) -> print_string Output.exhausted
       | `Optimise Search.Opt_unsat -> print_string Output.unsatisfiable
-      (* M6-T9. The FlatZinc standard's marker for "stopped with nothing to report";
-         SPEC 2.2 does not list it yet (a request is filed). A stopped run that DID
-         print solutions -- an optimisation run's improving ones -- prints nothing
-         more: their `----------` lines are already out, and the absence of
-         `==========` is exactly the statement that the last one is not proved
-         optimal. *)
+      (* The FlatZinc standard's marker for "stopped with nothing to report" (M6-T9),
+         normative in SPEC 2.2 under "A stopped run". A stopped run that DID print
+         solutions (an optimisation run's improving ones) prints nothing more: their
+         `----------` lines are already out, and the absence of `==========` is exactly
+         the statement that the last one is not proved optimal. *)
       | `Stopped None -> print_string "=====UNKNOWN=====\n"
       | `Stopped (Some _) -> ());
       flush stdout);
@@ -2073,9 +2193,10 @@ let solve opts (m : Model.t) =
 
 (* ------------------------------------------- MiniZinc standard flags (M7-T32) *)
 
-(* D-0150. What the standard flags became, on stderr: the two notes under --stats, -s or
-   -v (so a run that asked for none of them keeps its stderr empty, M1-T49), and under -v
-   also the resolved search and limit. D-0150's warning for -f is gone since D-0148 closed
+(* What the standard flags became, on stderr (D-0150): the notes on -p and -r under
+   --stats, -s or -v, and under -v also the resolved search and limit. A run that asked
+   for none of them keeps its stderr empty (M1-T49: diagnostics are off unless asked
+   for). D-0150's warning for -f is gone since D-0148 fixed the refused nogoods of
    M7-T31 (D-0154). *)
 let report_std_flags opts =
   if opts.stats || opts.verbose then (
@@ -2100,12 +2221,13 @@ let report_std_flags opts =
       (if opts.intermediate || opts.all_solutions then " (asked, and printed anyway)"
        else " (printed anyway)")
 
-(* D-0150. Enumeration is refused on a SATISFACTION model, after it is read (whether it
-   is one is a property of the model, not of the command line). It needs two things that
+(* Enumeration is refused on a SATISFACTION model with exit 3 (D-0150), after the model
+   is read, because whether it is one is a property of the model, not of the command
+   line. It needs two things that
    do not exist: a search that goes on past a solution ([Search.solve] returns the
    first), and a proof shape for "no other solution" -- VeriPB 3.0's `solx` excludes a
-   solution only under a preserved set, which this project has no encoding for
-   ([Writer.solution_excluding]). Printing one solution and letting `----------` stand
+   solution only under a preserved set, which this project has no encoding for (see
+   [Writer.solution_excluding]). Printing one solution and letting `----------` stand
    for "the only one" would be a claim nothing proves. On an optimisation model `-a` is
    `-i`, and `-n` is not used (the FlatZinc specification: satisfaction problems only). *)
 let refuse_enumeration opts (m : Model.t) =
@@ -2127,30 +2249,33 @@ let refuse_enumeration opts (m : Model.t) =
 
 (* --------------------------------------------------------------------- main *)
 
-(* M6-T2 (D-0198). The minor heap is up to 4 M words (32 MB), not OCaml 5.1's 256 k words
-   (2 MB). The solver allocates 14 to 23 words per thousand instructions everywhere, mostly data
-   that dies within a branch or a conflict: trail entries of a level that is undone, an
-   analysis's terms, a proof line's literals. In a 2 MB nursery much of it is promoted before
-   it dies and the major collector pays for it again. At 4 M words promotion falls 2 to 9
-   times, and the instructions by a median 7 % without the proof and 12 % with it (D-0198 §2
-   and §4 have the tables).
+(* The minor heap size. It is up to 4 M words (32 MB), not OCaml 5.1's 256 k words
+   (2 MB), and never more than the address-space limit allows (M6-T2, D-0198).
 
-   THE ADDRESS SPACE. OCaml 5.1 reserves the minor heaps of all [max_domains] = 128 possible
-   domains in one mapping, so a 4 M-word nursery reserves 4 GiB of address space it never
-   touches. Under [ulimit -v 4000000], which every suite and lane here runs under, the
-   runtime then aborts at startup ("Not enough heap memory to reserve minor heaps"); the
-   gate found it. So the size is cut until the reservation is at most an EIGHTH of the soft
-   address-space limit read from /proc/self/limits: about 490 k words under a 4 GB cap, the
-   full 4 M under the 32 GB cap of the corpus scripts or with no limit, and never below the
-   runtime's default. No /proc (not Linux) reads as no limit. A quarter was tried first and
-   lost the lane's lot-sizing [activity] run, whose major heap alone is 3.2 GB of its 4 GB
-   cap, to an Out_of_memory (D-0198 §2).
+   WHY LARGER. The solver allocates 14 to 23 words per thousand instructions
+   everywhere, mostly data that dies within a branch or a conflict: trail entries of a
+   level that is undone, an analysis's terms, a proof line's literals. In a 2 MB
+   nursery much of it is promoted before it dies and the major collector pays for it
+   again. At 4 M words promotion falls 2 to 9 times, and the instructions by a median
+   7 % without the proof and 12 % with it (D-0198 sections 2 and 4 have the tables).
 
-   It changes WHEN memory is reclaimed, never a value: nothing in [lib/] reads an address, so
-   stdout, proofs and --stats are the same bytes. It costs up to 32 MB resident per process.
-   An explicit [s=] in OCAMLRUNPARAM or CAMLRUNPARAM wins, so [OCAMLRUNPARAM=s=256k] gives
-   back the old behaviour without a rebuild. The test binaries do not link this file and keep
-   the default. *)
+   THE ADDRESS SPACE. OCaml 5.1 reserves the minor heaps of all [max_domains] = 128
+   possible domains in one mapping, so a 4 M-word nursery reserves 4 GiB of address
+   space it never touches. Under [ulimit -v 4000000], which every suite and lane here
+   runs under, the runtime then aborts at startup ("Not enough heap memory to reserve
+   minor heaps"); the gate found it. So the size is cut until the reservation is at
+   most an EIGHTH of the soft address-space limit read from /proc/self/limits: about
+   490 k words under a 4 GB cap, the full 4 M under the 32 GB cap of the corpus scripts
+   or with no limit, and never below the runtime's default. No /proc (not Linux) reads
+   as no limit. A quarter was tried first and lost the lane's lot-sizing [activity]
+   run, whose major heap alone is 3.2 GB of its 4 GB cap, to an Out_of_memory (D-0198
+   section 2).
+
+   It changes WHEN memory is reclaimed, never a value: nothing in [lib/] reads an
+   address, so stdout, proofs and --stats are the same bytes. It costs up to 32 MB
+   resident per process. An explicit [s=] in OCAMLRUNPARAM or CAMLRUNPARAM wins, so
+   [OCAMLRUNPARAM=s=256k] gives back the old behaviour without a rebuild. The test
+   binaries do not link this file and keep the default. *)
 let minor_heap_words_max = 4 * 1024 * 1024
 let max_domains = 128
 
@@ -2203,18 +2328,21 @@ let () =
   Timing.main_start := t_main;
   let opts = parse_args Sys.argv in
   Timing.on := opts.time;
-  (* M1-T47. The writer's per-line clock is a syscall a line and stays off unless the
-     numbers are being asked for; --time is the only thing in the tree that opens it. *)
+  (* The writer's per-line clock (the [emit] row, M1-T47) is a syscall a line and stays
+     off unless the numbers are being asked for; --time is the only thing in the tree
+     that opens it. *)
   Writer.time_emission := opts.time;
   if opts.time then at_exit Timing.report;
-  (* M7-T8. As early as possible and after the options are read: the alarm is the
-     backstop for everything the clause budget cannot predict, so it wants to be armed
-     before the first allocation that is not argument parsing. Installs nothing at all
-     unless --max-heap-mb was asked for. *)
+  (* The heap budget's Gc alarm (M7-T8), armed as early as possible and after the
+     options are read. The alarm is the backstop for everything the clause budget
+     cannot predict, so it wants to be armed before the first allocation that is not
+     argument parsing. It installs nothing at all unless --max-heap-mb (or
+     BAGUETTE_MAX_HEAP_MB) was given. *)
   Encoding.install_heap_guard ();
-  (* D-0200. The alarm reads the heap only at the end of a major cycle, and a cycle on a
-     heap of several GB can outlast the climb to the address-space limit. So the budget is
-     also polled on a CPU-time ticker, ten times a second: every phase, every granularity
+  (* The heap budget is also polled on a CPU-time ticker, ten times a second
+     ([Encoding.heap_poll_seconds]), because the alarm reads the heap only at the end of
+     a major cycle and a cycle on a heap of several GB can outlast the climb to the
+     address-space limit (D-0200). The poll covers every phase, every granularity
      of propagator (D-0200 §2 has the run whose root propagation did 127 runs in 42 s).
      The handler ends the run where it stands, as the alarm does. ITIMER_VIRTUAL counts
      this process's user time only, so it does not tick while a write blocks. Installed
@@ -2234,11 +2362,12 @@ let () =
     exit exit_usage);
   report_std_flags opts;
   Timing.record "args" (Timing.now () - t_main);
-  (* The reader, by the file's extension (M23-inputs-T2, D-0230): `.scp` is CakeML's
-     format, read by lib/scp/ into the same Model.t; anything else is FlatZinc, as before.
-     The end-to-end chain (--e2e, M14) is FlatZinc's alone: D-0228 section 14 leaves it
-     out for a .scp, so the flag is refused rather than run against a translation of a
-     file that was never FlatZinc. *)
+  (* The reader, by the file's extension (M23-inputs-T2, D-0230): `.scp` is the input
+     format of CakeML's cake_pb_cp, read by lib/scp/ into the same Model.t; anything else
+     is FlatZinc. The end-to-end chain (--e2e, M14) is FlatZinc's alone: D-0228 (a
+     relational problem between the readers and the solver, with .scp as a second input)
+     leaves it out for a .scp in its section 14, so the flag is refused, exit 2, rather
+     than run against a translation of a file that was never FlatZinc. *)
   let is_scp = Filename.check_suffix opts.model ".scp" in
   if is_scp && opts.e2e then (
     prerr_endline
@@ -2264,15 +2393,15 @@ let () =
       | exception (Sys_error msg | Fun.Finally_raised (Sys_error msg)) ->
           exit_write_failed opts msg
       | Error e ->
-          (* Compile raises through the front end's error type for everything SPEC 2.1
-             requires a diagnostic for: an unimplemented builtin, a domain the encoding
-             cannot express, an objective, a search annotation that is not what the
-             search actually does. *)
+          (* Exit 3. Compile raises through the front end's error type for everything
+             SPEC 2.1 requires a diagnostic for: an unimplemented builtin, a domain the
+             encoding cannot express, an objective, a search annotation that is not what
+             the search actually does. *)
           prerr_endline (Fz_error.to_string e);
           exit exit_unsupported
       | exception Baguette_proof.E2e.Not_covered why ->
-          (* M14-e2e-verification-T3 (D-0187): the model has a construct the solver-written
-             prefix does not cover. Refused before the search, like an unsupported
+          (* Exit 3: the model has a construct the solver-written --e2e prefix does not
+             cover (D-0187). Refused before the search, like an unsupported
              builtin; the external bridge (tools/e2e/bridge.py) is the path for it. *)
           Printf.eprintf
             "baguette: --e2e: %s (D-0187). Run without --e2e and bridge the proof with \
@@ -2280,9 +2409,10 @@ let () =
             why;
           exit exit_unsupported
       | exception Search.Unsound_solution assignment ->
-          (* I-P1. The solver found an assignment its own propagators accepted and the
-             model rejects. That is a propagator soundness bug, and the only correct
-             thing to do with it is stop. *)
+          (* Exit 4, I-P1 (soundness: a propagator never removes a value that belongs to
+             a solution). The solver found an assignment its own propagators accepted
+             and the model rejects. That is a propagator soundness bug, and the only
+             correct thing to do with it is stop. *)
           Printf.eprintf
             "baguette: INTERNAL -- a propagator is unsound (I-P1). The search returned \
              an assignment that does not satisfy the model:\n";
@@ -2292,44 +2422,50 @@ let () =
             assignment;
           exit exit_internal
       | exception Writer.Audit_failed msg ->
-          (* I-X2: some constraint id was minted and never retired. The answer may well
-             be right, but the proof is not one we are entitled to stand behind. *)
+          (* Exit 4, I-X2: some constraint id was minted and never retired. The answer
+             may well be right, but the proof is not one we are entitled to stand
+             behind. *)
           Printf.eprintf "baguette: INTERNAL -- proof audit failed (I-X2): %s\n" msg;
           exit exit_internal
       | exception Encoding.Encoding_too_large o ->
-          (* M7-T8 / D-0071. The predictive guard. Not exit 3: this model is legal and
-             a larger budget answers it. Not exit 4: nothing is broken. The whole point
+          (* Exit 5, the predictive guard, --max-encoding-clauses (M7-T8, D-0071). Not
+             exit 3: this model is legal and a larger budget answers it. Not exit 4:
+             nothing is broken. The whole point
              of the row is that a harness can tell this apart from both, and from the
              exit 134 it replaces. [Encoding] refuses before it allocates, so there is
              no partial encoding and no partial proof to warn about. *)
           prerr_string (Encoding.overrun_message o);
           exit_out_of_resource opts
       | exception Out_of_memory ->
-          (* D-0200. One allocation the runtime could not map: the one failure of this
-             kind that can be caught. "Fatal error: allocation failure during minor GC"
-             cannot be, which is why the budget's poll exists. *)
+          (* Exit 5. One allocation the runtime could not map: the one failure of this
+             kind that can be caught (D-0200). "Fatal error: allocation failure during
+             minor GC" cannot be, which is why the budget's poll exists. *)
           prerr_string (Encoding.out_of_memory_message ());
           exit_out_of_resource opts
       | exception Encoding.Heap_too_large o ->
-          (* The reactive guard, caught synchronously at a declaration. Its sibling --
-             the Gc alarm -- cannot come through here: it fires at an arbitrary point
-             and exits with this same status itself. Same wording either way. *)
+          (* Exit 5, the reactive guard, caught synchronously at a declaration. Its
+             sibling, the Gc alarm, cannot come through here: it fires at an arbitrary
+             point and exits with this same status itself. Same wording either way. *)
           prerr_string (Encoding.heap_message o);
           exit_out_of_resource opts
       | exception Encoding.Width_too_large (x, lo, hi) ->
-          (* M1-T54 / D-0041. The sibling of the [Unrepresentable] arm below, and exit 4
-             for the same reason: lib/flatzinc/compile.ml refuses an over-wide declared
-             domain first, with a positioned diagnostic and exit 3 (which is the right
-             code, because an over-wide domain is a MODEL problem, not an invariant
-             failure). So reaching the encoding's own raise through this binary means
-             Compile's pass did not cover the path.
+          (* Exit 4, the width limit (D-0041: a declared width limit, because a proof
+             nobody can store is not an answer; M1-T54 gave it this arm). The sibling of
+             the [Unrepresentable] arm below, and exit 4 for the same reason:
+             lib/flatzinc/compile.ml refuses an over-wide declared domain first, with a
+             positioned diagnostic and exit 3 (which is the right code, because an
+             over-wide domain is a MODEL problem, not an invariant failure). So reaching
+             the encoding's own raise through this binary means Compile's pass did not
+             cover the path.
 
              Measured before adding this, with Compile's pass disabled: the binary died
              on "Fatal error: exception Baguette_proof.Encoding.Width_too_large(...)",
              exit 2 -- the same code as a bad command line.
 
-             Two-reader wording, as I-X8 requires: reached through a different caller of
-             Encoding, this exception is the documented contract rather than a bug.
+             Two-reader wording, as I-X8 requires (no row whose arithmetic wrapped is
+             committed to the .opb, whoever the caller): reached
+             through a different caller of Encoding, this exception is the documented
+             contract rather than a bug.
 
              And unlike [Unrepresentable] there is NO "do not use the proof" warning,
              because [declare_int] raises before the Hashtbl and before the ladder loop.
@@ -2358,16 +2494,16 @@ let () =
           prerr_endline "  it allocates the ladder.";
           exit exit_internal
       | exception Encoding.Unrepresentable why ->
-          (* M1-T58. [Encoding] is the *committing door* for the .opb: it raises this
-             when a row's arithmetic does not fit a 63-bit int, so writing the row would
-             put a constraint in the file that is not the one posted and veripb would
-             cheerfully verify the wrong model (D-0029, I-X8).
+          (* Exit 4, a row the .opb could not commit (M1-T58). [Encoding] is the
+             *committing door* for the .opb: it raises this when a row's arithmetic does
+             not fit a 63-bit int, because writing the row would put a constraint in the
+             file that is not the one posted and veripb would verify the wrong model
+             (D-0029: an arithmetic limit enforced at compile time; I-X8).
 
-             Before this arm existed the CLI died on an uncaught exception here --
-             "Fatal error: exception Baguette_proof.Encoding.Unrepresentable(...)",
-             exit 2, no context and no warning about the artefact. [Checked.Overflow]
-             below has had a positioned diagnostic since M1-T34; this is its twin and
-             was simply missing.
+             Without this arm the CLI would die on an uncaught exception, "Fatal error:
+             exception Baguette_proof.Encoding.Unrepresentable(...)", exit 2, with no
+             context and no warning about the artefact. It is the twin of the
+             [Checked.Overflow] arm below (M1-T34).
 
              Why it is exit 4 and not exit 3, by the same argument as Overflow's: a
              model genuinely over the arithmetic limit is rejected by
@@ -2379,12 +2515,12 @@ let () =
 
              What is NOT the same as Overflow, and is the reason I-X8 exists: this
              exception is raised by the module that writes the artefact, on behalf of
-             *any* caller. `bin/main.ml` is the only front end today and it goes through
-             Compile's cap, so this is unreachable from here. A second front end -- or a
-             caller that drives Encoding directly, as the test suite does -- has no such
-             cap in front of it, and for those this exception is the contract rather than
-             a bug. The message therefore says which of the two the reader is looking at
-             instead of asserting it is a baguette bug outright. *)
+             *any* caller. This binary reaches Encoding only through Compile's cap, with
+             either reader, so this is unreachable from here. A caller that drives
+             Encoding directly, as the test suite does, has no such cap in front of it,
+             and for those this exception is the contract rather than a bug. The message
+             therefore says which of the two the reader is looking at instead of asserting
+             it is a baguette bug outright. *)
           Printf.eprintf
             "baguette: INTERNAL -- the encoding refused to commit a row (I-X8, D-0029):\n\
             \  %s\n"
@@ -2413,23 +2549,26 @@ let () =
           prerr_endline "  and a checker would accept it (D-0029, SPEC 2.1).";
           exit exit_internal
       | exception Checked.Overflow msg ->
-          (* M6-T9: under OCAMLRUNPARAM=b, say WHERE. The arm exists because the cap
+          (* Under OCAMLRUNPARAM=b, say WHERE (M6-T9). The arm exists because the cap
              has a hole, and the only way to find the hole is the raise site; wave 31's
              sweep reached this on 2014_rectangle-packing with nothing to go on. *)
           if Printexc.backtrace_status () then prerr_string (Printexc.get_backtrace ());
-          (* M1-T34. D-0029 decided that overflow RAISES rather than wrapping or quietly
-             declining, and put a compile-time cap in front of the raise so that no model
-             the CLI accepts can reach it. This arm is what happens if that cap is ever
-             wrong, and without it the CLI would die on an uncaught exception -- "Fatal
-             error: exception Baguette_core.Checked.Overflow(...)", exit 2, no context.
+          (* Exit 4, an integer overflow past the compile-time cap (M1-T34). D-0029
+             decided that overflow RAISES rather than wrapping or quietly declining, and
+             put a compile-time cap in front of the raise so that no model the CLI accepts
+             can reach it. This arm is what happens if that cap is ever wrong, and without
+             it the CLI would die on an uncaught exception -- "Fatal error: exception
+             Baguette_core.Checked.Overflow(...)", exit 2, no context.
 
              Three deliberate choices:
 
-             * It is attached to [solve] and nowhere else. [Builder.of_file] cannot
-               raise this: builder.ml computes through Checked and turns an overflow
-               into a positioned diagnostic ([lin_terms], M22-review-T1) or drops the
-               fact ([facts_of], [infer_bounds]); lexer.ml, parser.ml and model.ml
-               compute nothing that can overflow. [Compile.compile], [Search.solve] and
+             * It is attached to [solve] and nowhere else. Neither reader can raise
+               this. builder.ml computes through Checked and turns an overflow into a
+               positioned diagnostic ([lin_terms], fixed in M22-review-T1 when its
+               constant fold could overflow) or drops the fact ([facts_of],
+               [infer_bounds]); lexer.ml, parser.ml and model.ml compute nothing that
+               can overflow. lib/scp/reader.ml turns an overflow into a positioned
+               refusal ([ck]). [Compile.compile], [Search.solve] and
                the encoding can, and all three are inside [solve].
 
              * It exits 4 (INTERNAL), not 3 (unsupported model), even though the model
