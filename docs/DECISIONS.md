@@ -31852,12 +31852,13 @@ At 300 s, objective is maximised:
 | std, no proof | 2 (050_050_10_050-03 OPT 45, 070_070_15_085-09 OPT 85) | |
 | A, no proof | 1 (050-03) | 3 better (the three widest, 300_300 and 500_500), 8 worse, 4 same |
 | B, no proof (stopped after 8) | 0 | 0 better, 5 worse, 3 same |
-| std, proof (14 of 15 finished) | 1 (085-09 OPT 85 in 244 s, the check ran out of 900 s) | |
+| std, proof (14 of 15 finished) | 1 (085-09 OPT 85 in 244 s; the check ran out of 900 s here, VERIFIED on a re-run below) | |
 | A, proof (stopped after 12) | 0 | 3 better, 7 worse, 2 same |
 | Chuffed (D-0211, 1 200 s) | 2 (050-03 OPT 45 in 113 s, 070-02 OPT 70 in 392 s) | |
 
 Tower 085-09 is a find of its own: std's route in baguette proves OPT 85 in 67 s without proof and 244 s with it,
-where Chuffed stops at 58 after 1 200 s. Its proof is being re-checked with a 5 400 s budget (section 5).
+where Chuffed stops at 58 after 1 200 s. Re-solved with proof (OPT 85 again, a 3.2 GB `.pbp`) and checked with a
+longer budget: `s VERIFIED BOUNDS -85 <= obj <= -85` in 1 206 s of veripb (4.2 GB RSS).
 
 Correctness, the routes kept. A differential fuzz against Chuffed, each model solved by Chuffed through std and by
 baguette (dev `505217da`) through the same library, veripb on every proof: 1 000 random small `arg_max`/`arg_min`
@@ -31874,6 +31875,16 @@ complete all four, baguette three without proof (not sort_8_0, 237 against 209) 
 Chuffed 2 389 and none, Gecode none and 1 429. So a native sort is where Gecode's lead comes from on `sort`; on the
 same decomposition baguette is ahead of Chuffed on three of the four and behind on 16_0.
 
+Checks on the branch merged with origin/main `a67493a` (the lane re-recorded after D-0238). The dev binary is
+main's, `505217da`, built from each checkout, so every existing test model's artefacts are main's (242 of 242 with
+the same stdout, `.opb` and `.pbp` hash, measured before the merge). `check_fmt.sh` clean, the width lint clean,
+`dune runtest --root . --force` 5 483 ok and 0 FAIL (peak RSS 155 MB), `run_model_tests.sh` 250 models (242 + this
+record's 8) VERIFIED in both encodings, `check_determinism.sh` 250, `check_mznlib.sh` 66 ok, the differential lane
+`--tier all` 347 of 347 equal and `--debug` 333 of 333, the scaling lane ok, the lanes under
+`BAGUETTE_MEM_CAP_KB=33554432`. Before the merge the lane differed on 14 runs, all `tc-graph-color k5_05`, which is
+D-0238's own change that `a67493a` re-recorded. About 80 GB of proofs were written by the proof arms (about 3 GB per
+300 s run) and deleted once checked.
+
 ### 4. SPEC 2.1
 
 None proposed. Nothing new reaches the solver: std's decompositions emit only builtins SPEC 2.1 already has
@@ -31889,6 +31900,5 @@ None proposed. Nothing new reaches the solver: std's decompositions emit only bu
   `perf` profile of `070_070_15_070-04` at 3 000 nodes puts `Linear` at 18 % (propagate, prune_term, walk), which
   holds arg_max's reified rows and the model's own, the engine's queue and wakes at about 15 %, `Pb` at 6 %. A
   profile by propagator instance would say whether a native `arg_max` could pay at all.
-- Tower 085-09's OPT 85 proof: re-checked by `runs/v085/` in the results directory (veripb, 5 400 s).
 - The census tool counts names. `tools/compare/challenge_globals.py` lists `sort`, `arg_sort` and `arg_max` as not
   native, which is right, but the ROADMAP's 155 overstates what any route could change by ten to one.
