@@ -1598,6 +1598,103 @@ let split_gcc_repeats (m : Model.t) : Model.t =
       constraints = constraints @ List.rev !defs_rev;
     }
 
+(* ========================================= a repeated cover value in global_cardinality
+   `fzn_global_cardinality(xs, cover, counts)` whose COVER names the same value twice
+   (M22-review-bugs, D-0260). MiniZinc passes it through unchanged: the fuzz lane's
+   `global_cardinality_low_up(x, [2,2,2], ...)` reaches the native predicate with three
+   counts for the value 2.
+
+   THE RULE. For i < j with cover.(i) = cover.(j), the constraint is equivalent to the same
+   constraint WITHOUT position j, plus `counts.(j) = counts.(i)`: both sides say that
+   counts.(j) is the number of x equal to cover.(j), which is the number counts.(i) already
+   states. So every occurrence after the first is dropped from the cover and its count is
+   TIED to the first occurrence's count by a linear equality, which is a model constraint
+   like any other, so its rows are in the .opb and every proof step that uses the tie
+   cites a row the checker has. No variable is added, so a solution of one model is a
+   solution of the other on the same variables, and main.ml prints the same thing.
+
+   WHY HERE AND NOT IN lib/core/prop/gcc.ml. That module keys two things on the cover
+   VALUE: rule A's capacity table, and the memo of HIGH rows ([high_row_shared], keyed by
+   value, count bound and whether the bound is a root one). With two counts for one value
+   the memo handed the second count the derivation of the first, and the pruning's reason
+   named the second count's bound while the derivation needed the first's: veripb rejected
+   the `rup` that followed (D-0260). Teaching every rule about duplicates is the same
+   trade [split_gcc_repeats] below refused for repeated variables, and the answer is the
+   same: normalise the shape away, so gcc.ml never sees it. lib/flatzinc/compile.ml's
+   [post_global_cardinality] refuses a repeated cover value, as it refuses a repeated
+   variable, so a [Model.t] built by other means meets a refusal and not a bad proof.
+
+   THE TIE, by the kind of the two counts (first, later):
+     Var a, Var a        nothing (the same variable)
+     Var a, Var b        int_lin_eq([1, -1], [a, b], 0)
+     Var a, Const k      int_lin_eq([1], [a], k), and symmetrically
+     Const k, Const k    nothing
+     Const k, Const k'   int_lin_eq([], [], k' - k): a constant false row, so the model
+                         is UNSAT at the root, as the original is (k' <> k counts of one
+                         tally)
+   An [Int_lin_eq] and not an [Int_eq], with [c_id = ""] (no FlatZinc item states it):
+   an [Int_eq (Var, Var)] with [c_id = ""] is what lib/flatzinc/compile.ml's `--e2e` path
+   reads as a gcc COPY, which a count tie is not. Under `--e2e` the tie is therefore
+   refused ("a constraint no FlatZinc item states"), which is the honest answer: the
+   end-to-end prefix has no derivation for it.
+
+   What it costs is propagation strength between the tied counts: the tie is [Lin_eq],
+   bounds consistent, and gcc pushes only bounds on counts, so nothing is lost there.
+
+   A model with no repeated cover value comes back PHYSICALLY unchanged, so every byte of
+   its .opb, .pbp and output is what it was. A call whose cover and counts differ in
+   length is left alone for compile.ml's positioned refusal. *)
+let merge_gcc_cover_repeats (m : Model.t) : Model.t =
+  let ties_rev = ref [] in
+  let tie pos first later =
+    let k =
+      match (first, later) with
+      | Model.Var a, Model.Var b when a = b -> None
+      | Model.Var a, Model.Var b -> Some (Model.Int_lin_eq ([ (1, a); (-1, b) ], 0))
+      | Model.Var a, Model.Const k | Model.Const k, Model.Var a ->
+          Some (Model.Int_lin_eq ([ (1, a) ], k))
+      | Model.Const k, Model.Const k' ->
+          if k = k' then None else Some (Model.Int_lin_eq ([], k' - k))
+    in
+    Option.iter (fun k -> ties_rev := { Model.k; c_pos = pos; c_id = "" } :: !ties_rev) k
+  in
+  let rewrite (c : Model.constr) =
+    match c.Model.k with
+    | Model.Global_cardinality (xs, cover, counts)
+      when Array.length cover = List.length counts ->
+        let first = Hashtbl.create 16 in
+        let kept_rev =
+          List.fold_left2
+            (fun acc v cnt ->
+              match Hashtbl.find_opt first v with
+              | Some f ->
+                  tie c.Model.c_pos f cnt;
+                  acc
+              | None ->
+                  Hashtbl.replace first v cnt;
+                  (v, cnt) :: acc)
+            [] (Array.to_list cover) counts
+        in
+        if List.length kept_rev = Array.length cover then c
+        else
+          let kept = List.rev kept_rev in
+          {
+            c with
+            Model.k =
+              Model.Global_cardinality
+                (xs, Array.of_list (List.map fst kept), List.map snd kept);
+          }
+    | _ -> c
+  in
+  let constraints = List.map rewrite m.Model.constraints in
+  if List.for_all2 ( == ) constraints m.Model.constraints then m
+  else { m with Model.constraints = constraints @ List.rev !ties_rev }
+
+(* The two gcc normalisations, in the order they compose: the cover first (it touches only
+   the cover and the counts), then the repeated variables (only the array). Both return a
+   model with nothing to normalise physically unchanged. *)
+let normalise_gcc (m : Model.t) : Model.t = split_gcc_repeats (merge_gcc_cover_repeats m)
+
 (* After the last item. The deferred constraints are built here, after inference; a
    variable that stays unbounded is refused AFTER, so a malformed constraint still
    reports its own error first (M7-T19, D-0083). *)
@@ -1621,7 +1718,7 @@ let finish st : Model.t =
     | Ast.Maximize e -> Model.Maximize (operand env solve_pos e)
   in
   let search = List.filter_map (search_of_annot env solve_pos) solve_annots in
-  split_gcc_repeats
+  normalise_gcc
     {
       Model.vars = Array.of_list (List.rev env.vars_rev);
       constraints = List.rev st.built_rev;

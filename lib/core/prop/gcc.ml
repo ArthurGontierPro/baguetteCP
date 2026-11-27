@@ -15,6 +15,14 @@
    counts, so everything below about variable counts is live.  The front end is
    [post_global_cardinality] in lib/flatzinc/compile.ml.
 
+   TWO PRECONDITIONS THE FRONT END ESTABLISHES.  No variable occurs twice in the scope
+   (lib/flatzinc/builder.ml's [split_gcc_repeats], D-0146) and NO VALUE OCCURS TWICE IN
+   THE COVER ([merge_gcc_cover_repeats], D-0260).  The second matters because this module
+   keys rule A's capacity table ([cover_at] in [pass]) and the memo of HIGH rows
+   ([high_row_shared]) on the cover VALUE: with two counts for one value the memo handed
+   the second count the first count's derivation, the reason named the second count's
+   bound, and veripb rejected the `rup` that followed.  compile.ml refuses both shapes.
+
    gcc is all_different's generalisation -- all_different is gcc with every count in
    {0, 1} -- so this module is shaped on lib/core/prop/alldiff.ml and its rule A below
    IS alldiff's Hall rule with the capacities set to one.  Read alldiff.ml's header

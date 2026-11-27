@@ -34085,3 +34085,135 @@ ocamlformat's layout and comments.
 Revert `881263e` (retention's hold, the two calls in `search.ml`, the debug checks, the two tests and
 I-X11). `--cdcl` then deletes clauses it asserts from again; `BAGUETTE_RETENTION=off` avoids it
 without a rebuild. Nothing else depends on it.
+
+## D-0260  [AUTONOME] M22-review-bugs: a gcc cover that repeats a value got a rejected proof on the default configuration. No answer was wrong. The cover is now merged at the front end, the later counts tied by linear equalities in the model
+
+**Status**: DECIDED and implemented (agent-gccdup, `wave105-gccdup`, 2026-11-27), not merged. The fix is ONE commit,
+`9b5ef85`. Material: `/cluster/arthur/baguette-results/gccdup/` (the grid, the bisect, the scripts, `binaries.md5`).
+
+### 1. The finding
+
+The fuzz lane (D-0258, branch `wave104-fuzz`) shrank two models, `global_cardinality_low_up` through mznlib with the
+cover `[2,2,2]` over `[x0,x0,x0]` (UNSAT) and over `[x1,x0,x0,x0]` (SAT). Baguette's answers are right (Gecode
+agrees) and veripb 3.0.2 REJECTED both proofs on the default configuration, at a `rup` (line 80 of the UNSAT one,
+`rup ~x0_ge_2 x0_ge_3 X_INTRODUCED_22__ge_1`). Reproduced on main `a599c97` (binary `55028ee3`), in both encodings
+(`--bits-above none` and the default, a gcc scope stays order in both). Under `-f` both proofs verify on main, because the
+search never reaches the aliasing there, which is luck and not a guard. With the fix the twelve repeated-cover test
+models verify under `-f` too.
+
+### 2. No answer was wrong
+
+A grid of tiny cases compared baguette with a brute-force oracle and with Gecode 6.4.0 (`grid.py`). Six forms
+(fixed counts, variable counts, closed with variable and with fixed counts, low_up, low_up_closed), arrays of 1 to 4
+entries over 1 to 4 variables in 0..3 with repeats, covers of 1 to 5 values with repeats, bounds and count domains in
+0..3, repeated count variables too. Each case is solved in both encodings, a SAT answer is checked against the oracle,
+every proof goes to veripb.
+
+| run | cases | rows (x2 configs) | wrong status | bad solution | Gecode against the oracle | proof rejected |
+|---|---|---|---|---|---|---|
+| main, uniform | 3 000 | 6 000 | 0 | 0 | agrees | 0 |
+| main, dense repeats | 4 000 | 8 000 | 0 | 0 | agrees | 26 (13 cases) |
+| fix, uniform | 3 000 | 6 000 | 0 | 0 | agrees | 0 |
+| fix, dense repeats | 4 000 | 8 000 | 0 | 0 | agrees | 0 |
+
+The 13 rejected cases are all `global_cardinality_low_up` with a repeated cover value, in both encodings, eight UNSAT
+and five SAT. None was found for the closed forms or for fixed counts (section 4 says why fixed counts are safe and
+why the closed forms are exposed in principle).
+
+### 3. The mechanism
+
+`gcc.ml` keeps a memo of HIGH rows (`high_row_shared`, M7-T24) keyed on the cover VALUE, the count's upper bound and
+whether that bound is a root one. Rule (a) (a saturated value is removed from everyone else) walks every cover ENTRY.
+With two counts for one value at the same upper bound, the second count's pruning was handed the first count's memo
+entry, a deferred derivation over the FIRST count's row and ladder, while its reason named the SECOND count's bound.
+Where that bound was set by a decision and the first count's was not, the trace line is not RUP from what was derived,
+and veripb says so. Reduced by hand (`ingr.sh`):
+
+| ingredient | proof |
+|---|---|
+| repeated cover, distinct variables (`[x0,x1,x2]`, cover `[2,2,2]`) | REJECTED, sat and unsat |
+| distinct cover, repeated variable | verified |
+| both (the fuzz pair) | REJECTED |
+
+So the repeated cover is the cause and the repeated variable is not needed. Confirmed by keying the memo on the cover
+row instead of the value (a throwaway edit, not kept): all four rejected models then verify.
+
+### 4. Forms and encodings exposed
+
+Every form that hands a repeated cover with a VARIABLE count to the native propagator: low_up and low_up_closed (counts
+declared on the bounds), closed with variable counts, and before D-0247 (2026-11-27) the plain form with variable counts.
+Fixed counts are not exposed: a constant count's HIGH row is its model row and a root fact, so two constants with the
+same value derive the same fact from either row, and two different constants have different memo keys. Both encodings
+are exposed equally, because a gcc scope stays on the order encoding at every `--bits-above`.
+
+### 5. Since when
+
+- The memo keyed on the value: `c70852a` (M7-T24, 2026-10-02). Rule A, its only user then, reads one entry per value
+  (`cover_at`), so nothing aliased.
+- Rule (a), the first per-entry user: `ecae5c7` (2026-10-02, the bisect's first bad commit between `c70852a` and
+  `53e77ea`, `bisect-steps.txt`). On main since the merge `1e6363c` (wave39-gcc3, 2026-10-02). `a445bbb` (M7-T16) and
+  `c70852a` verify the distinct-variable pair.
+- The fuzz shape (a repeated variable as well) reached the propagator from `53e77ea` (D-0146, on main since `b13ce94`,
+  2026-11-19). Before it a repeated variable was refused.
+
+Every Challenge series since 2026-10-02 ran an exposed binary, and none was affected. Over the 205 series instances that
+call gcc (D-0247's re-flattening, `/scratch/arthur/gccvar/fzn-base/`), `scancover.py` finds 2 017 calls and no cover with
+a repeated value, which confirms agent-gccsum's sentence (D-0255) for the whole gcc census and not only its 98 instances.
+
+### 6. The fix and its rule
+
+Options considered:
+
+| option | consequence |
+|---|---|
+| key the memo and `cover_at` on the cover entry in `gcc.ml` | two lines, but every rule of a 1 500-line module would have to be re-read for other value-keyed assumptions, now and after every change |
+| normalise at the front end (chosen) | gcc.ml never sees a repeated cover, the same trade D-0146 made for a repeated variable |
+| refuse the shape | a valid MiniZinc model refused |
+
+The rule (header of `merge_gcc_cover_repeats` in `lib/flatzinc/builder.ml`). For i < j with `cover[i] = cover[j]`, the
+constraint is equivalent to itself without position j plus `counts[j] = counts[i]`, because both sides say counts[j] is
+the number of x equal to that value. So the first occurrence of each value is kept and every later count is tied to the
+first one's count by an `int_lin_eq` (no variable added, so solutions print unchanged). The tie is a model constraint, so
+its rows are in the .opb and every proof step that uses it cites a row the checker has. The tie by kind: the same
+variable twice, nothing. Var and var, `a - b = 0`. Var and constant, `a = k`. Equal constants, nothing. Different
+constants, the false row `0 = k' - k` (UNSAT at the root, as the original). It is an `Int_lin_eq` with `c_id = ""`, not an
+`Int_eq`, because compile.ml's `--e2e` path reads an `Int_eq (Var, Var)` with an empty `c_id` as a gcc COPY. Under
+`--e2e` a tie is therefore refused ("a constraint no FlatZinc item states"). `Builder.normalise_gcc` composes it with
+`split_gcc_repeats` and both front ends call it (`builder.ml`'s `finish`, `lib/scp/reader.ml`). `post_global_cardinality`
+refuses a repeated cover value that reaches it anyway, and `gcc.ml`'s header states the two preconditions. No new
+`Explanation.t` constructor, no gcc rule changed.
+
+Cost. The ties are `Lin_eq`, bounds consistent, and gcc pushes only bounds on counts, so no propagation is lost. A model
+with no repeated cover value is returned physically unchanged.
+
+### 7. Tests (commit `628c91b`)
+
+- `test/models/gcc_lu_dupcover_repeatvar_{sat,unsat}.fzn`, the fuzz pair; `gcc_dupcover_distinctvars_{sat,unsat}.fzn`,
+  the one-ingredient pair. All four rejected on main, verified with the fix.
+- `mznlib/test/gcc_dupcover_{low_up,fixed,closed}_src_{sat,unsat}.mzn` and their flattened artefacts in `test/models/`,
+  expected outputs checked against Gecode. The two low_up ones are grid cases 1823 and 2143 and were rejected on main.
+  The fixed and closed ones pin the tie kinds (equal constants, different constants, var and constant, var and var).
+- `test_compile.ml` (`test_gcc_cover_repeats`): the tie table row by row, the unchanged model, and compile.ml's guard.
+- `test_endtoend.ml` (`test_gcc_cover_ties_are_load_bearing`), the load-bearing check on a SATISFIABLE model. Each tie
+  row of the .opb is weakened to a tautology in turn (label kept) and the unchanged proof re-checked. At least one must be
+  judged with the RUP wording. Measured with the CLI, 4 of the 8 tie rows of that scene are load-bearing, and 5 of 8 on
+  `gcc_dupcover_low_up_src_sat` (`loadbearing.sh`).
+
+### 8. Verification (binary `5b04070c`, fataepyc-06)
+
+| check | verdict |
+|---|---|
+| `scripts/check_fmt.sh`, `scripts/check_test_widths.py` | clean |
+| `dune runtest --root . --force` (ulimit -v 4000000) | 5 628 ok, 0 FAIL |
+| `scripts/run_model_tests.sh` | 281 models passed (271 + the 10 new), proofs verified, order encoding too |
+| `scripts/check_determinism.sh` | 281 models identical across two runs |
+| `mznlib/test/check_mznlib.sh` (MiniZinc 2.10.1) | 86 ok, 0 failed |
+| every pre-existing test model, main `55028ee3` against `5b04070c` | 269 of 271 byte-identical (stdout, .opb, .pbp); the two D-0255 `gcc_low_up_closed_dupcover_src_*` change, as they must (their cover repeats a value), same output, proofs verified |
+| `scripts/diff_lane.sh --tier all -j 8` | 347 of 347 equal the reference |
+| the same with `--debug` | 333 of 333 equal |
+| `scripts/scaling_lane.sh -j 8` | ok, every line within its threshold |
+
+### 9. Revert
+
+`git revert 9b5ef85` restores the rejected proofs and leaves the tests failing, which is the point of them. Reverting
+`628c91b` as well removes the tests.
