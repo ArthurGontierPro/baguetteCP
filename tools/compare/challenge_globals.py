@@ -1,20 +1,31 @@
 #!/usr/bin/env python3
-"""M7-T26. Which global constraints the Challenge editions use, against what baguette
-propagates natively, joined with baguette's outcome on each instance (D-0122).
+"""Which global constraints the Challenge editions use, against what baguette propagates
+natively, joined with baguette's outcome on each instance. Written for M7-T26 (the Challenge
+editions as benchmark sets); its first table is D-0122, what the 1 600 instances ask for
+against what baguette propagates.
 
     challenge_globals.py <archive> <lists-dir> [<runs-dir>] [--min=20] [--arm=A] [--mznlib=DIR]
 
-<archive>   ~/mznc-archive (probs/mznc<Y>_probs.tar.gz)
-<lists-dir> bench/challenge (the <Y>.lst files, M7-T26)
+<archive>   the downloaded Challenge archive, /scratch/arthur/mznc-archive on the node
+            (~/mznc-archive on the laptop), read for probs/mznc<Y>_probs.tar.gz
+<lists-dir> bench/challenge (the <Y>.lst files written by challenge_lists.py)
 <runs-dir>  a directory holding <Y>/results.tsv from scripts/compare_run.sh, or a series
-            directory whose ARMS hold it (<runs-dir>/<arm>/<Y>/results.tsv, as M10-T5's
-            /scratch/arthur/m10t5 and the M17 series); --arm picks the arm, default the
-            first in name order. Without <runs-dir> only the usage census is printed.
+            directory whose ARMS hold it (<runs-dir>/<arm>/<Y>/results.tsv, as
+            M10-search-strategy-T5's /scratch/arthur/m10t5 and the M17 series of
+            bench/series/); --arm picks the arm, default the first in name order. Without
+            <runs-dir> only the usage census is printed.
+--min       the fewest instances a global must appear in to get a row (default 20).
 --mznlib    the library the NATIVE set is read from; default the mznlib/ of this checkout.
+
+Output on stdout: `#` lines (the run directory, the instance count and the native set), then
+one TAB-separated row per global. Exit 0; 2 with this text on stderr when <archive> or
+<lists-dir> is not given; a <runs-dir> with no results.tsv (or no arm --arm names) stops with a
+message and status 1.
 
 An instance "uses" a global when its model, or a .mzn it includes from its own directory,
 calls it outside a comment. A NATIVE global is one mznlib routes to a baguette propagator,
-and the set is READ FROM mznlib/ (M18-coverage-T0), never listed here: every
+and the set is READ FROM mznlib/ (since M18-coverage-T0, which replaced a hand-kept list that
+had gone stale), never listed here: every
 fzn_<g>[_int|_bool|_set].mzn names <g>, and a body-less array_int_<g> declaration (the
 FlatZinc builtin kept whole, as maximum/minimum) names <g>. `element` is the one native
 with no mznlib file, because array_int_element is a FlatZinc builtin (SPEC 2.1) that std
@@ -24,11 +35,13 @@ library.
 
 Outcome columns are baguette's harness statuses. REFUSED is the FRONT END refusing the
 model before any search (exit 2 or 3: width wall, heap budget, an unsupported shape); it is
-not a proof rejected by the checker, which would be `check_verdict` REJECTED and is counted
-separately. `complete%` is OPT+UNSAT over the instances actually attempted (not REFUSED,
+not a proof rejected by the checker, which would be `check_verdict` REJECTED, a column this
+census does not read (an answer is counted by its status whatever its proof's verdict).
+`complete%` is OPT+UNSAT over the instances actually attempted (not REFUSED,
 not FLATTEN-FAIL). A SAT answer is complete when the model has no objective (the `kind` column of
-the .lst is SAT) and goes to its own column `SAT-satisfied`, counted in `complete%` (M18-coverage-T12,
-D-0232 section 1); on a MIN or MAX model it stays an incumbent.
+the .lst is SAT) and goes to its own column `SAT-satisfied`, counted in `complete%`; on a MIN or
+MAX model it stays an incumbent. (M18-coverage-T12 made that split, after D-0232 section 1
+found the census counting a satisfaction model's SAT as an incumbent.)
 
 Python 3.8+, standard library only.
 """

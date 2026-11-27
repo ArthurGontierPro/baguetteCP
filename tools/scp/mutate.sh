@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Mutations of lib/scp/reader.ml, each of which the lanes must catch (M23-inputs-T5,
-# D-0228 section 14 test 6, D-0230).
+# Mutations of lib/scp/reader.ml, the .scp reader, each of which the lanes must catch. This is
+# test 6 of the plan in D-0228 section 14 (the record that made .scp baguette's second input),
+# run for M23-inputs-T5, the milestone's acceptance; D-0230 records the reader and its lanes.
 #
 # Usage: tools/scp/mutate.sh WORKDIR
 #
@@ -9,8 +10,11 @@
 # a mutation into a no-op), bin/main.exe built, then the three lanes run against it: the
 # hand-written models (scripts/run_scp_tests.sh), the FlatZinc agreement lane
 # (tools/scp/fzn_lane.sh) and 200 random files (tools/scp/random_lane.py). A mutation is
-# CAUGHT when at least one lane fails. Prints one line per mutation and exits 1 if one
-# survives.
+# CAUGHT when at least one lane fails. Prints one line per mutation (CAUGHT or SURVIVED) and
+# exits 0 when every mutation is caught, 1 if one survives. It exits 1 at once, with a
+# `FAIL <mutation>: ...` line, when a worktree cannot be made, a mutated line is not found or
+# a mutant does not build, and when WORKDIR is not given. Each worktree is removed after its
+# lanes; the logs stay in WORKDIR/<mutation>.*.
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 WORK="$1"; mkdir -p "$WORK"

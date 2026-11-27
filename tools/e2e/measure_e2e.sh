@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
-# One instance through the SOLVER-WRITTEN end-to-end chain (M14-e2e-verification-T3, D-0187),
-# every stage timed with its peak RSS, for comparison with tools/e2e/measure.sh's bridged
-# chain (D-0182) on the same instance:
+# One instance through the SOLVER-WRITTEN end-to-end chain, in which baguette writes the prefix
+# that re-derives its .opb from cake_pb_cp's itself, under --e2e (M14-e2e-verification-T3,
+# D-0187), every stage timed with its peak RSS, for comparison with tools/e2e/measure.sh's
+# bridged chain (D-0182, the first measurement of cake_pb_cp on search proofs) on the same
+# instance:
 #
 #   fzn2scp.py -> cake_pb_cp (encode) -> baguette --e2e --proof -> veripb --elaborate
 #   -> cake_pb_cp (check)                      (no bridge, no `veripb alone` baseline)
@@ -12,7 +14,8 @@
 #
 # Usage: tools/e2e/measure_e2e.sh MODEL.fzn OUTDIR
 # Env:   as measure.sh: CAKE_PB_CP (required), BAGUETTE, VERIPB, SOLVE_TIMEOUT, CHECK_TIMEOUT,
-#        CAKE_HEAP, KEEP; E2E_FLAGS (T7, D-0196), e.g. `--bits-above 64`.
+#        CAKE_HEAP, KEEP; E2E_FLAGS, more solver flags, e.g. `--bits-above 64` for the bits
+#        arm (M14-e2e-verification-T7, D-0196, the bits arm in the end-to-end chain).
 #
 # Prints ONE tab-separated line:
 #   id answer verdict  t_solve rss_solve  t_elab rss_elab  t_cake rss_cake
@@ -20,7 +23,9 @@
 # times in seconds, RSS in MB, sizes in bytes; `prefix_tally` is the prefix's own closing
 # comment (substitutions, atom clauses, selectors, pins by kind). A model --e2e does not
 # cover is `E2E-UNCOVERED` with baguette's reason in the last column. The script's PID is in
-# OUTDIR/<id>.pid while it runs (clean up by that file, never by name).
+# OUTDIR/<id>.pid while it runs (clean up by that file, never by name). Exit 0 once that line
+# is printed, whatever the verdict; 1 when no checker is found (`no checker`) or when an
+# argument or CAKE_PB_CP is missing.
 set -u
 HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/../.." && pwd)

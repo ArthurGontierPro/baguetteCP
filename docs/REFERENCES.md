@@ -18,24 +18,24 @@ and `grep -n 'I-X6' docs/INVARIANTS.md` find any of them.
 | D-0003 | 3 | What "higher-order explanation" means here |
 | D-0004 | 2 | all_different justification strategy |
 | D-0007 | 23 | Booleans use the order encoding on [0, 1] |
-| D-0008 | 5 | Backtracking uses proof levels, not per-reason deletion |
+| D-0008 | 4 | Backtracking uses proof levels, not per-reason deletion |
 | D-0009 | 42 | A bound fact in a pol needs a constraint id, not a literal |
 | D-0010 | 28 | A bound fact is a chain of order literals, not one literal |
 | D-0011 | 22 | One propagator instance, one model row |
 | D-0012 | 3 | A branch nogood is not RUP-derivable from the model rows alone |
-| D-0013 | 52 | How a bounds conflict is justified: weaken, divide, add |
+| D-0013 | 53 | How a bounds conflict is justified: weaken, divide, add |
 | D-0014 | 2 | Decision-free lemmas strengthen a branch nogood, but do not yet close it |
 | D-0015 | 5 | Explanation gets a divisor, a named row, and a weaken-only summand |
 | D-0017 | 2 | A SAT run's nogoods are checked too, so SAT proofs fail as well |
-| D-0018 | 58 | A branch nogood is RUP over the branch's own logged trace |
+| D-0018 | 61 | A branch nogood is RUP over the branch's own logged trace |
 | D-0019 | 17 | A disequality needs the order encoding, not the direct one |
 | D-0020 | 2 | lin_unsat's refutation has a unit of slack, and only mutation found it |
 | D-0021 | 6 | Every pruning needs a trace line, not only the ones under a decision |
 | D-0022 | 13 | A root conflict is its own contradiction only if its derivation is numeric |
 | D-0023 | 14 | Proof format: VeriPB 3.0, and the Rust checker of record |
-| D-0024 | 10 | VeriPB 3.0 deletes the level stack, so the writer keeps the tags |
+| D-0024 | 11 | VeriPB 3.0 deletes the level stack, so the writer keeps the tags |
 | D-0025 | 2 | The 3.0 default is on, and what the test flip actually cost |
-| D-0026 | 64 | D-0003 resolved: reasons are data, justifications are cutting planes |
+| D-0026 | 65 | D-0003 resolved: reasons are data, justifications are cutting planes |
 | D-0027 | 5 | D-0011 is a rule about naming rows, not about counting them |
 | D-0028 | 34 | A justification's size is proportional to declared domain width |
 | D-0029 | 41 | An arithmetic limit, enforced at compile time, and why declining to prune is not an option |
@@ -44,19 +44,19 @@ and `grep -n 'I-X6' docs/INVARIANTS.md` find any of them.
 | D-0033 | 11 | Division rounds toward zero as a relation and outward as a bound; dividing by zero is unsatisfiable, not an error |
 | D-0034 | 3 | A wake trigger is a property of what a propagator READS, not of what it promises |
 | D-0035 | 4 | An explanation must justify the bound as RECORDED, not the bound the propagator asked for |
-| D-0037 | 12 | A decision is an assumption, not the model row: Trivial is deleted and the ambient row becomes unrepresentable |
+| D-0037 | 13 | A decision is an assumption, not the model row: Trivial is deleted and the ambient row becomes unrepresentable |
 | D-0038 | 3 | Should an Explanation carry the bound it concludes, so a pol can be checked against it? |
 | D-0039 | 6 | A trace line is RUP in sequence, not standalone: the individual-derivability property is retired |
 | D-0040 | 19 | all_different does NOT force the direct encoding; it forces an explicit derivation |
 | D-0041 | 6 | A declared width limit, because a proof nobody can store is not an answer |
 | D-0043 | 25 | D-0038 resolved: the conclusion is a Reason.fact, carried on justified, in reason.ml |
-| D-0044 | 51 | The learned object is a PB inequality; a clause is its degenerate case |
-| D-0045 | 21 | SPEC §3.4 and restarts: the question raised, with the finding it turned up |
+| D-0044 | 49 | The learned object is a PB inequality; a clause is its degenerate case |
+| D-0045 | 22 | SPEC §3.4 and restarts: the question raised, with the finding it turned up |
 | D-0046 | 8 | Proof format 2.0 is removed from the project entirely |
 | D-0050 | 4 | to_linear_row is the right predicate being used as the wrong gate |
 | D-0051 | 12 | A learned constraint has one owner, and retention is dominated by keeping everything |
 | D-0052 | 19 | A clause over order literals is a WIDENING of bool_clause, not a new family — and watched literals are a separate question |
-| D-0053 | 15 | Reification has two doors, and red is vacuous over a contradictory database |
+| D-0053 | 16 | Reification has two doors, and red is vacuous over a contradictory database |
 | D-0054 | 23 | A proof line and a propagation explanation are different objects, and this project has been building one of them |
 | D-0056 | 3 | The backjump rests on the decision closure, and a PB row cannot supply one |
 | D-0057 | 5 | Reification: big-M int_lin_le rows, one dispatcher, and int_eq_reif without p ∧ q |
@@ -66,8 +66,8 @@ and `grep -n 'I-X6' docs/INVARIANTS.md` find any of them.
 | D-0061 | 7 | The Hall derivation: the ADT carried it, and the one place it could not |
 | D-0062 | 1 | M2-L6's PB analysis costs an order of magnitude on width, and that is accepted |
 | D-0064 | 16 | Explanation.Defining: the ADT can now ask for a constraint id, and D-0044's table breaks at nine |
-| D-0065 | 7 | The hardware limits become options, defaulting off — and D-0041's objection is answered, not ignored |
-| D-0066 | 4 | rup is vacuous over a contradictory database, and 26 lanes may be testing nothing |
+| D-0065 | 8 | The hardware limits become options, defaulting off — and D-0041's objection is answered, not ignored |
+| D-0066 | 5 | rup is vacuous over a contradictory database, and 26 lanes may be testing nothing |
 | D-0068 | 5 | The first full corpus run: 8 proofs verified, and the blocker is not what anyone predicted |
 | D-0070 | 4 | The level-0 nogood RUP defect: a decision that settles past a hole, and a filter that cannot see it |
 | D-0071 | 4 | The graceful resource guard: predictive AND reactive, both defaulting to off |
@@ -75,7 +75,7 @@ and `grep -n 'I-X6' docs/INVARIANTS.md` find any of them.
 | D-0073 | 1 | The rup audit: none of the 26 lanes was vacuous, and D-0066's remedy was wrong |
 | D-0075 | 13 | The SECOND RUP defect: a propagator that reads a HOLE and states only BOUNDS |
 | D-0076 | 3 | FLATTEN-FAIL was mostly a 2008-2010 dialect, not a missing global |
-| D-0077 | 10 | The assignment decision: a disjunctive sibling is discharged by DERIVATION, not by resolution |
+| D-0077 | 14 | The assignment decision: a disjunctive sibling is discharged by DERIVATION, not by resolution |
 | D-0078 | 9 | A global_cardinality propagator: the counting row lives in the ORDER encoding, and the interval capacity is what the decomposition cannot reach |
 | D-0079 | 2 | The wave-30 corpus run: 58 verified, 0 rejected, and the blocker is now TIME |
 | D-0080 | 10 | Where the 300 s go: a stopped run is now a checked proof, and the time is in quadratic bookkeeping, not in search |
@@ -84,7 +84,7 @@ and `grep -n 'I-X6' docs/INVARIANTS.md` find any of them.
 | D-0084 | 13 | The 26 corpus rejections: a derivation one propagator EMBEDS in another, in two families |
 | D-0085 | 9 | D-0080's levers #3-#6 shipped as constant-factor changes: every artefact byte-identical, the learned-PB-row work is the one that moves locally |
 | D-0086 | 7 | Three root-conflict defects from the sweep: the root trace is gated on a WALK, a hole has one currency, a telescope stops at the declared top |
-| D-0087 | 8 | M6-T13: Search's per-node cost stops scaling with the store, Opb's name tables are string-specialised, and global_cardinality_low_up is routed to gcc ... |
+| D-0087 | 9 | M6-T13: Search's per-node cost stops scaling with the store, Opb's name tables are string-specialised, and global_cardinality_low_up is routed to gcc ... |
 | D-0088 | 10 | M6-T14: per-variable trail histories replace the support and remover scans |
 | D-0090 | 5 | M6-T15: Trace.position_of from the entry's own trail position, add_fact by a reversed accumulator |
 | D-0091 | 3 | M6-T8: BAGUETTE_DEBUG=1 is clean on every model; the four element fatals were the agreement check over-reading a ROOT Defining |
@@ -101,28 +101,28 @@ and `grep -n 'I-X6' docs/INVARIANTS.md` find any of them.
 | D-0122 | 3 | M7-T26, what the 1 600 Challenge instances ask for, against what baguette propagates natively; and a word on the comparison itself |
 | D-0123 | 7 | M7-T27, the wall is memory, in three places, and the objective's width is not one of them |
 | D-0124 | 30 | M7-T27 (a): a Linear pruning's reason is materialised LATER, from the trail's history, not snapshotted per term at the push |
-| D-0126 | 16 | M9-no-proof-T1: a solve-without-proof mode exists, as a measurement instrument |
+| D-0126 | 14 | M9-no-proof-T1: a solve-without-proof mode exists, as a measurement instrument |
 | D-0127 | 13 | M8-bits-encoding-T0: RUP, pol and elaboration measured on the checker alone, in the order and the bits encodings |
 | D-0128 | 5 | M7-T27 (d): the front end streams -- family A was the token array, and the fix is a window with one lexeme of lookahead, items built as they are ... |
-| D-0130 | 55 | M8-bits-encoding-T1: the bits encoding above a threshold -- the substrate contract, the on-demand atom, the mixed row, and how a bits pruning is ... |
-| D-0131 | 23 | M8-bits-encoding-T5: the order arm's ladder walks are written as rup, the root closes on its trace, and where pol stays and why |
+| D-0130 | 56 | M8-bits-encoding-T1: the bits encoding above a threshold -- the substrate contract, the on-demand atom, the mixed row, and how a bits pruning is ... |
+| D-0131 | 24 | M8-bits-encoding-T5: the order arm's ladder walks are written as rup, the root closes on its trace, and where pol stays and why |
 | D-0132 | 37 | M8-bits-encoding-T2: the bits encoding for Linear -- the design as it will be built, the checker facts measured first, and what deviates from D-0130 |
 | D-0134 | 49 | M8-bits-encoding-T3: the full substrate -- maxmin over bits by SELECTOR rows and one Resolve step, the checker facts measured first, and the step ... |
 | D-0136 | 8 | M6-T21: the --time-limit overshoot was the stop's own sweep, quadratic in the learned constraints |
-| D-0137 | 49 | M10-search-strategy-T1: restarts, phase saving and an activity heuristic, behind flags -- a restart is the backjump this solver already writes, taken ... |
+| D-0137 | 48 | M10-search-strategy-T1: restarts, phase saving and an activity heuristic, behind flags -- a restart is the backjump this solver already writes, taken ... |
 | D-0138 | 16 | M6-T22: the per-node cost on the XOR codes was the engine asking every learned clause about every variable it names |
 | D-0139 | 37 | M10-search-strategy-T4: retention re-measured, the learned database made evictable (Retention.gate, the lock rule, three LBD tiers), and why the ... |
-| D-0140 | 41 | M11-complexity-T1: the inventory of the costs that grow with the run, measured on six instances at four node budgets, ranked, and split into the ... |
+| D-0140 | 39 | M11-complexity-T1: the inventory of the costs that grow with the run, measured on six instances at four node budgets, ranked, and split into the ... |
 | D-0142 | 29 | M11-complexity-T3: batch 1 of the complexity pass (engine, store, propagators), and first the I-P7 alarm on integer instances, which was two debug ... |
 | D-0143 | 9 | M11-complexity-T7: the setup before node 1 was the .opb's name pipeline, three lists and two string tables per term of every linear row |
 | D-0144 | 15 | M11-complexity-T4 part 1: learning and PB analysis without their quadratic lists, the trail walk of falsified_before replaced by the bound history |
 | D-0145 | 30 | M11-complexity-T5: batch 3 of the complexity pass, trace, justification and proof writing, profiled with frame pointers |
-| D-0146 | 47 | M7-T28 first steps and M7-T29's gcc half: the closed gcc forms were never decomposed, a repeated gcc variable is copied away in the model, and ... |
+| D-0146 | 49 | M7-T28 first steps and M7-T29's gcc half: the closed gcc forms were never decomposed, a repeated gcc variable is copied away in the model, and ... |
 | D-0148 | 6 | M7-T31: a factless pruning that settled over a hole is not a root of the decision closure |
 | D-0149 | 13 | M6-T23: the --time-limit overshoot on cargo and cable was the stop never being asked, inside a PB analysis and inside a conflict's trace, and not the ... |
-| D-0150 | 11 | M7-T32: the MiniZinc standard flags. tools/baguette.msc declares -i -f -n -p -r -s -t -v, each maps onto an option the CLI already had, every ... |
+| D-0150 | 9 | M7-T32: the MiniZinc standard flags. tools/baguette.msc declares -i -f -n -p -r -s -t -v, each maps onto an option the CLI already had, every ... |
 | D-0151 | 31 | M7-T28 continued: regular's reasons on the letters (every tail recurses into the dead flags' own lines, so a learned clause names cells and not ... |
-| D-0152 | 23 | M11-complexity-T4 part 2: search, analysis and retention without their per-node and per-conflict scans |
+| D-0152 | 22 | M11-complexity-T4 part 2: search, analysis and retention without their per-node and per-conflict scans |
 | D-0153 | 18 | M8-bits-encoding: PB conflict analysis over rows with a bits term -- every bits block is INSTANTIATED through its atom's bridge before the analysis ... |
 | D-0154 | 2 | The user's decisions of 2026-11-19: the default search stays the fixed one, as in the MiniZinc Challenge |
 | D-0155 | 9 | M11-complexity-T8: Element's fact deduplication hashed and linear, and the other per-pruning scans of element.ml gone |
@@ -138,7 +138,7 @@ and `grep -n 'I-X6' docs/INVARIANTS.md` find any of them.
 | D-0168 | 11 | M11-complexity-T13: a thunk is released once its line is written; the memo lets go of what the closure built |
 | D-0170 | 7 | M7-T34: member without width-proportional rows -- b_k -> x_k = y as four bound clauses and two big-M rows over the declared overlap, the threshold ... |
 | D-0172 | 13 | M11-complexity-T15: explanations as a DAG whose nodes carry their line |
-| D-0173 | 10 | M11-complexity-T17: the learned clauses that "cannot prune" are SATISFIED |
+| D-0173 | 11 | M11-complexity-T17: the learned clauses that "cannot prune" are SATISFIED |
 | D-0174 | 2 | M14-e2e-verification-T1: the verified encoder is CakeML's cake_pb_cp, and baguette reaches it by re-deriving its own .opb at the head of its proof |
 | D-0176 | 2 | M14-e2e-verification-T2: the end-to-end lane, 75 test models certified by CakeML's verified encoder and checker, with a separate translator checked ... |
 | D-0178 | 3 | M14-e2e-verification-T4: the Boolean and reified families in the end-to-end lane, 105 test models certified by cake_pb_cp |
@@ -172,14 +172,14 @@ and `grep -n 'I-X6' docs/INVARIANTS.md` find any of them.
 | D-0216 | 10 | M11-complexity-T18: black-hole's root cost under native table was alldiff rebuilding its Hall derivations at every pruning, 8.3 M pairwise ... |
 | D-0217 | 16 | M18-coverage-T3: circuit as a native propagator over MTZ position variables |
 | D-0218 | 6 | M21-memory-T1/T2: where the heap goes. OCaml's own representation costs a factor 2.5 to 4 on record-heavy kinds and the GC's free space a factor 1.5 ... |
-| D-0219 | 14 | M19-config-T10: learning that drives the search. The CDCL loop of lazy clause generation (1UIP clause, backjump to its asserting level, the clause ... |
+| D-0219 | 17 | M19-config-T10: learning that drives the search. The CDCL loop of lazy clause generation (1UIP clause, backjump to its asserting level, the clause ... |
 | D-0220 | 13 | M18-coverage-T4: bin_packing_load, bin_packing_capa and bin_packing through mznlib, std's rows without the bool2int copies |
 | D-0221 | 5 | M19-config-T5 (review T12): the retention default measured on the tuning set and on 42 heap refusals |
 | D-0222 | 23 | M21-memory-T3 (fix 2 of D-0218): a hole set is a VERSION of a per-variable hole log, trailed by value |
 | D-0223 | 6 | M21-memory-T3 (fix 4 of D-0218): what kept written explanations alive on tdtsp is not the hash-consing table but the INNER thunk of Element's ... |
-| D-0224 | 8 | M19-config-T11, then T2 to T4 measured on the CDCL loop: chronological backtracking for long jumps under --cdcl (--chrono N), with the asserted ... |
+| D-0224 | 9 | M19-config-T11, then T2 to T4 measured on the CDCL loop: chronological backtracking for long jumps under --cdcl (--chrono N), with the asserted ... |
 | D-0225 | 10 | M6-T24: an interrupted run ends its proof. A signal or the heap budget closes it where it stands, and an optimisation run concludes BOUNDS <declared ... |
-| D-0226 | 45 | M21-memory-T3 fix 1, the learned-row layout, and a PB size guard (M19-config-T5 re-measured) |
+| D-0226 | 48 | M21-memory-T3 fix 1, the learned-row layout, and a PB size guard (M19-config-T5 re-measured) |
 | D-0228 | 17 | M23-inputs: a relational Problem between the readers and the solver, .scp as a second input, every other language translated to .scp outside the ... |
 | D-0230 | 15 | M23-inputs-T1..T5: the .scp reader, lib/scp/. What it reads, what it refuses and why, the choices D-0228 section 14 left open, and the lanes that ... |
 | D-0231 | 3 | M22-review-bugs: regular with a constant letter outside its symbols no longer crashes, and cumulative's overload conflict writes the clearing of its ... |
@@ -192,14 +192,16 @@ and `grep -n 'I-X6' docs/INVARIANTS.md` find any of them.
 | D-0238 | 5 | M18-coverage-ne: int_lin_ne's conflicts carry their fixing facts under a decision, so they learn. Measured first |
 | D-0239 | 9 | M18-coverage-T5: lex_lesseq and lex_less (integers and Booleans, hence lex_greater(eq), lex_chain_*, lex2) as four linear rows per position over ... |
 | D-0240 | 11 | M18-coverage-T6: sort, arg_sort, arg_max and arg_min stay on std's decompositions |
-| D-0241 | 7 | M19-config-T6, clause minimisation: learned clauses lose their root-level literals (ROOT) and the literals the kept ones re-derive (RECURSIVE, ... |
+| D-0241 | 8 | M19-config-T6, clause minimisation: learned clauses lose their root-level literals (ROOT) and the literals the kept ones re-derive (RECURSIVE, ... |
 | D-0242 | 11 | M20-pernode-T4 on all_different, second pass: a stage 1 pass that would move nothing is answered by counting, and the derivations a tight set ... |
 | D-0243 | 11 | M20-pernode-T4 on the engine's wake path: the static wake index as flat int arrays walked without closures, the default advisor answered without its ... |
 | D-0245 | 5 | M20-pernode-T4 on conflict analysis: Store.var_named answers through a direct-mapped memo of 4 096 cells, and Analysis.locate reads it as an int |
-| D-0246 | 5 | M19-config-T9, propagator priorities: a cost-class queue behind BAGUETTE_PRIORITY=off\|classes (four classes, cheapest first, as Gecode and Chuffed) |
-| D-0247 | 10 | M18-coverage-T14: global_cardinality with variable counts goes to std's count decomposition in mznlib (route b), constant counts stay native |
+| D-0246 | 6 | M19-config-T9, propagator priorities: a cost-class queue behind BAGUETTE_PRIORITY=off\|classes (four classes, cheapest first, as Gecode and Chuffed) |
+| D-0247 | 11 | M18-coverage-T14: global_cardinality with variable counts goes to std's count decomposition in mznlib (route b), constant counts stay native |
 | D-0248 | 2 | M22-review-T5: a proof write that fails (Sys_error: missing directory, full disk) ends with one line on stderr and a new exit status, 6 |
+| D-0250 | 9 | M19-config-T8, probing at the root: a bound literal of a small domain that fails under propagation is a failed one-decision node, its unit nogood ... |
 | D-0254 | 1 | M22-review-T4, second documentation pass: the remaining modules' comments, docs/REFERENCES.md extended, and the four findings of D-0253 settled (a ... |
+| D-0255 | 6 | Reserved for agent-gccsum, the follow-ups of D-0247 (a native rule between the counts, low_up routed or strengthened); the record is not in docs/DECISIONS.md yet |
 
 ## Roadmap tasks (docs/ROADMAP.md)
 
@@ -211,7 +213,7 @@ and `grep -n 'I-X6' docs/INVARIANTS.md` find any of them.
 | M1-T13 | 4 | The branching half of D-0013: justify a conflict reached under decisions |
 | M1-T14 | 1 | Wire the CLI: .fzn in, solution + proof out |
 | M1-T17 | 11 | Fix the three int_ne composition bugs M1-T16 pinned |
-| M1-T18 | 4 | Adopt the Rust VeriPB 3.0.2 checker while still emitting format 2.0 |
+| M1-T18 | 5 | Adopt the Rust VeriPB 3.0.2 checker while still emitting format 2.0 |
 | M1-T19 | 1 | Migrate proof emission to format 3.0 |
 | M1-T21 | 1 | A bool *parameter* folded to a Const prints as 0/1, not false/true |
 | M1-T22 | 3 | del range is half-open: fix Writer.wipe_level, correct PROOF-FORMAT §5 |
@@ -224,15 +226,15 @@ and `grep -n 'I-X6' docs/INVARIANTS.md` find any of them.
 | M1-T32 | 6 | State and enforce "Compile is the only door": check the arithmetic inside Encoding/Opb too |
 | M1-T33 | 2 | Make I-S1's oracle genuinely independent: Model.check_assignment must not share the propagator's arithmetic |
 | M1-T34 | 2 | bin/main.ml should catch Checked.Overflow and exit with a diagnostic |
-| M1-T35 | 3 | A --time flag (or a library-level harness) so solve time is separable from process start-up |
-| M1-T36 | 21 | A real node counter in search.ml, replacing the benchmark's lvl proxy |
+| M1-T35 | 4 | A --time flag (or a library-level harness) so solve time is separable from process start-up |
+| M1-T36 | 20 | A real node counter in search.ml, replacing the benchmark's lvl proxy |
 | M1-T37 | 2 | The .opb header embeds the input path, so its byte count depends on where the file lives |
 | M1-T39 | 1 | Delete Writer.pol_raw, or document why it stays |
 | M1-T4 | 1 | Order encoding in lib/proof/lit.ml, .opb writer |
 | M1-T42 | 2 | test_prop.ml's integer veripb builders hold their setup facts as .opb model rows |
 | M1-T44 | 10 | A correct UNSAT answer whose proof the checker rejects (I-X7). Reproduced by the orchestrator through the CLI |
-| M1-T45 | 10 | Reclaim the 0.4% of branching shapes random_order's hole guard refuses |
-| M1-T47 | 8 | Separate proof *emission* time from propagation time |
+| M1-T45 | 8 | Reclaim the 0.4% of branching shapes random_order's hole guard refuses |
+| M1-T47 | 6 | Separate proof *emission* time from propagation time |
 | M1-T48 | 2 | --proof-comments is a no-op on all 29 models — untested by construction |
 | M1-T49 | 4 | The gate cannot see "timings are off unless asked" |
 | M1-T5 | 1 | writer.ml: rule emission, constraint ids, audit mode |
@@ -240,24 +242,24 @@ and `grep -n 'I-X6' docs/INVARIANTS.md` find any of them.
 | M1-T51 | 7 | Nothing distinguishes a pol that derives the claimed bound from one that derives something weaker |
 | M1-T53 | 3 | A bare dune runtest still bypasses the memory cap |
 | M1-T54 | 9 | A width cap in Encoding.declare_int, so a wide domain is a loud refusal |
-| M1-T55 | 11 | spec_order can decide at a hole; random_order deliberately will not |
+| M1-T55 | 9 | spec_order can decide at a hole; random_order deliberately will not |
 | M1-T56 | 8 | trace.ml's claims writes no line for a pure hole removal |
 | M1-T57 | 4 | A settle-strengthened bound makes its own trace line stronger than its facts |
 | M1-T58 | 1 | bin/main.ml does not catch Encoding.Unrepresentable |
 | M1-T59 | 5 | Two proofs emit a byte-identical rup twice |
 | M1-T6 | 1 | FlatZinc lexer + parser for the §2.1 subset |
 | M1-T63 | 2 | Two hedges for a declared hole are unreachable dead paths |
-| M1-T66 | 8 | Nothing but a string match holds up M1-T55's bridge |
+| M1-T66 | 7 | Nothing but a string match holds up M1-T55's bridge |
 | M1-T7 | 1 | int_lin_le propagator + justification |
 | M1-T7a | 1 | int_lin_le propagator and its explanations |
 | M1-T7c | 1 | Order-encoding expansion of sum a_i x_i into a PB row |
 | M1-T9 | 13 | int_lin_ne, int_ne |
-| M10-T2 | 9 | Restarts and phase saving, behind flags, with partial restarts if T1 keeps them |
-| M10-T3 | 6 | The activity heuristic, behind a flag, and its alternation with the annotation |
+| M10-T2 | 5 | Restarts and phase saving, behind flags, with partial restarts if T1 keeps them |
+| M10-T3 | 4 | The activity heuristic, behind a flag, and its alternation with the annotation |
 | M10-T4 | 1 | Learned-clause deletion re-measured, and LBD tiers: today's policies (keep_all, fifo, lbd) on the codes set and the editions, then glue clauses kept ... |
 | M10-T5 | 2 | The measurement and the defaults: the sixteen editions in the fixed and free categories (M7-T30), the codes set, a decision record on what becomes ... |
-| M10-search-strategy-T2 | 12 | Restarts and phase saving, behind flags, with partial restarts if T1 keeps them |
-| M10-search-strategy-T3 | 7 | The activity heuristic, behind a flag, and its alternation with the annotation |
+| M10-search-strategy-T2 | 8 | Restarts and phase saving, behind flags, with partial restarts if T1 keeps them |
+| M10-search-strategy-T3 | 5 | The activity heuristic, behind a flag, and its alternation with the annotation |
 | M10-search-strategy-T4 | 3 | Learned-clause deletion re-measured, and LBD tiers: today's policies (keep_all, fifo, lbd) on the codes set and the editions, then glue clauses kept ... |
 | M11-T2 | 1 | The lanes the pass needs, before any fix: (a) a DIFFERENTIAL lane, real instances at a fixed node budget whose stdout, node counts and proof hashes ... |
 | M11-T4 | 1 | Batch 2, search, analysis, learning and retention |
@@ -272,12 +274,12 @@ and `grep -n 'I-X6' docs/INVARIANTS.md` find any of them.
 | M11-complexity-T17 | 8 | Learned clauses that cannot prune (D-0169): on codes QR48 under the fixed search, learned clauses run 177 times per node and prune nothing (0.00 ... |
 | M11-complexity-T18 | 2 | black-hole's root cost under native table (D-0206's finding: black-hole_10 4.5x more instructions at the root, black-hole_14 past --time-limit 300 by ... |
 | M11-complexity-T3 | 15 | Batch 1, engine, store and propagators |
-| M11-complexity-T4 | 20 | Batch 2, search, analysis, learning and retention |
+| M11-complexity-T4 | 17 | Batch 2, search, analysis, learning and retention |
 | M11-complexity-T5 | 15 | Batch 3, trace, justification and proof writing |
 | M11-complexity-T7 | 11 | Setup: the cost before the first node (D-0140 §8.4, item X1): openshop spends 762 G instructions (112 s) before node 1, with or without the proof, in ... |
 | M11-complexity-T8 | 5 | Element.add_facts's duplicate check is quadratic: 99 % of 2011_black-hole_10's run under the native inverse (D-0151 §2), and the same on main ... |
 | M11-complexity-T9 | 8 | The Learned list arithmetic on PB rows: PB analysis over bits rows (D-0153) costs up to 2.3x per node with the search unchanged at equal nodes, about ... |
-| M14-e2e-verification-T3 | 8 | The bridge written by the solver, a --e2e mode in which baguette emits the prefix itself (atoms, the two halves of B = l + S, the ladder, each row's ... |
+| M14-e2e-verification-T3 | 7 | The bridge written by the solver, a --e2e mode in which baguette emits the prefix itself (atoms, the two halves of B = l + S, the ladder, each row's ... |
 | M14-e2e-verification-T3b | 2 | --e2e for T5's globals: array_int_element, global_cardinality, array_int_maximum/minimum, member, inverse |
 | M14-e2e-verification-T6 | 2 | The far families: int_times/int_div/int_abs (baguette's case-split Booleans against cake's bit products), cumulative, regular (the mznlib state flags ... |
 | M14-e2e-verification-T7 | 1 | The bits arm: baguette's x_bit_i (bits of x - l, unsigned) against cake's two's-complement bits of x |
@@ -288,31 +290,32 @@ and `grep -n 'I-X6' docs/INVARIANTS.md` find any of them.
 | M16-file-review-T5 | 8 | The front end and setup: lexer.ml, parser.ml, builder.ml, compile.ml, output.ml (the cost before node 1; D-0143) |
 | M18-coverage-T1 | 14 | table (135 instances, 52 refused): a native GAC propagator (compact-table, as Gecode, OR-tools and Chuffed have), each pruning justified from the ... |
 | M18-coverage-T11 | 6 | gcc's conflicts carry their facts, as alldiff's do since M7-T33 (D-0156) |
-| M18-coverage-T14 | 5 | global_cardinality with variable counts counts windows, not domains |
+| M18-coverage-T14 | 9 | global_cardinality with variable counts counts windows, not domains |
 | M18-coverage-T2 | 6 | diffn (155): pairwise non-overlap plus the two cumulative relaxations (Chuffed and Gecode do this), reusing cumulative.ml's time-table and its ... |
 | M18-coverage-T3 | 13 | circuit, subcircuit (127): alldiff plus the no-subtour check (Chuffed's and Gecode's), the subtour cut justified in the proof. Design record first |
 | M18-coverage-T4 | 10 | bin_packing_load, bin_packing, _capa (85, 40 refused): the load sums as linear rows plus the capacity reasoning (Shaw's propagator, or the cumulative ... |
 | M18-coverage-T5 | 9 | The ordering and symmetry-breaking globals: lex_*, value_precede(_chain), seq_precede_chain, increasing and its family (~350 instance mentions) |
 | M18-coverage-T6 | 8 | sort, arg_sort, arg_max (155): the decomposition is a sorting network or a big-M family; a native sort (bounds consistent, Mehlhorn and Thiel) |
 | M18-coverage-T7 | 10 | The cheap ones: alldifferent_except_0 (37, 3 % complete) as alldiff over the non-zero values, all_equal, nvalue (already 52 %, measure before ... |
-| M19-config-T10 | 11 | Learning that drives the search (FIRST in this milestone's priority) |
-| M19-config-T11 | 9 | Chronological backtracking for long jumps under the CDCL loop (Nadel and Ryvchin, SAT 2018), or trail saving |
+| M19-config-T10 | 8 | Learning that drives the search (FIRST in this milestone's priority) |
+| M19-config-T11 | 6 | Chronological backtracking for long jumps under the CDCL loop (Nadel and Ryvchin, SAT 2018), or trail saving |
 | M19-config-T6 | 5 | Conflict analysis: recursive clause minimisation (MiniSat), Pumpkin's CPIP stopping criterion, extended nogood propagation and per-variable atom ... |
+| M19-config-T8 | 2 | The root: probing (failed literals), equality merging into views, the LP relaxation (M13-codes-leads-T1, whose spike measured it and did not build it) |
 | M19-config-T9 | 2 | The propagation engine: propagator priorities (cheap first, as Gecode and Chuffed), idempotence, staged propagation |
 | M2-L0 | 4 | Implement D-0043: the conclusion as a Reason.fact on justified; first caller for Writer.pol_concluding / Writer.implied |
 | M2-L1 | 16 | Learned.t: the PB learned-constraint type, its runtime propagator instance, and its proof-side introduction and deletion |
-| M2-L11 | 17 | The ladder chain as a row: give PB analysis the reason Linear actually uses, so a learned inequality can be non-trivial |
-| M2-L12 | 55 | Make learned constraints propagate: unit clauses as level-0 bounds first, then widen bool_clause to a threshold |
-| M2-L13 | 40 | The PB explanation for SOLVING: propagate a learned PB row as a PB constraint over order literals, and take to_linear_row out of the propagation path |
-| M2-L15 | 19 | Backjumping on the PB row: redo the calculation M2-L13 invalidated |
+| M2-L11 | 19 | The ladder chain as a row: give PB analysis the reason Linear actually uses, so a learned inequality can be non-trivial |
+| M2-L12 | 56 | Make learned constraints propagate: unit clauses as level-0 bounds first, then widen bool_clause to a threshold |
+| M2-L13 | 43 | The PB explanation for SOLVING: propagate a learned PB row as a PB constraint over order literals, and take to_linear_row out of the propagation path |
+| M2-L15 | 18 | Backjumping on the PB row: redo the calculation M2-L13 invalidated |
 | M2-L2 | 7 | Conflict-analysis scaffolding: the implication graph and the 1UIP cut, as data |
-| M2-L3 | 41 | 1UIP clause learning over order literals, with backjumping and its rup derivation |
-| M2-L4 | 41 | Learned-constraint deletion, the matching del, and a retention policy |
+| M2-L3 | 42 | 1UIP clause learning over order literals, with backjumping and its rup derivation |
+| M2-L4 | 38 | Learned-constraint deletion, the matching del, and a retention policy |
 | M2-L5 | 8 | Reduction as a named, swappable component: division and roundToOne |
-| M2-L6 | 49 | PB conflict analysis: eliminate the pivot by linear combination + reduction, with the M2-L3 clause path as fallback |
+| M2-L6 | 48 | PB conflict analysis: eliminate the pivot by linear combination + reduction, with the M2-L3 clause path as fallback |
 | M2-L7 | 3 | Saturate in Explanation.t, and saturation-based reduction as the second plug |
 | M2-T1 | 3 | bool_clause, array_bool_or, array_bool_and |
-| M2-T10 | 14 | Harness: per-node consistency checking against the brute-force oracle |
+| M2-T10 | 15 | Harness: per-node consistency checking against the brute-force oracle |
 | M2-T11 | 3 | Fuzzer: randomise branching order from the announced seed |
 | M2-T16 | 1 | Remove proof format 2.0 from the project entirely (D-0046) |
 | M2-T2 | 2 | bool2int, bool_eq, bool_not channelling |
@@ -339,7 +342,7 @@ and `grep -n 'I-X6' docs/INVARIANTS.md` find any of them.
 | M3-T1 | 2 | red-based definitions for reified variables |
 | M3-T2 | 4 | Reified linear/comparison propagators + justifications DONE 2026-09-21 (agent-reif), built through M3-T4 as this row asked |
 | M3-T4 | 7 | Reification dispatcher: author supplies enforce-hold / enforce-not-hold / entailment |
-| M3-T5 | 2 | Proof benchmark reporting .opb bytes, .pbp bytes and verify seconds separately |
+| M3-T5 | 3 | Proof benchmark reporting .opb bytes, .pbp bytes and verify seconds separately |
 | M4-T0 | 6 | Views (±x + k) and constants-as-variables in Var/Store |
 | M4-T1 | 27 | all_different (bounds consistent) + Hall-interval justification |
 | M4-T10 | 14 | cumulative (and disjunctive as its unit-capacity case): design first, then the time-table propagator — 53 + 16 corpus models |
@@ -349,12 +352,12 @@ and `grep -n 'I-X6' docs/INVARIANTS.md` find any of them.
 | M4-T4b | 13 | int_times/int_div/int_abs over M4-T4a |
 | M4-T7 | 11 | Let an Explanation ask for the defining id of a bound fact — close the gap M4-T1 made concrete |
 | M4-T9 | 15 | array_int_maximum / array_int_minimum as a propagator, and int_max/int_min through it — 94 corpus models name maximum/minimum, all decomposed today ... |
-| M5-T1 | 21 | Branch and bound, obju / o / core rules DONE 2026-09-21 (agent-bb). A branch-and-bound bound is exactly an M2-L12 global unit |
+| M5-T1 | 20 | Branch and bound, obju / o / core rules DONE 2026-09-21 (agent-bb). A branch-and-bound bound is exactly an M2-L12 global unit |
 | M5-T2 | 4 | conclusion BOUNDS for proved optimality DONE 2026-09-21 (agent-bb). conclusion BOUNDS 2  |
 | M6-T10 | 4 | D-0080's lever #2 and the wall clock: Justify's memo as identity buckets under a shallow hash (bench/m6t9/justify-memo.patch, costas prefix 15.32 s → ... |
 | M6-T11 | 10 | D-0080's levers #3, #5, #6: Analysis.scan_support compares names as STRINGS (~60 % on prize-collecting) → Var.equal |
 | M6-T12 | 2 | Two tidy-ups M6-T9 asked for: a Writer.No_conclusion verdict so Search.conclude_stopped is one call instead of a hand-written epilogue |
-| M6-T13 | 9 | D-0085's two leftovers and one mznlib line: (i) Search does per-node work over ALL variables (Search.unfixed, a Hashtbl.replace per variable under ... |
+| M6-T13 | 7 | D-0085's two leftovers and one mznlib line: (i) Search does per-node work over ALL variables (Search.unfixed, a Hashtbl.replace per variable under ... |
 | M6-T14 | 11 | The slow-node instances: Analysis.scan_support still walks the trail — on the 26 formerly-rejected corpus instances the solver does 2-20 nodes/s ... |
 | M6-T15 | 9 | Trace.position_of is a linear walk over done_ by physical identity, and Trace.add_fact appends with acc @ [l] — after M6-T14, 2014_mario's 60 s ... |
 | M6-T16 | 3 | Analysis builds its frontier with out @ [n] (analysis.ml:395) and add_antecedent the same way (:407) — after M6-T15, 83 % of mario's remaining ... |
@@ -363,15 +366,15 @@ and `grep -n 'I-X6' docs/INVARIANTS.md` find any of them.
 | M6-T19 | 9 | One propagator pass per deduction: alldiff, cumulative, gcc and element restart the whole pass (Moved) after every single pruning |
 | M6-T2 | 2 | Minor-GC pressure: move domains/trail to Bigarray/Bytes |
 | M6-T20 | 15 | Learned clauses run on every bound change of every variable they name: 1299 of 3732 runs/node on racp, 1731 of 1830 on depot, under 0.2 % effectful |
-| M6-T21 | 13 | --time-limit overshoots ~8 %, growing with run length (the user's request of 2026-11-17 in WORKLOG, measured on a linear-code model |
+| M6-T21 | 12 | --time-limit overshoots ~8 %, growing with run length (the user's request of 2026-11-17 in WORKLOG, measured on a linear-code model |
 | M6-T22 | 18 | Per-node cost on XOR-heavy Boolean models (the user's request of 2026-11-18, point 1, WORKLOG "codes-cp measurements") |
-| M6-T23 | 10 | The --time-limit stop still overshoots by more than 300 s with --proof (D-0137 §13.3) |
-| M6-T24 | 20 | An interrupted run ends its proof (the user, 2026-11-24): SIGTERM, SIGINT, SIGXCPU and the heap budget close the proof with the strongest conclusion ... |
+| M6-T23 | 9 | The --time-limit stop still overshoots by more than 300 s with --proof (D-0137 §13.3) |
+| M6-T24 | 18 | An interrupted run ends its proof (the user, 2026-11-24): SIGTERM, SIGINT, SIGXCPU and the heap budget close the proof with the strongest conclusion ... |
 | M6-T8 | 1 | BAGUETTE_DEBUG=1 is not clean |
-| M6-T9 | 25 | Why 273 of 436 corpus instances time out at 300 s — a --time-limit that stops cleanly and reports stats and incumbent, the config sweep on the node, ... |
+| M6-T9 | 24 | Why 273 of 436 corpus instances time out at 300 s — a --time-limit that stops cleanly and reports stats and incumbent, the config sweep on the node, ... |
 | M7-T1 | 19 | Unrestrict the defaults; the limits become options |
 | M7-T11 | 18 | Encode a set domain by punching its holes in the ladder, instead of refusing the model |
-| M7-T12 | 20 | indomain_median, and the decision shape that cannot express it |
+| M7-T12 | 18 | indomain_median, and the decision shape that cannot express it |
 | M7-T13 | 3 | A SECOND RUP defect: 2012_tpp is still rejected after M7-T6 |
 | M7-T15 | 6 | FLATTEN-FAIL is 50, and roughly half of it is ours |
 | M7-T16 | 12 | A global_cardinality propagator — the global M7-T15 had to decompose |
@@ -387,8 +390,8 @@ and `grep -n 'I-X6' docs/INVARIANTS.md` find any of them.
 | M7-T27 | 27 | The wall is memory, in three places, and the objective's width is not one of them (D-0123). The recount of the 543 Challenge refusals |
 | M7-T28 | 44 | The decomposed globals that kill the search, in payoff order (D-0122) |
 | M7-T29 | 6 | Two small front-end refusals from the editions (D-0121): fzn_global_cardinality with the same variable twice (gcc.ml's tally assumption |
-| M7-T31 | 5 | A branch nogood the checker refuses under restarts with phase saving and a dynamic order (first thought to be the ASSIGNMENT decision of D-0077 |
-| M7-T32 | 11 | The MiniZinc standard flags, as the Challenge calls a solver: tools/baguette.msc declares "stdFlags" |
+| M7-T31 | 6 | A branch nogood the checker refuses under restarts with phase saving and a dynamic order (first thought to be the ASSIGNMENT decision of D-0077 |
+| M7-T32 | 9 | The MiniZinc standard flags, as the Challenge calls a solver: tools/baguette.msc declares "stdFlags" |
 | M7-T33 | 11 | alldiff conflicts carry no facts, so nothing is learned from them |
 | M7-T34 | 4 | member without width-proportional rows (D-0159 §5, D-0167 item 2) |
 | M7-T35 | 1 | Six member models stop under BAGUETTE_DEBUG on the D-0026 agreement check, on main too (found by M16-file-review-T1, D-0186 §6) |
@@ -397,12 +400,12 @@ and `grep -n 'I-X6' docs/INVARIANTS.md` find any of them.
 | M7-T8 | 21 | A graceful resource guard: an over-large encoding must diagnose, not Fatal error |
 | M7-T9 | 8 | The four missing search strategies: smallest, largest, indomain_split, indomain_median |
 | M8-T2 | 2 | Encoding, rows and Linear only: encoding.ml/lit.ml/opb.ml for a bits variable, expand_int_lin_le over mixed terms, linear.ml's justification through ... |
-| M8-bits-encoding-T2 | 36 | Encoding, rows and Linear only: encoding.ml/lit.ml/opb.ml for a bits variable, expand_int_lin_le over mixed terms, linear.ml's justification through ... |
-| M8-bits-encoding-T3 | 29 | The full substrate: Weaken, Order_reason's chains, Ladder for PB conflict analysis (or the clause fallback, measured), trace lines that today rely on ... |
+| M8-bits-encoding-T2 | 33 | Encoding, rows and Linear only: encoding.ml/lit.ml/opb.ml for a bits variable, expand_int_lin_le over mixed terms, linear.ml's justification through ... |
+| M8-bits-encoding-T3 | 28 | The full substrate: Weaken, Order_reason's chains, Ladder for PB conflict analysis (or the clause fallback, measured), trace lines that today rely on ... |
 | M8-bits-encoding-T5 | 11 | The cheap half (D-0127): emit the order arm's ladder-walk justifications as rup, not as the Θ(w)-token pol fold |
-| M9-no-proof-T2 | 14 | Implement: Compile with the encoding half skipped (ids still counted), bin/main.ml with no Writer/Justify, --stats saying so |
-| M9-no-proof-T4 | 6 | The audit: every computation that serves only the proof and still runs under --no-proof, in the code merged since D-0135 (bits atoms and PB analysis ... |
-| M9-no-proof-T5 | 9 | The default keeps the proof (the user's decision, 2026-11-19) |
+| M9-no-proof-T2 | 12 | Implement: Compile with the encoding half skipped (ids still counted), bin/main.ml with no Writer/Justify, --stats saying so |
+| M9-no-proof-T4 | 2 | The audit: every computation that serves only the proof and still runs under --no-proof, in the code merged since D-0135 (bits atoms and PB analysis ... |
+| M9-no-proof-T5 | 6 | The default keeps the proof (the user's decision, 2026-11-19) |
 
 ## Invariants (docs/INVARIANTS.md)
 
@@ -424,10 +427,10 @@ and `grep -n 'I-X6' docs/INVARIANTS.md` find any of them.
 | I-S3 | 2 | Decision level on return from search equals the level on entry. |
 | I-S4 | 62 | A trace line that cites a hole is supported only while that hole's own line is |
 | I-T1 | 17 | backtrack_to l restores every domain to exactly its state when level l was |
-| I-T2 | 12 | Trail entries are strictly ordered by level; the level marks are monotone. |
+| I-T2 | 13 | Trail entries are strictly ordered by level; the level marks are monotone. |
 | I-T3 | 6 | Every trail entry has an explanation index that resolves. No orphan reasons. |
 | I-T4 | 4 | Every trail entry names the propagator instance that made it, in entry.prop, |
-| I-X10 | 38 | Every trace line a propagator emits is RUP against the .opb plus the lines |
+| I-X10 | 37 | Every trace line a propagator emits is RUP against the .opb plus the lines |
 | I-X2 | 60 | Constraint ids are deleted exactly once. Checked at conclusion time under |
 | I-X3 | 12 | Proof state mirrors solver state: a reason that has been deleted from the proof |
 | I-X4 | 2 | The proof is append-only and never rewound. Backtracking in the solver becomes |
@@ -435,4 +438,4 @@ and `grep -n 'I-X6' docs/INVARIANTS.md` find any of them.
 | I-X6 | 70 | A Deferred explanation's thunk closes over a snapshot and never reads live |
 | I-X7 | 3 | What conclusion UNSAT cites is a line the checker has itself established is a |
 | I-X8 | 19 | No row is committed to the .opb whose arithmetic wrapped. |
-| I-X9 | 9 | An explanation justifies the bound as recorded on the trail, not the bound |
+| I-X9 | 10 | An explanation justifies the bound as recorded on the trail, not the bound |

@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
-"""Every solution of a .scp, under the semantics of CakeML's cpScript.sml (M14-e2e-verification-T2).
+"""Every solution of a .scp, under the semantics of CakeML's cpScript.sml. Written for
+M14-e2e-verification-T2, the first end-to-end lane.
 
 Usage: python3 -I scpsem.py MODEL.scp NAMES [MAX_NODES]
 
 The translator (fzn2scp.py) is the one trusted link of the chain that no theorem covers
-(D-0174 section 5), and a wrong translation verifies. This is half of its test: it reads
+(D-0174 section 5, in the record that chose CakeML's cake_pb_cp as the verified encoder),
+and a wrong translation verifies. This is half of its test: it reads
 ONLY the .scp (not the FlatZinc, not the translator's code) and enumerates the assignments
 cake's semantics admit, by backtracking with interval pruning. The other half is Gecode's
-FlatZinc interpreter on the .fzn, which `scripts/e2e_lane.sh` runs and compares with this.
+FlatZinc interpreter on the .fzn (fzn_solutions.py), which `scripts/e2e_lane.sh` runs and
+compares with this through validate.py.
 
 The semantics, transcribed from cpScript.sml (CakeML master, 2026-11):
   valid_assignment   every variable within its (name lb ub)
@@ -16,12 +19,13 @@ The semantics, transcribed from cpScript.sml (CakeML master, 2026-11):
      cmp: equals =, not_equals !=, less_equal <=, less_than <, greater_equal >=, greater_than >
   all_different (X1 ...)       ALL_DISTINCT (MAP (varc w) Xs)     (AllDifferentExcept Xs [])
   in (X1 ...) Y                MEM (varc w Y) (MAP (varc w) Xs)   (in_sem)
-  and the T4 forms (D-0178), a reify tuple (Z op v) meaning `varc Z op v`, op in = != >= > <= <:
+  and the T4 forms (M14-e2e-verification-T4, D-0178: the Boolean and reified families),
+  a reify tuple (Z op v) meaning `varc Z op v`, op in = != >= > <= <:
   <cmp>_iff R X Y              R <=> cmpop_val cmp X Y            (cmpop_sem, Zr = INR R)
   lin_<cmp>_iff R (c1 X1 ...) Y   R <=> cmpop_val cmp (sum ...) Y  (lin_sem, Zr = INR R)
   or (R1 ...) R                R <=> EXISTS Ri                    (or_sem)
   and (R1 ...) R               R <=> EVERY Ri                     (and_sem)
-  and the T5 forms (D-0180):
+  and the T5 forms (D-0180, the globals):
   <cmp>_if R X Y               R ==> cmpop_val cmp X Y            (cmpop_sem, Zr = INL R)
   element (A0 ...) (Y off) Z   0 <= Y-off < n and Z = A[Y-off]    (element_sem)
   gacglobalcardinality (X1 ...) (v1 ...) (C1 ...)
@@ -32,7 +36,7 @@ The semantics, transcribed from cpScript.sml (CakeML master, 2026-11):
   inverse ((X1 ...) ox) ((Y1 ...) oy)
                                same length n; every Xi - oy and Yj - ox in [0, n);
                                X[i-ox] = j <=> Y[j-oy] = i over i in ox.., j in oy..  (inverse_sem)
-  and the T6 forms (D-0195):
+  and the T6 forms (D-0195, the far families):
   abs X Y                      ABS X = Y                          (unop_sem Abs)
   cumulative (X1 ...) (W1 ...) (H1 ...) C
                                equal lengths, every Hi >= 0, C >= 0, and at every t the Hi
@@ -40,7 +44,8 @@ The semantics, transcribed from cpScript.sml (CakeML master, 2026-11):
   regular (X1 ...) n ((edges_0) ...) (f ...)
                                some run from state 0 along edges (v q') of EL q trans, every
                                state < n, ends in a final state      (regular_sem, nfa_accepts)
-  and, for the reader of M23-inputs (D-0230), each checked once its variables are assigned:
+  and, for baguette's own .scp reader (lib/scp/, M23-inputs, D-0230), each checked once its
+  variables are assigned:
   gacglobalcardinalityclosed, boundsglobalcardinality[closed]   the gcc above, closed: every
                                Xi is one of the vi                (global_cardinality_sem)
   count (X1 ...) Y Z           Z = #{i : Xi = Y}                  (count_sem)
@@ -56,12 +61,15 @@ The semantics, transcribed from cpScript.sml (CakeML master, 2026-11):
                                to i after n steps and not before  (circuit_sem)
   `enumerate` is read as `decide`: the set of solutions is the same.
 Any other keyword, or a `_if` form other than a comparison's, is refused (exit 2). The
-prob_type is `decide`, or `(minimize X)` / `(maximize X)` (T8, D-0182), whose solutions are
-the same set: the objective only adds the line `objective minimize|maximize NAME` at the end,
-NAME the FlatZinc name of X, for validate.py to take the optimum over the set.
+prob_type is `decide`, or `(minimize X)` / `(maximize X)` (T8, D-0182, objectives), whose
+solutions are the same set: the objective only adds the line
+`objective minimize|maximize NAME` at the end, NAME the FlatZinc name of X, for validate.py to
+take the optimum over the set.
 
 Prints `count N` then one line per solution, `name=value ...` over the FlatZinc names of
-NAMES, sorted; or `toobig` when MAX_NODES (default 2,000,000) is exceeded.
+NAMES, sorted; or `toobig` when MAX_NODES (default 2,000,000) is exceeded. Exit 0 in both
+cases; 2 with a `REFUSED:` line on stderr when the .scp is refused; 64 with a usage line on
+stderr when the argument count is wrong; 1 on an unbalanced s-expression.
 """
 import operator
 import re

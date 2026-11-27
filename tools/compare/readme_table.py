@@ -1,11 +1,15 @@
 #!/usr/bin/env python3
-"""M17-bench-series-T1 (D-0203). The README's "Performance on the MiniZinc Challenge" section, written
-from a series directory instead of copied by hand.
+"""The README's "Performance on the MiniZinc Challenge" section, written from a series directory
+instead of copied by hand. Part of the series driver of M17-bench-series-T1 (bench/series/,
+one script that runs a commit's arms over the sixteen editions; D-0203 records it and its first
+series).
 
     readme_table.py SERIES_DIR [--record D-0203] [--previous TEXT] [--notes FILE] [--readme README.md]
 
-SERIES_DIR is what bench/series/read_series.sh wrote (SERIES_DIR/tables, or the published copy in
-/cluster/arthur/baguette-results/series-<name>): series.conf (the arms, commit, binary hash,
+--record names the decision record the section cites for the series (default `D-????`).
+
+SERIES_DIR is what bench/series/read_series.sh wrote (SERIES_DIR/tables, or the published copy
+in /cluster/arthur/baguette-results/series-<name>): series.conf (the arms, commit, binary hash,
 dates), results_<L>.tsv per arm, rank_<L>_<YEAR>.txt (rank_<L>fd_ for a `-f` arm, which is
 scored in the fixed-search category so the rows compare), arms.txt (arms_compare.py).
 
@@ -16,6 +20,9 @@ verified proofs, whose files the series deletes), and the rank per edition with 
 --notes FILE is appended as it stands (the caveat paragraphs are prose, written by hand), and
 --previous is a one-line pointer to the series before this one. With --readme the section replaces
 the one in that file, up to the next `## ` heading, and nothing is printed.
+Exit 0; 2 with this text on stdout when SERIES_DIR is missing (or the first argument is an
+option); an option without its value, or a README with no such section, stops on a Python
+exception (status 1).
 Standard library only; read-only over SERIES_DIR.
 """
 import os, re, statistics, sys

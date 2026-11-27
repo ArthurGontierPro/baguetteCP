@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """opb2graph.py IN.opb[.gz] OUT.dimacs -- a pseudo-Boolean formula as a coloured graph for dejavu,
 whose automorphisms are the literal permutations that map the formula onto itself (the witnesses the
-dominance rule of VeriPB can use). notes/dejavu-plan.md.
+dominance rule of VeriPB can use). It started as a prototype in the codes-cp repository (another
+repository; its notes/dejavu-plan.md is the plan) and came here with M15-symmetry-T2.
 
 - Each variable x has two literal vertices, x and ~x (colour 0), joined by an edge. An automorphism
   may swap them, which is a negation symmetry and a valid witness.
@@ -16,12 +17,14 @@ dominance rule of VeriPB can use). notes/dejavu-plan.md.
   above, signs kept) to its literals, so that every automorphism keeps the objective. A `<=` row is
   turned into `>=`, and anything that is not a list of "coefficient literal" pairs is refused
   (non-linear terms, for instance). These two traps and the objective were found by a session that
-  looked for counterexamples ($WORK/dvcex/README.md).
+  looked for counterexamples (codes-cp's $WORK/dvcex/README.md).
 Known losses, not fixed here: two equivalent constraints written differently (2y1+2y2+2y3 >= 4 and
 y1+y2+y3 >= 2, or a coefficient above the degree) get different colours, since nothing divides by
 the gcd or saturates; and values of an order-encoded integer are only seen up to reversal.
 Also writes OUT.map: one line per literal vertex, "vertex literal" (vertex numbers as in the DIMACS
 file, 1-based), so that the generators of dejavu (0-based, `--gens-file`) can be read back.
+Exit 0 once both files are written; a line it cannot parse, or a non-linear term, stops it with
+the line quoted and status 1 (a missing argument also gives 1, on a Python exception).
 """
 import sys, gzip, re, collections
 inp, outp = sys.argv[1], sys.argv[2]

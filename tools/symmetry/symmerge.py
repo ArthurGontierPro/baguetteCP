@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """symmerge.py CHAIN.json ORIG.opb BROKEN.opb BROKEN.pbp MERGED.pbp [--bad-witness K | --bad-cut K]
--- baguette's proof of the BROKEN model turned into a proof about the ORIGINAL one
-(M15-symmetry-T2, D-0179).
+                   [--as-rup K | --unit-probe K] [--rule auto|red|dom|transversal]
+-- baguette's proof of the BROKEN model turned into a proof about the ORIGINAL one. Written for
+M15-symmetry-T2, the pipeline beside baguette (D-0179: cuts proved by `red` with a swap, `dom`
+where the group has none).
 
 CHAIN.json is symchain.py's, BROKEN.opb/.pbp baguette's run on symchain's OUT.fzn, ORIG.opb
 baguette's .opb of the model without breaking. The merged proof is checked by VeriPB against
@@ -15,13 +17,25 @@ label for label, row for row, plus one row per cut and nothing else, and each ex
 its cut's clause. symmerge refuses anything else. The merged proof is BROKEN.pbp with its `f`
 line counting ORIG.opb's rows, and, right after it, one line per cut, in chain order:
 
-  @cK red <the row of @cK> : <witness> ;
+  @cK red <the row of @cK> : <witness> ;      or      @cK dom <the row of @cK> : <witness> ;
 
-The witness is w_b^-1, the inverse of the cut's word in its level's generators, so it sends b to
-c. No order is loaded. Why the line holds (D-0177 §4): under the negated cut (c false, b true) the
-image of the cut contains ~c, which holds; the witness is an automorphism of ORIG.opb, so the
-model's rows map onto rows; and the earlier cuts must map onto constraints that follow by unit
-propagation, which VeriPB checks rather than this script. baguette's proof then follows unchanged.
+The rule and its witness, by --rule (default auto):
+  auto          a cut with a `swap` (symchain.py's step 3) is `red` with the element h o u of
+                G_{i-1} that SWAPS c and b (checked here); a cut without one is `dom` with the
+                word w_b itself, under the lex order of the points' negations: codes-cp's order
+                definition (def_order below), loaded by `load_order` before the cuts and
+                unloaded after them. No order is loaded when no cut is `dom`.
+  red           the swap where there is one, the transversal witness below otherwise.
+  dom           every cut by `dom`.
+  transversal   every cut by `red` with w_b^-1, the inverse of the cut's word in its level's
+                generators, which sends b to c (the witness of D-0177, the first study, with
+                dejavu as distributed and satsuma's Schreier cuts; D-0179 section 2 measured it
+                refused on the second cut of a level, on php_unsat).
+
+Why a `red` line with w_b^-1 holds (D-0177 §4): under the negated cut (c false, b true) the image of
+the cut contains ~c, which holds; the witness is an automorphism of ORIG.opb, so the model's rows
+map onto rows; and the earlier cuts must map onto constraints that follow by unit propagation, which
+VeriPB checks rather than this script. baguette's proof then follows unchanged.
 
 Mutation controls (negative tests, each on one cut K, 0-based in chain order):
   --bad-witness K   the witness of cut K becomes the transposition of c and b alone, which is
@@ -34,7 +48,8 @@ Mutation controls (negative tests, each on one cut K, 0-based in chain order):
                     before c at 0 the parity rows propagate every coordinate to 0, against
                     sum x >= 1, so the dominance goal closes by propagation.)
 VeriPB must refuse both at the mutated line, which symmerge prints (`line N`).
-  --as-rup K        the PROBE that makes a control meaningful (D-0181): cut K written as a bare
+  --as-rup K        the PROBE that makes a control meaningful (D-0181, the record of what VeriPB
+                    accepts mid-proof): cut K written as a bare
                     `rup` line. If VeriPB accepts it, cut K is implied by the lines before it, so
                     any witness or any weaker mutation of it would be accepted too, and a control
                     on it tests nothing (measured: under `--order search` on php_escape_sat every
@@ -48,6 +63,12 @@ VeriPB must refuse both at the mutated line, which symmerge prints (`line N`).
 A point may be a NEGATIVE literal (`symchain.py --order search` under a min value choice, D-0181):
 its cuts are ~x_c v x_b, the witnesses are the same permutations, and the `dom` order is the lex
 order of the points' negations, so the preferred value comes first either way.
+
+Prints one summary line (cuts by rule, the largest witness, the mutated line if any). Exit 0 once
+MERGED.pbp is written; 1 with a `symmerge: ...` message when BROKEN.opb is not ORIG.opb plus one
+row per cut or --bad-cut names a level-0 cut, and on a failed internal check (an AssertionError:
+a word that does not send c to b, a swap that does not swap, a proof without its header); 2
+(argparse) on a usage error.
 """
 import argparse, json, re, sys, os
 

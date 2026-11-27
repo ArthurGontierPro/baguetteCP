@@ -1,13 +1,20 @@
 #!/usr/bin/env python3
-"""M7-T26. The benchmark set of each MiniZinc Challenge edition, as an instance list.
+"""The benchmark set of each MiniZinc Challenge edition, as an instance list (M7-T26, the
+task that made the Challenge editions baguette's benchmark sets).
 
     challenge_lists.py <archive> <out-dir> [YEAR ...]        default: 2011..2026
 
-<archive> is the downloaded ~/mznc-archive (README there): `results/<YEAR>.json`, the
+<archive> is the downloaded Challenge archive, /scratch/arthur/mznc-archive on the node
+(~/mznc-archive on the laptop; README there): `results/<YEAR>.json`, the
 official results page's data, and `probs/mznc<YEAR>_probs.tar.gz`, the official problem
 set. The list is built from `results.json`'s `locations` -- the exact (model, data) of
 every one of the 100 instances, in `benchmarks` order -- and every path is checked
 against the tarball's members, so a row in the list is a file the run will find.
+
+Exit 0 when every edition asked for was written; 1 when one or more could not be listed
+whole (an error, or a count short of the edition's), whose list is then NOT written and
+whose errors are printed; 2 with this text on stderr when an argument is missing. Each
+written edition prints one summary line (instances, problems, kinds, notes).
 
 Output `<out-dir>/<YEAR>.lst`, TAB-separated, `#` comment lines first:
 

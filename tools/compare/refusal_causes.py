@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Why baguette refused each Challenge instance, from the run directories themselves.
 
-D-0121 counted 388 "width" refusals and 145 "heap" refusals. That split came from the
+It classifies each REFUSED run by what actually ended it, reading the whole stderr: the
+memory wall is in three places, and the objective's width is not one of them (D-0123, the
+record this script was written for). The first synthesis of the sixteen editions, D-0121,
+had counted 388 "width" refusals and 145 "heap" refusals. That split came from the
 `detail` column of results.tsv, which keeps the first 180 characters of stderr -- and the
-width WARNING is printed first, so any later death inherited the word "width". This script
-reads the whole stderr instead and classifies by what actually ended the run (D-0123):
+width WARNING is printed first, so any later death inherited the word "width". The causes:
 
   exit 5, "heap budget is exhausted"   the --max-heap-mb guard (M7-T8), split three ways
                                        by its own message:
@@ -18,6 +20,9 @@ Usage: python3 -I tools/compare/refusal_causes.py /scratch/arthur/m7t26 [--width
   <runs> holds one directory per edition (2011 .. 2026), each with results.tsv, log/, work/.
   --widths also sums the DECLARED widths of each refused model's `var lo..hi` lines, and says
   what share the objective is; it needs the work/*.fzn files, which only refused runs keep.
+Prints on stdout the causes by count, the three heap-budget families with the clauses minted at
+death, and with --widths the width table. Exit 0; with no <runs> argument it stops on a Python
+exception (status 1).
 Standard library only; read-only over the run directories.
 """
 import glob, os, re, sys

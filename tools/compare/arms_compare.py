@@ -1,22 +1,31 @@
 #!/usr/bin/env python3
-"""M10-search-strategy-T5 / M9-no-proof-T3: several ARMS of one Challenge series, side by side.
+"""Several ARMS of one Challenge series, side by side: per-edition counts, then pairwise readings.
 
-An arm is a directory holding one compare_run.sh output per edition (<arm>/<YEAR>/results.tsv,
-log/<id>.baguette.{err,rss}), all arms over the same instance lists and the same .fzn files. The
-arm wrappers of D-0185 run the solver under a small RSS recorder that writes `rss_kb=N` to
-<proof base>.rss, and pass `--stats`, so the node count is on stderr.
+Written for M10-search-strategy-T5 (the measurement that chose the search defaults) and
+M9-no-proof-T3 (the measurement of runs without proof logging).
 
-    arms_compare.py <repo> NAME=DIR[@SOLVER] [NAME=DIR[@SOLVER] ...] [--pair X Y ...] [--trust NAME] [--tsv OUT]
+    arms_compare.py <repo> NAME=DIR[@SOLVER] [NAME=DIR[@SOLVER] ...]
+                    [--pair X Y ...] [--trust NAME] [--tsv OUT]
+
+<repo> is a baguette checkout: its bench/challenge/<YEAR>.lst give each instance its family.
+An arm is a directory holding one scripts/compare_run.sh output per edition
+(<arm>/<YEAR>/results.tsv, log/<id>.baguette.{err,rss}), all arms over the same instance lists
+and the same .fzn files. The arm wrappers of D-0185 (the sixteen editions run in three arms of
+one binary) and their successor bench/series/solver_wrap.sh run the solver under a small RSS
+recorder that writes `rss_kb=N` to <proof base>.rss, and pass `--stats`, so the node count is
+on stderr.
 
 An arm reads the rows of one solver of compare_run.sh, `baguette` unless `@SOLVER` names another
-(`@gcs`, `@chuffed`: M17-bench-series-T4, D-0211), its logs being log/<id>.<SOLVER>.{err,rss}. A
-GCS arm's complete answers count only VERIFIED, as baguette's; a Chuffed arm has no proof, so it
-must be named by --trust.
+(`@gcs`, `@chuffed`: the proof-logging and speed references added by M17-bench-series-T4,
+D-0211, which ranks them verified answer for verified answer), its logs being
+log/<id>.<SOLVER>.{err,rss}. A GCS arm's complete answers count only VERIFIED, as baguette's;
+a Chuffed arm has no proof, so it must be named by --trust.
 
 Prints, for each arm, per edition and in total: complete answers (OPT/UNSAT), how many of them
 are VERIFIED, satisfaction problems solved (SAT on a model without an objective), incumbents (an
-objective VALUE present -- D-0125's addendum: `min:-` is not one), and the statuses. Then, for
-each --pair X Y (Y read against X):
+objective VALUE present; `min:-` is not one, by the addendum of D-0125, the re-run of the
+sixteen editions that first counted incumbents), and the statuses. Then, for each --pair X Y
+(Y read against X):
 
   * the status transitions X -> Y;
   * complete in one arm only, and incumbent in one arm only (id, family, both statuses);
@@ -30,8 +39,12 @@ each --pair X Y (Y read against X):
 In the pairwise reading a complete answer counts only when VERIFIED (an unverified one falls back
 to its incumbent, as challenge_rank.py demotes it), except in an arm named by --trust: an arm run
 with --no-proof has no proof, so its complete answers are trusted, UNVERIFIED, and the caller must
-say so. The per-arm table counts every OPT/UNSAT and, beside it, the VERIFIED ones. Standard library
-only; read-only over the run directories.
+say so. The per-arm table counts every OPT/UNSAT and, beside it, the VERIFIED ones.
+
+--tsv OUT also writes one row per instance and pair (both statuses, objectives, wall times,
+nodes, peak RSS and Y's verdict). Exit 0 once the tables are printed; with no arm, or -h, it
+prints this text and exits 0; a malformed argument stops on a Python exception (status 1).
+Standard library only; read-only over the run directories.
 """
 import os, re, statistics, sys
 from collections import Counter, defaultdict

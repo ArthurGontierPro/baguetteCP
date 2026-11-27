@@ -1,19 +1,21 @@
 #!/usr/bin/env bash
-# One instance through the end-to-end chain, every stage timed and its peak RSS taken
-# (M14-e2e-verification-T8, D-0182): the first measurement of cake_pb_cp on baguette's
-# SEARCH proofs, against `veripb` alone on baguette's own files.
+# One instance through the end-to-end chain, every stage timed and its peak RSS taken: the
+# first measurement of cake_pb_cp on baguette's SEARCH proofs, against `veripb` alone on
+# baguette's own files (M14-e2e-verification-T8, recorded as D-0182).
 #
 #   fzn2scp.py -> cake_pb_cp (encode) -> baguette --proof -> veripb (alone, the baseline)
 #   -> bridge.py -> veripb --elaborate -> cake_pb_cp (check)
 #
 # Usage: tools/e2e/measure.sh MODEL.fzn OUTDIR
-# Env:   CAKE_PB_CP (required), BAGUETTE (use the release binary, D-0171), VERIPB (else
-#        scripts/checker.sh), SOLVE_TIMEOUT (s, default 300), CHECK_TIMEOUT (s, per checking
-#        stage, default 7200), KEEP=1 to keep the proofs (default: deleted once measured,
-#        their sizes recorded), CAKE_HEAP (MB, default 24576: cake_pb_cp's CakeML heap,
-#        whose default of 4 GB a long proof can exhaust; passed as --CML_HEAP_SIZE to both
-#        of its runs, and it is reserved as virtual memory, so the RSS column is what it
-#        touched).
+# Env:   CAKE_PB_CP (required), BAGUETTE (default the release binary,
+#        _build_release/default/bin/main.exe, which `make release` builds and this script
+#        does not; D-0171 made it the measured binary: the same output as the dev build, 5 to
+#        17 % fewer instructions per node), VERIPB (else scripts/checker.sh), SOLVE_TIMEOUT
+#        (s, default 300), CHECK_TIMEOUT (s, per checking stage, default 7200), KEEP=1 to
+#        keep the proofs (default: deleted once measured, their sizes recorded), CAKE_HEAP
+#        (MB, default 24576: cake_pb_cp's CakeML heap, whose default of 4 GB a long proof can
+#        exhaust; passed as --CML_HEAP_SIZE to both of its runs, and it is reserved as
+#        virtual memory, so the RSS column is what it touched).
 #
 # Prints ONE tab-separated line:
 #   id answer verdict  t_tr rss_tr  t_enc rss_enc  t_solve rss_solve  t_veripb rss_veripb
@@ -23,7 +25,9 @@
 # first stage that did not end as it should (SKIPPED, SOLVE-TIMEOUT, VERIPB-REFUSED,
 # BRIDGE-FAIL, ELAB-REFUSED, CAKE-REFUSED, CAKE-DISAGREES, ...). Each stage runs under
 # `systemd-run --user --scope -p MemoryMax=32G` when it exists; the script's PID is in
-# OUTDIR/<id>.pid while it runs (clean up by that file, never by name).
+# OUTDIR/<id>.pid while it runs (clean up by that file, never by name). Exit 0 once that line
+# is printed, whatever the verdict; 1 when no checker is found (`no checker`) or when an
+# argument or CAKE_PB_CP is missing.
 set -u
 HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/../.." && pwd)
