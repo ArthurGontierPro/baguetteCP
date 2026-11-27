@@ -1317,7 +1317,7 @@ let compile (m : Model.t) : t =
       if List.length vars_in_scope < 2 then []
       else
         let names = List.map (name_of pos) vars_in_scope in
-        List.iter (Encoding.request_direct encoding) names;
+        List.iter (Encoding.request_direct ~where:(Pos.to_string pos) encoding) names;
         let rows = Encoding.add_all_different encoding names in
         let p = Alldiff.make store encoding ~rows (List.map Var.of_int vars_in_scope) in
         [
@@ -1762,7 +1762,7 @@ let compile (m : Model.t) : t =
       if List.length set < 2 || List.length set <> List.length is || posted then []
       else
         let names = List.map (name_of pos) is in
-        List.iter (Encoding.request_direct encoding) names;
+        List.iter (Encoding.request_direct ~where:(Pos.to_string pos) encoding) names;
         let decl i =
           let d = Store.get store (Var.of_int i) in
           (Domain.lo d, Domain.hi d)
@@ -2325,7 +2325,7 @@ let compile (m : Model.t) : t =
           | Model.Const c -> View.const c
           | Model.Var j -> View.of_var (Var.of_int j)
         in
-        Encoding.request_direct encoding iname;
+        Encoding.request_direct ~where:(Pos.to_string pos) encoding iname;
         let rows =
           Element.post_rows encoding ~index_name:iname
             ~imap:(Option.get (View.map_of index))

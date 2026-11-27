@@ -1401,6 +1401,187 @@ let out_of_memory_message () =
     (mb_of_words (heap_words ()))
     encoding budget
 
+(* ---------------------------------------------------------------------------
+   THE ESTIMATE BEFORE THE ALLOCATION (M22-review-bugs, D-0263)
+   ---------------------------------------------------------------------------
+
+   The two guards above see the heap as it IS. Neither sees what a declaration is about to
+   cost, and on a wide model the cost arrives in one structure, too fast for the reactive
+   guard and too large for any budget: the fuzz lane's `wide` stream (D-0258) found 109 of
+   2 000 default runs killed by the runtime's `Fatal error: allocation failure` under
+   `ulimit -v 4000000`, an all_different over two variables of widths 2^21 and 2^24
+   among them. So the two structures that are PROPORTIONAL TO A DECLARED WIDTH, and that
+   the front end can size before it allocates them, are reserved first:
+
+   - a DIRECT encoding ([request_direct]: all_different, element's index, inverse): the
+     value's three channelling lines, its three table entries, and the live proof ids;
+   - the CASE SPLIT of int_times and int_div (lib/flatzinc/arith_aux.ml, in the parse,
+     before its ladder of Booleans is created): per value of the case variable, one
+     Boolean (model, store and encoding), its two definition rows and their instance,
+     and up to four guarded rows with theirs.
+
+   THE RULE. [reserve] adds a LOWER bound of the item's live heap to a running total, and
+   refuses (raises [Will_not_fit], exit 5) when the total exceeds the memory this run can
+   have ([available]). The coefficients are measured live words (after a full major
+   collection) per unit, D-0263 section 2, and TAKEN BELOW the smallest measured shape:
+
+     direct value, proof written      61 to 65 words measured   45 reserved
+     direct value, --no-proof         13 to 16                  10
+     case of int_times / int_div     411 to 775 (both modes)   300
+
+   so the total is below what the run will hold live. A run refused here is one whose live
+   heap would have passed [available]: the budget's alarm would have refused it later, or,
+   without a budget, the address space would have run out. NO RUN THAT COULD FINISH IS
+   REFUSED, and that is why this is on by default, where M7-T8's budgets are not (D-0065:
+   a figure a machine chose is not a property of the solver). [available] is not a figure
+   this solver chooses; it is the smallest of what the run was GIVEN: --max-heap-mb when
+   set, the address space (`ulimit -v`, RLIMIT_AS), and the machine's memory plus swap. A
+   process cannot hold a heap larger than any of the three.
+
+   WHAT IT DOES NOT SEE, and does not claim to: every other structure (the rows, the
+   propagators, the trail, the search), which is why it is a lower bound; a row over an
+   order-encoded variable, whose text is width-proportional but streamed to disk; and the
+   coefficients drifting below a future representation's cost, which test_compile.ml's
+   [test_d0263_estimate_is_a_lower_bound] checks by measuring the live words of both
+   items again. The total is process-wide and never reset: the binary reads one model,
+   and a test binary's small models add a few thousand words each. *)
+
+let words_per_direct_value ~proof = if proof then 45 else 10
+let words_per_arith_case = 300
+let reserved_words = ref 0
+
+type fit = {
+  f_what : string; (* the variable, as the model names it *)
+  f_why : string; (* "a direct encoding (all_different, element or inverse)" ... *)
+  f_where : string; (* a source position, or "" *)
+  f_lo : int;
+  f_hi : int;
+  f_units : int;
+  f_per_unit : int; (* words *)
+  f_total : int; (* words reserved, this item included *)
+  f_avail : int; (* bytes *)
+  f_from : string; (* where [f_avail] comes from *)
+}
+
+exception Will_not_fit of fit
+
+(* The soft RLIMIT_AS, from /proc/self/limits ("Max address space  <soft> <hard> bytes"),
+   and MemTotal + SwapTotal from /proc/meminfo, in bytes. Read once: neither changes under
+   a running process. A system without /proc (the laptop's macOS) has neither, and then
+   only --max-heap-mb bounds the estimate. *)
+let read_lines path =
+  match open_in path with
+  | exception Sys_error _ -> []
+  | ic ->
+      let rec go acc =
+        match input_line ic with
+        | l -> go (l :: acc)
+        | exception End_of_file ->
+            close_in ic;
+            List.rev acc
+      in
+      go []
+
+let words_of line = List.filter (fun w -> w <> "") (String.split_on_char ' ' line)
+
+let address_space () =
+  List.find_map
+    (fun l ->
+      if String.starts_with ~prefix:"Max address space" l then
+        match words_of l with
+        | _ :: _ :: _ :: soft :: _ -> int_of_string_opt soft
+        | _ -> None
+      else None)
+    (read_lines "/proc/self/limits")
+
+let machine_memory () =
+  let kb key =
+    List.find_map
+      (fun l ->
+        if String.starts_with ~prefix:(key ^ ":") l then
+          match words_of l with _ :: n :: _ -> int_of_string_opt n | _ -> None
+        else None)
+      (read_lines "/proc/meminfo")
+  in
+  match (kb "MemTotal", kb "SwapTotal") with
+  | Some m, s -> Some ((m + Option.value s ~default:0) * 1024)
+  | None, _ -> None
+
+let given = lazy (address_space (), machine_memory ())
+
+(* The smallest of what the run was given, in bytes, and its name. *)
+let available () =
+  let as_, mem = Lazy.force given in
+  let cands =
+    List.filter_map Fun.id
+      [
+        Option.map
+          (fun mb ->
+            (mb * 1024 * 1024, Printf.sprintf "the --max-heap-mb budget of %d MB" mb))
+          !heap_limit_mb;
+        Option.map
+          (fun b ->
+            ( b,
+              Printf.sprintf "this process's address space (ulimit -v), %d MB"
+                (b / 1048576) ))
+          as_;
+        Option.map
+          (fun b ->
+            (b, Printf.sprintf "this machine's memory and swap, %d MB" (b / 1048576)))
+          mem;
+      ]
+  in
+  List.fold_left
+    (fun acc (b, n) ->
+      match acc with Some (b', _) when b' <= b -> acc | _ -> Some (b, n))
+    None cands
+
+let reserve ~what ~why ?(where = "") ~lo ~hi ~units ~per_unit () =
+  (* Saturating: a width near 2^62 times 300 words is "more than any machine", not a
+     negative number. *)
+  let words = if units > max_int / per_unit then max_int else units * per_unit in
+  reserved_words :=
+    if words > max_int - !reserved_words then max_int else !reserved_words + words;
+  match available () with
+  | Some (bytes, from) when !reserved_words > bytes / word_bytes ->
+      raise
+        (Will_not_fit
+           {
+             f_what = what;
+             f_why = why;
+             f_where = where;
+             f_lo = lo;
+             f_hi = hi;
+             f_units = units;
+             f_per_unit = per_unit;
+             f_total = !reserved_words;
+             f_avail = bytes;
+             f_from = from;
+           })
+  | _ -> ()
+
+let fit_message f =
+  let mb w =
+    if w > max_int / word_bytes then max_int / 1048576 else w * word_bytes / 1048576
+  in
+  Printf.sprintf
+    "baguette: this model's encoding cannot fit in the memory this run has, and it is \
+     refused before it is allocated (D-0263).\n\
+    \  `%s`%s, declared over %d..%d, needs %s: %d values at %d words each at least, %d MB.\n\
+    \  With what was reserved before it, the encoding needs at least %d MB, past %s.\n\
+    \  The estimate is a LOWER bound of the live heap (D-0263 measured each figure; the \
+     run would hold more),\n\
+    \  so this run could not have finished: without the refusal it ends in the OCaml \
+     runtime's\n\
+    \  `Fatal error: allocation failure`. Narrow the declared domain, or give the run \
+     more memory.\n"
+    f.f_what
+    (if f.f_where = "" then "" else " (" ^ f.f_where ^ ")")
+    f.f_lo f.f_hi f.f_why f.f_units f.f_per_unit
+    (mb
+       (if f.f_units > max_int / f.f_per_unit then max_int else f.f_units * f.f_per_unit))
+    (mb f.f_total) f.f_from
+
 (* The two budgets of the resource guard (M7-T8) join the four settings above, through
    the SAME entry point rather than a second
    one bin/main.ml would have to remember to call. A budget nobody reads is a budget
@@ -2130,10 +2311,21 @@ let bound_lines t w x =
    [--max-direct-values] when that limit was asked for (off by default since M7-T1);
    a propagator that needs a direct encoding on a domain that wide is a design problem,
    not a budget problem. *)
-let request_direct t x =
+let request_direct ?where t x =
   let v = find t x in
   let size = v.hi - v.lo + 1 in
   check_direct_size x size;
+  (* D-0263: reserved at the first request, before [start_proof] materialises it. *)
+  if not (Names.mem t.direct_wanted x) then
+    reserve ~what:x ~why:"a direct encoding (all_different, element or inverse)" ?where
+      ~lo:v.lo ~hi:v.hi ~units:size
+      ~per_unit:
+        (words_per_direct_value
+           ~proof:
+             (match t.sink with
+             | Discard -> false
+             | Retain _ | Stream _ | Written -> true))
+      ();
   Names.replace t.direct_wanted x ()
 
 (* The requested variables, in declaration order (read off [vars]), so that the .pbp

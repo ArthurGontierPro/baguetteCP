@@ -450,7 +450,13 @@ let usage () =
   prerr_endline "                    2 usage or bad model,";
   prerr_endline "                    3 unsupported model, 4 internal invariant failure,";
   prerr_endline "                    5 a resource budget above was exhausted (0 when the";
-  prerr_endline "                    search had printed a solution: a stopped run),";
+  prerr_endline "                    search had printed a solution: a stopped run), or";
+  prerr_endline "                    the encoding cannot fit: a LOWER bound of its heap,";
+  prerr_endline "                    reserved before a direct encoding or a case split";
+  prerr_endline "                    is allocated, passes the memory the run has (the";
+  prerr_endline
+    "                    budget, ulimit -v, memory+swap; D-0263, on by default";
+  prerr_endline "                    since it refuses only a run that could not finish),";
   prerr_endline "                    6 a file could not be written (the proof's directory";
   prerr_endline
     "                    is missing, the disk is full): the proof is incomplete.";
@@ -1871,6 +1877,13 @@ let exit_time_limit opts ~proof_ended =
   flush stderr;
   exit exit_ok
 
+(* Exit 5, the estimate before the allocation (D-0263, [Encoding.reserve]): refused in the
+   parse or the compile, before the .opb is opened, so there is no partial proof. *)
+let exit_will_not_fit f =
+  prerr_string (Encoding.fit_message f);
+  flush stderr;
+  exit exit_resource
+
 (* The `limit:` line of a stopped run (M6-T9: a --time-limit that stops cleanly and
    reports stats and incumbent). One line, always (not gated on --stats), so that a
    results file built from stderr alone can say what a stopped run was doing.
@@ -2441,6 +2454,7 @@ let () =
       flush stderr;
       exit exit_resource
   | exception Deadline.Reached -> exit_time_limit opts ~proof_ended:false
+  | exception Encoding.Will_not_fit f -> exit_will_not_fit f
   | Error e ->
       prerr_endline (Fz_error.to_string e);
       exit exit_usage
@@ -2449,6 +2463,7 @@ let () =
       match Fz_error.catch (fun () -> solve opts m) with
       | Ok () -> exit exit_ok
       | exception Deadline.Reached -> exit_time_limit opts ~proof_ended:!deadline_ended
+      | exception Encoding.Will_not_fit f -> exit_will_not_fit f
       | exception (Sys_error msg | Fun.Finally_raised (Sys_error msg)) ->
           exit_write_failed opts msg
       | Error e ->
