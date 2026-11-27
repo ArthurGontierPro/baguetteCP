@@ -1,7 +1,20 @@
 (* array_int_maximum(m, [x_1..x_n]) and array_int_minimum(m, [x_1..x_n]): the
-   DISJUNCTIVE half of m = max_i x_i (resp. min), as one propagator. M4-T9, D-0095.
-   Governed by docs/SPEC.md 3.2 (consistency) and 3.3 (explanations), and by
-   docs/PROOF-FORMAT.md section 4's `array_int_maximum` row.
+   DISJUNCTIVE half of m = max_i x_i (resp. min), as one propagator; `int_max` and
+   `int_min` are the two-operand case.
+
+   Consistency level: BOUNDS ([consistency] below), for the constraint this instance is,
+   `m <= max_i x_i` (section "Consistency level" below). Governed by docs/SPEC.md 3.2
+   (consistency levels) and 3.3 (explanations), and by docs/PROOF-FORMAT.md section 4's
+   `array_int_maximum` row. Proof shape: every pruning is justified by ONE clause C_v,
+   the disjunction at one threshold v, either restated from its posted row (`rup`) or
+   derived in one `pol` from the operand's selector rows over the bits encoding. The
+   family is [Single_row] in the I-X10 classification table of test/unit/test_trace.ml
+   (a pruning that follows from one model constraint, whose trace line is RUP with
+   nothing derived ahead of it).
+
+   The records: D-0095 (task M4-T9) built this propagator over one clause row per
+   threshold; D-0134 (M8-bits-encoding-T3) added the selector shape for a scope with a
+   bits variable.
 
    ---------------------------------------------------------------------------
    The split: m = max x is TWO constraints, and only one of them is this module
@@ -12,7 +25,8 @@
    The CONJUNCTIVE half is n ordinary linear rows `x_i - m <= 0`, and
    lib/flatzinc/compile.ml posts them as exactly that: n [Linear] instances over n
    `int_lin_le` rows of the .opb. Those rows ARE the model rows, and they carry two of
-   the four bounds rules with [Linear]'s own pol justification (D-0013) and nothing new:
+   the four bounds rules with [Linear]'s own pol justification (weaken, add, divide,
+   D-0013) and nothing new:
 
      (R1)  lo(m)   >= lo(x_i)      -- row i, read from x_i's lower bound
      (R2)  hi(x_i) <= hi(m)        -- row i, read from m's upper bound
@@ -47,12 +61,13 @@
    is refuted by it at the root.
 
    That is the PER-VALUE shape, and it is what every scope with no bits variable posts,
-   byte for byte as before. Over a bits variable it cannot be posted at all: the order
-   atoms of a bits variable do not exist when the .opb is closed (D-0130 section 3.4),
+   byte for byte as before. Over a bits variable (one encoded by its binary digits
+   above a width threshold, D-0130) it cannot be posted at all: the order atoms of a bits
+   variable do not exist when the .opb is closed (D-0130 section 3.4),
    and Theta(w) rows of them would be the ladder the bits encoding exists to avoid.
 
    ---------------------------------------------------------------------------
-   The SELECTOR shape: a scope with a bits variable (M8-bits-encoding-T3, D-0134)
+   The SELECTOR shape: a scope with a bits variable (D-0134)
    ---------------------------------------------------------------------------
 
    D-0095 rejected one selector per position (b_i -> m <= x_i, big-M, plus one clause
@@ -94,8 +109,9 @@
    Selector: the explanation at v is a [Deferred] [Resolve] built on first demand and
    cached per v (the threshold range is Theta(w) on bits, so nothing is built per value
    in [make]). It derives exactly the same C_v, which is why the reason half below is
-   one code path for both shapes (D-0026's split: the facts are the propagator's, the
-   justification the shape's). The [Linear_term] of the CLAIM variable carries the
+   one code path for both shapes (D-0026's split between reasons as declarative facts and
+   justifications as cutting planes: the facts are the propagator's, the justification
+   the shape's). The [Linear_term] of the CLAIM variable carries the
    negation of the claim as the bound it assumed -- R3's m >= H + 1, R4's x_j <= L - 1
    -- so the derived clause is the trace clause with the claim among its literals and
    lib/core/justify.ml's [emit_bits_pruning] pins it by `ia` with no atom added.
@@ -126,17 +142,18 @@
    the x attaining H; lo(x_j) by m = lo(m) exactly when another x can reach lo(m), and
    R4 is precisely the case where none can; every other bound is supported by setting
    the x that attains H to H. Engine fixpoint with R1/R2 gives the textbook bounds
-   rules for max. It never reads or punches an interior hole (the [Domain] settle is
-   [Store]'s, I-X9).
+   rules for max. It never reads or punches an interior hole (the settle of a bound past
+   holes is [Store]'s, and I-X9 makes the explanation cover the bound as recorded).
 
    ---------------------------------------------------------------------------
-   minimum: the SAME propagator over negated views (D-0058)
+   minimum: the SAME propagator over negated views
    ---------------------------------------------------------------------------
 
        m = min_i x_i   <=>   -m = max_i (-x_i)
 
-   [make ~dir:Min] negates every view at construction and from then on there is one
-   code path. A negated view's `>= v` literal IS the base's `<= -v` literal
+   A view (+-x + k) is a rendering onto its base's order literals, with no PB variable of
+   its own (D-0058). [make ~dir:Min] negates every view at construction and from then on
+   there is one code path. A negated view's `>= v` literal IS the base's `<= -v` literal
    ([Lit.view_ge]), so the rows posted for a minimum are C_v in the mirror
    (`~[m <= -v] \/ [x_1 <= -v] \/ ...`) with no second encoding, and its facts are the
    base's upper bounds where a maximum's are lower ones. A constant operand is a
@@ -159,7 +176,7 @@ type slot = {
   bdhi : int;
 }
 
-(* M8-bits-encoding-T3 (D-0134): the selector shape's proof-side state. The ids are
+(* The selector shape's proof-side state (D-0134). The ids are
    attached by lib/flatzinc/compile.ml once it has posted [selector_rows] (they do not
    exist when [make] runs); [cache] holds the [Resolve] of each threshold already asked
    for, so prunings at the same v share one physical explanation, as the per-value

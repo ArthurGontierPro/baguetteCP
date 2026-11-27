@@ -1,9 +1,19 @@
-(* circuit(succ): the successors succ_u of the nodes root, root + 1, ..., root + n - 1 form
-   ONE cycle through every node. Reaches the solver as `baguette_circuit(succ, pos, root)`
-   through mznlib/fzn_circuit.mzn, which also posts all_different(succ) (lib/core/prop/
-   alldiff.ml, its own instance) and the domain restrictions succ_u in S, succ_u <> u.
-   docs/DECISIONS.md D-0217 is this module's record (M18-coverage-T3). Governed by
-   docs/SPEC.md 3.2 (consistency) and 3.3 (explanations).
+(* circuit(succ): the successors succ_u of the nodes root, root + 1, ..., root + n - 1
+   form ONE cycle through every node. Reaches the solver as
+   `baguette_circuit(succ, pos, root)` through mznlib/fzn_circuit.mzn, which also posts
+   all_different(succ) (lib/core/prop/alldiff.ml, its own instance) and the domain
+   restrictions succ_u in S, succ_u <> u.
+
+   Consistency level: CHECKING ([consistency] below), plus Chuffed's subtour `prevent`
+   rule. Governed by docs/SPEC.md 3.2 (consistency levels) and 3.3 (explanations). Proof
+   shape: a position pinned along a fixed arc is one `rup` against one MTZ row, and a
+   subtour cut is ONE `pol` written ahead of its trace line. The cut sums several rows, so
+   the family is [Needs_derivation] in the I-X10 classification table of
+   test/unit/test_trace.ml (a pruning that rests on several model constraints and must
+   put its cutting-planes derivation on the page before its trace line).
+
+   docs/DECISIONS.md D-0217 is this module's record: circuit as a native propagator over
+   Miller-Tucker-Zemlin position variables, built by M18-coverage-T3.
 
    ---------------------------------------------------------------------------
    The .opb rows: Miller-Tucker-Zemlin positions, the DEFINITION of the constraint
@@ -37,7 +47,8 @@
    LE(c_(k-2), c_(k-1)) and END(c_(k-1)) sum to `n * sum(guards) >= n - k`. Every position
    cancels (the two rows of a node expand it identically). Divided by n, either is
    `sum(guards) >= 1`: some arc of C is not taken. [cut] builds it as one [Combine] of
-   [Model_row] terms with divisor n (D-0013); no new constructor. Its literals are the
+   [Model_row] terms with divisor n, the "add the rows, then divide" shape D-0013 set for
+   a linear pruning; no new constructor. Its literals are the
    NEGATED bound facts of the fixed arcs plus the claim `succ_e <> s`, so for an interior
    value it is literally the pruning's trace clause, and for a bound value with no hole
    next to it too.
@@ -61,8 +72,9 @@
    refutes a violated one: that is [Checking]. P is the reasoning Chuffed's circuit runs
    without its SCC check; the matching's strength on succ is all_different's instance.
    When the whole circuit is fixed H fixes every position from the root, so the positions
-   need no search there. The advisor wakes the instance on a FIXED variable only: R ran at
-   the first call, and H and P read fixed arcs and pinned positions only (I-P7).
+   need no search there. The advisor wakes the instance on a FIXED variable only, because
+   R ran at the first call and H and P read fixed arcs and pinned positions only (I-P7: an
+   advisor may drop a wake only when a run then would change nothing).
 
    ---------------------------------------------------------------------------
    The proof
@@ -74,12 +86,13 @@
         premise's two. Only PINNED premises, on purpose: over bits, unit propagation turns
         `x >= c` and `x <= c` into every bit of x (top bit down, one of the two forces
         it) and `x >= c`, `x <= c - 1` into a conflict, so the line is RUP; a premise that
-        is only a bound is not RUP over bits in general. [Single_row] under I-X10.
+        is only a bound is not RUP over bits in general. This part alone would be
+        [Single_row].
      P  the facts are the chain's arcs (two bound facts each), the derivation the cut over
         the chain plus e -> s, made under [Store.deriving_ahead]: Trace writes the `pol`
         ahead and `rup claim \/ ~facts` follows from it by unit propagation. A closed
-        short cycle is a conflict on its arcs with the same derivation ahead.
-        [Needs_derivation] under I-X10, as alldiff and gcc are.
+        short cycle is a conflict on its arcs with the same derivation ahead. This part
+        is what makes the family [Needs_derivation], as alldiff and gcc are.
 
    A value that would empty a position is reported as a conflict on the premise plus the
    facts excluding the value (its weakest bound or its hole's remover), never through

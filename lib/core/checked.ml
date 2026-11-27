@@ -12,7 +12,7 @@
    wrote.
 
    The instance that demonstrated it (test/unit/test_matrix.ml's overflow axis,
-   [overflow_compile_rejected], and the header of test_prop.ml's [overflow_cells]):
+   [overflow_compile_cell], and test_prop.ml's "M1-T23: overflow, and the cap" section):
 
        array [1..1] of int: c = [-2305843009213693952];    % -2^61
        var 3..4: x;

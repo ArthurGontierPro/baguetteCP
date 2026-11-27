@@ -1,10 +1,21 @@
 (* regular(x, Q, S, d, q0, F): the word x_0 .. x_(n-1) drives the DFA with states 1..Q,
    transition d (0 = fail) and start q0 to an accepting state in F. Reaches the solver as
    `baguette_regular(x, Q, smin, d, q0, F, s)` through mznlib/fzn_regular.mzn and
-   mznlib/fzn_regular_set.mzn; docs/DECISIONS.md D-0146 is this module's record (section 3
-   the design, section 4 the checker probes that settled it before a line of it existed),
-   and D-0151 section 1 that of its reasons on the letters.
-   Governed by docs/SPEC.md 3.2 (consistency) and 3.3 (explanations).
+   mznlib/fzn_regular_set.mzn.
+
+   Consistency level: DOMAIN ([consistency] below, Pesant's layered-graph filtering) over
+   the letters and the state flags, and CHECKING for the [Aliased] packing compile.ml
+   uses when a variable occurs twice in the word (section "Consistency level" below).
+   Governed by docs/SPEC.md 3.2 (consistency levels) and 3.3 (explanations). Proof
+   shape: every pruning is ONE `rup` against one row or root lemma of the automaton, with
+   the flags' own earlier trace lines on the page and nothing derived ahead, so the
+   family is [Single_row] in the I-X10 classification table of test/unit/test_trace.ml
+   (a pruning that follows from one model constraint, whose trace line is RUP with
+   nothing derived ahead of it).
+
+   The records: docs/DECISIONS.md D-0146 (section 3 the design, section 4 the checker
+   probes that settled it before a line of it existed), D-0151 section 1 for the reasons
+   on the letters, and D-0232 for the incremental call.
 
    ---------------------------------------------------------------------------
    The layered graph, and the STATE FLAGS that make it a store object
@@ -46,7 +57,8 @@
    the constraint: a letter value lies on a live edge, which lies on an accepting path;
    a flag's 1 is its state on such a path, and its 0 is another live state of its layer
    (or the flag is fixed). That is domain consistency over the joint scope, so the tag
-   is [Domain] and the M2-T10 oracle holds the module to it.
+   is [Domain] and the per-node consistency harness of M2-T10 (a brute-force oracle)
+   holds the module to it.
 
    It holds only while the layers are INDEPENDENT. A variable twice in the word couples
    two layers the graph treats separately, the filtering is no longer complete, and
@@ -70,9 +82,10 @@
          domain pushes x_i past R, from the declared bound upward, until x_i has no value.
      P2  s(i,q) dies BACKWARD. Assume it: FWD(i,q,R) with its successor dead (or no
          successor) pushes x_i past R, the same sweep.
-     P3  x_i <> v. Assume x_i = v: every FWD(i,q,R) with v in R kills s(i,q) (its successor
-         is dead) unless s(i,q) is already dead, and ALO_i is empty. At a bound the claim is
-         the settled bound, so the reason carries the bound fact that pins x_i to v.
+     P3  x_i <> v. Assume x_i = v: every FWD(i,q,R) with v in R kills s(i,q) (its
+         successor is dead) unless s(i,q) is already dead, and ALO_i is empty. At a bound
+         the claim is the settled bound, so the reason carries the bound fact that pins
+         x_i to v.
      P4  s(i,q) := 1: the rest of its layer is dead, ALO_i.
      P5  a flag fixed to 1 kills the rest of its layer: AMO_i. START and ACCEPT kill layer
          0 outside q0 and layer n outside F with no facts.
@@ -85,18 +98,20 @@
    The reasons are ON THE LETTERS (D-0151): no tail names a flag this instance moved
    ---------------------------------------------------------------------------
 
-   D-0146 put the dead flags themselves on the tails (`s <= 0`), and 1UIP learning then
-   cut on flags: a learned clause named states of a row, which only that row's propagator
-   can read back. The reasons now name only the WORD's bounds (and, for a hole, the facts
-   of its remover, and a flag only if something other than this instance fixed it: a
-   decision). The rule that makes that one `rup` per pruning, with no line added, is
-   RECURSION THROUGH THE FLAGS' OWN LINES: where D-0146 cited "s(i,q) <= 0", the reason
-   now cites the TAIL of the line that killed s(i,q) -- which is letter facts by the same
-   rule, one level down. Assume the new tail and the dead flag's line fires (its tail is
-   a subset), so the argument above goes through unchanged, against the same rows, the
-   same lemmas and the earlier trace lines. The tails are kept as the STRONGEST fact per
-   letter and direction (x >= 3 subsumes x >= 2 through the ladder), so a tail has at
-   most two facts per letter however deep the recursion goes.
+   The reasons name only the WORD's bounds (and, for a hole, the facts of its remover,
+   and a flag only if something other than this instance fixed it: a decision). The rule
+   that makes that one `rup` per pruning, with no line added, is RECURSION THROUGH THE
+   FLAGS' OWN LINES: where a reason would cite "s(i,q) <= 0", it cites the TAIL of the
+   line that killed s(i,q), which is letter facts by the same rule, one level down.
+   Assume the new tail and the dead flag's line fires (its tail is a subset), so the
+   argument above goes through unchanged, against the same rows, the same lemmas and the
+   earlier trace lines. The tails are kept as the STRONGEST fact per letter and direction
+   (x >= 3 subsumes x >= 2 through the ladder), so a tail has at most two facts per
+   letter however deep the recursion goes.
+
+   Why the letters: the first design (D-0146) put the dead flags themselves on the tails
+   (`s <= 0`), and 1UIP learning then cut on flags, so a learned clause named states of a
+   row, which only that row's propagator can read back.
 
    Which values cite what -- Pesant's layered graph explained the way Gange, Stuckey and
    Szymanek explain an MDD ("MDD propagators with explanation", Constraints 2011): an
@@ -109,8 +124,8 @@
          and above hi, or, inside [lo, hi], the hole's remover.
      P2  per value v: no successor -> nothing; the successor dead -> its tail; else v is
          out of the domain -> the weakest bound / the hole, as P1.
-     P3  per state q with d[q,v] = t > 0: s(i,q) dead or s(i+1,t) dead, whichever tail adds
-         fewer facts the reason does not already hold (the source on a tie); plus the
+     P3  per state q with d[q,v] = t > 0: s(i,q) dead or s(i+1,t) dead, whichever tail
+         adds fewer facts the reason does not already hold (the source on a tie); plus the
          letter's own bound fact when v is a bound.
      P4  the tails of the rest of the layer.  P5  the tail of the flag fixed to 1.
      Conflicts: the union of the tails the argument reads.
@@ -128,10 +143,10 @@
    never read through a stale tail, and is cited as itself.
 
    The justification is [Explanation.clause] of the claim and the negated facts, the
-   trace line itself, deferred. No new constructor, no [Store.deriving_ahead]: under
-   I-X10 this is a [Single_row] family in the sense test/unit/test_trace.ml's table gives
-   element.ml -- one constraint, several rows -- with the root lemmas and the flags' own
-   earlier trace lines being "lines already on the page", which is I-X10's own wording.
+   trace line itself, deferred. No new constructor, no [Store.deriving_ahead]: this is a
+   [Single_row] family in the sense test/unit/test_trace.ml's table gives element.ml (one
+   constraint, several rows), with the root lemmas and the flags' own earlier trace lines
+   being "lines already on the page", which is I-X10's own wording.
    A bound move is explained by the HOLE clause `x_i <> v`, which is RUP without the
    facts a settle adds; the trace line, which Trace builds from the entry, carries those.
 
@@ -170,8 +185,9 @@
 
 module Lit = Baguette_proof.Lit
 
-(* One letter of the word: a variable with its DECLARED hull (what a fact's [decl] is and
-   what decides whether a literal exists), or a constant the flattener left in the array. *)
+(* One letter of the word: a variable with its DECLARED hull (what a fact's [decl] is
+   and what decides whether a literal exists), or a constant the flattener left in the
+   array. *)
 type cell =
   | Fixed of int
   | Letter of { var : Var.t; name : string; dlo : int; dhi : int }
@@ -563,8 +579,9 @@ let fixed_flags store t =
    range is EMPTY (lo > hi) when the hull misses the alphabet, a constant letter outside
    it included: such a letter labels no edge, every state of layer i + 1 dies forward
    with nothing to cite, and its line is `rup` against FWD(i, q, {c}) = ~s(i,q) for every
-   q and ALO_i (D-0231; [Fixed c] used to return (c, c) and [forward_reason] indexed
-   [preds] out of bounds with it). *)
+   q and ALO_i. (A constant letter outside the alphabet once crashed here: [Fixed c]
+   returned (c, c) and [forward_reason] indexed [preds] out of bounds with it, fixed by
+   D-0231.) *)
 let alphabet_hull t i =
   let a = t.smin and b = t.smin + t.w - 1 in
   match t.xs.(i) with

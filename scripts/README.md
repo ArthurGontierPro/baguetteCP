@@ -10,7 +10,7 @@ how to run them, gate a merge with them and re-record them.
 |---|---|
 | The laptop (WSL2, 15 GB shared by every session) | Building and typechecking only: `dune build --build-dir=<scratch> lib/ bin/ test/ @fmt`. Flattening a model with MiniZinc is fine. The user forbids running tests, models, benchmarks or the solver there (2026-10-23: "trop nul et imprévisible", and CLAUDE.md's 14.9 GB RSS incident). |
 | `fataepyc-06` (192 cores, 2 TB, shared) | Every run: suites, lanes, gates, measurements, Challenge series. |
-| `fataepyc-07` | The user's other experiments (codes-cp, graph solvers, re-verifications). **Never run baguette there.** Reading its files is fine when the user asks. |
+| `fataepyc-07` | The user's other experiments (codes-cp, graph solvers, re-verifications), which are untouchable. Baguette campaigns may run there only while it is idle, launched over `ssh` from `fataepyc-06` after checking `uptime` and `ps -u arthur` (the user, 2026-11-23); stop launching as soon as another experiment starts. `/scratch` is local to each node. |
 
 On `fataepyc-06`:
 
@@ -133,6 +133,8 @@ Launch it detached (section 3) and poll `gateNN.status`.
 | `check_fmt.sh`, `check_test_widths.py`, `check_determinism.sh`, `check_unlimited.sh` | The static checks of `make check` |
 | `compare_selftest.sh`, `corpus_selftest.sh` | Self-tests of the two harnesses |
 | `shrink.sh` | Shrinks a failing model |
+| `run_scp_tests.sh` | The `.scp` models of `test/scp/` against `test/scp/expected/`, every proof checked (`make scp`, part of `make test`) |
+| `e2e_lane.sh`, `sym_lane.sh` | The end-to-end and symmetry lanes, sections 9 and 10. Node only, not in `make check` |
 | `fuzz_lane.sh` | The differential fuzz (M22-review-T7): random small models, baguette against Gecode through MiniZinc, every proof checked and every solution re-checked. Not a gate: a disagreement becomes a model in `test/models/`. `scripts/fuzz_lane.sh -j 16 -n 100 /scratch/arthur/<run>` on a node |
 | `bootstrap.sh` | Installs the toolchain on a fresh machine; safe to re-run |
 

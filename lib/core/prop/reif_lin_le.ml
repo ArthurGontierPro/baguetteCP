@@ -6,8 +6,17 @@
    bool, which has no interior to be domain consistent about. The level is therefore
    [Linear]'s, unchanged, and nothing here claims more.
 
+   Proof shape (docs/SPEC.md 3.3): none of its own. Every pruning is [Linear]'s
+   [Combine] over one of the two reification rows the .opb contains; see
+   "Justification" below.
+
+   This is one of the two authors of lib/core/prop/reif.ml's dispatcher. Besides the
+   two builtins it names, lib/flatzinc/compile.ml uses it for the GUARD rows of the
+   arithmetic family ([Arith.Times_guard], [Div_guard], [Abs_guard]), which report the
+   arithmetic builtin instead.
+
    ---------------------------------------------------------------------------
-   The three author pieces (roadmap M3-T4), and the two rows that carry five cases
+   The three author pieces, and the two rows that carry five cases
    ---------------------------------------------------------------------------
 
    lib/core/prop/reif.ml is the dispatcher and its header states the contract: an
@@ -34,27 +43,30 @@
                        lo(b) above 0 exactly when max(sum a x) <= rhs, which is case 3.
 
    So the five cases are carried by two rows, and the two directions of each row carry
-   a case and its own contrapositive. That is not a coincidence to be admired: it is
-   why the big-M constants have to be the smallest that work (D-0053), because a larger
-   K would leave slack in the cushion and the entailment pushes above would stop firing
-   at the right moment.
+   a case and its own contrapositive. This is why the big-M constants must be the
+   smallest that work (D-0053 fixed them so): a larger K would leave slack in the
+   cushion, and the entailment pushes above would stop firing at the right moment.
 
    ---------------------------------------------------------------------------
    Justification
    ---------------------------------------------------------------------------
 
    There is none of its own, and that is the point. Every pruning here is [Linear]'s,
-   justified by [Linear]'s D-0013 [Combine] over [Model_row fwd_id] or
-   [Model_row bwd_id] -- rows the .opb actually contains, posted by the `.opb` door
-   D-0053 requires for a model-stated reifier. The reifier is just another term of the
+   justified by [Linear]'s [Combine] (the "weaken, divide, add" derivation of D-0013)
+   over [Model_row fwd_id] or [Model_row bwd_id]. Both are rows the .opb actually
+   contains, because D-0053 requires a model-stated reifier to be defined in the .opb
+   rather than introduced by `red` in the proof. The reifier is just another term of the
    row, so the [Combine] treats it exactly as it treats a condition variable: still at
    its declared bound, weaken it away with an axiom (D-0009); moved by an earlier step,
    cite that step. No new [Explanation] constructor is involved, and none was added.
 
-   The terms handed to [Linear.make] must be the row's own terms, or [Model_row] would
-   name a constraint [Linear.pb_row] cannot reproduce (M2-L6). [k_fwd] and [k_bwd] are
-   therefore passed in from the encoding that posted the rows rather than recomputed
-   here -- the same discipline, and for the same reason, as [~row_id] itself. *)
+   The terms handed to [Linear.make] must be the row's own terms. [Linear]'s [Combine]
+   cancels each term against the row's coefficient for it, and [Linear.pb_row] hands
+   PB conflict analysis (M2-L6) the row as [Linear] believes it, so a term list that
+   differed from the .opb row would derive something other than what that row says.
+   [k_fwd] and [k_bwd] are therefore passed in from the encoding that posted the rows
+   rather than recomputed here, the same discipline, and for the same reason, as
+   [~row_id] itself. *)
 
 type t = Reif.t
 
@@ -67,8 +79,9 @@ let propagate = Reif.propagate
    [Encoding.add_int_lin_le_reif_rows], which posted the two rows these cite.
 
    Reads each variable's declared domain out of the store through [Linear.make], so it
-   inherits that function's D-0010 requirement: call it before anything has narrowed a
-   domain. *)
+   inherits that function's requirement: call it before anything has narrowed a
+   domain, because a bound fact is a chain of order literals counted from the DECLARED
+   bound (D-0010). *)
 let make ~fwd_id ~bwd_id ~k_fwd ~k_bwd store terms rhs ~reifier =
   let fwd =
     Linear.make ~row_id:fwd_id store
@@ -86,8 +99,10 @@ let make ~fwd_id ~bwd_id ~k_fwd ~k_bwd store terms rhs ~reifier =
     | Propagator.Conflict c -> Propagator.Conflict c
     | Propagator.Fixpoint -> Linear.propagate bwd store
   in
-  (* Each piece a closure of its own arity, not a partial application of
-     [Linear.propagate] (M16-file-review-T2, D-0190). *)
+  (* Each piece is a closure of its own arity, not a partial application of
+     [Linear.propagate], so a call through it is one full application (a hot-path
+     lever of the file-by-file review, M16-file-review-T2, D-0190, that changed no
+     output byte). *)
   Reif.make ~reifier ~positive:true ~vars:(List.map snd terms)
     ~hold:(fun store -> Linear.propagate fwd store)
     ~not_hold:(fun store -> Linear.propagate bwd store)

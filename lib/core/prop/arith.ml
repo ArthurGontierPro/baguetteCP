@@ -1,4 +1,13 @@
-(* int_times, int_div and int_abs: the M4 arithmetic family (roadmap M4-T4b).
+(* int_times, int_div and int_abs: the arithmetic family, x * y = z, x div y = q and
+   z = |x|, each as a case split posted in the model as guarded linear rows (task M4-T4b,
+   design record D-0060).
+
+   Governed by docs/SPEC.md 3.2 (consistency levels), 3.3 (explanations) and 2.1 (the
+   FlatZinc builtins, division by zero included). Proof shape: every pruning is
+   [Linear]'s, its weaken-add-divide derivation over ONE guarded row of the .opb, so the
+   family is [Single_row]
+   in the I-X10 classification table of test/unit/test_trace.ml (a pruning that follows
+   from one model constraint, whose trace line is RUP with nothing derived ahead of it).
 
    Consistency level: BOUNDS for every instance this family posts, and the level is
    [Linear]'s because every instance IS a [Linear] (or, for the guard definitions, a
@@ -17,16 +26,17 @@
 
    x * y = z is not linear, so it has no single .opb row, and a bounds pruning that
    reads all of x, y and z at once is not the consequence of any one linear
-   inequality. The classical answer is a CASE SPLIT, and the question M4-T4b has to
-   answer is where that case split lives: in the proof (a derivation that resolves the
-   cases, which needs a cutting-planes rule this tree does not have and an
-   [Explanation] constructor that does not exist), or in the MODEL (rows that are each
-   individually linear, each individually on the page, each individually cited).
+   inequality. The classical answer is a CASE SPLIT, and the design question is where
+   that case split lives: in the proof (a derivation that resolves the cases, which
+   needs a cutting-planes rule this tree does not have and an [Explanation] constructor
+   that does not exist), or in the MODEL (rows that are each individually linear, each
+   individually on the page, each individually cited).
 
-   **It lives in the model.** For each value v of the case variable the .opb carries
-   ordinary linear rows, guarded by big-M terms over Boolean variables that are
-   themselves defined by the M3 reification machinery. That is the same device
-   D-0057 chose for `b <-> C` one wave earlier, used once more:
+   **It lives in the model** (D-0060). For each value v of the case variable the .opb
+   carries ordinary linear rows, guarded by big-M terms over Boolean variables that are
+   themselves defined by the reification machinery of M3. That is the device D-0057
+   chose for `b <-> C` (reification as a pair of big-M int_lin_le rows), used once
+   more:
 
      - the guard `b_v <-> y >= v` is an [int_lin_le_reif] over `-y <= -v`, which
        lib/proof/encoding.ml already posts as a pair of big-M rows and
@@ -38,13 +48,13 @@
        and the cushion cancels exactly; violate one and the row degenerates to a bound
        the declared box already guarantees. [guarded_row] below is the whole of it.
 
-   The consequence for the proof is the point of the design: **there is no new proof
-   shape at all.** Every pruning is [Linear]'s, justified by [Linear]'s D-0013
-   [Combine] over [Explanation.Model_row], citing a row the .opb really contains. No
-   [Explanation] constructor was added and none is needed; no `pol` is written here;
-   nothing in lib/core/justify.ml changed. docs/PROOF-FORMAT.md section 4's row for
-   this family is therefore "as int_lin_le", and that is a claim about where the work
-   went, not a gap.
+   The consequence for the proof is the point of the design: **there is no new proof shape
+   at all.** Every pruning is [Linear]'s, justified by [Linear]'s weaken-add-divide
+   [Combine] (D-0013) over [Explanation.Model_row], citing a row the .opb really contains.
+   No [Explanation] constructor was added and none is needed; no `pol` is written here;
+   nothing in lib/core/justify.ml changed. docs/PROOF-FORMAT.md section 4's row for this
+   family is therefore "as int_lin_le", and that is a claim about where the work went, not
+   a gap.
 
    What it costs is size. A case split on a variable of declared width w posts O(w)
    rows and O(w) auxiliary Booleans per constraint, and each of those rows is expanded
@@ -69,13 +79,15 @@
      T3  [A(v), ~S]   z - v x <= 0        y >= v and x <= 0  =>  xy <= vx
      T4  [B(v), ~S]   z - v x >= 0        y <= v and x <= 0  =>  xy >= vx
 
-   Which operand is y: the NARROWER of the two (M8-bits-encoding-T3, docs/DECISIONS.md
-   D-0134 section 10). Multiplication is symmetric and the groups are one per value of
-   y, so lib/flatzinc/builder.ml puts the narrower operand second, the model's order at a
-   tie; `int_times(b, y, z)` with b in 0..1 is two groups whatever y's width.
+   Which operand is y: the NARROWER of the two (docs/DECISIONS.md D-0134 section 10, from
+   the bits-encoding work of M8-bits-encoding-T3). Multiplication is symmetric and the
+   groups are one per value of y, so lib/flatzinc/builder.ml puts the narrower operand
+   second, the model's order at a tie; `int_times(b, y, z)` with b in 0..1 is two groups
+   whatever y's width.
 
    At y = v both A(v) and B(v) hold, so whichever sign x has, z = v x is forced from
-   two sides. The family is therefore CHECKING (propagator.ml's I-P2), which a
+   two sides. The family is therefore CHECKING (I-P3: with every variable fixed it fails
+   if and only if the assignment violates the constraint), which a
    relaxation such as a bare McCormick envelope over the declared box would NOT be --
    that was the first design tried and it is why the guards are there.
 
@@ -95,7 +107,8 @@
    With y fixed to v <> 0, R1/R2 say 0 <= x - v q <= |v| - 1 and R3/R4 say
    -(|v| - 1) <= x - v q <= 0. As q moves, v q steps by |v|, so exactly one q lands in
    the window, and the remainder x - v q it leaves takes the sign of x. That is
-   D-0033's rounding, spelled as two inequalities rather than as a call to any
+   D-0033's rounding (truncation toward zero as the relation, outward rounding for
+   bounds), spelled as two inequalities rather than as a call to any
    division function: see "Rounding" below.
 
    **Division by zero needs no special case and gets none.** At v = 0 the bound
@@ -142,10 +155,11 @@
    the right division", but "the pruning path contains no division".
 
    ---------------------------------------------------------------------------
-   Where M4-T4a's [Interval] is used, and one place it must NOT be
+   Where [Interval] is used, and one place it must NOT be
    ---------------------------------------------------------------------------
 
-   [Interval] computes the HULL ROWS: the unguarded rows that bound z (and x) over the
+   lib/core/interval.ml (interval arithmetic on bounds, task M4-T4a) computes the HULL
+   ROWS: the unguarded rows that bound z (and x) over the
    declared box, which is what gives them a bound at the root rather than only once the
    case variable is fixed. [product_bounds] is exact there, [square_bounds] is what
    `x * x = z` gets (interval.ml's header: "using the general one for a square is sound
@@ -199,7 +213,8 @@
              own Boolean, and the reification channels that back to y), which is real
              but is not domain-consistent filtering. test_prop.ml asserts CONTAINMENT.
 
-   **On [Interval.quotient_filter]'s inexactness (the roadmap asks M4-T4b to decide).**
+   **On [Interval.quotient_filter]'s inexactness (a question the roadmap left to
+   M4-T4b).**
    It is not used on the pruning path at all -- see "Rounding" above -- so the ~1% gap
    M4-T4a measured (40 of 4095 small cases) neither helps nor hurts this family, and
    the answer to "does M4-T4b want a tighter algorithm?" is NO, not because the gap is
@@ -228,11 +243,12 @@ let family_name = function Times -> "int_times" | Div -> "int_div" | Abs -> "int
    what anything else in lib/ should ask rather than restating the arithmetic.
 
    Total: it answers for every triple of machine integers. The multiplication is
-   [Checked.mul], so an overflowing product RAISES rather than wrapping (I-X8, D-0029)
-   -- and a raise here would mean a wrong answer had been accepted, which is precisely
-   D-0029's failure, so it is caught and reported as "not in the relation" rather than
-   escaping. It cannot be a false NEGATIVE: |z| is bounded by the declared box, so a
-   product too large to compute is a product too large to equal z.
+   [Checked.mul], so an overflowing product RAISES rather than wrapping (I-X8: no row
+   whose arithmetic wrapped reaches the .opb; D-0029, the arithmetic limit enforced at
+   compile time) -- and a raise here would mean a wrong answer had been accepted, which is
+   precisely D-0029's failure, so it is caught and reported as "not in the relation"
+   rather than escaping. It cannot be a false NEGATIVE: |z| is bounded by the declared
+   box, so a product too large to compute is a product too large to equal z.
 
    Division truncates toward zero because [Stdlib.(/)] does (docs/SPEC.md 2.1,
    D-0033), and y = 0 is simply not in the relation -- not an error, per the same

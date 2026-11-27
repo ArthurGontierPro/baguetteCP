@@ -15,13 +15,22 @@
    [Ne]'s header argues for the unreified case. (docs/GLOSSARY.md defines "bounds" and
    "domain" consistent but not "value"; reported there, not invented here.)
 
+   Proof shape (docs/SPEC.md 3.3): enforce-hold and the refuting half of entailment are
+   [Linear]'s [Combine] over the guarded LE/GE rows below; enforce-not-hold and the
+   entailing half are a [Clause], `rup` against the guarded A/B pair (a derived
+   [Resolve] `pol` over a bits scope, see the last section). docs/PROOF-FORMAT.md
+   section 4's `int_eq_reif` row states the same.
+
+   This is one of the two authors of lib/core/prop/reif.ml's dispatcher, which reads the
+   reifier and runs one of the three pieces below.
+
    ---------------------------------------------------------------------------
    Why an equality is four rows and not two -- and why there is no `p /\ q`
    ---------------------------------------------------------------------------
 
    D-0053 records that `b <-> (sum = c)` is NOT one reified inequality: it needs
    `p <-> (sum<=c)`, `q <-> (sum>=c)` and `b <-> p /\ q`, and it leaves open where [p]
-   and [q] should live. **This module builds neither.** The four rows
+   and [q] should live. This module builds neither. The four rows
    lib/proof/encoding.ml's [add_int_lin_eq_reif] posts are
 
      LE   sum a x <= c        }  guarded so they say nothing unless the reification
@@ -29,27 +38,28 @@
      A    sum a x <= c - 1 + big_a * ne_aux   }  guarded so they say nothing unless it
      B   -sum a x <= -c - 1 + big_b * ~ne_aux }  is FALSE
 
-   and A/B are [Encoding.expand_int_lin_ne]'s own pair -- the PB encoding of
-   `sum <> c` that lib/core/prop/ne.ml has been explaining against since M1-T9 --
-   with one extra guard term. The conjunction's whole purpose was the direction
+   and A/B are [Encoding.expand_int_lin_ne]'s own pair, the PB encoding of `sum <> c`
+   that lib/core/prop/ne.ml (the int_lin_ne propagator, M1-T9) explains against, with
+   one extra guard term. The conjunction's whole purpose was the direction
    `(sum = c) -> b`; A and B are its contrapositive `~b -> (sum <> c)` already written
    as rows, so the decomposition buys nothing that is not already in the .opb.
 
    It also is not reachable as stated. [p] and [q] would have to be propagated, so they
-   would have to be *store* variables and not merely .opb names; bin/main.ml's
+   would have to be STORE variables and not merely .opb names; bin/main.ml's
    [assignment_values] fails on any solver variable outside the model's own, so
    introducing one is a change on the far side of that bridge and not a change here.
    The auxiliary A and B share is an ordinary .opb-only Boolean, the same kind
    [add_int_lin_ne] has always minted, and nothing propagates over it.
 
    ---------------------------------------------------------------------------
-   The three author pieces (roadmap M3-T4)
+   The three author pieces
    ---------------------------------------------------------------------------
 
      enforce-hold      [Linear] over LE, then [Linear] over GE. With the reification
                        literal true both guards vanish and the pair is an ordinary
-                       `sum = c` at bounds consistency, the [Lin_eq] shape (D-0011:
-                       two rows, two instances, each citing its own).
+                       `sum = c` at bounds consistency, the [Lin_eq] shape (two rows,
+                       two instances, each citing its own: D-0011's one instance, one
+                       row).
      enforce-not-hold  the disequality pass below. Its explanations are [Clause]s --
                        nogoods that name the reifier's own literal alongside the fixed
                        values -- and they are RUP against A and B, which is what makes
@@ -73,14 +83,19 @@
    literals behind [Explanation.deferred], every product through [Checked].
 
    ---------------------------------------------------------------------------
-   Over the BITS encoding (M8-bits-encoding-T3, docs/DECISIONS.md D-0134 section 8)
+   Over the BITS encoding
    ---------------------------------------------------------------------------
 
+   A wide variable may be encoded by its binary digits instead of an order ladder (the
+   bits encoding). The design for this module is D-0134 section 8, built by
+   M8-bits-encoding-T3.
+
    The enforce-hold face and the refutation half of entailment are [Linear] instances
-   over LE and GE, so over a bits scope they are already [Linear]'s bits `pol` (D-0132),
-   with the reifier as one more term. The two [Clause] pieces are not: the nogood is RUP
-   over A, B and the LADDER, and over a bits variable no bound crosses a row by unit
-   propagation (D-0127). So a scope with a bits variable is built with [~rows], A's and
+   over LE and GE, so over a bits scope they are already [Linear]'s bits `pol` (the
+   row's bridges added up and divided, D-0132), with the reifier as one more term. The
+   two [Clause] pieces are not: the nogood is RUP over A, B and the LADDER, and over a
+   bits variable no bound crosses a row by unit propagation (measured on the checker,
+   D-0127). So a scope with a bits variable is built with [~rows], A's and
    B's ids and big-Ms from [Encoding.add_int_lin_eq_reif], and the SAME nogood is
    derived as [Ne]'s two halves resolved on the selector ([Explanation.Resolve]), each
    half carrying the reifier as one more [Linear_term] at the value that denies the
@@ -97,14 +112,16 @@
    ~facts` -- maxmin's claim variable is carried the same way (D-0134 section 2.3).
    Measured before this code (bench/bits_spike/probe_t3c.sh, r1/r2/n1 verified, the pin
    without the reifier's literal or with the wrong bridge refused at the `ia`). The
-   reason half is untouched (D-0026's split). A scope with no bits variable has no
-   [rows] and is byte for byte what it was. *)
+   reason half is untouched: the facts a pruning read are data kept apart from the
+   cutting planes that justify it (D-0026), so only the justification changes. A scope
+   with no bits variable has no [rows] and is byte for byte what it was. *)
 
 module Encoding = Baguette_proof.Encoding
 
-(* A term of the condition, with its DECLARED domain frozen at [make] time -- D-0010,
-   the same freeze [Linear.make] and [Ne.make] perform and for the same reason: a
-   nogood literal is stated relative to the declared bound. *)
+(* A term of the condition, with its DECLARED domain frozen at [make] time, the same
+   freeze [Linear.make] and [Ne.make] perform and for the same reason: a nogood literal
+   is stated relative to the declared bound (D-0010, a bound fact is a chain of order
+   literals counted from the declared bound). *)
 type term = { coeff : int; x : Var.t; name : string; decl_lo : int; decl_hi : int }
 
 (* A's and B's ids and big-Ms over a bits scope (the header's last section). *)
@@ -118,8 +135,10 @@ type payload = {
   p_wrong : int;
       (* The reifier's value at which `sum = rhs` is FALSE: 0 for int_eq_reif, 1 for
          int_ne_reif. The nogoods below name this value, because a nogood that did not
-         mention the reifier would be claiming the disequality unconditionally -- which
-         is the I-P5 failure [Ne] shipped between M1-T9 and M1-T17, one level up. *)
+         mention the reifier would be claiming the disequality unconditionally. That is
+         the failure I-P5 (every bound move carries the facts its trace line negates,
+         now part of I-P4) was written against, and which [Ne] had between M1-T9 and
+         M1-T17, one level up. *)
   p_rows : ne_rows option; (* over a bits scope (T3), else [None] *)
 }
 
@@ -168,8 +187,10 @@ let explain p pairs =
   Explanation.deferred (fun () ->
       match p.p_rows with None -> nogood p pairs | Some r -> nogood_resolve p r pairs)
 
-(* The reifier's own contribution to the reason half (D-0018 point 3 / D-0026): it is
-   fixed at the value the nogood names, so the trace line's tail carries it too. Over a
+(* The reifier's own contribution to the reason half, the facts the trace line negates
+   (D-0018 point 3: a branch's nogood is RUP over the trace lines it logged, each of
+   which states its pruning's facts). The reifier is fixed at the value the nogood
+   names, so the trace line's tail carries it too. Over a
    bool one of the two halves is always the declared bound and drops at
    [Reason.lit_of_fact], leaving exactly the literal the clause above spends. *)
 let reifier_fact p = Reason.fixed_at ~name:p.p_bname ~decl_lo:0 ~decl_hi:1 p.p_wrong
@@ -187,10 +208,11 @@ let moved_bound_fact tm w d =
   else if w = Domain.hi d then [ Reason.at_most ~name:tm.name ~decl:tm.decl_hi w ]
   else []
 
-(* [Ne.removal_conclusion], verbatim in shape (D-0043): a removal at a bound concludes
-   the bound it settled to, an interior removal concludes nothing a [Reason.fact] can
-   state. The walk over holes is the one [Trace] does, so the number stated here and
-   the number the trace line claims come from one rule. *)
+(* [Ne.removal_conclusion], verbatim in shape. What a pruning concludes is a
+   [Reason.fact] carried on the [justified] value (D-0043): a removal at a bound
+   concludes the bound it settled to, an interior removal concludes nothing a
+   [Reason.fact] can state. The walk over holes is the one [Trace] does, so the number
+   stated here and the number the trace line claims come from one rule. *)
 let removal_conclusion tm w d =
   if w = Domain.lo d then (
     let v = ref (w + 1) in
@@ -208,8 +230,9 @@ let removal_conclusion tm w d =
 
 (* ------------------------------------------------------------------- the pieces *)
 
-(* Whether [tm]'s variable is fixed: [Domain.value]'s [Some] test without the [Some]
-   (M16-file-review-T2, D-0190; [unfixed_positions] asks it per term per run). *)
+(* Whether [tm]'s variable is fixed: [Domain.value]'s [Some] test without allocating
+   the [Some], since [unfixed_positions] asks it per term per run (a lever of the
+   file-by-file review of the propagators, M16-file-review-T2, D-0190). *)
 let is_fixed store tm = Domain.is_fixed (Store.get store tm.x)
 let value_of store tm = Domain.lo (Store.get store tm.x)
 let all_pairs store terms = List.map (fun tm -> (tm, value_of store tm)) terms
@@ -239,10 +262,12 @@ let not_hold p store =
   | [] ->
       if sum_of store p.p_terms <> p.p_rhs then Propagator.Fixpoint
       else
-        (* [Ne]'s unreified conflict records NO facts, and can: with everything fixed
-           it is unconditional, so [Trace.conflict_line] writes no line and the clause
-           is the whole story. Here it is conditional -- on the reifier -- so a line IS
-           written, and then every premise has to be on it. Stating only the reifier's
+        (* This conflict is conditional on the reifier, so its reason must name every
+           premise: the reifier's fact AND every term's fixing facts. [Ne]'s unreified
+           conflict is unconditional, so at the root it records no facts and
+           [Trace.conflict_line] writes no line (under a decision it records the fixing
+           facts too, for learning, since D-0238). Here a line IS written at every
+           level, and then every premise has to be on it. Stating only the reifier's
            fact was this module's first version and test/models/reif_eq_branch_unsat.fzn
            is what caught it: the line came out as `rup ~b_ge_1 >= 1`, which is TRUE of
            the model and not reverse-unit-propagable from it, and veripb said so. *)
@@ -277,9 +302,9 @@ let not_hold p store =
    true -- i.e. move the reifier off [p_wrong] -- on the nogood that says the two
    cannot both hold.
 
-   This is the piece the `<=` author (lib/core/prop/reif_lin_le.ml) does not need and
-   D-0053 said the conjunction channelling would be needed for. It is not: the claim is
-   RUP against the guarded A/B pair, which is already in the .opb. *)
+   This is the piece the `<=` author (lib/core/prop/reif_lin_le.ml) does not need, and
+   the one D-0053 expected to need the `p /\ q` channelling for. It does not: the claim
+   is RUP against the guarded A/B pair, which is already in the .opb. *)
 let entail_equal p store =
   match unfixed_positions store p.p_terms ~limit:1 with
   | _ :: _ -> Propagator.Fixpoint
@@ -312,7 +337,8 @@ let entail_equal p store =
    Zero-coefficient terms are dropped for the disequality pieces, exactly as [Ne.make]
    drops them: a term that is not part of the constraint must not count towards "how
    many terms are unfixed". They are kept in the [Linear] rows, which skip them
-   themselves and must be given the row's own term list unchanged (M2-L6). *)
+   themselves and must be given the row's own term list unchanged, because
+   [Linear.pb_row] hands that list to PB conflict analysis (M2-L6) as the .opb row. *)
 let make ?rows ~le_id ~ge_id ~k_le ~k_ge ~positive store terms rhs ~reifier =
   let vac_eq = if positive then 0 else 1 in
   let guard k = if vac_eq = 1 then (Checked.neg k, 0) else (k, k) in

@@ -26,11 +26,10 @@ or of the `.pbp`; the harness verifies that before it measures anything (§1, "t
 self-checks"). One row, `emitln`, is a **count** and carries a `lines` unit instead of
 `us` — deliberately, so that anything matching on `us` cannot read it as a duration.
 
-There **is** a `make bench` target now (`make bench ARGS="..."`), and it is correctly not
-a dependency of `check`. `Makefile` belongs to the orchestrator, not to `bench/`; as of
-2026-09-18 its comment above that target still offers `ARGS="-F 2.0"` as the example, and
-that flag no longer exists — D-0046 removed the format it selected and M2-L8 removed the
-flag. Raised as a cross-session request rather than edited from here.
+`make bench ARGS="..."` runs `bench/run_bench.sh` with those arguments under the suites'
+memory cap, and it is deliberately not a dependency of `make check`: a timing number has no
+business failing a build. (Until M2-L8 the Makefile's example offered `ARGS="-F 2.0"`, a flag
+removed with the 2.0 format by D-0046; the example is now `ARGS="-r 9"`.)
 
 ---
 

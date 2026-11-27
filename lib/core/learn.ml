@@ -29,9 +29,9 @@
    resumes only because something propagates it. Nothing here propagates it, so a resume
    would re-reach the same fixpoint, re-take the same decision and re-derive the same
    conflict -- an outright loop, not a slow search. Taking (i) to avoid that would have
-   silently restricted learning to Boolean models: [conversion_rate] below counts how
-   often the cut converts, so that claim is measured rather than assumed, and M2-L4 has
-   the number when it writes the retention policy.
+   silently restricted learning to Boolean models: the [l_converts] field below records,
+   per learned clause, whether the cut converts, so that claim is measured rather than
+   assumed, and M2-L4 has the number when it writes the retention policy.
 
    **THE LAST CLAUSE OF THAT IS NO LONGER TRUE, and the fork was resolved from the other
    end.** This said "the learned clause here is ... not propagating", and M2-L12 gave the

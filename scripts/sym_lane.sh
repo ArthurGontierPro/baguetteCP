@@ -26,6 +26,10 @@
 #                       dynamic search "--search activity --restarts luby --phase-saving"
 #        --no-base      skip step 3 (the baseline's columns are then "-"); for a second chain
 #                       over instances whose baseline another OUTDIR already measured
+#
+# Ends on `sym_lane: PASS`, exit 0, or `sym_lane: FAIL (n)`, exit 1, where n counts the
+# instances with no result row and the rows marked FAIL.
+#
 # A `mzn:` source may end in `:Wmax=K`: the .dzn is copied with its `Wmax = ...;` set to K (QR48's
 # weight-12 question reuses codes-cp's weight-8 file, as codes-cp's qr48orb_w12 is that file's code).
 # Env:   BAGUETTE  the solver (default _build/default/bin/main.exe; NOT built here: run

@@ -12,8 +12,8 @@ A constraint programming solver with VeriPB proof logging and higher-order expla
 
 ## Context budget — read this before you open a file
 
-`docs/` is **2.7 MB ≈ 680k tokens** and `WORKLOG.md` alone is ~680 KB ≈ 170k tokens (measured
-2026-11-24; `du -sh docs; wc -c WORKLOG.md docs/*.md` re-measures, and the sizes below grow
+`docs/` is **3.1 MB ≈ 780k tokens** and `WORKLOG.md` alone is ~745 KB ≈ 185k tokens (measured
+2026-11-27; `du -sh docs; wc -c WORKLOG.md docs/*.md` re-measures, and the sizes below grow
 with every wave). Reading them "to be thorough" costs more than the work you were dispatched
 to do, and a session that spends its context on reading has none left for the task. So the
 rule is:
@@ -22,15 +22,17 @@ rule is:
 
 | File | Size | How to read it |
 |---|---|---|
-| `WORKLOG.md` | ~680 KB | **The `SessionStart` hook already printed `## Active claims` for you.** Do not re-read the file to get it. For other sections: `sed -n '/^## Cross-session requests/,/^## Completed/p' WORKLOG.md`, or `tail -60` for the latest handoff notes. |
-| `docs/DECISIONS.md` | 2.1 MB | Never whole. `grep -n 'D-0028' docs/DECISIONS.md` then `sed -n '<start>,<end>p'`. To catch up: `grep -n '^## D-' docs/DECISIONS.md \| tail -20`. |
-| `docs/ROADMAP.md` | ~390 KB | Never whole. `grep -n -A8 'M1-T31' docs/ROADMAP.md` for your task's row. |
-| `docs/PROOF-FORMAT.md` | 77 KB | By section, and the sections are stable: §1 the checker, §2 **historical** (the 2.0 grammar D-0046 removed — do not read it for the contract), §2a **the contract**: the 3.0 rules, the `pol` operators and the traps, §3 encoding (normative), §4 per-propagator justification, §5 backtracking/deletion, §6 debugging a rejected proof. Find §4 with `grep -n '^## 4\.' docs/PROOF-FORMAT.md` rather than a pinned line range. |
+| `WORKLOG.md` | ~745 KB | **The `SessionStart` hook already printed `## Active claims` for you.** Do not re-read the file to get it. For other sections: `sed -n '/^## Cross-session requests/,/^## Completed/p' WORKLOG.md`, or `tail -60` for the latest handoff notes. |
+| `docs/DECISIONS.md` | 2.4 MB | Never whole. `grep -n 'D-0028' docs/DECISIONS.md` then `sed -n '<start>,<end>p'`. To catch up: `grep -n '^## D-' docs/DECISIONS.md \| tail -20`. |
+| `docs/ROADMAP.md` | ~410 KB | Never whole. `grep -n -A8 'M1-T31' docs/ROADMAP.md` for your task's row. |
+| `docs/PROOF-FORMAT.md` | 78 KB | By section, and the sections are stable: §1 the checker, §2 **historical** (the 2.0 grammar D-0046 removed — do not read it for the contract), §2a **the contract**: the 3.0 rules, the `pol` operators and the traps, §3 encoding (normative), §4 per-propagator justification, §5 backtracking/deletion, §6 debugging a rejected proof. Find §4 with `grep -n '^## 4\.' docs/PROOF-FORMAT.md` rather than a pinned line range. |
 | `docs/GCS-COMPARISON.md` | 29 KB | Background. Read only if the task is explicitly about the comparison. |
-| `docs/SPEC.md` | 37 KB | Normative. Read the relevant section whole; §2.1 is the FlatZinc subset, §3.2 consistency levels, §3.3 explanations. |
+| `docs/SPEC.md` | 39 KB | Normative. Read the relevant section whole; §2.1 is the FlatZinc subset, §3.2 consistency levels, §3.3 explanations. |
 | `docs/INVARIANTS.md` | 20 KB | Read whole before touching `lib/core/`. |
-| `docs/ARCHITECTURE.md` | 24 KB | Read whole if you are changing structure. Its §1 module map was stale for months; **corrected on 2026-09-18, re-verified against the tree on 2026-11-24**, and it now agrees with the map below. |
+| `docs/ARCHITECTURE.md` | 26 KB | Read whole if you are changing structure. Its §1 module map is the same text as the map below (**re-verified against the tree on 2026-11-27**). |
 | `docs/GLOSSARY.md` | 4 KB | Read whole if the vocabulary is new to you. |
+| `docs/EXPLANATION-REVIEW.md` | 11 KB | A report of 2026-09-18 comparing the explanation mechanism with the literature. Background only. |
+| `docs/REFERENCES.md` | 48 KB | One line per `D-`, `M` and `I-` reference the code cites. `grep -n 'D-0216' docs/REFERENCES.md` before opening DECISIONS.md. |
 
 **Module headers are the cheapest documentation in this repo.** Every module in `lib/`
 opens with a comment stating what it is, its consistency level, and which spec section
@@ -227,11 +229,11 @@ lib/core/       Baguette_core
   store.ml                  backtrackable store: domains + undo trail (ARCH §3)
   reason.ml                 WHICH FACTS justify a pruning, as declarative data, and
                             [justified], the one value a mutator takes (D-0026)
-  explanation.ml    *****   THE Explanation ADT. Read SPEC §3.3 + ARCH §4 first.
-                            D-0003 is RESOLVED (by D-0026): reasons are declarative
-                            data, justifications are cutting planes (M2-T8, DONE).
-                            Check `## Active claims` before touching this file. Still
-                            no new constructor without a decision record.
+  explanation.ml    *****   THE Explanation ADT: HOW the checker is convinced, as a
+                            cutting-planes expression over model rows and facts
+                            (D-0026, M2-T8). Read SPEC §3.3 + ARCH §4 first. Check
+                            `## Active claims` before touching this file. No new
+                            constructor without a decision record.
   justify.ml                Explanation.t -> VeriPB rules -> constraint id. Lives in
                             core, not proof, because proof cannot see Explanation.
   trace.ml                  records what a branch learned so its nogood is plain RUP
@@ -241,7 +243,9 @@ lib/core/       Baguette_core
                             its proof-side introduction/deletion (M2-L1, D-0044)
   learn.ml                  1UIP clause learning over order literals, its semantic
                             minimisation, its `rup` derivation and the backjump it
-                            licenses (M2-L3)
+                            licenses (M2-L3). Removing root-level and re-derivable
+                            literals from the learned clause is BAGUETTE_MINIMISE
+                            (off, root, local, rec), `off` by default (D-0241)
   analysis.ml               the implication graph and the cut, AS DATA. The criterion
                             is a swappable record carrying its own postcondition
                             (M2-L2)
@@ -264,13 +268,18 @@ lib/core/       Baguette_core
   view.ml                   VIEWS (+-x + k) and constants-as-variables, as a RENDERING
                             onto the base's order literals -- no PB variables of its
                             own, no name, so no sanitize table (M4-T0, D-0058)
-  propagator.ml             the PROPAGATOR module type (218 lines — read it whole)
-  engine.ml                 propagate-to-fixpoint loop and the queue (ARCH §5)
+  propagator.ml             the PROPAGATOR module type (288 lines — read it whole)
+  engine.ml                 propagate-to-fixpoint loop and the queue (ARCH §5). The
+                            queue is FIFO; BAGUETTE_PRIORITY=classes runs cheap
+                            propagators first (four cost classes), off by default
+                            (D-0246)
   search.ml                 DFS, branching, backtracking, every step proof-logged.
                             Restarts are opt-in (SPEC 3.4, D-0137): NRestart t unwinds
                             to level t and re-enters that node, no new proof rule.
-                            CDCL loop `Search.cdcl` beside `dfs`: BAGUETTE_CDCL=1, OFF
-                            by default (D-0219)
+                            CDCL loop `Search.cdcl` beside `dfs`: `--cdcl` or
+                            BAGUETTE_CDCL=1, OFF by default (D-0219). With it, `--chrono
+                            T` (BAGUETTE_CHRONO=T) backjumps one level instead of more
+                            than T (chronological backtracking, D-0224)
   restart.ml                WHEN to restart: Luby, geometric, Glucose's LBD average
                             (with a Luby floor), the stable alternation (M10-T2)
   phase.ml                  phase saving: the value a variable was last fixed at,
@@ -378,15 +387,27 @@ test/unit/                  25 binaries: test_core test_domain test_engine test_
   mem_guard.ml              NOT a test binary: the shared Gc-alarm heap guard every
                             suite installs (M1-T53). All 25 announce arming under
                             BAGUETTE_TEST_HEAP_CAP_ANNOUNCE=1
-test/models/                228 .fzn models  test/expected/  their expected outputs
+  domain_helper.ml          NOT a test binary: Domain.of_list and change_of, test-only
+                            constructors moved out of lib/ (M22-review-T5, D-0248)
+test/models/                264 .fzn models  test/expected/  their expected outputs
 test/scp/                   26 .scp models   test/scp/expected/  theirs (M23-inputs, D-0230)
+mznlib/                     baguette's MiniZinc library: the fzn_*.mzn redefinitions that
+                            route a global to a native propagator or to its decomposition
 scripts/                    checker.sh verify_proof.sh run_model_tests.sh shrink.sh
                             mutate_proof.sh check_test_widths.py check_fmt.sh
-                            check_determinism.sh bootstrap.sh; the lanes (diff, scaling,
-                            e2e, sym, fuzz)_lane.sh; compare_run.sh (Challenge runs);
-                            run_scp_tests.sh (the .scp models, `make scp`)
+                            check_determinism.sh check_unlimited.sh bootstrap.sh; the lanes
+                            (diff, scaling, e2e, sym, fuzz)_lane.sh; compare_run.sh and
+                            corpus_run.sh (Challenge and corpus runs) with their
+                            *_selftest.sh; run_scp_tests.sh (the .scp models, `make scp`).
+                            scripts/README.md is the operating manual for the node
+tools/                      baguette.msc (the MiniZinc solver configuration); compare/
+                            (Challenge scoring, the README's performance table); e2e/
+                            (the cake_pb_cp end-to-end chain); symmetry/ (dejavu,
+                            `make sym`); fuzz/; lp/ (opb2lp.py)
 tools/scp/                  the .scp lanes: validate.py (an answer against the .scp alone),
                             fzn_lane.sh, random_lane.py, mutate.sh (D-0230)
+bench/                      measurement harnesses and their results; bench/challenge/ and
+                            bench/series/ hold the Challenge runs (README.md in each)
 ```
 
 ## Commands
@@ -394,11 +415,13 @@ tools/scp/                  the .scp lanes: validate.py (an answer against the .
 ```sh
 make build          # dune build
 make test           # unit + model + proof-checking tests
-make check          # fmt-check + build + lint + determinism + test — the gate.
+make check          # fmt-check + build + lint + determinism + unlimit + selftests
+                    # + test — the gate.
                     # It VERIFIES formatting and no longer fixes it (M1-T64): an
                     # unformatted file fails the gate instead of being silently
                     # rewritten in your working tree.
 make fmt            # the explicit fixer. Rewrites files. Run it, then stage only YOURS
+make release        # optimised binary in _build_release/default/bin/main.exe
 make proof FZN=test/models/foo.fzn   # solve and verify one model's proof
 make bench ARGS="..."                # measurement only, never a commit gate
 make diff ARGS="--tier all -j 16"    # the DIFFERENTIAL lane (M11-T2, D-0141): real instances at a
@@ -614,7 +637,7 @@ Several sessions share this checkout, so staging discipline matters more than us
 The toolchain is installed and working. MiniZinc, Chuffed and GCS on the node, and where the
 Challenge runs are recorded: `bench/challenge/README.md`.
 
-- opam 2.5.2 at `~/.local/bin/opam`, switch `baguette` on OCaml 5.1.1
+- opam 2.6.0 at `~/.local/bin/opam`, switch `baguette` on OCaml 5.1.1
 - **The checker is VeriPB 3.0.2** (the Rust build, **source `d5644ca4` of 2026-09-04 since
   D-0100** — the June build `78db9573` falsely rejected valid `rup` steps and is kept only as
   `veripb-3.0.2-78db9573`; a rejection now reads *"Checking error at"*, the June build said

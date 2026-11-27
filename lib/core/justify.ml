@@ -6,61 +6,78 @@
    to sit on the [core] side of the line, calling down into [Baguette_proof.Writer].
 
    -------------------------------------------------------------------------------
-   Which rule a derivation is written as (D-0009, D-0013, D-0043, and since
-   M8-bits-encoding-T5 D-0131)
+   Which rule a derivation is written as: `rup` where unit propagation closes it
    -------------------------------------------------------------------------------
 
-   docs/PROOF-FORMAT.md section 2a's rule used to read "prefer [pol] over [rup]
-   everywhere [pol] states the reasoning; [rup] makes the checker search". D-0127
-   measured that sentence on the checker alone and found it true for a derivation of
-   O(1) citations and false for one of Theta(w): a `pol` that adds Theta(w) terms into
-   a wide accumulator is quadratic for VeriPB 3.0.2 (383 s at w = 10^6), the same
-   conclusion as a `rup` is 197 bytes and the linear unit-propagation walk the checker
-   does anyway (2.6 s, dominated by reading the .opb), and the elaborator writes a
-   `rup` as its hint list while it copies a `pol` as it is. So the rule this module
-   follows is D-0127's closing sentence: **a justification is written as `rup`
-   wherever the checker's unit propagation closes it, and as `pol` only where it
-   cannot.**
+   The rule: **a justification is written as `rup` wherever the checker's unit
+   propagation closes it, and as `pol` only where it cannot** (docs/PROOF-FORMAT.md
+   section 2a; the order arm follows it since M8-bits-encoding-T5, D-0131). A `rup`
+   line states a constraint and lets the checker find the derivation by unit
+   propagation; a `pol` line spells the cutting-planes arithmetic out.
+
+   The reason is cost, measured on the checker alone (D-0127). For a derivation of O(1)
+   citations the two rules cost the same. For one of Theta(w) they do not: a `pol` that
+   adds Theta(w) terms into a wide accumulator is quadratic for VeriPB 3.0.2 (383 s at
+   w = 10^6), while the same conclusion as a `rup` is 197 bytes and the linear
+   unit-propagation walk the checker does anyway (2.6 s, dominated by reading the .opb).
+   The elaborator also writes a `rup` as its compact hint list and copies a `pol` as it
+   is. (Before D-0127 the rule read "prefer [pol] over [rup] everywhere [pol] states the
+   reasoning; [rup] makes the checker search".)
 
    Per constructor, that is:
 
-     - [Clause] and [Linear] are `rup`, and always were: a clause carries no record of
-       HOW its literals imply the pruning, and a bare literal in a `pol` asserts
-       nothing (D-0009, and [emit_linear]'s comment keeps the measurement).
-     - [Combine] and [Cut] WITH A CONCLUSION -- [emit_concluding], the D-0043 path,
-       whose claim is one order literal -- are `rup` of that literal. The ladder walk
-       D-0013's "weaken, divide, add" spells out as Theta(w) axioms is exactly what the
-       checker's unit propagation performs on its own along the ladder rows the .opb
-       holds (D-0031), once the bounds the derivation cites are on the page as lines it
-       can propagate along. Where that is true a `rup` is one line and O(1) tokens where
-       the `pol` + `ia` + `del` of D-0043 were three lines and Theta(w) tokens; where it
-       is not, the checker says so at the line ("not implied by reverse unit
-       propagation"), and nothing is silently weaker. The conclusion goes through the
-       claim index like every other clause, so a line the trace already wrote is reused
-       rather than restated (M1-T59).
-     - [Combine] and [Cut] WITHOUT a conclusion -- plain [emit] -- stay the D-0013
-       `pol`. A bare derivation is demanded exactly where its RESULT is consumed as a
-       ROW by arithmetic rather than as a bound: a [Term] operand of a parent `pol`, a
-       counting family's derivation written ahead of its trace line because unit
-       propagation cannot close that line without it (I-X10's [Needs_derivation]:
-       alldiff, gcc, element, cumulative), and [Pb_analysis.introduce]'s learned PB row,
-       whose claim is an inequality the checker cannot reach by propagation (measured,
-       D-0131: the lifted row of lib/core/ladder.ml's worked example is refused as
-       `rup`). For those the `pol` IS the statement, and its token count is what
-       `--stats` reports so that a Theta(w) one is seen rather than suffered.
+     - [Clause] and [Linear] are `rup`, and always were. A clause carries no record of
+       HOW its literals imply the pruning, and a bare literal in a `pol` is the trivial
+       axiom [l >= 0], so it asserts nothing (D-0009: a bound fact in a `pol` needs the
+       id of a line that establishes it, never its literal; [emit_linear]'s comment keeps
+       the measurement).
+     - [Combine] and [Cut] WITH A CONCLUSION are `rup` of that conclusion. This is
+       [emit_concluding], the path D-0043 opened by letting a justification carry the
+       bound it concludes, as a [Reason.fact], and the claim is one order literal. D-0013
+       writes a bounds derivation as "weaken, divide, add": weaken the row by the other
+       variables' bounds, divide by the pruned coefficient, add. Its weakening is a walk
+       of Theta(w) axioms along the order-encoding ladder, and that walk is exactly what
+       the checker's unit propagation performs on its own along the ladder rows the .opb
+       holds (the ladder stays in the .opb rather than being introduced lazily, D-0031),
+       once the bounds the derivation cites are on the page as lines it can propagate
+       along. Where that is true a `rup` is one line and O(1) tokens, where the `pol` +
+       `ia` + `del` of D-0043 were three lines and Theta(w) tokens. Where it is not, the
+       checker says so at the line ("not implied by reverse unit propagation"), so
+       nothing is silently weaker. The conclusion goes through the claim index like every
+       other clause, so a line the trace already wrote is reused rather than restated
+       (M1-T59 found two proofs writing a byte-identical `rup` twice).
+     - [Combine] and [Cut] WITHOUT a conclusion (plain [emit]) stay the D-0013 `pol`. A
+       bare derivation is demanded exactly where its RESULT is consumed as a ROW by
+       arithmetic rather than as a bound. That happens in three places: a [Term] operand
+       of a parent `pol`; a counting family's derivation (alldiff, gcc, element,
+       cumulative), written ahead of its trace line because unit propagation cannot close
+       that line without it (these are the [Needs_derivation] families, the stated
+       exception to I-X10, which otherwise makes every trace line RUP against the .opb
+       and the lines before it); and [Pb_analysis.introduce]'s learned PB row, whose
+       claim is an inequality the checker cannot reach by propagation (measured, D-0131:
+       the lifted row of lib/core/ladder.ml's worked example is refused as `rup`). For
+       those the `pol` IS the statement, and `--stats` reports its token count so that a
+       Theta(w) one is seen rather than suffered.
      - [Model_row] writes nothing: its id is the row's.
      - [Decision] is not a derivation at all, and [emit] refuses it rather than
        rendering it as something.
 
-   The root conflict, which until D-0131 was the one place [Linear]'s Combine reached
-   the page as a `pol` at all, no longer asks this module for the derivation:
+   The root conflict does not ask this module for a derivation.
    [Search.close_root_conflict] writes the root's trace and closes with `rup >= 1`, the
-   nogood over an empty decision stack (D-0018 with [decisions = []]), which is the same
-   shape every branch already closed with.
+   nogood over an empty decision stack, which is the shape every branch closes with
+   (D-0018: a branch's nogood is RUP over the trace lines the branch logged). Until
+   D-0131 the root was the one place [Linear]'s [Combine] reached the page as a `pol`.
 
    -------------------------------------------------------------------------------
-   The BITS arm (M8-bits-encoding-T2, D-0130 section 7 as D-0132 section 2 rebuilt it)
+   The BITS arm: a pruning over a bits row is one `pol` pinned by `ia`
    -------------------------------------------------------------------------------
+
+   A variable declared wider than `--bits-above W`, whose scope is eligible, is on the
+   BITS encoding: its value is written in binary over Booleans `x_bit_i`, the .opb has
+   no ladder for it, and its order literals `x >= v` are ATOMS that
+   lib/proof/encoding.ml mints into the .pbp on demand, each defined by a `red` pair of
+   lines B1 and B2 (the design of D-0130 section 7, as D-0132 section 2 rebuilt it for
+   M8-bits-encoding-T2).
 
    A pruning or conflict of a [Linear] row with at least one term on the bits encoding
    is not RUP: a bound does not cross a bits row by unit propagation (D-0127, measured
@@ -82,13 +99,14 @@
    `--bits-above none` is untouched: [emit_summand] renders a [Linear_term] exactly as it
    rendered the [Weaken]/[Term] it replaced.
 
-   M8-bits-encoding-T3 (D-0134): the second bits-arm shape is [Explanation.Resolve],
-   a CHOICE derivation -- maxmin's selector rows over bits, each summed with the bounds
-   it reads and saturated to a clause on its selector, the clauses summed with the
-   selector clause and saturated ([emit_bits_resolve]). The same fragment per term, the
-   same `ia` pin, and no atom added for the claim: the claim variable's term assumes
-   the claim's negation inside every part, so the derived clause is the trace clause
-   with the claim among its literals (D-0134 section 2.3), which is checked.
+   The second bits-arm shape is [Explanation.Resolve] (M8-bits-encoding-T3, D-0134,
+   which extended the bits encoding to maxmin through selector rows and one [Resolve]
+   step). It is a CHOICE derivation -- maxmin's selector rows over bits, each summed with
+   the bounds it reads and saturated to a clause on its selector, the clauses summed with
+   the selector clause and saturated ([emit_bits_resolve]). The same fragment per term,
+   the same `ia` pin, and no atom added for the claim: the claim variable's term assumes
+   the claim's negation inside every part, so the derived clause is the trace clause with
+   the claim among its literals (D-0134 section 2.3), and the `ia` checks that clause.
 
    Atoms are minted where a name first reaches the writer (D-0130 section 3.3):
    [validate_lits] below, which every clause, `rup`, [Defining] and nogood already pass
@@ -97,152 +115,136 @@
    mints; it could not know whether it needs to.
 
    -------------------------------------------------------------------------------
-   Context -- and the ambient row that used to live in it (M1-T31)
+   The context, and why it holds no "current row"
    -------------------------------------------------------------------------------
 
-   [ctx] carries two things, and it used to carry a third:
+   An explanation names every row it cites itself: the model row it rests on is an
+   [Explanation.Model_row id] inside it (D-0015 added that constructor), and each
+   propagator instance justifies against exactly one row, which [Linear.make] requires
+   (D-0011). So [ctx] has no field for an ambient row, and no explanation can render as
+   "whatever row happens to be current", because there is nowhere to put one. A caller
+   that needs to cite a row puts [Explanation.model_row] in the explanation.
 
-     - [writer]   the proof writer every rule is emitted through.
-     - [encoding] lets Justify sanity-check that the literals an explanation mentions
-       belong to variables the encoding actually declared, which turns "propagator
-       passed garbage" into an immediate, legible error instead of a confusing veripb
-       rejection several lines later.
+   [ctx] carries the [writer] every rule is emitted through and the [encoding], which
+   lets Justify check that the literals an explanation mentions belong to variables the
+   encoding declared. That check turns "propagator passed garbage" into an immediate,
+   legible error instead of a confusing veripb rejection several lines later. The rest
+   of [ctx] is the claim index and the bookkeeping that tells whether a remembered line
+   is still on the page (both below).
 
-   The third was [model_id], a thunk answering "what is the id of the model constraint
-   this batch of explanations is about, right now", with a [for_constraint] view to
-   rebind it per site. It existed for one reason: [Explanation.Trivial] carried no
-   data, so [emit] could not answer "which constraint is this about" from the
-   explanation value alone and had to be told.
-
-   Both are gone. D-0015 gave the ADT [Model_row id], so an explanation names its own
-   row; D-0011 says each propagator instance justifies against exactly one row and
-   [Linear.make] now *requires* it; and M1-T31 deleted [Trivial], which was the only
-   constructor that ever consulted the ambient pointer. What is left is the property
-   the row was written for: a [ctx] has no field in which an ambient row could be
-   stored, so no explanation can render as "whatever row happens to be current" -- not
-   by discipline, but because there is nowhere to put one. A caller that used to reach
-   for [for_constraint] wants [Explanation.model_row] in the explanation instead.
+   (Until M1-T31 the context also held [model_id], a thunk naming the current model row,
+   with a [for_constraint] view to rebind it, because an [Explanation.Trivial] carried
+   no row. M1-T31 made the row a required argument and deleted [Trivial], [model_id] and
+   [for_constraint].)
 
    -------------------------------------------------------------------------------
-   Memoisation
+   Memoisation: every written node carries its line
    -------------------------------------------------------------------------------
 
-   The same [Explanation.t] value can be demanded more than once while conflict
-   analysis walks the reason graph (that is exactly why [Explanation.force] itself
-   memoises). Emitting it twice would write duplicate proof rules, waste ids, and make
-   the proof unreadable, so [emit] keeps its own memo from explanation identity to the
-   [Writer.cid] already produced for it.
+   The rule: an explanation node whose line has been written carries that line
+   ([Explanation.node_line]: the id, the writer's level when it was written, this
+   [ctx]'s epoch and serial), and [emit] on that node hands the id back without writing
+   anything for as long as the line is still on the page ([live], [node_answer]). The
+   same [Explanation.t] value is demanded more than once while conflict analysis walks
+   the reason graph, and writing it twice would duplicate proof rules, waste ids and
+   make the proof unreadable.
 
-   Identity, not structural equality, is the only honest key: [Explanation.t] embeds
-   closures ([Deferred]'s thunk), which have no useful notion of structural equality
-   (and [Hashtbl.hash] on a value that stores a *mutable* memoised result is actively
-   dangerous as a hash key -- forcing the thunk changes its representation, so a hash
-   computed before forcing would stop matching the bucket after). So the memo is a plain
-   association list compared with [==]. That is intentionally simple: the number of
-   distinct explanation nodes alive during one conflict's analysis is small, so a linear
-   scan costs nothing that matters, and it sidesteps the mutable-hash-key trap entirely.
+   The key is the node's physical identity, never structural equality. [Explanation.t]
+   embeds closures ([Deferred]'s thunk), which have no useful structural equality, and
+   a value that stores a *mutable* memoised result is a dangerous hash key: forcing the
+   thunk changes its representation, so a hash computed before forcing would stop
+   matching after. Keeping the line in a field of the node asks the identity question
+   with a field read, and no table outside the node holds it.
 
-   [Model_row] is never memoised: it writes nothing and returns the id it already
-   carries, so there is nothing to remember.
+   Two constructors are not memoised this way. [Model_row] writes nothing and returns
+   the id it already carries. A [Deferred] keeps its line on the THUNK
+   ([Explanation.line]), and [emit_thunk] RELEASES the thunk once the line is written,
+   so the tree it built is dropped; after a wipe that reaches the line's level the thunk
+   is forced again and written again (M11-complexity-T13, D-0168; explanation.ml's
+   header, "releasing a written thunk", argues that every byte is the same).
 
-   M11-complexity-T13 (D-0168): neither is a [Deferred] any more. A thunk's line is kept
-   ON THE THUNK ([Explanation.line]: its id, its level, this [ctx]'s epoch and serial),
-   and [emit_thunk] RELEASES the thunk once the line is written: the tree is dropped. The
-   line answers a later [emit] for as long as no wipe has reached its level ([live]),
-   which is when the memo entry it replaces would have answered; after such a wipe the
-   thunk is forced again and written again. explanation.ml's header ("releasing a written
-   thunk") gives the argument that every byte is the same.
+   Hash-consing, on by default (BAGUETTE_HASHCONS=0 turns it off), makes equal content
+   one node: the smart constructors of explanation.ml return the node already written
+   when a build's content equals it. So a propagator that rebuilds the same derivation
+   at every level (388 copies on cable_tree_wiring, D-0149) cites the first copy's line
+   instead of writing an identical line under a new id. A node's line then answers only
+   when it is at or below the writer's current level ([node_answer]), the claim index's
+   condition 2 below, for the same reason: [Writer.wipe_level l] retires every line
+   tagged at a level [>= l], so a line at or below the citing line's level is never
+   retired before it. With BAGUETTE_HASHCONS=0 the memo is the identity memo alone.
 
-   M11-complexity-T15: and since T15 no node is a key either. Every node a line is written
-   for carries that line the way a thunk does ([Explanation.node_line]), so "have I
-   emitted this value" is a field read on the value, the identity question it always
-   was, with the same liveness test as a thunk's line. The paragraphs above describe the
-   table this replaced; what they say about identity being the only honest key is
-   unchanged, and is why the field is on the node.
+   [wipe_level] keeps the memo in lockstep with the writer: in the same call that wipes
+   the writer it stamps the wiped levels with a new epoch ([wiped_at]), so every line
+   remembered at those levels stops answering without visiting a node, and it empties
+   the hash-consing table's entries for those levels. A stale line pointing at an id the
+   proof no longer contains would otherwise let a later [Cut] silently cite a deleted id.
 
-   M11-complexity-T10 (D-0158) added a SHARE MODE (BAGUETTE_MEMO_SHARE=1): a propagator that
-   rebuilds the same derivation at every level (D-0149's 388 copies on cable_tree_wiring)
-   hands this module a new value each time, so the identity memo misses and each copy
-   writes its own line, identical to the first copy's but for its id; share mode rendered
-   every miss and looked the LINE up. M11-complexity-T15 (D-0172) replaced it, and it is
-   gone: the smart constructors HASH-CONS the nodes (explanation.ml, "hash-consing"), so a
-   build whose content equals a node whose line is on the page is that node, and its line
-   answers. The condition share mode put on a shared line stays, on the node's line
-   ([node_answer]): it answers only at or below the writer's current level, the claim
-   index's condition 2 below, for the same reason (`w l` retires levels [>= l], so a line
-   at a level at or below the citing line's is never retired before it). The proof is
-   share mode's proof (byte for byte on three of D-0172's four instances), the search does
-   not change, and BAGUETTE_HASHCONS=0 writes the proof of the identity memo alone.
-
-   Every memo entry is tagged with the writer's level at the moment it was created
-   (docs/PROOF-FORMAT.md section 5: [w] wipes every constraint at or above a level).
-   [wipe_level] drops the matching memo entries in the same call that wipes the writer,
-   so the two stay in lockstep -- a stale memo entry pointing at an id the proof no
-   longer contains would otherwise let a later [Cut] silently cite a deleted id.
+   History, each step measured: the memo was an association list compared with [==],
+   then a table bucketed by a hash (see the comment after the module aliases); a thunk's
+   line moved onto the thunk in M11-complexity-T13 (D-0168), and every node's line onto
+   the node in M11-complexity-T15 (D-0172), which removed the table. A SHARE MODE
+   (BAGUETTE_MEMO_SHARE=1, M11-complexity-T10, D-0158: identical copies could not share
+   a memo entry without changing the proof's bytes, so the mode rendered every miss and
+   looked the LINE up) was replaced by hash-consing in D-0172, which writes share mode's
+   proof (byte for byte on three of D-0172's four instances) without changing the
+   search.
 
    -------------------------------------------------------------------------------
-   The claim index (M2-T9): which line already states this?
+   The claim index: which line already states this clause?
    -------------------------------------------------------------------------------
 
-   The memo above answers "have I emitted *this explanation value* before", keyed on
-   physical identity. It cannot answer the different and older question D-0009 leaves
-   open: **which constraint id establishes this bound fact?** That question has no
-   answer inside an [Explanation.t] -- the record says so in as many words ("an
-   explanation that appeals to a bound fact must name the constraint id that
-   established it ... until [Explanation.t] can carry ids, [Linear] renders as [rup]")
-   -- and the missing field is not on the ADT, it is here: a *lookup* from what a line
-   claims to the id of the line claiming it.
-
-   [stated] is that lookup. Its key is a clause, as a set of literals; its value is the
-   id of the line that put that clause on the page, with the writer's level at the
-   moment it did.
+   [stated] maps a clause, as a set of literals, to the id of the line that put that
+   clause on the page and the writer's level when it did (M2-T9). It answers the
+   question the memo cannot: **which constraint id establishes this bound fact?** The
+   memo answers "have I emitted *this explanation value* before", keyed on identity.
+   D-0009 records that a `pol` may cite a bound fact only by the id of a line that
+   establishes it, and an [Explanation.t] does not carry that id, so the lookup lives
+   here: from what a line claims to the id of the line claiming it.
 
    Three things about the key, each load-bearing:
 
-     - **A clause, not a literal.** D-0019's whole content is that the jump from
-       "literal" to "clause" is where a milestone went wrong: a [rup] target is a
-       clause, so a *line* claims a clause, and an index over literals could not
-       describe most of the lines this proof contains. The literal case is the
-       interesting one -- a **unit** line is the only thing that establishes a literal,
-       which is exactly what D-0009 needs and what [defining_lit] exposes -- but it is
-       the special case of the clause key, not a different table.
+     - **A clause, not a literal.** A [rup] target is a clause, so a *line* claims a
+       clause, and an index over literals could not describe most of the lines this
+       proof contains. (D-0019 found that the jump from "literal" to "clause" is where an
+       earlier milestone went wrong: `x <> v` is no single order literal, but it is the
+       two-literal clause `~x_ge_v \/ x_ge_(v+1)`.) The literal case is the special case
+       of the clause key, not a different table: a **unit** line is the only thing that
+       establishes a literal, which is what D-0009 needs and what [defining_lit] exposes.
      - **Structural, over [Lit.t] rather than over rendered names.** [Lit.var_name]
        sanitises, so two distinct FlatZinc identifiers can render to one OPB name; a
        key built from [Lit.to_string] would silently conflate them and hand back an id
-       that states something else. The key is the literal list itself, sorted by
-       [Lit.compare] so that clause order does not matter (a clause is a set) and
-       [Hashtbl]'s structural equality is the right equality ([Lit.t] holds no closure
-       and nothing mutable, unlike [Explanation.t] -- which is why the memo above
-       cannot be a [Hashtbl] and this can). Since M11-complexity-T12 (D-0166) the
-       sorted list is stored PACKED, two integers a literal over interned names
-       ([pack_key]); the packing is injective, so the equality is the same one.
+       that states something else. The key is the clause's literals PACKED, two integers
+       a literal over interned names ([pack_word], [clause_key]), sorted as integers so
+       that clause order does not matter (a clause is a set). The packing is injective,
+       so two keys are equal exactly when the literal sets are equal. ([Lit.t] holds no
+       closure and nothing mutable, unlike [Explanation.t], which is why this can be a
+       hash table and the memo cannot.)
      - **The empty clause and a clause with a repeated literal are not indexed.**
        [Opb.clause] gives every literal coefficient 1 without merging duplicates, so a
        repeated literal is a coefficient-2 row rather than the set its key would claim.
        The empty clause is excluded for a different and sharper reason, below.
 
-   *Nothing iterates this table*, only [Hashtbl.find_opt] on it, so no emitted byte
+   *Nothing iterates this table*, only [Claims.find_opt] on it, so no emitted byte
    depends on hash order (the gate's determinism lane is what would catch that).
 
-   Reuse is allowed under exactly two conditions, and the second is invariant I-S4
-   turned into a precondition:
+   Reuse is allowed under exactly two conditions:
 
      1. the clause is indexed, and
      2. the indexed line's level is **at or below the writer's current level**.
 
-   (2) is what makes reuse safe rather than merely economical, and it is the same
-   sentence I-S4 makes about a settle line citing a hole line: `w l` retires levels
-   `>= l`, so a line at a level at or below the citing line's is never retired before
-   it. Without (2) a deeper line could be reused by a shallower one and die first. It
-   also disposes of the one genuinely dangerous case: [Search]'s nogood goes through
-   [emit_clause] like every other clause, and the nogood's id is cited by
-   [conclusion UNSAT] at the root and asserted live by [wipe_after_nogood] under a
-   decision. A nogood is emitted at the *parent* level, so a trace line written inside
-   the branch it closes cannot be handed back for it; and the root nogood is
-   [Explanation.clause []], which is not indexed at all.
+   (2) is what makes reuse safe rather than merely economical. [Writer.wipe_level l]
+   retires every line tagged at a level [>= l], so a line at or below the citing line's
+   level is never retired before it, while a deeper line reused by a shallower one
+   would die first. This is invariant I-S4 (a cited line must outlive the line citing
+   it) turned into a precondition. (2) also disposes of the one genuinely dangerous
+   case: [Search]'s nogood goes through [emit_clause] like every other clause, and the
+   nogood's id is cited by [conclusion UNSAT] at the root and asserted live by
+   [wipe_after_nogood] under a decision. A nogood is emitted at the *parent* level, so a
+   trace line written inside the branch it closes cannot be handed back for it; and the
+   root nogood is [Explanation.clause []], which is not indexed at all.
 
-   [wipe_level] drops the index's entries in the same call as the memo's, for the same
-   reason and in lockstep. *)
+   [wipe_level] drops the index's entries in the same call as it wipes the writer and
+   the memo, for the same reason. *)
 
 module Lit = Baguette_proof.Lit
 module Opb = Baguette_proof.Opb
@@ -250,19 +252,22 @@ module Writer = Baguette_proof.Writer
 module Pol = Baguette_proof.Writer.Pol
 module Encoding = Baguette_proof.Encoding
 
-(* M11-complexity-T15: the memo is no longer a table. Its history, kept because each
-   step was measured: M6-T9 (D-0080) bucketed a physical-identity memo by a shallow hash;
-   M11-complexity-T5 (D-0145, D-0140 J1) made that hash allocation-free and computed once;
-   M6-T23 (D-0149) hashed an operand by its content; M11-complexity-T12 (D-0166) made a
-   cell 48 bytes; M11-complexity-T13 (D-0168) took a released thunk's cells out. Each
-   node now carries its own line ([Explanation.node_line]), so a lookup is a field read,
-   nothing is hashed, and nothing outside the node holds it: what D-0168's window, frame
-   and second forcing existed to let go of is never held. *)
+(* The memo is a field of each node ([Explanation.node_line]), so a lookup is a field
+   read, nothing is hashed, and nothing outside the node holds it (M11-complexity-T15,
+   D-0172). It was a table, and its history is kept because each step was measured, on
+   the per-node cost of a proved run: M6-T9 (D-0080, where the time of a 300 s run went)
+   bucketed a physical-identity memo by a shallow hash; M11-complexity-T5 (D-0145, the
+   profiled pass over trace, justification and proof writing) made that hash
+   allocation-free and computed once; M6-T23 (D-0149) hashed an operand by its content;
+   M11-complexity-T12 (D-0166, what a proved run keeps alive once a line is written) made
+   a cell 48 bytes; M11-complexity-T13 (D-0168) took a released thunk's cells out. With
+   no table, the bookkeeping D-0168 needed to let go of those cells (a window, a frame of
+   builds, a second forcing) has nothing left to release. *)
 
-(* M11-complexity-T10 (D-0158), M11-complexity-T15. Off unless asked for:
-   BAGUETTE_MEMO_STATS=1 counts the memo's lookups, its hits, the lines too deep to answer
-   ([node_answer]) and the thunks' lines, and prints them to stderr at exit, as
-   BAGUETTE_WAKE_STATS does for the engine; explanation.ml adds the builds per producer. *)
+(* Off unless asked for: BAGUETTE_MEMO_STATS=1 counts the memo's lookups, its hits, the
+   lines too deep to answer ([node_answer]) and the thunks' lines, and prints them to
+   stderr at exit, as BAGUETTE_WAKE_STATS does for the engine; explanation.ml adds the
+   builds per producer (M11-complexity-T10, D-0158; M11-complexity-T15). *)
 let memo_stats_on =
   match Sys.getenv_opt "BAGUETTE_MEMO_STATS" with
   | Some ("1" | "true" | "yes" | "on") -> true
@@ -283,9 +288,12 @@ let () =
           !Explanation.released !ms_line_hits !Explanation.reforced
           !Explanation.reforced_emit)
 
-(* An integer mix, for the claim index's keys (M11-complexity-T5,
-   D-0145). A name is hashed with [String.hash], the C string hash, which allocates
-   nothing (and returns what [Hashtbl.hash] did, without its dispatch, D-0236). *)
+(* An integer mix and its finaliser, which hash the claim index's packed keys ([Claims])
+   and the [Combine] shapes ([Shapes]) without allocating (M11-complexity-T5, D-0145).
+   [lit_hash] hashes one literal, its name with [String.hash], the C string hash, which
+   allocates nothing and returns what [Hashtbl.hash] did without its generic dispatch
+   (M20-pernode-T4, D-0236: a name is hashed once where it was hashed per use). Nothing
+   in lib/, bin/ or test/ calls [Justify.lit_hash] today; explanation.ml has its own. *)
 let mix h x = (h * 31) + x
 
 let finish h =
@@ -305,22 +313,23 @@ let lit_hash (l : Lit.t) =
    line was written at. See the module header's "claim index". *)
 type stated = { s_cid : Writer.cid; s_level : int }
 
-(* M11-complexity-T5 (D-0145, D-0140 J2), M11-complexity-T12 (D-0166). The claim
-   index's table. Its key is the clause as a PACKED array, two [int]s per literal of the
-   sorted set: the variable's name interned in [ctx.names] with the kind and the sign,
-   then the value ([pack_key]). It was the sorted [Lit.t list] itself, and that list was
-   the only thing holding its literals: 4.87 M literals in 25 888 keys on
-   2011_black-hole_9 at node 40 (a trace line's claim and negated facts), 333 MB at about
-   68 bytes a literal (a cons, a [Lit.t], a [Ge] block), where the packed key costs 16.
-   The packing is injective (one interned id per name STRING, so two names are one id
-   exactly when [String.equal] holds, which is what [Lit.equal] compares), so two keys
-   are equal exactly when the sorted literal lists were [List.equal Lit.equal], the
-   equality the table had. The hash mixes the packed integers rather than a string hash
-   of each name; since M16-file-review-T4 (D-0192) all of them, and the pairs are sorted
-   as integers (by interned name, kind, sign, value) rather than by [Lit.compare]: any
-   one order makes a set's key unique, and this one compares no string.
-   Nothing iterates this table, so only the cost of a lookup and the bytes a key holds
-   change. *)
+(* The claim index's table. Its key is the clause as a PACKED array, two [int]s per
+   literal of the sorted set: first the variable's name interned in [ctx.names] with the
+   literal's kind and sign ([pack_word]), then the value. The pairs are sorted as
+   integers (by interned name, kind, sign, value): any one order makes a set's key
+   unique, and this one compares no string (M16-file-review-T4, D-0192, the file-by-file
+   review of the proof side). The packing is injective, because there is one interned id
+   per name STRING, so two names share an id exactly when [String.equal] holds, which is
+   what [Lit.equal] compares. Two keys are therefore equal exactly when the sorted
+   literal lists are [List.equal Lit.equal]. The hash mixes every packed integer rather
+   than a string hash of each name. Nothing iterates this table, so the packing changes
+   only the cost of a lookup and the bytes a key holds, never the proof.
+
+   Why packed (M11-complexity-T5, D-0145; M11-complexity-T12, D-0166): the key was the
+   sorted [Lit.t list], and that list was the only thing holding its literals, 4.87 M
+   literals in 25 888 keys on 2011_black-hole_9 at node 40 (a trace line's claim and
+   negated facts), 333 MB at about 68 bytes a literal (a cons, a [Lit.t], a [Ge] block),
+   where the packed key costs 16. *)
 module Claims = Hashtbl.Make (struct
   type t = int array
 
@@ -331,32 +340,33 @@ module Claims = Hashtbl.Make (struct
     let rec go i = i >= n || (Int.equal a.(i) b.(i) && go (i + 1)) in
     go 0
 
-  (* Every slot and the length. M16-file-review-T4 (D-0192): it was the first eight
-     literals, and once a key is sorted by interned name (the names met first sort first)
-     the clauses of 2023_evm-super-compilation agreed on that prefix by the thousand, one
-     bucket walked by [equal] at every lookup (+15 % per node with the proof). *)
+  (* Every slot and the length. Hashing only a prefix is not enough: it was the first
+     eight literals (until D-0192), and once a key is sorted by interned name (the names
+     met first sort first) the clauses of 2023_evm-super-compilation agreed on that
+     prefix by the thousand, one bucket walked by [equal] at every lookup (+15 % per node
+     with the proof). *)
   let hash (a : int array) =
     let n = Array.length a in
     let rec go h i = if i >= n then h else go (mix h a.(i)) (i + 1) in
     finish (mix (go 8 0) (n / 2))
 end)
 
-(* M16-file-review-T4 (D-0192): the interned names, keyed by the string with [String.equal]
-   and the C string hash. It was the polymorphic [Hashtbl], whose lookup compares a key
+(* The interned names: lib/proof/name_tbl.ml, a table keyed by the string with
+   [String.equal] and [String.hash], which returns [Hashtbl.hash]'s value without the
+   generic hash's dispatch (M20-pernode-T4, D-0236). It gives the same answer for every
+   name as the polymorphic [Hashtbl] it replaced (D-0192), whose lookup compared keys
    with [compare] (the C [compare_val] walking both strings), a quarter of [intern]'s
-   cost on soccer. The same answer for every name: the polymorphic equality on two
-   strings is [String.equal], and the hash is the one [Hashtbl.hash] computed.
-   M20-pernode-T4 (D-0236): it is [Name_tbl], the same table hashed by [String.hash],
-   which returns that value without the generic hash's dispatch. *)
+   cost on soccer. *)
 module Names = Baguette_proof.Name_tbl
 
-(* M16-file-review-T4 (D-0192): the table of [combine_origin]'s shapes, keyed by the two
-   integers packed as one, the count in the high bits. It was a [Writer.Itbl], whose hash
-   is the key itself because the writer's keys are consecutive ids, and a bucket is the
-   key's LOW bits: every shape of one divisor fell in one bucket, and the lookup walked
-   them all (10.6 % of 2013_rcpsp_11's samples with the proof, a chain of every shape of
-   divisor 1). [finish] spreads the high bits into the low ones. The table is never
-   iterated, and a shape still finds the one closure it shared, so no byte moves. *)
+(* The table of [combine_origin]'s shapes, keyed by the two integers packed as one, the
+   count in the high bits. Its hash is [finish], which spreads the high bits into the low
+   ones, because a bucket is chosen by the key's LOW bits. It was a [Writer.Itbl] (until
+   D-0192), whose hash is the key itself because the writer's keys are consecutive ids:
+   every shape of one divisor fell in one bucket, and the lookup walked them all (10.6 %
+   of 2013_rcpsp_11's samples with the proof, a chain of every shape of divisor 1). The
+   table is never iterated, and a shape still finds the one closure it shared, so no
+   byte moves. *)
 module Shapes = Hashtbl.Make (struct
   type t = int
 
@@ -368,50 +378,58 @@ type ctx = {
   writer : Writer.t;
   encoding : Encoding.t;
   stated : stated Claims.t;
+      (* The claim index (M2-T9): clause (as a packed sorted literal set) -> the line
+         that states it. Read by [defining_line] and [defining_lit], written by every
+         clause this module puts on the page, wiped by [wipe_level]. Lookup only, never
+         iterated for emission. *)
   mutable stated_by_level : int array list array;
-      (* M6-T17: the keys each level stated, indexed by level. Level 0 is not recorded
-         (M11-complexity-T5): no wipe reaches it. *)
+      (* The keys each level stated, indexed by level, so that [wipe_level] visits only
+         the wiped levels' keys (M6-T17 measured the whole-table fold on every backtrack
+         at 2 to 2.5 % of mario). Level 0 is not recorded (M11-complexity-T5): no wipe
+         reaches it. *)
   mutable stated_hi : int;
-      (* M2-T9. Clause (as a sorted literal set) -> the line that states it. Read by
-         [defining_line] and [defining_lit], written by every clause this module puts on
-         the page, wiped by [wipe_level]. Lookup only -- never iterated for emission. *)
+      (* The highest level [stated_by_level] holds keys for, -1 when none. *)
   names : int Names.t;
   mutable name_of : string array;
-      (* M11-complexity-T12 (D-0166): the claim index's interned variable names, both
-         ways ([name_of] only to spell a key back in [defining_key]'s message). One
-         entry per name a stated clause has named, never wiped: the ids must stay
-         stable for as long as a key that uses them can be in [stated]. *)
+      (* The claim index's interned variable names, both ways ([name_of] only to spell a
+         key back in [defining_key]'s message), M11-complexity-T12 (D-0166). One entry
+         per name a stated clause has named, never wiped: the ids must stay stable for
+         as long as a key that uses them can be in [stated]. *)
   mutable declared : Bytes.t;
-      (* M16-file-review-T4 (D-0192): per interned name, '\001' once [validate_lit] has
-         found it declared in [encoding]. A name is never undeclared ([Encoding] only adds
-         to its table), so the answer [Encoding.is_declared] gave once is the answer it
-         would give again, and the check costs one lookup where it cost two.
-         M20-pernode-T4 (D-0236): '\002' when the variable is declared on the BITS
-         encoding, read by [validate_lit] in place of an [Encoding.is_bits] per literal; a
-         variable's encoding is fixed at its declaration, so that answer is stable too. *)
+      (* Per interned name: '\000' not yet checked, '\001' once [validate_lit] has found
+         it declared in [encoding] on the order encoding, '\002' when it is declared on
+         the BITS encoding. Both answers are stable, because a name is never undeclared
+         ([Encoding] only adds to its table) and a variable's encoding is fixed at its
+         declaration, so each name costs one [Encoding.is_declared] and one
+         [Encoding.is_bits] for the whole run (D-0192 for the first, D-0236 for the
+         second). *)
   combine_origins : (unit -> string) Shapes.t;
-      (* M11-complexity-T12 (D-0166): one origin closure per (summands, divisor) shape,
-         shared by every [Combine] line of that shape; see [combine_origin]. *)
+      (* One origin closure per (summands, divisor) shape, shared by every [Combine]
+         line of that shape; see [combine_origin]. *)
   serial : int;
   mutable epoch : int;
   mutable wiped_at : int array;
   mutable line_hi : int;
-      (* M11-complexity-T13 (D-0168), and since M11-complexity-T15 for every node's line
-         too: what tells whether a line a thunk or a node remembers is still on the page. [epoch] counts this [ctx]'s wipes; [wiped_at.(l)] is the epoch of
-         the last wipe that reached level [l] (0 if none), stamped by [wipe_level] for
-         every level up to [line_hi], the highest level a line was recorded at since. A
-         line recorded at level [l] in epoch [e] by the [ctx] whose [serial] it carries
-         is live exactly when [wiped_at.(l) <= e]: the condition under which the memo
-         entry it replaces would still be in the memo. *)
+      (* What tells whether a line a thunk or a node remembers is still on the page
+         ([live]). [epoch] counts this [ctx]'s wipes; [wiped_at.(l)] is the epoch of the
+         last wipe that reached level [l] (0 if none), stamped by [wipe_level] for every
+         level up to [line_hi], the highest level a line was recorded at since. A line
+         recorded at level [l] in epoch [e] by the [ctx] whose [serial] it carries is
+         live exactly when [wiped_at.(l) <= e], which is when the memo entry it replaces
+         would still be in the memo (M11-complexity-T13, D-0168, for a thunk's line;
+         M11-complexity-T15 for a node's). *)
 }
 
 let serials = ref 0
 
 let create ~writer ~encoding =
   incr serials;
-  (* M21-memory-T3 (D-0223): the rows of the .opb and the lines the proof opened with are
-     the ids a derivation cites again and again; their citations are shared from here on.
-     A null writer has handed out no id, so nothing is shared under `--no-proof`. *)
+  (* The rows of the .opb and the lines the proof opened with are the ids a derivation
+     cites again and again, so from here on each of them is cited through one shared
+     [Term (1, Model_row id)] value ([Explanation.intern_up_to]) instead of a fresh one
+     per citation (M21-memory-T3, D-0223, which measured what kept written explanations
+     alive on tdtsp). A null writer has handed out no id, so nothing is shared under
+     `--no-proof`. *)
   if not (Writer.is_null writer) then Explanation.intern_up_to (Writer.last_id writer);
   {
     writer;
@@ -463,7 +481,10 @@ let wipe_level ctx level =
   if ctx.stated_hi >= level then ctx.stated_hi <- level - 1
 
 (* Emit at a chosen level -- [Writer.with_level] with the [ctx]'s two side tables kept
-   honest, and the call every learned constraint goes through (M2-L1, D-0045).
+   honest, and the call every learned constraint goes through. A learned constraint is
+   derived at the conflict's level but must survive the backjump, so its id has to be
+   tagged at the shallower level it is kept at; D-0045's addendum found that nothing
+   could do that, and M2-L1 (the learned-constraint type) built this bracket.
 
    Nothing extra has to be done to them, and that is worth one sentence rather than
    leaving a reader to check: [remember] and [state_clause] both stamp their entry with
@@ -480,10 +501,8 @@ let with_level ctx level f = Writer.with_level ctx.writer level f
 
 (* ------------------------------------------------------- the claim index (M2-T9) *)
 
-(* The key, or [None] for a clause this index does not describe: the empty clause, and
-   any clause whose [Opb] rendering is not the literal *set* its key would claim. See
-   the module header. Packed as [Claims] says (M11-complexity-T12, D-0166), sorted by
-   the packed integers (D-0192), not by [Lit.compare]. *)
+(* The id of the name [x] in [ctx.names], minted on first sight; [name_of] and [declared]
+   grow with it so that both stay indexed by the same id. *)
 let intern ctx (x : string) =
   match Names.find_opt ctx.names x with
   | Some i -> i
@@ -500,7 +519,9 @@ let intern ctx (x : string) =
       ctx.name_of.(i) <- x;
       i
 
-(* One literal's two slots: the interned name with the kind and the sign, then the value. *)
+(* The first of a literal's two slots: the interned name shifted left by 3, the kind (0
+   for [Ge], 1 for [Eq], 2 for [Bit]) in bits 1 and 2, the sign in bit 0. The second
+   slot is the value. *)
 let pack_word ctx (l : Lit.t) =
   let kind, x =
     match l.Lit.v with
@@ -510,16 +531,18 @@ let pack_word ctx (l : Lit.t) =
   in
   (intern ctx x lsl 3) lor (kind lsl 1) lor Bool.to_int l.Lit.positive
 
-(* M16-file-review-T4 (D-0192): the pairs sorted by their two integers, in place, and
-   whether two of them are equal. Insertion for a short clause (the trace's lines are),
-   [Array.stable_sort] beyond [insertion_max].
+(* The pairs sorted by their two integers, in place ([sort_pairs]), and whether two of
+   them are equal ([has_repeat]). Insertion sort for a short clause (the trace's lines
+   are), [Array.stable_sort] beyond [insertion_max] (D-0192).
 
-   M6-T2 (D-0198 §3): the long case sorts an [int array] of pair INDICES and writes the
-   pairs back from a copy. It used to sort an array of tuples, and past 256 pairs
-   [Array.make] with a young tuple as its initial value runs a minor collection first, once
-   for the array and once for the merge's scratch: 1 300 of soccer's 1 635 collections, 10 %
-   of its cycles with the proof. An int array holds no pointer, so nothing forces one. The
-   bytes are the same, because two pairs that compare equal are equal pairs. *)
+   The long case sorts an [int array] of pair INDICES and writes the pairs back from a
+   copy, because an int array holds no pointer and so allocating it forces no minor
+   collection (M6-T2, D-0198 section 3, which found the trail and the domains a small
+   share of the allocation and fixed this instead). It used to sort an array of tuples,
+   and past 256 pairs [Array.make] with a young tuple as its initial value runs a minor
+   collection first, once for the array and once for the merge's scratch: 1 300 of
+   soccer's 1 635 collections, 10 % of its cycles with the proof. The bytes are the same,
+   because two pairs that compare equal are equal pairs. *)
 let insertion_max = 24
 
 let sort_pairs (a : int array) =
@@ -589,6 +612,10 @@ let unpack_key ctx (a : int array) : Lit.t list =
       in
       { Lit.v = pv; positive = w land 1 = 1 })
 
+(* The key, or [None] for a clause this index does not describe: the empty clause, and
+   any clause with a repeated literal, whose [Opb] rendering is not the literal *set* its
+   key would claim (see the module header's claim index). Packed and sorted as [Claims]
+   says. *)
 let clause_key ctx (lits : Lit.t list) : int array option =
   key_of_words (pack_word ctx) lits
 
@@ -618,7 +645,7 @@ let state_clause ctx (lits : Lit.t list) (cid : Writer.cid) =
 
 (* [defining_line ctx lits] is the id of a line already on the page that states exactly
    the clause [lits], and that a line written *now* may cite: it is at or below the
-   current level, so no [w] retires it first (I-S4).
+   current level, so no [wipe_level] retires it before the citing line (I-S4).
 
    Under the audit the recorded id is also checked to be live. That is not a fallback --
    it raises rather than quietly minting a fresh line -- because a dead id here means
@@ -652,16 +679,18 @@ let defining_line ctx (lits : Lit.t list) : Writer.cid option =
    about [l] on its own -- so this is [defining_line] on the one-literal clause, and the
    answer is [None] exactly when no line has stated [l] outright.
 
-   M4-T7 gave it its caller. [Explanation.Defining (c, l)] is the slot this comment said
-   [Combine]/[Cut] did not carry -- a summand that sits where a [Weaken] axiom would and
-   cites this lookup's answer instead -- so the ADT gap D-0009 and D-0038 were circling
-   is closed on the [pol] side. [emit_summand] below is the call. *)
+   Its caller is [Explanation.Defining (c, l)], a [Combine] summand that sits where a
+   [Weaken] axiom would and cites this lookup's answer instead (M4-T7, which let an
+   explanation ask for the defining id of a bound fact). That closes, on the [pol] side,
+   the gap D-0009 and D-0038 (should an explanation carry the bound it concludes?) were
+   circling. [emit_summand] below is the call. *)
 let defining_lit ctx (l : Lit.t) : Writer.cid option = defining_line ctx [ l ]
 
 (* The atom a literal names is on the page before the line that names it (D-0130
-   section 3.3): for an order literal of a BITS variable, [Encoding.ensure_atom] mints
-   the `red` pair (once; memoised there). An order variable's literal is a PB variable
-   of the .opb and needs nothing; a [Bit] never reaches a clause this module writes. *)
+   section 3.3, the on-demand atom): for an order literal of a BITS variable,
+   [Encoding.ensure_atom] mints the `red` pair (once; memoised there). An order variable's
+   literal is a PB variable of the .opb and needs nothing; a [Bit] never reaches a clause
+   this module writes. *)
 let ensure_lit ctx (l : Lit.t) =
   match l.Lit.v with
   | Lit.Ge (x, v)
@@ -670,10 +699,11 @@ let ensure_lit ctx (l : Lit.t) =
   | Lit.Ge _ | Lit.Eq _ | Lit.Bit _ -> ()
 
 (* [l] is about a declared variable, or this raises; then its atom is minted, if it has
-   one to mint. Answers [l]'s first packed slot, so a caller building the claim key does not
-   intern the name a second time (M16-file-review-T4, D-0192: the check was a lookup in
-   [Encoding]'s names and the key a lookup in [ctx.names], two string hashes a literal of
-   every line; it is now the second alone, and [declared] remembers the first's answer). *)
+   one to mint. Answers [l]'s first packed slot, so a caller building the claim key does
+   not intern the name a second time. One string hash per literal: the declaration check
+   was a lookup in [Encoding]'s names and the key a lookup in [ctx.names], two string
+   hashes a literal of every line, and it is now the second alone, with [declared]
+   remembering the first's answer (D-0192). *)
 let validate_lit ctx (l : Lit.t) =
   let w = pack_word ctx l in
   let i = w lsr 3 in
@@ -704,9 +734,9 @@ let validate_lits ctx lits = List.iter (fun l -> ignore (validate_lit ctx l : in
    in the order given, as [validate_lits] does, then the key. *)
 let validated_key ctx lits = key_of_words (validate_lit ctx) lits
 
-(* M11-complexity-T13 (D-0168), M11-complexity-T15: the id of a line a thunk or a node
-   remembers, if this [ctx] wrote it and it is still on the page (see [ctx]'s
-   [wiped_at]): exactly when the memo cell it replaces would still answer. *)
+(* The id of a line a thunk or a node remembers, if this [ctx] wrote it and it is still
+   on the page (see [ctx]'s [wiped_at]): exactly when the memo cell it replaces would
+   still answer. *)
 let live ctx (l : Explanation.line) =
   match l with
   | Explanation.Line { cid; level; epoch; owner } ->
@@ -728,13 +758,14 @@ let new_line ctx cid =
   Explanation.Line { cid; level; epoch = ctx.epoch; owner = ctx.serial }
 
 (* What a node's line answers. Without hash-consing it is what the identity memo
-   answered. With it (BAGUETTE_HASHCONS=1) a node is every build of the same content, so
-   its line is cited by builds that would each have written their own, and it answers
-   only when it is at or below the writer's current level: the claim index's condition 2
-   (M2-T9), for the same reason -- an id handed back is kept by the caller for as long as
-   the CURRENT level lives (a nogood, a thunk's line), and `w l` retires levels [>= l], so
-   only a line at or below that level is sure to outlive it. A deeper line is answered by
-   a new one, which the node then remembers. *)
+   answered. With it (the default; BAGUETTE_HASHCONS=0 is without) a node is every build
+   of the same content, so its line is cited by builds that would each have written their
+   own, and it answers only when it is at or below the writer's current level: the claim
+   index's condition 2, for the same reason -- an id handed back is kept by the caller
+   for as long as the CURRENT level lives (a nogood, a thunk's line), and
+   [Writer.wipe_level l] retires every line tagged at a level [>= l], so only a line at
+   or below that level is sure to outlive it. A
+   deeper line is answered by a new one, which the node then remembers. *)
 let node_answer ctx (e : Explanation.t) =
   match Explanation.node_line e with
   | Explanation.No_line -> None
@@ -747,14 +778,15 @@ let node_answer ctx (e : Explanation.t) =
             None)
       | hit -> hit)
 
-(* [e]'s line is [cid], written now. With hash-consing the node enters the table of written nodes at the writer's
-   level, which [wipe_level] empties with the level. *)
+(* [e]'s line is [cid], written now. With hash-consing the node enters the table of
+   written nodes at the writer's level, which [wipe_level] empties with the level. *)
 let remember ctx (e : Explanation.t) cid =
   Explanation.set_node_line e (new_line ctx cid);
   if !Explanation.hashcons || Explanation.stats_on then
     Explanation.hc_written e (Writer.current_level ctx.writer)
 
-(* What [e]'s line answers now, for tests: the id [emit] would hand back without writing. *)
+(* What [e]'s line answers now, for tests: the id [emit] would hand back without
+   writing. *)
 let remembered ctx (e : Explanation.t) = node_answer ctx e
 
 (* Run [write] and remember its line on [e], unless [e]'s line answers. [e] is never a
@@ -782,29 +814,30 @@ let memoized ctx (e : Explanation.t) (write : unit -> Writer.cid) : Writer.cid =
    target and searches for its own justification, so it is the only one that fits;
    docs/PROOF-FORMAT.md section 4 makes the same call for [int_ne] and [bool_clause].
 
-   M1-T59: and before writing one, ask the claim index whether the page already says
-   this. It did, twice out of 34 models, and the roadmap row is right that the fix is a
-   question of *who owns the claim* rather than a rendering bug. Both duplicates had the
-   same shape: [Trace] had already written the pruning's own line -- claim clause plus
-   negated facts -- and then a conflict path asked [Justify] for the id of the very same
-   [Clause], which had no way to know and wrote it again.
+   Before writing one, [emit_clause] asks the claim index whether the page already
+   states this clause, and if so hands back that line's id (M1-T59). The question is
+   *who owns the claim*: [Trace] writes a pruning's own line (claim clause plus negated
+   facts), and a conflict path that later asks [Justify] for the id of the very same
+   [Clause] gets that line. Without the lookup it was written twice, in 2 of 34 models:
 
      root_hole_unsat    @c9 and @c14 are `rup +1 ~v0_ge_0 +1 v0_ge_1 +1 v1_ge_1 >= 1 ;`
      bool_channel_unsat @c6 and @c8  are `rup +1 ~x_ge_2 >= 1 ;`
 
-   Handing back an id this module did not mint is not new -- [Model_row] always has, and
-   the memo has since M1-T31 -- so I-X2's "an id you receive is an id you must delete"
-   already cannot mean exclusive ownership of an [emit] result, and [Search.solve]
-   already retires by [live_ids] rather than by counting what it was handed. *)
+   So an [emit] result can be an id this module did not mint for this call ([Model_row]
+   always returns one, and so does the memo). Invariant I-X2 (every constraint id is
+   deleted exactly once, "an id you receive is an id you must delete") therefore cannot
+   mean exclusive ownership of an [emit] result, and [Search.solve] retires by
+   [Writer.live_ids] rather than by counting what it was handed. *)
 let emit_clause ctx lits =
-  (* The key once (M11-complexity-T5, D-0140 J2): it was sorted by [defining_line] and
-     again by [state_clause]. Built in the same pass as the check (D-0192). *)
+  (* The key is built once, in the same pass as the literal check (D-0192); it was
+     sorted by [defining_line] and again by [state_clause] (until M11-complexity-T5,
+     D-0145, item J2 of D-0140's inventory of costs that grow with the run). *)
   let key = validated_key ctx lits in
   match match key with None -> None | Some k -> defining_key ctx k with
   | Some cid -> cid
   | None ->
-      (* The origin is rendered only if something reads it (D-0145, D-0140 J6): the
-         writer's audit naming a leaked id, or the mutation knob. *)
+      (* The origin is rendered only if something reads it (D-0145): the writer's audit
+         naming a leaked id, or the mutation knob. *)
       let cid =
         Writer.rup_clause_lazy ctx.writer
           ~origin:(fun () ->
@@ -814,26 +847,28 @@ let emit_clause ctx lits =
       (match key with None -> () | Some k -> state_key ctx k cid);
       cid
 
-(* A clause emitted outside the [Explanation.t] world entirely: docs/DECISIONS.md
-   D-0018's trace lines, which state "these bound facts imply that bound" and are
-   globally valid with no decision in them. They are deliberately *not* memoised --
-   each one is about one trail entry at one moment, two prunings of the same variable
-   in the same branch are two different lines, and physical identity of a freshly
-   built literal list would never hit the memo anyway. [validate_lits] still applies:
-   a propagator handing [Trace] a literal about an undeclared variable should say so
-   here, not several lines later inside veripb.
+(* A clause emitted outside the [Explanation.t] world entirely: the trace lines of
+   D-0018 (a branch's nogood is RUP over the lines its trace logged), which state "these
+   bound facts imply that bound" and are globally valid with no decision in them. They are
+   deliberately *not* memoised -- each one is about one trail entry at one moment, two
+   prunings of the same variable in the same branch are two different lines, and physical
+   identity of a freshly built literal list would never hit the memo anyway.
+   [validate_lits] still applies: a propagator handing [Trace] a literal about an
+   undeclared variable should say so here, not several lines later inside veripb.
 
-   It *populates* the claim index (M2-T9) and deliberately does not *consult* it. That
+   It *populates* the claim index and deliberately does not *consult* it. That
    asymmetry is the ownership answer M1-T59 asks for: the trace is the primary record of
    what a branch learned, so it always writes its own line, and everything else asks it
    what is already there. Consulting here would also break two properties [Trace] owns
    -- [emitted_ids] would list one id twice, and [permanent_ids] would hand
-   [Search.solve] an id to delete twice, which is an I-X2 violation rather than a saving. *)
-(* [~origin] is a thunk (D-0145, D-0140 J6): [Trace] builds it from the line's literals,
+   [Search.solve] an id to delete twice, which is an I-X2 violation rather than a
+   saving. *)
+(* [~origin] is a thunk (D-0145): [Trace] builds it from the line's literals,
    and only the writer's audit and the mutation knob ever render it. [emit_rup_clause]
    below is the same over a string, for [Search]'s bridges. *)
 let emit_rup_clause_lazy ctx ~origin lits =
-  (* M9-no-proof-T2: no line, no claim-index entry, no literal validated. *)
+  (* Under `--no-proof` the writer is null (M9-no-proof-T2): an id is still counted, but
+     no line is written, no claim-index entry made, no literal validated. *)
   if Writer.is_null ctx.writer then Writer.fresh_lazy ctx.writer ~origin
   else
     let key = validated_key ctx lits in
@@ -844,38 +879,37 @@ let emit_rup_clause_lazy ctx ~origin lits =
 let emit_rup_clause ctx ~origin lits =
   emit_rup_clause_lazy ctx ~origin:(fun () -> origin) lits
 
-(* [Linear (terms, rhs)] -- rup of exactly the constraint it states. Not [pol]; see
-   D-0009 (docs/DECISIONS.md) for the full story, summarised here because
-   docs/PROOF-FORMAT.md section 2 requires a propagator (and by extension, its bridge)
-   that can only manage [rup] to say why in its own header.
+(* [Linear (terms, rhs)] -- `rup` of exactly the constraint [terms >= rhs] it states,
+   never [pol].
 
-   The earlier version of this function ignored [terms] and [rhs] entirely and emitted
-   [pol <model_id>], restating the model constraint. That was wrong: [Explanation.Linear]
-   is used by propagators (see [lib/core/prop/linear.ml]'s [int_lin_le]) to carry a
-   restatement of *bound facts*, e.g. "the order-encoding unit literals witnessing the
-   current bounds of the other variables" -- a completely different constraint from the
-   model row, and the old code silently discarded it.
+   [Explanation.Linear] carries a restatement of *bound facts*, not the model row:
+   lib/core/prop/linear.ml's [int_lin_le] uses it for "the order-encoding unit literals
+   witnessing the current bounds of the other variables". A [pol] cannot render that,
+   because a [pol] expression cannot state that a literal *holds*: a bare literal in
+   one is the trivial axiom [lit >= 0] (true for 0 or 1 alike), not an assertion that
+   it is 1. A bound fact can be cited in a [pol] only by the id of a line that already
+   establishes it (D-0009), such as a decision or an earlier pruning the search has
+   logged at its proof level (D-0008: backtracking retires lines by level), and this
+   constructor carries literals, not ids. So [rup] is the faithful
+   rendering: state [terms >= rhs] outright and let the checker's unit propagation find
+   the already-logged facts that make it true. It is also what the module header's rule
+   asks for, since unit propagation closes it. docs/PROOF-FORMAT.md section 2a asks a
+   propagator (and by extension its bridge) that can only produce [rup] to say why in
+   its own header, and this paragraph is the why.
 
-   The tempting fix -- render [terms >= rhs] as [pol], citing whatever established each
-   literal -- does not work, because a [pol] expression cannot state that a literal
-   *holds*: a bare literal in one is the trivial axiom [lit >= 0] (true for 0 or 1
-   alike), not an assertion that it is 1. Checked directly against a checker -- the
-   transcript below is the original 2.0-era one (D-0046 retired that format and its
-   checker; the measurement is kept because it is what settled the question):
+   The measurement that settled it, checked directly against a checker. The transcript
+   is the original 2.0-era one (D-0046 retired that format and its checker), kept
+   because it is what settled the question:
 
      f 1                  * model: 1 x1 >= 1
      pol x2
      rup 1 x2 >= 1 ;      * Failed to show '1 x2 >= 1' by reverse unit propagation
 
-   So a bound fact can only be cited by the id of a constraint that already establishes
-   it (a decision or an earlier pruning search has logged, per D-0008's levels) -- never
-   by naming its literal inside a [pol] expression. [Explanation.t] cannot carry that id
-   (D-0003 is still open on whether it ever will), so the only honest rendering today is
-   [rup]: state [terms >= rhs] outright and let the checker's own unit-propagation search
-   find the already-logged facts that make it true. This is faithful to what the
-   explanation claims, unlike the old [pol <model_id>], at the cost of being exactly the
-   "checker searches" case docs/PROOF-FORMAT.md section 2 says to avoid when a [pol] is
-   available -- it is not available here. *)
+   History: the first version of this function ignored [terms] and [rhs] and emitted
+   [pol <model_id>], restating the model row and silently discarding the facts. A
+   [Combine] can now cite a fact's defining line through [Explanation.Defining] (M4-T7),
+   and reasons became declarative data rather than ids (D-0003, resolved by D-0026);
+   neither changes this rendering. *)
 let linear_line ctx terms rhs =
   validate_lits ctx (List.map snd terms);
   Opb.ge terms rhs
@@ -887,23 +921,16 @@ let write_linear ctx c =
 
 let emit_linear ctx terms rhs = write_linear ctx (linear_line ctx terms rhs)
 
-(* [Cut (e1, e2, c1, c2)] -- recurse on both reasons, then combine: c1 * e1 + c2 * e2.
+(* One [pol], or one [pol] that states what it concludes (D-0043: a justification may
+   carry the constraint it concludes, so the checker can compare it).
 
-   [Pol.mul] rejects a multiplier below 1, so [c1] and [c2] must be positive; this is
-   the same restriction cutting planes always has (a "combination" with a non-positive
-   multiplier is not a sound PB addition step). There is no negative-coefficient escape
-   hatch here on purpose -- a caller wanting to subtract a reason should be weakening or
-   negating literals inside the reason itself, not asking [Cut] to do it, since [Cut]'s
-   coefficients are exactly what get handed to [Pol.mul]. *)
-(* One [pol], or one [pol] that states what it concludes -- docs/DECISIONS.md D-0043.
-
-   [claim = None] is what every caller got before M2-L0 and is still what [emit] passes:
-   a bare [pol], whose content the checker recomputes and never compares against
-   anything. [Some c] routes the same expression through [Writer.pol_concluding], which
-   writes the derivation, an `ia` stating [c] against it, and a `del` of the derivation,
-   and hands back the id of the CLAIM. M1-T51 measured what that buys: a [pol] truncated
-   so it derives something strictly weaker than the bound the propagator actually set is
-   ACCEPTED bare and REJECTED once the claim is on the page.
+   [claim = None] is what [emit] passes: a bare [pol], whose content the checker
+   recomputes and never compares against anything. [Some c] routes the same expression
+   through [Writer.pol_concluding], which writes the derivation, an `ia` stating [c]
+   against it, and a `del` of the derivation, and hands back the id of the CLAIM
+   (M2-L0 gave it its first caller). M1-T51 measured what that buys: a [pol] truncated
+   so it derives something strictly weaker than the bound the propagator actually set
+   is ACCEPTED bare and REJECTED once the claim is on the page.
 
    Since D-0131 the only [Some] caller is [emit_stating], whose claim is a PB ROW: a
    learned inequality the checker cannot reach by unit propagation, so the `pol` is the
@@ -915,8 +942,18 @@ let pol_stating ctx ~origin ~claim expr =
   | None -> Writer.pol_lazy ctx.writer ~origin expr
   | Some c -> Writer.pol_concluding_lazy ctx.writer ~origin ~claim:c expr
 
-(* The expression and the origin, with the operands emitted; [emit_cut] writes it (split
-   for D-0158's share mode, which D-0172 removed). *)
+(* [Cut (e1, e2, c1, c2)] -- recurse on both reasons, then combine: c1 * e1 + c2 * e2.
+
+   [Pol.mul] rejects a multiplier below 1, so [c1] and [c2] must be positive; this is
+   the same restriction cutting planes always has (a "combination" with a non-positive
+   multiplier is not a sound PB addition step). There is no negative-coefficient escape
+   hatch here on purpose -- a caller wanting to subtract a reason should be weakening or
+   negating literals inside the reason itself, not asking [Cut] to do it, since [Cut]'s
+   coefficients are exactly what get handed to [Pol.mul]. *)
+
+(* [cut_line] builds the expression and the origin, with the operands emitted;
+   [emit_cut] writes it. (The split served the share mode of D-0158, which D-0172
+   replaced by hash-consing.) *)
 let cut_line ~emit ctx e1 e2 c1 c2 =
   if c1 < 1 || c2 < 1 then
     invalid_arg
@@ -930,26 +967,9 @@ let emit_cut ~emit ~claim ctx e1 e2 c1 c2 =
   let expr, origin = cut_line ~emit ctx e1 e2 c1 c2 in
   pol_stating ctx ~claim ~origin expr
 
-(* [Combine (summands, divisor)] -- docs/DECISIONS.md D-0013: the "weaken, divide, add"
-   derivation. One [pol] step: every summand's [Pol.t] fragment added left to right,
-   then (unless [divisor = 1]) divided.
-
-   A [Term (c, e)] summand recurses through [emit] exactly as [Cut]'s operands do --
-   the recursion can legitimately land on an explanation another propagator instance
-   built (its own base a [Model_row] naming *that* instance's row, not this one),
-   which is exactly why [Model_row] exists (see explanation.ml's header): the id it
-   cites is unambiguous regardless of which [ctx] is doing the recursing.
-
-   A [Weaken lits] summand emits no rule and consumes no id: each [(c, l)] becomes
-   [Pol.mul (Pol.axiom l) c], folded together with [Pol.add]. This is the one place a
-   bare literal is deliberately allowed into a [pol] expression as the *trivial*
-   axiom [l >= 0] (D-0009) -- never to assert [l] holds, only to cancel a term whose
-   variable is still sitting at its declared bound. [emit_summand] therefore has two
-   return shapes (mint an id vs. build a fragment directly); folding both into one
-   [Pol.t] before the single [Writer.pol] call is what keeps the whole [Combine] to
-   exactly one proof line, matching every step of D-0013's worked example. *)
 (* The axiom fold of a [Weaken] (and of an uncited [Linear_term]): one fragment, the
-   literals added left to right. Empty for a fixed variable, which [emit_combine] drops. *)
+   literals added left to right. Empty for a fixed variable, which [combine_line]
+   drops. *)
 let emit_weaken ctx lits =
   match lits with
   | [] -> []
@@ -979,11 +999,13 @@ let emit_summand ~emit ctx = function
       let id = emit ctx e in
       [ Pol.mul (Pol.id id) c ]
   (* [Linear_term] in the ORDER arm (D-0132 section 2.4): the declared-range axiom chain
-     when nothing is cited (declared bound, or a bound resting on a decision -- I-X9's
-     exception), one [Term] at |coeff| per cited explanation otherwise. Byte for byte
-     what [Linear] built before T2. A bits term cannot be rendered here at all: its
-     order literals are atoms, not .opb variables, and the derivation that names them is
-     [emit_bits_pruning]'s. *)
+     when nothing is cited, one [Term] at |coeff| per cited explanation otherwise.
+     Nothing is cited for a bound at its declared value, or for a bound resting on a
+     decision, the stated exception to I-X9 (an explanation justifies the bound as
+     recorded on the trail, citing the reasons of any holes a settle walked over).
+     Byte for byte what [Linear] built before M8-bits-encoding-T2. A bits term cannot be
+     rendered here at all: its order literals are atoms, not .opb variables, and the
+     derivation that names them is [emit_bits_pruning]'s. *)
   | Explanation.Linear_term r -> (
       if
         Encoding.n_bits_vars ctx.encoding > 0
@@ -1005,7 +1027,8 @@ let emit_summand ~emit ctx = function
       | es ->
           let c = Stdlib.abs r.Explanation.lt_coeff in
           List.map (fun e -> Pol.mul (Pol.id (emit ctx e)) c) es)
-  (* [Defining (c, l)] -- D-0009's other half (M4-T7, explanation.ml's header).
+  (* [Defining (c, l)] -- D-0009's other half: cite a bound fact by the id of the line
+     that establishes it (M4-T7, explanation.ml's header).
 
      A [Weaken] puts [l] in as the trivial axiom, which cancels the term and costs one
      unit of degree per copy; this cites the id of the line that ESTABLISHES [l], which
@@ -1015,9 +1038,12 @@ let emit_summand ~emit ctx = function
 
      EITHER WAY THE CITED LINE IS A UNIT, and that is the property the rest of the system
      reads off this constructor: a unit's cancellation is exact, so a derivation holding
-     one still derives what its arithmetic says, which is why [Search.rests_on_a_clause]
-     does not have to route a conflict carrying one away from its own [pol]. A [Clause]
-     summand cannot promise that, which is exactly what D-0061 recorded going wrong.
+     one still derives what its arithmetic says. A [Clause] summand cannot promise that,
+     which is exactly what D-0061 recorded going wrong: a Hall derivation over moved
+     bounds cited each bound as a [Clause], which made the derivation rest on a clause,
+     so Search's former [rests_on_a_clause] predicate routed that conflict away from its
+     own [pol]. A [Defining] needed no such routing; the predicate went with the root's
+     [pol] arm (D-0131).
 
      The soundness precondition -- that [l] is a consequence of the model rather than of
      a decision -- belongs to the caller and cannot be checked here: the writer's current
@@ -1036,14 +1062,12 @@ let emit_summand ~emit ctx = function
       [ Pol.mul (Pol.id id) c ]
   | Explanation.Weaken lits -> emit_weaken ctx lits
 
-(* The expression and the origin, with the operands emitted; [emit_combine] writes it
-   (split for D-0158's share mode, which D-0172 removed). *)
 (* The origin of a [Combine] line, which the writer's audit keeps for as long as the line
    is live. It renders two integers, so every line of one shape can share one closure
    (M11-complexity-T12, D-0166): a closure per line was 40 bytes for each of the 3.1 M
    live `pol` lines of 2011_black-hole_9 at node 40, and the shapes are a few hundred. The
    string it renders is the same. The table is [Shapes], whose hash mixes the key: see
-   there why the writer's identity-hashed table was quadratic in the shapes here. *)
+   there why the writer's identity-hashed table walked every shape of a divisor. *)
 let combine_origin ctx n_summands divisor =
   let o () = Printf.sprintf "combine(%d summand(s), / %d)" n_summands divisor in
   (* The key packs both integers, so it is shared only where both fit in 31 bits (both
@@ -1057,6 +1081,28 @@ let combine_origin ctx n_summands divisor =
         Shapes.add ctx.combine_origins k o;
         o
 
+(* [Combine (summands, divisor)] -- D-0013's "weaken, divide, add" derivation. One [pol]
+   step: every summand's [Pol.t] fragments added left to right, then (unless
+   [divisor = 1]) divided.
+
+   A [Term (c, e)] summand recurses through [emit] exactly as [Cut]'s operands do --
+   the recursion can legitimately land on an explanation another propagator instance
+   built (its own base a [Model_row] naming *that* instance's row, not this one),
+   which is exactly why [Model_row] exists (see explanation.ml's header): the id it
+   cites is unambiguous regardless of which [ctx] is doing the recursing.
+
+   A [Weaken lits] summand emits no rule and consumes no id: each [(c, l)] becomes
+   [Pol.mul (Pol.axiom l) c], folded together with [Pol.add]. This is the one place a
+   bare literal is deliberately allowed into a [pol] expression as the *trivial*
+   axiom [l >= 0] (D-0009) -- never to assert [l] holds, only to cancel a term whose
+   variable is still sitting at its declared bound. So a summand either cites an id or
+   builds its fragment directly ([emit_summand]); folding every fragment into one
+   [Pol.t] before the single [Writer.pol] call is what keeps the whole [Combine] to
+   exactly one proof line, matching every step of D-0013's worked example.
+
+   [combine_line] builds the expression and the origin, with the operands emitted;
+   [emit_combine] writes it. (The split served D-0158's share mode, which D-0172
+   replaced by hash-consing.) *)
 let combine_line ~emit ctx summands divisor =
   (* A [Weaken []] summand is a variable with NOTHING to weaken: declared on a single
      value (`var 7..7`), it has no order literal at all -- its whole contribution to the
@@ -1066,8 +1112,8 @@ let combine_line ~emit ctx summands divisor =
      coefficient. It is dropped here rather than refused: refusing it was the
      `Invalid_argument` M7-T19 reproduced with `var 1..3: x; var 7..7: s;
      constraint int_le(s, x);` at the ROOT (exit 2 on a legal model, found 2026-10-01).
-     [emit_summand]'s own check below stays, for a [Weaken []] that reaches it any other
-     way. *)
+     A [Combine] left with no summand, or with no fragment at all, is still refused
+     below. *)
   let summands =
     List.filter
       (function
@@ -1135,11 +1181,12 @@ let bits_sum frags =
   | [] -> invalid_arg "Justify.emit_bits_pruning: empty derivation"
   | f :: rest -> List.fold_left Pol.add f rest
 
-(* D-0134 section 2.2: each part saturated to its clause (a [Combine]: its fragments
-   summed, divided, saturated; a [Model_row]: cited as it is), the parts summed and
-   saturated once more. The clause derived is every part's negated literal, without
-   duplicates, in part order -- the claim is one of them, carried by the part that
-   assumed its negation, and is checked to be. No atom is added for it. *)
+(* A [Resolve] as one `pol` pinned by `ia` (D-0134 section 2.2): each part saturated to
+   its clause (a [Combine]: its fragments summed, divided, saturated; a [Model_row]:
+   cited as it is), the parts summed and saturated once more. The clause derived is
+   every part's negated literal, without duplicates, in part order. The claim is
+   normally one of them, carried by the part that assumed its negation, so no atom is
+   added for it; the comment on the claim below says when it is not. *)
 let emit_bits_resolve ctx ~origin ~(concludes : Reason.fact option) parts =
   let w = ctx.writer and enc = ctx.encoding in
   let neg_facts_rev = ref [] in
@@ -1222,14 +1269,16 @@ let live_line ctx (th : Explanation.thunk) = live ctx (Explanation.line_of th)
      answered with the ambient model row. [Explanation.term] and [Explanation.cut]
      refuse to build a citation out of a decision, so the only way in is a direct
      [emit] on one.
-   - Every other constructor is memoised on [e]'s physical identity (see the module
-     header) before doing any work, so asking for the same explanation twice is free
-     the second time.
-   - [Deferred] is forced -- never call its thunk directly, [Explanation.force] is what
-     memoises it -- and the result is recursed on. Forcing happens *inside* the memo
-     lookup for the [Deferred] node itself, so a [Deferred] demanded twice neither
-     forces its thunk twice (that guarantee is [Explanation.force]'s) nor re-emits the
-     inner explanation's rule twice (that guarantee is this memo). *)
+   - Under `--no-proof` every other constructor answers a fresh id and writes nothing.
+   - [Clause], [Linear], [Cut], [Combine] and [Resolve] are memoised on the node
+     ([memoized]: the line the node carries answers while it is live, see the module
+     header), so asking for the same explanation twice is free the second time.
+   - [Deferred] answers its thunk's line while that line is live ([live_line]);
+     otherwise [emit_thunk] forces it -- never call its thunk directly,
+     [Explanation.force] is what memoises it -- recurses on the tree, and releases the
+     thunk onto the line. A [Deferred] demanded twice therefore neither forces its thunk
+     twice nor re-emits the inner explanation's rule twice, until a wipe retires the line.
+*)
 let rec emit ctx (e : Explanation.t) : Writer.cid =
   match e with
   | Explanation.Decision l ->
@@ -1240,7 +1289,8 @@ let rec emit ctx (e : Explanation.t) : Writer.cid =
             nogood (D-0018). See justify.ml's [emit] header and M1-T50."
            (Lit.to_string l))
   | Explanation.Model_row id -> id
-  (* M9-no-proof-T2 (D-0126): under `--no-proof` the writer is null, and the guard sits
+  (* Under `--no-proof` the writer is null (M9-no-proof-T2; D-0126 made solving without
+     a proof a mode of its own, as a measurement instrument), and the guard sits
      HERE, before the memo and before anything is forced -- a [Deferred] thunk is never
      run for the proof's sake, and no literal is validated or rendered. The id handed
      back is distinct and stands for nothing; [Model_row] above and [Decision] before it
@@ -1260,8 +1310,8 @@ let rec emit ctx (e : Explanation.t) : Writer.cid =
           if memo_stats_on then incr ms_line_hits;
           cid
       | None -> emit_thunk ctx e th)
-  (* M8-bits-encoding-T3 (D-0134 section 2.6, and its deviation in section 5): a
-     [Resolve] is written by [emit_bits_pruning] as the trace line of the entry it
+  (* A [Resolve] (M8-bits-encoding-T3; D-0134 section 2.6, and its deviation in
+     section 5) is written by [emit_bits_pruning] as the trace line of the entry it
      justifies. It reaches here only as a CITATION -- an order-arm derivation whose
      [Linear_term] cites the entry that moved an order variable of a maxmin scope with a
      bits operand (D-0132 section 2.4's [Term] per cited explanation). The clause it
@@ -1277,12 +1327,15 @@ let rec emit ctx (e : Explanation.t) : Writer.cid =
                 (emit_bits_resolve ctx ~origin:"bits resolve (cited)" ~concludes:None
                    parts))
 
-(* M11-complexity-T13 (D-0168): write a thunk's derivation and RELEASE it -- record the
+(* Write a thunk's derivation and RELEASE it (M11-complexity-T13, D-0168): record the
    line on the thunk and drop its tree, so that nothing holds the tree once it is
    written. A thunk released before whose line has since been wiped comes here again, is
-   forced again through its closure, and its derivation is written again.
+   forced again through its closure, and its derivation is written again. Under
+   BAGUETTE_DEBUG that second forcing is checked to give the same derivation, which is
+   invariant I-X6 (a thunk closes over a snapshot and never reads live domains).
 
-   M11-complexity-T15: nothing else is let go of. Until T15 the memo's cells held the
+   Nothing else is let go of, because each node carries its own line and no table holds
+   it (M11-complexity-T15). Until T15 the memo's cells held the
    tree's nodes, and the release took out the cells of the nodes the closure BUILT, which
    took a frame recording every build and, where the tree might hold a node it had not
    built, a second forcing to tell the two apart. Each node now carries its own line and
@@ -1315,8 +1368,9 @@ and emit_thunk ctx e (th : Explanation.thunk) =
   Explanation.release th line;
   cid
 
-(* M2-L6: emit [e] as a [pol] that STATES the constraint [claim], where [e] renders to a
-   [pol] at all.
+(* Emit [e] as a [pol] that STATES the constraint [claim], where [e] renders to a [pol]
+   at all. Its caller is PB conflict analysis (M2-L6: eliminate the pivot by linear
+   combination and reduction, with clause learning as the fallback).
 
    [emit_concluding] below does the same thing for a pruning, whose claim is always a
    one-literal constraint read off a [Reason.fact]. A learned PB inequality is not a
@@ -1344,12 +1398,14 @@ let emit_stating ctx ~(claim : Opb.constr) (e : Explanation.t) : Writer.cid =
     | Explanation.Resolve { parts = _; _ } ->
         emit ctx e
   in
-  (* M9-no-proof-T2: nothing stated and nothing forced; see [emit]. *)
+  (* Under `--no-proof`: nothing stated and nothing forced; see [emit]. *)
   if Writer.is_null ctx.writer then Writer.fresh ctx.writer ~origin:"no-proof: stated"
   else go e
 
-(* D-0132 section 2.1: [Linear]'s row, every term weakened by its bridge or bound line,
-   divided by the pruned term's coefficient, closed by the pruned variable's own atom. *)
+(* A bits-arm [Combine] as one `pol` pinned by `ia` (D-0132 section 2.1): [Linear]'s
+   row, every term weakened by its bridge or bound line, divided by the pruned term's
+   coefficient, closed by the pruned variable's own atom. The module header's "BITS arm"
+   says why the result is exactly the trace clause. *)
 let emit_bits_combine ctx ~origin ~(concludes : Reason.fact option) summands divisor =
   let w = ctx.writer and enc = ctx.encoding in
   let neg_facts_rev = ref [] in
@@ -1407,7 +1463,7 @@ let rec is_bits_derivation (e : Explanation.t) =
         parts
   | _ -> false
 
-(* M8-bits-encoding-T2: the BITS arm's trace line -- the module header's "The BITS arm"
+(* The BITS arm's trace line (M8-bits-encoding-T2) -- the module header's "BITS arm"
    says what the `pol` is and why it derives exactly the trace clause. [concludes] is
    the pruning's own claim ([Reason.justified]'s third half, D-0043), [None] for a
    conflict. Returns the id of the `ia` line, which IS the clause, and the clause it
@@ -1429,10 +1485,10 @@ let emit_bits_pruning ctx ~origin ~(concludes : Reason.fact option) (e : Explana
         (Printf.sprintf "Justify.emit_bits_pruning: not a bits derivation: %s"
            (Explanation.to_string other))
 
-(* M8-bits-encoding-T5 (D-0131): a [Combine] or [Cut] that concludes a LITERAL is
-   written as `rup <literal> >= 1 ;` -- the module header says why, and this comment
-   says what the line rests on, because a `rup` is only as good as the database it is
-   checked against.
+(* A [Combine] or [Cut] that concludes a LITERAL is written as `rup <literal> >= 1 ;`
+   (M8-bits-encoding-T5, D-0131) -- the module header says why, and this comment says
+   what the line rests on, because a `rup` is only as good as the database it is checked
+   against.
 
    What the checker needs on the page is every bound the derivation CITES, as a line it
    can unit-propagate to: a [Term] summand's conclusion as a unit (or as a trace clause
@@ -1461,13 +1517,15 @@ let emit_bits_pruning ctx ~origin ~(concludes : Reason.fact option) (e : Explana
        (PROOF-FORMAT section 3 states that bound as the constant true).
      - [Clause] and [Linear] are `rup` already and name their own target.
      - [Model_row] mints no line; its id is the row's, and a bound stated against it
-       would claim the ROW implies the bound, the D-0020 restatement defect.
+       would claim the ROW implies the bound, a line the checker may accept that does
+       not assert what we meant (the defect class of D-0020, where lin_unsat's
+       refutation verified with a unit of slack that only mutation found).
      - [Decision] raises, in [emit], as it must. *)
 let emit_concluding ctx ~(concludes : Reason.fact option) (e : Explanation.t) : Writer.cid
     =
   match Option.bind concludes Reason.lit_of_fact with
   | None -> emit ctx e
-  (* M9-no-proof-T2: nothing concluded and nothing forced; see [emit]. *)
+  (* Under `--no-proof`: nothing concluded and nothing forced; see [emit]. *)
   | Some _ when Writer.is_null ctx.writer ->
       Writer.fresh ctx.writer ~origin:"no-proof: concluding"
   | Some l -> (

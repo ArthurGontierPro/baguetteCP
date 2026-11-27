@@ -1,6 +1,14 @@
 #!/usr/bin/env bash
 # One-time setup of the OCaml toolchain for baguette.
 # Safe to re-run: every step checks before acting.
+#
+#   scripts/bootstrap.sh            (no arguments)
+#
+# Installs opam into ~/.local/bin if it is missing, creates the opam switch `baguette` on
+# OCaml 5.1.1, installs dune, menhir, ocamlformat 0.26.1 and ocaml-lsp-server, then looks
+# for veripb through scripts/checker.sh. It does NOT install veripb: a missing checker is
+# a warning here and a failure of every proof test later. Exit 0 when the toolchain is in
+# place; any failing step stops the script with that step's status (set -e).
 set -euo pipefail
 
 SWITCH_NAME="baguette"
