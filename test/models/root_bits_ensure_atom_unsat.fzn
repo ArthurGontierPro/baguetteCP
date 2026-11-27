@@ -1,0 +1,13 @@
+% M22-review-bugs (D-0237): agent-cheap's reproducer. x0 in 0..3 is on bits, x1 and x2 in
+% 2..3 (width 1) stay on the order ladder. Root propagation fixes x0 = 3, x2 = 2, x1 = 3,
+% and the disequality x1 != x0 fails with every term fixed: a FACTLESS root conflict
+% (ne.ml records no facts at the root), whose derivation is a Resolve over the bits row
+% that cites x1's order BRIDGE, minted there for the first time. Before D-0237 the atoms
+% were closed before that derivation and the default (bits) run died in ensure_atom.
+var 0..3: x0 :: output_var;
+var 2..3: x1 :: output_var;
+var 2..3: x2 :: output_var;
+constraint int_lin_ne([1,-1],[x1,x0],0);
+constraint int_lin_ne([1,-1],[x2,x1],0);
+constraint int_lin_le([1,-1],[x2,x0],-1);
+solve satisfy;

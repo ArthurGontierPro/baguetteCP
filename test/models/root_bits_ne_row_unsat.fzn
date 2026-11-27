@@ -1,0 +1,9 @@
+% M22-review-bugs (D-0237): two variables, a linear row fixing each at the root, then a
+% disequality between them. x0 in 2..4 is on bits, x1 in 1..2 on the order ladder; the
+% factless conflict's derivation cites x1 >= 2, an atom first named there.
+var 2..4: x0 :: output_var;
+var 1..2: x1 :: output_var;
+constraint int_lin_eq([1],[x1],2);
+constraint int_lin_le([1],[x0],2);
+constraint int_ne(x1,x0);
+solve satisfy;
