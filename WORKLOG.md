@@ -19,6 +19,7 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
+| M22-review-bugs: the proof is not reproducible run to run (D-0264) | `lib/core/justify.ml`, `lib/core/explanation.ml`, `lib/core/trace.ml`, `lib/proof/writer.ml`, `lib/proof/text.ml`, `scripts/check_determinism.sh`, tests | agent-nondet (wave109-nondet) | 2026-11-27 |
 
 ## Cross-session requests
 
