@@ -19,6 +19,7 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
+| M18-coverage-T14 follow-ups (D-0255): count-to-count rows for variable-count gcc, low_up route | `lib/core/prop/gcc.ml`, `mznlib/fzn_global_cardinality*.mzn`, gcc entries of `lib/flatzinc/compile.ml` and `builder.ml` if needed, gcc sections of `test/unit/`, `test/models/gcc*`, `mznlib/test/gcc*` | agent-gccsum (`wave100-gccsum`) | 2026-11-27 |
 
 ## Cross-session requests
 
