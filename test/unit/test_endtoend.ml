@@ -2646,6 +2646,15 @@ let d0263_times w =
      solve satisfy;\n"
     w w
 
+let d0263_max w =
+  Printf.sprintf
+    "var 0..%d: x :: output_var;\n\
+     var 0..%d: y :: output_var;\n\
+     var 0..%d: m :: output_var;\n\
+     constraint array_int_maximum(m, [x, y]);\n\
+     solve satisfy;\n"
+    w w w
+
 let d0263_with ~every f =
   let saved = !Baguette_proof.Deadline.every in
   Baguette_proof.Deadline.every := every;
@@ -2727,13 +2736,13 @@ let d0263_live build =
 
 (* What bin/main.ml builds before the search, with the proof (rows streamed, a writer on
    a file) or without (rows discarded, a null writer). *)
-let d0263_build ~proof dir src () =
+let d0263_build ?(bits = Some 0) ~proof dir src () =
   let saved_sink = !Encoding.row_sink and saved_bits = !Encoding.bits_above in
   Encoding.row_sink :=
     if proof then Encoding.Stream_rows_to (Filename.concat dir "p.opb.rows")
     else Encoding.Discard_rows;
-  (* the binary's default; this file runs at `none` (its header) *)
-  Encoding.bits_above := Some 0;
+  (* the binary's default, unless asked; this file runs at `none` (its header) *)
+  Encoding.bits_above := bits;
   Fun.protect
     ~finally:(fun () ->
       Encoding.row_sink := saved_sink;
@@ -2759,15 +2768,17 @@ let test_d0263_estimate_is_a_lower_bound () =
   let dir = Filename.temp_file "baguette_d0263lb" "" in
   Sys.remove dir;
   Sys.mkdir dir 0o700;
-  let slope ~proof model ~units w1 w2 =
-    let a = d0263_live (d0263_build ~proof dir (model w1)) in
-    let b = d0263_live (d0263_build ~proof dir (model w2)) in
+  let slope ?bits ~proof model ~units w1 w2 =
+    let a = d0263_live (d0263_build ?bits ~proof dir (model w1)) in
+    let b = d0263_live (d0263_build ?bits ~proof dir (model w2)) in
     (b - a) / (units w2 - units w1)
   in
   let values w = 2 * (w + 1) and cases w = w + 1 in
   List.iter
     (fun (what, proof, model, units, coeff) ->
-      let s = slope ~proof model ~units 200 999 in
+      (* maximum's per-value shape needs an order-encoded scope *)
+      let bits = if model == d0263_max then None else Some 0 in
+      let s = slope ~bits ~proof model ~units 200 999 in
       check
         (Printf.sprintf
            "D-0263: %s costs %d live words per unit, at least the %d reserved" what s
@@ -2794,6 +2805,16 @@ let test_d0263_estimate_is_a_lower_bound () =
         d0263_times,
         cases,
         Encoding.words_per_arith_case );
+      ( "maximum's per-value rows, with the proof",
+        true,
+        d0263_max,
+        cases,
+        Encoding.words_per_maxmin_value );
+      ( "maximum's per-value rows, --no-proof",
+        false,
+        d0263_max,
+        cases,
+        Encoding.words_per_maxmin_value );
     ];
   List.iter
     (fun f -> Sys.remove (Filename.concat dir f))

@@ -1418,7 +1418,10 @@ let out_of_memory_message () =
    - the CASE SPLIT of int_times and int_div (lib/flatzinc/arith_aux.ml, in the parse,
      before its ladder of Booleans is created): per value of the case variable, one
      Boolean (model, store and encoding), its two definition rows and their instance,
-     and up to four guarded rows with theirs.
+     and up to four guarded rows with theirs;
+   - the PER-VALUE shape of array_int_maximum/minimum (lib/core/prop/maxmin.ml, before
+     its array): one clause and its explanation per threshold, over an order-encoded
+     scope (a bits scope takes the selector shape and has none).
 
    THE RULE. [reserve] adds a LOWER bound of the item's live heap to a running total, and
    refuses (raises [Will_not_fit], exit 5) when the total exceeds the memory this run can
@@ -1429,6 +1432,7 @@ let out_of_memory_message () =
      direct value, proof written      61 to 75      35            30
      direct value, --no-proof         13 to 24      36            10
      case of int_times / int_div     411 to 775    435 to 466    300
+     threshold of maximum/minimum     34 to 56      (measured)    20
 
    (the binary: bin/main.exe at widths 2^8 to 2^16, read after [proofopen]; in-process:
    test_endtoend.ml's lower-bound test, which builds what [proofopen] builds at widths 200
@@ -1453,6 +1457,7 @@ let out_of_memory_message () =
 
 let words_per_direct_value ~proof = if proof then 30 else 10
 let words_per_arith_case = 300
+let words_per_maxmin_value = 20
 let reserved_words = ref 0
 
 type fit = {

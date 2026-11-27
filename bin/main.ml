@@ -2116,7 +2116,13 @@ let solve opts (m : Model.t) =
                call and not the total. Sampled inside the phase so that the two brackets
                nest. *)
             let e0 = Writer.emitted_us () and l0 = Writer.emitted_lines () in
-            Deadline.disarm () (* the search polls [config.stop], D-0263 *);
+            (* The search polls [config.stop] at the limit; the deadline, at the limit plus
+               its grace, becomes the backstop for one step longer than that poll's
+               period, and stops the run as a second signal does (D-0263). *)
+            (Deadline.on_reached :=
+               fun () ->
+                 Deadline.disarm ();
+                 stop_now (fun () -> killed_line "time-limit") (fun () -> exit_ok));
             t_search := wall ();
             let config =
               {

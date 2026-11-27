@@ -21,6 +21,9 @@
    between two iterations of a loop. A [Reached] therefore abandons at most a line that was
    never on the page.
 
+   IN THE SEARCH the search's own poll stops the run at the limit; the deadline stays armed
+   as a backstop, through [on_reached], and only proof lines tick there.
+
    WHAT A STOP HERE PRODUCES is bin/main.ml's (exit_time_limit): `=====UNKNOWN=====`, a
    `limit:` line with `at=<phase>`, exit 0, as a search cut by the limit. The proof: when
    the stop comes during [Encoding.start_proof], the .opb is complete and the .pbp is a
@@ -62,9 +65,16 @@ let arm f =
 
 let disarm () = armed := None
 
+(* What a past deadline does: raise [Reached] before the search. From the search on,
+   bin/main.ml replaces it with the stop a second signal makes (end the proof where it
+   stands, report, exit), the BACKSTOP for one search step too long for the search's own
+   poll: an alldiff whose Hall derivations wrote 540 MB of proof in one propagator run
+   overran `--time-limit 10` by 10 s and died against the memory cap (D-0263 section 4). *)
+let on_reached : (unit -> unit) ref = ref (fun () -> raise Reached)
+
 let check () =
   left := !every;
-  match !armed with Some f when f () -> raise Reached | _ -> ()
+  match !armed with Some f when f () -> !on_reached () | _ -> ()
 
 let tick n =
   left := !left - n;
