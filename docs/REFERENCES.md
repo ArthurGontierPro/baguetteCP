@@ -201,7 +201,7 @@ and `grep -n 'I-X6' docs/INVARIANTS.md` find any of them.
 | D-0248 | 2 | M22-review-T5: a proof write that fails (Sys_error: missing directory, full disk) ends with one line on stderr and a new exit status, 6 |
 | D-0250 | 9 | M19-config-T8, probing at the root: a bound literal of a small domain that fails under propagation is a failed one-decision node, its unit nogood ... |
 | D-0254 | 1 | M22-review-T4, second documentation pass: the remaining modules' comments, docs/REFERENCES.md extended, and the four findings of D-0253 settled (a ... |
-| D-0255 | 6 | ? |
+| D-0255 | 6 | Reserved for agent-gccsum, the follow-ups of D-0247 (a native rule between the counts, low_up routed or strengthened); the record is not in docs/DECISIONS.md yet |
 
 ## Roadmap tasks (docs/ROADMAP.md)
 
