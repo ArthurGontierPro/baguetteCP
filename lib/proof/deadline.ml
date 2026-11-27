@@ -38,7 +38,7 @@
    [grace], plus the time between two clock reads (one per [every] units, a few
    milliseconds of work).
 
-   GRANULARITY AND COST. [every] = 2^20 units: one clock read per MB of proof text or per
+   GRANULARITY AND COST. [every] is 2^20 units: one clock read per MB of proof text or per
    16 K rows. A normal model's compile writes far less than that, so it reads the clock a
    handful of times; the cost on handball12 and costas13 is in D-0263 (instructions, not
    measurable). *)
@@ -51,18 +51,19 @@ let armed : (unit -> bool) option ref = ref None
 (* The seconds a stop before the search waits past the limit (see THE GRACE). *)
 let grace = 1.0
 
-(* Units of weight between two clock reads. *)
-let every = 1 lsl 20
-let left = ref every
+(* Units of weight between two clock reads. A ref only so that test_endtoend.ml can stop
+   a small model's compile and proof at their first tick; nothing else sets it. *)
+let every = ref (1 lsl 20)
+let left = ref !every
 
 let arm f =
   armed := Some f;
-  left := every
+  left := !every
 
 let disarm () = armed := None
 
 let check () =
-  left := every;
+  left := !every;
   match !armed with Some f when f () -> raise Reached | _ -> ()
 
 let tick n =

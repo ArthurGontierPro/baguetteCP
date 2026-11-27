@@ -1425,9 +1425,14 @@ let out_of_memory_message () =
    have ([available]). The coefficients are measured live words (after a full major
    collection) per unit, D-0263 section 2, and TAKEN BELOW the smallest measured shape:
 
-     direct value, proof written      61 to 65 words measured   45 reserved
-     direct value, --no-proof         13 to 16                  10
-     case of int_times / int_div     411 to 775 (both modes)   300
+                                   the binary     in-process    reserved
+     direct value, proof written      61 to 75      35            30
+     direct value, --no-proof         13 to 24      36            10
+     case of int_times / int_div     411 to 775    435 to 466    300
+
+   (the binary: bin/main.exe at widths 2^8 to 2^16, read after [proofopen]; in-process:
+   test_endtoend.ml's lower-bound test, which builds what [proofopen] builds at widths 200
+   and 999 and measures less with the proof and more without, for reasons not chased),
 
    so the total is below what the run will hold live. A run refused here is one whose live
    heap would have passed [available]: the budget's alarm would have refused it later, or,
@@ -1446,7 +1451,7 @@ let out_of_memory_message () =
    items again. The total is process-wide and never reset: the binary reads one model,
    and a test binary's small models add a few thousand words each. *)
 
-let words_per_direct_value ~proof = if proof then 45 else 10
+let words_per_direct_value ~proof = if proof then 30 else 10
 let words_per_arith_case = 300
 let reserved_words = ref 0
 
@@ -1571,10 +1576,11 @@ let fit_message f =
     \  With what was reserved before it, the encoding needs at least %d MB, past %s.\n\
     \  The estimate is a LOWER bound of the live heap (D-0263 measured each figure; the \
      run would hold more),\n\
-    \  so this run could not have finished: without the refusal it ends in the OCaml \
+    \  so this run could not have finished within that: the heap budget or the OCaml \
      runtime's\n\
-    \  `Fatal error: allocation failure`. Narrow the declared domain, or give the run \
-     more memory.\n"
+    \  `Fatal error: allocation failure` would have ended it later. Narrow the declared \
+     domain,\n\
+    \  or give the run more memory.\n"
     f.f_what
     (if f.f_where = "" then "" else " (" ^ f.f_where ^ ")")
     f.f_lo f.f_hi f.f_why f.f_units f.f_per_unit
