@@ -20,6 +20,7 @@ of it to every session and stopping at a broken line before it even reached the 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
 | M19-config-T6 clause minimisation (D-0241): learned clauses shorter (root-false literals, order-literal self-subsumption, recursive minimisation), each behind a switch, default by measurement | `lib/core/learn.ml`, `lib/core/analysis.ml`, their tests (`test/unit/test_learn.ml`, `test_analysis.ml`), `lib/core/search.ml` only for the switch read if needed | agent-minim (wave87-minim, /scratch/arthur/wt-minim) | 2026-11-27 |
+| M20-pernode-T4 engine wakes (D-0243): `watchers_of_new_entries` and `check_attribution` cheaper, same wake order, same check | `lib/core/engine.ml`, `test/unit/test_engine.ml` | agent-wakes (wave89-wakes, /scratch/arthur/wt-wakes) | 2026-11-27 |
 
 ## Cross-session requests
 
