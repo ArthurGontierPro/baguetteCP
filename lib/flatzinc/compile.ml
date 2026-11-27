@@ -583,7 +583,10 @@ let holes_of_domain (v : Model.var) =
   | Model.Dbool | Model.Drange _ | Model.Dset [] -> []
   | Model.Dset values ->
       let lo, hi = bounds_of_domain v in
-      let present = List.sort_uniq Stdlib.compare values in
+      (* D-0263: a set domain can list millions of values (a fuzz model's 16.7 M took
+         17 s here, past its --time-limit), so the clock is read before the sort. *)
+      Baguette_proof.Deadline.tick (List.length values);
+      let present = List.sort_uniq Int.compare values in
       let rec go v present acc =
         if v > hi then List.rev acc
         else
