@@ -19,7 +19,6 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M20-pernode-T4 (D-0245, analysis locate and attribution) | `lib/core/analysis.ml`, `test/unit/test_analysis.ml`; `lib/core/store.ml` (`var_named`'s memo and an int accessor) and `test/unit/test_core.ml`; `lib/core/engine.ml` only for an accessor; `lib/core/search.ml` / `learn.ml` only to pass an argument | agent-locate (wave91-locate) | 2026-11-27 |
 
 ## Cross-session requests
 
@@ -478,6 +477,7 @@ section 1. Shares are inclusive, of the whole run.
 
 | Task | Session | Date | Summary |
 |---|---|---|---|
+| M20-pernode-T4, conflict analysis's name lookup (D-0245) | agent-locate (`wave91-locate`, not merged) | 2026-11-27 | **D-0245 [AUTONOME].** `Store.var_named` through a direct-mapped memo of 4 096 cells (98 % of handball12's lookups hit), `Analysis.locate` reads it as an int. Same trees, byte-identical artefacts; instructions per node without / with proof: handball12 -2.5 / -0.5 %, tppv circ14 -0.8 / -0.1 %, costas13 -0.9 / -0.2 %, qr2 -3.9 / -2.2 %. The attribution check through `Engine.in_scope` measured neutral and withdrawn. |
 | M19-config-T6, clause minimisation (D-0241) | agent-minim (`wave87-minim`, not merged) | 2026-11-27 | **D-0241 [AUTONOME].** `Analysis.minimise_cut` drops root-level literals (`root`) and the literals the kept ones re-derive (`rec`, MiniSat's over order literals, a trail-order guard for the ladder's forward edges), behind `BAGUETTE_MINIMISE=off|root|local|rec`, default `off`. Learned width -27 %, every proof verifies, +3 complete answers on the tuning set at 300 s, share 0.010 to 0.015 below `off` (noise): the default waits for the full series. Switch off: artefacts byte-identical to main |
 | M20-pernode-T4, the engine's wake path (D-0243) | agent-wakes (`wave89-wakes`, not merged) | 2026-11-27 | **D-0243 [AUTONOME].** `wake_static` a flat int array per variable walked from its last cell down (the old list's order), the merge two loops, `wants`/`advises` top level and inlined, `advise_always` answered without its call, the trigger mask off `trig_bits` (one byte per id), and `check_attribution` through `attr_ok`, a memo of positive answers that `purge` resets. Same trees: 518 test-model runs, diff lane 347 + 333 debug equal; scaling ok; runtest 5 495 ok, 0 FAIL. Instructions per node without / with proof: handball12 -2.0 / -0.5 %, circ14 -2.2 / -0.9 %, costas13 -3.0 / -0.3 %, qr2 -5.0 / -2.9 % (release `ef11db7f` -> `1ee55030`). Withdrawn: the walk's result in a buffer. |
 | M20-pernode-T4, alldiff's second pass (D-0242) | agent-hall (`wave88-hall`, not merged) | 2026-11-27 | **D-0242 [AUTONOME].** Stage 1 answers a pass that would move nothing by counting (`hall_free`, two term permutations kept sorted), the Regin pass skips a tight set no outside term meets, a tight set's derivations share its at-least-one lines (D-0216's `rebuilds_to` rule). Same trees, artefacts byte-identical (259 test models x 2 encodings, diff lane 347 + 333 debug). handball12 -7.7 % / -7.6 % instructions per node without / with proof, tppv circ14 -14 %, costas13 -13 % / -12 %. An at-most-one memo kept on the table epoch was withdrawn: it changed a proof under BAGUETTE_DEBUG. Release `ef11db7f`, dev `b52a0cd6`. |
@@ -716,6 +716,10 @@ section 1. Shares are inclusive, of the whole run.
 
 | M18-coverage-T5 (the ordering globals) | agent-lex (`wave85-lex`) | 2026-11-27 | **D-0239 [AUTONOME].** mznlib only: `lex_lesseq`/`lex_less`, int and Bool, as four linear rows per position over std's chain flag; 26 -> 27 complete of 92 with proof, nodes/s x1.02 to 1.04; precedence globals keep std's (T13 added); `increasing` already native. |
 ## Handoff notes
+
+### 2026-11-27 (agent-locate, `wave91-locate`, D-0245): conflict analysis's name lookup, not merged
+
+`Store.var_named` answers through a direct-mapped memo (4 096 int cells, `memo_slot` = length and last eight bytes, a hit when `names.(i) == name`); `Store.var_index_named` returns the int and `Analysis.locate` reads it. `var_named` is gone from handball12's profile. The cross-session requests of agent-hall item (2), agent-wakes and agent-names item (3) are answered: the attribution check through `Engine.in_scope` was built, measured (-0.5 to +0.6 %) and withdrawn, the comment above `Analysis.watches` says why. The `Reason.fact` carrying its variable is now worth only the proof side (`Trace.bits_arm`, D-0236's 3.5 %); D-0245 section 5. Results: `/cluster/arthur/baguette-results/locate/`.
 
 ### 2026-11-27 (agent-minim, `wave87-minim`, D-0241): clause minimisation behind a switch, default off, not merged
 
