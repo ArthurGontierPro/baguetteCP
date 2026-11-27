@@ -19,6 +19,7 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
+| M22-review-T4 documentation pass (D-0253) | comments only in `lib/`, `bin/`, `scripts/`, `tools/` (not gcc.ml, compile.ml, builder.ml, mznlib/, search.ml, probe.ml, bin/main.ml, lib/core/dune, test_search_strategy.ml); README.md and the other READMEs; CLAUDE.md; docs/ARCHITECTURE.md, GLOSSARY.md, INVARIANTS.md, PROOF-FORMAT.md, SPEC.md non-normative text; docs/REFERENCES.md (new) | agent-docs, wave98-docs | 2026-11-27 |
 
 ## Cross-session requests
 
