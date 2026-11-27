@@ -33833,3 +33833,61 @@ table is where the change shows and not a measure of one propagator. Not separat
 
 Nothing in the solver changes. The harness fix reverts with `git revert` of `f97a62b` (`bench/series/rss_wrap.py`,
 `bench/series/veripb_wrap.sh`).
+
+## D-0259  [AUTONOME] M19-config-T1: the free search (`-f`) becomes the default, the fixed search stays behind a flag
+
+**Status**: DECIDED (orchestrator, 2026-11-27), NOT YET IMPLEMENTED: the implementation waits for D-0257's fix to merge (it
+holds `lib/core/search.ml`) and goes in its own commit. Reopens D-0154, as ROADMAP row M19-config-T1 says.
+
+### 1. Context
+
+M19-config-T1: "fixed against `-f` against the best combination, on the full M17 series. If a free configuration wins, it
+becomes the default and the fixed search stays a flag." The user, on 2026-11-27, about open default decisions: either the
+orchestrator decides or a comparison on a heterogeneous set does. The full series is that comparison: 1 575 flattened
+instances, 16 Challenge editions, about 180 families.
+
+### 2. The evidence (D-0227, release `fa2d4ee4`, fataepyc-07, with proof, every answer counted only if veripb verified it)
+
+| | A: default (fixed) | B: `-f` |
+|---|---|---|
+| OPT + UNSAT, verified | 311 | 356 |
+| SAT on satisfaction models, verified | 79 | 98 |
+| incumbents | 1 101 | 1 192 |
+| refused | 65 | 55 |
+| Challenge score | 4 442 | 6 277 |
+| rank range over the editions | 4 to 11 | 2 to 8 |
+
+Without proof the same order holds: C 352 + 92, 4 922 points; D (`-f --no-proof`) 419 + 111, 6 803 points. B has at least as
+many OPT + UNSAT as A in 15 of the 16 editions (2021 is the exception: 12 against 10). Two earlier series said the same
+(D-0185: +39 verified answers; D-0203), and D-0224 recommends `-f` from the tuning set.
+
+What `-f` costs, instance by instance (B against A, `arms.txt` in `/cluster/arthur/baguette-results/series-20261126/`):
+79 instances go from TIMEOUT to OPT and 31 go from OPT to TIMEOUT. A model whose author wrote a good search annotation can
+lose its proof of optimality under `-f`; those 31 are listed in `pairs.tsv` (rows `A B ... OPT TIMEOUT`).
+
+### 3. Options
+
+| Option | Consequence |
+|---|---|
+| keep the fixed search as default | the user who runs `baguette model.fzn` gets the weaker configuration on 3 instances of 4 where they differ; `-f` remains what MiniZinc passes on request |
+| `-f` as default, fixed behind a flag (CHOSEN) | +45 verified OPT + UNSAT and +19 verified SAT on the series; 31 optima lost unless the user asks for the fixed search; the model tests and the lanes must cover both |
+| a portfolio (fixed first for a share of the time, then free) | might keep the 31 and the 79; not built, not measured: left as the follow-up |
+
+### 4. The choice and its conditions
+
+`-f` becomes the default. Conditions on the implementation, which is its own commit so that reverting it reverts nothing else:
+
+- the fixed search stays reachable by a flag (`--fixed-search`), documented in the usage text and the README; `-f` stays
+  accepted and means what the default now means, so MiniZinc's driver keeps working;
+- nothing is weakened: the existing model tests and both diff lanes keep their recorded references by passing the fixed
+  flag (their bytes must not move, which proves the fixed path is untouched), and the default gets its own model-test pass
+  (every proof verified, answers compared on status and objective, not on which solution is printed) and its own lane
+  references, recorded in a separate commit after a gate;
+- the SPEC sentence that says restarts and the free search are opt-in (3.4, D-0137) is rewritten to say they are the
+  default and the fixed search is the option; old and new text quoted in the implementation's record;
+- the held-out comparison of D-0252 measured its switches under the fixed default. Whether `rec`, `classes` or `probe`
+  should be on is asked again under the new default before any of them changes.
+
+### 5. Revert
+
+Revert the implementation's default commit (one line once the flag exists). This record then stands as history.
