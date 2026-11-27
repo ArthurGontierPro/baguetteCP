@@ -33182,3 +33182,91 @@ agents during this pass); the learning modules (`analysis.ml`, `learn.ml`, `lear
 `pb_analysis.ml`, `reduce.ml`, `retention.ml` beyond its default, `ladder.ml`, `trace.ml`),
 `view.ml`, `lib/flatzinc/` and `lib/scp/` beyond their headers, and `tools/` beyond the check
 for dead paths.
+
+## D-0254  [AUTONOME] M22-review-T4, second documentation pass: the remaining modules' comments, docs/REFERENCES.md extended, and the four findings of D-0253 settled (a PROOF-FORMAT sentence corrected, bootstrap capped at 16 jobs, shrink.sh's missing mode removed, three dead functions removed)
+
+**Status**: DONE on `wave99-docs2` (agent-docs, 2026-11-27). The findings of D-0253 section 2 were
+decided by the orchestrator, to whom the user handed such decisions back (D-0251); this record
+says what was done and how to revert each.
+
+### 1. PROOF-FORMAT section 3, "The consistency clauses are in the `.opb`" (normative paragraph)
+
+The code is checked by veripb on every test, so the sentence was the stale side. Old bullet:
+
+> **No derivation this project emits ever cites a ladder id.** `Encoding.consistency_id`
+> has **no** caller in `lib/` or `bin/` at all — only `test/unit/test_proof.ml` — and the
+> one place in `lib/` that reads the id table, `derive_at_most_one`, is itself called only
+> from that same test file. Read from the emission side, the ladder looks like dead weight.
+
+New bullet:
+
+> **Derivations cite ladder ids, and the ladder would be needed even if none did.**
+> `Encoding.consistency_id` is cited by PB conflict analysis, which lifts a reason row onto
+> the rungs that carry its strength (`lib/core/ladder.ml`, called from `lib/core/search.ml`
+> under `pb_ladder`, on by default, M2-L11), and by the `pol` derivations of the counting
+> families: `element` (M4-T3), `gcc` (M7-T16, D-0078), `cumulative` (M4-T10, D-0096) and
+> `all_different` through `consistency_ids` (M7-T33). `derive_at_most_one` is still called
+> only from `test/unit/test_proof.ml`. (When this section was written for M1-T25, no
+> derivation cited a ladder id and the ladder looked like dead weight from the emission
+> side; M2-L11 was the first citer, on 2026-09-18.)
+
+The paragraph's normative conclusion (the ladder rows are in the `.opb` and are load-bearing for
+the checker's unit propagation) is unchanged. Verified with `git log -S` on each citer. Revert:
+the commit `M22-review-T4 (D-0254): the three findings of D-0253 ...`.
+
+### 2. `scripts/bootstrap.sh`
+
+`opam switch create -j "$(nproc)"` (192 on fataepyc-06) became `-j "${JOBS}"`, `JOBS = min(nproc,
+16)`, also exported as `OPAMJOBS` and passed to `opam install`, the node rule being no `-j`
+above 16. `bash -n` clean. Revert: the same commit.
+
+### 3. `scripts/shrink.sh`
+
+Its mode "disable one propagator at a time" needed a solver flag `--disable-propagator`, planned
+for M1-T7 and never added; `bin/main.ml` refuses it (exit 2), so the script always ended on "no
+single propagator accounts for it". The flag was NOT added. The mode and its `PROPAGATORS`
+variable are removed. What still works: the script solves the model with `--proof`, runs the
+checker, exits 0 when the proof is accepted, 1 when the solver fails (with its stderr), 2 without
+a checker, 3 when the proof is rejected, printing the checker's last lines and pointing at
+PROOF-FORMAT section 6. Tested on `trivial_sat.fzn` (exit 0) and a missing file (exit 1).
+`scripts/README.md`'s row says the same. Revert: the same commit.
+
+### 4. Dead code
+
+Grepped over `lib/`, `bin/`, `test/`, `tools/`, `scripts/` and `bench/`:
+
+| Function | Callers | Done |
+|---|---|---|
+| `Encoding.is_direct_row` | none; its only caller, `search.ml`'s `rests_on_a_clause`, went with D-0131 | REMOVED, with the table `direct_cids` it read, which four sites wrote and nothing else read |
+| `Justify.lit_hash` | none (`Explanation.lit_hash` is the one in use) | REMOVED |
+| `Writer.solution_excluding` (`solx`) | `test/unit/test_proof.ml` calls it to pin VeriPB 3.0's refusal of `solx` without a preserved set | KEPT |
+| `Writer.objective_update` (`obju`) | `test/unit/test_proof.ml`'s M5 gate greps for its definition to prove the "no caller" search ran | KEPT |
+
+One commit (`M22-review-T4 (D-0254): remove dead code ...`), the only one of this pass that
+changes code; `samecode.sh` reports DIFF on `encoding.ml` and `justify.ml` for it, as expected.
+Revert that commit to restore them.
+
+### 5. Comments
+
+The method of D-0253, with two additions the orchestrator asked for: every rewritten `.ml`
+file was compared with origin/main by `ocamlc -dsource` (parsed code identical) AND by a
+lost-token script that lists the numbers, references, bracketed names and backquoted words
+present in the old comments and absent from the new ones; each listed token was read and is a
+stale name corrected, a rewording or a quotation rewrapped. Sub-agents drafted the rewrites;
+each group's diff was reviewed with both scripts before its commit, and one sub-agent claim
+was corrected in review (`Learned.retire` has callers in `test/unit/test_learned.ml`).
+
+Done: `lib/flatzinc/` (all nine files including `compile.ml` and `builder.ml`), `lib/scp/`,
+the headers of the 15 mznlib files that needed it (only `%` lines changed), `analysis.ml`,
+`learn.ml`, `reduce.ml`, `pb_analysis.ml`, `learned.ml`, `ladder.ml`, `retention.ml`,
+`trace.ml`, `view.ml`, `restart.ml`, `phase.ml`, `activity.ml`, `checked.ml`, `interval.ml`,
+`debug.ml`, `prop/gcc.ml`, and the bodies of `maxmin`, `arith`, `cumulative`, `regular`,
+`table`, `circuit`, `inverse` and `member`. `docs/REFERENCES.md` now also indexes the
+references of `mznlib/`.
+
+Left: `lib/core/search.ml`, `lib/core/probe.ml` and `bin/main.ml` (agent-probe's), and
+`tools/` beyond the check for dead paths. Claims the sub-agents could not verify and left as
+written: builder.ml's note that a singleton-declared variable in a root-UNSAT row crashes
+`Justify.emit`; pb_analysis.ml's `level_of` returning 0 for a literal its declared domain
+falsifies (the code may give 1 when level 0 has no trail entry); analysis.ml's "2^30 trail
+positions in 15 GB" (the laptop's figure).

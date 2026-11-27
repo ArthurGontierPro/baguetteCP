@@ -1,6 +1,8 @@
 (* Views: [+/-x + k] over a store variable, and constants as first-class views.
-   M4-T0. Consistency level: none of its own -- a view is not a constraint, it is a
-   lens. Governed by docs/SPEC.md section 2.1 (what the front end may present) and
+   Added by M4-T0 (views and constants-as-variables) under D-0058, which decided that a
+   view is a rendering onto its base's literals with no PB variables of its own.
+   Consistency level: none of its own -- a view is not a constraint, it is a lens.
+   Governed by docs/SPEC.md section 2.1 (what the front end may present) and
    docs/PROOF-FORMAT.md section 3 (how it reaches the proof).
 
    WHY THIS EXISTS, and why the obvious alternative is worse.
@@ -12,9 +14,10 @@
    reasons about [y] and then has to get its pruning back to [x] through the
    channelling row -- which is a bounds-consistent step. The consistency is lost at
    the channel, silently, and the symptom is a slower search rather than a wrong
-   answer. docs/ROADMAP.md's M4-T0 row records what that cost GCS on one family; the
-   figure there is theirs and is not re-measured here, so it is cited as the reason
-   for the shape and not as a number this project has confirmed.
+   answer. docs/ROADMAP.md's M4-T0 row records what that cost GCS on one family: 4 of
+   15 instances solved to optimality with the auxiliary variable, 9 of 15 once it was
+   replaced. The figure is GCS's and is not re-measured here, so it is cited as the
+   reason for the shape and not as a number this project has confirmed.
 
    A view has no domain of its own. It has no store slot, no trail slot, and no PB
    variable. Everything it does is a translation of one integer:
@@ -30,8 +33,10 @@
 
    1. Pruning through a view moves the BASE, through [Store]'s ordinary mutators, so
       it pushes exactly one ordinary trail entry against the base variable. A view
-      cannot smuggle a second trail past I-T1/I-X4, because there is nothing here to
-      put one in.
+      cannot smuggle a second trail past I-T1 (backtracking restores every domain to
+      its state when the level opened) or I-X4 (the proof is append-only, so
+      backtracking becomes deletions in it), because there is nothing here to put one
+      in.
 
    2. Reading a view reads the base's LIVE domain. The two directions are the same
       array cell, not two cells kept in step, so there is no link to fall out of
@@ -49,10 +54,11 @@
    no trail entry to undo, no order ladder in the .opb. Every operation below has a
    [Const] arm that is the SAME operation on a one-value domain -- [lo = hi = c],
    [mem c v] is [v = c], a narrowing that keeps [c] is [Unchanged] and one that
-   excludes it is a [Conflict] reported through [Store.conflict], the same call a
-   propagator makes. The rule the arms are written to: a constant is a special case
-   of the ARITHMETIC and of nothing else. If a caller has to ask [is_const] before it
-   can do something, that something has been written wrong. *)
+   excludes it is a [Conflict] reported through [Store.unattributed_conflict], the
+   same call [Store.apply] makes when a variable's narrowing empties its domain (see
+   [fail] below for why it is not [Store.conflict]). The rule the arms are written to: a
+   constant is a special case of the ARITHMETIC and of nothing else. If a caller has to
+   ask [is_const] before it can do something, that something has been written wrong. *)
 
 module Lit = Baguette_proof.Lit
 module Encoding = Baguette_proof.Encoding
@@ -102,8 +108,9 @@ let compare a b =
       if c <> 0 then c else Lit.affine_compare a.map b.map
 
 (* The variables a view actually reads, for a propagator's [vars] declaration. A
-   constant reads none -- which is the point of I-T4's "the naming instance must also
-   watch the variable the entry changed": a propagator over constants changes
+   constant reads none. That is the point of I-T4, which says every trail entry names
+   the propagator instance that made it and that "the naming instance must also watch
+   the variable the entry changed": a propagator over constants changes
    nothing, so it declares nothing. *)
 let vars v = match v with Const _ -> [] | Affine { base; _ } -> [ base ]
 
@@ -131,9 +138,11 @@ let mem store v value =
 (* [lo], [hi] and [mem] over the BASE's domain [d] as it stood at some earlier moment,
    rather than as the store holds it now: the reads a propagator replays from the frame it
    froze at a pruning, so that the reason can be built later and still be the one the
-   pruning read (D-0214, lib/core/prop/element.ml). A [Domain.t] held since then IS the
-   domain then while the pruning's entry is on the trail (a version of its hole log,
-   D-0222; read after that, it raises). The same formulas as the three above; [d] is not
+   pruning read. That is D-0214's frame: an Element pruning records the domains it read
+   and builds its reason from them only when asked (lib/core/prop/element.ml). A
+   [Domain.t] held since then IS the domain then while the pruning's entry is on the
+   trail, because since D-0222 a hole set is a version of a per-variable hole log; read
+   after that entry is undone, it raises. The same formulas as the three above; [d] is not
    read for a constant. *)
 let lo_in (d : Domain.t) = function
   | Const c -> c
@@ -179,7 +188,8 @@ let domain store = function
 
 (* The [Const] failure arm goes through [Store.unattributed_conflict], which is what
    [Store.apply] itself returns when a variable's narrowing empties its domain -- NOT
-   [Store.conflict]. The distinction is load-bearing and is the whole of test (d): the
+   [Store.conflict]. The distinction is load-bearing and is the whole of the tests
+   labelled "view (d)" in test/unit/test_core.ml: the
    conflict a constant reports must be the same VALUE a variable reports in the same
    situation, reason included ([Reason.none], for the documented reason at
    [Store.apply]'s [Failed] arm). Reaching for [Store.conflict] here, which is the one
@@ -218,12 +228,13 @@ let fix store v value j =
 (* ---------------------------------------------------------------------- proof *)
 
 (* The view as the encoding sees it. The base's FlatZinc identifier comes from the
-   store -- the SAME string [Encoding.declare_int] was given, which is what D-0010's
-   "Store's initial domains and Encoding's declared domains must agree" requires of
-   the other half of this pair.
+   store -- the SAME string [Encoding.declare_int] was given, which is what D-0010 (a
+   bound fact is a chain of order literals) requires when it says "Store's initial domains
+   and Encoding's declared domains must agree" requires of the other half of this pair.
 
    Note what is not here: no name is minted, no table is consulted, and nothing is
-   keyed on a rendered OPB name. [Lit.sanitize] is non-injective (M2-T9); the reason
+   keyed on a rendered OPB name. [Lit.sanitize] is non-injective (two FlatZinc names
+   can render to one OPB name, the trap M2-T9 found); the reason
    that cannot bite a view is that a view never has a name to sanitise. *)
 let to_encoding store = function
   | Const c -> Encoding.view_const c

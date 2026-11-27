@@ -28,10 +28,11 @@
    [hi(s_i), lo(s_i) + d_i - 1], the profile at t is the resource of the tasks whose
    compulsory part contains t, and a task j that would overload the profile at t is
    pushed off t.  That is not bounds consistency (which is NP-hard for cumulative), it is
-   not edge-finding, energetic reasoning or not-first/not-last (each a later row, D-0096
-   section 5), and it is all this module does.  What [Checking] obliges it delivers: with
-   every start fixed, every task's compulsory part is its whole run, so an overloaded
-   time point is a profile of fixed tasks and the push it causes empties a domain.
+   not edge-finding, energetic reasoning or not-first/not-last (each left to a later
+   roadmap row by D-0096 section 5), and it is all this module does. What [Checking]
+   obliges it delivers: with every start fixed, every task's compulsory part is its whole
+   run, so an overloaded time point is a profile of fixed tasks and the push it causes
+   empties a domain.
 
    ---------------------------------------------------------------------------
    The model rows: one per time point, over ORDER literals, and no auxiliary
@@ -45,9 +46,9 @@
 
    -- gcc's identity (its counting rows live in the order encoding, D-0078) over an
    interval instead of a value.  `s_ge_dlo` is the constant 1 and `s_ge_(dhi+1)` the
-   constant 0, so a clipped end contributes a
-   constant, folded into the right-hand side.  [make] posts, for every t at which the
-   tasks that MAY run (by declared windows) carry more than [cap],
+   constant 0, so a clipped end contributes a constant, folded into the right-hand side.
+   [make] posts, for every t at which the tasks that MAY run (by declared windows) carry
+   more than [cap],
 
      sum_i r_i I_i(t)  <=  cap - (fixed-start load at t) - (folded constants)
 
@@ -254,10 +255,11 @@ type snap = {
 (* Whether a bound was established at the root: [Store.at_root], one comparison. It
    gives the same answer as [Store.level_of_index sup = 0], a binary search over the open
    levels, by I-T2 (the level marks are monotone, so an entry is at level 0 iff it
-   precedes the first mark). Asked twice per task per snapshot, the search was 12 % of
-   this module's samples on rcpsp without learning or proof (the per-node profile of
-   D-0207); D-0214 made the change, the one alldiff.ml had made for D-0161's
-   request 1. *)
+   precedes the first mark). The comparison is used because the search, asked twice per
+   task per snapshot, was 12 % of this module's samples on rcpsp without learning or
+   proof, in D-0207's profile of where the cost per node goes. D-0214 (a batch of
+   per-node savings) made the change in Element, Cumulative and Gcc, the one alldiff.ml
+   had made for request 1 of the --no-proof audit (D-0161). *)
 let established_at_root store v ~lower =
   let sup = if lower then Store.lo_support store v else Store.hi_support store v in
   sup = Store.no_support || Store.at_root store sup
@@ -304,14 +306,15 @@ let rung_summands t ~c x ~from_ ~to_ =
     (fun u -> cite c (cid_of "ladder rung" (Encoding.consistency_id t.enc x u)))
     (range from_ (to_ - 1))
 
-(* [c] x `I_i >= 1` for a compulsory task, as far as the ladder takes it; its two
-   leftovers are its own bounds, which [cancels] removes where they are root ones. *)
-(* LIFTED (Schutt et al.'s pointwise explanation): a bound a DECISION moved is not
-   walked onto the window by a chain and named at its current value; the window literal
-   itself is left in the row and named in the reason -- `s_i >= a_i'` and `s_i <= b_i'`,
-   which is exactly what "compulsory at t" needs and no more.  A root bound is still
-   walked to and cancelled ([alo_cancels]), because a root contradiction must close to
-   0 >= 1.  Measured on 2008_rcpsp: see D-0096's addendum. *)
+(* [c] x `I_i >= 1` for a compulsory task, as far as the ladder takes it. Only a ROOT
+   bound is walked onto the window by a chain; its leftover is then the bound itself,
+   which [alo_cancels] removes, because a root contradiction must close to 0 >= 1.
+
+   A bound a DECISION moved is LIFTED instead (Schutt et al.'s pointwise explanation): it
+   is not walked onto the window and named at its current value; the window literal
+   itself is left in the row and named in the reason, `s_i >= a_i'` and `s_i <= b_i'`,
+   which is exactly what "compulsory at t" needs and no more. The measurement on
+   2008_rcpsp that chose this is D-0096's addendum. *)
 let alo_summands t s ~time =
   let c = s.s_task.res and a', b' = window s ~time in
   (if a' > s.s_dlo && s.s_lo_root then rung_summands t ~c s.s_name ~from_:a' ~to_:s.s_lo
@@ -350,9 +353,9 @@ let drop_summands t s ~time =
    facts with its justification) asks the reason to name every variable weakened at the
    TOP level, which is right for a weakening that stands for a bound the pruning read and
    is not what these are.  The push ([prune_expl]) and the overload ([propagate]) both
-   build it here, because the overload once wrote the clearing at the top level (fixed by
-   D-0231), which the check refused on
-   test/models/cumulative_fixed_overload_edge_unsat.fzn while the proof verified. *)
+   build it here. The overload used to write the clearing at the top level, which the
+   check refused on test/models/cumulative_fixed_overload_edge_unsat.fzn while the proof
+   verified (fixed by D-0231). *)
 let cleared_row t ~cid ~time free =
   match List.concat_map (fun s -> drop_summands t s ~time) free with
   | [] -> cite 1 cid
@@ -460,11 +463,12 @@ let prune_expl t ~row ~halls ~others ~y ~lower ~bound =
    scope, and it is measured: on 2008_rcpsp every trace line carried both bounds of all
    ~30 tasks, and the 1UIP nogoods resolved from them were correspondingly long.
 
-   UNLIKE gcc, the facts of a bound's SUPPORT are not appended.  gcc needs them for its
-   [fact_summand] clause `l \/ ~facts(support)`; nothing here cites a non-root bound by
-   anything but its own literal, which stays in the row and is the fact named below.
-   Appending them is also what made the first draft EXPONENTIAL: a time-table push
-   rests on earlier pushes of the same instance, each reason copied its supports'
+   The facts of a bound's SUPPORT (the reason of the entry that set it) are not appended:
+   nothing here cites a non-root bound by anything but its own literal, which stays in
+   the row and is the fact named below. gcc.ml once appended them, for a [fact_summand]
+   clause `l \/ ~facts(support)` that nothing called, and stopped in M7-T24 (D-0099).
+   Appending them is also what made this module's first draft EXPONENTIAL: a time-table
+   push rests on earlier pushes of the same instance, each reason copied its supports'
    reasons, and on a six-task unit-capacity scene (horizon 8) eleven search nodes took
    over five seconds before the copies were removed. *)
 let side_facts s ~time ~low ~high =
@@ -495,23 +499,24 @@ exception Found of Store.conflict
    ONE SNAPSHOT, EVERY DEDUCTION (I-P6: a pass photographs the store once and makes
    every deduction that photograph licenses).  The snapshot and the profile are built
    once per pass and every task they overload is pushed before [loop] takes the next.
-   Before M6-T19 the pass restarted at the first push that landed, so a time point whose
-   compulsory parts push k tasks cost k + 1 snapshots and k + 1 profiles.
+   Before M6-T19 (one pass per deduction instead of a restart per pruning) the pass
+   restarted at the first push that landed, so a time point whose compulsory parts push
+   k tasks cost k + 1 snapshots and k + 1 profiles.
 
-   The snapshot is kept CURRENT INCREMENTALLY rather than left stale, and that is a
-   choice about explanation quality, not soundness.  A push on a stale profile would be
-   sound (I-P6: its facts are frozen bounds that still hold) but could land short of
-   what the live profile allows, when a part an earlier push of this pass has grown is
-   what overloads the later point; the next pass would then push the same task again,
-   and the two entries chain into a longer 1UIP clause than the single push the old
-   restart made.  Measured on cumulative_sat / disjunctive_sat: 5 -> 7 and 15 -> 19
-   nodes with the stale version.  So a landed push refreshes ITS OWN task's snapshot --
-   nothing else in the store has moved, this propagator being the only thing running --
-   and adds the growth of its compulsory part to the profile, which is exactly what the
-   old restart's fresh snapshot and rebuilt profile would show, at O(duration) instead
-   of O(tasks + horizon).  What still differs from the restart is the ORDER: the scan
-   continues with the next task rather than starting over, so a task before the pushed
-   one is re-examined in the next pass, not now.  Same fixpoint, same reasons per push. *)
+   The snapshot is kept CURRENT INCREMENTALLY: a landed push refreshes ITS OWN task's
+   snapshot and adds the growth of its compulsory part to the profile, at O(duration)
+   instead of O(tasks + horizon).  Nothing else in the store has moved, this propagator
+   being the only thing running, so that is exactly what a fresh snapshot and a rebuilt
+   profile would show.  This is a choice about explanation quality, not soundness.  A
+   push on a stale profile would be sound (I-P6: its facts are frozen bounds that still
+   hold) but could land short of what the live profile allows, when a part an earlier
+   push of this pass has grown is what overloads the later point; the next pass would
+   then push the same task again, and the two entries chain into a longer 1UIP clause
+   than the single push a fresh profile gives.  Measured on cumulative_sat /
+   disjunctive_sat: 5 -> 7 and 15 -> 19 nodes with the stale version.  What still
+   differs from a restart per push is the ORDER: the scan continues with the next task
+   rather than starting over, so a task before the pushed one is re-examined in the next
+   pass, not now.  Same fixpoint, same reasons per push. *)
 let pass t store =
   Propagator.count_pass ();
   let moved = ref false in
@@ -576,10 +581,11 @@ let pass t store =
     | Store.Unchanged -> ()
   in
   (* The first overloaded point of the [n] times [a], [a + step], ..., scanned in that
-     order, generated rather than listed (item E8 of the complexity pass, D-0142): the
-     times used to be built as a list per task and direction on every pass ([range], and
-     [List.rev] of it for the lower push); the loop visits the same times in the same
-     order and stops at the same one. *)
+     order and generated rather than listed, so no list is built per task and direction
+     on every pass. The loop visits the same times in the same order, and stops at the
+     same one, as the list it replaced ([range], and [List.rev] of it for the lower
+     push). That was item E8 of the complexity inventory, done in the first batch of the
+     complexity pass (D-0142). *)
   let first_overloaded j a step n =
     let rec go k =
       if k >= n then None

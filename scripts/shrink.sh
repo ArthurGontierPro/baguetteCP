@@ -1,18 +1,17 @@
 #!/usr/bin/env bash
-# Find which propagator emits a proof step veripb rejects, by re-running the model with
-# propagators disabled one at a time.
+# Check whether one model's proof is rejected, and show where. It was meant to also find
+# WHICH propagator emits the rejected step, by re-running with propagators disabled one at
+# a time; that needs a solver flag --disable-propagator, planned with the engine (roadmap
+# M1-T7) and never added, so that mode is gone (D-0254). What remains:
 #
-#   scripts/shrink.sh test/models/lin_unsat.fzn     (PROPAGATORS="int_le ..." to choose)
+#   scripts/shrink.sh test/models/lin_unsat.fzn
 #
-# Exit 0 when the baseline proof is accepted (nothing to shrink) or when disabling one
-# propagator makes it accepted (that one is printed as SUSPECT); 1 when no single
-# propagator accounts for the rejection; 2 when no checker is found.
+# solves the model with --proof into test/out/shrink/base.{opb,pbp}, runs veripb on it and,
+# when the checker refuses it, prints the checker's last lines (the rejected line and the
+# checker's sentence). Localise from there with docs/PROOF-FORMAT.md section 6.
 #
-# NOT WORKING TODAY (checked 2026-11-27): it relies on a solver flag
-# --disable-propagator, which was planned with the engine (roadmap M1-T7) and was never
-# added to bin/main.ml. The solver refuses the flag as a usage error (exit 2), so every
-# disabled run fails and the script always ends on "no single propagator accounts for
-# it". Use it only after the flag exists.
+# Exit 0 when the proof is accepted; 1 when the solver itself fails; 2 when no checker is
+# found; 3 when the proof is rejected.
 set -uo pipefail
 
 FZN="${1:?usage: shrink.sh MODEL.fzn}"
@@ -28,23 +27,21 @@ fi
 OUT="${ROOT}/test/out/shrink"
 mkdir -p "${OUT}"
 
-PROPAGATORS="${PROPAGATORS:-int_le int_lt int_eq int_ne int_lin_le int_lin_eq int_lin_ne bool_clause all_different element}"
-
 echo "baseline:"
-if "${SOLVER}" "${FZN}" --proof "${OUT}/base" >/dev/null 2>&1 &&
-   "${VERIPB}" "${OUT}/base.opb" "${OUT}/base.pbp" >/dev/null 2>&1; then
-  echo "  proof already accepted — nothing to shrink"
+"${SOLVER}" "${FZN}" --proof "${OUT}/base" >"${OUT}/base.out" 2>"${OUT}/base.err"
+rc=$?
+if [ "${rc}" -ne 0 ]; then
+  echo "  the solver failed on ${FZN} (exit ${rc}), so there is no proof to check:"
+  tail -5 "${OUT}/base.err" | sed 's/^/    /'
+  exit 1
+fi
+if "${VERIPB}" "${OUT}/base.opb" "${OUT}/base.pbp" >"${OUT}/base.check" 2>&1; then
+  echo "  proof accepted -- nothing to shrink"
   exit 0
 fi
-echo "  proof rejected, searching"
-
-for p in ${PROPAGATORS}; do
-  if "${SOLVER}" "${FZN}" --disable-propagator "${p}" --proof "${OUT}/${p}" >/dev/null 2>&1 &&
-     "${VERIPB}" "${OUT}/${p}.opb" "${OUT}/${p}.pbp" >/dev/null 2>&1; then
-    echo "  SUSPECT: disabling '${p}' makes the proof check. Its justification is wrong."
-    exit 0
-  fi
-done
-
-echo "  no single propagator accounts for it — the encoding or the search logging is suspect"
-exit 1
+echo "  proof REJECTED by ${VERIPB}; the checker's last lines:"
+tail -8 "${OUT}/base.check" | sed 's/^/    /'
+echo "  shrink.sh cannot say which propagator wrote the line: the --disable-propagator"
+echo "  mode it was written for does not exist in the solver. See docs/PROOF-FORMAT.md"
+echo "  section 6 to localise the rejected line."
+exit 3

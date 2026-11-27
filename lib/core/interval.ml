@@ -5,9 +5,11 @@
    ---------------------------------------------------------------------------
 
    A port of GCS's [constraints/innards/product_bounds.hh] -- free functions over
-   integers with no solver types at all. There is no [Store], no [Explanation], no
-   [Encoding] and no [Var] in this file, and there should never be one: M4-T4b builds
-   [int_times]/[int_div]/[int_abs] *on top of* this, and the point of the split is that
+   integers with no solver types at all. M4-T4a asked for exactly that: interval
+   arithmetic as a standalone, proof-free, unit-tested module. There is no [Store], no
+   [Explanation], no [Encoding] and no [Var] in this file, and there should never be
+   one: M4-T4b builds [int_times]/[int_div]/[int_abs] *on top of* this
+   (lib/core/prop/arith.ml), and the point of the split is that
    everything here is checkable by brute force over small ranges, with no proof
    machinery and no scene to set up. test/unit/test_interval.ml does exactly that.
 
@@ -20,7 +22,9 @@
    Overflow (docs/DECISIONS.md D-0029)
    ---------------------------------------------------------------------------
 
-   Multiplying two bounds is precisely where D-0029's soundness gap lived: a wrapped
+   D-0029 records the arithmetic limit enforced at compile time and why declining to
+   prune is not an option, and multiplying two bounds is precisely where the soundness
+   gap behind it lived (lib/core/checked.ml's header has the instance): a wrapped
    product pruned wrongly *and* the .opb row was folded from the same wrapped
    arithmetic, so the checker agreed with the solver because both were wrong. A
    four-corner product bound is four multiplications, so this module is four times that
@@ -46,16 +50,20 @@
    lib/core/prop/linear.ml (which now re-exports [Checked]'s versions under its own
    names), and [div_floor]/[div_ceil] here are [Checked.floordiv]/[Checked.ceildiv]
    under the names the GCS header uses. They are aliases and not a second
-   implementation on purpose -- two roundings that must agree is how D-0009 started.
+   implementation on purpose: two copies of one rule that must agree is how D-0009
+   started, when the propagator and the proof bridge read [Explanation.Linear] two
+   different ways and each reading was defensible.
 
    The test file checks their rounding against an independent float reference rather
    than assuming it, over every sign combination, because "we reused the shared one" is
    not evidence about what the shared one does.
 
-   **A warning for M4-T4b, which is easy to get backwards.** This rounding is about
-   *bounds*, not about what [int_div] means. The FlatZinc/MiniZinc [int_div] relation
-   truncates toward zero, with the remainder taking the dividend's sign, and the roadmap
-   records that as a SPEC addition M4-T4b needs before any code. The two are not in
+   **A warning for [int_div] (M4-T4b, lib/core/prop/arith.ml), easy to get backwards.**
+   This rounding is about *bounds*, not about what [int_div] means. The FlatZinc/MiniZinc
+   [int_div] relation truncates toward zero, with the remainder taking the dividend's
+   sign, and docs/SPEC.md section 2.1 ("Integer division, modulo and absolute value")
+   states it normatively; when this module was written that SPEC addition was still
+   a precondition M4-T4b had to meet before any code. The two are not in
    conflict and must not be conflated: the relation says which triples (x, y, q) are
    solutions, while [div_floor]/[div_ceil] answer "what is the widest bound this
    constraint permits", which rounds outward whatever the relation does. A propagator

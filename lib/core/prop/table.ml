@@ -81,13 +81,12 @@
    The reasons are ON THE LETTERS, the rule D-0151 set for regular's state flags so that
    a learned clause names cells of x and not auxiliary selectors. Where a line would cite
    "s_t <= 0", it cites the TAIL of the line that killed s_t, which is letter facts by the
-   same rule. A
-   selector moved by anything other than this instance (a decision, a learned clause) has
-   no tail of ours and is cited as itself. The tails are kept as the STRONGEST fact per
-   letter and direction, so a tail has at most two facts per letter; a K tail has at most
-   one. The machinery (slots, stamped scratch arrays, tails cached with the trail entry
-   they belong to and read back through [Store.hi_support] / [lo_support]) is
-   regular.ml's, copied rather than shared, as member.ml copied it.
+   same rule. A selector moved by anything other than this instance (a decision, a
+   learned clause) has no tail of ours and is cited as itself. The tails are kept as the
+   STRONGEST fact per letter and direction, so a tail has at most two facts per letter; a
+   K tail has at most one. The machinery (slots, stamped scratch arrays, tails cached with
+   the trail entry they belong to and read back through [Store.hi_support] / [lo_support])
+   is regular.ml's, copied rather than shared, as member.ml copied it.
 
    The justification is [Explanation.clause] of the claim and the negated facts, deferred:
    no new constructor, no line written ahead, a [Single_row] family (one constraint,
@@ -170,7 +169,8 @@ type t = {
   mutable others_rev : Reason.fact list;
   (* [others_rev]'s facts, to keep each once in one lookup. [List.mem] over the list was
      quadratic in the foreign facts of a reason, 50 % of a 2011_black-hole_14 node under
-     the proof (removed with the other quadratic deduplications of D-0216). *)
+     the proof. D-0216, the task that cut black-hole's root cost under native table,
+     removed it with the other quadratic deduplications. *)
   others_seen : (Reason.fact, unit) Hashtbl.t;
   mutable stamp : int;
 }

@@ -172,12 +172,12 @@
    literal drops a fact the argument rests on.
 
    The reasons are kept on the LETTERS (x and y) by regular.ml's machinery, copied rather
-   than shared (regular.ml was left as it was): one slot per distinct
-   variable of x and y, a reason under construction as stamped scratch arrays indexed by
-   (slot, direction) -- the STRONGEST fact per letter and direction -- and each selector's
-   tail cached with the trail entry it belongs to, read back through the entry that
-   moved the selector now ([Store.hi_support] / [lo_support]), so a selector revived by a
-   backtrack and moved again by a decision is cited as itself.
+   than shared (regular.ml was left as it was): one slot per distinct variable of x and
+   y, a reason under construction as stamped scratch arrays indexed by (slot, direction)
+   -- the STRONGEST fact per letter and direction -- and each selector's tail cached with
+   the trail entry it belongs to, read back through the entry that moved the selector now
+   ([Store.hi_support] / [lo_support]), so a selector revived by a backtrack and moved
+   again by a decision is cited as itself.
 
    A call is O(n * w) for K and O(|dom y| * live) for S, w the overlap of two hulls; the
    lemmas a K line writes are as many as the holes its reason already cites.

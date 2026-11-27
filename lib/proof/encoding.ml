@@ -471,16 +471,6 @@ type t = {
      of its own accord: each [int_lin_ne] pair of big-M rows needs one (M1-T9), as do a
      reified equality and each selector of a choice group. Only ever increases, so a
      name handed out once is never handed out again even after a failed candidate. *)
-  (* Every id this module minted for a DIRECT-ENCODING line: the three channelling
-     halves of every [ensure_direct], and every [derive_at_least_one]. Read only by
-     [is_direct_row]. M4-T2 added it for lib/core/search.ml's [rests_on_a_clause], which
-     asked "which currency is this row stated in" of a root conflict, a question only
-     the id could answer (an [Explanation.Model_row] carries an id and nothing else).
-     That predicate was removed with the root arm it served (M8-bits-encoding-T5,
-     D-0131: a root conflict now always closes on its trace), and [is_direct_row] has
-     no caller left in lib/ or bin/. Ids are minted by [Writer] in one ascending
-     sequence and never reused, so an entry stays correct after [retire_direct] drops
-     the [dvar] itself. *)
   (* M7-T1. What the encoding COST, accumulated as it is minted. These exist because
      the width refusal was also a diagnostic: with the refusal gone by default, this is
      what is left to tell a reader that their model asked for an encoding nobody can
@@ -492,7 +482,6 @@ type t = {
   mutable ladder_clauses : int;
   mutable widest : (string * int * int) option; (* name, lo, hi *)
   mutable direct_values : int;
-  direct_cids : (cid, unit) Hashtbl.t;
   direct_wanted : unit Names.t;
       (* The variables a propagator has declared it will need the DIRECT encoding for
          ([request_direct]), recorded at compile time and materialised by
@@ -593,7 +582,6 @@ let create () =
     n = 0;
     objective = None;
     n_aux = 0;
-    direct_cids = Hashtbl.create 64;
     direct_wanted = Names.create 16;
     alo = Hashtbl.create 16;
     ladder_clauses = 0;
@@ -1835,17 +1823,15 @@ let ensure_direct t w x =
         let zl = Lit.eq x value in
         let origin = Printf.sprintf "channel %s=%d" x value in
         (* ~x_eq_v \/ x_ge_v, only when x >= v is not the constant true *)
-        if value > v.lo then (
-          let c = Opb.clause [ Lit.negate zl; Lit.ge x value ] in
-          let id = Writer.red w ~origin ~witness:[ (z value, Writer.Zero) ] c in
-          Hashtbl.replace t.direct_cids id ();
-          Hashtbl.replace d.d_lo value id);
+        (if value > v.lo then
+           let c = Opb.clause [ Lit.negate zl; Lit.ge x value ] in
+           let id = Writer.red w ~origin ~witness:[ (z value, Writer.Zero) ] c in
+           Hashtbl.replace d.d_lo value id);
         (* ~x_eq_v \/ ~x_ge_(v+1), only when x >= v+1 is not the constant false *)
-        if value < v.hi then (
-          let c = Opb.clause [ Lit.negate zl; Lit.le x value ] in
-          let id = Writer.red w ~origin ~witness:[ (z value, Writer.Zero) ] c in
-          Hashtbl.replace t.direct_cids id ();
-          Hashtbl.replace d.d_hi value id);
+        (if value < v.hi then
+           let c = Opb.clause [ Lit.negate zl; Lit.le x value ] in
+           let id = Writer.red w ~origin ~witness:[ (z value, Writer.Zero) ] c in
+           Hashtbl.replace d.d_hi value id);
         (* x_eq_v \/ ~x_ge_v \/ x_ge_(v+1) *)
         let body =
           [ zl ]
@@ -1855,7 +1841,6 @@ let ensure_direct t w x =
         let id =
           Writer.red w ~origin ~witness:[ (z value, Writer.One) ] (Opb.clause body)
         in
-        Hashtbl.replace t.direct_cids id ();
         Hashtbl.replace d.d_fwd value id
       done;
       v.direct <- Some d;
@@ -1879,7 +1864,6 @@ let derive_at_least_one t w x =
       ~origin:(Printf.sprintf "at-least-one %s" x)
       (Writer.Pol.sum (List.map Writer.Pol.id ids))
   in
-  Hashtbl.replace t.direct_cids id ();
   id
 
 (* at-most-one for a pair a < b: take
@@ -2176,24 +2160,6 @@ let direct_fwd_id t x value =
 (* The at-least-one line for [x], derived from the channelling by [start_proof].
    [None] when no direct encoding was requested for [x]. *)
 let at_least_one_id t x = Hashtbl.find_opt t.alo x
-
-(* Is this id one of the DIRECT-ENCODING lines this module wrote? (M4-T2.)
-
-   The question it answers is not "who minted this" but "which currency is the row that
-   cites it stated in". The order encoding's ladder and the direct encoding's x_eq_v
-   family are two different vocabularies, and a [pol] whose operands come from the second
-   derives a statement about values, not about the per-variable declared-range chain a
-   [Linear] row's division needs (D-0010, lib/core/prop/linear.ml's header). So a
-   derivation that names any of these ids is a COUNTING row. lib/core/search.ml's
-   [rests_on_a_clause] used exactly that to decide how a root conflict citing it closed;
-   that predicate is gone (M8-bits-encoding-T5, D-0131: every root conflict now closes on
-   its trace), and this function has no caller left in lib/ or bin/.
-
-   The pairwise disequality rows [add_all_different] posts are deliberately NOT here:
-   they are clauses over ORDER literals, so a derivation may cite one without leaving the
-   ladder currency -- and [Ne] does. What marks the counting row is the channelling and
-   the at-least-one line, which is why those are what this records. *)
-let is_direct_row t id = Hashtbl.mem t.direct_cids id
 
 (* ---------------------------------------------------------------------------
    Assignments

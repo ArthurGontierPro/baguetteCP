@@ -1,111 +1,129 @@
-(* retention.ml: the learned-constraint database, its deletion, and the retention
-   policy (M2-L4, absorbing M2-T4).
+(* retention.ml: the learned-constraint database. It holds the proof id of every learned
+   constraint the search introduced, it is the only code that deletes one (writing the
+   matching `del` line), and its retention POLICY decides which constraints to evict while
+   the search runs (M2-L4, which absorbed M2-T4, learned-clause deletion with its `del`).
 
-   Consistency level: none -- this is not a propagator. Governing records:
-   docs/DECISIONS.md D-0045 (the `wipe_level` finding this row exists to resolve),
-   D-0044 and its amendments (the learned object, and the fork that makes it
-   proof-only), D-0024 (what `wipe_level` imitates); docs/INVARIANTS.md I-X2 and I-X3;
-   docs/PROOF-FORMAT.md section 5.
+   Consistency level: none, this is not a propagator. The records it rests on are D-0045,
+   which found that a learned constraint tagged at the decision level it was learned at is
+   deleted by the very backjump that follows learning it (the `wipe_level` finding that
+   section 1 resolves); D-0044 and its amendments, under which the learned object is a PB
+   inequality with the clause as its degree-1 case (and the fork that makes a learned PB
+   row proof-only); D-0024, under which VeriPB 3.0 has no command that wipes a level, so
+   lib/proof/writer.ml keeps a level tag per id and [Writer.wipe_level] imitates the wipe
+   with explicit deletions; the invariants I-X2 (every constraint id is deleted exactly
+   once) and I-X3 (a reason deleted from the proof is referenced by no live trail entry)
+   of docs/INVARIANTS.md; and docs/PROOF-FORMAT.md section 5, on backtracking and
+   deletion.
 
    The default policy is [tiered] (three LBD tiers, Glucose's schedule), chosen by D-0226
    on measurement: once an eviction also takes the instance out of the engine, [tiered]
    verified 25 answers of the tuning set where [keep_all] verified 20, and the peak memory
    of a run that times out fell to 0.6 to 0.7 times [keep_all]'s. `BAGUETTE_RETENTION`
    selects another policy (`off` or `keep_all`, `fifo:N`, `lbd:N`, `tiered:PARAMS`); `off`
-   gives back the proofs written before D-0226 byte for byte. Section 2 below records the
-   earlier measurements, under which [keep_all] was the default (D-0051, D-0139); its
-   "the default is [keep_all]" sentences are that history.
+   gives back the proofs written before D-0226 byte for byte. Section 2 gives the
+   measurements that led there in the order they were taken. The first three chose or
+   kept [keep_all] as the default (D-0051, D-0139), and what they say about the default
+   is history.
 
    ===========================================================================
    1. WHO OWNS A LEARNED CONSTRAINT'S LIFETIME
    ===========================================================================
 
-   This row's real question, and the one D-0045 said to settle BEFORE choosing between
-   LBD and activity. The answer:
-
      **This database owns it, alone. A backjump cannot be a co-owner, and since M2-L4
      that is a property of the code rather than a property of the call sites.**
 
-   The argument is three steps and each one is checkable:
+   D-0045 asked for this to be settled BEFORE any choice between LBD and activity. The
+   argument is three steps and each one is checkable:
 
    1. [Writer.wipe_level l] deletes exactly the set {id | tag(id) >= l}
       (lib/proof/writer.ml, and D-0024 is why it is that set and not "everything derived
       since"). It is the only bulk deleter in the tree.
    2. A learned id is tagged 0. [Learned.introduce] and [Pb_analysis.introduce] both emit
       inside [Justify.with_level ctx 0], which moves the writer's level FOR REAL, so the
-      tag and the emitted proof agree (I-X3). M2-L1 measured the alternative: tagged at
-      the conflict level, the backjump deletes it and the next citation is "Trying to
-      access constraint with ID 3 that has already been deleted".
+      tag and the emitted proof agree (I-X3). M2-L1 (the learned-constraint type and its
+      introduction) measured the alternative: tagged at the conflict level, the backjump
+      deletes it and the next citation is "Trying to access constraint with ID 3 that has
+      already been deleted".
    3. Levels are non-negative ([Writer.set_level] rejects a negative), so a tag of 0 is
-      reached by [wipe_level l] only at l = 0. **[Writer.wipe_level] now refuses l = 0**
-      -- an [invalid_arg] naming this module. Before M2-L4 that was a fact about
+      reached by [wipe_level l] only at l = 0, and **[Writer.wipe_level] refuses l = 0**
+      with an [invalid_arg] naming this module. Before M2-L4 that was a fact about
       [Search]'s four call sites, all of which pass a decision level; a fifth call site
       passing 0 would have made the backjump a second owner silently. It is now a fact
       about the writer.
 
-   So there is exactly one deleter of a learned id, and it is [retire] below.
+   So there is exactly one deleter of a learned id, and it is [retire] below. Everything
+   else in this module routes through it (eviction, the end-of-search sweep, and the test
+   harness alike), which is what makes "deleted exactly once" (I-X2) a property of one
+   function with one membership test rather than of an argument about call order.
 
-   **And since D-0226 the RUNTIME side has the same owner.** A learned constraint with a
-   propagator is in two places: its id on the page, and its instance in the engine. Before
-   D-0226 only the first ended at an eviction; the engine kept the instance (switched off
-   by [gate], but with every closure and byte of the propagator) until the end of the run.
-   Now [Engine.add] hands the gated instance the function that removes it
+   **The RUNTIME side has the same owner (D-0226).** A learned constraint with a
+   propagator is in two places: its id on the page, and its instance in the engine.
+   [Engine.add] hands the gated instance the function that removes it
    ([Propagator.inst_attach]), [gate] keeps that function, and [reduce] calls it in the
    same step that turns the gate off and retires the id. The engine holds a gated instance
    on this database's behalf and for exactly as long as this database holds its id; no
    other caller can remove it (the function is reachable only from the gate), and the
    engine never removes anything on its own. Under [keep_all] there is no gate, so nothing
-   is ever removed and the proof is the one written before D-0226. Everything
-   else in this module routes through it -- eviction, the end-of-search sweep, and the
-   test harness alike -- which is what makes "deleted exactly once" (I-X2) a property of
-   one function with one membership test rather than of an argument about call order.
+   is ever removed and the proof is the one written before D-0226. Before D-0226 only the
+   id ended at an eviction: the engine kept the instance until the end of the run,
+   switched off by [gate] but with every closure and byte of the propagator.
 
-   ### The double-delete this actually prevents, which is NOT the backjump
+   ### The double-delete this prevents is not the backjump's
 
    D-0045's addendum warns about the policy and the backjump both wanting a learned id
-   gone. Step 3 above closes that off. The double-delete that would really have happened
-   is nearer home and is worth naming, because it is the shape a reader will reintroduce:
+   gone, and step 3 above closes that off. The double-delete that would really have
+   happened is nearer home, and it is worth naming because it is the shape a reader will
+   reintroduce.
 
-   before this row, [Search.solve] retired learned ids from [stats.learned_rev], the list
-   of every id ever introduced. A policy that evicts mid-search and leaves that list
-   alone gives two deletions of one id from ONE owner -- the end-of-search sweep repeating
-   what the eviction already did. [stats.learned_rev] is now an audit trail and nothing
-   reads it to delete; the sweep is [retire_all], which deletes what this database still
-   HOLDS. The distinction between "introduced" and "held" is the whole fix.
+   Before M2-L4, [Search.solve] retired learned ids from [stats.learned_rev], the list of
+   every id ever introduced. A policy that evicts mid-search and leaves that list alone
+   gives two deletions of one id from ONE owner: the end-of-search sweep repeating what
+   the eviction already did. [stats.learned_rev] is now an audit trail and nothing reads
+   it to delete; the sweep is [retire_all], which deletes what this database still HOLDS.
+   The distinction between "introduced" and "held" is the whole fix.
 
-   And it matters that the checker catches it rather than only our audit: a second
-   [Writer.forget] is a no-op, so [BAGUETTE_PROOF_AUDIT=1]'s live-set check cannot see a
-   double delete at all (D-0045's closing paragraph). What sees it is `del id` on an
-   already-deleted id, which 3.0.2 refuses -- and [test_retention.ml] performs that break
-   rather than citing it.
+   It matters that the checker catches this and not only our audit, because the audit
+   cannot: a second [Writer.forget] is a no-op, so [BAGUETTE_PROOF_AUDIT=1]'s live-set
+   check cannot see a double delete at all (D-0045's closing paragraph). What sees it is
+   `del id` on an already-deleted id, which 3.0.2 refuses, and [test_retention.ml]
+   performs that break rather than citing it.
 
    ===========================================================================
-   2. THE POLICY, AND THE MEASUREMENT THAT CHOSE IT
+   2. THE POLICY, AND THE MEASUREMENTS THAT CHOSE IT
    ===========================================================================
 
-   The row asks for LBD-like or activity-based, justified by a measurement. Both were
-   measured before either was written. The measurements are stated here with how they
-   were taken, because a figure in this repository that says only what it is has twice
-   turned out to be wrong.
+   The default is [tiered] since D-0226. Four measurements led there. Each is stated
+   below with how it was taken, because a figure in this repository that says only what
+   it is has twice turned out to be wrong.
 
-   ### Activity
+   (a) M2-L4, 2026-09-18, on a suite whose largest learned database held 73 constraints.
+       LBD does not discriminate, and every eviction costs proof bytes and checker time
+       while saving neither, so D-0051 made [keep_all] the default.
+   (b) M2-L12, the same day, once learned constraints propagate (M2-L12 for the clause,
+       M2-L13 for the PB row). The same verdict for a new reason: the constraints that
+       propagate are cited, and a policy may not evict a cited constraint.
+   (c) M10-search-strategy-T4 (D-0139), on models that learn 10^4 to 10^5 constraints.
+       With a detachable consumer ([gate]) and three LBD tiers ([tiered]) a policy can
+       act. On the codes models it removes most of the propagation cost at an equal
+       search; on a Challenge subset it buys no answer, and the default stayed [keep_all]
+       (D-0139 section 6). D-0202 then found [tiered] a wash on the codes set.
+   (d) D-0221 measured [tiered] on the tuning set and on 42 former heap refusals: one
+       verified answer more of 200, but 6 refusals of 42 against 2, because an evicted
+       constraint kept its bytes ([gate] kept the instance's closures and the engine kept
+       the instance). D-0226 made an eviction take the instance out of the engine,
+       re-measured the question, and made [tiered] the default; [default]'s comment has
+       the numbers and D-0226's record the table.
 
-   Learned constraints propagate (M2-L12 for the clause, M2-L13 for the PB row), so a
-   learned constraint's use is a real measure. [tiered] (D-0139) ranks its middle tier by
-   it ([e_used]), and [fifo] below is the plain age policy. The default was [keep_all]
-   (D-0051, D-0139 section 6, D-0202, D-0221) until D-0226 made it [tiered]. D-0221 measured [tiered] on the tuning set
-   and on 42 former heap refusals: one verified answer more of 200, but 6 refusals of 42
-   against 2, because an evicted constraint kept its bytes ([gate] kept the instance's
-   closures and the engine kept the instance). D-0226 made an eviction take the instance
-   out of the engine and re-measured the question; see its record for the table.
+   The activity [tiered] ranks its middle tier by is use ([e_used], whether the gated
+   instance propagated), and [fifo] below is the plain age policy.
 
-   ### LBD is available, and on today's suite it does not discriminate either
+   ### LBD, and why it did not discriminate on the first suite
 
-   LBD -- the number of distinct decision levels the minimised clause's literals sit at
-   -- is computable at derivation time from the cut alone, needs no runtime
-   participation, and is therefore the one of the two that carries information at all.
-   [Learn.lbd] computes it, after minimisation (see its comment for why the order
-   matters).
+   LBD, the number of distinct decision levels the minimised clause's literals sit at, is
+   computable at derivation time from the cut alone and needs no runtime participation,
+   which made it the one of the two candidates that carried information at all while no
+   learned constraint propagated. [Learn.lbd] computes it, after minimisation (see its
+   comment for why the order matters).
 
    Measured over all 39 models, 2026-09-18, by running the solver with `--stats` and
    reading the `stats: lbd` histogram ([Search.stats_lbd]):
@@ -116,41 +134,38 @@
    | 2 | 16 |
    | >= 3 | **0** |
 
-   -- 88 clauses in all, which is the same denominator lib/core/pb_analysis.ml's header
-   carries for the conversion rate, arrived at independently here.
+   That is 88 clauses in all, the same denominator lib/core/pb_analysis.ml's header
+   carries for the conversion rate, arrived at independently here. On `width_sat_depth`,
+   the only model with a search deep enough to matter, **all 49 learned clauses have LBD
+   1** and every one of them is a UNIT clause. The maximum LBD anywhere in that suite was
+   2.
 
-   and on `width_sat_depth`, the only model with a search deep enough to matter, **all 49
-   learned clauses have LBD 1** and every one of them is a UNIT clause. The maximum LBD
-   anywhere in the suite is 2.
+   Two consequences, both still in the code:
 
-   Two consequences, and the second is the one that shaped the code:
-
-   - **Glucose's glue exemption is measured inert and is deliberately NOT implemented.**
-     "Keep every clause with LBD <= 2 forever" retains 100% of what this suite learns.
-     A parameter whose only measured value is "never fires" is a parameter that is
-     exercised by nothing, which is this project's signature defect; so there is no
-     [glue] argument here. If a later model produces LBD >= 3, adding it is one line and
-     the histogram is how you will know.
+   - **[lbd] has no glue exemption.** Glucose keeps every clause with LBD <= 2 forever;
+     on that suite the exemption would have retained 100% of what was learned. A
+     parameter whose only measured value is "never fires" is a parameter exercised by
+     nothing, which is this project's signature defect, so [lbd] has no [glue] argument.
+     [tiered]'s CORE tier is that exemption, added by D-0139 once models that produce
+     LBD >= 3 were measured.
    - **LBD is the ranking key; the CAP is the budget, and the cap is what fires.** With
-     LBD tied everywhere on this suite, the tie-break -- age, oldest evicted first --
-     does the work. That is stated rather than hidden: a reader who sees [lbd] evicting
-     in age order on every shipped model should know it is the tie-break and not a bug.
+     LBD tied everywhere on that suite, the tie-break (age, oldest evicted first) does the
+     work. That is stated rather than hidden: a reader who sees [lbd] evicting in age
+     order on a small model should know it is the tie-break and not a bug.
 
-   ### What retention costs, and what it was expected to buy -- the measurement REFUTED
-   ### the expectation, and the default follows the measurement
+   ### (a) On a small database, eviction costs bytes and buys nothing (D-0051)
 
-   This is the part that changed after it was measured, and it is recorded that way round
-   on purpose.
-
-   The expectation, written before the numbers: a learned constraint costs nothing in
-   search (nothing propagates it) and a `del` line to retire, so eviction cannot save
-   proof bytes -- but every live constraint is one the checker's unit propagation walks on
-   every subsequent `rup`, and this proof is almost all `rup` lines, so eviction should
-   buy verification time.
+   Every cap measured made the proof larger and its check about 10% slower and saved
+   neither, so D-0051 made [keep_all] the default. That refuted the expectation written
+   before the numbers, and the order is recorded on purpose. The expectation was: a
+   learned constraint costs nothing in search (at the time nothing propagated it) and a
+   `del` line to retire, so eviction cannot save proof bytes; but every live constraint
+   is one the checker's unit propagation walks on every subsequent `rup`, and this proof
+   is almost all `rup` lines, so eviction should buy verification time.
 
    Measured on `width_sat_depth` (73 learned constraints, the only shipped model that
    learns enough for a cap to fire), 2026-09-18, by solving with `BAGUETTE_RETENTION=<p>`
-   and then running the checker `scripts/checker.sh` resolves -- VeriPB 3.0.2 -- over the
+   and then running the checker `scripts/checker.sh` resolves (VeriPB 3.0.2) over the
    emitted proof, 15 runs, mean wall time; peak checker RSS from `/usr/bin/time -v`:
 
    | policy | evicted | .pbp bytes | `del` rules | check (mean) | checker peak RSS |
@@ -169,40 +184,43 @@
    the smaller database saves it. Checker RSS does not move outside noise. Every policy
    on the axis is dominated by `keep-all`.
 
-   **So [default] is [keep_all].** The machinery is built, named, swappable, exercised and
-   measured; it is off because the measurement says off. Turning it on would be choosing
-   a policy by citation, which is the one thing this row's text forbids.
+   So [keep_all] became the default: the machinery was built, named, swappable, exercised
+   and measured, and left off because the measurement said off. Turning it on then would
+   have been choosing a policy by citation, which the text of M2-L4's row forbids.
 
    What would change that verdict, stated so the next session does not have to re-derive
    it: the benefit term is per-`rup` propagation over the live database and it grows with
    database size, while the cost term is `del` rules and grows with the number of
    evictions. At 73 constraints the cost term wins. Re-run the table above on a model
-   whose learned database is an order of magnitude larger -- and if the crossover is
-   found, `lbd:<cap>` is one environment variable away and nothing else has to change.
+   whose learned database is an order of magnitude larger, and if the crossover is found,
+   `lbd:<cap>` is one environment variable away and nothing else has to change.
 
    A last note on the cap sweep, because it settles something the row worried about:
    **the proof verifies at every cap, including `lbd:0`, which deletes each learned
-   constraint on the line after it is introduced.** Nothing in this proof depends on a
-   learned constraint still being live -- consistent with the citation count of 0 above,
-   and the reason eviction is safe here at all. It would NOT be safe in a solver whose
-   later `rup` lines leaned on a learned unit to propagate, and that is a constraint on
-   M2-L6's successors rather than a property of retention in general: deleting is free in
-   a plain solver and is not free in a proof-logging one.
+   constraint on the line after it is introduced.** Nothing in this proof depended on a
+   learned constraint still being live, consistent with no learned constraint being cited
+   at the time, and that is why eviction was safe here at all. It would NOT be safe in a
+   solver whose later `rup` lines leaned on a learned unit to propagate, and that is a
+   constraint on the successors of M2-L6 (PB conflict analysis) rather than a property of
+   retention in general: deleting is free in a plain solver and is not free in a
+   proof-logging one.
 
-   ---------------------------------------------------------------------------
-   M2-L12 RE-RAN THE SWEEP, BECAUSE THE CONDITION ABOVE WAS MET
-   ---------------------------------------------------------------------------
+   ### (b) Once learned constraints propagate, the same verdict for a new reason (M2-L12)
 
-   D-0051 said the verdict reverses "when a learned constraint is actually propagated",
-   and the paragraph above says eviction "would NOT be safe in a solver whose later `rup`
+   With propagation on, eviction still only adds `del` lines, because the constraints that
+   propagate are cited and [reduce] refuses to evict them, and the ones it may evict do
+   not propagate.
+
+   D-0051 had said the verdict reverses "when a learned constraint is actually
+   propagated", and (a) says eviction "would NOT be safe in a solver whose later `rup`
    lines leaned on a learned unit to propagate". M2-L12 built exactly that solver: a unit
    learned clause is applied at every node and a wider one is a registered
    [Clause.Learned_clause] instance. So the table was re-run rather than inherited, on
    the same model, the same four columns, with the same method (2026-09-18).
 
-   First, the OLD column reproduced EXACTLY -- `off` 48145 bytes / 124 `del`, `lbd:16`
-   48658 / 181, `lbd:0` 48793 / 196, all VERIFIED -- which is what makes the new one
-   worth reading. `BAGUETTE_PROPAGATE_LEARNED=off` is the build that produces it.
+   First, the OLD column reproduced EXACTLY (`off` 48145 bytes / 124 `del`, `lbd:16`
+   48658 / 181, `lbd:0` 48793 / 196, all VERIFIED), which is what makes the new one worth
+   reading. `BAGUETTE_PROPAGATE_LEARNED=off` is the build that produces it.
 
    With propagation ON, on `width_sat_depth` (73 learned constraints, 49 of them cited):
 
@@ -214,41 +232,42 @@
      | lbd:0    |      24 |             2125 |      48361 |   148 |    99 | VERIFIED |
 
    **The verdict is unchanged and the ARGUMENT for it is not.** D-0051's reason was
-   "activity is the constant zero". That reason is now false: 49 of the 73 constraints
-   have a consumer. The reason `keep_all` still wins is the new one:
+   "activity is the constant zero". That reason became false: 49 of the 73 constraints
+   have a consumer. The reason `keep_all` still won is the new one:
 
      1. **The constraints with activity are exactly the ones eviction may not touch.**
         [reduce] below refuses to evict a cited constraint, so the achievable cap is
         bounded below by the number of live consumers: at `lbd:0`, which asks for an
         empty database, 24 of 73 go and 49 stay. Eviction cannot reduce the work the
         globals do, because the globals are what pins them.
-     2. **What it CAN evict has no activity**, being the uncited remainder -- duplicates
-        and M2-L6 PB rows with no runtime instance -- so evicting it saves no propagation
+     2. **What it CAN evict has no activity**, being the uncited remainder (duplicates
+        and M2-L6 PB rows with no runtime instance), so evicting it saves no propagation
         and only adds `del` lines. Bytes and `del` rules still rise monotonically with
         eviction, exactly as before.
      3. **The tree is the same size at every cap** (99 nodes in all four rows), which is
         the direct measurement that eviction is buying nothing here.
 
-   So: **`keep_all` stands, and D-0051's "what would reverse this" is now spent.** Do not
-   cite it a third time as "retention does not help while nothing propagates a learned
-   constraint" -- something does. Cite it as: retention does not help while the
-   constraints that propagate are the ones a policy may not evict, and the ones it may
-   evict do not propagate. What would reverse THAT is a database large enough for the
-   uncited remainder to dominate, or a consumer cheap enough to be worth dropping -- and
-   the sweep above is re-runnable with two environment variables.
+   So `keep_all` stood, and D-0051's "what would reverse this" was spent. Do not cite it
+   as "retention does not help while nothing propagates a learned constraint", because
+   something does. Cite it as: retention does not help while the constraints that
+   propagate are the ones a policy may not evict, and the ones it may evict do not
+   propagate. What would reverse THAT is a database large enough for the uncited
+   remainder to dominate, or a consumer cheap enough to be worth dropping, and the sweep
+   above is re-runnable with two environment variables.
 
-   And the safety note above has to be read the other way round now. The proof still
-   verifies at every cap, but no longer because nothing leans on a learned constraint:
-   it verifies because [reduce] refuses to delete the ones that are leaned on. The
-   citation guard is doing the work the citation count of 0 used to do for free.
+   The safety note of (a) reads the other way round since M2-L12. The proof still
+   verifies at every cap, but no longer because nothing leans on a learned constraint: it
+   verifies because [reduce] refuses to delete the ones that are leaned on. The citation
+   guard does the work that the absence of citations used to do for free.
 
-   ---------------------------------------------------------------------------
-   M10-search-strategy-T4 (D-0139) RE-MEASURED IT ON MODELS THAT LEARN 10^4 TO 10^5
-   ---------------------------------------------------------------------------
+   ### (c) On databases of 10^4 to 10^5 constraints, a policy can act (D-0139)
 
-   D-0051's two verdicts above were taken on a suite where the largest learned base was 73
-   constraints. D-0139 took them to the coding-theory models and fifteen Challenge
-   instances, 1 170 s each, and three things came out, in order:
+   With a consumer that can be switched off ([gate]), three LBD tiers ([tiered]), and an
+   eviction that may detach a cited constraint unless the proof still needs it
+   ([locked_instances]), a policy evicts for real. (a) and (b) were taken on a suite where
+   the largest learned base was 73 constraints; M10-search-strategy-T4 (D-0139) took the
+   question to the coding-theory models and fifteen Challenge instances, 1 170 s each,
+   and three things came out, in order:
 
      1. **Nothing above could evict anything.** Every learned clause and PB row is cited
         for the whole search (M2-L12/L13), so `lbd:2000` on QR48 evicted 0 of 11 684 and
@@ -259,30 +278,34 @@
         BAGUETTE_PROPAGATE_LEARNED=off and every clause still held, QR48 runs the same
         nodes in a tenth of the time.
      3. **With a detachable consumer ([gate], below) and three LBD tiers ([tiered]), a
-        policy can act**, and on the codes it removes most of that cost at an EQUAL search
-        (QR72 with proof 554 -> 296 s, the same conflicts). On the Challenge subset it buys
-        conflicts and no answer, a third of them clauses learned again after eviction, and
-        costs `bacp-22` a 2.3 times slower optimum; the checker's time does not move at an
-        equal search, so "a smaller database for the checker" buys nothing measurable here.
+        policy can act**, and on the codes it removes most of that cost at an EQUAL
+        search (QR72 with proof 554 -> 296 s, the same conflicts). On the Challenge
+        subset it buys conflicts and no answer, a third of them clauses learned again
+        after eviction, and costs `bacp-22` a 2.3 times slower optimum; the checker's time
+        does not move at an equal search, so "a smaller database for the checker" buys
+        nothing measurable here.
 
-   So [default] is still [keep_all], now as a recommendation to M10-T5 (restarts and an
-   activity heuristic change what eviction loses) rather than as D-0051's measurement.
-   [gate] is wired by the search since main 36c1312 (the two `Engine.add` sites in
-   lib/core/search.ml, cherry-picked from `wave45-retention-hook`), so `lbd`, `fifo` and
-   `tiered` all evict for real now; under [keep_all] the gate is the identity and the
-   default is byte-identical to before it. D-0139 has the tables, the binaries each was
-   measured on, the lock rule's break, and the two late configurations.
+   D-0139 therefore kept [keep_all] as the default, as a recommendation to M10-T5 (the
+   task that measured the defaults; restarts and an activity heuristic change what
+   eviction loses) rather than as D-0051's measurement. [gate] is wired by the search
+   since main 36c1312 (the two `Engine.add` sites in lib/core/search.ml, cherry-picked
+   from `wave45-retention-hook`), so `lbd`, `fifo` and `tiered` all evict for real; under
+   [keep_all] the gate is the identity and the proof is byte-identical to the one before
+   it. D-0139 has the tables, the binaries each was measured on, the lock rule's break,
+   and the two late configurations. Section (d) of the list above says how [tiered]
+   became the default.
 
    ### Determinism
 
-   The gate requires two runs of one binary to be byte-identical, and a learned database
-   iterated in hash order is the specific way learning breaks it (lib/core/learn.ml says
-   so, and this is the module that inherits the obligation). So: [live] is a LIST, in
-   introduction order; [gone] and [cited] are [Hashtbl]s that are only ever queried with
+   Two runs of one binary must write byte-identical output (the commit gate checks it with
+   scripts/check_determinism.sh), and a learned database iterated in hash order is the
+   specific way learning breaks it (lib/core/learn.ml says so, and this is the module
+   that inherits the obligation). So [live_rev] is a LIST, in introduction order; [gone],
+   [cited], [index] and [keys] are [Hashtbl]s that are only ever queried with
    [find_opt]/[mem] and never folded or iterated; and every policy below sorts on a key
    ending in [e_seq], which is unique, so no sort is left to compare equal elements.
-   D-0139 kept that: [index] and the table [locked_instances] builds are lookup only,
-   and [tiered] ranks on a key ending in [e_seq] like the others.
+   D-0139 kept that: [index] and the table [locked_instances] builds are lookup only, and
+   [tiered] ranks on a key ending in [e_seq] like the others.
 *)
 
 module Lit = Baguette_proof.Lit
@@ -290,7 +313,8 @@ module Writer = Baguette_proof.Writer
 
 (* Engine ids, keyed by their own value: they are small non-negative ints, so the
    identity is a hash and [Int.equal] the comparison, with no [caml_hash] and no
-   polymorphic compare per probe (D-0191). Lookup only, like every table here. *)
+   polymorphic compare per probe (one of the hash-table costs the file-by-file review of
+   learning removed, D-0191). Lookup only, like every table here. *)
 module Int_tbl = Hashtbl.Make (struct
   type t = int
 
@@ -306,25 +330,26 @@ end)
    total.
 
    The duplicate MEASUREMENT below ([keys], [n_duplicate]) is keyed on the row's HASH
-   ([Learned.hash]) since D-0226. It was keyed on the row's canonical text, held in every
-   entry and in [keys] for the whole run, 27 bytes per literal kept only to be compared
-   (D-0218 section 5). M11-complexity-T4 (D-0152) had tried keying on the row itself and
-   reverted it because the table then held every row; a hash holds one word. *)
+   ([Learned.hash]), which holds one word per row. Until D-0226 it was keyed on the row's
+   canonical text, held in every entry and in [keys] for the whole run, 27 bytes per
+   literal kept only to be compared (D-0218 section 5, the heap inventory that found it).
+   M11-complexity-T4 (D-0152, which took the per-conflict scans out of search, analysis
+   and retention) had tried keying on the row itself and reverted it because the table
+   then held every row. *)
 type tier = Core | Mid | Local
 
 let tier_to_string = function Core -> "core" | Mid -> "mid" | Local -> "local"
 
-(* M10-search-strategy-T4 (D-0139): the runtime consumer of a learned constraint, when
-   the search handed it to [gate] -- the engine instance [g_inst] and the switch that
-   turns it off. A [gate]d constraint is the only kind of CITED constraint a policy may
-   evict; see [gate] and [reduce]. *)
+(* The runtime consumer of a learned constraint, when the search handed it to [gate]: the
+   engine instance [g_inst] and the switch that turns it off. A [gate]d constraint is the
+   only kind of CITED constraint a policy may evict; see [gate] and [reduce]. (D-0139.) *)
 type gate = {
   g_inst : int;
   mutable g_dead : bool;
   mutable g_leave : unit -> unit;
-      (* M21-memory-T3 (D-0226): what takes the instance out of the engine that holds it,
-         handed over by [Engine.add] through [Propagator.inst_attach]; [ignore] before
-         that and after it has been called. *)
+      (* What takes the instance out of the engine that holds it, handed over by
+         [Engine.add] through [Propagator.inst_attach]; [ignore] before that and after it
+         has been called (M21-memory-T3, the memory fixes of D-0226). *)
 }
 
 type entry = {
@@ -364,30 +389,31 @@ let entry_tier e = e.e_tier
    owner -- the exact failure this module exists to prevent, arriving through the one door
    that is meant to be extensible.
 
-   M10-search-strategy-T4 (D-0139) split it in two, [due] and [evict], and made the pair
-   something a policy CONSTRUCTS ([p_new]) per database:
+   The function comes in two halves, [due] and [evict], and the pair is something a
+   policy CONSTRUCTS ([p_new]) per database (both since D-0139):
 
-   - [due] answers from two counters whether [evict] has anything to do. [reduce] runs
-     once per learned constraint, and before D-0139 it materialised the whole live list
-     ([List.rev]) on every call, under [keep_all] too, to hand it to a function that
-     returned [] -- O(n) per conflict for nothing, at 35 000 held constraints. [due]
-     makes the common call O(1). For [fifo] and [lbd] it is exactly their old "n <= cap
-     then []" test, so what they evict is unchanged.
+   - [due] answers from two counters whether [evict] has anything to do, so the common
+     call to [reduce], which runs once per learned constraint, is O(1). Before D-0139
+     [reduce] materialised the whole live list ([List.rev]) on every call, under
+     [keep_all] too, to hand it to a function that returned [], which was O(n) per
+     conflict for nothing at 35 000 held constraints. For [fifo] and [lbd], [due] is
+     exactly their old "n <= cap then []" test, so what they evict is unchanged.
    - [p_new] gives each database its own schedule state. [tiered] carries a reduction
      count and the point at which it next reduces, and a policy VALUE is shared by every
      solve of a config, so the state cannot live in the value.
    - [p_detaches] says whether the policy may ever evict, i.e. whether [gate] has to wrap
-     anything. [keep_all] says no, and [gate] then returns the instance unchanged: the
-     default build runs the very closure it ran before D-0139. *)
+     anything. [keep_all] says no, and [gate] then returns the instance unchanged: a
+     [keep_all] build runs the very closure it ran before D-0139. *)
 type evictor = {
   due : added:int -> live:int -> bool;
   evict : added:int -> entry list -> entry list;
 }
 
-(* ------------------------------------------------- M10-T4 / D-0139: three tiers
+(* ------------------------------------------------- three LBD tiers (M10-T4, D-0139)
 
-   Glucose (Audemard and Simon, IJCAI 2009) and its three-tier successor (Oh, SAT 2015,
-   COMiniSatPS; the scheme Kissat and CaDiCaL kept):
+   The scheme of Glucose (Audemard and Simon, IJCAI 2009) and of its three-tier successor
+   (Oh, SAT 2015, COMiniSatPS; the scheme Kissat and CaDiCaL kept). Each learned
+   constraint is in one tier, set from its LBD when it is added:
 
    - CORE: LBD <= [core]. A "glue" clause links few decision blocks and is kept for the
      whole search. Never proposed.
@@ -442,8 +468,9 @@ type policy = {
 
 let name p = p.p_name
 
-(* Off. The behaviour before M2-L4: everything is retained until the search ends. Test
-   (c)'s "policy off" side, and the control every measurement here is taken against. *)
+(* Off: everything is retained until the search ends, the behaviour before M2-L4. It is
+   the "policy off" side of test (c) in test/unit/test_retention.ml (.pbp bytes with the
+   policy off and on), and the control every measurement here is taken against. *)
 let keep_all =
   {
     p_name = "keep-all";
@@ -454,9 +481,10 @@ let keep_all =
     p_tiers = None;
   }
 
-(* M11-complexity-T4 (D-0152, D-0140 R3): the orders [fifo] and [lbd] rank by, over ints
-   ([Int.compare], where the polymorphic [compare] was called per comparison).
-   [by_seq] is total because [e_seq] is unique. [reduce] hands [evict] the live list
+(* The orders [fifo] and [lbd] rank by, over ints with [Int.compare] (the polymorphic
+   [compare] was called per comparison until M11-complexity-T4, D-0152, the fix for item
+   R3 of D-0140's inventory of costs that grow with the run). [by_seq] is total because
+   [e_seq] is unique. [reduce] hands [evict] the live list
    oldest first, i.e. already in [by_seq] order ([add] appends with the next [e_seq], and
    [retire] only filters), so [fifo] checks that in one pass and sorts only a list that
    is not; [List.sort] being stable and the order total, the sorted list is the list. *)
@@ -466,10 +494,12 @@ let rec sorted_by_seq = function
   | a :: (b :: _ as rest) -> a.e_seq < b.e_seq && sorted_by_seq rest
   | [ _ ] | [] -> true
 
-(* Evict oldest-first down to [cap]. This IS the activity policy -- see the header: with
-   every learned constraint's activity identically zero, an activity ranking is a tie
-   across the whole database and the tie-break is all that is left. Spelling it [fifo]
-   says what it does instead of what it was named after. *)
+(* Evict oldest-first down to [cap]. It stands in for the activity policy M2-L4 was asked
+   for: when it was written no learned constraint propagated, so every activity was
+   identically zero, an activity ranking was a tie across the whole database, and the
+   tie-break (age) was all that was left. Spelling it [fifo] says what it does instead of
+   what it was named after. Since M2-L12 learned constraints do propagate, and the policy
+   that ranks on use is [tiered] (its middle tier, [e_used]). *)
 let fifo ~cap =
   {
     p_name = Printf.sprintf "fifo(cap=%d)" cap;
@@ -491,12 +521,13 @@ let fifo ~cap =
   }
 
 (* The [k] first elements of [List.sort cmp l], in that order, for a TOTAL [cmp] (every
-   comparator here ends in [by_seq]). M16-file-review-T3 (D-0191): [lbd] asks for the
-   [n - cap] worst of a database that is over its cap by one or a few, once per learned
-   constraint, and sorting all [n] for them was most of its cost once [locked_instances]
-   stopped dominating. For a small [k] this takes them one pass each, the next being the
-   least element above the last one taken, which a total order makes the same element the
-   sort puts there; past [first_k_passes] it sorts. *)
+   comparator here ends in [by_seq]). For a small [k] it takes them in one pass each, the
+   next being the least element above the last one taken, which a total order makes the
+   same element the sort puts there; past [first_k_passes] it sorts.
+
+   Why: [lbd] asks for the [n - cap] worst of a database that is over its cap by one or a
+   few, once per learned constraint, and sorting all [n] for them was most of its cost
+   once [locked_instances] stopped dominating (M16-file-review-T3, D-0191). *)
 let first_k_passes = 8
 
 let first_k cmp k l =
@@ -523,8 +554,9 @@ let first_k cmp k l =
 (* The policy. Rank by LBD descending -- a higher LBD is a worse constraint, Glucose's
    direction -- and break ties by age, oldest first. Evict down to [cap].
 
-   No glue exemption: measured inert, see the header. The cap is the budget and the
-   ranking decides who pays it. *)
+   No glue exemption: on the suite it was measured on, the exemption never fired (header,
+   section 2); [tiered]'s core tier is the policy that has one. The cap is the budget and
+   the ranking decides who pays it. *)
 let lbd ~cap =
   {
     p_name = Printf.sprintf "lbd(cap=%d)" cap;
@@ -600,26 +632,22 @@ let tiered ?(params = default_tier_params) () =
     p_tiers = Some prm;
   }
 
-(* The default is KEEP-ALL, and that is the measurement's verdict rather than a decision
-   not to choose -- see the table in the header. Every cap measured costs proof bytes and
-   costs verification time; none saves either. A policy turned on against its own
-   measurement is a policy chosen by citation.
+(* The default is [tiered] with D-0139's parameters ([default_tier_params]), chosen by
+   D-0226, an [AUTONOME] decision. Once an eviction took the instance out of the engine
+   (D-0226 fix 1), the review's rule held on both of D-0221's sets: verified answers 20 to
+   25 on the tuning set and 1 to 1 on the 42 heap cases, heap-budget refusals 3 to 2 and 1
+   to 1, the peak RSS of a run that times out 0.67 and 0.59 times [keep_all]'s.
+   `BAGUETTE_RETENTION=off` (or [keep_all]) is the default before it, exactly.
 
-   [lbd ~cap:16] is what the default WOULD be if the crossover the header describes were
-   ever found, and `BAGUETTE_RETENTION=lbd:16` is how to run it without changing a line.
-   It is not dead code: test/unit/test_retention.ml runs it end to end through the
-   checker, which is where the eviction path is exercised.
-
-   D-0139 re-measured the question on the codes set and a Challenge subset, with
-   [tiered]; its recommendation is in docs/DECISIONS.md and the decision is M10-T5's.
-
-   **D-0226 ([AUTONOME]) made [tiered] the default**, with D-0139's parameters. Once an
-   eviction took the instance out of the engine (D-0226 fix 1), the review's rule held on
-   both of D-0221's sets: verified answers 20 to 25 on the tuning set and 1 to 1 on the 42
-   heap cases, heap-budget refusals 3 to 2 and 1 to 1, the peak RSS of a run that times out
-   0.67 and 0.59 times [keep_all]'s. `BAGUETTE_RETENTION=off` (or [keep_all]) is the default
-   before it, exactly. The paragraphs above that say "the default is [keep_all]" are the
-   history of the measurements, kept as they were. *)
+   Before D-0226 the default was KEEP-ALL, on the measurement in the header's section 2
+   (a): on a database of 73 constraints every cap measured cost proof bytes and
+   verification time and saved neither, and a policy turned on against its own
+   measurement would have been a policy chosen by citation. [lbd ~cap:16] was what the
+   default would have been had the crossover the header describes been found, and
+   `BAGUETTE_RETENTION=lbd:16` runs it without changing a line;
+   test/unit/test_retention.ml runs it end to end through the checker, which is where the
+   [lbd] eviction path is exercised. D-0139 then re-measured the question on the codes set
+   and a Challenge subset, with [tiered], and left the decision to M10-T5. *)
 let default = tiered ()
 
 (* Every policy, at one cap. For a test that wants to run the axis rather than a point
@@ -645,9 +673,9 @@ type t = {
   mutable live_rev : entry list; (* newest first *)
   mutable n_live : int; (* [List.length live_rev], kept so [size] and [due] are O(1) *)
   index : (Writer.cid, entry) Hashtbl.t;
-      (* D-0139. cid -> its entry, for the ids in [live_rev] exactly. Lookup only, never
-         iterated (determinism, header). [holds] used to walk [live_rev], which made
-         [add] O(n) and a search O(n^2) in learned constraints. *)
+      (* cid -> its entry, for the ids in [live_rev] exactly. Lookup only, never iterated
+         (determinism, header). Before D-0139 [holds] walked [live_rev], which made [add]
+         O(n) and a search O(n^2) in learned constraints. *)
   mutable store : Store.t option;
       (* D-0139. The store the gated instances run on, handed over by [gate]; [reduce]
          reads its trail to find the LOCKED entries. [None] until something is gated. *)
@@ -664,28 +692,29 @@ type t = {
   mutable n_duplicate : int;
   mutable n_cited : int;
   mutable n_pinned : int;
-      (* M2-L12. Evictions the policy PROPOSED and [reduce] did NOT perform, because the
-         constraint had a live consumer. Proposals and not distinct constraints: [reduce]
-         runs once per conflict and an over-cap policy re-proposes the same pinned
-         entries every time, so this number is much larger than the database. That is
-         what makes it the right counter for "how hard is the policy pushing against the
-         citations", which is the question the sweep in the header asks. See [reduce]. *)
+      (* Evictions the policy PROPOSED and [reduce] did NOT perform, because the
+         constraint had a live consumer (M2-L12). Proposals and not distinct constraints:
+         [reduce] runs once per learned constraint and an over-cap policy re-proposes the
+         same pinned entries every time, so this number is much larger than the
+         database. That is what makes it the right counter for "how hard is the policy
+         pushing against the citations", which is the question the header's sweep (b)
+         asks. See [reduce]. *)
   gone : (Writer.cid, entry) Hashtbl.t;
       (* Retired by this database: cid -> the entry it was. Lookup only, never iterated
          (determinism, header). It is what turns a second deletion into an exception
          instead of a silently accepted no-op. *)
   cited : (Writer.cid, string Lazy.t) Hashtbl.t;
       (* cid -> what cites it, for the live citation. Lookup only. See [cite]. The text
-         is LAZY (D-0152, D-0140 S2): it names every literal of the citing instance and
-         is read only by the [Cited] message and [cited_by], so it is rendered when one
-         of them asks, from the same values, and never otherwise. *)
+         is LAZY (D-0152, item S2 of D-0140's inventory): it names every literal of the
+         citing instance and is read only by the [Cited] message and [cited_by], so it is
+         rendered when one of them asks, from the same values, and never otherwise. *)
   keys : (int, Writer.cid) Hashtbl.t;
       (* The row's hash ([Learned.hash], D-0226; its canonical TEXT until then) -> the
-         first id that stated it. Lookup only, and MEASUREMENT
-         only: it feeds [n_duplicate] and no policy reads it. M1-T59 found duplicate
-         `rup` lines harmless per-proof; a retention policy that evicts and lets the same
-         clause be re-learned is how they stop being harmless, so the count is kept where
-         a later row can see it. *)
+         first id that stated it. Lookup only, and MEASUREMENT only: it feeds
+         [n_duplicate] and no policy reads it. M1-T59, which found two proofs emitting a
+         byte-identical `rup` twice, judged duplicate lines harmless within one proof; a
+         retention policy that evicts and lets the same clause be re-learned is how they
+         stop being harmless, so the count is kept where a later row can see it. *)
 }
 
 let create ?(policy = default) () =
@@ -729,18 +758,18 @@ let policy_name t = t.policy.p_name
 let holds t cid = Hashtbl.mem t.index cid
 let was_retired t cid = Hashtbl.mem t.gone cid
 
-(* M10-search-strategy-T4 (D-0139): a PROGRESS TRACE, measurement only. Every
-   [!trace_every] constraints added, one stderr line with what the database holds and the
-   process CPU time, so that a run's learning RATE can be read at its start and at its end
-   -- the per-node slowdown the codes models show as the base grows is a slope, and a
-   single end-of-run total cannot show a slope. 0 (the default) prints nothing; bin/main.ml
-   sets it from BAGUETTE_RETENTION_TRACE. stderr only, so the determinism gate and the
-   stdout-identity lane never see it. *)
+(* A PROGRESS TRACE, measurement only (D-0139). Every [!trace_every] constraints added,
+   one stderr line with what the database holds and the process CPU time, so that a run's
+   learning RATE can be read at its start and at its end -- the per-node slowdown the
+   codes models show as the base grows is a slope, and a single end-of-run total cannot
+   show a slope. 0 (the default) prints nothing; bin/main.ml sets it from
+   BAGUETTE_RETENTION_TRACE. stderr only, so the determinism gate and the stdout-identity
+   lane never see it. *)
 let trace_every = ref 0
 
-(* M21-memory-T3 (D-0226): and, under BAGUETTE_RETENTION_TRACE_HEAP=1 as well, the live
-   words of the heap after a full major collection, which is how D-0226 measured what an
-   eviction frees. A full collection per trace line: measurement only, never a default. *)
+(* Under BAGUETTE_RETENTION_TRACE_HEAP=1, each trace line also carries the live words of
+   the heap after a full major collection, which is how D-0226 measured what an eviction
+   frees. A full collection per trace line: measurement only, never a default. *)
 let trace_heap = ref (Sys.getenv_opt "BAGUETTE_RETENTION_TRACE_HEAP" = Some "1")
 
 let trace t =
@@ -799,13 +828,16 @@ let add t ~cid ~(row : Learned.t) ~lbd ~origin =
 (* Record that [cid] is referenced by something still live -- a trail entry whose reason
    is this learned constraint, which is what I-X3 is about. [by] is for the message.
 
-   M2-L4 wrote this with NO caller in lib/, because no learned constraint propagated and
-   so no trail entry could name one -- a guard written before the thing it guards, which
-   is the only time a guard is written against a bug that does not already exist.
-   **M2-L12 is that caller**: [Search.register_learned] cites a constraint the moment it
-   gives it a consumer, a global unit or a [Clause.Learned_clause] instance. [n_cited]
-   counts calls, so the population is a measurement this module reports rather than a
-   claim its header makes; on `width_sat_depth` it is 49 of 73. *)
+   The search cites a constraint the moment it gives it a consumer:
+   [Search.register_learned] for a global unit or a [Clause.Learned_clause] instance,
+   [Search.register_learned_pb] for a learned PB row's instance. [n_cited] counts calls,
+   so the population is a measurement this module reports rather than a claim its header
+   makes; on `width_sat_depth` it is 49 of 73.
+
+   M2-L4 wrote this guard with NO caller in lib/, because no learned constraint
+   propagated and so no trail entry could name one: a guard written before the thing it
+   guards, which is the only time a guard is written against a bug that does not already
+   exist. M2-L12 added the first caller. *)
 let cite_lazy t ~cid ~(by : unit -> string) =
   t.n_cited <- t.n_cited + 1;
   Hashtbl.replace t.cited cid (Lazy.from_fun by)
@@ -815,10 +847,10 @@ let uncite t ~cid = Hashtbl.remove t.cited cid
 
 (* Release EVERY citation at once, for [Search.solve]'s end-of-search sweep alone.
 
-   M2-L12. The guard [cite] installs is about the search: a trace line written by a
+   The guard [cite] installs is about the search (M2-L12): a trace line written by a
    global unit or by a registered learned-clause instance is RUP only while its
    constraint is live, so retiring a cited constraint MID-SEARCH is the fault the guard
-   catches. When [dfs] has returned there are no more nodes, nothing will propagate
+   catches. When the search has returned there are no more nodes, nothing will propagate
    again, and the constraints have to come off the page (I-X2) -- so the citations are
    released first and [retire_all] then sweeps with its other two guards, the double
    delete and the not-owned, still on.
@@ -829,13 +861,7 @@ let uncite t ~cid = Hashtbl.remove t.cited cid
 let release_all t = Hashtbl.reset t.cited
 let cited_by t cid = Option.map Lazy.force (Hashtbl.find_opt t.cited cid)
 
-(* ------------------------------------------- D-0139: a consumer that CAN be detached
-
-   Since M2-L12 every learned clause of two or more literals is a registered
-   [Clause.Learned_clause] instance and every learned PB row a [Pb] instance, and both
-   are [cite]d for the whole search, so [reduce] refuses to evict them: on the codes
-   models and the Challenge subset D-0139 measured, `lbd:N` and `fifo:N` evict NOTHING
-   and only count refusals ([n_pinned]). The cap is soft to the point of being absent.
+(* ------------------------------------------- a consumer that CAN be detached (D-0139)
 
    [gate] is what lets a policy evict a constraint that has a consumer. The search hands
    the instance over before [Engine.add]; what comes back is the same instance behind a
@@ -856,8 +882,15 @@ let cited_by t cid = Option.map Lazy.force (Hashtbl.find_opt t.cited cid)
    garbage. Until then the engine kept the switched-off instance for the rest of the run,
    with all its bytes (D-0221 section 5).
 
-   Under [keep_all] ([p_detaches = false]) the instance is returned UNCHANGED, so the
-   default build runs the very closures it ran before this function existed. *)
+   Under [keep_all] ([p_detaches = false]) the instance is returned UNCHANGED, so a
+   [keep_all] build runs the very closures it ran before this function existed.
+
+   Why it is needed: since M2-L12 every learned clause of two or more literals is a
+   registered [Clause.Learned_clause] instance and every learned PB row a [Pb] instance,
+   and both are [cite]d for the whole search, so [reduce] refuses to evict them. Without
+   a gate, on the codes models and the Challenge subset D-0139 measured, `lbd:N` and
+   `fifo:N` evict NOTHING and only count refusals ([n_pinned]): the cap is soft to the
+   point of being absent. *)
 let gate t store ~cid (inst : Propagator.instance) : Propagator.instance =
   if not t.policy.p_detaches then inst
   else
@@ -924,15 +957,14 @@ let gate t store ~cid (inst : Propagator.instance) : Propagator.instance =
    already been deleted"). Half 2 reddens no model in the suite and is kept on the
    argument above; the unit lanes in test/unit/test_retention.ml pin both.
 
-   M16-file-review-T3 (D-0191): ASKED ONLY ABOUT [wanted], the gates of this reduction's
-   victims, and answering with the subset of them that is locked. It used to put the
-   instance of EVERY trail entry into a polymorphic table, one [caml_hash] and a growing
-   table per entry, once per reduction: under `lbd:500` that was 20 % of
-   2017_opd_small_bibd_08_28_14's samples. Now the trail is walked testing each entry's
-   instance against the few wanted ids, and the walk stops once all of them are found
-   locked. [reduce] asks the answer only about ids in [wanted], and for those the answer
-   is the one the full table gave: an id is locked iff it is [last_conflict] or the
-   instance of an entry on the trail. *)
+   The function is ASKED ONLY ABOUT [wanted], the gates of this reduction's victims, and
+   answers with the subset of them that is locked: an id is locked iff it is
+   [last_conflict] or the instance of an entry on the trail. It walks the trail testing
+   each entry's instance against the few wanted ids, and stops once all of them are found
+   locked. Before M16-file-review-T3 (D-0191) it put the instance of EVERY trail entry
+   into a polymorphic table, one [caml_hash] and a growing table per entry, once per
+   reduction: under `lbd:500` that was 20 % of 2017_opd_small_bibd_08_28_14's samples.
+   For the ids [reduce] asks about the answer is the one the full table gave. *)
 let locked_instances t (wanted : int list) =
   let want = Int_tbl.create 8 and locked = Int_tbl.create 8 in
   List.iter (fun id -> Int_tbl.replace want id ()) wanted;
@@ -964,13 +996,14 @@ let locked_instances t (wanted : int list) =
    CHECKER says about it, which is the only way to know the guard is catching something
    the checker would otherwise have had to. It is not reachable from the CLI.
 
-   M6-T21 (D-0136): ONE pass over [live_rev] per call, not one per id. It used to look
-   each id up with [holds], [List.find_opt] and [List.filter] over the whole database,
-   which is O(k n) for k ids out of n held, and the end-of-search sweep has k = n: at
-   12 071 learned clauses that was 4.3 s of a 120 s `--time-limit` stop, at 34 381 the
-   bulk of a 46 s overshoot past 600 s. The guards, their order and their messages, the
-   entry recorded in [gone] (the newest one holding the id, which is what [find_opt]
-   over a newest-first list returned) and what is left in [live_rev] are unchanged. *)
+   ONE pass over [live_rev] per call, not one per id. Looking each id up with [holds],
+   [List.find_opt] and [List.filter] over the whole database, as this did until M6-T21
+   (D-0136, the --time-limit overshoot traced to this sweep), is O(k n) for k ids out of
+   n held, and the end-of-search sweep has k = n: at 12 071 learned clauses that was 4.3 s
+   of a 120 s `--time-limit` stop, at 34 381 the bulk of a 46 s overshoot past 600 s. The
+   one-pass version kept the guards, their order and their messages, the entry recorded
+   in [gone] (the newest one holding the id, which is what [find_opt] over a newest-first
+   list returned) and what is left in [live_rev]. *)
 let retire ?(unchecked = false) t ctx ~why (ids : Writer.cid list) =
   if ids <> [] then (
     let wanted = Hashtbl.create 64 in
@@ -1018,7 +1051,7 @@ let retire ?(unchecked = false) t ctx ~why (ids : Writer.cid list) =
     Writer.delete_many (Justify.writer ctx) ids;
     Hashtbl.iter (fun cid e -> Hashtbl.replace t.gone cid e) held;
     t.live_rev <- List.filter (fun e -> not (Hashtbl.mem wanted e.e_cid)) t.live_rev;
-    (* D-0139: [index] and [n_live] follow [live_rev]. [held] is exactly the set of ids
+    (* [index] and [n_live] follow [live_rev] (D-0139). [held] is exactly the set of ids
        in [ids] that [live_rev] held (and [add] refuses a repeat), so it is what left. *)
     Hashtbl.iter (fun cid _ -> Hashtbl.remove t.index cid) held;
     t.n_live <- t.n_live - Hashtbl.length held)
@@ -1029,27 +1062,26 @@ let retire ?(unchecked = false) t ctx ~why (ids : Writer.cid list) =
    policy is the one place where an id that this database does not hold could enter the
    deletion path. [retire]'s [Not_owned] is where it lands.
 
-   D-0139: the call is O(1) unless the policy is [due], which is what keeps the once-per-
-   learned-constraint call off the profile (see [evictor]).
-
-   M16-file-review-T3 (D-0191): when it is due it is O(n) in the live database (the
-   [List.rev], the policy's pass, the partition), plus [locked_instances]' one trail walk.
-   Over a run that is O(n) per learned constraint, and n is the cap plus what is PINNED: a
-   database whose pinned constraints keep growing past the cap (cited consumers without a
-   gate) makes the run quadratic in them. Under `lbd:500` no lane instance ends with more
-   than 526 live constraints (the end sweep's count), so there n stays near the cap. *)
+   Cost. The call is O(1) unless the policy is [due], which is what keeps the
+   once-per-learned-constraint call off the profile (see [evictor], D-0139). When it is
+   due it is O(n) in the live database (the [List.rev], the policy's pass, the
+   partition), plus [locked_instances]' one trail walk (D-0191). Over a run that is O(n)
+   per learned constraint, and n is the cap plus what is PINNED: a database whose pinned
+   constraints keep growing past the cap (cited consumers without a gate) makes the run
+   quadratic in them. Under `lbd:500` no lane instance ends with more than 526 live
+   constraints (the end sweep's count), so there n stays near the cap. *)
 let reduce t ctx =
   if not (t.ev.due ~added:t.n_added ~live:t.n_live) then []
   else
     let victims = t.ev.evict ~added:t.n_added (List.rev t.live_rev) in
     t.n_reductions <- t.n_reductions + 1;
-    (* M2-L12: A CITED CONSTRAINT IS NOT ELIGIBLE FOR EVICTION, so the cap is SOFT.
+    (* A CITED CONSTRAINT IS NOT ELIGIBLE FOR EVICTION, so the cap is SOFT (M2-L12).
 
-       Before M2-L12 this filter would have been dead code -- nothing propagated a learned
-       constraint, nothing cited one, and a policy's choice was always performable. Now a
-       unit is applied at every node and a wider clause has a registered instance, and a
-       trace line either writes is RUP only while the constraint is on the page. A policy
-       that named one would be naming a deletion the search cannot survive.
+       A learned unit is applied at every node and a wider learned clause has a
+       registered instance, and a trace line either writes is RUP only while the
+       constraint is on the page. A policy that named one would be naming a deletion the
+       search cannot survive. (Before M2-L12 nothing propagated a learned constraint,
+       nothing cited one, and this filter would have been dead code.)
 
        Filtering here rather than letting [retire]'s [Cited] guard fire is the difference
        between a POLICY DECISION and a FAULT, and the two must not be confused. [Cited] is
@@ -1061,8 +1093,8 @@ let reduce t ctx =
 
        The consequence is stated rather than buried: with [propagate_learned] on, NO
        policy can evict a constraint with a consumer, so the achievable cap is bounded
-       below by the number of live consumers. That is exactly what the sweep in D-0051's
-       successor record has to be read against.
+       below by the number of live consumers. That is exactly what the header's sweep (b)
+       has to be read against.
 
        D-0139 makes ONE exception, and it is the whole of what makes retention real with
        propagation on: a cited constraint whose only consumer is a [gate]d instance is
@@ -1133,10 +1165,10 @@ let to_string t =
     "%s: %d added, %d evicted, %d swept, %d live, %d duplicate, %d cited, %d pinned%s"
     t.policy.p_name t.n_added t.n_evicted t.n_swept (size t) t.n_duplicate t.n_cited
     t.n_pinned
-    (* D-0139: only for [tiered], so the keep-all, fifo and lbd lines are the ones the
-       M11-T2 differential lane recorded (it compares this counter as text; the first
-       draft appended it for every detaching policy and reddened all 84 fifo/lbd runs
-       on this counter alone). *)
+    (* Only for [tiered] (D-0139), so the keep-all, fifo and lbd lines are the ones the
+       differential lane of M11-T2 recorded (it runs real instances at a fixed node
+       budget and compares this line as text; the first draft appended it for every
+       detaching policy and reddened all 84 fifo/lbd runs on this counter alone). *)
     (if t.policy.p_tiers <> None then
        Printf.sprintf ", %d reductions, %d detached, %d locked" t.n_reductions
          t.n_detached t.n_locked

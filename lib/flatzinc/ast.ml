@@ -1,7 +1,8 @@
 (* FlatZinc syntax, restricted to the subset in docs/SPEC.md section 2.1.
 
-   The lexer and parser (M1-T6) produce this one [item] at a time; builder.ml turns
-   each into its part of a Model.t.
+   The lexer and parser (written in M1-T6) produce this one [item] at a time, and
+   builder.ml turns each into its part of a Model.t.
+
    Keep this type honest about the subset: a construct that appears here is a construct
    the front end claims to *parse*. Whether the solver can *handle* it is builder.ml's
    judgement, and the spec says an unsupported builtin must be a clear error rather than
@@ -54,10 +55,12 @@ type constraint_item = {
 
 type solve_kind = Satisfy | Minimize of expr | Maximize of expr
 
-(* One item of the file, in file order. There is no whole-model tree (M7-T27 (d),
-   D-0128): the parser hands items to the builder one at a time and each is dropped
-   once built, so the front end's memory is the Model.t and never the syntax of a
-   460 MB `.fzn`. A `predicate` item is skipped by the parser and never reaches here. *)
+(* One item of the file, in file order. There is no whole-model tree: the parser hands
+   items to the builder one at a time and each is dropped once built, so the front end's
+   memory is the Model.t and never the syntax of a 460 MB `.fzn`. That is the streaming
+   front end of D-0128 (task M7-T27 (d)), adopted after the whole-file token array and
+   syntax tree were measured to run the largest Challenge files out of memory. A
+   `predicate` item is skipped by the parser and never reaches here. *)
 type item =
   | Decl of decl
   | Constraint of constraint_item

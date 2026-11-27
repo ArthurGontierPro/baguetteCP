@@ -315,10 +315,15 @@ The `u - l - 1` consistency clauses ("the ladder") are written into the `.opb` e
 `Encoding.declare_int`, for every declared variable. That is a requirement, not an
 implementation choice, and the reason is not the one it looks like:
 
-- **No derivation this project emits ever cites a ladder id.** `Encoding.consistency_id`
-  has **no** caller in `lib/` or `bin/` at all — only `test/unit/test_proof.ml` — and the
-  one place in `lib/` that reads the id table, `derive_at_most_one`, is itself called only
-  from that same test file. Read from the emission side, the ladder looks like dead weight.
+- **Derivations cite ladder ids, and the ladder would be needed even if none did.**
+  `Encoding.consistency_id` is cited by PB conflict analysis, which lifts a reason row onto
+  the rungs that carry its strength (`lib/core/ladder.ml`, called from `lib/core/search.ml`
+  under `pb_ladder`, on by default, M2-L11), and by the `pol` derivations of the counting
+  families: `element` (M4-T3), `gcc` (M7-T16, D-0078), `cumulative` (M4-T10, D-0096) and
+  `all_different` through `consistency_ids` (M7-T33). `derive_at_most_one` is still called
+  only from `test/unit/test_proof.ml`. (When this section was written for M1-T25, no
+  derivation cited a ladder id and the ladder looked like dead weight from the emission
+  side; M2-L11 was the first citer, on 2026-09-18.)
 - **The checker's unit propagation needs it anyway.** Every `rup` in this project — the
   D-0018 trace lines of section 4 above, and the branch nogoods that are RUP *along*
   them — is checked by propagating from the model rows. A model row is the order

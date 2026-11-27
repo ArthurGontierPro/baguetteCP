@@ -5,24 +5,27 @@
    last thing between a solution and the user, and it should be testable — byte for byte,
    against test/expected/*.out — without standing a solver up first.
 
-   The exact bytes are ground truth under I-M1: test/expected/*.out is not adjusted to
-   match this module, this module is adjusted to match it. What those files pin down, and
-   the spec does not spell out, is that there is no blank line and no trailing space
-   anywhere: a solution is exactly `name = value;\n' per output item followed by
-   `----------\n', and every line including the last is newline-terminated.
+   The exact bytes are ground truth: test/expected/*.out is not adjusted to match this
+   module, this module is adjusted to match it (invariant I-M1: the expected outputs are
+   ground truth, changed only when the spec changes, through a decision record). What
+   those files pin down, and the spec does not spell out, is that there is no blank line
+   and no trailing space anywhere: a solution is exactly `name = value;\n' per output item
+   followed by `----------\n', and every line including the last is newline-terminated.
 
-   Cost (M16-file-review-T5, D-0193). [solution] is O(output items + array elements),
-   one [Buffer] per solution and one string per item, and it runs once per solution
-   printed, never per node. An optimisation run that prints many solutions pays it per
-   improvement, which is bounded by the objective's range and is linear in the output
-   each time. Nothing here is on the setup's path before node 1. *)
+   Cost, as the front end's file-by-file cost review found it (M16-file-review-T5,
+   D-0193). [solution] is O(output items + array elements), one [Buffer] per solution and
+   one string per item, and it runs once per solution printed, never per node. An
+   optimisation run that prints many solutions pays it per improvement, which is bounded
+   by the objective's range and is linear in the output each time. Nothing here is on the
+   setup's path before node 1. *)
 
 (* Rendering a value needs the *declared* type of the output item, because "1" and "true"
    are the same assignment printed under two different types, and only the declaration
    says which. The operand cannot say: the builder folds a bool parameter to [Const 1]
    while resolving names, so by the time an item reaches here, its value has forgotten
    whether it was a bool. That is why [Model.output_item] carries a [Model.out_ty],
-   recorded by the builder from the declaration (M1-T21). Nothing is inferred here: this
+   recorded by the builder from the declaration (M1-T21, which fixed a bool parameter
+   printed as 0/1). Nothing is inferred here: this
    module is handed the type and obeys it, for [Const] and [Var] alike. *)
 
 let bool_string v =
@@ -31,7 +34,8 @@ let bool_string v =
   else
     (* A `var bool' holding something other than 0 or 1 means the store or a propagator
        is broken. Printing "true" for 2 would launder that bug into a plausible-looking
-       answer, which is precisely what I-S1 exists to prevent. *)
+       answer, which is precisely what I-S1 exists to prevent (every solution printed
+       satisfies every constraint, re-checked independently of the propagators). *)
     invalid_arg (Printf.sprintf "Output: bool variable has non-Boolean value %d" v)
 
 let of_ty (ty : Model.out_ty) v =

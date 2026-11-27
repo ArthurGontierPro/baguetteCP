@@ -61,10 +61,11 @@
    is refuted by it at the root.
 
    That is the PER-VALUE shape, and it is what every scope with no bits variable posts,
-   byte for byte as before. Over a bits variable (one encoded by its binary digits
-   above a width threshold, D-0130) it cannot be posted at all: the order atoms of a bits
-   variable do not exist when the .opb is closed (D-0130 section 3.4),
-   and Theta(w) rows of them would be the ladder the bits encoding exists to avoid.
+   byte for byte the rows it posted before the selector shape existed. Over a bits
+   variable (one encoded by its binary digits above a width threshold, D-0130) it cannot
+   be posted at all: the order atoms of a bits variable do not exist when the .opb is
+   closed (D-0130 section 3.4), and Theta(w) rows of them would be the ladder the bits
+   encoding exists to avoid.
 
    ---------------------------------------------------------------------------
    The SELECTOR shape: a scope with a bits variable (D-0134)
@@ -272,8 +273,8 @@ let threshold_range m xs =
   (Int.max m.dlo (lx + 1), Int.min m.dhi (Int.max (hx + 1) m.dlo))
 
 (* [~shape] is the caller's: lib/flatzinc/compile.ml asks for [`Selector] exactly when
-   a variable of the scope is on the bits encoding (D-0134 section 2.5), and the
-   default is the per-value shape every pre-T3 caller built. *)
+   a variable of the scope is on the bits encoding (D-0134 section 2.5). The default is
+   the per-value shape, the only one before M8-bits-encoding-T3 added the selector. *)
 let make ?(shape = `Per_value) store ~dir (m : View.t) (xs : View.t list) : t =
   if xs = [] then
     invalid_arg "Maxmin.make: the maximum/minimum of an empty array is undefined";

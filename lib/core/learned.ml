@@ -1,10 +1,13 @@
 (* learned.ml: the LEARNED-CONSTRAINT type, its runtime instance, and its proof-side
    introduction and deletion (M2-L1).
 
-   Consistency level: none of its own. A learned constraint does not get a propagator
-   family -- see "The bet" below; it is instantiated as a [Linear] instance and prunes at
-   [Linear]'s level (BOUNDS, docs/SPEC.md 3.2). Governing records: docs/DECISIONS.md
-   D-0044 (the type) and D-0045's addendum (the proof-side lifetime).
+   Consistency level: none of its own. A learned row is propagated by the slack
+   propagator of lib/core/prop/pb.ml (instantiated by [pb_instance] at the foot of this
+   file), which is BOUNDS consistent over the order literals the row names (docs/SPEC.md
+   3.2). Governing records: docs/DECISIONS.md D-0044 (the type: a PB inequality, with the
+   clause as its degree-1 case), D-0054 (a proof line and a solving-side explanation are
+   different objects, which is why that propagator exists) and D-0045's addendum (a
+   learned constraint is put on the page at level 0, or the backjump deletes it).
 
    ---------------------------------------------------------------------------
    The type: sum a_i l_i >= b, over Lit.t
@@ -18,28 +21,30 @@
    The argument D-0044 rests on is a property of our encoding: D-0028's order encoding is
    eager, so every atomic constraint x >= v already IS a 0-1 variable in the .opb, and a
    clause over order literals already IS the PB constraint sum l_i >= 1 over those same
-   variables. Pumpkin's LLG has to mint an auxiliary variable per literal to cross from a
-   clause to a linear inequality; we have nothing to cross.
+   variables. LLG, the linear learning of the Pumpkin solver (Baauw, Flippo & Demirović,
+   CP 2025), has to mint an auxiliary variable per literal to cross from a clause to a
+   linear inequality; we have nothing to cross.
 
    [make] normalises: a negative coefficient is absorbed by negating its literal
    (a*l = a + |a|*~l, so the degree grows by |a|), a zero coefficient is dropped, and
    repeated literals are merged. After [make] every coefficient is >= 1, which is the
-   form [Opb] and the checker want and the form the reduction rules of M2-L5 assume.
+   form [Opb] and the checker want and the form the reduction rules of lib/core/reduce.ml
+   (M2-L5) assume.
 
    ---------------------------------------------------------------------------
-   The bet -- AND M2-L13 COLLECTED IT THE OTHER WAY (D-0054)
+   The bet that no new propagator family was needed, and why it was lost (D-0054)
    ---------------------------------------------------------------------------
 
    docs/ROADMAP.md M2-L1 bet that "a learned row is exactly what [Linear] already
-   propagates -- no new propagator family if this holds". **The bet is LOST, deliberately,
-   and losing it is M2-L13.** D-0054's reason is one sentence: a PB line for proof logging
-   and a PB explanation for solving are different objects, and the conversion below
-   decides whether a row may propagate by an ALGEBRAIC IDENTITY OVER THE DECLARED BOX --
-   a proof-side test doing a solving-side job. What replaced it is
-   lib/core/prop/pb.ml, a slack propagator over the order literals the row already names,
-   instantiated by [pb_instance] at the bottom of this file; [Linear] is untouched and
-   lib/core/prop/clause.ml is now that propagator's degree-1 face, so the family count
-   went up by one and down by nothing.
+   propagates -- no new propagator family if this holds". **The bet is LOST, deliberately:
+   task M2-L13 gave learned rows a propagator family of their own.** D-0054's reason is
+   one sentence: a PB line for proof logging and a PB explanation for solving are
+   different objects, and the conversion below decides whether a row may propagate by an
+   ALGEBRAIC IDENTITY OVER THE DECLARED BOX -- a proof-side test doing a solving-side job.
+   What replaced it is lib/core/prop/pb.ml, a slack propagator over the order literals
+   the row already names, instantiated by [pb_instance] at the bottom of this file;
+   [Linear] is untouched and lib/core/prop/clause.ml is now that propagator's degree-1
+   face, so the family count went up by one and down by nothing.
 
    The section below is kept BECAUSE the boundary it states is still exactly right about
    [to_linear_row], which survives as the measured counter [Search.n_pb_converts]. Read it
@@ -50,9 +55,9 @@
        conversion and no auxiliary variable.
      - In the SOLVER'S STORE they are not variables at all. The store holds the model's
        integer variables; [x >= v] is a *question about a domain*, not a handle. So a
-       runtime instance exists only where the PB row can be read back as a linear row
-       over those integer variables, and [to_linear_row] below is exactly the predicate
-       for that. It succeeds on:
+       PB row can be read back as a linear row over those integer variables only in some
+       shapes, and [to_linear_row] below is exactly the predicate for that. It succeeds
+       on:
 
          * a clause over `var bool`s -- D-0007 order-encodes a Boolean on [0, 1], so its
            ladder has ONE rung and [b >= 1] is the integer b itself. This is the D-0044
@@ -67,51 +72,57 @@
        and it FAILS, returning [None], on a threshold strictly inside an integer
        variable's ladder: `[x >= 3]` for x declared 0..5 is not any linear function of x
        over that box, and neither is a sum of two such. There is no rounding of this: a
-       1UIP cut over integer variables produces exactly those literals, so **M2-L3 must
-       expect [None] from [to_linear_row] on its own output** and either restrict the cut
-       to the shapes above or accept that the learned constraint is proof-only until a
-       propagator for it exists. Recorded here rather than discovered there.
+       1UIP cut over integer variables produces exactly those literals, so **1UIP clause
+       learning (lib/core/learn.ml, M2-L3) gets [None] from [to_linear_row] on most of
+       its own output**. M2-L3 therefore kept such a clause proof-only, until M2-L13 gave
+       every learned row the propagator of lib/core/prop/pb.ml.
 
    Nothing in this module widens [Linear], and since M2-L13 nothing in it builds a
    [Linear.t] either.
 
    ---------------------------------------------------------------------------
-   Why the [Linear.t] is built here instead of through [Linear.make]
+   The declared bounds come from the ENCODING, not from the store
    ---------------------------------------------------------------------------
 
-   [Linear.make] reads each variable's domain out of the store at construction time and
-   freezes it as the term's DECLARED domain -- its own header says this "has to happen
-   before anything ... has narrowed it". A learned constraint is created in the middle of
-   search, when domains have been narrowed, so [make] would freeze a narrow box as the
-   declared one and every [Order_reason.weaken_declared] chain the instance later builds
-   would be short of the ladder the .opb actually contains. The chain would then fail to
-   cancel the row's coefficient and the `pol` would derive something other than the bound.
+   [pb_instance] and [to_linear_row] read each variable's declared bounds through
+   [~decl], which [decl_of_encoding] answers from the encoding ([Encoding.domain]),
+   where the ladder's width is defined. The store is the wrong source. A learned
+   constraint is created in the middle of search, when domains have been narrowed, and
+   a box read from the store then would freeze a narrow box as the declared one: every
+   chain built against the ladder (an [Order_reason.weaken_declared] chain, or the
+   declared bound at which [Reason] drops a fact as the constant true) would be short of
+   the ladder the .opb actually contains, the chain would fail to cancel the row's
+   coefficient, and the `pol` would derive something other than the bound.
 
-   So the declared bounds come from the ENCODING, which is where the ladder's width is
-   defined ([Encoding.domain]), and the [Linear.t] record is built directly. That is a
-   deliberate reach into another module's representation and it is confined to
-   [to_linear] below. It is not a shortcut around [make]'s checks -- [make] has none
-   beyond the freeze -- it is the freeze done against the right source.
+   [Linear.make] is the cautionary case: it reads each variable's domain out of the
+   store at construction time and freezes it as the term's DECLARED domain -- its own
+   header says this "has to happen before anything ... has narrowed it". Before M2-L13,
+   this module built a [Linear.t] record directly in [to_linear] for that reason, a
+   deliberate reach into another module's representation; that function is gone, and
+   the rule it followed is the one above.
 
    ---------------------------------------------------------------------------
-   The proof side: level 0, or the backjump takes it -- D-0045's addendum
+   The proof side: level 0, or the backjump deletes it (D-0045's addendum)
    ---------------------------------------------------------------------------
 
-   MEASURED by M2-L1 before it was fixed, and it is exactly what D-0045 predicted:
-   [Writer.fresh] tags every id with the writer's current level and [Writer.wipe_level l]
-   deletes every id tagged at level >= l. A constraint derived at the conflict level is
-   deleted by the backjump that follows, and citing it afterwards is "Trying to access
-   constraint with ID 3 that has already been deleted".
+   A learned constraint is put on the page at LEVEL 0. [Writer.fresh] tags every id with
+   the writer's current level and [Writer.wipe_level l] deletes every id tagged at level
+   >= l, so a constraint derived at the conflict level is deleted by the backjump that
+   follows, and citing it afterwards is "Trying to access constraint with ID 3 that has
+   already been deleted". D-0045's addendum predicted this, and M2-L1 measured it before
+   fixing it.
 
    [introduce] therefore emits inside [Justify.with_level ctx 0], which moves the level
    FOR REAL -- the `% level 0` marker goes on the page -- rather than writing our own
-   table, which would keep [t.tags] and the emitted proof disagreeing about where the id
-   landed (invariant I-X3).
+   table, which would keep the writer's tags and the emitted proof disagreeing about
+   where the id landed (invariant I-X3: the proof state mirrors the solver state).
 
-   The consequence for I-X2 is the one M2-L4 will own: a level-0 id is no longer retired
-   by any backjump, so somebody must delete it explicitly. That somebody is [retire], and
-   until the retention policy exists its caller is whoever called [introduce]. A learned
-   constraint is the first object in this solver whose lifetime is not a search level's.
+   The consequence for I-X2 (an id you receive is an id you must delete): a level-0 id
+   is retired by no backjump, so somebody must delete it explicitly. That is
+   lib/core/retention.ml, the learned-constraint database and the single owner of a
+   learned constraint's lifetime (M2-L4, D-0226), whose [Retention.retire] deletes the
+   ids it evicts; [retire] below is the same deletion for one id. A learned constraint is
+   the first object in this solver whose lifetime is not a search level's.
 
    ---------------------------------------------------------------------------
    Determinism (docs/ROADMAP.md M2-L1 test (e))
@@ -121,15 +132,15 @@
    whose order depends on one. [make] sorts and merges through [Lit.compare]; the
    grouping in [to_linear_row] is done on a sorted list, not in a [Hashtbl]. The gate
    requires two runs of one binary to be byte-identical, and a learned database iterated
-   in hash order is the specific way learning breaks it. There is no [Hashtbl] in this
-   file; keep it that way.
+   in hash order is the specific way learning breaks it. There is no hash table in this
+   file ([hash] only calls [Hashtbl.hash] on a name); keep it that way.
 
-   CONSTANT STACK PER TERM (D-0197). A row is as long as the ladders it crosses -- 32
-   million terms on 2021_ATSP_instance10, whose conflict row lifted onto a variable 22
-   million values wide -- so no walk in this file recurses once per term outside a tail
-   position, and [List.merge], one frame per element in OCaml 5.1, is not called. A
-   [x :: go rest] here overflowed the 1 GiB OCaml stack mid-search. test_learned.ml runs
-   these walks in a 512 KiB stack. *)
+   CONSTANT STACK PER TERM (D-0197). No walk in this file recurses once per term outside
+   a tail position, and [List.merge], one frame per element in OCaml 5.1, is not called,
+   because a row is as long as the ladders it crosses: 32 million terms on
+   2021_ATSP_instance10, whose conflict row lifted onto a variable 22 million values
+   wide. A [x :: go rest] here overflowed the 1 GiB OCaml stack mid-search.
+   test_learned.ml runs these walks in a 512 KiB stack. *)
 
 module Lit = Baguette_proof.Lit
 module Opb = Baguette_proof.Opb
@@ -145,21 +156,23 @@ type t = { terms : term list; degree : int }
 
 (* ------------------------------------------------------------------- construction *)
 
-(* Normalise to positive coefficients and merge repeats.
+(* [make] (below): normalise to positive coefficients and merge repeats.
 
    [a * l] with a < 0 becomes [|a| * ~l] with the degree raised by [|a|], since
    l = 1 - ~l. A zero coefficient contributes nothing at all -- not even to the degree --
    and is dropped, exactly as [Encoding.linear_terms_int_lin_le] drops a zero term.
 
-   Repeated literals are summed. This is not tidying: [Opb.normalise] and the checkers
+   Repeated literals are summed. This is not tidying: [Opb.normalise] and the checker
    both expect a literal to appear once, and a cut that resolves two reasons naming the
-   same bound produces repeats by construction (M2-L2's output does), so the merge is on
-   the path M2-L3 will take. Sorting by [Lit.compare] makes the result a function of the
-   SET of terms and not of the order they were built in, which is test (e).
+   same bound produces repeats by construction (the implication-graph cut of
+   lib/core/analysis.ml, M2-L2, does), so the merge is on the path of clause learning
+   (M2-L3). Sorting by [Lit.compare] makes the result a function of the SET of terms and
+   not of the order they were built in, which is test (e).
 
-   M11-complexity-T9 (D-0157): [make_reference] is the body this function had, kept as
-   the specification; test_learned.ml compares the two on random rows. [make] gives the
-   same row by two shortcuts, neither of which changes an integer:
+   [make_reference] is the specification, kept as the plain fold-sort-merge it is, and
+   test_learned.ml compares the two on random rows. [make] gives the same row by two
+   shortcuts, neither of which changes an integer (M11-complexity-T9, D-0157: the learned
+   row's arithmetic without its sorts):
 
      - an input already in the order [make] produces (strictly increasing by
        [Lit.compare], so no literal twice, every coefficient >= 1) is that order: the
@@ -171,19 +184,18 @@ type t = { terms : term list; degree : int }
        one unsorted input that is long, a model row's expansion, which is a few sorted
        blocks one per variable ([Linear.pb_row]).
 
-   The merge's [a1 + a2] stays unchecked, as it was: it is the reference's arithmetic. *)
+   The merge's [a1 + a2] stays unchecked: it is the reference's arithmetic. *)
+
 (* The merge both [make]s end with: a list sorted by [Lit.compare] in, its equal
    literals summed, as terms.
 
-   D-0197: TAIL-RECURSIVE, the result accumulated in reverse and reversed once. It was
-   [{ coeff = a1; lit = l1 } :: merge rest], one stack frame per term, and PB conflict
-   analysis hands [make] rows of tens of millions of terms: on 2021_ATSP_instance10_0p25,
-   a conflict row lifted onto the ladder of a variable 22 million values wide had 32 168 204
-   terms ([Pb_analysis.analyse]'s [Learned.of_pb_row]), and that recursion overflowed the
-   1 GiB OCaml stack mid-search with "Fatal error: exception Stack overflow". The same rule
-   holds for every walk in this module: a row is as long as the ladders it crosses, so
-   nothing here recurses once per term outside a tail position, and [List.merge], which is
-   not tail-recursive in OCaml 5.1, is not called. *)
+   TAIL-RECURSIVE, the result accumulated in reverse and reversed once, because PB
+   conflict analysis hands [make] rows of tens of millions of terms (the constant-stack
+   rule of the header, D-0197). It was [{ coeff = a1; lit = l1 } :: merge rest], one
+   stack frame per term: on 2021_ATSP_instance10_0p25, a conflict row lifted onto the
+   ladder of a variable 22 million values wide had 32 168 204 terms
+   ([Pb_analysis.analyse]'s [Learned.of_pb_row]), and that recursion overflowed the 1 GiB
+   OCaml stack mid-search with "Fatal error: exception Stack overflow". *)
 let merge_equal_lits (sorted : (Lit.t * int) list) : term list =
   let rec go acc = function
     | [] -> List.rev acc
@@ -291,10 +303,10 @@ let is_empty t = t.terms = []
 (* Is this the clause case? Asked by tests, and by anything that wants to know whether a
    [rup] is available (a clause is RUP-checkable; a general PB inequality derived by
    cutting planes is not, which is the whole difficulty Koops et al. exist to solve and
-   is M2-L6's problem, not this module's). *)
+   is the problem of PB conflict analysis, lib/core/pb_analysis.ml, not this module's). *)
 let is_clause t = t.degree = 1 && List.for_all (fun tm -> tm.coeff = 1) t.terms
 
-(* ------------------------------------------------- M2-L6: PB arithmetic on the row *)
+(* ------------------------- PB arithmetic on the row, for PB conflict analysis (M2-L6) *)
 
 (* An instance's own row ([Propagator.pb_row]) as this type. [make] does the
    normalisation, so a [pb_row] may hand over negative coefficients -- and
@@ -323,9 +335,9 @@ let of_pb_row (r : Propagator.pb_row) : t =
             p * l  +  n * ~l   =   min(p,n)  +  (p-m) * l  +  (n-m) * ~l,   m = min(p,n)
 
         and the constant moves across, LOWERING the degree by m. Skipping this stage
-        would leave a row that is still sound but is not the row the checker holds: both
-        checkers normalise complements away when they read a constraint, so our copy and
-        theirs would disagree on every subsequent step, and the first [pol] built on the
+        would leave a row that is still sound but is not the row the checker holds: the
+        checker normalises complements away when it reads a constraint, so our copy and
+        its copy would disagree on every subsequent step, and the first [pol] built on the
         difference would be rejected. That is the whole reason this function exists
         instead of a fold over [make].
 
@@ -340,13 +352,14 @@ let combine_reference (a : t) (ca : int) (b : t) (cb : int) : t =
   (* Net each pseudo-Boolean variable, keeping both polarities so the constant that
      falls out of the cancellation can be counted exactly once per variable. *)
   let sorted = List.sort (fun (_, l1) (_, l2) -> Lit.var_compare l1.Lit.v l2.Lit.v) raw in
-  (* M6-T11 (D-0085): [sorted] is sorted by [Lit.var_compare], so the terms of [l]'s
-     variable are exactly the maximal PREFIX that is [var_equal] to [l] -- [span] takes it
-     in one pass, where a [List.partition] over the whole remainder made the stage
-     quadratic (D-0080: 2008 trucking ~50 % in [var_compare]/[var_equal]/[Learned]). Both
-     halves come out in the order [partition] gave them, and [acc] is built reversed and
-     reversed once instead of by [acc @ keep], so the terms reach [make] in the same order
-     and every [Checked] operation runs on the same operands in the same sequence. *)
+  (* [sorted] is sorted by [Lit.var_compare], so the terms of [l]'s variable are exactly
+     the maximal PREFIX that is [var_equal] to [l], and [span] takes it in one pass. Both
+     halves come out in the order a [List.partition] would give them, and [acc] is built
+     reversed and reversed once rather than by [acc @ keep], so the terms reach [make] in
+     the same order and every [Checked] operation runs on the same operands in the same
+     sequence. A [List.partition] over the whole remainder made the stage quadratic: on
+     2008 trucking about 50 % of the time was in [var_compare]/[var_equal]/[Learned]
+     (D-0080, the profile of where a 300 s run goes; fixed by M6-T11, D-0085). *)
   let span v group =
     let rec go mine = function
       | ((_, m) as x) :: rest when Lit.var_equal v m.Lit.v -> go (x :: mine) rest
@@ -378,15 +391,17 @@ let combine_reference (a : t) (ca : int) (b : t) (cb : int) : t =
   let terms, dropped = cancel [] 0 sorted in
   make_reference terms (Checked.sub degree dropped)
 
-(* ------------------------------------- M11-complexity-T9: the same sums, in one walk
+(* ------------------------------------------------------- the same sums, in one walk
 
-   D-0157. [combine_reference] above is the specification and stays, word for word, as
-   what test_learned.ml and the [BAGUETTE_DEBUG] cross-check compare against. What it
-   costs is the shape, not the arithmetic: two scaled copies and an append, a sort of the
-   whole row by variable, a list per variable, then [make]'s fold, reversal, second sort
-   and merge -- for every elimination of a PB analysis, on a row that is often hundreds
-   of terms and gets one short reason added. D-0153's profile put 45 % of a bits run in
-   the GC, much of it here.
+   [combine] computes [combine_reference]'s answer by one merge of the two sorted rows
+   (M11-complexity-T9, D-0157). [combine_reference] above is the specification and stays,
+   word for word, as what test_learned.ml and the [BAGUETTE_DEBUG] cross-check compare
+   against. What it costs is the shape, not the arithmetic: two scaled copies and an
+   append, a sort of the whole row by variable, a list per variable, then [make]'s fold,
+   reversal, second sort and merge -- for every elimination of a PB analysis, on a row
+   that is often hundreds of terms and gets one short reason added. The profile of D-0153
+   (PB analysis over rows with a bits term) put 45 % of a bits run in the GC, much of it
+   here.
 
    Both inputs are [make]'s output, so their terms are already sorted by [Lit.compare],
    which sorts by variable first. The sum is then a MERGE of two sorted lists, one
@@ -528,8 +543,9 @@ let combine (a : t) (ca : int) (b : t) (cb : int) : t =
 
    -- [Ladder.lift] adding one ladder row per rung -- and returns what the fold returns,
    raise included. The fold is k merges of a row that does not shrink, k times the row
-   for a lift of k rungs (cargo's lift was minutes of it, D-0149); the answer is ONE
-   merge of the row with the summands' scaled terms, sorted together.
+   for a lift of k rungs (cargo's lift was minutes of it, which D-0149 found behind a
+   --time-limit overshoot); the answer is ONE merge of the row with the summands' scaled
+   terms, sorted together.
 
    That one merge is the fold's answer because cancellation keeps a running total. For a
    variable, let P and N be the total positive and negative mass the row and the first j
@@ -587,10 +603,12 @@ let add_multiples ?(before = fun () -> ()) (row : t) (summands : (int * t) list)
                    row summands));
           r)
 
-(* M11-complexity-T9 (D-0157): into one buffer, where it was a [Printf.sprintf] per term
-   and a [String.concat]; the same bytes ([Lit.add_int] is [string_of_int]'s digits,
-   [Lit.add_sanitized] is [Lit.to_string]'s pieces, lib/proof/lit.ml). [Retention.add]
-   keys every learned row by it. *)
+(* The row as text, for diagnostics ([Pb_analysis.to_string], [Reduce]'s and [Search]'s
+   messages). Written into one buffer; it was a [Printf.sprintf] per term and a
+   [String.concat], and the bytes are the same ([Lit.add_int] is [string_of_int]'s
+   digits, [Lit.add_sanitized] is [Lit.to_string]'s pieces, lib/proof/lit.ml;
+   M11-complexity-T9, D-0157). [Retention] keyed every learned row by this text until
+   D-0226 gave it [hash] below. *)
 let to_string t =
   let b = Buffer.create 64 in
   List.iteri
@@ -607,15 +625,13 @@ let to_string t =
 
 (* --------------------------------------------------------------------- proof side *)
 
-(* The constraint as the .opb/.pbp writes it. [Opb.ge] is already the checkers' own
-   normal form for a ">=" and [make] has already made every coefficient positive, so
-   there is nothing to negate here. *)
-(* M21-memory-T3 (D-0226): a 63-bit hash of the row, a function of exactly what [to_string]
-   renders (the degree, then every coefficient and literal in [make]'s order), for
-   [Retention]'s duplicate count, which used to keep the rendered text of every row (27
-   bytes per literal) only to compare it. Two different rows share a hash with
-   probability about 2^-62 per pair, so over a million learned rows the count is wrong
-   with probability under 10^-6; the count is a measurement and steers nothing. *)
+(* A 63-bit hash of the row, a function of exactly what [to_string] renders (the degree,
+   then every coefficient and literal in [make]'s order), for [Retention]'s duplicate
+   count. Two different rows share a hash with probability about 2^-62 per pair, so over
+   a million learned rows the count is wrong with probability under 10^-6; the count is
+   a measurement and steers nothing. The count used to keep the rendered text of every
+   row (27 bytes per literal) only to compare it (M21-memory-T3, D-0226: the learned-row
+   memory layout). *)
 let hash t =
   let mix h x = h * 1000003 lxor x in
   let lit_code (l : Lit.t) =
@@ -634,6 +650,9 @@ let hash t =
     (mix 17 t.degree) t.terms
   land max_int
 
+(* The constraint as the .opb/.pbp writes it. [Opb.ge] is already the checker's own
+   normal form for a ">=" and [make] has already made every coefficient positive, so
+   there is nothing to negate here. *)
 let to_opb t = Opb.ge (List.map (fun tm -> (tm.coeff, tm.lit)) t.terms) t.degree
 
 (* Put the learned constraint on the page and hand back its id.
@@ -641,24 +660,29 @@ let to_opb t = Opb.ge (List.map (fun tm -> (tm.coeff, tm.lit)) t.terms) t.degree
    AT LEVEL 0, unconditionally -- see the module header. That is the whole of M2-L1's
    proof-side half and the reason [Justify.with_level] exists.
 
-   [rup] is the rule, which is D-0044's staging and not a permanent choice: a learned
-   CLAUSE is a single [rup] line, the checker re-derives the intermediate resolvents by
-   unit propagation, and the cut choice costs nothing in proof size. A general PB
-   inequality is not RUP-derivable and M2-L6 owes it a [pol] built from the reduction
-   steps; that path will call [Justify.with_level] in exactly the same place, which is
-   why the bracket is not folded into this function's body. [is_clause] is what a caller
-   asks before trusting the [rup].
+   The rule is [rup], which suits a learned CLAUSE (its caller in lib/ is
+   lib/core/learn.ml's [introduce]): a clause is a single [rup] line, the checker
+   re-derives the intermediate resolvents by unit propagation, and the cut choice costs
+   nothing in proof size. [is_clause] is what a caller asks before trusting the [rup]. A
+   general PB inequality is not RUP-derivable; it is introduced by
+   [Pb_analysis.introduce] instead, as the [pol] built from the reduction steps, inside
+   the same [Justify.with_level ctx 0] bracket, which is why the bracket is not folded
+   into this function's body. D-0044 staged it this way: the clause first, the PB row
+   once PB conflict analysis (M2-L6) existed.
 
-   I-X2: the id returned is an id you must delete, with [retire]. Nothing else will --
-   a backjump will not, which is the point. *)
+   I-X2: the id returned is an id you must delete. Nothing else will -- a backjump will
+   not, which is the point; lib/core/retention.ml does, or [retire] below. *)
 let introduce ctx t ~origin : Writer.cid =
   Justify.with_level ctx 0 (fun () -> Writer.rup (Justify.writer ctx) ~origin (to_opb t))
 
 (* The other half of I-X2, and a separate function rather than a comment on [introduce]
-   because a learned constraint's lifetime is a policy (M2-L4) and not a scope. *)
+   because a learned constraint's lifetime is a policy (the retention policies of
+   lib/core/retention.ml, M2-L4) and not a scope. [Retention.retire] does the same
+   deletion, in batches, for the ids the database evicts; this single-id form has no
+   caller in lib/ today, and test/unit/test_learned.ml uses it. *)
 let retire ctx (id : Writer.cid) = Writer.delete (Justify.writer ctx) id
 
-(* ------------------------------------------------- the runtime instance (the bet) *)
+(* ------------------------------------------------------------ the runtime instance *)
 
 (* The PB row rewritten over the positive order literals only, as a sorted
    [(name, threshold, coefficient)] list plus a constant that moves to the left-hand
@@ -666,14 +690,16 @@ let retire ctx (id : Writer.cid) = Writer.delete (Justify.writer ctx) id
    to the constant and minus its coefficient to the rung.
 
    [None] for a direct-encoding ([Eq]) literal: the direct encoding is a set of 0-1
-   variables with no order to read a bound off (D-0019, D-0040), so there is no linear
-   form and saying so is the honest answer.
+   variables with no order to read a bound off (D-0019, D-0040: the solver reasons on the
+   order encoding), so there is no linear form and saying so is the honest answer.
 
-   M11-complexity-T4 (D-0152, D-0140 L2): sorted by [rung_compare], which is the order
-   the polymorphic [compare] gives a [(string, int, int)] triple ([String.compare] on the
-   name, then [Int.compare] on the threshold, then on the coefficient), without the
-   polymorphic call per comparison. [List.sort] sees the same signs, so the list is the
-   same. [to_linear_row] runs on every learned clause, for [--stats]'s [convertible]. *)
+   Sorted by [rung_compare], which is the order the polymorphic [compare] gives a
+   [(string, int, int)] triple ([String.compare] on the name, then [Int.compare] on the
+   threshold, then on the coefficient), without the polymorphic call per comparison.
+   [List.sort] sees the same signs, so the list is the same. It matters because
+   [to_linear_row] runs on every learned clause, for [--stats]'s [convertible]
+   (M11-complexity-T4, D-0152: search, analysis and retention without their per-conflict
+   scans, item L2 of the cost inventory D-0140). *)
 let rung_compare (x1, v1, c1) (x2, v2, c2) =
   match String.compare x1 x2 with
   | 0 -> ( match Int.compare v1 v2 with 0 -> Int.compare c1 c2 | c -> c)
@@ -684,7 +710,7 @@ let rung_compare (x1, v1, c1) (x2, v2, c2) =
    A row out of [make] lists its rungs in [rung_compare] order already ([Lit.compare] is
    name, then threshold, then the negative literal, whose rung coefficient is the
    negative one, first), so [to_linear_row] -- asked of every learned row, for
-   [--stats] -- no longer sorts what is sorted. *)
+   [--stats] -- does not sort what is sorted. *)
 let sort_unless_sorted cmp l =
   let rec sorted = function
     | x :: (y :: _ as rest) -> cmp x y <= 0 && sorted rest
@@ -766,11 +792,11 @@ let to_linear_row t ~decl =
   match ladder_form t with
   | None -> None
   | Some (rungs, const0) ->
-      (* [rungs] is sorted by (name, threshold), so a variable's rungs are contiguous.
-         D-0152 (D-0140 L2): so they are taken as the maximal prefix with [x]'s name, in
-         one pass, which is what [List.partition] over the whole remainder returned on a
-         sorted list (the same rungs in the same order, and the same remainder), where
-         the partition made the grouping quadratic in the clause. *)
+      (* [rungs] is sorted by (name, threshold), so a variable's rungs are contiguous
+         and are taken as the maximal prefix with [x]'s name, in one pass. On a sorted
+         list that is what a [List.partition] over the whole remainder returns (the same
+         rungs in the same order, and the same remainder); the partition made the
+         grouping quadratic in the clause (D-0152, item L2 of D-0140). *)
       let rec span x mine = function
         | (y, v, c) :: rest when String.equal x y -> span x ((v, c) :: mine) rest
         | others -> (List.rev mine, others)
@@ -804,49 +830,29 @@ let to_linear_row t ~decl =
       in
       Option.map (fun (terms, const) -> (terms, const - t.degree)) (fold [] const0 groups)
 
-(* Pack the row for the engine, as a PB CONSTRAINT over the order literals it already
-   names -- lib/core/prop/pb.ml, which is D-0054's solving-side object and reads LIVE
-   domains. [None] when a literal has no bound to move ([Lit.Eq]) or names a variable
-   this store or this encoding does not know; [Pb.atom_of] holds both refusals and the
-   reason for each.
+(* [pb_instance] (below the switch that follows): pack the row for the engine, as a PB
+   CONSTRAINT over the order literals it already names -- lib/core/prop/pb.ml, which is
+   D-0054's solving-side object and reads LIVE domains. [None] when a literal has no
+   bound to move ([Lit.Eq]) or names a variable this store or this encoding does not
+   know; [Pb.atom_of] holds both refusals and the reason for each. This is the runtime
+   instance of every learned PB row, and it always exists where the linear reading of
+   [to_linear_row] may not.
 
-   M2-L13 REPLACED [to_linear] AND [instance] WITH THIS, and the replacement is the whole
-   of the row. Those two built a [Linear.t] through [to_linear_row], i.e. they asked
-   whether the PB row could be read back as an integer linear row over the DECLARED box,
-   and propagated only if it could. D-0050 called that "the right predicate used as the
-   wrong gate" and D-0054 named why: an algebraic identity over the declared box is a
-   PROOF-side test, and whether a row is worth propagating is a SOLVING-side question.
-   Neither function had a caller in lib/ -- the bet of "no new propagator family" was
-   never actually collected -- so what M2-L13 removed was a designated path, not a live
-   one.
-
-   [to_linear_row] itself stays, above, and is now only what bin/main.ml has always
-   called it: MEASURED ONLY. [Search.n_pb_converts] and [Learn.converts] read it, nothing
-   propagates through it, and test/unit/test_learned.ml keeps the D-0044 boundary it pins
-   by building the [Linear.t] itself.
-
-   The two readings are NOT ordered, which is worth knowing before anyone reverses this:
-   on a row that is a model row's own expansion the linear reading is STRICTLY STRONGER,
-   because the slack rule is blind to the ladder rows that tie one rung to the next
-   (lib/core/prop/pb.ml's "Consistency level" section, and lib/core/pb_analysis.ml's
-   [Postcondition_failed] section for the same arithmetic on the analysis side). On a
-   1UIP-shaped row with a threshold strictly inside a ladder the linear reading does not
-   exist at all. This function is the one that always exists.
-
-   [~row_id] is the id [introduce] returned, and the instance DOES expose a
-   [Propagator.pb_row] built from it -- unlike the learned clause, which exposes none.
-   That is not an inconsistency between the two, it is D-0054's two objects finally both
-   being present for the same constraint: the row this instance propagates is the row on
-   the page, so it is citable, it is frozen, and PB conflict analysis can resolve against
-   it. Leaving it [None] is not neutral: [Engine.row_of] would answer [None], and
-   lib/core/pb_analysis.ml would fall back to the clause path on every conflict a learned
-   instance reports -- MEASURED on the php models, where omitting it cut the rows learned
-   on php_wide_unsat from 30 to 2 and grew the tree instead of shrinking it.
+   [~row_id] is the id the row was put on the page under ([Pb_analysis.introduce]), and
+   the instance DOES expose a [Propagator.pb_row] built from it -- unlike the learned
+   clause, which exposes none. That is not an inconsistency between the two, it is
+   D-0054's two objects finally both being present for the same constraint: the row this
+   instance propagates is the row on the page, so it is citable, it is frozen, and PB
+   conflict analysis can resolve against it. Leaving it [None] is not neutral:
+   [Engine.row_of] would answer [None], and lib/core/pb_analysis.ml would fall back to
+   the clause path on every conflict a learned instance reports -- MEASURED on the php
+   models, where omitting it cut the rows learned on php_wide_unsat from 30 to 2 and
+   grew the tree instead of shrinking it.
 
    The terms handed over are the row's own, i.e. the DECLARED-bound object, which is what
-   [Propagator.pb_row]'s comment requires ("a row that moved with the search would be the
-   wrong side of I-X6"). The propagator beside it reads live domains. Same constraint,
-   two readings, which is the whole of D-0054.
+   [Propagator.pb_row]'s comment requires: a row that moved with the search would break
+   I-X6 (an explanation reads a snapshot, never live domains). The propagator beside it
+   reads live domains. Same constraint, two readings, which is the whole of D-0054.
 
    [~bump] is M2-L13's BREAK and is 0 everywhere but in test/unit/test_pb.ml. It raises
    the degree of the propagated constraint above the degree of the row on the page, so
@@ -857,12 +863,38 @@ let to_linear_row t ~decl =
    proves nothing about the code.
 
    [~id] must be [Engine.next_id] of the engine it is about to be added to -- [Engine.add]
-   checks that and says why. *)
-(* M21-memory-T3 (D-0226): the PROPAGATION cap, off by default ([0]). With [N > 0] a
-   learned PB row of more than [N] terms gets no instance: it stays on the page, held by the
-   database and citable by PB analysis as before, and only its wakes go (lib/core/search.ml
-   counts it as declined). The other half of D-0226's guard; [Pb_analysis.max_terms] is the
-   one that does not derive the row at all. CHANGES the search, so a switch. *)
+   checks that and says why.
+
+   Why a slack propagator and not a [Linear] instance. M2-L13 REPLACED [to_linear] AND
+   [instance] WITH THIS. Those two built a [Linear.t] through [to_linear_row], i.e. they
+   asked whether the PB row could be read back as an integer linear row over the
+   DECLARED box, and propagated only if it could. D-0050 called that "the right predicate
+   used as the wrong gate" and D-0054 named why: an algebraic identity over the declared
+   box is a PROOF-side test, and whether a row is worth propagating is a SOLVING-side
+   question. Neither function had a caller in lib/ -- the bet of "no new propagator
+   family" was never actually collected -- so what M2-L13 removed was a designated path,
+   not a live one.
+
+   [to_linear_row] itself stays, above, and is only what bin/main.ml has always called
+   it: MEASURED ONLY. [Search.n_pb_converts] and [Learn.converts] read it, nothing
+   propagates through it, and test/unit/test_learned.ml keeps the D-0044 boundary it pins
+   by building the [Linear.t] itself.
+
+   The two readings are NOT ordered, which is worth knowing before anyone reverses this:
+   on a row that is a model row's own expansion the linear reading is STRICTLY STRONGER,
+   because the slack rule is blind to the ladder rows that tie one rung to the next
+   (lib/core/prop/pb.ml's "Consistency level" section, and lib/core/pb_analysis.ml's
+   section on the integer propagator being stronger than PB propagation, for the same
+   arithmetic on the analysis side). On a 1UIP-shaped row with a threshold strictly
+   inside a ladder the linear reading does not exist at all. This function is the one
+   that always exists. *)
+
+(* The PROPAGATION cap, off by default ([0]). With [N > 0] a learned PB row of more than
+   [N] terms gets no instance: it stays on the page, held by the database and citable by
+   PB analysis as before, and only its wakes go (lib/core/search.ml counts it as
+   declined). It is the second half of the size guard on learned PB rows (M21-memory-T3,
+   D-0226); [Pb_analysis.max_terms] is the first, which does not derive the row at all.
+   It CHANGES the search, so it is a switch. *)
 let propagate_max_terms =
   match Option.bind (Sys.getenv_opt "BAGUETTE_PB_PROPAGATE_MAX") int_of_string_opt with
   | Some n when n > 0 -> n
@@ -874,9 +906,9 @@ let pb_instance ~id ~row_id ?(bump = 0) store ~decl t : Propagator.instance opti
   else
     Option.map
       (fun p ->
-        (* M21-memory-T3 (D-0226): the row is read back off the instance's own arrays, so the
-           closure holds the instance and the degree on the page, not a second copy of the
-           row. Same pairs in the same order: [Pb.of_terms] keeps every term of a [make]d row
+        (* The row is read back off the instance's own arrays, so the closure holds the
+           instance and the degree on the page, not a second copy of the row (D-0226).
+           Same pairs in the same order: [Pb.of_terms] keeps every term of a [make]d row
            (all coefficients >= 1) in its order, with the literal it was given. *)
         let row _store =
           Some

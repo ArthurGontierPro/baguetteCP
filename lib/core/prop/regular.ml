@@ -451,8 +451,10 @@ let finish t =
 (* ------------------------------------------------------------- the flags' tails *)
 
 (* The tail of the line that killed (fixed, if [~set]) flag (i, q), as THIS instance wrote
-   it; or the flag's own fact when anything else moved it, or when no engine is running
-   (see the header). The entry is the one [Store.hi_support]/[lo_support] names. *)
+   it; or the flag's own fact when anything else moved it (see the header), or when the
+   bound has no support entry ([Store.no_support]: it is still the bound the flag was
+   created with). The entry is the one [Store.hi_support]/[lo_support] names, and the
+   cached tail is used only when it belongs to that very entry. *)
 let flag_tail store t ~set i q : tail =
   let k = fid t i q in
   let v = t.flags.(k) in
@@ -606,7 +608,9 @@ let forward_reason store t i q' =
   done;
   add_exclusion t i ~nlo:!nlo ~nhi:!nhi
 
-(* Step 2. *)
+(* Step 2, [forward] below: a state of layer i + 1 that no live edge from a live state
+   of layer i reaches dies (P1). *)
+
 (* Letter i's domain over the symbols, into [inx], read by the edge loops below. *)
 let load_letter t mem =
   for k = 0 to t.w - 1 do
@@ -657,7 +661,8 @@ let backward_reason store t i q =
   done;
   add_exclusion t i ~nlo:!nlo ~nhi:!nhi
 
-(* Step 3. *)
+(* Step 3: a live state of layer i with no live edge to a live state of layer i + 1
+   dies (P2). *)
 let backward store t =
   for i = t.n - 1 downto 0 do
     if touched t i then (
