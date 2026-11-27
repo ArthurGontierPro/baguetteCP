@@ -274,8 +274,9 @@ lib/core/       Baguette_core
                             propagators first (four cost classes), off by default
                             (D-0246)
   search.ml                 DFS, branching, backtracking, every step proof-logged.
-                            Restarts are opt-in (SPEC 3.4, D-0137): NRestart t unwinds
-                            to level t and re-enters that node, no new proof rule.
+                            Restarts are the DEFAULT since D-0261 (SPEC 3.4: the free
+                            search, `--fixed-search` for the annotation alone): NRestart t
+                            unwinds to level t and re-enters that node, no new proof rule.
                             CDCL loop `Search.cdcl` beside `dfs`: `--cdcl` or
                             BAGUETTE_CDCL=1, OFF by default (D-0219). With it, `--chrono
                             T` (BAGUETTE_CHRONO=T) backjumps one level instead of more

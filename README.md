@@ -23,7 +23,7 @@ Written in OCaml 5, single-threaded, deterministic.
 | Global constraints, through `mznlib` | `bin_packing`, `bin_packing_capa` and `bin_packing_load` (one linear row per bin), `diffn` and `diffn_nonstrict` (pairwise rows plus two `cumulative` relaxations). The capacity rows of the two relaxations are rows of the model, so the proof uses them without deriving them (D-0213). `nvalue`, the reified `all_equal`, `alldifferent_except` and `all_different(xs, S)` (D-0233), `lex_less` and `lex_lesseq` over integers and Booleans, hence `lex_greater`, `lex_chain_*` and `lex2` (D-0239) |
 | Learning | 1UIP clause learning, the clause minimised over the order ladder (MiniSat's removal of root-level and re-derivable literals exists behind `BAGUETTE_MINIMISE` and is off by default, D-0241), and pseudo-Boolean conflict analysis (linear combination plus division or rounding), with a swappable retention policy for the learned database |
 | Explanations | each pruning carries a declarative reason (an `Explanation` value), turned into `pol` or `rup` steps only when the proof needs them. Reasons are hash-consed so shared sub-proofs are written once |
-| Search | the model's search annotation by default (first-fail, smallest value when there is none). Free search with `-f` (activity order alternating with the annotation, Luby restarts, phase saving). A conflict-driven search, where the learned clause decides the backjump, is available with `--cdcl` (or `BAGUETTE_CDCL=1`) and off by default (D-0219) |
+| Search | free search by default since D-0261 (the activity order alternating with the model's annotation at each Luby restart, phase saving). The fixed search, the annotation alone (first-fail, smallest value when there is none) with no restarts, with `--fixed-search`. A conflict-driven search, where the learned clause decides the backjump, is available with `--cdcl` (or `BAGUETTE_CDCL=1`) and off by default (D-0219) |
 | Without proof | `--no-proof` runs the same search without writing a proof, as a measurement tool. Its answers are unverified |
 | Limits | `--time-limit`, `--max-heap-mb` (a clean refusal before memory runs out), caps on encoding size |
 | Symmetries | `tools/symmetry/` finds model symmetries with dejavu, outside the solver (`make sym`) |
@@ -93,8 +93,9 @@ How to read these numbers.
   With 64 GiB and a heap of 32 GiB the binary of D-0203 refused 60 instances instead of 164 with proof,
   but verified 304 optimal or UNSAT answers instead of 302 (D-0210, in `bench/series/HISTORY.md`).
 - Free search is stronger in aggregate but not on every model. It wins on 715 instances and loses
-  on 349 (511 ties). The default is the fixed search, and whether it stays so is an open question
-  (M19-config-T1). The `-f` rows above are there to compare the arms against the same opponents. They
+  on 349 (511 ties). Since D-0261 (M19-config-T1, decided by D-0259 on this series) the free search is the
+  default and the fixed search is `--fixed-search`. The "Default search" columns above are the fixed search,
+  which was the default when the series ran. The `-f` rows above are there to compare the arms against the same opponents. They
   are not legal entries, because the fixed category requires the model's annotation to be followed.
   The ranks of `-f` in its own category are below.
 - Against the other solvers that log proofs, GCS verified 141 answers in the same editions and settings and scored 2 792 (D-0211), against 390 and 4 442 for the default arm here. Chuffed, which logs nothing, scored 8 466.
@@ -130,7 +131,7 @@ make release             # optimised binary in _build_release/default/bin/main.e
 baguette model.fzn                          # solve, keep the proof as ./model.opb and ./model.pbp
 baguette model.fzn --proof out              # solve, write the proof as out.opb and out.pbp
 veripb out.opb out.pbp                      # verify
-baguette model.fzn -f                       # free search
+baguette model.fzn --fixed-search           # the fixed search: the model's annotation, no restarts
 baguette model.fzn --no-proof               # solve without a proof (the answer is unverified)
 ```
 
@@ -162,21 +163,31 @@ MiniZinc hands baguette a temporary `.fzn` and not the name of the `.mzn`, so wi
 stderr. `--no-proof` works through MiniZinc too.
 
 baguette accepts the MiniZinc standard flags `-a -i -f -n -p -r -s -t -v`. It runs on one
-thread and draws no random numbers, so `-p` and `-r` are accepted and change nothing.
+thread and draws no random numbers, so `-p` and `-r` are accepted and change nothing. `-f`
+changes nothing either, because the free search is already the default. MiniZinc runs without
+`-f` still get the free search, so a run that must follow the model's annotation (the fixed
+category of the MiniZinc Challenge) passes `--fixed-search`:
+
+```sh
+minizinc --solver baguette --fixed-search model.mzn data.dzn
+```
 
 ### Search
 
-By default baguette follows the model's search annotation. A model without one is searched
-first-fail with the smallest value first. There are no restarts. This is the fixed search of
-the MiniZinc Challenge.
+By default (since D-0261) baguette runs the free search, as Chuffed does under `-f`. The search
+alternates between the model's annotation and an activity order at each Luby restart, and it
+keeps the last value of each variable (phase saving). It is the same as `--search alternate
+--restarts luby --phase-saving`, and `-f` names it too.
 
-With `-f` (free search, as with Chuffed) the search alternates between the annotation and an
-activity order at each Luby restart, and it keeps the last value of each variable (phase
-saving). It is the same as `--search alternate --restarts luby --phase-saving`, and each of
-those options can also be given on its own. Free search often helps when the annotation is a
-poor order or when there is none. It can also be much slower, so neither search wins on every
-model (the Challenge table above, and D-0137 §10 and D-0202 on smaller sets). A run under `-f`
-writes a proof the checker verifies, as the default search does.
+With `--fixed-search` baguette follows the model's search annotation alone. A model without
+one is searched first-fail with the smallest value first. There are no restarts. This is the
+fixed search of the MiniZinc Challenge, and it was the default until D-0261.
+
+On either search, `--search`, `--restarts` and `--phase-saving` replace their own part of it.
+The free search is stronger in aggregate (the Challenge table above: 356 verified optima and
+UNSAT answers against 311), but not on every model, because a good annotation can lose its proof of
+optimality under it (31 instances of that series). Both
+write a proof the checker verifies.
 
 `--cdcl` replaces the default depth-first search with the CDCL loop of lazy clause
 generation: after a conflict, the learned clause sends the search back to the level where it
