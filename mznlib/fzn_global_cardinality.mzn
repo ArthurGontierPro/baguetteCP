@@ -68,7 +68,24 @@
 % predicate itself): they already state sum(counts) = |x|, the row that decides
 % mondoku, and blocks-world, the one Challenge family that uses them, did not move.
 % global_cardinality_low_up's counts are declared on constant bounds and stay native
-% too; that route was not measured (D-0247 section 6).
+% too, by measurement (D-0255): over the 58 Challenge instances that call only low_up,
+% std's decomposition, the native propagator plus the row between the counts, and both
+% together reach the incumbent main reaches on every instance stopped at 20 000 nodes,
+% and their 300 s differences stay within the run-to-run spread of main itself.
+%
+% Native plus one row between the counts, sum(counts) in L..|x|, was measured against
+% this route as well (D-0255): it scores well below (2 wins, 14 losses at 300 s without
+% proof, 2 and 12 with), and with proof it loses oocsp_racks 100_r1's verified answer.
+%
+% A COVER WITH A REPEATED VALUE gets the per-value rows WITHOUT std's implied row
+% (D-0255). Each repeat's count is the same tally, so the counts can sum past |x|:
+% global_cardinality(x, [1,1], c) with x = [1,1] holds with c = [2,2] (Gecode agrees),
+% and std's row 2 >= c1 + c2 made it UNSAT, a wrong answer 4c5df61 introduced (the
+% native route before it answered SAT). The guard is a par test, so a cover of distinct
+% values gets the same rows as before. MiniZinc 2.10.1's output for them is not byte for
+% byte the same: its common-subexpression choices move with any edit of these files
+% (12 of 98 Challenge instances shifted here, blocks-world among them although it never
+% reaches this branch; D-0255 section 2). Models: mznlib/test/gccvar_dupcover_src_*.
 %
 % A COVER WITH A REPEATED VALUE gets the per-value rows WITHOUT std's implied row
 % (D-0255). Each repeat's count is the same tally, so the counts can sum past |x|:

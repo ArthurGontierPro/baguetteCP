@@ -33581,3 +33581,127 @@ peak RSS is 650 MB (jr63 `--cdcl`, proof).
 
 Drop `scripts/factor_lane.sh`, `bench/factor/`, the `factor` target and its README section, and the
 per-node table of `bench/series/HISTORY.md` (all on `wave102-factor`). Nothing else depends on them.
+
+## D-0255  [AUTONOME] M18-coverage-T14, D-0247's two follow-ups: the row between the counts posted beside the native propagator loses to std's decomposition for variable counts, and low_up stays native (no alternative moves a tree). On the way, a wrong UNSAT under a repeated cover value, fixed in mznlib
+
+**Status**: DECIDED (agent-gccsum, `wave100-gccsum`, 2026-11-27), not merged. The fix is ONE commit,
+`99d0e39` (mznlib only); the measured routes change nothing. Material: `/cluster/arthur/baguette-results/gccsum/`
+(README first).
+
+### 1. Context
+
+D-0247 section 6 left two questions. (1) Native gcc does not propagate between the counts
+(`hi(c_v) <= |x| - sum_{u != v} lo(c_u)`, and its mirror over the x that can only take cover values), which is
+what std's implied row gives `Linear` and what closes mondoku. Posting that row beside the native propagator
+would serve every variable-count call with no new rule in gcc.ml: does it beat routing variable counts to std's
+decomposition? (2) `global_cardinality_low_up` (58 Challenge instances) stays native: does the same class of
+inference, or std's decomposition, do better there?
+
+### 2. A wrong UNSAT under a repeated cover value (found while building the arms, fixed first)
+
+`global_cardinality(x, [1,1], c)` with x = [1,1] holds with c = [2,2]: each copy of the value counts the same
+tally. Gecode answers SAT. Main answered UNSAT, because std's implied row `|x| >= sum(c)`, which 4c5df61 (D-0247)
+brought into the variable-count route, sums the repeat twice. Before 4c5df61 the native route answered SAT, so
+D-0247 introduced it. Same check on every form, main's mznlib against the one before 4c5df61 against Gecode
+(script `dupcover.sh`): fixed counts SAT/SAT/SAT, closed three-argument form SAT/SAT/SAT (its `sum = |x|` row was
+already guarded), low_up SAT/SAT/SAT, **low_up_closed UNSAT/UNSAT/SAT**: std's par check `|x| in
+sum(lb)..sum(ub)`, copied into mznlib since D-0146, has the same flaw. Chuffed, which runs std's text, gives the
+wrong answer on four of the five. alldifferent_except and nvalue (D-0233) iterate over sets of values and have no
+such row. Fix (`99d0e39`): both rows are posted only when `card(array2set(cover)) = length(cover)`, a par test, so
+a cover of distinct values gets the same rows as before. Not the same bytes, though: MiniZinc 2.10.1's
+common-subexpression output moves with ANY edit of these files. Of the 98 Challenge instances of section 3, 86
+flatten identically (X_INTRODUCED names and output annotations normalised) and 12 differ (from 1 line on warehouse
+olal41 to 15 000 on chessboard n39_2), blocks-world among them although it never reaches the changed branch, and
+the same guard bound in a `let` moved 20 others (`cmpfix*.txt`). `ee6e580` corrects the header that claimed byte
+identity. Solved at 20 000 nodes, the 12 give main's status and incumbent on every instance that reaches the
+limit; the two that differ are nside runs the 300 s cap cut first (`tables/nl-fix.txt`). The arms of section 3
+were flattened with main's mznlib, before the fix. Four models, sat with an unsat twin for each form (`gccvar_dupcover_src_*`,
+`gcc_low_up_closed_dupcover_src_*`), outputs as Gecode's, proofs VERIFIED, both unsat twins decided by the
+solver, not by the flattener. That commit's gate: 5 590 ok, 0 FAIL (peak RSS 170 MB), 268 models, mznlib 77 ok.
+
+### 3. Arms and measurements
+
+One binary for every arm, main's release build `456603e1` (main `c651bbb`, `make release`'s command); the arms
+differ by their mznlib only (`mklibs.sh`), each instance flattened again by MiniZinc 2.10.1:
+
+- **M**: main (variable counts to std's decomposition with its implied row; low_up native).
+- **S**: variable counts to the native propagator plus ONE row `sum(counts) in L..|x|`, L = number of x whose
+  declared domain lies inside the cover (|x| in the closed case, so it is also the mirror rule), guarded on a
+  distinct cover.
+- **BC**: native plus std's count rows and implied row (arm (iii): the decomposition with the native capacity
+  reasoning beside it).
+- **LS**: low_up native plus the same row over its declared counts. **LD**: low_up through std's decomposition.
+  **LDN**: low_up native plus std's decomposition.
+
+Stages, 32 at a time on fataepyc-06 (load 4 to 30 from other work), 16 GiB address space, `MemoryMax=32G`,
+`--max-heap-mb 8192`, veripb 3.0.2 with 900 s on every proof that ended; score by `agreement.py` (no-proof arms
+trusted): nl = `BAGUETTE_NODE_LIMIT=20000` capped at 300 s; t300 and p300 = 300 s without and with proof.
+
+Question 1, the 40 instances D-0247's route reaches (mondoku's five among them):
+
+| arm | nl: share, W/L vs M | t300: complete, share, W/L vs M | p300: complete (verified), share, W/L vs M |
+|---|---|---|---|
+| **M** | 0.433 | 11, 0.438 | 11 (11), 0.425 |
+| S | 0.304, 1/12 | 11, 0.296, 2/14 | 11 (10), 0.296, 2/12 |
+| BC | 0.263, 0/13 | 11, 0.267, 0/13 | 11 (11), 0.279, 0/12 |
+
+Mondoku: 10-10-6 and 12-12-8 are OPT in every arm (12-12-8 in 12.5 s under M, 18.9 s S, 17.9 s BC; with proof
+24.9, 30.9, 29.3 s, all VERIFIED), and on 14-14-8 and 20-18-9 M's incumbents are the best (2 and 4 against S's 3
+and 10). The row closes mondoku as D-0247 measured; what S lacks is elsewhere: the per-value rows read holes
+and are cheaper per node on peaceable queens (S explores 3.5 times more nodes in 300 s and finds worse), and the
+native propagator is what exhausts the heap on warehouse (wlp02, wlp22, oly20 REFUSED or without incumbent under
+S and BC, answered under M). S loses oocsp_racks 100_r1's verified answer (its check runs out of 900 s, as
+D-0247's S did). BC is below S.
+
+Question 2, the 58 low_up-only instances:
+
+| arm | nl: share, W/L vs M | t300: share, W/L vs M | p300: complete (verified), share, W/L vs M |
+|---|---|---|---|
+| **M** | 0.257 | 0.253 | 9 (8), 0.316 |
+| LS | 0.251, 0/2 | 0.244, 2/3 | 9 (8), 0.368, 8/1 |
+| LD | 0.243, 1/2 | 0.273, 6/2 | 9 (8), 0.316, 4/5 |
+| LDN | 0.249, 1/3 | 0.230, 1/6 | not run (below LD 0/8 at t300) |
+
+At 20 000 nodes every arm reaches the incumbent M reaches on all 46 instances stopped at the limit; the nl
+losses are runs the 300 s cap cut first. The node sums over the instances both complete differ by under 0.1 %
+for LS, so the row prunes almost nothing there: low_up's counts sit on constant bounds and only rise from
+x being fixed, which rule C already sees. LD's per-value rows read holes (the class route (a) of D-0247 aimed
+at) and shorten one tree, evm-super-compilation BDARUMA (37 183 nodes against 68 241), without changing an
+answer. LS's 8/1 with proof is all incumbents at the 300 s cut, so I ran M and LS again with proof on those 8
+instances, paired: M's own incumbent moved on 7 of 8 between its two runs, and LS's second run beat M's second
+on 3, lost 1, tied 4. That spread, and the identical trees at the node limit, make the with-proof gain node rate
+under load, not inference. LD gains 0.020 without proof, under D-0205's noise of 0.03, and ties with proof.
+No arm gains or loses a complete answer against M in either mode.
+
+Load-bearing check on the route kept (CLAUDE.md, proof discipline): three models where the implied row decides,
+`gccvar_sum_src_{unsat,sat,opt}` (`6944d6e`), outputs as Gecode's, proofs VERIFIED. Replacing the row in the
+.opb by `>= 0` (`droprow.py`, the label kept so later ids do not move) makes veripb 3.0.2 reject all three
+("Checking error at" lines 4, 38 and 33); the satisfiable one is rejected at a line of its search after a
+conflict the row caused, so the row is load-bearing over a satisfiable model.
+
+Proof volume written: 1 071 GB over 310 proof runs (`p300` 991 GB, `p300b` 80 GB) (largest 19.6 GB, warehouse wlp22 under S), every proof
+deleted once checked.
+
+### 4. Decision
+
+[AUTONOME] **Nothing changes in the routes.** Variable counts keep std's decomposition (M beats S and BC in all
+three stages, and S loses a verified answer); low_up stays native (neither LS nor LD gains by D-0205's rule in
+both modes, and neither moves a tree at the node limit). The only behaviour change is the soundness fix of
+section 2, in its own commit, which no Challenge instance reaches (every cover there has distinct values). The
+mznlib headers of `fzn_global_cardinality.mzn` and `fzn_global_cardinality_low_up.mzn` now cite these
+measurements. A native count-to-count rule in gcc.ml is not built: the row that would be its exact effect
+measures no gain on the calls it would serve (fixed counts have nothing to propagate between, low_up's are LS).
+
+Revert: `git revert 99d0e39` restores both unguarded rows (and the wrong UNSAT; the four dupcover models then
+fail). The test commit `6944d6e` is independent.
+
+### 5. Verification
+
+Worktree `/scratch/arthur/wt-gccsum`. On `ee6e580` (the branch head before this record): `scripts/check_fmt.sh`
+clean, `check_test_widths.py` clean, `dune build --root . bin/` gives `e2d7c833` (main's dev build: no solver code
+changes on the branch), `dune runtest --root . --force` 5 590 ok, 0 FAIL, peak RSS 170 MB,
+`scripts/run_model_tests.sh` 271 models passed (264 + the seven of D-0255), `mznlib/test/check_mznlib.sh`
+(MiniZinc 2.10.1) 80 ok. On `6944d6e` (the same solver and test models; the later commits change mznlib
+comments and docs only): `scripts/diff_lane.sh --tier all -j 8` 347 of 347 runs equal the reference,
+`--debug` 333 of 333, `scripts/scaling_lane.sh -j 8` ok (every line within its threshold), `scripts/check_determinism.sh` 271 models identical across two runs. The diff lane's corpus is
+pre-flattened FlatZinc, so no mznlib change can reach it.
