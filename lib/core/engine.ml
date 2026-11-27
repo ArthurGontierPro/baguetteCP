@@ -293,6 +293,14 @@ type t = {
           int array since M20-pernode-T4 (D-0243): it was an [int list], newest first,
           and the walk over it was most of [watchers_of_new_entries]; walking the array
           from its last cell down visits the same ids in the same order. *)
+  mutable attr_ok : int array;
+      (** M20-pernode-T4 (D-0243): variable int -> an id [check_attribution] has found
+          in [scopes] for that variable, or [-1]: a memo of a POSITIVE answer of
+          [in_scope], so a run that prunes the same variables as the last check of the
+          same instance skips the binary search. Exact because a scope never changes
+          while its id is live; [purge], the one place that empties a scope, resets the
+          memo of every variable of the scopes it empties. Sized with [wake_static]; a
+          variable past its end is checked without the memo. *)
   mutable moved : Bytes.t;
       (** M11-complexity-T3 (D-0142, E1): variable int -> the bound moves (bit 1 lower,
           bit 2 upper) of the entries [watchers_of_new_entries] has walked so far, i.e.
@@ -393,19 +401,37 @@ let scope_of (inst : Propagator.instance) =
   Array.of_list
     (List.sort_uniq Int.compare (List.map Var.to_int inst.Propagator.inst_vars))
 
+(* Binary search for [x] in the sorted [s.(lo .. hi - 1)]. Top level since D-0243: as a
+   local [go] it closed over [s] and [x], a closure allocated per [in_scope] call, i.e.
+   per new trail entry. *)
+let rec mem_sorted (s : int array) x lo hi =
+  if lo >= hi then false
+  else
+    let mid = (lo + hi) lsr 1 in
+    let y = s.(mid) in
+    if y = x then true
+    else if y < x then mem_sorted s x (mid + 1) hi
+    else mem_sorted s x lo mid
+
 let in_scope t id v =
   id >= 0
   && id < Array.length t.scopes
   &&
-  let s = t.scopes.(id) and x = Var.to_int v in
-  let rec go lo hi =
-    if lo >= hi then false
-    else
-      let mid = (lo + hi) lsr 1 in
-      let y = s.(mid) in
-      if y = x then true else if y < x then go (mid + 1) hi else go lo mid
-  in
-  go 0 (Array.length s)
+  let s = t.scopes.(id) in
+  mem_sorted s (Var.to_int v) 0 (Array.length s)
+
+(* D-0243: [in_scope] for [check_attribution], through the [attr_ok] memo of a positive
+   answer (see the field). The same answer as [in_scope]: a memo hit is a pair the binary
+   search accepted while the scope it searched is still the id's scope. *)
+let watches_memo t id v =
+  let x = Var.to_int v in
+  if x < Array.length t.attr_ok then
+    t.attr_ok.(x) = id
+    || in_scope t id v
+       &&
+       (t.attr_ok.(x) <- id;
+        true)
+  else in_scope t id v
 
 (* ------------------------------------------- M6-T22: the wake index of watched literals
 
@@ -492,6 +518,9 @@ let ensure_var t x =
     let wl = Array.make m 0 in
     Array.blit t.wake_len 0 wl 0 n;
     t.wake_len <- wl;
+    let ao = Array.make m (-1) in
+    Array.blit t.attr_ok 0 ao 0 n;
+    t.attr_ok <- ao;
     let mv = Bytes.make m '\000' in
     Bytes.blit t.moved 0 mv 0 n;
     t.moved <- mv;
@@ -797,6 +826,7 @@ let create ?(trigger = default_trigger) (instances : Propagator.instance list) :
       scopes;
       wake_static = [||];
       wake_len = [||];
+      attr_ok = [||];
       moved = Bytes.empty;
       dyn_ids = [||];
       dyn_len = [||];
@@ -958,6 +988,7 @@ let purge t =
   let keep id = not t.removed.(id) in
   Hashtbl.iter
     (fun x () ->
+      if x < Array.length t.attr_ok then t.attr_ok.(x) <- -1;
       if x < Array.length t.wake_static then (
         (* In place, keeping the order, as [List.filter] did. *)
         let a = t.wake_static.(x)
@@ -1411,7 +1442,6 @@ let check_attribution (t : t) (inst : Propagator.instance) store ~since
      a learned database that list is every learned clause naming the variable, newest
      first, with the model propagators that actually prune at its far end: on QR48 that
      walk, under OCaml's polymorphic [compare], was 15 % of the solve's cycles. *)
-  let watches v = in_scope t id v in
   for i = since to Store.trail_length store - 1 do
     let e : Store.entry = Store.trail_entry store i in
     if e.Store.prop <> id then
@@ -1428,7 +1458,7 @@ let check_attribution (t : t) (inst : Propagator.instance) store ~since
               id inst.Propagator.inst_name
               (Store.name store e.Store.var)
               e.Store.prop))
-    else if not (watches e.Store.var) then
+    else if not (watches_memo t id e.Store.var) then
       raise
         (Mis_attributed
            (Printf.sprintf
