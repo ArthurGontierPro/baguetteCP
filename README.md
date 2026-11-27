@@ -185,6 +185,10 @@ asserts a literal and propagates there, and no branch nogood is written. It is o
 (D-0219). With it, `--chrono T` goes back a single level whenever the jump would skip more
 than T levels (chronological backtracking, D-0224).
 
+`BAGUETTE_PROBE=root` probes at the root before the first decision: each bound literal of a
+small domain is tried on its own, and one that fails is asserted negated at level 0, with
+the failed node's nogood as its proof (failed-literal probing, D-0250). It is off by default.
+
 ## Documentation
 
 | | |

@@ -286,9 +286,11 @@ lib/core/       Baguette_core
                             read when its level is undone (M10-T2, D-0137)
   activity.ml               the activity heuristic: VSIDS score per variable,
                             learned-clause bumps, EVSIDS decay (M10-T3, D-0137)
-  probe.ml                  PROBING at the root: a bound literal that fails is a failed
-                            one-decision node, its negation asserted at level 0 on its
-                            unit clause; BAGUETTE_PROBE=off|root (M19-config-T8, D-0250)
+  probe.ml                  PROBING at the root (failed literals): each bound literal of a
+                            small domain pushed on level 1 and propagated; a failure is a
+                            failed one-decision node, its nogood filed at level 0 and its
+                            negation asserted there. BAGUETTE_PROBE=off|root, default off,
+                            budget in propagator runs (M19-config-T8, D-0250)
   checked.ml                checked integer arithmetic + the overflow cap (M1-T23)
   interval.ml               interval arithmetic: mul, square, div of bounds (M4-T4a)
   debug.ml                  BAGUETTE_DEBUG-gated invariant checks
