@@ -26,13 +26,13 @@
 
    The candidates are, in store order, every unfixed variable whose domain spans at most
    [width_cap] values, and for each its two BOUND literals: [x <= lo] (x = lo) and
-   [x >= hi] (x = hi). For a Boolean those are its two polarities. A bound that fails moves,
-   so the next pass probes the new bound (bounds shaving). Passes repeat while the last
-   one failed a literal, until the BUDGET runs out: a number of propagator runs
+   [x >= hi] (x = hi). For a Boolean those are its two polarities. A bound that fails
+   moves, so the next pass probes the new bound (bounds shaving). Passes repeat while the
+   last one failed a literal, until the BUDGET runs out: a number of propagator runs
    ([Engine.runs], counted over the whole probing including the root propagations it
    triggers), which is deterministic, or a CPU cap, which is not and is there for the
-   propagators whose one run is expensive (see [default_budget]). The search's stop (the time limit) is polled between two probes and inside each
-   propagation, as at a node.
+   propagators whose one run is expensive (see [default_budget]). The search's stop (the
+   time limit) is polled between two probes and inside each propagation, as at a node.
 
    ---------------------------------------------------------------------------
    Why it is sound, and why the proof needs no new rule
@@ -40,8 +40,8 @@
 
    A probe is EXACTLY a one-decision search node: [Search.branch_split]'s first child at
    the root, with the same push ([Explanation.decision], [Reason.none]) and the same
-   propagation. When it fails, D-0018's argument gives its nogood [~l] as `rup`: negate it,
-   that asserts [l], and the trace lines just written (each "facts -> claim", decision
+   propagation. When it fails, D-0018's argument gives its nogood [~l] as `rup`: negate
+   it, that asserts [l], and the trace lines just written (each "facts -> claim", decision
    free) unit propagate the level's prunings in order up to the conflict's line, which is
    falsified. The only difference from the node is WHERE the clause is filed: at level 0
    rather than at level 1, because no decision of level 0 is in it, so it is globally
@@ -50,10 +50,11 @@
    The negation [~l] is then a level-0 PRUNING whose explanation is that clause and whose
    reason has no facts -- the shape of D-0077's assignment clause at p = 0
    ([Search.branch_assign], [Reason.none] because no decision is active). [Trace] writes
-   its line [~l] (or, past a hole, the settled bound with the holes' facts, I-X9) as it
-   writes any level-0 line, permanently, and the clause stays live until the end of the
-   search: the search records its id with the assignment clauses
-   ([stats.assign_clauses_rev]) and [retire_assign_clauses] deletes it with them (I-X2).
+   its line [~l] (or, past a hole, the settled bound with the holes' facts: I-X9, a line
+   justifies the bound as recorded on the trail) as it writes any level-0 line,
+   permanently, and the clause stays live until the end of the search: the search records
+   its id with the assignment clauses ([stats.assign_clauses_rev]) and
+   [retire_assign_clauses] deletes it with them (I-X2: every id is deleted exactly once).
 
    No [Explanation.t] constructor and no proof rule is added. What is added is ORDER: the
    lines of a failed probe are the lines of the node it is, written before the search
@@ -120,12 +121,13 @@ let set_mode m = current := Some m
 
 (* The budget, in propagator runs ([Engine.runs]), the CPU cap and the width cap. Defaults
    chosen on the census of D-0250 section 3: run to completion, the pass costs a median of
-   3.8 M runs and 0.7 s, but a run is not a unit of time (2011_pentominoes_04 spends 0.19 s
-   per probe at 23 runs each, black-hole 14 half a second), so the runs budget, which is
+   3.8 M runs and 0.7 s, but a run is not a unit of time (2011_pentominoes_04 spends 0.19
+   s per probe at 23 runs each, black-hole 14 half a second), so the runs budget, which is
    deterministic, is backed by a CPU cap, which is not. The cap fires only where a pass is
-   heavy, and there it makes the probe set depend on the machine's speed; under the default
-   [off] nothing is read. BAGUETTE_PROBE_BUDGET (runs), BAGUETTE_PROBE_CPU (seconds, 0 for
-   none) and BAGUETTE_PROBE_WIDTH override them for measurement; a malformed value FAILS. *)
+   heavy, and there it makes the probe set depend on the machine's speed; under the
+   default [off] nothing is read. BAGUETTE_PROBE_BUDGET (runs), BAGUETTE_PROBE_CPU
+   (seconds, 0 for none) and BAGUETTE_PROBE_WIDTH override them for measurement; a
+   malformed value FAILS. *)
 let default_budget = 5_000_000
 let default_cpu_cap = 10
 let default_width_cap = 64
