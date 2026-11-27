@@ -1416,6 +1416,58 @@ let test_var_named_index () =
     [ 0; 3; 3; 1; 0; 5; 2; 4; 4; 3 ];
   check "var_named memo: every answer is the scan's, hits and misses alike" !ok
 
+(* M20-pernode-T4 (D-0245): the memo is DIRECT-MAPPED, [Store.memo_size] cells chosen by
+   [Store.memo_slot], so names that share a cell evict each other. Over 3 000 names of
+   the shapes Compile produces (long [X_INTRODUCED_k_], short [xk], the empty name) and
+   ten thousand asks in a fixed pseudo-random order -- the store's own strings, equal
+   copies of them and absent names -- every answer is the scan's, and the scene is not
+   vacuous: some two names share a cell. Break, measured: a hit test by slot alone (no
+   [names.(i) == name]) fails the first check. *)
+let test_var_named_direct_mapped_memo () =
+  let n = 3000 in
+  let names =
+    Array.init n (fun i ->
+        if i = 0 then ""
+        else if i mod 3 = 0 then Printf.sprintf "x%d" i
+        else Printf.sprintf "X_INTRODUCED_%d_" i)
+  in
+  let s = Store.create ~names ~domains:(Array.map (fun _ -> Domain.make 0 1) names) in
+  let seed = ref 12345 in
+  let next () =
+    seed := ((!seed * 1103515245) + 12345) land 0x3FFF_FFFF;
+    !seed
+  in
+  let ok = ref true in
+  for _ = 1 to 10_000 do
+    let i = next () mod n in
+    let nm =
+      match next () mod 4 with
+      | 0 -> Bytes.to_string (Bytes.of_string names.(i))
+      | 1 -> names.(i) ^ "_absent"
+      | _ -> Store.name s (Var.of_int i)
+    in
+    if
+      Store.var_index_named s nm
+      <> match Store.var_named_scan s nm with Some v -> Var.to_int v | None -> -1
+    then ok := false
+  done;
+  check "var_named memo (D-0245): every answer is the scan's, over 10 000 asks" !ok;
+  let seen = Hashtbl.create n in
+  let shared = ref false in
+  Array.iter
+    (fun nm ->
+      let sl = Store.memo_slot nm in
+      if Hashtbl.mem seen sl then shared := true else Hashtbl.add seen sl ())
+    names;
+  check "var_named memo (D-0245): some two names share a cell, so eviction is exercised"
+    !shared;
+  check "var_named memo (D-0245): every slot is a cell of the memo"
+    (Array.for_all
+       (fun nm ->
+         let sl = Store.memo_slot nm in
+         sl >= 0 && sl < Store.memo_size)
+       names)
+
 (* M6-T14 (D-0088): [Store.bound_support] (binary search over a variable's bound
    history) against [Analysis.scan_support] (the downward trail walk it replaced), for
    EVERY (representative, direction, value, before) over a hand-built trail on which
@@ -1961,6 +2013,7 @@ let () =
       test_view_trail ();
       test_view_constants ();
       test_var_named_index ();
+      test_var_named_direct_mapped_memo ();
       test_bound_history ();
       test_bound_history_long ();
       test_low_water ();

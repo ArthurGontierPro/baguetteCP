@@ -196,9 +196,9 @@ type node = {
   root : bool;
   slot : int;
       (* [2 * v + 1] for a lower bound and [2 * v] for an upper one, [v] the variable the
-         store names [fact]'s owner ([Store.var_named], read once by [locate]), or -1
-         when the store knows no such name. The KEY [Frontier] merges on: two facts share
-         a slot iff they share a name and a direction (D-0191). *)
+         store names [fact]'s owner ([Store.var_index_named], read once by [locate]), or
+         -1 when the store knows no such name. The KEY [Frontier] merges on: two facts
+         share a slot iff they share a name and a direction (D-0191). *)
 }
 
 (* One hole folded into a bound move, per the rule in the header. [fold_into] is the
@@ -416,22 +416,21 @@ let locate store ~before fact =
   let name = Reason.fact_owner fact in
   let is_lower = Reason.fact_is_lower fact in
   let value = fact_value fact in
-  match Store.var_named store name with
-  | None -> (Store.no_support, false, -1)
-  | Some v ->
-      let slot = (2 * Var.to_int v) + if is_lower then 1 else 0 in
-      let fast =
-        if is_lower then Store.lo_support store v else Store.hi_support store v
-      in
-      if
-        fast <> Store.no_support && fast < before
-        && establishes (Store.trail_entry store fast) ~is_lower ~value
-      then (fast, true, slot)
-      else
-        let at = Store.bound_support store ~before v ~is_lower ~value in
-        Debug.check "M6-T14: the bound history agrees with the trail scan" (fun () ->
-            at = scan_support store ~before ~v ~is_lower ~value);
-        (at, false, slot)
+  let x = Store.var_index_named store name in
+  if x < 0 then (Store.no_support, false, -1)
+  else
+    let v = Var.of_int x in
+    let slot = (2 * x) + if is_lower then 1 else 0 in
+    let fast = if is_lower then Store.lo_support store v else Store.hi_support store v in
+    if
+      fast <> Store.no_support && fast < before
+      && establishes (Store.trail_entry store fast) ~is_lower ~value
+    then (fast, true, slot)
+    else
+      let at = Store.bound_support store ~before v ~is_lower ~value in
+      Debug.check "M6-T14: the bound history agrees with the trail scan" (fun () ->
+          at = scan_support store ~before ~v ~is_lower ~value);
+      (at, false, slot)
 
 (* [locate] without the slot. *)
 let support_of store ~before fact =
@@ -703,8 +702,14 @@ exception Bad of error
 
    [watches] is [List.exists (Var.equal var)] without the partial application, which
    allocated a closure per check (D-0236: -0.3 % per node on elitserien handball12, -0.6 %
-   on costas13). The check is still O(arity); an O(1) "does instance i watch v" belongs
-   to [Engine] (D-0191's request). *)
+   on costas13). The check is still O(arity). M20-pernode-T4 (D-0245) measured the O(log
+   arity) answer in its place, [Engine.in_scope]'s binary search over the instance's
+   sorted scope passed down from [Search] (with and without D-0243's memo of positive
+   answers): -0.2 to +0.15 % instructions per node on elitserien handball12, tppv circ14,
+   costas13 and qr2, -0.5 to +0.6 % of a whole run on the diff lane's 21 fast instances,
+   cycles within the noise. The check reads one short list that the entry's instance
+   owns, a few cells long on these instances, so what it costs is the call and one
+   cache line, which the binary search pays as well. The list stayed. *)
 let rec watches var = function
   | [] -> false
   | v :: vs -> Var.equal v var || watches var vs
