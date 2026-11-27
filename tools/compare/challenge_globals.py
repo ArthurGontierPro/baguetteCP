@@ -26,7 +26,9 @@ Outcome columns are baguette's harness statuses. REFUSED is the FRONT END refusi
 model before any search (exit 2 or 3: width wall, heap budget, an unsupported shape); it is
 not a proof rejected by the checker, which would be `check_verdict` REJECTED and is counted
 separately. `complete%` is OPT+UNSAT over the instances actually attempted (not REFUSED,
-not FLATTEN-FAIL).
+not FLATTEN-FAIL). A SAT answer is complete when the model has no objective (the `kind` column of
+the .lst is SAT) and goes to its own column `SAT-satisfied`, counted in `complete%` (M18-coverage-T12,
+D-0232 section 1); on a MIN or MAX model it stays an incumbent.
 
 Python 3.8+, standard library only.
 """
@@ -110,7 +112,7 @@ def census(archive, lists, year):
             found.add("VAR-SET")
         if FLOATVAR.search(txt):
             found.add("VAR-FLOAT")
-        uses[r[0]] = (found, r[4])
+        uses[r[0]] = (found, r[4], r[5] if len(r) > 5 else "")
     return uses
 
 
@@ -163,8 +165,10 @@ def main(argv):
     years = collections.defaultdict(collections.Counter)
     agg = collections.defaultdict(collections.Counter)
     for y, (uses, outs) in per_year.items():
-        for iid, (gs, prob) in uses.items():
+        for iid, (gs, prob, kind) in uses.items():
             st = outs.get(iid, "-")
+            if st == "SAT" and kind == "SAT":
+                st = "SAT-satisfied"
             keys = list(gs) + ([] if gs - NATIVE else ["(native globals only, or none)"])
             for g in keys:
                 n[g] += 1
@@ -175,7 +179,7 @@ def main(argv):
     print("# %d instances in %d editions; natives: %s" % (total, len(per_year), " ".join(sorted(NATIVE))))
     hdr = ["global", "instances", "problems", "native"]
     if runs:
-        hdr += ["REFUSED", "OPT+UNSAT", "incumbent", "TIMEOUT-empty", "other", "complete%"]
+        hdr += ["REFUSED", "OPT+UNSAT", "SAT-satisfied", "incumbent", "TIMEOUT-empty", "other", "complete%"]
     hdr += ["per-year"]
     print("\t".join(hdr))
     for g, k in n.most_common():
@@ -184,10 +188,11 @@ def main(argv):
         c = agg[g]
         line = [g, str(k), str(len(probs[g])), "yes" if g in NATIVE else ""]
         if runs:
-            ref, comp = c["REFUSED"], c["OPT"] + c["UNSAT"]
+            ref, sat = c["REFUSED"], c["SAT-satisfied"]
+            comp = c["OPT"] + c["UNSAT"] + sat
             inc, te = c["TIMEOUT+inc"] + c["SAT"], c["TIMEOUT"]
             att = k - ref - c["FLATTEN-FAIL"]
-            line += [str(ref), str(comp), str(inc), str(te), str(k - ref - comp - inc - te),
+            line += [str(ref), str(comp - sat), str(sat), str(inc), str(te), str(k - ref - comp - inc - te),
                      "%.0f" % (100.0 * comp / att) if att else "-"]
         line.append(" ".join("%d:%d" % (y, years[g][y]) for y in sorted(years[g])))
         print("\t".join(line))
