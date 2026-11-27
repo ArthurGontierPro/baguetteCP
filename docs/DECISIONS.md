@@ -31847,7 +31847,7 @@ because the root's trace can make the database UP-contradictory before the solve
   fix both terms), `root_bits_ne_const_unsat` (comparisons with constants).
 - Differential fuzz, every model under `--proof` in both encodings with each proof checked by VeriPB,
   `--no-proof` compared byte for byte with the proved run, verdicts and optima compared across the
-  encodings. Harness `/scratch/arthur/rootbug2/fuzz/run.py`. A generator aimed at root conflicts over
+  encodings. Harness and results in `/cluster/arthur/baguette-results/rootbug2/`. A generator aimed at root conflicts over
   mixed order and bits variables (`gen2.py`), 20 000 models: main dies on 24 (all `ensure_atom` after
   the root contradiction), the branch on 0, and those 24 are UNSAT. agent-rootbug's `gen.py`, 5 000
   models: 0 issues on main and on the branch. `scripts/fuzz_lane.sh -n 300 --seed 7` (Gecode as the

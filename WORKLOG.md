@@ -19,7 +19,6 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M22-review-bugs (D-0237, ensure_atom after the root contradiction) | `lib/core/search.ml` (root-conflict path), `lib/core/justify.ml`, `lib/proof/encoding.ml` (atom introduction only), `test/models/root_bits_*`, `test/expected/root_bits_*` | agent-rootbug (`wave83-rootbug`) | 2026-11-26 |
 | M18-coverage-T5 (D-0239): lex_*, value_precede(_chain), seq_precede_chain, increasing/decreasing | new `lib/core/prop/` modules if needed, `lib/core/dune`, `mznlib/` files for these globals, their families in `lib/flatzinc/builder.ml` and `compile.ml`, tests and test models, the two module maps if a module is added | agent-lex (wave85-lex, /scratch/arthur/wt-lex) | 2026-11-26 |
 
 ## Cross-session requests
@@ -476,6 +475,7 @@ section 1. Shares are inclusive, of the whole run.
 
 | Task | Session | Date | Summary |
 |---|---|---|---|
+| M22-review-bugs, ensure_atom after the root contradiction (D-0237) | agent-rootbug, then agent-rootbug2 (`wave83-rootbug`, not merged) | 2026-11-27 | **D-0237 [AUTONOME].** A factless root conflict's derivation (an all-fixed disequality, ne.ml records no facts at the root) cites atoms nothing minted, and `close_root_conflict` closed the atoms before it, so the default run died in `Encoding.ensure_atom`. The atoms now close after that derivation, before the empty clause. Sound over any database; measured on 16 models main died on, the database is already UP-contradictory before the derivation in 14 and not in 2, and every minted line was an order bridge. Four `root_bits_*` models. Fuzz: 20 000 targeted models, main 24 crashes, branch 0; 5 000 gen.py and 1 800 fuzz_lane models, 0. Binary `db155bd7`, the 242 existing models byte-identical in both encodings, lanes 347 of 347 and 333 of 333, scaling 5 of 5. |
 | M18-coverage-ne, int_lin_ne's conflicts carry their facts (D-0238) | agent-ne (`wave84-ne`, not merged) | 2026-11-26 | **D-0238 [AUTONOME].** Survey of 507 Challenge instances: int_lin_ne is the one family whose conflicts were factless (41 671, 18 instances, 7 families; learned_pb 9). Under a decision its all-fixed conflict now carries every term's fixing facts, so the trace writes the nogood and 1UIP learns; root unchanged. 300 s on the 18: complete answers 4 then 7 without proof, 2 then 4 with (tc-graph-color k2_42 UNSAT in 1 035 nodes, ocr 4s-23d OPT, k5_05 OPT), none lost; x1.2 to x1.8 instructions per node on tc-graph-color, x0.54 on gcc-benchmark l42_3. Lanes: 14 of 347 and 14 of 333 differ, tc-graph-color k5_05 only, not re-recorded. |
 | M20-pernode-T4, the learning path's name lookups (D-0236) | agent-names (`wave82-names`, not merged) | 2026-11-26 | **D-0236 [AUTONOME].** One-entry memos in `Store.var_named` and `Encoding.find` (hit when the name is physically the last answer's), Justify's interned name carries a literal's bits flag, the decision closure's cells a dense scratch by slot, `String.hash` for every name table (`lib/proof/name_tbl.ml`), `check_attribution` without a closure. Same trees, byte-identical artefacts. Per node without / with proof: handball12 -8.1 / -9.6 %, tppv circ14 -2.7 / -6.0 %, costas13 -3.3 / -4.0 %, qr2 -1.3 / -1.6 %; cycles move less (handball12 to OPT: instructions -7.3 %, cycles -1.8 %) |
 | M18-coverage-T11, gcc's conflicts carry their facts (D-0234) | agent-gcc (`wave80-gcc`, not merged) | 2026-11-26 | **D-0234 [AUTONOME].** Under a decision every gcc push that would empty its target is the conflict, with its facts plus the crossed bound, derived ahead; the reasons name only the facts their derivation leaves. Every gcc conflict learns now; rws e-80-s-1 SAT in 1 s (was 71 s); no new answer at 300 s on 34 gcc users, instructions per node x1.1 to x3.3. |
@@ -708,6 +708,10 @@ section 1. Shares are inclusive, of the whole run.
 | M18-coverage-T7 (the cheap globals) | agent-cheap (`wave79-cheap`) | 2026-11-26 | **D-0233 [AUTONOME].** mznlib only: `fzn_alldifferent_except` as at most one indicator per value (1 -> 2 complete of 37, gcc's route measured worse), `fzn_nvalue` without the bool2int copies, `fzn_all_equal_int_reif` as a chain (outcomes unchanged). Seven test models, SPEC 2.1 row |
 
 ## Handoff notes
+
+### 2026-11-27 (agent-rootbug2, `wave83-rootbug`, D-0237): the ensure_atom crash at the root is fixed, not merged
+
+`Search.close_root_conflict` calls `Encoding.close_atoms` after a factless conflict's derivation instead of before it (agent-rootbug's `f7140c7`, kept, its comment rewritten with the measurement). This answers agent-cheap's cross-session request of 2026-11-26. Four models `test/models/root_bits_*_unsat.fzn` (246 in all); the 242 others are byte-identical to main `a67493a` in both encodings, so the lanes do not move and nothing needs re-recording. Open: D-0130 section 5.4's `conclusion_pending` debug assertion in the writer is not implemented (grep finds nothing), and the guard never promised a non-contradictory database (section 3 of D-0237). The harness, the fuzz results and the 16 measured cases are in `/cluster/arthur/baguette-results/rootbug2/` (run.py, gen2.py, up/probe.sh).
 
 ### 2026-11-26 (agent-ne, `wave84-ne`, D-0238): int_lin_ne's conflicts carry their facts, not merged
 
