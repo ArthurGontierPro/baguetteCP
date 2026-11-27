@@ -1257,7 +1257,7 @@ let wakes_on_kind trig ~bound = if bound then trig.on_bound else trig.on_holes
 (* D-0243: [wakes_on_kind (trigger_of t id) ~bound], off [trig_bits]: one byte read
    where it was a call and a record read. Same answer, [3] being [wake_on_any]'s byte
    for an id the table does not cover, as [trigger_of] answers [wake_on_any]. *)
-let wakes_id t id ~bound =
+let[@inline] wakes_id t id ~bound =
   ((if id >= 0 && id < Bytes.length t.trig_bits then
       Char.code (Bytes.unsafe_get t.trig_bits id)
     else 3)
