@@ -32994,3 +32994,57 @@ The rule, fixed before the numbers exist. A switch becomes the default if and on
 pairwise share against `off` is at least 0.47 (D-0205's 0.03 noise band). Each instance whose answer is lost is listed. A
 default change is its own commit, followed by a lane re-record in its own commit and a gate. If neither passes, both stay
 `off` and the question is closed until one of the follow-ups of D-0241 section 7 or D-0246 section 6 changes the code.
+
+## D-0253  [AUTONOME] M22-review-T4, the documentation pass: references in comments stand alone, docs/REFERENCES.md indexes them, and comments state the rule before the history
+
+**Status**: DONE on `wave98-docs` (agent-docs, 2026-11-27), comments and documents only. Taken in
+mode autonome on the user's request of 2026-11-27 ("bring every document, README and comment up
+to date, and rewrite the comments that teach poorly or that cite a reference without saying what
+it refers to").
+
+### 1. What was decided
+
+| Item | Options | Choice | Why | Revert |
+|---|---|---|---|---|
+| A reference in a comment (`D-0123`, `M6-T22`, `I-P3`) | delete references; keep them bare; keep them with a sentence that stands alone | KEEP, and at its first mention in each file the sentence says what the record established | the reference is how history is found; the sentence is what a reader needs without opening a 2.4 MB file | the pass's commits on `wave98-docs`, each `M22-review-T4:` |
+| An index of the references | none; a hand-written glossary of records; a generated table | `docs/REFERENCES.md`, generated once (title of each record, roadmap row of each task, first line of each invariant, shortened), a snapshot of 2026-11-27 | 392 distinct references are cited in `lib/` and `bin/`; a one-line meaning per id is enough to read a comment, and the record stays the authority | delete the file and its two links (README, CLAUDE.md) |
+| Order of a comment | as written (often history first) | rule or invariant, why it is sound, one example, history in one line with its reference | the user's instruction; most long comments put their point last | per file, the commit |
+| Section titles | by task (`M11-complexity-T3 (D-0142, E1): ...`) | by concept, the reference after | a title is read by someone who does not know the task numbers | per file |
+
+No code changed: every edit is inside a comment, a Markdown document or a script's header
+comment. The gate below shows the same binary behaviour (same model answers, same diff-lane
+artefacts).
+
+### 2. Findings recorded rather than fixed
+
+- `scripts/shrink.sh` relies on a `--disable-propagator` flag that `bin/main.ml` never
+  implemented; the solver refuses it (exit 2), so the script cannot localise a rejected step.
+  Its header says so now. Fixing it is code (a flag, or a script that uses another switch).
+- `scripts/bootstrap.sh` builds the opam switch with `-j "$(nproc)"`, 192 on fataepyc-06, where
+  the node rule is at most 16 parallel jobs. A one-time setup, but it is code: not changed.
+
+- `docs/PROOF-FORMAT.md` section 3, "The consistency clauses are in the `.opb`" (normative),
+  says no derivation cites a ladder id and `Encoding.consistency_id` has no caller in `lib/`.
+  `lib/core/ladder.ml`, `cumulative.ml` and `search.ml` (under `pb_ladder`) call it now. Left
+  for the user: the sentence is normative and its consequence (the ladder is load-bearing for
+  RUP) still holds.
+- Dead functions named in their comments: `Encoding.is_direct_row` (its caller went with
+  D-0131), `Justify.lit_hash`, `Writer.solx` and `Writer.obju` have no caller in `lib/` or `bin/`.
+
+### 3. What is done and what is left
+
+Done: README.md, CLAUDE.md (sizes, map, switches, counts), ARCHITECTURE.md sections 1, 3 and
+4, GLOSSARY.md (23 terms), INVARIANTS.md I-X10, SPEC.md section 6 (non-normative),
+PROOF-FORMAT.md section 4 (three missing rows), scripts/README.md, bench/README.md, twelve
+script headers, every module header of `lib/` checked, and the comments of propagator.ml,
+linear.ml, explanation.ml, reason.ml, store.ml, domain.ml, engine.ml, justify.ml,
+encoding.ml, writer.ml and every propagator but gcc.ml rewritten (the bodies of maxmin,
+arith, cumulative, regular, table, circuit, inverse and member had their references made
+self-standing, not a full rewrite).
+
+Left for a second pass: `lib/core/prop/gcc.ml`, `lib/flatzinc/compile.ml`,
+`lib/flatzinc/builder.ml`, `mznlib/`, `lib/core/search.ml`, `bin/main.ml` (held by other
+agents during this pass); the learning modules (`analysis.ml`, `learn.ml`, `learned.ml`,
+`pb_analysis.ml`, `reduce.ml`, `retention.ml` beyond its default, `ladder.ml`, `trace.ml`),
+`view.ml`, `lib/flatzinc/` and `lib/scp/` beyond their headers, and `tools/` beyond the check
+for dead paths.
