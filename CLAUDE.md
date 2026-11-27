@@ -381,6 +381,9 @@ lib/proof/      Baguette_proof
                             String.hash (Hashtbl.hash's value without its dispatch), for
                             Encoding, Justify and Store's name index (M20-pernode-T4, D-0236)
   checker.ml                resolves which veripb to use; mirrors scripts/checker.sh
+  deadline.ml               --time-limit BEFORE the search: the parse, compile, .opb and
+                            start_proof tick a weight, one clock read per 2^20 units, at the
+                            limit plus 1 s; the search polls its own stop (M22-review-bugs, D-0263)
 
 test/unit/                  25 binaries: test_core test_domain test_engine test_prop
                             test_proof test_justify test_trace test_flatzinc
