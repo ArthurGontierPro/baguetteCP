@@ -19,7 +19,6 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M18-coverage-T12 and the exit 6 bucket (M22-review-T5) | `tools/compare/challenge_globals.py`, `scripts/corpus_run.sh` | agent-census, wave95-census | 2026-11-27 |
 
 ## Cross-session requests
 
@@ -630,6 +629,7 @@ section 1. Shares are inclusive, of the whole run.
 | M10-search-strategy-T5: codes set under `-f` and `tiered` | agent-m10t5b (`wave57-m10t5b`) | 2026-11-22 | **D-0202.** Release `f244c35a`, 60 runs, 30 proofs VERIFIED, none rejected. `-f` solves o7k2 def, 2x slower on QR; `tiered` a wash; both together lose QR72. Proposal only, no default change. |
 | M6-T24, the harness (proofs of stopped runs checked, three kinds of answer; on `wave73-interrupt`) | interrupt-session (`wave73-interrupt`), merged by the orchestrator | 2026-11-26 | **D-0225.** The session ended before merging; branch recovered and merged, lane re-recorded after it. |
 | M6-T24 (an interrupted run ends its proof: signals, heap budget, time limit; D-0225) | interrupt-session (`wave73-interrupt`), merged by the orchestrator | 2026-11-26 | **D-0225.** The session ended before merging; branch recovered and merged, lane re-recorded after it. |
+| M18-coverage-T12, M22-review-T5 (exit 6 bucket) | challenge_globals.py, corpus_run.sh | agent-census, wave95-census | 2026-11-27, branch wave95-census |
 
 | M2-L3 | agent-learn3 | 2026-09-18 | 1UIP clause learning over order literals, proof-only (**D-0044 fork (ii)**), with conflict-directed backjumping over the **decision closure** and its `rup` derivation at level 0. **I-S4's cross-level debt is discharged** and the check is wider than the invariant's wording. Backjump measured: 31 -> 9 nodes on `backjump_unsat.fzn`. **M1-T66 stays OPEN**: with `Search.bridges` disabled, 35/35 models still pass and no checker rejects — a learned clause citing across levels did NOT make the bridge load-bearing. 1833 unit checks, 267 matrix, 44 mutation, 35/35 models, determinism 35/35 byte-identical |
 | M2-T14 | agent-fmt2 | 2026-09-18 | Format-2.0 vacuity sweep. Three more instances of the M2-L0 defect found and fixed (test_proof 3.0-only lanes resolving 2.2.2 via `$VERIPB`; D-0030's certification in test_mutation writing a 3.0 proof against an env-format `.opb`; 20 blanked-trace controls asserting on exit status alone). Test (c) now checks the claim index by content, so it runs under both formats. |
@@ -6598,3 +6598,7 @@ GCS "rejections" were the June checker's, 10 of 16 re-verified before access dro
 5. Coverage next by census: `table` (37 models), `diffn` (29), `circuit` (28), `regular` (26);
    cumulative's variable-duration/resource forms (22 models) stay with std.
 6. The width wall (69 instances) — a different encoding of wide domains, a decision not taken.
+
+### 2026-11-27 (agent-census, wave95-census): M18-coverage-T12 and the exit 6 bucket
+- `challenge_globals.py` reads `kind` from the .lst, puts SAT on a SAT model in column `SAT-satisfied` and counts it in `complete%` (m10t5 arm A: regular 1 % to 28 %, no-global 20 % to 28 %, count 18 % to 25 %). No committed output file.
+- `corpus_run.sh` files exit 6 as `PROOF-WRITE-ERR` (header, case, counted by the generic report); tested with a wrapper sending the proof to a missing directory. No other consumer lists the buckets. No D-record taken.
