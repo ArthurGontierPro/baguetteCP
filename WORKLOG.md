@@ -19,7 +19,7 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M22-review-T3, M22-review-T5 | `lib/proof/encoding.ml` (declare_int_gen only), `lib/core/domain.ml` (of_list, change_of), `lib/proof/writer.ml` and `bin/main.ml` (Sys_error handling), `test/unit/test_flatzinc.ml`, `test/unit/test_proof.ml`, `test/unit/test_domain.ml`, `test/unit/test_compile.ml`; one-line renames `Domain.of_list` -> `Domain_helper.of_list` in `test/unit/test_core.ml` and `test/unit/test_prop.ml`, new `test/unit/domain_helper.ml`; comments only in `lib/core/{trace,store}.ml`, `lib/core/prop/linear.ml`, `docs/INVARIANTS.md` I-X10 | agent-latent (wave94-latent, D-0248) | 2026-11-27 |
+| M22-review-T3, M22-review-T5 | `lib/proof/encoding.ml` (declare_int_gen only), `lib/core/domain.ml` (of_list, change_of), `lib/proof/writer.ml` and `bin/main.ml` (Sys_error handling), `test/unit/test_flatzinc.ml`, `test/unit/test_proof.ml`, `test/unit/test_domain.ml`, `test/unit/test_compile.ml`; one-line renames `Domain.of_list` -> `Domain_helper.of_list` in `test/unit/test_core.ml` and `test/unit/test_prop.ml`, new `test/unit/domain_helper.ml`; comments only in `lib/core/{trace,store}.ml`, `lib/core/prop/linear.ml`, `docs/INVARIANTS.md` I-X10; `test/unit/test_endtoend.ml` (one CLI test for the write failure) | agent-latent (wave94-latent, D-0248) | 2026-11-27 |
 
 ## Cross-session requests
 
