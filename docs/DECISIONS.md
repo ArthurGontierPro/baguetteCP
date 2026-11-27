@@ -33581,3 +33581,197 @@ peak RSS is 650 MB (jr63 `--cdcl`, proof).
 
 Drop `scripts/factor_lane.sh`, `bench/factor/`, the `factor` target and its README section, and the
 per-node table of `bench/series/HISTORY.md` (all on `wave102-factor`). Nothing else depends on them.
+
+## D-0257  [AUTONOME] M22-review-bugs, retention deleted a learned clause a line still to be written rested on: under `--cdcl` the reduction a clause's own `add` triggered could evict it, and the loop then asserted from the deleted clause. The clause is now HELD until its assertion's line is on the page (new invariant I-X11). The default search (`dfs`) was not exposed and its artefacts are byte-identical
+
+**Status**: DECIDED (agent-retbug, `wave103-retbug`, 2026-11-27). Taken in mode autonome: it adds an
+invariant (I-X11) and a lock to retention. It changes no default behaviour: the hold is taken only by
+the CDCL loop, which is opt-in (`--cdcl`, D-0219). Revert: the fix is commit `881263e` alone (revert
+it to return to main's behaviour); nothing else depends on it. Work files, scripts and result tables:
+`fataepyc-06:/cluster/arthur/baguette-results/retbug/`.
+
+### 1. The mechanism
+
+D-0256 section 5 found `main.exe --cdcl --proof` on costas14 refused at line 7 483 531, a `rup`, and
+that removing the `del id` line written just before it made the proof verify. Reproduced on main
+`f128d89` (dev binary `55028ee3`): the `del id` (line 7 483 526, 1 955 ids, written by a `tiered`
+reduction) ends with `@c7410916`, **the clause learned at that very conflict** (line 7 483 524). The
+refused line `@c7410917`, written right after the backjump to level 7, is that clause's assertion: its
+57 literals are the clause's 56 with the asserted bound settled past a hole.
+
+In order, at one conflict of the CDCL loop (`Search.cdcl`, `learn_at_conflict`):
+
+1. the 1UIP clause is written at level 0, registered (`Retention.add`), given a gated instance
+   (`register_learned`), and `Retention.reduce` runs;
+2. `reduce` locks the instances that stamp an entry of the trail and the last conflicting instance
+   (`locked_instances`, D-0139). The new clause's instance has not propagated yet, so **nothing locks
+   it**; `tiered` ranks it like any other local entry (new entries start "used", CaDiCaL's grace,
+   which only orders the ranking) and, when more than half the local tier is used, it falls in the
+   evicted half. The eviction turns the gate off, takes the instance out of the engine (D-0226) and
+   writes `del id ... @c7410916`;
+3. the loop backjumps to the asserting level and goes round. No instance asserts the UIP, so at the
+   fixpoint `expect` finds it unassigned and `assert_directly` pushes it **from the clause itself**,
+   with `Explanation.clause lits` and no instance on the entry;
+4. at the next conflict `Trace.emit` writes that entry's line, `rup` of the clause (the trace clause of
+   an assertion is the asserting clause), RUP only against `@c7410916`, which is gone: "not implied
+   by reverse unit propagation".
+
+Locks 1 and 2 see a consumer only through the instance on a trail entry or the last conflict. The CDCL
+loop's direct assertion is a third consumer, which no lock saw. The engine side was right: the
+instance was gone and asserted nothing. The proof side deleted a line that a line not yet written
+needed.
+
+The hypothesis of D-0256 ("a locked clause, the reason of a literal still on the trail, is evicted")
+is refuted in that form: no entry on the trail rested on the clause at the eviction. The entry was
+pushed after it.
+
+Smallest reproduction: `test/models/gccvar_hole_dec_sat.fzn` (7 variables, domains of at most 3
+values) under `--cdcl` with `BAGUETTE_RETENTION=tiered:first=1,inc=0,core=0,mid=0,mid_every=1` (a
+reduction at every learned constraint, half the local tier each time): a 332-line proof refused at line
+142 (`rup +1 ~n_ge_1 +1 ~w_ge_2 +1 w_ge_3`), the clause `@c88` having been deleted on line 131.
+
+### 2. Was the default search exposed? No
+
+**By argument.** `dfs` writes a line that rests on a learned constraint in three ways only: the trace
+line of an entry its gated instance pushed (lock 1 holds it while the entry is on the trail, and
+`Trace.emit` writes every line the trail owes before any `reduce`, which only runs inside conflict
+handling); the PB path resolving the conflicting instance's row (lock 2); a learned unit, applied as
+a global and cited without a gate, so never evicted. `dfs` never pushes an entry from a learned
+constraint other than through its own instance: `assert_directly` and `expect` exist only in `cdcl`,
+and `dfs`'s other direct pushes (the assignment hole, D-0075) rest on its own nogood, which retention
+does not own. A clause evicted before its instance propagates is simply never used.
+
+**By measurement** (base binary `55028ee3` unless said, every proof checked by VeriPB 3.0.2):
+
+Two retention settings were used: the default `tiered`, and `tiered` made to reduce at every learned
+constraint (`first=1,inc=0,core=0,mid=0,mid_every=1`, "every") or early
+(`first=50,inc=10,core=1,mid=3,mid_every=100`, "early"). "Evicting" counts runs whose `--stats`
+retention line has at least one eviction.
+
+| set | search | binary | runs | evicting | verified |
+|---|---|---|---|---|---|
+| 268 test models, "every" | `dfs` | main | 268 | 84 | **268** |
+| 268 test models, "every", BAGUETTE_DEBUG | `dfs`, `--restarts luby:1 --phase-saving`, `-f` | fix | 804 | 231 | **804**, 0 debug failures |
+| diff corpus (27 instances, its node budgets), default `tiered` and "early" | `dfs` and the lane's six other `dfs` configurations (restarts, activity, alternate, rest, bits0, nopb) | main | 378 | **263** (27 instances) | **378** |
+| fuzz lane, 600 models, seed 7, "every" | `dfs` (its six streams, `-f` among them) | main | 600 | | 0 disagreements |
+| tuning sample, 35 instances, 300 s | `dfs`, default `tiered` | fix | 35 | | 24 VERIFIED, none refused (11 not finished) |
+| 268 test models, "every" | `--cdcl`, `--chrono 0`, `--chrono 1`, `--restarts luby:1 --phase-saving`, `-f` | main | 1 340 | 294 | 1 308: **32 REJECTED** |
+| the same | the same, BAGUETTE_DEBUG | fix | 1 340 | 285 | **1 340**, 0 debug failures |
+| diff corpus, default `tiered` and "early" | `--cdcl`, `--chrono 0`, `--chrono 2`, `--restarts luby:1` | main | 216 | 165 | 160: **56 REJECTED** (12 under the default `tiered`) |
+| the same | the same | fix | 216 | 164 | **216** |
+| fuzz lane, 600 models, "every" | `BAGUETTE_CDCL=1` | main | 600 | | **11 PROOF-REJECTED** |
+| the same | the same | fix | 600 | | 0 disagreements |
+| costas14.b (D-0256's instance) | `--cdcl`, default `tiered` | main / fix | 1 / 1 | 7 396 / 7 395 evicted | REJECTED at 7 483 531 / **VERIFIED** (1.18 GB proof) |
+
+So `dfs` verified every one of its 1 450 proofs (578 of them with evictions, restarts and `-f`
+included) plus the fuzz lane's 600 models; `--cdcl` was refused on all three corpora before the fix and on none after it, `--chrono`
+and restarts included. `-f` and restarts re-enter levels in `dfs` (SPEC 3.4) without pushing anything
+from a learned constraint, so they do not change the argument.
+
+**Since when `--cdcl` was exposed.** The direct assertion is in the loop since its first commit
+(`e9108c1`, D-0219), and a gated instance is evictable since D-0139 (main `36c1312`), so `--cdcl` under
+`lbd`, `fifo` or `tiered` was exposed from D-0219 on. With the default retention since `d9e57e3`
+(D-0226 made `tiered` the default). `--cdcl` is opt-in; no default run was affected.
+
+### 3. The fix and its rule
+
+**Rule (I-X11): a learned constraint stays on the page while a line not yet written may rest on it.**
+Locks 1 and 2 are the two consumers retention can see; the third is declared by the search:
+
+- `Retention.hold t ~cid`: [reduce] never evicts a held id (it may have no gate and no citation, a
+  clause `Clause.of_lits` declined); counted in `n_locked`, and apart in `n_held_refused`;
+- `Retention.release_held t`: the holds end.
+
+The learning path holds the 1UIP clause when `cfg.cdcl`, after `add` and before its `reduce` (so the
+PB row's `reduce` of the same conflict cannot evict it either), and `cdcl`'s `conflict` releases right
+after `Trace.emit`: every line the trail owes is then on the page, the assertion's included, or the
+assertion was dropped by this conflict before the fixpoint (`expect := None`) and will never be
+written. Sound because a line already written needs nothing (VeriPB keeps a derived constraint
+whatever happens to its premises), which is the same argument lock 1 rests on.
+
+Why a hold and not a delayed `del` (the other option the request named): delaying every eviction's
+`del` to the next reduction would also have been sound, but it moves the `del` lines of every run that
+evicts, the default `dfs` included, so every diff-lane run that evicts would have changed bytes for a
+bug `dfs` does not have. The hold changes `--cdcl` runs only, keeps D-0226's engine eviction (the
+instance leaves the engine at the same reduction as before for every other constraint), and costs one
+list test per proposed victim. A MiniSat-style lock (the asserted entry carries the clause) would need
+the entry to name a constraint id, which `Store.entry` does not carry; the hold says the same thing
+from the side that knows it.
+
+With the hold, the clause's own instance stays in the engine and asserts the UIP at the next
+`propagate`, as it does whenever no eviction falls on it, so `assert_directly` is reached only for a
+clause with no instance (on gccvar_hole_dec_sat: 2 direct assertions on main, 0 with the fix).
+
+**Debug invariants (BAGUETTE_DEBUG=1).** `Retention.check_no_consumer` rechecks at every eviction,
+before its `del` is written, without the shortcuts `locked_instances` takes (its early exit, the
+`wanted` filter): no victim is held, and no evicted gated instance stamps an entry of the whole trail
+or is the last conflict. And the CDCL loop checks, at a direct assertion, that the clause it asserts
+from is still held. With the hold call removed, the second fires on gccvar_hole_dec_sat ("D-0257/I-X11:
+the CDCL loop asserts from a learned clause no longer held") at the fixpoint after the `del`, before
+any line rests on it; without BAGUETTE_DEBUG the same run is refused by the checker at line 142.
+
+### 4. What it costs
+
+**The default search: nothing.** `dfs` never holds, so its artefacts are byte-identical to main's
+(268 of 268 models, 347 of 347 diff-lane runs, 333 of 333 under `--debug`), and D-0226's measurement
+(tuning set 20 to 25 answers verified, median RSS of a timed-out run 1 215 to 724 MB) is untouched:
+the code path it measured is the one that runs. The one new cost on that path is a test `t.held <> []`
+per proposed victim, in a reduction that runs every few hundred learned constraints.
+
+**Re-measured on D-0226's tuning sample** anyway (35 instances: the 25 that D-0226's `keep_all` or
+`tiered` verified, and 10 of its time-outs; 300 s, `--max-heap-mb 8192`, `ulimit -v` 16 GiB, scope
+`MemoryMax=32G`, peak RSS by `/usr/bin/time`, every finished proof checked):
+
+| arm | finished | verified | refused | RSS MB median (finished runs) | RSS paired to its control |
+|---|---|---|---|---|---|
+| `dfs`, `keep_all` (fix binary) | 24 | 22 (2 checks timed out at 1 800 s) | 0 | 283 | |
+| `dfs`, `tiered` (fix binary) | 25 | **24** (1 check timed out) | 0 | 270 | 0.999 of `keep_all` (0.32 to 1.01) |
+| `--cdcl`, `tiered`, main | 24 | 20 | **4** | 267 | |
+| `--cdcl`, `tiered`, fix | 24 | **24** | 0 | 269 | 1.000 of main (0.99 to 1.03) |
+
+The killed runs wrote no RSS (`time -o` dies with them), so the RSS columns are over finished runs
+only, which is why their medians sit far below D-0226's time-out medians; the paired ratio is the
+comparison that means something here. `dfs`'s `tiered` still verifies more than `keep_all` (24 to
+22), D-0226's direction. Under `--cdcl` the fix turns the 4 refused proofs (2016 maximum-dag 31_02,
+2017 tc-graph-color k10_34, 2019 amaze 2012-03-19, 2025 EchoSched 12-12-0-1_7) into verified ones, at
+the same memory and the same wall time (median ratio 1.000 on the 24 finished runs). The search
+changes a little (26 of 35 runs end on the same conflict count) because a held clause stays in the
+engine one conflict longer and so asserts and propagates; `n_held_refused` counts those refusals.
+
+### 5. Tests
+
+- `test/unit/test_retention.ml`, `test_d0257_hold_mechanics`: under `lbd:0` (an empty database asked
+  at every reduction) a held clause survives two reductions, is evicted by the first after
+  `release_held`, and `hold` refuses an id the database does not hold; the page verifies.
+- `test_d0257_cdcl_assertion_survives`: gccvar_hole_dec_sat's scene through `Search.solve` with
+  `cdcl = true`, the model's annotated order and `tiered` reducing at every learned constraint; the
+  policy evicts, a hold refuses at least one eviction, the audit is clean, no id is deleted twice, and
+  VeriPB accepts the proof. **Break measured**: with the `hold` call removed the lane goes red, and
+  VeriPB refuses the proof at line 142, "not implied by reverse unit propagation".
+- No new model in `test/models/`: the model tests run the default search, which is not exposed, and a
+  model cannot carry `--cdcl` or a retention setting. The scene is the existing
+  `gccvar_hole_dec_sat.fzn`, verbatim in the test.
+
+### 6. Lanes
+
+Final binary: dev `e75fab1a` (commit `881263e`), release `ff0bf742`. The figures of section 2 for the
+fix were taken with `555506d6` and `bin-fix2` = `e75fab1a`; `555506d6` differs from it only by
+ocamlformat's layout and comments.
+
+| check | result |
+|---|---|
+| `scripts/check_fmt.sh`, `check_test_widths.py` | ok, ok |
+| `dune runtest --root . --force` (4 GB cap) | rc 0, 5 628 ok, 0 FAIL |
+| `scripts/run_model_tests.sh` | 268 passed, 0 failed |
+| `scripts/check_determinism.sh` | 268 models identical across two runs |
+| the 268 models, default flags, main against fix | stdout, `.opb`, `.pbp` and exit code identical on 268 of 268 |
+| `diff_lane.sh --tier all -j 8` | **347 of 347 equal the reference**: no re-record |
+| `diff_lane.sh --tier all --debug -j 8` | 333 of 333 equal |
+| `scaling_lane.sh -j 8` | ok, every line within its threshold |
+| `factor_lane.sh -j 8` (release) | **exit 0** (1 on main, this bug): 90 runs, 36 proofs VERIFIED, costas14 `--cdcl --proof` among them (10 594 nodes, as D-0256 recorded) |
+
+### 7. Reverting
+
+Revert `881263e` (retention's hold, the two calls in `search.ml`, the debug checks, the two tests and
+I-X11). `--cdcl` then deletes clauses it asserts from again; `BAGUETTE_RETENTION=off` avoids it
+without a rebuild. Nothing else depends on it.
