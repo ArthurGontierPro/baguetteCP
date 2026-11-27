@@ -1,6 +1,12 @@
 #!/usr/bin/env python3
 """Refuse a declared domain whose WIDTH is large.
 
+    python3 scripts/check_test_widths.py              the lint over test/ (`make lint`)
+    python3 scripts/check_test_widths.py --self-test  proves it can fail; runs first
+
+Prints ``width lint: no wide declared domain`` and exits 0, or names every offending line
+and exits 1.
+
 Why this exists. Three test binaries had to be killed at the machine's memory ceiling on
 2026-09-16. Every one was the same mistake: a wide ``~lo:``/``~hi:`` pair.
 ``Encoding.declare_int`` writes one ladder clause per interior value (D-0028, D-0031 --

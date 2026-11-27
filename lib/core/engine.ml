@@ -1,101 +1,111 @@
-(* engine.ml: the propagation fixpoint (M1-T10, Part 1).
+(* engine.ml: the propagation fixpoint. [propagate] runs the propagator instances until
+   none of them has anything left to prune (a JOINT FIXPOINT) or one of them fails, and
+   then returns [Fixpoint] or the failing [Store.conflict]. docs/ARCHITECTURE.md section 5
+   is the overview; this header says what the module owns and names the section comment
+   below that explains each mechanism. The engine and its FIFO were Part 1 of M1-T10.
 
-   docs/ARCHITECTURE.md section 5: "A priority queue of propagator ids ... pops, runs,
-   applies the resulting changes to the trail, and re-queues the propagators watching
-   the changed variables." This is that queue, minus the cost-class ordering (which
-   M19-config-T9 adds as an option, D-0246, at the end of this header)
-   (docs/ARCHITECTURE.md's "cheap bounds propagators before all_different" -- M1 has no
-   propagator above [Bounds] consistency yet, so a plain FIFO is honest; a priority
-   ordering is a scheduling refinement for when that stops being true, not a
-   correctness requirement, and adding one now would be sorting a list of one).
+   THE LOOP. One SEED SLOT per instance, walked in id order, then a FIFO of instance ids.
+   After each run the engine reads the trail entries that run pushed and queues the
+   instances watching the variables they changed. Waking by watched variable, rather than
+   running every instance again, is what makes I-P2 cheap to hold (at a [Fixpoint]
+   return, running any propagator again changes nothing). [Store] does not track "who
+   changed since I last looked", so the engine keeps its own trail position and reads the
+   entries above it: O(new entries) per run, not O(variables), because the trail is
+   exactly the log of domain changes (docs/ARCHITECTURE.md section 3). Since M6-T18 the
+   seed runs only the DIRTY slots, those whose instance may have something new to say;
+   "THE INCREMENTAL SEED", above [propagate], says why skipping the others is exact.
 
-   Waking is by watched variable, not "run everyone again" (the task's explicit
-   requirement, and the only way I-P2 -- fixpoint means propagating again changes
-   nothing -- can be cheap to hold). [Store] does not track "who changed since I last
-   looked" itself, so this module keeps its own trail cursor and, after each
-   propagator call, diffs the trail against it to find the newly-touched variables
-   (docs/ARCHITECTURE.md section 3: the trail is exactly the log of domain changes,
-   most-recent-first). That is O(new entries) per propagator call, not O(n_vars); for
-   the domain sizes and propagator counts M1 deals with, simplicity here is worth more
-   than a smarter incremental cursor would be.
+   THE PROOF IS NOT WRITTEN HERE (docs/ARCHITECTURE.md, "Deferred explanations"). A
+   [Conflict] carries the [Explanation.t] the failing propagator built, unrendered, and
+   search.ml decides whether and how a reason is turned into proof rules.
 
-   This module never touches the proof (the task's Part 1 instruction, and
-   docs/ARCHITECTURE.md's "Deferred explanations"): a [Conflict] hands back whatever
-   [Explanation.t] the failing propagator built, unrendered, and it is search's job
-   (search.ml) to decide whether and how a reason is ever turned into proof rules.
+   WHAT DROPS A WAKE. A trail entry on [x] reaches the instances indexed under [x], and
+   three filters can drop the wake, in this order ([wants]):
+     - the SELF-WAKE VETO (M2-T6): an instance whose idempotence claim is honoured is not
+       re-woken by its own prunings. "THE SELF-WAKE VETO", above [has_alias], gives the
+       aliased-scope rule ([honours_claim]) that decides whether a claim is honoured;
+     - the TRIGGER MASK (M2-T5): an instance that reads only bounds is not woken by an
+       interior hole, which cannot change what it computes ("triggers", and the soundness
+       argument above [trigger_of_consistency]);
+     - the ADVISOR ([Propagator.inst_advise], M6-T20, D-0104): the instance itself may
+       decline a change after which a run would change nothing (invariant I-P7). A learned
+       clause's advisor answers from its two watched literals in O(1).
+   An instance packed with [inst_watched] (a learned clause) is moreover indexed by its
+   two watched literals and not by its whole scope, and by the bound move that can falsify
+   each; under BAGUETTE_REST_SATISFIED=on (off by default) a satisfied one RESTS on its
+   true literal and leaves the index until a backtrack. Those are "the wake index of
+   watched literals", "the wake index by direction" and "RESTING", below.
 
-   M2-T5 adds two things to that picture.
+   WHY EACH FILTER HAS A DEBUG CHECK. A filter that drops a wake it should have delivered
+   crashes nothing and fails no proof: everything that WAS derived was derived correctly,
+   so the checker accepts. The solver just prunes less, and at worst reports an
+   assignment that violates a constraint nobody woke to check. The only direct evidence
+   is a propagator with something left to say where the engine believed it had none, so
+   under BAGUETTE_DEBUG every filter is backed by a re-run that looks for exactly that:
+   [check_fixpoint] re-runs every instance at each [Fixpoint] return (I-P2, the check to
+   switch on first when a starved wake is suspected), [check_claim] re-runs a claimant
+   the veto skipped, [check_declined] an instance whose advisor or direction slot
+   declined, [check_skip] a seed slot passed as clean, and [check_watched] confirms a
+   self-watching instance's advisor declines every variable it does not watch.
 
-   (1) Trigger masking. Waking was by watched variable but not by *kind* of change: a
-   propagator that reads only [lo] and [hi] was re-run when some other propagator punched
-   a hole in the middle of a domain, which by construction cannot change what it computes.
-   Each instance now carries a [trigger] saying which [Domain.change] kinds wake it, and
-   [watchers_of_new_entries] classifies each new trail entry and drops the wakes the
-   trigger does not want.
+   ATTRIBUTION (M2-T7). The engine is the only place that knows WHICH propagator is
+   running, so it is the only place that can record it. [Store] holds the trail and
+   stamps each entry, but cannot see a [Propagator.instance] (the dependency runs the
+   other way), so the engine brackets every run with [Store.run_as] (the closure-free form
+   of [Store.with_running]) and then reads the stamp back in [check_attribution], on by
+   default. [Store.entry]'s [prop] field says why the id is stamped from here rather than
+   passed in by the propagator.
 
-   (2) [check_fixpoint], the I-P2 re-run check. This is not a nicety; it is the safety net
-   that makes (1) testable at all. An over-aggressive mask does not crash and does not
-   make the proof fail - everything that WAS derived was still derived correctly, so
-   veripb is happy - it just silently prunes less, and in the worst case reports an
-   assignment that violates a constraint nobody woke to check. The only direct evidence is
-   "at the fixpoint, some propagator still has something to say", which is exactly I-P2,
-   and exactly what [check_fixpoint] looks for. It runs under BAGUETTE_DEBUG, and it is
-   the thing to switch on first when a starved wake is suspected.
+   THE STOP POLL. [propagate] takes the caller's [?stop] predicate (the search passes
+   [config.stop], the clock `--time-limit` reads) and asks it after every [?poll_runs]-th
+   COMPLETED run of this engine, never during one, so no propagator is left half-way
+   through a domain update. When it says yes, the loop leaves without running anything
+   else, does the same low-water reset a [Conflict] return does, records NO fixpoint (the
+   store is not at one), and raises [Stopped]. Nothing here touches the proof, so the
+   writer then holds exactly what it held when the call began: the node's prunings are
+   trail entries with unrendered explanations, nothing more. [Search.dfs] turns [Stopped]
+   into its own node-entry stop, and the run ends through the clean `--time-limit` stop of
+   M6-T9. Without [?stop] the loop is exactly what it was: the countdown is one decrement
+   per run. The poll is M6-T21's; D-0136 found the `--time-limit` overshoot and records
+   why the stop point is consistent and that it costs nothing measurable.
 
-   M2-T7 adds the third thing this module owns: it is the only place that knows WHICH
-   propagator is running, so it is the only place that can record it. [Store] holds the
-   trail and stamps each entry, but [Store] cannot see a [Propagator.instance] at all
-   (the dependency runs the other way), so the engine brackets every [run] with
-   [Store.with_running] and then reads the stamp back in [check_attribution]. See
-   [Store.entry]'s [prop] field for why the id is stamped from here rather than passed in
-   by the propagator.
-
-   M6-T21 (D-0136) adds the fourth: a STOP POLL between two propagator runs. [propagate]
-   takes the caller's [?stop] predicate (the search passes [config.stop], i.e. the clock
-   `--time-limit` reads) and asks it after every [?poll_runs]-th COMPLETED run of this
-   engine -- never during one, so no propagator is ever left half-way through a domain
-   update. When it says yes, the loop leaves without running anything else, does the
-   same low-water reset a [Conflict] return does, records NO fixpoint (the store is not
-   at one), and raises [Stopped]. Nothing here touches the proof (above), so at that
-   point the writer holds exactly what it held when the call began: the node's prunings
-   are trail entries with unrendered explanations, nothing more. [Search.dfs] turns
-   [Stopped] into its own node-entry stop, and the run ends through M6-T9's path. Why
-   the point is consistent, and what it costs (nothing measurable), is D-0136. Without
-   [?stop] the loop is exactly what it was: the countdown is one decrement per run.
-
-   M16-file-review-T1 (D-0186): the wake walk and the seed read a trail entry's change
-   as its KIND only ([wakes_on_kind]: did it move a bound), which is all a trigger mask
-   asks; [Domain.classify], which also lists the holes and walks the domain to find
-   them, is left to the proof side ([Trace]) that needs the list.
-
-   M20-pernode-T4 (D-0243): the wake walk and the attribution check without closures or
-   lists, four rules, each giving the same answer as before by the argument beside it.
+   THE WAKE WALK'S COST. Two rewrites made the walk cheaper with every answer unchanged.
+   The walk and the seed read a trail entry's change as its KIND only ([wakes_on_kind]:
+   did it move a bound), which is all a trigger mask asks; [Domain.classify], which also
+   lists the holes and walks the domain to find them, is left to the proof side ([Trace])
+   that needs the list (M16-file-review-T1, D-0186). And the walk and the attribution
+   check use no closure and no list per id, by four rules, each giving the same answer as
+   before by the argument beside it (M20-pernode-T4, D-0243):
    (a) [wake_static] is a flat int array per variable, appended to oldest first and walked
    from its last cell down, which is the order of the newest-first list it replaced;
    [purge] filters it in place, keeping that order. The merge with the self-watching ids
    is two loops and [wants] a top-level function, so the walk applies no closure per id.
    (b) [advises] answers the default advisor [Propagator.advise_always] without calling
    it: it is [fun _ _ -> true], so no answer and no counter moves. (c) The trigger mask
-   reads one byte per id ([trig_bits], [wakes_id]), written wherever [triggers] is.
-   (d) [check_attribution] remembers, per variable, an id it has found in that variable's
-   scope ([attr_ok]). A hit is a pair the binary search accepted against a scope that has
-   not changed since, because a live id's scope never changes and [purge], which empties
-   the scopes of removed ids, resets the memo of each of their variables; so the check
-   refuses exactly what it refused. The wake order, the woken set and every counter are
-   unchanged, and with them the search and the artefacts.
+   reads one byte per id ([trig_bits], read by [wakes_id]), written wherever [triggers]
+   is. (d) [check_attribution] remembers, per variable, an id it has found in that
+   variable's scope ([attr_ok]). A hit is a pair the binary search accepted against a
+   scope that has not changed since, because a live id's scope never changes and [purge],
+   which empties the scopes of removed ids, resets the memo of each of their variables; so
+   the check refuses exactly what it refused. The wake order, the woken set and every
+   counter are unchanged, and with them the search and the artefacts.
 
-   M19-config-T9 (D-0246): the cost-class ordering the first paragraph left out, behind
-   BAGUETTE_PRIORITY=classes ([off], the FIFO above, is the default and is untouched
-   byte for byte). Every instance is filed at [create]/[add] in one of
+   THE COST-CLASS QUEUE, behind BAGUETTE_PRIORITY=classes and OFF by default ([off], the
+   FIFO above, is the default and is untouched byte for byte). D-0246 added it as an
+   option and kept the FIFO as the default, because on the tuning set it lost share
+   without proof and, with proof, gained share but lost two verified complete answers
+   (M19-config-T9). Every instance is filed at [create]/[add] in one of
    [Propagator.n_cost_classes] classes by [Propagator.cost_class], the one rule (its
    header: two variables or fewer is Cheap, else the family's class). Under [classes] the
    queue is one FIFO per class and the loop always runs the head of the cheapest non-empty
    one; the seed's dirty slots enter their class queues in id order before anything runs.
    Why that is sound, and what it does change:
      - every run is the same function of the store it reads, and every pruning carries
-       its own justification against the facts on the trail when it is made (I-P4, I-P6,
-       I-X6): no reason, derivation or trace line refers to the run that preceded it, so
-       a pruning made in another order is justified by the same argument;
+       its own justification against the facts on the trail when it is made: every change
+       carries its explanation (I-P4), a pass reads one snapshot of the store (I-P6), and
+       a deferred explanation reads that snapshot, never live domains (I-X6). No reason,
+       derivation or trace line refers to the run that preceded it, so a pruning made in
+       another order is justified by the same argument;
      - the loop still stops only when every queue is empty, and a wake is still delivered
        to every instance watching a changed variable (mask, veto and advisor unchanged),
        so I-P2 holds at the return, checked by [check_fixpoint] under BAGUETTE_DEBUG;
@@ -105,26 +115,28 @@
        here, so a different fixpoint is possible, and each reachable one is sound;
      - the ORDER of the prunings changes, hence the trail, the reasons each later
        pruning cites, the conflict reached first, the learned clauses, the search tree
-       and the proof bytes. Nothing reads the FIFO order as such: the seed marks
-       (D-0138) only mark, [check_declined] asks queue MEMBERSHIP, the attribution stamp
-       (I-T4) is per run, alldiff's gate (D-0215) is inside a run.
+       and the proof bytes. Nothing reads the FIFO order as such: the seed marks (the
+       dirty flags and heap of D-0138) only mark, [check_declined] asks queue
+       MEMBERSHIP, the attribution stamp (I-T4: every trail entry names the instance that
+       made it) is per run, and alldiff's skip of a matching pass that cannot prune
+       (D-0215) is decided inside a run.
    The class is a scheduling hint: no propagator reads it. *)
 
 type outcome = Fixpoint | Conflict of Store.conflict
 
-(* M6-T21: [propagate] was told to stop, between two runs; see the header. Never escapes
-   [Search], which re-raises it as its node-entry stop. *)
+(* [propagate] was told to stop, between two runs (the stop poll of the header, M6-T21).
+   Never escapes [Search], which re-raises it as its node-entry stop. *)
 exception Stopped
 
-(* M6-T21: runs between two asks of [?stop], when the caller does not say. A clock read
+(* Runs between two asks of [?stop], when the caller does not say. A clock read
    (Unix.gettimeofday through the CLI's closure) every 128 runs is noise next to 128
    propagator calls; on the codes model of D-0136 (47 k runs/s late in a 600 s run) 128
    runs take about 3 ms, which bounds the stop's latency there. *)
 let default_poll_runs = 128
 
-(* M19-config-T9 (D-0246): BAGUETTE_PRIORITY, read once. [off] (the default, and an unset
-   variable) is the FIFO this header describes; [classes] is the cost-class queue described
-   at [propagate]. Anything else is refused at startup rather than read as [off]: a
+(* BAGUETTE_PRIORITY, read once (D-0246). [off] (the default, and an unset variable) is
+   the FIFO; [classes] is the cost-class queue of the header, run by [loops_by_class] in
+   [propagate]. Anything else is refused at startup rather than read as [off]: a
    misspelt switch in a campaign would otherwise measure the default twice. *)
 let priority_default =
   match Sys.getenv_opt "BAGUETTE_PRIORITY" with
@@ -149,7 +161,8 @@ type trigger = { on_bound : bool; on_holes : bool }
 let wake_on_any = { on_bound = true; on_holes = true }
 let wake_on_bounds = { on_bound = true; on_holes = false }
 
-(* THE SOUNDNESS ARGUMENT, in full, because a mistake here is invisible (M2-T5):
+(* Why the trigger mask is sound: the argument in full, because a mistake here is
+   invisible (M2-T5).
 
    Skipping a wake is sound exactly when re-running that propagator after that change
    would have pruned nothing. For an interior hole - [Domain.Holes], which by
@@ -164,19 +177,25 @@ let wake_on_bounds = { on_bound = true; on_holes = false }
    docs/GLOSSARY.md defines "bounds consistent" as a promise about a propagator's OUTPUT
    ("guarantees lo and hi of each variable can be extended to a solution, saying nothing
    about interior values"), while what is needed here is a statement about its INPUT.
-   The two coincide for every propagator in the tree today, checked by reading them:
-   [linear.ml] and [bool2int.ml] are the only [Bounds] instances (int_le, int_lt, lin_eq
+   The two coincide for every [Bounds] family in the tree. When the mask was written,
+   [linear.ml] and [bool2int.ml] were the only [Bounds] instances (int_le, int_lt, lin_eq
    and int_eq are all [Linear.t] values), and each touches [Domain.lo] and [Domain.hi]
-   and no other domain reader. [ne.ml] declares [Value] and does read [Domain.mem], and
-   [bool_clause.ml] declares [Domain], so both keep [wake_on_any].
+   and no other domain reader. The [Bounds] families added since (pb.ml and clause.ml's
+   order-literal clauses, maxmin.ml, reif_lin_le.ml, arith.ml) call none of [Domain.mem],
+   [Domain.size] or [Domain.iter] either (checked by grep on 2026-11-27; pb.ml reads an
+   order literal off [lo] and [hi]). [ne.ml] declares [Value] and does read [Domain.mem],
+   and the Boolean clause family of clause.ml declares [Domain], so both keep
+   [wake_on_any]. The one optional argument that overrides this default, [?trigger] of
+   [create] and [add], is passed by no caller in lib/ or bin/.
 
    That coincidence is not a theorem, and this is the gap to close: either
    [Propagator.instance] grows a [trigger] field that an instance states for itself, or
    docs/GLOSSARY.md's "bounds consistent" is extended to say a Bounds propagator reads
-   only bounds. Both are outside this round's file ownership; M2-T5's report asks for one
-   of them. Until then, a NEW [Bounds] propagator that reads holes would be starved -
-   and would be caught by [check_fixpoint] below under BAGUETTE_DEBUG, which is why that
-   check ships in the same round as this mask and not later. *)
+   only bounds. D-0034 settled the principle (a wake trigger is a property of what a
+   propagator READS, not of what it promises) and neither change has been made. Until
+   then, a NEW [Bounds] propagator that reads holes would be starved, and would be caught
+   by [check_fixpoint] under BAGUETTE_DEBUG, which is why that check shipped in the same
+   round as this mask. *)
 let trigger_of_consistency = function
   | Propagator.Bounds -> wake_on_bounds
   | Propagator.Domain | Propagator.Value | Propagator.Checking -> wake_on_any
@@ -209,7 +228,8 @@ let reset_stats () =
 
 let stats () = (!runs, !wakes, !masked_wakes)
 
-(* M2-T6 deliverable 1: the three counters GCS prints under `-s`, PER ENGINE.
+(* The engine's run counters, PER ENGINE: the three GCS prints under `-s`, then the wake
+   filters' and the seed's own (M2-T6 added the first three, to compare the two solvers).
 
    [c_runs]       propagator runs taken off the queue by [propagate]          (GCS
                   `propagations`).
@@ -221,19 +241,21 @@ let stats () = (!runs, !wakes, !masked_wakes)
                   counted here and NOT in [c_effectful]: the two are disjoint, so
                   [c_runs - c_effectful - c_contra] is exactly the number of runs that
                   did nothing at all, which is the number the wake discipline is for.
-   [c_wakes] [c_masked]  the M2-T5 pair, per engine as well.
+   [c_wakes] [c_masked]  the wakes delivered and the wakes the trigger mask dropped, as
+                  the process-global pair above, per engine.
 
-   Only the fixpoint loop counts. [check_fixpoint] (the re-checker) and the M2-T10
-   consistency oracle run propagators too, but they are audits of the loop and must not
-   inflate the figure they audit -- a BAGUETTE_DEBUG run reports the same counts as a
-   plain one.
+   Only the fixpoint loop counts. [check_fixpoint] (the re-checker) and the consistency
+   oracle of BAGUETTE_CONSISTENCY (M2-T10, at the end of this file) run propagators too,
+   but they are audits of the loop and must not inflate the figure they audit -- a
+   BAGUETTE_DEBUG run reports the same counts as a plain one.
 
    Per engine and not process-global (the globals above stay, for BAGUETTE_WAKE_STATS
    and for the tests that predate this) because a solve builds exactly one engine
    ([Compile.compile]) and [bin/main.ml] prints this record beside [Search.stats],
    which is per solve too: a counter that outlived its run could not sit on the same
    `limit:` line as the node count it is divided by. Counted by the engine, never read
-   from the proof (M1-T36's rule). *)
+   from the proof (the rule of M1-T36, which gave the search a real node counter in place
+   of a proxy read off the proof). *)
 type counters = {
   mutable c_runs : int;
   mutable c_effectful : int;
@@ -242,21 +264,22 @@ type counters = {
   mutable c_masked : int;
   mutable c_seeded : int;
       (** runs taken from the SEED: every [propagate] call walks one seed slot per
-          instance, in id order, and runs the slots that are DIRTY (M6-T18: watching a
-          change since the last joint fixpoint, woken before their slot came up, or not
-          yet established). [c_runs - c_seeded] is the runs that came from wakes. Before
-          M6-T18 every slot was run, so this grew by [n_instances] per call. *)
+          instance, in id order, and runs the slots that are DIRTY (watching a change
+          since the last joint fixpoint, woken before their slot came up, or not yet at a
+          recorded fixpoint; "THE INCREMENTAL SEED"). [c_runs - c_seeded] is the runs that
+          came from wakes. Before the incremental seed (M6-T18) every slot was run, so
+          this grew by [n_instances] per call. *)
   mutable c_skipped : int;
-      (** M6-T18: seed slots passed over as CLEAN -- the run the pre-M6-T18 engine made
-          there and that, by [propagate]'s argument, could prune nothing.
-          [c_seeded + c_skipped] is the old [c_seeded]. *)
+      (** seed slots passed over as CLEAN: each is a run the full seed made there and
+          that, by the argument of "THE INCREMENTAL SEED", could prune nothing.
+          [c_seeded + c_skipped] is what [c_seeded] counted before M6-T18. *)
   mutable c_vetoed : int;
-      (** M2-T6 deliverable 2: self-wakes dropped because the instance's idempotence
-          claim is honoured ([honours_claim]). Counted apart from [c_masked]: a mask
-          drops a wake by KIND of change, the veto by WHO made it. *)
+      (** self-wakes dropped by the self-wake veto, because the instance's idempotence
+          claim is honoured ([honours_claim], M2-T6). Counted apart from [c_masked]: a
+          mask drops a wake by KIND of change, the veto by WHO made it. *)
   mutable c_advised : int;
-      (** M6-T20 / D-0104: wakes (and seed marks) the instance's own [inst_advise]
-          declined, after the mask and the veto let them through. *)
+      (** wakes (and seed marks) the instance's own advisor [inst_advise] declined,
+          after the mask and the veto let them through (M6-T20, D-0104). *)
 }
 
 let counters_create () =
@@ -285,13 +308,25 @@ let () =
 
 (* ------------------------------------------------------------------- engine *)
 
+(* The engine's state. Where each group of fields came from, for the history: [born] to
+   [incremental] with the incremental seed (M6-T18, D-0098); [poll_left] with the stop
+   poll (M6-T21, D-0136); [scopes], [wake_static], [dyn_ids] to [wp2], [births],
+   [heap], [dirty] and [in_queue] with the per-node pass on the XOR code models (M6-T22,
+   D-0138); [moved] and the three watch slots per variable with the wake index by
+   direction (M11-complexity-T3, D-0142); [resting] to [released] with RESTING
+   (M11-complexity-T17, D-0173); [removed] and [pending] with instance removal
+   (M21-memory-T3, D-0226); [trig_bits] and [attr_ok] with the closure-free wake walk
+   (M20-pernode-T4, D-0243); [priority] and [cls] with the cost-class queue
+   (M19-config-T9, D-0246). *)
 type t = {
   mutable instances : Propagator.instance array;
-      (** By id, [0 .. count - 1]; the slots past [count] are [vacant] (M6-T22). *)
+      (** By id, [0 .. count - 1]; the slots past [count] are [vacant]. *)
   mutable count : int;
-      (** M6-T22 / D-0138: the number of instances. Every id-indexed array of this record
-          is at least this long and grows by DOUBLING in [add]; before M6-T22 each grew
-          by one, so a learned clause copied six arrays of the whole database. *)
+      (** The number of instances. Every id-indexed array of this record is at least
+          this long and grows by DOUBLING in [add]. Each grew by one before M6-T22, so a
+          learned clause copied six arrays of the whole database; M6-T22 (D-0138) was the
+          per-node cost pass on the XOR code models, which also built the watched-literal
+          wake index below. *)
   (* var -> ids of the propagator instances that read it. Built once at [create] time
      from each instance's [inst_vars]; instances never change their variable set after
      that, so the table does not need to be rebuilt per call. *)
@@ -302,90 +337,90 @@ type t = {
      answer for an unknown reader is always "wake it". *)
   mutable triggers : trigger array;
   mutable trig_bits : Bytes.t;
-      (** M20-pernode-T4 (D-0243): [triggers] as one byte per id, bit 1 [on_bound] and bit
-          2 [on_holes], for the wake walk's mask ([wants]): a byte read where it called
-          [trigger_of] and read a record. Written with [triggers], at [create] and [add],
-          and grown with it, filled as [wake_on_any] is. *)
-  ctr : counters;  (** M2-T6: this engine's run counters, see [counters]. *)
+      (** [triggers] as one byte per id, bit 1 [on_bound] and bit 2 [on_holes], for the
+          wake walk's mask ([wakes_id], called by [wants]): a byte read where it called
+          [trigger_of] and read a record (D-0243). Written with [triggers], at [create]
+          and [add], and grown with it, filled as [wake_on_any] is. *)
+  ctr : counters;  (** this engine's run counters, see [counters]. *)
   mutable runs_by_id : int array;
-      (** M6-T20, MEASUREMENT ONLY: runs and effectful runs PER INSTANCE, indexed by id
+      (** MEASUREMENT ONLY (M6-T20): runs and effectful runs PER INSTANCE, indexed by id
           and grown on demand, so [family_table] can say which propagator FAMILY the
           [c_runs] of a solve belong to. One array write per run; nothing reads them
           but the report. *)
   mutable eff_by_id : int array;
   mutable veto : bool array;
-      (** M2-T6: id -> whether this instance's own prunings may skip re-waking it, i.e.
-          [honours_claim]. Indexed by id like [triggers], grown by [add] like it, and an
-          id with no entry is [false]: an unknown instance is re-woken. *)
+      (** id -> whether this instance's own prunings may skip re-waking it, i.e.
+          [honours_claim] (the self-wake veto). Indexed by id like [triggers], grown by
+          [add] like it, and an id with no entry is [false]: an unknown instance is
+          re-woken. *)
   mutable born : int array;
-      (** M6-T18: id -> the [epoch] of the first [Fixpoint] return after which this
-          instance has been at its fixpoint, or [unborn] until there has been one. An
-          instance is known to be at its fixpoint at a recorded fixpoint state only if
-          it was born at or before that state's epoch. Grown by [add] with [unborn]. *)
-  mutable epoch : int;  (** M6-T18: the number of [Fixpoint] returns so far. *)
+      (** id -> the [epoch] of the first [Fixpoint] return after which this instance has
+          been at its fixpoint, or [unborn] until there has been one. An instance is known
+          to be at its fixpoint at a recorded fixpoint state only if it was born at or
+          before that state's epoch. Grown by [add] with [unborn]. *)
+  mutable epoch : int;  (** the number of [Fixpoint] returns so far. *)
   mutable fixpoints : (int * int) list;
-      (** M6-T18: the joint fixpoints this engine has returned whose state is still the
+      (** the joint fixpoints this engine has returned whose state is still the
           store's, as [(trail length, epoch)], most recent first and strictly decreasing
-          in length. See [propagate]. *)
+          in length. See "THE INCREMENTAL SEED". *)
   mutable seen : (Store.t * int) option;
-      (** M6-T18: the store [propagate] last ran on, and its low-water handle. *)
+      (** the store [propagate] last ran on, and its low-water handle. *)
   mutable incremental : bool;
-      (** M6-T18: [false] makes every call seed every instance, as before M6-T18. For
-          tests that compare the two; a solve never sets it. *)
+      (** [false] makes every call seed every instance, as before the incremental seed
+          (M6-T18). For tests that compare the two; a solve never sets it. *)
   mutable poll_left : int;
-      (** M6-T21: completed runs left before [propagate] next asks its [?stop]. PER
-          ENGINE and carried ACROSS calls, so a long run of short nodes still polls on
-          schedule; only a call given [?stop] counts it down. *)
+      (** completed runs left before [propagate] next asks its [?stop]. PER ENGINE and
+          carried ACROSS calls, so a long run of short nodes still polls on schedule; only
+          a call given [?stop] counts it down. *)
   mutable scopes : int array array;
-      (** M6-T22 / D-0138: id -> the instance's [inst_vars] as SORTED, DEDUPLICATED
-          variable ints, so [check_attribution] answers "does [id] watch [v]" by binary
-          search. Indexed by id and grown by [add] like [triggers]; an id with no entry
-          has the empty scope. See [in_scope] for why this replaced a walk of the
-          watcher list. *)
+      (** id -> the instance's [inst_vars] as SORTED, DEDUPLICATED variable ints, so
+          [check_attribution] answers "does [id] watch [v]" by binary search. Indexed by
+          id and grown by [add] like [triggers]; an id with no entry has the empty scope.
+          See [in_scope] for why this replaced a walk of the watcher list. *)
   mutable wake_static : int array array;
   mutable wake_len : int array;
-      (** M6-T22 / D-0138: variable int -> the ids of the instances with NO
-          [inst_watched] that read it, as [wake_static.(x).(0 .. wake_len.(x) - 1)],
-          OLDEST first, so newest first when walked downwards. The wake loops' copy of
-          [watchers] minus the self-watching instances, indexed by array rather than
-          hashed. Grown on demand; a variable past its end has no such reader. A flat
-          int array since M20-pernode-T4 (D-0243): it was an [int list], newest first,
-          and the walk over it was most of [watchers_of_new_entries]; walking the array
-          from its last cell down visits the same ids in the same order. *)
+      (** variable int -> the ids of the instances with NO [inst_watched] that read it, as
+          [wake_static.(x).(0 .. wake_len.(x) - 1)], OLDEST first, so newest first when
+          walked downwards. The wake loops' copy of [watchers] minus the self-watching
+          instances, indexed by array rather than hashed. Grown on demand; a variable past
+          its end has no such reader. Walking the array from its last cell down visits the
+          ids in the order of the [int list], newest first, that it replaced in
+          M20-pernode-T4 (D-0243), when the walk over that list was most of
+          [watchers_of_new_entries]. *)
   mutable attr_ok : int array;
-      (** M20-pernode-T4 (D-0243): variable int -> an id [check_attribution] has found
-          in [scopes] for that variable, or [-1]: a memo of a POSITIVE answer of
+      (** variable int -> an id [check_attribution] has found in [scopes] for that
+          variable, or [-1] (D-0243): a memo of a POSITIVE answer of
           [in_scope], so a run that prunes the same variables as the last check of the
           same instance skips the binary search. Exact because a scope never changes
           while its id is live; [purge], the one place that empties a scope, resets the
           memo of every variable of the scopes it empties. Sized with [wake_static]; a
           variable past its end is checked without the memo. *)
   mutable moved : Bytes.t;
-      (** M11-complexity-T3 (D-0142, E1): variable int -> the bound moves (bit 1 lower,
-          bit 2 upper) of the entries [watchers_of_new_entries] has walked so far, i.e.
-          of this walk's NEWER entries on the variable. All zero between walks; sized
+      (** variable int -> the bound moves (bit 1 lower, bit 2 upper) of the entries
+          [watchers_of_new_entries] has walked so far, i.e. of this walk's NEWER entries
+          on the variable, for the wake index by direction. All zero between walks; sized
           with [wake_static]. *)
   mutable dyn_ids : int array array;
   mutable dyn_len : int array;
-      (** M6-T22 / D-0138: WATCH SLOT -> the self-watching instances that CURRENTLY
-          watch it, as [dyn_ids.(s).(0 .. dyn_len.(s) - 1)], in no particular order. The
-          invariant, kept by [sync_watched]: [id] is there exactly once iff [s] is
-          [wv1.(id)] or [wv2.(id)]. A slot is a [Propagator.watch], three per variable
-          [x]: [3x] for a watch any change of [x] may falsify, [3x + 1] for one only a
-          LOWER-bound move falsifies, [3x + 2] for one only an UPPER-bound move does
-          (M11-complexity-T3, D-0142, E1; "The wake index by direction" below). *)
+      (** WATCH SLOT -> the self-watching instances that CURRENTLY watch it, as
+          [dyn_ids.(s).(0 .. dyn_len.(s) - 1)], in no particular order. The invariant,
+          kept by [sync_watched]: [id] is there exactly once iff [s] is [wv1.(id)] or
+          [wv2.(id)]. A slot is a [Propagator.watch], three per variable [x]: [3x] for a
+          watch any change of [x] may falsify, [3x + 1] for one only a LOWER-bound move
+          falsifies, [3x + 2] for one only an UPPER-bound move does ("the wake index by
+          direction" below). *)
   mutable wv1 : int array;
   mutable wv2 : int array;
-      (** M6-T22 / D-0138: id -> the two watch slots a self-watching instance reported
-          at the end of its last run, or [-1] before its first. *)
+      (** id -> the two watch slots a self-watching instance reported at the end of its
+          last run, or [-1] before its first. *)
   mutable wp1 : int array;
   mutable wp2 : int array;
-      (** M6-T22 / D-0138: id -> where its entry sits in [dyn_ids.(wv1.(id))] and
-          [dyn_ids.(wv2.(id))], so a watch move removes it in O(1). When both watches are
-          in one slot there is one entry and [wp1] holds it. *)
+      (** id -> where its entry sits in [dyn_ids.(wv1.(id))] and [dyn_ids.(wv2.(id))], so
+          a watch move removes it in O(1). When both watches are in one slot there is one
+          entry and [wp1] holds it. *)
   mutable births : (int * int list) list;
   mutable newborns : int list;
-      (** M6-T22 / D-0138: [born], inverted. [newborns] is every id whose [born] is
+      (** [born], inverted. [newborns] is every id whose [born] is
           [unborn]; [births] holds, most recent first and so in DECREASING epoch, one
           [(e, ids)] per epoch some instance is born at, with exactly the ids whose [born]
           is [e]. So "every id born after epoch [e]" is [newborns] plus the head of
@@ -393,51 +428,52 @@ type t = {
           time proportional to the instances concerned rather than to all of them. *)
   mutable heap : int array;
   mutable heap_len : int;
-      (** M6-T22 / D-0138: the DIRTY seed slots of the current [propagate] call, as a
-          binary min-heap of ids, so the seed visits them in id order without walking the
-          clean ones. An id is in it iff its [dirty] flag is set. Empty between calls. *)
+      (** the DIRTY seed slots of the current [propagate] call, as a binary min-heap of
+          ids, so the seed visits them in id order without walking the clean ones. An id
+          is in it iff its [dirty] flag is set. Empty between calls. *)
   mutable dirty : bool array;
   mutable in_queue : bool array;
-      (** M6-T22 / D-0138: [propagate]'s seed marks and queue membership, by id, kept
-          from one call to the next and ALL FALSE between calls ([propagate] clears what
-          it set, on every exit). They were allocated per call: two arrays of the whole
-          database per search node, in the major heap once past 256 instances. *)
+      (** [propagate]'s seed marks and queue membership, by id, kept from one call to the
+          next and ALL FALSE between calls ([propagate] clears what it set, on every
+          exit). They were allocated per call: two arrays of the whole database per search
+          node, in the major heap once past 256 instances. *)
   mutable resting : bool array;
   mutable rest_levels : int list array;
   mutable rest_top : int;
   mutable releasing : bool array;
   mutable released : int list;
-      (** M11-complexity-T17 (D-0173): the RESTING self-watching instances ([rest_on]).
+      (** the RESTING self-watching instances ([rest_on]; empty unless
+          BAGUETTE_REST_SATISFIED=on).
           [resting] is id -> whether the id sits in [rest_levels], which is level -> the
           ids resting on a literal held up by a bound pushed at that level; [rest_top] is
           at least the highest non-empty level, or [-1]. [releasing] is id -> released by
           a backtrack and not run since; [released] holds those ids (and possibly some
           whose flag a run has cleared since). *)
   mutable removed : bool array;
-      (** M21-memory-T3 (D-0226): id -> taken out of this engine by [remove]. Its slot in
+      (** id -> taken out of this engine by [remove] ("REMOVING an instance"). Its slot in
           [instances] holds a [tombstone], it is in no wake list once [purge] has run, and
-          it is never marked dirty again. Indexed by id and grown by [add] like [dirty]. *)
+          it is never marked dirty again. Indexed by id, grown by [add] like [dirty]. *)
   mutable pending : int list;
-      (** M21-memory-T3 (D-0226): removed ids whose [wake_static] and [watchers] entries
-          are still there, purged together by [purge] at the start of the next
-          [propagate], so that a reduction evicting k rows walks each variable's list once
-          and not k times. Their [scopes] entry is what says which lists to purge. *)
+      (** removed ids whose [wake_static] and [watchers] entries are still there, purged
+          together by [purge] at the start of the next [propagate], so that a reduction
+          evicting k rows walks each variable's list once and not k times. Their [scopes]
+          entry is what says which lists to purge. *)
   mutable priority : bool;
-      (** M19-config-T9 (D-0246): run the queue by cost class ([propagate]). Set from
+      (** run the queue by cost class (the header's cost-class queue). Set from
           BAGUETTE_PRIORITY at [create]; tests set it with [set_priority]. *)
   mutable cls : Bytes.t;
-      (** M19-config-T9 (D-0246): id -> [Propagator.cost_rank] of its class, written at
-          [create] and [add] whatever [priority] says, so switching it on later is exact. *)
+      (** id -> [Propagator.cost_rank] of its class, written at [create] and [add]
+          whatever [priority] says, so switching it on later is exact. *)
   mutable declined : (int * Var.t) list;
-      (** M11-complexity-T3 (D-0142 section 1): under BAGUETTE_DEBUG only, the asks the
-          advisors declined during the current wake walk or seed, newest first, waiting
-          for [check_declined]. Always [[]] when BAGUETTE_DEBUG is off. *)
+      (** under BAGUETTE_DEBUG only, the asks the advisors declined during the current
+          wake walk or seed, newest first, waiting for [check_declined] (D-0142 section
+          1). Always [[]] when BAGUETTE_DEBUG is off. *)
 }
 
 let unborn = max_int
 
-(* M6-T22: the filler of [instances] past [count]. Never run: every reader of
-   [instances] stops at [count]. *)
+(* The filler of [instances] past [count]. Never run: every reader of [instances] stops
+   at [count]. *)
 let vacant : Propagator.instance =
   {
     Propagator.id = -1;
@@ -452,7 +488,7 @@ let vacant : Propagator.instance =
     inst_attach = Propagator.attach_never;
   }
 
-(* M6-T22: [a] with room for index [id], doubling, the new slots [fill]. *)
+(* [a] with room for index [id], doubling, the new slots [fill]. *)
 let room a id fill =
   let n = Array.length a in
   if id < n then a
@@ -461,7 +497,7 @@ let room a id fill =
     Array.blit a 0 b 0 n;
     b
 
-(* D-0243: a trigger as the byte [trig_bits] holds, and that table grown to [n] ids,
+(* A trigger as the byte [trig_bits] holds, and that table grown to [n] ids,
    filled with [wake_on_any]'s byte as [room] fills [triggers]. *)
 let trig_byte trig = (if trig.on_bound then 1 else 0) lor if trig.on_holes then 2 else 0
 
@@ -473,7 +509,7 @@ let bits_room b n =
     Bytes.blit b 0 c 0 m;
     c
 
-(* M19-config-T9 (D-0246): an instance's cost class as the byte [cls] holds, from its
+(* An instance's cost class as the byte [cls] holds, from its
    scope (the sorted set below, so [Array.length] is the number of DISTINCT variables),
    and that table grown to [n] ids. *)
 let class_byte inst ~scope =
@@ -487,7 +523,7 @@ let class_room b n =
     Bytes.blit b 0 c 0 m;
     c
 
-(* M6-T22 / D-0138: an instance's scope as the sorted set of its variables' ints. *)
+(* An instance's scope as the sorted set of its variables' ints. *)
 let scope_of (inst : Propagator.instance) =
   Array.of_list
     (List.sort_uniq Int.compare (List.map Var.to_int inst.Propagator.inst_vars))
@@ -511,7 +547,7 @@ let in_scope t id v =
   let s = t.scopes.(id) in
   mem_sorted s (Var.to_int v) 0 (Array.length s)
 
-(* D-0243: [in_scope] for [check_attribution], through the [attr_ok] memo of a positive
+(* [in_scope] for [check_attribution], through the [attr_ok] memo of a positive
    answer (see the field). The same answer as [in_scope]: a memo hit is a pair the binary
    search accepted while the scope it searched is still the id's scope. *)
 let watches_memo t id v =
@@ -524,61 +560,65 @@ let watches_memo t id v =
         true)
   else in_scope t id v
 
-(* ------------------------------------------- M6-T22: the wake index of watched literals
+(* ----------------------------------------- the wake index of watched literals (M6-T22)
 
-   D-0104 (M6-T20) gave a learned clause an advisor, two watched literals answered in
-   O(1), and left the watcher table untouched: the clause's WHOLE scope stayed
-   registered, so every trail entry on a variable still asked every learned clause
-   naming that variable, and the clause said no unless one of its two watches was on it.
-   On the codes models (D-0138: QR48, 23 367 nodes, 11 684 learned clauses of width 9 to
-   16 and more) that is 439 million asks for 23 k nodes, 18 800 per node, and the asking
-   -- [advises], the clause's [ask], the closure call and the cache miss on each clause
-   record -- was 37 % of the cycles. A clause asked on a variable it does not watch
-   always says no, so those asks decide nothing.
+   RULE. An instance packed with [inst_watched] (a watched-literal advisor: today a
+   learned clause) is indexed by the variables it currently WATCHES, in [dyn_ids], and not
+   by its whole scope. Every other instance is indexed by its scope, in [wake_static].
 
-   An instance packed with [inst_watched] (a watched-literal advisor) is therefore
-   indexed by the variables it currently WATCHES and not by its scope: [dyn_ids].
-   After every run of it, whoever ran it, [sync_watched] reads the two variables back
-   and moves the instance's entries. The [run] in [t.instances] is wrapped at [create] /
-   [add] to do that, so no caller -- the fixpoint loop, the BAGUETTE_DEBUG re-runs, the
-   consistency oracle -- can run it without the index following. A wake on [x] then asks
-   exactly the instances whose advisor could say yes, the same question the full scope
-   asked, so the set of instances queued is the old set (the others all answered no).
+   WHY. A learned clause's advisor answers from its two watched literals in O(1) (M6-T20,
+   D-0104), and says no to a change of any variable it does not watch. While the clause's
+   WHOLE scope stayed registered, every trail entry on a variable asked every learned
+   clause naming that variable, to be told no. On the codes models (D-0138: QR48, 23 367
+   nodes, 11 684 learned clauses of width 9 to 16 and more) that was 439 million asks for
+   23 k nodes, 18 800 per node, and the asking -- [advises], the clause's [ask], the
+   closure call and the cache miss on each clause record -- was 37 % of the cycles.
 
-   The ORDER is kept as well: per trail entry the old walk queued the woken ids in
-   ascending id order (the watcher list is newest-first and is walked by prepending),
+   HOW THE INDEX FOLLOWS. After every run of a self-watching instance, whoever ran it,
+   [sync_watched] reads the two variables back and moves the instance's entries. The [run]
+   in [t.instances] is wrapped at [create] / [add] to do that, so no caller -- the
+   fixpoint loop, the BAGUETTE_DEBUG re-runs, the consistency oracle -- can run it without
+   the index following. A wake on [x] then asks exactly the instances whose advisor could
+   say yes, the same question the full scope asked, so the set of instances queued is the
+   old set (the others all answered no).
+
+   The ORDER is kept as well: per trail entry the scope-indexed walk queued the woken ids
+   in ascending id order (the watcher list is newest-first and is walked by prepending),
    and [watchers_of_new_entries] merges the woken self-watching ids into the static ones
    by id. A self-watching instance never sits in [wake_static], whose lists are
-   otherwise the old ones. Before its first run such an instance is in no list at all,
-   which loses nothing: it was [add]ed since the last fixpoint, so [propagate] seeds it
-   (rule (b)) and any wake could only have marked a slot that is dirty already.
+   otherwise the scope-indexed ones. Before its first run such an instance is in no list
+   at all, which loses nothing: it was [add]ed since the last fixpoint, so [propagate]
+   seeds it (rule (b) of "THE INCREMENTAL SEED", a newborn) and any wake could only have
+   marked a slot that is dirty already.
 
    The watcher table [watchers] itself is unchanged -- every instance, its whole scope --
    because it is the declaration of what an instance reads, which test_engine.ml's
    wake-order oracle and the attribution argument are stated against. *)
 
-(* ---------------------------- M11-complexity-T3 (D-0142, E1): the wake index by direction
+(* ------------------------------ the wake index by direction (M11-complexity-T3, D-0142)
 
-   The index above asks a learned clause on EVERY change of a watched variable, and most
-   of those changes cannot make it want a run: a watch `x >= k` is falsified only when
-   [hi x] drops below [k], so a move of [lo x] can never falsify it. D-0138 section 5
-   measured that half on QR48 (37.3 M wakes, 17.1 M declined) and filed it.
-
-   So a self-watching instance reports each watch as a [Propagator.watch], which also
+   RULE. A self-watching instance reports each watch as a [Propagator.watch], which also
    says which bound move can falsify it, and the index keeps three slots per variable:
    [3x] (any change may falsify the watch), [3x + 1] (only a lower-bound move), [3x + 2]
    (only an upper-bound move). An entry on [x] asks slot [3x] always, [3x + 1] when IT OR
    A NEWER ENTRY OF THE SAME WALK moved [x]'s lower bound, and [3x + 2] likewise for the
    upper bound ([t.moved]). The seed asks by the entry's own moves.
 
-   Why this wakes the same instances in the same order, apart from runs that do nothing.
-   The ask is a function of the store, not of the entry: it answers yes iff a watch of the
-   instance on [x] is false NOW, so every entry on [x] of one walk gets the same answers,
-   and the old walk placed an instance at its FIRST occurrence, the OLDEST entry on [x]
-   whose trigger kind it wants (the woken lists are oldest-entry-first, and a later
-   occurrence is a no-op of [enqueue]/[mark_dirty]). Take an instance whose watch on [x]
-   is false now, say `x >= k`. Either an entry of this walk moved [hi x] below [k], and
-   then every entry on [x] at or before it in age asks the upper slot, the oldest one
+   WHY. The index above would ask a learned clause on EVERY change of a watched variable,
+   and most of those changes cannot make it want a run: a watch `x >= k` is falsified
+   only when [hi x] drops below [k], so a move of [lo x] can never falsify it. D-0138
+   section 5 measured that half on QR48 (37.3 M wakes, 17.1 M declined) and filed it; it
+   was item E1 of the complexity inventory (D-0140), built by M11-complexity-T3 (D-0142).
+
+   WHY IT WAKES THE SAME INSTANCES IN THE SAME ORDER, apart from runs that do nothing.
+   Call "the plain walk" the one that asked every self-watching instance of [x] on every
+   entry on [x]. The ask is a function of the store, not of the entry: it answers yes iff
+   a watch of the instance on [x] is false NOW, so every entry on [x] of one walk gets the
+   same answers, and the plain walk placed an instance at its FIRST occurrence, the OLDEST
+   entry on [x] whose trigger kind it wants (the woken lists are oldest-entry-first, and a
+   later occurrence is a no-op of [enqueue]/[mark_dirty]). Take an instance whose watch on
+   [x] is false now, say `x >= k`. Either an entry of this walk moved [hi x] below [k],
+   and then every entry on [x] at or before it in age asks the upper slot, the oldest one
    included, so the instance is placed where it was; or [hi x] was below [k] before the
    walk. Then it was false when the instance last ran: had it been falsified since, the
    walk or seed that saw that entry asked the upper slot, and the instance has run since
@@ -586,13 +626,14 @@ let watches_memo t id v =
    watch is a conflict (which ends the call and is backtracked over, both watches being
    falsified at the conflict's level) or a unit propagation, after which the clause is
    SATISFIED by its one non-false literal; so the clause is satisfied, every literal but
-   the true one is false, and the run the old walk gave it changes nothing: [Pb.pass] finds no open term,
-   and [rewatch] keeps the true literal and picks the latest-falsified other literal again,
-   which is the same one because no falsification position has moved. That run, and the
-   asks that answer no, are what goes: WORK counters (wakes, advised, props), never the
-   trail. The seed only marks, so its order never mattered, and the same two cases cover
-   which slots it marks. The woken ids are merged by id as before ([sort_uniq], because one
-   instance can now sit in two slots of one variable).
+   the true one is false, and the run the plain walk gave it changes nothing: the clause's
+   run ([Clause.Learned_clause.propagate]) finds no open term, and its rewatch keeps the
+   true literal and picks the latest-falsified other literal again, which is the same one
+   because no falsification position has moved. That run, and the asks that answer no, are
+   what goes: WORK counters (wakes, advised, props), never the trail. The seed only marks,
+   so its order never mattered, and the same two cases cover which slots it marks. The
+   woken ids are merged by id as before, deduplicated ([sort_desc_uniq]) because one
+   instance can now sit in two slots of one variable.
 
    Under BAGUETTE_DEBUG the instances of the slots an entry does not ask are recorded as
    declined asks ([record_unasked]), so [check_declined] runs each one nothing else woke,
@@ -654,13 +695,17 @@ let dyn_remove t x i =
     if t.wv1.(moved) = x then t.wp1.(moved) <- i;
     if t.wv2.(moved) = x then t.wp2.(moved) <- i)
 
-(* M11-complexity-T17 (D-0173): RESTING, the satisfied learned clause taken out of the wake
-   index.
+(* RESTING: a satisfied learned clause taken out of the wake index (M11-complexity-T17,
+   D-0173). OFF by default: [Clause.Learned_clause] rests only when made with
+   [~rest_satisfied:true], which the search passes under BAGUETTE_REST_SATISFIED=on
+   ([Search.config.rest_satisfied], default [false]). D-0173 kept it behind that flag
+   because it prunes the same but in another order, hence other trees and proofs.
 
    A self-watching instance whose [inst_watched] answers [(w, Propagator.rests)] says that
-   the literal behind slot [w] is TRUE: [Clause.Learned_clause] does so when one of its two
-   watched literals holds, i.e. the clause is SATISFIED, and then no change can make it
-   prune and its advisor declines everything (I-P7 holds: a run would change nothing). It is
+   the literal behind slot [w] is TRUE: [Clause.Learned_clause] does so when one of its
+   two watched literals holds, i.e. the clause is SATISFIED, and then no change can make
+   it prune and its advisor declines everything. That is allowed by I-P7, which lets an
+   advisor decline a change only when a run would change nothing and not fail. It is
    indexed under [w] alone, so the falsification of its other literals no longer asks it.
    That ask, hundreds per trail entry on codes-cp's QR48, is what a satisfied clause cost
    once it had stopped running.
@@ -677,13 +722,13 @@ let dyn_remove t x i =
    first crossing's is conservative: an early release costs one run that changes nothing.
 
    Why the two watches it left are good again. The clause rested on [s] when a run found
-   [s] true; the other watch [f] was then non-false, or falsified at the CURRENT level (the
-   wake that brought the run), or the run was a seed of a clause [propagate] seeds anyway
-   (rule (b), a newborn or young instance, re-seeded after any backtrack below its birth).
-   In the first two cases [f]'s falsity, if any, is at a level at or above [s]'s, so the
-   backtrack that pops [s]'s support pops it too, and both watches are non-false again:
-   the two-watched-literal state of D-0104, the one MiniSat's satisfied clauses rely on.
-   The third case is covered by rule (b) exactly as before this row. *)
+   [s] true; the other watch [f] was then non-false, or falsified at the CURRENT level
+   (the wake that brought the run), or the run was a seed of a clause [propagate] seeds
+   anyway (rule (b), a newborn or young instance, re-seeded after any backtrack below its
+   birth). In the first two cases [f]'s falsity, if any, is at a level at or above [s]'s,
+   so the backtrack that pops [s]'s support pops it too, and both watches are non-false
+   again: the two-watched-literal state of D-0104, the one MiniSat's satisfied clauses
+   rely on. The third case is covered by rule (b) exactly as it is without resting. *)
 let rest_on t store id (w : Propagator.watch) =
   let x = Propagator.watch_var w in
   let pos =
@@ -824,13 +869,14 @@ let index_static t (inst : Propagator.instance) =
         t.wake_len.(x) <- len + 1)
       (List.sort_uniq Int.compare (List.map Var.to_int inst.Propagator.inst_vars))
 
-(* M2-T6: THE SELF-WAKE VETO, and the aliased-scope rule that guards it.
+(* THE SELF-WAKE VETO, and the aliased-scope rule that guards it (M2-T6, D-0094).
 
-   Before this, a propagator that pruned was re-queued by its own prunings -- every
-   watcher of a variable it moved, itself included -- so every effectful run of an
-   idempotent propagator was followed by one that could not possibly do anything. GCS
-   does not re-wake a propagator from its own changes when it has claimed idempotence,
-   and that is the first of its two guards this copies.
+   RULE. An instance whose idempotence claim is honoured is not re-woken by the trail
+   entries its own run pushed. Without the veto every watcher of a variable a run moved
+   is woken, the runner included, so every effectful run of an idempotent propagator is
+   followed by one that cannot possibly do anything. GCS does not re-wake a propagator
+   from its own changes when it has claimed idempotence, and that is the first of its two
+   guards this copies.
 
    A claim ([Propagator.inst_idempotent]) is HONOURED only when the instance's scope
    names no variable twice. That is GCS's second guard -- it downgrades claims from
@@ -845,7 +891,10 @@ let index_static t (inst : Propagator.instance) =
 
    A claim that is honoured but WRONG loses pruning silently -- the answer can still be
    right and the proof still verifies, since every line written was derived correctly --
-   so it ships with [check_claim] below, in the same commit, under BAGUETTE_DEBUG. *)
+   so it ships with [check_claim] below, in the same commit, under BAGUETTE_DEBUG. The
+   claim itself is made at the packing site ([Propagator.pack ~idempotent:true], from
+   lib/flatzinc/compile.ml's [pack_linear], [pack_arith_row] and a few others), not
+   looked up by name (D-0098). *)
 let has_alias (vars : Var.t list) =
   let sorted = List.sort Var.compare vars in
   let rec dup = function
@@ -859,14 +908,16 @@ let honours_claim (inst : Propagator.instance) =
 
 let create ?(trigger = default_trigger) (instances : Propagator.instance list) : t =
   let watchers = Hashtbl.create 64 in
-  (* M11-complexity-T3 (D-0142, D-0143's request): whether [id] is already in [v]'s list
-     was a [List.mem] over the list, which made building the engine quadratic in a
-     variable's degree (smelt_2: variables in about 2 000 constraints). Ids are distinct
+  (* Whether [id] is already in [v]'s list is answered by the list's HEAD alone. Ids are
+     distinct
      ([t.instances] is indexed by them, instance [i] at slot [i]), so [id] can only be in
      [v]'s list if THIS instance put it there, for an earlier occurrence of [v] in its own
      scope, and then it is the head, nothing having been prepended since. So the head is
-     the whole test: the same lists in the same order, in O(1) and without the table of
-     pairs a first version kept, which cost smelt_2 50 MB of peak memory. *)
+     the whole test: the same lists in the same order, in O(1). It was a [List.mem] over
+     the list, which made building the engine quadratic in a variable's degree (smelt_2:
+     variables in about 2 000 constraints), and a first fix kept a table of pairs, which
+     cost smelt_2 50 MB of peak memory (M11-complexity-T3, D-0142, at the request of
+     D-0143, the pass on the setup cost before node 1). *)
   List.iter
     (fun (inst : Propagator.instance) ->
       let id = inst.Propagator.id in
@@ -951,7 +1002,7 @@ let create ?(trigger = default_trigger) (instances : Propagator.instance list) :
       declined = [];
     }
   in
-  (* M6-T22: the wake index, in [instances] order -- the order [watchers] was built in. *)
+  (* The wake index, in [instances] order -- the order [watchers] was built in. *)
   Array.iteri
     (fun i inst ->
       index_static t inst;
@@ -965,7 +1016,7 @@ let priority t = t.priority
 let cost_class_of t id = Char.code (Bytes.get t.cls id)
 let n_instances t = t.count
 
-(* M6-T22: the instances, in id order, without the [vacant] tail. *)
+(* The instances, in id order, without the [vacant] tail. *)
 let iter_instances t f =
   for i = 0 to t.count - 1 do
     f t.instances.(i)
@@ -973,8 +1024,8 @@ let iter_instances t f =
 
 let counters t = t.ctr
 
-(* M6-T20. [name, instances, runs, effectful runs] per propagator family, most runs
-   first; ties by name so the table is deterministic. *)
+(* For measurement (M6-T20): [name, instances, runs, effectful runs] per propagator
+   family, most runs first; ties by name so the table is deterministic. *)
 let family_table t =
   let tbl = Hashtbl.create 16 in
   iter_instances t (fun (inst : Propagator.instance) ->
@@ -1012,16 +1063,12 @@ let vetoes_self t id = id >= 0 && id < Array.length t.veto && t.veto.(id)
    derived it for itself would silently stop agreeing the day that stops being true. *)
 let next_id t = t.count
 
-(* ------------------------------------------- M21-memory-T3 (D-0226): REMOVING an instance
+(* ------------------------------------------ REMOVING an instance (M21-memory-T3, D-0226)
 
-   Until D-0226 an instance, once added, stayed in this engine for good: its slot held the
-   record and its closures, and its id sat in the wake lists of every variable of its
-   scope. [Retention.gate] could switch a learned constraint off (its run became
-   [Fixpoint], its advisor [false]), but the engine kept the switched-off instance and,
-   through its closures, the whole propagator, so an eviction freed no byte (D-0221
-   section 5: 109.7 M live words with and without 455 evictions on mapping mesh3x3_2).
-
-   [remove t id] takes instance [id] out:
+   [remove t id] takes instance [id] out of this engine, so that a learned constraint the
+   database evicts frees its memory. Called by the learned database ([Retention], the
+   single owner of a learned constraint's lifetime) through the function [add] hands to
+   [inst_attach].
 
    - its slot gets a [tombstone]: the same id and name (so [family_table] counts what it
      counted), no variable, a [run] that is [Fixpoint] and an advisor that is [false]. The
@@ -1034,8 +1081,17 @@ let next_id t = t.count
      ([pending], [purge]): one filter per variable for all the ids removed since, which is
      what a reduction evicting hundreds of rows over the same ladders needs;
    - the newborn rule refuses it ([mark_born]) and no wake list or resting level names it,
-     so no seed, wake, release or newborn rule runs it again. A FULL seed (every slot, after a backtrack below every recorded fixpoint) still steps
-     on the slot and runs the tombstone, which does nothing.
+     so no seed, wake, release or newborn rule runs it again. A FULL seed (every slot,
+     after a backtrack below every recorded fixpoint) still steps on the slot and runs the
+     tombstone, which does nothing.
+
+   Why it exists. Before D-0226 an instance, once added, stayed in this engine for good:
+   its slot held the record and its closures, and its id sat in the wake lists of every
+   variable of its scope. [Retention.gate] could switch a learned constraint off (its run
+   became [Fixpoint], its advisor [false]), but the engine kept the switched-off instance
+   and, through its closures, the whole propagator, so an eviction freed no byte (D-0221
+   section 5, the measurement of the retention default: 109.7 M live words with and
+   without 455 evictions on mapping mesh3x3_2).
 
    Why the search cannot see it. [remove] is called between two [propagate] calls (by the
    database's reduction, at a conflict), on an instance whose [run] is already
@@ -1112,8 +1168,10 @@ let purge t =
           | l' -> Hashtbl.replace t.watchers v l'))
     vars
 
-(* Register one more propagator instance, AFTER [create] -- M2-L1's half of "instantiate
-   a learned constraint as a Linear instance registered with the engine".
+(* Register one more propagator instance, AFTER [create]: how a learned constraint joins
+   the engine. This is the engine's half of M2-L1 ("instantiate a learned constraint as a
+   Linear instance registered with the engine"), the task that gave learned constraints
+   their PB type and runtime instance (lib/core/learned.ml).
 
    Three things this has to get right, each of which is an existing invariant of this
    file rather than a new rule:
@@ -1124,20 +1182,22 @@ let purge t =
       learned instance's id comes from a caller and a wrong one would silently make
       [propagate] run the wrong propagator -- which is a wrong pruning attributed to the
       right constraint, the exact shape I-T4 exists to catch.
-   2. The watcher table is the ONLY thing that tells [check_attribution] an instance is
-      allowed to prune a variable (its second arm). A learned row over variables this
-      engine has never seen is therefore registered against those variables here, or its
-      every pruning is a mis-attribution.
+   2. The instance's scope ([scopes], built from [inst_vars] like the watcher table) is
+      the ONLY thing that tells [check_attribution] an instance is allowed to prune a
+      variable (its second arm). A learned row over variables this engine has never seen
+      is therefore registered against those variables here, in [scopes] and in
+      [watchers], or its every pruning is a mis-attribution.
    3. [triggers] is indexed by id too and is sized at [create]; it grows here. The
       default for an id with no entry is [wake_on_any], so a short array is never
       *unsound* -- it just wakes more than it must -- but it would make a learned
-      instance's trigger unreachable, which is a silent loss of the M2-T5 mask.
+      instance's trigger unreachable, which is a silent loss of the trigger mask.
 
-   Appending copied every id-indexed array, O(n) per learned constraint, on the argument
-   that learning is bounded by conflicts. D-0138 measured what that costs when there is a
-   conflict at every other node and n is the learned database: six arrays of n words in
-   the major heap per conflict, and the marking they feed. Since M6-T22 the arrays grow by
-   doubling and [count] says which instances exist. *)
+   The id-indexed arrays grow by doubling and [count] says which instances exist, so an
+   [add] is amortised O(1). Until M6-T22 each [add] copied every id-indexed array, O(n)
+   per learned constraint, on the argument that learning is bounded by conflicts; D-0138
+   measured what that costs when there is a conflict at every other node and n is the
+   learned database: six arrays of n words in the major heap per conflict, and the marking
+   they feed. *)
 let add ?(trigger = default_trigger) (t : t) (inst : Propagator.instance) =
   let expected = next_id t in
   if inst.Propagator.id <> expected then
@@ -1181,29 +1241,31 @@ let add ?(trigger = default_trigger) (t : t) (inst : Propagator.instance) =
   t.scopes.(id) <- scope;
   t.cls <- class_room t.cls (Array.length t.triggers);
   Bytes.set t.cls id (class_byte inst ~scope);
-  (* M6-T18: a new instance has never run, so it is at its fixpoint at no state: it is
+  (* A new instance has never run, so it is at its fixpoint at no state: it is
      seeded by the next [propagate] whatever else changed, and after any later backjump
      to a fixpoint older than the one it is born at. *)
   t.born <- room t.born id unborn;
   t.born.(id) <- unborn;
   t.newborns <- id :: t.newborns;
   t.heap <- room t.heap id 0;
-  (* D-0226: the instance is told how to leave. Every instance but a gated learned one
-     drops the function ([Propagator.attach_never]). *)
+  (* The instance is told how to leave ([remove], D-0226). Every instance but a gated
+     learned one drops the function ([Propagator.attach_never]). *)
   inst.Propagator.inst_attach (fun () -> remove t id)
 
 (* The variables an instance watches, or [None] if this engine has no such instance.
 
-   The shape [Analysis.analyse] wants (M2-L2), and it is here rather than reconstructed
-   by the caller because [t.instances] is indexed by id and only [add] keeps it so. A
-   caller that built this from its own list of instances would stop agreeing with the
-   engine the moment a learned constraint was registered. *)
+   The shape [Analysis.analyse] wants (the implication graph of conflict analysis, M2-L2),
+   and it is here rather than reconstructed by the caller because [t.instances] is indexed
+   by id and only [add] keeps it so. A caller that built this from its own list of
+   instances would stop agreeing with the engine the moment a learned constraint was
+   registered. *)
 let vars_of t id =
   if id >= 0 && id < t.count then Some t.instances.(id).Propagator.inst_vars else None
 
-(* M2-L6: the PB row instance [id] is, or [None] when it does not expose one. The same
-   shape as [vars_of] and for the same reason -- lib/core/pb_analysis.ml is shown the
-   engine through two narrow functions rather than being handed the instance array. *)
+(* The PB row instance [id] is, or [None] when it does not expose one (for PB conflict
+   analysis, M2-L6). The same shape as [vars_of] and for the same reason --
+   lib/core/pb_analysis.ml is shown the engine through two narrow functions rather than
+   being handed the instance array. *)
 let row_of t store id =
   if id >= 0 && id < t.count then t.instances.(id).Propagator.inst_row store else None
 
@@ -1214,49 +1276,19 @@ let row_of t store id =
 let name_of t id =
   if id >= 0 && id < t.count then t.instances.(id).Propagator.inst_name else "<unknown>"
 
-(* M11-complexity-T15: BAGUETTE_MEMO_STATS names the producer of a build by its instance. *)
+(* Under BAGUETTE_MEMO_STATS, the explanation statistics name the propagator that built
+   each explanation by its instance's name (M11-complexity-T15). *)
 let install_names t = if Explanation.stats_on then Explanation.producer_name := name_of t
 
 let trigger_of t id =
   if id >= 0 && id < Array.length t.triggers then t.triggers.(id) else wake_on_any
 
-(* Every newly-touched variable's watchers, for the trail entries pushed since
-   [since] -- the positions [since .. trail_length - 1].
-
-   This walks the trail by index ([Store.trail_entry] is O(1) and says so in its own
-   comment). It used to call [Store.trail_entries], which materialises the *whole*
-   trail as a fresh most-recent-first list and then kept only its first
-   [trail_length - since] elements: O(|trail|) allocation on every propagator call in
-   the fixpoint loop, to look at the handful of entries that call had just pushed.
-   The module header above already claimed "O(new entries) per propagator call"; that
-   is now true of the code as well as of the comment. M1-T24.
-
-   The walk runs *downwards*, newest position first, and that is not cosmetic. The
-   old code iterated a newest-first list prepending each entry's watchers with
-   [List.rev_append], so the returned list came out oldest-entry-first with each
-   entry's watcher list reversed, and [propagate] enqueues in exactly that order.
-   Counting down from [trail_length - 1] to [since] performs the identical sequence
-   of [rev_append]s on the identical entries, so the wake order -- and hence the
-   propagation order, the search tree and the emitted proof -- is unchanged, not
-   merely equal as a set. An upward walk would reverse it.
-
-   M2-T5: each entry is now classified ([Domain.classify] off the [old]/[now] the entry
-   already carries -- no new field on [Store.entry]) and a watcher whose trigger does not
-   want that kind is dropped. Two things about that, both load-bearing:
-
-   - Order is preserved exactly. [List.iter (fun id -> acc := id :: !acc) ids] is
-     [List.rev_append ids] written out, and filtering inside it yields a SUBSEQUENCE of
-     what the unfiltered walk returns -- never a permutation of it. So the wake order
-     this file's own test ([test_engine.ml], "wake order") pins is still the order, with
-     masked ids removed and nothing reordered.
-   - Classification is per ENTRY, not per variable: one entry is one [Domain] operation,
-     so its change is a [Bound] or a [Holes] but never both, and a watcher that wants
-     bounds only cannot lose a bound move that happened to be bundled with a hole. *)
-(* M6-T20 / D-0104. The advisor's answer for instance [id] on a change of [v], or [true]
-   for an id this engine does not know (the safe answer, as for the trigger). Under
-   BAGUETTE_DEBUG a [false] is CHECKED: the instance is run and must prune nothing and
-   not fail, which is I-P7 read literally -- once the walk is over and only if nothing
-   else woke it ([check_declined], D-0142 section 1). *)
+(* The advisor's answer for instance [id] on a change of [v], or [true] for an id this
+   engine does not know (the safe answer, as for the trigger). The advisor was M6-T20's
+   answer to the cost of learned clauses (D-0104: two watched literals, answered in O(1)
+   before the wake is queued). Under BAGUETTE_DEBUG a [false] is CHECKED: the instance is
+   run and must prune nothing and not fail, which is I-P7 read literally -- once the walk
+   is over and only if nothing else woke it ([check_declined], D-0142 section 1). *)
 exception Not_at_fixpoint of string
 
 let check_advise (inst : Propagator.instance) (store : Store.t) v =
@@ -1286,32 +1318,32 @@ let[@inline] advises t store id v =
       if Debug.enabled then t.declined <- (id, v) :: t.declined;
       false)
 
-(* M11-complexity-T3 (D-0142 section 1): the I-P7 check of the declined asks, made once
-   the walk that asked them is over and its wakes are in, and only for an instance that
-   is NOT PENDING.
+(* THE CHECK OF THE DECLINED ASKS: under BAGUETTE_DEBUG, the I-P7 check of every ask an
+   advisor declined, made once the walk that asked them is over and its wakes are in, and
+   only for an instance that is NOT PENDING (D-0142 section 1, M11-complexity-T3).
 
-   I-P7 lets an advisor decline a change only "if, every change since this instance's
-   last run on a variable it names having been answered [false], a run now would change
+   I-P7 lets an advisor decline a change only "if, every change since this instance's last
+   run on a variable it names having been answered [false], a run now would change
    nothing". That premise is false for an instance that some OTHER change since its last
-   run woke and that has not run yet: it is in the queue (or a dirty seed slot), and a
-   run of it now may well prune -- the run it is queued for. Until this record the check
-   ran on the spot, at the declined ask, and so it ran such instances early and called
-   their pending run a lost wake. On an integer variable that is ordinary: a learned
-   clause is woken because its second watch was falsified (an entry on [y]), and before
-   it runs, a change of its first watch's variable [x] that leaves that watch open is
-   declined -- correctly, the clause is already queued -- and the check, run there, sees
-   the unit propagation the queue is about to make. A Boolean change cannot do that: it
-   fixes the variable, so the watch it touches is decided, true (the clause is satisfied
-   and a run does nothing) or false (the ask says yes). That is why the alarm was on the
-   integer instances only (D-0142 section 1 has the trace on 2013 rcpsp_12).
+   run woke and that has not run yet: it is in the queue (or a dirty seed slot), and a run
+   of it now may well prune -- the run it is queued for. A check made on the spot, at the
+   declined ask, would run such instances early and call their pending run a lost wake;
+   the first version did, and raised false alarms. On an integer variable that is
+   ordinary: a learned clause is woken because its second watch was falsified (an entry on
+   [y]), and before it runs, a change of its first watch's variable [x] that leaves that
+   watch open is declined -- correctly, the clause is already queued -- and the check, run
+   there, sees the unit propagation the queue is about to make. A Boolean change cannot do
+   that: it fixes the variable, so the watch it touches is decided, true (the clause is
+   satisfied and a run does nothing) or false (the ask says yes). That is why the alarm
+   was on the integer instances only (D-0142 section 1 has the trace on 2013 rcpsp_12).
 
-   So the check now waits for the end of the walk ([watchers_of_new_entries], after the
+   So the check waits for the end of the walk ([watchers_of_new_entries], after the
    caller's wakes) or of the seed ([seed_dirty] and the newborn marks), and skips every
    instance that is dirty or queued. For the rest, the premise holds -- every change of
    that walk was declined for it, and any earlier one was declined or was run since --
    and a run must change nothing, exactly as before. Each instance is checked once per
-   walk, at the variable of its first declined ask. This is the whole change: without
-   BAGUETTE_DEBUG [declined] stays empty and nothing here runs. *)
+   walk, at the variable of its first declined ask. Without BAGUETTE_DEBUG [declined]
+   stays empty and nothing here runs. *)
 let check_declined t store =
   if t.declined <> [] then (
     let ds = List.rev t.declined in
@@ -1325,24 +1357,24 @@ let check_declined t store =
             check_advise t.instances.(id) store v))
       ds)
 
-(* E1 (D-0142): did this entry move [x]'s lower bound, its upper bound? A hole entry
-   moves neither, a fixing entry on a wide domain can move both. *)
+(* For the wake index by direction: did this entry move [x]'s lower bound, its upper
+   bound? A hole entry moves neither, a fixing entry on a wide domain can move both. *)
 let lo_moved (e : Store.entry) = Domain.lo e.now <> Domain.lo e.old
 let hi_moved (e : Store.entry) = Domain.hi e.now <> Domain.hi e.old
 
-(* M16-file-review-T1 (D-0186): whether [trig] wants a trail entry, from the entry's KIND
-   alone: [bound] is "this entry moved a bound" ([lo_moved] or [hi_moved]). It is
-   [wakes_on trig (Domain.classify ~old ~now)] without the classification. [classify]
-   answers [Bound] exactly when a bound moved, and otherwise walks the domain for the
-   new holes and answers [Holes] -- never [NoChange] for a trail entry, because
-   [Store.apply] pushes only a [Domain.Changed] value, which is a strict subset of the
-   old domain with the same bounds only if a value inside them became a hole. So the
-   answer is the same, without the O(width) walk over a hole entry and without the
-   [Bound] record and its two options allocated per entry the engine looked at. *)
+(* Whether [trig] wants a trail entry, from the entry's KIND alone (D-0186): [bound] is
+   "this entry moved a bound" ([lo_moved] or [hi_moved]). It is [wakes_on trig
+   (Domain.classify ~old ~now)] without the classification. [classify] answers [Bound]
+   exactly when a bound moved, and otherwise walks the domain for the new holes and
+   answers [Holes] -- never [NoChange] for a trail entry, because [Store.apply] pushes
+   only a [Domain.Changed] value, which is a strict subset of the old domain with the same
+   bounds only if a value inside them became a hole. So the answer is the same, without
+   the O(width) walk over a hole entry and without the [Bound] record and its two options
+   allocated per entry the engine looked at. *)
 let wakes_on_kind trig ~bound = if bound then trig.on_bound else trig.on_holes
 
-(* D-0243: [wakes_on_kind (trigger_of t id) ~bound], off [trig_bits]: one byte read
-   where it was a call and a record read. Same answer, [3] being [wake_on_any]'s byte
+(* [wakes_on_kind (trigger_of t id) ~bound], off [trig_bits]: one byte read where it was
+   a call and a record read (D-0243). Same answer, [3] being [wake_on_any]'s byte
    for an id the table does not cover, as [trigger_of] answers [wake_on_any]. *)
 let[@inline] wakes_id t id ~bound =
   ((if id >= 0 && id < Bytes.length t.trig_bits then
@@ -1351,13 +1383,14 @@ let[@inline] wakes_id t id ~bound =
   land if bound then 1 else 2)
   <> 0
 
-(* E1 (D-0142), under BAGUETTE_DEBUG only: the instances of the directional slots of
-   [e.var] that this entry does NOT ask ([lo]/[hi] false) are recorded as declined asks, so that
-   [check_declined] treats them exactly as it treated them when every watcher of the
-   variable was asked: an instance that nothing else woke is run and must prune nothing.
-   That is the claim the direction index rests on, checked the way I-P7 is. [self] is a
-   vetoed self-wake (never asked, not recorded); [skip] an instance the seed marks
-   whatever its advisor says. The trigger mask is applied as the ask would apply it. *)
+(* For the wake index by direction, under BAGUETTE_DEBUG only: the instances of the
+   directional slots of [e.var] that this entry does NOT ask ([lo]/[hi] false) are
+   recorded as declined asks, so that [check_declined] treats them exactly as it treated
+   them when every watcher of the variable was asked: an instance that nothing else woke
+   is run and must prune nothing. That is the claim the direction index rests on, checked
+   the way I-P7 is. [self] is a vetoed self-wake (never asked, not recorded); [skip] an
+   instance the seed marks whatever its advisor says. The trigger mask is applied as the
+   ask would apply it. *)
 let record_unasked ?(skip = fun _ -> false) t (e : Store.entry) ~lo ~hi ~self =
   let x = Var.to_int e.Store.var in
   let bound = lo_moved e || hi_moved e in
@@ -1371,22 +1404,23 @@ let record_unasked ?(skip = fun _ -> false) t (e : Store.entry) ~lo ~hi ~self =
   if not lo then record ((3 * x) + 1);
   if not hi then record ((3 * x) + 2)
 
-(* M11-complexity-T14: the woken self-watching ids of one entry, sorted DESCENDING with
-   duplicates dropped, in a scratch array instead of a list.
+(* The woken self-watching ids of one entry, sorted DESCENDING with duplicates dropped,
+   in a scratch array instead of a list (M11-complexity-T14).
 
-   [watchers_of_new_entries] used [List.sort_uniq] here. On codes-cp's QR48 one entry
-   can wake hundreds of learned clauses (17 787 of the 230 000 entries of the 3-fixed run
-   woke 63 or more), and the list sort allocated O(k log k) cells and called its comparison
+   [watchers_of_new_entries] used [List.sort_uniq] here. On codes-cp's QR48 one entry can
+   wake hundreds of learned clauses (17 787 of the 230 000 entries of the 3-fixed run woke
+   63 or more), and the list sort allocated O(k log k) cells and called its comparison
    closure O(k log k) times, 5 % of the cycles. [sort_desc_uniq] is a heapsort over the
-   first [len] cells of [a], with no allocation and no closure: a MIN-heap is built, and its
-   minimum swapped to the end of the shrinking heap [len - 1] times, which leaves the
-   cells in DESCENDING order. Adjacent duplicates are then squeezed out, and the new length
-   is returned. The result is the list [List.sort_uniq (fun a b -> Int.compare b a)] gave,
-   as a prefix of [a], so the wake order is the same.
+   first [len] cells of [a], with no allocation and no closure: a MIN-heap is built, and
+   its minimum swapped to the end of the shrinking heap [len - 1] times, which leaves the
+   cells in DESCENDING order. Adjacent duplicates are then squeezed out, and the new
+   length is returned. The result is, as a prefix of [a], the list that
+   [List.sort_uniq (fun a b -> Int.compare b a)] gave, so the wake order is the same.
 
    The scratch is module-level and grown on demand, like lib/core/prop/pb.ml's: the walk
    writes every cell it reads ([0 .. len - 1]) before reading it, calls no propagator and
-   no walk while it holds the cells, so nothing one walk leaves there is read by another. *)
+   no walk while it holds the cells, so nothing one walk leaves there is read by any
+   other. *)
 let wake_scratch = ref (Array.make 64 0)
 
 let rec sift_min (a : int array) i n =
@@ -1436,19 +1470,46 @@ let[@inline] wants t store ~vetoed ~self_id id bound v =
     t.ctr.c_masked <- t.ctr.c_masked + 1;
     false)
 
+(* THE WAKE WALK: every newly-touched variable's watchers, for the trail entries pushed
+   since [since] (the positions [since .. trail_length - 1]), with the veto, the mask and
+   the advisor applied ([wants]), in the order [propagate] enqueues them.
+
+   The walk reads the trail by index ([Store.trail_entry] is O(1)), so it costs O(new
+   entries) per run, as the module header says. Until M1-T24 it called
+   [Store.trail_entries], which materialised the WHOLE trail as a fresh list on every run
+   to look at the handful of entries that run had just pushed.
+
+   ORDER. The walk runs DOWNWARDS, newest position first, and prepends each woken id to
+   its result, so the result is oldest-entry-first and, within one entry, in ascending id
+   order: [wake_static.(x)] is walked from its last cell down (newest instance, highest
+   id, first) and prepended, and the self-watching ids, sorted descending, are merged into
+   it by id. That is the order the original list-based walk produced (it prepended each
+   entry's newest-first watcher list with [List.rev_append]), so the wake order -- and
+   hence the propagation order, the search tree and the emitted proof -- is unchanged,
+   not merely equal as a set. An upward walk would reverse it. test_engine.ml's "wake
+   order" test pins it.
+
+   FILTERING keeps that order. Dropping an id inside the walk yields a SUBSEQUENCE of what
+   the unfiltered walk returns, never a permutation of it, so the veto, the mask and the
+   advisor remove ids and reorder nothing. The mask reads each entry's KIND ([bound], from
+   the [old]/[now] the entry carries, no new field on [Store.entry]), and the kind is per
+   ENTRY, not per variable: one entry is one [Domain] operation, so its change moves a
+   bound or punches holes but never both, and a watcher that wants bounds only cannot
+   lose a bound move that happened to be bundled with a hole (M2-T5). *)
 let watchers_of_new_entries ?self t store ~since =
-  (* M2-T6: [self] is the instance that pushed these entries. When its claim is
-     honoured, its own id is dropped from every entry's watcher list -- a subsequence
-     again, never a reordering, for the reason the bullet above gives for the mask. *)
+  (* [self] is the instance that pushed these entries. When its claim is honoured (the
+     self-wake veto), its own id is dropped from every entry's watcher list -- a
+     subsequence again, never a reordering, as FILTERING above says. *)
   let vetoed = match self with Some id -> vetoes_self t id | None -> false in
   let self_id = match self with Some id -> id | None -> -1 in
   let acc = ref [] in
-  (* D-0142 section 1: what this walk declines is checked after it, by its caller. *)
+  (* What this walk declines is checked after it, by its caller ([check_declined]). *)
   if Debug.enabled then t.declined <- [];
-  (* M6-T22: the self-watching instances of one slot that want this entry, into the
-     scratch [dl] at [!dn] ([sort_desc_uniq]'s header). A copy of the slice under
-     BAGUETTE_DEBUG, as before D-0142 moved the I-P7 check after the walk: nothing in the
-     walk resyncs a slice now, and the copy costs nothing that counts. *)
+  (* The self-watching instances of one slot that want this entry, into the scratch
+     [dl] at [!dn] ([sort_desc_uniq]'s header). Under BAGUETTE_DEBUG the slice is copied
+     first, a habit from when the I-P7 check ran inside the walk and could resync a
+     slice; since D-0142 moved that check after the walk nothing here resyncs one, and
+     the copy costs nothing that counts. *)
   let dn = ref 0 in
   let collect bound v sl =
     let nd = t.dyn_len.(sl) in
@@ -1471,9 +1532,9 @@ let watchers_of_new_entries ?self t store ~since =
     let x = Var.to_int e.var in
     if x < Array.length t.wake_static then (
       let stat = t.wake_static.(x) and ns = t.wake_len.(x) in
-      (* E1 (D-0142): the slots this entry asks are those of the bound moves of this
-         entry AND of every newer entry of this walk on [x] -- see "The wake index by
-         direction", and [t.moved]. *)
+      (* The slots this entry asks are those of the bound moves of this entry AND of
+         every newer entry of this walk on [x] -- see "the wake index by direction", and
+         [t.moved]. *)
       let lm = lo_moved e and hm = hi_moved e in
       let m =
         Char.code (Bytes.unsafe_get t.moved x)
@@ -1491,8 +1552,8 @@ let watchers_of_new_entries ?self t store ~since =
         record_unasked t e ~lo ~hi ~self:(if vetoed then self_id else -1);
       if ns > 0 || nd > 0 then (
         let bound = lm || hm in
-        (* M6-T22: the self-watching instances that want this entry, DESCENDING, to
-           be merged into the static ones by id (see the wake index's header). One
+        (* The self-watching instances that want this entry, DESCENDING, to be merged
+           into the static ones by id (see "the wake index of watched literals"). One
            instance can sit in two of the slots asked (two watches on [x]), hence the
            duplicates [sort_desc_uniq] drops. [dk] is the next one to merge. *)
         dn := 0;
@@ -1525,41 +1586,46 @@ let watchers_of_new_entries ?self t store ~since =
   done;
   !acc
 
-(* --------------------------------------------- attribution, checked by reading it back *)
+(* ------------------------------------------- attribution, checked by reading it back *)
 
 exception Mis_attributed of string
 
-(* M2-T7's answer to "an id that is threaded but never read changes no behaviour at all".
+(* THE ATTRIBUTION CHECK. After each [run], every trail entry that run pushed must be
+   credited to the instance that just ran, and that instance must be one that watches the
+   variable the entry changed. It exists because an id that is threaded through the store
+   but never read changes no behaviour at all, so nothing else would notice a wrong one
+   (M2-T7, which threaded it).
 
-   After each [run], every trail entry that run pushed must be credited to the instance
-   that just ran, and that instance must be one that watches the variable the entry
-   changed. The second half is the one with teeth: the first catches a stamp that was
-   never written, the second catches a stamp that was written with a plausible but wrong
-   id -- which is exactly the failure mode M2-T3 would turn into a wrong learned clause,
-   and exactly the kind of thing this codebase has repeatedly shipped green (M1-T45's
-   [if true || ...], M1-T50's deliberately wrong decision literal).
+   The second half is the one with teeth: the first catches a stamp that was never
+   written, the second catches a stamp that was written with a plausible but wrong id.
+   That is exactly the failure clause learning (M2-T3) would turn into a wrong learned
+   clause, since it resolves an entry's reason through this id, and exactly the kind of
+   thing this codebase has repeatedly shipped green: a test disabled by [if true || ...]
+   (found in M1-T45), and a deliberately wrong decision literal that left the whole
+   suite green because nothing read it (M1-T50).
 
    It is ON BY DEFAULT, not behind BAGUETTE_DEBUG, and that is deliberate. A Debug-gated
    check of a field nobody else reads is indistinguishable from no check at all in every
-   run the suite actually makes. The cost is one binary search in the instance's sorted
-   scope per NEW TRAIL ENTRY, bounded by the number of prunings, not by the trail or the
-   variable count.
+   run the suite actually makes. The cost is at most one binary search in the instance's
+   sorted scope per NEW TRAIL ENTRY (none on a hit of the [attr_ok] memo), bounded by the
+   number of prunings, not by the trail or the variable count.
 
-   Until M6-T22 the watcher table was consulted ("the short [List.mem]"), on the argument
-   that it is indexed by variable. The list it returns is short only while the watchers
-   of one variable are few: with a learned database it is every learned clause naming
-   the variable, and D-0138 measured that walk at 15 % of a QR48 solve. [t.scopes] is
-   built from the same [inst_vars] at the same two places ([create], [add]), so the
-   answer is the table's. *)
+   The scope is a sorted array per instance ([t.scopes]). Until M6-T22 the watcher table
+   was consulted ("the short [List.mem]"), on the argument that it is indexed by variable.
+   The list it returns is short only while the watchers of one variable are few: with a
+   learned database it is every learned clause naming the variable, and D-0138 measured
+   that walk at 15 % of a QR48 solve. [t.scopes] is built from the same [inst_vars] at the
+   same two places ([create], [add]), so the answer is the table's. *)
 let check_attribution (t : t) (inst : Propagator.instance) store ~since
     ~(conflict : Store.conflict option) =
   let id = inst.Propagator.id in
-  (* M6-T22 / D-0138: membership in the instance's own sorted scope, which is the
-     watcher table's answer by construction (both are built from [inst_vars], at [create]
-     and at [add]). It used to be [List.mem id] over the watcher list of [e.var], and on
-     a learned database that list is every learned clause naming the variable, newest
-     first, with the model propagators that actually prune at its far end: on QR48 that
-     walk, under OCaml's polymorphic [compare], was 15 % of the solve's cycles. *)
+  (* Membership in the instance's own sorted scope, through the [attr_ok] memo
+     ([watches_memo]), which is the watcher table's answer by construction (both are
+     built from [inst_vars], at [create] and at [add]). It used to be [List.mem id] over
+     the watcher list of [e.var], and on a learned database that list is every learned
+     clause naming the variable, newest first, with the model propagators that actually
+     prune at its far end: on QR48 that walk, under OCaml's polymorphic [compare], was
+     15 % of the solve's cycles (D-0138). *)
   for i = since to Store.trail_length store - 1 do
     let e : Store.entry = Store.trail_entry store i in
     if e.Store.prop <> id then
@@ -1654,8 +1720,8 @@ let check_fixpoint (t : t) (store : Store.t) : unit =
                        (Domain.to_string e.now)
                        (Domain.change_to_string (Domain.classify ~old:e.old ~now:e.now))))))
 
-(* M2-T6: the CLAIM RE-CHECKER, GCS's companion to the veto ("re-runs every honoured
-   idempotence claim ... and aborts if it infers anything").
+(* THE CLAIM RE-CHECKER, GCS's companion to the self-wake veto ("re-runs every honoured
+   idempotence claim ... and aborts if it infers anything"), M2-T6.
 
    Called by [propagate] under BAGUETTE_DEBUG at the exact moment a claim is relied on:
    an honoured instance has just returned [Fixpoint] having pruned, and the veto is
@@ -1697,8 +1763,7 @@ let check_claim (inst : Propagator.instance) (store : Store.t) : unit =
           (Printf.sprintf "pruned %s from %s to %s" (Store.name store e.var)
              (Domain.to_string e.old) (Domain.to_string e.now))
 
-(* ============================================================ M2-T10: the consistency
-   oracle
+(* ================================ the consistency oracle (M2-T10, BAGUETTE_CONSISTENCY)
 
    docs/SPEC.md 2.2 makes the `consistency` tag normative and 3.2 spells out what a
    propagator owes; [Propagator.consistency] makes the tag a constructor rather than a
@@ -1760,15 +1825,15 @@ let check_claim (inst : Propagator.instance) (store : Store.t) : unit =
               the other variables' INTERVALS -- [lo..hi] with holes ignored.
 
               That relaxation is a reading, and it is the one docs/GLOSSARY.md's
-              "saying nothing about interior values" forces. It is bounds(Z), not
-              bounds(D). The difference is not cosmetic: over x,y in {0,2} with
-              x + y != 1 removed... concretely, `x + y = 1` with x,y in {0,2} has no
-              bounds(Z) pruning to make (x = 0 wants y = 1, and 1 IS in [0,2]) while
-              bounds(D) would empty both domains. [Linear], [Int_le], [Int_lt], [Pb]
-              and [Bool2int] all declare [Bounds] and all are bounds(Z); asserting
-              bounds(D) against them would report five findings that are not bugs.
-              SPEC 3.2 does not currently distinguish the two -- REPORTED, not decided
-              here (M2-T10).
+              "saying nothing about interior values" forces. It is bounds(Z) (support
+              over the integer intervals), not bounds(D) (support over the actual
+              domains). The difference is not cosmetic: `x + y = 1` with x,y in {0,2}
+              has no bounds(Z) pruning to make (x = 0 wants y = 1, and 1 IS in [0,2])
+              while bounds(D) would empty both domains. [Linear], [Int_le], [Int_lt],
+              [Pb] and [Bool2int], the [Bounds] declarers when this oracle was written,
+              are all bounds(Z); asserting bounds(D) against them would report five
+              findings that are not bugs. SPEC 3.2 does not currently distinguish the
+              two -- REPORTED, not decided here (M2-T10).
 
    [Value]    nothing. docs/GLOSSARY.md: "only ever removes values it can name, without
               claiming anything about the values it leaves behind". A level that claims
@@ -2026,19 +2091,14 @@ let check_consistency_exn (t : t) (store : Store.t) : unit =
   | [] -> ()
   | v :: _ -> raise (Weaker_than_declared v)
 
-(* M6-T18: THE INCREMENTAL SEED, and why it is the full seed with the no-op runs removed.
+(* THE INCREMENTAL SEED, and why it is the full seed with the no-op runs removed (M6-T18,
+   D-0098).
 
-   Until M6-T18 [propagate] enqueued every instance, in id order, on every call, and then
-   fed the FIFO with the watchers of what each run changed. D-0094 measured the seed at
-   75-85 % of all runs, and nearly all of those runs change nothing: at a search node only
-   the decision and its consequences are new, and a propagator that watches none of it is
-   still at the fixpoint it reached at the parent.
-
-   This engine walks the same seed -- one SLOT per instance, in id order, ahead of the
-   FIFO -- and runs a slot only if its instance is DIRTY:
+   RULE. Every [propagate] call walks a SEED -- one SLOT per instance, in id order, ahead
+   of the FIFO -- and runs a slot only if its instance is DIRTY:
 
    (a) it watches a variable that a trail entry ABOVE THE LAST VALID FIXPOINT moved, with
-       M2-T5's trigger mask applied ([seed_dirty]);
+       the trigger mask (and the advisor) applied ([seed_dirty]);
    (b) it is not known to be at its fixpoint at that fixpoint: not BORN at or before it
        (a learned constraint [add]ed since, or one born after a fixpoint a backjump has
        now gone back to); or
@@ -2046,14 +2106,25 @@ let check_consistency_exn (t : t) (store : Store.t) : unit =
        the queue already, so the wake was deduplicated and it ran AT ITS SLOT; marking it
        dirty does exactly that. A wake for a slot already passed goes to the FIFO, as it
        did before.
+   A resting instance a backtrack released is marked dirty too ([release_rests], only
+   under BAGUETTE_REST_SATISFIED=on).
 
    A clean slot is skipped. Skipping is exact, not approximate: a clean instance's watched
    domains are what they were at a joint fixpoint (nothing above it moved them, by (a) and
    (c)), it was at its fixpoint there (by (b) and I-P2 at that return), and its output is
-   a function of its watched domains (D-0034; the audit is D-0098's table). So the full
-   seed's run at that slot would have pruned nothing, written nothing and woken nothing,
-   and every run that IS made happens in the same order, on the same domains, as before.
-   The trail, the proof and the search are the old engine's, minus its no-op runs.
+   a function of its watched domains (D-0034: a wake trigger declares what a propagator
+   READS; D-0098's table audits every family against it). An instance whose advisor
+   declined every such change is clean as well, because I-P7 allows a decline only when
+   a run would change nothing. So the full seed's run at that slot would have pruned
+   nothing, written nothing and woken nothing, and every run that IS made happens in the
+   same order, on the same domains, as before. The trail, the proof and the search are the
+   full seed's, minus its no-op runs.
+
+   WHY. Until M6-T18 [propagate] enqueued every instance, in id order, on every call, and
+   then fed the FIFO with the watchers of what each run changed. D-0094 (the run counters
+   of M2-T6) measured that seed at 75-85 % of all runs, and nearly all of those runs
+   change nothing: at a search node only the decision and its consequences are new, and a
+   propagator that watches none of it is still at the fixpoint it reached at the parent.
 
    Which fixpoint is "the last valid one" is the low-water mark's job. [fixpoints] holds
    the [(trail length, epoch)] of every [Fixpoint] return whose state is still a prefix of
@@ -2069,10 +2140,11 @@ let check_consistency_exn (t : t) (store : Store.t) : unit =
    the end. A starved instance is caught at the slot it was skipped at, before any later
    wake could cover it up. *)
 
-(* M6-T22: the seed's min-heap of dirty ids ([t.heap]).
+(* The seed's min-heap of dirty ids ([t.heap]), so the seed visits the dirty slots in id
+   order without walking the clean ones.
 
-   M11-complexity-T14: [heap_up] and [heap_down] are top-level functions of the array
-   rather than local closures, so a push or a pop allocates nothing; one pop per SEEDED
+   [heap_up] and [heap_down] are top-level functions of the array rather than local
+   closures, so a push or a pop allocates nothing (M11-complexity-T14); one pop per SEEDED
    run, 266 per node on codes-cp's QR48. The moves are the ones the closures made. *)
 let rec heap_up (h : int array) id i =
   if i > 0 then
@@ -2111,7 +2183,7 @@ let mark_dirty t id =
     t.dirty.(id) <- true;
     heap_push t id)
 
-(* D-0226: [mark_dirty] for the newborn rule, the one route by which a REMOVED id could
+(* [mark_dirty] for the newborn rule, the one route by which a REMOVED id could
    still be marked: [remove] takes an id out of every wake list and out of the resting
    levels, but not out of [newborns] and [births], which only a fixpoint rewrites. The
    wake and seed paths keep the plain [mark_dirty], with no test added to them. *)
@@ -2141,7 +2213,7 @@ let seed_dirty t store ~since ~epoch =
     let x = Var.to_int e.var in
     if x < Array.length t.wake_static then (
       let stat = t.wake_static.(x) and ns = t.wake_len.(x) in
-      (* E1 (D-0142): the slots this entry asks -- see "The wake index by direction". *)
+      (* The slots this entry asks -- see "the wake index by direction". *)
       let sl = 3 * x and lo = lo_moved e and hi = hi_moved e in
       let nd =
         t.dyn_len.(sl)
@@ -2155,15 +2227,15 @@ let seed_dirty t store ~since ~epoch =
         for k = ns - 1 downto 0 do
           mark bound e.var stat.(k)
         done;
-        (* M6-T22: the self-watching instances of the slots asked; order is immaterial
+        (* The self-watching instances of the slots asked; order is immaterial
            here, this only marks. *)
         mark_slot bound e.var sl;
         if lo then mark_slot bound e.var (sl + 1);
         if hi then mark_slot bound e.var (sl + 2)))
   done
 
-(* M6-T18: under BAGUETTE_DEBUG, the run a skipped slot would have made under the old
-   full seed, made after all, and required to do nothing. Same exception and same
+(* Under BAGUETTE_DEBUG, the run a skipped slot would have made under the full seed,
+   made after all, and required to do nothing. Same exception and same
    no-write property as [check_claim]; not counted. *)
 let check_skip (inst : Propagator.instance) (store : Store.t) : unit =
   let before = Store.trail_length store in
@@ -2192,14 +2264,16 @@ let check_skip (inst : Propagator.instance) (store : Store.t) : unit =
 
 (* Run every propagator to a joint fixpoint (invariant I-P2): the seed slots in id order
    (only the dirty ones run, see above), then the FIFO, re-fed only by the watchers of
-   variables a run actually changed. *)
+   variables a run actually changed. Under BAGUETTE_PRIORITY=classes the FIFO is one queue
+   per cost class ([loops_by_class]). Returns [Conflict] at the first failing run, and
+   raises [Stopped] when the [?stop] poll says yes. *)
 let propagate ?stop ?(poll_runs = default_poll_runs) (t : t) (store : Store.t) : outcome =
   let n = n_instances t in
   if t.pending <> [] then purge t;
   if n = 0 then Fixpoint
   else
-    (* M6-T22: [t]'s own, all false on entry; this call clears what it sets, on every
-       exit (see [t.dirty]). *)
+    (* [t]'s own, all false on entry; this call clears what it sets, on every exit (see
+       [t.dirty]). *)
     let dirty = t.dirty in
     (* The epoch of the fixpoint the seed is relative to, or -1 when there is none and
        every slot is dirty. *)
@@ -2207,8 +2281,8 @@ let propagate ?stop ?(poll_runs = default_poll_runs) (t : t) (store : Store.t) :
       match t.seen with
       | Some (s, h) when s == store && t.incremental -> (
           let lw = Store.take_low_water store h in
-          (* M11-complexity-T17 (D-0173): the resting instances whose literal's support a
-             backtrack popped, seeded by this call ([rest_on]). [lw] is the first popped
+          (* The resting instances whose literal's support a backtrack popped, seeded by
+             this call ([rest_on], RESTING). [lw] is the first popped
              position, the start of the lowest popped level, or the length the last call
              ended at when nothing was popped. *)
           if t.rest_top >= 0 || t.released <> [] then
@@ -2222,7 +2296,7 @@ let propagate ?stop ?(poll_runs = default_poll_runs) (t : t) (store : Store.t) :
           | [] -> -1
           | (since, e) :: _ ->
               seed_dirty t store ~since ~epoch:e;
-              (* Rule (b): every id with [born > e], read off [births] (M6-T22). *)
+              (* Rule (b): every id with [born > e], read off [births]. *)
               List.iter (mark_born t) t.newborns;
               let rec young = function
                 | (b, ids) :: rest when b > e ->
@@ -2250,8 +2324,8 @@ let propagate ?stop ?(poll_runs = default_poll_runs) (t : t) (store : Store.t) :
       t.heap_len <- n);
     let in_queue = t.in_queue in
     let queue = Queue.create () in
-    (* M19-config-T9 (D-0246): under [classes], one FIFO per cost class, and [queue]
-       stays empty; under [off], no class queue and [queue] is the FIFO. *)
+    (* Under [classes], one FIFO per cost class, and [queue] stays empty; under [off], no
+       class queue and [queue] is the FIFO. *)
     let prio = t.priority in
     let queues =
       if prio then Array.init Propagator.n_cost_classes (fun _ -> Queue.create ())
@@ -2287,7 +2361,7 @@ let propagate ?stop ?(poll_runs = default_poll_runs) (t : t) (store : Store.t) :
     let cursor = ref 0 in
     let wake id = if id >= !cursor && id < n then mark_dirty t id else enqueue id in
     let conflict = ref None in
-    (* M6-T21: set by the poll at the end of a completed [Fixpoint] run. The poll also
+    (* Set by the stop poll at the end of a completed [Fixpoint] run. The poll also
        ENDS both loops itself -- the cursor to [n], the queue emptied -- rather than the
        loops testing [stopped] in their guards: the seed loop's guard is evaluated once
        per instance SLOT, run or skipped, which on a large learned database is billions
@@ -2308,7 +2382,7 @@ let propagate ?stop ?(poll_runs = default_poll_runs) (t : t) (store : Store.t) :
               t.poll_left <- poll_runs;
               if stop () then (
                 stopped := true;
-                (* M6-T22: the slots and the queue this abandons, cleared. *)
+                (* The slots and the queue this abandons, cleared. *)
                 for i = 0 to t.heap_len - 1 do
                   dirty.(t.heap.(i)) <- false
                 done;
@@ -2321,8 +2395,9 @@ let propagate ?stop ?(poll_runs = default_poll_runs) (t : t) (store : Store.t) :
       let before = Store.trail_length store in
       incr runs;
       t.ctr.c_runs <- t.ctr.c_runs + 1;
-      (* The whole of M2-T7's threading, in one bracket: everything [inst] pushes while
-         this call is in flight is stamped with [inst]'s own id, and nothing else can be.
+      (* The whole of the attribution threading (M2-T7), in one bracket: everything
+         [inst] pushes while this call is in flight is stamped with [inst]'s own id, and
+         nothing else can be.
          [check_attribution] then reads it back on both arms -- a propagator may push
          prunings and *then* conflict, so the conflict arm has new entries to check too,
          which is why the check is not simply folded into [watchers_of_new_entries]. *)
@@ -2338,15 +2413,15 @@ let propagate ?stop ?(poll_runs = default_poll_runs) (t : t) (store : Store.t) :
           if pruned then t.ctr.c_effectful <- t.ctr.c_effectful + 1;
           bump_by_id t id ~eff:pruned;
           if pruned && Debug.enabled && vetoes_self t id then check_claim inst store;
-          (* M11-complexity-T14: a run that pushed nothing has no entry to walk, and the
-             walk would return [] after building its closures; nine runs in ten on
-             codes-cp's QR48 are such runs. [t.declined] is [[]] here either way: every
+          (* A run that pushed nothing has no entry to walk, so the walk is not called (it
+             would return [] after its setup); nine runs in ten on codes-cp's QR48 are
+             such runs (M11-complexity-T14). [t.declined] is [[]] here either way: every
              walk and every seed is followed by [check_declined], which empties it. *)
           if pruned then
             List.iter wake (watchers_of_new_entries ~self:id t store ~since:before);
           if Debug.enabled then check_declined t store;
-          (* M6-T21: AFTER the run and its wakes, so the run is whole whatever the poll
-             says. Not on the [Conflict] arm: that call is leaving anyway. *)
+          (* The stop poll, AFTER the run and its wakes, so the run is whole whatever
+             the poll says. Not on the [Conflict] arm: that call is leaving anyway. *)
           poll ()
     in
     (* The slots [!cursor .. upto - 1] are passed CLEAN: counted, and under
@@ -2358,13 +2433,13 @@ let propagate ?stop ?(poll_runs = default_poll_runs) (t : t) (store : Store.t) :
           check_skip t.instances.(q) store
         done
     in
-    (* M19-config-T9 (D-0246): the loop under [classes]. The dirty seed slots go, in id
-       order, into their class queues, keeping their [dirty] mark as "came from the seed"
-       (counted in [c_seeded] when run); clean slots are passed exactly as below, before any
-       run, which is where [check_skip]'s premise (nothing has moved what they watch since
-       the fixpoint) holds most plainly. Then: the head of the cheapest non-empty class,
-       until every class is empty. A wake lands in its class's queue; one for an id already
-       queued is deduplicated as under the FIFO. *)
+    (* The loop under [classes] (the header's cost-class queue). The dirty seed slots go,
+       in id order, into their class queues, keeping their [dirty] mark as "came from the
+       seed" (counted in [c_seeded] when run); clean slots are passed exactly as below,
+       before any run, which is where [check_skip]'s premise (nothing has moved what they
+       watch since the fixpoint) holds most plainly. Then: the head of the cheapest
+       non-empty class, until every class is empty. A wake lands in its class's queue; one
+       for an id already queued is deduplicated as under the FIFO. *)
     let loops_by_class () =
       while t.heap_len > 0 do
         let id = heap_pop t in
@@ -2396,7 +2471,7 @@ let propagate ?stop ?(poll_runs = default_poll_runs) (t : t) (store : Store.t) :
     let loops () =
       if prio then loops_by_class ()
       else (
-        (* M6-T22: the seed walks the dirty slots in id order off [t.heap] -- the same
+        (* The seed walks the dirty slots in id order off [t.heap] -- the same
            runs, in the same order, as the walk over every slot, which cost O(n) per call
            on a learned database of n. *)
         while Option.is_none !conflict && t.heap_len > 0 do
@@ -2416,7 +2491,7 @@ let propagate ?stop ?(poll_runs = default_poll_runs) (t : t) (store : Store.t) :
           run_one id
         done)
     in
-    (* M6-T22: a [Conflict] leaves the seed slots past the cursor and the queue's
+    (* A [Conflict] leaves the seed slots past the cursor and the queue's
        members marked; an exception (a BAGUETTE_DEBUG check, an attribution failure)
        can leave anything. Both are cleared here, so the next call starts all false. *)
     (match loops () with
@@ -2444,7 +2519,8 @@ let propagate ?stop ?(poll_runs = default_poll_runs) (t : t) (store : Store.t) :
     match !conflict with
     | Some c -> Conflict c
     | None when !stopped ->
-        (* M6-T21: not a fixpoint, so neither I-P2 nor the M6-T18 record below. The next
+        (* Stopped: not a fixpoint, so neither the I-P2 check nor the fixpoint record
+           below. The next
            call (there is none in a solve: the search is ending) would reseed from the
            last recorded fixpoint, exactly as after a [Conflict]. *)
         raise Stopped
@@ -2453,14 +2529,15 @@ let propagate ?stop ?(poll_runs = default_poll_runs) (t : t) (store : Store.t) :
            return: I-P2 says nothing about a [Conflict], and re-running propagators
            against a store that has already failed would be meaningless. *)
         if Debug.enabled then check_fixpoint t store;
-        (* M6-T18: record this state as a joint fixpoint. Every instance is at its
-           fixpoint here (I-P2); one not known at the fixpoint the seed started from is
-           born now. A record at the same length is the same state, so it is replaced. *)
+        (* Record this state as a joint fixpoint, for the incremental seed. Every instance
+           is at its fixpoint here (I-P2); one not known at the fixpoint the seed started
+           from is born now. A record at the same length is the same state, so it is
+           replaced. *)
         if t.incremental then (
           let e = t.epoch + 1 in
           t.epoch <- e;
           (* Every id with [born > since_epoch] is born at [e]: [newborns] and the head
-             of [births] down to [since_epoch], merged into one entry (M6-T22). *)
+             of [births] down to [since_epoch], merged into one entry. *)
           let rec take acc = function
             | (b, ids) :: rest when b > since_epoch -> take (List.rev_append ids acc) rest
             | rest -> (acc, rest)
@@ -2474,12 +2551,12 @@ let propagate ?stop ?(poll_runs = default_poll_runs) (t : t) (store : Store.t) :
             (match t.fixpoints with
             | (l, _) :: rest when l = len -> (len, e) :: rest
             | l -> (len, e) :: l));
-        (* M2-T10. Here and not in [Search]: "at a fixpoint" is a property this loop
-           knows and its caller can only assume, and this is the same return that I-P2
-           is checked on, for the same reason -- both are statements about the state the
-           engine has just finished producing. [Search] calls [propagate] exactly once
-           per node (see its [dfs]), so a per-fixpoint check IS a per-node check, and
-           the node count [oracle_nodes] reports is the search's own.
+        (* The consistency oracle, here and not in [Search]: "at a fixpoint" is a property
+           this loop knows and its caller can only assume, and this is the same return
+           that I-P2 is checked on, for the same reason -- both are statements about the
+           state the engine has just finished producing. [Search] calls [propagate]
+           exactly once per node (see its [dfs]), so a per-fixpoint check IS a per-node
+           check, and the node count [oracle_nodes] reports is the search's own.
 
            Not on the [Conflict] arm: a failed store is not a fixpoint, the domains are
            whatever the failing propagator left behind, and "every remaining value has a

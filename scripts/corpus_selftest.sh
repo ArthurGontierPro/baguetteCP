@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# M7-T4. Proves the corpus harness's input gate can actually fail.
+# Proves the corpus harness's input gate can actually fail (M7-T4).
 #
-# `scripts/corpus_run.sh --self-test` runs this. It needs no corpus, no node, no
+# `scripts/corpus_run.sh --self-test` runs this (and `make selftests`). Prints `corpus
+# self-test: PASS`, exit 0, or the number of failed assertions, exit 1. It needs no corpus, no node, no
 # solver and no checker: it feeds `validate_fzn` and `instance_id` fixtures and
 # asserts what they return.
 #

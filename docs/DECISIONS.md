@@ -33103,3 +33103,306 @@ Material: `/cluster/arthur/baguette-results/probe/` (README.md).
 
 **Revert**: `git revert` of the `M19-config-T8` code commits (`443bdd8`, `42420ab`, `552d52c`) and the test
 commit (`4c78e12`); with the default `off`, removing the switch changes no artefact.
+## D-0251  [AUTONOME] The open items of 2026-11-27 the user handed back: three decided, two sent to a held-out comparison
+
+**Status**: DECIDED (orchestrator, 2026-11-27). The user's words, on being given the list of open decisions: "Je n'ai pas
+assez de connaissances des résultats pour prendre ces décisions. Soit tu sais les trancher toi-même soit il faut faire des
+comparaisons pour trouver leurs conséquences sur un set d'instances hétérogènes."
+
+### 1. Decided here
+
+| Item | Options | Choice | Why | Revert |
+|---|---|---|---|---|
+| SPEC 2.1 row for `lex_lesseq` / `lex_less` (D-0239), merged as text while the agent called it a proposal | keep the row; remove it and leave the globals undocumented | KEEP | the row describes what mznlib does and nothing else, in the form of the rows D-0217, D-0220 and D-0233 already added; a supported global missing from 2.1 is the worse state | delete the row in `docs/SPEC.md` |
+| Exit status 6 for a failed proof write (D-0248) | 6; the review's 5; a SPEC sentence | KEEP 6, no SPEC sentence | 5 is read as the heap budget by the campaign scripts; the status is documented where the others are (`bin/main.ml` usage text) and bucketed by `corpus_run.sh` (`PROOF-WRITE-ERR`) | `git revert c460150` |
+| ROADMAP row M18-coverage-T14, the fourth row added in this autonomous run where the rule allows three | keep; remove and stop agent-gccvar | KEEP, and no further row in this run | the row came out of a measurement (D-0244: mondoku 10-10-6 in 4 271 nodes against no answer in 240 000) and the work on it was already running; agents launched since are told to add none | delete the row |
+
+### 2. Sent to a comparison: `BAGUETTE_MINIMISE=rec` (D-0241) and `BAGUETTE_PRIORITY=classes` (D-0246) as defaults
+
+Both were measured on the tuning set of D-0205, which is also the set ideas are tuned on. `rec` loses nothing and adds 2 and 1
+complete answers with a pairwise share inside the noise; `classes` adds 2 and 1 and loses two verified optima with proof.
+D-0205's rule keeps both `off`, and that stands until the comparison of D-0252 reports: a HELD-OUT heterogeneous set (drawn by
+D-0205's rule from the Challenge lists, tuning-set instances excluded), four arms (`off`, `rec`, `classes`, both), with and
+without proof, 300 s.
+
+The rule, fixed before the numbers exist. A switch becomes the default if and only if, on the held-out set, in BOTH modes
+(with proof, without proof): it loses no more verified complete answers than it gains with a net gain of at least 2, and its
+pairwise share against `off` is at least 0.47 (D-0205's 0.03 noise band). Each instance whose answer is lost is listed. A
+default change is its own commit, followed by a lane re-record in its own commit and a gate. If neither passes, both stay
+`off` and the question is closed until one of the follow-ups of D-0241 section 7 or D-0246 section 6 changes the code.
+
+## D-0247  [AUTONOME] M18-coverage-T14: `global_cardinality` with variable counts goes to std's count decomposition in mznlib (route b), constant counts stay native. Rule C over holes (route a) was built, verified and dropped: it barely changes a tree and loses on score. What closes mondoku is the implied row between counts, not the holes
+
+**Status**: DECIDED (agent-gccvar, `wave93-gccvar`, 2026-11-27), not merged. The default changes in ONE commit,
+`4c5df61` (mznlib only, no solver code). Route (a) is `d94f08f` and its revert `fa32d4b`. Material:
+`/cluster/arthur/baguette-results/gccvar/` (README first).
+
+### 1. Context
+
+D-0244 section 3 measured that baguette does not finish mondoku 10-10-6 in 240 000 nodes while std's `count`
+decomposition for the variable-count calls finishes it in 4 271, and proposed as the cause that rule C of
+`lib/core/prop/gcc.ml` counts a value's possible takers by their window (`holds_v`), so a hole never lowers a count's
+upper bound. M18-coverage-T14 asked to measure that route against routing variable counts to std's decomposition,
+over every gcc instance of the Challenge lists.
+
+### 2. Census
+
+The 1 575 instances of the 2026-11-23 series lists (2011 to 2026), flattened again by MiniZinc 2.10.1 against this
+branch's base (main `a6602f0`). 205 of them called `baguette_global_cardinality` in the series' own flattening, but
+52 of those came through std's `alldifferent_except` (a gcc_low_up), which mznlib now routes elsewhere. On today's
+mznlib **153 instances in 27 families call gcc**: 55 with constant counts only, **98 with at least one variable
+count**. Of the 98, **40 reach a three-argument `global_cardinality` with variable counts** (521 calls: oocsp_racks
+10, mondoku 5, blocks-world 5 (the closed form), generalized-peacable-queens 5, chessboard 5, compression 5,
+warehouse 5) and 58 only `global_cardinality_low_up`, whose counts mznlib declares on constant bounds (gbac 19,
+community-detection 20, vaccine 5, evm-super-compilation 5, nside 3, gcc-benchmark 5, and one more). Script
+`census.py`, tables `census-*.tsv`, lists `routed.ids` (40), `lowup.ids` (58), `users.ids` (153).
+
+### 3. The two routes, and the one that decides mondoku
+
+**(a) rule C over `Domain.mem`** (`d94f08f`). A variable whose window holds `v` around a hole is no longer a
+possible taker; its indicator is cleared by the hole's own line, the remover's explanation from `Store.remover`
+(element.ml's `excl_hole`: the order clause of D-0086 with the remover's residue), the remover's facts join the
+push's reason, and a push that clears a hole is derived ahead (the hole clause is binary, so the line is not RUP
+against the counting row alone). Rule (b) got the same reading. A unit test (hi(n) falls from 3 to 1 under a
+decided `w`, ahead, the reason names `w`'s two bounds, D-0026 agreement) and three models, all proofs VERIFIED;
+dropping the remover's facts makes veripb 3.0.2 reject both SAT and OPT proofs ("Checking error at" lines 49 and 58),
+so the facts are load-bearing.
+
+**(b) std's decomposition for variable counts** (mznlib, constant counts stay native).
+
+**The probe that changed the diagnosis** (mondoku 10-10-6, no proof, 100 s): route (a) alone does NOT finish
+(140 163 nodes). Main's binary over main's mznlib PLUS std's implied row `length(x) >= sum(counts)` and nothing else
+finishes in 4 745 nodes (2.8 s); with route (a) too, 4 723; route (b), 4 271. So the inference mondoku lacks is the
+propagation BETWEEN counts (a count's upper bound from the others' lower bounds), which gcc.ml does not make and the
+implied row does, not the holes. D-0244's hypothesis was the wrong one, and its "split arm" measured the row.
+
+### 4. Measurements
+
+Binaries (release profile, `make release`'s command): main `a23edcfd` (main `a6602f0`, the base of every arm except
+A), route (a) `7fea1d0f` (`d94f08f`). Arms: base; A = route (a) over main's mznlib; B = route (b); S = native plus the
+implied row only; BC = native plus std's count rows; AS = A plus the row; SL = S plus the same row for low_up's
+counts; AB = A plus B. 16 at a time on fataepyc-06 (load 15 to 55 from other campaigns), 16 GiB address space,
+`MemoryMax=32G`, `--max-heap-mb 8192`, veripb 3.0.2 with 900 s on every proof that ended. Score: `agreement.py`
+(Challenge order, Borda), no-proof arms trusted.
+
+Node limit 20 000 (300 s cap), no proof. On all 153 users A grows the same tree as main wherever both stop on the
+node limit, except gbac UD8 (incumbent 10 128 against 10 127); the other differences are runs cut by the 300 s cap.
+On the 40: complete base 8, A 8, B 10, S 10, BC 10, AS 10; better incumbents against base B 10 (0 worse), S 3 (1),
+BC 2 (2), AS 2 (2). SL and ASL on the 98 add mondoku (+2) and nothing else.
+
+300 s, the 40 that route (b) reaches:
+
+| arm | no proof: complete, score share, wins/losses vs base | with proof: complete (verified), share, wins/losses |
+|---|---|---|
+| base | 9, 0.212 | 9 (8), 0.227 |
+| A | 10, 0.210, 2/3 | 9 (8), 0.219, 1/2 |
+| **B** | **11, 0.329, 15/1** | **11 (11), 0.296, 11/3** |
+| S | 11, 0.248, 5/0 | 11 (10), 0.258, 5/1 |
+| BC | 11, scores below B (1 win, 14 losses against B) | not run |
+| AB | 11, AB over B 2/2 | 11 (11), AB over B 2/1 |
+
+B's gains: mondoku 10-10-6 OPT in 2 s (6 s with proof, 4 271 nodes) and 12-12-8 in 13 s (27 s), both VERIFIED;
+oocsp_racks 100_r1, SAT in 22 s in every arm, whose proof check runs out of veripb's 900 s under base, A and S and
+VERIFIES under B; better incumbents on peaceable queens n9_q5, n11_q5, n13_q5, n25_q4 (B explores 4 to 5 times fewer
+nodes and still finds better), mondoku 14-14-8 (2 against 5) and 20-18-9 (4 or 5 against 11), warehouse olal41, olil4,
+oly20 and wlp02 (where main has no incumbent, or is refused by the 8 GiB heap budget on wlp02's 3 219-variable gcc).
+B's losses, all three with proof: two oocsp_racks answers found by both arms, 1.2 s and 2.7 s later under B
+(UNSAT 030_f7 in 10.2 s against 9.0 s, SAT 2018 100_r1 in 20.4 s against 17.7 s), and warehouse olil4, where the
+proof-logging run hit the 8 GiB heap budget at 127 s with 75 730 against main's 75 636 at 300 s. Without proof the
+one loss is the same 2018 100_r1, 13.1 s against 11.8 s. **No complete answer of any arm is lost by B**, with or
+without proof.
+
+300 s, the 58 low_up-only instances (only route (a) reaches them): no proof A 7 wins 8 losses over the 98 (score
+share 0.495); with proof 4 wins 8 losses (0.480), +1 verified complete (vaccine v857 OPT in 254 s) and one OPT lost
+(community-detection rnd_n100_e5000, 284 s under main and over 300 s under A, a check that timed out anyway).
+
+AB (route a on top of route b) ties B within the set's noise (D-0205's README: under 0.03 of the share), so route
+(a) adds nothing once route (b) is in.
+
+Proof volume written: 978 GB over 316 proof runs (largest 19.6 GB, warehouse wlp22), every proof deleted once
+checked.
+
+### 5. Decision
+
+[AUTONOME] **Route (b)**, in `mznlib/fzn_global_cardinality.mzn`: when some count is a variable, std's count
+decomposition with its implied row; when every count is fixed, the native propagator as before. By D-0205's rule it
+gains on score with and without proof and loses no verified complete answer. The closed form
+(`fzn_global_cardinality_closed.mzn`) now calls the bodyless predicate itself and stays native: it already posts
+`sum(count) = |x|`, the row that decides mondoku, and blocks-world, the only family using it, finds nothing in
+300 s either way. low_up stays native (not routed, not measured as a route). `gcc_shim_{sat,unsat}.fzn` (MiniZinc 1's
+two-argument shim, variable counts) were regenerated as their header instructs; outputs unchanged, proofs VERIFIED.
+
+**Route (a) is not kept** (`fa32d4b` reverts the solver half of `d94f08f`): it changes the tree on almost no
+Challenge instance, costs per node, and loses on score in both modes. Its three models stay as hole scenes.
+
+Clarity: the change is twelve lines of MiniZinc and a header; no solver code moves. What it costs is that gcc.ml's
+variable-count path is now reached only from low_up and from hand-written FlatZinc, so its D-0078 argument (the
+interval capacity the decomposition cannot reach) holds for fixed counts and low_up only.
+
+Revert: `git revert 4c5df61` (and `2bfeea9`, the two route tests, whose MUST-NOT-EMIT would then fail).
+
+### 6. What is left (no ROADMAP row added: the autonomous run's cap is reached)
+
+- **Count-to-count propagation in gcc.ml**: `hi(c_v) <= |x| - sum_{u != v} lo(c_u)` (and the mirror over the
+  variables that can only take cover values) is what the implied row gives Linear. A native rule would serve low_up
+  and fixed-count calls too; measured nowhere yet.
+- **low_up through the same route**: its counts are variables declared on constant bounds; S's row for them (SL)
+  changed nothing at 20 000 nodes, the full decomposition was not measured.
+- **gcc's cost on large scopes**: warehouse wlp02 (3 219 variables, counts 101 wide) exhausts the 8 GiB heap under the
+  native propagator in 150 s without proof, and on olal41 and olil4 B's per-value rows run about twice as many nodes in 300 s as the native propagator.
+
+### 7. Verification
+
+Worktree `/scratch/arthur/wt-gccvar` at `2bfeea9`: `scripts/check_fmt.sh` clean; `check_test_widths.py` clean;
+`dune build --root . bin/` (`ef23c899`, the dev build) and the release build `a23edcfd`, byte-identical to main's,
+since no solver code changes; `dune runtest --root . --force` 5 544 ok, 0 FAIL, peak RSS 170 MB;
+`scripts/run_model_tests.sh` 264 models passed with proofs verified; `scripts/check_determinism.sh` 264 identical;
+`mznlib/test/check_mznlib.sh` (MiniZinc 2.10.1) 73 ok; `scripts/diff_lane.sh --tier all -j 8` 347 of 347 runs equal
+the reference and `--debug` 333 of 333 (the lane's corpus is pre-flattened FlatZinc and the solver is unchanged,
+so route (b) cannot reach it); `scripts/scaling_lane.sh -j 8` ok. Route (a)'s own commit passed the same gate
+(5 555 ok, 262 models, determinism) before it was dropped; its only change to an existing artefact was
+`gcc_saturate_hole_unsat.pbp`, VERIFIED. Existing test artefacts changed by the kept route:
+`test/models/gcc_shim_{sat,unsat}.fzn` (bodies regenerated, outputs and verdicts unchanged); new:
+`gccvar_hole_{root_unsat,dec_sat,opt}` and `gccvar_src_{unsat,opt}`, all VERIFIED.
+
+## D-0253  [AUTONOME] M22-review-T4, the documentation pass: references in comments stand alone, docs/REFERENCES.md indexes them, and comments state the rule before the history
+
+**Status**: DONE on `wave98-docs` (agent-docs, 2026-11-27), comments and documents only. Taken in
+mode autonome on the user's request of 2026-11-27 ("bring every document, README and comment up
+to date, and rewrite the comments that teach poorly or that cite a reference without saying what
+it refers to").
+
+### 1. What was decided
+
+| Item | Options | Choice | Why | Revert |
+|---|---|---|---|---|
+| A reference in a comment (`D-0123`, `M6-T22`, `I-P3`) | delete references; keep them bare; keep them with a sentence that stands alone | KEEP, and at its first mention in each file the sentence says what the record established | the reference is how history is found; the sentence is what a reader needs without opening a 2.4 MB file | the pass's commits on `wave98-docs`, each `M22-review-T4:` |
+| An index of the references | none; a hand-written glossary of records; a generated table | `docs/REFERENCES.md`, generated once (title of each record, roadmap row of each task, first line of each invariant, shortened), a snapshot of 2026-11-27 | 392 distinct references are cited in `lib/` and `bin/`; a one-line meaning per id is enough to read a comment, and the record stays the authority | delete the file and its two links (README, CLAUDE.md) |
+| Order of a comment | as written (often history first) | rule or invariant, why it is sound, one example, history in one line with its reference | the user's instruction; most long comments put their point last | per file, the commit |
+| Section titles | by task (`M11-complexity-T3 (D-0142, E1): ...`) | by concept, the reference after | a title is read by someone who does not know the task numbers | per file |
+
+No code changed: every edit is inside a comment, a Markdown document or a script's header
+comment. The gate below shows the same binary behaviour (same model answers, same diff-lane
+artefacts).
+
+### 2. Findings recorded rather than fixed
+
+- `scripts/shrink.sh` relies on a `--disable-propagator` flag that `bin/main.ml` never
+  implemented; the solver refuses it (exit 2), so the script cannot localise a rejected step.
+  Its header says so now. Fixing it is code (a flag, or a script that uses another switch).
+- `scripts/bootstrap.sh` builds the opam switch with `-j "$(nproc)"`, 192 on fataepyc-06, where
+  the node rule is at most 16 parallel jobs. A one-time setup, but it is code: not changed.
+
+- `docs/PROOF-FORMAT.md` section 3, "The consistency clauses are in the `.opb`" (normative),
+  says no derivation cites a ladder id and `Encoding.consistency_id` has no caller in `lib/`.
+  `lib/core/ladder.ml`, `cumulative.ml` and `search.ml` (under `pb_ladder`) call it now. Left
+  for the user: the sentence is normative and its consequence (the ladder is load-bearing for
+  RUP) still holds.
+- Dead functions named in their comments: `Encoding.is_direct_row` (its caller went with
+  D-0131), `Justify.lit_hash`, `Writer.solx` and `Writer.obju` have no caller in `lib/` or `bin/`.
+
+### 3. What is done and what is left
+
+Done: README.md, CLAUDE.md (sizes, map, switches, counts), ARCHITECTURE.md sections 1, 3 and
+4, GLOSSARY.md (23 terms), INVARIANTS.md I-X10, SPEC.md section 6 (non-normative),
+PROOF-FORMAT.md section 4 (three missing rows), scripts/README.md, bench/README.md, twelve
+script headers, every module header of `lib/` checked, and the comments of propagator.ml,
+linear.ml, explanation.ml, reason.ml, store.ml, domain.ml, engine.ml, justify.ml,
+encoding.ml, writer.ml and every propagator but gcc.ml rewritten (the bodies of maxmin,
+arith, cumulative, regular, table, circuit, inverse and member had their references made
+self-standing, not a full rewrite).
+
+Left for a second pass: `lib/core/prop/gcc.ml`, `lib/flatzinc/compile.ml`,
+`lib/flatzinc/builder.ml`, `mznlib/`, `lib/core/search.ml`, `bin/main.ml` (held by other
+agents during this pass); the learning modules (`analysis.ml`, `learn.ml`, `learned.ml`,
+`pb_analysis.ml`, `reduce.ml`, `retention.ml` beyond its default, `ladder.ml`, `trace.ml`),
+`view.ml`, `lib/flatzinc/` and `lib/scp/` beyond their headers, and `tools/` beyond the check
+for dead paths.
+
+## D-0254  [AUTONOME] M22-review-T4, second documentation pass: the remaining modules' comments, docs/REFERENCES.md extended, and the four findings of D-0253 settled (a PROOF-FORMAT sentence corrected, bootstrap capped at 16 jobs, shrink.sh's missing mode removed, three dead functions removed)
+
+**Status**: DONE on `wave99-docs2` (agent-docs, 2026-11-27). The findings of D-0253 section 2 were
+decided by the orchestrator, to whom the user handed such decisions back (D-0251); this record
+says what was done and how to revert each.
+
+### 1. PROOF-FORMAT section 3, "The consistency clauses are in the `.opb`" (normative paragraph)
+
+The code is checked by veripb on every test, so the sentence was the stale side. Old bullet:
+
+> **No derivation this project emits ever cites a ladder id.** `Encoding.consistency_id`
+> has **no** caller in `lib/` or `bin/` at all — only `test/unit/test_proof.ml` — and the
+> one place in `lib/` that reads the id table, `derive_at_most_one`, is itself called only
+> from that same test file. Read from the emission side, the ladder looks like dead weight.
+
+New bullet:
+
+> **Derivations cite ladder ids, and the ladder would be needed even if none did.**
+> `Encoding.consistency_id` is cited by PB conflict analysis, which lifts a reason row onto
+> the rungs that carry its strength (`lib/core/ladder.ml`, called from `lib/core/search.ml`
+> under `pb_ladder`, on by default, M2-L11), and by the `pol` derivations of the counting
+> families: `element` (M4-T3), `gcc` (M7-T16, D-0078), `cumulative` (M4-T10, D-0096) and
+> `all_different` through `consistency_ids` (M7-T33). `derive_at_most_one` is still called
+> only from `test/unit/test_proof.ml`. (When this section was written for M1-T25, no
+> derivation cited a ladder id and the ladder looked like dead weight from the emission
+> side; M2-L11 was the first citer, on 2026-09-18.)
+
+The paragraph's normative conclusion (the ladder rows are in the `.opb` and are load-bearing for
+the checker's unit propagation) is unchanged. Verified with `git log -S` on each citer. Revert:
+the commit `M22-review-T4 (D-0254): the three findings of D-0253 ...`.
+
+### 2. `scripts/bootstrap.sh`
+
+`opam switch create -j "$(nproc)"` (192 on fataepyc-06) became `-j "${JOBS}"`, `JOBS = min(nproc,
+16)`, also exported as `OPAMJOBS` and passed to `opam install`, the node rule being no `-j`
+above 16. `bash -n` clean. Revert: the same commit.
+
+### 3. `scripts/shrink.sh`
+
+Its mode "disable one propagator at a time" needed a solver flag `--disable-propagator`, planned
+for M1-T7 and never added; `bin/main.ml` refuses it (exit 2), so the script always ended on "no
+single propagator accounts for it". The flag was NOT added. The mode and its `PROPAGATORS`
+variable are removed. What still works: the script solves the model with `--proof`, runs the
+checker, exits 0 when the proof is accepted, 1 when the solver fails (with its stderr), 2 without
+a checker, 3 when the proof is rejected, printing the checker's last lines and pointing at
+PROOF-FORMAT section 6. Tested on `trivial_sat.fzn` (exit 0) and a missing file (exit 1).
+`scripts/README.md`'s row says the same. Revert: the same commit.
+
+### 4. Dead code
+
+Grepped over `lib/`, `bin/`, `test/`, `tools/`, `scripts/` and `bench/`:
+
+| Function | Callers | Done |
+|---|---|---|
+| `Encoding.is_direct_row` | none; its only caller, `search.ml`'s `rests_on_a_clause`, went with D-0131 | REMOVED, with the table `direct_cids` it read, which four sites wrote and nothing else read |
+| `Justify.lit_hash` | none (`Explanation.lit_hash` is the one in use) | REMOVED |
+| `Writer.solution_excluding` (`solx`) | `test/unit/test_proof.ml` calls it to pin VeriPB 3.0's refusal of `solx` without a preserved set | KEPT |
+| `Writer.objective_update` (`obju`) | `test/unit/test_proof.ml`'s M5 gate greps for its definition to prove the "no caller" search ran | KEPT |
+
+One commit (`M22-review-T4 (D-0254): remove dead code ...`), the only one of this pass that
+changes code; `samecode.sh` reports DIFF on `encoding.ml` and `justify.ml` for it, as expected.
+Revert that commit to restore them.
+
+### 5. Comments
+
+The method of D-0253, with two additions the orchestrator asked for: every rewritten `.ml`
+file was compared with origin/main by `ocamlc -dsource` (parsed code identical) AND by a
+lost-token script that lists the numbers, references, bracketed names and backquoted words
+present in the old comments and absent from the new ones; each listed token was read and is a
+stale name corrected, a rewording or a quotation rewrapped. Sub-agents drafted the rewrites;
+each group's diff was reviewed with both scripts before its commit, and one sub-agent claim
+was corrected in review (`Learned.retire` has callers in `test/unit/test_learned.ml`).
+
+Done: `lib/flatzinc/` (all nine files including `compile.ml` and `builder.ml`), `lib/scp/`,
+the headers of the 15 mznlib files that needed it (only `%` lines changed), `analysis.ml`,
+`learn.ml`, `reduce.ml`, `pb_analysis.ml`, `learned.ml`, `ladder.ml`, `retention.ml`,
+`trace.ml`, `view.ml`, `restart.ml`, `phase.ml`, `activity.ml`, `checked.ml`, `interval.ml`,
+`debug.ml`, `prop/gcc.ml`, and the bodies of `maxmin`, `arith`, `cumulative`, `regular`,
+`table`, `circuit`, `inverse` and `member`. `docs/REFERENCES.md` now also indexes the
+references of `mznlib/`.
+
+Left: `lib/core/search.ml`, `lib/core/probe.ml` and `bin/main.ml` (agent-probe's), and
+`tools/` beyond the check for dead paths. Claims the sub-agents could not verify and left as
+written: builder.ml's note that a singleton-declared variable in a root-UNSAT row crashes
+`Justify.emit`; pb_analysis.ml's `level_of` returning 0 for a literal its declared domain
+falsifies (the code may give 1 when level 0 has no trail entry); analysis.ml's "2^30 trail
+positions in 15 GB" (the laptop's figure).

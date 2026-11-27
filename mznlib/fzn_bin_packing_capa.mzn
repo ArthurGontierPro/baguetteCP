@@ -1,4 +1,5 @@
-% M18-coverage-T4 (docs/DECISIONS.md D-0220): bin_packing_capa without the bool2int copies.
+% M18-coverage-T4 (docs/DECISIONS.md D-0220): bin_packing_capa without the bool2int
+% copies.
 %
 % MiniZinc 2.10.1's std/fzn_bin_packing_capa.mzn is bin[i] in index_set(capacity) and per
 % bin `capacity[b] >= sum(i) (weight[i] * bool2int(bin[i] = b))`. Here the same rows are

@@ -1,10 +1,22 @@
 (* member(x, y): y equals some x_i. Reaches the solver as `baguette_member(x, y, b)`
    through mznlib/fzn_member_int.mzn (and fzn_member_bool.mzn, over 0..1), where [b] is
-   one SELECTOR Boolean per position the library introduces; docs/DECISIONS.md D-0151
-   section 3 is its design record and D-0159 its implementation, including the one place
-   the implementation departs from the design (the rows, below); D-0170 (M7-T34)
-   replaced its width-proportional rows by two big-M rows per position. Governed by
-   docs/SPEC.md 3.2 (consistency) and 3.3 (explanations).
+   one SELECTOR Boolean per position the library introduces.
+
+   Consistency level: DOMAIN ([consistency] below) while no variable occurs twice among x
+   and y, and CHECKING for the [Aliased] packing compile.ml uses otherwise (section
+   "Consistency level" below). Governed by docs/SPEC.md 3.2 (consistency levels) and 3.3
+   (explanations). Proof shape: every line is ONE `rup`, and a line whose argument walks
+   a hole has threshold lemmas, or a case split per selector, written ahead of it under
+   [Store.deriving_ahead]. That makes the family [Needs_derivation] in the I-X10
+   classification table of test/unit/test_trace.ml (a family some of whose prunings rest
+   on more than one constraint and put their derivation on the page before their trace
+   line).
+
+   The records: docs/DECISIONS.md D-0151 section 3 is the design (selectors as store
+   variables, reasons on the letters). D-0159 is the implementation, with the one place it
+   departs from the design (the bound form of the rows, below). D-0170 (task M7-T34)
+   replaced the width-proportional rows by four bound clauses and two big-M rows per
+   position, the threshold clauses becoming lemmas written only where a line needs one.
 
    ---------------------------------------------------------------------------
    The selectors are STORE VARIABLES, as regular.ml's state flags are
@@ -12,8 +24,10 @@
 
    b_i means "y is matched at position i". A selector that dies is a trail entry with a
    reason like any other, lib/core/trace.ml writes its line, and every later reason that
-   would have cited it cites the tail of that line instead (D-0151 section 1's rule, which
-   section 3 carries over: a selector is to member what a state flag is to regular).
+   would have cited it cites the tail of that line instead. That is the rule D-0151
+   section 1 set for regular's state flags, so that a learned clause names cells and not
+   auxiliaries, and section 3 carries it over: a selector is to member what a state flag
+   is to regular.
 
    ---------------------------------------------------------------------------
    The .opb rows (lib/flatzinc/compile.ml's [post_member]): TWO per position (M7-T34)
@@ -43,19 +57,20 @@
      R+(k, v)      ~b_k \/ ~[y >= v] \/ [x_k >= v]
      R-(k, v)      ~b_k \/ ~[x_k >= v] \/ [y >= v]
 
-   two per threshold per position, which is D-0028's width-proportionality paid per
-   position: 1.39 M rows on hexagon_gcc.reload1.gen_reload, 3.77 M on gl_Map1f (D-0159
-   section 5). They are now LEMMAS, written into the proof only where a line needs one
-   (see "The proof"). Each is RUP from the rows and the ladders: assume b_k, [y >= v]
-   and ~[x_k >= v]. For v in a+1..b the ladders set y's rungs up to v and clear x_k's from
-   v, so F_k's left side is at most (v - 1 - a) + (b - v) + 0 < b - a. For v <= a,
-   [x_k >= v] follows from B_k; for v > b, ~[y >= v] does. Folded the same way: a
-   constant literal at a declared bound, and a lemma a constant makes true not written.
+   two per threshold per position, which is the order encoding's width-proportionality
+   (a justification costs in proportion to the declared width, D-0028) paid per position:
+   1.39 M rows on hexagon_gcc.reload1.gen_reload, 3.77 M on gl_Map1f (D-0159 section 5).
+   They are now LEMMAS, written into the proof only where a line needs one (see "The
+   proof"). Each is RUP from the rows and the ladders: assume b_k, [y >= v] and ~[x_k >=
+   v]. For v in a+1..b the ladders set y's rungs up to v and clear x_k's from v, so F_k's
+   left side is at most (v - 1 - a) + (b - v) + 0 < b - a. For v <= a, [x_k >= v] follows
+   from B_k; for v > b, ~[y >= v] does. Folded the same way: a constant literal at a
+   declared bound, and a lemma a constant makes true not written.
 
    D-0151 section 3.1 wrote the VALUE form, `~b_i \/ y <> v \/ x_i >= v`. D-0159 measured
    that a selector death across TWO holes of x_i inside y's range is not RUP over it, and
-   is over the bound form, which chases both lower bounds upward, each hole pushing its own
-   variable past it. The lemmas keep the bound form for that reason.
+   is over the bound form, which chases both lower bounds upward, each hole pushing its
+   own variable past it. The lemmas keep the bound form for that reason.
 
    ---------------------------------------------------------------------------
    Consistency level: DOMAIN, and [Aliased] when it is not
@@ -122,18 +137,19 @@
    satisfiable random models, test_mutation's chase lanes pin three that are not
    (bench/member_spike/fuzz_member.py, D-0170).
 
-   The derivation ahead (M7-T34). A line with lemmas is made under [Store.deriving_ahead],
-   so lib/core/trace.ml writes its explanation's `pol` before it: each lemma (a [Clause],
-   so a `rup`) weakened back out to a constant by its literals' axioms, then the line's own
+   The derivation ahead. A line with lemmas is made under [Store.deriving_ahead], so
+   lib/core/trace.ml writes its explanation's `pol` before it: each lemma (a [Clause], so
+   a `rup`) weakened back out to a constant by its literals' axioms, then the line's own
    [Clause] scaled by k = 1 + the degree the weakening cost, all divided by k. A [Combine]
-   emits its terms left to right, so every lemma is on the page before the line's clause;
-   the result is exactly that clause (the line's coefficients are k / k, and its degree
-   k less the k - 1 the weakening cost is 1, which divides to 1), which is what a
-   CITATION of the entry reads. The
-   pruning's trace line is then RUP in sequence. No new [Explanation] constructor: Term,
-   Weaken and Combine as D-0013 has them. Measured load-bearing on a SATISFIABLE model
-   (test/unit/test_mutation.ml's chase-start, chase-last and transfer lanes: one lemma
-   deleted, the line refused at the RUP wording), which the rup vacuity trap requires.
+   emits its terms left to right, so every lemma is on the page before the line's clause.
+   The result is exactly that clause (the line's coefficients are k / k, and its degree k
+   less the k - 1 the weakening cost is 1, which divides to 1), which is what a CITATION
+   of the entry reads. The pruning's trace line is then RUP in sequence. No new
+   [Explanation] constructor: Term, Weaken and Combine as D-0013 set them for a linear
+   pruning (weaken, add, divide). The lemmas are measured load-bearing on a SATISFIABLE
+   model (test/unit/test_mutation.ml's chase-start, chase-last and transfer lanes: one
+   lemma deleted, the line refused at the RUP wording). A satisfiable model is required
+   because over a contradictory database the checker accepts any `rup` line.
 
    S is still not one line when two or more LIVE positions exclude v by a HOLE only: OR
    then forces neither, and each b_i needs its own case split (D-0159, probe q2). That
@@ -146,33 +162,35 @@
        exactly the clause y <> v \/ ~F -- with the hole-excluded positions' R+(i, v)
        weakened in front of it, the same way.
 
-   So this family is [Needs_derivation] under I-X10 for those shapes and [Single_row] for
-   every other (test/unit/test_trace.ml's table says so, and its derive-ahead lane
-   drives the gap shape).
+   The lines that only compare bounds are single-row shapes, but the lemma lines and the
+   gap shape are not, so test/unit/test_trace.ml's table classifies the whole family as
+   [Needs_derivation]; its derive-ahead lane drives the gap shape and test_mutation.ml's
+   member-chase lanes the lemmas.
 
    ORDER ON THE TAIL: pinning bound facts first, then the dead selectors' tails, the
    excluding facts LAST, so test/unit/test_mutation.ml's lane that drops a line's last
    literal drops a fact the argument rests on.
 
    The reasons are kept on the LETTERS (x and y) by regular.ml's machinery, copied rather
-   than shared (that module is not this task's to refactor): one slot per distinct
-   variable of x and y, a reason under construction as stamped scratch arrays indexed by
-   (slot, direction) -- the STRONGEST fact per letter and direction -- and each selector's
-   tail cached with the trail entry it belongs to, read back through the entry that
-   moved the selector now ([Store.hi_support] / [lo_support]), so a selector revived by a
-   backtrack and moved again by a decision is cited as itself.
+   than shared (regular.ml was left as it was): one slot per distinct variable of x and
+   y, a reason under construction as stamped scratch arrays indexed by (slot, direction)
+   -- the STRONGEST fact per letter and direction -- and each selector's tail cached with
+   the trail entry it belongs to, read back through the entry that moved the selector now
+   ([Store.hi_support] / [lo_support]), so a selector revived by a backtrack and moved
+   again by a decision is cited as itself.
 
    A call is O(n * w) for K and O(|dom y| * live) for S, w the overlap of two hulls; the
    lemmas a K line writes are as many as the holes its reason already cites.
 
-   M16-file-review-T3 (D-0191) measured this module at no more than 0.32 % of the search's
-   samples on the five Challenge instances it profiled (elitserien_handball 7 and 11 at
-   20 000 nodes, three code-generator instances), with the proof and without, so nothing
-   here was changed. Two costs are stated for whoever finds one hot: [support] builds a
-   [dom] triple and closure per live position per value of y, and [add_fact] keeps a
-   reason's foreign facts unique by [List.mem], quadratic in their number, which a hole
-   punched by a wide row makes one per other term of that row; element.ml's [Fact_tbl]
-   (D-0155) is the shape to copy. *)
+   Cost as measured: no more than 0.32 % of the search's samples on the five Challenge
+   instances profiled (elitserien_handball 7 and 11 at 20 000 nodes, three code-generator
+   instances), with the proof and without, so nothing here was changed by the file-by-file
+   review of M16-file-review-T3 (D-0191). Two costs are stated for whoever finds one hot.
+   [support] builds a [dom] triple and closure per live position per value of y.
+   [add_fact] keeps a reason's foreign facts unique by [List.mem], quadratic in their
+   number, which a hole punched by a wide row makes one per other term of that row;
+   element.ml's [Fact_tbl], a hashed deduplication that keeps the first-read order
+   (D-0155), is the shape to copy. *)
 
 module Lit = Baguette_proof.Lit
 
@@ -212,8 +230,8 @@ type t = {
   mutable nkeys : int;
   mutable others_rev : Reason.fact list;
   mutable stamp : int;
-  (* M7-T34: the threshold lemmas the line under construction needs on the page ahead of
-     it, newest first (see the header, "The proof"). *)
+  (* The threshold lemmas the line under construction needs on the page ahead of it,
+     newest first (see the header, "The proof"). *)
   mutable lemmas_rev : Lit.t list list;
 }
 
@@ -403,7 +421,7 @@ let clause_expl claim fs =
   Explanation.deferred (fun () ->
       Explanation.clause (claim @ List.map Lit.negate (Reason.lits_of_facts fs)))
 
-(* ------------------------------------------------- the threshold lemmas (M7-T34) *)
+(* ------------------------------------------------------- the threshold lemmas *)
 
 (* [c >= v] over a cell's DECLARED hull: the constant true, the constant false, or a
    literal -- the folding compile.ml applied to the rows these lemmas used to be. *)
@@ -458,7 +476,8 @@ let ahead_combine lemmas summands divisor =
     (k * divisor)
 
 (* A line's explanation: the bare [Clause] (one `rup`, RUP against the rows) when it needs
-   no lemma, else that clause behind its lemmas. The thunk closes over lists (I-X6). *)
+   no lemma, else that clause behind its lemmas. The thunk closes over lists, never over
+   the live store (I-X6: an explanation reads a snapshot, never live domains). *)
 let line_expl lemmas claim fs =
   match lemmas with
   | [] -> clause_expl claim fs
@@ -540,7 +559,8 @@ let kill_reason store t i =
     let low_x = lx >= ly and high_x = hx <= hy in
     if low_x then add_lo t sx a else add_lo t sy a;
     if high_x then add_hi t sx b else add_hi t sy b;
-    (* [owner v]: true when v is a hole of x_i (the one the reason cites), false when of y *)
+    (* [owner v]: true when v is a hole of x_i (the one the reason cites), false when it
+       is a hole of y *)
     let owner v =
       if not (mx v) then true
       else if not (my v) then false
@@ -702,7 +722,8 @@ let narrow store t k ~tgt_is_y ~tgt ~st ~src ~ss =
       !changed
 
 (* Every set selector: a set one with no common value is K's conflict; then y is
-   narrowed to each such x_k, and each such x_k to y (after all of them, so y is final). *)
+   narrowed to each such x_k, and each such x_k to y (after all of them, so y is
+   final). *)
 let equalise store t =
   let changed = ref false in
   for k = 0 to size t - 1 do

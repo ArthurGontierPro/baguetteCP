@@ -1,5 +1,12 @@
 #!/bin/sh
-# M1-T64. Verify formatting instead of silently fixing it.
+# Verify formatting instead of silently fixing it (M1-T64, `make fmt-check`).
+#
+#   scripts/check_fmt.sh              `fmt: clean`, exit 0; or the unformatted files, exit 1
+#   scripts/check_fmt.sh --self-test  proves the check can fail; runs first
+#
+# When ocamlformat is not on PATH the check is SKIPPED with a loud banner and exit 0 (a
+# cosmetic property is not worth blocking the gate over; `make check` then says the gate
+# was not fully verified). `make fmt` is the fixer.
 #
 # `make fmt` runs `dune build @fmt --auto-promote`, which REWRITES unformatted files.
 # That is the right behaviour for an explicit fixer and the wrong behaviour for a gate:

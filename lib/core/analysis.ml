@@ -1,7 +1,22 @@
-(* analysis.ml: the implication graph and the cut, AS DATA (M2-L2, D-0044).
+(* analysis.ml: clause conflict analysis AS DATA. [analyse] walks back from a conflict
+   through the implication graph and returns a CUT, a set of bound facts whose conjunction
+   is inconsistent with the model; a swappable [criterion] says where the walk stops. The
+   file then offers two things built on the same walk: [minimise_cut], which shortens a
+   finished cut (BAGUETTE_MINIMISE, off by default, D-0241), and [dependency_levels], the
+   decision levels a conflict rests on, computed over citations memoised on the trail
+   entries. lib/core/learn.ml is the consumer: it turns the 1UIP cut into the learned
+   clause that the default search and the CDCL loop (--cdcl, off by default, D-0219)
+   both use. Task M2-L2 built the module.
 
-   Consistency level: none -- this is not a propagator. Spec section: none yet; the
-   governing record is docs/DECISIONS.md D-0044 and its 2026-09-18 amendment.
+   Consistency level: none -- this is not a propagator. Spec section: none yet. The
+   governing record is docs/DECISIONS.md D-0044, which decided that the learned object is
+   a PB inequality with the clause as its degree-1 case, and its 2026-09-18 amendment,
+   which made the stopping criterion a pluggable component because 1UIP's guarantee does
+   not carry over to PB constraints (see "The stopping criterion" below).
+
+   The sections, in file order: facts; the cut (the types); the criterion; the walk
+   ([locate], [Frontier], [analyse]); reading a cut ([lits], [decision_levels],
+   [backjump_level]); clause minimisation; the dependency levels, memoised.
 
    ---------------------------------------------------------------------------
    What this module does, and the four things it deliberately does NOT do
@@ -9,14 +24,16 @@
 
    [analyse] walks back from a [Store.conflict] through the implication graph and
    returns a CUT: a list of bound facts whose conjunction is inconsistent with the
-   model. The clause a later row will learn is the negation of that conjunction, i.e.
-   [lits] below; the PB inequality M2-L1 will learn is the same object at degree 1
-   (D-0044: "a clause is the degree-1, unit-coefficient case").
+   model. The clause to learn is the negation of that conjunction, i.e. [lits] below,
+   which lib/core/learn.ml learns (M2-L3); the PB inequality type of lib/core/learned.ml
+   (M2-L1) holds the same object at degree 1 (D-0044: "a clause is the degree-1,
+   unit-coefficient case").
 
    It learns nothing, it backjumps nowhere, it attaches nothing to the engine and it
-   emits no proof line. M2-L2 is split from M2-L3 precisely so that the cut can be
-   checked against a brute-force oracle before anything depends on it. Four consequences
-   worth stating, because each is a thing a reader will look for and not find:
+   emits no proof line. It was built apart from learning (M2-L2 before M2-L3) precisely
+   so that the cut could be checked against a brute-force oracle before anything
+   depended on it. Four consequences worth stating, because each is a thing a reader
+   will look for and not find:
 
      - no [Writer] call and no dependency on lib/proof beyond [Lit] (which is data);
      - no mutation of the store: [analyse] takes it and reads it. The one exception
@@ -32,14 +49,17 @@
    The graph: three edges, each an existing O(1) question
    ---------------------------------------------------------------------------
 
-   A node is a [Reason.fact] -- one bound, frozen at the value a propagator read (see
-   lib/core/reason.ml on why it is frozen: I-X6 is discharged by the type on this half,
-   and nothing here reads a live domain to decide what a reason says).
+   A node is a [Reason.fact] -- one bound, frozen at the value a propagator read. It is
+   frozen because I-X6 requires an explanation to read a snapshot, never live domains;
+   lib/core/reason.ml discharges that by the type on this half, and nothing here reads a
+   live domain to decide what a reason says.
 
      - "which trail entry established this bound?"  [Store.lo_support]/[hi_support],
-       O(1), M2-T8. See [support_of] for the one case where it is not the answer and
+       O(1), kept by the store since M2-T8 (the interface of declarative reasons). See
+       [support_of] for the one case where it is not the answer and
        [Store.bound_support]'s binary search over the bound's history is (M6-T14).
-     - "which constraint made that entry?"          [Store.entry]'s [prop], M2-T7/I-T4.
+     - "which constraint made that entry?"          [Store.entry]'s [prop]: every trail
+       entry names the instance that made it (I-T4, since M2-T7).
      - "which bounds did that constraint read?"     the entry's [Reason.t], walked by
        [Reason.owners]' sibling logic without materialising a [Lit.t].
 
@@ -58,13 +78,13 @@
    BELOW it. [lo_support] is tried first and is the answer in the common case (nothing
    moved the bound again between the read and the conflict); when it is not, the unique
    entry that pushed the bound past [value] is found -- it exists and is unique because
-   bounds are monotone within a level (I-D3) and [undo_to] pops entries whose effect is
-   gone. Until M6-T14 that was a downward scan of the trail, once per fact per step, so
-   quadratic in trail depth over an analysis; it is now [Store.bound_support], a binary
-   search over the variable's bound history (D-0088), with the scan kept as a
-   [BAGUETTE_DEBUG] cross-check. [o1_supports] and [scanned_supports] count the two
-   paths ([scanned] now meaning "the history answered"), so a test can assert the O(1)
-   path is the one actually taken rather than assuming it.
+   bounds are monotone within a level (I-D3, a domain only shrinks within a level) and
+   [undo_to] pops entries whose effect is gone. That search is [Store.bound_support], a
+   binary search over the variable's bound history (per-variable trail histories, M6-T14,
+   D-0088), with the downward trail scan it replaced kept as a [BAGUETTE_DEBUG]
+   cross-check. [o1_supports] and [scanned_supports] count the two paths ([scanned]
+   meaning "the history answered"), so a test can assert the O(1) path is the one
+   actually taken rather than assuming it.
 
    That [~before] discipline is also the termination argument: every fact a resolution
    step introduces has a support strictly below the step's own, so the largest expandable
@@ -81,8 +101,10 @@
        materialises to no literal, [Reason.lit_of_fact] returns [None], and it is in the
        cut only so that [Reason.owners]' notion of scope survives the walk); or
      - its supporting entry rests on no facts ([Reason.is_empty]) AND is either a level
-       start or settled over no hole ([rests_on_nothing]). That is a DECISION (search.ml
-       pushes [Reason.none] beside [Explanation.decision] -- D-0018/D-0037), a constraint
+       start or settled over no hole ([rests_on_nothing]). That is a DECISION, which is
+       an assumption and so carries no reason (search.ml pushes [Reason.none] beside
+       [Explanation.decision]: a branch nogood is RUP over the branch's own trace, D-0018,
+       and a decision is an assumption rather than a model row, D-0037), a constraint
        posted at this level, or a pruning that genuinely follows from a model row alone
        -- a learned unit or an improving bound re-applied by [Search.apply_globals] is
        the common one.
@@ -102,9 +124,10 @@
    clause -- and would be WRONG for a decision, which rests on nothing precisely because
    it is assumed rather than derived. There is no way to tell the two apart from the
    reason alone ([Store.is_level_start] distinguishes a decision from a mid-level
-   factless pruning, and [factless] reports the latter for anyone who wants to look;
-   I-P5's history -- [Store.remove] and [Store.fix] recording [no_facts] silently from
-   M1-T9 to M1-T17 -- is why that list is reported rather than assumed empty).
+   factless pruning, and [factless] reports the latter for anyone who wants to look).
+   That list is reported rather than assumed empty because of I-P5's history (every
+   change carries its facts, since merged into I-P4): [Store.remove] and [Store.fix]
+   recorded [no_facts] silently through the int_ne tasks M1-T9 to M1-T17.
 
    ---------------------------------------------------------------------------
    Holes: the fold, and why it is not a special case of anything
@@ -112,17 +135,18 @@
 
    An [int_ne] removal claims a CLAUSE ([Encoding.ne_clause_lits], M1-T56) and not a
    literal, so it is non-asserting: there is no single order literal for "x <> v" and a
-   hole therefore cannot be a graph node in the usual way. The documented rule is to fold
-   the hole's reason into the bound move that CONSUMED it -- which is exactly the shape
-   [Store.lo_reasons]/[hi_reasons] already has for the proof side (M1-T44, I-X9): the
-   entry that moved the bound, plus one contribution per hole [Domain.settle] walked
-   over. [expand] does the same walk over [Store.settled_over_lo]/[settled_over_hi] and
+   hole therefore cannot be a graph node in the usual way. The rule is to fold the hole's
+   reason into the bound move that CONSUMED it -- which is exactly the shape
+   [Store.lo_reasons]/[hi_reasons] already has for the proof side, where an explanation
+   justifies the bound as recorded on the trail (M1-T44, I-X9): the entry that moved the
+   bound, plus one contribution per hole [Domain.settle] walked over. [analyse]'s
+   [hole_facts] does the same walk over [Store.settled_over_lo]/[settled_over_hi] and
    [Store.remover], and records every fold it performs in [folds].
 
    It is recorded rather than merely performed because a hole dropped silently is
    invisible: the cut still looks well formed, still holds on the trail, and is simply
-   over too few facts. Test (d) of this row asserts the fold FIRED, and separately that
-   the cut without the folded facts is not a valid nogood.
+   over too few facts. Test (d) of test/unit/test_analysis.ml asserts the fold FIRED,
+   and separately that the cut without the folded facts is not a valid nogood.
 
    ---------------------------------------------------------------------------
    The stopping criterion is a COMPONENT, and 1UIP is not a property of the cut
@@ -137,33 +161,36 @@
    merely do worse there; it measures the wrong thing.
 
    Therefore each criterion carries its OWN [postcondition]. "Exactly one literal from
-   the conflict level" is [one_uip]'s postcondition and nobody else's. M2-L6 plugs in a
-   slack-based criterion with a postcondition of its own and the 1UIP assertion cannot
-   redden for it, because it is not stated about the cut -- it is stated about the
-   criterion that produced the cut. Writing it as an invariant of [t] would have been
-   writing it at the wrong altitude.
+   the conflict level" is [one_uip]'s postcondition and nobody else's, so a criterion
+   with another postcondition cannot redden the 1UIP assertion: it is not stated about
+   the cut, it is stated about the criterion that produced the cut. Writing it as an
+   invariant of [t] would have been writing it at the wrong altitude. PB conflict
+   analysis (lib/core/pb_analysis.ml, M2-L6) relied on exactly that: its slack-based
+   criterion [assertive_slack] needs the coefficients of the row under construction, so
+   it lives in a criterion type of its own there, and [one_uip] was left untouched.
 
    [conflict_side] is here as the second criterion for the same reason a second
    implementation always is: a component with one instance is a constant wearing a
    record. It stops immediately, so its cut is the conflicting constraint's own reason,
    unexpanded -- trivially sound, non-asserting, and carrying as many conflict-level
-   literals as the conflict had. It is the shape M2-L6 must be free to accept.
+   literals as the conflict had. It is the shape a slack-based criterion must be free to
+   accept.
 
    ---------------------------------------------------------------------------
-   Determinism, and one note for M2-L3
+   Determinism, and the per-node level
    ---------------------------------------------------------------------------
 
-   Every list here is built in a fixed order and no [Hashtbl] is iterated: the gate
-   requires two runs to produce byte-identical output and a cut accumulated in a hash set
-   is the textbook way to lose that.
+   Every list here is built in a fixed order and no [Hashtbl] is iterated in an order
+   that reaches an output: the gate requires two runs to produce byte-identical output
+   and a cut accumulated in a hash set is the textbook way to lose that.
 
-   For M2-L3: each node records the [level] at which its bound was established, and
+   Each node records the [level] at which its bound was established, and
    [cited_levels]/[backjump_level] read them. I-S4 -- a cited hole line must outlive the
-   line citing it -- holds today by an argument about the level discipline that
-   EXPLICITLY does not cover a learned clause citing across levels, which is what this
-   cut becomes. Nothing here can violate it, because nothing here emits a line; but the
-   per-node level is recorded so that whoever takes M2-L3 can check it without walking
-   the trail a second time. That check is M2-L3's debt, not this row's. *)
+   line citing it -- holds by an argument about the level discipline that EXPLICITLY
+   does not cover a learned clause citing across levels, which is what this cut becomes.
+   Nothing here can violate it, because nothing here emits a line; the per-node level is
+   recorded so that the check can be made without walking the trail a second time. That
+   check is lib/core/learn.ml's ([Learn.supports], [Learn.support_check]). *)
 
 module Lit = Baguette_proof.Lit
 
@@ -187,7 +214,7 @@ let fact_value = function
    [root] is "this node is never resolved away" -- see the header. It is recorded on the
    node rather than recomputed because a [criterion]'s postcondition is shown the nodes
    and not the store, deliberately: a criterion that could reach the store could read
-   live state, which is the wrong side of I-X6's line. *)
+   live state, which I-X6 forbids. *)
 type node = {
   fact : Reason.fact;
   level : int;
@@ -198,7 +225,8 @@ type node = {
       (* [2 * v + 1] for a lower bound and [2 * v] for an upper one, [v] the variable the
          store names [fact]'s owner ([Store.var_index_named], read once by [locate]), or
          -1 when the store knows no such name. The KEY [Frontier] merges on: two facts
-         share a slot iff they share a name and a direction (D-0191). *)
+         share a slot iff they share a name and a direction. An int, so that a merge
+         hashes no string (the file-by-file review of learning, D-0191). *)
 }
 
 (* One hole folded into a bound move, per the rule in the header. [fold_into] is the
@@ -219,16 +247,18 @@ type t = {
          caller that cares is expected to look rather than to assume. *)
   antecedents : int list;
       (* Every propagator instance the cut RESTS ON: the conflicting one, every entry
-         resolved away, and every hole-punching entry folded in. I-X10 says a pruning
-         that rests on several model rows owes an explicit derivation (D-0040); this is
-         the list of rows M2-L3 owes it over. First-seen order. *)
+         resolved away, and every hole-punching entry folded in. Every trace line must be
+         RUP against the .opb and the lines before it (I-X10), so a pruning that rests on
+         several model rows owes an explicit derivation (D-0040); this is the list of rows
+         a derivation of the learned clause rests on. First-seen order. *)
   folds : fold list;
   factless : int list;
       (* Trail positions of root entries that rest on no facts and are NOT a level start,
          i.e. not decisions. A search that pushes one decision per level never produces
          one; a second constraint posted at a level already open does, and so would the
-         I-P5 shape that let [int_ne] prune factlessly from M1-T9 to M1-T17. Reported
-         rather than assumed empty, because that defect was invisible for eight tasks. *)
+         I-P5 shape that let [int_ne] prune factlessly from M1-T9 to M1-T17 (see the
+         header's "Roots"). Reported rather than assumed empty, because that defect was
+         invisible for eight tasks. *)
   resolutions : int;
   o1_supports : int;
   scanned_supports : int;
@@ -237,8 +267,8 @@ type t = {
 type error =
   | Misattributed of { at : int; claimed : int; var : string }
     (* [entry.prop] at trail position [at] names an instance that does not exist or
-       does not watch [var]. The graph is corrupt: M2-L3 would derive the learned
-       clause over the wrong model row. *)
+       does not watch [var]. The graph is corrupt: lib/core/learn.ml would derive the
+       learned clause over the wrong model row. *)
   | Diverged of int
 
 let error_to_string = function
@@ -252,16 +282,18 @@ let error_to_string = function
 
 (* What a criterion is shown. Deliberately the nodes and the conflict level and nothing
    else: a criterion that needed the store would be a criterion that could read live
-   state, which is the wrong side of I-X6's line. M2-L6's slack criterion needs the
-   coefficients of the constraint under construction, which is a field to add to this
-   view when M2-L1's [Learned.t] exists -- not a store. *)
+   state, which I-X6 forbids. A slack criterion needs the coefficients of the row under
+   construction, which is a different view, not a store: lib/core/pb_analysis.ml (M2-L6)
+   defines its own. *)
 type view = {
   v_nodes : node list Lazy.t;
   v_conflict_level : int;
   v_at_conflict_level : int;
-      (* How many of [v_nodes] sit at [v_conflict_level]. D-0152 (D-0140 A1): carried so
-         [one_uip] stops on a count the walk keeps, and [v_nodes] is lazy so that a
-         criterion that reads only the count never has the list built. *)
+      (* How many of [v_nodes] sit at [v_conflict_level]. Carried so that [one_uip] stops
+         on a count the walk keeps, and [v_nodes] is lazy so that a criterion that reads
+         only the count never has the list built (D-0152, which took the per-conflict
+         scans out of analysis; item A1 of D-0140's inventory of costs that grow with
+         the run). *)
 }
 
 (* The view of a finished node list, counted here. *)
@@ -280,8 +312,8 @@ type criterion = { crit_name : string; stop : view -> bool; postcondition : view
 
 let count_at_conflict_level v = v.v_at_conflict_level
 
-(* The clause path (M2-L3): resolve conflict-level facts away until one is left. The
-   postcondition is the 1UIP rule and it is scoped to this value. *)
+(* The clause path of lib/core/learn.ml: resolve conflict-level facts away until one is
+   left. The postcondition is the 1UIP rule and it is scoped to this value. *)
 let one_uip =
   {
     crit_name = "1UIP";
@@ -297,11 +329,11 @@ let conflict_side =
   { crit_name = "conflict-side"; stop = (fun _ -> true); postcondition = (fun _ -> true) }
 
 (* The other end: resolve until every conflict-level node is a root, i.e. until the cut
-   is over the assumptions themselves. This is what M1's [Search] already learns without
-   any analysis at all (D-0018's branch nogood over the negated decisions), so it is the
-   baseline any cut has to beat rather than a candidate for M2-L3 -- and it is the third
-   value that makes [criterion] a component with a range rather than a two-valued flag.
-   Its postcondition is its own and says nothing about counts. *)
+   is over the assumptions themselves. This is what [Search] learns without any analysis
+   at all (D-0018's branch nogood over the negated decisions), so it is the baseline any
+   cut has to beat rather than a candidate for learning -- and it is the third value
+   that makes [criterion] a component with a range rather than a two-valued flag. Its
+   postcondition is its own and says nothing about counts. *)
 let every_conflict_level_node_is_a_root v =
   List.for_all (fun n -> n.level <> v.v_conflict_level || n.root) (Lazy.force v.v_nodes)
 
@@ -318,25 +350,27 @@ let decision_cut =
    criterion would simply never be satisfied and [stopped_by_criterion] would report
    [false]. [analyse] says so rather than leaving it to be discovered.
 
-   M2-L3 needs it and [decision_cut] is not it. [decision_cut] stops when every
+   The default search's backjump needs it and [decision_cut] is not it (lib/core/learn.ml
+   writes the argument out). [decision_cut] stops when every
    CONFLICT-LEVEL node is a root and leaves the lower levels unexpanded, so the set of
    levels its cut names is NOT a dependency set: a node at level j that is not a root
    rests on further facts, at unknown levels, that the cut does not name. A backjump that
    skipped a level on that basis would skip a branch nothing had refuted. This criterion
    resolves until no such node is left, so every node IS a decision, a declared bound or
    a factless pruning that settled over no hole, and the levels it names really are the
-   levels the conflict rests on. See lib/core/learn.ml for the argument written out.
+   levels the conflict rests on.
 
-   LEVEL 0 IS NOT EXPANDED (M7-T27 (a2), D-0124 addendum). A node at level 0 rests on
-   level-0 facts only -- its support entry precedes every level mark, and so does every
+   LEVEL 0 IS NOT EXPANDED (M7-T27 (a2), D-0124 addendum; D-0124 made a [Linear]
+   pruning's reason materialise later, from the trail's history). A node at level 0 rests
+   on level-0 facts only -- its support entry precedes every level mark, and so does every
    entry its reason cites ([support_of]'s [~before]) -- so expanding it can add nothing
    but level-0 nodes, and level 0 is what [decision_levels] drops. The set of levels the
    closure names is therefore the same whether level 0 is resolved away or kept as it
    stands, and the postcondition says exactly that: every node ABOVE level 0 is a root.
-   Measured reason: on pattern-set-mining the closure re-expanded every root-level
-   Linear entry at every conflict, 146 055 reason materialisations of ~3 600 facts in
-   300 s, 13% of the nodes; since D-0124 a reason is rebuilt on each ask, so that was
-   the whole of (a)'s time cost. *)
+   Measured reason: on pattern-set-mining the closure re-expanded every root-level Linear
+   entry at every conflict, 146 055 reason materialisations of ~3 600 facts in 300 s, 13%
+   of the nodes; since D-0124 a reason is rebuilt on each ask, so that was the whole of
+   (a)'s time cost. *)
 let every_node_above_root_is_a_root v =
   List.for_all (fun n -> n.root || n.level = 0) (Lazy.force v.v_nodes)
 
@@ -351,12 +385,12 @@ let criteria = [ one_uip; conflict_side; decision_cut; decision_closure ]
 
 (* Which nodes the walk is allowed to resolve away.
 
-   [At_conflict_level] is M2-L2's own and the default: 1UIP and its siblings only ever
-   need to resolve the conflict level, and expanding below it would make every cut the
-   decision closure. [Everywhere] is M2-L3's, for [decision_closure] above, and since
-   M7-T27 (a2) it means every level ABOVE 0: see [decision_closure] for why level 0 adds
-   nothing to a dependency set, and note that a root CONFLICT (conflict level 0) under
-   the default scope still resolves level 0, as 1UIP at the root always did. The
+   [At_conflict_level] is the default: 1UIP and its siblings only ever need to resolve
+   the conflict level, and expanding below it would make every cut the decision closure.
+   [Everywhere] is for [decision_closure] above (lib/core/learn.ml's dependency set), and
+   since M7-T27 (a2) it means every level ABOVE 0: see [decision_closure] for why level 0
+   adds nothing to a dependency set, and note that a root CONFLICT (conflict level 0)
+   under the default scope still resolves level 0, as 1UIP at the root always did. The
    termination argument is unchanged and does not depend on which one is in force: every
    fact a resolution introduces has a support strictly below the step's own
    ([support_of]'s [~before]), so the largest expandable support strictly decreases
@@ -364,12 +398,12 @@ let criteria = [ one_uip; conflict_side; decision_cut; decision_closure ]
 type scope = At_conflict_level | Everywhere
 
 (* A slot ([2 * variable + direction], so a non-negative int) as a table key: the
-   identity is its hash and [Int.equal] its comparison. M16-file-review-T3 (D-0191): the
-   decision closure's cell table was a polymorphic [(int, int) Hashtbl.t], a [caml_hash]
-   and a [compare_val] per probe and a re-hash of every cell at each doubling, and
-   [Frontier] hashed a fact's NAME, a string, at every merge and removal. Neither table is
-   iterated in an order that reaches an output: the closure's is folded into a list the
-   caller sorts, the frontier's is only looked up. *)
+   identity is its hash and [Int.equal] its comparison, with none of the polymorphic
+   table's [caml_hash] and [compare_val] per probe. [Frontier] and [minimise_cut] key on
+   it, and neither iterates it: both only look it up. It replaced a polymorphic
+   [(int, int) Hashtbl.t] for the decision closure's cells, and [Frontier]'s hashing of a
+   fact's NAME, a string, at every merge and removal (M16-file-review-T3, D-0191); the
+   closure's cells have since become the dense array [Cells] (D-0236). *)
 module Slot_tbl = Hashtbl.Make (struct
   type t = int
 
@@ -381,22 +415,24 @@ end)
 
 (* Did [e] establish [value] in this direction? True for exactly one entry per
    (variable, direction, value) that is still live, by I-D3's monotonicity. The predicate
-   lives in [Store] since M6-T14 so that the history search and this scan share it. *)
+   lives in [Store] since M6-T14 (per-variable bound histories, D-0088) so that the
+   history search and this scan share it. *)
 let establishes = Store.establishes
 
-(* The downward trail walk [support_of] used until M6-T14 (D-0088): the newest entry
-   strictly below [before] on a variable of [v]'s name that establishes [value]. Linear
-   in the trail, once per fact per resolution step, so quadratic in trail depth over an
-   analysis -- the walk the 2014_mario / 2023_chessboard profiles put at the top.
-   [Store.bound_support] answers the same question by binary search over the variable's
-   bound history; this scan survives for one wave as the [BAGUETTE_DEBUG] cross-check in
-   [support_of] and as test_analysis's oracle, and is otherwise dead.
+(* The newest entry strictly below [before] on a variable of [v]'s name that establishes
+   [value], by a downward walk of the trail. It is the reference [Store.bound_support]
+   must agree with: the [BAGUETTE_DEBUG] cross-check in [locate] and test_analysis's
+   oracle, and otherwise unused. Linear in the trail, once per fact per resolution step,
+   so quadratic in trail depth over an analysis -- the walk the 2014_mario /
+   2023_chessboard profiles put at the top until M6-T14 (D-0088) replaced it by the
+   binary search over the variable's bound history.
 
-   [v] is [Store.var_named store name]. M6-T11 (D-0085): the scan used to compare
-   [String.equal (Store.name store e.var) name] at every entry -- D-0080 measured ~60 % of
-   2016 prize-collecting's self time in it. [Store.name_rep] maps each entry's variable to
+   [v] is [Store.var_named store name]. [Store.name_rep] maps each entry's variable to
    the first variable of its name, so the integer test below holds on exactly the entries
-   the string test did, duplicate names included. *)
+   a string comparison of names would, duplicate names included. It was that string
+   comparison, [String.equal (Store.name store e.var) name] at every entry, until M6-T11
+   (D-0085): D-0080, which found the 300 s going to quadratic bookkeeping rather than to
+   search, measured ~60 % of 2016 prize-collecting's self time in it. *)
 let scan_support store ~before ~v ~is_lower ~value =
   let rec go i =
     if i < 0 then Store.no_support
@@ -456,8 +492,9 @@ let same_slot a b =
 (* Of two facts about the same bound of the same variable, the one that implies the
    other: the order encoding's ladder makes [x >= 5] entail [x >= 4], so keeping only the
    strongest is sound and strictly shortens the learned clause. This is the cheap half of
-   the semantic minimisation M2-L3 owes in full; it is here because without it the 1UIP
-   count would see two thresholds for one variable as two conflict-level literals. *)
+   the semantic minimisation lib/core/learn.ml does in full ([Learn.minimise]); it is
+   here because without it the 1UIP count would see two thresholds for one variable as
+   two conflict-level literals. *)
 let stronger a b =
   if Reason.fact_is_lower a.fact then
     if fact_value a.fact >= fact_value b.fact then a else b
@@ -477,67 +514,72 @@ let add_node nodes n =
   in
   if !found then out else out @ [ n ]
 
-(* [add_node] above is the SPECIFICATION of the frontier merge and stays as the reference
-   a test compares against; [Frontier] is what [analyse] runs (M6-T16, D-0092).
+(* [Frontier] is the walk's frontier: the nodes not yet resolved away, at most one per
+   slot, in the order [add_node] above would produce them. [add_node] is the
+   SPECIFICATION of the merge and stays as the reference a test compares against;
+   [Frontier] is what [analyse] runs, and computes the same sequence with one hash lookup
+   per incoming fact:
 
-   [List.fold_left (fun acc f -> add_node acc (mk f)) rest facts] is O(|rest| * |facts|)
-   per resolution step: every [add_node] maps the whole frontier and then appends with
-   [@]. On 2014_mario that was the top of the profile after M6-T15 (D-0090). [Frontier]
-   computes the same sequence with one hash lookup per incoming fact:
-
-     - the frontier is a list of CELLS in frontier order, and a per-bound table from the
-       variable's name to its cell, so "is this slot already in the frontier?" is O(1);
+     - the frontier is a list of CELLS in frontier order, and a table from the node's
+       [slot] to its cell (or, for a node without a slot, from the variable's name, one
+       table per bound direction), so "is this slot already in the frontier?" is O(1);
      - a fact whose slot is present merges INTO the cell, in place, as the [stronger] of
        the two -- and on a tie [stronger m n] keeps the EXISTING [m], exactly as
        [add_node] does;
      - a fact whose slot is new gets a new cell appended after every existing one, in
        first-arrival order; later facts for that slot merge into it and do not move it.
        FIRST OCCURRENCE WINS the position; [stronger] decides the content;
-     - [remove] (the node a resolution step expands) drops the cell AND its table entry,
-       so a later fact on that slot is a new slot appended at the end -- which is what
-       [List.filter] followed by [add_node] did.
+     - [remove] (the node a resolution step expands) marks the cell dead and drops its
+       table entry, so a later fact on that slot is a new slot appended at the end --
+       which is what [List.filter] followed by [add_node] did.
 
-   A first version (in this same row) rebuilt a polymorphic [(string * bool) Hashtbl]
-   from the whole frontier at every step. It was byte-identical and 1.36x on mario, and
-   0.91x on 2023_chessboard: [caml_hash] and [compare_val] on the tuple keys, re-hashing
-   every frontier node every step, cost more than the short [String.equal] scans they
-   replaced. The table here persists across the walk, is keyed on the bare name with a
-   monomorphic [String] table per bound direction, and hashes only incoming facts.
-   M16-file-review-T3 (D-0191): keyed on the node's [slot] instead, an int [locate]
-   computes from the variable it looks up anyway, so a merge or a removal no longer
-   hashes the name; the name tables remain for a node without a slot.
-
-   [mk] is applied to the facts in order, once each, so [mk_node]'s counters and its
-   [Bad] exception fire in the same order as before.
-
-   M11-complexity-T4 (D-0152, D-0140 A1): THE 1UIP LOOP WITHOUT A PASS OVER THE FRONTIER
-   PER RESOLUTION. Each step used to rebuild the node list ([nodes], a [List.map]), count
-   its conflict-level nodes for [one_uip] (a filter and a length), fold it for the
-   expandable node of largest support, append the fresh cells with [@] and filter the
-   expanded cell out: five passes over the frontier per step, so a conflict cost its
-   resolutions times its frontier. Now:
+   No step passes over the whole frontier:
 
      - a cell carries its creation number [seq], and a removed cell is marked dead and
        left where it is. [rev_cells] is every cell ever made, newest first, so the live
-       ones in [seq] order are the old [cells] list exactly: cells were only ever
+       ones in [seq] order are exactly the list [add_node] builds: cells are only ever
        appended in creation order and filtered out;
      - [at_level] counts the live cells whose node sits at [conflict_level], kept at the
        three places a cell's node changes (created, merged, removed). It is the count
-       [one_uip] stops on, which [view] now carries;
+       [one_uip] stops on, which [view] carries;
      - [best] is a max-heap of (support, seq) over the expandable nodes, pushed whenever
        a cell takes a node, and cleaned lazily: an entry is current while its cell is
        live and still holds that very node (a node is never re-used, [mk] builds a new
        one per fact, so physical equality cannot see an old node come back). Its top is
        the expandable node of largest support, ties to the smallest [seq], i.e. the
-       EARLIEST cell -- which is what the fold over the cells returned, since it kept the
-       first of equal supports.
+       EARLIEST cell -- which is what a fold over the cells keeping the first of equal
+       supports returns ([analyse]'s [best_expandable]).
 
-   [remove] finds the cell through the table, where it filtered the list. Under
-   BAGUETTE_DEBUG [analyse] checks the count and the heap's answer against the passes
-   they replaced, at every step. [create ()] with no level and no [expandable] keeps the
-   old merge-only behaviour, which test_analysis.ml compares against [add_node]. *)
+   Under BAGUETTE_DEBUG [analyse] checks the count and the heap's answer against those
+   passes over the list, at every step. [create ()] with no level and no [expandable]
+   keeps the merge-only behaviour, which test_analysis.ml compares against [add_node].
+   [mk] is applied to the facts in order, once each, so [mk_node]'s counters and its
+   [Bad] exception fire in the order [add_node] would fire them.
+
+   History, with the measurements that chose the shape. Folding [add_node]
+   ([List.fold_left (fun acc f -> add_node acc (mk f)) rest facts]) is
+   O(|rest| * |facts|) per resolution step: every [add_node] maps the whole frontier and
+   then appends with [@]. On 2014_mario that was the top of the profile after M6-T15
+   (D-0090, which made trace positions O(1)), and M6-T16 (D-0092) replaced it by this
+   module. Its first version rebuilt a polymorphic [(string * bool) Hashtbl] from the
+   whole frontier at every step. It was byte-identical and 1.36x on mario, and 0.91x on
+   2023_chessboard: [caml_hash] and [compare_val] on the tuple keys, re-hashing every
+   frontier node every step, cost more than the short [String.equal] scans they
+   replaced. So the table persists across the walk, and was keyed on the bare name with
+   a monomorphic [String] table per bound direction, hashing only incoming facts.
+   M16-file-review-T3 (D-0191) keyed it on the node's [slot] instead, an int [locate]
+   computes from the variable it looks up anyway, so a merge or a removal no longer
+   hashes the name; the name tables remain for a node without a slot. Finally
+   M11-complexity-T4 (D-0152, D-0140 A1) took out the passes over the frontier per
+   resolution: each step used to rebuild the node list ([nodes], a [List.map]), count
+   its conflict-level nodes for [one_uip] (a filter and a length), fold it for the
+   expandable node of largest support, append the fresh cells with [@] and filter the
+   expanded cell out, five passes per step, so a conflict cost its resolutions times
+   its frontier. [remove] finds the cell through the table, where it filtered the
+   list. *)
 module Frontier = struct
-  (* The table keyed by a name, [String.equal] and [String.hash] (D-0236). *)
+  (* The table keyed by a name, through [String.equal] and [String.hash] without
+     [Hashtbl.hash]'s dispatch (lib/proof/name_tbl.ml, D-0236). *)
   module H = Baguette_proof.Name_tbl
 
   type cell = { mutable cur : node; seq : int; mutable alive : bool }
@@ -787,9 +829,9 @@ let analyse ?(scope = At_conflict_level) store (c : Store.conflict)
       None nodes
   in
   let frontier = Frontier.create ~conflict_level ~expandable () in
-  (* D-0152 (D-0140 A1): the criterion is shown the walk's count and a lazy node list,
-     and the next node comes off [Frontier.best]; see [Frontier]. Under BAGUETTE_DEBUG
-     both are checked against the passes over the list they replaced. *)
+  (* The criterion is shown the walk's count and a lazy node list, and the next node
+     comes off [Frontier.best]; see [Frontier]. Under BAGUETTE_DEBUG both are checked
+     against the passes over the list they replaced (D-0152). *)
   let view () =
     {
       v_nodes = lazy (Frontier.nodes frontier);
@@ -883,10 +925,11 @@ let lits t = List.map Lit.negate (Reason.lits_of_facts (facts t))
    [lits] drops (a fact still at its declared bound has no literal), keeps node order, and
    is 1:1 by construction rather than by coincidence.
 
-   M2-L4 reads it to compute an LBD -- the number of distinct levels a learned clause's
-   literals sit at. That number has to be taken AFTER minimisation (two literals over one
-   variable in one direction can sit at different levels and one of them is dropped), so
-   the levels have to travel with the literals rather than be counted here. *)
+   lib/core/learn.ml reads it to compute the LBD the retention policy scores a clause by
+   (M2-L4) -- the number of distinct levels a learned clause's literals sit at. That
+   number has to be taken AFTER minimisation (two literals over one variable in one
+   direction can sit at different levels and one of them is dropped), so the levels have
+   to travel with the literals rather than be counted here. *)
 let lits_levelled t : (Lit.t * int) list =
   List.filter_map
     (fun n ->
@@ -914,8 +957,10 @@ let cited_levels t = List.sort_uniq Int.compare (List.map (fun n -> n.level) t.n
 let decision_levels t = List.rev (List.filter (fun l -> l > 0) (cited_levels t))
 
 (* Where a clause over this cut would become asserting: the second-highest level it
-   cites, which is the level M2-L3 attaches the learned clause at. 0 when the cut cites
-   at most one level. *)
+   cites. 0 when the cut cites at most one level. Only tests read it: the learned clause
+   is introduced at level 0 (lib/core/learn.ml), the default search does not backjump on
+   it (see [decision_closure]), and the CDCL loop computes the same level from
+   [Learn.levelled], after minimisation. *)
 let backjump_level t =
   match List.rev (cited_levels t) with _ :: second :: _ -> second | _ -> 0
 
@@ -946,19 +991,27 @@ let to_string t =
 
 (* SHORTER LEARNED CLAUSES, by two rules applied to a finished cut. Each removal drops a
    node of the cut whose fact the checker re-derives for itself, by unit propagation,
-   from the facts that stay -- so the learned clause stays the `rup` it was (D-0018), and
-   the proof writes nothing new.
+   from the facts that stay -- so the learned clause stays the `rup` it was (a learned
+   clause is RUP over the logged trace, as D-0018 established for the branch nogood),
+   and the proof writes nothing new.
+
+   Which rules run is [min_config], chosen by BAGUETTE_MINIMISE in lib/core/learn.ml and
+   OFF by default. D-0241 measured the two rules: learned width -27 %, every proof
+   verified, +3 complete answers at 300 s, and a score within the noise, so the default
+   stayed off because the protocol asks for a gain in score.
 
    ROOT. A node whose bound was established at level 0 is dropped. Its fact holds at the
    root, and its literal in the clause is false there forever: the clause is the same
    constraint on every node the search will visit, only wider. The checker re-derives the
-   fact because every level-0 trail entry has its trace line on the page (lib/core/trace.ml,
-   "Level-0 prunings get a line too") or rests on one model row (I-X10), and level-0 lines
-   are never retired by a `w`. D-0238 section 5's `~e_ge_1` is the example.
+   fact because every level-0 trail entry has its trace line on the page
+   (lib/core/trace.ml, "Level-0 prunings get a line too") or rests on one model row
+   (I-X10), and level-0 lines are never retired by a level wipe ([Writer.wipe_level]
+   wipes levels above 0 only). D-0238 section 5's `~e_ge_1`, a level-0 fact in an
+   [int_lin_ne] conflict, is the example.
 
-   RECURSIVE (MiniSat's, Sorensson and Biere 2009, over order literals). A node above level
-   0 and below the conflict level is dropped when every fact its supporting entry read
-   ([Reason.facts], plus the holes it settled over, as [analyse] expands them) is
+   RECURSIVE (MiniSat's, Sorensson and Biere 2009, over order literals). A node above
+   level 0 and below the conflict level is dropped when every fact its supporting entry
+   read ([Reason.facts], plus the holes it settled over, as [analyse] expands them) is
    DERIVABLE:
      - at its declared bound, or established at level 0, or
      - implied by a cut node of the same slot (ladder order: [x >= 7] implies [x >= 3])
@@ -970,8 +1023,8 @@ let to_string t =
    are already falsified, and the removed node's line then propagates its fact. That is
    the same replay a node the 1UIP walk resolved away gets, at a lower level; the lines
    are on the page because [Trace] writes the whole trail when a branch fails, and they
-   are live because the clause is written before the `w` that retires any of their
-   levels (I-S4, [Learn.support_check]).
+   are live because the clause is written before the level wipe that retires any of
+   their levels (I-S4, checked by [Learn.support_check]).
 
    WHY "STRICTLY BEFORE, OR KEPT". The ladder gives a forward edge the SAT version does
    not have: [x >= 7] can be established AFTER the entry that read [x >= 3]. Two cut
@@ -986,25 +1039,29 @@ let to_string t =
    THE ABSTRACT-LEVEL FILTER (MiniSat's): an intermediate entry at a level no cut node
    sits at fails at once. In SAT that is exact; here an entry at level j can read only
    facts from below j, so the filter is a heuristic that may miss a removal and never
-   allows a wrong one ([~level_filter:false] measures what it misses).
+   allows a wrong one ([min_level_filter = false], BAGUETTE_MINIMISE=rec-nofilter,
+   measures what it misses).
 
    The conflict level is never touched: under 1UIP it holds one node, the asserting one,
    and dropping it would leave a clause that asserts nothing. A cut taken at level 0 is
    returned as it is (its clause is the root refutation's business). *)
 
-(* [min_break_unchecked] is the BREAK, as [Learn.Weakest] is minimisation's: it drops every
-   node strictly between level 0 and the conflict level without asking whether it is
-   derivable, so the clause claims more than the trail supports and the checker must refuse
-   it. It exists for test/unit/test_learn.ml's lane, which shows the line really rests on
-   the literals the rules keep (D-0066: a `rup` line can be vacuous). *)
+(* [min_break_unchecked] is the BREAK, as [Learn.Weakest] is minimisation's: it drops
+   every node strictly between level 0 and the conflict level without asking whether it
+   is derivable, so the clause claims more than the trail supports and the checker must
+   refuse it. It exists for test/unit/test_learn.ml's lane, which shows the line really
+   rests on the literals the rules keep: a `rup` line can be vacuous, accepted even when
+   wrong over a contradictory database, so a break is only seen through a line that
+   rests on it (D-0066). *)
 type min_config = {
   min_root : bool;
   min_recursive : bool;
   min_level_filter : bool;
   min_local : bool;
       (* With [min_recursive]: look ONE step back only, MiniSat's "local" mode. A fact is
-         derivable when it is at its declared bound, set at level 0 or implied by a cut node;
-         no other entry is expanded. The same argument, a shorter replay, a cheaper test. *)
+         derivable when it is at its declared bound, set at level 0 or implied by a cut
+         node; no other entry is expanded. The same argument, a shorter replay, a cheaper
+         test. *)
   min_break_unchecked : bool;
 }
 
@@ -1170,7 +1227,8 @@ let minimise_cut ?(config = min_off) store (cut : t) : min_result =
 (* [dependency_levels] is [decision_levels] of [analyse ~scope:Everywhere
    ~criterion:decision_closure] -- the SAME set, for the same conflict -- computed
    without materialising a reason the closure has already walked once. D-0124's second
-   addendum is the record.
+   addendum (M7-T27 (a3)) is the record; D-0124 itself made a [Linear] pruning's reason
+   materialise from the trail's history on each ask, which is what made re-walking cost.
 
    WHY A MEMO OF LEVELS PER ENTRY WOULD BE WRONG, which is what D-0124's first addendum
    proposed. The closure's answer is not the union, over the facts the conflict rests
@@ -1192,7 +1250,8 @@ let minimise_cut ?(config = min_off) store (cut : t) : min_result =
    reasons of the holes its bound move settled over read), with that position's level,
    direction and root-ness packed into one int. That is a property of the entry alone --
    [support_of ~before:p] answers from positions strictly below [p], and everything
-   below a live entry is frozen (I-T1, the argument D-0124 makes for [Store.history]) --
+   below a live entry is frozen (I-T1: backtracking to a level restores every domain to
+   its state at that level; the argument D-0124 makes for [Store.history]) --
    so it is computed on the entry's first visit, stored on it ([Store.entry.cites]), and
    dies with the record; nothing invalidates it on backtrack because [Store.apply]
    allocates a fresh record for every push. Citations at level 0 or without a support
@@ -1203,15 +1262,16 @@ let minimise_cut ?(config = min_off) store (cut : t) : min_result =
    of every pruning that D-0124 removed.
 
    THE WALK over citations is [analyse]'s walk with the facts left out: a cell per slot
-   holding the highest cited position; the highest expandable cell resolved first
-   ([best_expandable]); a cited position merged into an existing cell only when it is
-   higher ([stronger]: on one slot a later position is a stronger bound, by I-D3, and
-   the same position is the same fact); the cell removed when its position is expanded
-   ([Frontier.remove]); a decision or a factless pruning that settled over no hole
-   ([rests_on_nothing]) never expanded; level 0 never entered. The answer is the set of levels of the cells left,
-   which are all roots above level 0: [decision_closure]'s postcondition, by
-   construction. Under BAGUETTE_DEBUG the walk over facts runs beside it and the two
-   answers must agree; test_analysis.ml compares them on every scene.
+   holding the highest cited position ([Cells]); the highest expandable cell resolved
+   first ([Heap], as [Frontier.best] in [analyse]); a cited position merged into an
+   existing cell only when it is higher ([stronger]: on one slot a later position is a
+   stronger bound, by I-D3, and the same position is the same fact); the cell removed
+   when its position is expanded ([Frontier.remove]); a decision or a factless pruning
+   that settled over no hole ([rests_on_nothing]) never expanded; level 0 never
+   entered. The answer is the set of levels of the cells left, which are all roots above
+   level 0: [decision_closure]'s postcondition, by construction. Under BAGUETTE_DEBUG the
+   walk over facts runs beside it and the two answers must agree; test_analysis.ml
+   compares them on every scene.
 
    Per conflict this costs one hash step per citation of each entry resolved, in place
    of one [Reason.facts] per entry (3 600 facts rebuilt from the history, 122 033 times
@@ -1252,17 +1312,17 @@ let cite store ~check ~before fact =
 (* [memo_entries]/[memo_ints] count the memos built and the ints they hold, over the run:
    an upper bound on what the memo ever held live (a memo dies with its entry), printed
    under --stats as `cites` so that the memory question is answered by a number. *)
-(* The citations of the entry at [p]: its memo, or computed once and stored. The holes
-   follow [analyse]'s rule: the reasons of the holes the entry's bound move settled over,
-   in the direction it moved -- [settled_over_lo] when the lower bound moved,
-   [settled_over_hi] when the upper did. An entry moves one bound ([Store.fix], which
-   moves both, has no caller in lib/), so this is [hole_facts] for the one direction a
-   node on that entry can have; for a two-bound entry it would be the union over both
-   directions, a superset of either node's folds and sound. Each remover's attribution
-   is checked as [hole_facts] checks it. *)
 let memo_entries = ref 0
 let memo_ints = ref 0
 
+(* The citations of the entry at [p]: its memo, or computed once and stored. The holes
+   follow [analyse]'s rule: the reasons of the holes the entry's bound move settled over,
+   in the direction it moved -- [settled_over_lo] when the lower bound moved,
+   [settled_over_hi] when the upper did. Most entries move one bound, and for them this
+   is [hole_facts] for the one direction a node on that entry can have. An entry that
+   moved both ([Store.fix], which lib/core/view.ml calls) gets the union over both
+   directions, a superset of either node's folds, and sound. Each remover's attribution
+   is checked as [hole_facts] checks it. *)
 let cites_of store ~check p =
   let e = Store.trail_entry store p in
   match e.Store.cites with
@@ -1345,7 +1405,8 @@ module Heap = struct
 end
 
 (* The closure's CELLS, slot -> the citation the cell holds, as a DENSE array indexed by
-   slot rather than a hash table (M20-pernode-T4, D-0236). A slot is [2 * v + direction]
+   slot rather than a hash table (M20-pernode-T4, the per-node cost of the learning path,
+   D-0236). A slot is [2 * v + direction]
    for a store variable [v], so [2 * Store.n_vars] cells cover every key; [Slot_tbl] cost
    a hash, a closure call and a [Some] per probe, 3 to 4 % of elitserien handball12's
    instructions without the proof.

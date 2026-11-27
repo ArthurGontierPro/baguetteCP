@@ -1,0 +1,23 @@
+% M18-coverage-T14 / D-0247: a scene where a HOLE decides a global_cardinality count bound.
+% Route (a) of D-0247 (rule C and rule (b) of lib/core/prop/gcc.ml reading holes, each cited
+% through the entry that punched it) was built, verified on these models, measured over the
+% Challenge's variable-count instances and NOT kept: it lost on score (branch commit d94f08f).
+% The models stay as proof-checked regressions of the native propagator on hole scenes; the
+% std decomposition that variable counts now reach through mznlib reads holes by itself.
+% SAT. The decision w = 2 punches 2 out of x and y under a decision, so n can take no 2, and the
+% q pigeonhole then needs n >= 1 and fails deeper than the holes.
+var 1..3: w :: output_var;
+var 1..3: x :: output_var;
+var 1..3: y :: output_var;
+var 0..2: n :: output_var;
+var 1..3: q1 :: output_var;
+var 1..3: q2 :: output_var;
+var 1..3: q3 :: output_var;
+constraint int_ne(x,w);
+constraint int_ne(y,w);
+constraint fzn_global_cardinality([x,y],[2],[n]);
+constraint int_ne(q1,q2);
+constraint int_ne(q1,q3);
+constraint int_ne(q2,q3);
+constraint int_lin_le([1,1,1,-1],[q1,q2,q3,n],5);
+solve :: int_search([w,q1,q2,q3,x,y,n], input_order, indomain_median) satisfy;

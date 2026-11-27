@@ -1,18 +1,18 @@
 (* Checked integer arithmetic, and the compile-time cap that keeps it off the hot path.
 
    ---------------------------------------------------------------------------
-   Why this module exists (roadmap M1-T23)
+   Why overflow must be checked (roadmap M1-T23)
    ---------------------------------------------------------------------------
 
-   Until M1-T23 nothing in [lib/] checked for overflow. OCaml's native [int] is 63
-   bits and wraps silently, and the failure that produces is worse than a wrong
-   answer: the propagator and the .opb row are computed from the *same* wrapped
-   arithmetic, so they agree with each other, and veripb -- which only ever sees
-   the .opb -- accepts the refutation of a model that is not the model the user
-   wrote.
+   Until M1-T23, the task that put checked arithmetic into [Linear] and [Ne] and capped
+   declared domains at compile time, nothing in [lib/] checked for overflow. OCaml's
+   native [int] is 63 bits and wraps silently, and the failure that produces is worse than
+   a wrong answer: the propagator and the .opb row are computed from the *same* wrapped
+   arithmetic, so they agree with each other, and veripb -- which only ever sees the .opb
+   -- accepts the refutation of a model that is not the model the user wrote.
 
    The instance that demonstrated it (test/unit/test_matrix.ml's overflow axis,
-   [overflow_compile_rejected], and the header of test_prop.ml's [overflow_cells]):
+   [overflow_compile_cell], and test_prop.ml's "M1-T23: overflow, and the cap" section):
 
        array [1..1] of int: c = [-2305843009213693952];    % -2^61
        var 3..4: x;
@@ -32,7 +32,8 @@
 
    The .opb was a different model from the .fzn, the solver propagated that same
    different model, and the proof of the corrupted model's unsatisfiability was
-   perfectly valid. I-S1 could not see it: no solution was printed, and
+   perfectly valid. I-S1 (every printed solution satisfies every constraint, re-checked
+   independently of the propagators) could not see it: no solution was printed, and
    [Model.check_assignment] evaluates `sum a_i v_i` with the same wrapping [+] and
    [*] anyway.
 
@@ -118,8 +119,9 @@
    D-0028 measures a justification of 29.8 MB in a single `pol` line at a width of
    10^6. A width policy is a different decision with a different right answer -- it
    refuses models the FlatZinc standard allows and therefore needs a SPEC change and
-   its own record (D-0028 point 3) -- and folding one into the other silently is
-   exactly what that record asks not to happen. *)
+   its own record (D-0028 point 3, which says that if a width cap is ever wanted it
+   belongs beside this one, at compile time) -- and folding one into the other silently
+   is exactly what that record asks not to happen. *)
 
 exception Overflow of string
 

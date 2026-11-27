@@ -1,9 +1,14 @@
-(* The reification dispatcher (roadmap M3-T4).
+(* The reification dispatcher: the shared half of every reified constraint, to which an
+   author adds three pieces (roadmap M3-T4). Not a propagator family of its own: the
+   authors are lib/core/prop/reif_lin_le.ml and lib/core/prop/reif_lin_eq.ml, and their
+   headers carry the consistency level and the proof shape.
 
-   A reified constraint is  b <-> C  for a Boolean [b] (the *reifier*, an ordinary
-   order-encoded bool -- D-0007, and docs/DECISIONS.md D-0053 says reification
-   introduces no new naming scheme) and a condition [C] over integer variables. Written
-   out as propagation rules it is five cases:
+   A reified constraint is  b <-> C  for a Boolean [b] (the REIFIER) and a condition [C]
+   over integer variables. The reifier is an ordinary `var bool`, order-encoded on
+   [0, 1] like every Boolean (D-0007). A reification the model states is defined by two
+   big-M rows in the .opb, not by a `red` step in the proof (D-0053: `red` cannot give
+   a reifier the model already constrains its meaning), so there is no new naming
+   scheme. Written out as propagation rules it is five cases:
 
      1. [b] is true                  -> enforce C
      2. [b] is false                 -> enforce ~C
@@ -11,10 +16,10 @@
      4. C is refuted by the domains  -> [b] is false
      5. none of the above            -> nothing
 
-   M3-T2 has to do this for a linear inequality *and* for a linear equality, and
-   M3-T4 exists so that is two authors and not ten cases. **An author supplies three
-   pieces** -- enforce-hold, enforce-not-hold, entailment -- **and this module supplies
-   the collapse and the contrapositive**:
+   The reified linear builtins (M3-T2) need this for a linear inequality AND for a
+   linear equality, and this module exists so that is two authors and not ten cases.
+   An author supplies three pieces (enforce-hold, enforce-not-hold, entailment), and
+   this module supplies the collapse and the contrapositive:
 
      - the COLLAPSE is [propagate] below: it reads the reifier once and runs *at most
        one* of the three. Cases 1 and 2 are the two enforcement pieces; cases 3, 4 and
@@ -24,7 +29,7 @@
        case 4 of case 1. An author never writes either contrapositive; it writes the
        forward form and gets the reverse one from the position its piece sits in here.
 
-   [r_positive] carries the one further collapse M3-T2 needs. `int_ne_reif` is
+   [r_positive] carries the one further collapse the builtins need. `int_ne_reif` is
    `int_eq_reif` with the reifier's meaning inverted, so rather than a second author
    the dispatcher holds the POLARITY of the reification literal: [true] means the
    condition holds when [b] = 1, [false] that it holds when [b] = 0. Nothing else in
@@ -35,76 +40,80 @@
    ---------------------------------------------------------------------------
 
    An author's three pieces are [Store.t -> Propagator.result], which is the signature
-   of [Propagator.propagate] itself. That is deliberate and it is the whole economy of
-   this design: **the overwhelmingly common author piece is an existing propagator over
-   an existing row**, not new code. lib/core/prop/reif_lin_le.ml's enforce-hold is
-   [Linear.propagate] over the big-M row `sum a x + K b <= rhs + K`; its
-   enforce-not-hold is [Linear.propagate] over the other one. Neither re-implements
-   bounds propagation and neither hand-builds a [pol]: they inherit [Linear]'s D-0013
-   [Combine], which is the justification this reification needs, because the big-M row
-   IS the reification row the .opb carries (lib/proof/encoding.ml,
-   [add_int_lin_le_reif_rows]).
+   of [Propagator.propagate] itself, because the common author piece is an existing
+   propagator over an existing row, not new code. lib/core/prop/reif_lin_le.ml's
+   enforce-hold is [Linear.propagate] over the big-M row `sum a x + K b <= rhs + K`; its
+   enforce-not-hold is [Linear.propagate] over the other one. Neither re-implements bounds
+   propagation and neither hand-builds a [pol]: they inherit [Linear]'s [Combine] (the
+   "weaken, divide, add" derivation of D-0013), which is the justification this
+   reification needs, because the big-M row IS the reification row the .opb carries
+   (lib/proof/encoding.ml, [add_int_lin_le_reif_rows]).
 
-   The dispatch is therefore not redundant with the rows, and it is worth being precise
-   about why, since "just register both rows as two ordinary propagators" is the obvious
-   alternative. It would be *correct*: at b unfixed neither big-M row can prune a
-   condition variable, so running them unconditionally prunes exactly the same values.
-   What it would lose is the five cases as a THING IN THE CODE -- there would be no
-   place where case 3 and case 2 are visibly the same fact read in two directions, no
-   place for an author that is not two rows, and no [r_positive]. The equality author
+   The dispatch is still not redundant with the rows. The obvious alternative, "register
+   both rows as two ordinary propagators", would be CORRECT: at b unfixed neither big-M
+   row can prune a condition variable, so running them unconditionally prunes exactly the
+   same values. What it would lose is the five cases as a THING IN THE CODE -- there would
+   be no place where case 3 and case 2 are visibly the same fact read in two directions,
+   no place for an author that is not two rows, and no [r_positive]. The equality author
    (lib/core/prop/reif_lin_eq.ml) is exactly such an author: its enforce-not-hold is a
    value-consistent disequality pass whose explanation is a [Clause], not a [pol] over a
-   cited row, and its entailment piece pushes the reifier from a nogood. A dispatcher
-   that only knew how to run rows could not hold it.
+   cited row, and its entailment piece pushes the reifier from a nogood. A dispatcher that
+   only knew how to run rows could not hold it.
 
    ---------------------------------------------------------------------------
    Consistency, attribution, and the PB row
    ---------------------------------------------------------------------------
 
    This module declares NO consistency level, because it has no propagation of its own
-   to declare one for: the level is the author's, stated in the author's own header, and
-   each named face below the authors export carries it (SPEC 3.2 requires the level to
-   be documented per propagator, and a dispatcher that declared one would be declaring
-   something about code it does not contain).
+   to declare one for. The level is the author's, stated in the author's header and
+   carried by each named face the author exports ([Reif_lin_le.Int_le_reif] is Bounds,
+   [Reif_lin_eq.Int_eq_reif] Value). docs/SPEC.md 3.2 requires the level per
+   propagator, and a dispatcher that declared one would be declaring something about
+   code it does not contain. The proof shape is likewise the author's (docs/SPEC.md 3.3,
+   docs/PROOF-FORMAT.md section 4's `int_lin_le_reif` and `int_eq_reif` rows).
 
    ATTRIBUTION. A sub-propagator called from here changes domains through the ordinary
-   [Store] mutators, which stamp whoever [Engine] said was running -- that is this
-   dispatcher's instance, not the inner [Linear]'s, because the inner one was never
-   registered with the engine and has no id. That is the right answer and not an
-   accident of the mechanism: the model wrote `int_le_reif`, so a trace line or an
-   attribution failure should say `int_le_reif` (the [Ne] / [Ne.Int_ne] rule, and
-   lib/core/prop/clause.ml's five faces of one propagator). Nothing here calls
-   [Store.with_running].
+   [Store] mutators, which stamp whichever instance [Engine] said was running. That is
+   this dispatcher's instance, not the inner [Linear]'s, because the inner one was never
+   registered with the engine and has no id. It is also the right answer: the model
+   wrote `int_le_reif`, so a trace line or an attribution failure should say
+   `int_le_reif`. The same rule gives [Ne.Int_ne] its own name over [Ne], and
+   lib/core/prop/clause.ml one face per Boolean builtin over one propagator. Nothing here
+   calls [Store.with_running].
 
-   NO PB ROW. [Propagator.pb_row] is left at its default [None] (D-0054): an instance
-   here stands for TWO rows at least, and a [pb_row] is a promise to reproduce exactly
-   one. lib/flatzinc/compile.ml therefore packs these without [~row:], and M2-L6 falls
-   back to the clause path for a conflict this instance reports -- which is what
-   [Search]'s fallback rate counts, and is the same answer [Ne] gives for the same
+   NO PB ROW. [Propagator.pb_row] is left at its default [None]: an instance here stands
+   for TWO rows at least, and a [pb_row] is a promise to reproduce exactly one (the PB
+   row an instance exposes is the .opb row itself, D-0054). lib/flatzinc/compile.ml
+   therefore packs these without [~row:], and PB conflict analysis (M2-L6) falls back to
+   1UIP clause learning for a conflict this instance reports. That is what [Search]'s
+   fallback rate counts, and is the same answer [Ne] gives for the same
    reason. The rows are not thereby uncitable: each inner [Linear.t] names its own with
    [Explanation.Model_row], so every [pol] this instance's prunings emit is still
    anchored to a row the .opb actually contains.
 
-   IDEMPOTENCE AT THE INTERFACE (I-P3). [propagate] re-dispatches once if the
-   entailment piece has just fixed the reifier -- and only then. That is bounded by
+   IDEMPOTENCE AT THE INTERFACE (I-P2: run again at the engine's fixpoint, a propagator
+   changes nothing). [propagate] re-dispatches once if the entailment piece has just
+   fixed the reifier, and only then. That is bounded by
    construction: the reifier is a bool, so it can be fixed at most once, and the second
    pass takes an enforcement branch which cannot move it again.
 
-   For BOTH authors shipped today the second pass provably prunes nothing, and it is
-   worth saying so rather than leaving the re-dispatch looking load-bearing. Case 3
+   For BOTH authors shipped today the second pass provably prunes nothing, so the
+   re-dispatch is not load-bearing. Case 3
    fires because the current domains already entail the condition, so enforce-hold has
    nothing left to take away from them; case 4 fires because they already refute it, so
-   enforce-not-hold has nothing either -- and the equality author's case 3 is stronger
+   enforce-not-hold has nothing either. The equality author's case 3 is stronger
    still, firing only with every condition variable fixed. The re-dispatch is a guard
    for a future author whose entailment test is cheaper than its enforcement, not a
    path this suite exercises; even without it nothing would be lost but a queue
    round-trip, since the reifier is in [vars] and the engine re-wakes on it.
 
-   COST (M16-file-review-T2, D-0190). A run reads the reifier once ([decided], a constant
+   COST. A run reads the reifier once ([decided], a constant
    constructor, no [Domain.value] option) and then costs what the author's piece costs:
    for [Reif_lin_le] one or two [Linear] runs, O(n) each. The dispatcher builds no
    closure per run, and the authors hand it closures of their own arity rather than
-   partial applications. *)
+   partial applications. Both properties come from the file-by-file review of the
+   propagators' hot paths (M16-file-review-T2, D-0190), whose levers changed no output
+   byte. *)
 
 module Domain = Domain
 module Store = Store
@@ -141,10 +150,11 @@ let make ~reifier ~positive ~vars ~hold ~not_hold ~entail store =
 let vars t = t.r_b :: t.r_vars
 
 (* Whether the reification literal is decided, and which way. This is the only place
-   [r_positive] is read. M16-file-review-T2 (D-0190): a constant constructor read off
-   [Domain.is_fixed] and [Domain.lo], where it was [Some true] / [Some false] / [None]
-   built from [Domain.value]'s [Some v], two allocations per run of every reified
-   constraint; and [decided] and [go] are top-level, so a run builds no closure. *)
+   [r_positive] is read. A constant constructor read off [Domain.is_fixed] and
+   [Domain.lo] allocates nothing, and [decided] and [go] are top-level, so a run builds
+   no closure. (It used to be [Some true] / [Some false] / [None] built from
+   [Domain.value]'s [Some v], two allocations per run of every reified constraint;
+   M16-file-review-T2.) *)
 type decision = Holds | Fails | Open
 
 let decided t store =
