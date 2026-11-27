@@ -852,31 +852,6 @@ def main(cake_opb, names_file, bag_opb, bag_pbp):
         deferred[klab] = f"{klab} pol {' '.join(rpn)} ;"
         needs[klab] = deps
         cands.append(([klab], (coefs, d), [klab]))
-    # GCC TIES (D-0262). A cover that repeats a value is merged at the front end (D-0260)
-    # and each later count TIED to the first by a model row, counts[j] - counts[i] = 0, which
-    # no single cake row states. cake counts the value at both positions, over the same eq
-    # atoms: `<i>_ge` (atoms - c_i >= 0) plus `<j>_le` (c_j - atoms >= 0) is the tie's
-    # c_j - c_i >= 0, the atoms cancelling, and `<i>_le` plus `<j>_ge` its mirror. Offered as
-    # candidates for every pair of one gcc whose atom parts cancel exactly (equal values).
-    gcc_half = {}
-    for lab, c, d in subst:
-        gm = re.fullmatch(r"@(?:S\[)?c\[(.+)\]\[(\d+)_(ge|le)\]\]?", lab)
-        if gm:
-            atoms_part = frozenset((v, a) for v, a in c.items() if v not in bagvars)
-            gcc_half.setdefault((gm.group(1), gm.group(3)), []).append((gm.group(2), lab, c, d, atoms_part))
-    for (cK, side), rows in gcc_half.items():
-        if side != "ge":
-            continue
-        for p_i, lab_i, c_i, d_i, a_i in rows:
-            for p_j, lab_j, c_j, d_j, a_j in gcc_half.get((cK, "le"), []):
-                if p_i == p_j or not a_i or frozenset((v, -a) for v, a in a_i) != a_j:
-                    continue
-                coefs = dict(c_i)
-                for v, a in c_j.items():
-                    coefs[v] = coefs.get(v, 0) + a
-                coefs = {v: a for v, a in coefs.items() if a}
-                if all(v in bagvars for v in coefs):
-                    cands.append(([lab_i, lab_j, "+"], (coefs, d_i + d_j), []))
     cvars = [{var_of(l) for l in lit_form(*row)[0]} & bagvars for _, row, _ in cands]
     # an index from each baguette variable to the candidates that name it, so that a row is
     # tried only against candidates it could match (both passes need a shared variable or,
