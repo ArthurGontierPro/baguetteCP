@@ -19,6 +19,7 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
+| M22-review-bugs (D-0262): e2e rejections and bridge defects of D-0258 section 4 | `lib/proof/e2e.ml`, `tools/e2e/bridge.py`, `scripts/e2e_lane.sh` (minimal), e2e tests and models | agent-e2efix | 2026-11-27 |
 
 ## Cross-session requests
 
