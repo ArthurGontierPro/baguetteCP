@@ -104,7 +104,11 @@ type cond =
   | Cond of Lit.t
 
 exception Undeclared of string
-exception Redeclared of string
+
+(* A second declaration of a name already declared, with other bounds, other holes or
+   another representation: the variable, and what differs in words. An identical
+   redeclaration is a no-op and raises nothing (M22-review-T5). *)
+exception Redeclared of string * string
 exception Empty_domain of string
 exception No_direct_encoding of string
 exception Direct_too_large of string * int
@@ -1432,23 +1436,43 @@ let warn_wide_declaration x ~lo ~hi ~clauses =
    magnitude, which is why holes are BUDGETED (counted into [ladder_clauses], and so
    into M7-T8's predictive check below) rather than separately refused. *)
 
-let declare_int_gen t x ~holes ~lo ~hi =
-  if lo > hi then raise (Empty_domain x);
-  (* Before the Hashtbl and before the ladder: a refused declaration leaves no trace
-     in [t] and costs no allocation. M1-T54, and still true of the two refusals that
-     survive M7-T1 -- a width that is not representable, and a limit someone asked for. *)
-  if order_width_exceeds ~lo ~hi then raise (Width_too_large (x, lo, hi));
-  (match Names.find_opt t.ints x with
-  | Some v when v.lo = lo && v.hi = hi -> raise Exit (* idempotent redeclaration *)
-  | Some _ -> raise (Redeclared x)
-  | None -> ());
+(* M22-review-T5: is [x] already declared exactly so? [false] when the name is new;
+   [true] when it was declared with the same bounds, the same holes ([holes] sorted and
+   deduplicated, as the declaration keeps them) and the same representation, which makes
+   the redeclaration a no-op; and [Redeclared] naming what differs otherwise. Before
+   M22-review-T5 only the bounds were compared, so [declare_int_with_holes] after
+   [declare_int] silently dropped the holes, and an order declaration of a bits variable
+   kept the bits; the no-op was signalled by [raise Exit] under a wrapper that would also
+   have swallowed an [Exit] from any callee. *)
+let already_declared t x ~lo ~hi ~holes ~bits =
+  match Names.find_opt t.ints x with
+  | None -> false
+  | Some v ->
+      let differ what before after =
+        raise (Redeclared (x, Printf.sprintf "%s %s, then %s" what before after))
+      in
+      let ints l = "{" ^ String.concat "," (List.map string_of_int l) ^ "}" in
+      let repr_name b = if b then "bits" else "order" in
+      if v.lo <> lo || v.hi <> hi then
+        differ "bounds"
+          (Printf.sprintf "%d..%d" v.lo v.hi)
+          (Printf.sprintf "%d..%d" lo hi);
+      let v_bits = match v.repr with Bits _ -> true | Order -> false in
+      if v_bits <> bits then differ "representation" (repr_name v_bits) (repr_name bits);
+      let v_holes =
+        List.sort Stdlib.compare (Hashtbl.fold (fun h _ acc -> h :: acc) v.hole_rows [])
+      in
+      if v_holes <> holes then differ "holes" (ints v_holes) (ints holes);
+      true
+
+(* The order declaration of a NEW name, [holes] sorted and deduplicated, after
+   [declare_int_gen]'s checks. *)
+let mint_order t x ~holes ~lo ~hi =
   (* [order_width_exceeds] has established that hi - lo is representable. *)
   let width = hi - lo in
   let ladder = if width >= 1 then width - 1 else 0 in
-  (* Sorted and deduplicated so the .opb is byte-identical whatever order the caller
-     produced the holes in (the determinism gate), and validated before anything is
-     minted so a bad hole leaves [t] untouched, exactly as a refused width does. *)
-  let holes = List.sort_uniq Stdlib.compare holes in
+  (* [holes] are validated before anything is minted so a bad hole leaves [t]
+     untouched, exactly as a refused width does. *)
   List.iter (fun h -> if h <= lo || h >= hi then raise (Hole_out_of_range (x, h))) holes;
   let n_holes = List.length holes in
   (* Hole rows ARE order-ladder rows: same literals, same shape, minted by this same
@@ -1529,7 +1553,17 @@ let declare_int_gen t x ~holes ~lo ~hi =
     holes
 
 let declare_int_gen t x ~holes ~lo ~hi =
-  try declare_int_gen t x ~holes ~lo ~hi with Exit -> ()
+  if lo > hi then raise (Empty_domain x);
+  (* Before the Hashtbl and before the ladder: a refused declaration leaves no trace
+     in [t] and costs no allocation. M1-T54, and still true of the two refusals that
+     survive M7-T1 -- a width that is not representable, and a limit someone asked for. *)
+  if order_width_exceeds ~lo ~hi then raise (Width_too_large (x, lo, hi));
+  (* Sorted and deduplicated so the .opb is byte-identical whatever order the caller
+     produced the holes in (the determinism gate), and so a redeclaration compares them
+     as a set. *)
+  let holes = List.sort_uniq Stdlib.compare holes in
+  if not (already_declared t x ~lo ~hi ~holes ~bits:false) then
+    mint_order t x ~holes ~lo ~hi
 
 (* The hull-only declaration, which is every caller but a FlatZinc set domain. Kept as
    its own name rather than an optional [?holes] argument because an optional labelled
@@ -1575,22 +1609,8 @@ let bit_length width =
 (* The weighted bit literals of [x]: (2^i, x_bit_i) for 0 <= i < n. *)
 let bit_terms x n = List.init n (fun i -> (1 lsl i, Lit.bit x i))
 
-let declare_int_bits t x ~lo ~hi =
-  if lo > hi then raise (Empty_domain x);
-  (match width_opt ~lo ~hi with
-  | None -> raise (Width_too_large (x, lo, hi))
-  | Some w when w < 2 ->
-      invalid_arg
-        (Printf.sprintf
-           "Encoding.declare_int_bits: `%s` has width %d; width 0 and 1 stay on the \
-            order encoding by rule (D-0130 section 3.4) and the caller should not have \
-            asked"
-           x w)
-  | Some _ -> ());
-  (match Names.find_opt t.ints x with
-  | Some v when v.lo = lo && v.hi = hi && v.repr <> Order -> raise Exit
-  | Some _ -> raise (Redeclared x)
-  | None -> ());
+(* The bits declaration of a NEW name, after [declare_int_bits]'s checks. *)
+let mint_bits t x ~lo ~hi =
   let width = hi - lo in
   let n = bit_length width in
   check_encoding_budget t ~what:x ~kind:"bits bound rows" ~blo:lo ~bhi:hi ~adds:2;
@@ -1629,7 +1649,20 @@ let declare_int_bits t x ~lo ~hi =
   Names.replace t.taken (Lit.sanitize x) ();
   t.decl_rev <- x :: t.decl_rev
 
-let declare_int_bits t x ~lo ~hi = try declare_int_bits t x ~lo ~hi with Exit -> ()
+let declare_int_bits t x ~lo ~hi =
+  if lo > hi then raise (Empty_domain x);
+  (match width_opt ~lo ~hi with
+  | None -> raise (Width_too_large (x, lo, hi))
+  | Some w when w < 2 ->
+      invalid_arg
+        (Printf.sprintf
+           "Encoding.declare_int_bits: `%s` has width %d; width 0 and 1 stay on the \
+            order encoding by rule (D-0130 section 3.4) and the caller should not have \
+            asked"
+           x w)
+  | Some _ -> ());
+  if not (already_declared t x ~lo ~hi ~holes:[] ~bits:true) then mint_bits t x ~lo ~hi
+
 let is_bits t x = match (find t x).repr with Bits _ -> true | Order -> false
 let n_bits_vars t = t.bits_vars
 
