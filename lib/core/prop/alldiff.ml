@@ -1204,6 +1204,22 @@ let push_conflict store ~facts why =
 
 exception Found of Store.conflict
 
+(* [perm] sorted by [key], ascending, in place, by insertion. Ties keep no particular
+   order, and none is needed: [hall_free] reads only counts and the values at run ends,
+   and [pass_scan] only counts along [by_hi] and marks what it walked. O(n + the number
+   of pairs out of order), which across one search step is the few bounds that moved. *)
+let sort_by (key : int array) perm =
+  for j = 1 to Array.length perm - 1 do
+    let i = perm.(j) in
+    let k = key.(i) in
+    let p = ref (j - 1) in
+    while !p >= 0 && key.(perm.(!p)) > k do
+      perm.(!p + 1) <- perm.(!p);
+      decr p
+    done;
+    perm.(!p + 1) <- i
+  done
+
 (* One pass: every candidate interval, in a fixed order, pushing what it can. Returns
    [true] if anything moved, so [propagate] can re-run; raises [Found] on a conflict,
    which is the one non-local exit -- a conflict abandons the pass, and unwinding
@@ -1256,13 +1272,16 @@ let pass_scan t store ~lo0 ~hi0 =
      it runs, so the pass-start bounds updated at each push that lands are what
      [Store.get] would read, without reading it per term per tight interval. *)
   let lo_l = Array.copy lo0 and hi_l = Array.copy hi0 in
-  let los = List.sort_uniq Int.compare (Array.to_list lo0) in
-  let his = Array.of_list (List.sort_uniq Int.compare (Array.to_list hi0)) in
-  (* The terms by ascending upper bound, so that the number of terms inside [a, b] is a
-     pointer walked along [his] for each [a] rather than a filter of the scope per
-     interval. *)
-  let by_hi = Array.init nt Fun.id in
-  Array.stable_sort (fun i j -> Int.compare hi0.(i) hi0.(j)) by_hi;
+  (* The terms by ascending lower and upper bound, the instance's kept permutations
+     ([sort_by] is a walk over them when [pass] has just sorted them). The intervals are
+     enumerated over them: [a] at the first term of each run of equal lower bounds, [b]
+     at the last of each run of equal upper bounds, so the same distinct values in the
+     same ascending order as the sorted lists of bounds this used to build (D-0242). The
+     number of terms inside [a, b] is a pointer walked along [by_hi] for each [a] rather
+     than a filter of the scope per interval. *)
+  sort_by lo0 t.by_lo;
+  sort_by hi0 t.by_hi;
+  let by_lo = t.by_lo and by_hi = t.by_hi in
   (* One push, with both halves of D-0026 built from the same snapshot. Returns through
      [Found]/[Moved]; a push that changes nothing (the bound is already there) falls
      through, which is how [Unchanged] can happen at all here. *)
@@ -1311,11 +1330,13 @@ let pass_scan t store ~lo0 ~hi0 =
         moved := true
     | Store.Unchanged -> ()
   in
-  List.iter
-    (fun a ->
+  for ia = 0 to nt - 1 do
+    let a = lo0.(by_lo.(ia)) in
+    if ia = 0 || lo0.(by_lo.(ia - 1)) <> a then
       let inside = ref 0 and p = ref 0 in
-      Array.iter
-        (fun b ->
+      for ib = 0 to nt - 1 do
+        let b = hi0.(by_hi.(ib)) in
+        if ib = nt - 1 || hi0.(by_hi.(ib + 1)) <> b then (
           (* [inside]: the terms whose pass-start window lies in [a, b]. *)
           while !p < nt && hi0.(by_hi.(!p)) <= b do
             if lo0.(by_hi.(!p)) >= a then incr inside;
@@ -1390,8 +1411,8 @@ let pass_scan t store ~lo0 ~hi0 =
                 if inmask.(i) then inset.(t.canon.(i)) <- false
               done);
             Array.fill inmask 0 nt false))
-        his)
-    los;
+      done
+  done;
   !moved
 
 (* THE QUIET-BOUNDS SKIP (M20-pernode-T4, D-0235). Whether [pass_scan] moves anything or
@@ -1407,22 +1428,6 @@ let pass_scan t store ~lo0 ~hi0 =
    BAGUETTE_DEBUG runs the scan behind every skip and requires it to move nothing. *)
 (* How many passes [pass] skipped, for test_prop's lane; not read by the solver. *)
 let quiet_skips = ref 0
-
-(* [perm] sorted by [key], ascending, in place, by insertion. Ties keep no particular
-   order, and none is needed: [hall_free] reads only counts and the values at run ends,
-   and [pass_scan] only counts along [by_hi] and marks what it walked. O(n + the number
-   of pairs out of order), which across one search step is the few bounds that moved. *)
-let sort_by (key : int array) perm =
-  for j = 1 to Array.length perm - 1 do
-    let i = perm.(j) in
-    let k = key.(i) in
-    let p = ref (j - 1) in
-    while !p >= 0 && key.(perm.(!p)) > k do
-      perm.(!p + 1) <- perm.(!p);
-      decr p
-    done;
-    perm.(!p + 1) <- i
-  done
 
 (* THE HALL-FREE TEST (M20-pernode-T4, D-0242). Whether [pass_scan] on the bound vector
    [lo]/[hi] would move nothing and raise nothing, decided by counting alone, with no
