@@ -19,6 +19,7 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
+| M18-coverage-T13 (D-0244) | `mznlib/` files for value_precede / value_precede_chain / seq_precede_chain; a new `lib/core/prop/` module + `lib/core/dune` only if measurement justifies it; the family's entries in `lib/flatzinc/builder.ml` and `compile.ml`; test models for the family; `docs/DECISIONS.md` (D-0244), `docs/ROADMAP.md` (its row) | agent-precede (wave90-precede) | 2026-11-27 |
 
 ## Cross-session requests
 
