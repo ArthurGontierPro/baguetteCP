@@ -19,7 +19,6 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M18-coverage-T14 (D-0247) | `lib/core/prop/gcc.ml` (rule C only), gcc entries of `lib/flatzinc/compile.ml` and `lib/flatzinc/builder.ml`, `mznlib/fzn_global_cardinality*.mzn`, gcc sections of `test/unit/*`, new `test/models/gccvar_*` | agent-gccvar (`wave93-gccvar`) | 2026-11-27 |
 
 ## Cross-session requests
 
@@ -717,7 +716,12 @@ section 1. Shares are inclusive, of the whole run.
 | M18-coverage-T7 (the cheap globals) | agent-cheap (`wave79-cheap`) | 2026-11-26 | **D-0233 [AUTONOME].** mznlib only: `fzn_alldifferent_except` as at most one indicator per value (1 -> 2 complete of 37, gcc's route measured worse), `fzn_nvalue` without the bool2int copies, `fzn_all_equal_int_reif` as a chain (outcomes unchanged). Seven test models, SPEC 2.1 row |
 
 | M18-coverage-T5 (the ordering globals) | agent-lex (`wave85-lex`) | 2026-11-27 | **D-0239 [AUTONOME].** mznlib only: `lex_lesseq`/`lex_less`, int and Bool, as four linear rows per position over std's chain flag; 26 -> 27 complete of 92 with proof, nodes/s x1.02 to 1.04; precedence globals keep std's (T13 added); `increasing` already native. |
+| M18-coverage-T14 (gcc with variable counts) | agent-gccvar (`wave93-gccvar`) | 2026-11-27 | **D-0247 [AUTONOME].** mznlib only in the kept route: a `global_cardinality` whose counts are not all fixed goes to std's count decomposition (`4c5df61`), constant counts and the closed form stay native; +3 verified complete with proof over the 40 Challenge instances it reaches, none lost. Route (a), rule C over holes, built, verified and dropped (`d94f08f`, reverted `fa32d4b`). Not merged |
 ## Handoff notes
+
+### 2026-11-27 (agent-gccvar, `wave93-gccvar`, D-0247): gcc with variable counts goes to std's decomposition, not merged
+
+Kept: `mznlib/fzn_global_cardinality.mzn` sends a call with a variable count to std's `count` rows plus the implied row `length(x) >= sum(counts)` (`4c5df61`, its own commit, revert it to undo); the closed form calls `baguette_global_cardinality` itself and stays native; low_up untouched. No solver code changes: the branch's release binary is main's `a23edcfd`, the diff lane is 347 of 347 equal. `gcc_shim_{sat,unsat}.fzn` regenerated (same outputs). Mondoku's missing inference is the row between counts, not holes: rule C over holes alone does not finish 10-10-6, the row alone does in 4 745 nodes. A native count-to-count rule in gcc.ml, and low_up through the same route, are the follow-ups (D-0247 section 6, no ROADMAP row added). Material: `/cluster/arthur/baguette-results/gccvar/`.
 
 ### 2026-11-27 (agent-precede, `wave90-precede`, D-0244): the precede gap is not the chain, nothing built, not merged
 
