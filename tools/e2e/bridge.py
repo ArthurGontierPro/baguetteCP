@@ -431,6 +431,49 @@ def main(cake_opb, names_file, bag_opb, bag_pbp):
                     emit(f"@Y1[{Y}] red +1 ~{Y} +1 {X} >= 1 : {Y} -> {X} ;")
                     emit(f"@Y2[{Y}] red +1 {Y} +1 ~{X} >= 1 : {Y} -> {X} ;")
                     break
+    # D-0262: a copy over a domain of more than one rung is tied by int_eq's two LINEAR
+    # rows, sum_v Y_ge_v - sum_v X_ge_v >= 0 and its mirror (a binary clause per rung only
+    # where the ladder has one rung), so the clause test above never sees it and its rungs
+    # were cited (@L) undefined. Recognised from the two rows over the same values; each
+    # rung is defined by the same red pair, the copy's ladder rungs @L derived from the
+    # original's, and the two rows pinned as the sums of the pairs (copy_eq).
+    copy_eq = {}
+    ladder = {}
+    for a in atoms:
+        base, v = a.rsplit("_ge_", 1)
+        ladder.setdefault(base, {})[pv(v)] = a
+    for _, terms, op, rhs in bag:
+        coefs, d = var_form(terms, op, rhs)
+        if d != 0 or not coefs or set(coefs.values()) != {1, -1}:
+            continue
+        pos = {v for v, c in coefs.items() if c == 1}
+        negs = {v for v, c in coefs.items() if c == -1}
+        for ys, xs in ((pos, negs), (negs, pos)):
+            if any(Y in bagvars or Y in alias or not re.fullmatch(r".+_ge_m?\d+", Y) for Y in ys):
+                continue
+            ybases = {Y.rsplit("_ge_", 1)[0] for Y in ys}
+            xbases = {X.rsplit("_ge_", 1)[0] for X in xs}
+            if len(ybases) != 1 or len(xbases) != 1 or not xs <= atoms:
+                continue
+            yb, xb = ybases.pop(), xbases.pop()
+            vals = sorted(pv(Y.rsplit("_ge_", 1)[1]) for Y in ys)
+            if sorted(ladder.get(xb, {})) != vals:
+                continue
+            for v in vals:
+                Y, X = f"{yb}_ge_{vn(v)}", f"{xb}_ge_{vn(v)}"
+                alias[Y] = X
+                emit(f"@Y1[{Y}] red +1 ~{Y} +1 {X} >= 1 : {Y} -> {X} ;")
+                emit(f"@Y2[{Y}] red +1 {Y} +1 ~{X} >= 1 : {Y} -> {X} ;")
+            for v, w in zip(vals[1:], vals):
+                hi, lo = f"{yb}_ge_{vn(v)}", f"{yb}_ge_{vn(w)}"
+                emit(f"@L[{hi}] pol @Y1[{hi}] @L[{alias[hi]}] + @Y2[{lo}] + ;")
+            for k, sign in (("@Y2", 1), ("@Y1", -1)):
+                key = frozenset({**{f"{yb}_ge_{vn(v)}": sign for v in vals},
+                                 **{f"{xb}_ge_{vn(v)}": -sign for v in vals}}.items())
+                rpn = " ".join(f"{k}[{yb}_ge_{vn(v)}]" + (" +" if i else "")
+                               for i, v in enumerate(vals))
+                copy_eq[key] = rpn
+            break
     bagvars |= set(alias)
 
     # REGULAR'S STATE FLAGS (T6, D-0195). The translator leaves mznlib's flags out of the .scp
@@ -1044,6 +1087,64 @@ def main(cake_opb, names_file, bag_opb, bag_pbp):
             found = match(bl, bd, coefs, loose=True)
         return found
 
+    # CHOICE GROUPS BY POSITION (D-0262). baguette mints one `_mxN` per operand, in operand
+    # order, and its clause over them in that order; the k-th is cake's k-th flag. Guessing it
+    # from the first flag that derives the selector's rows (below) took a constant operand's
+    # flag, which cake forces, for another operand's selector (array_int_maximum over
+    # [x1, x0, -1]: _mx0 := x[c1][2], then _mx2's row and the clause had no derivation). The
+    # group's cake constraint is the one whose choice rows, operand by operand, name the same
+    # variables as baguette's selector rows (the result, and the operand unless a constant).
+    base_to_cake = {info["x"]: X for X, info in ivars.items()}
+
+    def cake_vars_bag(coefs):
+        out = set()
+        for v in coefs:
+            mm = re.fullmatch(r"(.+)_(?:ge_m?\d+|bit_\d+)", v)
+            if mm and mm.group(1) in base_to_cake:
+                out.add(base_to_cake[mm.group(1)])
+        return out
+
+    cake_rows_by_label = {lab: (terms, op, rhs) for lab, terms, op, rhs in cake if lab}
+    choice_groups = {}   # cake constraint -> its flags, in operand order
+    for lab in cake_rows_by_label:
+        mm = re.fullmatch(r"c\[(.+)\]\[al1\]", lab)
+        if mm:
+            fl = [v for _, v in cake_rows_by_label[lab][0]]
+            if all(f"{F}[r]" in cake_rows_by_label for F in fl):
+                choice_groups[mm.group(1)] = fl
+    sel_row = {}
+    for _, terms, op, rhs in bag:
+        coefs, d = var_form(terms, op, rhs)
+        mxs = [v for v in coefs if v in mx_vars]
+        if len(mxs) == 1 and len(coefs) > 1 and mxs[0] not in sel_row:
+            sel_row[mxs[0]] = cake_vars_bag(coefs)
+    used = set()
+    for _, terms, op, rhs in bag:
+        coefs, d = var_form(terms, op, rhs)
+        group = [v for _, v in terms]
+        if not (d == 1 and len(group) > 1 and all(c == 1 for c in coefs.values())
+                and all(v in mx_vars for v in group) and all(v in sel_row for v in group)):
+            continue
+        for cK, fl in choice_groups.items():
+            if cK in used or len(fl) != len(group):
+                continue
+            if all(sel_row[g] == {owner.get(v.lstrip("~"), None) for _, v in cake_rows_by_label[f"{F}[r]"][0]} - {None}
+                   for g, F in zip(group, fl)):
+                used.add(cK)
+                for s_, F in zip(group, fl):
+                    define(s_, F)
+                    cj = conj_of(s_, F)
+                    if cj:
+                        conj[s_] = cj
+                        k = len(cj[1])
+                        emit(f"@C1[{s_}] red +{k + 1} ~{s_} +1 {F} {' '.join('+1 ~' + g for g in cj[1])} >= {k + 1} : {s_} -> 0 ;")
+                        emit(f"@C2[{s_}] red +1 {s_} +1 ~{F} {' '.join('+1 ' + g for g in cj[1])} >= 1 : {s_} -> 1 ;")
+                        emit(f"@D1[{s_}] pol @C1[{s_}] {' '.join(g + ' w' for g in cj[1])} s ;")
+                    else:
+                        emit(f"@D1[{s_}] red +1 ~{s_} +1 {F} >= 1 : {s_} -> {F} ;")
+                        emit(f"@D2[{s_}] red +1 {s_} +1 {neg(F)} >= 1 : {s_} -> {F} ;")
+                break
+
     # SELECTORS, each defined once against ALL its rows (T8, D-0182). A `_neN` selector
     # stands in two rows of baguette's .opb (A and B of one disequality). The first row
     # alone can be implied, by weakening, by the flag of ANOTHER constraint over the same
@@ -1117,6 +1218,11 @@ def main(cake_opb, names_file, bag_opb, bag_pbp):
         m = re.fullmatch(r"\+1 ~(\S+)_ge_(m?\d+) \+1 (\S+)_ge_(m?\d+) >= 1", line)
         if m and m.group(1) == m.group(3) and pv(m.group(2)) == pv(m.group(4)) + 1:
             pins.append(f"@{label} ia {line} : @L[{m.group(1)}_ge_{m.group(2)}] ;")
+            continue
+        if d == 0 and frozenset(coefs.items()) in copy_eq:
+            nw[0] += 1
+            emit(f"@W[{nw[0]}] pol {copy_eq[frozenset(coefs.items())]} ;")
+            pins.append(f"@{label} ia {line} : @W[{nw[0]}] ;")
             continue
         hit = next((lab for lab, d2 in by_coefs.get(frozenset(coefs.items()), ()) if d2 >= d), None)
         if hit:
