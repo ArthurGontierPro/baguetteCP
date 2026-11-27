@@ -32966,3 +32966,140 @@ rejected when M7-T11 tried it (D-0072); the gate that kept it out of the solver 
 **Revert**: `git revert` of the commit `M22-review-T5: a proof write that fails ends with one line and exit 6
 (D-0248)` restores the crash with exit 2; the removal reverts on its own commit
 (`M22-review-T5: Domain.of_list and change_of move ...`).
+
+## D-0250  [AUTONOME] M19-config-T8, probing at the root: a bound literal of a small domain that fails under propagation is a failed one-decision node, its unit nogood filed at level 0 and its negation asserted there, behind `BAGUETTE_PROBE=off|root`. No new rule, no new `Explanation` constructor; every proof verifies under `root`. On the tuning set it gains 0.015 of the share without proof (+6 complete answers, none lost) and 0.040 with proof, but loses one verified complete answer by time, so the default stays `off`
+
+**Status**: DONE on `wave96-probe` (agent-probe, 2026-11-27), not merged. Base: main `f4863c6`. First item of
+M19-config-T8 only; equality merging into views and the LP relaxation stay open.
+
+### 1. Context
+
+The ROADMAP row lists three root techniques; this record builds and measures the first, probing (failed
+literals: Freeman's POSIT, Lynce and Marques-Silva; Chuffed's and CP-SAT's root probing). baguette's root is
+its propagation fixpoint and nothing else, so a value whose assignment fails at once under propagation is
+discovered again on every branch that tries it.
+
+### 2. What was built
+
+`lib/core/probe.ml` (new) and one function in `lib/core/search.ml` (`probe_root`, called by `search_core`
+before `dfs` or `cdcl`). Under `BAGUETTE_PROBE=root`, after the root fixpoint and before the first decision:
+for every unfixed variable whose domain spans at most 64 values, in store order, the two BOUND literals
+`x <= lo` and `x >= hi` (a Boolean's two polarities) are each pushed on level 1 as a decision and propagated.
+A fixpoint undoes the level. A conflict is a failed literal: the level's trace, the conflict's line and the
+bridges are written exactly as at a failed node (the search lends `state_conflict`, `bridges` and
+`close_root_conflict`, so the two stay one rule), then the unit clause `~l` at level 0, then the level is
+undone and wiped, and `~l` is pushed at level 0 with that clause as its explanation and `Reason.none`, then the
+root propagates again; a conflict there is the root conflict. A failed bound moves, so passes repeat while a
+pass failed something (bounds shaving). Budget: 5 M propagator runs (`Engine.runs`, deterministic) backed by
+a 10 s CPU cap (not deterministic, fires only where one run is expensive), overridable by
+`BAGUETTE_PROBE_BUDGET`, `BAGUETTE_PROBE_CPU`, `BAGUETTE_PROBE_WIDTH`; `BAGUETTE_PROBE_STATS=1` prints the
+census line on stderr. A misspelt switch exits 2. `off` never calls the pass.
+
+**The proof.** A probe is `Search.branch_split`'s first child at the root, so D-0018 gives its nogood `~l` as
+`rup`: negating it asserts `l`, and the trace lines just written (decision free, "facts -> claim") unit
+propagate the level's prunings up to the falsified conflict line. The only change is the FILING level, 0
+rather than 1, legitimate because the clause names no level-0 decision; `Justify.with_level 0` keeps it from
+the wipe of level 1. The negation is then a level-0 pruning on a clause with no facts, D-0077's assignment
+clause at p = 0: `Trace` writes its line `~l` (past a hole, the settled bound with the holes' facts, I-X9) as
+it writes any level-0 line, and the clause id goes on `stats.assign_clauses_rev`, which
+`retire_assign_clauses` deletes at the end of the search (I-X2). No rule and no `Explanation.t` constructor
+is added. Necessary assignments (a literal implied by both polarities) were left out: their proof needs the
+two implications as clauses, so the SURVIVING levels' traces written too, which is not the failed-node shape.
+
+**SPEC 3.4.** The tree is still the annotation's, explored once; probing removes root values every solution
+avoids, as a stronger root propagator would, takes no decision the search reports and changes no choice rule.
+It is a propagation, so 3.4's "anything else MUST be refused" does not bear on it. Proposed sentence for 3.4,
+NOT written into SPEC.md (the user decides normative text): *"Probing at the root (`BAGUETTE_PROBE=root`,
+D-0250) is opt-in. Before the first decision it pushes bound literals of small domains one at a time and
+propagates; a literal that fails is removed from the root domain, and the removal is written as the unit
+clause of that failed one-decision node. It takes no decision the search reports and substitutes no
+strategy."*
+
+### 3. Census, the tuning set at the root only (`BAGUETTE_NODE_LIMIT=1`, `--no-proof`)
+
+Three budgets on the 200 instances (`camp/census.txt` per instance): 100 k runs (`cdef`, release binary
+`a9ed53ad`), unbounded (`cinf`, same binary, stopped by the 300 s limit) and the chosen default, 5 M runs and
+10 s CPU (`cnew`, binary `059aabe6`).
+
+| budget | probe line | instances with a failed literal | literals failed | probed | budget hit | CPU median / p90 / max |
+|---|---|---|---|---|---|---|
+| 100 k runs | 200 | 84 | 1 770 | 85 163 | 175 | 0.06 / 0.57 / 291 s |
+| unbounded | 197 | 154 | 205 360 | 11 965 084 | 0 (32 stopped at 300 s) | 7.6 / 294 / 300 s |
+| 5 M runs, 10 s | 198 | 144 | 39 908 | 1 367 602 | 115 | 1.8 / 8.1 / 36 s |
+
+Run to completion, the pass costs a median 3.8 M runs and 0.7 s, but runs are not time: 2011_pentominoes_04
+spends 0.19 s a probe at 23 runs each (291 s under 100 k runs), black-hole 14 half a second; hence the CPU cap.
+No instance is refuted at the root by probing. The most failed literals at the default: ma-path-finding
+g16_p20_a30 4 633, stable-goods s-d16 4 250, jp-encoding data900 3 662, prize-collecting 32-4-8-2 1 682,
+network 50 1 608. The two instances with no probe line never reach the search in any arm (arithmetic-target
+8657 at the 420 s guard, ihtc-2024-marte i11 at the 8 GB heap budget, exit 5). Both caps are read between two
+probes, so one propagation can overrun them: the 36 s maximum is MZNC connect 0083, 41 M runs in the pass.
+
+### 4. Correctness under `root`
+
+- `off` against main: the 259 test models, stdout, exit status, `.opb` and `.pbp`, dev binaries `1527731a`
+  (main) and ``32fa42d3` (tip `4c78e12`; the off path is unchanged since, and section 8's lanes check the final tip)`: 0 differences (`art-off/`).
+- `root`: `scripts/run_model_tests.sh` 253 / 259 identical stdout; the six others (argmin_opt, argsort_opt,
+  opt_max_sat, opt_min_sat: other intermediate solutions, same optimum; bits_search_sat, count_rel_sat: another
+  first solution) have their proofs checked by hand: VERIFIED with the same verdict and bound. Every one of the
+  259 proofs VERIFIED, and again under `BAGUETTE_DEBUG=1` (no invariant fired). The expected outputs were not
+  touched: they record the default.
+- `test_search_strategy.ml` (`test_probe`, 25 checks): three models built so that one probe sees what the
+  root does not (a settle past a hole, a Boolean implication, a pigeonhole refuted with no decision); same
+  answer off and root, VERIFIED, every id deleted, M1-T36's identity, and on the two SATISFIABLE ones every
+  derived unit line flipped is refused by veripb with the full RUP wording (the D-0053 / D-0066 trap: the
+  line is checked, not vacuous).
+
+### 5. The tuning set at 300 s (D-0205), release binary `059aabe6` (`552d52c`), same binary both arms
+
+| arms | complete | verified | incumbent | nothing | died | share | verdicts |
+|---|---|---|---|---|---|---|---|
+| offN / rootN | 41 / 47 | - | 116 / 111 | 40 / 39 | 3 / 3 | 0.492 / 0.507 | root 27+ / 24- |
+| offP / rootP | 32 / 35 | 31 / 34 | 118 / 120 | 47 / 42 | 3 / 3 | 0.480 / 0.520 | root 31+ / 23- |
+
+Status changes without proof, all gains: amaze2 2012-06-28 (a solution, 15 s), still-life-wastage 11, ptv
+pax_period_20_5b, stable-goods s-d7 (and a better objective), network 50 and mondoku 10-10-6 (optimal). With
+proof: gains amaze2 (VERIFIED solution), sudoku_opt p90 (VERIFIED optimum), sudoku_fixed p89 (VERIFIED
+solution), mondoku 10-10-6 (VERIFIED optimum), hoist PU_1_2_2 and stable-goods s-d7 (a solution); one loss,
+flowshop-workers 5stat_ex6, whose VERIFIED optimum `off` proves at 296 s and `root` does not reach by 300 s.
+Its pass fails no literal (9 532 probes, 1.4 s), so the tree is the same and the loss is the pass's time at
+the edge of the limit. 67 proofs of complete answers checked: 65 VERIFIED, 0 rejected, two check timeouts at 3 600 s
+(smelt 4, both arms). Material: `camp/t300-table-{N,P}.txt`, `camp/t300-status.txt`.
+
+### 6. Decision
+
+[AUTONOME] D-0205's rule keeps an idea as default only if it gains on score and loses no verified complete
+answer. Without proof `root` gains 0.015 of the share, under the 0.03 noise, with six more complete answers
+and none lost; with proof it gains 0.040, over the noise, and three more verified complete answers, but loses
+one (flowshop-workers ex6, by time). **The default stays `off`.** The rule is applied as written, as D-0241 did
+with three more complete answers and a score within the noise; the case for `root` is the strongest of the
+M19 rows so far and goes to the full series (D-0205: the subset proposes, the full series decides). No
+default commit, so the diff lanes need no re-record and the 347 lane runs are unchanged by construction.
+
+### 7. What is left (follow-ups, not opened as rows)
+
+- The full Challenge series with `BAGUETTE_PROBE=root` against `off`, which decides; if it agrees in sign
+  the default change is one line (`mode_of_env`'s `None` arm) in its own commit, then the diff lanes count.
+- A cheaper pass where nothing fails: flowshop-workers spends 1.4 s probing 9 532 literals for nothing. Stop
+  the pass after a first sweep of K probes with no failure, or scale the CPU cap by the time limit (the
+  search's stop does not say it; `bin/main.ml` would pass it).
+- Necessary assignments (a literal both polarities imply) and learning from a probe's conflict (its 1UIP
+  clause is at times stronger than `~l`): both need the surviving level's trace or a learned constraint per
+  failure, so they are a second step, measured behind the same switch.
+- Equality merging into views and the LP relaxation, the row's other two items.
+
+### 8. Verification on the tip, default `off` (`552d52c`, dev binary `20a74b84`)
+
+`scripts/check_fmt.sh` clean; `check_test_widths.py` no wide domain; `dune runtest --root . --force` 5 615 ok,
+0 FAIL (peak 174 MB); `run_model_tests.sh` 259 passed, 0 failed; `check_determinism.sh` 259 models identical
+across two runs; `diff_lane.sh --tier all -j 8` 347 of 347 runs equal the reference, `--debug` 333 of 333
+(the debug-skip list's), never `--update`; `scaling_lane.sh -j 8` every line within its threshold.
+
+Under `root`: the 259 model proofs VERIFIED, also with `BAGUETTE_DEBUG=1` (section 4). Challenge sample at
+2 000 nodes (D-0241's 238 instances, both encodings, binary `059aabe6`, every proof checked): see the addendum below.
+
+Proof volume written: t300 1.43 TB (the sample's in the addendum), every proof deleted after its check.
+Material: `/cluster/arthur/baguette-results/probe/` (README.md).
+
+**Revert**: `git revert` of the `M19-config-T8` code commits (`443bdd8`, `42420ab`, `552d52c`) and the test
+commit (`4c78e12`); with the default `off`, removing the switch changes no artefact.

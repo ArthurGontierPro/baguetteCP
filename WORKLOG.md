@@ -19,7 +19,6 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M19-config-T8 (probing at the root only, D-0250) | new `lib/core/probe.ml` + its line in `lib/core/dune`; `lib/core/search.ml` (the root call and the switch read only); `bin/main.ml` (only if a flag is needed); `test/unit/test_search_strategy.ml` (new sections) or a new test file; new test models; the module maps (CLAUDE.md, docs/ARCHITECTURE.md section 1) | agent-probe, wave96-probe | 2026-11-27 |
 
 ## Cross-session requests
 
@@ -478,6 +477,7 @@ section 1. Shares are inclusive, of the whole run.
 
 | Task | Session | Date | Summary |
 |---|---|---|---|
+| M19-config-T8, probing at the root (D-0250) | agent-probe (`wave96-probe`, not merged) | 2026-11-27 | **D-0250 [AUTONOME].** `lib/core/probe.ml`: a failed bound literal is a failed one-decision node, its unit nogood filed at level 0, its negation asserted there; `BAGUETTE_PROBE=off|root`, default off (byte-identical, 259 models). Tuning set: share 0.507/0.492 without proof, 0.520/0.480 with proof, one verified optimum lost by time, so the default stays off. Dev binary `20a74b84`: runtest --force 5615 ok 0 FAIL (peak 174 MB), models 259, determinism 259, diff lane 347/347 and debug 333/333 equal, scaling ok |
 | M22-review-T3 and M22-review-T5, the unit test for T1 and three latent defects (D-0248) | agent-latent (`wave94-latent`, not merged) | 2026-11-27 | **D-0248 [AUTONOME].** T3: `test_m22t3_constant_fold` in `test_flatzinc` (the 2^61 * 4 fold refused by the builder, a fold to rhs = -2^59 refused by compile's cap, cancelling 2^61 products accepted as `x <= 0`). T5: `Encoding.already_declared` compares bounds, holes and representation, `Redeclared (x, what differs)`, no `raise Exit`; `Domain.of_list` / `change_of` moved to `test/unit/domain_helper.ml`; a proof write that fails ends with one stderr line and exit 6 instead of an uncaught `Sys_error` (exit 2). Binary `458c85e0`: runtest --force 5590 ok 0 FAIL (peak 170 MB), models 259, determinism 259, diff lane 347/347 equal, artefacts byte-identical |
 | M18-coverage-T13, `value_precede_chain` against Chuffed (D-0244) | agent-precede (`wave90-precede`, not merged) | 2026-11-27 | **D-0244 [AUTONOME].** Measured, nothing built. Chuffed over std's precede decomposition explores the same trees as over its native `seq_precede`, and baguette with the chain dropped completes nothing more. Mondoku's gap is gcc with variable counts (std's `count` decomposition completes 10-10-6 in 3 938 nodes, verified proof), code-generator/concert-hall-cap/community-detection per-node cost, test-scheduling learning. T14 added |
 | M19-config-T9, propagator priorities (D-0246) | agent-prio (`wave92-prio`, not merged) | 2026-11-27 | **D-0246 [AUTONOME].** `BAGUETTE_PRIORITY=off\|classes`, four cost classes (Cheap, Row, Learned_row, Global) by one rule in `Propagator.cost_class`; off byte-identical (259 models, diff 347/347, debug 333/333, scaling ok). Classes: every proof verified, 0 rejected; tuning set 0.463 vs 0.537 without proof, 0.532 vs 0.468 with proof but two verified optima lost. Default stays off. |
@@ -721,6 +721,10 @@ section 1. Shares are inclusive, of the whole run.
 
 | M18-coverage-T5 (the ordering globals) | agent-lex (`wave85-lex`) | 2026-11-27 | **D-0239 [AUTONOME].** mznlib only: `lex_lesseq`/`lex_less`, int and Bool, as four linear rows per position over std's chain flag; 26 -> 27 complete of 92 with proof, nodes/s x1.02 to 1.04; precedence globals keep std's (T13 added); `increasing` already native. |
 ## Handoff notes
+
+### 2026-11-27 (agent-probe, `wave96-probe`, D-0250): probing at the root behind a switch, default off, not merged
+
+`Probe.root`, called by `Search.search_core` before `dfs`/`cdcl` under `BAGUETTE_PROBE=root` only: the two bound literals of every unfixed domain of at most 64 values, each pushed on level 1 and propagated; a failure writes the failed node's lines (Search lends `state_conflict`, `bridges`, `close_root_conflict`), the unit clause at level 0 (retired with D-0077's assignment clauses) and asserts the negation at the root. Budget 5 M runs plus a 10 s CPU cap; `BAGUETTE_PROBE_STATS=1` prints the census line. On the tuning set the gain is under the noise without proof and over it with proof, but flowshop-workers ex6 loses its verified optimum by the pass's 1.4 s (no literal failed there), so the default stays off and no lane needs a re-record. Next (D-0250 section 7): the full series with `root`, a cheaper pass where nothing fails, then necessary assignments. Material: `/cluster/arthur/baguette-results/probe/` (README.md).
 
 ### 2026-11-27 (agent-latent, `wave94-latent`, D-0248): M22-review-T3 and T5, not merged
 
