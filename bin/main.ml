@@ -353,6 +353,15 @@ let usage () =
   prerr_endline "                    does not cover is refused (exit 3). Off by default.";
   prerr_endline "";
   prerr_endline
+    "  --fixed-search    (M19-config-T1, D-0261, SPEC 3.4) the fixed search: the";
+  prerr_endline
+    "                    order and values the model's annotations fix, else SPEC";
+  prerr_endline
+    "                    3.4's first-fail, depth-first, no restarts, no phase saving";
+  prerr_endline
+    "                    (the default today). --search, --restarts and --phase-saving";
+  prerr_endline "                    still set their own part. Refused with -f (exit 2).";
+  prerr_endline
     "  --restarts POLICY (M10-search-strategy-T2, D-0137, SPEC 3.4) restart the search";
   prerr_endline
     "                    to level 0 on a deterministic schedule. POLICY is one of";
@@ -625,6 +634,7 @@ let parse_args argv =
   let intermediate = ref false in
   let n_solutions = ref None in
   let free_search = ref false in
+  let fixed_search = ref false in
   let seed = ref None in
   let threads = ref None in
   let mzn_stats = ref false in
@@ -680,6 +690,9 @@ let parse_args argv =
           go (i + 2)
       | "--phase-saving" ->
           phase_saving := true;
+          go (i + 1)
+      | "--fixed-search" ->
+          fixed_search := true;
           go (i + 1)
       | "--search" ->
           if i + 1 >= Array.length argv then usage ();
@@ -803,6 +816,14 @@ let parse_args argv =
           go (i + 1)
   in
   go 1;
+  (* `-f` and --fixed-search name the two bases a search is built on (M19-config-T1,
+     D-0261), and a silent choice between them would leave a run whose flag was never in
+     force, as --no-proof and --proof below: a usage error, exit 2. *)
+  if !free_search && !fixed_search then (
+    prerr_endline
+      "baguette: -f (the free search) and --fixed-search (the fixed search) contradict \
+       each other. Give one.";
+    exit exit_usage);
   (* `-f` is Chuffed's free search: the annotation's order alternating with the activity
      order under restarts (D-0137 section 4), with phase saving as Chuffed's SAT layer
      has it, and Luby restarts on D-0137's unit of 100 conflicts (section 0,
