@@ -21,7 +21,12 @@ with open(out, "w") as f:
     f.write("rss_kb=%d\n" % ru.ru_maxrss)
 if os.WIFSIGNALED(st):
     sig = os.WTERMSIG(st)
-    signal.signal(sig, signal.SIG_DFL)
+    # SIGKILL (a cgroup memory kill, D-0211) and SIGSTOP cannot have a handler set: signal.signal raised
+    # `OSError: [Errno 22]` there and the death was reported as an ordinary failure of exit 1.
+    try:
+        signal.signal(sig, signal.SIG_DFL)
+    except OSError:
+        pass
     os.kill(os.getpid(), sig)
     sys.exit(128 + sig)
 sys.exit(os.WEXITSTATUS(st))

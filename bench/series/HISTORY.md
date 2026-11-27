@@ -19,6 +19,7 @@ Arms: A default with proof, B `-f` with proof, C default `--no-proof`, D `-f --n
 
 | Date | Record | Commit | Binary | Differing settings | A (default, proof) | B (`-f`, proof) | C (default, `--no-proof`) | D (`-f`, `--no-proof`) |
 |---|---|---|---|---|---|---|---|---|
+| 2026-11-26 to 27 | D-0227, series-20261126 | `73b4cab` (main `6c9cf97` plus the series branch, no change under `lib/` or `bin/`) | `fa2d4ee4` | D-0203's settings, fataepyc-07, PAR 22 per arm, 88 in all; `CHECK_STOPPED=0` | 311 / 79 / 65 / 4 442 / 4 to 11 | 356 / 98 / 55 / 6 277 / 2 to 8 | 352 / 92 / 44 / 4 922 / 2 to 10 (unverified) | 419 / 111 / 41 / 6 803 / 2 to 7 (unverified) |
 | 2026-11-24 to 25 | D-0229, series-20261124-fnoproof, main | `36e8cc0` | `ef2f76c8` | D-0203's settings, fataepyc-04, 46 in parallel beside the next row | not run | not run | not run | 420 / 112 / 84 / 6 590 / 2 to 7 (unverified) |
 | 2026-11-24 to 25 | D-0229, series-20261124-fnoproof, reference | `e1971f6` | `f244c35a` | D-0203's settings and flattened files, fataepyc-04, 46 in parallel beside the previous row | not run | not run | not run | 401 / 108 / 125 / 6 288 / 2 to 8 (unverified) |
 | 2026-11-23 to 24 | D-0210, observation, 64 GiB, fataepyc-07 | `e1971f6` (harness), same source as D-0203 | `f244c35a` | bits default, no proof cap, 64 GiB address space, `--max-heap-mb 32768`; arms A and C only, PAR 40 | 304 / 76 / 60 / 4 323 / 4 to 11 (3 more OPT complete but TIMEOUT-CHECK) | not run | 344 / 86 / 48 / 4 782 / 2 to 11 (unverified) | not run |

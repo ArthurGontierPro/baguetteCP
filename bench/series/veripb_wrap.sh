@@ -29,6 +29,12 @@ if [ "$size" -ge 2147483648 ] && [ -d "$SEM" ]; then
     sleep 5
   done
 fi
+# A checker memory death leaves a proof too large to keep as evidence (D-0211: 3.5 to 91 GB), so the
+# files are deleted here (SERIES_DROP_CHECKER_MEMORY=0 keeps them); the row stays, with its size.
+drop_proof() {
+  [ "${SERIES_DROP_CHECKER_MEMORY:-1}" = 1 ] || return 0
+  for f in "$@"; do case "$f" in *.opb | *.pbp) rm -f "$f" ;; esac; done
+}
 out="$(mktemp "${TMPDIR:-/tmp}/vpw.XXXXXX")"
 start=$SECONDS
 # Peak RSS of veripb to <proof base>.vrss (kept beside the run's log, with the check time in results.tsv).
@@ -44,9 +50,23 @@ el=$((SECONDS - start))
 if [ "$rc" -eq 124 ] || { [ "$rc" -eq 137 ] && [ "$el" -ge "$LIMIT" ]; }; then
   cat "$out"; rm -f "$out"; exit 124
 fi
+# D-0211: at its cgroup limit veripb can also die of `OSError: [Errno 22] Invalid argument` (a failed
+# allocation inside Python, any exit status). That message alone is not proof of a memory death, so it
+# only counts when the peak RSS veripb reached (rss_wrap.py's .vrss, KB) is within 5 % of MemoryMax.
+peak_kb=0
+[ -f "$vrss" ] && peak_kb="$(sed -n 's/^rss_kb=//p' "$vrss" | head -1)"
+case "$MEMMAX" in
+  *[Gg]) lim_kb=$(( ${MEMMAX%[Gg]} * 1024 * 1024 )) ;;
+  *[Mm]) lim_kb=$(( ${MEMMAX%[Mm]} * 1024 )) ;;
+  *) lim_kb=$(( MEMMAX / 1024 )) ;;
+esac
+if [ "$rc" -ne 0 ] && grep -q 'OSError: \[Errno 22\]' "$out" && [ "${peak_kb:-0}" -ge $(( lim_kb * 95 / 100 )) ]; then
+  echo "Error: SERIES-CHECKER-MEMORY veripb died with status $rc after ${el}s (MemoryMax=$MEMMAX, peak RSS ${peak_kb} KB, OSError Errno 22)"
+  cat "$out"; rm -f "$out"; drop_proof "$@"; exit 97
+fi
 if [ "$rc" -eq 137 ] || { [ "$rc" -eq 134 ] && grep -q 'memory allocation' "$out"; }; then
   echo "Error: SERIES-CHECKER-MEMORY veripb died with status $rc after ${el}s (MemoryMax=$MEMMAX)"
-  cat "$out"; rm -f "$out"; exit 97
+  cat "$out"; rm -f "$out"; drop_proof "$@"; exit 97
 fi
 cat "$out"; rm -f "$out"
 exit "$rc"
