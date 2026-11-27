@@ -21,13 +21,16 @@
 %      the cover has no repeated value (a repeated value counts the same x twice),
 %      and the guard below says so rather than assuming it.
 %
+% Since D-0247 the call goes to the bodyless predicate DIRECTLY, with the bounds
+% fzn_global_cardinality.mzn used to add: that file now sends variable counts to std's
+% decomposition, and the closed form, which carries sum(count) = |xs| below, stays native.
+%
 % The domain restriction is std's, word for word: MiniZinc applies it to the
 % declaration, and a cover with gaps becomes a declared set domain, whose holes the
 % front end posts as one Ne instance each (M7-T11, D-0072).
 %-----------------------------------------------------------------------------%
 
 include "fzn_global_cardinality.mzn";
-include "global_cardinality.mzn";
 
 predicate fzn_global_cardinality_closed(
   array [int] of var int: xs,
@@ -35,5 +38,6 @@ predicate fzn_global_cardinality_closed(
   array [int] of var int: count,
 ) =
   forall (i in index_set(xs)) (xs[i] in {d | d in cover})
-  /\ global_cardinality(xs, cover, count)
+  /\ forall (i in index_set(count)) (count[i] >= 0 /\ count[i] <= length(xs))
+  /\ baguette_global_cardinality(xs, cover, count)
   /\ if card({d | d in cover}) = length(cover) then sum(count) = length(xs) else true endif;
