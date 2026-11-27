@@ -19,7 +19,6 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M22-review-bugs: the proof is not reproducible run to run (D-0264) | `lib/core/justify.ml`, `lib/core/explanation.ml`, `lib/core/trace.ml`, `lib/proof/writer.ml`, `lib/proof/text.ml`, `scripts/check_determinism.sh`, tests | agent-nondet (wave109-nondet) | 2026-11-27 |
 
 ## Cross-session requests
 
@@ -495,6 +494,7 @@ section 1. Shares are inclusive, of the whole run.
   budget being off by default) and `wide_times_timelimit_overrun.fzn` (`int_times` over the same: no output at 100 s under `--time-limit 10`). In the
   `wide` stream 109 of 2 000 models met the cap and 264 overran the limit by 20 s or more. No wrong answer.
 - **2026-11-27, agent-e2efix (D-0262 section 6), for whoever owns `lib/flatzinc/compile.ml`:** `e2e_spec` refuses D-0260's gcc ties (`c_id = ""`, "a constraint no FlatZinc item states"), so `--e2e` SKIPS a repeated cover whose counts differ as terms (9 of the 15 dupcover test models in the e2e lane). Since D-0262 the translator writes the same tie as `(cN_tie<j> equals c_i c_j)`, so a tie could be passed as `E.Lin_eq` under that name (`cN_tie<j>`, j the later ORIGINAL cover position) and pinned like any int_lin_eq. Not urgent: the bridged path verifies them.
+- **2026-11-27, agent-nondet (D-0264), for agent-compare (D-0252's `tools/ident.sh`):** the two instances whose `.pbp` "differs on every run" never reached the 2 000-node limit: vrp was cut by `timeout 900` (`limit: ... at=trace fired=900.00s signal=TERM`, rc 124) and connect by `--max-heap-mb 8192` (`limit: killed signal=heap-budget`, rc 5), and so was cable_tree_wiring_A073 (node 929, which happened to cut at the same byte twice). A proof cut by a clock, a signal or the heap budget is valid and not reproducible by design. `ident.sh` should require `fired=none signal=none` on each P run's `limit:` line before comparing hashes, and report the others as void. Under the node limit both instances reproduce byte for byte under seven runtimes; every variant verifies.
 
 ## Completed
 
@@ -753,8 +753,20 @@ section 1. Shares are inclusive, of the whole run.
 | M18-coverage-T14 (gcc with variable counts) | agent-gccvar (`wave93-gccvar`) | 2026-11-27 | **D-0247 [AUTONOME].** mznlib only in the kept route: a `global_cardinality` whose counts are not all fixed goes to std's count decomposition (`4c5df61`), constant counts and the closed form stay native; +3 verified complete with proof over the 40 Challenge instances it reaches, none lost. Route (a), rule C over holes, built, verified and dropped (`d94f08f`, reverted `fa32d4b`). Not merged |
 | M22-review-bugs (gcc repeated cover, rejected proof on the default) | agent-gccdup (`wave105-gccdup`) | 2026-11-27 | **D-0260 [AUTONOME].** No answer was wrong (14 000 grid runs against a brute-force oracle and Gecode). Cause: gcc.ml's HIGH-row memo keyed on the cover VALUE, so rule (a) justified one count's pruning by another count's row (since `ecae5c7`, main `1e6363c` 2026-10-02). Fix `9b5ef85`: `Builder.merge_gcc_cover_repeats` keeps one occurrence per value and ties the later counts by `int_lin_eq` rows in the model; compile.ml refuses a repeated cover. Tests `628c91b`. Not merged. |
 | M22-review-bugs, the e2e defects of D-0258 section 4 (D-0262) | agent-e2efix (`wave107-e2efix`, not merged) | 2026-11-27 | **D-0262 [AUTONOME].** `--e2e` defines maxmin's and all_different's selectors by POSITION; bridge.py: wide gcc copies, choice groups by position; fzn2scp.py states a repeated gcc cover merged; fzn_solutions.py reads gcc by its sentence. Twelve e2e test models. e2e lane FAIL -> PASS |
+| M22-review-bugs, the proof not reproducible run to run (D-0264) | agent-nondet (`wave109-nondet`, not merged) | 2026-11-27 | **D-0264 [AUTONOME].** No defect in the solver: the two proofs that varied were cut by `timeout 900` (vrp) and by the 8 GB heap budget (connect) before the node limit, and a cut proof is valid but not reproducible by design. Every vrp variant verifies (10 cut, 1 at the node limit); the four connect checks take many hours and run on (48 h cap, `/scratch/arthur/nondet/r/*.veripb`). Under the node limit: same bytes under seven runtimes, 347 of 347 lane runs under two, 91 of 91 tuning instances that reach 2 000 nodes. `check_determinism.sh` gains four corpus instances under two GC settings and a guard that voids a comparison cut by a clock, a signal or the heap budget; `Writer.conclude_interrupted` states the rule. No proof byte changed. |
 
 ## Handoff notes
+
+### 2026-11-27 (agent-nondet, `wave109-nondet`, D-0264): the proofs "not reproducible run to run", not merged
+
+Not a solver defect. D-0252's identity check compared runs that never reached `BAGUETTE_NODE_LIMIT=2000`: vrp was cut by
+`timeout 900` inside one enormous trace at node 1 628 (`limit: ... at=trace fired=900.00s signal=TERM`) and connect by
+`--max-heap-mb 8192` at node 91 (`limit: killed signal=heap-budget`). A proof cut by a clock, a signal or the heap budget
+is valid (the 10 vrp cut variants verify; the four connect checks, hours each, still run with a 48 h cap and write
+`/scratch/arthur/nondet/r/<name>.veripb`) and its cut point moves run to run. Under the node limit nothing moves: seven
+runtimes on both instances, 347 of 347 lane runs under two GC settings, 91 of 91 tuning instances. `check_determinism.sh`
+now runs four corpus instances under two GC settings and fails a comparison whose `limit:` line lacks
+`fired=none signal=none`. Any harness comparing proofs should check that line first (request to agent-compare filed).
 
 ### 2026-11-27 (agent-e2efix, `wave107-e2efix`, D-0262): the end-to-end defects of D-0258 section 4, not merged
 
