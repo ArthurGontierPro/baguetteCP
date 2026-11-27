@@ -2,69 +2,79 @@
 
      a_1 l_1 + ... + a_n l_n  >=  b,     every a_i >= 1
 
-   where each l_i is an order-encoding atom [x >= k] at a polarity (D-0028,
-   docs/PROOF-FORMAT.md section 3), so `~[x >= k]` is `x <= k - 1`.
+   where each l_i is an order-encoding atom [x >= k] at a polarity (the order encoding's
+   ladder of literals per variable, D-0028, docs/PROOF-FORMAT.md section 3), so
+   `~[x >= k]` is `x <= k - 1`. Its instances are LEARNED rows ([Learned_pb], at the
+   bottom) and, at degree 1, every clause of lib/core/prop/clause.ml.
 
-   Consistency level: BOUNDS (docs/SPEC.md 3.2). See "Consistency level" below --
-   the declaration is honest and the section says exactly what is left on the table.
+   Consistency level: BOUNDS ([consistency] below). See "Consistency level" below: the
+   declaration is honest and the section says exactly what is left on the table.
+   Governed by docs/SPEC.md 3.2 (consistency levels) and 3.3 (explanations). Proof shape:
+   every forcing and every conflict is one `rup` of a clause over the row's falsified
+   literals, RUP in one step against the row already on the page. The family is
+   [Single_row] in the I-X10 classification table of test/unit/test_trace.ml (a pruning
+   that follows from one constraint, whose trace line is RUP with nothing derived ahead
+   of it); the ladder rows the checker also uses are the variable's own encoding, not a
+   second constraint.
 
    ---------------------------------------------------------------------------
-   Why this module exists: D-0054, a SOLVING-side object
+   A SOLVING-side object (D-0054)
    ---------------------------------------------------------------------------
 
-   D-0054 is the precondition and it is one sentence: **a PB line for proof logging and
-   a PB explanation for solving are different objects.** The first must be sound,
-   complete and CITABLE; the second must be USEFUL TO PROPAGATION. Until M2-L13 this
-   tree had only ever built the first.
+   The premise, from D-0054, is one sentence: **a PB line for proof logging and a PB
+   explanation for solving are different objects.** The first must be sound, complete
+   and CITABLE; the second must be USEFUL TO PROPAGATION. This module is the second, and
+   it was the first of its kind in this tree (M2-L13).
 
    [Propagator.pb_row] is explicitly the proof object and its own comment says so: it
    requires [r_cid] because "a row nobody can cite is a row no [pol] can be built from",
    and it is "emphatically not a function of the store because it reads live domains" --
-   it is frozen at DECLARED bounds, because "a row that moved with the search would be
-   the wrong side of I-X6". Both properties are correct for proof logging and
-   disqualifying for propagation, because propagation strength lives in the LIVE domain
-   at the moment of the pruning.
+   it is frozen at DECLARED bounds, because "a row that moved with the search would
+   break I-X6" (an explanation reads a snapshot, never live domains). Both properties are
+   correct for proof logging and disqualifying for propagation, because propagation
+   strength lives in the LIVE domain at the moment of the pruning.
 
-   **This module reads live domains, and that is the entire point.** [status] below asks
-   [Store.get] on every call. Nothing here is frozen except the DECLARED bounds each
+   **This module reads live domains, and that is the entire point.** [status] below reads
+   the live domain on every call. Nothing here is frozen except the DECLARED bounds each
    atom carries, which are the .opb's ladder width and not a search state -- exactly the
    freeze lib/core/learned.ml's "Why the [Linear.t] is built here" argues for, for the
    same reason. The proof row stays static and citable; this object moves.
 
-   [Learned.to_linear_row] used to stand between a learned row and propagation, deciding
-   by an ALGEBRAIC IDENTITY OVER THE DECLARED BOX whether the row could be read back as
-   an integer linear row that [Linear] would take. D-0050 called that "the right
-   predicate used as the wrong gate"; D-0054 named why -- a proof-side test doing a
-   solving-side job. M2-L13 removed it from the propagation path: [Learned.to_linear]
-   and [Learned.instance] are gone, this module instantiates from [Learned.t] terms
-   directly, and [to_linear_row] survives only as the MEASURED counter
-   [Search.n_pb_converts] that bin/main.ml already labels "MEASURED ONLY".
+   This module instantiates from [Learned.t] terms directly. Before it, a learned row
+   reached propagation only if [Learned.to_linear_row] could read it back as an integer
+   linear row for [Linear], an ALGEBRAIC IDENTITY OVER THE DECLARED BOX. D-0050 called
+   that "the right predicate used as the wrong gate", and D-0054 named why: a proof-side
+   test doing a solving-side job. M2-L13 removed it from the propagation path; the
+   predicate survives only as the MEASURED counter [Search.n_pb_converts] that
+   bin/main.ml labels "MEASURED ONLY".
 
    ---------------------------------------------------------------------------
    [Clause] is the degree-1 case, and it is the SAME CODE
    ---------------------------------------------------------------------------
 
-   D-0044 fixed the learned object as a PB inequality with the clause as its degree-1,
-   unit-coefficient case. lib/core/prop/clause.ml's header already refused "a second
-   implementation to keep in step" for [Array_bool_or]; that refusal applies here with
-   more force, so [Clause] does not have a propagator of its own any more. Its [t] IS
-   this [t], its [make] and [of_lits] build one with every coefficient 1 and degree 1,
-   and its [propagate] is this [propagate]. The type relationship D-0044 asserted is now
-   structural instead of asserted.
+   [Clause] has no propagator of its own: its [t] IS this [t], its [make] and [of_lits]
+   build one with every coefficient 1 and degree 1, and its [propagate] is this
+   [propagate]. D-0044 fixed the learned object as a PB inequality with the clause as its
+   degree-1, unit-coefficient case, and sharing the code makes that relationship
+   structural instead of asserted. lib/core/prop/clause.ml already refused "a second
+   implementation to keep in step" for [Array_bool_or]; the refusal applies here with
+   more force.
 
    The degree-1 arithmetic falls out rather than being special-cased, which is the check
-   that the generalisation is the right one. With every a_i = 1 and b = 1:
+   that the generalisation is the right one. With every a_i = 1 and b = 1, the four cases
+   a clause propagator distinguishes (the arms of the clause module's former survey, in
+   brackets) are:
 
      - some literal satisfied: slack = |sat| + |open| - 1 >= 0 and a forcing needs
        1 > slack, i.e. slack = 0 with an open literal, which cannot happen while a
-       literal is satisfied. Nothing fires -- [Clause]'s old [Satisfied] arm.
+       literal is satisfied. Nothing fires ([Satisfied]).
      - two or more open, none satisfied: slack = |open| - 1 >= 1, and 1 > 1 is false.
-       Nothing fires -- the old [Two_open] arm.
-     - exactly one open: slack = 0 and 1 > 0, so that literal is forced -- unit
-       propagation, the old [Units [l]] arm.
-     - none open, none satisfied: slack = -1 < 0, conflict -- the old [Units []] arm,
-       including the opposite-direction HOLE case its header describes (`x >= 3 \/
-       x <= 1` with x at [2,2]).
+       Nothing fires ([Two_open]).
+     - exactly one open: slack = 0 and 1 > 0, so that literal is forced: unit
+       propagation ([Units [l]]).
+     - none open, none satisfied: slack = -1 < 0, conflict ([Units []]), including the
+       opposite-direction HOLE case its header describes (`x >= 3 \/ x <= 1` with x at
+       [2,2]).
 
    The explanations coincide too, and byte-identically: see [reason_clause] below.
 
@@ -80,7 +90,8 @@
      - any OPEN l_i with a_i > slack is forced true.
 
    Both are the textbook counter/slack rule (Elffers & Nordstrom, IJCAI 2018, and
-   RoundingSat as Koops et al. (CP 2025) describe it -- docs/DECISIONS.md:2649, :2677).
+   RoundingSat as Koops et al. (CP 2025) describe it; the literature review is in
+   docs/DECISIONS.md D-0044).
    lib/core/reduce.ml's header already states its solving-side half -- "reduce the reason
    so the resolvent stays CONFLICTING" -- and confines it to the analysis; this is the
    same criterion at the other end of the pipeline.
@@ -114,9 +125,9 @@
 
    Forcing `x >= v` true moves [lo]; forcing it false moves [hi]. Those are the only two
    mutators this module calls, so it can only ever move bounds. It cannot punch an
-   interior hole -- that would need [Store.remove], a hole the row's own trace line does
-   not unit-propagate (I-X10), and D-0052 decided that the clause row does not reach for
-   it.
+   interior hole: that would need [Store.remove], a hole the row's own trace line does
+   not unit-propagate (I-X10), and D-0052 (a clause over order literals is a widening of
+   bool_clause, at BOUNDS) decided that the clause row does not reach for it.
 
    BOUNDS is also the honest level for a second reason that is about PB and not about
    holes: **the slack rule is not domain consistent even over the literals it does
@@ -131,58 +142,59 @@
    precondition its [make] checks -- see clause.ml. An instance built here gets BOUNDS.
 
    ---------------------------------------------------------------------------
-   No mutable state, and no watched literals
+   No state across calls, and no watched literals on a PB row
    ---------------------------------------------------------------------------
 
-   [t] has no [mutable] field and [propagate] keeps nothing between calls. D-0052
-   refused watched literals for the clause row because they would be the first
-   search-dependent mutable propagator state outside [Store]'s undo trail, and a
-   counter-based PB propagator has the same temptation (a cached slack updated on the
-   trail). It is refused here for the same reason and for a second one: a cached counter
+   [propagate] relies on nothing an earlier call computed: every pass recomputes the
+   slack from the live domains. [t] has no [mutable] field; its [scan] is written by
+   [quiet] and read in the same run by lib/core/prop/clause.ml's learned clause, to move
+   its watches. A cached slack updated on the trail is refused, because a cached counter
    that the trail does not undo is the classic way a backtracking PB solver becomes
-   unsound in a way no proof check catches, because the wrong slack yields a pruning
-   whose [rup] is still valid for the F it names.
+   unsound in a way no proof check catches: the wrong slack yields a pruning whose `rup`
+   is still valid for the F it names.
 
-   Every pass recomputes from [Store.get].
-
-   M20-pernode-T4 (D-0208) measured the watched alternative for the LEARNED rows and did
-   not take it. A WITNESS of quiet (a few non-false literals whose sum, minus its largest
-   (variable, polarity) group, reaches the degree; re-read at every run, so a choice and
-   not a cached number) is exact and keeps the run order, but on costas and mknap the
-   learned rows sit so close to propagating that a witness needs 60 to 70 % of the row
-   and exists after fewer than half of the passes, and building it cost more than it
-   saved: +20 and +24 % instructions at 3 000 nodes. What was taken instead is the exact
-   early exit of [pass] ([snapshot]'s [max_open]): one walk instead of three for a run
-   that forces nothing, which is almost every run of a learned row.
+   Watched literals exist only for the degree-1 case. D-0052 had refused them as the
+   first search-dependent mutable propagator state outside [Store]'s undo trail; M6-T20
+   (D-0104) gave the learned CLAUSE two watches ([Clause.Learned_clause]), because an
+   advisor (I-P7) may answer for a wake it drops. For a learned PB row, M20-pernode-T4
+   (D-0208) measured the watched alternative and did not take it. A WITNESS of quiet (a
+   few non-false literals whose sum, minus its largest (variable, polarity) group, reaches
+   the degree; re-read at every run, so a choice and not a cached number) is exact and
+   keeps the run order, but on costas and mknap the learned rows sit so close to
+   propagating that a witness needs 60 to 70 % of the row and exists after fewer than half
+   of the passes, and building it cost more than it saved: +20 and +24 % instructions at 3
+   000 nodes. What was taken instead is the exact early exit of [pass] ([snapshot]'s
+   [max_open]): one walk instead of three for a run that forces nothing, which is almost
+   every run of a learned row.
 
    ---------------------------------------------------------------------------
-   The pass's working memory is not state (M11-complexity-T3, D-0142)
+   The pass's working memory is not state
    ---------------------------------------------------------------------------
 
-   A pass used to allocate its whole survey: a list of (term, status) pairs, from 12 terms
-   on a hash table of (variable, polarity) groups, the forceable list, and a [List.exists]
-   over it per forceable term to keep the strongest. On a learned row lifted onto ladder
-   rungs that is quadratic in a group, and D-0140 (E3) measured the learned PB rows at
-   73 % of a no-proof node on 2011 cyclic-rcpsp. The pass now runs over a [layout] built
-   once per row, on its first pass ([t.layout] is lazy, so a row [quiet] always answers
-   never builds one): each term's (variable, polarity) GROUP, and
-   each group's terms strongest threshold first. With it [effective] is one walk per group
-   and the strongest forceable threshold one slot per group, so a pass is O(row) and
-   allocates nothing unless it prunes or conflicts.
+   A pass runs over a [layout] built once per row, on its first pass ([t.layout] is
+   lazy, so a row [quiet] always answers never builds one): each term's (variable,
+   polarity) GROUP, and each group's terms strongest threshold first. With it
+   [effective] is one walk per group and the strongest forceable threshold one slot per
+   group, so a pass is O(row) and allocates nothing unless it prunes or conflicts.
+   Before it, a pass allocated its whole survey (a list of (term, status) pairs, from 12
+   terms a hash table of groups, and a [List.exists] per forceable term to keep the
+   strongest), quadratic in a group on a row lifted onto ladder rungs; the complexity
+   inventory measured the learned PB rows at 73 % of a no-proof node on 2011
+   cyclic-rcpsp (D-0140, item E3), and M11-complexity-T3 (D-0142) built the layout.
 
-   A pass also needs three SCRATCH arrays (the statuses, the effective coefficients and the
-   per-group strongest threshold). They are mutable memory, and module-level: one set,
+   A pass also needs three SCRATCH arrays (the statuses, the effective coefficients and
+   the per-group strongest threshold). They are mutable memory, and module-level: one set,
    [scratch], shared by every row and grown to the longest (a set per row cost 15 % of the
    peak memory of a 40 000-node run, one learned clause per conflict). It is not state in
    the sense above, and the argument is short: every pass WRITES every cell it will read
-   before it reads it (all statuses first, then every term's effective coefficient and every
-   group's slot), so nothing one pass leaves there is ever read by another. A cached slack is
-   refused because a later call relies on a number an earlier call computed under domains
-   the trail has since undone; here no call relies on any number from an earlier call. And
-   two passes never overlap, whatever rows they belong to: a pass calls nothing that runs a
-   propagator ([assign] only moves the store, which wakes nobody until the engine walks the
-   trail after the run), it recurses into [propagate] only once it is past its last read,
-   and the solver runs one propagator at a time on one domain. *)
+   before it reads it (all statuses first, then every term's effective coefficient and
+   every group's slot), so nothing one pass leaves there is ever read by another. A cached
+   slack is refused because a later call relies on a number an earlier call computed under
+   domains the trail has since undone; here no call relies on any number from an earlier
+   call. And two passes never overlap, whatever rows they belong to: a pass calls nothing
+   that runs a propagator ([assign] only moves the store, which wakes nobody until the
+   engine walks the trail after the run), it recurses into [propagate] only once it is
+   past its last read, and the solver runs one propagator at a time on one domain. *)
 
 module Lit = Baguette_proof.Lit
 
@@ -193,10 +205,12 @@ module Lit = Baguette_proof.Lit
 
    [name] is frozen at construction -- nothing renames a variable and an explanation
    should not have to hold the store to spell itself out. [decl_lo] / [decl_hi] are the
-   DECLARED bounds, which is what [Reason] needs to decide whether a fact materialises
-   to a literal at all (M2-T8 / D-0026); they come from the ENCODING and not from the
-   store, because an instance built mid-search would otherwise freeze a narrowed box as
-   the declared one. lib/core/learned.ml says this at length for the same hazard. *)
+   DECLARED bounds, which is what [Reason] needs to decide whether a fact materialises to
+   a literal at all (a fact at its declared bound is the constant true and drops out;
+   reasons as declarative facts are D-0026, built by M2-T8); they come from the ENCODING
+   and not from the store, because an instance built mid-search would otherwise freeze a
+   narrowed box as the declared one. lib/core/learned.ml says this at length for the same
+   hazard. *)
 type atom = {
   x : Var.t;
   name : string;
@@ -215,9 +229,10 @@ type term = { coeff : int; a : atom }
 (* The status of one literal under the live domains, as [status] below reads it. *)
 type status = Sat_lit | Unsat_lit | Open
 
-(* M11-complexity-T3 (D-0142, D-0140's E3 (a)): the pass's LAYOUT, built once per row on
-   its first pass. Since D-0226 the terms themselves are the row's flat arrays ([t] below),
-   so the layout holds only what is derived from them:
+(* The pass's LAYOUT, built once per row on its first pass (item E3 (a) of the
+   complexity inventory D-0140, built by M11-complexity-T3, D-0142). Since D-0226 the
+   terms themselves are the row's flat arrays ([t] below), so the layout holds only what
+   is derived from them:
 
      [groups]  [None] when no two terms share a (variable, polarity), which is every
                clause [Learn.minimise] produced: then term [i] is group [i] alone.
@@ -233,9 +248,9 @@ type status = Sat_lit | Unsat_lit | Open
 type groups = { gid : int array; dom : int array; gfirst : int array }
 type layout = { groups : groups option; plain : bool }
 
-(* M20-pernode-T4 (D-0208): [plain] says that no partial sum of the slack can overflow --
-   [-degree] plus any subset of the coefficients, all of which are >= 1 -- so [snapshot]
-   adds with [+] and [Checked.add] could never have raised there. False when the whole
+(* [plain] says that no partial sum of the slack can overflow ([-degree] plus any subset
+   of the coefficients, all of which are >= 1), so [snapshot] adds with [+] where
+   [Checked.add] could never have raised (M20-pernode-T4, D-0208). False when the whole
    coefficient sum, or that sum minus a negative degree, does not fit. *)
 let plain_sums (coef : int array) degree =
   let total = ref 0 and fits = ref (degree > min_int) in
@@ -312,22 +327,23 @@ let ensure_scratch n =
     scratch.gbest <- Array.make m 0;
     scratch.osum <- Array.make m 0)
 
-(* M11-complexity-T3 (D-0142, D-0140's E2 (a)): what [quiet]'s walk found, kept for the
-   learned clause's watch move (lib/core/prop/clause.ml, [Learned_clause.propagate]). When
-   [quiet] answers [true], [f1] and [f2] are the indices of the FIRST TWO non-false
-   literals; when it answers [false] they mean nothing. [quiet] writes both before it can
-   answer [true], so, like the layout's scratch, the record carries nothing from one call
-   to the next. *)
+(* What [quiet]'s walk found, kept for the learned clause's watch move
+   (lib/core/prop/clause.ml, [Learned_clause.propagate]; item E2 (a) of the complexity
+   pass, D-0142). When [quiet] answers [true], [f1] and [f2] are the indices of the FIRST
+   TWO non-false literals; when it answers [false] they mean nothing. [quiet] writes both
+   before it can answer [true], so, like the layout's scratch, the record carries nothing
+   from one call to the next. *)
 type scan = { mutable f1 : int; mutable f2 : int }
 
-(* M21-memory-T3 (D-0226): THE ROW IS FLAT. One array per field, indexed by term, and no
-   record per term: [coef] the coefficient, [xv] the variable, [kv] the threshold [k],
-   [pv] the polarity (a byte, ['\001'] for `x >= k`, ['\000'] for `x <= k - 1`), [dlo]
-   and [dhi] the declared bounds, [lits] the proof literal. Until D-0226 a term was a
-   [term] record over an [atom] record, held in a list, again in an array, again in the
-   layout, beside a list of its literals: about 230 bytes per term on the 64-bit heap
-   (D-0218 section 5), for 49 here. [atom] and [term] above stay as the CONSTRUCTION and
-   test view of a term ([atom_at], [terms]); nothing in a pass reads one.
+(* THE ROW IS FLAT. One array per field, indexed by term, and no record per term
+   (M21-memory-T3, D-0226, the learned-row layout): [coef] the coefficient, [xv] the
+   variable, [kv] the threshold [k], [pv] the polarity (a byte, ['\001'] for `x >= k`,
+   ['\000'] for `x <= k - 1`), [dlo] and [dhi] the declared bounds, [lits] the proof
+   literal. Until D-0226 a term was a [term] record over an [atom] record, held in a list,
+   again in an array, again in the layout, beside a list of its literals: about 230 bytes
+   per term on the 64-bit heap (measured in D-0218 section 5, where the heap goes), for 49
+   here. [atom] and [term] above stay as the CONSTRUCTION and test view of a term
+   ([atom_at], [terms]); nothing in a pass reads one.
 
    [lits] holds the literal each term was BUILT FROM when it came as one ([of_terms]), so
    a learned row and its propagator share their literals rather than each holding a copy;
@@ -367,8 +383,8 @@ let consistency = Propagator.Bounds
 let pb_lit a = if a.positive then Lit.ge a.name a.k else Lit.le a.name (a.k - 1)
 
 (* Term [i]'s fields. [name_at] reads the name off the literal: an order literal is
-   [Ge (name, k)] at either polarity (`x <= k - 1` is the negated [Ge (name, k)]), and only
-   order literals are ever stored ([atom_of] declines the others). *)
+   [Ge (name, k)] at either polarity (`x <= k - 1` is the negated [Ge (name, k)]), and
+   only order literals are ever stored ([atom_of] declines the others). *)
 let var_at t i = t.xv.(i)
 let k_at t i = t.kv.(i)
 let positive_at t i = Bytes.unsafe_get t.pv i <> '\000'
@@ -430,16 +446,18 @@ let finish (coefs : int list) (atoms : atom list) (lits : Lit.t list) degree =
 (* An order literal as an atom of this store, or [None].
 
    [None] for a [Lit.Eq] literal: the direct encoding is a set of 0-1 variables with no
-   order to read a bound off (D-0019, D-0040), so a positive [Eq] would have to FIX a
-   variable and a negative one would have to punch an interior hole. Both are outside
-   what BOUNDS may claim and the second needs [Store.remove] (I-X10). [None]
-   too for a name this store or this encoding does not know: the honest answer is to
-   decline the whole instance rather than to guess a box. A 1UIP cut and a PB row can
-   both contain such a literal, so this is a case that really arises and is counted by
+   order to read a bound off (D-0019, D-0040: the solver stays on the order encoding), so
+   a positive [Eq] would have to FIX a variable and a negative one would have to punch an
+   interior hole. Both are outside what BOUNDS may claim and the second needs
+   [Store.remove] (I-X10). [None] too for a name this store or this encoding does not
+   know: the honest answer is to decline the whole instance rather than to guess a box. A
+   1UIP cut and a PB row can both contain such a literal, so this is a case that really
+   arises and is counted by
    the caller, not a defensive arm. *)
 let atom_of store ~(decl : string -> (int * int) option) (l : Lit.t) : atom option =
   match l.Lit.v with
-  | Lit.Eq _ | Lit.Bit _ -> None (* a bit is not a bound: decline (D-0130 section 7.5) *)
+  | Lit.Eq _ | Lit.Bit _ ->
+      None (* a bit is not a bound: decline (D-0130 section 7.5, the bits encoding) *)
   | Lit.Ge (nm, k) -> (
       match (Store.var_named store nm, decl nm) with
       | Some x, Some (lo, hi) ->
@@ -466,9 +484,10 @@ let of_terms store ~decl ~degree (raw : (int * Lit.t) list) : t option =
         else
           match atom_of store ~decl l with
           | None -> None
-          (* D-0226: the literal handed over is the one kept, shared with the caller's
-             row. [pb_lit a] is equal to it ([atom_of] reads [k] and the polarity off it
-             and nothing else), so the explanations built from either are the same. *)
+          (* The literal handed over is the one kept, shared with the caller's row (the
+             flat learned-row layout of D-0226). [pb_lit a] is equal to it ([atom_of]
+             reads [k] and the polarity off it and nothing else), so the explanations
+             built from either are the same. *)
           | Some a -> go (c :: cs) (a :: atoms) (l :: lits) rest)
   in
   go [] [] [] raw
@@ -507,11 +526,12 @@ let raw_terms t = List.init t.n_terms (fun i -> (t.coef.(i), t.lits.(i)))
 
 (* ------------------------------------------------------------------- bound facts *)
 
-(* docs/DECISIONS.md D-0018's other projection: the facts lib/core/trace.ml negates into
-   the tail of a trace line. A literal that is FALSE is a bound fact -- `x <= k - 1` for
-   a positive occurrence, `x >= k` for a negative one -- which is exactly [Lit.negate]
-   of the literal, so the line [Trace] builds, [claim :: List.map Lit.negate facts],
-   comes out as the clause [reason_clause] built.
+(* The facts lib/core/trace.ml negates into the tail of a trace line, the other projection
+   of D-0018's rule that a branch nogood is RUP over the branch's own trace. A literal
+   that is FALSE is a bound fact -- `x <= k - 1` for a positive occurrence, `x >= k` for a
+   negative one -- which is exactly [Lit.negate] of the literal, so the line [Trace]
+   builds, [claim :: List.map Lit.negate facts], comes out as the clause [reason_clause]
+   built.
 
    M2-T8 / D-0026: the declared bound is IN the fact, so whether it materialises to a
    literal at all is [Reason.lit_of_fact]'s test and not this module's. *)
@@ -530,11 +550,11 @@ let falsity_fact_at t i =
    object and [Propagator.pb_row].
 
    M11-complexity-T14: the bounds are read off the domain record once ([d.Domain.lo],
-   [d.Domain.hi]) rather than through [Domain.lo]/[Domain.hi]. The values are the same; the
-   difference is that dune's default (dev) profile compiles with [-opaque], so a
-   cross-module accessor is never inlined and each was a call, two or three per literal
-   on the hottest loop of a clause-heavy model ([status] and [falsified] were 12 % of a
-   QR48 node with their callees). *)
+   [d.Domain.hi]) rather than through [Domain.lo]/[Domain.hi]. The values are the same;
+   the difference is that dune's default (dev) profile compiles with [-opaque], so a
+   cross-module accessor is never inlined and each was a call, two or three per literal on
+   the hottest loop of a clause-heavy model ([status] and [falsified] were 12 % of a QR48
+   node with their callees). *)
 let status store a =
   let d = Store.get store a.x in
   if a.positive then
@@ -543,16 +563,16 @@ let status store a =
   else if d.Domain.lo >= a.k then Unsat_lit
   else Open
 
-(* [status store a = Unsat_lit], in one test: `x >= k` is false iff [hi x < k], `x <= k - 1`
-   iff [lo x >= k]. The [Sat_lit] arm [status] tries first cannot hold at the same time,
-   since [lo <= hi] (I-D1). The walks of [quiet] and the learned clause's watches ask only
-   this. *)
+(* [status store a = Unsat_lit], in one test: `x >= k` is false iff [hi x < k],
+   `x <= k - 1` iff [lo x >= k]. The [Sat_lit] arm [status] tries first cannot hold at the
+   same time, since [lo <= hi] (I-D1). The walks of [quiet] and the learned clause's
+   watches ask only this. *)
 let falsified store a =
   let d = Store.get store a.x in
   if a.positive then d.Domain.hi < a.k else d.Domain.lo >= a.k
 
-(* [status store a = Sat_lit], in one test: `x >= k` holds iff [lo x >= k], `x <= k - 1` iff
-   [hi x < k]. The satisfied-watch rule of [Clause.Learned_clause] asks only this
+(* [status store a = Sat_lit], in one test: `x >= k` holds iff [lo x >= k], `x <= k - 1`
+   iff [hi x < k]. The satisfied-watch rule of [Clause.Learned_clause] asks only this
    (M11-complexity-T17, D-0173). *)
 let holds store a =
   let d = Store.get store a.x in
@@ -601,8 +621,9 @@ let reason_clause t ~claim =
       incr n_picked;
       picked := t.lits.(j) :: !picked;
       (* The FALSIFIED members are the facts. The forced literal is not a fact --
-         [assign] passes it as [concludes] instead, which is D-0043's shape and what lets
-         [Store.apply] check the claim against the bound. *)
+         [assign] passes it as [concludes] instead (D-0043: the conclusion is a
+         [Reason.fact] carried on the justification), which is what lets [Store.apply]
+         check the claim against the bound. *)
       if falsified then facts := falsity_fact_at t j :: !facts)
   done;
   let expl = if !n_picked = t.n_terms then t.expl_all else Explanation.clause !picked in
@@ -610,9 +631,9 @@ let reason_clause t ~claim =
 
 (* Force term [i], which is open, true. A positive atom moves [lo] to [k], a negative one
    moves [hi] to [k - 1]; either way exactly ONE bound moves, so lib/core/trace.ml writes
-   exactly one line for it. The reason is not optional and there is no factless mutator
-   to reach for (I-P5): without it the line would claim the new bound unconditionally,
-   which is false.
+   exactly one line for it. The reason is not optional and there is no factless mutator to
+   reach for (I-P4: every change carries its explanation and its facts): without it the
+   line would claim the new bound unconditionally, which is false.
 
    D-0043: [concludes] is the [Reason.fact] mirror of the bound handed to the mutator on
    the next line, against the same declared bounds [falsity_fact] uses, so [Store.apply]
@@ -688,8 +709,8 @@ let effective t i =
   !acc
 
 (* [effective] for every term of one pass, in O(row) (M11-complexity-T3, D-0142, E3 (a);
-   before it, M6-T11 / D-0085 grouped by a hash table per pass and walked a group per
-   term, which was still quadratic in a group and allocated every pass).
+   before it, a hash table per pass grouped the terms and a group was walked per term,
+   still quadratic in a group and allocating every pass, M6-T11 / D-0085).
 
    The terms [effective] adds for a term are the non-falsified ones of its group whose
    threshold is at least as strong as its own. The layout lists each group strongest
@@ -781,10 +802,10 @@ let forced t w ~slack i =
    Termination: a pass only repeats when a [Store] mutator reported [Changed], and a
    change strictly narrows a domain over a finite box.
 
-   I-P3: on return there is nothing more to say about this constraint, because the last
-   pass found no forceable term and a non-negative slack. *)
+   Fixpoint (I-P2): on return there is nothing more to say about this constraint,
+   because the last pass found no forceable term and a non-negative slack. *)
 
-(* M6-T22 / D-0138: the pass, when it can be seen in advance to do nothing. At degree 1
+(* The pass, when it can be seen in advance to do nothing (M6-T22, D-0138). At degree 1
    with two non-false literals on DIFFERENT variables, the slack S - 1 (S the non-false
    coefficients' sum) is at least 1, so there is no conflict; and a literal is forced
    only when its LADDER-EFFECTIVE coefficient ([effective]) exceeds S - 1, i.e. reaches
@@ -837,14 +858,15 @@ let quiet store t =
    [Checked.add], or through [+] when the layout's [plain] says no partial sum can
    overflow. Reads the store, writes only [scratch].
 
-   M20-pernode-T4 (D-0208): [max_open] is the largest ladder-effective coefficient of an
+   [max_open] (M20-pernode-T4, D-0208) is the largest ladder-effective coefficient of an
    open term, exactly. A term i of group g counts the non-false terms of g at least as
    strong as itself; a satisfied term of g is strictly weaker than any open one (for
-   `x >= k`, satisfied is [k <= lo] and open is [lo < k <= hi]; mirrored for `x <= k - 1`),
-   so what i counts is open terms of g only, and the weakest open term of g counts all of
-   them. So [mark_forceable] finds a forceable term iff [slack < max_open], and [pass]
-   returns at once when [slack >= max_open], which is most runs of a learned row (D-0208
-   section 6). [max_int] means "do not exit early", never "nothing is forceable". *)
+   `x >= k`, satisfied is [k <= lo] and open is [lo < k <= hi]; mirrored for
+   `x <= k - 1`), so what i counts is open terms of g only, and the weakest open term of g
+   counts all of them. So [mark_forceable] finds a forceable term iff [slack < max_open],
+   and [pass] returns at once when [slack >= max_open], which is most runs of a learned
+   row (D-0208 section 6). [max_int] means "do not exit early", never "nothing is
+   forceable". *)
 let snapshot store t w =
   let n = t.n_terms in
   ensure_scratch n;
@@ -931,8 +953,9 @@ and pass t store =
    A learned instance is on the page only while [Retention] holds it, so a [rup] citing
    it is RUP only while that constraint is live: whoever registers one must
    [Retention.cite] its id. [Search.register_learned_pb] does. That is the same coupling
-   M2-L12 created for the learned clause and D-0051's "what would reverse this" section
-   is the other half of it. *)
+   M2-L12 created for the learned clause. It matters because learned rows are evicted:
+   the default retention policy is [tiered] (D-0226), not the keep-everything policy
+   D-0051 had chosen. *)
 module Learned_pb = struct
   type nonrec t = t
 
