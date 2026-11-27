@@ -135,6 +135,13 @@
    really does carry redundant thresholds and really is shortened here. That is where the
    break bites, and it bites on a shipped model rather than on a scene built for it.
 
+   M19-config-T6 (D-0241) MEASURED that on the 1UIP cut: 0 literals of 135 million, over
+   230 Challenge instances at 20 000 nodes. What does shorten a learned clause is the
+   other two kinds, which [Analysis.minimise_cut] removes before this reduction runs:
+   literals FALSE AT THE ROOT (7 % of them) and literals the kept ones re-derive through
+   the implication graph, MiniSat's recursive minimisation (17 % more). BAGUETTE_MINIMISE
+   selects them; its header is the soundness argument.
+
    ---------------------------------------------------------------------------
    I-S4, discharged -- and what it turns out to be about
    ---------------------------------------------------------------------------
