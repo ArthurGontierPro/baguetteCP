@@ -31781,3 +31781,120 @@ Left open:
 
 Revert: `git revert bdd564a 80525a0` (the two re-pinned tests first, then the rule, its test section
 and the model). The rule alone is the `if Store.level store > 0` line in `Ne.propagate`.
+
+## D-0239  [AUTONOME] M18-coverage-T5: `lex_lesseq` and `lex_less` (integers and Booleans, hence `lex_greater(eq)`, `lex_chain_*`, `lex2`) as four linear rows per position over std's own chain flag, through mznlib; `increasing` and its family were already native; `value_precede(_chain)` and `seq_precede_chain` keep std's decomposition. No new builtin, no `lib/` change
+
+**Status**: DECIDED (agent-lex, `wave85-lex`, 2026-11-27). Revert: delete `mznlib/fzn_lex_lesseq_int.mzn`,
+`fzn_lex_less_int.mzn`, `fzn_lex_lesseq_bool.mzn` and `fzn_lex_less_bool.mzn` (each pair alone gives its type std's
+text back), the six test models they brought and the SPEC 2.1 row. The binary does not change: the branch's builds
+are main's bytes (dev `505217da`, release `9194b0f8`).
+
+### 1. What reached baguette before, measured first
+
+The census (D-0185, the ROADMAP's M18 table) lists about 350 instance mentions for these globals. Read from the
+models of the sixteen Challenge lists (a call outside a comment, in the model or a local include), 245 instances
+call one of them: `value_precede_chain` 75, `increasing` 50, `lex_lesseq` 45, `value_precede` 30, `lex_less` 25,
+`lex_greatereq` 25, `seq_precede_chain` 25, `decreasing` 20, `strictly_decreasing` 15, `strictly_increasing` 10,
+`lex_chain_lesseq` 5 (one instance can call several). Flattened with main's mznlib (MiniZinc 2.10.1), the families
+are not alike:
+
+- `increasing`, `decreasing` and the strict forms were ALREADY native: std's `fzn_increasing_int` is
+  `x[i - 1] <= x[i]` for consecutive cells, one `int_lin_le` each (bounds consistent, which is GAC for this chain),
+  and `decreasing` is `increasing` reversed. The census counts them decomposed because it reads names. Dropping them
+  changes nothing worth a route.
+- `lex_lesseq`, `lex_less` (and `lex_greater(eq)`, `lex_chain_*`, `lex2` through them): std's
+  `lex_lesseq_std_decomposition`, per position two `int_lin_le_reif`, an `array_bool_and` and about three
+  `bool_clause`s over three Booleans. On the families that use them it is most of the model: with the lex calls
+  replaced by `true` the flattened constraint count falls by 90 % on mqueens n11, 90 to 99 % on the two peaceable
+  queens, 82 % on zephyrus, 61 to 70 % on opd, 59 to 74 % on neighbours, 60 % on chessboard, 55 % on
+  pattern-set-mining-k2; 8 to 16 % on p1f, vaccine and products-and-shelves. And it is most of the work per node:
+  at 3 000 nodes on mqueens n11 the decomposition's families take about 1 340 of 1 528 propagator runs per node,
+  on generalized-peacable-queens n11_q5 about 430 of 500. Pattern-set-mining-k2 and generalized-peacable-queens
+  call it over Booleans as well.
+- `value_precede_chain` with the order `1..n` and `seq_precede_chain` are std's `H[i] = max(x[i], H[i - 1])`,
+  `H[i] <= H[i - 1] + 1`: one `array_int_maximum` (native, maxmin.ml) and one `int_lin_le` per position. With any
+  other order std maps each cell through a constant `array_int_element` first. Lean already; the share of the model
+  is 1 to 11 % except concert-hall-cap (about 50 %) and yumi (51 to 54 %, with `value_precede` and `increasing`).
+- `value_precede(s, t, x)` is std's chain of Booleans with an `int_eq_reif` and an `int_ne_reif` per position and
+  about seven clauses. Peaceable queens and yumi call it, a small part of either.
+
+### 2. Options for lex
+
+| option | per position | status |
+|---|---|---|
+| std's chain (the baseline) | two `int_lin_le_reif` (four big-M rows, two Booleans), one `array_bool_and`, about three `bool_clause`s, one chain Boolean: about five instances | measured |
+| **four rows over a 0..1 flag** (chosen): `b[i] <-> (x[i] <= y[i] /\ (x[i] < y[i] \/ b[i + 1]))` written as R1 to R4 (the file's header), `int_lin_le`, or `baguette_bool_lin_le` over Booleans | four rows, one flag, four instances; the flags are std's own chain Booleans, so the solutions over `(x, y, b)` are std's one for one | measured, section 3 |
+| two rows over a free flag (R1 and R2 only): `b[i] -> ...`, half the rows | two rows, one flag | node-limited arm only (section 3): `b` is no longer determined by `x` and `y`, so first-fail branches on flags whose value says nothing about the answer |
+| the same with `b[i + 1] <= b[i]` | three rows | node-limited arm only |
+| a native lex propagator (Frisch, Hnich, Kiziltan, Miguel and Walsh's alpha and beta pointers) | one instance per lex | not built. With bounds-consistent rows the chain already prunes what the GAC algorithm prunes (the header's argument: every value it removes is a bound of `x[alpha]` or `y[alpha]`, `b[alpha]` is forced up the fixed-equal prefix by R2, `b[beta]` down by R1 or R2), so a native module would buy the cost per node and nothing in strength. Its proof would need the flags anyway (a lex order over n cells is not one PB row without coefficients exponential in n), i.e. the same rows in the .opb and a `pol` per pruning that Linear already writes. Not worth a module before the rows are shown short |
+
+### 3. Measurement (2026-11-26/27)
+
+The 245 instances of the sixteen Challenge lists that call one of these globals, flattened with MiniZinc 2.10.1 once
+with main's mznlib (235 flatten: 7 yumi fail in std itself, `maximum of empty set`, as for Chuffed; one test-scheduling t500 and two
+gt-sort stop at the flattening timeout of 1 200 s; 231 have a row in each base arm, four lost to the harness edit
+below) and once with this branch's for the 100
+that call a lex global (all flatten; one, pattern-set-mining anneal-k1, flattens byte-identically). One binary for
+every arm, release `9194b0f8` (main `2fff866`; this branch changes nothing under `lib/` or `bin/`, its dev build is
+main's `505217da`). 300 s, `--max-heap-mb 8192`, 16 GiB address space, MemoryMax 32 G, four runs per arm in parallel
+on fataepyc-06; veripb on every COMPLETE run of the proof arms. Four instances of the new arms
+(pattern-set-mining-k1 ionosphere and mushroom, k2 german-credit and segment) lost their rows to a harness edit made
+while they ran and are not compared. Runs, tables and scripts: `/cluster/arthur/baguette-results/lex/`.
+
+Lex, 92 instances with both arms:
+
+| arm | complete (verified) | incumbents vs std |
+|---|---|---|
+| std, proof | 26 (26) | |
+| rows, proof | 27 (27) | 5 better, 2 worse, 41 equal |
+| std, no proof | 28 | |
+| rows, no proof | 28 | 4 better, 1 worse, 45 equal |
+| Chuffed (std's lex too; D-0211, 1 200 s) | 41 of 100 within 300 s | |
+
+The new completion is mqueens n11 with proof (OPT 5, VERIFIED; std timed out at 5). Better incumbents:
+pattern-set-mining (hypothyroid-k1 230 -> 232, kr-vs-kp-k2 213 -> 227; anneal-k1 385 -> 411 is noise, its
+flattening is byte-identical), peaceable queens 25 (10 -> 11) and pq_n35 (7 -> 8); worse: opd flener_10_350_100
+(65 -> 68) and opd medium_13_250_80 (54 -> 55), minimised. Nodes per second on the instances that time out in both
+arms, rows over std: geomean 1.02 without proof (64 instances) and 1.04 with (65); mqueens 1.36 and 1.46, peaceable
+queens 1.07 to 1.10, chessboard 1.05 and 1.16, opd 0.79 to 0.93, the others 0.86 to 1.10. The flattened models are
+smaller: constraints 0.66 to 0.98 of std's per family, variables 0.38 (mqueens) to 0.96. At 3 000 nodes on mqueens
+n11 (`--no-proof`, `instructions:u`, the same stdout): std 9.01 G instructions, the two-row variant 3.10 G, the
+monotone two-row variant 6.69 G (the four-row route was not put in this arm; the 300 s arms are its measurement).
+The node-limited arm over all 100 was not run: the parallel budget went to the timed arms.
+
+So the route is neutral to slightly positive on outcomes, a few per cent faster per node, and much smaller. It is
+kept because it is the same constraint as std's (b determined, solutions one for one), it removes about five
+propagator instances per position for four rows, and it is mznlib only.
+
+Correctness, beside the six test models (`lex_lesseq_sat`, `lex_less_unsat`, `lex_chain_opt`, `lex_length_sat`,
+`lex_bool_sat`, each VERIFIED in both encodings and under BAGUETTE_DEBUG=1): an exhaustive comparison of the rows
+against std's lex on 260 random small pairs (int, different lengths, negative bounds; gecode `-a`, projected solution
+sets equal), 100 Boolean pairs with constants and a shared cell, and a differential fuzz of 600 random models (150
+Boolean, 187 with `lex_chain_*` or `lex2`, 188 with a reified lex, which keeps std's text, 167 UNSAT) solved by Chuffed
+through std and by baguette through this mznlib: 600 agree, every proof VERIFIED.
+
+The other globals, std's decompositions, base arms (complete with proof / without / Chuffed within 300 s):
+`increasing` 6 / 7 / 9 of 45, `decreasing` 3 / 6 / 8 of 20, `strictly_decreasing` 2 / 2 / 7 of 15,
+`strictly_increasing` 0 / 0 / 1 of 10, `seq_precede_chain` 9 / 10 / 12 of 20, `value_precede` 0 / 0 / 0 of 20,
+`value_precede_chain` 6 / 9 / 22 of 70 (mondoku 1 against Chuffed's 5, concert-hall-cap 2018 1 against 4,
+community-detection 0 against 3, code-generator 2 against 6). Only the last is a gap, and its global is 1 to 11 % of
+those models (concert-hall-cap and yumi aside), so the cause is not established; Chuffed propagates
+`value_precede` and `seq_precede_chain` natively.
+
+### 4. SPEC 2.1
+
+One row added to the M18 builtins table, PROPOSED (the D-0217, D-0220, D-0233 precedent), normative because it says
+what reaches the solver: `lex_lesseq` and `lex_less` as four `int_lin_le` (resp. `baguette_bool_lin_le`) rows per
+position over one 0..1 flag, `b[i] <-> (x[i] <= y[i] /\ (x[i] < y[i] \/ b[i + 1]))`; a cell without declared bounds
+and the reified forms keep std's text; `increasing` and its family need no file; the precedence globals keep std's.
+No new builtin, so no new sentence of semantics. The user's to confirm outside autonomous mode.
+
+### 5. What is left open
+
+- `value_precede_chain`: 6 complete of 70 with proof against Chuffed's 22 within 300 s, spread over six families. Not
+  established that the global is the cause (it is a small part of most of these models). A TODO row in M18
+  (ajouté en mode autonome) measures it before any native `seq_precede` is built.
+- The node-limited arm (instructions per node at a fixed node budget over all 100 lex instances, std against the four
+  rows) was not run; the timed arms and one mqueens probe are the measurement.
+- The census tool reads names: with these files it counts `lex_lesseq` and `lex_less` native, and still counts
+  `increasing`, `decreasing` and their strict forms decomposed although std writes them as `int_lin_le`. Left as is.

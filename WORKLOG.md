@@ -19,7 +19,6 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M18-coverage-T5 (D-0239): lex_*, value_precede(_chain), seq_precede_chain, increasing/decreasing | new `lib/core/prop/` modules if needed, `lib/core/dune`, `mznlib/` files for these globals, their families in `lib/flatzinc/builder.ml` and `compile.ml`, tests and test models, the two module maps if a module is added | agent-lex (wave85-lex, /scratch/arthur/wt-lex) | 2026-11-26 |
 
 ## Cross-session requests
 
@@ -706,7 +705,12 @@ section 1. Shares are inclusive, of the whole run.
 | M19-config-T0 (the tuning set) | agent-tuning (`wave59-tuning`) | 2026-11-23 | **D-0205.** `bench/tuning/`, 200 instances in 183 families. DONE except the driver hook. |
 | M18-coverage-T7 (the cheap globals) | agent-cheap (`wave79-cheap`) | 2026-11-26 | **D-0233 [AUTONOME].** mznlib only: `fzn_alldifferent_except` as at most one indicator per value (1 -> 2 complete of 37, gcc's route measured worse), `fzn_nvalue` without the bool2int copies, `fzn_all_equal_int_reif` as a chain (outcomes unchanged). Seven test models, SPEC 2.1 row |
 
+| M18-coverage-T5 (the ordering globals) | agent-lex (`wave85-lex`) | 2026-11-27 | **D-0239 [AUTONOME].** mznlib only: `lex_lesseq`/`lex_less`, int and Bool, as four linear rows per position over std's chain flag; 26 -> 27 complete of 92 with proof, nodes/s x1.02 to 1.04; precedence globals keep std's (T13 added); `increasing` already native. |
 ## Handoff notes
+
+### 2026-11-27 (agent-lex, `wave85-lex`, D-0239): lex as linear rows through mznlib, not merged
+
+`fzn_lex_lesseq_int`/`fzn_lex_less_int` (and `_bool`, over `baguette_bool_lin_le`) write std's chain `b[i] <-> (x[i] <= y[i] /\ (x[i] < y[i] \/ b[i + 1]))` as four rows per position over a 0..1 flag, in place of two `int_lin_le_reif`, an `array_bool_and` and three clauses. Same solutions as std, binary unchanged (dev `505217da`), six new test models, a 600-model fuzz against Chuffed all agree. On 92 lex instances: 26 -> 27 complete with proof, a few per cent more nodes per second, smaller models. The SPEC row is a proposal. Open: `value_precede_chain` against Chuffed (M18-coverage-T13), and a node-limited arm over the lex set. Runs in `/cluster/arthur/baguette-results/lex/`.
 
 ### 2026-11-26 (agent-ne, `wave84-ne`, D-0238): int_lin_ne's conflicts carry their facts, not merged
 
