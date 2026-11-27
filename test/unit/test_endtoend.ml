@@ -2172,6 +2172,16 @@ let test_m7t32_std_flags () =
       check
         (tag ^ ": an explicit --search or --restarts wins over -f, in either order")
         (m6_says err_f2 "search=activity restarts=geom:100:1.5 phase-saving=true");
+      (* The default (M19-config-T1, D-0261): with no search option the run is what -f
+         names, and an explicit setting replaces its own part of it. *)
+      let _, _, err_d = run_free ("-v " ^ opt) in
+      check
+        (tag ^ ": with no search option -v says alternate, luby and phase saving (D-0261)")
+        (m6_says err_d "search=alternate restarts=luby:100 phase-saving=true");
+      let _, _, err_d2 = run_free ("--search annotation -v " ^ opt) in
+      check
+        (tag ^ ": ...and an explicit --search replaces only the order")
+        (m6_says err_d2 "search=annotation restarts=luby:100 phase-saving=true");
       (* --fixed-search (M19-config-T1, D-0261): the fixed search by name, an explicit
          setting still wins over it, and with -f it is a usage error. *)
       let _, _, err_x = run ("-v " ^ opt) in

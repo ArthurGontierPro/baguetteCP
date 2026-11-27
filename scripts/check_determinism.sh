@@ -187,12 +187,13 @@ run_check() {
   d="$(mktemp -d)"
   trap 'rm -rf "$d"' EXIT INT TERM
   n=0; bad=0
-  # Two arms (M19-config-T1, D-0261): the fixed search, and the free search, whose
-  # restarts, activity and phases must not depend on the clock or on addresses either.
+  # Two arms (M19-config-T1, D-0261): the fixed search, and the free search (the default,
+  # so no flag), whose restarts, activity and phases must not depend on the clock or on
+  # addresses either.
   # compare_two_runs assigns the global d (POSIX sh has no locals), hence top.
   top="$d"
   for arm in fixed free; do
-    case "$arm" in fixed) SEARCH="--fixed-search" ;; free) SEARCH="-f" ;; esac
+    case "$arm" in fixed) SEARCH="--fixed-search" ;; free) SEARCH="" ;; esac
     mkdir -p "$top/$arm"
     for fzn in "${ROOT}"/test/models/*.fzn; do
       n=$((n + 1))

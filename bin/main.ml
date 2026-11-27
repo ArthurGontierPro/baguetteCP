@@ -96,10 +96,12 @@
      -f        is `--search alternate --restarts luby --phase-saving`, for whichever of
                the three was not given explicitly. That is Chuffed's free search, the
                annotation's order alternating with the activity order under restarts
-               (D-0137 section 4). It was unsafe while the checker refused some branch
-               nogoods under restarts with a dynamic order (M7-T31), until D-0148 fixed
-               the decision closure; the default search stays the fixed one by the
-               user's choice (D-0154).
+               (D-0137 section 4), and since D-0261 (M19-config-T1, decided by D-0259)
+               it is also the DEFAULT, so `-f` alone changes nothing; it is accepted
+               because MiniZinc passes it. `--fixed-search` (not a standard flag) is the
+               fixed search the default was until D-0261 (D-0154): the annotation,
+               depth-first, no restarts, no phase saving. The two together are a usage
+               error.
      -i        and, on an optimisation model, `-a` ask for every improving solution,
                which this CLI prints anyway, each with its own `soli` line in the proof.
      -r SEED   is accepted and unused: nothing on the CLI's path draws a random number.
@@ -245,10 +247,12 @@ let usage () =
   prerr_endline
     "  -n N              stop after N solutions: N = 1 is the default; N > 1 on a";
   prerr_endline "                    satisfaction model is refused (exit 3) as -a is.";
-  prerr_endline "  -f                free search: --search alternate --restarts luby";
-  prerr_endline "                    --phase-saving, each unless given explicitly. Worth";
+  prerr_endline "  -f                the free search, the DEFAULT since D-0261: --search";
   prerr_endline
-    "                    trying when the model's search annotation is a poor order.";
+    "                    alternate --restarts luby --phase-saving, each unless";
+  prerr_endline
+    "                    given explicitly. Accepted so that MiniZinc's -f keeps";
+  prerr_endline "                    working; on its own it changes nothing.";
   prerr_endline "  -t MS             --time-limit in milliseconds.";
   prerr_endline
     "  -r SEED           accepted and unused: the search draws no random number.";
@@ -359,14 +363,22 @@ let usage () =
   prerr_endline
     "                    3.4's first-fail, depth-first, no restarts, no phase saving";
   prerr_endline
-    "                    (the default today). --search, --restarts and --phase-saving";
+    "                    (the default before D-0261). --search, --restarts and \
+     --phase-saving";
   prerr_endline "                    still set their own part. Refused with -f (exit 2).";
+  prerr_endline
+    "                    THE RULE: the search starts from the free search, or from";
+  prerr_endline
+    "                    the fixed one under --fixed-search; an explicit --search,";
+  prerr_endline
+    "                    --restarts or --phase-saving replaces its own part of it,";
+  prerr_endline "                    wherever it sits on the line.";
   prerr_endline
     "  --restarts POLICY (M10-search-strategy-T2, D-0137, SPEC 3.4) restart the search";
   prerr_endline
     "                    to level 0 on a deterministic schedule. POLICY is one of";
   prerr_endline
-    "                    none (default), luby[:U] (U * luby(k) conflicts, U=100),";
+    "                    none, luby[:U] (U * luby(k) conflicts, U=100; the default),";
   prerr_endline
     "                    geom[:U[:F]] (U * F^k, 100 and 1.5), lbd[:W[:K]] (Glucose's";
   prerr_endline
@@ -380,11 +392,11 @@ let usage () =
     "                    domain; the variable choice is unchanged. Overrides an";
   prerr_endline "                    annotation's value choice: an explicit substitution.";
   prerr_endline "  --search ORDER    (M10-search-strategy-T3, D-0137) the variable order:";
-  prerr_endline "                    annotation (default: the annotation, else SPEC 3.4's";
+  prerr_endline "                    annotation (the annotation, else SPEC 3.4's";
   prerr_endline "                    first-fail), activity (the unfixed variable with the";
   prerr_endline "                    highest conflict activity, EVSIDS decay), alternate";
   prerr_endline "                    (annotation and activity, switching at each restart;";
-  prerr_endline "                    needs --restarts to ever switch).";
+  prerr_endline "                    needs restarts to ever switch; the default).";
   prerr_endline
     "  --reuse-trail     with --search activity and --restarts: keep the levels";
   prerr_endline
@@ -824,12 +836,13 @@ let parse_args argv =
       "baguette: -f (the free search) and --fixed-search (the fixed search) contradict \
        each other. Give one.";
     exit exit_usage);
-  (* `-f` is Chuffed's free search: the annotation's order alternating with the activity
-     order under restarts (D-0137 section 4), with phase saving as Chuffed's SAT layer
-     has it, and Luby restarts on D-0137's unit of 100 conflicts (section 0,
-     [Restart.default_unit]). An explicit --search or --restarts wins wherever it sits
-     on the line. *)
-  if !free_search then (
+  (* THE DEFAULT SEARCH (M19-config-T1, D-0261) is Chuffed's free search, what `-f`
+     names: the annotation's order alternating with the activity order under restarts
+     (D-0137 section 4), with phase saving as Chuffed's SAT layer has it, and Luby
+     restarts on D-0137's unit of 100 conflicts (section 0, [Restart.default_unit]).
+     --fixed-search keeps the fixed search instead. An explicit --search or --restarts
+     wins wherever it sits on the line. *)
+  if not !fixed_search then (
     if not !search_given then search := Search.Alternate;
     (if not !restarts_given then
        restarts :=

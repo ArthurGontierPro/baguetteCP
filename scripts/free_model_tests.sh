@@ -22,8 +22,8 @@
 #      `%%%mzn-stat:` lines of -s aside.
 # A model listed in test/models/PENDING is skipped and named.
 #
-# The search under test is $FREE_SEARCH, default -f (the free search by its MiniZinc flag;
-# the solver's default is still the fixed search until D-0261's default commit).
+# The search under test is $FREE_SEARCH, default empty: the solver's default, the free search
+# since D-0261. FREE_SEARCH=-f runs the same search by its MiniZinc flag.
 # The solver is $BAGUETTE (default _build/default/bin/main.exe); this script does NOT build it.
 # Exit 0 when nothing failed, 1 otherwise, 2 when the solver or the checker is missing.
 set -uo pipefail
@@ -40,7 +40,7 @@ fi
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SOLVER="${BAGUETTE:-${ROOT}/_build/default/bin/main.exe}"
-read -r -a FREE <<< "${FREE_SEARCH--f}"
+read -r -a FREE <<< "${FREE_SEARCH:-}"
 # shellcheck source=checker.sh
 . "${ROOT}/scripts/checker.sh"
 OUT="${ROOT}/test/out/free"
@@ -60,7 +60,7 @@ if ! baguette_resolve_veripb; then
   baguette_veripb_diagnostic
   exit 2
 fi
-echo "checker: ${VERIPB}; search under test: ${FREE_SEARCH--f}"
+echo "checker: ${VERIPB}; search under test: ${FREE_SEARCH:-the default}"
 
 # Check 5 proves it can fail before it is trusted to pass (the `lint` discipline): on
 # array_sat, whose only solution is q = [1, 4], a planted q = [2, 3] must be refused by the
@@ -141,7 +141,7 @@ for fzn in "${ROOT}"/test/models/*.fzn; do
 done
 
 echo
-echo "free model tests: ${pass} passed, ${fail} failed, ${skip} skipped (search: ${FREE_SEARCH--f})"
+echo "free model tests: ${pass} passed, ${fail} failed, ${skip} skipped (search: ${FREE_SEARCH:-the default})"
 echo "  every PASS: proof verified, status as expected, objective the fixed search's, the same"
 echo "  stdout without a proof (D-0126), and, on ${checked_sol} model(s) with a printed solution,"
 echo "  that solution fixed in the model and verified satisfiable by a second proved run."
