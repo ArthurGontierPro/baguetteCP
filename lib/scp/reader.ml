@@ -1033,7 +1033,7 @@ let of_lexer lx : Model.t =
     List.init st.nfile (fun i ->
         Model.Out_var (vars.(i).Model.v_name, Model.Oint, Model.Var i))
   in
-  F.Builder.split_gcc_repeats
+  F.Builder.normalise_gcc
     { Model.vars; constraints = List.rev st.built_rev; objective; search = []; output }
 
 let of_string ~file s = of_lexer (Sexp.of_string ~file s)
