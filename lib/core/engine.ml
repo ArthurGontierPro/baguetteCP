@@ -65,7 +65,23 @@
    M16-file-review-T1 (D-0186): the wake walk and the seed read a trail entry's change
    as its KIND only ([wakes_on_kind]: did it move a bound), which is all a trigger mask
    asks; [Domain.classify], which also lists the holes and walks the domain to find
-   them, is left to the proof side ([Trace]) that needs the list. *)
+   them, is left to the proof side ([Trace]) that needs the list.
+
+   M20-pernode-T4 (D-0243): the wake walk and the attribution check without closures or
+   lists, four rules, each giving the same answer as before by the argument beside it.
+   (a) [wake_static] is a flat int array per variable, appended to oldest first and walked
+   from its last cell down, which is the order of the newest-first list it replaced;
+   [purge] filters it in place, keeping that order. The merge with the self-watching ids
+   is two loops and [wants] a top-level function, so the walk applies no closure per id.
+   (b) [advises] answers the default advisor [Propagator.advise_always] without calling
+   it: it is [fun _ _ -> true], so no answer and no counter moves. (c) The trigger mask
+   reads one byte per id ([trig_bits], [wakes_id]), written wherever [triggers] is.
+   (d) [check_attribution] remembers, per variable, an id it has found in that variable's
+   scope ([attr_ok]). A hit is a pair the binary search accepted against a scope that has
+   not changed since, because a live id's scope never changes and [purge], which empties
+   the scopes of removed ids, resets the memo of each of their variables; so the check
+   refuses exactly what it refused. The wake order, the woken set and every counter are
+   unchanged, and with them the search and the artefacts. *)
 
 type outcome = Fixpoint | Conflict of Store.conflict
 
@@ -1187,7 +1203,7 @@ let check_advise (inst : Propagator.instance) (store : Store.t) v =
       if Store.trail_length store > before then
         fail (Printf.sprintf "pruned %d entr(y/ies)" (Store.trail_length store - before))
 
-let advises t store id v =
+let[@inline] advises t store id v =
   if id < 0 || id >= t.count then true
   else
     let ask = t.instances.(id).Propagator.inst_advise in
@@ -1336,7 +1352,7 @@ let sort_desc_uniq (a : int array) len =
    ([bound]): the self-wake veto, then the trigger mask, then the advisor, each counted
    as it was. A top-level function since M20-pernode-T4 (D-0243), called directly from
    the walk's loops, where it was a closure applied by [List.iter]'s. *)
-let wants t store ~vetoed ~self_id id bound v =
+let[@inline] wants t store ~vetoed ~self_id id bound v =
   if vetoed && id = self_id then (
     t.ctr.c_vetoed <- t.ctr.c_vetoed + 1;
     false)
