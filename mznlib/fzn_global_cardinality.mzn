@@ -70,6 +70,13 @@
 % global_cardinality_low_up's counts are declared on constant bounds and stay native
 % too; that route was not measured (D-0247 section 6).
 %
+% A COVER WITH A REPEATED VALUE gets the per-value rows WITHOUT std's implied row
+% (D-0255). Each repeat's count is the same tally, so the counts can sum past |x|:
+% global_cardinality(x, [1,1], c) with x = [1,1] holds with c = [2,2] (Gecode agrees),
+% and std's row 2 >= c1 + c2 made it UNSAT, a wrong answer 4c5df61 introduced (the
+% native route before it answered SAT). The guard is a par test, so a cover of distinct
+% values flattens byte for byte as before. Models: mznlib/test/gccvar_dupcover_src_*.
+%
 % To revert: restore the body below to its first two lines (the bounds and the
 % baguette_global_cardinality call) for every call.
 %-----------------------------------------------------------------------------%
@@ -92,5 +99,5 @@ predicate fzn_global_cardinality(
     /\ baguette_global_cardinality(x, cover, counts)
   else
     forall (i in index_set(cover)) (count(x, cover[i], counts[i]))
-    /\ length(x) >= sum(counts)
+    /\ if card(array2set(cover)) = length(cover) then length(x) >= sum(counts) else true endif
   endif;
