@@ -34323,3 +34323,120 @@ the `limit` stream's `-t` runs depend on the wall clock (its `BAGUETTE_NODE_LIMI
 Drop `tools/fuzz/streams.py`, `triage.py`, `shrink_mzn.py`, `bench/fuzz/found/`, and restore
 `scripts/fuzz_lane.sh`, `bench/fuzz/README.md` and the `scripts/README.md` row from `c9b1b70`. The
 2026-11-23 streams keep their seeds (the stream index still counts them first).
+
+## D-0252  [AUTONOME] The held-out comparison of D-0251: `BAGUETTE_MINIMISE=rec`, `BAGUETTE_PRIORITY=classes` and both, on 400 Challenge instances outside the tuning set, with and without proof, 300 s. By D-0251's rule NONE becomes the default: `rec` gains no verified complete answer with proof, `classes` loses three, both together lose two net
+
+**Status**: DONE (agent-compare, branch `wave97-compare`, measurement only, no `lib/` or `bin/` change). Measured
+2026-11-27 on fataepyc-07. Scripts, tables and runs: `/cluster/arthur/baguette-results/compare/` (README first).
+
+### 1. The set
+
+`bench/tuning/heldout.lst`: D-0205's rule (`bench/tuning/draw_set.py`, same inputs, D-0185's three arms) with the
+200 tuning-set ids removed from the candidates before the rounds (`--exclude bench/tuning/set.lst`, new option;
+without it the draw is still byte-identical to `set.lst`), size 400. The rule has no random seed: ties are broken
+by the md5 of the id, so the command in the README re-draws the same list. 1 022 candidates in 179 families remain,
+and the rule's rounds take 400 of them.
+
+| | tuning set (D-0205) | held-out set |
+|---|---|---|
+| instances, families | 200, 183 | 400, 179 (no id in common) |
+| per family | 1 (166 families), 2 (17) | 1 (14), 2 (109), 3 (56) |
+| editions | 9 to 16 each | 18 to 32 each, all sixteen |
+| kinds | MIN 134, MAX 40, SAT 26 | MIN 276, MAX 74, SAT 50 |
+| tiers 1/2/3/4 | 164/15/6/15 | 267/35/35/63 |
+
+No family has 8 instances or more (the rule takes at most one per family per round), so the per-family split the
+brief asked for has no row; the tables below split by kind and by edition instead, and count families won and lost.
+
+### 2. Method
+
+- Binary: `make release`'s build of `26025ab` (origin/main when the campaign started), md5 `4888c464`
+  (`4888c4646772e9f503cca50868d107a6`). Smoke (`smoke.txt`): at 20 000 nodes two `off` runs give identical
+  counters and each other arm different ones (`rec` cuts the learned literals 237 818 -> 176 928 on
+  pillars-and-planks p-d2); at 3 000 nodes with proof all four arms verify on two instances.
+- Inputs: the flattened files of series2 (D-0227, mznlib of `73b4cab`, 2026-11-26) on fataepyc-07. mznlib changed
+  since (lex, nvalue, alldifferent_except, all_equal_reif decompositions); every arm reads the same file.
+- Arms: `off` (both switches off, set explicitly), `rec`, `classes`, `rec+classes`; modes `--no-proof` and with
+  proof. D-0241's settings: 300 s `--time-limit`, `--stats --max-heap-mb 8192`, own scope `MemoryMax=32G`, outer
+  timeout 420 s; veripb 3.0.2 (d5644ca4) on every complete answer, 3600 s at `MemoryMax=32G`; a check that times
+  out is UNVERIFIED and counted apart. Each instance's eight runs are adjacent with the arm order rotated, so load
+  falls on the arms equally. At most 46 of these runs at once, the node's main.exe+veripb count (series2's
+  A and B arms, the user's two 14-day veripb runs) under 92; load at launch 47 to 95, median 73.
+- Verdicts and share: `tools/compare/arms_compare.py`'s Challenge order (complete beats incomplete, then time
+  within 5 % or 1 s, then the incumbent); share = pairwise share against `off`.
+
+### 3. Results (`tables.md`)
+
+Without proof (complete answers trusted):
+
+| arm | complete | incumbent only | share vs off | wins/losses | complete +/- vs off |
+|---|---|---|---|---|---|
+| off | 79 | 230 | 0.500 | | |
+| rec | 84 | 226 | 0.484 | 35+/48- | +6/-1 |
+| classes | 79 | 227 | 0.477 | 54+/72- | +4/-4 |
+| rec+classes | 81 | 226 | 0.480 | 60+/76- | +7/-5 |
+
+With proof:
+
+| arm | complete | verified complete | incumbent only | share vs off | wins/losses | verified +/- vs off |
+|---|---|---|---|---|---|---|
+| off | 69 | 65 | 232 | 0.500 | | |
+| rec | 68 | 65 | 235 | 0.510 | 38+/30- | +0/-0 |
+| classes | 66 | 62 | 232 | 0.532 | 77+/51- | +0/-3 |
+| rec+classes | 67 | 63 | 233 | 0.539 | 83+/52- | +1/-3 |
+
+Unverified (veripb at its 3600 s limit, never rejected): 4/3/4/4 per arm, the same four instances
+(2011 pentominoes 07, 2013 pentominoes-int 07, 2014 smelt 2, 2026 sdn-chain d10n780-7; `rec` lost the last one
+without proof and has no complete answer there with proof). **No proof was REJECTED.**
+
+Complete answers gained (+) and lost (-) against `off`:
+
+- `rec`, no proof: +2011_solbat_sb_13_13_5_1, +2014_road-cons_road_9, +2016_maximum-dag_25_06,
+  +2017_ma-path-finding_ins_g24_p10_a05, +2022_gfd-schedule_n85f3d50m8k20_10124, +2025_products-and-shelves_ps-25-01;
+  -2026_sdn-chain_d10n780-7. With proof: none either way.
+- `classes`, no proof: +2011_solbat_sb_13_13_5_1, +2013_ghoulomb_4-9-10, +2015_mapping_mesh2x2_mpeg,
+  +2016_elitserien_handball20; -2013_on-call-rostering_4s-23d, -2017_hrc_exp1-1-5145,
+  -2023_evm-super-compilation_isolated_block_6_0_input, -2024_word-equations_word_equations_02_track_8-int.
+  With proof: -2012_ship-schedule_8ShipsUnconst, -2023_evm-super-compilation_isolated_block_6_0_input,
+  -2024_word-equations_word_equations_02_track_8-int.
+- `rec+classes`, no proof: the gains of both (solbat, ghoulomb, road-cons, mapping, elitserien, maximum-dag,
+  products-and-shelves); -2013_nmseq_99, -2013_on-call-rostering_4s-23d, -2017_steelmillslab_bench_16_10,
+  -2023_evm-super-compilation, -2024_word-equations. With proof: +2015_mapping_mesh2x2_mpeg;
+  -2012_ship-schedule_8ShipsUnconst, -2023_evm-super-compilation, -2024_word-equations.
+
+By kind (wins/losses against `off`, share):
+
+| arm | no proof MIN (276) | MAX (74) | SAT (50) | proof MIN | MAX | SAT |
+|---|---|---|---|---|---|---|
+| rec | 31+/29- 0.50 | 2+/13- 0.43 | 2+/6- 0.46 | 28+/20- 0.51 | 8+/8- 0.50 | 2+/2- 0.50 |
+| classes | 44+/50- 0.49 | 8+/17- 0.44 | 2+/5- 0.47 | 58+/33- 0.55 | 14+/14- 0.50 | 5+/4- 0.51 |
+| rec+classes | 49+/50- 0.50 | 9+/19- 0.43 | 2+/7- 0.45 | 68+/32- 0.57 | 12+/17- 0.47 | 3+/3- 0.50 |
+
+Families won/lost (a family once, by the sum of its verdicts): no proof `rec` 24/37, `classes` 34/48, both 40/49;
+with proof 26/19, 50/35, 49/36. The by-edition split is in `tables.md`; no edition moves by more than 0.15 of the
+share and the signs scatter, as expected from 18 to 32 instances each.
+
+### 4. The rule of D-0251 section 2, applied as written
+
+| switch | with proof: verified +/-, net, share | without proof: +/-, net, share | verdict |
+|---|---|---|---|
+| `rec` | +0/-0, net 0 (needs at least +2: FAILS), 0.510 | +6/-1, net +5, 0.484 | stays `off` |
+| `classes` | +0/-3, net -3 (FAILS), 0.532 | +4/-4, net 0 (FAILS), 0.477 | stays `off` |
+| `rec+classes` | +1/-3, net -2 (FAILS), 0.539 | +7/-5, net +2, 0.480 | stays `off` |
+
+Every share is above 0.47, so the shares fail nothing; what fails is the verified complete answers with proof.
+Read plainly: without proof `rec` answers five more instances to completion and loses a little time elsewhere
+(mostly on MAX instances, 2+/13-), with proof it changes nothing that finishes. `classes` wins time with proof
+(0.532, 77+/51-) but loses the same two optima in both modes (evm-super-compilation, word-equations), and one more
+with proof. The question closes as D-0251 says, until D-0241 section 7's or D-0246 section 6's follow-ups change
+the code. Note for the record: D-0259 decides that the free search (`-f`) becomes the default; this comparison ran
+on the fixed search (no `-f`), the default of `26025ab`, and says nothing of the switches under `-f`.
+
+### 5. Proof volume
+
+5.29 TB of `.opb` + `.pbp` written by the 1 600 proof runs, each deleted after its check (and the one not checked
+deleted at once), plus 27.9 GB of `.opb.rows` spools left by the eight runs of two 2022 arithmetic-target instances
+killed by the outer 420 s timeout while still encoding (`leftover-rows.txt`, deleted after the campaign).
+
+**Revert**: nothing to revert (no default changed). `bench/tuning/heldout.lst` and the `--exclude` option are
+measurement tools; delete them to undo.
