@@ -878,10 +878,49 @@ let alo_over t s ~keep =
    A value only one variable in scope can take gets a literal axiom instead of an
    at-most-one line: "at most one of {x} takes v" IS ~x_eq_v >= 0, and a value no
    variable can take gets nothing, because there is no term to cancel. *)
-let core_summands t ~vals ~halls ~extra =
+(* THE AT-LEAST-ONE LINES OF A TIGHT SET, BUILT ONCE (M20-pernode-T4, D-0242). Every
+   removal a Regin set justifies sums the same at-least-one line per member, from the same
+   snapshots and the same [keep]: only the at-most-one lines (which [y] joins) and [y]'s
+   own leftovers differ. [alo_lines] hands back the lines the set's first forced
+   derivation built, when building them again would return those very nodes, by D-0216's
+   rule ([Explanation.rebuilds_to], checked again only after a node left the table): an
+   at-least-one line's operands are model rows, the [excl] chains (whose own operands are
+   model rows) and hole clauses, so the shallow check is the whole induction. Otherwise,
+   and always when hash-consing is off, it builds them, which is what every removal did.
+   The same nodes either way, so the same bytes. [amo_reuse] off (D-0216's switch, for
+   test_endtoend's byte comparison) turns this memo off too; [alo_hits] counts the lines
+   it handed back. *)
+type alo_memo = { mutable a_nodes : Explanation.t list option; mutable a_seen : int }
+
+let alo_memo () = { a_nodes = None; a_seen = -1 }
+let alo_hits = ref 0
+
+let alo_lines t ~vals ~halls memo =
+  let epoch = if !amo_reuse then Explanation.reuse_epoch () else -1 in
+  match memo.a_nodes with
+  | Some nodes
+    when epoch >= 0
+         && (memo.a_seen = epoch
+            || List.for_all Explanation.rebuilds_to nodes
+               &&
+               (memo.a_seen <- epoch;
+                true)) ->
+      incr alo_hits;
+      nodes
+  | _ ->
+      let keep = mem_of vals in
+      let nodes = List.map (fun s -> alo_over t s ~keep) halls in
+      memo.a_nodes <- Some nodes;
+      memo.a_seen <- -1;
+      nodes
+
+let core_summands ?alo t ~vals ~halls ~extra =
   let all = halls @ Option.to_list extra in
-  let keep = mem_of vals in
-  List.map (fun s -> Explanation.term 1 (alo_over t s ~keep)) halls
+  (match alo with
+  | Some memo -> List.map (Explanation.term 1) (alo_lines t ~vals ~halls memo)
+  | None ->
+      let keep = mem_of vals in
+      List.map (fun s -> Explanation.term 1 (alo_over t s ~keep)) halls)
   @ List.concat_map
       (fun v ->
         match List.filter (fun s -> s.s_dlo <= v && v <= s.s_dhi) all with
@@ -1065,18 +1104,18 @@ let prune_expl t ~a ~b ~halls ~y ~lower =
 
    which is the pruning, disjoined with the facts it rests on -- the [Ne] shape, sound at
    any level. Nothing here is new machinery: it is [core_summands] plus [Weaken]. *)
-let remove_summands t ~vals ~halls ~y ~value =
+let remove_summands ?alo t ~vals ~halls ~y ~value =
   let mine = List.filter (fun w -> y.s_dlo <= w && w <= y.s_dhi) vals in
-  core_summands t ~vals ~halls ~extra:(Some y)
+  core_summands ?alo t ~vals ~halls ~extra:(Some y)
   @ List.filter_map
       (fun w ->
         if w = value then None else Some (Explanation.weaken [ (1, Lit.eq y.s_name w) ]))
       mine
 
-let remove_expl t ~keep ~vals ~halls ~y ~value =
+let remove_expl ?alo t ~keep ~vals ~halls ~y ~value =
   Explanation.deferred (fun () ->
       Explanation.combine
-        (remove_summands t ~vals ~halls ~y ~value @ hall_cancels ~keep ~halls)
+        (remove_summands ?alo t ~vals ~halls ~y ~value @ hall_cancels ~keep ~halls)
         1)
 
 (* THE PIGEONHOLE over a value SET, which is the M4-T2 shape of the sentence this
@@ -1650,10 +1689,10 @@ let in_order_currency t y value expl =
    [facts] is the tight set's [hall_facts], shared by every removal under that set
    (D-0235); the caller hands over only a value still in [y]'s live domain, so every
    call reaches the store. *)
-let remove_one t store ~moved ~halls ~vals ~keep ~facts ~y ~y_tm value =
+let remove_one t store ~moved ~halls ~vals ~keep ~facts ~alo ~y ~y_tm value =
   let d = Store.get store y_tm.x in
   let concludes = removal_conclusion y d value in
-  let expl = remove_expl t ~keep ~vals ~halls ~y ~value in
+  let expl = remove_expl ~alo t ~keep ~vals ~halls ~y ~value in
   let j =
     Reason.because ~concludes
       (remove_reason_of y (Lazy.force facts))
@@ -1861,6 +1900,7 @@ let regin_scratch t store =
               in
               let keep = mem_of vals in
               let facts = lazy (hall_facts ~keep (Lazy.force halls)) in
+              let alo = alo_memo () in
               List.iter
                 (fun y ->
                   if not ink.(y) then
@@ -1872,7 +1912,7 @@ let regin_scratch t store =
                         then
                           if
                             remove_one t store ~moved ~halls:(Lazy.force halls) ~vals
-                              ~keep ~facts ~y:(snap y) ~y_tm:t.terms.(y) v
+                              ~keep ~facts ~alo ~y:(snap y) ~y_tm:t.terms.(y) v
                           then twins t y (fun j -> cache.(j) <- None))
                       vals)
                 (range 0 (n - 1))
