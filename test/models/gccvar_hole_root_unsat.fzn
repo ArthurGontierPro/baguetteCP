@@ -1,0 +1,14 @@
+% M18-coverage-T14 / D-0247: gcc rule C and rule (b) read HOLES. Before D-0247 a value removed
+% from the inside of a domain still counted as a possible taker, so a count upper bound never
+% came down for a hole. The hole clause is cited through the entry that punched it (here int_ne),
+% the push is derived ahead, and its reason names the remover facts.
+% UNSAT at the root: x and y lose 2 to int_ne, only z can take 2, and n >= 2.
+var 1..3: x :: output_var;
+var 1..3: y :: output_var;
+var 1..3: z :: output_var;
+var 1..3: n :: output_var;
+constraint int_ne(x,2);
+constraint int_ne(y,2);
+constraint fzn_global_cardinality([x,y,z],[2],[n]);
+constraint int_le(2,n);
+solve satisfy;

@@ -1,0 +1,17 @@
+% M18-coverage-T14 / D-0247: gcc rule C and rule (b) read HOLES. Before D-0247 a value removed
+% from the inside of a domain still counted as a possible taker, so a count upper bound never
+% came down for a hole. The hole clause is cited through the entry that punched it (here int_ne),
+% the push is derived ahead, and its reason names the remover facts.
+% OPT. Two cover values share one count; the branch w = 2 is bounded by holes under a decision.
+var 1..4: w :: output_var;
+var 1..4: x1 :: output_var;
+var 1..4: x2 :: output_var;
+var 1..4: x3 :: output_var;
+var 1..4: x4 :: output_var;
+var 0..4: n :: output_var;
+constraint int_ne(x1,w);
+constraint int_ne(x2,w);
+constraint int_ne(x3,w);
+constraint int_ne(x4,3);
+constraint fzn_global_cardinality([x1,x2,x3,x4],[2,3],[n,n]);
+solve :: int_search([w,x1,x2,x3,x4], input_order, indomain_median) maximize n;

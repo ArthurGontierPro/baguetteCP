@@ -10717,6 +10717,89 @@ let test_t11_gcc_conflicts () =
 
 let () = test_t11_gcc_conflicts ()
 
+(* ============================================ M18-coverage-T14: rule C reads holes
+
+   D-0247. Until M18-coverage-T14 rule C counted a value's possible takers by their WINDOW, so
+   a value removed from the inside of a domain still counted and a count's upper bound never
+   came down for a hole. The scene: [w] decided to 2 makes [int_ne] punch 2 out of [x] and [y]
+   (interior holes under a decision), and only [z] can still take 2, so [hi n] must fall from
+   3 to 1. That push is made AHEAD (its line is not RUP against the counting row alone: the
+   hole clause is binary) and its reason names the holes' REMOVERS' facts, [w]'s two bounds.
+   test/models/gccvar_hole_*.fzn carry the same shape through the CLI with the proof checked. *)
+
+let t14_src =
+  "var 1..3: w;\n\
+   var 1..3: x;\n\
+   var 1..3: y;\n\
+   var 1..3: z;\n\
+   var 0..3: n;\n\
+   constraint int_ne(x,w);\n\
+   constraint int_ne(y,w);\n\
+   constraint fzn_global_cardinality([x,y,z],[2],[n]);\n\
+   solve satisfy;\n"
+
+let test_t14_rule_c_holes () =
+  let title = "M18-coverage-T14 rule C over holes" in
+  let c = compile_src t14_src in
+  let store = c.Compile.store and engine = c.Compile.engine in
+  let path = Filename.temp_file "baguette_t14" ".pbp" in
+  let oc = open_out path in
+  Encoding.start_proof c.Compile.encoding (Writer.create oc);
+  check
+    (title ^ ": the root is a fixpoint")
+    (Engine.propagate engine store = Engine.Fixpoint);
+  let var s = Option.get (Store.var_named store s) in
+  let w = var "w" and x = var "x" and n = var "n" in
+  check
+    (title ^ ": no hole at the root, hi(n) stays 3")
+    (Domain.hi (Store.get store n) = 3);
+  Store.new_level store;
+  let decide f lit =
+    ignore
+      (f store w 2 (Reason.because ~concludes:None Reason.none (Explanation.decision lit))
+        : Store.outcome)
+  in
+  decide Store.set_lo (Lit.ge "w" 2);
+  decide Store.set_hi (Lit.le "w" 2);
+  check
+    (title ^ ": the decision propagates")
+    (Engine.propagate engine store = Engine.Fixpoint);
+  let dx = Store.get store x in
+  check
+    (title ^ ": int_ne punched an interior hole in x (the scene is what we think it is)")
+    (Domain.lo dx = 1 && Domain.hi dx = 3 && not (Domain.mem dx 2));
+  check
+    (Printf.sprintf "%s: hi(n) = 1, only z can take 2 (got %d; 3 before D-0247)" title
+       (Domain.hi (Store.get store n)))
+    (Domain.hi (Store.get store n) = 1);
+  let e = Store.trail_entry store (Store.hi_support store n) in
+  check (title ^ ": the push is gcc's") (Engine.name_of engine e.Store.prop = Gcc.name);
+  check
+    (title ^ ": the push is made under deriving_ahead (the hole clause is binary)")
+    e.Store.ahead;
+  let lits = Reason.lits e.Store.reason in
+  let shown = String.concat " " (List.map Lit.to_string lits) in
+  List.iter
+    (fun l ->
+      check
+        (Printf.sprintf "%s: the reason names the remover's fact %s (got %s)" title
+           (Lit.to_string l) shown)
+        (List.mem l lits))
+    [ Lit.ge "w" 2; Lit.le "w" 2 ];
+  check
+    (title ^ ": no fact is listed twice")
+    (List.length (List.sort_uniq compare (Reason.facts e.Store.reason))
+    = List.length (Reason.facts e.Store.reason));
+  check
+    (title ^ ": the reason and the justification agree (D-0026)")
+    (Store.agreement_holds store
+       (Reason.because ~concludes:None (Reason.facts e.Store.reason)
+          (Store.explanation store e)));
+  close_out oc;
+  try Sys.remove path with _ -> ()
+
+let () = test_t14_rule_c_holes ()
+
 (* ============================================ M18-coverage-ne: int_lin_ne conflicts learn
 
    D-0238. Until M18-coverage-ne an all-fixed int_lin_ne / int_ne violation was reported

@@ -1,0 +1,21 @@
+% M18-coverage-T14 / D-0247: gcc rule C and rule (b) read HOLES. Before D-0247 a value removed
+% from the inside of a domain still counted as a possible taker, so a count upper bound never
+% came down for a hole. The hole clause is cited through the entry that punched it (here int_ne),
+% the push is derived ahead, and its reason names the remover facts.
+% SAT. The decision w = 2 punches 2 out of x and y under a decision, so the hole push of n
+% carries the remover facts (w bounds), and the q pigeonhole fails deeper, so its line is written.
+var 1..3: w :: output_var;
+var 1..3: x :: output_var;
+var 1..3: y :: output_var;
+var 0..2: n :: output_var;
+var 1..3: q1 :: output_var;
+var 1..3: q2 :: output_var;
+var 1..3: q3 :: output_var;
+constraint int_ne(x,w);
+constraint int_ne(y,w);
+constraint fzn_global_cardinality([x,y],[2],[n]);
+constraint int_ne(q1,q2);
+constraint int_ne(q1,q3);
+constraint int_ne(q2,q3);
+constraint int_lin_le([1,1,1,-1],[q1,q2,q3,n],5);
+solve :: int_search([w,q1,q2,q3,x,y,n], input_order, indomain_median) satisfy;
