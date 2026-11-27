@@ -1,13 +1,26 @@
 #!/usr/bin/env python3
-"""M7-T26. Baguette's theoretical rank in a MiniZinc Challenge edition, offline.
+"""Baguette's theoretical rank in a MiniZinc Challenge edition, offline (M7-T26, the task that
+made the Challenge editions baguette's benchmark sets).
 
     challenge_rank.py <results.json> <YEAR.lst> [<out-dir> ...] [options]
 
 <results.json> is the edition's official per-instance results (the results page's data,
-~/mznc-archive/results/<YEAR>.json), <YEAR.lst> the instance list the run used
+results/<YEAR>.json in the Challenge archive, /scratch/arthur/mznc-archive on the node,
+~/mznc-archive on the laptop), <YEAR.lst> the instance list the run used
 (bench/challenge/<YEAR>.lst, whose `idx` column is the join key into results.json), and
 each <out-dir> a scripts/compare_run.sh output directory (results.tsv + flatten.tsv) of
 a run over that list. With no <out-dir> the script only validates the scoring.
+
+Options: --solver=S (whose rows to insert, default baguette), --as=NAME, --category=fd|free,
+--timeout=S, --trust-unverified, --demote-gcs (all four described below), --no-chuffed (skip
+the calibration of step 3), --all (print every entrant, not only the top 12 and the inserted
+ones' neighbours), --year=Y (the edition, when the list's file name does not start with it).
+
+Output on stdout: the scoring check, each inserted entrant's status counts and demotions, the
+category's ranking, the points by problem and the calibration. Exit 0 when every stored
+pairwise score and every official rank is reproduced; 1 when one is not, or when an
+<out-dir> has no row of the solver asked for; 2 with this text on stderr when <results.json>
+or <YEAR.lst> is not given.
 
 What it does, in order:
 
@@ -51,8 +64,9 @@ Our statuses -> the Challenge's (compare_run.sh's vocabulary, see its header):
   A baguette completeness claim (OPT, UNSAT) whose proof is not VERIFIED is DEMOTED
   (OPT -> S, UNSAT -> UNK) unless --trust-unverified; both counts are printed. Chuffed
   and GCS rows are taken as printed, except that --demote-gcs demotes a GCS completeness
-  claim on the same rule as baguette's (M17-bench-series-T4, D-0211: "verified answer for
-  verified answer"; rank GCS with --solver=gcs).
+  claim on the same rule as baguette's (M17-bench-series-T4, which added GCS with proofs as
+  the proof-logging reference, D-0211: "verified answer for verified answer"; rank GCS with
+  --solver=gcs).
 
 Python 3.8+, standard library only (imports compare.py from its own directory).
 """

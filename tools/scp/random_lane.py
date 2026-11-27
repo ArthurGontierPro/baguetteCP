@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""Random small .scp files against tools/e2e/scpsem.py (M23-inputs-T5, D-0228 section 14
-test 4, D-0230).
+"""Random small .scp files, baguette's .scp reader against tools/e2e/scpsem.py. This is test 4 of
+the plan in D-0228 section 14 (the record that made .scp baguette's second input), run for
+M23-inputs-T5, the milestone's acceptance; D-0230 records the reader and its lanes.
 
 Usage: python3 -I random_lane.py BAGUETTE OUTDIR [N] [SEED]
 
@@ -8,8 +9,9 @@ Writes N (default 300) random problems over 2 to 5 variables with domains of at 
 values, each with 1 to 3 constraints drawn from every family lib/scp/reader.ml reads, a
 third of them optimisation problems. Each is solved by BAGUETTE with a proof, the proof
 checked by veripb, and the answer judged by tools/scp/validate.py (the .scp's own
-semantics, enumerated). Prints one line per failure and the totals; exits 1 on any
-failure. The seed makes a run reproducible.
+semantics, enumerated). Prints one line per failure and the totals; exits 0 when there is
+none, 1 on any failure (a missing argument also stops with status 1, on a Python exception).
+The seed (default 2026) makes a run reproducible.
 """
 import os
 import random

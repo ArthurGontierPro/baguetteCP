@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# One model through the end-to-end chain of D-0174/D-0176 (M14-e2e-verification-T2):
+# One model through the end-to-end chain: baguette's proof, checked by CakeML's verified
+# cake_pb_cp against cake's own encoding of the model (the chain chosen by D-0174, run over the
+# test models as the lane of D-0176; written for M14-e2e-verification-T2):
 #
 #   fzn2scp.py  M.fzn            -> M.scp, M.names   (the translator: TRUSTED, small)
 #   cake_pb_cp  M.scp            -> M.cake.opb       (the verified encoder)
@@ -51,6 +53,7 @@
 #     sel-witness     the first disequality selector definition `@D1[...]` gets the witness
 #                     `s -> ~F` in place of `s -> F` (tools/e2e/mutate.py sel): a wrong
 #                     definition of the auxiliary the solver introduces, refused at that red
+#                     line
 # bridge-witness, scp-*, opt-* and core-* apply to it unchanged (on the solver's own .pbp).
 # T6 (D-0195) adds two, on either path's proof (the bridged one or the solver's):
 #     flag-witness    the first regular state flag past layer 0, `@D1[s]`, defined with the
@@ -67,10 +70,16 @@
 # `maximize`; cake prints a negative number as `~6`), or, when baguette says UNSAT, on
 # `s VERIFIED BOUNDS -INF <= OBJ <= +INF`. That print is cake's OBounds NONE NONE, and under
 # cpScript.sml's cp_sem_concl the side that is NONE for the problem's direction (cp_is_lb
-# for minimize, cp_is_ub for maximize) means cp_unsatisfiable. The verdict is read from cake_pb_cp's `s VERIFIED` line, never from
-# its exit status: it exits 0 when it refuses (D-0174 section 6).
+# for minimize, cp_is_ub for maximize) means cp_unsatisfiable. The verdict is read from
+# cake_pb_cp's `s VERIFIED` line, never from its exit status: it exits 0 when it refuses
+# (D-0174 section 6).
 #
-# Env: CAKE_PB_CP (required), BAGUETTE, VERIPB (else scripts/checker.sh), E2E_TIMEOUT (s).
+# Exit 0 whenever that line is printed, whatever the verdict; 1 when no checker is found (the
+# line then reads `MODEL FAIL no checker`), or when OUTDIR, MODEL.fzn or CAKE_PB_CP is missing.
+# Every artefact goes to OUTDIR/MODEL[.MUTATION].* (the script's PID in its .pid while it runs).
+#
+# Env: CAKE_PB_CP (required), BAGUETTE (default _build/default/bin/main.exe, which this script
+# does NOT build), VERIPB (else scripts/checker.sh), E2E_TIMEOUT (s, default 300).
 set -u
 HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/../.." && pwd)

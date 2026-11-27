@@ -1,14 +1,21 @@
 #!/usr/bin/env python3
-"""FlatZinc -> .scp, the input of CakeML's verified CP encoder `cake_pb_cp` (M14-e2e-verification-T2).
+"""FlatZinc -> .scp, the input of CakeML's verified CP encoder `cake_pb_cp`. Written for
+M14-e2e-verification-T2, the first end-to-end lane.
 
 Usage: python3 -I fzn2scp.py MODEL.fzn OUT.scp OUT.names
 
-This translator is TRUSTED: the verified chain of D-0174 starts at the .scp, so a wrong
-translation here verifies (GCS's issue #987 was exactly that). It is therefore kept small,
+Exit 0 with OUT.scp and OUT.names written (and OUT.names.flags when the model has regular state
+flags, below); 2 when the model is refused, with the `UNCOVERED:` line below on stderr and no
+file written; 64 with a usage line on stderr when there are not three arguments.
+
+This translator is TRUSTED: the verified chain of D-0174 (cake_pb_cp encodes the .scp, and
+baguette re-derives its own .opb from cake's at the head of its proof) starts at the .scp, so a
+wrong translation here verifies (GCS's issue #987 was exactly that). It is therefore kept small,
 and it shares NOTHING with baguette's front end (lib/flatzinc/): its own scanner, its own
 parser, its own reading of each builtin (D-0174 section 5). A parsing bug common to both
 would otherwise be invisible. Its validation is `tools/e2e/scpsem.py` against Gecode's
-FlatZinc interpreter, in the lane (D-0176).
+FlatZinc interpreter, in the end-to-end lane (D-0176, which certifies the test models
+through cake_pb_cp and checks this translator separately).
 
 Covered, and nothing else (anything else is refused, exit 2, with one line on stderr that
 starts `UNCOVERED:` and names the first construct it cannot translate):
@@ -100,7 +107,8 @@ starts `UNCOVERED:` and names the first construct it cannot translate):
   domains with holes (bounds plus `(dN in (v1 ...) x)`), annotations (ignored: they do not
   change the solutions), `solve satisfy` (with or without a search annotation).
 
-  `solve minimize x` / `solve maximize x` (T8, D-0182)  (prob_type (minimize X)), (maximize X)
+  `solve minimize x` / `solve maximize x` (M14-e2e-verification-T8, D-0182: objectives in the
+                                 end-to-end chain)   (prob_type (minimize X)), (maximize X)
                                  x resolved through aliases to the .scp variable it names;
                                  cake's Minimize/Maximize in cpScript.sml's cp_sem_concl. An
                                  objective that resolves to a constant is refused (cake's

@@ -7,13 +7,20 @@ CAKE.opb is what the verified encoder wrote for MODEL.scp; NAMES is the translat
 `SCP_NAME FLATZINC_NAME` table (tools/e2e/fzn2scp.py); BAGUETTE.opb/.pbp is baguette's own
 run on MODEL.fzn, order arm. The output is a proof over CAKE.opb: a prefix that derives every
 row of BAGUETTE.opb under its own label, then baguette's proof unchanged but for its `f N`.
+An optional NAMES.flags beside NAMES (written by the translator for regular) names cake's flag
+for each of baguette's state flags. Exit 0 with the bridged proof on stdout; 64 with the usage
+line on stderr when there are not four arguments; 1 with a `bridge: ...` message on stderr when
+an input has a shape the bridge does not handle (a row it cannot read, a variable missing from
+NAMES, an objective on one side only).
 
 This script is UNTRUSTED. If it writes a wrong line, the checker refuses it; nothing it does
 can make a wrong answer verify, because the proof is checked against CAKE.opb, which the
 verified encoder wrote. Its only obligation is to be complete on the covered families.
 
-The prefix (D-0174 section 4), per integer X over [l, u], B = cake's bit sum of X, x_ge_v
-baguette's order atoms (PROOF-FORMAT section 3), S = sum_{l<v<=u} x_ge_v:
+The prefix (D-0174 section 4: the record that chose cake_pb_cp as the verified encoder and
+this re-derivation, at the head of baguette's proof, as the way to reach it), per integer X
+over [l, u], B = cake's bit sum of X, x_ge_v baguette's order atoms (PROOF-FORMAT section 3),
+S = sum_{l<v<=u} x_ge_v:
 
   atoms   @A1  red  B + M ~x_ge_v >= v      : x_ge_v -> 0     (x_ge_v -> B >= v)
           @A2  red -B + K x_ge_v  >= 1 - v  : x_ge_v -> 1     (B >= v -> x_ge_v)

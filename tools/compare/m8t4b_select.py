@@ -1,13 +1,19 @@
 #!/usr/bin/env python3
-"""M8-bits-encoding-T4 continuation (D-0199): choose the TARGETED instance set of the middle-W check
-from D-0175's two arms (/scratch/arthur/m8t4/{none,w0}/<Y>/results.tsv).
+"""Choose the TARGETED instance set of the middle-W check of the bits encoding, from the two arms
+of D-0175 (the sixteen editions with W = none, order encoding only, and W = 0, every eligible
+variable on bits; /scratch/arthur/m8t4/{none,w0}/<Y>/results.tsv). A one-off of the continuation of
+M8-bits-encoding-T4 (the measurement that chose the default W), recorded as D-0199;
+m8t4b_analyze.py reads the runs made on this set.
 
   (1) every instance that `none` wins over `w0` (complete VERIFIED, or an incumbent `w0` lacks),
       and every instance of the families they belong to, in the sixteen editions;
   (2) a random sample (seed 199) of 40 instances that `w0` wins over `none` (same two criteria),
       drawn outside the families of (1).
 
-FLATTEN-FAIL rows are left out (no .fzn to solve). Prints `<year>\t<id>\t<group>\t<family>` lines.
+FLATTEN-FAIL rows are left out (no .fzn to solve). Prints `<year>\t<id>\t<group>\t<family>` lines
+on stdout (the selection.tsv m8t4b_analyze.py reads), the group being order-win, order-family or
+w0-win, and one `#` summary line on stderr. <repo> supplies bench/challenge/<Y>.lst for the
+families. Exit 0; a missing results.tsv or list stops on a Python exception (status 1).
 Usage: python3 -I m8t4b_select.py [<d0175 root>=/scratch/arthur/m8t4] [<repo>=.]"""
 import os, random, sys
 

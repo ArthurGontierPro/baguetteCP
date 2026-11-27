@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""Differential fuzz: baguette against Gecode, both through MiniZinc (M22-review, the
-harness of docs/reports/2026-11-23-code-review.md section 1.3, as it ran).
+"""Differential fuzz: baguette against Gecode, both through MiniZinc, on small random models.
+This is the harness of docs/reports/2026-11-23-code-review.md section 1.3, as it ran (milestone
+M22-review, the fixes that code review found).
 
 Usage: fuzz.py OUTDIR SEED N [baguette flags...]
   FUZZ_BIN   the binary under test (default: _build/default/bin/main.exe of this clone)
@@ -8,7 +9,11 @@ Usage: fuzz.py OUTDIR SEED N [baguette flags...]
 
 Each model is small (domains within -4..4). For each: Gecode's answer, baguette's answer,
 VeriPB on baguette's proof, and Gecode re-checking baguette's solution. Every disagreement
-is kept in OUTDIR/bad/ with the model, the proof and both outputs. fuzz2.py is the
+is kept in OUTDIR/bad/<seed>_<i>_<verdict>/ with the model, the proof and both outputs
+(note.txt); a refusal's reason is appended to OUTDIR/refusals.txt; the solver configuration
+MiniZinc runs baguette through is written to OUTDIR/fuzz.msc. The stream ends by printing one
+line, the seed and the tally of verdicts. The exit status is 0 whatever was found (read
+OUTDIR/bad/); a missing argument stops it on a Python exception (status 1). fuzz2.py is the
 search-heavy stream (3-SAT near the threshold, small integer optimisation).
 
 RUN IT ON A NODE, NEVER ON THE LAPTOP (scripts/README.md section 1). Each run is under
