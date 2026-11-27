@@ -1302,7 +1302,7 @@ def main(cake_opb, names_file, bag_opb, bag_pbp):
         lab = m.group(1).strip()
         half, k = obj_fix
         w(f"@O[{lab[1:]}] soli{m.group(2)}\n")
-        w(f"{lab} pol @O[{lab[1:]}] {half} {k} * + ;\n")
+        w(f"{lab} pol @O[{lab[1:]}] {half} {k} * + ;\n" if k else f"{lab} pol @O[{lab[1:]}] ;\n")
 
 
 def objective(cake_opb, bag_lines, ivars, owner):
@@ -1324,6 +1324,10 @@ def objective(cake_opb, bag_lines, ivars, owner):
     if cobj is None or bobj is None:
         raise SystemExit("bridge: an objective on one side only")
     (ct, cc), (bt, bc) = cobj, bobj
+    if not ct and not bt and cc == 0 and bc == 0:
+        # D-0262: an objective over a FIXED variable (`var 0..0`), empty on both sides; every
+        # `soli`'s improving constraint is then the same row on both, carried over unchanged
+        return ("", 0)
     Xs = {owner.get(b) for b in ct}
     if len(Xs) != 1 or None in Xs or cc != 0:
         raise SystemExit("bridge: cake's objective is not one variable's bit sum")
