@@ -19,6 +19,7 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
+| M18-coverage-T14 (D-0247) | `lib/core/prop/gcc.ml` (rule C only), gcc entries of `lib/flatzinc/compile.ml` and `lib/flatzinc/builder.ml`, `mznlib/fzn_global_cardinality*.mzn`, gcc sections of `test/unit/*`, new `test/models/gccvar_*` | agent-gccvar (`wave93-gccvar`) | 2026-11-27 |
 
 ## Cross-session requests
 
