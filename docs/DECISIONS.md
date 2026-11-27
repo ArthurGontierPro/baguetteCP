@@ -32092,3 +32092,183 @@ No new builtin, so no new sentence of semantics. The user's to confirm outside a
   rows) was not run; the timed arms and one mqueens probe are the measurement.
 - The census tool reads names: with these files it counts `lex_lesseq` and `lex_less` native, and still counts
   `increasing`, `decreasing` and their strict forms decomposed although std writes them as `int_lin_le`. Left as is.
+
+## D-0242  [AUTONOME] M20-pernode-T4 on all_different, second pass: a stage 1 pass that would move nothing is answered by counting, and the derivations a tight set justifies share its lines. Same trees, byte-identical artefacts; elitserien handball12 -7.7 % instructions per node without proof, -7.6 % with; tppv circ14 -14 % / -9 %, costas13 -13 % / -12 %
+
+**Status**: DONE on `wave88-hall` (agent-hall, 2026-11-27), not merged. Base: main `05f3477` (the code of
+`32c7ce9`), release binary `fe77561d`. Branch tip after merging main `370fba3` (D-0239, mznlib and test models
+only): release `ef11db7f`, dev `b52a0cd6`. Node fataepyc-06 at load 17 to 56 (other sessions' runs). Runs, profiles,
+scripts and the sample `.fzn`: `/cluster/arthur/baguette-results/hall/`. Touches `lib/core/prop/alldiff.ml`,
+`test/unit/test_prop.ml` (lane (h)) and `test/unit/test_endtoend.ml` (the D-0242 scene), nothing else on the
+solver side.
+
+### 1. Method
+
+D-0235's, unchanged: `perf stat -e instructions:u` at a fixed node budget (`BAGUETTE_NODE_LIMIT`), per node =
+(I(N) - I(1)) / N with the 1-node run of the base binary; `perf record --call-graph fp -F 2999` on the
+`baguette-fp` switch for the shares (`-m 16`: with the default mmap size, parallel `perf record`s on this node
+fail with "Permission error mapping pages" and write an empty file). Samples: D-0235's elitserien handball12
+and handball9, tppv circ8bbal and circ14cnonbal, costas13, and D-0207's qr2 as a control without an
+all_different. Every step was checked at the budget, with and without `--proof`: md5 of `.opb`, `.pbp` and
+stdout, and the nodes/conflicts/learned counters, equal to the base binary's on all six.
+
+### 2. Where alldiff's instructions went after D-0235 (base, no proof)
+
+Inclusive shares of CPU samples (`perf record`, so cycles, not instructions), at 1 000 nodes (handball12,
+tppv circ14) and 3 000 (tppv circ8, costas13; costas completes in 1 504):
+
+| instance | alldiff | stage 1 (`pass`) | of which `pass_scan` | Regin scratch | Regin gate | learning |
+|---|---|---|---|---|---|---|
+| elitserien handball12 | 19.5 % | 6.8 % | 5.9 % | 8.1 % | 4.4 % | 30.2 % |
+| tppv circ14cnonbal | 20.2 % | 10.9 % | 10.0 % | 6.3 % | 2.7 % | 6.8 % |
+| tppv circ8bbal | 16.4 % | 11.3 % | 10.3 % | 3.0 % | 1.8 % | 23.6 % |
+| costas13 | 34.9 % | 15.3 % | 13.8 % | 14.4 % | 4.5 % | 22.1 % |
+
+Counted with a throwaway build at the same budgets: on handball12 42 079 stage 1 passes ran a scan (14 083
+more were skipped on D-0235's quiet vector), and 40 408 of those scans moved nothing; on costas13 27 863 of
+32 295, on tppv circ14 18 652 of 21 687, on circ8 50 785 of 71 980. A quiet scan still paid what a moving one
+does before its first interval: two sorted lists of the bounds, a stable sort of the terms by upper bound,
+six arrays, and the walk over every candidate interval through closures. The quiet vector rarely matches
+because a call usually follows a bound move: about three terms of the scope had other bounds than the last
+quiet vector at each scan. In the Regin scratch pass, the n reachability searches cost little; what a pass
+paid beyond its removals was the sorted value list, a value list, a membership table and the removal loop for
+every tight set, including the many (a fixed variable's singleton set, mostly) that no other term meets.
+With the proof, elitserien's derivations dominate (`Trace.emit_to_page` 68 % of the samples), and 18 % of
+them was building the Regin removals' derivations, every removal rebuilding its set's at-least-one lines.
+
+### 3. The fixes, each measured (instructions per node; artefacts identical at each step)
+
+All in `lib/core/prop/alldiff.ml`. Budgets: handball12 300 nodes, tppv circ14 500, circ8 2 000, costas13 to
+completion (1 503); qr2 2 000 stayed at 0.80 / 1.63 M throughout.
+
+| step (commit) | rule | h12 np / p | tppv14 np / p | tppv8 np / p | costas13 np / p |
+|---|---|---|---|---|---|
+| base | | 12.63 / 63.54 M | 8.00 / 21.44 M | 4.88 / 14.80 M | 3.34 / 10.20 M |
+| 1 `fec0985` | `hall_free`: whether a scan would move nothing, by counting over two term permutations kept sorted across calls (`sort_by`, insertion); `pass` skips the scan then | 11.74 / 62.85 | 7.15 / 20.62 | 4.57 / 14.50 | 3.05 / 9.89 |
+| 2 `74782b6` | Regin scratch: a tight set no outside term meets (a count) skips its removal loop and everything built for it; the scope's values marked rather than sorted from lists; `sort_by`'s key typed `int` (its comparison was polymorphic) | 11.53 / 62.65 | 6.86 / 20.26 | 4.48 / 14.42 | 2.92 / 9.77 |
+| 3 `d994b47` | `pass_scan` enumerates its intervals over the kept permutations, not over sorted lists of the bounds | 11.52 / 62.67 | 6.81 / 20.26 | 4.44 / 14.36 | 2.90 / 9.79 |
+| 4 `3ab3e34` | a Regin set's removals share its at-least-one lines (`alo_lines`) | 11.53 / 59.09 | 6.81 / 19.94 | 4.45 / 14.34 | 2.90 / 9.17 |
+| 5 `41861a6` | the removals from one y under one set share its at-most-one lines; WITHDRAWN by `0b216c7`, see below | (11.53 / 58.42) | (6.81 / 19.95) | (4.43 / 14.30) | (2.91 / 9.13) |
+| 6 `6217a67` | the stage 1 pushes from one tight interval share its Hall set's at-least-one lines | 11.53 / 58.38 | 6.83 / 19.55 | 4.45 / 14.33 | 2.91 / 9.01 |
+| final `ef11db7f` | 1 to 4 and 6 | 11.52 / 59.05 | 6.81 / 19.55 | 4.45 / 14.33 | 2.90 / 8.93 |
+| total | | -8.8 / -7.1 % | -14.9 / -8.8 % | -8.8 / -3.2 % | -13.2 / -12.5 % |
+
+At larger budgets, base `fe77561d` against final `ef11db7f`: handball12 3 000 nodes without proof 12.85 -> 11.86 M
+per node (-7.7 %), 1 500 nodes with proof 67.86 -> 62.71 M (-7.6 %); tppv circ14 20 000 nodes without proof
+7.06 -> 6.09 M (-13.7 %); the same stdout, `.opb`, `.pbp` and counters. Cycles (`cycles:u`, the two binaries
+run back to back): tppv circ14 at 20 000 nodes without proof 86.4 -> 72.5 G (-16 %), handball12 at 3 000 nodes
+without proof 21.2 -> 20.1 G (-5.5 %, instructions -7.1 % whole run), tppv circ8 at 3 000 nodes with proof
+28.60 -> 28.46 G (-0.5 %, instructions -3.4 %, `.pbp` md5 `2ed8b2c1` both).
+
+**Why each is sound.** The module header's new paragraph "THE COST PER CALL, SECOND PASS" and the comment at
+each site. In short:
+
+- A stage 1 scan acts on a candidate interval [a, b] with n contained terms of k values exactly when n > k
+  (it pushes a contained term out, which empties it) or n = k and a term not contained has a bound in [a, b]
+  (it pushes that bound past the interval, which always changes it). With no push the live bounds are the
+  pass-start ones, so a scan moves nothing iff no candidate interval is either. The second case is a count:
+  contained terms have both bounds in [a, b], so "an outside term has a lower bound in [a, b]" is "more than k
+  lower bounds lie in [a, b]", and the same for the upper bounds. A variable repeated in the scope has one
+  bound pair for all its terms, so they are contained together, and the scan's name test skips exactly the
+  contained terms. When the count says a scan would act, the scan runs unchanged, so every push, its order
+  and its proof are the ones it made. BAGUETTE_DEBUG runs the scan behind every skip; test_prop's lane (h)
+  checks both directions on 3 000 random bound vectors (1 384 Hall-free, 1 616 not), and fails with 182
+  disagreements, and lane (g) with 75 scenes, when the upper-bound count is dropped.
+- The kept permutations are re-sorted from the live bounds at every pass, and an insertion sort of any
+  permutation is sorted, so they need no trail. Ties keep no order and none is read: the walk reads counts,
+  the scan's containment marks are a set and its pushes go in `t.terms` order.
+- A tight Regin set's members hold only its values (every value they hold is matched, to a member, by the
+  closure), so the outside terms hold sum(holders over its values) - sum(held over its members) of them,
+  over the pass's `doms`. At 0 the removal loop, which tests `doms.(y)` first, calls nothing. BAGUETTE_DEBUG
+  checks the count against the pairs.
+- The at-least-one lines of a tight set (or interval) are built from the same snapshots and the same value
+  set for each of its derivations. A memo hands back what the first forced derivation built when building
+  it again would return those very nodes, D-0216's rule, checked by `Explanation.rebuilds_to` once a node has
+  left the table (their operands are model rows, the `excl` chains, whose own operands are model rows, and
+  hole clauses, so the shallow check is the whole induction). Otherwise, and always with
+  hash-consing or `amo_reuse` off, they are built. The same nodes, so the same bytes: test_endtoend's D-0242
+  scene (a Hall set over the value set {1, 3, 5}, nine Regin removals, the root refuted by a sum) compares
+  the proof with the memo on and off (8 hits, 0) and veripb accepts it.
+
+**Withdrawn, measured: the at-most-one memo (step 5).** The removals from one y under one set sum the same
+at-most-one lines (they depend on the variables and declared ranges only), and `41861a6` kept them while
+`Explanation.reuse_epoch` was unchanged since a build during which no node left the table, since an m-deep
+chain is beyond `rebuilds_to`'s shallow check. Every normal run kept main's bytes (the 259 test models in
+both encodings, the differential lane 347 of 347), but the `--debug` lane did not: 2018 soccer-computational
+xIGData_24_16_14_2 [activity] under BAGUETTE_DEBUG (which forces every pruning's derivation at the push and
+re-forces it at release) wrote 167 570 `pol` lines against main's 207 004, the same search and stdout. With
+only that memo off the run is main's bytes (md5 `05627651`), so "no node left the table" does not establish
+what a rebuild returns, and the record does not rest on it. It bought 1.1 % on handball12 with proof (48
+hits in 5 344 at 300 nodes) and 0.4 % on costas13 (7 780 in 11 783). Reverted in `0b216c7`; the test of
+`3ab3e34` covers the at-least-one memo alone again.
+
+**Withdrawn, measured.** The Regin scratch pass's reachability through an adjacency matrix read once per
+pass, in place of `holds` per edge in each of the n searches: same bytes, -0.4 % on handball12 and +0.4 % on
+tppv circ8. The searches were not the cost. Not kept.
+
+**Nothing changes the push order**, so there is no option outside the branch to describe: every fix above
+is a skip or a share whose outcome equals the eager code's, and the incremental scan of the task's title came
+out as the counting test, because a scan that would push is the minority (1 671 of 42 079 on handball12) and
+runs unchanged.
+
+### 4. What is left (branch binary `17e9334d`, whose no-proof path is the final's, inclusive shares of samples)
+
+| instance | alldiff | stage 1 / Regin scratch / gate | learning | engine wakes | attribution checks | `Store.var_named` |
+|---|---|---|---|---|---|---|
+| elitserien handball12 | 12.7 % | 1.6 / 6.4 / 4.4 % | 31.9 % | 6.1 % | 3.0 % | 5.1 % |
+| tppv circ14cnonbal | 9.8 % | 3.2 / 3.4 / 2.8 % | 7.6 % | 8.3 % | 2.1 % | 0.5 % |
+| tppv circ8bbal | 9.9 % | 4.9 / 2.4 / 2.1 % | 25.9 % | 7.6 % | 2.8 % | 2.7 % |
+| costas13 | 24.1 % | 6.3 / 12.6 / 4.3 % | 27.5 % | 9.7 % | 1.8 % | 2.3 % |
+
+Inside alldiff: the Regin scratch pass is now its removals' own work (the snapshots of the pruned terms, the
+reasons' facts, `Store.remove`), and the gate is a Tarjan pass over every edge per call (`visit`, 3.6 % of
+handball12), at its algorithmic floor unless the strongly connected components are kept across calls, which
+is the next item inside the module. With the proof, building the derivations stays the largest cost
+(handball12's at-most-one steps that add the pruned y, 9.5 % of the samples): every removal sums one
+at-most-one line per value over its set plus y, and its m pairs with y are new nodes each time. Sharing them
+between the removals from one y needs a validity check that covers the chain (section 3, withdrawn).
+
+Outside it, measured and filed as a cross-session request (WORKLOG): `Engine.watchers_of_new_entries` 6 to
+10 %, the two attribution checks (`Engine.check_attribution`, `Analysis.check_attribution`) 2 to 3 % on every
+sample including qr2, and learning's by-name lookup (`Store.var_named` under `Analysis.locate`, D-0236's
+request) 5.1 % of handball12.
+
+### 5. Throughput (300 s, wall-clock rates)
+
+Base `fe77561d` and branch `17e9334d` (step 5 included; its code is on the proof path only), each pair run
+side by side, 8 runs at a time, load 56 to 64 from other sessions, so the rates are wall-clock under load:
+
+| instance | no proof, base -> branch | with proof, base -> branch |
+|---|---|---|
+| elitserien handball12 | OPT both, 18 277 nodes, 83.2 s -> 75.9 s (220 -> 241 nodes/s) | 13 369 -> 17 155 nodes (44 -> 57 /s) |
+| elitserien handball9 | 39 583 -> 48 480 nodes (131 -> 161 /s) | 14 657 -> 15 527 (48 -> 51 /s) |
+| tppv circ8bbal | 166 278 -> 198 394 (553 -> 660 /s) | 64 010 -> 51 655 (213 -> 172 /s) |
+| tppv circ14cnonbal | 157 897 -> 138 633 (526 -> 461 /s) | 57 050 -> 56 484 (190 -> 188 /s) |
+| costas13 | SAT in 1 504 nodes, 1.18 -> 0.99 s | 3.74 -> 3.17 s |
+
+The two rows that go the wrong way (circ8 with proof, circ14 without) are the load: on the same instances
+run back to back the cycles fall (section 3, -0.5 % and -16 %) as the instructions do. Against Chuffed on
+handball12 (D-0232: 7 207 nodes in 1.7 s, 4 160 nodes/s) baguette without proof is 241 nodes/s at this load,
+a factor 17 per node (D-0235 said 15 at 271 nodes/s under a lighter load); its tree is 18 277 nodes, 2.5 times
+Chuffed's, so 45 times on the time to OPT.
+
+### 6. Checks
+
+Final binaries release `ef11db7f`, dev `b52a0cd6` (branch merged with main `370fba3`), against main's release
+`fe77561d`. The 259 test models with `--proof`: `.opb`, `.pbp`, stdout and exit code identical, in the default
+encoding and under `--bits-above none` (518 pairs). Differential lane `--tier all`: 347 of 347 equal; `--debug`:
+333 of 333 equal (`BAGUETTE_MEM_CAP_KB=33554432`). Scaling lane: ok, every line within its threshold (dev build, `-j 4`). `scripts/check_fmt.sh` clean,
+`check_test_widths.py` no wide domain, `dune runtest --root . --force` 5 489 ok, 0 FAIL (peak RSS 155 MB), `run_model_tests.sh`
+259 passed with proofs VERIFIED, `check_determinism.sh` 259 models identical across two runs. The first `--debug` lane, on `17e9334d`, was 332 of 333:
+the run that found step 5 (section 3).
+
+**Clarity cost.** `t` gained four arrays (`lo0`, `hi0`, `by_lo`, `by_hi`); `hall_free` (40 lines) is a second
+statement of the scan's acting condition, which lane (h) holds to the scan in both directions; one memo
+(`alo_lines`) threaded as an optional argument through `core_summands`, `prune_*` and `remove_*`; the Regin
+pass gained the holder counts and the outsider test. About 200 lines, a third of them comments. `pass_scan` lost its list-building and its two folds.
+
+### 7. Decision and revert
+
+[AUTONOME] Kept: no search, proof or answer changes, so no default behaviour changes. Revert: `git revert` of
+`fec0985`, `74782b6`, `d994b47`, `3ab3e34`, `6217a67`, the header commit `a93c84c` and the test commit
+`0f9240e` (`41861a6` is already undone by `0b216c7`; the e2e scene goes with `3ab3e34`).
