@@ -19,7 +19,7 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M22-review-T4 documentation pass (D-0253) | comments only in `lib/`, `bin/`, `scripts/`, `tools/` (not gcc.ml, compile.ml, builder.ml, mznlib/, search.ml, probe.ml, bin/main.ml, lib/core/dune, test_search_strategy.ml); README.md and the other READMEs; CLAUDE.md; docs/ARCHITECTURE.md, GLOSSARY.md, INVARIANTS.md, PROOF-FORMAT.md, SPEC.md non-normative text; docs/REFERENCES.md (new) | agent-docs, wave98-docs | 2026-11-27 |
+| M22-review-T4, the documentation pass (D-0253) | agent-docs (`wave98-docs`, not merged) | 2026-11-27 | **D-0253 [AUTONOME].** Comments and documents only: entry documents (README, CLAUDE.md, ARCHITECTURE 1/3/4, GLOSSARY, INVARIANTS I-X10, PROOF-FORMAT section 4 rows, scripts/README), twelve script headers, the newcomer files and every propagator but gcc.ml rewritten, `docs/REFERENCES.md` new. Checks on the worktree before the merge of D-0247 (binary built from the branch): check_fmt clean, width lint clean, dune runtest --force 5 590 ok 0 FAIL (peak RSS 174 MB), run_model_tests 259/259, check_determinism ok, diff_lane --tier all -j 8 347/347 equal; after the merge the parsed source of all 36 touched .ml files is identical to origin/main (ocamlc -dsource). |
 
 ## Cross-session requests
 
@@ -722,6 +722,12 @@ section 1. Shares are inclusive, of the whole run.
 | M18-coverage-T5 (the ordering globals) | agent-lex (`wave85-lex`) | 2026-11-27 | **D-0239 [AUTONOME].** mznlib only: `lex_lesseq`/`lex_less`, int and Bool, as four linear rows per position over std's chain flag; 26 -> 27 complete of 92 with proof, nodes/s x1.02 to 1.04; precedence globals keep std's (T13 added); `increasing` already native. |
 | M18-coverage-T14 (gcc with variable counts) | agent-gccvar (`wave93-gccvar`) | 2026-11-27 | **D-0247 [AUTONOME].** mznlib only in the kept route: a `global_cardinality` whose counts are not all fixed goes to std's count decomposition (`4c5df61`), constant counts and the closed form stay native; +3 verified complete with proof over the 40 Challenge instances it reaches, none lost. Route (a), rule C over holes, built, verified and dropped (`d94f08f`, reverted `fa32d4b`). Not merged |
 ## Handoff notes
+
+### 2026-11-27 (agent-docs, `wave98-docs`, D-0253): the documentation pass, comments and documents only, not merged
+
+Files done: README.md, CLAUDE.md, docs/ARCHITECTURE.md (sections 1, 3, 4), GLOSSARY.md, INVARIANTS.md (I-X10), SPEC.md section 6, PROOF-FORMAT.md section 4, scripts/README.md, bench/README.md, docs/REFERENCES.md (new, generated once, one line per reference the code cites); twelve headers in scripts/; comments of propagator.ml, linear.ml, explanation.ml (header reordered by concept), reason.ml, store.ml, domain.ml, engine.ml, justify.ml, encoding.ml, writer.ml and every propagator but gcc.ml; retention.ml's header says the default is tiered. Every `.ml` change was checked with `ocamlc -dsource` (parsed code identical to origin/main). Checks on the worktree before the merge of D-0247 (binary built from the branch): check_fmt clean, width lint clean, dune runtest --force 5 590 ok 0 FAIL (peak RSS 174 MB), run_model_tests 259/259, check_determinism ok, diff_lane --tier all -j 8 347/347 equal; after the merge the parsed source of all 36 touched .ml files is identical to origin/main (ocamlc -dsource).
+
+Left for a second pass: gcc.ml, compile.ml, builder.ml, mznlib/, search.ml, bin/main.ml (held by agent-gccvar and agent-probe during the pass); the learning modules (analysis, learn, learned, pb_analysis, reduce, ladder, trace), view.ml, lib/flatzinc/ and lib/scp/ beyond their headers, tools/ beyond dead paths; the bodies of maxmin, arith, cumulative, regular, table, circuit, inverse and member past their headers had their references fixed, not a full rewrite. Findings for the user (D-0253 section 2): scripts/shrink.sh relies on a --disable-propagator flag the solver never had; PROOF-FORMAT section 3 (normative) says no derivation cites a ladder id, which ladder.ml, cumulative.ml and search.ml now do; is_direct_row, Justify.lit_hash, Writer.solx and Writer.obju have no caller.
 
 ### 2026-11-27 (agent-latent, `wave94-latent`, D-0248): M22-review-T3 and T5, not merged
 
