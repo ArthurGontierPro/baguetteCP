@@ -2661,6 +2661,84 @@ let test_d0242_alo_reuse () =
     (Array.to_list (Sys.readdir dir));
   Sys.rmdir dir
 
+(* M22-review-T5 (D-0248): a proof that cannot be written. The proof's directory does not
+   exist, or the .pbp or the .opb is /dev/full (a symlink to it, since the CLI appends the
+   suffixes). Each run must end with exit 6 and ONE line on stderr naming the failure and
+   saying the proof is incomplete, print no verdict on stdout, and not die on the
+   runtime's `Fatal error: exception Sys_error`, which is what it did before (exit 2,
+   usage's status). *)
+let m22t5_model =
+  "var 1..3: x :: output_var;\n\
+   var 1..3: y :: output_var;\n\
+   constraint int_lin_le([1, 1], [x, y], 3);\n\
+   solve satisfy;\n"
+
+let test_m22t5_write_failure_cli () =
+  match m9_binary () with
+  | None ->
+      incr failures;
+      print_endline
+        "FAIL M22-review-T5: bin/main.exe was not found above the test's cwd, so the \
+         write-failure lane was NOT run. Build bin/ first (`dune build bin/`)."
+  | Some binary ->
+      let binary =
+        if Filename.is_relative binary then Filename.concat (Sys.getcwd ()) binary
+        else binary
+      in
+      let dir = Filename.temp_file "baguette_m22t5" "" in
+      Sys.remove dir;
+      Sys.mkdir dir 0o700;
+      let fzn = Filename.concat dir "m.fzn" in
+      let oc = open_out fzn in
+      output_string oc m22t5_model;
+      close_out oc;
+      let starts_with ~prefix str =
+        String.length str >= String.length prefix
+        && String.sub str 0 (String.length prefix) = prefix
+      in
+      let contains str ~needle =
+        let n = String.length needle and l = String.length str in
+        let rec go i = i + n <= l && (String.sub str i n = needle || go (i + 1)) in
+        go 0
+      in
+      let case name prefix =
+        let rc, o, e =
+          m9_run binary ~cwd:dir
+            (Printf.sprintf "%s --proof %s" (Filename.quote fzn) prefix)
+        in
+        let lines = List.filter (fun l -> l <> "") (String.split_on_char '\n' e) in
+        check ("M22-T5 " ^ name ^ ": exit 6") (rc = 6);
+        check
+          ("M22-T5 " ^ name
+         ^ ": one line on stderr, the write failure, the proof INCOMPLETE")
+          (match lines with
+          | [ l ] ->
+              starts_with ~prefix:"baguette: a write failed (" l
+              && contains l ~needle:"INCOMPLETE"
+          | _ -> false);
+        check
+          ("M22-T5 " ^ name ^ ": no uncaught exception")
+          (not (contains e ~needle:"Fatal error"));
+        check ("M22-T5 " ^ name ^ ": no verdict on stdout") (o = "");
+        if rc <> 6 || List.length lines <> 1 then
+          Printf.printf "  rc=%d stderr:\n%s\n" rc e
+      in
+      case "missing directory" "nodir/p";
+      let full name =
+        Sys.command
+          (Printf.sprintf "ln -s /dev/full %s"
+             (Filename.quote (Filename.concat dir name)))
+        = 0
+      in
+      if Sys.file_exists "/dev/full" && full "q.pbp" && full "r.opb" then (
+        case ".pbp on a full disk" "q";
+        case ".opb on a full disk" "r")
+      else
+        print_endline
+          "note M22-review-T5: /dev/full does not exist here, the two full-disk cases \
+           did not run";
+      m9_rm_rf dir
+
 let () =
   print_endline "";
   List.iter run_model models;
@@ -2679,6 +2757,7 @@ let () =
   test_m6_t24_interrupt_cli ();
   test_d0216_amo_reuse ();
   test_d0242_alo_reuse ();
+  test_m22t5_write_failure_cli ();
   if !failures > 0 then (
     Printf.printf "\n%d failure(s)\n" !failures;
     exit 1)
