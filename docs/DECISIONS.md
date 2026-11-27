@@ -32272,3 +32272,193 @@ pass gained the holder counts and the outsider test. About 200 lines, a third of
 [AUTONOME] Kept: no search, proof or answer changes, so no default behaviour changes. Revert: `git revert` of
 `fec0985`, `74782b6`, `d994b47`, `3ab3e34`, `6217a67`, the header commit `a93c84c` and the test commit
 `0f9240e` (`41861a6` is already undone by `0b216c7`; the e2e scene goes with `3ab3e34`).
+
+## D-0241  [AUTONOME] M19-config-T6, clause minimisation: learned clauses lose their root-level literals (ROOT) and the literals the kept ones re-derive (RECURSIVE, MiniSat's over order literals), behind `BAGUETTE_MINIMISE`. Learned width -27 %, every proof verifies, +3 complete answers at 300 s and a score within the noise. The default stays `off`: the protocol asks for a gain in score
+
+**Status**: DONE on `wave87-minim` (agent-minim, 2026-11-27), not merged. Measured against main
+`e98e398` (binary `db155bd7`) with the branch's `47264f1d` (`a700a73`: the 300 s runs, the
+2 000-node checks, the first cost table) and `f37d4545` (`2d6a518`: adds `local`, the rules are
+otherwise unchanged; the second measurement and cost table). The checks of section 6 are on the
+tip merged with main `cb727bc` (D-0242's alldiff), binary `184504fc`. Node fataepyc-06, 32 runs in parallel, `MemoryMax=32G`,
+`--max-heap-mb 8192`. Runs, tables and scripts: `/cluster/arthur/baguette-results/minim/`.
+Touches: `lib/core/analysis.ml` (`minimise_cut`), `lib/core/learn.ml` (the switch, the
+measurement, `l_min_supports`), `test/unit/test_learn.ml`, `test/unit/test_analysis.ml`.
+
+### 1. What a learned clause carries (measured first)
+
+`BAGUETTE_MINIMISE_STATS=1` takes, at every learned clause, the width of the 1UIP cut's clause and
+what each rule WOULD remove from it, on the same cut, so one run of the default measures every
+arm. 238 instances (the tuning set, the gcc sample of D-0234, the ne sample of D-0238) at 20 000
+nodes, `--no-proof`, binary `17cc2bd8`:
+
+| sample | instances learning | clauses | mean width | median | 16 or more | false at the root | same variable, same side | recursive, beyond root | recursive, no level filter |
+|---|---|---|---|---|---|---|---|---|---|
+| tuning set | 194 | 1 268 869 | 91.2 | 44 | 88 % | 6.8 % | 0 | 17.5 % | 17.5 % |
+| gcc sample | 32 | 269 907 | 75.7 | 64 | 94 % | 3.5 % | 0 | 14.6 % | 14.6 % |
+| ne sample | 18 | 137 965 | 61.7 | 34 | 85 % | 15.8 % | 0 | 13.6 % | 13.6 % |
+
+All together 135 million literals, 7.1 % false at the root, 17.0 % more removable recursively,
+0 dominated. Per instance, root plus recursive remove a median 17.6 % (p10 1.6 %, p90 52.6 %,
+max 93.4 %). The one-step (`local`) variant, measured on a second pass (`f37d4545`), removes
+4.8 % beyond root where the recursion removes 17.2 %. The existing semantic minimisation
+(`Learn.minimise`, M2-L3) removes 0 from a learned clause: `Analysis.Frontier` already keeps one
+node per variable and side, so the cut never holds `x >= 3` and `x >= 5` together. Its header
+said so; this is the number. It does fire on branch nogoods, which is what it is for.
+
+On D-0234's instances the width does not come from either kind. Generalised peaceable queens
+loses 4 to 11 % of its 63 to 168 literals, rotating-workforce 0 to 35 %: a pigeonhole conflict
+names every confined cell, and none of them is implied by another (D-0234's left open 2 stays).
+
+### 2. The rules, and why the learned line still holds
+
+`Analysis.minimise_cut`, applied by `Learn.at_conflict` to the 1UIP cut after its postcondition is
+checked and before `minimise`. The clause is still the same `rup` (D-0018); no new line is
+written. Only the literals it names change, so the argument is about what the checker's unit
+propagation re-derives when a literal is absent.
+
+- **ROOT.** A cut node whose bound was set at level 0 is dropped. Its literal is false on every
+  node the search will visit. The checker re-derives the fact because every level-0 trail entry
+  has its trace line on the page (`trace.ml`, "Level-0 prunings get a line too") or rests on one
+  model row (I-X10), and no `w` retires a level-0 line. D-0238 section 5's `~e_ge_1` is this case,
+  and so is `ne_conflict_sat`, whose clause `~x_ge_2 x_ge_3 y_ge_3` becomes the unit `x_ge_3`.
+- **RECURSIVE.** A node strictly between level 0 and the conflict level is dropped when every fact
+  its entry read (its reason, and the reasons of the holes it settled over, as `analyse` expands
+  them) is derivable: at its declared bound, set at level 0, implied on the ladder by a cut node
+  (`x >= 7` implies `x >= 3`), or set by an entry that is not a decision and whose own facts are
+  derivable, recursively, memoised per entry and side. The checker replays that chain because
+  `Trace` writes the whole trail when a branch fails and the clause is written before the `w`
+  that retires any of those levels (I-S4). It is the replay a node the 1UIP walk resolved away
+  already gets, one level lower. `Learn.supports` now counts the lines the removals rest on.
+- **The guard the ladder needs.** `x >= 7` can be set AFTER the entry that read `x >= 3`, which
+  the SAT version never sees. Two dropped nodes could then justify each other (`y >= 2` read
+  `x >= 3`, `x >= 7` read `y >= 2`), and the clause would be wrong. So a cut node justifies a
+  reader only when its entry precedes the reader's on the trail, or when it is kept (nodes are
+  decided in decreasing trail order, so a kept one is final). Every edge between two dropped
+  nodes then points backwards on the trail, and induction on trail position is the soundness
+  argument.
+- The conflict level is never touched, because it holds the asserting literal. A cut taken at
+  level 0 is returned unchanged.
+- **The abstract-level filter** (MiniSat's) stays. Here an entry at level j may rest only on facts
+  set below j, so a level absent from the cut does not prove a missing decision, and the filter
+  can only miss a removal. It misses 4 474 of 23 094 525.
+- **Self-subsumption among one variable's order literals**, the brief's second rule, was not
+  built: section 1 measured 0.
+
+`BAGUETTE_MINIMISE=off|root|local|rec|rec-nofilter` (unset is `off`, anything else exits 2, the
+discipline of `BAGUETTE_CDCL`). `rec` includes `root`.
+
+### 3. Cost and width at a fixed node budget
+
+`perf stat -e instructions:u`, 20 000 nodes, `--no-proof`, `f37d4545`, D-0234's eight instances
+and two of D-0238's. The trees differ from the first shorter clause on.
+
+| instance | off M/node | local | rec | off width | local | rec |
+|---|---|---|---|---|---|---|
+| on-call-rostering 4s-23d | 3.44 | 3.35 | 3.39 | 29.7 | 26.8 | 22.5 |
+| elitserien handball11 | 9.20 | 9.37 | 9.63 | 52.5 | 49.8 | 48.8 |
+| rotating-workforce Example1780 | 10.91 | 11.01 | 11.00 | 55.8 | 49.2 | 35.8 |
+| rotating-workforce Example1242 | 16.39 | 16.81 | 17.17 | 105.5 | 95.2 | 87.4 |
+| gpq n8_q3 | 1.99 | 2.03 | 2.23 | 62.8 | 60.7 | 59.4 |
+| gpq n9_q5 | 3.43 | 3.46 | 3.88 | 81.7 | 76.4 | 72.6 |
+| rws e-25-s-7 | 2.98 | 3.22 | 3.25 | 57.7 | 59.9 | 55.6 |
+| rws e-30-s-9 | 2.95 | 3.03 | 3.01 | 27.6 | 25.3 | 25.2 |
+| work-task seed-3 | 17.12 | 18.55 | 19.18 | 113.2 | 90.5 | 88.2 |
+| gcc-benchmark l42_3 | 2.98 | 2.96 | 2.97 | 29.7 | 20.9 | 19.9 |
+
+`rec` costs x0.99 to x1.13 per node. A first version cost x1.20 on work-task, most of it asking
+the hole log for the remover of every hole an entry settled over. `a700a73` asks only once the
+entry's reason has passed. `root` alone is one filter over the cut and costs nothing measurable.
+
+### 4. 300 s on the tuning set (D-0205's protocol)
+
+200 instances, five arms, binary `47264f1d`. Pairwise shares (`tools/analyse.py`, Challenge order,
+Borda over the pair, D-0205's noise 0.03):
+
+| pair | complete | verified | incumbents | share | wins/losses | confl/s (median) |
+|---|---|---|---|---|---|---|
+| off / root, no proof | 40 / 40 | - | 116 / 116 | 0.500 / 0.500 | 12+ / 12- | 128.0 / 127.1 |
+| off / rec, no proof | 40 / 42 | - | 116 / 114 | 0.507 / 0.492 | 18+ / 21- | 128.0 / 124.6 |
+| off / rec, proof | 28 / 29 | 28 / 29 | 121 / 122 | 0.505 / 0.495 | 15+ / 17- | 60.0 / 57.8 |
+
+Status changes. `rec` without proof: 2019_hrc exp2-1-5145 and 2025_mondoku 10-10-6 become OPT
+(257 s, 220 s). With proof: 2019_kidney-exchange 3_20_0.30_5 becomes OPT (275 s, verified),
+2020_hoist PU_1_2_2 and 2020_stable-goods s-d7 get a first solution. No complete answer is lost.
+`root`: 2019_hrc becomes OPT, 2014_mqueens n11 (OPT at 250 s) times out. Families: `rec` wins 16
+and loses 20 without proof. The learned width falls from 73.2 to 53.5 literals on average
+without proof (-27 %), from 67.2 to 50.0 with (-26 %). Every complete answer of both proof arms
+verifies (57 checks).
+
+The 39 gcc and ne sample instances outside the set, same arms (`off`, `rec`): 8 / 8 complete
+without proof, 6 / 6 with, shares 0.513 / 0.487 and 0.500 / 0.500, wins 2+/3- and 2+/2-, no status
+change. Rotating-workforce stays UNKNOWN in both. Learned width 70.9 -> 53.7 and 66.2 -> 51.5.
+
+### 5. Decision
+
+[AUTONOME] **The default stays `off`.** D-0205 keeps an idea for the full series when it gains on
+the subset's score and loses no verified complete answer. `rec` loses no complete answer and adds
+three (two without proof, one verified with), but its share is 0.015 and 0.010 BELOW `off`'s.
+That is under the 0.03 noise, so it is not a measured loss, and it is not the gain the protocol
+asks for. `root` alone is a tie on every count. Making `rec` the default is a one-line change
+(`Learn.default_minimisation`), so the choice is reversible either way, and the option that
+changes nothing is the one taken. What decides it is the full M17 series with `BAGUETTE_MINIMISE=rec`
+as an arm: its +3 complete answers against its slightly lower score is exactly the trade the
+subset cannot separate. Nothing to revert: no default moved.
+
+### 6. Checks (tip merged with main `cb727bc`, binary `184504fc`; main's is `b52a0cd6`)
+
+- `check_fmt.sh` clean, `check_test_widths.py` clean, `dune build --root .` clean.
+- `dune runtest --root . --force` under 4 GB: 5 535 ok, 0 FAIL, peak RSS 155 MB.
+  `run_model_tests.sh`: 259 passed, 0 failed. `check_determinism.sh`: 259 models identical.
+- With the switch off, the 259 test models in both encodings are byte-identical to main's
+  `b52a0cd6` (stdout, exit code, `.opb`, `.pbp`: 2 072 files). Before the last merge the same held
+  against `db155bd7` (2 016 files).
+- Under `rec`: 91 of the 518 test-model runs change their `.pbp`, nothing else changes, and veripb
+  accepts all 518. All 518 under `BAGUETTE_DEBUG=1`, with `rec` and with the default: no
+  invariant fired, all verify. Before the merge, on 254 models: `root` changed 52 proofs, `local`
+  87, all accepted; `rec` with `BAGUETTE_CDCL=1`, all 508 accepted.
+- Challenge proofs under `rec` at 2 000 nodes (238 instances in the bits encoding, 116 in the order
+  encoding): 328 verified, 0 rejected; 19 checks hit veripb's 3 600 s, 4 hit the 32 GB cap (order
+  encoding, `.opb` of 20 to 27 GB), 3 runs gave no proof (two killed at 420 s in the order
+  encoding, one refused). The 300 s campaigns: 69 checks, all verified.
+- Differential lane (`--tier all -j 8`, 32 GB) with the switch off: 347 of 347 runs equal; debug pass:
+  333 of 333 equal. Scaling lane: ok, every line within its threshold. Before the merge (`f37d4545`): 347 of 347 and 333 of 333
+  equal, scaling ok.
+- Proofs written by the campaigns, all deleted after checking: about 1.9 TB (the 300 s proof arms
+  1.3 TB on the set and 0.32 TB on the samples, the 2 000-node checks 0.26 TB).
+
+### 7. Lanes under `rec` as the default (a build `ca695efc` of `a700a73` that only flips the
+default; not re-recorded)
+
+- Plain pass: 299 of 347 runs differ. By kind: work counters 297, search counters 266, proof hash
+  247, stdout 24. Every learning configuration differs; the 48 equal runs are Boolean instances
+  whose conflicts carry no root literal and nothing to drop. LBD histograms shift down by one,
+  because level 0 no longer counts. No exit code changes.
+- The 24 stdout changes, final objective at the node budget (min: lower is better): better in 11
+  (2013_filters_dct_2_2 alternate 26 -> 23; 2016_diameterc-mst alternate none -> 590;
+  2017_tc-graph-color k5_05 alternate 552 -> 496; 2020_lot-sizing pigment15b alternate 1 704 -> 1 584;
+  2023_chessboard4 activity 12 -> 13, alternate 9 -> 12, fifo 15 -> 16 (max); 2013_rcpsp_11@10000
+  default, audit0, noproof, nopb 79 -> 78), worse in 2 (2015_opd bibd_10_30_09 activity 6 -> 9;
+  2019_fox-geese-corn 54 activity 1 503 -> 1 283, max), one completes (2024_monitor-placement
+  rf1755 alternate proves its optimum), and in the 10 others the final objective is the same
+  through a different solution path (bacp-22 activity and alternate, filters_dct_2_2 activity,
+  rcpsp_12 activity, alternate and restarts, grid-colouring 13_11 activity, opd bibd_10_30_09
+  alternate, opd bibd_08_28_14 alternate, fox-geese-corn alternate).
+- The kept runs of those 13 instances, every configuration with a proof (163): all verified.
+- Debug pass (`--debug --tier all -j 8`): 285 of 333 differ (work 283, search 238, hash 224,
+  stdout 12), no exit code change, no invariant fired.
+- Scaling lane on the same build: ok, every line within its threshold.
+
+### 8. Left open
+
+1. **The full series with `BAGUETTE_MINIMISE=rec`** decides the default (section 5).
+2. **The cost of `rec`** is `Analysis.locate` per fact read (a name lookup and the bound history's
+   binary search) and the recursion's allocation. A per-conflict cache of slot by name, or facts
+   carrying their variable, would cut it. Not done: the score gap may be that cost.
+3. **Wide pigeonhole nogoods** (D-0234 left open 2) are untouched: gpq loses 4 to 11 %.
+4. Inside the recursion a fact is justified only by a cut node set before the reader, never by a
+   kept one set after (the memo stays a property of the entry). Measured cost of that choice: not
+   measured.
+5. `bin/main.ml`'s usage text does not list `BAGUETTE_MINIMISE` (not this row's file).
+
+Revert: `git revert 60c57ea 2d6a518 525184a a700a73 0e48012` removes the switch, the rules and
+their lanes; with the default `off` they change no artefact.

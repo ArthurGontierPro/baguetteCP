@@ -19,7 +19,6 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M19-config-T6 clause minimisation (D-0241): learned clauses shorter (root-false literals, order-literal self-subsumption, recursive minimisation), each behind a switch, default by measurement | `lib/core/learn.ml`, `lib/core/analysis.ml`, their tests (`test/unit/test_learn.ml`, `test_analysis.ml`), `lib/core/search.ml` only for the switch read if needed | agent-minim (wave87-minim, /scratch/arthur/wt-minim) | 2026-11-27 |
 
 ## Cross-session requests
 
@@ -477,6 +476,7 @@ section 1. Shares are inclusive, of the whole run.
 
 | Task | Session | Date | Summary |
 |---|---|---|---|
+| M19-config-T6, clause minimisation (D-0241) | agent-minim (`wave87-minim`, not merged) | 2026-11-27 | **D-0241 [AUTONOME].** `Analysis.minimise_cut` drops root-level literals (`root`) and the literals the kept ones re-derive (`rec`, MiniSat's over order literals, a trail-order guard for the ladder's forward edges), behind `BAGUETTE_MINIMISE=off|root|local|rec`, default `off`. Learned width -27 %, every proof verifies, +3 complete answers on the tuning set at 300 s, share 0.010 to 0.015 below `off` (noise): the default waits for the full series. Switch off: artefacts byte-identical to main |
 | M20-pernode-T4, alldiff's second pass (D-0242) | agent-hall (`wave88-hall`, not merged) | 2026-11-27 | **D-0242 [AUTONOME].** Stage 1 answers a pass that would move nothing by counting (`hall_free`, two term permutations kept sorted), the Regin pass skips a tight set no outside term meets, a tight set's derivations share its at-least-one lines (D-0216's `rebuilds_to` rule). Same trees, artefacts byte-identical (259 test models x 2 encodings, diff lane 347 + 333 debug). handball12 -7.7 % / -7.6 % instructions per node without / with proof, tppv circ14 -14 %, costas13 -13 % / -12 %. An at-most-one memo kept on the table epoch was withdrawn: it changed a proof under BAGUETTE_DEBUG. Release `ef11db7f`, dev `b52a0cd6`. |
 | M18-coverage-T6, sort / arg_sort / arg_max (D-0240) | agent-sort (`wave86-sort`, not merged) | 2026-11-27 | **D-0240 [AUTONOME].** std's decompositions kept, no `lib/` or mznlib change (binary `505217da`, main's). Probe flattening: 15 of 155 instances reach the solver with one, all `arg_max` on tower; `sort`/`arg_sort` never. Three arg_max routes without the copies cost 1.45, 1.26, 1.09 times std per node; no native sort (no instance). Eight test models pin std's routes. Tower 085-09 OPT 85 VERIFIED (Chuffed 58 at 1 200 s). Lanes 347/347 and 333/333 after merging `a67493a` |
 | M22-review-bugs, ensure_atom after the root contradiction (D-0237) | agent-rootbug, then agent-rootbug2 (`wave83-rootbug`, not merged) | 2026-11-27 | **D-0237 [AUTONOME].** A factless root conflict's derivation (an all-fixed disequality, ne.ml records no facts at the root) cites atoms nothing minted, and `close_root_conflict` closed the atoms before it, so the default run died in `Encoding.ensure_atom`. The atoms now close after that derivation, before the empty clause. Sound over any database; measured on 16 models main died on, the database is already UP-contradictory before the derivation in 14 and not in 2, and every minted line was an order bridge. Four `root_bits_*` models. Fuzz: 20 000 targeted models, main 24 crashes, branch 0; 5 000 gen.py and 1 800 fuzz_lane models, 0. Binary `db155bd7`, the 242 existing models byte-identical in both encodings, lanes 347 of 347 and 333 of 333, scaling 5 of 5. |
@@ -713,6 +713,10 @@ section 1. Shares are inclusive, of the whole run.
 
 | M18-coverage-T5 (the ordering globals) | agent-lex (`wave85-lex`) | 2026-11-27 | **D-0239 [AUTONOME].** mznlib only: `lex_lesseq`/`lex_less`, int and Bool, as four linear rows per position over std's chain flag; 26 -> 27 complete of 92 with proof, nodes/s x1.02 to 1.04; precedence globals keep std's (T13 added); `increasing` already native. |
 ## Handoff notes
+
+### 2026-11-27 (agent-minim, `wave87-minim`, D-0241): clause minimisation behind a switch, default off, not merged
+
+`Analysis.minimise_cut` shortens a 1UIP cut before `Learn.minimise`: `root` drops literals false at level 0, `rec` also drops the ones the kept literals re-derive through their trace lines (MiniSat's recursive minimisation; a cut node justifies a reader only if set before it or kept, because the ladder has forward edges), `local` looks one step back. `BAGUETTE_MINIMISE` selects them, `BAGUETTE_MINIMISE_STATS=1` prints what each would remove. Measured on 238 instances: 7 % of learned literals are root-false, 17 % more removable recursively, 0 dominated (the frontier already merges). At 300 s `rec` gains 3 complete answers and loses none, but its share is 0.010 to 0.015 below `off`, so by D-0205 the default stays `off`; the next step is an M17 series arm with `BAGUETTE_MINIMISE=rec`. D-0234's wide gpq nogoods are pigeonholes, which neither rule shortens (4 to 11 %).
 
 ### 2026-11-27 (agent-hall, `wave88-hall`, D-0242): alldiff's second pass, not merged
 
