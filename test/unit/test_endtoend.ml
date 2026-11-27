@@ -2058,10 +2058,14 @@ let test_m7t32_std_flags () =
          default name to be overwritten by the next run; the end of the lane checks that
          no default-named proof appeared. A proved run rather than --no-proof, because
          SPEC 1 says `make check` always proves. *)
-      let run args =
+      (* M19-config-T1 (D-0261): the lane pins the fixed search's output (two improving
+         solutions, and every flag compared with them), so each run names --fixed-search;
+         the runs about -f itself go through [run_free] and name their own search. *)
+      let run_free args =
         m9_run binary ~cwd:dir
           (if m6_says args "--proof " then args else "--proof plain " ^ args)
       in
+      let run args = run_free ("--fixed-search " ^ args) in
       let tag = "M7-T32" in
       (* The plain runs every flag is compared with. *)
       let rc_o, out_o, err_o = run opt and rc_s, out_s, err_s = run sat in
@@ -2114,7 +2118,7 @@ let test_m7t32_std_flags () =
           (* -f with the proof, on this small model: the mapping reaches the search and
              the proof closes. The instances D-0137 section 13 refused are M7-T31's, and
              D-0148's 1 233 runs (hrc under -f's combination among them) cover them. *)
-          let rc_f, out_f, _ = run ("-f --proof fp " ^ opt) in
+          let rc_f, out_f, _ = run_free ("-f --proof fp " ^ opt) in
           let rc, out =
             m6_veripb veripb dir
               (Filename.concat dir "fp.opb")
@@ -2158,16 +2162,33 @@ let test_m7t32_std_flags () =
         (m6_says err_st "stats: nodes" && m6_says err_st "one thread"
         && m6_says err_st "-r 7 accepted and unused");
       (* -f: the combination, with an explicit flag winning in either order. *)
-      let _, _, err_f = run ("-f -v " ^ opt) in
+      let _, _, err_f = run_free ("-f -v " ^ opt) in
       check
         (tag ^ ": -f -v says alternate, luby and phase saving, and no longer warns")
         (m6_says err_f "search=alternate restarts=luby:100 phase-saving=true"
         && (not (m6_says err_f "WARNING"))
         && not (m6_says err_f "M7-T31"));
-      let _, _, err_f2 = run ("--search activity -f --restarts geom -v " ^ opt) in
+      let _, _, err_f2 = run_free ("--search activity -f --restarts geom -v " ^ opt) in
       check
         (tag ^ ": an explicit --search or --restarts wins over -f, in either order")
         (m6_says err_f2 "search=activity restarts=geom:100:1.5 phase-saving=true");
+      (* --fixed-search (M19-config-T1, D-0261): the fixed search by name, an explicit
+         setting still wins over it, and with -f it is a usage error. *)
+      let _, _, err_x = run ("-v " ^ opt) in
+      check
+        (tag ^ ": --fixed-search -v says annotation, no restarts, no phase saving")
+        (m6_says err_x "search=annotation restarts=none phase-saving=false");
+      let _, _, err_x2 = run ("--restarts geom -v " ^ opt) in
+      check
+        (tag ^ ": an explicit --restarts wins over --fixed-search")
+        (m6_says err_x2 "search=annotation restarts=geom:100:1.5 phase-saving=false");
+      List.iter
+        (fun args ->
+          let rc, out, err = run_free (args ^ " " ^ opt) in
+          check
+            (Printf.sprintf "%s: `%s` is a usage error, exit 2, stdout empty" tag args)
+            (rc = 2 && out = "" && m6_says err "contradict"))
+        [ "-f --fixed-search"; "--fixed-search -f" ];
       let _, _, err_t = run ("-t 2500 -v " ^ opt) in
       check (tag ^ ": -t is milliseconds") (m6_says err_t "time-limit=2.5s");
       (* Refused: enumeration of a satisfaction model, exit 3, nothing on stdout. *)
@@ -2442,16 +2463,20 @@ let test_m6_t24_interrupt_cli () =
           (String.concat " "
              (List.map (fun s -> Printf.sprintf "kill -%s $p 2>/dev/null;" s) sigs))
       in
-      case "one SIGTERM" "" (signalled [ "TERM" ]);
-      case "one SIGINT" "" (signalled [ "INT" ]);
+      (* M19-config-T1 (D-0261): every case but the -f one names --fixed-search, the search
+         these stops were written against; the -f case names its own. *)
+      let fx = "--fixed-search" in
+      case "one SIGTERM" fx (signalled [ "TERM" ]);
+      case "one SIGINT" fx (signalled [ "INT" ]);
       case "one SIGXCPU, -f" "-f" (signalled [ "XCPU" ]);
-      case "SIGINT then SIGTERM" "" (signalled [ "INT"; "TERM" ]);
-      case "SIGTERM twice, order encoding" "--bits-above none"
+      case "SIGINT then SIGTERM" fx (signalled [ "INT"; "TERM" ]);
+      case "SIGTERM twice, order encoding" (fx ^ " --bits-above none")
         (signalled [ "TERM"; "TERM" ]);
       (* The grace timer's own signal, sent by hand: the handler it shares. *)
-      case "SIGTERM then SIGALRM" "" (signalled [ "TERM"; "ALRM" ]);
-      case "--time-limit" "--time-limit 2" Fun.id;
-      case "the heap budget" "--max-heap-mb 16" (fun cmd -> "OCAMLRUNPARAM=s=256k " ^ cmd);
+      case "SIGTERM then SIGALRM" fx (signalled [ "TERM"; "ALRM" ]);
+      case "--time-limit" (fx ^ " --time-limit 2") Fun.id;
+      case "the heap budget" (fx ^ " --max-heap-mb 16") (fun cmd ->
+          "OCAMLRUNPARAM=s=256k " ^ cmd);
       List.iter
         (fun f -> Sys.remove (Filename.concat dir f))
         (Array.to_list (Sys.readdir dir));
@@ -2480,8 +2505,8 @@ let test_d0200_heap_budget_cli () =
       let rc =
         Sys.command
           (Printf.sprintf
-             "OCAMLRUNPARAM=s=256k,o=100000 timeout 300 %s --no-proof --max-heap-mb 8 %s \
-              > %s 2> %s"
+             "OCAMLRUNPARAM=s=256k,o=100000 timeout 300 %s --fixed-search --no-proof \
+              --max-heap-mb 8 %s > %s 2> %s"
              (Filename.quote binary) (Filename.quote fzn) (Filename.quote out)
              (Filename.quote err))
       in

@@ -127,7 +127,10 @@ EF=()
 # control runs at `--bits-above 0` whatever E2E_FLAGS says
 read -r -a XF <<< "${E2E_FLAGS:-}"
 case "$MUT" in bits-*) XF=(--bits-above 0) ;; esac
-(ulimit -v 4000000; timeout "$TO" "$B" "$FZN" --proof "$o.bag" "${EF[@]}" "${XF[@]}" > "$o.bag.out" 2> "$o.bag.err")
+# E2E_SEARCH (M19-config-T1, D-0261): the search, --fixed-search unless set (empty is the
+# default search): the lane's controls were recorded on the fixed search
+read -r -a SF <<< "${E2E_SEARCH---fixed-search}"
+(ulimit -v 4000000; timeout "$TO" "$B" "$FZN" --proof "$o.bag" "${SF[@]}" "${EF[@]}" "${XF[@]}" > "$o.bag.out" 2> "$o.bag.err")
 rc=$?
 if [ -n "$SOLVER" ] && [ $rc -eq 3 ] && grep -q '^baguette: --e2e: ' "$o.bag.err"; then
     say "SKIPPED e2e: $(sed -n 's/^baguette: --e2e: \(.*\) (D-0187).*/\1/p' "$o.bag.err" | head -1)"

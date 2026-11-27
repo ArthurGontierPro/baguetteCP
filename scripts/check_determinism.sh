@@ -71,14 +71,19 @@ is_pending() {
     | awk '{print $1}' | grep -qx "$1"
 }
 
+# The search both runs use (M19-config-T1, D-0261): the fixed search.
+SEARCH="--fixed-search"
+
 # One model, two runs, three artefacts compared. Echoes the differing kind on failure.
 # $1 model path, $2 scratch dir. Prints nothing when identical.
 compare_two_runs() {
   fzn="$1"; d="$2"
   base="$(basename "${fzn}" .fzn)"
   rc1=0; rc2=0
+  # The search (M19-config-T1, D-0261), SEARCH, comes AFTER the proof prefix: the
+  # self-test's flaky wrapper reads --proof PREFIX as arguments 2 and 3.
   for run in 1 2; do
-    timeout 300 "${SOLVER}" "${fzn}" --proof "${d}/${base}.${run}" \
+    timeout 300 "${SOLVER}" "${fzn}" --proof "${d}/${base}.${run}" ${SEARCH} \
       > "${d}/${base}.${run}.out" 2> "${d}/${base}.${run}.err" || eval "rc${run}=\$?"
   done
   # M6-T5. A model listed in test/models/PENDING is known not to work yet, and a

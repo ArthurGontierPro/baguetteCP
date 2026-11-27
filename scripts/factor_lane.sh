@@ -177,9 +177,11 @@ fzn_of() { # gz-or-plain file in bench/factor/fzn -> a plain copy in $OUT/fzn
 bag_job() { # id config blimit bfzn
   local id="$1" c="$2" lim="$3" f="$4" d="$OUT/runs/$1.$2" stage
   local -a a=()
+  # M19-config-T1 (D-0261): the reference solver follows the model's annotation and the
+  # factor wants the same tree, so every arm is the fixed search.
   case "$c" in
-    pf) a=(--proof p) ;; np) a=(--no-proof) ;;
-    cdpf) a=(--cdcl --proof p) ;; cdnp) a=(--cdcl --no-proof) ;;
+    pf) a=(--fixed-search --proof p) ;; np) a=(--fixed-search --no-proof) ;;
+    cdpf) a=(--fixed-search --cdcl --proof p) ;; cdnp) a=(--fixed-search --cdcl --no-proof) ;;
   esac
   for stage in base full; do
     local -a e=()

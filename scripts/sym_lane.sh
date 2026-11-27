@@ -22,7 +22,8 @@
 #                            NAMEs restrict to those instances)
 #        --chain ARGS   extra symchain.py arguments, e.g. "--order search" (M15-symmetry-T3,
 #                       D-0181: the chain that follows the search's variable order and value choice)
-#        --solver ARGS  extra main.exe arguments for BOTH runs (baseline and broken), e.g. the
+#        --solver ARGS  main.exe arguments for BOTH runs (baseline and broken), default
+#                       --fixed-search (D-0261), which ARGS replaces; e.g. the
 #                       dynamic search "--search activity --restarts luby --phase-saving"
 #        --no-base      skip step 3 (the baseline's columns are then "-"); for a second chain
 #                       over instances whose baseline another OUTDIR already measured
@@ -46,7 +47,9 @@
 # while it runs; the lane writes OUTDIR/lane.pid. Clean up by those PIDs only, never by name.
 set -u
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
-J=4; BIG=0; CHAIN_ARGS=""; SOLVER_ARGS=""; NOBASE=0
+# SOLVER_ARGS is --fixed-search unless --solver replaces it (M19-config-T1, D-0261): the
+# lane's measurements were taken on the fixed search
+J=4; BIG=0; CHAIN_ARGS=""; SOLVER_ARGS="--fixed-search"; NOBASE=0
 while [ $# -gt 0 ]; do
     case "$1" in
         -j) J=$2; shift 2 ;;

@@ -134,8 +134,10 @@ run_one() { # id mode budget -> $WORK/<id>.<mode>.<budget>/{cost,nodes,props}
   mkdir -p "$d"
   [ -f "$WORK/$id.fzn" ] || return 1
   ln -sf "$WORK/$id.fzn" "$d/model.fzn"
-  local -a pf=(--no-proof)
-  [ "$mode" = proof ] && pf=(--proof p)
+  # M19-config-T1 (D-0261): the baseline was measured on the fixed search, so every run
+  # names it; the default (free) search is not this lane's line.
+  local -a pf=(--fixed-search --no-proof)
+  [ "$mode" = proof ] && pf=(--fixed-search --proof p)
   (
     cd "$d" || exit 1
     for v in $(compgen -e | grep '^BAGUETTE_' | grep -v '^BAGUETTE_MEM_CAP_KB$'); do unset "$v"; done
