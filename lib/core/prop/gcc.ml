@@ -397,10 +397,6 @@ type snap = {
      instead and carries the facts in the [Reason] (D-0064, and alldiff's [Gone_hole]). *)
   s_lo_root : bool;
   s_hi_root : bool;
-  (* M18-coverage-T14 (D-0247): the domain itself, a VERSION (D-0222) read only within the
-     pass, so that rule C and rule (b) can tell a value inside the window from a value in
-     the domain. Holding it costs a pointer. *)
-  s_dom : Domain.t;
 }
 
 type csnap = { k_cov : cover; k_lo : int; k_hi : int; k_lo_root : bool; k_hi_root : bool }
@@ -429,7 +425,6 @@ let snap_of store tm =
     s_hi = Domain.hi d;
     s_lo_root = established_at_root store tm.x ~lower:true;
     s_hi_root = established_at_root store tm.x ~lower:false;
-    s_dom = d;
   }
 
 (* A constant count never moves: both bounds are its declared ones, established "at the
@@ -887,73 +882,13 @@ let ladder_at_least t ~c ~must =
       @ rung_weighted t c.cname ~from_:must ~to_:c.cdhi ~weight:(fun u -> c.cdhi - u),
       c.cdhi - must + 1 )
 
-(* M18-coverage-T14 (D-0247): A HOLE CLEARS AN INDICATOR AS A BOUND DOES.
-
-   Until D-0247 rule C and rule (b) sorted a value's variables by their WINDOW ([holds_v]),
-   so an x whose domain had lost [v] from its inside still counted as a possible taker, and
-   a count's upper bound never came down for a hole. That is the whole gap D-0244 section 3
-   measured on mondoku: std's per-value decomposition reads holes, gcc did not.
-
-   A variable whose window holds [v] around a hole is now a NON-taker, and its indicator is
-   cleared by the hole's own line: the entry that punched it ([Store.remover]) concludes, in
-   the order currency every hole of the store is written in (D-0086), the clause
-
-     ~x_ge_v + x_ge_(v+1) + <the negation of the remover's facts>  >=  1
-
-   i.e. `- e_i^v + R >= 0`, which is [zero_summands]' `- e_i^v >= 0` with the remover's
-   residue [R] left in the row. That is element.ml's [excl_hole], and the residue is
-   handled the way every other leftover literal here is: the push's [Reason] names the
-   remover's facts, so each literal of [R] is the negation of a fact on the trace line, and
-   the final division rounds it to coefficient 1 like a non-root bound [bound_cancels]
-   leaves. The explanation and the facts are read at the push, from the live store, which
-   is the pass's own store: a hole present in the snapshot was punched below the cut, and
-   the entry that punched it is the one [Store.remover] finds (I-X6 is kept: the thunk
-   closes over the [Explanation.t] value, not over the store).
-
-   The trace line of a push that clears a hole this way is NOT RUP against [ge_cid] alone:
-   the hole clause is binary and unit propagation never fires it. So such a push is made
-   under [Store.deriving_ahead], as rule C's lower push is; a push with no hole in its
-   scope stays as it was, byte for byte.
-
-   A hole with no remover is a declared one, which lib/ does not produce ([Store.remover]'s
-   header); such a variable stays a possible taker, the weaker and still sound reading. *)
-(* The snapshot's window holds [v]: the test rule C and rules (a) and (b) sort a value's
-   variables by, before D-0247 the only one. *)
-let holds_v v s = s.s_lo <= v && v <= s.s_hi
-
-type hole = { h_line : Explanation.t; h_facts : Reason.fact list }
-
-(* [s]'s window holds [v] but its domain does not, and the entry that punched [v] is known. *)
-let hole_at store v s =
-  if holds_v v s && not (Domain.mem s.s_dom v) then
-    match Store.remover store ~before:(Store.trail_length store) ~var:s.s_var v with
-    | None -> None
-    | Some e ->
-        Some { h_line = Store.explanation store e; h_facts = Reason.facts e.Store.reason }
-  else None
-
-(* A possible taker of [v]: its window holds [v] and no remover-backed hole excludes it. *)
-let takes_v store v s =
-  holds_v v s && (Domain.mem s.s_dom v || Option.is_none (hole_at store v s))
-
-let hole_summands holes = List.map (fun h -> Explanation.term 1 h.h_line) holes
-
-(* The facts a push names for the variables of [dv]: a variable whose window holds [v]
-   named only (a taker, or a holed one whose hole's line clears it), one outside the window
-   at the bound that excludes [v]; then the removers' facts, deduplicated by the caller.
-   With no hole this is D-0234's list, element for element. *)
-let taker_facts ~holes v dv =
-  List.map (fun s -> if holds_v v s then named_only s else excluding_bound s v) dv
-  @ List.concat_map (fun h -> h.h_facts) holes
-
-let c_upper_expl t ~k ~poss ~gone ~holes ~may =
+let c_upper_expl t ~k ~poss ~gone ~may =
   let c = k.k_cov in
   let v = c.cv in
   Explanation.deferred (fun () ->
       let tail, divisor = ladder_at_most t ~c ~may in
       Explanation.combine
         ((cite c.ge_cid :: List.concat_map (fun s -> zero_summands t s v) gone)
-        @ hole_summands holes
         @ List.concat_map (fun s -> cost_summands s v) poss
         @ bound_cancels
             ~lo_of:(fun s -> if v < s.s_lo then 1 else 0)
@@ -1082,7 +1017,7 @@ let hole_expl t ~v ~snaps ~halls ~caps ~y =
    indicator the row needs is held up by a rung unit propagation cannot sum, because every
    free one appears POSITIVELY.  The derivation is still written wherever a later [pol]
    consumes the push (a root conflict, test/models/gcc_forced_root_unsat.fzn). *)
-let forced_expl t ~k ~v ~poss ~gone ~holes ~y ~lower =
+let forced_expl t ~k ~v ~poss ~gone ~y ~lower =
   let c = k.k_cov in
   let lo = k.k_lo in
   Explanation.deferred (fun () ->
@@ -1100,7 +1035,6 @@ let forced_expl t ~k ~v ~poss ~gone ~holes ~y ~lower =
               (fun kk -> Explanation.weaken [ (1, Lit.ge c.cname kk) ])
               (range (lo + 1) c.cdhi)
           @ List.concat_map (fun s -> zero_summands t s v) gone
-          @ hole_summands holes
           @ bound_cancels
               ~lo_of:(fun s -> if v < s.s_lo then 1 else 0)
               ~hi_of:(fun s -> if v > s.s_hi then 1 else 0)
@@ -1193,6 +1127,7 @@ let conflict_facts store (j : Reason.justified) ~name ~dlo ~dhi x ~lower =
 
 (* The snapshot's window holds [v] / is exactly [v]: the two tests rule C and rules (a)
    and (b) sort a value's variables by. *)
+let holds_v v s = s.s_lo <= v && v <= s.s_hi
 let fixed_at v s = s.s_lo = v && s.s_hi = v
 let count_where p l = List.fold_left (fun n s -> if p s then n + 1 else n) 0 l
 
@@ -1207,22 +1142,24 @@ let rule_c t store ~dvs ~caps ~apply =
       let c = k.k_cov in
       let v = c.cv in
       let dv = dvs.(j) in
-      let takes = takes_v store v in
-      let may = c.cconst + count_where takes dv in
+      let may = c.cconst + count_where (holds_v v) dv in
       let must = c.cconst + count_where (fixed_at v) dv in
       (if may < k.k_hi then
-         let poss = List.filter takes dv in
+         let poss = List.filter (holds_v v) dv in
          let gone = List.filter (fun s -> not (holds_v v s)) dv in
-         let holes = List.filter_map (hole_at store v) dv in
          (* D-0234: a taker is cleared by two literal axioms, a non-taker by the bound
-            that excludes [v]; D-0247: a holed one by its hole's line. *)
-         let facts = taker_facts ~holes v dv @ count_named k ~read:`Nothing in
-         let facts = if holes = [] then facts else distinct_facts facts in
-         apply ~ahead:(holes <> []) ~who:(c.cname, c.cdlo, c.cdhi) ~lower:false c.cx may
+            that excludes [v]. *)
+         let facts =
+           List.map
+             (fun s -> if holds_v v s then named_only s else excluding_bound s v)
+             dv
+           @ count_named k ~read:`Nothing
+         in
+         apply ~ahead:false ~who:(c.cname, c.cdlo, c.cdhi) ~lower:false c.cx may
            (Reason.because
               ~concludes:(Some (Reason.at_most ~name:c.cname ~decl:c.cdhi may))
               facts
-              (close_upper t ~k ~may (c_upper_expl t ~k ~poss ~gone ~holes ~may))));
+              (close_upper t ~k ~may (c_upper_expl t ~k ~poss ~gone ~may))));
       if must > k.k_lo then
         let fixed = List.filter (fixed_at v) dv in
         let others = List.filter (fun s -> not (fixed_at v s)) dv in
@@ -1240,7 +1177,7 @@ let rule_c t store ~dvs ~caps ~apply =
              facts
              (close_lower t ~k ~must (c_lower_expl t ~k ~fixed ~others ~must))))
     caps;
-  ()
+  ignore store
 
 (* One pass.  Rule C first -- it is O(values * n) and it is what turns a shortfall into a
    conflict -- then rule A over every candidate interval all of whose values are in the
@@ -1379,24 +1316,25 @@ let pass t store =
                  | Store.Unchanged -> ())
            dv);
       (* (b) forced *)
-      let takes = takes_v store v in
-      let n_poss = count_where takes dv in
+      let n_poss = count_where holds dv in
       if c.cconst + n_poss = k.k_lo && n_fixed < n_poss then
-        let poss = List.filter takes dv in
+        let poss = List.filter holds dv in
         if List.for_all (fun s -> Domain.mem (Store.get store s.s_var) v) poss then
           let gone = List.filter (fun s -> not (holds s)) dv in
-          let holes = List.filter_map (hole_at store v) dv in
           List.iter
             (fun y ->
               if not (is_fixed y) then
                 let lower = y.s_lo < v in
                 (* D-0234: a non-candidate at the bound that excludes [v], every
                    candidate (the target too) named only -- literal axioms clear them --
-                   and the count at the lower bound the rule reads; D-0247: a holed
-                   non-candidate named, with its hole's remover's facts. *)
-                let facts = taker_facts ~holes v dv @ count_named k ~read:`Lo in
-                let facts = if holes = [] then facts else distinct_facts facts in
-                apply ~ahead:(holes <> []) ~who:(y.s_name, y.s_dlo, y.s_dhi) ~lower
+                   and the count at the lower bound the rule reads. *)
+                let facts =
+                  List.map
+                    (fun s -> if holds s then named_only s else excluding_bound s v)
+                    dv
+                  @ count_named k ~read:`Lo
+                in
+                apply ~ahead:false ~who:(y.s_name, y.s_dlo, y.s_dhi) ~lower
                   (View.of_var y.s_var) v
                   (Reason.because
                      ~concludes:
@@ -1404,7 +1342,7 @@ let pass t store =
                           (if lower then Reason.at_least ~name:y.s_name ~decl:y.s_dlo v
                            else Reason.at_most ~name:y.s_name ~decl:y.s_dhi v))
                      facts
-                     (forced_expl t ~k ~v ~poss ~gone ~holes ~y ~lower)))
+                     (forced_expl t ~k ~v ~poss ~gone ~y ~lower)))
             poss)
     caps;
   (* M16-file-review-T2 (D-0190): [a, b] is a candidate when every value in it is in the
