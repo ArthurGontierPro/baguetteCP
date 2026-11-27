@@ -33103,6 +33103,13 @@ Material: `/cluster/arthur/baguette-results/probe/` (README.md).
 
 **Revert**: `git revert` of the `M19-config-T8` code commits (`443bdd8`, `42420ab`, `552d52c`) and the test
 commit (`4c78e12`); with the default `off`, removing the switch changes no artefact.
+**Addendum (2026-11-27, the sample and the volume).** Challenge sample at 2 000 nodes under `root`, D-0241's 238
+instances on both encodings, release binary `059aabe6`, every proof checked: 421 VERIFIED, **0 rejected**, 30
+check timeouts at 3 600 s, 9 checks killed at 32 GB, 16 runs without a proof (11 solver timeouts, 5 heap budget),
+the same shape as D-0246's sample (423 / 0 / 28 / 9 / 16). Proof volume written by this record: about 3.6 TB
+(t300 1.43 TB; the sample 0.75 TB by its recorded sizes plus 1.42 TB of unchecked leftovers, 90 files, logged in
+`ver-leftover.txt`), all deleted. The map commit `0b92cac` reverts with the code commits.
+
 ## D-0251  [AUTONOME] The open items of 2026-11-27 the user handed back: three decided, two sent to a held-out comparison
 
 **Status**: DECIDED (orchestrator, 2026-11-27). The user's words, on being given the list of open decisions: "Je n'ai pas
