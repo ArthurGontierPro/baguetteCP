@@ -890,6 +890,12 @@ def main(cake_opb, names_file, bag_opb, bag_pbp):
         has no room for it, and unit propagation closes. The rpn of that second sum, or None."""
         if not any(var_of(l) in bitvars for l in blits):
             return None
+        if any(var_of(l) not in {var_of(m) for m in blits} for l in rl):
+            # D-0262: a literal the row does not have (another constraint's selector) is free
+            # to satisfy the candidate, which the simulation below does not see: it claimed a
+            # close that unit propagation did not make (int_eq_reif's row against int_lin_ne's
+            # candidate over the same two variables)
+            return None
         sa = sum(blits.values())
         nt = ({neg(l): a for l, a in blits.items()}, sa - bd + 1)
         r1l, r1d = lsum([(1, nt), (1, (rl, rd))])
@@ -1166,6 +1172,11 @@ def main(cake_opb, names_file, bag_opb, bag_pbp):
         # every flag the first row proposes (on 2011_fillomino, int_ne(x, 12)'s own flag came
         # after another constraint's over x that fitted the first row only), then constants
         tries = []
+        # D-0262: the proposals come from the selector's first row that is not TRUE outright
+        # (degree <= 0 in literal form): a constant term or an impossible half makes one, any
+        # candidate implies it, and the first flag met was another constraint's (int_lin_ne
+        # beside an int_eq_reif over the same two variables: `_ne0 := b[c4][lt]`)
+        rows = sorted(rows, key=lambda r: lit_form(*r)[1] <= 0)
         bl0, bd0 = lit_form(*rows[0])
         for loose in (False, True):
             for got in matches(bl0, bd0, rows[0][0], loose):
