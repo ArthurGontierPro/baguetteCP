@@ -132,7 +132,7 @@ Launch it detached (section 3) and poll `gateNN.status`.
 | `compare_run.sh`, `corpus_run.sh` | baguette against Chuffed and GCS, and corpus walks; both pass `--proof` (`bench/challenge/README.md`) |
 | `check_fmt.sh`, `check_test_widths.py`, `check_determinism.sh`, `check_unlimited.sh` | The static checks of `make check` |
 | `compare_selftest.sh`, `corpus_selftest.sh` | Self-tests of the two harnesses |
-| `shrink.sh` | Shrinks a failing model |
+| `shrink.sh` | Solves one model and says whether its proof is rejected, with the checker's last lines. Its propagator-by-propagator mode needed a `--disable-propagator` flag the solver never had and was removed (D-0254) |
 | `run_scp_tests.sh` | The `.scp` models of `test/scp/` against `test/scp/expected/`, every proof checked (`make scp`, part of `make test`) |
 | `e2e_lane.sh`, `sym_lane.sh` | The end-to-end and symmetry lanes, sections 9 and 10. Node only, not in `make check` |
 | `fuzz_lane.sh` | The differential fuzz (M22-review-T7): random small models, baguette against Gecode through MiniZinc, every proof checked and every solution re-checked. Not a gate: a disagreement becomes a model in `test/models/`. `scripts/fuzz_lane.sh -j 16 -n 100 /scratch/arthur/<run>` on a node |

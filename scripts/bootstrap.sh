@@ -5,14 +5,19 @@
 #   scripts/bootstrap.sh            (no arguments)
 #
 # Installs opam into ~/.local/bin if it is missing, creates the opam switch `baguette` on
-# OCaml 5.1.1, installs dune, menhir, ocamlformat 0.26.1 and ocaml-lsp-server, then looks
-# for veripb through scripts/checker.sh. It does NOT install veripb: a missing checker is
+# OCaml 5.1.1, installs dune, menhir, ocamlformat 0.26.1 and ocaml-lsp-server (at most 16
+# parallel jobs, the node rule), then looks for veripb through scripts/checker.sh. It does NOT install veripb: a missing checker is
 # a warning here and a failure of every proof test later. Exit 0 when the toolchain is in
 # place; any failing step stops the script with that step's status (set -e).
 set -euo pipefail
 
 SWITCH_NAME="baguette"
 OCAML_VERSION="5.1.1"
+# At most 16 parallel jobs: the compute nodes are shared and their rule is no -j above 16
+# (CLAUDE.md, "The nodes are shared"). OPAMJOBS also bounds the dune builds opam runs.
+JOBS="$(nproc)"
+[ "${JOBS}" -gt 16 ] && JOBS=16
+export OPAMJOBS="${JOBS}"
 
 say() { printf '\033[1m==>\033[0m %s\n' "$*"; }
 
@@ -40,14 +45,14 @@ eval "$(opam env 2>/dev/null || true)"
 
 if ! opam switch list --short | grep -qx "${SWITCH_NAME}"; then
   say "creating switch ${SWITCH_NAME} on OCaml ${OCAML_VERSION}"
-  opam switch create "${SWITCH_NAME}" "ocaml-base-compiler.${OCAML_VERSION}" -y -j "$(nproc)"
+  opam switch create "${SWITCH_NAME}" "ocaml-base-compiler.${OCAML_VERSION}" -y -j "${JOBS}"
 fi
 
 opam switch set "${SWITCH_NAME}"
 eval "$(opam env --switch=${SWITCH_NAME})"
 
 say "installing build and dev dependencies"
-opam install -y dune menhir ocamlformat.0.26.1 ocaml-lsp-server
+opam install -y -j "${JOBS}" dune menhir ocamlformat.0.26.1 ocaml-lsp-server
 
 say "checking veripb"
 # scripts/checker.sh is the single source of truth for which checker this project
