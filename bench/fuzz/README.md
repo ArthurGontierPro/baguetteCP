@@ -9,6 +9,58 @@ root-conflict defects that no lane and no corpus run had seen.
 defects, not a regression gate. A failure it finds is reduced into `test/models/`
 and recorded.
 
+## The differential fuzz lane: `scripts/fuzz_lane.sh` (M22-review-T7, D-0258)
+
+The lane is the successor of `run.py` below: it compares baguette with Gecode instead of only
+checking proofs, so it also catches a wrong answer whose proof VeriPB accepts (a wrong `.opb`, or a
+`rup` over a contradictory database, D-0066). It is not a gate either. Run it on a node:
+
+```sh
+dune build --root . bin/
+scripts/fuzz_lane.sh -j 16 -n 100 /scratch/arthur/fuzz-<date>          # all twelve streams
+scripts/fuzz_lane.sh -j 16 -n 2000 --streams globals,configs --seed 2 OUT
+scripts/fuzz_lane.sh --streams globals --mznlib /path/to/old/mznlib OUT  # another mznlib/
+```
+
+Exit status: 0 when every model agreed; 1 when a disagreement was kept in `OUT/<stream>-<k>/bad/`;
+2 on a usage or setup error. Timeouts (baguette's 30 to 60 s, VeriPB's 120 s) are kept in `slow/`
+and do not make the status 1. `OUT/summary.txt` has one tally line per chunk. The seed of chunk
+`k` of the `i`-th stream is `SEED*1000 + i*100 + k`; a stream is a function of that seed, the
+binary and mznlib.
+
+| Stream | Script | What it runs | Acceptance test |
+|---|---|---|---|
+| `default` | `tools/fuzz/fuzz.py` | the review's 26 constraint kinds, domains within -4..4, default flags | found M22-review-T2 (2026-11-23) |
+| `free-order` | fuzz.py | `-f --bits-above none` | |
+| `larger` | fuzz.py | up to 10 variables and 12 constraints | |
+| `search`, `search-free`, `search-order` | `tools/fuzz/fuzz2.py` | 3-SAT near the threshold, small integer optimisation; default, `-f`, `--bits-above none` | |
+| `globals` | `tools/fuzz/streams.py` | `global_cardinality` in its five forms (fixed and variable counts, closed, `low_up`, `low_up_closed`) with covers that REPEAT a value (40 %) or miss one, `all_different`, `alldifferent_except_0`, `nvalue`, `table`, `regular`, `element`, `inverse` (also `inverse(f, f)`), `circuit`, `cumulative`, `disjunctive(_strict)`, `bin_packing`, `_capa`, `_load`, `lex_less(eq)` over int and bool, `value_precede`, `count_eq`, `member`, `maximum`/`minimum`; repeated variables, constants in arrays, empty and one-element arrays; 40 % optimisation | with the mznlib of `99d0e39~1` it finds D-0255's wrong UNSAT: 11 of 2000 models, the first at model 54 of seed 1703 (`--seed 1`) |
+| `configs` | streams.py | one model (globals, fuzz.py, fuzz2) under 18 configurations: default, `--cdcl`, `--cdcl --chrono 5`, `-f`, and under both the default search and `--cdcl`: `BAGUETTE_MINIMISE=rec`, `BAGUETTE_PRIORITY=classes`, `BAGUETTE_PROBE=root`, `BAGUETTE_RETENTION=keep_all`, `fifo:1`, `lbd:1` and `tiered:core=0,mid=0,first=1,inc=0,mid_every=1` (an eviction at every learned constraint, D-0257's knob). Each agrees with Gecode and with the default run | on main before D-0257 it finds the REJECTED proof under `--cdcl`: model 0 of seed 1 (`streams.py configs OUT 1 1`), under `cdcl-ret-evict`, `-fifo1` and `-lbd1`; VERIFIED on `wave103-retbug` |
+| `incr` | streams.py | optimisation models, `-i` and plain: the printed objectives strictly improve, every printed solution holds, the last equals the plain run's optimum | |
+| `limit` | streams.py | `BAGUETTE_NODE_LIMIT` in 1..50 (30 % under `--cdcl`) and `-t` 1..20 ms: a stopped run (stderr `limit:`) claims neither `==========` nor UNSAT, its solutions hold and are no better than Gecode's optimum, and VeriPB says NO CONCLUSION or BOUNDS containing the optimum | |
+| `e2e` | streams.py | models over what `tools/e2e/fzn2scp.py` covers, through `tools/e2e/chain.sh` bridged and `E2E_SOLVER=1`: VERIFIED agrees with Gecode, SKIPPED is counted, FAIL is kept | |
+| `wide` | streams.py | FRONT END ONLY: domains of width 2^21 to 2^62, linear, times, div, abs, max, element, alldifferent; `--time-limit 10`. It answers (agreeing with Gecode when Gecode answers) or refuses (exit 3, 5), never crashes or meets the 4 GB cap. Proofs are not checked | |
+
+Every streams.py run is judged by `check_run`: exit status (3 refused, 5 resource, 4 INTERNAL, an
+`Out_of_memory` MEMCAP, anything else CRASH), status and objective against Gecode, VeriPB on the
+proof AND its `s VERIFIED` conclusion against what was printed (PROOF-CONCLUSION when they differ),
+and Gecode on the model with the printed solution fixed (BAD-SOLUTION). streams.py flattens each
+model once with `minizinc -c` (baguette's mznlib, or `--mznlib`) and runs the binary on the `.fzn`,
+translating its output through the `.ozn` (a variable MiniZinc fixed is not in the `.fzn`). On a
+STATUS- or OBJ-MISMATCH the note also records Chuffed's and CP-SAT's answers, for the triage only:
+they never outvote Gecode, because Chuffed shares std's repeated-cover row and answers the same wrong
+UNSAT as D-0255's mznlib.
+
+Two shapes are kept out of the generator because Gecode is the outlier there (D-0258): `circuit` over
+one node (std and Chuffed: false, Gecode: true; baguette follows std), and a `cumulative` task of
+duration 0 whose resource exceeds the capacity (Gecode 6.4.0: UNSAT; Chuffed, CP-SAT, HiGHS: SAT).
+
+**Triage.** `tools/fuzz/triage.py CASE...` re-judges kept cases under `FUZZ_BIN`/`FUZZ_MZNLIB` (a
+fix's build tells a known defect from a new one); `tools/fuzz/shrink_mzn.py IN OUT VERDICT [FLAGS]`
+deletes constraints while the verdict holds. A new defect is kept as `bench/fuzz/found/<name>.fzn`
+with a one-line header, never in `test/models/` until it is fixed, and filed as a cross-session
+request.
+
 ## Running it
 
 ```sh
