@@ -414,7 +414,12 @@ let reif_of kw =
   | None -> ( match strip_suffix "_if" kw with Some s -> (s, `If) | None -> (kw, `None))
 
 let actx st pos =
-  { F.Arith_aux.bounds = bounds st; fresh = (fun () -> fresh_bool st pos "arith") }
+  {
+    F.Arith_aux.bounds = bounds st;
+    fresh = (fun () -> fresh_bool st pos "arith");
+    name = (fun i -> st.vars.(i).Model.v_name);
+    where = (fun () -> Pos.to_string pos);
+  }
 
 let one_constraint st pos kw (args : Sexp.t list) =
   let arity n expected = if List.length args <> n then shape pos kw expected in

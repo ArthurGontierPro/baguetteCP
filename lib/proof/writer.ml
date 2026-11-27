@@ -717,6 +717,12 @@ let line_buf t =
 let write_buf t =
   let b = t.buf in
   Text.char b '\n';
+  (* --time-limit before the search (D-0263): BEFORE [enter], so a stop here abandons a
+     line that never reached the channel and leaves the writer idle, which is what
+     [conclude_interrupted] asks. Disarmed during the search, where the test of [armed]
+     here, inline, is all a line pays: the call cost 0.13 % of handball12's instructions
+     with the proof (D-0263 section 5). *)
+  (match !Deadline.armed with None -> () | Some _ -> Deadline.tick (Text.length b));
   enter t;
   (if not !emit_clock then (
      incr emit_lines;

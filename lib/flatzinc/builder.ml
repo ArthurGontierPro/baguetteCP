@@ -1112,7 +1112,16 @@ let build_constraint env (c : Ast.constraint_item) =
      [Arith_aux]'s, shared with lib/scp/reader.ml, the reader of the .scp format
      (M23-inputs-T4, D-0230): this builder supplies the bounds it reads and the Booleans
      it names. *)
-  let actx = { Arith_aux.bounds = var_bounds; fresh = fresh_bool } in
+  let actx =
+    {
+      Arith_aux.bounds = var_bounds;
+      fresh = fresh_bool;
+      name =
+        (fun i ->
+          match var_at env i with Some v -> v.Model.v_name | None -> string_of_int i);
+      where = (fun () -> Pos.to_string pos);
+    }
+  in
   let arity3 f =
     arity 3;
     match c.Ast.c_args with
