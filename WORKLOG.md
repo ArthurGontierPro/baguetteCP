@@ -19,6 +19,7 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
+| M19-config-T1 the free search as default (D-0259, record D-0261) | `bin/main.ml` (option parser, usage text), `lib/core/search.ml` only if a default lives there, `scripts/run_model_tests.sh`, `scripts/diff_lane.sh`, `scripts/scaling_lane.sh`, `scripts/check_determinism.sh`, `scripts/factor_lane.sh`, the other scripts and tests that call the solver without stating a search (not `scripts/fuzz_lane.sh`, `tools/fuzz/`), `test/unit/test_endtoend.ml`, `Makefile`, `bench/diff/`, `docs/SPEC.md` 3.4, `README.md`, `CLAUDE.md` | agent-free (`wave106-free`) | 2026-11-27 |
 
 ## Cross-session requests
 
