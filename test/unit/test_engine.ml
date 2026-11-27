@@ -2697,6 +2697,163 @@ let test_d0243_attribution_memo () =
     (refused p since);
   Store.backtrack store
 
+(* ===================================================================== *)
+(* M19-config-T9 (D-0246): the cost-class queue under                    *)
+(* BAGUETTE_PRIORITY=classes. Each scene is run twice, the switch off and *)
+(* on, through [Engine.set_priority], so the test does not depend on the  *)
+(* environment it is run in.                                             *)
+(* ===================================================================== *)
+
+(* A propagator that only records that it ran. Its family name is unknown to
+   [Propagator.cost_of_family], so its class comes from the rule's two generic parts: the
+   arity, and the consistency fallback. [log] is per scene. *)
+let prio_log = ref []
+
+module Rec_dom = struct
+  type t = { rid : int; rvars : Var.t list }
+
+  let name = "rec_dom"
+  let consistency = Propagator.Domain
+  let vars p = p.rvars
+
+  let propagate p _ =
+    prio_log := p.rid :: !prio_log;
+    Propagator.Fixpoint
+end
+
+module Rec_bounds = struct
+  type t = Rec_dom.t
+
+  let name = "rec_bounds"
+  let consistency = Propagator.Bounds
+  let vars = Rec_dom.vars
+  let propagate = Rec_dom.propagate
+end
+
+(* Lowers [a]'s upper bound to 3 once, then is quiet: the change that wakes the others.
+   Packed with the idempotence claim, so its own pruning does not re-wake it. *)
+module Kick = struct
+  type t = { kid : int; ka : Var.t }
+
+  let name = "kick"
+  let consistency = Propagator.Bounds
+  let vars k = [ k.ka ]
+
+  let propagate k store =
+    prio_log := k.kid :: !prio_log;
+    match Store.set_hi store k.ka 3 no_facts_placeholder with
+    | Store.Conflict e -> Propagator.Conflict e
+    | Store.Changed | Store.Unchanged -> Propagator.Fixpoint
+end
+
+let test_d0246_cost_classes () =
+  let a = var 0 and b = var 1 and c = var 2 in
+  let rank inst ~arity = Propagator.cost_rank (Propagator.cost_class inst ~arity) in
+  let rd id vs =
+    Propagator.pack ~id
+      (module Rec_dom : Propagator.S with type t = Rec_dom.t)
+      { Rec_dom.rid = id; rvars = vs }
+  in
+  let rb id vs =
+    Propagator.pack ~id
+      (module Rec_bounds : Propagator.S with type t = Rec_dom.t)
+      { Rec_dom.rid = id; rvars = vs }
+  in
+  check "D-0246: an unnamed Domain family over three variables is Global"
+    (rank (rd 0 [ a; b; c ]) ~arity:3 = Propagator.cost_rank Propagator.Global);
+  check "D-0246: an unnamed Bounds family over three variables is Row"
+    (rank (rb 0 [ a; b; c ]) ~arity:3 = Propagator.cost_rank Propagator.Row);
+  check "D-0246: any family over two variables is Cheap"
+    (rank (rd 0 [ a; b ]) ~arity:2 = Propagator.cost_rank Propagator.Cheap);
+  check "D-0246: the table names the families (all_different, learned_pb, int_lin_le)"
+    (Propagator.cost_of_family ~name:"all_different_int" Propagator.Domain
+     = Propagator.Global
+    && Propagator.cost_of_family ~name:"learned_pb" Propagator.Bounds
+       = Propagator.Learned_row
+    && Propagator.cost_of_family ~name:"int_lin_le" Propagator.Bounds = Propagator.Row
+    && Propagator.cost_of_family ~name:"learned_clause" Propagator.Bounds
+       = Propagator.Cheap);
+  (* The engine's own record, the scope counting DISTINCT variables: [a; a; b] is two. *)
+  let store = mk_store [ ("a", 0, 4); ("b", 0, 4); ("c", 0, 4) ] in
+  let e = Engine.create [ rd 0 [ a; b; c ]; rb 1 [ a; b; c ]; rd 2 [ a; a; b ] ] in
+  check "D-0246: the engine files each instance in its class"
+    (Engine.cost_class_of e 0 = 3
+    && Engine.cost_class_of e 1 = 1
+    && Engine.cost_class_of e 2 = 0);
+  ignore store
+
+(* Instance 0 is Global, 1 is Row, 2 and 3 are Cheap; 3 lowers [a] on its first run, which
+   wakes 0, 1 and 2. Off: the seed in id order, then the FIFO. Classes: cheapest first. *)
+let prio_scene priority =
+  let a = var 0 and b = var 1 and c = var 2 in
+  let store = mk_store [ ("a", 0, 4); ("b", 0, 4); ("c", 0, 4) ] in
+  let insts =
+    [
+      Propagator.pack ~id:0
+        (module Rec_dom : Propagator.S with type t = Rec_dom.t)
+        { Rec_dom.rid = 0; rvars = [ a; b; c ] };
+      Propagator.pack ~id:1
+        (module Rec_bounds : Propagator.S with type t = Rec_dom.t)
+        { Rec_dom.rid = 1; rvars = [ a; b; c ] };
+      Propagator.pack ~id:2
+        (module Rec_bounds : Propagator.S with type t = Rec_dom.t)
+        { Rec_dom.rid = 2; rvars = [ a; b ] };
+      Propagator.pack ~id:3 ~idempotent:true
+        (module Kick : Propagator.S with type t = Kick.t)
+        { Kick.kid = 3; ka = a };
+    ]
+  in
+  let e = Engine.create insts in
+  Engine.set_priority e priority;
+  prio_log := [];
+  let r = Engine.propagate e store in
+  (r, List.rev !prio_log, Domain.hi (Store.get store a), e, store)
+
+let test_d0246_classes_order () =
+  let r_off, log_off, hi_off, _, _ = prio_scene false in
+  let r_on, log_on, hi_on, e, store = prio_scene true in
+  check "D-0246: off runs the seed in id order first"
+    (match log_off with 0 :: 1 :: 2 :: 3 :: _ -> true | _ -> false);
+  check "D-0246: classes runs cheapest first, a woken Cheap before a seeded Row"
+    (log_on = [ 2; 3; 2; 1; 0 ]);
+  check "D-0246: both reach a fixpoint with the same domain"
+    (r_off = Engine.Fixpoint && r_on = Engine.Fixpoint && hi_off = 3 && hi_on = 3);
+  check "D-0246: classes counts each seeded run once (four slots seeded)"
+    ((Engine.counters e).Engine.c_seeded = 4 && (Engine.counters e).Engine.c_runs = 5);
+  (* A second call with nothing changed runs nothing: the queues and the seed marks were
+     left empty by the first. *)
+  prio_log := [];
+  ignore (Engine.propagate e store);
+  check "D-0246: classes leaves no mark behind (a quiet second call runs nothing)"
+    (!prio_log = [])
+
+(* The same fixpoint on a real propagator scene: two linear rows, off and on. *)
+let test_d0246_same_fixpoint_linear () =
+  let go priority =
+    let store =
+      mk_store [ ("x1", 0, 5); ("x2", 3, 5); ("x3", 0, 5); ("y1", 0, 5); ("y2", 1, 5) ]
+    in
+    let l1 =
+      Linear.make ~row_id:(unrendered_row ()) store
+        [ (1, var 0); (1, var 1); (1, var 2) ]
+        6
+    in
+    let l2 = Linear.make ~row_id:(unrendered_row ()) store [ (1, var 3); (1, var 4) ] 3 in
+    let l3 =
+      Linear.make ~row_id:(unrendered_row ()) store [ (1, var 4); (-1, var 0) ] 0
+    in
+    let e = Engine.create [ pack_linear 0 l1; pack_linear 1 l2; pack_linear 2 l3 ] in
+    Engine.set_priority e priority;
+    let r = Engine.propagate e store in
+    ( r,
+      List.init 5 (fun i ->
+          let d = Store.get store (var i) in
+          (Domain.lo d, Domain.hi d)) )
+  in
+  let r0, d0 = go false and r1, d1 = go true in
+  check "D-0246: off and classes reach the same domains on three linear rows"
+    (r0 = Engine.Fixpoint && r1 = Engine.Fixpoint && d0 = d1)
+
 let () =
   test_fixpoint_tightens_and_settles ();
   test_conflict_carries_explanation ();
@@ -2744,6 +2901,9 @@ let () =
   test_create_watchers ();
   test_d0243_static_lists_after_purge ();
   test_d0243_attribution_memo ();
+  test_d0246_cost_classes ();
+  test_d0246_classes_order ();
+  test_d0246_same_fixpoint_linear ();
   if !failures > 0 then (
     Printf.printf "\n%d failure(s)\n" !failures;
     exit 1)

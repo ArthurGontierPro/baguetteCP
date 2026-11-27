@@ -223,6 +223,66 @@ let pack (type a) ?(row = no_row) ?(advise = no_advisor) ?(idempotent = false) ~
    determinism gate does not see them. *)
 type pass_counters = { mutable passes : int; mutable deductions : int }
 
+(* ------------------------------------------------------ M19-config-T9: cost classes
+
+   D-0246. Under BAGUETTE_PRIORITY=classes the engine keeps one FIFO per COST CLASS and
+   always runs from the cheapest non-empty one (Gecode's PropCost, Chuffed's two
+   priorities); under [off], the default, the classes are computed and never read. The
+   class is a statement about what ONE RUN costs, nothing else: it is never read by a
+   propagator, a reason or the proof, so a wrong class costs time and never soundness.
+
+   One rule, in two parts, for every instance:
+     (1) a scope of at most two distinct variables is [Cheap], whatever the family: a run
+         over two variables is constant work (Gecode's PropCost::binary);
+     (2) otherwise the FAMILY's class, from the table below, which is the only place a
+         family states its class. A family the table does not name (a test's propagator,
+         a family added later) falls back on its declared consistency: [Bounds] and
+         [Value] read bounds or test one value, so [Row]; [Domain] and [Checking] are
+         the shape of the globals, so [Global]. A new family lands somewhere sound and
+         its author moves it by adding its name here.
+
+   The classes, cheapest first:
+     [Cheap]   clauses over order literals, the Boolean clause family, learned clauses
+               (watched literals, Chuffed's SAT engine runs these before any
+               propagator), bool2int, the binary comparisons and their reifications;
+     [Row]     rows whose pass is linear in the scope: int_lin_le/ne and the reified
+               row, the arithmetic rows and guards, model PB rows, max/min, element and
+               member (one pass over the index domain or the selectors);
+     [Learned_row] learned PB rows: linear, but there may be tens of thousands of them, and
+               a model row is more likely to prune than one of them;
+     [Global]  the globals whose pass is superlinear: all_different's matching, gcc,
+               cumulative, regular, circuit, table, inverse.
+
+   Why a table by NAME is acceptable here when D-0098 moved the idempotence claim off one:
+   a name could not tell an arithmetic row from an arithmetic guard, which differ in
+   whether the claim is TRUE; they do not differ in cost class, and a wrong class is never
+   unsound. The table lives here and not as a [val cost] in [S] because [S] is
+   implemented outside lib/core (compile.ml, the test suites), and a field every
+   implementer must state would change all of them for a scheduling hint. *)
+type cost = Cheap | Row | Learned_row | Global
+
+let n_cost_classes = 4
+let cost_rank = function Cheap -> 0 | Row -> 1 | Learned_row -> 2 | Global -> 3
+
+let cost_of_family ~name consistency =
+  match name with
+  | "clause" | "learned_clause" | "bool_clause" | "array_bool_or" | "array_bool_and"
+  | "bool_eq" | "bool_not" | "bool2int" | "int_le" | "int_lt" | "int_ne" | "int_le_reif"
+  | "int_eq_reif" | "int_ne_reif" ->
+      Cheap
+  | "int_lin_le" | "int_lin_ne" | "int_lin_le_reif" | "int_times" | "int_div" | "int_abs"
+  | "pb" | "array_int_maximum" | "array_int_minimum" | "array_int_element" | "member" ->
+      Row
+  | "learned_pb" -> Learned_row
+  | "all_different_int" | "global_cardinality" | "cumulative" | "regular" | "circuit"
+  | "table" | "inverse" ->
+      Global
+  | _ -> ( match consistency with Bounds | Value -> Row | Domain | Checking -> Global)
+
+(* The rule above, for an instance whose scope has [arity] distinct variables. *)
+let cost_class (inst : instance) ~arity =
+  if arity <= 2 then Cheap else cost_of_family ~name:inst.inst_name inst.inst_consistency
+
 let pass_counters = { passes = 0; deductions = 0 }
 let count_pass () = pass_counters.passes <- pass_counters.passes + 1
 let count_deduction () = pass_counters.deductions <- pass_counters.deductions + 1
