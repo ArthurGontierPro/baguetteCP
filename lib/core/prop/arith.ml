@@ -5,9 +5,9 @@
    Governed by docs/SPEC.md 3.2 (consistency levels), 3.3 (explanations) and 2.1 (the
    FlatZinc builtins, division by zero included). Proof shape: every pruning is
    [Linear]'s, its weaken-add-divide derivation over ONE guarded row of the .opb, so the
-   family is [Single_row]
-   in the I-X10 classification table of test/unit/test_trace.ml (a pruning that follows
-   from one model constraint, whose trace line is RUP with nothing derived ahead of it).
+   family is [Single_row] in the I-X10 classification table of test/unit/test_trace.ml
+   (a pruning that follows from one model constraint, whose trace line is RUP with
+   nothing derived ahead of it).
 
    Consistency level: BOUNDS for every instance this family posts, and the level is
    [Linear]'s because every instance IS a [Linear] (or, for the guard definitions, a
@@ -87,9 +87,9 @@
 
    At y = v both A(v) and B(v) hold, so whichever sign x has, z = v x is forced from
    two sides. The family is therefore CHECKING (I-P3: with every variable fixed it fails
-   if and only if the assignment violates the constraint), which a
-   relaxation such as a bare McCormick envelope over the declared box would NOT be --
-   that was the first design tried and it is why the guards are there.
+   if and only if the assignment violates the constraint), which a relaxation such as a
+   bare McCormick envelope over the declared box would NOT be -- that was the first
+   design tried and it is why the guards are there.
 
    int_div(x, y, q), one group per v in [lo_y, hi_y], writing d for x - v q:
 
@@ -159,11 +159,11 @@
    ---------------------------------------------------------------------------
 
    lib/core/interval.ml (interval arithmetic on bounds, task M4-T4a) computes the HULL
-   ROWS: the unguarded rows that bound z (and x) over the
-   declared box, which is what gives them a bound at the root rather than only once the
-   case variable is fixed. [product_bounds] is exact there, [square_bounds] is what
-   `x * x = z` gets (interval.ml's header: "using the general one for a square is sound
-   and weak"), and [quotient_filter] gives x's row and is sound but not exact.
+   ROWS: the unguarded rows that bound z (and x) over the declared box, which is what
+   gives them a bound at the root rather than only once the case variable is fixed.
+   [product_bounds] is exact there, [square_bounds] is what `x * x = z` gets
+   (interval.ml's header: "using the general one for a square is sound and weak"), and
+   [quotient_filter] gives x's row and is sound but not exact.
 
    It is **not** used for the guarded rows, which do no multiplication and no division
    of bounds at all -- they compare `x - v q` against constants -- and it is not used
@@ -470,9 +470,11 @@ let times_rows ~bound ~(x : aff) ~(y : case) ~(z : aff) ~(sign : sign) ~ge : row
   done;
   List.rev !acc
 
-(* int_div(x, y, q): R1..R4 of the header. [y] must be a variable for the same reason.
-   Note there is no arm for v = 0: it is in the loop like any other value, and the
-   window |v| - 1 = -1 is what makes it unsatisfiable. *)
+(* int_div(x, y, q): the hull row on q, then R1..R6 of the header, one group per value
+   of y. Unlike [times_rows], a constant divisor comes here too, as [Case_const] (one
+   group, no ladder), because truncation is decided by the sign of x and a constant
+   divisor keeps that split. There is no arm for v = 0: it is in the loop like any other
+   value, and the window |v| - 1 = -1 is what makes it unsatisfiable. *)
 let div_rows ~bound ~(x : aff) ~(y : case) ~(q : aff) ~(sign : sign) ~ge : row list =
   let ylo, yhi = case_bounds ~bound y in
   let s = is_nonneg sign and ns = is_neg sign in
