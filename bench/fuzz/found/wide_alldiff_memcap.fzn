@@ -1,0 +1,7 @@
+% D-0258, wide stream seed 3202 model 6, shrunk: all_different over two variables of width 2^21 and 2^24. Default flags under ulimit -v 4000000: "Fatal error: allocation failure during minor GC" after 47 s (exit 134, not the exit 5 of the heap budget, which is off by default; --max-heap-mb 3000 gives exit 5). Front end/encoding, no answer claimed.
+predicate all_different_int(array [int] of var int: x);
+var -879180..1217972: x0:: output_var;
+var -7595641..9181579: x1:: output_var;
+array [1..2] of var int: X_INTRODUCED_16_ ::var_is_introduced  = [x0,x1];
+constraint all_different_int(X_INTRODUCED_16_);
+solve  satisfy;

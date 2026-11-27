@@ -600,6 +600,8 @@ def classify_exit(run):
         return "MEMCAP", "bad"
     if run.rc == 4:
         return "INTERNAL", "bad"
+    if run.rc == 2 and "Fatal error" not in run.err and "exception" not in run.err:
+        return "refused-parse", None  # exit 2 with a positioned diagnostic (a literal past 2^62)
     return "CRASH", "bad"
 
 
