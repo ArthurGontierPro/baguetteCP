@@ -2,7 +2,8 @@
 
    docs/ARCHITECTURE.md section 5: "A priority queue of propagator ids ... pops, runs,
    applies the resulting changes to the trail, and re-queues the propagators watching
-   the changed variables." This is that queue, minus the cost-class ordering
+   the changed variables." This is that queue, minus the cost-class ordering (which
+   M19-config-T9 adds as an option, D-0246, at the end of this header)
    (docs/ARCHITECTURE.md's "cheap bounds propagators before all_different" -- M1 has no
    propagator above [Bounds] consistency yet, so a plain FIFO is honest; a priority
    ordering is a scheduling refinement for when that stops being true, not a
@@ -81,7 +82,33 @@
    not changed since, because a live id's scope never changes and [purge], which empties
    the scopes of removed ids, resets the memo of each of their variables; so the check
    refuses exactly what it refused. The wake order, the woken set and every counter are
-   unchanged, and with them the search and the artefacts. *)
+   unchanged, and with them the search and the artefacts.
+
+   M19-config-T9 (D-0246): the cost-class ordering the first paragraph left out, behind
+   BAGUETTE_PRIORITY=classes ([off], the FIFO above, is the default and is untouched
+   byte for byte). Every instance is filed at [create]/[add] in one of
+   [Propagator.n_cost_classes] classes by [Propagator.cost_class], the one rule (its
+   header: two variables or fewer is Cheap, else the family's class). Under [classes] the
+   queue is one FIFO per class and the loop always runs the head of the cheapest non-empty
+   one; the seed's dirty slots enter their class queues in id order before anything runs.
+   Why that is sound, and what it does change:
+     - every run is the same function of the store it reads, and every pruning carries
+       its own justification against the facts on the trail when it is made (I-P4, I-P6,
+       I-X6): no reason, derivation or trace line refers to the run that preceded it, so
+       a pruning made in another order is justified by the same argument;
+     - the loop still stops only when every queue is empty, and a wake is still delivered
+       to every instance watching a changed variable (mask, veto and advisor unchanged),
+       so I-P2 holds at the return, checked by [check_fixpoint] under BAGUETTE_DEBUG;
+     - the fixpoint is the same SET OF DOMAINS whatever the order only when every
+       propagator is monotone (a smaller input never yields a larger output): then both
+       orders reach the greatest common fixpoint. That is not audited for every family
+       here, so a different fixpoint is possible, and each reachable one is sound;
+     - the ORDER of the prunings changes, hence the trail, the reasons each later
+       pruning cites, the conflict reached first, the learned clauses, the search tree
+       and the proof bytes. Nothing reads the FIFO order as such: the seed marks
+       (D-0138) only mark, [check_declined] asks queue MEMBERSHIP, the attribution stamp
+       (I-T4) is per run, alldiff's gate (D-0215) is inside a run.
+   The class is a scheduling hint: no propagator reads it. *)
 
 type outcome = Fixpoint | Conflict of Store.conflict
 
@@ -94,6 +121,17 @@ exception Stopped
    propagator calls; on the codes model of D-0136 (47 k runs/s late in a 600 s run) 128
    runs take about 3 ms, which bounds the stop's latency there. *)
 let default_poll_runs = 128
+
+(* M19-config-T9 (D-0246): BAGUETTE_PRIORITY, read once. [off] (the default, and an unset
+   variable) is the FIFO this header describes; [classes] is the cost-class queue described
+   at [propagate]. Anything else is refused at startup rather than read as [off]: a
+   misspelt switch in a campaign would otherwise measure the default twice. *)
+let priority_default =
+  match Sys.getenv_opt "BAGUETTE_PRIORITY" with
+  | None | Some ("" | "off") -> false
+  | Some "classes" -> true
+  | Some s ->
+      failwith (Printf.sprintf "BAGUETTE_PRIORITY=%s: expected off or classes (D-0246)" s)
 
 (* ------------------------------------------------------------------ triggers *)
 
@@ -384,6 +422,12 @@ type t = {
           are still there, purged together by [purge] at the start of the next
           [propagate], so that a reduction evicting k rows walks each variable's list once
           and not k times. Their [scopes] entry is what says which lists to purge. *)
+  mutable priority : bool;
+      (** M19-config-T9 (D-0246): run the queue by cost class ([propagate]). Set from
+          BAGUETTE_PRIORITY at [create]; tests set it with [set_priority]. *)
+  mutable cls : Bytes.t;
+      (** M19-config-T9 (D-0246): id -> [Propagator.cost_rank] of its class, written at
+          [create] and [add] whatever [priority] says, so switching it on later is exact. *)
   mutable declined : (int * Var.t) list;
       (** M11-complexity-T3 (D-0142 section 1): under BAGUETTE_DEBUG only, the asks the
           advisors declined during the current wake walk or seed, newest first, waiting
@@ -426,6 +470,20 @@ let bits_room b n =
   if n <= m then b
   else
     let c = Bytes.make n (Char.chr (trig_byte wake_on_any)) in
+    Bytes.blit b 0 c 0 m;
+    c
+
+(* M19-config-T9 (D-0246): an instance's cost class as the byte [cls] holds, from its
+   scope (the sorted set below, so [Array.length] is the number of DISTINCT variables),
+   and that table grown to [n] ids. *)
+let class_byte inst ~scope =
+  Char.chr (Propagator.cost_rank (Propagator.cost_class inst ~arity:(Array.length scope)))
+
+let class_room b n =
+  let m = Bytes.length b in
+  if n <= m then b
+  else
+    let c = Bytes.make n (Char.chr 0) in
     Bytes.blit b 0 c 0 m;
     c
 
@@ -840,6 +898,12 @@ let create ?(trigger = default_trigger) (instances : Propagator.instance list) :
     (fun (inst : Propagator.instance) ->
       if inst.Propagator.id >= 0 then scopes.(inst.Propagator.id) <- scope_of inst)
     instances;
+  let cls = Bytes.make (Array.length triggers) (Char.chr 0) in
+  List.iter
+    (fun (inst : Propagator.instance) ->
+      let id = inst.Propagator.id in
+      if id >= 0 then Bytes.set cls id (class_byte inst ~scope:scopes.(id)))
+    instances;
   let t =
     {
       instances = Array.of_list instances;
@@ -882,6 +946,8 @@ let create ?(trigger = default_trigger) (instances : Propagator.instance list) :
       released = [];
       removed = Array.make (Array.length triggers) false;
       pending = [];
+      priority = priority_default;
+      cls;
       declined = [];
     }
   in
@@ -894,6 +960,9 @@ let create ?(trigger = default_trigger) (instances : Propagator.instance list) :
   t
 
 let set_incremental t b = t.incremental <- b
+let set_priority t b = t.priority <- b
+let priority t = t.priority
+let cost_class_of t id = Char.code (Bytes.get t.cls id)
 let n_instances t = t.count
 
 (* M6-T22: the instances, in id order, without the [vacant] tail. *)
@@ -1110,6 +1179,8 @@ let add ?(trigger = default_trigger) (t : t) (inst : Propagator.instance) =
   t.veto.(id) <- honours_claim inst;
   t.scopes <- room t.scopes id [||];
   t.scopes.(id) <- scope;
+  t.cls <- class_room t.cls (Array.length t.triggers);
+  Bytes.set t.cls id (class_byte inst ~scope);
   (* M6-T18: a new instance has never run, so it is at its fixpoint at no state: it is
      seeded by the next [propagate] whatever else changed, and after any later backjump
      to a fixpoint older than the one it is born at. *)
@@ -2179,10 +2250,37 @@ let propagate ?stop ?(poll_runs = default_poll_runs) (t : t) (store : Store.t) :
       t.heap_len <- n);
     let in_queue = t.in_queue in
     let queue = Queue.create () in
-    let enqueue id =
-      if (not in_queue.(id)) && id >= 0 && id < n then (
-        in_queue.(id) <- true;
-        Queue.push id queue)
+    (* M19-config-T9 (D-0246): under [classes], one FIFO per cost class, and [queue]
+       stays empty; under [off], no class queue and [queue] is the FIFO. *)
+    let prio = t.priority in
+    let queues =
+      if prio then Array.init Propagator.n_cost_classes (fun _ -> Queue.create ())
+      else [||]
+    in
+    let enqueue =
+      if prio then (fun id ->
+        if (not in_queue.(id)) && id >= 0 && id < n then (
+          in_queue.(id) <- true;
+          Queue.push id queues.(Char.code (Bytes.unsafe_get t.cls id))))
+      else fun id ->
+        if (not in_queue.(id)) && id >= 0 && id < n then (
+          in_queue.(id) <- true;
+          Queue.push id queue)
+    in
+    (* Every queued id unmarked, and under [classes] its seed mark too (a seed id waits in
+       its class queue with [dirty] set, see [loops]). *)
+    let clear_queues () =
+      Queue.iter (fun id -> in_queue.(id) <- false) queue;
+      Queue.clear queue;
+      Array.iter
+        (fun q ->
+          Queue.iter
+            (fun id ->
+              in_queue.(id) <- false;
+              dirty.(id) <- false)
+            q;
+          Queue.clear q)
+        queues
     in
     (* Seed slots below [cursor] have been passed; a wake for one at or above it is a
        wake the full seed's queue would have deduplicated (rule (c) above). *)
@@ -2216,8 +2314,7 @@ let propagate ?stop ?(poll_runs = default_poll_runs) (t : t) (store : Store.t) :
                 done;
                 t.heap_len <- 0;
                 cursor := n;
-                Queue.iter (fun id -> in_queue.(id) <- false) queue;
-                Queue.clear queue))
+                clear_queues ()))
     in
     let run_one id =
       let inst = t.instances.(id) in
@@ -2261,26 +2358,63 @@ let propagate ?stop ?(poll_runs = default_poll_runs) (t : t) (store : Store.t) :
           check_skip t.instances.(q) store
         done
     in
-    let loops () =
-      (* M6-T22: the seed walks the dirty slots in id order off [t.heap] -- the same
-         runs, in the same order, as the walk over every slot, which cost O(n) per call
-         on a learned database of n. *)
-      while Option.is_none !conflict && t.heap_len > 0 do
+    (* M19-config-T9 (D-0246): the loop under [classes]. The dirty seed slots go, in id
+       order, into their class queues, keeping their [dirty] mark as "came from the seed"
+       (counted in [c_seeded] when run); clean slots are passed exactly as below, before any
+       run, which is where [check_skip]'s premise (nothing has moved what they watch since
+       the fixpoint) holds most plainly. Then: the head of the cheapest non-empty class,
+       until every class is empty. A wake lands in its class's queue; one for an id already
+       queued is deduplicated as under the FIFO. *)
+    let loops_by_class () =
+      while t.heap_len > 0 do
         let id = heap_pop t in
         pass_clean id;
         cursor := id + 1;
-        dirty.(id) <- false;
-        t.ctr.c_seeded <- t.ctr.c_seeded + 1;
-        run_one id
+        enqueue id
       done;
-      if Option.is_none !conflict then (
-        pass_clean n;
-        cursor := n);
-      while Option.is_none !conflict && not (Queue.is_empty queue) do
-        let id = Queue.pop queue in
-        in_queue.(id) <- false;
-        run_one id
+      pass_clean n;
+      cursor := n;
+      let ncls = Array.length queues in
+      let rec next k =
+        if k >= ncls then -1
+        else
+          let q = Array.unsafe_get queues k in
+          if Queue.is_empty q then next (k + 1) else Queue.pop q
+      in
+      let go = ref true in
+      while !go && Option.is_none !conflict do
+        let id = next 0 in
+        if id < 0 then go := false
+        else (
+          in_queue.(id) <- false;
+          if dirty.(id) then (
+            dirty.(id) <- false;
+            t.ctr.c_seeded <- t.ctr.c_seeded + 1);
+          run_one id)
       done
+    in
+    let loops () =
+      if prio then loops_by_class ()
+      else (
+        (* M6-T22: the seed walks the dirty slots in id order off [t.heap] -- the same
+           runs, in the same order, as the walk over every slot, which cost O(n) per call
+           on a learned database of n. *)
+        while Option.is_none !conflict && t.heap_len > 0 do
+          let id = heap_pop t in
+          pass_clean id;
+          cursor := id + 1;
+          dirty.(id) <- false;
+          t.ctr.c_seeded <- t.ctr.c_seeded + 1;
+          run_one id
+        done;
+        if Option.is_none !conflict then (
+          pass_clean n;
+          cursor := n);
+        while Option.is_none !conflict && not (Queue.is_empty queue) do
+          let id = Queue.pop queue in
+          in_queue.(id) <- false;
+          run_one id
+        done)
     in
     (* M6-T22: a [Conflict] leaves the seed slots past the cursor and the queue's
        members marked; an exception (a BAGUETTE_DEBUG check, an attribution failure)
@@ -2291,7 +2425,7 @@ let propagate ?stop ?(poll_runs = default_poll_runs) (t : t) (store : Store.t) :
           dirty.(t.heap.(i)) <- false
         done;
         t.heap_len <- 0;
-        Queue.iter (fun id -> in_queue.(id) <- false) queue
+        clear_queues ()
     | exception e ->
         Array.fill dirty 0 n false;
         t.heap_len <- 0;
