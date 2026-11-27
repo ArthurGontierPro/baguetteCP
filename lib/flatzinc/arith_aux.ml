@@ -38,6 +38,7 @@ let ladder_bools ctx (y : Model.operand) =
       let lo, hi = ctx.bounds j in
       let acc = ref [] in
       for v = lo + 1 to hi do
+        Baguette_proof.Deadline.tick 64 (* --time-limit in the parse, D-0263 *);
         acc := (v, ctx.fresh ()) :: !acc
       done;
       List.rev !acc

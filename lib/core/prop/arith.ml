@@ -372,17 +372,11 @@ let lookup ge =
    `y >= lo_y` and `y <= hi_y` are true of every assignment the declaration allows. *)
 let at_least ~ylo ~ge v =
   if v <= ylo then Always
-  else
-    match ge v with
-    | Some b -> Lit { g_var = b; g_pos = true }
-    | None -> Never
+  else match ge v with Some b -> Lit { g_var = b; g_pos = true } | None -> Never
 
 let at_most ~yhi ~ge v =
   if v >= yhi then Always
-  else
-    match ge (v + 1) with
-    | Some b -> Lit { g_var = b; g_pos = false }
-    | None -> Never
+  else match ge (v + 1) with Some b -> Lit { g_var = b; g_pos = false } | None -> Never
 
 (* The variable the case split runs over. A FlatZinc model may write `int_div(x, 3, q)`,
    and then there is exactly one case and no ladder: [Case_const] is that, spelled as

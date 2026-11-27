@@ -128,6 +128,7 @@ module Activity = Baguette_core.Activity
 module Justify = Baguette_core.Justify
 module Writer = Baguette_proof.Writer
 module Encoding = Baguette_proof.Encoding
+module Deadline = Baguette_proof.Deadline
 module Checked = Baguette_core.Checked
 
 type options = {
@@ -319,6 +320,13 @@ let usage () =
   prerr_endline "                    Exit status 0: a stopped run is not a failure.";
   prerr_endline "                    SIGTERM, SIGINT and SIGXCPU stop a run the same way";
   prerr_endline "                    (M6-T24), and a second one ends the proof at once.";
+  prerr_endline "                    BEFORE the search (parse, compile, .opb, the proof's";
+  prerr_endline
+    "                    opening) it is checked at S + 1 s (D-0263), so that a";
+  prerr_endline "                    short limit still reaches the search and its proof:";
+  prerr_endline "                    same stdout and exit, `at=<phase>` on the `limit:`";
+  prerr_endline "                    line; the proof is ended if the .opb was complete";
+  prerr_endline "                    and otherwise there is none, which stderr says.";
   prerr_endline
     "  --no-proof        (M9-no-proof-T2, D-0126) solve WITHOUT a proof. Off by";
   prerr_endline "                    default, and a MEASUREMENT INSTRUMENT: the answer it";
@@ -1831,6 +1839,38 @@ let wall () = Unix.gettimeofday () -. wall_start
    node-limit stop. *)
 let stop_fired_at = ref Float.nan
 
+(* A stop by --time-limit BEFORE the search (D-0263, lib/proof/deadline.ml): what a search
+   cut by the limit prints (`=====UNKNOWN=====`, a `limit:` line, exit 0), with the phase
+   in `at=`. The proof is ended when the stop came inside [Encoding.start_proof]
+   ([deadline_ended]); before that the .opb itself is incomplete, and stderr says the proof
+   is INCOMPLETE (or absent), as exit 5 and exit 6 say of theirs. *)
+let deadline_ended = ref false
+
+let exit_time_limit opts ~proof_ended =
+  print_string "=====UNKNOWN=====\n";
+  flush stdout;
+  Printf.eprintf
+    "limit: reached time-limit=%s cpu=%.2fs wall=%.2fs nodes=0 at=%s proof=%s\n"
+    (match opts.time_limit with None -> "none" | Some s -> Printf.sprintf "%gs" s)
+    (Sys.time ()) (wall ()) !Timing.current
+    (if proof_ended then "ended"
+     else if opts.proof_prefix = None then "none"
+     else "incomplete");
+  (match opts.proof_prefix with
+  | Some p when (not proof_ended) && Sys.file_exists (p ^ ".opb") ->
+      Printf.eprintf
+        "  The run stopped before its encoding was complete (D-0263): %s.opb / %s.pbp \
+         are INCOMPLETE,\n\
+        \  not a proof of anything. Do not check them and do not keep them.\n"
+        p p
+  | Some _ when not proof_ended ->
+      prerr_string
+        "  The run stopped before its encoding was complete (D-0263): no proof was \
+         written.\n"
+  | _ -> ());
+  flush stderr;
+  exit exit_ok
+
 (* The `limit:` line of a stopped run (M6-T9: a --time-limit that stops cleanly and
    reports stats and incumbent). One line, always (not gated on --stats), so that a
    results file built from stderr alone can say what a stopped run was doing.
@@ -1956,7 +1996,13 @@ let solve opts (m : Model.t) =
            line (D-0172). With no line ever written there is nothing to share, so under
            --no-proof a build is not hash-consed, nor given an identity, at all. *)
         if opts.no_proof then Baguette_core.Explanation.set_hashcons false;
-        Encoding.start_proof encoding writer;
+        (* D-0263: the .opb is complete, so a stop by the deadline here ENDS the proof,
+           which is a valid prefix ([Deadline.tick] runs between two lines). *)
+        (try Encoding.start_proof encoding writer
+         with Deadline.Reached ->
+           Writer.conclude_interrupted writer;
+           deadline_ended := true;
+           raise Deadline.Reached);
         (* The context needs no model row: every propagator instance carries its own
            row id (D-0011: one propagator instance, one model row; D-0015 made the row
            part of the Explanation). M1-T31 removed the ambient row and the
@@ -2057,6 +2103,7 @@ let solve opts (m : Model.t) =
                call and not the total. Sampled inside the phase so that the two brackets
                nest. *)
             let e0 = Writer.emitted_us () and l0 = Writer.emitted_lines () in
+            Deadline.disarm () (* the search polls [config.stop], D-0263 *);
             t_search := wall ();
             let config =
               {
@@ -2366,6 +2413,12 @@ let () =
     exit exit_usage);
   report_std_flags opts;
   Timing.record "args" (Timing.now () - t_main);
+  (* --time-limit before the search (D-0263): the parse, the compile, the .opb and the
+     proof's opening poll this, at the limit plus [Deadline.grace]; [solve] disarms it
+     where the search's own stop takes over. *)
+  Option.iter
+    (fun s -> Deadline.arm (fun () -> wall () >= s +. Deadline.grace))
+    opts.time_limit;
   (* The reader, by the file's extension (M23-inputs-T2, D-0230): `.scp` is the input
      format of CakeML's cake_pb_cp, read by lib/scp/ into the same Model.t; anything else
      is FlatZinc. The end-to-end chain (--e2e, M14) is FlatZinc's alone: D-0228 (a
@@ -2387,6 +2440,7 @@ let () =
       prerr_string (Encoding.out_of_memory_message ());
       flush stderr;
       exit exit_resource
+  | exception Deadline.Reached -> exit_time_limit opts ~proof_ended:false
   | Error e ->
       prerr_endline (Fz_error.to_string e);
       exit exit_usage
@@ -2394,6 +2448,7 @@ let () =
       refuse_enumeration opts m;
       match Fz_error.catch (fun () -> solve opts m) with
       | Ok () -> exit exit_ok
+      | exception Deadline.Reached -> exit_time_limit opts ~proof_ended:!deadline_ended
       | exception (Sys_error msg | Fun.Finally_raised (Sys_error msg)) ->
           exit_write_failed opts msg
       | Error e ->

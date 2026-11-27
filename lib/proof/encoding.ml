@@ -661,6 +661,8 @@ let note_renamed t x =
    ladder, which accounts for all its rungs at once. *)
 let commit t c =
   if Opb.relation c = Opb.Eq then raise Equality_in_opb;
+  (* --time-limit before the search (D-0263): before [t] is touched. *)
+  Deadline.tick 64;
   t.n <- t.n + 1;
   (match t.sink with
   | Retain rev -> t.sink <- Retain (c :: rev)
@@ -1820,6 +1822,9 @@ let ensure_direct t w x =
       Writer.comment w "direct encoding of %s over [%d, %d]" x v.lo v.hi;
       let z value = Lit.Eq (x, value) in
       for value = v.lo to v.hi do
+        (* D-0263: a value is three proof lines, which tick on their own unless the
+           writer is null (--no-proof), where this one is the loop's only clock. *)
+        Deadline.tick 64;
         let zl = Lit.eq x value in
         let origin = Printf.sprintf "channel %s=%d" x value in
         (* ~x_eq_v \/ x_ge_v, only when x >= v is not the constant true *)
@@ -2291,6 +2296,7 @@ let write_opb ?(comments = []) t oc =
       let rec go () =
         let k = input ic buf 0 (Bytes.length buf) in
         if k > 0 then (
+          Deadline.tick k;
           output oc buf 0 k;
           go ())
       in
