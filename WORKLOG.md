@@ -19,6 +19,7 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
+| M22-review-bugs: wide domains, the memory cap and the time limit (D-0263) | `lib/flatzinc/compile.ml`, `lib/proof/encoding.ml`, `lib/proof/opb.ml`, `lib/core/checked.ml`, time-limit and heap-budget plumbing outside `bin/main.ml` (minimal line in `bin/main.ml` if needed), tests and models | agent-wide (branch wave108-wide) | 2026-11-27 |
 
 ## Cross-session requests
 
