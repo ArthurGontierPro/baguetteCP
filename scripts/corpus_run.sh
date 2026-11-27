@@ -77,6 +77,11 @@
 #                      MEASUREMENT row (config b of D-0080), never a success; it
 #                      carries the same compact detail. A stopped run under
 #                      NO_PROOF=1 is UNKNOWN-NOPROOF.
+#   PROOF-WRITE-ERR   exit 6 (D-0248): the solver could not WRITE the proof (missing
+#                      directory, full disk) and said so in one line, with no verdict. An
+#                      environment fault of the run, not a solver crash and not a
+#                      refusal, so it is not SOLVE-ERR-6 and it is never read as a
+#                      result. The detail column is that line.
 #   SOLVE-ERR-<rc>     any other exit, rc kept (134 = SIGABRT/OOM, see D-0068)
 #
 # Proof-side:
@@ -653,6 +658,12 @@ $(head -c 120 "$L.mzn.err" | tr '\t\n\r' '   ')"
       # SOLVE-ERR-134 is the entire deliverable, because the two look identical in a
       # total and are opposites in what they tell you.
       emit "$id" "REFUSED-RESOURCE" "$sz" - "$detail"
+      cleanup_one "$L" keepfzn
+      return
+      ;;
+    6)
+      # M22-review-T5 (D-0248). Writing the proof failed: the environment, named.
+      emit "$id" "PROOF-WRITE-ERR" "$sz" - "$detail"
       cleanup_one "$L" keepfzn
       return
       ;;
