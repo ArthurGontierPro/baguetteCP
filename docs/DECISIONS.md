@@ -33413,3 +33413,171 @@ written: builder.ml's note that a singleton-declared variable in a root-UNSAT ro
 `Justify.emit`; pb_analysis.ml's `level_of` returning 0 for a literal its declared domain
 falsifies (the code may give 1 when level 0 has no trail entry); analysis.ml's "2^30 trail
 positions in 15 GB" (the laptop's figure).
+
+## D-0256  [AUTONOME] M17-bench-series-T6, the per-node factor as a lane: `scripts/factor_lane.sh`. Today baguette spends 30 to 143 times Gecode's instructions per node without proof on D-0207's families (57 to 196 with), a quarter of what it spent on 2026-11-23 on alldiff and linear; on planted 3-SAT `--cdcl` walks Chuffed's tree and answers, at 38 times Chuffed's instructions per failure; and `--cdcl`'s proof on costas14 is REJECTED
+
+**Status**: DONE on `wave102-factor` (agent-factor, 2026-11-27), not merged. Base: main `3e60e8c`. No
+change under `lib/` or `bin/`. The measured binary is the release build of that source,
+`c79a6b0683eb6ce2c2245335e4ddde2d`. Runs in `/scratch/arthur/factor-runs/` (run1, run2, repro, st).
+
+### 1. What was built, and the choices made without the user
+
+`scripts/factor_lane.sh` (`make factor`), `bench/factor/` (plan, instances, generator, table script,
+README, `reference.tsv`), a section of `scripts/README.md` and a per-node table under
+`bench/series/HISTORY.md`. The lane's header is its manual. For each instance it runs baguette in four
+configurations (default and `--cdcl`, each with and without proof) and the reference, each twice (a
+base run stopped at one node, and the measured run), under `perf stat -e instructions:u`, and reports
+(I - I_base) / (U - U_base) per node or per failure, the factor over the reference and a geometric mean
+per family. Every proof, base runs included, is checked by the checker `scripts/checker.sh` resolves
+and deleted.
+
+| Choice | Options considered | Taken | Why | Revert |
+|---|---|---|---|---|
+| The instances | re-flatten D-0207's models with today's `mznlib`; reuse its files | reuse the six files of `pernode2/fzn/`, gzipped, bytes unchanged | the comparison with D-0207 is then on the same input; every file names its flattening command in its header | replace the files and re-record |
+| Budgets | D-0207's (full, or 20 000 nodes); smaller ones to shorten the lane | D-0207's | same trees as its table; the lane still ends in 6.5 to 8 minutes at -j 8 | change `plan.tsv`, re-record |
+| The unit | always the node; always the failure; the node only on the same tree | the node when baguette's nodes AND failures are within 2 % of the reference's, else the failure on each solver's own tree, always the failure under `--cdcl` | a per-node figure on two different trees compares two different searches; `--cdcl` counts no node for an implied right branch (as Chuffed LCG, D-0207 section 1) | `SAME_TREE` in `table.py` |
+| The reference | Gecode everywhere; D-0207's per family | Gecode, except rcpsp11_60 against Chuffed `--lazy off` (D-0207's same tree); rcpsp11_66 against Gecode cut at 20 000 nodes, per failure (Chuffed `--lazy off` runs past 60 s) | the reference D-0207 aligned is kept; no reference that does not finish | `plan.tsv` |
+| The 3-SAT family | uniform random near the threshold (SAT not certain); planted | planted, 200 variables, ratio 4.26, seeds 1 to 3 all kept, chosen before any run | satisfiable by construction; Chuffed answers in 0.06 to 0.20 s | `gen_3sat.py`, `plan.tsv` |
+| The binary | the dev build (the gates'); release | release (`_build_release`, `make factor` builds it) | D-0207 measured release; release runs fewer instructions per node (D-0171), so dev would inflate the factor | `BIN=` |
+| A proof the checker refuses | fail and record nothing; fail and record | the lane exits 1; `--record` still writes the reference, with that line's verdict in it | the counts were measured; the failure stays visible in the rc and in the file | `table.py`, the `record` branch |
+| The checker's cap | the solver's 4 GB `ulimit -v`; its own | 32 GB (`FACTOR_CHECK_CAP_KB`), the solver keeps 4 GB | veripb died at 4 GB on jr63's `--cdcl` proof (2.3 GB, "memory allocation of 1107296272 bytes failed"); it peaks at 4.3 GB RSS there; the diff lane met the same on openshop | the variable |
+
+Not a gate: a factor that moves never fails the lane; a crashed run or a proof not verified does (rc 1).
+
+### 2. Today's factors (run2, binary `c79a6b06`, fataepyc-06, 389 s at -j 8)
+
+Thousands of user instructions per unit, `n` per node on the same tree, `f` per failure, and the
+factor over the reference on the same unit. The reference column is per node and per failure.
+
+| instance | family | reference | default, proof | default, `--no-proof` | `--cdcl`, proof | `--cdcl --no-proof` |
+|---|---|---|---|---|---|---|
+| costas14 | alldiff | G 108 / 215 | 21 026/n (196x) | 13 145/n (122x) | 47 763/f (222x) | 31 532/f (147x) |
+| jr63 | element | G 213 / 425 | 19 681/n (92.6x) | 8 101/n (38.1x) | 37 775/f (88.8x) | 15 995/f (37.6x) |
+| mknap2-1 | linear | G 69.4 / 139 | 10 602/n (153x) | 9 929/n (143x) | 25 305/f (182x) | 24 117/f (174x) |
+| qr3 | clauses | G 28.0 / 56.0 | 1 603/n (57.3x) | 851/n (30.4x) | 2 889/f (51.6x) | 1 493/f (26.7x) |
+| sat3_200_1 | sat3 | G 83.7 / 168 | 2 602/f (15.5x) | 1 929/f (11.5x) | 2 591/f (15.5x) | 1 935/f (11.6x) |
+| sat3_200_2 | sat3 | G 75.7 / 152 | 1 867/f (12.3x) | 1 257/f (8.29x) | 1 698/f (11.2x) | 1 130/f (7.46x) |
+| sat3_200_3 | sat3 | G 78.2 / 157 | 1 900/f (12.1x) | 1 284/f (8.20x) | 1 750/f (11.2x) | 1 174/f (7.49x) |
+| rcpsp11_66 | cumulative | G 145 / 291 (own tree, cut) | 19 765/f (68.0x) | 4 644/f (16.0x) | 26 174/f (90.1x) | 4 185/f (14.4x) |
+| rcpsp11_60 | cumulative | CN 92.7 / 185 | 24 373/f (132x) | 3 712/f (20.0x) | 37 764/f (204x) | 4 215/f (22.7x) |
+
+Geometric mean per family (default proof / default no-proof / `--cdcl` proof / `--cdcl` no-proof):
+alldiff 196 / 122 / 222 / 147, element 92.6 / 38.1 / 88.8 / 37.6, linear 153 / 143 / 182 / 174,
+clauses 57.3 / 30.4 / 51.6 / 26.7, sat3 13.2 / 9.22 / 12.5 / 8.64, cumulative 94.6 / 17.9 / 135 / 18.1.
+
+Read across. The proof multiplies the no-proof cost by 1.07 (mknap) to 6.6 (rcpsp11_60). Per failure,
+`--cdcl` costs 0.88 to 1.21 times what the default costs per failure on the four families with a same
+tree (qr3 0.88, jr63 0.99, costas14 1.20, mknap2-1 1.21 without proof; 0.90 to 1.19 with), and it
+needs about half the nodes, so on these fixed searches the CDCL loop is neither cheaper nor dearer per
+unit of search.
+
+### 3. Next to D-0207, same instance and same tree
+
+D-0207 section 3's B columns (main `3dc1a81`, release `f244c35a`) against today's default columns, per
+node, thousands of instructions. Gecode's figures are the same to the third digit both days (28.0,
+108, 69.4, 213), which also shows the reference did not move. The trees are D-0207's: same node and
+failure counts on qr3, mknap2-1, jr63 (one failure fewer) and rcpsp, ten nodes more on costas14
+(21 139 against 21 129).
+
+| instance | D-0207 proof | today proof | change | D-0207 no-proof | today no-proof | change |
+|---|---|---|---|---|---|---|
+| qr3 | 1 841 (66x) | 1 603 (57x) | -13 % | 1 044 (37x) | 851 (30x) | -18 % |
+| costas14 | 54 119 (503x) | 21 026 (196x) | -61 % | 44 736 (416x) | 13 145 (122x) | -71 % |
+| mknap2-1 | 41 080 (592x) | 10 602 (153x) | -74 % | 40 298 (581x) | 9 929 (143x) | -75 % |
+| jr63 | 24 548 (115x) | 19 681 (93x) | -20 % | 12 586 (59x) | 8 101 (38x) | -36 % |
+| rcpsp11_66 (B's own tree, 2 010 nodes) | 10 201 | 9 538 | -6.5 % | 2 636 | 2 241 | -15 % |
+| rcpsp11_60 (B's own tree, 71 nodes) | 11 579 | 12 010 | +3.7 % | 2 007 | 1 829 | -8.9 % |
+
+The rcpsp lines are per node on baguette's own tree, as D-0207 gave them, read from the lane's raw
+counts (`/scratch/arthur/factor-runs/pernode.py`). The large falls are where D-0207 section 5 put the
+cost: learned rows that run and do not prune (costas14, mknap2-1, its item 1) and alldiff's Régin stage
+(item 4). Since 2026-11-23 main merged, among others, D-0209 (proof text), D-0226 (evicted learned
+constraints leave the engine, `tiered` retention by default), D-0235 and D-0242 (alldiff), D-0236,
+D-0243 and D-0245 (names, the wake path, analysis). The lane does not attribute the fall to one of
+them; a profile would (D-0207 section 4's method). The factor that remains is still 30 to 143 without
+proof, and the no-learning core D-0207 measured at 6 to 55 cannot be measured on main, which has no
+switch that turns learning off.
+
+### 4. The 3-SAT family: baguette no longer "gives nothing", and the gap is per node
+
+The review's probe (170 variables, ratio 4.26, uniform, on the laptop) found Chuffed at 0.012 s and
+baguette with nothing in 3 s. On the planted family at 200 variables:
+
+| seed | Chuffed LCG | Chuffed `--lazy off` / Gecode | baguette default | baguette `--cdcl` | `--cdcl`, activity, Luby, phase saving | learned constraints off |
+|---|---|---|---|---|---|---|
+| 1 | 15 140 nodes, 0.20 s | 2 297 604 nodes, 3.1 s / 37.9 s | 27 291 nodes, 8.2 s | 15 316 nodes, 6.7 s | 6 294 nodes, 1.5 s | nothing in 60 s (1.03 M nodes) |
+| 2 | 2 256, 0.06 s | 625 529, 0.8 s / 9.6 s | 3 269, 0.55 s | 2 131, 0.50 s | 1 677, 0.35 s | 272 194, 14.8 s |
+| 3 | 3 123, 0.06 s | 553 460, 0.7 s / 9.1 s | 5 572, 0.92 s | 3 358, 0.82 s | 3 727, 0.76 s | 244 575, 14.1 s |
+
+Wall times at load about 40, so load-dependent; the node counts are not. Every answer is a solution
+(`----------`), and the six proved runs (default and `--cdcl`) verify `s VERIFIED SATISFIABLE`.
+"Learned constraints off" is `BAGUETTE_PROPAGATE_LEARNED=off` (learned constraints proof-only), the
+closest main has to no learning.
+
+What it shows. With learning, baguette answers every instance; the default needs 1.8 times Chuffed's
+nodes on seed 1 and `--cdcl` 1.01 times (15 316 against 15 140, 11 572 against 11 374 failures): the
+CDCL loop of D-0219 builds Chuffed's tree. Without its learned constraints propagating, baguette
+behaves like Gecode and does not answer seed 1 in a minute. So what separates baguette from Chuffed on
+this family is the cost of a failure: Chuffed LCG spends 51.1 thousand instructions per failure on seed
+1 (`perf stat`, base `-t 1` subtracted), `--cdcl --no-proof` 1 935 thousand (38 times) and `--cdcl`
+with proof 2 591 thousand (51 times). Against Gecode's no-learning failure the factor is 8 to 12
+without proof, the lowest of all families, because a clause propagator is where baguette is closest to a
+SAT solver. The planted distribution is easier than the review's uniform probe, so "answers in seconds"
+is about this family, not that instance.
+
+### 5. `--cdcl` with proof on costas14: the proof is REJECTED
+
+`--cdcl --proof` on costas14 writes a proof veripb 3.0.2 refuses, every time (run1, run2, and a run on
+its own): "Checking error at p.pbp:7483531", the `rup` of `@c7410917`, "not implied by reverse unit
+propagation". The line follows the backtrack from level 8 to level 7, which writes `del id @c5108422
+@c5115524 ...` (line 7483526, older learned constraints) and `del range @c7410425 @c7410916` (line
+7483528). Measured on the kept proof:
+
+- the `del range` line keeping its last id (`@c7410915` as its end): still refused at 7483531;
+- both deletion lines removed: the whole proof verifies (`s VERIFIED SATISFIABLE`, 103 s);
+- only the `del id` line removed, the `del range` kept: verifies (`s VERIFIED SATISFIABLE`, 101 s).
+
+So a learned constraint deleted by that `del id` line is still needed by the next derivation. The
+default search's proof on the same instance verifies, and so do the other 35 proofs of the lane,
+`--cdcl` ones included (jr63's 2.3 GB one with the 32 GB cap).
+
+The same run with `BAGUETTE_RETENTION=off` (keep every learned constraint: 13 383 added, 0 evicted,
+against `tiered`'s 13 477 added and 7 396 evicted, six reductions) writes a proof that verifies (`s
+VERIFIED SATISFIABLE`, 10 582 nodes). That points at a retention eviction. It is evidence and not
+proof, because without evictions the tree differs a little (10 582 nodes against 10 594).
+
+Hypothesis, not checked in the code: `tiered` retention (D-0226's default) evicts a learned constraint
+that is still the reason of a literal on the trail (a locked clause, which MiniSat never deletes), and
+the CDCL loop, where a learned clause propagates at its asserting level and stays a reason across the
+backjump, is where that happens. `--cdcl` is opt-in, and every proof of the default search in this lane
+verifies, but the default uses the same retention, so the owner should check it too. Filed under
+`## Cross-session requests` for whoever owns `search.ml` and `retention.ml` next. Reproduce:
+`main.exe --cdcl --proof P --stats costas14.b.fzn` (from `bench/factor/fzn/`), then `veripb P.opb P.pbp`.
+
+### 6. Stability and duration
+
+Two runs of the lane (run1 at load 43, run2 at load 10 to 30, the same binary) over 90 measured
+processes: the instruction counts differ by a median of 0.0000 % and at most 0.018 % (a Gecode base
+run); the costs per unit by at most 0.0006 %, the factors by at most 0.0024 %. The lane is a
+measurement, not a sample. Duration 389 s at -j 8 (run2); run1 took 463 s with its jr63 check killed
+early at the old 4 GB cap, so a run at load 40 should take about 8 minutes. The longest chain is jr63
+`--cdcl` with proof (about 160 s) then the check of its 2.3 GB proof (229 s, 4.3 GB RSS). The solver's
+peak RSS is 650 MB (jr63 `--cdcl`, proof).
+
+### 7. What the lane cannot measure
+
+- Time. Instructions miss what is bound by memory rather than work (D-0207 section 7, D-0138's 13 % of
+  cycles in a copy); a change that only improves locality shows up here as nothing.
+- A factor on different trees: per failure, it compares the cost of a failure in two different searches
+  (rcpsp, sat3, every `--cdcl` line). The `tree` column says which lines are like for like.
+- Learning's effect on the tree, which is the other half of solving speed; the node counts are printed,
+  and section 4 needed a separate run with no budget to say whether baguette answers.
+- The no-learning core of D-0207 (its NL columns): main has no switch that turns learning off.
+- Growth with the learned database beyond the budgets: per-node cost on a cut tree is an average over a
+  small database (the scaling lane measures the growth).
+- Nine instances. A family mean of one instance is that instance.
+
+### 8. Reverting
+
+Drop `scripts/factor_lane.sh`, `bench/factor/`, the `factor` target and its README section, and the
+per-node table of `bench/series/HISTORY.md` (all on `wave102-factor`). Nothing else depends on them.

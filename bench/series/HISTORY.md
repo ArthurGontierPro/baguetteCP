@@ -53,3 +53,19 @@ Notes on the rows.
   binary of D-0121 is not recorded there.
 - Scores and ranks are only comparable between rows with the same entrants and the same scoring
   script, and the counts only between rows that share a proof cap (see Differing settings).
+
+## Per-node factor, one row per run of `scripts/factor_lane.sh` (M17-bench-series-T6, D-0256)
+
+Run at each series (`make factor`), newest first. A cell is the geometric mean over the family's
+instances of baguette's instructions per unit over the reference's, in four configurations:
+**default with proof / default `--no-proof` / `--cdcl` with proof / `--cdcl --no-proof`**. The
+unit is the node where the trees are the same and the failure elsewhere (always for `--cdcl`);
+the lane's `factor.txt` says which, per instance. The instances and references are
+`bench/factor/plan.tsv` (alldiff costas14, element jr63, linear mknap2-1, clauses QR48 with 3
+fixed, sat3 three planted 3-SAT at 200 variables, cumulative rcpsp 11 at 60 and 66). Copy the row
+the lane prints. A row whose lane failed says why in Settings.
+
+| Date | Record | Commit | Binary | Settings | alldiff | element | linear | clauses | sat3 | cumulative |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 2026-11-27 | D-0256 | `3e60e8c` (main; the branch adds only the lane) | `c79a6b06` (release) | fataepyc-06, -j 8, 389 s; lane rc 1: costas14's `--cdcl` proof REJECTED | 196 / 122 / 222 / 147 | 92.6 / 38.1 / 88.8 / 37.6 | 153 / 143 / 182 / 174 | 57.3 / 30.4 / 51.6 / 26.7 | 13.2 / 9.22 / 12.5 / 8.64 | 94.6 / 17.9 / 135 / 18.1 |
+| 2026-11-23 | D-0207 (by hand, before the lane) | `3dc1a81` | `f244c35a` (release) | the same files; default only; per node on the same tree, cumulative not given | 503 / 416 / not run / not run | 115 / 59 / not run / not run | 592 / 581 / not run / not run | 66 / 37 / not run / not run | not run | not given |
