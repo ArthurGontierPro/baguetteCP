@@ -32966,3 +32966,31 @@ rejected when M7-T11 tried it (D-0072); the gate that kept it out of the solver 
 **Revert**: `git revert` of the commit `M22-review-T5: a proof write that fails ends with one line and exit 6
 (D-0248)` restores the crash with exit 2; the removal reverts on its own commit
 (`M22-review-T5: Domain.of_list and change_of move ...`).
+
+## D-0251  [AUTONOME] The open items of 2026-11-27 the user handed back: three decided, two sent to a held-out comparison
+
+**Status**: DECIDED (orchestrator, 2026-11-27). The user's words, on being given the list of open decisions: "Je n'ai pas
+assez de connaissances des résultats pour prendre ces décisions. Soit tu sais les trancher toi-même soit il faut faire des
+comparaisons pour trouver leurs conséquences sur un set d'instances hétérogènes."
+
+### 1. Decided here
+
+| Item | Options | Choice | Why | Revert |
+|---|---|---|---|---|
+| SPEC 2.1 row for `lex_lesseq` / `lex_less` (D-0239), merged as text while the agent called it a proposal | keep the row; remove it and leave the globals undocumented | KEEP | the row describes what mznlib does and nothing else, in the form of the rows D-0217, D-0220 and D-0233 already added; a supported global missing from 2.1 is the worse state | delete the row in `docs/SPEC.md` |
+| Exit status 6 for a failed proof write (D-0248) | 6; the review's 5; a SPEC sentence | KEEP 6, no SPEC sentence | 5 is read as the heap budget by the campaign scripts; the status is documented where the others are (`bin/main.ml` usage text) and bucketed by `corpus_run.sh` (`PROOF-WRITE-ERR`) | `git revert c460150` |
+| ROADMAP row M18-coverage-T14, the fourth row added in this autonomous run where the rule allows three | keep; remove and stop agent-gccvar | KEEP, and no further row in this run | the row came out of a measurement (D-0244: mondoku 10-10-6 in 4 271 nodes against no answer in 240 000) and the work on it was already running; agents launched since are told to add none | delete the row |
+
+### 2. Sent to a comparison: `BAGUETTE_MINIMISE=rec` (D-0241) and `BAGUETTE_PRIORITY=classes` (D-0246) as defaults
+
+Both were measured on the tuning set of D-0205, which is also the set ideas are tuned on. `rec` loses nothing and adds 2 and 1
+complete answers with a pairwise share inside the noise; `classes` adds 2 and 1 and loses two verified optima with proof.
+D-0205's rule keeps both `off`, and that stands until the comparison of D-0252 reports: a HELD-OUT heterogeneous set (drawn by
+D-0205's rule from the Challenge lists, tuning-set instances excluded), four arms (`off`, `rec`, `classes`, both), with and
+without proof, 300 s.
+
+The rule, fixed before the numbers exist. A switch becomes the default if and only if, on the held-out set, in BOTH modes
+(with proof, without proof): it loses no more verified complete answers than it gains with a net gain of at least 2, and its
+pairwise share against `off` is at least 0.47 (D-0205's 0.03 noise band). Each instance whose answer is lost is listed. A
+default change is its own commit, followed by a lane re-record in its own commit and a gate. If neither passes, both stay
+`off` and the question is closed until one of the follow-ups of D-0241 section 7 or D-0246 section 6 changes the code.
