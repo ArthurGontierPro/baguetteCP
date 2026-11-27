@@ -4,7 +4,9 @@ and turn an objective into `solve satisfy`, one at a time, while the same verdic
 
 Usage: shrink_mzn.py IN.mzn OUT.mzn VERDICT [FLAG...]
   VERDICT   the verdict to preserve (STATUS-MISMATCH, PROOF-REJECTED, BAD-SOLUTION, ...), as
-            streams.py's check_run names it
+            streams.py's check_run names it; or E2E:bridged:TEXT / E2E:solver:TEXT, kept while
+            tools/e2e/chain.sh on that path prints a line that contains TEXT (e.g.
+            "E2E:solver:FAIL SAT veripb: Error: Checking error")
   FLAG...   baguette flags of the failing configuration; env assignments NAME=VALUE among them
             are passed as the environment (e.g. BAGUETTE_RETENTION=fifo:1 --cdcl)
 
@@ -17,11 +19,21 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import streams as S  # noqa: E402
 
 
-def verdict_of(ctx, mzn, flags, env):
+def verdict_of(ctx, mzn, flags, env, want=""):
     model = S.Model(ctx, mzn, 0)
     v = S.pre(ctx, model)
     if v:
         return v
+    if want.startswith("E2E:"):
+        path = want.split(":")[1]
+        e = dict(env, BAGUETTE=S.BIN, E2E_TIMEOUT="60", CAKE_PB_CP=os.environ.get(
+            "CAKE_PB_CP", "/cluster/arthur/baguette-results/wave55-e2e/cake_pb_cp-438b8f83"))
+        if path == "solver":
+            e["E2E_SOLVER"] = "1"
+        d = os.path.join(ctx.outdir, "e2e")
+        rc, so, _ = S.sh("bash %s %s %s" % (S.q(os.path.join(S.ROOT, "tools", "e2e", "chain.sh")),
+                                            S.q(model.fzn_path), S.q(d)), 400, env=e, cap=False)
+        return "E2E:%s:%s" % (path, " ".join(so.strip().splitlines()[-1:]))
     run = S.bag(model, flags, env, os.path.join(ctx.outdir, "p"), timeout=60)
     return S.check_run(ctx, model, run, cfg="shrink", all_sols=True)[0]
 
@@ -36,7 +48,14 @@ def main():
     tmp = tempfile.mkdtemp(prefix="shrink-", dir=os.path.dirname(os.path.abspath(dst)))
     ctx = S.Ctx("shrink", tmp, 0)
     lines = open(src).read().splitlines(keepends=True)
-    if verdict_of(ctx, "".join(lines), flags, env) != want:
+    def holds(text):
+        v = verdict_of(ctx, text, flags, env, want)
+        if want.startswith("E2E:"):
+            path, text = want.split(":", 2)[1:]
+            return v.startswith("E2E:%s:" % path) and text in v
+        return v == want
+
+    if not holds("".join(lines)):
         print("does not reproduce %s" % want, file=sys.stderr)
         sys.exit(1)
     changed = True
@@ -50,7 +69,7 @@ def main():
                 cand = lines[:i] + ["solve satisfy;\n"] + lines[i + 1:]
             else:
                 continue
-            if verdict_of(ctx, "".join(cand), flags, env) == want:
+            if holds("".join(cand)):
                 lines = cand
                 changed = True
                 break
