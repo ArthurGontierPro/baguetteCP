@@ -32462,3 +32462,253 @@ default; not re-recorded)
 
 Revert: `git revert 60c57ea 2d6a518 525184a a700a73 0e48012` removes the switch, the rules and
 their lanes; with the default `off` they change no artefact.
+
+## D-0243  [AUTONOME] M20-pernode-T4 on the engine's wake path: the static wake index as flat int arrays walked without closures, the default advisor answered without its call, the trigger mask off a byte per id, and a memo of positive answers in `check_attribution`. Same trees, byte-identical artefacts; instructions per node without proof -2.0 % on elitserien handball12, -2.2 % on tppv circ14, -3.0 % on costas13, -5.0 % on qr2
+
+**Status**: DONE on `wave89-wakes` (agent-wakes, 2026-11-27), not merged. Base: main `cb727bc`, release binary
+`ef11db7f` (agent-hall's `new.exe`, D-0242). Final: `a2fdeb2`, release binary `1ee55030`. Touches
+`lib/core/engine.ml` and `test/unit/test_engine.ml` only. Node fataepyc-06 at load 14 to 21 (other sessions'
+runs), so the cycle counts below are noisy and the instruction counts are the measurement. Scripts, binaries'
+hashes, the per-run `md5`/`instr`/`cycles` files and the profiles: `/cluster/arthur/baguette-results/wakes/`.
+
+### 1. Context and method
+
+agent-hall's cross-session request (WORKLOG, D-0242): after D-0242, `Engine.watchers_of_new_entries` was 6.1 %
+of handball12's samples, 8.3 % of tppv circ14cnonbal, 7.6 % of circ8bbal, 9.7 % of costas13 and 13.5 % of qr2,
+two thirds of it in its `List.iter` over the static watcher list, and `Engine.check_attribution` about 1 %
+(`in_scope` 0.73). The contract was the same search trees and artefacts: the same wake order, the same woken
+set, the attribution check as strong as before.
+
+Method of D-0236 and D-0242: `perf stat -e instructions:u,cycles:u` at a fixed node budget
+(`BAGUETTE_NODE_LIMIT`), per node = (I(N) - I(1)) / (nodes - 1), the 1-node run taken with the base binary.
+Budgets: handball12 3 000 nodes, tppv circ14cnonbal 2 000, tppv circ8bbal 3 000, costas13 3 000 (it completes
+in 1 504), qr2 20 000; agent-hall's `.fzn` (`/scratch/arthur/hall-runs/fzn`). Every step was run with and
+without `--proof`, and at every step the md5 of `.opb`, `.pbp` and stdout and the counters nodes, conflicts,
+learned, props, eff, wakes, masked, vetoed, advised and seeded were equal to the base binary's on all five.
+Profiles with `perf record --call-graph fp` on the `baguette-fp` switch, one at a time.
+
+### 2. What the walk paid
+
+Per trail entry, the walk iterated the variable's static watcher list (an `int list`, newest first) through
+`List.iter` and a closure, which called the `wants` closure (veto, trigger mask through `trigger_of`, then
+`advises`, which calls the instance's `inst_advise` closure) and a local recursive `flush_above` closure for the
+merge with the self-watching ids. On handball12 the static wakes are almost all to model propagators whose
+advisor is `Propagator.advise_always` (2 600 wakes per node, 5 % masked); on qr2 they are learned PB rows whose
+advisor is real work (Retention's gate around it). `check_attribution` allocated a closure per call
+(`watches`) and `in_scope` another per new entry (its local `go`).
+
+### 3. The steps, each measured (instructions per node against the base, without / with proof)
+
+| step | handball12 | circ8bbal | circ14cnonbal | costas13 | qr2 | kept |
+|---|---|---|---|---|---|---|
+| s1 `wake_static` an int array per variable plus a length, walked from the last cell down; the merge two loops; `wants` top level; `advises` skips `advise_always` | -1.52 / -0.36 | -2.37 / -0.70 | -1.98 / -0.52 | -2.13 / -0.08 | -3.44 / -2.02 | yes |
+| s2 = s1 + `in_scope`'s binary search top level (no closure) | -1.52 / -0.34 | -1.95 / -0.75 | -1.63 / -0.48 | -2.20 / +0.02 | -3.55 / -2.11 | yes |
+| s3 = s2 + `attr_ok`, a memo of positive answers in `check_attribution` | -1.62 / -0.38 | -2.15 / -0.82 | -1.77 / -0.54 | -2.18 / +0.02 | -3.74 / -2.22 | yes |
+| s4 = s3 + the walk's result in a module-level buffer instead of a list | -1.28 / -0.32 | -2.09 / -0.67 | -2.01 / -0.57 | -1.62 / +0.11 | -2.75 / -1.78 | **withdrawn** |
+| s5 = s3 + the trigger mask off `trig_bits`, one byte per id | -1.88 / -0.43 | -2.43 / -0.88 | -2.06 / -0.80 | -2.79 / -0.17 | -4.42 / -2.61 | yes |
+| s5 with the mask factored into a function `wakes_id`, not inlined | -1.44 / -0.34 | -1.89 / -0.71 | -1.55 / -0.62 | -1.80 / +0.15 | -3.20 / -1.92 | as `[@inline]` |
+| `wakes_id` `[@inline]` | -1.88 / -0.43 | -2.43 / -0.88 | -2.06 / -0.80 | -2.80 / -0.17 | -4.46 / -2.62 | yes |
+| `wants` and `advises` `[@inline]` (final, `1ee55030`) | **-2.01 / -0.46** | **-2.61 / -0.98** | **-2.23 / -0.86** | **-3.03 / -0.25** | **-4.95 / -2.90** | yes |
+
+s1 to s3 differ by noise on some rows: the step from s1 to s2 is within +-0.4 %, and s3's memo pays 0.1 to 0.2 %
+on four of five instances and nothing on costas13. It was kept because its cost in clarity is one field and one
+line in `purge`, and because it does not weaken the check (section 4). The buffer of s4 cost 0.3 to 1 % more
+than the list it replaced (a bounds check and a module-level reference per wake against a minor-heap cons), so
+it was withdrawn before its commit.
+
+Absolute, base `ef11db7f` -> final `1ee55030`, per node:
+
+| instance | instructions, no proof | instructions, proof | cycles, no proof | cycles, proof |
+|---|---|---|---|---|
+| elitserien handball12 | 11.87 M -> 11.63 M | 55.70 M -> 55.45 M | 5.68 M -> 5.43 M | 27.45 M -> 28.08 M |
+| tppv circ14cnonbal | 6.45 M -> 6.31 M | 18.34 M -> 18.18 M | 3.09 M -> 3.08 M | 9.96 M -> 9.42 M |
+| tppv circ8bbal | 4.50 M -> 4.39 M | 14.28 M -> 14.14 M | 2.32 M -> 2.21 M | 7.56 M -> 8.24 M |
+| costas13 | 2.90 M -> 2.81 M | 8.93 M -> 8.91 M | 1.34 M -> 1.28 M | 4.01 M -> 4.39 M |
+| qr2 | 890 k -> 846 k | 1 595 k -> 1 549 k | 382 k -> 380 k | 683 k -> 712 k |
+
+The cycle columns are noise at this resolution under the node's load: `80113bed` and the final `1ee55030` are the
+same code (the second adds the header comment) and their two series differ by up to 7.4 % in cycles per node
+and 0.05 % in instructions. They say nothing finer than "no regression".
+
+### 4. Why each rule gives the same answer (also in `engine.ml`'s header)
+
+- (a) The array of `wake_static.(x)` is appended to in the order the list was prepended to, so walking it from
+  its last cell down visits the list's order. `purge` filters it in place, keeping order, as `List.filter`
+  did. The merge loop is `flush_above` unrolled: the self-watching ids above each static id, then the rest.
+- (b) `Propagator.advise_always` is `fun _ _ -> true` and touches nothing, so answering `true` for it without
+  the call changes no answer, no counter and no `declined` record (only a `false` records one).
+- (c) `trig_bits.(id)` is written from `triggers.(id)` at the two places that write `triggers` (`create`,
+  `add`) and grown with it, filled with `wake_on_any`'s byte as `room` fills `triggers`; an id past its end
+  reads `3`, `wake_on_any`, as `trigger_of` answers. Used in the walk, the seed and the debug record of
+  unasked slots.
+- (d) `attr_ok.(x) = id` is written only after `in_scope t id x` answered yes. A live id's scope never
+  changes (it is set by `create`/`add`), and the one place that changes a scope, `purge` emptying a removed
+  id's, resets `attr_ok` on every variable of that scope. So a memo hit is an answer the binary search gave
+  against the scope that is still the id's, and the check refuses exactly what it refused. The first half of
+  the check (`e.prop <> id`) is untouched and runs before the memo is read.
+
+### 5. Tests
+
+`test_engine.ml` gains two (`test_d0243_*`): the array index against the list's specification (the live
+readers of a variable in ascending id order, minus those a hole masks) over 30 random engines through
+removals, purges and additions past the first array's capacity, 1 200 probes; and the attribution memo, read
+back directly, refusing another instance on a memoised variable and refusing the memoised instance once
+`purge` has emptied its scope. Mutations performed: dropping `purge`'s reset of the memo fails the last two
+memo checks; walking the array upwards fails the new test and the two M1-T24 wake-order checks.
+
+### 6. Verification
+
+All in the worktree at `a2fdeb2`, dev binary `a055ef42`, release `1ee55030`:
+
+- `scripts/check_fmt.sh` clean, `scripts/check_test_widths.py` no wide domain.
+- `dune runtest --root . --force` under `ulimit -v 4000000`: rc 0, 5 495 ok (agent-hall's run on the base:
+  5 489; the six new checks are D-0243's), 0 FAIL, peak RSS 155 MB.
+- `scripts/run_model_tests.sh`: 259 passed, 0 failed, every proof accepted by veripb.
+- `scripts/check_determinism.sh`: 259 models, `.opb`/`.pbp`/stdout identical across two runs.
+- The 259 test models under both encodings (default and `--bits-above none`), `--proof`, release `1ee55030`
+  against agent-hall's sums for `ef11db7f` (the base): exit code, `.opb`, `.pbp` and stdout equal on all 518.
+- `scripts/diff_lane.sh --tier all -j 8`: 347 of 347 runs equal the reference. `--debug`: 333 of 333 equal.
+  Both under `BAGUETTE_MEM_CAP_KB=33554432`, scripts/README.md's documented exception for openshop's checker.
+- `scripts/scaling_lane.sh -j 8`: ok, every line within its threshold.
+
+### 7. What is left
+
+- The walk itself after this: on qr2 the advisors of the learned PB rows (Retention's gate closure around the
+  row's own advisor) are the larger part of `watchers_of_new_entries`' inclusive share; that is Retention's
+  and Pb's code, not the walk's.
+- `Analysis.check_attribution` (1.76 % of handball12 in agent-hall's profile) still asks `List.exists` over
+  `Engine.vars_of`; `Engine.in_scope` answers the same question by binary search without allocating since
+  this record. Cross-session request to the owner of `lib/core/analysis.ml` (agent-minim holds it).
+- `docs/INVARIANTS.md` I-T4 still says the attribution check costs "one hashtable lookup per new entry"; it
+  has been a binary search since D-0138 and is a memo read on a hit since this record. Not in this task's
+  files.
+
+### 8. Decision and revert
+
+[AUTONOME] Kept: no search, proof or answer changes, so no default behaviour changes. Revert: `git revert` of
+`a2fdeb2`, `9479388`, `cb86100` (the trigger bytes and the tests), `3e10deb` (the attribution memo) and
+`5f09fee` (the array index), in that order.
+
+## D-0245  [AUTONOME] M20-pernode-T4 on conflict analysis: `Store.var_named` answers through a direct-mapped memo of 4 096 cells, and `Analysis.locate` reads it as an int. Same trees, byte-identical artefacts; instructions per node without proof -2.5 % on elitserien handball12, -0.8 % on tppv circ14, -0.9 % on costas13, -3.9 % on qr2. The O(log arity) attribution check was measured and withdrawn
+
+**Status**: DONE on `wave91-locate` (agent-locate, 2026-11-27), not merged. Base: main `b61549c`, release
+binary `956f9d27`. Final: `9f70b38` (code) and `55f1a7f` (a comment), release binary `30eda4ca`. Touches
+`lib/core/store.ml`, `lib/core/analysis.ml` and `test/unit/test_core.ml`. Node fataepyc-06 at load 14 to 20
+(other sessions' runs). Scripts, binaries and per-run `md5`/`instr`/`cycles` files:
+`/cluster/arthur/baguette-results/locate/`.
+
+### 1. Context and method
+
+Three cross-session requests (WORKLOG, agent-names D-0236, agent-hall D-0242, agent-wakes D-0243): after
+D-0242 and D-0243, on release profiles without proof, `Store.var_named` under `Analysis.locate` was 5.1 % of
+elitserien handball12's samples (4.9 of it `Hashtbl.find_opt`), and `Analysis.check_attribution` 1.76 %
+(`watches` 1.01, `Engine.vars_of` 0.65). Re-profiled on the base (`perf record --call-graph fp`, 1 000 nodes):
+`var_named` 5.7 % with its callees, `check_attribution` 1.3 % plus `watches` 0.7 % flat. The contract: same
+search trees, byte-identical artefacts, the attribution check as strong as before.
+
+Method of D-0236, D-0242 and D-0243: `perf stat -e instructions:u,cycles:u` at a fixed node budget
+(`BAGUETTE_NODE_LIMIT`), per node = (I(N) - I(1)) / (nodes - 1), the 1-node run taken with the base binary.
+Budgets: handball12 3 000, tppv circ14cnonbal 2 000, costas13 3 000 (it completes in 1 504), qr2 20 000;
+agent-hall's `.fzn` (`/scratch/arthur/hall-runs/fzn`). Every step was run with and without `--proof`, and at
+every step the md5 of `.opb`, `.pbp` and stdout and the counters nodes, conflicts, learned, props, eff, wakes,
+masked, vetoed, advised and seeded were equal to the base binary's on all four. Cycles: the medians of five
+interleaved runs per binary without proof (`rep.sh`), because one run's cycles moved by several per cent. And
+the diff lane's 21 fast instances at their lane budgets without proof, whole-run instructions and stdout md5
+(`corpus.sh`).
+
+### 2. The name lookup: a direct-mapped memo
+
+`Analysis.locate` asks `Store.var_named` once per fact it places, both in `analyse` (`mk_node`) and in the
+decision closure's memo builds (`cite`): 8.87 M lookups over handball12's 3 000 nodes, about 3 000 per node.
+D-0236's one-entry memo (a hit when the name is physically the string of the variable answered last) hit
+about half of them; the other half paid `String.hash` over the whole name (a C call), the bucket walk and
+`String.equal`.
+
+The memo is now 4 096 cells, DIRECT-MAPPED: the cell of a name is `memo_slot name`, its length and its last
+eight bytes (one unaligned load) multiplied by an odd constant and shifted to 12 bits; a short name folds its
+bytes. A cell holds a variable the index answered, or -1, and a hit is the one-entry memo's test on that cell:
+`names.(i) == name`. Sound by D-0236's argument: `i` came out of the index for a name equal to `names.(i)`, and
+any string equal to it gets the same answer from the index. The slot decides only where an answer is kept,
+never what it is, so names that share a cell evict each other and `memo_slot` could be any function of the
+string; the one-entry memo is the case of one cell. A miss is the index lookup it was, plus one int store
+(no `caml_modify`). The memo is allocated on the first lookup, so `Engine.oracle_accepts`' scratch stores,
+which never ask a name, pay nothing. `Store.var_index_named` returns the int (-1: no such name), so a hit
+allocates nothing; `var_named` wraps it in the option, and `Analysis.locate` reads the int.
+
+Hit rates (an instrumented build, not committed): handball12 98.0 % of 8.87 M lookups, tppv circ14 99.6 % of
+443 k, costas13 99.98 % of 479 k, qr2 99.99 % of 3.0 M. A larger memo cannot gain more than the 2 % of
+handball12's misses, about 0.004 % of its instructions, so the size was not tuned further.
+
+Test: `test_core.ml`'s `test_var_named_direct_mapped_memo`, 3 000 names of Compile's shapes and 10 000 asks
+(the store's strings, equal copies, absent names) against the linear scan, with a check that some two names
+share a cell. Break, measured: a hit by the cell alone (no `==` test) fails it.
+
+### 3. The attribution check: measured, withdrawn
+
+agent-wakes' suggestion: `Analysis.check_attribution` asks "does instance `prop` watch `var`" by walking
+`vars_of prop`; `Engine.in_scope` answers it by binary search over the instance's sorted scope. Built as
+`Engine.watches t id v = id >= 0 && id < t.count && not t.removed.(id) && <scope search>` (the `removed` test
+because `vars_of` answers a removed id's tombstone, which has no variables, while its scope is emptied only at
+the next `purge`), passed down from `Search` through `Learn.at_conflict` as `?watches`, with a
+`BAGUETTE_DEBUG` comparison against the list on every call and a test over every id and variable of an engine
+with a removed instance, before and after the purge, and the (c) break still refused by name. It gave the
+same answers and artefacts, and:
+
+| step | handball12 | circ14 | costas13 | qr2 |
+|---|---|---|---|---|
+| s1 `Engine.watches` through D-0243's memo, vs base | +0.15 / +0.06 | -0.23 / +0.21 | +0.43 / +0.03 | -0.01 / +0.06 |
+| s2 = s1 + the memo of section 2, vs s1 | -2.37 / -0.53 | -0.45 / -0.28 | -1.05 / -0.15 | -3.83 / -2.09 |
+| s2b = s2 with the scope search without D-0243's memo, vs s2 | +0.28 / +0.06 | +0.01 / 0.00 | +0.04 / +0.01 | +0.13 / +0.07 |
+| s3 = s2 with the check back on the list, vs s2 | -0.06 / -0.02 | -0.06 / -0.02 | -0.15 / -0.05 | +0.07 / -0.15 |
+
+(instructions per node, % without / with proof). On the 21 fast instances, s3 vs
+s2 ranged from -0.5 % to +0.6 % of a whole run. Median cycles per node of five runs: s2 and s3 within 0.5 % of
+each other on all four. The check reads one short list that the entry's instance owns (a few cells on these
+instances), so what it costs is the call and one cache line, which the binary search pays as well. Withdrawn
+before its commit, with its tests; the comment above `Analysis.watches` records the measurement so that the
+next reader does not redo it. The check is unchanged.
+
+### 4. The final, base `956f9d27` -> final `30eda4ca`, per node
+
+| instance | instructions, no proof | instructions, proof | cycles, no proof (median of 5) | cycles, proof (median of 3) |
+|---|---|---|---|---|
+| elitserien handball12 | 11.62 M -> 11.33 M (-2.49 %) | 55.44 M -> 55.14 M (-0.54 %) | 5.47 M -> 5.22 M (-4.5 %) | 27.65 M -> 27.52 M (-0.5 %) |
+| tppv circ14cnonbal | 6.31 M -> 6.26 M (-0.76 %) | 18.19 M -> 18.17 M (-0.10 %) | 2.88 M -> 2.83 M (-1.4 %) | 9.43 M -> 9.40 M (-0.2 %) |
+| costas13 | 2.81 M -> 2.79 M (-0.94 %) | 8.92 M -> 8.90 M (-0.20 %) | 1.28 M -> 1.27 M (-1.3 %) | 4.01 M -> 3.99 M (-0.4 %) |
+| qr2 | 846 k -> 814 k (-3.85 %) | 1 548 k -> 1 514 k (-2.21 %) | 371 k -> 357 k (-3.9 %) | 671 k -> 654 k (-2.6 %) |
+
+One run of the final with the proof had put handball12 at +17 % cycles while the gate ran beside it; the
+three interleaved runs per binary (`repp.sh`, proofs deleted after each) put one run of each binary 12 to 26 %
+above its other two, so that number was the node's load. The cycles column without proof is the code of s3 (the final's code with the withdrawn plumbing still in the
+tree and unused), whose instructions are within 0.2 % of the final's. The diff lane's 21 fast instances,
+whole runs without proof, base -> s3: -0.3 % (evm-super-compilation) to -6.3 % (chicroster), stdout and
+counters identical on all 21.
+
+With the proof the gain is smaller in share because the proof's own lookups (`Encoding.find`, `Lit.sanitize`,
+`Trace.bits_arm`'s `Encoding.is_bits`) are by name through other tables, which this task did not touch.
+
+### 5. What is left, and the larger change
+
+After the memo, `Store.var_named` is out of handball12's profile (`memo_slot` 0.5 % flat), and the
+`Hashtbl.find_opt` and `caml_hash_mix_string` still visible (0.8 % and 1.1 % flat) are `Encoding.find` under
+`Learned.decl_of_encoding` and `Lit.needs_sanitize`, outside this row's files. `Analysis.locate` with its
+callees is 9.7 % of handball12's samples, mostly `Store.bound_support`'s binary search and the minor heap.
+
+The larger change agent-names requested, a `Reason.fact` that carries its variable (a `var : int` beside
+`name` in `At_least`/`At_most`, filled at the ~120 producer sites in 17 files, element.ml's `Fact_tbl` keyed
+without it or with it agreeing with the name), would now remove only the memo hit (a slot computation and
+two loads per fact) on the learning path. Its remaining motive is the proof side: `Trace.bits_arm` could read a
+per-variable bits array instead of `Encoding.is_bits` per fact (3.5 % of handball12 with the proof, D-0236).
+Proposed as the next task of this row, to be measured against that 3.5 % rather than against this lookup.
+
+### 6. Verification
+
+Worktree `/scratch/arthur/wt-locate` at `55f1a7f`: `scripts/check_fmt.sh` clean; `check_test_widths.py` clean;
+`dune build --root . bin/` then `dune runtest --root . --force -j 8` under `ulimit -v 4000000`: 5 544 ok, 0
+FAIL; `scripts/run_model_tests.sh` 259 passed, 0 failed, every proof accepted; `scripts/check_determinism.sh`
+259 models identical across two runs; `scripts/diff_lane.sh --tier all -j 8` 347 of 347 runs equal the reference, `--debug` 333 of 333 (dev binary `ef23c899`); `scripts/scaling_lane.sh -j 8` every line within its threshold. Never `--update`.
+
+### 7. Decision and revert
+
+[AUTONOME] Kept: no search, proof or answer changes, so no default behaviour changes. Revert: `git revert
+55f1a7f 9f70b38`.

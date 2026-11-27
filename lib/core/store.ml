@@ -22,7 +22,12 @@
    [created_domain] reads an array of the created domains (see each).
 
    D-0197: a walk over a [Combine]'s summands ([drop_page_only_lemmas]) runs in constant
-   stack, since a summand list is as long as the ladders it crosses. *)
+   stack, since a summand list is as long as the ladders it crosses.
+
+   M20-pernode-T4 (D-0245): [var_named] answers through a DIRECT-MAPPED memo of the
+   index's answers, a hit being a cell whose variable's name is PHYSICALLY the name
+   asked. Sound because the cell's answer came from the index for an equal name; the
+   cell a name lands in decides only where an answer is kept (see [var_index_named]). *)
 
 module Lit = Baguette_proof.Lit
 module Name_tbl = Baguette_proof.Name_tbl
@@ -182,11 +187,13 @@ type t = {
      scratch store per tuple and never asks for a name. Names are fixed at creation
      ([names] is a private copy nothing writes), so the index never goes stale. *)
   by_name : (int Name_tbl.t * int array) Lazy.t;
-  (* M20-pernode-T4 (D-0236): the variable [var_named] answered last, or [-1] before the
-     first answer. A one-entry memo in front of [by_name], tested by PHYSICAL equality
-     against [names], see [var_named]. An int, so that writing it is a plain store and not
-     a [caml_modify]: a string field cost more on a miss than the hits saved (D-0236). *)
-  mutable named_last : int;
+  (* M20-pernode-T4 (D-0245, after D-0236's one-entry memo): a DIRECT-MAPPED memo in
+     front of [by_name], [memo_size] cells, cell [memo_slot name] holding a variable the
+     index answered for a name of that slot, or [-1]; tested by PHYSICAL equality against
+     [names], see [var_index_named]. Ints, so that writing one is a plain store and not a
+     [caml_modify] (a string field cost more on a miss than the hits saved, D-0236).
+     Allocated on the first lookup, [[||]] until then, for the reason [by_name] is lazy. *)
+  mutable named_memo : int array;
   reasons : Explanation.Arena.t;
   lo_sup : int array;
   hi_sup : int array;
@@ -339,7 +346,7 @@ let create ~names ~domains =
     initial = Array.copy domains;
     names;
     by_name;
-    named_last = -1;
+    named_memo = [||];
     reasons = Explanation.Arena.create ();
     lo_sup = Array.make nv no_support;
     hi_sup = Array.make nv no_support;
@@ -628,16 +635,60 @@ let push_mark t m =
    of one snapshot -- and producers name a variable by [name t v], i.e. by the string in
    [names] (D-0236 counted 47 % of elitserien handball12's lookups as physical repeats of
    the one before, and none that was equal without being physical). A miss costs a load
-   and a comparison of pointers. *)
-let var_named t name =
-  let last = t.named_last in
-  if last >= 0 && t.names.(last) == name then Some (Var.of_int last)
+   and a comparison of pointers.
+
+   M20-pernode-T4 (D-0245): the memo has [memo_size] cells, DIRECT-MAPPED, the cell of a
+   name chosen by [memo_slot] -- its length and its last eight bytes, multiplied and
+   shifted, so a slot costs a few instructions where [String.hash] mixes the whole string
+   behind a C call. A hit is the one-entry memo's test on that cell (the cell's variable
+   [i] and [names.(i) == name]) and is sound by its argument: [i] came out of the index
+   for a name equal to [names.(i)], and any string equal to [names.(i)] gets the same
+   answer from the index. The slot only decides WHERE an answer is remembered, never
+   what it is, so two names sharing a slot just evict each other, and [memo_slot] could
+   be any function of the string. The one-entry memo is the case [memo_size = 1]: the
+   name asked last is still in its cell. It pays because conflict analysis asks about
+   the variables near the conflict, conflict after conflict, and [Analysis.locate] asks
+   once per fact: over 3 000 nodes of elitserien handball12 (no proof), 98.0 % of 8.87 M
+   lookups hit, and 99.6 to 99.99 % on tppv circ14, costas13 and qr2 (D-0245). The
+   answer is an int ([-1]: no such name), so a hit allocates nothing; [var_named] wraps
+   it. *)
+let memo_bits = 12
+let memo_size = 1 lsl memo_bits
+
+external string_get64u : string -> int -> int64 = "%caml_string_get64u"
+
+let memo_slot name =
+  let n = String.length name in
+  let h =
+    if n >= 8 then Int64.to_int (string_get64u name (n - 8))
+    else
+      let h = ref 0 in
+      for i = 0 to n - 1 do
+        h := (!h lsl 8) lor Char.code (String.unsafe_get name i)
+      done;
+      !h
+  in
+  (h lxor n * 0x2545F4914F6CDD1D) lsr (Sys.int_size - memo_bits)
+
+let rec var_index_named t name =
+  let m = t.named_memo in
+  if Array.length m = 0 then (
+    t.named_memo <- Array.make memo_size (-1);
+    var_index_named t name)
   else
-    match Name_tbl.find_opt (fst (Lazy.force t.by_name)) name with
-    | Some i ->
-        t.named_last <- i;
-        Some (Var.of_int i)
-    | None -> None
+    let slot = memo_slot name in
+    let i = m.(slot) in
+    if i >= 0 && t.names.(i) == name then i
+    else
+      match Name_tbl.find_opt (fst (Lazy.force t.by_name)) name with
+      | Some i ->
+          m.(slot) <- i;
+          i
+      | None -> -1
+
+let var_named t name =
+  let i = var_index_named t name in
+  if i < 0 then None else Some (Var.of_int i)
 
 let var_named_scan t name =
   let n = Array.length t.names in
