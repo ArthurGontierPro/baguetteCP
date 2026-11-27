@@ -1272,6 +1272,44 @@ let test_memo_agrees_on_every_other_scene () =
         | _ -> false)
   | _ -> failwith "test_analysis: the broken scene did not reach its conflict"
 
+(* M19-config-T6 (D-0241): [Analysis.minimise_cut] returns a sub-cut of the 1UIP cut that
+   still passes the oracle, still holds on the trail and keeps 1UIP's postcondition, under
+   every rule set. Scene 1's cut is b >= 3 (the UIP) and e >= 3, e <= 3, ASSUMED at level 1
+   (roots), with no level-0 fact, so nothing may be dropped there: the oracle is what says a
+   drop would have been wrong, and the count says none was made. *)
+let test_minimise_cut_keeps_the_oracle () =
+  let store, t = cut1 Analysis.one_uip in
+  List.iter
+    (fun (tag, config) ->
+      let r = Analysis.minimise_cut ~config store t in
+      let m = r.Analysis.mr_cut in
+      check
+        (Printf.sprintf "T6 %s: the minimised cut is a sub-list of the 1UIP cut" tag)
+        (List.for_all (fun n -> List.memq n (Analysis.nodes t)) (Analysis.nodes m));
+      check
+        (Printf.sprintf "T6 %s: model + minimised cut is UNSAT by brute force" tag)
+        (oracle_says_valid store m);
+      check
+        (Printf.sprintf "T6 %s: every fact of it holds on the trail" tag)
+        (Analysis.holds_on_trail store m);
+      check
+        (Printf.sprintf "T6 %s: 1UIP's postcondition still holds" tag)
+        (Analysis.postcondition_holds Analysis.one_uip m);
+      check
+        (Printf.sprintf "T6 %s: nothing is dropped on scene 1" tag)
+        (r.Analysis.mr_root + r.Analysis.mr_recursive = 0))
+    [
+      ("root", { Analysis.min_off with Analysis.min_root = true });
+      ("rec", { Analysis.min_off with Analysis.min_root = true; min_recursive = true });
+      ( "rec-nofilter",
+        {
+          Analysis.min_off with
+          Analysis.min_root = true;
+          min_recursive = true;
+          min_level_filter = false;
+        } );
+    ]
+
 let () =
   test_scene1_shape ();
   test_merge_nodes_is_the_add_node_fold ();
@@ -1292,6 +1330,7 @@ let () =
   test_scene2_scan_fallback ();
   test_engine_agrees ();
   test_determinism ();
+  test_minimise_cut_keeps_the_oracle ();
   test_lits_are_the_negated_cut ();
   test_closure_keeps_level_0 ();
   test_root_conflict_still_resolves_level_0 ();

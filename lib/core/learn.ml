@@ -135,6 +135,13 @@
    really does carry redundant thresholds and really is shortened here. That is where the
    break bites, and it bites on a shipped model rather than on a scene built for it.
 
+   M19-config-T6 (D-0241) MEASURED that on the 1UIP cut: 0 literals of 135 million, over
+   230 Challenge instances at 20 000 nodes. What does shorten a learned clause is the
+   other two kinds, which [Analysis.minimise_cut] removes before this reduction runs:
+   literals FALSE AT THE ROOT (7 % of them) and literals the kept ones re-derive through
+   the implication graph, MiniSat's recursive minimisation (17 % more). BAGUETTE_MINIMISE
+   selects them; its header is the soundness argument.
+
    ---------------------------------------------------------------------------
    I-S4, discharged -- and what it turns out to be about
    ---------------------------------------------------------------------------
@@ -283,6 +290,132 @@ let minimise_with_reference policy (xs : (Lit.t * 'a) list) : (Lit.t * 'a) list 
 let minimise ?(policy = Strongest) (lits : Lit.t list) : Lit.t list =
   List.map fst (minimise_with policy (List.map (fun l -> (l, ())) lits))
 
+(* ------------------------------------------- clause minimisation (M19-config-T6) *)
+
+(* WHICH of [Analysis.minimise_cut]'s rules run, read once from BAGUETTE_MINIMISE (D-0241):
+   [off] none, [root] the level-0 rule, [rec] the level-0 rule and the recursive one with
+   the abstract-level filter, [local] the level-0 rule and the recursive one looking one
+   step back only, [rec-nofilter] the recursive one without the filter (a measurement
+   arm). Anything else FAILS, the discipline of BAGUETTE_CDCL: a run that silently used
+   the default because the spelling was wrong is the trap CLAUDE.md records twice. The
+   rules, and why the learned clause stays the `rup` it was, are [Analysis.minimise_cut]'s
+   header. *)
+type minimisation =
+  | Min_off
+  | Min_root
+  | Min_rec
+  | Min_rec_nofilter
+  | Min_local
+  | Min_break_unchecked
+(* the break: [Analysis.min_config]'s [min_break_unchecked]. Tests only, so no
+   spelling of BAGUETTE_MINIMISE selects it. *)
+
+let default_minimisation = Min_off
+
+let minimisation_name = function
+  | Min_off -> "off"
+  | Min_root -> "root"
+  | Min_rec -> "rec"
+  | Min_rec_nofilter -> "rec-nofilter"
+  | Min_local -> "local"
+  | Min_break_unchecked -> "break-unchecked"
+
+let min_config = function
+  | Min_off -> Analysis.min_off
+  | Min_root -> { Analysis.min_off with Analysis.min_root = true }
+  | Min_rec -> { Analysis.min_off with min_root = true; min_recursive = true }
+  | Min_rec_nofilter ->
+      {
+        Analysis.min_off with
+        min_root = true;
+        min_recursive = true;
+        min_level_filter = false;
+      }
+  | Min_local ->
+      { Analysis.min_off with min_root = true; min_recursive = true; min_local = true }
+  | Min_break_unchecked -> { Analysis.min_off with min_break_unchecked = true }
+
+let minimisation =
+  ref
+    (match Sys.getenv_opt "BAGUETTE_MINIMISE" with
+    | None | Some "" -> default_minimisation
+    | Some ("off" | "0") -> Min_off
+    | Some "root" -> Min_root
+    | Some ("rec" | "1" | "on") -> Min_rec
+    | Some "rec-nofilter" -> Min_rec_nofilter
+    | Some "local" -> Min_local
+    | Some v ->
+        prerr_endline
+          (Printf.sprintf
+             "baguette: BAGUETTE_MINIMISE=%S is not a setting. Use off, root, local, rec \
+              or rec-nofilter."
+             v);
+        exit 2)
+
+(* The measurement BAGUETTE_MINIMISE_STATS=1 prints at exit, on stderr: for every learned
+   clause, its width as the 1UIP walk left it, what each rule WOULD remove from it (taken
+   on the same cut whatever the setting, so one run measures every arm), what [minimise]
+   below removes from it, and its width as learned. Off, none of it is computed. *)
+type min_stats = {
+  mutable ms_clauses : int;
+  mutable ms_lits : int; (* literals of the cut's clause, before any rule *)
+  mutable ms_root : int; (* ... false at the root *)
+  mutable ms_rec : int; (* ... removed by the recursive rule on top of [root] *)
+  mutable ms_rec_nofilter : int; (* ... the same without the abstract-level filter *)
+  mutable ms_local : int; (* ... by the one-step (local) rule on top of [root] *)
+  mutable ms_dominated : int; (* ... removed by [minimise] (same variable, same side) *)
+  mutable ms_learned : int; (* literals of the clauses as learned *)
+  ms_hist_before : int array;
+  ms_hist_after : int array;
+}
+
+(* [2] counts the widths only, without the shadow runs of every rule, so that a timed run
+   can carry it: the shadow runs are three extra [Analysis.minimise_cut] per conflict. *)
+let min_stats_level =
+  match Sys.getenv_opt "BAGUETTE_MINIMISE_STATS" with
+  | Some "1" -> 1
+  | Some "2" -> 2
+  | _ -> 0
+
+let min_stats_on = min_stats_level > 0
+let hist_buckets = 66
+
+let min_stats =
+  {
+    ms_clauses = 0;
+    ms_lits = 0;
+    ms_root = 0;
+    ms_rec = 0;
+    ms_rec_nofilter = 0;
+    ms_local = 0;
+    ms_dominated = 0;
+    ms_learned = 0;
+    ms_hist_before = Array.make hist_buckets 0;
+    ms_hist_after = Array.make hist_buckets 0;
+  }
+
+let bump_hist h w = h.(min w (hist_buckets - 1)) <- h.(min w (hist_buckets - 1)) + 1
+
+let print_min_stats () =
+  let s = min_stats in
+  let hist h =
+    String.concat ","
+      (List.filter_map
+         (fun (i, n) -> if n = 0 then None else Some (Printf.sprintf "%d:%d" i n))
+         (Array.to_list (Array.mapi (fun i n -> (i, n)) h)))
+  in
+  Printf.eprintf
+    "minimise: setting=%s clauses=%d lits=%d root=%d rec=%d rec_nofilter=%d local=%d \
+     dominated=%d learned=%d\n\
+     minimise-hist-before: %s\n\
+     minimise-hist-after: %s\n\
+     %!"
+    (minimisation_name !minimisation)
+    s.ms_clauses s.ms_lits s.ms_root s.ms_rec s.ms_rec_nofilter s.ms_local s.ms_dominated
+    s.ms_learned (hist s.ms_hist_before) (hist s.ms_hist_after)
+
+let () = if min_stats_on then at_exit print_min_stats
+
 (* ------------------------------------------------------------- the learned object *)
 
 type t = {
@@ -309,6 +442,10 @@ type t = {
          unminimised cut can be strictly larger than the clause's own. Computed here
          because this is where both the levels and the survivors are in hand; what is
          done with it is [Retention]'s business, not this module's. *)
+  l_min_supports : int list;
+      (* M19-config-T6 (D-0241): trail positions of the entries the minimisation's
+         removals rest on. Their lines are what the checker replays to re-derive a dropped
+         literal, so [supports] counts them. Empty when nothing was dropped. *)
 }
 
 let lits t = t.l_lits
@@ -334,14 +471,42 @@ let levelled t = t.l_levelled
    [l_levels] empty. The CDCL loop backjumps on the clause's own asserting level and never
    reads the closure, so it does not pay for the second walk, and an [Error] of that walk
    no longer costs it the clause. The default is the walk, as before. *)
-let at_conflict ?(policy = Strongest) ?(closure = true) store (c : Store.conflict)
-    ~(vars_of : int -> Var.t list option) ~(decl : string -> (int * int) option) :
-    t option =
+(* M19-config-T6 (D-0241): [?minimisation] picks [Analysis.minimise_cut]'s rules, applied
+   to the 1UIP cut after its postcondition is checked and before [minimise]; the default is
+   [!minimisation], BAGUETTE_MINIMISE's. [l_cut] is the cut as minimised. *)
+let measure_minimisation store raw policy =
+  let width cut = List.length (Analysis.lits_levelled cut) in
+  let w = width raw in
+  let s = min_stats in
+  s.ms_clauses <- s.ms_clauses + 1;
+  s.ms_lits <- s.ms_lits + w;
+  bump_hist s.ms_hist_before w;
+  if min_stats_level = 1 then (
+    let count cfg =
+      let r = Analysis.minimise_cut ~config:(min_config cfg) store raw in
+      r.Analysis.mr_root + r.Analysis.mr_recursive
+    in
+    let root = count Min_root in
+    s.ms_root <- s.ms_root + root;
+    s.ms_rec <- s.ms_rec + (count Min_rec - root);
+    s.ms_rec_nofilter <- s.ms_rec_nofilter + (count Min_rec_nofilter - root);
+    s.ms_local <- s.ms_local + (count Min_local - root);
+    s.ms_dominated <-
+      s.ms_dominated
+      + (w - List.length (minimise_with policy (Analysis.lits_levelled raw))))
+
+let at_conflict ?(policy = Strongest) ?(closure = true) ?minimisation:m store
+    (c : Store.conflict) ~(vars_of : int -> Var.t list option)
+    ~(decl : string -> (int * int) option) : t option =
   match Analysis.analyse store c ~vars_of ~criterion:Analysis.one_uip with
   | Error _ -> None
-  | Ok cut -> (
-      if not (Analysis.postcondition_holds Analysis.one_uip cut) then None
+  | Ok raw -> (
+      if not (Analysis.postcondition_holds Analysis.one_uip raw) then None
       else
+        let m = match m with Some m -> m | None -> !minimisation in
+        let mr = Analysis.minimise_cut ~config:(min_config m) store raw in
+        if min_stats_on then measure_minimisation store raw policy;
+        let cut = mr.Analysis.mr_cut in
         match if closure then Analysis.dependency_levels store c ~vars_of else Ok [] with
         | Error _ -> None
         | Ok levels ->
@@ -353,6 +518,9 @@ let at_conflict ?(policy = Strongest) ?(closure = true) store (c : Store.conflic
                pins that equality rather than leaving it as a claim in this comment. *)
             let levelled = minimise_with policy (Analysis.lits_levelled cut) in
             let ls = List.map fst levelled in
+            if min_stats_on && ls <> [] then (
+              min_stats.ms_learned <- min_stats.ms_learned + List.length ls;
+              bump_hist min_stats.ms_hist_after (List.length ls));
             if ls = [] then None
             else
               let cl = Learned.of_clause ls in
@@ -365,6 +533,7 @@ let at_conflict ?(policy = Strongest) ?(closure = true) store (c : Store.conflic
                   l_converts = Learned.to_linear_row cl ~decl <> None;
                   l_levelled = levelled;
                   l_lbd = List.length (List.sort_uniq Int.compare (List.map snd levelled));
+                  l_min_supports = mr.Analysis.mr_supports;
                 })
 
 (* Put the learned clause on the page, at level 0, through M2-L1's own entry point.
@@ -445,6 +614,13 @@ let supports store trace (t : t) : support list =
           (fun w -> add (support_of_written w ~var:(Store.name store e.Store.var)))
           (Trace.lines_at trace e))
     (Analysis.nodes t.l_cut);
+  List.iter
+    (fun p ->
+      let e = Store.trail_entry store p in
+      List.iter
+        (fun w -> add (support_of_written w ~var:(Store.name store e.Store.var)))
+        (Trace.lines_at trace e))
+    t.l_min_supports;
   List.iter
     (fun (f : Analysis.fold) ->
       match Store.var_named store f.Analysis.fold_var with
