@@ -706,9 +706,10 @@ exception Bad of error
    arity) answer in its place, [Engine.in_scope]'s binary search over the instance's
    sorted scope passed down from [Search] (with and without D-0243's memo of positive
    answers): -0.2 to +0.15 % instructions per node on elitserien handball12, tppv circ14,
-   costas13, qr2 and the diff lane's 21 fast instances, cycles within the noise. The
-   check reads one short list that the entry's instance owns, so its cost is the call
-   and a cache line, not the walk; the list stayed. *)
+   costas13 and qr2, -0.5 to +0.6 % of a whole run on the diff lane's 21 fast instances,
+   cycles within the noise. The check reads one short list that the entry's instance
+   owns, a few cells long on these instances, so what it costs is the call and one
+   cache line, which the binary search pays as well. The list stayed. *)
 let rec watches var = function
   | [] -> false
   | v :: vs -> Var.equal v var || watches var vs
