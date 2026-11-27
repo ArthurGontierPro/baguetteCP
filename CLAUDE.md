@@ -32,6 +32,7 @@ rule is:
 | `docs/ARCHITECTURE.md` | 26 KB | Read whole if you are changing structure. Its §1 module map is the same text as the map below (**re-verified against the tree on 2026-11-27**). |
 | `docs/GLOSSARY.md` | 4 KB | Read whole if the vocabulary is new to you. |
 | `docs/EXPLANATION-REVIEW.md` | 11 KB | A report of 2026-09-18 comparing the explanation mechanism with the literature. Background only. |
+| `docs/REFERENCES.md` | 48 KB | One line per `D-`, `M` and `I-` reference the code cites. `grep -n 'D-0216' docs/REFERENCES.md` before opening DECISIONS.md. |
 
 **Module headers are the cheapest documentation in this repo.** Every module in `lib/`
 opens with a comment stating what it is, its consistency level, and which spec section

@@ -596,10 +596,10 @@ let mem_of vals =
    [Store.remover] agrees with that scan under [BAGUETTE_DEBUG] by physical equality.
    Element made the same move in D-0155. Read eagerly, at snapshot time (I-X6).
 
-   [None] is a hole with no trail entry behind it: a gap in a DECLARED set domain
-   (`var {1,3,5}: x`). The .opb states such a gap as a clause of its own
-   ([Encoding.declare_int_with_holes]; M7-T11 removed the [reject_set_domain] check
-   that used to refuse these domains), so it is cited as a [Gone_hole] with no facts. *)
+   [None] is a hole with no trail entry behind it, which no model reaches: a set domain
+   (`var {1,3,5}: x`) gets its holes from propagators at the root, so each has a remover
+   (D-0072: a set domain's holes go in the .opb as ladder rows, and in the solver as
+   propagators). The arm cites it as a [Gone_hole] with no facts. *)
 let hole_cite store var value =
   match Store.remover store ~before:(Store.trail_length store) ~var value with
   | Some e when Store.at_root store e.Store.pos -> Gone_hole_root
@@ -1330,35 +1330,34 @@ let sort_by (key : int array) perm =
    restriction: a Hall interval can always be shrunk to one whose ends are a variable's
    bounds without losing any variable from its set.
 
-   ONE SNAPSHOT, EVERY DEDUCTION (I-P6, from M6-T19: a pass photographs the store once
-   and applies every deduction the photograph justifies). The pass takes [snaps] once
-   and applies
-   every push the snapshot justifies before [propagate] takes the next one. Until M6-T19
-   it returned at the first push that landed, so a Hall set confining k variables cost
-   k + 1 snapshots and k + 1 interval enumerations; the restart bought the one-line
-   argument "everything examined is current", which I-P6 replaces with this one: a Hall
-   set's facts are frozen at snapshot values that still hold at every later push of the
-   pass, because bounds only tighten within a level (I-D3), and the pruned variable [y]
-   is re-read live at the push. Containment computed from the older, wider bounds is a
-   SUBSET of the true containment, so a set the stale snapshot calls Hall is Hall; what
-   staleness can do is miss a set that only the newer bounds reveal, or push a [y] the
-   live store already has there ([Unchanged]), or push a [y] the newer bounds have since
-   confined inside the interval -- which empties it, and that is the pigeonhole the
-   store reports as a conflict. The next pass, which [stage_bounds] runs until a pass
-   changes nothing, recovers whatever this one missed. *)
+   ONE SNAPSHOT, EVERY DEDUCTION (I-P6: a pass photographs the store once and applies
+   every deduction the photograph justifies). The pass reads each term's pass-start
+   snapshot ([snap] below) and applies every push those snapshots justify before
+   [propagate] starts the next pass. It is sound because a Hall set's facts are frozen
+   at snapshot values that still hold at every later push of the pass, because bounds only
+   tighten within a level (I-D3), and the pruned variable [y] is re-read live at the push.
+   Containment computed from the older, wider bounds is a SUBSET of the true containment,
+   so a set the stale snapshot calls Hall is Hall; what staleness can do is miss a set
+   that only the newer bounds reveal, or push a [y] the live store already has there
+   ([Unchanged]), or push a [y] the newer bounds have since confined inside the interval
+   -- which empties it, and that is the pigeonhole the store reports as a conflict. The
+   next pass, which [stage_bounds] runs until a pass changes nothing, recovers whatever
+   this one missed. (Before M6-T19 a pass returned at the first push that landed, so a
+   Hall set confining k variables cost k + 1 snapshots and k + 1 interval
+   enumerations.) *)
 let pass_scan t store ~lo0 ~hi0 =
   let nt = Array.length t.terms in
   let moved = ref false in
-  (* THE PASS-START SNAPSHOTS, TAKEN WHEN FIRST READ (M20-pernode-T4, D-0235). [snap i]
-     is the snapshot [snap_of] took of every term at the start of the pass until D-0235;
-     it is now taken the first time the pass reads it, which is the same value as long
-     as nothing has changed term [i] in between -- a snapshot reads [i]'s domain, its two
-     supports and the remover of each of its holes, and within a pass only a push ON
-     [i] moves any of them. So the one rule is: a push forces the pushed term's snapshot
-     BEFORE it lands ([dirty] marks it after). A pass that reaches no Hall interval
-     snapshots nothing, where it used to snapshot every term with a [Store.remover]
-     search per hole: 19 to 23 % of elitserien, tppv and costas instructions. [live i]
-     is the snapshot of the store as it stands now, which the [n = k] arm reads. *)
+  (* THE PASS-START SNAPSHOTS, TAKEN WHEN FIRST READ (D-0235). THE RULE: a push forces
+     the pushed term's snapshot BEFORE it lands ([dirty] marks it after). [snap i] is
+     taken the first time the pass reads it, which is the value a snapshot at the start
+     of the pass would have had as long as nothing has changed term [i] in between: a
+     snapshot reads [i]'s domain, its two supports and the remover of each of its holes,
+     and within a pass only a push ON [i] moves any of them. [live i] is the snapshot of
+     the store as it stands now, which the [n = k] arm reads. A pass that reaches no Hall
+     interval snapshots nothing; before D-0235 every term was snapshotted at the start,
+     with a [Store.remover] search per hole, which was 19 to 23 % of elitserien, tppv and
+     costas instructions. *)
   let cache = Array.make nt None and dirty = Array.make nt false in
   let snap i =
     match cache.(i) with
@@ -1390,7 +1389,7 @@ let pass_scan t store ~lo0 ~hi0 =
      push that changes nothing (the bound is already there) falls through, which is how
      [Unchanged] can happen at all here. *)
   let push ?alo ~halls ~a ~b ~y ~yi ~lower bound =
-    (* M7-T33 (D-0156): the push that would EMPTY [y] -- [pass]'s pigeonhole arm, or an
+    (* The push that would EMPTY [y] (D-0156) -- [pass]'s pigeonhole arm, or an
        [n = k] push whose live [y] is now confined -- is the conflict, reported with its
        facts under a decision (see [push_conflict]). [y]'s bounds here are the ones the
        store will read: live for the [n = k] arm, and for the pigeonhole arm a snapshot
@@ -1468,13 +1467,14 @@ let pass_scan t store ~lo0 ~hi0 =
                it. Pushing one surplus variable out of an interval it is confined to
                reaches the same contradiction through [Store.apply]'s [Failed] arm, which
                pairs the derivation with [Reason.none] -- deliberately, and its own
-               comment says why -- so no conflict line is written and what closes the
-               root is this module's derivation, which really does derive [0 >= 1].
+               comment says why -- so no `rup ~fact` conflict line is written: search.ml
+               writes the factless conflict's derivation on the page, and it really does
+               derive [0 >= 1].
 
-               M7-T33 (D-0156) keeps that at the ROOT only. Under a decision [push]
-               reports the conflict itself, WITH its facts, under [deriving_ahead]: the
-               derivation then goes on the page before `rup ~fact ... >= 1`, which makes
-               that line unit propagation against one line rather than the Hall
+               That arrangement holds at the ROOT only (D-0156, M7-T33). Under a decision
+               [push] reports the conflict itself, WITH its facts, under [deriving_ahead]:
+               the derivation then goes on the page before `rup ~fact ... >= 1`, which
+               makes that line unit propagation against one line rather than the Hall
                argument, and 1UIP learning gets a reason to resolve from. See
                [push_conflict].
 
@@ -1488,12 +1488,13 @@ let pass_scan t store ~lo0 ~hi0 =
               let yi = List.nth idx k in
               push ~halls ~a ~b ~y:(snap yi) ~yi ~lower:true (b + 1)
             else (
-              (* M16-file-review-T2 (D-0190): a variable is snapshotted, and looked for in
-                 the Hall set, only once its LIVE bounds show it can be pushed: [y.s_lo]
-                 and [y.s_hi] are those bounds, read again by [snap_of] from the same
-                 store, so the same variables are pushed with the same snapshots. Every
-                 variable of the scope used to be snapshotted (its holes, two root tests)
-                 and compared by name with the Hall set, for every tight interval. *)
+              (* A variable is snapshotted, and looked for in the Hall set, only once its
+                 LIVE bounds show it can be pushed: [y.s_lo] and [y.s_hi] are those
+                 bounds, read again by [snap_of] from the same store, so the same
+                 variables are pushed with the same snapshots. (Before the file-by-file
+                 review, M16-file-review-T2, D-0190, every variable of the scope was
+                 snapshotted and compared by name with the Hall set, for every tight
+                 interval.) *)
               (* D-0235: the Hall set is snapshotted only when a push needs it, and a
                  term is looked for in it before it is snapshotted, through [inset] over
                  [canon] -- the same test as the name comparison it replaces, which was
@@ -1523,7 +1524,7 @@ let pass_scan t store ~lo0 ~hi0 =
   done;
   !moved
 
-(* THE QUIET-BOUNDS SKIP (M20-pernode-T4, D-0235). Whether [pass_scan] moves anything or
+(* THE QUIET-BOUNDS SKIP (D-0235). Whether [pass_scan] moves anything or
    raises is a function of the scope's BOUNDS alone: every interval, every containment,
    every push and every emptying test reads [lo]/[hi] and nothing else (holes enter only
    the reasons and derivations of a push that lands). So a bound vector on which a scan
@@ -1531,13 +1532,14 @@ let pass_scan t store ~lo0 ~hi0 =
    vector is not a fact about the store and needs no trail: after a backtrack, a restart
    or a descent the test compares the live bounds with it and runs the scan whenever
    they differ. Most wake-ups of a domain-consistent alldiff are interior holes, which
-   leave the bounds where the last call's final pass found them quiet. [count_pass] is
-   counted as before, so the [snaps] counter the lanes compare is unchanged.
+   leave the bounds where the last call's final pass found them quiet. A skipped pass
+   still calls [Propagator.count_pass], so the pass counter the lanes compare is
+   unchanged.
    BAGUETTE_DEBUG runs the scan behind every skip and requires it to move nothing. *)
 (* How many passes [pass] skipped, for test_prop's lane; not read by the solver. *)
 let quiet_skips = ref 0
 
-(* THE HALL-FREE TEST (M20-pernode-T4, D-0242). Whether [pass_scan] on the bound vector
+(* THE HALL-FREE TEST (D-0242). Whether [pass_scan] on the bound vector
    [lo]/[hi] would move nothing and raise nothing, decided by counting alone, with no
    snapshot, no allocation and no push. [by_lo]/[by_hi] must be sorted by [lo]/[hi].
 
@@ -1645,17 +1647,17 @@ let pass t store =
       q.q_valid <- true);
     moved)
 
-(* ================================================== M4-T2: stage 2, Regin's matching
+(* ================================================== stage 2, Regin's matching (M4-T2)
 
    THE FILTERING. Build the value graph (a variable on one side, a value on the other,
    an edge when the value is in the variable's current domain) and take a maximum
    matching. An edge that lies in NO maximum matching is a value no solution of the
    constraint can give that variable, and removing all of them is domain consistency.
 
-   THE JUSTIFICATION, which is the part this row exists to settle. D-0004 has said since
-   2026-09-14 that Regin's pruning "does not have an obvious cheap justification". It
-   has one, it is the SAME counting argument M4-T1 already built, and the bridge is a
-   fact about matchings rather than anything new about proofs:
+   THE JUSTIFICATION. D-0004 recorded that Regin's pruning "does not have an obvious
+   cheap justification". It has one: the SAME counting argument stage 1 (M4-T1) already
+   built, and the bridge is a fact about matchings rather than anything new about
+   proofs:
 
      Let M be a matching saturating the variables, u a variable, v = M(u), and let
      K be {u} together with every variable reachable from u in the digraph
@@ -1671,7 +1673,7 @@ let pass t store =
      And conversely: if (y, v) is in no maximum matching then, writing u = M^-1(v), u can
      reach neither y nor a free value (either would be an augmenting alternating walk
      giving a matching that contains (y, v)), so the K built from u is tight, contains v
-     in its value set, and excludes y. **Every Regin pruning is witnessed by a Hall set**,
+     in its value set, and excludes y. EVERY REGIN PRUNING IS WITNESSED BY A HALL SET,
      and enumerating K over every u is therefore COMPLETE -- which is what lets this
      declare [Domain] rather than "stronger than bounds by an amount nobody measured".
 
@@ -1681,8 +1683,9 @@ let pass t store =
    non-interval value set forces -- narrowing a Hall variable's at-least-one line past an
    interior HOLE -- and [gone] above is that, in the existing ADT.
 
-   **No new [Explanation] constructor.** The no-new-constructor rule has been spent once
-   in nine rows (D-0064) and is not spent here.
+   NO NEW [Explanation] CONSTRUCTOR. A new constructor needs a decision record (the
+   project's rule); it has been spent once, for [Defining] (D-0064), and is not spent
+   here.
 
    THE CONFLICT is the same statement one member short. If no matching saturates the
    variables, the failed augmenting search from the first unmatched variable x0 has
@@ -1693,18 +1696,21 @@ let pass t store =
    length: [Store.apply]'s [Failed] arm pairs the derivation with [Reason.none] so no
    `rup` conflict line claims the counting argument as reverse unit propagation. That is
    the root's arrangement; under a decision the conflict is reported with A's facts and
-   its derivation written ahead of its line (M7-T33, D-0156, [push_conflict]).
+   its derivation written ahead of its line ([push_conflict], D-0156).
 
-   THE ALGORITHM is Kuhn's augmenting path and a reachability sweep per variable, which
-   is O(n^2 d) per pass rather than Regin's O(n^2 d) matching plus one Tarjan SCC pass.
-   Deliberately, and for M4-T1's reason restated: this row is an experiment about the
-   JUSTIFICATION, the models it may ship are bounded to single/low-double-digit domains
-   by the memory rule, and the SCC decomposition is an OPTIMISATION of the enumeration
-   above -- the strongly connected components ARE the sets K, found once instead of n
-   times. An implementation whose completeness is the paragraph above is worth more here
-   than one whose completeness is a citation. *)
+   THE ALGORITHM of the from-scratch pass ([regin_scratch]) is Kuhn's augmenting path
+   and a reachability sweep per variable, which is O(n^2 d) per pass rather than
+   Regin's O(n^2 d) matching plus one Tarjan SCC pass. (The gate in front of it,
+   [cannot_prune], does use one Tarjan pass, but only to decide whether this pass can
+   prune.) Deliberately, and for stage 1's reason restated: this row is an experiment
+   about the JUSTIFICATION, the models it may ship are bounded to single/low-double-digit
+   domains by the memory rule, and the SCC decomposition is an OPTIMISATION of the
+   enumeration above -- the strongly connected components ARE the sets K, found once
+   instead of n times. An implementation whose completeness is the paragraph above is
+   worth more here than one whose completeness is a citation. *)
 
-(* D-0043's conclusion for a value removal. Same rule as lib/core/prop/ne.ml's
+(* What a value removal concludes, as the [Reason.fact] carried on its [justified] value
+   (D-0043). Same rule as lib/core/prop/ne.ml's
    [removal_conclusion] and for the same reason: removing a value AT a bound settles that
    bound past any holes above (below) it and concludes the bound it landed on, while
    removing an interior value concludes `x <> v`, which is a two-literal clause and not a
@@ -1724,12 +1730,13 @@ let removal_conclusion y d w =
     Some (Reason.at_most ~name:y.s_name ~decl:y.s_dhi !v))
   else None
 
-(* M7-T22 / D-0086 (b). An INTERIOR Regin removal states `y <> v` the way every other
-   hole in the store is stated -- over the ORDER encoding, `~y_ge_v \/ y_ge_(v+1)`, the
-   clause its own trace line claims -- and not in this module's working currency
-   [~y_eq_v]. The forward channelling line [y_eq_v \/ ~y_ge_v \/ y_ge_(v+1)] converts one
-   into the other exactly: added to [~y_eq_v >= 1 (+ leftovers)], the [y_eq_v] terms pair
-   off and the degree drops by the one unit they carried, divisor 1.
+(* ONE CURRENCY FOR A HOLE (D-0086 (b), built by M7-T22). An INTERIOR Regin removal
+   states `y <> v` the way every other hole in the store is stated -- over the ORDER
+   encoding, `~y_ge_v \/ y_ge_(v+1)`, the clause its own trace line claims -- and not in
+   this module's working currency [~y_eq_v]. The forward channelling line [y_eq_v \/
+   ~y_ge_v \/ y_ge_(v+1)] converts one into the other exactly: added to [~y_eq_v >= 1 (+
+   leftovers)], the [y_eq_v] terms pair off and the degree drops by the one unit they
+   carried, divisor 1.
 
    The trail entry's explanation is a CONTRACT with whoever embeds it, and the embedder
    that reads it is element.ml's [excl_hole]: when an element RESULT sits in this scope,
@@ -1748,16 +1755,17 @@ let in_order_currency t y value expl =
   | None -> expl
   | Some fwd -> Explanation.combine [ Explanation.term 1 expl; cite fwd ] 1
 
-(* One removal, with both halves of D-0026 built from the same snapshot, returning
+(* One removal, with both halves of D-0026 (reason and justification) built from the
+   same snapshot, returning
    through [Found] exactly as [pass]'s [push] does and recording a landed removal in
    [moved], and answering whether it landed. [y] and [d] are LIVE here, not the pass's
-   snapshot: I-P6 allows stale premises, but the SHAPE of the entry -- a hole clause for
-   an interior value, the bound landed on for a value at the bound ([removal_conclusion])
-   -- must be decided against the domain the store is about to change. [y] comes from
-   [regin_scratch]'s cache, which is the live snapshot by its invalidation rule, and
-   [facts] is the tight set's [hall_facts], shared by every removal under that set
-   (D-0235); the caller hands over only a value still in [y]'s live domain, so every
-   call reaches the store. *)
+   snapshot: I-P6 (one snapshot, every deduction) allows stale premises, but the SHAPE of
+   the entry -- a hole clause for an interior value, the bound landed on for a value at
+   the bound ([removal_conclusion]) -- must be decided against the domain the store is
+   about to change. [y] comes from [regin_scratch]'s cache, which is the live snapshot by
+   its invalidation rule, and [facts] is the tight set's [hall_facts], shared by every
+   removal under that set (D-0235); the caller hands over only a value still in [y]'s live
+   domain, so every call reaches the store. *)
 let remove_one t store ~moved ~halls ~vals ~keep ~facts ~alo ~y ~y_tm value =
   let d = Store.get store y_tm.x in
   let concludes = removal_conclusion y d value in
@@ -1779,8 +1787,8 @@ let remove_one t store ~moved ~halls ~vals ~keep ~facts ~alo ~y ~y_tm value =
 (* One Regin pass FROM SCRATCH: the matching rebuilt, every tight set enumerated. Its
    output -- which removals land, in which order, with which [halls] and [vals] -- is the
    contract D-0215 keeps byte for byte, and [regin_pass] runs it whenever [cannot_prune]
-   does not rule it out. Returns whether a removal landed. ONE SNAPSHOT, EVERY DEDUCTION (I-P6,
-   M6-T19): [doms], the matching and the components are computed once and every removal
+   does not rule it out. Returns whether a removal landed. ONE SNAPSHOT, EVERY DEDUCTION
+   (I-P6): [doms], the matching and the components are computed once and every removal
    they justify is applied. The argument is [pass]'s, in this module's second currency:
    a removal only ever takes a value OUTSIDE its tight set, so no matching edge and no
    set membership is ever removed by this pass, and a set that is tight over the stale
@@ -1839,7 +1847,7 @@ let regin_scratch t store =
         let seen = Array.make (Int.max 1 nv) false in
         if not (augment i seen) then failed := Some (i, seen)
     done;
-    (* THE SNAPSHOT CACHE (M20-pernode-T4, D-0235). [snap i] is [snap_of store
+    (* THE SNAPSHOT CACHE (D-0235). [snap i] is [snap_of store
        t.terms.(i)] as the store stands NOW, and it is kept until a removal lands on
        [i]: a snapshot reads [i]'s domain, its two supports and the remover of each of
        its holes, and within this pass only a removal ON [i] changes any of them (the
@@ -1874,7 +1882,7 @@ let regin_scratch t store =
                (range 0 (nv - 1))
         in
         let x0_tm = t.terms.(x0) in
-        (* M7-T33 (D-0156): under a decision, the conflict with A's facts -- both bounds
+        (* Under a decision (D-0156), the conflict with A's facts -- both bounds
            of every member and the remover's facts of every hole the derivation cancels
            ([hall_facts] over B) -- derived ahead ([push_conflict]). At the root, the
            factless emptying push below, unchanged. *)
@@ -2158,27 +2166,29 @@ let regin_pass t store =
         false
     | Some _ | None -> regin_scratch t store)
 
-(* Stage 1, unchanged: Hall intervals over bounds. Returns whether it moved anything, so
+(* Stage 1: Hall intervals over bounds, pass after pass until one moves nothing.
+   Returns whether it moved anything, so
    [propagate] can decide whether to go on to stage 2. *)
 let rec stage_bounds t store ~moved =
   if pass t store then stage_bounds t store ~moved:true else moved
 
 let rec stage_regin t store = if regin_pass t store then stage_regin t store
 
-(* THE STAGING, and it is a measurement of GCS's rather than a choice of ours
-   (docs/GCS-COMPARISON.md section 3, docs/ROADMAP.md M4-T2): above 256 var-value pairs
-   the cheap pass returns WITHOUT an idempotence claim, so the propagators that are
-   cheaper than a matching get to react to what it inferred before the matching work is
-   paid for; at or below the cutoff both stages run in one call, because the staging
-   itself costs a wake-up that a small instance does not earn back.
+(* THE STAGING. Above [cutoff] var-value pairs (256 by default), a call whose stage 1
+   moved something returns WITHOUT running stage 2 and without an idempotence claim, so
+   the propagators that are cheaper than a matching get to react to what it inferred
+   before the matching work is paid for; at or below the cutoff both stages run in one
+   call, because the staging itself costs a wake-up that a small instance does not earn
+   back. The threshold is a measurement of GCS's rather than a choice of ours
+   (docs/GCS-COMPARISON.md section 3, docs/ROADMAP.md M4-T2).
 
    "Without an idempotence claim" is about this CALL and not about I-P2, idempotence at
-   the interface. The instance
-   watches its own variables, so the prunings stage 1 just made re-enqueue it
-   ([Engine.watchers_of_new_entries]), and at the engine's fixpoint -- which is the state
-   I-P2 and the M2-T10 consistency oracle are both statements about -- stage 1 has
-   nothing left to say and stage 2 has run. [Engine.check_fixpoint] is what would catch
-   it if that were not so, and it re-runs this function directly.
+   the interface. The instance watches its own variables, so the prunings stage 1 just
+   made re-enqueue it ([Engine.watchers_of_new_entries]), and at the engine's fixpoint --
+   which is the state I-P2 and the consistency oracle (BAGUETTE_CONSISTENCY=1) are both
+   statements about -- stage 1 has nothing left to say and stage 2 has run.
+   [Engine.check_fixpoint] is what would catch it if that were not so, and it re-runs this
+   function directly.
 
    The cutoff is a field rather than a constant so that a test can drive both branches;
    it is NOT re-measured here, and no model in this suite comes within two orders of

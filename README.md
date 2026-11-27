@@ -196,6 +196,7 @@ than T levels (chronological backtracking, D-0224).
 | `docs/ROADMAP.md` | milestones |
 | `docs/DECISIONS.md` | why things are the way they are |
 | `docs/GLOSSARY.md` | vocabulary |
+| `docs/REFERENCES.md` | one line per decision, task and invariant the code cites |
 | `bench/challenge/README.md` | how the Challenge runs are made and where they are kept |
 | `bench/series/HISTORY.md` | the results of every Challenge series |
 | `scripts/README.md` | the operating manual for the compute node (runs, gates, lanes) |
