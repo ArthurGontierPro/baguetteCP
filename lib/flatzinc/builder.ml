@@ -3,36 +3,40 @@
    This is where the normative rules of SPEC 2.1 are enforced:
 
    - a `var int` with no declared domain is given the domain the model's own constraints
-     imply ([infer_domains], M7-T19, D-0083), and is rejected with a diagnostic if they
-     imply none -- never defaulted to a machine-word range;
+     imply ([infer_domains]; SPEC 2.1 was amended for this by D-0083, task M7-T19), and
+     is rejected with a diagnostic if they imply none -- never defaulted to a
+     machine-word range;
    - a builtin outside the implemented set is a hard error that names the builtin,
      never a silent skip.
 
-   [implemented] below is the M1 row of the SPEC 2.1 milestone table. When a propagator
-   lands, move its builtin from [planned] to [implemented] in the same commit — that is
-   the only place the front end's idea of "supported" is written down.
+   [implemented] below is the list of builtins the front end accepts, grouped by the
+   milestone of SPEC 2.1's table that added each. When a propagator lands, move its
+   builtin from [planned] to [implemented] in the same commit — that is the only place
+   the front end's idea of "supported" is written down.
 
-   Memory model (M7-T27 (d), D-0128). The builder consumes the file ONE ITEM AT A TIME
-   as the parser delivers it ([add_item]), and keeps nothing of an item's syntax once it
-   is built: a declaration becomes its entries in [env], a constraint becomes its
+   Memory model: the streaming front end (D-0128, task M7-T27 (d), which keeps a large
+   `.fzn` from being held whole in memory). The builder consumes the file ONE ITEM AT A
+   TIME as the parser delivers it ([add_item]), and keeps nothing of an item's syntax once
+   it is built: a declaration becomes its entries in [env], a constraint becomes its
    [Model.cstr]. The one exception is deliberate: a constraint that arrives after a
    `var int` with no domain was declared is held as syntax until the end of the file,
    because its domain is inferred from ALL the constraints before any of them is built
-   (D-0083, and the arithmetic family sizes its auxiliaries from domains). On a
-   FlatZinc 2.x file every declaration precedes every constraint, so that is either
-   every constraint or none. What this costs, and the one way it differs from building
-   a whole tree, is in D-0128.
+   (D-0083, and the arithmetic family sizes its auxiliaries from domains). On a FlatZinc
+   2.x file every declaration precedes every constraint, so that is either every
+   constraint or none. What this costs, and the one way it differs from building a whole
+   tree, is in D-0128.
 
-   Cost (M16-file-review-T5, D-0193). Every occurrence of a name in the file is one probe
-   of [Model.Names], a table over [String] (a polymorphic [Hashtbl] compared every key
-   through [compare_val]), and a variable is found by its index in an array. Nothing is
-   quadratic in the file on the accepting path, except two costs bounded by what the
-   file states: a parameter array of a set type checks each element against the set
-   ([check_par_domain], O(elements x set)), and [infer_domains] runs at most
-   [infer_max_passes] passes over the facts. The diagnostics ([refuse_unbounded]) may
-   walk the facts once per unbounded variable; they end the run. *)
+   Cost, as the front end's file-by-file cost review left it (M16-file-review-T5, D-0193).
+   Every occurrence of a name in the file is one probe of [Model.Names], a table over
+   [String] (a polymorphic [Hashtbl] compared every key through [compare_val]), and a
+   variable is found by its index in an array. Nothing is quadratic in the file on the
+   accepting path, except two costs bounded by what the file states: a parameter array of
+   a set type checks each element against the set ([check_par_domain], O(elements x set)),
+   and [infer_domains] runs at most [infer_max_passes] passes over the facts. The
+   diagnostics ([refuse_unbounded]) may walk the facts once per unbounded variable; they
+   end the run. *)
 
-(* SPEC 2.1, milestones M1, M2 and M3. *)
+(* SPEC 2.1's builtins by milestone. M1: the linear and comparison builtins. *)
 let implemented =
   [
     "int_lin_le";
@@ -42,64 +46,73 @@ let implemented =
     "int_lt";
     "int_eq";
     "int_ne";
-    (* M2, the Boolean row (M2-T1 / M2-T2). *)
+    (* M2, the Booleans: the clauses (M2-T1) and the channelling bool2int, bool_eq and
+       bool_not (M2-T2). *)
     "bool_clause";
     "array_bool_or";
     "array_bool_and";
     "bool2int";
     "bool_eq";
     "bool_not";
-    (* M3, the reified row (M3-T2 / M3-T4). *)
+    (* M3, the reified forms (M3-T2), built on the reification dispatcher of M3-T4. *)
     "int_lin_le_reif";
     "int_le_reif";
     "int_eq_reif";
     "int_ne_reif";
-    (* M4, the arithmetic row (M4-T4b). *)
+    (* M4, the arithmetic family (M4-T4b). *)
     "int_abs";
     "int_times";
     "int_div";
-    (* M4, the first global (M4-T1). *)
+    (* M4, the first global: all_different (M4-T1). *)
     "all_different_int";
-    (* M4, the second (M4-T3). *)
+    (* M4, the second: element over a constant array (M4-T3). *)
     "array_int_element";
-    (* M7-T16, the third: all_different's generalisation. TWO SPELLINGS, and the second
-       is not a synonym for convenience: mznlib/fzn_global_cardinality.mzn has to give
-       `fzn_global_cardinality' a BODY, because std hands it counts declared `var int'
-       with no domain and the decomposition this replaces was what used to imply their
-       0..|x| bound. That body states the bound and calls the bodyless
-       `baguette_global_cardinality', which is what reaches the .fzn from MiniZinc. The
-       fzn_ name stays accepted because the test models are written in it and because a
-       hand-written .fzn should not have to know about the library's internals. *)
+    (* The third global, global_cardinality (M7-T16), all_different's generalisation.
+       TWO SPELLINGS, and the second is not a synonym for convenience:
+       mznlib/fzn_global_cardinality.mzn has to give `fzn_global_cardinality' a BODY,
+       because std hands it counts declared `var int' with no domain and the
+       decomposition this replaces was what used to imply their 0..|x| bound. That body
+       states the bound and calls the bodyless `baguette_global_cardinality', which is
+       what reaches the .fzn from MiniZinc. The fzn_ name stays accepted because the test
+       models are written in it and because a hand-written .fzn should not have to know
+       about the library's internals. *)
     "fzn_global_cardinality";
     "baguette_global_cardinality";
-    (* M4-T9: maximum / minimum, kept whole by mznlib/redefinitions-2.0.mzn (D-0095). *)
+    (* maximum / minimum (M4-T9), kept whole by mznlib/redefinitions-2.0.mzn and
+       propagated over one clause row per threshold (D-0095). *)
     "array_int_maximum";
     "array_int_minimum";
     (* ...and their two-element case, FlatZinc's own `int_max(x, y, z)` (z = max(x, y)),
        which is the same instance over [x; y]. *)
     "int_max";
     "int_min";
-    (* M4-T10 (D-0096): cumulative, and disjunctive as its unit case, through
-       mznlib/fzn_cumulative.mzn and mznlib/fzn_disjunctive*.mzn. *)
+    (* cumulative, and disjunctive as its unit case, through mznlib/fzn_cumulative.mzn
+       and mznlib/fzn_disjunctive*.mzn: time-table filtering over capacity rows on the
+       order literals (M4-T10, D-0096). *)
     "baguette_cumulative";
-    (* M7-T28 (D-0146): regular, through mznlib/fzn_regular.mzn and fzn_regular_set.mzn. *)
+    (* The native globals of M7-T28 (the decomposed globals that cost the search most).
+       regular, through mznlib/fzn_regular.mzn and fzn_regular_set.mzn, over a layered
+       graph of state flags (D-0146). *)
     "baguette_regular";
-    (* M7-T28 (D-0151): inverse, through mznlib/fzn_inverse.mzn. *)
+    (* inverse, through mznlib/fzn_inverse.mzn, by channel filtering (D-0151). *)
     "baguette_inverse";
-    (* M7-T28 (D-0159): member, through mznlib/fzn_member_int.mzn and
-       fzn_member_bool.mzn -- one relation, the second spelling over var bool. *)
+    (* member, through mznlib/fzn_member_int.mzn and fzn_member_bool.mzn -- one
+       relation, the second spelling over var bool; one selector per position (D-0159). *)
     "baguette_member";
     "baguette_member_bool";
-    (* M18-coverage-T1 (D-0206): table, through mznlib/fzn_table_int.mzn and
-       fzn_table_bool.mzn -- one relation, the second spelling over var bool. *)
+    (* table, through mznlib/fzn_table_int.mzn and fzn_table_bool.mzn -- one relation,
+       the second spelling over var bool; one selector per tuple (M18-coverage-T1,
+       D-0206). *)
     "baguette_table";
     "baguette_table_bool";
-    (* M18-coverage-T3 (D-0217): circuit, through mznlib/fzn_circuit.mzn. *)
+    (* circuit, through mznlib/fzn_circuit.mzn, over MTZ position variables
+       (M18-coverage-T3, D-0217). *)
     "baguette_circuit";
-    (* M18-coverage-T4 (D-0220): bin_packing_load, bin_packing_capa and bin_packing,
-       through mznlib/fzn_bin_packing_load.mzn, fzn_bin_packing_capa.mzn and
-       fzn_bin_packing.mzn: one linear row per bin over the indicators `bin[i] = b`,
-       which are std's own int_eq_reif Booleans, read as 0..1 without a bool2int copy. *)
+    (* bin_packing_load, bin_packing_capa and bin_packing, through
+       mznlib/fzn_bin_packing_load.mzn, fzn_bin_packing_capa.mzn and fzn_bin_packing.mzn:
+       one linear row per bin over the indicators `bin[i] = b`, which are std's own
+       int_eq_reif Booleans, read as 0..1 without a bool2int copy (M18-coverage-T4,
+       D-0220). *)
     "baguette_bool_lin_eq";
     "baguette_bool_lin_le";
   ]
@@ -114,11 +127,11 @@ let implemented =
 let planned : (string * string) list = []
 let implemented_list = String.concat ", " implemented
 
-(* The name tables, keyed by the identifier, are [Model.Names] (M16-file-review-T5,
-   D-0193), where they were polymorphic [Hashtbl]s whose every probe went through
-   [compare_val]: a name is looked up once per occurrence in the file, and these probes
-   were a quarter of the builder's time on a Challenge `.fzn`. Nothing iterates them, so
-   their bucket order is not observable. *)
+(* The name tables, keyed by the identifier, are [Model.Names], a table over [String],
+   because a name is looked up once per occurrence in the file. They were polymorphic
+   [Hashtbl]s whose every probe went through [compare_val], and those probes were a
+   quarter of the builder's time on a Challenge `.fzn` (D-0193). Nothing iterates them,
+   so their bucket order is not observable. *)
 module Names = Model.Names
 
 type env = {
@@ -126,25 +139,27 @@ type env = {
   arrays : Model.operand array Names.t;
   array_dims : (int * int) list Names.t;
   mutable vars_rev : Model.var list;
-  (* M6-T21: the same variables BY INDEX, kept in step with [vars_rev] by [new_var] and
-     [infer_domains]. Both lookups below used to be [List.nth_opt (List.rev vars_rev) i],
-     a reversal of the whole table per lookup: 44 s of the 60 s budget on 2016_mrcpsp
-     (118 756 lines) went there, as `List.rev_append` and the GC behind it.
-     M16-file-review-T5 (D-0193): an array doubled as it fills, where it was an
-     [(int, var) Hashtbl.t] -- one polymorphic hash, a bucket scan for [replace] and the
-     table's resizing per declared variable, 13 % of the builder's time on smelt_11.
-     Slots [nvars] and above are unused; [var_at] answers [None] there as the table did
-     for an index it did not hold. *)
+  (* The same variables BY INDEX, kept in step with [vars_rev] by [new_var] and
+     [infer_domains], so that [var_at] is O(1): an array doubled as it fills. Slots
+     [nvars] and above are unused, and [var_at] answers [None] there.
+
+     Both earlier forms were measured costs. [List.nth_opt (List.rev vars_rev) i]
+     reversed the whole table per lookup: 44 s of the 60 s budget on 2016_mrcpsp
+     (118 756 lines) went there, as `List.rev_append` and the GC behind it (fixed by
+     commit 517453b under the id M6-T21, which the roadmap later gave to another task).
+     The [(int, var) Hashtbl.t] that replaced it cost one polymorphic hash, a bucket scan
+     for [replace] and the table's resizing per declared variable, 13 % of the builder's
+     time on smelt_11 (D-0193). *)
   mutable vars_by_index : Model.var array;
   mutable nvars : int;
   mutable outputs_rev : Model.output_item list;
-  (* M4-T4b: how many auxiliary Booleans the arithmetic family has introduced so far.
+  (* How many auxiliary Booleans the arithmetic family (M4-T4b) has introduced so far.
      It only ever goes up, so the names it makes are unique among themselves; a
      collision with a name the model itself declares is caught by
      lib/flatzinc/compile.ml's [check_name_collisions], which is where the diagnostic
      can say which declaration it clashed with. *)
   mutable naux : int;
-  (* M7-T19 (D-0083): the variables declared `var int` with NO domain, newest first. Each
+  (* The variables declared `var int` with NO domain, newest first (D-0083). Each
      holds a placeholder domain until [infer_domains] replaces it; one that inference
      cannot bound is refused by [refuse_unbounded], exactly as SPEC 2.1 refused all of
      them before. *)
@@ -245,7 +260,8 @@ let as_const pos ~builtin ~what (op : Model.operand) =
 let sorted_uniq ns = List.sort_uniq compare ns
 
 (* [Ast.Tint] -- `var int` with no domain -- is not a domain and never reaches here: the
-   two declaration sites route it to [new_undomained_var] (M7-T19, D-0083). *)
+   two declaration sites route it to [new_undomained_var], whose domain is inferred
+   below (D-0083). *)
 let domain_of_base pos name (bt : Ast.base_type) =
   match bt with
   | Ast.Tbool -> Model.Dbool
@@ -258,17 +274,18 @@ let domain_of_base pos name (bt : Ast.base_type) =
   | Ast.Tset [] -> Error.failf pos "`%s` has an empty domain" name
   | Ast.Tset ns -> Model.Dset (sorted_uniq ns)
 
-(* ------------------------------------------- M7-T19: bounds inference (D-0083)
+(* ------------------------------------------- bounds inference (D-0083, M7-T19)
 
    docs/SPEC.md 2.1, as amended 2026-10-01: a `var int` declared with NO domain is given
    the domain its model's own constraints IMPLY, and is refused only if they imply none.
-   MiniZinc 2.10 writes these for sums of bounded terms it did not bother to bound
-   (D-0079 counted four corpus instances refused for it).
+   MiniZinc 2.10 writes these for sums of bounded terms it did not bother to bound (the
+   wave-30 corpus run of D-0079 counted four instances refused for it).
 
-   WHY INFERENCE AND NOT A DEFAULT RANGE. The order encoding is width-proportional
-   (D-0028): a default of, say, -10^6..10^6 is two million ladder clauses paid BLIND, for
-   every such variable, whatever the model needs. An inferred bound is the width the model
-   itself licenses, and nothing the model does not.
+   WHY INFERENCE AND NOT A DEFAULT RANGE. The order encoding is width-proportional, one
+   ladder clause per value of the declared domain (D-0028): a default of, say, -10^6..10^6
+   is two million ladder clauses paid BLIND, for every such variable, whatever the model
+   needs. An inferred bound is the width the model itself licenses, and nothing the model
+   does not.
 
    WHY IT IS SOUND. Every rule below derives a bound that EVERY SOLUTION of the one
    constraint it reads satisfies, so the inferred domain contains every value the variable
@@ -297,6 +314,9 @@ let domain_of_base pos name (bt : Ast.base_type) =
      int_div(x, y, q)          |q| <= max|x| (|y| >= 1 wherever the relation holds)
      array_int_element(i,a,c)  i in 1..|a|, c in min(a)..max(a)
      global_cardinality counts each in 0..|xs|
+     array_int_maximum / int_max (and the minimum forms)
+                               the rows m >= x_i (resp. <=), and m at most the
+                               largest upper bound once every x_i has one (the hull)
      case split                if c then x = e1 else x = e2, written as int_eq_reif
                                under two-literal bool_clause implications: x in the
                                hull of e1's and e2's bounds
@@ -326,9 +346,10 @@ type fact =
      implies `p`, from a two-literal `bool_clause`. Neither bounds anything alone. *)
   | F_reif_eq of int * Model.operand * int
   | F_imp of (int * bool) * int
-  (* M4-T9. [F_hull (is_max, m, xs)]: m = max xs (resp. min), the half the [F_lin] rows
-     `m >= x_i` (resp. <=) do not carry -- m is at most the largest upper bound, and only
-     once EVERY x has one (resp. at least the smallest lower bound). *)
+  (* Maximum and minimum (M4-T9). [F_hull (is_max, m, xs)]: m = max xs (resp. min),
+     the half the [F_lin] rows `m >= x_i` (resp. <=) do not carry -- m is at most the
+     largest upper bound, and only once EVERY x has one (resp. at least the smallest
+     lower bound). *)
   | F_hull of bool * int * Model.operand list
 
 let fact_vars = function
@@ -394,10 +415,11 @@ let facts_of env (c : Ast.constraint_item) : fact list =
         if List.length coeffs <> List.length vs then []
         else [ lin_fact (List.combine coeffs vs) (const ra) (c.Ast.c_id = "int_lin_eq") ]
     | "int_eq", [ a; b ] -> [ lin_fact [ (1, op a); (-1, op b) ] 0 true ]
-    (* M4-T9, D-0083's rule for maximum / minimum: the rows m >= x_i (resp. <=) as linear
-       facts, and the hull. Before M4-T9 the decomposition's own rows were what bounded a
-       `var int` result; keeping the constraint whole must not lose that (measured on
-       2010_filters_filter, whose objective is a maximum with no declared domain). *)
+    (* D-0083's rule for maximum / minimum: the rows m >= x_i (resp. <=) as linear
+       facts, and the hull. Before maximum was kept whole (M4-T9) the decomposition's
+       own rows were what bounded a `var int` result, and keeping the constraint whole
+       must not lose that (measured on 2010_filters_filter, whose objective is a maximum
+       with no declared domain). *)
     | (("array_int_maximum" | "array_int_minimum" | "int_max" | "int_min") as b), args
       -> (
         let is_max = b = "array_int_maximum" || b = "int_max" in
@@ -827,9 +849,10 @@ let add_par_scalar env (d : Ast.decl) bt =
 
 let add_var_scalar env (d : Ast.decl) bt =
   let pos = d.Ast.d_pos and name = d.Ast.d_name in
-  (* M7-T19 (D-0083). An ALIAS needs no domain of its own -- it is its target -- so a
-     `var int: x = y;` is no longer refused; a fresh undomained variable waits for
-     [infer_domains]. Every other base type is checked here as before. *)
+  (* An ALIAS needs no domain of its own -- it is its target -- so a `var int: x = y;`
+     is accepted (SPEC 2.1 as amended by D-0083, which refused it before). A `var int`
+     with neither a value nor a domain becomes a fresh undomained variable that waits for
+     [infer_domains]. Every other base type is checked here. *)
   let op =
     match (d.Ast.d_value, bt) with
     | Some e, _ -> operand env pos e
@@ -959,8 +982,9 @@ let build_constraint env (c : Ast.constraint_item) =
   in
   (* `as`, `bs`, `c` folded into (terms, rhs) -- shared by the plain linear builtins
      and by [int_lin_le_reif], which is the same three arguments with a reifier after
-     them. Folding it once is the M1-T7 rule that the row and the propagator read one
-     normalised list, applied one argument earlier. *)
+     them. Folding it once applies, one argument earlier, the rule int_lin_le's
+     propagator was built on (M1-T7): the .opb row and the propagator read one normalised
+     list. *)
   let lin_terms ca va ra =
     let coeffs =
       List.map
@@ -977,9 +1001,11 @@ let build_constraint env (c : Ast.constraint_item) =
     let rhs0 =
       as_const pos ~builtin:id ~what:"the right-hand side" (operand env pos ra)
     in
-    (* A constant operand moves to the right-hand side through [Checked] (M22-review-T1,
-       D-0029). Wrapped, the product vanished before compile.ml's cap saw the row, and
-       VeriPB verified an answer to a different model. *)
+    (* A constant operand moves to the right-hand side through [Checked], which raises
+       on overflow instead of wrapping (D-0029: baguette's arithmetic limit is enforced,
+       never silently exceeded). Wrapped, the product vanished before compile.ml's cap
+       saw the row, and VeriPB verified an answer to a different model; the review task
+       M22-review-T1 found that and made the fold checked. *)
     let fold_const r coeff n =
       let module C = Baguette_core.Checked in
       match C.sub r (C.mul coeff n) with
@@ -1050,7 +1076,7 @@ let build_constraint env (c : Ast.constraint_item) =
     | [ a; r ] -> make (operands env pos a) (operand env pos r)
     | _ -> Error.failf pos "builtin `%s`: internal arity mismatch" id
   in
-  (* ---------------------------------------------------------------- M4-T4b
+  (* ------------------------------------ the arithmetic family's auxiliaries (M4-T4b)
 
      The arithmetic family is the first one whose front end CREATES variables. The
      reason is structural and is stated in lib/core/prop/arith.ml's header: x * y = z
@@ -1059,15 +1085,15 @@ let build_constraint env (c : Ast.constraint_item) =
      so a Boolean invented there would arrive after the store exists. The builder is
      the last place early enough.
 
-     Only the auxiliaries that will actually be USED are created. An auxiliary that
-     no row mentions would be a free variable of the model, and
-     [Model.check_assignment] checks each one against its own definition, so a free
-     one could be assigned a value its definition forbids and turn a correct solution
-     into an I-S1 failure. The three rules below therefore have to agree with the
-     paths compile.ml takes, and compile.ml is written to make that agreement cheap:
-     it posts the definition of every auxiliary the constraint carries before it
-     chooses a path, so an auxiliary is never left undefined even if a path stops
-     using it. *)
+     Only the auxiliaries that will actually be USED are created. An auxiliary that no row
+     mentions would be a free variable of the model, and [Model.check_assignment] checks
+     each one against its own definition, so a free one could be assigned a value its
+     definition forbids and turn a correct solution into an I-S1 failure (the invariant
+     that every solution printed satisfies every constraint, re-checked independently).
+     The three rules, [Arith_aux.times], [div] and [abs], therefore have to agree with the
+     paths compile.ml takes, and compile.ml is written to make that agreement cheap: it
+     posts the definition of every auxiliary the constraint carries before it chooses a
+     path, so an auxiliary is never left undefined even if a path stops using it. *)
   let var_bounds i =
     match var_at env i with
     | Some { Model.v_dom = Model.Dbool; _ } -> (0, 1)
@@ -1083,8 +1109,9 @@ let build_constraint env (c : Ast.constraint_item) =
     new_var env (Printf.sprintf "X_INTRODUCED_arith_%d" n) Model.Dbool pos
   in
   (* The sign and ladder Booleans, and the three constructors that carry them, are
-     [Arith_aux]'s, shared with lib/scp/reader.ml (M23-inputs-T4, D-0230): this builder
-     supplies the bounds it reads and the Booleans it names. *)
+     [Arith_aux]'s, shared with lib/scp/reader.ml, the reader of the .scp format
+     (M23-inputs-T4, D-0230): this builder supplies the bounds it reads and the Booleans
+     it names. *)
   let actx = { Arith_aux.bounds = var_bounds; fresh = fresh_bool } in
   let arity3 f =
     arity 3;
@@ -1097,7 +1124,8 @@ let build_constraint env (c : Ast.constraint_item) =
     | "int_lin_le" -> lin (fun ts r -> Model.Int_lin_le (ts, r))
     | "int_lin_eq" -> lin (fun ts r -> Model.Int_lin_eq (ts, r))
     | "int_lin_ne" -> lin (fun ts r -> Model.Int_lin_ne (ts, r))
-    (* M18-coverage-T4 (D-0220). `baguette_bool_lin_le(as, bs, c)` is `int_lin_le` and
+    (* The bin_packing rows (M18-coverage-T4, D-0220, see [implemented]).
+       `baguette_bool_lin_le(as, bs, c)` is `int_lin_le` and
        `baguette_bool_lin_eq(as, bs, y)` is `sum as * bs = y` as an `int_lin_eq`, the
        Booleans read as the integers 0 and 1 (D-0007), so no bool2int copy and no row of
        their own: they ARE linear rows, with every check a linear row has. *)
@@ -1131,21 +1159,22 @@ let build_constraint env (c : Ast.constraint_item) =
     | "bool2int" -> cmp (fun b x -> Model.Bool2int (b, x))
     | "bool_eq" -> cmp (fun a b -> Model.Bool_eq (a, b))
     | "bool_not" -> cmp (fun a b -> Model.Bool_not (a, b))
-    (* M4-T1. One array argument, and the operands are kept exactly as written --
-       duplicates and constants included. `all_different_int([x, x])` is UNSAT and
-       `all_different_int([x, 1])` is `x <> 1`, and both fall out of the pairwise rows
+    (* all_different (M4-T1). One array argument, and the operands are kept exactly as
+       written -- duplicates and constants included. `all_different_int([x, x])` is UNSAT
+       and `all_different_int([x, 1])` is `x <> 1`, and both fall out of the pairwise rows
        lib/flatzinc/compile.ml posts with no special case, which is the same reason
        [normalise_terms] is not applied to a linear row's duplicates here. *)
     | "all_different_int" -> one_array (fun xs -> Model.All_different xs)
-    (* M7-T16. `fzn_global_cardinality(xs, cover, counts)`. The COVER is an array of
-       constants -- SPEC 2.1's form and the only one lib/core/prop/gcc.ml's counting
-       rows can be built over -- and [as_const] refuses a variable cover HERE rather
-       than in compile.ml so the message carries a source position, the same division
-       `array_int_element` below makes for its array.
+    (* global_cardinality (M7-T16). `fzn_global_cardinality(xs, cover, counts)`. The COVER
+       is an array of constants -- SPEC 2.1's form and the only one lib/core/prop/gcc.ml's
+       counting rows can be built over -- and [as_const] refuses a variable cover HERE
+       rather than in compile.ml so the message carries a source position, the same
+       division `array_int_element` below makes for its array.
 
        The counts are ordinary operands, a literal constant included: compile.ml
-       makes a constant count the count view [View.const k] (M7-T18, D-0082), whose
-       row is the one-value variable's row, so nothing here distinguishes the two. *)
+       makes a constant count the count view [View.const k], whose row is the one-value
+       variable's row, so nothing here distinguishes the two (constant counts were
+       accepted by M7-T18, and D-0082 made them a VIEW rather than a variable). *)
     | "fzn_global_cardinality" | "baguette_global_cardinality" -> (
         arity 3;
         match c.Ast.c_args with
@@ -1159,7 +1188,7 @@ let build_constraint env (c : Ast.constraint_item) =
             in
             Model.Global_cardinality (operands env pos xa, cover, operands env pos na)
         | _ -> Error.failf pos "builtin `%s`: internal arity mismatch" id)
-    (* M7-T28 (D-0146). `baguette_regular(x, Q, smin, d, q0, F, s)`: the automaton is
+    (* regular (D-0146). `baguette_regular(x, Q, smin, d, q0, F, s)`: the automaton is
        CONSTANTS (Q, smin, the flattened table, the start, the accepting states), refused
        here with a position otherwise; the letters and the state flags are operands.
        lib/flatzinc/compile.ml's [post_regular] checks the shape. *)
@@ -1185,7 +1214,7 @@ let build_constraint env (c : Ast.constraint_item) =
                 r_flags = operands env pos fla;
               }
         | _ -> Error.failf pos "builtin `%s`: internal arity mismatch" id)
-    (* M7-T28 (D-0151). `baguette_inverse(f, fmin, g, gmin)`: the two arrays are
+    (* inverse (D-0151). `baguette_inverse(f, fmin, g, gmin)`: the two arrays are
        operands, the two first indices constants. lib/flatzinc/compile.ml's
        [post_inverse] writes the rows. *)
     | "baguette_inverse" -> (
@@ -1201,7 +1230,7 @@ let build_constraint env (c : Ast.constraint_item) =
                 inv_gmin = const "g's first index" gm;
               }
         | _ -> Error.failf pos "builtin `%s`: internal arity mismatch" id)
-    (* M7-T28 (D-0159). `baguette_member(x, y, b)` and `baguette_member_bool(x, y, b)`:
+    (* member (D-0159). `baguette_member(x, y, b)` and `baguette_member_bool(x, y, b)`:
        three operand slots, the selectors last. A Boolean is the integer 0..1 here
        (D-0007), so both spellings are one [Model.Member]; lib/flatzinc/compile.ml's
        [post_member] checks the selectors' shape. *)
@@ -1216,9 +1245,9 @@ let build_constraint env (c : Ast.constraint_item) =
                 mem_b = operands env pos ba;
               }
         | _ -> Error.failf pos "builtin `%s`: internal arity mismatch" id)
-    (* M18-coverage-T3 (D-0217). `baguette_circuit(xs, pos, root)`: the root is a
-       CONSTANT, refused here with a position otherwise; lib/flatzinc/compile.ml's
-       [post_circuit] checks the shape (n successors, n - 1 positions). *)
+    (* circuit (D-0217). `baguette_circuit(xs, pos, root)`: the root is a CONSTANT,
+       refused here with a position otherwise; lib/flatzinc/compile.ml's [post_circuit]
+       checks the shape (n successors, n - 1 positions). *)
     | "baguette_circuit" -> (
         arity 3;
         match c.Ast.c_args with
@@ -1230,9 +1259,9 @@ let build_constraint env (c : Ast.constraint_item) =
                 cir_root = as_const pos ~builtin:id ~what:"the root" (operand env pos ra);
               }
         | _ -> Error.failf pos "builtin `%s`: internal arity mismatch" id)
-    (* M18-coverage-T1 (D-0206). `baguette_table(x, t, s)` and `baguette_table_bool(x, t,
-       s)`: the tuples [t] are CONSTANTS (a Boolean tuple is written 0/1 by the library),
-       refused here with a position otherwise; x and the selectors are operands.
+    (* table (D-0206). `baguette_table(x, t, s)` and `baguette_table_bool(x, t, s)`: the
+       tuples [t] are CONSTANTS (a Boolean tuple is written 0/1 by the library), refused
+       here with a position otherwise; x and the selectors are operands.
        lib/flatzinc/compile.ml's [post_table] checks the shape. *)
     | "baguette_table" | "baguette_table_bool" -> (
         arity 3;
@@ -1249,9 +1278,9 @@ let build_constraint env (c : Ast.constraint_item) =
                 tab_s = operands env pos sa;
               }
         | _ -> Error.failf pos "builtin `%s`: internal arity mismatch" id)
-    (* M4-T10 (D-0096). `baguette_cumulative(s, d, r, cap)`: the durations, resources
-       and capacity are CONSTANTS, refused here with a position otherwise, as the cover
-       of `fzn_global_cardinality` is. The starts are ordinary operands. *)
+    (* cumulative (M4-T10, D-0096). `baguette_cumulative(s, d, r, cap)`: the durations,
+       resources and capacity are CONSTANTS, refused here with a position otherwise, as
+       the cover of `fzn_global_cardinality` is. The starts are ordinary operands. *)
     | "baguette_cumulative" -> (
         arity 4;
         match c.Ast.c_args with
@@ -1274,20 +1303,11 @@ let build_constraint env (c : Ast.constraint_item) =
                 id (List.length ss) (Array.length ds) (Array.length rs);
             Model.Cumulative (ss, ds, rs, cap)
         | _ -> Error.failf pos "builtin `%s`: internal arity mismatch" id)
-    (* M4-T3. `array_int_element(idx, as, c)`, with `as` an array of CONSTANTS -- the
-       only form docs/SPEC.md 2.1 admits. [as_const] is what refuses a variable element,
-       and it refuses it HERE rather than in compile.ml so the message carries the
-       source position and names the builtin, the same division [lin_terms] makes for a
-       linear row's coefficients.
-
-       An empty array and an index whose declared domain misses `1..|as|` are both left
-       to fall through: lib/core/prop/element.ml posts a unit row per out-of-range
-       position, so both are refuted by the ordinary arithmetic rather than by a special
-       case here -- the same reason `all_different_int` above keeps its duplicates. *)
-    (* M4-T9. `array_int_maximum(m, xs)` / `array_int_minimum(m, xs)`: m first, then
-       the array, which is MiniZinc's argument order (std/flatzinc_builtins.mzn). An
-       empty array is refused here, with the position, because it has no maximum and
-       lib/core/prop/maxmin.ml would have nothing to post. *)
+    (* maximum / minimum (M4-T9). `array_int_maximum(m, xs)` / `array_int_minimum(m, xs)`:
+       m first, then the array, which is MiniZinc's argument order
+       (std/flatzinc_builtins.mzn). An empty array is refused here, with the position,
+       because it has no maximum and lib/core/prop/maxmin.ml would have nothing to
+       post. *)
     (* `int_max(x, y, z)` / `int_min(x, y, z)`: z = max(x, y). The two-element case, so
        it IS the array form over [x; y] -- one constructor, one propagator, and the
        result last, which is FlatZinc's order for these two. *)
@@ -1305,6 +1325,16 @@ let build_constraint env (c : Ast.constraint_item) =
             | "array_int_maximum" -> Model.Array_int_maximum (m, xs)
             | _ -> Model.Array_int_minimum (m, xs))
         | _ -> Error.failf pos "builtin `%s`: internal arity mismatch" id)
+    (* element (M4-T3). `array_int_element(idx, as, c)`, with `as` an array of CONSTANTS
+       -- the only form docs/SPEC.md 2.1 admits. [as_const] is what refuses a variable
+       element, and it refuses it HERE rather than in compile.ml so the message carries
+       the source position and names the builtin, the same division [lin_terms] makes for
+       a linear row's coefficients.
+
+       An empty array and an index whose declared domain misses `1..|as|` are both left
+       to fall through: lib/core/prop/element.ml posts a unit row per out-of-range
+       position, so both are refuted by the ordinary arithmetic rather than by a special
+       case here -- the same reason `all_different_int` above keeps its duplicates. *)
     | "array_int_element" -> (
         arity 3;
         match c.Ast.c_args with
@@ -1323,8 +1353,9 @@ let build_constraint env (c : Ast.constraint_item) =
     | "int_le_reif" -> cmp_reif (fun a b r -> Model.Int_le_reif (a, b, r))
     | "int_eq_reif" -> cmp_reif (fun a b r -> Model.Int_eq_reif (a, b, r))
     | "int_ne_reif" -> cmp_reif (fun a b r -> Model.Int_ne_reif (a, b, r))
-    (* M4: `int_times`, `int_div`, `int_abs`. Which auxiliaries each creates, and in
-       which order, is [Arith_aux]'s (its header and its comments on [times] and [div]). *)
+    (* The arithmetic family (M4): `int_times`, `int_div`, `int_abs`. Which auxiliaries
+       each creates, and in which order, is [Arith_aux]'s (its header and its comments on
+       [times] and [div]). *)
     | "int_times" -> arity3 (Arith_aux.times actx)
     | "int_div" -> arity3 (Arith_aux.div actx)
     | "int_abs" -> cmp (Arith_aux.abs actx)
@@ -1339,19 +1370,19 @@ let rec search_of_annot env pos (a : Ast.expr) =
   | Ast.Call ((("int_search" | "bool_search") as nm), args) -> (
       match args with
       | vs :: vsel :: valsel :: _rest ->
-          (* M7-T7. A CONSTANT IN THE SEARCH ARRAY IS SKIPPED, NOT REFUSED.
+          (* A CONSTANT IN THE SEARCH ARRAY IS SKIPPED, NOT REFUSED (M7-T7).
 
-             This used to `Error.failf` on the first [Model.Const], killing the whole
-             model. That was wrong twice over. A constant there is a variable with
-             nothing left to decide -- MiniZinc's flattener writes one whenever it fixes
-             a variable it had already named in the annotation -- so there is no
-             decision to skip: the annotation asks for a search over that array, and a
-             search over that array never branches on a fixed element. SKIPPING IT IS
-             HONOURING IT, which is what docs/SPEC.md 3.4 requires; refusing the model is
-             not a stricter reading of 3.4, it is a different answer to a question 3.4
-             does not ask. And it was expensive: over the 436-instance corpus of D-0068
-             this single check accounted for 143 of 278 refusals, more than every other
-             cause combined.
+             A constant there is a variable with nothing left to decide -- MiniZinc's
+             flattener writes one whenever it fixes a variable it had already named in
+             the annotation -- so there is no decision to skip: the annotation asks for a
+             search over that array, and a search over that array never branches on a
+             fixed element. SKIPPING IT IS HONOURING IT, which is what docs/SPEC.md 3.4
+             requires; refusing the model is not a stricter reading of 3.4, it is a
+             different answer to a question 3.4 does not ask. This used to
+             `Error.failf` on the first [Model.Const], killing the whole model, and it
+             was expensive: over the 436-instance corpus of the first full corpus run
+             (D-0068) this single check accounted for 143 of 278 refusals, more than
+             every other cause combined.
 
              An array of ALL constants therefore yields an EMPTY index list, and that is
              a legal phase rather than an error. `compile.ml`'s [phases_of_search] builds
@@ -1374,15 +1405,15 @@ let rec search_of_annot env pos (a : Ast.expr) =
             match vsel with
             | Ast.Ident "input_order" -> Model.Input_order
             | Ast.Ident "first_fail" -> Model.First_fail
-            (* M7-T19 (D-0083). The LARGEST current domain first, ties to the earliest
-               candidate -- [first_fail]'s tie-break, unchanged. See
-               `Search.anti_first_fail`. *)
+            (* D-0083. The LARGEST current domain first, ties to the earliest candidate --
+               [first_fail]'s tie-break, unchanged. See `Search.anti_first_fail`. *)
             | Ast.Ident "anti_first_fail" -> Model.Anti_first_fail
-            (* M7-T9. `smallest` selects the variable with the smallest value in its
-               domain, `largest` the one with the largest -- read on the domain MINIMUM
-               and the domain MAXIMUM respectively, which is the MiniZinc spec's literal
-               wording and what Gecode's INT_VAR_MIN_MIN / INT_VAR_MAX_MAX do.
-               `Search.smallest` / `Search.largest` carry the argument in full. *)
+            (* M7-T9, which added the missing strategies. `smallest` selects the variable
+               with the smallest value in its domain, `largest` the one with the largest
+               -- read on the domain MINIMUM and the domain MAXIMUM respectively, which is
+               the MiniZinc spec's literal wording and what Gecode's INT_VAR_MIN_MIN /
+               INT_VAR_MAX_MAX do. `Search.smallest` / `Search.largest` carry the argument
+               in full. *)
             | Ast.Ident "smallest" -> Model.Smallest
             | Ast.Ident "largest" -> Model.Largest
             | e ->
@@ -1393,26 +1424,29 @@ let rec search_of_annot env pos (a : Ast.expr) =
           in
           let vl =
             match valsel with
-            (* M7-T19 (D-0083). Bare `indomain` is the MiniZinc specification's
-               "assign values in ascending order", which is `indomain_min`'s branching
-               exactly -- `x = lo` first, the rest of the domain as the sibling, and the
-               next decision on that variable takes the new minimum. It is the SAME
-               search, not an approximation of one, so mapping the spelling is honouring
-               the annotation (SPEC 3.4) rather than substituting for it. *)
+            (* D-0083. Bare `indomain` is the MiniZinc specification's "assign values in
+               ascending order", which is `indomain_min`'s branching exactly -- `x = lo`
+               first, the rest of the domain as the sibling, and the next decision on that
+               variable takes the new minimum. It is the SAME search, not an approximation
+               of one, so mapping the spelling is honouring the annotation (SPEC 3.4)
+               rather than substituting for it. *)
             | Ast.Ident ("indomain_min" | "indomain") -> Model.Indomain_min
             | Ast.Ident "indomain_max" -> Model.Indomain_max
             (* M7-T9. `indomain_split` bisects, excluding the upper half first -- the
                range midpoint, low branch first. See `Search.indomain_split`. *)
             | Ast.Ident "indomain_split" -> Model.Indomain_split
-            (* M7-T12. `indomain_median` was REFUSED here until wave 30, and the
-               refusal was correct at the time: a baguette decision was one order
-               literal, `x = m` for an interior `m` is two, and its sibling `x <> m` is
-               a disjunction (D-0019) that no nogood can name. M7-T12 built the second
-               decision shape rather than substituting a bisection -- see
-               `Search.branch_assign` and D-0077. The median is the LOWER median, the
+            (* `indomain_median` (M7-T12) branches `x = m` against `x <> m` with the
+               ASSIGNMENT decision, whose disjunctive sibling is discharged by derivation
+               (D-0077, `Search.branch_assign`). The median is the LOWER median, the
                value at index `(size-1)/2` of the domain's values in ascending order
                (Gecode's `INT_VAL_MED`); it counts VALUES, which is what distinguishes
-               it from `indomain_split`'s range midpoint. *)
+               it from `indomain_split`'s range midpoint.
+
+               It was REFUSED here until wave 30, and the refusal was correct at the
+               time: a baguette decision was one order literal, `x = m` for an interior
+               `m` is two, and its sibling `x <> m` is a disjunction that no nogood can
+               name (D-0019: a disequality needs the order encoding). M7-T12 built the
+               second decision shape rather than substituting a bisection. *)
             | Ast.Ident "indomain_median" -> Model.Indomain_median
             | e ->
                 Error.failf pos
@@ -1434,12 +1468,13 @@ let rec search_of_annot env pos (a : Ast.expr) =
     when nm = "priority_search"
          || (String.length nm > 7 && String.sub nm (String.length nm - 7) 7 = "_search")
     ->
-      (* M7-T2. `float_search`, `set_search` and `priority_search` used to fall into the
-         catch-all below and be SILENTLY DROPPED -- the one shape of failure this project
-         does not accept, because a dropped search annotation is a different search than
-         the model asked for and docs/SPEC.md 3.4 says it MUST be honoured. They are
-         named and refused instead. This arm is reached only for a `*_search` the arms
-         above did not recognise; `int_search` and `bool_search` never get here. *)
+      (* `float_search`, `set_search`, `priority_search` and any other `*_search` the
+         arms above did not recognise are named and refused, never SILENTLY DROPPED: a
+         dropped search annotation is a different search than the model asked for, and
+         docs/SPEC.md 3.4 says it MUST be honoured. `int_search` and `bool_search` never
+         get here. They used to fall into the catch-all below and be dropped, the one
+         shape of failure this project does not accept, until M7-T2 made the search
+         annotations honoured. *)
       Error.failf pos
         "unsupported search annotation `%s`: baguette implements `int_search`, \
          `bool_search` and `seq_search`. docs/SPEC.md section 3.4 says a search \
@@ -1476,17 +1511,18 @@ let add_item st (item : Ast.item) =
       else st.deferred_rev <- c :: st.deferred_rev
   | Ast.Solve (kind, annots, pos) -> st.solve <- Some (kind, annots, pos)
 
-(* ======================================================================== M7-T29
+(* ============================================ a repeated variable in global_cardinality
    `fzn_global_cardinality` with the SAME VARIABLE twice among its movable operands
-   (D-0146 section 2).
+   (M7-T29, D-0146 section 2).
 
    MiniZinc produces it by unification: community-detection's must-link constraints
-   `x[a] = x[b]` make two array cells one variable, and the gcc over x then names it
-   twice (D-0121: nine Challenge instances, all refused). Its tally contribution is the
-   number of occurrences, and every cancellation in lib/core/prop/gcc.ml's derivations
-   assumes one (that module's header: an ALO line per confined variable, a drop line per
-   other). Teaching gcc.ml multiplicities would touch every rule and every derivation of
-   a 1 200-line module whose proofs are measured line by line.
+   `x[a] = x[b]` make two array cells one variable, and the gcc over x then names it twice
+   (nine Challenge instances, all refused, counted by D-0121's comparison of the sixteen
+   Challenge editions). Its tally contribution is the number of occurrences, and every
+   cancellation in lib/core/prop/gcc.ml's derivations assumes one (that module's header:
+   an ALO line per confined variable, a drop line per other). Teaching gcc.ml
+   multiplicities would touch every rule and every derivation of a 1 200-line module whose
+   proofs are measured line by line.
 
    So the repeat is NORMALISED AWAY, in the model itself, and gcc.ml never sees one:
    every occurrence after the first is replaced by a FRESH variable declared on the

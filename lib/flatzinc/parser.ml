@@ -13,17 +13,20 @@
      solve      ::= "solve" annots ("satisfy" | "minimize" expr | "maximize" expr) ";"
      annots     ::= ( "::" expr )*
      expr       ::= int | "true" | "false" | string | ident | ident "(" args ")"
-                  | ident "[" expr "]" | "[" args "]" | "{" ints "}" | expr ".." expr
+                  | ident "[" expr "]" | "[" args "]" | "{" ints "}" | int ".." int
 
    Every failure raises Error.Error with the position of the offending token.
 
    The parser is LL(1) and never backs up: [cur] is the one token of lookahead the
    streaming lexer holds, and [advance] scans the next. It delivers the file one [item]
-   at a time through [iter_items] rather than as a tree (M7-T27 (d), D-0128), so that
-   the builder can drop each item once it is built; the two rules that are about the
-   model and not an item -- exactly one `solve` -- are checked in [iter_items].
+   at a time through [iter_items] rather than as a tree, so that the builder can drop
+   each item once it is built (the streaming front end, D-0128, task M7-T27 (d), which
+   keeps a large `.fzn` from being held whole in memory). The one rule about the model
+   rather than an item, exactly one `solve` (no second one, and not none), is checked in
+   [iter_items].
 
-   Cost (M16-file-review-T5, D-0193). One pass, O(tokens): every token is looked at
+   Cost, as the front end's file-by-file cost review left it (M16-file-review-T5,
+   D-0193). One pass, O(tokens): every token is looked at
    once through [cur] and consumed once by [advance], and nothing is ever re-read. A
    sequence ([parse_seq], [parse_annots]) is accumulated in reverse and reversed once,
    so an array literal of n elements costs O(n), whatever its length. A [Pos.t] is
@@ -78,9 +81,8 @@ let parse_int st =
   | t -> bad t
 
 (* An expression's start is taken as the token's line and column, two ints, and made a
-   [Pos.t] only for the diagnostic that needs it (M16-file-review-T5, D-0193): a
-   [Lexer.pos] per expression would be the allocation per token the lexer stopped
-   making. *)
+   [Pos.t] only for the diagnostic that needs it, because a [Lexer.pos] per expression
+   would be the allocation per token the lexer stopped making (D-0193). *)
 let rec parse_expr st =
   let line = Lexer.tok_line st and col = Lexer.tok_col st in
   let e = parse_primary st in
