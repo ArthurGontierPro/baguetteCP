@@ -4192,6 +4192,32 @@ let cdcl engine store ctx trace stats cfg (order : order) : node =
 
 (* ------------------------------------------------------------------------------ API *)
 
+(* M19-config-T8 (D-0250): probing at the root, under BAGUETTE_PROBE=root only. The rule,
+   its proof and its budget are lib/core/probe.ml's; this lends it the steps a failed node
+   writes ([state_conflict], [bridges], [close_root_conflict]) so the two stay one rule, and
+   the list D-0077's level-0 clauses are retired from. [None]: search as usual; [Some]: the
+   root was refuted while probing. Under [off] nothing here runs and no byte changes. *)
+let probe_root engine store ctx trace stats cfg : node option =
+  match Probe.mode () with
+  | Probe.Off -> None
+  | Probe.Root -> (
+      let hooks =
+        {
+          Probe.state_conflict = state_conflict ctx trace;
+          bridges = (fun ds -> ignore (bridges ctx trace stats store ds : Lit.t list));
+          close_root = close_root_conflict ctx trace store;
+          root_clause =
+            (fun cid -> stats.assign_clauses_rev <- cid :: stats.assign_clauses_rev);
+        }
+      in
+      match
+        Probe.root ~engine ~store ~ctx ~trace ~stop:cfg.stop ~poll_runs:cfg.stop_poll_runs
+          ~hooks
+      with
+      | Probe.Fixpoint -> None
+      | Probe.Refuted cid -> Some (NFail ([], cid))
+      | exception Probe.Stopped -> raise Limit_hit)
+
 (* The tree walk itself, shared by [solve] and [optimise] (M5-T1).
 
    It stops where the two part company: it runs the search, checks the invariants and
@@ -4299,8 +4325,11 @@ let search_core ~(engine : Engine.t) ~(store : Store.t) ~(ctx : Justify.ctx) ?tr
   in
   let result =
     try
-      if config.cdcl then cdcl engine store ctx trace stats config order
-      else dfs engine store ctx trace stats config order []
+      match probe_root engine store ctx trace stats config with
+      | Some refuted -> refuted
+      | None ->
+          if config.cdcl then cdcl engine store ctx trace stats config order
+          else dfs engine store ctx trace stats config order []
     with Limit_hit ->
       report_learning stats;
       raise (Interrupted (trace, stats))
