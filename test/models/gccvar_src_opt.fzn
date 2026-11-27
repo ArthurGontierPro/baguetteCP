@@ -1,0 +1,60 @@
+% gccvar_src_opt -- M18-coverage-T14 (D-0247)
+%
+% FLATTENED ARTEFACT. Source: mznlib/test/gccvar_src_opt.mzn, flattened by MiniZinc 2.10.1
+% against mznlib/ (MZN_SOLVER_PATH=tools). Regenerate with
+%   minizinc -c --no-output-ozn --solver baguette mznlib/test/gccvar_src_opt.mzn -o <this>
+% and re-attach this header; do not hand-edit the body.
+%
+% WHAT IT PINS. A global_cardinality whose counts are variables reaches std's count
+% decomposition since D-0247 (int_eq_reif per x and value, one int_lin_eq per count),
+% and a count bound decided by holes punched under a decision (x != w) is proved.
+
+array [1..2] of int: X_INTRODUCED_23_ = [1,-1];
+array [1..5] of int: X_INTRODUCED_34_ = [1,-1,-1,-1,-1];
+var 1..4: X_INTRODUCED_16_;
+var 1..4: X_INTRODUCED_17_;
+var 1..4: X_INTRODUCED_18_;
+var {1,2,4}: X_INTRODUCED_19_;
+var 1..4: w:: output_var;
+var 0..2: X_INTRODUCED_21_:: is_defined_var;
+var bool: X_INTRODUCED_25_ ::var_is_introduced :: is_defined_var;
+var 0..1: X_INTRODUCED_26_ ::var_is_introduced :: is_defined_var;
+var bool: X_INTRODUCED_27_ ::var_is_introduced :: is_defined_var;
+var 0..1: X_INTRODUCED_28_ ::var_is_introduced :: is_defined_var;
+var bool: X_INTRODUCED_29_ ::var_is_introduced :: is_defined_var;
+var 0..1: X_INTRODUCED_30_ ::var_is_introduced :: is_defined_var;
+var bool: X_INTRODUCED_31_ ::var_is_introduced :: is_defined_var;
+var 0..1: X_INTRODUCED_32_ ::var_is_introduced :: is_defined_var;
+var bool: X_INTRODUCED_35_ ::var_is_introduced :: is_defined_var;
+var 0..1: X_INTRODUCED_36_ ::var_is_introduced :: is_defined_var;
+var bool: X_INTRODUCED_37_ ::var_is_introduced :: is_defined_var;
+var 0..1: X_INTRODUCED_38_ ::var_is_introduced :: is_defined_var;
+var bool: X_INTRODUCED_39_ ::var_is_introduced :: is_defined_var;
+var 0..1: X_INTRODUCED_40_ ::var_is_introduced :: is_defined_var;
+var bool: X_INTRODUCED_41_ ::var_is_introduced :: is_defined_var;
+var 0..1: X_INTRODUCED_42_ ::var_is_introduced :: is_defined_var;
+array [1..4] of var int: x:: output_array([1..4]) = [X_INTRODUCED_16_,X_INTRODUCED_17_,X_INTRODUCED_18_,X_INTRODUCED_19_];
+array [1..2] of var int: c:: output_array([1..2]) = [X_INTRODUCED_21_,X_INTRODUCED_21_];
+array [1..5] of var int: X_INTRODUCED_46_ ::var_is_introduced  = [w,X_INTRODUCED_16_,X_INTRODUCED_17_,X_INTRODUCED_18_,X_INTRODUCED_19_];
+constraint int_lin_ne(X_INTRODUCED_23_,[X_INTRODUCED_16_,w],0);
+constraint int_lin_ne(X_INTRODUCED_23_,[X_INTRODUCED_17_,w],0);
+constraint int_lin_ne(X_INTRODUCED_23_,[X_INTRODUCED_18_,w],0);
+constraint int_lin_eq(X_INTRODUCED_34_,[X_INTRODUCED_21_,X_INTRODUCED_26_,X_INTRODUCED_28_,X_INTRODUCED_30_,X_INTRODUCED_32_],0):: defines_var(X_INTRODUCED_21_);
+constraint int_lin_eq(X_INTRODUCED_34_,[X_INTRODUCED_21_,X_INTRODUCED_36_,X_INTRODUCED_38_,X_INTRODUCED_40_,X_INTRODUCED_42_],0);
+constraint int_eq_reif(X_INTRODUCED_16_,2,X_INTRODUCED_25_):: defines_var(X_INTRODUCED_25_);
+constraint bool2int(X_INTRODUCED_25_,X_INTRODUCED_26_):: defines_var(X_INTRODUCED_26_);
+constraint int_eq_reif(X_INTRODUCED_17_,2,X_INTRODUCED_27_):: defines_var(X_INTRODUCED_27_);
+constraint bool2int(X_INTRODUCED_27_,X_INTRODUCED_28_):: defines_var(X_INTRODUCED_28_);
+constraint int_eq_reif(X_INTRODUCED_18_,2,X_INTRODUCED_29_):: defines_var(X_INTRODUCED_29_);
+constraint bool2int(X_INTRODUCED_29_,X_INTRODUCED_30_):: defines_var(X_INTRODUCED_30_);
+constraint int_eq_reif(X_INTRODUCED_19_,2,X_INTRODUCED_31_):: defines_var(X_INTRODUCED_31_);
+constraint bool2int(X_INTRODUCED_31_,X_INTRODUCED_32_):: defines_var(X_INTRODUCED_32_);
+constraint int_eq_reif(X_INTRODUCED_16_,3,X_INTRODUCED_35_):: defines_var(X_INTRODUCED_35_);
+constraint bool2int(X_INTRODUCED_35_,X_INTRODUCED_36_):: defines_var(X_INTRODUCED_36_);
+constraint int_eq_reif(X_INTRODUCED_17_,3,X_INTRODUCED_37_):: defines_var(X_INTRODUCED_37_);
+constraint bool2int(X_INTRODUCED_37_,X_INTRODUCED_38_):: defines_var(X_INTRODUCED_38_);
+constraint int_eq_reif(X_INTRODUCED_18_,3,X_INTRODUCED_39_):: defines_var(X_INTRODUCED_39_);
+constraint bool2int(X_INTRODUCED_39_,X_INTRODUCED_40_):: defines_var(X_INTRODUCED_40_);
+constraint int_eq_reif(X_INTRODUCED_19_,3,X_INTRODUCED_41_):: defines_var(X_INTRODUCED_41_);
+constraint bool2int(X_INTRODUCED_41_,X_INTRODUCED_42_):: defines_var(X_INTRODUCED_42_);
+solve :: int_search(X_INTRODUCED_46_,input_order,indomain_median,complete) maximize X_INTRODUCED_21_;

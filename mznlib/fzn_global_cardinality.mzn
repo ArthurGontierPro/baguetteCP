@@ -42,7 +42,34 @@
 % post_global_cardinality says why): a cover and counts of different lengths, a
 % count that is a literal constant rather than a variable, and the same variable
 % twice in the array.
+
+% VARIABLE COUNTS GO TO STD'S DECOMPOSITION (M18-coverage-T14, D-0247 [AUTONOME]).
+%
+% When some count is a variable, this file now hands the call to std's own
+% decomposition (one `count' per cover value, plus std's implied row
+% length(x) >= sum(counts)), and keeps lib/core/prop/gcc.ml for the calls whose
+% counts are all fixed. Measured over the 40 Challenge instances (2014-2026 lists,
+% flattened by MiniZinc 2.10.1) that reach this branch, 300 s: with proof three more
+% complete and verified (mondoku 10-10-6 and 12-12-8, and oocsp_racks 100_r1 whose
+% check now ends), 11 wins and 3 losses against main by the Challenge order;
+% without proof two more complete, 15 wins and 1 loss. No complete answer is lost.
+% What the native propagator misses with variable counts is the propagation BETWEEN
+% counts: the implied row alone closes mondoku (D-0247 section 3), and on warehouse
+% and peaceable queens the per-value rows are also cheaper per node than gcc's
+% interval rule over 3 000 variables. Native plus the rows was measured too: it
+% completes the same instances and scores below this route (1 win, 14 losses).
+%
+% The closed forms stay native (fzn_global_cardinality_closed.mzn calls the bodyless
+% predicate itself): they already state sum(counts) = |x|, the row that decides
+% mondoku, and blocks-world, the one Challenge family that uses them, did not move.
+% global_cardinality_low_up's counts are declared on constant bounds and stay native
+% too; that route was not measured (D-0247 section 6).
+%
+% To revert: restore the body below to its first two lines (the bounds and the
+% baguette_global_cardinality call) for every call.
 %-----------------------------------------------------------------------------%
+
+include "count.mzn";
 
 predicate baguette_global_cardinality(
   array [int] of var int: x,
@@ -55,5 +82,10 @@ predicate fzn_global_cardinality(
   array [int] of int: cover,
   array [int] of var int: counts,
 ) =
-  forall (i in index_set(counts)) (counts[i] >= 0 /\ counts[i] <= length(x))
-  /\ baguette_global_cardinality(x, cover, counts);
+  if forall (i in index_set(counts)) (is_fixed(counts[i])) then
+    forall (i in index_set(counts)) (counts[i] >= 0 /\ counts[i] <= length(x))
+    /\ baguette_global_cardinality(x, cover, counts)
+  else
+    forall (i in index_set(cover)) (count(x, cover[i], counts[i]))
+    /\ length(x) >= sum(counts)
+  endif;

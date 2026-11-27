@@ -32994,3 +32994,137 @@ The rule, fixed before the numbers exist. A switch becomes the default if and on
 pairwise share against `off` is at least 0.47 (D-0205's 0.03 noise band). Each instance whose answer is lost is listed. A
 default change is its own commit, followed by a lane re-record in its own commit and a gate. If neither passes, both stay
 `off` and the question is closed until one of the follow-ups of D-0241 section 7 or D-0246 section 6 changes the code.
+
+## D-0247  [AUTONOME] M18-coverage-T14: `global_cardinality` with variable counts goes to std's count decomposition in mznlib (route b), constant counts stay native. Rule C over holes (route a) was built, verified and dropped: it barely changes a tree and loses on score. What closes mondoku is the implied row between counts, not the holes
+
+**Status**: DECIDED (agent-gccvar, `wave93-gccvar`, 2026-11-27), not merged. The default changes in ONE commit,
+`4c5df61` (mznlib only, no solver code). Route (a) is `d94f08f` and its revert `fa32d4b`. Material:
+`/cluster/arthur/baguette-results/gccvar/` (README first).
+
+### 1. Context
+
+D-0244 section 3 measured that baguette does not finish mondoku 10-10-6 in 240 000 nodes while std's `count`
+decomposition for the variable-count calls finishes it in 4 271, and proposed as the cause that rule C of
+`lib/core/prop/gcc.ml` counts a value's possible takers by their window (`holds_v`), so a hole never lowers a count's
+upper bound. M18-coverage-T14 asked to measure that route against routing variable counts to std's decomposition,
+over every gcc instance of the Challenge lists.
+
+### 2. Census
+
+The 1 575 instances of the 2026-11-23 series lists (2011 to 2026), flattened again by MiniZinc 2.10.1 against this
+branch's base (main `a6602f0`). 205 of them called `baguette_global_cardinality` in the series' own flattening, but
+52 of those came through std's `alldifferent_except` (a gcc_low_up), which mznlib now routes elsewhere. On today's
+mznlib **153 instances in 27 families call gcc**: 55 with constant counts only, **98 with at least one variable
+count**. Of the 98, **40 reach a three-argument `global_cardinality` with variable counts** (521 calls: oocsp_racks
+10, mondoku 5, blocks-world 5 (the closed form), generalized-peacable-queens 5, chessboard 5, compression 5,
+warehouse 5) and 58 only `global_cardinality_low_up`, whose counts mznlib declares on constant bounds (gbac 19,
+community-detection 20, vaccine 5, evm-super-compilation 5, nside 3, gcc-benchmark 5, and one more). Script
+`census.py`, tables `census-*.tsv`, lists `routed.ids` (40), `lowup.ids` (58), `users.ids` (153).
+
+### 3. The two routes, and the one that decides mondoku
+
+**(a) rule C over `Domain.mem`** (`d94f08f`). A variable whose window holds `v` around a hole is no longer a
+possible taker; its indicator is cleared by the hole's own line, the remover's explanation from `Store.remover`
+(element.ml's `excl_hole`: the order clause of D-0086 with the remover's residue), the remover's facts join the
+push's reason, and a push that clears a hole is derived ahead (the hole clause is binary, so the line is not RUP
+against the counting row alone). Rule (b) got the same reading. A unit test (hi(n) falls from 3 to 1 under a
+decided `w`, ahead, the reason names `w`'s two bounds, D-0026 agreement) and three models, all proofs VERIFIED;
+dropping the remover's facts makes veripb 3.0.2 reject both SAT and OPT proofs ("Checking error at" lines 49 and 58),
+so the facts are load-bearing.
+
+**(b) std's decomposition for variable counts** (mznlib, constant counts stay native).
+
+**The probe that changed the diagnosis** (mondoku 10-10-6, no proof, 100 s): route (a) alone does NOT finish
+(140 163 nodes). Main's binary over main's mznlib PLUS std's implied row `length(x) >= sum(counts)` and nothing else
+finishes in 4 745 nodes (2.8 s); with route (a) too, 4 723; route (b), 4 271. So the inference mondoku lacks is the
+propagation BETWEEN counts (a count's upper bound from the others' lower bounds), which gcc.ml does not make and the
+implied row does, not the holes. D-0244's hypothesis was the wrong one, and its "split arm" measured the row.
+
+### 4. Measurements
+
+Binaries (release profile, `make release`'s command): main `a23edcfd` (main `a6602f0`, the base of every arm except
+A), route (a) `7fea1d0f` (`d94f08f`). Arms: base; A = route (a) over main's mznlib; B = route (b); S = native plus the
+implied row only; BC = native plus std's count rows; AS = A plus the row; SL = S plus the same row for low_up's
+counts; AB = A plus B. 16 at a time on fataepyc-06 (load 15 to 55 from other campaigns), 16 GiB address space,
+`MemoryMax=32G`, `--max-heap-mb 8192`, veripb 3.0.2 with 900 s on every proof that ended. Score: `agreement.py`
+(Challenge order, Borda), no-proof arms trusted.
+
+Node limit 20 000 (300 s cap), no proof. On all 153 users A grows the same tree as main wherever both stop on the
+node limit, except gbac UD8 (incumbent 10 128 against 10 127); the other differences are runs cut by the 300 s cap.
+On the 40: complete base 8, A 8, B 10, S 10, BC 10, AS 10; better incumbents against base B 10 (0 worse), S 3 (1),
+BC 2 (2), AS 2 (2). SL and ASL on the 98 add mondoku (+2) and nothing else.
+
+300 s, the 40 that route (b) reaches:
+
+| arm | no proof: complete, score share, wins/losses vs base | with proof: complete (verified), share, wins/losses |
+|---|---|---|
+| base | 9, 0.212 | 9 (8), 0.227 |
+| A | 10, 0.210, 2/3 | 9 (8), 0.219, 1/2 |
+| **B** | **11, 0.329, 15/1** | **11 (11), 0.296, 11/3** |
+| S | 11, 0.248, 5/0 | 11 (10), 0.258, 5/1 |
+| BC | 11, scores below B (1 win, 14 losses against B) | not run |
+| AB | 11, AB over B 2/2 | 11 (11), AB over B 2/1 |
+
+B's gains: mondoku 10-10-6 OPT in 2 s (6 s with proof, 4 271 nodes) and 12-12-8 in 13 s (27 s), both VERIFIED;
+oocsp_racks 100_r1, SAT in 22 s in every arm, whose proof check runs out of veripb's 900 s under base, A and S and
+VERIFIES under B; better incumbents on peaceable queens n9_q5, n11_q5, n13_q5, n25_q4 (B explores 4 to 5 times fewer
+nodes and still finds better), mondoku 14-14-8 (2 against 5) and 20-18-9 (4 or 5 against 11), warehouse olal41, olil4,
+oly20 and wlp02 (where main has no incumbent, or is refused by the 8 GiB heap budget on wlp02's 3 219-variable gcc).
+B's losses, all three with proof: two oocsp_racks answers found by both arms, 1.2 s and 2.7 s later under B
+(UNSAT 030_f7 in 10.2 s against 9.0 s, SAT 2018 100_r1 in 20.4 s against 17.7 s), and warehouse olil4, where the
+proof-logging run hit the 8 GiB heap budget at 127 s with 75 730 against main's 75 636 at 300 s. Without proof the
+one loss is the same 2018 100_r1, 13.1 s against 11.8 s. **No complete answer of any arm is lost by B**, with or
+without proof.
+
+300 s, the 58 low_up-only instances (only route (a) reaches them): no proof A 7 wins 8 losses over the 98 (score
+share 0.495); with proof 4 wins 8 losses (0.480), +1 verified complete (vaccine v857 OPT in 254 s) and one OPT lost
+(community-detection rnd_n100_e5000, 284 s under main and over 300 s under A, a check that timed out anyway).
+
+AB (route a on top of route b) ties B within the set's noise (D-0205's README: under 0.03 of the share), so route
+(a) adds nothing once route (b) is in.
+
+Proof volume written: 978 GB over 316 proof runs (largest 19.6 GB, warehouse wlp22), every proof deleted once
+checked.
+
+### 5. Decision
+
+[AUTONOME] **Route (b)**, in `mznlib/fzn_global_cardinality.mzn`: when some count is a variable, std's count
+decomposition with its implied row; when every count is fixed, the native propagator as before. By D-0205's rule it
+gains on score with and without proof and loses no verified complete answer. The closed form
+(`fzn_global_cardinality_closed.mzn`) now calls the bodyless predicate itself and stays native: it already posts
+`sum(count) = |x|`, the row that decides mondoku, and blocks-world, the only family using it, finds nothing in
+300 s either way. low_up stays native (not routed, not measured as a route). `gcc_shim_{sat,unsat}.fzn` (MiniZinc 1's
+two-argument shim, variable counts) were regenerated as their header instructs; outputs unchanged, proofs VERIFIED.
+
+**Route (a) is not kept** (`fa32d4b` reverts the solver half of `d94f08f`): it changes the tree on almost no
+Challenge instance, costs per node, and loses on score in both modes. Its three models stay as hole scenes.
+
+Clarity: the change is twelve lines of MiniZinc and a header; no solver code moves. What it costs is that gcc.ml's
+variable-count path is now reached only from low_up and from hand-written FlatZinc, so its D-0078 argument (the
+interval capacity the decomposition cannot reach) holds for fixed counts and low_up only.
+
+Revert: `git revert 4c5df61` (and `2bfeea9`, the two route tests, whose MUST-NOT-EMIT would then fail).
+
+### 6. What is left (no ROADMAP row added: the autonomous run's cap is reached)
+
+- **Count-to-count propagation in gcc.ml**: `hi(c_v) <= |x| - sum_{u != v} lo(c_u)` (and the mirror over the
+  variables that can only take cover values) is what the implied row gives Linear. A native rule would serve low_up
+  and fixed-count calls too; measured nowhere yet.
+- **low_up through the same route**: its counts are variables declared on constant bounds; S's row for them (SL)
+  changed nothing at 20 000 nodes, the full decomposition was not measured.
+- **gcc's cost on large scopes**: warehouse wlp02 (3 219 variables, counts 101 wide) exhausts the 8 GiB heap under the
+  native propagator in 150 s without proof, and on olal41 and olil4 B's per-value rows run about twice as many nodes in 300 s as the native propagator.
+
+### 7. Verification
+
+Worktree `/scratch/arthur/wt-gccvar` at `2bfeea9`: `scripts/check_fmt.sh` clean; `check_test_widths.py` clean;
+`dune build --root . bin/` (`ef23c899`, the dev build) and the release build `a23edcfd`, byte-identical to main's,
+since no solver code changes; `dune runtest --root . --force` 5 544 ok, 0 FAIL, peak RSS 170 MB;
+`scripts/run_model_tests.sh` 264 models passed with proofs verified; `scripts/check_determinism.sh` 264 identical;
+`mznlib/test/check_mznlib.sh` (MiniZinc 2.10.1) 73 ok; `scripts/diff_lane.sh --tier all -j 8` 347 of 347 runs equal
+the reference and `--debug` 333 of 333 (the lane's corpus is pre-flattened FlatZinc and the solver is unchanged,
+so route (b) cannot reach it); `scripts/scaling_lane.sh -j 8` ok. Route (a)'s own commit passed the same gate
+(5 555 ok, 262 models, determinism) before it was dropped; its only change to an existing artefact was
+`gcc_saturate_hole_unsat.pbp`, VERIFIED. Existing test artefacts changed by the kept route:
+`test/models/gcc_shim_{sat,unsat}.fzn` (bodies regenerated, outputs and verdicts unchanged); new:
+`gccvar_hole_{root_unsat,dec_sat,opt}` and `gccvar_src_{unsat,opt}`, all VERIFIED.
