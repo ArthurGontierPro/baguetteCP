@@ -45,7 +45,7 @@ Env: FUZZ_BIN (the binary, default this clone's), FUZZ_MZNLIB, CAKE_PB_CP (e2e o
 RUN IT ON A NODE, NEVER ON THE LAPTOP (scripts/README.md section 1): each solver call is under
 `ulimit -v 4000000` and a timeout.
 """
-import json, os, random, re, shutil, subprocess, sys
+import glob, json, os, random, re, shutil, subprocess, sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
@@ -548,7 +548,7 @@ class Ctx:
         d = os.path.join(self.outdir, sub, name)
         os.makedirs(d, exist_ok=True)
         shutil.copy(model.mzn_path, os.path.join(d, "m.mzn"))
-        if model.flat_ok:
+        if model.flat_ok and os.path.getsize(model.fzn_path) < 20 * 2 ** 20:  # m.mzn regenerates it
             shutil.copy(model.fzn_path, os.path.join(d, "m.fzn"))
         if prefix and sub == "bad":
             for ext in (".opb", ".pbp"):
@@ -577,10 +577,15 @@ class Run:
         return objval(self.sols[-1]) if self.sols else None
 
 
+def clean(prefix):
+    """Remove every file of a run's proof prefix: PREFIX.opb, .pbp, and what a run killed by the
+    timeout or the memory cap leaves (PREFIX.opb.rows reached 5 GB on a wide domain)."""
+    for f in glob.glob(glob.escape(prefix) + ".*"):
+        os.remove(f)
+
+
 def bag(model, flags, env, prefix, timeout=T_SOLVE):
-    for ext in (".opb", ".pbp"):
-        if os.path.exists(prefix + ext):
-            os.remove(prefix + ext)
+    clean(prefix)
     cmd = "%s %s --proof %s %s" % (q(BIN), q(model.fzn_path), q(prefix), " ".join(q(f) for f in flags))
     rc, out, err = sh(cmd, timeout, env=env)
     return Run(model, rc, out, err, prefix)
@@ -670,6 +675,7 @@ def check_run(ctx, model, run, cfg=None, all_sols=False):
             ctx.refusal(run.err)
         if where:
             ctx.keep(model, v, run.err[-1500:], cfg, run.prefix, sub=where)
+        clean(run.prefix)
         return v, run.err[-300:]
     verdict, note = "ok", ""
     if run.status in ("ERROR",):
@@ -711,9 +717,7 @@ def check_run(ctx, model, run, cfg=None, all_sols=False):
     elif verdict != "ok":
         ctx.keep(model, verdict, note + "\n--- baguette stdout\n" + run.out[-1500:] +
                  "\n--- stderr\n" + run.err[-1500:], cfg, run.prefix)
-    for ext in (".opb", ".pbp"):
-        if os.path.exists(run.prefix + ext):
-            os.remove(run.prefix + ext)
+    clean(run.prefix)
     return verdict, note
 
 
@@ -790,9 +794,7 @@ def s_incr(ctx, r, it):
             bad = "-i ends at %s, the plain run at %s" % (run.last_obj(), base.last_obj())
     if bad:
         ctx.keep(model, "INCR-ORDER", bad + "\n--- -i stdout\n" + run.out[-1500:], cfg="i", prefix=p)
-        for ext in (".opb", ".pbp"):
-            if os.path.exists(p + ext):
-                os.remove(p + ext)
+        clean(p)
         return [vb, "INCR-ORDER"]
     vi, _ = check_run(ctx, model, run, cfg="i", all_sols=True)
     return [vb, vi]
@@ -882,9 +884,7 @@ def s_wide(ctx, r, it):
         elif run.sols and not recheck(model, run.sols[-1]):
             verdict = "BAD-SOLUTION"
             ctx.keep(model, verdict, str(run.sols[-1]))
-    for ext in (".opb", ".pbp"):
-        if os.path.exists(p + ext):
-            os.remove(p + ext)
+    clean(p)
     return [verdict]
 
 
