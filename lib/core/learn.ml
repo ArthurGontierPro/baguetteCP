@@ -355,7 +355,15 @@ type min_stats = {
   ms_hist_after : int array;
 }
 
-let min_stats_on = Sys.getenv_opt "BAGUETTE_MINIMISE_STATS" = Some "1"
+(* [2] counts the widths only, without the shadow runs of every rule, so that a timed run
+   can carry it: the shadow runs are three extra [Analysis.minimise_cut] per conflict. *)
+let min_stats_level =
+  match Sys.getenv_opt "BAGUETTE_MINIMISE_STATS" with
+  | Some "1" -> 1
+  | Some "2" -> 2
+  | _ -> 0
+
+let min_stats_on = min_stats_level > 0
 let hist_buckets = 66
 
 let min_stats =
@@ -454,20 +462,22 @@ let levelled t = t.l_levelled
 let measure_minimisation store raw policy =
   let width cut = List.length (Analysis.lits_levelled cut) in
   let w = width raw in
-  let count cfg =
-    let r = Analysis.minimise_cut ~config:(min_config cfg) store raw in
-    r.Analysis.mr_root + r.Analysis.mr_recursive
-  in
-  let root = count Min_root in
   let s = min_stats in
   s.ms_clauses <- s.ms_clauses + 1;
   s.ms_lits <- s.ms_lits + w;
-  s.ms_root <- s.ms_root + root;
-  s.ms_rec <- s.ms_rec + (count Min_rec - root);
-  s.ms_rec_nofilter <- s.ms_rec_nofilter + (count Min_rec_nofilter - root);
-  s.ms_dominated <-
-    s.ms_dominated + (w - List.length (minimise_with policy (Analysis.lits_levelled raw)));
-  bump_hist s.ms_hist_before w
+  bump_hist s.ms_hist_before w;
+  if min_stats_level = 1 then (
+    let count cfg =
+      let r = Analysis.minimise_cut ~config:(min_config cfg) store raw in
+      r.Analysis.mr_root + r.Analysis.mr_recursive
+    in
+    let root = count Min_root in
+    s.ms_root <- s.ms_root + root;
+    s.ms_rec <- s.ms_rec + (count Min_rec - root);
+    s.ms_rec_nofilter <- s.ms_rec_nofilter + (count Min_rec_nofilter - root);
+    s.ms_dominated <-
+      s.ms_dominated
+      + (w - List.length (minimise_with policy (Analysis.lits_levelled raw))))
 
 let at_conflict ?(policy = Strongest) ?(closure = true) ?minimisation:m store
     (c : Store.conflict) ~(vars_of : int -> Var.t list option)

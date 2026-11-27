@@ -1035,6 +1035,18 @@ let minimise_cut ?(config = min_off) store (cut : t) : min_result =
     || (not config.min_root) && (not config.min_recursive)
        && not config.min_break_unchecked
   then unchanged
+  else if not (config.min_recursive || config.min_break_unchecked) then
+    (* ROOT alone: one pass, no table. *)
+    let at_root n = n.support <> Store.no_support && has_lit n && n.level = 0 in
+    let n_root = List.length (List.filter at_root cut.nodes) in
+    if n_root = 0 then unchanged
+    else
+      {
+        mr_cut = { cut with nodes = List.filter (fun n -> not (at_root n)) cut.nodes };
+        mr_root = n_root;
+        mr_recursive = 0;
+        mr_supports = [];
+      }
   else
     let cl = cut.conflict_level in
     let by_slot = Slot_tbl.create 64 in
@@ -1046,18 +1058,23 @@ let minimise_cut ?(config = min_off) store (cut : t) : min_result =
     let kept = Int_tbl_min.create 16 in
     let memo = Int_tbl_min.create 64 in
     let used = ref [] in
-    let entry_facts (e : Store.entry) ~at ~is_lower =
+    (* Every fact the entry at [at] read, as [analyse] expands it (its reason, then the
+       reasons of the holes it settled over), satisfies [ok]. Short-circuits, and asks for
+       the holes' removers only once the reason itself has passed: a remover is a search
+       of the hole log, and on work-task it was most of what this rule cost. *)
+    let entry_ok (e : Store.entry) ~at ~is_lower ok =
+      List.for_all ok (Reason.facts e.Store.reason)
+      &&
       let holes =
         if is_lower then Store.settled_over_lo e.Store.old ~cur:(Domain.lo e.Store.now)
         else Store.settled_over_hi e.Store.old ~cur:(Domain.hi e.Store.now)
       in
-      Reason.facts e.Store.reason
-      @ List.concat_map
-          (fun h ->
-            match Store.remover store ~before:at ~var:e.Store.var h with
-            | None -> []
-            | Some (r : Store.entry) -> Reason.facts r.Store.reason)
-          holes
+      List.for_all
+        (fun h ->
+          match Store.remover store ~before:at ~var:e.Store.var h with
+          | None -> true
+          | Some (r : Store.entry) -> List.for_all ok (Reason.facts r.Store.reason))
+        holes
     in
     (* Does a cut node on [g]'s slot imply [g] and may it justify a reader at [before]? *)
     let by_cut g ~slot ~before ~top =
@@ -1089,9 +1106,7 @@ let minimise_cut ?(config = min_off) store (cut : t) : min_result =
             (* Provisionally false: the recursion only goes backwards, so this is never
                read before it is overwritten, and it bounds the walk if it ever were. *)
             (Int_tbl_min.replace memo key false;
-             List.for_all
-               (fun f -> derivable f ~before:pos ~top:false)
-               (entry_facts e ~at:pos ~is_lower))
+             entry_ok e ~at:pos ~is_lower (fun f -> derivable f ~before:pos ~top:false))
           in
           Int_tbl_min.replace memo key ok;
           if ok then used := pos :: !used;
@@ -1115,9 +1130,8 @@ let minimise_cut ?(config = min_off) store (cut : t) : min_result =
           config.min_recursive && n.level < cl && (not n.root)
           &&
           let e = Store.trail_entry store n.support in
-          List.for_all
-            (fun f -> derivable f ~before:n.support ~top:true)
-            (entry_facts e ~at:n.support ~is_lower:(Reason.fact_is_lower n.fact))
+          entry_ok e ~at:n.support ~is_lower:(Reason.fact_is_lower n.fact) (fun f ->
+              derivable f ~before:n.support ~top:true)
         then (
           Int_tbl_min.replace dropped (node_key n) ();
           used := n.support :: !used;
