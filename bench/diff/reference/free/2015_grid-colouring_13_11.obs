@@ -1,0 +1,120 @@
+rc 0
+out objective = 10;
+out X_INTRODUCED_0_ = array1d(1..143, [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 1, 2, 2, 2, 1, 2, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 2, 3, 4, 1, 4, 4, 4, 4, 4, 4, 1, 2, 3, 4, 5, 5, 5, 5, 5, 5, 5, 1, 2, 3, 4, 4, 5, 6, 6, 6, 6, 6, 2, 1, 3, 4, 5, 6, 6, 7, 7, 7, 7, 1, 2, 3, 4, 5, 6, 7, 6, 7, 8, 8, 1, 2, 3, 4, 5, 6, 7, 7, 6, 8, 9, 1, 2, 3, 4, 5, 6, 7, 8, 8, 6, 7, 1, 2, 3, 4, 5, 6, 7, 2, 8, 7, 6, 9, 1, 9, 9, 9, 9, 9, 9, 9, 9, 9, 10, 1, 10, 10, 10, 10, 10, 10, 10, 10, 10]);
+out ----------
+out objective = 9;
+out X_INTRODUCED_0_ = array1d(1..143, [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 1, 2, 2, 2, 1, 2, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 2, 3, 4, 1, 4, 4, 4, 4, 4, 4, 1, 2, 3, 4, 5, 5, 5, 5, 5, 5, 5, 1, 2, 3, 4, 4, 5, 6, 6, 6, 6, 6, 2, 1, 3, 4, 5, 6, 6, 7, 7, 7, 7, 1, 2, 3, 4, 5, 6, 7, 6, 7, 8, 8, 1, 2, 3, 4, 5, 6, 7, 7, 6, 8, 9, 1, 2, 3, 4, 5, 6, 7, 8, 8, 6, 7, 1, 2, 3, 4, 5, 6, 7, 2, 8, 7, 6, 9, 1, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 1, 2, 3, 4, 4, 5, 2, 6, 7, 8]);
+out ----------
+out objective = 8;
+out X_INTRODUCED_0_ = array1d(1..143, [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 1, 2, 2, 2, 1, 2, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 2, 3, 4, 1, 4, 4, 4, 4, 4, 4, 1, 2, 3, 4, 5, 5, 5, 5, 5, 5, 5, 1, 2, 3, 4, 4, 5, 6, 6, 6, 6, 6, 2, 3, 3, 4, 5, 6, 6, 7, 7, 7, 1, 1, 2, 3, 4, 5, 6, 7, 6, 7, 8, 8, 1, 2, 3, 4, 5, 6, 7, 2, 6, 8, 7, 1, 2, 3, 4, 5, 6, 7, 8, 8, 6, 8, 1, 2, 3, 4, 5, 6, 7, 7, 8, 8, 6, 1, 2, 3, 4, 5, 7, 8, 7, 8, 6, 7, 1, 3, 2, 3, 4, 4, 5, 2, 6, 7, 8]);
+out ----------
+out objective = 7;
+out X_INTRODUCED_0_ = array1d(1..143, [1, 1, 1, 1, 1, 1, 4, 1, 3, 2, 1, 2, 2, 1, 2, 2, 2, 2, 3, 2, 2, 2, 1, 2, 3, 3, 3, 3, 3, 3, 3, 3, 3, 5, 2, 3, 4, 1, 4, 4, 4, 4, 4, 4, 1, 2, 3, 4, 5, 5, 5, 5, 5, 5, 5, 1, 2, 3, 4, 4, 5, 6, 6, 6, 6, 6, 2, 3, 2, 4, 5, 6, 6, 7, 7, 7, 1, 5, 2, 3, 4, 5, 6, 7, 6, 7, 1, 1, 1, 2, 3, 4, 5, 6, 7, 2, 6, 1, 7, 4, 3, 3, 4, 5, 6, 7, 1, 1, 6, 2, 3, 2, 3, 4, 5, 6, 7, 7, 1, 1, 6, 1, 2, 3, 4, 5, 7, 1, 7, 1, 6, 7, 1, 3, 2, 3, 4, 4, 5, 2, 6, 7, 2]);
+out ----------
+out objective = 6;
+out X_INTRODUCED_0_ = array1d(1..143, [1, 1, 1, 1, 1, 4, 4, 2, 3, 2, 1, 2, 2, 1, 2, 2, 2, 2, 3, 2, 2, 2, 4, 2, 3, 1, 3, 3, 3, 1, 3, 3, 3, 5, 1, 3, 4, 6, 4, 2, 4, 1, 4, 4, 1, 2, 3, 4, 5, 5, 5, 5, 5, 5, 5, 1, 2, 3, 4, 4, 5, 6, 6, 6, 6, 6, 1, 3, 2, 4, 5, 6, 6, 1, 3, 1, 2, 5, 2, 3, 4, 6, 6, 4, 6, 4, 1, 1, 3, 2, 4, 3, 4, 6, 5, 2, 6, 3, 1, 4, 3, 3, 4, 1, 6, 5, 2, 1, 6, 2, 3, 2, 3, 1, 5, 6, 4, 3, 1, 1, 6, 5, 2, 3, 4, 5, 1, 1, 1, 1, 6, 1, 1, 5, 2, 3, 4, 1, 5, 2, 6, 4, 3]);
+out ----------
+out objective = 5;
+out X_INTRODUCED_0_ = array1d(1..143, [1, 5, 1, 1, 1, 4, 4, 2, 3, 2, 1, 2, 2, 1, 2, 2, 2, 2, 3, 1, 2, 3, 4, 2, 3, 1, 3, 3, 3, 1, 3, 3, 3, 5, 1, 3, 4, 1, 4, 2, 4, 2, 4, 4, 2, 5, 3, 4, 5, 1, 5, 5, 5, 5, 5, 5, 1, 5, 4, 4, 2, 5, 3, 1, 3, 2, 4, 3, 2, 2, 5, 1, 1, 3, 3, 4, 2, 5, 4, 3, 4, 1, 1, 4, 1, 4, 2, 2, 3, 2, 4, 3, 4, 4, 5, 2, 4, 3, 1, 4, 3, 3, 4, 2, 1, 5, 2, 2, 1, 2, 3, 1, 3, 1, 5, 1, 4, 3, 2, 2, 4, 5, 2, 3, 4, 5, 5, 1, 1, 1, 1, 1, 1, 4, 2, 3, 4, 1, 5, 2, 1, 4, 3]);
+out ----------
+out objective = 4;
+out X_INTRODUCED_0_ = array1d(1..143, [1, 2, 2, 1, 3, 4, 4, 4, 3, 1, 1, 2, 2, 1, 2, 2, 1, 2, 3, 1, 2, 4, 4, 2, 3, 1, 3, 3, 1, 1, 1, 3, 4, 3, 3, 1, 4, 1, 4, 2, 1, 2, 4, 4, 2, 1, 3, 4, 1, 2, 3, 2, 1, 1, 2, 1, 1, 2, 4, 4, 1, 1, 3, 3, 3, 2, 4, 3, 2, 2, 1, 1, 3, 3, 4, 4, 1, 3, 4, 1, 4, 2, 2, 4, 3, 4, 1, 3, 3, 1, 4, 1, 4, 2, 2, 4, 4, 3, 4, 4, 3, 3, 4, 1, 2, 1, 4, 2, 2, 3, 3, 2, 3, 3, 4, 1, 4, 1, 2, 1, 2, 1, 4, 2, 3, 1, 3, 3, 2, 3, 2, 3, 3, 4, 1, 2, 4, 3, 1, 2, 2, 4, 1]);
+out ----------
+search ladder/cls 0 cls
+search opb/lines 20444 lines
+search direct/vals 0 vals
+search widest/wide 10 wide
+search bits/vars 144 vars
+search bitsrows/lines 288 lines
+search choices/groups 0 groups
+search limit.nodes 5001
+search limit.decisions 3885
+search limit.conflicts 1121
+search limit.learned 1109
+search limit.pb-learned 0
+search limit.db 1109
+search limit.maxdepth 540
+search limit.incumbent 4
+work limit.props 1358391
+work limit.eff 188774
+work limit.contra 1114
+search limit.at node
+search limit.signal none
+search nodes/nodes 5001 nodes
+search decisions/decs 3885 decs
+search conflicts/nodes 1121 nodes
+search maxdepth/levels 540 levels
+work exhausted/bool 0 bool 1 if
+search skipped/nodes 1486 nodes
+search learned/cls 1109 cls
+work later/asks 110593 asks
+work cites/memos 17627 memos
+search convertible/cls 0 cls
+search retention tiered(core<=2,mid<=6,first=2000,inc=300,mid_every=10000) tiered(core<=2,mid<=6,first=2000,inc=300,mid_every=10000): 1109 added, 0 evicted, 1109 swept, 0 live, 3 duplicate, 1102 cited, 0 pinned, 0 reductions, 0 detached, 0 locked
+search lbd 1:7,3:227,4:212,5:285,6:284,7:21,8:4,9:10,10:4,11:2,13:11,14:6,15:7,16:29
+search width 1:7,5:295,6:88,7:525,8:71,9:43,10:6,11:3,12:1,13:2,15:1,16:67
+search globals/units 7 units
+search glob-prune/prunes 50 prunes
+search glob-confl/confl 7 confl
+search cls-inst/inst 1102 inst
+search cls-decl/cls 0 cls
+search cls-prune/prunes 2293 prunes
+search pb-inst/inst 0 inst
+search pb-inst-no/rows 0 rows
+search pb-prune/prunes 0 prunes
+search pb-confl/confl 0 confl
+search minimised/lits 67 lits
+search i-s4-cross/lines 5896 lines
+search pb-tried/confl 1109 confl
+search pb-learned/rows 0 rows
+search pb-fallback/confl 1109 confl
+search pb-why first fallback reason: no PB row for instance bool_clause
+work pb-whys/recd 64 recd 64 x
+search pb-steps/pivots 0 pivots
+search pb-convert/rows 0 rows
+search pb-stronger/rows 0 rows
+search pb-nondeg/rows 0 rows
+search pb-lifted/rows 0 rows
+search pb-rungs/rungs 0 rungs
+search lvl-cmp/confl 0 confl
+search lvl-same/confl 0 confl
+search lvl-narrow/confl 0 confl
+search lvl-wide/confl 0 confl
+search lvl-incomp/confl 0 confl
+search lvl-empty/confl 0 confl
+search lvl-assert/confl 0 confl
+search restarts/runs 6 runs
+search unexplored/nodes 1230 nodes
+search kept/levels 0 levels
+search activity/bumps 8221 bumps
+search phases/vals 183060 vals
+search phase-used/decs 2653 decs
+work int_lin_le_reif/inst 3494 inst 129.0 runs/node 19.30 eff/node
+work bool_clause/inst 4290 inst 58.6 runs/node 0.04 eff/node
+work array_bool_and/inst 5241 inst 49.3 runs/node 8.95 eff/node
+work bool_not/inst 3494 inst 26.5 runs/node 8.61 eff/node
+work int_lin_le/inst 143 inst 4.4 runs/node 0.39 eff/node
+work learned_clause/inst 1102 inst 3.7 runs/node 0.46 eff/node
+work props/runs 1358391 runs
+work eff/runs 188774 runs
+work contra/runs 1114 runs
+work passes/snaps 0 snaps
+work deductions/chgs 0 chgs
+work wakes/wakes 1589743 wakes
+work masked/wakes 0 wakes
+work vetoed/wakes 1936 wakes
+work advised/wakes 16677 wakes
+work seeded/runs 475003 runs
+work skipped/slots 85425112 slots
+search rup/lines 97481 lines
+search pol/lines 100259 lines
+search pol-tokens/tokens 988168 tokens
+search pol-widest/tokens 10 tokens
+search atoms/atoms 1308 atoms
+search atomlinks/lines 1659 lines
+search bridges/pairs 3494 pairs
+search boundlines/pairs 0 pairs
+search bitsprune/lines 98593 lines
+search atoms/prune/atoms 0.013 atoms
+opb ca9d25f5a64cc581808074ff2404e11b0cc86c883ba8206217692f18ee622191
+pbp 1de6e2fb2d3f540bf1953809447137af18df7d2cc1cef0297d256d50bf0da5fb

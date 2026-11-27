@@ -45,3 +45,9 @@ alternate	-	--fixed-search --search alternate --restarts lbd:3:1.5 --phase-savin
 rest	BAGUETTE_REST_SATISFIED=on	--fixed-search	yes
 # --- D-0201 (D-0199 applied): the ORDER encoding, the default before D-0201, added 2026-11-21 ---
 order	-	--fixed-search --bits-above none	yes
+# --- M19-config-T1 (D-0261): THE DEFAULT SEARCH, the free search since D-0261 (no search flag), added 2026-11-27 ---
+# Its references were recorded on their own (--update --config free --config free-noproof),
+# after a check that two runs of the free search give the same bytes; the lines above were not
+# re-recorded.
+free	-	-	yes
+free-noproof	-	--no-proof	no

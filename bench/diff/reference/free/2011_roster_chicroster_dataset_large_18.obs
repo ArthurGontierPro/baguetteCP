@@ -1,0 +1,119 @@
+rc 0
+out evemorn = 0;
+out isolated = 17;
+out X_INTRODUCED_17_ = array1d(1..182, [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 1, 1, 1, 1, 1, 1, 2, 1, 1, 1, 1, 1, 1, 2, 1, 1, 1, 1, 1, 1, 2, 1, 1, 1, 1, 2, 2, 2, 1, 1, 2, 2, 2, 2, 3, 2, 1, 2, 2, 3, 2, 3, 2, 2, 2, 2, 3, 3, 3, 2, 2, 2, 2, 4, 4, 4, 2, 4, 3, 2, 4, 4, 4, 2, 4, 3, 3, 4, 4, 4, 3, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 5, 5, 5, 5, 5, 4, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5]);
+out ----------
+out evemorn = 0;
+out isolated = 16;
+out X_INTRODUCED_17_ = array1d(1..182, [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 1, 1, 1, 1, 1, 1, 2, 1, 1, 1, 1, 1, 1, 2, 1, 1, 1, 1, 1, 1, 2, 1, 1, 1, 1, 2, 2, 2, 1, 1, 2, 2, 2, 2, 3, 2, 1, 2, 2, 3, 2, 3, 2, 2, 2, 2, 3, 3, 3, 2, 2, 2, 2, 4, 4, 4, 2, 4, 3, 2, 4, 4, 4, 2, 4, 3, 3, 4, 4, 4, 3, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 5, 5, 5, 5, 5, 4, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5]);
+out ----------
+out evemorn = 0;
+out isolated = 15;
+out X_INTRODUCED_17_ = array1d(1..182, [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 4, 1, 1, 1, 1, 1, 1, 2, 1, 1, 1, 1, 1, 1, 2, 1, 1, 1, 1, 1, 1, 2, 1, 1, 1, 1, 1, 4, 2, 1, 1, 1, 1, 2, 2, 2, 4, 1, 2, 2, 2, 2, 3, 2, 1, 2, 2, 3, 2, 3, 2, 2, 2, 2, 3, 3, 3, 2, 2, 2, 2, 4, 4, 4, 2, 4, 3, 2, 4, 4, 4, 2, 4, 3, 3, 4, 4, 4, 3, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 5, 5, 5, 4, 4, 4, 5, 5, 5, 5, 5, 4, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 1, 1, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 1, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5]);
+out ----------
+out evemorn = 0;
+out isolated = 13;
+out X_INTRODUCED_17_ = array1d(1..182, [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 4, 1, 1, 1, 1, 1, 1, 2, 1, 1, 1, 1, 1, 1, 2, 1, 1, 1, 1, 1, 1, 2, 4, 1, 1, 1, 4, 4, 2, 4, 1, 4, 1, 2, 2, 2, 4, 1, 2, 2, 2, 2, 3, 2, 1, 2, 2, 3, 2, 3, 2, 2, 2, 2, 3, 3, 3, 2, 2, 2, 2, 4, 4, 4, 2, 4, 3, 2, 4, 4, 4, 2, 4, 3, 3, 4, 4, 4, 3, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 5, 4, 4, 4, 4, 4, 4, 5, 4, 4, 4, 5, 5, 5, 5, 4, 4, 4, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 1, 1, 5, 1, 5, 5, 5, 5, 5, 5, 5, 5, 1, 1, 5, 1, 5, 5, 5, 5, 5, 5, 1, 5, 5]);
+out ----------
+out evemorn = 0;
+out isolated = 12;
+out X_INTRODUCED_17_ = array1d(1..182, [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 4, 1, 1, 1, 1, 1, 1, 2, 1, 1, 1, 1, 1, 1, 2, 1, 1, 1, 1, 1, 1, 2, 4, 1, 4, 1, 4, 4, 2, 4, 1, 4, 1, 2, 2, 2, 4, 1, 2, 2, 2, 2, 3, 2, 1, 2, 2, 3, 2, 3, 2, 2, 2, 2, 3, 3, 3, 2, 2, 2, 2, 4, 4, 4, 2, 4, 3, 2, 4, 4, 4, 2, 4, 3, 3, 4, 4, 4, 3, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 5, 4, 4, 4, 4, 4, 4, 5, 4, 4, 4, 5, 5, 5, 5, 4, 5, 4, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 1, 5, 5, 5, 1, 1, 5, 1, 5, 5, 5, 5, 5, 5, 5, 5, 1, 1, 5, 1, 5, 5, 5, 5, 5, 5, 1, 5, 5]);
+out ----------
+search ladder/cls 0 cls
+search opb/lines 12993 lines
+search direct/vals 0 vals
+search widest/wide 364 wide
+search bits/vars 731 vars
+search bitsrows/lines 1462 lines
+search choices/groups 0 groups
+search limit.nodes 3501
+search limit.decisions 3376
+search limit.conflicts 125
+search limit.learned 115
+search limit.pb-learned 0
+search limit.db 115
+search limit.maxdepth 595
+search limit.incumbent 12
+work limit.props 148642
+work limit.eff 42832
+work limit.contra 120
+search limit.at node
+search limit.signal none
+search nodes/nodes 3501 nodes
+search decisions/decs 3376 decs
+search conflicts/nodes 125 nodes
+search maxdepth/levels 595 levels
+work exhausted/bool 0 bool 1 if
+search skipped/nodes 2517 nodes
+search learned/cls 115 cls
+work later/asks 30461 asks
+work cites/memos 4508 memos
+search convertible/cls 29 cls
+search retention tiered(core<=2,mid<=6,first=2000,inc=300,mid_every=10000) tiered(core<=2,mid<=6,first=2000,inc=300,mid_every=10000): 115 added, 0 evicted, 115 swept, 0 live, 0 duplicate, 110 cited, 0 pinned, 0 reductions, 0 detached, 0 locked
+search lbd 1:5,4:8,5:9,6:1,7:2,8:5,9:2,10:2,16:81
+search width 1:5,5:3,6:5,7:8,8:3,9:1,10:1,11:2,12:2,13:1,15:1,16:83
+search globals/units 5 units
+search glob-prune/prunes 48 prunes
+search glob-confl/confl 5 confl
+search cls-inst/inst 110 inst
+search cls-decl/cls 0 cls
+search cls-prune/prunes 440 prunes
+search pb-inst/inst 0 inst
+search pb-inst-no/rows 0 rows
+search pb-prune/prunes 0 prunes
+search pb-confl/confl 0 confl
+search minimised/lits 0 lits
+search i-s4-cross/lines 2333 lines
+search pb-tried/confl 115 confl
+search pb-learned/rows 0 rows
+search pb-fallback/confl 115 confl
+search pb-why first fallback reason: no PB row for instance <unknown>
+work pb-whys/recd 64 recd 47 x
+search pb-steps/pivots 0 pivots
+search pb-convert/rows 0 rows
+search pb-stronger/rows 0 rows
+search pb-nondeg/rows 0 rows
+search pb-lifted/rows 0 rows
+search pb-rungs/rungs 0 rungs
+search lvl-cmp/confl 0 confl
+search lvl-same/confl 0 confl
+search lvl-narrow/confl 0 confl
+search lvl-wide/confl 0 confl
+search lvl-incomp/confl 0 confl
+search lvl-empty/confl 0 confl
+search lvl-assert/confl 0 confl
+search restarts/runs 1 runs
+search unexplored/nodes 262 nodes
+search kept/levels 0 levels
+search activity/bumps 2477 bumps
+search phases/vals 29208 vals
+search phase-used/decs 2709 decs
+work int_lin_le/inst 805 inst 14.1 runs/node 5.03 eff/node
+work int_eq_reif/inst 1273 inst 9.4 runs/node 2.44 eff/node
+work array_bool_and/inst 1274 inst 8.8 runs/node 0.70 eff/node
+work bool2int/inst 1456 inst 6.7 runs/node 3.15 eff/node
+work int_ne_reif/inst 362 inst 2.9 runs/node 0.78 eff/node
+work learned_clause/inst 110 inst 0.5 runs/node 0.13 eff/node
+work props/runs 148642 runs
+work eff/runs 42832 runs
+work contra/runs 120 runs
+work passes/snaps 0 snaps
+work deductions/chgs 0 chgs
+work wakes/wakes 158415 wakes
+work masked/wakes 0 wakes
+work vetoed/wakes 23074 wakes
+work advised/wakes 0 wakes
+work seeded/runs 47821 runs
+work skipped/slots 18299499 slots
+search rup/lines 20149 lines
+search pol/lines 36003 lines
+search pol-tokens/tokens 1764546 tokens
+search pol-widest/tokens 368 tokens
+search atoms/atoms 3285 atoms
+search atomlinks/lines 4016 lines
+search bridges/pairs 2145 pairs
+search boundlines/pairs 551 pairs
+search bitsprune/lines 31982 lines
+search atoms/prune/atoms 0.103 atoms
+opb 7d9b08943407d12c10f7e2c68bd93b1650b6c9977f187c918527b4ab620aec7e
+pbp f273747656a17235767f4bcfd1ca69ba02adf7ce943f59460228850c887695cb
