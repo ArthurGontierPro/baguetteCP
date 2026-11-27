@@ -19,6 +19,7 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
+| M22-review-bugs: gcc repeated cover, rejected proof on the default (D-0260) | `lib/core/prop/gcc.ml`, the gcc entries of `lib/flatzinc/compile.ml` and `lib/flatzinc/builder.ml`, `mznlib/fzn_global_cardinality*.mzn`, gcc tests in `test/unit/`, new `test/models/gcc_*dupcover*` and their expected outputs | agent-gccdup (`wave105-gccdup`) | 2026-11-27 |
 
 ## Cross-session requests
 
