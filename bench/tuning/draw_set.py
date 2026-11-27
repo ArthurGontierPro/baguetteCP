@@ -2,6 +2,10 @@
 """M19-config-T0 (D-0205): draw the tuning set from D-0185's three arms, deterministically.
 
     draw_set.py <repo> <results_dir> [--size 200] [--out bench/tuning/set.lst] [--stats]
+                [--exclude bench/tuning/set.lst]
+
+--exclude (D-0252): the ids of that list (first column) are removed from the candidates BEFORE the
+rounds, so the same rule draws a set disjoint from it. Without it the draw is D-0205's, unchanged.
 
 <results_dir> holds results_A.tsv results_B.tsv results_C.tsv (D-0185, 1 200 s, release binary
 7c880bce). The rule is written in D-0205 and in bench/tuning/README.md; this file is its code.
@@ -84,11 +88,16 @@ def main(argv):
     repo, res = argv[1], argv[2]
     size = int(argv[argv.index("--size") + 1]) if "--size" in argv else 200
     out = argv[argv.index("--out") + 1] if "--out" in argv else None
+    excl = set()
+    if "--exclude" in argv:
+        for line in open(argv[argv.index("--exclude") + 1]):
+            if line.strip() and not line.startswith("#"):
+                excl.add(line.split("\t")[0].strip())
     arms = [read(os.path.join(res, "results_%s.tsv" % a)) for a in "ABC"]
     fam = families(repo)
     cand = {}
     for i in arms[0]:
-        if i in arms[1] and i in arms[2] and i in fam:
+        if i in arms[1] and i in arms[2] and i in fam and i not in excl:
             t = tier([arms[0][i], arms[1][i], arms[2][i]])
             if t is not None:
                 cand[i] = t
@@ -115,7 +124,11 @@ def main(argv):
             if len(chosen) < size:
                 chosen[i] = cand[i]
     lines = sorted(chosen, key=lambda i: (fam[i][0], fam[i][1], i))
-    text = "# M19-config-T0 tuning set (D-0205), drawn by bench/tuning/draw_set.py from D-0185\n" \
+    head = ("# M19-config-T0 tuning set (D-0205), drawn by bench/tuning/draw_set.py from D-0185\n"
+            if not excl else
+            "# D-0252 held-out set: D-0205's rule (bench/tuning/draw_set.py) from D-0185, size %d,"
+            " the %d ids of the --exclude list removed\n" % (size, len(excl)))
+    text = head + \
            "# id\tfamily\tedition\ttier\n" + "".join(
                "%s\t%s\t%s\t%d\n" % (i, fam[i][1], fam[i][0], chosen[i]) for i in lines)
     if out:
