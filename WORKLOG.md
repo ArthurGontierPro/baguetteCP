@@ -19,7 +19,6 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M19-config-T9 propagator priorities (D-0246) | `lib/core/engine.ml`, `docs/ARCHITECTURE.md` §5, `lib/core/propagator.ml` (cost-class field), `lib/core/prop/*.ml` (class declaration only), `test/unit/test_engine.ml` | agent-prio, wave92-prio | 2026-11-27 |
 
 ## Cross-session requests
 
@@ -478,6 +477,7 @@ section 1. Shares are inclusive, of the whole run.
 
 | Task | Session | Date | Summary |
 |---|---|---|---|
+| M19-config-T9, propagator priorities (D-0246) | agent-prio (`wave92-prio`, not merged) | 2026-11-27 | **D-0246 [AUTONOME].** `BAGUETTE_PRIORITY=off\|classes`, four cost classes (Cheap, Row, Learned_row, Global) by one rule in `Propagator.cost_class`; off byte-identical (259 models, diff 347/347, debug 333/333, scaling ok). Classes: every proof verified, 0 rejected; tuning set 0.463 vs 0.537 without proof, 0.532 vs 0.468 with proof but two verified optima lost. Default stays off. |
 | M20-pernode-T4, conflict analysis's name lookup (D-0245) | agent-locate (`wave91-locate`, not merged) | 2026-11-27 | **D-0245 [AUTONOME].** `Store.var_named` through a direct-mapped memo of 4 096 cells (98 % of handball12's lookups hit), `Analysis.locate` reads it as an int. Same trees, byte-identical artefacts; instructions per node without / with proof: handball12 -2.5 / -0.5 %, tppv circ14 -0.8 / -0.1 %, costas13 -0.9 / -0.2 %, qr2 -3.9 / -2.2 %. The attribution check through `Engine.in_scope` measured neutral and withdrawn. |
 | M19-config-T6, clause minimisation (D-0241) | agent-minim (`wave87-minim`, not merged) | 2026-11-27 | **D-0241 [AUTONOME].** `Analysis.minimise_cut` drops root-level literals (`root`) and the literals the kept ones re-derive (`rec`, MiniSat's over order literals, a trail-order guard for the ladder's forward edges), behind `BAGUETTE_MINIMISE=off|root|local|rec`, default `off`. Learned width -27 %, every proof verifies, +3 complete answers on the tuning set at 300 s, share 0.010 to 0.015 below `off` (noise): the default waits for the full series. Switch off: artefacts byte-identical to main |
 | M20-pernode-T4, the engine's wake path (D-0243) | agent-wakes (`wave89-wakes`, not merged) | 2026-11-27 | **D-0243 [AUTONOME].** `wake_static` a flat int array per variable walked from its last cell down (the old list's order), the merge two loops, `wants`/`advises` top level and inlined, `advise_always` answered without its call, the trigger mask off `trig_bits` (one byte per id), and `check_attribution` through `attr_ok`, a memo of positive answers that `purge` resets. Same trees: 518 test-model runs, diff lane 347 + 333 debug equal; scaling ok; runtest 5 495 ok, 0 FAIL. Instructions per node without / with proof: handball12 -2.0 / -0.5 %, circ14 -2.2 / -0.9 %, costas13 -3.0 / -0.3 %, qr2 -5.0 / -2.9 % (release `ef11db7f` -> `1ee55030`). Withdrawn: the walk's result in a buffer. |
@@ -717,6 +717,10 @@ section 1. Shares are inclusive, of the whole run.
 
 | M18-coverage-T5 (the ordering globals) | agent-lex (`wave85-lex`) | 2026-11-27 | **D-0239 [AUTONOME].** mznlib only: `lex_lesseq`/`lex_less`, int and Bool, as four linear rows per position over std's chain flag; 26 -> 27 complete of 92 with proof, nodes/s x1.02 to 1.04; precedence globals keep std's (T13 added); `increasing` already native. |
 ## Handoff notes
+
+### 2026-11-27 (agent-prio, `wave92-prio`, D-0246): propagator priorities behind a switch, default off, not merged
+
+`Propagator.cost_class` (one rule: two variables or fewer is Cheap, else a by-name family table, else by consistency) and a per-class FIFO in `Engine.propagate` under `BAGUETTE_PRIORITY=classes`; off is the old FIFO, byte-identical. Classes lose without proof and win with proof on the tuning set, so the default stays off and no lane needs a re-record. Under classes 13 runtest scene checks lose their subject (listed in D-0246 section 3); flipping the default would need them re-targeted. Next lead (D-0246 section 6): dynamic cost by current arity, or alldiff's bounds stage in Row and its matching in Global.
 
 ### 2026-11-27 (agent-locate, `wave91-locate`, D-0245): conflict analysis's name lookup, not merged
 

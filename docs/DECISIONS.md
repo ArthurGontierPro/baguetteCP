@@ -32712,3 +32712,118 @@ FAIL; `scripts/run_model_tests.sh` 259 passed, 0 failed, every proof accepted; `
 
 [AUTONOME] Kept: no search, proof or answer changes, so no default behaviour changes. Revert: `git revert
 55f1a7f 9f70b38`.
+
+## D-0246  [AUTONOME] M19-config-T9, propagator priorities: a cost-class queue behind `BAGUETTE_PRIORITY=off|classes` (four classes, cheapest first, as Gecode and Chuffed). Every proof verifies under `classes`; on the tuning set it loses 0.074 of the share without proof (22+/37-) and gains 0.064 with proof (38+/25-) but loses two verified complete answers. The default stays `off`
+
+**Status**: DONE on `wave92-prio` (agent-prio, 2026-11-27), not merged. Base: main `62dae28` (gate 121 binary
+`ef23c899`). Touches `lib/core/engine.ml`, `lib/core/propagator.ml`, `test/unit/test_engine.ml`,
+`docs/ARCHITECTURE.md` section 5. Runs, scripts and tables: `/cluster/arthur/baguette-results/prio/` (README first).
+
+### 1. Context
+
+`engine.ml`'s header said the queue was "a plain FIFO, minus the cost-class ordering" because M1 had no
+propagator above bounds consistency. That stopped being true long ago: all_different's matching, gcc,
+cumulative, regular, circuit and table run beside thousands of reified rows and learned clauses, and a
+global woken by ten changes in a node runs as often as the FIFO pops it. Gecode orders by `PropCost`
+(unary to cubic), Chuffed runs the SAT engine's clauses before any propagator and its globals last.
+
+### 2. What was built
+
+`Propagator.cost_class inst ~arity`, ONE rule: a scope of at most two distinct variables is `Cheap`
+(Gecode's binary cost); otherwise the family's class from one table in `propagator.ml`; a family the table
+does not name falls back on its declared consistency (`Bounds`/`Value` to `Row`, `Domain`/`Checking` to
+`Global`). The classes, cheapest first:
+
+| class | families |
+|---|---|
+| `Cheap` | clause, learned_clause, bool_clause, array_bool_or/and, bool_eq, bool_not, bool2int, int_le, int_lt, int_ne, int_le_reif, int_eq_reif, int_ne_reif, and every instance over at most two variables |
+| `Row` | int_lin_le, int_lin_ne, int_lin_le_reif, int_times/div/abs (rows and guards), pb, array_int_maximum/minimum, array_int_element, member |
+| `Learned_row` | learned_pb |
+| `Global` | all_different_int, global_cardinality, cumulative, regular, circuit, table, inverse |
+
+The table is by name, against D-0098's move of the idempotence claim off one, because a wrong class costs
+time and never soundness, and because a `val cost` in `Propagator.S` would have to be stated by every
+implementer, including `lib/flatzinc/compile.ml` (not this session's to edit) and 19 test modules.
+
+The engine files each instance's class in a byte per id (`cls`, written at `create`/`add`, like `trig_bits`).
+Under `classes`, `propagate` keeps one FIFO per class: the dirty seed slots enter their class queues in id
+order before anything runs (clean slots are passed, and `check_skip`ped under BAGUETTE_DEBUG, at that
+point), then the loop runs the head of the cheapest non-empty queue until all are empty. A wake goes to its
+class queue, deduplicated by `in_queue` as before. Under `off` (the default, also an unset variable) the code
+path is the FIFO it was; any other value fails at startup. Four unit checks in `test_engine.ml` (the rule,
+the engine's filing, the run order on a scene, the same domains as off on three linear rows).
+
+**Soundness, stated in the engine's header.** Each pruning carries its own justification against the facts
+on the trail when it is made (I-P4, I-P6, I-X6), so a pruning made in another order is justified by the same
+argument. The loop still ends only when every queue is empty and every wake is delivered (mask, veto and
+advisor unchanged), so I-P2 holds at the return. The fixpoint is the same set of domains only when every
+propagator is monotone, which is not audited here. The ORDER of prunings changes, hence the trail, reasons,
+learned clauses, the tree and the proof bytes. Nothing read the FIFO order as such: the seed marks
+(D-0138) only mark, `check_declined` reads queue membership, the attribution stamp (I-T4) is per run,
+alldiff's gate (D-0215) is inside a run.
+
+### 3. Correctness under `classes`
+
+- Off is byte-identical: the 259 test models, stdout, rc, `.opb`, `.pbp` of `c7f01f7e` against main's
+  `ef23c899`, 0 differences; diff lane 347/347 and debug lane 333/333 equal the reference; scaling lane ok.
+- The 259 model tests under `classes`: 259 passed, every proof verified (70 proofs differ from off), and again
+  under `BAGUETTE_DEBUG=1`: 259 passed.
+- The diff lanes with a build whose default is `classes` (`e03daad5`, never committed): 347 of 347 runs
+  differ (345 in search counters, 43 in stdout), and under `--debug` 333 of 333 differ with no exit status
+  change, so no invariant fired.
+- D-0241 section 6's sample, 238 instances at 2 000 nodes, both encodings, every proof checked: 423 VERIFIED,
+  0 rejected; 28 checks timed out at 3 600 s and 9 died at 32 GB, 16 runs gave no proof (11 solver timeouts,
+  5 resource exits).
+- `dune runtest --force` under `classes`: 13 checks fail, every one a SCENE whose subject no longer arises in
+  the new order ("the Hall trace line ... is not in the proof", mutation lanes "the target line is not in the
+  proof, so nothing was tested", M2-L13's "one of them actually MOVED a bound"). No rejected proof, no wrong
+  answer. Making `classes` the default would oblige re-targeting those 13 scenes (or pinning `off` in them).
+
+### 4. Per node (release binary `f701eacd`, method of D-0243, I(N)-I(1) over nodes-1, same budget per arm)
+
+| instance | budget | ins/node off | classes | runs/node off | classes |
+|---|---|---|---|---|---|
+| elitserien handball12, no proof / proof | 3 000 | 11.35 M / 55.2 M | -12.0 % / -16.0 % | 1 410 | 1 773 |
+| tppv circ14cnonbal | 2 000 | 6.27 M / 18.2 M | +33.9 % / +21.6 % | 1 175 | 1 863 |
+| tppv circ8bbal | 3 000 | 4.30 M / 14.1 M | +7.1 % / -14.7 % | 898 | 1 038 |
+| costas13 | 3 000 | 2.79 M / 8.90 M | -31.2 % / -51.5 % | 358 | 410 |
+| qr2 | 20 000 | 0.82 M / 1.52 M | -0.4 % / -0.2 % | 340 | 341 |
+
+The trees differ (conflict counts within 1 %), so these are costs of different nodes of the same size. Runs
+per node RISE everywhere: the cheap propagators now do work a global did in bulk. On circ14,
+all_different falls from 27.9 to 10.1 runs per node while int_eq_reif rises from 432 to 695 and its
+effectful runs from 59 to 108: one Hall pruning that removed a value from many variables is replaced by
+reified rows finding it one Boolean at a time. Costas halves its proof (58 MB to 27 MB at 3 000 nodes).
+
+### 5. The tuning set at 300 s (D-0205), binary `f701eacd`, same binary both arms
+
+| arms | complete | incumbent | nothing | died | share | verdicts |
+|---|---|---|---|---|---|---|
+| offN / clsN | 42 / 44 | 115 / 113 | 40 / 40 | 3 / 3 | 0.537 / 0.463 | classes 22+ / 37- |
+| offP / clsP (verified) | 31 / 32 | 119 / 118 | 47 / 47 | 3 / 3 | 0.468 / 0.532 | classes 38+ / 25- |
+
+Status changes, without proof: gains fast-food ff63, ghoulomb 3-9-16, network 50, mondoku 10-10-6 (optimal),
+p1f-pjs 14 (a solution); losses still-life-wastage 11 and mqueens n11 (optimal), portal 20_9_100 (the
+solution). With proof: gains steelmillslab 14, pennies-opt n7, mondoku (VERIFIED optimal), stable-goods
+s-d7 (a solution); losses team-assignment data1_4_6 and vaccine v857 (VERIFIED optimal, both), smelt 4
+(optimal with an unfinished check), portal (the solution). 63 proofs of complete answers checked, 0 rejected.
+
+### 6. Decision
+
+[AUTONOME] D-0205's rule keeps an idea as default only if it gains on score and loses no verified complete
+answer. `classes` loses 0.074 of the share without proof (over the 0.03 noise), gains 0.064 with proof, and
+loses two verified complete answers with proof. **The default stays `off`**; nothing else changes, and the
+diff lanes need no re-record. The opposite signs with and without proof follow section 4: with proof a node
+pays for every line, and the order that writes fewer, more local lines (costas, handball) wins; without
+proof the runs per node it adds are paid in full.
+
+**Next task, as section 4 points at it** (one TODO, not opened): the loss is the cheap classes rerunning
+what one global pass did. Two candidates, to measure behind the same switch: (a) Gecode's dynamic cost, the
+class of a row computed from its CURRENT unfixed arity rather than its declared scope, so a reified row
+whose Boolean is fixed stays cheap but an open one waits; (b) staged propagation for all_different, its
+bounds stage in `Row` and only its matching in `Global` (Gecode's and Chuffed's two-stage alldiff), so the
+Hall pruning comes before the reified rows rediscover it. Idempotence was not pointed at: the self-wake
+veto already covers the linear rows.
+
+**Revert**: `git revert` of the two `M19-config-T9` code commits (`8e9f9a4`, `cc67cc4`'s doc line); with the
+default `off`, removing the switch changes no artefact.
