@@ -19,7 +19,6 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M18-coverage-T14 follow-ups (D-0255): count-to-count rows for variable-count gcc, low_up route | `lib/core/prop/gcc.ml`, `mznlib/fzn_global_cardinality*.mzn`, gcc entries of `lib/flatzinc/compile.ml` and `builder.ml` if needed, gcc sections of `test/unit/`, `test/models/gcc*`, `mznlib/test/gcc*` | agent-gccsum (`wave100-gccsum`) | 2026-11-27 |
 
 ## Cross-session requests
 
@@ -478,6 +477,7 @@ section 1. Shares are inclusive, of the whole run.
 
 | Task | Session | Date | Summary |
 |---|---|---|---|
+| M18-coverage-T14 follow-ups (D-0255) | agent-gccsum (`wave100-gccsum`, not merged) | 2026-11-27 | **D-0255 [AUTONOME].** Routes unchanged by measurement: native gcc plus the row between the counts loses to std's decomposition for variable counts (2/14 at 300 s, a verified answer lost), low_up alternatives move no tree at 20 000 nodes. Fixed a wrong UNSAT under a repeated cover value (`99d0e39`, header `ee6e580`), seven test models |
 | M22-review-T4 second pass (D-0254) | agent-docs (`wave99-docs2`, not merged) | 2026-11-27 | **D-0254 [AUTONOME].** Comments of lib/flatzinc/, lib/scp/, gcc.ml, the learning modules, the small core modules, mznlib headers and eight propagator bodies; PROOF-FORMAT section 3's ladder-id sentence corrected; bootstrap.sh capped at 16 jobs; shrink.sh's missing mode removed; Encoding.is_direct_row (with direct_cids) and Justify.lit_hash removed. Checks on the branch: check_fmt clean, width lint clean, build ok, dune runtest --force 5 590 ok 0 FAIL (peak RSS 174 MB), run_model_tests 264/264, check_determinism ok, diff_lane --tier all -j 8 347/347 equal. samecode.sh against origin/main a303059: 33 SAME, 2 DIFF (encoding.ml, justify.ml: the dead-code commit, expected). |
 | M22-review-T4, the documentation pass (D-0253) | agent-docs (`wave98-docs`, not merged) | 2026-11-27 | **D-0253 [AUTONOME].** Comments and documents only: entry documents (README, CLAUDE.md, ARCHITECTURE 1/3/4, GLOSSARY, INVARIANTS I-X10, PROOF-FORMAT section 4 rows, scripts/README), twelve script headers, the newcomer files and every propagator but gcc.ml rewritten, `docs/REFERENCES.md` new. Checks on the worktree before the merge of D-0247 (binary built from the branch): check_fmt clean, width lint clean, dune runtest --force 5 590 ok 0 FAIL (peak RSS 174 MB), run_model_tests 259/259, check_determinism ok, diff_lane --tier all -j 8 347/347 equal; after the merge the parsed source of all 36 touched .ml files is identical to origin/main (ocamlc -dsource). |
 | M22-review-T3 and M22-review-T5, the unit test for T1 and three latent defects (D-0248) | agent-latent (`wave94-latent`, not merged) | 2026-11-27 | **D-0248 [AUTONOME].** T3: `test_m22t3_constant_fold` in `test_flatzinc` (the 2^61 * 4 fold refused by the builder, a fold to rhs = -2^59 refused by compile's cap, cancelling 2^61 products accepted as `x <= 0`). T5: `Encoding.already_declared` compares bounds, holes and representation, `Redeclared (x, what differs)`, no `raise Exit`; `Domain.of_list` / `change_of` moved to `test/unit/domain_helper.ml`; a proof write that fails ends with one stderr line and exit 6 instead of an uncaught `Sys_error` (exit 2). Binary `458c85e0`: runtest --force 5590 ok 0 FAIL (peak 170 MB), models 259, determinism 259, diff lane 347/347 equal, artefacts byte-identical |
@@ -724,6 +724,12 @@ section 1. Shares are inclusive, of the whole run.
 | M18-coverage-T5 (the ordering globals) | agent-lex (`wave85-lex`) | 2026-11-27 | **D-0239 [AUTONOME].** mznlib only: `lex_lesseq`/`lex_less`, int and Bool, as four linear rows per position over std's chain flag; 26 -> 27 complete of 92 with proof, nodes/s x1.02 to 1.04; precedence globals keep std's (T13 added); `increasing` already native. |
 | M18-coverage-T14 (gcc with variable counts) | agent-gccvar (`wave93-gccvar`) | 2026-11-27 | **D-0247 [AUTONOME].** mznlib only in the kept route: a `global_cardinality` whose counts are not all fixed goes to std's count decomposition (`4c5df61`), constant counts and the closed form stay native; +3 verified complete with proof over the 40 Challenge instances it reaches, none lost. Route (a), rule C over holes, built, verified and dropped (`d94f08f`, reverted `fa32d4b`). Not merged |
 ## Handoff notes
+
+### 2026-11-27 (agent-gccsum, `wave100-gccsum`, D-0255): D-0247's follow-ups, not merged
+
+Done: soundness fix `99d0e39` (mznlib: std's implied row and low_up_closed's par check guarded on a cover of distinct values; before it, `global_cardinality(x, [1,1], c)` with x = [1,1] was UNSAT, since 4c5df61, and low_up_closed's twin since D-0146), `ee6e580` corrects its header (MiniZinc's output moves with any edit of these files; 12 of 98 Challenge flattenings shift, same answers at 20 000 nodes). Measured (binary `456603e1`): variable counts keep std's decomposition, low_up stays native. Tests: four dupcover models, three `gccvar_sum_src_*` where the implied row is load-bearing (veripb rejects all three without it). Gate on `ee6e580`: 5 590 ok 0 FAIL, 271 models, mznlib 80 ok; lanes 347/347 and 333/333 equal on `6944d6e`, scaling and determinism ok.
+
+Left: nothing for gcc's routes. The mznlib check leaves `.ozn` files in mznlib/test/ (not ignored); stage paths by extension.
 
 ### 2026-11-27 (agent-docs, `wave99-docs2`, D-0254): second documentation pass, not merged
 
