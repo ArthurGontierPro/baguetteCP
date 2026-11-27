@@ -1050,13 +1050,13 @@ let target_cancel ~y ~lower =
    its residue [y_ge_(decl_hi+1)] is the constant false. Uncapped it asked for a
    [direct_fwd_id] that does not exist: exit 2 on `var 1..3: a, b, c; var 1..2: d;
    all_different_int([a, b, c, d])`, the four-variable pigeonhole. *)
-let prune_summands t ~a ~b ~halls ~y ~lower =
+let prune_summands ?alo t ~a ~b ~halls ~y ~lower =
   let keep, drop =
     if lower then
       (range y.s_lo (Int.min b y.s_dhi), range (Int.max a y.s_dlo) (y.s_lo - 1))
     else (range a y.s_hi, range (y.s_hi + 1) (Int.min b y.s_dhi))
   in
-  core_summands t ~vals:(range a b) ~halls ~extra:(Some y)
+  core_summands ?alo t ~vals:(range a b) ~halls ~extra:(Some y)
   @ List.map (fun v -> Explanation.weaken [ (1, Lit.eq y.s_name v) ]) drop
   @ List.map
       (fun v -> cite (cid_of "d_fwd" (Encoding.direct_fwd_id t.enc y.s_name v)))
@@ -1101,10 +1101,10 @@ let overshoot_cancel ~b ~y ~lower =
     @ [ Explanation.defining 1 (Lit.le y.s_name y.s_hi) ]
   else []
 
-let prune_expl t ~a ~b ~halls ~y ~lower =
+let prune_expl ?alo t ~a ~b ~halls ~y ~lower =
   Explanation.deferred (fun () ->
       Explanation.combine
-        (prune_summands t ~a ~b ~halls ~y ~lower
+        (prune_summands ?alo t ~a ~b ~halls ~y ~lower
         @ hall_cancels ~keep:(fun v -> a <= v && v <= b) ~halls
         @ target_cancel ~y ~lower @ overshoot_cancel ~b ~y ~lower)
         1)
@@ -1348,7 +1348,7 @@ let pass_scan t store ~lo0 ~hi0 =
   (* One push, with both halves of D-0026 built from the same snapshot. Returns through
      [Found]/[Moved]; a push that changes nothing (the bound is already there) falls
      through, which is how [Unchanged] can happen at all here. *)
-  let push ~halls ~a ~b ~y ~yi ~lower bound =
+  let push ?alo ~halls ~a ~b ~y ~yi ~lower bound =
     (* M7-T33 (D-0156): the push that would EMPTY [y] -- [pass]'s pigeonhole arm, or an
        [n = k] push whose live [y] is now confined -- is the conflict, reported with its
        facts under a decision (see [push_conflict]). [y]'s bounds here are the ones the
@@ -1369,7 +1369,7 @@ let pass_scan t store ~lo0 ~hi0 =
              (if lower then Reason.at_least ~name:y.s_name ~decl:y.s_dlo bound
               else Reason.at_most ~name:y.s_name ~decl:y.s_dhi bound))
         (prune_reason ~keep:(fun v -> a <= v && v <= b) halls y ~lower)
-        (prune_expl t ~a ~b ~halls ~y ~lower)
+        (prune_expl ?alo t ~a ~b ~halls ~y ~lower)
     in
     (* The rule above: the pass-start snapshot of [yi], and of any term naming the same
        variable, is taken before the push can land. *)
@@ -1459,6 +1459,9 @@ let pass_scan t store ~lo0 ~hi0 =
               for i = 0 to nt - 1 do
                 if inmask.(i) then inset.(t.canon.(i)) <- true
               done;
+              (* Every push from this interval sums the same Hall set's at-least-one
+                 lines, from the same pass-start snapshots ([alo_lines], D-0242). *)
+              let alo = memo () in
               for yi = 0 to nt - 1 do
                 let lo = lo_l.(yi) and hi = hi_l.(yi) in
                 if (a <= lo && lo <= b) || (a <= hi && hi <= b) then
@@ -1466,9 +1469,9 @@ let pass_scan t store ~lo0 ~hi0 =
                     let y = live yi in
                     let halls = List.map snap (idx ()) in
                     if a <= y.s_lo && y.s_lo <= b then
-                      push ~halls ~a ~b ~y ~yi ~lower:true (b + 1)
+                      push ~alo ~halls ~a ~b ~y ~yi ~lower:true (b + 1)
                     else if a <= y.s_hi && y.s_hi <= b then
-                      push ~halls ~a ~b ~y ~yi ~lower:false (a - 1)
+                      push ~alo ~halls ~a ~b ~y ~yi ~lower:false (a - 1)
               done;
               for i = 0 to nt - 1 do
                 if inmask.(i) then inset.(t.canon.(i)) <- false
