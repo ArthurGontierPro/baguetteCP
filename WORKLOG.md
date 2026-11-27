@@ -19,6 +19,7 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
+| M22-review-bugs, retention deletes a needed constraint (D-0257) | `lib/core/retention.ml`, `lib/core/search.ml` (the `cdcl` loop and backjump deletion), `lib/core/learned.ml`, `lib/core/learn.ml` if needed, `test/unit/test_retention.ml`, `test_learn.ml`, `test_search_strategy.ml`, `docs/INVARIANTS.md`, new test models | agent-retbug (`wave103-retbug`) | 2026-11-27 |
 
 ## Cross-session requests
 
