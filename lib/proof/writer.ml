@@ -20,16 +20,20 @@
      - every rule ends in [;]; [rup] already does and must not get a second.
      - comments are [%]; [*] is refused outright.
      - [red]'s witness follows a [:], before the terminator.
-     - [#] and [w] DO NOT EXIST. See [wipe_level] and D-0024.
+     - VeriPB 3.0 has no `#` (set level) and no `w` (wipe level) command. The level
+       stack the 2.0 format had is now this module's: [set_level] records the level
+       and leaves a `% level l` comment, and [wipe_level] imitates `w l` with explicit
+       deletions computed from the tags it keeps (D-0024).
      - constraints carry [@label]s and are cited by name, never by number.
 
-   D-0197: a [Pol.t] is walked down its left spine in constant stack ([Pol.write_with],
-   [Pol.tokens]): [Pol.sum] builds one [Add] per operand, and a `pol` can have millions.
-   The mutation knob's walks ([rewrite_first], [cited_ids]) still recurse; they run on
-   the test models only.
+   A [Pol.t] is walked down its left spine in constant stack ([Pol.write_with],
+   [Pol.tokens]): [Pol.sum] builds one [Add] per operand, and a `pol` can have millions
+   (D-0197: recursing once per term overflowed the stack on a 32-million-term PB row of
+   the ATSP instances). The mutation knob's walks ([rewrite_first], [cited_ids]) still
+   recurse; they run on the test models only.
 
-   D-0209 (M20-pernode-T5): every line the search writes is assembled in ONE [Text.t]
-   ([t.buf]) and handed to the channel in one call. Integers ([Text.int]) and literal
+   Every line the search writes is assembled in ONE [Text.t] ([t.buf]) and handed to
+   the channel in one call (M20-pernode-T5, D-0209). Integers ([Text.int]) and literal
    names ([Text.lit]) are written into its bytes in place, with no [Printf], no
    intermediate string and no closure per reference; a literal's owner prefix
    ("x_ge_") is rendered once per variable and cached in [Text]. The bytes are the ones
@@ -44,12 +48,13 @@
 
 type cid = int
 
-(* M11-complexity-T5 (D-0145, D-0140 W3). The writer's tables are keyed by a constraint
-   id, which is an [int]. They were polymorphic [Hashtbl]s, so every [fresh], every
-   deletion and every lookup on a proof line went through the C primitives [caml_hash]
-   and [compare_val]. Ids are dense and handed out in order, so the identity is a perfect
-   hash and [Int.equal] is the equality. No emitted byte depends on a table's iteration
-   order: every fold over one below is sorted before it is used. *)
+(* The writer's tables are keyed by a constraint id, an [int]. Ids are dense and handed
+   out in order, so the identity is a perfect hash and [Int.equal] is the equality. No
+   emitted byte depends on a table's iteration order: every fold over one below is
+   sorted before it is used. (The tables were polymorphic [Hashtbl]s until
+   M11-complexity-T5, D-0145, the profiled pass over trace, justification and proof
+   writing: every [fresh], every deletion and every lookup on a proof line went through
+   the C primitives [caml_hash] and [compare_val].) *)
 module Itbl = Hashtbl.Make (struct
   type t = int
 
@@ -98,28 +103,32 @@ module Pol = struct
     | (k, c) :: rest ->
         List.fold_left (fun acc (k, c) -> add acc (mul (id c) k)) (mul (id c) k) rest
 
-  (* Constraint references are rendered by [cite], never as bare integers: VeriPB 3.0
+  (* [write_with b cite p] writes [p] in reverse Polish into [b] and returns the number
+     of tokens it wrote, which is [tokens p]: the writer counts while it writes instead
+     of walking the tree twice.
+
+     Constraint references are rendered as labels, never as bare integers: VeriPB 3.0
      lets a `pol` name its operands (`pol @c7 @c9 +`), which is the whole point of
-     D-0023 -- an id our counter got wrong is then a hard "label not assigned" error
-     rather than a silently different constraint. The positional rendering this used to
-     sit beside went with format 2.0 (D-0046); there is no unlabelled `pol` any more. *)
-  (* M11-complexity-T5 (D-0145, D-0140 W4): the integers are written without the format
-     interpreter "%d" used to cost per operator (now by [Text.int], D-0209). *)
-  (* D-0197: the LEFT SPINE is walked by a loop, not by recursion. [sum] and [lin_comb]
-     build left-deep trees, one [Add] per operand, so a `pol` of n operands is a spine n
-     deep, and a recursion down it is n stack frames: a PB conflict row lifted onto the
-     ladder of a variable 22 million values wide is that many operands (2021_ATSP,
-     D-0197). [spine] collects the operators from the leaf up; the right operand of an
-     [Add], which [sum] keeps small, is still written by recursion. Same bytes in the same
-     order: the leftmost leaf, then each operator with its right operand, innermost first,
-     which is reverse Polish. *)
-  (* M20-pernode-T5 (D-0209): written into a [Text.t] rather than a [Buffer.t], so the
-     integers and the literal names go straight into the line's bytes ([Text.int],
-     [Text.lit]). [cite] is [None] on the writer's own path, where a reference is "@c"
-     and its decimal written in place with no closure called, and [Some f] where a
-     caller renders references its own way ([to_string_cited]). One walker for both, so
-     the two cannot disagree. It returns the number of tokens it wrote, which is
-     [tokens p]: the writer counts while it writes instead of walking the tree twice. *)
+     D-0023 (adopting 3.0) -- an id our counter got wrong is then a hard "label not
+     assigned" error rather than a silently different constraint. [cite] is [None] on
+     the writer's own path, where a reference is "@c" and its decimal written in place
+     with no closure called, and [Some f] where a caller renders references its own way
+     ([to_string_cited]). One walker for both, so the two cannot disagree. The
+     positional rendering went with format 2.0 (D-0046); there is no unlabelled `pol`
+     any more.
+
+     The LEFT SPINE is walked by a loop, not by recursion. [sum] and [lin_comb] build
+     left-deep trees, one [Add] per operand, so a `pol` of n operands is a spine n deep,
+     and a recursion down it is n stack frames: a PB conflict row lifted onto the ladder
+     of a variable 22 million values wide is that many operands (2021_ATSP, D-0197).
+     [spine] collects the operators from the leaf up; the right operand of an [Add],
+     which [sum] keeps small, is still written by recursion. Same bytes in the same
+     order: the leftmost leaf, then each operator with its right operand, innermost
+     first, which is reverse Polish.
+
+     Integers and literal names go straight into the line's bytes ([Text.int],
+     [Text.lit]), with no [Printf] "%d" interpreted per operator (M11-complexity-T5,
+     D-0145) and no intermediate [Buffer.t] (M20-pernode-T5, D-0209). *)
   let rec write_with (b : Text.t) cite p =
     let rec spine ops = function
       | (Id _ | Axiom _) as leaf -> (leaf, ops)
@@ -175,11 +184,14 @@ module Pol = struct
 
   (* How many tokens the rendered expression carries: one per operand or operator, so
      the word count of [to_string_cited]'s output. This is what [--stats] reports per
-     `pol` (M8-bits-encoding-T5, D-0131). D-0127 measured, on VeriPB 3.0.2, that every
+     `pol` (M8-bits-encoding-T5, D-0131, which writes the order arm's ladder walks as
+     `rup` and keeps `pol` only where unit propagation cannot close a line). D-0127
+     measured, on VeriPB 3.0.2, that every
      `+` into an accumulator of Theta(w) terms costs Theta(w), so a `pol` of Theta(w)
      tokens is the shape whose check time grows faster than its byte count, and the
      count is the number to watch rather than the line's length. *)
-  (* Tail-recursive down the left spine, as [write_with] is and for its reason (D-0197). *)
+  (* Tail-recursive down the left spine, as [write_with] is and for its reason
+     (D-0197). *)
   let tokens p =
     let rec go acc = function
       | Id _ | Axiom _ -> acc + 1
@@ -193,16 +205,18 @@ end
 (* ---------------------------------------------------------------------------
    The format this writer emits.
 
-   VeriPB 3.0, and only 3.0 (D-0046; M1-T19 made it the default, D-0025 made it the
-   checker of record). The shape of the grammar, kept here because every one of these
-   is a thing the writer does differently from the 2.0 this project used to emit, and
-   the reasoning for each survives in docs/PROOF-FORMAT.md section 2a and D-0023/24:
+   VeriPB 3.0, and only 3.0. D-0023 adopted 3.0 and the Rust checker of record, M1-T19
+   and D-0025 made 3.0 the default, and D-0046 removed format 2.0. The shape of the
+   grammar, kept here because every one of these is a thing the writer does differently
+   from the 2.0 this project used to emit, and the reasoning for each survives in
+   docs/PROOF-FORMAT.md section 2a and D-0023/24:
 
      - every rule is terminated by `;`
      - comments are `%`; `*` is refused outright
-     - `#` (set level) and `w` (wipe level) DO NOT EXIST. The level stack this
-       project's backtracking is built on (D-0008) is not the checker's any more, so
-       the writer keeps the tags itself and deletes explicitly ([wipe_level], D-0024).
+     - `#` (set level) and `w` (wipe level) DO NOT EXIST in 3.0. This project's
+       backtracking retires a branch's lines by proof level (D-0008), and that level
+       stack is no longer the checker's, so the writer keeps the tags itself and
+       imitates `w` with explicit deletions ([set_level], [wipe_level], D-0024).
      - `red`'s witness follows a `:`, before the terminator
      - `delc` takes its constraint reference directly, with no `id` keyword
      - constraints carry `@name` labels and are cited by name, never by number.
@@ -226,8 +240,10 @@ let proof_version = "3.0"
    every derived constraint carries a label and is cited by it, so
    *deleting* a step un-defines that label and the later citation fails to PARSE. The
    checker rejects, the lane goes green, and nothing about the derivation was tested.
-   That is D-0020's failure mode, and it is not fixable in awk: the information
-   needed to avoid it is here, not in the output.
+   That is the failure mode D-0020 named (a lane verdict that does not test what it
+   claims to: lin_unsat's refutation had a unit of slack that only mutation found), and
+   it is not fixable in awk: the information needed to avoid it is here, not in the
+   output.
 
    So the knobs are typed and sit next to the derivation, GCS-style. A knob names a
    [kind] of corruption and a [site]; the site is matched against the [~origin] every
@@ -332,7 +348,7 @@ module Mutation = struct
     Printf.sprintf "%s at site %S, occurrence %d" (kind_name m.kind) m.site m.occurrence
 end
 
-(* [origin] is rendered on demand (M11-complexity-T5, D-0145, D-0140 J6 and W8). The
+(* [origin] is rendered on demand (M11-complexity-T5, D-0145). The
    audit keeps one entry per live id, and reads [origin] only to name a leaked id in
    [audit_report]; the mutation knob and [--stats]'s widest `pol` are its other two
    readers, and neither runs on a normal line. Building every line's origin string
@@ -340,23 +356,25 @@ end
    thrown away. *)
 type entry = { origin : unit -> string; level : int }
 
-(* M11-complexity-T12 (D-0166): what the audit keeps per live id is its [origin] alone.
-   It kept an [entry], whose [level] is the id's tag, which [tags] holds for every id the
-   audit holds (the two tables gain and lose their ids at the same sites: [fresh_lazy],
-   [wipe_level], [delete_many], [delete_core]). The record was 24 bytes per live id, and
-   2011_black-hole_9 holds 3.37 M of them at node 40. [audit_report] reads the level from
-   [tags]. *)
+(* What the audit keeps per live id ([t.live]) is its [origin] alone; [audit_report]
+   reads the level from [tags], which holds it for every id the audit holds (the two
+   tables gain and lose their ids at the same sites: [fresh_lazy], [wipe_level],
+   [delete_many], [delete_core]). It kept an [entry] until M11-complexity-T12 (D-0166,
+   what a proved run keeps alive once a line is written): 24 bytes per live id, and
+   2011_black-hole_9 holds 3.37 M of them at node 40. *)
 
-(* M11-complexity-T12 (D-0166): a RUN of consecutive ids [lo..hi] that [fresh] tagged
-   at one level. A level's bucket in [by_lvl] lists its runs newest first. It listed its
-   ids, one cons each, and a level's ids are almost always consecutive: 3.37 M live ids
-   on 2011_black-hole_9 at node 40 cost 24 bytes each there. *)
+(* A RUN of consecutive ids [lo..hi] that [fresh] tagged at one level. A level's bucket
+   in [by_lvl] lists its runs newest first, because a level's ids are almost always
+   consecutive. It listed its ids, one cons each, until M11-complexity-T12 (D-0166):
+   3.37 M live ids on 2011_black-hole_9 at node 40 cost 24 bytes each there. *)
 type run = { lo : cid; mutable hi : cid }
 
-(* M6-T24 (D-0225). What an interrupted run is entitled to conclude, in the CHECKER's
-   units (negated for a maximisation). The floor is the objective's DECLARED one, which
-   the .opb implies by itself: nothing about the search is claimed. The incumbent is the
-   value of the last `soli` line, which the checker recorded. *)
+(* What an interrupted run is entitled to conclude, in the CHECKER's units (negated for
+   a maximisation). A run stopped by a signal or the heap budget ends its proof where it
+   stands with the strongest conclusion it can claim (M6-T24, D-0225). The floor is the
+   objective's DECLARED one, which the .opb implies by itself: nothing about the search is
+   claimed. The incumbent is the value of the last `soli` line, which the checker
+   recorded. *)
 type stop_verdict =
   | Nothing_known
   | Floor_and_incumbent of { floor : int; incumbent : int option }
@@ -367,34 +385,37 @@ type t = {
   live : (unit -> string) Itbl.t; (* id -> what introduced it, for audit failures *)
   model : unit Itbl.t; (* ids fixed by the .opb, not an obligation *)
   objective : entry Itbl.t;
-      (* M5-T1: the objective-improving constraints `soli` handed back. Not an
+      (* The objective-improving constraints `soli` handed back (branch and bound,
+         M5-T1). Not an
          obligation either, and for a sharper reason than [model]'s -- these are ids we
          DID receive, and deleting one is an unchecked deletion that weakens the
          checker's guarantee over the conclusion that follows it. See [improving]. *)
   tags : int Itbl.t;
       (* Always on, rather than under [audit]: the level each live derived id was
-         tagged with. VeriPB 3.0 has no level stack -- the checker used to keep this
-         and `w` used to consult it (D-0024) -- so [wipe_level] reproduces `w l` from
-         this table. It is a mirror of checker state (invariant I-X3) and stopped being
-         optional the moment the checker stopped holding it. *)
+         tagged with. VeriPB 3.0 has no level stack -- the 2.0 checker kept this and its
+         `w` command consulted it (D-0024) -- so [wipe_level] imitates `w l` from this
+         table. It is a mirror of checker state (invariant I-X3: proof state mirrors
+         solver state) and stopped being optional the moment the checker stopped holding
+         it. *)
   mutable by_lvl : run list array;
-      (* M6-T17: the ids [fresh] tagged at each level, newest first, indexed by level, so
-         [wipe_level l] walks levels >= l only instead of folding all of [tags]. An id
-         deleted by other means stays in its bucket; [wipe_level] skips it by looking it
-         up in [tags], which is the authority.
+      (* The ids [fresh] tagged at each level, as runs of consecutive ids newest first
+         (see [run]), indexed by level, so [wipe_level l] walks levels >= l only instead
+         of folding all of [tags] (M6-T17 measured that fold, with Justify's, at 2 to
+         2.5 % of mario). An id deleted by other means stays in its bucket; [wipe_level]
+         skips it by looking it up in [tags], which is the authority. Read out from each
+         run's [hi] down to its [lo], a bucket lists exactly the ids, in exactly the
+         order, that the list of ids it replaced did (M11-complexity-T12, D-0166).
 
-         M11-complexity-T5 (D-0145, D-0140 W5): bucket 0 is never filled. [wipe_level]
-         refuses level 0, so nothing ever read it, and it held every id ever minted at
-         level 0 (the learned constraints, the permanent trace lines) for the whole run.
-         A level-0 id is retired only by an explicit deletion, which reads [tags].
-
-         M11-complexity-T12 (D-0166): as runs of consecutive ids, newest first, see
-         [run]. Read out from each run's [hi] down to its [lo], a bucket lists exactly the
-         ids, in exactly the order, that the list of ids did. *)
+         Bucket 0 is never filled (M11-complexity-T5, D-0145). [wipe_level] refuses
+         level 0, so nothing ever read it, and it held every id ever minted at level 0
+         (the learned constraints, the permanent trace lines) for the whole run. A
+         level-0 id is retired only by an explicit deletion, which reads [tags]. *)
   mutable by_hi : int; (* no bucket above this index is non-empty *)
   audit : bool;
   null : bool;
-      (* M9-no-proof-T2 (D-0126). A NULL writer: every rule below mints its id through
+      (* A NULL writer, for `--no-proof` (M9-no-proof-T2; D-0126 made solving without a
+         proof a mode of its own, as a measurement instrument): every rule below mints
+         its id through
          [fresh] and writes nothing -- no line, no level comment, no deletion, no
          conclusion -- and [fresh] itself keeps no tag, no bucket and no audit entry.
          Built by [create ~null:true] for `--no-proof`, over a channel nobody reads
@@ -408,7 +429,7 @@ type t = {
   mutable level : int;
   mutable finished : bool;
   mutable busy : int;
-      (* M6-T24 (D-0225): > 0 while a line is going to the channel, or inside [guarded].
+      (* > 0 while a line is going to the channel, or inside [guarded] (M6-T24).
          A signal handler must not write then; [when_idle] is how it waits. *)
   mutable on_idle : (unit -> unit) option;
       (* M6-T24: what [when_idle] was asked to run as soon as [busy] is back to 0. *)
@@ -431,18 +452,18 @@ type t = {
   mutable pol_tokens : int;
   mutable pol_tokens_max : int;
   mutable pol_widest : unit -> string;
-      (* M8-bits-encoding-T5 (D-0131): the SHAPE counters, read back by [shape_stats] for
+      (* The SHAPE counters (M8-bits-encoding-T5, D-0131), read back by [shape_stats] for
          bin/main.ml's [--stats]. How many `pol` and `rup` lines this writer put on the
          page, the tokens over every `pol` ([Pol.tokens]), the widest single `pol` and the
          [~origin] that wrote it -- so a Theta(w)-token `pol` is visible by name, not only
          as a slow check. Counted on what is written, after the mutation knob. *)
   buf : Text.t;
-      (* M11-complexity-T5 (D-0145, D-0140 W2 and W4): the line being written. A rule
+      (* The line being written (M11-complexity-T5, D-0145). A rule
          is assembled here and handed to the channel in ONE call ([put_line]), instead
          of a [Printf] format with "\n" appended per line, a string per piece and about
          four copies of a `pol`. In OCaml 5 every write to a channel takes the channel's
-         lock, so one call per line is also the cheapest way to write it (D-0143).
-         M20-pernode-T5 (D-0209): a [Text.t], so integers and names are written in place. *)
+         lock, so one call per line is also the cheapest way to write it (D-0143). A
+         [Text.t], so integers and names are written in place (D-0209). *)
 }
 
 let audit_enabled () =
@@ -450,7 +471,7 @@ let audit_enabled () =
 
 let create ?(comments = false) ?audit ?(null = false) oc =
   let audit = match audit with Some b -> b | None -> audit_enabled () in
-  (* M9-no-proof-T2: a null writer audits nothing, whatever the environment asked for --
+  (* A null writer audits nothing, whatever the environment asked for --
      there is no page for I-X2 to be a statement about. *)
   let audit = audit && not null in
   {
@@ -506,7 +527,7 @@ let cite _t id = Opb.label_of id
 let cite_all t ids = String.concat " " (List.map (cite t) ids)
 let auditing t = t.audit
 
-(* M9-no-proof-T2: is this the null writer? [Justify] and [Trace] ask at the entry of
+(* Is this the null writer (`--no-proof`)? [Justify] and [Trace] ask at the entry of
    their emitting functions and return before forcing or rendering anything. *)
 let is_null t = t.null
 let last_id t = t.next_id
@@ -533,7 +554,7 @@ let shape_stats (t : t) : shape_stats =
 let live_count t = Itbl.length t.live
 let live_ids t = Itbl.fold (fun id _ acc -> id :: acc) t.live [] |> List.sort Int.compare
 
-(* M5-T1. The ids [improving] handed back, which are discharged by the conclusion and
+(* The ids [improving] handed back, which are discharged by the conclusion and
    never deleted. Exposed so a test can assert they are still on the page rather than
    inferring it from the absence of a `del`. *)
 let objective_ids t =
@@ -541,33 +562,35 @@ let objective_ids t =
 
 let is_live t id = Itbl.mem t.live id
 
-(* The proof is append-only and is never rewound (invariant I-X4); once [conclusion]
+(* The proof is append-only and is never rewound (invariant I-X4: backtracking in the
+   solver becomes deletion in the proof, never a rewind); once [conclusion]
    has run, nothing more may be written to it. *)
 let is_finished t = t.finished
 
-(* ---------------------------------------------------------------- M1-T47
-   Accounting for the time this module spends WRITING.
+(* ------------------------------------------- the emission clock (M1-T47)
+   Accounting for the time this module spends WRITING, so that solve time can be split
+   into propagation and proof emission.
 
-   M1-T35 split the CLI's run into phases and found that one of them, [search], is
-   propagation, search and .pbp emission fused: bin/main.ml can only bracket
-   [Search.solve], and every emission point is below it. So no row of bench/ could
-   support "propagation costs X". This is the hook that separates them.
+   bin/main.ml can only bracket [Search.solve], and every emission point is below it,
+   so its [search] phase is propagation, search and .pbp emission fused (M1-T35 split
+   the CLI's run into phases and found this). No row of bench/ could support
+   "propagation costs X". This is the hook that separates them.
 
    WHAT IS ACCUMULATED, exactly, because a column that looks authoritative and is not
    is worse than no column:
 
-     * The three functions below -- [line], [comment], [always_comment] -- are the
-       only places this module writes to [t.oc], plus the [flush] in [conclusion],
-       which is timed too. Every RULE goes through [line] (via [rule], or directly
-       where the body already carries its own `;`). But [comment] and
-       [always_comment] do NOT go through [line], and that is not a corner case:
-       [set_level] emits its level marker as an [always_comment], so every level
-       marker in every proof bypasses [line]. All three are instrumented.
+     * Every write this module makes to [t.oc] while a run is in progress: [line]
+       (the rare rules, through [rule] or directly where the body already carries its
+       own `;`), [comment], [always_comment], [write_buf] (behind [put_line] and
+       [put_comment]: every rule on the search's path and every `% level l` marker),
+       and the [flush] in [conclusion]. All of them are instrumented. The one write
+       that is not is [copy_file], the `--e2e` prefix copied once before the search.
      * NOT the building of a rule's body. [rule t (Printf.sprintf ...)],
-       [Pol.to_string_cited], [Opb.constr_to_string], [lits_to_string] all run at the
-       CALL SITE, before [line] is entered, and are not in this number. So this is a
-       LOWER bound on emission cost, and search-minus-emission is an UPPER bound on
-       propagation. Both are labelled that way wherever they are printed.
+       [Pol.to_string_cited], [Opb.constr_to_string], [lits_to_string], and the filling
+       of [t.buf] before [write_buf], all run before the write is entered, and are not
+       in this number. So this is a LOWER bound on emission cost, and
+       search-minus-emission is an UPPER bound on propagation. Both are labelled that
+       way wherever they are printed.
 
    WHY [kfprintf] AND NOT A TIMER AROUND THE BODY. [Printf.fprintf oc fmt] returns a
    closure that consumes the format's remaining arguments; the output happens as they
@@ -613,6 +636,7 @@ let emitted_us () = !emit_us
 let emitted_lines () = !emit_lines
 
 (* ------------------------- interruption (M6-T24, D-0225) -------------------
+   (M6-T24: a signal or the heap budget closes the proof where it stands.)
 
    A run can be stopped from outside (a signal, the heap budget) at an arbitrary
    point, and the proof it has written is still a valid prefix: every line on the page
@@ -660,7 +684,7 @@ let guarded t f =
 
 let line t fmt =
   if t.finished then invalid_arg "Writer: the proof has already ended";
-  (* M9-no-proof-T2: the null writer consumes the format and writes nothing, and
+  (* The null writer consumes the format and writes nothing, and
      [emit_lines] stays where it was, so --time's `emitln` reads 0. *)
   if t.null then Printf.ifprintf t.oc (fmt ^^ "\n")
   else
@@ -673,12 +697,13 @@ let line t fmt =
         leave t)
       t.oc (fmt ^^ "\n")
 
-(* M6-T22 / D-0138 wrote [rup], nearly every line a search writes (1.29 M of QR48's
-   1.40 M), as a list of pieces straight to the channel, without the format's
-   interpretation. M11-complexity-T5 takes that one step further for every rule on the
-   search's path: the pieces are assembled in one buffer and written in one call. *)
+(* Every rule on the search's path is assembled in one buffer and written in one call,
+   without a format's interpretation (M11-complexity-T5, D-0145). The first step was
+   [rup], nearly every line a search writes (1.29 M of QR48's 1.40 M), written as a
+   list of pieces straight to the channel (M6-T22, D-0138, the per-node cost on the
+   XOR-heavy codes models). *)
 
-(* M11-complexity-T5 (D-0145). The line in [t.buf], cleared and ready to be filled; then
+(* The line in [t.buf], cleared and ready to be filled; then
    [put_line] (a rule: refused once the proof has ended) or [put_comment] (a level
    marker: never refused, as [always_comment] never was) ends it with "\n" and writes it
    in one call, with [line]'s accounting. A buffer that one huge line grew past
@@ -723,7 +748,8 @@ let add_cite b id =
 
 (* [lits_to_string lits] appended to [b]: the literals separated by one space.
 
-   M16-file-review-T4 (D-0192): each literal is written without building its string,
+   Each literal is written without building its string (M16-file-review-T4, D-0192,
+   the file-by-file review of the proof side),
    and its owner's name is not scanned again per literal. A `sol`/`soli` line lists
    every literal of every variable (Encoding.assignment_lits): 2014_openshop_gp10-4
    spent a third of its search writing them, one string allocated and one name scanned
@@ -839,23 +865,25 @@ let fresh_lazy t ~origin =
 (* Every rule that yields an id comes in two forms: the one taking [~origin] as a
    string, which every caller had, and a [_lazy] one taking a thunk that renders it,
    for the callers on the per-line path ([Justify], [Trace]), which build their origin
-   from the line's literals (D-0140 J6). The string form is the lazy one over a
-   constant. *)
+   from the line's literals (D-0145; item J6 of D-0140's inventory of costs that grow
+   with the run). The string form is the lazy one over a constant. *)
 let fresh t ~origin = fresh_lazy t ~origin:(fun () -> origin)
 
 (* Preamble: version line, then the count of model constraints loaded from the .opb.
 
-   The count is NOT the trap PROOF-FORMAT section 2 used to describe it as. The
-   checker rejects a wrong one outright and names the right number ("The formula
-   contains 3 constraints, but the rule expected that there are 2"), measured. What
-   used to be silent was the *consequence* of miscounting inside [Encoding] -- a `pol`
-   citing a shifted id. That is gone too: citations are labels. *)
-(* M14-e2e-verification-T3 (D-0187). Under `--e2e` the proof is checked against the .opb
-   cake_pb_cp wrote, whose row count baguette does not know: the `f` line is left out
-   (veripb 3.0.2 accepts that and elaborates the right count), and the prefix
-   [Encoding] wrote while the .opb was built ([e2e_prefix], a file) is copied in its place.
-   Every `soli` is then relabelled @O[c<id>] and @c<id> derived from it by the line
-   [e2e_soli] returns. [None] for both is every byte as before. *)
+   A wrong count is not a silent trap: the checker rejects it outright and names the
+   right number ("The formula contains 3 constraints, but the rule expected that there
+   are 2"), measured. (The historical section 2 of docs/PROOF-FORMAT.md described it as
+   one.) What used to be silent was the *consequence* of miscounting inside [Encoding]
+   -- a `pol` citing a shifted id. That is gone too: citations are labels. *)
+(* End-to-end mode (M14-e2e-verification-T3, D-0187: baguette writes the prefix that
+   derives its own rows from cake_pb_cp's verified .opb, off by default). Under `--e2e`
+   the proof is checked against the .opb cake_pb_cp wrote, whose row count baguette
+   does not know: the `f` line is left out (veripb 3.0.2 accepts that and elaborates the
+   right count), and the prefix [Encoding] wrote while the .opb was built ([e2e_prefix],
+   a file) is copied in its place. Every `soli` is then relabelled @O[c<id>] and @c<id>
+   derived from it by the line [e2e_soli] returns. [None] for both is every byte as
+   before. *)
 let e2e_soli : (int -> string) option ref = ref None
 
 let copy_file t path =
@@ -870,7 +898,7 @@ let copy_file t path =
   Fun.protect ~finally:(fun () -> close_in ic) go
 
 let header ?e2e_prefix t ~n_model_constraints =
-  (* M9-no-proof-T2: the null writer writes no preamble, but the counter still starts
+  (* The null writer writes no preamble, but the counter still starts
      where the `f` rule would have put it, so the direct-encoding ids
      [Encoding.start_proof] mints next are the proved run's (D-0126's id rule). *)
   if not t.null then (
@@ -903,10 +931,12 @@ let model_ids t =
 
 (* ------------------------- deletion levels ------------------------------- *)
 
-(* docs/PROOF-FORMAT.md section 5: reasons logged during search are retired on
-   backtrack. VeriPB has a level stack for exactly this: [# l] puts subsequently
-   derived constraints on level l, and [w l] wipes every constraint on level l and
-   above. One [w] per backtrack beats one [del] per reason. *)
+(* Reasons logged during search are retired on backtrack (docs/PROOF-FORMAT.md section
+   5). The writer keeps a current level, and [fresh] tags every id with it; [wipe_level
+   l] deletes every id tagged at level l or above. This imitates the level stack VeriPB
+   2.0 had, where `# l` put subsequently derived constraints on level l and `w l` wiped
+   every constraint on level l and above in one line; VeriPB 3.0 has neither command
+   (D-0024), so the tags are ours and the deletions explicit. *)
 let set_level t l =
   if l < 0 then invalid_arg "Writer.set_level: negative level";
   (* VeriPB 3.0 has no SetLevel rule -- `#` there introduces a proofgoal id and `# 1`
@@ -914,8 +944,8 @@ let set_level t l =
      it and leave a comment where the marker used to be. That comment is emitted
      unconditionally: without it a proof has nothing in it that says where a decision
      began, and the proofs in this project are read by hand. *)
-  (* "% level <l>", as [always_comment t "level %d" l] wrote it (D-0145: one per
-     decision, so not through a format). *)
+  (* "% level <l>", as [always_comment t "level %d" l] wrote it, through [t.buf]
+     rather than a format because there is one per decision (D-0145). *)
   let b = line_buf t in
   Text.string b "% level ";
   Text.int b l;
@@ -924,8 +954,9 @@ let set_level t l =
 
 let current_level t = t.level
 
-(* Allocate ids at a CHOSEN level for the duration of [f] -- docs/DECISIONS.md D-0045's
-   addendum, and the entry point M2-L1 was sent to build.
+(* Allocate ids at a CHOSEN level for the duration of [f]. D-0045's addendum found that
+   nothing could tag a learned constraint below the conflict level, and M2-L1 (the
+   learned-constraint type) built this entry point.
 
    The problem it exists for, measured before it was written (M2-L1, 2026-09-18, by
    hand): [fresh] tags every id with [t.level], unconditionally and with no override,
@@ -1037,7 +1068,7 @@ let runs ids =
    HI survives. That is not a reading of a grammar, it is measured against VeriPB
    3.0.2 -- the checker of record -- and it is pinned by [test_v3_del_range_semantics]
    in test/unit/test_proof.ml, which runs the checker rather than asserting our own
-   text. M1-T22: we emitted `del range lo hi` for an inclusive run, so every run of
+   text. Until M1-T22 we emitted `del range lo hi` for an inclusive run, so every run of
    two or more ids left its last id live in the checker while [t.tags] and (under
    audit) [t.live] had already dropped it -- the I-X3 mirror disagreeing with the
    thing it mirrors. Not unsound; the proof simply kept a constraint it believed gone.
@@ -1054,7 +1085,7 @@ let runs ids =
    earlier). That is fine and is measured too: a deleted label still resolves, and
    `del range` tolerates already-deleted ids inside the span.
 
-   ---- M1-T29: the newest-id run no longer costs one citation per retired reason ----
+   ---- the newest-id run costs two short lines, not one citation per id (M1-T29) ----
 
    The paragraph above is why that fallback existed; what follows is why it is gone.
    The run [lo, hi] with [hi] the newest id is now written as a PAIR of rules --
@@ -1085,11 +1116,11 @@ let runs ids =
    The pair also makes the dangerous direction LOUD, which is the reason to prefer it
    over the numeric bound even setting D-0023 aside. Over-deletion is the silent
    failure -- a range whose upper bound is one too high retires a constraint a later
-   line may cite (with D-0039 and I-S4, that now includes a trace line citing a hole
-   line), and nothing in our own bookkeeping notices, because an over-deleted id is
-   not an un-retired id and the I-X2 audit is checking us against ourselves. Here an
-   upper bound one too high is caught by the very next rule, measured against 3.0.2
-   in [test_v3_del_pair_spelling]:
+   line may cite (since D-0039 a trace line is RUP in sequence and may cite a hole's
+   line, which I-S4 requires to outlive it), and nothing in our own bookkeeping notices,
+   because an over-deleted id is not an un-retired id and the I-X2 audit is checking us
+   against ourselves. Here an upper bound one too high is caught by the very next rule,
+   measured against 3.0.2 in [test_v3_del_pair_spelling]:
 
      - `@c<hi+1>` not yet assigned -> "The label `@c6` is not assigned to a
        constraint ID at line 6 col 15" (a parse error naming the label -- D-0023's
@@ -1137,13 +1168,36 @@ let debug_xcheck =
   | Some ("1" | "true" | "yes" | "on") -> true
   | _ -> false
 
-let wipe_level t l =
-  (* M2-L4: a backjump may not be a second owner of a learned constraint's lifetime, and
-     this line is what makes that structural instead of a fact about [Search]'s call
-     sites.
+(* [wipe_level t l] retires every id tagged at level [l] or above: the set VeriPB 2.0's
+   `w l` retired. VeriPB 3.0 has no `w` (it dropped the level stack that D-0008 built
+   backtracking on), so the set is computed here from [t.tags] and deleted explicitly
+   with [del_run] (D-0024 is the record of what `w` did and why this imitates it).
 
-     A learned constraint is introduced at level 0 ([Justify.with_level ctx 0], D-0045's
-     addendum as M2-L1 resolved it) precisely so that no backjump retires it. Levels are
+   The set is "tagged at level >= l", not "derived since the level was set". The two
+   differ as soon as a level is re-entered after an interlude at a lower one, which is
+   what search does on every branch: level 1, level 0, two root prunings, level 1 again.
+   The root prunings must survive.
+
+   The cost is honest and belongs in the record: PROOF-FORMAT section 5's whole argument
+   for levels was one proof line per backtrack rather than one deletion per reason, and
+   that argument is gone. Runs recover most of it -- a level's ids are usually
+   consecutive, so it is usually still one or two lines -- but "usually" is not
+   "always", and a level whose ids interleave with deletions costs a pair of lines per
+   run. What the proof no longer grows with, since M1-T29, is the number of reasons
+   retired at one level: every shape [del_run] can emit is of bounded length.
+   [del_run] is what turns an inclusive run into a rule; `del range` is half-open and
+   that difference is the whole of M1-T22.
+
+   The current level does not move on a wipe, as VeriPB 2.0's level stack did not, so
+   that the mirror stays exact (invariant I-X3). *)
+let wipe_level t l =
+  (* No backjump may retire a learned constraint (M2-L4: learned constraints are owned by
+     the retention database, which alone deletes them). This check makes that structural
+     instead of a fact about [Search]'s call sites.
+
+     A learned constraint is introduced at level 0 ([Justify.with_level ctx 0], the
+     bracket M2-L1 built for D-0045's addendum) precisely so that no backjump retires
+     it. Levels are
      non-negative, so the ONLY wipe that could reach a level-0 tag is [wipe_level 0] --
      and every caller in lib/ passes a decision level, which is >= 1. That was true by
      inspection and would have stayed true only by inspection: a fifth call site passing
@@ -1159,31 +1213,13 @@ let wipe_level t l =
       "Writer.wipe_level: level must be >= 1. Level 0 holds the learned constraints and \
        the permanent trace lines, whose lifetimes are owned by Retention and Trace \
        respectively (M2-L4); no backjump may retire them.";
-  (* VeriPB 3.0 deleted the level stack that D-0008 built backtracking on. `w l` retired
-     every constraint TAGGED at level >= l, and the checker held the tags; now [t.tags]
-     does, so the same set is computed here and deleted explicitly. This reproduces
-     `w l` exactly -- it is not "delete what was derived since", which would be wrong the
-     moment a level is re-entered after an interlude at a lower level (search does
-     exactly that: level 1, level 0, two root prunings, level 1 again).
-
-     The cost is honest and belongs in the record: PROOF-FORMAT section 5's whole
-     argument for levels was one proof line per backtrack rather than one deletion per
-     reason, and that argument is gone. Runs recover most of it -- a level's ids are
-     usually consecutive, so it is usually still one or two lines -- but "usually" is not
-     "always", and a level whose ids interleave with deletions costs a pair of lines per
-     run. What the proof no longer grows with, since M1-T29, is the number of reasons
-     retired at one level: every shape [del_run] can emit is of bounded length. See
-     D-0024, which is the record of what `w` did and why this function has to imitate it.
-
-     [del_run] is what turns an inclusive run into a rule; `del range` is half-open and
-     that difference is the whole of M1-T22. *)
-  (* M11-complexity-T5 (D-0145, D-0140 W5): the doomed ids in ascending order without a
-     sort in the usual case. A bucket is newest first, so the fold below lists the ids
-     it keeps oldest first, in front of the higher levels' ids already collected. Ids
-     are handed out in order, so a higher level's ids are usually all newer and the
-     whole list is ascending as built; a level re-entered after an interlude at a lower
-     one can break that, and then the list is sorted, which is what it always was. Ids
-     are distinct, so either way it is the sorted set the old [List.sort compare] gave. *)
+  (* The doomed ids in ascending order without a sort in the usual case
+     (M11-complexity-T5, D-0145). A bucket is newest first, so the fold below lists the
+     ids it keeps oldest first, in front of the higher levels' ids already collected. Ids
+     are handed out in order, so a higher level's ids are usually all newer and the whole
+     list is ascending as built; a level re-entered after an interlude at a lower one can
+     break that, and then the list is sorted, which is what it always was. Ids are
+     distinct, so either way it is the sorted set the old [List.sort compare] gave. *)
   let doomed_ids = ref [] in
   for lv = t.by_hi downto l do
     doomed_ids :=
@@ -1221,8 +1257,6 @@ let wipe_level t l =
   List.iter (Itbl.remove t.tags) doomed;
   List.iter (del_run t) (runs doomed);
   if t.audit then List.iter (Itbl.remove t.live) doomed
-(* VeriPB's LevelStack does not move the current level on a wipe, so neither do we:
-   the mirror has to stay exact (invariant I-X3). *)
 
 (* ------------------------- applying a knob -------------------------------
    All of this is dead code in a writer built by [create]: every entry point below
@@ -1378,8 +1412,8 @@ let corrupt_pol t ~origin (p : Pol.t) =
    dropping a literal from a reason is only a corruption when the literal traces back
    to a search DECISION, because anything a propagator derived is in the proof as a
    clause of its own and the checker has it either way. The text harness guessed at
-   that by preferring a clause emitted between a level marker and its wipe; a lane here
-   states the derivation it means. *)
+   that by preferring a clause emitted between a level marker and the deletions that
+   retired its level; a lane here states the derivation it means. *)
 let corrupt_claim t ~origin (c : Opb.constr) =
   match knob_for t ~corrupts:Mutation.corrupts_claim ~origin with
   | None -> c
@@ -1428,13 +1462,16 @@ let corrupt_claim t ~origin (c : Opb.constr) =
 
 (* A cutting-planes derivation, and the ONLY way this module writes a `pol` line.
 
-   There used to be a [pol_raw] beside it, taking reverse-Polish text built elsewhere.
-   It had no caller anywhere in the tree and it is deleted (M1-T39). Three reasons, and
-   the first is the one that makes this a decision rather than tidying:
+   Every `pol` goes through [corrupt_pol] and [Pol.write_labelled], so there is no
+   emission path the mutation knobs cannot reach and none that writes unlabelled text.
+   A [pol_raw] taking reverse-Polish text built elsewhere used to sit beside it; it had
+   no caller anywhere in the tree and was deleted (M1-T39). Three reasons, and the first
+   is the one that makes this a decision rather than tidying:
 
    1. It bypassed [corrupt_pol], so it was the one emission path the mutation harness
-      could not reach. D-0030 makes it structurally impossible for a knob to fire in a
-      normal run; the dual obligation is that no emission path is structurally
+      could not reach. D-0030 (a mutation lane must judge a derivation, not a grammar)
+      makes it structurally impossible for a knob to fire in a normal run; the dual
+      obligation is that no emission path is structurally
       incapable of being corrupted, or a future caller gets a derivation no lane can
       ever gate. A proof step this file writes must be a proof step this file can
       knowingly break.
@@ -1444,11 +1481,11 @@ let corrupt_claim t ~origin (c : Opb.constr) =
       files" failure this tree has recorded twice already (Checker.find, and the
       level-marker spellings that D-0023's round collapsed into this module).
    3. Nothing is lost. [Pol.t] spans the whole cutting-planes vocabulary
-      docs/PROOF-FORMAT.md section 2 lists -- ids, literal axioms, `+`, `* k`, `d k`,
+      docs/PROOF-FORMAT.md section 2a lists -- ids, literal axioms, `+`, `* k`, `d k`,
       `s`, `w v` -- so there is no derivation the raw form could state that [pol]
       cannot. It bought no expressiveness, only an unchecked path. *)
 let pol_lazy t ~origin p =
-  (* M9-no-proof-T2: every rule that yields an id yields one from the null writer and
+  (* Every rule that yields an id yields one from the null writer and
      renders nothing; the guard sits before the shape counters so `--stats` cannot
      report a `pol` that was never written. *)
   if t.null then fresh_lazy t ~origin
@@ -1476,8 +1513,10 @@ let pol_lazy t ~origin p =
 
 let pol t ~origin p = pol_lazy t ~origin:(fun () -> origin) p
 
-(* Reverse unit propagation of a PB constraint. Prefer [pol] where the reasoning is
-   known; see docs/PROOF-FORMAT.md section 2.
+(* Reverse unit propagation of a PB constraint: the checker finds the derivation by
+   unit propagation. A justification is written as `rup` wherever unit propagation
+   closes it and as `pol` only where it cannot (docs/PROOF-FORMAT.md section 2a;
+   lib/core/justify.ml's header says why).
 
    The body already ends in " ;" (Opb.constr_to_string), which is the rule terminator,
    so this goes through [line] rather than [rule]: `rup ... ; ;` is a syntax error. *)
@@ -1487,7 +1526,7 @@ let rup_lazy t ~origin c =
     let c = corrupt_claim t ~origin c in
     let id = t.next_id + 1 in
     t.n_rup <- t.n_rup + 1;
-    (* "@c<id> rup <body> ;" in [t.buf], one call to the channel (D-0145, W2). *)
+    (* "@c<id> rup <body> ;" in [t.buf], one call to the channel (D-0145). *)
     let b = line_buf t in
     add_label b id;
     Text.string b "rup ";
@@ -1509,7 +1548,8 @@ let rup_clause t ~origin lits = rup t ~origin (Opb.clause lits)
    contained no statement of what the propagator BELIEVED it had derived. A `pol` that
    computes something strictly weaker than the bound the propagator then pruned to is
    a sound proof line under an unsound prune, and the checker has nothing to object
-   to. M1-T42 could only reach 8 of its 9 cells for exactly this reason: every `pol`
+   to. M1-T42 (the integer veripb builders of test_prop.ml) could only reach 8 of its 9
+   cells for exactly this reason: every `pol`
    guard in the suite was a regex over emitted text, so it could see the derivation
    change shape but never see the checker judge it.
 
@@ -1518,9 +1558,9 @@ let rup_clause t ~origin lits = rup t ~origin (Opb.clause lits)
    search -- and it is the missing half of a `pol`: the derivation says how, the `ia`
    says what.
 
-   docs/PROOF-FORMAT.md section 2a lists no `e` and no `ia` and is INCOMPLETE on this
-   point; see the M1-T51 hand-back. The measured rejection wording, for a lane that
-   asserts this control fires:
+   docs/PROOF-FORMAT.md section 2a lists `ia` and the trap below (its table lacked it
+   until M1-T51). The measured rejection wording, for a lane that asserts this control
+   fires:
 
      "Expected constraint is not syntactically implied by the constraint at the hint."
 
@@ -1669,7 +1709,7 @@ let lits_to_string lits = String.concat " " (List.map Lit.to_string lits)
    total assignment, so hand it every decision variable's literals. *)
 let solution t lits =
   if not t.null then (
-    (* "sol <lits> ;" in [t.buf] (D-0145, D-0140 W6: it was the whole assignment as one
+    (* "sol <lits> ;" in [t.buf] (D-0145: it was the whole assignment as one
        [String.concat], then [Printf], then [rule]'s format). *)
     let b = line_buf t in
     Text.string b "sol ";
@@ -1682,8 +1722,9 @@ let solution t lits =
 
    NOT USABLE as it stands: "Logging and excluding a solution with 'solx' is only
    possible if a preserved set is specified". VeriPB 3.0 ties solution exclusion to the
-   `preserved` machinery, which this project has no encoding for. Nothing in M1 emits
-   it; enumeration (and M5's `soli`, untested here) will have to face this. *)
+   `preserved` machinery, which this project has no encoding for. Nothing in lib/ or
+   bin/ calls it (test_proof.ml does, to pin the refusal); enumeration will have to face
+   this. Branch and bound uses `soli` ([improving]) instead. *)
 let solution_excluding t ~origin lits =
   if t.null then fresh t ~origin
   else
@@ -1724,7 +1765,7 @@ let improving t ~origin lits =
   if t.null then fresh t ~origin
   else
     let id = t.next_id + 1 in
-    (* "@c<id> soli <lits> ;" (D-0145, W6). *)
+    (* "@c<id> soli <lits> ;" (D-0145). *)
     let b = line_buf t in
     (match !e2e_soli with
     | None -> add_label b id
@@ -1743,7 +1784,9 @@ let improving t ~origin lits =
       Itbl.replace t.objective id { origin = (fun () -> origin); level = t.level };
     id
 
-(* Objective update (M5). [diff] gives the change, [`New] the whole new objective. *)
+(* Objective update (M5). [`Diff] gives the change, [`New] the whole new objective.
+   Nothing in lib/ or bin/ calls it: branch and bound emits no `obju` (M5-T1), and
+   test_proof.ml asserts that no run can reach it. *)
 let objective_update t ~origin kind terms =
   if t.null then fresh t ~origin
   else
@@ -1833,10 +1876,11 @@ type verdict =
       upper_assignment : Lit.t list;
     }
   | No_conclusion
-(* M6-T12. `conclusion NONE`: the run was stopped (--time-limit, M6-T9) and claims
-   nothing. veripb 3.0.2 accepts it as "VERIFIED NO CONCLUSION". It cites no id, so
-   it discharges nothing: the caller retires what is live first, and the I-X2 audit
-   then runs exactly as it does for a finished run. *)
+(* `conclusion NONE`: the run was stopped (--time-limit, M6-T9) and claims nothing
+   (M6-T12 made it a verdict of its own, so a stopped search concludes in one call).
+   veripb 3.0.2 accepts it as "VERIFIED NO CONCLUSION". It cites no id, so it discharges
+   nothing: the caller retires what is live first, and the I-X2 audit then runs exactly as
+   it does for a finished run. *)
 
 (* [output NONE] is required by the checker before [conclusion]; the doc's rule table
    does not mention it. NONE is the honest guarantee: we do not emit an output
@@ -1845,7 +1889,7 @@ let conclusion ?(output = "NONE") ?(audit = true) t v =
   (* [sol] first: it is a derivation rule and [output] must be the line immediately
      before [conclusion] (SPEC section 4.3).
 
-     M7-T6/D-0070: EVERY [Sat], including one with no literals. The [_ :: _] guard this
+     EVERY [Sat], including one with no literals (M7-T6, D-0070). The [_ :: _] guard this
      line used to carry was a mechanical carry-over from the shape M1-T18 replaced --
      [Sat [] -> "conclusion SAT"] against [Sat lits -> "conclusion SAT : <lits>"], where
      the empty case meant "no assignment to inline" and skipping it was right. It was
@@ -1862,11 +1906,11 @@ let conclusion ?(output = "NONE") ?(audit = true) t v =
      exactly when the .opb has none either and the empty assignment is the complete one.
      test/unit/test_proof.ml's control lane asserts the non-empty side rather than
      leaving that as an argument. *)
-  (* M9-no-proof-T2: the null writer has nothing to end, nothing to flush and nothing
+  (* The null writer has nothing to end, nothing to flush and nothing
      to audit; it only stops accepting rules, as a finished proof does. *)
   if t.null then t.finished <- true
   else (
-    (* M6-T24: the three lines are one step to an interruption, which then finds
+    (* The three lines are one step to an interruption (M6-T24), which then finds
        [finished] set and has nothing left to write. *)
     enter t;
     (match v with Sat lits -> solution t lits | _ -> ());
@@ -1896,9 +1940,9 @@ let conclusion ?(output = "NONE") ?(audit = true) t v =
         rule t (Buffer.contents b));
     rule t "end pseudo-Boolean proof";
     t.finished <- true;
-    (* The fourth write to [t.oc], and the only one that is not a line: it is where the
-       buffered proof actually reaches the kernel, so on a proof of any size it is the
-       single largest emission cost in the whole of [search]. It bypasses [line] by
+    (* The one write to [t.oc] that is not a line (see the emission clock's list): it is
+       where the buffered proof actually reaches the kernel, so on a proof of any size it
+       is the single largest emission cost in the whole of [search]. It bypasses [line] by
        construction and is accumulated here rather than left out. It adds no line, so
        [emit_lines] does not move. *)
     (if not !emit_clock then flush t.oc
@@ -1909,7 +1953,7 @@ let conclusion ?(output = "NONE") ?(audit = true) t v =
     leave t;
     if audit then check_audit t)
 
-(* M6-T24 (D-0225). The conclusion of a run that was stopped: `BOUNDS <floor> <best>` on
+(* The conclusion of a run that was stopped (M6-T24, D-0225): `BOUNDS <floor> <best>` on
    an optimisation run, `BOUNDS <floor> INF` when it has no incumbent yet, and NONE on a
    satisfaction run, which stops at its first solution and so has nothing in hand. The
    lower bound cites no id: the .opb implies it. *)
