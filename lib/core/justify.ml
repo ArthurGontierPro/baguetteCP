@@ -289,25 +289,14 @@ let () =
           !Explanation.reforced_emit)
 
 (* An integer mix and its finaliser, which hash the claim index's packed keys ([Claims])
-   and the [Combine] shapes ([Shapes]) without allocating (M11-complexity-T5, D-0145).
-   [lit_hash] hashes one literal, its name with [String.hash], the C string hash, which
-   allocates nothing and returns what [Hashtbl.hash] did without its generic dispatch
-   (M20-pernode-T4, D-0236: a name is hashed once where it was hashed per use). Nothing
-   in lib/, bin/ or test/ calls [Justify.lit_hash] today; explanation.ml has its own. *)
+   and the [Combine] shapes ([Shapes]) without allocating (M11-complexity-T5, D-0145). A
+   literal's hash is [Explanation.lit_hash]; this module's copy had no caller and was
+   removed (D-0254). *)
 let mix h x = (h * 31) + x
 
 let finish h =
   let h = h * 0x2545F4914F6CDD1D in
   h lxor (h lsr 29) land max_int
-
-let lit_hash (l : Lit.t) =
-  let k, x, v =
-    match l.Lit.v with
-    | Lit.Ge (x, v) -> (0, x, v)
-    | Lit.Eq (x, v) -> (1, x, v)
-    | Lit.Bit (x, i) -> (2, x, i)
-  in
-  mix (mix (mix (String.hash x) v) k) (Bool.to_int l.Lit.positive)
 
 (* A claim that is already on the page: the id of the line stating it and the level that
    line was written at. See the module header's "claim index". *)
