@@ -19,7 +19,6 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M22-review-bugs: gcc repeated cover, rejected proof on the default (D-0260) | `lib/core/prop/gcc.ml`, the gcc entries of `lib/flatzinc/compile.ml` and `lib/flatzinc/builder.ml`, `mznlib/fzn_global_cardinality*.mzn`, gcc tests in `test/unit/`, new `test/models/gcc_*dupcover*` and their expected outputs | agent-gccdup (`wave105-gccdup`) | 2026-11-27 |
 
 ## Cross-session requests
 
@@ -728,7 +727,16 @@ section 1. Shares are inclusive, of the whole run.
 
 | M18-coverage-T5 (the ordering globals) | agent-lex (`wave85-lex`) | 2026-11-27 | **D-0239 [AUTONOME].** mznlib only: `lex_lesseq`/`lex_less`, int and Bool, as four linear rows per position over std's chain flag; 26 -> 27 complete of 92 with proof, nodes/s x1.02 to 1.04; precedence globals keep std's (T13 added); `increasing` already native. |
 | M18-coverage-T14 (gcc with variable counts) | agent-gccvar (`wave93-gccvar`) | 2026-11-27 | **D-0247 [AUTONOME].** mznlib only in the kept route: a `global_cardinality` whose counts are not all fixed goes to std's count decomposition (`4c5df61`), constant counts and the closed form stay native; +3 verified complete with proof over the 40 Challenge instances it reaches, none lost. Route (a), rule C over holes, built, verified and dropped (`d94f08f`, reverted `fa32d4b`). Not merged |
+| M22-review-bugs (gcc repeated cover, rejected proof on the default) | agent-gccdup (`wave105-gccdup`) | 2026-11-27 | **D-0260 [AUTONOME].** No answer was wrong (14 000 grid runs against a brute-force oracle and Gecode). Cause: gcc.ml's HIGH-row memo keyed on the cover VALUE, so rule (a) justified one count's pruning by another count's row (since `ecae5c7`, main `1e6363c` 2026-10-02). Fix `9b5ef85`: `Builder.merge_gcc_cover_repeats` keeps one occurrence per value and ties the later counts by `int_lin_eq` rows in the model; compile.ml refuses a repeated cover. Tests `628c91b`. Not merged. |
+
 ## Handoff notes
+
+### 2026-11-27 (agent-gccdup, `wave105-gccdup`, D-0260): a repeated gcc cover value, rejected proof fixed at the front end, not merged
+
+No answer was ever wrong; the proofs of a gcc whose cover repeats a value were rejected when two counts of one value shared
+gcc.ml's HIGH-row memo (keyed on the value). `Builder.normalise_gcc` now merges the cover (ties in the .opb, `9b5ef85`) before
+`split_gcc_repeats`, and compile.ml refuses a repeated cover that reaches it. Only the two D-0255 `gcc_low_up_closed_dupcover_src_*`
+models change bytes (2 rows fewer); a tie is refused under `--e2e`. Material in `/cluster/arthur/baguette-results/gccdup/`.
 
 ### 2026-11-27 (agent-series2, `wave74-series2`, D-0227): the four-arm series on main `6c9cf97`, not merged
 
