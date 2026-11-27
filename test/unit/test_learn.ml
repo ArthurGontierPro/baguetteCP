@@ -596,7 +596,13 @@ let test_minimisation_rules () =
     let off, d0, o0, p0 = run_min Learn.Min_off src in
     let root, d1, o1, p1 = run_min Learn.Min_root src in
     let rc, d2, o2, p2 = run_min Learn.Min_rec src in
+    let lc, d3, o3, p3 = run_min Learn.Min_local src in
     let w0 = learned_lits off and w1 = learned_lits root and w2 = learned_lits rc in
+    let w3 = learned_lits lc in
+    check
+      (Printf.sprintf "T6 %s: local sits between root and rec (%d <= %d <= %d)" name w2 w3
+         w1)
+      (w2 <= w3 && w3 <= w1);
     check (Printf.sprintf "T6 %s: the scene learns (off: %d literals)" name w0) (w0 > 0);
     check
       (Printf.sprintf "T6 %s: root %s the learned literals (%d -> %d)" name
@@ -609,8 +615,9 @@ let test_minimisation_rules () =
          w1 w2)
       (if rec_shrinks then w2 < w1 else w2 = w1);
     check
-      (Printf.sprintf "T6 %s: the three settings give the same answer" name)
-      (off.r_outcome = root.r_outcome && root.r_outcome = rc.r_outcome);
+      (Printf.sprintf "T6 %s: the four settings give the same answer" name)
+      (off.r_outcome = root.r_outcome
+      && root.r_outcome = rc.r_outcome && rc.r_outcome = lc.r_outcome);
     List.iter
       (fun (tag, (r : run), dir, opb, pbp) ->
         check
@@ -618,7 +625,12 @@ let test_minimisation_rules () =
           (r.r_audit_error = None);
         expect_accepted ~title:(Printf.sprintf "T6 %s %s" name tag) ~dir ~opb ~pbp;
         cleanup dir [ opb; pbp ])
-      [ ("off", off, d0, o0, p0); ("root", root, d1, o1, p1); ("rec", rc, d2, o2, p2) ]
+      [
+        ("off", off, d0, o0, p0);
+        ("root", root, d1, o1, p1);
+        ("rec", rc, d2, o2, p2);
+        ("local", lc, d3, o3, p3);
+      ]
   in
   scene "ne_conflict_sat" ne_conflict_src ~root_shrinks:true ~rec_shrinks:false;
   scene "backjump_unsat" backjump_src ~root_shrinks:false ~rec_shrinks:true
