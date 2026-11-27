@@ -32272,3 +32272,129 @@ pass gained the holder counts and the outsider test. About 200 lines, a third of
 [AUTONOME] Kept: no search, proof or answer changes, so no default behaviour changes. Revert: `git revert` of
 `fec0985`, `74782b6`, `d994b47`, `3ab3e34`, `6217a67`, the header commit `a93c84c` and the test commit
 `0f9240e` (`41861a6` is already undone by `0b216c7`; the e2e scene goes with `3ab3e34`).
+
+## D-0243  [AUTONOME] M20-pernode-T4 on the engine's wake path: the static wake index as flat int arrays walked without closures, the default advisor answered without its call, the trigger mask off a byte per id, and a memo of positive answers in `check_attribution`. Same trees, byte-identical artefacts; instructions per node without proof -2.0 % on elitserien handball12, -2.2 % on tppv circ14, -3.0 % on costas13, -5.0 % on qr2
+
+**Status**: DONE on `wave89-wakes` (agent-wakes, 2026-11-27), not merged. Base: main `cb727bc`, release binary
+`ef11db7f` (agent-hall's `new.exe`, D-0242). Final: `a2fdeb2`, release binary `1ee55030`. Touches
+`lib/core/engine.ml` and `test/unit/test_engine.ml` only. Node fataepyc-06 at load 14 to 21 (other sessions'
+runs), so the cycle counts below are noisy and the instruction counts are the measurement. Scripts, binaries'
+hashes, the per-run `md5`/`instr`/`cycles` files and the profiles: `/cluster/arthur/baguette-results/wakes/`.
+
+### 1. Context and method
+
+agent-hall's cross-session request (WORKLOG, D-0242): after D-0242, `Engine.watchers_of_new_entries` was 6.1 %
+of handball12's samples, 8.3 % of tppv circ14cnonbal, 7.6 % of circ8bbal, 9.7 % of costas13 and 13.5 % of qr2,
+two thirds of it in its `List.iter` over the static watcher list, and `Engine.check_attribution` about 1 %
+(`in_scope` 0.73). The contract was the same search trees and artefacts: the same wake order, the same woken
+set, the attribution check as strong as before.
+
+Method of D-0236 and D-0242: `perf stat -e instructions:u,cycles:u` at a fixed node budget
+(`BAGUETTE_NODE_LIMIT`), per node = (I(N) - I(1)) / (nodes - 1), the 1-node run taken with the base binary.
+Budgets: handball12 3 000 nodes, tppv circ14cnonbal 2 000, tppv circ8bbal 3 000, costas13 3 000 (it completes
+in 1 504), qr2 20 000; agent-hall's `.fzn` (`/scratch/arthur/hall-runs/fzn`). Every step was run with and
+without `--proof`, and at every step the md5 of `.opb`, `.pbp` and stdout and the counters nodes, conflicts,
+learned, props, eff, wakes, masked, vetoed, advised and seeded were equal to the base binary's on all five.
+Profiles with `perf record --call-graph fp` on the `baguette-fp` switch, one at a time.
+
+### 2. What the walk paid
+
+Per trail entry, the walk iterated the variable's static watcher list (an `int list`, newest first) through
+`List.iter` and a closure, which called the `wants` closure (veto, trigger mask through `trigger_of`, then
+`advises`, which calls the instance's `inst_advise` closure) and a local recursive `flush_above` closure for the
+merge with the self-watching ids. On handball12 the static wakes are almost all to model propagators whose
+advisor is `Propagator.advise_always` (2 600 wakes per node, 5 % masked); on qr2 they are learned PB rows whose
+advisor is real work (Retention's gate around it). `check_attribution` allocated a closure per call
+(`watches`) and `in_scope` another per new entry (its local `go`).
+
+### 3. The steps, each measured (instructions per node against the base, without / with proof)
+
+| step | handball12 | circ8bbal | circ14cnonbal | costas13 | qr2 | kept |
+|---|---|---|---|---|---|---|
+| s1 `wake_static` an int array per variable plus a length, walked from the last cell down; the merge two loops; `wants` top level; `advises` skips `advise_always` | -1.52 / -0.36 | -2.37 / -0.70 | -1.98 / -0.52 | -2.13 / -0.08 | -3.44 / -2.02 | yes |
+| s2 = s1 + `in_scope`'s binary search top level (no closure) | -1.52 / -0.34 | -1.95 / -0.75 | -1.63 / -0.48 | -2.20 / +0.02 | -3.55 / -2.11 | yes |
+| s3 = s2 + `attr_ok`, a memo of positive answers in `check_attribution` | -1.62 / -0.38 | -2.15 / -0.82 | -1.77 / -0.54 | -2.18 / +0.02 | -3.74 / -2.22 | yes |
+| s4 = s3 + the walk's result in a module-level buffer instead of a list | -1.28 / -0.32 | -2.09 / -0.67 | -2.01 / -0.57 | -1.62 / +0.11 | -2.75 / -1.78 | **withdrawn** |
+| s5 = s3 + the trigger mask off `trig_bits`, one byte per id | -1.88 / -0.43 | -2.43 / -0.88 | -2.06 / -0.80 | -2.79 / -0.17 | -4.42 / -2.61 | yes |
+| s5 with the mask factored into a function `wakes_id`, not inlined | -1.44 / -0.34 | -1.89 / -0.71 | -1.55 / -0.62 | -1.80 / +0.15 | -3.20 / -1.92 | as `[@inline]` |
+| `wakes_id` `[@inline]` | -1.88 / -0.43 | -2.43 / -0.88 | -2.06 / -0.80 | -2.80 / -0.17 | -4.46 / -2.62 | yes |
+| `wants` and `advises` `[@inline]` (final, `1ee55030`) | **-2.01 / -0.46** | **-2.61 / -0.98** | **-2.23 / -0.86** | **-3.03 / -0.25** | **-4.95 / -2.90** | yes |
+
+s1 to s3 differ by noise on some rows: the step from s1 to s2 is within +-0.4 %, and s3's memo pays 0.1 to 0.2 %
+on four of five instances and nothing on costas13. It was kept because its cost in clarity is one field and one
+line in `purge`, and because it does not weaken the check (section 4). The buffer of s4 cost 0.3 to 1 % more
+than the list it replaced (a bounds check and a module-level reference per wake against a minor-heap cons), so
+it was withdrawn before its commit.
+
+Absolute, base `ef11db7f` -> final `1ee55030`, per node:
+
+| instance | instructions, no proof | instructions, proof | cycles, no proof | cycles, proof |
+|---|---|---|---|---|
+| elitserien handball12 | 11.87 M -> 11.63 M | 55.70 M -> 55.45 M | 5.68 M -> 5.43 M | 27.45 M -> 28.08 M |
+| tppv circ14cnonbal | 6.45 M -> 6.31 M | 18.34 M -> 18.18 M | 3.09 M -> 3.08 M | 9.96 M -> 9.42 M |
+| tppv circ8bbal | 4.50 M -> 4.39 M | 14.28 M -> 14.14 M | 2.32 M -> 2.21 M | 7.56 M -> 8.24 M |
+| costas13 | 2.90 M -> 2.81 M | 8.93 M -> 8.91 M | 1.34 M -> 1.28 M | 4.01 M -> 4.39 M |
+| qr2 | 890 k -> 846 k | 1 595 k -> 1 549 k | 382 k -> 380 k | 683 k -> 712 k |
+
+The cycle columns are noise at this resolution under the node's load: `80113bed` and the final `1ee55030` are the
+same code (the second adds the header comment) and their two series differ by up to 7.4 % in cycles per node
+and 0.05 % in instructions. They say nothing finer than "no regression".
+
+### 4. Why each rule gives the same answer (also in `engine.ml`'s header)
+
+- (a) The array of `wake_static.(x)` is appended to in the order the list was prepended to, so walking it from
+  its last cell down visits the list's order. `purge` filters it in place, keeping order, as `List.filter`
+  did. The merge loop is `flush_above` unrolled: the self-watching ids above each static id, then the rest.
+- (b) `Propagator.advise_always` is `fun _ _ -> true` and touches nothing, so answering `true` for it without
+  the call changes no answer, no counter and no `declined` record (only a `false` records one).
+- (c) `trig_bits.(id)` is written from `triggers.(id)` at the two places that write `triggers` (`create`,
+  `add`) and grown with it, filled with `wake_on_any`'s byte as `room` fills `triggers`; an id past its end
+  reads `3`, `wake_on_any`, as `trigger_of` answers. Used in the walk, the seed and the debug record of
+  unasked slots.
+- (d) `attr_ok.(x) = id` is written only after `in_scope t id x` answered yes. A live id's scope never
+  changes (it is set by `create`/`add`), and the one place that changes a scope, `purge` emptying a removed
+  id's, resets `attr_ok` on every variable of that scope. So a memo hit is an answer the binary search gave
+  against the scope that is still the id's, and the check refuses exactly what it refused. The first half of
+  the check (`e.prop <> id`) is untouched and runs before the memo is read.
+
+### 5. Tests
+
+`test_engine.ml` gains two (`test_d0243_*`): the array index against the list's specification (the live
+readers of a variable in ascending id order, minus those a hole masks) over 30 random engines through
+removals, purges and additions past the first array's capacity, 1 200 probes; and the attribution memo, read
+back directly, refusing another instance on a memoised variable and refusing the memoised instance once
+`purge` has emptied its scope. Mutations performed: dropping `purge`'s reset of the memo fails the last two
+memo checks; walking the array upwards fails the new test and the two M1-T24 wake-order checks.
+
+### 6. Verification
+
+All in the worktree at `a2fdeb2`, dev binary `a055ef42`, release `1ee55030`:
+
+- `scripts/check_fmt.sh` clean, `scripts/check_test_widths.py` no wide domain.
+- `dune runtest --root . --force` under `ulimit -v 4000000`: rc 0, 5 495 ok (agent-hall's run on the base:
+  5 489; the six new checks are D-0243's), 0 FAIL, peak RSS 155 MB.
+- `scripts/run_model_tests.sh`: 259 passed, 0 failed, every proof accepted by veripb.
+- `scripts/check_determinism.sh`: 259 models, `.opb`/`.pbp`/stdout identical across two runs.
+- The 259 test models under both encodings (default and `--bits-above none`), `--proof`, release `1ee55030`
+  against agent-hall's sums for `ef11db7f` (the base): exit code, `.opb`, `.pbp` and stdout equal on all 518.
+- `scripts/diff_lane.sh --tier all -j 8`: 347 of 347 runs equal the reference. `--debug`: 333 of 333 equal.
+  Both under `BAGUETTE_MEM_CAP_KB=33554432`, scripts/README.md's documented exception for openshop's checker.
+- `scripts/scaling_lane.sh -j 8`: ok, every line within its threshold.
+
+### 7. What is left
+
+- The walk itself after this: on qr2 the advisors of the learned PB rows (Retention's gate closure around the
+  row's own advisor) are the larger part of `watchers_of_new_entries`' inclusive share; that is Retention's
+  and Pb's code, not the walk's.
+- `Analysis.check_attribution` (1.76 % of handball12 in agent-hall's profile) still asks `List.exists` over
+  `Engine.vars_of`; `Engine.in_scope` answers the same question by binary search without allocating since
+  this record. Cross-session request to the owner of `lib/core/analysis.ml` (agent-minim holds it).
+- `docs/INVARIANTS.md` I-T4 still says the attribution check costs "one hashtable lookup per new entry"; it
+  has been a binary search since D-0138 and is a memo read on a hit since this record. Not in this task's
+  files.
+
+### 8. Decision and revert
+
+[AUTONOME] Kept: no search, proof or answer changes, so no default behaviour changes. Revert: `git revert` of
+`a2fdeb2`, `9479388`, `cb86100` (the trigger bytes and the tests), `3e10deb` (the attribution memo) and
+`5f09fee` (the array index), in that order.
