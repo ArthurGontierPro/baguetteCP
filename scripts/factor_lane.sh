@@ -65,7 +65,8 @@
 # jr63's --cdcl proof, 2.3 GB, as on openshop in the diff lane), BIN (the solver, default _build_release/default/bin/main.exe: D-0207 measured the release
 # build, `make release`; `make factor` builds it), MZN_BIN (the MiniZinc 2.10.1 bundle's bin/,
 # for fzn-gecode and fzn-chuffed), BAGUETTE_MEM_CAP_KB (ulimit -v per run, default 4000000),
-# VERIPB (as checker.sh). The node runs it in about five minutes at -j 8 (D-0256).
+# VERIPB (as checker.sh). On fataepyc-06 it takes 6.5 to 8 minutes at -j 8 (D-0256),
+# most of it the longest chain: jr63 with --cdcl and proof, then the check of its 2.3 GB proof.
 set -u
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 FD="$ROOT/bench/factor"
@@ -214,8 +215,9 @@ while IFS=$'\t' read -r id fam blim ref rlim bf rf; do
 done < "$FD/plan.tsv"
 [ "${#LINES[@]}" -gt 0 ] || die "no plan line selected"
 
-# The proof configurations first (the longest runs), then the others, then the references.
-for c in pf cdpf np cdnp ref; do
+# The longest runs first: --cdcl with proof (the largest proofs), the default with proof, then
+# the runs without proof, then the references.
+for c in cdpf pf cdnp np ref; do
   for l in "${LINES[@]}"; do
     IFS=$'\t' read -r id fam blim ref rlim bf rf <<< "$l"
     while [ "$(jobs -rp | wc -l)" -ge "$PAR" ]; do wait -n; done

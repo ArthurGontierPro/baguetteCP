@@ -262,4 +262,5 @@ Run it at each Challenge series and add its row to HISTORY's per-node factor tab
 reference (`--record`) after a merge that moves the factor on purpose, in its own commit. Every run
 is under `systemd-run --user --scope -p MemoryMax=32G`, `ulimit -v` and a timeout, with its PID in
 `OUTDIR/runs/<run>/pid` while it runs and the lane's in `OUTDIR/lane.pid`. Instructions are
-load-independent to well under 1 %, so it runs on a loaded node; it takes about five minutes at -j 8.
+load-independent (two runs at loads 43 and 10 differed by at most 0.02 % per run, D-0256), so it
+runs on a loaded node. It takes 6.5 to 8 minutes at -j 8 and peaks at 4.3 GB (the checker on jr63).

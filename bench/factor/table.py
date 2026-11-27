@@ -226,7 +226,7 @@ def main():
                 old = float(d["kinstr_per_unit"])
                 new = r["kinstr_per_unit"]
                 same_unit = d.get("unit") == r["unit"]
-                ch = ("%+.1f %%" % (100.0 * (new - old) / old)) if new is not None and same_unit else \
+                ch = ("%+.2f %%" % (100.0 * (new - old) / old)) if new is not None and same_unit else \
                     "unit changed (%s -> %s)" % (d.get("unit"), r["unit"])
                 L.append("  %-11s %-5s %s/%s now, %s recorded: %s; factor %s -> %s"
                          % (r["id"], r["config"], kfmt(None if new is None else new * 1000),
