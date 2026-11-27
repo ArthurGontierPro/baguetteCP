@@ -1,0 +1,21 @@
+% M18-coverage-T5 (D-0239): flattened by MiniZinc 2.10.1 with baguette's mznlib from
+% mznlib/test/lex_src_length_sat.mzn.
+% Arrays of different lengths: x (three cells) <lex y (two cells) holds only through a
+% strict position, since x is the longer; x <=lex z (z of four cells) may tie on all three.
+
+
+array [1..2] of int: X_INTRODUCED_32_ = [-1,1];
+array [1..3] of int: X_INTRODUCED_68_ = [-1,-1,-1];
+var 0..2: X_INTRODUCED_17_;
+var 0..2: X_INTRODUCED_18_;
+var 0..2: X_INTRODUCED_19_;
+var 0..2: X_INTRODUCED_20_;
+var 0..2: X_INTRODUCED_24_;
+array [1..3] of var int: x:: output_array([1..3]) = [X_INTRODUCED_19_,X_INTRODUCED_17_,X_INTRODUCED_18_];
+array [1..2] of var int: y:: output_array([1..2]) = [X_INTRODUCED_19_,X_INTRODUCED_20_];
+array [1..4] of var int: z:: output_array([1..4]) = [X_INTRODUCED_19_,X_INTRODUCED_17_,X_INTRODUCED_18_,X_INTRODUCED_24_];
+constraint int_lin_le([-1,1],[X_INTRODUCED_20_,X_INTRODUCED_17_],-1);
+constraint int_lin_le([-1,1],[X_INTRODUCED_17_,X_INTRODUCED_20_],2);
+constraint int_lin_le(X_INTRODUCED_32_,[X_INTRODUCED_17_,X_INTRODUCED_20_],1);
+constraint int_lin_le(X_INTRODUCED_68_,[X_INTRODUCED_19_,X_INTRODUCED_17_,X_INTRODUCED_18_],-3);
+solve  satisfy;
