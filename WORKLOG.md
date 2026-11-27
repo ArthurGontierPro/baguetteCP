@@ -19,6 +19,7 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
+| M18-coverage-T12 and the exit 6 bucket (M22-review-T5) | `tools/compare/challenge_globals.py`, `scripts/corpus_run.sh` | agent-census, wave95-census | 2026-11-27 |
 
 ## Cross-session requests
 
