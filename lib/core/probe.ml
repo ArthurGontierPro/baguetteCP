@@ -176,6 +176,7 @@ type census = {
   mutable cpu : float;  (** seconds of CPU, for the census only, never for a choice *)
   mutable budget_hit : bool;
   mutable refuted : bool;
+  mutable stopped : bool;  (** the search's stop fired during the pass *)
   mutable units : Writer.cid list;
       (** the level-0 unit clauses written, newest first: the tests flip them *)
 }
@@ -191,9 +192,10 @@ let report c =
   if stats_enabled () then
     Printf.eprintf
       "probe: candidates=%d probed=%d failed=%d passes=%d runs=%d cpu=%.3f budget_hit=%b \
-       refuted=%b\n\
+       refuted=%b stopped=%b\n\
        %!"
       c.candidates c.probed c.failed c.passes c.runs c.cpu c.budget_hit c.refuted
+      c.stopped
 
 let propagate ~stop ~poll_runs engine store =
   match
@@ -272,10 +274,9 @@ let probe_one ~engine ~store ~(ctx : Justify.ctx) ~trace ~stop ~poll_runs ~hooks
 
 (* The pass. Called by [Search.search_core] at level 0, before the first decision, under
    [mode () = Root] only. *)
-let root ~engine ~store ~(ctx : Justify.ctx) ~trace ~stop ~poll_runs ~hooks : result =
+let rec root ~engine ~store ~(ctx : Justify.ctx) ~trace ~stop ~poll_runs ~hooks : result =
   let t0 = Sys.time () in
   let runs0 = !Engine.runs in
-  let budget = budget () and cap = width_cap () in
   let census =
     {
       candidates = 0;
@@ -286,6 +287,7 @@ let root ~engine ~store ~(ctx : Justify.ctx) ~trace ~stop ~poll_runs ~hooks : re
       cpu = 0.;
       budget_hit = false;
       refuted = false;
+      stopped = false;
       units = [];
     }
   in
@@ -298,6 +300,15 @@ let root ~engine ~store ~(ctx : Justify.ctx) ~trace ~stop ~poll_runs ~hooks : re
     r
   in
   if Store.level store <> 0 then invalid_arg "Probe.root: called above level 0";
+  (* A stop during the pass still reports what it spent, then leaves as the search's. *)
+  try pass ~engine ~store ~ctx ~trace ~stop ~poll_runs ~hooks census runs0 ~finish
+  with Stopped ->
+    census.stopped <- true;
+    ignore (finish Fixpoint : result);
+    raise Stopped
+
+and pass ~engine ~store ~ctx ~trace ~stop ~poll_runs ~hooks census runs0 ~finish =
+  let budget = budget () and cap = width_cap () in
   match propagate ~stop ~poll_runs engine store with
   | Engine.Conflict c -> finish (Refuted (hooks.close_root c))
   | Engine.Fixpoint -> (
