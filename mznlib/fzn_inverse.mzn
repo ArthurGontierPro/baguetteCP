@@ -1,4 +1,6 @@
 % M7-T28 (docs/DECISIONS.md D-0146 section 7, D-0151 section 2): inverse, kept whole.
+% M7-T28 is the task that keeps whole, in payoff order, the decomposed globals that
+% killed the search on the Challenge instances (D-0122's census).
 %
 % MiniZinc 2.10.1's std/fzn_inverse.mzn is `f[i] in index_set(invf) /\ invf[f[i]] = i` and
 % the mirror, an array_var_int_element per position, which baguette's subset does not

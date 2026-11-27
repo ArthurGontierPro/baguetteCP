@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """Search-heavy differential fuzz: random 3-SAT near the threshold and small integer
 optimisation problems. Same checks as fuzz.py (Gecode answer, VeriPB on baguette's proof,
-Gecode re-check of baguette's solution). Usage: fuzz2.py OUTDIR SEED N [extra flags]"""
+Gecode re-check of baguette's solution), whose helpers it loads, so FUZZ_BIN and the outputs
+are fuzz.py's: OUTDIR/bad/ for every disagreement, OUTDIR/fuzz.msc, one tally line on stdout.
+Exit 0 whatever was found; a missing argument stops it on a Python exception (status 1). Run it
+on a node, as fuzz.py. Usage: fuzz2.py OUTDIR SEED N [extra flags]"""
 import os, random, sys, shutil, re, collections
 import importlib.util
 

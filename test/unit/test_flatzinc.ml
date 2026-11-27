@@ -892,6 +892,61 @@ let test_width_cap_boundary () =
     ~src:"var 0..9: z;\nconstraint int_abs(-4, z);\nsolve satisfy;\n";
   ()
 
+(* M22-review-T3: the unit test for M22-review-T1 (docs/reports/2026-11-23-code-review.md
+   section 1.1). [Builder]'s [lin_terms] moves a constant operand of [int_lin_*] to the
+   right-hand side; it did so with an unchecked [r - coeff * n], so 2^61 * 4 wrapped to 0,
+   the row became `x <= 0`, and the run printed `x = 0` with a proof veripb verified. The
+   fold now goes through [Checked]. Three cases: the overflow the report found, refused by
+   the builder with the limit named; a fold that does not overflow but leaves the
+   right-hand side above [Checked.limit], refused by compile.ml's cap; and two large
+   products that cancel exactly, accepted with the right row. The constants are large, the
+   declared domains are not. *)
+let test_m22t3_constant_fold () =
+  let limit = Baguette_core.Checked.limit in
+  (* 2^61 * 4 = 2^63 is one past max_int's range: the fold overflows. *)
+  reject "M22-T3: a constant operand whose product overflows is refused by the builder"
+    ~line:2
+    ~src:
+      "var 0..1: x :: output_var;\n\
+       constraint int_lin_le([2305843009213693952, 1], [4, x], 0);\n\
+       solve satisfy;\n"
+    ~needles:
+      [
+        "int_lin_le";
+        "2305843009213693952";
+        "arithmetic limit";
+        string_of_int limit;
+        "Rescale the coefficients";
+      ];
+  (* 2^59 * 1 folds to a right-hand side of -2^59 without overflowing, so the builder
+     accepts it; |rhs| = 2^59 > Checked.limit = max_int / 16, so compile's cap refuses. *)
+  reject_compile
+    "M22-T3: a fold that fits but leaves |rhs| above Checked.limit is refused by the cap"
+    ~line:2
+    ~src:
+      "var 0..1: x :: output_var;\n\
+       constraint int_lin_le([576460752303423488, 1], [1, x], 0);\n\
+       solve satisfy;\n"
+    ~needles:[ "arithmetic limit"; Printf.sprintf "the limit is %d" limit ];
+  (* 2^60 * 2 - 2^60 * 2 = 0: each product is 2^61, inside the 63-bit range, and exact
+     arithmetic cancels them, so the row is x <= 0 and the model is accepted. *)
+  let cancel =
+    "var 0..1: x :: output_var;\n\
+     constraint int_lin_le([1152921504606846976, -1152921504606846976, 1], [2, 2, x], 0);\n\
+     solve satisfy;\n"
+  in
+  accepts_compile "M22-T3: large constant products that cancel are accepted" ~src:cancel;
+  match F.Error.catch (fun () -> F.Builder.of_string ~file:"<test>" cancel) with
+  | Error e ->
+      incr failures;
+      Printf.printf "FAIL M22-T3: the cancelling model was refused: %s\n"
+        (F.Error.to_string e)
+  | Ok m ->
+      check "M22-T3: the cancelling products fold to the row x <= 0"
+        (match List.map (fun (c : M.constr) -> c.M.k) m.M.constraints with
+        | [ M.Int_lin_le ([ (1, _) ], 0) ] -> true
+        | _ -> false)
+
 (* M7-T1: the compile-level half of the CONTROL, lifted out of [test_rejections] so it
    can be run under an explicit limit. Every assertion is the pre-M7 one, unchanged. *)
 let test_width_cap_compile () =
@@ -1855,6 +1910,7 @@ let () =
   test_search_strategies ();
   test_m7_t19 ();
   test_split_vs_min_proof_size ();
+  test_m22t3_constant_fold ();
   (* M7-T1. The inversion first -- it is the change -- then the control, which runs
      every pre-M7 assertion under an explicit --max-order-width=10000. *)
   test_width_cap_default ();

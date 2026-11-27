@@ -1,9 +1,20 @@
 (* inverse(f, g): f and g are mutually inverse functions, f[i] = j <-> g[j] = i, every
    value of f in g's index set and every value of g in f's. Reaches the solver as
    `baguette_inverse(f, fmin, g, gmin)` through mznlib/fzn_inverse.mzn (the two offsets
-   carry the index sets, FlatZinc arrays being 1-based); docs/DECISIONS.md D-0146 section 7
-   is its design record and D-0151 section 2 its implementation. Governed by docs/SPEC.md
-   3.2 (consistency) and 3.3 (explanations).
+   carry the index sets, FlatZinc arrays being 1-based).
+
+   Consistency level: CHECKING ([consistency] below), with arc consistency on every
+   channel pair as what one call actually achieves (section "Consistency level" below).
+   Governed by docs/SPEC.md 3.2 (consistency levels) and 3.3 (explanations). Proof shape:
+   every pruning is one `rup` against one pair of channel rows, so the family is
+   [Single_row] in the I-X10 classification table of test/unit/test_trace.ml (a pruning
+   that follows from one model constraint, whose trace line is RUP with nothing derived
+   ahead of it).
+
+   Design record: docs/DECISIONS.md D-0146 section 7, the model rows and both stages
+   written and probed on the checker before any code. Implementation: D-0151 section 2,
+   which built the two stages below (channel filtering here, then all_different over each
+   array from cited root lemmas).
 
    ---------------------------------------------------------------------------
    The .opb rows: std's semantics as CHANNEL clauses, no auxiliary
@@ -27,13 +38,13 @@
 
    One call restricts every value to the other index set, then makes the two arrays agree
    pairwise: j in dom(f_i) <=> i in dom(g_j), both ways. That is arc consistency on each
-   CHANNEL pair, which is not domain consistency of `inverse`: f and g are permutations,
-   and a value set no matching can cover is only seen by all_different's counting. The
-   tag is therefore [Checking] -- with every variable fixed, a pair that disagrees empties
-   one of its two variables -- and the stronger claim belongs to the all_different
-   instances compile.ml posts beside this one over f and over g (stage 2, below), which
-   are [Domain] on their own account. After the two passes no pair disagrees, so a second
-   call changes nothing (I-P2).
+   CHANNEL pair, which is not domain consistency of `inverse`, because f and g are
+   permutations and a value set no matching can cover is only seen by all_different's
+   counting. The tag is therefore [Checking], since with every variable fixed a pair that
+   disagrees empties one of its two variables. The stronger claim belongs to the
+   all_different instances compile.ml posts beside this one over f and over g (stage 2,
+   below), which are [Domain] on their own account. After the two passes no pair
+   disagrees, so a second call changes nothing (idempotence at the interface, I-P2).
 
    ---------------------------------------------------------------------------
    The proof: every pruning is ONE `rup`, its facts on its tail
@@ -42,25 +53,27 @@
    Removing i from g_j because j is not in dom(f_i): assume g_j = i and the facts that
    exclude j from f_i; CH'(j, i) pins f_i to j and the facts refute it. The facts are the
    WEAKEST bound that excludes j (f_i >= j+1 when j is below f_i's lower bound, f_i <= j-1
-   above its upper one), or, for an interior hole, the facts of the entry that punched it
-   (D-0075's technique, as element.ml and regular.ml do: a hole is not a literal, and its
-   own trace line fires once its facts are assumed). When i is a BOUND of g_j the claim is
-   the settled bound, so the tail also carries the bound fact that pins g_j to i. Measured
-   before the module existed (D-0146 section 7.2, bench/regular_spike/probe_inverse.sh):
-   a bound prune under a fact and an interior hole verify, a prune the facts do not
-   support is refused at the RUP wording.
+   above its upper one), or, for an interior hole, the facts of the entry that punched it.
+   A hole is not a literal, so a reason that reads one cites its remover's facts instead,
+   and the remover's own trace line fires once those facts are assumed (the rule D-0075
+   set after a reason that read a hole but stated only bounds was refused; element.ml and
+   regular.ml do the same). When i is a BOUND of g_j the claim is the settled bound, so
+   the tail also carries the bound fact that pins g_j to i. Measured before the module
+   existed (D-0146 section 7.2, bench/regular_spike/probe_inverse.sh): a bound prune under
+   a fact and an interior hole verify, a prune the facts do not support is refused at the
+   RUP wording.
 
    ORDER ON THE TAIL: the pinning bound facts first, the excluding facts LAST, so
    test/unit/test_mutation.ml's lane that drops a line's last literal drops the fact the
    whole argument rests on.
 
-   The justification is [Explanation.clause] of the claim and the negated facts -- the
-   trace line itself, deferred. No new constructor and no [Store.deriving_ahead]: every
-   line is RUP against one CH pair plus the lines already on the page, so the family is
-   [Single_row] under I-X10 (test/unit/test_trace.ml's table). Emptying a variable is
-   reported here, as a conflict on the facts of the pruning that would empty it plus the
-   variable's own fixing, never by [Store.apply]'s failing arm, whose derivation would be
-   the one pruning's and not the contradiction (element.ml's rule).
+   The justification is [Explanation.clause] of the claim and the negated facts, that is
+   the trace line itself, deferred. No new constructor and no [Store.deriving_ahead]:
+   every line is RUP against one CH pair plus the lines already on the page. Emptying a
+   variable is reported here, as a conflict on the facts of the pruning that would empty
+   it plus the variable's own fixing, never by [Store.apply]'s failing arm, whose
+   derivation would be the one pruning's and not the contradiction (the rule element.ml
+   states for its empty index).
 
    ---------------------------------------------------------------------------
    Stage 2: all_different strength, from root lemmas (not in this module)
@@ -71,8 +84,9 @@
    the pairwise rows `f_i <> j \/ f_k <> j`, which the .opb above does not state and must
    not (an implied row posted as a model row is a stronger model nothing checks). They are
    ROOT LEMMAS, `rup` from CH(i, j) and CH(k, j) at the start of the proof
-   ([Encoding.add_cited_lemma]), and alldiff names their ids through its lemma-row hook.
-   compile.ml posts that; this module does not know about it.
+   ([Encoding.add_cited_lemma]), and alldiff names their ids through its lemma-row hook
+   ([?lemma_rows] of [Alldiff.make]). compile.ml posts that; this module does not know
+   about it.
 
    The scan is O(|f| * |g|) per call over the live domains, and allocates only the reasons
    of the prunings it makes. *)
@@ -181,10 +195,11 @@ let remove store c v why =
         | Store.Conflict c -> raise (Found c)
         | Store.Changed | Store.Unchanged -> ())
 
-(* Every value of [c] outside [first, last] (the other array's index set) goes, on no facts:
-   the unit rows compile.ml posts for a declared domain that reaches outside (and, for a
-   constant outside, the empty row it posts). A live domain wholly outside is a conflict
-   on the one bound fact that puts it there, against the same unit row. *)
+(* Every value of [c] outside [first, last] (the other array's index set) goes, on no
+   facts, because the unit rows compile.ml posts for a declared domain that reaches
+   outside say so (and, for a constant outside, the empty row it posts). A live domain
+   wholly outside is a conflict on the one bound fact that puts it there, against the same
+   unit row. *)
 let restrict store c ~first ~last =
   match c with
   | Fixed k -> if k < first || k > last then raise (Found (conflict store []))

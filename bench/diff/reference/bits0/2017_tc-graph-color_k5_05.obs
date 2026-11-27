@@ -8,48 +8,48 @@ search bits/vars 137 vars
 search bitsrows/lines 274 lines
 search choices/groups 0 groups
 search limit.nodes 8001
-search limit.decisions 4006
-search limit.conflicts 3994
-search limit.learned 2298
+search limit.decisions 4026
+search limit.conflicts 3974
+search limit.learned 3974
 search limit.pb-learned 0
-search limit.db 2298
-search limit.maxdepth 39
+search limit.db 3213
+search limit.maxdepth 48
 search limit.incumbent none
-work limit.props 2450821
-work limit.eff 365061
-work limit.contra 3994
+work limit.props 2572570
+work limit.eff 332171
+work limit.contra 3974
 search limit.at node
 search limit.signal none
 search nodes/nodes 8001 nodes
-search decisions/decs 4006 decs
-search conflicts/nodes 3994 nodes
-search maxdepth/levels 39 levels
+search decisions/decs 4026 decs
+search conflicts/nodes 3974 nodes
+search maxdepth/levels 48 levels
 work exhausted/bool 0 bool 1 if
-search skipped/nodes 5 nodes
-search learned/cls 2298 cls
-work later/asks 165636 asks
-work cites/memos 59646 memos
+search skipped/nodes 37 nodes
+search learned/cls 3974 cls
+work later/asks 171715 asks
+work cites/memos 108682 memos
 search convertible/cls 1 cls
-search retention keep-all keep-all: 2298 added, 0 evicted, 2298 swept, 0 live, 4 duplicate, 2298 cited, 0 pinned
-search lbd 1:1,2:1,3:39,4:102,5:162,6:174,7:222,8:202,9:190,10:207,11:186,12:202,13:169,14:138,15:97,16:206
-search width 1:1,3:27,4:13,5:130,6:39,7:86,8:155,9:65,10:109,11:130,12:130,13:91,14:98,15:62,16:1162
+search retention tiered(core<=2,mid<=6,first=2000,inc=300,mid_every=10000) tiered(core<=2,mid<=6,first=2000,inc=300,mid_every=10000): 3974 added, 761 evicted, 3213 swept, 0 live, 21 duplicate, 3974 cited, 2 pinned, 1 reductions, 761 detached, 2 locked
+search lbd 1:1,2:6,3:55,4:153,5:289,6:299,7:362,8:346,9:336,10:365,11:338,12:319,13:280,14:238,15:201,16:386
+search width 1:1,2:1,3:33,4:20,5:162,6:71,7:137,8:206,9:137,10:183,11:194,12:178,13:141,14:139,15:99,16:2272
 search globals/units 1 units
 search glob-prune/prunes 1 prunes
 search glob-confl/confl 0 confl
-search cls-inst/inst 2297 inst
+search cls-inst/inst 3973 inst
 search cls-decl/cls 0 cls
-search cls-prune/prunes 19577 prunes
+search cls-prune/prunes 19098 prunes
 search pb-inst/inst 0 inst
 search pb-inst-no/rows 0 rows
 search pb-prune/prunes 0 prunes
 search pb-confl/confl 0 confl
-search minimised/lits 14686 lits
-search i-s4-cross/lines 35185 lines
-search pb-tried/confl 2298 confl
+search minimised/lits 14692 lits
+search i-s4-cross/lines 71094 lines
+search pb-tried/confl 3974 confl
 search pb-learned/rows 0 rows
-search pb-fallback/confl 2298 confl
+search pb-fallback/confl 3974 confl
 search pb-why first fallback reason: no PB row for instance bool2int
-work pb-whys/recd 64 recd 56 x
+work pb-whys/recd 64 recd 45 x
 search pb-steps/pivots 0 pivots
 search pb-convert/rows 0 rows
 search pb-stronger/rows 0 rows
@@ -63,37 +63,37 @@ search lvl-wide/confl 0 confl
 search lvl-incomp/confl 0 confl
 search lvl-empty/confl 0 confl
 search lvl-assert/confl 0 confl
-work learned_clause/inst 2297 inst 102.0 runs/node 2.45 eff/node
-work int_lin_ne/inst 819 inst 82.7 runs/node 7.01 eff/node
-work array_bool_and/inst 533 inst 31.8 runs/node 6.44 eff/node
-work int_lin_le_reif/inst 272 inst 29.3 runs/node 9.44 eff/node
-work int_eq_reif/inst 255 inst 26.4 runs/node 6.61 eff/node
-work bool_not/inst 270 inst 17.5 runs/node 5.88 eff/node
-work bool2int/inst 135 inst 11.1 runs/node 5.90 eff/node
-work int_lin_le/inst 9 inst 3.8 runs/node 1.88 eff/node
-work bool_clause/inst 151 inst 1.5 runs/node 0.01 eff/node
+work learned_clause/inst 3973 inst 122.2 runs/node 2.39 eff/node
+work int_lin_ne/inst 819 inst 82.4 runs/node 6.79 eff/node
+work array_bool_and/inst 533 inst 31.0 runs/node 5.81 eff/node
+work int_lin_le_reif/inst 272 inst 27.9 runs/node 8.24 eff/node
+work int_eq_reif/inst 255 inst 26.5 runs/node 5.51 eff/node
+work bool_not/inst 270 inst 16.0 runs/node 5.44 eff/node
+work bool2int/inst 135 inst 10.0 runs/node 5.43 eff/node
+work int_lin_le/inst 9 inst 3.8 runs/node 1.89 eff/node
+work bool_clause/inst 151 inst 1.8 runs/node 0.01 eff/node
 work int_le_reif/inst 16 inst 0.0 runs/node 0.01 eff/node
 work int_ne_reif/inst 9 inst 0.0 runs/node 0.00 eff/node
-work props/runs 2450821 runs
-work eff/runs 365061 runs
-work contra/runs 3994 runs
+work props/runs 2572570 runs
+work eff/runs 332171 runs
+work contra/runs 3974 runs
 work passes/snaps 0 snaps
 work deductions/chgs 0 chgs
-work wakes/wakes 4094069 wakes
-work masked/wakes 123607 wakes
-work vetoed/wakes 16721 wakes
-work advised/wakes 826667 wakes
-work seeded/runs 1072654 runs
-work skipped/slots 27523711 slots
-search rup/lines 231622 lines
-search pol/lines 199033 lines
-search pol-tokens/tokens 6356900 tokens
+work wakes/wakes 4204231 wakes
+work masked/wakes 122076 wakes
+work vetoed/wakes 17115 wakes
+work advised/wakes 1101335 wakes
+work seeded/runs 1191665 runs
+work skipped/slots 32756973 slots
+search rup/lines 213891 lines
+search pol/lines 179180 lines
+search pol-tokens/tokens 6100564 tokens
 search pol-widest/tokens 278 tokens
-search atoms/atoms 409 atoms
-search atomlinks/lines 390 lines
+search atoms/atoms 510 atoms
+search atomlinks/lines 560 lines
 search bridges/pairs 679 pairs
 search boundlines/pairs 135 pairs
-search bitsprune/lines 198643 lines
-search atoms/prune/atoms 0.002 atoms
+search bitsprune/lines 178620 lines
+search atoms/prune/atoms 0.003 atoms
 opb a71eac4ca5cb2625d5bb6e1e4cdd31eca7c77a46b42e97d3c9e1d31a23fae55a
-pbp cf4cd2eba0590e1c281904c54a9262e4cc511465c730e3207a90e59645dbaaf4
+pbp 999379f8c4f007f39f3a2c4dffe494c16b3b9b3f3108812a353408d3ce2f1eb3

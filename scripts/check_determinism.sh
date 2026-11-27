@@ -1,6 +1,12 @@
 #!/bin/sh
-# M2-T12 (the determinism half). Solve every model TWICE and require the .opb, .pbp and
-# stdout to be byte-identical across the two runs.
+# Solve every model TWICE and require the .opb, .pbp and stdout to be byte-identical
+# across the two runs (the determinism half of M2-T12).
+#
+#   scripts/check_determinism.sh              the check (`make determinism`)
+#   scripts/check_determinism.sh --self-test  proves the check can fail; runs first
+#
+# Exit 0 when every model's two runs agree (or the self-test saw the check fail on a
+# planted difference), non-zero otherwise. It does not build the solver.
 #
 # Why this exists, and what it deliberately does NOT do.
 #

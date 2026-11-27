@@ -1,8 +1,19 @@
 (* global_cardinality(x, cover, counts): for each i, [counts.(i)] is the number of
    variables of [x] taking the value [cover.(i)].  The cover is a list of CONSTANTS; the
-   counts are VIEWS -- a variable, or a constant (M7-T18) -- and a fixed cardinality is
-   the degenerate case of the arithmetic, not a different shape.  See "Constant counts"
-   below.
+   counts are VIEWS -- a variable, or a constant (M7-T18, which stopped refusing constant
+   counts) -- and a fixed cardinality is the degenerate case of the arithmetic, not a
+   different shape.  See "Constant counts" below.
+
+   WHICH CALLS ARRIVE HERE.  mznlib/fzn_global_cardinality.mzn hands a plain
+   `global_cardinality` to this propagator only when every count is fixed.  A call with
+   a variable count goes to std's per-value `count` decomposition instead, plus std's
+   implied row `length(x) >= sum(counts)` (M18-coverage-T14, D-0247): this module does
+   not propagate BETWEEN counts (a count's upper bound from the others' lower bounds),
+   and that row does.  The closed forms (mznlib/fzn_global_cardinality_closed.mzn, which
+   adds `sum(counts) = |x|` as a linear row) and `global_cardinality_low_up` (its counts
+   declared on [max(0, lbound), min(|x|, ubound)]) still arrive here with variable
+   counts, so everything below about variable counts is live.  The front end is
+   [post_global_cardinality] in lib/flatzinc/compile.ml.
 
    gcc is all_different's generalisation -- all_different is gcc with every count in
    {0, 1} -- so this module is shaped on lib/core/prop/alldiff.ml and its rule A below
@@ -15,11 +26,12 @@
    ---------------------------------------------------------------------------
 
    The filtering is bounds-level REASONING -- it reads lo/hi and writes lo/hi -- with ONE
-   exception since M7-T24: rule (a) writes an interior hole for a saturated value, and
+   exception since M7-T24 (gcc's two single-value rules): rule (a) writes an interior
+   hole for a saturated value, and
    rule (b) reads [Domain.mem] to refuse a candidate whose window holds the value around
    a hole (see "The two single-value rules" below).  The tag is [Propagator.Checking],
-   which is the level
-   the M2-T10 oracle (BAGUETTE_CONSISTENCY=1) holds a propagator to.  That is not
+   which is the level the M2-T10 oracle (BAGUETTE_CONSISTENCY=1, per-node consistency
+   checking against a brute-force oracle) holds a propagator to.  That is not
    modesty for its own sake:
 
      - bounds consistency for gcc is Quimper/Katriel's algorithm, not the capacity-Hall
@@ -72,13 +84,16 @@
 
      1. **This propagator requests no direct encoding at all.**  No `x_eq_v` variables,
         no channelling clauses, no at-least-one line -- none of the width-proportional
-        machinery D-0028 charges for.  all_different pays for all of it.
+        machinery D-0028 charges for (a justification's size grows with the declared
+        domain width).  all_different pays for all of it.
      2. **"x takes a value in [a, b]" telescopes.**  Summing the indicator over an
         interval leaves `x_ge_a - x_ge_(b+1)`, so the at-least-one line a Hall argument
         needs is not derived from the channelling: it IS the variable's two bound facts,
-        cited with [Explanation.defining] (D-0064's per-bound root test) or, where a
-        decision moved the bound, as [Explanation.clause] with the facts carried into
-        the pruning's [Reason] (alldiff's [Gone_hole] shape, I-P5).
+        cited with [Explanation.defining] (D-0064's per-bound root test: a bound that
+        has not moved since the root is cited by its defining constraint id) or, where
+        a decision moved the bound, as [Explanation.clause] with the facts carried into
+        the pruning's [Reason] (alldiff's [Gone_hole] shape; I-P5, every change carries
+        its facts, now part of I-P4).
      3. **The pruning needs no channelling telescope either.**  What the counting leaves
         is already a statement about order literals, so turning it into a bound is one
         more bound fact rather than alldiff's per-value forward-clause sum.
@@ -137,7 +152,8 @@
    so the residue `y_ge_(b+1)` has to become a contradiction rather than a valid bound.
    It does so for nothing when b is at or above y's DECLARED top -- the literal is the
    constant false and is simply not there -- and that is the case every model reaches
-   first, which is exactly how alldiff shipped the same defect latent (M4-T2's note).
+   first, which is exactly how alldiff shipped the same defect latent (the note of
+   M4-T2, alldiff's domain-consistent stage).
    When y's declared top is HIGHER than b and only its CURRENT top is inside, the
    literal is real, the row derives the perfectly valid `y >= b + 1`, and 3.0.2 answers
    "the constraint with ID n is not contradicting".  Measured here on the first model
@@ -148,10 +164,16 @@
    the pruning and must stay.
 
    With |H| > cap the degree is |H| - cap >= 1 and the row is contradicting.  It is
-   REPORTED the way all_different reports its pigeonhole: by pushing one surplus
-   confined variable out of the interval it is confined to, so [Store.apply]'s [Failed]
-   arm pairs the derivation with [Reason.none] and no `rup` conflict line claims a
-   counting argument as reverse unit propagation (I-X10, D-0040).
+   REPORTED the way all_different reports its pigeonhole.  AT THE ROOT, by pushing one
+   surplus confined variable out of the interval it is confined to, so [Store.apply]'s
+   [Failed] arm pairs the derivation with [Reason.none] and no `rup` conflict line claims
+   a counting argument as reverse unit propagation (I-X10: every trace line is RUP
+   against the .opb plus the lines before it; D-0040: a counting global needs its
+   derivation written explicitly).  UNDER A DECISION, since M18-coverage-T11 (D-0234),
+   the same push is the conflict itself, with its facts
+   and its derivation written ahead of `rup ~facts >= 1`, so 1UIP learns from it -- and so
+   is every other push of this module that would empty its target (rule C's shortfall
+   and surplus included).  See "a conflict carries its facts" above [pass].
 
    ---------------------------------------------------------------------------
    Rule C -- the count variables' own bounds
@@ -181,7 +203,8 @@
    other term clears for free ([free_e], one ladder rung), and [ladder_at_least] does
    the same division the other way up.
 
-   THE TWO ARE NOT ALIKE ON THE PAGE (M7-T21, D-0084). The upper push's trace line is
+   THE TWO ARE NOT ALIKE ON THE PAGE (M7-T21, D-0084: a derivation one propagator
+   embeds in another was behind 26 corpus rejections). The upper push's trace line is
    RUP against [ge_cid] alone; the lower push's is NOT, because those free ladder rungs
    are second constraints unit propagation cannot sum. So the lower push is made under
    [Store.deriving_ahead] and its derivation is written ahead of its line, as rule A's
@@ -196,9 +219,11 @@
 
    2. **No interval LOWER-capacity rule.**  Its per-value case -- when the number of
       possible takers of v equals the count's lower bound, every one of them must take v
-      -- IS here since M7-T24, as rule (b): this sentence used to say it was the
-      decomposition's job, and once a one-value count is routed to gcc (D-0097) there is
-      no decomposition row left to do it.  Its interval case still is not, and needs
+      -- IS here since M7-T24, as rule (b).  This sentence used to say it was the
+      decomposition's job, but a call routed to gcc has no decomposition row left to do
+      it.  M7-T24 added it, with rule (a), after D-0097 measured the one-value `count`
+      route to gcc losing to std's decomposition and withdrew that route (mznlib has no
+      such route today).  Its interval case still is not, and needs
       one line this module does not build: `one variable takes at most one value of
       [a, b]`.  Over the order encoding that line is free as well (the indicators over
       [a, b] telescope to x_ge_a - x_ge_(b+1) <= 1, which is two literal axioms), so the
@@ -207,7 +232,8 @@
 
    3. **NO NEW [Explanation] CONSTRUCTOR.**  Everything above is
       [Combine]/[Weaken]/[Model_row]/[Defining] and, for a bound a decision moved,
-      [Clause].  D-0044's bet is not spent here.
+      [Clause].  D-0044's bet, that the existing constructors suffice and no new
+      [Explanation] constructor is needed, is not spent here.
 
    ---------------------------------------------------------------------------
    Constant counts (M7-T18, D-0082)
@@ -216,9 +242,10 @@
    M7-T16 refused `fzn_global_cardinality(xs, cover, [2, 1])` and asked the model to
    declare `var 2..2: n` instead.  That is the COMMON case of the constraint -- every
    closed form and `global_cardinality_low_up` with equal bounds flattens to it -- and
-   the wave-30 corpus run lost nine instances to the refusal (D-0079).
+   the wave-30 corpus run lost nine instances to the refusal (D-0079, that run's record).
 
-   A constant count k is [View.const k] (D-0058), and the argument that it changes
+   A constant count k is [View.const k] (D-0058: a view is a rendering onto its base's
+   literals, with no PB variable of its own), and the argument that it changes
    NOTHING in either artefact is one observation applied twice: everything here reads a
    count only through [cdlo], [cdhi], its current bounds and its ladder
    `c_ge_(cdlo+1) .. c_ge_cdhi`, and a constant is the one-value variable `var k..k: c`
@@ -244,7 +271,7 @@
        [Store.apply]'s [Failed] arm returns for the one-value variable, derivation
        included.
      - THE REASONS.  A one-value variable's facts are all at its declared bounds, so
-       [Reason.lits] already drops every one of them; for a constant [scope_facts] names
+       [Reason.lits] already drops every one of them; for a constant [count_named] names
        none at all, because there is no name to put in a reason's scope.  The trace
        lines are therefore the same lines.
 
@@ -259,26 +286,29 @@
    ---------------------------------------------------------------------------
 
    As in alldiff: every number a derivation reads is frozen into a [snap]/[csnap] at the
-   moment of the pruning and the thunk reads nothing from the store afterwards.  The
+   moment of the pruning and the thunk reads nothing from the store afterwards, which is
+   I-X6 (a deferred explanation closes over a snapshot and never reads live state).  The
    [Encoding] ids it reads live are written once, by [Encoding.start_proof], before the
    first decision, and never move.
 
    ---------------------------------------------------------------------------
-   Cost of a pass (M16-file-review-T2, D-0190)
+   Cost of a pass (M16-file-review-T2, D-0190, the file-by-file review of the
+   propagators)
    ---------------------------------------------------------------------------
 
    Rule C and rules (a) and (b) are O(sum over the v cover values of the variables that
    declare each): per value, those variables, listed once at [make] ([declaring], since a
-   declared range never moves), then COUNTS; the lists and the facts a push names are built
-   from the same snapshot by the same filters, only for a push. Rule A walks the run of
-   cover values that starts at each lower end once, sums the capacities of its prefixes,
-   and per (lower, upper) pair COUNTS the confined variables, O(P n) for P pairs; the lists
-   are built only for an interval with a capacity >= 0 and at least that many confined
-   variables, the intervals that can push. Most of a pass's values and intervals push
-   nothing, and the counting is what they cost. Two quadratic steps are left, both per
-   PUSH and so bounded by the prunings they pay for: a push's facts test each variable
-   against every value of [a, b] ([in_scope_of], O(n (b - a))), and a saturated
-   interval's arm looks each candidate up by name in the confined set (O(n cap)). *)
+   declared range never moves), then COUNTS; the lists and the facts a push names are
+   built from the same snapshot by the same filters, only for a push. Rule A walks the run
+   of cover values that starts at each lower end once, sums the capacities of its
+   prefixes, and per (lower, upper) pair COUNTS the confined variables, O(P n) for P
+   pairs; the lists are built only for an interval with a capacity >= 0 and at least that
+   many confined variables, the intervals that can push. Most of a pass's values and
+   intervals push nothing, and the counting is what they cost. Two quadratic steps are
+   left, both per PUSH and so bounded by the prunings they pay for: a push's facts test
+   each variable against every value of [a, b] ([in_scope_of], O(n (b - a))), and a
+   saturated interval's arm looks each candidate up by name in the confined set (O(n
+   cap)). *)
 
 module Lit = Baguette_proof.Lit
 module Encoding = Baguette_proof.Encoding
@@ -318,17 +348,18 @@ type t = {
   terms : term array;
   cov : cover array;
   enc : Encoding.t;
-  (* M7-T24 (D-0099): the HIGH_v row of a cover value, one [Explanation.t] VALUE per
-     (value, upper bound of its count, whether that bound is a root one) -- the three
-     things [high_row] reads.  Every rule-A and rule-(a) derivation that sums the same
-     row hands [Justify] the same value, so its memo (M6-T10, keyed on physical
-     identity) writes the row once per level instead of once per push.  [deferred],
+  (* The HIGH_v row of a cover value, one [Explanation.t] VALUE per (value, upper bound of
+     its count, whether that bound is a root one) -- the three things [high_row] reads.
+     Every rule-A and rule-(a) derivation that sums the same row hands [Justify] the same
+     value, so its memo (M6-T10, keyed on physical identity) writes the row once per
+     level instead of once per push (M7-T24, D-0099, which found the proof volume was in
+     the reasons, not the derivations).  [deferred],
      because the rungs it cites exist only once the proof has started. *)
   hrows : (int * int * bool, Explanation.t) Hashtbl.t;
-  (* M16-file-review-T2 (D-0190): per cover value (by its index in [cov]), the indices of
-     the terms whose DECLARED range holds it, ascending. [declares] reads only the declared
-     bounds, which never move, so this is the list every pass used to filter out of the
-     scope once per value and per rule. *)
+  (* Per cover value (by its index in [cov]), the indices of the terms whose DECLARED
+     range holds it, ascending. [declares] reads only the declared bounds, which never
+     move, so this list is computed once at [make]; every pass used to filter it out of
+     the scope once per value and per rule (M16-file-review-T2, D-0190). *)
   declaring : int array array;
 }
 
@@ -397,11 +428,14 @@ type snap = {
 
 type csnap = { k_cov : cover; k_lo : int; k_hi : int; k_lo_root : bool; k_hi_root : bool }
 
-(* D-0214: [Store.at_root], one comparison, where [Store.level_of_index sup = 0] was a
-   binary search over the open levels -- the same answer by I-T2 (the marks are monotone,
-   so an entry is at level 0 iff it precedes the first mark), and the move alldiff.ml made
-   in D-0161 (request 1). Asked twice per variable per snapshot, as in cumulative.ml, where the search was 12 %
-   of that module's samples on rcpsp (D-0207's profile). *)
+(* Whether a bound is established at the root: its support entry is at level 0, or it
+   has none. [Store.at_root] is one comparison, where [Store.level_of_index sup = 0] was
+   a binary search over the open levels (D-0214, from M20-pernode-T2's per-node work).
+   The answer is the same by I-T2 (the level marks are monotone, so an entry is at level
+   0 iff it precedes the first mark), and it is the move alldiff.ml made in D-0161
+   (request 1 of the --no-proof audit). Asked twice per variable per snapshot, as in
+   cumulative.ml, where the search was 12 % of that module's samples on rcpsp (the
+   per-node profile of D-0207). *)
 let established_at_root store v ~lower =
   let sup = if lower then Store.lo_support store v else Store.hi_support store v in
   sup = Store.no_support || Store.at_root store sup
@@ -607,6 +641,59 @@ let cap_summands t ~a ~b ~snaps ~halls ~caps ~extra =
       (fun s -> if named s || not (in_scope s) then [] else drop_summands t s ~a ~b)
       snaps
 
+(* D-0010's CURRENCY (a bound fact is a chain of order literals, not one literal), and
+   gcc is the first global that had to pay it.
+
+   What the counting leaves is a single order literal -- `y_ge_(b+1) >= 1` for a lower
+   push.  That is a true and sufficient statement of the new bound, and it is NOT what
+   another propagator can combine with.  lib/core/prop/order_reason.ml's header says why
+   in one sentence: an order literal is 0/1, so `a * y_ge_b` tops out at `a` and not at
+   `a * b`; a bound is worth its whole prefix of the ladder, `sum_{k = dlo+1}^{b} y_ge_k`,
+   which is the substitution lib/proof/encoding.ml performs on the model side.  A
+   [Linear] row summed against the single literal is short by exactly the rungs beneath
+   it, and 3.0.2 answers "the constraint with ID n is not contradicting".
+
+   MEASURED, and it is the defect this module shipped first: a gcc capacity push of `u` to
+   5 consumed by `int_lin_le([1],[u],4)` at the ROOT. all_different does not show it for a
+   reason that is luck rather than design -- its derivations still reach
+   [Explanation.clause] often enough that lib/core/search.ml's [rests_on_a_clause] routes
+   those root conflicts the D-0022 way (a root conflict is its own contradiction only if
+   its derivation is numeric), where the empty clause is cited and the arithmetic is never
+   evaluated. gcc's derivation is [Defining] all the way down, so the numeric route is the
+   one it takes, and the numeric route is where the currency matters.
+
+   The lift is the same shape both ways: take W copies of the single-literal derivation
+   and add, for every rung beneath (above) the pushed bound, the chain that relates it to
+   that bound.  The lower rungs' coefficients come out at 1, the pushed literal's excess
+   cancels, and the right-hand side is W -- which is the ladder statement
+   [Order_reason.weaken_declared] would have built.
+
+   Only for a push that MOVES a bound.  An emptying push already derives 0 >= 1 and a
+   contradiction is in no currency at all. *)
+let ladder_lift t ~y ~lower ~bound base =
+  if lower then
+    let w = bound - y.s_dlo in
+    if w < 2 then base
+    else
+      (* The chains k -> bound for k = dlo+1 .. bound-1: rung u lies in u - dlo of
+         them. *)
+      Explanation.combine
+        (Explanation.term w base
+        :: rung_weighted t y.s_name ~from_:(y.s_dlo + 1) ~to_:bound ~weight:(fun u ->
+               u - y.s_dlo))
+        1
+  else
+    let w = y.s_dhi - bound in
+    if w < 2 then base
+    else
+      (* The chains bound+1 -> k for k = bound+2 .. dhi: rung u lies in dhi - u of
+         them. *)
+      Explanation.combine
+        (Explanation.term w base
+        :: rung_weighted t y.s_name ~from_:(bound + 1) ~to_:y.s_dhi ~weight:(fun u ->
+               y.s_dhi - u))
+        1
+
 (* The push.  After the counting the row is `y_ge_(b'+1) - y_ge_a' >= 0` -- "y is past b,
    or y is below a" -- and turning it into a bound is the same ladder move once more:
    the chain a' -> lo(y) replaces ~y_ge_a' by ~y_ge_lo(y), which [bound_cancels] then
@@ -626,56 +713,6 @@ let cap_summands t ~a ~b ~snaps ~halls ~caps ~extra =
    `b + 1 > hi(y)`, which is not a heuristic: in the |H| = cap arm the pushed variable is
    NOT confined, so its upper bound is strictly above b and the residue IS the pruning
    and must stay. *)
-(* D-0010's CURRENCY, and gcc is the first global that had to pay it.
-
-   What the counting leaves is a single order literal -- `y_ge_(b+1) >= 1` for a lower
-   push.  That is a true and sufficient statement of the new bound, and it is NOT what
-   another propagator can combine with.  lib/core/prop/order_reason.ml's header says why
-   in one sentence: an order literal is 0/1, so `a * y_ge_b` tops out at `a` and not at
-   `a * b`; a bound is worth its whole prefix of the ladder, `sum_{k = dlo+1}^{b} y_ge_k`,
-   which is the substitution lib/proof/encoding.ml performs on the model side.  A
-   [Linear] row summed against the single literal is short by exactly the rungs beneath
-   it, and 3.0.2 answers "the constraint with ID n is not contradicting".
-
-   MEASURED, and it is the defect this row shipped first: a gcc capacity push of `u` to 5
-   consumed by `int_lin_le([1],[u],4)` at the ROOT.  all_different does not show it for a
-   reason that is luck rather than design -- its derivations still reach
-   [Explanation.clause] often enough that lib/core/search.ml's [rests_on_a_clause] routes
-   those root conflicts the D-0022 way, where the empty clause is cited and the
-   arithmetic is never evaluated.  gcc's derivation is [Defining] all the way down, so
-   the numeric route is the one it takes, and the numeric route is where the currency
-   matters.
-
-   The lift is the same shape both ways: take W copies of the single-literal derivation
-   and add, for every rung beneath (above) the pushed bound, the chain that relates it to
-   that bound.  The lower rungs' coefficients come out at 1, the pushed literal's excess
-   cancels, and the right-hand side is W -- which is the ladder statement
-   [Order_reason.weaken_declared] would have built.
-
-   Only for a push that MOVES a bound.  An emptying push already derives 0 >= 1 and a
-   contradiction is in no currency at all. *)
-let ladder_lift t ~y ~lower ~bound base =
-  if lower then
-    let w = bound - y.s_dlo in
-    if w < 2 then base
-    else
-      (* The chains k -> bound for k = dlo+1 .. bound-1: rung u lies in u - dlo of them. *)
-      Explanation.combine
-        (Explanation.term w base
-        :: rung_weighted t y.s_name ~from_:(y.s_dlo + 1) ~to_:bound ~weight:(fun u ->
-               u - y.s_dlo))
-        1
-  else
-    let w = y.s_dhi - bound in
-    if w < 2 then base
-    else
-      (* The chains bound+1 -> k for k = bound+2 .. dhi: rung u lies in dhi - u of them. *)
-      Explanation.combine
-        (Explanation.term w base
-        :: rung_weighted t y.s_name ~from_:(bound + 1) ~to_:y.s_dhi ~weight:(fun u ->
-               y.s_dhi - u))
-        1
-
 let prune_expl t ~a ~b ~snaps ~halls ~caps ~y ~lower ~bound =
   let moves = if lower then bound <= y.s_hi else bound >= y.s_lo in
   Explanation.deferred (fun () ->
@@ -710,11 +747,13 @@ let prune_expl t ~a ~b ~snaps ~halls ~caps ~y ~lower ~bound =
 (* The variables the counting READ are named, and only those (M7-T24, D-0099).
 
    Rule A's top level weakens the indicator of every x that is neither confined nor the
-   target, so D-0026's reverse agreement check ([Explanation.top_weaken_owners]) requires
-   the reason to name every x the HIGH rows mention -- the x that DECLARE a value of
-   [a, b], [in_scope] below.  An x that declares no value of the interval appears in no
-   row the derivation cites, and naming it only made the trace line weaker and longer.
-   The counts are named at their upper bound, which is the only one rule A reads.
+   target, so D-0026's reverse agreement check ([Explanation.top_weaken_owners]: since
+   D-0026 made reasons declarative data, every variable a derivation weakens at its top
+   level must be named in the reason) requires the reason to name every x the HIGH rows
+   mention -- the x that DECLARE a value of [a, b], [in_scope_of] below. An x that
+   declares no value of the interval appears in no row the derivation cites, and naming it
+   only made the trace line weaker and longer. The counts are named at their upper bound,
+   which is the only one rule A reads.
 
    EACH FACT IS THE BOUND ITSELF, never the reason behind it.  Until M7-T24 this function
    also appended the trail reason of every bound that a decision-level entry had set
@@ -730,26 +769,71 @@ let prune_expl t ~a ~b ~snaps ~halls ~caps ~y ~lower ~bound =
    [pol] lines were 30 KB in all.  See D-0099. *)
 let in_scope_of ~a ~b s = List.exists (fun v -> declares s v) (range a b)
 
-let scope_facts ~snaps ~caps =
-  List.concat_map
-    (fun s ->
-      [
-        Reason.at_least ~name:s.s_name ~decl:s.s_dlo s.s_lo;
-        Reason.at_most ~name:s.s_name ~decl:s.s_dhi s.s_hi;
-      ])
-    snaps
-  @ List.concat_map
-      (fun k ->
-        if View.is_const k.k_cov.cx then
-          (* A constant has no literal and no name; it was read, but there is no fact
-             about it that the proof could negate, and its bounds never moved. *)
-          []
-        else
-          [
-            Reason.at_most ~name:k.k_cov.cname ~decl:k.k_cov.cdhi k.k_hi;
-            Reason.at_least ~name:k.k_cov.cname ~decl:k.k_cov.cdlo k.k_cov.cdlo;
-          ])
-      caps
+(* THE FACTS A DERIVATION LEAVES, and only those (M18-coverage-T11, D-0234).
+
+   A reason must NAME every variable whose literal the derivation weakens at the top
+   level (D-0026's reverse arm), but its FACTS need only be the bounds the derivation
+   leaves in its row. A fact of a variable whose terms the derivation clears for free (a
+   ladder chain, a literal axiom) is a fact the trace line does not need, and since gcc's
+   conflicts reach 1UIP (M18-coverage-T11) every such fact is a literal 1UIP has to
+   resolve away or keep. So each rule names its scope with three kinds of entry, from the
+   same snapshot:
+
+     - [both_bounds] for a variable whose two bound literals the derivation LEAVES in its
+       row where a decision moved them -- rule A's confined variables and its target
+       (their [alo_summands] / [prune_expl] chains), rule C's fixed takers
+       ([fixed_leftovers]);
+     - [excluding_bound] for a variable whose ONE bound clears the value -- rule C's and
+       rule (b)'s [gone] ([zero_summands] leaves exactly that bound);
+     - [named_only] for every other variable of the scope: its terms are cleared by a
+       ladder chain ([drop_summands], [free_summands]) or by literal axioms
+       ([cost_summands]), which read nothing, and it is NAMED, by the fact that it is
+       at least its declared minimum -- a fact with no literal ([Reason.lit_of_fact]
+       answers [None]), which costs the trace line and the learned clause nothing and
+       keeps the reverse arm of D-0026 satisfied. That is how this module has always
+       named a count (`at_least cdlo`, [count_named]).
+
+   Until M18-coverage-T11 one function, [scope_facts], named every variable of the scope
+   at BOTH its current bounds, and the counts at their upper one: the right scope and the
+   wrong set of facts. Measured (D-0234, 60 s, no proof): with those facts on the
+   conflicts, rws e-30-s-9 ran at 1 151 nodes/s and e-25-s-7 at 1 209; with the facts
+   above, 1 636 and 1 406.
+
+   The trace lines stay RUP where they were: the ahead lines (rule A, rule C's lower
+   push, rule (a)'s hole) because every literal their derivation leaves is the negation of
+   a fact still listed; the two that are RUP against one model row alone (rule C's upper
+   push, rule (b)) because a variable that holds the value contributes at most 1 to that
+   row's slack whether or not its bounds are asserted -- the argument their comments
+   already make never used those bounds. *)
+let named_only s = Reason.at_least ~name:s.s_name ~decl:s.s_dlo s.s_dlo
+
+let both_bounds s =
+  [
+    Reason.at_least ~name:s.s_name ~decl:s.s_dlo s.s_lo;
+    Reason.at_most ~name:s.s_name ~decl:s.s_dhi s.s_hi;
+  ]
+
+let excluding_bound s v =
+  if v < s.s_lo then Reason.at_least ~name:s.s_name ~decl:s.s_dlo s.s_lo
+  else Reason.at_most ~name:s.s_name ~decl:s.s_dhi s.s_hi
+
+(* A count is named (at its declared minimum, no literal) and, where the rule reads it,
+   at the one bound it reads. A constant has no name. *)
+let count_named k ~read =
+  if View.is_const k.k_cov.cx then []
+  else
+    Reason.at_least ~name:k.k_cov.cname ~decl:k.k_cov.cdlo k.k_cov.cdlo
+    ::
+    (match read with
+    | `Hi -> [ Reason.at_most ~name:k.k_cov.cname ~decl:k.k_cov.cdhi k.k_hi ]
+    | `Lo -> [ Reason.at_least ~name:k.k_cov.cname ~decl:k.k_cov.cdlo k.k_lo ]
+    | `Nothing -> [])
+
+(* Rule A and rule (a): the confined set and the target at both bounds, every other
+   variable of the scope named, the counts at their upper bound. *)
+let capacity_facts ~scope ~read ~caps =
+  List.concat_map (fun s -> if read s then both_bounds s else [ named_only s ]) scope
+  @ List.concat_map (fun k -> count_named k ~read:`Hi) caps
 
 (* ----------------------------------------------------------- rule C: the count bounds *)
 
@@ -770,8 +854,9 @@ let zero_summands t s v =
   else invalid_arg "Gcc.zero_summands: the value is inside the current window"
 
 (* `- e_i^v >= -1` -- clearing the indicator of a value the variable CAN take, at the one
-   unit of degree D-0009 says a literal axiom costs.  Two axioms, one per end, and no
-   fact: this is the only clearing in the module that reads nothing. *)
+   unit of degree a literal axiom costs (D-0009: a bound fact in a [pol] needs a
+   constraint id, so a bare literal enters only as an axiom). Two axioms, one per end, and
+   no fact: this is the only clearing in the module that reads nothing. *)
 let cost_summands s v =
   (if v > s.s_dlo then [ Explanation.weaken [ (1, Lit.negate (Lit.ge s.s_name v)) ] ]
    else [])
@@ -902,16 +987,16 @@ let close_upper t ~k ~may expl =
           1)
   else expl
 
-(* ------------------------------------------- M7-T24: the two single-value rules *)
+(* ------------------------------------------- the two single-value rules (M7-T24) *)
 
 (* RULE (a) -- A SATURATED VALUE IS REMOVED FROM EVERYONE ELSE (M7-T24, D-0099).
 
    When the variables FIXED to v already number hi(c_v) - const_v, no other x may take v.
    This is rule A on the singleton interval [v, v]: its confined set H is exactly the x
    fixed to v, its capacity is hi(c_v) - const_v, and |H| = cap is the saturation.  Rule A
-   already pushed a BOUND off v when v sat at one -- but only when both v in [los] and v in
-   [his] made [v, v] a candidate interval, which a zero-capacity value nobody is fixed to
-   never is -- and it never touched a v strictly INSIDE a window, which is the one
+   already pushed a BOUND off v when v sat at one -- but only when both v in [los] and v
+   in [his] made [v, v] a candidate interval, which a zero-capacity value nobody is fixed
+   to never is -- and it never touched a v strictly INSIDE a window, which is the one
    inference D-0097 measured std's decomposition making and gcc not.
 
    So [pass] enumerates the singletons per cover value, and the outcome has two shapes and
@@ -922,10 +1007,11 @@ let close_upper t ~k ~may expl =
        [cap_summands] over [v, v] with y as the extra variable the row is
          y_ge_(v+1) - y_ge_v >= 0,   i.e.   ~y_ge_v + y_ge_(v+1) >= 1
        -- which is precisely the ORDER clause D-0086 (b) makes the one convention for a
-       hole, so the entry needs no currency bridge: an embedder citing this hole through
-       [Store.remover] (D-0084 shape 1) gets the order clause it expects.  Its non-root
-       facts -- the fixed variables' bounds, the count's upper bound -- are literals left in
-       the row, exactly as in rule A, and the reason names them.
+       hole (a hole has one currency, whoever states it), so the entry needs no currency
+       bridge: an embedder citing this hole through [Store.remover] (D-0084 shape 1, a
+       derivation one propagator embeds in another) gets the order clause it expects. Its
+       non-root facts -- the fixed variables' bounds, the count's upper bound -- are
+       literals left in the row, exactly as in rule A, and the reason names them.
 
    Not RUP alone (the free rungs that drop every other x are second constraints, as in
    rule C's lower push), so the removal is made under [Store.deriving_ahead]. *)
@@ -943,8 +1029,10 @@ let hole_expl t ~v ~snaps ~halls ~caps ~y =
 
    When the x whose window still holds v number exactly lo(c_v) - const_v and some of them
    are not yet fixed to v, every one of them must take v.  The header's "What is NOT here"
-   point 2 called this the decomposition's job; once a one-value count is ROUTED to gcc
-   (D-0097) there is no decomposition row left to do it, and that is why it is here now.
+   point 2 used to call this the decomposition's job, but a call routed to gcc has no
+   decomposition row left to do it, and that is why it is here.  M7-T24 added it after
+   D-0097 measured the one-value `count` route to gcc losing to std's decomposition and
+   withdrew that route.
 
    THE DERIVATION is rule C's upper one with the target's indicator kept and the count's
    ladder paid for from BELOW instead of bounded:
@@ -956,8 +1044,8 @@ let hole_expl t ~v ~snaps ~halls ~caps ~y =
      x that cannot take v ([zero_summands]): free, from the bound that excludes it
      every other candidate ([cost_summands]): -e_i >= -1, one unit each
 
-   leaving e_y >= lo(c) - const_v - (|candidates| - 1) = 1, i.e. y_ge_v + ~y_ge_(v+1) >= 2:
-   both bounds at once.  Each push keeps one of the two literals by adding the trivial
+   leaving e_y >= lo(c) - const_v - (|candidates| - 1) = 1, i.e. y_ge_v + ~y_ge_(v+1) >=
+   2: both bounds at once.  Each push keeps one of the two literals by adding the trivial
    axiom of the other ([Weaken]), and [ladder_lift] puts it in D-0010's currency as every
    other bound move of this module.  A candidate must still HOLD v: one whose window
    contains v around a hole would be fixed onto the hole, and the emptying would carry a
@@ -1008,17 +1096,89 @@ let forced_expl t ~k ~v ~poss ~gone ~y ~lower =
 
 exception Found of Store.conflict
 
+(* ------------------------------------- a conflict carries its facts (M18-coverage-T11)
+
+   THE RULE (D-0234), all_different's of M7-T33 (D-0156) restated once for every push of
+   this module, in [pass]'s [apply]: a push whose bound crosses the LIVE opposite bound of
+   its target is, under a decision, not made; it is reported as the conflict, under
+   [Store.deriving_ahead], with the push's own facts plus that crossed bound
+   ([conflict_facts]). [Trace.conflict_line] then writes the push's derivation first and
+   `rup ~facts >= 1` after it (cumulative's arrangement, D-0096). So 1UIP clause learning
+   gets a non-empty cut from every conflict of this module. The line is unit propagation
+   against that one derivation, because every literal the derivation leaves in its row
+   is the negation of a listed fact:
+
+     - a bound of a variable or count the counting read, left where a decision moved it
+       ([bound_cancels] cancels root ones only) -- the push's own facts, which state
+       exactly those bounds ([capacity_facts], [both_bounds], [excluding_bound]);
+     - the pushed target's residue. For rule A's pigeonhole it is [y_ge_(hi(y)+1)], left
+       by [prune_expl]'s chain from the snapshot top, and y's snapshot top is already in
+       [capacity_facts] (y is the target). For every other emptying push the derivation
+       proves a VALID bound (`y >= b + 1`, `c <= may`, `c >= must`) that the live store
+       contradicts, and the live opposite bound -- the crossed fact -- falsifies it
+       through the ladder rungs, which unit propagation walks. That is the fact
+       [Store.apply]'s [Failed] arm says a conflict line needs and a pruning's reason does
+       not carry. A constant count has no literal and none is needed: its derivation takes
+       the declared-range arm of [ladder_at_most] / [ladder_at_least], which is already
+       contradicting.
+
+   Before M18-coverage-T11 every conflict of this module -- rule A's pigeonhole (|H| >
+   cap, one surplus confined variable pushed past its own top), rule C's shortfall and
+   surplus (a count pushed past its opposite bound), and a stale push of either rule that
+   lands on a variable an earlier push of the pass had already confined -- reached the
+   store as a pruning that must fail, and [Store.apply]'s [Failed] arm paired the
+   derivation with [Reason.none] at every depth. Sound (search.ml's D-0040 arm writes the
+   derivation and the decision nogood closes the branch), but [Learn.at_conflict] got an
+   EMPTY cut, and on rotating-workforce 82 to 99.9 % of the conflicts learned nothing
+   (D-0232 section 2: rws e-30-s-9, 1.05 M nodes and 78 clauses, where Chuffed answers in
+   121 791 nodes; D-0232 is the record of why regular-heavy models complete so little).
+
+   AT THE ROOT NOTHING CHANGES: the push runs and fails as before, its derivation closes
+   to [0 >= 1] where every bound it read is root-established and cancelled, and every root
+   refutation is byte-identical. The test reads the store LIVE ([View.lo] / [View.hi]), so
+   it agrees with [Store.apply]'s [Failed] exactly: [set_lo] to a bound at or below [hi]
+   always lands on a value (a hole moves it up to the next one, at most [hi]).
+
+   No new [Explanation] constructor, no change outside this module: [Store.conflict],
+   [Store.deriving_ahead] and the trace's c_ahead path are the ones all_different,
+   cumulative and element already use. *)
+
+(* Each fact once, first occurrence kept: the crossed bound often IS one of the push's
+   facts (rule A's pigeonhole, whose snapshot top is still live), and a conflict line is a
+   clause, so a repeat is a longer line saying the same thing. alldiff.ml has the same
+   function; a shared one belongs in reason.ml, which this module's task did not own. *)
+let distinct_facts facts =
+  let seen = Hashtbl.create 16 in
+  List.filter
+    (fun f ->
+      if Hashtbl.mem seen f then false
+      else (
+        Hashtbl.replace seen f ();
+        true))
+    facts
+
+(* The bound a push to [lower]'s side crosses, read live: the target's top for a lower
+   push, its bottom for an upper one. [x] is a plain variable (rule A, rule (b), a count
+   variable) or a constant count, which has no literal to name. *)
+let conflict_facts store (j : Reason.justified) ~name ~dlo ~dhi x ~lower =
+  distinct_facts
+    (Reason.facts j.Reason.reason
+    @
+    if View.is_const x then []
+    else if lower then [ Reason.at_most ~name ~decl:dhi (View.hi store x) ]
+    else [ Reason.at_least ~name ~decl:dlo (View.lo store x) ])
+
 (* The snapshot's window holds [v] / is exactly [v]: the two tests rule C and rules (a)
    and (b) sort a value's variables by. *)
 let holds_v v s = s.s_lo <= v && v <= s.s_hi
 let fixed_at v s = s.s_lo = v && s.s_hi = v
 let count_where p l = List.fold_left (fun n s -> if p s then n + 1 else n) 0 l
 
-(* M16-file-review-T2 (D-0190): the two counts first, and the lists and the facts a push
-   names only for a push. They are the same lists, built from the same snapshot by the
-   same filters, so every push is what it was; a pass that pushes nothing (most of them)
-   no longer builds four lists and the scope's facts per cover value. The facts are one
-   value for both pushes, as before. *)
+(* Rule C for every cover value: the two counts first, and the lists and the facts a push
+   names only for a push, so a pass that pushes nothing (most of them) builds no lists
+   and no facts (M16-file-review-T2, D-0190). They are the same lists, built from the
+   same snapshot by the same filters, as when they were built for every value. The facts
+   are one value for both pushes. *)
 let rule_c t store ~dvs ~caps ~apply =
   List.iteri
     (fun j k ->
@@ -1027,22 +1187,37 @@ let rule_c t store ~dvs ~caps ~apply =
       let dv = dvs.(j) in
       let may = c.cconst + count_where (holds_v v) dv in
       let must = c.cconst + count_where (fixed_at v) dv in
-      let facts = lazy (scope_facts ~snaps:dv ~caps:[ k ]) in
       (if may < k.k_hi then
          let poss = List.filter (holds_v v) dv in
          let gone = List.filter (fun s -> not (holds_v v s)) dv in
-         apply ~ahead:false ~lower:false c.cx may
+         (* D-0234: a taker is cleared by two literal axioms, a non-taker by the bound
+            that excludes [v]. *)
+         let facts =
+           List.map
+             (fun s -> if holds_v v s then named_only s else excluding_bound s v)
+             dv
+           @ count_named k ~read:`Nothing
+         in
+         apply ~ahead:false ~who:(c.cname, c.cdlo, c.cdhi) ~lower:false c.cx may
            (Reason.because
               ~concludes:(Some (Reason.at_most ~name:c.cname ~decl:c.cdhi may))
-              (Lazy.force facts)
+              facts
               (close_upper t ~k ~may (c_upper_expl t ~k ~poss ~gone ~may))));
       if must > k.k_lo then
         let fixed = List.filter (fixed_at v) dv in
         let others = List.filter (fun s -> not (fixed_at v s)) dv in
-        apply ~ahead:true ~lower:true c.cx must
+        (* D-0234: a fixed taker leaves its two bounds, every other indicator clears on
+           a free rung. *)
+        let facts =
+          List.concat_map
+            (fun s -> if fixed_at v s then both_bounds s else [ named_only s ])
+            dv
+          @ count_named k ~read:`Nothing
+        in
+        apply ~ahead:true ~who:(c.cname, c.cdlo, c.cdhi) ~lower:true c.cx must
           (Reason.because
              ~concludes:(Some (Reason.at_least ~name:c.cname ~decl:c.cdlo must))
-             (Lazy.force facts)
+             facts
              (close_lower t ~k ~must (c_lower_expl t ~k ~fixed ~others ~must))))
     caps;
   ignore store
@@ -1051,10 +1226,12 @@ let rule_c t store ~dvs ~caps ~apply =
    conflict -- then rule A over every candidate interval all of whose values are in the
    cover.  Returns whether a push landed; a conflict leaves through [Found].
 
-   ONE SNAPSHOT, EVERY DEDUCTION (I-P6, M6-T19): [snaps] and [caps] are taken once and
-   every push either rule justifies from them is applied before [loop] takes the next.
-   The argument is alldiff's, in its [pass]: the facts a push names are frozen at
-   snapshot values that still hold later in the pass (I-D3); a window computed from the
+   ONE SNAPSHOT, EVERY DEDUCTION (I-P6, M6-T19: a pass photographs the store once and
+   applies every deduction from it, rather than restarting after each pruning): [snaps]
+   and [caps] are taken once and every push either rule justifies from them is applied
+   before [loop] takes the next. The argument is alldiff's, in its [pass]: the facts a
+   push names are frozen at snapshot values that still hold later in the pass (I-D3: a
+   domain only shrinks within a decision level); a window computed from the
    older, wider bounds is a superset of the live one, so a set the snapshot finds
    confined is confined, and what staleness costs is a push the next pass makes
    instead. The one thing read LIVE is the shape of a hole removal, below. *)
@@ -1071,24 +1248,38 @@ let pass t store =
       (fun ids -> Array.fold_right (fun i acc -> snaps_arr.(i) :: acc) ids [])
       t.declaring
   in
-  (* [~ahead] is M7-T17's trigger (D-0082): rule A's capacity push sums a counting row
-     per cover value of the interval, so its trace line is RUP only after its
-     derivation and the push is made under [Store.deriving_ahead].
+  (* [~ahead] marks a push whose trace line is RUP only after its derivation, so it is
+     made under [Store.deriving_ahead] (the per-propagator trigger of M7-T17, D-0082).
+     Rule A's capacity push is one: it sums a counting row per cover value of the
+     interval.
 
-     Rule C is SPLIT, and M7-T21 (D-0084) is why. This comment used to say rule C's line
-     "is RUP against the ONE counting row of its own value plus the count's ladder", and
-     that is true of the UPPER push only. The upper line clears every indicator with a
-     bound fact the variable's own ladder propagates, so unit propagation reaches it. The
-     LOWER push reads the `<=` row, in which every OTHER variable's indicator
-     `x_ge_v - x_ge_(v+1)` appears negated, and unit propagation treats its two literals
-     independently: it cannot see that the indicator is never negative, because that is
-     the ladder rung `x_ge_(v+1) -> x_ge_v`, a second constraint. With two or more other
-     variables holding v strictly inside their window the row keeps slack and never
+     Rule C is SPLIT: its UPPER push's line is RUP against the one counting row of its
+     own value plus the count's ladder, and its LOWER push's line is not (M7-T21,
+     D-0084; this comment used to claim the first for both). The upper line clears every
+     indicator with a bound fact the variable's own ladder propagates, so unit propagation
+     reaches it. The LOWER push reads the `<=` row, in which every OTHER variable's
+     indicator `x_ge_v - x_ge_(v+1)` appears negated, and unit propagation treats its two
+     literals independently: it cannot see that the indicator is never negative, because
+     that is the ladder rung `x_ge_(v+1) -> x_ge_v`, a second constraint. With two or more
+     other variables holding v strictly inside their window the row keeps slack and never
      fires, and 3.0.2 refused the line (test/models/gcc_count_lower_rup_sat.fzn; with one
      such variable it verifies, which is why no M7-T16 scene saw it). So the lower push
      runs under [deriving_ahead], and [c_lower_expl]'s [free_summands] -- exactly those
      rungs -- go on the page ahead of it. *)
-  let apply ?(ahead = false) ~lower x bound j =
+  let apply ?(ahead = false) ~who:(name, dlo, dhi) ~lower x bound j =
+    (* A push that would EMPTY its target is, under a decision, the conflict itself, with
+       its facts and its derivation ahead -- see [conflict_facts] and the section above
+       it (D-0234). At the root it runs and fails as before. *)
+    (if
+       Store.level store > 0
+       && if lower then bound > View.hi store x else bound < View.lo store x
+     then
+       let facts = conflict_facts store j ~name ~dlo ~dhi x ~lower in
+       raise
+         (Found
+            (Store.deriving_ahead store (fun () ->
+                 Store.conflict store
+                   (Reason.because ~concludes:None facts j.Reason.justification)))));
     (* Through [View] so that rule C's count may be a constant (M7-T18); rule A's [x] is
        always [View.of_var], whose mutators ARE [Store]'s. *)
     let prune () =
@@ -1106,18 +1297,26 @@ let pass t store =
   List.iter (fun k -> Int_tbl.replace cover_at k.k_cov.cv k) caps;
   let los = List.sort_uniq Int.compare (List.map (fun s -> s.s_lo) snaps) in
   let his = List.sort_uniq Int.compare (List.map (fun s -> s.s_hi) snaps) in
-  let push ~a ~b ~halls ~caps_ab ~y ~lower x bound =
-    apply ~ahead:true ~lower (View.of_var x) bound
+  (* [member] answers "is this snapshot in [halls]" in O(1) -- a set the caller builds
+     once per interval, or rule (a)'s [fixed_at v] -- so that a push's facts cost
+     O(scope) (D-0234: measured at 17 % of gcc-benchmark l42_3's samples as a
+     [List.exists] by name over [halls] per scope variable). *)
+  let push ~a ~b ~halls ~member ~caps_ab ~y ~lower x bound =
+    apply ~ahead:true ~who:(y.s_name, y.s_dlo, y.s_dhi) ~lower (View.of_var x) bound
       (Reason.because
          ~concludes:
            (Some
               (if lower then Reason.at_least ~name:y.s_name ~decl:y.s_dlo bound
                else Reason.at_most ~name:y.s_name ~decl:y.s_dhi bound))
-         (scope_facts ~snaps:(List.filter (in_scope_of ~a ~b) snaps) ~caps:caps_ab)
+         (capacity_facts
+            ~scope:(List.filter (in_scope_of ~a ~b) snaps)
+            ~read:(fun s -> Var.equal s.s_var y.s_var || member s)
+            ~caps:caps_ab)
          (prune_expl t ~a ~b ~snaps ~halls ~caps:caps_ab ~y ~lower ~bound))
   in
-  (* M7-T24, rules (a) and (b): one cover value at a time, before the interval search,
-     because each is O(n) per value and they are what a ROUTED one-value count needs. *)
+  (* Rules (a) and (b) (M7-T24): one cover value at a time, before the interval search,
+     because each is O(n) per value. They are the per-value inferences std's
+     decomposition makes and the interval rules miss (D-0097). *)
   List.iteri
     (fun j k ->
       let c = k.k_cov in
@@ -1125,8 +1324,8 @@ let pass t store =
       let dv = dvs.(j) in
       let is_fixed = fixed_at v in
       let holds = holds_v v in
-      (* M16-file-review-T2 (D-0190): counted first, as in [rule_c]; the lists are built
-         where a rule fires, from the same snapshot by the same filters. *)
+      (* Counted first, as in [rule_c]; the lists are built only where a rule fires, from
+         the same snapshot by the same filters (D-0190). *)
       let n_fixed = count_where is_fixed dv in
       (* (a) saturated *)
       (if c.cconst + n_fixed = k.k_hi then
@@ -1135,9 +1334,11 @@ let pass t store =
            (fun y ->
              if not (is_fixed y) then
                if y.s_lo = v then
-                 push ~a:v ~b:v ~halls:fixed ~caps_ab:[ k ] ~y ~lower:true y.s_var (v + 1)
+                 push ~a:v ~b:v ~halls:fixed ~member:is_fixed ~caps_ab:[ k ] ~y
+                   ~lower:true y.s_var (v + 1)
                else if y.s_hi = v then
-                 push ~a:v ~b:v ~halls:fixed ~caps_ab:[ k ] ~y ~lower:false y.s_var (v - 1)
+                 push ~a:v ~b:v ~halls:fixed ~member:is_fixed ~caps_ab:[ k ] ~y
+                   ~lower:false y.s_var (v - 1)
                else if
                  (* LIVE, not [y]'s snapshot bounds: an earlier push of this pass may have
                     moved a bound of [y] onto [v], and a removal AT a bound is a bound
@@ -1149,7 +1350,7 @@ let pass t store =
                then
                  let j =
                    Reason.because ~concludes:None
-                     (scope_facts ~snaps:dv ~caps:[ k ])
+                     (capacity_facts ~scope:dv ~read:is_fixed ~caps:[ k ])
                      (hole_expl t ~v ~snaps ~halls:fixed ~caps:[ k ] ~y)
                  in
                  match
@@ -1171,17 +1372,17 @@ let pass t store =
             (fun y ->
               if not (is_fixed y) then
                 let lower = y.s_lo < v in
+                (* D-0234: a non-candidate at the bound that excludes [v], every
+                   candidate (the target too) named only -- literal axioms clear them --
+                   and the count at the lower bound the rule reads. *)
                 let facts =
-                  scope_facts ~snaps:dv ~caps:[]
-                  @
-                  if View.is_const c.cx then []
-                  else
-                    [
-                      Reason.at_least ~name:c.cname ~decl:c.cdlo k.k_lo;
-                      Reason.at_most ~name:c.cname ~decl:c.cdhi k.k_hi;
-                    ]
+                  List.map
+                    (fun s -> if holds s then named_only s else excluding_bound s v)
+                    dv
+                  @ count_named k ~read:`Lo
                 in
-                apply ~ahead:false ~lower (View.of_var y.s_var) v
+                apply ~ahead:false ~who:(y.s_name, y.s_dlo, y.s_dhi) ~lower
+                  (View.of_var y.s_var) v
                   (Reason.because
                      ~concludes:
                        (Some
@@ -1191,17 +1392,17 @@ let pass t store =
                      (forced_expl t ~k ~v ~poss ~gone ~y ~lower)))
             poss)
     caps;
-  (* M16-file-review-T2 (D-0190): [a, b] is a candidate when every value in it is in the
-     cover, which is [b <= reach a], the top of the run of cover values that starts at [a]
-     ([a - 1] when [a] is not one). One walk per lower end, where every (a, b) pair used to
-     build [range a b] and look each value up: the same pairs, in the same order, with the
-     same [caps_ab]. *)
+  (* [a, b] is a candidate when every value in it is in the cover, which is
+     [b <= reach a], the top of the run of cover values that starts at [a] ([a - 1] when
+     [a] is not one). One walk per lower end; before D-0190 every (a, b) pair built
+     [range a b] and looked each value up, giving the same pairs, in the same order, with
+     the same [caps_ab]. *)
   let reach a =
     let rec up v = if Int_tbl.mem cover_at v then up (v + 1) else v - 1 in
     up a
   in
-  (* M16-file-review-T2 (D-0190): an interval is worked on only when it can push, which
-     needs a capacity [cap >= 0] and at least [cap] variables confined to it. [capacc]
+  (* An interval is worked on only when it can push, which needs a capacity [cap >= 0]
+     and at least [cap] variables confined to it (D-0190). [capacc]
      holds the capacity of [a, a + i] summed in value order, as the fold below sums it,
      and the confined variables are COUNTED; the lists are built, exactly as before, only
      for an interval that passes both tests. Most intervals of a pass fail them, and each
@@ -1242,19 +1443,27 @@ let pass t store =
               in
               let ordered = folded @ rest in
               let n = List.length ordered in
+              let set_of l =
+                let tbl = Int_tbl.create 16 in
+                List.iter (fun s -> Int_tbl.replace tbl (Var.to_int s.s_var) ()) l;
+                fun s -> Int_tbl.mem tbl (Var.to_int s.s_var)
+              in
               if n > cap then
                 let halls = List.filteri (fun i _ -> i < cap) ordered in
                 let y = List.nth ordered cap in
-                push ~a ~b ~halls ~caps_ab ~y ~lower:true y.s_var (b + 1)
+                push ~a ~b ~halls ~member:(set_of halls) ~caps_ab ~y ~lower:true y.s_var
+                  (b + 1)
               else if n = cap then
+                let member = set_of ordered in
                 List.iter
                   (fun y ->
-                    if not (List.exists (fun s -> String.equal s.s_name y.s_name) ordered)
-                    then
+                    if not (member y) then
                       if a <= y.s_lo && y.s_lo <= b then
-                        push ~a ~b ~halls:ordered ~caps_ab ~y ~lower:true y.s_var (b + 1)
+                        push ~a ~b ~halls:ordered ~member ~caps_ab ~y ~lower:true y.s_var
+                          (b + 1)
                       else if a <= y.s_hi && y.s_hi <= b then
-                        push ~a ~b ~halls:ordered ~caps_ab ~y ~lower:false y.s_var (a - 1))
+                        push ~a ~b ~halls:ordered ~member ~caps_ab ~y ~lower:false y.s_var
+                          (a - 1))
                   snaps)
         his)
     los;

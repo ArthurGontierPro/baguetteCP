@@ -1,4 +1,8 @@
-(* `.scp` text to [Model.t] (M23-inputs-T2..T4, D-0228 section 14, D-0230).
+(* `.scp` text to [Model.t]. Built by M23-inputs-T2..T4 (the frame and the arithmetic,
+   then the globals without and with auxiliary variables) on the plan D-0228 section 14
+   fixed: a reader from `.scp` text to [Model.t] in lib/scp/, nothing more, that takes
+   only what baguette propagates or rewrites exactly. D-0230 records the reader as built,
+   what it refuses and why, and the choices that plan left open (its section 3).
 
    The grammar is that of CakeML's `cake_pb_cp`, `cp_parseScript.sml` on branch
    `cp_enc_new` at `930601d6`, version 1, and every constraint means what that commit's
@@ -27,8 +31,10 @@
    other is a [Model.Drange]. Every variable of the file is printed, in the order of the
    file, as `name = value;` (a .scp has no output item, D-0230 section 3).
 
-   AUXILIARIES are created after the variables of the file (D-0228 section 5), in the
-   order the constraints ask for them, and named `scp_<kind>_<n>` (a `_` is appended until
+   AUXILIARIES are created after the variables of the file (D-0228 section 5: the order
+   of creation fixes names and the default branching, so the file's own variables come
+   first and keep the order the file gives them), in the order the constraints ask for
+   them, and named `scp_<kind>_<n>` (a `_` is appended until
    the name is not one the file declares). They are of four kinds:
    - a CONDITION `(Z op v)` whose Z is not a 0..1 variable is a Boolean b defined by
      `b <-> Z op v` (memoised: one per distinct condition), and a negated 0..1 variable
@@ -167,7 +173,8 @@ let lookup st p name =
         name
 
 (* cake's `varc`: an integer, else a variable name. A list here is a view, which version
-   1 of the format does not have (D-0228 section 11). *)
+   1 of the format does not have (D-0228 section 11, the format author's answer: views
+   wait for a version 2, so this reader refuses one by name and position). *)
 let operand st (e : Sexp.t) : Model.operand =
   match e with
   | Sexp.Atom (a, p) -> (
@@ -791,9 +798,13 @@ let one_constraint st pos kw (args : Sexp.t list) =
             let smax = List.fold_left (fun a (_, v, _) -> max a v) min_int edges in
             let w = ck pos kw (fun () -> Checked.add (Checked.sub smax smin) 1) in
             (* A constant letter that labels no edge kills every run, so the constraint is
-               false. Said here because lib/core/prop/regular.ml raises on a constant
-               letter outside the symbol range (an index out of bounds in
-               [forward_reason], reproduced from FlatZinc on main: D-0230 section 7). *)
+               false, and the reader says so itself. When this was written
+               lib/core/prop/regular.ml raised on a constant letter outside the symbol
+               range (an index out of bounds in [forward_reason], reproduced from FlatZinc
+               on main: D-0230 section 7). D-0231 has since fixed the propagator, which
+               now kills every state of the next layer with nothing to cite
+               ([Regular.alphabet_hull]); the reader's check stays, as the direct
+               statement that the constraint is false. *)
             let dead_letter = function
               | Model.Const v -> v < smin || v > smax
               | Model.Var _ -> false

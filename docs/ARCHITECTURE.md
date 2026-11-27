@@ -7,11 +7,12 @@ freely — but changes to §4 (explanations) need a decision record.
 
 ## 1. Module map
 
-*Verified against the tree on 2026-09-18, re-verified the same day after M2-L11, and again on 2026-11-24 (M22-review-T4).* **That first verification missed six modules** -- the whole M2L learning vertical (`learned`, `learn`, `analysis`, `reduce`, `pb_analysis`) plus `ladder` -- which is worth knowing about a map that says it was checked: it was checked against the propagators and not against `lib/core`'s root. They are listed below now. This section was stale for long enough that
-`CLAUDE.md` carried its own replacement map and told readers to trust that one over this —
-it listed three propagators that have never existed (`alldiff`, `element`, `clause`) and
-omitted eleven modules that do, including `reason.ml`, which half of `lib/core` now depends
-on. If you change the tree, change this. A map nobody trusts costs more than no map.
+This block is the same text as the map in `CLAUDE.md`, "Where things are". If you add,
+move or remove a module, change both, and check them against `ls lib/*/ lib/core/prop/`
+rather than against the propagators alone. *Verified against the tree on 2026-11-27
+(M22-review-T4, D-0253).* History in one line: the map drifted for months before
+2026-09-18, listing three propagators that did not exist yet and missing eleven modules,
+and the first re-verification missed the six learning modules of `lib/core`'s root.
 
 ```
 bin/main.ml                 CLI: parse args, wire everything, print results
@@ -26,7 +27,7 @@ lib/flatzinc/   Baguette_flatzinc
                             builder.ml and lib/scp/reader.ml (M23-inputs-T4, D-0230)
   compile.ml                Model.t -> store + PB encoding + propagator instances;
                             this is the flatzinc -> core edge
-  output.ml                 solution printing in FlatZinc output format (SPEC 2.2)
+  output.ml                 solution printing in FlatZinc output format
 
 lib/scp/        Baguette_scp (M23-inputs, D-0228 section 14, D-0230)
   sexp.ml                   .scp text -> s-expressions with positions: iterative, linear,
@@ -38,24 +39,27 @@ lib/scp/        Baguette_scp (M23-inputs, D-0228 section 14, D-0230)
 lib/core/       Baguette_core
   var.ml                    variable identity (abstract int)
   domain.ml                 bounds pair + lazily allocated hole set, a VERSION of a
-                            per-variable hole log since D-0222 (section 2)
-  store.ml                  backtrackable store: domains + undo trail (section 3)
+                            per-variable hole log since D-0222 (ARCH §2)
+  store.ml                  backtrackable store: domains + undo trail (ARCH §3)
   reason.ml                 WHICH FACTS justify a pruning, as declarative data, and
-                            [justified] -- the one value a mutator takes. D-0026's
-                            first half; [Explanation] is the second
+                            [justified], the one value a mutator takes (D-0026)
   explanation.ml    *****   THE Explanation ADT: HOW the checker is convinced, as a
-                            cutting-planes expression. Read SPEC 3.3 + section 4
-                            first. No new constructor without a decision record
+                            cutting-planes expression over model rows and facts
+                            (D-0026, M2-T8). Read SPEC §3.3 + ARCH §4 first. Check
+                            `## Active claims` before touching this file. No new
+                            constructor without a decision record.
   justify.ml                Explanation.t -> VeriPB rules -> constraint id. Lives in
-                            core, not proof, because proof cannot see Explanation
+                            core, not proof, because proof cannot see Explanation.
   trace.ml                  records what a branch learned so its nogood is plain RUP
-                            (D-0018)
+                            (D-0018, M1-T13)
   learned.ml                the LEARNED-CONSTRAINT type: a PB inequality of which a
                             clause is the degree-1 case, plus its runtime instance and
                             its proof-side introduction/deletion (M2-L1, D-0044)
   learn.ml                  1UIP clause learning over order literals, its semantic
                             minimisation, its `rup` derivation and the backjump it
-                            licenses (M2-L3)
+                            licenses (M2-L3). Removing root-level and re-derivable
+                            literals from the learned clause is BAGUETTE_MINIMISE
+                            (off, root, local, rec), `off` by default (D-0241)
   analysis.ml               the implication graph and the cut, AS DATA. The criterion
                             is a swappable record carrying its own postcondition
                             (M2-L2)
@@ -70,30 +74,39 @@ lib/core/       Baguette_core
                             can propagate: lifts a Linear reason onto the ladder rungs
                             that actually carry its strength (M2-L11, D-0028/D-0010)
   retention.ml              the learned-constraint DATABASE, and the SINGLE owner of a
-                            learned constraint's lifetime. Policies are swappable
-                            (`keep_all`, `fifo`, `lbd`) and the default is `keep_all`
-                            BY MEASUREMENT, not by omission -- D-0051, D-0221 (M2-L4)
+                            learned constraint's lifetime, its proof id AND its engine
+                            instance (an eviction removes both, D-0226). Policies are
+                            swappable (`keep_all`, `fifo`, `lbd`, `tiered`) and the default
+                            is `tiered` BY MEASUREMENT since D-0226 (`keep_all` before:
+                            D-0051, D-0221) (M2-L4)
   view.ml                   VIEWS (+-x + k) and constants-as-variables, as a RENDERING
                             onto the base's order literals -- no PB variables of its
                             own, no name, so no sanitize table (M4-T0, D-0058)
-  propagator.ml             the PROPAGATOR module type (218 lines -- read it whole)
-  engine.ml                 propagate-to-fixpoint loop and the queue (section 5)
+  propagator.ml             the PROPAGATOR module type (288 lines — read it whole)
+  engine.ml                 propagate-to-fixpoint loop and the queue (ARCH §5). The
+                            queue is FIFO; BAGUETTE_PRIORITY=classes runs cheap
+                            propagators first (four cost classes), off by default
+                            (D-0246)
   search.ml                 DFS, branching, backtracking, every step proof-logged.
-                            Restarts are OPT-IN (SPEC 3.4, D-0137): a restart is the
-                            node outcome NRestart t, the backjump unwinding to level t
-                            and re-entering that node -- no new proof rule.
-                            CDCL loop `Search.cdcl` beside `dfs`: BAGUETTE_CDCL=1, OFF
-                            by default (D-0219)
-  restart.ml                WHEN to restart: the policies (Luby, geometric, Glucose's
-                            LBD average with a Luby floor, the stable alternation) as
-                            a pure state machine over conflicts (M10-T2, D-0137)
-  phase.ml                  PHASE SAVING: the value each variable was last fixed at,
+                            Restarts are opt-in (SPEC 3.4, D-0137): NRestart t unwinds
+                            to level t and re-enters that node, no new proof rule.
+                            CDCL loop `Search.cdcl` beside `dfs`: `--cdcl` or
+                            BAGUETTE_CDCL=1, OFF by default (D-0219). With it, `--chrono
+                            T` (BAGUETTE_CHRONO=T) backjumps one level instead of more
+                            than T (chronological backtracking, D-0224)
+  restart.ml                WHEN to restart: Luby, geometric, Glucose's LBD average
+                            (with a Luby floor), the stable alternation (M10-T2)
+  phase.ml                  phase saving: the value a variable was last fixed at,
                             read when its level is undone (M10-T2, D-0137)
-  activity.ml               the ACTIVITY heuristic: one VSIDS score per variable,
-                            learned-clause bumps, EVSIDS decay, first-fail tie-break
-                            (M10-T3, D-0137)
-  checked.ml                checked integer arithmetic + the overflow cap
-  interval.ml               interval arithmetic: mul, square, div of bounds
+  activity.ml               the activity heuristic: VSIDS score per variable,
+                            learned-clause bumps, EVSIDS decay (M10-T3, D-0137)
+  probe.ml                  PROBING at the root (failed literals): each bound literal of a
+                            small domain pushed on level 1 and propagated; a failure is a
+                            failed one-decision node, its nogood filed at level 0 and its
+                            negation asserted there. BAGUETTE_PROBE=off|root, default off,
+                            budget in propagator runs (M19-config-T8, D-0250)
+  checked.ml                checked integer arithmetic + the overflow cap (M1-T23)
+  interval.ml               interval arithmetic: mul, square, div of bounds (M4-T4a)
   debug.ml                  BAGUETTE_DEBUG-gated invariant checks
   prop/                     one module per constraint family:
     pb.ml                   the LEARNED PB ROW AS A PROPAGATOR: counter/slack over
@@ -108,17 +121,16 @@ lib/core/       Baguette_core
                             intervals on the bounds with the multi-row Hall justification
                             (M4-T1, D-0061), then a maximum matching that prunes values
                             (M4-T2), skipped when it cannot prune (D-0215)
-    element.ml              array_int_element, DOMAIN consistent; the index is a
-                            VIEW rather than an auxiliary (M4-T3, D-0058)
-    gcc.ml                  global_cardinality: all_different's generalisation, by
-                            interval CAPACITY. Counting rows over the ORDER encoding,
-                            so it needs no direct encoding at all (M7-T16, D-0078)
-    maxmin.ml               array_int_maximum / array_int_minimum (and int_max/int_min):
-                            the DISJUNCTION m <= max x as one clause row per threshold,
-                            beside n Linear rows m >= x_i; min is max over negated
-                            views (M4-T9, D-0095). Over a bits variable, one big-M
-                            SELECTOR row per operand + a clause, each pruning one
-                            Resolve `pol` (M8-bits-encoding-T3, D-0134)
+    gcc.ml                  global_cardinality by interval CAPACITY -- alldiff generalised;
+                            counting rows over the ORDER encoding (M7-T16, D-0078)
+    element.ml              array_int_element over a constant array, DOMAIN consistent.
+                            The index is a VIEW, not an auxiliary (D-0058), and the
+                            pruning is an interior hole in its own domain (M4-T3)
+    maxmin.ml               array_int_maximum / array_int_minimum (and int_max/int_min as
+                            the two-element case), BOUNDS consistent over one clause row per
+                            value; minimum is maximum over negated views (M4-T9, D-0095).
+                            Over bits: one SELECTOR row per operand + a clause, each
+                            pruning one Resolve `pol` (M8-bits-encoding-T3, D-0134)
     cumulative.ml           cumulative (and disjunctive as cap 1, r 1): time-table filtering
                             over gcc's window indicators, one capacity row per time point,
                             CHECKING; the first Needs_derivation family whose CONFLICTS carry
@@ -126,22 +138,22 @@ lib/core/       Baguette_core
                             two RELAXATIONS: mznlib/fzn_diffn.mzn keeps std's pairs and adds
                             cumulative over order copies of x and of y (no module of its
                             own; the capacity rows are model rows, M18-coverage-T2, D-0213)
-    regular.ml              regular (DFA), DOMAIN consistent (Pesant's layered graph) over
-                            the letters AND (n+1)*Q state flags the mznlib route introduces;
-                            every pruning one rup against its rows plus the backward-chain
-                            lemmas Encoding.start_proof derives (M7-T28, D-0146); its reasons
-                            name the LETTERS, recursing into the dead flags' own tails (D-0151)
-    inverse.ml              inverse(f, g) through mznlib's baguette_inverse: CHANNEL filtering,
-                            j in f_i <=> i in g_j, CHECKING; every pruning one rup against one
-                            channel row pair. compile.ml adds all_different over each array,
-                            its pairwise rows cited ROOT LEMMAS (M7-T28, D-0151)
+    regular.ml              regular (DFA) through mznlib's baguette_regular, DOMAIN
+                            consistent over the letters and (n+1)*Q STATE FLAGS (store
+                            variables, so a dead state is a trail entry); every pruning one
+                            rup against its rows plus the backward-chain lemmas
+                            Encoding.start_proof derives (M7-T28, D-0146). The reasons name
+                            the LETTERS only, recursing into the dead flags' own tails (D-0151)
+    inverse.ml              inverse(f, g) through mznlib's baguette_inverse: CHANNEL filtering
+                            (j in f_i <=> i in g_j), CHECKING, every pruning one rup; compile.ml
+                            adds all_different over each array whose pairwise rows are cited
+                            ROOT LEMMAS (Encoding.add_cited_lemma) (M7-T28, D-0151)
     member.ml               member(x, y) through mznlib's baguette_member: DOMAIN consistent
                             over x, y and one SELECTOR per position (store variables, as
-                            regular's flags), b_k -> x_k = y in at most six rows per position
-                            (D-0170); every line one rup with its reasons on the letters, a
-                            line that walks a hole behind threshold lemmas written ahead, a
-                            value of y two holes exclude behind a lemma per position and the
-                            OR row (M7-T28, D-0159)
+                            regular's flags), b_k -> x_k = y as six rows at most; a line that
+                            walks a hole rests on threshold lemmas written AHEAD, and a value
+                            of y two holes exclude on a derivation ahead (M7-T28, D-0159,
+                            D-0170)
     table.ml                table(x, T) through mznlib's baguette_table: DOMAIN consistent over
                             x and one SELECTOR per tuple (store variables, as member's), one
                             DEF row s_t -> x = t per tuple; every pruning one rup with its
@@ -151,22 +163,24 @@ lib/core/       Baguette_core
                             (succ_u = v -> pos_v = pos_u + 1 in the .opb, the definition); a
                             subtour cut is ONE pol, the rows around the cycle divided by n,
                             written ahead (M18-coverage-T3, D-0217)
-    linear.ml               int_lin_le. THE REFERENCE PROPAGATOR -- copy this shape
+    linear.ml               int_lin_le. THE REFERENCE PROPAGATOR — copy this shape.
     lin_eq.ml               int_lin_eq (two model rows, see D-0011)
     ne.ml                   int_lin_ne and int_ne (VALUE consistency)
     int_le.ml int_lt.ml     degenerate linear constraints, delegate to Linear
     int_eq.ml               delegates to Lin_eq
     bool2int.ml             bool <-> int channelling
     clause.ml               clauses over ORDER literals (Bounds); the degree-1 face of
-                            pb.ml, plus the bool_clause/array_bool_or/and/eq/not family
-                            as Domain submodules (M2-L12)
-    reif.ml                 the REIFICATION DISPATCHER (M3-T4, D-0057)
+                            pb.ml, plus the bool_clause/array_bool_or/and/eq/not
+                            family as Domain submodules (M2-L12)
+    reif.ml                 the REIFICATION DISPATCHER: author supplies enforce-hold /
+                            enforce-not-hold / entailment; framework does the collapse,
+                            the contrapositive and the polarity (M3-T4, D-0057)
     reif_lin_le.ml          b <-> (sum a x <= c) as two big-M int_lin_le rows
-    reif_lin_eq.ml          int_eq_reif / int_ne_reif, one arg apart
+    reif_lin_eq.ml          int_eq_reif / int_ne_reif, one arg apart (D-0057)
     order_reason.ml         bound-fact chains in the order encoding (D-0010)
 
 lib/proof/      Baguette_proof
-  lit.ml                    encoding literals; naming is NORMATIVE (PROOF-FORMAT 3)
+  lit.ml                    encoding literals; naming is NORMATIVE (PROOF-FORMAT §3)
   encoding.ml               which variable has which encoding; channelling
   opb.ml                    writes the .opb model file
   writer.ml                 writes the .pbp proof; owns the constraint-id counter
@@ -177,7 +191,42 @@ lib/proof/      Baguette_proof
   e2e.ml                    the END-TO-END PREFIX under --e2e: derives each of baguette's
                             rows from cake_pb_cp's verified .opb; nothing in it is
                             trusted, every line is checked (M14-T3, D-0187)
+  name_tbl.ml               the table keyed by a FlatZinc identifier: String.equal and
+                            String.hash (Hashtbl.hash's value without its dispatch), for
+                            Encoding, Justify and Store's name index (M20-pernode-T4, D-0236)
   checker.ml                resolves which veripb to use; mirrors scripts/checker.sh
+
+test/unit/                  25 binaries: test_core test_domain test_engine test_prop
+                            test_proof test_justify test_trace test_flatzinc
+                            test_compile test_endtoend test_matrix test_mutation
+                            test_output test_random test_interval test_learned
+                            test_learn test_analysis test_ladder test_retention test_clause test_pb test_consistency
+                            test_search_strategy (M10: restarts, phases, activity)
+                            test_scp (M23-inputs: the .scp reader)
+  mem_guard.ml              NOT a test binary: the shared Gc-alarm heap guard every
+                            suite installs (M1-T53). All 25 announce arming under
+                            BAGUETTE_TEST_HEAP_CAP_ANNOUNCE=1
+  domain_helper.ml          NOT a test binary: Domain.of_list and change_of, test-only
+                            constructors moved out of lib/ (M22-review-T5, D-0248)
+test/models/                264 .fzn models  test/expected/  their expected outputs
+test/scp/                   26 .scp models   test/scp/expected/  theirs (M23-inputs, D-0230)
+mznlib/                     baguette's MiniZinc library: the fzn_*.mzn redefinitions that
+                            route a global to a native propagator or to its decomposition
+scripts/                    checker.sh verify_proof.sh run_model_tests.sh shrink.sh
+                            mutate_proof.sh check_test_widths.py check_fmt.sh
+                            check_determinism.sh check_unlimited.sh bootstrap.sh; the lanes
+                            (diff, scaling, e2e, sym, fuzz)_lane.sh; compare_run.sh and
+                            corpus_run.sh (Challenge and corpus runs) with their
+                            *_selftest.sh; run_scp_tests.sh (the .scp models, `make scp`).
+                            scripts/README.md is the operating manual for the node
+tools/                      baguette.msc (the MiniZinc solver configuration); compare/
+                            (Challenge scoring, the README's performance table); e2e/
+                            (the cake_pb_cp end-to-end chain); symmetry/ (dejavu,
+                            `make sym`); fuzz/; lp/ (opb2lp.py)
+tools/scp/                  the .scp lanes: validate.py (an answer against the .scp alone),
+                            fzn_lane.sh, random_lane.py, mutate.sh (D-0230)
+bench/                      measurement harnesses and their results; bench/challenge/ and
+                            bench/series/ hold the Challenge runs (README.md in each)
 ```
 
 Dependency direction is strictly `flatzinc -> core -> proof`. `core` must not depend on
@@ -244,13 +293,17 @@ half became a type property. And `sup_lo` / `sup_hi` were added: the trail posit
 the entry that established each bound, maintained by `apply` and restored by `undo_to`,
 which is what let `linear.ml`'s per-pruning backward trail scan be deleted.
 
-So "keep trail records small" above is now a goal the entry only partly meets: **eight
-fields** — `var`, `old`, `now`, `why`, `reason`, `prop`, `sup_lo`, `sup_hi` — two of them
-proof-side, one for conflict analysis and two for support. The arena indirection for
-explanations matters more, not less. If the trail ever moves to `Bigarray`/`Bytes`
-(M6-T2, D-0001), `now` and `reason` are the awkward part of the move and should be planned
-for rather than discovered; `prop`, `sup_lo` and `sup_hi` are plain ints and are the easy
-part.
+So "keep trail records small" above is a goal the entry only partly meets. It has
+**twelve fields** today (`lib/core/store.ml`, `type entry`): `var`, `old`, `now` and `why`
+for undo and conflict analysis; `reason` and `concludes`, the facts a trace line negates
+and the fact it states (proof-side); `prop`, the instance that made the entry; `ahead`, set
+when the pruning's derivation must be written ahead of its trace line (I-X10, D-0082);
+`sup_lo` and `sup_hi`, the supports that replaced the backward scan; `pos`, the entry's
+own trail position (D-0090); and `cites`, conflict analysis's memo of what the reason cites
+(D-0124). The arena indirection for explanations matters more, not less. If the trail ever
+moves to `Bigarray`/`Bytes` (M6-T2, D-0001), `now`, `reason`, `concludes` and `cites` are
+the awkward part of the move and should be planned for rather than discovered; the others
+are plain ints or Booleans.
 
 ## 4. Explanations
 
@@ -273,14 +326,27 @@ The type therefore has a deferred constructor: an explanation may be a *thunk* t
 when forced, produces the concrete reason. OCaml makes this cheap and readable, which is
 a large part of why the language was chosen (see D-0001).
 
+The constructors today (`lib/core/explanation.ml` is the reference; the record fields
+`line` and `hid` that the written ones carry are left out here):
+
 ```ocaml
 type t =
-  | Trivial                              (* from the model constraint itself *)
-  | Clause of Lit.t list                 (* a set of literals that imply the pruning *)
-  | Linear of (int * Lit.t) list * int   (* a PB constraint: sum a_i l_i >= b *)
-  | Cut of t * t * int * int             (* linear combination of two reasons *)
-  | Deferred of (unit -> t)              (* computed only if actually needed *)
+  | Decision of Lit.t                    (* an assumption of the search; no id, never a pol operand *)
+  | Clause of Lit.t list                 (* these literals imply the pruning; renders to rup *)
+  | Linear of (int * Lit.t) list * int   (* a PB constraint sum a_i l_i >= b *)
+  | Cut of t * t * int * int             (* c1 * e1 + c2 * e2, the single-row combination *)
+  | Model_row of int                     (* a model constraint of the .opb, cited by id *)
+  | Combine of summand list * int        (* sum of summands, then divide: one pol step (D-0013) *)
+  | Resolve of t list                    (* saturated derivations summed: resolution in one pol (D-0134) *)
+  | Deferred of thunk                    (* computed only if actually needed *)
 ```
+
+A `summand` is `Term (c, e)` (c times the line of another explanation, which is what
+makes an explanation higher-order), `Weaken` (literal axioms that weaken a variable out of
+a row), `Defining (c, l)` (the line that establishes a literal) or `Linear_term` (one term
+of a linear row as the snapshot it read, rendered for the order or the bits encoding by
+`Justify`, D-0132). The first sketch of September 2026 had a `Trivial` constructor and no
+`Model_row`, `Combine` or `Resolve`.
 
 `Deferred` MUST be memoised on force — a reason can be demanded more than once during
 conflict analysis, and recomputing a propagator's reason is not cheap.
@@ -300,19 +366,25 @@ a mutable `line` (the record a thunk keeps) and an identity `hid`, so `Justify`'
 a field read on the node and no table holds a node: what T13 needed to take out of the
 table (a frame of what a forcing built, a second forcing where it might have captured)
 is gone. Build nodes through the smart constructors; a pattern names the fields it reads
-and ends in `_`. With `BAGUETTE_HASHCONS=1` the constructors also return a written node
-of the same content, so an identical derivation is one line (the bytes change; off by
-default). `lib/core/explanation.ml`'s header gives the argument reader by reader. The type's
+and ends in `_`. The constructors also return a written node of the same content
+(hash-consing, D-0172), so an identical derivation is one line. It is on by default;
+`BAGUETTE_HASHCONS=0` turns it off and gives back the proof written before D-0172, byte for
+byte. `lib/core/explanation.ml`'s header gives the argument reader by reader. The type's
 listing above is the 2026-09 sketch; the module is the reference.
 
-**Open**: whether `Cut` and `Deferred` are enough, or whether explanations should be
-parameterised over the reasons they consume (a genuinely higher-order form). That is
-decision **D-0003**; do not build past M3 without settling it.
+**Settled**: the question this section used to leave open, whether `Cut` and `Deferred` are
+enough or explanations should take other explanations as arguments (D-0003), was resolved by
+D-0026 on 2026-09-16. Which facts justify a pruning is declarative data (`Reason.t`), and
+how the checker is convinced is this type, whose `Term` summand recurses into another
+explanation. A new constructor still needs a decision record.
 
 ## 5. Propagation loop
 
-As of M2-T6 (D-0094) `engine.ml` uses a **FIFO** queue of propagator ids. There is no
-cost-class ordering yet. Each `propagate` call, made once per search node, walks one **seed
+As of M2-T6 (D-0094) `engine.ml` uses a **FIFO** queue of propagator ids. Since M19-config-T9
+(D-0246) a cost-class ordering exists as an option, `BAGUETTE_PRIORITY=classes` (default `off`,
+the FIFO): `Propagator.cost_class` files every instance in one of four classes (Cheap, Row,
+Learned_row, Global), the queue is one FIFO per class, the loop runs the cheapest non-empty one,
+and the dirty seed slots below enter their class queues in id order before anything runs. Each `propagate` call, made once per search node, walks one **seed
 slot** per instance in id order, ahead of the FIFO. As of M6-T18 (D-0098) it runs only the
 **dirty** slots:
 

@@ -516,9 +516,17 @@ let test_asserting_level_matches_reference () =
    `stats.n_min_dropped` is 0 on every one of them -- because the decision closure has
    already reduced the nogood to one level per variable per direction before minimisation
    sees it, which is [Analysis.add_node]'s strongest-per-slot merge doing this row's work
-   one layer up. Under other orders it does fire, and this is one of them: seed 12 on the
-   settle scene drops a literal, the proof still verifies, and keeping the weakest
+   one layer up. Under other orders it does fire, and this is one of them: seed 75 on the
+   holes scene drops a literal, the proof still verifies, and keeping the weakest
    threshold instead makes the checker reject it.
+
+   Re-pinned by M18-coverage-ne (D-0238). Until then the scene was the settle scene at seed
+   12. Once int_ne's conflicts carry their facts, the settle scene's int_ne conflicts
+   learn, the search takes another path, and on NO seed of 0..300 does the reduction fire
+   there any more (measured; before, 19 of those seeds fired, each with the break
+   rejected). On the holes scene 6 seeds of 0..300 fire (75, 80, 144, 154, 204, 290) and
+   every one of them has its weakest-threshold break rejected. The break and what it
+   protects are unchanged; only the scene that reaches it moved.
 
    A fresh [Random.State] per decision, so the order is a deterministic function of the
    seed and of nothing else -- a break lane pinned to a seed has to be reproducible from
@@ -527,8 +535,8 @@ let seeded_order seed store cands =
   Search.random_order (Random.State.make [| seed |]) store cands
 
 let test_minimise_break_in_a_proof () =
-  let order = seeded_order 12 in
-  let r, dir, opb, pbp = run ~order settle_src in
+  let order = seeded_order 75 in
+  let r, dir, opb, pbp = run ~order holes_src in
   check "a2: the scene the break needs really does minimise something"
     (r.r_stats.Search.n_min_dropped > 0);
   expect_accepted ~title:"a2: the minimised proof" ~dir ~opb ~pbp;
@@ -536,7 +544,7 @@ let test_minimise_break_in_a_proof () =
   let _, dir2, opb2, pbp2 =
     run ~order
       ~config:{ Search.default_config with Search.policy = Learn.Weakest }
-      settle_src
+      holes_src
   in
   expect_rejected ~title:"a2 BREAK: weakest-threshold minimisation" ~dir:dir2 ~opb:opb2
     ~pbp:pbp2;
@@ -550,6 +558,82 @@ let test_minimise_break_in_a_proof () =
      closure got there first (measured, not argued)"
     (n.r_stats.Search.n_min_dropped = 0);
   cleanup dn [ on_; pn ]
+
+(* ================================================ M19-config-T6: shorter clauses *)
+
+(* D-0241. [Analysis.minimise_cut]'s two rules, each on the smallest shipped model where it
+   fires, and the break that shows the learned line rests on what they keep.
+
+   test/models/ne_conflict_sat.fzn, verbatim: x >= 2 is posted, so at the root
+   int_lin_eq gives y <= 2 as well, and both facts sit in the conflict's cut. The ROOT rule
+   drops both: the learned clause is `x_ge_3` alone where it was three literals.
+
+   backjump_src (test/models/backjump_unsat.fzn): the cut carries a y fact that int_eq
+   derived from an x fact the same cut holds, at a level below the conflict. The ROOT rule
+   has nothing to drop and the RECURSIVE rule drops it. *)
+let ne_conflict_src =
+  "var 1..3: x;\n\
+   var 1..3: y;\n\
+   constraint int_lin_eq([1,1],[x,y],4);\n\
+   constraint int_le(2, x);\n\
+   constraint int_ne(x, y);\n\
+   solve satisfy;\n"
+
+(* Total learned literals, from the width histogram (its last bucket is ">=", far above
+   anything these scenes learn). *)
+let learned_lits (r : run) =
+  List.fold_left (fun a (w, n) -> a + (w * n)) 0 (Search.stats_width r.r_stats)
+
+let with_minimisation m f =
+  let saved = !Learn.minimisation in
+  Learn.minimisation := m;
+  Fun.protect ~finally:(fun () -> Learn.minimisation := saved) f
+
+let run_min m src = with_minimisation m (fun () -> run src)
+
+let test_minimisation_rules () =
+  let scene name src ~root_shrinks ~rec_shrinks =
+    let off, d0, o0, p0 = run_min Learn.Min_off src in
+    let root, d1, o1, p1 = run_min Learn.Min_root src in
+    let rc, d2, o2, p2 = run_min Learn.Min_rec src in
+    let lc, d3, o3, p3 = run_min Learn.Min_local src in
+    let w0 = learned_lits off and w1 = learned_lits root and w2 = learned_lits rc in
+    let w3 = learned_lits lc in
+    check
+      (Printf.sprintf "T6 %s: local sits between root and rec (%d <= %d <= %d)" name w2 w3
+         w1)
+      (w2 <= w3 && w3 <= w1);
+    check (Printf.sprintf "T6 %s: the scene learns (off: %d literals)" name w0) (w0 > 0);
+    check
+      (Printf.sprintf "T6 %s: root %s the learned literals (%d -> %d)" name
+         (if root_shrinks then "shrinks" else "leaves")
+         w0 w1)
+      (if root_shrinks then w1 < w0 else w1 = w0);
+    check
+      (Printf.sprintf "T6 %s: rec %s them beyond root (%d -> %d)" name
+         (if rec_shrinks then "shrinks" else "leaves")
+         w1 w2)
+      (if rec_shrinks then w2 < w1 else w2 = w1);
+    check
+      (Printf.sprintf "T6 %s: the four settings give the same answer" name)
+      (off.r_outcome = root.r_outcome
+      && root.r_outcome = rc.r_outcome && rc.r_outcome = lc.r_outcome);
+    List.iter
+      (fun (tag, (r : run), dir, opb, pbp) ->
+        check
+          (Printf.sprintf "T6 %s %s: the writer's audit is clean" name tag)
+          (r.r_audit_error = None);
+        expect_accepted ~title:(Printf.sprintf "T6 %s %s" name tag) ~dir ~opb ~pbp;
+        cleanup dir [ opb; pbp ])
+      [
+        ("off", off, d0, o0, p0);
+        ("root", root, d1, o1, p1);
+        ("rec", rc, d2, o2, p2);
+        ("local", lc, d3, o3, p3);
+      ]
+  in
+  scene "ne_conflict_sat" ne_conflict_src ~root_shrinks:true ~rec_shrinks:false;
+  scene "backjump_unsat" backjump_src ~root_shrinks:false ~rec_shrinks:true
 
 (* ============================================================ (b) I-S4 ordering *)
 
@@ -1916,11 +2000,38 @@ let test_m7t25_break_hole_facts () =
   expect_rejected ~title:"M7-T25 c BREAK (no remover facts)" ~dir ~opb ~pbp;
   cleanup dir [ opb; pbp ]
 
+(* M19-config-T6 (D-0241), the break: every node between the root and the conflict level
+   dropped without asking whether the kept literals re-derive it. The clause then claims
+   more than the trail supports, and the checker must refuse the line, in its RUP wording.
+   On median_sat_src under its median order, a SATISFIABLE scene (D-0066: on an UNSAT one,
+   backjump_src, the checker accepted this break, so that scene could not carry it). *)
+let test_minimisation_break () =
+  let log = ref [] in
+  let ok, d0, o0, p0 =
+    with_minimisation Learn.Min_rec (fun () ->
+        run ~order:(median_order log) median_sat_src)
+  in
+  expect_accepted ~title:"T6 median_sat rec" ~dir:d0 ~opb:o0 ~pbp:p0;
+  cleanup d0 [ o0; p0 ];
+  let log = ref [] in
+  let r, dir, opb, pbp =
+    with_minimisation Learn.Min_break_unchecked (fun () ->
+        run ~order:(median_order log) median_sat_src)
+  in
+  check "T6 BREAK: the scene still learns under the break" (learned_lits r > 0);
+  check "T6 BREAK: and the answer is the same, so the defect is in the artefact"
+    (r.r_outcome = ok.r_outcome);
+  expect_rejected ~title:"T6 BREAK: unchecked removal of lower-level literals" ~dir ~opb
+    ~pbp;
+  cleanup dir [ opb; pbp ]
+
 let () =
   test_minimise_pure ();
   test_minimise_matches_reference ();
   test_asserting_level_matches_reference ();
   test_minimise_break_in_a_proof ();
+  test_minimisation_rules ();
+  test_minimisation_break ();
   test_i_s4_ordering ();
   test_i_s4_crossings_are_real ();
   test_node_count_decreases ();

@@ -1,0 +1,19 @@
+% gcc_low_up_closed_dupcover_src_sat -- M18-coverage-T14 (D-0255)
+%
+% FLATTENED ARTEFACT. Source: mznlib/test/gcc_low_up_closed_dupcover_src_sat.mzn, flattened by MiniZinc 2.10.1
+% against mznlib/ (MZN_SOLVER_PATH=tools). Regenerate with
+%   minizinc -c --no-output-ozn --solver baguette mznlib/test/gcc_low_up_closed_dupcover_src_sat.mzn -o <this>
+% and re-attach this header; do not hand-edit the body.
+%
+% WHAT IT PINS. global_cardinality_low_up_closed over a cover with a REPEATED
+% value. x = [1,1] takes the value 1 twice, within [2,2] for both copies (Gecode: SAT).
+% std's par check |x| in sum(lbound)..sum(ubound) said 2 in 4..4 and made this UNSAT
+% (in mznlib since D-0146); it is no longer posted under a repeated value.
+
+
+predicate baguette_global_cardinality(array [int] of var int: x,array [int] of int: cover,array [int] of var int: counts);
+array [1..2] of int: X_INTRODUCED_18_ = [2,2];
+array [1..2] of int: X_INTRODUCED_19_ = [1,1];
+array [1..2] of var int: x:: output_array([1..2]) = [1,1];
+constraint baguette_global_cardinality(x,X_INTRODUCED_19_,X_INTRODUCED_18_);
+solve  satisfy;

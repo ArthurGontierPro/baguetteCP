@@ -17,26 +17,27 @@
    "these fixed values are jointly impossible". (docs/GLOSSARY.md defines "bounds"
    and "domain" consistent but not "value"; reported, not invented here.)
 
-   Shape: this follows lib/core/prop/linear.ml, the reference propagator -- compute
-   once, snapshot the decision eagerly and build the literals lazily behind
-   [Explanation.deferred], one pass to fixpoint, [consistency] declared above. The
-   one structural difference from [Linear] is deliberate, and the next paragraph is
-   why: this propagator cites no row id, because its justification is a [rup] whose
-   target is self-contained.
+   Proof shape (docs/SPEC.md 3.3): one `rup` clause per pruning or conflict, over
+   order-encoding literals, detailed under "Justification" below; over a bits scope the
+   same clause is derived by one `pol` (the last section).
 
-   D-0011 (one propagator instance, one model row) is satisfied vacuously and it is
-   worth being explicit about why, since this is the first propagator in the tree
-   that is not a [Linear]. D-0011's hazard was [Explanation.Trivial], which meant
-   "whatever ctx.model_id points at" and is unresolvable once it is on the trail with
-   no propagator identity attached. **[Explanation.Trivial] no longer exists** (M1-T31/M1-T50,
-   D-0037): a decision now carries [Decision of Lit.t] and [Linear.make]'s row id is
-   required, so the ambient row is unrepresentable rather than merely unused. Nothing in
-   this module ever built [Trivial], or
-   [Model_row], or any constructor that names a constraint: every explanation it
-   produces is a [Clause] that states its own content in full. So there is nothing to
-   route and nothing to get wrong -- which is also why [make] takes no [?row_id],
-   unlike [Linear.make]. An unused id parameter would be an invitation to believe it
-   was load-bearing.
+   Shape of the code: this follows lib/core/prop/linear.ml, the reference propagator.
+   It computes once, snapshots the decision eagerly and builds the literals lazily
+   behind [Explanation.deferred], reaches its fixpoint in one pass, and declares
+   [consistency] above. The one structural difference from [Linear] is deliberate:
+   this propagator cites no row id, because its justification is a [rup] whose target
+   is self-contained.
+
+   One instance, one model row (D-0011: every explanation names the row it was derived
+   from) is satisfied vacuously. Every explanation this module produces is a [Clause]
+   that states its own content in full; nothing in it builds [Model_row] or any
+   constructor that names a constraint. So there is nothing to route and nothing to get
+   wrong, which is also why [make] takes no [?row_id], unlike [Linear.make]. An unused
+   id parameter would be an invitation to believe it was load-bearing. (D-0011's
+   original hazard was the deleted [Explanation.Trivial], which meant "whatever row is
+   ambient"; M1-T31, M1-T50 and D-0037 removed it, so that a decision now carries
+   [Decision of Lit.t], [Linear.make]'s row id is required, and the ambient row is
+   unrepresentable.)
 
    ---------------------------------------------------------------------------
    Propagation
@@ -60,12 +61,11 @@
    Justification -- one [rup], and what it says
    ---------------------------------------------------------------------------
 
-   docs/PROOF-FORMAT.md section 4 nominates [rup] over direct-encoding literals for
-   `int_ne`. This module emits a [rup], and over *order*-encoding literals: see
-   [Encoding.ne_clause_lits]'s header (lib/proof/encoding.ml) for why the direct
-   encoding is not needed to say "x <> v" inside a clause, only to say it as a single
-   literal. Checked against the checker rather than argued; test/unit/test_prop.ml runs
-   every shape below through it.
+   This module emits a [rup] over ORDER-encoding literals, as docs/PROOF-FORMAT.md
+   section 4's `int_ne` row records. [Encoding.ne_clause_lits]'s header
+   (lib/proof/encoding.ml) says why the direct encoding is not needed to say "x <> v"
+   inside a clause, only to say it as a single literal. Checked against the checker rather
+   than argued; test/unit/test_prop.ml runs every shape below through it.
 
    Every explanation this module builds -- pruning and conflict alike -- is the same
    clause:
@@ -77,11 +77,12 @@
 
    For a *conflict* the pairs are every term at its fixed value, and the clause says
    "this total is forbidden". For a *pruning* of [w] from x_j the pairs are the other
-   terms at their fixed values plus (x_j, w) -- so the clause is D-0018's trace-line
-   shape, "the claim, disjoined with the negation of its reason's literals", with the
-   claim being x_j <> w. The two cases are literally the same function of the same
-   data, which is not a coincidence: the reason a value is prunable is that the tuple
-   it would complete is the tuple that conflicts.
+   terms at their fixed values plus (x_j, w), so the clause has the shape of the trace
+   line D-0018 writes for a pruning, "the claim, disjoined with the negation of its
+   reason's literals", with the claim being x_j <> w. (D-0018: a branch's nogood is RUP
+   over the trace lines the branch logged.) The two cases are literally the same function
+   of the same data, which is not a coincidence: the reason a value is prunable is that
+   the tuple it would complete is the tuple that conflicts.
 
    Three properties of that clause are worth stating, because each one is a thing a
    later change could quietly break:
@@ -95,48 +96,48 @@
       posts, in at most two propagation steps: negating it asserts every x_i = v_i as
       units, which makes the sum numerically [c], which forces the selector Boolean b
       true through row A and then falsifies row B. It does not need the checker to
-      replay a multi-row bounds fixpoint, which is the thing D-0012/D-0018 record
-      veripb cannot do.
+      replay a multi-row bounds fixpoint, which veripb's unit propagation cannot do (the
+      reason D-0012 found a branch nogood is not RUP from the model rows alone, and
+      D-0018 logs a trace for it).
 
    3. It contains *no* direct-encoding literal, so it does not depend on anything
       having been introduced with [red] earlier in the proof, and in particular does
-      not depend on the audit (I-X2) retiring anything afterwards.
+      not depend on the audit retiring anything afterwards (I-X2: every constraint id
+      is deleted exactly once, checked at conclusion time).
 
-   What this explanation is *not* is a statement that entails the pruning on its own:
-   it says "not all of these values together", not "x_j <> w". That is the correct
-   and only honest shape for a clausal reason, and it is what D-0018 asks for, but it
-   means an explanation from this module must not be dropped into a cutting-planes
-   sum as though it were a bound derivation. [Linear]'s *citing* path does exactly
-   that when it cites the trail entry that last moved a bound (lib/core/prop/linear.ml's
-   [lo_rests_on], over [Store.lo_reasons]) -- and this propagator *can* move a bound, since
+   What this explanation is NOT is a statement that entails the pruning on its own: it
+   says "not all of these values together", not "x_j <> w". That is the correct and
+   only honest shape for a clausal reason, and it is what D-0018 asks for, but it means
+   an explanation from this module must not be dropped into a cutting-planes sum as
+   though it were a bound derivation. [Linear]'s CITING path does exactly that when it
+   cites the trail entry that last moved a bound (lib/core/prop/linear.ml's
+   [lo_rests_on], over [Store.lo_reasons]), and this propagator CAN move a bound, since
    removing a value at [lo] or [hi] shrinks the interval.
 
-   M1-T17 note on that composition: the [pol] it produces is *sound* (a [pol] is sound
-   whatever it cites; it simply derives something valid that is not the bound the row's
-   own slack argument claimed), and what was actually broken was downstream --
-   lib/core/search.ml's root arm cited that [pol] to [conclusion UNSAT] as though it
-   were a contradiction, which veripb rejects. The rejection is worded "The constraint
-   with ID <n> is not contradicting, as specified by the hint" (3.0.2, the checker of
-   record); test/unit/test_random.ml matches on it.
-   [Search.rests_on_a_clause] now recognises a derivation that rests on a clause and
-   closes such a root conflict the D-0018 way, over the trace, so nothing this module
-   produces is cited as a contradiction it does not establish. Making the citing path
-   weaken rather than cite is still open; see the M1-T17 hand-back for the measurement
-   of what that costs and which pinned check it moves.
+   That composition is sound: a [pol] is sound whatever it cites, it simply derives
+   something valid that is not the bound the row's own slack argument claimed. What
+   M1-T17 found broken was downstream: lib/core/search.ml's root arm cited such a [pol]
+   to [conclusion UNSAT] as though it were a contradiction, which veripb 3.0.2 rejects
+   with "The constraint with ID <n> is not contradicting, as specified by the hint"
+   (test/unit/test_random.ml matches on that wording). That arm is gone: since D-0131
+   every root conflict is closed by the empty clause `rup >= 1` over the root's trace,
+   so nothing this module produces is cited as a contradiction it does not establish.
+   Making the citing path weaken rather than cite was left open by M1-T17, whose
+   hand-back measured what that costs.
 
    ---------------------------------------------------------------------------
    Snapshotting
    ---------------------------------------------------------------------------
 
-   The values in the clause are snapshotted *eagerly* into [pairs] and only the
-   [Lit.t] list is built lazily. D-0018 is explicit that a [Deferred] thunk reading
-   live store state instead of a snapshot silently breaks the trace: an explanation
-   forced later must still render the derivation as of the moment it was made, and by
-   then the store may have been narrowed further or backtracked. Snapshotting ints is
+   The values in the clause are snapshotted EAGERLY into [pairs] and only the [Lit.t]
+   list is built lazily. A [Deferred] thunk that read live store state instead of a
+   snapshot would silently break the trace (I-X6, from D-0018): an explanation forced
+   later must still render the derivation as of the moment it was made, and by then the
+   store may have been narrowed further or backtracked. Snapshotting ints is
    cheap; it is the clause construction that is deferred.
 
    ---------------------------------------------------------------------------
-   Arithmetic (roadmap M1-T23)
+   Arithmetic: checked, never wrapping (roadmap M1-T23)
    ---------------------------------------------------------------------------
 
    [sum_of], the [rhs - sum] that gives the missing amount, and the divisibility test
@@ -151,11 +152,16 @@
    reach for a coefficient of -1 -- which is every [int_ne]. *)
 
 (* ---------------------------------------------------------------------------
-   Over the BITS encoding (M8-bits-encoding-T3, D-0134 section 6, D-0130 section 7.4)
+   Over the BITS encoding
    ---------------------------------------------------------------------------
 
+   A wide variable may be encoded by its binary digits instead of an order ladder (the
+   bits encoding, D-0130; its section 7.4 covers a disequality). The design for this
+   module is D-0134 section 6, built by M8-bits-encoding-T3.
+
    The nogood above is RUP over the A/B pair and the LADDER; over a bits variable it is
-   not (D-0127: no bound crosses a bits row by unit propagation), so a scope with a bits
+   not (D-0127 measured on the checker that no bound crosses a bits row by unit
+   propagation), so a scope with a bits
    variable is built with [~rows:(a, b)], the ids of [Encoding.add_int_lin_ne]'s pair,
    and the same nogood is DERIVED as one `pol` ([Explanation.Resolve]):
 
@@ -166,8 +172,9 @@
 
    Both degrees are exactly 1 because the pairs sum to exactly c, so neither part divides,
    and their sum resolves the selector away: the clause left is the nogood, literal for
-   literal (probe g1). The reason half is untouched (D-0026's split): the same facts, the
-   same claims; only the justification's shape depends on the encoding, chosen once by
+   literal (probe g1). The reason half is untouched, because the facts a pruning read
+   are data kept apart from the cutting planes that justify it (D-0026): the same facts,
+   the same claims; only the justification's shape depends on the encoding, chosen once by
    lib/flatzinc/compile.ml from the scope. A scope with no bits variable has no [rows]
    and is byte for byte what it was. *)
 
@@ -176,10 +183,10 @@ module Lit = Baguette_proof.Lit
 
 (* One term of the sum. [name] and the declared bounds are frozen at [make] time:
    the name because nothing can rename a variable and the deferred thunk should not
-   have to hold the store to find it, the bounds because docs/DECISIONS.md D-0010
-   requires it -- [Encoding.ne_clause_lits] drops the constant halves of its clause
-   against the *declared* domain, which the store stops reporting the moment anything
-   narrows the variable. Coefficients here are always non-zero; see [make]. *)
+   have to hold the store to find it, the bounds because a bound fact is counted from
+   the declared bound (D-0010): [Encoding.ne_clause_lits] drops the constant halves of its
+   clause against the *declared* domain, which the store stops reporting the moment
+   anything narrows the variable. Coefficients here are always non-zero; see [make]. *)
 type term = { coeff : int; x : Var.t; name : string; decl_lo : int; decl_hi : int }
 
 type t = {
@@ -233,9 +240,6 @@ let nogood pairs =
          Encoding.ne_clause_lits ~name:tm.name ~decl_lo:tm.decl_lo ~decl_hi:tm.decl_hi v)
        pairs)
 
-(* The clause is short, but building it still allocates and most prunings are never
-   asked for a reason (docs/ARCHITECTURE.md, "Deferred explanations"), so it goes
-   behind a thunk over the already-snapshotted values. *)
 (* The same nogood over a bits scope, derived (the header's last section): row A with
    every pair as a [Linear_term] on A's coefficient, row B on the negated ones, each a
    divisor-1 [Combine], resolved on the selector. *)
@@ -252,17 +256,22 @@ let nogood_resolve (row_a, row_b) pairs =
   in
   Explanation.resolve [ part row_a 1; part row_b (-1) ]
 
+(* The clause is short, but building it still allocates and most prunings are never
+   asked for a reason (docs/ARCHITECTURE.md, "Deferred explanations"), so it goes
+   behind a thunk over the already-snapshotted values. *)
 let explain ?rows pairs =
   Explanation.deferred (fun () ->
       match rows with None -> nogood pairs | Some r -> nogood_resolve r pairs)
 
 (* ---------------------------------------------------------------------------
-   The other projection of the same pruning: its bound facts (docs/DECISIONS.md
-   D-0018/D-0021, and [Store.entry]'s [facts])
+   The other projection of the same pruning: its bound facts
    ---------------------------------------------------------------------------
 
-   Removing a value that sits at [lo] or at [hi] shrinks the interval, so it *is* a
-   bound move, so lib/core/trace.ml writes a line for it:
+   Every bound move gets a trace line (D-0021), and a branch's nogood is RUP over those
+   lines (D-0018). The facts a line negates are the [Reason.t] half of the pruning's
+   [Reason.justified], kept on the trail as [Store.entry]'s [reason] field. Removing a
+   value that sits at [lo] or at [hi] shrinks the interval, so it IS a bound move, and
+   lib/core/trace.ml writes a line for it:
 
        rup <the order literal the new bound establishes> \/ ~<fact> ... >= 1 ;
 
@@ -292,12 +301,15 @@ let explain ?rows pairs =
        is forced, and M1 does not reach it.
 
    [d] is the pruned variable's domain as it stands *now*, before the removal, and is
-   read here rather than inside the thunk: I-X6, the same snapshot discipline the
-   values in [pairs] already follow. *)
-(* M2-T8/D-0026: these are [Reason.fact]s, not [Lit.t]s, and the "drop it at the declared
-   bound" test they used to make for themselves now lives once, in [Reason.lit_of_fact].
-   Nothing else about them changed: the same facts in the same order, so the same tail on
-   the same line. *)
+   read here rather than inside the thunk: I-X6 (a deferred explanation closes over a
+   snapshot and never reads live state), the discipline the values in [pairs] already
+   follow.
+
+   These are [Reason.fact]s, not [Lit.t]s, since reasons became declarative data
+   separate from their justification (D-0026, built by M2-T8). The "drop it at the
+   declared bound" test they used to make for themselves lives once, in
+   [Reason.lit_of_fact]; the same facts in the same order give the same tail on the
+   same line. *)
 let moved_bound_fact tm w d =
   if w = Domain.lo d then [ Reason.at_least ~name:tm.name ~decl:tm.decl_lo w ]
   else if w = Domain.hi d then [ Reason.at_most ~name:tm.name ~decl:tm.decl_hi w ]
@@ -309,8 +321,9 @@ let pruning_reason tm w d fixed_others =
       (fun (o, v) -> Reason.fixed_at ~name:o.name ~decl_lo:o.decl_lo ~decl_hi:o.decl_hi v)
       fixed_others
 
-(* The two halves of one pruning, from one snapshot, in one function -- D-0026, and the
-   same shape [Linear.justified_of_snaps] has. The justification's clause is over
+(* The two halves of one pruning, the reason and the justification, from one snapshot
+   in one function (D-0026's split, and the same shape [Linear.justified_of_snaps]
+   has). The justification's clause is over
    [(tm, w) :: fixed_others] (the pruned term fixed at [w] as well, which is what makes it
    a nogood) and the reason is over the bound [w] is about to move plus the others; the
    two differ exactly there and by construction, not by two call sites agreeing. *)
@@ -319,17 +332,19 @@ let justified_pruning ?rows ~concludes tm w d fixed_others : Reason.justified =
     (pruning_reason tm w d fixed_others)
     (explain ?rows ((tm, w) :: fixed_others))
 
-(* D-0043's conclusion for a *value removal*, which is the one pruning shape whose claim
-   is not always a bound.
+(* The conclusion of a VALUE REMOVAL, which is the one pruning shape whose claim is not
+   always a bound. (D-0043: what a pruning concludes is a [Reason.fact] carried on the
+   [justified] value, so the store can compare it against the trail as data.)
 
-   [Store.remove] does one of two things (I-D2, and [Domain.classify] reports them as
-   disjoint): removing a value AT a bound settles and tightens that bound, and removing
-   an interior value punches a hole. The first concludes the bound it settled to -- which
-   is exactly the claim lib/core/trace.ml writes for it, a single order literal with the
-   holes it stepped over as [settled_over]. The second concludes `x <> w`, a TWO-literal
-   clause over the order encoding ([Trace.hole_clause]), and that is not a [Reason.fact]
-   in any direction: it is [None], and reason.ml's header states that this [None] is
-   about the type and not about a gap in the solver's own partition.
+   [Store.remove] does one of two things (a bound is always a value of the domain, I-D2,
+   and [Domain.classify] reports the two as disjoint): removing a value AT a bound settles
+   and tightens that bound, and removing an interior value punches a hole. The first
+   concludes the bound it settled to -- which is exactly the claim lib/core/trace.ml
+   writes for it, a single order literal with the holes it stepped over as [settled_over].
+   The second concludes `x <> w`, a TWO-literal clause over the order encoding
+   ([Trace.hole_clause]), and that is not a [Reason.fact] in any direction: it is [None],
+   and reason.ml's header states that this [None] is about the type and not about a gap in
+   the solver's own partition.
 
    The settled bound is walked out here rather than recovered from a second
    [Domain.remove] call: that call allocates a hole bitset whose size is
@@ -351,6 +366,59 @@ let removal_conclusion tm w d =
     done;
     Some (Reason.at_most ~name:tm.name ~decl:tm.decl_hi !v))
   else None
+
+(* ---------------------------------------------------------------------------
+   The reason of a CONFLICT
+   ---------------------------------------------------------------------------
+
+   THE RULE (D-0238, built by M18-coverage-ne): under a decision, the conflict's reason
+   is every term's [Reason.fixed_at] at its fixed value (the two bound facts [x >= v] and
+   [x <= v], whose negations are [Encoding.ne_clause_lits]'s two halves), each fact once,
+   since a variable may appear in two terms. [Trace.conflict_line] then writes
+   `rup ~facts >= 1`, which is LITERALLY the nogood [explain] states for the same pairs,
+   so:
+
+     - over the ORDER encoding it is reverse unit propagation against the A/B pair, for
+       the reason the header's property 2 gives, and needs nothing on the page ahead of
+       it;
+     - over a BITS scope [t.rows] is set, the justification is the [Resolve] `pol`, and
+       the trace's bits arm writes that `pol` and pins it by `ia` to the same clause.
+
+   The reason and the justification name the same variables (the clause's, or the
+   Resolve's linear terms), so D-0026's agreement check holds by construction. A fact at
+   a declared bound has no literal ([Reason.lit_of_fact] answers [None]) and drops,
+   exactly as the clause's constant half does.
+
+   WHY: a factless conflict gives [Learn.at_conflict] an EMPTY cut, so it learns
+   nothing. Before D-0238 an all-fixed violation was reported with [Reason.none]. That
+   was sound (the nogood is globally valid, search.ml writes a factless conflict's
+   derivation on the page, the arm D-0040 introduced, and the decision nogood closes the
+   branch), but on gcc-benchmark l42_3 it was 9 019 of 9 714 conflicts at 20 000 nodes
+   (D-0234 section 4, the same finding for global_cardinality).
+
+   AT THE ROOT NOTHING CHANGES: the conflict stays factless there, as gcc's does
+   (D-0234), because a root conflict has nothing to learn and search.ml's root arm
+   closes it on the root's trace. The forwarding arm in [propagate]'s one-unfixed case
+   is unreachable (see there) and still forwards [Store.apply]'s factless conflict.
+
+   [distinct] is gcc.ml's and alldiff.ml's [distinct_facts] once more; a shared one
+   belongs in reason.ml, which this row does not own. *)
+let distinct facts =
+  let seen = Hashtbl.create 8 in
+  List.filter
+    (fun f ->
+      if Hashtbl.mem seen f then false
+      else (
+        Hashtbl.replace seen f ();
+        true))
+    facts
+
+let conflict_reason pairs =
+  distinct
+    (List.concat_map
+       (fun (tm, v) ->
+         Reason.fixed_at ~name:tm.name ~decl_lo:tm.decl_lo ~decl_hi:tm.decl_hi v)
+       pairs)
 
 (* ------------------------------------------------------------------- propagation *)
 
@@ -393,15 +461,16 @@ let propagate t store =
       (* I-P3, checking: with everything fixed, fail iff the constraint is violated. *)
       if sum_of store t.terms <> t.rhs then Propagator.Fixpoint
       else
-        (* [Reason.none], deliberately and now visibly: an all-fixed violation records no
-           bound facts, so [Trace.conflict_line] writes no line for it. The clause IS the
-           explanation here (every variable is fixed, so the nogood is the whole story),
-           and a reason line restating it would be a second copy of the same claim. Before
-           M2-T8 this was the default argument and said nothing. *)
+        (* M18-coverage-ne (D-0238): under a decision the conflict carries the fixing
+           facts, so 1UIP learning has a cut to walk; at the root it stays factless and
+           every root refutation is byte for byte what it was. See [conflict_reason]. *)
+        let pairs = all_pairs store t.terms in
+        let reason =
+          if Store.level store > 0 then conflict_reason pairs else Reason.none
+        in
         Propagator.Conflict
           (Store.conflict store
-             (Reason.because ~concludes:None Reason.none
-                (explain ?rows:t.rows (all_pairs store t.terms))))
+             (Reason.because ~concludes:None reason (explain ?rows:t.rows pairs)))
   | [ idx ] -> (
       let tm = List.nth t.terms idx in
       let others = others_except t.terms idx in
@@ -436,9 +505,10 @@ let propagate t store =
               (* [Unchanged] happens when [Domain.remove] declines to allocate a hole
                  bitset for an enormous span (lib/core/domain.ml, [max_hole_span]).
                  Declining to prune is sound and no explanation is emitted for a
-                 pruning that did not happen, so I-P4 is not at stake; the propagator
-                 is simply weaker there. Re-running finds the same thing and still
-                 changes nothing, so I-P3 holds either way. *)
+                 pruning that did not happen, so I-P4 (every change carries an
+                 explanation) is not at stake; the propagator is simply weaker there.
+                 Re-running finds the same thing and still changes nothing, so I-P2,
+                 idempotence at the interface, holds either way. *)
               Propagator.Fixpoint)
 
 (* ---------------------------------------------------------------------------
@@ -452,11 +522,14 @@ let propagate t store =
    the two variables is the one being pruned, and which value of the *other* is the
    reason. Having one implementation means one place where that can be wrong.
 
-   It lives in this file rather than its own because lib/core/dune is
-   orchestrator-owned and M1-T9's claim is this one module; [Int_le]/[Int_lt] are
-   separate files only because they were written when a file per builtin was free.
-   Justification shape: identical to [int_lin_ne]'s -- the same clause over the same
-   two rows [Encoding.add_int_lin_ne] posts for [x - y <> 0]. *)
+   Consistency level: VALUE, as for [int_lin_ne]. Justification shape: identical to
+   [int_lin_ne]'s -- the same clause over the same two rows [Encoding.add_int_lin_ne]
+   posts for [x - y <> 0].
+
+   It lives in this file rather than its own for a historical reason: a new file meant
+   editing lib/core/dune, which M1-T9 (the task that built int_lin_ne and int_ne) did
+   not hold. [Int_le]/[Int_lt] are separate files only because they were written when a
+   file per builtin cost nothing. *)
 module Int_ne = struct
   type nonrec t = t
 

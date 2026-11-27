@@ -1,20 +1,26 @@
-(* ladder.ml: THE ORDER-ENCODING LADDER CHAIN, AS A ROW (M2-L11), and the BITS ARM: a
-   bits block instantiated through its bridges (M8-bits-encoding, D-0153, at the foot).
+(* ladder.ml: the order-encoding LADDER CHAIN AS A ROW, so that PB conflict analysis can
+   resolve against the reason a bounds propagator actually used (M2-L11); and, at the
+   foot, the BITS ARM, which rewrites a row carrying a bits term into a row without one,
+   through the bridge rows of the variable's atoms, before the analysis resolves on it
+   (M8-bits-encoding, D-0153).
 
    Consistency level: none -- this is not a propagator. Governing records:
-   docs/DECISIONS.md D-0010 (a bound fact is stated in the order encoding's own
-   currency), D-0028 (the ladder is eager and its implications are SEPARATE .opb rows),
-   docs/INVARIANTS.md I-X6 (the falsified predicate is frozen at the propagation, and
-   this module never reads a store) and I-X8 / D-0029 (coefficient growth must raise).
+   docs/DECISIONS.md D-0010 (a bound fact is a chain of order literals, stated in the
+   order encoding's own currency), D-0028 (the ladder is eager and its implications are
+   SEPARATE .opb rows), docs/INVARIANTS.md I-X6 (an explanation reads a snapshot, never
+   live domains: here the falsified predicate is frozen at the propagation, and this
+   module never reads a store) and I-X8 / D-0029 (no row is committed whose arithmetic
+   wrapped: coefficient growth past the cap raises [Checked.Overflow]).
 
    ---------------------------------------------------------------------------
-   The finding this module exists to answer -- M2-L6, measured
+   Why it exists: the integer propagator is stronger than PB propagation on the same row
    ---------------------------------------------------------------------------
 
-   OUR INTEGER PROPAGATOR IS STRONGER THAN PB PROPAGATION ON THE SAME ROW. That is
-   lib/core/pb_analysis.ml's dominant non-[No_row] fallback and it is not a defect
-   anywhere; it is a statement about where the strength lives. The worked case is
-   [int_lin_le] doing its ordinary job:
+   OUR INTEGER PROPAGATOR IS STRONGER THAN PB PROPAGATION ON THE SAME ROW. This was found
+   while measuring PB conflict analysis (M2-L6, lib/core/pb_analysis.ml), where it shows
+   as the [Postcondition_failed] fallback, and it is not a defect anywhere; it is a
+   statement about where the strength lives. The worked case is [int_lin_le] doing its
+   ordinary job:
 
      3a + 2b <= 14,  a, b declared 0..4,  and lo(b) = 4 already established.
 
@@ -43,10 +49,11 @@
    Write the ladder row at value [w] as  L_w  =  [x>=w] + ~[x>=w+1] >= 1.
 
    Add [c * L_w] to a row carrying [c * ~[x>=w]]. The complementary pair
-   [c ~[x>=w] + c [x>=w]] is the constant [c] (D-0044's [Learned.combine] stage 3 does
-   this cancellation, and must: the checker normalises complements away when it reads a
+   [c ~[x>=w] + c [x>=w]] is the constant [c]. The third stage of [Learned.combine], the
+   arithmetic of the PB inequalities D-0044 made the learned object, does this
+   cancellation, and must: the checker normalises complements away when it reads a
    constraint, so a copy that did not would disagree with the checker's from the next
-   line on). The constant moves across, so the degree goes [d + c - c = d], and what is
+   line on. The constant moves across, so the degree goes [d + c - c = d], and what is
    left in its place is [c * ~[x>=w+1]]. That is a SUBSTITUTION of one rung for the next
    one up, at no cost in degree -- and it is sound for the obvious reason, which is that
    every step is the addition of a positive multiple of a row the .opb already contains.
@@ -96,12 +103,14 @@
    lib/core/reduce.ml draws the same line for the same reason.
 
    It does not mint a row ([lift] does not; the bits arm at the foot of this file does,
-   and says why that is safe). Every id it cites comes from [Encoding.consistency_id], i.e.
-   from a row the .opb already contains, introduced before the proof's first decision and
-   retired by nothing. That is what keeps pb_analysis.ml's I-S4 discharge true after this
-   module joins the derivation: the cited set still holds model-row ids and nothing else.
-   A missing id (the caller's [ladder_id] answering [None], which is what the ladder's
-   ENDS do) is not an error -- the term is simply not liftable and is left alone.
+   and says why that is safe). Every id it cites comes from [Encoding.consistency_id],
+   i.e. from a row the .opb already contains, introduced before the proof's first
+   decision and retired by nothing. That keeps true, after this module joins the
+   derivation, the argument of pb_analysis.ml's header that a PB derivation respects I-S4
+   (a cited line must outlive every line that cites it): the cited set still holds
+   model-row ids and nothing else. A missing id (the caller's [ladder_id] answering
+   [None], which is what the ladder's ENDS do) is not an error -- the term is simply not
+   liftable and is left alone.
 
    It does not double-count [Order_reason]. The chain [Order_reason.weaken_declared]
    builds is a list of LITERAL AXIOMS inside a propagator's own [Explanation]; it names
@@ -112,22 +121,26 @@
    other. test/unit/test_ladder.ml pins that they cannot collide.
 
    ---------------------------------------------------------------------------
-   It stays a `pol` (M8-bits-encoding-T5, D-0131)
+   Why the lift stays a `pol` and is not written as a `rup`
    ---------------------------------------------------------------------------
 
-   D-0131 writes the order arm's ladder walks as `rup` wherever the checker's unit
-   propagation closes them. This derivation is the one ladder walk that is NOT such a
-   case, and it was measured rather than argued: on the worked case above, `rup` of the
-   lifted row `9 ~[a>=3] + 3 ~[a>=4] + 2 ~[b>=1..4] >= 6` against the .opb (the row and
-   the ladder) is REFUSED by VeriPB 3.0.2 ("not implied by reverse unit propagation"),
-   while the `pol` of the two rung additions is accepted and `e` confirms it equals the
-   row. Reverse unit propagation negates the claim and propagates; the lifted row's
-   negation forces nothing that the model row then contradicts, because the row's
-   strength was never in the row -- it is in the rungs, which is the whole point of this
-   module. So [Pb_analysis.introduce] keeps `pol` + `ia`, the `ia` stating the row our
-   arithmetic produced against the checker's, and its token count is Theta(rungs) ids
-   added into a Theta(w)-term accumulator, which is the shape D-0127 measured as
-   quadratic in the checker. `--stats` reports it (`pol-widest`) so a wide one is seen. *)
+   A lift is written as a `pol` (the rung additions) followed by an `ia` stating the row
+   our arithmetic produced, so the checker compares the two. Elsewhere the order
+   encoding's ladder walks are written as `rup` wherever the checker's unit propagation
+   closes them (M8-bits-encoding-T5, D-0131); this derivation is the one ladder walk that
+   is NOT such a case, and that was measured rather than argued. On the worked case
+   above, `rup` of the lifted row `9 ~[a>=3] + 3 ~[a>=4] + 2 ~[b>=1..4] >= 6` against the
+   .opb (the row and the ladder) is REFUSED by VeriPB 3.0.2 ("not implied by reverse unit
+   propagation"), while the `pol` of the two rung additions is accepted and `e` confirms
+   it equals the row. Reverse unit propagation negates the claim and propagates; the
+   lifted row's negation forces nothing that the model row then contradicts, because the
+   row's strength was never in the row -- it is in the rungs, which is the whole point of
+   this module. So [Pb_analysis.introduce] keeps `pol` + `ia`.
+
+   The cost: the line's token count is Theta(rungs) ids added into a Theta(w)-term
+   accumulator, the shape that D-0127's measurements of the checker alone found
+   quadratic in checking time. `--stats` reports the widest `pol` (`pol-widest`) so a
+   wide one is seen. *)
 
 module Lit = Baguette_proof.Lit
 
@@ -170,9 +183,10 @@ type t = {
    still cutting planes -- which is exactly why it is worth having: the proof is
    well-formed, every id it names is live, and the only thing wrong with it is the
    ARITHMETIC. A checker that accepted it would be telling us that
-   [Pb_analysis.introduce]'s claim is not being compared against anything, and M1-T42,
-   M1-T51 and M2-T9's "Break A" are three occasions on which a well-formed but wrong
-   derivation went through. Reached only through [Search.config], never from the CLI. *)
+   [Pb_analysis.introduce]'s claim is not being compared against anything, and that has
+   happened before: M1-T42, M1-T51 and M2-T9's "Break A" are three occasions on which a
+   well-formed but wrong derivation went through. Reached only through [Search.config]
+   ([break_ladder_mult]), never from the CLI. *)
 let derive ?(break = false) (t : t) (e : Explanation.t) : Explanation.t =
   match t.steps with
   | [] -> e
@@ -227,17 +241,19 @@ module Int_tbl = Hashtbl.Make (Int)
    Boolean, and the caller then proceeds with the bare row exactly as it did before this
    module existed. [Some t] always has [t.rungs > 0].
 
-   Raises nothing: [Learned.combine] multiplies through [Checked] and may raise
-   [Checked.Overflow], which is I-X8 / D-0029 and is the caller's to catch -- it is the
-   same raise the caller already catches around its own [combine], and the answer to it
-   is to learn a clause instead, never to wrap.
+   It raises two exceptions and catches neither. [Learned.add_multiples] multiplies
+   through [Checked] and may raise [Checked.Overflow], which is I-X8 / D-0029 and is the
+   caller's to catch -- it is the same raise the caller already catches around its own
+   [combine], and the answer to it is to learn a clause instead, never to wrap.
 
-   M6-T23 (D-0149): [stop] is asked before every rung's [combine], and [Stopped] is
-   raised when it says yes. One lift on 2017_cargo_challenge01 folds thousands of rungs
-   into a row of thousands of terms, minutes of [combine] and its GC with nothing polling
-   the time limit, so the stop fired only after the analysis ended, long past the limit.
-   The default never says yes, so nothing changes without a limit, and a limit that fires
-   here abandons a lift whose row nothing has used yet. *)
+   [stop] is asked before every rung is added, and [Stopped] is raised when it says yes,
+   so that a time limit can interrupt a lift. The default never says yes, so nothing
+   changes without a limit, and a limit that fires here abandons a lift whose row nothing
+   has used yet. Why it is needed: one lift on 2017_cargo_challenge01 folds thousands of
+   rungs into a row of thousands of terms, minutes of [combine] and its GC with nothing
+   polling the time limit, so the stop fired only after the analysis ended, long past
+   the limit (M6-T23, D-0149: the --time-limit overshoot was the stop never being asked
+   inside a PB analysis). *)
 exception Stopped
 
 let lift ?(stop = fun () -> false) ~(row : Learned.t) ~(pivot : Lit.t)
@@ -248,14 +264,15 @@ let lift ?(stop = fun () -> false) ~(row : Learned.t) ~(pivot : Lit.t)
   | Lit.Bit _ -> None (* a bits variable has no ladder either: D-0130 section 7.5 *)
   | Lit.Ge (name, k) ->
       let positive = pivot.Lit.positive in
-      (* Multipliers accumulated per ladder value, keyed by the value, so the result is a
-         function of the SET of liftable terms and not of the order [Learned.terms]
-         happened to return them in. M11-complexity-T4 (D-0140 P2, D-0144): a table keyed
-         by the value, where it was an association list with an [assoc] and a
-         [remove_assoc] per rung per term. The table is iterated once, into a list that
-         is then SORTED by the value, which is unique per entry, so its iteration order
-         reaches nothing: the same [(value, multiplier)] pairs come out in the same order
-         as before. *)
+      (* Multipliers accumulated per ladder value, in a table keyed by the value. The
+         table is iterated once, into a list that is then SORTED by the value, which is
+         unique per entry, so the table's iteration order reaches nothing and the result
+         is a function of the SET of liftable terms, not of the order [Learned.terms]
+         happened to return them in. The table replaced an association list with an
+         [assoc] and a [remove_assoc] per rung per term, and the same [(value,
+         multiplier)] pairs come out in the same order (M11-complexity-T4, D-0144:
+         learning and PB analysis without their quadratic lists, item P2 of the cost
+         inventory D-0140). *)
       let tbl = Int_tbl.create 16 in
       let bump w m =
         match Int_tbl.find_opt tbl w with
@@ -300,12 +317,13 @@ let lift ?(stop = fun () -> false) ~(row : Learned.t) ~(pivot : Lit.t)
         in
         if steps = [] then None
         else
-          (* M11-complexity-T9 (D-0157): the rungs added in ONE merge, by
-             [Learned.add_multiples], which returns what the fold of one
-             [Learned.combine] per rung returned -- the same row, and the same
-             [Checked.Overflow] at the same rung with the same message, because it runs
-             that fold itself whenever an overflow is possible at all. The stop is asked
-             once per rung, before the rung, as the fold asked it. *)
+          (* The rungs are added in ONE merge, by [Learned.add_multiples], which returns
+             what a fold of one [Learned.combine] per rung returns -- the same row, and
+             the same [Checked.Overflow] at the same rung with the same message, because
+             it runs that fold itself whenever an overflow is possible at all. The stop
+             is asked once per rung, before the rung, as the fold asks it. The fold was
+             one merge of the whole row per rung (M11-complexity-T9, D-0157: the learned
+             row's arithmetic without its sorts). *)
           let rows = List.map (fun (w, _, cid) -> (cid, ladder_row ~name w)) steps in
           let lifted =
             Learned.add_multiples
@@ -316,18 +334,20 @@ let lift ?(stop = fun () -> false) ~(row : Learned.t) ~(pivot : Lit.t)
           Some { lifted; steps; rows; rungs = List.length steps }
 
 (* ===========================================================================
-   THE BITS ARM: a bits block INSTANTIATED through its bridges (M8-bits-encoding, D-0153)
+   THE BITS ARM: a bits block INSTANTIATED through its bridges (D-0153)
    ===========================================================================
 
    What the ladder lift above does for an order variable, this does for a variable on
-   the BITS encoding (D-0130, D-0132): it turns the reason row the .opb holds into a row
-   that PB-propagates the pivot, by adding rows the proof already has. The difference is
-   in what a bits term IS. An order term of a model row is a run of literals each of
-   which the trail can falsify, so the analysis resolves on them as they stand. A bits
-   term [a * X'] (X' = sum 2^i x_bit_i, the offset of x from its declared low) is not:
-   no bit is a bound, the trail never falsifies one, and a pivot cannot be one. So no
-   row this arm hands back contains a [Bit] literal, and the learned rows, the
-   criterion, the levels and lib/core/prop/pb.ml never see one.
+   the BITS encoding, where a variable wider than a threshold is the weighted sum of its
+   bits instead of a ladder (D-0130 chose that encoding, D-0132 built it for [Linear]):
+   it turns the reason row the .opb holds into a row that PB-propagates the pivot, by
+   adding rows the proof already has. The difference is in what a bits term IS. An order
+   term of a model row is a run of literals each of which the trail can falsify, so the
+   analysis resolves on them as they stand. A bits term [a * X'] (X' = sum 2^i x_bit_i,
+   the offset of x from its declared low) is not: no bit is a bound, the trail never
+   falsifies one, and a pivot cannot be one. So no row this arm hands back contains a
+   [Bit] literal, and the learned rows, the criterion, the levels and lib/core/prop/pb.ml
+   never see one.
 
    ---------------------------------------------------------------------------
    The step: a bridge cancels a whole block, and leaves ONE atom
@@ -383,9 +403,9 @@ let lift ?(stop = fun () -> false) ~(row : Learned.t) ~(pivot : Lit.t)
 
      - THE SPARSE CHAIN AS THE LADDER of a bits term (replace [a X'] by its order
        expansion over the minted atoms, then reuse [lift]): that row is not one
-       cutting-planes step from the pairs (D-0134 section 11's convex-combination
-       argument), and as a `rup` it is refused at 8 bits (probe p7w) -- accepted at 3
-       only, D-0127's caveat.
+       cutting-planes step from the pairs (the convex-combination argument of D-0134
+       section 11, the record that built maxmin over bits), and as a `rup` it is refused
+       at 8 bits (probe p7w) -- accepted at 3 only, D-0127's caveat.
      - THE BITS ROW ITSELF AS AN ANTECEDENT (add conflict and reason so the pivot
        variable's whole block cancels, no atom): accepted, and STRONGER where the reason
        is tight (probe p6 learns z <= 1 where this arm learns z <= 2), but the row it
@@ -404,7 +424,9 @@ let lift ?(stop = fun () -> false) ~(row : Learned.t) ~(pivot : Lit.t)
    this arm asks for is already on the page -- the trace names the same bounds as facts
    and claims -- and one minted here is a level-0 line like any other, never deleted
    before the conclusion (D-0132 section 2.8), which is what keeps pb_analysis.ml's I-S4
-   discharge true: the derivation still cites only lines no `w` retires. The
+   discharge true: the derivation still cites only lines that no backjump's deletions
+   retire ([Writer.wipe_level], which imitates the `w` command VeriPB 3.0 lacks, deletes
+   only ids tagged at the levels it undoes). The
    precondition [ensure_atom] states (no root contradiction on the page) holds because
    PB analysis runs at a conflict below the root. *)
 
@@ -568,13 +590,13 @@ let instantiate ~(bits : bits) ~(row : Learned.t) ~(pivot : Lit.t option)
     in
     (a, cid, r)
   in
-  (* M11-complexity-T9 (D-0157): the scaled terms are handed to [Learned.make] with the
-     atoms first and the bits after, each half in block order. [make]'s answer is a
-     function of the multiset it is given, so the row is the same; but that order is
-     already [make]'s own (a block per variable, found in the row's sorted order, one atom
-     each, its bits by index), so [make] takes it as it stands instead of sorting
-     hundreds of blocks. The [Checked] products run as before, in the same order: the
-     reordering happens after them. *)
+  (* The scaled terms are handed to [Learned.make] with the atoms first and the bits
+     after, each half in block order. That order is already [make]'s own (a block per
+     variable, found in the row's sorted order, one atom each, its bits by index), so
+     [make] takes the list as it stands instead of sorting hundreds of blocks; and since
+     [make]'s answer is a function of the multiset it is given, the row is the same in
+     any order. The [Checked] products run in the order they did before the reordering,
+     which happens after them (M11-complexity-T9, D-0157). *)
   let atoms_first l =
     List.partition (fun (_, (b : Lit.t)) -> not (Lit.is_bit b.Lit.v)) l
   in

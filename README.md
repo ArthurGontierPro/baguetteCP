@@ -15,15 +15,15 @@ Written in OCaml 5, single-threaded, deterministic.
 | Input | FlatZinc over integers and Booleans (`docs/SPEC.md` §2.1), directly or through MiniZinc with its own library `mznlib/` |
 | Problems | satisfaction, minimisation, maximisation, every improving solution (`-i`, or `-a` on an optimisation model) |
 | Proof | VeriPB 3.0, checked by VeriPB 3.0.2. The proof covers the encoding, every propagation, every learned constraint and the final claim (UNSAT, a solution, or optimality bounds) |
-| End-to-end verification | under `--e2e`, the proof can also be checked against the `.opb` produced by `cake_pb_cp`, CakeML's verified encoder, so the encoding of the model is no longer trusted. At the last recorded run (D-0201), 197 of the 207 test models of that day verified this way and 10 were skipped (`make e2e`). The suite has 228 models since |
+| End-to-end verification | under `--e2e`, the proof can also be checked against the `.opb` produced by `cake_pb_cp`, CakeML's verified encoder, so the encoding of the model is no longer trusted. At the last recorded run (D-0201), 197 of the 207 test models of that day verified this way and 10 were skipped (`make e2e`). The suite has 264 models since |
 | Integer encoding | order encoding, or a binary (bits) encoding for wide domains. Bits is the default (`--bits-above 0`), `--bits-above none` gives the order encoding everywhere |
 | Linear and arithmetic | `int_lin_le`, `int_lin_eq`, `int_lin_ne` and their reified forms, `int_le`, `int_lt`, `int_eq`, `int_ne` and their reified forms, `int_times`, `int_div`, `int_mod`, `int_abs`, `int_min`, `int_max` |
 | Booleans | `bool_clause`, `array_bool_and`, `array_bool_or`, `bool_eq`, `bool_not`, `bool2int`, and the rest of the Boolean family through `mznlib` |
 | Global constraints, native | `all_different_int` (domain consistent: Hall intervals on the bounds, then a matching over the values), `global_cardinality` (open, closed, low/up), `array_int_element`, `array_int_maximum`/`minimum`, `cumulative` and `disjunctive` (time-table), `regular` and `table` (domain consistent), `inverse`, `member`, `circuit` (with Chuffed's no-subtour rule) |
-| Global constraints, through `mznlib` | `bin_packing`, `bin_packing_capa` and `bin_packing_load` (one linear row per bin), `diffn` and `diffn_nonstrict` (pairwise rows plus two `cumulative` relaxations). The capacity rows of the two relaxations are rows of the model, so the proof uses them without deriving them (D-0213) |
-| Learning | 1UIP clause learning with minimisation, and pseudo-Boolean conflict analysis (linear combination plus division or rounding), with a swappable retention policy for the learned database |
+| Global constraints, through `mznlib` | `bin_packing`, `bin_packing_capa` and `bin_packing_load` (one linear row per bin), `diffn` and `diffn_nonstrict` (pairwise rows plus two `cumulative` relaxations). The capacity rows of the two relaxations are rows of the model, so the proof uses them without deriving them (D-0213). `nvalue`, the reified `all_equal`, `alldifferent_except` and `all_different(xs, S)` (D-0233), `lex_less` and `lex_lesseq` over integers and Booleans, hence `lex_greater`, `lex_chain_*` and `lex2` (D-0239) |
+| Learning | 1UIP clause learning, the clause minimised over the order ladder (MiniSat's removal of root-level and re-derivable literals exists behind `BAGUETTE_MINIMISE` and is off by default, D-0241), and pseudo-Boolean conflict analysis (linear combination plus division or rounding), with a swappable retention policy for the learned database |
 | Explanations | each pruning carries a declarative reason (an `Explanation` value), turned into `pol` or `rup` steps only when the proof needs them. Reasons are hash-consed so shared sub-proofs are written once |
-| Search | the model's search annotation by default (first-fail, smallest value when there is none). Free search with `-f` (activity order alternating with the annotation, Luby restarts, phase saving). A conflict-driven search, where the learned clause decides the backjump, is available with `BAGUETTE_CDCL=1` and off by default (D-0219) |
+| Search | the model's search annotation by default (first-fail, smallest value when there is none). Free search with `-f` (activity order alternating with the annotation, Luby restarts, phase saving). A conflict-driven search, where the learned clause decides the backjump, is available with `--cdcl` (or `BAGUETTE_CDCL=1`) and off by default (D-0219) |
 | Without proof | `--no-proof` runs the same search without writing a proof, as a measurement tool. Its answers are unverified |
 | Limits | `--time-limit`, `--max-heap-mb` (a clean refusal before memory runs out), caps on encoding size |
 | Symmetries | `tools/symmetry/` finds model symmetries with dejavu, outside the solver (`make sym`) |
@@ -140,6 +140,12 @@ model and go in the current directory, replacing those of an earlier run of the 
 
 `baguette --help` lists every option.
 
+The exit status is 0 when the run solved the model (SAT or UNSAT) or was stopped by
+`--time-limit`, 2 for a usage error or a malformed model, 3 for a model outside the supported
+subset, 4 for an internal invariant failure, 5 when a resource budget (`--max-heap-mb`, the
+encoding caps) was exhausted before any solution was printed, and 6 when a file could not be
+written (a missing directory or a full disk), in which case the proof is incomplete (D-0248).
+
 ### From MiniZinc
 
 `tools/baguette.msc` registers baguette as a MiniZinc solver, with its own library for the
@@ -173,6 +179,16 @@ poor order or when there is none. It can also be much slower, so neither search 
 model (the Challenge table above, and D-0137 §10 and D-0202 on smaller sets). A run under `-f`
 writes a proof the checker verifies, as the default search does.
 
+`--cdcl` replaces the default depth-first search with the CDCL loop of lazy clause
+generation: after a conflict, the learned clause sends the search back to the level where it
+asserts a literal and propagates there, and no branch nogood is written. It is off by default
+(D-0219). With it, `--chrono T` goes back a single level whenever the jump would skip more
+than T levels (chronological backtracking, D-0224).
+
+`BAGUETTE_PROBE=root` probes at the root before the first decision: each bound literal of a
+small domain is tried on its own, and one that fails is asserted negated at level 0, with
+the failed node's nogood as its proof (failed-literal probing, D-0250). It is off by default.
+
 ## Documentation
 
 | | |
@@ -184,6 +200,7 @@ writes a proof the checker verifies, as the default search does.
 | `docs/ROADMAP.md` | milestones |
 | `docs/DECISIONS.md` | why things are the way they are |
 | `docs/GLOSSARY.md` | vocabulary |
+| `docs/REFERENCES.md` | one line per decision, task and invariant the code cites |
 | `bench/challenge/README.md` | how the Challenge runs are made and where they are kept |
 | `bench/series/HISTORY.md` | the results of every Challenge series |
 | `scripts/README.md` | the operating manual for the compute node (runs, gates, lanes) |

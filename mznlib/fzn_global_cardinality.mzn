@@ -1,5 +1,6 @@
 %-----------------------------------------------------------------------------%
-% global_cardinality stays whole.
+% global_cardinality stays whole when its counts are fixed (variable counts go to
+% std's decomposition since D-0247, see the second header below).
 %
 % std/fzn_global_cardinality.mzn decomposes to one reified equality per variable
 % per cover value, channelled to 0/1 and summed against the count.  That throws
@@ -35,14 +36,69 @@
 % So `fzn_global_cardinality' states the bound the decomposition used to imply and hands
 % the constraint to `baguette_global_cardinality', which is the bodyless one.  The bounds
 % are not a heuristic: a tally over |x| variables is between 0 and |x| by definition, so
-% nothing is lost and nothing is assumed.
+% nothing is lost and nothing is assumed.  Since D-0247 only fixed counts reach that
+% call, where the bounds are a par check; variable counts get their bounds again from
+% std's count rows.
 %
-% THE FRONT END REFUSES three shapes rather than mis-counting them, and all
-% three are refusals with a source position (lib/flatzinc/compile.ml's
-% post_global_cardinality says why): a cover and counts of different lengths, a
-% count that is a literal constant rather than a variable, and the same variable
-% twice in the array.
+% THE FRONT END REFUSES two shapes rather than mis-counting them, each with a
+% source position (lib/flatzinc/compile.ml's post_global_cardinality says why): a
+% cover and counts of different lengths, and the same variable twice in the array.
+% The second is a guard: Builder.split_gcc_repeats replaces every repeat by a copy
+% tied with int_eq before compile.ml sees the model (M7-T29, D-0146).  A count that
+% is a literal constant was a third refusal until M7-T18 made it the count VIEW
+% (D-0082).
+
+% VARIABLE COUNTS GO TO STD'S DECOMPOSITION (M18-coverage-T14, D-0247 [AUTONOME]).
+%
+% When some count is a variable, this file now hands the call to std's own
+% decomposition (one `count' per cover value, plus std's implied row
+% length(x) >= sum(counts)), and keeps lib/core/prop/gcc.ml for the calls whose
+% counts are all fixed. Measured over the 40 Challenge instances (2014-2026 lists,
+% flattened by MiniZinc 2.10.1) that reach this branch, 300 s: with proof three more
+% complete and verified (mondoku 10-10-6 and 12-12-8, and oocsp_racks 100_r1 whose
+% check now ends), 11 wins and 3 losses against main by the Challenge order;
+% without proof two more complete, 15 wins and 1 loss. No complete answer is lost.
+% What the native propagator misses with variable counts is the propagation BETWEEN
+% counts: the implied row alone closes mondoku (D-0247 section 3), and on warehouse
+% and peaceable queens the per-value rows are also cheaper per node than gcc's
+% interval rule over 3 000 variables. Native plus the rows was measured too: it
+% completes the same instances and scores below this route (1 win, 14 losses).
+%
+% The closed forms stay native (fzn_global_cardinality_closed.mzn calls the bodyless
+% predicate itself): they already state sum(counts) = |x|, the row that decides
+% mondoku, and blocks-world, the one Challenge family that uses them, did not move.
+% global_cardinality_low_up's counts are declared on constant bounds and stay native
+% too, by measurement (D-0255): over the 58 Challenge instances that call only low_up,
+% std's decomposition, the native propagator plus the row between the counts, and both
+% together reach the incumbent main reaches on every instance stopped at 20 000 nodes,
+% and their 300 s differences stay within the run-to-run spread of main itself.
+%
+% Native plus one row between the counts, sum(counts) in L..|x|, was measured against
+% this route as well (D-0255): it scores well below (2 wins, 14 losses at 300 s without
+% proof, 2 and 12 with), and with proof it loses oocsp_racks 100_r1's verified answer.
+%
+% A COVER WITH A REPEATED VALUE gets the per-value rows WITHOUT std's implied row
+% (D-0255). Each repeat's count is the same tally, so the counts can sum past |x|:
+% global_cardinality(x, [1,1], c) with x = [1,1] holds with c = [2,2] (Gecode agrees),
+% and std's row 2 >= c1 + c2 made it UNSAT, a wrong answer 4c5df61 introduced (the
+% native route before it answered SAT). The guard is a par test, so a cover of distinct
+% values gets the same rows as before. MiniZinc 2.10.1's output for them is not byte for
+% byte the same: its common-subexpression choices move with any edit of these files
+% (12 of 98 Challenge instances shifted here, blocks-world among them although it never
+% reaches this branch; D-0255 section 2). Models: mznlib/test/gccvar_dupcover_src_*.
+%
+% A COVER WITH A REPEATED VALUE gets the per-value rows WITHOUT std's implied row
+% (D-0255). Each repeat's count is the same tally, so the counts can sum past |x|:
+% global_cardinality(x, [1,1], c) with x = [1,1] holds with c = [2,2] (Gecode agrees),
+% and std's row 2 >= c1 + c2 made it UNSAT, a wrong answer 4c5df61 introduced (the
+% native route before it answered SAT). The guard is a par test, so a cover of distinct
+% values flattens byte for byte as before. Models: mznlib/test/gccvar_dupcover_src_*.
+%
+% To revert: restore the body below to its first two lines (the bounds and the
+% baguette_global_cardinality call) for every call.
 %-----------------------------------------------------------------------------%
+
+include "count.mzn";
 
 predicate baguette_global_cardinality(
   array [int] of var int: x,
@@ -55,5 +111,10 @@ predicate fzn_global_cardinality(
   array [int] of int: cover,
   array [int] of var int: counts,
 ) =
-  forall (i in index_set(counts)) (counts[i] >= 0 /\ counts[i] <= length(x))
-  /\ baguette_global_cardinality(x, cover, counts);
+  if forall (i in index_set(counts)) (is_fixed(counts[i])) then
+    forall (i in index_set(counts)) (counts[i] >= 0 /\ counts[i] <= length(x))
+    /\ baguette_global_cardinality(x, cover, counts)
+  else
+    forall (i in index_set(cover)) (count(x, cover[i], counts[i]))
+    /\ if card(array2set(cover)) = length(cover) then length(x) >= sum(counts) else true endif
+  endif;

@@ -30049,3 +30049,3659 @@ claimed). A TODO for `regular.ml`'s owner: treat an out-of-range constant letter
 Each commit reverts alone. The extraction (`M23-inputs-T4: the arithmetic auxiliaries ...`) is
 byte-identical on the FlatZinc path, and the reader is reached only through a `.scp` file name, so
 reverting `lib/scp/` and the two lines of `bin/main.ml` leaves FlatZinc runs exactly as they are.
+
+## D-0224  [AUTONOME] M19-config-T11, then T2 to T4 measured on the CDCL loop: chronological backtracking for long jumps under `--cdcl` (`--chrono N`), with the asserted literal recorded at the level the search goes back to. The trail stays ordered by level, no `Store`, `Engine` or proof-rule change; the learned clause's own instance re-asserts it after a later backtrack through the engine's existing re-seed of young instances
+
+**Status**: DONE on branch `wave71-chrono` (agent-chrono, 2026-11-24 to 26), not merged. ROADMAP M19-config-T11,
+T2, T3, T4. Taken in autonomous mode. The solver's default is NOT changed here (M19-config-T1 decides
+it on a full series). Results in `/cluster/arthur/baguette-results/chrono/`.
+
+### 1. Design (written before the code)
+
+**What is to be removed.** D-0219 section 6: after a conflict at level `d` the loop backjumps to the
+learned clause's asserting level `b`, the fixed order then re-takes the decisions of the levels
+`b+1 .. d-1` it undid, with their propagation, and on a deep optimisation search that re-descent is
+most of the work (flowshop-workers 24 decisions per conflict against `dfs`'s 9).
+
+**The three candidates.**
+
+| candidate | what it does | what it needs here | verdict |
+|---|---|---|---|
+| D-0137's `--reuse-trail` | at a RESTART, keep the levels whose decision still outscores every unfixed variable (van der Tak et al. 2011) | nothing | not this problem: it acts on restarts, under `--search activity` only, never on a conflict's backjump |
+| trail saving (Hickey and Bacchus, SAT 2020) | keep the undone segment `b+1 .. d`, and when the search re-takes its first decision, replay the saved propagations while their reasons still hold | to re-push a trail entry WITH ITS EXPLANATION after the store has been unwound below it: a D-0124 `Later` reason or a D-0214 frame reads a `Store.history` that `Store.check_history` refuses once the trail is cut below it, so a replay needs a new store API (held by agent-holes) and a re-derivation of every reason it carries | not built: the replay is a second propagation path through `Store` and the explanations, which are the two things other sessions hold today |
+| chronological backtracking (Nadel and Ryvchin, SAT 2018) | when the jump would skip more than `T` levels, go back ONE level (to `top - 1`, `top` the clause's highest level) instead of to `b`, and assert the UIP's negation there | see below: nothing new from the store or the proof | **built** |
+
+**The variant built, and why it needs no new trail machinery.** Nadel and Ryvchin assign the
+asserted literal at its TRUE level `b` while it sits above level-`b+1` entries on the trail (out of
+order), and on a later backtrack to `t >= b` they keep such literals. Here the trail is strictly
+ordered by level (I-T2) and `Store` is held by another session, so the asserted literal is recorded
+at the level the search goes back to, `c = top - 1`: an ordinary propagation of the learned clause
+at level `c`, as Möhle and Biere (SAT 2019) call the "imprecise" assignment level. Every level the
+loop reads (`Learn.levelled`, the asserting level, the 1UIP walk) is the RECORDED one, and the
+argument that a learned clause is implied never read a level at all, so the only cost is precision:
+a literal recorded above its true level makes a later clause's asserting level, and its LBD, higher
+than they had to be.
+
+What Nadel and Ryvchin's out-of-order trail buys is that the literal survives a later backtrack to
+any `t` in `[b, c)`. Here it is popped there with level `c`, and the clause is then unit again with
+nothing to wake it (its false watch sits at level `<= b`, which was not popped): a "missed lower
+implication". The engine already re-seeds it. `Engine.propagate`'s rule (b) (M6-T18, M6-T22) seeds
+every instance BORN after the last fixpoint the backtrack left standing, because such an instance
+has never run on that state; the learned clause was born at the conflict, after every fixpoint of
+levels `<= c`, so the next `propagate` after a backtrack to `t < c` runs it, and it asserts the
+literal again at `t`, its own reason, its own trace line. It is then stamped with the new
+fixpoint's epoch and the same holds for the next backtrack below `t`. The PB row learned beside
+the clause is an instance too and is covered the same way. `BAGUETTE_DEBUG`'s `check_fixpoint` (I-P2)
+re-runs every instance at every fixpoint and would raise on a missed implication: the unit lane and
+the model tests under `--debug` are the check.
+
+Two kinds of assertion have no instance and are handled in the loop:
+
+- the learned UNIT is a global applied at every node (`apply_globals`), so nothing is missed;
+- the FALLBACK (D-0219 section 4: no 1UIP clause, the branch nogood filed at its asserting level `b`,
+  its assertion pushed from it by `assert_directly`) is kept on a short list, and after every
+  backjump to a `t` with `b <= t < ` its recorded level it is pushed again at `t`, from the same
+  line, which is still live because it is filed at `b <= t`. An entry is dropped when `t < b` (its
+  other literals are popped too) or when it is pushed at its true level.
+
+**Not chronological**: a clause that does not assert (its two highest levels tie, the
+branch-and-bound case of D-0219 section 4) goes where D-0219 sends it; a restart's target still wins
+when it is lower (`min`). The jump is taken whole when it skips at most `T` levels, as Nadel and
+Ryvchin's threshold (their `T = 100`); `T = 0` makes every conflict chronological, which on a fixed
+search is `dfs`'s tree with the sibling a propagation.
+
+**The proof.** The lines written are the same learned clauses, the same conflict lines and the same
+bridges, in the same order; the assertion's trace line is the same `rup` against the level-0 clause,
+filed at `c` instead of `b`. What changes is the DELETIONS: a backjump wipes the levels above its
+target (`Justify.wipe_level (c + 1)`), so a chronological step deletes the lines of level `top` only
+and the lines of `b+1 .. c` stay live as long as their entries stay on the trail, to be wiped when
+those levels are undone or at the end (I-X2 unchanged: every id still deleted exactly once). A
+re-assertion after a later backtrack is a new trail entry with a new trace line, written lazily at
+the next conflict as every entry's is. No new rule kind, no new `Explanation` constructor, no change
+to `Store`, `Engine`, `Trace` or `Justify`.
+
+**Completeness.** Möhle and Biere's argument with recorded levels: at each conflict the loop goes back
+to a level `t` in `[b, top - 1]` where the clause is unit and adds its literal at `t`, so the vector
+of per-level assignment counts grows strictly in the lexicographic order (levels below `t`
+untouched, level `t` one longer) and is bounded; restarts are spaced by the restart policy as before.
+
+**The switch.** Under the loop only: `config.chrono : int option`, `None` off (D-0219's loop,
+byte-identical), `Some t` chronological when the jump would skip more than `t` levels. CLI
+`--chrono T` (needs `--cdcl`, a usage error otherwise), environment `BAGUETTE_CHRONO=T`. `--cdcl` is
+added to the CLI (D-0219's cross-session request), `BAGUETTE_CDCL=1` kept. `dfs` and the default
+are byte-identical by construction: the code is inside `Search.cdcl` and the CLI parsing.
+
+### 2. The threshold, chosen on a pilot
+
+Built as section 1 says (`440b579`), release md5 `f35ba693` for the pilot (`f404f013` after `dune
+fmt`, the same code, for everything after it). Fixed search, `--no-proof`, 300 s, the loop alone (`L`)
+against `--chrono T`. Seconds, G instructions (`perf stat -e instructions:u`), nodes, conflicts, and
+the number of conflicts that went back chronologically:
+
+| instance | L | T 0 | T 5 | T 10 | T 20 | T 30 | T 50 | T 100 |
+|---|---|---|---|---|---|---|---|---|
+| 2012 tpp 7_5_30_1 (OPT) | 134 s, 788 G, 218 357 n, 5 805 c | 68 s, 387 G | 70 s | 71 s | 70 s, 401 G, 159 869 n, 5 825 c, 235 chrono | 70 s | 132 s (35 chrono) | 131 s |
+| 2019 nside EASY_200_50 (OPT) | 115 s, 429 G, 10 961 n, 441 c | 53 s, 202 G | 57 s | 64 s | 82 s, 304 G, 7 242 n, 443 c, 118 chrono | 99 s | 111 s (0) | 113 s |
+| 2021 flowshop-workers ex6 | 3211, no proof of optimality, 536 645 n, 22 571 c | 3211, 143 199 c | 3211 | 3211 | **OPT 3201, 261 s**, 1 001 G, 205 320 n, 96 277 c, 71 670 chrono | **OPT 3201, 218 s** | 3211 | 3211 |
+| 2022 rotating-workforce e-80 (SAT) | 1.7 s | 2.1 s | 1.6 s | 1.6 s | 1.6 s | 1.6 s | 1.6 s | 1.6 s |
+| QR48 f3 (UNSAT), costas 14 (SAT) | 6.2 s, 153 s | same tree, no jump to cut | | | same | | | |
+
+On QR48 and costas no jump skips a level (D-0219 section 6: the asserting level is the level below),
+so the threshold changes nothing there. On tpp and nside every threshold up to 30 halves the time
+(the re-descent is gone: nodes -27 % and -34 % at `T = 20` for the same conflicts). On flowshop-workers
+the small thresholds trade the re-descent for something worse: at `T = 0` every conflict goes back
+one level and the run makes 143 199 conflicts in 300 s, one per node, without closing the optimum.
+The literal recorded at its imprecise level makes the next clause's asserting level high, so the
+jumps that remain are short and the conflicts many; only 20 and 30 prove the optimum. D-0219's
+`dfs` proved it in 167 s. `T = 20` is taken for the campaign: the best of the thresholds that close
+all three optimisation instances on tpp and nside, second on flowshop. Nadel and Ryvchin's 100 is
+the loop without the option here (the jumps that hurt are 20 to 60 levels long). This was chosen on
+four instances that are in the tuning set, so the tuning set is not an independent test of `T`.
+
+### 3. Checks (code at `440b579`)
+
+With the switch OFF (the default, and `--cdcl` without `--chrono`):
+
+- All 228 test models, both encodings: stdout, exit code, `.opb` and `.pbp` byte-identical to main
+  `4fbbf56`'s binary (dev builds, md5 `cc46f5dd` main, `3b5eed72` branch), 456 of 456
+  (`/scratch/arthur/chrono-runs/ident/`).
+- `dune runtest --root . --force` under `ulimit -v 4000000`: 5 283 ok, 0 FAIL, peak RSS 155 MB (the
+  61 more than D-0219's 5 222 are this row's and main's since).
+- `diff_lane.sh --tier all -j 4`: 347 of 347 equal the reference; with `--debug`: 333 of 333
+  (`BAGUETTE_DEBUG`, 14 skipped by `debug-skip.tsv` as on main). `scaling_lane.sh --enforce -j 4`:
+  every line within its threshold.
+- Without `--chrono` the loop is D-0219's: the unit lane checks that no chronological step and no
+  re-push happens in its twelve old arms.
+
+With the loop and chronological backtracking ON:
+
+- `scripts/run_model_tests.sh` under `BAGUETTE_CDCL=1 BAGUETTE_CHRONO=20`: 223 of 228 pass, every
+  proof VERIFIED on both encodings; the five others are D-0219's five (three satisfiable models print
+  another solution, each `VERIFIED SATISFIABLE` on both encodings, two optimisation models print
+  other intermediate solutions and the expected optimum, `VERIFIED BOUNDS 6 <= obj <= 6` and
+  `3 <= obj <= 3`). Every answer agrees with `dfs`.
+- The same under `BAGUETTE_CHRONO=0 BAGUETTE_DEBUG=1` (every conflict chronological, I-P2 checked at
+  every fixpoint, so a missed re-assertion would raise): 224 pass, the three satisfiable models as
+  above, and `cumulative_fixed_overload_edge_unsat` stops on a `BAGUETTE_DEBUG` invariant
+  (`D-0026: the reason and the justification are about the same pruning`) that fires identically on
+  main's own binary with the default search: a pre-existing finding of M22-review-T2's model, not of
+  this row (WORKLOG cross-session request). Without `BAGUETTE_DEBUG` it is UNSAT and verified.
+- Unit lane `test_cdcl_loop`: four more arms (`chrono:0`, `chrono:1`, `chrono:0` with learning off,
+  `chrono:0` with Luby and phase saving) on pigeonhole 5/4, queens 8, queens 6 optimisation: same
+  answer as `dfs`, proof VERIFIED, every id deleted (audit on), no rule kind the `dfs` proof lacks,
+  every learned clause unit where the search resumed, no direct assertion; 18 chronological steps
+  over them. Also under `BAGUETTE_DEBUG=1`: 280 ok.
+- `test_mutation.exe` under `BAGUETTE_CDCL=1 BAGUETTE_CHRONO=20`: 156 ok, every corruption refused.
+
+Re-run after merging main `5935d7e` and then main at the `wave76-scp` merge (`c1c2c93`, which brings
+D-0225's signal handling and D-0230's `.scp` reader into `bin/main.ml` and `search.ml`): identity
+456 of 456 against that main's binary (`9bfe10d3` against `bbbd0630`), `dune runtest --root . --force`
+5 399 ok and 0 FAIL (peak RSS 161 MB), diff lane 347 of 347 and 333 of 333 under `--debug`, scaling
+lane ok, the model tests under `--cdcl --chrono 20` the same 223 plus D-0219's five, all ten of
+their proofs VERIFIED.
+
+### 4. Measured: the 3-SAT probes and D-0207's five (campaign binary `f404f013`, `--no-proof`)
+
+The arms. Loop arms (`--cdcl`): `Lfix` fixed search; `Cfix` fixed search with `--chrono 20`; and with
+`--chrono 20`: `Cf` `-f` (alternate, Luby, phase saving), `Calp` activity + Luby + phase saving,
+`Cal` activity + Luby, `Cabp` activity + LBD restarts (`--restarts lbd`) + phase saving, `Ca` activity
+alone. `dfs` arms with the same flags: `Dfix`, `Df`, `Dalp`, `Dal`, `Dabp`, `Da`. Run while the node's
+load was 50 to 93 (other sessions' series), 20 of these at a time, so compare instructions and
+conflicts more than seconds.
+
+**3-SAT, 32 probes, 120 s** (Chuffed answers all 32 in under 20 s, 17 satisfiable and 15 UNSAT):
+
+| arm | answered of 32 | SAT / UNSAT | seconds, sum | conflicts per s (median) | G instr per s |
+|---|---|---|---|---|---|
+| Lfix | 12 | 12 / 0 | 2 762 | 428 | 1.53 |
+| Cfix | 13 | 12 / 1 | 2 740 | 443 | 1.57 |
+| Cf | 17 | 12 / 5 | 2 225 | 471 | 1.51 |
+| Calp | 23 | 14 / 9 | 1 422 | 620 | 1.75 |
+| Cal | **24** | 15 / 9 | 1 343 | 696 | 1.87 |
+| Cabp | **24** | 15 / 9 | 1 248 | 1 046 | 2.03 |
+| Ca | 23 | 15 / 8 | 1 346 | 779 | 1.90 |
+| Dfix | 13 | 12 / 1 | 2 822 | 397 | 1.52 |
+| Df | 16 | 13 / 3 | 2 346 | 382 | 1.44 |
+| Dalp | 21 | 14 / 7 | 1 602 | 442 | 1.47 |
+| Dal | 20 | 13 / 7 | 1 686 | 348 | 1.41 |
+| Dabp | 21 | 14 / 7 | 1 477 | 367 | 1.46 |
+| Da | **24** | 15 / 9 | 1 226 | 1 000 | 2.04 |
+
+Eight probes (seven of the 250-variable ones and `r3_200_7`) are answered by no arm. Under every
+restart policy the loop answers more than `dfs` with the same flags (17 to 24 against 16 to 21) and
+makes 1.2 to 2.9 times the conflicts per second; without restarts the two are equal (24). Chuffed's
+32 are out of reach at 0.4 to 1 thousand conflicts a second: that gap is M20's (cost per conflict),
+not the search's.
+
+**D-0207's five, 300 s** (seconds, conflicts, G instructions):
+
+| arm | QR48 f3 (UNSAT) | costas 14 (SAT) | rcpsp 11 <= 60 (UNSAT) | mknap2-1, javarouting <= 66 |
+|---|---|---|---|---|
+| Lfix | 7 s, 14 890 c, 27 G | 196 s, 10 573 c, 456 G | 17 c | none, none |
+| Cfix | same as Lfix (no jump to cut) | same | 17 c | none, none |
+| Cf | 10 s, 16 208 c, 31 G | 5 s, 1 810 c, 22 G | 19 c | none, none |
+| Calp | **4 s, 9 335 c, 18 G** | **2 s, 875 c, 9 G** | 46 c | none, none |
+| Cal | 7 s, 10 235 c, 23 G | 22 s, 4 538 c, 72 G | 28 c | none, none |
+| Cabp | 5 s, 10 474 c, 20 G | 9 s, 2 778 c, 37 G | 46 c | none, none |
+| Ca | 12 s, 12 708 c, 27 G | none | 28 c | none, none |
+| Dfix | 7 s, 14 890 c, 31 G | 198 s, 10 561 c, 468 G | 34 c | none, none |
+| Df | 52 s, 32 281 c, 108 G | 4 s, 1 535 c, 18 G | 44 c | none, none |
+| Dalp | 19 s, 17 735 c, 45 G | none | 29 c | none, none |
+| Dal | 39 s, 24 159 c, 79 G | 60 s, 6 372 c, 148 G | 48 c | none, none |
+| Dabp | 22 s, 21 000 c, 58 G | none | 29 c | none, none |
+| Da | 7 s, 9 620 c, 22 G | none | 48 c | none, none |
+
+Under restarts the loop is two to ten times cheaper than `dfs` on QR48 (where `dfs`'s restarts throw
+away a tree the nogoods were closing) and solves costas under every restart policy, where `dfs` under
+activity with phase saving (`Dalp`, `Dabp`) does not.
+
+### 5. Measured: the whole tuning set, 13 arms, `--no-proof` (binary `f404f013`)
+
+`bench/tuning/set.lst`, 200 instances, 300 s, 16 GiB scope, `--max-heap-mb 8192`, the arms of
+section 4. 2 600 runs, 20 to 40 at a time on `fataepyc-06` (load 40 to 93 from other series), from
+2026-11-24 11:32 to the night of the 25th. Status and verdicts as `tools/compare/compare.py classify`
+and `arms_compare.verdict` (the Challenge order); without proof every complete answer is trusted,
+unverified. "Share" is the Borda score of `agreement.py` over the 13 arms (1 per arm beaten, 0.5 per
+tie, over the total); `bench/tuning/README.md` says a difference under about 0.03 is noise.
+`died` = heap refusal or error. Conflicts per second and G instructions per second are medians over
+runs longer than 1 s. "vs" = instances better / worse in the Challenge order.
+
+| arm | complete | incumbent only | nothing | died | share | conflicts/s | G instr/s | vs `Dfix` | vs `Df` | vs `dfs` same flags |
+|---|---|---|---|---|---|---|---|---|---|---|
+| Lfix (loop, fixed) | 32 | 117 | 45 | 6 | 0.077 | 104 | 3.55 | 24+ 28- | 52+ 105- | (Dfix) 24+ 28- |
+| **Cfix** (loop, fixed, `--chrono 20`) | 35 | 114 | 44 | 7 | 0.078 | 109 | 3.59 | 30+ 26- | 53+ 102- | (Dfix) 30+ 26- |
+| **Cf** (`-f`) | **51** | 115 | 29 | 5 | **0.099** | 93 | 3.67 | **103+ 45-** | **69+ 60-** | (Df) 69+ 60- |
+| Calp (activity, Luby, phase) | 44 | 115 | 35 | 6 | 0.077 | 92 | 4.07 | 78+ 88- | 46+ 105- | (Dalp) 63+ 61- |
+| Cal (activity, Luby, no phase) | 41 | 118 | 34 | 7 | 0.078 | 106 | 4.00 | 83+ 79- | 53+ 100- | (Dal) 50+ 62- |
+| Cabp (activity, LBD, phase) | 40 | 115 | 39 | 6 | 0.073 | 97 | 4.00 | 77+ 89- | 46+ 105- | (Dabp) 69+ 66- |
+| Ca (activity, no restarts) | 29 | 110 | 55 | 6 | 0.057 | 92 | 3.76 | 55+ 106- | 32+ 126- | (Da) 54+ 47- |
+| Dfix (`dfs`, the default) | 34 | 117 | 43 | 6 | 0.078 | 100 | 3.45 | | 53+ 103- | |
+| Df | 48 | 119 | 28 | 5 | 0.098 | 97 | 3.72 | 103+ 53- | | |
+| Dalp | 38 | 118 | 38 | 6 | 0.077 | 97 | 3.86 | 79+ 87- | 44+ 106- | |
+| Dal | 42 | 118 | 33 | 7 | 0.078 | 89 | 3.88 | 85+ 77- | 52+ 98- | |
+| Dabp | 41 | 120 | 33 | 6 | 0.073 | 91 | 3.96 | 78+ 85- | 47+ 109- | |
+| Da | 30 | 105 | 59 | 6 | 0.057 | 84 | 3.64 | 50+ 107- | 34+ 127- | |
+
+Families (183; a family counts once, by the sum of its instances' verdicts), won / lost:
+
+| arm | against `Dfix` | against `Df` |
+|---|---|---|
+| Lfix | 22 / 25 | 43 / 93 |
+| Cfix | 27 / 23 | 46 / 92 |
+| Cf | **91 / 38** | **61 / 53** |
+| Calp | 70 / 76 | 43 / 94 |
+| Cal | 73 / 68 | 47 / 89 |
+| Cabp | 68 / 79 | 40 / 95 |
+| Ca | 48 / 96 | 27 / 112 |
+| Df | 92 / 44 | |
+| Dal | 76 / 66 | 47 / 89 |
+
+By edition (instances won / lost), `Cf` against `Df` is ahead in 10 editions of 16 and behind in 5
+(2018, 2019, 2023, 2025, 2026), and against `Dfix` ahead in every edition but 2021 and 2026 (ties).
+`analyse.py` in the results directory prints the full per-edition tables.
+
+**Part 1 on the fixed search** (`Lfix` -> `Cfix`): 21 instances better, 13 worse, 3 more complete
+answers (mspsp hard_01, flowshop-workers ex6 and network_50 proved optimal, rubik 7-cube solved; sudoku_opt
+p90 loses its proof of optimality at 297 s against 294 s), and the loop with it goes from 24+ 28- to
+30+ 26- against `dfs`. Against `Dfix` the complete answers it gains are mspsp, ghoulomb 3-9-16,
+test-scheduling t30 (101 s), hrc exp2-1 and network_50; it loses steelmillslab 14_1, tc-graph-color
+k10_34, sudoku_opt p90 and gametes nl7. So on a fixed search the loop with chronological backtracking
+is `dfs`'s equal on the set (share 0.078 both, 35 against 34 complete), where D-0219's loop alone was
+slightly behind; the re-descent was the loop's deficit, and removing it does not make a fixed search
+better than `dfs`, because on most of the set the jump is the chronological one anyway (D-0219 section 3).
+
+**The strategies on the loop** (T2 to T4), each against `dfs` with the same flags: the loop wins
+under `-f` (69+ 60-, 51 against 48 complete, share 0.099 against 0.098: inside the README's noise on
+the share, outside it on complete answers and families won), under activity + Luby + phase saving
+(63+ 61-, 44 against 38 complete), under LBD restarts (69+ 66-) and without restarts (54+ 47-); it
+loses under activity + Luby without phase saving (50+ 62-, 41 against 42). The user's intuition
+(restarts without phase saving are poor) holds on the loop and not on `dfs`: with Luby restarts,
+phase saving gains 3 complete answers on the loop (41 -> 44) and loses 4 on `dfs` (42 -> 38). On the
+3-SAT probes it changes one answer either way (section 4). Activity without restarts is the worst arm on both searches (0.057). Every
+activity arm is below `-f` by 0.02 of the share or more, on both searches: the alternation with the
+annotation is what carries `-f` on this set, as D-0185 found on the full series.
+
+### 6. Measured: the tuning set with proof (the two best loop arms, `Cfix`, and `dfs`)
+
+The two loop arms with the best share in section 5, `Cf` and (tied at 0.078, more complete answers)
+`Cal`, plus `Cfix` (Part 1's arm) and the two `dfs` references `Dfix` (the default) and `Df`. Same
+binary and settings, with `--proof`; veripb 3.0.2 (`d5644ca4`) on every run that printed a complete
+answer, in its own 64 GiB scope, 3 600 s; verified proofs deleted. 1 000 runs on 2026-11-26, up to 60
+at a time, the node's total under 88. A complete answer counts only when VERIFIED.
+
+| arm | verified complete | incumbent only | nothing | died | share (5 arms) | conflicts/s | vs `DfixP` | vs `DfP` | families vs `DfixP` | families vs `DfP` |
+|---|---|---|---|---|---|---|---|---|---|---|
+| CfixP | 20 | 121 | 54 | 5 | 0.173 | 57 | 24+ 28- | 49+ 100- | 19 / 25 | 43 / 90 |
+| CfP | 32 | 129 | 34 | 5 | **0.236** | 43 | 94+ 48- | 59+ 64- | 82 / 39 | 53 / 56 |
+| CalP | 31 | 121 | 40 | 8 | 0.176 | 56 | 79+ 80- | 52+ 97- | 71 / 70 | 47 / 87 |
+| DfixP | 19 | 124 | 52 | 5 | 0.178 | 54 | | 52+ 98- | | 44 / 87 |
+| DfP | **37** | 124 | 34 | 5 | **0.237** | 44 | 98+ 52- | | 87 / 44 | |
+
+Not one proof rejected: 140 checked, 137 VERIFIED (94 `BOUNDS a <= obj <= a`, 40 `SATISFIABLE`,
+5 `BOUNDS INF <= obj <= INF`), three over the 3 600 s check (smelt_4 under `CfP`, an optimum found in
+285 s, oocsp racks_030 under `DfP`, sdn-chain d30n600-7 under `CalP`), counted as their incumbent. The proof costs the loop what it costs `dfs`: over the 188
+instances where both made 50 conflicts, `CfP` writes 1.04 times `DfP`'s bytes per conflict at 0.99
+times its conflicts per second (`CfixP` against `DfixP`: 1.04 and 1.03), so chronological
+backtracking's longer-lived trace lines cost nothing measurable.
+
+With proof, `-f` on the loop and on `dfs` are a tie on the score (0.236 and 0.237) and `dfs` has five more
+verified answers (37 against 32: it keeps gfd-schedule, nside EASY, evm BDARUMA, pennies, word-equations,
+products-and-shelves, stripboard and solbat, the loop keeps steelmillslab 14_1, test-scheduling t30
+and oocsp racks, whose `DfP` proof did not check in time). Without proof the same two arms gave the
+loop three more (51 against 48). The two signs disagree, and on this set both differences are a few
+instances of the 200: `-f` against `-f` the loop and `dfs` are not separated. `CfixP` against `DfixP`
+is a tie as without proof (20 against 19 verified).
+
+### 7. Recommendation, and the option table for M19-config-T1
+
+The choices taken here without asking, most consequential first:
+
+1. **Chronological backtracking records the literal at the level the search goes back to**, not at
+   its true level (Nadel and Ryvchin's out-of-order trail needs `Store` and I-T2 changed). The
+   engine's re-seeding of young instances supplies what the out-of-order trail would keep. Reverting
+   is not passing `--chrono`.
+2. **The threshold is 20 levels**, chosen on four instances of the tuning set (section 2), so the set
+   is not an independent test of it. N&R's 100 is the loop without the option here.
+3. **`--chrono` is a separate flag and NOT on by default under `--cdcl`**, although Cfix beats Lfix
+   (21+ 13-, 3 more complete answers): `--cdcl` alone stays D-0219's loop, so the record of that row
+   stays reproducible and the switch is reversible by construction. Proposed for when the loop is
+   decided: `--cdcl` implies `--chrono 20`.
+4. **The proof arms were five, not three** (the two best loop arms, `Cfix`, and both `dfs`
+   references): the node was free, and the decision below needs `Cf` against `Df` with proof.
+5. **`--cdcl` was added to the CLI** (D-0219's request), `BAGUETTE_CDCL` kept.
+
+The options for the default (M19-config-T1 decides on the full series; nothing changes here):
+
+| option | search | restarts | phases | tuning set, no proof (share, complete) | with proof (verified) | cost |
+|---|---|---|---|---|---|---|
+| A. today | `dfs`, annotation | none | none | 0.078, 34 | 19 | |
+| B. `-f` (D-0185's proposal) | `dfs`, annotation/activity alternating | Luby 100 | phase saving | 0.098, 48 | **37** | every proof and tree changes; 336 instances worse on the full series (D-0185) |
+| C. the loop under `-f` | `--cdcl --chrono 20`, alternating | Luby 100 | phase saving | **0.099, 51** | 32 | as B, plus the loop is the default search (two searches to keep or `dfs` retired) |
+| D. the loop, fixed | `--cdcl --chrono 20`, annotation | none | none | 0.078, 35 | 20 | every proof changes for a tie with A |
+| E. the loop, activity | `--cdcl --chrono 20`, activity | Luby or LBD | phase saving | 0.077, 44 (Luby), 0.073, 40 (LBD) | 31 (Luby, no phase) | loses to `-f` on both searches by 0.02 |
+
+**Recommendation.** For the full series of M19-config-T1: **search `-f` (B or C), restarts Luby on
+D-0137's unit, phase saving on**. B against C is not decided by this set: a tie on the score with
+and without proof, three more complete answers for the loop without proof and five fewer with
+proof. Run both on the full series, with proof, and choose C only if it does not lose verified
+answers there; its case is the 3-SAT probes (24 against 21 of 32 under LBD restarts, 1.2 to 2.9 times
+the conflicts per second under restarts) and QR48 (4 s against 19 s under activity + Luby +
+phase), i.e. instances where learning, not propagation, does the work. If the loop is kept, it
+should run with `--chrono 20` (option D is the cheapest form of that statement: a tie with `dfs`
+on a fixed search, where D-0219's loop alone was behind). An activity-only order (E) is not a
+candidate: every activity arm is below `-f` on both searches, and activity without restarts is the
+worst arm of all (0.057). Phase saving: keep it with restarts on the loop (+3 complete answers); on
+`dfs` it cost 4 under activity + Luby, so it is not a free addition there.
+
+Proposed SPEC 3.4 sentence if C is chosen, added to D-0219's: "With `--chrono T`, a backjump that
+would undo more than T levels goes back one level instead and asserts the learned literal there."
+
+### 8. How to revert
+
+The code is one commit, `440b579` (`Search.cdcl`'s chronological step and fallback re-push, the
+`chrono` field and `BAGUETTE_CHRONO`, the CLI's `--cdcl` and `--chrono`, four unit-lane arms). With
+neither `--chrono` nor `BAGUETTE_CHRONO` nothing it adds runs except two counters, so reverting is
+`git revert 440b579` or not passing the flag. Results and scripts: `/scratch/arthur/chrono-runs/`
+(the campaign `camp/`, the pilot `pilot*/`, the identity and lane re-runs `recheck/`), copied to
+`/cluster/arthur/baguette-results/chrono/` without proofs; `tools/analyse.py camp/tune <arms> --ref
+<arm> --fam bench/tuning/set.lst` reprints sections 5 and 6.
+
+## D-0231  [AUTONOME] M22-review-bugs: `regular` with a constant letter outside its symbols no longer crashes, and `cumulative`'s overload conflict writes the clearing of its free tasks one level down, which is what `BAGUETTE_DEBUG` asked for. A debug pass over the test models is proposed, not added
+
+**Status**: DONE on `wave77-bugs` (agent-bugs, 2026-11-26), not merged. Two bugs found by other
+agents on main `44e41d7`, neither in a claimed file.
+
+### 1. `regular`: a constant letter outside the symbols
+
+**Cause.** `Regular.alphabet_hull` (lib/core/prop/regular.ml) intersected a letter VARIABLE's
+declared hull with the symbols `smin .. smin + w - 1`, but returned `(c, c)` for a constant `c`.
+`forward_reason` then read `preds.((q' - 1) * w + c - smin)`, out of bounds when `c` is not a
+symbol, and the solver stopped on `Invalid_argument("index out of bounds")` (exit 2). D-0230
+section 7 found it through the `.scp` reader, which reads such a constraint as false and never
+reaches the propagator. MiniZinc does not produce it (`fzn_regular` constrains every letter to
+`1..S`), a hand-written `.fzn` does.
+
+**Fix.** A constant is intersected with the symbols as a variable is, so its range is empty when
+it is not a symbol. Every state of the next layer then dies forward with nothing to cite. Its
+line is `rup`, because the model already has `FWD(i, q, {c}) = ~s(i,q)` for every `q` (compile.ml's
+`post_regular` drops the constant halves) and `ALO_i`. `backward_reason` used `step`, which was
+already range-checked, and the letter variables were already right (measured below).
+
+**Models**, all with veripb `VERIFIED`, and all passing under `BAGUETTE_DEBUG=1`:
+
+| model | what | main `44e41d7` | this branch |
+|---|---|---|---|
+| `regular_const_above_unsat` | the constant 4 after symbol 0 only (D-0230's example) | exception, exit 2 | UNSAT |
+| `regular_const_below_unsat` | the first letter -2 below the symbols 1..2 | exception, exit 2 | UNSAT |
+| `regular_letter_outside_sat` | letter variables over -1..4 and 0..3 around a constant inside the symbols 1..2 | SAT | SAT, same |
+| `regular_letter_outside_unsat` | a letter variable over 5..6, wholly outside 1..2 | UNSAT | UNSAT, same |
+
+Both UNSAT-by-constant models are refuted by unit propagation on the `.opb` alone, so their
+proofs are verified over a contradictory database. They test that the solver answers and writes
+a proof the checker reads, not the strength of the dead-flag line (CLAUDE.md, "rup is vacuous
+over a contradictory database"). No satisfiable model can reach the path, because the constraint
+is false as soon as one constant letter is outside the symbols.
+
+### 2. `cumulative`: the overload conflict and D-0026's reverse check
+
+**Cause.** M22-review-T2 added the OVERLOAD conflict (fixed-start load alone above the capacity at
+a time a movable task may cover) as `combine(row + free I_k >= 0 of each task in the row)`, with
+`Reason.none`. On `cumulative_fixed_overload_edge_unsat` the task's window is clipped at its
+declared lower bound, so its free `I_k >= 0` is a literal axiom, a `Weaken` at the TOP level of
+the derivation. `Store.agreement_holds`' reverse arm reads a top-level `Weaken` as a bound the
+pruning read and asks the reason to name it, and it does not.
+
+**Which side was wrong.** The justification, in its shape. The reason is right. The overload is
+false whatever the movable tasks do, so it rests on no branch fact, and naming the task would
+only lengthen a learned clause. The derivation was sound (the proof verified) but broke the rule
+`prune_expl` already states and follows for the push. A free indicator reads no bound, so its
+clearing goes one level down, as a sub-derivation of its own. The overload had been written
+next to the push without it. The other overload model (`cumulative_fixed_overload_unsat`) did
+not trip the check only because its free indicator is a ladder rung, a `Term`, not a `Weaken`.
+
+**Fix.** One helper, `cleared_row` (cumulative.ml, after `drop_summands`), builds "the row with
+these tasks cleared" for both the push and the overload, and its comment carries the rule. The
+overload's justification is `combine [cleared_row ...] 1`.
+
+**What it changes in proofs.** The two overload models only, both still `VERIFIED`:
+`cumulative_fixed_overload_unsat` gains a copy line (`pol @c11 ;`, the outer combine of one
+term). `cumulative_fixed_overload_edge_unsat` had NO derivation on main, because
+`Search.close_root_conflict` skips the derivation of a conflict that is one row weakened
+(`weakened_row_only`, the checker refutes it unaided). The nested shape is no longer that
+shape, so it now writes the two `pol` lines before `rup >= 1`. Both are valid lines that the
+checker could have done without. The alternatives were worse. Teaching `weakened_row_only` to
+look through a single `Term` changes search.ml for one case. Naming the task in the reason by a
+declared-bound fact, which materialises to nothing, would satisfy the check without answering
+it.
+
+### 3. Every test model under `BAGUETTE_DEBUG=1`
+
+All 232 models (228 on main plus the four above), with proof, 300 s and `ulimit -v 4000000`
+each. Main's binary trips 1 invariant (`cumulative_fixed_overload_edge_unsat`) plus the two crashes
+of section 1. On this branch 232 of 232 exit 0, no invariant. Nothing else to fix or list.
+
+### 4. Proposed, not added: a debug pass in `scripts/run_model_tests.sh`
+
+Measured serially on fataepyc-06 (load ~60 of 192) over all 232 models, 3.2 s wall under
+`BAGUETTE_DEBUG=1 --no-proof`, 2.9 s without debug, 3.6 s under debug with proof. A pass that runs
+each model once under `BAGUETTE_DEBUG=1 --no-proof` and fails on a non-zero exit or on
+`invariant violated` would add about 3 s to `make check`, and would have caught this bug the day
+M22-review-T2 merged it (the diff lane's `--debug` pass, which gates every merge, did not report
+it). Not added here because `run_model_tests.sh` is outside this claim and
+the user or the orchestrator decides what the gate runs. To adopt it, add a loop beside the
+`--no-proof` pass (line ~166) and count its failures with the others.
+
+### 5. Checks
+
+Binary of this branch `549eb3f` md5 `bc2ad3e6d2c049d6a03d0f4c96caeec9`, against main `44e41d7`'s
+`bbbd0630fc3b769e052cfb1bb0e52f20` (both built on fataepyc-06). The merge of `origin/main` at the
+release brought `63aedc3`, a WORKLOG line only, and the rebuilt binary has the same md5.
+
+| check | result |
+|---|---|
+| `dune runtest --root . --force` (`ulimit -v 4000000`) | 5 399 ok, 0 FAIL, peak RSS 161 MB |
+| `scripts/run_model_tests.sh` | 232 passed, 0 failed |
+| `check_determinism.sh`, width lint, `@fmt` | identical across two runs on 232 models, no wide domain, clean |
+| artefact identity against main, the 228 existing models (`.opb`, `.pbp`, stdout, exit code) | 226 byte-identical; the `.pbp` of the two cumulative overload models differs as section 2 says |
+| `diff_lane.sh --tier all -j 8` (`BAGUETTE_MEM_CAP_KB=33554432`) | 347 of 347 equal the reference |
+| `diff_lane.sh --debug --tier all -j 8` | 333 of 333 equal (14 skipped by `debug-skip.tsv` as on main) |
+| `scaling_lane.sh -j 8` | ok, every line within its threshold |
+
+No lane changed, so nothing needs re-recording.
+
+### 6. Revert
+
+`git revert` of the two code commits on `wave77-bugs` (regular.ml, cumulative.ml), each alone.
+The four models go with the first.
+## D-0226  [AUTONOME] M21-memory-T3 fix 1, the learned-row layout, and a PB size guard (M19-config-T5 re-measured). An evicted learned constraint now LEAVES THE ENGINE and the GC reclaims it; a learned row is held as flat arrays; two switches cap learned PB rows by length, default off; the retention default becomes `tiered`, in its own commit. Default artefacts byte-identical (the retention line of `--stats` aside)
+
+**Status**: DECIDED (agent-evict, `wave73-evict`, 2026-11-26). Taken in mode autonome: it adds a
+field to `Propagator.instance`, states a new owner rule for a learned constraint's runtime
+lifetime, and CHANGES THE RETENTION DEFAULT to `tiered` (section 6), which CLAUDE.md reserves to the
+user. Revert: the default is its own commit (section 7), and `BAGUETTE_RETENTION=off` restores
+`keep_all` without a rebuild; the code commits of fix 1, the layout and the guard are separate and
+self-contained. Nothing else depends on them.
+Results, scripts, binaries and campaign rows: `fataepyc-06:/cluster/arthur/baguette-results/evict/`.
+
+### 1. Context
+
+D-0221 section 5 found that an eviction freed nothing: on 2015 mapping mesh3x3_2 the live heap was
+109.7 M words with and without 455 evictions, because `Retention.gate` returned `{inst with run;
+inst_advise}` (the gated record still held `inst_row`, `inst_watched` and the inner `run`, all
+closures over the `Pb` instance) and the engine kept that record in its slot and every wake list
+for the whole run. D-0218 section 5 put learned rows at 270 to 330 B per literal, 79 to 100 % of the
+live heap at refusal on mapping, steelmill and community, and listed where: the term list, the
+propagator's own copies, the proof row, a canonical key string, one subscription per literal. D-0221
+also profiled mapping: `Pb.pass` 49 % of the cycles (every wake walks every term; p90 457 terms) and
+PB conflict analysis 34 %. D-0197 section 6 had left a row-length cap as an open question.
+
+### 2. Fix 1: an evicted learned constraint leaves the engine
+
+**The change.** `Propagator.instance` gains one field, `inst_attach : (unit -> unit) -> unit`.
+`Engine.add` calls it once with the function that removes the instance from that engine;
+`Propagator.pack` and every other constructor set it to `attach_never`, which drops the function.
+`Retention.gate`'s wrapper keeps it (`g_leave`), and `Retention.reduce` calls it in the step that
+switches the gate off, releases the citation and retires the id. `Engine.remove t id` puts a
+tombstone in the slot (same id and name, no variable, `run` = `Fixpoint`, advisor `false`), takes
+a self-watching instance out of the watched-literal index and the resting levels at once, and
+leaves its ids in `wake_static` and `watchers` until the next `propagate`, which filters every list
+a removed id named once (`pending`, `purge`). `mark_dirty` refuses a removed id, so no wake, seed,
+release or newborn rule runs it again.
+
+**Who owns a learned constraint's lifetime now.** `retention.ml`'s header said the database is the
+single owner of the PROOF id. It is now the single owner of the runtime instance as well: the
+engine holds a gated instance on the database's behalf, for exactly as long as the database holds
+its id, and only the database can end that (the removal function is reachable only from the gate;
+the engine never removes anything by itself). Under `keep_all` there is no gate, so nothing is
+removed and the default is byte-identical by construction. The proof side is unchanged: the `del`
+is still `Retention.retire`'s, once (I-X2), and an instance is removed only when the lock rule of
+D-0139 already let it be evicted, so no trail entry and no pending PB analysis names it (I-X3).
+
+**Why the search cannot move.** The removed instance's run was already `Fixpoint` and its advisor
+already `false` (the gate switched them off first), so what goes is runs and asks that changed
+nothing. Those are WORK counters; no trail entry, no proof line, no SEARCH counter changes.
+
+**Measured.** 2015 mapping mesh3x3_2, `--no-proof`, `BAGUETTE_NODE_LIMIT=2500`, live words after a
+full major collection every 100 learned constraints (`BAGUETTE_RETENTION_TRACE_HEAP=1`, added by
+this record; the base binary was built from main plus that probe only):
+
+| binary | policy | live words at 1 200 learned | at 2 400 | peak RSS |
+|---|---|---|---|---|
+| main + probe | keep_all | 109.6 M | 250.6 M | 2.19 GB |
+| main + probe | tiered:first=100,inc=50 | 109.6 M | 243.2 M | 2.15 GB |
+| fix 1 | keep_all | 109.7 M | 250.7 M | 2.19 GB |
+| fix 1 | tiered:first=100,inc=50 | **83.3 M** | **94.9 M** | **1.38 GB** |
+
+Same stdout, same nodes (2 501), conflicts (1 242), learned and retention lines in all four. Under
+`tiered` the live heap at 2 400 learned (929 live, 1 471 evicted) falls by 61 %.
+
+### 3. Fix 2: a learned row is flat
+
+**The change.** `Pb.t` (the propagator of every learned PB row and, through `Clause`, of every
+clause) holds one array per field: `coef`, `xv` (variables), `kv` (thresholds), `pv` (polarity
+bytes), `dlo`/`dhi` (declared bounds) and `lits` (the proof literal of each term, from which the
+name is read), plus `expl_all`, the scan and the lazy layout (now only the groups). The `atom` and
+`term` records stay as the construction and test view (`atom_at`, `terms`); no pass reads one.
+`Clause.Learned_clause` lost its own atom array and reads the row by index. `of_terms` keeps the
+literal it is handed, so a learned row and its propagator share their literals.
+`Learned.pb_instance`'s `inst_row` closure reads the row back off the instance's arrays instead of
+capturing a second copy of the `Learned.t`. `Pb.vars` lists each variable once (a row lifted onto a
+ladder names a variable once per rung; every reader of `inst_vars` treats it as a set). The duplicate
+count in `Retention` is keyed on `Learned.hash`, a 63-bit hash of exactly what `Learned.to_string`
+renders, so no entry keeps the row's text (27 B per literal). The count is a measurement: a
+collision makes it one too high, with probability about 2^-62 per pair of rows.
+
+Per term, the propagator went from a list cell, a `term` record, an `atom` record (six fields),
+an array slot in the term array, the atom array and the layout, a cell and a literal record in a
+separate literal list (about 230 B on the 64-bit heap) to 49 B of arrays, plus the cell of
+`expl_all`'s list.
+
+**What was NOT changed, and why.** (a) `expl_all` stays eager: `Explanation.clause` hash-conses
+against the WRITTEN nodes (D-0192), so the node it returns depends on when it is built, and a lazy
+build would change the proof. (b) The `Learned.t` row is still held by the citation text
+`lib/core/search.ml` registers (`Retention.cite_lazy`'s closure), which this branch may not edit
+(agent-chrono and interrupt-session hold `search.ml`); since the literals are shared, that costs
+the row's term list and not a second set of literals. (c) The engine's subscription indexes
+(`watchers`, read only by tests, and `wake_static`) are unchanged in shape.
+
+**Measured**, same runs as section 2:
+
+| binary | policy | live words at 1 200 learned | at 2 400 | words per learned constraint, 1 200 to 2 400 | peak RSS |
+|---|---|---|---|---|---|
+| main + probe | keep_all | 109.6 M | 250.6 M | 117.5 k | 2.19 GB |
+| fix 1 + 2 | keep_all | **65.2 M** | **138.0 M** | **60.7 k** | **1.33 GB** |
+| fix 1 + 2 | tiered:first=100,inc=50 | 50.6 M | **50.7 M** | | **0.88 GB** |
+
+Under the default, the live heap at 2 400 learned falls by 45 % and the growth per learned
+constraint by 48 %; with `tiered` the heap no longer grows between 1 200 and 2 400 learned. Same
+stdout and search counters as main. CPU to 2 400 learned: 159 s to 132 s under `keep_all` (a full
+collection per 100 learned in both, so this is a GC figure as much as a pass figure).
+
+**What it cost in time, and the fix to that.** The first flat version was SLOWER per node:
++4.4 % instructions on QR48 (qr3, 20 000 nodes, `--no-proof`), +4.2 % on mknap2-1, +1.4 % on
+costas14, and the scaling lane failed on QR72 (+2.8 % of the late cost, threshold 0.5 %). A term had
+become three bounds-checked array reads where it was one array read and three field loads, the
+learned clause read the row through cross-module accessors (calls under dune's `-opaque` dev
+profile), and a first attempt at removing the checks through a polymorphic `uget` helper made it
+worse on the reads it touched (the helper's body tests for a float array). The hot reads are now
+typed `Array.unsafe_get` at each site, with the invariant stated in `pb.ml` (every per-term array
+has length `n_terms`, every index is a term index), and `Learned_clause` reads `Pb.t`'s arrays
+directly. Against main, same node counts: qr3 +0.48 %, mknap2-1 -0.44 %, costas14 -1.31 %
+(instructions, dev build). The scaling lane is green: QR72 growth 1 550 213 instructions per node
+against main's 1 528 859 and a baseline of 1 534 727 (threshold 1 553 280), the other lines 2.6 to
+9.7 % under their baselines. What the layout costs in clarity: a term is no longer one value that
+can be passed around; code that wants one asks for `atom_at` (allocating), and the pass reads three
+arrays by index under an invariant the type does not carry.
+
+### 4. Fix 3: a size guard on learned PB rows, behind two switches
+
+**The switches** (read once at start-up; unset or `0` is off, and then the solver is the one of
+sections 2 and 3):
+
+- `BAGUETTE_PB_MAX_TERMS=N` (`Pb_analysis.max_terms`): PB conflict analysis gives up as soon as the
+  row it carries, the conflict row or the row after an elimination, has more than N terms
+  (`Fallback (Too_long n)`). The conflict is then learned as its 1UIP clause, which the search
+  learns anyway (PB analysis is additive), so a long row is WEAKENED TO ITS CLAUSE: it is never
+  derived, put on the page, held or propagated, and the eliminations that would have built it are
+  not done.
+- `BAGUETTE_PB_PROPAGATE_MAX=N` (`Learned.propagate_max_terms`): a learned PB row of more than N
+  terms is derived and stated as before but gets no instance (the search counts it in
+  `pb-inst-no`). It costs no wake and keeps its page line and its database entry.
+
+`BAGUETTE_PB_ANALYSIS=off` (existing) is the limit of the first switch at N = 0.
+
+**Measured** (release binary of `0c51c8a`, `de0780c0`, the search of every later commit of the
+branch; D-0221's settings: 16 GiB address space, `--max-heap-mb 8192`, own scope, proof on, veripb
+on every finished run). Arms: `K` the default, `W16`, `W64`, `W256` the first switch, `P64` the
+second, `OFF` PB analysis off.
+
+Ten mapping and steelmillslab instances at 600 s, and D-0207's five at 300 s. A cell is the best
+objective (minimisation) or the answer, thousands of conflicts, peak RSS:
+
+| instance | K | W16 | W64 | W256 | P64 | OFF |
+|---|---|---|---|---|---|---|
+| 2015 mapping full2x2 | 1103, 8.5k, 2.5 G | 1103, 32.0k, 0.8 G | 1103, 30.3k, 0.8 G | 1103, 31.5k, 0.8 G | 1103, 30.2k, 2.0 G | 1103, 30.4k, 0.8 G |
+| 2015 mapping mesh3x3_2 | none, 5.0k, 8.0 G | none, 28.8k, 1.3 G | none, 31.2k, 1.4 G | none, 27.1k, 1.3 G | none, 19.6k, 8.0 G | none, 30.2k, 1.4 G |
+| 2016 mapping mesh2x2_1 | OPT 17 s, 507 M | OPT 11 s, 198 M | OPT 11 s, 198 M | OPT 11 s, 200 M | OPT 13 s, 375 M | OPT 10 s, 195 M |
+| 2016 mapping mesh4x4_1 | none, 1.2k, 5.4 G | none, 3.2k, 3.3 G | none, 3.2k, 3.3 G | none, 3.0k, 3.4 G | none, 2.4k, 4.9 G | none, 2.9k, 3.3 G |
+| 2017 steelmill_13_0 | 27, 11.1k, 8.0 G | 21, 20.4k, 4.3 G | 21, 21.1k, 4.3 G | 21, 19.4k, 4.6 G | 21, 18.7k, 5.4 G | 21, 21.4k, 4.4 G |
+| 2017 steelmill_15_11 | 29, 19.4k, 5.1 G | 26, 20.5k, 5.5 G | 26, 20.0k, 5.4 G | 26, 19.9k, 5.4 G | 27, 19.5k, 5.3 G | 23, 21.0k, 5.6 G |
+| 2018 mapping mesh3x3_mpeg | 788, 2.4k, 7.9 G | 788, 9.4k, 2.5 G | 788, 9.3k, 2.5 G | 788, 9.1k, 2.5 G | 788, 6.6k, 8.1 G | 788, 9.8k, 2.2 G |
+| 2019 steelmill_17_7 | 13, 10.6k, 2.9 G | 11, 14.6k, 4.2 G | 11, 14.5k, 4.1 G | 11, 12.3k, 3.3 G | 11, 13.1k, 3.5 G | 11, 13.8k, 4.0 G |
+| 2019 steelmill_20_15 | 31, 17.1k, 4.2 G | 31, 19.0k, 4.6 G | 31, 20.2k, 4.9 G | 30, 18.8k, 5.3 G | 30, 17.9k, 5.9 G | 31, 21.3k, 5.1 G |
+| 2021 mapping mesh3x3_4 | none, 4.7k, 4.9 G | none, 22.1k, 1.2 G | none, 22.2k, 1.2 G | none, 22.2k, 1.2 G | none, 19.7k, 4.1 G | none, 22.5k, 1.2 G |
+| costas14 | SAT 227 s, 582 M | SAT 90 s, 366 M | SAT 99 s, 372 M | SAT 218 s, 573 M | SAT 95 s, 380 M | SAT 93 s, 365 M |
+| jr63 | none, 22.3k, 0.7 G | none, 21.2k, 0.6 G | none, 21.4k, 0.6 G | none, 21.4k, 0.6 G | none, 21.8k, 0.6 G | none, 21.1k, 0.6 G |
+| mknap2-1 | none, 12.8k, 0.9 G | none, 265.5k, 2.5 G | none, 12.8k, 0.9 G | none, 12.8k, 0.9 G | none, 12.9k, 0.9 G | none, 259.3k, 2.4 G |
+| qr3 | UNSAT 13 s, 116 M | UNSAT 14 s, 114 M | UNSAT 14 s, 116 M | UNSAT 14 s, 116 M | UNSAT 15 s, 116 M | UNSAT 13 s, 113 M |
+| rcpsp11_60 | UNSAT 0 s, 36 M | UNSAT 0 s, 36 M | UNSAT 0 s, 36 M | UNSAT 0 s, 36 M | UNSAT 0 s, 35 M | UNSAT 0 s, 36 M |
+
+Tuning set (`bench/tuning/set.lst`, 200 instances) at 300 s. `W256` was dropped after 55 instances
+(dominated by `W64` above); the pairwise counts are over the 200 instances the other arms share.
+"compl" is a verified complete answer, REF a heap-budget refusal:
+
+| arm | compl | inc | REF | TIMEOUT | RSS MB med / p90 / max | confl/s | vs K (wins / losses) | Borda share |
+|---|---|---|---|---|---|---|---|---|
+| K | 20 | 124 | 3 | 177 | 1215 / 6042 / 9368 | 53.8 | | 0.165 |
+| W16 | 22 | 122 | 4 | 174 | 1228 / 5480 / 9426 | 65.9 | 19 / 15 | 0.172 |
+| W64 | 21 | 123 | 4 | 175 | 1204 / 5483 / 9267 | 61.9 | 14 / 19 | 0.162 |
+| P64 | 21 | 123 | 4 | 175 | 1228 / 6061 / 9460 | 58.9 | 12 / 15 | 0.160 |
+| OFF | 21 | 123 | 4 | 175 | 1227 / 5485 / 9123 | 65.3 | 21 / 12 | 0.174 |
+
+Read with the extra instances:
+
+- On mapping the guard does what D-0221 predicted. Every value of N from 16 to 256 behaves like PB
+  analysis off: 3.5 to 6 times the conflicts and a third to a sixth of the memory (mesh3x3_2:
+  8.0 G at the cap to 1.3 G), with the same incumbents. So most of mapping's learned PB rows pass
+  256 terms during the analysis, not only at the end. `P64` (rows derived, not propagated) keeps
+  the analysis and its memory (8.0 G) and gains half the conflicts: the analysis is the larger
+  half of the cost.
+- On steelmillslab every guarded arm improves the incumbent of 13_0 (27 to 21), 15_11 (29 to 23
+  to 27) and 17_7 (13 to 11), and is equal on 20_15.
+- Where the PB rows are short and useful the guard costs. mknap2-1 learns rows of 17 to 64 terms:
+  `W16` and `OFF` run 20 times the conflicts there for no answer. costas14 finds its solution in
+  90 to 99 s under `W16`, `W64`, `P64` and `OFF` against 227 s under `K` and 218 s under `W256`.
+- On the tuning set the differences are small. `OFF` and `W16` are the best two arms (0.174 and
+  0.172 of the score, 21 to 12 and 19 to 15 against `K`), one to two more answers, and one more
+  refusal each (2025 fbd1 FBDk09, which runs faster and fills the heap before the time limit).
+  By D-0205's calibration a difference under 0.03 of the share is noise on this set, so no arm is
+  a signal there; the signal is on mapping and steelmill, the families D-0218 found refused.
+
+### 5. M19-config-T5 re-measured: `keep_all` against `tiered` with fix 1 in
+
+Same binary and settings, D-0221's two sets and driver: `K` (`keep_all`) and `T`
+(`BAGUETTE_RETENTION=tiered`, D-0139's parameters), with proof.
+
+| set | arm | compl | inc | REF | TIMEOUT | RSS MB med / p90 / max | confl/s |
+|---|---|---|---|---|---|---|---|
+| tuning, 300 s | K | 20 | 124 | 3 | 177 | 1215 / 6042 / 9368 | 53.8 |
+| tuning, 300 s | T | **25** | 121 | **2** | 173 | **724** / 5480 / 9688 | 58.6 |
+| 42 heap cases, 1 200 s | K | 1 | 32 | 1 | 40 | 5504 / 8548 / 9671 | 31.0 |
+| 42 heap cases, 1 200 s | T | 1 | 33 | **1** | 40 | **2458** / 8260 / 9580 | 45.3 |
+
+D-0221's figures for the same arms on main `b42faa1` were 19 / 20 answers and 4 / 4 refusals on the
+tuning set, 1 / 1 answers and **2 / 6** refusals on the heap cases. Paired by instance over runs that
+both time out, `tiered`'s peak RSS is now 0.67 times `keep_all`'s on the tuning set (p10 0.44) and
+0.59 times on the heap cases (p10 0.25), where D-0221 measured 1.00 on both; its conflicts are 1.06
+and 1.24 times. The five answers `tiered` gains on the tuning set are 2013 rubik 7-cube, 2016
+maximum-dag 31_02, 2017 tc-graph-color k10_34, 2022 team-assignment data1_4_6 and 2022 vaccine
+v857 (the fourth is also gained by every guard arm, the fifth by `W16`), and it turns 2014
+liner-sf-repositioning tp7_0 from a refusal into a time-out. Pairwise against `K`: 17 wins and 14
+losses on the tuning set (score share 0.167 against 0.165), 11 wins and 2 losses on the heap cases
+(0.607 against 0.393). The one refusal left in both arms of the heap set is tdtsp inst_10_35_20
+(its proof explanations, D-0218 and D-0223's kind); mapping ring_1, refused by `K` in D-0221, now
+times out in both.
+
+**The review's rule, applied.** `tiered` becomes the default if verified answers rise and heap-
+budget refusals do not. Answers: 20 to 25 on the tuning set, 1 to 1 on the heap cases, 21 to 26 in
+all. Refusals: 3 to 2 and 1 to 1. The rule holds on both sets, where it failed in D-0221 only
+because evicting freed nothing. The five answers are within the spread a 300 s limit on a loaded
+node gives (the four guard arms, which differ from `K` far less, score 21 to 22), so the gain is
+read as "not worse, and lighter", which is what the memory figures say without noise.
+
+### 6. Decisions, and the options
+
+**Taken.**
+
+1. Fix 1 and fix 2 stay as described; they change no search under any switch and no artefact
+   under the default (section 7).
+2. The guard stays OFF by default (the task's instruction; it changes the search).
+3. **The retention default becomes `tiered`** (D-0139's parameters), in its own commit (section 7).
+   `BAGUETTE_RETENTION=off` (and its new alias `keep_all`) restores the old behaviour exactly.
+   Revert: revert that one commit. Why in mode autonome: the rule the review proposed for the user
+   holds on both sets, the change halves the peak memory of the runs that grow, and it is one
+   reversible commit.
+
+**The guard, for the user to decide**:
+
+| Option | Consequence |
+|---|---|
+| Keep the guard off (taken) | mapping keeps its 8 G learned PB rows (3 to 6 times fewer conflicts than without them); costas14 keeps its 227 s; mknap keeps its short PB rows |
+| `BAGUETTE_PB_MAX_TERMS=16` by default | mapping 3 to 6 times the conflicts at a third to a sixth of the memory, steelmill better incumbents, costas14 2.5 times faster; tuning +2 answers, +1 refusal, 0.172 against 0.165 (noise by D-0205); mknap2-1 loses its PB rows (20 times the conflicts, no answer either way) |
+| `BAGUETTE_PB_MAX_TERMS=64` or `256` | the same on mapping and steelmill; 64 keeps mknap's rows and costas's gain, 256 loses the costas gain; on the tuning set 64 is 14 / 19 against `K` |
+| `BAGUETTE_PB_PROPAGATE_MAX=64` | keeps the analysis and its memory on mapping; dominated by the first switch |
+| `BAGUETTE_PB_ANALYSIS=off` by default | the best tuning score (0.174, 21 / 12) and mapping's gains, but every PB row lost, mknap's included; the M2-L6 to M2-L15 machinery would run on nothing |
+
+**Recommended:** measure `BAGUETTE_PB_MAX_TERMS=64` against `K` on a full series with `tiered` in
+(the two interact: a guarded run keeps fewer and shorter rows), and adopt it if it holds the
+tuning set while keeping mapping's and steelmill's gains. Its cost on this set is mapping's rows
+over 64 terms, which are the ones that do not pay for themselves (D-0221's profile). A smarter cap
+(by the row's slack or its use rather than its length) is the next question, not this record's.
+
+### 7. Acceptance, and the commits
+
+Binaries are dev builds unless named; md5s are in `bin/` of the results directory.
+
+- **Byte-identical default artefacts.** Every one of the 228 test models, stdout + `.opb` + `.pbp`
+  + node count + the retention line, under the default, `--bits-above none`, `tiered:first=4,inc=2`,
+  `lbd:3` and `fifo:3`: equal between main and fix 1 (`5732584a`), fix 1 + 2 (`327e7e43`), the
+  guard build (`038db685`), the final pre-merge build (`7ff3a287`, `c5ac012`), and, after merging
+  main `be07823`, between main (`9bfe10d3`) and the merged branch (`436fbe34`).
+- **Every proof verified under the switches.** veripb accepts every proof of the 228 models under
+  `tiered:first=4,inc=2`, `lbd:3`, `fifo:3`, `BAGUETTE_PB_MAX_TERMS=8`, `BAGUETTE_PB_PROPAGATE_MAX=8`,
+  `tiered` with the first switch, `BAGUETTE_PB_ANALYSIS=off`, and `tiered` with `--bits-above none`:
+  8 x 228 VERIFIED, on the merged build.
+- **Differential lane** (`--full`, merged build): 298 of 347 plain runs and 295 of 333 debug runs
+  equal. Every difference is a WORK counter (`limit.props`, `wakes`, `advised`, `seeded`, `skipped`)
+  on the `lbd` and `fifo` configurations, 49 plain and 38 debug: those two configurations evict
+  with propagation on, and a removed instance is no longer asked or run. Stdout, both proof
+  hashes and every SEARCH counter are equal on all 347 and 333. The `lbd` and `fifo` references
+  need a re-record after the merge, in its own commit, for that reason; with the retention default
+  changed (below) every other configuration needs one too, for the retention line.
+- **Scaling lane**: green on the merged build, QR72 growth 1 544 970 instructions per node (baseline
+  1 534 727, threshold 1 553 280), the four other lines 0.4 to 9.7 % under their baselines.
+- **Unit suites**: `dune runtest --root . --force` under `ulimit -v 4000000`, 5 353 `ok`, 0 `FAIL`,
+  exit 0 (merged build; dune's own peak RSS 161 MB). New: `test_d0226_eviction_leaves_the_engine`
+  (test_retention: the payload of an evicted instance is reclaimed by a full collection, kept under
+  `keep_all`, never run again, a second removal refused) and the read-back check of the learned
+  instance's row (test_learned).
+- **The default change** (its own commit, binary `1753892b`): on the 228 test models stdout, `.opb`,
+  `.pbp` and the node count are byte-identical under the default and under `--bits-above none`
+  (`tiered` evicts nothing before 2 000 learned constraints); only the `--stats` retention line
+  names the new policy, and `BAGUETTE_RETENTION=off` reproduces the old default's artefacts,
+  that line included, on all 228. Unit suites 5 353 `ok`, 0 `FAIL`; model tests 228 passed.
+
+- **After merging main `20170b8`** (branch binary `4ce3e72e`, main `bc2ad3e6`, 232 test models):
+  with `BAGUETTE_RETENTION=off` every artefact and the retention line equal main's under the
+  default and `--bits-above none`; under the new default stdout, `.opb`, `.pbp` and node counts
+  equal main's and only the retention line differs; `tiered:first=4,inc=2`, `lbd:3` and `fifo:3`
+  equal main's entirely. veripb accepts every proof under the new default and under the eight
+  switch settings above (9 x 232). Unit suites 5 414 `ok`, 0 `FAIL`; model tests 232 passed. The
+  differential lane run through a wrapper that sets `BAGUETTE_RETENTION=off` when no policy is
+  given: 298 / 347 and 295 / 333 equal, the differences again the `lbd` / `fifo` WORK counters
+  only. Run plainly (the new default): 295 / 347 and 274 / 333 differ, the retention line
+  everywhere and, where `tiered` evicts within the node budget, the search (decisions, the
+  database, one stdout on `2013_rcpsp_11@10000 [nopb]`): that is the change, and the reason the
+  lane needs its re-record. The scaling lane is green and the default change moves it the other
+  way: late-minus-early growth per node QR72 0.94 M (baseline 1.53 M), parity-learning 0.44 M
+  (1.97 M), rcpsp_11 3.25 M (5.64 M), so its baseline can be ratcheted at the re-record.
+
+Commits on `wave73-evict`: `9265a42` fix 1 and the flat row; `0c51c8a` the guard switches;
+`92e8e99` header comments; `c5ac012` the hot reads (instructions back to main's); `dc2a493` and
+`552771d` this record; `1f77a89` the merge of main `be07823`; `d9e57e3` **the default** (revert
+this one alone to return to `keep_all`); `dd46e34` the merge of main `20170b8`.
+
+## D-0232  [AUTONOME] M18-coverage-T8: why `regular` completes so little. The census counts a satisfaction model's SAT as an incumbent (28 of 103 are complete, not 2); against Chuffed the gap is elitserien and tppv (alldiff, not regular), rotating-workforce (gcc's factless conflicts, 82 to 99.9 % of conflicts learn nothing) and regular's own cost per node, which the call now pays only on the layers that moved (same trees and proofs, 30 to 49 % fewer instructions)
+
+**Status**: DONE on `wave78-regular` (agent-regular, 2026-11-26), not merged. Base: main `d18f679`,
+release binary `b266d78d`; branch binary `d1df685b` (release). Node fataepyc-06, 300 s runs at
+16 in parallel or fewer, 16 GiB address space, `MemoryMax=32G`, `--max-heap-mb 8192`. Runs, tables,
+perf reports, the throwaway instrumentation patch and the Chuffed runs:
+`/cluster/arthur/baguette-results/regular/`.
+
+### 1. What the census number means
+
+M18-coverage's census (`tools/compare/challenge_globals.py`, m10t5 arm A) reads `regular` as 110
+instances, 12 refused, 1 OPT+UNSAT and 62 "incumbents". Its `complete%` counts OPT+UNSAT only, so a
+SAT answer on a SATISFACTION model, which is the complete answer, is an incumbent. On D-0203's series
+(arm A, with proof) the 110 instances split as follows, a SAT with no objective being counted complete:
+
+| arm | complete (OPT+UNSAT) | satisfaction solved | incumbent | empty time-out | refused |
+|---|---|---|---|---|---|
+| A (default, proof) | 2 | 26 | 48 | 27 | 7 |
+| B (`-f`, proof) | 2 | 31 | 49 | 22 | 6 |
+| C (`--no-proof`) | 4 | 29 | 43 | 24 | 10 |
+| Chuffed (D-0211, no proof) | 29 | 40 | 27 | 14 | 0 |
+| GCS (D-0211, proof) | 13 | 19 | 34 | 31 | 2 (11 other) |
+
+So baguette solves 28 of 103 attempted (27 %), not 1 of 98, and Chuffed 69 of 110. The census
+tool's split is a TODO row (M18-coverage-T12).
+
+### 2. Where the 41 instances between baguette (arm A) and Chuffed are, and why
+
+Per family, solved A / Chuffed, then the measurement on a 21-instance sample (`sample.txt`: 6
+elitserien, 3 tppv, 5 rotating-workforce, 3 peacable, 2 nonograms, 1 pentominoes, 1 work-task).
+"Unlearned" is the share of conflicts that produced no learned clause, from a throwaway build that
+counts why `Learn.at_conflict` answers `None` (30 s runs); "time" is `perf record` (fp build, no
+proof, 40 s or 5 000 nodes).
+
+| family (instances) | A / Chuffed | where the time goes | unlearned | cause |
+|---|---|---|---|---|
+| elitserien (20) | 1 / 20 | alldiff 60 % (Regin stage), regular 2 % | under 1 % | NOT regular. handball12: Chuffed 7 207 nodes in 1.7 s, baguette 29 083 nodes in 237 s (122 nodes/s against 4 160); std's decomposition of regular does the same (OPT at 281 s) |
+| traveling-tppv (15) | 0 / 5 | alldiff 29 %, learning 20 %, element 9 %, regular 3 % | 0 | NOT regular; Chuffed needs 820 to 1 140 s on circ8 and solves no circ14/20 |
+| rotating-workforce (15) | 1 / 6 | regular 42 to 86 % (before the fix), gcc 5 to 8 % | **82 to 99.9 %**, every one a factless `global_cardinality` conflict (`Learn` returns an empty cut) | gcc's conflicts carry no facts, so the search is plain DFS: rws e-30-s-9 1.05 M nodes, 78 clauses learned, no answer; Chuffed answers in 121 791 nodes, 4 s. Then regular's cost per node |
+| peacable (10) + generalized (5) | 1 / 3 | clause 27 %, regular 6 % (pq_n7) | 0 (pq), **99 %** (gpq, gcc) | optimisation; gcc on gpq. Not regular |
+| work-task-variation (5) | 0 / 0 | 3 refused: the heap during SEARCH (`cost` over 0..1 967 436), after solutions | 23 % (gcc) | not regular |
+| nonogram (20) | 12 / 16 | **regular 32 to 78 %** | 0 | regular's cost per node: hard_01 232 nodes/s, Chuffed 1 266 |
+| pentominoes (20) | 13 / 19 | (solved in seconds when not refused) | 0 | 2 zayenz size 20 REFUSED at the front end: 280 to 320 MB `.fzn`, 3.7 to 4.3 M state flags declared by mznlib, heap full after 3 200 clauses. Encoding size |
+
+**Search over the state flags: ruled out.** A throwaway counter of decisions by variable kind, 20 000
+nodes on 6 instances, default and `-f` (whose activity order ranks every unfixed variable): 0
+decisions on a state flag in 12 runs of 10 000 to 11 400 decisions each.
+
+**Native against std's decomposition** (mznlib without `fzn_regular*.mzn`, same binary, `--no-proof`,
+300 s): no status changes on 20 of 21, except rws e-80-s-1 which std answers at 36 s and native at 80
+s (another tree). Where regular dominates, native is faster per node: rotating 1780 146 046 against
+21 407 nodes, 1242 91 857 against 14 227, nonogram_hard 69 692 against 34 271, dom_10 89 099 against
+45 035. Elsewhere the two are within noise. The native propagator helps; it is not the cause.
+
+### 3. The fix in reach: regular's call is incremental
+
+`propagate` rescanned every layer, every edge and every flag at every call, with a `Store.get` per
+test (`dead`, `is_set`: about 6 + 2S loads per flag per call). The new rule (module header, "The call
+is INCREMENTAL"): every condition the five steps test is local to a layer or to the edges of one
+letter, and all of them hold at the end of a call that returns `Fixpoint`. A later call compares each
+flag's state with a byte cache of that fixpoint, and each letter's domain by physical equality
+(`Domain.t` is immutable), and skips the conditions whose inputs did not move. Its own writes mark
+their layer or letter dirty, so the passes see their own deaths as before. Hence the same prunings in
+the same order with the same reasons. The passes read the cached bytes instead of the store, and the
+edge loops read a flattened edge table and a per-letter membership table. After a conflict, the
+layers that call wrote are marked stale and re-read. An aliased word keeps the full scan. Under
+`BAGUETTE_DEBUG` every call first checks that the cache is the store's and that every skipped
+condition holds (`skipped_hold`).
+
+Two versions were measured and dropped on the way: physical comparison of the FLAG domains (an
+array of `Domain.t`) made rotating 1780 12 % slower (no layer is clean there after a conflict, and
+the array's write barrier promoted every new domain), and a version that still invalidated
+everything after a conflict.
+
+| measured | base `b266d78d` | branch `d1df685b` |
+|---|---|---|
+| instructions, 5 000 nodes, same tree: nonogram_hard_01 | 87.8 G | 45.0 G (-49 %) |
+| rotating-workforce Example1780 | 68.0 G | 44.8 G (-34 %) |
+| nonogram_dom_10 | 14.9 G | 10.4 G (-30 %) |
+| 300 s `--no-proof`, nodes/s: rotating 1780, 1242 | 487, 306 | 707, 478 |
+| nonogram_hard_01, dom_10 | 232, 297 | 319, 320 |
+| rws e-25-s-7, e-30-s-9, e-80-s-1 (time to answer) | 4 728, 3 513 n/s, 80 s | 5 579, 4 152 n/s, 62 s |
+| 300 s with proof, nodes/s: rotating 1780, 1242, nonogram_hard | 243, 193, 142 | 282, 236, 179 |
+| statuses on the sample, both arms | | unchanged (no instance crosses 300 s) |
+
+Wall-clock rates were taken under a node load of 40 to 55, so they are indicative; the
+instruction counts at a node limit are the measurement. regular's remaining share on nonogram_hard
+is 62 % of the run (forward pass 25 %, the change scan 12 %, kills and their reasons 14 %), and the
+GC 17 %, most of it the reasons' allocations.
+
+**Identity.** On the 21-instance sample at 2 000 nodes with proof, the `.opb`, the `.pbp` and stdout
+are byte-identical to the base binary's (`ident/md5-2000nodes.txt`). On the 232 test models,
+stdout, `.opb` and `.pbp` are byte-identical. `BAGUETTE_DEBUG=1` at 400 nodes on nonogram_dom_10,
+nonogram_hard_01, rotating 1780 and rws e-30-s-9: no invariant raised. No differential-lane
+instance calls `regular` (none of the 25 corpus files), so the lane cannot see this module: see
+the handoff note.
+
+### 4. What is left, and where
+
+1. **gcc's conflicts with facts** (M18-coverage-T11, added): alldiff's Hall conflicts carry their
+   facts under a decision since M7-T33 (D-0156); gcc's rule A conflict is still the factless
+   emptying push. That is the rotating-workforce and generalized-peacable blocker (82 to 99.9 % of
+   conflicts unlearned), and work-task-variation's 23 %.
+2. **elitserien** is alldiff's cost per node (60 %) and 4 times Chuffed's nodes: an M20-pernode
+   question, not a regular one.
+3. **The flag encoding's size**: mznlib declares (n + 1) * Q flags in the `.fzn`, and most are
+   STATICALLY dead, unreachable from q0 or not co-reachable to F even with every letter over the
+   whole alphabet (`deadflags.py`, in the results directory): live are 47.6 % of zayenz size 20
+   far's 3.7 M, 54.0 % of zayenz size 10's 127 k, 31.2 % of rotating 1780's 8 162, 32.3 % of
+   nonogram_hard_01's 62 928, 11.0 % of elitserien handball12's 9 408 and 71.4 % of
+   nonogram_non_awful_1's 91 560. Each dead flag is a declared variable, its FWD rows and a root
+   kill line, and the call scans it. Leaving them out (mznlib declaring only the live pairs, or
+   compile.ml stating them 0 as part of the flags' definition) changes the .opb and the naming
+   contract, so it is a design record of its own, not done here.
+
+### 5. Decision and revert
+
+[AUTONOME] The incremental call is kept: it changes no search, no proof and no answer, so it is not
+a change of default behaviour. Revert: `git revert` of `772ac90` alone.
+
+## D-0235  [AUTONOME] M20-pernode-T4 on all_different: a call stops paying for what cannot have changed. The Regin pass caches each term's snapshot until a removal lands on it and builds a tight set's facts once, stage 1 snapshots lazily and skips a pass on a bound vector it once found quiet. Same trees, byte-identical artefacts; elitserien handball12 -61 % instructions per node without proof, -25 % with
+
+**Status**: DONE on `wave81-alldiff` (agent-alldiff, 2026-11-26), not merged. Base: main `d7a78cc`
+(code of `84e241b`), release binary `eaa02008`; branch release binary `d1a13b12`, dev build
+`50898a4e`. Node fataepyc-06 at load 30 to 51 (other sessions' runs). Runs, profiles, scripts and
+the five sample `.fzn`: `/cluster/arthur/baguette-results/alldiff/`.
+
+### 1. Method
+
+D-0207's: `perf stat -e instructions:u` at a fixed node budget (`BAGUETTE_NODE_LIMIT`), per node =
+(I(N) - I(1)) / N, the 1-node run taken with the base binary; `perf record --call-graph fp` on the
+`baguette-fp` switch for the shares. Samples: D-0232's elitserien handball12 and handball9 and tppv
+circ8bbal and circ14cnonbal (native flattening of D-0232), and D-0207's costas13 (which completes in
+1 504 nodes, so its per-node figure is over 1 503 nodes). Every step was checked at the budget with
+`--proof`: md5 of `.opb`, `.pbp` and stdout, and the nodes/conflicts/learned counters, equal to the
+base binary's on all five.
+
+### 2. Where alldiff's instructions went (base, no proof, inclusive share of all samples)
+
+| instance (nodes) | alldiff | Regin scratch | of which removals | stage 1 pass | snapshots (`snap_of`) | top self symbol |
+|---|---|---|---|---|---|---|
+| elitserien handball12 (1 000) | 63.6 % | 46.1 % | 42.0 % (reason 36.9 %) | 14.8 % | 16.2 % (`hole_cite` 9.3 %) | `compare_val` 10.0 % (`List.mem` over the Hall values) |
+| tppv circ14cnonbal (1 000) | 46.0 % | 6.8 % | | 37.7 % | 23.4 % (`hole_cite` 9.1 %) | |
+| tppv circ8bbal (3 000) | 33.2 % | | | 27.7 % | 14.3 % | |
+| costas13 (3 000) | 52.6 % | 12.2 % | | 37.2 % | 18.1 % | |
+
+Three causes. (a) A Regin removal rebuilt its tight set's whole fact list (`hall_facts`), with a
+polymorphic `List.mem v vals` per hole of every Hall member, and re-snapshotted every member and the
+pruned variable; the facts are the same for every removal under one set. (b) Every stage 1 pass
+snapshotted every term (holes, a `Store.remover` search per hole, two root tests) before looking
+at a single interval, and most passes find nothing. (c) The tight-interval arm compared names in
+O(n) per term and listed the contained terms by a filter of the scope per interval.
+
+### 3. The fixes, each measured (instructions per node, no proof; artefacts identical at each step)
+
+| step (commit) | rule (all in `lib/core/prop/alldiff.ml`) | h12 @300 | tppv14 @500 | tppv8 @2000 | costas13 |
+|---|---|---|---|---|---|
+| base | | 34.89 M | 14.65 M | 6.47 M | 4.77 M |
+| 1 `e250b69` | Regin: snapshot cache until a removal lands on the term, one `hall_facts` per tight set (lazy), only values still in the live domain go to the store, `mem_of` (binary search) for every `keep` | 17.32 M | 14.33 M | 6.43 M | 4.69 M |
+| 2 `93ecf93` | stage 1: `pass_scan` snapshots a term when first read and forces the pushed term's snapshot before a push lands; containment counted by a pointer walk; `pass` skips a bound vector a scan found quiet | 12.53 M | 9.48 M | 5.47 M | 3.77 M |
+| 3 `ffd540a` | a term is looked up in the Hall set through `canon` (first index with its name), not by string comparison | 12.39 M | 9.02 M | 5.41 M | 3.71 M |
+| 4 `5fda8c5` | Regin: each term's "holds a free value" once per pass, not per member of every enumerated set | 12.11 M | 8.87 M | 5.39 M | 3.62 M |
+| 5 `d549e65` | stage 1: contained terms marked in an array and listed only for a push; live bounds from the pass's own copy, updated at each landed push | 11.92 M | 8.24 M | 5.13 M | 3.50 M |
+
+At larger budgets, final against base: handball12 at 3 000 nodes 36.61 M -> 14.28 M (-61 %) without
+proof, at 1 500 nodes with proof 112.35 M -> 84.73 M (-25 %). With proof at the table's budgets:
+h12 89.24 -> 64.78 M, tppv14 29.42 -> 23.04 M, tppv8 17.46 -> 16.01 M, costas13 12.07 -> 10.70 M.
+
+**Why each is sound.** The module header's "THE COST PER CALL" paragraph and the comment at each
+site. In short: a snapshot reads the term's domain, its two supports and its holes' removers, and
+within one call only a push or removal on that term (or on a term naming the same variable,
+[twins]) changes them, so a cached snapshot is the one the eager code took; the pass-start
+snapshot is forced before any push on the term, so a lazy read returns pass-start values. Whether
+a stage 1 scan moves anything or raises is a function of the bound vector alone, so a quiet vector
+stays quiet; it is a hint compared against the live bounds, never a fact, and needs no trail.
+`Store.remove` of a value already gone answers `Unchanged` with no side effect, so not calling it
+changes nothing but the count of thunks built (their hash-consing ids, which equality never reads;
+the bytes confirm it). BAGUETTE_DEBUG re-runs the scan behind every quiet skip.
+
+**Withdrawn, measured**: routing the pairs of an at-most-one STEP through `reuse` (D-0216's memo),
+so the pruned variable's m pairs are found rather than rebuilt. Same bytes, but handball12 with
+proof went 64.79 -> 68.90 M per node (+6 %): the memo fills and is emptied more often. Not kept.
+
+### 4. What is left (final binary, no proof, inclusive shares)
+
+| instance | alldiff | of which stage 1 / Regin scratch / gate | learning (`Learn.at_conflict`) |
+|---|---|---|---|
+| elitserien handball12 | 19.9 % | 7.9 / 7.7 / 4.3 % | 32.5 % (`Analysis.dependency_levels` 19.6 %, `Store.var_named` 7.4 %) |
+| tppv circ14cnonbal | 29.1 % | 19.3 / 6.7 % / - | 8.4 % |
+| costas13 | 37.0 % | 19.0 / 13.1 / 4.4 % | 17.1 % |
+
+Stage 1 still runs a full scan whenever a bound of the scope moved: on handball12 15 484 of 58 941
+passes are skipped, on costas 1 405 of 33 700. An incremental Hall scan that keeps the push order is
+the next item inside alldiff. Outside it: the learning side resolves every fact's owner by NAME
+(`Store.var_named`, a string hash, 7.4 % of handball12), and with the proof `Encoding.find` by name
+is 8 % (Trace, `Justify.validate_lit`, alldiff's `pair_amo`); both are cross-session requests.
+
+### 5. Throughput (300 s, wall-clock rates under load 35 to 51)
+
+| instance | no proof, base -> branch | with proof, base -> branch |
+|---|---|---|
+| elitserien handball12 | OPT both, 29 762 nodes, 232.5 s -> 109.9 s (128 -> 271 nodes/s) | 12 857 -> 16 710 nodes (43 -> 56 /s) |
+| elitserien handball9 | 30 330 -> 58 284 nodes (101 -> 194 /s) | 14 399 -> 16 226 (48 -> 54 /s) |
+| tppv circ8bbal | 145 666 -> 186 991 (486 -> 623 /s) | 60 486 -> 63 790 (202 -> 213 /s) |
+| tppv circ14cnonbal | 114 799 -> 164 262 (383 -> 548 /s) | 48 192 -> 60 141 (161 -> 200 /s) |
+| costas13 | SAT in 1 504 nodes, 1.48 -> 1.09 s | 4.17 -> 3.50 s |
+
+Against Chuffed on handball12 (D-0232: 7 207 nodes in 1.7 s, 4 160 nodes/s): baguette without proof
+is now 271 nodes/s, a factor 15 per node (34 before), and its tree is 4.1 times Chuffed's, so 65
+times on the time to OPT.
+
+### 6. Checks
+
+`dune runtest --root . --force` 5 416 ok, 0 FAIL (a new lane, test_prop's (g): 400 random scenes
+with and without the skip, 3 935 skipped passes, fails when the skip compares the lower bounds
+only). The 232 test models: `.opb`, `.pbp`, stdout and exit code identical, base `eaa02008` against
+branch `d1a13b12`. Differential lane `--tier all`: 347 of 347 equal; `--debug`: 333 of 333 equal
+(`BAGUETTE_MEM_CAP_KB=33554432`). Scaling lane (dev build `50898a4e`, `-j 8`): ok, all 5 lines
+within their thresholds. The suite and the binaries were re-run and re-hashed after merging main
+`3841144` (WORKLOG only): the same `d1a13b12`/`50898a4e`, 5 416 ok, 0 FAIL.
+
+**Clarity cost.** `pass` became `pass` (the quiet test) and `pass_scan` (the scan, with a lazy
+snapshot array, a dirty mark, live bound copies and two mark arrays); `regin_scratch` holds a
+snapshot cache with its invalidation rule; `t` gained `quiet`, `quiet_on`, `canon` and `repeats`.
+About 250 lines, most of them comments stating the rule each cache relies on. A variable repeated
+in one scope is handled ([twins]) but no shipped model exercises it.
+
+### 7. Decision and revert
+
+[AUTONOME] Kept: no search, proof or answer changes, so no default behaviour changes. Revert:
+`git revert` of `e250b69`, `93ecf93`, `ffd540a`, `5fda8c5`, `d549e65` and the test commit `560ae93`
+(and the header commit `65004ef`).
+
+## D-0233  [AUTONOME] M18-coverage-T7: `alldifferent_except_0` as at most one indicator per non-zero value (Chuffed's shape) in place of std's gcc, `nvalue` without the `bool2int` copies, the reified `all_equal` as a chain. Three mznlib files, no new builtin, no `lib/` change. Measured on the 105 Challenge instances that call the three globals
+
+**Status**: DECIDED (agent-cheap, `wave79-cheap`, 2026-11-26). Revert: delete `mznlib/fzn_alldifferent_except.mzn`,
+`mznlib/fzn_nvalue.mzn` and `mznlib/fzn_all_equal_int_reif.mzn` (each alone reverts its global to std's text,
+byte for byte), the seven test models they brought and the SPEC 2.1 row. The binary does not change: every build of
+this branch has main's bytes (section 3, last paragraph).
+
+### 1. What reached baguette before, measured first
+
+The census (ROADMAP M18) counts the three globals as not native: `nvalue` 40 instances, 52 % complete,
+`all_equal` 40, 11 %, `alldifferent_except_0` 37, 3 %. Read from the models and from main's mznlib flattening
+(MiniZinc 2.10.1), the three cases are not alike.
+
+- `alldifferent_except_0` was ALREADY native. std's `fzn_alldifferent_except` writes, when every variable is
+  bounded, `global_cardinality(xs, dom_array(xs) diff except, 0, 1)`, which `mznlib/fzn_global_cardinality_low_up.mzn`
+  routes to baguette's gcc with one 0..1 count variable per value. Every one of the 37 instances flattens that way.
+  The census counts it decomposed because it reads names, not flattenings.
+- `all_equal` at the top level costs nothing. The flattener aliases the variables of an equality between two
+  variables, so no constraint reaches the solver. Only the REIFIED form survives, `b <-> forall (i < j) (xs[i] = xs[j])`,
+  in speck-optimisation (`all_equal(..) -> all_equal(..)`, `not all_equal(..)`), harmony (`not all_equal` over windows
+  of three) and yumi-dynamic 2024. Yumi-static's instances flatten byte-identically under every route of this record.
+  Seven yumi instances fail to flatten in std itself (`maximum of empty set`), for Chuffed as well.
+- `nvalue` is std's `n = sum_v bool2int(exists_i (xs[i] = v))`: per value an `array_bool_or` and a `bool2int` copy of it,
+  per (variable, value) an `int_eq_reif`, and one `int_lin_eq` over the copies.
+
+The low completion rates are the families'. On arithmetic-target the cost is `int_div` and `int_times` (1.2 M and
+1.0 M instances, 273 000 propagator runs per node, gcc 1.3), on hitori and seat-moving the learned clauses, and the
+seven liner-sf-repositioning instances are refused at the heap budget at the ROOT (one node, 98 propagator runs,
+8 GB) on every route tried here, so their cause is elsewhere in the model (domains up to 0..771 667) and stays open.
+
+### 2. Options, per global
+
+| global | option | per value or per call | measured (section 3) |
+|---|---|---|---|
+| `alldifferent_except_0` | std's gcc (the baseline) | a count variable and a counting row per value | 1 complete of 37 |
+| | **at most one indicator per value** (chosen): `baguette_bool_lin_le([1, ...], [xs[i] = v \| ...], 1)` over std's `int_eq_reif` indicators, D-0220's builtin; Chuffed's own library gives the std call this shape (`bool_sum_le`) | an `int_eq_reif` per (variable, value), shared by CSE, and one row per value | 2 complete, 10 incumbents better and none worse, 0.71 of the instructions per node |
+| | std's pairwise fallback (`(x in S /\ y in S) \/ x != y`) | n (n - 1) / 2 reified disequalities | 1 complete, 1.25 of the instructions per node, concert's incumbents unchanged or worse |
+| | a native `alldiff` restricted to the non-zero values (Hall intervals and Régin's matching) | a variant of `alldiff.ml`, whose model rows are pairwise disequalities that would each need the exception | not built: gcc is already a Hall-rule propagator here and it lost to the plain rows. The cost is the reasons the search learns from, not the pruning (gcc is 1 to 3 runs per node on these instances) |
+| `nvalue` | std | as above | the baseline |
+| | **std's rows without the `bool2int` copies** (chosen), D-0220's move: `baguette_bool_lin_eq([1, ...], [taken_v \| v ...], n)` and `n in 0..min(\|xs\|, #values)` | one variable, two rows and one propagator fewer per value | neutral: 0.97 to 1.03 of the instructions per node, the same outcomes |
+| | a native nvalue (the lower bound by disjoint domains, Beldiceanu's) | a new propagator and justification | not built: the decomposition is EXACT for n (n's bounds and the value Booleans propagate both ways) and the instances that time out are not waiting on n (gfd-schedule's misses are its scheduling part) |
+| reified `all_equal` | std's pairwise | n (n - 1) / 2 reified equalities | the baseline |
+| | **the chain** `b <-> forall (i > first) (xs[i] = xs[first])` (chosen) | n - 1 | speck 0.67 to 0.92 of the instructions per node, the same answers. And a stronger negation, see the file's header |
+| | a native all_equal | | not built: the unreified form never reaches the solver |
+
+Why the indicator rows beat gcc on concert-hall-cap is a reading, not a measurement: the indicators `xs[i] = v` are
+Booleans the rest of the model already uses (CSE shares them), so a learned clause over them generalises where one
+over gcc's order-literal reasons does not. The search differs from the first thousands of nodes (stdout at 3 000
+nodes differs on 7 of 25).
+
+### 3. Measurement (2026-11-26)
+
+All 112 instances of D-0185's census that call one of the three, flattened with MiniZinc 2.10.1 once per route
+(105 flatten, 7 yumi fail in std). One binary for every arm, release `b266d78d` (main `20170b8`, the same source
+under `lib/` and `bin/` as `ef56549` but for D-0226, which this record does not depend on). 300 s, `--max-heap-mb
+8192`, 16 GiB address space, MemoryMax 32 G, 8 runs per arm in parallel on fataepyc-06 under the load of a gate
+and two agents. With proof, veripb on every COMPLETE run (the timed-out proofs were checked only for the first 17
+baseline runs and are not counted). Node-limited arms: `BAGUETTE_NODE_LIMIT=3000`, `--no-proof`, `perf stat -e
+instructions:u`, deterministic. Tables, scripts and every `.err` with its stats: `fataepyc-06:/cluster/arthur/baguette-results/cheap/`.
+
+`alldifferent_except_0`, 37 instances.
+
+| arm | complete (verified) | incumbent only | refused | incumbents vs gcc |
+|---|---|---|---|---|
+| gcc, proof | 1 (1) | 15 | 7 | |
+| at-most-one, proof | 2 (2) | 16 | 7 | 10 better, 0 worse |
+| gcc, no proof | 1 | 16 | 5 | |
+| at-most-one, no proof | 2 | 16 | 6 | 7 better, 1 worse |
+| pairwise, no proof | 1 | 18 | 5 | 4 better, 2 worse |
+| Chuffed (M17-T4, 1 200 s) | 12 within 300 s, 14 in all | | | |
+
+The new completion is concert-hall-cap 2018.02, OPT 48 278 (Chuffed's value) in 136 s with proof, VERIFIED, where
+gcc times out at 39 050. The better incumbents are concert-hall-cap (2018: 06, 148, 318, 2024: 04, 100_20, 150_20,
+200_20, the last three from none or from 1 455 773 to 1 576 652) and seat-moving (10-20-05 139 to 134, 10-13-00 298
+to 294, minimised). Instructions per node at 3 000 nodes, at-most-one over gcc: geomean 0.708 over 25 instances
+(concert 0.035 to 1.70, seat-moving 0.62 to 1.27, hitori 0.88 to 1.00). In the 300 s runs concert does FEWER nodes
+per second (2018.02: 2 271 to 941 without proof) because it searches elsewhere, and seat-moving more (15-20-00:
+288 to 495). Flattened size, constraints at-most-one over gcc: concert 1.3 to 1.7, liner 1.2 to 1.4, seat-moving
+1.12 to 1.16, hitori and arithmetic-target 1.01.
+
+`nvalue` and the reified `all_equal`, 68 instances (gfd-schedule 20, physician-scheduling 5, word-equations 5,
+ihtc 5, workforce-alloc 5, speck 5, harmony 5, peaceable queens 5, yumi 13).
+
+| arm | complete (verified) | incumbent only |
+|---|---|---|
+| std, proof | 18 (18) | 39 |
+| this record, proof | 18 (18) | 39 |
+| std, no proof | 19 | 39 |
+| this record, no proof | 19 | 39 |
+| Chuffed (1 200 s) | 22 within 300 s, 25 in all | |
+
+No outcome changes. Instructions per node at 3 000 nodes, geomean 0.976 over 44 changed instances, the same stdout
+on 43: nvalue's families 0.97 to 1.03, speck 0.67 to 0.92, harmony 1.00 to 1.05. Nodes in 300 s on the timeouts
+moved by 0.91 to 1.29 where the inputs changed and by 0.82 to 1.30 on the instances whose flattening is
+byte-identical, so the timed arms cannot tell these two changes from the node's load. The deterministic arm is the
+measurement.
+
+Peaceable queens is the one surprise: the model calls `all_equal` only at the top level, yet the chain changes its
+flattening (n13_q5 10 860 to 17 286 constraints, n25_q4 72 614 to 47 610), and the file with std's pairwise body
+gives std's bytes back, so the reified predicate IS reached somewhere inside std's decomposition of the model's
+symmetry breaking. Not found. The outcomes are the same (TIMEOUT with the same incumbents), instructions per node
+1.18 and 0.89.
+
+Correctness, beside the seven test models: a differential fuzz of 600 random small models (nvalue with bounds on
+n, reified all_equal under negation and implication, alldifferent_except_0 over domains with and without 0, random
+side constraints, an objective), each solved by Chuffed through std and by baguette through this mznlib with veripb
+on the proof. 599 agree with VERIFIED proofs. The 600th crashed baguette, and it is not this record's: minimised, it
+is a three-variable model with no global at all (`x0 in 0..3`, `x1, x2 in 2..3`, `x1 != x0`, `x2 != x1`, `x2 < x0`)
+on which main's binary raises `Encoding.ensure_atom ... asked for after the root contradiction` from
+`Search.close_root_conflict` under `--proof` with the bits encoding. Recorded in WORKLOG's cross-session requests,
+reproducer in the results directory.
+
+Confirmed after merging main `ef56549` (D-0226, retention `tiered` by default), release `2397635e`, the ten concert-hall-cap instances with proof, gcc against at-most-one: 0 -> 1 complete (2018.02, OPT 48 278 in 70 s, VERIFIED), 8 incumbents better (06, 148, 318, 2024 .04, 100_20 and 150_20 from none, 200_20 1 455 773 -> 1 576 652), none worse, 2018.03 and 60_50 unchanged.
+
+Checks on the branch merged with main `e0c793a` (D-0235). Its binaries are main's bytes, dev `50898a4e` and release `d1a13b12`, both built here from each checkout, so every existing test model's artefacts are main's. `dune runtest --root . --force` 5 416 ok and 0 FAIL, `run_model_tests.sh` 239 models (232 + this record's 7) with proofs VERIFIED, `check_mznlib.sh` 58 ok, the differential lane `--tier all` 347 of 347 equal and `--debug` 333 of 333, the scaling lane ok, the lanes under `BAGUETTE_MEM_CAP_KB=33554432`. Before that merge (main `ef56549`, dev `4ce3e72e`) the same checks gave 5 414 ok, 239 models, 347 of 347 and 333 of 333. No lane instance calls these globals and every lane input is pre-flattened, so nothing there could move.
+
+### 4. SPEC 2.1
+
+One row added to the M18 builtins table (the D-0217 and D-0220 precedent), normative because it says what reaches
+the solver: `nvalue` through `baguette_bool_lin_eq`, the reified `all_equal` as the chain, `alldifferent_except_0`
+and `all_different(xs, S)` as one `baguette_bool_lin_le(..., 1)` per value outside `S`. No new builtin, so no new
+sentence of semantics. The user's to confirm outside autonomous mode.
+
+### 5. What is left open
+
+- liner-sf-repositioning's seven root refusals (section 1). Not a coverage question.
+- The reason gcc's conflicts learn worse than the indicator rows on concert-hall-cap. If it is the reasons' literals,
+  gcc itself (M7-T16) would gain from the same currency on every gcc model. A measurement for whoever holds gcc.ml.
+- nvalue's stronger lower bound, should a family ever wait on n.
+- The census tool reads names. `tools/compare/challenge_globals.py` will now count `alldifferent_except_0`, `nvalue`
+  and `all_equal` as native only if it reads the `fzn_alldifferent_except`, `fzn_nvalue` and `fzn_all_equal_int_reif`
+  files the way it reads the others, which it does for `fzn_<g>` names. `alldifferent_except` is the file's name, so
+  `alldifferent_except_0` stays listed apart. Left as is.
+
+## D-0234  [AUTONOME] M18-coverage-T11: global_cardinality's conflicts carry their facts under a decision, derived ahead, as all_different's do since D-0156, and its reasons name only the facts their derivation leaves
+
+**Status**: DONE on `wave80-gcc` (agent-gcc, 2026-11-26), not merged. Measured against main `84e241b`
+(binary `2b00a3ac`) with the branch's `8f4f8edd` (`28e0cba`); checked again after merging main
+`121a1ce` (binary `50898a4e`), branch tip binary `96af57d4`. Node
+fataepyc-06, 300 s runs at 16 in parallel, 16 GiB address space, `MemoryMax=32G`,
+`--max-heap-mb 8192`. Runs, tables and scripts: `/cluster/arthur/baguette-results/gcc/`.
+Touches: `lib/core/prop/gcc.ml` only on the solver side; `test/unit/test_prop.ml` (the
+M18-coverage-T11 section), `test/models/gcc_conflict_learn_sat.fzn`,
+`test/models/gcc_count_conflict_learn_sat.fzn` and their expected outputs.
+
+### 1. The finding (D-0232 section 2)
+
+Every conflict of `gcc.ml` reached the store as a push that must fail. That covers rule A's
+pigeonhole (|H| > cap, the surplus confined variable pushed past its own top), rule C's shortfall and
+surplus (a count pushed past its opposite bound), and the stale pushes of either rule that land on a variable an
+earlier push of the same pass had confined. `Store.apply`'s `Failed` arm pairs each with
+`Reason.none`, so `Learn.at_conflict` got an empty cut and the branch closed on the decision
+nogood. On rotating-workforce 82 to 99.9 % of the conflicts learned nothing.
+
+### 2. The rule
+
+One rule for every push of the module, in `pass`'s `apply`, which every rule-A, rule-C and rule-(b)
+push already goes through. A push whose bound crosses the LIVE opposite bound of its target is,
+under a decision, not made. It is reported as the conflict with `Store.conflict` under
+`Store.deriving_ahead`, with the push's own facts plus that crossed bound (`conflict_facts`, each
+fact once). `Trace.conflict_line` then writes the push's derivation first and `rup ~facts >= 1`
+after it, which is cumulative's arrangement (D-0096) and all_different's (D-0156).
+
+The line is unit propagation against that one derivation, because every literal the derivation
+leaves in its row is the negation of a listed fact:
+
+| what the derivation leaves | where it comes from | the fact |
+|---|---|---|
+| a bound of a confined variable, or of the count, that a decision moved | `alo_summands`, `high_row` (`bound_cancels` cancels root ones only) | that bound, from the push's reason |
+| a non-taker's excluding bound (rule C, rule (b)) | `zero_summands` | that bound |
+| a fixed taker's two bounds (rule C lower) | `fixed_leftovers` | both |
+| rule A pigeonhole: the surplus variable's residue `y_ge_(hi(y)+1)` | `prune_expl`'s chain from the snapshot top | `y <= hi(y)`, already in the reason (y is the target) |
+| every other emptying push: a VALID bound (`y >= b+1`, `c <= may`, `c >= must`) the live store contradicts | the push's own derivation | the CROSSED bound, read live: unit propagation walks the ladder rungs from it |
+
+A constant count has no literal and needs none, because its derivation takes the declared-range arm of
+`ladder_at_most` / `ladder_at_least`, which is already contradicting.
+
+The test reads the store live (`View.lo` / `View.hi`), so it agrees with `Store.apply`'s `Failed`
+exactly, because `set_lo` to a bound at or below `hi` always lands on a value. AT THE ROOT NOTHING
+CHANGES in the conflict. The push runs and fails as before, and its derivation closes to `0 >= 1`.
+
+No new `Explanation` constructor, and nothing outside `gcc.ml` changed on the solver side.
+`Store.conflict`, `Store.deriving_ahead` and the trace's `c_ahead` path are the ones all_different,
+cumulative and element already use. No constructor is needed because the conflict's derivation is
+the push's own `Combine`, unchanged, and what it lacked was facts on the `Reason` side, which
+`Reason.because` carries.
+
+### 3. The tight facts, and why they are a second commit
+
+With the rule alone (`5afb37e`), every gcc conflict on the sample learned, but the reasons were
+`scope_facts`', which state every variable of the scope at both its current bounds. That is the right SCOPE,
+since D-0026's reverse arm requires the reason to name every variable the derivation weakens at the
+top level, and too many FACTS, because a variable whose terms the counting clears for free (a ladder chain
+in `drop_summands` / `free_summands`, literal axioms in `cost_summands`) is a fact the trace line
+does not need and a literal 1UIP must resolve or keep.
+
+`28e0cba` names each variable of the scope in one of three ways, from the same snapshot.
+`both_bounds` where the derivation leaves both (rule A's confined set and target, rule C's fixed
+takers), `excluding_bound` where it leaves one (the non-takers of rule C and rule (b)), and
+`named_only` otherwise, which is the fact `x >= decl_lo(x)`. It has no literal (`Reason.lit_of_fact`
+answers `None`), costs nothing, and keeps D-0026's reverse arm satisfied. That is how `gcc.ml`
+already named a count (`at_least cdlo`). The counts are named, and stated at the one bound a rule
+reads (the top for rule A and (a), the bottom for rule (b), none for rule C).
+
+The trace lines stay RUP where they were. The ahead lines (rule A, rule C's lower push, rule (a)'s
+hole) because every literal their derivation leaves is still the negation of a listed fact. The two
+that are RUP against one model row alone (rule C's upper push, rule (b)) because a variable that
+holds the value contributes at most 1 to that row's slack whether or not its bounds are asserted,
+and the argument their comments already made never used those bounds. This changes the trace lines of
+gcc PRUNINGS too, at every level, which is why it is its own commit. Reverting `28e0cba` alone
+returns to wide reasons with learning kept.
+
+Measured at 60 s without proof, rule only against rule plus tight facts, rws e-30-s-9 ran 1 151
+against 1 636 nodes/s, e-25-s-7 1 209 against 1 406, Example1780 483 against 509, gpq n8_q3 2 115 against 2 289,
+work-task seed-3 280 against 262. Learned-clause widths barely move (16 literals or more in 97 to
+99.9 % of clauses either way), so the width comes from the rest of the cut.
+
+### 4. Measurements
+
+Binaries: base `2b00a3ac` (main `84e241b`), new `8f4f8edd` (`28e0cba`). The tip `31c06e1`
+(`d5e3bee4`) only replaces a by-name membership test with a set (section 3's cost, below). It gives the
+same stdout and counters at 20 000 nodes on gcc-benchmark l42_3, 8 % fewer instructions there, and its
+20 test-model proofs are byte-identical to `8f4f8edd`'s.
+
+**Share of conflicts that learn.** No gcc conflict is factless any more. A throwaway build that counts
+why `Learn.at_conflict` answers `None` (D-0232's patch) ran 20 000 nodes. On gpq n8_q3 9 967 of
+9 976 conflicts learn (the 9 others are gcc conflicts with facts whose 1UIP walk ends without a single
+literal at the conflict level, `postcondition`). On rws e-30-s-9 and Example1242 all of them learn,
+and on work-task seed-3 9 724 of 9 762 (int_lin_le, learned_clause, bool_clause, int_eq_reif and 7 gcc ones, all with facts).
+On gcc-benchmark l42_3 the 9 019 conflicts still unlearned are **int_lin_ne's**, factless, not gcc's
+(695 gcc conflicts now learn there, against 0 before). That is the next family with D-0232's defect.
+
+**300 s, 34 instances** (`table-300s.md`), namely 10 rotating-workforce, 4 generalized peacable queens, 3
+work-task-variation, and 17 other gcc users from the census. Cells are answer, last objective,
+nodes, learned / conflicts, nodes/s.
+
+| instance | base np | new np | base p | new p |
+|---|---|---|---|---|
+| 2016_gbac_reduced_UD6-gbac | SOL 8492 77459 n, 100% learn, 258 n/s | SOL 8533 73035 n, 100% learn, 243 n/s | SOL 9018 51785 n, 100% learn, 173 n/s | SOL 9017 52480 n, 100% learn, 175 n/s |
+| 2017_cd Strike.s6.k5 | SOL 53 389584 n, 100% learn, 1297 n/s | SOL 53 395708 n, 100% learn, 1317 n/s | SOL 53 235403 n, 100% learn, 784 n/s | SOL 53 243214 n, 100% learn, 810 n/s |
+| 2018_chc 02 | SOL 42126 1158619 n, 15% learn, 3860 n/s | SOL 39050 704462 n, 100% learn, 2346 n/s | SOL 39050 595152 n, 15% learn, 1983 n/s | SOL 39050 474043 n, 100% learn, 1579 n/s |
+| 2018_rw Example1014 | UNKNOWN 76843 n, 39% learn, 256 n/s | UNKNOWN 63542 n, 100% learn, 212 n/s | UNKNOWN 25529 n, 33% learn, 85 n/s | UNKNOWN 27155 n, 100% learn, 90 n/s |
+| 2018_rw Example103 | UNKNOWN 211865 n, 0% learn, 706 n/s | UNKNOWN 117510 n, 100% learn, 392 n/s | UNKNOWN 132239 n, 0% learn, 441 n/s | UNKNOWN 73226 n, 100% learn, 244 n/s |
+| 2018_rw Example1780 | UNKNOWN 196828 n, 8% learn, 656 n/s | UNKNOWN 134188 n, 100% learn, 447 n/s | UNKNOWN 77821 n, 8% learn, 259 n/s | UNKNOWN 68669 n, 100% learn, 229 n/s |
+| 2018_seat-moving_sm-10-12-00 | SOL 554 185370 n, 100% learn, 618 n/s | SOL 554 179547 n, 100% learn, 598 n/s | SOL 645 89676 n, 100% learn, 299 n/s | SOL 645 94457 n, 100% learn, 315 n/s |
+| 2018_seat-moving_sm-10-20-05 | SOL 134 218074 n, 99% learn, 727 n/s | SOL 132 224010 n, 100% learn, 746 n/s | SOL 137 100433 n, 99% learn, 335 n/s | SOL 132 123627 n, 100% learn, 412 n/s |
+| 2019_lot-sizing_pigment15a.psp | SOL 1195 23563 n, 98% learn, 79 n/s | SOL 1195 19995 n, 100% learn, 67 n/s | SOL 1195 20388 n, 98% learn, 68 n/s | SOL 1195 17588 n, 100% learn, 59 n/s |
+| 2019_rw Example1174 | UNKNOWN 87115 n, 39% learn, 290 n/s | UNKNOWN 95876 n, 100% learn, 319 n/s | UNKNOWN 35344 n, 37% learn, 118 n/s | UNKNOWN 44608 n, 100% learn, 149 n/s |
+| 2019_rw Example1242 | UNKNOWN 131472 n, 16% learn, 438 n/s | UNKNOWN 95495 n, 100% learn, 318 n/s | UNKNOWN 66574 n, 17% learn, 222 n/s | UNKNOWN 53358 n, 100% learn, 178 n/s |
+| 2022_gpq n11_q5 | SOL 1 558462 n, 1% learn, 1861 n/s | SOL 1 224052 n, 100% learn, 746 n/s | SOL 1 195238 n, 1% learn, 651 n/s | SOL 1 133585 n, 100% learn, 445 n/s |
+| 2022_gpq n13_q5 | SOL 0 605275 n, 0% learn, 2017 n/s | SOL 0 198155 n, 100% learn, 660 n/s | SOL 0 176181 n, 0% learn, 587 n/s | SOL 0 114557 n, 100% learn, 382 n/s |
+| 2022_gpq n8_q3 | SOL 4 1509254 n, 1% learn, 5030 n/s | SOL 3 614817 n, 100% learn, 2047 n/s | SOL 3 508332 n, 1% learn, 1694 n/s | SOL 3 323276 n, 100% learn, 1077 n/s |
+| 2022_gpq n9_q5 | SOL 2 989991 n, 1% learn, 3299 n/s | SOL 1 317534 n, 100% learn, 1058 n/s | SOL 1 302757 n, 1% learn, 1009 n/s | SOL 1 165928 n, 100% learn, 553 n/s |
+| rws e-100-s-2 | UNKNOWN 284706 n, 0% learn, 949 n/s | UNKNOWN 166960 n, 100% learn, 556 n/s | UNKNOWN 98165 n, 1% learn, 326 n/s | UNKNOWN 76643 n, 100% learn, 255 n/s |
+| rws e-25-s-7 | UNKNOWN 1388265 n, 0% learn, 4627 n/s | UNKNOWN 316401 n, 100% learn, 1054 n/s | UNKNOWN 534494 n, 0% learn, 1781 n/s | UNKNOWN 219238 n, 100% learn, 730 n/s |
+| rws e-30-s-9 | UNKNOWN 1055042 n, 0% learn, 3517 n/s | UNKNOWN 380736 n, 100% learn, 1269 n/s | UNKNOWN 356201 n, 0% learn, 1187 n/s | UNKNOWN 199486 n, 100% learn, 665 n/s |
+| rws e-80-s-1 | SOL 29328 n, 2% learn, 412 n/s (71s) | SOL 1003 n, 100% learn, 697 n/s (1s) | SOL 29328 n, 2% learn, 138 n/s (212s) | SOL 1003 n, 100% learn, 145 n/s (7s) |
+| rws e-90-s-2 | UNKNOWN 287321 n, 0% learn, 957 n/s | UNKNOWN 182399 n, 100% learn, 608 n/s | UNKNOWN 109957 n, 0% learn, 366 n/s | UNKNOWN 76749 n, 100% learn, 255 n/s |
+| 2022_vaccine_v946 | UNKNOWN 1130313 n, 1% learn, 3767 n/s | UNKNOWN 401184 n, 100% learn, 1337 n/s | UNKNOWN 320536 n, 2% learn, 1068 n/s | UNKNOWN 196566 n, 100% learn, 655 n/s |
+| 2023_chessboard_chessboard3 | SOL 48 257427 n, 91% learn, 858 n/s | SOL 48 232931 n, 100% learn, 776 n/s | SOL 45 126769 n, 93% learn, 422 n/s | SOL 45 127497 n, 100% learn, 425 n/s |
+| 2023_pennies-opt_n7 | OPT 7 76396 n, 83% learn, 307 n/s (249s) | OPT 7 56147 n, 100% learn, 260 n/s (216s) | SOL 6 54227 n, 84% learn, 181 n/s | SOL 6 47882 n, 100% learn, 160 n/s |
+| 2023_pennies-opt_n9 | SOL 8 44691 n, 81% learn, 149 n/s | SOL 8 35778 n, 100% learn, 119 n/s | SOL 8 28816 n, 80% learn, 96 n/s | SOL 8 23363 n, 100% learn, 78 n/s |
+| 2024_cd Zakhary.s12.k3 | SOL 426148 410037 n, 100% learn, 1365 n/s | SOL 426148 402769 n, 100% learn, 1341 n/s | SOL 405634 148436 n, 100% learn, 494 n/s | SOL 405634 149172 n, 100% learn, 497 n/s |
+| 2024_compression_bin_8 | SOL 26 332460 n, 100% learn, 1108 n/s | SOL 26 329221 n, 100% learn, 1097 n/s | SOL 26 112798 n, 100% learn, 376 n/s | SOL 26 103984 n, 100% learn, 346 n/s |
+| 2025_hitori_h5-1 | OPT 17 828 n, 100% learn, 1840 n/s (0s) | OPT 17 828 n, 100% learn, 1882 n/s (0s) | OPT 17 828 n, 100% learn, 872 n/s (1s) | OPT 17 828 n, 100% learn, 828 n/s (1s) |
+| 2025_mondoku_10-10-6 | SOL 4 390285 n, 7% learn, 1301 n/s | SOL 2 238973 n, 100% learn, 796 n/s | SOL 4 249565 n, 6% learn, 832 n/s | SOL 2 188484 n, 100% learn, 628 n/s |
+| 2025_wtv seed-1-l16-o14-w12-b15 | SOL 2298 59642 n, 87% learn, 199 n/s | SOL 2278 56054 n, 99% learn, 187 n/s | SOL 2789 13620 n, 85% learn, 45 n/s | SOL 2791 13039 n, 99% learn, 43 n/s |
+| 2025_wtv seed-3-l10-o8-w12-b15 | SOL 3205 83954 n, 82% learn, 280 n/s | SOL 3205 75912 n, 100% learn, 253 n/s | SOL 3315 16104 n, 80% learn, 54 n/s | SOL 3217 17742 n, 100% learn, 59 n/s |
+| 2025_wtv seed-8-l12-o10-w10-b15 | SOL 2103 117911 n, 46% learn, 393 n/s | SOL 2097 88776 n, 100% learn, 296 n/s | SOL 2349 19114 n, 45% learn, 64 n/s | SOL 2159 19517 n, 99% learn, 65 n/s |
+| 2026_gccb i24 | SOL 363 n, - learn, 136 n/s (3s) | SOL 363 n, - learn, 133 n/s (3s) | SOL 363 n, - learn, 126 n/s (3s) | SOL 363 n, - learn, 123 n/s (3s) |
+| 2026_gccb l35_1 | UNSAT 1 n, 0% learn, 50 n/s (0s) | UNSAT 1 n, 0% learn, 50 n/s (0s) | UNSAT 1 n, 0% learn, 33 n/s (0s) | UNSAT 1 n, 0% learn, 33 n/s (0s) |
+| 2026_gccb l42_3 | UNKNOWN 891998 n, 0% learn, 2973 n/s | UNKNOWN 267373 n, 1% learn, 891 n/s | UNKNOWN 427013 n, 0% learn, 1423 n/s | UNKNOWN 180225 n, 1% learn, 601 n/s |
+
+Complete answers are 5 and 5 without proof, 4 and 4 with. The one that moved is rws e-80-s-1, SAT in
+71 s then 1 s without proof and 212 s then 7 s with (29 328 nodes then 1 003). pennies-opt n7's
+optimum took 249 s then 216 s. **No new instance is solved.** The 9 other rotating-workforce
+instances still end UNKNOWN, rws e-30-s-9 included (Chuffed answers in 121 791 nodes, 4 s).
+Incumbents, new against base on the same arm, are 4 better without proof (seat-moving sm-10-20-05,
+mondoku, work-task seed-1 and seed-8) and 4 worse (gbac UD6, concert-hall-cap 02, gpq n8_q3 4 then 3,
+gpq n9_q5 2 then 1), the rest equal. With proof 5 are better (gbac UD6, sm-10-20-05, mondoku,
+work-task seed-3 and seed-8) and 1 worse (work-task seed-1, 2 789 then 2 791).
+
+**Instructions per node**, `perf stat -e instructions:u` at 20 000 nodes, no proof (`ipn-table.md`).
+The trees differ from the first learned clause on, so this is the cost of the search each binary
+makes. It is not the cost of one conflict.
+
+| instance | base M/node | new M/node | ratio | learned / conflicts, base | new |
+|---|---|---|---|---|---|
+| Example1780 | 10.11 | 11.34 | x1.12 | 936/9985 | 9935/9935 |
+| Example1242 | 13.88 | 17.02 | x1.23 | 1939/9972 | 9912/9912 |
+| gpq n8_q3 | 1.05 | 2.11 | x2.01 | 218/9977 | 9967/9976 |
+| gpq n9_q5 | 1.68 | 3.66 | x2.18 | 318/9972 | 9965/9972 |
+| rws e-25-s-7 | 1.43 | 3.08 | x2.16 | 43/9957 | 7979/7979 |
+| rws e-30-s-9 | 1.92 | 3.12 | x1.63 | 76/9947 | 6690/6690 |
+| work-task seed-3 | 18.12 | 19.21 | x1.06 | 7943/9763 | 9724/9762 |
+| gcc-benchmark l42_3 | 1.88 | 6.13 (5.64 at the tip `d5e3bee4`) | x3.26 (x3.0) | 0/9957 | 695/9714 |
+
+Where it goes, from `perf record` at the same budget with the samples grouped by module. The gcc
+propagator costs the same (gpq n8_q3 319 then 321 samples, rws e-30-s-9 165 then 231), and so does
+regular (313 then 347 on gpq). What grows is the learning that now runs, namely learned-clause
+propagation (`Pb.falsified_at`, `Pb.next_free`), the 1UIP walk (`Analysis`, 0.2 to 4.2 % of
+samples), the store and the runtime's hashing
+and GC. The learning side (`Analysis`, `Learn`, `Pb`, `Learned`, `Retention`) is 13.7 % of gpq
+n8_q3's samples, 5.6 % of rws e-30-s-9's, 4.6 % of Example1242's, 0.8 % of l42_3's. On l42_3 the
+factor 3 is the tree, where gcc runs 10.8 times per node instead of 4.5. The conflict itself costs
+what the failed push cost, which is the same derivation (built only with a proof) plus one list of
+facts.
+
+Learning does not pay on rotating-workforce and gpq yet because the clauses are wide. gpq's gcc
+conflicts carry 63 to 65 literals (the capacity argument names every confined cell), and on every
+sampled instance 97 to 99.9 % of learned clauses have 16 literals or more, LBD 16 or more. A
+pigeonhole over many variables is a wide nogood. What gives Chuffed its 121 791 nodes on rws
+e-30-s-9 is not measured here.
+
+### 5. Checks (on the merged tip, binary `96af57d4`, against main `121a1ce`'s `50898a4e`)
+
+- `dune runtest --root . --force` under 4 GB: 5 456 ok, 0 FAIL (5 454 before the merge).
+  `run_model_tests.sh`: 241 passed, 0 failed.
+- The 241 test models against main's binary: 20 artefact differences, every one a `.pbp` (stdout,
+  exit code and `.opb` identical everywhere), and veripb verifies all 20. They are the gcc users
+  (`at_least`, `at_most`, `count`, `exactly` route there) and the two new scenes, of two kinds:
+  shorter `rup` tails on gcc prunings (the tight facts, root refutations included, e.g.
+  gcc_forced_root_unsat 388 then 348 bytes) and, under a decision, a conflict now written as `pol`,
+  `rup ~facts >= 1` and a learned clause where the decision nogood was (gcc_shim_unsat 415 then 567
+  lines).
+- Every gcc test model (26) solved and verified under `BAGUETTE_DEBUG=1`; rws e-30-s-9, gpq n8_q3 and
+  gcc-benchmark l42_3 at 1 500 nodes under `BAGUETTE_DEBUG=1` with proof (binary `d5e3bee4`;
+  `gcc.ml` is unchanged by the merge): no invariant, proofs verify.
+- The campaign's proofs: every complete answer verified on both binaries (rws e-80-s-1 SAT, hitori
+  h5-1 OPT, gcc-benchmark i24 SAT and l35_1 UNSAT), and four 300 s time-outs of the new binary (gpq
+  n9_q5, rws e-30-s-9, Example103, pennies-opt n7, 2.6 to 3.7 GB) verify too.
+- Differential lane (`--tier all -j 8`, 32 GB): 42 of 347 runs differ, exactly the three gcc users
+  of the corpus (lot-sizing pigment15b, chessboard4, evm isolated_block_6) in all 14 configurations.
+  Kinds: search counters in 41 (decisions, learned, `i-s4-cross` lines), proof hash in 39, work
+  counters in 42, stdout in 1 (pigment15b under `alternate`: objective 1 698 then 1 704 at the node
+  budget, a minimisation, so worse). chessboard4 `noproof` differs in work counters only. Not
+  re-recorded.
+- Debug pass (`--debug --tier all -j 8`): 28 of 333 runs differ, chessboard4 and evm
+  isolated_block_6 in all 14 configurations (search 27, hash 26, work 28, no stdout and no exit
+  code), and no invariant fired. pigment15b's 14 debug runs are skipped by `bench/diff/debug-skip.tsv`
+  as on main.
+- Scaling lane (`-j 8`): ok, every line within its threshold, rc 0.
+
+### 6. Lanes
+
+`test/unit/test_prop.ml`, the M18-coverage-T11 section, on two SAT scenes (D-0053) that are also
+model tests. In each a decision on `k` acts through single-variable propagators that all watch `k`,
+so the conflict is gcc's by construction.
+
+- (a) by hand: rule A (`k <= 2` confines x1..x3 to [1, 2], capacity 2) and rule C (`k <= 2` leaves
+  one taker of 3 and lifts `c3 >= 2`): the conflict is gcc's, `c_ahead`, carries the named facts,
+  carries NO literal of the variable the counting does not read (`t`, root-bounded at 3; `x3`, a
+  taker), lists no fact twice, satisfies `Store.agreement_holds` (D-0026), and `Learn.at_conflict`
+  returns `Some`. The root pigeonhole is still factless.
+- (b) under search, audit on: each learns 2 clauses (0 before) and its proof verifies. Rule A's line
+  `rup +1 x1_ge_3 +1 x2_ge_3 +1 x3_ge_3 >= 1 ;` is refused standalone (I-X10), without its `pol`, without
+  the surplus variable's bound, and without a confined variable's bound. Rule C's line
+  `rup +1 x1_ge_3 +1 x2_ge_3 +1 ~c3_ge_2 >= 1 ;` verifies standalone (it is RUP against its one model
+  row, and the lane asserts that), and is refused without the crossed bound `c3 >= 2` and without a
+  non-taker's bound. Every refusal is asserted on the RUP wording and on the line number.
+
+### 7. Decision, what is left, revert
+
+[AUTONOME] Kept. A conflict without facts was a defect against the design every other family
+follows (D-0040's arm is meant as the fallback), the row asked for it, and it is what lets
+rws e-80-s-1 answer in 1 s. The cost is real. On rotating-workforce and
+gpq the search is now 1UIP over wide clauses at 1.6 to 2.2 times the instructions per node, with
+no new answer at 300 s and two gpq incumbents lower without proof. That is not a change of default
+configuration (no flag, no SPEC sentence, no `Explanation.t`), so it needed no question.
+
+Left open:
+
+1. **int_lin_ne's factless conflicts** (gcc-benchmark l42_3: 9 019 of 9 714 conflicts unlearned at
+   20 000 nodes). The same defect in another family.
+2. **Wide pigeonhole nogoods.** gpq's gcc conflicts carry 63 to 65 literals. A narrower
+   explanation (the smallest sub-interval whose confined set already exceeds its capacity, or
+   Chuffed-style lazy explanation by the count variables) would be a row of its own.
+3. **The learning machinery's cost per node** (learned-clause propagation, `Pb.falsified_at` and
+   `Pb.next_free`, hashing by name in the store), which every family now pays on these instances.
+4. `BAGUETTE_DEBUG` on work-task seed-3 dies in the GC at the 16 GB cap even at 300 nodes (peak
+   14.7 GB), base and branch alike. It is not this row's.
+5. A shared `Reason.distinct` for `gcc.ml` and `alldiff.ml`'s `distinct_facts` (reason.ml is not
+   this row's file).
+
+Revert: `git revert 31c06e1 28e0cba 5afb37e` (the O(1) membership, the tight facts, the rule), or
+`28e0cba` and `31c06e1` alone to keep learning with the wide reasons. The two test models and the
+test_prop section go with `28e0cba`.
+
+## D-0236  [AUTONOME] M20-pernode-T4, the learning path: a name is hashed once where it was hashed per use. One-entry memos in `Store.var_named` and `Encoding.find`, the bits flag of a literal read off Justify's interned name, the decision closure's cells as a dense array, `String.hash` for every name table. Same trees, byte-identical artefacts; elitserien handball12 -8.1 % instructions per node without proof, -9.6 % with
+
+**Status**: DONE on `wave82-names` (agent-names, 2026-11-26), not merged. Base: main `121a1ce`
+(whose `lib/` is `e0c793a`'s), binary md5 `50898a4e`; branch binary `8f4cefb9` (`b6344345` after merging main `d25f15e`). Node fataepyc-06 at
+load 15 to 30 (other sessions' runs). Runs, profiles, scripts and the four sample `.fzn`:
+`/cluster/arthur/baguette-results/names/`.
+
+### 1. Method
+
+D-0207's and D-0235's: `perf stat -e instructions:u` at a fixed node budget
+(`BAGUETTE_NODE_LIMIT`), per node = (I(N) - I(1)) / (nodes - 1), the 1-node run taken with the
+base binary; `perf record -e instructions:u --call-graph fp` on the `baguette-fp` switch for the
+shares. Samples: elitserien handball12 (3 000 nodes), tppv circ14cnonbal (2 000), costas13
+(completes in 1 504 nodes) and qr2 (20 000), D-0235's `.fzn`. Every step was checked at the budget
+with and without `--proof`: md5 of `.opb`, `.pbp` and stdout, and the nodes/conflicts/learned
+counters, equal to the base binary's on all four. Call counts came from a throwaway counting
+build, not committed.
+
+Two things the profiles taught that the next session should know. (a) Concurrent `perf record`
+runs on this node fail silently (one of eight wrote a `perf.data`), so profiles run one at a time.
+(b) An instruction-sampled share overstates a short hot function: `Store.var_named` showed 6.9 % of
+handball12 and the open-addressing index of section 4, which halves its cost per call in a
+micro-benchmark, measured -0.9 %. The per-node deltas below are the measurement, the shares
+only rank.
+
+### 2. Where the learning path's instructions went (inclusive share of all instructions)
+
+| instance, proof | learning (`Learn.at_conflict`) | `dependency_levels` | `analyse` | `var_named` | `Encoding.find` | `Encoding.is_bits` | `Justify.validate_lit` | `caml_hash` |
+|---|---|---|---|---|---|---|---|---|
+| handball12, no | 33.5 -> 28.0 | 22.3 -> 17.5 | 10.3 -> 9.5 | 7.0 -> 5.3 | - | - | - | 3.4 -> 0.9 |
+| tppv circ14, no | 8.2 -> 6.2 | 6.3 -> 4.1 | 1.4 -> 1.6 | 0.4 -> 0.4 | - | - | - | 0.3 -> 0.2 |
+| costas13, no | 15.6 -> 12.3 | 9.0 -> 6.8 | 5.1 -> 4.1 | 1.7 -> 0.9 | - | - | - | 0.9 -> 0.2 |
+| qr2, no | 19.5 -> 17.8 | 8.8 -> 8.4 | 9.4 -> 8.1 | 4.5 -> 4.3 | - | - | - | 2.1 -> 0.9 |
+| handball12, yes | 7.1 -> 6.1 | 5.0 -> 3.9 | 2.2 -> 2.2 | 1.5 -> 1.1 | 9.7 -> 4.9 | 8.2 -> 3.5 | 7.3 -> 4.0 | 6.8 -> 3.5 |
+| tppv circ14, yes | 3.0 -> 2.4 | 2.6 -> 1.9 | 0.6 -> 0.6 | 0.2 -> 0.2 | 4.6 -> 3.0 | 2.2 -> 0.8 | 3.4 -> 2.2 | 3.3 -> 2.2 |
+| costas13, yes | 6.0 -> 4.9 | 3.4 -> 2.6 | 1.9 -> 1.7 | 1.0 -> 0.4 | 3.5 -> 1.5 | - | 1.8 -> 1.8 | 3.8 -> 2.0 |
+| qr2, yes | 11.6 -> 11.2 | 5.5 -> 5.0 | 5.2 -> 5.4 | 2.7 -> 2.9 | 1.6 -> 1.4 | - | 5.8 -> 5.4 | 4.4 -> 2.7 |
+
+Without the proof the name lookups sit in `Analysis.locate`, once per fact a cut or a closure
+locates (handball12: 9.4 M per 3 000 nodes, 5.7 M from the closure's memo builds and 3.7 M from
+1UIP nodes). With the proof they sit in the encoding: 74.8 M `Encoding.find` per 3 000 nodes on
+handball12, mostly `Encoding.is_bits` from `Trace.bits_arm` (one per fact of every traced entry)
+and from `Justify.ensure_lit` (one per literal of every line). In the closure itself the
+`Slot_tbl` of cells was the largest item after the lookups.
+
+### 3. The fixes, each measured (instructions per node, artefacts identical at each step)
+
+| step | handball12 no / proof | tppv circ14 | costas13 | qr2 |
+|---|---|---|---|---|
+| F1a `Name_tbl`: the name tables hashed by `String.hash` (`Store` index, `Encoding.Names`, `Analysis.Frontier`) | -1.5 / -1.7 | -0.4 / -1.0 | -0.8 / -0.7 | -0.8 / -0.6 |
+| F1b one-entry memo in `Store.var_named` (`store.ml`, `var_named`) | -2.4 / -0.5 | -0.1 / -0.1 | -1.2 / -0.7 | +0.2 / +0.1 |
+| F2 one-entry memo in `Encoding.find` (`encoding.ml`, `find`) | -0.1 / -3.0 | -0.1 / -2.3 | -0.1 / -1.5 | 0.0 / +0.1 |
+| F3 the closure's cells as a dense scratch (`analysis.ml`, `Cells`) | -4.1 / -1.0 | -2.2 / -1.2 | -0.6 / +0.1 | -0.8 / -0.4 |
+| F4 Justify: bits flag in `declared`, `String.hash` (`justify.ml`, `validate_lit`) | 0.0 / -3.6 | 0.0 / -1.7 | 0.0 / -0.3 | 0.0 / -0.8 |
+| F5 `check_attribution` without a closure (`analysis.ml`, `watches`) | -0.3 / 0.0 | +0.1 / 0.0 | -0.6 / -0.9 | 0.0 / 0.0 |
+| **total, base -> branch** | **-8.1 / -9.6** | **-2.7 / -6.0** | **-3.3 / -4.0** | **-1.3 / -1.6** |
+
+In absolute terms, per node: handball12 16.41 M -> 15.08 M without proof and 78.71 M -> 71.18 M
+with; tppv circ14 10.16 M -> 9.89 M and 25.06 M -> 23.55 M; costas13 4.09 M -> 3.95 M and 11.86 M ->
+11.38 M; qr2 1.10 M -> 1.08 M and 1.92 M -> 1.89 M.
+
+**Why each is sound.** F1a: `String.hash` returns `Hashtbl.hash`'s value on every string (both
+are `caml_hash_mix_string` under seed 0 with the same final mix, checked on 100 000 names and in
+`test_proof.ml`), so every table keeps its bucket layout and iteration order; what goes is the
+generic hash's dispatch and the polymorphic compare. F1b and F2: a name never changes variable
+(the store's index is built once from `names`, and `Encoding.ints` never rebinds a name, a second
+declaration raises `Redeclared`), only a found answer is remembered, and a hit needs the name to
+be PHYSICALLY the remembered variable's name, so a hit returns what the table would and an equal
+copy just misses. The counts that make them pay: 47 % of handball12's `var_named` calls and 39 %
+of its `Encoding.find` calls were physical repeats of the call before (a reason's two facts on one
+variable, alldiff's `at_least`/`at_most` of one snapshot), and none was equal without being
+physical. F3: a slot is `2 * v + direction` for a store variable, so `2 * n_vars` cells cover
+every key; the arrays are kept across conflicts and an epoch stamp makes an old cell read as
+empty, so nothing is cleared; the levels are sorted at the end, so the fold's order reaches
+nothing. F4: a variable's encoding is fixed at its declaration, so the `is_bits` answer cached per
+interned name is the one `Encoding.is_bits` would give at every later literal, and the atom is
+minted under the same condition and in the same order as before. F5 is the same test written
+as a loop.
+
+**Withdrawn, measured.**
+- The memo of F1b keeping the last NAME (a string field) instead of the index: on a miss the
+  string store is a `caml_modify`, and qr2, where consecutive facts never repeat a variable, went
+  from -0.8 % to 0.0 %. The index form tests `names.(i) == name` and writes an int.
+- An open-addressing index for `Store.var_named` (an `int array` probed linearly, a word-wise
+  multiplicative hash written in OCaml, no C call and no `Some`): -0.9 % / -0.2 % on handball12,
+  -0.6 % / -0.4 % on costas13, -0.8 % / -0.4 % on qr2, +0.1 % on tppv. Withdrawn for about 60
+  lines of hash function and table for under a point.
+- F2 with a placeholder variable in place of the option: 0.3 % worse on handball12 with the proof.
+  The option form keeps the `Some` the table returned, so a miss allocates nothing more.
+
+**Cycles and time: much less than the instructions.** elitserien handball12 to its optimum
+without the proof (29 762 nodes, both binaries, same answer): instructions -7.3 % (514.4 G -> 476.6 G),
+`cycles:u` -1.8 % (250.1 G -> 245.7 G), CPU time 110.6 s for both (run side by side at load 25). At
+the 3 000-node budget, three runs each: cycles -5 % (25.06 G -> 23.82 G on average). What went is
+instructions that were cheap in cycles (a hash over a string already in cache, a closure call),
+so the per-node instruction figure overstates the time gained here.
+
+### 4. What is left (branch binary, inclusive shares)
+
+- `Store.var_named` is still 5.3 % of handball12 and 4.3 % of qr2 without the proof (shares
+  overstated, see section 1). The lever is the one D-0235 named: a `Reason.fact` that CARRIES its
+  variable. Not done here, because a fact is built at about 120 producer sites in 17 files (gcc.ml
+  among them, held by agent-gcc), and element.ml keys a `Fact_tbl` on a fact's structure, so a new
+  field changes its equality. A request to the owners of `lib/core/prop/` is in WORKLOG.
+- `Analysis.check_attribution` is O(arity) per citation and per node (`List.exists` over the
+  instance's variables): 1.7 % of handball12 measured by switching it off. An O(1) "does instance i
+  watch v" belongs to `Engine` (D-0191's request, open).
+- With the proof, `Trace.bits_arm` still asks `Encoding.is_bits` per fact (3.5 % of handball12),
+  and alldiff's `pair_amo` asks `Encoding.direct_hi_id`/`direct_lo_id` by name. `Explanation.lit_hash`
+  still calls `Hashtbl.hash` on a name (0.9 %); `explanation.ml` was outside this task.
+- The closure (`dependency_levels`) remains 17.5 % of handball12 without the proof: the memo
+  builds (`cites_of`, one `locate` per fact on an entry's first visit) and the heap.
+
+### 5. Checks
+
+On the branch merged with main `121a1ce`: `dune runtest --root . --force` 5 420 ok, 0 FAIL (the
+4 new checks included), peak RSS 155 MB. The 239 test models (232 plus those wave79-cheap added):
+`.opb`, `.pbp`, stdout and exit code identical, main `50898a4e` against the branch `8f4cefb9`, in
+the default configuration and under `--bits-above none` (478 pairs, every exit code 0).
+Differential lane `--tier all -j 8`: 347 of 347 equal; `--debug`: 333 of 333 equal
+(`BAGUETTE_MEM_CAP_KB=33554432`). Scaling lane (`-j 8`, the branch binary): ok, all 5 lines within
+their thresholds. Main has since taken wave80-gcc (D-0234), which changes the search on gcc models and makes the lane reference stale until it is re-recorded; the checks are re-run after merging main past that re-recording (below).
+
+After merging main `d25f15e` (D-0234 and its lane re-recording): main binary `96af57d4`, branch
+binary `b6344345`. `dune runtest --root . --force` 5 460 ok, 0 FAIL, peak RSS 155 MB. The 241 test
+models identical (`.opb`, `.pbp`, stdout, exit code) in both configurations (482 pairs).
+Differential lane `--tier all -j 8` 347 of 347 equal, `--debug` 333 of 333 equal
+(`BAGUETTE_MEM_CAP_KB=33554432`); scaling lane ok, 5 of 5 lines within their thresholds.
+
+**Clarity cost.** One new module, `lib/proof/name_tbl.ml` (a functor application and the
+argument that its hash is `Hashtbl.hash`'s), in both module maps. Two one-entry memos with the
+rule that makes them exact stated at the field and at the function (`Store.named_last`,
+`Encoding.found_last`). `Analysis.Cells`, a process-wide scratch with an epoch, about 50 lines
+with its header: the one piece of mutable state between conflicts this adds, used by one function
+that does not re-enter itself. Justify's `declared` byte now has three values. Two unit checks
+pin the memos, with their breaks measured.
+
+### 6. Decision and revert
+
+[AUTONOME] Kept: no search, proof or answer changes, so no default behaviour changes. Revert:
+`git revert` of `d787fa3` (F1), `ea1bb63` (F2), `335aeb3` (F3), `522bf0e` (F4), `211f8e8` (F5),
+with the tests `f9578c2` and the module maps `ef6d128`.
+
+## D-0238  [AUTONOME] M18-coverage-ne: int_lin_ne's conflicts carry their fixing facts under a decision, so they learn. Measured first: across 507 Challenge instances it is the only family whose conflicts are factless (18 instances, 7 families), learned_pb aside (9 conflicts)
+
+**Status**: DONE on `wave84-ne` (agent-ne, 2026-11-26), not merged. Measured against main `f700fb2`
+(binary `96af57d4`, the gate 111 binary) with the branch's `a97075e4` (`80525a0`; unchanged by the
+merge of main `d25f15e`). Node fataepyc-06, 300 s runs at 12 in parallel, 16 GiB address space,
+`MemoryMax=32G`, `--max-heap-mb 8192`. Runs, tables and scripts: `/cluster/arthur/baguette-results/ne/`.
+Touches: `lib/core/prop/ne.ml` only on the solver side; `test/unit/test_prop.ml` (the
+M18-coverage-ne section), `test/models/ne_conflict_learn_sat.fzn` and its expected output, and two
+tests whose scene moved with the search (section 5).
+
+### 1. The survey: which conflicts learn nothing
+
+A throwaway build of main (`f2f3d735`, never committed) counts, at `Search.learn_at_conflict`, each
+conflict under a decision by the kind of the propagator that raised it and by what `Learn.at_conflict`
+answered: learned, not learned with facts, not learned and factless. 20 000 nodes or 240 s, no proof,
+on the 201 instances of the tuning set (`bench/tuning/set.lst`) plus gcc-benchmark l42_3, then on the
+306 other Challenge instances that call `int_lin_ne` or `int_ne` (351 of the 1 575 do). 507 instances,
+495 with a conflict under a decision, 3 506 537 such conflicts.
+
+| kind | conflicts | learn | not learned, with facts | factless | instances with a factless one |
+|---|---|---|---|---|---|
+| int_lin_le | 838 855 | 834 826 | 4 029 | 0 | 0 |
+| learned_clause | 680 534 | 679 120 | 1 414 | 0 | 0 |
+| int_eq_reif | 415 514 | 413 493 | 2 021 | 0 | 0 |
+| bool_clause | 258 504 | 257 899 | 605 | 0 | 0 |
+| int_ne_reif | 209 579 | 209 219 | 360 | 0 | 0 |
+| int_lin_le_reif | 192 332 | 191 945 | 387 | 0 | 0 |
+| all_different_int | 164 630 | 164 570 | 60 | 0 | 0 |
+| bool2int | 134 749 | 134 086 | 663 | 0 | 0 |
+| array_int_element | 99 464 | 98 989 | 475 | 0 | 0 |
+| global_cardinality | 92 008 | 91 956 | 52 | 0 | 0 |
+| array_bool_and | 88 886 | 88 585 | 301 | 0 | 0 |
+| **learned_pb** | 85 131 | 85 015 | 107 | **9** | 3 |
+| (no instance id) | 45 282 | 45 282 | 0 | 0 | 0 |
+| **int_lin_ne** | 41 671 | **0** | 0 | **41 671** | 18 |
+| 13 other kinds (int_le_reif, regular, bool_not, int_times, inverse, int_abs, int_div, cumulative, min, member, max, bool_or, bool_eq) | 159 398 | 159 015 | 383 | 0 | 0 |
+
+Findings.
+
+- **int_lin_ne is the one family with the defect.** Every one of its conflicts was factless, so none
+  learned. 18 instances in 7 families: tc-graph-color (5 instances, 26 414 conflicts, 36 to 97 % of
+  each instance's conflicts), gcc-benchmark l42_3 (9 019 of 9 714), on-call-rostering (3 instances,
+  6 134; 4s-23d 3 256 of 9 909, 10s-100d-C 2 875 of 9 580), elitserien (5 instances, 82),
+  community-detection (19), fbd1 (2), harmony (1).
+- **int_ne never conflicts** in the sample, though 300 instances post it: with two terms, the first
+  fixed one prunes the other before both can be fixed in one pass.
+- **learned_pb has 9 factless conflicts** in 3 instances (rcpsp-wet 7, depot-placement 1, ghoulomb 1).
+  Listed, not fixed: `pb.ml` is not this row's.
+- `(no instance id)`: 45 282 conflicts whose `c_prop` is not an engine instance. All learn, so
+  attribution is the only question there; not this row's.
+- "Not learned, with facts" is 0.3 % of all conflicts (10 857): the 1UIP walk stops without a literal
+  at the conflict level (`postcondition`, D-0234 section 4). Spread over every kind, not a defect of one.
+
+### 2. The rule
+
+Under a decision, an all-fixed `int_lin_ne` / `int_ne` violation is reported with every term's
+`Reason.fixed_at` at its fixed value, each fact once (`Ne.conflict_reason`), in place of `Reason.none`.
+The negations of those facts are exactly the clause `Ne.explain` already states for the same pairs, so
+`Trace.conflict_line` writes the nogood itself: `rup ~facts >= 1`, RUP against the A/B pair alone over
+the order encoding (I-X10's enumeration, nothing written ahead), and over a bits scope the trace's
+bits arm writes the existing `Resolve` `pol` pinned by `ia` to the same clause. At the root the
+conflict stays factless, as gcc's does, so every root refutation is byte-identical.
+
+No new `Explanation` constructor and nothing outside `ne.ml` on the solver side: the justification is
+unchanged, what was missing was the `Reason` half, which `Reason.because` carries. D-0026's check holds
+by construction because the reason and the justification name the same variables. The other conflict
+arm (the last unfixed term losing its only value) is unreachable, as the module already said: an
+unfixed term holds two values and loses one. It still forwards `Store.apply`'s factless conflict.
+
+### 3. Measurements
+
+**Share of conflicts that learn**, same counter on the branch (20 000 nodes, no proof): on the 18
+instances the int_lin_ne conflicts are 7 908, of which 7 907 learn (one has facts and ends at the
+postcondition). Per instance, all conflicts that learn, base then new:
+
+| instance | int_lin_ne conflicts (learned), base | new | all conflicts learned, base | new |
+|---|---|---|---|---|
+| tc-graph-color k2_42 | 9 702 (0) | 76 (76) | 283 / 9 985 (3 %) | 493 / 493 (100 %), UNSAT at 1 035 nodes |
+| tc-graph-color k10_31 | 5 145 (0) | 2 752 (2 752) | 48 % | 100 % |
+| tc-graph-color k10_34 | 3 585 (0) | 1 454 (1 454) | 64 % | 100 % |
+| tc-graph-color k5_05 | 4 173 (0) | 1 879 (1 879) | 58 % | 100 % |
+| tc-graph-color k9_39 | 3 809 (0) | 1 032 (1 032) | 62 % | 100 % |
+| gcc-benchmark l42_3 | 9 019 (0) | 20 (20) | 695 / 9 714 (7 %) | 4 705 / 4 705 (100 %) |
+| on-call-rostering 4s-23d | 3 256 (0) | 289 (289) | 67 % | 100 % |
+| on-call-rostering 10s-100d-C | 2 875 (0) | 363 (363) | 70 % | 100 % |
+| the 10 others (elitserien, cd, harmony, fbd1, ocr 4s-10d) | 1 to 63 each (0) | all learn | 89 to 100 % | 91 to 100 % |
+
+**Instructions per node**, `perf stat -e instructions:u` at 20 000 nodes, no proof (`ipn-table.md`).
+The trees differ from the first learned clause on, so this is the cost of the search each binary makes.
+
+| instance | base M/node | new M/node | ratio |
+|---|---|---|---|
+| gcc-benchmark l42_3 | 5.64 | 3.03 | x0.54 |
+| tc-graph-color k10_31 | 1.00 | 1.77 | x1.77 |
+| tc-graph-color k10_34 | 1.55 | 2.02 | x1.30 |
+| tc-graph-color k2_42 | 0.80 | 1.43 (1 035 nodes, UNSAT) | x1.79 |
+| tc-graph-color k5_05 | 1.21 | 1.60 | x1.32 |
+| tc-graph-color k9_39 | 1.83 | 2.22 | x1.21 |
+| on-call-rostering 4s-23d | 2.49 | 3.50 | x1.41 |
+| on-call-rostering 10s-100d-C | 4.36 | 4.62 | x1.06 |
+| elitserien (5), cd adjourn, harmony ode, fbd1 FBDk06, ocr 4s-10d | | | x1.00 to x1.01 |
+
+FBDk07 does not reach 20 000 nodes in 900 s on either binary. On l42_3 the factor-3 cost D-0234 measured
+is half undone: gcc ran 10.8 times per node there because every ne conflict closed on the decision
+nogood. Where it costs (tc-graph-color, x1.2 to x1.8), the work that grows is the learning that now
+runs, as on gcc's instances.
+
+**300 s, 18 instances** (`table-300s.md`), the 18 of section 1. Complete answers:
+
+| arm | base | new |
+|---|---|---|
+| no proof | 4 | 7 |
+| proof | 2 | 4 |
+
+New answers: tc-graph-color k2_42 UNSAT in 1 035 nodes, under 1 s (base UNKNOWN after 2.06 M nodes
+without proof), on-call-rostering 4s-23d OPT 2 in 215 s without proof and 266 s with (base SOL 2),
+tc-graph-color k5_05 OPT 273 in 232 s without proof (base SOL 273). tc-graph-color k10_34's optimum
+in 65 s then 140 s with proof (base 119 s and 290 s). No answer is lost. Slower: elitserien handball7
+OPT in 185 s against 170 s without proof (29 347 against 29 359 nodes, x1.00 instructions per node at
+20 000 nodes, so the run's own variance), community-detection adjourn OPT in 235 s against 227 s.
+Incumbents, new against base on the same arm: with proof k5_05 273 against 274 (better) and k9_39 489
+where base found none; every other incumbent equal. Nodes/s fall on tc-graph-color (k10_31 1 894 to
+1 085 without proof) and are equal elsewhere within 5 %.
+
+### 4. Checks (on the tip merged with main `b156f0d`, binary `505217da`, against main's `b6344345`)
+
+- `dune runtest --root . --force` under 4 GB: 5 483 ok, 0 FAIL. `run_model_tests.sh`: 242 passed,
+  0 failed. Before the merge with `b156f0d` (D-0236), on `a97075e4`: 5 479 ok, 0 FAIL, 242 passed.
+- The 242 test models against main's binary, in BOTH encodings (default bits at 0, and
+  `--bits-above none`): 20 artefact differences in each, the same 20 models, every one a `.pbp`
+  (stdout, exit code and `.opb` identical everywhere), and veripb verifies all 40 (13 SAT, 7 UNSAT in
+  each). They are the models where an int_lin_ne / int_ne conflict happens under a decision (bits_ne,
+  ne_conflict, member, gcc, median, nvalue, all_equal_reif, element and search-split scenes): the
+  branch writes the conflict's nogood as a trace line and a learned clause where the decision nogood
+  closed the branch (nvalue_unsat 2 011 then 2 041 lines over order, bits_ne_unsat 68 then 99).
+  The same 20 differed against main `f700fb2`'s `96af57d4` before the merge.
+- Every test model (242) solved under `BAGUETTE_DEBUG=1` in both encodings with proof: rc 0 on all
+  484, stdout equal to the non-debug run, every proof verified. gcc-benchmark l42_3 at 1 500 nodes under
+  `BAGUETTE_DEBUG=1` with proof, in both encodings (binary `afe9ce13`, the same source before `make fmt`): no invariant, 333 of 333 conflicts learn, both
+  proofs verify.
+- The campaign's proofs: every complete answer verified on both binaries (ocr 4s-10d OPT on each,
+  tc-graph-color k10_34 OPT 433 on each, and on the branch ocr 4s-23d OPT 2 and k2_42 UNSAT, the
+  latter as `BOUNDS INF <= obj <= INF`), and four 300 s time-outs of the branch (l42_3, k10_31, k9_39,
+  ocr 10s-100d-C, 2.5 to 5.8 GB, 8 minutes and 3.4 GB peak for the checker at most) verify too.
+  141 GB of proofs written by the campaign, deleted after checking.
+- Differential lane (`--tier all -j 8`, 32 GB): 14 of 347 runs differ, exactly tc-graph-color k5_05
+  (the corpus's one int_lin_ne user with conflicts) in all 14 configurations. Kinds: search counters
+  in 14, proof hash in 13, work counters in 14, stdout in 1: under `alternate` the branch finds a
+  solution at the 8 000-node budget where main ends UNKNOWN (objective 552, a minimisation; both
+  proofs verify, `BOUNDS 102 <= obj <= 552` against `102 <= obj <= INF`). `noproof` differs in search
+  and work counters only. Identical lists before and after the merge with `b156f0d`. Not re-recorded.
+- Debug pass (`--debug --tier all -j 8`): 14 of 333 runs differ, tc-graph-color k5_05 in all 14
+  configurations (search 14, hash 13, work 14, no stdout, no exit code), and no invariant fired.
+  pigment15b's 14 debug runs are skipped by `bench/diff/debug-skip.tsv` as on main. Identical lists before and after the merge with `b156f0d`.
+- Scaling lane (`-j 8`): ok, every line within its threshold, rc 0, before and after the merge.
+
+### 5. Two tests whose scene moved
+
+Both are scenes that relied on an int_lin_ne / int_ne conflict NOT learning. Neither check is
+weakened: the property each protects is still exercised and still checked.
+
+- `test_matrix.ml` check 3 ("every nogood needs the trace, none is standalone-RUP"), on
+  int_lin_ne/sat-after-failure. The branch now LEARNS `~e_ge_1 e_ge_2 ~f_ge_2 ~g_ge_3`, a 1UIP clause
+  that names its root facts as literals and is therefore RUP against the `.opb` alone. A learned
+  clause is neither of check 3's two kinds: it is decision-free (so it need not fail standalone) and
+  may rest on trace lines (so it need not pass). It is now excluded from both, through
+  `Search.stats.learned_rev`. The decision nogoods are held to the check unchanged, and the label
+  now says how many were checked (1 on each of the seven SAT cells).
+- `test_learn.ml` a2, the weakest-threshold minimisation break, pinned to a scene where the reduction
+  fires. The settle scene at seed 12 no longer reaches it: once its int_ne conflicts learn, NO seed
+  of 0..300 makes the reduction fire there (19 did on main, every one with the break rejected).
+  The holes scene fires on 6 seeds of 0..300 (75, 80, 144, 154, 204, 290), each with the break
+  rejected; a2 is re-pinned to holes at seed 75. The normative-order finding stays on the settle
+  scene and still holds.
+
+Both failed on the first full run with the change (5 475 ok, 3 FAIL) and pass after.
+
+### 6. Decision, what is left, revert
+
+[AUTONOME] Kept. A factless conflict was the defect D-0234 named, the fix stays inside the module and
+changes no flag, no SPEC sentence and no `Explanation.t`, and the measurement is one-sided on
+answers (3 new complete answers, none lost). The cost is the learning that now runs, x1.2 to x1.8
+instructions per node on tc-graph-color, while l42_3 halves.
+
+Left open:
+
+1. **learned_pb's 9 factless conflicts** (rcpsp-wet 7, depot-placement 1, ghoulomb 1). Small, and in
+   `pb.ml`.
+2. **45 282 conflicts with no instance id** (`c_prop` outside the engine's table). They learn, but the
+   survey cannot say whose they are.
+3. A shared `Reason.distinct` for `ne.ml`, `gcc.ml` and `alldiff.ml` (reason.ml is not this row's).
+4. Learned clauses keep root-level literals (`~e_ge_1` in section 5's clause, e >= 1 at the root).
+   Sound, but wider than needed; `learn.ml`'s, not this row's.
+
+Revert: `git revert bdd564a 80525a0` (the two re-pinned tests first, then the rule, its test section
+and the model). The rule alone is the `if Store.level store > 0` line in `Ne.propagate`.
+
+## D-0240  [AUTONOME] M18-coverage-T6: `sort`, `arg_sort`, `arg_max` and `arg_min` stay on std's decompositions. Of the 155 Challenge instances that name them, 15 (tower) reach the solver with one, always `arg_max` over var int; three routes for it without std's scaled copies were measured and each costs more per node. No native sort is built: no instance needs one. Eight test models pin std's routes
+
+**Status**: DECIDED (agent-sort, `wave86-sort`, 2026-11-26). No `lib/`, `bin/` or `mznlib/*.mzn` change, so
+nothing to revert in the solver. The branch adds eight test models (`mznlib/test/{argmax,argmin,sort,argsort}_src_*.mzn`,
+their `test/models/*.fzn` and `test/expected/*.out`); deleting them reverts it. The route measured and dropped is
+commit `d4a4857` (reverted by `cfbac28`), kept for whoever reopens it.
+
+### 1. What reaches baguette, measured first
+
+The ROADMAP's 155 counts names in models (100 `arg_sort`, 25 `sort`, 30 `arg_max`, 5 `arg_min` in MZNC_connect, which
+also calls `arg_max`). To see what reaches the solver, every one of the 155 was flattened (MiniZinc 2.10.1) with a
+PROBE library, main's `mznlib/` plus body-less `fzn_sort`, `fzn_arg_sort_int`, `fzn_maximum_arg_{int,bool}` and
+`fzn_minimum_arg_{int,bool}`, so that any call over variables shows up by name in the `.fzn`.
+
+- 150 flattened. 15 call `fzn_maximum_arg_int`, all of them tower (2020 tower_challenge 5, 2022 and 2025 tower 10):
+  `tower[h] = arg_max(t in TOWER)(signal_strength(t, h))`, one call per handset (50 to 284 calls) over the 10 to 50
+  towers. The other 135 call none of the six.
+- 5 did not finish flattening in 12 minutes (gt-sort 3, test-scheduling 2) and were stopped. Their calls are on data,
+  read from the models (`reverse(sort(c))` over a parameter array, `reverse(arg_sort(duration))`), and their siblings
+  that did flatten (gt-sort 2, test-scheduling 8) call none.
+- Every `sort` and `arg_sort` call in the sixteen editions is over parameters: an order of the data (racp, nside,
+  steelmillslab, zephyrus, rotating-workforce, concert-hall-cap, rel2onto, warehouse, chessboard, roster-sickness's
+  and roster-shifts-bool's `assert`, hoist's bound), a search annotation (tsptw) or the output (atp-stage2). The same
+  holds for `arg_max` in hitori, evm-super-compilation and MZNC_connect (`let { int: ... = arg_max(...) }`).
+
+So no Challenge instance reaches baguette with a variable `sort` or `arg_sort`, and `arg_max` reaches it on tower only.
+
+What std gives baguette there. `fzn_maximum_arg_int` writes `w[j] = n * x[j] + (u - j)`, one `int_lin_eq` per
+position, `Mx = max(w)` (an `array_int_maximum`, native since D-0095) and `(idx != j) = (Mx > w[j])`, one
+`int_lin_le_reif` per position whose Boolean IS idx's `int_ne_reif` indicator (the flattener aliases them). The
+`(u - j)` term makes the first position of the maximum win. On tower the copies are 15 times wider than x (x in
+0..1134, w up to 17 000, Mx up to 332 916), which is what the ROADMAP row called the big-M family.
+
+### 2. Options
+
+| constraint | option | measured (section 3) |
+|---|---|---|
+| `arg_max`, `arg_min` | std's copies (kept) | the baseline |
+| | A. `m = max(xs)` over xs itself, `idx = j -> xs[j] >= m`, `idx > j -> xs[j] < m` (`d4a4857`) | 1.45 times the instructions per node; at 300 s 3 incumbents better, 8 worse, 1 OPT lost |
+| | B. one reified `top[j] = (xs[j] >= m)`, `idx = j -> top[j]`, `top[j] -> idx <= j` | 1.26 times per node; 0 better, 5 worse of 8 |
+| | C. std's own row without the copies: `(idx = j) = (n * xs[j] + idx >= n * m + j)`, exact because `max(w) = n * m + u - idx` | 1.09 times per node (1.45 to 1.52 on the three widest instances) |
+| | a native `arg_max` | not built: std's route is ONE reified row per position, aliased with the indicator, and under the bits default the copies' width costs nothing measurable (C, which removes only the width, does not win). A native module would save the rows' propagation but needs its own justification in both encodings for 15 instances on which Chuffed, through the same std decomposition, completes 2 in 1 200 s |
+| `sort` | std: a permutation `p`, `all_different(p)`, `increasing(ys)`, `ys[p[i]] = xs[i]` as `array_var_int_element`, which `mznlib/redefinitions.mzn` writes as `(p[i] = k) -> (ys[k] = xs[i])`, n^2 implications (kept) | no instance; correct on 600 fuzz models |
+| | a native bounds-consistent sort (Mehlhorn and Thiel) | not built: no instance reaches it. Section 3's synthetic models show where it would help |
+| `arg_sort` | std: `all_different(p)` and per adjacent pair `xs[p[j]] <= xs[p[j + 1]]` with the tie on `p`, two var elements per pair (kept) | no instance; correct on the same fuzz |
+
+Why A and B lose is a reading, not a measurement: std's tie-break costs no constraint (it is the `(u - j)` of a row
+that is already there), while A and B pay for it with a second reified comparison or two clauses and an `idx <= j`
+literal per position (tower `070_070_15_070-04`, 15 191 constraints under std, 19 123 under A, 18 157 under B, 15 190
+under C).
+
+### 3. Measurement (2026-11-26)
+
+One release binary for every arm, main `2fff866`, md5 `9194b0f8` (dev `505217da`, identical to the dev binary of
+origin/main `7e98ce5`). fataepyc-06, 300 s, `--max-heap-mb 8192`, 16 GiB address space, MemoryMax 32G, 4 runs per
+arm in parallel, 16 or fewer in all. With proof, veripb on complete runs (the first 4 of each proof arm were also
+checked when they timed out, and all 8 ran out of the checker's 900 s). Deterministic arm: `BAGUETTE_NODE_LIMIT=3000`,
+`--no-proof`, `perf stat -e instructions:u`. Tables, scripts and `.err` files: `/cluster/arthur/baguette-results/sort/`.
+
+Instructions per node at 3 000 nodes over the 15 tower instances, against std (the stdout differs on every one, so
+the trees differ and the ratio mixes per-node cost with where the search goes): A 1.450 (1.33 to 1.76), B 1.263
+(1.12 to 1.63), C 1.090 (0.92 to 1.52).
+
+At 300 s, objective is maximised:
+
+| arm | complete | incumbents vs std |
+|---|---|---|
+| std, no proof | 2 (050_050_10_050-03 OPT 45, 070_070_15_085-09 OPT 85) | |
+| A, no proof | 1 (050-03) | 3 better (the three widest, 300_300 and 500_500), 8 worse, 4 same |
+| B, no proof (stopped after 8) | 0 | 0 better, 5 worse, 3 same |
+| std, proof (14 of 15 finished) | 1 (085-09 OPT 85 in 244 s; the check ran out of 900 s here, VERIFIED on a re-run below) | |
+| A, proof (stopped after 12) | 0 | 3 better, 7 worse, 2 same |
+| Chuffed (D-0211, 1 200 s) | 2 (050-03 OPT 45 in 113 s, 070-02 OPT 70 in 392 s) | |
+
+Tower 085-09 is a find of its own: std's route in baguette proves OPT 85 in 67 s without proof and 244 s with it,
+where Chuffed stops at 58 after 1 200 s. Re-solved with proof (OPT 85 again, a 3.2 GB `.pbp`) and checked with a
+longer budget: `s VERIFIED BOUNDS -85 <= obj <= -85` in 1 206 s of veripb (4.2 GB RSS).
+
+Correctness, the routes kept. A differential fuzz against Chuffed, each model solved by Chuffed through std and by
+baguette (dev `505217da`) through the same library, veripb on every proof: 1 000 random small `arg_max`/`arg_min`
+models (int and bool, index sets offset by 0 to 2, ties, side constraints, an objective) agree on every optimum or
+UNSAT, 1 000 proofs VERIFIED; 600 `sort` (both spellings) and `arg_sort` models agree, 600 VERIFIED. Route A passed
+the same 1 000 after one fix (its bool form let every position follow an all-false or all-true array).
+
+Synthetic `sort` and `arg_sort` (no Challenge instance has one), 12 generated models, n = 8, 16, 32, 60 s, baguette
+std route against Chuffed (std route too) and Gecode (native `sort`, std `arg_sort`): n = 8, Chuffed and Gecode
+complete all four, baguette three without proof (not sort_8_0, 237 against 209) and one with it. n = 16 and 32,
+`sort`: Gecode completes or leads (702 OPT, 972 OPT, 2 958, 3 284, minimised), baguette and Chuffed both behind
+(1 176, 1 797, 7 024, 6 018 for baguette; Chuffed completes 16_0 at 702 and otherwise 1 860, 9 046, 8 864).
+`arg_sort` n = 16: Gecode 156 and 181, Chuffed 369 and 346, baguette 392 and 459; n = 32: baguette 2 036 and 2 138,
+Chuffed 2 389 and none, Gecode none and 1 429. So a native sort is where Gecode's lead comes from on `sort`; on the
+same decomposition baguette is ahead of Chuffed on three of the four and behind on 16_0.
+
+Checks on the branch merged with origin/main `a67493a` (the lane re-recorded after D-0238). The dev binary is
+main's, `505217da`, built from each checkout, so every existing test model's artefacts are main's (242 of 242 with
+the same stdout, `.opb` and `.pbp` hash, measured before the merge). `check_fmt.sh` clean, the width lint clean,
+`dune runtest --root . --force` 5 483 ok and 0 FAIL (peak RSS 155 MB), `run_model_tests.sh` 250 models (242 + this
+record's 8) VERIFIED in both encodings, `check_determinism.sh` 250, `check_mznlib.sh` 66 ok, the differential lane
+`--tier all` 347 of 347 equal and `--debug` 333 of 333, the scaling lane ok, the lanes under
+`BAGUETTE_MEM_CAP_KB=33554432`. Before the merge the lane differed on 14 runs, all `tc-graph-color k5_05`, which is
+D-0238's own change that `a67493a` re-recorded. About 80 GB of proofs were written by the proof arms (about 3 GB per
+300 s run) and deleted once checked.
+
+### 4. SPEC 2.1
+
+None proposed. Nothing new reaches the solver: std's decompositions emit only builtins SPEC 2.1 already has
+(`int_lin_eq`, `int_lin_le_reif`, `int_ne_reif`, `array_int_maximum`, `all_different_int` and the reified rows of
+`array_var_int_element`'s redefinition).
+
+### 5. What is left open
+
+- A native `sort` (Mehlhorn and Thiel), if a model ever reaches baguette with one. Section 3 says it would pay on
+  `sort` from n = 16. It is a new propagator family with its justification in both encodings; nothing in the
+  sixteen editions asks for it today.
+- Tower's cost per node is not arg_max's alone (10 350 clauses and 2 070 reified rows per 70 handsets). A flat
+  `perf` profile of `070_070_15_070-04` at 3 000 nodes puts `Linear` at 18 % (propagate, prune_term, walk), which
+  holds arg_max's reified rows and the model's own, the engine's queue and wakes at about 15 %, `Pb` at 6 %. A
+  profile by propagator instance would say whether a native `arg_max` could pay at all.
+- The census tool counts names. `tools/compare/challenge_globals.py` lists `sort`, `arg_sort` and `arg_max` as not
+  native, which is right, but the ROADMAP's 155 overstates what any route could change by ten to one.
+## D-0237  [AUTONOME] M22-review-bugs: a factless root conflict's derivation may mint atoms, so `close_root_conflict` closes the atoms after it. A three-variable UNSAT model died in `Encoding.ensure_atom` under the default (bits) encoding
+
+**Status**: DONE on `wave83-rootbug` (agent-rootbug, then agent-rootbug2, 2026-11-27), not merged.
+Main `a67493a` (binary `505217da`) merged in. Branch binary `db155bd7`. Touches
+`lib/core/search.ml` (`close_root_conflict` only) and four test models. Amends D-0130 section 5.4.
+
+### 1. The bug
+
+agent-cheap's fuzz found it (`/cluster/arthur/baguette-results/cheap/bug-root-bits-ensure-atom.fzn`).
+With `x0 in 0..3` (bits), `x1, x2 in 2..3` (width 1, so order), `x1 != x0`, `x2 != x1` and `x2 < x0`,
+root propagation fixes `x2 = 2`, `x0 = 3` and `x1 = 3`, and `x1 != x0` fails with every term fixed.
+At the root `ne.ml` records no facts for that conflict (D-0238 changed this under a decision only), so
+`Trace.conflict_line` writes nothing and `close_root_conflict` writes the conflict's derivation itself,
+a `Resolve` over the bits row. That derivation cites the order bridge of `x1 >= 3`, which nothing had
+minted, and `Encoding.ensure_atom` refused it because `close_atoms` had been called just before. The
+run died with `Invalid_argument`. `--no-proof` and `--bits-above none` answered UNSAT.
+
+### 2. Options
+
+| option | consequence |
+|---|---|
+| A. close the atoms after the factless derivation, before the empty clause | the crash goes. Atoms minted by that derivation may be written over a database unit propagation already refutes, so their check is vacuous there (section 3) |
+| B. keep the close before the derivation and let `ensure_atom` mint order bridges (`rup`) when closed, never a bits `red` pair | fixes every case measured (section 3) but leaves a crash for a bits pair, which nothing rules out, and adds a second rule to the guard |
+| C. make `ne.ml` record its fixing facts at the root too | not this row's file. The derivation would still cite the same atoms, so it does not remove the cause |
+| D. skip the derivation at the root and close on `rup >= 1` alone | refused where the derivation is load-bearing (2 of the 16 cases below, and test_prop's regin (c) of D-0134) |
+
+Chosen: **A**, the agent-rootbug commit `f7140c7`, kept as written except its comment, which claimed
+that the contradiction reaches the page only with the derivation. Section 3 measured that this is
+usually false.
+
+### 3. Why it is sound, and what is checked there
+
+Soundness does not depend on the database. Every rule VeriPB accepts is sound over any database, a
+`red` included (the redundance theorem), so a line minted over a contradictory database cannot make an
+UNSAT verdict wrong. D-0053 and D-0066 are about the strength of the check, because over a database
+that unit propagation already refutes, a `rup` or `red` is accepted whatever it says.
+
+Measured on the 16 models main `121a1ce` died on (the four `test/models/root_bits_*` and 12 seeds of
+the fuzz of section 4). For each, main's partial proof stops exactly where the derivation would mint,
+and that prefix followed by `rup >= 1` was given to VeriPB 3.0.2.
+
+- In 14 of 16 the prefix is accepted, so the database is already UP-contradictory before the
+  derivation. Its lines are unchecked there, and closing earlier would not have changed that. It only
+  turned the run into a crash.
+- In 2 of 16 (fuzz seeds 1247 and 3250) the prefix is refused at the added line. The derivation is
+  load-bearing, and its lines are checked against a database that is not yet contradictory.
+- On all 16 the minted lines were order bridges (`rup`, no witness), 15 of them on width-1 variables,
+  where B1' is a tautology. No bits `red` pair was minted there. Option A would mint one if a case
+  needed it. Its two lines are fixed by the atom being fresh, whatever the database, and the mint
+  code is the one `test_mutation`'s bits lanes (`bits_sat`, `bits_reif`) check over satisfiable models.
+
+D-0130 section 5.4 said that `ensure_atom` "must never run after a contradiction has been derived at
+level 0" and that this holds structurally. It now reads that nothing mints once the refutation is
+written, the guard closing just before the empty clause. A root conflict's derivation belongs to the
+refutation. The measurement also shows that the guard never promised a non-contradictory database,
+because the root's trace can make the database UP-contradictory before the solver sees the conflict.
+
+### 4. Tests and the hunt for siblings
+
+- Four models, each dying on main under the default encoding and UNSAT with a verified proof on the
+  branch, in both encodings and under `BAGUETTE_DEBUG=1`: `root_bits_ensure_atom_unsat` (the
+  reproducer), `root_bits_ne_lt_unsat` (`int_ne` and `int_lt`), `root_bits_ne_row_unsat` (linear rows
+  fix both terms), `root_bits_ne_const_unsat` (comparisons with constants).
+- Differential fuzz, every model under `--proof` in both encodings with each proof checked by VeriPB,
+  `--no-proof` compared byte for byte with the proved run, verdicts and optima compared across the
+  encodings. Harness and results in `/cluster/arthur/baguette-results/rootbug2/`. A generator aimed at root conflicts over
+  mixed order and bits variables (`gen2.py`), 20 000 models: main dies on 24 (all `ensure_atom` after
+  the root contradiction), the branch on 0, and those 24 are UNSAT. agent-rootbug's `gen.py`, 5 000
+  models: 0 issues on main and on the branch. `scripts/fuzz_lane.sh -n 300 --seed 7` (Gecode as the
+  reference, six streams): 1 800 models, 0 disagreements.
+
+### 5. Revert
+
+`git revert f7140c7 81dff27` restores the close before the derivation. The four models then fail.
+## D-0239  [AUTONOME] M18-coverage-T5: `lex_lesseq` and `lex_less` (integers and Booleans, hence `lex_greater(eq)`, `lex_chain_*`, `lex2`) as four linear rows per position over std's own chain flag, through mznlib; `increasing` and its family were already native; `value_precede(_chain)` and `seq_precede_chain` keep std's decomposition. No new builtin, no `lib/` change
+
+**Status**: DECIDED (agent-lex, `wave85-lex`, 2026-11-27). Revert: delete `mznlib/fzn_lex_lesseq_int.mzn`,
+`fzn_lex_less_int.mzn`, `fzn_lex_lesseq_bool.mzn` and `fzn_lex_less_bool.mzn` (each pair alone gives its type std's
+text back), the five test models they brought and the SPEC 2.1 row. The binary does not change: the branch's builds
+are main's bytes (dev `505217da`, release `9194b0f8`).
+
+### 1. What reached baguette before, measured first
+
+The census (D-0185, the ROADMAP's M18 table) lists about 350 instance mentions for these globals. Read from the
+models of the sixteen Challenge lists (a call outside a comment, in the model or a local include), 245 instances
+call one of them: `value_precede_chain` 75, `increasing` 50, `lex_lesseq` 45, `value_precede` 30, `lex_less` 25,
+`lex_greatereq` 25, `seq_precede_chain` 25, `decreasing` 20, `strictly_decreasing` 15, `strictly_increasing` 10,
+`lex_chain_lesseq` 5 (one instance can call several). Flattened with main's mznlib (MiniZinc 2.10.1), the families
+are not alike:
+
+- `increasing`, `decreasing` and the strict forms were ALREADY native: std's `fzn_increasing_int` is
+  `x[i - 1] <= x[i]` for consecutive cells, one `int_lin_le` each (bounds consistent, which is GAC for this chain),
+  and `decreasing` is `increasing` reversed. The census counts them decomposed because it reads names. Dropping them
+  changes nothing worth a route.
+- `lex_lesseq`, `lex_less` (and `lex_greater(eq)`, `lex_chain_*`, `lex2` through them): std's
+  `lex_lesseq_std_decomposition`, per position two `int_lin_le_reif`, an `array_bool_and` and about three
+  `bool_clause`s over three Booleans. On the families that use them it is most of the model: with the lex calls
+  replaced by `true` the flattened constraint count falls by 90 % on mqueens n11, 90 to 99 % on the two peaceable
+  queens, 82 % on zephyrus, 61 to 70 % on opd, 59 to 74 % on neighbours, 60 % on chessboard, 55 % on
+  pattern-set-mining-k2; 8 to 16 % on p1f, vaccine and products-and-shelves. And it is most of the work per node:
+  at 3 000 nodes on mqueens n11 the decomposition's families take about 1 340 of 1 528 propagator runs per node,
+  on generalized-peacable-queens n11_q5 about 430 of 500. Pattern-set-mining-k2 and generalized-peacable-queens
+  call it over Booleans as well.
+- `value_precede_chain` with the order `1..n` and `seq_precede_chain` are std's `H[i] = max(x[i], H[i - 1])`,
+  `H[i] <= H[i - 1] + 1`: one `array_int_maximum` (native, maxmin.ml) and one `int_lin_le` per position. With any
+  other order std maps each cell through a constant `array_int_element` first. Lean already; the share of the model
+  is 1 to 11 % except concert-hall-cap (about 50 %) and yumi (51 to 54 %, with `value_precede` and `increasing`).
+- `value_precede(s, t, x)` is std's chain of Booleans with an `int_eq_reif` and an `int_ne_reif` per position and
+  about seven clauses. Peaceable queens and yumi call it, a small part of either.
+
+### 2. Options for lex
+
+| option | per position | status |
+|---|---|---|
+| std's chain (the baseline) | two `int_lin_le_reif` (four big-M rows, two Booleans), one `array_bool_and`, about three `bool_clause`s, one chain Boolean: about five instances | measured |
+| **four rows over a 0..1 flag** (chosen): `b[i] <-> (x[i] <= y[i] /\ (x[i] < y[i] \/ b[i + 1]))` written as R1 to R4 (the file's header), `int_lin_le`, or `baguette_bool_lin_le` over Booleans | four rows, one flag, four instances; the flags are std's own chain Booleans, so the solutions over `(x, y, b)` are std's one for one | measured, section 3 |
+| two rows over a free flag (R1 and R2 only): `b[i] -> ...`, half the rows | two rows, one flag | node-limited arm only (section 3): `b` is no longer determined by `x` and `y`, so first-fail branches on flags whose value says nothing about the answer |
+| the same with `b[i + 1] <= b[i]` | three rows | node-limited arm only |
+| a native lex propagator (Frisch, Hnich, Kiziltan, Miguel and Walsh's alpha and beta pointers) | one instance per lex | not built. With bounds-consistent rows the chain already prunes what the GAC algorithm prunes (the header's argument: every value it removes is a bound of `x[alpha]` or `y[alpha]`, `b[alpha]` is forced up the fixed-equal prefix by R2, `b[beta]` down by R1 or R2), so a native module would buy the cost per node and nothing in strength. Its proof would need the flags anyway (a lex order over n cells is not one PB row without coefficients exponential in n), i.e. the same rows in the .opb and a `pol` per pruning that Linear already writes. Not worth a module before the rows are shown short |
+
+### 3. Measurement (2026-11-26/27)
+
+The 245 instances of the sixteen Challenge lists that call one of these globals, flattened with MiniZinc 2.10.1 once
+with main's mznlib (235 flatten: 7 yumi fail in std itself, `maximum of empty set`, as for Chuffed; one test-scheduling t500 and two
+gt-sort stop at the flattening timeout of 1 200 s; 231 have a row in each base arm, four lost to the harness edit
+below) and once with this branch's for the 100
+that call a lex global (all flatten; one, pattern-set-mining anneal-k1, flattens byte-identically). One binary for
+every arm, release `9194b0f8` (main `2fff866`; this branch changes nothing under `lib/` or `bin/`, its dev build is
+main's `505217da`). 300 s, `--max-heap-mb 8192`, 16 GiB address space, MemoryMax 32 G, four runs per arm in parallel
+on fataepyc-06; veripb on every COMPLETE run of the proof arms. Four instances of the new arms
+(pattern-set-mining-k1 ionosphere and mushroom, k2 german-credit and segment) lost their rows to a harness edit made
+while they ran and are not compared. Runs, tables and scripts: `/cluster/arthur/baguette-results/lex/`.
+
+Lex, 92 instances with both arms:
+
+| arm | complete (verified) | incumbents vs std |
+|---|---|---|
+| std, proof | 26 (26) | |
+| rows, proof | 27 (27) | 5 better, 2 worse, 41 equal |
+| std, no proof | 28 | |
+| rows, no proof | 28 | 4 better, 1 worse, 45 equal |
+| Chuffed (std's lex too; D-0211, 1 200 s) | 41 of 100 within 300 s | |
+
+The new completion is mqueens n11 with proof (OPT 5, VERIFIED; std timed out at 5). Better incumbents:
+pattern-set-mining (hypothyroid-k1 230 -> 232, kr-vs-kp-k2 213 -> 227; anneal-k1 385 -> 411 is noise, its
+flattening is byte-identical), peaceable queens 25 (10 -> 11) and pq_n35 (7 -> 8); worse: opd flener_10_350_100
+(65 -> 68) and opd medium_13_250_80 (54 -> 55), minimised. Nodes per second on the instances that time out in both
+arms, rows over std: geomean 1.02 without proof (64 instances) and 1.04 with (65); mqueens 1.36 and 1.46, peaceable
+queens 1.07 to 1.10, chessboard 1.05 and 1.16, opd 0.79 to 0.93, the others 0.86 to 1.10. The flattened models are
+smaller: constraints 0.66 to 0.98 of std's per family, variables 0.38 (mqueens) to 0.96. At 3 000 nodes on mqueens
+n11 (`--no-proof`, `instructions:u`, the same stdout): std 9.01 G instructions, the two-row variant 3.10 G, the
+monotone two-row variant 6.69 G (the four-row route was not put in this arm; the 300 s arms are its measurement).
+The node-limited arm over all 100 was not run: the parallel budget went to the timed arms.
+
+So the route is neutral to slightly positive on outcomes, a few per cent faster per node, and much smaller. It is
+kept because it is the same constraint as std's (b determined, solutions one for one), it removes about five
+propagator instances per position for four rows, and it is mznlib only.
+
+Correctness, beside the five test models (`lex_lesseq_sat`, `lex_less_unsat`, `lex_chain_opt`, `lex_length_sat`,
+`lex_bool_sat`, each VERIFIED in both encodings and under BAGUETTE_DEBUG=1): an exhaustive comparison of the rows
+against std's lex on 260 random small pairs (int, different lengths, negative bounds; gecode `-a`, projected solution
+sets equal), 100 Boolean pairs with constants and a shared cell, and a differential fuzz of 600 random models (150
+Boolean, 187 with `lex_chain_*` or `lex2`, 188 with a reified lex, which keeps std's text, 167 UNSAT) solved by Chuffed
+through std and by baguette through this mznlib: 600 agree, every proof VERIFIED.
+
+The other globals, std's decompositions, base arms (complete with proof / without / Chuffed within 300 s):
+`increasing` 6 / 7 / 9 of 45, `decreasing` 3 / 6 / 8 of 20, `strictly_decreasing` 2 / 2 / 7 of 15,
+`strictly_increasing` 0 / 0 / 1 of 10, `seq_precede_chain` 9 / 10 / 12 of 20, `value_precede` 0 / 0 / 0 of 20,
+`value_precede_chain` 6 / 9 / 22 of 70 (mondoku 1 against Chuffed's 5, concert-hall-cap 2018 1 against 4,
+community-detection 0 against 3, code-generator 2 against 6). Only the last is a gap, and its global is 1 to 11 % of
+those models (concert-hall-cap and yumi aside), so the cause is not established; Chuffed propagates
+`value_precede` and `seq_precede_chain` natively.
+
+### 4. SPEC 2.1
+
+One row added to the M18 builtins table, PROPOSED (the D-0217, D-0220, D-0233 precedent), normative because it says
+what reaches the solver: `lex_lesseq` and `lex_less` as four `int_lin_le` (resp. `baguette_bool_lin_le`) rows per
+position over one 0..1 flag, `b[i] <-> (x[i] <= y[i] /\ (x[i] < y[i] \/ b[i + 1]))`; a cell without declared bounds
+and the reified forms keep std's text; `increasing` and its family need no file; the precedence globals keep std's.
+No new builtin, so no new sentence of semantics. The user's to confirm outside autonomous mode.
+
+### 5. What is left open
+
+- `value_precede_chain`: 6 complete of 70 with proof against Chuffed's 22 within 300 s, spread over six families. Not
+  established that the global is the cause (it is a small part of most of these models). A TODO row in M18
+  (ajouté en mode autonome) measures it before any native `seq_precede` is built.
+- The node-limited arm (instructions per node at a fixed node budget over all 100 lex instances, std against the four
+  rows) was not run; the timed arms and one mqueens probe are the measurement.
+- The census tool reads names: with these files it counts `lex_lesseq` and `lex_less` native, and still counts
+  `increasing`, `decreasing` and their strict forms decomposed although std writes them as `int_lin_le`. Left as is.
+
+## D-0242  [AUTONOME] M20-pernode-T4 on all_different, second pass: a stage 1 pass that would move nothing is answered by counting, and the derivations a tight set justifies share its lines. Same trees, byte-identical artefacts; elitserien handball12 -7.7 % instructions per node without proof, -7.6 % with; tppv circ14 -14 % / -9 %, costas13 -13 % / -12 %
+
+**Status**: DONE on `wave88-hall` (agent-hall, 2026-11-27), not merged. Base: main `05f3477` (the code of
+`32c7ce9`), release binary `fe77561d`. Branch tip after merging main `370fba3` (D-0239, mznlib and test models
+only): release `ef11db7f`, dev `b52a0cd6`. Node fataepyc-06 at load 17 to 56 (other sessions' runs). Runs, profiles,
+scripts and the sample `.fzn`: `/cluster/arthur/baguette-results/hall/`. Touches `lib/core/prop/alldiff.ml`,
+`test/unit/test_prop.ml` (lane (h)) and `test/unit/test_endtoend.ml` (the D-0242 scene), nothing else on the
+solver side.
+
+### 1. Method
+
+D-0235's, unchanged: `perf stat -e instructions:u` at a fixed node budget (`BAGUETTE_NODE_LIMIT`), per node =
+(I(N) - I(1)) / N with the 1-node run of the base binary; `perf record --call-graph fp -F 2999` on the
+`baguette-fp` switch for the shares (`-m 16`: with the default mmap size, parallel `perf record`s on this node
+fail with "Permission error mapping pages" and write an empty file). Samples: D-0235's elitserien handball12
+and handball9, tppv circ8bbal and circ14cnonbal, costas13, and D-0207's qr2 as a control without an
+all_different. Every step was checked at the budget, with and without `--proof`: md5 of `.opb`, `.pbp` and
+stdout, and the nodes/conflicts/learned counters, equal to the base binary's on all six.
+
+### 2. Where alldiff's instructions went after D-0235 (base, no proof)
+
+Inclusive shares of CPU samples (`perf record`, so cycles, not instructions), at 1 000 nodes (handball12,
+tppv circ14) and 3 000 (tppv circ8, costas13; costas completes in 1 504):
+
+| instance | alldiff | stage 1 (`pass`) | of which `pass_scan` | Regin scratch | Regin gate | learning |
+|---|---|---|---|---|---|---|
+| elitserien handball12 | 19.5 % | 6.8 % | 5.9 % | 8.1 % | 4.4 % | 30.2 % |
+| tppv circ14cnonbal | 20.2 % | 10.9 % | 10.0 % | 6.3 % | 2.7 % | 6.8 % |
+| tppv circ8bbal | 16.4 % | 11.3 % | 10.3 % | 3.0 % | 1.8 % | 23.6 % |
+| costas13 | 34.9 % | 15.3 % | 13.8 % | 14.4 % | 4.5 % | 22.1 % |
+
+Counted with a throwaway build at the same budgets: on handball12 42 079 stage 1 passes ran a scan (14 083
+more were skipped on D-0235's quiet vector), and 40 408 of those scans moved nothing; on costas13 27 863 of
+32 295, on tppv circ14 18 652 of 21 687, on circ8 50 785 of 71 980. A quiet scan still paid what a moving one
+does before its first interval: two sorted lists of the bounds, a stable sort of the terms by upper bound,
+six arrays, and the walk over every candidate interval through closures. The quiet vector rarely matches
+because a call usually follows a bound move: about three terms of the scope had other bounds than the last
+quiet vector at each scan. In the Regin scratch pass, the n reachability searches cost little; what a pass
+paid beyond its removals was the sorted value list, a value list, a membership table and the removal loop for
+every tight set, including the many (a fixed variable's singleton set, mostly) that no other term meets.
+With the proof, elitserien's derivations dominate (`Trace.emit_to_page` 68 % of the samples), and 18 % of
+them was building the Regin removals' derivations, every removal rebuilding its set's at-least-one lines.
+
+### 3. The fixes, each measured (instructions per node; artefacts identical at each step)
+
+All in `lib/core/prop/alldiff.ml`. Budgets: handball12 300 nodes, tppv circ14 500, circ8 2 000, costas13 to
+completion (1 503); qr2 2 000 stayed at 0.80 / 1.63 M throughout.
+
+| step (commit) | rule | h12 np / p | tppv14 np / p | tppv8 np / p | costas13 np / p |
+|---|---|---|---|---|---|
+| base | | 12.63 / 63.54 M | 8.00 / 21.44 M | 4.88 / 14.80 M | 3.34 / 10.20 M |
+| 1 `fec0985` | `hall_free`: whether a scan would move nothing, by counting over two term permutations kept sorted across calls (`sort_by`, insertion); `pass` skips the scan then | 11.74 / 62.85 | 7.15 / 20.62 | 4.57 / 14.50 | 3.05 / 9.89 |
+| 2 `74782b6` | Regin scratch: a tight set no outside term meets (a count) skips its removal loop and everything built for it; the scope's values marked rather than sorted from lists; `sort_by`'s key typed `int` (its comparison was polymorphic) | 11.53 / 62.65 | 6.86 / 20.26 | 4.48 / 14.42 | 2.92 / 9.77 |
+| 3 `d994b47` | `pass_scan` enumerates its intervals over the kept permutations, not over sorted lists of the bounds | 11.52 / 62.67 | 6.81 / 20.26 | 4.44 / 14.36 | 2.90 / 9.79 |
+| 4 `3ab3e34` | a Regin set's removals share its at-least-one lines (`alo_lines`) | 11.53 / 59.09 | 6.81 / 19.94 | 4.45 / 14.34 | 2.90 / 9.17 |
+| 5 `41861a6` | the removals from one y under one set share its at-most-one lines; WITHDRAWN by `0b216c7`, see below | (11.53 / 58.42) | (6.81 / 19.95) | (4.43 / 14.30) | (2.91 / 9.13) |
+| 6 `6217a67` | the stage 1 pushes from one tight interval share its Hall set's at-least-one lines | 11.53 / 58.38 | 6.83 / 19.55 | 4.45 / 14.33 | 2.91 / 9.01 |
+| final `ef11db7f` | 1 to 4 and 6 | 11.52 / 59.05 | 6.81 / 19.55 | 4.45 / 14.33 | 2.90 / 8.93 |
+| total | | -8.8 / -7.1 % | -14.9 / -8.8 % | -8.8 / -3.2 % | -13.2 / -12.5 % |
+
+At larger budgets, base `fe77561d` against final `ef11db7f`: handball12 3 000 nodes without proof 12.85 -> 11.86 M
+per node (-7.7 %), 1 500 nodes with proof 67.86 -> 62.71 M (-7.6 %); tppv circ14 20 000 nodes without proof
+7.06 -> 6.09 M (-13.7 %); the same stdout, `.opb`, `.pbp` and counters. Cycles (`cycles:u`, the two binaries
+run back to back): tppv circ14 at 20 000 nodes without proof 86.4 -> 72.5 G (-16 %), handball12 at 3 000 nodes
+without proof 21.2 -> 20.1 G (-5.5 %, instructions -7.1 % whole run), tppv circ8 at 3 000 nodes with proof
+28.60 -> 28.46 G (-0.5 %, instructions -3.4 %, `.pbp` md5 `2ed8b2c1` both).
+
+**Why each is sound.** The module header's new paragraph "THE COST PER CALL, SECOND PASS" and the comment at
+each site. In short:
+
+- A stage 1 scan acts on a candidate interval [a, b] with n contained terms of k values exactly when n > k
+  (it pushes a contained term out, which empties it) or n = k and a term not contained has a bound in [a, b]
+  (it pushes that bound past the interval, which always changes it). With no push the live bounds are the
+  pass-start ones, so a scan moves nothing iff no candidate interval is either. The second case is a count:
+  contained terms have both bounds in [a, b], so "an outside term has a lower bound in [a, b]" is "more than k
+  lower bounds lie in [a, b]", and the same for the upper bounds. A variable repeated in the scope has one
+  bound pair for all its terms, so they are contained together, and the scan's name test skips exactly the
+  contained terms. When the count says a scan would act, the scan runs unchanged, so every push, its order
+  and its proof are the ones it made. BAGUETTE_DEBUG runs the scan behind every skip; test_prop's lane (h)
+  checks both directions on 3 000 random bound vectors (1 384 Hall-free, 1 616 not), and fails with 182
+  disagreements, and lane (g) with 75 scenes, when the upper-bound count is dropped.
+- The kept permutations are re-sorted from the live bounds at every pass, and an insertion sort of any
+  permutation is sorted, so they need no trail. Ties keep no order and none is read: the walk reads counts,
+  the scan's containment marks are a set and its pushes go in `t.terms` order.
+- A tight Regin set's members hold only its values (every value they hold is matched, to a member, by the
+  closure), so the outside terms hold sum(holders over its values) - sum(held over its members) of them,
+  over the pass's `doms`. At 0 the removal loop, which tests `doms.(y)` first, calls nothing. BAGUETTE_DEBUG
+  checks the count against the pairs.
+- The at-least-one lines of a tight set (or interval) are built from the same snapshots and the same value
+  set for each of its derivations. A memo hands back what the first forced derivation built when building
+  it again would return those very nodes, D-0216's rule, checked by `Explanation.rebuilds_to` once a node has
+  left the table (their operands are model rows, the `excl` chains, whose own operands are model rows, and
+  hole clauses, so the shallow check is the whole induction). Otherwise, and always with
+  hash-consing or `amo_reuse` off, they are built. The same nodes, so the same bytes: test_endtoend's D-0242
+  scene (a Hall set over the value set {1, 3, 5}, nine Regin removals, the root refuted by a sum) compares
+  the proof with the memo on and off (8 hits, 0) and veripb accepts it.
+
+**Withdrawn, measured: the at-most-one memo (step 5).** The removals from one y under one set sum the same
+at-most-one lines (they depend on the variables and declared ranges only), and `41861a6` kept them while
+`Explanation.reuse_epoch` was unchanged since a build during which no node left the table, since an m-deep
+chain is beyond `rebuilds_to`'s shallow check. Every normal run kept main's bytes (the 259 test models in
+both encodings, the differential lane 347 of 347), but the `--debug` lane did not: 2018 soccer-computational
+xIGData_24_16_14_2 [activity] under BAGUETTE_DEBUG (which forces every pruning's derivation at the push and
+re-forces it at release) wrote 167 570 `pol` lines against main's 207 004, the same search and stdout. With
+only that memo off the run is main's bytes (md5 `05627651`), so "no node left the table" does not establish
+what a rebuild returns, and the record does not rest on it. It bought 1.1 % on handball12 with proof (48
+hits in 5 344 at 300 nodes) and 0.4 % on costas13 (7 780 in 11 783). Reverted in `0b216c7`; the test of
+`3ab3e34` covers the at-least-one memo alone again.
+
+**Withdrawn, measured.** The Regin scratch pass's reachability through an adjacency matrix read once per
+pass, in place of `holds` per edge in each of the n searches: same bytes, -0.4 % on handball12 and +0.4 % on
+tppv circ8. The searches were not the cost. Not kept.
+
+**Nothing changes the push order**, so there is no option outside the branch to describe: every fix above
+is a skip or a share whose outcome equals the eager code's, and the incremental scan of the task's title came
+out as the counting test, because a scan that would push is the minority (1 671 of 42 079 on handball12) and
+runs unchanged.
+
+### 4. What is left (branch binary `17e9334d`, whose no-proof path is the final's, inclusive shares of samples)
+
+| instance | alldiff | stage 1 / Regin scratch / gate | learning | engine wakes | attribution checks | `Store.var_named` |
+|---|---|---|---|---|---|---|
+| elitserien handball12 | 12.7 % | 1.6 / 6.4 / 4.4 % | 31.9 % | 6.1 % | 3.0 % | 5.1 % |
+| tppv circ14cnonbal | 9.8 % | 3.2 / 3.4 / 2.8 % | 7.6 % | 8.3 % | 2.1 % | 0.5 % |
+| tppv circ8bbal | 9.9 % | 4.9 / 2.4 / 2.1 % | 25.9 % | 7.6 % | 2.8 % | 2.7 % |
+| costas13 | 24.1 % | 6.3 / 12.6 / 4.3 % | 27.5 % | 9.7 % | 1.8 % | 2.3 % |
+
+Inside alldiff: the Regin scratch pass is now its removals' own work (the snapshots of the pruned terms, the
+reasons' facts, `Store.remove`), and the gate is a Tarjan pass over every edge per call (`visit`, 3.6 % of
+handball12), at its algorithmic floor unless the strongly connected components are kept across calls, which
+is the next item inside the module. With the proof, building the derivations stays the largest cost
+(handball12's at-most-one steps that add the pruned y, 9.5 % of the samples): every removal sums one
+at-most-one line per value over its set plus y, and its m pairs with y are new nodes each time. Sharing them
+between the removals from one y needs a validity check that covers the chain (section 3, withdrawn).
+
+Outside it, measured and filed as a cross-session request (WORKLOG): `Engine.watchers_of_new_entries` 6 to
+10 %, the two attribution checks (`Engine.check_attribution`, `Analysis.check_attribution`) 2 to 3 % on every
+sample including qr2, and learning's by-name lookup (`Store.var_named` under `Analysis.locate`, D-0236's
+request) 5.1 % of handball12.
+
+### 5. Throughput (300 s, wall-clock rates)
+
+Base `fe77561d` and branch `17e9334d` (step 5 included; its code is on the proof path only), each pair run
+side by side, 8 runs at a time, load 56 to 64 from other sessions, so the rates are wall-clock under load:
+
+| instance | no proof, base -> branch | with proof, base -> branch |
+|---|---|---|
+| elitserien handball12 | OPT both, 18 277 nodes, 83.2 s -> 75.9 s (220 -> 241 nodes/s) | 13 369 -> 17 155 nodes (44 -> 57 /s) |
+| elitserien handball9 | 39 583 -> 48 480 nodes (131 -> 161 /s) | 14 657 -> 15 527 (48 -> 51 /s) |
+| tppv circ8bbal | 166 278 -> 198 394 (553 -> 660 /s) | 64 010 -> 51 655 (213 -> 172 /s) |
+| tppv circ14cnonbal | 157 897 -> 138 633 (526 -> 461 /s) | 57 050 -> 56 484 (190 -> 188 /s) |
+| costas13 | SAT in 1 504 nodes, 1.18 -> 0.99 s | 3.74 -> 3.17 s |
+
+The two rows that go the wrong way (circ8 with proof, circ14 without) are the load: on the same instances
+run back to back the cycles fall (section 3, -0.5 % and -16 %) as the instructions do. Against Chuffed on
+handball12 (D-0232: 7 207 nodes in 1.7 s, 4 160 nodes/s) baguette without proof is 241 nodes/s at this load,
+a factor 17 per node (D-0235 said 15 at 271 nodes/s under a lighter load); its tree is 18 277 nodes, 2.5 times
+Chuffed's, so 45 times on the time to OPT.
+
+### 6. Checks
+
+Final binaries release `ef11db7f`, dev `b52a0cd6` (branch merged with main `370fba3`), against main's release
+`fe77561d`. The 259 test models with `--proof`: `.opb`, `.pbp`, stdout and exit code identical, in the default
+encoding and under `--bits-above none` (518 pairs). Differential lane `--tier all`: 347 of 347 equal; `--debug`:
+333 of 333 equal (`BAGUETTE_MEM_CAP_KB=33554432`). Scaling lane: ok, every line within its threshold (dev build, `-j 4`). `scripts/check_fmt.sh` clean,
+`check_test_widths.py` no wide domain, `dune runtest --root . --force` 5 489 ok, 0 FAIL (peak RSS 155 MB), `run_model_tests.sh`
+259 passed with proofs VERIFIED, `check_determinism.sh` 259 models identical across two runs. The first `--debug` lane, on `17e9334d`, was 332 of 333:
+the run that found step 5 (section 3).
+
+**Clarity cost.** `t` gained four arrays (`lo0`, `hi0`, `by_lo`, `by_hi`); `hall_free` (40 lines) is a second
+statement of the scan's acting condition, which lane (h) holds to the scan in both directions; one memo
+(`alo_lines`) threaded as an optional argument through `core_summands`, `prune_*` and `remove_*`; the Regin
+pass gained the holder counts and the outsider test. About 200 lines, a third of them comments. `pass_scan` lost its list-building and its two folds.
+
+### 7. Decision and revert
+
+[AUTONOME] Kept: no search, proof or answer changes, so no default behaviour changes. Revert: `git revert` of
+`fec0985`, `74782b6`, `d994b47`, `3ab3e34`, `6217a67`, the header commit `a93c84c` and the test commit
+`0f9240e` (`41861a6` is already undone by `0b216c7`; the e2e scene goes with `3ab3e34`).
+
+## D-0241  [AUTONOME] M19-config-T6, clause minimisation: learned clauses lose their root-level literals (ROOT) and the literals the kept ones re-derive (RECURSIVE, MiniSat's over order literals), behind `BAGUETTE_MINIMISE`. Learned width -27 %, every proof verifies, +3 complete answers at 300 s and a score within the noise. The default stays `off`: the protocol asks for a gain in score
+
+**Status**: DONE on `wave87-minim` (agent-minim, 2026-11-27), not merged. Measured against main
+`e98e398` (binary `db155bd7`) with the branch's `47264f1d` (`a700a73`: the 300 s runs, the
+2 000-node checks, the first cost table) and `f37d4545` (`2d6a518`: adds `local`, the rules are
+otherwise unchanged; the second measurement and cost table). The checks of section 6 are on the
+tip merged with main `cb727bc` (D-0242's alldiff), binary `184504fc`. Node fataepyc-06, 32 runs in parallel, `MemoryMax=32G`,
+`--max-heap-mb 8192`. Runs, tables and scripts: `/cluster/arthur/baguette-results/minim/`.
+Touches: `lib/core/analysis.ml` (`minimise_cut`), `lib/core/learn.ml` (the switch, the
+measurement, `l_min_supports`), `test/unit/test_learn.ml`, `test/unit/test_analysis.ml`.
+
+### 1. What a learned clause carries (measured first)
+
+`BAGUETTE_MINIMISE_STATS=1` takes, at every learned clause, the width of the 1UIP cut's clause and
+what each rule WOULD remove from it, on the same cut, so one run of the default measures every
+arm. 238 instances (the tuning set, the gcc sample of D-0234, the ne sample of D-0238) at 20 000
+nodes, `--no-proof`, binary `17cc2bd8`:
+
+| sample | instances learning | clauses | mean width | median | 16 or more | false at the root | same variable, same side | recursive, beyond root | recursive, no level filter |
+|---|---|---|---|---|---|---|---|---|---|
+| tuning set | 194 | 1 268 869 | 91.2 | 44 | 88 % | 6.8 % | 0 | 17.5 % | 17.5 % |
+| gcc sample | 32 | 269 907 | 75.7 | 64 | 94 % | 3.5 % | 0 | 14.6 % | 14.6 % |
+| ne sample | 18 | 137 965 | 61.7 | 34 | 85 % | 15.8 % | 0 | 13.6 % | 13.6 % |
+
+All together 135 million literals, 7.1 % false at the root, 17.0 % more removable recursively,
+0 dominated. Per instance, root plus recursive remove a median 17.6 % (p10 1.6 %, p90 52.6 %,
+max 93.4 %). The one-step (`local`) variant, measured on a second pass (`f37d4545`), removes
+4.8 % beyond root where the recursion removes 17.2 %. The existing semantic minimisation
+(`Learn.minimise`, M2-L3) removes 0 from a learned clause: `Analysis.Frontier` already keeps one
+node per variable and side, so the cut never holds `x >= 3` and `x >= 5` together. Its header
+said so; this is the number. It does fire on branch nogoods, which is what it is for.
+
+On D-0234's instances the width does not come from either kind. Generalised peaceable queens
+loses 4 to 11 % of its 63 to 168 literals, rotating-workforce 0 to 35 %: a pigeonhole conflict
+names every confined cell, and none of them is implied by another (D-0234's left open 2 stays).
+
+### 2. The rules, and why the learned line still holds
+
+`Analysis.minimise_cut`, applied by `Learn.at_conflict` to the 1UIP cut after its postcondition is
+checked and before `minimise`. The clause is still the same `rup` (D-0018); no new line is
+written. Only the literals it names change, so the argument is about what the checker's unit
+propagation re-derives when a literal is absent.
+
+- **ROOT.** A cut node whose bound was set at level 0 is dropped. Its literal is false on every
+  node the search will visit. The checker re-derives the fact because every level-0 trail entry
+  has its trace line on the page (`trace.ml`, "Level-0 prunings get a line too") or rests on one
+  model row (I-X10), and no `w` retires a level-0 line. D-0238 section 5's `~e_ge_1` is this case,
+  and so is `ne_conflict_sat`, whose clause `~x_ge_2 x_ge_3 y_ge_3` becomes the unit `x_ge_3`.
+- **RECURSIVE.** A node strictly between level 0 and the conflict level is dropped when every fact
+  its entry read (its reason, and the reasons of the holes it settled over, as `analyse` expands
+  them) is derivable: at its declared bound, set at level 0, implied on the ladder by a cut node
+  (`x >= 7` implies `x >= 3`), or set by an entry that is not a decision and whose own facts are
+  derivable, recursively, memoised per entry and side. The checker replays that chain because
+  `Trace` writes the whole trail when a branch fails and the clause is written before the `w`
+  that retires any of those levels (I-S4). It is the replay a node the 1UIP walk resolved away
+  already gets, one level lower. `Learn.supports` now counts the lines the removals rest on.
+- **The guard the ladder needs.** `x >= 7` can be set AFTER the entry that read `x >= 3`, which
+  the SAT version never sees. Two dropped nodes could then justify each other (`y >= 2` read
+  `x >= 3`, `x >= 7` read `y >= 2`), and the clause would be wrong. So a cut node justifies a
+  reader only when its entry precedes the reader's on the trail, or when it is kept (nodes are
+  decided in decreasing trail order, so a kept one is final). Every edge between two dropped
+  nodes then points backwards on the trail, and induction on trail position is the soundness
+  argument.
+- The conflict level is never touched, because it holds the asserting literal. A cut taken at
+  level 0 is returned unchanged.
+- **The abstract-level filter** (MiniSat's) stays. Here an entry at level j may rest only on facts
+  set below j, so a level absent from the cut does not prove a missing decision, and the filter
+  can only miss a removal. It misses 4 474 of 23 094 525.
+- **Self-subsumption among one variable's order literals**, the brief's second rule, was not
+  built: section 1 measured 0.
+
+`BAGUETTE_MINIMISE=off|root|local|rec|rec-nofilter` (unset is `off`, anything else exits 2, the
+discipline of `BAGUETTE_CDCL`). `rec` includes `root`.
+
+### 3. Cost and width at a fixed node budget
+
+`perf stat -e instructions:u`, 20 000 nodes, `--no-proof`, `f37d4545`, D-0234's eight instances
+and two of D-0238's. The trees differ from the first shorter clause on.
+
+| instance | off M/node | local | rec | off width | local | rec |
+|---|---|---|---|---|---|---|
+| on-call-rostering 4s-23d | 3.44 | 3.35 | 3.39 | 29.7 | 26.8 | 22.5 |
+| elitserien handball11 | 9.20 | 9.37 | 9.63 | 52.5 | 49.8 | 48.8 |
+| rotating-workforce Example1780 | 10.91 | 11.01 | 11.00 | 55.8 | 49.2 | 35.8 |
+| rotating-workforce Example1242 | 16.39 | 16.81 | 17.17 | 105.5 | 95.2 | 87.4 |
+| gpq n8_q3 | 1.99 | 2.03 | 2.23 | 62.8 | 60.7 | 59.4 |
+| gpq n9_q5 | 3.43 | 3.46 | 3.88 | 81.7 | 76.4 | 72.6 |
+| rws e-25-s-7 | 2.98 | 3.22 | 3.25 | 57.7 | 59.9 | 55.6 |
+| rws e-30-s-9 | 2.95 | 3.03 | 3.01 | 27.6 | 25.3 | 25.2 |
+| work-task seed-3 | 17.12 | 18.55 | 19.18 | 113.2 | 90.5 | 88.2 |
+| gcc-benchmark l42_3 | 2.98 | 2.96 | 2.97 | 29.7 | 20.9 | 19.9 |
+
+`rec` costs x0.99 to x1.13 per node. A first version cost x1.20 on work-task, most of it asking
+the hole log for the remover of every hole an entry settled over. `a700a73` asks only once the
+entry's reason has passed. `root` alone is one filter over the cut and costs nothing measurable.
+
+### 4. 300 s on the tuning set (D-0205's protocol)
+
+200 instances, five arms, binary `47264f1d`. Pairwise shares (`tools/analyse.py`, Challenge order,
+Borda over the pair, D-0205's noise 0.03):
+
+| pair | complete | verified | incumbents | share | wins/losses | confl/s (median) |
+|---|---|---|---|---|---|---|
+| off / root, no proof | 40 / 40 | - | 116 / 116 | 0.500 / 0.500 | 12+ / 12- | 128.0 / 127.1 |
+| off / rec, no proof | 40 / 42 | - | 116 / 114 | 0.507 / 0.492 | 18+ / 21- | 128.0 / 124.6 |
+| off / rec, proof | 28 / 29 | 28 / 29 | 121 / 122 | 0.505 / 0.495 | 15+ / 17- | 60.0 / 57.8 |
+
+Status changes. `rec` without proof: 2019_hrc exp2-1-5145 and 2025_mondoku 10-10-6 become OPT
+(257 s, 220 s). With proof: 2019_kidney-exchange 3_20_0.30_5 becomes OPT (275 s, verified),
+2020_hoist PU_1_2_2 and 2020_stable-goods s-d7 get a first solution. No complete answer is lost.
+`root`: 2019_hrc becomes OPT, 2014_mqueens n11 (OPT at 250 s) times out. Families: `rec` wins 16
+and loses 20 without proof. The learned width falls from 73.2 to 53.5 literals on average
+without proof (-27 %), from 67.2 to 50.0 with (-26 %). Every complete answer of both proof arms
+verifies (57 checks).
+
+The 39 gcc and ne sample instances outside the set, same arms (`off`, `rec`): 8 / 8 complete
+without proof, 6 / 6 with, shares 0.513 / 0.487 and 0.500 / 0.500, wins 2+/3- and 2+/2-, no status
+change. Rotating-workforce stays UNKNOWN in both. Learned width 70.9 -> 53.7 and 66.2 -> 51.5.
+
+### 5. Decision
+
+[AUTONOME] **The default stays `off`.** D-0205 keeps an idea for the full series when it gains on
+the subset's score and loses no verified complete answer. `rec` loses no complete answer and adds
+three (two without proof, one verified with), but its share is 0.015 and 0.010 BELOW `off`'s.
+That is under the 0.03 noise, so it is not a measured loss, and it is not the gain the protocol
+asks for. `root` alone is a tie on every count. Making `rec` the default is a one-line change
+(`Learn.default_minimisation`), so the choice is reversible either way, and the option that
+changes nothing is the one taken. What decides it is the full M17 series with `BAGUETTE_MINIMISE=rec`
+as an arm: its +3 complete answers against its slightly lower score is exactly the trade the
+subset cannot separate. Nothing to revert: no default moved.
+
+### 6. Checks (tip merged with main `cb727bc`, binary `184504fc`; main's is `b52a0cd6`)
+
+- `check_fmt.sh` clean, `check_test_widths.py` clean, `dune build --root .` clean.
+- `dune runtest --root . --force` under 4 GB: 5 535 ok, 0 FAIL, peak RSS 155 MB.
+  `run_model_tests.sh`: 259 passed, 0 failed. `check_determinism.sh`: 259 models identical.
+- With the switch off, the 259 test models in both encodings are byte-identical to main's
+  `b52a0cd6` (stdout, exit code, `.opb`, `.pbp`: 2 072 files). Before the last merge the same held
+  against `db155bd7` (2 016 files).
+- Under `rec`: 91 of the 518 test-model runs change their `.pbp`, nothing else changes, and veripb
+  accepts all 518. All 518 under `BAGUETTE_DEBUG=1`, with `rec` and with the default: no
+  invariant fired, all verify. Before the merge, on 254 models: `root` changed 52 proofs, `local`
+  87, all accepted; `rec` with `BAGUETTE_CDCL=1`, all 508 accepted.
+- Challenge proofs under `rec` at 2 000 nodes (238 instances in the bits encoding, 116 in the order
+  encoding): 328 verified, 0 rejected; 19 checks hit veripb's 3 600 s, 4 hit the 32 GB cap (order
+  encoding, `.opb` of 20 to 27 GB), 3 runs gave no proof (two killed at 420 s in the order
+  encoding, one refused). The 300 s campaigns: 69 checks, all verified.
+- Differential lane (`--tier all -j 8`, 32 GB) with the switch off: 347 of 347 runs equal; debug pass:
+  333 of 333 equal. Scaling lane: ok, every line within its threshold. Before the merge (`f37d4545`): 347 of 347 and 333 of 333
+  equal, scaling ok.
+- Proofs written by the campaigns, all deleted after checking: about 1.9 TB (the 300 s proof arms
+  1.3 TB on the set and 0.32 TB on the samples, the 2 000-node checks 0.26 TB).
+
+### 7. Lanes under `rec` as the default (a build `ca695efc` of `a700a73` that only flips the
+default; not re-recorded)
+
+- Plain pass: 299 of 347 runs differ. By kind: work counters 297, search counters 266, proof hash
+  247, stdout 24. Every learning configuration differs; the 48 equal runs are Boolean instances
+  whose conflicts carry no root literal and nothing to drop. LBD histograms shift down by one,
+  because level 0 no longer counts. No exit code changes.
+- The 24 stdout changes, final objective at the node budget (min: lower is better): better in 11
+  (2013_filters_dct_2_2 alternate 26 -> 23; 2016_diameterc-mst alternate none -> 590;
+  2017_tc-graph-color k5_05 alternate 552 -> 496; 2020_lot-sizing pigment15b alternate 1 704 -> 1 584;
+  2023_chessboard4 activity 12 -> 13, alternate 9 -> 12, fifo 15 -> 16 (max); 2013_rcpsp_11@10000
+  default, audit0, noproof, nopb 79 -> 78), worse in 2 (2015_opd bibd_10_30_09 activity 6 -> 9;
+  2019_fox-geese-corn 54 activity 1 503 -> 1 283, max), one completes (2024_monitor-placement
+  rf1755 alternate proves its optimum), and in the 10 others the final objective is the same
+  through a different solution path (bacp-22 activity and alternate, filters_dct_2_2 activity,
+  rcpsp_12 activity, alternate and restarts, grid-colouring 13_11 activity, opd bibd_10_30_09
+  alternate, opd bibd_08_28_14 alternate, fox-geese-corn alternate).
+- The kept runs of those 13 instances, every configuration with a proof (163): all verified.
+- Debug pass (`--debug --tier all -j 8`): 285 of 333 differ (work 283, search 238, hash 224,
+  stdout 12), no exit code change, no invariant fired.
+- Scaling lane on the same build: ok, every line within its threshold.
+
+### 8. Left open
+
+1. **The full series with `BAGUETTE_MINIMISE=rec`** decides the default (section 5).
+2. **The cost of `rec`** is `Analysis.locate` per fact read (a name lookup and the bound history's
+   binary search) and the recursion's allocation. A per-conflict cache of slot by name, or facts
+   carrying their variable, would cut it. Not done: the score gap may be that cost.
+3. **Wide pigeonhole nogoods** (D-0234 left open 2) are untouched: gpq loses 4 to 11 %.
+4. Inside the recursion a fact is justified only by a cut node set before the reader, never by a
+   kept one set after (the memo stays a property of the entry). Measured cost of that choice: not
+   measured.
+5. `bin/main.ml`'s usage text does not list `BAGUETTE_MINIMISE` (not this row's file).
+
+Revert: `git revert 60c57ea 2d6a518 525184a a700a73 0e48012` removes the switch, the rules and
+their lanes; with the default `off` they change no artefact.
+
+## D-0243  [AUTONOME] M20-pernode-T4 on the engine's wake path: the static wake index as flat int arrays walked without closures, the default advisor answered without its call, the trigger mask off a byte per id, and a memo of positive answers in `check_attribution`. Same trees, byte-identical artefacts; instructions per node without proof -2.0 % on elitserien handball12, -2.2 % on tppv circ14, -3.0 % on costas13, -5.0 % on qr2
+
+**Status**: DONE on `wave89-wakes` (agent-wakes, 2026-11-27), not merged. Base: main `cb727bc`, release binary
+`ef11db7f` (agent-hall's `new.exe`, D-0242). Final: `a2fdeb2`, release binary `1ee55030`. Touches
+`lib/core/engine.ml` and `test/unit/test_engine.ml` only. Node fataepyc-06 at load 14 to 21 (other sessions'
+runs), so the cycle counts below are noisy and the instruction counts are the measurement. Scripts, binaries'
+hashes, the per-run `md5`/`instr`/`cycles` files and the profiles: `/cluster/arthur/baguette-results/wakes/`.
+
+### 1. Context and method
+
+agent-hall's cross-session request (WORKLOG, D-0242): after D-0242, `Engine.watchers_of_new_entries` was 6.1 %
+of handball12's samples, 8.3 % of tppv circ14cnonbal, 7.6 % of circ8bbal, 9.7 % of costas13 and 13.5 % of qr2,
+two thirds of it in its `List.iter` over the static watcher list, and `Engine.check_attribution` about 1 %
+(`in_scope` 0.73). The contract was the same search trees and artefacts: the same wake order, the same woken
+set, the attribution check as strong as before.
+
+Method of D-0236 and D-0242: `perf stat -e instructions:u,cycles:u` at a fixed node budget
+(`BAGUETTE_NODE_LIMIT`), per node = (I(N) - I(1)) / (nodes - 1), the 1-node run taken with the base binary.
+Budgets: handball12 3 000 nodes, tppv circ14cnonbal 2 000, tppv circ8bbal 3 000, costas13 3 000 (it completes
+in 1 504), qr2 20 000; agent-hall's `.fzn` (`/scratch/arthur/hall-runs/fzn`). Every step was run with and
+without `--proof`, and at every step the md5 of `.opb`, `.pbp` and stdout and the counters nodes, conflicts,
+learned, props, eff, wakes, masked, vetoed, advised and seeded were equal to the base binary's on all five.
+Profiles with `perf record --call-graph fp` on the `baguette-fp` switch, one at a time.
+
+### 2. What the walk paid
+
+Per trail entry, the walk iterated the variable's static watcher list (an `int list`, newest first) through
+`List.iter` and a closure, which called the `wants` closure (veto, trigger mask through `trigger_of`, then
+`advises`, which calls the instance's `inst_advise` closure) and a local recursive `flush_above` closure for the
+merge with the self-watching ids. On handball12 the static wakes are almost all to model propagators whose
+advisor is `Propagator.advise_always` (2 600 wakes per node, 5 % masked); on qr2 they are learned PB rows whose
+advisor is real work (Retention's gate around it). `check_attribution` allocated a closure per call
+(`watches`) and `in_scope` another per new entry (its local `go`).
+
+### 3. The steps, each measured (instructions per node against the base, without / with proof)
+
+| step | handball12 | circ8bbal | circ14cnonbal | costas13 | qr2 | kept |
+|---|---|---|---|---|---|---|
+| s1 `wake_static` an int array per variable plus a length, walked from the last cell down; the merge two loops; `wants` top level; `advises` skips `advise_always` | -1.52 / -0.36 | -2.37 / -0.70 | -1.98 / -0.52 | -2.13 / -0.08 | -3.44 / -2.02 | yes |
+| s2 = s1 + `in_scope`'s binary search top level (no closure) | -1.52 / -0.34 | -1.95 / -0.75 | -1.63 / -0.48 | -2.20 / +0.02 | -3.55 / -2.11 | yes |
+| s3 = s2 + `attr_ok`, a memo of positive answers in `check_attribution` | -1.62 / -0.38 | -2.15 / -0.82 | -1.77 / -0.54 | -2.18 / +0.02 | -3.74 / -2.22 | yes |
+| s4 = s3 + the walk's result in a module-level buffer instead of a list | -1.28 / -0.32 | -2.09 / -0.67 | -2.01 / -0.57 | -1.62 / +0.11 | -2.75 / -1.78 | **withdrawn** |
+| s5 = s3 + the trigger mask off `trig_bits`, one byte per id | -1.88 / -0.43 | -2.43 / -0.88 | -2.06 / -0.80 | -2.79 / -0.17 | -4.42 / -2.61 | yes |
+| s5 with the mask factored into a function `wakes_id`, not inlined | -1.44 / -0.34 | -1.89 / -0.71 | -1.55 / -0.62 | -1.80 / +0.15 | -3.20 / -1.92 | as `[@inline]` |
+| `wakes_id` `[@inline]` | -1.88 / -0.43 | -2.43 / -0.88 | -2.06 / -0.80 | -2.80 / -0.17 | -4.46 / -2.62 | yes |
+| `wants` and `advises` `[@inline]` (final, `1ee55030`) | **-2.01 / -0.46** | **-2.61 / -0.98** | **-2.23 / -0.86** | **-3.03 / -0.25** | **-4.95 / -2.90** | yes |
+
+s1 to s3 differ by noise on some rows: the step from s1 to s2 is within +-0.4 %, and s3's memo pays 0.1 to 0.2 %
+on four of five instances and nothing on costas13. It was kept because its cost in clarity is one field and one
+line in `purge`, and because it does not weaken the check (section 4). The buffer of s4 cost 0.3 to 1 % more
+than the list it replaced (a bounds check and a module-level reference per wake against a minor-heap cons), so
+it was withdrawn before its commit.
+
+Absolute, base `ef11db7f` -> final `1ee55030`, per node:
+
+| instance | instructions, no proof | instructions, proof | cycles, no proof | cycles, proof |
+|---|---|---|---|---|
+| elitserien handball12 | 11.87 M -> 11.63 M | 55.70 M -> 55.45 M | 5.68 M -> 5.43 M | 27.45 M -> 28.08 M |
+| tppv circ14cnonbal | 6.45 M -> 6.31 M | 18.34 M -> 18.18 M | 3.09 M -> 3.08 M | 9.96 M -> 9.42 M |
+| tppv circ8bbal | 4.50 M -> 4.39 M | 14.28 M -> 14.14 M | 2.32 M -> 2.21 M | 7.56 M -> 8.24 M |
+| costas13 | 2.90 M -> 2.81 M | 8.93 M -> 8.91 M | 1.34 M -> 1.28 M | 4.01 M -> 4.39 M |
+| qr2 | 890 k -> 846 k | 1 595 k -> 1 549 k | 382 k -> 380 k | 683 k -> 712 k |
+
+The cycle columns are noise at this resolution under the node's load: `80113bed` and the final `1ee55030` are the
+same code (the second adds the header comment) and their two series differ by up to 7.4 % in cycles per node
+and 0.05 % in instructions. They say nothing finer than "no regression".
+
+### 4. Why each rule gives the same answer (also in `engine.ml`'s header)
+
+- (a) The array of `wake_static.(x)` is appended to in the order the list was prepended to, so walking it from
+  its last cell down visits the list's order. `purge` filters it in place, keeping order, as `List.filter`
+  did. The merge loop is `flush_above` unrolled: the self-watching ids above each static id, then the rest.
+- (b) `Propagator.advise_always` is `fun _ _ -> true` and touches nothing, so answering `true` for it without
+  the call changes no answer, no counter and no `declined` record (only a `false` records one).
+- (c) `trig_bits.(id)` is written from `triggers.(id)` at the two places that write `triggers` (`create`,
+  `add`) and grown with it, filled with `wake_on_any`'s byte as `room` fills `triggers`; an id past its end
+  reads `3`, `wake_on_any`, as `trigger_of` answers. Used in the walk, the seed and the debug record of
+  unasked slots.
+- (d) `attr_ok.(x) = id` is written only after `in_scope t id x` answered yes. A live id's scope never
+  changes (it is set by `create`/`add`), and the one place that changes a scope, `purge` emptying a removed
+  id's, resets `attr_ok` on every variable of that scope. So a memo hit is an answer the binary search gave
+  against the scope that is still the id's, and the check refuses exactly what it refused. The first half of
+  the check (`e.prop <> id`) is untouched and runs before the memo is read.
+
+### 5. Tests
+
+`test_engine.ml` gains two (`test_d0243_*`): the array index against the list's specification (the live
+readers of a variable in ascending id order, minus those a hole masks) over 30 random engines through
+removals, purges and additions past the first array's capacity, 1 200 probes; and the attribution memo, read
+back directly, refusing another instance on a memoised variable and refusing the memoised instance once
+`purge` has emptied its scope. Mutations performed: dropping `purge`'s reset of the memo fails the last two
+memo checks; walking the array upwards fails the new test and the two M1-T24 wake-order checks.
+
+### 6. Verification
+
+All in the worktree at `a2fdeb2`, dev binary `a055ef42`, release `1ee55030`:
+
+- `scripts/check_fmt.sh` clean, `scripts/check_test_widths.py` no wide domain.
+- `dune runtest --root . --force` under `ulimit -v 4000000`: rc 0, 5 495 ok (agent-hall's run on the base:
+  5 489; the six new checks are D-0243's), 0 FAIL, peak RSS 155 MB.
+- `scripts/run_model_tests.sh`: 259 passed, 0 failed, every proof accepted by veripb.
+- `scripts/check_determinism.sh`: 259 models, `.opb`/`.pbp`/stdout identical across two runs.
+- The 259 test models under both encodings (default and `--bits-above none`), `--proof`, release `1ee55030`
+  against agent-hall's sums for `ef11db7f` (the base): exit code, `.opb`, `.pbp` and stdout equal on all 518.
+- `scripts/diff_lane.sh --tier all -j 8`: 347 of 347 runs equal the reference. `--debug`: 333 of 333 equal.
+  Both under `BAGUETTE_MEM_CAP_KB=33554432`, scripts/README.md's documented exception for openshop's checker.
+- `scripts/scaling_lane.sh -j 8`: ok, every line within its threshold.
+
+### 7. What is left
+
+- The walk itself after this: on qr2 the advisors of the learned PB rows (Retention's gate closure around the
+  row's own advisor) are the larger part of `watchers_of_new_entries`' inclusive share; that is Retention's
+  and Pb's code, not the walk's.
+- `Analysis.check_attribution` (1.76 % of handball12 in agent-hall's profile) still asks `List.exists` over
+  `Engine.vars_of`; `Engine.in_scope` answers the same question by binary search without allocating since
+  this record. Cross-session request to the owner of `lib/core/analysis.ml` (agent-minim holds it).
+- `docs/INVARIANTS.md` I-T4 still says the attribution check costs "one hashtable lookup per new entry"; it
+  has been a binary search since D-0138 and is a memo read on a hit since this record. Not in this task's
+  files.
+
+### 8. Decision and revert
+
+[AUTONOME] Kept: no search, proof or answer changes, so no default behaviour changes. Revert: `git revert` of
+`a2fdeb2`, `9479388`, `cb86100` (the trigger bytes and the tests), `3e10deb` (the attribution memo) and
+`5f09fee` (the array index), in that order.
+
+## D-0245  [AUTONOME] M20-pernode-T4 on conflict analysis: `Store.var_named` answers through a direct-mapped memo of 4 096 cells, and `Analysis.locate` reads it as an int. Same trees, byte-identical artefacts; instructions per node without proof -2.5 % on elitserien handball12, -0.8 % on tppv circ14, -0.9 % on costas13, -3.9 % on qr2. The O(log arity) attribution check was measured and withdrawn
+
+**Status**: DONE on `wave91-locate` (agent-locate, 2026-11-27), not merged. Base: main `b61549c`, release
+binary `956f9d27`. Final: `9f70b38` (code) and `55f1a7f` (a comment), release binary `30eda4ca`. Touches
+`lib/core/store.ml`, `lib/core/analysis.ml` and `test/unit/test_core.ml`. Node fataepyc-06 at load 14 to 20
+(other sessions' runs). Scripts, binaries and per-run `md5`/`instr`/`cycles` files:
+`/cluster/arthur/baguette-results/locate/`.
+
+### 1. Context and method
+
+Three cross-session requests (WORKLOG, agent-names D-0236, agent-hall D-0242, agent-wakes D-0243): after
+D-0242 and D-0243, on release profiles without proof, `Store.var_named` under `Analysis.locate` was 5.1 % of
+elitserien handball12's samples (4.9 of it `Hashtbl.find_opt`), and `Analysis.check_attribution` 1.76 %
+(`watches` 1.01, `Engine.vars_of` 0.65). Re-profiled on the base (`perf record --call-graph fp`, 1 000 nodes):
+`var_named` 5.7 % with its callees, `check_attribution` 1.3 % plus `watches` 0.7 % flat. The contract: same
+search trees, byte-identical artefacts, the attribution check as strong as before.
+
+Method of D-0236, D-0242 and D-0243: `perf stat -e instructions:u,cycles:u` at a fixed node budget
+(`BAGUETTE_NODE_LIMIT`), per node = (I(N) - I(1)) / (nodes - 1), the 1-node run taken with the base binary.
+Budgets: handball12 3 000, tppv circ14cnonbal 2 000, costas13 3 000 (it completes in 1 504), qr2 20 000;
+agent-hall's `.fzn` (`/scratch/arthur/hall-runs/fzn`). Every step was run with and without `--proof`, and at
+every step the md5 of `.opb`, `.pbp` and stdout and the counters nodes, conflicts, learned, props, eff, wakes,
+masked, vetoed, advised and seeded were equal to the base binary's on all four. Cycles: the medians of five
+interleaved runs per binary without proof (`rep.sh`), because one run's cycles moved by several per cent. And
+the diff lane's 21 fast instances at their lane budgets without proof, whole-run instructions and stdout md5
+(`corpus.sh`).
+
+### 2. The name lookup: a direct-mapped memo
+
+`Analysis.locate` asks `Store.var_named` once per fact it places, both in `analyse` (`mk_node`) and in the
+decision closure's memo builds (`cite`): 8.87 M lookups over handball12's 3 000 nodes, about 3 000 per node.
+D-0236's one-entry memo (a hit when the name is physically the string of the variable answered last) hit
+about half of them; the other half paid `String.hash` over the whole name (a C call), the bucket walk and
+`String.equal`.
+
+The memo is now 4 096 cells, DIRECT-MAPPED: the cell of a name is `memo_slot name`, its length and its last
+eight bytes (one unaligned load) multiplied by an odd constant and shifted to 12 bits; a short name folds its
+bytes. A cell holds a variable the index answered, or -1, and a hit is the one-entry memo's test on that cell:
+`names.(i) == name`. Sound by D-0236's argument: `i` came out of the index for a name equal to `names.(i)`, and
+any string equal to it gets the same answer from the index. The slot decides only where an answer is kept,
+never what it is, so names that share a cell evict each other and `memo_slot` could be any function of the
+string; the one-entry memo is the case of one cell. A miss is the index lookup it was, plus one int store
+(no `caml_modify`). The memo is allocated on the first lookup, so `Engine.oracle_accepts`' scratch stores,
+which never ask a name, pay nothing. `Store.var_index_named` returns the int (-1: no such name), so a hit
+allocates nothing; `var_named` wraps it in the option, and `Analysis.locate` reads the int.
+
+Hit rates (an instrumented build, not committed): handball12 98.0 % of 8.87 M lookups, tppv circ14 99.6 % of
+443 k, costas13 99.98 % of 479 k, qr2 99.99 % of 3.0 M. A larger memo cannot gain more than the 2 % of
+handball12's misses, about 0.004 % of its instructions, so the size was not tuned further.
+
+Test: `test_core.ml`'s `test_var_named_direct_mapped_memo`, 3 000 names of Compile's shapes and 10 000 asks
+(the store's strings, equal copies, absent names) against the linear scan, with a check that some two names
+share a cell. Break, measured: a hit by the cell alone (no `==` test) fails it.
+
+### 3. The attribution check: measured, withdrawn
+
+agent-wakes' suggestion: `Analysis.check_attribution` asks "does instance `prop` watch `var`" by walking
+`vars_of prop`; `Engine.in_scope` answers it by binary search over the instance's sorted scope. Built as
+`Engine.watches t id v = id >= 0 && id < t.count && not t.removed.(id) && <scope search>` (the `removed` test
+because `vars_of` answers a removed id's tombstone, which has no variables, while its scope is emptied only at
+the next `purge`), passed down from `Search` through `Learn.at_conflict` as `?watches`, with a
+`BAGUETTE_DEBUG` comparison against the list on every call and a test over every id and variable of an engine
+with a removed instance, before and after the purge, and the (c) break still refused by name. It gave the
+same answers and artefacts, and:
+
+| step | handball12 | circ14 | costas13 | qr2 |
+|---|---|---|---|---|
+| s1 `Engine.watches` through D-0243's memo, vs base | +0.15 / +0.06 | -0.23 / +0.21 | +0.43 / +0.03 | -0.01 / +0.06 |
+| s2 = s1 + the memo of section 2, vs s1 | -2.37 / -0.53 | -0.45 / -0.28 | -1.05 / -0.15 | -3.83 / -2.09 |
+| s2b = s2 with the scope search without D-0243's memo, vs s2 | +0.28 / +0.06 | +0.01 / 0.00 | +0.04 / +0.01 | +0.13 / +0.07 |
+| s3 = s2 with the check back on the list, vs s2 | -0.06 / -0.02 | -0.06 / -0.02 | -0.15 / -0.05 | +0.07 / -0.15 |
+
+(instructions per node, % without / with proof). On the 21 fast instances, s3 vs
+s2 ranged from -0.5 % to +0.6 % of a whole run. Median cycles per node of five runs: s2 and s3 within 0.5 % of
+each other on all four. The check reads one short list that the entry's instance owns (a few cells on these
+instances), so what it costs is the call and one cache line, which the binary search pays as well. Withdrawn
+before its commit, with its tests; the comment above `Analysis.watches` records the measurement so that the
+next reader does not redo it. The check is unchanged.
+
+### 4. The final, base `956f9d27` -> final `30eda4ca`, per node
+
+| instance | instructions, no proof | instructions, proof | cycles, no proof (median of 5) | cycles, proof (median of 3) |
+|---|---|---|---|---|
+| elitserien handball12 | 11.62 M -> 11.33 M (-2.49 %) | 55.44 M -> 55.14 M (-0.54 %) | 5.47 M -> 5.22 M (-4.5 %) | 27.65 M -> 27.52 M (-0.5 %) |
+| tppv circ14cnonbal | 6.31 M -> 6.26 M (-0.76 %) | 18.19 M -> 18.17 M (-0.10 %) | 2.88 M -> 2.83 M (-1.4 %) | 9.43 M -> 9.40 M (-0.2 %) |
+| costas13 | 2.81 M -> 2.79 M (-0.94 %) | 8.92 M -> 8.90 M (-0.20 %) | 1.28 M -> 1.27 M (-1.3 %) | 4.01 M -> 3.99 M (-0.4 %) |
+| qr2 | 846 k -> 814 k (-3.85 %) | 1 548 k -> 1 514 k (-2.21 %) | 371 k -> 357 k (-3.9 %) | 671 k -> 654 k (-2.6 %) |
+
+One run of the final with the proof had put handball12 at +17 % cycles while the gate ran beside it; the
+three interleaved runs per binary (`repp.sh`, proofs deleted after each) put one run of each binary 12 to 26 %
+above its other two, so that number was the node's load. The cycles column without proof is the code of s3 (the final's code with the withdrawn plumbing still in the
+tree and unused), whose instructions are within 0.2 % of the final's. The diff lane's 21 fast instances,
+whole runs without proof, base -> s3: -0.3 % (evm-super-compilation) to -6.3 % (chicroster), stdout and
+counters identical on all 21.
+
+With the proof the gain is smaller in share because the proof's own lookups (`Encoding.find`, `Lit.sanitize`,
+`Trace.bits_arm`'s `Encoding.is_bits`) are by name through other tables, which this task did not touch.
+
+### 5. What is left, and the larger change
+
+After the memo, `Store.var_named` is out of handball12's profile (`memo_slot` 0.5 % flat), and the
+`Hashtbl.find_opt` and `caml_hash_mix_string` still visible (0.8 % and 1.1 % flat) are `Encoding.find` under
+`Learned.decl_of_encoding` and `Lit.needs_sanitize`, outside this row's files. `Analysis.locate` with its
+callees is 9.7 % of handball12's samples, mostly `Store.bound_support`'s binary search and the minor heap.
+
+The larger change agent-names requested, a `Reason.fact` that carries its variable (a `var : int` beside
+`name` in `At_least`/`At_most`, filled at the ~120 producer sites in 17 files, element.ml's `Fact_tbl` keyed
+without it or with it agreeing with the name), would now remove only the memo hit (a slot computation and
+two loads per fact) on the learning path. Its remaining motive is the proof side: `Trace.bits_arm` could read a
+per-variable bits array instead of `Encoding.is_bits` per fact (3.5 % of handball12 with the proof, D-0236).
+Proposed as the next task of this row, to be measured against that 3.5 % rather than against this lookup.
+
+### 6. Verification
+
+Worktree `/scratch/arthur/wt-locate` at `55f1a7f`: `scripts/check_fmt.sh` clean; `check_test_widths.py` clean;
+`dune build --root . bin/` then `dune runtest --root . --force -j 8` under `ulimit -v 4000000`: 5 544 ok, 0
+FAIL; `scripts/run_model_tests.sh` 259 passed, 0 failed, every proof accepted; `scripts/check_determinism.sh`
+259 models identical across two runs; `scripts/diff_lane.sh --tier all -j 8` 347 of 347 runs equal the reference, `--debug` 333 of 333 (dev binary `ef23c899`); `scripts/scaling_lane.sh -j 8` every line within its threshold. Never `--update`.
+
+### 7. Decision and revert
+
+[AUTONOME] Kept: no search, proof or answer changes, so no default behaviour changes. Revert: `git revert
+55f1a7f 9f70b38`.
+
+## D-0244  [AUTONOME] M18-coverage-T13: the `value_precede_chain` gap against Chuffed is not the precede chain. Chuffed over std's decomposition explores the same trees as over its native `seq_precede` (the same 22 complete, nodes within 1.4 % on 21 of them), and dropping the chain makes baguette complete nothing more. The gap is, per family, `global_cardinality` with variable counts (mondoku), per-node cost (code-generator, concert-hall-cap, community-detection) and learning (test-scheduling, concert-hall-cap). Nothing built
+
+**Status**: DECIDED (agent-precede, `wave90-precede`, 2026-11-27). Nothing in `lib/`, `mznlib/` or the tests
+changed, so there is nothing to revert. The measurement material is in `/cluster/arthur/baguette-results/precede/`
+(README.md first).
+
+### 1. Context
+
+D-0239 section 3 measured, with proof and within 300 s, 6 complete of 70 `value_precede_chain` instances against
+Chuffed's 22 (mondoku 1 against 5, concert-hall-cap 1 against 4, community-detection 0 against 3, code-generator 2
+against 6), and left open whether the global is the cause. M18-coverage-T13 asked for the cause before any native
+`seq_precede` (Law and Lee).
+
+The instances are the 24 of agent-lex's 70 (`/cluster/arthur/baguette-results/lex/inst.lst`) where Chuffed
+completes and baguette with proof does not (18), plus the 6 baguette completes (controls). Flattened with MiniZinc
+2.10.1 in five ways. `base` is main's mznlib. `drop` is main's mznlib with `fzn_value_precede_chain_int`,
+`fzn_seq_precede_chain_int` and `fzn_value_precede_int` defined as `true`. `chuffed` is Chuffed's own mznlib (native
+`chuffed_seq_precede`). `chstd` is Chuffed's mznlib with std's two precede files put back. `stdgcc` is main's mznlib
+without baguette's `fzn_global_cardinality*.mzn`, so std's `count` decomposition (the 10 instances that call gcc).
+The `drop` arm relaxes the model, so its answers are not results. It is a cost probe only.
+
+Binaries. Measurement binary `184504fc` (main `402d9cb`, release profile). The proof arm reruns the same binary.
+agent-lex's timed numbers quoted below are binary `9194b0f8` (main `2fff866`). The branch after merging main
+(`5008e6e`) builds `ef23c899`, main's gate-121 binary, and the branch changes no code.
+
+### 2. Is it the chain? No
+
+| arm | what it shows |
+|---|---|
+| Chuffed native against Chuffed over std's decomposition (learning on, 300 s) | the 22 instances Chuffed completes natively, it completes over std's decomposition too (peaceable n8 and community mexican time out natively and were not rerun). Node counts agree within 1.4 % on 21 of the 22 and within 5 % on mondoku 20-18-9 (2 338 657 native, 2 222 752 std, 168 s against 135 s). The decomposition gives Chuffed the same search |
+| baguette `base` against `drop`, 3 000 nodes, no proof, `perf stat instructions:u` | instructions per node unchanged on code-generator (52.3, 70.1, 56.3, 36.6 Mi/node both), community-detection (2.1, 5.4, 2.8 both, Polblogs 194 against 205), test-scheduling (5.2, 19.1 against 18.6), mondoku (1.2 against 1.1, 3.5 both). Only concert-hall-cap moves: 1.55 to 1.28, 1.56 to 1.14, 2.87 to 1.72 Mi/node (17 to 40 %), where the chain is half the model |
+| baguette `drop`, 300 s, no proof | completes the same instances `base` completes without proof (code-generator update_br_prob 203 s and control_flow_insn_p 164 s, which agent-lex's base also completed without proof) and nothing else. Not one concert-hall-cap, mondoku or community-detection instance completes with the chain gone |
+
+So a native `seq_precede` cannot close the gap. Concert-hall-cap's 17 to 40 % per node is the most the chain costs
+anywhere, and the next two sections show that family is 10 to 30 times slower per node than Chuffed, so the chain
+is not its bottleneck either.
+
+### 3. Where the gap is, per family
+
+Chuffed's rate is its node count over its wall time on a completed run (`-s`, learning on). baguette's is agent-lex's
+no-proof run (nodes over 300 s). `--no-learn` is Chuffed with nogood learning off.
+
+| family | baguette nodes/s, Mi/node | Chuffed nodes, nodes/s | Chuffed `--no-learn` | cause |
+|---|---|---|---|---|
+| mondoku 10-10-6, 12-12-8, 14-14-8 | 689 to 844, 1.2 to 1.6 | 1 234 to 6 884, solved in under 1 s | completes (3 584 to 80 703 nodes) | **propagation of `global_cardinality` with variable counts.** Chuffed without learning needs 3 584 nodes on 10-10-6, baguette does not finish in 240 000. With std's `count` decomposition (`stdgcc`) baguette completes 10-10-6 in 3 938 nodes (2 s) and 12-12-8 in 11 000 (13 s). The split arms say which call: baguette's gcc kept for fixed counts and std's for variable ones completes 10-10-6 in 4 271 nodes, the reverse does not in 98 258 |
+| mondoku 20-18-9 | 729, 3.5 | 2 338 657, 13 903/s | times out | the same plus learning and per-node cost. `stdgcc` does not complete it |
+| code-generator (4) | 34 to 80, 37 to 70 | 22 689 to 125 712, 2 900 to 4 400/s | 1 of 4 completes | **per-node cost on models of 300 000 to 570 000 constraints**, 50 to 80 times Chuffed's. baguette needs fewer nodes (13 682 against 33 927 on update_br_prob) and completes two of the four without proof (153 s, 187 s). With proof the per-node cost grows further and they time out |
+| concert-hall-cap 03, 148, 318 | 1 031 to 1 867, 1.5 to 2.9 | 0.8 M to 2.9 M, 17 000 to 31 500/s | times out | **learning and per-node cost**. Chuffed needs learning here and explores 10 to 30 times more nodes per second |
+| community-detection Sampson, adjourn, Polblogs | 22 to 2 763, 2.1 to 194 | 6 485 to 9.8 M, 1 000 to 41 000/s | Sampson and Polblogs complete | **per-node cost.** Sampson without learning takes Chuffed 14 M nodes in 216 s, about 15 times baguette's rate. gcc is not it here: adjourn under `stdgcc` explores the identical 214 817 nodes |
+| test-scheduling t30m10r3-15, t50m20r10-17 | 262 to 680, 5.2 to 19.1 | 84 646 and 209 034, solved in 2 s and 10 s | times out | **learning.** The chain is one trivial `array_int_maximum` in these models (std's `value_precede_chain` over a single value). Without learning Chuffed does not complete either |
+| peaceable queens n8 | 2 640, 2.1 | times out at 300 s (315 s in agent-lex's 1 200 s run) | times out | outside the 300 s window for both |
+
+### 4. Completes with proof, before and after
+
+Nothing was built, so before and after are the same binary. Rerun with proof on the 24 instances, binary
+`184504fc`, 300 s, veripb 3.0.2 on every proof that ended: 4 complete with a VERIFIED proof (mondoku 8-8-4 0.9 s, test-scheduling t30m10r10-5 49 s, concert-hall-cap 02 79 s, code-generator find_regno_partial 24 s), code-generator pegwit OPT in 39 s whose check ran out of veripb's 900 s (as in agent-lex's run), and test-scheduling t20m10r10-17 timed out at 111 206 nodes where agent-lex's run completed at 116 505 in 230 s (the node's load average was above 30 throughout). The 18 gap instances: 0 complete, as in agent-lex's run. For the next task's benefit, the `stdgcc`
+flattening with proof: mondoku 10-10-6 OPT in 5.9 s (3 938 nodes) and 12-12-8 OPT in 35.4 s (11 000 nodes), both VERIFIED, 8-8-4 VERIFIED in 0.5 s (338 nodes against 1 945). Mondoku 14-14-8 and 20-18-9, the four community-detection instances and peaceable n8 time out. That is +2 mondoku complete with proof, the size of what T14 can expect on this family.
+
+Proof volume written: 97 GB over 34 runs (the largest 7.1 GB, community-detection mexican) (deleted once checked).
+
+### 5. Decision
+
+[AUTONOME] Build nothing for the precede family. std's decomposition is already lean (D-0239 section 1) and gives
+Chuffed the same search as its native propagator, and baguette's gaps on these instances are elsewhere. The ROADMAP
+row is closed as measured, with no code.
+
+### 6. What is next
+
+- **gcc with variable counts reads windows, not domains.** Rule C of `lib/core/prop/gcc.ml` counts the possible
+  takers of `v` with `holds_v` (`lo <= v <= hi`), so a value removed from the inside of a domain still counts,
+  and the count's upper bound stays loose. Mondoku's `occurences = global_cardinality(puzzle[.., h], Colors)` feed
+  a `max - min` objective through these counts, and std's per-value `int_eq_reif` decomposition, which reads the
+  holes, closes 10-10-6 and 12-12-8. This is the hypothesis the split arm points to, not yet a measured fact
+  about rule C itself. Proposed as a TODO row (M18-coverage-T14), with two routes to measure: rule C over
+  `Domain.mem` (the hole as the free `- e_i >= 0` term, from the direct literal's two order literals), or routing
+  gcc with variable counts to std's decomposition in mznlib, measured over every gcc instance of the Challenge
+  lists, since the change reaches beyond this family.
+- **Per-node cost on very large models** (code-generator, 37 to 282 Mi/node at 300 000 to 570 000 constraints).
+  Belongs to M20-pernode. A profile of one code-generator instance at a node limit is the first step.
+- **Learning.** test-scheduling and concert-hall-cap need nogood learning in Chuffed. baguette's CDCL loop is off
+  by default (D-0219). A probe on mondoku 10-10-6 with `BAGUETTE_CDCL=1` did not finish in 90 s (103 069 nodes,
+  incumbent 2), consistent with the gcc diagnosis there. Its effect on test-scheduling and concert-hall-cap was
+  not measured here.
+
+### 7. Verification
+
+Worktree `/scratch/arthur/wt-precede` at the merge `5008e6e` plus this record (docs only): `scripts/check_fmt.sh` clean; `check_test_widths.py` clean; `dune build --root . bin/` (`ef23c899`) then `dune runtest --root . --force -j 8` under `ulimit -v 4000000`: 5 544 ok, 0 FAIL; `scripts/run_model_tests.sh` 259 passed, 0 failed; `scripts/check_determinism.sh` 259 models identical. No `lib/` change, so no diff lane. No model artefact changed.
+
+## D-0246  [AUTONOME] M19-config-T9, propagator priorities: a cost-class queue behind `BAGUETTE_PRIORITY=off|classes` (four classes, cheapest first, as Gecode and Chuffed). Every proof verifies under `classes`; on the tuning set it loses 0.074 of the share without proof (22+/37-) and gains 0.064 with proof (38+/25-) but loses two verified complete answers. The default stays `off`
+
+**Status**: DONE on `wave92-prio` (agent-prio, 2026-11-27), not merged. Base: main `62dae28` (gate 121 binary
+`ef23c899`). Touches `lib/core/engine.ml`, `lib/core/propagator.ml`, `test/unit/test_engine.ml`,
+`docs/ARCHITECTURE.md` section 5. Runs, scripts and tables: `/cluster/arthur/baguette-results/prio/` (README first).
+
+### 1. Context
+
+`engine.ml`'s header said the queue was "a plain FIFO, minus the cost-class ordering" because M1 had no
+propagator above bounds consistency. That stopped being true long ago: all_different's matching, gcc,
+cumulative, regular, circuit and table run beside thousands of reified rows and learned clauses, and a
+global woken by ten changes in a node runs as often as the FIFO pops it. Gecode orders by `PropCost`
+(unary to cubic), Chuffed runs the SAT engine's clauses before any propagator and its globals last.
+
+### 2. What was built
+
+`Propagator.cost_class inst ~arity`, ONE rule: a scope of at most two distinct variables is `Cheap`
+(Gecode's binary cost); otherwise the family's class from one table in `propagator.ml`; a family the table
+does not name falls back on its declared consistency (`Bounds`/`Value` to `Row`, `Domain`/`Checking` to
+`Global`). The classes, cheapest first:
+
+| class | families |
+|---|---|
+| `Cheap` | clause, learned_clause, bool_clause, array_bool_or/and, bool_eq, bool_not, bool2int, int_le, int_lt, int_ne, int_le_reif, int_eq_reif, int_ne_reif, and every instance over at most two variables |
+| `Row` | int_lin_le, int_lin_ne, int_lin_le_reif, int_times/div/abs (rows and guards), pb, array_int_maximum/minimum, array_int_element, member |
+| `Learned_row` | learned_pb |
+| `Global` | all_different_int, global_cardinality, cumulative, regular, circuit, table, inverse |
+
+The table is by name, against D-0098's move of the idempotence claim off one, because a wrong class costs
+time and never soundness, and because a `val cost` in `Propagator.S` would have to be stated by every
+implementer, including `lib/flatzinc/compile.ml` (not this session's to edit) and 19 test modules.
+
+The engine files each instance's class in a byte per id (`cls`, written at `create`/`add`, like `trig_bits`).
+Under `classes`, `propagate` keeps one FIFO per class: the dirty seed slots enter their class queues in id
+order before anything runs (clean slots are passed, and `check_skip`ped under BAGUETTE_DEBUG, at that
+point), then the loop runs the head of the cheapest non-empty queue until all are empty. A wake goes to its
+class queue, deduplicated by `in_queue` as before. Under `off` (the default, also an unset variable) the code
+path is the FIFO it was; any other value fails at startup. Four unit checks in `test_engine.ml` (the rule,
+the engine's filing, the run order on a scene, the same domains as off on three linear rows).
+
+**Soundness, stated in the engine's header.** Each pruning carries its own justification against the facts
+on the trail when it is made (I-P4, I-P6, I-X6), so a pruning made in another order is justified by the same
+argument. The loop still ends only when every queue is empty and every wake is delivered (mask, veto and
+advisor unchanged), so I-P2 holds at the return. The fixpoint is the same set of domains only when every
+propagator is monotone, which is not audited here. The ORDER of prunings changes, hence the trail, reasons,
+learned clauses, the tree and the proof bytes. Nothing read the FIFO order as such: the seed marks
+(D-0138) only mark, `check_declined` reads queue membership, the attribution stamp (I-T4) is per run,
+alldiff's gate (D-0215) is inside a run.
+
+### 3. Correctness under `classes`
+
+- Off is byte-identical: the 259 test models, stdout, rc, `.opb`, `.pbp` of `c7f01f7e` against main's
+  `ef23c899`, 0 differences; diff lane 347/347 and debug lane 333/333 equal the reference; scaling lane ok.
+- The 259 model tests under `classes`: 259 passed, every proof verified (70 proofs differ from off), and again
+  under `BAGUETTE_DEBUG=1`: 259 passed.
+- The diff lanes with a build whose default is `classes` (`e03daad5`, never committed): 347 of 347 runs
+  differ (345 in search counters, 43 in stdout), and under `--debug` 333 of 333 differ with no exit status
+  change, so no invariant fired.
+- D-0241 section 6's sample, 238 instances at 2 000 nodes, both encodings, every proof checked: 423 VERIFIED,
+  0 rejected; 28 checks timed out at 3 600 s and 9 died at 32 GB, 16 runs gave no proof (11 solver timeouts,
+  5 resource exits).
+- `dune runtest --force` under `classes`: 13 checks fail, every one a SCENE whose subject no longer arises in
+  the new order ("the Hall trace line ... is not in the proof", mutation lanes "the target line is not in the
+  proof, so nothing was tested", M2-L13's "one of them actually MOVED a bound"). No rejected proof, no wrong
+  answer. Making `classes` the default would oblige re-targeting those 13 scenes (or pinning `off` in them).
+
+### 4. Per node (release binary `f701eacd`, method of D-0243, I(N)-I(1) over nodes-1, same budget per arm)
+
+| instance | budget | ins/node off | classes | runs/node off | classes |
+|---|---|---|---|---|---|
+| elitserien handball12, no proof / proof | 3 000 | 11.35 M / 55.2 M | -12.0 % / -16.0 % | 1 410 | 1 773 |
+| tppv circ14cnonbal | 2 000 | 6.27 M / 18.2 M | +33.9 % / +21.6 % | 1 175 | 1 863 |
+| tppv circ8bbal | 3 000 | 4.30 M / 14.1 M | +7.1 % / -14.7 % | 898 | 1 038 |
+| costas13 | 3 000 | 2.79 M / 8.90 M | -31.2 % / -51.5 % | 358 | 410 |
+| qr2 | 20 000 | 0.82 M / 1.52 M | -0.4 % / -0.2 % | 340 | 341 |
+
+The trees differ (conflict counts within 1 %), so these are costs of different nodes of the same size. Runs
+per node RISE everywhere: the cheap propagators now do work a global did in bulk. On circ14,
+all_different falls from 27.9 to 10.1 runs per node while int_eq_reif rises from 432 to 695 and its
+effectful runs from 59 to 108: one Hall pruning that removed a value from many variables is replaced by
+reified rows finding it one Boolean at a time. Costas halves its proof (58 MB to 27 MB at 3 000 nodes).
+
+### 5. The tuning set at 300 s (D-0205), binary `f701eacd`, same binary both arms
+
+| arms | complete | incumbent | nothing | died | share | verdicts |
+|---|---|---|---|---|---|---|
+| offN / clsN | 42 / 44 | 115 / 113 | 40 / 40 | 3 / 3 | 0.537 / 0.463 | classes 22+ / 37- |
+| offP / clsP (verified) | 31 / 32 | 119 / 118 | 47 / 47 | 3 / 3 | 0.468 / 0.532 | classes 38+ / 25- |
+
+Status changes, without proof: gains fast-food ff63, ghoulomb 3-9-16, network 50, mondoku 10-10-6 (optimal),
+p1f-pjs 14 (a solution); losses still-life-wastage 11 and mqueens n11 (optimal), portal 20_9_100 (the
+solution). With proof: gains steelmillslab 14, pennies-opt n7, mondoku (VERIFIED optimal), stable-goods
+s-d7 (a solution); losses team-assignment data1_4_6 and vaccine v857 (VERIFIED optimal, both), smelt 4
+(optimal with an unfinished check), portal (the solution). 63 proofs of complete answers checked, 0 rejected.
+
+### 6. Decision
+
+[AUTONOME] D-0205's rule keeps an idea as default only if it gains on score and loses no verified complete
+answer. `classes` loses 0.074 of the share without proof (over the 0.03 noise), gains 0.064 with proof, and
+loses two verified complete answers with proof. **The default stays `off`**; nothing else changes, and the
+diff lanes need no re-record. The opposite signs with and without proof follow section 4: with proof a node
+pays for every line, and the order that writes fewer, more local lines (costas, handball) wins; without
+proof the runs per node it adds are paid in full.
+
+**Next task, as section 4 points at it** (one TODO, not opened): the loss is the cheap classes rerunning
+what one global pass did. Two candidates, to measure behind the same switch: (a) Gecode's dynamic cost, the
+class of a row computed from its CURRENT unfixed arity rather than its declared scope, so a reified row
+whose Boolean is fixed stays cheap but an open one waits; (b) staged propagation for all_different, its
+bounds stage in `Row` and only its matching in `Global` (Gecode's and Chuffed's two-stage alldiff), so the
+Hall pruning comes before the reified rows rediscover it. Idempotence was not pointed at: the self-wake
+veto already covers the linear rows.
+
+**Revert**: `git revert` of the two `M19-config-T9` code commits (`8e9f9a4`, `cc67cc4`'s doc line); with the
+default `off`, removing the switch changes no artefact.
+
+
+## D-0248  [AUTONOME] M22-review-T5: a proof write that fails (`Sys_error`: missing directory, full disk) ends with one line on stderr and a new exit status, 6. `Domain.of_list` and `change_of` leave `lib/` for a test helper
+
+**Status**: DONE on `wave94-latent` (agent-latent, 2026-11-27), not merged. Base: main `3d0a067`. Touches
+`bin/main.ml`, `lib/proof/encoding.ml`, `lib/core/domain.ml`, `test/unit/domain_helper.ml` (new), comments in
+`lib/core/{trace,store}.ml`, `lib/core/prop/linear.ml` and `docs/INVARIANTS.md` I-X10.
+
+### 1. Context
+
+The code review of 2026-11-23 (`docs/reports/2026-11-23-code-review.md`, T5) found that a write error on the
+proof had no handler. Measured on main `3d0a067` with `alldiff_hall_sat.fzn`: a `--proof` prefix in a missing
+directory, or a `.pbp` or `.opb` that is a symlink to `/dev/full`, ended with
+`Fatal error: exception Sys_error(...)` (or `Fun.Finally_raised: Sys_error("No space left on device")` for the
+`.pbp`, whose last flush is the `close_out` in `solve`'s `finally`), exit 2. Exit 2 is also usage's status, and
+a full disk names no file. No answer was printed in these runs, because the answer is printed after that
+`close_out`.
+
+### 2. The options for the exit status
+
+| option | consequence |
+|---|---|
+| 5, `exit_resource` (the review's suggestion) | no new number. But campaigns count 5 as the heap budget (`scripts/corpus_run.sh`'s REFUSED-RESOURCE, `tools/compare/refusal_causes.py`, the "of which the heap budget, exit 5" rows of D-0141 onward), so a full `/scratch` during a campaign would be filed as memouts, and 5's message says to re-run with a larger budget, which a missing directory does not need |
+| 4, internal | wrong: no invariant failed |
+| 2, as before | the same number as a bad command line, which is what made the old crash hard to read |
+| **6, a new status** | a harness can tell it apart from all five; one more number in the table at the top of `bin/main.ml` and in `--help`. A harness that knows only 0 to 5 sees an unexpected non-zero status, which is the right reading |
+
+### 3. The choice
+
+6, `exit_write` in `bin/main.ml`'s table, beside the other five, and in the `exit status` paragraph of
+`--help`. `main` catches `Sys_error msg` and `Fun.Finally_raised (Sys_error msg)` at `solve`'s call (every file
+`solve` opens is an output: the `.opb`, its `.opb.rows` body, the `.pbp`, the e2e prefix) and prints one line,
+`baguette: a write failed (MSG); the proof P.opb / P.pbp is INCOMPLETE, do not check or keep it`, then exits 6.
+It does not try to end the proof: the writer may be mid-line, and the file cannot be written anyway. No
+verdict reaches stdout, because the final answer is printed after the `.pbp`'s `close_out` and a stopped
+run's marker after its conclusion's flush; an optimisation run may have printed improving solutions before
+the failure, as a stopped run does. `test_endtoend` checks the three cases (exit 6, one line, no
+`Fatal error`, empty stdout). `scripts/corpus_run.sh` has no bucket for 6 and files it as `SOLVE-ERR-6`, its class for any
+other exit; adding one was not needed for this row.
+
+### 4. The removal
+
+`Domain.of_list` and `Domain.change_of` had no caller in `lib/` or `bin/` (grep, 2026-11-27). `test_domain`,
+`test_core`, `test_prop` and `test_consistency` used them, so both moved unchanged in behaviour to `test/unit/domain_helper.ml`
+(linked like `mem_guard.ml`, no `dune` line). `of_list` builds holes no trail entry explains, which veripb
+rejected when M7-T11 tried it (D-0072); the gate that kept it out of the solver was "it has no caller in
+`lib/`", and it is now "it is not in `lib/`". The comments that named the gate say so. No artefact changes.
+
+**Revert**: `git revert` of the commit `M22-review-T5: a proof write that fails ends with one line and exit 6
+(D-0248)` restores the crash with exit 2; the removal reverts on its own commit
+(`M22-review-T5: Domain.of_list and change_of move ...`).
+
+## D-0250  [AUTONOME] M19-config-T8, probing at the root: a bound literal of a small domain that fails under propagation is a failed one-decision node, its unit nogood filed at level 0 and its negation asserted there, behind `BAGUETTE_PROBE=off|root`. No new rule, no new `Explanation` constructor; every proof verifies under `root`. On the tuning set it gains 0.015 of the share without proof (+6 complete answers, none lost) and 0.040 with proof, but loses one verified complete answer by time, so the default stays `off`
+
+**Status**: DONE on `wave96-probe` (agent-probe, 2026-11-27), not merged. Base: main `f4863c6`. First item of
+M19-config-T8 only; equality merging into views and the LP relaxation stay open.
+
+### 1. Context
+
+The ROADMAP row lists three root techniques; this record builds and measures the first, probing (failed
+literals: Freeman's POSIT, Lynce and Marques-Silva; Chuffed's and CP-SAT's root probing). baguette's root is
+its propagation fixpoint and nothing else, so a value whose assignment fails at once under propagation is
+discovered again on every branch that tries it.
+
+### 2. What was built
+
+`lib/core/probe.ml` (new) and one function in `lib/core/search.ml` (`probe_root`, called by `search_core`
+before `dfs` or `cdcl`). Under `BAGUETTE_PROBE=root`, after the root fixpoint and before the first decision:
+for every unfixed variable whose domain spans at most 64 values, in store order, the two BOUND literals
+`x <= lo` and `x >= hi` (a Boolean's two polarities) are each pushed on level 1 as a decision and propagated.
+A fixpoint undoes the level. A conflict is a failed literal: the level's trace, the conflict's line and the
+bridges are written exactly as at a failed node (the search lends `state_conflict`, `bridges` and
+`close_root_conflict`, so the two stay one rule), then the unit clause `~l` at level 0, then the level is
+undone and wiped, and `~l` is pushed at level 0 with that clause as its explanation and `Reason.none`, then the
+root propagates again; a conflict there is the root conflict. A failed bound moves, so passes repeat while a
+pass failed something (bounds shaving). Budget: 5 M propagator runs (`Engine.runs`, deterministic) backed by
+a 10 s CPU cap (not deterministic, fires only where one run is expensive), overridable by
+`BAGUETTE_PROBE_BUDGET`, `BAGUETTE_PROBE_CPU`, `BAGUETTE_PROBE_WIDTH`; `BAGUETTE_PROBE_STATS=1` prints the
+census line on stderr. A misspelt switch exits 2. `off` never calls the pass.
+
+**The proof.** A probe is `Search.branch_split`'s first child at the root, so D-0018 gives its nogood `~l` as
+`rup`: negating it asserts `l`, and the trace lines just written (decision free, "facts -> claim") unit
+propagate the level's prunings up to the falsified conflict line. The only change is the FILING level, 0
+rather than 1, legitimate because the clause names no level-0 decision; `Justify.with_level 0` keeps it from
+the wipe of level 1. The negation is then a level-0 pruning on a clause with no facts, D-0077's assignment
+clause at p = 0: `Trace` writes its line `~l` (past a hole, the settled bound with the holes' facts, I-X9) as
+it writes any level-0 line, and the clause id goes on `stats.assign_clauses_rev`, which
+`retire_assign_clauses` deletes at the end of the search (I-X2). No rule and no `Explanation.t` constructor
+is added. Necessary assignments (a literal implied by both polarities) were left out: their proof needs the
+two implications as clauses, so the SURVIVING levels' traces written too, which is not the failed-node shape.
+
+**SPEC 3.4.** The tree is still the annotation's, explored once; probing removes root values every solution
+avoids, as a stronger root propagator would, takes no decision the search reports and changes no choice rule.
+It is a propagation, so 3.4's "anything else MUST be refused" does not bear on it. Proposed sentence for 3.4,
+NOT written into SPEC.md (the user decides normative text): *"Probing at the root (`BAGUETTE_PROBE=root`,
+D-0250) is opt-in. Before the first decision it pushes bound literals of small domains one at a time and
+propagates; a literal that fails is removed from the root domain, and the removal is written as the unit
+clause of that failed one-decision node. It takes no decision the search reports and substitutes no
+strategy."*
+
+### 3. Census, the tuning set at the root only (`BAGUETTE_NODE_LIMIT=1`, `--no-proof`)
+
+Three budgets on the 200 instances (`camp/census.txt` per instance): 100 k runs (`cdef`, release binary
+`a9ed53ad`), unbounded (`cinf`, same binary, stopped by the 300 s limit) and the chosen default, 5 M runs and
+10 s CPU (`cnew`, binary `059aabe6`).
+
+| budget | probe line | instances with a failed literal | literals failed | probed | budget hit | CPU median / p90 / max |
+|---|---|---|---|---|---|---|
+| 100 k runs | 200 | 84 | 1 770 | 85 163 | 175 | 0.06 / 0.57 / 291 s |
+| unbounded | 197 | 154 | 205 360 | 11 965 084 | 0 (32 stopped at 300 s) | 7.6 / 294 / 300 s |
+| 5 M runs, 10 s | 198 | 144 | 39 908 | 1 367 602 | 115 | 1.8 / 8.1 / 36 s |
+
+Run to completion, the pass costs a median 3.8 M runs and 0.7 s, but runs are not time: 2011_pentominoes_04
+spends 0.19 s a probe at 23 runs each (291 s under 100 k runs), black-hole 14 half a second; hence the CPU cap.
+No instance is refuted at the root by probing. The most failed literals at the default: ma-path-finding
+g16_p20_a30 4 633, stable-goods s-d16 4 250, jp-encoding data900 3 662, prize-collecting 32-4-8-2 1 682,
+network 50 1 608. The two instances with no probe line never reach the search in any arm (arithmetic-target
+8657 at the 420 s guard, ihtc-2024-marte i11 at the 8 GB heap budget, exit 5). Both caps are read between two
+probes, so one propagation can overrun them: the 36 s maximum is MZNC connect 0083, 41 M runs in the pass.
+
+### 4. Correctness under `root`
+
+- `off` against main: the 259 test models, stdout, exit status, `.opb` and `.pbp`, dev binaries `1527731a`
+  (main) and ``32fa42d3` (tip `4c78e12`; the off path is unchanged since, and section 8's lanes check the final tip)`: 0 differences (`art-off/`).
+- `root`: `scripts/run_model_tests.sh` 253 / 259 identical stdout; the six others (argmin_opt, argsort_opt,
+  opt_max_sat, opt_min_sat: other intermediate solutions, same optimum; bits_search_sat, count_rel_sat: another
+  first solution) have their proofs checked by hand: VERIFIED with the same verdict and bound. Every one of the
+  259 proofs VERIFIED, and again under `BAGUETTE_DEBUG=1` (no invariant fired). The expected outputs were not
+  touched: they record the default.
+- `test_search_strategy.ml` (`test_probe`, 25 checks): three models built so that one probe sees what the
+  root does not (a settle past a hole, a Boolean implication, a pigeonhole refuted with no decision); same
+  answer off and root, VERIFIED, every id deleted, M1-T36's identity, and on the two SATISFIABLE ones every
+  derived unit line flipped is refused by veripb with the full RUP wording (the D-0053 / D-0066 trap: the
+  line is checked, not vacuous).
+
+### 5. The tuning set at 300 s (D-0205), release binary `059aabe6` (`552d52c`), same binary both arms
+
+| arms | complete | verified | incumbent | nothing | died | share | verdicts |
+|---|---|---|---|---|---|---|---|
+| offN / rootN | 41 / 47 | - | 116 / 111 | 40 / 39 | 3 / 3 | 0.492 / 0.507 | root 27+ / 24- |
+| offP / rootP | 32 / 35 | 31 / 34 | 118 / 120 | 47 / 42 | 3 / 3 | 0.480 / 0.520 | root 31+ / 23- |
+
+Status changes without proof, all gains: amaze2 2012-06-28 (a solution, 15 s), still-life-wastage 11, ptv
+pax_period_20_5b, stable-goods s-d7 (and a better objective), network 50 and mondoku 10-10-6 (optimal). With
+proof: gains amaze2 (VERIFIED solution), sudoku_opt p90 (VERIFIED optimum), sudoku_fixed p89 (VERIFIED
+solution), mondoku 10-10-6 (VERIFIED optimum), hoist PU_1_2_2 and stable-goods s-d7 (a solution); one loss,
+flowshop-workers 5stat_ex6, whose VERIFIED optimum `off` proves at 296 s and `root` does not reach by 300 s.
+Its pass fails no literal (9 532 probes, 1.4 s), so the tree is the same and the loss is the pass's time at
+the edge of the limit. 67 proofs of complete answers checked: 65 VERIFIED, 0 rejected, two check timeouts at 3 600 s
+(smelt 4, both arms). Material: `camp/t300-table-{N,P}.txt`, `camp/t300-status.txt`.
+
+### 6. Decision
+
+[AUTONOME] D-0205's rule keeps an idea as default only if it gains on score and loses no verified complete
+answer. Without proof `root` gains 0.015 of the share, under the 0.03 noise, with six more complete answers
+and none lost; with proof it gains 0.040, over the noise, and three more verified complete answers, but loses
+one (flowshop-workers ex6, by time). **The default stays `off`.** The rule is applied as written, as D-0241 did
+with three more complete answers and a score within the noise; the case for `root` is the strongest of the
+M19 rows so far and goes to the full series (D-0205: the subset proposes, the full series decides). No
+default commit, so the diff lanes need no re-record and the 347 lane runs are unchanged by construction.
+
+### 7. What is left (follow-ups, not opened as rows)
+
+- The full Challenge series with `BAGUETTE_PROBE=root` against `off`, which decides; if it agrees in sign
+  the default change is one line (`mode_of_env`'s `None` arm) in its own commit, then the diff lanes count.
+- A cheaper pass where nothing fails: flowshop-workers spends 1.4 s probing 9 532 literals for nothing. Stop
+  the pass after a first sweep of K probes with no failure, or scale the CPU cap by the time limit (the
+  search's stop does not say it; `bin/main.ml` would pass it).
+- Necessary assignments (a literal both polarities imply) and learning from a probe's conflict (its 1UIP
+  clause is at times stronger than `~l`): both need the surviving level's trace or a learned constraint per
+  failure, so they are a second step, measured behind the same switch.
+- Equality merging into views and the LP relaxation, the row's other two items.
+
+### 8. Verification on the tip, default `off` (`552d52c`, dev binary `20a74b84`)
+
+`scripts/check_fmt.sh` clean; `check_test_widths.py` no wide domain; `dune runtest --root . --force` 5 615 ok,
+0 FAIL (peak 174 MB); `run_model_tests.sh` 259 passed, 0 failed; `check_determinism.sh` 259 models identical
+across two runs; `diff_lane.sh --tier all -j 8` 347 of 347 runs equal the reference, `--debug` 333 of 333
+(the debug-skip list's), never `--update`; `scaling_lane.sh -j 8` every line within its threshold.
+
+Under `root`: the 259 model proofs VERIFIED, also with `BAGUETTE_DEBUG=1` (section 4). Challenge sample at
+2 000 nodes (D-0241's 238 instances, both encodings, binary `059aabe6`, every proof checked): see the addendum below.
+
+Proof volume written: t300 1.43 TB (the sample's in the addendum), every proof deleted after its check.
+Material: `/cluster/arthur/baguette-results/probe/` (README.md).
+
+**Revert**: `git revert` of the `M19-config-T8` code commits (`443bdd8`, `42420ab`, `552d52c`) and the test
+commit (`4c78e12`); with the default `off`, removing the switch changes no artefact.
+**Addendum (2026-11-27, the sample and the volume).** Challenge sample at 2 000 nodes under `root`, D-0241's 238
+instances on both encodings, release binary `059aabe6`, every proof checked: 421 VERIFIED, **0 rejected**, 30
+check timeouts at 3 600 s, 9 checks killed at 32 GB, 16 runs without a proof (11 solver timeouts, 5 heap budget),
+the same shape as D-0246's sample (423 / 0 / 28 / 9 / 16). Proof volume written by this record: about 3.6 TB
+(t300 1.43 TB; the sample 0.75 TB by its recorded sizes plus 1.42 TB of unchecked leftovers, 90 files, logged in
+`ver-leftover.txt`), all deleted. The map commit `0b92cac` reverts with the code commits.
+
+## D-0251  [AUTONOME] The open items of 2026-11-27 the user handed back: three decided, two sent to a held-out comparison
+
+**Status**: DECIDED (orchestrator, 2026-11-27). The user's words, on being given the list of open decisions: "Je n'ai pas
+assez de connaissances des résultats pour prendre ces décisions. Soit tu sais les trancher toi-même soit il faut faire des
+comparaisons pour trouver leurs conséquences sur un set d'instances hétérogènes."
+
+### 1. Decided here
+
+| Item | Options | Choice | Why | Revert |
+|---|---|---|---|---|
+| SPEC 2.1 row for `lex_lesseq` / `lex_less` (D-0239), merged as text while the agent called it a proposal | keep the row; remove it and leave the globals undocumented | KEEP | the row describes what mznlib does and nothing else, in the form of the rows D-0217, D-0220 and D-0233 already added; a supported global missing from 2.1 is the worse state | delete the row in `docs/SPEC.md` |
+| Exit status 6 for a failed proof write (D-0248) | 6; the review's 5; a SPEC sentence | KEEP 6, no SPEC sentence | 5 is read as the heap budget by the campaign scripts; the status is documented where the others are (`bin/main.ml` usage text) and bucketed by `corpus_run.sh` (`PROOF-WRITE-ERR`) | `git revert c460150` |
+| ROADMAP row M18-coverage-T14, the fourth row added in this autonomous run where the rule allows three | keep; remove and stop agent-gccvar | KEEP, and no further row in this run | the row came out of a measurement (D-0244: mondoku 10-10-6 in 4 271 nodes against no answer in 240 000) and the work on it was already running; agents launched since are told to add none | delete the row |
+
+### 2. Sent to a comparison: `BAGUETTE_MINIMISE=rec` (D-0241) and `BAGUETTE_PRIORITY=classes` (D-0246) as defaults
+
+Both were measured on the tuning set of D-0205, which is also the set ideas are tuned on. `rec` loses nothing and adds 2 and 1
+complete answers with a pairwise share inside the noise; `classes` adds 2 and 1 and loses two verified optima with proof.
+D-0205's rule keeps both `off`, and that stands until the comparison of D-0252 reports: a HELD-OUT heterogeneous set (drawn by
+D-0205's rule from the Challenge lists, tuning-set instances excluded), four arms (`off`, `rec`, `classes`, both), with and
+without proof, 300 s.
+
+The rule, fixed before the numbers exist. A switch becomes the default if and only if, on the held-out set, in BOTH modes
+(with proof, without proof): it loses no more verified complete answers than it gains with a net gain of at least 2, and its
+pairwise share against `off` is at least 0.47 (D-0205's 0.03 noise band). Each instance whose answer is lost is listed. A
+default change is its own commit, followed by a lane re-record in its own commit and a gate. If neither passes, both stay
+`off` and the question is closed until one of the follow-ups of D-0241 section 7 or D-0246 section 6 changes the code.
+
+## D-0247  [AUTONOME] M18-coverage-T14: `global_cardinality` with variable counts goes to std's count decomposition in mznlib (route b), constant counts stay native. Rule C over holes (route a) was built, verified and dropped: it barely changes a tree and loses on score. What closes mondoku is the implied row between counts, not the holes
+
+**Status**: DECIDED (agent-gccvar, `wave93-gccvar`, 2026-11-27), not merged. The default changes in ONE commit,
+`4c5df61` (mznlib only, no solver code). Route (a) is `d94f08f` and its revert `fa32d4b`. Material:
+`/cluster/arthur/baguette-results/gccvar/` (README first).
+
+### 1. Context
+
+D-0244 section 3 measured that baguette does not finish mondoku 10-10-6 in 240 000 nodes while std's `count`
+decomposition for the variable-count calls finishes it in 4 271, and proposed as the cause that rule C of
+`lib/core/prop/gcc.ml` counts a value's possible takers by their window (`holds_v`), so a hole never lowers a count's
+upper bound. M18-coverage-T14 asked to measure that route against routing variable counts to std's decomposition,
+over every gcc instance of the Challenge lists.
+
+### 2. Census
+
+The 1 575 instances of the 2026-11-23 series lists (2011 to 2026), flattened again by MiniZinc 2.10.1 against this
+branch's base (main `a6602f0`). 205 of them called `baguette_global_cardinality` in the series' own flattening, but
+52 of those came through std's `alldifferent_except` (a gcc_low_up), which mznlib now routes elsewhere. On today's
+mznlib **153 instances in 27 families call gcc**: 55 with constant counts only, **98 with at least one variable
+count**. Of the 98, **40 reach a three-argument `global_cardinality` with variable counts** (521 calls: oocsp_racks
+10, mondoku 5, blocks-world 5 (the closed form), generalized-peacable-queens 5, chessboard 5, compression 5,
+warehouse 5) and 58 only `global_cardinality_low_up`, whose counts mznlib declares on constant bounds (gbac 19,
+community-detection 20, vaccine 5, evm-super-compilation 5, nside 3, gcc-benchmark 5, and one more). Script
+`census.py`, tables `census-*.tsv`, lists `routed.ids` (40), `lowup.ids` (58), `users.ids` (153).
+
+### 3. The two routes, and the one that decides mondoku
+
+**(a) rule C over `Domain.mem`** (`d94f08f`). A variable whose window holds `v` around a hole is no longer a
+possible taker; its indicator is cleared by the hole's own line, the remover's explanation from `Store.remover`
+(element.ml's `excl_hole`: the order clause of D-0086 with the remover's residue), the remover's facts join the
+push's reason, and a push that clears a hole is derived ahead (the hole clause is binary, so the line is not RUP
+against the counting row alone). Rule (b) got the same reading. A unit test (hi(n) falls from 3 to 1 under a
+decided `w`, ahead, the reason names `w`'s two bounds, D-0026 agreement) and three models, all proofs VERIFIED;
+dropping the remover's facts makes veripb 3.0.2 reject both SAT and OPT proofs ("Checking error at" lines 49 and 58),
+so the facts are load-bearing.
+
+**(b) std's decomposition for variable counts** (mznlib, constant counts stay native).
+
+**The probe that changed the diagnosis** (mondoku 10-10-6, no proof, 100 s): route (a) alone does NOT finish
+(140 163 nodes). Main's binary over main's mznlib PLUS std's implied row `length(x) >= sum(counts)` and nothing else
+finishes in 4 745 nodes (2.8 s); with route (a) too, 4 723; route (b), 4 271. So the inference mondoku lacks is the
+propagation BETWEEN counts (a count's upper bound from the others' lower bounds), which gcc.ml does not make and the
+implied row does, not the holes. D-0244's hypothesis was the wrong one, and its "split arm" measured the row.
+
+### 4. Measurements
+
+Binaries (release profile, `make release`'s command): main `a23edcfd` (main `a6602f0`, the base of every arm except
+A), route (a) `7fea1d0f` (`d94f08f`). Arms: base; A = route (a) over main's mznlib; B = route (b); S = native plus the
+implied row only; BC = native plus std's count rows; AS = A plus the row; SL = S plus the same row for low_up's
+counts; AB = A plus B. 16 at a time on fataepyc-06 (load 15 to 55 from other campaigns), 16 GiB address space,
+`MemoryMax=32G`, `--max-heap-mb 8192`, veripb 3.0.2 with 900 s on every proof that ended. Score: `agreement.py`
+(Challenge order, Borda), no-proof arms trusted.
+
+Node limit 20 000 (300 s cap), no proof. On all 153 users A grows the same tree as main wherever both stop on the
+node limit, except gbac UD8 (incumbent 10 128 against 10 127); the other differences are runs cut by the 300 s cap.
+On the 40: complete base 8, A 8, B 10, S 10, BC 10, AS 10; better incumbents against base B 10 (0 worse), S 3 (1),
+BC 2 (2), AS 2 (2). SL and ASL on the 98 add mondoku (+2) and nothing else.
+
+300 s, the 40 that route (b) reaches:
+
+| arm | no proof: complete, score share, wins/losses vs base | with proof: complete (verified), share, wins/losses |
+|---|---|---|
+| base | 9, 0.212 | 9 (8), 0.227 |
+| A | 10, 0.210, 2/3 | 9 (8), 0.219, 1/2 |
+| **B** | **11, 0.329, 15/1** | **11 (11), 0.296, 11/3** |
+| S | 11, 0.248, 5/0 | 11 (10), 0.258, 5/1 |
+| BC | 11, scores below B (1 win, 14 losses against B) | not run |
+| AB | 11, AB over B 2/2 | 11 (11), AB over B 2/1 |
+
+B's gains: mondoku 10-10-6 OPT in 2 s (6 s with proof, 4 271 nodes) and 12-12-8 in 13 s (27 s), both VERIFIED;
+oocsp_racks 100_r1, SAT in 22 s in every arm, whose proof check runs out of veripb's 900 s under base, A and S and
+VERIFIES under B; better incumbents on peaceable queens n9_q5, n11_q5, n13_q5, n25_q4 (B explores 4 to 5 times fewer
+nodes and still finds better), mondoku 14-14-8 (2 against 5) and 20-18-9 (4 or 5 against 11), warehouse olal41, olil4,
+oly20 and wlp02 (where main has no incumbent, or is refused by the 8 GiB heap budget on wlp02's 3 219-variable gcc).
+B's losses, all three with proof: two oocsp_racks answers found by both arms, 1.2 s and 2.7 s later under B
+(UNSAT 030_f7 in 10.2 s against 9.0 s, SAT 2018 100_r1 in 20.4 s against 17.7 s), and warehouse olil4, where the
+proof-logging run hit the 8 GiB heap budget at 127 s with 75 730 against main's 75 636 at 300 s. Without proof the
+one loss is the same 2018 100_r1, 13.1 s against 11.8 s. **No complete answer of any arm is lost by B**, with or
+without proof.
+
+300 s, the 58 low_up-only instances (only route (a) reaches them): no proof A 7 wins 8 losses over the 98 (score
+share 0.495); with proof 4 wins 8 losses (0.480), +1 verified complete (vaccine v857 OPT in 254 s) and one OPT lost
+(community-detection rnd_n100_e5000, 284 s under main and over 300 s under A, a check that timed out anyway).
+
+AB (route a on top of route b) ties B within the set's noise (D-0205's README: under 0.03 of the share), so route
+(a) adds nothing once route (b) is in.
+
+Proof volume written: 978 GB over 316 proof runs (largest 19.6 GB, warehouse wlp22), every proof deleted once
+checked.
+
+### 5. Decision
+
+[AUTONOME] **Route (b)**, in `mznlib/fzn_global_cardinality.mzn`: when some count is a variable, std's count
+decomposition with its implied row; when every count is fixed, the native propagator as before. By D-0205's rule it
+gains on score with and without proof and loses no verified complete answer. The closed form
+(`fzn_global_cardinality_closed.mzn`) now calls the bodyless predicate itself and stays native: it already posts
+`sum(count) = |x|`, the row that decides mondoku, and blocks-world, the only family using it, finds nothing in
+300 s either way. low_up stays native (not routed, not measured as a route). `gcc_shim_{sat,unsat}.fzn` (MiniZinc 1's
+two-argument shim, variable counts) were regenerated as their header instructs; outputs unchanged, proofs VERIFIED.
+
+**Route (a) is not kept** (`fa32d4b` reverts the solver half of `d94f08f`): it changes the tree on almost no
+Challenge instance, costs per node, and loses on score in both modes. Its three models stay as hole scenes.
+
+Clarity: the change is twelve lines of MiniZinc and a header; no solver code moves. What it costs is that gcc.ml's
+variable-count path is now reached only from low_up and from hand-written FlatZinc, so its D-0078 argument (the
+interval capacity the decomposition cannot reach) holds for fixed counts and low_up only.
+
+Revert: `git revert 4c5df61` (and `2bfeea9`, the two route tests, whose MUST-NOT-EMIT would then fail).
+
+### 6. What is left (no ROADMAP row added: the autonomous run's cap is reached)
+
+- **Count-to-count propagation in gcc.ml**: `hi(c_v) <= |x| - sum_{u != v} lo(c_u)` (and the mirror over the
+  variables that can only take cover values) is what the implied row gives Linear. A native rule would serve low_up
+  and fixed-count calls too; measured nowhere yet.
+- **low_up through the same route**: its counts are variables declared on constant bounds; S's row for them (SL)
+  changed nothing at 20 000 nodes, the full decomposition was not measured.
+- **gcc's cost on large scopes**: warehouse wlp02 (3 219 variables, counts 101 wide) exhausts the 8 GiB heap under the
+  native propagator in 150 s without proof, and on olal41 and olil4 B's per-value rows run about twice as many nodes in 300 s as the native propagator.
+
+### 7. Verification
+
+Worktree `/scratch/arthur/wt-gccvar` at `2bfeea9`: `scripts/check_fmt.sh` clean; `check_test_widths.py` clean;
+`dune build --root . bin/` (`ef23c899`, the dev build) and the release build `a23edcfd`, byte-identical to main's,
+since no solver code changes; `dune runtest --root . --force` 5 544 ok, 0 FAIL, peak RSS 170 MB;
+`scripts/run_model_tests.sh` 264 models passed with proofs verified; `scripts/check_determinism.sh` 264 identical;
+`mznlib/test/check_mznlib.sh` (MiniZinc 2.10.1) 73 ok; `scripts/diff_lane.sh --tier all -j 8` 347 of 347 runs equal
+the reference and `--debug` 333 of 333 (the lane's corpus is pre-flattened FlatZinc and the solver is unchanged,
+so route (b) cannot reach it); `scripts/scaling_lane.sh -j 8` ok. Route (a)'s own commit passed the same gate
+(5 555 ok, 262 models, determinism) before it was dropped; its only change to an existing artefact was
+`gcc_saturate_hole_unsat.pbp`, VERIFIED. Existing test artefacts changed by the kept route:
+`test/models/gcc_shim_{sat,unsat}.fzn` (bodies regenerated, outputs and verdicts unchanged); new:
+`gccvar_hole_{root_unsat,dec_sat,opt}` and `gccvar_src_{unsat,opt}`, all VERIFIED.
+
+## D-0253  [AUTONOME] M22-review-T4, the documentation pass: references in comments stand alone, docs/REFERENCES.md indexes them, and comments state the rule before the history
+
+**Status**: DONE on `wave98-docs` (agent-docs, 2026-11-27), comments and documents only. Taken in
+mode autonome on the user's request of 2026-11-27 ("bring every document, README and comment up
+to date, and rewrite the comments that teach poorly or that cite a reference without saying what
+it refers to").
+
+### 1. What was decided
+
+| Item | Options | Choice | Why | Revert |
+|---|---|---|---|---|
+| A reference in a comment (`D-0123`, `M6-T22`, `I-P3`) | delete references; keep them bare; keep them with a sentence that stands alone | KEEP, and at its first mention in each file the sentence says what the record established | the reference is how history is found; the sentence is what a reader needs without opening a 2.4 MB file | the pass's commits on `wave98-docs`, each `M22-review-T4:` |
+| An index of the references | none; a hand-written glossary of records; a generated table | `docs/REFERENCES.md`, generated once (title of each record, roadmap row of each task, first line of each invariant, shortened), a snapshot of 2026-11-27 | 392 distinct references are cited in `lib/` and `bin/`; a one-line meaning per id is enough to read a comment, and the record stays the authority | delete the file and its two links (README, CLAUDE.md) |
+| Order of a comment | as written (often history first) | rule or invariant, why it is sound, one example, history in one line with its reference | the user's instruction; most long comments put their point last | per file, the commit |
+| Section titles | by task (`M11-complexity-T3 (D-0142, E1): ...`) | by concept, the reference after | a title is read by someone who does not know the task numbers | per file |
+
+No code changed: every edit is inside a comment, a Markdown document or a script's header
+comment. The gate below shows the same binary behaviour (same model answers, same diff-lane
+artefacts).
+
+### 2. Findings recorded rather than fixed
+
+- `scripts/shrink.sh` relies on a `--disable-propagator` flag that `bin/main.ml` never
+  implemented; the solver refuses it (exit 2), so the script cannot localise a rejected step.
+  Its header says so now. Fixing it is code (a flag, or a script that uses another switch).
+- `scripts/bootstrap.sh` builds the opam switch with `-j "$(nproc)"`, 192 on fataepyc-06, where
+  the node rule is at most 16 parallel jobs. A one-time setup, but it is code: not changed.
+
+- `docs/PROOF-FORMAT.md` section 3, "The consistency clauses are in the `.opb`" (normative),
+  says no derivation cites a ladder id and `Encoding.consistency_id` has no caller in `lib/`.
+  `lib/core/ladder.ml`, `cumulative.ml` and `search.ml` (under `pb_ladder`) call it now. Left
+  for the user: the sentence is normative and its consequence (the ladder is load-bearing for
+  RUP) still holds.
+- Dead functions named in their comments: `Encoding.is_direct_row` (its caller went with
+  D-0131), `Justify.lit_hash`, `Writer.solx` and `Writer.obju` have no caller in `lib/` or `bin/`.
+
+### 3. What is done and what is left
+
+Done: README.md, CLAUDE.md (sizes, map, switches, counts), ARCHITECTURE.md sections 1, 3 and
+4, GLOSSARY.md (23 terms), INVARIANTS.md I-X10, SPEC.md section 6 (non-normative),
+PROOF-FORMAT.md section 4 (three missing rows), scripts/README.md, bench/README.md, twelve
+script headers, every module header of `lib/` checked, and the comments of propagator.ml,
+linear.ml, explanation.ml, reason.ml, store.ml, domain.ml, engine.ml, justify.ml,
+encoding.ml, writer.ml and every propagator but gcc.ml rewritten (the bodies of maxmin,
+arith, cumulative, regular, table, circuit, inverse and member had their references made
+self-standing, not a full rewrite).
+
+Left for a second pass: `lib/core/prop/gcc.ml`, `lib/flatzinc/compile.ml`,
+`lib/flatzinc/builder.ml`, `mznlib/`, `lib/core/search.ml`, `bin/main.ml` (held by other
+agents during this pass); the learning modules (`analysis.ml`, `learn.ml`, `learned.ml`,
+`pb_analysis.ml`, `reduce.ml`, `retention.ml` beyond its default, `ladder.ml`, `trace.ml`),
+`view.ml`, `lib/flatzinc/` and `lib/scp/` beyond their headers, and `tools/` beyond the check
+for dead paths.
+
+## D-0254  [AUTONOME] M22-review-T4, second documentation pass: the remaining modules' comments, docs/REFERENCES.md extended, and the four findings of D-0253 settled (a PROOF-FORMAT sentence corrected, bootstrap capped at 16 jobs, shrink.sh's missing mode removed, three dead functions removed)
+
+**Status**: DONE on `wave99-docs2` (agent-docs, 2026-11-27). The findings of D-0253 section 2 were
+decided by the orchestrator, to whom the user handed such decisions back (D-0251); this record
+says what was done and how to revert each.
+
+### 1. PROOF-FORMAT section 3, "The consistency clauses are in the `.opb`" (normative paragraph)
+
+The code is checked by veripb on every test, so the sentence was the stale side. Old bullet:
+
+> **No derivation this project emits ever cites a ladder id.** `Encoding.consistency_id`
+> has **no** caller in `lib/` or `bin/` at all — only `test/unit/test_proof.ml` — and the
+> one place in `lib/` that reads the id table, `derive_at_most_one`, is itself called only
+> from that same test file. Read from the emission side, the ladder looks like dead weight.
+
+New bullet:
+
+> **Derivations cite ladder ids, and the ladder would be needed even if none did.**
+> `Encoding.consistency_id` is cited by PB conflict analysis, which lifts a reason row onto
+> the rungs that carry its strength (`lib/core/ladder.ml`, called from `lib/core/search.ml`
+> under `pb_ladder`, on by default, M2-L11), and by the `pol` derivations of the counting
+> families: `element` (M4-T3), `gcc` (M7-T16, D-0078), `cumulative` (M4-T10, D-0096) and
+> `all_different` through `consistency_ids` (M7-T33). `derive_at_most_one` is still called
+> only from `test/unit/test_proof.ml`. (When this section was written for M1-T25, no
+> derivation cited a ladder id and the ladder looked like dead weight from the emission
+> side; M2-L11 was the first citer, on 2026-09-18.)
+
+The paragraph's normative conclusion (the ladder rows are in the `.opb` and are load-bearing for
+the checker's unit propagation) is unchanged. Verified with `git log -S` on each citer. Revert:
+the commit `M22-review-T4 (D-0254): the three findings of D-0253 ...`.
+
+### 2. `scripts/bootstrap.sh`
+
+`opam switch create -j "$(nproc)"` (192 on fataepyc-06) became `-j "${JOBS}"`, `JOBS = min(nproc,
+16)`, also exported as `OPAMJOBS` and passed to `opam install`, the node rule being no `-j`
+above 16. `bash -n` clean. Revert: the same commit.
+
+### 3. `scripts/shrink.sh`
+
+Its mode "disable one propagator at a time" needed a solver flag `--disable-propagator`, planned
+for M1-T7 and never added; `bin/main.ml` refuses it (exit 2), so the script always ended on "no
+single propagator accounts for it". The flag was NOT added. The mode and its `PROPAGATORS`
+variable are removed. What still works: the script solves the model with `--proof`, runs the
+checker, exits 0 when the proof is accepted, 1 when the solver fails (with its stderr), 2 without
+a checker, 3 when the proof is rejected, printing the checker's last lines and pointing at
+PROOF-FORMAT section 6. Tested on `trivial_sat.fzn` (exit 0) and a missing file (exit 1).
+`scripts/README.md`'s row says the same. Revert: the same commit.
+
+### 4. Dead code
+
+Grepped over `lib/`, `bin/`, `test/`, `tools/`, `scripts/` and `bench/`:
+
+| Function | Callers | Done |
+|---|---|---|
+| `Encoding.is_direct_row` | none; its only caller, `search.ml`'s `rests_on_a_clause`, went with D-0131 | REMOVED, with the table `direct_cids` it read, which four sites wrote and nothing else read |
+| `Justify.lit_hash` | none (`Explanation.lit_hash` is the one in use) | REMOVED |
+| `Writer.solution_excluding` (`solx`) | `test/unit/test_proof.ml` calls it to pin VeriPB 3.0's refusal of `solx` without a preserved set | KEPT |
+| `Writer.objective_update` (`obju`) | `test/unit/test_proof.ml`'s M5 gate greps for its definition to prove the "no caller" search ran | KEPT |
+
+One commit (`M22-review-T4 (D-0254): remove dead code ...`), the only one of this pass that
+changes code; `samecode.sh` reports DIFF on `encoding.ml` and `justify.ml` for it, as expected.
+Revert that commit to restore them.
+
+### 5. Comments
+
+The method of D-0253, with two additions the orchestrator asked for: every rewritten `.ml`
+file was compared with origin/main by `ocamlc -dsource` (parsed code identical) AND by a
+lost-token script that lists the numbers, references, bracketed names and backquoted words
+present in the old comments and absent from the new ones; each listed token was read and is a
+stale name corrected, a rewording or a quotation rewrapped. Sub-agents drafted the rewrites;
+each group's diff was reviewed with both scripts before its commit, and one sub-agent claim
+was corrected in review (`Learned.retire` has callers in `test/unit/test_learned.ml`).
+
+Done: `lib/flatzinc/` (all nine files including `compile.ml` and `builder.ml`), `lib/scp/`,
+the headers of the 15 mznlib files that needed it (only `%` lines changed), `analysis.ml`,
+`learn.ml`, `reduce.ml`, `pb_analysis.ml`, `learned.ml`, `ladder.ml`, `retention.ml`,
+`trace.ml`, `view.ml`, `restart.ml`, `phase.ml`, `activity.ml`, `checked.ml`, `interval.ml`,
+`debug.ml`, `prop/gcc.ml`, and the bodies of `maxmin`, `arith`, `cumulative`, `regular`,
+`table`, `circuit`, `inverse` and `member`. `docs/REFERENCES.md` now also indexes the
+references of `mznlib/`.
+
+Left: `lib/core/search.ml`, `lib/core/probe.ml` and `bin/main.ml` (agent-probe's), and
+`tools/` beyond the check for dead paths. Claims the sub-agents could not verify and left as
+written: builder.ml's note that a singleton-declared variable in a root-UNSAT row crashes
+`Justify.emit`; pb_analysis.ml's `level_of` returning 0 for a literal its declared domain
+falsifies (the code may give 1 when level 0 has no trail entry); analysis.ml's "2^30 trail
+positions in 15 GB" (the laptop's figure).
+
+## D-0256  [AUTONOME] M17-bench-series-T6, the per-node factor as a lane: `scripts/factor_lane.sh`. Today baguette spends 30 to 143 times Gecode's instructions per node without proof on D-0207's families (57 to 196 with), a quarter of what it spent on 2026-11-23 on alldiff and linear; on planted 3-SAT `--cdcl` walks Chuffed's tree and answers, at 38 times Chuffed's instructions per failure; and `--cdcl`'s proof on costas14 is REJECTED
+
+**Status**: DONE on `wave102-factor` (agent-factor, 2026-11-27), not merged. Base: main `3e60e8c`. No
+change under `lib/` or `bin/`. The measured binary is the release build of that source,
+`c79a6b0683eb6ce2c2245335e4ddde2d`. Runs in `/scratch/arthur/factor-runs/` (run1, run2, repro, st).
+
+### 1. What was built, and the choices made without the user
+
+`scripts/factor_lane.sh` (`make factor`), `bench/factor/` (plan, instances, generator, table script,
+README, `reference.tsv`), a section of `scripts/README.md` and a per-node table under
+`bench/series/HISTORY.md`. The lane's header is its manual. For each instance it runs baguette in four
+configurations (default and `--cdcl`, each with and without proof) and the reference, each twice (a
+base run stopped at one node, and the measured run), under `perf stat -e instructions:u`, and reports
+(I - I_base) / (U - U_base) per node or per failure, the factor over the reference and a geometric mean
+per family. Every proof, base runs included, is checked by the checker `scripts/checker.sh` resolves
+and deleted.
+
+| Choice | Options considered | Taken | Why | Revert |
+|---|---|---|---|---|
+| The instances | re-flatten D-0207's models with today's `mznlib`; reuse its files | reuse the six files of `pernode2/fzn/`, gzipped, bytes unchanged | the comparison with D-0207 is then on the same input; every file names its flattening command in its header | replace the files and re-record |
+| Budgets | D-0207's (full, or 20 000 nodes); smaller ones to shorten the lane | D-0207's | same trees as its table; the lane still ends in 6.5 to 8 minutes at -j 8 | change `plan.tsv`, re-record |
+| The unit | always the node; always the failure; the node only on the same tree | the node when baguette's nodes AND failures are within 2 % of the reference's, else the failure on each solver's own tree, always the failure under `--cdcl` | a per-node figure on two different trees compares two different searches; `--cdcl` counts no node for an implied right branch (as Chuffed LCG, D-0207 section 1) | `SAME_TREE` in `table.py` |
+| The reference | Gecode everywhere; D-0207's per family | Gecode, except rcpsp11_60 against Chuffed `--lazy off` (D-0207's same tree); rcpsp11_66 against Gecode cut at 20 000 nodes, per failure (Chuffed `--lazy off` runs past 60 s) | the reference D-0207 aligned is kept; no reference that does not finish | `plan.tsv` |
+| The 3-SAT family | uniform random near the threshold (SAT not certain); planted | planted, 200 variables, ratio 4.26, seeds 1 to 3 all kept, chosen before any run | satisfiable by construction; Chuffed answers in 0.06 to 0.20 s | `gen_3sat.py`, `plan.tsv` |
+| The binary | the dev build (the gates'); release | release (`_build_release`, `make factor` builds it) | D-0207 measured release; release runs fewer instructions per node (D-0171), so dev would inflate the factor | `BIN=` |
+| A proof the checker refuses | fail and record nothing; fail and record | the lane exits 1; `--record` still writes the reference, with that line's verdict in it | the counts were measured; the failure stays visible in the rc and in the file | `table.py`, the `record` branch |
+| The checker's cap | the solver's 4 GB `ulimit -v`; its own | 32 GB (`FACTOR_CHECK_CAP_KB`), the solver keeps 4 GB | veripb died at 4 GB on jr63's `--cdcl` proof (2.3 GB, "memory allocation of 1107296272 bytes failed"); it peaks at 4.3 GB RSS there; the diff lane met the same on openshop | the variable |
+
+Not a gate: a factor that moves never fails the lane; a crashed run or a proof not verified does (rc 1).
+
+### 2. Today's factors (run2, binary `c79a6b06`, fataepyc-06, 389 s at -j 8)
+
+Thousands of user instructions per unit, `n` per node on the same tree, `f` per failure, and the
+factor over the reference on the same unit. The reference column is per node and per failure.
+
+| instance | family | reference | default, proof | default, `--no-proof` | `--cdcl`, proof | `--cdcl --no-proof` |
+|---|---|---|---|---|---|---|
+| costas14 | alldiff | G 108 / 215 | 21 026/n (196x) | 13 145/n (122x) | 47 763/f (222x) | 31 532/f (147x) |
+| jr63 | element | G 213 / 425 | 19 681/n (92.6x) | 8 101/n (38.1x) | 37 775/f (88.8x) | 15 995/f (37.6x) |
+| mknap2-1 | linear | G 69.4 / 139 | 10 602/n (153x) | 9 929/n (143x) | 25 305/f (182x) | 24 117/f (174x) |
+| qr3 | clauses | G 28.0 / 56.0 | 1 603/n (57.3x) | 851/n (30.4x) | 2 889/f (51.6x) | 1 493/f (26.7x) |
+| sat3_200_1 | sat3 | G 83.7 / 168 | 2 602/f (15.5x) | 1 929/f (11.5x) | 2 591/f (15.5x) | 1 935/f (11.6x) |
+| sat3_200_2 | sat3 | G 75.7 / 152 | 1 867/f (12.3x) | 1 257/f (8.29x) | 1 698/f (11.2x) | 1 130/f (7.46x) |
+| sat3_200_3 | sat3 | G 78.2 / 157 | 1 900/f (12.1x) | 1 284/f (8.20x) | 1 750/f (11.2x) | 1 174/f (7.49x) |
+| rcpsp11_66 | cumulative | G 145 / 291 (own tree, cut) | 19 765/f (68.0x) | 4 644/f (16.0x) | 26 174/f (90.1x) | 4 185/f (14.4x) |
+| rcpsp11_60 | cumulative | CN 92.7 / 185 | 24 373/f (132x) | 3 712/f (20.0x) | 37 764/f (204x) | 4 215/f (22.7x) |
+
+Geometric mean per family (default proof / default no-proof / `--cdcl` proof / `--cdcl` no-proof):
+alldiff 196 / 122 / 222 / 147, element 92.6 / 38.1 / 88.8 / 37.6, linear 153 / 143 / 182 / 174,
+clauses 57.3 / 30.4 / 51.6 / 26.7, sat3 13.2 / 9.22 / 12.5 / 8.64, cumulative 94.6 / 17.9 / 135 / 18.1.
+
+Read across. The proof multiplies the no-proof cost by 1.07 (mknap) to 6.6 (rcpsp11_60). Per failure,
+`--cdcl` costs 0.88 to 1.21 times what the default costs per failure on the four families with a same
+tree (qr3 0.88, jr63 0.99, costas14 1.20, mknap2-1 1.21 without proof; 0.90 to 1.19 with), and it
+needs about half the nodes, so on these fixed searches the CDCL loop is neither cheaper nor dearer per
+unit of search.
+
+### 3. Next to D-0207, same instance and same tree
+
+D-0207 section 3's B columns (main `3dc1a81`, release `f244c35a`) against today's default columns, per
+node, thousands of instructions. Gecode's figures are the same to the third digit both days (28.0,
+108, 69.4, 213), which also shows the reference did not move. The trees are D-0207's: same node and
+failure counts on qr3, mknap2-1, jr63 (one failure fewer) and rcpsp, ten nodes more on costas14
+(21 139 against 21 129).
+
+| instance | D-0207 proof | today proof | change | D-0207 no-proof | today no-proof | change |
+|---|---|---|---|---|---|---|
+| qr3 | 1 841 (66x) | 1 603 (57x) | -13 % | 1 044 (37x) | 851 (30x) | -18 % |
+| costas14 | 54 119 (503x) | 21 026 (196x) | -61 % | 44 736 (416x) | 13 145 (122x) | -71 % |
+| mknap2-1 | 41 080 (592x) | 10 602 (153x) | -74 % | 40 298 (581x) | 9 929 (143x) | -75 % |
+| jr63 | 24 548 (115x) | 19 681 (93x) | -20 % | 12 586 (59x) | 8 101 (38x) | -36 % |
+| rcpsp11_66 (B's own tree, 2 010 nodes) | 10 201 | 9 538 | -6.5 % | 2 636 | 2 241 | -15 % |
+| rcpsp11_60 (B's own tree, 71 nodes) | 11 579 | 12 010 | +3.7 % | 2 007 | 1 829 | -8.9 % |
+
+The rcpsp lines are per node on baguette's own tree, as D-0207 gave them, read from the lane's raw
+counts (`/scratch/arthur/factor-runs/pernode.py`). The large falls are where D-0207 section 5 put the
+cost: learned rows that run and do not prune (costas14, mknap2-1, its item 1) and alldiff's Régin stage
+(item 4). Since 2026-11-23 main merged, among others, D-0209 (proof text), D-0226 (evicted learned
+constraints leave the engine, `tiered` retention by default), D-0235 and D-0242 (alldiff), D-0236,
+D-0243 and D-0245 (names, the wake path, analysis). The lane does not attribute the fall to one of
+them; a profile would (D-0207 section 4's method). The factor that remains is still 30 to 143 without
+proof, and the no-learning core D-0207 measured at 6 to 55 cannot be measured on main, which has no
+switch that turns learning off.
+
+### 4. The 3-SAT family: baguette no longer "gives nothing", and the gap is per node
+
+The review's probe (170 variables, ratio 4.26, uniform, on the laptop) found Chuffed at 0.012 s and
+baguette with nothing in 3 s. On the planted family at 200 variables:
+
+| seed | Chuffed LCG | Chuffed `--lazy off` / Gecode | baguette default | baguette `--cdcl` | `--cdcl`, activity, Luby, phase saving | learned constraints off |
+|---|---|---|---|---|---|---|
+| 1 | 15 140 nodes, 0.20 s | 2 297 604 nodes, 3.1 s / 37.9 s | 27 291 nodes, 8.2 s | 15 316 nodes, 6.7 s | 6 294 nodes, 1.5 s | nothing in 60 s (1.03 M nodes) |
+| 2 | 2 256, 0.06 s | 625 529, 0.8 s / 9.6 s | 3 269, 0.55 s | 2 131, 0.50 s | 1 677, 0.35 s | 272 194, 14.8 s |
+| 3 | 3 123, 0.06 s | 553 460, 0.7 s / 9.1 s | 5 572, 0.92 s | 3 358, 0.82 s | 3 727, 0.76 s | 244 575, 14.1 s |
+
+Wall times at load about 40, so load-dependent; the node counts are not. Every answer is a solution
+(`----------`), and the six proved runs (default and `--cdcl`) verify `s VERIFIED SATISFIABLE`.
+"Learned constraints off" is `BAGUETTE_PROPAGATE_LEARNED=off` (learned constraints proof-only), the
+closest main has to no learning.
+
+What it shows. With learning, baguette answers every instance; the default needs 1.8 times Chuffed's
+nodes on seed 1 and `--cdcl` 1.01 times (15 316 against 15 140, 11 572 against 11 374 failures): the
+CDCL loop of D-0219 builds Chuffed's tree. Without its learned constraints propagating, baguette
+behaves like Gecode and does not answer seed 1 in a minute. So what separates baguette from Chuffed on
+this family is the cost of a failure: Chuffed LCG spends 51.1 thousand instructions per failure on seed
+1 (`perf stat`, base `-t 1` subtracted), `--cdcl --no-proof` 1 935 thousand (38 times) and `--cdcl`
+with proof 2 591 thousand (51 times). Against Gecode's no-learning failure the factor is 8 to 12
+without proof, the lowest of all families, because a clause propagator is where baguette is closest to a
+SAT solver. The planted distribution is easier than the review's uniform probe, so "answers in seconds"
+is about this family, not that instance.
+
+### 5. `--cdcl` with proof on costas14: the proof is REJECTED
+
+`--cdcl --proof` on costas14 writes a proof veripb 3.0.2 refuses, every time (run1, run2, and a run on
+its own): "Checking error at p.pbp:7483531", the `rup` of `@c7410917`, "not implied by reverse unit
+propagation". The line follows the backtrack from level 8 to level 7, which writes `del id @c5108422
+@c5115524 ...` (line 7483526, older learned constraints) and `del range @c7410425 @c7410916` (line
+7483528). Measured on the kept proof:
+
+- the `del range` line keeping its last id (`@c7410915` as its end): still refused at 7483531;
+- both deletion lines removed: the whole proof verifies (`s VERIFIED SATISFIABLE`, 103 s);
+- only the `del id` line removed, the `del range` kept: verifies (`s VERIFIED SATISFIABLE`, 101 s).
+
+So a learned constraint deleted by that `del id` line is still needed by the next derivation. The
+default search's proof on the same instance verifies, and so do the other 35 proofs of the lane,
+`--cdcl` ones included (jr63's 2.3 GB one with the 32 GB cap).
+
+The same run with `BAGUETTE_RETENTION=off` (keep every learned constraint: 13 383 added, 0 evicted,
+against `tiered`'s 13 477 added and 7 396 evicted, six reductions) writes a proof that verifies (`s
+VERIFIED SATISFIABLE`, 10 582 nodes). That points at a retention eviction. It is evidence and not
+proof, because without evictions the tree differs a little (10 582 nodes against 10 594).
+
+Hypothesis, not checked in the code: `tiered` retention (D-0226's default) evicts a learned constraint
+that is still the reason of a literal on the trail (a locked clause, which MiniSat never deletes), and
+the CDCL loop, where a learned clause propagates at its asserting level and stays a reason across the
+backjump, is where that happens. `--cdcl` is opt-in, and every proof of the default search in this lane
+verifies, but the default uses the same retention, so the owner should check it too. Filed under
+`## Cross-session requests` for whoever owns `search.ml` and `retention.ml` next. Reproduce:
+`main.exe --cdcl --proof P --stats costas14.b.fzn` (from `bench/factor/fzn/`), then `veripb P.opb P.pbp`.
+
+### 6. Stability and duration
+
+Two runs of the lane (run1 at load 43, run2 at load 10 to 30, the same binary) over 90 measured
+processes: the instruction counts differ by a median of 0.0000 % and at most 0.018 % (a Gecode base
+run); the costs per unit by at most 0.0006 %, the factors by at most 0.0024 %. The lane is a
+measurement, not a sample. Duration 389 s at -j 8 (run2); run1 took 463 s with its jr63 check killed
+early at the old 4 GB cap, so a run at load 40 should take about 8 minutes. The longest chain is jr63
+`--cdcl` with proof (about 160 s) then the check of its 2.3 GB proof (229 s, 4.3 GB RSS). The solver's
+peak RSS is 650 MB (jr63 `--cdcl`, proof).
+
+### 7. What the lane cannot measure
+
+- Time. Instructions miss what is bound by memory rather than work (D-0207 section 7, D-0138's 13 % of
+  cycles in a copy); a change that only improves locality shows up here as nothing.
+- A factor on different trees: per failure, it compares the cost of a failure in two different searches
+  (rcpsp, sat3, every `--cdcl` line). The `tree` column says which lines are like for like.
+- Learning's effect on the tree, which is the other half of solving speed; the node counts are printed,
+  and section 4 needed a separate run with no budget to say whether baguette answers.
+- The no-learning core of D-0207 (its NL columns): main has no switch that turns learning off.
+- Growth with the learned database beyond the budgets: per-node cost on a cut tree is an average over a
+  small database (the scaling lane measures the growth).
+- Nine instances. A family mean of one instance is that instance.
+
+### 8. Reverting
+
+Drop `scripts/factor_lane.sh`, `bench/factor/`, the `factor` target and its README section, and the
+per-node table of `bench/series/HISTORY.md` (all on `wave102-factor`). Nothing else depends on them.
+
+## D-0255  [AUTONOME] M18-coverage-T14, D-0247's two follow-ups: the row between the counts posted beside the native propagator loses to std's decomposition for variable counts, and low_up stays native (no alternative moves a tree). On the way, a wrong UNSAT under a repeated cover value, fixed in mznlib
+
+**Status**: DECIDED (agent-gccsum, `wave100-gccsum`, 2026-11-27), not merged. The fix is ONE commit,
+`99d0e39` (mznlib only); the measured routes change nothing. Material: `/cluster/arthur/baguette-results/gccsum/`
+(README first).
+
+### 1. Context
+
+D-0247 section 6 left two questions. (1) Native gcc does not propagate between the counts
+(`hi(c_v) <= |x| - sum_{u != v} lo(c_u)`, and its mirror over the x that can only take cover values), which is
+what std's implied row gives `Linear` and what closes mondoku. Posting that row beside the native propagator
+would serve every variable-count call with no new rule in gcc.ml: does it beat routing variable counts to std's
+decomposition? (2) `global_cardinality_low_up` (58 Challenge instances) stays native: does the same class of
+inference, or std's decomposition, do better there?
+
+### 2. A wrong UNSAT under a repeated cover value (found while building the arms, fixed first)
+
+`global_cardinality(x, [1,1], c)` with x = [1,1] holds with c = [2,2]: each copy of the value counts the same
+tally. Gecode answers SAT. Main answered UNSAT, because std's implied row `|x| >= sum(c)`, which 4c5df61 (D-0247)
+brought into the variable-count route, sums the repeat twice. Before 4c5df61 the native route answered SAT, so
+D-0247 introduced it. Same check on every form, main's mznlib against the one before 4c5df61 against Gecode
+(script `dupcover.sh`): fixed counts SAT/SAT/SAT, closed three-argument form SAT/SAT/SAT (its `sum = |x|` row was
+already guarded), low_up SAT/SAT/SAT, **low_up_closed UNSAT/UNSAT/SAT**: std's par check `|x| in
+sum(lb)..sum(ub)`, copied into mznlib since D-0146, has the same flaw. Chuffed, which runs std's text, gives the
+wrong answer on four of the five. alldifferent_except and nvalue (D-0233) iterate over sets of values and have no
+such row. Fix (`99d0e39`): both rows are posted only when `card(array2set(cover)) = length(cover)`, a par test, so
+a cover of distinct values gets the same rows as before. Not the same bytes, though: MiniZinc 2.10.1's
+common-subexpression output moves with ANY edit of these files. Of the 98 Challenge instances of section 3, 86
+flatten identically (X_INTRODUCED names and output annotations normalised) and 12 differ (from 1 line on warehouse
+olal41 to 15 000 on chessboard n39_2), blocks-world among them although it never reaches the changed branch, and
+the same guard bound in a `let` moved 20 others (`cmpfix*.txt`). `ee6e580` corrects the header that claimed byte
+identity. Solved at 20 000 nodes, the 12 give main's status and incumbent on every instance that reaches the
+limit; the two that differ are nside runs the 300 s cap cut first (`tables/nl-fix.txt`). The arms of section 3
+were flattened with main's mznlib, before the fix. Four models, sat with an unsat twin for each form (`gccvar_dupcover_src_*`,
+`gcc_low_up_closed_dupcover_src_*`), outputs as Gecode's, proofs VERIFIED, both unsat twins decided by the
+solver, not by the flattener. That commit's gate: 5 590 ok, 0 FAIL (peak RSS 170 MB), 268 models, mznlib 77 ok.
+
+### 3. Arms and measurements
+
+One binary for every arm, main's release build `456603e1` (main `c651bbb`, `make release`'s command); the arms
+differ by their mznlib only (`mklibs.sh`), each instance flattened again by MiniZinc 2.10.1:
+
+- **M**: main (variable counts to std's decomposition with its implied row; low_up native).
+- **S**: variable counts to the native propagator plus ONE row `sum(counts) in L..|x|`, L = number of x whose
+  declared domain lies inside the cover (|x| in the closed case, so it is also the mirror rule), guarded on a
+  distinct cover.
+- **BC**: native plus std's count rows and implied row (arm (iii): the decomposition with the native capacity
+  reasoning beside it).
+- **LS**: low_up native plus the same row over its declared counts. **LD**: low_up through std's decomposition.
+  **LDN**: low_up native plus std's decomposition.
+
+Stages, 32 at a time on fataepyc-06 (load 4 to 30 from other work), 16 GiB address space, `MemoryMax=32G`,
+`--max-heap-mb 8192`, veripb 3.0.2 with 900 s on every proof that ended; score by `agreement.py` (no-proof arms
+trusted): nl = `BAGUETTE_NODE_LIMIT=20000` capped at 300 s; t300 and p300 = 300 s without and with proof.
+
+Question 1, the 40 instances D-0247's route reaches (mondoku's five among them):
+
+| arm | nl: share, W/L vs M | t300: complete, share, W/L vs M | p300: complete (verified), share, W/L vs M |
+|---|---|---|---|
+| **M** | 0.433 | 11, 0.438 | 11 (11), 0.425 |
+| S | 0.304, 1/12 | 11, 0.296, 2/14 | 11 (10), 0.296, 2/12 |
+| BC | 0.263, 0/13 | 11, 0.267, 0/13 | 11 (11), 0.279, 0/12 |
+
+Mondoku: 10-10-6 and 12-12-8 are OPT in every arm (12-12-8 in 12.5 s under M, 18.9 s S, 17.9 s BC; with proof
+24.9, 30.9, 29.3 s, all VERIFIED), and on 14-14-8 and 20-18-9 M's incumbents are the best (2 and 4 against S's 3
+and 10). The row closes mondoku as D-0247 measured; what S lacks is elsewhere: the per-value rows read holes
+and are cheaper per node on peaceable queens (S explores 3.5 times more nodes in 300 s and finds worse), and the
+native propagator is what exhausts the heap on warehouse (wlp02, wlp22, oly20 REFUSED or without incumbent under
+S and BC, answered under M). S loses oocsp_racks 100_r1's verified answer (its check runs out of 900 s, as
+D-0247's S did). BC is below S.
+
+Question 2, the 58 low_up-only instances:
+
+| arm | nl: share, W/L vs M | t300: share, W/L vs M | p300: complete (verified), share, W/L vs M |
+|---|---|---|---|
+| **M** | 0.257 | 0.253 | 9 (8), 0.316 |
+| LS | 0.251, 0/2 | 0.244, 2/3 | 9 (8), 0.368, 8/1 |
+| LD | 0.243, 1/2 | 0.273, 6/2 | 9 (8), 0.316, 4/5 |
+| LDN | 0.249, 1/3 | 0.230, 1/6 | not run (below LD 0/8 at t300) |
+
+At 20 000 nodes every arm reaches the incumbent M reaches on all 46 instances stopped at the limit; the nl
+losses are runs the 300 s cap cut first. The node sums over the instances both complete differ by under 0.1 %
+for LS, so the row prunes almost nothing there: low_up's counts sit on constant bounds and only rise from
+x being fixed, which rule C already sees. LD's per-value rows read holes (the class route (a) of D-0247 aimed
+at) and shorten one tree, evm-super-compilation BDARUMA (37 183 nodes against 68 241), without changing an
+answer. LS's 8/1 with proof is all incumbents at the 300 s cut, so I ran M and LS again with proof on those 8
+instances, paired: M's own incumbent moved on 7 of 8 between its two runs, and LS's second run beat M's second
+on 3, lost 1, tied 4. That spread, and the identical trees at the node limit, make the with-proof gain node rate
+under load, not inference. LD gains 0.020 without proof, under D-0205's noise of 0.03, and ties with proof.
+No arm gains or loses a complete answer against M in either mode.
+
+Load-bearing check on the route kept (CLAUDE.md, proof discipline): three models where the implied row decides,
+`gccvar_sum_src_{unsat,sat,opt}` (`6944d6e`), outputs as Gecode's, proofs VERIFIED. Replacing the row in the
+.opb by `>= 0` (`droprow.py`, the label kept so later ids do not move) makes veripb 3.0.2 reject all three
+("Checking error at" lines 4, 38 and 33); the satisfiable one is rejected at a line of its search after a
+conflict the row caused, so the row is load-bearing over a satisfiable model.
+
+Proof volume written: 1 071 GB over 310 proof runs (`p300` 991 GB, `p300b` 80 GB) (largest 19.6 GB, warehouse wlp22 under S), every proof
+deleted once checked.
+
+### 4. Decision
+
+[AUTONOME] **Nothing changes in the routes.** Variable counts keep std's decomposition (M beats S and BC in all
+three stages, and S loses a verified answer); low_up stays native (neither LS nor LD gains by D-0205's rule in
+both modes, and neither moves a tree at the node limit). The only behaviour change is the soundness fix of
+section 2, in its own commit, which no Challenge instance reaches (every cover there has distinct values). The
+mznlib headers of `fzn_global_cardinality.mzn` and `fzn_global_cardinality_low_up.mzn` now cite these
+measurements. A native count-to-count rule in gcc.ml is not built: the row that would be its exact effect
+measures no gain on the calls it would serve (fixed counts have nothing to propagate between, low_up's are LS).
+
+Revert: `git revert 99d0e39` restores both unguarded rows (and the wrong UNSAT; the four dupcover models then
+fail). The test commit `6944d6e` is independent.
+
+### 5. Verification
+
+Worktree `/scratch/arthur/wt-gccsum`. On `ee6e580` (the branch head before this record): `scripts/check_fmt.sh`
+clean, `check_test_widths.py` clean, `dune build --root . bin/` gives `e2d7c833` (main's dev build: no solver code
+changes on the branch), `dune runtest --root . --force` 5 590 ok, 0 FAIL, peak RSS 170 MB,
+`scripts/run_model_tests.sh` 271 models passed (264 + the seven of D-0255), `mznlib/test/check_mznlib.sh`
+(MiniZinc 2.10.1) 80 ok. On `6944d6e` (the same solver and test models; the later commits change mznlib
+comments and docs only): `scripts/diff_lane.sh --tier all -j 8` 347 of 347 runs equal the reference,
+`--debug` 333 of 333, `scripts/scaling_lane.sh -j 8` ok (every line within its threshold), `scripts/check_determinism.sh` 271 models identical across two runs. The diff lane's corpus is
+pre-flattened FlatZinc, so no mznlib change can reach it.

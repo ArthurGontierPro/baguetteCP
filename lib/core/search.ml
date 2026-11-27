@@ -1,64 +1,89 @@
-(* search.ml: depth-first search with every decision and backtrack reflected in the
-   proof (M1-T10, Part 2). Read the module header below in full before calling
-   [solve] -- the proof-logging strategy it implements is a specific, deliberate
-   answer to "how a decision made mid-search can ever be cited by a checker that never
-   sees it as an axiom", not an incidental detail.
+(* search.ml: the search. A depth-first walk over binary decisions ([dfs]) in which every
+   decision, every pruning made under it and every backtrack is written into the VeriPB
+   proof, so that the checker verifies the answer without trusting the walk (M1-T10 made
+   the search proof-logged). docs/SPEC.md 3.4 governs it: first-fail variable selection,
+   min-value branching, depth first, restarts off unless asked for.
+
+   What is in this file, in order:
+     - the node outcomes ([node], [nogood]) and the counters ([stats]) that tests, --stats
+       and the time-limit summary read;
+     - the branching orders: SPEC 3.4's default ([spec_order]), the annotation's orders
+       ([sequence]), the two decision shapes ([Split] at a bound, [Assign] of one value),
+       phase saving and the activity order;
+     - [config], what the search does with a conflict, which opt-in strategies run and the
+       break knobs a test sets to watch the checker reject a wrong proof, and
+       [default_config];
+     - the pieces a conflict uses: nogoods, the root conflict, the settle bridge
+       ([bridges]), PB conflict analysis, learned constraints that propagate (a unit as a
+       permanent bound, a wider clause as an engine instance), branch and bound;
+     - [dfs], the default search, and [cdcl], the CDCL loop (opt-in, --cdcl or
+       BAGUETTE_CDCL=1, D-0219), which can backtrack chronologically on a long jump
+       (--chrono, D-0224);
+     - [search_core], which runs the root probe (lib/core/probe.ml, BAGUETTE_PROBE=root,
+       off by default, D-0250) and then [dfs] or [cdcl]; [solve] and [optimise], which
+       delete every proof id the search still holds and write the conclusion.
+
+   Restarts (SPEC 3.4, opt-in since D-0137) are the backjump the search already writes,
+   taken to a level a policy chooses, so they need no proof rule of their own. Read the
+   two sections below before changing how anything reaches the proof.
 
    ---------------------------------------------------------------------------
-   The hard question, and why the answer here is neither of the two the task poses
+   How a decision enters a proof that never assumes it
    ---------------------------------------------------------------------------
 
-   docs/SPEC.md 3.4: first-fail variable selection, min-value branching, depth-first,
-   restarts disabled. That part is unsurprising. The proof-logging strategy is not.
-
-   A decision is not implied by the model, so it cannot enter the proof as a bare fact:
-   neither [rup] nor [pol] can derive an unentailed literal (docs/DECISIONS.md D-0009
-   demonstrates this directly against veripb -- a bare literal in a [pol] is the
-   trivial axiom [lit >= 0], and [rup] requires a genuine logical consequence), and
-   [a] (assumed-checked) is forbidden outside debugging (docs/PROOF-FORMAT.md section
-   2). [red] (redundance) does not apply either: it justifies adding a constraint that
-   preserves *satisfiability* under a witness substitution, which is not available for
-   an arbitrary domain split (a solution with x=3 cannot be "witnessed" into one with
-   x>=5; it may simply not exist).
-
-   The task offers two standard resolutions:
-     (a) every derived constraint carries the negated decision literals, so it is
-         globally valid rather than valid-under-assumption;
-     (b) nothing is logged inside a branch; the branch's refutation is derived only
-         when it closes.
-
-   This module used to implement (b) for the branching case, and that was the defect
-   docs/DECISIONS.md D-0018 is about. The nogood over the active decisions was emitted
-   as a [rup] and veripb rejected it; D-0012, D-0014 and D-0017 concluded from that that
-   the nogood was *unreachable* and needed new machinery. It is not, and it does not.
-   A [rup] check negates its target -- asserting each decision as a unit -- and then unit
-   propagates over the database one single constraint at a time. With nothing logged
-   inside the branch, the database held only the model rows, so the checker was being
-   asked to re-derive a multi-row bounds fixpoint in one step. That is the one thing PB
-   unit propagation cannot do, and it never had to: the solver already performed that
-   fixpoint and can simply write down each step.
-
-   So what is implemented now is (a) applied *per pruning* rather than per conflict, in
-   the form D-0018 takes from the Glasgow Constraint Solver. Every pruning gets one line
-   (lib/core/trace.ml):
+   THE RULE. A decision is never written as a fact. Every pruning made inside a branch is
+   written as one line (lib/core/trace.ml) that mentions no decision at all:
 
        rup 1 <the order literal the pruning established>
              1 ~<a bound fact the propagator read> ... >= 1 ;
 
-   which is globally valid and mentions **no decision at all** -- it says "these bounds
-   imply that bound", a consequence of one model row. The decisions appear in exactly one
-   line, the nogood, unchanged in form from what this module always emitted; it is RUP
-   now because the checker has a trace to propagate along. We keep the lazy variant: the
-   trace is written when a branch actually fails, by walking the trail, not at every
+   It says "these bounds imply that bound", a consequence of one model row, so it is
+   globally valid. The decisions appear in exactly one line, the branch's NOGOOD (the
+   clause "not all of these decisions"), written when the branch fails. The nogood is RUP
+   because the checker now has the trace to propagate along: negating it asserts each
+   decision as a unit, and the trace lines then re-derive the branch's prunings one row at
+   a time up to the conflict. This is the form the Glasgow Constraint Solver uses, and
+   D-0018 is the record (a branch nogood is RUP over the branch's own logged trace).
+
+   The trace is written lazily: when a branch fails, by walking the trail, not at every
    pruning on every successful path. [Trace]'s header says why that is sound here and
    what would break it.
 
-   **A conflict with no decision active** is unchanged: it renders the propagator's own
-   [Explanation.t] -- D-0013's weaken-out-the-other-variables, divide, add -- as a [pol]
-   chain. That is the derivation M1-T12 made [Explanation.t] able to express, and D-0018
+   WHY A DECISION CANNOT BE A FACT. A decision is not implied by the model, and neither
+   [rup] nor [pol] can derive an unentailed literal: a bare literal in a [pol] is the
+   trivial axiom [lit >= 0], and [rup] requires a genuine logical consequence (D-0009
+   demonstrates this against veripb, and records that a bound fact in a [pol] needs a
+   constraint id, not a literal). [a] (assumed, unchecked) is forbidden outside
+   debugging (docs/PROOF-FORMAT.md section 2). [red] (redundance) does not apply either:
+   it adds a constraint that preserves *satisfiability* under a witness substitution,
+   and there is none for an arbitrary domain split (a solution with x=3 cannot be
+   "witnessed" into one with x>=5; it may simply not exist).
+
+   The two standard resolutions are:
+     (a) every derived constraint carries the negated decision literals, so it is
+         globally valid rather than valid-under-assumption;
+     (b) nothing is logged inside a branch; the branch's refutation is derived only
+         when it closes.
+   The rule above is (a) applied *per pruning* rather than per conflict.
+
+   History, in one paragraph. This module used to implement (b), and that was the defect
+   D-0018 is about. The nogood over the active decisions was emitted as a [rup] and
+   veripb rejected it, because with nothing logged inside the branch the database held
+   only the model rows, and the checker was asked to re-derive a multi-row bounds
+   fixpoint in one step of unit propagation, which PB unit propagation cannot do. D-0012
+   (the nogood is not RUP from the model rows alone), D-0014 (decision-free lemmas help
+   but do not close it) and D-0017 (SAT runs fail too, because their nogoods are checked
+   as well) concluded that the nogood was *unreachable* and needed new machinery. It was
+   not, and it did not: the solver already performed that fixpoint and can simply write
+   down each step.
+
+   **A conflict with no decision active** renders the propagator's own [Explanation.t] as
+   a [pol] chain: D-0013's derivation of a bounds conflict (weaken out the other
+   variables, divide, add), which M1-T12 made [Explanation.t] able to express. D-0018
    keeps it: where a pruning is not plain RUP over its row, the [pol] is what the trace
    line falls back on (D-0018 point 2). No such fallback was needed for any [int_lin_le]
-   pruning in this checkout; see the M1-T13 hand-back report for what was run.
+   pruning when M1-T13 (the branching half of D-0013) was done; its hand-back report
+   says what was run.
 
    ---------------------------------------------------------------------------
    How a decision and a backtrack become proof steps
@@ -69,14 +94,18 @@
    is first-fail with [k = lo]: try [x = lo] -- i.e. [~l] -- before [x > lo] -- i.e.
    [l]). Which variable, which [k] and which side first are the *only* things the order
    decides, and none of them reaches anything below this paragraph: one literal, one
-   level, one trace, one nogood, whatever the order says. Both branches run inside their own
-   [Store] decision level (docs/DECISIONS.md D-0008), tagged in the proof with
-   [Writer.set_level] to match: *every* decision opens a level and *every* backtrack
-   wipes one, which is the sense in which "every branching decision and every
-   backtrack MUST be reflected in the proof" (docs/SPEC.md 3.4) holds here. Since
-   D-0018 each individual pruning inside a branch is rendered too, tagged with the
-   level of the trail entry that produced it, so one [w] retires exactly the lines
-   whose prunings the matching [Store.backtrack] undid.
+   level, one trace, one nogood, whatever the order says.
+
+   Both branches run inside their own [Store] decision level, and the proof writer is
+   moved to the same level with [Writer.set_level]: backtracking deletes proof lines by
+   level, not reason by reason (D-0008). *Every* decision opens a level and *every*
+   backtrack WIPES one, which is the sense in which "every branching decision and every
+   backtrack MUST be reflected in the proof" (docs/SPEC.md 3.4) holds here. A wipe is
+   [Justify.wipe_level l]: it deletes every proof line tagged at level [l] or above.
+   VeriPB 3.0 has no wipe command, so the writer keeps the level tags itself and writes
+   the deletions (D-0024); this file says [w] for such a wipe. Each pruning's trace line
+   is tagged with the level of the trail entry that produced it, so one [w] retires
+   exactly the lines whose prunings the matching [Store.backtrack] undid.
 
    Ordering is load-bearing and has its own [Debug.check] below: the nogood is emitted
    **before** the level it mentions is wiped. D-0018 point 4 exists because reversing
@@ -90,28 +119,31 @@
    two clauses, both still live in the database at that point) into the ancestor-only
    nogood, i.e. the failure is propagated exactly one level up, mirroring chronological
    backtracking. The two child nogoods are then retired with a single [w] at the level
-   they were tagged with (D-0008: one wipe per backtrack, not one deletion per
-   reason), and the combined nogood survives, tagged one level up. Recursing this to
-   the root produces, when the whole search space is exhausted, the empty clause --
-   an unconditional contradiction -- which is exactly the id [conclusion UNSAT] cites
-   (invariant I-S2: the proof independently establishes it, not merely the solver's
-   own "I looked everywhere" bookkeeping).
+   they were tagged with, and the combined nogood survives, tagged one level up. With
+   learning on (the default, M2-L3), a nogood keeps only the decisions the conflict rests
+   on, and a frame whose level it does not name skips its sibling and passes the nogood
+   up unchanged: that skip is the backjump. Recursing this to the root produces, when the
+   whole search space is exhausted, the empty clause -- an unconditional contradiction --
+   which is exactly the id [conclusion UNSAT] cites (invariant I-S2: UNSAT is printed only
+   when the proof establishes it, not on the solver's own "I looked everywhere"
+   bookkeeping).
 
    ---------------------------------------------------------------------------
-   M16-file-review-T1 (D-0186): no literal set is a list
+   Literal sets are tables, not lists (D-0186)
    ---------------------------------------------------------------------------
 
    A conflict handles sets of decision literals: the union of two child nogoods
    ([combine_nogoods]), the decisions a settle bridge protects ([bridges]) and the
-   nogood literals kept for them ([dfs]). Each was a list asked [List.exists Lit.equal],
-   so a conflict at depth [d] cost O(d^2) literal comparisons, each a string compare of
-   two variable names; on the lane that was a third of 2011 roster's instructions and
-   half of 2018 soccer's (D-0186 has the profiles). The rule: membership in such a set
-   is asked of a [Lit_tbl], keyed through [Lit.equal] itself, so the predicate is the
-   one the list scan applied, and every list the old code returned is still built, in
-   the same order, so no caller sees a difference.
+   nogood literals kept for them ([dfs]). Membership in such a set is asked of a
+   [Lit_tbl], keyed through [Lit.equal] itself, so the predicate is the one a list scan
+   would apply, and every list a caller receives is still built in the same order, so no
+   caller sees a difference. Why: each set was a list asked [List.exists Lit.equal], so a
+   conflict at depth [d] cost O(d^2) literal comparisons, each a string compare of two
+   variable names; on the differential lane that was a third of 2011 roster's
+   instructions and half of 2018 soccer's. D-0186 (M16-file-review-T1, the core read file
+   by file for costs quadratic in the tree's depth) has the profiles.
 
-   And a walk made at every node allocates nothing per element: the staged order of an
+   A walk made at every node allocates nothing per element: the staged order of an
    annotated search ([sequence]) gathers a phase's live variables in one pass into a
    scratch array and copies out the live prefix, the array [Array.of_seq] gave. A
    [Debug.check] made per node or per conflict sits under [if Debug.enabled], so that
@@ -122,8 +154,9 @@ module Lit = Baguette_proof.Lit
 module Writer = Baguette_proof.Writer
 module Encoding = Baguette_proof.Encoding
 
-(* D-0186: a literal-keyed table through [Lit.equal], never the polymorphic compare (the
-   same table as lib/core/reduce.ml's and pb_analysis.ml's, D-0144). *)
+(* A literal-keyed table through [Lit.equal], never the polymorphic compare (D-0186,
+   above). It is the same table lib/core/reduce.ml and pb_analysis.ml use since D-0144
+   took the quadratic list scans out of learning and PB analysis. *)
 module Lit_tbl = Hashtbl.Make (struct
   type t = Lit.t
 
@@ -139,32 +172,34 @@ type outcome = Sat of assignment | Unsat
    must not paper over this by pretending UNSAT or silently retrying. *)
 exception Unsound_solution of assignment
 
-(* M6-T9. A run stopped by its caller's [config.stop] -- in practice `--time-limit` --
-   before the search answered. It is NOT an outcome of the search, it is the absence of
-   one, which is why it is an exception and not a third [outcome] constructor: every
-   caller that matches [Sat | Unsat] keeps meaning exactly what it meant.
+(* A run stopped by its caller's [config.stop] -- in practice `--time-limit` -- before
+   the search answered (M6-T9, the time limit that stops cleanly and still reports). It is
+   NOT an outcome of the search, it is the absence of one, which is why it is an exception
+   and not a third [outcome] constructor: every caller that matches [Sat | Unsat] keeps
+   meaning exactly what it meant.
 
    By the time it is raised the proof has ALREADY ENDED, validly: everything the search
    derived is on the page (its learned constraints included), every id this solve was
-   handed has been deleted (I-X2), and the last three lines are `output NONE`, the
-   conclusion, `end pseudo-Boolean proof`. The conclusion is NONE on a satisfaction run
-   (veripb reports `VERIFIED NO CONCLUSION`) and BOUNDS on an optimisation run (M6-T24) --
-   so a stopped run still yields a CHECKED record of every line it wrote, which is the
-   evidence M6-T9 exists to produce.
+   handed has been deleted (I-X2: every id is deleted exactly once), and the last three
+   lines are `output NONE`, the conclusion, `end pseudo-Boolean proof`. The conclusion is
+   NONE on a satisfaction run (veripb reports `VERIFIED NO CONCLUSION`) and BOUNDS on an
+   optimisation run (M6-T24: an interrupted run ends its proof with the strongest
+   conclusion it can check), so a stopped run still yields a CHECKED record of every line
+   it wrote, which is the evidence M6-T9 exists to produce.
 
    [best] is an optimisation run's incumbent and its objective value in model units,
    [None] for a satisfaction run or an optimisation run that found nothing. Every
    improving solution has already been printed by [b_on_solution] as it was found. Its
    value is the proof's upper bound, and the lower bound that BOUNDS needs is the
    objective's declared one, which the .opb implies: the search has derived no better one
-   to cite (M6-T24, D-0225). *)
+   to cite (D-0225, the record of M6-T24). *)
 exception Stopped of { best : (assignment * int) option }
 
 (* Internal: raised at node entry by [dfs] when [config.stop] says so, and caught by
    [search_core], which re-raises it with the state the finaliser needs. Never escapes
    this module.
 
-   M6-T21 (D-0136): [dfs] also raises it when [Engine.propagate] stops BETWEEN two
+   [dfs] also raises it when [Engine.propagate] stops BETWEEN two
    propagator runs ([Engine.Stopped]), because [config.stop] said yes at one of the
    engine's polls. That point is as good as node entry for the finaliser, and for the
    same reasons: no propagator is mid-run, the engine never writes the proof, and this
@@ -172,15 +207,13 @@ exception Stopped of { best : (assignment * int) option }
    written AFTER [propagate] returns, in [dfs]'s [Conflict] arm). What the stopped node
    leaves is trail entries whose explanations were never rendered, and the finaliser
    does not read the trail. A half-propagated node is therefore concluded NONE exactly
-   as a node stopped at its entry is: NONE claims nothing about it. *)
+   as a node stopped at its entry is: NONE claims nothing about it. (This second poll is
+   M6-T21's, D-0136: the time limit overshot because one node could run long.) *)
 exception Limit_hit
 
-(* One node's outcome, before it has been reported to its own caller: a solution, or a
-   nogood -- the clause already asserted into the proof (its [Writer.cid] is still
-   live) together with the literals it states, so the caller can drop its own most
-   recent decision literal and re-derive the next nogood up. *)
-(* M2-L3: the literals are PAIRED WITH THE DECISION LEVEL each one negates, and the
-   pairing is the whole of what makes a backjump decidable locally. A frame owning level
+(* A nogood: the literals of a clause already asserted into the proof, each PAIRED WITH
+   THE DECISION LEVEL it negates. The pairing is the whole of what makes a backjump
+   decidable locally (M2-L3, clause learning with backjumping). A frame owning level
    [lvl] skips its sibling exactly when no pair in the nogood carries [lvl]: the clause is
    then already false under the decisions ABOVE [lvl], so it refutes the sibling too.
    Recomputing the level from the literal is not available -- semantic minimisation merges
@@ -188,19 +221,26 @@ exception Limit_hit
    information that would be lost. See lib/core/learn.ml. *)
 type nogood = (Lit.t * int) list
 
-(* M10-search-strategy-T2 (D-0137 section 1): [NRestart t] is the third outcome, "a
-   restart to level [t] is under way". Every frame whose level is above [t] closes its
-   level the way the backjump arm does -- step the writer down, wipe -- with no nogood to
-   keep, and passes it up; the [dfs] whose node sits at level [t] re-enters that node with
-   its decision stack unchanged, the move M5-T1 and M7-T12 already make. It never reaches
-   [solve]: the root's [dfs] is at level 0 and re-enters for any [t >= 0]. Only produced
-   when [config.restarts] is not [Restart.No_restarts]. *)
+(* One node's outcome, before it has been reported to its own caller: a solution, or a
+   nogood with the [Writer.cid] of its clause (still live in the proof), so the caller can
+   drop its own most recent decision literal and re-derive the next nogood up, or a
+   restart.
+
+   [NRestart t] is the third outcome, "a restart to level [t] is under way" (D-0137
+   section 1: a restart is the backjump this solver already writes, taken to a level the
+   policy chooses; M10-search-strategy-T2). Every frame whose level is above [t] closes
+   its level the way the backjump arm does -- step the writer down, wipe -- with no nogood
+   to keep, and passes it up; the [dfs] whose node sits at level [t] re-enters that node
+   with its decision stack unchanged, the move branch and bound (M5-T1) and the assignment
+   decision (M7-T12) already make. It never reaches [solve]: the root's [dfs] is at level
+   0 and re-enters for any [t >= 0]. Only produced when [config.restarts] is not
+   [Restart.No_restarts]. *)
 type node = NSat of assignment | NFail of nogood * Writer.cid | NRestart of int
 
-(* ------------------------------------------------------------ M1-T36: node counting *)
+(* -------------------------------------------------------- the node count (M1-T36) *)
 
 (* The search-tree node count, kept by the search itself rather than read back out of
-   the proof it wrote.
+   the proof it wrote (M1-T36 replaced the benchmark's proxy for it, below).
 
    WHAT A NODE IS HERE. One node is one child dispatched by [branch], plus the root.
    [branch] explores a decision's two sides through [explore_le]/[explore_ge], and each
@@ -221,8 +261,9 @@ type node = NSat of assignment | NFail of nogood * Writer.cid | NRestart of int
        marker and (down that path) one node. The ratio is a property of the tree's
        shape, so it cannot be divided out;
      * a marker is a property of the PROOF. It moves when the proof's shape changes with
-       the tree standing still, which is precisely the confusion D-0026's claim -- the
-       same search tree costs no more -- cannot be tested through;
+       the tree standing still, so it cannot test a claim of the form "the same search
+       tree costs no more", which is the claim D-0026 made when it turned reasons into
+       declarative data and justifications into cutting planes;
      * there is no marker at all without --proof, so the proxy is not even defined for
        a run that emits no proof.
 
@@ -231,8 +272,10 @@ type node = NSat of assignment | NFail of nogood * Writer.cid | NRestart of int
    the deepest level marker in the proof.
 
    THE ARITHMETIC IS CHECKED, because a number nothing reads is decoration and this
-   project has shipped one (M1-T48). Branching is binary and every decision push lands
-   (I-D2, and [check_decision_landed] asserts it), so:
+   project has shipped one (M1-T48: an option found to be a no-op on every model because
+   nothing tested it). Branching is binary and every decision push lands (I-D2: a
+   domain's bounds are values of the domain, never holes; [check_decision_landed]
+   asserts it), so:
 
        nodes =  2 * decisions + 1     when the tree was exhausted (Unsat)
        nodes <= 2 * decisions + 1     when it was not (Sat: the search stops at the
@@ -242,26 +285,32 @@ type node = NSat of assignment | NFail of nogood * Writer.cid | NRestart of int
    asserts it outside [Debug.check] on searches whose trees it knows. An off-by-one
    anywhere in the accounting, or a count taken at the wrong event, breaks the equality
    on every complete search. *)
-(* ------------------------------------------------------------------------- M1-T66
+(* -------------------------------------------------- the bridge record (M1-T66)
 
-   What a bridge rested on, as data rather than as bytes in the proof.
+   What a settle bridge rested on, as data rather than as bytes in the proof. A BRIDGE is
+   the line that carries a decision pushed at a hole onto the bound the store actually
+   recorded (a decision [x >= 3] over the holes 3 and 4 settles at [x >= 5]); it is
+   written by [bridges] below, where the full story is.
 
-   M1-T55 put the settle step on the page; M1-T66 is the row that asked how anyone would
-   know if it stopped being there. The answer, measured twice (M1-T45 and the
-   orchestrator, 2026-09-17), was: nothing would, except one byte-level assertion in
-   test/unit/test_engine.ml that greps the proof text for the line. Disable [bridges]
-   outright and 34/34 models still pass and every checker still accepts, because the
-   settle is re-derivable from the page without it -- see the paragraph headed "why its
-   absence is invisible, and what this record does about it" above [bridges].
+   The bridge is recorded here as a *derivation*: which decision it bridged, from which
+   literal onto which bound, which holes the push walked over, and -- the part that
+   matters for I-S4 (a line citing a hole is supported only while the hole's own line is
+   live) and for clause learning (M2-L3) -- which line on the page states each of those
+   holes, at which level. A test can then assert that the step was derived, in the
+   vocabulary of the derivation rather than of the emitted text. [br_unnamed] is the
+   honest remainder: holes the push walked over that no line this solver wrote states,
+   so the bridge rests on the model's own rows for them (I-X10: every trace line is RUP
+   against the .opb plus the lines before it).
 
-   So the bridge is recorded here as a *derivation* instead: which decision it bridged,
-   from which literal onto which bound, which holes the push walked over, and -- the part
-   that matters for I-S4 and for M2-L3 -- which line on the page states each of those
-   holes, at which level. A test can then assert that the step was derived, and assert it
-   in the vocabulary of the derivation rather than in the vocabulary of the emitted text,
-   which is what M1-T66 asked for. [br_unnamed] is the honest remainder: holes the push
-   walked over that no line this solver wrote states, so the bridge rests on the model's
-   own rows for them (I-X10).
+   Why a record and not a check on the proof text: M1-T55 put the settle step on the
+   page, and M1-T66 asked how anyone would know if it stopped being there. The answer,
+   measured twice (by M1-T45, which reclaimed the hole splits [random_order] refused, and
+   by the orchestrator, 2026-09-17), was: nothing would, except
+   one byte-level assertion in test/unit/test_engine.ml that greps the proof text for the
+   line. Disable [bridges] outright and 34/34 models still pass and every checker still
+   accepts, because the settle is re-derivable from the page without it -- see the
+   paragraph headed "why its absence is invisible, and what this record does about it"
+   above [bridges].
 
    [Trace.record_citation] is called for every hole in [br_cited], so a decision settle
    now enters the same I-S4 audit as a propagator settle. Before M1-T66 it did not enter
@@ -287,21 +336,25 @@ type bridge = {
    the number a measurement wants. *)
 let bridge_cap = 256
 
-(* M2-L4: buckets for [stats.lbd_hist]. Index [lbd_buckets - 1] is the overflow bucket,
-   so an LBD of 16 or more is counted as 16 rather than growing the array -- the
-   distribution's shape is what the policy is chosen from, and its tail is one bucket. *)
+(* Buckets for [stats.lbd_hist], the histogram the retention policy (M2-L4) is chosen
+   from. Index
+   [lbd_buckets - 1] is the overflow bucket, so an LBD of 16 or more is counted as 16
+   rather than growing the array -- the distribution's shape is what the policy is chosen
+   from, and its tail is one bucket. *)
 let lbd_buckets = 17
 
-(* ------------------------------------------------------ M2-L12 step 1: a GLOBAL unit
+(* ------------------------------------------- a learned unit as a GLOBAL bound (M2-L12)
 
-   A learned clause of ONE literal, as a permanent bound tightening.
-
-   D-0052's step 1, and the reason it comes first is now a measurement rather than an
-   estimate: over the 39 models of test/models/, instrumented at the point the clause is
-   built ([stats.width_hist]), **72 of 88 learned clauses have exactly one literal**, 5
-   have two, 8 have three and 3 have four. The provisional figure D-0052 refused to build
+   A learned clause of ONE literal, as a permanent bound tightening. M2-L12 made learned
+   constraints propagate, units first; D-0052 planned it (a clause over order literals is
+   a widening of bool_clause, so the wider clauses came second, as instances of
+   lib/core/prop/clause.ml). Units come first because they are most of what is learned:
+   over the 39 models of test/models/, instrumented at the point the clause is built
+   ([stats.width_hist]), **72 of 88 learned clauses have exactly one literal**, 5 have
+   two, 8 have three and 3 have four. The provisional figure D-0052 refused to build
    on -- "roughly 70, +/-5, parsed out of proof text" -- is confirmed at 72 by a counter
-   that cannot mistake an [Ne] hole line for a learned clause.
+   that cannot mistake an [Ne] hole line for a learned clause. (Those 39 models are the
+   suite of the time; it has grown since.)
 
    A unit 1UIP clause has backjump level 0. It is not a constraint that needs a
    propagator, a watch list, a survey or two-open logic: it is a bound that holds
@@ -323,8 +376,11 @@ let lbd_buckets = 17
    `rup g_lit >= 1`. That is reverse unit propagation in one step against the learned
    constraint [Learn.introduce] put on the page -- negating the target falsifies that
    constraint outright. Which is exactly why [register_learned] below calls
-   [Retention.cite]: the line is RUP only while the constraint is LIVE (D-0052's "new
-   obligation", D-0051's "what would reverse this"). *)
+   [Retention.cite]: the line is RUP only while the constraint is LIVE, so the retention
+   database must not evict a constraint something still cites (D-0052's "new
+   obligation"; D-0051, which gave every learned constraint one owner and found keeping
+   everything best while nothing propagated a learned constraint, lists this change as
+   what would reverse that finding). *)
 type global = {
   g_lit : Lit.t; (* the unit literal, as it appears in the learned clause *)
   g_cid : Writer.cid; (* the learned constraint the [rup] rests on *)
@@ -333,25 +389,28 @@ type global = {
   g_k : int;
   g_decl_lo : int;
   g_decl_hi : int;
-  g_fact : Reason.fact; (* D-0043: what applying it concludes *)
+  g_fact : Reason.fact; (* what applying it concludes (D-0043: a reason's conclusion) *)
   g_expl : Explanation.t;
       (* Built ONCE per global and shared, because lib/core/justify.ml memoises on
          physical identity: one `rup` per decision level per unit, cited again
          afterwards, exactly as lib/core/prop/clause.ml shares its own. *)
 }
 
-(* M10-search-strategy (D-0137): the per-solve state of the opt-in strategies -- the
-   restart policy's counters, the saved phases. Built by [search_core] from [config] and
+(* The per-solve state of the opt-in search strategies of D-0137 (restarts, phase
+   saving, the activity order; M10-search-strategy) -- the restart policy's counters, the
+   saved phases, the activity scores. Built by [search_core] from [config] and
    [None] unless one of them was asked for, so that the default search takes not one
    extra branch through any of it. *)
 type strat = {
   st_restart : Restart.t;
   st_phase : Phase.t option;
   st_activity : Activity.t option;
-      (* M10-T3: the scores, when the order is [Activity_order] or [Alternate]. *)
+      (* the activity scores (M10-T3, the VSIDS-style activity order), when the order is
+         [Activity_order] or [Alternate] *)
   st_reuse : bool;
-      (* M10-T3: partial restarts by the trail-reuse rule (D-0137 section 1.1); only ever
-         [true] with [Activity_order], where the rule is defined. *)
+      (* Partial restarts by the trail-reuse rule (D-0137 section 1.1: a restart keeps the
+         decisions the activity order would take again); only ever [true] with
+         [Activity_order], where the rule is defined. *)
   mutable st_lbd : int option;
       (* The LBD of the clause learned at the conflict being handled, set by
          [learn_at_conflict] and consumed by the restart decision in [dfs]'s conflict
@@ -362,11 +421,13 @@ type stats = {
   mutable strat : strat option;
   mutable restart_unexplored : int;
   mutable restart_targets : int;
-  (* M10-T3: the sum of the levels restarts kept (0 for a full restart), so the mean
-     kept prefix of the trail-reuse rule is this over the restart count. *)
-  (* M10-T2: second children a restart left undispatched -- a split frame unwound
-     while its FIRST child was running. M1-T36's identity counts that child as
-     dispatched, so [stats_expected_nodes] subtracts this. 0 without restarts. *)
+  (* [restart_unexplored]: second children a restart left undispatched -- a split frame
+     unwound while its FIRST child was running (M10-T2, restarts). M1-T36's identity
+     counts that child as dispatched, so [stats_expected_nodes] subtracts this. 0 without
+     restarts.
+     [restart_targets]: the sum of the levels restarts kept (0 for a full restart), so
+     the mean kept prefix of the trail-reuse rule is this over the restart count
+     (M10-T3). *)
   mutable nodes : int;
   mutable conflicts : int;
       (* M6-T9: nodes whose propagation (or a learned unit) failed, at ANY level, the
@@ -376,23 +437,23 @@ type stats = {
   mutable max_depth : int;
   mutable n_bridges : int;
   mutable bridges_rev : bridge list;
-  (* ------------------------------------------------------------------ M2-L3 *)
+  (* ----------------------------------------------- clause learning, backjumps (M2-L3) *)
   mutable skipped : int;
       (* Siblings NOT explored because the branch's nogood was already false without
          this level's decision. The M1-T36 identity is stated over it below; a backjump
          that reported no skip would be a backjump that did not happen. *)
   mutable assigns : int;
-      (* M7-T12: assignment decisions taken ([branch_assign]). Counted separately from
-         [decisions] because such a decision is NOT a binary internal node: it opens two
-         levels, dispatches ONE child, and continues as a re-entry of the node it was
-         taken at rather than as a sibling. The M1-T36 identity is corrected by exactly
-         [3 * assigns] below and stays an equality. *)
+      (* Assignment decisions taken ([branch_assign], the [x = m] decision shape of
+         M7-T12). Counted separately from [decisions] because such a decision is NOT a
+         binary internal node: it opens two levels, dispatches ONE child, and continues as
+         a re-entry of the node it was taken at rather than as a sibling. The M1-T36
+         identity is corrected by exactly [3 * assigns] below and stays an equality. *)
   mutable assign_backjumps : int;
-      (* M7-T12: assignment decisions discharged by the backjump arm -- the child's nogood
+      (* Assignment decisions discharged by the backjump arm -- the child's nogood
          named neither assignment level, so the node was refuted outright and the value
          was never removed. NOT a [skipped]; see [branch_assign]'s backjump arm. *)
   mutable assign_clauses_rev : Writer.cid list;
-      (* M7-T12: the assignment clauses emitted at LEVEL 0, newest first, and the whole
+      (* The assignment clauses emitted at LEVEL 0, newest first, and the whole
          of who owns them (I-X2). An assignment clause is filed at the level of the node
          that took the decision, so at every level above 0 the frame owning that level
          wipes it on the way out, exactly as it wipes a child nogood. Level 0 is never
@@ -400,10 +461,12 @@ type stats = {
          beside the trace's own permanent lines. *)
   mutable n_learned : int; (* 1UIP clauses put on the page *)
   mutable n_converts : int;
-      (* ...of which [Learned.to_linear_row] would accept, i.e. of which could have been
-         a runtime instance had this row taken D-0044 fork (i). MEASURED, not used: see
-         lib/core/learn.ml's header for why the fork went the other way, and M2-L4 for
-         who needs the number. *)
+      (* ...of which [Learned.to_linear_row] would accept (it refuses a threshold strictly
+         inside an integer's ladder). This was the fork D-0044's amendment posed: restrict
+         the cut to the shapes that convert (i), or accept a proof-only learned
+         constraint (ii). M2-L3 took (ii), and since M2-L13 a learned row propagates
+         whether or not it converts, so this is a MEASUREMENT only: lib/core/learn.ml's
+         header has the history, and the retention policy (M2-L4) read the number. *)
   mutable learned_rev : Writer.cid list;
       (* Every id [Learn.introduce] and [Pb_analysis.introduce] handed back, newest
          first. AN AUDIT TRAIL, NOT A DELETION LIST -- M2-L4 took that job away from it,
@@ -424,7 +487,7 @@ type stats = {
          depth. Clause path only: the PB path's rows have no LBD of their own -- see
          [Retention]'s header for what they are scored on instead. *)
   mutable width_hist : int array;
-  (* M2-L12 step 0. Index i counts learned CLAUSES of exactly i literals, with index
+  (* Index i counts learned CLAUSES of exactly i literals, with index
      [lbd_buckets-1] the overflow bucket -- the same bucketing as [lbd_hist] because
      the two are read side by side and a clause cannot have more literals than it has
      levels plus one anyway.
@@ -436,16 +499,18 @@ type stats = {
      clause is built cannot catch anything else: it counts exactly the clauses
      [Learn.at_conflict] returned and [Learn.introduce] put on the page. Width 1 is
      the population step 1 acts on -- a unit clause has backjump level 0 and is a
-     permanent global bound tightening. *)
-  (* ------------------------------------------------------------------ M2-L12 *)
+     permanent global bound tightening. (This counter was M2-L12's step 0.) *)
+  (* -------------------------------- learned units and clauses that propagate (M2-L12) *)
   mutable globals_rev : global list;
       (* Learned units, newest first, DEDUPLICATED by literal. Replaced at [solve] entry
          for the reason [db] is. Deduplication matters here and not for the clause
          instances below: one model (width_sat_depth) derives 49 of the suite's 72 units,
          many of them the same bound twice, and this list is walked at every node. *)
   mutable globals_fwd : global list;
-      (* D-0152 (D-0140 S6): [List.rev globals_rev], kept beside it by [push_global] so
-         [apply_globals] does not reverse the list at every node. *)
+      (* [List.rev globals_rev], kept beside it by [push_global] so [apply_globals] does
+         not reverse the list at every node. D-0140 inventoried the costs that grow with
+         the run (its row S6 is this reversal) and D-0152 removed the search's
+         per-node ones. *)
   mutable n_global_prunes : int;
       (* Times applying a global actually MOVED a bound. This is the counter that says
          whether step 1 did anything: a learned unit that never prunes is a learned unit
@@ -453,28 +518,30 @@ type stats = {
   mutable n_global_conflicts : int; (* ...and times it refuted the node outright *)
   mutable n_global_declined : int;
       (* Units this search could not apply -- a [Lit.Eq] literal (the direct encoding has
-         no bound to move; D-0019 point 3 and D-0052 both say do not reach for
-         [Store.remove_with_facts]) or a name the encoding does not declare. Counted
+         no bound to move, and D-0019 point 3 and D-0052 both say not to reach for an
+         interior removal, then [Store.remove_with_facts], now [Store.remove]) or a name
+         the encoding does not declare. Counted
          rather than silently skipped, because "step 1 captured the unit population" is a
          claim this number can refute. *)
   mutable n_clause_instances : int;
-      (* M2-L12 step 2: multi-literal learned clauses registered with the engine as
+      (* Multi-literal learned clauses (M2-L12 step 2) registered with the engine as
          [Clause.Learned_clause] instances. *)
   mutable n_clause_declined : int;
   (* ...and those [Clause.of_lits] refused, for the same two reasons as
      [n_global_declined]. *)
-  (* ------------------------------------------------------------------ M2-L13 *)
+  (* ------------------------------------------ learned PB rows that propagate (M2-L13) *)
   mutable n_pb_instances : int;
-      (* Learned PB ROWS registered with the engine as [Pb.Learned_pb] instances --
-         D-0054's solving-side object. Distinct from [n_clause_instances], which counts
-         the degree-1 case arriving by the M2-L3 clause path; a conflict can contribute
-         to both, because both objects are learned from it. *)
+      (* Learned PB ROWS registered with the engine as [Pb.Learned_pb] instances -- the
+         solving-side object of D-0054, which separated a proof line from a propagation
+         explanation (lib/core/prop/pb.ml). Distinct from [n_clause_instances], which
+         counts the degree-1 case arriving by the M2-L3 clause path; a conflict can
+         contribute to both, because both objects are learned from it. *)
   mutable n_pb_inst_declined : int;
       (* ...and the rows [Pb.of_terms] refused: a [Lit.Eq] literal, or a name the
          encoding does not declare. Same two reasons as [n_global_declined], counted
          rather than silently skipped for the same reason. *)
   mutable learned_kinds : Bytes.t;
-      (* M11-complexity-T4 (D-0152, D-0140 S1): one byte per engine id at or above
+      (* One byte per engine id at or above
          [first_learned_id], saying which kind of learned instance has that id
          ([kind_pb], [kind_clause], or [kind_none]). Read by [count_learned_activity] to
          tell a pruning made by a learned PB row from one made by a learned clause, at
@@ -482,13 +549,15 @@ type stats = {
          [clause_inst_ids_rev]) walked by a polymorphic [List.mem] per entry, which made
          every node pay for the size of the learned database. An array indexed by id is
          never iterated, so the determinism argument the lists were kept for (no
-         [Hashtbl] iteration in a solve) holds for it as it held for them. *)
+         [Hashtbl] iteration in a solve) holds for it as it held for them. (D-0152, row
+         S1 of D-0140's inventory; M11-complexity-T4.) *)
   mutable n_pb_prunes : int;
       (* Bounds actually MOVED by a learned PB instance. This is the counter M2-L13
          turns on and the one M2-L12 reported as 0 for the clause path: an instance with
          no prunings is a propagator that exists and does nothing, which is the result
          D-0054 reinterpreted. Counted off the TRAIL (whose entries carry the pushing
-         instance's id, M2-T7) rather than by the propagator, which has no stats. *)
+         instance in its [prop] field since M2-T7) rather than by the propagator, which
+         has no stats. *)
   mutable n_pb_inst_conflicts : int; (* ...and conflicts one reported outright *)
   mutable n_clause_prunes : int; (* the same two, for the M2-L12 clause instances *)
   mutable n_clause_inst_conflicts : int;
@@ -505,7 +574,7 @@ type stats = {
   (* Literals semantic minimisation removed from a nogood. A reduction that never
      fires is a reduction whose break lane cannot redden, which is why it is counted
      rather than assumed to be doing something. *)
-  (* ------------------------------------------------------------------ M2-L6 *)
+  (* -------------------------------------------------- PB conflict analysis (M2-L6) *)
   mutable n_pb_attempts : int;
       (* Conflicts PB analysis was asked about. The denominator of the fallback rate, and
          NOT [n_learned]: a conflict at no decision level is never analysed at all. *)
@@ -529,13 +598,14 @@ type stats = {
          26 could actually propagate. Read this beside [n_pb_nondegenerate], which is the
          counter that can tell them apart, and see bin/main.ml's block above `pb-nondeg`.
          The counter is left as it is on purpose: test_ladder.ml's degenerate control pins
-         that it CANNOT make the distinction, which is the property M2-L11 established. *)
+         that it CANNOT make the distinction, which is the property M2-L11 (the ladder
+         lift, below) established. *)
   mutable n_pb_stronger : int;
   (* ...of which convert where the SAME conflict's clause does not. This is test (a)
      as a counter: the number of times this row did something M2-L3 could not -- with
      [n_pb_converts]'s caveat above inherited in full, because it is the same predicate.
      Suite-wide 36, of which the same 10 are vacuous. *)
-  (* ------------------------------------------------------------------ M2-L11 *)
+  (* ------------------------------------- the ladder lift in PB analysis (M2-L11) *)
   mutable n_pb_nondegenerate : int;
       (* Learned PB rows that are NOT the empty contradiction, i.e. that still carry at
          least one literal. This is docs/ROADMAP.md M2-L11 test (b) and it is the number
@@ -571,7 +641,7 @@ type stats = {
   (* Why, newest first, capped. A rate with no breakdown behind it cannot be acted
      on, and the breakdown is what says whether the traffic is [No_row] (expected,
      D-0044) or [Not_conflicting] (a finding about the reduction). *)
-  (* ------------------------------------------------------------------ M2-L15 *)
+  (* -------------- which levels license the backjump: closure or PB row (M2-L15) *)
   mutable n_level_compared : int;
       (* Conflicts at which BOTH a decision closure and a PB row were obtained, so the
          two level sets could be put side by side. The denominator of everything below,
@@ -621,17 +691,19 @@ type stats = {
       (* The disagreements, newest first, capped: one line each, closure set against PB
          set. Capped for the reason [pb_fallback_rev] is. *)
   mutable stopped_in_propagation : bool;
-      (* M6-T21: the run was stopped by a poll INSIDE [Engine.propagate] rather than at a
+      (* The run was stopped by a poll INSIDE [Engine.propagate] (M6-T21) rather than at a
          node entry. Read by the CLI's `limit:` line and by the lane that pins the
          poll. *)
   mutable stopped_in_trace : bool;
-  (* M6-T23 (D-0149): the run was stopped by a poll inside a conflict's
-     [Trace.emit]. Read by the CLI's `limit:` line ([at=trace]). *)
-  (* ------------------------------------------- M19-config-T10 (D-0219), both searches *)
+  (* The run was stopped by a poll inside a conflict's [Trace.emit] (M6-T23, D-0149: the
+     stop is also polled inside a conflict's trace and PB analysis). Read by the CLI's
+     `limit:` line ([at=trace]). *)
+  (* ------------- where a search resumes after a conflict, both searches (D-0219) *)
   mutable cdcl_run : bool;
-      (* This solve ran the CDCL loop ([cdcl]) rather than [dfs]. M1-T36's identity is a
-         statement about a binary tree walked once, which the CDCL loop does not build,
-         so [stats_consistent] answers [true] for such a run instead of a false alarm. *)
+      (* This solve ran the CDCL loop ([cdcl], D-0219, M19-config-T10) rather than [dfs].
+         M1-T36's identity is a statement about a binary tree walked once, which the CDCL
+         loop does not build, so [stats_consistent] answers [true] for such a run instead
+         of a false alarm. *)
   mutable lo_resumes : int;
       (* Conflicts after which the search went on below the root: the frame that explores
          a second child ([dfs]), or the level the CDCL loop backjumps to. *)
@@ -661,6 +733,13 @@ type stats = {
          conflict level), refuted by the branch nogood instead ([cdcl]). *)
   mutable lo_direct : int;
       (* CDCL loop: assertions no consumer made, pushed from the clause ([cdcl]). *)
+  mutable lo_chrono : int;
+      (* Conflicts after which the loop went back to the level below the clause's highest
+         one (chronological backtracking, D-0224, M19-config-T11) instead of jumping to
+         its asserting level, the jump skipping more than [config.chrono] levels. *)
+  mutable lo_repushed : int;
+      (* Fallback assertions pushed again after a later backtrack left
+         their nogood unit ([cdcl]'s [repush]). *)
 }
 
 let stats_create () =
@@ -738,28 +817,31 @@ let stats_create () =
     lo_pb_pruning = 0;
     lo_direct = 0;
     lo_fallback = 0;
+    lo_chrono = 0;
+    lo_repushed = 0;
   }
 
 let stats_learned s = List.rev s.learned_rev
 let stats_db s = s.db
 
-(* M2-L4: the LBD histogram as [(lbd, count)], ascending, empty buckets dropped. The
-   last bucket is the overflow one, so a pair [(16, n)] means "16 or more". *)
+(* The LBD histogram (read by the retention work, M2-L4) as [(lbd, count)], ascending,
+   empty buckets dropped. The last bucket is the overflow one, so a pair [(16, n)] means
+   "16 or more". *)
 let stats_lbd s =
   Array.to_list (Array.mapi (fun i n -> (i, n)) s.lbd_hist)
   |> List.filter (fun (_, n) -> n > 0)
 
-(* M2-L12 step 0: the learned-CLAUSE WIDTH histogram as [(width, count)], ascending,
+(* The learned-CLAUSE WIDTH histogram as [(width, count)], ascending,
    empty buckets dropped, last bucket overflow. Same shape as [stats_lbd]. *)
 let stats_width s =
   Array.to_list (Array.mapi (fun i n -> (i, n)) s.width_hist)
   |> List.filter (fun (_, n) -> n > 0)
 
-(* M2-L12: the learned units in force, oldest first, as their literals. A test reads this
-   to name the bound it expects to have moved. *)
+(* The learned units in force (the globals above), oldest first, as their literals. A test
+   reads this to name the bound it expects to have moved. *)
 let stats_globals s = List.rev_map (fun g -> g.g_lit) s.globals_rev
 
-(* ------------------------------------------------------------------ M2-L6 counters *)
+(* -------------------------------------------------- PB analysis's counters (M2-L6) *)
 
 (* The same cap and the same reason as [bridge_cap]: keeping every reason of a long
    search would be a leak in a process that shares 15 GB, and no caller needs more than
@@ -768,9 +850,9 @@ let pb_reason_cap = 64
 let stats_pb_fallbacks s = List.rev s.pb_fallback_rev
 let stats_pb_rows s = List.rev s.pb_rows_rev
 
-(* M2-L15: the disagreements, oldest first. Same shape and same cap as
-   [stats_pb_fallbacks], and read for the same reason -- a rate with no breakdown behind
-   it cannot be acted on. *)
+(* The level-set disagreements of [n_level_narrower] and its siblings, oldest first. Same
+   shape and same cap as [stats_pb_fallbacks], and read for the same reason -- a rate with
+   no breakdown behind it cannot be acted on. *)
 let stats_level_diffs s = List.rev s.level_diffs_rev
 
 (* The fraction of analysed conflicts that fell back to the clause path, in [0., 1.].
@@ -790,7 +872,7 @@ let record_bridge s b =
   s.n_bridges <- s.n_bridges + 1;
   if s.n_bridges <= bridge_cap then s.bridges_rev <- b :: s.bridges_rev
 
-(* D-0152 (D-0140 S1): the kind of the learned instance with engine id [id], kept in
+(* The kind of the learned instance with engine id [id], kept in
    [learned_kinds] at [id - first_learned_id]. The table grows by doubling, so
    registering costs amortised O(1), and an id outside it is [kind_none]. *)
 let kind_none = '\000'
@@ -812,12 +894,13 @@ let set_learned_kind s id k =
       s.learned_kinds <- b);
     Bytes.set s.learned_kinds i k)
 
-(* ------------------------------------------------ M19-config-T10 (D-0219): observables
+(* ------------------------------ what a learned clause does at the resume (D-0219)
 
    What a learned clause does where the search resumes after its conflict, measured the
    same way on [dfs] and on the CDCL loop so that the two can be put side by side. None
    of it is read by the search; it is printed by [report_learning] under
-   BAGUETTE_CDCL_STATS=1 and changes no byte of stdout or of the proof. *)
+   BAGUETTE_CDCL_STATS=1 and changes no byte of stdout or of the proof. They were added
+   with the CDCL loop (M19-config-T10) to measure why [dfs] rarely jumps. *)
 
 (* The truth of an order literal in the store as it stands: [1] true, [-1] false, [0]
    unassigned. A literal of another kind answers [0]: a learned clause has none (its
@@ -866,8 +949,8 @@ let mark_pruned stats id ~pb =
       if pb then stats.lo_pb_pruning <- stats.lo_pb_pruning + 1
       else stats.lo_clauses_pruning <- stats.lo_clauses_pruning + 1))
 
-(* One stderr line, under BAGUETTE_CDCL_STATS=1 only (stderr is otherwise forbidden
-   without --time, M1-T49). *)
+(* One stderr line, under BAGUETTE_CDCL_STATS=1 only: stderr is otherwise silent unless
+   --time asks for timings, and the model tests enforce that (M1-T49). *)
 let report_learning_enabled =
   match Sys.getenv_opt "BAGUETTE_CDCL_STATS" with Some ("1" | "on") -> true | _ -> false
 
@@ -877,35 +960,38 @@ let report_learning s =
       "cdcl-stats: loop=%s nodes=%d decisions=%d conflicts=%d learned=%d resumes=%d \
        skipped=%d far=%d jump_max=%d asserting=%d/%d clause_instances=%d \
        clauses_pruning=%d pb_instances=%d pb_pruning=%d units=%d unit_prunes=%d \
-       direct=%d fallback=%d\n\
+       direct=%d fallback=%d chrono=%d repushed=%d\n\
        %!"
       (if s.cdcl_run then "cdcl" else "dfs")
       s.nodes s.decisions s.conflicts s.n_learned s.lo_resumes s.lo_skipped s.lo_far
       s.lo_jump_max s.lo_asserting s.lo_checked s.n_clause_instances s.lo_clauses_pruning
       s.n_pb_instances s.lo_pb_pruning (List.length s.globals_rev) s.n_global_prunes
-      s.lo_direct s.lo_fallback
+      s.lo_direct s.lo_fallback s.lo_chrono s.lo_repushed
 
-(* Does this pair of counts satisfy the identity above? [exhausted] is whether the
-   search closed its whole tree. Public because [solve] checks it only under
-   BAGUETTE_DEBUG and the tests must be able to check it always. *)
-(* M2-L3 widens the identity by exactly one term rather than weakening it. Branching is
+(* The node count M1-T36's identity predicts (above [type stats]), widened term by term
+   and never relaxed to an inequality, which would stop catching the off-by-one it
+   exists for, on every search.
+
+   Clause learning (M2-L3) widens it by exactly one term. Branching is
    still binary and every push still lands; what changed is that a backjump dispatches
    ONE child at an internal node instead of two, and [skipped] counts each time it did.
-   With learning off [skipped] is 0 and this is M1-T36's equation unaltered. A version
-   that merely relaxed the equality to an inequality would have stopped catching the
-   off-by-one it exists for, on every search. *)
-(* M7-T12 widens it by exactly one more term, on the same principle. An assignment
+   With learning off [skipped] is 0 and this is M1-T36's equation unaltered.
+
+   The assignment decision (M7-T12) widens it by exactly one more term. An assignment
    decision bumps [decisions] by 2 (it opens two levels, [x >= m] and [x <= m], each a
    real decision the nogood machinery sees) but dispatches ONE child: the sibling is a
    RE-ENTRY of the same node, which -- as M5-T1 already established for the
    branch-and-bound re-entry -- is not a node [branch] dispatched and is not counted.
    So an assignment contributes 1 node where the equation expects 4, and [3 * assigns]
    is the correction. With no [indomain_median] in the model [assigns] is 0 and this is
-   the M2-L3 equation unaltered. *)
+   the M2-L3 equation unaltered.
+
+   Restarts subtract [restart_unexplored]: a split frame unwound by a restart while its
+   first child ran dispatched one child where the identity counts two. *)
 let stats_expected_nodes s =
   (2 * s.decisions) + 1 - s.skipped - (3 * s.assigns) - s.restart_unexplored
 
-(* M10-T2: restarts taken, 0 when restarts are off. *)
+(* Restarts taken, 0 when restarts are off. *)
 let stats_restarts s =
   match s.strat with None -> 0 | Some st -> Restart.restarts st.st_restart
 
@@ -915,18 +1001,25 @@ let stats_phase s =
 let stats_activity s =
   match s.strat with Some { st_activity = Some a; _ } -> Some a | _ -> None
 
+(* Does this pair of counts satisfy the identity? [exhausted] is whether the search
+   closed its whole tree. Public because [solve] checks it only under BAGUETTE_DEBUG and
+   the tests must be able to check it always. A CDCL run answers [true]: it builds no
+   binary tree walked once. *)
 let stats_consistent s ~exhausted =
   if s.cdcl_run then true
   else if exhausted then s.nodes = stats_expected_nodes s
   else s.nodes <= stats_expected_nodes s
 
-(* ------------------------------------------------------- the branching order (M2-T11)
+(* ------------------------------------------------------------- the branching order
 
    Which variable is branched on, at which value, and which side first. docs/SPEC.md 3.4
-   fixes that -- first-fail, indomain_min -- and [spec_order] is it; it is the default of
-   [solve] and the only order anything outside the tests uses. [random_order] exists
-   because M1's whole nogood story (D-0018, D-0021) is a claim about *whatever* tree the
-   search happens to build: the branch's own trace is what its refutation rests on, so a
+   fixes the default -- first-fail, indomain_min -- and [spec_order] is it; it is the
+   default of [solve]. A model's search annotation replaces it with the orders built by
+   [sequence] below, and the opt-in strategies wrap it (phase saving, the activity order).
+   [random_order] (M2-T11, the fuzzer that randomises the branching order from its seed)
+   exists because M1's whole nogood story (D-0018, and D-0021: every pruning gets a trace
+   line, not only those under a decision) is a claim about *whatever* tree the search
+   happens to build: the branch's own trace is what its refutation rests on, so a
    different tree is a different proof, and a fuzzer that only ever drives one tree shape
    tests one shape of that claim. It is a test facility and nothing more.
 
@@ -944,14 +1037,15 @@ let stats_consistent s ~exhausted =
    [dfs] reports a solution exactly when the array is empty, so a strategy decides the
    *shape* of the tree and never which leaves it has. *)
 let unfixed store =
-  (* M6-T13: two passes over the domains -- count, then fill -- instead of consing a list
-     and copying it, so a node allocates the one array it returns and nothing else. Same
-     array, same ascending store-index order.
+  (* Two passes over the domains -- count, then fill -- instead of consing a list and
+     copying it, so a node allocates the one array it returns and nothing else. Same
+     array, same ascending store-index order (M6-T13, D-0087: the search's per-node cost
+     stops scaling with the store).
 
-     M11-complexity-T4 (D-0152, D-0140 S4): "unfixed" is [not (Domain.is_fixed d)], two
-     loads, where it was [Domain.size d > 1], which counts the hole bits of a domain
-     with holes. The two agree on every stored domain: I-D2 keeps both bounds members
-     and I-D1 keeps lo <= hi, so the size is 1 exactly when lo = hi. *)
+     "Unfixed" is [not (Domain.is_fixed d)], two loads, where it was [Domain.size d > 1],
+     which counts the hole bits of a domain with holes. The two agree on every stored
+     domain: I-D2 keeps both bounds members and I-D1 keeps lo <= hi, so the size is 1
+     exactly when lo = hi. (D-0152, row S4 of D-0140's inventory.) *)
   let n = Store.n_vars store in
   let k = ref 0 in
   for i = 0 to n - 1 do
@@ -980,7 +1074,7 @@ let unfixed store =
    [d_split = hi - 1] with the high side first. *)
 type decision = { d_var : Var.t; d_split : int; d_high_first : bool }
 
-(* ------------------------------------------------- M7-T12: THE SECOND DECISION SHAPE
+(* ------------------------------- the assignment decision, a second shape (M7-T12)
 
    An ASSIGNMENT decision: "try [a_var = a_value], and if that fails carry on with
    [a_var <> a_value]". [a_value] must be strictly interior to the variable's current
@@ -994,14 +1088,16 @@ type decision = { d_var : Var.t; d_split : int; d_high_first : bool }
    disagrees about TWO: [x = m] is [x >= m /\ x <= m], and its sibling [x <> m] is the
    DISJUNCTION [x <= m-1 \/ x >= m+1] (D-0019). The sibling is therefore not an
    assumption a nogood can name, and that -- not the propagation and not the search --
-   is the whole of M7-T12. See [branch_assign] for how it is discharged, and D-0077.
+   is the whole of M7-T12. The sibling is discharged by DERIVATION, not by resolution
+   (D-0077): see [branch_assign].
 
    WHAT IT IS NOT. It is NOT two nested splits. [x >= m] then [x <= m] gives the same
    first branch, but its siblings are [x <= m-1] and [x >= m+1] explored SEPARATELY,
    and the value choice at each is then made over a domain that is not the one the
-   annotation is about -- M7-T9 measured that drift and refused to ship it as
-   [indomain_median]. This shape explores ONE child and then RE-ENTERS the same node
-   with the value removed, so the next value choice sees the whole remaining domain. *)
+   annotation is about -- M7-T9 (the missing search strategies) measured that drift and
+   refused to ship it as [indomain_median]. This shape explores ONE child and then
+   RE-ENTERS the same node with the value removed, so the next value choice sees the whole
+   remaining domain. *)
 type assign = { a_var : Var.t; a_value : int }
 
 (* What an order may ask for. [Split] is every value choice that predates M7-T12. *)
@@ -1022,13 +1118,13 @@ let as_split = function
            "Search.as_split: an assignment decision (value %d) is not a split" a.a_value)
 
 (* First-fail (docs/SPEC.md 3.4): the unfixed variable (domain size > 1) with the
-   smallest domain, ties broken by declaration order (the store's variable index). *)
-(* M11-complexity-T4 (D-0152, D-0140 S4): the scan stops at the first candidate of size
-   2. Every candidate is unfixed ([type order] says so, and [unfixed] and both arms of
-   [sequence] filter for it), so no size is below 2, and the comparison is strict, so
-   no later candidate can replace one of size 2: the answer is the one the full scan
-   gives. On a Boolean model that is the first candidate, where the scan read every
-   unfixed variable at every node. *)
+   smallest domain, ties broken by declaration order (the store's variable index).
+
+   The scan stops at the first candidate of size 2 (D-0152). Every candidate is unfixed
+   ([type order] says so, and [unfixed] and both arms of [sequence] filter for it), so no
+   size is below 2, and the comparison is strict, so no later candidate can replace one of
+   size 2: the answer is the one the full scan gives. On a Boolean model that is the first
+   candidate, where the scan read every unfixed variable at every node. *)
 let first_fail store cands =
   let n = Array.length cands in
   let best = ref cands.(0) in
@@ -1043,11 +1139,12 @@ let first_fail store cands =
   done;
   !best
 
-(* Anti-first-fail (docs/SPEC.md 3.4, M7-T19, D-0083): the unfixed variable with the
+(* Anti-first-fail (docs/SPEC.md 3.4; D-0083 mapped the corpus annotations baguette
+   refused onto orders, this one among them, M7-T19): the unfixed variable with the
    LARGEST domain, measured exactly as [first_fail] measures it ([Domain.size], the live
    value count, holes excluded). TIES ARE BROKEN BY [first_fail]'s RULE: the comparison is
-   strict, so the EARLIEST candidate in the array the caller handed over wins -- at the top
-   level that is declaration order, inside a phase the annotation's array order. It is
+   strict, so the EARLIEST candidate in the array the caller handed over wins -- at the
+   top level that is declaration order, inside a phase the annotation's array order. It is
    [first_fail] with the comparison reversed and NOTHING else changed; in particular it is
    not "first_fail's ordering reversed", which would also reverse the tie-break and pick
    the LAST of several equally large domains. *)
@@ -1069,7 +1166,7 @@ let anti_first_fail store cands =
    array wrote, which is the order `int_search(vs, input_order, ...)` actually means. *)
 let input_order _store cands = cands.(0)
 
-(* ------------------------------------------------- M7-T9: `smallest` and `largest`
+(* ---------------------------- `smallest` and `largest`, read as Gecode does (M7-T9)
 
    WHICH READING OF THE MINIZINC SPEC THESE TAKE, AND WHY. The spec's wording is
    "smallest: choose the variable with the smallest value in its domain" and "largest:
@@ -1125,7 +1222,7 @@ let spec_order store cands =
   let v = first_fail store cands in
   Split { d_var = v; d_split = Domain.lo (Store.get store v); d_high_first = false }
 
-(* ------------------------------------------------------- M7-T2: annotated search
+(* --------------------------------------------- annotated search: phases (M7-T2)
 
    A FlatZinc `int_search`/`bool_search` annotation is two independent choices -- which
    variable, then how to split it -- over a NAMED SUBSET of the variables, and
@@ -1133,7 +1230,8 @@ let spec_order store cands =
    way: a [var_select] picks from candidates, a [val_select] turns the pick into a
    decision, and a [phase] pairs them with the subset they govern.
 
-   Splitting the value choice out is what makes obligation (a) of M7-T2 testable at all:
+   Splitting the value choice out is what makes obligation (a) of M7-T2 (honour the
+   search annotations) testable at all:
    [indomain_min] and [indomain_max] produce DIFFERENT decisions on the same variable, and
    a test can assert on the decision rather than on the answer.
 
@@ -1158,7 +1256,7 @@ let indomain_min store v =
 let indomain_max store v =
   Split { d_var = v; d_split = Domain.hi (Store.get store v) - 1; d_high_first = true }
 
-(* ------------------------------------------------------- M7-T9: `indomain_split`
+(* ------------------------------------- `indomain_split`, a range bisection (M7-T9)
 
    MiniZinc: "bisect the variable's domain, excluding the upper half first". So the split
    point is the midpoint of the domain's RANGE and the LOW side goes first -- which is
@@ -1182,16 +1280,18 @@ let indomain_max store v =
 
    HOLES ARE NOT A SPECIAL CASE HERE, and it is worth saying why, because they are one for
    [indomain_median]. The midpoint may land ON a hole, in which case [Domain.settle] walks
-   the pushed bound past it and the decision lands strictly stronger than the order literal
-   its nogood negates. That is the exact shape M1-T45 investigated and M1-T55 closed: see
-   [bridges] below, and [test_hole_split_sweep] in test/unit/test_engine.ml, which forces
-   every such shape and checks each proof. The normative default already makes this
+   the pushed bound past it and the decision lands strictly stronger than the order
+   literal its nogood negates. That is the exact shape M1-T45 investigated and M1-T55
+   closed (a decision taken at a hole, carried onto the settled bound by a bridge line):
+   see [bridges] below, and [test_hole_split_sweep] in test/unit/test_engine.ml, which
+   forces every such shape and checks each proof. The normative default already makes this
    decision, so [indomain_split] adds no case the search did not have.
 
    WHAT IT COSTS IN THE PROOF -- MEASURED, not assumed. The row that opened this
    (docs/ROADMAP.md M7-T9) predicted the justification would be CHEAPER than
    [indomain_min]'s because the branch is an order literal and the order encoding is built
-   out of exactly those (D-0028). The prediction is about the wrong quantity. Both
+   out of exactly those (D-0028: a justification's size is proportional to the declared
+   domain width). The prediction is about the wrong quantity. Both
    branchings emit the SAME per-decision lines: [branch] writes one order literal
    [x_ge_(k+1)] either way, and neither the bridge nor the nogood is shaped by where [k]
    sits. What differs is the TREE -- how many decisions there are -- and bisection is the
@@ -1202,7 +1302,7 @@ let indomain_split store v =
   let lo = Domain.lo d and hi = Domain.hi d in
   Split { d_var = v; d_split = lo + ((hi - lo) / 2); d_high_first = false }
 
-(* ------------------------------------------------------ M7-T12: `indomain_median`
+(* -------------------------------- `indomain_median`, a value count (M7-T12)
 
    MiniZinc: "assign the variable its median value". THE MEDIAN IS A VALUE COUNT, not a
    range midpoint -- that is [indomain_split] above, and the two are different
@@ -1237,24 +1337,15 @@ let indomain_median store v =
    omit variables entirely, and neither is this type's problem. *)
 type phase = { p_vars : Var.t array; p_var : var_select; p_val : val_select }
 
-(* `seq_search`: consult each phase in turn, and take the first whose subset still holds
-   an unfixed variable. That IS the composition rule -- a later annotation is reached only
-   once every variable of every earlier one is fixed -- and it is M7-T2 obligation (b).
-
-   [fallback] is what happens when no phase has an unfixed variable left but the search
-   still needs a decision, which is the ordinary case: a FlatZinc annotation is not
-   obliged to mention every variable, and the solver must still be able to branch on the
-   ones it did not. [Search] would otherwise have no decision to make and the model would
-   be answered wrong, so the fallback is not optional and not a default -- it is stated.
-   `compile.ml` passes [spec_order], and docs/SPEC.md 3.4 needs to say so. *)
-(* ------------------------------------------------- M6-T13: the STAGED form of an order
+(* ------------------------------------------------- the STAGED form of an order (M6-T13)
 
    THE COST THIS REMOVES. [dfs] used to build [unfixed store] -- a scan of EVERY variable
    in the store -- at every node, and [sequence] then put every one of those candidates in
    a [Hashtbl] so it could ask which of a phase's variables were live. So a node cost
    O(store), constrained or not: on a 7-variable pigeonhole padded with 2000 unconstrained
    variables (bench/m6t11/gen.py ne 7 2000) the run was GC and [Hashtbl.replace] for
-   variables no phase names and no propagator watches (D-0085's request, D-0087).
+   variables no phase names and no propagator watches. D-0085 left this as a leftover of
+   its constant-factor levers, and D-0087 removed it.
 
    WHY IT IS THE SAME ANSWER. [dfs] only ever hands an order [unfixed store], and against
    THAT array "[v] is a candidate" is exactly "[Domain.size (Store.get store v) > 1]" --
@@ -1289,15 +1380,29 @@ let staged_of (o : order) : staged option =
       staged_cache := Some (o, s);
       s
 
-(* M10-T3: the phases a [sequence] was built from, keyed by the order it returned, the
+(* The phases a [sequence] was built from, keyed by the order it returned, the
    same way [staged_orders] is. The activity order reads an annotation's VALUE choice for
-   a variable from here (D-0137 section 4), so compile.ml does not have to hand it over. *)
+   a variable from here (D-0137 section 4; M10-T3), so compile.ml does not have to hand
+   it over. *)
 let sequence_phases : (order, phase list) Ephemeron.K1.Bucket.t =
   Ephemeron.K1.Bucket.make ()
 
-(* D-0186: [full] builds a table of every candidate per call, O(variables) per node once
-   no phase has a live variable and [dfs] falls back on it, the order of the [unfixed]
-   array it is handed. The staged form below answers every node where a phase is live. *)
+(* `seq_search`: consult each phase in turn, and take the first whose subset still holds
+   an unfixed variable. That IS the composition rule -- a later annotation is reached only
+   once every variable of every earlier one is fixed -- and it is M7-T2 obligation (b).
+
+   [fallback] is what happens when no phase has an unfixed variable left but the search
+   still needs a decision, which is the ordinary case: a FlatZinc annotation is not
+   obliged to mention every variable, and the solver must still be able to branch on the
+   ones it did not. [Search] would otherwise have no decision to make and the model would
+   be answered wrong, so the fallback is not optional and not a default -- it is stated.
+   `compile.ml` passes [spec_order], and docs/SPEC.md 3.4 says so ("Variables no
+   annotation mentions").
+
+   [full], the plain [order], builds a table of every candidate per call: O(variables)
+   per node, paid only once no phase has a live variable and [dfs] falls back on it with
+   the [unfixed] array. The staged form below answers every node where a phase is live
+   (D-0186). *)
 let sequence ?(fallback = spec_order) (phases : phase list) : order =
   let full store cands =
     let live = Hashtbl.create (2 * Array.length cands) in
@@ -1328,13 +1433,13 @@ let sequence ?(fallback = spec_order) (phases : phase list) : order =
       let i = Var.to_int v in
       i >= 0 && i < n && not (Domain.is_fixed (Store.get store v))
     in
-    (* D-0186: the live variables of a phase, in the phase's order, as one pass into a
+    (* The live variables of a phase, in the phase's order, as one pass into a
        scratch array and one copy of the live prefix. It was [Array.of_seq (Seq.filter
        ...)], a [Seq] cell, a closure call and a list cell per variable at every node:
        8 % of 2024 monitor-placement's instructions, whose phase is every Boolean of
        the model. The array is the one [Array.of_seq] built. The scratch is this order's
        own and is copied out before [p_var] or [p_val] runs, so nothing they do can
-       see it. *)
+       see it. (D-0186.) *)
     let rec go = function
       | [] -> None
       | ph :: rest -> (
@@ -1359,16 +1464,17 @@ let sequence ?(fallback = spec_order) (phases : phase list) : order =
   Ephemeron.K1.Bucket.add sequence_phases full phases;
   full
 
-(* ------------------------------------------- M10-search-strategy-T2: phase saving
+(* ------------------------------------- phase saving (D-0137 section 3, M10-T2)
 
-   D-0137 section 3. [phased ph o] is [o] with its VALUE choice replaced by the saved
-   phase of the variable [o] chose, when [ph] holds one still in that variable's domain;
-   the variable choice is [o]'s, untouched. The saved value [s] becomes a ONE-LITERAL
-   decision, the shape every default and annotated search makes: at [lo] the literal
-   [x <= lo] first (that branch is [x = lo]), at [hi] [x >= hi] first, and strictly inside
-   [x <= s] first, with [s] at the top of that branch, so the next decision on [x], if
-   the order takes [x] again with the same phase, is [x >= s] there and lands on [s]. So
-   no decision shape and no proof line is new.
+   Phase saving tries first, for a variable, the value it was last fixed at before a
+   backtrack undid it (lib/core/phase.ml). [phased ph o] is [o] with its VALUE choice
+   replaced by the saved phase of the variable [o] chose, when [ph] holds one still in
+   that variable's domain; the variable choice is [o]'s, untouched. The saved value [s]
+   becomes a ONE-LITERAL decision, the shape every default and annotated search makes: at
+   [lo] the literal [x <= lo] first (that branch is [x = lo]), at [hi] [x >= hi] first,
+   and strictly inside [x <= s] first, with [s] at the top of that branch, so the next
+   decision on [x], if the order takes [x] again with the same phase, is [x >= s] there
+   and lands on [s]. So no decision shape and no proof line is new.
 
    NOT D-0077's assignment [x = s], and that is a measured choice (D-0137 section 3,
    addendum): with the assignment shape, `--search activity --restarts luby
@@ -1377,8 +1483,8 @@ let sequence ?(fallback = spec_order) (phases : phase list) : order =
    same run verifies. The root cause is not found; until it is, phase saving does not
    produce the assignment shape.
 
-   Both forms of [o] are wrapped -- the full one, and the staged one [dfs] asks first
-   (M6-T13) -- so that a staged order keeps its O(phase) node instead of falling back to
+   Both forms of [o] are wrapped -- the full one, and the staged one [dfs] asks first --
+   so that a staged order keeps its O(phase) node instead of falling back to
    [unfixed store]. *)
 let value_decision store v s =
   let d = Store.get store v in
@@ -1403,9 +1509,9 @@ let phased (ph : Phase.t) (o : order) : order =
   | None -> ());
   full
 
-(* ------------------------------------------------- M7-T31: the median sweep's knob
+(* ------------------------------------------ the median sweep's test knob (M7-T31)
 
-   D-0148. [median_values o] is [o] with every decision's VALUE replaced by
+   [median_values o] is [o] with every decision's VALUE replaced by
    [indomain_median]'s for the variable [o] chose, so that an interior median becomes
    D-0077's assignment decision wherever the domain allows one. It exists for one
    purpose: a sweep over the model suite and the lane corpus that takes the assignment
@@ -1415,7 +1521,9 @@ let phased (ph : Phase.t) (o : order) : order =
    command-line flag: SPEC 3.4 fixes the value choice a model gets, and this changes it.
    Unset, the order is the same value, so a default run cannot see it. It wraps both
    forms of [o], as [phased] does, and it goes on last, after [phased], so the median
-   is the value every decision takes. *)
+   is the value every decision takes. It was built for M7-T31, a branch nogood the
+   checker refused under restarts, which D-0148 resolved (a factless pruning that
+   settled over a hole is not a root of the decision closure). *)
 let median_values (o : order) : order =
   let apply store c =
     let v = match c with Split d -> d.d_var | Assign a -> a.a_var in
@@ -1429,14 +1537,15 @@ let median_values (o : order) : order =
   | None -> ());
   full
 
-(* ------------------------------------------ M10-search-strategy-T3: the activity order
+(* ------------------------- the activity order (D-0137 section 4, M10-search-strategy-T3)
 
-   D-0137 section 4. The variable is [Activity.select]'s; the value is the annotation's
-   value choice for that variable when some phase of the annotation names it (the first
-   such phase, as [sequence] would consult them), and SPEC 3.4's [indomain_min]
+   The variable is [Activity.select]'s (the highest VSIDS-style score, bumped by the
+   variables of each learned clause and decayed, lib/core/activity.ml); the value is the
+   annotation's value choice for that variable when some phase of the annotation names it
+   (the first such phase, as [sequence] would consult them), and SPEC 3.4's [indomain_min]
    otherwise. A saved phase, when [--phase-saving] is on, is applied on top by [phased],
-   as for every other order. The activity order has no staged form: it ranks every
-   unfixed variable, which is [unfixed store]. *)
+   as for every other order. The activity order has no staged form: it ranks every unfixed
+   variable, which is [unfixed store]. *)
 let annotated_value (annotation : order) : val_select =
   match Ephemeron.K1.Bucket.find sequence_phases annotation with
   | None -> indomain_min
@@ -1479,13 +1588,19 @@ let alternate ~(run : unit -> int) ~(annotation : order) ~(activity : order) : o
    split in [lo, hi), which is the only shape constraint [branch] imposes.
 
    ---------------------------------------------------------------------------
-   M1-T45: the hole guard this function used to carry, and why it is gone
+   A split at a hole is allowed, and [bridges] carries it (M1-T45)
    ---------------------------------------------------------------------------
 
-   This function used to refuse to split at a [k] unless both [k] and [k + 1] were in
-   the domain, retrying up to eight times and falling back to [lo]. The refusal was
-   about the proof and not about the search: [Domain.settle] walks a bound over a hole,
-   so a decision at a hole puts a bound on the trail strictly STRONGER than the
+   The rule: [random_order] may split at any [k] in [lo, hi), holes included. A split at
+   a hole puts on the trail a bound strictly STRONGER than the [x_ge_(k+1)] its nogood
+   negates ([Domain.settle] walks a bound over a hole), and [bridges] writes the step
+   from one to the other, so the checker can replay it. [spec_order] makes the same kind
+   of decision whenever [lo + 1] is a hole, so the fuzzer and the default are symmetric.
+
+   History. This function used to refuse to split at a [k] unless both [k] and [k + 1]
+   were in the domain, retrying up to eight times and falling back to [lo]. The refusal
+   was about the proof and not about the search: [Domain.settle] walks a bound over a
+   hole, so a decision at a hole puts a bound on the trail strictly STRONGER than the
    [x_ge_(k+1)] its nogood negates, and the checker cannot replay the difference unless
    the difference is written down.
 
@@ -1541,12 +1656,16 @@ let extract_assignment store : assignment =
       let v = Var.of_int i in
       (v, Domain.lo (Store.get store v)))
 
-(* ------------------------------------------------------- M2-L3: learning, as a config
+(* -------------------------------- what the search does with a conflict: [config]
 
    What the search is allowed to do with a conflict, as a value rather than as an
-   environment variable, because two of the three fields exist ONLY so that a test can
-   perform a break and watch the checker reject it. A knob a test cannot set is a knob
-   whose break lane does not exist, and this project has shipped one (M1-T45).
+   environment variable, because several fields exist ONLY so that a test can perform a
+   BREAK (a deliberately wrong proof step) and watch the checker reject it. A knob a test
+   cannot set is a knob whose break lane does not exist, and this project has shipped one
+   (M1-T45). The fields below are documented in the order they arrived; the record
+   itself, after branch and bound, documents the later ones in place.
+
+   Clause learning (M2-L3: 1UIP learning over order literals, with backjumping):
 
    [learn]      off is M1's search exactly: the nogood is the whole decision stack, no
                 cut is taken, no clause is put on the page and [stats.skipped] stays 0.
@@ -1561,28 +1680,34 @@ let extract_assignment store : assignment =
                 read backwards. The [rup] is then checked against a database that no
                 longer holds the trace lines it rests on. Also not CLI-reachable.
 
-   M2-L6 adds three, and the first is the one a reader should look at twice.
+   PB conflict analysis (M2-L6) adds three, and the first is the one a reader should look
+   at twice.
 
    [pb]         PB conflict analysis (lib/core/pb_analysis.ml). On, and ADDITIVE: when it
                 succeeds, the derived inequality goes on the page ALONGSIDE the M2-L3
                 clause, not instead of it. That is not hedging. The clause is what the
                 search's nogood and backjump rest on -- through [Learn.levels], which come
-                from the decision closure and not from either learned object, which M2-L15
-                re-asked after M2-L13 and MEASURED rather than left as a preference; see
-                [pb_level_verdict] -- and M2-L3 owns a body of assertions about it that
-                this row has no business disturbing. What the PB row adds is a strictly stronger constraint on the
-                page, under D-0044's same fork (ii): proof-only until M2-L4's retention
-                policy decides which learned objects earn a runtime instance. Off is the
-                state every M2-L3 measurement was taken in, so a comparison against those
-                numbers has a switch to set.
+                from the decision closure and not from either learned object; M2-L15
+                re-asked that after learned PB rows began to propagate and MEASURED it
+                rather than leaving it a preference, see [pb_level_verdict] -- and M2-L3
+                owns a body of assertions about it that this field has no business
+                disturbing. What the PB row adds is a strictly stronger constraint on the
+                page, which since M2-L13 also gets a runtime instance (lib/core/prop/
+                pb.ml) when [propagate_learned] is on, and which the retention database
+                (M2-L4) may evict like any learned constraint. Off is the state every
+                M2-L3 measurement was taken in, so a comparison against those numbers has
+                a switch to set.
    [reduction]  which [Reduce.t] brings the pivot's coefficient to 1. [round_to_one]
-                dominates [division] (D-0044), and [division] is here so a test can show
-                the difference on a real conflict rather than on a hand-built row.
+                dominates [division] (D-0044, which made the learned object a PB
+                inequality with the clause as its degree-1 case), and [division] is here
+                so a test can show the difference on a real conflict rather than on a
+                hand-built row.
    [pb_criterion] the slack-based stopping rule. See lib/core/pb_analysis.ml on why an
                 assertive constraint is not a sufficient stop condition for PB.
 
-   M2-L11 adds one, and it is a BREAK KNOB in the same sense [break_i_s4] is -- except
-   that turning it off is not wrong, it is M2-L6.
+   The ladder lift (M2-L11: a reason row strengthened by the order encoding's ladder rows
+   so that it propagates its pivot) adds one, and it is a BREAK KNOB in the same sense
+   [break_i_s4] is -- except that turning it off is not wrong, it is M2-L6.
 
    [pb_ladder]  whether a reason row that does not PB-propagate its pivot may be
                 strengthened by the order encoding's ladder rows (lib/core/ladder.ml)
@@ -1597,7 +1722,7 @@ let extract_assignment store : assignment =
                 still claiming the right conclusion, which is this row's proof-level
                 break. Wrong on purpose, sound but not the claimed row, and not
                 CLI-reachable. See [Ladder.derive]'s [~break]. *)
-(* ------------------------------------------------------- M5-T1: BRANCH AND BOUND
+(* -------------------------------- branch and bound: the objective, the incumbent (M5-T1)
 
    The objective, and the incumbent, as data. Read this before [record_improving] and
    before [optimise]; the whole of M5-T1's proof argument is here rather than spread
@@ -1628,15 +1753,15 @@ let extract_assignment store : assignment =
    falsified outright. That is one unit-propagation sweep over rows that are already in
    the .opb, which is the reason this needs no `pol` and no new machinery.
 
-   `obju` IS NOT USED, AND THAT IS THE POINT. docs/PROOF-FORMAT.md line 136 files the
-   trap against M5: `obju ... ;` is refused with *"Proofgoal #1 could not be autoproven.
-   Please add an explicit subproof for proofgoal #1."* (re-measured on 3.0.2, 2026-09-21,
-   not quoted from the note). It is refused because an objective UPDATE changes the
-   function being minimised and owes a proof that the change is sound. Branch and bound
-   does not change the objective -- it tightens a BOUND on a fixed objective -- so the
-   rule it needs is `soli`, which owes no such goal. The trap is avoided by not being in
-   its way, and [test_proof.ml]'s [obju_needs_a_subproof] keeps the measurement honest by
-   performing it.
+   `obju` IS NOT USED, AND THAT IS THE POINT. docs/PROOF-FORMAT.md's table of traps
+   (section 2a, the "objective update" row) files it against M5: `obju ... ;` is refused
+   with *"Proofgoal #1 could not be autoproven. Please add an explicit subproof for
+   proofgoal #1."* (re-measured on 3.0.2, 2026-09-21, not quoted from the note). It is
+   refused because an objective UPDATE changes the function being minimised and owes a
+   proof that the change is sound. Branch and bound does not change the objective -- it
+   tightens a BOUND on a fixed objective -- so the rule it needs is `soli`, which owes no
+   such goal. The trap is avoided by not being in its way, and [test_proof.ml]'s
+   [obju_needs_a_subproof] keeps the measurement honest by performing it.
 
    WHAT THE CONCLUSION RESTS ON, and why it is not decorative. `conclusion BOUNDS <lo>`
    is CHECKED: 3.0.2 refuses a claim no database constraint syntactically implies, with
@@ -1697,7 +1822,8 @@ type bnb = {
          [Some] means the search is over and this is what the conclusion cites. *)
 }
 
-(* M10-search-strategy-T3 (D-0137 section 4): which variable order a solve uses. *)
+(* Which variable order a solve uses: the annotation's, the activity order, or the two
+   alternating at each restart (D-0137 section 4, M10-search-strategy-T3). *)
 type search_mode =
   | Annotated (* the order handed to [solve]: SPEC 3.4's default or the annotation *)
   | Activity_order (* [activity_order], every run *)
@@ -1713,7 +1839,8 @@ type config = {
   pb_ladder : bool;
   break_ladder_mult : bool;
   break_pb_degree : bool;
-      (* M2-L13's break. Registers the learned PB row's runtime instance with a degree
+      (* The break for learned PB rows that propagate (M2-L13). Registers the learned PB
+         row's runtime instance with a degree
          ONE HIGHER than the row that is on the page, so the propagator enforces a
          constraint the proof does not state and its prunings are no longer RUP against
          it. The point is that a wrong slack rule is NOT visible in the answer -- an
@@ -1721,13 +1848,15 @@ type config = {
          only oracle for it is the checker, and this is what puts the checker in front of
          one. test/unit/test_pb.ml runs it and asserts the REJECTION's wording. *)
   retention : Retention.policy;
-      (* M2-L4. [Retention.keep_all] is the pre-M2-L4 behaviour and test (c)'s "policy
-         off" side; [Retention.default] is the policy and the measurement that chose it
-         is in lib/core/retention.ml's header. Swappable for the same reason [reduction]
-         and [pb_criterion] are (D-0044): the interesting alternatives are not
+      (* Which learned constraints the retention database keeps (M2-L4).
+         [Retention.keep_all] is the pre-M2-L4 behaviour and test (c)'s "policy off" side;
+         [Retention.default] is the policy, [tiered] since D-0226, and the measurement
+         that chose it is in lib/core/retention.ml's header. Swappable for the same reason
+         [reduction] and [pb_criterion] are (D-0044): the interesting alternatives are not
          parameterisations of one another. *)
   backjump_on_pb : bool;
-      (* M2-L15's BREAK, and the thing this row exists to refuse. OFF.
+      (* A BREAK: backjump on the levels the learned PB row names. M2-L15 re-did the
+         calculation after M2-L13 and exists to refuse this. OFF.
 
          On, the branch nogood is filtered by the level set the LEARNED PB ROW names
          ([Pb_analysis.levels]) instead of by the decision closure's
@@ -1743,17 +1872,18 @@ type config = {
          [break_ladder_mult] and [break_pb_degree] are. test/unit/test_pb.ml runs it and
          asserts the rejection's wording. *)
   bnb : bnb option;
-      (* M5-T1. [None] is a satisfaction search and is every pre-M5 caller's behaviour
-         unchanged: [dfs] returns [NSat] at the first solution exactly as it always did.
-         [Some] turns the same tree into a branch-and-bound search -- see [type bnb]
-         above and [record_improving] below.
+      (* Branch and bound (M5-T1). [None] is a satisfaction search and is every pre-M5
+         caller's behaviour unchanged: [dfs] returns [NSat] at the first solution exactly
+         as it always did. [Some] turns the same tree into a branch-and-bound search --
+         see [type bnb] above and [record_improving] below.
 
          It lives on [config] rather than being threaded as an argument because that is
          what [config] is: the record that says how this solve behaves. It is NOT one of
          the swappable components D-0044 is about, and it is not a break lane; it is the
          one field here that carries mutable state, which [type bnb] justifies. *)
   break_assign_clause : bool;
-      (* M7-T12/D-0077's FIRST BREAK. OFF.
+      (* The FIRST BREAK of the assignment decision (M7-T12, D-0077: its sibling is
+         discharged by a derived clause). OFF.
 
          On, the assignment clause is emitted with only its LOWER half -- `x <= m-1`
          and not `x >= m+1`. That is a STRENGTHENING of the child's nogood rather than
@@ -1762,18 +1892,21 @@ type config = {
          punched on a clause the node does not entail, and every line the re-entry writes
          rests on it. Wrong on purpose and NOT CLI-reachable, like the two below. *)
   break_assign_facts : bool;
-      (* M7-T12/D-0077's SECOND BREAK, and the one worth the most. OFF.
+      (* The assignment decision's SECOND BREAK, and the one worth the most. OFF.
 
          On, the hole the assignment punches carries [Reason.none] instead of the active
          decisions, so [Trace] writes its line with an EMPTY TAIL: a bare `x <> m`,
-         asserted unconditionally. That is D-0075's defect exactly, in a new place --
-         the solver's reasoning is unchanged and the answer it returns is still right,
-         and the only thing that can see it is the checker, over a SATISFIABLE model
-         (D-0053, D-0066 as D-0073 amends it). At the ROOT the tail is empty honestly,
+         asserted unconditionally. That is D-0075's defect exactly (a line that states
+         less than the reasoning read), in a new place -- the solver's reasoning is
+         unchanged and the answer it returns is still right, and the only thing that can
+         see it is the checker, over a SATISFIABLE model: over a contradictory database
+         every [red] and [rup] is vacuously accepted (D-0053, D-0066 as D-0073 amends
+         it). At the ROOT the tail is empty honestly,
          so this break is invisible there and the lane that exercises it has to take its
          assignment under at least one decision. *)
   break_bridge_levels : bool;
-      (* M7-T6/D-0070's BREAK, and the defect this row fixed. OFF.
+      (* The BREAK of the level-0 nogood defect M7-T6 found and D-0070 fixed: a decision
+         that settles past a hole, and a level filter that could not see it. OFF.
 
          On, the nogood is filtered by [Learn.levels] ALONE, which is what this module
          did before M7-T6: the decision literals a [bridges] line rests on are no longer
@@ -1788,16 +1921,16 @@ type config = {
          [break_ladder_mult], [break_pb_degree] and [backjump_on_pb] are.
          test/unit/test_learn.ml runs it over a SAT model and asserts the rejection. *)
   stop : unit -> bool;
-      (* M6-T9. Asked once at the entry of every node; [true] stops the search there and
-         [solve]/[optimise] end the proof with `conclusion NONE` and raise [Stopped].
-         Default [never]: the search is byte-for-byte what it was. NODE granularity,
-         deliberately -- a node is the one place the store, the trail and the proof are
-         all in a state the finaliser can sweep, and a check inside propagation or
-         conflict analysis would have to unwind a half-written derivation. The cost is
+      (* The stop predicate (M6-T9). Asked once at the entry of every node; [true] stops
+         the search there and [solve]/[optimise] end the proof with `conclusion NONE` and
+         raise [Stopped]. Default [never]: the search is byte-for-byte what it was. NODE
+         granularity, deliberately -- a node is the one place the store, the trail and the
+         proof are all in a state the finaliser can sweep, and a check inside propagation
+         or conflict analysis would have to unwind a half-written derivation. The cost is
          that a single node that takes longer than the remaining budget overruns it; the
          CLI's caller keeps its own wall-clock `timeout` above `--time-limit` for that.
 
-         M6-T21 (D-0136): ALSO asked inside [Engine.propagate], after every
+         ALSO asked inside [Engine.propagate] (M6-T21, D-0136), after every
          [stop_poll_runs]-th completed propagator run, so that one node with a long
          propagation cannot hold the stop past the limit. (The 2026-11-17 overshoot,
          49 s past 600, was mostly NOT that: it was [Retention.retire]'s quadratic
@@ -1808,22 +1941,25 @@ type config = {
          unaffected by being asked more often; one that COUNTS its calls is not, which
          is why [stop_poll_runs = 0] exists.
 
-         M6-T23 (D-0149): the same knob governs the two polls added there, inside a
-         conflict's [Trace.emit] (every trail entry) and inside PB conflict analysis
-         (every elimination and every ladder rung): [inner_stop] below. So [0] still
+         The same knob governs two more polls (M6-T23, D-0149: the stop was never asked
+         there, and runs with --proof overshot by minutes), inside a conflict's
+         [Trace.emit] (every trail entry) and inside PB conflict analysis (every
+         elimination and every ladder rung): [inner_stop] below. So [0] still
          means node entry only, everywhere. *)
   stop_poll_runs : int;
-      (* M6-T21. Completed propagator runs between two asks of [stop] inside
+      (* Completed propagator runs between two asks of [stop] inside
          [Engine.propagate]; [0] asks at node entry only, which is M6-T9's contract
          exactly. Default [Engine.default_poll_runs]. With [stop] at its default
          [never] the value changes nothing but one decrement per run. *)
   propagate_learned : bool;
-      (* M2-L12. Whether a learned clause gets a runtime consumer: a unit becomes a
+      (* Whether a learned constraint gets a runtime consumer (M2-L12, and M2-L13 for the
+         PB rows): a unit becomes a
          global bound tightening applied at every node, a wider one becomes a
-         [Clause.Learned_clause] instance registered with the engine. ON.
+         [Clause.Learned_clause] instance registered with the engine, a learned PB row
+         a [Pb.Learned_pb] instance. ON.
 
          OFF is exactly the pre-M2-L12 build -- every learned constraint proof-only,
-         which is D-0044 fork (ii) as lib/core/learn.ml's header took it -- and it is
+         the "fork (ii)" lib/core/learn.ml's header describes -- and it is
          here for the same reason [pb_ladder] is: an improvement that cannot be switched
          off is an improvement nobody can measure. It is also what makes test (a)'s break
          possible, which is the obligation "assert the bound moves, and that it does NOT
@@ -1833,34 +1969,47 @@ type config = {
          learned constraints still go on the page, nothing cites them, and
          [Retention]'s citation guard has nothing to guard. *)
   rest_satisfied : bool;
-      (* M11-complexity-T17 (D-0173): RESTING ([Clause.Learned_clause], [Engine.rest_on]).
-         A learned clause whose run finds one of its two watched literals TRUE keeps both
-         watches, leaves the wake index but for that literal's slot, and is run again after
-         a backtrack that pops the literal's support. It loses no pruning (every node
-         reaches the same fixpoint), but it changes the order prunings land in, so the
-         trees and the proofs, on most of the differential lane. OFF: a default-behaviour
-         change, for the user (D-0173 section 5). CLI: BAGUETTE_REST_SATISFIED=on. *)
+      (* RESTING ([Clause.Learned_clause], [Engine.rest_on]). A learned clause whose run
+         finds one of its two watched literals TRUE keeps both watches, leaves the wake
+         index but for that literal's slot, and is run again after a backtrack that pops
+         the literal's support. It loses no pruning (every node reaches the same
+         fixpoint), but it changes the order prunings land in, so the trees and the
+         proofs, on most of the differential lane. OFF: a default-behaviour change, for
+         the user (D-0173 section 5). CLI: BAGUETTE_REST_SATISFIED=on. D-0173
+         (M11-complexity-T17) found that the learned clauses that "cannot prune" were
+         SATISFIED ones, which is what resting skips. *)
   restarts : Restart.policy;
-      (* M10-search-strategy-T2 (D-0137 sections 1-2). [Restart.No_restarts] is SPEC 3.4's
+      (* The restart policy (D-0137 sections 1-2, M10-search-strategy-T2: Luby,
+         geometric, Glucose's LBD average, lib/core/restart.ml). [Restart.No_restarts] is
+         SPEC 3.4's
          default and every pre-M10 caller's behaviour: [search_core] then builds no
          strategy state and no [NRestart] is ever produced. Any other policy restarts the
          search to level 0 when it says so, after a conflict that learned something. *)
   phase_saving : bool;
-      (* M10-search-strategy-T2 (D-0137 section 3): replace the order's value choice by
-         the variable's saved phase ([phased]). OFF by default. *)
+      (* Replace the order's value choice by the variable's saved phase ([phased], D-0137
+         section 3). OFF by default. *)
   search : search_mode;
-      (* M10-search-strategy-T3 (D-0137 section 4). [Annotated] is the order the caller
-         passed (SPEC 3.4's default, or the annotation) and every pre-M10 caller's. *)
+      (* The variable order ([search_mode], D-0137 section 4). [Annotated] is the order
+         the caller passed (SPEC 3.4's default, or the annotation) and every pre-M10
+         caller's. *)
   reuse_trail : bool;
-      (* M10-T3: partial restarts under [Activity_order] (D-0137 section 1.1). Ignored
+      (* Partial restarts under [Activity_order] (D-0137 section 1.1). Ignored
          with any other order, where the rule is not defined. OFF. *)
   cdcl : bool;
-      (* M19-config-T10 (D-0219): run the CDCL loop ([cdcl]) instead of [dfs]: on a
+      (* Run the CDCL loop ([cdcl], D-0219, M19-config-T10) instead of [dfs]: on a
          conflict, learn the 1UIP clause, backjump to its asserting level and let it
          propagate there. OFF by default; BAGUETTE_CDCL=1 turns it on (read here, so
-         that every caller building on [default_config] -- bin/main.ml included -- gets
-         it without a CLI change). Forces the learned clause's consumer on whatever
+         that every caller building on [default_config] gets it), and so does the CLI's
+         --cdcl. Forces the learned clause's consumer on whatever
          [propagate_learned] says. *)
+  chrono : int option;
+      (* Chronological backtracking for long jumps (D-0224, M19-config-T11), under [cdcl]
+         only. [Some t]: when the backjump to the
+         learned clause's asserting level would skip more than [t] levels, go back to the
+         level below the clause's highest one instead and assert the literal there
+         (chronological backtracking for long jumps, Nadel and Ryvchin 2018, the literal
+         recorded at that level). [None] (the default): D-0219's loop exactly. Ignored by
+         [dfs]. BAGUETTE_CHRONO=T, or the CLI's --chrono T. *)
 }
 
 let default_config =
@@ -1899,21 +2048,36 @@ let default_config =
           prerr_endline
             (Printf.sprintf "baguette: BAGUETTE_CDCL=%S is not a setting. Use 1 or 0." v);
           exit 2);
+    chrono =
+      (* The same discipline: a non-negative integer, or unset/off. *)
+      (match Sys.getenv_opt "BAGUETTE_CHRONO" with
+      | None | Some ("" | "off") -> None
+      | Some v -> (
+          match int_of_string_opt v with
+          | Some t when t >= 0 -> Some t
+          | _ ->
+              prerr_endline
+                (Printf.sprintf
+                   "baguette: BAGUETTE_CHRONO=%S is not a setting. Use a level count >= \
+                    0 or off."
+                   v);
+              exit 2));
   }
 
 let no_learning = { default_config with learn = false; pb = false }
 
 (* Retention off: every learned constraint is held until the search ends, which is what
-   this solver did before M2-L4. The control side of test (c). *)
+   this solver did before M2-L4 (the retention database). The control side of test (c). *)
 let no_retention = { default_config with retention = Retention.keep_all }
 let no_pb = { default_config with pb = false }
 
-(* M2-L12 test (a)'s control side: learning on, every learned constraint proof-only. The
+(* The control side of M2-L12's test (a): learning on, every learned constraint
+   proof-only. The
    build lib/core/learn.ml's header describes, in which the backjump "would re-reach the
    same fixpoint, re-take the same decision and re-derive the same conflict". *)
 let no_propagate_learned = { default_config with propagate_learned = false }
 
-(* ------------------------------------------------------------------- nogoods
+(* -------------------------------------------- nogoods: levelled, filed, combined
 
    The decision stack as a nogood: one literal per decision, negated, paired with the
    level that decision was taken at. [decisions] is most-recent first and each branch
@@ -1923,15 +2087,16 @@ let levelled_nogood decisions ~top : nogood =
 
 (* The level a nogood is FILED at: the deepest decision level it names, or 0.
 
-   docs/ROADMAP.md M2-L3: "attach the clause at the backjump level, not the level being
-   retired". That is this function, and it is the whole resolution of the tension the row
-   names. The nogood is consumed by the frame owning its deepest level -- every frame
-   between there and the conflict skips its sibling and passes the nogood up untouched --
-   so it must survive their wipes and die with that frame's. [Writer.fresh] tags an id at
-   the writer's CURRENT level, which is the conflict's, so emitting it where it is derived
-   is exactly what gets it deleted on the way out (D-0045's addendum). [Justify.with_level]
-   is M2-L1's entry point for moving the level for real, in both formats, and it is the
-   entry point this row was told to check for and did find. *)
+   The rule (docs/ROADMAP.md M2-L3): "attach the clause at the backjump level, not the
+   level being retired". The nogood is consumed by the frame owning its deepest level --
+   every frame between there and the conflict skips its sibling and passes the nogood up
+   untouched -- so it must survive their wipes and die with that frame's. [Writer.fresh]
+   tags an id at the writer's CURRENT level, which is the conflict's, so emitting it where
+   it is derived is exactly what would get it deleted on the way out (D-0045's addendum,
+   which found that a line filed at the conflict's level dies on the backjump).
+   [Justify.with_level] files a line at another level; it came with M2-L1 (the learned
+   constraint's proof-side introduction), which introduces learned constraints at
+   level 0 the same way. *)
 let filed_at (ng : nogood) = List.fold_left (fun a (_, l) -> Stdlib.max a l) 0 ng
 
 (* Emit a branch nogood at the level it is filed at. The writer is left where it was:
@@ -1957,12 +2122,12 @@ let minimise stats policy (xs : nogood) : nogood =
    descending level, so the result is a function of the two clauses and not of the order
    they were built in (test (f)).
 
-   D-0186: the deduplication keeps the FIRST pair of each literal, in [joined]'s order,
+   The deduplication keeps the FIRST pair of each literal, in [joined]'s order,
    as the fold over a list did ([List.exists Lit.equal] on the pairs kept so far, then
    [acc @ [pair]]); the kept literals are a [Lit_tbl] and the pairs are consed and
    reversed once, so a combine at depth [d] is O(d) and not O(d^2) string compares. The
    sort compares levels with [Int.compare], which on ints is the [Stdlib.compare] it
-   replaces. *)
+   replaces (D-0186). *)
 let combine_nogoods stats policy (a : nogood) (b : nogood) ~lvl : nogood =
   let joined = List.filter (fun (_, l) -> l <> lvl) (a @ b) in
   let kept = Lit_tbl.create 64 in
@@ -1980,14 +2145,11 @@ let combine_nogoods stats policy (a : nogood) (b : nogood) ~lvl : nogood =
 
 (* ------------------------------------------------------------------------------ dfs *)
 
-(* [decisions] is the stack of literals actually forced true so far by branching,
-   most-recent decision first -- so [List.map Lit.negate decisions] is, at every
-   point, exactly the nogood clause that would state "not all of these hold". *)
-(* D-0018 point 4, made loud. The nogood cites decisions that live at [lvl]; the [w]
-   that retires them must come *after* it, and the writer must already have stepped down
-   to the parent level, or the nogood is filed at a level its own [w] is about to wipe.
-   Under the audit the id is checked to be live as well, which catches the same mistake
-   made one call earlier. *)
+(* D-0018 point 4 (the nogood before the wipe), made loud. The nogood cites decisions that
+   live at [lvl]; the [w] that retires them must come *after* it, and the writer must
+   already have stepped down to the parent level, or the nogood is filed at a level its
+   own [w] is about to wipe. Under the audit the id is checked to be live as well, which
+   catches the same mistake made one call earlier. *)
 let wipe_after_nogood ctx ~lvl ~nogood =
   if Debug.enabled then
     Debug.check
@@ -1999,29 +2161,13 @@ let wipe_after_nogood ctx ~lvl ~nogood =
         (not (Writer.auditing w)) || Writer.is_live w nogood);
   Justify.wipe_level ctx lvl
 
-(* ------------------------------------------------------------ the root conflict
+(* ----------------------------------------- the root conflict, closed on its trace
 
    A conflict under NO decision is closed the way every branch is closed (D-0018), with
    an empty decision stack: the root's trace, the conflict's own reason line, and the
    empty clause `rup >= 1 ;` -- the nogood over no decisions, and the line
-   `conclusion UNSAT` cites. M8-bits-encoding-T5 (D-0131) made this the only root arm.
-
-   Until then there were two. D-0013 closed the no-decision case with "the propagator's
-   own derivation IS the contradiction" -- for [int_lin_le] a `pol` that weakens every
-   other variable out of the row, divides and adds down to `0 >= k` -- and a second arm
-   (D-0022) took over where that sentence was false: a [Clause] conflict (int_ne with
-   everything fixed is a constraint, not a contradiction: "The constraint with ID <n> is
-   not contradicting, as specified by the hint"), a [Combine] that folded a hole's
-   clause in as a cited summand (M1-T44), a counting row added to an order-currency row
-   (M4-T2, D-0064). Three predicates told the arms apart -- [rests_on_a_clause],
-   [mixes_currencies], [root_needs_trace] -- each a structural reading of the derivation
-   standing in for the question "does this `pol` close?", and each was wrong once before
-   it was right (D-0064; M7-T22/D-0086 for a [Defining] nested under a [Term]). D-0127
-   then measured the `pol` the first arm wrote: Theta(w) tokens per variable of declared
-   width w, 29.8 MB and 12 s at w = 10^6 on a two-variable model infeasible by
-   inspection (D-0028), stating the contradiction a `rup` states in 8 bytes. The
-   derivation was never what made the refutation checkable; the trace was, exactly as
-   under a decision. So the arm that emitted it is gone, and the predicates with it.
+   `conclusion UNSAT` cites. This is the only root arm since D-0131
+   (M8-bits-encoding-T5); the history is at the end of this comment.
 
    What makes `rup >= 1` RUP here is D-0018's argument for every nogood, with nothing
    to negate: each root pruning's line is on the page with its facts before it
@@ -2055,7 +2201,26 @@ let wipe_after_nogood ctx ~lvl ~nogood =
 
    The one shape that short-circuits is a conflict whose explanation is already the
    empty clause -- a disequality every one of whose variables the model declares fixed
-   (D-0019) -- emitted once rather than twice. *)
+   (D-0019) -- emitted once rather than twice.
+
+   History. There used to be two root arms. D-0013 closed the no-decision case with "the
+   propagator's own derivation IS the contradiction" -- for [int_lin_le] a `pol` that
+   weakens every other variable out of the row, divides and adds down to `0 >= k` -- and
+   a second arm (D-0022: a root conflict is its own contradiction only if its derivation
+   is numeric) took over where that sentence was false: a [Clause] conflict (int_ne with
+   everything fixed is a constraint, not a contradiction: "The constraint with ID <n> is
+   not contradicting, as specified by the hint"), a [Combine] that folded a hole's
+   clause in as a cited summand (M1-T44), a counting row added to an order-currency row
+   (M4-T2, D-0064). Three predicates told the arms apart -- [rests_on_a_clause],
+   [mixes_currencies], [root_needs_trace] -- each a structural reading of the derivation
+   standing in for the question "does this `pol` close?", and each was wrong once before
+   it was right (D-0064; M7-T22/D-0086 for a [Defining] nested under a [Term]). D-0127
+   then measured the `pol` the first arm wrote: Theta(w) tokens per variable of declared
+   width w, 29.8 MB and 12 s at w = 10^6 on a two-variable model infeasible by
+   inspection (D-0028), stating the contradiction a `rup` states in 8 bytes. The
+   derivation was never what made the refutation checkable; the trace was, exactly as
+   under a decision. So D-0131 removed the arm that emitted it, and the predicates with
+   it. *)
 let weakened_row_only (e : Explanation.t) =
   match Explanation.force e with
   | Explanation.Combine { summands; divisor = _; _ } ->
@@ -2074,7 +2239,8 @@ let weakened_row_only (e : Explanation.t) =
       && List.for_all
            (function
              | Explanation.Weaken _ -> true
-             (* An uncited term is the declared-range weakening (D-0132 section 2.4). *)
+             (* An uncited term is the declared-range weakening (D-0132 section 2.4, the
+                bits encoding of a linear row). *)
              | Explanation.Linear_term r -> r.lt_cited = []
              | Explanation.Term (_, t) -> (
                  match Explanation.force t with
@@ -2088,16 +2254,35 @@ let close_root_conflict ctx trace store (c : Store.conflict) =
   let e = c.Store.c_why in
   Trace.emit ctx trace store;
   let line = Trace.conflict_line ctx trace c in
-  (* M8-bits-encoding-T2 (D-0130 section 5.4, D-0053): nothing may mint an atom once the
-     root contradiction is on the page. Nothing below names a literal; the guard is for
-     whatever comes after. *)
-  Encoding.close_atoms ctx.Justify.encoding;
+  (* Nothing may mint an atom once the refutation is written (D-0130 section 5.4, the
+     bits encoding's on-demand atoms, M8-bits-encoding-T2; D-0053, a line over a
+     contradictory database is not checked). The guard closes just before the empty
+     clause, which names no literal, and AFTER a factless conflict's derivation, because
+     that derivation may name atoms nothing earlier minted (D-0237, a review fix): an
+     all-fixed disequality's [Resolve] over a bits row (ne.ml records no facts for it at
+     the root) cites the atoms of every term's fixed value, and an ORDER variable's bridge
+     is minted only where a bits derivation first cites it. Closing before it made the
+     default run die in [Encoding.ensure_atom] on a model the order encoding refutes.
+
+     Minting there is sound. Every line VeriPB accepts is sound over any database, a
+     `red` included (the redundance theorem), so a mint cannot make the UNSAT verdict
+     wrong. What D-0053 warns about is the CHECK: over a database unit propagation
+     already refutes, the lines are accepted whatever they say. Measured on 16 models
+     main 121a1ce died on (test/models/root_bits_*, and 12 fuzz seeds): in 14 the
+     database is already UP-contradictory before the derivation, so its lines are
+     unchecked there, as closing earlier would not have changed; in 2 it is not, and
+     the derivation is load-bearing for the `rup >= 1`. Every line minted on these 16
+     was an order bridge (a `rup`, no witness), never a bits `red` pair. The mint code
+     is the one test_mutation's bits lanes check over satisfiable models. *)
+  let close () = Encoding.close_atoms ctx.Justify.encoding in
   match Explanation.force e with
-  | Explanation.Clause { lits = []; _ } -> Justify.emit ctx e
+  | Explanation.Clause { lits = []; _ } ->
+      close ();
+      Justify.emit ctx e
   | forced ->
       (match (line, forced) with
-      (* M8-bits-encoding-T3 (D-0134): a [Resolve] -- a choice derivation over bits,
-         e.g. a disequality all of whose terms are fixed -- is arithmetic too. *)
+      (* A [Resolve] -- a choice derivation over bits, e.g. a disequality all of whose
+         terms are fixed -- is arithmetic too (D-0134, M8-bits-encoding-T3). *)
       | ( None,
           ( Explanation.Combine _ | Explanation.Cut _
           | Explanation.Resolve { parts = _; _ } ) )
@@ -2107,18 +2292,33 @@ let close_root_conflict ctx trace store (c : Store.conflict) =
              weakened, which the checker refutes unaided. *)
           ignore (Justify.emit ctx e : Writer.cid)
       | _ -> ());
+      close ();
       Justify.emit ctx (Explanation.clause [])
 
-(* ------------------------------------------------- a decision that settled at a hole
+(* -------------------------------------- a decision that settled at a hole: the bridge
 
-   M1-T55, and the other half of the sentence in [random_order]'s header above.
+   THE RULE. For each decision on the path whose push settled past a hole, [bridges]
+   writes one line, the BRIDGE (M1-T55):
 
-   [spec_order] splits at [d_split = lo] and [explore_ge] pushes [set_lo v (lo + 1)].
-   [Domain.settle] re-establishes I-D2 by walking a bound over a hole, so when [lo + 1]
-   is a hole the trail entry records [x >= m] for the next value [m] actually in the
-   domain, while the literal that branch assumed -- and the one its nogood negates -- is
-   [x_ge_(lo+1)]. The nogood therefore claims to have refuted [x >= lo + 1] on the
-   strength of having explored only [x >= m].
+       rup 1 <the bound the trail recorded> 1 ~<the bound the decision assumed>
+              1 ~<each ancestor decision> >= 1 ;
+
+   read as a clause: "under these decisions, [x >= lo + 1] implies [x >= m]". It is
+   globally valid -- every ancestor it rests on is negated into it, which is form (a) of
+   this module's header. It is emitted lazily, after [Trace.emit] and before the nogood,
+   because a [rup] does not inherit the solver's root fixpoint, so the trace the
+   exclusion propagates along has to be on the page first (D-0021: every pruning gets a
+   trace line). It changes no tree: no order, no split, no domain and no decision literal
+   is touched, and a run that never splits at a hole emits byte-for-byte the proof it
+   emitted before: when the bridge landed, the bytes were unchanged on every model in
+   test/models/ but the one added for that task.
+
+   WHY IT IS NEEDED. [spec_order] splits at [d_split = lo] and [explore_ge] pushes
+   [set_lo v (lo + 1)]. [Domain.settle] re-establishes I-D2 by walking a bound over a
+   hole, so when [lo + 1] is a hole the trail entry records [x >= m] for the next value
+   [m] actually in the domain, while the literal that branch assumed -- and the one its
+   nogood negates -- is [x_ge_(lo+1)]. The nogood therefore claims to have refuted
+   [x >= lo + 1] on the strength of having explored only [x >= m].
 
    That claim is *true*. The values [lo + 1 .. m - 1] are excluded by constraints (I-P1),
    and where a propagator needed an ancestor decision to exclude them the nogood is
@@ -2127,60 +2327,40 @@ let close_root_conflict ctx trace store (c : Store.conflict) =
    time; a pure hole removal moves no bound, so lib/core/trace.ml's [claims] writes no
    line for it (that function says so itself, and M1-T56 is the same sentence from the
    other end). The exclusion is on the page only as whatever the punching constraint's
-   own rows happen to unit propagate.
+   own rows happen to unit propagate. The bridge is exactly the one fact the nogood's own
+   check had been deriving implicitly, made a line veripb checks at the decision that
+   made it, naming the variable and both bounds: when it stops holding, the proof is
+   rejected *there* rather than at a nogood several inferences away -- or, worse,
+   accepted because some other route through the branch happened to close.
 
-   For every propagator M1 has, that is enough -- which is why M2-T11 measured 2051 hole
-   splits out of 495723 over 108000 runs with **not one veripb rejection**. A hole is
-   punched only by a disequality (lib/core/prop/ne.ml, [int_lin_ne]); its .opb encoding
-   is a bounded number of rows over that constraint's own literals; and PB unit
-   propagation over one such row reproduces exactly the bounds reasoning the propagator
-   did, given the other terms' bounds -- which are on the page either as a trace line or
-   as a decision the nogood itself asserts. So the proof has been resting on a property
-   of *the encoding of the current propagator set*, stated nowhere and checked by
-   nothing. M4's [all_different] prunes from a Hall set, whose reason is not one row, and
-   that property ends there.
+   For every propagator M1 had, the implicit route was enough -- which is why M2-T11
+   measured 2051 hole splits out of 495723 over 108000 runs with **not one veripb
+   rejection**. A hole was punched only by a disequality (lib/core/prop/ne.ml,
+   [int_lin_ne]); its .opb encoding is a bounded number of rows over that constraint's
+   own literals; and PB unit propagation over one such row reproduces exactly the bounds
+   reasoning the propagator did, given the other terms' bounds -- which are on the page
+   either as a trace line or as a decision the nogood itself asserts. So the proof rested
+   on a property of *the encoding of the propagator set of the time*, stated nowhere and
+   checked by nothing. M4's [all_different] prunes from a Hall set, whose reason is not
+   one row, and that property ends there.
 
-   Two routes were open (docs/ROADMAP.md M1-T55). Guarding [spec_order] the way
+   THE ROUTES NOT TAKEN (docs/ROADMAP.md M1-T55). Guarding [spec_order] the way
    [random_order] was then guarded was rejected: the split would no longer be at [lo],
    which is docs/SPEC.md 3.4's indomain_min, so it is a normative change that moves every
    model's proof to pay for a defect that has never been observed -- and that guard was
    not total anyway, its fallback after eight misses being [lo] itself, which is where it
-   refused to land. (M1-T45 has since removed it outright; the argument above is what
-   made that possible, and [random_order]'s header records the evidence.) Making the
-   decision's trail entry land exactly on the literal its nogood negates was rejected
-   because **it cannot be done**: the low side lands exactly iff [k] is in the domain and
-   the high side iff [k + 1] is, so demanding both is demanding that old guard's
-   condition, and a complementary literal pair at a hole boundary always leaves one side
-   settling. Choosing the literal from the settled bound
+   refused to land. Making the decision's trail entry land exactly on the literal its
+   nogood negates was rejected because **it cannot be done**: the low side lands exactly
+   iff [k] is in the domain and the high side iff [k + 1] is, so demanding both is
+   demanding that old guard's condition, and a complementary literal pair at a hole
+   boundary always leaves one side settling. Choosing the literal from the settled bound
    instead only moves the gap to the other side, where it is worse: the two children's
    nogoods then no longer resolve on one literal.
 
-   So the missing step is written down instead. [bridges] emits, for each decision on the
-   path whose push settled past a hole, one line
-
-       rup 1 <the bound the trail recorded> 1 ~<the bound the decision assumed>
-              1 ~<each ancestor decision> >= 1 ;
-
-   read as a clause: "under these decisions, [x >= lo + 1] implies [x >= m]". It is
-   globally valid -- every ancestor it rests on is negated into it, which is form (a) of
-   this module's header -- and it is exactly the one fact the nogood's own check has been
-   deriving implicitly all along. It is emitted lazily, after [Trace.emit] and before the
-   nogood, because D-0021: a [rup] does not inherit the solver's root fixpoint, so the
-   trace the exclusion propagates along has to be on the page first.
-
-   What that buys is the point. The implicit dependency becomes a line veripb checks at
-   the decision that made it, naming the variable and both bounds, so when it stops
-   holding the proof is rejected *there* rather than at a nogood several inferences away
-   -- or, worse, accepted because some other route through the branch happened to close.
-   It also retires M1-T45, and M1-T45 has now taken it up: with the bridge on the page a
-   hole split is harmless, so [random_order] no longer refuses one and the 0.4% of tree
-   shapes it used to give up are back. [test_hole_split_sweep] is the evidence.
-
-   It changes no tree. No order, no split, no domain and no decision literal is touched;
-   a run that never splits at a hole emits byte-for-byte the proof it emitted before, and
-   [solve]'s "the default is byte-for-byte the tree this module has always built" still
-   holds -- for the tree *and*, on every model in test/models/ but the one added for this
-   task, for the bytes. *)
+   With the bridge on the page a hole split is harmless, so M1-T45 removed
+   [random_order]'s guard and the 0.4% of tree shapes it used to give up are back;
+   [random_order]'s header records the evidence, and [test_hole_split_sweep] is the
+   test. *)
 
 (* The decision pushes of the open levels, oldest first, each with the trail index it
    sits at: each is the first trail entry of its own level, which is what
@@ -2194,14 +2374,16 @@ let close_root_conflict ctx trace store (c : Store.conflict) =
    the same ~before [Trace.settle_facts] passes for a propagator's settle; M1-T66 asks it
    for a decision's.
 
-   M11-complexity-T4 (D-0152, D-0140 S3): read off the LEVEL MARKS, one per open level,
-   instead of asking [Store.is_level_start] at every trail position, which made every
-   conflict pay for the whole trail. An entry is a level start iff some open mark sits at
-   its position (that is what [Store.is_level_start] counts, D-0142), the marks are
+   Read off the LEVEL MARKS, one per open level, instead of asking
+   [Store.is_level_start] at every trail position, which made every conflict pay for the
+   whole trail (D-0152, row S3 of D-0140). An entry is a level start iff some open mark
+   sits at its position (that is what [Store.is_level_start] counts since D-0142, the
+   complexity pass's first batch over the engine and the store), the marks are
    monotone (I-T2), and an empty level shares its position with the next one, so the
    marks below the trail's end, with repeats dropped, are exactly the positions the scan
-   kept, in the same ascending order. [decision_entries_scan] is the old walk, kept as
-   the specification: [BAGUETTE_DEBUG] compares the two at every call. *)
+   kept, in the same ascending order (I-T2: the trail is ordered by level).
+   [decision_entries_scan] is the old walk, kept as the specification: [BAGUETTE_DEBUG]
+   compares the two at every call. *)
 let decision_entries_scan store =
   let n = Store.trail_length store in
   let acc = ref [] in
@@ -2272,7 +2454,7 @@ let aligned store (e : Store.entry) (l : Lit.t) =
   if l.Lit.positive then Domain.lo e.Store.now > Domain.lo e.Store.old
   else Domain.hi e.Store.now < Domain.hi e.Store.old
 
-(* ------------------------------------------------------------------------- M1-T66
+(* ---------------------------------------- the bridge leaves a record (M1-T66)
 
    Why its absence is invisible, and what this record does about it.
 
@@ -2303,7 +2485,7 @@ let aligned store (e : Store.entry) (l : Lit.t) =
    outside of. [test/unit/test_matrix.ml]'s [bridge_derivation] is the test that reads
    them. *)
 let bridges (ctx : Justify.ctx) trace stats store (decisions : Lit.t list) : Lit.t list =
-  (* M7-T6/D-0070: the decision literals the lines emitted below rest on. A bridge is
+  (* The decision literals the lines emitted below rest on (M7-T6, D-0070). A bridge is
      stated as "claim \/ ~l \/ ~ancestors", and its own [rup] reaches [claim] only once
      [l] and every ancestor are asserted -- by the hole line at [v] (route 1) or by the
      disequality's .opb rows (route 2), both of which need those decisions on the trail.
@@ -2311,13 +2493,14 @@ let bridges (ctx : Justify.ctx) trace stats store (decisions : Lit.t list) : Lit
      at the nogood rather than here. The caller unions this back into the nogood; see
      [dfs]'s conflict arm.
 
-     D-0186: [protect (l :: ancestors)] scanned every ancestor against the list, O(d^2)
+     [protect (l :: ancestors)] used to scan every ancestor against the list, O(d^2)
      string compares per settled decision at depth [d]. Membership is [seen] now, and
      only the literals walked since the previous [protect] ([fresh], newest first) are
      offered: every older ancestor was offered then, so it is in [seen] and the scan
      skipped it. [l] itself is offered at its own call and goes into [fresh] like any
      decision, where [seen] skips it next time. So each literal is prepended at the
-     same call and in the same order as before, and the list returned is the same. *)
+     same call and in the same order as before, and the list returned is the same
+     (D-0186). *)
   let protected = ref [] in
   let seen = Lit_tbl.create 16 in
   let protect ls =
@@ -2362,8 +2545,8 @@ let bridges (ctx : Justify.ctx) trace stats store (decisions : Lit.t list) : Lit
                          (Lit.to_string l) (Lit.to_string claim))
                       (fun () -> holes <> []);
                   let lits = claim :: Lit.negate l :: List.map Lit.negate ancestors in
-                  (* D-0152 (D-0140 J6): the origin is a thunk, rendered only by the
-                     writer's audit or the mutation knob, as [Trace]'s are (D-0145). *)
+                  (* The origin is a thunk, rendered only by the writer's audit or the
+                     mutation knob, as [Trace]'s are (D-0145; D-0152, D-0140's row J6). *)
                   let origin () =
                     Printf.sprintf "M1-T55: %s settled onto %s" (Lit.to_string l)
                       (Lit.to_string claim)
@@ -2405,21 +2588,8 @@ let bridges (ctx : Justify.ctx) trace stats store (decisions : Lit.t list) : Lit
   go (decision_entries store) (List.rev decisions) [];
   !protected
 
-(* M2-L3: take the cut, discharge I-S4, put the learned clause on the page, and report
-   the decision levels the conflict actually rests on.
-
-   [None] means "learn nothing here", and every route to it is a route the search already
-   handled before this row existed: learning off, an [Analysis] error, a criterion whose
-   postcondition did not hold, or a cut that materialises no literal. The caller then
-   builds the nogood over the whole decision stack, which is M1's behaviour unchanged. A
-   failure to learn is never a failure to solve.
-
-   The ORDER of the three steps here is the invariant, not an implementation detail. The
-   trace lines and the conflict line are already on the page (the caller emitted them);
-   the learned clause's [rup] is checked against them; and nothing has been wiped yet. The
-   [break_i_s4] arm retires the conflict level first, which is the same three steps in the
-   wrong order and is exactly what test (b) asserts the checker rejects. *)
-(* M2-L13 / D-0054: give the learned PB ROW a runtime consumer.
+(* Give the learned PB ROW a runtime consumer (M2-L13; D-0054: a proof line and a
+   propagation explanation are different objects).
 
    This is the row's whole point, so it is worth saying what it is NOT. It is not a
    conversion: nothing here asks [Learned.to_linear_row] whether the row can be read back
@@ -2453,7 +2623,8 @@ let register_learned_pb engine store ctx stats ~bump ~cid ~(row : Learned.t) =
   match Learned.pb_instance ~id ~row_id:cid ~bump store ~decl row with
   | None -> stats.n_pb_inst_declined <- stats.n_pb_inst_declined + 1
   | Some inst ->
-      (* D-0139: behind [Retention.gate], so a policy that detaches can evict it. *)
+      (* Behind [Retention.gate], so a policy that detaches can evict it (D-0139 made the
+         learned database evictable). *)
       Engine.add engine (Retention.gate stats.db store ~cid inst);
       stats.n_pb_instances <- stats.n_pb_instances + 1;
       set_learned_kind stats id kind_pb;
@@ -2461,15 +2632,16 @@ let register_learned_pb engine store ctx stats ~bump ~cid ~(row : Learned.t) =
           Printf.sprintf "learned_pb instance #%d, %s (M2-L13)" id (Learned.to_string row))
 
 (* ---------------------------------------------------------------------------
-   M2-L15: THE BACKJUMP LEVEL, and why the decision closure is RIGHT and not merely safe
+   The backjump level: why the decision closure is RIGHT and not merely safe (M2-L15)
    ---------------------------------------------------------------------------
 
    lib/core/pb_analysis.ml's closing note handed this on by name: M2-L13 gave the learned
    PB row a runtime propagator, so the sentence "that would change the calculation" had
    stopped being hypothetical and the calculation was owed a redo. Here is the redo.
 
-   FIRST, WHAT THE BACKJUMP IS HERE, because the CDCL word is misleading. This solver does
-   not undo to a level and resume. [branch] is a recursive DFS, and the backjump is the
+   FIRST, WHAT THE BACKJUMP IS HERE, because the CDCL word is misleading. [dfs] does not
+   undo to a level and resume (the opt-in [cdcl] loop below does). [branch] is a
+   recursive DFS, and the backjump is the
    arm below that says [NFail (ng1, cid1) when not (mentions_level ng1 lvl)]: the sibling
    of a decision is skipped exactly when the branch nogood does not name that decision's
    level. So THE BACKJUMP IS A FILTER ON THE NOGOOD, and the level set that filter uses is
@@ -2534,7 +2706,12 @@ let pb_level_verdict stats ~(closure : int list) ~(pb : int list) ~asserting_lev
       stats.n_level_assert_deeper <- stats.n_level_assert_deeper + 1
   | _ -> ()
 
-(* M2-L6: PB conflict analysis, alongside the clause. [clause_converts] is whether the
+(* The stop as asked INSIDE a node, by a conflict's trace and by PB conflict analysis
+   (M6-T23, D-0149). [stop_poll_runs = 0] is M6-T9's contract, node entry only, and it
+   holds for these two polls as it does for [Engine.propagate]'s. *)
+let inner_stop cfg = if cfg.stop_poll_runs > 0 then cfg.stop else fun () -> false
+
+(* PB conflict analysis, alongside the clause (M2-L6). [clause_converts] is whether the
    SAME conflict's M2-L3 clause would have converted, which is what makes [n_pb_stronger]
    a comparison rather than a count.
 
@@ -2548,22 +2725,18 @@ let pb_level_verdict stats ~(closure : int list) ~(pb : int list) ~asserting_lev
    The [Debug] check is lib/core/pb_analysis.ml's I-S4 discharge, made a check rather
    than left a paragraph: the derivation must cite constraint ids that are on the page at
    level 0. A [pol] citing a hole line across levels is the violation learn.ml's header
-   says M2-L6's reduction steps are the first thing that could write. *)
-(* M6-T23 (D-0149): the stop as asked INSIDE a node, by a conflict's trace and by PB
-   conflict analysis. [stop_poll_runs = 0] is M6-T9's contract, node entry only, and it
-   holds for these two polls as it does for [Engine.propagate]'s. *)
-let inner_stop cfg = if cfg.stop_poll_runs > 0 then cfg.stop else fun () -> false
+   says M2-L6's reduction steps are the first thing that could write.
 
-(* M2-L15: returns the level set the learned row names, paired with its own asserting
-   level -- [None] when no row was learned. The return value is DATA for
-   [pb_level_verdict]; the default build compares it and acts on none of it. *)
+   Returns the level set the learned row names, paired with its own asserting level --
+   [None] when no row was learned. The return value is DATA for [pb_level_verdict]
+   (M2-L15); the default build compares it and acts on none of it. *)
 let pb_at_conflict engine store ctx stats cfg (c : Store.conflict) ~clause_converts ~lbd
     ~decl : (int list * int) option =
   if not (cfg.learn && cfg.pb) then None
   else (
     stats.n_pb_attempts <- stats.n_pb_attempts + 1;
     match
-      (* D-0153: a row with a bits term is instantiated through its bridges. *)
+      (* A row with a bits term is instantiated through its atoms' bridges (D-0153). *)
       Pb_analysis.analyse ~stop:(inner_stop cfg) ~bits:(Pb_analysis.bits_of_ctx ctx) store
         c ~row_of:(Engine.row_of engine store) ~name_of:(Engine.name_of engine)
         ~ladder_id:
@@ -2591,8 +2764,9 @@ let pb_at_conflict engine store ctx stats cfg (c : Store.conflict) ~clause_conve
         if converts then stats.n_pb_converts <- stats.n_pb_converts + 1;
         if converts && not clause_converts then
           stats.n_pb_stronger <- stats.n_pb_stronger + 1;
-        (* M2-L11 test (b). [Learned.is_empty] is exactly "the empty contradiction": no
-           terms left, and a degree the criterion already established is positive. *)
+        (* The ladder lift's test (b) (M2-L11). [Learned.is_empty] is exactly "the empty
+           contradiction": no terms left, and a degree the criterion already established
+           is positive. *)
         if not (Learned.is_empty t.Pb_analysis.row) then
           stats.n_pb_nondegenerate <- stats.n_pb_nondegenerate + 1;
         if t.Pb_analysis.ladder_rungs > 0 then (
@@ -2601,7 +2775,7 @@ let pb_at_conflict engine store ctx stats cfg (c : Store.conflict) ~clause_conve
         if List.length stats.pb_rows_rev < pb_reason_cap then
           stats.pb_rows_rev <- t :: stats.pb_rows_rev;
         stats.learned_rev <- cid :: stats.learned_rev;
-        (* M2-L4. [~lbd] here is the CONFLICT's LBD -- the 1UIP clause's, from the same
+        (* [~lbd] here is the CONFLICT's LBD -- the 1UIP clause's, from the same
            conflict -- and not the PB row's own. The row's literals come out of the
            elimination with no trail entry to read a level off, so there is no honest
            per-row figure to compute; scoring it by the conflict it came from is stated
@@ -2611,11 +2785,11 @@ let pb_at_conflict engine store ctx stats cfg (c : Store.conflict) ~clause_conve
         ignore
           (Retention.add stats.db ~cid ~row:t.Pb_analysis.row ~lbd
              ~origin:"M2-L6 learned PB row");
-        (* M2-L13. In the same place, and for the same two ordering reasons, M2-L12 put
-           its own registration: AFTER [Retention.add], because [cite] replaces an
-           entry's freedom to be evicted and the entry has to exist first, and BEFORE
-           [reduce], so that a policy cannot evict on this very call a constraint the
-           next line is about to give a consumer. *)
+        (* The runtime instance (M2-L13). In the same place, and for the same two
+           ordering reasons, M2-L12 put its own registration: AFTER [Retention.add],
+           because [cite] replaces an entry's freedom to be evicted and the entry has to
+           exist first, and BEFORE [reduce], so that a policy cannot evict on this very
+           call a constraint the next line is about to give a consumer. *)
         if cfg.propagate_learned then
           register_learned_pb engine store ctx stats
             ~bump:(if cfg.break_pb_degree then 1 else 0)
@@ -2623,7 +2797,7 @@ let pb_at_conflict engine store ctx stats cfg (c : Store.conflict) ~clause_conve
         ignore (Retention.reduce stats.db ctx);
         Some (t.Pb_analysis.levels, t.Pb_analysis.asserting_level))
 
-(* ------------------------------------------------------- M2-L12: making it propagate
+(* ------------------------------------- learned constraints that propagate (M2-L12)
 
    Everything below is D-0052's two steps and the retention obligation they create. See
    [type global] above for step 1's argument and lib/core/prop/clause.ml's header for
@@ -2632,23 +2806,22 @@ let pb_at_conflict engine store ctx stats cfg (c : Store.conflict) ~clause_conve
    Why the two steps do NOT share a mechanism, which is the question a reader will have:
    a unit is applied by [Store.set_lo] at every node and a multi-literal clause is a
    registered propagator instance. A unit could have been a width-1 [Clause] instance and
-   the code would be shorter. It is not, for two reasons that are about this engine
-   rather than about taste. [Engine.add] appends to an array, so it is O(n) per
-   registration and 72 units would be O(n^2) over a search. And a global applied at [dfs]
-   entry is in force BEFORE the first propagation round of the node, where an instance
-   would have to be woken and queued. D-0052 says step 1 "needs no clause propagator at
-   all"; this is that, and the saving is real rather than notional. *)
+   the code would be shorter. It is not, because a global applied at [dfs] entry is in
+   force BEFORE the first propagation round of the node, where an instance would have to
+   be woken and queued. D-0052 says step 1 "needs no clause propagator at all"; this is
+   that. (A second reason given when this was written, that [Engine.add] copied its
+   array at every registration, no longer holds: the arrays now grow by doubling.) *)
 
 (* The unit literal as a bound this search can move, or [None] when it is not one.
 
    [None] on a [Lit.Eq] literal: the direct encoding has no bound to move (a positive
    [Eq] fixes, which is two bounds from one literal; a negative one punches an interior
-   hole, i.e. [Store.remove_with_facts], of which I-X10 records [Ne] is the sole caller
-   in lib/ and which D-0052 told this row not to reach for). [None], too, on a name the
-   ENCODING does not declare -- the declared bounds have to come from there and not from
-   the store, because a learned constraint is built mid-search when the store's bounds
-   are narrow, which is the hazard lib/core/learned.ml's "Why the [Linear.t] is built
-   here instead of through [Linear.make]" spells out for the same reason. *)
+   hole, i.e. [Store.remove] (then [Store.remove_with_facts]), which D-0052 told this
+   row not to reach for). [None], too, on a name the ENCODING does not declare -- the
+   declared bounds have to come from there and not from the store, because a learned
+   constraint is built mid-search when the store's bounds are narrow, which is the
+   hazard lib/core/learned.ml's section "The declared bounds come from the ENCODING, not
+   from the store" spells out. *)
 let global_of store ~(decl : string -> (int * int) option) ~cid (l : Lit.t) :
     global option =
   match l.Lit.v with
@@ -2672,7 +2845,7 @@ let global_of store ~(decl : string -> (int * int) option) ~cid (l : Lit.t) :
             }
       | _, _ -> None)
 
-(* M2-L13's instrument: how much a LEARNED constraint actually did at this node.
+(* How much a LEARNED constraint actually did at this node (the instrument of M2-L13).
 
    M2-L12 reported 0 prunings from a learned clause over the whole suite, and that zero
    is the measurement D-0054 reinterprets -- so a row that claims to make learned
@@ -2682,17 +2855,16 @@ let global_of store ~(decl : string -> (int * int) option) ~cid (l : Lit.t) :
    It reads the TRAIL, not the propagators. Every entry carries the id of the instance
    that pushed it (M2-T7, [Store.entry.prop]), and [Engine.add] only ever appends, so an
    id at or above [first_learned_id] belongs to an instance this search registered. Which
-   KIND it is comes from the two id lists, which are short (one entry per learned
-   constraint) and are lists rather than hash tables because nothing in a solve may
-   iterate a [Hashtbl] -- the determinism gate is exactly what a learned database
-   iterated in hash order breaks.
+   KIND it is comes from [learned_kinds], one byte per learned id, indexed and never
+   iterated: nothing in a solve may iterate a [Hashtbl] -- the determinism gate is
+   exactly what a learned database iterated in hash order breaks.
 
    It is pure measurement: it returns its argument unchanged and no other code reads the
    counters. Passing a [stats] changes no byte of the emitted proof, which is the
    property [solve]'s own comment on [?stats] states. *)
 let count_learned_activity stats store ~since (o : Engine.outcome) : Engine.outcome =
-  (* D-0152 (D-0140 S1): the kind is one byte load per entry, where it was two
-     polymorphic [List.mem] over every learned instance id. [learned_kind] answers
+  (* The kind is one byte load per entry, where it was two polymorphic [List.mem] over
+     every learned instance id (D-0152, D-0140's row S1). [learned_kind] answers
      [kind_none] below [first_learned_id] and for an id no learned instance has, which is
      exactly when neither list held it. *)
   let classify id =
@@ -2734,7 +2906,7 @@ let count_learned_activity stats store ~since (o : Engine.outcome) : Engine.outc
    answer [None] out of range, and [Pb_analysis] turns that into its ordinary [No_row]
    fallback. *)
 let apply_globals store stats : Store.conflict option =
-  (* D-0152 (D-0140 S6): the forward list is kept, not rebuilt per node, and a bound
+  (* The forward list is kept, not rebuilt per node (D-0152, D-0140's row S6), and a bound
      already in force is skipped before its justification is built. That is exactly the
      case [Domain.set_lo]/[set_hi] answer [Unchanged] (the bound is at or past [g_k]), on
      which [Store.apply] does nothing and the loop goes on, as it does here. *)
@@ -2773,16 +2945,17 @@ let apply_globals store stats : Store.conflict option =
 
 (* File a learned unit, newest last in [globals_fwd] and newest first in [globals_rev].
 
-   D-0186: [push_global]'s append and [register_learned]'s duplicate test are O(units)
-   per learned unit, O(units^2) over a run. Left so on purpose: a unit is a learned clause
-   of width one, and D-0140's instances learn 6 to 27 of them in a run. *)
+   [push_global]'s append and [register_learned]'s duplicate test are O(units) per
+   learned unit, O(units^2) over a run. Left so on purpose (D-0186): a unit is a learned
+   clause of width one, and D-0140's instances learn 6 to 27 of them in a run. *)
 let push_global stats g =
   stats.globals_rev <- g :: stats.globals_rev;
   stats.globals_fwd <- stats.globals_fwd @ [ g ]
 
 (* Give the learned clause a runtime consumer, and TELL RETENTION IT HAS ONE.
 
-   The second half is the part that is easy to leave out and is the whole of step 3.
+   The second half is the part that is easy to leave out and is the whole of M2-L12's
+   step 3.
    Before M2-L12 nothing propagated a learned constraint, so [Retention]'s policy and the
    propagator set were independent -- D-0051's keep-all verdict was written on exactly
    that independence, and its own "what would reverse this" section names this row as the
@@ -2815,7 +2988,7 @@ let register_learned engine store ctx stats ~rest_satisfied ~cid ~(lits : Lit.t 
       | Some p ->
           let id = Engine.next_id engine in
           let lc = Clause.Learned_clause.make ~rest_satisfied p in
-          (* D-0139: behind [Retention.gate], so a policy that detaches can evict it. *)
+          (* Behind [Retention.gate], so a policy that detaches can evict it (D-0139). *)
           Engine.add engine
             (Retention.gate stats.db store ~cid
                (Propagator.pack ~id
@@ -2825,35 +2998,23 @@ let register_learned engine store ctx stats ~rest_satisfied ~cid ~(lits : Lit.t 
                   lc));
           stats.n_clause_instances <- stats.n_clause_instances + 1;
           set_learned_kind stats id kind_clause;
-          (* D-0152 (D-0140 S2): the citation's text is rendered only if a [Cited]
-             message or [Retention.cited_by] reads it, from the same values. *)
+          (* The citation's text is rendered only if a [Cited] message or
+             [Retention.cited_by] reads it, from the same values (D-0152, D-0140's
+             row S2). *)
           Retention.cite_lazy stats.db ~cid ~by:(fun () ->
               Printf.sprintf "learned_clause instance #%d over %s (M2-L12)" id
                 (String.concat " " (List.map Lit.to_string (Clause.literals p)))))
 
-(* M5-T1: the solution node of a branch-and-bound search.
-
-   Called where a satisfaction search would have returned [NSat]. It logs the incumbent,
-   yields the strictly-improving constraint, and installs the bound as a global unit --
-   after which the node the solver is standing on is itself in conflict, because the
-   objective variable is fixed at a value the new bound excludes. That is the whole
-   trick, and it is why nothing else in [dfs] changes: the caller re-enters the node and
-   [apply_globals] reports the conflict, which the ordinary conflict path then handles
-   with the ordinary trace, learning, nogood and backjump.
-
-   [`Proved] is the floor case of [type bnb]'s note (2): the improving constraint is
-   already unsatisfiable, so no better solution exists and no search is needed to say so.
-
-   THE CHECK RUNS HERE, on every improving solution, because every one of them is
-   printed -- I-S1 is about solutions printed, and an optimisation run prints several. *)
-(* ------------------------------------------------------- M7-T12: the assignment's
-   own two helpers. Both are about the SIBLING, which is where this shape lives or dies.
+(* ------------------------------ a decision as a reason's fact (M7-T12 and the CDCL loop)
 
    [fact_of_decision] turns an active decision literal back into the [Reason.fact] that
-   states it. It is the same conversion [global_of] does at the other end and for the
-   same reason: [Reason.t] is bound facts, and [Reason.lit_of_fact] is THE one place a
-   reason becomes a literal (D-0026), so a decision that is to appear in a trace line's
-   tail has to arrive as a fact and not as a literal.
+   states it. The assignment decision (M7-T12) needs it for its SIBLING, which is where
+   that shape lives or dies, and the CDCL loop for an assertion it makes from a clause
+   ([assert_directly]). It is the same conversion [global_of] does at the other end and
+   for the same reason: [Reason.t] is bound facts, and [Reason.lit_of_fact] is THE one
+   place a reason becomes a literal (D-0026: reasons are declarative data, justifications
+   are cutting planes), so a decision that is to appear in a trace line's tail has to
+   arrive as a fact and not as a literal.
 
    It always materialises, and that is a property of [branch] rather than luck: a
    decision strictly narrows its variable ([check_decision_landed]), so [x >= k] has
@@ -2875,6 +3036,21 @@ let fact_of_decision (decl : string -> (int * int) option) (l : Lit.t) :
           (if l.Lit.positive then Reason.at_least ~name:nm ~decl:lo k
            else Reason.at_most ~name:nm ~decl:hi (k - 1))
 
+(* The solution node of a branch-and-bound search (M5-T1).
+
+   Called where a satisfaction search would have returned [NSat]. It logs the incumbent,
+   yields the strictly-improving constraint, and installs the bound as a global unit --
+   after which the node the solver is standing on is itself in conflict, because the
+   objective variable is fixed at a value the new bound excludes. That is the whole
+   trick, and it is why nothing else in [dfs] changes: the caller re-enters the node and
+   [apply_globals] reports the conflict, which the ordinary conflict path then handles
+   with the ordinary trace, learning, nogood and backjump.
+
+   [`Proved] is the floor case of [type bnb]'s note (2): the improving constraint is
+   already unsatisfiable, so no better solution exists and no search is needed to say so.
+
+   THE CHECK RUNS HERE, on every improving solution, because every one of them is
+   printed -- I-S1 is about solutions printed, and an optimisation run prints several. *)
 let record_improving ctx store stats (b : bnb) (asn : assignment) : [ `Continue | `Proved ]
     =
   if not (b.b_check asn) then raise (Unsound_solution asn);
@@ -2891,12 +3067,14 @@ let record_improving ctx store stats (b : bnb) (asn : assignment) : [ `Continue 
          o.o_name (Domain.lo d) (Domain.hi d));
   let value = Domain.lo d in
   let null = Writer.is_null ctx.Justify.writer in
-  (* M6-T24 (D-0225): the solution is printed and logged in one step to an interruption,
+  (* The solution is printed and logged in one step as far as an interruption is
+     concerned (M6-T24, D-0225: an interrupted run ends its proof),
      so the last value printed is the last one the proof records. *)
   let cid =
     Writer.guarded ctx.Justify.writer @@ fun () ->
     b.b_on_solution asn;
-    (* M9-no-proof-T4 (D-0161): under `--no-proof` the null writer's [improving] mints its
+    (* Under `--no-proof` (a null writer that writes nothing, audited by M9-no-proof-T4,
+       D-0161) the writer's [improving] mints its
        id and reads nothing else, so the full literal family of every variable was built
        for no reader -- 29 % of 2014_openshop_gp10-4's instructions at 10 000 nodes, where
        every improving solution spells out each order ladder. The id is minted by the same
@@ -2907,19 +3085,20 @@ let record_improving ctx store stats (b : bnb) (asn : assignment) : [ `Continue 
         let bindings = List.map (fun (v, x) -> (Store.name store v, x)) asn in
         Encoding.assignment_lits ctx.Justify.encoding bindings
     in
-    (* `soli` and not `sol`: `sol` adds nothing, and the constraint this line yields is the
-       entire reason the bound below is derivable. It is also the reason the solution is
-       handed over in full -- the checker PROPAGATES a logged solution, which is what lets
-       it fill in the encoding auxiliaries (the `_neN` selectors of PROOF-FORMAT section 3)
-       that nothing in the solver knows a value for. See [Writer.verdict]'s note on why the
-       inline `conclusion SAT : <assignment>` form is unusable for the same reason. *)
+    (* `soli` and not `sol`: `sol` adds nothing, and the constraint this line yields is
+       the entire reason the bound below is derivable. It is also the reason the solution
+       is handed over in full -- the checker PROPAGATES a logged solution, which is what
+       lets it fill in the encoding auxiliaries (the `_neN` selectors of PROOF-FORMAT
+       section 3) that nothing in the solver knows a value for. See [Writer.verdict]'s
+       note on why the inline `conclusion SAT : <assignment>` form is unusable for the
+       same reason. *)
     (* AT LEVEL 0, for the reason [Learned.introduce] is at level 0 (D-0045's addendum):
-       the improving constraint holds everywhere in the tree from the moment it is derived,
-       and a `w` at the level the solution happened to be found at would retire it out from
-       under every later bound that rests on it. Found by measurement, not by foresight --
-       emitted at the current level, the checker refused the conclusion with "The claimed
-       upper bound of 2 mismatches the best recorded upper bound of 4", because wiping the
-       constraint took the recorded bound with it. *)
+       the improving constraint holds everywhere in the tree from the moment it is
+       derived, and a `w` at the level the solution happened to be found at would retire
+       it out from under every later bound that rests on it. Found by measurement, not by
+       foresight -- emitted at the current level, the checker refused the conclusion with
+       "The claimed upper bound of 2 mismatches the best recorded upper bound of 4",
+       because wiping the constraint took the recorded bound with it. *)
     let cid =
       Justify.with_level ctx 0 (fun () ->
           Writer.improving ctx.Justify.writer ~origin:"M5-T1 improving solution" lits)
@@ -2934,7 +3113,8 @@ let record_improving ctx store stats (b : bnb) (asn : assignment) : [ `Continue 
     | Maximise -> (value >= o.o_decl_hi, Lit.ge o.o_name (value + 1))
   in
   if at_limit then (
-    (* M8-bits-encoding-T2 (D-0132 section 2.6): over a BITS objective the improving
+    (* Over a BITS objective (the binary encoding for wide domains, D-0130; this case is
+       D-0132 section 2.6, M8-bits-encoding-T2) the improving
        constraint at the floor is `Σ 2^i obj_bit_i <= -1` (or `>= 2^n`-ish for a
        maximisation), which is NOT contradictory on its own -- the bound row is what
        refutes it -- and `conclusion BOUNDS` checks the cited constraint syntactically.
@@ -2959,7 +3139,7 @@ let record_improving ctx store stats (b : bnb) (asn : assignment) : [ `Continue 
     b.b_floor <- Some floor_id;
     `Proved)
   else
-    (* M8-bits-encoding-T2 (D-0130 section 9): over a bits objective the improving
+    (* Over a bits objective (D-0130 section 9) the improving
        constraint is over the bits, and the bound literal the search installs is an
        atom that does not follow from it by unit propagation. One bridge, at level 0:
        `pol @soli @B + s` -- B1 of the atom for `~obj_ge_v` (a minimisation's `obj <=
@@ -2967,7 +3147,7 @@ let record_improving ctx store stats (b : bnb) (asn : assignment) : [ `Continue 
        which is then what the global's trace line is RUP from. The `soli` id stays in
        [b_soli_ids] for the sweep; the bridge's id is the global's support.
 
-       M9-no-proof-T4 (D-0161): not under `--no-proof`. The bridge is a proof line and
+       Not under `--no-proof` (D-0161). The bridge is a proof line and
        nothing else: minting the atom builds its `red` pair and links for the null writer
        to drop, and [Justify.state_clause] fills a claim index only rendering reads. The
        global then carries the `soli` id, which no search step reads ([g_cid]). *)
@@ -3004,7 +3184,7 @@ let record_improving ctx store stats (b : bnb) (asn : assignment) : [ `Continue 
               (declared %d..%d, incumbent %d)"
              (Lit.to_string lit) o.o_name o.o_decl_lo o.o_decl_hi value)
 
-(* ------------------------------------------------ M10-search-strategy-T2: the hooks
+(* -------------------------- the restart and phase hooks (D-0137, M10-search-strategy-T2)
 
    Three, and with [stats.strat = None] each is one match on [None] and nothing else.
 
@@ -3016,11 +3196,12 @@ let record_improving ctx store stats (b : bnb) (asn : assignment) : [ `Continue 
    which level; a conflict that learned nothing never restarts (D-0137 section 1: every
    restart is preceded by a learned constraint on the page, which is what carries the
    conflict across it). When it answers [Some t] the policy has already counted the
-   restart. M10-T3 adds the activity's half: a conflict that learned nothing bumps its own
-   reason facts' variables (the learned clause's were bumped in [learn_at_conflict]), and
-   every conflict decays. Under [reuse_trail] the target is the trail-reuse rule's
-   (D-0137 section 1.1): the levels, from the root up, whose decision variable still
-   outscores every variable unfixed at the conflict, capped one below the conflict's.
+   restart. The activity order (M10-T3) adds its half: a conflict that learned nothing
+   bumps its own reason facts' variables (the learned clause's were bumped in
+   [learn_at_conflict]), and every conflict decays. Under [reuse_trail] the target is the
+   trail-reuse rule's (D-0137 section 1.1): the levels, from the root up, whose decision
+   variable still outscores every variable unfixed at the conflict, capped one below the
+   conflict's.
 
    [close_restarted] is a frame's half of the unwinding: its level, closed as the backjump
    arm closes it ([close_level]) but with no nogood to keep, so the D-0018.4 check on the
@@ -3032,9 +3213,10 @@ let undo_level stats store =
   | Some { st_phase = None; _ } | None -> ());
   Store.backtrack store
 
-(* D-0152 (D-0140 S5): [level_set ls l] is [List.mem l ls] for a list of decision
+(* [level_set ls l] is [List.mem l ls] for a list of decision
    levels, answered from a byte per level. Levels are never negative; a list that held
-   one would be answered by the scan, so the function is [List.mem] on every list. *)
+   one would be answered by the scan, so the function is [List.mem] on every list.
+   (D-0152, D-0140's row S5.) *)
 let level_set (ls : int list) : int -> bool =
   if List.exists (fun l -> l < 0) ls then fun l -> List.exists (Int.equal l) ls
   else
@@ -3079,10 +3261,10 @@ let close_restarted ctx ~lvl =
   Writer.set_level ctx.Justify.writer (lvl - 1);
   Justify.wipe_level ctx lvl
 
-(* M8-bits-encoding-T2 (D-0130 section 5.4): a decision's atom is on the page before the
-   level that assumes it opens -- minted at level 0, so no [w] takes it.
+(* Under the bits encoding (D-0130 section 5.4), a decision's atom is on the page before
+   the level that assumes it opens -- minted at level 0, so no [w] takes it.
 
-   M9-no-proof-T4 (D-0161): not under `--no-proof`, where no line is written for the
+   Not under `--no-proof` (D-0161), where no line is written for the
    atom to be on the page for. [Encoding.ensure_atom] would still build the `red` pair,
    its links and their origin strings for the null writer to drop, at the first decision
    on every new bound of a bits variable. Nothing in the search reads an atom: PB
@@ -3092,14 +3274,16 @@ let ensure_decision_atom ctx lit =
   if not (Writer.is_null ctx.Justify.writer) then Justify.ensure_lit ctx lit
 
 (* The conflict's own line, the D-0018 order's second step: [dfs]'s conflict arm and the
-   CDCL loop's (M19-config-T10) both call it, after the trace and before the bridges.
-   Moved here unchanged from [dfs] so that the two searches state a conflict by one rule. *)
+   CDCL loop's both call it, after the trace and before the bridges. Moved here
+   unchanged from [dfs] so that the two searches state a conflict by one rule. *)
 let state_conflict ctx trace (c : Store.conflict) =
   match Trace.conflict_line ctx trace c with
   | Some _ -> ()
   | None -> (
-      (* M4-T2 / D-0040, the same remedy [Trace.derive_ahead] applies to a
-         PRUNING, applied to a conflict.
+      (* A factless conflict writes its derivation: the same remedy
+         [Trace.derive_ahead] applies to a PRUNING, applied to a conflict (M4-T2;
+         D-0040: all_different forces an explicit derivation, not the direct
+         encoding).
 
          A conflict states itself one of two ways. With bound facts,
          [Trace.conflict_line] writes `rup ~fact ... >= 1` -- "these bounds are
@@ -3116,15 +3300,16 @@ let state_conflict ctx trace (c : Store.conflict) =
          BECAUSE a `rup` over its facts would be a counting argument claimed as
          reverse unit propagation. So the derivation is the statement, and it is
          emitted here: under a decision it does not close to [0 >= 1] (the bounds
-         a decision set are not cancelled, by D-0037), and what it derives instead
+         a decision set are not cancelled: D-0037, a decision is an assumption,
+         not a model row), and what it derives instead
          is "not all of these bounds hold" -- which is a row, derived rather than
          asserted, that the nogood's [rup] can propagate against.
 
          Found by the M4-T2 random sweep, on a branch whose Regin conflict left
          the nogood with nothing to propagate along. *)
       match Explanation.force c.Store.c_why with
-      (* M8-bits-encoding-T3 (D-0134): a [Resolve] states its clause by `pol`
-         + `ia`; over bits the nogood cannot reach it by unit propagation. *)
+      (* A [Resolve] states its clause by `pol` + `ia`; over bits the nogood cannot
+         reach it by unit propagation (D-0134). *)
       | Explanation.Combine _ | Explanation.Cut _ | Explanation.Resolve { parts = _; _ }
         ->
           ignore (Justify.emit ctx c.Store.c_why : Writer.cid)
@@ -3141,10 +3326,25 @@ let state_conflict ctx trace (c : Store.conflict) =
              ARITHMETIC, and that is what this arm selects. *)
           ())
 
-(* M19-config-T10 (D-0219): answers the learned clause as well as the levels, and takes
-   [~closure]: the CDCL loop passes [false] (it backjumps on the clause, see
-   [Learn.at_conflict]) and [dfs] [true], which is the walk it always made. With
-   [~closure:false] the M2-L15 comparison is not made, having nothing to compare. *)
+(* Clause learning at a conflict (M2-L3): take the cut, discharge I-S4, put the learned
+   clause on the page, and report the decision levels the conflict actually rests on.
+
+   [None] means "learn nothing here", and every route to it is a route the search already
+   handled before this row existed: learning off, an [Analysis] error, a criterion whose
+   postcondition did not hold, or a cut that materialises no literal. The caller then
+   builds the nogood over the whole decision stack, which is M1's behaviour unchanged. A
+   failure to learn is never a failure to solve.
+
+   The ORDER of the three steps here is the invariant, not an implementation detail. The
+   trace lines and the conflict line are already on the page (the caller emitted them);
+   the learned clause's [rup] is checked against them; and nothing has been wiped yet. The
+   [break_i_s4] arm retires the conflict level first, which is the same three steps in the
+   wrong order and is exactly what test (b) asserts the checker rejects.
+
+   It answers the learned clause as well as the levels, and takes [~closure]: the CDCL
+   loop (D-0219) passes [false] (it backjumps on the clause, see [Learn.at_conflict]) and
+   [dfs] [true], which is the walk it always made. With [~closure:false] the M2-L15
+   comparison is not made, having nothing to compare. *)
 let rec learn_at_conflict ?(closure = true) engine store ctx trace stats cfg
     (c : Store.conflict) : (Learn.t * int list) option =
   if not cfg.learn then None
@@ -3158,9 +3358,9 @@ let rec learn_at_conflict ?(closure = true) engine store ctx trace stats cfg
     | Some l -> (
         (* The break: the `w` first, the derivation second. *)
         if cfg.break_i_s4 then Justify.wipe_level ctx (Store.level store);
-        (* M9-no-proof-T4 (D-0161): I-S4 is about lines on the page, and under
+        (* I-S4 is about lines on the page, and under
            `--no-proof` [Trace] writes none, so [Learn.supports] could only walk the cut
-           and the folds to find nothing. [] is what it would have answered. *)
+           and the folds to find nothing. [] is what it would have answered (D-0161). *)
         let ss =
           if Writer.is_null ctx.Justify.writer then [] else Learn.supports store trace l
         in
@@ -3195,11 +3395,11 @@ let rec learn_at_conflict ?(closure = true) engine store ctx trace stats cfg
         ignore
           (Retention.add stats.db ~cid ~row:(Learn.clause l) ~lbd:(Learn.lbd l)
              ~origin:"M2-L3 1UIP learned clause");
-        (* M2-L12. AFTER [Retention.add] -- [cite] replaces an entry's freedom to be
-           evicted, so the entry has to exist first -- and BEFORE [reduce], so that a
-           policy cannot evict on this very call a constraint the next line is about to
-           give a consumer. *)
-        (* M19-config-T10: the CDCL loop needs the clause to propagate whatever the
+        (* The runtime consumer (M2-L12). AFTER [Retention.add] -- [cite] replaces an
+           entry's freedom to be evicted, so the entry has to exist first -- and BEFORE
+           [reduce], so that a policy cannot evict on this very call a constraint the next
+           line is about to give a consumer. *)
+        (* The CDCL loop needs the clause to propagate whatever the
            knob says -- an asserting backjump with no consumer re-takes the decision and
            re-derives the conflict ([Learn]'s header, the loop argument). *)
         if cfg.propagate_learned || cfg.cdcl then
@@ -3210,9 +3410,10 @@ let rec learn_at_conflict ?(closure = true) engine store ctx trace stats cfg
           pb_at_conflict engine store ctx stats cfg c ~clause_converts ~lbd:(Learn.lbd l)
             ~decl:(Learned.decl_of_encoding ctx.Justify.encoding)
         in
-        (* M2-L15. The comparison happens on EVERY build, including the default one that
-           acts on none of it: the whole finding of this row is a pair of numbers, and a
-           measurement taken only under the break knob is a measurement of the break. *)
+        (* The level-set comparison (M2-L15) happens on EVERY build, including the default
+           one that acts on none of it: the whole finding of this row is a pair of
+           numbers, and a measurement taken only under the break knob is a measurement of
+           the break. *)
         let levels = Learn.levels l in
         (match pb_levels with
         | Some (pb, asserting_level) when closure ->
@@ -3226,8 +3427,12 @@ let rec learn_at_conflict ?(closure = true) engine store ctx trace stats cfg
                rests on fewer decisions than it does. *)
             Some (l, pb))
 
+(* The default search: one node, then its children through [branch]. [decisions] is the
+   stack of literals actually forced true so far by branching, most-recent decision
+   first -- so [List.map Lit.negate decisions] is, at every point, exactly the nogood
+   clause that would state "not all of these hold". *)
 and dfs engine store ctx trace stats cfg (order : order) (decisions : Lit.t list) : node =
-  (* M2-L12 step 1: the learned units, applied before anything else at this node. See
+  (* The learned units (M2-L12 step 1), applied before anything else at this node. See
      [type global] on why this is where a "level-0 bound tightening" actually lands, and
      [apply_globals] on why the conflict it can report is built rather than forwarded.
      Before [Engine.propagate] and not after: a bound in force at the start of the round
@@ -3244,15 +3449,15 @@ and dfs engine store ctx trace stats cfg (order : order) (decisions : Lit.t list
       | None -> Engine.propagate engine store)
   with
   | exception Engine.Stopped ->
-      (* M6-T21: the engine stopped between two runs; see [Limit_hit] for why this is
+      (* The engine stopped between two runs (M6-T21); see [Limit_hit] for why this is
          as consistent a point as the line above. *)
       stats.stopped_in_propagation <- true;
       raise Limit_hit
   | Engine.Conflict c -> (
       stats.conflicts <- stats.conflicts + 1;
-      (* M2-T7: [c] carries the reporting instance's id ([c.Store.c_prop]) as well as its
-         explanation and its bound facts. M2-L3's resolution starts from exactly this
-         constraint. *)
+      (* [c] carries the reporting instance's id ([c.Store.c_prop], since M2-T7) as well
+         as its explanation and its bound facts. Clause learning's resolution (M2-L3)
+         starts from exactly this constraint. *)
       match decisions with
       | [] ->
           (* No decision to negate: the root is closed like any branch, with an empty
@@ -3268,11 +3473,11 @@ and dfs engine store ctx trace stats cfg (order : order) (decisions : Lit.t list
              decisions, and it is RUP precisely because the other two are there to unit
              propagate along.
 
-             M2-L3 inserts the learned clause between the bridges and the nogood, which is
-             the one place it can go: after everything its [rup] rests on and before
+             Learning inserts the learned clause between the bridges and the nogood, which
+             is the one place it can go: after everything its [rup] rests on and before
              anything that retires them.
 
-             M6-T23 (D-0149): the trace polls the stop between two trail entries, and a
+             The trace polls the stop between two trail entries (D-0149), and a
              stop that fires there leaves through [Limit_hit] like one at node entry. On
              2020_cable_tree_wiring_R046 the first conflict, 252 levels down, writes
              1.9 GB of trace and took 20 minutes with nothing asking; the lines already
@@ -3283,9 +3488,9 @@ and dfs engine store ctx trace stats cfg (order : order) (decisions : Lit.t list
              stats.stopped_in_trace <- true;
              raise Limit_hit);
           state_conflict ctx trace c;
-          (* M1-T55: and then the bridge for any decision on this path that settled past
-             a hole, which is the step the nogood's own [rup] needs and has until now
-             been left to find for itself. It goes after the trace (D-0021) and before
+          (* And then the bridge for any decision on this path that settled past a hole
+             (M1-T55), which is the step the nogood's own [rup] needs and would otherwise
+             be left to find for itself. It goes after the trace (D-0021) and before
              the nogood, at the nogood's own level, so the same [w] retires both. *)
           let protected = bridges ctx trace stats store decisions in
           let learned = learn_at_conflict engine store ctx trace stats cfg c in
@@ -3297,7 +3502,7 @@ and dfs engine store ctx trace stats cfg (order : order) (decisions : Lit.t list
           let keep = Option.map snd learned in
           match restart_after_conflict stats store c decisions with
           | Some t ->
-              (* M10-T2 (D-0137 section 1): a restart to level [t], 0 unless the trail
+              (* A restart to level [t] (D-0137 section 1), 0 unless the trail
                  is reused. The learned constraint is on the page at level 0; the nogood
                  is NOT written. Its consumer is the frame owning the deepest level it
                  names, and the restart re-enters a node instead of returning a nogood to
@@ -3310,29 +3515,31 @@ and dfs engine store ctx trace stats cfg (order : order) (decisions : Lit.t list
                 match keep with
                 | None -> minimise stats cfg.policy all
                 | Some ls ->
-                    (* M7-T6/D-0070. [ls] is [Learn.levels] -- the decision levels the 1UIP
-                       walk says the conflict rests on -- and filtering by it is what makes
-                       the nogood the cut's clause rather than the whole stack. It is right
-                       about the IMPLICATION GRAPH and wrong about the PROOF whenever a
-                       decision push SETTLED past a hole: the graph records the decision as
-                       the literal the branch assumed ([x >= b]), everything downstream
-                       propagated from the bound the trail landed on ([x >= m]), and the step
-                       between them is not an edge, so no ancestor that punched the hole ever
-                       enters the walk. [bridges] has just written that step down as a line
-                       conditioned on exactly those ancestors, so dropping their levels
-                       leaves the nogood no longer entailing its own bridge, and 3.0.2
-                       rejects the nogood -- at the nogood, several inferences away from the
-                       settle. Keeping them costs a weaker clause on the SETTLE PATHS ONLY;
-                       [protected] is empty on every path with no hole split, which is almost
-                       all of them, and the filter is then exactly what it was. *)
-                    (* D-0152 (D-0140 S5): membership in [ls] is one load from a
-                       table of its levels, where it was a polymorphic [List.mem] per
-                       nogood literal (depth squared per conflict). Same predicate. *)
+                    (* Why bridged decisions are kept (M7-T6, D-0070). [ls] is
+                       [Learn.levels] -- the decision levels the 1UIP walk says the
+                       conflict rests on -- and filtering by it is what makes the nogood
+                       the cut's clause rather than the whole stack. It is right about the
+                       IMPLICATION GRAPH and wrong about the PROOF whenever a decision
+                       push SETTLED past a hole: the graph records the decision as the
+                       literal the branch assumed ([x >= b]), everything downstream
+                       propagated from the bound the trail landed on ([x >= m]), and the
+                       step between them is not an edge, so no ancestor that punched the
+                       hole ever enters the walk. [bridges] has just written that step
+                       down as a line conditioned on exactly those ancestors, so dropping
+                       their levels leaves the nogood no longer entailing its own bridge,
+                       and 3.0.2 rejects the nogood -- at the nogood, several inferences
+                       away from the settle. Keeping them costs a weaker clause on the
+                       SETTLE PATHS ONLY; [protected] is empty on every path with no hole
+                       split, which is almost all of them, and the filter is then exactly
+                       what it was. *)
+                    (* Membership in [ls] is one load from a table of its levels, where
+                       it was a polymorphic [List.mem] per nogood literal (depth squared
+                       per conflict). Same predicate (D-0152, D-0140's row S5). *)
                     let in_ls = level_set ls in
-                    (* D-0186: "[lit] is the negation of a protected literal" is
+                    (* "[lit] is the negation of a protected literal" is
                        [Lit.equal (Lit.negate lit) p] for some [p] ([negate] flips the
-                       polarity and nothing else), asked of a table of [protected] where it
-                       was a scan of it per nogood literal. *)
+                       polarity and nothing else), asked of a table of [protected] where
+                       it was a scan of it per nogood literal (D-0186). *)
                     let negated_protected =
                       match protected with
                       | [] -> fun _ -> false
@@ -3349,11 +3556,11 @@ and dfs engine store ctx trace stats cfg (order : order) (decisions : Lit.t list
               let cid = emit_nogood ctx ng in
               NFail (ng, cid)))
   | Engine.Fixpoint -> (
-      (* M6-T13: a staged order ([sequence]) answers from the store when one of its phases
+      (* A staged order ([sequence]) answers from the store when one of its phases
          has a live variable, and the O(store) candidate array is built only when it does
          not -- see [staged_of]. Every other order is asked exactly as before. *)
       let early = match staged_of order with Some st -> st store | None -> None in
-      (* M10-T2: a restart to THIS node's level re-enters it, with the decision stack it
+      (* A restart to THIS node's level re-enters it, with the decision stack it
          was entered with (D-0137 section 1); one aimed lower is passed up. *)
       match early with
       | Some c -> (
@@ -3375,20 +3582,21 @@ and dfs engine store ctx trace stats cfg (order : order) (decisions : Lit.t list
             match cfg.bnb with
             | None -> NSat asn
             | Some b -> (
-                (* M5-T1. The solution is logged and the bound installed; then THE SAME NODE
-                   IS RE-ENTERED. [apply_globals] runs first at every node, the bound it now
-                   carries excludes the value the objective variable is fixed at, and the
-                   conflict that produces goes down the ordinary conflict path above -- trace,
-                   bridges, learning, nogood, backjump -- with nothing in it aware that the
-                   node it is refuting was a solution a moment ago.
+                (* Branch and bound (M5-T1). The solution is logged and the bound
+                   installed; then THE SAME NODE IS RE-ENTERED. [apply_globals] runs first
+                   at every node, the bound it now carries excludes the value the
+                   objective variable is fixed at, and the conflict that produces goes
+                   down the ordinary conflict path above -- trace, bridges, learning,
+                   nogood, backjump -- with nothing in it aware that the node it is
+                   refuting was a solution a moment ago.
 
-                   This is a re-entry, NOT a restart. docs/SPEC.md 3.4 fixes the search as
-                   depth-first with restarts disabled, and nothing here reopens a closed
-                   level, re-takes a decision or returns to the root: the decision stack is
-                   exactly as it was, the node is the one we are standing on, and the tree is
-                   still traversed once, left to right. [stats.nodes] is deliberately NOT
-                   incremented, because no node was dispatched -- M1-T36's identity counts
-                   [branch]'s children and this is not one.
+                   This is a re-entry, NOT a restart (docs/SPEC.md 3.4 keeps restarts off
+                   unless asked for, and this is not one): nothing here reopens a closed
+                   level, re-takes a decision or returns to the root: the decision stack
+                   is exactly as it was, the node is the one we are standing on, and the
+                   tree is still traversed once, left to right. [stats.nodes] is
+                   deliberately NOT incremented, because no node was dispatched --
+                   M1-T36's identity counts [branch]'s children and this is not one.
 
                    It terminates: the bound is strictly tighter than the incumbent, so the
                    re-entry conflicts rather than reaching [Fixpoint] again, and no second
@@ -3429,11 +3637,11 @@ and branch_split engine store ctx trace stats cfg order decisions (dec : decisio
   let first, second =
     if dec.d_high_first then (explore_ge, explore_le) else (explore_le, explore_ge)
   in
-  (* M1-T36. One decision taken, and this decision sits one deeper than the ancestors
-     it was handed. *)
+  (* The node count (M1-T36). One decision taken, and this decision sits one deeper than
+     the ancestors it was handed. *)
   stats.decisions <- stats.decisions + 1;
-  (* D-0186: O(depth) per node, a walk of one list cell per open level, which no profile
-     of the lane shows. *)
+  (* O(depth) per node, a walk of one list cell per open level, which no profile of the
+     lane shows (D-0186). *)
   let depth = List.length decisions + 1 in
   if depth > stats.max_depth then stats.max_depth <- depth;
   Store.new_level store;
@@ -3447,7 +3655,8 @@ and branch_split engine store ctx trace stats cfg order decisions (dec : decisio
       Justify.wipe_level ctx lvl;
       NSat asn
   | NRestart t ->
-      (* M10-T2: unwound during the first child, so the second is never dispatched. *)
+      (* A restart unwound this frame during the first child, so the second is never
+         dispatched. *)
       stats.restart_unexplored <- stats.restart_unexplored + 1;
       close_restarted ctx ~lvl;
       NRestart t
@@ -3459,9 +3668,9 @@ and branch_split engine store ctx trace stats cfg order decisions (dec : decisio
 
          It is already filed below [lvl] ([filed_at]), so the wipe below retires this
          level's trace lines and leaves it standing. That is the half of D-0045's addendum
-         this row had to get right, and getting it wrong is not a wrong answer -- it is
-         "Trying to access constraint with ID n that has already been deleted" several
-         lines later. *)
+         (a line is tagged at the writer's current level) clause learning had to get
+         right, and getting it wrong is not a wrong answer -- it is "Trying to access
+         constraint with ID n that has already been deleted" several lines later. *)
       stats.skipped <- stats.skipped + 1;
       close_level ctx ~lvl ~nogood:cid1;
       NFail (ng1, cid1)
@@ -3502,14 +3711,10 @@ and branch_split engine store ctx trace stats cfg order decisions (dec : decisio
           wipe_after_nogood ctx ~lvl ~nogood:cid;
           NFail (combined, cid))
 
-(* The decision push itself. It is the first entry of the level just opened, which is
-   what [Trace] relies on to tell a decision (no line -- nothing implies it) from a
-   pruning (a line). [Store] asserts the same thing from its side via
-   [is_level_start]; this check is the search's half, because the only way the two can
-   disagree is a push here that did not actually change the domain. *)
-(* ------------------------------------------------ M7-T12: THE ASSIGNMENT DECISION
+(* ------------------------------------------- THE ASSIGNMENT DECISION (M7-T12, D-0077)
 
-   docs/DECISIONS.md D-0077 is the record; this is the code it describes. Read the
+   docs/DECISIONS.md D-0077 is the record (the disjunctive sibling is discharged by
+   DERIVATION, not by resolution); this is the code it describes. Read the
    record before changing anything here -- the sibling's soundness is an argument about
    which constraint is live when, and it is not visible from the control flow alone.
 
@@ -3546,8 +3751,8 @@ and branch_split engine store ctx trace stats cfg order decisions (dec : decisio
        exactly [x <> m]. So the [x <> m] "branch" is not a branch under an assumption at
        all: it is THE SAME NODE with one more DERIVED fact. The hole is punched at level
        [p], with C1 as its justification and the active decisions as its reason, and
-       [dfs] is RE-ENTERED on the unchanged decision stack. M5-T1's branch-and-bound
-       re-entry is the same move and the same argument: no level is reopened, no
+       [dfs] is RE-ENTERED on the unchanged decision stack. Branch and bound's re-entry
+       is the same move and the same argument: no level is reopened, no
        decision is re-taken, the tree is still traversed once.
 
    WHAT THE RESOLVENT IS. There is none, and that is the answer rather than a gap. The
@@ -3561,7 +3766,8 @@ and branch_split engine store ctx trace stats cfg order decisions (dec : decisio
 
    WHAT THE RE-ENTRY'S PROOF RESTS ON. C1 must be LIVE for as long as the re-entry runs:
    the hole's own trace line is C1 weakened by the decisions' facts, every later line
-   that reads the hole cites the hole's reason (D-0075), and the re-entry's nogood is
+   that reads the hole cites the hole's reason (D-0075: a line that reads a hole states
+   it), and the re-entry's nogood is
    RUP along that chain. C1 is filed at [p], so the frame that owns [p] wipes it on the
    way out -- after the re-entry has returned. At [p = 0] nothing wipes, so this function
    records the id and [retire_assign_clauses] deletes it at the end of the search. Those
@@ -3573,7 +3779,8 @@ and branch_split engine store ctx trace stats cfg order decisions (dec : decisio
    RUP against C1 and never unsound (D-0075's own trade). Stating NO facts would be the
    D-0075 defect exactly: a bare [x <> m] is false at any node where the assumption that
    refuted [x = m] does not hold. This is also the one place in this module where a
-   trace line mentions a decision, and I-X10 gains its first stated exception -- see
+   trace line mentions a decision, and I-X10 (every trace line is RUP against the .opb
+   plus the lines before it, decision-free) gains its first stated exception -- see
    D-0077. *)
 and branch_assign engine store ctx trace stats cfg order decisions (a : assign) : node =
   let v = a.a_var in
@@ -3589,7 +3796,7 @@ and branch_assign engine store ctx trace stats cfg order decisions (a : assign) 
   (* The assumption's two literals, and its negation's two. [Lit.le x (m-1)] is
      [~(x >= m)] and [Lit.ge x (m+1)] is [~(x <= m)] by construction of [Lit]. *)
   let dec_ge = Lit.ge name m and dec_le = Lit.le name m in
-  (* M8-bits-encoding-T2: both atoms before the two levels open (see
+  (* Under the bits encoding, both atoms before the two levels open (see
      [ensure_decision_atom]). *)
   ensure_decision_atom ctx dec_ge;
   ensure_decision_atom ctx dec_le;
@@ -3632,7 +3839,7 @@ and branch_assign engine store ctx trace stats cfg order decisions (a : assign) 
       Justify.wipe_level ctx lvl_a;
       NSat asn
   | NRestart t ->
-      (* M10-T2: both assignment levels go, [lvl_b] with [lvl_a] (the wipe is >=). The
+      (* A restart: both assignment levels go, [lvl_b] with [lvl_a] (the wipe is >=). The
          assignment dispatched its one child, so the M1-T36 identity needs no correction
          here: [3 * assigns] already stands for the nodes it never dispatches. *)
       close_restarted ctx ~lvl:lvl_a;
@@ -3727,6 +3934,11 @@ and branch_assign engine store ctx trace stats cfg order decisions (a : assign) 
       (* THE RE-ENTRY. Same node, same decisions, same level -- one value fewer. *)
       dfs engine store ctx trace stats cfg order decisions
 
+(* The decision push itself. It is the first entry of the level just opened, which is
+   what [Trace] relies on to tell a decision (no line -- nothing implies it) from a
+   pruning (a line). [Store] asserts the same thing from its side via
+   [is_level_start]; this check is the search's half, because the only way the two can
+   disagree is a push here that did not actually change the domain. *)
 and check_decision_landed store lvl outcome =
   if Debug.enabled then
     Debug.check "D-0018: a decision is the first trail entry of its own level" (fun () ->
@@ -3739,14 +3951,14 @@ and check_decision_landed store lvl outcome =
 (* The low side, [x <= k] -- the decision literal is [~lit]. With [k = lo] (docs/SPEC.md
    3.4's indomain_min) this fixes [x = lo], which is what it has always done.
 
-   M1-T31/M1-T50: the reason pushed with it is [Explanation.decision ~lit] and not the
-   old [Explanation.trivial]. A decision is an assumption, not an instance of the model
-   constraint, and calling it [Trivial] was what let a propagator citing this entry
-   render it as the ambient model row (see explanation.ml's header).
-
-   M2-T8/D-0026: the push carries [Reason.none] beside that explanation, and it says so out
-   loud rather than getting it by default. M2-L0/D-0043: and [~concludes:None] beside it,
-   because the bound is ASSUMED, not derived. *)
+   The push is justified by [Explanation.decision ~lit], with [Reason.none] as its facts
+   and [~concludes:None], each stated out loud rather than got by default, because the
+   bound is ASSUMED, not derived. A decision is an assumption, not an instance of the
+   model constraint (D-0037). History: it used to be [Explanation.trivial], which let a
+   propagator citing this entry render it as the ambient model row (see explanation.ml's
+   header); M1-T31 and M1-T50 removed that. The [Reason.none] beside it is M2-T8's
+   (reasons as declarative data, D-0026) and the [~concludes] M2-L0's (a reason's
+   conclusion as a fact, D-0043). *)
 and explore_le store engine ctx trace stats cfg order decisions v k lit =
   let lvl = Store.level store in
   let outcome =
@@ -3760,7 +3972,7 @@ and explore_le store engine ctx trace stats cfg order decisions v k lit =
          it. Nothing is learned here: the push never landed, so there is no trail entry
          to walk back from and [Analysis] would have nothing to resolve. *)
       Trace.emit ctx trace store;
-      (* M1-T55: the ancestors only -- this push did not land, so it has no trail entry
+      (* The ancestors only -- this push did not land, so it has no trail entry
          and nothing to bridge, and [bridges] drops it for exactly that reason. *)
       ignore (bridges ctx trace stats store decisions : Lit.t list);
       let ng =
@@ -3783,7 +3995,7 @@ and explore_ge store engine ctx trace stats cfg order decisions v k lit =
   match outcome with
   | Store.Conflict _ ->
       Trace.emit ctx trace store;
-      (* M1-T55: as in [explore_le] -- the ancestors only. *)
+      (* As in [explore_le] -- the ancestors only. *)
       ignore (bridges ctx trace stats store decisions : Lit.t list);
       let ng = minimise stats cfg.policy (levelled_nogood (lit :: decisions) ~top:lvl) in
       let cid = emit_nogood ctx ng in
@@ -3792,10 +4004,11 @@ and explore_ge store engine ctx trace stats cfg order decisions v k lit =
       check_decision_landed store lvl outcome;
       dfs engine store ctx trace stats cfg order (lit :: decisions)
 
-(* ------------------------------------------------- M19-config-T10: THE CDCL LOOP
+(* ------------------------------------------------ THE CDCL LOOP (D-0219, opt-in)
 
-   docs/DECISIONS.md D-0219 is the record. Opt-in ([config.cdcl], BAGUETTE_CDCL=1); the
-   default search is [dfs] above, untouched.
+   Opt-in ([config.cdcl]: --cdcl or BAGUETTE_CDCL=1); the default search is [dfs] above,
+   untouched. docs/DECISIONS.md D-0219 is the record (M19-config-T10, learning that drives
+   the search: the CDCL loop of lazy clause generation).
 
    WHAT [dfs] DOES AT A CONFLICT, AND WHY IT RARELY JUMPS. It learns the 1UIP clause and
    lets it propagate, but the search itself is a binary tree walked once: the conflict's
@@ -3804,7 +4017,8 @@ and explore_ge store engine ctx trace stats cfg order decisions v k lit =
    as an assumption at the same level. When the 1UIP is the last decision, which is the
    common case, the sibling decision satisfies the learned clause and the clause never
    propagates; when the closure names the last level, which is almost always, nothing is
-   skipped (D-0207 section 2: no skip on four families of five).
+   skipped (D-0207 section 2, a profile of where the time per node goes: no skip on four
+   families of five).
 
    WHAT THIS LOOP DOES INSTEAD, the loop of MiniSat's [search] and of Chuffed:
 
@@ -3821,8 +4035,9 @@ and explore_ge store engine ctx trace stats cfg order decisions v k lit =
                                       new level ([Split]'s first side, or [Assign]'s two
                                       levels); the other side is never pushed as a
                                       decision, it is what a learned clause asserts;
-     fixpoint, all fixed           -> a solution; under branch and bound the bound is
-                                      installed and the loop goes round, as [dfs] re-enters.
+     fixpoint, all fixed           -> a solution; under branch and bound the bound
+                                      is installed and the loop goes round, as [dfs]
+                                      re-enters.
 
    THE PROOF. Per conflict: the trace lines not yet written, the conflict's line, the
    bridges and the learned clause, in [dfs]'s order, and no nogood: the learned clauses
@@ -3852,7 +4067,27 @@ and explore_ge store engine ctx trace stats cfg order decisions v k lit =
    the search to that level, where its instance reports the conflict again and the walk
    produces an asserting clause. [expect] checks the assertion at the next fixpoint and,
    if no consumer made it, pushes it here from the clause itself, so a declined
-   registration costs a weaker propagation, never a loop. *)
+   registration costs a weaker propagation, never a loop.
+
+   CHRONOLOGICAL BACKTRACKING FOR LONG JUMPS, [config.chrono] (D-0224, M19-config-T11,
+   after Nadel and Ryvchin, SAT 2018). With [Some t], a conflict whose asserting backjump
+   (to level [b]) would skip more than [t] levels goes back to [top - 1] instead ([top]
+   the clause's highest level), where the clause is unit too, and its literal is asserted
+   THERE, recorded at that level. Why it pays: a fixed order re-takes every decision a
+   long jump undid (D-0219 section 6).
+
+   Why it is sound: the trail stays ordered by level (I-T2) and every level read
+   afterwards is the recorded one, which is sound because nothing that makes a learned
+   clause implied reads a level; a recorded level above the true one only makes later
+   jumps shorter. What it could miss is a later backtrack to a level [t'] in
+   [b, top - 1) that pops the literal while its clause stays unit. The engine does not
+   miss it: the clause's instance was born after every fixpoint of those levels, so
+   [Engine.propagate]'s rule (b) seeds it again after any such backtrack and it asserts
+   the literal at [t'] (otherwise BAGUETTE_DEBUG's I-P2 check, "a fixpoint is a
+   fixpoint", would see it). The fallback assertion has no instance, so [repush] does the
+   same for it from its nogood, which is filed at [b] and so still live. A clause that
+   does not assert, a restart target below, or a jump of at most [t] levels: as above,
+   unchanged. *)
 
 (* Undo every level above [b] and retire their lines. *)
 let backjump ctx stats store b =
@@ -3910,7 +4145,8 @@ let assert_directly ctx store (lit : Lit.t) (lits : Lit.t list) =
             going on would re-take the decision and loop"
            (Lit.to_string lit))
 
-(* The order's next choice, exactly as [dfs] asks it, or [None] when everything is fixed. *)
+(* The order's next choice, exactly as [dfs] asks it, or [None] when everything is
+   fixed. *)
 let next_choice (order : order) store =
   match match staged_of order with Some st -> st store | None -> None with
   | Some c -> Some c
@@ -3932,6 +4168,27 @@ let cdcl engine store ctx trace stats cfg (order : order) : node =
   in
   (* The literal the last backjump left to be asserted, with its clause. *)
   let expect = ref None in
+  (* The fallback assertions made chronologically (D-0224), above their true level
+     [b]: (literal, nogood, b, recorded level). See [repush]. *)
+  let chrono_fallbacks = ref [] in
+  (* After a backjump to [t]: a fallback assertion recorded above [t] whose nogood is
+     still unit ([b <= t]) is pushed again at [t] from the same line, which is filed at
+     [b] and so still on the page; one whose [b] was popped is dropped, its nogood's other
+     literals with it; one pushed at its true level needs no more care. *)
+  let repush t =
+    if !chrono_fallbacks <> [] then
+      chrono_fallbacks :=
+        List.filter_map
+          (fun ((lit, lits, b, at) as e) ->
+            if t < b then None
+            else if at <= t then Some e
+            else (
+              if lit_status store lit = 0 then (
+                stats.lo_repushed <- stats.lo_repushed + 1;
+                assert_directly ctx store lit lits);
+              if t = b then None else Some (lit, lits, b, t)))
+          !chrono_fallbacks
+  in
   let decide (c : choice) =
     let push lit outcome lvl =
       (match (outcome : Store.outcome) with
@@ -4016,29 +4273,44 @@ let cdcl engine store ctx trace stats cfg (order : order) : node =
       if b = 0 then stats.assign_clauses_rev <- cid :: stats.assign_clauses_rev);
     if b >= d && not asserting then
       failwith "Search.cdcl: a learned clause neither asserts nor sends the search lower";
+    (* Where the clause is unit and the search goes back to, [b] or, for a
+       jump over more than [cfg.chrono] levels, the level below the clause's top. *)
+    let back =
+      match cfg.chrono with
+      | Some thr when asserting ->
+          let top = List.fold_left (fun a (_, l) -> Stdlib.max a l) entry levelled in
+          if top - 1 - b > thr then top - 1 else b
+      | Some _ | None -> b
+    in
     let target =
       match restart_after_conflict stats store c !decisions with
       | Some t ->
           let t = Stdlib.max entry t in
           stats.restart_targets <- stats.restart_targets + t;
-          Stdlib.min b t
-      | None -> b
+          Stdlib.min back t
+      | None -> back
     in
     backjump ctx stats store target;
     drop_to target;
+    repush target;
+    if target <> b && target = back then stats.lo_chrono <- stats.lo_chrono + 1;
     (* A restart below the asserting level is not a resume the clause is unit at: its
        assertion is not checked, only the levels skipped are counted. *)
-    if target <> b then stats.lo_pending <- Some ([], d);
+    if target <> back then stats.lo_pending <- Some ([], d);
     observe_resume stats store ~sk:(Stdlib.max 0 (d - 1 - target));
     let assertion =
-      if asserting && target = b then
+      if asserting && target = back then
         Option.map (fun l -> (l, List.map fst levelled)) (top_literal levelled)
       else None
     in
     if fallback then (
       (* No instance carries the nogood, so its assertion is pushed here, now. *)
       expect := None;
-      Option.iter (fun (l, lits) -> assert_directly ctx store l lits) assertion)
+      Option.iter
+        (fun (l, lits) ->
+          assert_directly ctx store l lits;
+          if target > b then chrono_fallbacks := (l, lits, b, target) :: !chrono_fallbacks)
+        assertion)
     else expect := assertion
   in
   let result = ref None in
@@ -4077,6 +4349,7 @@ let cdcl engine store ctx trace stats cfg (order : order) : node =
                 let finish () =
                   backjump ctx stats store entry;
                   decisions := [];
+                  chrono_fallbacks := [];
                   result := Some (NSat asn)
                 in
                 match cfg.bnb with
@@ -4090,7 +4363,38 @@ let cdcl engine store ctx trace stats cfg (order : order) : node =
 
 (* ------------------------------------------------------------------------------ API *)
 
-(* The tree walk itself, shared by [solve] and [optimise] (M5-T1).
+(* Probing at the root, under BAGUETTE_PROBE=root only (D-0250, M19-config-T8, off by
+   default): before the first decision, each bound literal of a small domain is tried as
+   a one-decision node, and one that fails is asserted negated at level 0, with the unit
+   clause the failed node proves as its justification. The rule, its proof and its
+   budget are lib/core/probe.ml's; this lends it the steps a failed node writes
+   ([state_conflict], [bridges], [close_root_conflict]) so the two stay one rule, and
+   the list the assignment decision's level-0 clauses (D-0077) are retired from, where
+   each probe's unit clause is filed. [None]: search as usual; [Some]: the
+   root was refuted while probing. Under [off] nothing here runs and no byte changes. *)
+let probe_root engine store ctx trace stats cfg : node option =
+  match Probe.mode () with
+  | Probe.Off -> None
+  | Probe.Root -> (
+      let hooks =
+        {
+          Probe.state_conflict = state_conflict ctx trace;
+          bridges = (fun ds -> ignore (bridges ctx trace stats store ds : Lit.t list));
+          close_root = close_root_conflict ctx trace store;
+          root_clause =
+            (fun cid -> stats.assign_clauses_rev <- cid :: stats.assign_clauses_rev);
+        }
+      in
+      match
+        Probe.root ~engine ~store ~ctx ~trace ~stop:cfg.stop ~poll_runs:cfg.stop_poll_runs
+          ~hooks
+      with
+      | Probe.Fixpoint -> None
+      | Probe.Refuted cid -> Some (NFail ([], cid))
+      | exception Probe.Stopped -> raise Limit_hit)
+
+(* The tree walk itself, shared by [solve] and [optimise] (since branch and bound,
+   M5-T1): the root probe, then [cdcl] or [dfs].
 
    It stops where the two part company: it runs the search, checks the invariants and
    reports the oracle, and hands back the root node together with the [trace] and [stats]
@@ -4100,7 +4404,7 @@ let cdcl engine store ctx trace stats cfg (order : order) : node =
    conclusion. It takes no [check] for the same reason: a satisfaction search checks one
    solution at the end, a branch-and-bound search checks every improving one as it is
    found ([record_improving]), and neither is this function's business. *)
-(* M6-T9: [Limit_hit] with what [conclude_stopped] needs and [search_core] alone holds --
+(* [Limit_hit] with what [conclude_stopped] needs and [search_core] alone holds --
    the trace it may have created privately, and the stats with the retention database. *)
 exception Interrupted of Trace.t * stats
 
@@ -4114,22 +4418,23 @@ let search_core ~(engine : Engine.t) ~(store : Store.t) ~(ctx : Justify.ctx) ?tr
      It is state this function would otherwise own privately; passing one in changes
      nothing about what is emitted. *)
   let trace = match trace with Some t -> t | None -> Trace.create () in
-  (* M1-T36. [?stats] is read back the same way [?trace] is: state this function would
+  (* [?stats] is read back the same way [?trace] is: state this function would
      otherwise own privately, passed in so a caller can see it. Passing one changes no
      byte of what is emitted -- the counters are read by nothing inside the search. The
      root is counted HERE and nowhere else: [branch] counts the children it dispatches,
      so the one node no [branch] dispatches is this one. *)
   let stats = match stats with Some s -> s | None -> stats_create () in
-  (* M2-L4: one database per solve, built from the configured policy. Installed here and
-     not in [stats_create] because the policy lives on [config] and a [stats] is allowed
-     to outlive a [solve]. *)
+  (* One retention database per solve, built from the configured policy. Installed here
+     and not in [stats_create] because the policy lives on [config] and a [stats] is
+     allowed to outlive a [solve]. *)
   stats.db <- Retention.create ~policy:config.retention ();
-  (* M2-L12: and the learned units, for the same reason -- a [stats] may outlive a
+  (* And the learned units (the globals), for the same reason -- a [stats] may outlive a
      [solve], and a global from a previous search cites a constraint this one's writer
      knows nothing about.
 
      THE ENGINE IS NOT RESET AND CANNOT BE, and that is a stated limit rather than an
-     oversight. Step 2 registers a learned clause with [Engine.add], which appends; there
+     oversight. A learned clause or PB row is registered with [Engine.add], which
+     appends; there
      is no [Engine.remove], and adding one would mean rebuilding the watcher table that
      [Engine.check_attribution]'s second arm reads. So **a second [solve] on an engine a
      first [solve] has learned on is not supported**: the instances from the first search
@@ -4144,14 +4449,14 @@ let search_core ~(engine : Engine.t) ~(store : Store.t) ~(ctx : Justify.ctx) ?tr
      that function's reason for existing. *)
   stats.globals_rev <- [];
   stats.globals_fwd <- [];
-  (* M2-L13: the id boundary [count_learned_activity] tests against. Recorded here rather
+  (* The id boundary [count_learned_activity] tests against. Recorded here rather
      than in [stats_create] for the same reason the database is: a [stats] may outlive a
      [solve], and the engine it is about to be pointed at is not the one it last saw. *)
   stats.first_learned_id <- Engine.next_id engine;
   stats.learned_kinds <- Bytes.empty;
   stats.lo_pruned <- Bytes.empty;
   stats.nodes <- stats.nodes + 1;
-  (* M10-search-strategy (D-0137): the opt-in strategies' state, per solve, and the order
+  (* The opt-in strategies' state (D-0137), per solve, and the order
      they wrap. With every one of them off this is [None] and [order] is the caller's,
      physically, so the default search is the pre-M10 code path. *)
   stats.strat <-
@@ -4197,8 +4502,11 @@ let search_core ~(engine : Engine.t) ~(store : Store.t) ~(ctx : Justify.ctx) ?tr
   in
   let result =
     try
-      if config.cdcl then cdcl engine store ctx trace stats config order
-      else dfs engine store ctx trace stats config order []
+      match probe_root engine store ctx trace stats config with
+      | Some refuted -> refuted
+      | None ->
+          if config.cdcl then cdcl engine store ctx trace stats config order
+          else dfs engine store ctx trace stats config order []
     with Limit_hit ->
       report_learning stats;
       raise (Interrupted (trace, stats))
@@ -4206,21 +4514,16 @@ let search_core ~(engine : Engine.t) ~(store : Store.t) ~(ctx : Justify.ctx) ?tr
   report_learning stats;
   Debug.check "I-S3: decision level on return equals level on entry" (fun () ->
       Store.level store = entry_level);
-  (* M1-T36's identity, stated above [type stats]. [Unsat] means the tree was
+  (* The node-count identity (M1-T36), stated above [type stats]. A CDCL run is exempt
+     ([stats_consistent]). [Unsat] means the tree was
      exhausted, so the equality must hold exactly; [Sat] means it was not, so only the
      bound does. *)
   Debug.check "M1-T36: nodes = 2 * decisions + 1 on an exhausted tree, <= it otherwise"
     (fun () ->
       stats_consistent stats
         ~exhausted:(match result with NFail _ -> true | NSat _ | NRestart _ -> false));
-  (* I-X2: the trace lines for prunings made at level 0 are the one class of rule this
-     search emits that no [w] retires -- they are deliberately outside every branch's
-     level, because a level-0 pruning outlives every branch and the checker needs it on
-     both sides of a backtrack (see [Trace]'s header). Retire them here, once, on every
-     path, before the conclusion. Doing it here rather than inside [Trace] keeps the
-     rule "an id you receive is an id you delete" with the caller that owns the proof's
-     shape. *)
-  (* M2-T10: the search-side half of the consistency oracle -- its TRACE.
+  (* The search-side half of the consistency oracle -- its TRACE (M2-T10, per-node
+     consistency checking against a brute-force oracle under BAGUETTE_CONSISTENCY).
 
      [Engine.propagate] does the checking, at every fixpoint, which is every node of this
      search. What it cannot do is say how much of the tree that came to, because the
@@ -4239,9 +4542,9 @@ let search_core ~(engine : Engine.t) ~(store : Store.t) ~(ctx : Justify.ctx) ?tr
      not be run over the suite it is meant to audit.
 
      And behind BAGUETTE_CONSISTENCY_TRACE rather than BAGUETTE_CONSISTENCY, because
-     M1-T49 forbids stderr without --time and run_model_tests.sh enforces it per model:
-     printing this whenever the oracle was on failed all 57 models for printing it. The
-     oracle checks silently; this says how much it checked. See lib/core/debug.ml. *)
+     M1-T49 keeps stderr silent without --time and run_model_tests.sh enforces it per
+     model: printing this whenever the oracle was on failed all 57 models for printing it.
+     The oracle checks silently; this says how much it checked. See lib/core/debug.ml. *)
   if Debug.consistency_enabled && Debug.consistency_trace then (
     let nodes, checks, tuples, skipped = Engine.oracle_stats () in
     Printf.eprintf
@@ -4268,17 +4571,17 @@ let search_core ~(engine : Engine.t) ~(store : Store.t) ~(ctx : Justify.ctx) ?tr
     show "no obligation at its level" (Engine.oracle_unobliged_families ()));
   (result, trace, stats)
 
-(* The two I-X2 sweeps, lifted out of [solve] when [optimise] came to need the same two.
-   Their arguments are what they always closed over; the comments that were on them are
-   below, unchanged in substance. *)
+(* ------------------------------------------------- the end-of-search sweeps (I-X2)
 
-(* I-X2: the trace lines for prunings made at level 0 are the one class of rule this
-   search emits that no [w] retires -- they are deliberately outside every branch's
-   level, because a level-0 pruning outlives every branch and the checker needs it on
-   both sides of a backtrack (see [Trace]'s header). Retire them once, on every path,
-   before the conclusion. Doing it here rather than inside [Trace] keeps the rule "an id
-   you receive is an id you delete" with the caller that owns the proof's shape. *)
-(* M7-T12 / I-X2: the assignment clauses filed at level 0. Every other one dies with
+   Every id the proof hands out is deleted exactly once (I-X2), and a line filed at
+   level 0 is never wiped, so whoever ends the proof deletes what level 0 still holds:
+   the assignment clauses (and the probe's unit clauses), the trace's level-0 lines, the
+   learned constraints the retention database still holds. [solve], [optimise] and
+   [conclude_stopped] each run the three sweeps, then delete what else is live except
+   the one id their conclusion cites. *)
+
+(* The assignment clauses filed at level 0 (M7-T12), and the root probe's unit clauses
+   filed beside them. Every other one dies with
    the level of the node that took the decision; nothing wipes level 0, so these are
    this function's, and it is the only owner they have. Recorded newest first and
    deleted in one [del], like the trace's permanent lines below. *)
@@ -4289,25 +4592,33 @@ let retire_assign_clauses ctx stats =
       Writer.delete_many ctx.Justify.writer (List.rev ids);
       stats.assign_clauses_rev <- []
 
+(* I-X2: the trace lines for prunings made at level 0 are the one class of rule this
+   search emits that no [w] retires -- they are deliberately outside every branch's
+   level, because a level-0 pruning outlives every branch and the checker needs it on
+   both sides of a backtrack (see [Trace]'s header). Retire them once, on every path,
+   before the conclusion. Doing it here rather than inside [Trace] keeps the rule "an id
+   you receive is an id you delete" with the caller that owns the proof's shape. *)
 let retire_trace ctx trace =
   match Trace.permanent_ids trace with
   | [] -> ()
   | ids -> Writer.delete_many ctx.Justify.writer ids
 
-(* I-X2, and M2-L4 is what changed here. A learned constraint is introduced at level 0
+(* The learned constraints. A learned constraint is introduced at level 0
    (D-0045's addendum, [Learned.introduce]) precisely so that no backjump retires it,
-   which leaves exactly one party who can. Since M2-L4 that party is [stats.db] and not
-   this function: the sweep deletes what the database still HOLDS, so a constraint the
-   policy already evicted mid-search is not deleted a second time here.
+   which leaves exactly one party who can. Since M2-L4 (the retention database) that
+   party is [stats.db] and not this function: the sweep deletes what the database still
+   HOLDS, so a constraint the policy already evicted mid-search is not deleted a second
+   time here.
 
    Reading it off [stats_learned] -- every id ever introduced -- is the double delete,
    and it is a double delete from ONE owner, which is the shape D-0045's warning about
-   two owners does not cover. lib/core/retention.ml section 1 is the record.
+   two owners does not cover (D-0045 raised the restart question and found the learned
+   constraints' lifetime problem). lib/core/retention.ml section 1 is the record.
 
    Note what is still NOT done: they are not retired at the backjump. A learned clause
    whose lifetime were a level's would be a learned clause that learned nothing.
 
-   M2-L12: the citations are released first. They are a statement about the SEARCH -- a
+   The citations (M2-L12) are released first. They are a statement about the SEARCH -- a
    global or a registered instance will write a [rup] resting on this constraint at the
    next node -- and there is no next node. [Retention.release_all] says this at length;
    the double-delete and not-owned guards stay on. *)
@@ -4315,7 +4626,7 @@ let retire_learned ctx stats =
   Retention.release_all stats.db;
   ignore (Retention.retire_all stats.db ctx)
 
-(* M6-T9. The proof's end when [config.stop] fired: the same three I-X2 sweeps as the
+(* The proof's end when [config.stop] fired (M6-T9): the same three I-X2 sweeps as the
    other two endings, then every id still live -- the prunings and nogoods of the levels
    the interrupted branch had open, which no [w] will now retire -- and then
    the conclusion, which cites nothing and so discharges nothing.
@@ -4325,7 +4636,8 @@ let retire_learned ctx stats =
    second solve on the same engine (see [search_core]).
 
    The three lines, the finish, the flush and the I-X2 audit are all
-   [Writer.conclusion] (M6-T12), so a stopped run is audited exactly as a finished one is.
+   [Writer.conclusion] (M6-T12 made that one call), so a stopped run is audited exactly
+   as a finished one is.
    What it claims is [Writer.interrupted_verdict], shared with the proof that is ended
    where it stands (M6-T24). *)
 let conclude_stopped ctx trace stats =
@@ -4356,11 +4668,12 @@ let conclude_stopped ctx trace stats =
    the solver) still has to pass one, even if it is a small hand-written one, as the
    tests below do.
 
-   On [Sat], the proof's [conclusion] cites the found assignment directly (never a
-   bare [sol], which the doc notes only works when deletion-checking was never turned
-   off -- the assignment form always works). On [Unsat], it cites the id of the
-   final, decision-free nogood. Both leave [Writer]'s audit-mode live set exactly as
-   it was before the call plus that one id, which [Writer.conclusion] itself retires
+   On [Sat], the assignment is logged with `sol` and the conclusion is the bare
+   `conclusion SAT` ([Writer.Sat]; the inline `conclusion SAT : <assignment>` form is
+   not used, because veripb does not propagate it and the encoding's auxiliaries would
+   read as false -- M1-T18's finding, see [Writer.verdict]). On [Unsat], it cites the id
+   of the final, decision-free nogood. Both leave [Writer]'s audit-mode live set exactly
+   as it was before the call plus that one id, which [Writer.conclusion] itself retires
    (invariant I-X2 -- see docs/PROOF-FORMAT.md section 5, "discharged by the
    conclusion"). *)
 let solve ~(engine : Engine.t) ~(store : Store.t) ~(ctx : Justify.ctx)
@@ -4379,17 +4692,19 @@ let solve ~(engine : Engine.t) ~(store : Store.t) ~(ctx : Justify.ctx)
       retire_assign_clauses ctx stats;
       retire_trace ctx trace;
       (* I-X2, and the SAT path needs it for the same reason the NFail arm below does
-         (M4-T4b found this; the arithmetic family is simply the first thing in the tree
+         (M4-T4b, int_times and its family, found this; the arithmetic family is simply
+         the first thing in the tree
          to nest this deeply at level 0 on a SAT path). A level-0 pruning whose D-0013
          explanation NESTS -- a [Combine] citing a trail entry whose own explanation is a
          [Combine] -- mints intermediate [pol] ids at level 0, and no [w] retires a
          level-0 id. The audit then refuses the run with "constraint id(s) never
          deleted". Unlike the refutation arm there is no cited contradiction to spare:
-         the conclusion is [Sat lits], which cites no constraint, so every live id goes. *)
+         the conclusion is [Sat lits], which cites no constraint, so every live id
+         goes. *)
       (match Writer.live_ids ctx.Justify.writer with
       | [] -> ()
       | ids -> Writer.delete_many ctx.Justify.writer ids);
-      (* M9-no-proof-T4 (D-0161): the null writer's conclusion reads nothing; see
+      (* Under `--no-proof` the null writer's conclusion reads nothing (D-0161); see
          [record_improving]. *)
       let lits =
         if Writer.is_null ctx.Justify.writer then []
@@ -4425,7 +4740,7 @@ let solve ~(engine : Engine.t) ~(store : Store.t) ~(ctx : Justify.ctx)
       Writer.conclusion ctx.Justify.writer (Writer.Unsat (Some cid));
       Unsat
 
-(* ------------------------------------------------------------------ M5-T1/M5-T2 *)
+(* --------------------------------------- optimisation: branch and bound (M5-T1/M5-T2) *)
 
 (* What an optimisation run answers. The value is in MODEL units -- the objective
    variable's own value, which is what SPEC 2.2's output prints -- and never the
@@ -4435,7 +4750,8 @@ type opt_outcome =
   | Opt_unsat (* the model has no solution at all *)
 
 (* Branch and bound, and the `conclusion BOUNDS` that proves the answer optimal
-   (M5-T1 + M5-T2). Read [type bnb] first: the proof argument is there.
+   (M5-T1, and M5-T2 for the conclusion). Read [type bnb] first: the proof argument is
+   there.
 
    The relation to [solve] is that there is almost none -- the tree, the propagation, the
    learning, the backjumping and every rule they emit are identical, and the whole of the
@@ -4454,12 +4770,12 @@ type opt_outcome =
 
    THE UPPER BOUND CARRIES NO ASSIGNMENT, deliberately. `conclusion BOUNDS <lo> : <id>
    <hi> : <assignment>` is legal and 3.0.2 accepts it, but it is the same trap M1-T18
-   found on `conclusion SAT : <assignment>`: the assignment we hold is over the MODEL
-   variables, the .opb also carries encoding auxiliaries that nothing in the solver knows
-   a value for, and an inline assignment is not propagated -- every unmentioned variable
-   reads as false and an honest proof is REJECTED. A solution logged with `soli` IS
-   propagated, and [record_improving] has already logged this one, so the number alone is
-   both sufficient and safe. *)
+   (the move to the Rust checker) found on `conclusion SAT : <assignment>`: the assignment
+   we hold is over the MODEL variables, the .opb also carries encoding auxiliaries that
+   nothing in the solver knows a value for, and an inline assignment is not propagated --
+   every unmentioned variable reads as false and an honest proof is REJECTED. A solution
+   logged with `soli` IS propagated, and [record_improving] has already logged this one,
+   so the number alone is both sufficient and safe. *)
 let optimise ~(engine : Engine.t) ~(store : Store.t) ~(ctx : Justify.ctx)
     ~(check : assignment -> bool) ~(objective : objective)
     ~(on_solution : assignment -> unit) ?trace ?stats ?(order = spec_order)
@@ -4474,7 +4790,7 @@ let optimise ~(engine : Engine.t) ~(store : Store.t) ~(ctx : Justify.ctx)
       b_floor = None;
     }
   in
-  (* M6-T24 (D-0225): what a stop concludes from here on. The floor is the DECLARED bound,
+  (* What a stop concludes from here on (D-0225). The floor is the DECLARED bound,
      which the .opb implies on its own. *)
   Writer.set_stop_verdict ctx.Justify.writer (fun () ->
       let page v = match objective.o_dir with Minimise -> v | Maximise -> -v in

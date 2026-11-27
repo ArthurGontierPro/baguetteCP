@@ -3,6 +3,11 @@
 # emitted proof with veripb, and judge the answer against the .scp alone with
 # tools/scp/validate.py (M23-inputs-T5, D-0230).
 #
+#   scripts/run_scp_tests.sh          (no arguments; `make scp` runs it)
+#
+# Like run_model_tests.sh it does not build the solver. Exit 0 when every model passes,
+# 1 when one fails or when the solver, the checker or python3 is missing.
+#
 # The .scp lane of scripts/run_model_tests.sh, with one check more: the expected outputs
 # were not taken on trust from the solver that produced them. validate.py reads the .scp
 # through tools/e2e/scpsem.py (CakeML's cpScript.sml, transcribed apart from lib/scp/),

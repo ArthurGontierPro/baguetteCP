@@ -2,55 +2,54 @@
    encodings they have been given, and the constraints that keep those encodings
    consistent with one another.
 
-   docs/PROOF-FORMAT.md section 3 is normative here, and this module is the only
-   place that is allowed to know the shape of the encoding:
+   docs/PROOF-FORMAT.md section 3 is normative here (the names are part of the contract),
+   and this module is the only place that is allowed to know the shape of the encoding.
+   An integer variable gets one of two encodings in the .opb:
 
-   - every integer variable gets the *order* encoding, eagerly, in the .opb -- UNLESS it
-     is declared wider than `--bits-above W` and its scope is eligible, in which case it
-     gets the *bits* encoding (M8-bits-encoding-T2, D-0130, D-0132): `bit_length (hi - lo)`
-     Booleans `x_bit_i` for `x - lo`, two bound rows and NO ladder. Its order atoms
-     `x_ge_v` keep their names and are minted into the .pbp on demand, at level 0, by a
-     `red` pair ([ensure_atom]); the rows that mention it carry `a * 2^i` on `x_bit_i`
-     ([linear_terms_int_lin_le]). The fork is [ivar.repr], and the four functions that
-     read it -- [declare_int_bits], [linear_terms_int_lin_le], [assignment_lits_of],
-     [ensure_atom]/[bound_lines] -- are the whole of what knows there are two shapes on
-     the proof side; lib/core/justify.ml and lib/core/trace.ml are the two on the core
-     side. Eligibility (width AND scope) is lib/flatzinc/compile.ml's, computed from the
-     model before any declaration;
-   - the *direct* encoding is introduced lazily, into the .pbp, with [red], only for
-     the variables a disequality / element / all_different propagator touches;
-   - exactly-one over the direct encoding is *derived* from the channelling, never
-     assumed.
+   - the *order* encoding: one Boolean `x_ge_v` per value v in (lo, hi], meaning
+     `x >= v`, and the LADDER, one clause `x_ge_(v+1) -> x_ge_v` per interior value,
+     written eagerly ([declare_int]);
+   - the *bits* encoding, for a variable declared wider than `--bits-above W` whose scope
+     is eligible: `bit_length (hi - lo)` Booleans `x_bit_i` for the offset `x - lo`, two
+     bound rows and NO ladder ([declare_int_bits]). Its order atoms `x_ge_v` keep their
+     names and are minted into the .pbp on demand, at level 0, by a `red` pair
+     ([ensure_atom]); the rows that mention it carry `a * 2^i` on `x_bit_i`
+     ([linear_terms_int_lin_le]). The default is `--bits-above 0`, so every eligible
+     variable of width 2 or more is on bits (D-0201), and `--bits-above none` puts every
+     variable on the order encoding. The bits arm was designed in D-0130 and built for
+     linear rows by M8-bits-encoding-T2 (D-0132).
+
+   The fork between the two is [ivar.repr]. On the proof side it is read by the
+   declarations, the ladder ids ([consistency_id], [consistency_ids]: a bits variable
+   has none), [ensure_direct] (which refuses a bits variable), [ensure_atom] and
+   [bound_lines], the assignment ([push_assignment]) and the row expansions
+   ([linear_terms_int_lin_le], [expand_int_lin_le], [row_magnitudes] and the
+   `--no-proof` counters [discard_shape_ok], [count_discarded_row]); [is_bits] and
+   [bits_n] expose it to lib/core/justify.ml, lib/core/trace.ml and
+   lib/core/pb_analysis.ml. Eligibility (width AND scope) is lib/flatzinc/compile.ml's,
+   computed from the model before any declaration.
+
+   Beside those two, the *direct* encoding (`x_eq_v`, meaning `x = v`) is introduced
+   lazily, into the .pbp, with [red], only for the variables an all_different or element
+   propagator asked for ([request_direct]); exactly-one over it is *derived* from the
+   channelling, never assumed.
 
    This module also owns the mapping from a model constraint to the id the [f] rule
    will give it. The .opb's line order and the proof's ids are the same thing, and
-   keeping them in one place is the only way invariant I-X5 stays true.
+   keeping them in one place is the only way invariant I-X5 stays true (the .opb is
+   complete before any .pbp rule cites it, and its constraint ids are fixed by its line
+   order).
 
    ---------------------------------------------------------------------------
-   "Compile is the only door", stated and enforced (M1-T32, from D-0029)
+   No row whose arithmetic wrapped reaches the .opb (invariant I-X8, M1-T32)
    ---------------------------------------------------------------------------
 
-   D-0029 closed a soundness gap whose shape is worth restating here, because this
-   module is where the damage is done rather than where the fix went. A wrapped product
-   makes a propagator prune wrongly AND makes the .opb row say something other than the
-   model, computed from the same wrapping [*] -- so the two agree, and veripb, which
-   only ever sees the .opb, accepts the refutation of a model nobody wrote. There is no
-   independent oracle: [Model.check_assignment] wraps the same way, and on an UNSAT
-   answer there is no assignment to check at all.
-
-   The fix was a compile-time cap ([Checked.limit], lib/flatzinc/compile.ml). Its
-   consequence, recorded in D-0029 and filed as M1-T32, was that THIS MODULE and
-   lib/proof/opb.ml still computed unchecked and were safe only because [Compile]
-   happened to be the only caller. Nothing stated that, and a second entry point -- a
-   future front end, or a test calling [add_int_lin_le] directly -- could still write a
-   corrupted row.
-
-   The invariant, stated:
+   The invariant:
 
      **No row is committed to the .opb whose arithmetic wrapped.** Every integer this
      module or [Opb] derives from a posted linear row is representable in a native int.
 
-   And enforced, by [check_lin_le_computable] / [check_lin_ne_computable] below, on the
+   It is enforced by [check_lin_le_computable] / [check_lin_ne_computable] below, on the
    two functions that commit such a row: [add_int_lin_le] and [add_int_lin_ne]. They are
    preconditions, computed in [Arith]'s overflow-checked operations, and they RAISE
    [Unrepresentable]. They never decline: D-0029's asymmetry ("there is no 'decline'
@@ -58,6 +57,18 @@
    propagator, because this module is the thing that writes the artefact. Under
    [Compile]'s cap neither can fire, so the .opb of every model the CLI accepts is
    byte-for-byte what it was.
+
+   Why it matters. A wrapped product makes a propagator prune wrongly AND makes the .opb
+   row say something other than the model, computed from the same wrapping [*], so the
+   two agree, and veripb, which only ever sees the .opb, accepts the refutation of a
+   model nobody wrote. There is no independent oracle: [Model.check_assignment] wraps the
+   same way, and on an UNSAT answer there is no assignment to check at all. D-0029 closed
+   that gap with a compile-time cap ([Checked.limit], lib/flatzinc/compile.ml). This
+   module and lib/proof/opb.ml then still computed unchecked and were safe only because
+   [Compile] happened to be their only caller ("Compile is the only door"). Nothing
+   stated that, and a second entry point (a future front end, or a test calling
+   [add_int_lin_le] directly) could still write a corrupted row, so M1-T32 stated the
+   invariant and added the guard.
 
    Three things this deliberately does NOT do, said here so they are not mistaken for
    oversights:
@@ -104,7 +115,11 @@ type cond =
   | Cond of Lit.t
 
 exception Undeclared of string
-exception Redeclared of string
+
+(* A second declaration of a name already declared, with other bounds, other holes or
+   another representation: the variable, and what differs in words. An identical
+   redeclaration is a no-op and raises nothing (M22-review-T5). *)
+exception Redeclared of string * string
 exception Empty_domain of string
 exception No_direct_encoding of string
 exception Direct_too_large of string * int
@@ -112,19 +127,21 @@ exception Direct_too_large of string * int
 (* A declared domain whose order ladder is longer than this module will build.
    Carries the variable's name and its declared bounds -- not the width, because for
    extreme bounds [hi - lo] is itself not representable and the exception exists partly
-   to report that case. See [max_order_width] and M1-T54. *)
+   to report that case. See [max_order_width], the per-variable width cap M1-T54 added. *)
 exception Width_too_large of string * int * int
 
 (* A hole handed to [declare_int] that is not strictly inside the declared hull, so the
    clause that would punch it has no rung to hang on. Loud rather than filtered: a hole
    silently dropped is a value the .opb still admits and the store does not, which is
-   the relaxation this whole mechanism exists to prevent (M7-T11, D-0072). *)
+   the relaxation this whole mechanism exists to prevent: a set domain is encoded by
+   punching its holes into the ladder as .opb rows, rather than refused (M7-T11,
+   D-0072). *)
 exception Hole_out_of_range of string * int
 
 (* A row whose arithmetic cannot be carried out in a native int, so committing it to
    the .opb would write a different constraint from the one the caller posted. See the
-   header, M1-T32. Loud by design: D-0029's "overflow raises; it never wraps and never
-   quietly declines". *)
+   header's invariant I-X8. Loud by design: D-0029's "overflow raises; it never wraps and
+   never quietly declines". *)
 exception Unrepresentable of string
 
 (* ---------------------------------------------------------------------------
@@ -186,28 +203,26 @@ end
 exception Equality_in_opb
 
 (* ---------------------------------------------------------------------------
-   The limits, and why they are OPTIONS now (M7-T1)
+   The width limits are options, off by default, and a wide domain warns (M7-T1)
    ---------------------------------------------------------------------------
 
-   Until M7-T1 the two numbers below were hard refusals, and they were hard because
-   the machine baguette was written on had 15 GB of RAM shared by every session. That
-   is a fact about a laptop, not about the problem, and the MiniZinc corpus runs on a
-   node with two terabytes. So the DEFAULT BUILD REFUSES NOTHING on width: both limits
-   start as [None].
+   The DEFAULT BUILD REFUSES NOTHING on width: both limits below start as [None]. What
+   it does instead is REPORT the cost: [declare_int] encodes the wide domain, writes a
+   warning on stderr each time a single declaration crosses [width_warn_threshold]
+   (which starts at the old cap, 10 000), and keeps counters on [t] that bin/main.ml
+   prints under --stats.
 
-   What survives the removal, because it was never about RAM:
+   Why report rather than refuse. The order encoding is width-proportional: a variable
+   of declared width w costs w - 1 ladder clauses, and every justification that cancels
+   it is Theta(w) literals long (D-0028). That cost is PROOF SIZE and CHECKER TIME, and
+   a large machine does not repeal it, so a model whose encoding nobody can check must
+   still say so. A silent success would be exactly as wrong as the silent failure, and
+   this module is the one that mints the cost, so it is the one that has to say so.
 
-   D-0028 makes the order encoding width-proportional, and that cost is PROOF SIZE and
-   CHECKER TIME. A 2 TB machine does not repeal it. The refusal was also doing a second
-   job -- it TOLD YOU. A model whose encoding nobody could check said so, loudly, at
-   the door.
-
-   The refusal goes; the signal does not. [declare_int] now encodes the wide domain and
-   REPORTS what it cost: a warning on stderr the first time a single declaration crosses
-   [width_warn_threshold] (which starts at the old cap, 10 000), and counters on [t] that
-   bin/main.ml prints under --stats. A silent success would be exactly as wrong as the
-   silent failure, and this module is still the one that mints the cost, so it is still
-   the one that has to say so.
+   Why not refuse. The two numbers below were hard refusals until M7-T1, because the
+   laptop baguette was written on had 15 GB of RAM shared by every session. That is a
+   fact about a laptop, not about the problem, and the MiniZinc corpus runs on a node
+   with two terabytes.
 
    Both limits stay REACHABLE, defaulting off:
 
@@ -241,13 +256,15 @@ type ivar = {
   hi : int;
   (* The id of the FIRST consistency constraint  x_ge_(lo+2) -> x_ge_(lo+1); the rung
      at value v (lo < v < hi) is  ladder_base + (v - lo - 1),  see [consistency_id].
-     Meaningful only when hi - lo >= 2, i.e. when there is a rung at all.
+     Meaningful only when hi - lo >= 2, i.e. when there is a rung at all. One base
+     suffices because the ids are minted consecutively by the one [for] loop in
+     [mint_order], and nothing else mints in between: the rungs' ids are an arithmetic
+     progression. For a bits variable the field holds its [lb_row] and is not read.
 
-     M7-T27 (b): this used to be a per-value [Hashtbl] from v to the rung's id, which
-     was the larger half of D-0123's ~300 bytes of live heap per rung (the binding, the
-     boxed value and the bucket array, resized log(width) times). The ids are minted
-     consecutively by the one [for] loop in [declare_int_gen], and nothing else mints
-     in between, so the table only ever recorded an arithmetic progression. *)
+     M7-T27 (b) replaced a per-value [Hashtbl] from v to the rung's id, which was the
+     larger half of the ~300 bytes of live heap per rung that D-0123 found to be the
+     memory wall on wide instances (the binding, the boxed value and the bucket array,
+     resized log(width) times). *)
   ladder_base : cid;
   (* h -> id of the HOLE clause  x_ge_h -> x_ge_(h+1),  for each declared hole h.
      Kept as a table because holes are sparse, and kept apart from the ladder because
@@ -273,44 +290,46 @@ type ivar = {
 
 and repr = Order | Bits of { n : int; lb_row : cid; ub_row : cid }
 
-(* M6-T11 (D-0085). The two tables keyed on a FlatZinc identifier, specialised to
-   [string]: the generic [Hashtbl] compares keys with the polymorphic [compare] (a C call
-   per probe, D-0080's "hashing per literal" on wide compiles, and [find] runs on every
-   literal [ge]/[le]/[eq] commits). Same hash function as the generic table
-   ([Hashtbl.hash]) and the same resizing, so the same bucket layout and iteration order;
-   nothing iterates these two anyway. *)
-module Names = Hashtbl.Make (struct
-  type t = string
-
-  let equal = String.equal
-  let hash (s : string) = Hashtbl.hash s
-end)
+(* The tables keyed on a FlatZinc identifier ([ints], [taken] and the others below) are
+   [Name_tbl]: a [Hashtbl] specialised to [string], comparing keys with [String.equal]
+   and hashing them with [String.hash], which returns [Hashtbl.hash]'s value without the
+   generic hash's dispatch. Same hash value and the same resizing as the generic table,
+   so the same bucket layout and iteration order; nothing iterates these tables anyway.
+   It pays because [find] runs on every literal [ge]/[le]/[eq] commits: the generic
+   table's polymorphic [compare] was a C call per probe (D-0080 measured that "hashing
+   per literal" on wide compiles; M6-T11, D-0085, specialised the table to strings), and
+   [find] was still 10.5 % of elitserien handball12 with the proof before M20-pernode-T4
+   moved it to [Name_tbl] (D-0236). *)
+module Names = Name_tbl
 
 (* ---------------------------------------------------------------------------
-   M7-T27 (b): the .opb is STREAMED, and its header is COUNTED, not scanned
+   The .opb is STREAMED, and its header is COUNTED, not scanned (M7-T27 (b))
    ---------------------------------------------------------------------------
 
-   D-0123, family C: 159 Challenge instances died inside a ladder loop at ~300 bytes
-   of live heap per rung, because every committed row was kept as an [Opb.constr]
-   until [write_opb] rendered the list, and [Opb.write] then scanned that list twice
-   more (distinct variable names for `#variable=`, renamed owners for the comments).
-   On the widest instance that is 26 M rows and a 3.0 GB .opb held as OCaml data.
-
-   Now a row is rendered to the .opb's body the moment [add_constraint] mints its id,
-   and the two header scans are replaced by counters maintained at the same moment:
+   Under [Stream_rows_to], a row is rendered to the .opb's body the moment [commit]
+   mints its id, and is not kept. The header's two figures, which used to be found by
+   scanning every row at the end, are counters maintained at the same moment, in every
+   sink:
 
    - [Occurs] counts the distinct OPB variable names that occur in committed rows.
      [Lit.render] is injective on (sanitize owner, kind, value): the suffix is
-     `[m]digits`, so neither "_ge_" nor "_eq_" can fall inside it, and the split of a
-     rendered name into prefix, kind and value is unique. A name is therefore a point
-     (owner', kind, v), and the ladder of x is the ONE INTERVAL (x', Ge, [lo+1, hi]):
-     the rung at v mentions x_ge_(v+1) and x_ge_v for lo < v < hi, and the hole rows
-     mention nothing outside that. So the ladder is counted in O(1) per declaration,
-     with no entry per rung, and only the model's own rows probe per literal -- which
-     [Opb.write] did at the end anyway, over every rung too.
+     `[m]digits`, so none of "_ge_", "_eq_" and "_bit_" can fall inside it, and the
+     split of a rendered name into prefix, kind and value is unique. A name is
+     therefore a point (owner', kind, v), and the ladder of x is the ONE INTERVAL
+     (x', Ge, [lo+1, hi]): the rung at v mentions x_ge_(v+1) and x_ge_v for
+     lo < v < hi, and the hole rows mention nothing outside that. So the ladder is
+     counted in O(1) per declaration, with no entry per rung, and only the model's own
+     rows probe, once per run of one owner -- where [Opb.write] probed every literal
+     at the end, over every rung too.
    - the renamed owners are recorded in first-occurrence order as rows are committed,
-     once per ladder declaration and once per literal of every other row -- the same
-     order [Opb.rename_comments] produced from the list.
+     once per ladder declaration and once per run of one owner in every other row (see
+     [add_constraint]) -- the same order [Opb.rename_comments] produces from a list.
+
+   Why. D-0123's family C was 159 Challenge instances that died inside a ladder loop at
+   ~300 bytes of live heap per rung, because every committed row was kept as an
+   [Opb.constr] until the .opb was rendered from the list, which [Opb.write] then scanned
+   twice more. On the widest instance that was 26 M rows and a 3.0 GB .opb held as OCaml
+   data.
 
    Where the rows GO is the [sink]. The CLI chooses before [Compile] runs, through
    [row_sink] (an ambient setting, like [order_width_limit] and for the same reason:
@@ -320,9 +339,10 @@ end)
    the same encoding both ways and compares the bytes. *)
 
 module Occurs = struct
-  (* Sorted, disjoint, closed integer intervals; [add r a b] merges [a, b] in and
-     returns how many integers it newly covers. Lists stay a few entries long: one
-     ladder interval per (owner, kind), plus the odd point outside it. *)
+  (* Sorted, disjoint, closed integer intervals; [merge a b r] merges [a, b] in, and
+     [overlap a b r] says how many of its integers [r] already covers, so an [add_*]
+     below grows [count] by the difference. Lists stay a few entries long: one ladder
+     interval per (owner, kind), plus the odd point outside it. *)
   type ranges = (int * int) list
 
   let overlap a b (l : ranges) =
@@ -368,7 +388,8 @@ module Occurs = struct
       o.bit <- merge a b o.bit;
       t.count <- t.count + n)
 
-  (* The direct literals x_eq_a .. x_eq_b, as one interval (M11-complexity-T7). *)
+  (* The direct literals x_eq_a .. x_eq_b, as one interval, for the per-run accounting
+     of [add_constraint] (M11-complexity-T7). *)
   let add_eq_range t x a b =
     if a <= b then (
       let o = owner t x in
@@ -420,19 +441,25 @@ type sink_policy = Retain_rows | Stream_rows_to of string | Discard_rows
    keeps every test and every direct caller exactly as they were. *)
 let row_sink : sink_policy ref = ref Retain_rows
 
-(* M14-e2e-verification-T3 (D-0187). The CLI's `--e2e` sets it, before [Compile.compile],
-   to the path of the file the prefix is written to while the .opb is built; [start_proof]
-   copies it into the proof. [None], the default, is every byte as before. *)
+(* The END-TO-END request (M14-e2e-verification-T3, D-0187): under `--e2e` baguette also
+   writes a proof prefix that derives each of its .opb rows from cake_pb_cp's verified
+   encoding of the model (lib/proof/e2e.ml). The CLI's `--e2e` sets this, before
+   [Compile.compile], to the path of the file the prefix is written to while the .opb is
+   built; [start_proof] copies it into the proof. [None], the default, is every byte as
+   before. *)
 let e2e_request : string option ref = ref None
 
 type t = {
   ints : ivar Names.t;
   taken : unit Names.t;
-      (* M6-T11 (D-0085). [Lit.sanitize k] for every key [k] of [ints], kept beside it at
-         the one place [ints] grows, so [fresh_aux_name] reads it instead of rebuilding
+      (* [Lit.sanitize k] for every key [k] of [ints], kept beside it where [ints] grows
+         ([mint_order], [mint_bits]), so [fresh_aux_name] reads it instead of rebuilding
          it from all of [ints] on every call (O(vars) per auxiliary, O(vars * rows) per
-         compile). Never shrinks, because [ints] never does. *)
+         compile, M6-T11). Never shrinks, because [ints] never does. *)
   mutable decl_rev : string list;
+  mutable found_last : ivar option;
+      (* The variable [find] answered last: a one-entry memo in front of [ints], see
+         [find]. *)
   mutable sink : sink;
   occurs : Occurs.t; (* the distinct variable names of every committed row *)
   mutable renamed_rev : string list; (* `name x -> x'` comments, newest first *)
@@ -440,18 +467,10 @@ type t = {
   mutable n : int; (* ids 1..n have been assigned *)
   mutable objective : Opb.objective option;
   mutable n_aux : int;
-  (* How many auxiliary variables this encoding has minted of its own accord
-     (M1-T9's disequality rows need one each). Only ever increases, so a name
-     handed out once is never handed out again even after a failed candidate.
-     See [fresh_aux_name]. *)
-  (* Every id this module minted for a DIRECT-ENCODING line: the three channelling
-     halves of every [ensure_direct], and every [derive_at_least_one]. M4-T2 added it
-     for [is_direct_row], whose one caller is lib/core/search.ml's [rests_on_a_clause]
-     -- see that function for why "which currency is this row stated in" is the
-     question a root conflict has to answer, and why the id is the only thing that can
-     answer it (an [Explanation.Model_row] carries an id and nothing else). Ids are
-     minted by [Writer] in one ascending sequence and never reused, so an entry stays
-     correct after [retire_direct] drops the [dvar] itself. *)
+  (* The next suffix [fresh_aux_name] tries for an auxiliary Boolean this encoding mints
+     of its own accord: each [int_lin_ne] pair of big-M rows needs one (M1-T9), as do a
+     reified equality and each selector of a choice group. Only ever increases, so a
+     name handed out once is never handed out again even after a failed candidate. *)
   (* M7-T1. What the encoding COST, accumulated as it is minted. These exist because
      the width refusal was also a diagnostic: with the refusal gone by default, this is
      what is left to tell a reader that their model asked for an encoding nobody can
@@ -463,28 +482,30 @@ type t = {
   mutable ladder_clauses : int;
   mutable widest : (string * int * int) option; (* name, lo, hi *)
   mutable direct_values : int;
-  direct_cids : (cid, unit) Hashtbl.t;
   direct_wanted : unit Names.t;
-      (* M4-T1. The variables a propagator has declared it will need the DIRECT
-         encoding for, recorded at compile time and materialised by [start_proof].
+      (* The variables a propagator has declared it will need the DIRECT encoding for
+         ([request_direct]), recorded at compile time and materialised by
+         [start_proof]. Added with all_different's Hall justification (M4-T1), which
+         cites the channelling lines by id.
 
          Why a request list and not [ensure_direct] at the point of use: the direct
          encoding is written with [red], which needs a [Writer.t], and a propagator
          has none -- [Propagator.propagate] takes a [Store.t] and nothing else, and
          that is not an oversight (lib/core/propagator.ml). An [Explanation.t] is a
-         VALUE naming constraint ids (D-0027 point 1, [Explanation.Model_row]), so
+         VALUE naming constraint ids, not a function that writes them (D-0027 point 1,
+         [Explanation.Model_row]), so
          the ids it names must already exist when the propagator builds it. So the
          materialisation happens once, at the top of the proof, for the variables
          [Compile] says will need it, and the propagator reads the ids back out.
 
          Declared order, not request order, so that the .pbp is byte-identical
-         whatever order [Compile] walks the constraints in ([alldiff_direct_vars]
-         below sorts by declaration). The determinism lane is what would catch a
-         regression here. *)
+         whatever order [Compile] walks the constraints in ([direct_requested] below
+         reads the set in declaration order). The determinism lane is what would catch
+         a regression here. *)
   alo : (string, cid) Hashtbl.t;
   (* x -> the id of the at-least-one line [derive_at_least_one] wrote for it,
      populated by [start_proof] alongside the direct encoding itself. *)
-  (* M8-bits-encoding-T2. What the bits arm cost, for `--stats` (D-0130 section 10):
+  (* What the bits arm cost, for `--stats` (D-0130 section 10):
      declarations on bits and their bound rows; eligible-by-width variables held back
      by scope, per family ([note_held_back], written by [Compile]); and on the proof
      side the atoms minted, the sparse-chain links, the order bridge pairs and the order
@@ -497,27 +518,29 @@ type t = {
   mutable n_bridges : int;
   mutable n_bound_lines : int;
   mutable n_bits_prunings : int; (* bits-arm `pol` lines written (D-0130's atoms/prune) *)
-  (* Set by [close_atoms] once a root contradiction is on the page: a `red` after that
-     is accepted whatever its witness (D-0053), so [ensure_atom] raises instead
-     (D-0130 section 5.4). *)
+  (* Set by [close_atoms] once a root contradiction is on the page: the checker accepts
+     a `red` over a contradictory database whatever its witness, so such a line proves
+     nothing (D-0053), and [ensure_atom] raises instead (D-0130 section 5.4). *)
   mutable atoms_closed : bool;
-  (* M8-bits-encoding-T3 (D-0134 section 2.4): the CHOICE groups -- selector Booleans
-     posted by [add_choice] that the rows leave free at a tie -- newest first, and how
-     many. [assignment_lits] lists every group's selectors after the bindings. *)
+  (* The CHOICE groups -- selector Booleans posted by [add_choice] that the rows leave
+     free at a tie -- newest first, and how many. [assignment_lits] lists every group's
+     selectors after the bindings. They came with maxmin over bits, whose pruning goes
+     through one selector row per operand (M8-bits-encoding-T3, D-0134 section 2.4). *)
   mutable choices_rev : choice list;
   mutable n_choices : int;
-  (* M7-T28 (D-0146 section 3.2): the ROOT LEMMAS a model-row family asked
-     [start_proof] to derive, newest first. See [add_root_lemma]. *)
+  (* The ROOT LEMMAS a model-row family asked [start_proof] to derive, newest first:
+     constraints the model rows entail but do not state, each derived as one `rup` at
+     the top of the proof (M7-T28, D-0146 section 3.2). See [add_root_lemma]. *)
   mutable lemmas_rev : Opb.constr list;
-  (* M7-T28 (D-0151 section 2): how many, how many of them a derivation CITES, and the
-     id each got when [start_proof] wrote it, by registration index. See
+  (* How many lemmas, how many of them a derivation CITES by id (D-0151 section 2), and
+     the id each got when [start_proof] wrote it, by registration index. See
      [add_cited_lemma]. *)
   mutable n_lemmas : int;
   mutable n_cited : int;
   mutable lemma_ids : Writer.cid array;
-  (* M14-e2e-verification-T3 (D-0187): under `--e2e`, the prefix writer every declaration
-     and every committed row is reported to ([E2e]). [None] otherwise, and then no line of
-     this module behaves differently. *)
+  (* Under `--e2e`, the prefix writer every declaration and every committed row is
+     reported to ([E2e], see [e2e_request]). [None] otherwise, and then no line of this
+     module behaves differently. *)
   e2e : E2e.t option;
 }
 
@@ -527,13 +550,15 @@ type t = {
    values only. *)
 and choice = { ch_sels : string list; ch_pick : (string -> int) -> int }
 
-(* The encoding the CLI is currently building, for the REACTIVE guard alone (M7-T8).
+(* The encoding the CLI is currently building, for the REACTIVE heap guard alone (the
+   resource guard below, M7-T8).
 
-   A [Gc] alarm fires from wherever the allocation happened to be; it has no [t] in
-   hand and cannot be given one. Its diagnostic still has to name a variable, because
-   "out of memory" is not a diagnostic. So [create] parks the encoding here and the
-   alarm reads the counters back out. Nothing else may read it -- every other caller
-   already holds the [t] it means. It is one of the library's process-wide mutable
+   A [Gc] alarm, or the timer behind [poll_heap], fires from wherever the allocation
+   happened to be; it has no [t] in hand and cannot be given one. Its diagnostic still
+   has to name a variable, because "out of memory" is not a diagnostic. So [create]
+   parks the encoding here and [refuse_heap] and [out_of_memory_message] read the
+   counters back out. Nothing else may read it -- every other caller already holds the
+   [t] it means. It is one of the library's process-wide mutable
    values, which M22-review-T11 proposes to remove.
 
    Last [create] wins, which is right: the CLI makes one, and a test that makes several
@@ -545,6 +570,7 @@ let create () =
     ints = Names.create 64;
     taken = Names.create 64;
     decl_rev = [];
+    found_last = None;
     sink =
       (match !row_sink with
       | Retain_rows -> Retain []
@@ -556,7 +582,6 @@ let create () =
     n = 0;
     objective = None;
     n_aux = 0;
-    direct_cids = Hashtbl.create 64;
     direct_wanted = Names.create 16;
     alo = Hashtbl.create 16;
     ladder_clauses = 0;
@@ -585,8 +610,27 @@ let create () =
   live := Some t;
   t
 
+(* M20-pernode-T4 (D-0236): a ONE-ENTRY MEMO in front of the table, hit when [x] is
+   PHYSICALLY ([==]) the name of the variable answered last. Sound because [ints] never
+   rebinds a name ([declare_int_gen] and [declare_int_bits] raise [Redeclared] rather than
+   replace) and only a found variable is remembered, so a hit returns what the table
+   would; an equal string that is not that very one just misses. It pays because a
+   caller names one variable several times in a row -- [Trace.bits_arm] over a reason's
+   facts, a literal's [Justify.validate_lit] then its rendering -- with the string the
+   store and the encoding share: on elitserien handball12 with the proof, 39 % of 25 000
+   lookups per node were physical repeats of the one before, and none was equal without
+   being physical. The memo keeps the [Some] the table returned, so a miss allocates
+   nothing more than it did; a version that kept a placeholder variable instead of an
+   option measured 0.3 % worse. *)
 let find t x =
-  match Names.find_opt t.ints x with Some v -> v | None -> raise (Undeclared x)
+  match t.found_last with
+  | Some v when v.name == x -> v
+  | _ -> (
+      match Names.find_opt t.ints x with
+      | Some v as found ->
+          t.found_last <- found;
+          v
+      | None -> raise (Undeclared x))
 
 let is_declared t x = Names.mem t.ints x
 
@@ -629,15 +673,16 @@ let commit t c =
 
 (* Append a constraint to the .opb and hand back the id [f] will give it.
 
-   M11-complexity-T7 (D-0143): the header's accounting is done per RUN, not per term. A
-   run is a stretch of consecutive terms whose owner is the same string (physically), of
-   one kind, at consecutive values -- a whole variable's block of a linear row is one --
-   and it is added to [Occurs] as one interval ([Occurs.add_run]: the same set and the
-   same count as its points one by one). [note_renamed] is called at the first term of
-   every run, which is where every owner first occurs, so the renaming comments keep
-   their first-occurrence order; it is idempotent after that. Per term this used to
-   sanitise and hash the owner and scan it again for [note_renamed]: on openshop's 72 M
-   terms of big-M rows, three passes over a 17-byte name and a table probe each. *)
+   The header's accounting is done per RUN, not per term. A run is a stretch of
+   consecutive terms whose owner is the same string (physically), of one kind, at
+   consecutive values -- a whole variable's block of a linear row is one -- and it is
+   added to [Occurs] as one interval ([Occurs.add_run]: the same set and the same count
+   as its points one by one). [note_renamed] is called at the first term of every run,
+   which is where every owner first occurs, so the renaming comments keep their
+   first-occurrence order; it is idempotent after that. Per term this used to sanitise
+   and hash the owner and scan it again for [note_renamed]: on openshop's 72 M terms of
+   big-M rows, three passes over a 17-byte name and a table probe each. Done by
+   M11-complexity-T7, the pass on the setup before the first node (D-0143). *)
 let add_constraint t c =
   let rec go x kind lo hi = function
     | [] -> Occurs.add_run t.occurs x kind lo hi
@@ -675,14 +720,17 @@ let objective t = t.objective
    --------------------------------------------------------------------------- *)
 
 (* ---------------------------------------------------------------------------
-   The width cap (M1-T54, taking D-0028 point 3; decided in D-0041, which is also
-   where SPEC 3.1's normative paragraph comes from)
+   The width cap (M1-T54; decided in D-0041, a declared width limit because a proof
+   nobody can store is not an answer, which is also where SPEC 3.1's paragraph comes from)
    ---------------------------------------------------------------------------
 
    The largest declared width [hi - lo] for which this module will build an order
-   ladder. Above it, [declare_int] raises [Width_too_large] and allocates nothing.
+   ladder WHEN A CAP IS ASKED FOR. With [order_width_limit] set to it, [declare_int]
+   raises [Width_too_large] above it and allocates nothing. Since M7-T1 no cap is in
+   force by default (D-0065), and this number is the default of a requested cap and the
+   threshold of the width warning; the argument below is why it is that number.
 
-   Why the cap is HERE. Every integer variable gets the order encoding eagerly
+   Why the cap is HERE. An order-encoded variable gets its ladder eagerly
    (PROOF-FORMAT section 3), so a declared width of w is w - 1 ladder clauses in the
    .opb before any constraint is posted, and -- the half that actually hurts -- the row
    expansion [expand_int_lin_le] is Theta(w) literals per variable, which makes every
@@ -693,8 +741,9 @@ let objective t = t.objective
 
    Why it is a refusal and not a budget. Three memory-ceiling incidents on 2026-09-16
    were all this shape, and the reason the existing defences did not help is that all
-   three act after the allocation is under way: `ulimit -v` and [Mem_guard] (M1-T53)
-   kill a run, and scripts/check_test_widths.sh sees only the *syntactic* form of a wide
+   three act after the allocation is under way: `ulimit -v` and [Mem_guard] (the heap
+   alarm every test suite installs, M1-T53) kill a run, and
+   scripts/check_test_widths.py sees only the *syntactic* form of a wide
    domain in a test file. Refusing at the declaration is different in kind -- nothing is
    allocated, and the caller can say which variable and where.
 
@@ -914,20 +963,24 @@ let note_bits_pruning t = t.n_bits_prunings <- t.n_bits_prunings + 1
 let widest_width = function None -> 0 | Some (_, lo, hi) -> hi - lo
 
 (* ---------------------------------------------------------------------------
-   The graceful resource guard (M7-T8, D-0071) -- on top of D-0065, not against it
+   The graceful resource guard: an encoding budget and a heap budget, both off by
+   default (M7-T8, D-0071)
    ---------------------------------------------------------------------------
 
-   D-0068's first full corpus run had 9 of 436 instances die with exit 134, and all
+   A run whose encoding or heap outgrows a budget the user asked for ENDS GRACEFULLY:
+   it says what did not fit and what to narrow, and exits with status [exit_resource]
+   (5), which a harness can bucket, instead of the OCaml runtime's abort.
+
+   Why. D-0068's first full corpus run had 9 of 436 instances die with exit 134, and all
    nine were the same death: `Fatal error: allocation failure during minor GC`, the
    OCaml runtime aborting against a 32 GB per-job cap, on wide-domain models. In every
    one of the nine, M7-T1's width WARNING had already fired, and fired correctly. The
    warning did its job; the failure mode did not.
 
-   This is D-0065's consequence, and the fix is NOT to put the declared-width refusal
-   back. Declared width is still the wrong proxy -- it bounds one variable, and D-0065
-   showed a width-30 000 model solving and verifying. What was missing is a graceful
-   END: a model whose encoding does not fit should say what did not fit and what to
-   narrow, with an exit status a harness can bucket, instead of an abort.
+   The fix is NOT to put the declared-width refusal back, which D-0065 removed (the
+   hardware limits became options, defaulting off). Declared width is still the wrong
+   proxy -- it bounds one variable, and D-0065 showed a width-30 000 model solving and
+   verifying. What was missing is a graceful END.
 
    PREDICTIVE AND REACTIVE, and the reason for both
    ------------------------------------------------
@@ -954,10 +1007,12 @@ let widest_width = function None -> 0 | Some (_, lo, hi) -> hi - lo
    off by default (below), and the heap watch cannot refuse a model at all, only end
    the run it is already in.
 
-   WHERE IT FIRES. [declare_int] and [ensure_direct], BEFORE the loop that allocates,
-   so a refused declaration leaves no trace and costs no allocation -- the same
-   property M1-T54 gave the width refusal and the same sentence guards it. Plus a
-   [Gc] alarm, installed by bin/main.ml, which fires wherever it fires.
+   WHERE IT FIRES. The order and bits declarations ([mint_order], [mint_bits]) and
+   [ensure_direct], BEFORE the loop that allocates, so a refused declaration leaves no
+   trace and costs no allocation -- the same property M1-T54 gave the width refusal and
+   the same sentence guards it. Plus a [Gc] alarm, installed by bin/main.ml, which fires
+   wherever it fires, and since D-0200 a CPU-timer poll ([poll_heap]) for the stretch
+   between two major cycles.
 
    WHAT IT SAYS. A count is not a diagnostic. Both messages name the declaration that
    crossed the line, what it would have added, what was already minted, the budget in
@@ -971,7 +1026,7 @@ let widest_width = function None -> 0 | Some (_, lo, hi) -> hi - lo
    There is no measurement that would justify a default here -- the number would be a
    property of whichever node the measuring was done on, which is the whole reason
    D-0065 removed the last one. What IS measured is the cost of having the guard: the
-   85-model suite's largest encoding is under 3000 clauses and the check is one
+   85-model suite of the time had no encoding over 3000 clauses, and the check is one
    comparison per declaration, so an unset budget changes no artefact and no timing. *)
 let encoding_budget : int option ref = ref None
 
@@ -980,7 +1035,8 @@ let heap_limit_mb : int option ref = ref None
 
 (* The exit status a resource overrun ends in. It is DISTINCT from every other status
    this project uses -- 0 solved (SAT or UNSAT), 2 usage / bad model, 3 a model this
-   solver does not support, 4 an internal invariant failure -- because a harness that
+   solver does not support, 4 an internal invariant failure, 6 a failed write of an
+   output file (bin/main.ml's [exit_write]) -- because a harness that
    cannot tell "your machine ran out" from "this proof is wrong" will bucket them
    together, and D-0068's SOLVE-ERR-134 bucket is precisely what that looks like.
    Named here rather than in bin/main.ml because the [Gc] alarm below exits directly
@@ -1036,15 +1092,18 @@ let heap_words_now = heap_words
 let words_of_mb mb = mb * 1024 * 1024 / word_bytes
 let mb_of_words w = w * word_bytes / 1024 / 1024
 
-(* D-0200. THE READING BETWEEN TWO MAJOR CYCLES.
+(* THE HEAP ESTIMATE BETWEEN TWO MAJOR CYCLES (D-0200).
 
-   [heap_words] above is a snapshot taken at the end of the last major cycle, and a cycle
-   lasts longer the larger the heap is. Measured on 2013 proteindesign12 1HZ5 at
-   --max-heap-mb 8192 under the harness's 16 GiB `ulimit -v`: the alarms read 2.9 GB at
-   16 s and 6.6 GB at 27 s, the heap grew by about 2 GB every 7 s, and the next cycle had
-   not ended when the address space ran out at 14.5 GB RSS, 63 s in -- "Fatal error:
-   allocation failure during minor GC", the abort M7-T8 exists to replace. The alarm and
-   the synchronous check both read that snapshot, so neither could see past 6.6 GB.
+   The rule: the heap now is estimated as the heap at the last cycle end plus the major
+   words allocated since, an upper bound that is tight while the heap grows. [heap_words]
+   above is only a snapshot taken at the end of the last major cycle, and a cycle lasts
+   longer the larger the heap is. Before D-0200 the budget read that snapshot alone.
+   Measured on 2013 proteindesign12 1HZ5 at --max-heap-mb 8192 under the harness's 16 GiB
+   `ulimit -v`: the alarms read 2.9 GB at 16 s and 6.6 GB at 27 s, the heap grew by about
+   2 GB every 7 s, and the next cycle had not ended when the address space ran out at 14.5
+   GB RSS, 63 s in -- "Fatal error: allocation failure during minor GC", the abort M7-T8
+   exists to replace. The alarm and the synchronous check both read that snapshot, so
+   neither could see past 6.6 GB.
 
    The words the heap can have gained since the snapshot are bounded by the words
    allocated INTO it since then: promoted by a minor collection, or allocated there
@@ -1091,7 +1150,8 @@ let forced_at = ref neg_infinity
    the last forced one. Without that floor, a run whose live heap sits just under its
    budget would force a full cycle every few MB of promotion and spend its time in the
    collector instead of ending. The cost of the floor: such a run can be caught up to a
-   sixteenth past its budget, never more. [AUTONOME] D-0200 §3.
+   sixteenth past its budget, never more (D-0200 §3, a decision taken in autonomous
+   mode).
 
    WHY ONE COLLECTION AND NOT A FULL ONE. OCaml 5 sweeps a cycle's garbage during the NEXT
    cycle, so the figure at the end of the forced cycle still counts what died during it
@@ -1225,10 +1285,12 @@ let check_heap_at t ~what ~blo ~bhi =
 (* The asynchronous refusal, shared by the alarm and by [poll_heap] (D-0200): the same
    message and the same exit, so a harness cannot tell which of the two caught the run and
    has no reason to. *)
-(* M6-T24 (D-0225): what the refusal does after its message. The binary replaces it once
-   the proof's header is on the page, by ending the proof first; before that point there
-   is nothing to end. It may return (the writer is mid-line, and the exit waits for the
-   line): [refusing] then keeps the next poll from repeating the message. *)
+(* What the refusal does after its message. The binary replaces it once the proof's
+   header is on the page, so that the heap budget ends the proof with the strongest
+   conclusion it has before exiting, as a signal does (M6-T24, D-0225: an interrupted
+   run ends its proof); before that point there is nothing to end. It may return (the
+   writer is mid-line, and the exit waits for the line): [refusing] then keeps the next
+   poll from repeating the message. *)
 let resource_exit : (unit -> unit) ref = ref (fun () -> exit exit_resource)
 let refusing = ref false
 
@@ -1287,8 +1349,8 @@ let install_heap_guard () =
       in
       if Option.is_none !alarm then alarm := Some (Gc.create_alarm check)
 
-(* D-0200. The poll for the stretch between two cycle ends that the alarm cannot see (see
-   [heap_estimate]). bin/main.ml calls it from a SIGVTALRM handler, every
+(* The poll for the stretch between two cycle ends that the alarm cannot see (see
+   [heap_estimate], D-0200). bin/main.ml calls it from a SIGVTALRM handler, every
    [heap_poll_seconds] of CPU time, installed only when a budget is set.
 
    A timer and not a count of nodes or propagator runs, because no count bounds the
@@ -1309,7 +1371,7 @@ let poll_heap () =
   | Some limit -> (
       match heap_overrun limit with None -> () | Some w -> refuse_heap ~limit w)
 
-(* D-0200. What an [Out_of_memory] that reached bin/main.ml's top level says: a single
+(* What an [Out_of_memory] that reached bin/main.ml's top level says (D-0200): a single
    allocation the runtime could not map, typically one large array, which no reading of
    the heap can see coming. Same exit as the budget, because it is the same bucket -- the
    machine ran out, the model is not wrong and neither is the solver. *)
@@ -1337,7 +1399,8 @@ let out_of_memory_message () =
     (mb_of_words (heap_words ()))
     encoding budget
 
-(* M7-T8's two join the other three, through the SAME entry point rather than a second
+(* The two budgets of the resource guard (M7-T8) join the four settings above, through
+   the SAME entry point rather than a second
    one bin/main.ml would have to remember to call. A budget nobody reads is a budget
    nobody has. *)
 let limits_from_env () =
@@ -1355,7 +1418,7 @@ let current_heap_limit_mb () = !heap_limit_mb
 let encoding_budget_string () = limit_string !encoding_budget
 let heap_limit_string () = limit_string !heap_limit_mb
 
-(* The diagnostic the refusal used to be (M7-T1).
+(* The warning that replaced the width refusal (M7-T1).
 
    Written for a reader who has never heard of D-0028, because that reader is exactly
    the one this fires for: someone who handed baguette a real model and has no idea
@@ -1384,8 +1447,8 @@ let warn_wide_declaration x ~lo ~hi ~clauses =
 (* THE HOLE CLAUSE (M7-T11, D-0072), and the direction of it is the whole soundness
    argument, so it is stated here rather than left to be re-derived.
 
-   The ladder's convention, PROOF-FORMAT section 3 and the loop at the bottom of this
-   function: [x_ge_v] means `x >= v`, it exists for lo < v <= hi, and the rung written
+   The ladder's convention, PROOF-FORMAT section 3 and the loop at the bottom of
+   [mint_order]: [x_ge_v] means `x >= v`, it exists for lo < v <= hi, and the rung written
    for each lo < v < hi is
 
      1 ~x_ge_(v+1) 1 x_ge_v >= 1        i.e.  x >= v+1  ->  x >= v      (DOWNWARD)
@@ -1395,8 +1458,8 @@ let warn_wide_declaration x ~lo ~hi ~clauses =
 
      1 ~x_ge_h 1 x_ge_(h+1) >= 1        i.e.  x >= h  ->  x >= h+1      (UPWARD)
 
-   The two are the same shape and OPPOSITE polarity, which is the trap the roadmap row
-   warns about: writing the ladder's direction here would say `x >= h+1 -> x >= h`,
+   The two are the same shape and OPPOSITE polarity, which is the trap M7-T11's roadmap
+   row warns about: writing the ladder's direction here would say `x >= h+1 -> x >= h`,
    which is already implied and forbids nothing, leaving the .opb a relaxation of the
    declared domain and every refutation against it worthless.
 
@@ -1410,25 +1473,46 @@ let warn_wide_declaration x ~lo ~hi ~clauses =
    are at most hi - lo - 1 of them -- the same count as the ladder itself. So a set
    domain costs at most twice its hull's ladder and never a different order of
    magnitude, which is why holes are BUDGETED (counted into [ladder_clauses], and so
-   into M7-T8's predictive check below) rather than separately refused. *)
+   into the resource guard's predictive budget, M7-T8) rather than separately refused. *)
 
-let declare_int_gen t x ~holes ~lo ~hi =
-  if lo > hi then raise (Empty_domain x);
-  (* Before the Hashtbl and before the ladder: a refused declaration leaves no trace
-     in [t] and costs no allocation. M1-T54, and still true of the two refusals that
-     survive M7-T1 -- a width that is not representable, and a limit someone asked for. *)
-  if order_width_exceeds ~lo ~hi then raise (Width_too_large (x, lo, hi));
-  (match Names.find_opt t.ints x with
-  | Some v when v.lo = lo && v.hi = hi -> raise Exit (* idempotent redeclaration *)
-  | Some _ -> raise (Redeclared x)
-  | None -> ());
+(* Is [x] already declared exactly so? [false] when the name is new;
+   [true] when it was declared with the same bounds, the same holes ([holes] sorted and
+   deduplicated, as the declaration keeps them) and the same representation, which makes
+   the redeclaration a no-op; and [Redeclared] naming what differs otherwise. Before
+   M22-review-T5 (a review that fixed three latent defects here) only the bounds were
+   compared, so [declare_int_with_holes] after
+   [declare_int] silently dropped the holes, and an order declaration of a bits variable
+   kept the bits; the no-op was signalled by [raise Exit] under a wrapper that would also
+   have swallowed an [Exit] from any callee. *)
+let already_declared t x ~lo ~hi ~holes ~bits =
+  match Names.find_opt t.ints x with
+  | None -> false
+  | Some v ->
+      let differ what before after =
+        raise (Redeclared (x, Printf.sprintf "%s %s, then %s" what before after))
+      in
+      let ints l = "{" ^ String.concat "," (List.map string_of_int l) ^ "}" in
+      let repr_name b = if b then "bits" else "order" in
+      if v.lo <> lo || v.hi <> hi then
+        differ "bounds"
+          (Printf.sprintf "%d..%d" v.lo v.hi)
+          (Printf.sprintf "%d..%d" lo hi);
+      let v_bits = match v.repr with Bits _ -> true | Order -> false in
+      if v_bits <> bits then differ "representation" (repr_name v_bits) (repr_name bits);
+      let v_holes =
+        List.sort Stdlib.compare (Hashtbl.fold (fun h _ acc -> h :: acc) v.hole_rows [])
+      in
+      if v_holes <> holes then differ "holes" (ints v_holes) (ints holes);
+      true
+
+(* The order declaration of a NEW name, [holes] sorted and deduplicated, after
+   [declare_int_gen]'s checks. *)
+let mint_order t x ~holes ~lo ~hi =
   (* [order_width_exceeds] has established that hi - lo is representable. *)
   let width = hi - lo in
   let ladder = if width >= 1 then width - 1 else 0 in
-  (* Sorted and deduplicated so the .opb is byte-identical whatever order the caller
-     produced the holes in (the determinism gate), and validated before anything is
-     minted so a bad hole leaves [t] untouched, exactly as a refused width does. *)
-  let holes = List.sort_uniq Stdlib.compare holes in
+  (* [holes] are validated before anything is minted so a bad hole leaves [t]
+     untouched, exactly as a refused width does. *)
   List.iter (fun h -> if h <= lo || h >= hi then raise (Hole_out_of_range (x, h))) holes;
   let n_holes = List.length holes in
   (* Hole rows ARE order-ladder rows: same literals, same shape, minted by this same
@@ -1466,8 +1550,8 @@ let declare_int_gen t x ~holes ~lo ~hi =
   Names.replace t.ints x v;
   Names.replace t.taken (Lit.sanitize x) ();
   t.decl_rev <- x :: t.decl_rev;
-  (* M14-e2e-verification-T3: the atoms, halves and ladder of x are written to the prefix
-     before its rungs are committed, so each rung's pin follows its @L. *)
+  (* Under `--e2e`: the atoms, halves and ladder of x are written to the end-to-end
+     prefix before its rungs are committed, so each rung's pin follows its @L. *)
   (match t.e2e with
   | Some e -> E2e.declare e x ~holes ~lo ~hi ~lit:(fun w -> Lit.to_string (Lit.ge x w))
   | None -> ());
@@ -1484,14 +1568,16 @@ let declare_int_gen t x ~holes ~lo ~hi =
      by construction of this loop, and its names were accounted above. *)
   (match t.sink with
   | Discard ->
-      (* M9-no-proof-T2 (D-0126, rule 1): under [Discard_rows] no rung is ever read back,
-         so the loop below, which would build [ladder] clauses only to drop them at
+      (* Under [Discard_rows] (`--no-proof`) no rung is ever read back, so the loop
+         below, which would build [ladder] clauses only to drop them at
          [commit], is replaced by its count. The ids are arithmetic -- a rung's is
          [ladder_base + (value - lo - 1)] by construction -- so nothing that cites one
          can tell the difference, and the hole rows below still go through [commit] and
-         land exactly where the loop would have left them. This is the one place the
-         encoding half is skipped rather than discarded; everything else counts by
-         committing. *)
+         land exactly where the loop would have left them. The rule kept is D-0126's
+         rule 1: every model row's id is minted by the same counter in both modes, so a
+         run without the proof carries the ids a proved run would (M9-no-proof-T2).
+         This and [count_discarded_row]'s linear rows are the places the encoding half
+         is skipped rather than discarded; everything else counts by committing. *)
       t.n <- t.n + ladder;
       assert (t.n = v.ladder_base + ladder - 1)
   | Retain _ | Stream _ | Written ->
@@ -1509,7 +1595,17 @@ let declare_int_gen t x ~holes ~lo ~hi =
     holes
 
 let declare_int_gen t x ~holes ~lo ~hi =
-  try declare_int_gen t x ~holes ~lo ~hi with Exit -> ()
+  if lo > hi then raise (Empty_domain x);
+  (* Before the Hashtbl and before the ladder: a refused declaration leaves no trace
+     in [t] and costs no allocation (M1-T54), still true of the two refusals that
+     survive M7-T1 -- a width that is not representable, and a limit someone asked for. *)
+  if order_width_exceeds ~lo ~hi then raise (Width_too_large (x, lo, hi));
+  (* Sorted and deduplicated so the .opb is byte-identical whatever order the caller
+     produced the holes in (the determinism gate), and so a redeclaration compares them
+     as a set. *)
+  let holes = List.sort_uniq Stdlib.compare holes in
+  if not (already_declared t x ~lo ~hi ~holes ~bits:false) then
+    mint_order t x ~holes ~lo ~hi
 
 (* The hull-only declaration, which is every caller but a FlatZinc set domain. Kept as
    its own name rather than an optional [?holes] argument because an optional labelled
@@ -1525,7 +1621,7 @@ let declare_int_with_holes t x ~holes ~lo ~hi = declare_int_gen t x ~holes ~lo ~
 let declare_bool t x = declare_int t x ~lo:0 ~hi:1
 
 (* ---------------------------------------------------------------------------
-   M8-bits-encoding-T2: the BITS encoding of one variable (D-0130 section 4, D-0132)
+   The BITS encoding of one variable (M8-bits-encoding-T2; D-0130 section 4, D-0132)
    ---------------------------------------------------------------------------
 
    For [x] declared over [lo, hi] with width [hi - lo >= 2] and [n = bit_length width]
@@ -1535,8 +1631,10 @@ let declare_bool t x = declare_int t x ~lo:0 ~hi:1
      @lb_x     +1 x_bit_0 +2 x_bit_1 ... +2^(n-1) x_bit_(n-1) >= 0              x >= lo
      @ub_x     -1 x_bit_0 -2 x_bit_1 ... -2^(n-1) x_bit_(n-1) >= -(hi - lo)     x <= hi
 
-   The bits are the OFFSET from [lo], unsigned: that is D-0010's own currency, the same
-   fold [linear_terms_int_lin_le] performs for the order expansion (`x = lo + Σ ...`), so
+   The bits are the OFFSET from [lo], unsigned: the order expansion counts from the
+   declared lower bound too (`x = lo + Σ [x >= v]`, the declared-bound currency of D-0010,
+   in which a bound fact is a chain of order literals from the declared bound), and
+   [linear_terms_int_lin_le] folds [a * lo] into the constant for both shapes, so
    a negative [lo] is in a row's constant and there is no sign bit. Both bound rows are
    always posted, even where one is trivially true (`@lb` always is; `@ub` is when
    [width = 2^n - 1]), so that a derivation weakens a bits term in either direction by
@@ -1555,22 +1653,8 @@ let bit_length width =
 (* The weighted bit literals of [x]: (2^i, x_bit_i) for 0 <= i < n. *)
 let bit_terms x n = List.init n (fun i -> (1 lsl i, Lit.bit x i))
 
-let declare_int_bits t x ~lo ~hi =
-  if lo > hi then raise (Empty_domain x);
-  (match width_opt ~lo ~hi with
-  | None -> raise (Width_too_large (x, lo, hi))
-  | Some w when w < 2 ->
-      invalid_arg
-        (Printf.sprintf
-           "Encoding.declare_int_bits: `%s` has width %d; width 0 and 1 stay on the \
-            order encoding by rule (D-0130 section 3.4) and the caller should not have \
-            asked"
-           x w)
-  | Some _ -> ());
-  (match Names.find_opt t.ints x with
-  | Some v when v.lo = lo && v.hi = hi && v.repr <> Order -> raise Exit
-  | Some _ -> raise (Redeclared x)
-  | None -> ());
+(* The bits declaration of a NEW name, after [declare_int_bits]'s checks. *)
+let mint_bits t x ~lo ~hi =
   let width = hi - lo in
   let n = bit_length width in
   check_encoding_budget t ~what:x ~kind:"bits bound rows" ~blo:lo ~bhi:hi ~adds:2;
@@ -1581,9 +1665,9 @@ let declare_int_bits t x ~lo ~hi =
   Occurs.add_bit_range t.occurs x 0 (n - 1);
   note_renamed t x;
   let terms = bit_terms x n in
-  (* M14-e2e-verification-T7 (D-0196): the bits' definitions from cake's and the halves of
-     B = lo + S go to the prefix before the two bound rows are committed, so each row's
-     pin follows its @BL / @BU *)
+  (* Under `--e2e`: the bits' definitions from cake's and the halves of B = lo + S go to
+     the prefix before the two bound rows are committed, so each row's pin follows its
+     @BL / @BU (the bits arm of the end-to-end chain, M14-e2e-verification-T7, D-0196). *)
   (match t.e2e with
   | Some e -> E2e.declare_bits e x ~lo ~hi ~n ~bit:(fun i -> Lit.to_string (Lit.bit x i))
   | None -> ());
@@ -1609,7 +1693,20 @@ let declare_int_bits t x ~lo ~hi =
   Names.replace t.taken (Lit.sanitize x) ();
   t.decl_rev <- x :: t.decl_rev
 
-let declare_int_bits t x ~lo ~hi = try declare_int_bits t x ~lo ~hi with Exit -> ()
+let declare_int_bits t x ~lo ~hi =
+  if lo > hi then raise (Empty_domain x);
+  (match width_opt ~lo ~hi with
+  | None -> raise (Width_too_large (x, lo, hi))
+  | Some w when w < 2 ->
+      invalid_arg
+        (Printf.sprintf
+           "Encoding.declare_int_bits: `%s` has width %d; width 0 and 1 stay on the \
+            order encoding by rule (D-0130 section 3.4) and the caller should not have \
+            asked"
+           x w)
+  | Some _ -> ());
+  if not (already_declared t x ~lo ~hi ~holes:[] ~bits:true) then mint_bits t x ~lo ~hi
+
 let is_bits t x = match (find t x).repr with Bits _ -> true | Order -> false
 let n_bits_vars t = t.bits_vars
 
@@ -1641,18 +1738,22 @@ let consistency_id t x value =
       if v.lo < value && value < v.hi then Some (v.ladder_base + (value - v.lo - 1))
       else None
 
-(* [consistency_id] for ONE variable, with the variable looked up ONCE (M7-T33, D-0156).
+(* [consistency_id] for ONE variable, with the variable looked up ONCE: the function
+   returned answers [consistency_id t x v] for every [v] without a name lookup. Added
+   with all_different's pigeonhole work (M7-T33, D-0156).
 
    [consistency_id] finds [x] by name on every call -- a string hash and a bucket walk
-   ([find]) to answer an arithmetic question, since the rungs are an arithmetic progression
-   (see [ivar]'s [ladder_base]). A caller that cites a whole chain of rungs of one variable
-   paid that lookup per rung: lib/core/prop/alldiff.ml's [excl] cites O(width) rungs per
-   excluded value, and the lookups were 12.4 % of 2011_cyclic-rcpsp_easy_6's proof mode
-   (D-0145 section 5). The function returned here answers exactly what [consistency_id t x]
-   answers, value for value, from the record [find] returned when it was built; that record
-   never changes once [x] is declared ([declare_int_gen] refuses a redeclaration with other
-   bounds, and the fields read here are immutable), so the answer cannot drift from
-   [consistency_id]'s. Raises [Undeclared] when built, as [consistency_id] does when called. *)
+   ([find]) to answer an arithmetic question, since the rungs are an arithmetic
+   progression (see [ivar]'s [ladder_base]). A caller that cites a whole chain of rungs
+   of one variable paid that lookup per rung: lib/core/prop/alldiff.ml's [excl] cites
+   O(width) rungs per excluded value, and the lookups were 12.4 % of
+   2011_cyclic-rcpsp_easy_6's proof mode (D-0145 section 5, the profile of the
+   proof-writing pass). The function returned here answers exactly what
+   [consistency_id t x] answers, value for value, from the record [find] returned when
+   it was built; that record never changes once [x] is declared (a redeclaration with
+   other bounds raises [Redeclared], and the fields read here are immutable), so the
+   answer cannot drift from [consistency_id]'s. Raises [Undeclared] when built, as
+   [consistency_id] does when called. *)
 let consistency_ids t x =
   let v = find t x in
   match v.repr with
@@ -1722,17 +1823,15 @@ let ensure_direct t w x =
         let zl = Lit.eq x value in
         let origin = Printf.sprintf "channel %s=%d" x value in
         (* ~x_eq_v \/ x_ge_v, only when x >= v is not the constant true *)
-        if value > v.lo then (
-          let c = Opb.clause [ Lit.negate zl; Lit.ge x value ] in
-          let id = Writer.red w ~origin ~witness:[ (z value, Writer.Zero) ] c in
-          Hashtbl.replace t.direct_cids id ();
-          Hashtbl.replace d.d_lo value id);
+        (if value > v.lo then
+           let c = Opb.clause [ Lit.negate zl; Lit.ge x value ] in
+           let id = Writer.red w ~origin ~witness:[ (z value, Writer.Zero) ] c in
+           Hashtbl.replace d.d_lo value id);
         (* ~x_eq_v \/ ~x_ge_(v+1), only when x >= v+1 is not the constant false *)
-        if value < v.hi then (
-          let c = Opb.clause [ Lit.negate zl; Lit.le x value ] in
-          let id = Writer.red w ~origin ~witness:[ (z value, Writer.Zero) ] c in
-          Hashtbl.replace t.direct_cids id ();
-          Hashtbl.replace d.d_hi value id);
+        (if value < v.hi then
+           let c = Opb.clause [ Lit.negate zl; Lit.le x value ] in
+           let id = Writer.red w ~origin ~witness:[ (z value, Writer.Zero) ] c in
+           Hashtbl.replace d.d_hi value id);
         (* x_eq_v \/ ~x_ge_v \/ x_ge_(v+1) *)
         let body =
           [ zl ]
@@ -1742,7 +1841,6 @@ let ensure_direct t w x =
         let id =
           Writer.red w ~origin ~witness:[ (z value, Writer.One) ] (Opb.clause body)
         in
-        Hashtbl.replace t.direct_cids id ();
         Hashtbl.replace d.d_fwd value id
       done;
       v.direct <- Some d;
@@ -1766,7 +1864,6 @@ let derive_at_least_one t w x =
       ~origin:(Printf.sprintf "at-least-one %s" x)
       (Writer.Pol.sum (List.map Writer.Pol.id ids))
   in
-  Hashtbl.replace t.direct_cids id ();
   id
 
 (* at-most-one for a pair a < b: take
@@ -1789,7 +1886,8 @@ let derive_at_most_one t w x a b =
     ~origin:(Printf.sprintf "at-most-one %s %d %d" x a b)
     (Writer.Pol.sum (List.map Writer.Pol.id ids))
 
-(* Every channelling id for x, so a caller can retire the definition (invariant I-X2). *)
+(* Every channelling id for x, so a caller can retire the definition (invariant I-X2:
+   every constraint id is deleted exactly once). *)
 let direct_ids t x =
   match (find t x).direct with
   | None -> []
@@ -1810,8 +1908,8 @@ let retire_direct t w x =
 let retire_all_direct t w = List.iter (fun x -> retire_direct t w x) (vars t)
 
 (* ---------------------------------------------------------------------------
-   M8-bits-encoding-T2: the on-demand atom, and the bridges an ORDER variable needs
-   beside one (D-0130 section 5, D-0132 sections 1 and 2)
+   The on-demand atom, and the bridges an ORDER variable needs beside one
+   (M8-bits-encoding-T2; D-0130 section 5, D-0132 sections 1 and 2)
    ---------------------------------------------------------------------------
 
    THE PAIR. For a bits variable [x] and [lo < v <= hi], with [k = v - lo] and
@@ -1820,8 +1918,9 @@ let retire_all_direct t w = List.iter (fun x -> retire_direct t w x) (vars t)
      @B1 red +1 x_bit_0 ... +2^(n-1) x_bit_(n-1)  +k ~x_ge_v  >= k : x_ge_v -> 0 ;   x_ge_v -> x >= v
      @B2 red +1 ~x_bit_0 ... +2^(n-1) ~x_bit_(n-1) +K x_ge_v  >= K : x_ge_v -> 1 ;   x >= v -> x_ge_v
 
-   written AT LEVEL 0 ([Writer.with_level w 0], as every learned constraint is, D-0045's
-   addendum: an atom minted under a decision is still an atom after the backtrack) and
+   written AT LEVEL 0 ([Writer.with_level w 0]), as every learned constraint is, because
+   an atom minted under a decision is still an atom after the backtrack (the addendum to
+   D-0045, the record on restarts and what a backtrack may delete), and
    memoised per (x, v). B1 goes first, under the witness that falsifies the fresh atom,
    which satisfies it outright while nothing else mentions the atom; B2 second, under the
    witness that satisfies it, whose one goal is B1's image and is discharged by B2's own
@@ -1829,8 +1928,9 @@ let retire_all_direct t w = List.iter (fun x -> retire_direct t w x) (vars t)
    p6: for a fresh atom the two halves are symmetric), so the order here is a convention,
    not a checker fact. The flipped witness is refused, on a satisfiable model with the
    atom undecided, at "Proofgoal #1 could not be autoproven" (probe p4) -- and ONLY then:
-   D-0127's B2 finding is that a `red` over a contradictory database, or one whose atom
-   the model decides, is accepted whatever its witness (D-0053). [close_atoms] is the
+   D-0127's B2 finding (the checker measured alone before the bits arm was built) is that
+   a `red` over a contradictory database, or one whose atom the model decides, is
+   accepted whatever its witness (D-0053). [close_atoms] is the
    structural guard: after a root contradiction nothing may mint.
 
    THE SPARSE CHAIN. When [x_ge_v] is minted and [x_ge_u] is the nearest minted atom
@@ -1847,8 +1947,8 @@ let retire_all_direct t w = List.iter (fun x -> retire_direct t w x) (vars t)
    neighbour is refused where it is written. An older link the new atom lands inside
    stays. The set of links is the ladder restricted to minted atoms, which is what a
    nogood's RUP, a learned clause's RUP and [Learn.slot]'s subsumption read off the eager
-   ladder today; whether nearest neighbours are enough for every such walk is D-0130
-   section 14's question 2 and T3's measurement.
+   ladder; whether nearest neighbours are enough for every such walk is D-0130
+   section 14's question 2, left to M8-bits-encoding-T3's measurement.
 
    THE ORDER BRIDGE (D-0132 section 2.2). A derivation over a row with a bits term is a
    `pol` in which every fact's atom is left in the row through its B1/B2 (lib/core/
@@ -2010,29 +2110,32 @@ let bound_lines t w x =
           pair)
 
 (* ---------------------------------------------------------------------------
-   M4-T1: the direct encoding a global constraint asks for up front
+   The direct encoding a global constraint asks for up front (M4-T1)
    --------------------------------------------------------------------------- *)
 
 (* "This variable's propagator will cite direct-encoding ids." Called by
-   lib/flatzinc/compile.ml for every `all_different_int` scope, before the .opb is
-   written; honoured by [start_proof], which is the first moment a [Writer.t] exists.
+   lib/flatzinc/compile.ml for every `all_different_int` scope (posted, or implied by an
+   `inverse`) and for an `array_int_element` index, before the .opb is written; honoured
+   by [start_proof], which is the first moment a [Writer.t] exists.
 
    Idempotent, and it does NOT write anything: a request recorded twice materialises
    once. It raises [Direct_too_large] here rather than at [start_proof] so the refusal
    names the constraint's own variable at compile time, where the diagnostic can carry
-   a source position -- [max_direct_values] is the width refusal this module's header
-   points at, and a propagator that needs a direct encoding on a domain that wide is a
-   design problem, not a budget problem. *)
+   a source position. [check_direct_size] refuses a size that wrapped, and one past
+   [--max-direct-values] when that limit was asked for (off by default since M7-T1);
+   a propagator that needs a direct encoding on a domain that wide is a design problem,
+   not a budget problem. *)
 let request_direct t x =
   let v = find t x in
   let size = v.hi - v.lo + 1 in
   check_direct_size x size;
   Names.replace t.direct_wanted x ()
 
-(* M11-complexity-T7 (D-0143): the requests are a set keyed on the name. They were a
-   list, scanned with the polymorphic [List.mem] once per request and once per declared
-   variable here, O(requests x variables) at compile time; the set answers the same
-   membership, and the order is still the declaration order read off [vars]. *)
+(* The requested variables, in declaration order (read off [vars]), so that the .pbp
+   does not depend on the order [Compile] made the requests in. The requests are a set
+   keyed on the name; they were a list, scanned with the polymorphic [List.mem] once per
+   request and once per declared variable here, O(requests x variables) at compile time
+   (M11-complexity-T7, D-0143). *)
 let direct_requested t = List.filter (fun x -> Names.mem t.direct_wanted x) (vars t)
 
 (* The ids a Hall derivation names with [Explanation.Model_row]. Each is [None] exactly
@@ -2058,22 +2161,6 @@ let direct_fwd_id t x value =
    [None] when no direct encoding was requested for [x]. *)
 let at_least_one_id t x = Hashtbl.find_opt t.alo x
 
-(* Is this id one of the DIRECT-ENCODING lines this module wrote? (M4-T2.)
-
-   The question it answers is not "who minted this" but "which currency is the row that
-   cites it stated in". The order encoding's ladder and the direct encoding's x_eq_v
-   family are two different vocabularies, and a [pol] whose operands come from the second
-   derives a statement about values, not about the per-variable declared-range chain a
-   [Linear] row's division needs (D-0010, lib/core/prop/linear.ml's header). So a
-   derivation that names any of these ids is a COUNTING row, and lib/core/search.ml's
-   [rests_on_a_clause] uses exactly that to decide how a root conflict citing it closes.
-
-   The pairwise disequality rows [add_all_different] posts are deliberately NOT here:
-   they are clauses over ORDER literals, so a derivation may cite one without leaving the
-   ladder currency -- and [Ne] does. What marks the counting row is the channelling and
-   the at-least-one line, which is why those are what this records. *)
-let is_direct_row t id = Hashtbl.mem t.direct_cids id
-
 (* ---------------------------------------------------------------------------
    Assignments
    --------------------------------------------------------------------------- *)
@@ -2082,12 +2169,13 @@ let is_direct_row t id = Hashtbl.mem t.direct_cids id
    [sol] wants an assignment that propagates to a total one; handing it the full
    family of every variable is the way not to have to reason about that.
 
-   M16-file-review-T4 (D-0192): pushed, in order, onto [acc] (reversed), so that
-   [assignment_lits] conses each literal once. It built [order @ direct] per variable,
-   [List.concat_map] copied each and a final [@] copied the whole, four cells a literal
-   of a list that holds every ladder literal of every variable, and a solution line is
-   that list (2014_openshop_gp10-4 spent about a third of its search with the proof on
-   its solution lines). The literals and their order are the same. *)
+   The literals are pushed, in order, onto [acc] (so it holds them reversed), so that
+   [assignment_lits] conses each literal once. It used to build [order @ direct] per
+   variable, [List.concat_map] copied each and a final [@] copied the whole, four cells a
+   literal of a list that holds every ladder literal of every variable, and a solution
+   line is that list (2014_openshop_gp10-4 spent about a third of its search with the
+   proof on its solution lines). The literals and their order are the same. Changed by the
+   proof-side file review, M16-file-review-T4 (D-0192). *)
 let push_assignment t acc x value =
   let v = find t x in
   if value < v.lo || value > v.hi then invalid_arg "Encoding.assignment_lits_of";
@@ -2166,14 +2254,16 @@ let assignment_lits t bindings =
    Output
    --------------------------------------------------------------------------- *)
 
-(* Every row is written as `@cN <row> ;` so the proof can cite it by name (D-0023).
+(* Every row is written as `@cN <row> ;` so the proof can cite it by name, which VeriPB
+   3.0, the proof format of record, allows (D-0023).
 
    Labelling is unconditional and there is no knob for it. It used to be optional
    because the .opb had to match the writer's format and format 2.0 had no labels; with
-   2.0 gone (D-0046) there is one grammar, so the only thing a switch could still do is
-   produce an .opb that every citation in the .pbp fails to parse against. That is why
-   the paired [write_opb_for] collapsed into this function rather than being kept as a
-   safer spelling of it: the unsafe spelling no longer exists. *)
+   2.0 removed from the project (D-0046) there is one grammar, so the only thing a switch
+   could still do is produce an .opb that every citation in the .pbp fails to parse
+   against. The variant that set the switch from the writer's format, [write_opb_for],
+   was therefore folded into this function by M2-T16 rather than kept as a safer
+   spelling of it: the unsafe spelling no longer exists. *)
 let write_opb ?(comments = []) t oc =
   (* `#variable=` counts the objective's names too, those not already in a row. *)
   let nvars =
@@ -2213,14 +2303,17 @@ let write_opb ?(comments = []) t oc =
 
 (* Start the proof. Must be called after the .opb is complete (invariant I-X5).
 
-   M4-T1: and then materialise every direct encoding [request_direct] asked for, with
-   its at-least-one line. Three things about doing it HERE rather than on demand:
+   Then materialise every direct encoding [request_direct] asked for, with its
+   at-least-one line (M4-T1), and then the root lemmas. Three things about doing it HERE
+   rather than on demand:
 
    - it is the first moment a [Writer.t] exists, and [red] needs one;
    - it is before the first decision, so the lines sit at level 0 and no [w] retires
-     them out from under a derivation that names them (I-S4);
+     them out from under a derivation that names them (the concern of I-S4: a trace line
+     that cites a line is supported only while that line is live);
    - the ids are then stable for the whole search, which is what lets a propagator's
-     [Explanation] name them as data instead of resolving them at emit time (I-X6).
+     [Explanation] name them as data instead of resolving them at emit time (I-X6: an
+     explanation reads a snapshot, never live state).
 
    PROOF-FORMAT section 3 is normative on the ORDER inside [ensure_direct] and on the
    at-least-one line being *derived* rather than asserted; neither is re-argued here.
@@ -2229,7 +2322,7 @@ let write_opb ?(comments = []) t oc =
    in this module: lib/core/search.ml sweeps [Writer.live_ids] on both the SAT and the
    UNSAT arm, so I-X2 is discharged there with every other level-0 line. *)
 (* ---------------------------------------------------------------------------
-   M7-T28 (D-0146 section 3.2): ROOT LEMMAS
+   ROOT LEMMAS (M7-T28, D-0146 section 3.2)
    ---------------------------------------------------------------------------
 
    A constraint the model rows ENTAIL but do not state, which a propagator family's
@@ -2258,7 +2351,7 @@ let add_root_lemma t (c : Opb.constr) =
 
 let n_root_lemmas t = t.n_lemmas
 
-(* M7-T28 (D-0151 section 2): a root lemma a derivation CITES by id -- the pairwise row
+(* A root lemma a derivation CITES by id (D-0151 section 2) -- the pairwise row
    `f_i <> j \/ f_k <> j` that lib/core/prop/alldiff.ml's Hall derivation names, when the
    all_different is IMPLIED by an `inverse` rather than posted by the model. Everything
    above holds unchanged (derived, checked, written by [start_proof] in registration
@@ -2279,14 +2372,14 @@ let add_cited_lemma t (c : Opb.constr) : lemma =
 let root_lemma_id t (h : lemma) =
   if h >= 0 && h < Array.length t.lemma_ids then Some t.lemma_ids.(h) else None
 
-(* M9-no-proof-T4 (D-0161): under the null writer of `--no-proof` the lemmas are not
-   written, but their ids must still exist, and be the ids the proved run gets: alldiff
-   cites the pairwise ones by id inside a [Combine] (D-0151), and D-0126's id rule wants
-   every id an Explanation can carry minted in both modes, by the same counter, in the same
-   order. A null [rup] is [Writer.fresh] and reads nothing else, so [n_lemmas] fresh ids
-   in registration order ARE the ids the loop below mints, without reversing the list or
-   visiting a lemma. The constraints are then dropped, so the search does not carry them:
-   nothing reads them again. *)
+(* Under the null writer of `--no-proof` the lemmas are not written, but their ids must
+   still exist, and be the ids the proved run gets: alldiff cites the pairwise ones by id
+   inside a [Combine], and D-0126's id rule wants every id an Explanation can carry
+   minted in both modes, by the same counter, in the same order. A null [rup] is
+   [Writer.fresh] and reads nothing else, so [n_lemmas] fresh ids in registration order
+   ARE the ids the loop below mints, without reversing the list or visiting a lemma. The
+   constraints are then dropped, so the search does not carry them: nothing reads them
+   again. (From the --no-proof audit, M9-no-proof-T4, D-0161.) *)
 let mint_root_lemma_ids t w =
   if t.n_lemmas > 0 then
     t.lemma_ids <-
@@ -2311,17 +2404,19 @@ let emit_root_lemmas t w =
              (fun c -> Writer.rup w ~origin:"root lemma (D-0146)" c)
              (List.rev rev))
 
-(* M14-e2e-verification-T3 (D-0187): what compile.ml tells the prefix writer. Each is a
-   no-op without `--e2e`. [e2e_begin] names the FlatZinc constraint whose rows are about to
-   be committed (its .scp name, `c<k>`, and the cake constraint the translator writes for
-   it); [e2e_end] closes it; [e2e_objective] is the objective variable and its sign. *)
+(* What compile.ml tells the end-to-end prefix writer (see [e2e_request]). Each is a
+   no-op without `--e2e`. [e2e_begin] names the FlatZinc constraint whose rows are about
+   to be committed (its .scp name, `c<k>`, and the cake constraint the translator writes
+   for it); [e2e_end] closes it; [e2e_objective] is the objective variable and its sign.
+*)
 let e2e_on t = t.e2e <> None
 let e2e_begin t ~name spec = Option.iter (fun e -> E2e.begin_con e ~name spec) t.e2e
 let e2e_end t = Option.iter E2e.end_con t.e2e
 let e2e_objective t x ~sign = Option.iter (fun e -> E2e.objective e x ~sign) t.e2e
 let e2e_copy t ~copy ~orig = Option.iter (fun e -> E2e.copy e ~copy ~orig) t.e2e
 
-(* M14-e2e-verification-T6 (D-0195): a regular state flag, an arith guard *)
+(* A regular state flag, an arith guard: the far families of the end-to-end chain
+   (M14-e2e-verification-T6, D-0195). *)
 let e2e_flag t ~var ~cake = Option.iter (fun e -> E2e.flag e ~var ~cake) t.e2e
 
 let e2e_guard t ~var ~x ~at ~pos =
@@ -2344,8 +2439,8 @@ let start_proof t w =
   emit_root_lemmas t w
 
 (* ---------------------------------------------------------------------------
-   M1-T7c: expanding an integer linear term into a PB row over the order
-   encoding.
+   Expanding an integer linear row into a PB row (M1-T7c for the order encoding;
+   the bits arm since M8-bits-encoding-T2)
 
    Under the order encoding (docs/SPEC.md 4.2, PROOF-FORMAT section 3), an
    integer variable x with domain [lo, hi] satisfies
@@ -2372,11 +2467,15 @@ let start_proof t w =
    literals at all -- the [List.init] below produces zero terms for it -- and
    contributes only lo_i * a_i to the constant.
 
-   M11-complexity-T7 (D-0143): the per-variable blocks are collected newest first and
-   concatenated ONCE at the end. The fold used to append each block to everything before
-   it ([acc @ vterms]), which copied the row built so far once per variable: a row over
-   k variables of width w cost O(k^2 w) cons cells for an output of k w terms. Same
-   blocks, same order, so the same list. *)
+   A BITS variable is the same fold with [x = lo + sum_i 2^i x_bit_i]: [a_i lo_i] goes
+   to the constant and the block is [a_i * 2^i] on bit i, so one row can hold both
+   shapes.
+
+   The per-variable blocks are collected newest first and concatenated ONCE at the end.
+   The fold used to append each block to everything before it ([acc @ vterms]), which
+   copied the row built so far once per variable: a row over k variables of width w cost
+   O(k^2 w) cons cells for an output of k w terms. Same blocks, same order, so the same
+   list (M11-complexity-T7, D-0143). *)
 let linear_terms_int_lin_le t terms =
   let blocks, const =
     List.fold_left
@@ -2390,7 +2489,7 @@ let linear_terms_int_lin_le t terms =
             | Order ->
                 List.init (max 0 (v.hi - v.lo)) (fun i -> (a, Lit.ge x (v.lo + 1 + i)))
             | Bits { n; _ } ->
-                (* M8-bits-encoding-T2 (D-0130 section 6): the same fold of [a * lo] into
+                (* D-0130 section 6: the same fold of [a * lo] into
                    the constant, and [a * 2^i] on bit i in place of [a] on every rung. One
                    row holds both shapes. *)
                 List.init n (fun i -> (a * (1 lsl i), Lit.bit x i))
@@ -2408,7 +2507,7 @@ let expand_int_lin_le_by_steps t terms rhs =
   let opb_terms, const = linear_terms_int_lin_le t terms in
   Opb.normalise (Opb.le opb_terms (rhs - const))
 
-(* M11-complexity-T7 (D-0143). Do the variables with a non-zero coefficient have
+(* Do the variables with a non-zero coefficient have
    pairwise distinct SANITISED names? Then no two literals of the expanded row share a
    rendered name ([Lit.render] is injective on (sanitised owner, kind, value), see
    [Occurs]), and [Opb.normalise] has nothing to merge. *)
@@ -2432,11 +2531,12 @@ let distinct_owners terms =
    own (not just via [add_int_lin_le]) so a caller -- or a test -- can inspect
    the row before it is committed to the .opb.
 
-   M11-complexity-T7 (D-0143): when [distinct_owners] holds, the three steps are done in
+   When [distinct_owners] holds, the three steps are done in
    one pass that builds the final row back to front, with no intermediate list. A
    big-M row of openshop_gp10-4 is 20 000 terms, and the three steps allocated about 30
    words per term in three lists that all outlived the minor heap; this allocates the
-   final terms only. What it builds is what the steps build, term by term:
+   final terms only (M11-complexity-T7). What it builds is what the steps build, term by
+   term:
 
    - [linear_terms_int_lin_le] gives, per variable in order and per rung (or bit) in
      ascending order, [(a, l)] with [l] POSITIVE ([Lit.ge] / [Lit.bit]), coefficient [a]
@@ -2488,8 +2588,9 @@ let expand_int_lin_le t terms rhs =
     Opb.ge row (-(rhs - const) - !moved)
 
 (* ---------------------------------------------------------------------------
-   M1-T32: the precondition that makes "Compile is the only door" enforced rather
-   than merely true. Read the header first.
+   The overflow precondition: invariant I-X8, enforced on the committing doors rather
+   than left true only because [Compile] is the only caller (M1-T32). Read the header
+   first.
    --------------------------------------------------------------------------- *)
 
 (* The two magnitudes a linear row's arithmetic is bounded by, over the DECLARED
@@ -2561,10 +2662,11 @@ let check_lin_le_computable t terms rhs ~what =
    This is one of the two committing doors M1-T32 guards. The check runs BEFORE the
    expansion, so a row that cannot be computed never reaches the sink and
    the encoding is left exactly as it was. *)
-(* M11-complexity-T7 (D-0143): under [Discard_rows] (`--no-proof`) the expanded row is
+(* Under [Discard_rows] (`--no-proof`) the expanded row is
    never read, so it is not built: what [add_constraint] would have recorded is recorded
    from the variables, per variable instead of per term, and the id is minted. It is
-   D-0126's rule 1 (the ladder loop replaced by its count) applied to a linear row.
+   what [mint_order] does to the ladder under D-0126's rule 1 (the ladder loop replaced
+   by its count), applied to a linear row (M11-complexity-T7).
 
    What [add_constraint] records is the header's names ([Occurs]) and the renamings,
    and nothing reads either under [Discard_rows] (the .opb is never written), but they
@@ -2620,7 +2722,7 @@ let add_int_lin_le t terms rhs =
       add_constraint t (expand_int_lin_le t terms rhs)
 
 (* ---------------------------------------------------------------------------
-   M1-T9: disequalities.
+   Disequalities (M1-T9): int_ne and int_lin_ne
 
    ---------------------------------------------------------------------------
    Part 1 -- saying "x <> v" in the order encoding
@@ -2647,12 +2749,12 @@ let add_int_lin_le t terms rhs =
    This is deliberately not a second naming scheme (section 3's standing warning):
    it introduces no name at all, it spends the two order literals the encoding
    already has. The direct encoding above stays exactly as it was, still the thing
-   M4's all_different and element will need -- a *reason* that mentions a hole
+   all_different and element need (M4) -- a *reason* that mentions a hole
    ("x <> v holds") cannot be negated into a clause without a single literal for it,
    which is the case that genuinely forces [ensure_direct]. A disequality
    propagator's reasons are only ever "these variables are fixed to these values",
-   whose negation is this clause, so M1-T9 does not reach that case. See the report
-   for the docs change this implies.
+   whose negation is this clause, so a disequality never reaches that case.
+   PROOF-FORMAT section 3's "Disequalities" records the same rule.
 
    ---------------------------------------------------------------------------
    Part 2 -- putting "sum a_i x_i <> c" in the .opb
@@ -2661,7 +2763,8 @@ let add_int_lin_le t terms rhs =
    The .opb *must* carry the disequality. It is the artefact the checker validates
    a [conclusion SAT] assignment against, so an .opb that omitted it would be a
    relaxation of the model and would accept a solution the model forbids -- the same
-   class of unsoundness [Compile.reject_set_domain] refuses a set domain over.
+   class of unsoundness that a set domain's hole rows prevent ([declare_int_with_holes];
+   before M7-T11, [Compile]'s [reject_set_domain] refused a set domain for it).
 
    A single PB row cannot say [<>]. Two can, with one fresh Boolean [b] selecting
    which side of [c] the sum falls on, and the row's own attainable range as the
@@ -2687,7 +2790,8 @@ let add_int_lin_le t terms rhs =
    gives -- a special case is a place the .opb and the propagator can disagree.
 
    Both rows go through [add_int_lin_le], so both are ordinary [>=] lines and the
-   [=]-counts-as-two trap (section 2's Traps, [Opb.n_checker_constraints]) is not in
+   [=]-counts-as-two trap (PROOF-FORMAT section 2a's Traps, [Opb.n_checker_constraints])
+   is not in
    play: [add_int_lin_ne] adds exactly two to [n_constraints] and to the [f] count.
    --------------------------------------------------------------------------- *)
 
@@ -2716,7 +2820,7 @@ let ne_clause t x value =
   ne_clause_lits ~name:x ~decl_lo:v.lo ~decl_hi:v.hi value
 
 (* ---------------------------------------------------------------------------
-   M4-T1: all_different_int, as pairwise disequality CLAUSES over the order encoding
+   all_different_int as pairwise disequality CLAUSES over the order encoding (M4-T1)
    ---------------------------------------------------------------------------
 
    One .opb row per (unordered pair of variables, shared declared value):
@@ -2738,12 +2842,16 @@ let ne_clause t x value =
       division (lib/core/prop/alldiff.ml, [pair_amo]); from the big-M pair it is a
       derivation that must first re-establish "x_eq_v pins every rung of x's ladder",
       which is the variable's whole declared width, twice, per pair, per value. The
-      cheap route is a [rup] -- and a [rup] is exactly what must NOT be in this
-      derivation: lib/core/search.ml's [rests_on_a_clause] routes any conflict whose
-      derivation rests on an [Explanation.Clause] the D-0022 way, so `conclusion UNSAT`
-      would cite the empty clause and every [pol] in the Hall tree would be decorative
-      (D-0057, and again in D-0060). A derivation nothing checks is not evidence, and
-      this row exists to produce evidence.
+      cheap route there is a [rup], and when this was decided a [rup] was exactly what
+      must NOT be in this derivation: lib/core/search.ml's [rests_on_a_clause] routed
+      any root conflict whose derivation rested on an [Explanation.Clause] the D-0022
+      way (a clause conflict is not its own contradiction, so the root closed on the
+      empty clause), so `conclusion UNSAT` would cite the empty clause and every [pol]
+      in the Hall tree would be decorative (the same trap D-0057 and D-0060 met for
+      reification and arithmetic). A derivation nothing checks is not evidence, and
+      this row exists to produce evidence. That routing has since been removed (every
+      root conflict now closes on its trace, M8-bits-encoding-T5, D-0131); the size
+      argument of point 1 and the five-id recovery stand on their own.
 
    Faithfulness is the same argument [ne_clause_lits] already makes: "x <> v" as a
    clause over order literals introduces no name and no channelling, so the .opb still
@@ -2891,7 +2999,8 @@ let add_int_lin_ne t terms rhs =
   (id_a, id_b)
 
 (* ---------------------------------------------------------------------------
-   M8-bits-encoding-T3 (D-0134 sections 2.1 and 2.4): a CHOICE group
+   A CHOICE group: selector rows and the clause over them (M8-bits-encoding-T3, D-0134
+   sections 2.1 and 2.4)
    ---------------------------------------------------------------------------
 
    [add_choice t ~rows ~pick] posts, for each [(terms, big_m, rhs)], a fresh selector
@@ -2924,7 +3033,7 @@ let add_choice t ~(rows : ((int * string) list * int * int) list) ~pick =
   (List.map snd posted, clause)
 
 (* ---------------------------------------------------------------------------
-   M3-T1: reified variables, and the two doors a definition can come through
+   Reified variables, and the two doors a definition can come through (M3-T1)
    ---------------------------------------------------------------------------
 
    A *reified variable* is a Boolean [b] that stands for a condition [C]:
@@ -3127,17 +3236,19 @@ let define_reif_int_lin_le t w ~reifier terms rhs =
 let retire_reif w r = Writer.delete_many w (reif_ids r)
 
 (* ---------------------------------------------------------------------------
-   M3-T2 / M3-T4: the same two rows, in the currency a propagator can cite
+   The same two rows as [int_lin_le] rows, which a propagator can cite (M3-T2, built
+   through the reification dispatcher of M3-T4)
    ---------------------------------------------------------------------------
 
    [add_reif] above posts FWD and BWD as [Opb.constr] values built by [reif_rows] --
    literals and big-M constants, assembled here. That is the right shape for
    [define_reif] (a [red] body is literals) and the wrong one for M3-T2, because a
    propagator does not cite a row by rebuilding it: [Linear] cites [Model_row row_id]
-   and reproduces the row from *integer terms and a right-hand side* ([Linear.pb_row],
-   M2-L6/D-0054, which test_learn.ml pins against every row the suite compiles).
+   and reproduces the row from *integer terms and a right-hand side* ([Linear.pb_row], the
+   row PB conflict analysis resolves (M2-L6; D-0054 separates such a row from a proof
+   line), which test_learn.ml pins against every row the suite compiles).
 
-   So M3-T2 needs the two rows as ordinary [int_lin_le] rows. They are:
+   So a reified propagator needs the two rows as ordinary [int_lin_le] rows. They are:
 
      FWD   sum a_i x_i  +  K  b  <=  rhs + K       K  = hi - rhs
      BWD  -sum a_i x_i  -  K' b  <=  -rhs - 1      K' = rhs + 1 - lo
@@ -3198,7 +3309,8 @@ let add_int_lin_le_reif_rows t terms rhs ~reifier =
    The equality family: four rows, and why it is not two
    ---------------------------------------------------------------------------
 
-   `b <-> (sum = c)` is not one reification of one inequality, and D-0053 says so:
+   `b <-> (sum = c)` is not one reification of one inequality, and D-0053 (the record
+   on reification's two doors) says so:
    it needs both directions of the equality under [b], and the DISEQUALITY under
    [~b]. The four rows, with [pos] saying whether [b] means "= c" ([int_eq_reif]) or
    "<> c" ([int_ne_reif]):
@@ -3284,7 +3396,7 @@ let add_int_lin_eq_reif t terms rhs ~reifier ~pos =
   { le_id; ge_id; k_le; k_ge; a_id; b_id; big_a; big_b }
 
 (* ---------------------------------------------------------------------------
-   Views (M4-T0)
+   Views: [s * x + k] over a declared variable, or a constant (M4-T0)
    ---------------------------------------------------------------------------
 
    A view is [s * x + k] over a DECLARED base variable, or a constant. It has no
@@ -3334,8 +3446,8 @@ let view_domain t = function
    view rendering performs, and a wrapped one would silently name a DIFFERENT
    literal -- the exact failure D-0029 records, one layer down: the .opb row and the
    solver would agree on a name neither of them means. So it raises, like every
-   other arithmetic on this side of the module (I-X8's discipline, applied to a
-   name rather than to a row). *)
+   other arithmetic on this side of the module (I-X8's discipline, no wrapped
+   arithmetic in the .opb, applied to a name rather than to a row). *)
 let view_base_value a n = Arith.sub n a.Lit.offset
 
 let view_ge t v value =

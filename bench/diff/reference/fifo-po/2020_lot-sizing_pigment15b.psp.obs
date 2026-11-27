@@ -28,11 +28,11 @@ work exhausted/bool 0 bool 1 if
 search skipped/nodes 0 nodes
 search learned/cls 1677 cls
 work later/asks 153920 asks
-work cites/memos 26449 memos
+work cites/memos 26399 memos
 search convertible/cls 0 cls
-search retention fifo(cap=500) fifo(cap=500): 1677 added, 1177 evicted, 500 swept, 0 live, 805 duplicate, 0 cited, 0 pinned
-search lbd 3:324,4:429,5:152,6:12,13:1,14:5,15:9,16:745
-search width 7:289,8:18,9:314,10:57,11:170,12:30,14:4,15:18,16:777
+search retention fifo(cap=500) fifo(cap=500): 1677 added, 1177 evicted, 500 swept, 0 live, 1042 duplicate, 0 cited, 0 pinned
+search lbd 2:2,3:365,4:429,5:152,6:21,7:25,8:31,9:41,10:44,12:20,13:33,14:27,15:64,16:423
+search width 3:41,7:289,8:18,9:314,10:77,11:197,12:30,13:40,14:59,15:26,16:586
 search globals/units 0 units
 search glob-prune/prunes 0 prunes
 search glob-confl/confl 0 confl
@@ -44,7 +44,7 @@ search pb-inst-no/rows 0 rows
 search pb-prune/prunes 0 prunes
 search pb-confl/confl 0 confl
 search minimised/lits 0 lits
-search i-s4-cross/lines 25008 lines
+search i-s4-cross/lines 23899 lines
 search pb-tried/confl 1677 confl
 search pb-learned/rows 0 rows
 search pb-fallback/confl 1677 confl
@@ -94,4 +94,4 @@ search boundlines/pairs 14 pairs
 search bitsprune/lines 22777 lines
 search atoms/prune/atoms 0.057 atoms
 opb 926f703a84a5f1d1471d3302b80f05ea02e7ea89abd9f202ecae5f09c58c25bf
-pbp cd24037adaea29df79af2bd35300cc2d4866c23201983b061e08bac1ba30e762
+pbp 6a8b907554963180a8de845796cc755054e6c7df21c61d2753118b40f793ae6c

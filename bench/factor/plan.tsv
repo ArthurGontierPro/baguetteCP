@@ -1,0 +1,31 @@
+# M17-bench-series-T6 (D-0256). The per-node factor lane's PLAN: one line per instance,
+# TAB-separated, read by scripts/factor_lane.sh. Files are under bench/factor/fzn/.
+#
+#   id      the instance's name in every table
+#   family  the geometric mean is taken per family
+#   blimit  BAGUETTE_NODE_LIMIT for every baguette run (0: to the end of the search)
+#   ref     the reference solver: gecode (fzn-gecode -s) or chuffed-nolazy (fzn-chuffed -s
+#           --restart none --lazy off, Chuffed without explanations or learning)
+#   rlimit  the reference's budget: gecode -node N, chuffed -t N milliseconds (0: none)
+#   bfzn    baguette's flattening      rfzn   the reference's flattening
+#
+# The first six lines are D-0207's instances and budgets (its section 2), the files it flattened
+# on 2026-11-23, unchanged: the comparison with its table is on the same bytes. The reference is
+# the one D-0207 aligned the tree with. rcpsp11_60's same tree is Chuffed --lazy off's (Gecode's
+# cumulative adds edge-finding and closes in 17 nodes); rcpsp11_66 has no same tree with any
+# reference that finishes (Chuffed --lazy off runs past 60 s), so its reference is Gecode's own
+# tree cut at 20 000 nodes and the lane compares it per FAILURE.
+# The sat3 lines are the planted 3-SAT family (gen_3sat.py 200 4.26 SEED, seeds 1 to 3, all
+# three kept), at a budget of 20 000 nodes on both sides.
+#
+# Longest first: the lane starts the lines in this order.
+# id	family	blimit	ref	rlimit	bfzn	rfzn
+costas14	alldiff	0	gecode	0	costas14.b.fzn.gz	costas14.g.fzn.gz
+jr63	element	20000	gecode	20000	jr63.b.fzn.gz	jr63.g.fzn.gz
+mknap2-1	linear	20000	gecode	20000	mknap2-1.b.fzn.gz	mknap2-1.g.fzn.gz
+qr3	clauses	0	gecode	0	qr3.b.fzn.gz	qr3.g.fzn.gz
+sat3_200_1	sat3	20000	gecode	20000	sat3_200_1.fzn.gz	sat3_200_1.fzn.gz
+sat3_200_2	sat3	20000	gecode	20000	sat3_200_2.fzn.gz	sat3_200_2.fzn.gz
+sat3_200_3	sat3	20000	gecode	20000	sat3_200_3.fzn.gz	sat3_200_3.fzn.gz
+rcpsp11_66	cumulative	0	gecode	20000	rcpsp11_66.b.fzn.gz	rcpsp11_66.g.fzn.gz
+rcpsp11_60	cumulative	0	chuffed-nolazy	0	rcpsp11_60.b.fzn.gz	rcpsp11_60.c.fzn.gz

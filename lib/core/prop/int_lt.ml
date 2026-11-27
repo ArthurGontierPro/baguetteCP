@@ -3,14 +3,16 @@
    Consistency level: BOUNDS (docs/SPEC.md 3.2).
 
    Over integers, [x < y] is [x <= y - 1], the degenerate linear constraint
-   [1*x + (-1)*y <= -1]. As with [Int_le] (lib/core/prop/int_le.ml, read that module's
-   header for the fuller case for reuse over a hand-written comparator), [make] hands
-   this straight to [Linear.make] and [propagate]/[vars] are [Linear]'s own, unmodified.
+   [1*x + (-1)*y <= -1]. As with [Int_le] (lib/core/prop/int_le.ml, whose header gives
+   the case for reusing [Linear] over a hand-written comparator), [make] hands this
+   straight to [Linear.make] and [propagate]/[vars] are [Linear]'s own, unmodified. The
+   solver itself lowers `int_lt` to [Linear] in lib/flatzinc/compile.ml; this module is
+   what the unit tests build by name.
 
-   Justification shape: identical to [int_lin_le]'s -- docs/DECISIONS.md D-0013's
-   [Combine] over the model row [x - y <= -1] (its own row id passed in as
-   [~row_id]). docs/PROOF-FORMAT.md section 4 has no `int_lt` row yet; the one
-   requested is "same as int_lin_le". *)
+   Justification shape: identical to [int_lin_le]'s, the [Combine] of D-0013's "weaken,
+   divide, add" derivation, over the model row [x - y <= -1] (its own row id passed in as
+   [~row_id]). docs/PROOF-FORMAT.md section 4's `int_lt` row says the same, "the same
+   [as int_le], at rhs -1". *)
 
 type t = Linear.t
 

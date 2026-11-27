@@ -1,15 +1,23 @@
-(* The front end's output: a flat, solver-agnostic description of a FlatZinc model.
+(* The front end's output: a flat, solver-agnostic description of a FlatZinc model. Two
+   readers build one, builder.ml from a `.fzn` file and lib/scp/reader.ml from a `.scp`
+   file. compile.ml turns it into the store, the PB encoding and the propagator
+   instances, and is the one place where the front end meets lib/core.
 
-   This type is deliberately defined *here* and not in Baguette_core: the dependency
-   direction in docs/ARCHITECTURE.md is `flatzinc -> core`, but core is being rewritten
-   in parallel (M1-T1..T5) and the front end should not be blocked on its API settling.
-   Wiring `Model.t` into the engine is a later task; when it happens, the translation
-   lives on the core side of the boundary, not here. *)
+   The type is defined *here* and not in Baguette_core, so that nothing in core depends
+   on it: the dependency direction in docs/ARCHITECTURE.md is `flatzinc -> core`, and
+   the translation into core's types is compile.ml's, on the front end's side of the
+   boundary. It was placed here first because core was being written in parallel (tasks
+   M1-T1 to M1-T5: the domain, the store and the engine), and the front end should not
+   wait for that API to settle.
+
+   The second half of the file is [check_assignment], the independent solution check
+   (invariant I-S1). *)
 
 (* A table keyed by an identifier, for the front end's name lookups (builder.ml's
-   environment, compile.ml's collision check). Over [String] with [String.equal]: a
-   polymorphic [Hashtbl] compares its keys through [compare_val], and these tables are
-   probed once per name in the file (M16-file-review-T5, D-0193). *)
+   environment, compile.ml's collision check). Over [String] with [String.equal],
+   because a polymorphic [Hashtbl] compares its keys through [compare_val] and these
+   tables are probed once per name occurrence in the file; this was one of the levers of
+   the front end's file-by-file cost review (M16-file-review-T5, D-0193). *)
 module Names = Hashtbl.Make (struct
   type t = string
 
@@ -28,10 +36,13 @@ type var = { v_name : string; v_dom : domain; v_pos : Pos.t }
    a bool, or an inline constant) or an index into [t.vars]. *)
 type operand = Const of int | Var of int
 
-(* Linear constraints are normalised: constant entries of the FlatZinc variable array are
-   folded into the right-hand side, so [terms] only ever mentions real variables.
-   A term list may repeat a variable index; propagators are free to merge. *)
-(* The auxiliary Booleans one M4 arithmetic constraint needs, as indices into [vars].
+(* The linear constructors of [cstr] below ([Int_lin_le], [Int_lin_eq], [Int_lin_ne],
+   [Int_lin_le_reif]) are normalised: constant entries of the FlatZinc variable array are
+   folded into the right-hand side, so a term list, of (coefficient, variable index)
+   pairs, only ever mentions real variables. A term list may repeat a variable index;
+   propagators are free to merge. *)
+(* The auxiliary Booleans one arithmetic constraint (int_times, int_div, int_abs) needs,
+   as indices into [vars]. lib/flatzinc/arith_aux.ml creates them.
 
    [x_sign], when present, is defined as `b <-> x >= 0` and splits the sign of the
    first operand; it is absent when the declared domain of x settles the sign on its
@@ -40,14 +51,17 @@ type operand = Const of int | Var of int
    need no Boolean. [Int_abs] uses only [x_sign] and always has [y_ge = []]. *)
 type aux = { x_sign : int option; y_ge : (int * int) list }
 
-(* M7-T28 (D-0146). `baguette_regular(x, Q, smin, d, q0, F, s)`, the DFA of
-   mznlib/fzn_regular.mzn: the word [r_xs] (n letters) drives the automaton with states
-   [1..r_nq] from [r_q0]; [r_delta] is the transition table row-major over the symbol
-   range [r_smin .. r_smin + w - 1] (w = |r_delta| / r_nq), 0 meaning "fail", so a letter
-   outside that range or mapped to 0 fails; [r_final] are the accepting states. [r_flags]
-   are the (n + 1) * Q STATE FLAGS the library introduces, layer-major ([r_flags] at
-   [i * Q + q - 1] is "after i letters the automaton is in q"), and they are PART OF THE
-   RELATION: exactly the run's states are 1 (lib/core/prop/regular.ml's header). *)
+(* `regular` as a native constraint (D-0146: a layered graph of state flags, every pruning
+   one `rup`; task M7-T28, the decomposed globals that cost the search most).
+   `baguette_regular(x, Q, smin, d, q0, F, s)`, the DFA of mznlib/fzn_regular.mzn: the
+   word [r_xs] (n letters) drives the automaton with states [1..r_nq] from [r_q0];
+   [r_delta] is the transition table row-major over the symbol range
+   [r_smin .. r_smin + w - 1] (w = |r_delta| / r_nq), 0 meaning "fail", so a letter
+   outside that range or mapped to 0 fails; [r_final] are the accepting states.
+   [r_flags] are the (n + 1) * Q STATE FLAGS the library introduces, layer-major
+   ([r_flags] at [i * Q + q - 1] is "after i letters the automaton is in q"), and they
+   are PART OF THE RELATION: exactly the run's states are 1 (lib/core/prop/regular.ml's
+   header). *)
 type regular = {
   r_xs : operand list;
   r_nq : int;
@@ -76,11 +90,12 @@ let regular_run r word =
   in
   if r.r_q0 < 1 || r.r_q0 > r.r_nq then None else go r.r_q0 [ r.r_q0 ] word
 
-(* M7-T28 (D-0151 section 2). `baguette_inverse(f, fmin, g, gmin)`, std's fzn_inverse
-   through mznlib/fzn_inverse.mzn: position k of [inv_f] is f_(inv_fmin + k), position k
-   of [inv_g] is g_(inv_gmin + k), and the RELATION is f_i = j <-> g_j = i with every value
-   of f an index of g and every value of g an index of f (lib/core/prop/inverse.ml's
-   header). *)
+(* `inverse` as a native constraint (D-0151 section 2: channel filtering, then
+   all_different over each array; task M7-T28). `baguette_inverse(f, fmin, g, gmin)`,
+   std's fzn_inverse through mznlib/fzn_inverse.mzn: position k of [inv_f] is
+   f_(inv_fmin + k), position k of [inv_g] is g_(inv_gmin + k), and the RELATION is
+   f_i = j <-> g_j = i with every value of f an index of g and every value of g an index
+   of f (lib/core/prop/inverse.ml's header). *)
 type inverse = {
   inv_f : operand list;
   inv_fmin : int;
@@ -88,27 +103,30 @@ type inverse = {
   inv_gmin : int;
 }
 
-(* M7-T28 (D-0159). `baguette_member(x, y, b)`, std's fzn_member_int (and fzn_member_bool,
-   over 0..1) through mznlib/fzn_member_int.mzn: [mem_b] are the SELECTOR Booleans the
-   library introduces, one per position of [mem_x], and they are PART OF THE RELATION:
-   y is one of the x, every selector set names a position equal to y, and one is set
-   (lib/core/prop/member.ml's header). *)
+(* `member` as a native constraint (D-0159: one selector per position as a store
+   variable; task M7-T28). `baguette_member(x, y, b)`, std's fzn_member_int (and
+   fzn_member_bool, over 0..1) through mznlib/fzn_member_int.mzn: [mem_b] are the
+   SELECTOR Booleans the library introduces, one per position of [mem_x], and they are
+   PART OF THE RELATION: y is one of the x, every selector set names a position equal to
+   y, and one is set (lib/core/prop/member.ml's header). *)
 type member = { mem_x : operand list; mem_y : operand; mem_b : operand list }
 
-(* M18-coverage-T1 (D-0206). `baguette_table(x, t, s)` (and `baguette_table_bool`, over
-   0..1), std's fzn_table_int / fzn_table_bool through mznlib/fzn_table_int.mzn: [tab_t]
-   is the tuples flattened row-major, [List.length tab_s] of them of [List.length tab_x]
-   values each, and [tab_s] the SELECTOR Booleans the library introduces, one per tuple.
-   They are PART OF THE RELATION: some selector is set, and every set selector names a
-   tuple equal to x (lib/core/prop/table.ml's header). *)
+(* `table` as a native constraint (D-0206: one selector per tuple, each tuple one row of
+   the .opb; task M18-coverage-T1). `baguette_table(x, t, s)` (and `baguette_table_bool`,
+   over 0..1), std's fzn_table_int / fzn_table_bool through mznlib/fzn_table_int.mzn:
+   [tab_t] is the tuples flattened row-major, [List.length tab_s] of them of
+   [List.length tab_x] values each, and [tab_s] the SELECTOR Booleans the library
+   introduces, one per tuple. They are PART OF THE RELATION: some selector is set, and
+   every set selector names a tuple equal to x (lib/core/prop/table.ml's header). *)
 type table = { tab_x : operand list; tab_t : int array; tab_s : operand list }
 
-(* M18-coverage-T3 (D-0217). `baguette_circuit(xs, pos, root)`, std's fzn_circuit through
-   mznlib/fzn_circuit.mzn: [cir_x] the successors of the nodes root, root + 1, ...,
-   [cir_pos] the POSITIONS of the nodes other than the root (root + 1 first), which the
-   library introduces and which are PART OF THE RELATION: the successors form one cycle
-   through every node and each position is its node's distance from the root along it
-   (lib/core/prop/circuit.ml's header). *)
+(* `circuit` as a native constraint (D-0217: MTZ position variables, the subtour cut
+   derived in the proof; task M18-coverage-T3). `baguette_circuit(xs, pos, root)`, std's
+   fzn_circuit through mznlib/fzn_circuit.mzn: [cir_x] the successors of the nodes root,
+   root + 1, ..., [cir_pos] the POSITIONS of the nodes other than the root (root + 1
+   first), which the library introduces and which are PART OF THE RELATION: the
+   successors form one cycle through every node and each position is its node's distance
+   from the root along it (lib/core/prop/circuit.ml's header). *)
 type circuit = { cir_x : operand list; cir_pos : operand list; cir_root : int }
 
 type cstr =
@@ -119,14 +137,14 @@ type cstr =
   | Int_lt of operand * operand (* a <  b *)
   | Int_eq of operand * operand (* a  = b *)
   | Int_ne of operand * operand (* a <> b *)
-  (* ------------------------------------------------------------------ M2, Booleans.
+  (* ------------------------------------------------------------------ Booleans (M2).
 
      Every operand below is Boolean: a `var bool` (whose domain is [Dbool], i.e. the
-     integers {0, 1} -- docs/DECISIONS.md D-0007) or a folded constant 0/1. The builder
-     folds `true`/`false` and bool parameters to [Const 1]/[Const 0] while resolving
-     names, exactly as it does for integers, so nothing here needs a second operand
-     type; lib/flatzinc/compile.ml checks that each operand really is Boolean and says
-     so with a position when it is not.
+     integers {0, 1}, because Booleans use the order encoding on [0, 1], D-0007) or a
+     folded constant 0/1. The builder folds `true`/`false` and bool parameters to
+     [Const 1]/[Const 0] while resolving names, exactly as it does for integers, so
+     nothing here needs a second operand type; lib/flatzinc/compile.ml checks that each
+     operand really is Boolean and says so with a position when it is not.
 
      [Bool2int] is the exception, and it is the seam the whole Boolean vertical turns
      on: its *first* operand is Boolean and its second is an ordinary integer operand. *)
@@ -146,23 +164,24 @@ type cstr =
     (* `bool2int(b, x)`: x = b, with b Boolean and x an integer operand. *)
   | Bool_eq of operand * operand (* `bool_eq(a, b)`: a <-> b *)
   | Bool_not of operand * operand (* `bool_not(a, b)`: a <-> ~b *)
-  (* ------------------------------------------------------- M3, reified forms.
+  (* ------------------------------------------------------- reified forms (M3).
 
      The reifier (the last operand of each) is Boolean; the constrained operands are
      ordinary integers. SPEC 2.1's M3 row is exactly these four, and they share one
-     dispatcher on the solver side (lib/core/prop/reif.ml, roadmap M3-T4), so the two
-     comparison forms keep the two-operand shape the unreified builtins have rather
-     than being normalised to linear terms here -- compile.ml does that once, in the
-     one place that also posts the rows. *)
+     dispatcher on the solver side (lib/core/prop/reif.ml, roadmap M3-T4: the author of a
+     reified form supplies enforce-hold, enforce-not-hold and entailment, the dispatcher
+     does the rest), so the two comparison forms keep the two-operand shape the unreified
+     builtins have rather than being normalised to linear terms here -- compile.ml does
+     that once, in the one place that also posts the rows. *)
   | Int_lin_le_reif of (int * int) list * int * operand
     (* `int_lin_le_reif(as, bs, c, r)`: r <-> (sum as*bs <= c). *)
   | Int_le_reif of operand * operand * operand (* r <-> (a <= b) *)
   | Int_eq_reif of operand * operand * operand (* r <-> (a  = b) *)
   | Int_ne_reif of operand * operand * operand (* r <-> (a <> b) *)
-  (* ------------------------------------------------- M4, the arithmetic family.
+  (* ------------------------------------------------- the arithmetic family (M4).
 
-     `int_times(x, y, z)`: x * y = z. `int_div(x, y, q)`: q = x div y, truncating
-     toward zero, with y = 0 simply unsupported (docs/SPEC.md 2.1, D-0033).
+     `int_times(x, y, z)`: x * y = z. `int_div(x, y, q)`: q = x div y, truncating toward
+     zero, with y = 0 unsatisfiable rather than an error (docs/SPEC.md 2.1, D-0033).
      `int_abs(x, z)`: z = |x|.
 
      Each carries an [aux] because none of the three is linear, and the case split
@@ -179,22 +198,22 @@ type cstr =
   | Int_times of operand * operand * operand * aux
   | Int_div of operand * operand * operand * aux
   | Int_abs of operand * operand * aux
-  (* M4-T1. `all_different_int(xs)`: the operands take pairwise distinct values.
+  (* `all_different_int(xs)` (M4-T1): the operands take pairwise distinct values.
      Kept as the RELATION and not as its pairwise decomposition, for the reason the
      comment above [Int_times] gives -- [check_assignment] must judge a solution
      against what SPEC 2.1 says the constraint means, never against the shape
      lib/flatzinc/compile.ml happens to post for it. *)
   | All_different of operand list
-  (* M7-T16. `fzn_global_cardinality(xs, cover, counts)`: for each position i,
-     `counts[i]` is exactly how many of `xs` take the value `cover[i]`. The cover is an
-     array of CONSTANTS (SPEC 2.1's form, and the only one lib/core/prop/gcc.ml's model
-     rows can be built over); the counts are operands, so a fixed cardinality is the
-     degenerate case rather than a different constructor.
+  (* `fzn_global_cardinality(xs, cover, counts)` (M7-T16, the global_cardinality
+     propagator): for each position i, `counts[i]` is exactly how many of `xs` take the
+     value `cover[i]`. The cover is an array of CONSTANTS (SPEC 2.1's form, and the only
+     one lib/core/prop/gcc.ml's model rows can be built over); the counts are operands, so
+     a fixed cardinality is the degenerate case rather than a different constructor.
 
      Kept as the RELATION for the reason [All_different] is: [check_assignment] must
      judge a solution against what the constraint MEANS, never against the rows
      lib/flatzinc/compile.ml happens to post. That matters more here than anywhere,
-     because the whole point of M7-T16 is that the propagator infers things the
+     because the whole point of a gcc propagator is that it infers things the
      decomposition does not -- an oracle written against the decomposition could not
      tell a stronger propagator from a wrong one.
 
@@ -202,21 +221,21 @@ type cstr =
      value at all. `global_cardinality` is the OPEN form; the closed form is a different
      builtin. *)
   | Global_cardinality of operand list * int array * operand list
-  (* M4-T9. `array_int_maximum(m, xs)` / `array_int_minimum(m, xs)`: m is the largest
+  (* `array_int_maximum(m, xs)` / `array_int_minimum(m, xs)` (M4-T9): m is the largest
      (resp. smallest) of [xs], which must be non-empty. Kept as the RELATION for
      [All_different]'s reason: lib/flatzinc/compile.ml posts n linear rows plus a
      per-value clause family for it (lib/core/prop/maxmin.ml's header), and the oracle
      must judge a solution against what the constraint means, not against those. *)
   | Array_int_maximum of operand * operand list
   | Array_int_minimum of operand * operand list
-  (* M4-T10 (D-0096). `baguette_cumulative(s, d, r, cap)`: at every time point the tasks
-     running there -- task i over [s_i, s_i + d_i - 1] -- use at most [cap], task i using
-     [r_i]. Durations, resources and the capacity are CONSTANTS (the only form
-     lib/core/prop/cumulative.ml's rows are built over; mznlib routes the rest to std's
-     decomposition). `disjunctive` reaches it as cap = 1, r_i = 1. Kept as the RELATION
-     for [All_different]'s reason. *)
+  (* `baguette_cumulative(s, d, r, cap)` (M4-T10; D-0096 chose time-table filtering over
+     capacity rows on the order literals): at every time point the tasks running there --
+     task i over [s_i, s_i + d_i - 1] -- use at most [cap], task i using [r_i]. Durations,
+     resources and the capacity are CONSTANTS (the only form lib/core/prop/cumulative.ml's
+     rows are built over; mznlib routes the rest to std's decomposition). `disjunctive`
+     reaches it as cap = 1, r_i = 1. Kept as the RELATION for [All_different]'s reason. *)
   | Cumulative of operand list * int array * int array * int
-  (* M4-T3. `array_int_element(idx, as, c)`: [as] is a CONSTANT array and the index is
+  (* `array_int_element(idx, as, c)` (M4-T3): [as] is a CONSTANT array and the index is
      1-BASED, so the relation is `as[idx] = c` with `idx` in `1..|as|`. The array is an
      `int array` and not an `operand list` because SPEC 2.1's M4 row admits only the
      constant form; a var-array element would be a different builtin with a different
@@ -238,22 +257,27 @@ type cstr =
   (* M18-coverage-T3 (D-0217): see [circuit] above. *)
   | Circuit of circuit
 
-(* [c_id] is the FlatZinc builtin as written (`int_max`, `array_int_maximum`, ...), or "" for
-   a constraint no FlatZinc item wrote (the `int_eq` tying a gcc copy, D-0146 section 2). Two
-   builtins can build one [cstr] (`int_max(x, y, z)` is [Array_int_maximum (z, [x; y])]), and
-   only the end-to-end contract tells them apart, because its translator writes a different
-   cake keyword for each (M14-e2e-verification-T3b, D-0188 section 3.1). Nothing else reads it. *)
+(* [c_id] is the FlatZinc builtin as written (`int_max`, `array_int_maximum`, ...), or ""
+   for a constraint no FlatZinc item wrote (the `int_eq` tying a gcc copy, D-0146
+   section 2). Two builtins can build one [cstr] (`int_max(x, y, z)` is
+   [Array_int_maximum (z, [x; y])]), and only the end-to-end contract tells them apart,
+   because its translator writes a different cake keyword for each (the `--e2e` prefix
+   derived from cake_pb_cp's verified .opb, M14-e2e-verification-T3b, D-0188 section
+   3.1). Nothing else reads it. *)
 type constr = { k : cstr; c_pos : Pos.t; c_id : string }
 
-(* M7-T2, extended by M7-T9. The strategies docs/SPEC.md 3.4 admits, one constructor
-   each. A strategy that is NOT here is refused by [Builder.search_of_annot]; there is no
-   catch-all arm on either of these types anywhere, deliberately, because a catch-all is
-   how an unsupported strategy becomes a wrong search instead of a refusal.
+(* The search strategies docs/SPEC.md 3.4 admits, one constructor each (search
+   annotations honoured since M7-T2; `smallest`, `largest`, `indomain_split` and
+   `indomain_median` added by M7-T9). A strategy that is NOT here is refused by
+   [Builder.search_of_annot]; there is no catch-all arm on either of these types anywhere,
+   deliberately, because a catch-all is how an unsupported strategy becomes a wrong search
+   instead of a refusal.
 
-   M7-T19 (D-0083) added [Anti_first_fail]: the LARGEST current domain first, ties broken
-   by [First_fail]'s rule. FlatZinc's bare `indomain` has no constructor of its own: it
-   means ascending-value assignment, which is [Indomain_min]'s branching exactly, so the
-   builder maps the spelling onto it rather than adding a synonym here. *)
+   [Anti_first_fail] is the LARGEST current domain first, ties broken by [First_fail]'s
+   rule. FlatZinc's bare `indomain` has no constructor of its own: it means
+   ascending-value assignment, which is [Indomain_min]'s branching exactly, so the
+   builder maps the spelling onto it rather than adding a synonym here. Both came from
+   D-0083 (M7-T19), which removed the corpus's last front-end refusals of this kind. *)
 type var_choice = Input_order | First_fail | Anti_first_fail | Smallest | Largest
 type val_choice = Indomain_min | Indomain_max | Indomain_split | Indomain_median
 type search = Int_search of int list * var_choice * val_choice | Seq of search list
@@ -441,7 +465,7 @@ let to_string t =
    it shares code with the engine it stops being independent and starts agreeing with the
    engine's bugs.
 
-   Two consequences worth keeping:
+   What follows from that:
 
    - It evaluates **every** constraint kind [cstr] has, and the [holds] match below is
      deliberately exhaustive rather than ending in a catch-all: adding a constructor
@@ -449,25 +473,27 @@ let to_string t =
      constraint family the oracle silently reports as satisfied. That is not a
      hypothetical -- the rule was written when [Int_lin_ne] and [Int_ne] had no
      propagator, so a hole here would have been a hole exactly where the solver already
-     had one, and the M2 Boolean row was added to this match in the same commit as its
-     propagators for the same reason.
+     had one, and the Boolean builtins of milestone M2 were added to this match in the
+     same commit as their propagators for the same reason.
    - Booleans are checked as Booleans. [truth] refuses a value that is neither 0 nor 1
      rather than treating everything non-zero as true: a `var bool` holding 2 means the
      store or a propagator is broken, and answering "satisfied" there would launder the
      bug into a plausible-looking solution, which is the one thing I-S1 exists to stop.
      lib/flatzinc/output.ml's [bool_string] refuses the same value for the same reason.
    - It shares no arithmetic with the Boolean propagators, because there is none to
-     share: nothing in the M2 row multiplies.
-   - **M1-T33: the linear sum is evaluated exactly, in arbitrary precision.** It used
-     to be `List.fold_left (fun acc (c, i) -> acc + (c * values.(i))) 0`, i.e. the same
+     share: no Boolean builtin multiplies.
+   - **The linear sum is evaluated exactly, in arbitrary precision (M1-T33).** An
+     independent check that shares a failure mode with its subject is not independent,
+     and I-S1's whole worth is that independence. The sum used to be
+     `List.fold_left (fun acc (c, i) -> acc + (c * values.(i))) 0`, i.e. the same
      wrapping `+` and `*` as [lib/core/prop/linear.ml] and [lib/proof/encoding.ml]. On
-     D-0029's overflow class that oracle agreed with the bug -- and it agreed with it
-     *because* the two computed the same wrong product, which is the one failure mode
-     an independent check must not have. M1-T23's compile-time cap means the native
-     version cannot overflow on any model the front end accepts today, so this was not
-     a live defect; it was the oracle's value that was wrong. An independent check that
-     shares a failure mode with its subject is not independent, and I-S1's whole worth
-     is that independence.
+     D-0029's overflow class (a sum that wraps silently, so that a propagator prunes on a
+     wrong bound) that oracle agreed with the bug -- and it agreed with it *because* the
+     two computed the same wrong product, which is the one failure mode an independent
+     check must not have. The compile-time cap on declared domains (M1-T23,
+     lib/core/checked.ml) means the native version cannot overflow on any model the
+     front end accepts today, so this was not a live defect; it was the oracle's value
+     that was wrong.
 
      [Exact] below is written here rather than taken from [Baguette_core.Checked] on
      purpose. [Checked] is what the propagators and the .opb expansion use; sharing it
@@ -616,7 +642,7 @@ module Exact = struct
 
   (* The worst intermediate [mul] can produce, as a plain [int]. Exposed so that the
      "cannot itself wrap" claim in this module's header is a checked assertion in
-     test/unit/test_compile.ml and not a comment nobody re-derives. *)
+     test/unit/test_output.ml and not a comment nobody re-derives. *)
   let widest_mul_intermediate = mask + (mask * mask) + mask
 end
 
@@ -633,7 +659,7 @@ let check_assignment (t : t) (values : int array) : bool =
       (Printf.sprintf "Model.check_assignment: expected %d values, got %d" n
          (Array.length values));
   let value = function Const c -> c | Var i -> values.(i) in
-  (* M1-T33: exact, so the oracle cannot confirm a wrapped product. See the header. *)
+  (* Exact (M1-T33), so the oracle cannot confirm a wrapped product. See the header. *)
   let sum terms =
     List.fold_left
       (fun acc (c, i) ->
@@ -668,7 +694,7 @@ let check_assignment (t : t) (values : int array) : bool =
     | Int_lt (a, b) -> value a < value b
     | Int_eq (a, b) -> value a = value b
     | Int_ne (a, b) -> value a <> value b
-    (* The M2 Boolean row, written from the FlatZinc definition of each builtin and
+    (* The Boolean builtins (M2), written from the FlatZinc definition of each and
        from nothing in lib/core/prop/: a disjunction is a disjunction, and the two
        reified forms are re-evaluated as the equivalences they are, in both
        directions. An empty [xs] is the identity of its connective -- `or([])` is
@@ -681,21 +707,21 @@ let check_assignment (t : t) (values : int array) : bool =
     | Bool2int (b, x) -> value x = if truth b then 1 else 0
     | Bool_eq (a, b) -> truth a = truth b
     | Bool_not (a, b) -> truth a <> truth b
-    (* M3: each re-evaluated as the equivalence it is, in both directions, from the
-       FlatZinc definition and from nothing in lib/core/prop/. *)
+    (* The reified forms (M3): each re-evaluated as the equivalence it is, in both
+       directions, from the FlatZinc definition and from nothing in lib/core/prop/. *)
     | Int_lin_le_reif (ts, rhs, r) -> truth r = (sum_cmp ts rhs <= 0)
     | Int_le_reif (a, b, r) -> truth r = (value a <= value b)
     | Int_eq_reif (a, b, r) -> truth r = (value a = value b)
     | Int_ne_reif (a, b, r) -> truth r = (value a <> value b)
-    (* M4. Written from docs/SPEC.md 2.1 and from nothing in lib/core/prop/, which is
-       the discipline this whole function is built on -- see the header. In particular
-       it does NOT call [Baguette_core.Arith.is_in_relation], although the roadmap row
-       for M4-T4b proposed one shared predicate: that predicate is the solver's, it
-       computes its product with [Checked] (the propagators' own arithmetic), and a
-       shared product is exactly the shape of agreement D-0029 was about and that the
-       [Exact] note above refuses. The anti-drift guarantee the row wanted is kept by
-       test, not by sharing: test_prop.ml enumerates small boxes and asserts the two
-       agree on every triple.
+    (* The arithmetic family (M4). Written from docs/SPEC.md 2.1 and from nothing in
+       lib/core/prop/, which is the discipline this whole function is built on -- see the
+       header. In particular it does NOT call [Baguette_core.Arith.is_in_relation],
+       although the roadmap row for M4-T4b (the arithmetic propagators) proposed one
+       shared predicate: that predicate is the solver's, it computes its product with
+       [Checked] (the propagators' own arithmetic), and a shared product is exactly the
+       shape of agreement D-0029 was about and that the [Exact] note above refuses. The
+       anti-drift guarantee the row wanted is kept by test, not by sharing: test_prop.ml
+       enumerates small boxes and asserts the two agree on every triple.
 
        The multiplication goes through [Exact], so it cannot wrap. Division and
        absolute value cannot overflow at any value the declared-bound cap admits
@@ -714,10 +740,10 @@ let check_assignment (t : t) (values : int array) : bool =
     | Int_div (a, b, c, aux) ->
         value b <> 0 && value a / value b = value c && aux_holds a b aux
     | Int_abs (a, c, aux) -> value c = abs (value a) && aux_holds a a aux
-    (* M4-T1, the relation itself: no pair of operands shares a value. Written as the
-       quadratic scan and not as a sorted-list or hashtable test, because the oracle is
-       written to be obviously right (see the header) and because a scope this small is
-       not where the solver's time goes. *)
+    (* all_different (M4-T1), the relation itself: no pair of operands shares a value.
+       Written as the quadratic scan and not as a sorted-list or hashtable test, because
+       the oracle is written to be obviously right (see the header) and because a scope
+       this small is not where the solver's time goes. *)
     | All_different xs ->
         let vs = List.map value xs in
         let rec distinct = function
@@ -725,16 +751,17 @@ let check_assignment (t : t) (values : int array) : bool =
           | v :: rest -> (not (List.mem v rest)) && distinct rest
         in
         distinct vs
-    (* M7-T16, the relation as SPEC 2.1 states it: a tally per cover value, compared
-       against that position's count. Written as the obvious scan for [All_different]'s
-       reason -- this is the oracle, so it is written to be obviously right. *)
+    (* global_cardinality (M7-T16), the relation as SPEC 2.1 states it: a tally per cover
+       value, compared against that position's count. Written as the obvious scan for
+       [All_different]'s reason -- this is the oracle, so it is written to be obviously
+       right. *)
     | Global_cardinality (xs, cover, counts) ->
         let vs = List.map value xs in
         List.for_all2
           (fun cv cnt -> List.length (List.filter (fun v -> v = cv) vs) = value cnt)
           (Array.to_list cover) counts
-    (* M4-T10, the relation as std's fzn_cumulative states it: a task with a zero
-       duration or a zero resource uses nothing, and the load at every task's start
+    (* cumulative (M4-T10), the relation as std's fzn_cumulative states it: a task with a
+       zero duration or a zero resource uses nothing, and the load at every task's start
        (where the maximum is reached) is within the capacity; with no array at all the
        constraint is true, with one it also asks cap >= 0. *)
     | Cumulative (ss, ds, rs, cap) ->
@@ -749,23 +776,23 @@ let check_assignment (t : t) (values : int array) : bool =
             0 tasks
         in
         (ss = [] || cap >= 0) && List.for_all (fun (s, _, _) -> load s <= cap) tasks
-    (* M4-T3, the relation as SPEC 2.1 states it and not as lib/flatzinc/compile.ml
-       posts it: the index is 1-based, it must land inside the array, and the selected
-       constant must equal the result. The range test is written out rather than left to
-       [Array.get]'s own bounds check, because an out-of-range index must make this
-       return [false] and not raise. *)
-    (* M4-T9, the relation as written: m is one of the values and none exceeds it (resp.
-       is below it). An empty array has no maximum, so it is never satisfied -- the front
-       end refuses one before it gets here. *)
+    (* maximum / minimum (M4-T9), the relation as written: m is one of the values and none
+       exceeds it (resp. is below it). An empty array has no maximum, so it is never
+       satisfied -- the front end refuses one before it gets here. *)
     | Array_int_maximum (m, xs) ->
         xs <> [] && value m = List.fold_left (fun a x -> max a (value x)) min_int xs
     | Array_int_minimum (m, xs) ->
         xs <> [] && value m = List.fold_left (fun a x -> min a (value x)) max_int xs
+    (* element (M4-T3), the relation as SPEC 2.1 states it and not as
+       lib/flatzinc/compile.ml posts it: the index is 1-based, it must land inside the
+       array, and the selected constant must equal the result. The range test is written
+       out rather than left to [Array.get]'s own bounds check, because an out-of-range
+       index must make this return [false] and not raise. *)
     | Array_int_element (i, vs, c) ->
         let k = value i in
         k >= 1 && k <= Array.length vs && vs.(k - 1) = value c
-    (* M7-T28, the relation over the word AND the flags: the run is defined and ends in
-       an accepting state, and exactly the run's states are set, one per layer. *)
+    (* regular (M7-T28), the relation over the word AND the flags: the run is defined and
+       ends in an accepting state, and exactly the run's states are set, one per layer. *)
     | Regular r -> (
         match regular_run r (List.map value r.r_xs) with
         | None -> false
@@ -778,8 +805,8 @@ let check_assignment (t : t) (values : int array) : bool =
                       let i = k / r.r_nq and q = (k mod r.r_nq) + 1 in
                       value f = if List.nth states i = q then 1 else 0)
                     r.r_flags))
-    (* M7-T28 (D-0151), the relation as std's fzn_inverse states it: every f_i is an index
-       of g and g at it is i, and every g_j is an index of f and f at it is j. *)
+    (* inverse (D-0151), the relation as std's fzn_inverse states it: every f_i is an
+       index of g and g at it is i, and every g_j is an index of f and f at it is j. *)
     | Inverse iv ->
         let f = Array.of_list (List.map value iv.inv_f)
         and g = Array.of_list (List.map value iv.inv_g) in
@@ -792,15 +819,15 @@ let check_assignment (t : t) (values : int array) : bool =
           i >= 0 && i < nf && f.(i) = iv.inv_gmin + k
         in
         List.for_all ok_f (List.init nf Fun.id) && List.for_all ok_g (List.init ng Fun.id)
-    (* M7-T28 (D-0159), the relation over x, y AND the selectors: one selector is set and
+    (* member (D-0159), the relation over x, y AND the selectors: one selector is set and
        every set selector names a position equal to y (so y is one of the x). *)
     | Member mb ->
         let y = value mb.mem_y in
         List.length mb.mem_x = List.length mb.mem_b
         && List.exists (fun b -> value b = 1) mb.mem_b
         && List.for_all2 (fun x b -> value b = 0 || value x = y) mb.mem_x mb.mem_b
-    (* M18-coverage-T1 (D-0206), over x AND the selectors: one selector is set and every
-       set selector's tuple is x. *)
+    (* table (D-0206), over x AND the selectors: one selector is set and every set
+       selector's tuple is x. *)
     | Table tb ->
         let n = List.length tb.tab_x in
         let xv = Array.of_list (List.map value tb.tab_x) in
@@ -812,9 +839,9 @@ let check_assignment (t : t) (values : int array) : bool =
                || Array.for_all Fun.id
                     (Array.init n (fun i -> xv.(i) = tb.tab_t.((k * n) + i))))
              (List.mapi (fun k s -> (k, s)) tb.tab_s)
-    (* M18-coverage-T3 (D-0217), over the successors AND the positions: walking from the
-       root visits every node once and comes back, and the node reached after d steps
-       has position d. *)
+    (* circuit (D-0217), over the successors AND the positions: walking from the root
+       visits every node once and comes back, and the node reached after d steps has
+       position d. *)
     | Circuit c ->
         let n = List.length c.cir_x in
         let xv = Array.of_list (List.map value c.cir_x) in

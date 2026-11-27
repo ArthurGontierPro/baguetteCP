@@ -1,9 +1,18 @@
 (* table(x, T): the tuple x_1 .. x_n is one of the T tuples of a constant table. Reaches
    the solver as `baguette_table(x, t, s)` (and `baguette_table_bool`, over 0..1) through
    mznlib/fzn_table_int.mzn and fzn_table_bool.mzn, [t] the tuples flattened row-major and
-   [s] one SELECTOR Boolean per tuple the library introduces. docs/DECISIONS.md D-0206 is
-   this module's record (M18-coverage-T1). Governed by docs/SPEC.md 3.2 (consistency) and
-   3.3 (explanations).
+   [s] one SELECTOR Boolean per tuple the library introduces.
+
+   Consistency level: DOMAIN ([consistency] below) when x names distinct variables, and
+   CHECKING for the [Aliased] packing compile.ml uses when one variable occurs twice in x
+   (section "Consistency level" below). Governed by docs/SPEC.md 3.2 (consistency levels)
+   and 3.3 (explanations). Proof shape: every pruning is ONE `rup` against one tuple's row
+   or the at-least-one row, with the earlier trace lines on the page and nothing derived
+   ahead, so the family is [Single_row] in the I-X10 classification table of
+   test/unit/test_trace.ml (a pruning that follows from one model constraint).
+
+   docs/DECISIONS.md D-0206 is this module's record: table as a native propagator over
+   one selector per tuple, each tuple one row of the .opb, built by M18-coverage-T1.
 
    ---------------------------------------------------------------------------
    The selectors are STORE VARIABLES, as regular.ml's state flags and member.ml's
@@ -23,9 +32,10 @@
 
    a literal a declared bound makes true dropped, k the number left ([def_lits]); a
    literal that is constant false (t_i outside x_i's declared hull, or a constant cell
-   that differs) makes DEF_t the unit `~s_t`. DEF_t is D-0184's DEF1 shape, s_t -> x = t
-   as ONE row: it propagates both ways by unit propagation, since any literal false leaves
-   the rest below k and forces ~s_t, and s_t true forces every literal.
+   that differs) makes DEF_t the unit `~s_t`. DEF_t is s_t -> x = t as ONE row, the DEF1
+   row of the in-proof tabulation spike (D-0184). It propagates both ways by unit
+   propagation, since any literal false leaves the rest below k and forces ~s_t, and s_t
+   true forces every literal.
 
    ---------------------------------------------------------------------------
    Consistency level: DOMAIN on (x, s), and [Aliased] when it is not
@@ -45,9 +55,9 @@
    decomposition over a shared index was GAC too (a star around the index): what this
    module changes is the SIZE, T + 1 rows against about (2n + 3) T, and no index ladder
    (D-0206 section 1). With one variable twice in x, a live tuple can disagree with itself
-   on it and the filtering is no longer complete: compile.ml packs that instance as
-   [Aliased], the same code declared [Checking]. Checking is unconditional: with x fixed,
-   K kills every tuple but x's own, and none left is ALO's conflict.
+   on it and the filtering is no longer complete, so compile.ml packs that instance as
+   [Aliased], the same code declared [Checking]. Checking holds in both packings: with x
+   fixed, K kills every tuple but x's own, and none left is ALO's conflict.
 
    The call is idempotent at its fixpoint when x names distinct variables, and compile.ml
    says so at the packing site for that instance only.
@@ -64,22 +74,23 @@
         tuple's tail.
      E  x_i >= t_i, x_i <= t_i: s_t's tail, so s_t, and DEF_t.
      S  x_i <> v: the tails of the dead tuples with t_i = v, plus the bound fact pinning v
-        when v is a bound (regular.ml's P3). Assume x_i = v: every tuple with t_i <> v
-        dies on DEF_t through x_i's ladder, every tuple with t_i = v on its own line, and
-        ALO is empty.
+        when v is a bound (as regular.ml's rule P3 does for a letter value). Assume x_i =
+        v: every tuple with t_i <> v dies on DEF_t through x_i's ladder, every tuple with
+        t_i = v on its own line, and ALO is empty.
 
-   The reasons are ON THE LETTERS (D-0151): where a line would cite "s_t <= 0", it cites
-   the TAIL of the line that killed s_t, which is letter facts by the same rule. A
-   selector moved by anything other than this instance (a decision, a learned clause) has
-   no tail of ours and is cited as itself. The tails are kept as the STRONGEST fact per
-   letter and direction, so a tail has at most two facts per letter; a K tail has at most
-   one. The machinery (slots, stamped scratch arrays, tails cached with the trail entry
-   they belong to and read back through [Store.hi_support] / [lo_support]) is regular.ml's,
-   copied rather than shared, as member.ml copied it.
+   The reasons are ON THE LETTERS, the rule D-0151 set for regular's state flags so that
+   a learned clause names cells of x and not auxiliary selectors. Where a line would cite
+   "s_t <= 0", it cites the TAIL of the line that killed s_t, which is letter facts by the
+   same rule. A selector moved by anything other than this instance (a decision, a
+   learned clause) has no tail of ours and is cited as itself. The tails are kept as the
+   STRONGEST fact per letter and direction, so a tail has at most two facts per letter; a
+   K tail has at most one. The machinery (slots, stamped scratch arrays, tails cached with
+   the trail entry they belong to and read back through [Store.hi_support] / [lo_support])
+   is regular.ml's, copied rather than shared, as member.ml copied it.
 
    The justification is [Explanation.clause] of the claim and the negated facts, deferred:
-   no new constructor, no line written ahead, a [Single_row] family in test_trace.ml's
-   sense (one constraint, several rows, the earlier trace lines on the page).
+   no new constructor, no line written ahead, a [Single_row] family (one constraint,
+   several rows, the earlier trace lines on the page).
 
    ---------------------------------------------------------------------------
    The scan: compact-table's two devices, without its reversible bitset
@@ -156,9 +167,10 @@ type t = {
   keys_in : int array;
   mutable nkeys : int;
   mutable others_rev : Reason.fact list;
-  (* [others_rev]'s facts, to keep each once in one lookup (D-0216): [List.mem] over the
-     list was quadratic in the foreign facts of a reason, 50 % of a 2011_black-hole_14 node
-     under the proof. *)
+  (* [others_rev]'s facts, to keep each once in one lookup. [List.mem] over the list was
+     quadratic in the foreign facts of a reason, 50 % of a 2011_black-hole_14 node under
+     the proof. D-0216, the task that cut black-hole's root cost under native table,
+     removed it with the other quadratic deduplications. *)
   others_seen : (Reason.fact, unit) Hashtbl.t;
   mutable stamp : int;
 }

@@ -697,10 +697,22 @@ let test_cdcl_loop () =
   Sys.remove dir;
   Sys.mkdir dir 0o700;
   let off = { Search.default_config with Search.cdcl = false } in
-  let on = { off with Search.cdcl = true } in
+  let on = { off with Search.cdcl = true; Search.chrono = None } in
+  (* M19-config-T11 (D-0224): the same checks with chronological backtracking for long
+     jumps, at thresholds 0 (every conflict goes back one level) and 1, with the fallback
+     (learning off) whose assertions are pushed again from their nogood after a later
+     backtrack, and under restarts. *)
+  let chrono t = { on with Search.chrono = Some t } in
   let configs =
     [
       ("cdcl", on);
+      ("cdcl+chrono:0", chrono 0);
+      ("cdcl+chrono:1", chrono 1);
+      ( "cdcl+chrono:0+nolearn",
+        { (chrono 0) with Search.learn = false; Search.pb = false } );
+      ( "cdcl+chrono:0+luby:1+phase",
+        { (chrono 0) with Search.restarts = Restart.Luby 1; Search.phase_saving = true }
+      );
       ("cdcl+nolearn", { on with Search.learn = false; Search.pb = false });
       ( "cdcl+luby:1+phase",
         { on with Search.restarts = Restart.Luby 1; Search.phase_saving = true } );
@@ -713,7 +725,7 @@ let test_cdcl_loop () =
         } );
     ]
   in
-  let far = ref 0 in
+  let far = ref 0 and chronos = ref 0 and repushed = ref 0 in
   List.iter
     (fun (name, src) ->
       let base = solve_with dir (name ^ "_dfs") src off in
@@ -727,6 +739,13 @@ let test_cdcl_loop () =
           let r = solve_with dir tag src config in
           let st = r.stats in
           far := !far + st.Search.lo_far;
+          chronos := !chronos + st.Search.lo_chrono;
+          repushed := !repushed + st.Search.lo_repushed;
+          if config.Search.chrono = None then
+            check
+              (Printf.sprintf "M19-T11 %s %s: no chronological step without --chrono" name
+                 cname)
+              (st.Search.lo_chrono = 0 && st.Search.lo_repushed = 0);
           check
             (Printf.sprintf "M19-T10 %s %s: same answer as dfs (%s), proof %s" name cname
                r.answer r.verdict)
@@ -754,10 +773,156 @@ let test_cdcl_loop () =
             && st.Search.lo_direct = 0))
         configs)
     [ ("pigeons54", pigeons); ("queens8", queens 8); ("queens6opt", queens ~opt:true 6) ];
-  check (Printf.sprintf "M19-T10: the loop skipped levels at %d resumes" !far) (!far > 0)
+  check (Printf.sprintf "M19-T10: the loop skipped levels at %d resumes" !far) (!far > 0);
+  check
+    (Printf.sprintf
+       "M19-T11: chronological steps taken in place of a long jump: %d (fallback \
+        assertions pushed again: %d)"
+       !chronos !repushed)
+    (!chronos > 0)
+
+(* ------------------------------------------- M19-config-T8 (D-0250): probing at the root
+
+   Three small models, each built so that the root fixpoint does not see what one probe
+   does. [probe_sat]: x = 1 forces y = z = 1 through a linear row, and int_ne refutes it, so
+   x = 1 FAILS and x >= 2 is asserted at the root; x's declared domain {1,3,5} makes that
+   push SETTLE past the hole at 2 (I-X9's path, with the holes' facts). SATISFIABLE, so the
+   database is not contradictory and each unit line is really checked (D-0053, D-0066).
+   [probe_bool]: the same over 0/1 variables, a -> b, a -> c and b + c <= 1, so a = 1 fails. [probe_unsat]: three pairwise int_ne over
+   1..2; value consistency sees nothing at the root, and both values of the first variable
+   fail, so probing alone refutes the model with no decision. *)
+let probe_sat =
+  "var {1,3,5}: x :: output_var;\n\
+   var 1..2: y :: output_var;\n\
+   var 1..2: z :: output_var;\n\
+   constraint int_ne(y,z);\n\
+   constraint int_lin_le([1,1,-1],[y,z,x],1);\n\
+   solve satisfy;\n"
+
+let probe_bool =
+  "var 0..1: a :: output_var;\n\
+   var 0..1: b :: output_var;\n\
+   var 0..1: c :: output_var;\n\
+   constraint int_lin_le([1,-1],[a,b],0);\n\
+   constraint int_lin_le([1,-1],[a,c],0);\n\
+   constraint int_lin_le([1,1],[b,c],1);\n\
+   solve satisfy;\n"
+
+let probe_unsat =
+  "var 1..2: x :: output_var;\n\
+   var 1..2: y :: output_var;\n\
+   var 1..2: z :: output_var;\n\
+   constraint int_ne(x,y);\n\
+   constraint int_ne(y,z);\n\
+   constraint int_ne(x,z);\n\
+   solve satisfy;\n"
+
+(* The proof with the unit line [@c<cid>]'s single literal negated. *)
+let flip_unit proof cid =
+  let tag = Printf.sprintf "@c%d " cid in
+  let lines = String.split_on_char '\n' proof in
+  let found = ref false in
+  let flip l =
+    if String.length l > String.length tag && String.sub l 0 (String.length tag) = tag
+    then (
+      found := true;
+      String.split_on_char ' ' l
+      |> List.map (fun w ->
+             if String.length w > 0 && w.[0] = '~' then
+               String.sub w 1 (String.length w - 1)
+             else if
+               String.length w > 0
+               && (match w.[0] with 'a' .. 'z' | 'A' .. 'Z' | '_' -> true | _ -> false)
+               && w <> "rup"
+             then "~" ^ w
+             else w)
+      |> String.concat " ")
+    else l
+  in
+  let out = String.concat "\n" (List.map flip lines) in
+  (!found, out)
+
+let rup_wording =
+  "The constraint is not implied by reverse unit propagation (RUP) from core and"
+
+let test_probe () =
+  check "M19-config-T8: probing is OFF unless BAGUETTE_PROBE turns it on"
+    (Sys.getenv_opt "BAGUETTE_PROBE" <> None
+    || Baguette_core.Probe.mode_of_env () = Baguette_core.Probe.Off);
+  let dir = Filename.temp_file "baguette_probe" "" in
+  Sys.remove dir;
+  Sys.mkdir dir 0o700;
+  let saved = Baguette_core.Probe.mode () in
+  let run name src mode =
+    Baguette_core.Probe.set_mode mode;
+    Baguette_core.Probe.last := None;
+    let r = solve_with dir name src Search.default_config in
+    (r, !Baguette_core.Probe.last)
+  in
+  List.iter
+    (fun (name, src, answer) ->
+      let off, c_off = run (name ^ "_off") src Baguette_core.Probe.Off in
+      let on, c_on = run (name ^ "_root") src Baguette_core.Probe.Root in
+      check (name ^ ": off never calls the pass") (c_off = None);
+      check
+        (name ^ ": same answer off and root")
+        (off.answer = answer && on.answer = answer);
+      check (name ^ ": the root proof is VERIFIED") (contains on.verdict "VERIFIED");
+      check (name ^ ": every id deleted (I-X2)") (on.live = 0 || answer = "UNSAT");
+      check (name ^ ": M1-T36's identity") on.consistent;
+      match c_on with
+      | None -> check (name ^ ": the pass ran") false
+      | Some c ->
+          check
+            (name ^ ": at least one literal failed")
+            (c.Baguette_core.Probe.failed >= 1);
+          if answer = "UNSAT" then (
+            check
+              (name ^ ": refuted by probing, no decision")
+              (c.Baguette_core.Probe.refuted && on.stats.Search.decisions = 0);
+            check
+              (name ^ ": the proof has no rule the search does not write")
+              (List.for_all
+                 (fun k -> List.mem k (rule_kinds off.proof))
+                 (rule_kinds on.proof)))
+          else
+            (* The load-bearing check (CLAUDE.md, proof discipline): on a SATISFIABLE
+               model, each derived unit flipped must be refused by the checker AT that
+               line, with the full RUP wording. *)
+            List.iter
+              (fun cid ->
+                let found, mutated = flip_unit on.proof cid in
+                check (Printf.sprintf "%s: unit @c%d is on the page" name cid) found;
+                let base = Filename.concat dir (Printf.sprintf "%s_root" name) in
+                let mut = Printf.sprintf "%s_flip%d.pbp" base cid in
+                let oc = open_out mut in
+                output_string oc mutated;
+                close_out oc;
+                match Baguette_proof.Checker.find () with
+                | None -> check "a checker is installed" false
+                | Some vp ->
+                    let log = mut ^ ".log" in
+                    ignore
+                      (Sys.command
+                         (Printf.sprintf "%s %s %s > %s 2>&1" (Filename.quote vp)
+                            (Filename.quote (base ^ ".opb"))
+                            (Filename.quote mut) (Filename.quote log)));
+                    let out = read_file log in
+                    check
+                      (Printf.sprintf "%s: unit @c%d flipped is refused as not RUP" name
+                         cid)
+                      ((not (contains out "VERIFIED")) && contains out rup_wording))
+              c.Baguette_core.Probe.units)
+    [
+      ("probe_sat", probe_sat, "SAT");
+      ("probe_bool", probe_bool, "SAT");
+      ("probe_unsat", probe_unsat, "UNSAT");
+    ];
+  Baguette_core.Probe.set_mode saved
 
 let () =
   print_endline "";
+  test_probe ();
   test_cdcl_loop ();
   test_learned_kinds ();
   test_level_set ();

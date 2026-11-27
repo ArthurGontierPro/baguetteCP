@@ -2590,6 +2590,155 @@ let test_d0216_amo_reuse () =
     (Array.to_list (Sys.readdir dir));
   Sys.rmdir dir
 
+(* M20-pernode-T4 (D-0242): the removals one Regin set justifies share its at-least-one
+   lines ([Alldiff.alo_lines]), handed back when building them again would return them.
+   The scene: h1..h3 over 1..5 lose 2 and 4 at the root, so they are a Hall set over the
+   value SET {1, 3, 5}, which no interval states (stage 1 sees [1, 5] with three
+   variables); y1..y3 over 1..6 lose 1, 3 and 5 to Regin under that one set. Their sum
+   at most 8 then leaves them {2, 4} between three, and the root conflict cites the
+   removals of 1 and 3 from each, which forces their derivations. The proof must be the
+   same bytes with and without the memo, the memo must be what the later removals used,
+   and veripb must accept the proof. *)
+let d0242_src =
+  "var 1..5: h1;\n\
+   var 1..5: h2;\n\
+   var 1..5: h3;\n\
+   var 1..6: y1;\n\
+   var 1..6: y2;\n\
+   var 1..6: y3;\n\
+   constraint int_ne(h1, 2);\n\
+   constraint int_ne(h1, 4);\n\
+   constraint int_ne(h2, 2);\n\
+   constraint int_ne(h2, 4);\n\
+   constraint int_ne(h3, 2);\n\
+   constraint int_ne(h3, 4);\n\
+   constraint int_lin_le([1,1,1],[y1,y2,y3],8);\n\
+   constraint all_different_int([h1,h2,h3,y1,y2,y3]);\n\
+   solve satisfy;\n"
+
+let test_d0242_alo_reuse () =
+  let dir = Filename.temp_file "baguette_d0242" "" in
+  Sys.remove dir;
+  Sys.mkdir dir 0o755;
+  let saved_hc = !Explanation.hashcons and saved_reuse = !Alldiff.amo_reuse in
+  let run reuse =
+    Explanation.set_hashcons true;
+    Alldiff.amo_reuse := reuse;
+    Alldiff.memo_hits := 0;
+    let name = if reuse then "reuse" else "rebuild" in
+    let opb, proof, outcome = el_solve dir name d0242_src in
+    (opb, proof, outcome, !Alldiff.memo_hits)
+  in
+  Fun.protect
+    ~finally:(fun () ->
+      Explanation.set_hashcons saved_hc;
+      Alldiff.amo_reuse := saved_reuse)
+    (fun () ->
+      let _, proof_off, out_off, hits_off = run false in
+      let opb, proof_on, out_on, hits_on = run true in
+      let unsat = function Search.Unsat -> true | _ -> false in
+      check "D-0242: the scene is refuted at the root, both ways"
+        (unsat out_off && unsat out_on);
+      check "D-0242: the proof is the same bytes with and without the memo"
+        (String.equal proof_off proof_on);
+      check
+        (Printf.sprintf
+           "D-0242: the eight removals after the first reuse the set's at-least-one \
+            lines (%d hits with the memo, %d without)"
+           hits_on hits_off)
+        (hits_on >= 8 && hits_off = 0);
+      match veripb_path () with
+      | None ->
+          incr failures;
+          Printf.printf "FAIL D-0242: veripb not found -- the proof was NOT checked.\n"
+      | Some veripb ->
+          let pbp = Filename.concat dir "reuse.pbp" in
+          let rc, log = m6_veripb veripb dir opb pbp in
+          check "D-0242: veripb accepts the proof" (rc = 0);
+          if rc <> 0 then Printf.printf "  veripb said:\n%s\n" log);
+  List.iter
+    (fun f -> Sys.remove (Filename.concat dir f))
+    (Array.to_list (Sys.readdir dir));
+  Sys.rmdir dir
+
+(* M22-review-T5 (D-0248): a proof that cannot be written. The proof's directory does not
+   exist, or the .pbp or the .opb is /dev/full (a symlink to it, since the CLI appends the
+   suffixes). Each run must end with exit 6 and ONE line on stderr naming the failure and
+   saying the proof is incomplete, print no verdict on stdout, and not die on the
+   runtime's `Fatal error: exception Sys_error`, which is what it did before (exit 2,
+   usage's status). *)
+let m22t5_model =
+  "var 1..3: x :: output_var;\n\
+   var 1..3: y :: output_var;\n\
+   constraint int_lin_le([1, 1], [x, y], 3);\n\
+   solve satisfy;\n"
+
+let test_m22t5_write_failure_cli () =
+  match m9_binary () with
+  | None ->
+      incr failures;
+      print_endline
+        "FAIL M22-review-T5: bin/main.exe was not found above the test's cwd, so the \
+         write-failure lane was NOT run. Build bin/ first (`dune build bin/`)."
+  | Some binary ->
+      let binary =
+        if Filename.is_relative binary then Filename.concat (Sys.getcwd ()) binary
+        else binary
+      in
+      let dir = Filename.temp_file "baguette_m22t5" "" in
+      Sys.remove dir;
+      Sys.mkdir dir 0o700;
+      let fzn = Filename.concat dir "m.fzn" in
+      let oc = open_out fzn in
+      output_string oc m22t5_model;
+      close_out oc;
+      let starts_with ~prefix str =
+        String.length str >= String.length prefix
+        && String.sub str 0 (String.length prefix) = prefix
+      in
+      let contains str ~needle =
+        let n = String.length needle and l = String.length str in
+        let rec go i = i + n <= l && (String.sub str i n = needle || go (i + 1)) in
+        go 0
+      in
+      let case name prefix =
+        let rc, o, e =
+          m9_run binary ~cwd:dir
+            (Printf.sprintf "%s --proof %s" (Filename.quote fzn) prefix)
+        in
+        let lines = List.filter (fun l -> l <> "") (String.split_on_char '\n' e) in
+        check ("M22-T5 " ^ name ^ ": exit 6") (rc = 6);
+        check
+          ("M22-T5 " ^ name
+         ^ ": one line on stderr, the write failure, the proof INCOMPLETE")
+          (match lines with
+          | [ l ] ->
+              starts_with ~prefix:"baguette: a write failed (" l
+              && contains l ~needle:"INCOMPLETE"
+          | _ -> false);
+        check
+          ("M22-T5 " ^ name ^ ": no uncaught exception")
+          (not (contains e ~needle:"Fatal error"));
+        check ("M22-T5 " ^ name ^ ": no verdict on stdout") (o = "");
+        if rc <> 6 || List.length lines <> 1 then
+          Printf.printf "  rc=%d stderr:\n%s\n" rc e
+      in
+      case "missing directory" "nodir/p";
+      let full name =
+        Sys.command
+          (Printf.sprintf "ln -s /dev/full %s"
+             (Filename.quote (Filename.concat dir name)))
+        = 0
+      in
+      if Sys.file_exists "/dev/full" && full "q.pbp" && full "r.opb" then (
+        case ".pbp on a full disk" "q";
+        case ".opb on a full disk" "r")
+      else
+        print_endline
+          "note M22-review-T5: /dev/full does not exist here, the two full-disk cases \
+           did not run";
+      m9_rm_rf dir
+
 let () =
   print_endline "";
   List.iter run_model models;
@@ -2607,6 +2756,8 @@ let () =
   test_d0200_heap_budget_cli ();
   test_m6_t24_interrupt_cli ();
   test_d0216_amo_reuse ();
+  test_d0242_alo_reuse ();
+  test_m22t5_write_failure_cli ();
   if !failures > 0 then (
     Printf.printf "\n%d failure(s)\n" !failures;
     exit 1)

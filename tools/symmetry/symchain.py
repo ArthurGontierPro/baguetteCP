@@ -2,8 +2,11 @@
 """symchain.py IN.fzn IN.opb OUT [--vars V,..] [--depth D] [--score orbit|first|shared]
                                 [--order static|search] [--orient auto|max|min]
 -- a stabilizer chain of the model's symmetry group, found by dejavu as distributed, and the
-symmetry-breaking clauses it licenses (M15-symmetry-T2, D-0179; the study is D-0177; the chain that
-follows the search, `--order search`, is M15-symmetry-T3, D-0181).
+symmetry-breaking clauses it licenses. Written for M15-symmetry-T2, the pipeline beside baguette
+(D-0179: each cut proved by `red` with a permutation that SWAPS its two literals, by `dom` where the
+group has none); the study before it is D-0177 (dejavu as distributed, the chain from satsuma's
+Schreier cuts). The chain that follows the search, `--order search`, is M15-symmetry-T3, D-0181
+(what VeriPB accepts in the middle of a proof).
 
 IN.opb is baguette's .opb of IN.fzn, without breaking (`main.exe IN.fzn --proof P --time-limit 0`
 writes it without searching). The pipeline, one dejavu run per level (D-0177 §4, backend A):
@@ -62,7 +65,10 @@ that VeriPB refuses. What the chain cannot do is find more symmetry than dejavu 
 is one-sided (a missing generator is a smaller orbit, so fewer cuts).
 Environment: DEJAVU (the binary; default /cluster/arthur/tools/dejavu-f984485/build/dejavu).
 Optimisation models (`min:` in the .opb) are refused: their `red` steps would also have to show
-that the witness keeps the objective (M15-symmetry-T4).
+that the witness keeps the objective (M15-symmetry-T4, parked).
+Prints the graph, one line per level and a summary on stdout. Exit 0 once OUT.chain.json and
+OUT.fzn are written; 1 with a `symchain: ...` message on an optimisation model, and on a Python
+exception when dejavu fails; 2 (argparse) on a usage error.
 """
 import argparse, collections, json, os, re, subprocess, sys, time
 

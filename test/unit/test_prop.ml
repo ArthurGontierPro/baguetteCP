@@ -2828,7 +2828,7 @@ let test_bool2int_hole () =
      hole must not survive as a wrong upper bound of 2. *)
   let store =
     Store.create ~names:[| "b"; "x" |]
-      ~domains:[| Domain.make 0 1; Domain.of_list [ 0; 2 ] |]
+      ~domains:[| Domain.make 0 1; Domain_helper.of_list [ 0; 2 ] |]
   in
   let prop = Bool2int.make store ~b:(var 0) ~x:(var 1) in
   match Bool2int.propagate prop store with
@@ -6510,6 +6510,183 @@ let regin_gate_random_scene rnd stats =
       | _ -> ok := false
   done;
   !ok && agree ()
+
+(* --------------------------------------- (g) THE QUIET-BOUNDS SKIP (D-0235) *)
+
+(* Stage 1 skips a pass whose bound vector is one a scan once found quiet ([Alldiff.pass]),
+   and its scans snapshot lazily. Two copies of one random scene, one with the skip and
+   one without ([?quiet:false]), receive the same decisions, bound moves, removals and
+   backtracks; both propagate after each and must agree on the outcome, every domain and
+   every trail entry (variable, domain after, reason literals). Bound moves are what make
+   stage 1 push, so they are drawn as often as removals; the backtracks are what bring a
+   bound vector back to one the skip has seen. *)
+let quiet_random_scene rnd =
+  let n = 2 + Random.State.int rnd 6 in
+  let boxes =
+    List.init n (fun _ ->
+        let lo = Random.State.int rnd 4 in
+        (lo, lo + 1 + Random.State.int rnd 5))
+  in
+  let names = List.init n (Printf.sprintf "v%d") in
+  let copy quiet =
+    let e = Encoding.create () in
+    List.iter2 (fun n (lo, hi) -> Encoding.declare_int e n ~lo ~hi) names boxes;
+    List.iter (Encoding.request_direct e) names;
+    let rows = Encoding.add_all_different e names in
+    let store = mk_store (List.map2 (fun n (lo, hi) -> (n, lo, hi)) names boxes) in
+    let p = Alldiff.make ~quiet store e ~rows (List.init n var) in
+    sink_proof e;
+    (store, p)
+  in
+  let sa, pa = copy true and sb, pb = copy false in
+  let agree () =
+    Store.trail_length sa = Store.trail_length sb
+    && List.for_all
+         (fun i -> Domain.equal (Store.get sa (var i)) (Store.get sb (var i)))
+         (List.init n Fun.id)
+    && List.for_all
+         (fun k ->
+           let ea = Store.trail_entry sa k and eb = Store.trail_entry sb k in
+           ea.Store.var = eb.Store.var
+           && Domain.equal ea.Store.now eb.Store.now
+           && Reason.lits ea.Store.reason = Reason.lits eb.Store.reason)
+         (List.init (Store.trail_length sa) Fun.id)
+  in
+  let both f =
+    ignore (f sa : Store.outcome);
+    ignore (f sb : Store.outcome)
+  in
+  let ok = ref true and live = ref true and steps = ref 0 in
+  while !live && !steps < 16 do
+    incr steps;
+    (match Random.State.int rnd 5 with
+    | 0 ->
+        Store.new_level sa;
+        Store.new_level sb
+    | 1 when Store.level sa > 0 ->
+        Store.backtrack sa;
+        Store.backtrack sb
+    | k ->
+        let i = Random.State.int rnd n in
+        let d = Store.get sa (var i) in
+        if Domain.size d > 1 then
+          let vs = Array.of_list (Domain.to_list d) in
+          let v = vs.(Random.State.int rnd (Array.length vs)) in
+          if k = 2 then both (fun s -> Store.remove s (var i) v placeholder_pruning)
+          else if k = 3 && v > Domain.lo d then
+            both (fun s -> Store.set_lo s (var i) v placeholder_pruning)
+          else if v < Domain.hi d then
+            both (fun s -> Store.set_hi s (var i) v placeholder_pruning));
+    let ra = Alldiff.propagate pa sa in
+    let rb = Alldiff.propagate pb sb in
+    match (ra, rb) with
+    | Propagator.Fixpoint, Propagator.Fixpoint -> if not (agree ()) then ok := false
+    | Propagator.Conflict _, Propagator.Conflict _ ->
+        if not (agree ()) then ok := false;
+        if Store.level sa = 0 then live := false
+        else (
+          Store.backtrack sa;
+          Store.backtrack sb)
+    | _ -> ok := false
+  done;
+  !ok && agree ()
+
+let test_alldiff_quiet_random () =
+  let rnd = Random.State.make [| 235 |] in
+  let bad = ref 0 in
+  Alldiff.quiet_skips := 0;
+  for _ = 1 to 400 do
+    if not (quiet_random_scene rnd) then incr bad
+  done;
+  check
+    (Printf.sprintf
+       "alldiff (g) D-0235: over 400 random scenes stage 1 with the quiet-bounds skip \
+        prunes exactly what it prunes without it, trail entry for trail entry (%d passes \
+        skipped, %d scenes disagreeing)"
+       !Alldiff.quiet_skips !bad)
+    (!bad = 0);
+  check "alldiff (g) D-0235: the scenes exercise the skip" (!Alldiff.quiet_skips > 100)
+
+(* ------------------------------------------- (h) THE HALL-FREE TEST (D-0242) *)
+
+(* [Alldiff.hall_free] claims to answer, by counting, exactly whether [Alldiff.pass_scan]
+   on the same bound vector moves nothing and raises nothing. BAGUETTE_DEBUG checks the
+   direction that soundness needs (a [true] is a scan that does nothing); this lane checks
+   both, so a test that is merely conservative (never skips) fails here too, and it does
+   so on random vectors with ties, fixed variables, over-full and tight intervals and,
+   in a quarter of the scenes, a variable repeated in the scope. Each scene: a fresh
+   store at level 1, the kept permutations sorted from a scrambled start, the test, then
+   the scan itself. *)
+let hall_free_scene rnd =
+  let n = 1 + Random.State.int rnd 7 in
+  let boxes =
+    List.init n (fun _ ->
+        let lo = Random.State.int rnd 6 in
+        (lo, lo + Random.State.int rnd 4))
+  in
+  let names = List.init n (Printf.sprintf "v%d") in
+  let e = Encoding.create () in
+  List.iter2 (fun n (lo, hi) -> Encoding.declare_int e n ~lo ~hi) names boxes;
+  List.iter (Encoding.request_direct e) names;
+  let rows = Encoding.add_all_different e names in
+  let store = mk_store (List.map2 (fun n (lo, hi) -> (n, lo, hi)) names boxes) in
+  let scope =
+    List.init n var
+    @ if Random.State.int rnd 4 = 0 then [ var (Random.State.int rnd n) ] else []
+  in
+  let p = Alldiff.make store e ~rows scope in
+  sink_proof e;
+  Store.new_level store;
+  let nt = Array.length p.Alldiff.terms in
+  let lo0 =
+    Array.init nt (fun i -> Domain.lo (Store.get store p.Alldiff.terms.(i).Alldiff.x))
+  and hi0 =
+    Array.init nt (fun i -> Domain.hi (Store.get store p.Alldiff.terms.(i).Alldiff.x))
+  in
+  let scramble a =
+    for i = Array.length a - 1 downto 1 do
+      let j = Random.State.int rnd (i + 1) in
+      let x = a.(i) in
+      a.(i) <- a.(j);
+      a.(j) <- x
+    done
+  in
+  let by_lo = Array.init nt Fun.id and by_hi = Array.init nt Fun.id in
+  scramble by_lo;
+  scramble by_hi;
+  Alldiff.sort_by lo0 by_lo;
+  Alldiff.sort_by hi0 by_hi;
+  let sorted key a =
+    let ok = ref true in
+    for i = 1 to Array.length a - 1 do
+      if key.(a.(i - 1)) > key.(a.(i)) then ok := false
+    done;
+    !ok
+  in
+  let free = Alldiff.hall_free ~by_lo ~by_hi lo0 hi0 in
+  let quiet =
+    match Alldiff.pass_scan p store ~lo0 ~hi0 with
+    | moved -> not moved
+    | exception Alldiff.Found _ -> false
+  in
+  (sorted lo0 by_lo && sorted hi0 by_hi && free = quiet, free)
+
+let test_alldiff_hall_free_random () =
+  let rnd = Random.State.make [| 242 |] in
+  let bad = ref 0 and free = ref 0 and busy = ref 0 in
+  for _ = 1 to 3000 do
+    let ok, f = hall_free_scene rnd in
+    if not ok then incr bad;
+    if f then incr free else incr busy
+  done;
+  check
+    (Printf.sprintf
+       "alldiff (h) D-0242: over 3000 random bound vectors [hall_free] answers exactly \
+        whether a stage 1 scan moves nothing (%d Hall-free, %d not, %d disagreeing)"
+       !free !busy !bad)
+    (!bad = 0);
+  check "alldiff (h) D-0242: the vectors exercise both answers"
+    (!free > 500 && !busy > 500)
 
 let test_regin_gate_random () =
   let rnd = Random.State.make [| 215 |] in
@@ -10289,6 +10466,438 @@ let () =
   test_m7t33_conflict_facts ();
   test_m7t33_lanes ()
 
+(* ============================================ M18-coverage-T11: gcc conflicts learn
+
+   D-0234. Until M18-coverage-T11 every global_cardinality conflict -- rule A's pigeonhole
+   and rule C's shortfall/surplus -- reached the store as a push that must fail, paired with
+   [Reason.none] at every depth, so [Learn.at_conflict] saw an empty cut (rotating-workforce:
+   82 to 99.9 % of conflicts unlearned, D-0232). Under a decision the push is now the
+   conflict, with its facts plus the crossed bound, derived ahead. And the facts are TIGHT:
+   a variable whose terms the counting clears for free is named with no literal.
+
+   The scenes are test/models/gcc_conflict_learn_sat.fzn (rule A) and
+   gcc_count_conflict_learn_sat.fzn (rule C), inline (their comments say why each line is
+   there). Domains stay in single digits (D-0028). *)
+
+module Gcc = Baguette_core.Gcc
+
+let t11_rule_a_src =
+  "var 1..4: k :: output_var;\n\
+   var 1..4: x1 :: output_var;\n\
+   var 1..4: x2 :: output_var;\n\
+   var 1..4: x3 :: output_var;\n\
+   var 1..4: t :: output_var;\n\
+   var 0..1: c1;\n\
+   var 0..1: c2;\n\
+   constraint int_le(x1,k);\n\
+   constraint int_le(x2,k);\n\
+   constraint int_le(x3,k);\n\
+   constraint int_le(t,3);\n\
+   constraint fzn_global_cardinality([x1,x2,x3,t],[1,2],[c1,c2]);\n\
+   solve :: int_search([k,x1,x2,x3,t], input_order, indomain_min, complete) satisfy;\n"
+
+let t11_rule_c_src =
+  "var 1..4: k :: output_var;\n\
+   var 1..3: x1 :: output_var;\n\
+   var 1..3: x2 :: output_var;\n\
+   var 1..3: x3 :: output_var;\n\
+   var 0..3: c3 :: output_var;\n\
+   constraint int_le(x1,k);\n\
+   constraint int_le(x2,k);\n\
+   constraint int_lin_le([-1,-1],[c3,k],-4);\n\
+   constraint fzn_global_cardinality([x1,x2,x3],[3],[c3]);\n\
+   solve :: int_search([k,x1,x2,x3,c3], input_order, indomain_min, complete) satisfy;\n"
+
+(* (a) Driven by hand: decide k <= [at] at level 1 and look at the conflict. *)
+let t11_conflict_at ~title ~src ~at ~want ~absent =
+  let c = compile_src src in
+  let store = c.Compile.store and engine = c.Compile.engine in
+  let path = Filename.temp_file "baguette_t11" ".pbp" in
+  let oc = open_out path in
+  Encoding.start_proof c.Compile.encoding (Writer.create oc);
+  check
+    (title ^ ": the root is a fixpoint")
+    (Engine.propagate engine store = Engine.Fixpoint);
+  let k = Option.get (Store.var_named store "k") in
+  Store.new_level store;
+  ignore
+    (Store.set_hi store k at
+       (Reason.because ~concludes:None Reason.none (Explanation.decision (Lit.le "k" at)))
+      : Store.outcome);
+  (match Engine.propagate engine store with
+  | Engine.Fixpoint -> check (title ^ ": the decision reaches a conflict") false
+  | Engine.Conflict cf ->
+      check
+        (title
+       ^ ": the conflict is global_cardinality's (the scene is what we think it is)")
+        (Engine.name_of engine cf.Store.c_prop = Gcc.name);
+      check (title ^ ": it is made under deriving_ahead (c_ahead)") cf.Store.c_ahead;
+      let lits = Reason.lits cf.Store.c_reason in
+      let shown = String.concat " " (List.map Lit.to_string lits) in
+      check
+        (title ^ ": it carries facts (it used to be Reason.none at every depth)")
+        (lits <> []);
+      List.iter
+        (fun l ->
+          check
+            (Printf.sprintf "%s: the facts include %s (got %s)" title (Lit.to_string l)
+               shown)
+            (List.mem l lits))
+        want;
+      List.iter
+        (fun name ->
+          check
+            (Printf.sprintf
+               "%s: no literal of %s, which the counting does not read (got %s)" title
+               name shown)
+            (not (List.exists (fun l -> String.equal (Lit.owner l.Lit.v) name) lits)))
+        absent;
+      check
+        (title ^ ": no fact is listed twice")
+        (List.length (List.sort_uniq compare (Reason.facts cf.Store.c_reason))
+        = List.length (Reason.facts cf.Store.c_reason));
+      check
+        (title ^ ": the reason and the justification agree (D-0026)")
+        (Store.agreement_holds store
+           (Reason.because ~concludes:None
+              (Reason.facts cf.Store.c_reason)
+              cf.Store.c_why));
+      check
+        (title ^ ": Learn.at_conflict returns Some")
+        (Option.is_some
+           (Learn.at_conflict store cf ~vars_of:(Engine.vars_of engine)
+              ~decl:(Learned.decl_of_encoding c.Compile.encoding))));
+  close_out oc;
+  try Sys.remove path with _ -> ()
+
+(* The root must NOT change: gcc's pigeonhole at level 0 is still factless, so every root
+   refutation stays byte-identical. *)
+let t11_root_is_factless () =
+  let c =
+    compile_src
+      "var 1..2: x1;\n\
+       var 1..2: x2;\n\
+       var 1..2: x3;\n\
+       var 0..1: c1;\n\
+       var 0..1: c2;\n\
+       constraint fzn_global_cardinality([x1,x2,x3],[1,2],[c1,c2]);\n\
+       solve satisfy;\n"
+  in
+  let path = Filename.temp_file "baguette_t11_root" ".pbp" in
+  let oc = open_out path in
+  Encoding.start_proof c.Compile.encoding (Writer.create oc);
+  (match Engine.propagate c.Compile.engine c.Compile.store with
+  | Engine.Fixpoint ->
+      check "M18-coverage-T11 root: the three-into-two pigeonhole conflicts" false
+  | Engine.Conflict cf ->
+      check
+        "M18-coverage-T11 root: the root pigeonhole is still factless (byte-identical \
+         root)"
+        (Reason.is_empty cf.Store.c_reason));
+  close_out oc;
+  try Sys.remove path with _ -> ()
+
+(* (b) The lanes, on each scene's own proof, solved as the CLI does with the audit on.
+   [counting] says whether the line is a counting argument (rule A: refused standalone and
+   without its pol, I-X10) or RUP against one model row (rule C's upper push, whose line
+   needs no derivation ahead and verifies alone -- the lane asserts that too, so a change
+   that makes it need one is seen). *)
+let t11_lane ~title ~src ~min_learned ~line ~counting ~mutants =
+  let c = compile_src src in
+  let dir = Filename.temp_file "baguette_t11_lane" "" in
+  Sys.remove dir;
+  Sys.mkdir dir 0o700;
+  let opb = Filename.concat dir "m.opb" and pbp = Filename.concat dir "m.pbp" in
+  let oc = open_out opb in
+  Encoding.write_opb ~comments:[ "M18-coverage-T11" ] c.Compile.encoding oc;
+  close_out oc;
+  let n_model = Encoding.n_constraints c.Compile.encoding in
+  let oc = open_out pbp in
+  let writer = Writer.create ~audit:true oc in
+  Encoding.start_proof c.Compile.encoding writer;
+  let ctx = Justify.create ~writer ~encoding:c.Compile.encoding in
+  let stats = Search.stats_create () in
+  let outcome =
+    Search.solve ~engine:c.Compile.engine ~store:c.Compile.store ~ctx
+      ~check:(fun _ -> true)
+      ~stats ?order:c.Compile.order ()
+  in
+  close_out oc;
+  check (title ^ ": SAT") (match outcome with Search.Sat _ -> true | _ -> false);
+  check
+    (Printf.sprintf "%s: learned %d >= %d (0 before M18-coverage-T11)" title
+       stats.Search.n_learned min_learned)
+    (stats.Search.n_learned >= min_learned);
+  let honest = String.split_on_char '\n' (read_file pbp) in
+  (match m7t33_veripb ~opb ~pbp with
+  | Some (true, _) -> check (title ^ " control: the honest proof verifies (I-X1)") true
+  | Some (false, out) ->
+      Printf.printf "     veripb said: %s\n" out;
+      check (title ^ " control: the honest proof verifies (I-X1)") false
+  | None -> check (title ^ ": veripb is available (a missing checker is a FAILURE)") false);
+  let arr = Array.of_list honest in
+  let idx = ref (-1) in
+  Array.iteri
+    (fun i l -> if !idx < 0 && String.equal (Writer.strip_label l) line then idx := i)
+    arr;
+  (if !idx < 0 then (
+     check (Printf.sprintf "%s: the conflict line `%s` is on the page" title line) false;
+     Array.iteri
+       (fun i l ->
+         if
+           i > 0
+           && starts_with_str "rup " (Writer.strip_label l)
+           && starts_with_str "pol " (Writer.strip_label arr.(i - 1))
+         then
+           Printf.printf "     after a pol, line %d: %s\n" (i + 1) (Writer.strip_label l))
+       arr)
+   else
+     let i = !idx in
+     check (Printf.sprintf "%s: the conflict line `%s` is on the page" title line) true;
+     check
+       (title ^ ": a pol is written immediately ahead of it (c_ahead)")
+       (i > 0 && starts_with_str "pol " (Writer.strip_label arr.(i - 1)));
+     let mutated = Filename.concat dir "mutated.pbp" in
+     (match cumul_standalone ~dir ~opb ~n:n_model line with
+     | Some (false, log) ->
+         check
+           (title ^ " standalone: REFUSED at the RUP wording (I-X10)")
+           (counting && contains_sub ~needle:rup_wording log)
+     | Some (true, _) ->
+         check
+           (title
+           ^
+           if counting then
+             " standalone: REFUSED (it verified alone: no I-X10 obligation)"
+           else " standalone: verifies alone (RUP against its one model row)")
+           (not counting)
+     | None -> check (title ^ ": veripb is available for the standalone lane") false);
+     if counting then
+       m7t33_refused ~name:(title ^ " no-pol") ~opb ~pbp:mutated ~at:i
+         (List.filteri (fun j _ -> j <> i - 1) honest);
+     let label = String.sub arr.(i) 0 (String.length arr.(i) - String.length line) in
+     List.iter
+       (fun (name, body) ->
+         m7t33_refused
+           ~name:(title ^ " " ^ name)
+           ~opb ~pbp:mutated ~at:(i + 1)
+           (List.mapi (fun j x -> if j = i then label ^ body else x) honest))
+       mutants;
+     try Sys.remove mutated with _ -> ());
+  List.iter
+    (fun f -> try Sys.remove f with _ -> ())
+    [
+      opb; pbp; Filename.concat dir "standalone.pbp"; Filename.concat dir "standalone.log";
+    ];
+  try Sys.rmdir dir with _ -> ()
+
+let test_t11_gcc_conflicts () =
+  let a = t11_rule_a_src and cc = t11_rule_c_src in
+  t11_conflict_at ~title:"M18-coverage-T11 a rule A (k <= 2)" ~src:a ~at:2
+    ~want:[ Lit.le "x1" 2; Lit.le "x2" 2; Lit.le "x3" 2 ]
+    ~absent:[ "t" ];
+  t11_conflict_at ~title:"M18-coverage-T11 a rule C (k <= 2)" ~src:cc ~at:2
+    ~want:[ Lit.le "x1" 2; Lit.le "x2" 2; Lit.ge "c3" 2 ]
+    ~absent:[ "x3" ];
+  t11_root_is_factless ();
+  t11_lane ~title:"M18-coverage-T11 b rule A" ~src:a ~min_learned:2
+    ~line:"rup +1 x1_ge_3 +1 x2_ge_3 +1 x3_ge_3 >= 1 ;" ~counting:true
+    ~mutants:
+      [
+        ("no-surplus", "rup +1 x1_ge_3 +1 x2_ge_3 >= 1 ;");
+        ("no-fact", "rup +1 x2_ge_3 +1 x3_ge_3 >= 1 ;");
+      ];
+  t11_lane ~title:"M18-coverage-T11 b rule C" ~src:cc ~min_learned:2
+    ~line:"rup +1 x1_ge_3 +1 x2_ge_3 +1 ~c3_ge_2 >= 1 ;" ~counting:false
+    ~mutants:
+      [
+        ("no-crossed", "rup +1 x1_ge_3 +1 x2_ge_3 >= 1 ;");
+        ("no-fact", "rup +1 x2_ge_3 +1 ~c3_ge_2 >= 1 ;");
+      ]
+
+let () = test_t11_gcc_conflicts ()
+
+(* ============================================ M18-coverage-ne: int_lin_ne conflicts learn
+
+   D-0238. Until M18-coverage-ne an all-fixed int_lin_ne / int_ne violation was reported
+   with [Reason.none] at every depth, so [Learn.at_conflict] saw an empty cut
+   (gcc-benchmark l42_3: 9 019 of 9 714 conflicts unlearned at 20 000 nodes, D-0234).
+   Under a decision the conflict now carries every term's fixing facts; at the root it is
+   still factless.
+
+   The scene is test/models/ne_conflict_learn_sat.fzn, inline: x = k and y = k, both
+   through int_lin_eq rows that watch k, so the decision k <= 1 fixes x and y in one
+   engine pass and x + y <> 2 sees both fixed -- the conflict is int_lin_ne's by
+   construction. Learning k >= 2 from it, the search lands on k = x = y = 2 (SAT, D-0053).
+   Run over the ORDER encoding and over BITS (x, y, k all width 3, so on bits at 0). *)
+
+let ne_conflict_src =
+  "var 1..4: k :: output_var;\n\
+   var 1..4: x :: output_var;\n\
+   var 1..4: y :: output_var;\n\
+   constraint int_lin_eq([1,-1],[x,k],0);\n\
+   constraint int_lin_eq([1,-1],[y,k],0);\n\
+   constraint int_lin_ne([1,1],[x,y],2);\n\
+   solve :: int_search([k,x,y], input_order, indomain_min, complete) satisfy;\n"
+
+let with_bits bits f =
+  let saved = !Baguette_proof.Encoding.bits_above in
+  Baguette_proof.Encoding.bits_above := bits;
+  Fun.protect ~finally:(fun () -> Baguette_proof.Encoding.bits_above := saved) f
+
+(* (a) Driven by hand: decide k <= 1 at level 1 and look at the conflict. *)
+let ne_conflict_at ~title =
+  let c = compile_src ne_conflict_src in
+  let store = c.Compile.store and engine = c.Compile.engine in
+  let path = Filename.temp_file "baguette_ne_conflict" ".pbp" in
+  let oc = open_out path in
+  Encoding.start_proof c.Compile.encoding (Writer.create oc);
+  check
+    (title ^ ": the root is a fixpoint")
+    (Engine.propagate engine store = Engine.Fixpoint);
+  let k = Option.get (Store.var_named store "k") in
+  Store.new_level store;
+  ignore
+    (Store.set_hi store k 1
+       (Reason.because ~concludes:None Reason.none (Explanation.decision (Lit.le "k" 1)))
+      : Store.outcome);
+  (match Engine.propagate engine store with
+  | Engine.Fixpoint -> check (title ^ ": the decision reaches a conflict") false
+  | Engine.Conflict cf ->
+      check
+        (title ^ ": the conflict is int_lin_ne's (the scene is what we think it is)")
+        (Engine.name_of engine cf.Store.c_prop = Ne.name);
+      let lits = Reason.lits cf.Store.c_reason in
+      let shown = String.concat " " (List.map Lit.to_string lits) in
+      check
+        (Printf.sprintf
+           "%s: the facts are exactly x <= 1 and y <= 1 (x >= 1, y >= 1 are declared and \
+            have no literal; got %s)"
+           title shown)
+        (List.sort compare lits = List.sort compare [ Lit.le "x" 1; Lit.le "y" 1 ]);
+      check
+        (title ^ ": no fact is listed twice")
+        (List.length (List.sort_uniq compare (Reason.facts cf.Store.c_reason))
+        = List.length (Reason.facts cf.Store.c_reason));
+      check
+        (title ^ ": the reason and the justification agree (D-0026)")
+        (Store.agreement_holds store
+           (Reason.because ~concludes:None
+              (Reason.facts cf.Store.c_reason)
+              cf.Store.c_why));
+      check
+        (title ^ ": Learn.at_conflict returns Some")
+        (Option.is_some
+           (Learn.at_conflict store cf ~vars_of:(Engine.vars_of engine)
+              ~decl:(Learned.decl_of_encoding c.Compile.encoding))));
+  close_out oc;
+  try Sys.remove path with _ -> ()
+
+(* The root must NOT change: an all-fixed violation at level 0 is still factless. *)
+let ne_root_is_factless ~title =
+  let c =
+    compile_src
+      "var 1..1: x;\n\
+       var 1..1: y;\n\
+       constraint int_lin_ne([1,1],[x,y],2);\n\
+       solve satisfy;\n"
+  in
+  let path = Filename.temp_file "baguette_ne_root" ".pbp" in
+  let oc = open_out path in
+  Encoding.start_proof c.Compile.encoding (Writer.create oc);
+  (match Engine.propagate c.Compile.engine c.Compile.store with
+  | Engine.Fixpoint -> check (title ^ ": x + y <> 2 at x = y = 1 conflicts") false
+  | Engine.Conflict cf ->
+      check
+        (title ^ ": the root conflict is still factless (byte-identical root)")
+        (Reason.is_empty cf.Store.c_reason));
+  close_out oc;
+  try Sys.remove path with _ -> ()
+
+(* (b) Under search with the audit on, as the CLI solves it. Over the order encoding the
+   conflict line is pinned: it is the nogood, RUP against the A/B pair alone (so it
+   verifies standalone, with nothing ahead of it), and a line claiming a weaker total
+   (x >= 3 \/ y >= 3, false at the solution x = y = 2) is refused at the RUP wording. *)
+let ne_lane ~title ~order_line =
+  let c = compile_src ne_conflict_src in
+  let dir = Filename.temp_file "baguette_ne_lane" "" in
+  Sys.remove dir;
+  Sys.mkdir dir 0o700;
+  let opb = Filename.concat dir "m.opb" and pbp = Filename.concat dir "m.pbp" in
+  let oc = open_out opb in
+  Encoding.write_opb ~comments:[ "M18-coverage-ne" ] c.Compile.encoding oc;
+  close_out oc;
+  let n_model = Encoding.n_constraints c.Compile.encoding in
+  let oc = open_out pbp in
+  let writer = Writer.create ~audit:true oc in
+  Encoding.start_proof c.Compile.encoding writer;
+  let ctx = Justify.create ~writer ~encoding:c.Compile.encoding in
+  let stats = Search.stats_create () in
+  let outcome =
+    Search.solve ~engine:c.Compile.engine ~store:c.Compile.store ~ctx
+      ~check:(fun _ -> true)
+      ~stats ?order:c.Compile.order ()
+  in
+  close_out oc;
+  check (title ^ ": SAT") (match outcome with Search.Sat _ -> true | _ -> false);
+  check
+    (Printf.sprintf "%s: learned %d >= 1 (0 before M18-coverage-ne)" title
+       stats.Search.n_learned)
+    (stats.Search.n_learned >= 1);
+  let honest = String.split_on_char '\n' (read_file pbp) in
+  (match m7t33_veripb ~opb ~pbp with
+  | Some (true, _) -> check (title ^ " control: the honest proof verifies (I-X1)") true
+  | Some (false, out) ->
+      Printf.printf "     veripb said: %s\n" out;
+      check (title ^ " control: the honest proof verifies (I-X1)") false
+  | None -> check (title ^ ": veripb is available (a missing checker is a FAILURE)") false);
+  (match order_line with
+  | None -> ()
+  | Some line -> (
+      let arr = Array.of_list honest in
+      let idx = ref (-1) in
+      Array.iteri
+        (fun i l -> if !idx < 0 && String.equal (Writer.strip_label l) line then idx := i)
+        arr;
+      if !idx < 0 then
+        check
+          (Printf.sprintf "%s: the conflict line `%s` is on the page" title line)
+          false
+      else
+        let i = !idx in
+        check (Printf.sprintf "%s: the conflict line `%s` is on the page" title line) true;
+        (match cumul_standalone ~dir ~opb ~n:n_model line with
+        | Some (true, _) ->
+            check (title ^ " standalone: verifies alone (RUP against the A/B pair)") true
+        | Some (false, log) ->
+            Printf.printf "     veripb said: %s\n" log;
+            check (title ^ " standalone: verifies alone (RUP against the A/B pair)") false
+        | None -> check (title ^ ": veripb is available for the standalone lane") false);
+        let mutated = Filename.concat dir "mutated.pbp" in
+        let label = String.sub arr.(i) 0 (String.length arr.(i) - String.length line) in
+        m7t33_refused ~name:(title ^ " weaker-total") ~opb ~pbp:mutated ~at:(i + 1)
+          (List.mapi
+             (fun j x -> if j = i then label ^ "rup +1 x_ge_3 +1 y_ge_3 >= 1 ;" else x)
+             honest);
+        try Sys.remove mutated with _ -> ()));
+  List.iter
+    (fun f -> try Sys.remove f with _ -> ())
+    [
+      opb; pbp; Filename.concat dir "standalone.pbp"; Filename.concat dir "standalone.log";
+    ];
+  try Sys.rmdir dir with _ -> ()
+
+let test_ne_conflicts () =
+  List.iter
+    (fun (enc, bits, order_line) ->
+      with_bits bits (fun () ->
+          ne_conflict_at ~title:("M18-coverage-ne a " ^ enc);
+          ne_root_is_factless ~title:("M18-coverage-ne root " ^ enc);
+          ne_lane ~title:("M18-coverage-ne b " ^ enc) ~order_line))
+    [ ("order", None, Some "rup +1 x_ge_2 +1 y_ge_2 >= 1 ;"); ("bits", Some 0, None) ]
+
+let () = test_ne_conflicts ()
+
 let () =
   print_endline "\npropagator unit tests";
   test_soundness ();
@@ -10434,6 +11043,8 @@ let () =
   test_regin_consistency_oracle ();
   test_regin_staging ();
   test_regin_gate_random ();
+  test_alldiff_quiet_random ();
+  test_alldiff_hall_free_random ();
   test_regin_conclusion ();
   test_regin_mixed_currency ();
   test_regin_random_proofs ();

@@ -7,8 +7,14 @@
 %   int_lin_le int_lin_eq int_lin_ne int_le int_lt int_eq int_ne
 %   bool_clause array_bool_or array_bool_and bool2int bool_eq bool_not
 %   int_lin_le_reif int_le_reif int_eq_reif int_ne_reif
-%   int_abs int_times int_div
-%   all_different_int array_int_element
+%   int_abs int_times int_div int_max int_min
+%   all_different_int array_int_element array_int_maximum array_int_minimum
+%   fzn_global_cardinality
+%
+% and the bodyless baguette_* predicates the other files of this library declare
+% (baguette_global_cardinality, _cumulative, _regular, _inverse, _member,
+% _member_bool, _table, _table_bool, _circuit, _bool_lin_eq, _bool_lin_le), each
+% the call that keeps a global whole for its propagator.
 %
 % Anything else MiniZinc would emit is given a body HERE, so that it decomposes
 % into that subset rather than reaching the front end and being refused.  A
@@ -21,11 +27,11 @@
 % the propagator and its justification are the point.
 %
 % std/redefinitions.mzn is a two-line comment, so shadowing it costs nothing.
-% The versioned std/redefinitions-2.*.mzn files are NOT shadowed, with one
-% exception: they map the _nonshifted and 2d_nonshifted element forms,
-% bool_clause_reif and int_pow_fixed onto the builtins this file defines.  The
-% exception is redefinitions-2.0.mzn, shadowed by M4-T9 so that
-% array_int_maximum / array_int_minimum stay whole (see that file).
+% The versioned std/redefinitions-2.*.mzn files map the _nonshifted and
+% 2d_nonshifted element forms, bool_clause_reif and int_pow_fixed onto the
+% builtins this file defines, and they are NOT shadowed, with one exception:
+% redefinitions-2.0.mzn, shadowed by M4-T9 so that array_int_maximum /
+% array_int_minimum stay whole (see that file).
 %-----------------------------------------------------------------------------%
 
 % var set of int -> array of var bool.  baguette has no set variables at all,

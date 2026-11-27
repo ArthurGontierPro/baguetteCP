@@ -71,7 +71,9 @@ let var i = Var.of_int i
    without one cannot tell the two readings apart. *)
 let mk_store (specs : (string * int list) list) =
   let names = Array.of_list (List.map fst specs) in
-  let domains = Array.of_list (List.map (fun (_, vs) -> Domain.of_list vs) specs) in
+  let domains =
+    Array.of_list (List.map (fun (_, vs) -> Domain_helper.of_list vs) specs)
+  in
   Store.create ~names ~domains
 
 let range lo hi = List.init (hi - lo + 1) (fun i -> lo + i)

@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
-"""The lane's deliberate corruptions (M14-e2e-verification-T2, D-0176). Each edits one file in
-place and prints what it changed, for the lane to check the refusal against.
+"""The deliberate corruptions of the end-to-end lane (run by tools/e2e/chain.sh, which
+scripts/e2e_lane.sh drives; D-0176, the lane that certifies the test models through cake_pb_cp,
+made in M14-e2e-verification-T2). Each edits one file in place and prints what it changed, for
+the lane to check the refusal against. The (Tn, D-...) tag of a mutation names the task of
+M14-e2e-verification that added it, and its record.
 
   mutate.py scp FILE.scp D      the first lin_less_equal/lin_equals: right-hand side + D;
                                 prints the constraint's name (cN)
@@ -52,7 +55,9 @@ place and prints what it changed, for the lane to check the refusal against.
   mutate.py tight FILE.pbp      (T7, D-0196) the first row derived by contradiction against a
                                 bits variable's ub row (`@cK pbc ROW : subproof` whose second
                                 step cites @BU) gets its degree + 1; prints @cK
-Exit 1 when there is nothing to mutate.
+Exit 0 once the file is rewritten and the label printed; 1 when there is nothing to mutate
+(the file is then left as it was). An unknown kind or a missing argument stops on a Python
+exception (status 1 as well).
 """
 import re
 import sys

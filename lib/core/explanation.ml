@@ -1,73 +1,198 @@
 (* Explanations: HOW THE CHECKER IS CONVINCED that a value could be removed -- the
-   derivation, in a form the proof layer can render.
+   derivation, as a cutting-planes expression the proof layer renders into `pol` and
+   `rup` lines (lib/core/justify.ml does the rendering).
 
    This is the design centre of the project. Read docs/SPEC.md section 3.3 and
    docs/ARCHITECTURE.md section 4 before changing it.
 
-   D-0003 ("what does higher-order explanation mean here?") is RESOLVED, by D-0026, and
-   the resolution split this type's job in two rather than reshaping it. *Which facts*
-   justify a pruning is now declarative data in lib/core/reason.ml; *how the checker is
-   convinced* is this type, unchanged, and it is the project's (a)-claim: [Combine] with
-   a divisor, [Weaken], [Model_row], and [Term (coeff, t)] recursing into another
-   justification -- an explanation taking explanations as arguments. Nothing about that
-   was flattened by D-0026 and nothing about it should be.
-
-   What changed here in M2-T8 is what this type is *not* asked to do any more. It no
-   longer doubles as the reason: no propagator projects an [Explanation.t] to get the
-   bound facts a trace line negates, and [Store.entry] no longer carries a second,
-   closure-valued reason channel beside it. The one new function is [owners], which
-   exists so the two halves can be *checked* against each other instead of kept in
+   A pruning has two halves (D-0026). WHICH FACTS justify it is declarative data in
+   lib/core/reason.ml; HOW the checker is convinced is this type. It is higher-order in
+   the sense D-0026 settled the open question of D-0003 with: [Combine] with a divisor,
+   [Weaken], [Model_row], and [Term (coeff, t)] recursing into another justification --
+   an explanation taking explanations as arguments. This type does not double as the
+   reason: no propagator projects an [Explanation.t] to get the bound facts a trace line
+   negates, and [Store.entry] carries no second, closure-valued reason channel beside it
+   (M2-T8 removed it). The one function that looks across the two halves is [owners],
+   which exists so that they can be CHECKED against each other instead of kept in
    agreement by a comment.
 
-   Do not add a constructor without a decision record -- D-0026 authorises the split, not
-   a new constructor -- and when one is added, extend [force], [lits] and [to_string]
+   Do not add a constructor without a decision record (D-0026 authorises the split, not
+   a new constructor), and when one is added, extend [force], [lits] and [to_string]
    rather than adding a catch-all case: the exhaustiveness warning is what will find
    every site that needs updating.
 
+   The sections below take the constructors in the order a reader meets them:
+     [Model_row], [Combine] and its summands [Term] and [Weaken]: the derivation of a
+       bound (D-0013);
+     [Decision]: an assumption of the search, never citable;
+     [Defining]: the summand that cites the line establishing a literal;
+     [Linear_term]: a term of a linear row as the snapshot it read, rendered for the
+       order or the bits encoding;
+     [Resolve]: resolution on a choice encoding's selectors in one `pol`;
+     [Deferred]: computed only when asked;
+   then the two memory rules: a written thunk releases its tree, and a row's citation is
+   one shared block. [Clause], [Linear] and [Cut] are the first constructors, kept for
+   their single-row uses; their comments in the type say what each renders to.
+
    -------------------------------------------------------------------------------
-   M8-bits-encoding-T2 / docs/DECISIONS.md D-0132: [Linear_term], ONE summand for a
-   term of a linear row, carrying the term's SNAPSHOT rather than its rendering
+   [Model_row], [Combine], [Weaken]: the derivation of a bound (D-0013, M1-T12)
    -------------------------------------------------------------------------------
 
-   D-0132 section 2.4 is this constructor's decision record (D-0130 section 8 designed a
-   [Weaken_declared] for the declared and assumed cases only; this is that constructor
-   grown to cover the cited case too, and the reason is stated there). What a term of
-   [Linear]'s row contributes to the D-0013 derivation was, until T2, decided by [Linear]
-   at construction: a [Weaken] of the full declared-range axiom chain when the bound it
-   read was the declared one or rested on a decision, one [Term] per cited explanation
-   otherwise. Both renderings spell the ORDER encoding -- the chain is Theta(w) literals
-   named `x_ge_v`, and a [Term] expects the cited line to be D-0013's full-range row --
-   and a variable on the BITS encoding has neither: no `x_ge_v` in the .opb, and a cited
-   line that is a clause over atoms. So a term is now carried as what [Linear] READ --
-   its coefficient, its name, its declared bounds, the bound value at the snapshot and
-   the explanations that bound rests on -- and the TWO renderings live in
-   lib/core/justify.ml: the order arm renders a [Linear_term] exactly as it rendered the
-   [Weaken]/[Term] it replaces (the `pol` text at `--bits-above none` is byte-identical,
-   the determinism gate holds it), and the bits arm cites the term's bridge
-   ([Encoding.ensure_atom]) or bound line ([Encoding.bound_lines]) once, whatever the
-   width. The substrate contract of D-0130 section 3.1 holds as a type: no field here
-   names a representation, and nothing in lib/core/prop/ can spell a bit.
+   D-0013 verified, against the checker, the actual derivation a bounds conflict at
+   the root needs: weaken every *other* variable out of the model row with literal
+   axioms (sound per D-0009 -- an axiom can never assert a bound, but it *can* weaken
+   one away), or, where that variable sits at a bound some earlier step already
+   derived, cite that derivation's id instead; then divide by the pushed variable's
+   own coefficient. [Linear] and [Cut] cannot say this (nor could [Trivial], deleted
+   since, see the next section):
+
+     - [Linear] carries literals but no constraint id, so it cannot cite "the id that
+       already established this bound" (D-0009).
+     - [Cut] has two multipliers and no divisor, so it cannot express the division,
+       which the first records on bound facts (D-0010, D-0011) had left out.
+     - Nothing distinguishes "still at the declared bound, weaken it away" from
+       "sitting at a bound some earlier step derived, cite that id" -- D-0013's whole
+       point is that these are different operations with a different source.
+
+   [Combine (summands, divisor)] is one [pol] step: every summand added, then (unless
+   [divisor = 1]) divided. A [summand] is either [Term (c, e)] -- recursively emit
+   [e], the way [Cut] already does, and cite its id scaled by [c] -- or [Weaken lits]
+   -- a sum of individually-scaled *literal axioms*, which cancel a term whose
+   variable is still sitting at its declared bound. [Weaken] is not a [t]: it is not
+   a value anyone can point at and say "this holds", only a piece of arithmetic valid
+   solely inside a [Combine]'s sum, which is exactly the D-0009 distinction made
+   structural instead of a convention someone has to remember.
+
+   [Model_row id] names a row explicitly because a [Combine] can cite an explanation
+   another propagator *instance* built. The deleted [Trivial] meant "whatever
+   [ctx.model_id] currently points at", a single ambient pointer good for exactly one row
+   at a time, and D-0011 (one propagator instance, one model row) had already found that
+   two instances justify against two different rows. A [Combine] can legitimately hold, in
+   one tree, an explanation this instance built (whose own base is its own row) *and* a
+   cited explanation another instance built earlier (whose base is *that* instance's row)
+   -- two different rows, resolved simultaneously, which one mutable ambient pointer
+   cannot do. [Model_row id] names the row explicitly and renders to [id] directly, no
+   lookup, so each instance's own base survives being embedded inside someone else's
+   derivation.
+
+   -------------------------------------------------------------------------------
+   [Decision], and why there is no [Trivial] (M1-T31, M1-T50, D-0037)
+   -------------------------------------------------------------------------------
+
+   [Decision lit] is the order literal the search assumed: an assumption, not a
+   consequence of any row. Two consequences follow, and both are the point:
+
+   - **It has no constraint id, and never will.** Nothing in the proof establishes a
+     decision. D-0009 is why: a [pol] cannot assert a literal (a bare literal in one
+     is the trivial axiom [lit >= 0]) and a [rup] cannot derive one that is not a
+     consequence. The decisions enter the proof in exactly one place, negated, in the
+     branch's nogood -- D-0018 and lib/core/trace.ml's header say so already. A
+     [Decision] is therefore not citable, and [term]/[cut] below refuse to build a
+     summand out of one rather than leaving [Justify] to discover it.
+   - **It is not silent.** Its [lits] is [[lit]], so a reason set that rests on a
+     decision names it. A reason that named nothing there would make a learned clause
+     unsound (D-0035).
+
+   [Justify.ctx] has no [model_id] field at all: the ambient row is not "discouraged", it
+   is unrepresentable. Every row a derivation names, it names with [Model_row].
+
+   History in one paragraph: until M1-T31 and M1-T50 a constructor [Trivial] meant "the
+   model constraint itself justifies this", with two producers, [Linear.make] without a
+   [row_id] (now impossible, [~row_id] is required) and search.ml's two decision pushes.
+   For a decision that sentence is false, and calling it [Trivial] let [Justify.emit]
+   answer [ctx.model_id ()] and emit `pol <own row> <own row> +`, a proof step that did
+   not say what the explanation said (M1-T50). [Trivial]'s [lits] was [[]], the silent
+   omission above. D-0037 deleted it.
+
+   -------------------------------------------------------------------------------
+   [Defining], and why it is a SUMMAND (D-0009, M4-T7)
+   -------------------------------------------------------------------------------
+
+   D-0009's sentence is "a bound fact in a [pol] needs a constraint id, not a literal",
+   and until M4-T7 this type could say only the first half of it. [Weaken lits] puts a
+   bare literal into a [pol] as the TRIVIAL AXIOM [l >= 0] -- which asserts nothing and,
+   arithmetically, cancels the term at the cost of one unit of degree per copy.
+   [Defining (c, l)] is the other half: [c] copies of the id of the line that
+   ESTABLISHES [l], which cancels the same term and KEEPS the degree. The two are the
+   same shape of arithmetic with the two different sources D-0013 says are different
+   operations, and they now sit next to each other instead of one of them being a gap.
+
+   It is a [summand] and not a [t], for exactly the reason [Weaken] is: it is a piece of
+   arithmetic valid only inside a [Combine]'s sum, not a value anyone can point at and
+   say "this holds". Nobody may [emit] it on its own, no [Cut] may take it as an
+   operand, and conflict analysis never has to decide what a bare one means.
+
+   THE LINE IT CITES IS ALWAYS A UNIT, by construction: [Justify] resolves it through
+   [defining_lit], which is [defining_line] on the one-literal clause, and states [l]
+   outright as a unit if no line has. That is what makes it sound to cancel with, and it
+   is also the whole difference from the [Explanation.clause [lit]] stand-in M4-T1 used,
+   whose cost D-0061 recorded. A [Clause] summand may cite a clause of any width, whose
+   cancellation does NOT behave, which is why lib/core/search.ml's [rests_on_a_clause]
+   conservatively refuses to let a root conflict rest on one; a [Defining] cites a unit,
+   the cancellation is exact, and the row really does come out contradicting. The stand-in
+   was the right arithmetic wearing the wrong label, and the label is what the search
+   reads.
+
+   WHO MAY BUILD ONE. A caller must know that [l] is a consequence of the MODEL, not of
+   a decision -- a unit line for a decision-established bound would be a false claim and
+   the checker would refuse it (rightly). lib/core/prop/alldiff.ml's test is the level at
+   which the bound was established ([Store.lo_support] / [Store.level_of_index]), not the
+   level the solver is at now, which is the difference between "sound only at level 0"
+   and "sound for anything the root fixpoint established, at any level".
+
+   -------------------------------------------------------------------------------
+   [Linear_term]: ONE summand for a term of a linear row, carrying the term's SNAPSHOT
+   rather than its rendering (D-0132, M8-bits-encoding-T2)
+   -------------------------------------------------------------------------------
+
+   A term of a linear row reaches the derivation as what [Linear] READ -- its coefficient,
+   its name, its declared bounds, the bound value at the snapshot and the explanations
+   that bound rests on -- and lib/core/justify.ml renders it for whichever encoding the
+   variable is on. D-0132 section 2.4 is this constructor's decision record (it grew
+   D-0130 section 8's [Weaken_declared], designed for the declared and assumed cases
+   only, to cover the cited case too).
+
+   Why a snapshot and not a rendering: what a term contributes to the D-0013 derivation
+   was, until M8-bits-encoding-T2, decided by [Linear] at construction: a [Weaken] of the
+   full declared-range axiom chain when the bound it read was the declared one or rested
+   on a decision, one [Term] per cited explanation otherwise. Both renderings spell the
+   ORDER encoding -- the chain is Theta(w) literals named `x_ge_v`, and a [Term] expects
+   the cited line to be D-0013's full-range row -- and a variable on the BITS encoding has
+   neither: no `x_ge_v` in the .opb, and a cited line that is a clause over atoms. So a
+   term is now carried as what [Linear] READ -- its coefficient, its name, its declared
+   bounds, the bound value at the snapshot and the explanations that bound rests on -- and
+   the TWO renderings live in lib/core/justify.ml: the order arm renders a [Linear_term]
+   exactly as it rendered the [Weaken]/[Term] it replaces (the `pol` text at `--bits-above
+   none` is byte-identical, the determinism gate holds it), and the bits arm cites the
+   term's bridge ([Encoding.ensure_atom]) or bound line ([Encoding.bound_lines]) once,
+   whatever the width. The substrate contract of D-0130 section 3.1 (no propagator may
+   name a variable's representation) holds as a type: no field here names one, and nothing
+   in lib/core/prop/ can spell a bit.
 
    [Weaken], [Term] and [Defining] stay, with their other producers: the enumerating
    families (alldiff, gcc, element, cumulative), which are order-only by D-0130
    section 3.4, and [Pb_analysis]'s reductions.
 
    -------------------------------------------------------------------------------
-   M8-bits-encoding-T3 / docs/DECISIONS.md D-0134: [Resolve], the sum of saturated
-   derivations -- resolution on a choice encoding's selectors, in one `pol`
+   [Resolve]: the sum of saturated derivations -- resolution on a choice encoding's
+   selectors, in one `pol` (D-0134, M8-bits-encoding-T3)
    -------------------------------------------------------------------------------
 
-   D-0134 section 2.2 is this constructor's decision record. A family whose order
-   encoding is one clause row per VALUE (maxmin, D-0095) cannot post those rows over a
-   bits variable (its atoms do not exist when the .opb is closed, D-0130 section 3.4),
-   so over bits it posts one big-M SELECTOR row per operand and a clause over the
-   selectors, and a pruning that was one row restated becomes a derivation: each
+   A family whose order encoding is one clause row per VALUE (maxmin, D-0095) cannot post
+   those rows over a bits variable (its atoms do not exist when the .opb is closed, D-0130
+   section 3.4), so over bits it posts one big-M SELECTOR row per operand and a clause
+   over the selectors, and a pruning that was one row restated becomes a derivation: each
    selector row plus the bounds it reads, saturated to a clause on its selector, the
-   clauses summed with the selector clause, saturated. [Resolve] is that shape as data:
-   a list of derivations to saturate and sum. It is the first constructor whose parts'
+   clauses summed with the selector clause, saturated. [Resolve] is that shape as data: a
+   list of derivations to saturate and sum. It is the first constructor whose parts'
    [Linear_term]s include the CLAIM variable, carrying the negation of the claim as the
    bound assumed, because the claim is cancelled inside every part and not left over as
    the one term a [Combine] divides and then closes with the pruned variable's atom.
+   D-0134 section 2.2 is this constructor's decision record.
+
+   -------------------------------------------------------------------------------
+   [Deferred]: computed only when asked
+   -------------------------------------------------------------------------------
 
    [Deferred] exists because most prunings are never asked for a reason. Computing a full
    explanation eagerly for every pruning is the standard way to make a proof-logging
@@ -75,17 +200,18 @@
    reason can be demanded more than once during conflict analysis.
 
    -------------------------------------------------------------------------------
-   M11-complexity-T13 / docs/DECISIONS.md D-0168: releasing a written thunk
+   Releasing a written thunk (D-0168, M11-complexity-T13)
    -------------------------------------------------------------------------------
 
-   D-0166 section 5 option B, decided by D-0167 item 6. Once [Justify.emit] has written a
-   thunk's derivation, the thunk records the line ([line]: the id, the level, and what
-   [Justify] needs to tell whether the line is still on the page) and drops its tree
-   (until M11-complexity-T15 the memo cells that emission made for nodes the closure
-   BUILT were taken out with it; since T15 every node carries its own line). Until
-   then the tree stayed reachable from [forced], from the closure [force] put in place of
-   the original, and from the memo's keys, for as long as the trail entry stood: 1.16 GB
-   of all_different derivations on 2011_black-hole_9 at node 40 (D-0166 section 4).
+   Once [Justify.emit] has written a thunk's derivation, the thunk records the line
+   ([line]: the id, the level, and what [Justify] needs to tell whether the line is still
+   on the page) and drops its tree (until M11-complexity-T15 the memo cells that emission
+   made for nodes the closure BUILT were taken out with it; since T15 every node carries
+   its own line). Until then the tree stayed reachable from [forced], from the closure
+   [force] put in place of the original, and from the memo's keys, for as long as the
+   trail entry stood: 1.16 GB of all_different derivations on 2011_black-hole_9 at node 40
+   (D-0166 section 4). The release is D-0166 section 5's option B, chosen by D-0167 item
+   6.
 
    Why every proof byte is the same, reader by reader:
 
@@ -117,8 +243,8 @@
    bookkeeping, since the node is the same value for every derivation that holds it.
 
    -------------------------------------------------------------------------------
-   M21-memory-T3 / docs/DECISIONS.md D-0223: a row's citation is shared, and what keeps
-   a written tree alive
+   A row's citation is shared, and what keeps a written tree alive (D-0223,
+   M21-memory-T3)
    -------------------------------------------------------------------------------
 
    [model_row id] and [term 1 (model_row id)] return ONE block per id for the ids the
@@ -134,114 +260,7 @@
    keeps the inner thunk for the life of the trail entry. Not memoising the inner thunk
    frees it, but a released wrapper is written again after a wipe, and the tree rebuilt
    then finds lines the kept one did not: fewer `pol` lines, other bytes, and the
-   closure's cost again. D-0223 measures that rule and leaves it to the user.
-
-   -------------------------------------------------------------------------------
-   M1-T12 / docs/DECISIONS.md D-0013: [Model_row], [Combine], [Weaken]
-   -------------------------------------------------------------------------------
-
-   D-0013 verified, against the checker, the actual derivation a bounds conflict at
-   the root needs: weaken every *other* variable out of the model row with literal
-   axioms (sound per D-0009 -- an axiom can never assert a bound, but it *can* weaken
-   one away), or, where that variable sits at a bound some earlier step already
-   derived, cite that derivation's id instead; then divide by the pushed variable's
-   own coefficient. [Trivial]/[Linear]/[Cut] cannot say this:
-
-     - [Linear] carries literals but no constraint id, so it cannot cite "the id that
-       already established this bound" (D-0009).
-     - [Cut] has two multipliers and no divisor, so it cannot express the division
-       D-0010/D-0011 left out.
-     - Nothing distinguishes "still at the declared bound, weaken it away" from
-       "sitting at a bound some earlier step derived, cite that id" -- D-0013's whole
-       point is that these are different operations with a different source.
-
-   [Combine (summands, divisor)] is one [pol] step: every summand added, then (unless
-   [divisor = 1]) divided. A [summand] is either [Term (c, e)] -- recursively emit
-   [e], the way [Cut] already does, and cite its id scaled by [c] -- or [Weaken lits]
-   -- a sum of individually-scaled *literal axioms*, which cancel a term whose
-   variable is still sitting at its declared bound. [Weaken] is not a [t]: it is not
-   a value anyone can point at and say "this holds", only a piece of arithmetic valid
-   solely inside a [Combine]'s sum, which is exactly the D-0009 distinction made
-   structural instead of a convention someone has to remember.
-
-   [Model_row] exists because [Trivial] was not enough once a [Combine] cites an
-   explanation another propagator *instance* built: [Trivial] meant "whatever
-   [ctx.model_id] currently points at" (lib/core/justify.ml), a single ambient
-   pointer good for exactly one row at a time. D-0011 already found this: two
-   propagator instances justify against two different rows, and nothing on the trail
-   says which one produced a given pruning. A [Combine] can legitimately hold, in one
-   tree, an explanation this instance built (whose own base is its own row) *and* a
-   cited explanation another instance built earlier (whose base is *that* instance's
-   row) -- two different rows, resolved simultaneously, which one mutable ambient
-   pointer cannot do. [Model_row id] names the row explicitly and renders to [id]
-   directly, no lookup, so each instance's own base survives being embedded inside
-   someone else's derivation.
-
-   -------------------------------------------------------------------------------
-   M1-T31 / M1-T50: [Trivial] is gone, and [Decision] is not its replacement
-   -------------------------------------------------------------------------------
-
-   [Trivial] had exactly two producers left: [Linear.make] without a [row_id], and
-   search.ml's two decision pushes. The first is now impossible ([~row_id] is
-   required), and the second was never what [Trivial] said. "The model constraint
-   itself justifies this" is *false* of a decision: a decision is an assumption the
-   search made, not a consequence of any row. Calling it [Trivial] is what let
-   [Justify.emit] answer [ctx.model_id ()] and emit `pol <own row> <own row> +` --
-   M1-T50, a proof step that does not say what the explanation says.
-
-   So the constructor now carries what a decision actually is: [Decision lit], the
-   order literal the search assumed. Two consequences follow, and both are the point:
-
-   - **It has no constraint id, and never will.** Nothing in the proof establishes a
-     decision. D-0009 is why: a [pol] cannot assert a literal (a bare literal in one
-     is the trivial axiom [lit >= 0]) and a [rup] cannot derive one that is not a
-     consequence. The decisions enter the proof in exactly one place, negated, in the
-     branch's nogood -- D-0018 and lib/core/trace.ml's header say so already. A
-     [Decision] is therefore not citable, and [term]/[cut] below refuse to build a
-     summand out of one rather than leaving [Justify] to discover it.
-   - **It is not silent.** [Trivial]'s [lits] was [[]], so a reason set that rested on
-     a decision named nothing at all -- the omission D-0035 says becomes unsoundness
-     once M2-T3 builds learned clauses from it. [Decision lit]'s [lits] is [[lit]].
-
-   With [Trivial] gone, [Justify.ctx] has no [model_id] field at all: the ambient row
-   is not "discouraged", it is unrepresentable. Every row a derivation names, it names
-   with [Model_row].
-
-   -------------------------------------------------------------------------------
-   M4-T7 / docs/DECISIONS.md D-0009: [Defining], and why it is a SUMMAND
-   -------------------------------------------------------------------------------
-
-   D-0009's sentence is "a bound fact in a [pol] needs a constraint id, not a literal",
-   and until now this type could say only the first half of it. [Weaken lits] puts a
-   bare literal into a [pol] as the TRIVIAL AXIOM [l >= 0] -- which asserts nothing and,
-   arithmetically, cancels the term at the cost of one unit of degree per copy.
-   [Defining (c, l)] is the other half: [c] copies of the id of the line that
-   ESTABLISHES [l], which cancels the same term and KEEPS the degree. The two are the
-   same shape of arithmetic with the two different sources D-0013 says are different
-   operations, and they now sit next to each other instead of one of them being a gap.
-
-   It is a [summand] and not a [t], for exactly the reason [Weaken] is: it is a piece of
-   arithmetic valid only inside a [Combine]'s sum, not a value anyone can point at and
-   say "this holds". Nobody may [emit] it on its own, no [Cut] may take it as an
-   operand, and conflict analysis never has to decide what a bare one means.
-
-   THE LINE IT CITES IS ALWAYS A UNIT, by construction: [Justify] resolves it through
-   [defining_lit], which is [defining_line] on the one-literal clause, and states [l]
-   outright as a unit if no line has. That is what makes it sound to cancel with, and it
-   is also the whole difference from the [Explanation.clause [lit]] stand-in M4-T1 used
-   (D-0061). A [Clause] summand may cite a clause of any width, whose cancellation does
-   NOT behave, which is why lib/core/search.ml's [rests_on_a_clause] conservatively
-   refuses to let a root conflict rest on one; a [Defining] cites a unit, the
-   cancellation is exact, and the row really does come out contradicting. The stand-in
-   was the right arithmetic wearing the wrong label, and the label is what the search
-   reads.
-
-   WHO MAY BUILD ONE. A caller must know that [l] is a consequence of the MODEL, not of
-   a decision -- a unit line for a decision-established bound would be a false claim and
-   the checker would refuse it (rightly). lib/core/prop/alldiff.ml's test is the level at
-   which the bound was established ([Store.lo_support] / [Store.level_of_index]), not the
-   level the solver is at now, which is the difference between "sound only at level 0"
-   and "sound for anything the root fixpoint established, at any level". *)
+   closure's cost again. D-0223 measures that rule and leaves it to the user. *)
 
 module Lit = Baguette_proof.Lit
 
@@ -286,11 +305,11 @@ type t =
 
    M11-complexity-T15 (the DAG spike): the five constructors a line is written for
    ([Clause], [Linear], [Cut], [Combine], [Resolve]) carry that line ([line]: [No_line]
-   until [Justify] writes one, the same record a thunk keeps) and an identity [hid] (0
-   unless BAGUETTE_HASHCONS=1, see "hash-consing" below). The memo that was a table in
-   [Justify] keyed by physical identity is this field: a node remembers its own line, so
-   a lookup is a field read and nothing outside the node holds it. Build them through
-   the smart constructors; a pattern reads the fields it needs and ends in [_]. *)
+   until [Justify] writes one, the same record a thunk keeps) and an identity [hid] (its
+   content hash; 0 under BAGUETTE_HASHCONS=0, see "hash-consing" below). The memo that was
+   a table in [Justify] keyed by physical identity is this field: a node remembers its own
+   line, so a lookup is a field read and nothing outside the node holds it. Build them
+   through the smart constructors; a pattern reads the fields it needs and ends in [_]. *)
 
 and summand =
   | Term of int * t
@@ -354,20 +373,21 @@ and line = No_line | Line of { cid : int; level : int; epoch : int; owner : int 
 
 type expl = t
 
-(* ------------------------------------------------------ hash-consing (T15)
+(* ------------------------------------------------------ hash-consing
 
-   M11-complexity-T15, D-0172 (D-0140 J1). Every node a line can be written for is
-   HASH-CONSED when it is built: a node whose content equals a node whose line is on the
-   page IS that node, so an identical derivation built twice is one value, its line is
-   written once and every later build cites it ([Justify.memoized]). It replaces D-0158's
-   share mode, which found the same lines by rendering every miss: here the identical node
-   is found at its build and its emission is one field read. The key is SHALLOW: the
-   constructor, its integers and literals, and every operand by its own identity ([hid]
-   for a node, [tid] for a thunk, the id for a [Model_row]), which is sound because the
-   operands are themselves hash-consed, so two equal operands are one value. The table
-   holds the written nodes only (see [table]).
+   Every node a line can be written for is HASH-CONSED when it is built: a node whose
+   content equals a node whose line is on the page IS that node, so an identical
+   derivation built twice is one value, its line is written once and every later build
+   cites it ([Justify.memoized]). It replaces D-0158's share mode, which found the same
+   lines by rendering every miss: here the identical node is found at its build and its
+   emission is one field read. The key is SHALLOW: the constructor, its integers and
+   literals, and every operand by its own identity ([hid] for a node, [tid] for a thunk,
+   the id for a [Model_row]), which is sound because the operands are themselves
+   hash-consed, so two equal operands are one value. The table holds the written nodes
+   only (see [table]). This is D-0172 (M11-complexity-T15), which built item J1 of the
+   complexity inventory, D-0140.
 
-   M16-file-review-T4 (D-0192): a node's [hid] is its content hash, computed once at its
+   A node's [hid] is its content hash (D-0192, M16-file-review-T4), computed once at its
    build, so every later lookup of the node ([hc_written], [hc_wipe]) hashes it in one
    read; equality still compares the operands by identity. The table and its two walks
    are written out ([Hc], [summands_hash], [same_summands]) rather than built from
@@ -542,10 +562,10 @@ let hc_hash e =
    only writer is [hc_enter], which replaces), doubled when it holds twice as many nodes
    as buckets, as [Hashtbl] does. It is never iterated, so its layout reaches no byte. *)
 module Hc = struct
-  (* [epoch] counts the times a node LEFT the table (D-0216): a wipe that took one out, a
+  (* [epoch] counts the times a node LEFT the table: a wipe that took one out, a
      twin that replaced it, a reset. Adding a node displaces no node of another content,
      so a node seen in the table at an epoch is still there while the epoch has not
-     moved ([reuse_epoch], [rebuilds_to]). *)
+     moved ([reuse_epoch], [rebuilds_to], "reusing a build" below, D-0216). *)
   type tbl = { mutable buckets : t list array; mutable size : int; mutable epoch : int }
 
   let create n = { buckets = Array.make n []; size = 0; epoch = 0 }
@@ -723,23 +743,26 @@ let built e =
     e)
   else e
 
-(* ------------------------------------------------- reusing a build (D-0216)
+(* ------------------------------------------------- reusing a build
 
-   A build that hits the table costs the build: the operands are made, the summand list
-   is allocated and hashed, and the bucket is compared, all to be handed back a node that
-   already exists. Alldiff's Hall derivations are rebuilt per pruning (D-0172 section 1),
-   so most of their builds are hits: on 2011_black-hole_10 under native `table`, the 156
-   removals one 47-variable Hall set licenses rebuild 8.3 M pairwise at-most-one nodes,
-   nearly all of them hits (78 468 `pol` lines are written in all), 55 G instructions at
-   the root. A caller that builds a node as a DETERMINISTIC function of a key (the same
-   leaves, the same operands obtained the same way) may keep the node it got and hand it
-   back instead of building again, when building again would return that very node. That is the case exactly when the node is the table's
-   node of its content and so is every node it cites: [built] then answers each operand's
-   rebuild and the node's own rebuild with those nodes, one level at a time. [rebuilds_to]
-   checks that, SHALLOWLY: the node and its direct operands. The caller supplies the
-   induction below them by having obtained those operands the same way (a reused node, or
-   a build). A thunk or a decision operand answers [false]: it is cited by identity and a
-   rebuild makes a new one.
+   A caller that builds a node as a DETERMINISTIC function of a key may keep the node and
+   hand it back instead of building again, when building again would return that very
+   node; [rebuilds_to] says when. The rule is D-0216's (M11-complexity-T18), and the cost
+   it removes is this. A build that hits the table costs the build: the operands are made,
+   the summand list is allocated and hashed, and the bucket is compared, all to be handed
+   back a node that already exists. Alldiff's Hall derivations are rebuilt per pruning
+   (D-0172 section 1), so most of their builds are hits: on 2011_black-hole_10 under
+   native `table`, the 156 removals one 47-variable Hall set licenses rebuild 8.3 M
+   pairwise at-most-one nodes, nearly all of them hits (78 468 `pol` lines are written in
+   all), 55 G instructions at the root. Building as a deterministic function of a key
+   means the same leaves and the same operands obtained the same way. Building again
+   returns the kept node exactly when the node is the table's node of its content and so
+   is every node it cites: [built] then answers each operand's rebuild and the node's own
+   rebuild with those nodes, one level at a time. [rebuilds_to] checks that, SHALLOWLY:
+   the node and its direct operands. The caller supplies the induction below them by
+   having obtained those operands the same way (a reused node, or a build). A thunk or a
+   decision operand answers [false]: it is cited by identity and a rebuild makes a new
+   one.
 
    [reuse_epoch] is [Hc]'s count of nodes that left the table, or -1 when no build can hit
    (hash-consing off, the table empty, or BAGUETTE_MEMO_STATS, whose counts are of builds):
@@ -1045,13 +1068,13 @@ let same_derivation a b =
 (* Force to a non-deferred head. Nested [Deferred] is allowed: a thunk may return another
    thunk, and memoisation records the fully forced result at each level.
 
-   Until M11-complexity-T13 the closure was replaced, once forced, by one returning the
-   result, so that what it captured became collectable. It is kept now: a RELEASED thunk
-   (one whose line [Justify] has written, [line <> No_line]) holds no tree, and a later
-   read forces it again through the closure, without memoising, so that the tree is
+   The original closure is kept, never replaced by one returning the result: a RELEASED
+   thunk (one whose line [Justify] has written, [line <> No_line]) holds no tree, and a
+   later read forces it again through the closure, without memoising, so that the tree is
    collectable again as soon as that reader is done with it. The closure is the snapshot
-   I-X6 says it closes over, and D-0164 measured what the closures hold on
-   2011_black-hole_9 at node 40: about 15 MB.
+   I-X6 says it closes over (a thunk never reads live domains), and D-0164 measured what
+   the closures hold on 2011_black-hole_9 at node 40: about 15 MB. (Until
+   M11-complexity-T13 the closure was replaced once forced, to free what it captured.)
 
    Under BAGUETTE_DEBUG a released thunk keeps its original tree ([release]), and every
    forcing again is compared with it ([same_derivation]): the measurement of the claim
@@ -1180,9 +1203,9 @@ let owners e =
    term whose variable is still where it was, so a [Weaken] summand is the derivation
    saying "I read this variable and chose not to cite anything for it". Such a variable
    must therefore appear in the reason -- if it does not, the trace line claims its bound
-   over a shorter tail than the pruning actually rested on, which is the I-P5 failure
-   [int_ne] shipped between M1-T9 and M1-T17 and the one M1-T50 found on the decision
-   path.
+   over a shorter tail than the pruning actually rested on: a factless trace line, the
+   I-P5 failure (every bound move carries the facts its trace line negates) that [int_ne]
+   shipped between M1-T9 and M1-T17 and that M1-T50 found on the decision path.
 
    TOP LEVEL ONLY, and that is not a shortcut. Recursing through a [Term] would descend
    into an explanation *another propagator instance* built, whose own [Weaken] summands

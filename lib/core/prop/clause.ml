@@ -7,199 +7,220 @@
    lib/flatzinc/compile.ml's decomposition, `array_bool_or`, `array_bool_and`, `bool_eq`
    and `bool_not`. The submodules at the bottom are that same propagator under the name
    of the builtin an instance came from, exactly as [Ne.Int_ne] is [Ne] under another
-   name -- an instance reports the builtin the model actually wrote, which is what a
-   trace or a failure message has to say to be worth reading.
+   name, so that an instance reports the builtin the model actually wrote, which is what
+   a trace or a failure message has to say to be worth reading. [Learned_clause] is the
+   face a learned clause is registered under.
+
+   Consistency level: BOUNDS ([consistency] below) for a clause over general order
+   literals, DOMAIN ([bool_consistency]) for the Boolean faces, whose [make] admits only
+   [0, 1] variables (section "Consistency level" below). Governed by docs/SPEC.md 3.2
+   (consistency levels) and 3.3 (explanations). Proof shape: every pruning and every
+   conflict is one `rup` whose clause is the constraint itself, RUP in one step against
+   the row that states it. The family is [Single_row] in the I-X10 classification table
+   of test/unit/test_trace.ml (a pruning that follows from one model constraint, whose
+   trace line is RUP with nothing derived ahead of it).
+
+   The propagation itself is lib/core/prop/pb.ml's: a clause is a PB row with every
+   coefficient 1 and degree 1, and [t] is [Pb.t] (see "There is ONE implementation"
+   below the header).
 
    ---------------------------------------------------------------------------
-   M2-L12 / D-0052: this is a WIDENING, and the widening is why the file moved
+   A WIDENING of bool_clause (D-0052)
    ---------------------------------------------------------------------------
 
    D-0052 decided that a clause over order literals is a widening of `bool_clause` and
    not a new propagator family, and the decision rests on three checkable facts:
    [Explanation.Clause] is already [Lit.t list] rather than a list of Booleans,
    [Justify.validate_lits] checks only that a literal's owner is a declared variable, and
-   every Boolean-specific site in this file was a CONSTANT SUBSTITUTION -- the threshold
-   1 -- rather than a structural assumption. [Lit.bool_true] / [Lit.bool_false] are
-   literally [Lit.ge x 1] / [Lit.le x 0].
+   every Boolean-specific site in this file was a CONSTANT SUBSTITUTION (the threshold 1)
+   rather than a structural assumption. [Lit.bool_true] / [Lit.bool_false] are literally
+   [Lit.ge x 1] / [Lit.le x 0].
 
-   So the threshold [k] is now a field of [lit] instead of the constant 1, [status],
-   [assign] and [falsity_fact] read it, and everything else is unchanged. M2-L12 needs
-   this because a 1UIP learned clause over integer variables is exactly such a clause and
-   nothing propagated it (lib/core/learn.ml's header: the backjump "would re-reach the
-   same fixpoint, re-take the same decision and re-derive the same conflict").
+   So the threshold [k] is a field of each literal ([Pb.atom]) instead of the constant 1.
+   The widening exists because a 1UIP learned clause over integer variables is exactly
+   such a clause, and before it nothing propagated one (lib/core/learn.ml's header: the
+   backjump "would re-reach the same fixpoint, re-take the same decision and re-derive
+   the same conflict"). It was built by M2-L12.
 
-   WHAT D-0052 EXPLICITLY REFUSED, and this module honours both:
+   ONE IMPLEMENTATION. The faces below share [t], [make], [vars] and [propagate] outright,
+   so there is no second propagation loop to keep in step. D-0052 refused one, and this
+   holds.
 
-     - **no watched literals.** [survey] below is still a full walk with early exit. No
-       propagator in lib/core/prop/ has a single [mutable] field, and watch pointers
-       would be the first search-dependent mutable propagator state outside [Store]'s
-       undo trail. Max observed learned-clause width on this suite is 4 (M2-L12 step 0,
-       measured: 72 clauses of width 1, 5 of width 2, 8 of width 3, 3 of width 4).
-     - **no second implementation.** The submodules below share [t], [make], [vars] and
-       [propagate] outright, which is what the pre-M2-L12 version of this comment
-       already refused to give up for [Array_bool_or].
+   WATCHED LITERALS, on the learned face only. A model clause keeps no state between
+   runs: a run is [Pb.propagate], whose degree-1 shortcut [Pb.quiet] walks to the second
+   non-false literal. A LEARNED clause carries two watched literals in [Learned_clause]
+   and answers the engine's advisor question from them (lib/core/propagator.ml's
+   [inst_advise] and [inst_watched]); I-P7 admits that state, because an advisor may
+   drop a wake only when a run then would change nothing. D-0052 had refused watched
+   literals, because no propagator then had a [mutable] field and learned clauses were
+   narrow (M2-L12 step 0 measured 72 clauses of width 1, 5 of width 2, 8 of width 3 and 3
+   of width 4 on the suite). M6-T20 (D-0104) added them once learned clauses were
+   measured to be where the propagator runs went, and M6-T22 (D-0138) made the engine
+   ask only the clauses watching the moved variable.
 
    ---------------------------------------------------------------------------
    Consistency level: BOUNDS here, DOMAIN in the [Bool_clause] submodule
    ---------------------------------------------------------------------------
 
-   This is the real cost of the widening and D-0052 names it as the honest
-   counter-argument to its own verdict. The pre-M2-L12 header declared DOMAIN and spent
-   nine lines making the argument: for a clause, unit propagation *is* domain
-   consistency, because **Booleans have no interior**, so every value of every variable
-   has a support while two literals are open.
+   Order literals over integers have an INTERIOR. `x <= 1 \/ x >= 3` over `x in 0..5` is
+   a HOLE at 2, not a tautology. Unit propagation moves bounds; it does not punch the
+   hole. So the declared level here is BOUNDS (docs/SPEC.md 3.2), and SPEC 3.2 makes the
+   declared level the bound on what an explanation may claim. This is the real cost of
+   the widening, and D-0052 names it as the honest counter-argument to its own verdict.
 
-   **Order literals over integers do have an interior.** `x <= 1 \/ x >= 3` over
-   `x in 0..5` is a HOLE at 2, not a tautology. Unit propagation moves bounds; it does
-   not punch the hole. So the declared level here is BOUNDS (docs/SPEC.md 3.2), and
-   SPEC 3.2 makes the declared level the bound on what an explanation may claim.
+   Chasing the hole would need [Store.remove], and a reason that mentions a hole is the
+   case that forces the direct encoding (a hole cannot be negated into a clause without a
+   literal for `x = v`; D-0019 point 3, which otherwise keeps disequalities on the order
+   encoding). D-0052 decided that the clause row does not chase it, and this module does
+   not.
 
-   Chasing the hole would need [Store.remove_with_facts], of which I-X10 records [Ne] is
-   the sole caller in lib/, and would trip D-0019 point 3. D-0052 says do not, and this
-   module does not.
-
-   **[Bool_clause] below still declares DOMAIN, and that declaration is still true**:
-   its [make] rejects any variable not declared over [0, 1] (D-0007), a [0, 1] variable
-   has no interior, and the nine-line argument survives verbatim on that restriction.
-   That is the [Ne] / [Ne.Int_ne] pattern this file already used -- one implementation,
-   two honest declarations, the narrower one earned by a checked precondition.
+   [Bool_clause] below still declares DOMAIN, and that declaration is true. Its [make]
+   rejects any variable not declared over [0, 1] (a `var bool` is the order encoding on
+   [0, 1], D-0007), a [0, 1] variable has no interior, and for a clause over such
+   variables unit propagation IS domain consistency: while two literals are open every
+   value of every variable has a support. That is the [Ne] / [Ne.Int_ne] pattern, one
+   implementation and two honest declarations, the narrower one earned by a checked
+   precondition.
 
    ---------------------------------------------------------------------------
    The opposite-direction pair: a HOLE, not a tautology
    ---------------------------------------------------------------------------
 
    [make] drops exact duplicate literals but leaves a variable occurring at both
-   polarities alone. That is unchanged, and the CODE was already right; the RATIONALE
-   was wrong for order literals and is rewritten here rather than left to mislead.
+   polarities alone, and the ordinary path is right for it without a special case. For
+   `b \/ ~b` the clause is a tautology and never fires. For `x >= 3 \/ x <= 1` it is not
+   one, in two ways:
 
-   The old text said such a clause "is a tautology, the propagator correctly never
-   fires". For `b \/ ~b` that is true. For `x >= 3 \/ x <= 1` it is false twice over, and
-   the ordinary path gets both cases right without a special case:
-
-     - `x` narrowed to [2, 2]: both literals are [Unsat_lit], the survey returns
-       [Units []], and the propagator CONFLICTS. A tautology assumption would have
-       missed a real violation.
-     - `x` narrowed to [2, 5]: `x <= 1` is [Unsat_lit] and `x >= 3` is [Open], so the
-       survey returns that one literal and the propagator moves `lo` to 3 -- a pruning no
-       tautology ever licenses.
+     - `x` narrowed to [2, 2]: both literals are false ([Pb.Unsat_lit]), the slack is
+       negative, and the propagator CONFLICTS. A tautology assumption would have missed a
+       real violation.
+     - `x` narrowed to [2, 5]: `x <= 1` is false and `x >= 3` is [Pb.Open], so that one
+       literal is forced and the propagator moves `lo` to 3, a pruning no tautology ever
+       licenses.
 
    D-0052 measured that at least 9 learned clauses of width >= 3 carry such a pair, so it
    is real traffic rather than an edge case. [Learn.minimise]'s [slot] keys on
    (variable, polarity), so opposite-direction pairs survive minimisation by design.
+   (An older version of this header called such a clause a tautology; the code was
+   already right.)
 
    ---------------------------------------------------------------------------
-   Shape and the two structural differences from [Linear]
+   Shape, and the two structural differences from [Linear]
    ---------------------------------------------------------------------------
 
-   This follows lib/core/prop/linear.ml, the reference propagator -- one pass,
-   [consistency] declared, the explanation built from data frozen at [make] time. The two
-   structural differences are deliberate and are the same two lib/core/prop/ne.ml makes,
-   for the same reason:
+   This follows lib/core/prop/linear.ml, the reference propagator: one pass, [consistency]
+   declared, the explanation built from data frozen at [make] time. The two structural
+   differences are deliberate and are the same two lib/core/prop/ne.ml makes, for the
+   same reason:
 
-     - it cites no row id, because its justification is a [rup] whose target states its
-       own content in full. D-0011's hazard was [Explanation.Trivial] ("whatever
-       ctx.model_id points at", unresolvable once it is on the trail with no propagator
-       identity attached). **It no longer exists** (M1-T31/M1-T50, D-0037): the ambient
-       row is unrepresentable now, not merely unused. Nothing here ever built [Trivial]
-       or [Model_row], so there is nothing to route and [make] takes no [?row_id]. An
-       unused id parameter would be an invitation to believe it was load-bearing.
+     - It cites no row id, because its justification is a `rup` whose target states its
+       own content in full. Nothing here builds a [Model_row], so [make] takes no
+       [?row_id]; an unused id parameter would be an invitation to believe it was
+       load-bearing. (The hazard D-0011 guarded against, a [Trivial] explanation meaning
+       "whatever row is current", is gone: D-0037 deleted the constructor and made the
+       ambient row unrepresentable.)
 
-     - nothing is [Deferred]. [Linear] and [Ne] defer because their reasons are a
-       function of the *store* at the moment of the pruning, so they must snapshot, and
+     - Nothing is [Deferred]. [Linear] and [Ne] defer because their reasons are a
+       function of the STORE at the moment of the pruning, so they must snapshot, and
        snapshotting is what costs. A clause's reason is the clause: a function of the
        constraint alone, identical for every pruning and every conflict this instance
        will ever report, and therefore computed once in [make] and shared.
-       docs/ARCHITECTURE.md's "lazy where it is expensive" cuts the other way here --
-       there is nothing to be lazy about, and I-X6's snapshot discipline is satisfied
-       vacuously by a value that does not depend on the store at all.
+       docs/ARCHITECTURE.md's "lazy where it is expensive" cuts the other way here, since
+       there is nothing to be lazy about, and I-X6 (an explanation reads a snapshot,
+       never live domains) is satisfied vacuously by a value that does not depend on the
+       store at all.
 
    Sharing the one [Explanation.t] has a second, useful consequence: lib/core/justify.ml
-   memoises on *physical* identity, so every pruning of one clause inside one decision
+   memoises on PHYSICAL identity, so every pruning of one clause inside one decision
    level emits the clause once and cites that id again afterwards.
 
    ---------------------------------------------------------------------------
-   Justification -- one [rup], which is the clause restated
+   Justification: one `rup`, which is the clause restated
    ---------------------------------------------------------------------------
 
-   docs/PROOF-FORMAT.md section 4 nominates [rup] for `bool_clause`, and D-0019 is why
-   that is not a weakness: a `rup` target is a *clause*, and this constraint IS a clause
-   over order-encoding literals. D-0007 fixes the Boolean spelling -- a `var bool` is the
-   order encoding on [0, 1], so "b is true" is [b_ge_1] ([Lit.bool_true]) and "b is
-   false" is [~b_ge_1] ([Lit.bool_false]). There is no second naming scheme and no direct
-   encoding anywhere in this module; by D-0019 point 3's test, none is forced, because no
-   reason here ever has to mention a hole. [of_lits] REFUSES a [Lit.Eq] literal outright
-   for that reason -- see its comment.
+   docs/PROOF-FORMAT.md section 4 nominates `rup` for `bool_clause`, and that is not a
+   weakness: a `rup` target is a CLAUSE, and this constraint IS a clause over
+   order-encoding literals (D-0019: the order encoding suffices while no reason has to
+   mention a hole). D-0007 fixes the Boolean spelling: a `var bool` is the order
+   encoding on [0, 1], so "b is true" is [b_ge_1] ([Lit.bool_true]) and "b is false" is
+   [~b_ge_1] ([Lit.bool_false]). There is no second naming scheme and no direct encoding
+   anywhere in this module, and none is forced, because no reason here ever has to
+   mention a hole. [of_lits] REFUSES a [Lit.Eq] literal outright for that reason (see its
+   comment).
 
-   Every explanation this module builds -- pruning and conflict alike -- is the same
-   clause, namely the constraint itself. For a *conflict* every literal is false and the
-   clause says so. For a *pruning* of the last open literal it is D-0018's trace-line
-   shape read the other way round: the claim (the literal being made true) disjoined with
-   the negation of the facts the propagator read (the other literals, each false). Those
-   are literally the same list, which is not a coincidence -- the reason a literal is
-   forced is that the assignment which falsifies it is the assignment that conflicts.
-   [Ne]'s header records the identical observation about a disequality.
+   Every explanation this module builds, pruning and conflict alike, is the same clause,
+   namely the constraint itself. For a CONFLICT every literal is false and the clause
+   says so. For a PRUNING of the last open literal it is the trace-line shape of D-0018
+   (the claim disjoined with the negation of the facts the propagator read) read the
+   other way round: the claim is the literal being made true, and the facts are the other
+   literals, each false. Those are literally the same list, and that is no coincidence:
+   the reason a literal is forced is that the assignment which falsifies it is the
+   assignment that conflicts. [Ne]'s header records the identical observation about a
+   disequality.
 
    Three properties of that clause, each of which a later change could quietly break:
 
-   1. It is *globally valid*: it is the constraint, not a consequence of the current
+   1. It is GLOBALLY VALID: it is the constraint, not a consequence of the current
       decisions. So it is sound at any proof level and never needs guarding or wiping.
 
-      **M2-L12 qualifies this for a LEARNED instance and the qualification is the whole
-      of step 3.** A clause from a model row is on the page for the whole run. A LEARNED
-      clause is on the page only while lib/core/retention.ml holds it, so a [rup] citing
-      it is RUP only while that constraint is live. Whoever registers a learned instance
-      must [Retention.cite] its id; [Search.register_learned] does, and D-0051's
-      "what would reverse this" section is the other half of the link.
+      For a LEARNED instance this holds only while the constraint is on the page. A
+      clause from a model row is there for the whole run; a LEARNED clause is there only
+      while lib/core/retention.ml holds it (the default policy, [tiered], evicts, D-0226),
+      so a `rup` citing it is RUP only while that constraint is live. Whoever registers a
+      learned instance must cite its id with [Retention]; [Search.register_learned] does
+      ([Retention.cite_lazy]).
 
-   2. It is *reverse unit propagation in one step* against the row that states it -- the
+   2. It is REVERSE UNIT PROPAGATION IN ONE STEP against the row that states it: the
       model row lib/flatzinc/compile.ml posts, or the learned constraint
       [Learned.introduce] put on the page. Negating the target falsifies that row
-      outright, so the checker does no searching at all. This is the one case where
-      PROOF-FORMAT section 2's "prefer pol over rup" costs nothing: the [pol] would be
-      `pol <row>`, a restatement, and D-0009 records what restating a row as a
-      justification did to this project once already.
+      outright, so the checker does no searching at all. docs/PROOF-FORMAT.md section 2a
+      asks for `rup` wherever unit propagation closes a step, and here the alternative
+      `pol` would be `pol <row>`, a restatement of the row, which D-0009 records as a
+      trap this project once fell into.
 
    3. It contains no direct-encoding literal, so it depends on nothing introduced by
-      [red] and leaves nothing for the I-X2 audit to retire.
+      `red` and leaves nothing for the I-X2 audit (every constraint id deleted exactly
+      once) to retire.
 
    The empty clause is a real value here and is handled by no special case. It arises
    when every literal folded away against a constant (`bool_clause([], [])`, or a clause
    all of whose operands are parameters with the wrong truth value), and the propagator
-   conflicts immediately with [Explanation.clause []], which renders as `rup >= 1 ;` and
-   is closed the D-0022/I-X7 way because it rests on a clause. That is the same route
-   `int_ne(x, x)` takes in test/models/ne_self_unsat.fzn.
+   conflicts immediately with [Explanation.clause []], which renders as `rup >= 1 ;`. A
+   conflict that rests on a clause is closed with the empty clause rather than by a
+   numeric contradiction (D-0022; I-X7, what `conclusion UNSAT` cites must be a line the
+   checker established). That is the same route `int_ne(x, x)` takes in
+   test/models/ne_self_unsat.fzn.
 
-   COST (M16-file-review-T2, D-0190). A run is [Pb.quiet]'s walk to the second non-false
-   literal, O(position of that literal), and a pass over the row when it is not quiet. A
-   learned clause's advisor ([Learned_clause.ask]) is asked once per wake of every clause
-   watching the moved variable, so it reads only its own record and the domain: each
-   watch's variable, threshold and polarity are kept there flat by [set_watches], the one
-   writer of [w1] and [w2]. *)
+   COST. A run is [Pb.quiet]'s walk to the second non-false literal, O(position of that
+   literal), and a pass over the row when it is not quiet. A learned clause's advisor
+   ([Learned_clause.ask]) is asked once per wake of every clause watching the moved
+   variable, so it reads only its own record and the domain: each watch's variable,
+   threshold and polarity are kept there flat by [set_watches], the one writer of [w1]
+   and [w2] (the file-by-file review of M16-file-review-T2, D-0190). *)
 
 module Lit = Baguette_proof.Lit
 
 (* ---------------------------------------------------------------------------
-   M2-L13 / D-0054: there is now ONE implementation, and it is [Pb]
+   There is ONE implementation, and it is [Pb] (D-0054)
    ---------------------------------------------------------------------------
 
-   D-0044 fixed the learned object as a PB inequality with the CLAUSE as its degree-1,
-   unit-coefficient case. Until M2-L13 that was a claim about types made in prose; this
-   module now *is* that case. [t] is [Pb.t], [make] and [of_lits] build one with every
-   coefficient 1 and degree 1, and [propagate] is [Pb.propagate] with no wrapper.
+   This module IS the degree-1 case of a learned PB row: [t] is [Pb.t], [make] and
+   [of_lits] build one with every coefficient 1 and degree 1, and [propagate] is
+   [Pb.propagate] with no wrapper. D-0044 fixed the learned object as a PB inequality with
+   the CLAUSE as its degree-1, unit-coefficient case, and D-0054 built the PB row as a
+   propagator, so a clause needs no loop of its own (M2-L13).
 
-   lib/core/prop/pb.ml's header works the four arms of the old [survey] -- [Satisfied],
-   [Two_open], [Units [l]], [Units []] -- out of the slack rule and shows each falls out
-   rather than being special-cased, and its [reason_clause] is where the explanations
-   are shown to coincide: for a degree-1 row the literals a step names are always the
-   WHOLE constraint, in term order, so the [Explanation.t] is the same value -- the
-   shared one, which keeps lib/core/justify.ml's memoisation on physical identity firing
-   exactly as this module's header claims below.
+   lib/core/prop/pb.ml's header derives the four cases a clause has (satisfied, two
+   open, one open and forced, none open and conflicting) from its slack rule, each
+   falling out rather than being special-cased. Its [reason_clause] is where the
+   explanations are shown to coincide: for a degree-1 row the literals a step names are
+   always the WHOLE constraint, in term order, so the [Explanation.t] is the same value,
+   the shared one, which keeps lib/core/justify.ml's memoisation on physical identity
+   firing exactly as the header above says.
 
-   Everything the pre-M2-L13 version of this file said about the SHAPE of a clause is
-   still true and still above; what is gone is the second copy of the propagation loop.
-   The old header already refused "a second implementation to keep in step" for
-   [Array_bool_or]; keeping one for the degree-1 PB row would have been the same refusal
-   ignored. *)
+   What the header says about the SHAPE of a clause is unchanged by this; what went is a
+   second copy of the propagation loop, which would have been "a second implementation
+   to keep in step", the thing this file already refused for [Array_bool_or]. *)
 
 type t = Pb.t
 
@@ -244,8 +265,9 @@ let finish atoms = Pb.of_atoms (dedup atoms)
    [raw] is (variable, polarity) pairs, i.e. the shape lib/flatzinc/compile.ml has.
 
    Reads each variable's domain out of the store, so it must be called before anything
-   has narrowed it -- the same requirement, for the same D-0010 reason, that
-   [Linear.make] and [Ne.make] state. Here it is a check rather than a freeze: a
+   has narrowed it: the same requirement, for the same reason, that [Linear.make] and
+   [Ne.make] state (a bound fact is a chain of order literals from the DECLARED bound,
+   D-0010). Here it is a check rather than a freeze: a
    `bool_clause` literal must be a `var bool`, i.e. the order encoding on [0, 1]
    (D-0007), and [Bool_clause.consistency]'s DOMAIN declaration rests on exactly that.
    lib/flatzinc/compile.ml rejects a non-Boolean argument with a positioned diagnostic
@@ -386,39 +408,46 @@ end
    or an attribution failure says WHICH clause -- a model row's or one this search
    derived -- which is exactly the distinction [Retention]'s citation guard is about. *)
 module Learned_clause = struct
-  (* M6-T20 / D-0104: the clause plus TWO WATCHED LITERALS, the first mutable propagator
-     state in lib/core/prop/ and the one kind I-P7 admits. [w1] and [w2] index [atoms];
-     after a run both are non-false unless the clause was unit or failed, and a widening
-     domain cannot falsify a literal, so backtracking never has to restore them.
+  (* The clause plus TWO WATCHED LITERALS, the one kind of mutable propagator state I-P7
+     admits (an advisor may drop a wake only when a run then would change nothing).
+     [w1] and [w2] are term indices of [pb]. After a run both are non-false unless the
+     clause was unit or failed, and a widening domain cannot falsify a literal, so
+     backtracking never has to restore them. Added by M6-T20 (D-0104).
 
-     M11-complexity-T17 (D-0173): RESTING, with [rest_satisfied]. [rest] is the index of a
-     watched literal found TRUE by a run, or [-1]. THE RULE: a run that finds one of its two
-     watched literals true does nothing, MOVES NEITHER WATCH, and reports that it rests on
-     that literal ([watched] answers [(w, Propagator.rests)]); while it rests its advisor
-     declines every change; the engine indexes it under that literal alone and seeds it
-     again after a backtrack that pops the bound holding the literal up ([Engine.rest_on]);
-     that run finds the literal still true and rests again, or goes back to the two watches
-     it left. WHY IT LOSES NO PRUNING: a clause with a true literal cannot prune or fail
-     whatever else changes, so declining is I-P7 read literally; and the two watches it
-     left are good again once released, because the other watch was non-false or falsified
-     at a level at or above the true one's (the classic argument for MiniSat's satisfied
-     clauses, spelled out at [Engine.rest_on]). WHY: on codes-cp's QR48 every one of the 177
-     learned-clause runs per node was a run of a satisfied clause moving its false watch,
-     and the asks that woke it cost more than the runs (D-0173 section 2). WHAT IT CHANGES:
-     not the fixpoint of any node, but the watch a satisfied clause holds after a backtrack,
-     so a later pruning by it can be woken at another trail entry and land at another place
-     in the propagation order (D-0173 section 3). OFF by default in [make]; [Search] passes
-     its [config.rest_satisfied]. *)
-  (* M16-file-review-T2 (D-0190): each watch's literal is ALSO kept flat in the record, its
-     variable as an int ([x1]/[x2], [-1] for no literal), its threshold and its polarity,
-     because [ask] reads nothing else and is asked once per wake of every clause watching
-     the moved variable (27 % of 2013 rcpsp_11's samples were [ask] itself, a chain of
-     four dependent loads: the record, [atoms], the atom, the domain). They are a COPY of
-     [atoms.(w1)] and [atoms.(w2)], written only by [set_watches], which is the one place
-     [w1] and [w2] are written; a test that places the watches by hand calls it too. *)
+     RESTING, under [rest_satisfied]. [rest] is the index of a watched literal found TRUE
+     by a run, or [-1]. The rule: a run that finds one of its two watched literals true
+     does nothing, MOVES NEITHER WATCH, and reports that it rests on that literal
+     ([watched] answers [(w, Propagator.rests)]). While it rests its advisor declines
+     every change, and the engine indexes it under that literal alone and seeds it again
+     after a backtrack that pops the bound holding the literal up ([Engine.rest_on]). That
+     run finds the literal still true and rests again, or goes back to the two watches it
+     left.
+
+     Why it loses no pruning: a clause with a true literal cannot prune or fail whatever
+     else changes, so declining is I-P7 read literally; and the two watches it left are
+     good again once released, because the other watch was non-false or falsified at a
+     level at or above the true one's (the classic argument for MiniSat's satisfied
+     clauses, spelled out at [Engine.rest_on]). What it changes: not the fixpoint of any
+     node, but the watch a satisfied clause holds after a backtrack, so a later pruning by
+     it can be woken at another trail entry and land at another place in the propagation
+     order (D-0173 section 3). It is OFF by default ([Search.default_config], and [make]'s
+     own default); [Search] passes its [config.rest_satisfied]
+     (BAGUETTE_REST_SATISFIED=on). Measured motive: on codes-cp's QR48 every one of the
+     177 learned-clause runs per node was a run of a satisfied clause moving its false
+     watch, and the asks that woke it cost more than the runs (M11-complexity-T17, D-0173
+     section 2). *)
+  (* Each watch's literal is ALSO kept flat in the record: its variable as an int
+     ([x1]/[x2], [-1] for no literal), its threshold and its polarity, because [ask] reads
+     nothing else and is asked once per wake of every clause watching the moved variable.
+     They are a COPY of term [w1]'s and term [w2]'s fields of [pb], written only by
+     [set_watches], which is the one place [w1] and [w2] are written; a test that places
+     the watches by hand calls it too. Measured motive: 27 % of 2013 rcpsp_11's samples
+     were [ask] itself, a chain of four dependent loads (the record, the atom array, the
+     atom, the domain), found by the file-by-file review M16-file-review-T2 (D-0190).
+     Since D-0226 (the learned-row layout) there is no atom array: [pb]'s own flat arrays
+     are read by index. *)
   type nonrec t = {
     pb : Pb.t;
-    atoms : Pb.atom array;
     mutable w1 : int;
     mutable w2 : int;
     mutable x1 : int;
@@ -432,32 +461,35 @@ module Learned_clause = struct
   }
 
   (* Place the two watches at [w1] and [w2], with their flat copies (the record's header);
-     a watch that does not move keeps the copy it has. An index outside [atoms] (the [-1]
+     a watch that does not move keeps the copy it has. An index outside the row (the [-1]
      [rewatch]'s [best] answers for a one-literal clause with its literal false) gets
      [x = -1], which no variable is. *)
+  (* Term [i]'s polarity, read off [pb]'s polarity bytes here rather than through
+     [Pb.positive_at]: dune's dev profile compiles with [-opaque], so a cross-module
+     accessor is a call, and these run on every watch move (D-0226 measured the calls). *)
+  let positive (pb : Pb.t) i = Bytes.unsafe_get pb.Pb.pv i <> '\000'
+
   let set_watches t w1 w2 =
-    let n = Array.length t.atoms in
+    let n = Pb.width t.pb in
     if w1 <> t.w1 then (
       t.w1 <- w1;
       if w1 >= 0 && w1 < n then (
-        let a = t.atoms.(w1) in
-        t.x1 <- Var.to_int a.Pb.x;
-        t.k1 <- a.Pb.k;
-        t.p1 <- a.Pb.positive)
+        t.x1 <- Var.to_int t.pb.Pb.xv.(w1);
+        t.k1 <- t.pb.Pb.kv.(w1);
+        t.p1 <- positive t.pb w1)
       else t.x1 <- -1);
     if w2 <> t.w2 then (
       t.w2 <- w2;
       if w2 >= 0 && w2 < n then (
-        let a = t.atoms.(w2) in
-        t.x2 <- Var.to_int a.Pb.x;
-        t.k2 <- a.Pb.k;
-        t.p2 <- a.Pb.positive)
+        t.x2 <- Var.to_int t.pb.Pb.xv.(w2);
+        t.k2 <- t.pb.Pb.kv.(w2);
+        t.p2 <- positive t.pb w2)
       else t.x2 <- -1)
 
   let name = "learned_clause"
   let consistency = consistency
   let vars t = vars t.pb
-  let false_at store t i = Pb.falsified store t.atoms.(i)
+  let false_at store t i = Pb.falsified_at store t.pb i
 
   (* The trail position of the entry that FALSIFIED literal [i], which must be false:
      a positive atom `x >= k` became false when [hi x] first moved below [k], a
@@ -466,9 +498,8 @@ module Learned_clause = struct
      see [Store.hi_below] for why the support of the current bound is a later position
      than the crossing, and how that difference broke the first draft. *)
   let falsified_at store t i =
-    let a = t.atoms.(i) in
-    if a.Pb.positive then Store.hi_below store a.Pb.x a.Pb.k
-    else Store.lo_at_least store a.Pb.x a.Pb.k
+    let x = t.pb.Pb.xv.(i) and k = t.pb.Pb.kv.(i) in
+    if positive t.pb i then Store.hi_below store x k else Store.lo_at_least store x k
 
   (* Two watches, chosen so that I-P7 holds through every backtrack:
 
@@ -490,7 +521,7 @@ module Learned_clause = struct
      was falsified EARLIER than an unwatched literal is un-falsified after it, and the
      clause goes unit unwatched. *)
   let rewatch store t =
-    let n = Array.length t.atoms in
+    let n = Pb.width t.pb in
     let best ~not_ =
       (* Any non-false literal other than [not_]; failing that, the latest-falsified.
          Ranks are computed only when every candidate is false. *)
@@ -514,36 +545,36 @@ module Learned_clause = struct
     let w2 = if keep t.w2 && t.w2 <> w1 then t.w2 else best ~not_:w1 in
     set_watches t w1 (if w2 >= 0 then w2 else w1)
 
-  (* THE PRECONDITION of the two watches (D-0142 section 5): at most one literal per
-     (variable, polarity). Two rungs of one variable in one direction, `x >= 3 \/ x >= 5`,
-     can propagate with both of them non-false -- [Pb.pass]'s ladder-effective rule forces
-     `x >= 3` once every other literal is false -- so watching those two would let a
-     change of an unwatched variable make the clause unit unasked. Opposite polarities on
-     one variable are fine: BOUNDS cannot punch the hole between them, so a run with both
-     open does nothing. [Learn.minimise] merges every same-slot pair of the 1UIP clause, and
-     that clause is the only one [Search] registers here; checked under BAGUETTE_DEBUG. *)
-  let one_per_slot (atoms : Pb.atom array) =
-    let n = Array.length atoms in
+  (* THE PRECONDITION of the two watches: at most one literal per (variable, polarity)
+     (D-0142 section 5; D-0142 is the first batch of the complexity pass over the engine,
+     the store and the propagators). Two rungs of one variable in one direction,
+     `x >= 3 \/ x >= 5`, can propagate with both of them non-false, because [Pb.pass]'s
+     ladder-effective rule forces `x >= 3` once every other literal is false. So watching
+     those two would let a change of an unwatched variable make the clause unit unasked.
+     Opposite polarities on one variable are fine: BOUNDS cannot punch the hole between
+     them, so a run with both open does nothing. [Learn.minimise] merges every same-slot
+     pair of the 1UIP clause, and that clause is the only one [Search] registers here;
+     checked under BAGUETTE_DEBUG. *)
+  let one_per_slot (pb : Pb.t) =
+    let n = Pb.width pb in
     let ok = ref true in
     for i = 0 to n - 1 do
       for j = i + 1 to n - 1 do
         if
-          Var.to_int atoms.(i).Pb.x = Var.to_int atoms.(j).Pb.x
-          && atoms.(i).Pb.positive = atoms.(j).Pb.positive
+          Var.to_int pb.Pb.xv.(i) = Var.to_int pb.Pb.xv.(j)
+          && positive pb i = positive pb j
         then ok := false
       done
     done;
     !ok
 
   let make ?(rest_satisfied = false) (pb : Pb.t) =
-    let atoms = pb.Pb.atoms in
-    let n = Array.length atoms in
+    let n = Pb.width pb in
     Debug.check "Learned_clause: one literal per (variable, polarity) (D-0142 section 5)"
-      (fun () -> one_per_slot atoms);
+      (fun () -> one_per_slot pb);
     let t =
       {
         pb;
-        atoms;
         w1 = -1;
         w2 = -1;
         x1 = -1;
@@ -559,7 +590,7 @@ module Learned_clause = struct
     set_watches t 0 (if n > 1 then 1 else 0);
     t
 
-  let true_at store t i = Pb.holds store t.atoms.(i)
+  let true_at store t i = Pb.holds_at store t.pb i
 
   (* I-P7: queue only when a WATCHED literal on [v] has just become false. Written
      without a local closure (M6-T22): this is asked once per wake, and the closure the
@@ -579,56 +610,58 @@ module Learned_clause = struct
     && ((t.x1 = x && watch_false store v t.p1 t.k1)
        || (t.x2 = x && watch_false store v t.p2 t.k2))
 
-  (* M6-T22 / D-0138: the variables of the two watches. [ask] answers [false] for every
-     other variable whatever the store holds, which is [Propagator.inst_watched]'s
-     contract, so the engine may wake this clause from these two variables only.
-
-     M11-complexity-T3 (D-0142, E1): with the move that can falsify each. `x >= k` is
+  (* The variables of the two watches, each with the move that can falsify it. [ask]
+     answers [false] for every other variable whatever the store holds, which is
+     [Propagator.inst_watched]'s contract, so the engine may wake this clause from these
+     two variables only (M6-T22, D-0138, after the engine was measured asking every
+     learned clause about every variable it names). The direction is the directional
+     watch of M11-complexity-T3 (D-0142, item E1). `x >= k` is
      false once [hi x < k], so only an UPPER-bound move falsifies it; `x <= k - 1` only a
      LOWER-bound move. That is [Propagator.watch_hi]/[watch_lo]'s whole claim, and it is
      true of every order literal. *)
-  let watch_of (a : Pb.atom) =
-    if a.Pb.positive then Propagator.watch_hi a.Pb.x else Propagator.watch_lo a.Pb.x
+  let watch_of t i =
+    if positive t.pb i then Propagator.watch_hi t.pb.Pb.xv.(i)
+    else Propagator.watch_lo t.pb.Pb.xv.(i)
 
   let watched t () =
-    if t.rest >= 0 then (watch_of t.atoms.(t.rest), Propagator.rests)
-    else (watch_of t.atoms.(t.w1), watch_of t.atoms.(t.w2))
+    if t.rest >= 0 then (watch_of t t.rest, Propagator.rests)
+    else (watch_of t t.w1, watch_of t t.w2)
 
-  (* The advisor [Propagator.pack] takes: both halves of one object. Each a closure of
-     its own arity over [t] (M16-file-review-T2, D-0190): [ask t], a partial application,
-     made every ask go through OCaml's currying stub before reaching [ask]. *)
+  (* The advisor [Propagator.pack] takes: both halves of one object. Each is a closure of
+     its own arity over [t], because [ask t], a partial application, made every ask go
+     through OCaml's currying stub before reaching [ask] (M16-file-review-T2, D-0190). *)
   let advise t =
     {
       Propagator.ask = (fun store v -> ask t store v);
       watched = Some (fun () -> watched t ());
     }
 
-  (* [rewatch] after a run [Pb.quiet] answered (M11-complexity-T3, D-0142, E2 (a)), from
-     what its walk found instead of a walk of its own. The store has not moved since
-     [quiet] (a quiet run prunes nothing), and [quiet] answered [true], so [scan.f1] and
-     [scan.f2] are the first two non-false literals. [best ~not_] is then "the first
+  (* [rewatch] after a run [Pb.quiet] answered, from what its walk found instead of a
+     walk of its own (item E2 (a) of the complexity pass, D-0142). The store has not moved
+     since [quiet] (a quiet run prunes nothing), and [quiet] answered [true], so [scan.f1]
+     and [scan.f2] are the first two non-false literals. [best ~not_] is then "the first
      non-false literal other than [not_]", which is [f1] unless [not_] is [f1] and then
      [f2], and its latest-falsified arm is never reached. [keep] is [rewatch]'s own test.
      So the two watches are the ones [rewatch] would choose, by its own definition. *)
   let rewatch_quiet store t (s : Pb.scan) =
-    let n = Array.length t.atoms in
+    let n = Pb.width t.pb in
     let best ~not_ = if s.Pb.f1 <> not_ then s.Pb.f1 else s.Pb.f2 in
     let keep i = i >= 0 && i < n && not (false_at store t i) in
     let w1 = if keep t.w1 then t.w1 else best ~not_:t.w2 in
     let w2 = if keep t.w2 && t.w2 <> w1 then t.w2 else best ~not_:w1 in
     set_watches t w1 w2
 
-  (* M6-T22 / D-0138: nearly every run of a learned clause is a watched literal falsified
-     with another literal still free -- the run a two-watched-literal solver answers by
-     moving the watch. [Pb.quiet] answers it with one walk, and the watch then moves on
-     the same store, so the watches -- and every later wake -- are what they were.
+  (* Nearly every run of a learned clause is a watched literal falsified with another
+     literal still free, the run a two-watched-literal solver answers by moving the
+     watch. [Pb.quiet] answers it with one walk, and the watch then moves on the same
+     store, so the watches, and every later wake, are what they would have been (M6-T22,
+     D-0138).
 
-     M11-complexity-T3 (D-0142, E2 (a)): that walk is now the only one. [Pb.quiet] leaves
-     the first two non-false literals in [t.pb]'s scan and [rewatch_quiet] reads them,
-     where the run used to walk the clause again in [rewatch]'s [best], once per watch to
-     replace. A run [quiet] does not answer is [Pb.pass] -- exactly what [Pb.propagate]
-     does then -- followed by the full [rewatch], because that run may have moved the
-     store. *)
+     That walk is the only one: [Pb.quiet] leaves the first two non-false literals in
+     [t.pb]'s scan and [rewatch_quiet] reads them, rather than walking the clause again
+     in [rewatch]'s [best] once per watch to replace (D-0142, item E2 (a)). A run [quiet]
+     does not answer is [Pb.pass], exactly what [Pb.propagate] does then, followed by the
+     full [rewatch], because that run may have moved the store. *)
   (* RESTING first ([t]'s header): a resting clause whose literal still holds stays as it
      is; one whose literal no longer does (a backtrack released it) goes back to its two
      watches and is run as any other. *)

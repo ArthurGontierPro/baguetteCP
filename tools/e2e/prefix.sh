@@ -1,12 +1,19 @@
 #!/usr/bin/env bash
-# The PREFIX's share of the chain's cost (M14-e2e-verification-T8, D-0182): the bridge's
-# prefix alone (baguette's .opb re-derived from cake's, no search), elaborated by veripb and
-# checked by cake_pb_cp, timed with peak RSS. Run after tools/e2e/measure.sh on the same
+# The PREFIX's share of the chain's cost, a part of the first measurement of cake_pb_cp on
+# baguette's search proofs (M14-e2e-verification-T8, D-0182): the bridge's prefix alone
+# (baguette's .opb re-derived from cake's, no search), elaborated by veripb and checked by
+# cake_pb_cp, timed with peak RSS. Run after tools/e2e/measure.sh on the same
 # OUTDIR: it reads the .scp, .names, .cake.opb and .bag.opb measure.sh keeps, and needs no
 # solver run, since the prefix does not depend on baguette's search proof.
 #
-# Usage: tools/e2e/prefix.sh OUTDIR ID
-# Prints: id t_bridge t_elab rss_elab t_cake rss_cake prefix_bytes core_bytes cake_s_line
+# Usage: tools/e2e/prefix.sh OUTDIR ID          (ID: the model's name, OUTDIR/ID.* its files)
+# Env:   CAKE_PB_CP (required), VERIPB (else scripts/checker.sh), CHECK_TIMEOUT (s per stage,
+#        default 7200), CAKE_HEAP (MB, default 24576), as measure.sh.
+# Prints ONE tab-separated line:
+#   id t_bridge t_elab rss_elab t_cake rss_cake prefix_bytes core_bytes cake_s_line
+# times in seconds, RSS in MB, sizes in bytes; the prefix and its core are deleted afterwards.
+# Exit 0 once the line is printed (read the verdict in cake_s_line); 1 when no checker is
+# found or when an argument or CAKE_PB_CP is missing.
 set -u
 HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/../.." && pwd)

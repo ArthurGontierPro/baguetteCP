@@ -1,19 +1,32 @@
 #!/usr/bin/env python3
-"""M6-T4. The comparison harness's judgement, in one reviewable place.
+"""The comparison harness's judgement, in one reviewable place (M6-T4, the comparison of
+baguette against Chuffed and the Glasgow solver on a shared set).
 
 scripts/compare_run.sh does the orchestration (flatten, ulimit, timeout, the files);
 this file does every step that DECIDES something, so the decisions are written once
-and the self-test exercises the same code the node runs:
+and the self-test exercises the same code the node runs. Usage: compare.py COMMAND ARGS...
 
-  prep FZN             validate a JSON FlatZinc file, read the solve item, and make the
-                       objective an output variable (text and JSON), so that "the last
-                       printed objective" exists for every solver alike. Prints
-                       `sense<TAB>objname`, sense in sat|min|max.
-  classify ...         a solver's exit code + stdout/stderr -> status, nsols, objective
-  verdict ...          veripb's exit code + output -> check verdict
-  report OUT...        the report: DISAGREE first
-  answers OUT...       the agreed answer per instance (bench/corpus/answers.tsv)
-  shared OUT...        the ids every solver's library flattened (shared_set.lst)
+  prep FZN             validate a FlatZinc file (text or JSON), read the solve item, and
+                       make the objective an output variable, rewriting FZN in place, so
+                       that "the last printed objective" exists for every solver alike.
+                       Prints `sense<TAB>objname`, sense in sat|min|max. Exit 1, with the
+                       reason on stdout, when the file is torn or has no solve item.
+  classify SOLVER RC OUT ERR SENSE OBJNAME CAP_RC
+                       a solver's exit code + stdout/stderr -> one line
+                       `status<TAB>objective<TAB>nsols<TAB>detail`
+  verdict RC VPOUT STATUS [OBJECTIVE]
+                       veripb's exit code + output -> `verdict<TAB>detail`
+  report OUT... [--pinned ANSWERS]
+                       the report over compare_run.sh output directories, DISAGREE first.
+                       Exit 1 when two rows share an (id, solver) in one table, or when a
+                       solver run in two or more tables lost a solved or verified instance
+                       from the first to the last; a DISAGREE is printed, not an exit status
+  answers OUT... DEST  the agreed answer per instance, written to DEST
+                       (bench/corpus/answers.tsv)
+  shared OUT...        prints the ids every solver's library flattened (shared_set.lst)
+
+Every command exits 0 when it has judged, except as stated; no command, or an unknown
+one, exits 2 (with no command this text is printed).
 
 Python 3.8+, standard library only: the node has 3.14 and the laptop 3.10.
 """

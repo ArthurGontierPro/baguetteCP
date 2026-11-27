@@ -1,55 +1,65 @@
-(* Finite integer domains: a bounds pair plus a lazily allocated hole set.
-
-   Rationale for the representation is in docs/ARCHITECTURE.md section 2 - most
-   propagation in a linear-heavy workload is bounds reasoning, so the bounds are the fast
-   path and holes are only populated by the propagators that actually punch them.
-
-   The hole set is a bitset ([Bytes.t]) rather than a balanced set, because SPEC section
-   3.1 requires membership in O(1). Since M21-memory-T3 (D-0222) it is NOT copied per
-   removal: a domain's holes are a VERSION of a per-variable LOG that its successors
-   share. The log is one mutable bitset (every hole any version of the lineage has) plus
-   the removals in the order they were made; a version is "the log's base holes and its
-   first [k] removals". Removing a value from the NEWEST version sets one bit and appends
-   one entry (16 bytes), where the copy cost span / 8 bytes per pruning and the trail
-   kept every copy: 98 % of wordpress's live heap at its refusal (D-0218). Removing from
-   an older version forks a new log (one copy, what every removal used to pay), so the
-   value semantics a caller sees are those of a persistent set.
-
-   What that costs is I-T1's old guarantee that a [t] shares no mutable state with its
-   successors. The new one (docs/INVARIANTS.md I-T1, D-0222 section 4): [undo] -- called
-   by [Store.undo_to] for every entry it pops -- truncates the log back to the version the
-   entry restores, so a [t] answers exactly the set it was made with for as long as no
-   trail entry older than it has been undone, and a read after that raises
-   [Stale_version] rather than answering. Each version carries the uid of its last log
-   slot, which a truncation and a refill never reproduce, so the refusal is exact.
-
-   Every read tests the bit first, with the loads the copying representation made (the
-   version carries the log's base, span and bitset): a clear bit is a hole of no valid
-   version, which answers every read of a value still in the domain. A set bit is a hole
-   of the newest version (two compares), and of an older one (a trail entry's
-   [old]/[now], a pass's snapshot, an Element frame, a D-0124 history) iff it was logged
-   before [k]: a scan of at most [deep_scan] entries, else [pos], an int32 per value
-   built on the first deep read of that log and kept up to date after. So every read is
-   O(1) once [pos] exists, and [pos] exists only for a log something read deep in its
-   past. What this costs in time is the set-bit reads of older versions, which Element's
-   lazy reasons make by the thousand per node: +2 % of javarouting's instructions per
-   node, +1 % of costas's, nothing elsewhere (D-0222 section 6).
-
-   M16-file-review-T1 (D-0186), the costs that grow with the WIDTH, and why none of them
-   is on a per-entry path of the engine: [remove] of an interior value copies the bitset
-   (O(span / 8), so punching every hole of a domain along one branch is O(span^2 / 8);
-   O(1) since D-0222, which appends to the log instead);
-   [size] of a domain with holes counts the bits between the bounds (O(span / 8)), and
-   [Search.first_fail] asks it per candidate per node; [classify] of a hole entry walks
-   the bounds (O(width)) and is asked by the proof side ([Trace]) only, the engine reading
-   an entry's kind without it. [span] is at most [max_hole_span] (2^20 values, a 128 KB
-   bitset). The lane's domains are at most 10 000 values wide, and none of the three
-   reaches 1.5 % of a lane profile (D-0186's table).
+(* Finite integer domains: a pair of bounds plus a hole set that is allocated only when a
+   value strictly inside the bounds is first removed.
 
    Invariants (docs/INVARIANTS.md):
      I-D1  lo <= hi; an empty domain is never constructed, it is reported as [Failed]
      I-D2  lo and hi are in the domain: holes never sit at a bound
-     I-D3  a domain only ever shrinks - every operation here returns a subset *)
+     I-D3  a domain only ever shrinks - every operation here returns a subset
+
+   Why bounds first (docs/ARCHITECTURE.md section 2): most propagation in a linear-heavy
+   workload is bounds reasoning, so the bounds are the fast path, and holes are populated
+   only by the propagators that actually punch them.
+
+   THE HOLE LOG (D-0222, task M21-memory-T3). The hole set is a bitset ([Bytes.t]) rather
+   than a balanced set, because SPEC section 3.1 requires membership in O(1). It is not
+   copied per removal: a domain's holes are a VERSION of a per-variable LOG that its
+   successors share. The log is one mutable bitset (every hole any version of the lineage
+   has) plus the removals in the order they were made, and a version is "the log's base
+   holes and its first [k] removals". Removing a value from the NEWEST version sets one
+   bit and appends one entry (16 bytes). Removing from an older version forks a new log
+   (one copy of the bitset), so a caller sees the value semantics of a persistent set.
+   Before D-0222 every removal copied the bitset, span / 8 bytes per pruning, and the
+   trail kept every copy: that was 98 % of wordpress's live heap at its refusal (the
+   memory census of D-0218).
+
+   What the sharing costs, and the invariant that replaces it. I-T1 says that
+   [Store.backtrack_to l] restores every domain to exactly its state when level [l] was
+   opened. Its old second half, "a [t] shares no mutable state with its successors", no
+   longer holds. The new one (docs/INVARIANTS.md I-T1, D-0222 section 4): [undo], called
+   by [Store.undo_to] for every entry it pops, truncates the log back to the version the
+   entry restores. So a [t] answers exactly the set it was made with for as long as no
+   trail entry older than it has been undone, and a read after that raises
+   [Stale_version] rather than answering. Each version carries the uid of its last log
+   slot, which a truncation followed by a refill never reproduces, so the refusal is
+   exact.
+
+   How a read stays O(1). Every read tests the bit first, with the same loads the copying
+   representation made (the version carries the log's base, span and bitset). A clear bit
+   is a hole of no valid version, which answers every read of a value still in the
+   domain. A set bit is a hole of the newest version (two compares), and of an older one
+   iff it was logged before [k]. Older versions are read by a trail entry's [old]/[now],
+   a pass's snapshot, an Element frame, or a bound history that a lazy reason reads later
+   (D-0124: a Linear pruning's reason is materialised from the trail's history, not
+   snapshotted at the push). Such a read scans at most [deep_scan] log entries, or else
+   reads [pos], an int32 per value built on the first deep read of that log and kept up
+   to date after. So every read is O(1) once [pos] exists, and [pos] exists only for a
+   log something read deep in its past. The time cost is the set-bit reads of older
+   versions, which Element's lazy reasons make by the thousand per node: +2 % of
+   javarouting's instructions per node, +1 % of costas's, nothing elsewhere (D-0222
+   section 6).
+
+   The costs that grow with the WIDTH, and why none of them is on a per-entry path of the
+   engine (the core file review of M16-file-review-T1, D-0186, measured them):
+   [remove] of an interior value appends to the log in O(1) (before D-0222 it copied the
+   bitset, O(span / 8), so punching every hole of a domain along one branch was
+   O(span^2 / 8)); [size] of a domain with holes counts the bits between the bounds
+   (O(span / 8)), and [Search.first_fail] asks it per candidate per node; [classify] of a
+   hole entry walks the bounds (O(width)) unless both domains are versions of one log,
+   and only the proof side ([Trace]) and debug messages ask it, the engine reading an
+   entry's kind without it. [span] is at most [max_hole_span] (2^20 values, a 128 KB
+   bitset). The domains of the differential lane's 25 instances are at most 10 000
+   values wide, and none of the three costs reaches 1.5 % of a lane profile (D-0186's
+   table). *)
 
 (* Bit [i] of [bits] stands for the value [base + i]. [span] is how many values the
    bitset covers; it is fixed when the log is first allocated, at which point it spans
@@ -87,12 +97,11 @@ type holes = { log : log; k : int; uid : int; hbase : int; hspan : int; hbits : 
 type t = { lo : int; hi : int; holes : holes option }
 type result = Unchanged | Changed of t | Failed
 
-(* What a narrowing actually moved - docs/ARCHITECTURE.md section 2's promise, which the
-   code did not keep until M2-T5: "Operations return a [change] describing what moved
-   ([NoChange | Bound of ... | Holes of ...]) so the engine knows which propagators to
-   re-queue and the proof layer knows which literals became true."
-
-   The payloads are chosen for those two readers:
+(* What a narrowing actually moved, for two readers: the engine, which decides from it
+   which propagators to re-queue, and the proof layer, which reads from it which literals
+   became true (docs/ARCHITECTURE.md section 2; the type exists since M2-T5, which made
+   the engine mask wakes by the kind of change). The payloads are chosen for those two
+   readers:
 
    - [Bound] carries the bound that MOVED, and only if it moved: [lo = Some v] means the
      lower bound is now [v] and was lower before. At least one of the two is [Some]
@@ -104,9 +113,12 @@ type result = Unchanged | Changed of t | Failed
      ([settle] restores I-D2), so a change is either a [Bound] or a [Holes] and never
      both. The engine relies on exactly that disjointness.
 
-   [change] is a sibling of [result]: [classify] below recovers it from the [old] and
-   [now] a trail entry records. Carrying it in [Changed] instead, as ARCHITECTURE section 2
-   reads, would be a change here and in [Store.apply] (M22-review-T6). *)
+   [change] is a sibling of [result], not a part of it: the narrowing operations return a
+   [result], and [classify] below recovers the [change] from the [old] and [now] a trail
+   entry records. ARCHITECTURE section 2 reads as if the operations returned the change
+   themselves; carrying it in [Changed] would be a change here and in [Store.apply], and
+   the review of false comments (M22-review-T6) left the code as it is and recorded the
+   difference here. *)
 type change =
   | NoChange
   | Bound of { lo : int option; hi : int option }
@@ -359,20 +371,20 @@ let equal a b =
 
 (* What moved between [old] and the [now] that replaced it. This is the [change] of
    docs/ARCHITECTURE.md section 2, recovered from the pair of domains rather than
-   returned alongside the new one - see the NOTE on [change] above for why.
+   returned alongside the new one (the comment on [change] above says why).
 
    Who asks: [Trace], once per trail entry it writes a line for, and the engine's debug
-   messages. The propagation path reads an entry's bound moves directly ([Engine.lo_moved],
-   [Engine.hi_moved]) and never calls it. The bound comparison is O(1) and returns first,
-   so the common case (a bound move) costs four integer comparisons and no allocation
-   beyond the result. Only the interior-hole case walks the
-   interval, and it is bounded by the span of a domain that is already known to have a
-   bitset. That is the right way round: the rare case pays.
+   messages. The propagation path reads an entry's bound moves directly
+   ([Engine.lo_moved], [Engine.hi_moved]) and never calls it. The bound comparison is
+   O(1) and returns first, so the common case (a bound move) costs four integer
+   comparisons and no allocation beyond the result. The interior-hole case reads the log
+   slots between the two versions when both are versions of one log (usually one slot),
+   and otherwise walks the interval, bounded by the span of a domain already known to
+   have a bitset. That is the right way round: the rare case pays.
 
-   Precondition: [now] is a subset of [old] (I-D3), which is what [Store.apply] has
-   already asserted by the time the engine gets here. If it is not - if a bound somehow
-   widened - the widened side reports as "did not move" rather than lying about a
-   literal that did not become true. *)
+   Precondition: [now] is a subset of [old] (I-D3), which [Store.apply] checks under
+   BAGUETTE_DEBUG. If it is not, because a bound somehow widened, the widened side reports
+   as "did not move" rather than claiming a literal that did not become true. *)
 (* Same bounds, so anything that went is strictly interior. Walk downwards and prepend,
    so the list comes out ascending without a reversal. *)
 let classify_walk ~old ~now =
@@ -411,13 +423,6 @@ let classify ~old ~now =
         r
     | _ -> classify_walk ~old ~now
 
-(* The bridge between the two vocabularies: the [change] that applying [r] to [d] makes.
-   [Failed] is not a change - the empty domain is never stored (I-D1), so there is no
-   watcher for it to wake and no literal for the proof to claim; the caller handles the
-   failure off the [result] itself, as [Store.apply] does. *)
-let change_of d (r : result) =
-  match r with Unchanged | Failed -> NoChange | Changed d' -> classify ~old:d ~now:d'
-
 let change_to_string = function
   | NoChange -> "no change"
   | Bound { lo; hi } ->
@@ -448,8 +453,8 @@ let settle d =
     done;
     Changed { d with lo = !l; hi = !h }
 
-(* Hole insertion, by appending to the log (D-0222). [None] means "declined" - see
-   [max_hole_span]. A domain with no hole yet gets a fresh log spanning its bounds; one
+(* Hole insertion, by appending to the log. [None] means "declined" (see
+   [max_hole_span]). A domain with no hole yet gets a fresh log spanning its bounds; one
    whose version is the newest of its log extends it in place; one whose version is OLDER
    (a caller removing twice from the same value, or a store sharing a log another store
    extended) forks: a fresh log whose base holes are that version's set, one copy of the
@@ -479,11 +484,11 @@ let with_hole d v =
         let lg = fresh_log ~base:d.lo ~span ~bits:(Bytes.make ((span + 7) / 8) '\000') in
         Some { d with holes = Some (push lg (v - d.lo) v) }
 
-(* The trail's half of D-0222: [Store.undo_to] pops an entry that replaced [old] by [now]
-   and calls this before writing [old] back. If [now]'s version is past [old]'s on the
-   same log, the slots between are this entry's (or a later pop's leftovers) and go; if
-   [now] holds a log [old] does not (the entry's removal created or forked it), that log
-   dies with the entry and is emptied, so a version of it read later refuses. An entry
+(* The trail's half of the hole log: [Store.undo_to] pops an entry that replaced [old] by
+   [now] and calls this before writing [old] back. If [now]'s version is past [old]'s on
+   the same log, the slots between are this entry's (or a later pop's leftovers) and go;
+   if [now] holds a log [old] does not (the entry's removal created or forked it), that
+   log dies with the entry and is emptied, so a version of it read later refuses. An entry
    that moved a bound shares its version with [old] and costs this one comparison. *)
 let[@inline] undo ~old ~now =
   match now.holes with
@@ -510,27 +515,6 @@ let fix d v =
   else if is_fixed d then Unchanged
   else Changed { lo = v; hi = v; holes = None }
 
-(* Build a domain from an explicit value list, for FlatZinc declarations of the form
-   [var {1,3,5}: x]. Gaps become holes. *)
-let of_list values =
-  match List.sort_uniq Stdlib.compare values with
-  | [] -> raise (Bad_domain "empty domain from an empty value list")
-  | first :: _ as sorted ->
-      let last = List.fold_left (fun _ v -> v) first sorted in
-      let d = make first last in
-      let rec go d v present =
-        if v > last then d
-        else
-          match present with
-          | p :: rest when p = v -> go d (v + 1) rest
-          | _ -> (
-              match remove d v with
-              | Changed d' -> go d' (v + 1) present
-              | Unchanged -> go d (v + 1) present
-              | Failed -> raise (Bad_domain "of_list: domain became empty"))
-      in
-      go d first sorted
-
 (* ------------------------------------------------------------------ display *)
 
 let to_string d =
@@ -542,9 +526,11 @@ let to_string d =
         Printf.sprintf "%d..%d \\ {%s}" d.lo d.hi
           (String.concat "," (List.map string_of_int hs))
 
-(* ---------------------------------------------------------------- views (M4-T0) *)
+(* ------------------------------------------------- views, +-x + k (M4-T0, D-0058) *)
 
-(* The image of a domain under [x |-> (if negated then -x else x) + offset].
+(* The image of a domain under [x |-> (if negated then -x else x) + offset]. A VIEW of a
+   variable is that map applied to it, read off the base variable's own domain and order
+   literals, with no variable or literals of its own (D-0058, lib/core/view.ml).
 
    This is the materialising form, for printing, for tests and for a caller that
    genuinely wants a [Domain.t] of a view. It is NOT the read path: [View.lo],
@@ -552,10 +538,12 @@ let to_string d =
    which is what a propagator uses. Building a domain per read would make a view
    cost more than the auxiliary variable it exists to avoid.
 
-   It is not [of_list] either, deliberately. [of_list] is documented in
-   docs/INVARIANTS.md I-X10 as unreachable from any model, and routing views through
-   it would quietly make that false; it is also O(size) in removals where this is one
-   pass over the bitset. The map is a bijection on values, so I-D2 (bounds are not
+   It is not the test helper [Domain_helper.of_list] either, deliberately. That one
+   builds holes no trail entry explains, which would break I-X10 (every trace line is RUP
+   against the .opb plus the lines already written, so a hole must come from a pruning
+   that wrote its line), and that is why M22-review-T5 moved it out of [lib/] into
+   test/unit/domain_helper.ml. It is also O(size) in removals where this is one pass over
+   the bitset. The map is a bijection on values, so I-D2 (bounds are not
    holes) transports with no settling: the image of a non-hole bound is a non-hole
    bound. *)
 let affine d ~negated ~offset =
