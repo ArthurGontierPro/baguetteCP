@@ -30,7 +30,7 @@ CAP := $(if $(filter none unlimited 0,$(MEM_CAP_KB)),:,ulimit -v $(MEM_CAP_KB)) 
 # Passed down so a script invoked from a recipe agrees with the recipe.
 export BAGUETTE_MEM_CAP_KB = $(MEM_CAP_KB)
 
-.PHONY: build release test unit models scp check fmt fmt-check lint determinism unlimit selftests clean proof bootstrap bench diff scaling factor e2e sym
+.PHONY: build release test unit models models-free scp check fmt fmt-check lint determinism unlimit selftests clean proof bootstrap bench diff scaling factor e2e sym
 
 build:
 	dune build
@@ -58,13 +58,19 @@ unit:
 models: build
 	$(CAP) ./scripts/run_model_tests.sh
 
+# M19-config-T1 (D-0261): every model again under the free search, the default since D-0261:
+# proof verified, status and objective as the fixed search's, the printed solution checked
+# by a second proved run (scripts/free_model_tests.sh says what and why).
+models-free: build
+	$(CAP) ./scripts/free_model_tests.sh
+
 # M23-inputs (D-0230): the .scp models, each proof checked by veripb and each answer judged
 # against the .scp alone (tools/scp/validate.py).
 scp: build
 	$(CAP) ./scripts/run_scp_tests.sh
 
 # Unit tests and model tests. Model tests include proof checking with veripb.
-test: unit models scp
+test: unit models models-free scp
 
 # The explicit fixer. Rewrites files. NOT in the gate -- see fmt-check and M1-T64.
 fmt:

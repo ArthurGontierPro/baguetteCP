@@ -71,7 +71,7 @@ is_pending() {
     | awk '{print $1}' | grep -qx "$1"
 }
 
-# The search both runs use (M19-config-T1, D-0261): the fixed search.
+# The search both runs use (M19-config-T1, D-0261); run_check sets it per arm.
 SEARCH="--fixed-search"
 
 # One model, two runs, three artefacts compared. Echoes the differing kind on failure.
@@ -187,19 +187,28 @@ run_check() {
   d="$(mktemp -d)"
   trap 'rm -rf "$d"' EXIT INT TERM
   n=0; bad=0
-  for fzn in "${ROOT}"/test/models/*.fzn; do
-    n=$((n + 1))
-    compare_two_runs "${fzn}" "$d" || bad=$((bad + 1))
+  # Two arms (M19-config-T1, D-0261): the fixed search, and the free search, whose
+  # restarts, activity and phases must not depend on the clock or on addresses either.
+  # compare_two_runs assigns the global d (POSIX sh has no locals), hence top.
+  top="$d"
+  for arm in fixed free; do
+    case "$arm" in fixed) SEARCH="--fixed-search" ;; free) SEARCH="-f" ;; esac
+    mkdir -p "$top/$arm"
+    for fzn in "${ROOT}"/test/models/*.fzn; do
+      n=$((n + 1))
+      compare_two_runs "${fzn}" "$top/$arm" || { echo "     (the ${arm} search)"; bad=$((bad + 1)); }
+    done
   done
+  d="$top"
   if [ "$bad" -ne 0 ]; then
-    echo "FAIL determinism: ${bad} of ${n} models produced different artefacts on a"
+    echo "FAIL determinism: ${bad} of ${n} runs produced different artefacts on a"
     echo "     second run of the SAME binary. That is nondeterminism in the solver or"
     echo "     the writer -- hash iteration order, an address reaching output, an"
     echo "     uninitialised read. It is not an expected-output question and must not"
     echo "     be fixed by re-blessing anything."
     return 1
   fi
-  echo "determinism: ${n} models, .opb/.pbp/stdout identical across two runs"
+  echo "determinism: ${n} runs (every model, fixed and free search), .opb/.pbp/stdout identical across two runs"
   return 0
 }
 
