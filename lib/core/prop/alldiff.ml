@@ -354,6 +354,17 @@ type t = {
   canon : int array;
   (* Whether some variable occurs twice in the scope ([canon.(i) <> i] for some [i]). *)
   repeats : bool;
+  (* D-0242: [pass]'s scratch, kept across calls. [lo0]/[hi0] are the pass-start bounds,
+     overwritten at every pass; [by_lo]/[by_hi] are the term indices sorted by them,
+     re-sorted by insertion at every pass ([sort_by]). A permutation and two arrays of
+     numbers read off the store, never a fact about it: every pass rewrites [lo0]/[hi0]
+     from the live domains before anything reads them, and an insertion sort of ANY
+     permutation is sorted, so nothing needs the trail. Keeping the permutation is what
+     makes the sort cheap, because one search step moves few bounds. *)
+  lo0 : int array;
+  hi0 : int array;
+  by_lo : int array;
+  by_hi : int array;
 }
 
 and quiet = { q_lo : int array; q_hi : int array; mutable q_valid : bool }
@@ -474,6 +485,10 @@ let make ?(cutoff = default_cutoff) ?(lemma_rows = []) ?(gate = true) ?(quiet = 
         q_hi = Array.make (Array.length terms) 0;
         q_valid = false;
       };
+    lo0 = Array.make (Array.length terms) 0;
+    hi0 = Array.make (Array.length terms) 0;
+    by_lo = Array.init (Array.length terms) Fun.id;
+    by_hi = Array.init (Array.length terms) Fun.id;
   }
 
 let vars t = Array.to_list (Array.map (fun tm -> tm.x) t.terms)
@@ -1393,16 +1408,97 @@ let pass_scan t store ~lo0 ~hi0 =
 (* How many passes [pass] skipped, for test_prop's lane; not read by the solver. *)
 let quiet_skips = ref 0
 
+(* [perm] sorted by [key], ascending, in place, by insertion. Ties keep no particular
+   order, and none is needed: [hall_free] reads only counts and the values at run ends,
+   and [pass_scan] only counts along [by_hi] and marks what it walked. O(n + the number
+   of pairs out of order), which across one search step is the few bounds that moved. *)
+let sort_by key perm =
+  for j = 1 to Array.length perm - 1 do
+    let i = perm.(j) in
+    let k = key.(i) in
+    let p = ref (j - 1) in
+    while !p >= 0 && key.(perm.(!p)) > k do
+      perm.(!p + 1) <- perm.(!p);
+      decr p
+    done;
+    perm.(!p + 1) <- i
+  done
+
+(* THE HALL-FREE TEST (M20-pernode-T4, D-0242). Whether [pass_scan] on the bound vector
+   [lo]/[hi] would move nothing and raise nothing, decided by counting alone, with no
+   snapshot, no allocation and no push. [by_lo]/[by_hi] must be sorted by [lo]/[hi].
+
+   THE RULE. A scan acts on a candidate interval [a, b] (a a lower bound, b an upper bound,
+   a <= b) holding n terms of k = b - a + 1 values exactly when
+     - n > k: it pushes a contained term out, which empties it (a conflict), or
+     - n = k and some term NOT contained has a bound in [a, b]: it pushes that bound past
+       the interval, which always changes it (a lower bound in [a, b] goes to b + 1 > lo).
+   Nothing else in a scan pushes, and with no push the live bounds are the pass-start
+   ones, so the scan moves nothing iff no candidate interval is one of the two. The
+   second case is counted rather than searched: a contained term has both bounds in
+   [a, b], so "some term outside has its lower bound in [a, b]" is "more than n = k lower
+   bounds lie in [a, b]", and the same for the upper bounds. A variable repeated in the
+   scope ([twins]) has one bound pair for all its terms, so its terms are contained
+   together and the scan's name test ([inset]) skips exactly the contained terms: the
+   count is the scan's test there too.
+
+   THE WALK is the scan's own: each distinct lower bound [a] ascending, the terms in
+   [by_hi] order counting those with [lo >= a], an interval closing at each distinct
+   upper bound. It stops for [a] as soon as k exceeds the number of terms with
+   [lo >= a], which no later [b] can fill. BAGUETTE_DEBUG runs the scan behind every
+   [true] and requires it to move nothing; test_prop's lane (h) checks the converse
+   (every [false] is a scan that moves or raises) on random vectors. *)
+let hall_free ~by_lo ~by_hi lo hi =
+  let n = Array.length by_lo in
+  let free = ref true and ia = ref 0 and hlo = ref 0 in
+  while !free && !ia < n do
+    let a = lo.(by_lo.(!ia)) in
+    if !ia > 0 && lo.(by_lo.(!ia - 1)) = a then incr ia
+    else (
+      (* [hlo]: the terms whose upper bound is below [a]; none is contained in an interval
+         from [a], and none has a bound in it. Monotone in [a]. *)
+      while !hlo < n && hi.(by_hi.(!hlo)) < a do
+        incr hlo
+      done;
+      let rem = n - !ia in
+      let inside = ref 0 and pl = ref !ia and p = ref !hlo in
+      while !p < n do
+        let i = by_hi.(!p) in
+        if lo.(i) >= a then incr inside;
+        let b = hi.(i) in
+        if !p + 1 < n && hi.(by_hi.(!p + 1)) = b then incr p
+        else
+          let k = b - a + 1 in
+          if k > rem then p := n
+          else (
+            if !inside > k then (
+              free := false;
+              p := n)
+            else if !inside = k then (
+              while !pl < n && lo.(by_lo.(!pl)) <= b do
+                incr pl
+              done;
+              if !pl - !ia > k || !p + 1 - !hlo > k then (
+                free := false;
+                p := n));
+            incr p)
+      done;
+      incr ia)
+  done;
+  !free
+
+(* How many passes [hall_free] answered without a scan, for test_prop's lanes. *)
+let hall_free_skips = ref 0
+
 let pass t store =
   Propagator.count_pass ();
   let nt = Array.length t.terms in
-  let lo0 = Array.make nt 0 and hi0 = Array.make nt 0 in
-  Array.iteri
-    (fun i tm ->
-      let d = Store.get store tm.x in
-      lo0.(i) <- Domain.lo d;
-      hi0.(i) <- Domain.hi d)
-    t.terms;
+  let lo0 = t.lo0 and hi0 = t.hi0 in
+  for i = 0 to nt - 1 do
+    let d = Store.get store t.terms.(i).x in
+    lo0.(i) <- Domain.lo d;
+    hi0.(i) <- Domain.hi d
+  done;
   let q = t.quiet in
   let quiet = ref (t.quiet_on && q.q_valid) in
   let i = ref 0 in
@@ -1417,13 +1513,24 @@ let pass t store =
         | moved -> not moved
         | exception Found _ -> false);
     false)
-  else
-    let moved = pass_scan t store ~lo0 ~hi0 in
+  else (
+    sort_by lo0 t.by_lo;
+    sort_by hi0 t.by_hi;
+    let moved =
+      if t.quiet_on && hall_free ~by_lo:t.by_lo ~by_hi:t.by_hi lo0 hi0 then (
+        incr hall_free_skips;
+        Debug.check "I-P2 (D-0242): stage 1 found the bounds Hall-free" (fun () ->
+            match pass_scan t store ~lo0 ~hi0 with
+            | moved -> not moved
+            | exception Found _ -> false);
+        false)
+      else pass_scan t store ~lo0 ~hi0
+    in
     if not moved then (
       Array.blit lo0 0 q.q_lo 0 nt;
       Array.blit hi0 0 q.q_hi 0 nt;
       q.q_valid <- true);
-    moved
+    moved)
 
 (* ================================================== M4-T2: stage 2, Regin's matching
 
