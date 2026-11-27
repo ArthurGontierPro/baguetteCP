@@ -6607,6 +6607,87 @@ let test_alldiff_quiet_random () =
     (!bad = 0);
   check "alldiff (g) D-0235: the scenes exercise the skip" (!Alldiff.quiet_skips > 100)
 
+(* ------------------------------------------- (h) THE HALL-FREE TEST (D-0242) *)
+
+(* [Alldiff.hall_free] claims to answer, by counting, exactly whether [Alldiff.pass_scan]
+   on the same bound vector moves nothing and raises nothing. BAGUETTE_DEBUG checks the
+   direction that soundness needs (a [true] is a scan that does nothing); this lane checks
+   both, so a test that is merely conservative (never skips) fails here too, and it does
+   so on random vectors with ties, fixed variables, over-full and tight intervals and,
+   in a quarter of the scenes, a variable repeated in the scope. Each scene: a fresh
+   store at level 1, the kept permutations sorted from a scrambled start, the test, then
+   the scan itself. *)
+let hall_free_scene rnd =
+  let n = 1 + Random.State.int rnd 7 in
+  let boxes =
+    List.init n (fun _ ->
+        let lo = Random.State.int rnd 6 in
+        (lo, lo + Random.State.int rnd 4))
+  in
+  let names = List.init n (Printf.sprintf "v%d") in
+  let e = Encoding.create () in
+  List.iter2 (fun n (lo, hi) -> Encoding.declare_int e n ~lo ~hi) names boxes;
+  List.iter (Encoding.request_direct e) names;
+  let rows = Encoding.add_all_different e names in
+  let store = mk_store (List.map2 (fun n (lo, hi) -> (n, lo, hi)) names boxes) in
+  let scope =
+    List.init n var
+    @ if Random.State.int rnd 4 = 0 then [ var (Random.State.int rnd n) ] else []
+  in
+  let p = Alldiff.make store e ~rows scope in
+  sink_proof e;
+  Store.new_level store;
+  let nt = Array.length p.Alldiff.terms in
+  let lo0 =
+    Array.init nt (fun i -> Domain.lo (Store.get store p.Alldiff.terms.(i).Alldiff.x))
+  and hi0 =
+    Array.init nt (fun i -> Domain.hi (Store.get store p.Alldiff.terms.(i).Alldiff.x))
+  in
+  let scramble a =
+    for i = Array.length a - 1 downto 1 do
+      let j = Random.State.int rnd (i + 1) in
+      let x = a.(i) in
+      a.(i) <- a.(j);
+      a.(j) <- x
+    done
+  in
+  let by_lo = Array.init nt Fun.id and by_hi = Array.init nt Fun.id in
+  scramble by_lo;
+  scramble by_hi;
+  Alldiff.sort_by lo0 by_lo;
+  Alldiff.sort_by hi0 by_hi;
+  let sorted key a =
+    let ok = ref true in
+    for i = 1 to Array.length a - 1 do
+      if key.(a.(i - 1)) > key.(a.(i)) then ok := false
+    done;
+    !ok
+  in
+  let free = Alldiff.hall_free ~by_lo ~by_hi lo0 hi0 in
+  let quiet =
+    match Alldiff.pass_scan p store ~lo0 ~hi0 with
+    | moved -> not moved
+    | exception Alldiff.Found _ -> false
+  in
+  (sorted lo0 by_lo && sorted hi0 by_hi && free = quiet, free)
+
+let test_alldiff_hall_free_random () =
+  let rnd = Random.State.make [| 242 |] in
+  let bad = ref 0 and free = ref 0 and busy = ref 0 in
+  for _ = 1 to 3000 do
+    let ok, f = hall_free_scene rnd in
+    if not ok then incr bad;
+    if f then incr free else incr busy
+  done;
+  check
+    (Printf.sprintf
+       "alldiff (h) D-0242: over 3000 random bound vectors [hall_free] answers exactly \
+        whether a stage 1 scan moves nothing (%d Hall-free, %d not, %d disagreeing)"
+       !free !busy !bad)
+    (!bad = 0);
+  check "alldiff (h) D-0242: the vectors exercise both answers"
+    (!free > 500 && !busy > 500)
+
 let test_regin_gate_random () =
   let rnd = Random.State.make [| 215 |] in
   let stats = (ref 0, ref 0) in
@@ -10963,6 +11044,7 @@ let () =
   test_regin_staging ();
   test_regin_gate_random ();
   test_alldiff_quiet_random ();
+  test_alldiff_hall_free_random ();
   test_regin_conclusion ();
   test_regin_mixed_currency ();
   test_regin_random_proofs ();
