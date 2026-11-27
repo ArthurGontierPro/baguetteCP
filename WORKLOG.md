@@ -19,6 +19,7 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
+| M17-bench-series-T6 (D-0256) | `scripts/factor_lane.sh` (new), `bench/factor/` (new), `bench/series/HISTORY.md` (one row), `scripts/README.md`, `Makefile` (the `factor` entry), `docs/DECISIONS.md` (D-0256), `docs/ROADMAP.md` (the row) | agent-factor, `wave102-factor` | 2026-11-27 |
 
 ## Cross-session requests
 
