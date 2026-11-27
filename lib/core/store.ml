@@ -1,33 +1,55 @@
-(* The backtrackable domain store.
+(* The backtrackable domain store: the current domain of every variable, the TRAIL of
+   every change made to them, and the decision-level marks into that trail.
 
-   Mutation is undone by replaying a trail in reverse. Decision levels are marks into
-   that trail. Every entry carries the arena index of the explanation of the change that
-   made it, so conflict analysis can walk backwards through reasons (invariant I-T3).
+   The mutators. A propagator changes a domain only through [set_lo], [set_hi], [remove]
+   and [fix], and each takes ONE [Reason.justified]: the facts the pruning read (its
+   reason), the derivation that convinces the checker (its justification) and the bound
+   it concludes. All four go through [apply], which pushes a trail [entry] recording the
+   old and new domain, those three halves, and the propagator instance that made the
+   change (stamped from the slot the engine sets around each run, so no mutator takes an
+   id; see [with_running]). Every change therefore carries its explanation (I-P4).
 
-   Invariant I-T1 is the one worth testing directly: backtrack_to restores every domain
-   to exactly its state when the level was opened. An entry keeps the old value, and
-   restoring is an array write plus [Domain.undo], which truncates the variable's hole
-   log back to that value's version (D-0222): a [Domain.t]'s holes are a version of a log
-   its successors share, so the trail holds a removed value (16 bytes in the log) where it
-   held a copy of the bitset per pruning (98 % of wordpress's heap at its refusal,
-   D-0218). Every domain an entry, a history or a frame holds stays readable while that
+   Backtracking. A level mark records where the trail and the explanation arena stood
+   when the level opened; [backtrack] pops entries back to it, writing each entry's [old]
+   domain back. Three trail invariants (docs/INVARIANTS.md) hold:
+     I-T1  [backtrack_to l] restores every domain to exactly its state when level [l]
+           was opened;
+     I-T2  trail entries are ordered by level, so the level marks are monotone;
+     I-T3  every live entry's explanation index resolves in the arena (no orphan
+           reasons), because the mark rewinds the arena with the trail.
+
+   Restoring is an array write plus [Domain.undo]. A [Domain.t]'s holes are a version of
+   a per-variable log its successors share (the hole log of lib/core/domain.ml, D-0222),
+   so the trail holds a removed value (16 bytes in the log) where it used to hold a copy
+   of the bitset per pruning (98 % of wordpress's heap at its refusal, D-0218's memory
+   census). [Domain.undo] truncates the log back to the version the popped entry
+   restores. Every domain an entry, a history or a frame holds stays readable while that
    entry is on the trail; a domain from an undone branch raises [Domain.Stale_version].
 
-   M16-file-review-T1 (D-0186): a [Debug.check] on a path taken per trail entry ([apply],
-   [push_entry], [check_agreement], [remover]) sits under [if Debug.enabled]. Its
-   predicate is a closure over the entry's values, and a closure with free variables is
-   allocated at every call whether or not anything checks it: three per entry, about as
-   many words as the entry itself. The bound walks of [hi_below] and [lo_at_least] are
-   walks of the newest moves then binary searches over the bound histories, and
-   [created_domain] reads an array of the created domains (see each).
+   Who established a bound. [lo_sup]/[hi_sup] name, per variable, the trail position of
+   the entry behind its current lower/upper bound, in O(1) (see [lo_support]), and the
+   bound HISTORIES ([lo_hist], [hi_hist], [all_hist]) keep the whole chain of such
+   entries, so "which entry established [x >= v]?" and "which entry removed value [v]?"
+   are binary searches rather than trail scans ([bound_support], [remover]). A
+   [history] is the trail cut at a position, which a reason built after the push reads
+   as if it had been read at the push.
 
-   D-0197: a walk over a [Combine]'s summands ([drop_page_only_lemmas]) runs in constant
-   stack, since a summand list is as long as the ladders it crosses.
+   Costs kept off the per-entry path (the core file review, M16-file-review-T1, D-0186):
+   a [Debug.check] on a path taken per trail entry ([apply], [push_entry],
+   [check_agreement], [remover]) sits under [if Debug.enabled], because its predicate is
+   a closure over the entry's values, and a closure with free variables is allocated at
+   every call whether or not anything checks it: three per entry, about as many words as
+   the entry itself. The bound walks of [hi_below] and [lo_at_least] are walks of the
+   newest moves then binary searches over the bound histories, and [created_domain]
+   reads an array of the created domains (see each). A walk over a [Combine]'s summands
+   ([drop_page_only_lemmas]) runs in constant stack, since a summand list is as long as
+   the ladders it crosses (D-0197, the stack overflow a 32-million-term row caused).
 
-   M20-pernode-T4 (D-0245): [var_named] answers through a DIRECT-MAPPED memo of the
-   index's answers, a hit being a cell whose variable's name is PHYSICALLY the name
-   asked. Sound because the cell's answer came from the index for an equal name; the
-   cell a name lands in decides only where an answer is kept (see [var_index_named]). *)
+   Name lookup. [var_named] answers through a DIRECT-MAPPED memo of the name index's
+   answers, a hit being a cell whose variable's name is PHYSICALLY the name asked
+   (M20-pernode-T4, D-0245). Sound because the cell's answer came from the index for an
+   equal name; the cell a name lands in decides only where an answer is kept (see
+   [var_index_named]). *)
 
 module Lit = Baguette_proof.Lit
 module Name_tbl = Baguette_proof.Name_tbl
@@ -50,79 +72,74 @@ let no_support = -1
    without bound over a long search. *)
 type mark = { trail_mark : int; reason_mark : int }
 
-(* One recorded domain change.
+(* One recorded domain change. [apply] is its only constructor and builds a fresh record
+   for every push. Twelve fields: [var], [old] and [why] serve undo and conflict
+   analysis; the other nine exist for the proof and for conflict analysis, and [cites],
+   a memo, is the only mutable one. docs/ARCHITECTURE.md section 3 lists them too.
 
    [old] is what the domain was, so backtracking is a single array write (I-T1).
-   [now] is what the change *produced*, and it is here because of docs/DECISIONS.md
-   D-0018: the trace line a pruning contributes to the proof claims the order literal
-   the pruning established, and that literal is a function of the new bound, which
-   nothing else on the trail records. D-0018's own consequence list says so; recording
-   it is what makes lib/core/trace.ml possible at all. It costs one word and no work --
-   [Domain.t] reads as it was while the entry is on the trail (D-0222) and [apply]
-   already holds the value it is about to store.
 
-   [reason] is the *other* half of that trace line: the bound facts the propagator
-   actually read, negated into the clause's tail. It is deliberately NOT
-   [Explanation.lits] of [why] -- that returns the declared-width [Weaken] chain the
-   D-0013 [pol] needs, which is a different projection of the same pruning
-   (lib/core/reason.ml's header says which, and lib/core/explanation.ml's [owners] says
-   what the two do share).
+   [now] is what the change PRODUCED. The trace line a pruning contributes to the proof
+   claims the order literal the pruning established, and that literal is a function of
+   the new bound, which nothing else on the trail records (D-0018: a branch's nogood is
+   RUP over the branch's own logged trace, so every pruning writes such a line;
+   lib/core/trace.ml writes them). It costs one word and no work: [Domain.t] reads as it
+   was while the entry is on the trail (D-0222), and [apply] already holds the value it
+   is about to store.
 
-   M2-T8/D-0026: this was a [unit -> Lit.t list] thunk and is now a [Reason.t] -- plain
-   declarative data, no closure. Three things follow, and all three were the point:
+   [why] is the explanation's index in the arena (I-T3 is a bounds test on it). It is
+   the JUSTIFICATION, the derivation the checker is shown.
 
-     - A pruning allocates no closure and captures no environment. What it used to
-       capture (a snapshot list, a propagator's term record) is exactly what D-0026
-       quotes GCS measuring at ~20% of runtime.
-     - The literals are built *later* than before, not earlier: the old thunk bodies
-       were cheap because the [Lit.t]s were already allocated eagerly at the call site
-       ([Linear.snapshot_source] built [Lit.ge name cur] per term per pruning whether or
-       not anyone ever asked). [Reason.lits] is where that allocation happens now, once,
-       for the prunings a failing branch actually writes down (ARCHITECTURE, "Deferred
-       explanations").
-     - It cannot read live store state, because it is not code. The I-X6 obligation on
-       this half is discharged by the type. A propagator that does not supply facts
-       writes [Reason.none] and cannot do so by omission.
+   [reason] is the other half of the trace line: the bound facts the propagator actually
+   read, negated into the line's tail. It is deliberately NOT [Explanation.lits] of
+   [why], which returns the declared-width [Weaken] chain that the [pol] of a bounds
+   justification needs (D-0013: weaken, divide, add); the two are different projections
+   of the same pruning (lib/core/reason.ml's header says which, and
+   lib/core/explanation.ml's [owners] says what they share). A [Reason.t] is declarative
+   data, not a closure (D-0026: reasons are data, justifications are cutting planes),
+   and three things follow:
 
-   [why] stays the explanation arena index: I-T3 is still a bounds test.
+     - A pruning allocates no closure and captures no environment. What a closure used
+       to capture (a snapshot list, a propagator's term record) is what D-0026 quotes
+       GCS measuring at ~20% of runtime.
+     - The literals are built late, once, and only for the prunings a failing branch
+       actually writes down ([Reason.lits]; ARCHITECTURE, "Deferred explanations"),
+       where the old thunks were cheap only because their [Lit.t]s had been allocated
+       eagerly at every call site ([Linear.snapshot_source] built [Lit.ge name cur] per
+       term per pruning whether or not anyone ever asked).
+     - It cannot read live store state, because it is not code, so the I-X6 obligation
+       (an explanation reads a snapshot, never live domains) is discharged by the type on
+       this half. A propagator that supplies no facts writes [Reason.none] and cannot do
+       so by omission.
+   History: the field was a [unit -> Lit.t list] thunk until M2-T8.
 
-   [sup_lo]/[sup_hi] are the trail positions that supported [var]'s lower and upper
-   bound *before* this entry, or [no_support]. They exist so that "which earlier
-   derivation established this bound?" is an O(1) question (see [lo_support] below), and
-   they are here rather than in a side structure because backtracking has to restore
-   them and [undo_to] already visits exactly this record. Two immediate ints, no
-   allocation.
+   [concludes] is the third half (D-0043): WHAT the pruning derived, where [reason] is
+   what it read and [why] how the checker is convinced. It is kept on the trail for the
+   reason [now] is: a caller walking the trail later has no other way to recover it (the
+   proof-line index of M2-T9 keys a line by its claim, and a [pol] line's content is
+   otherwise unknown to us), and recomputing it would mean re-running the propagator.
+   [apply] checks it against the change before pushing, so an entry's conclusion and its
+   [old]/[now] cannot disagree.
 
-   Note for docs/ARCHITECTURE.md section 3 (the "keep the trail record small" one): this
-   record is now twelve fields, nine of which exist only for the proof and for conflict
-   analysis ([cites], the newest, is a memo and the only mutable one).
-
-   [prop] is the propagator instance that made this change, M2-T7, closing the blocker
-   docs/DECISIONS.md D-0011 names against itself: "a pruning's explanation is recorded on
-   the trail as { var; old; why } -- **the trail records no propagator identity**. A
-   caller walking the trail has the explanation and nothing else, so it cannot tell which
-   half produced it, and [Trivial] is unresolvable." It is resolvable now. M2-T3's
-   conflict analysis walks this trail and asks, of an entry it did not watch happen,
-   which constraint implied it; that question has an answer here rather than needing
-   [Explanation] to carry the row.
-
-   It is stamped by [apply] off [t.current_prop], which the ENGINE sets around each
-   [run] -- never passed in by the propagator. That is the whole point: no mutator takes
-   an id, so a propagator has nothing to get wrong. [Engine.check_attribution] then reads
-   the stamp back, on by default, and rejects any entry that does not name the instance
+   [prop] is the id of the propagator instance that made this change ([no_prop] for a
+   decision). Conflict analysis (1UIP learning, M2-T3) walks the trail and asks, of an
+   entry it did not watch happen, which constraint implied it; this field answers that
+   without [Explanation] having to carry the row. It is stamped by [apply] from
+   [t.current_prop], which the ENGINE sets around each [run], and never passed in by the
+   propagator, so a propagator has nothing to get wrong. [Engine.check_attribution] reads
+   the stamp back, on by default, and rejects an entry that does not name the instance
    that just ran or that credits an instance which does not watch the variable it
-   changed. That read-back is what stops the field being decoration -- an id that is
-   threaded and never read changes no behaviour at all, and would pass every test this
-   suite has.
+   changed; an id threaded and never read would change no behaviour and pass every test.
+   History: added by M2-T7. Until then the trail held only [{ var; old; why }], and
+   D-0011 (one propagator instance per model row) recorded that a caller walking it could
+   not tell which half of an [int_lin_eq] instance, its [le] row or its [ge] row,
+   produced a pruning.
 
-   [concludes] is docs/DECISIONS.md D-0043's third half of the same pruning: WHAT it
-   derived, where [reason] is what it read and [why] is how the checker is convinced. It
-   is carried onto the trail rather than checked and dropped for the same reason [now]
-   is -- a caller walking the trail later (M2-T9's index keys a line by its claim, and a
-   `pol` line's content is otherwise unknown to us) has no other way to recover it, and
-   recomputing it would mean re-running the propagator. [apply] checks it against the
-   change it is recording before it gets here, so an entry's conclusion and its [old]/
-   [now] cannot disagree. *)
+   [sup_lo]/[sup_hi] are the trail positions that supported [var]'s lower and upper bound
+   BEFORE this entry, or [no_support]. They make "which earlier derivation established
+   this bound?" an O(1) question (see [lo_support] below), and they live here rather than
+   in a side structure because backtracking has to restore them and [undo_to] already
+   visits exactly this record. Two immediate ints, no allocation. *)
 type entry = {
   var : Var.t;
   old : Domain.t;
@@ -132,33 +149,40 @@ type entry = {
   concludes : Reason.fact option;
   prop : int;
   ahead : bool;
-      (* M7-T17 (D-0082). "This pruning's derivation must be on the page AHEAD of its
-         trace line", as a property of the PROPAGATOR that made it, not of the encoding
-         of the variable it moved. lib/core/trace.ml's [derive_ahead] reads it and
-         nothing else does. Stamped by [apply] off [current_ahead], which only
-         [deriving_ahead] sets -- and only a [Needs_derivation] propagator (I-X10,
-         test/unit/test_trace.ml's table) calls that, around its own pruning call. *)
+      (* "This pruning's derivation must be written on the page AHEAD of its trace
+         line." It is a property of the PROPAGATOR that made the pruning, not of the
+         encoding of the variable it moved (D-0082, M7-T17). lib/core/trace.ml's
+         [derive_ahead] reads it and nothing else does. Stamped by [apply] from
+         [current_ahead], which only [deriving_ahead] sets, and only a
+         [Needs_derivation] propagator calls that, around its own pruning call: one whose
+         pruning follows from several model constraints at once, so that its trace line
+         is RUP only once the derivation is on the page (I-X10: every trace line is RUP
+         against the .opb plus the lines already written; test/unit/test_trace.ml's table
+         classifies every family). *)
   sup_lo : int;
   sup_hi : int;
   pos : int;
-      (* M6-T15 (D-0090). The trail position this entry was pushed at, [-1] for
-         [dummy_entry]. [apply] is the only constructor and pushes the record it builds at
-         exactly this position, and no entry is ever re-pushed, so an entry occupies one
-         trail position for its whole life. lib/core/trace.ml's [position_of] reads it to
-         answer in O(1) what it used to answer by walking [done_]. *)
+      (* The trail position this entry was pushed at, [-1] for [dummy_entry]. [apply] is
+         the only constructor and pushes the record it builds at exactly this position,
+         and no entry is ever re-pushed, so an entry occupies one trail position for its
+         whole life. lib/core/trace.ml's [position_of] reads it to answer in O(1) what it
+         used to answer by walking its list of written entries (M6-T15, D-0090). *)
   mutable cites : int array option;
-      (* M7-T27 (a3), D-0124's second addendum. lib/core/analysis.ml's memo of what this
-         entry's reason CITES, as the trail positions that established the facts it read
-         (packed with their level and direction by [Analysis]; [Store] never reads the
-         contents). [None] until the decision closure first reaches the entry; filled
-         once and read at every later conflict instead of materialising the reason
-         again. It lives on the entry and not in a side table because its validity is
-         exactly the entry's life: the trail below a live entry is frozen (I-T1, and
-         D-0124's argument for [history]), so what the entry cites, at which level and
-         whether it is a decision cannot change while the entry is on the trail -- and
-         [apply] builds a fresh record for every push, so nothing has to invalidate it
-         when the entry is popped. The memo is O(cited facts above level 0) per entry,
-         filled only for entries a conflict analysis reaches. *)
+      (* lib/core/analysis.ml's memo of what this entry's reason CITES, as the trail
+         positions that established the facts it read (packed with their level and
+         direction by [Analysis]; [Store] never reads the contents). [None] until the
+         decision closure (the walk of [Analysis.decision_closure] down to the decisions a
+         fact rests on) first reaches the entry; filled once and read at every later
+         conflict instead of materialising the reason again. It lives on the entry and not
+         in a side table because its validity is exactly the entry's life: the trail below
+         a live entry is frozen (I-T1, and the argument for [history] below), so what the
+         entry cites, at which level and whether it is a decision cannot change while the
+         entry is on the trail, and [apply] builds a fresh record for every push, so
+         nothing has to invalidate it when the entry is popped. The memo is O(cited facts
+         above level 0) per entry, filled only for entries a conflict analysis reaches.
+         History: M7-T27 (a3), the second addendum of D-0124, which builds a Linear
+         pruning's reason later from the trail's history instead of snapshotting it at the
+         push. *)
 }
 
 (* [lo_sup]/[hi_sup] are indexed by variable and hold the trail position of the entry
@@ -166,49 +190,53 @@ type entry = {
    is still the declared one. Maintained by [apply] in O(1) and restored by [undo_to]
    from the entry's own [sup_lo]/[sup_hi].
 
-   M2-T8 (D-0026) added them to delete a scan, not to add a cache. [Linear] asked "what
-   established this bound?" once per term per pruning and answered it by walking the
-   trail downwards from the newest entry -- O(|trail|) per term, O(n * |trail|) per
-   pruning, and the most expensive thing left in [lib/] after M1-T24 fixed the same
-   defect in [Engine.propagate]. The answer was always a single trail position that
-   [apply] already knew when it pushed the entry, so it is recorded instead of
-   recomputed. See [lo_support] for the equivalence argument, which is the part worth
-   checking: the scan and the array agree only because bounds are monotone within a
-   level (I-D3) and the array is restored on backtrack. *)
+   They delete a scan; they are not a cache. The answer to "what established this
+   bound?" is a single trail position that [apply] already knows when it pushes the
+   entry, so it is recorded instead of recomputed. The equivalence argument, which is the
+   part worth checking, is at "what holds a bound up" below: the scan and the array agree
+   only because bounds are monotone within a level (I-D3) and the array is restored on
+   backtrack. History: M2-T8 (D-0026) added them. [Linear] used to answer the question
+   once per term per pruning by walking the trail down from the newest entry, O(|trail|)
+   per term and O(n * |trail|) per pruning, the most expensive thing left in [lib/] once
+   M1-T24 had replaced the same kind of walk in [Engine.propagate] by a trail cursor. *)
 type t = {
   domains : Domain.t array;
   initial : Domain.t array;
-      (* M16-file-review-T1 (D-0186): the domains the store was created with, read by
-         [created_domain]. A copy of the array, sharing the records; a created domain is
-         the oldest version of its log, which no undo truncates (D-0222). *)
+      (* The domains the store was created with, read by [created_domain]
+         (M16-file-review-T1, D-0186). A copy of the array, sharing the records; a
+         created domain is the oldest version of its hole log, which no undo truncates
+         (D-0222). *)
   names : string array;
-  (* M6-T11 (D-0085): the name -> variable index behind [var_named] and [name_rep],
-     built on first use rather than in [create], because [Engine.oracle_accepts] builds a
-     scratch store per tuple and never asks for a name. Names are fixed at creation
-     ([names] is a private copy nothing writes), so the index never goes stale. *)
+  (* The name -> variable index behind [var_named] and [name_rep], built on first use
+     rather than in [create], because [Engine.oracle_accepts] builds a scratch store per
+     tuple and never asks for a name. Names are fixed at creation ([names] is a private
+     copy nothing writes), so the index never goes stale. Added by M6-T11 (D-0085, a pass
+     of constant-factor savings on conflict analysis, every artefact byte-identical). *)
   by_name : (int Name_tbl.t * int array) Lazy.t;
-  (* M20-pernode-T4 (D-0245, after D-0236's one-entry memo): a DIRECT-MAPPED memo in
-     front of [by_name], [memo_size] cells, cell [memo_slot name] holding a variable the
-     index answered for a name of that slot, or [-1]; tested by PHYSICAL equality against
-     [names], see [var_index_named]. Ints, so that writing one is a plain store and not a
-     [caml_modify] (a string field cost more on a miss than the hits saved, D-0236).
-     Allocated on the first lookup, [[||]] until then, for the reason [by_name] is lazy. *)
+  (* A DIRECT-MAPPED memo in front of [by_name]: [memo_size] cells, cell [memo_slot name]
+     holding a variable the index answered for a name of that slot, or [-1]; tested by
+     PHYSICAL equality against [names] (see [var_index_named]). Ints, so that writing one
+     is a plain store and not a [caml_modify], the write barrier a pointer field pays (a
+     string field cost more on a miss than the hits saved, D-0236). Allocated on the
+     first lookup, [[||]] until then, for the reason [by_name] is lazy. M20-pernode-T4:
+     D-0245, generalising D-0236's one-entry memo. *)
   mutable named_memo : int array;
   reasons : Explanation.Arena.t;
   lo_sup : int array;
   hi_sup : int array;
-  (* M6-T14 (D-0088): the bound HISTORIES. [lo_hist.(i)] holds, in increasing order, the
-     trail positions of the live entries that RAISED variable [i]'s lower bound, the
-     first [lo_hn.(i)] cells of it; [hi_hist]/[hi_hn] likewise for the entries that
-     LOWERED its upper bound. Pushed by [apply] exactly when [lo_sup]/[hi_sup] is written,
-     popped by [undo_to] exactly when it is restored, so the top of a history IS the
-     array's answer and the history is the rest of the chain. One int per bound move,
-     in total; a variable's array is allocated on its first move. See [bound_support]. *)
+  (* The bound HISTORIES. [lo_hist.(i)] holds, in increasing order, the trail positions
+     of the live entries that RAISED variable [i]'s lower bound, the first [lo_hn.(i)]
+     cells of it; [hi_hist]/[hi_hn] likewise for the entries that LOWERED its upper bound.
+     Pushed by [apply] exactly when [lo_sup]/[hi_sup] is written, popped by [undo_to]
+     exactly when it is restored, so the top of a history IS the array's answer and the
+     history is the rest of the chain. One int per bound move, in total; a variable's
+     array is allocated on its first move. See [bound_support]. They replaced the trail
+     scans behind the support and remover queries (M6-T14, D-0088). *)
   lo_hist : int array array;
   lo_hn : int array;
   hi_hist : int array array;
   hi_hn : int array;
-  (* M6-T14: the same for EVERY live entry on the variable, bound move or hole, behind
+  (* The same for EVERY live entry on the variable, bound move or hole, behind
      [remover]. One more int per trail entry. *)
   all_hist : int array array;
   all_hn : int array;
@@ -220,67 +248,67 @@ type t = {
   mutable marks : mark array;
   mutable n_levels : int;
   mutable starts : int array;
-  (* M11-complexity-T3 (D-0142, S3's store half): trail position -> how many OPEN
-     level marks sit there (an empty level can share its position with the next).
-     Kept by [push_mark] and [backtrack], the only two places [n_levels] moves, so
-     [is_level_start] is one load instead of a binary search over the marks. *)
-  (* The propagator instance currently running, or [no_prop]. Written only by
-     [with_running], read only by [apply] and [conflict] to stamp what they build.
-     M2-T7 replaced a [conflict_facts : (unit -> Lit.t list) option] one-shot slot here:
-     the facts behind a conflict now travel *in* the [conflict] value the propagator
-     returns, so there is no slot to arm, to consume exactly once, or to clear in the
-     three places ([take_conflict_facts], [new_level], [backtrack]) that arming it made
-     necessary. One mutable field remains, and unlike the slot it is written and cleared
-     by the same wrapper in the same call. *)
+  (* Trail position -> how many OPEN level marks sit there (an empty level can share its
+     position with the next). Kept by [push_mark] and [backtrack], the only two places
+     [n_levels] moves, so [is_level_start] is one load instead of a binary search over
+     the marks. From the complexity pass M11-complexity-T3 (D-0142), the store half of
+     item S3 of D-0140's inventory of costs that grow with the run. *)
+  (* The propagator instance currently running, or [no_prop]. Written only by [run_as]
+     (behind [with_running]), and read by [apply] and the two conflict builders to stamp
+     what they build. It is written and restored by the same wrapper in the same call.
+     History: before M2-T7 a one-shot slot here carried a conflict's facts from the
+     propagator to the trace, to be consumed exactly once and cleared in three places
+     (a [take_conflict_facts] function since deleted, [new_level], [backtrack]); the
+     facts now travel in the [conflict] value itself ([c_reason]). *)
   mutable current_prop : int;
-  (* M7-T17. True only inside [deriving_ahead]; [apply] copies it into [entry.ahead].
-     Written and restored by the same wrapper in the same call, like [current_prop]. *)
+  (* True only inside [deriving_ahead]; [apply] copies it into [entry.ahead] and the
+     conflict builders into [c_ahead]. Written and restored by the same wrapper in the
+     same call, like [current_prop]. *)
   mutable current_ahead : bool;
-  (* M6-T18. The trail's LOW-WATER MARKS, one per registered reader: reader [r]'s slot is
-     the smallest [trail_len] reached since [r] last called [take_low_water]. Maintained by
-     [undo_to], the only place the trail shrinks, and reset to the current length on
-     read. [Engine.propagate] reads it to find how far a backtrack reached since it last
-     looked: the trail being short tells it a pop happened, but not how far, and a pop
-     followed by pushes back to the same length leaves no trace in [trail_len] at all.
+  (* The trail's LOW-WATER MARKS, one per registered reader: reader [r]'s slot is the
+     smallest [trail_len] reached since [r] last called [take_low_water]. Maintained by
+     [undo_to], the only place the trail shrinks, and reset to the current length on read.
+     [Engine.propagate] reads it to find how far a backtrack reached since it last looked:
+     the trail being short tells it a pop happened, but not how far, and a pop followed by
+     pushes back to the same length leaves no trace in [trail_len] at all.
      One slot PER READER rather than one per store because a read resets the mark, so
      two engines on one store (a unit test's shape, never a solve's) sharing a slot
-     would each steal the other's pops. See [register_low_water]. *)
+     would each steal the other's pops. See [register_low_water]. They let the engine
+     seed its queue from what CHANGED rather than from every propagator (M6-T18). *)
   mutable low_water : int array;
 }
 
-(* A conflict, with the identity of the propagator that reported it.
+(* A conflict: the explanation of the contradiction ([c_why]), the bound facts it read
+   ([c_reason]), and the propagator instance that reported it ([c_prop]). It is built
+   from the same [Reason.justified] value a pruning is, by [conflict] below, so the two
+   halves arrive together here too.
 
-   [c_prop] is that propagator's instance id (M2-T7). A conflict was already the one
-   case D-0011 said was fine -- "reasons are demanded only for *conflicts*, which
-   [propagate] returns directly to the engine, so the instance that produced it is
-   known" -- but "known to the engine, in a local variable" is not the same as
-   "recorded", and [Search] and [Trace] are handed the conflict with the engine's local
-   long gone. M2-T3 needs the conflicting constraint to start a 1UIP resolution from.
+   [c_prop] is the reporting instance's id. The engine knows it in a local variable when
+   [propagate] returns, but [Search] and [Trace] are handed the conflict after that local
+   is gone, and 1UIP learning (M2-T3) needs the conflicting constraint to start its
+   resolution from. Added by M2-T7.
 
-   [c_reason] is the bound facts behind the conflict, for D-0018 point 3's "a conflict
-   under decisions logs its own reason line first". A conflict establishes no bound and
-   so has no trail entry to hang them on; before M2-T7 they went through a one-shot
-   mutable slot on [t], armed by the propagator immediately before returning and
-   consumed immediately by [Trace.conflict_line]. They are a field of the returned value
-   now, which is what "consumed exactly once, immediately, and nothing may run in
-   between" was trying to approximate.
-
-   M2-T8: it is a [Reason.t] rather than a thunk, and there is no default. A conflict
-   with nothing behind it says [Reason.none] and is seen saying it; [Trace.conflict_line]
-   then writes no line, because a line over an empty tail claims an unconditional
-   contradiction, which is false. The conflict is built from the same
-   [Reason.justified] value a pruning is, so the two halves arrive together here too. *)
+   [c_reason] is the facts a conflict under decisions writes as its own reason line
+   before the branch's nogood (D-0018 point 3). A conflict establishes no bound, so it
+   has no trail entry to hang them on, and they are a field of the returned value. It is
+   a [Reason.t] with no default: a conflict with nothing behind it says [Reason.none]
+   and is seen saying it, and [Trace.conflict_line] then writes no line, because a line
+   over an empty tail claims an unconditional contradiction, which is false. History:
+   before M2-T7 the facts went through a one-shot mutable slot on [t] (see
+   [current_prop]); before M2-T8 they were a thunk. *)
 type conflict = {
   c_prop : int;
   c_why : Explanation.t;
   c_reason : Reason.t;
   c_ahead : bool;
-      (* M4-T10 (D-0096). "This conflict's derivation must be on the page AHEAD of its
-         reason line", the conflict's twin of [entry.ahead]: stamped by [conflict] off
-         [current_ahead], which only [deriving_ahead] sets. [Trace.conflict_line] reads
-         it. A [Needs_derivation] family that reports a conflict WITH its facts -- so
-         that 1UIP learning has a reason to resolve from -- must put the counting
-         argument ahead of `rup ~facts >= 1`, which is not reverse unit propagation. *)
+      (* "This conflict's derivation must be on the page AHEAD of its reason line", the
+         conflict's twin of [entry.ahead]: stamped by [conflict] from [current_ahead],
+         which only [deriving_ahead] sets. [Trace.conflict_line] reads it. A
+         [Needs_derivation] family that reports a conflict WITH its facts, so that 1UIP
+         learning has a reason to resolve from, must put the counting argument ahead of
+         `rup ~facts >= 1`, which is not reverse unit propagation on its own. Added for
+         cumulative (M4-T10, D-0096), the first such family whose conflicts carry
+         facts. *)
 }
 
 type outcome = Unchanged | Changed | Conflict of conflict
@@ -380,38 +408,40 @@ let level t = t.n_levels
 let lo_support t v = t.lo_sup.(Var.to_int v)
 let hi_support t v = t.hi_sup.(Var.to_int v)
 
-(* M6-T20 (D-0104). The trail position of the entry that FIRST brought [v]'s upper
-   bound below [k] ([hi_below]), or its lower bound to [k] or above ([lo_at_least]), or
-   [no_support] when the declared bound already did. These are the positions at which
-   the order literals `v >= k` and `v < k` became false, and so the positions a
-   backtrack must undo to make them non-false again -- which is what the watch rule of
-   [Clause.Learned_clause] ranks literals by. [hi_support] is NOT that position: it is
-   the entry behind the CURRENT bound, and a bound that has moved twice since it crossed
-   [k] has a support later than its crossing. Ranking by the support, the first M6-T20
-   draft watched a literal falsified early as if it had been falsified late, and the
-   BAGUETTE_DEBUG check of I-P7 caught the clause going unit unwatched after a backjump.
+(* The trail position of the entry that FIRST brought [v]'s upper bound below [k]
+   ([hi_below]), or its lower bound to [k] or above ([lo_at_least]), or [no_support] when
+   the declared bound already did. These are the positions at which the order literals
+   `v >= k` and `v < k` became false, and so the positions a backtrack must undo to make
+   them non-false again, which is what the watch rule of [Clause.Learned_clause] ranks
+   literals by (learned clauses answer their wakes through an advisor with two watched
+   literals, M6-T20, D-0104).
 
-   Each entry records the support of the bound BEFORE it ([sup_lo]/[sup_hi]), so the
-   crossing is found by walking one bound's own chain of moves back from its support
-   while the entry's [old] bound was already past [k]: O(moves of [v] on the trail),
-   and only asked for literals that are false now.
+   [hi_support] is NOT that position: it is the entry behind the CURRENT bound, and a
+   bound that has moved twice since it crossed [k] has a support later than its crossing.
+   The first M6-T20 draft ranked by the support, so it watched a literal falsified early
+   as if it had been falsified late, and the BAGUETTE_DEBUG check of I-P7 (an advisor
+   answers for every wake it drops) caught the clause going unit unwatched after a
+   backjump.
 
-   M16-file-review-T1 (D-0186): that walk now runs over the bound's HISTORY
-   ([hi_hist]/[lo_hist], below), its newest [walk_first] steps one by one and the rest
-   by binary search, O(min(steps, log moves)). The chain the walk followed IS
-   the history read backwards: [apply] pushes a position there exactly when it writes
-   [hi_sup] (the next entry's [sup_hi]), [undo_to] pops it exactly when it restores it.
-   Along the history the [old] upper bounds do not increase -- the first is the
-   declared bound, each later one the [now] of the entry before, and no entry outside
-   the history moves the bound -- so "[old] is already below [k]" is false, then true.
-   The walk stopped at the newest entry where it is false, or found none; past its first
-   steps, the search finds the first entry where it is true and answers its predecessor,
-   or [no_support] when there is none. The same answer, even for a literal that is not false now (the
+   How it is found. Each entry records the support of the bound BEFORE it
+   ([sup_lo]/[sup_hi]), so the crossing could be found by walking one bound's own chain
+   of moves back from its support while the entry's [old] bound was already past [k].
+   That chain IS the bound's HISTORY ([hi_hist]/[lo_hist]) read backwards: [apply] pushes
+   a position there exactly when it writes [hi_sup] (the next entry's [sup_hi]), and
+   [undo_to] pops it exactly when it restores it. Along the history the [old] upper
+   bounds do not increase (the first is the declared bound, each later one the [now] of
+   the entry before, and no entry outside the history moves the bound), so "[old] is
+   already below [k]" is false, then true. So the search tests the newest [walk_first]
+   entries one by one, then binary-searches the rest for the first entry where it is
+   true, and answers its predecessor, or [no_support] when there is none: O(min(steps,
+   log moves)). It gives the walk's answer even for a literal that is not false now (the
    walk then stops at once on the current support, the history's top). Symmetric on the
-   lower bound. On 2021 perfect_square the walk was 7 % of the instructions: its
-   learned clauses watch literals falsified many moves ago. The walks stay, as
-   [hi_below_walk] and [lo_at_least_walk], for the BAGUETTE_DEBUG cross-check and
-   test_core.ml's oracle. *)
+   lower bound.
+
+   Measured: on 2021 perfect_square the plain walk was 7 % of the instructions, because
+   its learned clauses watch literals falsified many moves ago (the history search is
+   M16-file-review-T1's, D-0186). The walks stay, as [hi_below_walk] and
+   [lo_at_least_walk], for the BAGUETTE_DEBUG cross-check and test_core.ml's oracle. *)
 let hi_below_walk t v k =
   let rec back p =
     if p = no_support then p
@@ -432,9 +462,10 @@ let lo_at_least_walk t v k =
 
 (* The newest [walk_first] moves are tested one by one, newest first, before the binary
    search takes the rest: a literal falsified a move or two ago is then found in a step or
-   two, as the walk found it, and only an old crossing pays the logarithm. The binary search
-   alone cost 2013 rcpsp_11 0.56 % more instructions per node than the walk, whose crossings
-   are recent, and grew with its histories; the walk alone is perfect_square's 7 %. *)
+   two, as the walk found it, and only an old crossing pays the logarithm. The binary
+   search alone cost 2013 rcpsp_11 0.56 % more instructions per node than the walk, whose
+   crossings are recent, and grew with its histories; the walk alone is perfect_square's 7
+   %. *)
 let walk_first = 4
 
 (* [h.(j)] for the largest [j <= top] whose [old] upper bound is at least [k], or
@@ -507,22 +538,25 @@ let running t = t.current_prop
    a caller that never nests pays nothing for it.
 
    The restore runs on BOTH exits, the return and the exception, because a propagator
-   can raise -- [Checked]'s overflow guard does, by design (I-X8, D-0029) -- and a store
+   can raise -- [Checked]'s overflow guard does, by design, so that no row whose
+   arithmetic wrapped is ever committed (I-X8, D-0029) -- and a store
    left claiming a propagator is running when none is would stamp the next change with a
    stale id. The exception is re-raised with its own backtrace.
 
-   M11-complexity-T14: written out as a [match ... with exception] rather than through
-   [Fun.protect]. The behaviour is the same on both exits ([Fun.protect]'s one extra case,
-   a [finally] that raises, cannot arise: the restore is one field write), but this is one
-   call per propagator RUN, 400 to 600 runs per node on codes-cp's QR48, and
-   [Fun.protect] allocates its [finally] closure and goes through two more calls and a
-   second handler on every one of them. [run_as] is the same bracket for the engine's
-   own call, [f x] instead of [f ()], so that call allocates no closure either. *)
+   It is written out as a [match ... with exception] rather than through [Fun.protect].
+   The behaviour is the same on both exits ([Fun.protect]'s one extra case, a [finally]
+   that raises, cannot arise: the restore is one field write), but this is one call per
+   propagator RUN, 400 to 600 runs per node on codes-cp's QR48, and [Fun.protect]
+   allocates its [finally] closure and goes through two more calls and a second handler
+   on every one of them. [run_as] is the same bracket for the engine's own call, [f x]
+   instead of [f ()], so that call allocates no closure either. (M11-complexity-T14, the
+   per-node cost measured against Gecode on the same tree.) *)
 let run_as t id f x =
   let saved = t.current_prop in
   t.current_prop <- id;
   if Explanation.stats_on then (
-    (* M11-complexity-T15: who builds what, for BAGUETTE_MEMO_STATS only *)
+    (* Who builds which explanation, counted for BAGUETTE_MEMO_STATS only (the
+       explanation-memo statistics of M11-complexity-T15) *)
     let p = !Explanation.producer in
     Explanation.producer := id;
     match f x with
@@ -547,25 +581,29 @@ let run_as t id f x =
 
 let with_running t id f = run_as t id f ()
 
-(* ------------------------------------------ derivation ahead (M7-T17, D-0082) *)
+(* ------------------------------------------------ the derivation written ahead *)
 
 (* Run [f] with every change it makes stamped [ahead = true]: lib/core/trace.ml will
    write the change's derivation (its forced [Explanation.t], through [Justify.emit])
-   immediately before the change's trace line, so a line that is NOT RUP against the
-   .opb alone -- a counting argument over several model constraints, I-X10 -- is RUP in
-   sequence (D-0040).
+   immediately before the change's trace line. A line that is NOT RUP against the .opb
+   alone (a counting argument over several model constraints) is then RUP against the
+   .opb plus the derivation just written, which is what I-X10 asks of every trace line.
+   That is how a counting global is proved: an explicit derivation on the page, not a
+   direct encoding (D-0040).
 
    The CALLER is the propagator, at its own pruning call, and that is the point of the
-   design. Until M7-T17 the trigger was [Encoding.has_direct] of the pruned variable, a
-   proxy for "this variable is in a counting global's scope" that over-triggered (an
-   [int_lin_le] pruning of an all_different variable got a [pol] it did not need) and,
-   once gcc's order-encoded rows arrived, UNDER-triggered (D-0078). Whether a pruning
-   needs its derivation ahead is decided by HOW it was inferred, which only the
-   propagator knows, and only at the moment it prunes.
+   design (D-0082, M7-T17): whether a pruning needs its derivation ahead is decided by
+   HOW it was inferred, which only the propagator knows, and only at the moment it
+   prunes. The engine does not set it (lib/core/engine.ml sets [current_prop], not
+   this), because it runs every family the same way and has no way to know. History:
+   the trigger was [Encoding.has_direct] of the pruned variable, a proxy for "this
+   variable is in a counting global's scope" that over-triggered (an [int_lin_le]
+   pruning of an all_different variable got a [pol] it did not need) and, once gcc's
+   order-encoded rows arrived, under-triggered (D-0078).
 
-   Not through the engine (lib/core/engine.ml sets [current_prop], not this): the
-   engine runs every family the same way and has no way to know. Restored rather than
-   cleared, and under [Fun.protect], for [with_running]'s reasons. *)
+   Restored rather than cleared, on both exits, for [with_running]'s reasons; here
+   through [Fun.protect], which [run_as] avoids only because it runs once per
+   propagator run. *)
 let deriving_ahead t f =
   let saved = t.current_ahead in
   t.current_ahead <- true;
@@ -613,45 +651,41 @@ let push_mark t m =
 
 (* The variable of that name (the lowest-numbered, should two share it), or [None].
 
-   M6-T11 (D-0085). This header used to say the lookup was linear and "only ever called
-   from the debug-gated agreement check, so no index is kept for it". Both halves had
-   stopped being true: [Pb_analysis], [Analysis.support_of], [Learn], [Pb] and [Search]
-   all call it on the conflict path, and D-0080 measured it at 11 % of a 60 s profile on
-   2018 rotating-workforce. It is now one hash lookup into an index built on first use.
-   [var_named_scan] is the old definition, kept as the specification the index is tested
-   against (test_core.ml).
+   One hash lookup into an index built on first use ([by_name]), behind a direct-mapped
+   memo. [Pb_analysis], [Analysis.support_of], [Learn], [Pb] and [Search] all call it on
+   the conflict path, and [Analysis.locate] asks it once per fact it locates.
+   [var_named_scan] is the linear definition, kept as the specification the index is
+   tested against (test_core.ml).
 
-   M20-pernode-T4 (D-0236): the index is a [Name_tbl], keyed by [String.equal] and hashed
-   by [String.hash] -- the value [Hashtbl.hash] gave, without the generic hash's dispatch
-   or the polymorphic compare. [Analysis.locate] asks it once per fact it locates, and it
-   was 7.3 % of elitserien handball12's instructions without the proof.
+   The index is a [Name_tbl], keyed by [String.equal] and hashed by [String.hash] (the
+   value [Hashtbl.hash] gave, without the generic hash's dispatch or the polymorphic
+   compare).
 
-   And in front of the index, a ONE-ENTRY MEMO: the variable [i] answered last, and a hit
-   when the name asked is PHYSICALLY ([==]) the string [names.(i)]. Sound because [i]
-   came out of the index, so it is the first variable bearing [names.(i)], which is what
-   the index answers for any string equal to it; a name that is equal without being that
-   very string just misses. It pays because a reason names one variable twice in a row
-   more often than not -- [Reason.fixed_at]'s two halves, alldiff's [at_least]/[at_most]
-   of one snapshot -- and producers name a variable by [name t v], i.e. by the string in
-   [names] (D-0236 counted 47 % of elitserien handball12's lookups as physical repeats of
-   the one before, and none that was equal without being physical). A miss costs a load
-   and a comparison of pointers.
+   The memo has [memo_size] cells. The cell of a name is chosen by [memo_slot] (its
+   length and its last eight bytes, multiplied and shifted, so a slot costs a few
+   instructions where [String.hash] mixes the whole string behind a C call). A hit is a
+   cell holding a variable [i] with [names.(i) == name], PHYSICAL equality. It is sound
+   because [i] came out of the index for a name equal to [names.(i)], and any string
+   equal to [names.(i)] gets the same answer from the index; a name that is equal
+   without being that very string just misses. The slot only decides WHERE an answer is
+   remembered, never what it is, so two names sharing a slot just evict each other, and
+   [memo_slot] could be any function of the string. The answer is an int ([-1]: no such
+   name), so a hit allocates nothing; [var_named] wraps it.
 
-   M20-pernode-T4 (D-0245): the memo has [memo_size] cells, DIRECT-MAPPED, the cell of a
-   name chosen by [memo_slot] -- its length and its last eight bytes, multiplied and
-   shifted, so a slot costs a few instructions where [String.hash] mixes the whole string
-   behind a C call. A hit is the one-entry memo's test on that cell (the cell's variable
-   [i] and [names.(i) == name]) and is sound by its argument: [i] came out of the index
-   for a name equal to [names.(i)], and any string equal to [names.(i)] gets the same
-   answer from the index. The slot only decides WHERE an answer is remembered, never
-   what it is, so two names sharing a slot just evict each other, and [memo_slot] could
-   be any function of the string. The one-entry memo is the case [memo_size = 1]: the
-   name asked last is still in its cell. It pays because conflict analysis asks about
-   the variables near the conflict, conflict after conflict, and [Analysis.locate] asks
-   once per fact: over 3 000 nodes of elitserien handball12 (no proof), 98.0 % of 8.87 M
-   lookups hit, and 99.6 to 99.99 % on tppv circ14, costas13 and qr2 (D-0245). The
-   answer is an int ([-1]: no such name), so a hit allocates nothing; [var_named] wraps
-   it. *)
+   Why it pays: producers name a variable by [name t v], i.e. by the string in [names],
+   so a repeated question is a physical repeat, and conflict analysis asks about the
+   variables near the conflict, conflict after conflict. Over 3 000 nodes of elitserien
+   handball12 (no proof), 98.0 % of 8.87 M lookups hit, and 99.6 to 99.99 % on tppv
+   circ14, costas13 and qr2 (D-0245).
+
+   History. The lookup was a linear scan, documented as "only called from the
+   debug-gated agreement check"; once the conflict path called it, D-0080 measured it at
+   11 % of a 60 s profile on 2018 rotating-workforce, and M6-T11 (D-0085) built the
+   index. M20-pernode-T4 then keyed the index by [Name_tbl] (it was 7.3 % of elitserien
+   handball12's instructions without the proof) and put a ONE-ENTRY memo in front of it
+   (D-0236 counted 47 % of that instance's lookups as physical repeats of the one
+   before, and none equal without being physical), which D-0245 generalised to the
+   direct-mapped memo; the one-entry memo is its case [memo_size = 1]. *)
 let memo_bits = 12
 let memo_size = 1 lsl memo_bits
 
@@ -728,15 +762,17 @@ let root_holds t (l : Lit.t) =
           if l.Lit.positive then Domain.lo (get t v) >= k && root (lo_support t v)
           else Domain.hi (get t v) <= k - 1 && root (hi_support t v))
 
-(* A PAGE-ONLY LEMMA (M7-T35, D-0189): a [Term (c, Clause l)] followed at once by a
-   [Weaken] of exactly [(c, ~l_j)] for each literal of [l], in order. Each [c l_j + c ~l_j]
-   is the constant [c], so the pair adds a constant to the row and NO VARIABLE: the
-   clause is in the derivation only so that its own line is on the page ahead of the line
-   that needs it (member.ml's threshold lemmas, D-0170), and the derivation's result does
-   not read it. The [Weaken] there is not "a variable read and weakened away", which is
+(* A PAGE-ONLY LEMMA: a [Term (c, Clause l)] followed at once by a [Weaken] of exactly
+   [(c, ~l_j)] for each literal of [l], in order. Each [c l_j + c ~l_j] is the constant
+   [c], so the pair adds a constant to the row and NO VARIABLE: the clause is in the
+   derivation only so that its own line is on the page ahead of the line that needs it
+   (member.ml's threshold lemmas, D-0170), and the derivation's result does not read it.
+   The [Weaken] there is not "a variable read and weakened away", which is
    the only thing the reverse arm asks the reason to account for. Matched on the raw
    [Clause], never a [Deferred] one, so the check forces nothing it did not force before,
-   and on the exact shape: one coefficient or literal off and the [Weaken] counts. *)
+   and on the exact shape: one coefficient or literal off and the [Weaken] counts.
+   History: M7-T35 (D-0189), after the reverse arm over-read member's threshold lemmas
+   and six member models stopped under BAGUETTE_DEBUG with correct reasons. *)
 let page_only_lemma c lits ws =
   List.compare_lengths lits ws = 0
   && List.for_all2 (fun l (c', w) -> c' = c && Lit.equal w (Lit.negate l)) lits ws
@@ -798,33 +834,35 @@ let reverse_owners t e =
    corrections were found by turning BAGUETTE_DEBUG on and watching the check reject
    working code; neither was visible by reading it.
 
-   Requiring a support is the sharpest forward statement available until D-0038 gives a
-   conclusion to compare against; see the M2-T8 hand-back for what it consequently does
-   not catch.
+   The forward arm compares variable SCOPES, so it catches a reason naming the wrong
+   variable and not the right variable at the wrong value. The value is checked exactly
+   by [conclusion_holds] below, against the conclusion each pruning now carries (D-0043,
+   which answered D-0038's question).
 
    **Reverse.** Every variable the derivation weakens out of its own row at the top level
    must be named by the reason ([Explanation.top_weaken_owners] says why top level). This
-   is the I-P5 direction: a derivation that read a variable and weakened it away has a
-   pruning that depends on it, and a reason that omits it writes a trace line over too
+   is the I-P5 direction (a pruning's reason carries every fact its trace line negates;
+   I-P5 is now part of I-P4): a derivation that read a variable and weakened it away has
+   a pruning that depends on it, and a reason that omits it writes a trace line over too
    short a tail.
 
-   **The reverse arm and a ROOT [Defining]** (M6-T8, D-0091). A top-level
-   [Explanation.Defining (c, l)] used to count exactly as a [Weaken] does, on the argument
-   that the derivation reads [l]'s variable "and the reason owes the same account of it".
-   That is right for a literal a branch rests on and wrong for one the ROOT established,
-   and the difference is D-0064's own construction rule: a [Defining] may cite only a
+   **The reverse arm and a ROOT [Defining].** A top-level [Explanation.Defining (c, l)]
+   on an order literal the ROOT established is exempt; one a branch rests on counts as a
+   [Weaken] does. The difference is D-0064's own construction rule: a [Defining] may cite
+   only a
    consequence of the MODEL (element.ml's and alldiff.ml's [established_at_root], gcc.ml's
    [root]). A reason is the list of facts a BRANCH rests on -- what a trace line assumes
    on its tail and what a learned clause negates -- and a root-established fact is in no
    branch's dependency: its unit line is on the page at level 0 and is never wiped, so a
    trace line that omits it is no shorter in the sense I-P5 means, and [Analysis] drops a
-   root node from every cut anyway. Demanding it of the reason fired on every element
+   root node from every cut anyway. History: until M6-T8 (D-0091) a root [Defining]
+   counted as a [Weaken] too, and demanding it of the reason fired on every element
    no-position conflict whose residue cancellation cites a root bound (four suite models,
    found by turning BAGUETTE_DEBUG on) while the proofs verified.
 
    So a top-level [Defining] on an ORDER literal is exempt exactly when the STORE says the
-   bound is root-held -- checked here, not taken on the propagator's word. A [Defining] of a
-   bound a decision set (the D-0064 violation) is still required, and so is every
+   bound is root-held -- checked here, not taken on the propagator's word. A [Defining] of
+   a bound a decision set (the D-0064 violation) is still required, and so is every
    [Weaken]. A [Defining] on a DIRECT literal (alldiff's hole units) is not exempted: no
    caller in [lib/] needs it to be, and deciding whether a hole is root-held needs
    [remover], which is not this check's business to call. *)
@@ -846,16 +884,16 @@ let agreement_holds t (j : Reason.justified) =
     (Reason.facts j.reason)
   && List.for_all (fun o -> List.mem o named) (reverse_owners t j.justification)
 
-(* D-0043's half of the same question, and the one M2-T8 could not ask.
+(* The conclusion a pruning carries ([concludes], D-0043) is the bound this change
+   produced, up to the holes the store settled over.
 
-   [agreement_holds] above compares the two halves' variable SCOPES, and its forward arm
-   has to fall back on "...or the fact has a support" because nothing in the pruning said
-   what it concluded. That arm is why M2-T8 handed back a known limitation: it catches a
-   reason naming the wrong *variable*, and not the right variable at the wrong *value*.
-   A conclusion is a value, so this check is exact where that one is structural, and the
-   defect it closes is I-X9's shape -- the M1-T44 one, a claim one unit off the bound the
-   trail actually holds, which reaches veripb as a line the checker cannot derive and
-   which nothing on our side saw first.
+   [agreement_holds] above compares the two halves' variable SCOPES, so it catches a
+   reason naming the wrong variable and not the right variable at the wrong value. A
+   conclusion is a value, so this check is exact where that one is structural. The defect
+   it closes is the one I-X9 forbids (an explanation justifies the bound as recorded on
+   the trail): a claim one unit off the bound the trail actually holds, which M1-T44 met
+   as a correct UNSAT answer whose proof the checker rejected, and which nothing on our
+   side had seen first.
 
    Three conjuncts, and each rejects a different wrong answer:
 
@@ -870,7 +908,7 @@ let agreement_holds t (j : Reason.justified) =
        [lib/] hits almost all of the time. Not "at least as strong" and not "at least as
        weak": a conclusion stronger than the change is a claim the store cannot back,
        and a weaker one is precisely what M1-T51 measured the checker accepting in
-       silence.
+       silence (a [pol] that derives something weaker than the claimed bound).
 
    THE SETTLE WINDOW was measured, not designed. Running the suite under BAGUETTE_DEBUG
    with the naive "exactly the new bound" test reddened three scenes and every one was
@@ -913,21 +951,44 @@ let conclusion_holds t v ~old ~now (j : Reason.justified) =
         && b >= Domain.hi now
         && settled_down (Domain.hi now)
 
-(* D-0037, enforced rather than commented: a DECISION concludes nothing.
+(* A DECISION concludes nothing (D-0037: a decision is an assumption, not a consequence
+   of the model row), and this enforces it.
 
    A decision moves a bound like any pruning, so [conclusion_holds] above would happily
-   accept one that claimed it -- the numbers agree, because the store really did set that
-   bound. What is wrong is not the number but the claim: nothing in the proof establishes
-   a decision ([Justify.emit] refuses a [Decision] outright, D-0009), so stating that the
-   pruning derived it is the M1-T50 defect wearing a new field. The match is on the raw
-   justification and not on [Explanation.force]: a decision is never [Deferred], and
-   forcing here would run a propagator's thunk inside an invariant check. *)
+   accept one that claimed it: the numbers agree, because the store really did set that
+   bound. What is wrong is the claim. Nothing in the proof establishes a decision
+   ([Justify.emit] refuses a [Decision] outright, D-0009), so stating that the pruning
+   derived it repeats the M1-T50 defect (linear.ml citing its own row twice when a fact
+   came from a decision) in a new field. The match is on the raw justification and not on
+   [Explanation.force]: a decision is never [Deferred], and forcing here would run a
+   propagator's thunk inside an invariant check. *)
 let decision_concludes_nothing (j : Reason.justified) =
   match j.justification with
   | Explanation.Decision _ -> Option.is_none j.concludes
   | _ -> true
 
-(* The failing message carries the offending pair, because "these two disagree" without
+(* The agreement check of D-0026: the reason and the justification are about the same
+   pruning.
+
+   They are two projections of one pruning, and cannot be compared literal for literal:
+   a [Weaken] summand states a variable's whole declared range while the reason states
+   where its bound currently sits, so for a weakened term the two share no literal at all
+   (lib/core/explanation.ml's [owners] says this at length). What they must share is the
+   VARIABLE SCOPE: a reason naming a variable the derivation never mentions is a reason
+   for a different pruning, which is how a hand-edited propagator drifts. Before M2-T8
+   the two were kept in agreement by a comment.
+
+   Under [BAGUETTE_DEBUG] only, and it FORCES the justification to do it. That is a
+   deliberate cost with one sharp edge: forcing at push time masks an I-X6 violation (a
+   deferred explanation that reads live state reads it before anything has moved). That
+   is how [explain_cross_conflict]'s violation stayed hidden until M1-T13, because search
+   happened to force conflict explanations immediately. A debug run therefore cannot be
+   the run that catches a NEW I-X6 violation, and nothing here claims otherwise: the type
+   discharges I-X6 on the reason half (lib/core/reason.ml), and on the justification half
+   it stays an argument that test_prop.ml's snapshot tests check by backtracking before
+   forcing.
+
+   The failing message carries the offending pair, because "these two disagree" without
    saying which fact and which derivation is a message that sends the reader back to a
    breakpoint. Built only on the failing path, so the enabled-and-passing cost is the
    predicate alone. *)
@@ -966,8 +1027,8 @@ let check_conclusion t v ~old ~now (j : Reason.justified) =
 
 (* A conflict, attributed to whoever is running. The propagator never names itself; see
    [with_running]. It takes the same [Reason.justified] a pruning does, so "a conflict
-   with no facts" is [Reason.because Reason.none expl] -- written out, never defaulted;
-   see [Reason.none]. *)
+   with no facts" is [Reason.because ~concludes:None Reason.none expl], written out and
+   never defaulted; see [Reason.none]. *)
 let conflict t (j : Reason.justified) =
   check_agreement t j;
   {
@@ -992,16 +1053,16 @@ let conflict t (j : Reason.justified) =
    this file. Found by turning the check on: this arm was the only false positive left in
    the suite once non-materialising facts were skipped.
 
-   [c_ahead] carries [current_ahead] exactly as [conflict] does (M8-bits-encoding-T5,
-   D-0131). It was hard-coded [false] here while nothing read the flag on a factless
-   conflict: [Trace.conflict_line] writes nothing over an empty tail, and both of
-   [Search]'s conflict arms wrote a factless derivation unconditionally. The root arm now
-   writes it ONLY when the family flagged the conflict, and the pigeonhole -- alldiff's
-   and gcc's push that empties a domain, made inside [deriving_ahead] -- is a conflict of
-   exactly that kind: its derivation is the counting argument the empty clause rests on.
-   Measured: with [false] here, five root refutations (alldiff_hall_unsat,
-   alldiff_pigeonhole_narrow_unsat, gcc_capacity_unsat, ...) closed on `rup >= 1` with no
-   derivation on the page and 3.0.2 refused each at that line. *)
+   [c_ahead] carries [current_ahead] exactly as [conflict] does. [Search]'s root arm
+   writes a factless conflict's derivation ONLY when the family flagged the conflict, and
+   the pigeonhole (alldiff's and gcc's push that empties a domain, made inside
+   [deriving_ahead]) is a conflict of exactly that kind: its derivation is the counting
+   argument the empty clause rests on. Measured: with [false] here, five root
+   refutations (alldiff_hall_unsat, alldiff_pigeonhole_narrow_unsat, gcc_capacity_unsat,
+   ...) closed on `rup >= 1` with no derivation on the page and 3.0.2 refused each at
+   that line. History: it was hard-coded [false] while both of [Search]'s conflict arms
+   wrote a factless derivation unconditionally, until M8-bits-encoding-T5 (D-0131, which
+   writes the order arm's ladder walks as [rup]) made the root arm read the flag. *)
 let unattributed_conflict t why =
   {
     c_prop = t.current_prop;
@@ -1010,31 +1071,15 @@ let unattributed_conflict t why =
     c_ahead = t.current_ahead;
   }
 
-(* The D-0026 agreement check.
+(* Apply a [Domain.result], recording the old value so it can be undone.
 
-   The reason and the justification are two projections of one pruning, and until M2-T8
-   they were kept in agreement by a comment. They cannot be compared literal for literal
-   -- a [Weaken] summand states a variable's whole declared range while the reason states
-   where its bound currently sits, so for a weakened term the two share no literal at all
-   (lib/core/explanation.ml's [owners] says this at length). What they must share is the
-   *variable scope*: a reason naming a variable the derivation never mentions is a reason
-   for a different pruning, which is how a hand-edited propagator drifts.
-
-   Under [BAGUETTE_DEBUG] only, and it FORCES the justification to do it. That is a
-   deliberate, documented cost with one sharp edge: forcing at push time is exactly what
-   masked the I-X6 violation in [explain_cross_conflict] until M1-T13 (search happened to
-   force conflict explanations immediately, so a thunk reading live state read it before
-   anything moved). A debug run therefore cannot be the run that catches a *new* I-X6
-   violation, and nothing here claims otherwise -- the type discharges I-X6 on the reason
-   half (lib/core/reason.ml), and on the justification half it stays an argument that
-   test_prop.ml's snapshot tests check by backtracking before forcing. *)
-(* Apply a Domain.result, recording the old value so it can be undone.
-
-   Every path through here takes ONE [Reason.justified], which is both halves of
-   D-0026 and both of I-P4 and I-P5. There is no second entry point that takes fewer:
-   do not add an optional argument and do not add a sibling function that omits the
-   reason -- [set_lo_with_facts] was that sibling, and the plain [set_lo] beside it
-   silently meaning "no facts" is how [int_ne] pruned factlessly from M1-T9 to M1-T17. *)
+   Every path through here takes ONE [Reason.justified], which carries both halves of
+   D-0026 (the reason and the justification) and so discharges I-P4: every change
+   carries its explanation, and its reason carries the facts its trace line negates.
+   There is no second entry point that takes fewer: do not add an optional argument and
+   do not add a sibling function that omits the reason. History: a [set_lo_with_facts]
+   sibling existed until M2-T8, and the plain [set_lo] beside it silently meaning "no
+   facts" is how [int_ne] (M1-T9) pruned without facts until M1-T17. *)
 let apply t v (r : Domain.result) (j : Reason.justified) =
   let why = j.justification in
   match r with
@@ -1047,8 +1092,7 @@ let apply t v (r : Domain.result) (j : Reason.justified) =
          own [conflict]). Attaching the partial set here would give those unreachable-at-
          the-interface forwarding arms in ne.ml and bool_clause.ml a conflict line over
          too few facts -- a claim that those facts alone are contradictory, which is
-         false and which veripb would reject. Before M2-T7 they recorded nothing and got
-         no line; they still get no line. *)
+         false and which veripb would reject. They get no line. *)
       Conflict (unattributed_conflict t why)
   | Domain.Changed d ->
       let i = Var.to_int v in
@@ -1118,8 +1162,8 @@ let undo_to t target =
     t.domains.(i) <- e.old;
     t.lo_sup.(i) <- e.sup_lo;
     t.hi_sup.(i) <- e.sup_hi;
-    (* M6-T14: the entry being popped is the newest on the trail, so if it moved a bound
-       it is the top of that bound's history. *)
+    (* The entry being popped is the newest on the trail, so if it moved a bound it is
+       the top of that bound's history. *)
     t.all_hn.(i) <- t.all_hn.(i) - 1;
     if Domain.lo e.now > Domain.lo e.old then t.lo_hn.(i) <- t.lo_hn.(i) - 1;
     if Domain.hi e.now < Domain.hi e.old then t.hi_hn.(i) <- t.hi_hn.(i) - 1;
@@ -1131,7 +1175,7 @@ let undo_to t target =
     if t.trail_len < lw.(r) then lw.(r) <- t.trail_len
   done
 
-(* M6-T18: a new low-water reader, whose mark starts at the CURRENT trail length -- the
+(* A new low-water reader, whose mark starts at the CURRENT trail length -- the
    reader has seen nothing yet, so nothing has been popped from under it. Returns the
    handle [take_low_water] takes. *)
 let register_low_water t =
@@ -1139,7 +1183,7 @@ let register_low_water t =
   t.low_water <- Array.append t.low_water [| t.trail_len |];
   r
 
-(* M6-T18: reader [r]'s minimum trail length since its previous call (or since it
+(* Reader [r]'s minimum trail length since its previous call (or since it
    registered), and reset its mark to the current length. Every trail position below the
    returned value has been on the trail, UNCHANGED, throughout; every position at or
    above it may have been popped and pushed again. The trail shrinks only in [undo_to],
@@ -1199,16 +1243,17 @@ let trail_entry t i =
       (Printf.sprintf "Store.trail_entry: %d out of range (len %d)" i t.trail_len);
   t.trail.(i)
 
-(* ------------------------------------------------ what holds a bound up (M2-T8) *)
+(* ------------------------------------------------------ what holds a bound up *)
 
-(* The trail position of the entry that established [v]'s current lower bound, or
+(* [lo_support] (defined near the top, because the agreement check reads it) is the
+   trail position of the entry that established [v]'s current lower bound, or
    [no_support] while it is still the bound [v] was created with. O(1).
 
-   This replaces lib/core/prop/linear.ml's [find_lo_reason], which answered the same
-   question by scanning the trail downwards from the newest entry, once per term per
-   pruning. Equivalence, because it is not obvious and because M1-T28 records that the
-   *direction* of that scan was load-bearing (scanning upwards returns the OLDEST entry
-   that moved the bound, i.e. a superseded reason, and no model in the suite can tell the
+   It answers what lib/core/prop/linear.ml's [find_lo_reason] (deleted by M2-T8) answered
+   by scanning the trail downwards from the newest entry, once per term per pruning. Why
+   the two agree, because it is not obvious and because the DIRECTION of that scan was
+   load-bearing (M1-T28 recorded that scanning upwards returns the OLDEST entry that
+   moved the bound, i.e. a superseded reason, and that no model in the suite can tell the
    two apart):
 
      - The scan looked for the newest entry [e] for [v] with [Domain.lo e.old < cur].
@@ -1222,9 +1267,9 @@ let trail_entry t i =
    bound* and returned nothing when [cur] had not passed it; this array knows only what
    the store was created with. The two differ for a propagator built after something had
    already narrowed the variable (which unit tests do deliberately), so the guard stays
-   at the call site where the declared bound lives -- [Linear.snapshot_source] already
-   makes exactly that test before asking. *)
-(* ------------------------------------- which entry established a value (M6-T14) *)
+   at the call site where the declared bound lives: [Linear.snapshot_at], behind
+   [snapshot_source], makes exactly that test before asking. *)
+(* ---------------------------------------------- which entry established a value *)
 
 (* Did [e] establish [value] in this direction? True for at most one live entry per
    (variable, direction, value), by I-D3's monotonicity. Moved here from
@@ -1286,16 +1331,17 @@ let bound_support t ~before v ~is_lower ~value =
    that pops the entry that removed it, so there is at most one and this finds it at the
    first hit.
 
-   [None] means a hole with no trail entry behind it, i.e. a *declared* domain with a gap
-   ([Domain.of_list], for `var {1,3,5}: x`). Nothing in `lib/` produces one: M7-T11
-   (D-0072) deleted [reject_set_domain], and lib/flatzinc/compile.ml now gives the store
-   the HULL of a set domain and posts one [Ne] instance per hole, so every hole has a
-   trail entry behind it; [Domain.of_list] is gone from `lib/` (M22-review-T5 moved it to
-   test/unit/domain_helper.ml). Callers cite nothing
-   rather than raising; lib/core/trace.ml's [remover] header argues why.
+   [None] means a hole with no trail entry behind it, i.e. a DECLARED domain with a gap
+   (`var {1,3,5}: x`). Nothing in `lib/` produces one: lib/flatzinc/compile.ml gives the
+   store the HULL of a set domain and posts one [Ne] instance per hole, so every hole has
+   a trail entry behind it (D-0072, M7-T11, which replaced the refusal of set domains).
+   The only builder of a gapped declared domain is the test helper
+   [Domain_helper.of_list] (test/unit/domain_helper.ml, moved out of [lib/] by
+   M22-review-T5). Callers cite nothing rather than raising; the comment on
+   [Store.remover] in lib/core/trace.ml argues why.
 
-   Shared: [Trace] and [Linear] had a copy each ([remover] and [find_removal]), with the
-   two off-by-one conventions that invites. This is the [before]-is-exclusive one. *)
+   [before] is EXCLUSIVE. [Trace] and [Linear] once had a copy each, with the two
+   off-by-one conventions that invites; this is the one they share. *)
 let remover_scan t ~before ~var value =
   let rec go i =
     if i < 0 then None
@@ -1307,15 +1353,15 @@ let remover_scan t ~before ~var value =
   in
   go (Stdlib.min (before - 1) (t.trail_len - 1))
 
-(* M6-T14 (D-0088): [remover_scan]'s answer from [var]'s entry history in O(log entries
-   on [var]) rather than O(|trail|) per call -- the walk that was left at the top of
-   2014_mario's profile once [bound_support] had removed the bound one. Along that history
+(* [remover_scan]'s answer from [var]'s entry history in O(log entries on [var]) rather
+   than O(|trail|) per call. The scan was at the top of 2014_mario's profile once
+   [bound_support] had removed the bound one (M6-T14, D-0088). Along that history
    each entry's [old] is its predecessor's [now] and domains only shrink (I-D3), so
    "[value] is gone from [now]" is false then true: the first entry where it turns true
    is the only one that can have removed it, found by binary search; it did iff its [old]
    still held [value] (false only for the first entry, when the declared domain never
-   did), and the scan finds it iff it lies strictly below [before]. The scan stays one
-   wave as the [BAGUETTE_DEBUG] cross-check and test_core's oracle. *)
+   did), and the scan finds it iff it lies strictly below [before]. The scan stays as the
+   [BAGUETTE_DEBUG] cross-check and test_core's oracle. *)
 let remover t ~before ~var value =
   let i = Var.to_int var in
   let h = t.all_hist.(i) and n = t.all_hn.(i) in
@@ -1354,8 +1400,9 @@ let settled_over_hi old ~cur =
   go (cur + 1) []
 
 (* Every reason [v]'s current lower bound rests on: the entry that moved it, then one per
-   hole that entry's settle walked over (M1-T44, I-X9). [[]] exactly when no entry has
-   moved it.
+   hole that entry's settle walked over, since the bound the trail records rests on those
+   holes too (I-X9; M1-T44 was the rejected proof that omitted them). [[]] exactly when
+   no entry has moved it.
 
    O(1) plus one scan per hole settled over, which is zero holes for every bound in a
    model with no disequality. The hole scan is what is left of the old O(n * |trail|):
@@ -1381,16 +1428,17 @@ let hi_reasons t v =
   reasons_under t v ~support:(hi_support t v) ~settled:(fun (e : entry) ->
       settled_over_hi e.old ~cur:(Domain.hi e.now))
 
-(* ------------------------------ the trail as of a fixed position (M7-T27 (a), D-0124) *)
+(* ----------------------------------------------- the trail as of a fixed position *)
 
 (* A [history] is the store's trail cut at [upto]: positions [0 .. upto - 1] and nothing
    after. The four lookups below answer, for that cut, exactly what [lo_support],
    [Domain.lo (get t v)], [lo_reasons] and their [hi] twins answer for the live store --
    and when [upto] is the current trail length the answers are the same values, which is
    how a [Linear] pruning's reason can be materialised later from a history taken at the
-   push and render what a snapshot taken at the push would have (D-0124).
+   push and render what a snapshot taken at the push would have (D-0124, M7-T27 (a)).
 
-   WHY THIS IS A SNAPSHOT AND NOT A LIVE READ (I-X6). The trail is a stack: an entry at
+   WHY THIS IS A SNAPSHOT AND NOT A LIVE READ, as I-X6 requires of an explanation. The
+   trail is a stack: an entry at
    position [p] is popped only by [undo_to], which pops every entry above it first, and a
    popped slot is overwritten with [dummy_entry]. So while the entry pushed at [upto] is
    on the trail, every position below [upto] holds the same physical record it held at
@@ -1455,9 +1503,9 @@ let hi_support_at h v =
    while it has none. Only needed when a bound has no support within the history, i.e.
    it still stood where the store created it.
 
-   M16-file-review-T1 (D-0186): read from [initial], one load where the history took four
-   dependent ones (2 % of 2011 roster's instructions, whose reasons cite many declared
-   bounds). The two agree: only [apply] and [undo_to] write [domains], so before the
+   Read from [initial], one load where the history took four dependent ones (2 % of 2011
+   roster's instructions, whose reasons cite many declared bounds; M16-file-review-T1,
+   D-0186). The two agree: only [apply] and [undo_to] write [domains], so before the
    oldest live entry on [v] was pushed nothing live had moved [v], every popped entry
    had restored what it found, and that entry's [old] is the created domain; with no
    live entry the current domain is. [created_domain_by_history] is the old reading,
@@ -1490,9 +1538,11 @@ let hi_reasons_at h v =
   reasons_under h.h_store v ~support:(hi_support_at h v) ~settled:(fun (e : entry) ->
       settled_over_hi e.old ~cur:(Domain.hi e.now))
 
-(* M20-pernode-T2 (D-0214), moved here by M21-memory-T3 (D-0222) at D-0214's request:
-   the three readers an Element FRAME needs beyond the bound ones above, each one call on
-   a position below the cut, so none can read past it. [remover_at] is [remover] with
+(* The three readers an Element FRAME needs beyond the bound ones above, each one call on
+   a position below the cut, so none can read past it. A frame is what an Element pruning
+   records instead of its reason: the domains it read and the trail cut, from which the
+   reason and derivation are built only when asked (D-0214, M20-pernode-T2; the readers
+   moved here with M21-memory-T3). [remover_at] is [remover] with
    [~before] at the cut: the first entry on [var] whose [now] lost [v], kept iff it lies
    below the cut, which is the entry the live store named at the push. [explanation_at]
    is the arena explanation of an entry the history holds (its arena slot is live while
@@ -1504,12 +1554,12 @@ let explanation_at h e = explanation h.h_store e
 let at_root_at h pos = at_root h.h_store pos
 
 (* The decision level the entry at trail position [i] belongs to: the number of open
-   level marks at or below it (I-T2 makes the marks monotone, so this is a count, not a
-   search). Position [marks.(k)] is exactly the *first* entry of level [k+1], which for
-   a level opened by [Search.branch] is the decision push itself. *)
-(* M6-T22 / D-0138: the count is a binary search -- the first [k] whose mark is past [i]
-   -- because the marks are monotone (I-T2); it was a walk over every open level, once
-   per trail entry conflict analysis reads. *)
+   level marks at or below it. Position [marks.(k)] is exactly the FIRST entry of level
+   [k+1], which for a level opened by [Search.branch] is the decision push itself. The
+   count is a binary search for the first [k] whose mark is past [i], because the marks
+   are monotone (I-T2). It was a walk over every open level, once per trail entry
+   conflict analysis reads, until the per-node cost pass on the XOR-heavy codes models
+   (M6-T22, D-0138). *)
 let first_mark_above t i =
   let rec go lo hi =
     if lo >= hi then lo
@@ -1523,15 +1573,14 @@ let level_of_index t i = first_mark_above t i
 
 (* True when [i] is the first entry of some open level, i.e. the push that opened it.
    [Trace] skips these: a decision is not implied by the model and has no trace line.
-   M6-T22: the marks at or below [i] are exactly the first [level_of_index t i], so [i]
-   is a level start iff the last of them equals it, which (the marks being monotone,
-   I-T2) is iff SOME open mark sits at [i].
-
-   M11-complexity-T3 (D-0142): that last form is what [t.starts] counts, so the answer is
-   one load. [Search.decision_entries] asks it for every trail entry at every conflict
-   (D-0140's S3), where the binary search was 8 % of mspsp's instructions at 10 000
-   nodes. [is_level_start_by_marks] is the old definition, kept as the specification
-   test_core.ml checks the count against. *)
+   The marks at or below [i] are exactly the first [level_of_index t i], so [i] is a
+   level start iff the last of them equals it, which (the marks being monotone, I-T2) is
+   iff SOME open mark sits at [i]. That last form is what [t.starts] counts, so the
+   answer is one load. [Search.decision_entries] asks it for every trail entry at every
+   conflict, where the binary search was 8 % of mspsp's instructions at 10 000 nodes
+   (item S3 of D-0140, fixed by M11-complexity-T3, D-0142). [is_level_start_by_marks] is
+   the binary-search definition, kept as the specification test_core.ml checks the count
+   against. *)
 let is_level_start_by_marks t i =
   let k = first_mark_above t i in
   k > 0 && t.marks.(k - 1).trail_mark = i
@@ -1554,8 +1603,8 @@ let check_invariants t =
   done;
   (* I-D1: no stored domain is empty. *)
   let ok_domains = Array.for_all (fun d -> Domain.lo d <= Domain.hi d) t.domains in
-  (* M2-T8: every bound support names a live entry for that variable which moved that
-     bound to where it now sits. This is the property [lo_support]'s equivalence with the
+  (* Every bound support names a live entry for that variable which moved that bound to
+     where it now sits. This is the property [lo_support]'s equivalence with the
      scan it replaced rests on, so it is asserted rather than argued: an array that drifts
      from the trail makes every citation name the wrong derivation, and a wrong citation
      is a proof step about a bound nobody derived. *)
@@ -1584,9 +1633,9 @@ let check_invariants t =
             || Domain.hi e.now <> Domain.hi t.domains.(i)
           then ok_support := false)
     t.hi_sup;
-  (* M6-T14: each history is sorted, names live entries on its variable that moved its
-     bound, and its top is the O(1) array's answer -- the property that makes
-     [bound_support] and [lo_support] two readings of one chain. *)
+  (* Each history is sorted, names live entries on its variable that moved its bound, and
+     its top is the O(1) array's answer -- the property that makes [bound_support] and
+     [lo_support] two readings of one chain. *)
   let ok_hist = ref true in
   let hist_ok h hn sup moved =
     Array.iteri
