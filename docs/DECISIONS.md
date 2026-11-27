@@ -33581,3 +33581,109 @@ peak RSS is 650 MB (jr63 `--cdcl`, proof).
 
 Drop `scripts/factor_lane.sh`, `bench/factor/`, the `factor` target and its README section, and the
 per-node table of `bench/series/HISTORY.md` (all on `wave102-factor`). Nothing else depends on them.
+
+## D-0258  [AUTONOME] M22-review-T7, the fuzz lane's additions: six new streams (globals, search configurations, `-i`, cut runs, end-to-end, wide domains), each with its acceptance test; on main they find a REJECTED proof of `global_cardinality_low_up` on the DEFAULT configuration, `--e2e` and bridge defects on `maximum`/`minimum` and on a gcc over a repeated variable, and wide domains that leave the memory cap or the time limit
+
+**Status**: DONE on `wave104-fuzz` (agent-fuzz, 2026-11-27), not merged. Base: main `c9b1b70`. No change
+under `lib/`, `bin/` or `mznlib/`. Binary under test: `dune build --root . bin/` of that source, md5
+`55028ee3`; the D-0257 reference is `origin/wave103-retbug` (`881263e`), md5 `e75fab1a`. Runs in
+`/scratch/arthur/fuzz-runs/` (`acc1`, `main2`, `full1`).
+
+### 1. What was built
+
+`tools/fuzz/streams.py` (six streams, each a function of its seed), wired into
+`scripts/fuzz_lane.sh` beside the six of 2026-11-23 (`--streams` selects, `--mznlib` flattens with
+another mznlib/), and two helpers: `tools/fuzz/triage.py` (re-judge kept cases under another binary)
+and `tools/fuzz/shrink_mzn.py` (delete constraints while a verdict, or an end-to-end failure text,
+holds). `bench/fuzz/README.md` describes every stream, its acceptance test and the exit statuses;
+`bench/fuzz/found/` keeps every new disagreement as a `.fzn` with a one-line header.
+
+Choices made without the user:
+
+- **Baguette runs on the `.fzn`, flattened once per model** (`minizinc -c` with baguette's mznlib), not
+  through MiniZinc: the `configs` stream runs 18 configurations of one model, and one flattening is
+  what makes 2 000 models of it cost 20 minutes. Its output goes through the `.ozn` (solns2out),
+  because a variable MiniZinc fixes is not in the `.fzn` output: the first version read the raw
+  `.fzn` output and reported 13 false OBJ-MISMATCHes in the acceptance run (the objective was fixed).
+- **The proof's conclusion is checked against the answer** (PROOF-CONCLUSION): `s VERIFIED
+  UNSATISFIABLE` for UNSAT, `SATISFIABLE` for a solution, `NO CONCLUSION` for a cut satisfaction run,
+  and `BOUNDS lo <= .. <= hi` with lo = hi = the optimum (negated for `maximize`) for OPT, hi = the
+  last printed objective and lo below Gecode's optimum for a cut optimisation run. The 2026-11-23
+  streams only looked for `VERIFIED`.
+- **No tie-break by a third solver.** On a STATUS- or OBJ-MISMATCH the note records Chuffed's and
+  CP-SAT's answers, for the triage only. Measured: on the acceptance models of section 2 Chuffed
+  answers the same wrong UNSAT as mznlib before D-0255 (it uses std's repeated-cover row), so a
+  majority vote would have hidden the defect the stream exists to find.
+- **Two shapes on which Gecode is the outlier are not generated**: `circuit` over one node (std's
+  decomposition and Chuffed: false since `x[1] != 1`; Gecode: true; baguette follows std), and a
+  `cumulative` task of duration 0 whose resource exceeds the capacity (Gecode 6.4.0: UNSAT; Chuffed,
+  CP-SAT, HiGHS: SAT; baguette: SAT). The capacity is drawn at least as large as every task's
+  largest resource. Both were found by the stream itself (seed 2 model 17, and seed 1705 model 163).
+- **The forced eviction is D-0257's knob, not a new one**: `BAGUETTE_RETENTION=tiered:core=0,mid=0,
+  first=1,inc=0,mid_every=1` ("an eviction at every learned constraint", the parameters of D-0257's
+  unit test), plus `fifo:1` and `lbd:1`. No solver code was copied.
+- **The `wide` stream runs `--time-limit 10`** under a 30 s outer timeout and does not check proofs:
+  the row asks for a front-end stream. Exit 3, 5, or 2 with a positioned diagnostic (a literal past
+  2^62, "does not fit in an OCaml int") are refusals; `Fatal error: allocation failure` or
+  `Out_of_memory` is MEMCAP; an outer timeout goes to `slow/`.
+- **Generator bias toward satisfiable models**: values of tables, element arrays, covers and counts
+  are drawn from a witness assignment most of the time, so that about half the `globals` models are
+  satisfiable (1 028 UNSAT of 1 969 in `main2`); a `rup` over a contradictory database proves little
+  (D-0066), so an UNSAT-heavy stream is weak evidence.
+
+### 2. The acceptance tests
+
+| Stream | Test | Result |
+|---|---|---|
+| `globals` | flattened with the mznlib of `99d0e39~1` (before D-0255), 2 000 models (`fuzz_lane.sh --streams globals --mznlib <old> --seed 1 -n 2000`, 164 s at -j 16) | FOUND: 11 wrong UNSAT, all `global_cardinality` (variable counts, `_closed`, `low_up_closed`) with a repeated cover value; the first by model index is model 54 of seed 1703 (`global_cardinality([x3], [3,0,0], [c1,x2,x1])`), the first chunk's at model 189 of seed 1700. All 11 answer right with current mznlib (`triage.py`) |
+| `configs` | on main `c9b1b70`, before D-0257 | FOUND at the first model: `streams.py configs OUT 1 1`, model 0 of seed 1 (a 6-variable integer optimisation), REJECTED under `cdcl-ret-evict`, `cdcl-ret-fifo1` and `cdcl-ret-lbd1` at line 800; VERIFIED (`BOUNDS 2 <= obj <= 2`) by the `wave103-retbug` build |
+| `incr`, `limit`, `e2e`, `wide` | no known defect of their kind to rediscover | not applicable; each found something or ran clean (section 3) |
+
+### 3. The run on main (`main2`, seed 2, 2 000 models per stream, -j 16)
+
+| Stream | Models | Result |
+|---|---|---|
+| `globals` | 2 000 (31 not flattenable by MiniZinc, both sides) | 0 disagreements; 1 028 UNSAT, 559 SAT, 382 OPT |
+| `configs` | 2 000 x 18 configurations (5 not flattenable) | 499 REJECTED proofs kept, on 423 models. 482 on 422 models are `--cdcl` with an early eviction (422 `cdcl-ret-lbd1`, 35 `-evict`, 25 `-fifo1`): every one VERIFIED by the `wave103-retbug` build, so D-0257's defect. The other 17 are one model, seed 2802 model 122, under 17 configurations including `default`: the ALARM of section 4. No CONFIG-MISMATCH, no wrong answer |
+| `incr` | 2 000 optimisation models, plain and `-i` | 0 disagreements (11 not flattenable) |
+| `limit` | 2 000 models, 2 cut runs each | 0 disagreements: 1 554 runs stopped by the limit, 2 436 finished; every stopped run printed no `==========`/UNSAT, its solutions held, VeriPB's NO CONCLUSION or BOUNDS contained Gecode's optimum |
+| `e2e` | 2 000 models, bridged and `--e2e` | 1 936 bridged and 1 955 solver-path VERIFIED, agreeing with Gecode; 36/43 SKIPPED; 30 FAIL on 30 models (section 4) |
+| `wide` | 2 000 models (285 MiniZinc cannot flatten, 1 flattening past 60 s) | no wrong answer: 1 111 answered and agreed with Gecode where Gecode answers (its literals stop at 2^31); 230 refused cleanly (130 exit 3 "the encoding must compute inside the representable range", 12 exit 5, 88 exit 2 "integer literal ... does not fit in an OCaml int"); **109 MEMCAP** (`Fatal error: allocation failure` at 4 GB: 57 with `int_times` only, 7 with `all_different` only, 45 with both) and **264 runs past `--time-limit 10` and the 30 s timeout** (216 of them with an `all_different`). Section 4 |
+
+### 4. The disagreements, classified
+
+| Class | Where | Kept as | What |
+|---|---|---|---|
+| **Rejected proof, DEFAULT configuration (new, alarm)** | `configs` seed 2802 model 122, all 17 configurations but one | `found/gcc_lu_dupcover_repeatvar_{unsat,sat}.fzn` | `var 0..3: x0; global_cardinality([x0,x0,x0], [2,2,2], [1,0,0], [2,1,1])`: UNSAT, right, but VeriPB refuses line 80 (`rup ~x0_ge_2 x0_ge_3 X_INTRODUCED_22__ge_1`); the SAT twin (`x1` added) is refused at line 202. Fails on main and on `wave103-retbug`. Dispatched: agent-gccdup, D-0260 |
+| Rejected proof, `--cdcl` with an early eviction (known) | `configs`, 482 cases | not kept (D-0257's) | D-0257's defect; all VERIFIED by its build |
+| Rejected proof, `--e2e` (new, opt-in) | `e2e` seed 3103 model 124, seed 3102 model 191, and `full1` seed 4100 model 8 | `found/e2e_solver_max_const_{first,last}_sat.fzn`, `found/e2e_solver_alldiff_negconst_sat.fzn` | `array_int_maximum(x0, [1, x2])`, `x0` in 1..2, `x2` in -1..1: the solver-written prefix is refused against cake's `.opb` ("Checking error", line 48); with `[x2, 1]` the `.pbp` does not even parse. `x2` in 0..1 verifies; plain `--proof` and the bridged path VERIFY. A signed member of a `maximum` (model 191 is `maximum(x3, [x0, x1])` with `x0` declared -1..2). And `all_different_int([x1,-1,4,x5])` (`x1` in 1..4, `x5` in 1..3) is refused at line 90, where `[x1,4,-1,x5]`, `[x1,0,4,x5]` and `[x1,-1,x5]` verify: an order-dependent handling of constant members. Owner: `lib/proof/e2e.ml` |
+| Bridge defect (new, tooling) | `e2e`, 20 bridged FAILs | `found/e2e_bridge_gcc_repeat_var_sat.fzn`, `found/e2e_bridge_gcc_empty_cover_repeat_var_sat.fzn` | a `global_cardinality` over an array that repeats a variable (also with an EMPTY cover, which MiniZinc flattens to one): `tools/e2e/bridge.py` cites `@L[X_INTRODUCED_gcc_copy_0_ge_k]`, a label it never assigned, and VeriPB refuses to parse the bridged `.pbp`. The `--e2e` path VERIFIES. Every one of the 20 has a gcc over a repeated variable (checked on all 20 by their constraints, shrunk on four) |
+| Bridge defect (new, tooling) | `e2e`, 4 bridged FAILs | `found/e2e_bridge_max_negconst_sat.fzn`, `found/e2e_bridge_min_signed_sat.fzn` | `array_int_maximum` over an array with a fixed negative member, `array_int_minimum` with a constant 0 and signed members: the bridged `.pbp` is refused ("Checking error"); the `--e2e` path and plain `--proof` VERIFY |
+| Bridge coverage gap (tooling) | `e2e`, 4 bridged FAILs | not kept | "cake's objective is not one variable's bit sum": `bridge.py` refuses an objective it does not cover, and chain.sh reports FAIL where SKIPPED would be the honest word |
+| Memory cap, default configuration (new, front end) | `wide`, 109 of 2 000 | `found/wide_alldiff_memcap.fzn` | `all_different` over two variables of width 2^21 and 2^24: `Fatal error: allocation failure during minor GC` at 4 GB after 47 s, the runtime's abort and not exit 5, because the heap budget (M7-T8, D-0071) is off by default; `--max-heap-mb 3000` gives exit 5 |
+| Time limit overrun, default configuration (new, front end) | `wide`, 264 of 2 000 | `found/wide_times_timelimit_overrun.fzn` | `int_times` over the same two variables: `--time-limit 10` is not honoured, no output at 100 s wall; `--max-heap-mb 3000` ends it with exit 5 at 94 s. The encoding phase does not look at the clock |
+| Gecode outliers (reference) | `globals` | not kept; generator changed (section 1) | one-node `circuit`, zero-duration `cumulative` task over capacity |
+| Fuzzer's own bug, fixed | `acc1` | not kept | 13 OBJ-MISMATCHes from reading the raw `.fzn` output (section 1); exit 2 with a positioned diagnostic first classed CRASH (88 wide cases in `main2`, all "does not fit in an OCaml int"); a MiniZinc flattening past 60 s first classed FLATTEN-ERROR (1) |
+
+Not a disagreement, but stated: the `configs` stream says nothing about the default search's
+retention beyond its 2 000 models (every non-`--cdcl` eviction configuration VERIFIED except on the
+gcc model), and the e2e stream's models are those `fzn2scp.py` covers.
+
+### 5. The default-size lane
+
+`scripts/fuzz_lane.sh -j 16 -n 100 --seed 3` (all twelve streams; 13 models per chunk, so 104 per stream, 1 248 models) took **238 s** at -j 16, beside `main2` at load 40 to 50, and exits 1: 34 disagreements kept, 14 timeouts. 27 are D-0257's (`--cdcl` with an early eviction; all VERIFIED by its build), 5 MEMCAP and the 14 timeouts are `wide`'s, one is the bridge's gcc-over-a-repeated-variable defect, and one is NEW: `--e2e` on `all_different_int([x1,-1,4,x5])` (section 4). The six 2026-11-23 streams ran clean. The `main2` run of the six new streams at 2 000 models each took 3 045 s (51 min), most of it the `wide` stream's timeouts and memory exhaustions.
+
+### 6. What is not built
+
+Nothing of the row is left unbuilt. Limits, stated: the `-i` stream checks optimisation models only
+(`-a`/`-n` on satisfaction models are refused by design, D-0150); the `wide` stream does not check
+proofs (the row asks for a front-end stream) and compares answers only when Gecode, whose literals stop
+at 2^31, answers; the `e2e` stream compares the chain's verdict with Gecode, and does not re-run its
+controls (`scripts/e2e_lane.sh` does). A stream is a function of the seed, the binary and mznlib, but
+the `limit` stream's `-t` runs depend on the wall clock (its `BAGUETTE_NODE_LIMIT` runs do not).
+
+### 7. Reverting
+
+Drop `tools/fuzz/streams.py`, `triage.py`, `shrink_mzn.py`, `bench/fuzz/found/`, and restore
+`scripts/fuzz_lane.sh`, `bench/fuzz/README.md` and the `scripts/README.md` row from `c9b1b70`. The
+2026-11-23 streams keep their seeds (the stream index still counts them first).

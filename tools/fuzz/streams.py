@@ -722,6 +722,8 @@ def pre(ctx, model):
     if not model.flat_ok:
         if model.st_g in ("ERROR",):
             return "mzn-error"
+        if model.flat_err.strip() == "TIMEOUT":
+            return "flatten-timeout"  # MiniZinc itself, 60 s (a wide domain's arithmetic)
         if "not supported" in model.flat_err or "unsupported" in model.flat_err.lower():
             ctx.refusal(model.flat_err)
             return "refused-flatten"

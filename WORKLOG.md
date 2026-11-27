@@ -19,7 +19,6 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M22-review-T7 fuzz lane additions (D-0258) | `scripts/fuzz_lane.sh`, `tools/fuzz/`, `bench/fuzz/README.md`, `bench/fuzz/found/`, `scripts/README.md`'s fuzz entry | agent-fuzz (wave104-fuzz) | 2026-11-27 |
 
 ## Cross-session requests
 
@@ -479,7 +478,21 @@ section 1. Shares are inclusive, of the whole run.
   `bench/fuzz/found/gcc_lu_dupcover_repeatvar_unsat.fzn` (`var 0..3: x0`, `global_cardinality([x0,x0,x0], [2,2,2], [1,0,0], [2,1,1])`):
   UNSAT, right (Gecode agrees), but veripb refuses line 80 (`rup ~x0_ge_2 x0_ge_3 X_INTRODUCED_22__ge_1`, RUP).
   Its SAT twin `gcc_lu_dupcover_repeatvar_sat.fzn` is refused at line 202. Both fail on main `c9b1b70` and on `wave103-retbug`.
-  A cover that repeats a value over an array that repeats a variable; found by the `configs` stream, seed 2802, model 122.
+  A cover that repeats a value over an array that repeats a variable; found by the `configs` stream, seed 2802, model 122. Dispatched: agent-gccdup, D-0260.
+
+- **2026-11-27, agent-fuzz (D-0258 section 4), for whoever owns `lib/proof/e2e.ml`: `--e2e` proofs refused against cake's `.opb`, plain `--proof` VERIFIES.**
+  `bench/fuzz/found/e2e_solver_max_const_first_sat.fzn` (`array_int_maximum(x0, [1, x2])`, `x2` in -1..1: "Checking error" line 48),
+  `e2e_solver_max_const_last_sat.fzn` (`[x2, 1]`: the `.pbp` does not parse), `e2e_solver_alldiff_negconst_sat.fzn`
+  (`all_different_int([x1,-1,4,x5])`, line 90; `[x1,4,-1,x5]` verifies). Run: `E2E_SOLVER=1 CAKE_PB_CP=... tools/e2e/chain.sh MODEL.fzn OUT`.
+- **2026-11-27, agent-fuzz (D-0258 section 4), for whoever owns `tools/e2e/bridge.py`: the BRIDGED path fails where `--e2e` verifies.**
+  A gcc over an array that repeats a variable (20 of 30 e2e failures): the bridge cites `@L[X_INTRODUCED_gcc_copy_0_ge_k]`, never assigned
+  (`bench/fuzz/found/e2e_bridge_gcc_repeat_var_sat.fzn`, `e2e_bridge_gcc_empty_cover_repeat_var_sat.fzn`); `maximum`/`minimum` with a fixed negative or
+  signed member (`e2e_bridge_max_negconst_sat.fzn`, `e2e_bridge_min_signed_sat.fzn`, "Checking error"). Also: an objective the bridge does not cover
+  ("cake's objective is not one variable's bit sum") is reported FAIL, where SKIPPED would be the honest verdict.
+- **2026-11-27, agent-fuzz (D-0258 section 4), for whoever owns the encoding of wide domains: the default configuration leaves the 4 GB cap and `--time-limit`.**
+  `bench/fuzz/found/wide_alldiff_memcap.fzn` (`all_different` over widths 2^21 and 2^24: `Fatal error: allocation failure` after 47 s, not exit 5, the heap
+  budget being off by default) and `wide_times_timelimit_overrun.fzn` (`int_times` over the same: no output at 100 s under `--time-limit 10`). In the
+  `wide` stream 109 of 2 000 models met the cap and 264 overran the limit by 20 s or more. No wrong answer.
 
 ## Completed
 
@@ -642,6 +655,7 @@ section 1. Shares are inclusive, of the whole run.
 | M6-T24, the harness (proofs of stopped runs checked, three kinds of answer; on `wave73-interrupt`) | interrupt-session (`wave73-interrupt`), merged by the orchestrator | 2026-11-26 | **D-0225.** The session ended before merging; branch recovered and merged, lane re-recorded after it. |
 | M6-T24 (an interrupted run ends its proof: signals, heap budget, time limit; D-0225) | interrupt-session (`wave73-interrupt`), merged by the orchestrator | 2026-11-26 | **D-0225.** The session ended before merging; branch recovered and merged, lane re-recorded after it. |
 | M18-coverage-T12, M22-review-T5 (exit 6 bucket) | challenge_globals.py, corpus_run.sh | agent-census, wave95-census | 2026-11-27, branch wave95-census |
+| M22-review-T7, the fuzz lane additions (D-0258) | agent-fuzz (`wave104-fuzz`, not merged) | 2026-11-27 | **D-0258 [AUTONOME].** `tools/fuzz/streams.py`: six streams (globals, 18 search configurations, `-i`, cut runs, e2e, wide), `triage.py`, `shrink_mzn.py`; acceptance: the D-0255 wrong UNSAT found with the old mznlib (11/2000), the D-0257 rejection found at the first `configs` model. 2 000 models per stream on main `c9b1b70` (51 min): a default-configuration rejected proof (gcc low_up, dispatched as D-0260), `--e2e` and bridge defects, wide domains past 4 GB and `--time-limit`; all in `bench/fuzz/found/`. Default-size lane: 238 s at -j 16. |
 
 | M2-L3 | agent-learn3 | 2026-09-18 | 1UIP clause learning over order literals, proof-only (**D-0044 fork (ii)**), with conflict-directed backjumping over the **decision closure** and its `rup` derivation at level 0. **I-S4's cross-level debt is discharged** and the check is wider than the invariant's wording. Backjump measured: 31 -> 9 nodes on `backjump_unsat.fzn`. **M1-T66 stays OPEN**: with `Search.bridges` disabled, 35/35 models still pass and no checker rejects — a learned clause citing across levels did NOT make the bridge load-bearing. 1833 unit checks, 267 matrix, 44 mutation, 35/35 models, determinism 35/35 byte-identical |
 | M2-T14 | agent-fmt2 | 2026-09-18 | Format-2.0 vacuity sweep. Three more instances of the M2-L0 defect found and fixed (test_proof 3.0-only lanes resolving 2.2.2 via `$VERIPB`; D-0030's certification in test_mutation writing a 3.0 proof against an env-format `.opb`; 20 blanked-trace controls asserting on exit status alone). Test (c) now checks the claim index by content, so it runs under both formats. |
@@ -733,6 +747,10 @@ section 1. Shares are inclusive, of the whole run.
 | M18-coverage-T5 (the ordering globals) | agent-lex (`wave85-lex`) | 2026-11-27 | **D-0239 [AUTONOME].** mznlib only: `lex_lesseq`/`lex_less`, int and Bool, as four linear rows per position over std's chain flag; 26 -> 27 complete of 92 with proof, nodes/s x1.02 to 1.04; precedence globals keep std's (T13 added); `increasing` already native. |
 | M18-coverage-T14 (gcc with variable counts) | agent-gccvar (`wave93-gccvar`) | 2026-11-27 | **D-0247 [AUTONOME].** mznlib only in the kept route: a `global_cardinality` whose counts are not all fixed goes to std's count decomposition (`4c5df61`), constant counts and the closed form stay native; +3 verified complete with proof over the 40 Challenge instances it reaches, none lost. Route (a), rule C over holes, built, verified and dropped (`d94f08f`, reverted `fa32d4b`). Not merged |
 ## Handoff notes
+
+### 2026-11-27 (agent-fuzz, `wave104-fuzz`, D-0258): the fuzz lane's six new streams, not merged
+
+`scripts/fuzz_lane.sh -j 16 -n 100 OUT` now runs twelve streams (238 s); `--streams globals,configs` picks some, `--mznlib DIR` flattens with another mznlib. The new ones (`tools/fuzz/streams.py`) flatten once, run the binary on the `.fzn` and also check that VeriPB's conclusion is the answer printed. Triage with `FUZZ_BIN=<fix build> tools/fuzz/triage.py OUT/*/bad/*`; shrink with `tools/fuzz/shrink_mzn.py`. **The lane exits 1 on main today**: D-0257 (every `--cdcl` early-eviction case), D-0260 (gcc low_up, default configuration), the `--e2e` and bridge defects and the wide-domain memory/time overruns of D-0258 section 4, all requested below. Once those merge, a clean run is the baseline; `wide` will still keep memory exhaustions until the heap budget is on by default or the encoding is bounded.
 
 ### 2026-11-27 (agent-factor, `wave102-factor`, D-0256): the per-node factor lane, not merged
 
