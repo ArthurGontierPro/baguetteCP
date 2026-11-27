@@ -117,7 +117,23 @@
    - cumulative: one candidate per time point, ONE pol of cake's capacity row, contribution
      rows, activity clauses and flag clauses ([begin_con]).
    - int_abs: the sign guard is DEFINED as x_ge_0 ([guard]); a row true in both signs is
-     derived by contradiction, `pbc` with the negation plus each candidate ([pin]). *)
+     derived by contradiction, `pbc` with the negation plus each candidate ([pin]).
+
+   ---------------------------------------------------------------------------
+   Selectors by position (D-0262)
+   ---------------------------------------------------------------------------
+
+   A selector compile.ml mints in a KNOWN ORDER is defined by its position, never guessed:
+   maxmin's `_mxN` over bits (one per operand, operand order) and all_different's `_neN`
+   (one per pair i < j that is not two distinct variables, i then j) are cake's k-th flag
+   ([selector_flags]), defined before the first row that names them ([pin]). The guess
+   (the first undefined flag a successful candidate meets, [swap]) stays for the
+   selectors with one flag and an unknown orientation (int_ne, int_lin_ne, the
+   reifications). It went wrong where a CONSTANT operand makes a row true, or implied
+   without its selector: `array_int_maximum(m, [1, x])` pinned operand 0's row by
+   [special] and left its selector undefined (the at-least-one then had no derivation, or
+   cited an unassigned @D2), and `all_different([x1, -1, 4, x5])` defined `_ne3` (pair
+   1_3) as the flag of pair 2_3 on a row of degree 0, which any candidate implies. *)
 
 exception Not_covered of string
 
