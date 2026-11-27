@@ -1541,7 +1541,7 @@ let available () =
       match acc with Some (b', _) when b' <= b -> acc | _ -> Some (b, n))
     None cands
 
-let reserve ~what ~why ?(where = "") ~lo ~hi ~units ~per_unit () =
+let reserve ~what ~why ?(where = "") ~blo ~bhi ~units ~per_unit () =
   (* Saturating: a width near 2^62 times 300 words is "more than any machine", not a
      negative number. *)
   let words = if units > max_int / per_unit then max_int else units * per_unit in
@@ -1555,8 +1555,8 @@ let reserve ~what ~why ?(where = "") ~lo ~hi ~units ~per_unit () =
              f_what = what;
              f_why = why;
              f_where = where;
-             f_lo = lo;
-             f_hi = hi;
+             f_lo = blo;
+             f_hi = bhi;
              f_units = units;
              f_per_unit = per_unit;
              f_total = !reserved_words;
@@ -2324,7 +2324,7 @@ let request_direct ?where t x =
   (* D-0263: reserved at the first request, before [start_proof] materialises it. *)
   if not (Names.mem t.direct_wanted x) then
     reserve ~what:x ~why:"a direct encoding (all_different, element or inverse)" ?where
-      ~lo:v.lo ~hi:v.hi ~units:size
+      ~blo:v.lo ~bhi:v.hi ~units:size
       ~per_unit:
         (words_per_direct_value
            ~proof:
