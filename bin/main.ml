@@ -152,6 +152,13 @@ let exit_internal = 4
    that a reader of this table sees all five. *)
 let exit_resource = Encoding.exit_resource
 
+(* M22-review-T5 (D-0248). A WRITE failed: the proof's directory does not exist, or the
+   disk is full. Not 5, because campaigns count 5 as the heap budget
+   (scripts/corpus_run.sh's REFUSED-RESOURCE) and its remedy, a larger budget, is not
+   this one's; not 4, because no invariant failed; and not the 2 an uncaught [Sys_error]
+   used to exit with, which is also usage's. See [exit_write_failed]. *)
+let exit_write = 6
+
 let usage () =
   prerr_endline
     "usage: baguette MODEL.fzn|MODEL.scp [--proof PREFIX | --no-proof] \
@@ -381,7 +388,10 @@ let usage () =
   prerr_endline "                    2 usage or bad model,";
   prerr_endline "                    3 unsupported model, 4 internal invariant failure,";
   prerr_endline "                    5 a resource budget above was exhausted (0 when the";
-  prerr_endline "                    search had printed a solution: a stopped run).";
+  prerr_endline "                    search had printed a solution: a stopped run),";
+  prerr_endline "                    6 a file could not be written (the proof's directory";
+  prerr_endline
+    "                    is missing, the disk is full): the proof is incomplete.";
   prerr_endline "";
   prerr_endline
     "  --bits-above W    (M8-bits-encoding-T2, D-0130/D-0132) put every ELIGIBLE integer";
@@ -1283,6 +1293,27 @@ let exit_out_of_resource opts =
   in
   flush stderr;
   exit code
+
+(* M22-review-T5 (D-0248). A write that failed, reported in one line instead of the
+   runtime's `Fatal error: exception Sys_error`. What [solve] writes is the .opb, its
+   .opb.rows body, the .pbp, the e2e prefix and stdout, and OCaml reports a failure of any
+   of them as [Sys_error], or as [Fun.Finally_raised (Sys_error _)] when it is the .pbp's
+   [close_out] in [solve]'s [finally], which flushes the last of the buffer. A full disk
+   names no file ("No space left on device"), so the line names the proof's. The final
+   answer is printed after that [close_out] and a stopped run's marker after its
+   conclusion's flush, so a run that ends here has printed no verdict on a proof that is
+   not there; an optimisation run may have printed improving solutions before it, as a
+   stopped one does. The proof is left as it is, incomplete, and the line says so. *)
+let exit_write_failed opts msg =
+  (match opts.proof_prefix with
+  | Some p when not opts.no_proof ->
+      Printf.eprintf
+        "baguette: a write failed (%s); the proof %s.opb / %s.pbp is INCOMPLETE, do not \
+         check or keep it\n"
+        msg p p
+  | _ -> Printf.eprintf "baguette: a write failed (%s)\n" msg);
+  flush stderr;
+  exit exit_write
 
 (* M8-bits-encoding-T5 (D-0131). The SHAPE of the proof that was just written, on
    stderr under --stats: how many lines are `pol` and how many `rup`, and the tokens the
@@ -2195,6 +2226,8 @@ let () =
       refuse_enumeration opts m;
       match Fz_error.catch (fun () -> solve opts m) with
       | Ok () -> exit exit_ok
+      | exception (Sys_error msg | Fun.Finally_raised (Sys_error msg)) ->
+          exit_write_failed opts msg
       | Error e ->
           (* Compile raises through the front end's error type for everything SPEC 2.1
              requires a diagnostic for: an unimplemented builtin, a domain the encoding

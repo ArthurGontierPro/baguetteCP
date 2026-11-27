@@ -2828,7 +2828,7 @@ let test_bool2int_hole () =
      hole must not survive as a wrong upper bound of 2. *)
   let store =
     Store.create ~names:[| "b"; "x" |]
-      ~domains:[| Domain.make 0 1; Domain.of_list [ 0; 2 ] |]
+      ~domains:[| Domain.make 0 1; Domain_helper.of_list [ 0; 2 ] |]
   in
   let prop = Bool2int.make store ~b:(var 0) ~x:(var 1) in
   match Bool2int.propagate prop store with

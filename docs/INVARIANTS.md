@@ -236,9 +236,10 @@ Assertions guarded by `BAGUETTE_DEBUG=1` should check as many of these as is aff
   in by the checker's own unit propagation), `Bool2int` and `Bool_clause` (channelling and
   clause rows). `Ne` is also the **only** thing that punches a hole: it is the sole caller
   of `Store.remove_with_facts` in `lib/`; `Store.remove`/`Store.fix` have no `lib` callers
-  at all; `Domain.settle` only walks bounds past holes that already exist; and
-  `Domain.of_list` is unreachable because `compile.ml`'s `reject_set_domain` refuses a
-  declared set domain outright.
+  at all; `Domain.settle` only walks bounds past holes that already exist; and no
+  function in `lib/` builds a declared domain with gaps: `compile.ml` gives the store a set
+  domain's hull and one `Ne` per hole (D-0072), and `Domain.of_list`, which had no `lib`
+  caller, moved to the test helper `test/unit/domain_helper.ml` (M22-review-T5).
 
   A propagator that counts **several** constraints (Hall intervals over n disequalities),
   or rests on a structure the `.opb` does not carry (Régin's matching, `element`'s value

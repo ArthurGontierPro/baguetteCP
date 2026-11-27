@@ -85,11 +85,12 @@ let test_no_change_and_change_of () =
   check "classify: identical domains are NoChange"
     (Domain.classify ~old:d ~now:d = Domain.NoChange);
   check "change_of: Unchanged is NoChange"
-    (Domain.change_of d (Domain.set_lo d 0) = Domain.NoChange);
+    (Domain_helper.change_of d (Domain.set_lo d 0) = Domain.NoChange);
   check "change_of: Failed is NoChange -- an empty domain is never stored (I-D1)"
-    (Domain.change_of d (Domain.set_lo d 20) = Domain.NoChange);
+    (Domain_helper.change_of d (Domain.set_lo d 20) = Domain.NoChange);
   check "change_of: Changed agrees with classify"
-    (Domain.change_of d (Domain.set_lo d 5) = Domain.Bound { lo = Some 5; hi = None })
+    (Domain_helper.change_of d (Domain.set_lo d 5)
+    = Domain.Bound { lo = Some 5; hi = None })
 
 (* ---------------------------------------------------------------- exhaustive *)
 
@@ -105,7 +106,7 @@ let all_domains () =
     let vs =
       List.filter (fun v -> mask land (1 lsl v) <> 0) (List.init (universe_hi + 1) Fun.id)
     in
-    acc := Domain.of_list vs :: !acc
+    acc := Domain_helper.of_list vs :: !acc
   done;
   !acc
 

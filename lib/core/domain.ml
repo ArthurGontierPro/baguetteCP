@@ -411,13 +411,6 @@ let classify ~old ~now =
         r
     | _ -> classify_walk ~old ~now
 
-(* The bridge between the two vocabularies: the [change] that applying [r] to [d] makes.
-   [Failed] is not a change - the empty domain is never stored (I-D1), so there is no
-   watcher for it to wake and no literal for the proof to claim; the caller handles the
-   failure off the [result] itself, as [Store.apply] does. *)
-let change_of d (r : result) =
-  match r with Unchanged | Failed -> NoChange | Changed d' -> classify ~old:d ~now:d'
-
 let change_to_string = function
   | NoChange -> "no change"
   | Bound { lo; hi } ->
@@ -510,27 +503,6 @@ let fix d v =
   else if is_fixed d then Unchanged
   else Changed { lo = v; hi = v; holes = None }
 
-(* Build a domain from an explicit value list, for FlatZinc declarations of the form
-   [var {1,3,5}: x]. Gaps become holes. *)
-let of_list values =
-  match List.sort_uniq Stdlib.compare values with
-  | [] -> raise (Bad_domain "empty domain from an empty value list")
-  | first :: _ as sorted ->
-      let last = List.fold_left (fun _ v -> v) first sorted in
-      let d = make first last in
-      let rec go d v present =
-        if v > last then d
-        else
-          match present with
-          | p :: rest when p = v -> go d (v + 1) rest
-          | _ -> (
-              match remove d v with
-              | Changed d' -> go d' (v + 1) present
-              | Unchanged -> go d (v + 1) present
-              | Failed -> raise (Bad_domain "of_list: domain became empty"))
-      in
-      go d first sorted
-
 (* ------------------------------------------------------------------ display *)
 
 let to_string d =
@@ -552,9 +524,9 @@ let to_string d =
    which is what a propagator uses. Building a domain per read would make a view
    cost more than the auxiliary variable it exists to avoid.
 
-   It is not [of_list] either, deliberately. [of_list] is documented in
-   docs/INVARIANTS.md I-X10 as unreachable from any model, and routing views through
-   it would quietly make that false; it is also O(size) in removals where this is one
+   It is not the test helper [Domain_helper.of_list] either, deliberately: that one
+   builds holes no trail entry explains, which is why M22-review-T5 moved it out of
+   [lib/] (docs/INVARIANTS.md I-X10), and it is O(size) in removals where this is one
    pass over the bitset. The map is a bijection on values, so I-D2 (bounds are not
    holes) transports with no settling: the image of a non-hole bound is a non-hole
    bound. *)

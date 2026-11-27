@@ -3556,6 +3556,69 @@ let test_m7t11_hole_rows () =
     (Encoding.n_constraints e4 = 0 && (Encoding.cost e4).Encoding.c_ladder_clauses = 0);
   Encoding.encoding_budget := saved
 
+(* M22-review-T5: a REDECLARATION. An identical one is a no-op; one that differs in the
+   bounds, the holes or the representation is [Redeclared], naming what differs, and
+   leaves the encoding as it was. Before, only the bounds were compared, so
+   [declare_int_with_holes] after [declare_int] dropped the holes silently, and the no-op
+   was a [raise Exit] under a wrapper that would have swallowed any callee's [Exit]. *)
+let test_m22t5_redeclaration () =
+  let refused name ~what f e =
+    let before = Encoding.n_constraints e in
+    (match f e with
+    | () -> check (name ^ " is refused") false
+    | exception Encoding.Redeclared (v, why) ->
+        check
+          (Printf.sprintf "%s is refused, naming x and the %s (%s)" name what why)
+          (v = "x"
+          && String.length why >= String.length what
+          && String.sub why 0 (String.length what) = what));
+    check (name ^ ": the refusal added no row") (Encoding.n_constraints e = before)
+  in
+  (* Identical redeclarations: no-ops, no row added. *)
+  let e = Encoding.create () in
+  Encoding.declare_int e "x" ~lo:1 ~hi:5;
+  Encoding.declare_int e "x" ~lo:1 ~hi:5;
+  check "M22-T5: an identical order redeclaration adds nothing"
+    (Encoding.n_constraints e = 3);
+  let eh = Encoding.create () in
+  Encoding.declare_int_with_holes eh "x" ~holes:[ 2; 4 ] ~lo:1 ~hi:5;
+  Encoding.declare_int_with_holes eh "x" ~holes:[ 4; 2; 4 ] ~lo:1 ~hi:5;
+  check "M22-T5: the same holes in another order are the same declaration"
+    (Encoding.n_constraints eh = 5);
+  let eb = Encoding.create () in
+  Encoding.declare_int_bits eb "x" ~lo:0 ~hi:9;
+  Encoding.declare_int_bits eb "x" ~lo:0 ~hi:9;
+  check "M22-T5: an identical bits redeclaration adds nothing"
+    (Encoding.n_constraints eb = 2);
+  (* Bounds. *)
+  refused "M22-T5: other bounds" ~what:"bounds"
+    (fun e -> Encoding.declare_int e "x" ~lo:1 ~hi:6)
+    e;
+  refused "M22-T5: other bounds on bits" ~what:"bounds"
+    (fun e -> Encoding.declare_int_bits e "x" ~lo:0 ~hi:8)
+    eb;
+  (* Holes, both ways: added, removed, changed. *)
+  refused "M22-T5: holes added to a hull declaration" ~what:"holes"
+    (fun e -> Encoding.declare_int_with_holes e "x" ~holes:[ 3 ] ~lo:1 ~hi:5)
+    e;
+  check "M22-T5: and the hole was not punched" (Encoding.hole_id e "x" 3 = None);
+  refused "M22-T5: holes dropped by a hull redeclaration" ~what:"holes"
+    (fun e -> Encoding.declare_int e "x" ~lo:1 ~hi:5)
+    eh;
+  refused "M22-T5: other holes" ~what:"holes"
+    (fun e -> Encoding.declare_int_with_holes e "x" ~holes:[ 2; 3 ] ~lo:1 ~hi:5)
+    eh;
+  (* Representation, both ways. *)
+  refused "M22-T5: an order redeclaration of a bits variable" ~what:"representation"
+    (fun e -> Encoding.declare_int e "x" ~lo:0 ~hi:9)
+    eb;
+  check "M22-T5: and the variable stayed on bits" (Encoding.is_bits eb "x");
+  let eo = Encoding.create () in
+  Encoding.declare_int eo "x" ~lo:0 ~hi:9;
+  refused "M22-T5: a bits redeclaration of an order variable" ~what:"representation"
+    (fun e -> Encoding.declare_int_bits e "x" ~lo:0 ~hi:9)
+    eo
+
 (* ------------------------------------------------------------------ *)
 (* M6-T12: [Writer.No_conclusion], the conclusion of a stopped run     *)
 (* ------------------------------------------------------------------ *)
@@ -5006,6 +5069,7 @@ let () =
   test_m7_encoding_cost ();
   test_m7t8_resource_guard ();
   test_m7t11_hole_rows ();
+  test_m22t5_redeclaration ();
   test_lit_rendering_is_the_reference ();
   test_m7t27_streamed_opb_is_byte_identical ();
   test_m7t27_ladder_ids_are_arithmetic ();

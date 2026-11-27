@@ -440,9 +440,9 @@ let inside_frozen_bounds t store =
    code weakened, so it is behaviour and not decoration.
 
    M1-T63: the declared-hole hedge this module used to carry is NOT here any more. A hole
-   the variable was declared with ([Domain.of_list]) has no trail entry to cite, and the
-   one surviving statement of what happens then is [Store.remover]'s header, which also
-   names the gate that makes it unreachable (lib/flatzinc/compile.ml's
+   the variable was declared with (a test's [Domain_helper.of_list]) has no trail entry
+   to cite, and the one surviving statement of what happens then is [Store.remover]'s
+   header, which also names the gate that makes it unreachable (lib/flatzinc/compile.ml's
    [reject_set_domain], refusing [Model.Dset] outright). M2-T8 deleted this module's copy
    along with [find_lo_reason]/[find_hi_reason]; do not reinstate it here. *)
 let lo_rests_on store v ~decl_lo =

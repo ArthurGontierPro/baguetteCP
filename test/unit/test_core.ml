@@ -148,9 +148,10 @@ let test_domains () =
     (not (Domain.equal a (Domain.make 1 4)));
 
   check "domain: of_list builds the holes"
-    (Domain.to_list (Domain.of_list [ 5; 1; 3; 1 ]) = [ 1; 3; 5 ]);
-  check "domain: of_list bounds" (Domain.lo (Domain.of_list [ 5; 1; 3 ]) = 1);
-  check_raises "domain: of_list of nothing is rejected" (fun () -> Domain.of_list []);
+    (Domain.to_list (Domain_helper.of_list [ 5; 1; 3; 1 ]) = [ 1; 3; 5 ]);
+  check "domain: of_list bounds" (Domain.lo (Domain_helper.of_list [ 5; 1; 3 ]) = 1);
+  check_raises "domain: of_list of nothing is rejected" (fun () ->
+      Domain_helper.of_list []);
 
   check "domain: to_string of a range" (Domain.to_string (Domain.make 1 5) = "1..5");
   check "domain: to_string of a fixed domain" (Domain.to_string (Domain.singleton 7) = "7");

@@ -1290,7 +1290,8 @@ let bound_support t ~before v ~is_lower ~value =
    ([Domain.of_list], for `var {1,3,5}: x`). Nothing in `lib/` produces one: M7-T11
    (D-0072) deleted [reject_set_domain], and lib/flatzinc/compile.ml now gives the store
    the HULL of a set domain and posts one [Ne] instance per hole, so every hole has a
-   trail entry behind it; [Domain.of_list] has no caller in `lib/`. Callers cite nothing
+   trail entry behind it; [Domain.of_list] is gone from `lib/` (M22-review-T5 moved it to
+   test/unit/domain_helper.ml). Callers cite nothing
    rather than raising; lib/core/trace.ml's [remover] header argues why.
 
    Shared: [Trace] and [Linear] had a copy each ([remover] and [find_removal]), with the
