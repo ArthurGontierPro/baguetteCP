@@ -1798,6 +1798,95 @@ let test_set_domain_holes () =
 
    And the M7-T16 stopgap stays gone: nothing in the gcc scope has a direct encoding,
    because derive-ahead no longer needs one to fire (M7-T17). *)
+(* D-0260: a cover that repeats a value is MERGED by [Builder.merge_gcc_cover_repeats] before
+   compile.ml sees it -- one occurrence per value for gcc.ml, and every later count tied to
+   the first one's by an [Int_lin_eq] with [c_id = ""] -- and compile.ml refuses a repeated
+   cover that reaches it anyway. The tie table of builder.ml's header, one scene per row. *)
+let test_gcc_cover_repeats () =
+  let decls =
+    "var 0..3: x1;\n\
+     var 0..3: x2;\n\
+     var 0..3: x3;\n\
+     var 0..3: a;\n\
+     var 0..3: b;\n\
+     var 0..3: c;\n"
+  in
+  let gcc cover counts =
+    build
+      (decls
+      ^ Printf.sprintf
+          "constraint fzn_global_cardinality([x1,x2,x3],%s,%s);\nsolve satisfy;\n" cover
+          counts)
+  in
+  let idx m name =
+    let r = ref (-1) in
+    for i = 0 to M.nvars m - 1 do
+      if String.equal (M.var m i).M.v_name name then r := i
+    done;
+    !r
+  in
+  let gccs m =
+    List.filter_map
+      (fun (k : M.constr) ->
+        match k.M.k with
+        | M.Global_cardinality (_, cover, counts) -> Some (cover, counts)
+        | _ -> None)
+      m.M.constraints
+  in
+  let ties m =
+    List.filter_map
+      (fun (k : M.constr) ->
+        match k.M.k with
+        | M.Int_lin_eq (ts, r) when k.M.c_id = "" -> Some (ts, r)
+        | _ -> None)
+      m.M.constraints
+  in
+  let m = gcc "[2,2,2]" "[a,b,c]" in
+  let ia = idx m "a" and ib = idx m "b" and ic = idx m "c" in
+  check "D-0260: a cover [2,2,2] reaches compile.ml as the cover [2] with the first count"
+    (gccs m = [ ([| 2 |], [ M.Var ia ]) ]);
+  check "D-0260: ... and the two later counts are tied to it, var to var"
+    (ties m = [ ([ (1, ia); (-1, ib) ], 0); ([ (1, ia); (-1, ic) ], 0) ]);
+  let m = gcc "[1,2,1]" "[a,b,a]" in
+  check "D-0260: the same count variable twice for one value needs no tie"
+    (gccs m = [ ([| 1; 2 |], [ M.Var (idx m "a"); M.Var (idx m "b") ]) ] && ties m = []);
+  let m = gcc "[1,1]" "[a,2]" in
+  check "D-0260: a variable and a constant count: the tie a = 2"
+    (ties m = [ ([ (1, idx m "a") ], 2) ]);
+  let m = gcc "[1,1]" "[2,a]" in
+  check "D-0260: a constant and a variable count: the tie a = 2"
+    (ties m = [ ([ (1, idx m "a") ], 2) ]);
+  let m = gcc "[1,1]" "[2,2]" in
+  check "D-0260: two equal constant counts: no tie, the cover [1] with the count 2"
+    (gccs m = [ ([| 1 |], [ M.Const 2 ]) ] && ties m = []);
+  let m = gcc "[1,1]" "[1,2]" in
+  check "D-0260: two different constant counts: the false row 0 = 1" (ties m = [ ([], 1) ]);
+  let m = gcc "[1,2,3]" "[a,b,c]" in
+  check "D-0260: a cover with no repeat comes back PHYSICALLY unchanged"
+    (F.Builder.normalise_gcc m == m && ties m = []);
+  (* The guard: a model built by other means, with the repeat put back after the
+     builder's normalisation, is refused with a position rather than compiled. *)
+  let m = gcc "[1,2,3]" "[a,b,c]" in
+  let repeated =
+    {
+      m with
+      M.constraints =
+        List.map
+          (fun (k : M.constr) ->
+            match k.M.k with
+            | M.Global_cardinality (xs, _, counts) ->
+                { k with M.k = M.Global_cardinality (xs, [| 1; 1; 3 |], counts) }
+            | _ -> k)
+          m.M.constraints;
+    }
+  in
+  match Compile.compile repeated with
+  | exception F.Error.Error e ->
+      check "D-0260: compile.ml refuses a repeated cover value that reaches it"
+        (contains (F.Error.to_string e) "the cover names the same value more than once")
+  | exception exn -> fail "D-0260: the guard" ("raised: " ^ Printexc.to_string exn)
+  | _ -> fail "D-0260: the guard" "a repeated cover value was compiled"
+
 let test_gcc_constant_counts () =
   let body =
     "var 1..3: x1;\n\
@@ -3050,6 +3139,7 @@ let () =
   test_search_annotated_proofs ();
   test_set_domain_holes ();
   test_gcc_constant_counts ();
+  test_gcc_cover_repeats ();
   test_maxmin ();
   test_bits_maxmin_shape ();
   test_bits_eligibility ();
