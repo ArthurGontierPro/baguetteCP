@@ -12,7 +12,11 @@
 % would give them (max(0, lbound[i])..min(|xs|, ubound[i]), the intersection of the
 % predicate's meaning with a tally's range), so that the closed cover's consequence
 % sum(c) = |xs| can be stated over them.  Under a cover with a repeated value the sum
-% would be wrong and is not posted; the par check std makes is kept either way.
+% would be wrong and is not posted, and neither is std's par check, which sums the
+% repeat's bounds twice: global_cardinality_closed(x, [1,1], [2,2], [2,2]) with
+% x = [1,1] holds (Gecode agrees), and the check 2 in 4..4 made it UNSAT. That wrong
+% answer was in this file since D-0146; std 2.10.1 and Chuffed give it too (D-0255,
+% models mznlib/test/gcc_low_up_closed_dupcover_src_*).
 %-----------------------------------------------------------------------------%
 
 include "fzn_global_cardinality.mzn";
@@ -30,5 +34,5 @@ predicate fzn_global_cardinality_low_up_closed(
     ];
   } in forall (i in index_set(xs)) (xs[i] in {d | d in array2set(cover)})
     /\ baguette_global_cardinality(xs, cover, c)
-    /\ length(xs) in sum(lbound)..sum(ubound)
+    /\ if card(array2set(cover)) = length(cover) then length(xs) in sum(lbound)..sum(ubound) else true endif
     /\ if card(array2set(cover)) = length(cover) then sum(c) = length(xs) else true endif;
