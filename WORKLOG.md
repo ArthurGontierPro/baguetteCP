@@ -19,6 +19,7 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
+| M22-review-T7 fuzz lane additions (D-0258) | `scripts/fuzz_lane.sh`, `tools/fuzz/`, `bench/fuzz/README.md`, `bench/fuzz/found/`, `scripts/README.md`'s fuzz entry | agent-fuzz (wave104-fuzz) | 2026-11-27 |
 
 ## Cross-session requests
 
