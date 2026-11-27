@@ -1412,7 +1412,7 @@ let quiet_skips = ref 0
    order, and none is needed: [hall_free] reads only counts and the values at run ends,
    and [pass_scan] only counts along [by_hi] and marks what it walked. O(n + the number
    of pairs out of order), which across one search step is the few bounds that moved. *)
-let sort_by key perm =
+let sort_by (key : int array) perm =
   for j = 1 to Array.length perm - 1 do
     let i = perm.(j) in
     let k = key.(i) in
@@ -1677,9 +1677,29 @@ let regin_scratch t store =
   let moved = ref false in
   if n > 0 then (
     let doms = Array.map (fun tm -> Store.get store tm.x) t.terms in
+    (* Every value some domain holds, ascending: a mark per value of the scope's live
+       span, then the marked values in order (D-0242; the same array the sorted union of
+       the domains' lists gives, without the lists). The lists stay for a span too wide
+       to mark, the gate's bound. *)
+    let vlo = Array.fold_left (fun a d -> Int.min a (Domain.lo d)) max_int doms in
+    let vhi = Array.fold_left (fun a d -> Int.max a (Domain.hi d)) min_int doms in
     let values =
-      Array.of_list
-        (List.sort_uniq Int.compare (List.concat_map Domain.to_list (Array.to_list doms)))
+      if vhi - vlo + 1 > max_gate_span then
+        Array.of_list
+          (List.sort_uniq Int.compare
+             (List.concat_map Domain.to_list (Array.to_list doms)))
+      else
+        let mark = Array.make (vhi - vlo + 1) false in
+        Array.iter (fun d -> Domain.iter (fun v -> mark.(v - vlo) <- true) d) doms;
+        let count = Array.fold_left (fun c b -> if b then c + 1 else c) 0 mark in
+        let values = Array.make count 0 and k = ref 0 in
+        Array.iteri
+          (fun i b ->
+            if b then (
+              values.(!k) <- vlo + i;
+              incr k))
+          mark;
+        values
     in
     let nv = Array.length values in
     let holds i vi = Domain.mem doms.(i) values.(vi) in
@@ -1773,6 +1793,16 @@ let regin_scratch t store =
               in
               any 0)
         in
+        (* [holders.(vi)]: how many terms hold [values.(vi)]; [held.(i)]: how many
+           values term [i] holds. Read once per pass, for the outsider count below. *)
+        let holders = Array.make nv 0 and held = Array.make n 0 in
+        for i = 0 to n - 1 do
+          for vi = 0 to nv - 1 do
+            if holds i vi then (
+              holders.(vi) <- holders.(vi) + 1;
+              held.(i) <- held.(i) + 1)
+          done
+        done;
         List.iter
           (fun u ->
             (* [ink]: {u} and everything reachable from it. *)
@@ -1794,7 +1824,22 @@ let regin_scratch t store =
               let rec any i = i < n && ((ink.(i) && has_free.(i)) || any (i + 1)) in
               any 0
             in
-            if not free_reachable then
+            (* WHETHER ANY TERM OUTSIDE THE SET HOLDS ONE OF ITS VALUES (D-0242). A tight
+               set's members hold only its values (every value they hold is matched, to
+               a member, by the closure above), so the terms outside hold
+               [sum holders over its values - sum held over its members] of them, counted
+               over [doms]. When that is 0 the removal loop below tests [doms.(y)] first
+               for every pair and calls nothing: skipping it, and the value list, the
+               membership table and the lazy facts it would have built, changes nothing
+               but the instructions. *)
+            let outsiders =
+              let c = ref 0 in
+              for i = 0 to n - 1 do
+                if ink.(i) then c := !c + holders.(mval.(i)) - held.(i)
+              done;
+              !c
+            in
+            if (not free_reachable) && outsiders > 0 then
               let vals =
                 List.sort_uniq Int.compare
                   (List.filter_map
@@ -1825,7 +1870,17 @@ let regin_scratch t store =
                               ~keep ~facts ~y:(snap y) ~y_tm:t.terms.(y) v
                           then twins t y (fun j -> cache.(j) <- None))
                       vals)
-                (range 0 (n - 1)))
+                (range 0 (n - 1))
+            else if not free_reachable then
+              Debug.check "I-P2 (D-0242): a tight Regin set no outside term meets"
+                (fun () ->
+                  List.for_all
+                    (fun y ->
+                      ink.(y)
+                      || List.for_all
+                           (fun i -> not (ink.(i) && holds y mval.(i)))
+                           (range 0 (n - 1)))
+                    (range 0 (n - 1))))
           (range 0 (n - 1)));
   !moved
 
