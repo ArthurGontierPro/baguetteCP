@@ -19,7 +19,6 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M22-review-T3, M22-review-T5 | `lib/proof/encoding.ml` (declare_int_gen only), `lib/core/domain.ml` (of_list, change_of), `lib/proof/writer.ml` and `bin/main.ml` (Sys_error handling), `test/unit/test_flatzinc.ml`, `test/unit/test_proof.ml`, `test/unit/test_domain.ml`, `test/unit/test_compile.ml`; one-line renames `Domain.of_list` -> `Domain_helper.of_list` in `test/unit/test_core.ml`, `test/unit/test_prop.ml` and `test/unit/test_consistency.ml`, new `test/unit/domain_helper.ml`; comments only in `lib/core/{trace,store}.ml`, `lib/core/prop/linear.ml`, `docs/INVARIANTS.md` I-X10; `test/unit/test_endtoend.ml` (one CLI test for the write failure) | agent-latent (wave94-latent, D-0248) | 2026-11-27 |
 
 ## Cross-session requests
 
@@ -478,6 +477,7 @@ section 1. Shares are inclusive, of the whole run.
 
 | Task | Session | Date | Summary |
 |---|---|---|---|
+| M22-review-T3 and M22-review-T5, the unit test for T1 and three latent defects (D-0248) | agent-latent (`wave94-latent`, not merged) | 2026-11-27 | **D-0248 [AUTONOME].** T3: `test_m22t3_constant_fold` in `test_flatzinc` (the 2^61 * 4 fold refused by the builder, a fold to rhs = -2^59 refused by compile's cap, cancelling 2^61 products accepted as `x <= 0`). T5: `Encoding.already_declared` compares bounds, holes and representation, `Redeclared (x, what differs)`, no `raise Exit`; `Domain.of_list` / `change_of` moved to `test/unit/domain_helper.ml`; a proof write that fails ends with one stderr line and exit 6 instead of an uncaught `Sys_error` (exit 2). Binary `458c85e0`: runtest --force 5590 ok 0 FAIL (peak 170 MB), models 259, determinism 259, diff lane 347/347 equal, artefacts byte-identical |
 | M18-coverage-T13, `value_precede_chain` against Chuffed (D-0244) | agent-precede (`wave90-precede`, not merged) | 2026-11-27 | **D-0244 [AUTONOME].** Measured, nothing built. Chuffed over std's precede decomposition explores the same trees as over its native `seq_precede`, and baguette with the chain dropped completes nothing more. Mondoku's gap is gcc with variable counts (std's `count` decomposition completes 10-10-6 in 3 938 nodes, verified proof), code-generator/concert-hall-cap/community-detection per-node cost, test-scheduling learning. T14 added |
 | M19-config-T9, propagator priorities (D-0246) | agent-prio (`wave92-prio`, not merged) | 2026-11-27 | **D-0246 [AUTONOME].** `BAGUETTE_PRIORITY=off\|classes`, four cost classes (Cheap, Row, Learned_row, Global) by one rule in `Propagator.cost_class`; off byte-identical (259 models, diff 347/347, debug 333/333, scaling ok). Classes: every proof verified, 0 rejected; tuning set 0.463 vs 0.537 without proof, 0.532 vs 0.468 with proof but two verified optima lost. Default stays off. |
 | M20-pernode-T4, conflict analysis's name lookup (D-0245) | agent-locate (`wave91-locate`, not merged) | 2026-11-27 | **D-0245 [AUTONOME].** `Store.var_named` through a direct-mapped memo of 4 096 cells (98 % of handball12's lookups hit), `Analysis.locate` reads it as an int. Same trees, byte-identical artefacts; instructions per node without / with proof: handball12 -2.5 / -0.5 %, tppv circ14 -0.8 / -0.1 %, costas13 -0.9 / -0.2 %, qr2 -3.9 / -2.2 %. The attribution check through `Engine.in_scope` measured neutral and withdrawn. |
@@ -719,6 +719,10 @@ section 1. Shares are inclusive, of the whole run.
 
 | M18-coverage-T5 (the ordering globals) | agent-lex (`wave85-lex`) | 2026-11-27 | **D-0239 [AUTONOME].** mznlib only: `lex_lesseq`/`lex_less`, int and Bool, as four linear rows per position over std's chain flag; 26 -> 27 complete of 92 with proof, nodes/s x1.02 to 1.04; precedence globals keep std's (T13 added); `increasing` already native. |
 ## Handoff notes
+
+### 2026-11-27 (agent-latent, `wave94-latent`, D-0248): M22-review-T3 and T5, not merged
+
+T3 is a test only. T5: a redeclaration that differs in bounds, holes or representation now raises `Encoding.Redeclared (x, why)` (the exception's payload changed from `string`; nothing matched on it). `Domain.of_list` and `change_of` live in `test/unit/domain_helper.ml`, linked like `mem_guard.ml`; a test that wants a holed domain calls `Domain_helper.of_list`. A `Sys_error` out of `solve` (or the `Fun.Finally_raised` the .pbp's close wraps it in) prints one line and exits 6, a new status (D-0248: not 5, which campaigns count as the heap budget); `scripts/corpus_run.sh` files it as `SOLVE-ERR-6`, a bucket of its own would be a small follow-up. All lanes green on binary `458c85e0`, artefacts byte-identical.
 
 ### 2026-11-27 (agent-precede, `wave90-precede`, D-0244): the precede gap is not the chain, nothing built, not merged
 
