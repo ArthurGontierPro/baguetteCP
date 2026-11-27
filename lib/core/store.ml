@@ -683,8 +683,10 @@ let push_mark t m =
    11 % of a 60 s profile on 2018 rotating-workforce, and M6-T11 (D-0085) built the
    index. M20-pernode-T4 then keyed the index by [Name_tbl] (it was 7.3 % of elitserien
    handball12's instructions without the proof) and put a ONE-ENTRY memo in front of it
-   (D-0236 counted 47 % of that instance's lookups as physical repeats of the one
-   before, and none equal without being physical), which D-0245 generalised to the
+   (a reason names one variable twice in a row more often than not: [Reason.fixed_at]'s
+   two halves, alldiff's [at_least]/[at_most] of one snapshot; D-0236 counted 47 % of
+   that instance's lookups as physical repeats of the one before, and none equal without
+   being physical), which D-0245 generalised to the
    direct-mapped memo; the one-entry memo is its case [memo_size = 1]. *)
 let memo_bits = 12
 let memo_size = 1 lsl memo_bits

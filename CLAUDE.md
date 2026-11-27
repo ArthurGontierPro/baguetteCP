@@ -389,7 +389,7 @@ test/unit/                  25 binaries: test_core test_domain test_engine test_
                             BAGUETTE_TEST_HEAP_CAP_ANNOUNCE=1
   domain_helper.ml          NOT a test binary: Domain.of_list and change_of, test-only
                             constructors moved out of lib/ (M22-review-T5, D-0248)
-test/models/                259 .fzn models  test/expected/  their expected outputs
+test/models/                264 .fzn models  test/expected/  their expected outputs
 test/scp/                   26 .scp models   test/scp/expected/  theirs (M23-inputs, D-0230)
 mznlib/                     baguette's MiniZinc library: the fzn_*.mzn redefinitions that
                             route a global to a native propagator or to its decomposition
