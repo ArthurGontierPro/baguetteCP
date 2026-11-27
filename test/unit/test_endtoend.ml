@@ -2812,7 +2812,7 @@ let test_d0263_will_not_fit () =
     Fun.protect
       ~finally:(fun () -> Encoding.heap_limit_mb := saved)
       (fun () ->
-        match Encoding.request_direct ~where:"d0263.fzn:3:12" enc "x" with
+        match Encoding.request_direct ~where:(fun () -> "d0263.fzn:3:12") enc "x" with
         | () -> None
         | exception Encoding.Will_not_fit f -> Some f)
   in

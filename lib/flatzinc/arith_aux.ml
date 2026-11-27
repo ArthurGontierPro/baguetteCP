@@ -46,8 +46,8 @@ let ladder_bools ctx (y : Model.operand) =
       (* D-0263: the case split costs a lower bound of [words_per_arith_case] live words
          per value of y, reserved here, before the first of its Booleans exists. *)
       Baguette_proof.Encoding.reserve ~what:(ctx.name j)
-        ~why:"the case split of an int_times or int_div over it" ~where:(ctx.where ())
-        ~blo:lo ~bhi:hi
+        ~why:"the case split of an int_times or int_div over it" ~where:ctx.where ~blo:lo
+        ~bhi:hi
         ~units:(if hi - lo < 0 then max_int else hi - lo + 1)
         ~per_unit:Baguette_proof.Encoding.words_per_arith_case ();
       let acc = ref [] in

@@ -1514,54 +1514,53 @@ let machine_memory () =
 
 let given = lazy (address_space (), machine_memory ())
 
-(* The smallest of what the run was given, in bytes, and its name. *)
+(* The smallest of what the run was given, in bytes, and where it comes from. Named only
+   when a refusal prints it: [reserve] runs once per arithmetic constraint and per direct
+   encoding, and a [Printf] per call was measurable on handball12 (D-0263 section 5). *)
+type source = Budget of int | Address_space of int | Machine of int
+
+let bytes_of = function Budget mb -> mb * 1024 * 1024 | Address_space b | Machine b -> b
+
+let source_name = function
+  | Budget mb -> Printf.sprintf "the --max-heap-mb budget of %d MB" mb
+  | Address_space b ->
+      Printf.sprintf "this process's address space (ulimit -v), %d MB" (b / 1048576)
+  | Machine b -> Printf.sprintf "this machine's memory and swap, %d MB" (b / 1048576)
+
 let available () =
   let as_, mem = Lazy.force given in
-  let cands =
-    List.filter_map Fun.id
-      [
-        Option.map
-          (fun mb ->
-            (mb * 1024 * 1024, Printf.sprintf "the --max-heap-mb budget of %d MB" mb))
-          !heap_limit_mb;
-        Option.map
-          (fun b ->
-            ( b,
-              Printf.sprintf "this process's address space (ulimit -v), %d MB"
-                (b / 1048576) ))
-          as_;
-        Option.map
-          (fun b ->
-            (b, Printf.sprintf "this machine's memory and swap, %d MB" (b / 1048576)))
-          mem;
-      ]
+  let smaller a b =
+    match (a, b) with
+    | None, x | x, None -> x
+    | Some x, Some y -> if bytes_of y < bytes_of x then Some y else Some x
   in
-  List.fold_left
-    (fun acc (b, n) ->
-      match acc with Some (b', _) when b' <= b -> acc | _ -> Some (b, n))
-    None cands
+  smaller
+    (smaller
+       (Option.map (fun mb -> Budget mb) !heap_limit_mb)
+       (Option.map (fun b -> Address_space b) as_))
+    (Option.map (fun b -> Machine b) mem)
 
-let reserve ~what ~why ?(where = "") ~blo ~bhi ~units ~per_unit () =
+let reserve ~what ~why ?(where = fun () -> "") ~blo ~bhi ~units ~per_unit () =
   (* Saturating: a width near 2^62 times 300 words is "more than any machine", not a
      negative number. *)
   let words = if units > max_int / per_unit then max_int else units * per_unit in
   reserved_words :=
     if words > max_int - !reserved_words then max_int else !reserved_words + words;
   match available () with
-  | Some (bytes, from) when !reserved_words > bytes / word_bytes ->
+  | Some src when !reserved_words > bytes_of src / word_bytes ->
       raise
         (Will_not_fit
            {
              f_what = what;
              f_why = why;
-             f_where = where;
+             f_where = where ();
              f_lo = blo;
              f_hi = bhi;
              f_units = units;
              f_per_unit = per_unit;
              f_total = !reserved_words;
-             f_avail = bytes;
-             f_from = from;
+             f_avail = bytes_of src;
+             f_from = source_name src;
            })
   | _ -> ()
 
