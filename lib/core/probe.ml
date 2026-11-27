@@ -30,8 +30,8 @@
    so the next pass probes the new bound (bounds shaving). Passes repeat while the last
    one failed a literal, until the BUDGET runs out: a number of propagator runs
    ([Engine.runs], counted over the whole probing including the root propagations it
-   triggers), so the pass is deterministic and does not depend on the machine's speed.
-   The search's stop (the time limit) is polled between two probes and inside each
+   triggers), which is deterministic, or a CPU cap, which is not and is there for the
+   propagators whose one run is expensive (see [default_budget]). The search's stop (the time limit) is polled between two probes and inside each
    propagation, as at a node.
 
    ---------------------------------------------------------------------------
@@ -118,10 +118,16 @@ let mode () =
 
 let set_mode m = current := Some m
 
-(* The budget, in propagator runs ([Engine.runs]), and the width cap. Defaults chosen on
-   the census of D-0250 section 3; BAGUETTE_PROBE_BUDGET and BAGUETTE_PROBE_WIDTH override
-   them for measurement, and a malformed value FAILS. *)
-let default_budget = 100_000
+(* The budget, in propagator runs ([Engine.runs]), the CPU cap and the width cap. Defaults
+   chosen on the census of D-0250 section 3: run to completion, the pass costs a median of
+   3.8 M runs and 0.7 s, but a run is not a unit of time (2011_pentominoes_04 spends 0.19 s
+   per probe at 23 runs each, black-hole 14 half a second), so the runs budget, which is
+   deterministic, is backed by a CPU cap, which is not. The cap fires only where a pass is
+   heavy, and there it makes the probe set depend on the machine's speed; under the default
+   [off] nothing is read. BAGUETTE_PROBE_BUDGET (runs), BAGUETTE_PROBE_CPU (seconds, 0 for
+   none) and BAGUETTE_PROBE_WIDTH override them for measurement; a malformed value FAILS. *)
+let default_budget = 5_000_000
+let default_cpu_cap = 10
 let default_width_cap = 64
 
 let int_env name default =
@@ -145,6 +151,7 @@ let budget () =
   | None -> int_env "BAGUETTE_PROBE_BUDGET" default_budget
 
 let width_cap () = int_env "BAGUETTE_PROBE_WIDTH" default_width_cap
+let cpu_cap () = int_env "BAGUETTE_PROBE_CPU" default_cpu_cap
 
 (* What the search lends this pass: the steps a failed node writes, which are Search's and
    must stay one rule for both (D-0250 section 2). *)
@@ -321,7 +328,10 @@ and pass ~engine ~store ~ctx ~trace ~stop ~poll_runs ~hooks census runs0 ~finish
         if in_scope (Var.of_int i) then census.candidates <- census.candidates + 1
       done;
       let exception Done of result in
-      let spent () = !Engine.runs - runs0 >= budget in
+      let cpu = float_of_int (cpu_cap ()) and t0 = Sys.time () in
+      let spent () =
+        !Engine.runs - runs0 >= budget || (cpu > 0. && Sys.time () -. t0 >= cpu)
+      in
       try
         let again = ref true in
         while !again do
