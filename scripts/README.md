@@ -136,7 +136,7 @@ Launch it detached (section 3) and poll `gateNN.status`.
 | `run_scp_tests.sh` | The `.scp` models of `test/scp/` against `test/scp/expected/`, every proof checked (`make scp`, part of `make test`) |
 | `factor_lane.sh` | The per-node factor (`make factor`, section 11): instructions per node against Gecode, four configurations, every proof checked. Information, not a gate |
 | `e2e_lane.sh`, `sym_lane.sh` | The end-to-end and symmetry lanes, sections 9 and 10. Node only, not in `make check` |
-| `fuzz_lane.sh` | The differential fuzz (M22-review-T7): random small models, baguette against Gecode through MiniZinc, every proof checked and every solution re-checked. Not a gate: a disagreement becomes a model in `test/models/`. `scripts/fuzz_lane.sh -j 16 -n 100 /scratch/arthur/<run>` on a node |
+| `fuzz_lane.sh` | The differential fuzz (M22-review-T7, D-0258): twelve streams of random small models, baguette against Gecode, every proof checked (and its conclusion compared with the answer), every solution re-checked; the six of D-0258 add the globals, 18 search configurations (`--cdcl`, `--chrono`, `-f`, the opt-in knobs, retention forced to evict), `-i`, cut runs, the end-to-end chain and domains wider than 2^20. Not a gate: a disagreement is kept as `bench/fuzz/found/<name>.fzn` and filed (`bench/fuzz/README.md`). `scripts/fuzz_lane.sh -j 16 -n 100 /scratch/arthur/<run>` on a node; `--streams` picks some, `tools/fuzz/triage.py` re-judges kept cases under another binary |
 | `bootstrap.sh` | Installs the toolchain on a fresh machine; safe to re-run |
 
 ## 8. The release binary (M11-complexity-T16, D-0171)

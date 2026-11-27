@@ -1,0 +1,6 @@
+% D-0258, e2e stream seed 4100 model 8 (default-size run), shrunk: SAT; under --e2e veripb refuses baguette own proof against cake .opb (line 90, "Checking error") on all_different_int([x1,-1,4,x5]); [x1,4,-1,x5], [x1,0,4,x5] and [x1,-1,x5] VERIFY, plain --proof and the bridged path VERIFY. Opt-in flag, lib/proof/e2e.ml.
+var 1..4: x1 :: output_var;
+var 1..3: x5 :: output_var;
+array [1..4] of var int: A :: var_is_introduced = [x1,-1,4,x5];
+constraint all_different_int(A);
+solve satisfy;
