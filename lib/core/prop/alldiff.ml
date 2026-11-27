@@ -50,6 +50,26 @@
    None of these caches outlives the call except [quiet], which is a hint about a bound
    vector and not about the store, so nothing here needs the trail.
 
+   THE COST PER CALL, SECOND PASS (M20-pernode-T4, D-0242). Four more, under the same
+   contract (every pruning, its order, its reason and its derivation unchanged; the
+   artefacts are byte-identical):
+
+     - [hall_free] decides by counting, over two term permutations kept sorted across
+       calls ([sort_by]), whether a stage 1 scan would move nothing, and [pass] skips the
+       scan when it would not: a scan acts exactly on an over-full interval or a tight one
+       holding an outside bound, and both are counts (BAGUETTE_DEBUG runs the scan behind
+       every skip; test_prop's lane (h) checks both directions). [pass_scan] enumerates
+       its intervals over the same permutations;
+     - [regin_scratch] skips a tight set that no outside term meets, by a count, and
+       marks the scope's values rather than sorting their lists;
+     - the derivations a tight set or interval justifies share its at-least-one lines
+       ([alo_lines]), under D-0216's rule that a node is handed back only when building
+       it again would return it.
+
+   [by_lo]/[by_hi] outlive the call, and they are permutations re-sorted from the live
+   bounds at every pass, so they need no trail either. The memos live in a derivation's
+   thunk, and a thunk reads no store (I-X6).
+
    ---------------------------------------------------------------------------
    Filtering: Hall intervals
    ---------------------------------------------------------------------------
@@ -354,6 +374,17 @@ type t = {
   canon : int array;
   (* Whether some variable occurs twice in the scope ([canon.(i) <> i] for some [i]). *)
   repeats : bool;
+  (* D-0242: [pass]'s scratch, kept across calls. [lo0]/[hi0] are the pass-start bounds,
+     overwritten at every pass; [by_lo]/[by_hi] are the term indices sorted by them,
+     re-sorted by insertion at every pass ([sort_by]). A permutation and two arrays of
+     numbers read off the store, never a fact about it: every pass rewrites [lo0]/[hi0]
+     from the live domains before anything reads them, and an insertion sort of ANY
+     permutation is sorted, so nothing needs the trail. Keeping the permutation is what
+     makes the sort cheap, because one search step moves few bounds. *)
+  lo0 : int array;
+  hi0 : int array;
+  by_lo : int array;
+  by_hi : int array;
 }
 
 and quiet = { q_lo : int array; q_hi : int array; mutable q_valid : bool }
@@ -474,6 +505,10 @@ let make ?(cutoff = default_cutoff) ?(lemma_rows = []) ?(gate = true) ?(quiet = 
         q_hi = Array.make (Array.length terms) 0;
         q_valid = false;
       };
+    lo0 = Array.make (Array.length terms) 0;
+    hi0 = Array.make (Array.length terms) 0;
+    by_lo = Array.init (Array.length terms) Fun.id;
+    by_hi = Array.init (Array.length terms) Fun.id;
   }
 
 let vars t = Array.to_list (Array.map (fun tm -> tm.x) t.terms)
@@ -863,17 +898,66 @@ let alo_over t s ~keep =
    A value only one variable in scope can take gets a literal axiom instead of an
    at-most-one line: "at most one of {x} takes v" IS ~x_eq_v >= 0, and a value no
    variable can take gets nothing, because there is no term to cancel. *)
-let core_summands t ~vals ~halls ~extra =
+(* WHAT THE DERIVATIONS OF ONE TIGHT SET SHARE, BUILT ONCE (M20-pernode-T4, D-0242). Every
+   derivation a tight set (a Regin set, or a stage 1 interval) justifies sums the same
+   at-least-one line per member, from the same snapshots and the same [keep]: only the
+   at-most-one lines (which [y] joins) and [y]'s leftovers differ. [alo_lines] hands back
+   the lines the first forced derivation built, when building them again would return
+   those very nodes, by D-0216's rule ([Explanation.rebuilds_to], checked again only after
+   a node left the table, [Explanation.reuse_epoch]): an at-least-one line's operands are
+   model rows, the [excl] chains (whose own operands are model rows) and hole clauses, so
+   the shallow check is the whole induction. Otherwise, and always when hash-consing or
+   [amo_reuse] is off (test_endtoend compares the bytes both ways), they are built, which
+   is what every derivation did. The same nodes either way, so the same bytes.
+   [memo_hits] counts what the memo handed back.
+
+   WITHDRAWN (D-0242 section 3): the same memo for the at-most-one lines of the removals
+   from one [y], kept while no node left the table. Same bytes in every normal run, but
+   under BAGUETTE_DEBUG (which forces and re-forces derivations) it changed the proof of
+   2018 soccer-computational, so "no node left" does not establish what a rebuild
+   returns, and only the [rebuilds_to] rule is used. *)
+type 'a memo = { mutable m_val : 'a option; mutable m_seen : int }
+
+let memo () = { m_val = None; m_seen = -1 }
+let memo_hits = ref 0
+let memo_epoch () = if !amo_reuse then Explanation.reuse_epoch () else -1
+
+let alo_lines t ~vals ~halls memo =
+  let epoch = memo_epoch () in
+  match memo.m_val with
+  | Some nodes
+    when epoch >= 0
+         && (memo.m_seen = epoch
+            || List.for_all Explanation.rebuilds_to nodes
+               &&
+               (memo.m_seen <- epoch;
+                true)) ->
+      incr memo_hits;
+      nodes
+  | _ ->
+      let keep = mem_of vals in
+      let nodes = List.map (fun s -> alo_over t s ~keep) halls in
+      memo.m_val <- Some nodes;
+      memo.m_seen <- -1;
+      nodes
+
+let core_summands ?alo t ~vals ~halls ~extra =
   let all = halls @ Option.to_list extra in
-  let keep = mem_of vals in
-  List.map (fun s -> Explanation.term 1 (alo_over t s ~keep)) halls
-  @ List.concat_map
+  let amos () =
+    List.concat_map
       (fun v ->
         match List.filter (fun s -> s.s_dlo <= v && v <= s.s_dhi) all with
         | [] -> []
         | [ s ] -> [ Explanation.weaken [ (1, Lit.negate (Lit.eq s.s_name v)) ] ]
         | ss -> [ Explanation.term 1 (amo t ss v) ])
       vals
+  in
+  (match alo with
+  | Some memo -> List.map (Explanation.term 1) (alo_lines t ~vals ~halls memo)
+  | None ->
+      let keep = mem_of vals in
+      List.map (fun s -> Explanation.term 1 (alo_over t s ~keep)) halls)
+  @ amos ()
 
 (* The bound literals [alo_window] leaves in the row, cancelled by the lines that
    already state those bounds. Until M4-T7 this was the one place in this module where
@@ -972,13 +1056,13 @@ let target_cancel ~y ~lower =
    its residue [y_ge_(decl_hi+1)] is the constant false. Uncapped it asked for a
    [direct_fwd_id] that does not exist: exit 2 on `var 1..3: a, b, c; var 1..2: d;
    all_different_int([a, b, c, d])`, the four-variable pigeonhole. *)
-let prune_summands t ~a ~b ~halls ~y ~lower =
+let prune_summands ?alo t ~a ~b ~halls ~y ~lower =
   let keep, drop =
     if lower then
       (range y.s_lo (Int.min b y.s_dhi), range (Int.max a y.s_dlo) (y.s_lo - 1))
     else (range a y.s_hi, range (y.s_hi + 1) (Int.min b y.s_dhi))
   in
-  core_summands t ~vals:(range a b) ~halls ~extra:(Some y)
+  core_summands ?alo t ~vals:(range a b) ~halls ~extra:(Some y)
   @ List.map (fun v -> Explanation.weaken [ (1, Lit.eq y.s_name v) ]) drop
   @ List.map
       (fun v -> cite (cid_of "d_fwd" (Encoding.direct_fwd_id t.enc y.s_name v)))
@@ -1023,10 +1107,10 @@ let overshoot_cancel ~b ~y ~lower =
     @ [ Explanation.defining 1 (Lit.le y.s_name y.s_hi) ]
   else []
 
-let prune_expl t ~a ~b ~halls ~y ~lower =
+let prune_expl ?alo t ~a ~b ~halls ~y ~lower =
   Explanation.deferred (fun () ->
       Explanation.combine
-        (prune_summands t ~a ~b ~halls ~y ~lower
+        (prune_summands ?alo t ~a ~b ~halls ~y ~lower
         @ hall_cancels ~keep:(fun v -> a <= v && v <= b) ~halls
         @ target_cancel ~y ~lower @ overshoot_cancel ~b ~y ~lower)
         1)
@@ -1050,18 +1134,18 @@ let prune_expl t ~a ~b ~halls ~y ~lower =
 
    which is the pruning, disjoined with the facts it rests on -- the [Ne] shape, sound at
    any level. Nothing here is new machinery: it is [core_summands] plus [Weaken]. *)
-let remove_summands t ~vals ~halls ~y ~value =
+let remove_summands ?alo t ~vals ~halls ~y ~value =
   let mine = List.filter (fun w -> y.s_dlo <= w && w <= y.s_dhi) vals in
-  core_summands t ~vals ~halls ~extra:(Some y)
+  core_summands ?alo t ~vals ~halls ~extra:(Some y)
   @ List.filter_map
       (fun w ->
         if w = value then None else Some (Explanation.weaken [ (1, Lit.eq y.s_name w) ]))
       mine
 
-let remove_expl t ~keep ~vals ~halls ~y ~value =
+let remove_expl ?alo t ~keep ~vals ~halls ~y ~value =
   Explanation.deferred (fun () ->
       Explanation.combine
-        (remove_summands t ~vals ~halls ~y ~value @ hall_cancels ~keep ~halls)
+        (remove_summands ?alo t ~vals ~halls ~y ~value @ hall_cancels ~keep ~halls)
         1)
 
 (* THE PIGEONHOLE over a value SET, which is the M4-T2 shape of the sentence this
@@ -1189,6 +1273,22 @@ let push_conflict store ~facts why =
 
 exception Found of Store.conflict
 
+(* [perm] sorted by [key], ascending, in place, by insertion. Ties keep no particular
+   order, and none is needed: [hall_free] reads only counts and the values at run ends,
+   and [pass_scan] only counts along [by_hi] and marks what it walked. O(n + the number
+   of pairs out of order), which across one search step is the few bounds that moved. *)
+let sort_by (key : int array) perm =
+  for j = 1 to Array.length perm - 1 do
+    let i = perm.(j) in
+    let k = key.(i) in
+    let p = ref (j - 1) in
+    while !p >= 0 && key.(perm.(!p)) > k do
+      perm.(!p + 1) <- perm.(!p);
+      decr p
+    done;
+    perm.(!p + 1) <- i
+  done
+
 (* One pass: every candidate interval, in a fixed order, pushing what it can. Returns
    [true] if anything moved, so [propagate] can re-run; raises [Found] on a conflict,
    which is the one non-local exit -- a conflict abandons the pass, and unwinding
@@ -1241,17 +1341,20 @@ let pass_scan t store ~lo0 ~hi0 =
      it runs, so the pass-start bounds updated at each push that lands are what
      [Store.get] would read, without reading it per term per tight interval. *)
   let lo_l = Array.copy lo0 and hi_l = Array.copy hi0 in
-  let los = List.sort_uniq Int.compare (Array.to_list lo0) in
-  let his = Array.of_list (List.sort_uniq Int.compare (Array.to_list hi0)) in
-  (* The terms by ascending upper bound, so that the number of terms inside [a, b] is a
-     pointer walked along [his] for each [a] rather than a filter of the scope per
-     interval. *)
-  let by_hi = Array.init nt Fun.id in
-  Array.stable_sort (fun i j -> Int.compare hi0.(i) hi0.(j)) by_hi;
+  (* The terms by ascending lower and upper bound, the instance's kept permutations
+     ([sort_by] is a walk over them when [pass] has just sorted them). The intervals are
+     enumerated over them: [a] at the first term of each run of equal lower bounds, [b]
+     at the last of each run of equal upper bounds, so the same distinct values in the
+     same ascending order as the sorted lists of bounds this used to build (D-0242). The
+     number of terms inside [a, b] is a pointer walked along [by_hi] for each [a] rather
+     than a filter of the scope per interval. *)
+  sort_by lo0 t.by_lo;
+  sort_by hi0 t.by_hi;
+  let by_lo = t.by_lo and by_hi = t.by_hi in
   (* One push, with both halves of D-0026 built from the same snapshot. Returns through
      [Found]/[Moved]; a push that changes nothing (the bound is already there) falls
      through, which is how [Unchanged] can happen at all here. *)
-  let push ~halls ~a ~b ~y ~yi ~lower bound =
+  let push ?alo ~halls ~a ~b ~y ~yi ~lower bound =
     (* M7-T33 (D-0156): the push that would EMPTY [y] -- [pass]'s pigeonhole arm, or an
        [n = k] push whose live [y] is now confined -- is the conflict, reported with its
        facts under a decision (see [push_conflict]). [y]'s bounds here are the ones the
@@ -1272,7 +1375,7 @@ let pass_scan t store ~lo0 ~hi0 =
              (if lower then Reason.at_least ~name:y.s_name ~decl:y.s_dlo bound
               else Reason.at_most ~name:y.s_name ~decl:y.s_dhi bound))
         (prune_reason ~keep:(fun v -> a <= v && v <= b) halls y ~lower)
-        (prune_expl t ~a ~b ~halls ~y ~lower)
+        (prune_expl ?alo t ~a ~b ~halls ~y ~lower)
     in
     (* The rule above: the pass-start snapshot of [yi], and of any term naming the same
        variable, is taken before the push can land. *)
@@ -1296,11 +1399,13 @@ let pass_scan t store ~lo0 ~hi0 =
         moved := true
     | Store.Unchanged -> ()
   in
-  List.iter
-    (fun a ->
+  for ia = 0 to nt - 1 do
+    let a = lo0.(by_lo.(ia)) in
+    if ia = 0 || lo0.(by_lo.(ia - 1)) <> a then
       let inside = ref 0 and p = ref 0 in
-      Array.iter
-        (fun b ->
+      for ib = 0 to nt - 1 do
+        let b = hi0.(by_hi.(ib)) in
+        if ib = nt - 1 || hi0.(by_hi.(ib + 1)) <> b then (
           (* [inside]: the terms whose pass-start window lies in [a, b]. *)
           while !p < nt && hi0.(by_hi.(!p)) <= b do
             if lo0.(by_hi.(!p)) >= a then incr inside;
@@ -1360,6 +1465,9 @@ let pass_scan t store ~lo0 ~hi0 =
               for i = 0 to nt - 1 do
                 if inmask.(i) then inset.(t.canon.(i)) <- true
               done;
+              (* Every push from this interval sums the same Hall set's at-least-one
+                 lines, from the same pass-start snapshots ([alo_lines], D-0242). *)
+              let alo = memo () in
               for yi = 0 to nt - 1 do
                 let lo = lo_l.(yi) and hi = hi_l.(yi) in
                 if (a <= lo && lo <= b) || (a <= hi && hi <= b) then
@@ -1367,16 +1475,16 @@ let pass_scan t store ~lo0 ~hi0 =
                     let y = live yi in
                     let halls = List.map snap (idx ()) in
                     if a <= y.s_lo && y.s_lo <= b then
-                      push ~halls ~a ~b ~y ~yi ~lower:true (b + 1)
+                      push ~alo ~halls ~a ~b ~y ~yi ~lower:true (b + 1)
                     else if a <= y.s_hi && y.s_hi <= b then
-                      push ~halls ~a ~b ~y ~yi ~lower:false (a - 1)
+                      push ~alo ~halls ~a ~b ~y ~yi ~lower:false (a - 1)
               done;
               for i = 0 to nt - 1 do
                 if inmask.(i) then inset.(t.canon.(i)) <- false
               done);
             Array.fill inmask 0 nt false))
-        his)
-    los;
+      done
+  done;
   !moved
 
 (* THE QUIET-BOUNDS SKIP (M20-pernode-T4, D-0235). Whether [pass_scan] moves anything or
@@ -1393,16 +1501,81 @@ let pass_scan t store ~lo0 ~hi0 =
 (* How many passes [pass] skipped, for test_prop's lane; not read by the solver. *)
 let quiet_skips = ref 0
 
+(* THE HALL-FREE TEST (M20-pernode-T4, D-0242). Whether [pass_scan] on the bound vector
+   [lo]/[hi] would move nothing and raise nothing, decided by counting alone, with no
+   snapshot, no allocation and no push. [by_lo]/[by_hi] must be sorted by [lo]/[hi].
+
+   THE RULE. A scan acts on a candidate interval [a, b] (a a lower bound, b an upper bound,
+   a <= b) holding n terms of k = b - a + 1 values exactly when
+     - n > k: it pushes a contained term out, which empties it (a conflict), or
+     - n = k and some term NOT contained has a bound in [a, b]: it pushes that bound past
+       the interval, which always changes it (a lower bound in [a, b] goes to b + 1 > lo).
+   Nothing else in a scan pushes, and with no push the live bounds are the pass-start
+   ones, so the scan moves nothing iff no candidate interval is one of the two. The
+   second case is counted rather than searched: a contained term has both bounds in
+   [a, b], so "some term outside has its lower bound in [a, b]" is "more than n = k lower
+   bounds lie in [a, b]", and the same for the upper bounds. A variable repeated in the
+   scope ([twins]) has one bound pair for all its terms, so its terms are contained
+   together and the scan's name test ([inset]) skips exactly the contained terms: the
+   count is the scan's test there too.
+
+   THE WALK is the scan's own: each distinct lower bound [a] ascending, the terms in
+   [by_hi] order counting those with [lo >= a], an interval closing at each distinct
+   upper bound. It stops for [a] as soon as k exceeds the number of terms with
+   [lo >= a], which no later [b] can fill. BAGUETTE_DEBUG runs the scan behind every
+   [true] and requires it to move nothing; test_prop's lane (h) checks the converse
+   (every [false] is a scan that moves or raises) on random vectors. *)
+let hall_free ~by_lo ~by_hi lo hi =
+  let n = Array.length by_lo in
+  let free = ref true and ia = ref 0 and hlo = ref 0 in
+  while !free && !ia < n do
+    let a = lo.(by_lo.(!ia)) in
+    if !ia > 0 && lo.(by_lo.(!ia - 1)) = a then incr ia
+    else (
+      (* [hlo]: the terms whose upper bound is below [a]; none is contained in an interval
+         from [a], and none has a bound in it. Monotone in [a]. *)
+      while !hlo < n && hi.(by_hi.(!hlo)) < a do
+        incr hlo
+      done;
+      let rem = n - !ia in
+      let inside = ref 0 and pl = ref !ia and p = ref !hlo in
+      while !p < n do
+        let i = by_hi.(!p) in
+        if lo.(i) >= a then incr inside;
+        let b = hi.(i) in
+        if !p + 1 < n && hi.(by_hi.(!p + 1)) = b then incr p
+        else
+          let k = b - a + 1 in
+          if k > rem then p := n
+          else (
+            if !inside > k then (
+              free := false;
+              p := n)
+            else if !inside = k then (
+              while !pl < n && lo.(by_lo.(!pl)) <= b do
+                incr pl
+              done;
+              if !pl - !ia > k || !p + 1 - !hlo > k then (
+                free := false;
+                p := n));
+            incr p)
+      done;
+      incr ia)
+  done;
+  !free
+
+(* How many passes [hall_free] answered without a scan, for test_prop's lanes. *)
+let hall_free_skips = ref 0
+
 let pass t store =
   Propagator.count_pass ();
   let nt = Array.length t.terms in
-  let lo0 = Array.make nt 0 and hi0 = Array.make nt 0 in
-  Array.iteri
-    (fun i tm ->
-      let d = Store.get store tm.x in
-      lo0.(i) <- Domain.lo d;
-      hi0.(i) <- Domain.hi d)
-    t.terms;
+  let lo0 = t.lo0 and hi0 = t.hi0 in
+  for i = 0 to nt - 1 do
+    let d = Store.get store t.terms.(i).x in
+    lo0.(i) <- Domain.lo d;
+    hi0.(i) <- Domain.hi d
+  done;
   let q = t.quiet in
   let quiet = ref (t.quiet_on && q.q_valid) in
   let i = ref 0 in
@@ -1417,13 +1590,24 @@ let pass t store =
         | moved -> not moved
         | exception Found _ -> false);
     false)
-  else
-    let moved = pass_scan t store ~lo0 ~hi0 in
+  else (
+    sort_by lo0 t.by_lo;
+    sort_by hi0 t.by_hi;
+    let moved =
+      if t.quiet_on && hall_free ~by_lo:t.by_lo ~by_hi:t.by_hi lo0 hi0 then (
+        incr hall_free_skips;
+        Debug.check "I-P2 (D-0242): stage 1 found the bounds Hall-free" (fun () ->
+            match pass_scan t store ~lo0 ~hi0 with
+            | moved -> not moved
+            | exception Found _ -> false);
+        false)
+      else pass_scan t store ~lo0 ~hi0
+    in
     if not moved then (
       Array.blit lo0 0 q.q_lo 0 nt;
       Array.blit hi0 0 q.q_hi 0 nt;
       q.q_valid <- true);
-    moved
+    moved)
 
 (* ================================================== M4-T2: stage 2, Regin's matching
 
@@ -1538,10 +1722,10 @@ let in_order_currency t y value expl =
    [facts] is the tight set's [hall_facts], shared by every removal under that set
    (D-0235); the caller hands over only a value still in [y]'s live domain, so every
    call reaches the store. *)
-let remove_one t store ~moved ~halls ~vals ~keep ~facts ~y ~y_tm value =
+let remove_one t store ~moved ~halls ~vals ~keep ~facts ~alo ~y ~y_tm value =
   let d = Store.get store y_tm.x in
   let concludes = removal_conclusion y d value in
-  let expl = remove_expl t ~keep ~vals ~halls ~y ~value in
+  let expl = remove_expl ~alo t ~keep ~vals ~halls ~y ~value in
   let j =
     Reason.because ~concludes
       (remove_reason_of y (Lazy.force facts))
@@ -1570,9 +1754,29 @@ let regin_scratch t store =
   let moved = ref false in
   if n > 0 then (
     let doms = Array.map (fun tm -> Store.get store tm.x) t.terms in
+    (* Every value some domain holds, ascending: a mark per value of the scope's live
+       span, then the marked values in order (D-0242; the same array the sorted union of
+       the domains' lists gives, without the lists). The lists stay for a span too wide
+       to mark, the gate's bound. *)
+    let vlo = Array.fold_left (fun a d -> Int.min a (Domain.lo d)) max_int doms in
+    let vhi = Array.fold_left (fun a d -> Int.max a (Domain.hi d)) min_int doms in
     let values =
-      Array.of_list
-        (List.sort_uniq Int.compare (List.concat_map Domain.to_list (Array.to_list doms)))
+      if vhi - vlo + 1 > max_gate_span then
+        Array.of_list
+          (List.sort_uniq Int.compare
+             (List.concat_map Domain.to_list (Array.to_list doms)))
+      else
+        let mark = Array.make (vhi - vlo + 1) false in
+        Array.iter (fun d -> Domain.iter (fun v -> mark.(v - vlo) <- true) d) doms;
+        let count = Array.fold_left (fun c b -> if b then c + 1 else c) 0 mark in
+        let values = Array.make count 0 and k = ref 0 in
+        Array.iteri
+          (fun i b ->
+            if b then (
+              values.(!k) <- vlo + i;
+              incr k))
+          mark;
+        values
     in
     let nv = Array.length values in
     let holds i vi = Domain.mem doms.(i) values.(vi) in
@@ -1666,6 +1870,16 @@ let regin_scratch t store =
               in
               any 0)
         in
+        (* [holders.(vi)]: how many terms hold [values.(vi)]; [held.(i)]: how many
+           values term [i] holds. Read once per pass, for the outsider count below. *)
+        let holders = Array.make nv 0 and held = Array.make n 0 in
+        for i = 0 to n - 1 do
+          for vi = 0 to nv - 1 do
+            if holds i vi then (
+              holders.(vi) <- holders.(vi) + 1;
+              held.(i) <- held.(i) + 1)
+          done
+        done;
         List.iter
           (fun u ->
             (* [ink]: {u} and everything reachable from it. *)
@@ -1687,7 +1901,22 @@ let regin_scratch t store =
               let rec any i = i < n && ((ink.(i) && has_free.(i)) || any (i + 1)) in
               any 0
             in
-            if not free_reachable then
+            (* WHETHER ANY TERM OUTSIDE THE SET HOLDS ONE OF ITS VALUES (D-0242). A tight
+               set's members hold only its values (every value they hold is matched, to
+               a member, by the closure above), so the terms outside hold
+               [sum holders over its values - sum held over its members] of them, counted
+               over [doms]. When that is 0 the removal loop below tests [doms.(y)] first
+               for every pair and calls nothing: skipping it, and the value list, the
+               membership table and the lazy facts it would have built, changes nothing
+               but the instructions. *)
+            let outsiders =
+              let c = ref 0 in
+              for i = 0 to n - 1 do
+                if ink.(i) then c := !c + holders.(mval.(i)) - held.(i)
+              done;
+              !c
+            in
+            if (not free_reachable) && outsiders > 0 then
               let vals =
                 List.sort_uniq Int.compare
                   (List.filter_map
@@ -1704,6 +1933,7 @@ let regin_scratch t store =
               in
               let keep = mem_of vals in
               let facts = lazy (hall_facts ~keep (Lazy.force halls)) in
+              let alo = memo () in
               List.iter
                 (fun y ->
                   if not ink.(y) then
@@ -1715,10 +1945,20 @@ let regin_scratch t store =
                         then
                           if
                             remove_one t store ~moved ~halls:(Lazy.force halls) ~vals
-                              ~keep ~facts ~y:(snap y) ~y_tm:t.terms.(y) v
+                              ~keep ~facts ~alo ~y:(snap y) ~y_tm:t.terms.(y) v
                           then twins t y (fun j -> cache.(j) <- None))
                       vals)
-                (range 0 (n - 1)))
+                (range 0 (n - 1))
+            else if not free_reachable then
+              Debug.check "I-P2 (D-0242): a tight Regin set no outside term meets"
+                (fun () ->
+                  List.for_all
+                    (fun y ->
+                      ink.(y)
+                      || List.for_all
+                           (fun i -> not (ink.(i) && holds y mval.(i)))
+                           (range 0 (n - 1)))
+                    (range 0 (n - 1))))
           (range 0 (n - 1)));
   !moved
 

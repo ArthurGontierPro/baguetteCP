@@ -2590,6 +2590,77 @@ let test_d0216_amo_reuse () =
     (Array.to_list (Sys.readdir dir));
   Sys.rmdir dir
 
+(* M20-pernode-T4 (D-0242): the removals one Regin set justifies share its at-least-one
+   lines ([Alldiff.alo_lines]), handed back when building them again would return them.
+   The scene: h1..h3 over 1..5 lose 2 and 4 at the root, so they are a Hall set over the
+   value SET {1, 3, 5}, which no interval states (stage 1 sees [1, 5] with three
+   variables); y1..y3 over 1..6 lose 1, 3 and 5 to Regin under that one set. Their sum
+   at most 8 then leaves them {2, 4} between three, and the root conflict cites the
+   removals of 1 and 3 from each, which forces their derivations. The proof must be the
+   same bytes with and without the memo, the memo must be what the later removals used,
+   and veripb must accept the proof. *)
+let d0242_src =
+  "var 1..5: h1;\n\
+   var 1..5: h2;\n\
+   var 1..5: h3;\n\
+   var 1..6: y1;\n\
+   var 1..6: y2;\n\
+   var 1..6: y3;\n\
+   constraint int_ne(h1, 2);\n\
+   constraint int_ne(h1, 4);\n\
+   constraint int_ne(h2, 2);\n\
+   constraint int_ne(h2, 4);\n\
+   constraint int_ne(h3, 2);\n\
+   constraint int_ne(h3, 4);\n\
+   constraint int_lin_le([1,1,1],[y1,y2,y3],8);\n\
+   constraint all_different_int([h1,h2,h3,y1,y2,y3]);\n\
+   solve satisfy;\n"
+
+let test_d0242_alo_reuse () =
+  let dir = Filename.temp_file "baguette_d0242" "" in
+  Sys.remove dir;
+  Sys.mkdir dir 0o755;
+  let saved_hc = !Explanation.hashcons and saved_reuse = !Alldiff.amo_reuse in
+  let run reuse =
+    Explanation.set_hashcons true;
+    Alldiff.amo_reuse := reuse;
+    Alldiff.memo_hits := 0;
+    let name = if reuse then "reuse" else "rebuild" in
+    let opb, proof, outcome = el_solve dir name d0242_src in
+    (opb, proof, outcome, !Alldiff.memo_hits)
+  in
+  Fun.protect
+    ~finally:(fun () ->
+      Explanation.set_hashcons saved_hc;
+      Alldiff.amo_reuse := saved_reuse)
+    (fun () ->
+      let _, proof_off, out_off, hits_off = run false in
+      let opb, proof_on, out_on, hits_on = run true in
+      let unsat = function Search.Unsat -> true | _ -> false in
+      check "D-0242: the scene is refuted at the root, both ways"
+        (unsat out_off && unsat out_on);
+      check "D-0242: the proof is the same bytes with and without the memo"
+        (String.equal proof_off proof_on);
+      check
+        (Printf.sprintf
+           "D-0242: the eight removals after the first reuse the set's at-least-one \
+            lines (%d hits with the memo, %d without)"
+           hits_on hits_off)
+        (hits_on >= 8 && hits_off = 0);
+      match veripb_path () with
+      | None ->
+          incr failures;
+          Printf.printf "FAIL D-0242: veripb not found -- the proof was NOT checked.\n"
+      | Some veripb ->
+          let pbp = Filename.concat dir "reuse.pbp" in
+          let rc, log = m6_veripb veripb dir opb pbp in
+          check "D-0242: veripb accepts the proof" (rc = 0);
+          if rc <> 0 then Printf.printf "  veripb said:\n%s\n" log);
+  List.iter
+    (fun f -> Sys.remove (Filename.concat dir f))
+    (Array.to_list (Sys.readdir dir));
+  Sys.rmdir dir
+
 let () =
   print_endline "";
   List.iter run_model models;
@@ -2607,6 +2678,7 @@ let () =
   test_d0200_heap_budget_cli ();
   test_m6_t24_interrupt_cli ();
   test_d0216_amo_reuse ();
+  test_d0242_alo_reuse ();
   if !failures > 0 then (
     Printf.printf "\n%d failure(s)\n" !failures;
     exit 1)
