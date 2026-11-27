@@ -2,9 +2,17 @@
 # Find which propagator emits a proof step veripb rejects, by re-running the model with
 # propagators disabled one at a time.
 #
-#   scripts/shrink.sh test/models/lin_unsat.fzn
+#   scripts/shrink.sh test/models/lin_unsat.fzn     (PROPAGATORS="int_le ..." to choose)
 #
-# Relies on --disable-propagator, which lands with the engine (roadmap M1-T7).
+# Exit 0 when the baseline proof is accepted (nothing to shrink) or when disabling one
+# propagator makes it accepted (that one is printed as SUSPECT); 1 when no single
+# propagator accounts for the rejection; 2 when no checker is found.
+#
+# NOT WORKING TODAY (checked 2026-11-27): it relies on a solver flag
+# --disable-propagator, which was planned with the engine (roadmap M1-T7) and was never
+# added to bin/main.ml. The solver refuses the flag as a usage error (exit 2), so every
+# disabled run fails and the script always ends on "no single propagator accounts for
+# it". Use it only after the flag exists.
 set -uo pipefail
 
 FZN="${1:?usage: shrink.sh MODEL.fzn}"

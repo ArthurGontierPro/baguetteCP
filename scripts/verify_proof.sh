@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
-# Solve one FlatZinc model and verify the proof it emits.
+# Solve one FlatZinc model and verify the proof it emits (what `make proof FZN=...` runs).
 #   scripts/verify_proof.sh test/models/trivial_sat.fzn
-# Exit 0 only if the solver succeeds AND veripb accepts the proof.
+# The proof goes to test/out/<model>.opb and .pbp, the solver's stdout to .out. The
+# solver is $BAGUETTE, default _build/default/bin/main.exe, which this script does NOT
+# build. Exit 0 only if the solver succeeds AND veripb accepts the proof; 1 when the proof
+# is rejected or no checker is found (a missing checker is a failure, never a skip); the
+# solver's own status when the solve fails.
 set -euo pipefail
 
 # MACHINE LIMIT (2026-09-16). 15 GB of RAM shared by every concurrent session, and three

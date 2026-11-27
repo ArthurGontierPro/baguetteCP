@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# M6-T4. Proves every bucket of scripts/compare_run.sh is REACHABLE, including the one
-# the harness exists for: DISAGREE.
+# Proves every bucket of scripts/compare_run.sh is REACHABLE, including the one the
+# harness exists for: DISAGREE (M6-T4).
 #
-# `scripts/compare_run.sh --self-test` runs this. A three-model synthetic corpus in a
+# `scripts/compare_run.sh --self-test` runs this (and `make selftests`). Exit 0 when every
+# expected bucket was reached, 1 otherwise. A three-model synthetic corpus in a
 # temp dir, run through the REAL harness with the REAL baguette and the REAL checker,
 # and two shims standing in for Chuffed and GCS:
 #
