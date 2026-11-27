@@ -32915,3 +32915,54 @@ veto already covers the linear rows.
 
 **Revert**: `git revert` of the two `M19-config-T9` code commits (`8e9f9a4`, `cc67cc4`'s doc line); with the
 default `off`, removing the switch changes no artefact.
+
+
+## D-0248  [AUTONOME] M22-review-T5: a proof write that fails (`Sys_error`: missing directory, full disk) ends with one line on stderr and a new exit status, 6. `Domain.of_list` and `change_of` leave `lib/` for a test helper
+
+**Status**: DONE on `wave94-latent` (agent-latent, 2026-11-27), not merged. Base: main `3d0a067`. Touches
+`bin/main.ml`, `lib/proof/encoding.ml`, `lib/core/domain.ml`, `test/unit/domain_helper.ml` (new), comments in
+`lib/core/{trace,store}.ml`, `lib/core/prop/linear.ml` and `docs/INVARIANTS.md` I-X10.
+
+### 1. Context
+
+The code review of 2026-11-23 (`docs/reports/2026-11-23-code-review.md`, T5) found that a write error on the
+proof had no handler. Measured on main `3d0a067` with `alldiff_hall_sat.fzn`: a `--proof` prefix in a missing
+directory, or a `.pbp` or `.opb` that is a symlink to `/dev/full`, ended with
+`Fatal error: exception Sys_error(...)` (or `Fun.Finally_raised: Sys_error("No space left on device")` for the
+`.pbp`, whose last flush is the `close_out` in `solve`'s `finally`), exit 2. Exit 2 is also usage's status, and
+a full disk names no file. No answer was printed in these runs, because the answer is printed after that
+`close_out`.
+
+### 2. The options for the exit status
+
+| option | consequence |
+|---|---|
+| 5, `exit_resource` (the review's suggestion) | no new number. But campaigns count 5 as the heap budget (`scripts/corpus_run.sh`'s REFUSED-RESOURCE, `tools/compare/refusal_causes.py`, the "of which the heap budget, exit 5" rows of D-0141 onward), so a full `/scratch` during a campaign would be filed as memouts, and 5's message says to re-run with a larger budget, which a missing directory does not need |
+| 4, internal | wrong: no invariant failed |
+| 2, as before | the same number as a bad command line, which is what made the old crash hard to read |
+| **6, a new status** | a harness can tell it apart from all five; one more number in the table at the top of `bin/main.ml` and in `--help`. A harness that knows only 0 to 5 sees an unexpected non-zero status, which is the right reading |
+
+### 3. The choice
+
+6, `exit_write` in `bin/main.ml`'s table, beside the other five, and in the `exit status` paragraph of
+`--help`. `main` catches `Sys_error msg` and `Fun.Finally_raised (Sys_error msg)` at `solve`'s call (every file
+`solve` opens is an output: the `.opb`, its `.opb.rows` body, the `.pbp`, the e2e prefix) and prints one line,
+`baguette: a write failed (MSG); the proof P.opb / P.pbp is INCOMPLETE, do not check or keep it`, then exits 6.
+It does not try to end the proof: the writer may be mid-line, and the file cannot be written anyway. No
+verdict reaches stdout, because the final answer is printed after the `.pbp`'s `close_out` and a stopped
+run's marker after its conclusion's flush; an optimisation run may have printed improving solutions before
+the failure, as a stopped run does. `test_endtoend` checks the three cases (exit 6, one line, no
+`Fatal error`, empty stdout). `scripts/corpus_run.sh` has no bucket for 6 and files it as `SOLVE-ERR-6`, its class for any
+other exit; adding one was not needed for this row.
+
+### 4. The removal
+
+`Domain.of_list` and `Domain.change_of` had no caller in `lib/` or `bin/` (grep, 2026-11-27). `test_domain`,
+`test_core`, `test_prop` and `test_consistency` used them, so both moved unchanged in behaviour to `test/unit/domain_helper.ml`
+(linked like `mem_guard.ml`, no `dune` line). `of_list` builds holes no trail entry explains, which veripb
+rejected when M7-T11 tried it (D-0072); the gate that kept it out of the solver was "it has no caller in
+`lib/`", and it is now "it is not in `lib/`". The comments that named the gate say so. No artefact changes.
+
+**Revert**: `git revert` of the commit `M22-review-T5: a proof write that fails ends with one line and exit 6
+(D-0248)` restores the crash with exit 2; the removal reverts on its own commit
+(`M22-review-T5: Domain.of_list and change_of move ...`).
