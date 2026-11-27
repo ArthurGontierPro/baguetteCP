@@ -19,6 +19,7 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
+| M19-config-T8 (probing at the root only, D-0250) | new `lib/core/probe.ml` + its line in `lib/core/dune`; `lib/core/search.ml` (the root call and the switch read only); `bin/main.ml` (only if a flag is needed); `test/unit/test_search_strategy.ml` (new sections) or a new test file; new test models; the module maps (CLAUDE.md, docs/ARCHITECTURE.md section 1) | agent-probe, wave96-probe | 2026-11-27 |
 
 ## Cross-session requests
 
