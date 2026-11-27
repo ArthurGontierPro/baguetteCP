@@ -283,11 +283,16 @@ type t = {
           search. Indexed by id and grown by [add] like [triggers]; an id with no entry
           has the empty scope. See [in_scope] for why this replaced a walk of the
           watcher list. *)
-  mutable wake_static : int list array;
+  mutable wake_static : int array array;
+  mutable wake_len : int array;
       (** M6-T22 / D-0138: variable int -> the ids of the instances with NO
-          [inst_watched] that read it, newest first. The wake loops' copy of [watchers]
-          minus the self-watching instances, indexed by array rather than hashed. Grown
-          on demand; a variable past its end has no such reader. *)
+          [inst_watched] that read it, as [wake_static.(x).(0 .. wake_len.(x) - 1)],
+          OLDEST first, so newest first when walked downwards. The wake loops' copy of
+          [watchers] minus the self-watching instances, indexed by array rather than
+          hashed. Grown on demand; a variable past its end has no such reader. A flat
+          int array since M20-pernode-T4 (D-0243): it was an [int list], newest first,
+          and the walk over it was most of [watchers_of_new_entries]; walking the array
+          from its last cell down visits the same ids in the same order. *)
   mutable moved : Bytes.t;
       (** M11-complexity-T3 (D-0142, E1): variable int -> the bound moves (bit 1 lower,
           bit 2 upper) of the entries [watchers_of_new_entries] has walked so far, i.e.
@@ -481,9 +486,12 @@ let ensure_var t x =
   let n = Array.length t.wake_static in
   if x >= n then (
     let m = max (x + 1) (2 * n) in
-    let ws = Array.make m [] in
+    let ws = Array.make m [||] in
     Array.blit t.wake_static 0 ws 0 n;
     t.wake_static <- ws;
+    let wl = Array.make m 0 in
+    Array.blit t.wake_len 0 wl 0 n;
+    t.wake_len <- wl;
     let mv = Bytes.make m '\000' in
     Bytes.blit t.moved 0 mv 0 n;
     t.moved <- mv;
@@ -676,13 +684,24 @@ let indexed t (inst : Propagator.instance) =
       }
 
 (* Register a NON-self-watching instance in [wake_static], once per distinct variable,
-   prepending as [watchers] does. *)
+   appending (the list it replaced was prepended to, as [watchers] is, and is walked from
+   its last cell down: the same order). *)
 let index_static t (inst : Propagator.instance) =
   if Option.is_none inst.Propagator.inst_watched then
     List.iter
       (fun x ->
         ensure_var t x;
-        t.wake_static.(x) <- inst.Propagator.id :: t.wake_static.(x))
+        let a = t.wake_static.(x) and len = t.wake_len.(x) in
+        let a =
+          if len < Array.length a then a
+          else
+            let b = Array.make (max 4 (2 * len)) 0 in
+            Array.blit a 0 b 0 len;
+            t.wake_static.(x) <- b;
+            b
+        in
+        a.(len) <- inst.Propagator.id;
+        t.wake_len.(x) <- len + 1)
       (List.sort_uniq Int.compare (List.map Var.to_int inst.Propagator.inst_vars))
 
 (* M2-T6: THE SELF-WAKE VETO, and the aliased-scope rule that guards it.
@@ -777,6 +796,7 @@ let create ?(trigger = default_trigger) (instances : Propagator.instance list) :
       poll_left = default_poll_runs;
       scopes;
       wake_static = [||];
+      wake_len = [||];
       moved = Bytes.empty;
       dyn_ids = [||];
       dyn_len = [||];
@@ -938,8 +958,16 @@ let purge t =
   let keep id = not t.removed.(id) in
   Hashtbl.iter
     (fun x () ->
-      if x < Array.length t.wake_static then
-        t.wake_static.(x) <- List.filter keep t.wake_static.(x);
+      if x < Array.length t.wake_static then (
+        (* In place, keeping the order, as [List.filter] did. *)
+        let a = t.wake_static.(x)
+        and m = ref 0 in
+        for k = 0 to t.wake_len.(x) - 1 do
+          if keep a.(k) then (
+            a.(!m) <- a.(k);
+            incr m)
+        done;
+        t.wake_len.(x) <- !m);
       let v = Var.of_int x in
       match Hashtbl.find_opt t.watchers v with
       | None -> ()
@@ -1110,8 +1138,10 @@ let check_advise (inst : Propagator.instance) (store : Store.t) v =
 let advises t store id v =
   if id < 0 || id >= t.count then true
   else
-    let inst = t.instances.(id) in
-    if inst.Propagator.inst_advise store v then true
+    let ask = t.instances.(id).Propagator.inst_advise in
+    (* D-0243: the default advisor is answered without the call. It is
+       [fun _ _ -> true], so skipping it changes no answer and no counter. *)
+    if ask == Propagator.advise_always || ask store v then true
     else (
       t.ctr.c_advised <- t.ctr.c_advised + 1;
       if Debug.enabled then t.declined <- (id, v) :: t.declined;
@@ -1240,6 +1270,23 @@ let sort_desc_uniq (a : int array) len =
     done;
     !m)
 
+(* Whether instance [id] is woken by a trail entry on [v] that moved a bound or not
+   ([bound]): the self-wake veto, then the trigger mask, then the advisor, each counted
+   as it was. A top-level function since M20-pernode-T4 (D-0243), called directly from
+   the walk's loops, where it was a closure applied by [List.iter]'s. *)
+let wants t store ~vetoed ~self_id id bound v =
+  if vetoed && id = self_id then (
+    t.ctr.c_vetoed <- t.ctr.c_vetoed + 1;
+    false)
+  else if wakes_on_kind (trigger_of t id) ~bound then (
+    incr wakes;
+    t.ctr.c_wakes <- t.ctr.c_wakes + 1;
+    advises t store id v)
+  else (
+    incr masked_wakes;
+    t.ctr.c_masked <- t.ctr.c_masked + 1;
+    false)
+
 let watchers_of_new_entries ?self t store ~since =
   (* M2-T6: [self] is the instance that pushed these entries. When its claim is
      honoured, its own id is dropped from every entry's watcher list -- a subsequence
@@ -1249,19 +1296,6 @@ let watchers_of_new_entries ?self t store ~since =
   let acc = ref [] in
   (* D-0142 section 1: what this walk declines is checked after it, by its caller. *)
   if Debug.enabled then t.declined <- [];
-  let wants id bound v =
-    if vetoed && id = self_id then (
-      t.ctr.c_vetoed <- t.ctr.c_vetoed + 1;
-      false)
-    else if wakes_on_kind (trigger_of t id) ~bound then (
-      incr wakes;
-      t.ctr.c_wakes <- t.ctr.c_wakes + 1;
-      advises t store id v)
-    else (
-      incr masked_wakes;
-      t.ctr.c_masked <- t.ctr.c_masked + 1;
-      false)
-  in
   (* M6-T22: the self-watching instances of one slot that want this entry, into the
      scratch [dl] at [!dn] ([sort_desc_uniq]'s header). A copy of the slice under
      BAGUETTE_DEBUG, as before D-0142 moved the I-P7 check after the walk: nothing in the
@@ -1278,7 +1312,7 @@ let watchers_of_new_entries ?self t store ~since =
       let ids = if Debug.enabled then Array.sub t.dyn_ids.(sl) 0 nd else t.dyn_ids.(sl) in
       for j = 0 to nd - 1 do
         let id = ids.(j) in
-        if wants id bound v then (
+        if wants t store ~vetoed ~self_id id bound v then (
           dl.(!dn) <- id;
           incr dn)
       done)
@@ -1287,7 +1321,7 @@ let watchers_of_new_entries ?self t store ~since =
     let e : Store.entry = Store.trail_entry store i in
     let x = Var.to_int e.var in
     if x < Array.length t.wake_static then (
-      let stat = t.wake_static.(x) in
+      let stat = t.wake_static.(x) and ns = t.wake_len.(x) in
       (* E1 (D-0142): the slots this entry asks are those of the bound moves of this
          entry AND of every newer entry of this walk on [x] -- see "The wake index by
          direction", and [t.moved]. *)
@@ -1306,7 +1340,7 @@ let watchers_of_new_entries ?self t store ~since =
       in
       if Debug.enabled then
         record_unasked t e ~lo ~hi ~self:(if vetoed then self_id else -1);
-      if stat <> [] || nd > 0 then (
+      if ns > 0 || nd > 0 then (
         let bound = lm || hm in
         (* M6-T22: the self-watching instances that want this entry, DESCENDING, to
            be merged into the static ones by id (see the wake index's header). One
@@ -1318,19 +1352,22 @@ let watchers_of_new_entries ?self t store ~since =
           if lo then collect bound e.var (sl + 1);
           if hi then collect bound e.var (sl + 2);
           dn := sort_desc_uniq !wake_scratch !dn);
-        let dl = !wake_scratch and dk = ref 0 in
-        let rec flush_above s =
-          if !dk < !dn && dl.(!dk) > s then (
+        (* The merge, as two plain loops (D-0243): the static ids newest first (the
+           array from its last cell down), each preceded by the self-watching ids
+           above it, then those left. *)
+        let dl = !wake_scratch and dk = ref 0 and dn = !dn in
+        for k = ns - 1 downto 0 do
+          let id = stat.(k) in
+          while !dk < dn && dl.(!dk) > id do
             acc := dl.(!dk) :: !acc;
-            incr dk;
-            flush_above s)
-        in
-        List.iter
-          (fun id ->
-            flush_above id;
-            if wants id bound e.var then acc := id :: !acc)
-          stat;
-        flush_above min_int))
+            incr dk
+          done;
+          if wants t store ~vetoed ~self_id id bound e.var then acc := id :: !acc
+        done;
+        while !dk < dn do
+          acc := dl.(!dk) :: !acc;
+          incr dk
+        done))
   done;
   (* [t.moved] back to all zero, over the same entries. *)
   for i = since to Store.trail_length store - 1 do
@@ -1955,7 +1992,7 @@ let seed_dirty t store ~since ~epoch =
     let e : Store.entry = Store.trail_entry store i in
     let x = Var.to_int e.var in
     if x < Array.length t.wake_static then (
-      let stat = t.wake_static.(x) in
+      let stat = t.wake_static.(x) and ns = t.wake_len.(x) in
       (* E1 (D-0142): the slots this entry asks -- see "The wake index by direction". *)
       let sl = 3 * x and lo = lo_moved e and hi = hi_moved e in
       let nd =
@@ -1965,9 +2002,11 @@ let seed_dirty t store ~since ~epoch =
       in
       if Debug.enabled then
         record_unasked t e ~lo ~hi ~self:(-1) ~skip:(fun id -> t.born.(id) > epoch);
-      if stat <> [] || nd > 0 then (
+      if ns > 0 || nd > 0 then (
         let bound = lo || hi in
-        List.iter (mark bound e.var) stat;
+        for k = ns - 1 downto 0 do
+          mark bound e.var stat.(k)
+        done;
         (* M6-T22: the self-watching instances of the slots asked; order is immaterial
            here, this only marks. *)
         mark_slot bound e.var sl;
