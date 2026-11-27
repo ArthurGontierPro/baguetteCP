@@ -1,6 +1,8 @@
 (* phase.ml: PHASE SAVING over order literals -- the value a variable was last fixed at
-   (M10-search-strategy-T2, docs/DECISIONS.md D-0137 section 3; Pipatsrisawat and
-   Darwiche, SAT 2007).
+   (Pipatsrisawat and Darwiche, SAT 2007). Built by M10-search-strategy-T2 (restarts and
+   phase saving behind flags) under docs/DECISIONS.md D-0137 section 3, which decided
+   that a saved phase changes the value choice only and adds no decision shape and no
+   proof line.
 
    Consistency level: none -- this is not a propagator. Governing records: D-0137 section 3
    (what is saved, what it changes), docs/SPEC.md 3.4 (it is opt-in: `--phase-saving`).
@@ -21,21 +23,24 @@
    The cost is one look at each popped entry, once, which is what popping it already
    costs. Nothing is saved on a path that never backtracks, and nothing needs to be. To
    FIND the level's first entry it pays O(depth) more per backtrack: [Store.level_marks]
-   lists every mark and [List.nth] walks to the level's (M16-file-review-T3, D-0191). That
-   is linear in the depth per node, quadratic only in a run whose every node backtracks
-   from the bottom of a deep stack; measured 0.2 % median and 1.0 % at most of the lane's
-   samples under `--restarts luby:1 --phase-saving`, so it stays until the store offers
-   one mark by its level.
+   lists every mark and [List.nth] walks to the level's. The file-by-file review of the
+   learning modules (M16-file-review-T3, D-0191) measured that cost. It is linear in the
+   depth per node, quadratic only in a run whose every node backtracks from the bottom of
+   a deep stack; measured 0.2 % median and 1.0 % at most of the lane's samples under
+   `--restarts luby:1 --phase-saving`, so it stays until the store offers one mark by its
+   level.
 
    ---------------------------------------------------------------------------
    What it changes: the value choice, never the variable choice
    ---------------------------------------------------------------------------
 
    [saved] answers "is there a saved value still in [v]'s domain?". Turning that into a
-   decision -- always a one-literal split, see [Search.value_decision] and D-0137 section
-   3's addendum on why not D-0077's assignment -- is Search's, because the decision type
-   is Search's and this module must not depend on it.
-   No decision shape and no proof line is added (D-0137 section 3).
+   decision is Search's, because the decision type is Search's and this module must not
+   depend on it. [Search.value_decision] always makes it a one-literal split that keeps
+   the saved value in the first branch, never D-0077's assignment decision [x = s]; the
+   reason is in D-0137 section 3's addendum and in the comment above
+   [Search.value_decision]. No decision shape and no proof line is added (D-0137 section
+   3).
 
    This module never reads the live store except through [save_level]'s walk of the
    level being popped and [saved]'s membership test, and holds no state that a backtrack

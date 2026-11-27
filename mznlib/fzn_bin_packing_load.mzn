@@ -1,4 +1,5 @@
-% M18-coverage-T4 (docs/DECISIONS.md D-0220): bin_packing_load without the bool2int copies.
+% M18-coverage-T4 (docs/DECISIONS.md D-0220): bin_packing_load without the bool2int
+% copies.
 %
 % MiniZinc 2.10.1's std/fzn_bin_packing_load.mzn is sum(load) = sum(weight), bin[i] in the
 % bin range, and per bin `load[b] = sum(i) (weight[i] * bool2int(bin[i] = b))`. Flattened,

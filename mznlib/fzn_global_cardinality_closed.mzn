@@ -5,8 +5,10 @@
 % std/fzn_global_cardinality_closed.mzn in 2.10.1 is ALREADY one call away from gcc:
 % it restricts every xs[i] to the cover and calls global_cardinality, which reaches
 % fzn_global_cardinality, which mznlib/fzn_global_cardinality.mzn keeps whole
-% (lib/core/prop/gcc.ml, D-0078).  D-0122 counted this global as decomposed because
-% its census reads the model's SOURCE; the flattened .fzn never held a decomposition.
+% (lib/core/prop/gcc.ml, D-0078).  D-0122, the census of the globals the Challenge
+% instances call against what baguette propagates natively, counted this global as
+% decomposed because it reads the model's SOURCE; the flattened .fzn never held a
+% decomposition.
 % Measured on 2.10.1 (D-0146, step 1).
 %
 % So this file is not a route that was missing.  It does two things std does not:

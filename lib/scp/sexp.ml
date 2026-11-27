@@ -1,5 +1,8 @@
 (* The s-expressions of a `.scp` file: text to a tree of atoms and lists, every node with
-   its position (M23-inputs-T1, D-0228 section 14, D-0230).
+   its position. This is task M23-inputs-T1, the first step of the plan D-0228 section 14
+   fixed for `.scp` input: a reader from `.scp` text to [Model.t] in lib/scp/, and
+   nothing else. D-0230 records the reader as built: what it reads, what it refuses and
+   why.
 
    The grammar is the one CakeML's `cake_pb_cp` reads through `mlsexp` (branch
    `cp_enc_new`, `930601d6`): an atom is a maximal run of characters that are neither
@@ -7,9 +10,9 @@
    points, each refused with the position rather than read some other way:
 
    - a `;` anywhere (cake refuses a comment, and so does this reader: D-0228 section 14);
-   - a double quote or a control character other than the four white spaces (cake's reader has
-     quoted strings, a `.scp` has no use for one, and an atom with a quote in it would be
-     a name the `.opb` cannot carry).
+   - a double quote or a control character other than the four white spaces (cake's
+     reader has quoted strings, a `.scp` has no use for one, and an atom with a quote in
+     it would be a name the `.opb` cannot carry).
 
    ITERATIVE AND LINEAR. [read] builds one form with an explicit stack of the lists still
    open, so nesting depth costs heap, never OCaml stack, and every character is looked at
@@ -213,7 +216,8 @@ let parse_string ~file s =
 (* Integers as cake's `mlint$fromString` reads them: an optional `-` or `~`, then one or
    more decimal digits, and nothing else. [None] for any other atom, which is then a
    name. A digit string beyond 63 bits is refused with the position: cake reads it as a
-   bignum, baguette computes over native integers (SPEC 2.1, D-0029). *)
+   bignum, baguette computes over native integers (SPEC 2.1, and D-0029's arithmetic
+   limit, enforced at compile time, lib/core/checked.ml). *)
 let int_of_atom p a =
   let n = String.length a in
   let start = if n > 0 && (a.[0] = '-' || a.[0] = '~') then 1 else 0 in

@@ -2,11 +2,11 @@
 %
 % MiniZinc 2.10.1's std/fzn_nvalue.mzn is
 %   n == sum (j in lb_array(xs)..ub_array(xs)) (exists (i in index_set(xs)) (xs[i] = j))
-% Flattened, each (variable, value) pair costs an int_eq_reif (the INDICATOR `xs[i] = j`, a
-% Boolean shared by common-subexpression elimination with any other part of the model that
-% says the same), each value an array_bool_or (the Boolean `value j is taken`) AND a bool2int
-% (a second, 0..1 integer copy of that Boolean, its two rows and its own propagator), and the
-% sum one int_lin_eq over the copies.
+% Flattened, each (variable, value) pair costs an int_eq_reif (the INDICATOR `xs[i] = j`,
+% a Boolean shared by common-subexpression elimination with any other part of the model
+% that says the same), each value an array_bool_or (the Boolean `value j is taken`) AND a
+% bool2int (a second, 0..1 integer copy of that Boolean, its two rows and its own
+% propagator), and the sum one int_lin_eq over the copies.
 %
 % Here the same rows are written without the copy, as bin packing does (D-0220): one
 % `baguette_bool_lin_eq([1, ...], [taken_j | ...], n)`, an int_lin_eq whose terms are the

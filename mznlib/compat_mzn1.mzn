@@ -7,7 +7,9 @@
 % archives from 2008-2010 use two constructs the 2.x standard library dropped,
 % and every solver that wants to run those archives has to supply them.  We do
 % it here rather than patching the corpus, because the corpus is the subject of
-% the measurement and must not be edited (M7-T15).
+% the measurement and must not be edited (M7-T15, which found that most of the
+% corpus's flattening failures were this 1.x dialect and not a missing global,
+% D-0076).
 %
 % Keep decompositions in redefinitions.mzn.  Keep compatibility here.
 %-----------------------------------------------------------------------------%

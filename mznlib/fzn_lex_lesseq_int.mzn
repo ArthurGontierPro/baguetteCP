@@ -15,22 +15,23 @@
 %   R2  b[i] /\ not b[i + 1]  -> x[i] <  y[i]
 %   R3  not b[i]              -> x[i] >= y[i]
 %   R4  not b[i] /\ b[i + 1]  -> x[i] >  y[i]
-% R1 and R2 are b[i] -> (x[i] <= y[i] /\ (x[i] < y[i] \/ b[i + 1])), R3 and R4 the converse,
-% so b is functionally determined by x and y, as std's is: the solutions over (x, y, b) are
-% std's, one for one. A row that a constant end makes trivial is not written (R3 and R4 at
-% i = 1, R2 at the last position when the tail is true, R1 when it is false, ...).
-% Every row is an int_lin_le, lib/core/prop/linear.ml's, bounds consistent and justified
-% by its own pol; no new builtin.
+% R1 and R2 are b[i] -> (x[i] <= y[i] /\ (x[i] < y[i] \/ b[i + 1])), R3 and R4 the
+% converse, so b is functionally determined by x and y, as std's is: the solutions over
+% (x, y, b) are std's, one for one. A row that a constant end makes trivial is not written
+% (R3 and R4 at i = 1, R2 at the last position when the tail is true, R1 when it is false,
+% ...). Every row is an int_lin_le, lib/core/prop/linear.ml's, bounds consistent and
+% justified by its own pol; no new builtin.
 %
-% With bounds consistency on the rows this prunes what Frisch et al.'s GAC algorithm prunes:
-% the values it removes are bounds of x[alpha] and y[alpha] (alpha the first position not
-% fixed equal), b[alpha] is 1 by R2 down the fixed-equal prefix, and b[beta] is 0 by R1 or by
-% R2 once b[beta + 1] is (beta the first position from which the suffix cannot be <=lex).
-% The big-M constants are the declared bounds' (ub(x) - lb(y) + 1 and ub(y) - lb(x) + 1), so a
-% variable without bounds keeps std's text.
+% With bounds consistency on the rows this prunes what Frisch et al.'s GAC algorithm
+% prunes: the values it removes are bounds of x[alpha] and y[alpha] (alpha the first
+% position not fixed equal), b[alpha] is 1 by R2 down the fixed-equal prefix, and b[beta]
+% is 0 by R1 or by R2 once b[beta + 1] is (beta the first position from which the suffix
+% cannot be <=lex). The big-M constants are the declared bounds' (ub(x) - lb(y) + 1 and
+% ub(y) - lb(x) + 1), so a variable without bounds keeps std's text.
 %
-% lex_greater, lex_greatereq, lex_chain_* and lex2 reach these through std. The Boolean and the
-% reified forms keep std's text (fzn_lex_less(eq)_bool, fzn_lex_less(eq)_int_reif).
+% lex_greater, lex_greatereq, lex_chain_* and lex2 reach these through std. The Boolean
+% and the reified forms keep std's text (fzn_lex_less(eq)_bool,
+% fzn_lex_less(eq)_int_reif).
 
 predicate baguette_lex_rows(array [int] of var int: xs, array [int] of var int: ys, bool: tail) =
   let {

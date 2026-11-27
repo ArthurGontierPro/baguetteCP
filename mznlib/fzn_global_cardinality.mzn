@@ -1,5 +1,6 @@
 %-----------------------------------------------------------------------------%
-% global_cardinality stays whole.
+% global_cardinality stays whole when its counts are fixed (variable counts go to
+% std's decomposition since D-0247, see the second header below).
 %
 % std/fzn_global_cardinality.mzn decomposes to one reified equality per variable
 % per cover value, channelled to 0/1 and summed against the count.  That throws
@@ -35,13 +36,17 @@
 % So `fzn_global_cardinality' states the bound the decomposition used to imply and hands
 % the constraint to `baguette_global_cardinality', which is the bodyless one.  The bounds
 % are not a heuristic: a tally over |x| variables is between 0 and |x| by definition, so
-% nothing is lost and nothing is assumed.
+% nothing is lost and nothing is assumed.  Since D-0247 only fixed counts reach that
+% call, where the bounds are a par check; variable counts get their bounds again from
+% std's count rows.
 %
-% THE FRONT END REFUSES three shapes rather than mis-counting them, and all
-% three are refusals with a source position (lib/flatzinc/compile.ml's
-% post_global_cardinality says why): a cover and counts of different lengths, a
-% count that is a literal constant rather than a variable, and the same variable
-% twice in the array.
+% THE FRONT END REFUSES two shapes rather than mis-counting them, each with a
+% source position (lib/flatzinc/compile.ml's post_global_cardinality says why): a
+% cover and counts of different lengths, and the same variable twice in the array.
+% The second is a guard: Builder.split_gcc_repeats replaces every repeat by a copy
+% tied with int_eq before compile.ml sees the model (M7-T29, D-0146).  A count that
+% is a literal constant was a third refusal until M7-T18 made it the count VIEW
+% (D-0082).
 
 % VARIABLE COUNTS GO TO STD'S DECOMPOSITION (M18-coverage-T14, D-0247 [AUTONOME]).
 %
