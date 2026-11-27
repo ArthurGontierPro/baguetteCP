@@ -3405,6 +3405,11 @@ let rec learn_at_conflict ?(closure = true) engine store ctx trace stats cfg
         if cfg.propagate_learned || cfg.cdcl then
           register_learned engine store ctx stats ~rest_satisfied:cfg.rest_satisfied ~cid
             ~lits:(Learn.lits l);
+        (* D-0257: the CDCL loop asserts this clause's UIP from the clause itself when no
+           consumer did, and that line, written at the next conflict, rests on the clause.
+           Held, so neither this [reduce] nor the PB row's below evicts it; [cdcl]
+           releases it once the next conflict's trace is on the page. *)
+        if cfg.cdcl then Retention.hold stats.db ~cid;
         ignore (Retention.reduce stats.db ctx);
         let pb_levels =
           pb_at_conflict engine store ctx stats cfg c ~clause_converts ~lbd:(Learn.lbd l)
@@ -4048,6 +4053,18 @@ and explore_ge store engine ctx trace stats cfg order decisions v k lit =
    the levels at or below the target stay, and [Trace.resync] finds them still written.
    Nothing here is a new proof rule or a new [Explanation] constructor.
 
+   THE LEARNED CLAUSE IS HELD UNTIL ITS ASSERTION'S LINE IS WRITTEN (I-X11, D-0257). The
+   learning path calls [Retention.hold] on it before its [reduce], and [conflict] calls
+   [Retention.release_held] once the next conflict's trace is on the page. Without the
+   hold, the reduction its own [add] triggers could evict it: its instance has not
+   propagated yet, so no trail entry locks it. The instance then left the engine, nothing
+   asserted the UIP at the fixpoint, [assert_directly] pushed it from the clause, and that
+   entry's trace line, RUP only against the deleted clause, was refused (costas14, D-0256
+   section 5). Held, the instance stays and asserts the literal itself, as it does when
+   no eviction falls on it; [assert_directly] remains for a clause [Clause.of_lits]
+   declined, which has no instance, and BAGUETTE_DEBUG checks there that the clause is
+   still held.
+
    When the 1UIP walk gives nothing ([Learn.at_conflict] answers [None], or learning is
    off, or the conflict is factless at its level, as a pigeonhole emptying a domain is),
    the clause is the branch nogood over every decision, minimised -- the line [dfs] writes
@@ -4060,8 +4077,9 @@ and explore_ge store engine ctx trace stats cfg order decisions v k lit =
 
    COMPLETENESS is MiniSat's argument: each learned clause is false under the trail at the
    conflict and asserting at its target, so the assignment sequence grows strictly in the
-   lexicographic order and no state repeats; learned clauses are kept by [Retention] and
-   a clause with a consumer is cited, so none that a trail entry rests on is evicted.
+   lexicographic order and no state repeats; learned clauses are kept by [Retention], a
+   clause with a consumer is cited, so none that a trail entry rests on is evicted, and the
+   clause just learned is held until its assertion is on the page (above).
    A clause that is NOT asserting (its two deepest literals share a level, possible only
    when the conflict is below the current level, e.g. the branch-and-bound bound) sends
    the search to that level, where its instance reports the conflict again and the walk
@@ -4250,6 +4268,10 @@ let cdcl engine store ctx trace stats cfg (order : order) : node =
      with Trace.Stopped ->
        stats.stopped_in_trace <- true;
        raise Limit_hit);
+    (* D-0257: every line the trail owes is on the page, the last assertion's included
+       (or it was dropped by this conflict before the fixpoint), so the clause it rested
+       on may be evicted from here on. *)
+    Retention.release_held stats.db;
     state_conflict ctx trace c;
     ignore (bridges ctx trace stats store !decisions : Lit.t list);
     let learned = learn_at_conflict ~closure:false engine store ctx trace stats cfg c in
@@ -4339,6 +4361,13 @@ let cdcl engine store ctx trace stats cfg (order : order) : node =
         | Some (lit, lits) when lit_status store lit <> 1 ->
             expect := None;
             stats.lo_direct <- stats.lo_direct + 1;
+            (* D-0257: the line this assertion owes rests on the learned clause, so the
+               clause must still be on the page, held since its conflict. *)
+            Debug.check
+              "D-0257/I-X11: the CDCL loop asserts from a learned clause no longer held"
+              (fun () ->
+                let h = Retention.held stats.db in
+                h <> [] && List.for_all (Retention.holds stats.db) h);
             assert_directly ctx store lit lits
         | Some _ | None -> (
             expect := None;
