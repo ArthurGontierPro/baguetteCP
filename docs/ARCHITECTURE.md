@@ -316,8 +316,11 @@ decision **D-0003**; do not build past M3 without settling it.
 
 ## 5. Propagation loop
 
-As of M2-T6 (D-0094) `engine.ml` uses a **FIFO** queue of propagator ids. There is no
-cost-class ordering yet. Each `propagate` call, made once per search node, walks one **seed
+As of M2-T6 (D-0094) `engine.ml` uses a **FIFO** queue of propagator ids. Since M19-config-T9
+(D-0246) a cost-class ordering exists as an option, `BAGUETTE_PRIORITY=classes` (default `off`,
+the FIFO): `Propagator.cost_class` files every instance in one of four classes (Cheap, Row,
+Learned_row, Global), the queue is one FIFO per class, the loop runs the cheapest non-empty one,
+and the dirty seed slots below enter their class queues in id order before anything runs. Each `propagate` call, made once per search node, walks one **seed
 slot** per instance in id order, ahead of the FIFO. As of M6-T18 (D-0098) it runs only the
 **dirty** slots:
 

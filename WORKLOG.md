@@ -19,7 +19,7 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M19-config-T9 propagator priorities (D-0246) | `lib/core/engine.ml`, `lib/core/propagator.ml` (cost-class field), `lib/core/prop/*.ml` (class declaration only), `test/unit/test_engine.ml` | agent-prio, wave92-prio | 2026-11-27 |
+| M19-config-T9 propagator priorities (D-0246) | `lib/core/engine.ml`, `docs/ARCHITECTURE.md` §5, `lib/core/propagator.ml` (cost-class field), `lib/core/prop/*.ml` (class declaration only), `test/unit/test_engine.ml` | agent-prio, wave92-prio | 2026-11-27 |
 
 ## Cross-session requests
 
