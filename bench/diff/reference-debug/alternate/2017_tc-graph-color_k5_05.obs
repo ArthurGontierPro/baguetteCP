@@ -8,48 +8,48 @@ search bits/vars 137 vars
 search bitsrows/lines 274 lines
 search choices/groups 0 groups
 search limit.nodes 1501
-search limit.decisions 1145
-search limit.conflicts 423
-search limit.learned 271
+search limit.decisions 1358
+search limit.conflicts 192
+search limit.learned 192
 search limit.pb-learned 0
-search limit.db 271
-search limit.maxdepth 27
+search limit.db 192
+search limit.maxdepth 66
 search limit.incumbent none
-work limit.props 331391
-work limit.eff 69496
-work limit.contra 423
+work limit.props 219401
+work limit.eff 39265
+work limit.contra 192
 search limit.at node
 search limit.signal none
 search nodes/nodes 1501 nodes
-search decisions/decs 1145 decs
-search conflicts/nodes 423 nodes
-search maxdepth/levels 27 levels
+search decisions/decs 1358 decs
+search conflicts/nodes 192 nodes
+search maxdepth/levels 66 levels
 work exhausted/bool 0 bool 1 if
-search skipped/nodes 17 nodes
-search learned/cls 271 cls
-work later/asks 124815 asks
-work cites/memos 7158 memos
+search skipped/nodes 2 nodes
+search learned/cls 192 cls
+work later/asks 71235 asks
+work cites/memos 5472 memos
 search convertible/cls 1 cls
-search retention tiered(core<=2,mid<=6,first=2000,inc=300,mid_every=10000) tiered(core<=2,mid<=6,first=2000,inc=300,mid_every=10000): 271 added, 0 evicted, 271 swept, 0 live, 2 duplicate, 271 cited, 0 pinned, 0 reductions, 0 detached, 0 locked
-search lbd 1:1,2:2,3:22,4:23,5:49,6:30,7:39,8:38,9:20,10:14,11:7,12:5,13:3,14:6,15:5,16:7
-search width 1:1,2:1,3:13,5:34,6:10,7:24,8:14,9:24,10:18,11:24,12:16,13:6,14:14,15:4,16:68
+search retention tiered(core<=2,mid<=6,first=2000,inc=300,mid_every=10000) tiered(core<=2,mid<=6,first=2000,inc=300,mid_every=10000): 192 added, 0 evicted, 192 swept, 0 live, 4 duplicate, 192 cited, 0 pinned, 0 reductions, 0 detached, 0 locked
+search lbd 1:1,2:3,3:6,4:11,5:26,6:15,7:25,8:29,9:25,10:11,11:13,12:8,13:7,14:4,16:8
+search width 1:1,3:2,4:3,5:25,6:1,7:15,8:13,9:22,10:14,11:10,12:14,13:7,14:9,15:3,16:53
 search globals/units 1 units
 search glob-prune/prunes 2 prunes
 search glob-confl/confl 0 confl
-search cls-inst/inst 270 inst
+search cls-inst/inst 191 inst
 search cls-decl/cls 0 cls
-search cls-prune/prunes 1340 prunes
+search cls-prune/prunes 311 prunes
 search pb-inst/inst 0 inst
 search pb-inst-no/rows 0 rows
 search pb-prune/prunes 0 prunes
 search pb-confl/confl 0 confl
-search minimised/lits 203 lits
-search i-s4-cross/lines 2324 lines
-search pb-tried/confl 271 confl
+search minimised/lits 30 lits
+search i-s4-cross/lines 1900 lines
+search pb-tried/confl 192 confl
 search pb-learned/rows 0 rows
-search pb-fallback/confl 271 confl
+search pb-fallback/confl 192 confl
 search pb-why first fallback reason: no PB row for instance bool2int
-work pb-whys/recd 64 recd 48 x
+work pb-whys/recd 64 recd 30 x
 search pb-steps/pivots 0 pivots
 search pb-convert/rows 0 rows
 search pb-stronger/rows 0 rows
@@ -63,43 +63,43 @@ search lvl-wide/confl 0 confl
 search lvl-incomp/confl 0 confl
 search lvl-empty/confl 0 confl
 search lvl-assert/confl 0 confl
-search restarts/runs 68 runs
-search unexplored/nodes 770 nodes
+search restarts/runs 50 runs
+search unexplored/nodes 1200 nodes
 search kept/levels 0 levels
-search activity/bumps 2421 bumps
-search phases/vals 62288 vals
-search phase-used/decs 935 decs
-work int_lin_ne/inst 819 inst 76.2 runs/node 4.98 eff/node
-work array_bool_and/inst 533 inst 35.0 runs/node 8.72 eff/node
-work int_lin_le_reif/inst 272 inst 28.5 runs/node 10.18 eff/node
-work int_eq_reif/inst 255 inst 25.1 runs/node 7.88 eff/node
-work bool_not/inst 270 inst 19.6 runs/node 5.68 eff/node
-work learned_clause/inst 270 inst 12.4 runs/node 0.89 eff/node
-work bool2int/inst 135 inst 11.0 runs/node 5.66 eff/node
-work bool_clause/inst 151 inst 7.9 runs/node 0.58 eff/node
-work int_lin_le/inst 9 inst 3.2 runs/node 1.12 eff/node
-work int_le_reif/inst 16 inst 1.2 runs/node 0.39 eff/node
-work int_ne_reif/inst 9 inst 0.7 runs/node 0.22 eff/node
-work props/runs 331391 runs
-work eff/runs 69496 runs
-work contra/runs 423 runs
+search activity/bumps 1673 bumps
+search phases/vals 34012 vals
+search phase-used/decs 1281 decs
+work int_lin_ne/inst 819 inst 58.5 runs/node 3.96 eff/node
+work int_eq_reif/inst 255 inst 20.2 runs/node 4.70 eff/node
+work array_bool_and/inst 533 inst 19.9 runs/node 4.34 eff/node
+work int_lin_le_reif/inst 272 inst 19.8 runs/node 5.48 eff/node
+work bool_not/inst 270 inst 10.2 runs/node 2.92 eff/node
+work bool_clause/inst 151 inst 6.2 runs/node 0.49 eff/node
+work bool2int/inst 135 inst 5.6 runs/node 2.86 eff/node
+work int_lin_le/inst 9 inst 2.0 runs/node 0.65 eff/node
+work learned_clause/inst 191 inst 1.9 runs/node 0.21 eff/node
+work int_le_reif/inst 16 inst 1.2 runs/node 0.36 eff/node
+work int_ne_reif/inst 9 inst 0.8 runs/node 0.19 eff/node
+work props/runs 219401 runs
+work eff/runs 39265 runs
+work contra/runs 192 runs
 work passes/snaps 0 snaps
 work deductions/chgs 0 chgs
-work wakes/wakes 539182 wakes
-work masked/wakes 15459 wakes
-work vetoed/wakes 2737 wakes
-work advised/wakes 20112 wakes
-work seeded/runs 97570 runs
-work skipped/slots 3942715 slots
-search rup/lines 39801 lines
-search pol/lines 40064 lines
-search pol-tokens/tokens 870306 tokens
+work wakes/wakes 300748 wakes
+work masked/wakes 13848 wakes
+work vetoed/wakes 1226 wakes
+work advised/wakes 4146 wakes
+work seeded/runs 88140 runs
+work skipped/slots 3873819 slots
+search rup/lines 20143 lines
+search pol/lines 24995 lines
+search pol-tokens/tokens 534544 tokens
 search pol-widest/tokens 278 tokens
-search atoms/atoms 371 atoms
-search atomlinks/lines 305 lines
+search atoms/atoms 721 atoms
+search atomlinks/lines 811 lines
 search bridges/pairs 679 pairs
 search boundlines/pairs 135 pairs
-search bitsprune/lines 39759 lines
-search atoms/prune/atoms 0.009 atoms
+search bitsprune/lines 24184 lines
+search atoms/prune/atoms 0.030 atoms
 opb a71eac4ca5cb2625d5bb6e1e4cdd31eca7c77a46b42e97d3c9e1d31a23fae55a
-pbp 131dbb76264f5b0ed0ed54fae6b86d633d5f0ca49ce6ffc96f46260cf16b423c
+pbp f58e6e9ccfdc0f5f04a4194e9a3bae8aa2ad3e343bb194509103fa3d1ec62b36
