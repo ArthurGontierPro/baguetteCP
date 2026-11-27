@@ -19,6 +19,7 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
+| M20-pernode-T4 (D-0245, analysis locate and attribution) | `lib/core/analysis.ml`, `test/unit/test_analysis.ml`; `lib/core/store.ml` / `lib/core/reason.ml` / `lib/core/engine.ml` only for an accessor; `lib/core/search.ml` / `learn.ml` only to pass an argument | agent-locate (wave91-locate) | 2026-11-27 |
 
 ## Cross-session requests
 
