@@ -444,6 +444,41 @@ let usage () =
     "  BAGUETTE_HASHCONS=0  every rebuilt derivation writes its own proof line (D-0172):";
   prerr_endline
     "                    the proof before hash-consing, for comparison. Default on.";
+  prerr_endline
+    "  BAGUETTE_MINIMISE=off|root|local|rec|rec-nofilter  which minimisation rules";
+  prerr_endline "                    trim a learned clause (D-0241). Default off.";
+  prerr_endline
+    "  BAGUETTE_PRIORITY=off|classes  classes runs cheap propagators first, in four";
+  prerr_endline "                    cost classes (D-0246). Default off: one FIFO queue.";
+  prerr_endline
+    "  BAGUETTE_PROBE=off|root  root tries each bound literal of a small domain";
+  prerr_endline
+    "                    before the first decision and asserts the negation of one";
+  prerr_endline
+    "                    that fails (failed-literal probing, D-0250). Default off.";
+  prerr_endline
+    "  BAGUETTE_REST_SATISFIED=on|off  a satisfied learned clause rests on its true";
+  prerr_endline "                    literal until a backtrack (D-0173). Default off.";
+  prerr_endline "  BAGUETTE_PROPAGATE_LEARNED=on|off  off keeps every learned constraint";
+  prerr_endline
+    "                    proof-only (a measurement build, M2-L12). Default on.";
+  prerr_endline
+    "  BAGUETTE_PB_MAX_TERMS=N, BAGUETTE_PB_PROPAGATE_MAX=N  a learned PB row of";
+  prerr_endline "                    more than N terms is not derived, or derived but not";
+  prerr_endline "                    propagated (D-0226). Default 0: no cap.";
+  prerr_endline "  BAGUETTE_DEBUG=1  the invariant checks of docs/INVARIANTS.md (slow).";
+  prerr_endline
+    "  BAGUETTE_CONSISTENCY=1  the brute-force consistency oracle (M2-T10), with";
+  prerr_endline
+    "                    BAGUETTE_CONSISTENCY_CAP=N its tuple budget (4096) and";
+  prerr_endline "                    BAGUETTE_CONSISTENCY_TRACE=1 its report.";
+  prerr_endline "  Measurements on stderr: BAGUETTE_CDCL_STATS, BAGUETTE_MEMO_STATS,";
+  prerr_endline "                    BAGUETTE_MINIMISE_STATS, BAGUETTE_PROBE_STATS and";
+  prerr_endline
+    "                    BAGUETTE_WAKE_STATS (=1), BAGUETTE_RETENTION_TRACE=N,";
+  prerr_endline
+    "                    BAGUETTE_RETENTION_TRACE_HEAP=1. BAGUETTE_TEST_VALUE_CHOICE";
+  prerr_endline "                    is for the test suites only.";
   exit exit_usage
 
 (* A limit from the command line or the environment. A value that is neither an integer
