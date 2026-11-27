@@ -2119,11 +2119,20 @@ let close_root_conflict ctx trace store (c : Store.conflict) =
   Trace.emit ctx trace store;
   let line = Trace.conflict_line ctx trace c in
   (* M8-bits-encoding-T2 (D-0130 section 5.4, D-0053): nothing may mint an atom once the
-     root contradiction is on the page. Nothing below names a literal; the guard is for
-     whatever comes after. *)
-  Encoding.close_atoms ctx.Justify.encoding;
+     root contradiction is on the page. It is on the page once the conflict's line is,
+     and for a FACTLESS conflict that line is the derivation written below, not
+     [conflict_line]'s -- so the guard closes after it, never before (D-0237). That
+     derivation may name atoms nothing earlier minted: an all-fixed disequality's
+     [Resolve] over a bits row (lib/core/prop/ne.ml records [Reason.none] for it) cites
+     B1/B2 of every term's fixed value, and an ORDER variable's bridge in such a row is
+     minted only where a bits derivation first cites it ([Encoding.ensure_atom]). Those
+     lines are written before the `rup >= 1` the refutation needs them for. The empty
+     clause names no literal. *)
+  let close () = Encoding.close_atoms ctx.Justify.encoding in
   match Explanation.force e with
-  | Explanation.Clause { lits = []; _ } -> Justify.emit ctx e
+  | Explanation.Clause { lits = []; _ } ->
+      close ();
+      Justify.emit ctx e
   | forced ->
       (match (line, forced) with
       (* M8-bits-encoding-T3 (D-0134): a [Resolve] -- a choice derivation over bits,
@@ -2137,6 +2146,7 @@ let close_root_conflict ctx trace store (c : Store.conflict) =
              weakened, which the checker refutes unaided. *)
           ignore (Justify.emit ctx e : Writer.cid)
       | _ -> ());
+      close ();
       Justify.emit ctx (Explanation.clause [])
 
 (* ------------------------------------------------- a decision that settled at a hole
