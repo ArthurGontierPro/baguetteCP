@@ -2,13 +2,19 @@
    [c]. [as] is an array of CONSTANTS (docs/SPEC.md 2.1's M4 row; a var-array element is
    not in the subset).
 
-   Consistency level: DOMAIN (docs/SPEC.md 3.2, docs/GLOSSARY.md). This is the first
-   propagator in the tree that declares it, and D-0059 said in as many words that the
-   [Bounds]/[Domain] tag "does no separating work on anything currently shipped" and
-   would start doing so at an `all_different` or an `element`. It is not a claim made on
-   the shape of the algorithm: for a constant array the two filtering rules below are
-   the whole support condition, so the fixpoint IS the domain-consistent one, and the
-   M2-T10 oracle (BAGUETTE_CONSISTENCY=1) holds this module to it.
+   Consistency level: DOMAIN (docs/SPEC.md 3.2, docs/GLOSSARY.md). It is not a claim
+   made on the shape of the algorithm: for a constant array the two filtering rules
+   below are the whole support condition, so the fixpoint IS the domain-consistent one,
+   and the brute-force consistency oracle (BAGUETTE_CONSISTENCY=1, M2-T10) holds this
+   module to it. (This was the first propagator to declare DOMAIN. D-0059, which made
+   the tag checked, had predicted that the [Bounds]/[Domain] distinction would start
+   doing separating work at an `all_different` or an `element`.)
+
+   Proof shape (docs/SPEC.md 3.3): every pruning is one [Combine], a `pol` over the
+   constraint's .opb rows, the index's channelling and the result's ladder rungs (see
+   "The derivations" below). The trace line of a pruning is RUP once earlier lines are
+   on the page, so nothing is written ahead of it; a conflict under a decision writes its
+   derivation ahead of its line.
 
      dom(idx) := { p in dom(idx) : as[p] in dom(c) }
      dom(c)   := { as[p]        : p in dom(idx)    }
@@ -19,13 +25,14 @@
    cheap global: the matching a general element needs is a lookup here.
 
    ---------------------------------------------------------------------------
-   The index is a VIEW, and that is the whole of D-0058
+   The index is a VIEW onto the FlatZinc variable, not an auxiliary (D-0058)
    ---------------------------------------------------------------------------
 
    [pos] is [View.shift (View.of_var idx) (-1)]: the 0-based array offset, as a lens
    onto the 1-based FlatZinc variable. It is NOT an auxiliary variable with a
-   channelling constraint, and D-0058 is the record of why that distinction is the
-   point of this row rather than a detail of it. An auxiliary [p = idx - 1] has a domain
+   channelling constraint. D-0058 decided that a view is a rendering onto its base's
+   literals, with no literals of its own, and that distinction is the point of this
+   module rather than a detail of it. An auxiliary [p = idx - 1] has a domain
    of its own, so every value this propagator excludes from [p] would have to travel
    back to [idx] through the channel -- a bounds-consistent step -- and the [Domain]
    claim above would be quietly false for [idx] itself. With a view there is no step at
@@ -58,7 +65,7 @@
      r_out(p)  ~idx_eq_p                        for p outside the array
 
    Two rows and not one because "c = w" is not a row: the .opb holds no equalities
-   (I-X5, [Encoding.add_constraint] refuses [Opb.Eq]), and the pair is exactly the split
+   ([Encoding.add_constraint] refuses [Opb.Eq]), and the pair is exactly the split
    [Encoding.add_equality] already makes for the same reason. Each is spelled with
    [Encoding.view_ge]/[view_le], so a bound that the declared domain already forces
    drops out and the row degenerates to the unit [idx <> p] -- which is the right row
@@ -75,23 +82,25 @@
    [~idx_eq_p] form every derivation below is written in is then RECOVERED by [pol], in
    [implies_ge]/[implies_le]/[implies_out]: adding the two channelling halves cancels
    both order literals and one division gives the unit. That is alldiff.ml's [pair_amo]
-   trick, for the same reason -- a [rup] would be cheaper and would make every [pol] here
-   decorative.
+   trick, for the same reason (the next paragraph but one).
 
    ONLY THE INDEX NEEDS THE DIRECT ENCODING, and only the index gets one. The result is
    spoken about in order literals throughout: [c >= w], [c <= w], and for a hole the
    two-literal clause [~c_ge_v \/ c_ge_(v+1)] that lib/core/prop/ne.ml already derives.
-   That halves the direct-encoding width this row costs -- width-proportional, D-0028 --
+   That halves the direct-encoding width this constraint costs (a justification's size
+   is proportional to declared width, D-0028),
    and it is what lets the result's own ladder rungs ([Encoding.consistency_id]) do the
    telescoping every derivation below leans on.
 
-   NO [Explanation.Clause] ON THE MAIN PATHS, and that is load-bearing for the same
-   reason it is in lib/core/prop/alldiff.ml: lib/core/search.ml's [rests_on_a_clause]
-   routes a root conflict whose derivation rests on a clause the D-0022 way, so
-   `conclusion UNSAT` would cite the empty clause and every [pol] here would be
-   decorative (D-0057, D-0060, and D-0061 is the row that avoided it). The clause rows
-   above are recovered by [pol], never by [rup]. The two places a clause does appear are
-   named where they are used and are both about a hole SOMEONE ELSE punched.
+   NO [Explanation.Clause] ON THE MAIN PATHS. The clause rows above are recovered by
+   [pol], never by [rup], for the reason lib/core/prop/alldiff.ml's header gives (its
+   item 1, D-0061): when this was written, search.ml routed a root conflict whose
+   derivation rested on a clause to the empty clause instead (D-0022), so `conclusion
+   UNSAT` did not depend on the [pol] arithmetic and every [pol] here would have been
+   decorative (D-0057 and D-0060 found that by accident). That routing is gone since
+   D-0131 (every root conflict closes on its trace), and the rule stands. The two places
+   a clause does appear are named where they are used and are both about a hole SOMEONE
+   ELSE punched.
 
    ---------------------------------------------------------------------------
    The derivations
@@ -131,19 +140,21 @@
    letting [Store.apply]'s [Failed] arm report it -- that arm would hand back the
    derivation of the ONE position it was removing, which is not contradicting.
 
-   WHAT A CONFLICT READ, and why it now says so (M7-T25 / D-0101). An empty-index
+   WHAT A CONFLICT READ, and why it says so (D-0101, built by M7-T25). An empty-index
    conflict is reached with exactly one position p still in dom(idx), and as[p] is not in
    dom(c). Its FACTS are, per declared position q, the facts behind whichever
    [pos_gone] arm excludes q: the result bound as[q] lies beyond ([c <= hi] or
    [c >= lo]); the index bound q lies beyond; for a hole in c at as[q], the REMOVER's
-   facts (D-0075/D-0084 -- a hole is cited through its remover, never as a bound fact);
+   facts (a hole is cited through its remover, never as a bound fact: D-0075 found the
+   defect of reading a hole and stating only bounds, D-0084 its embedded form);
    for an interior index hole punched under a decision, its puncher's facts. Under a
    decision the derivation above then leaves exactly the negations of those facts --
    "not all of these bounds hold" -- so `rup ~facts >= 1` is unit propagation against it.
    [conflict_facts] collects them and [no_position_conflict] reports them under
-   [Store.deriving_ahead], so the derivation is on the page before the line (D-0096's
-   [c_ahead]). That is what lets 1UIP learning resolve from an element conflict; until
-   M7-T25 the reason was [Reason.none] at every depth (D-0091) and nothing was learned.
+   [Store.deriving_ahead], so the derivation is on the page before the line
+   ([Store.conflict]'s [c_ahead], introduced for cumulative by D-0096). That is what
+   lets 1UIP learning resolve from an element conflict; until M7-T25 the reason was
+   [Reason.none] at every depth (D-0091) and nothing was learned.
    The line is ALSO RUP in sequence without the derivation, by the [Single_row] argument
    below: the one live position's rows plus the index ladder and the earlier trace lines
    of every index removal (measured, D-0101) -- the [pol] ahead is what makes that not a
@@ -151,16 +162,19 @@
    branch to learn from and the derivation itself closes to [0 >= 1].
 
    ---------------------------------------------------------------------------
-   I-X10: this is a [Single_row] family, on the [Ne] precedent
+   Trace lines: a [Single_row] family, on the [Ne] precedent
    ---------------------------------------------------------------------------
 
-   I-X10 holds by an enumeration over the propagator set, and the question it asks of a
-   new member is whether its trace line is RUP once the facts on the line's own tail are
-   assumed. It is, and the reason is the one [Ne] already relies on: "one model
-   constraint" is a rule about the CONSTRAINT and not about the row count, and
-   `array_int_element` is one constraint posted as 2n rows, the way `int_lin_ne` is one
-   constraint posted as two big-M rows whose selector the checker's own unit propagation
-   fills in.
+   I-X10 requires every trace line to be RUP against the .opb plus the lines before it.
+   It holds by an enumeration over the propagator set, kept as a classification table in
+   test/unit/test_trace.ml: a [Single_row] family's pruning follows from ONE model
+   constraint, a [Needs_derivation] family's needs a derivation written ahead. The
+   question I-X10 asks of a new member is whether its trace line is RUP once the facts on
+   the line's own tail are assumed. It is, and the reason is the one [Ne] already relies
+   on: "one model constraint" is a rule about the CONSTRAINT and not about the row count,
+   and `array_int_element` is one constraint posted as 2n rows, the way `int_lin_ne` is
+   one constraint posted as two big-M rows whose selector the checker's own unit
+   propagation fills in.
 
      - an INDEX pruning: negate the claim, i.e. assume idx = p. The single row r_ge(p) or
        r_le(p) then forces a bound on the result that the result's own ladder refutes.
@@ -171,26 +185,28 @@
        excluded by its own row; the index's ladder then has nothing left. Several rows,
        all of this constraint.
 
-   MEASURED, not argued, for the second one: the result has no direct encoding at all, so
-   [Trace.derive_ahead] did not fire for a result pruning even under the old trigger, and all seven element models
+   MEASURED, not argued, for the second one: the result has no direct encoding at all,
+   so [Trace.derive_ahead] did not fire for a result pruning even under the old
+   trigger, and all seven element models
    plus a scene built to defeat it -- an index HOLE punched by an `int_ne`, so the result
    pruning rests on something [Reason.t] has no fact for -- verify with nothing written
    ahead of their lines. The hole case works because the hole's OWN trace line is already
-   on the page: [Trace.emit] writes oldest first, which is I-S4/D-0039's "RUP against the
-   .opb plus earlier trace lines", the same support a settle line already leans on. It is
+   on the page: [Trace.emit] writes oldest first, and a trace line is RUP in sequence
+   against the .opb plus earlier trace lines (D-0039; I-S4 for a hole's own line), the
+   same support a settle line already leans on. It is
    not a second model constraint in I-X10's sense.
 
-   **M7-T13 / D-0075 amends the paragraph above.** "all seven element models plus a scene
-   built to defeat it ... verify" was true of those scenes and false in general: the scene
-   that defeats it needs the hole's own trace line to carry a TAIL (a hole punched under a
-   decision, not at level 0) AND the pruning that reads the hole to fail deeper, so that a
-   line is written for it at all. `2012_tpp` is that scene and
+   AMENDED BY D-0075 (M7-T13), A HOLE READ UNDER A DECISION. "all seven element models
+   plus a scene built to defeat it ... verify" was true of those scenes and false in
+   general: the scene that defeats it needs the hole's own trace line to carry a TAIL (a
+   hole punched under a decision, not at level 0) AND the pruning that reads the hole to
+   fail deeper, so that a line is written for it at all. `2012_tpp` is that scene and
    test/models/element_index_hole_rup_sat.fzn is it reduced. The repair is on the REASON
    side ([index_hole_facts]/[result_hole_facts]), so the cost is that such a line is no
    longer a single-row consequence -- I-X10 gains a second member of the kind
    lib/core/trace.ml's header already names for a settle.
 
-   The index side is now measured the same way (M7-T17, D-0082). Until then
+   The index side is measured the same way (D-0082, M7-T17). Before that,
    [derive_ahead] fired on [has_direct], which is true for the index because the
    derivations genuinely cite its direct ids, so a [pol] went ahead of every index line
    whether or not one was needed. The trigger is now [Store.entry]'s [ahead], which this
@@ -198,9 +214,10 @@
    among them -- verifies with nothing written ahead of an index line either. That is
    [Single_row] measured on both sides.
 
-   **M7-T21 / D-0084 amends it again, three times, and none of the three is about a trace
-   line.** Each is about a DERIVATION that some other line embeds, which is how D-0080's
-   corpus rejections were invisible to every lane above: the trace lines were right.
+   AMENDED BY D-0084 (M7-T21), THREE TIMES, AND NONE OF THE THREE IS ABOUT A TRACE LINE.
+   Each is about a DERIVATION that some other line embeds, which is how the 26 corpus
+   rejections D-0080 found were invisible to every lane above: the trace lines were
+   right.
 
      - A FOREIGN INDEX HOLE ([index_hole_clause]). The [pos_gone] arm for a position the
        index lost to someone else wrote the bare unit [~idx_eq_p]. That is RUP only for a
@@ -226,7 +243,7 @@
    here bridges. test/models/alldiff_regin_hole_element_unsat.fzn is the lane.
 
    ---------------------------------------------------------------------------
-   Snapshotting and I-X6
+   Snapshotting: a derivation reads the pruning's moment, never the live store (I-X6)
    ---------------------------------------------------------------------------
 
    Every derivation below is built from the domains as they stood at the moment of the
@@ -234,26 +251,29 @@
    [Encoding]'s constraint ids, which [start_proof] writes once before the first decision
    and never moves -- the same exemption alldiff.ml's header argues.
 
-   REASONS ON DEMAND (M20-pernode-T2, D-0214). Since D-0214 a pruning reads nothing it
-   does not need to DECIDE (which value goes, what the push concludes): it records a
-   [frame] -- the index's and the result's domains (versions that read as they were while
-   the pruning's entry is on the trail, D-0222), and the
-   trail cut at the push ([Store.history], D-0124) -- and both halves of the pruning are
-   built from that frame when they are first asked for. The reason is a [Reason.Later]
-   (D-0124's channel, the one [Linear] uses); the derivation's [pos_gone] walk, the
-   removers it looks up and the residue it cancels move inside the [Explanation.deferred]
-   that already wrapped it. Every lookup that used to be "hoisted to its call site" for
-   I-X6 ([Store.remover], [Store.lo_support], the level of an entry) is now answered by the
-   history, which can only answer for positions below the pruning, so I-X6 holds by what
-   the readers can see rather than by when they run. The frame section below argues why
-   the values are the ones the eager code read; the proof bytes are the same on every
-   test model (D-0214 section 2).
+   REASONS ON DEMAND (D-0214, built by M20-pernode-T2). A pruning reads nothing it does
+   not need to DECIDE (which value goes, what the push concludes): it records a [frame]
+   -- the index's and the result's domains (versions that read as they were while the
+   pruning's entry is on the trail, D-0222), and the trail cut at the push
+   ([Store.history], D-0124) -- and both halves of the pruning are built from that
+   frame when they are first asked for. The reason is a [Reason.Later] (D-0124's
+   channel for a reason materialised later from the trail's history, the one [Linear]
+   uses); the derivation's [pos_gone] walk, the removers it looks up and the residue it
+   cancels move inside the [Explanation.deferred] that already wrapped it. Every lookup
+   that used to be "hoisted to its call site" for I-X6 ([Store.remover],
+   [Store.lo_support], the level of an entry) is now answered by the history, which can
+   only answer for positions below the pruning, so I-X6 holds by what the readers can
+   see rather than by when they run. The frame section below argues why the values are
+   the ones the eager code read; the proof bytes are the same on every test model
+   (D-0214 section 2).
 
-   COST (M16-file-review-T2, D-0190; D-0214). A pass is O(n_decl + w_res). A pruning costs
+   COST (the file-by-file review of the propagators, M16-file-review-T2, D-0190; and
+   D-0214). A pass is O(n_decl + w_res). A pruning costs
    two domain reads and one history record; the O(n_decl) walk of the dead positions, and
    the hole facts, are paid only when a reason or a derivation is asked for (the trace,
    conflict analysis, or BAGUETTE_DEBUG's agreement check at the push). Without learning
-   or proof nothing asks, which was 28 % of a javarouting node (D-0207). *)
+   or proof nothing asks, which was 28 % of a javarouting node (D-0207, the per-node cost
+   breakdown). *)
 
 module Lit = Baguette_proof.Lit
 module Encoding = Baguette_proof.Encoding
@@ -651,10 +671,9 @@ type residue =
    the same position and for the same reason: [Explanation.t] cannot ask for "the id of
    the line that states this fact" (D-0009's open ADT gap), and [Justify.emit_clause]
    consults the M2-T9 claim index and mints nothing. The cost is stated rather than
-   hidden: a conflict whose derivation reaches one of these arms rests on a clause, so
-   [Search.rests_on_a_clause] routes it the D-0022 way and this module's [pol] is
-   decorative FOR THAT CONFLICT. It is not decorative for any conflict that does not --
-   which is every conflict a model without a disequality on the index can reach. *)
+   hidden: a conflict whose derivation reaches one of these arms rests on a clause.
+   Until D-0131 that routed it the D-0022 way and left this module's [pol] decorative
+   FOR THAT CONFLICT; every root conflict now closes on its trace instead. *)
 let pos_gone t fr p =
   let n = Array.length t.values in
   (* WHICH ARM is decided from the frame; BUILDING it is deferred, and the split is not
@@ -690,33 +709,34 @@ let pos_gone t fr p =
 
 (* [sum_{p live} idx_eq_p \/ <lits> >= 1]: the declared at-least-one line, narrowed by
    one [pos_gone] per dead position. Each cancels its own term and leaves the degree at
-   1, exactly as alldiff.ml's [alo_window] does over a Hall interval. *)
+   1, exactly as alldiff.ml's [alo_over] does over a Hall set. *)
 (* A bound the SEARCH established, cited by [Explanation.Defining] (D-0064,
    docs/DECISIONS.md D-0064; lib/core/explanation.ml's header, "[Defining], and why it
    is a SUMMAND"). M4-T3 branched before that constructor existed and stood in with
    [Explanation.term c (Explanation.clause [l])] -- the right arithmetic wearing the
    wrong label, per explanation.ml's own words -- which cancels the term but, because a
    [Clause] may be any width, is not an EXACT cancellation, and trips
-   [Search.rests_on_a_clause] into routing every conflict that uses it the D-0022 way
-   (`conclusion UNSAT` citing the empty clause, this module's own [pol] left decorative).
-   [Explanation.defining] cites a UNIT line and is exact, so a root conflict built only
-   from [Defining] summands closes on its own [pol].
+   the search of that time into routing every conflict that used it the D-0022 way
+   (`conclusion UNSAT` citing the empty clause, this module's own [pol] left decorative;
+   that routing is gone since D-0131). [Explanation.defining] cites a UNIT line and is
+   exact, so a root conflict built only from [Defining] summands closes on its own
+   [pol].
 
-   [established_at_root] mirrors lib/core/prop/alldiff.ml:179's function of the same
-   name (that module is M4-T2's, not duplicated here as a shared function, since
-   alldiff.ml is read-only to this task): the level the trail entry supporting a bound
-   was pushed at, or 0 for a bound that has never moved. A bound the ROOT fixpoint set
-   is a consequence of the model and stays true and citable at ANY search depth; one a
-   DECISION set is not (D-0064's level rule) -- so, unlike the old blanket "only at
-   [Store.level store] = 0", the check below is per LITERAL, not per conflict, and it
-   fires above level 0 exactly when the specific bound cited happened to be a root one.
-   It reads a HISTORY, never the store: the support arrays are live store state that a
-   later backtrack can invalidate, which is why alldiff.ml's [snap_of] snapshots
-   [s_lo_root]/[s_hi_root] before wrapping anything in [deferred]. [Store.lo_support_at]
-   walks the support back to below the cut, and a level mark below the cut does not move
-   while the cut is live, so the answer is the one the store gave at the cut (D-0214). The
-   conflict paths pass the live history ([Store.history store]), where it is the store's
-   own answer. *)
+   [established_at_root] mirrors lib/core/prop/alldiff.ml's function of the same name
+   (kept as two functions because alldiff.ml was another task's file when this was
+   written, and because this one reads a history where alldiff's reads the store): the
+   level the trail entry supporting a bound was pushed at, or 0 for a bound that has never
+   moved. A bound the ROOT fixpoint set is a consequence of the model and stays true and
+   citable at ANY search depth; one a DECISION set is not (D-0064's level rule) -- so,
+   unlike the old blanket "only at [Store.level store] = 0", the check below is per
+   LITERAL, not per conflict, and it fires above level 0 exactly when the specific bound
+   cited happened to be a root one. It reads a HISTORY, never the store: the support
+   arrays are live store state that a later backtrack can invalidate, which is why
+   alldiff.ml's [snap_of] snapshots [s_lo_root]/[s_hi_root] before wrapping anything in
+   [deferred]. [Store.lo_support_at] walks the support back to below the cut, and a level
+   mark below the cut does not move while the cut is live, so the answer is the one the
+   store gave at the cut (D-0214). The conflict paths pass the live history
+   ([Store.history store]), where it is the store's own answer. *)
 let established_at_root h v ~lower =
   let sup = if lower then Store.lo_support_at h v else Store.hi_support_at h v in
   sup = Store.no_support || at_root_at h sup

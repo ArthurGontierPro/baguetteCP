@@ -1,70 +1,70 @@
 (* int_lin_eq: sum_i a_i * x_i = c, over integer variables with possibly negative or
    zero coefficients.
 
-   docs/DECISIONS.md D-0011: one propagator instance justifies against exactly one
-   model row. An equality is *two* rows -- [Encoding.add_equality] posts the `<=` and
-   `>=` halves separately and hands back two distinct ids -- so [int_lin_eq] is not
-   itself a propagator instance. [make] returns a PAIR of ordinary [Linear.t] values,
+   Consistency level: BOUNDS (docs/SPEC.md 3.2), inherited entirely from [Linear] (see
+   that module's header). This module defines no propagator of its own, so it has no
+   [consistency] value: the two instances it builds are [Linear.t]s and report [Linear]'s.
+
+   One instance, one row (D-0011, restated by D-0027 as a rule about NAMING rows: every
+   explanation an instance builds names the model row it was derived from, as [Model_row
+   id] in the value). An equality is TWO rows in the .opb, because
+   [Encoding.add_equality] posts the `>=` and `<=` halves separately and returns two
+   distinct ids. So [make] does not build one propagator over both. It returns a PAIR of
+   ordinary [Linear.t] values,
 
      le : sum_i  a_i * x_i <=  c
      ge : sum_i -a_i * x_i <= -c        (i.e. sum_i a_i * x_i >= c)
 
-   for a caller to post as two separate, independently watched propagators, each paired
-   with its own id from [Encoding.add_equality] -- that function's own comment says its
-   two ids are `(geq, leq)`, so [ge] pairs with the first and [le] with the second.
-   Each of [le]/[ge] is exactly [int_lin_le] as it already exists: same module, same
-   propagate, same explanation shape. This file contributes nothing beyond the
-   negation that builds [ge] from [le]'s terms.
+   which the caller posts as two separate, independently watched instances, each paired
+   with its own row id. [Encoding.add_equality] returns its ids as [(geq, leq)], so [ge]
+   takes the first and [le] the second. Each of [le]/[ge] is exactly [int_lin_le]: same
+   module, same propagate, same explanation shape. This file contributes nothing beyond
+   the negation that builds [ge] from [le]'s terms.
 
-   An earlier version of this module fused [le] and [ge] into one propagator that
-   alternated them internally to a shared fixpoint, and proposed that a caller route
-   each resulting explanation to the model id for whichever half produced it by
-   comparing against the exposed [Linear.t] values. D-0011 records why that is wrong:
-   a pruning's explanation is recorded on the trail as [{ var; old; why }]
-   (lib/core/store.ml's [entry]) -- **the trail records no propagator identity** -- so a
-   caller walking the trail later (conflict analysis, from M2-T3 on) has the
-   explanation and nothing else and cannot tell which half produced it. A reason that
-   names no row is then unresolvable: there is no way to route it to the right model
-   constraint. The fix is not a cleverer routing scheme, it is to never need one: post
-   [le] and [ge] as two instances, each of which is asked to justify only against the
-   one row it knows about and each of which carries that row's id, so every base is a
-   [Model_row] and nothing ever has to inspect an explanation to work out which row it
-   meant. M1-T31 finished the job by deleting the fallback: there is no ambient row
-   left to route to, so a row that is not named cannot be guessed.
+   Why two instances and not one fused propagator. A fused instance owning both rows
+   would have to work out, for each pruning, which half produced it and so which row the
+   justification must cite. Nothing downstream can do that for it. A [Store.entry] does
+   carry the instance that made it (its [prop] field, since M2-T7), but that names the
+   fused instance, which owns both rows, so it cannot tell the halves apart. And
+   lib/core/justify.ml renders an explanation from the value alone, without the entry.
+   With two instances the question never arises: each one justifies only against the
+   row it was built with, and every base it writes is that row's [Model_row]. The id is
+   a required argument, so a row that is not named cannot be guessed (M1-T31 removed the
+   ambient "current row" fallback that used to stand in for it).
 
-   The fixpoint reasoning the old fused loop used to justify itself is still correct,
-   it just belongs to the engine now, not here: [engine.ml] runs propagators to a
-   fixpoint and re-wakes a propagator when a variable it watches changes. Tightening
-   [le]'s bound on some x_i can enable [ge] to tighten a bound on some x_j (their slack
-   computations read each other's current bounds -- [le] tightens hi for a positive
-   coefficient and lo for a negative one, [ge] the opposite, and each's slack depends on
-   every term's *current* min), which is exactly "a watched variable changed, re-run the
-   propagators watching it" -- the engine's own job. Positing [le] and [ge] as two
-   ordinary instances therefore reaches the same fixpoint a hand-written alternation
-   would reach, without a second, ad hoc scheduler duplicating what the engine already
-   does. Do not re-add a loop here.
+   The fixpoint needs no loop here either, because the engine already provides it.
+   lib/core/engine.ml runs propagators to a fixpoint and re-wakes an instance when a
+   variable it watches changes. Tightening a bound through [le] can let [ge] tighten
+   another, since each half's slack reads every term's current minimum ([le] tightens hi
+   for a positive coefficient and lo for a negative one, [ge] the opposite), and that is
+   exactly "a watched variable changed, re-run the instances watching it". Two ordinary
+   instances therefore reach the same fixpoint a hand-written alternation would, without
+   a second scheduler duplicating the engine's job. Do not re-add a loop here.
 
-   Consistency level: BOUNDS, inherited entirely from [Linear] (see that module's
-   header). Justification shape: each of [le]/[ge] is exactly [int_lin_le]'s own
-   docs/DECISIONS.md D-0013 [Combine] -- docs/PROOF-FORMAT.md section 4's
-   `int_lin_eq` row, "two int_lin_le derivations", taken completely literally, each
-   against its own row id ([~le_id]/[~ge_id], from [Encoding.add_equality]). *)
+   History, in one line: an earlier version fused [le] and [ge] into one propagator
+   alternating to a shared fixpoint, at a time when the trail recorded no propagator
+   identity at all; D-0011 replaced it with the pair.
 
-(* [Checked.neg] rather than [-]: min_int has no negation, so an unchecked negation
-   here would turn the `>=` half of an equality into a row that is not the negation of
-   the `<=` half -- and both halves would then be justified against .opb rows that do
-   not say what the propagators believe (roadmap M1-T23, lib/core/checked.ml). *)
+   Justification shape: each of [le]/[ge] is [int_lin_le]'s own [Combine], the "weaken,
+   divide, add" derivation of D-0013 (the other terms' bounds are weakened away from the
+   row, the sum divided by the pruned variable's coefficient), against its own row id
+   ([~le_id]/[~ge_id]). That is docs/PROOF-FORMAT.md section 4's `int_lin_eq` row, "two
+   int_lin_le derivations", taken literally. *)
+
+(* [Checked.neg] rather than [-]: min_int has no negation, so an unchecked negation here
+   would turn the `>=` half of an equality into a row that is not the negation of the
+   `<=` half, and both halves would then be justified against .opb rows that do not say
+   what the propagators believe. Checked arithmetic, which raises [Checked.Overflow]
+   instead of wrapping, is lib/core/checked.ml (roadmap M1-T23). *)
 let negate_terms terms = List.map (fun (a, x) -> (Checked.neg a, x)) terms
 
 (* [make store terms rhs ~le_id ~ge_id] : (le, ge), the two [Linear.t] instances the
-   equality [sum terms = rhs] decomposes into. Post both to the engine; pair [le]
-   with the `<=` id and [ge] with the `>=` id from [Encoding.add_equality] (whose own
-   return order is [(geq, leq)] -- i.e. [~ge_id] is that function's first result,
-   [~le_id] its second). Both required for the same reason [Linear.make]'s [~row_id]
-   is (M1-T31) -- see that module's header. The pairing is this function's whole
-   point: the two halves are two different rows, so an instance that could not name
-   its own would have to fall back on whichever one happened to be ambient, and that
-   is precisely the ambiguity D-0011 named. *)
+   equality [sum terms = rhs] decomposes into. Post both to the engine. [~le_id] is the
+   `<=` row's id and [~ge_id] the `>=` row's, so with [Encoding.add_equality]'s
+   [(geq, leq)] result, [~ge_id] is its first component and [~le_id] its second. Both are
+   required for the reason [Linear.make]'s [~row_id] is (see that module's header). The
+   pairing is this function's whole point: the two halves are two different rows, and an
+   instance that could not name its own would be back to the ambiguity D-0011 removed. *)
 let make ~le_id ~ge_id store terms rhs =
   let le = Linear.make ~row_id:le_id store terms rhs in
   let ge = Linear.make ~row_id:ge_id store (negate_terms terms) (Checked.neg rhs) in

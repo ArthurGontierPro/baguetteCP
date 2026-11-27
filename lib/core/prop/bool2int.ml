@@ -1,6 +1,11 @@
 (* bool2int(b, x): the FlatZinc channelling constraint between a `var bool` and a
    `var int`, i.e.  x = b  with b ranging over {0, 1}.
 
+   Consistency level BOUNDS, proof shape a `rup` clause per pruning; both are argued
+   below. This module serves an x on the ORDER encoding. Over a bits-encoded x,
+   lib/flatzinc/compile.ml posts the same two rows as a pair of [Linear] instances
+   instead ([Bool2int_row] there).
+
    This is the seam between the Boolean and the integer half of the model, and a
    channelling constraint that prunes in one direction and not the other is the
    classic way to lose propagation without losing any test. So, explicitly:
@@ -26,8 +31,8 @@
    bounds first, then b to x's *new* bounds. After the first step lo(x) >= lo(b) and
    hi(x) <= hi(b), so the second step can only tighten b to what x has actually got --
    there is nothing left for a third step to do. (Re-running is still cheap and the
-   engine does it anyway; this is about I-P3, idempotence at the interface, not about
-   saving a pass.)
+   engine does it anyway. The point is I-P2, idempotence at the interface: run again at
+   the fixpoint, the propagator changes nothing.)
 
    Consistency level: BOUNDS (docs/SPEC.md 3.2). Only lo/hi are read and written; no
    hole is ever punched. At the fixpoint that happens to be domain consistency as
@@ -38,12 +43,13 @@
    on the first pass over a wide x. Declaring the weaker level is conservative in the
    only direction that matters. A hole inside x is handled correctly without being
    reasoned about: x = {0, 2} meets hi(x) := 1 and [Domain.set_hi] tightens past the
-   hole (I-D2), leaving {0}.
+   hole, because a bound is always a value of the domain (I-D2), leaving {0}.
 
    Shape: this follows lib/core/prop/linear.ml, the reference propagator. The
    arithmetic is the one place it does not need to: every quantity here is a bound
    already in a domain, and nothing is multiplied, added or divided, so there is no
-   [Checked] call and no M1-T23 exposure in this module. (lib/flatzinc/compile.ml
+   [Checked] call and no overflow exposure in this module (the overflow audit that
+   introduced checked arithmetic was M1-T23). (lib/flatzinc/compile.ml
    still runs the cap over the two rows it posts for this constraint, because
    [Encoding.linear_terms_int_lin_le] does multiply.)
 
@@ -51,13 +57,14 @@
    Justification -- a clause, not a pol, and why that is the better answer here
    ---------------------------------------------------------------------------
 
-   The model rows are the two halves of the equality, posted by
-   lib/flatzinc/compile.ml through [Encoding.add_int_lin_le]:
+   Proof shape (docs/SPEC.md 3.3): every pruning and every conflict is a [Clause],
+   which the checker verifies as one `rup` step. The model rows are the two halves of
+   the equality, posted by lib/flatzinc/compile.ml through [Encoding.add_int_lin_le]:
 
        row LE:  x - b <= 0            row GE:  b - x <= 0
 
    so the obvious move is to justify a pruning the way [Linear] does, as D-0013's
-   weaken-divide-add [pol] over the row it came from. This module deliberately does
+   "weaken, divide, add" [pol] over the row it came from. This module deliberately does
    not, and the reason is measured rather than aesthetic: D-0028 records that a
    [Weaken] summand is one literal per value across the *declared* width of the other
    term, per pruning -- a model with a `var 0..1000000` and no prunings at all emits a
@@ -65,8 +72,9 @@
    Boolean one, so taking the [pol] route here would make the size of a channelling
    justification proportional to a width the constraint immediately destroys.
 
-   The clausal reason is O(1) instead. Every pruning this module makes has the
-   trace-line shape D-0018 asks for anyway,
+   The clausal reason is O(1) instead. Every pruning this module makes has the shape
+   of the trace line D-0018 writes for it anyway (a branch's nogood is RUP over the
+   trace lines the branch logged, one per pruning),
 
        <the order literal the pruning established>  \/  ~<the one bound fact read>
 
@@ -81,12 +89,13 @@
    pushes; test/unit/test_prop.ml runs every one of them past the real checker rather
    than taking this paragraph's word for it.
 
-   No [Explanation] constructor was needed for any of this: [Clause] was enough, which
-   is D-0019 arriving at the same place from the disequality side. And no row id is
-   cited, so D-0011's "which row did this mean" hazard cannot arise here any more than
-   it can in lib/core/prop/ne.ml -- [make] takes no row id for that reason. (M1-T31
-   removed the ambient row the hazard used to resolve to; this module never depended
-   on it.)
+   No [Explanation] constructor was needed for any of this: [Clause] was enough, the
+   same place D-0019 arrived at from the disequality side (a disequality is justified
+   over the order encoding by clauses, with no direct encoding). And no row id is
+   cited, so the question D-0011 settles (which model row does an instance's
+   explanation mean) cannot arise here any more than it can in lib/core/prop/ne.ml;
+   [make] takes no row id for that reason. (M1-T31 removed the ambient row that
+   question used to resolve to; this module never depended on it.)
 
    A bound fact still sitting at the variable's *declared* value contributes nothing
    to a clause: it is the encoding's constant true (docs/PROOF-FORMAT.md section 3,
@@ -103,27 +112,33 @@
    empty, and [Explanation.clause []] is then the correct and honest answer: the
    model is unsatisfiable from its declared domains alone (`var 2..5: x` channelled
    to a `var bool`), the empty clause renders as `rup >= 1 ;`, and lib/core/search.ml
-   closes it the D-0022/I-X7 way because it rests on a clause. No special case is
-   needed and none should be added -- this is the same route `int_ne(x, x)` takes.
+   closes it as it closes every root conflict, with the empty clause over the root's
+   trace (D-0131). A clause is never cited to `conclusion UNSAT` as a contradiction in
+   its own right (I-X7: the line UNSAT cites is one the checker has itself established
+   as a contradiction; D-0022 first drew that line for a derivation resting on a
+   clause). No special case is needed and none should be added: this is the same route
+   `int_ne(x, x)` takes.
 
    ---------------------------------------------------------------------------
    Snapshotting
    ---------------------------------------------------------------------------
 
-   Every explanation and every [~facts] thunk below closes over literals built
-   *before* the push, from bounds read before the push. I-X6: a reason forced later --
-   when the branch fails, which is when lib/core/trace.ml writes it down -- must
-   render the derivation as of the moment it was made, never as of now. Here that is
-   easy to hold because the literals are built eagerly and the thunk merely returns
-   the list it already has; there is no store access inside any closure in this
-   file. *)
+   Every explanation and every [~facts] list below is built BEFORE the push, from
+   bounds read before the push. A reason rendered later (when the branch fails, which
+   is when lib/core/trace.ml writes it down) must state the derivation as of the moment
+   it was made, never as of now (I-X6, stated there for a deferred explanation's
+   snapshot). Here that is easy to hold because the facts and the clause are built
+   eagerly as plain values: this file makes no [Explanation.deferred], so nothing reads
+   the store when the reason is rendered. *)
 
 module Lit = Baguette_proof.Lit
 
-(* Declared bounds are frozen at [make] time for the D-0010 reason [Linear.make] and
-   [Ne.make] both state: a clause drops the halves that sit at the *declared* bound,
+(* Declared bounds are frozen at [make] time for the reason [Linear.make] and [Ne.make]
+   both state (D-0010: a bound fact is a chain of order literals counted from the
+   declared bound). A clause drops the halves that sit at the DECLARED bound,
    and the store stops reporting that bound the moment anything narrows the variable.
-   [b_decl_lo]/[b_decl_hi] are 0 and 1 for every `var bool` (D-0007), and are carried
+   [b_decl_lo]/[b_decl_hi] are 0 and 1 for every `var bool` (Booleans are the order
+   encoding on [0, 1], D-0007), and are carried
    rather than assumed so the two sides read alike and neither has a constant baked
    into it. *)
 type t = {
@@ -173,13 +188,12 @@ let vars t = [ t.b; t.x ]
 
 (* ------------------------------------------------------------------- bound facts *)
 
-(* "v >= value" / "v <= value" as an order literal, or nothing at all when the bound
-   is still the declared one. See the module header: a declared bound is the
-   encoding's constant true and has no literal. *)
-(* M2-T8/D-0026: a [Reason.fact], not a [Lit.t], and the "nothing at all when the bound
-   is still the declared one" test now lives once, in [Reason.lit_of_fact], rather than
-   here and in [Ne] and in [Linear]. A list of one so the call sites below can keep
-   concatenating. *)
+(* "v >= value" / "v <= value" as a [Reason.fact], a list of one so the call sites
+   below can concatenate. A fact at the declared bound renders to no literal, because a
+   declared bound is the encoding's constant true (see the module header); that test
+   lives once, in [Reason.lit_of_fact], shared with [Ne] and [Linear]. Facts are data
+   rather than [Lit.t]s since reasons became declarative values separate from their
+   justification (D-0026, built by M2-T8). *)
 let ge_fact ~name ~decl_lo value = [ Reason.at_least ~name ~decl:decl_lo value ]
 let le_fact ~name ~decl_hi value = [ Reason.at_most ~name ~decl:decl_hi value ]
 
@@ -189,16 +203,16 @@ let nogood reason = Explanation.clause (List.map Lit.negate (Reason.lits_of_fact
 (* "these facts imply this claim", the clause a pruning reports -- and, literally, the
    line lib/core/trace.ml will write for it from the claim and the reason separately. The
    two being the same clause is what keeps the explanation and the trace line from
-   drifting; D-0009's failure mode was exactly a derivation and a trace that agreed on
-   a type and not on a meaning.
+   drifting. A derivation and a trace that agreed on a type and not on a meaning was
+   exactly the failure D-0009 recorded (a bound fact in a [pol] needs a constraint id,
+   not a literal).
 
-   Note what these two now are, post-D-0026: the justification is a *function of the
-   reason*. For this propagator the agreement D-0026 wants as a type is not merely a
-   shared source, it is a derivation -- there is no reason/justification pair to get
-   wrong, because one is computed from the other. [Linear] cannot do this (its
-   justification is a cutting-planes [Combine] over declared-width chains, which states
-   nothing about where a bound sits) and that is exactly why the two halves are separate
-   types rather than one. *)
+   Here the justification is a FUNCTION OF THE REASON. For this propagator the agreement
+   D-0026 wants as a type is not merely a shared source, it is a derivation -- there is no
+   reason/justification pair to get wrong, because one is computed from the other.
+   [Linear] cannot do this (its justification is a cutting-planes [Combine] over
+   declared-width chains, which states nothing about where a bound sits) and that is
+   exactly why the two halves are separate types rather than one. *)
 let implication ~claim reason =
   Explanation.clause (claim :: List.map Lit.negate (Reason.lits_of_facts reason))
 
@@ -215,7 +229,8 @@ let propagate t store =
       let d = Store.get store var in
       if bound > Domain.lo d then
         let claim = Lit.ge name bound in
-        (* D-0043: what this pruning concludes, as a [Reason.fact]. It is the same bound
+        (* What this pruning concludes, as a [Reason.fact] carried on the [justified]
+           value (D-0043). It is the same bound
            in the same direction as [claim] -- [Reason.lit_of_fact] of it IS [claim]
            whenever the bound has moved off the declared one -- built from the fact
            constructor rather than from the literal so that the store can compare it

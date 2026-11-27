@@ -1,8 +1,8 @@
 (* all_different_int: the variables take pairwise distinct values.
 
-   Consistency level: DOMAIN (docs/SPEC.md 3.2, docs/GLOSSARY.md), as of M4-T2. ONE
-   propagator, ONE consistency tag, TWO STAGES -- the design docs/ROADMAP.md M4-T1/M4-T2
-   and docs/GCS-COMPARISON.md section 3 both specify:
+   Consistency level: DOMAIN (docs/SPEC.md 3.2, docs/GLOSSARY.md). ONE propagator, ONE
+   consistency tag, TWO STAGES, as docs/ROADMAP.md M4-T1 (stage 1) and M4-T2 (stage 2)
+   and docs/GCS-COMPARISON.md section 3 specify:
 
      stage 1  [stage_bounds]  Hall intervals over lo/hi. Reads and writes bounds only.
      stage 2  [stage_regin]   a maximum matching over the value graph, which prunes
@@ -10,23 +10,31 @@
 
    [propagate] sequences them and is where the staging rule lives. The tag is what tells
    [Engine] to wake this instance on an interior hole and not only on a bound move, and
-   the M2-T10 oracle (BAGUETTE_CONSISTENCY=1) is what holds the declaration to its word
-   at every search node.
+   the brute-force consistency oracle (BAGUETTE_CONSISTENCY=1, M2-T10) holds the
+   declaration to its word at every search node.
 
-   D-0004 asked whether Regin's pruning has a justification at all. IT DOES, it is the
-   same counting argument as stage 1 over a value SET rather than an interval, and the
-   existing [Explanation] ADT expresses it with NO NEW CONSTRUCTOR -- see [regin_pass]
-   for the matching fact that bridges the two, and [gone] for the one thing an interval
+   Proof shape (docs/SPEC.md 3.3): every pruning and every conflict is one [Combine], a
+   `pol` that adds the at-least-one and at-most-one lines of the direct encoding over
+   the Hall set (a counting argument, "Justification" below), cites the model's
+   pairwise rows by id, and concludes in the ORDER encoding. Because a counting argument
+   is not reverse unit propagation, the derivation is written AHEAD of the trace line
+   that uses it.
+
+   Regin's pruning has a justification (the question D-0004 left open): it is the same
+   counting argument as stage 1 over a value SET rather than an interval, and the
+   existing [Explanation] ADT expresses it with NO NEW CONSTRUCTOR. See [regin_pass] for
+   the matching fact that bridges the two, and [gone] for the one thing an interval
    never forced.
 
-   ONE CURRENCY FOR A HOLE (M7-T22, D-0086). Whatever this module derives internally, the
-   explanation it attaches to a trail entry that punches an INTERIOR hole concludes the
-   ORDER clause `~y_ge_v \/ y_ge_(v+1)` -- the clause the entry's trace line claims, and
-   the one every other propagator's hole concludes -- not the direct literal [~y_eq_v]
-   its counting naturally ends on. [in_order_currency] is the conversion and its comment
-   is the argument; docs/PROOF-FORMAT.md section 4's all_different row is the contract.
+   ONE CURRENCY FOR A HOLE (D-0086, built by M7-T22). Whatever this module derives
+   internally, the explanation it attaches to a trail entry that punches an INTERIOR hole
+   concludes the ORDER clause `~y_ge_v \/ y_ge_(v+1)` -- the clause the entry's trace line
+   claims, and the one every other propagator's hole concludes -- not the direct literal
+   [~y_eq_v] its counting naturally ends on. [in_order_currency] is the conversion and its
+   comment is the argument; docs/PROOF-FORMAT.md section 4's all_different row is the
+   contract.
 
-   STAGE 2 IS GATED (M20-pernode-T4, D-0215). A Regin pass that cannot prune is skipped,
+   STAGE 2 IS GATED (D-0215). A Regin pass that cannot prune is skipped,
    and the test is exact: [cannot_prune] repairs a matching KEPT across passes (Régin's
    incremental matching, as Gecode and Chuffed keep theirs) and runs one Tarjan pass for
    an edge that lies in no maximum matching. When there is one, or no matching saturates
@@ -34,9 +42,10 @@
    pruning, its order and its justification are the ones it always made; the kept matching
    is a hint re-read against the live domains, never a fact, and needs no trail.
 
-   THE COST PER CALL (M20-pernode-T4, D-0235). Four rules keep a call from paying for
-   what cannot have changed, each stated and argued where it lives, none changing a
-   pruning, its order, its reason or its derivation (the artefacts are byte-identical):
+   THE COST PER CALL (D-0235; this and the gate are the per-node cost work of
+   M20-pernode-T4). Four rules keep a call from paying for what cannot have changed, each
+   stated and argued where it lives, none changing a pruning, its order, its reason or its
+   derivation (the artefacts are byte-identical):
 
      - [pass] skips a stage 1 pass whose BOUND vector is one a scan once found quiet: the
        scan's outcome is a function of the bounds alone (BAGUETTE_DEBUG re-runs it);
@@ -50,7 +59,7 @@
    None of these caches outlives the call except [quiet], which is a hint about a bound
    vector and not about the store, so nothing here needs the trail.
 
-   THE COST PER CALL, SECOND PASS (M20-pernode-T4, D-0242). Four more, under the same
+   THE COST PER CALL, SECOND PASS (D-0242). Four more, under the same
    contract (every pruning, its order, its reason and its derivation unchanged; the
    artefacts are byte-identical):
 
@@ -63,12 +72,13 @@
      - [regin_scratch] skips a tight set that no outside term meets, by a count, and
        marks the scope's values rather than sorting their lists;
      - the derivations a tight set or interval justifies share its at-least-one lines
-       ([alo_lines]), under D-0216's rule that a node is handed back only when building
-       it again would return it.
+       ([alo_lines]), under D-0216's rule that a derivation node is handed back from a
+       memo only when building it again would return that very node.
 
    [by_lo]/[by_hi] outlive the call, and they are permutations re-sorted from the live
    bounds at every pass, so they need no trail either. The memos live in a derivation's
-   thunk, and a thunk reads no store (I-X6).
+   thunk, and a thunk reads no store (I-X6: a deferred explanation closes over a
+   snapshot and never reads live state).
 
    ---------------------------------------------------------------------------
    Filtering: Hall intervals
@@ -88,26 +98,28 @@
    fire on one y. Only intervals whose endpoints are a current lo and a current hi can
    be Hall intervals, which is what bounds the enumeration; the loop repeats until a
    pass changes nothing, which is what makes [propagate] idempotent at the interface
-   (I-P3) rather than by a one-pass argument like [Linear]'s.
+   (I-P2: run again at its fixpoint it changes nothing) rather than by a one-pass
+   argument like [Linear]'s.
 
    The enumeration is O(n * d^2) per pass and is the naive complete one, not Puget's
    O(n log n). That is a deliberate M4-T1 choice: this row is an experiment about the
    JUSTIFICATION, the models it may ship are bounded to single/low-double-digit domains
    by the memory rule, and an algorithm whose completeness is evident is worth more here
-   than one whose completeness is a citation. The consistency oracle (M2-T10, D-0059,
-   BAGUETTE_CONSISTENCY=1) is what checks the claim either way.
+   than one whose completeness is a citation. The consistency oracle
+   (BAGUETTE_CONSISTENCY=1; D-0059 made the tag checked) is what checks the claim either
+   way.
 
    ---------------------------------------------------------------------------
-   Justification -- the multi-row Hall derivation (D-0027, roadmap M4-T1)
+   Justification: the multi-row Hall derivation
    ---------------------------------------------------------------------------
 
-   D-0027 is the permission: D-0011's "one instance justifies against exactly one model
-   row" is a rule about NAMING rows, not counting them, and a derivation may cite any
-   number. This module is the first thing in the tree that spends that permission, and
-   it spends it hard -- a single pruning's [Combine] names, transitively, one at-least-one
-   line per Hall variable, one at-most-one line per Hall value, and a channelling id per
-   value of every variable in sight. Every one of them is named with
-   [Explanation.Model_row], which is exactly the constructor D-0015 added for this.
+   A derivation may cite any number of model rows. D-0027 restated D-0011's "one
+   instance justifies against exactly one model row" as a rule about NAMING rows, not
+   counting them, and this module (built by roadmap M4-T1) was the first to spend that
+   permission, and spends it hard: a single pruning's [Combine] names, transitively, one
+   at-least-one line per Hall variable, one at-most-one line per Hall value, and a
+   channelling id per value of every variable in sight. Every one of them is named with
+   [Explanation.Model_row], the constructor D-0015 added for naming a row in the value.
 
    The counting argument, as cutting planes. Write V = [a, b], k = |V|, H the Hall set,
    y the variable being pruned, and x_eq_v for the direct encoding
@@ -129,45 +141,49 @@
 
    Three things that are worth saying because each was a choice:
 
-   1. **No [Explanation.Clause] anywhere in the tree, and that is load-bearing.** The
-      cheap way to recover a per-value at-most-one line is a [rup] over the direct
-      encoding. It would work, and it would make every [pol] in this file decorative:
-      lib/core/search.ml's [rests_on_a_clause] routes a root conflict whose derivation
-      rests on a clause the D-0022 way, so `conclusion UNSAT` cites the empty clause and
-      nothing the checker does depends on the Hall arithmetic being right (D-0057 and
-      D-0060 are two prior findings of exactly that). So the at-most-one line is
-      recovered by [pol] instead -- [pair_amo] -- and lib/proof/encoding.ml's
-      [add_all_different] posts the pairwise CLAUSE rows rather than big-M rows precisely
-      to make that recovery five ids and one division.
+   1. NO [Explanation.Clause] IN THE COUNTING. The at-most-one line is recovered by
+      [pol] ([pair_amo]), and lib/proof/encoding.ml's [add_all_different] posts the
+      pairwise CLAUSE rows rather than big-M rows precisely to make that recovery five
+      ids and one division. The cheap alternative, a [rup] over the direct encoding,
+      would work. It was rejected (D-0061) because, when this was written, a root
+      conflict whose derivation rested on a clause was routed by search.ml to the empty
+      clause instead of to the derivation (D-0022), so nothing the checker did would
+      have depended on the Hall arithmetic being right: every [pol] here would have been
+      decorative, as D-0057 and D-0060 had found twice by accident. That routing is gone
+      since D-0131 (every root conflict now closes on its trace), but the rule stands:
+      the only clauses in a derivation here are deep holes' [Gone_hole] cancellations.
 
-   2. **A current bound appears as a literal in the derived row, and is cancelled by the
-      id of the line that establishes it where there is one.** [excl] derives
+   2. A CURRENT BOUND APPEARS AS A LITERAL IN THE DERIVED ROW, and is cancelled by the
+      id of the line that establishes it where there is one. [excl] derives
       ~x_ge_lo(x) \/ ~x_eq_v rather than ~x_eq_v, so before cancellation the row is the
       globally valid `~<bound facts> \/ <the pruning>` shape lib/core/prop/ne.ml's clause
       already has, sound at any level. Citing the trail entry the way [Linear] does still
       does not fit -- a cited [Linear] derives a statement in the order encoding's ladder
       currency (D-0010, lib/core/ladder.ml's header), not the unit x_ge_c >= 1 the
       counting needs -- which is why M4-T7 gave [Explanation] the one thing that does:
-      [Defining], a summand carrying the id of the UNIT line that states the fact. See
-      [moved_bound_cancels] below.
+      [Defining], a summand carrying the id of the UNIT line that states the fact
+      (D-0064). See [hall_cancels] and [target_cancel] below.
 
-   3. **[Weaken] is used for its D-0009 meaning and twice over.** Once to drop the
+   3. [WEAKEN] IS USED FOR ITS D-0009 MEANING, AND TWICE OVER: a literal axiom can
+      weaken a term away but cannot assert a bound. Once to drop the
       excluded values the pruning does not need ([Lit.eq y v] as the trivial axiom
       y_eq_v >= 0), and once as the degenerate at-most-one: where only ONE variable in
       scope can take a value, the "at most one of them does" line is literally the
       literal axiom ~x_eq_v >= 0, and writing it as a [Weaken] summand rather than
       special-casing it keeps the counting uniform.
 
-   3'. **One new [Explanation] summand, and it is the only thing in this file that is
-      not [Combine]/[Weaken]/[Model_row].** M4-T1 built the whole derivation without one
+   3'. ONE NEW [Explanation] SUMMAND, the only thing in this file that is not
+      [Combine]/[Weaken]/[Model_row]. M4-T1 built the whole derivation without one
       (D-0061) and got everything except the cancellation in item 2, where it had to fall
       back on [Explanation.clause [lit]]. M4-T7 replaced that stand-in with
       [Explanation.defining], whose record is D-0009's own: see explanation.ml's header
       for why it is a summand rather than a [t].
 
    ---------------------------------------------------------------------------
-   The pairwise rows may be ROOT LEMMAS (M7-T28, D-0151 section 2)
+   The pairwise rows may be ROOT LEMMAS
    ---------------------------------------------------------------------------
+
+   (The design is D-0151 section 2, built by M7-T28 with the native `inverse`.)
 
    The derivation above names each pairwise row `x <> v \/ z <> v` by id. For an
    all_different the MODEL posts, that id is a model row ([Encoding.add_all_different]).
@@ -179,20 +195,21 @@
    model row gets, since a `pol` cites a derived line exactly as it cites a model row.
 
    ---------------------------------------------------------------------------
-   A conflict carries its facts under a decision (M7-T33, D-0156)
+   A conflict carries its facts under a decision
    ---------------------------------------------------------------------------
 
    Both pigeonholes -- a Hall interval holding one variable too many, and a matching
-   that saturates no more than all but one variable -- are reported at the ROOT as
-   before, a factless emptying push whose derivation closes to [0 >= 1]. Under a
-   DECISION they are reported with their facts, under [Store.deriving_ahead], so that
-   1UIP learning has a reason to resolve from and the derivation is on the page ahead of
-   `rup ~facts >= 1` -- cumulative's arrangement (D-0096) and element's split (D-0101).
+   that saturates no more than all but one variable -- are reported at the ROOT as a
+   factless emptying push whose derivation closes to [0 >= 1]. Under a DECISION they are
+   reported with their facts, under [Store.deriving_ahead], so that 1UIP learning has a
+   reason to resolve from and the derivation is on the page ahead of
+   `rup ~facts >= 1` (D-0156, built by M7-T33). It is the arrangement cumulative's
+   conflicts use (D-0096) and the root/decision split element's make (D-0101).
    [push_conflict] says which facts and why each literal the derivation leaves is one of
    them.
 
    ---------------------------------------------------------------------------
-   Snapshotting and I-X6
+   Snapshotting: a derivation reads a snapshot, never the live store (I-X6)
    ---------------------------------------------------------------------------
 
    Every number a derivation depends on -- the interval, each variable's current and
@@ -200,7 +217,8 @@
    hole with its cite -- is snapshotted into [snap] records at the moment of the pruning
    and the thunk reads nothing else from the store.
 
-   WHAT IS BUILT EAGERLY AND WHAT LAZILY (D-0161 request 1). The snapshot holds only what
+   WHAT IS BUILT EAGERLY AND WHAT LAZILY (D-0161 request 1, from the audit of what a
+   run under [--no-proof] still paid for). The snapshot holds only what
    needs the store as it stood: the four bounds, the two root flags (they read the bound
    supports) and the interior holes (their cite reads the trail). The list of declared
    values the variable has lost BELOW and ABOVE its window is not stored: [gone] rebuilds
@@ -216,30 +234,29 @@
    now. (They do not exist at all when no proof is being written, which is why
    [cid_of] says so rather than raising [Not_found] several layers down.)
 
-   COST (M16-file-review-T2, D-0190). Stage 1 is O(P n) per pass for P candidate
-   intervals, as above. A tight interval (as many confined variables as values) tests
-   every other variable's LIVE bounds first and snapshots, and looks up in the Hall set,
-   only one that can be pushed; the Hall set's own members pass that test and are found by
-   name, O(k^2) for an interval of width k, which the scope bounds. With the proof, a pruning's derivation is O(|halls| w^2)
-   to BUILD, because each excluded value's [excl] telescopes its own rungs, and every
+   COST (the file-by-file review of the propagators, M16-file-review-T2, D-0190). Stage
+   1 is O(P n) per pass for P candidate intervals, as above. A tight interval (as many
+   confined variables as values) tests every other variable's LIVE bounds first and
+   snapshots, and looks up in the Hall set, only one that can be pushed; the Hall set's
+   own members pass that test and are found by name, O(k^2) for an interval of width k,
+   which the scope bounds. With the proof, a pruning's derivation is O(|halls| w^2) to
+   BUILD, because each excluded value's [excl] telescopes its own rungs, and every
    build is hash-consed whether or not its line is already on the page (D-0190 section 5
    measures it at half of a proof-mode run on 2011 cyclic-rcpsp). *)
 
 module Lit = Baguette_proof.Lit
 module Encoding = Baguette_proof.Encoding
 
-(* A variable, and the five numbers any part of the derivation may ask about it. The
-   declared pair is frozen at [make] time for D-0010's reason ([Order_reason]'s header);
-   the current pair is frozen per pruning. *)
 (* Why a DECLARED value is no longer available to a variable, and therefore how the
    derivation is allowed to cancel its [x_eq_v] term out of that variable's
-   at-least-one line. (M4-T2.)
+   at-least-one line. (Holes entered with Regin, M4-T2.)
 
    The Hall counting needs, per Hall variable, [sum_{v in S and decl(x)} x_eq_v >= 1]
    for the Hall value set [S], and it gets there from the declared-range at-least-one
    line by cancelling one term per declared value outside [S]. Each cancellation has to
    name a line that ESTABLISHES that the value is gone, at DEGREE-preserving strength --
-   a [Weaken] axiom cancels the term but costs the degree (D-0009), so there is no
+   a [Weaken] axiom cancels the term but costs the degree (an axiom weakens, it asserts
+   nothing, D-0009), so there is no
    weakening shortcut here and the four cases below are the whole of what is available.
 
    [Gone_below]/[Gone_above] are M4-T1's case: the value is outside the variable's
@@ -255,17 +272,23 @@ module Encoding = Baguette_proof.Encoding
 
      - [Gone_hole_root]: the hole was established at LEVEL 0, so `~x_eq_v >= 1` is a
        consequence of the model on its own and [Explanation.defining] cites it as a unit
-       -- exactly D-0064's per-bound rule, applied per hole. The cancellation is exact,
+       -- exactly D-0064's per-bound rule (a bound established at the root is cited by
+       its defining unit line), applied per hole. The cancellation is exact,
        nothing is left in the row, and a root conflict built on it still closes.
      - [Gone_hole facts]: the hole rests on a decision, so the unit would be FALSE. What
        is globally valid is the implication, and [Explanation.clause] states it:
        `~x_eq_v \/ ~facts`, RUP against the hole's own trace line plus two channelling
        halves. The facts stay in the derived row and are carried into the pruning's
-       [Reason] alongside, which is what keeps the trace line true (I-P5). The price is
-       that the derivation now contains a [Clause], so a ROOT conflict resting on one
-       closes the D-0022 way -- see lib/core/search.ml's [rests_on_a_clause]. *)
+       [Reason] alongside, which is what keeps the trace line true (I-P5, now part of
+       I-P4: every bound move carries the facts its trace line negates). Such a hole
+       rests on a decision, so a derivation holding this [Clause] never closes a ROOT
+       conflict. *)
 type gone = Gone_below | Gone_above | Gone_hole_root | Gone_hole of Reason.t
 
+(* A variable, and the numbers any part of the derivation may ask about it. The declared
+   pair is frozen at [make] time, because a bound fact is a chain of order literals
+   counted from the declared bound (D-0010, [Order_reason]'s header); the current pair,
+   the root flags and the holes are frozen per pruning. *)
 type snap = {
   s_var : Var.t;
   s_name : string;
@@ -275,7 +298,8 @@ type snap = {
   s_hi : int;
   (* Whether each current bound was established AT THE ROOT -- i.e. the trail entry
      supporting it belongs to level 0, or it has never moved off the declared bound.
-     This is what decides whether [moved_bound_cancels] may cite a line for it, and it
+     This is what decides whether [hall_cancels] and [target_cancel] may cite a line
+     for it, and it
      is a fact about where the bound CAME FROM, not about the level the solver is at
      now: a root-established bound is a consequence of the model and stays citable
      however deep the search has gone. *)
@@ -572,8 +596,10 @@ let mem_of vals =
    [Store.remover] agrees with that scan under [BAGUETTE_DEBUG] by physical equality.
    Element made the same move in D-0155. Read eagerly, at snapshot time (I-X6).
 
-   [None] is a hole with no trail entry behind it -- a declared gap, which
-   lib/flatzinc/compile.ml's [reject_set_domain] refuses, so no model reaches it. *)
+   [None] is a hole with no trail entry behind it: a gap in a DECLARED set domain
+   (`var {1,3,5}: x`). The .opb states such a gap as a clause of its own
+   ([Encoding.declare_int_with_holes]; M7-T11 removed the [reject_set_domain] check
+   that used to refuse these domains), so it is cited as a [Gone_hole] with no facts. *)
 let hole_cite store var value =
   match Store.remover store ~before:(Store.trail_length store) ~var value with
   | Some e when Store.at_root store e.Store.pos -> Gone_hole_root
@@ -591,9 +617,9 @@ let holes_of store tm d =
 
 (* Every DECLARED value [s] can no longer take, ascending, with the reason the derivation
    may cite for it: below the window, then the holes inside it, then above. The order is
-   what makes an [alo_over] over an INTERVAL value set emit exactly the summands M4-T1's
-   [alo_window] emitted, in the same order, so stage 1's proofs are unchanged byte for
-   byte.
+   what makes an [alo_over] over an INTERVAL value set emit exactly the summands the
+   interval-only version of M4-T1 emitted, in the same order, so stage 1's proofs did not
+   change when M4-T2 generalised it to value sets.
 
    BUILT WHEN A DERIVATION IS FORCED, NOT AT THE SNAPSHOT (D-0161 request 1). Until then
    [snap_of] built this list for every variable at every snapshot -- two [range] lists of
@@ -959,50 +985,46 @@ let core_summands ?alo t ~vals ~halls ~extra =
       List.map (fun s -> Explanation.term 1 (alo_over t s ~keep)) halls)
   @ amos ()
 
-(* The bound literals [alo_window] leaves in the row, cancelled by the lines that
-   already state those bounds. Until M4-T7 this was the one place in this module where
-   the reified explanation ADT did not reach; read this and explanation.ml's [Defining]
-   section together before changing it.
+(* CANCELLING THE BOUND LITERALS. [alo_over] narrows a Hall variable's at-least-one line
+   with one [excl] per declared value outside the value set, and each [excl] carries the
+   bound it rests on into the sum as a literal: [a - decl_lo] copies of ~x_ge_lo(x), and
+   [decl_hi - b] of x_ge_(hi(x)+1). The pruned variable [y] leaves one more, from its
+   telescope. This section cancels them with the lines that already state those bounds:
+   [hall_cancels] for the Hall variables, [target_cancel] for [y], [overshoot_cancel] for
+   an emptying push. Read it together with explanation.ml's [Defining] section before
+   changing it.
 
-   [alo_window] narrows a Hall variable's at-least-one line with one [excl] per declared
-   value outside the interval, and each [excl] carries the bound it rests on into the sum
-   as a literal: [a - decl_lo] copies of ~x_ge_lo(x), and [decl_hi - b] of x_ge_(hi(x)+1).
-   For a PRUNING, leaving them there is already right -- the derived row is then the
-   globally valid "the pruning, disjoined with the bounds it read", which is the shape
-   [Ne] already has. For a CONFLICT it is not enough: lib/core/search.ml cites a root
-   conflict's derivation to `conclusion UNSAT`, and a row with literals left in it is not
-   contradicting, which 3.0.2 says in as many words ("The constraint with ID n is not
-   contradicting, as specified by the hint") and which M1-T17 already found from the
-   other end.
+   THE RULE. A bound literal is cancelled exactly when its bound was ESTABLISHED AT THE
+   ROOT, by an [Explanation.defining] summand, which [Justify.defining_lit] resolves to
+   the UNIT line already stating the bound (the trace line, in practice), minting one
+   only if there is none. The cancellation is exact: the term goes and the degree stays.
+   A bound a decision set is left in the row as its literal.
 
-   Cancelling them needs "the id of the line that establishes this bound fact" -- D-0009's
-   open ADT gap, which M4-T7 closed with [Explanation.defining]. It resolves through
-   [Justify.defining_lit] to the UNIT line already stating the bound (the trace line, in
-   practice), minting one only if there is none, and the cancellation is exact: the term
-   goes and the degree stays. Two things follow, and both are the row's point:
+   WHY IT IS SOUND. Left uncancelled, the literals make the derived row the globally
+   valid "the pruning, disjoined with the bounds it read", the shape [Ne]'s clause
+   already has, so a pruning is right either way. The test is the level the bound was
+   ESTABLISHED at, not the level the solver is at: a bound the root fixpoint set is a
+   consequence of the model, so its unit line is true and citable at any depth, while a
+   unit line for a bound a decision set would be false. [snap.s_lo_root]/[s_hi_root]
+   carry the test, snapshotted with everything else the derivation reads (I-X6). So a
+   Hall inference made three decisions deep still cancels whatever the root established.
 
-   - the derivation no longer contains an [Explanation.Clause], so
-     [Search.rests_on_a_clause] is false for it and `conclusion UNSAT` cites THIS
-     module's [pol] rather than the D-0022 empty clause. M4-T1's stand-in
-     ([Explanation.clause [lit]]) was the same arithmetic wearing a label the search reads
-     as "not numeric", which is D-0061's recorded cost.
-   - the test is now PER BOUND and is the level the bound was ESTABLISHED at, not the
-     level the solver is at. A bound the root fixpoint set is a consequence of the model,
-     so its unit line is true and citable at any depth; a bound a decision set is not, and
-     a unit line for it would be false. M4-T1 could only say "level 0 or nothing" and
-     switched the whole cancellation off under a decision; this says it bound by bound, so
-     a Hall inference made three decisions deep still cancels whatever the root
-     established. [snap.s_lo_root]/[s_hi_root] carry the test, snapshotted with everything
-     else the derivation reads (I-X6).
+   WHY IT IS NEEDED. A root CONFLICT must derive [0 >= 1], and a row with literals left
+   in it is not contradicting: veripb 3.0.2 says "The constraint with ID n is not
+   contradicting, as specified by the hint" (M1-T17 met the same message from [Ne]'s
+   side). With every root bound cancelled, the root derivation closes on its own.
 
-   A bound that is neither -- moved under a decision -- is simply not cancelled, and the
-   row keeps its literal, which is exactly the sound shape the first paragraph describes. *)
-
+   History, in short. Cancelling needs "the id of the line that establishes this bound
+   fact", the gap D-0009 left open in the ADT, which M4-T7 closed with
+   [Explanation.defining] (D-0064). M4-T1's stand-in was [Explanation.clause [lit]], the
+   same arithmetic wearing a label search.ml then read as "not numeric" (D-0061's
+   recorded cost), and it could only say "level 0 or nothing", switching the whole
+   cancellation off under a decision. *)
 (* The Hall variables' share: one copy of ~x_ge_lo(x) per declared value below the
-   interval and one of x_ge_(hi(x)+1) per declared value above it, which is exactly how
-   many [excl] summands [alo_window] added in each direction. A Hall variable's window is
-   inside [a, b], so [below > 0] implies its lo really has moved and [Lit.ge] below names
-   a literal the encoding has (likewise [above] and [Lit.le]). *)
+   value set and one of x_ge_(hi(x)+1) per declared value above it, which is exactly how
+   many [excl] summands [alo_over] added in each direction. A Hall variable's window is
+   inside the value set's hull, so [below > 0] implies its lo really has moved and
+   [Lit.ge] below names a literal the encoding has (likewise [above] and [Lit.le]). *)
 let hall_cancels ~keep ~halls =
   List.concat_map
     (fun s ->
@@ -1021,9 +1043,10 @@ let hall_cancels ~keep ~halls =
 
 (* The pruned variable's own share, and it is ONE copy in ONE direction: the telescoping
    channelling sum leaves ~y_ge_lo(y) on a lower push and y_ge_(hi(y)+1) on an upper one,
-   and nothing else of y's survives. [y] has no [alo_window] -- that asymmetry is the
-   whole reason its terms are what the derivation is left holding -- so it must not be
-   handed to [moved_bound_cancels], which counts a Hall variable's [excl] summands.
+   and nothing else of y's survives. [y] has no at-least-one line ([alo_over]), and that
+   asymmetry is the whole reason its terms are what the derivation is left holding, so
+   it must not be handed to [hall_cancels], which counts a Hall variable's [excl]
+   summands.
 
    The same per-bound root test as above, and for the same reason. *)
 let target_cancel ~y ~lower =
@@ -1047,15 +1070,16 @@ let target_cancel ~y ~lower =
        ~y_ge_lo(y) + y_ge_(b+1) >= 1 for a lower push and ~y_ge_a + y_ge_(hi(y)+1) >= 1
        for an upper one. Those are the bound the propagator just set, disjoined with the
        bound it read -- again the [Ne] shape, and globally valid. *)
-(* CAPPED AT y's DECLARED TOP (M7-T22, D-0086 (c)). [pass]'s pigeonhole arm pushes a
-   CONTAINED y to [b + 1], and [b] is the interval's end -- some variable's upper bound,
-   not necessarily one y's declared domain reaches. The values of [y.s_lo .. b] above
-   [decl_hi(y)] have no forward channelling clause (y takes none of them by declaration),
-   and the core sum leaves no [~y_eq_v] for them to cancel either ([core_summands] filters
-   the at-most-one lines by declared domain), so the telescope stops at [decl_hi(y)] and
-   its residue [y_ge_(decl_hi+1)] is the constant false. Uncapped it asked for a
-   [direct_fwd_id] that does not exist: exit 2 on `var 1..3: a, b, c; var 1..2: d;
-   all_different_int([a, b, c, d])`, the four-variable pigeonhole. *)
+(* CAPPED AT y's DECLARED TOP (D-0086 (c): a telescope stops at the declared top).
+   [pass]'s pigeonhole arm pushes a CONTAINED y to [b + 1], and [b] is the interval's end
+   -- some variable's upper bound, not necessarily one y's declared domain reaches. The
+   values of [y.s_lo .. b] above [decl_hi(y)] have no forward channelling clause (y takes
+   none of them by declaration), and the core sum leaves no [~y_eq_v] for them to cancel
+   either ([core_summands] filters the at-most-one lines by declared domain), so the
+   telescope stops at [decl_hi(y)] and its residue [y_ge_(decl_hi+1)] is the constant
+   false. Uncapped it asked for a [direct_fwd_id] that does not exist: exit 2 on `var
+   1..3: a, b, c; var 1..2: d; all_different_int([a, b, c, d])`, the four-variable
+   pigeonhole. *)
 let prune_summands ?alo t ~a ~b ~halls ~y ~lower =
   let keep, drop =
     if lower then
@@ -1068,7 +1092,9 @@ let prune_summands ?alo t ~a ~b ~halls ~y ~lower =
       (fun v -> cite (cid_of "d_fwd" (Encoding.direct_fwd_id t.enc y.s_name v)))
       keep
 
-(* THE OTHER END OF AN EMPTYING PUSH (M4-T2, and a defect M4-T1 shipped latent).
+(* THE OTHER END OF AN EMPTYING PUSH. [overshoot_cancel] cancels the residue a
+   pigeonhole push leaves, for a root-established upper bound. (Found by M4-T2: a defect
+   M4-T1 shipped latent.)
 
    [pass]'s pigeonhole arm pushes a CONTAINED variable's lower bound to [b + 1], which is
    past its current upper bound, and relies on [Store.apply]'s [Failed] arm to turn that
@@ -1085,7 +1111,7 @@ let prune_summands ?alo t ~a ~b ~halls ~y ~lower =
    What closes it is the ladder: the rungs [y_ge_(u+1) -> y_ge_u] for u in
    [hi(y) + 1 .. b] telescope to [~y_ge_(b+1) + y_ge_(hi(y)+1) >= 1], which turns the
    residue into [y_ge_(hi(y)+1)], and the line stating y's own upper bound cancels that
-   exactly -- D-0064's [Defining], and its per-bound root test, once more.
+   exactly: a [Defining] summand (D-0064) and its per-bound root test, once more.
 
    The test [b + 1 > y.s_hi] is what tells the two arms apart and is not a heuristic: in
    the [n = k] arm the pushed variable is NOT contained, so its upper bound is strictly
@@ -1097,10 +1123,10 @@ let prune_summands ?alo t ~a ~b ~halls ~y ~lower =
    [b < y.s_dhi] (M7-T22, D-0086 (c)) is the first paragraph's own condition, which the
    guard did not state: the residue [y_ge_(b+1)] is a literal the encoding has only when
    [b + 1 <= decl_hi(y)]. Past it the residue is the constant false, there is nothing to
-   cancel, and the ladder has no rung [y_ge_(decl_hi+1) -> y_ge_decl_hi] to cite -- the
-   `Alldiff: ladder rung has no constraint id` crash (exit 2) the bench/fuzz sweep found on
-   models where an element constraint had shaved y's upper bound below a Hall interval
-   reaching y's declared top. *)
+   cancel, and the ladder has no rung [y_ge_(decl_hi+1) -> y_ge_decl_hi] to cite. Without
+   it the bench/fuzz sweep found the `Alldiff: ladder rung has no constraint id` crash
+   (exit 2) on models where an element constraint had shaved y's upper bound below a Hall
+   interval reaching y's declared top. *)
 let overshoot_cancel ~b ~y ~lower =
   if lower && b + 1 > y.s_hi && b < y.s_dhi && y.s_hi < y.s_dhi && y.s_hi_root then
     List.map (rung y) (range (y.s_hi + 1) b)
@@ -1115,7 +1141,7 @@ let prune_expl ?alo t ~a ~b ~halls ~y ~lower =
         @ target_cancel ~y ~lower @ overshoot_cancel ~b ~y ~lower)
         1)
 
-(* ------------------------------------------------------ M4-T2: a VALUE is removed
+(* ------------------------------------------------------ a VALUE is removed (M4-T2)
 
    The same counting, stopped one step earlier. After [core_summands] over a tight set
    [halls] saturating the value set [vals], with [y] joining the at-most-one lines and
@@ -1157,7 +1183,7 @@ let remove_expl ?alo t ~keep ~vals ~halls ~y ~value =
    difference is the whole difference between a pruning and a refutation. It is reported
    the way [pass] reports its own: handed to a mutator that must fail, so
    [Store.apply]'s [Failed] arm pairs it with [Reason.none] and no `rup` conflict line
-   claims a counting argument as reverse unit propagation (I-X10, D-0040). That is the
+   claims a counting argument as reverse unit propagation (I-X10). That is the
    ROOT's arrangement since M7-T33; under a decision the same derivation is the
    conflict's, with its facts, written ahead of its line ([push_conflict], D-0156). *)
 let conflict_expl t ~vals ~halls =
@@ -1182,7 +1208,8 @@ let hall_facts ~keep halls =
       ]
       (* M4-T2. A hole the derivation had to cancel with [Gone_hole] leaves that hole's
          OWN facts in the row, so they are facts this pruning rests on and the trace
-         line's tail owes them (I-P5). Only the EXCLUDED holes: a hole inside the value
+         line's tail owes them (I-P5: every bound move carries the facts its trace line
+         negates). Only the EXCLUDED holes: a hole inside the value
          set is never cancelled, contributes nothing, and naming it would put a fact in
          the tail that the derivation does not read. For an interval value set there are
          no excluded holes at all, which is why stage 1's reasons are unchanged. *)
@@ -1201,8 +1228,9 @@ let prune_reason ~keep halls y ~lower =
    [y]'s window never enters the row. Both of [y]'s bounds are named anyway, and that is
    deliberate rather than sloppy: the derivation's top level weakens [y]'s own [y_eq_w]
    terms away, so [Explanation.top_weaken_owners] names [y] and D-0026's agreement check
-   requires the reason to name it too. A tail with a fact the derivation did not need is
-   a WEAKER trace line, which is sound; a tail missing one is I-P5. *)
+   requires the reason to name it too (D-0026: reason and justification are separate
+   values, checked to name the same variables). A tail with a fact the derivation did
+   not need is a WEAKER trace line, which is sound; a tail missing one breaks I-P5. *)
 let remove_reason_of y hall_facts =
   Reason.at_least ~name:y.s_name ~decl:y.s_dlo y.s_lo
   :: Reason.at_most ~name:y.s_name ~decl:y.s_dhi y.s_hi
@@ -1210,15 +1238,18 @@ let remove_reason_of y hall_facts =
 
 let remove_reason ~keep halls y = remove_reason_of y (hall_facts ~keep halls)
 
-(* ------------------------------------------- M7-T33: a conflict carries its facts
+(* ------------------------------------- a conflict carries its facts (M7-T33, D-0156)
 
-   Until M7-T33 both pigeonholes -- [pass]'s push that empties a contained variable and
-   [regin_pass]'s failed matching -- reached the store as a pruning that must fail, and
-   [Store.apply]'s [Failed] arm paired the derivation with [Reason.none] at every depth.
-   That is sound (search.ml's D-0040 arm writes the derivation and the decision nogood
-   closes the branch), but it hands [Learn.at_conflict] an EMPTY cut: on 2015_p1f_13
-   under the native [inverse] the run learned 0 clauses (D-0151 section 2), where std's
-   decomposition learned 523.
+   THE RULE: at the root a pigeonhole conflict is factless; under a decision it carries
+   the facts listed below and its derivation is written ahead of its line.
+
+   WHY. Until M7-T33 both pigeonholes -- [pass]'s push that empties a contained variable
+   and [regin_pass]'s failed matching -- reached the store as a pruning that must fail,
+   and [Store.apply]'s [Failed] arm paired the derivation with [Reason.none] at every
+   depth. That is sound (search.ml writes a factless conflict's derivation on the page,
+   the arm D-0040 introduced, and the decision nogood closes the branch), but it hands
+   [Learn.at_conflict] an EMPTY cut: on 2015_p1f_13 under the native [inverse] the run
+   learned 0 clauses (D-0151 section 2), where std's decomposition learned 523.
 
    AT THE ROOT nothing changes, deliberately: there is no branch to learn from, every
    bound the derivation reads is root-established and cancelled ([hall_cancels],
@@ -1230,9 +1261,10 @@ let remove_reason ~keep halls y = remove_reason_of y (hall_facts ~keep halls)
    [Store.deriving_ahead], so [Trace.conflict_line] writes the derivation FIRST and then
    `rup ~facts >= 1` (cumulative's arrangement, D-0096; store.ml's [c_ahead]). That line
    is the counting argument, so it is NOT reverse unit propagation over the pairwise
-   rows on its own (I-X10, D-0040); after the derivation it is unit propagation against
-   one line, because every literal the derivation leaves in its row is the negation of a
-   fact listed here:
+   rows on its own (I-X10 asks every trace line to be RUP against what is on the page
+   before it, which is why D-0040 writes the derivation first); after the derivation it is
+   unit propagation against one line, because every literal the derivation leaves in its
+   row is the negation of a fact listed here:
 
      - a Hall variable's bound literal that [hall_cancels] could not cancel (moved under
        a decision) -- its bound fact, from [hall_facts];
@@ -1298,7 +1330,9 @@ let sort_by (key : int array) perm =
    restriction: a Hall interval can always be shrunk to one whose ends are a variable's
    bounds without losing any variable from its set.
 
-   ONE SNAPSHOT, EVERY DEDUCTION (I-P6, M6-T19). The pass takes [snaps] once and applies
+   ONE SNAPSHOT, EVERY DEDUCTION (I-P6, from M6-T19: a pass photographs the store once
+   and applies every deduction the photograph justifies). The pass takes [snaps] once
+   and applies
    every push the snapshot justifies before [propagate] takes the next one. Until M6-T19
    it returned at the first push that landed, so a Hall set confining k variables cost
    k + 1 snapshots and k + 1 interval enumerations; the restart bought the one-line
@@ -1351,9 +1385,10 @@ let pass_scan t store ~lo0 ~hi0 =
   sort_by lo0 t.by_lo;
   sort_by hi0 t.by_hi;
   let by_lo = t.by_lo and by_hi = t.by_hi in
-  (* One push, with both halves of D-0026 built from the same snapshot. Returns through
-     [Found]/[Moved]; a push that changes nothing (the bound is already there) falls
-     through, which is how [Unchanged] can happen at all here. *)
+  (* One push, with both halves of D-0026 (the reason and the justification) built from
+     the same snapshot. It raises [Found] on a conflict and sets [moved] on a change; a
+     push that changes nothing (the bound is already there) falls through, which is how
+     [Unchanged] can happen at all here. *)
   let push ?alo ~halls ~a ~b ~y ~yi ~lower bound =
     (* M7-T33 (D-0156): the push that would EMPTY [y] -- [pass]'s pigeonhole arm, or an
        [n = k] push whose live [y] is now confined -- is the conflict, reported with its
@@ -1381,8 +1416,9 @@ let pass_scan t store ~lo0 ~hi0 =
        variable, is taken before the push can land. *)
     twins t yi (fun j -> ignore (snap j));
     (* [deriving_ahead]: a Hall pruning counts several disequality rows, so its trace
-       line is RUP only after its derivation (I-X10, D-0040). M7-T17 / D-0082 made this
-       the trigger; it used to be [Encoding.has_direct] of [x]. *)
+       line is RUP only after its derivation (I-X10, D-0040). "Derive ahead" is a
+       property of the propagator that made the entry, stamped on [Store.entry]'s [ahead]
+       (D-0082, M7-T17); it used to be [Encoding.has_direct] of [x]. *)
     match
       Store.deriving_ahead store (fun () ->
           if lower then Store.set_lo store y.s_var bound j
@@ -1994,10 +2030,11 @@ let regin_scratch t store =
    not a fact about the store. Step 1 re-reads every matched edge against the live
    domain, so a matching that a backtrack, a restart, or a different store has made
    stale costs a repair and never an answer: after a backtrack the domains are WIDER
-   (I-T1), every kept edge still exists and the matching is still valid, and after a
-   descent the edges that left are the ones step 1 drops. The invariant that covers the
-   answer is I-P2 through the BAGUETTE_DEBUG check in [regin_pass]: whenever the gate
-   says "cannot prune", the scratch pass runs as well and must land nothing. *)
+   (I-T1: a backtrack restores every domain exactly), every kept edge still exists and the
+   matching is still valid, and after a descent the edges that left are the ones step 1
+   drops. The invariant that covers the answer is I-P2 through the BAGUETTE_DEBUG check in
+   [regin_pass]: whenever the gate says "cannot prune", the scratch pass runs as well and
+   must land nothing. *)
 
 exception Prunable
 
@@ -2135,7 +2172,8 @@ let rec stage_regin t store = if regin_pass t store then stage_regin t store
    paid for; at or below the cutoff both stages run in one call, because the staging
    itself costs a wake-up that a small instance does not earn back.
 
-   "Without an idempotence claim" is about this CALL and not about I-P3. The instance
+   "Without an idempotence claim" is about this CALL and not about I-P2, idempotence at
+   the interface. The instance
    watches its own variables, so the prunings stage 1 just made re-enqueue it
    ([Engine.watchers_of_new_entries]), and at the engine's fixpoint -- which is the state
    I-P2 and the M2-T10 consistency oracle are both statements about -- stage 1 has
