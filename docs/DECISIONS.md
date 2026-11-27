@@ -34323,3 +34323,173 @@ the `limit` stream's `-t` runs depend on the wall clock (its `BAGUETTE_NODE_LIMI
 Drop `tools/fuzz/streams.py`, `triage.py`, `shrink_mzn.py`, `bench/fuzz/found/`, and restore
 `scripts/fuzz_lane.sh`, `bench/fuzz/README.md` and the `scripts/README.md` row from `c9b1b70`. The
 2026-11-23 streams keep their seeds (the stream index still counts them first).
+
+## D-0262  [AUTONOME] M22-review-bugs: the end-to-end defects the fuzz lane found (D-0258 section 4). `--e2e` now defines a selector by its POSITION in the constraint, never by guessing it from a candidate; `tools/e2e/bridge.py` recognises a gcc copy tied by linear rows and maps a choice group by position; the translator states a repeated gcc cover merged, as the front end does since D-0260. No proof was ever wrongly ACCEPTED; the plain `--proof` path is untouched
+
+Context. D-0258's `e2e` stream kept seven models in `bench/fuzz/found/` (three where baguette's own `--e2e`
+prefix is refused against cake_pb_cp's `.opb`, four where the bridged path is refused) and asked whoever owns
+`lib/proof/e2e.ml` and `tools/e2e/bridge.py` to fix them. Reproduced on origin/main `7c9f8371` (binary md5
+`852e292b`, cake_pb_cp `/cluster/arthur/baguette-results/wave55-e2e/cake_pb_cp-438b8f83`, sha256 `ca92491e`)
+with the stream's own command, `E2E_SOLVER=[1] CAKE_PB_CP=... tools/e2e/chain.sh MODEL OUT`: all seven fail as
+reported. The `e2e` lane on that commit was itself red (section 4), on D-0260's new models.
+
+### 1. The mechanisms
+
+| Model | Path | Mechanism |
+|---|---|---|
+| `e2e_solver_max_const_first_sat` (`maximum(x0, [1, x2])`) | `--e2e` | A maxmin over a bits variable gets one selector `_mxK` per operand (compile.ml, `Encoding.add_choice`). e2e.ml defined a selector only when a candidate SWAPPED a cake flag for it ([swap]'s `try_def`). The constant operand's row `_mx0 -> x0 <= 1` is implied without its selector (by [special], the `m >= v -> OR x_i >= v` sum), so `_mx0` was never defined, and the at-least-one `_mx0 + _mx1 >= 1` had no `rup` |
+| `e2e_solver_max_const_last_sat` (`[x2, 1]`) | `--e2e` | the same selector left undefined, then guessed by the at-least-one's candidate as a plain renaming `@D2`, while [define] made it the conjunction "flag AND no earlier flag" (T7), which writes no `@D2`: the label was cited unassigned, the `.pbp` did not parse |
+| `e2e_solver_alldiff_negconst_sat` (`all_different([x1,-1,4,x5])`) | `--e2e` | all_different's constant pairs get one `_neN` each. The pair (-1, x5)'s first row has degree 0 (`x5 > -1` always), which ANY candidate implies: the guess took the first one met, cake's flag of the pair (4, x5), and the next row of `_ne3` had no derivation. Not order dependent as reported: `[x, 4, -1, z]` fails too on a model of its own (`test/models/e2e_alldiff_posneg_const_sat`) |
+| `e2e_bridge_gcc_repeat_var_sat`, `e2e_bridge_gcc_empty_cover_repeat_var_sat` | bridged | the bridge recognised a gcc COPY only from int_eq's per-rung binary clauses, which baguette writes only for a ladder of one rung. Over three values or more the tie is two LINEAR rows (`sum Y_ge - sum X_ge >= 0` and its mirror): no alias, no `@Y1/@Y2`, and the copy's rungs were pinned against `@L[copy_ge_v]`, never written. The empty cover is the same defect (MiniZinc keeps the repeated variables) |
+| `e2e_bridge_max_negconst_sat`, `e2e_bridge_min_signed_sat` | bridged | the bridge's selector pre-pass (T8) takes the first flag under which ALL the selector's rows derive. A constant operand's flag is forced by cake (x[c][2] false when the constant is below every value of m), so defining operand 0's `_mx0` as it made `_mx0`'s own row trivially derivable: accepted, and then `_mx2`'s row and the clause had no derivation |
+
+One more, found by the fuzz stream run on the first fixes (seed 8101 model 50, `--e2e`, an UNSAT
+model): a gcc whose cover REPEATS a value with equal constant counts (`[0,3,3,1]`, `[0,0,0,1]`).
+D-0260 merges such a cover at the front end and adds no tie (the two counts are the same term), so
+`--e2e` is not refused; e2e.ml received the merged cover and labelled cake's rows `<j>_ge|le` by the
+merged positions, where cake, from the translator's unmerged `.scp`, labels them by the original
+ones. The count of 1 (merged position 2) was pinned against cake's row of the second 3 (original
+position 2). `test/models/e2e_gcc_dupcover_const_sat` is its shrunk form.
+
+Common cause of the first seven: in both writers a selector's cake flag was GUESSED from the first candidate that implied a row,
+and a constant operand makes rows that every candidate implies (or that need no selector at all). The rule of
+the fix is the same on both sides: where the order in which baguette mints the selectors is known, the k-th
+selector IS cake's k-th flag.
+
+### 2. The fixes
+
+`lib/proof/e2e.ml` (header section "Selectors by position (D-0262)"): [selector_flags] lists cake's flag for
+each selector compile.ml mints for a spec, in minting order: maxmin over bits, `x[N][i]` per operand
+(Maxmin.selector_rows, one per operand, operand order); int_max/int_min over bits, `b[N][lge|rge]`
+(`lle|rle`); all_different, `x[N][i_j]` per pair i < j that is not two distinct variables (compile.ml's
+`post_all_different`). [declare] records the k-th auxiliary of the constraint against the k-th flag, and
+[pin] defines it (through the existing [define], so a maxmin selector past operand 0 is still "flag AND no
+earlier one") before the first row that names it. The orientation is positive in every case: the aux of
+`Encoding.expand_int_lin_ne` is 1 iff sum > rhs, and cake's `x[N][i_j]` is 1 iff x_i > x_j (its `gt`/`lt`
+rows), the same difference; maxmin's selector picks operand i and cake's flag is x_i >= m (<= for min). The
+guess stays for the one-flag selectors (int_ne, int_lin_ne, the reifications), where only the orientation is
+unknown and both are tried. A selector past cake's flags is refused (`Not_covered`, "a selector ... past
+cake's flags"), never guessed.
+
+`tools/e2e/bridge.py` (untrusted, as before):
+- a COPY tied by the two linear rows over the same values is recognised, each rung defined by the same red
+  pair as before (`@Y1`, `@Y2`), the copy's rungs `@L` derived from the original's (`@Y1 + @L + @Y2`), and the
+  two tie rows pinned as the sums of the pairs;
+- CHOICE GROUPS BY POSITION: the selector clause names the group in order; its cake constraint is the
+  array_max/min (or binary max/min) whose choice rows, operand by operand, name the same variables as
+  baguette's selector rows (none for a constant result and a constant operand); each selector is defined as
+  its position's flag before the guessing pre-pass, which then skips it;
+- the selector pre-pass proposes flags from the selector's first row that is not TRUE outright (degree
+  <= 0 in literal form): any candidate implies such a row, and the first flag met was another
+  constraint's (seed 10100 model 54: int_lin_ne's `_ne0 := b[c4][lt]`, the flag of an int_eq_reif over
+  the same two variables);
+- T7's derivation by contradiction ([tight]) takes no candidate with a literal the row lacks: that
+  literal is free to satisfy the candidate, which the simulation does not see, and it claimed a close
+  unit propagation did not make (the same model, the reification's big-M row from int_lin_ne's
+  candidate). Both pre-existing on main, which failed one line earlier;
+- an objective over a FIXED variable (`min:` empty on both sides) is carried over, each `soli`'s improving
+  row unchanged (`pol @O[cK]`), where it was refused ("cake's objective is not one variable's bit sum");
+- (no rule for D-0260's ties: with the translator below, cake's own `equals` rows state them.)
+
+`tools/e2e/fzn2scp.py` (the TRUSTED translator, so stated with its argument): a gcc cover that repeats a
+value is written MERGED, as `Builder.merge_gcc_cover_repeats` writes it: the first occurrence kept, each
+later count tied to the first's by `(cN_tie<j> equals c_i c_j)`, nothing when the two are the same term.
+Equivalent, because both sides say the count is the number of x equal to that value (D-0260's own
+argument); the lane's validation (the `.scp`'s solutions, enumerated under cake's semantics, against
+Gecode's and CP-SAT's on the `.fzn`) checks it on the fifteen dupcover test models (fourteen of D-0255 and D-0260, and this one). The labels then agree
+and `e2e_gcc_dupcover_const_sat` verifies both ways. The root fix on the solver side would hand e2e.ml the
+cover positions from compile.ml's `e2e_spec`, a file agent-wide holds; it is not needed while the contract
+is the translator's `.scp`. A tie that is a row (`c_j - c_i = 0`, `c_j = k`) is still REFUSED under `--e2e`
+(D-0260's "a constraint no FlatZinc item states"); the bridged path VERIFIES all fifteen
+(it failed on eight on main), deriving the tie rows from cake's `equals` rows.
+
+`tools/e2e/fzn_solutions.py`: the validation's reference reads `baguette_global_cardinality` by its sentence
+(each count is the number of x equal to its value) instead of the reference solver's own
+`global_cardinality`. CP-SAT's admits NO solution when the cover repeats a value: on
+`gcc_low_up_closed_dupcover_src_sat` (`gcc([1,1], [1,1], [2,2])`) it counted 0 solutions where Gecode and
+cake's semantics count 1 (`x = [1, 1]`), and on `gcc_dupcover_closed_src_sat` 0 against 3. Both were DIFFER,
+two of the lane's failures on main. With the sentence both references count 1 and 3.
+
+No refusal was needed beyond D-0260's: every shape of the grid (section 3) now verifies on both paths.
+
+### 3. The builtins grid
+
+829 tiny models (`/scratch/arthur/e2efix-work/grid_gen.py`, flattened by MiniZinc 2.10.1 with mznlib), every
+builtin the chain covers: array_int_maximum/minimum over every operand list of length 1 to 3 drawn from three
+signed variables and the constants -1, 0, 1 (constants first, middle, last, a constant result after
+MiniZinc's presolve, a repeated operand, the result among the operands); int_max/int_min with constants;
+all_different with negative and positive constants anywhere, repeated variables, equal and distinct
+constants, one operand; int_ne/int_lin_ne/int_eq_reif/int_ne_reif/int_le_reif/int_lin_le_reif/int_lin_le/
+int_lin_eq at constants inside, outside and at the bounds of the domain, with a variable cancelling; int_abs;
+element over arrays with negative values and an index partly outside; global_cardinality over repeated
+variables, constants in x, empty and negative covers, constant and variable counts; inverse with a fixed
+entry and of size 1; member with constants and a repeat; regular with a constant letter; cumulative with a
+fixed start and a zero duration; disjunctive; the Boolean family with constants. Each through the chain both
+ways, default flags and `--bits-above 0` (3 316 runs), every proof checked, every VERIFIED answer compared
+with Gecode's.
+
+| | origin/main (`852e292b`) | this branch (`a610846e`) |
+|---|---|---|
+| bridged, default / bits 0 | 735 / 735 VERIFIED, 94 / 94 FAIL | 829 / 829 VERIFIED, 0 FAIL |
+| `--e2e`, default / bits 0 | 827 / 827 VERIFIED, 2 / 2 FAIL (`all_different([x,-1,4,z])`, `[x,4,-1,z]`) | 829 / 829 VERIFIED, 0 FAIL |
+| VERIFIED answer differing from Gecode | 0 | 0 |
+
+The 94 bridged failures on main: 89 maxmin with a constant operand or a constant result, 5 gcc over a
+repeated variable of three values or more.
+
+### 4. Was anything wrongly ACCEPTED
+
+Looked for, two ways. (a) Per row: on the nine new test models and 50 SAT models of the grid
+(maxmin, all_different, gcc, the disequalities, member, element, inverse), every one of baguette's rows in
+turn strengthened by one (degree + 1): in the `--e2e` proof at its pin (`ia`, `rup`, `pbc`), and in baguette's
+`.opb` handed to the bridge. Of 1 342 strengthened rows over 59 models, the `--e2e` proof refused 664 of 683 (654 at the pin itself, 10 inside a `pbc` pin's subproof) and accepted 19; the bridged chain refused 556 of 659 (2 in the prefix the bridge rebuilt from the changed row) and accepted 103. An accepted strengthened row is judged against the proof's own `sol`
+(the auxiliaries `sol` does not list taken existentially): accepted and FALSE there would be the alarm.
+None. (b) The lane's controls (41 bridged, 42 solver: stronger and weaker `.scp`, stronger `.opb` rows and
+pins, wrong definitions of selectors, atoms, copies, flags and bits, wrong optima before and after the
+elaborator) all refused where and as expected, before and after. Why none could be: every line of either
+prefix is checked by VeriPB against cake's `.opb`; a selector definition is a `red` over a FRESH variable,
+a conservative extension whatever flag it names, so a wrong definition costs a refusal later, never a wrong
+acceptance (the satisfiable controls `sel-witness`, `copy-witness` check that the checker does judge these
+lines, D-0053).
+
+### 5. Tests and lanes
+
+Twelve models in `test/models/` (each with a unique solution, so a change of the default search does not
+move their expected output; each fails on main on the path named in its header and verifies here):
+`e2e_max_const_first_sat`, `e2e_max_const_last_sat`, `e2e_alldiff_negconst_sat` (the three `--e2e`
+defects, shrunk), `e2e_gcc_copy_wide_sat`, `e2e_gcc_empty_cover_copy_sat`, `e2e_max_negconst_sat`,
+`e2e_min_signed_const_sat` (the four bridge defects), `e2e_alldiff_posneg_const_sat`, `e2e_max_const_result_sat`
+(the grid's), `e2e_gcc_dupcover_const_sat`, `e2e_obj_fixed_sat`, `e2e_linne_eqreif_bits_sat` (the fuzz stream's). The end-to-end checks are a LANE only: `make check` runs none, and `scripts/e2e_lane.sh` takes
+every `test/models/*.fzn`, so the twelve are in its chain and solver passes and in the model tests.
+
+| Check | origin/main `7c9f8371` (`852e292b`) | this branch (`a610846e`) |
+|---|---|---|
+| `scripts/e2e_lane.sh -j 4` | **FAIL**: chain 281 models, 242 VERIFIED, 31 SKIPPED, 8 FAIL (D-0260's dupcover models, bridged); solver 241 VERIFIED, 0 FAIL; controls 41/41, 42/42; validation 246 AGREE, 2 UNCHECKED, 2 DIFFER (CP-SAT's gcc) | **PASS**: chain 293 models, 262 VERIFIED, 31 SKIPPED, 0 FAIL; solver 253 VERIFIED, 0 FAIL, 0 disagreeing; controls 41/41, 42/42; validation 260 AGREE, 2 UNCHECKED (as on main), 0 DIFFER |
+| fuzz `e2e` stream, 2 000 models, `-j 8` | the 30 e2e failures of D-0258's run (its section 4) | seed 11 on the final code (`f507a93e`): 470 s, **0 disagreements**; `--e2e` 1 946 VERIFIED, 54 SKIPPED (outside its families or the translator's); bridged 1 967 VERIFIED, 33 SKIPPED. Earlier runs on intermediate commits found the four models of the fuzz stream above (seed 7: the fixed objective twice; seeds 8101 and 10100 on interrupted tries) |
+| `dune runtest --root . --force` | | 5 641 ok, 0 FAIL |
+| `scripts/run_model_tests.sh` | | 293 passed, 0 failed (peak RSS 15.7 MB on the 290-model run) |
+| `scripts/check_determinism.sh` | | 293 models identical |
+| `scripts/diff_lane.sh --tier all -j 8` | | 347 of 347 equal the reference |
+| `... --debug` | | 333 of 333 equal (the 14 others skipped by `bench/diff/debug-skip.tsv`, as on main) |
+| `scripts/check_fmt.sh`, `check_test_widths.py` | | clean |
+
+The binary is the same before and after every commit but the first two (the `e2e.ml` change); the plain
+`--proof` path does not reach e2e.ml, which the diff lanes and the model tests confirm.
+
+### 6. What is left
+
+- `--e2e` refuses D-0260's tie rows (a repeated cover value whose counts differ as terms); the bridged path
+  now derives them. Deriving them in e2e.ml too needs compile.ml's `e2e_spec` to say which constraint a tie
+  belongs to (`c_id = ""` today), a file agent-wide holds.
+- The bridge's "cake's objective is not one variable's bit sum" (D-0258 section 4, reported FAIL): every case the
+  fuzz stream met was an objective over a FIXED variable, both `min:` lines empty; it is now carried over
+  (each `soli`'s improving row unchanged, `test/models/e2e_obj_fixed_sat`). An objective the bridge does not
+  cover otherwise is still FAIL, not SKIPPED.
+- The guess stays for one-flag selectors; the grid found no failure of it.
+
+### 7. Reverting
+
+`git revert` the branch's `M22-review-bugs:` commits (wave107-e2efix): e2e.ml's [selector_flags] and the
+position rule, bridge.py's five additions, fzn2scp.py's merged cover, fzn_solutions.py's gcc sentence, the twelve models and their
+expected outputs. The plain `--proof` path is unchanged (model tests, both diff lanes, determinism: section 5),
+so nothing outside the e2e lane moves.

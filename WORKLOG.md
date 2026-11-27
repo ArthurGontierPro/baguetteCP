@@ -19,7 +19,6 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M22-review-bugs (D-0262): e2e rejections and bridge defects of D-0258 section 4 | `lib/proof/e2e.ml`, `tools/e2e/bridge.py`, `tools/e2e/fzn_solutions.py`, `tools/e2e/fzn2scp.py`, `scripts/e2e_lane.sh` (minimal), e2e tests and models (`test/models/e2e_*`) | agent-e2efix | 2026-11-27 |
 
 ## Cross-session requests
 
@@ -481,11 +480,11 @@ section 1. Shares are inclusive, of the whole run.
   Its SAT twin `gcc_lu_dupcover_repeatvar_sat.fzn` is refused at line 202. Both fail on main `c9b1b70` and on `wave103-retbug`.
   A cover that repeats a value over an array that repeats a variable; found by the `configs` stream, seed 2802, model 122. Dispatched: agent-gccdup, D-0260.
 
-- **2026-11-27, agent-fuzz (D-0258 section 4), for whoever owns `lib/proof/e2e.ml`: `--e2e` proofs refused against cake's `.opb`, plain `--proof` VERIFIES.**
+- **CLOSED 2026-11-27 by agent-e2efix (D-0262, `wave107-e2efix`).** **2026-11-27, agent-fuzz (D-0258 section 4), for whoever owns `lib/proof/e2e.ml`: `--e2e` proofs refused against cake's `.opb`, plain `--proof` VERIFIES.**
   `bench/fuzz/found/e2e_solver_max_const_first_sat.fzn` (`array_int_maximum(x0, [1, x2])`, `x2` in -1..1: "Checking error" line 48),
   `e2e_solver_max_const_last_sat.fzn` (`[x2, 1]`: the `.pbp` does not parse), `e2e_solver_alldiff_negconst_sat.fzn`
   (`all_different_int([x1,-1,4,x5])`, line 90; `[x1,4,-1,x5]` verifies). Run: `E2E_SOLVER=1 CAKE_PB_CP=... tools/e2e/chain.sh MODEL.fzn OUT`.
-- **2026-11-27, agent-fuzz (D-0258 section 4), for whoever owns `tools/e2e/bridge.py`: the BRIDGED path fails where `--e2e` verifies.**
+- **CLOSED 2026-11-27 by agent-e2efix (D-0262, `wave107-e2efix`).** **2026-11-27, agent-fuzz (D-0258 section 4), for whoever owns `tools/e2e/bridge.py`: the BRIDGED path fails where `--e2e` verifies.**
   A gcc over an array that repeats a variable (20 of 30 e2e failures): the bridge cites `@L[X_INTRODUCED_gcc_copy_0_ge_k]`, never assigned
   (`bench/fuzz/found/e2e_bridge_gcc_repeat_var_sat.fzn`, `e2e_bridge_gcc_empty_cover_repeat_var_sat.fzn`); `maximum`/`minimum` with a fixed negative or
   signed member (`e2e_bridge_max_negconst_sat.fzn`, `e2e_bridge_min_signed_sat.fzn`, "Checking error"). Also: an objective the bridge does not cover
@@ -494,6 +493,7 @@ section 1. Shares are inclusive, of the whole run.
   `bench/fuzz/found/wide_alldiff_memcap.fzn` (`all_different` over widths 2^21 and 2^24: `Fatal error: allocation failure` after 47 s, not exit 5, the heap
   budget being off by default) and `wide_times_timelimit_overrun.fzn` (`int_times` over the same: no output at 100 s under `--time-limit 10`). In the
   `wide` stream 109 of 2 000 models met the cap and 264 overran the limit by 20 s or more. No wrong answer.
+- **2026-11-27, agent-e2efix (D-0262 section 6), for whoever owns `lib/flatzinc/compile.ml`:** `e2e_spec` refuses D-0260's gcc ties (`c_id = ""`, "a constraint no FlatZinc item states"), so `--e2e` SKIPS a repeated cover whose counts differ as terms (9 of the 15 dupcover test models in the e2e lane). Since D-0262 the translator writes the same tie as `(cN_tie<j> equals c_i c_j)`, so a tie could be passed as `E.Lin_eq` under that name (`cN_tie<j>`, j the later ORIGINAL cover position) and pinned like any int_lin_eq. Not urgent: the bridged path verifies them.
 
 ## Completed
 
@@ -751,8 +751,21 @@ section 1. Shares are inclusive, of the whole run.
 | M18-coverage-T5 (the ordering globals) | agent-lex (`wave85-lex`) | 2026-11-27 | **D-0239 [AUTONOME].** mznlib only: `lex_lesseq`/`lex_less`, int and Bool, as four linear rows per position over std's chain flag; 26 -> 27 complete of 92 with proof, nodes/s x1.02 to 1.04; precedence globals keep std's (T13 added); `increasing` already native. |
 | M18-coverage-T14 (gcc with variable counts) | agent-gccvar (`wave93-gccvar`) | 2026-11-27 | **D-0247 [AUTONOME].** mznlib only in the kept route: a `global_cardinality` whose counts are not all fixed goes to std's count decomposition (`4c5df61`), constant counts and the closed form stay native; +3 verified complete with proof over the 40 Challenge instances it reaches, none lost. Route (a), rule C over holes, built, verified and dropped (`d94f08f`, reverted `fa32d4b`). Not merged |
 | M22-review-bugs (gcc repeated cover, rejected proof on the default) | agent-gccdup (`wave105-gccdup`) | 2026-11-27 | **D-0260 [AUTONOME].** No answer was wrong (14 000 grid runs against a brute-force oracle and Gecode). Cause: gcc.ml's HIGH-row memo keyed on the cover VALUE, so rule (a) justified one count's pruning by another count's row (since `ecae5c7`, main `1e6363c` 2026-10-02). Fix `9b5ef85`: `Builder.merge_gcc_cover_repeats` keeps one occurrence per value and ties the later counts by `int_lin_eq` rows in the model; compile.ml refuses a repeated cover. Tests `628c91b`. Not merged. |
+| M22-review-bugs, the e2e defects of D-0258 section 4 (D-0262) | agent-e2efix (`wave107-e2efix`, not merged) | 2026-11-27 | **D-0262 [AUTONOME].** `--e2e` defines maxmin's and all_different's selectors by POSITION; bridge.py: wide gcc copies, choice groups by position; fzn2scp.py states a repeated gcc cover merged; fzn_solutions.py reads gcc by its sentence. Twelve e2e test models. e2e lane FAIL -> PASS |
 
 ## Handoff notes
+
+### 2026-11-27 (agent-e2efix, `wave107-e2efix`, D-0262): the end-to-end defects of D-0258 section 4, not merged
+
+All seven `bench/fuzz/found/e2e_*` models verify both ways. Cause of the three `--e2e` ones and two bridge ones: a
+selector's cake flag was GUESSED from the first candidate implying a row, and a constant operand makes rows any candidate
+implies; e2e.ml ([selector_flags]) and bridge.py now take the k-th selector as cake's k-th flag. The other bridge two: a gcc
+copy over three values or more is tied by linear rows, not clauses. The fuzz stream on the first fixes found one more (a
+repeated gcc cover with equal constant counts: labels shifted by D-0260's merge); the translator now states the merged
+cover too. No proof was ever wrongly accepted (1 342 strengthened rows, section 4). The e2e lane was FAIL on main (8
+bridged FAIL on D-0260's models, 2 validation DIFFER from CP-SAT's gcc on a repeated cover): now PASS. The fuzz e2e stream on the final code (seed 11, 2 000 models): 0 disagreements. Left:
+`--e2e` still refuses D-0260's tie rows (needs compile.ml's `e2e_spec`, agent-wide's); an uncovered objective in the
+bridge is still FAIL, not SKIPPED.
 
 ### 2026-11-27 (agent-gccdup, `wave105-gccdup`, D-0260): a repeated gcc cover value, rejected proof fixed at the front end, not merged
 
