@@ -50,6 +50,27 @@
    None of these caches outlives the call except [quiet], which is a hint about a bound
    vector and not about the store, so nothing here needs the trail.
 
+   THE COST PER CALL, SECOND PASS (M20-pernode-T4, D-0242). Four more, under the same
+   contract (every pruning, its order, its reason and its derivation unchanged; the
+   artefacts are byte-identical):
+
+     - [hall_free] decides by counting, over two term permutations kept sorted across
+       calls ([sort_by]), whether a stage 1 scan would move nothing, and [pass] skips the
+       scan when it would not: a scan acts exactly on an over-full interval or a tight one
+       holding an outside bound, and both are counts (BAGUETTE_DEBUG runs the scan behind
+       every skip; test_prop's lane (h) checks both directions). [pass_scan] enumerates
+       its intervals over the same permutations;
+     - [regin_scratch] skips a tight set that no outside term meets, by a count, and
+       marks the scope's values rather than sorting their lists;
+     - the derivations a tight set or interval justifies share its at-least-one lines,
+       and the removals from one [y] its at-most-one lines ([alo_lines], [amo_lines]),
+       under D-0216's rule that a node is handed back only when building it again would
+       return it.
+
+   [by_lo]/[by_hi] outlive the call, and they are permutations re-sorted from the live
+   bounds at every pass, so they need no trail either. The memos live in a derivation's
+   thunk, and a thunk reads no store (I-X6).
+
    ---------------------------------------------------------------------------
    Filtering: Hall intervals
    ---------------------------------------------------------------------------
