@@ -807,9 +807,10 @@ let emit_to_page ?(stop = fun () -> false) (ctx : Justify.ctx) t store =
              entry whose claim is a bits atom but whose justification is a [Clause] -- a
              global unit from `soli` (D-0130 section 9), whose bridge is already on the
              page -- keeps its `rup`. *)
-          let derived =
-            if bits_arm ctx.Justify.encoding ~claim_owner:name all_facts then
-              match Explanation.force (Store.explanation store e) with
+          let bits = bits_arm ctx.Justify.encoding ~claim_owner:name all_facts in
+          let derived_of why =
+            if bits then
+              match Explanation.force why with
               | forced when Justify.is_bits_derivation forced ->
                   let origin =
                     Printf.sprintf "bits trace: %s from %d fact(s)" name
@@ -821,8 +822,20 @@ let emit_to_page ?(stop = fun () -> false) (ctx : Justify.ctx) t store =
               | _ -> None
             else None
           in
+          (* A bulk entry (D-0268, [Store.remove_interior]) has one derivation per hole,
+             and each hole's line is decided against its own, as each merged entry's line
+             was against its entry's; every other entry has one derivation for its lines. *)
+          let per_hole = Option.is_some e.Store.per_value in
+          let derived =
+            if per_hole then None else derived_of (Store.explanation store e)
+          in
           List.iter
             (fun { claim; settled_over; hole } ->
+              let derived =
+                match hole with
+                | Some v when per_hole -> derived_of (Store.removal_explanation store e v)
+                | _ -> derived
+              in
               let facts, cited =
                 settle_facts t store ~before:i ~var:e.Store.var settled_over facts
               in

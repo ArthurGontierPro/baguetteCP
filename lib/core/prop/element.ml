@@ -267,6 +267,22 @@
    the ones the eager code read; the proof bytes are the same on every test model
    (D-0214 section 2).
 
+   ONE STORE CHANGE FOR A RESULT'S GAP (D-0268, M18-coverage-T9). The interior half of
+   rule 2 removes every unsupported interior value of the result in ONE store change,
+   [View.remove_interior] (store.ml's bulk rule), where it made one change per value. The
+   values share a reason already (a pass reads the index's bounds and holes once,
+   D-0155) and keep one derivation each, [hole_expl], built when asked and memoised per
+   value. Each per-value derivation reads the frame taken before the change plus a
+   [pending] record saying which of the change's values come before it, so it reads
+   exactly what a per-value removal's own frame read: the values of the same pass below
+   it as holes, each with its own derivation (see [frame]). The trace writes one line
+   per value in ascending order with the shared facts, as before, so the proof is the
+   same bytes (D-0268 measures it); what goes is one trail entry, one frame, one
+   [Later] reason and one closure per value: 15.4 million entries of 657 bytes at the
+   root of liner-sf fm3_11 (D-0265). A result that IS the index (one variable on both
+   sides) keeps one change per value, since a removal there moves the index the next
+   value's frame reads.
+
    COST (the file-by-file review of the propagators, M16-file-review-T2, D-0190; and
    D-0214). A pass is O(n_decl + w_res). A pruning costs two domain reads and one
    history record; the O(n_decl) walk of the dead positions, and the hole facts, are
@@ -537,7 +553,9 @@ let idx_excl_above t p ~bhi =
        domain then. [dr] is the result BASE's domain, read through [View.lo_in] and its
        twins; for a constant result it is never read;
      - which trail entry REMOVED a value ([remover_at]), its ARENA explanation
-       ([explanation_at]) and whether a trail position is at the ROOT ([at_root_at]);
+       ([removal_explanation_at], the entry's derivation of that value: its arena
+       explanation, or one value's of a bulk entry, D-0268) and whether a trail position
+       is at the ROOT ([at_root_at]);
      - which entry SUPPORTS a bound ([Store.lo_support_at]/[hi_support_at]).
 
    The last three are answered from [h], the trail cut at the pruning ([Store.history],
@@ -550,10 +568,24 @@ let idx_excl_above t p ~bhi =
    cut. So a reason or a derivation rebuilt from the frame is the one the eager code built,
    value for value; the bytes do not move (D-0214 section 2).
 
-   The three readers ([Store.remover_at], [Store.explanation_at], [Store.at_root_at])
+   The three readers ([Store.remover_at], [Store.removal_explanation_at], [Store.at_root_at])
    live in store.ml's history section (moved there by M21-memory-T3, D-0222, as D-0214
    had asked); each is one call on a position below the cut, and none can read past it. *)
-type frame = { h : Store.history; di : Domain.t; dr : Domain.t }
+type frame = { h : Store.history; di : Domain.t; dr : Domain.t; pend : pending option }
+
+(* THE VALUES OF ONE BULK REMOVAL THAT COME BEFORE [p_upto] (D-0268). The interior rule
+   removes its result's unsupported values as ONE store change ([Store.remove_interior])
+   where it used to make one per value, ascending. Each per-value derivation used to read
+   a frame taken just before its own removal, so it saw the values of the same pass
+   below it as holes already, each with its own remover; a dead position carrying such
+   a value is then excluded by [excl_hole] citing that value's derivation, where a value
+   above it is still in the result. A per-value derivation of the bulk reads the frame
+   taken before the bulk, plus this record: [w] counts as a hole iff [p_in w] (it is one
+   of the bulk's values) and [w < p_upto] (it came before), and its remover's derivation
+   is [p_expl w], the bulk's own, memoised. So [res_mem] and [hole_line] below answer
+   exactly what the per-value frame answered, and the derivation is the same tree, value
+   for value. Values are the VIEW's, as [res_mem]'s argument is. *)
+and pending = { p_upto : int; p_in : int -> bool; p_expl : int -> Explanation.t }
 
 let frame t store =
   let di = Store.get store t.ibase in
@@ -561,14 +593,18 @@ let frame t store =
     h = Store.history store;
     di;
     dr = (match View.base_var t.res with Some rv -> Store.get store rv | None -> di);
+    pend = None;
   }
 
+let pending_gone fr w =
+  match fr.pend with Some p -> w < p.p_upto && p.p_in w | None -> false
+
 let remover_at = Store.remover_at
-let explanation_at = Store.explanation_at
+let removal_explanation_at = Store.removal_explanation_at
 let at_root_at = Store.at_root_at
 let res_lo t fr = View.lo_in fr.dr t.res
 let res_hi t fr = View.hi_in fr.dr t.res
-let res_mem t fr w = View.mem_in fr.dr t.res w
+let res_mem t fr w = View.mem_in fr.dr t.res w && not (pending_gone fr w)
 
 (* The trail entry that punched [bp] out of the index, or [None]. [Store.remover]
    answers from the variable's own entry history by binary search (D-0088), and it is
@@ -594,9 +630,20 @@ let index_hole_puncher t fr bp = remover_at fr.h ~var:t.ibase bp
    established [lo(c) <= w <= hi(c)], and a bound move that removed [w] would have left
    [w] outside the current bounds, since bounds only tighten. *)
 let hole_line t fr w =
-  match View.base_var t.res with
-  | None -> None
-  | Some rv -> Option.map (explanation_at fr.h) (remover_at fr.h ~var:rv w)
+  match fr.pend with
+  | Some p when w < p.p_upto && p.p_in w -> Some (p.p_expl w)
+  | _ -> (
+      match View.base_var t.res with
+      | None -> None
+      | Some rv ->
+          let bw =
+            match t.res with
+            | View.Affine { map; _ } -> Lit.unapply map w
+            | View.Const _ -> w
+          in
+          Option.map
+            (fun e -> removal_explanation_at fr.h e bw)
+            (remover_at fr.h ~var:rv bw))
 
 (* An interior INDEX hole that this propagator did not punch, as the clause a summand
    may cite (D-0084, built by M7-T21).
@@ -1057,6 +1104,10 @@ exception Found of Store.conflict
 
 let live_positions t store = List.filter (fun p -> View.mem store t.pos p) t.decl_pos
 
+(* The result's base variable is the index's (one variable on both sides). *)
+let shares_index t =
+  match View.base_var t.res with Some rv -> Var.equal rv t.ibase | None -> false
+
 (* WHAT AN EMPTY-INDEX CONFLICT READ, per dead position, arm by arm (D-0101, M7-T25).
 
    This is [pos_gone]'s case split replayed to say which FACTS each arm's line rests on,
@@ -1373,7 +1424,7 @@ let filter_result t store =
      the index's two bounds whatever they are. Each pruning checks its OWN history, the
      one its entry sits on, which is above the first one's. *)
   let facts = ref None in
-  let justified fr ~concludes expl =
+  let reason_of fr =
     let shared =
       match !facts with
       | Some l -> l
@@ -1382,11 +1433,18 @@ let filter_result t store =
           facts := Some l;
           l
     in
-    Reason.because_later ~concludes ~empty:false
-      (fun () ->
-        Store.check_history fr.h;
-        Lazy.force shared)
-      (Explanation.deferred (fun () -> expl))
+    Reason.Later
+      {
+        compute =
+          (fun () ->
+            Store.check_history fr.h;
+            Lazy.force shared);
+        empty = false;
+      }
+  in
+  let justified fr ~concludes expl =
+    let reason = reason_of fr in
+    { Reason.reason; justification = Explanation.deferred (fun () -> expl); concludes }
   in
   (if a > View.lo store t.res then
      let h = View.hi store t.res in
@@ -1423,12 +1481,16 @@ let filter_result t store =
      pushes above. *)
   (match t.rname with
   | None -> ()
-  | Some _ ->
+  | Some _ -> (
       let d = View.domain store t.res in
       let carried = int_set vals in
-      List.iter
-        (fun v ->
-          if Domain.mem d v && not (Int_tbl.mem carried v) then
+      let lo = Domain.lo d and hi = Domain.hi d in
+      let unsupported v = Domain.mem d v && not (Int_tbl.mem carried v) in
+      if shares_index t then
+        (* The result IS the index (one variable on both sides): a removal moves the index
+           too, so each value's frame must be its own, and the values go one at a time. *)
+        for v = lo + 1 to hi - 1 do
+          if unsupported v then
             let fr = frame t store in
             let expl = hole_expl t fr ~live ~alive ~v in
             match View.remove store t.res v (justified fr ~concludes:None expl) with
@@ -1437,8 +1499,54 @@ let filter_result t store =
             | Store.Changed ->
                 Propagator.count_deduction ();
                 moved := true
-            | Store.Unchanged -> ())
-        (range (Domain.lo d + 1) (Domain.hi d - 1)));
+            | Store.Unchanged -> ()
+        done
+      else
+        (* ONE store change for every unsupported interior value (D-0268): the values
+           ascending, one reason (the pass's shared facts, which every per-value removal
+           carried already), and a derivation per value, built when asked from the frame
+           taken now plus the [pending] record (see [frame]). *)
+        let buf = ref (Array.make 16 0) and n = ref 0 in
+        for v = lo + 1 to hi - 1 do
+          if unsupported v then (
+            if !n = Array.length !buf then (
+              let bigger = Array.make (2 * !n) 0 in
+              Array.blit !buf 0 bigger 0 !n;
+              buf := bigger);
+            !buf.(!n) <- v;
+            incr n)
+        done;
+        if !n > 0 then
+          let vs = if !n = Array.length !buf then !buf else Array.sub !buf 0 !n in
+          let fr = frame t store in
+          let p_in w = w > lo && w < hi && unsupported w in
+          let memo = ref None in
+          let rec expl_of v =
+            let tbl =
+              match !memo with
+              | Some tb -> tb
+              | None ->
+                  let tb = Int_tbl.create 16 in
+                  memo := Some tb;
+                  tb
+            in
+            match Int_tbl.find_opt tbl v with
+            | Some e -> e
+            | None ->
+                let fv = { fr with pend = Some { p_upto = v; p_in; p_expl = expl_of } } in
+                let inner = hole_expl t fv ~live ~alive ~v in
+                let e = Explanation.deferred (fun () -> inner) in
+                Int_tbl.replace tbl v e;
+                e
+          in
+          match View.remove_interior store t.res vs (reason_of fr) ~justify:expl_of with
+          | Store.Conflict _ -> assert false (* an interior removal leaves both bounds *)
+          | Store.Changed ->
+              for _ = 1 to !n do
+                Propagator.count_deduction ()
+              done;
+              moved := true
+          | Store.Unchanged -> ()));
   !moved
 
 let pass t store =
