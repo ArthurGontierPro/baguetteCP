@@ -524,6 +524,12 @@ let usage () =
   prerr_endline
     "                    (M6-T9, a measurement knob; Search.no_pb). Default on.";
   prerr_endline
+    "  BAGUETTE_ALLDIFF_ROWS=pairs|amo  the .opb rows of an all_different: one clause";
+  prerr_endline
+    "                    per pair and shared value (pairs), or one at-most-one row per";
+  prerr_endline
+    "                    shared value (amo, D-0271; not under --e2e). Default pairs.";
+  prerr_endline
     "  BAGUETTE_NODE_LIMIT=N  stop as --time-limit does, past N search nodes (M6-T9):";
   prerr_endline
     "                    the deterministic stop, for byte-comparing two builds.";
@@ -1306,6 +1312,21 @@ let pb_analysis () =
            "baguette: BAGUETTE_PB_ANALYSIS=%S is not a setting. Use on or off." v);
       exit 2
 
+(* BAGUETTE_ALLDIFF_ROWS=pairs|amo, which .opb rows state an all_different (M18-coverage-T9,
+   D-0271): one clause per pair of variables and shared value (`pairs`, the default and
+   every byte as before), or one at-most-one row per shared value (`amo`, a proof change
+   and an OPTION of PROOF-FORMAT section 3; refused under --e2e). Read once, here, into
+   [Encoding.alldiff_rows] before the compile. *)
+let alldiff_rows () =
+  match Sys.getenv_opt "BAGUETTE_ALLDIFF_ROWS" with
+  | None | Some "pairs" -> Encoding.Pairs
+  | Some "amo" -> Encoding.Amo
+  | Some v ->
+      prerr_endline
+        (Printf.sprintf
+           "baguette: BAGUETTE_ALLDIFF_ROWS=%S is not a setting. Use pairs or amo." v);
+      exit 2
+
 (* BAGUETTE_NODE_LIMIT=N stops the search exactly as --time-limit does, at the first
    node entry past N nodes (M6-T9). A time stop lands on a different node on every run,
    so two binaries cannot be compared byte for byte under it; a node stop lands on the
@@ -2005,6 +2026,7 @@ let solve opts (m : Model.t) =
         at_exit (fun () ->
             if Sys.file_exists pre then try Sys.remove pre with Sys_error _ -> ()))
   | None -> Encoding.row_sink := Encoding.Discard_rows);
+  Encoding.alldiff_rows := alldiff_rows ();
   let compiled = Timing.phase "compile" (fun () -> Compile.compile m) in
   let store = compiled.Compile.store in
   let encoding = compiled.Compile.encoding in

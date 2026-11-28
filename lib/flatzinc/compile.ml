@@ -1323,8 +1323,26 @@ let compile (m : Model.t) : t =
         List.iter
           (Encoding.request_direct ~where:(fun () -> Pos.to_string pos) encoding)
           names;
-        let rows = Encoding.add_all_different encoding names in
-        let p = Alldiff.make store encoding ~rows (List.map Var.of_int vars_in_scope) in
+        (* D-0271: the .opb rows are one per pair and shared value ([Pairs], the
+           default) or one per shared value ([Amo], BAGUETTE_ALLDIFF_ROWS=amo). The
+           option has no `--e2e` derivation: cake_pb_cp states all_different by pairs,
+           and a per-value row is not one `rup` from them. *)
+        let p =
+          match !Encoding.alldiff_rows with
+          | Encoding.Pairs ->
+              let rows = Encoding.add_all_different encoding names in
+              Alldiff.make store encoding ~rows (List.map Var.of_int vars_in_scope)
+          | Encoding.Amo ->
+              if Encoding.e2e_on encoding then
+                raise
+                  (Baguette_proof.E2e.Not_covered
+                     "all_different under BAGUETTE_ALLDIFF_ROWS=amo (D-0271): the \
+                      per-value rows have no derivation from cake_pb_cp's pairwise \
+                      statement");
+              let value_amo = Encoding.add_all_different_amo encoding names in
+              Alldiff.make ~value_amo store encoding ~rows:[]
+                (List.map Var.of_int vars_in_scope)
+        in
         [
           (fun id ->
             Propagator.pack ~id (module Alldiff : Propagator.S with type t = Alldiff.t) p);

@@ -195,6 +195,22 @@
    model row gets, since a `pol` cites a derived line exactly as it cites a model row.
 
    ---------------------------------------------------------------------------
+   The OPTION: rows per VALUE (BAGUETTE_ALLDIFF_ROWS=amo, D-0271)
+   ---------------------------------------------------------------------------
+
+   The pairwise table is n (n - 1) / 2 rows per shared value (297 M on whirlpool d29), and
+   its ids were the heap of the refused alldiff instances (D-0265). Under the option the
+   .opb holds one row per value instead ([Encoding.add_all_different_amo]) and
+   [Encoding.start_proof] derives from each the direct at-most-one over EVERY variable
+   whose declared domain holds the value. THE ONE RULE that changes here, in [amo]: the
+   at-most-one over a set comes from that line, either narrowed by one literal axiom per
+   variable outside the set or by the usual induction on pairs where a pair is a `rup`
+   clause against it, whichever is shorter by count ([narrow_by_axioms], [pair]); [rows]
+   and [lemmas] are empty. Everything else (the at-least-one lines, the cancellations, every [Combine]
+   around [amo]) is the same code, so the counting is the same and only the at-most-one
+   summands change. The default ([value_amo] = [None]) is every byte as before.
+
+   ---------------------------------------------------------------------------
    A conflict carries its facts under a decision
    ---------------------------------------------------------------------------
 
@@ -381,6 +397,10 @@ type t = {
      does not exist until [Encoding.start_proof] has written the lemma. Empty for every
      all_different the model posts. *)
   lemmas : (string * string * int, Encoding.lemma) Hashtbl.t;
+  (* D-0271, BAGUETTE_ALLDIFF_ROWS=amo: the scope's rows are one per VALUE
+     ([Encoding.add_all_different_amo]) and [amo] narrows the per-value line instead of
+     building on pairs; [rows] and [lemmas] are then empty. [None] by default. *)
+  value_amo : Encoding.amo_family option;
   (* D-0216: the at-most-one nodes [amo] built, kept to be handed back when building them
      again would return them ([reuse]). Buckets of entries, allocated at the first use
      with a proof; [amo_count] entries. *)
@@ -475,8 +495,8 @@ let make_gate terms =
    one: see the module header on I-X6. Reads each variable's domain, so it must be
    called before anything has narrowed it -- the same requirement, for the same D-0010
    reason, that [Linear.make] and [Ne.make] state. *)
-let make ?(cutoff = default_cutoff) ?(lemma_rows = []) ?(gate = true) ?(quiet = true)
-    store enc ~rows vars =
+let make ?(cutoff = default_cutoff) ?(lemma_rows = []) ?value_amo ?(gate = true)
+    ?(quiet = true) store enc ~rows vars =
   let tbl = Hashtbl.create (2 * List.length rows) in
   List.iter
     (fun ((x, z, v), cid) ->
@@ -518,6 +538,7 @@ let make ?(cutoff = default_cutoff) ?(lemma_rows = []) ?(gate = true) ?(quiet = 
     cutoff;
     rows = tbl;
     lemmas;
+    value_amo;
     amo_memo = [||];
     amo_count = 0;
     canon;
@@ -810,30 +831,111 @@ let reuse t ~prev ~a ~u v build =
         t.amo_count <- t.amo_count + 1;
         node)
 
+(* D-0271, under BAGUETTE_ALLDIFF_ROWS=amo: the same line, from the per-value one.
+
+   [Encoding.start_proof] has derived, for each value v two or more of the scope hold,
+   D_v = sum_{x in P_v} ~x_eq_v >= K_v - 1 over EVERY variable P_v whose declared domain
+   holds v. Two routes from D_v to the at-most-one over [ss] (a subset of P_v by
+   [core_summands]' filter, its names distinct: compile.ml posts the DISTINCT variables):
+
+     NARROW  D_v plus the literal axiom x_eq_v >= 0 for each x of P_v outside [ss]: each
+             turns that x's term into the constant 1 and lowers the degree by one, which
+             leaves sum_{x in ss} ~x_eq_v >= |ss| - 1. One `pol`, K_v - |ss| axioms.
+     PAIRS   [amo]'s induction on pairs, unchanged, where a pair is the CLAUSE
+             ~x_eq_v \/ ~z_eq_v, a `rup` against D_v alone: with x_eq_v and z_eq_v
+             assumed, D_v's other K_v - 2 terms cannot reach K_v - 1. Two literals a pair
+             where [pair_amo] cites five ids; |ss| (|ss| - 1) / 2 pairs.
+
+   THE RULE, for |ss| = m (the Hall variables holding v, then the pruned variable when
+   it holds v): NARROW the whole set when K_v - m <= m - 1, no more axioms than the one
+   step that adds the last variable costs in pairs; otherwise the induction, whose BASE,
+   the prefix of m - 1, is NARROWED when K_v - (m - 1) <= (m - 1) (m - 2) / 2 and built
+   from pairs when not. The prefix is the same for every variable one Hall set prunes, so
+   its node is hash-consed and its line written once, and each pruning pays m - 1
+   two-literal `rup` pairs. A Hall set over most of a small scope (costas, tppv,
+   elitserien) narrows whole; the commonest pruning of a wide scope, a variable fixed at
+   v taking v from another (m = 2, K_v up to 900 on whirlpool), is ONE two-literal `rup`
+   instead of K_v - 2 axioms (D-0271 section 7 measures the routes).
+
+   D-0061 kept [Explanation.Clause] out of this counting because, then, a root conflict
+   resting on a clause was routed to the empty clause and the `pol`s around it went
+   unchecked; that routing is gone since D-0131, and here the clause is a lemma CITED by
+   the `pol` of the induction, so the checker judges both. The default ([pairs]) has no
+   clause in its counting, as before. *)
+let holders t v =
+  Array.fold_left
+    (fun k tm -> if tm.decl_lo <= v && v <= tm.decl_hi then k + 1 else k)
+    0 t.terms
+
+let narrow_by_axioms t fam ss v =
+  let id =
+    cid_of "the per-value at-most-one (D-0271)" (Encoding.value_amo_id t.enc fam v)
+  in
+  let inside = Hashtbl.create 8 in
+  List.iter (fun s -> Hashtbl.replace inside s.s_name ()) ss;
+  let outside =
+    Array.fold_right
+      (fun tm acc ->
+        if tm.decl_lo <= v && v <= tm.decl_hi && not (Hashtbl.mem inside tm.name) then
+          (1, Lit.eq tm.name v) :: acc
+        else acc)
+      t.terms []
+  in
+  match outside with
+  | [] -> model_row id
+  | _ -> Explanation.combine [ cite id; Explanation.weaken outside ] 1
+
+(* The pair the induction adds: [pair_amo]'s five-id `pol` by default, the `rup` clause
+   against D_v under the option (see above). *)
+let pair t sx sz v =
+  match t.value_amo with
+  | None -> pair_amo t sx sz v
+  | Some _ ->
+      Explanation.clause
+        [ Lit.negate (Lit.eq sx.s_name v); Lit.negate (Lit.eq sz.s_name v) ]
+
 let amo t ss v =
   match ss with
   | [] | [ _ ] -> invalid_arg "Alldiff.amo: at least two variables"
-  | first :: second :: rest ->
-      let id s = Var.to_int s.s_var in
-      (* [rhave] is the variables covered so far, last first; [m] their number. *)
-      let rec grow acc rhave m = function
-        | [] -> acc
-        | u :: more ->
-            let step =
-              reuse t ~prev:acc ~a:(-1) ~u:(id u) v (fun () ->
-                  Explanation.combine
-                    (Explanation.term (m - 1) acc
-                    :: List.rev_map (fun s -> Explanation.term 1 (pair_amo t u s v)) rhave
-                    )
-                    m)
-            in
-            grow step (u :: rhave) (m + 1) more
+  | first :: second :: rest -> (
+      let induction () =
+        let id s = Var.to_int s.s_var in
+        (* [rhave] is the variables covered so far, last first; [m] their number. *)
+        let rec grow acc rhave m = function
+          | [] -> acc
+          | u :: more ->
+              let step =
+                reuse t ~prev:acc ~a:(-1) ~u:(id u) v (fun () ->
+                    Explanation.combine
+                      (Explanation.term (m - 1) acc
+                      :: List.rev_map (fun s -> Explanation.term 1 (pair t u s v)) rhave)
+                      m)
+              in
+              grow step (u :: rhave) (m + 1) more
+        in
+        let base =
+          reuse t ~prev:no_prev ~a:(id first) ~u:(id second) v (fun () ->
+              pair t first second v)
+        in
+        grow base [ second; first ] 2 rest
       in
-      let base =
-        reuse t ~prev:no_prev ~a:(id first) ~u:(id second) v (fun () ->
-            pair_amo t first second v)
-      in
-      grow base [ second; first ] 2 rest
+      match t.value_amo with
+      | None -> induction ()
+      | Some fam ->
+          let m = List.length ss and k = holders t v in
+          let narrow_pays p = k - p <= p * (p - 1) / 2 in
+          if k - m <= m - 1 then narrow_by_axioms t fam ss v
+          else if m >= 3 && narrow_pays (m - 1) then
+            (* The prefix (the Hall variables holding v) narrowed, the same node for
+               every pruning of this Hall set, so its line is written once; the last
+               variable joins by one induction step of m - 1 `rup` pairs. *)
+            let prefix = List.filteri (fun i _ -> i < m - 1) ss
+            and last = List.nth ss (m - 1) in
+            Explanation.combine
+              (Explanation.term (m - 2) (narrow_by_axioms t fam prefix v)
+              :: List.map (fun s -> Explanation.term 1 (pair t last s v)) prefix)
+              (m - 1)
+          else induction ())
 
 (* "x cannot take v", for a v outside x's CURRENT window but inside its declared one,
    as a globally valid line carrying the bound it rests on as a literal:
