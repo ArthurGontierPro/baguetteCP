@@ -34666,3 +34666,136 @@ Each piece is its own commit: `4ebf1f43` (the lookup), `62610481` (the deadline)
 reservation, default-changing), `d4e41fb3` and `f457d9bc` (tests, label rename), `2d8827a4` (SPEC and
 module maps), `cff2e916` (cost), `9e6489bc` (backstop, maximum). Reverting `22510357` with `9e6489bc`'s
 maxmin hunk restores the default exactly.
+
+## D-0264  [AUTONOME] M22-review-bugs: the two Challenge proofs "not reproducible run to run" (D-0252's identity check) were runs CUT BY AN ASYNCHRONOUS STOP, `timeout 900`'s SIGTERM on vrp and the 8 GB heap budget on connect, never the 2 000-node limit. Every vrp variant verifies, and the connect checks, which take many hours, are still running. Under the node limit the proof is the same bytes under seven runtimes, on 347 lane runs and on 91 of 100 tuning instances (the other 9 never reach 2 000 nodes in 300 s). No solver code changed. The determinism check now covers four real instances under two GC settings and refuses a comparison cut by a clock, a signal or the heap budget
+
+Context. agent-compare's identity check (D-0252, `/cluster/arthur/baguette-results/compare/ident.txt`,
+`ident2.txt`, `tools/ident.sh`) ran 20 held-out instances with proof at `BAGUETTE_NODE_LIMIT=2000` under
+`timeout 900 ... --max-heap-mb 8192`, and found the `.pbp` different on every run of
+`2021_vrp-submission_toy_D_2v_4l_w_reload` and `2021_MZNC_connect_connect__0018` (same binary twice
+included) while stdout, the counters and the `.opb` agreed. Reproduced on origin/main `fa9e7fc4` (dev binary
+md5 `a610846e`, release `d1d52185`). Runs, tools and hashes: `/cluster/arthur/baguette-results/nondet/`
+(README there).
+
+### 1. The mechanism
+
+Neither run reached the node limit, and their `limit:` lines say so, on agent-compare's runs as on mine:
+
+    vrp      limit: reached time-limit=none ... nodes=1628 ... at=trace fired=900.00s signal=TERM    (rc 124)
+    connect  limit: killed signal=heap-budget phase=search ... nodes=91                           (rc 5)
+
+The vrp run reaches node 1 628 in under 120 s and then spends the rest in ONE trace: its bounds walk
+`X_INTRODUCED_81_` (declared 0..460588, a bits variable) down two or three values per step, each step a `red`
+atom pair, a `pol`, an `ia` (about 9 300 values per 60 MB of proof, so hours to the end). `timeout 900` stops
+it inside that trace. connect's propagation explodes between nodes 81 and 91 (45 535 propagations at node 81,
+7.2 M at node 91) and its heap passes 8 GB. Both stops are asynchronous: SIGTERM is polled between two trail
+entries of a trace (`at=trace`), and the heap budget fires at a GC cycle end or from the SIGVTALRM poll
+(`Encoding.install_heap_guard`, D-0200). The proof is then ended where it stands (`Writer.conclude_interrupted`,
+M6-T24, D-0225). Two vrp proofs of one pair are byte-identical for 974 975 lines (127.8 MB); there one wrote
+its end sweep and `conclusion BOUNDS 0 115` and the other went on for 31 900 lines of the same trace. The
+counters agree because the cut falls inside one node; the deferred-reason, `pol` and atom counts differ
+because they count the work done before the cut. The request's hypotheses (a) to (d) (the collector, a clock
+read on the proof side, an address in a hash, a reused buffer) are refuted by the runs below: under a node
+limit nothing moves.
+
+agent-compare's 20 instances: 17 reached the node limit (identical); vrp and connect were cut and differed;
+`2020_cable_tree_wiring_A073` was also cut by the heap budget (node 929, both runs) and happened to cut at the
+same byte. My `connect` pair at `--max-heap-mb 2048` did the same (identical proofs, different `props=`
+counters: the cut fell in propagation, between two writes). A cut CAN coincide; nothing makes it.
+
+### 2. Validity, and the proof under a deterministic stop
+
+| Runs (release unless said) | Stop | `.pbp` across the runs | veripb |
+|---|---|---|---|
+| vrp 2 000 nodes, `timeout 900`: dev x2, release x2, release with ASLR off x2 | SIGTERM | 6 different | 6 VERIFIED (`BOUNDS 0 <= obj <= 115`) |
+| vrp 2 000 nodes, `timeout 120` x2 | SIGTERM | 2 different | 2 VERIFIED |
+| vrp 2 000 nodes, no timeout, stopped by hand at 729 s x2 | SIGTERM | 2 different | 2 VERIFIED |
+| connect 2 000 nodes, `--max-heap-mb 8192` x2 (dev, deleted unchecked) | heap budget | 2 different | not run |
+| connect 2 000 nodes, `--max-heap-mb 8192` x2, kept | heap budget | 2 different (577.6 / 578.5 MB) | running (section 2) |
+| connect 2 000 nodes, `--max-heap-mb 2048` x2 | heap budget | identical (`2977dc7b`) | running (section 2) |
+| vrp 1 600 nodes, default + budget armed / `OCAMLRUNPARAM=s=64k,o=60` | node limit | identical (`115bb19b`) | VERIFIED (`BOUNDS 0 <= obj <= INF`) |
+| connect 80 nodes x2 | node limit | identical (`449f8150`, 221 MB) | running (section 2) |
+| vrp 300 nodes, seven runtimes | node limit | identical (`ba4503a1`) | (same bytes) |
+| connect 80 nodes, seven runtimes | node limit | identical (`449f8150`) | (same bytes) |
+
+The seven runtimes: default, `--max-heap-mb 8192` (the budget armed and not reached, so its alarm and timer
+run), `OCAMLRUNPARAM=s=32k`, `s=16M,o=400`, `o=20`, ASLR off (`setarch -R`), and `ulimit -v 4000000` (which
+changes the minor heap bin/main.ml picks). vrp at 2 000 nodes cannot end by the node limit in an hour (the
+trace above), so 1 600 nodes is its largest budget below the exploding node.
+
+The connect proofs are slow to check: past their first 58 MB, veripb reads about 4 KB a second through a region of
+182 000 order-bridge `rup` lines (about 50 lines a second, measured from its file offset), so after 75 minutes
+it had read a third of the 221 MB node-limit proof. Those four checks (`B.con80.a1`, `C.conheap2048.a1`,
+`G.conheap8192.a1`, `G.conheap8192.a2`) were restarted with a 48 h cap and their verdicts land in
+`/scratch/arthur/nondet/r/<name>.veripb` (PIDs in `/cluster/arthur/baguette-results/nondet/veripb-running.txt`).
+The two heap-cut proofs share their first 577 568 389 bytes, then each writes the same kind of ending (its
+end sweep, then `conclusion BOUNDS 0 INF`), so they stand or fall together on the shared part.
+
+So: (1) all 10 vrp cut variants and the vrp node-limit proof verify, none was refused, and the connect checks have
+refused nothing so far. There is no soundness alarm on what was checked. (2) The
+variation is the documented behaviour of a stop by a clock, a signal or memory pressure, which cuts the run
+where it finds it, as `--time-limit` always has (bin/main.ml's `node_limit` comment, M6-T9: "a time stop lands
+on a different node on every run"). The request's premise that the two instances "run in a few hundred MB"
+does not hold for connect, which reaches 8 GB at node 91. vrp does run in about 1 GB and was cut by the clock.
+With no pressure and no clock, nothing varies.
+
+### 3. How common
+
+- The diff-lane corpus: `scripts/diff_lane.sh --tier all` twice, each run against the recorded hashes: plain,
+  347 of 347 equal; under `OCAMLRUNPARAM=s=16k,o=40`, 347 of 347 equal. So 0 of 347 vary, across two runtimes.
+- The tuning set, the first 100 instances of `bench/tuning/set.lst` (series-20261123 flats on fataepyc-06) at
+  2 000 nodes with proof: run a plain with a 300 s cap, run b under `OCAMLRUNPARAM=s=64k,o=60` when a ended
+  deterministically. 91 ended by the node limit (89) or on their own (2), and all 91 are byte-identical across
+  the two runtimes. 9 were cut by the clock before 2 000 nodes (5 inside a trace, 3 at a node entry, 1 killed in
+  propagation with a 9.3 GB proof; three of them at 600 s, the cap of a first pass) and are not comparable,
+  by the rule of section 4.
+
+### 4. The fix, and its rule
+
+No proof byte changed, because the solver was not wrong: the comparison read runs that `timeout` and the heap
+budget had cut as runs that had reached the node limit. The rule is written where an interrupted proof is
+ended, in the comment of `Writer.conclude_interrupted`: the `.pbp` is a function of the binary, the input and
+the options for a run that ends on its own or at BAGUETTE_NODE_LIMIT. A run ended by `--time-limit`,
+SIGTERM/SIGINT/SIGXCPU or the heap budget is a valid proof cut at a point that moves from run to run, and its
+`limit:` line says which (`fired=`, `signal=`, `killed signal=heap-budget`). A harness that compares proofs
+first checks that the line says `fired=none signal=none`.
+
+Considered and refused, for the solver itself: landing the heap-budget stop on a node boundary. The cut point
+would be coarser but still not reproducible, since the node at which the heap passes its budget depends on
+the collector, and the run would allocate past its budget for a whole node, which the budget exists to
+prevent (D-0200: 2017 groupsplitter grew its heap from 4.4 to 9.9 GB inside one root propagation). A SIGTERM from `timeout` is a wall clock, and no
+change inside the solver makes it reproducible.
+
+### 5. The extended check
+
+`scripts/check_determinism.sh` (`make check`) now also solves four instances of the diff lane's corpus, read
+from `bench/diff/corpus/` and never written: parity-learning 48_24_6.2 at 1 000 nodes (clause path, PB rows),
+rcpsp_12 at 1 000 (cumulative), soccer xIGData_24_16_14_2 at 800 (alldiff), cyclic-rcpsp easy_6 at 300 with
+`--bits-above 0` (the bits arm, atoms minted on demand). Each twice, under `OCAMLRUNPARAM=s=16k,o=40` and
+`s=256k,o=400`, and the `.opb`, `.pbp` and stdout must agree. The caller's BAGUETTE_* settings are unset for
+these runs, as in the lane. Each run must end by the node limit or on its own: a `limit:` line without
+`fired=none signal=none` makes the comparison VOID, which fails the check. The self-test now also feeds the
+guard the three asynchronous `limit:` lines and the node-limit line as the binary writes them, and requires it
+to refuse the first three and accept the last; a guard changed to accept everything was watched failing it.
+The whole check takes 18 s on fataepyc-06, about 10 s of it the new part. Not larger GC settings: the runtime
+reserves the minor heap for 128 domains, so `s=8M` asks 8 GB of address space and the gate's 4 GB cap refuses
+it ("Not enough heap memory to reserve minor heaps", measured on the first attempt).
+
+Why there and not in the diff lane: the lane compares each run to a recorded reference under one runtime, so a
+GC-dependent proof would show there as a DIFF that someone might re-record, whereas the determinism check is
+self-relative, needs no reference and runs in `make check`. The lane's options are held by agent-free this
+wave as well.
+
+### 6. Verification, what is left, and how to revert
+
+Branch `wave109-nondet`, dev binary `b81c5f51`: `check_fmt.sh` clean, `check_test_widths.py` clean,
+`dune runtest --root . --force` 5 641 ok, 0 FAIL; `run_model_tests.sh` 293 passed, 0 failed;
+`check_determinism.sh` self-test and check green (293 models, 4 real instances); `diff_lane.sh --tier all` 347 of 347 (and 347 of 347 again under `OCAMLRUNPARAM=s=16k,o=40`); `--debug` 333 of 333;
+`scaling_lane.sh` ok, every line within its threshold.
+
+Left for others: agent-compare's `ident.sh` should require `fired=none signal=none` on each P run (WORKLOG
+cross-session request). Two performance facts this found, not proof defects: vrp's trace at node 1 628 walks a
+460 588-wide bits variable two or three values a step (hours of proof for one conflict), and connect's
+propagation grows 160-fold between nodes 81 and 91 to an 8 GB heap.
+
+Reverting is `git revert f524cdb0` (the check and the comment). The solver is untouched.
