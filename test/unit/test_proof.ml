@@ -4236,8 +4236,12 @@ let test_bits_atoms_veripb () =
             ignore (line : Writer.cid);
             Writer.set_level w 0;
             let st = Encoding.atom_stats e in
-            check "M8-T2 atoms: the counters see one atom, one bridge, one bound pair"
-              (st.Encoding.a_atoms = 1 && st.Encoding.a_bridges = 1
+            (* D-0270: [a_bridges] counts bridge LINES since bridges are minted per half,
+               so the pair [ensure_atom] wrote for y is 2. *)
+            check
+              "M8-T2 atoms: the counters see one atom, one bridge pair (two lines), one \
+               bound pair"
+              (st.Encoding.a_atoms = 1 && st.Encoding.a_bridges = 2
              && st.Encoding.a_bound_lines = 1 && st.Encoding.a_links = 0);
             Writer.delete_many w (Writer.live_ids w);
             Writer.conclusion w Writer.No_conclusion)

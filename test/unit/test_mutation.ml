@@ -2084,6 +2084,13 @@ let ladder_mixed_src =
 
 let ladder_line = "rup +1 ~k_ge_11 +1 ~m_ge_8 +1 ~x2_ge_3 >= 1 ;"
 
+(* The bridge half B1'(x2, 3) the same model mints at its SECOND citation (D-0270), and
+   the wording of the `ia` that refuses a pin its hint does not imply. *)
+let ladder_bridge = "rup +1 x2_ge_2 +1 x2_ge_3 +1 x2_ge_4 +2 ~x2_ge_3 >= 2 ;"
+
+let ia_wording =
+  "Expected constraint is not syntactically implied by the constraint at the hint."
+
 (* b1's death across the holes, and x2 <> 3 from y's hole under b2. Pinned verbatim. *)
 let member_chase_line = "rup +1 ~b1_ge_1 +1 ~y_ge_2 +1 ~w2_ge_3 +1 ~w3_ge_5 >= 1 ;"
 
@@ -3284,6 +3291,58 @@ solve :: seq_search([int_search([b, y], input_order, indomain_min, complete), in
             (List.rev (";" :: "+" :: row :: "+" :: "*" :: "2" :: a :: rest))
       | _ -> l
     in
+    (* The BRIDGE half (D-0270): B1'(x2, 3), minted at its second citation, and the pol
+       that then cites it, pinned by `ia`. Its atom literal flipped, or its degree lowered
+       by one, leaves a line the checker takes on its own (x2 >= 3 holds at the root, and
+       a weaker line is still RUP) -- what must refuse is the LATER `ia` whose pol adds it,
+       at the `ia` wording: the half is load-bearing for the line that cites it. Its
+       degree raised is refused at the half itself (bridge-rhs, the script's lane). *)
+    let bat = ref (-1) and pin_at = ref (-1) in
+    Array.iteri
+      (fun i l ->
+        if !bat < 0 && contains l ladder_bridge then bat := i
+        else if !bat >= 0 && !pin_at < 0 then
+          match (words lines.(!bat), words l) with
+          | lab :: _, _ :: "pol" :: ops when List.mem lab ops -> pin_at := i + 1
+          | _ -> ())
+      lines;
+    check
+      (Printf.sprintf
+         "ladder-mixed: the proof holds the bridge half `%s` and a pol citing it"
+         ladder_bridge)
+      (!bat >= 0 && !pin_at > 0);
+    let bridge_pinned c name rewrite =
+      let lane = Printf.sprintf "%s/%s-pinned" c.c_tag name in
+      ran c (name ^ "-pinned");
+      if !bat < 0 || !pin_at < 0 then fail "%s: no bridge half, nothing tested" lane
+      else
+        let lines' = Array.copy lines in
+        lines'.(!bat) <- rewrite lines.(!bat);
+        let pbp = b.pbp ^ "." ^ name ^ ".pbp" in
+        let oc = open_out pbp in
+        output_string oc (String.concat "\n" (Array.to_list lines'));
+        close_out oc;
+        let v, out = check_proof { b with pbp } in
+        let here = Printf.sprintf "%s:%d\n" pbp (!pin_at + 1) in
+        check
+          (Printf.sprintf
+             "%s: the half itself accepted, refused LATER at the ia that cites it (line \
+              %d), at the ia wording"
+             lane (!pin_at + 1))
+          (v = Rejected_on_derivation && contains out here && contains out ia_wording);
+        if not (v = Rejected_on_derivation && contains out here) then show out
+    in
+    let flip_atom l =
+      String.concat " "
+        (List.map (fun w -> if w = "~x2_ge_3" then "x2_ge_3" else w) (words l))
+    in
+    let rhs_down l =
+      match List.rev (words l) with
+      | ";" :: k :: rest ->
+          String.concat " "
+            (List.rev (";" :: string_of_int (int_of_string k - 1) :: rest))
+      | _ -> l
+    in
     gated ~tag:"ladder-mixed"
       ~control:(fun () -> control_holds ~tag:"ladder-mixed" ~proof:b.pbp)
       ~declares:
@@ -3294,6 +3353,11 @@ solve :: seq_search([int_search([b, y], input_order, indomain_min, complete), in
           "ladder-rhs";
           "ladder-pol-row-pinned";
           "ladder-pol-mult-pinned";
+          "bridge-flip";
+          "bridge-rhs";
+          "bridge-rhs-down";
+          "bridge-flip-pinned";
+          "bridge-rhs-down-pinned";
         ]
       (fun c ->
         mutation_lane c ~nth ~proof:b.pbp ~expect:`Rejects "ladder-pol-row";
@@ -3301,7 +3365,12 @@ solve :: seq_search([int_search([b, y], input_order, indomain_min, complete), in
         mutation_lane c ~nth ~proof:b.pbp ~expect:`Rejects "ladder-flip";
         mutation_lane c ~nth ~proof:b.pbp ~expect:`Rejects "ladder-rhs";
         pinned c "ladder-pol-row" drop_row;
-        pinned c "ladder-pol-mult" twice_before_row);
+        pinned c "ladder-pol-mult" twice_before_row;
+        mutation_lane c ~proof:b.pbp ~expect:`Rejects "bridge-flip";
+        mutation_lane c ~proof:b.pbp ~expect:`Rejects "bridge-rhs";
+        mutation_lane c ~proof:b.pbp ~expect:`Rejects "bridge-rhs-down";
+        bridge_pinned c "bridge-flip" flip_atom;
+        bridge_pinned c "bridge-rhs-down" rhs_down);
 
     census ~dir;
 

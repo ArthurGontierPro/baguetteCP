@@ -434,23 +434,36 @@ rup +1 ~y_ge_(l+1) ... +1 ~y_ge_u +K y_ge_v >= K ;      at least k rungs -> y_ge
 ```
 
 and, at its declared bound, the degree-0 lines `rup Σ y_ge_w >= 0` / `rup Σ ~y_ge_w >= 0`,
-also once -- 93 % of a liner-sf proof (D-0270 section 1). **Since D-0270 no such line is
-written** for an order variable wider than a Boolean. A derivation whose row holds one
-cites nothing for it: its rungs stay in the `pol`, which cites only the bits terms (their
-atom lines, `@lb`/`@ub`), a bits claim's atom line MULTIPLIED by the divisor in place of a
-division, and the row(s) last; no division, no saturation. The clause is then pinned
+also once -- 93 % of a liner-sf proof, half of the halves never cited (D-0270 section 1).
+**Since D-0270** a derivation whose row holds an order variable wider than a Boolean
+cites no bound line for it and its rungs stay in the `pol`, which cites the bits terms
+(their atom lines, `@lb`/`@ub`), a bits claim's atom line MULTIPLIED by the divisor in
+place of a division, and the row(s) last; no division, no saturation. An order FACT (or a
+wide order claim) cites ONE bridge half, the line above that it needs (`B1'` for
+`y >= v`, `B2'` for `y <= v - 1`), and only from its SECOND citation on: the first
+citation of a half writes nothing for it, the second writes the half once, at level 0,
+memoised (`Encoding.order_bridge`). The clause is then pinned
 
-- by **`rup`** when a wide order term carries a FACT or is the claim: the negated clause
-  sets the fact's literal, the ladder fixes the rungs it decides, the rungs left free
-  reach at most what the bridge replaced them by, so the `pol`'s constraint is violated;
-- by **`ia`** when every wide order term is at its declared bound: its rungs are free under
-  the negated clause, and `ia`'s weakening reads them at their maximum, as the bound line
-  did (measured on 3.0.2: `ia` accepts a hint carrying literals the clause does not hold).
+- by **`ia`** when every wide order literal cited its half: the terms at their declared
+  bounds are free under the negated clause and `ia`'s weakening reads them at their
+  maximum, as the bound line did (measured on 3.0.2: `ia` accepts a hint carrying
+  literals the clause does not hold);
+- by **`rup`** when one did not (a first citation): the negated clause sets that literal,
+  the ladder fixes the rungs it decides, the rungs left free reach at most what the
+  bridge replaced them by, so the `pol`'s constraint is violated.
+
+test/models/ladder_mixed_sat.fzn (`k + m + x2 <= 21`, k and m on bits, x2 on the order
+encoding with `x2 >= 3` at the root), verbatim:
 
 ```
-@P  pol @B_fact 2 * @B_claim 3 * + @row + ;        the bits terms only, the row last
-@T  rup +1 ~k_ge_11 +1 ~m_ge_8 +1 ~x2_ge_3 >= 1 ;  x2 an order fact: walked by the ladder
-    del id @P ;
+@c89 pol @c74 @c83 + @c12 + ;                                 m's atom, k's atom, the row
+@c90 rup +1 ~k_ge_11 +1 ~m_ge_8 +1 ~x2_ge_3 >= 1 ;            x2 >= 3 cited the first time
+del id @c89 ;
+...
+@c97 rup +1 x2_ge_2 +1 x2_ge_3 +1 x2_ge_4 +2 ~x2_ge_3 >= 2 ;  B1'(x2, 3), its second citation
+@c98 pol @c60 @c97 + @c91 + @c12 + ;
+@c99 ia +1 ~m_ge_15 +1 ~k_ge_4 +1 ~x2_ge_3 >= 1 : @c98 ;
+del id @c98 ;
 ```
 
 Dropping the division is what makes this exact: one constraint violated after `ceil(·/d)`

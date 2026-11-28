@@ -8,10 +8,12 @@
 % claim), k + m + x2 <= 21 (bits facts and x2, at its root bound x2 >= 3, a wide order
 % fact), m >= 3*x3 + 5 (a bits fact pushes an ORDER claim). Deciding x1 = 4 fails
 % through the rows, so the trace is written under a decision over a satisfiable model.
-% The root line `~k_ge_11 \/ ~m_ge_8 \/ ~x2_ge_3` is not RUP without its pol (two bits
-% sums in one row do not propagate), and test_mutation.ml's ladder lanes corrupt that
-% pol (its row dropped, its atom line counted twice) and assert veripb refuses the rup
-% after it, and corrupt the rup itself (claim flipped, degree raised).
+% The root line `~k_ge_11 \/ ~m_ge_8 \/ ~x2_ge_3` is the first citation of x2 >= 3: not
+% RUP without its pol (two bits sums in one row do not propagate), and test_mutation.ml's
+% ladder lanes corrupt that pol (its row dropped, its atom line counted twice) and assert
+% veripb refuses the rup after it, and corrupt the rup itself. The second citation mints
+% the bridge half B1'(x2, 3); its bridge lanes flip its atom or shift its degree, and the
+% `ia` that cites it is refused.
 var 0..30: k :: output_var;
 var 0..30: m :: output_var;
 var 1..4: x1 :: output_var;

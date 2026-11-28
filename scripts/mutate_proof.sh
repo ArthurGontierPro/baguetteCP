@@ -106,6 +106,15 @@ ladder-pol-mult the same pol, the multiplier of the operand before the row (a bi
 ladder-flip    the same triple's `rup`, its first literal (the claim) flipped: a false
                clause, refused at that line.
 ladder-rhs     the same `rup`, its right-hand side raised by one: refused at that line.
+bridge-flip    on the NTH order BRIDGE line (D-0270: a `rup` over one order variable's
+               whole ladder plus `+k ~V_ge_v` or `+K V_ge_v` with a coefficient above 1,
+               minted at its second citation), flip that atom's literal. Over a model
+               whose root decides the atom the flipped line can still be true, so the
+               line itself may be accepted: the lane holds when a LATER line that cites
+               it (an `ia` whose pol adds it) is refused.
+bridge-rhs     that bridge's degree raised by one: a false claim, refused at the line.
+bridge-rhs-down that bridge's degree lowered by one: a weaker line, accepted itself; the
+               later line that cites it must be refused.
 drop-line      delete one emitted derivation step entirely -- `pol`, `rup`, `red` or a
                solution rule, by default the last one. Never a level marker or a `del`:
                failing to delete is not an error (PROOF-FORMAT section 5), so a lane
@@ -550,6 +559,33 @@ case "${MUT}" in
           print line
         }
       }' "${PROOF}" > "${MUTATED}"
+    ;;
+
+  bridge-flip|bridge-rhs|bridge-rhs-down)
+    # The NTH bridge line (D-0270): a labelled `rup` whose literals all name ONE variable
+    # V (`V_ge_N`), at least three terms, exactly one of them with a coefficient above 1
+    # (the atom). Rewritten in place, its label kept.
+    awk -v nth="${NTH}" -v mut="${MUT}" -v desc="${DESC}" "${AWK_PRELUDE}"'
+      function var_of(lit,   k) { sub(/^~/, "", lit); k = index(lit, "_ge_"); return k ? substr(lit, 1, k - 1) : "" }
+      !done && rulename() == "rup" && rulestart() == 2 {
+        n = 0; big = 0; v = ""; same = 1
+        for (i = 3; i < NF; i += 2) {
+          if ($i == ">=") { deg = i + 1; break }
+          n++
+          w = var_of($(i+1)); if (w == "") { same = 0; break }
+          if (v == "") v = w; else if (w != v) { same = 0; break }
+          if ($i + 0 > 1) { big++; at = i + 1 }
+        }
+        if (same && n >= 3 && big == 1 && ++seen == nth) {
+          before = $0
+          if (mut == "bridge-flip") { if ($at ~ /^~/) $at = substr($at, 2); else $at = "~" $at }
+          else if (mut == "bridge-rhs") $deg = $deg + 1
+          else $deg = $deg - 1
+          printf "line %d: %s on the bridge line of %s\n  before: %s\n   after: %s\n", NR, mut, v, before, $0 > desc
+          done = 1
+        }
+      }
+      { print }' "${PROOF}" > "${MUTATED}"
     ;;
 
   drop-line)
