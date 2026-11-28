@@ -190,12 +190,15 @@ type t = {
    the audit off reports "not measured" rather than a false violation. The level half is
    always measured: [Writer] keeps no per-id level table this module may read, but the
    levels are exactly the ones this module chose for the two lines itself. *)
-(* One line this module wrote, against the trail position it wrote it for. [w_hole] is
-   the removed run [(a, b)] a hole line claims -- [(v, v)] for one hole, a maximal gap
-   for a bulk entry's line since D-0269 -- and [None] for a bound line; [w_level] is the
-   level the line was filed at, which is the entry's level and not the writer's ambient
-   one. *)
-and written = { w_hole : (int * int) option; w_cid : Writer.cid; w_level : int }
+(* One line this module wrote, against the trail position it wrote it for. [w_hole] says
+   what a hole line claims removed: [Hole v] one value, [Gap (a, b)] a maximal run of a
+   bulk entry (D-0269), [No_hole] for a bound line. A variant rather than an option and a
+   second field, so a line allocates what it allocated before D-0269 (measured: one more
+   word per line cost evm a major collection and +0.34 % instructions per node). [w_level]
+   is the level the line was filed at, which is the entry's level and not the writer's
+   ambient one. *)
+and written = { w_hole : hole; w_cid : Writer.cid; w_level : int }
+and hole = No_hole | Hole of int | Gap of int * int
 
 and citation = {
   citing : Writer.cid;
@@ -421,7 +424,7 @@ let hole_clause encoding name v = gap_clause encoding name v v
    [None] for a bound line. It is not part of what gets written -- the claim clause
    already says it -- it is what lets [emit] record *which* of an entry's lines a later
    settle cites, so that I-S4's edges are per-hole rather than per-trail-entry. *)
-type line = { claim : Lit.t list; settled_over : int list; hole : (int * int) option }
+type line = { claim : Lit.t list; settled_over : int list; hole : hole }
 
 (* The holes of [old] in the contiguous run immediately below [bound], ascending. Every
    member of [old] below [bound] is below this run, so the bound the propagator asked
@@ -459,7 +462,8 @@ let lines ?(gaps = false) encoding (e : Store.entry) name =
     List.filter_map
       (fun (a, b) ->
         Option.map
-          (fun claim -> { claim; settled_over = []; hole = Some (a, b) })
+          (fun claim ->
+            { claim; settled_over = []; hole = (if a = b then Hole a else Gap (a, b)) })
           (gap_clause encoding name a b))
       (Domain.removed_runs ~old:e.Store.old ~now:e.Store.now)
   else
@@ -468,7 +472,7 @@ let lines ?(gaps = false) encoding (e : Store.entry) name =
     | Domain.Bound { lo; hi } ->
         let bound_line ~what ~cond ~settled_over =
           Option.map
-            (fun l -> { claim = [ l ]; settled_over; hole = None })
+            (fun l -> { claim = [ l ]; settled_over; hole = No_hole })
             (claim_of_cond ~what ~name cond)
         in
         let lo_line =
@@ -486,7 +490,7 @@ let lines ?(gaps = false) encoding (e : Store.entry) name =
         List.filter_map
           (fun v ->
             Option.map
-              (fun claim -> { claim; settled_over = []; hole = Some (v, v) })
+              (fun claim -> { claim; settled_over = []; hole = Hole v })
               (hole_clause encoding name v))
           vs
 
@@ -651,7 +655,11 @@ let hole_line_of t (e : Store.entry) v =
   | None -> None
   | Some i ->
       List.find_opt
-        (fun w -> match w.w_hole with Some (a, b) -> a <= v && v <= b | None -> false)
+        (fun w ->
+          match w.w_hole with
+          | Hole h -> h = v
+          | Gap (a, b) -> a <= v && v <= b
+          | No_hole -> false)
         t.line_ids.(i)
 
 (* The facts the settled-over holes contribute, and -- for I-S4 -- the ids of the lines
@@ -835,8 +843,8 @@ let emit_to_page ?(stop = fun () -> false) (ctx : Justify.ctx) t store =
          depends on the bits arm, which reads the reason: so its reason is read first and
          its value list is never built. Every other entry keeps "claims first". *)
       let bulk = Option.is_some e.Store.per_value in
-      match if bulk then None else Some (lines ctx.Justify.encoding e name) with
-      | Some [] -> ()
+      match if bulk then [] else lines ctx.Justify.encoding e name with
+      | [] when not bulk -> ()
       | pre ->
           (* One materialisation of the reason serves both the facts of the line and
              (M8-bits-encoding-T2) the scope the bits-arm decision reads. *)
@@ -844,9 +852,7 @@ let emit_to_page ?(stop = fun () -> false) (ctx : Justify.ctx) t store =
           let facts = Reason.lits_of_facts all_facts in
           let bits = bits_arm ctx.Justify.encoding ~claim_owner:name all_facts in
           let cs =
-            match pre with
-            | Some cs -> cs
-            | None -> lines ~gaps:(not bits) ctx.Justify.encoding e name
+            if bulk then lines ~gaps:(not bits) ctx.Justify.encoding e name else pre
           in
           let level = !lv in
           (* The level is set here rather than inside the loop below so that the
@@ -882,7 +888,7 @@ let emit_to_page ?(stop = fun () -> false) (ctx : Justify.ctx) t store =
             (fun { claim; settled_over; hole } ->
               let derived =
                 match hole with
-                | Some (v, _) when per_hole ->
+                | Hole v when per_hole ->
                     bits_derived ctx ~name ~facts e (Store.removal_explanation store e v)
                 | _ -> derived
               in

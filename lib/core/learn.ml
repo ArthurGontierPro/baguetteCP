@@ -599,14 +599,9 @@ let introduce ctx t : Writer.cid =
 (* ------------------------------------------------------------------ I-S4 *)
 
 (* One line on the page that the cut's derivation rests on: what it states, the id of the
-   line, and that line's level. [s_hole] is the removed run [(a, b)] of a hole line
-   ([(v, v)] for one hole, a bulk entry's gap since D-0269) and [None] for a bound line. *)
-type support = {
-  s_hole : (int * int) option;
-  s_var : string;
-  s_cid : Writer.cid;
-  s_level : int;
-}
+   line, and that line's level. [s_hole] is what a hole line claims removed (one value, or
+   since D-0269 a bulk entry's gap) and [No_hole] for a bound line. *)
+type support = { s_hole : Trace.hole; s_var : string; s_cid : Writer.cid; s_level : int }
 
 let support_of_written (w : Trace.written) ~var =
   {
@@ -687,9 +682,9 @@ let supports store trace (t : t) : support list =
 
 let describe s =
   match s.s_hole with
-  | Some (h, h') when h = h' -> Printf.sprintf "the hole %s <> %d" s.s_var h
-  | Some (a, b) -> Printf.sprintf "the gap %s not in %d..%d" s.s_var a b
-  | None -> Printf.sprintf "the bound line for %s" s.s_var
+  | Trace.Hole h -> Printf.sprintf "the hole %s <> %d" s.s_var h
+  | Trace.Gap (a, b) -> Printf.sprintf "the gap %s not in %d..%d" s.s_var a b
+  | Trace.No_hole -> Printf.sprintf "the bound line for %s" s.s_var
 
 (* The LIVE-AT-DERIVATION half of I-S4, as messages -- empty when it holds. See the
    header for why this half applies to a [rup] and the "outlives" half does not.
