@@ -2612,6 +2612,289 @@ let test_d0200_heap_budget_cli () =
         (Array.to_list (Sys.readdir dir));
       Sys.rmdir dir
 
+(* ===================================== D-0263: wide domains, the time limit, the memory ====
+
+   Three obligations, none of which may declare a wide domain (CLAUDE.md): the widths here
+   are at most 999, and a model that is refused allocates nothing.
+
+   (1) --time-limit before the search ([Deadline]). In-process, with [Deadline.every] set to
+       1 so that the first tick reads the clock, and a clock that always says "past":
+       the compile is stopped with [Deadline.Reached]; and a stop inside
+       [Encoding.start_proof], ended with [Writer.conclude_interrupted] as bin/main.ml
+       does, leaves a proof veripb accepts as NO CONCLUSION. Disarmed, nothing is raised.
+   (2) The estimate is a LOWER bound ([Encoding.reserve]): the live words a direct
+       encoding and a case split really cost, per value, measured here by the difference
+       of two widths after a full major collection, are at least the coefficients
+       reserved. A future representation cheaper than the coefficient fails this, and the
+       coefficient must come down with it, or the refusal could refuse a run that fits.
+   (3) The refusal, by the binary: exit 5, its wording, the variable and the position, and
+       no runtime abort; the same model without a budget is answered. *)
+
+let d0263_alldiff w =
+  Printf.sprintf
+    "var 0..%d: x :: output_var;\n\
+     var 0..%d: y :: output_var;\n\
+     constraint all_different_int([x, y]);\n\
+     solve satisfy;\n"
+    w w
+
+let d0263_times w =
+  Printf.sprintf
+    "var 0..%d: x :: output_var;\n\
+     var 0..%d: y :: output_var;\n\
+     constraint int_times(y, x, 0);\n\
+     solve satisfy;\n"
+    w w
+
+let d0263_max w =
+  Printf.sprintf
+    "var 0..%d: x :: output_var;\n\
+     var 0..%d: y :: output_var;\n\
+     var 0..%d: m :: output_var;\n\
+     constraint array_int_maximum(m, [x, y]);\n\
+     solve satisfy;\n"
+    w w w
+
+let d0263_with ~every f =
+  let saved = !Baguette_proof.Deadline.every in
+  Baguette_proof.Deadline.every := every;
+  Baguette_proof.Deadline.arm (fun () -> true);
+  Fun.protect
+    ~finally:(fun () ->
+      Baguette_proof.Deadline.disarm ();
+      Baguette_proof.Deadline.every := saved)
+    f
+
+let test_d0263_deadline () =
+  let module D = Baguette_proof.Deadline in
+  let raised f = match f () with _ -> false | exception D.Reached -> true in
+  check "D-0263: disarmed, a tick past [every] raises nothing"
+    (not (raised (fun () -> D.tick (2 * !D.every))));
+  check "D-0263: armed with a clock that says no, nothing either"
+    (let saved = !D.every in
+     D.every := 1;
+     D.arm (fun () -> false);
+     let r = raised (fun () -> D.tick 10) in
+     D.disarm ();
+     D.every := saved;
+     not r);
+  check "D-0263: armed and past, the compile is stopped (Deadline.Reached)"
+    (d0263_with ~every:1 (fun () ->
+         raised (fun () ->
+             Baguette_flatzinc.Compile.compile
+               (Baguette_flatzinc.Builder.of_string ~file:"d0263.fzn" (d0263_alldiff 3)))));
+  match veripb_path () with
+  | None ->
+      incr failures;
+      print_endline "FAIL D-0263: no veripb, so the ended proof was NOT checked"
+  | Some veripb ->
+      let dir = Filename.temp_file "baguette_d0263" "" in
+      Sys.remove dir;
+      Sys.mkdir dir 0o700;
+      let opb = Filename.concat dir "p.opb" and pbp = Filename.concat dir "p.pbp" in
+      let m = Baguette_flatzinc.Builder.of_string ~file:"d0263.fzn" (d0263_alldiff 3) in
+      let compiled = Baguette_flatzinc.Compile.compile m in
+      let enc = compiled.Baguette_flatzinc.Compile.encoding in
+      let oc = open_out opb in
+      Encoding.write_opb enc oc;
+      close_out oc;
+      let oc = open_out pbp in
+      let writer = Writer.create oc in
+      let stopped =
+        d0263_with ~every:1 (fun () ->
+            match Encoding.start_proof enc writer with
+            | () -> false
+            | exception D.Reached ->
+                Writer.conclude_interrupted writer;
+                true)
+      in
+      close_out oc;
+      check "D-0263: armed and past, start_proof is stopped" stopped;
+      let proof = read_file pbp in
+      check "D-0263: before every direct-encoding line (the first proof line ticks)"
+        (not (m6_says proof "red "));
+      check "D-0263: and the proof is ended, conclusion NONE"
+        (m6_says proof "conclusion NONE");
+      let rc, out = m6_veripb veripb dir opb pbp in
+      check "D-0263: veripb accepts it as NO CONCLUSION"
+        (rc = 0 && m6_says out "VERIFIED NO CONCLUSION");
+      if rc <> 0 then print_endline out;
+      List.iter
+        (fun f -> Sys.remove (Filename.concat dir f))
+        (Array.to_list (Sys.readdir dir));
+      Sys.rmdir dir
+
+(* The live words of what [build] returns, kept alive across the second collection. *)
+let d0263_live build =
+  Gc.full_major ();
+  let before = (Gc.stat ()).Gc.live_words in
+  let kept = build () in
+  Gc.full_major ();
+  let after = (Gc.stat ()).Gc.live_words in
+  ignore (Sys.opaque_identity kept);
+  after - before
+
+(* What bin/main.ml builds before the search, with the proof (rows streamed, a writer on
+   a file) or without (rows discarded, a null writer). *)
+let d0263_build ?(bits = Some 0) ~proof dir src () =
+  let saved_sink = !Encoding.row_sink and saved_bits = !Encoding.bits_above in
+  Encoding.row_sink :=
+    if proof then Encoding.Stream_rows_to (Filename.concat dir "p.opb.rows")
+    else Encoding.Discard_rows;
+  (* the binary's default, unless asked; this file runs at `none` (its header) *)
+  Encoding.bits_above := bits;
+  Fun.protect
+    ~finally:(fun () ->
+      Encoding.row_sink := saved_sink;
+      Encoding.bits_above := saved_bits)
+    (fun () ->
+      let m = Baguette_flatzinc.Builder.of_string ~file:"d0263.fzn" src in
+      let compiled = Baguette_flatzinc.Compile.compile m in
+      let enc = compiled.Baguette_flatzinc.Compile.encoding in
+      let oc = open_out (Filename.concat dir "p.opb") in
+      if proof then Encoding.write_opb enc oc;
+      close_out oc;
+      let oc = open_out (Filename.concat dir "p.pbp") in
+      let writer = Writer.create ~null:(not proof) oc in
+      if not proof then Explanation.set_hashcons false;
+      Encoding.start_proof enc writer;
+      (* bin/main.ml's [proofopen] ends with the justification context *)
+      let ctx = mk_ctx writer enc in
+      close_out oc;
+      Explanation.set_hashcons true;
+      (m, compiled, writer, ctx))
+
+let test_d0263_estimate_is_a_lower_bound () =
+  let dir = Filename.temp_file "baguette_d0263lb" "" in
+  Sys.remove dir;
+  Sys.mkdir dir 0o700;
+  let slope ?bits ~proof model ~units w1 w2 =
+    let a = d0263_live (d0263_build ?bits ~proof dir (model w1)) in
+    let b = d0263_live (d0263_build ?bits ~proof dir (model w2)) in
+    (b - a) / (units w2 - units w1)
+  in
+  let values w = 2 * (w + 1) and cases w = w + 1 in
+  List.iter
+    (fun (what, proof, model, units, coeff) ->
+      (* maximum's per-value shape needs an order-encoded scope *)
+      let bits = if model == d0263_max then None else Some 0 in
+      let s = slope ~bits ~proof model ~units 200 999 in
+      check
+        (Printf.sprintf
+           "D-0263: %s costs %d live words per unit, at least the %d reserved" what s
+           coeff)
+        (s >= coeff))
+    [
+      ( "a direct encoding, with the proof",
+        true,
+        d0263_alldiff,
+        values,
+        Encoding.words_per_direct_value ~proof:true );
+      ( "a direct encoding, --no-proof",
+        false,
+        d0263_alldiff,
+        values,
+        Encoding.words_per_direct_value ~proof:false );
+      ( "int_times' case split, with the proof",
+        true,
+        d0263_times,
+        cases,
+        Encoding.words_per_arith_case );
+      ( "int_times' case split, --no-proof",
+        false,
+        d0263_times,
+        cases,
+        Encoding.words_per_arith_case );
+      ( "maximum's per-value rows, with the proof",
+        true,
+        d0263_max,
+        cases,
+        Encoding.words_per_maxmin_value );
+      ( "maximum's per-value rows, --no-proof",
+        false,
+        d0263_max,
+        cases,
+        Encoding.words_per_maxmin_value );
+    ];
+  List.iter
+    (fun f -> Sys.remove (Filename.concat dir f))
+    (Array.to_list (Sys.readdir dir));
+  Sys.rmdir dir
+
+let test_d0263_will_not_fit () =
+  (* In-process, the direct encoding's reservation: refused at the request, before
+     [start_proof] materialises anything, against a budget of 0 MB set after the
+     declarations (a budget set before them is the reactive guard's to enforce). *)
+  let enc = Encoding.create () in
+  Encoding.declare_int enc "x" ~lo:0 ~hi:9;
+  let saved = !Encoding.heap_limit_mb in
+  Encoding.heap_limit_mb := Some 0;
+  let r =
+    Fun.protect
+      ~finally:(fun () -> Encoding.heap_limit_mb := saved)
+      (fun () ->
+        match Encoding.request_direct ~where:(fun () -> "d0263.fzn:3:12") enc "x" with
+        | () -> None
+        | exception Encoding.Will_not_fit f -> Some f)
+  in
+  check "D-0263: a direct encoding past the budget is refused at its request"
+    (match r with
+    | Some f ->
+        f.Encoding.f_what = "x" && f.Encoding.f_units = 10
+        && m6_says (Encoding.fit_message f) "`x` (d0263.fzn:3:12), declared over 0..9"
+        && m6_says (Encoding.fit_message f) "the --max-heap-mb budget of 0 MB"
+    | None -> false);
+  check "D-0263: and nothing was requested" (Encoding.direct_requested enc = []);
+  (* The binary: the case split, refused in the parse. *)
+  match m9_binary () with
+  | None ->
+      incr failures;
+      print_endline "FAIL D-0263: bin/main.exe was not found, the refusal was NOT run"
+  | Some binary ->
+      let binary =
+        if Filename.is_relative binary then Filename.concat (Sys.getcwd ()) binary
+        else binary
+      in
+      let dir = Filename.temp_file "baguette_d0263cli" "" in
+      Sys.remove dir;
+      Sys.mkdir dir 0o700;
+      let fzn = Filename.concat dir "times.fzn" in
+      let oc = open_out fzn in
+      output_string oc (d0263_times 999);
+      close_out oc;
+      let file f = Filename.concat dir f in
+      let run flags =
+        let rc =
+          Sys.command
+            (Printf.sprintf "timeout 120 %s %s %s > %s 2> %s" (Filename.quote binary)
+               (Filename.quote fzn) flags
+               (Filename.quote (file "out"))
+               (Filename.quote (file "err")))
+        in
+        (rc, read_file (file "out"), read_file (file "err"))
+      in
+      (* 1000 cases at 300 words: 2.3 MB reserved, past a budget of 1 MB. *)
+      let rc, o, e = run (Printf.sprintf "--proof %s --max-heap-mb 1" (file "p")) in
+      check (Printf.sprintf "D-0263: the binary refuses it, exit 5 (got %d)" rc) (rc = 5);
+      check "D-0263: with the refusal's wording, the variable and the position"
+        (m6_says e "cannot fit in the memory this run has"
+        && m6_says e "`x` (" && m6_says e "times.fzn:3:"
+        && m6_says e "the case split of an int_times"
+        && m6_says e "the --max-heap-mb budget of 1 MB");
+      check "D-0263: before the .opb, and with no runtime abort"
+        ((not (Sys.file_exists (file "p.opb")))
+        && (not (m6_says ("\n" ^ e) "\nFatal error"))
+        && not (m6_says o "=========="));
+      if rc <> 5 then Printf.printf "  stderr:\n%s" e;
+      let rc, o, _ = run "--no-proof" in
+      check
+        (Printf.sprintf "D-0263: without a budget the same model is answered (exit %d)" rc)
+        (rc = 0 && m6_says o "----------");
+      List.iter
+        (fun f -> Sys.remove (Filename.concat dir f))
+        (Array.to_list (Sys.readdir dir));
+      Sys.rmdir dir
+
 (* M11-complexity-T18 (D-0216): an all_different's Hall derivations are rebuilt per
    pruning, and on 2011_black-hole_10 under native `table` 156 removals under a 47-variable
    Hall set rebuilt 8.3 M pairwise at-most-one nodes at the root, nearly all of them
@@ -2852,6 +3135,9 @@ let () =
   test_d0216_amo_reuse ();
   test_d0242_alo_reuse ();
   test_m22t5_write_failure_cli ();
+  test_d0263_deadline ();
+  test_d0263_estimate_is_a_lower_bound ();
+  test_d0263_will_not_fit ();
   if !failures > 0 then (
     Printf.printf "\n%d failure(s)\n" !failures;
     exit 1)

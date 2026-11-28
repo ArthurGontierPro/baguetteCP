@@ -285,6 +285,13 @@ let make ?(shape = `Per_value) store ~dir (m : View.t) (xs : View.t list) : t =
   let shape =
     match shape with
     | `Per_value ->
+        (* D-0263: one clause and its explanation per threshold, held for the run; its
+           lower bound is reserved before the array exists ([Encoding.reserve]). *)
+        Baguette_proof.Encoding.reserve ~what:m.name
+          ~why:"the per-value rows of an array_int_maximum or minimum over it" ~blo:vlo
+          ~bhi:vhi
+          ~units:(Int.max 0 (vhi - vlo + 1))
+          ~per_unit:Baguette_proof.Encoding.words_per_maxmin_value ();
         Per_value
           (Array.init
              (Int.max 0 (vhi - vlo + 1))

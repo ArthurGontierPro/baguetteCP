@@ -34324,6 +34324,482 @@ Drop `tools/fuzz/streams.py`, `triage.py`, `shrink_mzn.py`, `bench/fuzz/found/`,
 `scripts/fuzz_lane.sh`, `bench/fuzz/README.md` and the `scripts/README.md` row from `c9b1b70`. The
 2026-11-23 streams keep their seeds (the stream index still counts them first).
 
+## D-0262  [AUTONOME] M22-review-bugs: the end-to-end defects the fuzz lane found (D-0258 section 4). `--e2e` now defines a selector by its POSITION in the constraint, never by guessing it from a candidate; `tools/e2e/bridge.py` recognises a gcc copy tied by linear rows and maps a choice group by position; the translator states a repeated gcc cover merged, as the front end does since D-0260. No proof was ever wrongly ACCEPTED; the plain `--proof` path is untouched
+
+Context. D-0258's `e2e` stream kept seven models in `bench/fuzz/found/` (three where baguette's own `--e2e`
+prefix is refused against cake_pb_cp's `.opb`, four where the bridged path is refused) and asked whoever owns
+`lib/proof/e2e.ml` and `tools/e2e/bridge.py` to fix them. Reproduced on origin/main `7c9f8371` (binary md5
+`852e292b`, cake_pb_cp `/cluster/arthur/baguette-results/wave55-e2e/cake_pb_cp-438b8f83`, sha256 `ca92491e`)
+with the stream's own command, `E2E_SOLVER=[1] CAKE_PB_CP=... tools/e2e/chain.sh MODEL OUT`: all seven fail as
+reported. The `e2e` lane on that commit was itself red (section 4), on D-0260's new models.
+
+### 1. The mechanisms
+
+| Model | Path | Mechanism |
+|---|---|---|
+| `e2e_solver_max_const_first_sat` (`maximum(x0, [1, x2])`) | `--e2e` | A maxmin over a bits variable gets one selector `_mxK` per operand (compile.ml, `Encoding.add_choice`). e2e.ml defined a selector only when a candidate SWAPPED a cake flag for it ([swap]'s `try_def`). The constant operand's row `_mx0 -> x0 <= 1` is implied without its selector (by [special], the `m >= v -> OR x_i >= v` sum), so `_mx0` was never defined, and the at-least-one `_mx0 + _mx1 >= 1` had no `rup` |
+| `e2e_solver_max_const_last_sat` (`[x2, 1]`) | `--e2e` | the same selector left undefined, then guessed by the at-least-one's candidate as a plain renaming `@D2`, while [define] made it the conjunction "flag AND no earlier flag" (T7), which writes no `@D2`: the label was cited unassigned, the `.pbp` did not parse |
+| `e2e_solver_alldiff_negconst_sat` (`all_different([x1,-1,4,x5])`) | `--e2e` | all_different's constant pairs get one `_neN` each. The pair (-1, x5)'s first row has degree 0 (`x5 > -1` always), which ANY candidate implies: the guess took the first one met, cake's flag of the pair (4, x5), and the next row of `_ne3` had no derivation. Not order dependent as reported: `[x, 4, -1, z]` fails too on a model of its own (`test/models/e2e_alldiff_posneg_const_sat`) |
+| `e2e_bridge_gcc_repeat_var_sat`, `e2e_bridge_gcc_empty_cover_repeat_var_sat` | bridged | the bridge recognised a gcc COPY only from int_eq's per-rung binary clauses, which baguette writes only for a ladder of one rung. Over three values or more the tie is two LINEAR rows (`sum Y_ge - sum X_ge >= 0` and its mirror): no alias, no `@Y1/@Y2`, and the copy's rungs were pinned against `@L[copy_ge_v]`, never written. The empty cover is the same defect (MiniZinc keeps the repeated variables) |
+| `e2e_bridge_max_negconst_sat`, `e2e_bridge_min_signed_sat` | bridged | the bridge's selector pre-pass (T8) takes the first flag under which ALL the selector's rows derive. A constant operand's flag is forced by cake (x[c][2] false when the constant is below every value of m), so defining operand 0's `_mx0` as it made `_mx0`'s own row trivially derivable: accepted, and then `_mx2`'s row and the clause had no derivation |
+
+One more, found by the fuzz stream run on the first fixes (seed 8101 model 50, `--e2e`, an UNSAT
+model): a gcc whose cover REPEATS a value with equal constant counts (`[0,3,3,1]`, `[0,0,0,1]`).
+D-0260 merges such a cover at the front end and adds no tie (the two counts are the same term), so
+`--e2e` is not refused; e2e.ml received the merged cover and labelled cake's rows `<j>_ge|le` by the
+merged positions, where cake, from the translator's unmerged `.scp`, labels them by the original
+ones. The count of 1 (merged position 2) was pinned against cake's row of the second 3 (original
+position 2). `test/models/e2e_gcc_dupcover_const_sat` is its shrunk form.
+
+Common cause of the first seven: in both writers a selector's cake flag was GUESSED from the first candidate that implied a row,
+and a constant operand makes rows that every candidate implies (or that need no selector at all). The rule of
+the fix is the same on both sides: where the order in which baguette mints the selectors is known, the k-th
+selector IS cake's k-th flag.
+
+### 2. The fixes
+
+`lib/proof/e2e.ml` (header section "Selectors by position (D-0262)"): [selector_flags] lists cake's flag for
+each selector compile.ml mints for a spec, in minting order: maxmin over bits, `x[N][i]` per operand
+(Maxmin.selector_rows, one per operand, operand order); int_max/int_min over bits, `b[N][lge|rge]`
+(`lle|rle`); all_different, `x[N][i_j]` per pair i < j that is not two distinct variables (compile.ml's
+`post_all_different`). [declare] records the k-th auxiliary of the constraint against the k-th flag, and
+[pin] defines it (through the existing [define], so a maxmin selector past operand 0 is still "flag AND no
+earlier one") before the first row that names it. The orientation is positive in every case: the aux of
+`Encoding.expand_int_lin_ne` is 1 iff sum > rhs, and cake's `x[N][i_j]` is 1 iff x_i > x_j (its `gt`/`lt`
+rows), the same difference; maxmin's selector picks operand i and cake's flag is x_i >= m (<= for min). The
+guess stays for the one-flag selectors (int_ne, int_lin_ne, the reifications), where only the orientation is
+unknown and both are tried. A selector past cake's flags is refused (`Not_covered`, "a selector ... past
+cake's flags"), never guessed.
+
+`tools/e2e/bridge.py` (untrusted, as before):
+- a COPY tied by the two linear rows over the same values is recognised, each rung defined by the same red
+  pair as before (`@Y1`, `@Y2`), the copy's rungs `@L` derived from the original's (`@Y1 + @L + @Y2`), and the
+  two tie rows pinned as the sums of the pairs;
+- CHOICE GROUPS BY POSITION: the selector clause names the group in order; its cake constraint is the
+  array_max/min (or binary max/min) whose choice rows, operand by operand, name the same variables as
+  baguette's selector rows (none for a constant result and a constant operand); each selector is defined as
+  its position's flag before the guessing pre-pass, which then skips it;
+- the selector pre-pass proposes flags from the selector's first row that is not TRUE outright (degree
+  <= 0 in literal form): any candidate implies such a row, and the first flag met was another
+  constraint's (seed 10100 model 54: int_lin_ne's `_ne0 := b[c4][lt]`, the flag of an int_eq_reif over
+  the same two variables);
+- T7's derivation by contradiction ([tight]) takes no candidate with a literal the row lacks: that
+  literal is free to satisfy the candidate, which the simulation does not see, and it claimed a close
+  unit propagation did not make (the same model, the reification's big-M row from int_lin_ne's
+  candidate). Both pre-existing on main, which failed one line earlier;
+- an objective over a FIXED variable (`min:` empty on both sides) is carried over, each `soli`'s improving
+  row unchanged (`pol @O[cK]`), where it was refused ("cake's objective is not one variable's bit sum");
+- (no rule for D-0260's ties: with the translator below, cake's own `equals` rows state them.)
+
+`tools/e2e/fzn2scp.py` (the TRUSTED translator, so stated with its argument): a gcc cover that repeats a
+value is written MERGED, as `Builder.merge_gcc_cover_repeats` writes it: the first occurrence kept, each
+later count tied to the first's by `(cN_tie<j> equals c_i c_j)`, nothing when the two are the same term.
+Equivalent, because both sides say the count is the number of x equal to that value (D-0260's own
+argument); the lane's validation (the `.scp`'s solutions, enumerated under cake's semantics, against
+Gecode's and CP-SAT's on the `.fzn`) checks it on the fifteen dupcover test models (fourteen of D-0255 and D-0260, and this one). The labels then agree
+and `e2e_gcc_dupcover_const_sat` verifies both ways. The root fix on the solver side would hand e2e.ml the
+cover positions from compile.ml's `e2e_spec`, a file agent-wide holds; it is not needed while the contract
+is the translator's `.scp`. A tie that is a row (`c_j - c_i = 0`, `c_j = k`) is still REFUSED under `--e2e`
+(D-0260's "a constraint no FlatZinc item states"); the bridged path VERIFIES all fifteen
+(it failed on eight on main), deriving the tie rows from cake's `equals` rows.
+
+`tools/e2e/fzn_solutions.py`: the validation's reference reads `baguette_global_cardinality` by its sentence
+(each count is the number of x equal to its value) instead of the reference solver's own
+`global_cardinality`. CP-SAT's admits NO solution when the cover repeats a value: on
+`gcc_low_up_closed_dupcover_src_sat` (`gcc([1,1], [1,1], [2,2])`) it counted 0 solutions where Gecode and
+cake's semantics count 1 (`x = [1, 1]`), and on `gcc_dupcover_closed_src_sat` 0 against 3. Both were DIFFER,
+two of the lane's failures on main. With the sentence both references count 1 and 3.
+
+No refusal was needed beyond D-0260's: every shape of the grid (section 3) now verifies on both paths.
+
+### 3. The builtins grid
+
+829 tiny models (`/scratch/arthur/e2efix-work/grid_gen.py`, flattened by MiniZinc 2.10.1 with mznlib), every
+builtin the chain covers: array_int_maximum/minimum over every operand list of length 1 to 3 drawn from three
+signed variables and the constants -1, 0, 1 (constants first, middle, last, a constant result after
+MiniZinc's presolve, a repeated operand, the result among the operands); int_max/int_min with constants;
+all_different with negative and positive constants anywhere, repeated variables, equal and distinct
+constants, one operand; int_ne/int_lin_ne/int_eq_reif/int_ne_reif/int_le_reif/int_lin_le_reif/int_lin_le/
+int_lin_eq at constants inside, outside and at the bounds of the domain, with a variable cancelling; int_abs;
+element over arrays with negative values and an index partly outside; global_cardinality over repeated
+variables, constants in x, empty and negative covers, constant and variable counts; inverse with a fixed
+entry and of size 1; member with constants and a repeat; regular with a constant letter; cumulative with a
+fixed start and a zero duration; disjunctive; the Boolean family with constants. Each through the chain both
+ways, default flags and `--bits-above 0` (3 316 runs), every proof checked, every VERIFIED answer compared
+with Gecode's.
+
+| | origin/main (`852e292b`) | this branch (`a610846e`) |
+|---|---|---|
+| bridged, default / bits 0 | 735 / 735 VERIFIED, 94 / 94 FAIL | 829 / 829 VERIFIED, 0 FAIL |
+| `--e2e`, default / bits 0 | 827 / 827 VERIFIED, 2 / 2 FAIL (`all_different([x,-1,4,z])`, `[x,4,-1,z]`) | 829 / 829 VERIFIED, 0 FAIL |
+| VERIFIED answer differing from Gecode | 0 | 0 |
+
+The 94 bridged failures on main: 89 maxmin with a constant operand or a constant result, 5 gcc over a
+repeated variable of three values or more.
+
+### 4. Was anything wrongly ACCEPTED
+
+Looked for, two ways. (a) Per row: on the nine new test models and 50 SAT models of the grid
+(maxmin, all_different, gcc, the disequalities, member, element, inverse), every one of baguette's rows in
+turn strengthened by one (degree + 1): in the `--e2e` proof at its pin (`ia`, `rup`, `pbc`), and in baguette's
+`.opb` handed to the bridge. Of 1 342 strengthened rows over 59 models, the `--e2e` proof refused 664 of 683 (654 at the pin itself, 10 inside a `pbc` pin's subproof) and accepted 19; the bridged chain refused 556 of 659 (2 in the prefix the bridge rebuilt from the changed row) and accepted 103. An accepted strengthened row is judged against the proof's own `sol`
+(the auxiliaries `sol` does not list taken existentially): accepted and FALSE there would be the alarm.
+None. (b) The lane's controls (41 bridged, 42 solver: stronger and weaker `.scp`, stronger `.opb` rows and
+pins, wrong definitions of selectors, atoms, copies, flags and bits, wrong optima before and after the
+elaborator) all refused where and as expected, before and after. Why none could be: every line of either
+prefix is checked by VeriPB against cake's `.opb`; a selector definition is a `red` over a FRESH variable,
+a conservative extension whatever flag it names, so a wrong definition costs a refusal later, never a wrong
+acceptance (the satisfiable controls `sel-witness`, `copy-witness` check that the checker does judge these
+lines, D-0053).
+
+### 5. Tests and lanes
+
+Twelve models in `test/models/` (each with a unique solution, so a change of the default search does not
+move their expected output; each fails on main on the path named in its header and verifies here):
+`e2e_max_const_first_sat`, `e2e_max_const_last_sat`, `e2e_alldiff_negconst_sat` (the three `--e2e`
+defects, shrunk), `e2e_gcc_copy_wide_sat`, `e2e_gcc_empty_cover_copy_sat`, `e2e_max_negconst_sat`,
+`e2e_min_signed_const_sat` (the four bridge defects), `e2e_alldiff_posneg_const_sat`, `e2e_max_const_result_sat`
+(the grid's), `e2e_gcc_dupcover_const_sat`, `e2e_obj_fixed_sat`, `e2e_linne_eqreif_bits_sat` (the fuzz stream's). The end-to-end checks are a LANE only: `make check` runs none, and `scripts/e2e_lane.sh` takes
+every `test/models/*.fzn`, so the twelve are in its chain and solver passes and in the model tests.
+
+| Check | origin/main `7c9f8371` (`852e292b`) | this branch (`a610846e`) |
+|---|---|---|
+| `scripts/e2e_lane.sh -j 4` | **FAIL**: chain 281 models, 242 VERIFIED, 31 SKIPPED, 8 FAIL (D-0260's dupcover models, bridged); solver 241 VERIFIED, 0 FAIL; controls 41/41, 42/42; validation 246 AGREE, 2 UNCHECKED, 2 DIFFER (CP-SAT's gcc) | **PASS**: chain 293 models, 262 VERIFIED, 31 SKIPPED, 0 FAIL; solver 253 VERIFIED, 0 FAIL, 0 disagreeing; controls 41/41, 42/42; validation 260 AGREE, 2 UNCHECKED (as on main), 0 DIFFER |
+| fuzz `e2e` stream, 2 000 models, `-j 8` | the 30 e2e failures of D-0258's run (its section 4) | seed 11 on the final code (`f507a93e`): 470 s, **0 disagreements**; `--e2e` 1 946 VERIFIED, 54 SKIPPED (outside its families or the translator's); bridged 1 967 VERIFIED, 33 SKIPPED. Earlier runs on intermediate commits found the four models of the fuzz stream above (seed 7: the fixed objective twice; seeds 8101 and 10100 on interrupted tries) |
+| `dune runtest --root . --force` | | 5 641 ok, 0 FAIL |
+| `scripts/run_model_tests.sh` | | 293 passed, 0 failed (peak RSS 15.7 MB on the 290-model run) |
+| `scripts/check_determinism.sh` | | 293 models identical |
+| `scripts/diff_lane.sh --tier all -j 8` | | 347 of 347 equal the reference |
+| `... --debug` | | 333 of 333 equal (the 14 others skipped by `bench/diff/debug-skip.tsv`, as on main) |
+| `scripts/check_fmt.sh`, `check_test_widths.py` | | clean |
+
+The binary is the same before and after every commit but the first two (the `e2e.ml` change); the plain
+`--proof` path does not reach e2e.ml, which the diff lanes and the model tests confirm.
+
+### 6. What is left
+
+- `--e2e` refuses D-0260's tie rows (a repeated cover value whose counts differ as terms); the bridged path
+  now derives them. Deriving them in e2e.ml too needs compile.ml's `e2e_spec` to say which constraint a tie
+  belongs to (`c_id = ""` today), a file agent-wide holds.
+- The bridge's "cake's objective is not one variable's bit sum" (D-0258 section 4, reported FAIL): every case the
+  fuzz stream met was an objective over a FIXED variable, both `min:` lines empty; it is now carried over
+  (each `soli`'s improving row unchanged, `test/models/e2e_obj_fixed_sat`). An objective the bridge does not
+  cover otherwise is still FAIL, not SKIPPED.
+- The guess stays for one-flag selectors; the grid found no failure of it.
+
+### 7. Reverting
+
+`git revert` the branch's `M22-review-bugs:` commits (wave107-e2efix): e2e.ml's [selector_flags] and the
+position rule, bridge.py's five additions, fzn2scp.py's merged cover, fzn_solutions.py's gcc sentence, the twelve models and their
+expected outputs. The plain `--proof` path is unchanged (model tests, both diff lanes, determinism: section 5),
+so nothing outside the e2e lane moves.
+
+## D-0263  [AUTONOME] M22-review-bugs, wide domains on the default configuration: `--time-limit` is honoured before the search (at the limit plus 1 s) and, as a backstop, inside one long search step; an encoding whose LOWER-bound heap estimate exceeds the memory the run has is refused before it is allocated (exit 5, on by default); the int_times/int_div case split is no longer quadratic in its width
+
+**Status**: DONE on `wave108-wide` (agent-wide, 2026-11-27), not merged. Base: main `7c9f8371`, binary md5
+`852e292b`. Final binary `0ef89af2` (commit `a15fdaf8`; the fuzz and the gate also ran on `333c015a`, commit
+`9e6489bc`, which lacks only the last commit). Runs in `/scratch/arthur/wide-runs/`. The two
+findings are D-0258 section 4's (`bench/fuzz/found/wide_alldiff_memcap.fzn`,
+`bench/fuzz/found/wide_times_timelimit_overrun.fzn`). ROADMAP: no row added (M22-review-bugs).
+
+### 1. The two mechanisms, measured
+
+**The time limit.** `--time-limit` was read by the search only (`config.stop`: every node, every 128
+propagator runs, inside a conflict's trace). Nothing before the search looked at a clock: the parse,
+the compile, the `.opb` splice and `Encoding.start_proof` (the direct encodings, written into the
+`.pbp`). On the times model (`int_times(x1, x0, x1)`, `x0` of width 2^21, `x1` of 2^24, both on bits)
+the base binary was killed by `timeout 150` still in the compile, `.opb.rows` at 1.7 GB, no output.
+Scaled down (`x0` of width 2^14 and 2^16): compile 4.1 s and 56.5 s CPU, a factor 14 for a width
+factor 4. `perf`: 22 % `compare_val`, 12 % `caml_compare`, 10 % `List.assoc_opt`, from
+`lib/core/prop/arith.ml`'s `at_least`/`at_most`, which looked the case's guard Boolean up in the
+front end's association list once per value: the case split was QUADRATIC in the case variable's
+width. With a table (`Arith.lookup`, byte-identical) the compile is linear (0.78 s, 3.2 s). The root
+propagation of the same model is still quadratic (2.2 s, 43 s: every change of `x1` wakes the 4w rows)
+but it is polled, and stops at the limit (`at=propagation`, 5.04 s under `--time-limit 5`).
+
+**The memory.** Live words after a full major collection, read at the end of `proofopen` (a probe
+binary, never committed), slope per unit between widths:
+
+| structure | per | with the proof | `--no-proof` |
+|---|---|---|---|
+| direct encoding (all_different, element, inverse) | value | 61 to 75 words | 13 to 24 |
+| case split of int_times / int_div (z constant, z narrow, x = z, div) | value of the case variable | 437 to 775 | 411 to 743 |
+| per-value rows of array_int_maximum over an order scope | threshold | 56 | 34 |
+
+So the alldiff model (2^21 + 2^24 values) needs 9 to 11 GB live, the times model (2^21 cases) 7 to
+13 GB, under the fuzz lane's `ulimit -v 4000000`. The order ladder itself costs no heap per rung (it is
+streamed since D-0123). The heap budget (M7-T8, D-0071) is OFF by default (D-0065), and both of its
+halves read the heap as it IS, at a declaration or a cycle end, never what a declaration is about to
+allocate. The base alldiff run ended `Out_of_memory` (caught, exit 5) at 65 s once and `Fatal error:
+allocation failure during minor GC` (exit 134) in D-0258's run.
+
+### 2. The contract
+
+SPEC "A stopped run": a run stopped by `--time-limit` prints `=====UNKNOWN=====` when it printed no
+solution, a `limit:` line, exits 0, and its proof is ENDED and accepted by the checker (`conclusion
+NONE` or `BOUNDS`); the fuzz `limit` stream checks exactly that. SPEC 3.1: the default build refuses
+no model for its width (D-0065), and a resource overrun is exit 5 with a diagnostic, never the
+runtime's abort. Both findings departed from it: no stop at all, and exit 134 naming nothing.
+
+### 3. The fixes
+
+1. **`Arith.lookup`** (`4ebf1f43`): the ladder lookup by `Hashtbl`, first pair of a value as
+   `List.assoc_opt` gave. Byte-identical (the 6 test models with int_times/int_div, the 281 model
+   tests, both diff lanes).
+2. **`lib/proof/deadline.ml`** (`62610481`, `9e6489bc`): the phases before the search call
+   `Deadline.tick w` with a weight (a committed `.opb` row 64, a row or a proof line its bytes, a value
+   of a direct encoding 64, a Boolean of an arithmetic ladder 64, a block of the splice its bytes);
+   the clock is read once per 2^20 units. `bin/main.ml` arms it at the limit PLUS `Deadline.grace` =
+   1 s. A stop before the `.opb` is complete prints `=====UNKNOWN=====`, `limit: reached ... at=<phase>
+   proof=incomplete`, exit 0, and says on stderr that the proof is INCOMPLETE (or that none was
+   written); a stop inside `start_proof` ENDS the proof (`Writer.conclude_interrupted`; VeriPB: `s
+   VERIFIED NO CONCLUSION`, tested). From the search on, the search's own poll stops the run at the
+   limit, and the deadline stays armed as a BACKSTOP that stops the run as a second signal does
+   (`stop_now`, `limit: killed signal=time-limit`), ticked by proof lines only.
+   *Why the grace*: without it a short limit stops the run in the compile and costs it the proof
+   (the `limit` stream runs `-t 1` to `-t 20` ms; start-up alone is 4 ms). *One rule for the proof*:
+   a stopped run's proof is ended and checked whenever the `.opb` is complete; before that there is
+   no model file, and stderr says so in exit 5's and exit 6's word (INCOMPLETE). SPEC amended.
+3. **`Encoding.reserve`** (`22510357`, own commit, the default-changing one; `9e6489bc` adds maximum):
+   before a structure proportional to a declared width is allocated, a LOWER bound of its live heap
+   is added to a process-wide total, and the run is refused (exit 5, `Encoding.Will_not_fit`) when the
+   total exceeds the smallest of what the run was GIVEN: `--max-heap-mb`, the address space
+   (RLIMIT_AS, `/proc/self/limits`), memory plus swap (`/proc/meminfo`). Reserved per unit: a direct
+   value 30 words with the proof, 10 without (at `request_direct`, compile time, before `start_proof`
+   materialises it); an arithmetic case 300 (in `Arith_aux.ladder_bools`, in the PARSE, before its
+   Booleans exist: a case width of 2^24 dies in the parse otherwise); a maximum/minimum threshold 20
+   (in `Maxmin.make`, before its array). The diagnostic names the variable, its position (direct and
+   arithmetic), its declared domain, the structure, the estimate and the source of the limit.
+   *Why on by default*: the coefficients are below every measured shape (the table above, and the
+   in-process test's own measure, which is lower with the proof: 35, 435, 115), so a refused run is
+   one whose live heap would have passed what it was given: it could not have finished. D-0065's
+   objection (a figure a machine chose is not a property of the solver) does not apply: the limit is
+   the run's own. *Why not a default `--max-heap-mb`* (corpus_run's `HEAP_MB=auto`, half the address
+   space): it would arm the reactive guard by default and refuse runs whose heap sits between half
+   and all of `ulimit -v` and that finish today; proposed, not done (a one-line change in
+   `Encoding.limits_from_env` if the user wants it). SPEC 3.1 amended.
+
+**Cost on normal models** (instructions, `perf stat -e instructions:u`, `BAGUETTE_NODE_LIMIT=3000`,
+three repetitions within 5 000 instructions, base `852e292b` against the final build's code at
+`cff2e916`): handball12 +0.032 % with the proof, +0.024 % without; costas13 +0.021 % / -0.002 %. Their
+stdout, `.opb` and `.pbp` are byte-identical. The first version called `Deadline.tick` per proof line
+and cost +0.13 % on handball12 with the proof; a proof line now tests `Deadline.armed` inline. Under
+`--time-limit` the per-line tick is paid in the search too (the backstop). The scaling lane: section 5.
+What it costs in clarity: one more module (deadline.ml, 80 lines, its rule in its header), a `tick`
+at six sites, and one reservation per width-proportional structure, which a new such structure must
+add (the lower-bound test names the three).
+
+### 4. The fuzz counts (`scripts/fuzz_lane.sh --streams wide,limit -n 2000 --seed 2 -j 16`)
+
+Base `852e292b` (main `7c9f8371`) reproduces D-0258's `main2` exactly; after, `333c015a`:
+
+| `wide`, 2 000 models | before | after |
+|---|---|---|
+| MEMCAP (`Fatal error: allocation failure`, exit 134) | **109** | **2** |
+| past `--time-limit 10` and the 30 s timeout | **264** | **1** (0 with `0ef89af2`, below) |
+| `ok`: answered, or stopped by the limit with no claim (agreeing with Gecode where it answers) | 1 111 | 1 348 |
+| exit 5 (`resource`) | 12 | 146 |
+| refused exit 3 / exit 2 (literal past 2^62) / not flattenable | 130 / 88 / 286 | 129 / 88 / 286 |
+| `limit` stream: disagreements | 0 | 0 (1 593 runs stopped, 2 397 finished) |
+
+Where each of the 373 went, by rerunning `333c015a` on every case the base run kept (`attr/summary2`):
+
+| base verdict | refused by the estimate | stopped by the time limit | answered | still failing |
+|---|---|---|---|---|
+| MEMCAP (109) | 102 | 6 (5 `at=compile`, 1 by the search backstop, 3205_42) | 0 | 1 MEMCAP (3206_229) |
+| timeout (264) | 35 | 227 (219 `at=compile`, 1 `at=opb`, 7 `at=proofopen`, the proof ended) | 1 | 1 (3203_246) |
+
+So the estimate removes 137 of the 373 and the time limit 233 (227 + 6), the quadratic lookup one more
+(answered, no longer stopped), and 2 are left. 3203_246 is a 140 MB `.fzn` whose one set domain lists
+16.7 M values: the parse (15.2 s) is not ticked, and the set's hole computation sorted it for 17 s
+without a tick; with the tick of `a15fdaf8` it stops at 16.8 s (`at=compile`), inside the lane's 30 s.
+The second MEMCAP of the after run, 3201_243, was an exit 5 (`Out_of_memory` caught) in the base run
+and a `Fatal error` in this one, the same death at a different allocation: section 6.
+The rerun of both streams with `0ef89af2` (867 s at -j 16): `wide` MEMCAP 2 (3201_243, 3206_229), past the
+time limit **0**, `ok` 1 349, exit 5 146; `limit` 0 disagreements (1 608 stopped, 2 382 finished).
+
+### 5. Behaviour on existing models
+
+| check | `333c015a` | `0ef89af2` |
+|---|---|---|
+| `dune runtest --root . --force` (`ulimit -v 4000000`) | 5 660 ok, 0 FAIL | 5 660 ok, 0 FAIL |
+| `scripts/run_model_tests.sh` | 281 passed, proofs verified | 281 passed |
+| `scripts/check_determinism.sh` | 281 identical | 281 identical |
+| `scripts/diff_lane.sh --tier all -j 8` | 347 of 347 equal | 347 of 347 equal |
+| `... --debug` | 333 of 333 equal | 333 of 333 equal |
+| `scripts/scaling_lane.sh -j 8` | ok | ok |
+| `check_fmt.sh`, `check_test_widths.py` | ok | ok |
+
+Byte-identical to the base on the 281 test models (stdout, `.opb`, `.pbp`; `cmp.sh`, `5c596acc`), on
+handball12 and costas13 at 3 000 nodes, and on both diff lanes. The tests added (test_endtoend.ml,
+19 checks): the deadline stops a compile and a `start_proof` (whose ended proof veripb accepts as NO
+CONCLUSION) and does nothing disarmed or before its time; the estimate is a lower bound for each of
+the three structures in both modes (widths 200 and 999); a direct encoding past a 0 MB budget is
+refused at its request with nothing requested; the binary refuses an int_times over 0..999 under
+`--max-heap-mb 1` with exit 5, the wording, the variable, the position and no `.opb`, and answers it
+without a budget.
+
+The 60 widest instances of D-0185's corpus (1 574 flattened `.fzn`, widest declared domain 66 M to
+7.5 G), base and final at `BAGUETTE_NODE_LIMIT=100`, `--max-heap-mb 8192` under `ulimit -v 16 GiB`
+(the Challenge harness): 51 exit 0 both with identical stdout, 4
+exit 5 both (the heap budget), 1 exit 2 both, 1 timeout both, and 3 `2022_arithmetic-target` instances
+that timed out in the base (300 s) and exit 5 after. They are not solved runs turned into refusals:
+the base never left their compile, which was the quadratic case split; the build with only the lookup
+fixed (`788594069`) reaches the heap budget on two of them at 93 s and 135 s (8 207 and 8 315 MB, exit
+5), and the third ends by the heap budget in the final build too. The estimate refuses the two at
+parse time (8 336 MB reserved for the 8 192 MB budget).
+
+### 6. What is left for M18-coverage-T9
+
+The estimate covers the structures that are proportional to a width AND live for the run. It does not
+cover what the order encoding makes proportional per ROW: a linear row over a wide order-encoded
+variable expands to one literal per value, built in full before it is streamed (the two `wide`
+models still killed at the cap, 3201_243 and 3206_229: a maximum or a disequality over a 2^24-wide
+variable that all_different holds on the order encoding; their peak is transient lists and buffers
+of single rows, which no lower bound of LIVE structures sees). Nor the alldiff Hall derivations over
+wide domains (3205_42: 540 MB of proof in one propagator run; the backstop now stops it at 11 s).
+Lazy order literals (T9) remove the expansion itself.
+
+### 7. Reverting
+
+Each piece is its own commit: `4ebf1f43` (the lookup), `62610481` (the deadline), `22510357` (the
+reservation, default-changing), `d4e41fb3` and `f457d9bc` (tests, label rename), `2d8827a4` (SPEC and
+module maps), `cff2e916` (cost), `9e6489bc` (backstop, maximum). Reverting `22510357` with `9e6489bc`'s
+maxmin hunk restores the default exactly.
+
+## D-0264  [AUTONOME] M22-review-bugs: the two Challenge proofs "not reproducible run to run" (D-0252's identity check) were runs CUT BY AN ASYNCHRONOUS STOP, `timeout 900`'s SIGTERM on vrp and the 8 GB heap budget on connect, never the 2 000-node limit. Every vrp variant verifies, and the connect checks, which take many hours, are still running. Under the node limit the proof is the same bytes under seven runtimes, on 347 lane runs and on 91 of 100 tuning instances (the other 9 never reach 2 000 nodes in 300 s). No solver code changed. The determinism check now covers four real instances under two GC settings and refuses a comparison cut by a clock, a signal or the heap budget
+
+Context. agent-compare's identity check (D-0252, `/cluster/arthur/baguette-results/compare/ident.txt`,
+`ident2.txt`, `tools/ident.sh`) ran 20 held-out instances with proof at `BAGUETTE_NODE_LIMIT=2000` under
+`timeout 900 ... --max-heap-mb 8192`, and found the `.pbp` different on every run of
+`2021_vrp-submission_toy_D_2v_4l_w_reload` and `2021_MZNC_connect_connect__0018` (same binary twice
+included) while stdout, the counters and the `.opb` agreed. Reproduced on origin/main `fa9e7fc4` (dev binary
+md5 `a610846e`, release `d1d52185`). Runs, tools and hashes: `/cluster/arthur/baguette-results/nondet/`
+(README there).
+
+### 1. The mechanism
+
+Neither run reached the node limit, and their `limit:` lines say so, on agent-compare's runs as on mine:
+
+    vrp      limit: reached time-limit=none ... nodes=1628 ... at=trace fired=900.00s signal=TERM    (rc 124)
+    connect  limit: killed signal=heap-budget phase=search ... nodes=91                           (rc 5)
+
+The vrp run reaches node 1 628 in under 120 s and then spends the rest in ONE trace: its bounds walk
+`X_INTRODUCED_81_` (declared 0..460588, a bits variable) down two or three values per step, each step a `red`
+atom pair, a `pol`, an `ia` (about 9 300 values per 60 MB of proof, so hours to the end). `timeout 900` stops
+it inside that trace. connect's propagation explodes between nodes 81 and 91 (45 535 propagations at node 81,
+7.2 M at node 91) and its heap passes 8 GB. Both stops are asynchronous: SIGTERM is polled between two trail
+entries of a trace (`at=trace`), and the heap budget fires at a GC cycle end or from the SIGVTALRM poll
+(`Encoding.install_heap_guard`, D-0200). The proof is then ended where it stands (`Writer.conclude_interrupted`,
+M6-T24, D-0225). Two vrp proofs of one pair are byte-identical for 974 975 lines (127.8 MB); there one wrote
+its end sweep and `conclusion BOUNDS 0 115` and the other went on for 31 900 lines of the same trace. The
+counters agree because the cut falls inside one node; the deferred-reason, `pol` and atom counts differ
+because they count the work done before the cut. The request's hypotheses (a) to (d) (the collector, a clock
+read on the proof side, an address in a hash, a reused buffer) are refuted by the runs below: under a node
+limit nothing moves.
+
+agent-compare's 20 instances: 17 reached the node limit (identical); vrp and connect were cut and differed;
+`2020_cable_tree_wiring_A073` was also cut by the heap budget (node 929, both runs) and happened to cut at the
+same byte. My `connect` pair at `--max-heap-mb 2048` did the same (identical proofs, different `props=`
+counters: the cut fell in propagation, between two writes). A cut CAN coincide; nothing makes it.
+
+### 2. Validity, and the proof under a deterministic stop
+
+| Runs (release unless said) | Stop | `.pbp` across the runs | veripb |
+|---|---|---|---|
+| vrp 2 000 nodes, `timeout 900`: dev x2, release x2, release with ASLR off x2 | SIGTERM | 6 different | 6 VERIFIED (`BOUNDS 0 <= obj <= 115`) |
+| vrp 2 000 nodes, `timeout 120` x2 | SIGTERM | 2 different | 2 VERIFIED |
+| vrp 2 000 nodes, no timeout, stopped by hand at 729 s x2 | SIGTERM | 2 different | 2 VERIFIED |
+| connect 2 000 nodes, `--max-heap-mb 8192` x2 (dev, deleted unchecked) | heap budget | 2 different | not run |
+| connect 2 000 nodes, `--max-heap-mb 8192` x2, kept | heap budget | 2 different (577.6 / 578.5 MB) | running (section 2) |
+| connect 2 000 nodes, `--max-heap-mb 2048` x2 | heap budget | identical (`2977dc7b`) | running (section 2) |
+| vrp 1 600 nodes, default + budget armed / `OCAMLRUNPARAM=s=64k,o=60` | node limit | identical (`115bb19b`) | VERIFIED (`BOUNDS 0 <= obj <= INF`) |
+| connect 80 nodes x2 | node limit | identical (`449f8150`, 221 MB) | running (section 2) |
+| vrp 300 nodes, seven runtimes | node limit | identical (`ba4503a1`) | (same bytes) |
+| connect 80 nodes, seven runtimes | node limit | identical (`449f8150`) | (same bytes) |
+
+The seven runtimes: default, `--max-heap-mb 8192` (the budget armed and not reached, so its alarm and timer
+run), `OCAMLRUNPARAM=s=32k`, `s=16M,o=400`, `o=20`, ASLR off (`setarch -R`), and `ulimit -v 4000000` (which
+changes the minor heap bin/main.ml picks). vrp at 2 000 nodes cannot end by the node limit in an hour (the
+trace above), so 1 600 nodes is its largest budget below the exploding node.
+
+The connect proofs are slow to check: past their first 58 MB, veripb reads about 4 KB a second through a region of
+182 000 order-bridge `rup` lines (about 50 lines a second, measured from its file offset), so after 75 minutes
+it had read a third of the 221 MB node-limit proof. Those four checks (`B.con80.a1`, `C.conheap2048.a1`,
+`G.conheap8192.a1`, `G.conheap8192.a2`) were restarted with a 48 h cap and their verdicts land in
+`/scratch/arthur/nondet/r/<name>.veripb` (PIDs in `/cluster/arthur/baguette-results/nondet/veripb-running.txt`).
+The two heap-cut proofs share their first 577 568 389 bytes, then each writes the same kind of ending (its
+end sweep, then `conclusion BOUNDS 0 INF`), so they stand or fall together on the shared part.
+
+So: (1) all 10 vrp cut variants and the vrp node-limit proof verify, none was refused, and the connect checks have
+refused nothing so far. There is no soundness alarm on what was checked. (2) The
+variation is the documented behaviour of a stop by a clock, a signal or memory pressure, which cuts the run
+where it finds it, as `--time-limit` always has (bin/main.ml's `node_limit` comment, M6-T9: "a time stop lands
+on a different node on every run"). The request's premise that the two instances "run in a few hundred MB"
+does not hold for connect, which reaches 8 GB at node 91. vrp does run in about 1 GB and was cut by the clock.
+With no pressure and no clock, nothing varies.
+
+### 3. How common
+
+- The diff-lane corpus: `scripts/diff_lane.sh --tier all` twice, each run against the recorded hashes: plain,
+  347 of 347 equal; under `OCAMLRUNPARAM=s=16k,o=40`, 347 of 347 equal. So 0 of 347 vary, across two runtimes.
+- The tuning set, the first 100 instances of `bench/tuning/set.lst` (series-20261123 flats on fataepyc-06) at
+  2 000 nodes with proof: run a plain with a 300 s cap, run b under `OCAMLRUNPARAM=s=64k,o=60` when a ended
+  deterministically. 91 ended by the node limit (89) or on their own (2), and all 91 are byte-identical across
+  the two runtimes. 9 were cut by the clock before 2 000 nodes (5 inside a trace, 3 at a node entry, 1 killed in
+  propagation with a 9.3 GB proof; three of them at 600 s, the cap of a first pass) and are not comparable,
+  by the rule of section 4.
+
+### 4. The fix, and its rule
+
+No proof byte changed, because the solver was not wrong: the comparison read runs that `timeout` and the heap
+budget had cut as runs that had reached the node limit. The rule is written where an interrupted proof is
+ended, in the comment of `Writer.conclude_interrupted`: the `.pbp` is a function of the binary, the input and
+the options for a run that ends on its own or at BAGUETTE_NODE_LIMIT. A run ended by `--time-limit`,
+SIGTERM/SIGINT/SIGXCPU or the heap budget is a valid proof cut at a point that moves from run to run, and its
+`limit:` line says which (`fired=`, `signal=`, `killed signal=heap-budget`). A harness that compares proofs
+first checks that the line says `fired=none signal=none`.
+
+Considered and refused, for the solver itself: landing the heap-budget stop on a node boundary. The cut point
+would be coarser but still not reproducible, since the node at which the heap passes its budget depends on
+the collector, and the run would allocate past its budget for a whole node, which the budget exists to
+prevent (D-0200: 2017 groupsplitter grew its heap from 4.4 to 9.9 GB inside one root propagation). A SIGTERM from `timeout` is a wall clock, and no
+change inside the solver makes it reproducible.
+
+### 5. The extended check
+
+`scripts/check_determinism.sh` (`make check`) now also solves four instances of the diff lane's corpus, read
+from `bench/diff/corpus/` and never written: parity-learning 48_24_6.2 at 1 000 nodes (clause path, PB rows),
+rcpsp_12 at 1 000 (cumulative), soccer xIGData_24_16_14_2 at 800 (alldiff), cyclic-rcpsp easy_6 at 300 with
+`--bits-above 0` (the bits arm, atoms minted on demand). Each twice, under `OCAMLRUNPARAM=s=16k,o=40` and
+`s=256k,o=400`, and the `.opb`, `.pbp` and stdout must agree. The caller's BAGUETTE_* settings are unset for
+these runs, as in the lane. Each run must end by the node limit or on its own: a `limit:` line without
+`fired=none signal=none` makes the comparison VOID, which fails the check. The self-test now also feeds the
+guard the three asynchronous `limit:` lines and the node-limit line as the binary writes them, and requires it
+to refuse the first three and accept the last; a guard changed to accept everything was watched failing it.
+The whole check takes 18 s on fataepyc-06, about 10 s of it the new part. Not larger GC settings: the runtime
+reserves the minor heap for 128 domains, so `s=8M` asks 8 GB of address space and the gate's 4 GB cap refuses
+it ("Not enough heap memory to reserve minor heaps", measured on the first attempt).
+
+Why there and not in the diff lane: the lane compares each run to a recorded reference under one runtime, so a
+GC-dependent proof would show there as a DIFF that someone might re-record, whereas the determinism check is
+self-relative, needs no reference and runs in `make check`. The lane's options are held by agent-free this
+wave as well.
+
+### 6. Verification, what is left, and how to revert
+
+Branch `wave109-nondet`, dev binary `b81c5f51`: `check_fmt.sh` clean, `check_test_widths.py` clean,
+`dune runtest --root . --force` 5 641 ok, 0 FAIL; `run_model_tests.sh` 293 passed, 0 failed;
+`check_determinism.sh` self-test and check green (293 models, 4 real instances); `diff_lane.sh --tier all` 347 of 347 (and 347 of 347 again under `OCAMLRUNPARAM=s=16k,o=40`); `--debug` 333 of 333;
+`scaling_lane.sh` ok, every line within its threshold.
+
+Left for others: agent-compare's `ident.sh` should require `fired=none signal=none` on each P run (WORKLOG
+cross-session request). Two performance facts this found, not proof defects: vrp's trace at node 1 628 walks a
+460 588-wide bits variable two or three values a step (hours of proof for one conflict), and connect's
+propagation grows 160-fold between nodes 81 and 91 to an 8 GB heap.
+
+Reverting is `git revert f524cdb0` (the check and the comment). The solver is untouched.
+
 ## D-0252  [AUTONOME] The held-out comparison of D-0251: `BAGUETTE_MINIMISE=rec`, `BAGUETTE_PRIORITY=classes` and both, on 400 Challenge instances outside the tuning set, with and without proof, 300 s. By D-0251's rule NONE becomes the default: `rec` gains no verified complete answer with proof, `classes` loses three, both together lose two net
 
 **Status**: DONE (agent-compare, branch `wave97-compare`, measurement only, no `lib/` or `bin/` change). Measured

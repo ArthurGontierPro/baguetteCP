@@ -717,6 +717,12 @@ let line_buf t =
 let write_buf t =
   let b = t.buf in
   Text.char b '\n';
+  (* --time-limit before the search (D-0263): BEFORE [enter], so a stop here abandons a
+     line that never reached the channel and leaves the writer idle, which is what
+     [conclude_interrupted] asks. Disarmed during the search, where the test of [armed]
+     here, inline, is all a line pays: the call cost 0.13 % of handball12's instructions
+     with the proof (D-0263 section 5). *)
+  (match !Deadline.armed with None -> () | Some _ -> Deadline.tick (Text.length b));
   enter t;
   (if not !emit_clock then (
      incr emit_lines;
@@ -1981,6 +1987,18 @@ let has_incumbent t =
 (* End the proof where it stands. I-X2 is not audited: the live ids of the interrupted
    branch are not deleted, and the checker does not ask for it. The caller must be
    [idle], or come through [when_idle]. Idempotent, and nothing to do for a proof that
-   has already ended. *)
+   has already ended.
+
+   WHERE THE PROOF IS A FUNCTION OF ITS INPUTS, AND WHERE IT IS NOT (D-0264). The .pbp is a
+   function of the binary, the input and the options for a run that ends on its own or at
+   BAGUETTE_NODE_LIMIT: same bytes under any GC setting, address layout or machine load
+   (measured on two Challenge instances under seven runtimes, and what
+   scripts/check_determinism.sh checks on four corpus instances). A run that comes here
+   from an ASYNCHRONOUS stop (--time-limit, SIGTERM, SIGINT, SIGXCPU, the heap budget of
+   --max-heap-mb) is cut wherever the stop found the writer, often inside a node's trace,
+   so its proof is that same deterministic prefix, then a cut point that moves from run to
+   run, then this function's ending. Each such proof is valid; none is reproducible, and
+   the `limit:` line says which kind of stop it was (`fired=`, `signal=`, `killed
+   signal=heap-budget`). Comparing two of them byte for byte measures the clock. *)
 let conclude_interrupted t =
   if not t.finished then conclusion ~audit:false t (interrupted_verdict t)

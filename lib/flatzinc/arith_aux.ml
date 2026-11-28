@@ -17,7 +17,14 @@
    caller supplies the two things that differ between readers: how a variable's declared
    bounds are read ([bounds]) and how a fresh Boolean is made and named ([fresh]). *)
 
-type ctx = { bounds : int -> int * int; fresh : unit -> int }
+(* [name] and [where] are for one diagnostic only: the refusal of a ladder whose estimated
+   heap cannot fit (D-0263, [Encoding.reserve]). *)
+type ctx = {
+  bounds : int -> int * int;
+  fresh : unit -> int;
+  name : int -> string;
+  where : unit -> string;
+}
 
 (* `b <-> x >= 0`, and only when the declared domain of x leaves the sign open. *)
 let sign_bool ctx (x : Model.operand) =
@@ -36,8 +43,16 @@ let ladder_bools ctx (y : Model.operand) =
   | Model.Const _ -> []
   | Model.Var j ->
       let lo, hi = ctx.bounds j in
+      (* D-0263: the case split costs a lower bound of [words_per_arith_case] live words
+         per value of y, reserved here, before the first of its Booleans exists. *)
+      Baguette_proof.Encoding.reserve ~what:(ctx.name j)
+        ~why:"the case split of an int_times or int_div over it" ~where:ctx.where ~blo:lo
+        ~bhi:hi
+        ~units:(if hi - lo < 0 then max_int else hi - lo + 1)
+        ~per_unit:Baguette_proof.Encoding.words_per_arith_case ();
       let acc = ref [] in
       for v = lo + 1 to hi do
+        Baguette_proof.Deadline.tick 64 (* --time-limit in the parse, D-0263 *);
         acc := (v, ctx.fresh ()) :: !acc
       done;
       List.rev !acc

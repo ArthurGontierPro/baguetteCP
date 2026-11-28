@@ -117,7 +117,23 @@
    - cumulative: one candidate per time point, ONE pol of cake's capacity row, contribution
      rows, activity clauses and flag clauses ([begin_con]).
    - int_abs: the sign guard is DEFINED as x_ge_0 ([guard]); a row true in both signs is
-     derived by contradiction, `pbc` with the negation plus each candidate ([pin]). *)
+     derived by contradiction, `pbc` with the negation plus each candidate ([pin]).
+
+   ---------------------------------------------------------------------------
+   Selectors by position (D-0262)
+   ---------------------------------------------------------------------------
+
+   A selector compile.ml mints in a KNOWN ORDER is defined by its position, never guessed:
+   maxmin's `_mxN` over bits (one per operand, operand order) and all_different's `_neN`
+   (one per pair i < j that is not two distinct variables, i then j) are cake's k-th flag
+   ([selector_flags]), defined before the first row that names them ([pin]). The guess
+   (the first undefined flag a successful candidate meets, [swap]) stays for the
+   selectors with one flag and an unknown orientation (int_ne, int_lin_ne, the
+   reifications). It went wrong where a CONSTANT operand makes a row true, or implied
+   without its selector: `array_int_maximum(m, [1, x])` pinned operand 0's row by
+   [special] and left its selector undefined (the at-least-one then had no derivation, or
+   cited an unassigned @D2), and `all_different([x1, -1, 4, x5])` defined `_ne3` (pair
+   1_3) as the flag of pair 2_3 on a row of degree 0, which any candidate implies. *)
 
 exception Not_covered of string
 
@@ -402,6 +418,9 @@ type con = {
   cands : (string, cand list) Hashtbl.t;
   by_min : (string, cand list) Hashtbl.t; (* its least variable (or "") -> candidates *)
   aux_seen : (string, unit) Hashtbl.t;
+  sel_flags : string list;
+      (* D-0262: cake's flag of each selector compile.ml mints for this constraint, in
+         the order it mints them ([selector_flags]); [] where none is known by position *)
   rows : (string, crow) Hashtbl.t; (* cake's rows for it, by label *)
   mutable fam : fam;
   mutable pending : string list; (* its @S labels not written yet *)
@@ -453,6 +472,8 @@ type t = {
       (* a bits variable's @BL/@BU, for its next two committed rows *)
   conj : (string, string list) Hashtbl.t;
       (* a choice selector defined as its flag AND no earlier one -> those earlier flags *)
+  pos_flag : (string, string) Hashtbl.t;
+      (* D-0262: a selector -> cake's flag at its position ([selector_flags]) *)
   mutable n_bits : int;
   mutable n_tight : int; (* rows derived by contradiction against the bits' ub rows *)
 }
@@ -492,6 +513,7 @@ let create path =
     finished = false;
     bound_q = Queue.create ();
     conj = Hashtbl.create 4;
+    pos_flag = Hashtbl.create 4;
     n_bits = 0;
     n_tight = 0;
   }
@@ -606,6 +628,13 @@ let declare ?(holes = []) t x ~lo ~hi ~lit =
       (* an auxiliary declared while a constraint is posted: a disequality selector *)
       if lo <> 0 || hi <> 1 then
         refuse "an auxiliary integer %s in constraint %s" x c.cname;
+      (* D-0262: the k-th selector of a constraint whose selectors compile.ml mints in a
+         known order is cake's k-th flag ([selector_flags]); [pin] defines it before the
+         first row that names it *)
+      (if c.sel_flags <> [] then
+         match List.nth_opt c.sel_flags (Hashtbl.length c.aux_seen) with
+         | Some f -> Hashtbl.replace t.pos_flag (lit 1) f
+         | None -> refuse "a selector %s past cake's flags in constraint %s" x c.cname);
       Hashtbl.replace t.aux (lit 1) ();
       Hashtbl.replace c.aux_seen (lit 1) ()
   | None ->
@@ -1680,6 +1709,38 @@ let split_copies t xs (rpn, lf) =
       groups;
     (Buffer.contents b, lit_form !row)
 
+(* D-0262: cake's flag for each selector compile.ml mints for [spec], in minting order, so
+   that a selector is defined by its POSITION and never guessed from the first candidate
+   that happens to imply a row (a row a constant operand makes true, or weaker, implied by
+   any candidate, used to define a selector as the wrong pair's flag). Each flag is the
+   selector's value, positively:
+   - array_int_maximum/minimum over a bits variable: one `$mxN` per operand in operand
+     order (Maxmin.selector_rows, Encoding.add_choice); $mx_i = 1 picks operand i, cake's
+     x[N][i] is x_i >= m (resp. <=); defined as F_i AND no earlier flag ([conj_of]);
+   - int_max/int_min over bits: the same over cake's binary b[N][lge|rge] (b[N][lle|rle]);
+   - all_different: one `$neN` per pair i < j that is not two distinct variables (a
+     constant on either side, or a repeated variable), i then j (compile.ml's
+     [post_all_different]); $ne = 1 iff x_i - x_j > 0 (Encoding.expand_int_lin_ne: the
+     aux is 1 iff sum > rhs), and cake's x[N][i_j] is 1 iff x_i > x_j (its `gt`/`lt` rows) *)
+let selector_flags name spec =
+  match spec with
+  | Array_max (xs, _) | Array_min (xs, _) ->
+      List.mapi (fun i _ -> Printf.sprintf "x[%s][%d]" name i) xs
+  | Max _ -> [ Printf.sprintf "b[%s][lge]" name; Printf.sprintf "b[%s][rge]" name ]
+  | Min _ -> [ Printf.sprintf "b[%s][lle]" name; Printf.sprintf "b[%s][rle]" name ]
+  | All_different xs ->
+      let xa = Array.of_list xs in
+      let n = Array.length xa in
+      List.concat
+        (List.init n (fun i ->
+             List.filter_map
+               (fun j ->
+                 match (xa.(i), xa.(j)) with
+                 | Var a, Var b when a <> b -> None
+                 | _ -> Some (Printf.sprintf "x[%s][%d_%d]" name i j))
+               (List.init (n - i - 1) (fun k -> i + 1 + k))))
+  | _ -> []
+
 let begin_con t ~name spec =
   let c =
     {
@@ -1687,6 +1748,7 @@ let begin_con t ~name spec =
       cands = Hashtbl.create 8;
       by_min = Hashtbl.create 8;
       aux_seen = Hashtbl.create 2;
+      sel_flags = selector_flags name spec;
       rows = Hashtbl.create 16;
       fam = Generic;
       pending = [];
@@ -2191,6 +2253,15 @@ let tight t (cl, cd) (bl, bd) =
 let pin t ~id (c : Opb.constr) =
   let body = Opb.constr_body c in
   let bl, bd = lits_of_row c in
+  (* D-0262: a choice selector is defined by its position, before any derivation that may
+     cite it; guessing it from a candidate's first undefined flag left a constant operand's
+     selector undefined (its row is implied without it, by [special]) *)
+  SM.iter
+    (fun l _ ->
+      let s = var_of l in
+      if not (Hashtbl.mem t.sel s) then
+        Option.iter (fun f -> define t (s, f, true)) (Hashtbl.find_opt t.pos_flag s))
+    bl;
   let rung =
     if t.cur <> None then None
     else
