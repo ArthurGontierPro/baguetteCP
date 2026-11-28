@@ -34085,3 +34085,179 @@ ocamlformat's layout and comments.
 Revert `881263e` (retention's hold, the two calls in `search.ml`, the debug checks, the two tests and
 I-X11). `--cdcl` then deletes clauses it asserts from again; `BAGUETTE_RETENTION=off` avoids it
 without a rebuild. Nothing else depends on it.
+
+## D-0261  [AUTONOME] M19-config-T1, D-0259 implemented: the free search is the default, `--fixed-search` keeps the fixed one. Every recorded reference was pinned to `--fixed-search` first and did not move a byte; the default has its own model-test pass (gated) and its own diff-lane references
+
+**Status**: DONE (agent-free, branch `wave106-free`, 2026-11-27), NOT MERGED. Implements D-0259 section 4
+condition by condition. Taken in mode autonome: D-0259 decided the default, this record decides how.
+**Revert**: `git revert b86ad5e8` (the one-purpose default commit) returns the solver, the free model
+pass and the determinism arm to the fixed default; then revert `deacb530` too for the docs (SPEC, README,
+CLAUDE.md, the .msc), and drop the `free`/`free-noproof` lines and references of the lane commit
+(`aa2a900d`). The pins of step 2 can stay: they name the search the references were recorded with,
+which is right under either default.
+
+### 1. The commits, in order (each keeps the tree green)
+
+| # | commit | what | behaviour |
+|---|---|---|---|
+| 1 | `a2b733fd` | `--fixed-search` in the parser and the usage text; with `-f` it is a usage error (exit 2) | none |
+| 2 | `6b127c2c` | every caller that compares against recorded bytes, expected outputs or a search tree names `--fixed-search` (section 2) | none: lanes byte-identical |
+| 3 | `ad741662` | `scripts/free_model_tests.sh` (`make models-free`, in `make test`), `scripts/fzn_fix_solution.py`, the free arm of `check_determinism.sh`, all under `-f` | none |
+| 4 | **`b86ad5e8`** | **THE DEFAULT**: `bin/main.ml` fills the free search unless `--fixed-search`; the free pass and the determinism arm run with no flag; `test_endtoend` checks the default `-v` line | **the default search** |
+| 4b | `deacb530` | SPEC 3.4 and 2.2, README, CLAUDE.md's module map, `tools/baguette.msc` declares `--fixed-search` | docs |
+| 5 | `aa2a900d` | the diff lane's `free` and `free-noproof` configurations and their references (plain and debug), recorded with `--update --config free --config free-noproof` only | none (lane data) |
+
+**The rule** (usage text, SPEC 3.4): the search starts from a BASE, the free search (`--search alternate
+--restarts luby --phase-saving`) or, under `--fixed-search`, the fixed search (annotation, no restarts, no
+phase saving); an explicit `--search`, `--restarts` or `--phase-saving` replaces its own part of the base,
+wherever it sits on the line (the rule `-f` already had, M7-T32). `-f` stays accepted and changes nothing
+on its own; `-f` with `--fixed-search` is refused (exit 2), as `--no-proof` with `--proof`. Consequence:
+`--search annotation` alone now keeps Luby restarts and phase saving; there is no flag that turns phase
+saving off on the free base, `--fixed-search` is the way. `-v` prints the resolved triple as before.
+Nothing in `lib/` changed: the default lives in `bin/main.ml` only (`Search.default_config` is the
+library's, used by the unit scenes, and stays the fixed search).
+
+### 2. The pinned callers (step 2)
+
+Pinned (`--fixed-search`), because they compare with recorded bytes, expected outputs or a tree:
+- `scripts/run_model_tests.sh`: the main lane (proved and `--no-proof` runs) and the `--bits-above none`
+  lane. Its restart lane names `--search`, `--restarts` and `--phase-saving` itself, so the base does not
+  reach it, unchanged.
+- `scripts/run_scp_tests.sh`: both runs.
+- `scripts/check_determinism.sh`: the fixed arm (after the proof prefix: the self-test's flaky wrapper
+  reads `--proof PREFIX` as arguments 2 and 3; found when the first placement broke the self-test).
+- `bench/diff/configs.tsv`: all 14 configurations (`default` ... `order`), so `scripts/diff_lane.sh`'s
+  plain and debug passes. `restarts` (no `--search`) and `activity` (no `--phase-saving`) WOULD have
+  changed under the free base; the others would have changed entirely.
+- `scripts/scaling_lane.sh`: both modes. `scripts/factor_lane.sh`: its four arms (the reference
+  solvers follow the annotation; the factor wants the same tree).
+- `tools/e2e/chain.sh` (hence `scripts/e2e_lane.sh`): `E2E_SEARCH`, default `--fixed-search`.
+- `scripts/sym_lane.sh`: `SOLVER_ARGS` defaults to `--fixed-search`, `--solver ARGS` replaces it.
+- `bench/series/run_series.sh`: default arms `A:proof:--fixed-search B:proof:-f C:noproof:--fixed-search`
+  (a REV older than D-0261 refuses the flag: give its arms explicitly, the header says how).
+- `test/unit/test_endtoend.ml`: M7-T32's `run` (it pins two improving solutions and compares every flag
+  with them; the `-f` runs go through `run_free`), M6-T24's stops (all but the `-f` case), D-0200's
+  pigeons. New checks: `--fixed-search -v`, an explicit `--restarts` over it, the two contradictions, the
+  default `-v` line, an explicit `--search` over the default.
+
+Not pinned, and why: `scripts/verify_proof.sh` (`make proof`: what a user runs, so the default),
+`scripts/shrink.sh`, `scripts/check_unlimited.sh` (width diagnostics and exit codes, not the search;
+green under the new default), `scripts/compare_run.sh`, `scripts/corpus_run.sh` and
+`scripts/compare_selftest.sh` (drivers; an arm states its flags), `bench/run_bench.sh`,
+`bench/learning_baseline.sh`, `bench/explanation_size.sh`, `bench/width_sat_depth_bisect.sh`,
+`tools/e2e/measure*.sh`, `tools/scp/fzn_lane.sh` and `tools/scp/mutate.sh` (measurement or agreement
+between two runs of the same binary, no recorded bytes), the `test/unit` scenes that build a
+`Search.config` directly (the library default did not move). `scripts/fuzz_lane.sh` and `tools/fuzz/`
+are agent-fuzz's: see section 7.
+
+**Proof that the fixed path is untouched** (binary `6dff4031`, step 2, against the references recorded
+on main): model tests 271/271, determinism 271 models, scp 26/26, `diff_lane.sh --tier all` **347 of 347
+equal**, `--tier all --debug` ****333 of 333 equal****, scaling ok (every line within its threshold),
+`dune runtest --root . --force` 0 FAIL. The same after step 4 (binary `b5859af4`): model tests 271/271,
+scp 26/26, free pass 271/271, determinism 542 runs, `dune runtest --root . --force` 0 FAIL, and the diff lane
+with the step-5 configurations: `--tier all` **393 of 393** (the 347 pinned runs + 46 free), `--debug`
+**377 of 377** (333 + 44); scaling ok; `factor_lane.sh -j 8` on the release build `ad4b4639` exit 0, 90 runs,
+36 proofs VERIFIED, every per-node cost within 0.1 % of its recorded reference.
+
+### 3. SPEC 3.4, before and after
+
+Before: "**Default.** A model with no search annotation is searched by first-fail variable selection with
+min-value branching, depth-first, restarts disabled. **Restarts, phase saving and activity search are
+opt-in** (M10-search-strategy, D-0137). With none of `--restarts`, `--phase-saving` and `--search` given,
+the search is the default above or the annotation, and its output and proof are byte-identical to a build
+without these flags." ... "Each of these substitutes a strategy, and each is only ever the user's explicit
+request. Without the flag, the sentence under "Anything else MUST be refused" below stands as it is."
+
+After: "**Default order.** A model with no search annotation is searched by first-fail variable selection
+with min-value branching. That order, or the annotation, is the FIXED search: under `--fixed-search`,
+depth-first, restarts disabled, no phase saving. **The free search is the default, and the fixed search
+is the option** (M19-config-T1, D-0259, D-0261; from D-0137 to D-0261 it was the other way round). With no
+search option the search is `--search alternate --restarts luby --phase-saving`, which `-f` also names
+[...]. `--fixed-search` starts from the fixed search instead, and with none of `--restarts`,
+`--phase-saving` and `--search` given its output and proof are byte-identical to the default search of a
+build before D-0261. On either base an explicit `--restarts`, `--search` or `--phase-saving` replaces its
+own part; `-f` with `--fixed-search` MUST be refused as a usage error." ... "Each of these substitutes a
+strategy for the annotation's, and since D-0261 the default does so unless `--fixed-search` is given: that
+flag is how a user asks for the annotation alone, as the MiniZinc Challenge's fixed category requires. The
+sentence under "Anything else MUST be refused" below stands under both searches, because the free search
+alternates with the annotation's order and so reads it." SPEC 2.2 adds that `-f` alone changes nothing.
+
+### 4. The default's own tests (step 3, gated by `make check` through `make test`)
+
+`scripts/free_model_tests.sh` runs every model of `test/models/` under the default search and holds it to
+what does not depend on the search, since the free search may print another solution or another sequence
+of improving solutions (it does on 28 of the 271 models): (1) exit 0, stderr empty; (2) veripb VERIFIES
+the proof; (3) the status line is the expected output's; (4) the objective (`%%%mzn-stat: objective=`)
+is the fixed search's; (5) the last printed solution is fixed in the model (`scripts/fzn_fix_solution.py`,
+one `int_eq`/`bool_eq` per printed value, `solve satisfy`) and that model is solved again by the fixed
+search with a proof that must end on `----------` and verify; (6) the same stdout and exit code without
+a proof (D-0126). A self-test first plants `q = [2, 3]` on `array_sat` (refused) and `q = [1, 4]`
+(accepted). Result, under `-f` (step 3) and with no flag (step 4, `b5859af4`): **271 of 271 pass, every
+proof verified, no status or objective differs, 158 printed solutions checked.** `check_determinism.sh`
+gains a free arm: 542 runs, identical.
+
+Time added to `make check`: the free pass 26 s, the determinism arm about 7 s (fataepyc-06 at load 20
+to 30), against about 21 s for the pinned model tests.
+
+### 5. Lane references for the default (step 5)
+
+`bench/diff/configs.tsv` gains `free` (no search flag, proof) and `free-noproof` (`--no-proof`), on
+every instance whose corpus line says `all` (the 21 fast instances and the two QR lines of the slow tier;
+the four slow lines that list their configurations are not extended, and pigment15b stays out of the
+debug pass by its `*` skip). Recorded on `b5859af4` with `--update --config free --config free-noproof`
+and nothing else: 46 plain references, every proof accepted by veripb, and 44 debug references. The 14
+pinned configurations were not re-recorded, and `BINARY` says which update wrote which.
+
+**Determinism of the free search** (checked before relying on its bytes): a second run of the 46 and of
+the 44 equals the record, stdout, counters and proof hashes; with the 271 models twice in
+`check_determinism.sh`, no run of the free search has differed. Restarts are counted in conflicts
+(Luby, unit 100), activity is EVSIDS over conflicts and phases are values, so nothing reads the clock;
+the measurement agrees. So the free search's lane compares bytes, like the others.
+
+### 6. Sanity on real instances (step 6)
+
+60 instances of the tuning set (`bench/tuning/set.lst`, D-0205): the data rows whose index is 1, 4 or 7
+modulo 10 (`sanity60.lst`, 52 of tier 1, every edition), flattened by the series driver at `deacb530`.
+One binary, the release build of `deacb530` (md5 `ad4b463926e2459e4d722d86c0b246b5`, the default commit's
+code), two arms: **N** with no search option (the new default) and **F** with `--fixed-search` (the old
+default). 300 s, 16 GiB address space, `--max-heap-mb 8192`, `MemoryMax=32G`, a proof on every run,
+veripb on every proof (`MemoryMax=64G`, 3 600 s), each proof deleted after its check.
+(`bench/series/run_series.sh` was started first and stopped by its PIDs after 50 minutes: it runs the
+editions one after the other per arm, so each edition waits for its slowest check and 60 instances would
+have taken most of a day. `sanity_one.sh` runs the same settings over all 120 runs, 14 at a time.)
+
+| arm | complete, verified (OPT + UNSAT + SAT) | of which OPT / UNSAT / SAT | incumbent only | nothing | proof rejected | check not finished in 3 600 s |
+|---|---|---|---|---|---|---|
+| N (default, free) | **13** | 8 / 1 / 4 | 39 | 8 | **0** | 10 (incumbents only, proofs 0.6 to 11.4 GB) |
+| F (`--fixed-search`) | **16** | 12 / 1 / 3 | 34 | 10 | **0** | 8 (likewise) |
+
+Every complete answer of both arms is verified; no proof was rejected; `arithmetic-target` wrote no proof
+in either arm (stopped while writing its `.opb`). Nine instances change: N gains `bacp-28` (OPT in 0.5 s,
+F times out), `rotating-workforce Example103` (SAT in 9 s) and `stripboard` (OPT in 20 s), and loses the
+proof of optimality on `radiation i7-15`, `mqueens n11`, `maximum-dag`, `tc-graph-color k10`,
+`flowshop-workers` and `vaccine` (F proves each in 118 to 272 s). Proofs written: 184 GB (N) and 209 GB
+(F), 393 GB in all, all deleted. Results: `/cluster/arthur/baguette-results/free-sanity-20261127/`.
+
+**The direction does NOT match the series in aggregate (3 gained, 6 lost), and it is not a bug in the
+default.** On the same 60 instances D-0227's 1 200 s series has A (fixed) 20 complete and B (`-f`) 17, B
+20 wins and 29 losses (`d0227_on_sanity.tsv`, from its `pairs.tsv`), and each of the nine changes above
+has the same sign there: the three gains are B's wins and the six losses B's losses (B timed out on all
+six at 1 200 s). So the default reproduces `-f` instance by instance, and this draw of 60 is a subset
+where `-f` loses; the 31 optima D-0259 section 2 says `-f` costs include these six. A sample of 60 is
+3.8 % of the series, and a sign test on 3 against 6 is far from significant. D-0259's decision rests on
+the full series and is not reopened here; the follow-up D-0259 already names (a portfolio, fixed first
+then free) is what these six would need.
+
+### 7. What others must do on merge
+
+- **agent-fuzz** (`scripts/fuzz_lane.sh`, `tools/fuzz/`): after this merges, a stream that passes no
+  search runs the FREE search, so the `default` streams and the `-f` streams become the same search and
+  the lane stops covering the fixed one. To keep both: the msc that `fuzz.py` writes declares
+  `--fixed-search` in its `extraFlags` (MiniZinc refuses an undeclared flag), and the streams that today
+  pass no search pass `--fixed-search`. Expected: the same findings as before on the fixed streams; the
+  `-f` streams unchanged. Written as a cross-session request in WORKLOG.md.
+- **MiniZinc users and the Challenge**: `minizinc --solver baguette` without `-f` now gets the free
+  search too. An entry in the Challenge's fixed category must pass `--fixed-search` (declared in
+  `tools/baguette.msc`); `bench/challenge` runs that score the fixed category must name it.
+- **D-0259 section 4, last bullet**: D-0252's switches (`rec`, `classes`, `probe`) were measured under
+  the fixed default; they are to be asked again under this one before any of them changes. Not done here.
