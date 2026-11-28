@@ -646,6 +646,12 @@ let find t x =
 
 let is_declared t x = Names.mem t.ints x
 
+(* D-0270: an ORDER variable's declared width, 0 for a bits variable; one lookup, no
+   tuple (lib/core/justify.ml asks it once per bits-arm derivation). *)
+let order_width t x =
+  let v = find t x in
+  match v.repr with Bits _ -> 0 | Order -> v.hi - v.lo
+
 let domain t x =
   let v = find t x in
   (v.lo, v.hi)

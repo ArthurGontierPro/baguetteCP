@@ -1230,15 +1230,13 @@ let bits_sum frags =
    the one-line tautology and its bound line one literal, so a row whose only order terms
    are Booleans (every big-M reifier) keeps the `ia`-pinned line, whose pin is checked
    against the `pol` alone. *)
-let wide_order ctx x =
-  (not (Encoding.is_bits ctx.encoding x))
-  &&
-  let lo, hi = Encoding.domain ctx.encoding x in
-  hi - lo > 1
+let wide_order ctx x = Encoding.order_width ctx.encoding x > 1
 
+(* [lt_width] is the declared width, so only the encoding is looked up. *)
 let order_summand ctx = function
   | Explanation.Linear_term r ->
-      Explanation.lt_width r > 1 && wide_order ctx r.Explanation.lt_name
+      Explanation.lt_width r > 1
+      && not (Encoding.is_bits ctx.encoding r.Explanation.lt_name)
   | _ -> false
 
 (* One [Combine]'s `pol` on the ladder rule: the terms' citations first, then [extra]
@@ -1247,15 +1245,21 @@ let order_summand ctx = function
    terms. No division, no saturation: the pin reads the constraint as it is (D-0270
    section 3.1). [walk] is set when a wide order fact had no bridge half to cite. *)
 let ladder_part ctx neg_facts_rev ~walk ~extra summands =
-  let rows, terms =
-    List.partition
-      (function Explanation.Term (_, Explanation.Model_row _) -> true | _ -> false)
-      summands
-  in
-  let frag = bits_summand_fragment ~walk ctx neg_facts_rev in
-  let t = List.filter_map frag terms in
-  let r = List.filter_map frag rows in
-  bits_sum (t @ extra @ r)
+  let add acc f = match acc with None -> Some f | Some a -> Some (Pol.add a f) in
+  let t = ref None and rows_rev = ref [] in
+  List.iter
+    (function
+      | Explanation.Term (c, Explanation.Model_row id) ->
+          rows_rev := Pol.mul (Pol.id id) c :: !rows_rev
+      | s -> (
+          match bits_summand_fragment ~walk ctx neg_facts_rev s with
+          | Some f -> t := add !t f
+          | None -> ()))
+    summands;
+  let acc = List.fold_left add (List.fold_left add !t extra) (List.rev !rows_rev) in
+  match acc with
+  | Some e -> e
+  | None -> invalid_arg "Justify.emit_bits_pruning: empty derivation"
 
 (* The ladder rule's pin after the `pol`(s) when a wide order literal has no bridge half
    on the page: the `rup` of [clause], then the `pol`s deleted. The `rup`'s id is the
@@ -1587,15 +1591,13 @@ let emit_bits_combine ctx ~origin ~(concludes : Reason.fact option) summands div
       if !walk then
         (* a wide order literal with no bridge half: it reaches the rungs only through
            the ladder, so the pin is a `rup` *)
-        let origin = origin ^ " [ladder]" in
         ladder_close ctx ~origin ~clause [ Writer.pol w ~origin expr ]
       else (
         (* every wide order literal cites its bridge half, and the terms at their declared
            bounds are free under the negated clause: `ia`'s weakening reads them at their
            maximum, as the bound line did (D-0270 section 3.6) *)
         Encoding.note_bits_ladder enc ~rup:false;
-        Writer.pol_concluding w ~origin:(origin ^ " [ladder, ia]")
-          ~claim:(Opb.clause clause) expr)
+        Writer.pol_concluding w ~origin ~claim:(Opb.clause clause) expr)
     in
     Encoding.note_bits_pruning enc;
     state_clause ctx clause cid;
