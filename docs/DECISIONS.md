@@ -34800,7 +34800,7 @@ propagation grows 160-fold between nodes 81 and 91 to an 8 GB heap.
 
 Reverting is `git revert f524cdb0` (the check and the comment). The solver is untouched.
 
-## D-0252  [AUTONOME] The held-out comparison of D-0251: `BAGUETTE_MINIMISE=rec`, `BAGUETTE_PRIORITY=classes` and both, on 400 Challenge instances outside the tuning set, with and without proof, 300 s. By D-0251's rule NONE becomes the default: `rec` gains no verified complete answer with proof, `classes` loses three, both together lose two net
+## D-0252  [AUTONOME] The held-out comparison of D-0251: `BAGUETTE_MINIMISE=rec`, `BAGUETTE_PRIORITY=classes` and both, on 400 Challenge instances outside the tuning set, with and without proof, 300 s. By D-0251's rule NONE becomes the default: `rec` gains no verified complete answer with proof, `classes` loses three, both together lose two net; nor does `BAGUETTE_PROBE=root` (section 6, net 0 in both modes). And a load drop alone moved the default by 0.08 of the share (section 7)
 
 **Status**: DONE (agent-compare, branch `wave97-compare`, measurement only, no `lib/` or `bin/` change). Measured
 2026-11-27 on fataepyc-07. Scripts, tables and runs: `/cluster/arthur/baguette-results/compare/` (README first).
@@ -34922,14 +34922,17 @@ measurement tools; delete them to undo.
 Requested by the orchestrator once D-0250 merged (`7970ddc`). Binary: `make release` of `7970ddc`, md5 `c79a6b06`
 (`c79a6b0683eb6ce2c2245335e4ddde2d`).
 
-**The new binary against the old one** (`ident.txt`, `ident2.txt`): on the first 20 instances of the run order, the
-`off` arm at 20 000 nodes without proof gives identical stdout and counters on all 20; at 2 000 nodes with proof,
-identical stdout and `.opb` on all 20 and identical `.pbp` on 18. The two others (2021 vrp-submission
-toy_D_2v_4l_w_reload, 2021 MZNC connect_0018) are not a difference of binary: each binary run twice writes four
-different `.pbp` there, with the same search and the same `.opb`; the proof-side counters move (deferred reasons
-materialised 95 993 / 92 801, `pol` lines 200 763 / 191 187, atoms minted over bits variables 59 037 / 55 845).
-**The proof of a run is not reproducible byte for byte on these two instances**, on either binary. Not
-investigated here (a measurement task); a GC-dependent cache on the bits path is the first suspect.
+**The new binary against the old one** (`ident.txt`, `ident2.txt`, `tools/ident.sh`, `tools/ident2.sh`): on the
+first 20 instances of the run order, the `off` arm at 20 000 nodes without proof gives identical stdout and counters
+on all 20; at 2 000 nodes with proof, identical stdout and `.opb` on all 20 and identical `.pbp` on 18. Seventeen of
+the twenty runs reached the node limit (`limit:` line `fired=none signal=none`). Three did not: cable_tree_wiring
+A073 with proof stopped at the heap budget (and its proof was identical anyway), and 2021 vrp-submission
+toy_D_2v_4l_w_reload and 2021 MZNC connect_0018 were cut by `timeout 900` (vrp at node 1 628 inside a trace) or by the
+heap budget (connect at node 91). Their `.pbp` differs between ANY two runs, the same binary twice included,
+because the cut point of a clock or heap stop moves run to run; agent-nondet (D-0264) traced it and found nothing
+moves under a node limit that is actually reached. So the two binaries do not differ in what this check can see.
+My first reading, that the proof was not reproducible, was wrong: the harness compared cut runs, and
+`tools/ident.sh` should have checked the `limit:` line first, as D-0264's request says.
 
 **Design, fixed before any probe number** (README, "Probe addendum"): `prb` (probe root, the other switches off)
 interleaved with a fresh `off2` arm on the same new binary, 1 600 runs, same settings and the same node rules; the
@@ -34957,7 +34960,7 @@ SAT 6+/5- and 3+/3-. Unverified: 4 per arm (the same veripb timeouts). No proof 
 same node count, ratio 1.000, `offcmp.txt`), and yet against `off` it scores 0.573 without proof (68+/10-, +5
 complete) and 0.586 with proof (75+/6-, +3 verified). The one difference is the node: series2 finished between the
 campaigns, the load at launch fell from a median of 73 (interquartile 52 to 91) to 49, and the same work took 5.6 %
-less wall time at the median. The five complete answers `off2` gains without proof include four of the six `rec`
+less wall time at the median. The five complete answers `off2` gains without proof are five of the six `rec`
 gained in section 3 (solbat, road-cons, ma-path-finding, gfd-schedule, products-and-shelves are all 300 s edge
 instances). So:
 

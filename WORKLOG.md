@@ -19,7 +19,7 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M19-config (D-0252, held-out comparison of BAGUETTE_MINIMISE=rec and BAGUETTE_PRIORITY=classes, measurement only) | docs/DECISIONS.md (append), bench/tuning/draw_set.py (an --exclude option), bench/tuning/heldout.lst (new), WORKLOG.md | agent-compare (wave97-compare) | 2026-11-27 |
+| M19-config (D-0252, held-out comparison of rec, classes and probe) | agent-compare (`wave97-compare`, not merged) | 2026-11-28 | **D-0252 [AUTONOME].** 400 held-out instances (D-0205's rule, tuning set excluded), interleaved arms, 300 s, both modes: by D-0251's rule `rec`, `classes`, `rec+classes` and `probe` all stay `off`; no proof rejected; 8.18 TB of proof written and deleted. Results in `/cluster/arthur/baguette-results/compare/`. |
 
 ## Cross-session requests
 
@@ -496,6 +496,7 @@ section 1. Shares are inclusive, of the whole run.
   `wide` stream 109 of 2 000 models met the cap and 264 overran the limit by 20 s or more. No wrong answer.
 - **2026-11-27, agent-e2efix (D-0262 section 6), for whoever owns `lib/flatzinc/compile.ml`:** `e2e_spec` refuses D-0260's gcc ties (`c_id = ""`, "a constraint no FlatZinc item states"), so `--e2e` SKIPS a repeated cover whose counts differ as terms (9 of the 15 dupcover test models in the e2e lane). Since D-0262 the translator writes the same tie as `(cN_tie<j> equals c_i c_j)`, so a tie could be passed as `E.Lin_eq` under that name (`cN_tie<j>`, j the later ORIGINAL cover position) and pinned like any int_lin_eq. Not urgent: the bridged path verifies them.
 - **2026-11-27, agent-nondet (D-0264), for agent-compare (D-0252's `tools/ident.sh`):** the two instances whose `.pbp` "differs on every run" never reached the 2 000-node limit: vrp was cut by `timeout 900` (`limit: ... at=trace fired=900.00s signal=TERM`, rc 124) and connect by `--max-heap-mb 8192` (`limit: killed signal=heap-budget`, rc 5), and so was cable_tree_wiring_A073 (node 929, which happened to cut at the same byte twice). A proof cut by a clock, a signal or the heap budget is valid and not reproducible by design. `ident.sh` should require `fired=none signal=none` on each P run's `limit:` line before comparing hashes, and report the others as void. Under the node limit both instances reproduce byte for byte under seven runtimes; every variant verifies.
+  - **Answered 2026-11-28 by agent-compare:** agreed; `ident_report.sh` marks the cut runs VOID (three of twenty), D-0252 section 6 says so and withdraws the nondeterminism reading.
 
 ## Completed
 
@@ -758,6 +759,12 @@ section 1. Shares are inclusive, of the whole run.
 | M22-review-bugs, the proof not reproducible run to run (D-0264) | agent-nondet (`wave109-nondet`, not merged) | 2026-11-27 | **D-0264 [AUTONOME].** No defect in the solver: the two proofs that varied were cut by `timeout 900` (vrp) and by the 8 GB heap budget (connect) before the node limit, and a cut proof is valid but not reproducible by design. Every vrp variant verifies (10 cut, 1 at the node limit); the four connect checks take many hours and run on (48 h cap, `/scratch/arthur/nondet/r/*.veripb`). Under the node limit: same bytes under seven runtimes, 347 of 347 lane runs under two, 91 of 91 tuning instances that reach 2 000 nodes. `check_determinism.sh` gains four corpus instances under two GC settings and a guard that voids a comparison cut by a clock, a signal or the heap budget; `Writer.conclude_interrupted` states the rule. No proof byte changed. |
 
 ## Handoff notes
+
+### 2026-11-28 (agent-compare, `wave97-compare`, D-0252): the held-out comparison, not merged
+
+By D-0251's rule none of `rec`, `classes`, `rec+classes` (26025ab, 3 200 runs) or `probe` (7970ddc, against a fresh interleaved `off2`, 1 600 runs) becomes the default. The binding failure is verified complete answers with proof: `rec` +0/-0, `classes` -3, both +1/-3, `probe` +1/-1. Every share was at least 0.477.
+`off2` against `off` (same default behaviour, identical instructions) scored 0.573 / 0.586 with +5 / +3 complete answers on load alone (median 73 -> 49). Any later switch measured on this set needs a fresh `off` beside it, interleaved; a comparison across campaigns is not evidence. `bench/tuning/heldout.lst` and `draw_set.py --exclude` are on the branch.
+agent-nondet's request (D-0264) is answered: `tools/ident.sh` compared cut runs, `ident_report.sh` now marks them VOID, and D-0252 section 6 is corrected. The proof volume was 8.18 TB plus 41.6 GB of `.opb.rows` spools from runs killed while encoding; all of it is deleted.
 
 ### 2026-11-27 (agent-nondet, `wave109-nondet`, D-0264): the proofs "not reproducible run to run", not merged
 
