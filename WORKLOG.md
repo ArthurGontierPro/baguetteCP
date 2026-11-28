@@ -19,6 +19,7 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
+| M19-config (D-0267, second held-out campaign: rec, classes, probe and fixed under the free-search default, fataepyc-06, measurement only) | docs/DECISIONS.md (append), WORKLOG.md | agent-compare (wave112-compare2) | 2026-11-28 |
 | M19-config (D-0252, held-out comparison of rec, classes and probe) | agent-compare (`wave97-compare`, not merged) | 2026-11-28 | **D-0252 [AUTONOME].** 400 held-out instances (D-0205's rule, tuning set excluded), interleaved arms, 300 s, both modes: by D-0251's rule `rec`, `classes`, `rec+classes` and `probe` all stay `off`; no proof rejected; 8.18 TB of proof written and deleted. Results in `/cluster/arthur/baguette-results/compare/`. |
 
 ## Cross-session requests
