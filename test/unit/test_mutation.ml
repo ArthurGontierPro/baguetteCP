@@ -3184,14 +3184,17 @@ solve :: seq_search([int_search([b, y], input_order, indomain_min, complete), in
        to [Amo]: the .opb states the all_different as one row per value, and the proof
        derives each value's direct at-most-one from it at the top. A satisfiable model
        whose search fails under decisions, so Hall derivations citing those lines are
-       written and a later trace line rests on them. Three corruptions, each refused at a
-       LATER line at the RUP wording, at full strength:
+       written and a later trace line rests on them. Four corruptions, each refused at the
+       corrupted line or a LATER one, at the RUP wording, at full strength:
          amo-row-degree   value 1's .opb row asks one fewer (at most TWO of the five
                           variables equal 1): a weaker model, so only a line that needed
                           the at-most-one can fail;
          amo-row-flip     one literal of that row negated (x0_ge_2 -> ~x0_ge_2);
          amo-line-div     value 2's derived line divides its rung sum by 3, not 2: the
-                          rounding that makes ~x_eq_v the whole of ne(x, v) is lost.
+                          rounding that makes ~x_eq_v the whole of ne(x, v) is lost;
+         amo-pair-flip    the first `rup` pair `~a_eq_v \/ ~b_eq_v` (alldiff's [pair]
+                          under the option) with a literal made positive: refused AT
+                          that line (its 1-based number is past [pair_at]).
        A corruption NOT here, measured: dropping one channelling half from value 1's line
        verifies, because it leaves x0_ge_2 where ~x0_eq_1 stood, and x0_ge_2 implies
        ~x0_eq_1: the corrupted line is a STRONGER line the model also implies. *)
@@ -3270,7 +3273,7 @@ solve :: seq_search([int_search([b, y], input_order, indomain_min, complete), in
     in
     gated ~tag:"alldiff-amo"
       ~control:(fun () -> control_holds ~tag:"alldiff-amo" ~proof:b.pbp)
-      ~declares:[ "amo-row-degree"; "amo-row-flip"; "amo-line-div" ]
+      ~declares:[ "amo-row-degree"; "amo-row-flip"; "amo-line-div"; "amo-pair-flip" ]
       (fun c ->
         let opb_with f =
           let ls = Array.copy opb_lines in
@@ -3300,7 +3303,29 @@ solve :: seq_search([int_search([b, y], input_order, indomain_min, complete), in
         ls.(div_at) <- replace ~from:" 2 d " ~into:" 3 d " ls.(div_at);
         let p = b.pbp ^ ".div.pbp" in
         write p ls;
-        refused_later c "amo-line-div" ~opb:b.opb ~pbp:p ~after:(div_at + 1));
+        refused_later c "amo-line-div" ~opb:b.opb ~pbp:p ~after:(div_at + 1);
+        (* The first PAIR the induction adds, `rup +1 ~a_eq_v +1 ~b_eq_v >= 1 ;`, with
+           its first literal made positive: a false claim on a satisfiable model, so the
+           pair line ITSELF must be refused (it rests on the per-value line alone). *)
+        let is_pair l =
+          let n = ref 0 in
+          String.iteri
+            (fun i _ ->
+              if i + 4 <= String.length l && String.sub l i 4 = "_eq_" then incr n)
+            l;
+          contains l " rup +1 ~" && !n = 2 && contains l ">= 1 ;"
+        in
+        let pair_at = ref (-1) in
+        Array.iteri (fun i l -> if !pair_at < 0 && is_pair l then pair_at := i) pbp_lines;
+        if !pair_at < 0 then (
+          ran c "amo-pair-flip";
+          fail "alldiff-amo/amo-pair-flip: no rup pair line, nothing tested")
+        else
+          let ls = Array.copy pbp_lines in
+          ls.(!pair_at) <- replace ~from:" rup +1 ~" ~into:" rup +1 " ls.(!pair_at);
+          let p = b.pbp ^ ".pair.pbp" in
+          write p ls;
+          refused_later c "amo-pair-flip" ~opb:b.opb ~pbp:p ~after:!pair_at);
 
     census ~dir;
 
