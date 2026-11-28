@@ -1543,6 +1543,40 @@ let rup_lazy t ~origin c =
 
 let rup t ~origin c = rup_lazy t ~origin:(fun () -> origin) c
 
+(* D-0270: an order variable's bridge HALF (Encoding.order_bridge), written straight into
+   the line buffer from its bounds, with no list of terms. The bytes are [rup]'s for
+
+     B1'  Σ_{w=lo+1..hi} +1 x_ge_w  +k ~x_ge_v >= k        ([b1], k = v - lo)
+     B2'  Σ_{w=lo+1..hi} +1 ~x_ge_w +K x_ge_v  >= K        (K = hi - lo - k + 1)
+
+   The term lists [rup] needs cost about 2 GB of transient heap for a variable of 22.5 M
+   rungs (a liner-sf objective), allocated at a citation late in the search, when the
+   live heap is largest; this writes the same line with the buffer alone. Not a mutation
+   knob's site: the lanes corrupt a half by its text (scripts/mutate_proof.sh). *)
+let rup_ladder_half t ~origin ~name ~lo ~hi ~v ~b1 =
+  if t.null then fresh_lazy t ~origin:(fun () -> origin)
+  else (
+    t.n_rup <- t.n_rup + 1;
+    let b = line_buf t in
+    add_label b (t.next_id + 1);
+    Text.string b "rup ";
+    for w = lo + 1 to hi do
+      Text.string b "+1 ";
+      Text.lit b (if b1 then Lit.ge name w else Lit.negate (Lit.ge name w));
+      Text.char b ' '
+    done;
+    let k = v - lo in
+    let d = if b1 then k else hi - lo - k + 1 in
+    Text.char b '+';
+    Text.int b d;
+    Text.char b ' ';
+    Text.lit b (if b1 then Lit.negate (Lit.ge name v) else Lit.ge name v);
+    Text.string b " >= ";
+    Text.int b d;
+    Text.string b " ;";
+    put_line t;
+    fresh_lazy t ~origin:(fun () -> origin))
+
 (* Reverse unit propagation of a clause -- the common case. *)
 let rup_clause_lazy t ~origin lits = rup_lazy t ~origin (Opb.clause lits)
 let rup_clause t ~origin lits = rup t ~origin (Opb.clause lits)

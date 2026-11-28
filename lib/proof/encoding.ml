@@ -2315,22 +2315,9 @@ let order_bridge t w x v ~b1 =
                  x v);
           let id =
             Writer.with_level w 0 (fun () ->
-                let k = v - iv.lo in
-                let rungs = order_rungs iv in
-                let origin = Printf.sprintf "bridge %s>=%d" x v in
-                if b1 then
-                  Writer.rup w ~origin
-                    (Opb.ge
-                       (List.map (fun l -> (1, l)) rungs
-                       @ [ (k, Lit.negate (Lit.ge x v)) ])
-                       k)
-                else
-                  let big_k = iv.hi - iv.lo - k + 1 in
-                  Writer.rup w ~origin
-                    (Opb.ge
-                       (List.map (fun l -> (1, Lit.negate l)) rungs
-                       @ [ (big_k, Lit.ge x v) ])
-                       big_k))
+                Writer.rup_ladder_half w
+                  ~origin:(Printf.sprintf "bridge %s>=%d" x v)
+                  ~name:x ~lo:iv.lo ~hi:iv.hi ~v ~b1)
           in
           t.n_bridges <- t.n_bridges + 1;
           iv.halves <- IMap.add key (Some id) iv.halves;
