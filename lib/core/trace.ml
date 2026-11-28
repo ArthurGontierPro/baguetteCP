@@ -723,6 +723,17 @@ let derive_ahead (ctx : Justify.ctx) store (e : Store.entry) =
         | Explanation.Decision _ -> ()
         | _ -> ignore (Justify.emit ctx why : Writer.cid))
 
+(* The BITS arm's derivation of one pruning, when its derivation is a bits derivation
+   (see [emit_to_page]): the `pol` deriving its trace clause, and the clause. *)
+let bits_derived (ctx : Justify.ctx) ~name ~facts (e : Store.entry) why =
+  match Explanation.force why with
+  | forced when Justify.is_bits_derivation forced ->
+      let origin =
+        Printf.sprintf "bits trace: %s from %d fact(s)" name (List.length facts)
+      in
+      Some (Justify.emit_bits_pruning ctx ~origin ~concludes:e.Store.concludes forced)
+  | _ -> None
+
 (* Raised by [emit] when its [stop] says yes, between two trail entries, so that a
    --time-limit stop is not delayed by a long trace (M6-T23, D-0149: the overshoot was
    the stop never being asked inside a conflict's trace). Every line already written is
@@ -808,32 +819,21 @@ let emit_to_page ?(stop = fun () -> false) (ctx : Justify.ctx) t store =
              global unit from `soli` (D-0130 section 9), whose bridge is already on the
              page -- keeps its `rup`. *)
           let bits = bits_arm ctx.Justify.encoding ~claim_owner:name all_facts in
-          let derived_of why =
-            if bits then
-              match Explanation.force why with
-              | forced when Justify.is_bits_derivation forced ->
-                  let origin =
-                    Printf.sprintf "bits trace: %s from %d fact(s)" name
-                      (List.length facts)
-                  in
-                  Some
-                    (Justify.emit_bits_pruning ctx ~origin ~concludes:e.Store.concludes
-                       forced)
-              | _ -> None
-            else None
-          in
           (* A bulk entry (D-0268, [Store.remove_interior]) has one derivation per hole,
              and each hole's line is decided against its own, as each merged entry's line
              was against its entry's; every other entry has one derivation for its lines. *)
-          let per_hole = Option.is_some e.Store.per_value in
+          let per_hole = bits && Option.is_some e.Store.per_value in
           let derived =
-            if per_hole then None else derived_of (Store.explanation store e)
+            if bits && not per_hole then
+              bits_derived ctx ~name ~facts e (Store.explanation store e)
+            else None
           in
           List.iter
             (fun { claim; settled_over; hole } ->
               let derived =
                 match hole with
-                | Some v when per_hole -> derived_of (Store.removal_explanation store e v)
+                | Some v when per_hole ->
+                    bits_derived ctx ~name ~facts e (Store.removal_explanation store e v)
                 | _ -> derived
               in
               let facts, cited =
