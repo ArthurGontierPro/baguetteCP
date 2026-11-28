@@ -19,6 +19,7 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
+| M18-coverage-T9 (all_different rows per value, D-0271) | `lib/proof/encoding.ml` (`add_all_different` and a new per-value variant beside it only), `lib/core/prop/alldiff.ml`, `lib/core/prop/inverse.ml` / `circuit.ml` only if they cite alldiff's rows, `lib/flatzinc/compile.ml` (all_different entry), `lib/proof/e2e.ml` only if needed, `bin/main.ml` (usage text), PROOF-FORMAT sections 3 and 4 (the option), tests and models | agent-pairs (`wave116-pairs`) | 2026-11-28 |
 
 ## Cross-session requests
 
