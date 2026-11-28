@@ -19,6 +19,7 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
+| M18-coverage-T9 step 2, one trace line per gap (D-0269) | lib/core/trace.ml, lib/core/store.ml (bulk entry's proof side), lib/core/justify.ml, lib/core/prop/element.ml, lib/core/prop/table.ml, lib/core/analysis.ml/learn.ml (only if a cited line changes shape), docs/PROOF-FORMAT.md s4/s5, tests, models | agent-gapline (wave114-gapline) | 2026-11-28 |
 
 ## Cross-session requests
 
