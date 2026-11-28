@@ -4212,6 +4212,55 @@ let test_d0268_element_one_entry () =
            (List.length l))
         false
 
+(* D-0268: table removes each run of values no tuple carries as ONE store change, on an
+   empty reason. test/models/table_gap_sat.fzn's scene: x over 0..20, the column
+   {0, 7, 12, 20}, y <> 1 killing the tuples of 0 and 12. Seventeen values are carried by
+   no tuple; they took seventeen entries and now take at most two (one run, or two if the
+   dead tuple's 12 comes between them), with 0 and 12 one entry each. *)
+let test_d0268_table_runs () =
+  let t =
+    compile_src
+      "var 0..20: x;\n\
+       var 1..3: y;\n\
+       var bool: s1;\n\
+       var bool: s2;\n\
+       var bool: s3;\n\
+       var bool: s4;\n\
+       constraint baguette_table([x, y], [0, 1, 7, 2, 12, 1, 20, 3], [s1, s2, s3, s4]);\n\
+       constraint int_ne(y, 1);\n\
+       solve satisfy;\n"
+  in
+  sink_proof t.Compile.encoding;
+  let st = t.Compile.store and eng = t.Compile.engine in
+  let x = Option.get (Store.var_named st "x") in
+  (match Engine.propagate eng st with
+  | Engine.Fixpoint -> ()
+  | Engine.Conflict _ -> failwith "D-0268: the table scene has no conflict");
+  let on_x =
+    List.filter
+      (fun e -> Baguette_core.Var.equal e.Store.var x)
+      (List.init (Store.trail_length st) (Store.trail_entry st))
+  in
+  let uncarried =
+    List.filter (fun v -> not (List.mem v [ 0; 7; 12; 20 ])) (List.init 19 succ)
+  in
+  let runs =
+    List.filter_map
+      (fun e ->
+        match Domain.classify ~old:e.Store.old ~now:e.Store.now with
+        | Domain.Holes vs when List.length vs > 1 -> Some vs
+        | _ -> None)
+      on_x
+  in
+  check "D-0268: x ends on {7, 20}" (Domain.to_list (Store.get st x) = [ 7; 20 ]);
+  check
+    (Printf.sprintf
+       "D-0268: the 17 uncarried values go in at most two entries (%d entries on x)"
+       (List.length on_x))
+    (List.length runs <= 2
+    && List.sort compare (List.concat runs) = uncarried
+    && List.length on_x <= 4)
+
 (* M11-complexity-T8 / D-0155: [Element.add_facts] replaced a quadratic [List.mem] /
    [@] fold with a hashed accumulator, and the list it returns is the order of a trace
    line's tail, which the proof diff compares byte for byte. So the new function is held to
@@ -11082,6 +11131,7 @@ let () =
   test_d0091_element_root_defining ();
   test_d0214_element_reason_on_demand ();
   test_d0268_element_one_entry ();
+  test_d0268_table_runs ();
   test_d0155_element_add_facts_oracle ();
   test_ix6_justification_snapshot ();
   test_ix6_cross_conflict_snapshot ();

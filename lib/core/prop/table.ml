@@ -600,35 +600,81 @@ let supported t i v =
       in
       scan 0
 
-(* Step S: remove every value of position i no live tuple carries. *)
+(* Step S: remove every value of position i no live tuple carries.
+
+   ONE STORE CHANGE PER RUN OF VALUES NO TUPLE CARRIES (D-0268, M18-coverage-T9). A value
+   outside the column altogether (no tuple, live or dead, has it at position i) is removed
+   on an EMPTY reason: its line `x <> v` is RUP from the at-least-one row and the DEF rows
+   alone. Every such value strictly inside the current bounds therefore shares its reason
+   with the next, and a maximal run of them goes in ONE entry ([Store.remove_interior],
+   store.ml's bulk rule) with one derivation per value, the clause each removal carried.
+   The run is flushed before any other removal of the pass (a value carried by dead tuples
+   has a reason of its own, and a value at a bound moves it, settling over the run's holes,
+   which must be holes by then), so the entries' lines come out in the order the per-value
+   removals wrote them, value for value. proteindesign declares 7.8 to 15.3 M values of
+   which the columns carry 6 to 25 thousand (D-0265). *)
 let values store t i =
   match t.xs.(i) with
   | Fixed _ -> ()
   | Cell { var; name; dlo; dhi } ->
       let s = t.slot.(i) in
+      let run = ref (Array.make 16 0) and n = ref 0 in
+      let flush () =
+        if !n > 0 then (
+          let vs = Array.sub !run 0 !n in
+          n := 0;
+          let memo = Hashtbl.create 16 in
+          let justify v =
+            match Hashtbl.find_opt memo v with
+            | Some e -> e
+            | None ->
+                let e =
+                  clause_expl [ Lit.negate (Lit.ge name v); Lit.ge name (v + 1) ] []
+                in
+                Hashtbl.replace memo v e;
+                e
+          in
+          match
+            Store.remove_interior store var vs (Reason.of_facts Reason.none) ~justify
+          with
+          | Store.Conflict c -> raise (Found c)
+          | Store.Changed | Store.Unchanged -> ())
+      in
       Domain.iter
         (fun v ->
-          if not (supported t i v) then (
+          if not (supported t i v) then
             let d = Store.get store var in
-            start t;
-            Array.iter (fun k -> add_sel store t ~set:false k) (supports t i v);
-            if v = Domain.lo d && v > dlo then add_key t (2 * s) v;
-            if v = Domain.hi d && v < dhi then add_key t ((2 * s) + 1) v;
-            if Domain.is_fixed d then raise (Found (conflict_now store t));
-            let fs, _, _ = finish t in
-            let claim =
-              (if v > dlo then [ Lit.negate (Lit.ge name v) ] else [])
-              @ if v < dhi then [ Lit.ge name (v + 1) ] else []
-            in
-            match
-              Store.remove store var v
-                (Reason.because
-                   ~concludes:(removal_conclusion ~name ~dlo ~dhi d v)
-                   fs (clause_expl claim fs))
-            with
-            | Store.Conflict c -> raise (Found c)
-            | Store.Changed | Store.Unchanged -> ()))
-        (Store.get store var)
+            if Array.length (supports t i v) = 0 && v > Domain.lo d && v < Domain.hi d
+            then (
+              if !n = Array.length !run then (
+                let bigger = Array.make (2 * !n) 0 in
+                Array.blit !run 0 bigger 0 !n;
+                run := bigger);
+              !run.(!n) <- v;
+              incr n)
+            else (
+              flush ();
+              let d = Store.get store var in
+              start t;
+              Array.iter (fun k -> add_sel store t ~set:false k) (supports t i v);
+              if v = Domain.lo d && v > dlo then add_key t (2 * s) v;
+              if v = Domain.hi d && v < dhi then add_key t ((2 * s) + 1) v;
+              if Domain.is_fixed d then raise (Found (conflict_now store t));
+              let fs, _, _ = finish t in
+              let claim =
+                (if v > dlo then [ Lit.negate (Lit.ge name v) ] else [])
+                @ if v < dhi then [ Lit.ge name (v + 1) ] else []
+              in
+              match
+                Store.remove store var v
+                  (Reason.because
+                     ~concludes:(removal_conclusion ~name ~dlo ~dhi d v)
+                     fs (clause_expl claim fs))
+              with
+              | Store.Conflict c -> raise (Found c)
+              | Store.Changed | Store.Unchanged -> ()))
+        (Store.get store var);
+      flush ()
 
 (* With x naming a variable twice, S at one position can remove a value another position's
    live tuple carries, so the call goes round again until S changes nothing; over distinct
