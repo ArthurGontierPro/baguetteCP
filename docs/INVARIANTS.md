@@ -47,7 +47,9 @@ Assertions guarded by `BAGUETTE_DEBUG=1` should check as many of these as is aff
   assignment violates its constraint.
 - **I-P4** Every change carries an explanation. Enforced by the type — the function that
   writes a domain takes an `Explanation.t`, not an optional one. Do not add a `?reason`
-  optional argument to work around this.
+  optional argument to work around this. The bulk mutator `Store.remove_interior` (D-0268:
+  several interior values in one trail entry) takes one reason and a derivation PER VALUE,
+  both mandatory, and `Store.removal_explanation` answers which derivation removed a value.
 - **I-P6** One snapshot, every deduction (M6-T19). A pass photographs the store once (its
   snapshot) and may then apply *every* deduction that snapshot justifies before it reads
   anything again. Sound because a reason's facts are frozen at the values they had in the

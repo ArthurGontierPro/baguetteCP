@@ -1,0 +1,12 @@
+% M18-coverage-T9 step 2 (D-0269): the gap line on an UNSATISFIABLE model. E1 removes c's
+% gap 3..8 (one bulk entry, one line `~c_ge_3 \/ c_ge_9`); E2 reads c as its index, so
+% r = 3 (carried only by c's gap positions 3..8) and r = 4 (carried by none) both lose
+% their support, and r = 3 + d leaves nothing: the refutation rests on c's gap.
+var 1..4: i :: output_var;
+var 1..10: c :: output_var;
+var 1..5: r :: output_var;
+constraint array_int_element(i, [1, 2, 9, 10], c);
+constraint array_int_element(c, [1, 1, 3, 3, 3, 3, 3, 3, 5, 5], r);
+var 0..1: d :: output_var;
+constraint int_lin_eq([1, -1], [r, d], 3);
+solve :: int_search([d, i], input_order, indomain_max, complete) satisfy;

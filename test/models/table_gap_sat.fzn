@@ -1,0 +1,15 @@
+% M18-coverage-T9 (D-0268): a table column with runs of values no tuple carries. x over
+% 0..20, the column {0, 7, 12, 20}; y <> 1 kills the tuples of 0 and 12. Step S removes
+% each run of uncarried interior values (1..6, 8..11, 13..19) as ONE store change on an
+% empty reason, and 0 (a bound) and 12 (carried by a dead tuple) one at a time, each on
+% its own reason, flushing the run before it so the lines keep their order.
+predicate baguette_table(array [int] of var int: x,array [int] of int: t,array [int] of var bool: s);
+var 0..20: x :: output_var;
+var 1..3: y :: output_var;
+var bool: s1;
+var bool: s2;
+var bool: s3;
+var bool: s4;
+constraint baguette_table([x, y], [0, 1, 7, 2, 12, 1, 20, 3], [s1, s2, s3, s4]);
+constraint int_ne(y, 1);
+solve :: int_search([x], input_order, indomain_min, complete) satisfy;

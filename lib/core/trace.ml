@@ -46,6 +46,10 @@
      [int_ne]'s justification. Only a claim that has to be a *single* literal forces the
      direct encoding (D-0019 point 3: a disequality needs the order encoding, not the
      direct one), and a trace line's claim never has to be one;
+   - a BULK entry's holes ([Store.remove_interior], D-0268) claim one clause per maximal
+     run a..b of consecutive removed values, `x <= a-1 \/ x >= b+1` (D-0269), where they
+     claimed one "x <> v" per value: the line count of an element's declared gap falls
+     from the gap's width to the number of its runs. Off the bits arm only; see [lines];
    - a bound the settle strengthened past a hole claims the recorded bound and cites the
      hole's facts as well as the propagator's, so the line is RUP against the hole's own
      line. That one line is therefore **not** a consequence of a single model row. A
@@ -186,10 +190,15 @@ type t = {
    the audit off reports "not measured" rather than a false violation. The level half is
    always measured: [Writer] keeps no per-id level table this module may read, but the
    levels are exactly the ones this module chose for the two lines itself. *)
-(* One line this module wrote, against the trail position it wrote it for. [w_hole] is
-   the hole value for a hole line and [None] for a bound line; [w_level] is the level the
-   line was filed at, which is the entry's level and not the writer's ambient one. *)
-and written = { w_hole : int option; w_cid : Writer.cid; w_level : int }
+(* One line this module wrote, against the trail position it wrote it for. [w_hole] says
+   what a hole line claims removed: [Hole v] one value, [Gap (a, b)] a maximal run of a
+   bulk entry (D-0269), [No_hole] for a bound line. A variant rather than an option and a
+   second field, so a line allocates what it allocated before D-0269 (measured: one more
+   word per line cost evm a major collection and +0.34 % instructions per node). [w_level]
+   is the level the line was filed at, which is the entry's level and not the writer's
+   ambient one. *)
+and written = { w_hole : hole; w_cid : Writer.cid; w_level : int }
+and hole = No_hole | Hole of int | Gap of int * int
 
 and citation = {
   citing : Writer.cid;
@@ -359,8 +368,11 @@ let claim_of_cond ~what ~name (c : Encoding.cond) =
    is the one that would quietly write the *empty* clause, i.e. an unconditional
    contradiction, which is the worst thing a trace line can say (compare I-P5, every
    change carries its facts, since merged into I-P4). *)
-let hole_clause encoding name v =
-  match (Encoding.le encoding name (v - 1), Encoding.ge encoding name (v + 1)) with
+(* [gap_clause encoding name a b] is the same clause for the run [a..b] (D-0269):
+   x <= a-1 or x >= b+1, i.e. `~x_ge_a \/ x_ge_(b+1)`, and [hole_clause] is its [a = b]
+   case, so a one-value run writes the bytes it always wrote. *)
+let gap_clause encoding name a b =
+  match (Encoding.le encoding name (a - 1), Encoding.ge encoding name (b + 1)) with
   | Encoding.Holds, _ | _, Encoding.Holds -> None
   | below, above -> (
       match
@@ -370,8 +382,14 @@ let hole_clause encoding name v =
       with
       | [] ->
           invalid_arg
-            (Printf.sprintf "Trace: %s <> %d is unsatisfiable in the encoding" name v)
+            (if a = b then
+               Printf.sprintf "Trace: %s <> %d is unsatisfiable in the encoding" name a
+             else
+               Printf.sprintf "Trace: %s outside %d..%d is unsatisfiable in the encoding"
+                 name a b)
       | lits -> Some lits)
+
+let hole_clause encoding name v = gap_clause encoding name v v
 
 (* One line this module owes, before its facts are known.
 
@@ -402,11 +420,11 @@ let hole_clause encoding name v =
    asked-for bound on the trail entry, which is not additive to [Store.entry] and is a
    decision record, not an edit.
 
-   [hole] is the value a hole line claims to be removed, and [None] for a bound line. It
-   is not part of what gets written -- the claim clause already says it -- it is what lets
-   [emit] record *which* of an entry's lines a later settle cites, so that I-S4's edges
-   are per-hole rather than per-trail-entry. *)
-type line = { claim : Lit.t list; settled_over : int list; hole : int option }
+   [hole] is the run [(a, b)] a hole line claims removed ([(v, v)] for one value), and
+   [None] for a bound line. It is not part of what gets written -- the claim clause
+   already says it -- it is what lets [emit] record *which* of an entry's lines a later
+   settle cites, so that I-S4's edges are per-hole rather than per-trail-entry. *)
+type line = { claim : Lit.t list; settled_over : int list; hole : hole }
 
 (* The holes of [old] in the contiguous run immediately below [bound], ascending. Every
    member of [old] below [bound] is below this run, so the bound the propagator asked
@@ -429,33 +447,52 @@ let holes_above old bound =
    half. [Domain.classify] is asked rather than the bounds compared by hand because it
    is the module that owns the [Bound]-or-[Holes] disjointness this function relies on,
    and because it is what already recovers the interior holes of a [Holes] change. *)
-let lines encoding (e : Store.entry) name =
-  match Domain.classify ~old:e.Store.old ~now:e.Store.now with
-  | Domain.NoChange -> []
-  | Domain.Bound { lo; hi } ->
-      let bound_line ~what ~cond ~settled_over =
+(* [~gaps] (D-0269): a bulk entry's holes ([Store.remove_interior]) as ONE line per
+   maximal run of consecutive removed values, claiming `~x_ge_a \/ x_ge_(b+1)`, instead of
+   one line per value. [emit_to_page] asks for it on a bulk entry off the bits arm, and
+   the header of [Store.remove_interior] states the contract that makes the gap line RUP
+   where the per-value lines were: the rows that exclude [x = v] for one removed value
+   exclude every value of its run, given the entry's one reason. Every per-value line is
+   then one unit-propagation chain away from the gap line along the ladder rows
+   ([x_ge_v] fixes [x_ge_a] downwards, [~x_ge_(v+1)] fixes [~x_ge_(b+1)] upwards), so
+   every later [rup] that propagated along a per-value line propagates along the gap
+   line; no [pol] cites a trace line by id (see D-0269 for the consumers). *)
+let lines ?(gaps = false) encoding (e : Store.entry) name =
+  if gaps then
+    List.filter_map
+      (fun (a, b) ->
         Option.map
-          (fun l -> { claim = [ l ]; settled_over; hole = None })
-          (claim_of_cond ~what ~name cond)
-      in
-      let lo_line =
-        Option.bind lo (fun b ->
-            bound_line ~what:"the new lower bound" ~cond:(Encoding.ge encoding name b)
-              ~settled_over:(holes_below e.Store.old b))
-      in
-      let hi_line =
-        Option.bind hi (fun b ->
-            bound_line ~what:"the new upper bound" ~cond:(Encoding.le encoding name b)
-              ~settled_over:(holes_above e.Store.old b))
-      in
-      List.filter_map Fun.id [ lo_line; hi_line ]
-  | Domain.Holes vs ->
-      List.filter_map
-        (fun v ->
+          (fun claim ->
+            { claim; settled_over = []; hole = (if a = b then Hole a else Gap (a, b)) })
+          (gap_clause encoding name a b))
+      (Domain.removed_runs ~old:e.Store.old ~now:e.Store.now)
+  else
+    match Domain.classify ~old:e.Store.old ~now:e.Store.now with
+    | Domain.NoChange -> []
+    | Domain.Bound { lo; hi } ->
+        let bound_line ~what ~cond ~settled_over =
           Option.map
-            (fun claim -> { claim; settled_over = []; hole = Some v })
-            (hole_clause encoding name v))
-        vs
+            (fun l -> { claim = [ l ]; settled_over; hole = No_hole })
+            (claim_of_cond ~what ~name cond)
+        in
+        let lo_line =
+          Option.bind lo (fun b ->
+              bound_line ~what:"the new lower bound" ~cond:(Encoding.ge encoding name b)
+                ~settled_over:(holes_below e.Store.old b))
+        in
+        let hi_line =
+          Option.bind hi (fun b ->
+              bound_line ~what:"the new upper bound" ~cond:(Encoding.le encoding name b)
+                ~settled_over:(holes_above e.Store.old b))
+        in
+        List.filter_map Fun.id [ lo_line; hi_line ]
+    | Domain.Holes vs ->
+        List.filter_map
+          (fun v ->
+            Option.map
+              (fun claim -> { claim; settled_over = []; hole = Hole v })
+              (hole_clause encoding name v))
+          vs
 
 (* Just the claim clauses, which is what a test wanting to check one line in isolation
    needs (test/unit/test_prop.ml drives every propagator's trace line through this and
@@ -607,14 +644,23 @@ let position_of t (e : Store.entry) =
 let lines_at t (e : Store.entry) =
   match position_of t e with None -> [] | Some i -> t.line_ids.(i)
 
-(* The id of the line this module wrote for [v]'s removal, if it wrote one. [None] covers
+(* The id of the line this module wrote for [v]'s removal, if it wrote one: the line of
+   the hole [v], or since D-0269 the line of the gap of a bulk entry that contains [v].
+   [None] covers
    the two honest cases: a remover whose change was a *bound* move that happened to
    exclude [v] (it has a line, but that line claims a bound, not `<> v`, so it is not the
    hole's own line), and a hole the encoding stated as constant-true so no line exists. *)
 let hole_line_of t (e : Store.entry) v =
   match position_of t e with
   | None -> None
-  | Some i -> List.find_opt (fun w -> w.w_hole = Some v) t.line_ids.(i)
+  | Some i ->
+      List.find_opt
+        (fun w ->
+          match w.w_hole with
+          | Hole h -> h = v
+          | Gap (a, b) -> a <= v && v <= b
+          | No_hole -> false)
+        t.line_ids.(i)
 
 (* The facts the settled-over holes contribute, and -- for I-S4 -- the ids of the lines
    those holes were stated by. The two are gathered together because they come from the
@@ -723,6 +769,17 @@ let derive_ahead (ctx : Justify.ctx) store (e : Store.entry) =
         | Explanation.Decision _ -> ()
         | _ -> ignore (Justify.emit ctx why : Writer.cid))
 
+(* The BITS arm's derivation of one pruning, when its derivation is a bits derivation
+   (see [emit_to_page]): the `pol` deriving its trace clause, and the clause. *)
+let bits_derived (ctx : Justify.ctx) ~name ~facts (e : Store.entry) why =
+  match Explanation.force why with
+  | forced when Justify.is_bits_derivation forced ->
+      let origin =
+        Printf.sprintf "bits trace: %s from %d fact(s)" name (List.length facts)
+      in
+      Some (Justify.emit_bits_pruning ctx ~origin ~concludes:e.Store.concludes forced)
+  | _ -> None
+
 (* Raised by [emit] when its [stop] says yes, between two trail entries, so that a
    --time-limit stop is not delayed by a long trace (M6-T23, D-0149: the overshoot was
    the stop never being asked inside a conflict's trace). Every line already written is
@@ -781,13 +838,22 @@ let emit_to_page ?(stop = fun () -> false) (ctx : Justify.ctx) t store =
          Since M1-T56 an interior hole does get a claim, so the cases this skips are the
          ones where the whole change is invisible to the encoding -- a bound that was
          already the declared one. *)
-      match lines ctx.Justify.encoding e name with
-      | [] -> ()
-      | cs ->
+      (* A bulk entry (D-0268, [Store.remove_interior]) always claims something (its
+         holes are interior), and whether its lines are per gap or per value (D-0269)
+         depends on the bits arm, which reads the reason: so its reason is read first and
+         its value list is never built. Every other entry keeps "claims first". *)
+      let bulk = Option.is_some e.Store.per_value in
+      match if bulk then [] else lines ctx.Justify.encoding e name with
+      | [] when not bulk -> ()
+      | pre ->
           (* One materialisation of the reason serves both the facts of the line and
              (M8-bits-encoding-T2) the scope the bits-arm decision reads. *)
           let all_facts = Reason.facts e.Store.reason in
           let facts = Reason.lits_of_facts all_facts in
+          let bits = bits_arm ctx.Justify.encoding ~claim_owner:name all_facts in
+          let cs =
+            if bulk then lines ~gaps:(not bits) ctx.Justify.encoding e name else pre
+          in
           let level = !lv in
           (* The level is set here rather than inside the loop below so that the
              derivation and the line it precedes are tagged together; the loop's own
@@ -807,22 +873,25 @@ let emit_to_page ?(stop = fun () -> false) (ctx : Justify.ctx) t store =
              entry whose claim is a bits atom but whose justification is a [Clause] -- a
              global unit from `soli` (D-0130 section 9), whose bridge is already on the
              page -- keeps its `rup`. *)
+          (* A bulk entry (D-0268, [Store.remove_interior]) has one derivation per hole;
+             on the bits arm it keeps one line per hole (D-0269: the gap line is written
+             off the bits arm only), each decided against its own derivation, as each
+             merged entry's line was against its entry's; every other entry has one
+             derivation for its lines. *)
+          let per_hole = bits && bulk in
           let derived =
-            if bits_arm ctx.Justify.encoding ~claim_owner:name all_facts then
-              match Explanation.force (Store.explanation store e) with
-              | forced when Justify.is_bits_derivation forced ->
-                  let origin =
-                    Printf.sprintf "bits trace: %s from %d fact(s)" name
-                      (List.length facts)
-                  in
-                  Some
-                    (Justify.emit_bits_pruning ctx ~origin ~concludes:e.Store.concludes
-                       forced)
-              | _ -> None
+            if bits && not per_hole then
+              bits_derived ctx ~name ~facts e (Store.explanation store e)
             else None
           in
           List.iter
             (fun { claim; settled_over; hole } ->
+              let derived =
+                match hole with
+                | Hole v when per_hole ->
+                    bits_derived ctx ~name ~facts e (Store.removal_explanation store e v)
+                | _ -> derived
+              in
               let facts, cited =
                 settle_facts t store ~before:i ~var:e.Store.var settled_over facts
               in

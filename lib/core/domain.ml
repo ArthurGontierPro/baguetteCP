@@ -207,8 +207,10 @@ let stale h =
            truncated to %d (its branch was undone)"
           h.k h.log.len))
 
-(* Append [v] (bit index [i], clear) and return the version that ends with it. *)
-let push lg i v =
+(* Append [v] (bit index [i], clear) to the log. [push] below returns the version that
+   ends with it; [remove_interior] appends a run of values and makes one version for the
+   whole run. *)
+let append lg i v =
   let j = lg.len in
   if j = Array.length lg.vals then (
     (* from empty: a log made by [affine] or a fork may never be appended to *)
@@ -223,8 +225,22 @@ let push lg i v =
   lg.len <- j + 1;
   lg.top_uid <- uid;
   set_bit lg.bits i;
-  if Bytes.length lg.pos > 0 then Bytes.set_int32_le lg.pos (4 * i) (Int32.of_int j);
-  { log = lg; k = j + 1; uid; hbase = lg.base; hspan = lg.span; hbits = lg.bits }
+  if Bytes.length lg.pos > 0 then Bytes.set_int32_le lg.pos (4 * i) (Int32.of_int j)
+
+(* The version holding every slot of [lg]: its newest. *)
+let newest lg =
+  {
+    log = lg;
+    k = lg.len;
+    uid = lg.top_uid;
+    hbase = lg.base;
+    hspan = lg.span;
+    hbits = lg.bits;
+  }
+
+let push lg i v =
+  append lg i v;
+  newest lg
 
 (* Pop every slot at or above [k], clearing its bit. *)
 let truncate lg k =
@@ -423,6 +439,102 @@ let classify ~old ~now =
         r
     | _ -> classify_walk ~old ~now
 
+(* The interior values [now] lacks and [old] has, as maximal runs of CONSECUTIVE values
+   [(a, b)], ascending (D-0269): the set [classify]'s [Holes] lists, without the list. A
+   bulk entry ([Store.remove_interior], D-0268) on a gap instance removes up to tens of
+   millions of values, and [Trace] writes one line per run of them, so the run list is
+   what it needs and the value list is what it must not build. Precondition: same bounds
+   (the [Holes] case of [classify]); a bound move raises. Two values are in one run only
+   if every value between them is removed by this change, so an older hole between two
+   removed values splits the run (its line is another entry's).
+
+   The log path reads slots [ho.k .. hn.k - 1], which one bulk entry appends ascending, so
+   the runs are built in one pass that allocates nothing but the runs (it is on every
+   bulk entry's trace line, and most hold one value: measured +0.39 % per node on evm
+   with proof for a first version that built the runs through a closure and an option
+   per value); slots out of order (no producer appends them so today) are sorted first.
+   Otherwise the interval is walked, as [classify_walk] does. *)
+let runs_of_ascending (next : unit -> int option) =
+  let acc = ref [] and cur = ref None in
+  let rec go () =
+    match next () with
+    | None -> ()
+    | Some v ->
+        (match !cur with
+        | Some (a, b) when v = b + 1 -> cur := Some (a, v)
+        | Some r ->
+            acc := r :: !acc;
+            cur := Some (v, v)
+        | None -> cur := Some (v, v));
+        go ()
+  in
+  go ();
+  (match !cur with Some r -> acc := r :: !acc | None -> ());
+  List.rev !acc
+
+let removed_runs_walk ~old ~now =
+  let v = ref now.lo in
+  runs_of_ascending (fun () ->
+      while !v <= now.hi && not (is_hole now !v && not (is_hole old !v)) do
+        incr v
+      done;
+      if !v > now.hi then None
+      else
+        let r = !v in
+        incr v;
+        Some r)
+
+let removed_runs ~old ~now =
+  if old.lo <> now.lo || old.hi <> now.hi then
+    invalid_arg "Domain.removed_runs: the bounds moved (a Bound change, not Holes)";
+  let r =
+    match (old.holes, now.holes) with
+    | Some ho, Some hn when ho.log == hn.log && ho.k <= hn.k && valid ho && valid hn ->
+        (* One pass, no allocation but the runs: the slots of one bulk entry ascend. *)
+        let lg = hn.log in
+        let acc = ref [] and a = ref 0 and b = ref 0 in
+        let started = ref false and sorted = ref true in
+        for j = ho.k to hn.k - 1 do
+          let v = lg.vals.(j) in
+          if v >= now.lo && v <= now.hi then
+            if not !started then (
+              started := true;
+              a := v;
+              b := v)
+            else if v = !b + 1 then b := v
+            else if v > !b then (
+              acc := (!a, !b) :: !acc;
+              a := v;
+              b := v)
+            else sorted := false
+        done;
+        if !sorted then (
+          if !started then acc := (!a, !b) :: !acc;
+          List.rev !acc)
+        else
+          let vs = ref [] in
+          for j = ho.k to hn.k - 1 do
+            let v = lg.vals.(j) in
+            if v >= now.lo && v <= now.hi then vs := v :: !vs
+          done;
+          let l = ref (List.sort_uniq Int.compare !vs) in
+          runs_of_ascending (fun () ->
+              match !l with
+              | [] -> None
+              | v :: rest ->
+                  l := rest;
+                  Some v)
+    | _ -> removed_runs_walk ~old ~now
+  in
+  if Debug.enabled then
+    Debug.check "D-0269: removed_runs agrees with classify" (fun () ->
+        let expand = List.concat_map (fun (a, b) -> List.init (b - a + 1) (( + ) a)) r in
+        match classify ~old ~now with
+        | NoChange -> r = []
+        | Holes vs -> vs = expand
+        | Bound _ -> false);
+  r
+
 let change_to_string = function
   | NoChange -> "no change"
   | Bound { lo; hi } ->
@@ -509,6 +621,53 @@ let remove d v =
   else if v = d.lo then settle { d with lo = d.lo + 1 }
   else if v = d.hi then settle { d with hi = d.hi - 1 }
   else match with_hole d v with None -> Unchanged | Some d' -> settle d'
+
+(* REMOVING A SET OF INTERIOR VALUES AS ONE VERSION (D-0268, M18-coverage-T9). [vs] is
+   ascending and every value in it is strictly inside [d]'s bounds (raised otherwise:
+   a value at a bound is a bound move, which [set_lo]/[set_hi] make, and a caller that
+   mixes the two has a bug). The result is the domain the sequence [remove d v_1],
+   [remove .. v_2], ... would produce, as ONE version: the log gains one slot per value
+   [d] still held, in the order of [vs], and one [holes] record is made for the lot.
+
+   Why it is the same domain. An interior removal never moves a bound, so each step of
+   the sequence is [with_hole] followed by a [settle] that changes nothing (the bounds
+   are members, I-D2). The first step decides the log once and for all, exactly as
+   [with_hole] does: a domain with no hole yet gets a fresh log over its bounds, or
+   declines when they span more than [max_hole_span] (then every value declines, the
+   span being the same, and the answer is [Unchanged]); a version older than its log's
+   newest forks once. Every later step extends the newest version in place, which is
+   [push]'s path, minus the record [push] makes for each intermediate version nobody
+   holds. Membership after the first removal is a bit test on that newest version,
+   so no read of an older version (and no [pos] table) is needed. [classify] of [d] against the result reads
+   the new slots: [Holes] of the removed values, ascending. *)
+let remove_interior d (vs : int array) =
+  let n = Array.length vs in
+  for j = 0 to n - 1 do
+    let v = vs.(j) in
+    if v <= d.lo || v >= d.hi || (j > 0 && v <= vs.(j - 1)) then
+      invalid_arg
+        (Printf.sprintf
+           "Domain.remove_interior: %d is not an ascending value strictly inside %d..%d" v
+           d.lo d.hi)
+  done;
+  let rec first j =
+    if j = n then None else if is_hole d vs.(j) then first (j + 1) else Some j
+  in
+  match first 0 with
+  | None -> Unchanged
+  | Some j0 -> (
+      match with_hole d vs.(j0) with
+      | None -> Unchanged
+      | Some d1 ->
+          let lg = match d1.holes with Some h -> h.log | None -> assert false in
+          (* [d1] is the newest version of [lg], so a clear bit is a value [d1] holds, and
+             [d1] holds what [d] held but [vs.(j0)]. *)
+          for j = j0 + 1 to n - 1 do
+            let v = vs.(j) in
+            let i = v - lg.base in
+            if i >= 0 && i < lg.span && not (get_bit lg.bits i) then append lg i v
+          done;
+          Changed { d with holes = Some (newest lg) })
 
 let fix d v =
   if not (mem d v) then Failed

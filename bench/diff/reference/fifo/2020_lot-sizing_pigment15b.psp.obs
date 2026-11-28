@@ -27,7 +27,7 @@ search maxdepth/levels 26 levels
 work exhausted/bool 0 bool 1 if
 search skipped/nodes 0 nodes
 search learned/cls 1536 cls
-work later/asks 316988 asks
+work later/asks 293584 asks
 work cites/memos 28748 memos
 search convertible/cls 0 cls
 search retention fifo(cap=500) fifo(cap=500): 1536 added, 1035 evicted, 501 swept, 0 live, 124 duplicate, 1536 cited, 1101 pinned
@@ -78,13 +78,13 @@ work eff/runs 200842 runs
 work contra/runs 1536 runs
 work passes/snaps 34543 snaps
 work deductions/chgs 43176 chgs
-work wakes/wakes 1166778 wakes
-work masked/wakes 56241 wakes
+work wakes/wakes 1143358 wakes
+work masked/wakes 9401 wakes
 work vetoed/wakes 25943 wakes
 work advised/wakes 141975 wakes
 work seeded/runs 286783 runs
 work skipped/slots 5744466 slots
-search rup/lines 195032 lines
+search rup/lines 191131 lines
 search pol/lines 141500 lines
 search pol-tokens/tokens 2192497 tokens
 search pol-widest/tokens 391 tokens
@@ -95,4 +95,4 @@ search boundlines/pairs 92 pairs
 search bitsprune/lines 53173 lines
 search atoms/prune/atoms 0.035 atoms
 opb 926f703a84a5f1d1471d3302b80f05ea02e7ea89abd9f202ecae5f09c58c25bf
-pbp 4e7003c624cfb0a3108bd65544fcaa5544474dc38bf3ffbc6dde0c28fb790880
+pbp ac6d763d47045cf80cc6817c1d5146837bd0709c1099f63a774f663842c15859

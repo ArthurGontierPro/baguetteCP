@@ -35182,3 +35182,641 @@ model runs and 8 real-instance runs identical; scp 26/26; `check_unlimited` ok; 
 `b5859af4` are unchanged by the merge (no re-record); scaling ok; `e2e_lane.sh -j 4` PASS (validation
 260 AGREE, 2 UNCHECKED, 0 DIFFER); `fuzz_lane.sh -j 4 -n 200`, all twelve streams, 0 disagreements, 0
 timeouts; `factor_lane.sh -j 8` exit 0, 90 runs, 36 proofs VERIFIED, every per-node cost within 0.23 % of its recorded reference.
+
+## D-0265  [AUTONOME] M18-coverage-T9, first half: what fills the heap of the refused third, and whether lazy literals would remove it. Measured on today's main: the order ladder is not in the heap, and order atoms are not what the refused runs spend. The largest single mechanism (21 of 70 instances, 20 refusals with proof) is a domain-consistent global pruning a wide declared gap VALUE BY VALUE at the root, one trail entry of 650 bytes per value. The rest is model objects, deferred reasons, the all_different pairwise table and the arithmetic case split. Recommended first step: element prunes its result's gap as one store change. Measurement and design only, no solver code changed
+
+**Status**: DONE (the measurement and this record) on `wave110-refused` (agent-refused, 2026-11-28). The build is NOT
+started. Base: origin/main `00c42b51`, release md5 `4158b921a737cafe9a3009d4f785f1fd`. Probe: the same source with
+`bench/refused/memprobe.patch` (D-0218's census re-applied, plus touched-atom counters), md5 `198db484`, never
+committed. Runs on fataepyc-06, `/scratch/arthur/refused-work/`. Tables, logs, probes and README:
+`/cluster/arthur/baguette-results/refused/`. Scripts: `bench/refused/`. ROADMAP: the T9 row is annotated, no row added.
+
+[AUTONOME] because the row asks for a recommendation on the PB encoding and the proof's naming contract, which the
+user decides. Nothing is decided here that changes the solver: the record proposes, and its first step is
+byte-identical by construction.
+
+### 1. The population, and where each run stops on today's main
+
+70 instances of the series of 2026-11-26 (D-0227). 56 were REFUSED (heap budget) in arm B or arm D of the series. 14
+more timed out with no solution in B or D after at most 1 000 nodes (only one after at most 100, so "never leaves the
+root" by time is rare; the stuck ones are the 14). Rerun with today's main in the series' setting (16 GiB address space,
+`--max-heap-mb 8192`, `MemoryMax=32G`, 1 200 s, `-f`, which D-0261 made the default since), arm B with proof and arm D
+without. "Moment" is read from stderr: compile (the encoding-cost statistics are not printed yet), proof open, root
+(node 1), early (at most 1 000 nodes), search.
+
+| | refused | compile (of which D-0263's estimate) | proof open | root | early | search | heap stop with an incumbent |
+|---|---|---|---|---|---|---|---|
+| B (proof) | **56** | 19 (2) | 2 | 13 | 21 | 1 | 0 |
+| D (`--no-proof`) | **40** | 18 (2) | 0 | 13 | 8 | 1 | 3 |
+
+The series read 54 and 40 on the same instances. D-0263's estimate turns two `arithmetic-target` instances into
+refusals at parse time (the int_times case split over a 68 720-wide variable), the third still dies in the compile
+by the heap. The other 14 rows are time-outs (11 in B, 17 in D, nmseq, community, black-hole, crosswords, connect,
+whirlpool d12, multiple-constant-multiplication), and one is a front-end refusal (`connect__0086`, a `var int` with no
+domain, not memory).
+
+Without any budget (arm Dnolim, no address-space cap, `MemoryMax=64G`, 600 s), **39 of the 40 refusals of arm D run**
+(one, whirlpool d30, is killed at 64 GB in the compile), at a peak RSS of **18 to 65 GB**, and 21 of them find a
+solution or prove UNSAT within the 600 s. So at today's main the
+refused third is not refusals of models that cannot be run. It is runs that need 3 to 8 times the 8 GiB budget.
+
+### 2. What fills the heap, by D-0218's census
+
+The probe walks the live heap from named roots at fixed points and at each crossing of 0.5, 1, 2, ... GiB (D-0218
+section 2). Arm PB: proof, a 64 GiB budget, the run stopped after the probe at 8 GiB of heap (48 GiB for the
+instances that die in the compile, so that the probe after the compile exists). The probe that stands for the
+refusal is the last one whose walk finished. Groups: model (front end, encoding records, propagator instances,
+subscriptions), trail (entries and the reasons they hold), learned, proof (writer, justify, hash-consed explanations,
+trace). Then the reading by hand that splits the trail by what its entries hold (`bench/refused/kinds.py`, the rules
+and every override with its reason in its header).
+
+| kind | instances | refused B / D | what holds the heap at the refusal | peak RSS without a budget | GCS (16 GiB, proof) |
+|---|---|---|---|---|---|
+| **gap**: a domain-consistent global prunes a wide declared gap value by value | 21 (liner-sf 7, wordpress 5, proteindesign 5, connect 3, table-layout 1) | **20 / 16** | trail 82 to 95 % (liner-sf, wordpress, connect: 15.4 to 18.5 M entries at node 1 on liner-sf, 15.3 M on wordpress 7, 1.7 to 6.1 M on connect), trail + proof 72 % (proteindesign), proof 64 % (table-layout, 5 GB of live proof ids at the root) | 29 to 65 GB | past the root on 15: incumbents on 14 (liner-sf 4 of 7, wordpress 5, proteindesign 5) at 31 MB to 2.5 GB; table-layout UNSAT at 10.9 GB; connect no solution |
+| **model**: propagator instances, subscriptions, encoding records, front end | 15 (code-generator 5, gt-sort 2, largescheduling 2, pentominoes 2, ihtc i06 and i14, rcpsp-wet-diverse, ma-path-finding) | 15 / 12 | model 46 to 96 % (`bool_clause` 5 to 14 GB on gt-sort, `int_times` and `int_lin_le` instances, `engine.watch` 1.1 to 3.5 GB, `encoding.ints` 0.9 to 2.6 GB, front end 0.5 to 3.5 GB) | 18 to 63 GB | out of memory on 7 (ERROR at 15.5 to 16.3 GB), no solution on the rest |
+| **reasons**: trail entries of 4.6 to 190 KB, deferred reasons holding explanation trees | 8 (warehouse 3, nside 2, tdtsp 2, ihtc i11) | 8 / 4 | trail 49 to 99 % (tdtsp 20_56: 22.6 GB for 119 k entries) | 20 to 34 GB | out of memory on 3, incumbents on tdtsp's 2, no solution on 3 |
+| **alldiff**: the pairwise row table of all_different | 5 (whirlpool d21, d29, d30, ghoulomb, multi-agent-graph-coverage) | 5 / 4 | `prop.all_different_int` 11 and 16.3 GB (74 and 84 % of live), the compile of d29 and d30 never finishes | 25 to 65 GB (d30 killed at 64) | no solution, 188 MB to 2.1 GB |
+| **arith**: the int_times / int_div case split | 4 (arithmetic-target 3, yumi-dynamic p9) | 4 / 4 | `prop.int_div` + `int_times` + `int_abs` 10 to 22 GB (91 to 97 %) | 37 to 52 GB | incumbents on the 3 arithmetic-target at 150 to 176 MB |
+| **proof**: hash-consed explanations, the trace, and the GC over them | 7 (nmseq 3, crosswords 2, black-hole, whirlpool d12) | 4 / 0 | proof 41 to 98 % (crosswords 19: 17.6 GB of hash-consed nodes), nmseq refused at 8 nodes with 1.6 to 2.5 GB live under an 8 GiB heap (the GC's free space, D-0218 fix 3) | not run (not refused in D) | |
+| learned | 2 (community-detection) | 0 / 0 | the retention 80 % of 0.4 to 0.5 GB, time-outs at 300 k to 1.2 M nodes | | |
+| search, front end | 8 | 0 / 0 | not memory | | |
+
+Sum 70; refusals 56 in B and 40 in D. The kinds that are the ENCODING's width are the first and the fourth and fifth
+in part (the gap, the alldiff table over a shared width, the case split per value). The order ladder is in none of
+them: D-0218 already found it streamed to the `.opb` and absent from the heap, and this census agrees
+(`encoding.ints` is 0.2 to 0.3 GB on liner-sf, whose ladder is 28 to 50 M rungs).
+
+**The gap mechanism, in detail.** 21 instances of the population declare wide (10 000 or more) order variables. In 20
+of them every such variable is the result of an `array_int_element` over a CONSTANT array or a column of a
+`baguette_table` (in crosswords 19 they are held by all_different and element). Table-layout's 400 k element results
+are narrow (about 250 values each) but bounded the same way. Those constraints allow few values
+(`bench/refused/wide_holders.py`, the intersection over every such constraint):
+
+| instances | wide order variables | declared values | values the arrays allow |
+|---|---|---|---|
+| liner-sf (7) | 18 to 55 | 11.8 to 49.6 M | 1 441 to 2 689 |
+| wordpress (5) | 45 to 78 | 15.3 to 26.5 M | 7 320 to 12 688 |
+| proteindesign (5) | 78 to 153 | 7.8 to 15.3 M | 6 116 to 25 239 |
+| connect (3) | 24 to 110 | 0.6 to 2.1 M | 62 to 298 |
+| table-layout (1) | 400 k results of width 250 or so | 101 M | 3.7 M |
+
+`lib/core/prop/element.ml`'s interior rule walks `range (lo + 1) (hi - 1)` and calls `View.remove` once per value that
+no live position carries, each with its own frame, `hole_expl` and trail entry. At the root of liner-sf fm3_11 that is
+15.4 M trail entries after 51 effective propagator runs, 657 bytes each (10.1 GB of `store.trail`), and the list of
+the range itself (28 M cells) as garbage. `trail_len` matches the declared gap on every probed run (wordpress 7: 15.27
+M entries for 15.28 M declared values). With the proof, each entry later becomes one trace line and one live id (131
+to 150 bytes, D-0218), which is table-layout's 5 GB of `writer.live` at the root.
+
+### 3. Would it fit if literals were introduced lazily?
+
+The probe counts the order atoms a run TOUCHES: every bound move to `lo = v` touches `x_ge_v`, every move to `hi = v`
+touches `x_ge_(v+1)` (a lower bound of what a lazy encoding would mint: a reason may weaken a bound to a value that
+never was one). Arm PD (no proof, 48 GiB, 600 s) on six instances of the gap kind:
+
+| instance | where the probe is | order atoms touched | declared | live | trail share |
+|---|---|---|---|---|---|
+| wordpress 7 | node 1 000 | 1 802 | 15.3 M | 12.7 GB | 82 % |
+| liner-sf tp7_2 | node 45 | 1 434 | 18.0 M | 9.7 GB | 95 % |
+| liner-sf fm3_11 | node 1 | 5 | 28.4 M | 11.4 GB | 95 % |
+| proteindesign 1HZ5 | node 34 | 3 718 | 7.8 M | 9.4 GB | 53 % |
+| connect 0018 | node 129 | 104 | 0.76 M | 1.3 GB | 88 % |
+| table-layout | node 1 | 0 | 104 M | 2.5 GB | 2 % (writer, model) |
+
+So a run touches about 10^-4 of the atoms it declares. But the declared atoms are not in the heap, and **lazy order
+atoms alone would move no refusal**: the heap is the gap's per-value trail entries, which are holes (values) and not
+bound atoms, and an element over a result on the bits encoding would still punch every value (with a `pol` per
+pruning, D-0127). What makes these runs fit is that the gap values never become prunings. Without them the live heap
+at the refusal falls to what is left: about 0.5 GB on liner-sf (11.4 GB x 5 %), 1.1 to 2.3 GB on wordpress, 4.4 GB on
+proteindesign without proof, 0.2 GB on connect; with proof, liner-sf 1.4 GB and wordpress 1.1 to 1.8 GB. By that
+estimate **19 to 20 of the 21 gap instances would fit under 8 GiB** (table-layout, which GCS solves at 10.9 GB, is the
+uncertain one).
+
+**What GCS does on the same instances** (D-0211's runs, fzn-glasgow `ebffdc08` with proof, 16 GiB, 1 200 s, read from
+`/cluster/arthur/baguette-results/node07-gcs/`, `gcs.tsv`). On the gap kind GCS passes the root on 15 of 21, at 31 to 489
+MB on liner-sf and wordpress, 1.2 to 2.5 GB on proteindesign, with an incumbent on 14. It writes 3.7 to 341 GB of proof
+per run, never checked (the series does not check a stopped run). On the arithmetic case split it holds 150 to 176 MB
+and finds incumbents on the three arithmetic-target. On the model and reasons kinds it fails as we do: out of memory at
+15.5 to 16.3 GB on 10 of the 23 (ihtc 3, nside 2, rcpsp, pentominoes 2, ma-path, code-generator mesa.eval), no solution
+on the others but tdtsp's two incumbents. On the
+alldiff kind it stays under 2.1 GB and finds nothing. So GCS's advantage on the refused third is the gap and the case
+split, the two places where it does not materialise per-value work, and not its order atoms.
+
+### 4. What `--bits-above` buys, and why it does not reach these
+
+The default is `--bits-above 0` (D-0201): every ELIGIBLE variable of width 2 or more is on bits. Every wide order
+variable of the population is held back by scope: element (15 instances), table (5), all_different (crosswords 19). The
+widest variables of the refused instances that are eligible are already on bits (largescheduling's 8 M, rcpsp's 1.18
+M objective, ihtc's 27.5 M objective, connect's 2 x 10^9, arithmetic-target's 1.69 x 10^9). Arm Dorder
+(`--bits-above none`, 300 s) refuses 37 of the same 40 and two more (liner-sf fm3_3 and rcpsp, which find an incumbent
+on bits). Of the other three, the two largescheduling no longer finish their compile in 360 s (an 8 M-rung ladder) and
+warehouse oly20 meets the shorter limit first. So bits already
+removes what it can reach. What still grows with a width under bits: the held families' ladders (above), the int_times
+/ int_div case split per value of the case variable (arith, D-0263), maximum/minimum's per-value rows over an order
+scope, and all_different's pairwise table, which is per shared VALUE as well as per pair (D-0263's 2^24-wide variable
+kept on the order encoding by all_different is the same family). And on the proof side D-0264's vrp: a trace step that
+walks a 460 588-wide BITS variable a few values at a time, which costs proof lines and time, not heap.
+
+### 5. The options
+
+For each, what it removes from the table of section 2 (refusals in B / D at 8 GiB, by the estimate of section 3), what
+it does to the proof, which modules change, the risks, a rough size.
+
+**(a) Lazy order atoms, defined on first use (GCS's scheme).** In this solver that IS the bits arm: a variable without
+a ladder in the `.opb`, its rows over `x_bit_i`, its atoms minted by a `red` pair at level 0 (PROOF-FORMAT section 3,
+"Bits encoding"). A lazy order atom over a variable whose rows NAME order literals is impossible (I-X5, and a `red`
+whose atom occurs in a model row has a goal the fresh-atom witness cannot discharge), and the D-0031 rotation that
+introduces a rung without bits is quadratic. So (a) means rewriting each held family's rows over bits and every
+pruning of those families as a `pol` (D-0127: no `rup` over a bits row). Removes the ladder from the `.opb` (liner-sf
+fm3_11's `.opb` is 5.9 GB, mostly the 28 M rungs and their names) and from the checker's load. **Removes 0 refusals by
+itself**: element would still punch the gap value by value. Proof: PROOF-FORMAT section 3's bits section extended to
+the families' rows, `--e2e` must re-derive each family's rows from cake's `.opb` over bits. Modules: compile.ml
+(`held_families`), encoding.ml, and per family element.ml, table.ml, alldiff.ml, gcc.ml, cumulative.ml, regular.ml,
+inverse.ml, member.ml, circuit.ml, plus justify.ml and trace.ml. Size: one M8-bits-encoding-T3-sized task (D-0134)
+per family, ten families.
+
+**(b) Widen the bits encoding's reach to the globals that still force the order encoding.** The same work as (a) seen
+from the scope rule, and the same result on this table. It is what D-0263 section 6 needs for its two remaining
+`wide` fuzz cases. Worth doing for element over a constant array and table first if (a)/(b) is ever started, because
+those hold every wide variable here.
+
+**(c) A per-variable choice by width.** Exists (`--bits-above W`). It only matters once (a)/(b) makes the held families
+eligible. Alone, 0.
+
+**(d) Sparse ladders over the values that occur.** For a result of element over a constant array or a table column,
+declare the variable over S (the values the arrays allow) from the start: a ladder of |S| - 1 rungs, atoms `x_ge_v`
+only for v in S, rows over it with the gaps as coefficients (`x = S_0 + sum (S_k - S_(k-1)) x_ge_(S_k)`), the store's
+domain created with S's complement as BASE holes (the D-0222 log has base holes, so no trail entry, no line). Removes
+the gap kind: **20 / 16 refusals**, and the ladder (28 to 50 M rungs to 1.4 to 2.7 k on liner-sf). Proof: the `.opb`
+then states x in S, which the model implies through the element or table but does not say; that is a translation
+rule SPEC 2.1 and PROOF-FORMAT section 3 must state ("the result of an element over constants is encoded over the
+array's values"), and the naming contract changes: `[x >= v]` for v not in S renders as `x_ge_(next_S(v))`, the way a
+view renders onto its base (D-0058). `--e2e` no longer lines up with cake's `.opb` (which declares x's full domain) until
+the prefix derives the sparse ladder; until then `--e2e` keeps the full encoding. Modules: compile.ml (S, the
+decision), encoding.ml (declaration, expansion, naming), lit.ml, domain.ml and store.ml (an initial domain with base
+holes), order_reason.ml and ladder.ml (rungs are no longer unit steps: D-0028's rule that `Order_reason.weaken_declared`
+and `Encoding.expand_int_lin_le` change in the same commit applies), trace.ml and justify.ml (claims over
+non-consecutive atoms). Risks: every place that assumes an atom at every value of (lo, hi]; the faithfulness argument
+moves into the translation. Size: three to five tasks, a SPEC change, a decision.
+
+**(d') The gap as one change, the contract unchanged.** Keep the full ladder and the `.opb` as they are. Element (then
+table) removes the unsupported interior values of its result in ONE store change per run, not one per value. Step 1 is
+store-side only: one trail entry, one frame, one reason for the whole set, the hole log appending the values (16 bytes
+each, D-0222: 450 MB for liner-sf fm3_11's 28 M), and the trace still writing one line per hole in the order it does
+today (`Trace.lines` already yields one line per hole of a `Holes` change), so the `.pbp` should be byte-identical.
+Step 2 writes one line per maximal GAP instead of per value: the claim `~x_ge_a \/ x_ge_(b+1)` is RUP from the
+element rows, the index's at-least-one line and the ladder (assume both literals false, the ladder fixes every rung
+across the gap, each row then falsifies its position's direct literal, the at-least-one line is violated). That is a
+new claim shape in trace.ml and a proof change (lanes re-recorded). Removes: step 1, the trail of the gap kind without
+proof (16 refusals of D by the estimate, the trail share being 82 to 95 %); step 2, the per-value proof lines and live
+ids as well (the 20 of B). Leaves the Θ(w) ladder on disk and in veripb's load. Modules: element.ml, then table.ml;
+domain.ml / store.ml for a multi-value removal if `Domain` has none; trace.ml in step 2. Size: step 1 one agent, step 2
+one agent.
+
+**(e) Refuse earlier, with a better diagnostic, and nothing else.** The heap guard's message names the widest declared
+variable and blames its ladder even when that variable is on bits (rcpsp: the 1.18 M objective on bits, 28 890 ladder
+clauses in all; gt-sort n7: 56 clauses and values when it dies, its heap is 5 M `bool_clause` instances). Replacing
+that sentence by the counters the run already has (trail entries, instances, `.opb` rows) makes every refusal of the
+table name its kind. Removes 0 refusals. Size: small.
+
+**Outside the encoding, what the other kinds need** (not T9's, said so the third is accounted for):
+
+- reasons (8 / 4): D-0223 measured releasing Element's wrapper tree (97 % of tdtsp's heap, +16 to +37 % time, a proof
+  change) and left it to the user. These numbers are the case for it: 8 refusals with proof.
+- model (15 / 12): D-0218 fix 5 (flat instances, one subscription index, no empty tables per integer variable, the
+  front end freed after the compile). GCS and Chuffed hold 4 to 16 GB on the same models, so a factor 2 to 4 is the
+  realistic gain; some stay over 8 GiB.
+- alldiff (5 / 4): `Encoding.add_all_different` writes one `.opb` row per pair AND shared value (whirlpool d29: 297 M
+  rows, 39 GB of `.opb` written in 16 minutes before the run was stopped) and returns their ids as an OCaml list of
+  `((string * string * int) * cid)`, about 100 bytes a row, which the propagator keeps. The ids are consecutive per
+  pair, so a base id per pair is the same table in 8 bytes a pair (byte-identical); the `.opb` itself needs one
+  at-most-one row per value instead of the pairwise clauses (a proof change).
+- arith (4 / 4): a bounds-reasoning int_times / int_div instead of the per-value case split (D-0060 chose the split
+  for its proof shape); GCS shows 150 MB is possible.
+- proof (4 / 0): the GC's free space (D-0218 fix 3) and the trace.
+
+### 6. Recommendation
+
+**The honest answer to the row is that the refused third is mostly NOT the order encoding's literals.** The order
+ladder costs no heap (D-0218, confirmed), a run touches about one atom in ten thousand of those it declares, and none
+of the 56 refusals would become an attempt if order atoms were lazy and nothing else changed. What the encoding's WIDTH
+does cost is one mechanism with a precise owner: element (16 instances) and table (5) prune a declared gap of 0.6 to
+101 M values one value at a time at the root, and that is 20 of the 56 refusals in B and 16 of the 40 in D. The other
+36 / 24 are model objects (15 / 12), deferred reasons (8 / 4), the alldiff pairwise table (5 / 4), the arithmetic case
+split (4 / 4) and proof memory (4 / 0).
+
+Recommended, in this order, each its own task:
+
+1. **(d') step 1, one agent: element prunes its result's unsupported interior values as ONE store change.** No
+   change to the `.opb`, the naming contract or `--e2e`; the `.pbp` is expected byte-identical (to be shown on the 281
+   test models, both diff lanes, the determinism check). The measurement that confirms it: on the 16 element-gap
+   instances (liner-sf 7, wordpress 5, connect 3, table-layout), `trail_len` at node 1 falls from 15.4 to 18.5 M to a
+   few thousand and the live heap at the root from 9 to 15 GB to under 2 GB (`bench/refused/run1.sh` arms D and PD,
+   `census.py`), and arm D at 8 GiB refuses none of the 13 that die at the root today (`population.sh`,
+   `parse_logs.py`, `join.py` rerun as here).
+2. (d') step 2: one trace line per gap, then the same two steps for table (proteindesign 5). That reaches the 20 of B.
+3. Then, and only with a measurement of veripb loading a 28 to 50 M-rung `.opb` (none was made here), decide between
+   keeping the ladder and (d), the sparse ladder, which changes the contract and needs the user. (a)/(b) stay what
+   D-0263 section 6 needs for the fuzz lane's two wide cases, not a remedy for the refused third.
+
+Separately and not T9's: D-0223's release decision (8 refusals), D-0218 fix 5 (15), the alldiff id table (5,
+byte-identical first half), and the diagnostic of (e).
+
+### 7. What this does not measure
+
+- veripb on the `.opb` of a gap instance (fm3_11's `.opb` alone is 5.9 GB): not run.
+- The probe's 8 GiB stop catches proteindesign 1CM1 before its trail fills (model 82 % at that point); the four other
+  proteindesign runs show the trail. The compile-phase deaths of whirlpool d29 and d30 never reached a completed probe
+  (the compile did not finish in 16 minutes at 48 GiB), so their kind is read from the row count and the d21 probe.
+- The estimate of section 3 subtracts the trail share; it does not run a solver without the gap pruning.
+- The series' arms A and C, and instances outside the population (a run that solves today but would be faster without
+  the gap) were not measured.
+- One run per arm: no repetition. GCS was not rerun: its numbers are D-0211's, on the same flattened instances
+  (each solver flattens with its own library, so GCS's model is not byte for byte ours).
+
+**Volume.** Arm B wrote 347 GB of proof, arm PB 623 GB, two stopped PB compiles 87 GB of `.opb` rows, a 75 s look at
+liner-sf's proof 5.9 GB: about 1.06 TB in all, every byte deleted after its size was recorded. `/scratch` never went
+under 11 TB free.
+
+**Revert.** Nothing to revert in the solver. The branch adds this record, the ROADMAP note, the WORKLOG rows and
+`bench/refused/`.
+
+## D-0268  [AUTONOME] M18-coverage-T9, D-0265's first step built: element removes its result's unsupported interior values in ONE store change (and table each run of values no tuple carries), through one shared store rule, `Store.remove_interior`: one trail entry, one reason, a derivation per value. The proof is the same bytes on every test model and both diff lanes; the trail of the element-gap instances falls from 15 to 22 M entries to a few hundred at node 2
+
+**Status**: DONE on `wave113-elembulk` (agent-elembulk, 2026-11-28), not merged. Base: origin/main `615a7e97`.
+
+[AUTONOME] because the store's contract ("one justified change per mutator call", I-P4) gains a second shape of change, which is the kind of change the user decides; nothing that changes the solver's answers, its default search or its proof was decided.
+
+### 1. What one trail entry per value was, and what the bulk entry shares
+
+Before: element's interior rule (`filter_result`) walked `range (lo+1) (hi-1)` (a list of the whole range) and for each value no live position carries called `View.remove`, which pushed per value:
+
+- a trail `entry` (13 words: `var`, `old`, `now`, `why`, `reason`, `concludes`, `prop`, `ahead`, `sup_lo`, `sup_hi`, `pos`, `cites`, now `per_value`),
+- an arena slot for `why`, a `Deferred` wrapper around `hole_expl`'s own `Deferred` (its closure holds a `frame`: a `Store.history` record and two domain versions, plus a lazy `dead_and_cancel`),
+- a `Reason.Later` whose closure checks the frame's history and forces the pass's SHARED facts (one lazy list per pass since D-0155),
+- one `all_hist` int and one hole-log slot (16 bytes, D-0222).
+
+About 650 bytes per value (D-0265). The reason was already the same for every value of a pass; only the derivation differs per value.
+
+The bulk entry (`Store.remove_interior t v vs reason ~justify`): ONE entry with `old` = the domain before the first value, `now` = the domain after the last (the hole log gains one slot per value, one version for the lot, `Domain.remove_interior`), the one reason, `concludes = None` (an interior hole concludes no bound), the same `prop` and level, and `per_value = Some justify`; `why` holds the first removed value's derivation. What each consumer of an entry needs and how it is answered:
+
+| consumer | needs | the bulk entry |
+|---|---|---|
+| undo (`undo_to`, I-T1) | `old` written back, the log truncated to `old`'s version | unchanged code: `Domain.undo` truncates every slot the entry appended |
+| I-T2, I-T3 | one level, a resolving arena slot | one entry at the current level, `why` = first value's derivation, rewound with the trail |
+| I-P4 | a reason and a derivation, both mandatory | `reason` and `~justify` are both required, no default |
+| `remover` / `remover_at` ("which entry removed v") | the binary search over the variable's entry history | unchanged: "v gone from `now`" still turns true at exactly one entry |
+| "which DERIVATION removed v": `reasons_under` (a bound settled over holes, I-X9), Element's `hole_line` (a dead position whose value is a hole, `excl_hole`) | the derivation of that one value | new `Store.removal_explanation t e v` (`removal_explanation_at h e v` for a frame): `per_value v` on a bulk entry, the arena explanation otherwise |
+| the reason's facts: `Analysis` hole folds, `Trace.settle_facts`, the remover-facts readers of table/regular/member/inverse/circuit/element | per entry | the one shared reason, which is why the rule takes one reason and refuses a reason per value |
+| `Trace.lines` | one line per hole | `Domain.classify` gives `Holes` of the removed values, ascending; one `rup` per hole with the entry's facts, the order the merged entries wrote them |
+| `Trace`'s bits arm | the derivation of the line's claim | decided per hole against `removal_explanation e v` (it was per entry, and each merged entry had one hole) |
+| `Trace.derive_ahead` | one derivation ahead of an entry | refused: `remove_interior` raises inside `deriving_ahead`; only a `Single_row` family (element, table) uses it |
+| `Engine` (wakes, masks, advisors) | the change's kind | one `Holes` change of the variable: the merged entries' first woke everything the rest did |
+| `Learn.supports`, `Trace.lines_at` / `hole_line_of` | the lines of an entry, the line of one hole | per position, keyed by hole: unchanged |
+| BAGUETTE_DEBUG agreement check (D-0026) | each pruning's reason against its derivation | run once per removed value at the push, as each merged entry was |
+
+**Why the derivations are the same trees.** Each per-value removal took its frame just before its own push, so value v_k's derivation saw the values v_1..v_(k-1) of the same pass as holes, each with its own remover. That matters: a dead position q whose value as[q] is one of them is excluded by `excl_hole` citing v_j's derivation (`pos_gone`'s result arms come before its index arms), and a value above v_k is still in the result. The bulk takes one frame before the change and gives each per-value derivation a `pending` record (`p_upto = v_k`, `p_in` = membership in the bulk, `p_expl` = the bulk's memoised per-value function), and `res_mem` / `hole_line` read it, so they answer what the per-value frame answered. The derivation is memoised per value (the store requires it: a derivation is emitted once and cited by its line afterwards), and the memo stores the same wrapper shape the arena held (`Deferred (fun () -> hole_expl ...)`). Nothing else a derivation reads moves within the hole loop (bounds, the index's domain, the supports of `established_at_root`). A result that IS the index keeps one change per value. Table's runs carry an empty reason and a clause per value, the derivation each merged removal carried.
+
+### 2. Bounds (question 3)
+
+Element pushes its result's bounds to the smallest and largest carried value first (two entries, unchanged), so every value the rule then removes is strictly interior: the gap is holes, as D-0265 said. Measured: at node 2 the liner-sf and wordpress trails hold 53 to 612 entries. Table's step S removes a value at the current bound one at a time (a bound move, which settles over the holes above it) and flushes the run first, so the order of lines is kept; a declared range below a column's smallest value is still removed one bound move per value (how much of proteindesign's remaining trail that is was not measured; section 4 reads it as mostly values dead tuples carry).
+
+Table (the second step of D-0265's list, done here because the same mechanism holds): step S removes a value no live tuple carries, and a value no tuple carries AT ALL (outside the column) has an EMPTY reason, its line `x <> v` RUP from the at-least-one and DEF rows. A maximal run of such values strictly inside the bounds goes in one bulk entry (one clause per value); the run is flushed before any other removal of the pass, so lines keep their order and a bound removal settles over holes that are holes by then. A value carried by a dead tuple has a reason of its own (the dead selectors) and stays one entry per value.
+
+### 3. Proof bytes (question 2)
+
+Unchanged, as D-0265 expected: the `.opb`, the naming contract and `--e2e` are not touched, and the `.pbp` is the same bytes.
+
+- The 295 test models (293 and the two added) under the default (free) search and `--fixed-search`, with proof, main's release binary `aedfd1c6` against each build of the branch (`c8114031` element, `59fdd9c1` table, `c526527b` final): stdout, exit code, `.opb`, `.pbp` identical on every run (586, 586 and 590 runs).
+- `scripts/diff_lane.sh --tier all -j 8` (binary `59fdd9c1`): 45 of 393 runs differ, ALL in WORK counters (`later/asks` first on 39, `wakes/wakes` on 6; the three items that move are `later/asks`, `wakes` and `masked`), on the three instances with element (pigment15b, chessboard4, evm). No search counter, no stdout, no `.opb`/`.pbp` hash differs. `--debug`: 29 of 377 differ, the same counters, no exit status changed (no invariant fired). The counters move because there are fewer entries: a reason is materialised once per entry (`later/asks`: -53 on evm `free`), and an entry wakes its watchers once (`wakes`: -53, `masked`: -106). The references are NOT re-recorded here (D-0141); the orchestrator re-records after the gate, the change of these counters being intended.
+- `scripts/check_determinism.sh`: 590 model runs and 8 real-instance runs identical.
+
+### 4. The 21 instances of D-0265's gap kind
+
+Main `615a7e97` (release `aedfd1c6`) against the branch (release `bb3dc48a`, commit `3a750d1c`; the final commit changes only the proof path's bits arm, same bytes), D-0265's setting: 16 GiB address space, `--max-heap-mb 8192`, `MemoryMax=32G`, `--stats -f`, `--time-limit 300`.
+
+**Trail and live heap** (the memory probe of D-0265, `bench/refused/memprobe.patch` plus a probe at node 2, i.e. after the root fixpoint: probes `e83fb47b` main, `c5e9f772` element commit, `b958a43a` table commit; no proof, a 48 GiB budget, stopped after the probe at 8 GiB of heap):
+
+| instance | main: trail entries at its last probe (node) | main: live MB | branch: trail at node 2 | branch: live MB at node 2 |
+|---|---|---|---|---|
+| liner-sf fm3_11 | 15 399 568 (1) | 10 320 | 372 | 245 |
+| liner-sf fm3_5 | 19 259 914 (1) | 13 289 | 450 | 306 |
+| liner-sf tp7_10 | 22 613 744 (62) | 15 447 | 612 | 301 |
+| liner-sf tp7_8 | 9 583 072 (139) | 6 630 | 53 | 109 |
+| liner-sf fm3_3 | 6 036 581 (198) | 4 213 | 45 | 99 |
+| liner-sf tp7_12 | 17 286 150 (60) | 12 030 | 538 | 251 |
+| liner-sf tp7_2 | 13 461 672 (45) | 9 249 | 69 | 167 |
+| wordpress 10 / 11 / 12 / 7 / 8 | 15.3 to 18.0 M (1) | 9 945 to 11 901 | 60 to 104 | 242 to 418 |
+| connect 0018 / 0041_02 / 0083_02 | 0.74 / 1.72 / 3.35 M (200 / 414 / 1 000) | 849 / 1 212 / 2 934 | 845 / 1 160 / 3 203 | 18 / 44 / 73 |
+| table-layout | main without budget: still in the root fixpoint at 660 s, 61 GB RSS, killed | | 2.24 M at the end (UNSAT at the root) | 5 685 |
+| proteindesign 1HZ5 / 2DHC / 1UBI (table) | 10.4 / 14.1 / 12.2 M (34 / 32 / 33) | 8 940 / 11 971 / 10 397 | 1.48 / 1.51 / 1.24 M | 3 907 / 4 920 / 4 233 |
+| proteindesign 1CM1 (table) | 20.6 M (76, at the 600 s exit) | 20 953 | 3.03 M | 8 168 |
+
+D-0265's criterion (about 15 M entries down to a few thousand, live heap at the root under 2 GB) holds on the 15 element instances that have a gap at the root: 45 to 3 203 entries, 18 to 418 MB. What is left of the live heap on liner-sf and wordpress is the hole log itself (`store.domains`, 16 bytes per removed value, D-0222: 237 to 407 MB). On proteindesign the table runs remove most of the entries (1.2 to 3.0 M at node 2; main has 10 to 21 M by node 32 to 76, its node 2 was not probed) and what remains is the values that dead tuples carry, one reason each, and the model, 2.7 to 5.8 GB at node 1 before any pruning (`encoding.ints`, `engine.watch`, `int_lin_le`, the front end: D-0265's "model" kind).
+
+**Runs at 8 GiB, 300 s** (base / branch):
+
+| | main, no proof (D) | branch, no proof | main, proof (B) | branch, proof |
+|---|---|---|---|---|
+| heap-budget refusals | 17 (+1 killed past the limit) | **5** (the 5 proteindesign, 4 of them after an incumbent) | 18 | **15** (6 liner-sf, 5 wordpress, 3 proteindesign, table-layout) |
+| reach the time limit | 3 (connect 2, fm3_3) | 15 | 3 (connect) | 5 (connect 3, proteindesign 1HZ5 twice) + liner tp7_8 killed past it |
+| answers | fm3_3 12 solutions, tp7_8 8 before refusal | **table-layout UNSAT**; wordpress 5 (201 to 299 solutions each); liner-sf 4 of 7 with incumbents (fm3_5, tp7_8, fm3_3, tp7_2); proteindesign 4 incumbents before the refusal; connect none | none | wordpress 5 one incumbent each before the refusal, proteindesign 4 incumbents (2 at the time limit) |
+
+So without proof 16 of the 21 now run under 8 GiB, against 3 on main (4 counting the run killed past its limit). With proof the trace still writes one line per removed value at the first trace emission, each a live id (D-0218: 131 to 150 bytes), which is what refuses liner-sf (5.9 to 10.9 GB of `.pbp` before the refusal), wordpress (after its first solution) and table-layout (13.8 GB of proof at node 1): D-0265's step 2 (one line per maximal gap) is what reaches them.
+
+**Proofs.** Every proof of the per-node and factor runs was checked (12 + 36, all `s VERIFIED`). Of the 21 branch runs with proof, three were rerun keeping the proof and checked: connect 0018 (0.33 GB), connect 0041_02 (0.93 GB) and wordpress 7 (2.85 GB) each ran veripb to its 5 400 s limit without a verdict (rc 124, no rejection). The rest (1.6 to 13.8 GB each, cut by the heap budget or the clock) were not checked: their size and a cut proof's check time put them past this task. No proof was rejected.
+
+### 5. Per-node cost
+
+`perf stat -e instructions:u`, (I(N) - I(1)) / (nodes(N) - 1), median of three, default search, release binaries `aedfd1c6` (main) and `65acb55f` (final commit `46de8de9`); the trees are the same (node counts and stdout identical):
+
+| instance | budget | no proof | proof |
+|---|---|---|---|
+| elitserien handball12 | 3 000 | 13.720 -> 13.679 M (-0.30 %) | 47.910 -> 47.945 M (+0.07 %) |
+| costas13 | 291 (solved) | 1.988 -> 1.983 M (-0.22 %) | 7.674 -> 7.710 M (+0.46 %) |
+| jr63 (factor lane's element family) | 20 000 | 19.855 -> 19.867 M (+0.06 %) | 44.556 -> 44.546 M (-0.02 %) |
+| chessboard4 (diff lane, 98 elements) | 2 500 | 2.761 -> 2.765 M (+0.15 %) | 5.901 -> 5.928 M (+0.46 %) |
+
+The first build of the trace's per-hole bits arm allocated a closure per trace entry and cost costas13 +1.16 % with proof; the final commit removes it. What is left (+0.46 % with proof on costas13 and chessboard4) is the extra word of every trail entry and of every element frame, and the per-hole test of the bits arm. `scripts/factor_lane.sh` (`bb3dc48a`): every line within -0.52 % to +0.45 % of the recorded reference, the element family's factors 92.7 / 38.1 / 88.9 / 37.6 (recorded 92.6 / 38.1 / 88.8 / 37.6), 36 proofs verified. `scripts/scaling_lane.sh -j 8`: ok, every line within its threshold.
+
+### 6. Checks
+
+`scripts/check_fmt.sh` clean; `check_test_widths.py` no wide domain; `dune runtest --root . --force`: 5 692 ok, 0 FAIL, peak RSS 172 MB (final commit); `run_model_tests.sh` 295 passed, `free_model_tests.sh` 295 passed (every proof verified); `check_determinism.sh` ok; diff lanes as in section 3 (final binary: final binary `c526527b`: diff 45/393 and debug 29/377, the same WORK counters and nothing else; per configuration, diff: 3 each in fifo, audit0, noproof, order, rest, bits0, default, alternate, free, lbd, restarts, nopb, free-noproof, 2 each in activity, fifo-po, lbd-po (pigment15b 16, chessboard4 13, evm 16); debug: 2 each in alternate, noproof, free, bits0, lbd, audit0, restarts, default, rest, free-noproof, fifo, order, nopb, 1 each in fifo-po, activity, lbd-po (chessboard4 13, evm 16; pigment15b is skipped under debug)); scaling ok; factor ok; `fuzz_lane.sh -j 8 -n 500 --streams globals,configs`: 0 disagreements, 0 timeouts (the 13 `mzn-error` are MiniZinc's flattening of the generated models).
+
+Tests added: `test_core.ml` `test_d0268_bulk_removal` (the domain against the sequence of removals it replaces, 400 random cases, forks, declines, refusals; the store's every reader: one entry, the remover of each value, each value's derivation, the settle reasons of a bound over bulk holes, undo, re-removal, the refusal under `deriving_ahead`); `test_prop.ml` `test_d0268_element_one_entry` (one entry, memoised per value, value 6's derivation cites 5's and not the reverse) and `test_d0268_table_runs`; models `element_gap_opt` and `table_gap_sat`.
+
+### 7. What it costs in clarity
+
+One more mutator with its rule in store.ml's header and at its definition, one more field on the entry, and one reader (`removal_explanation`) that every "which derivation removed v" question must use (two sites today, `reasons_under` and Element's frame). Element's frame gains the `pending` record, whose correctness argument (the per-value frame's answers, value for value) is in element.ml. A future propagator may use the bulk rule only for values whose lines share one reason and are RUP with nothing written ahead.
+
+### 8. What is left
+
+- D-0265's step 2, one trace line per maximal gap (`~x_ge_a \/ x_ge_(b+1)`), a proof change: that is what the 15 refusals with proof need (liner-sf, wordpress, table-layout), and the per-value line ids.
+- proteindesign: the values dead tuples carry (1.5 to 3 M entries, a reason each) and the model's own 2.7 to 5.8 GB.
+- connect reaches its time limit with no solution on both binaries: not memory.
+- Element's index pruning was not changed: the index ranges over the array's positions, not a wide gap.
+- veripb on a gap instance's full proof was not run (as in D-0265).
+
+**Volume.** Arm B wrote 84.8 GB of proof on main and 97.2 GB on the branch, the three kept runs 4.1 GB, the per-node and factor runs a few GB: about 190 GB, every byte deleted after its size was recorded. `/scratch` stayed above 10 TB free.
+
+**Results**: `/cluster/arthur/baguette-results/elembulk/` (README, the tables, probes, logs, scripts).
+
+**Revert.** `git revert 46de8de9 3a750d1c 2c1fd087` (trace fix, table, the rule and element), in that order; the two test models go with `3a750d1c`. Nothing outside the branch depends on `Store.remove_interior`.
+
+## D-0269  [AUTONOME] M18-coverage-T9, D-0265's step 2: a bulk entry writes ONE trace line per maximal removed gap, `~x_ge_a \/ x_ge_(b+1)`, instead of one line per removed value. A proof change with no new variable, no `.opb` row and no change to the naming contract or `--e2e`
+
+**Status**: DONE on `wave114-gapline` (agent-gapline, 2026-11-28), not merged. Base: origin/main `99897e96` (D-0268 merged).
+
+[AUTONOME] because it changes the proof the solver writes (D-0021's "every pruning writes one line" now reads "every bulk pruning writes one line per run"); nothing that changes the solver's answers or its search was decided.
+
+### 1. What a removed run means in each encoding, and the gap rule
+
+- **Order encoding.** There is no literal `x = v`; a hole is the clause `~x_ge_v \/ x_ge_(v+1)` (PROOF-FORMAT §4, the trace line's hole claim). A maximal run `a..b` of consecutive values removed by ONE bulk entry is the clause `~x_ge_a \/ x_ge_(b+1)`, both literals existing because the run is strictly interior (`a > lo >= l`, `b + 1 <= hi <= u`). The rule: one line per run, `rup +1 ~x_ge_a +1 x_ge_(b+1) +1 ~f_1 ... >= 1` with the entry's facts (the one shared reason of D-0268), in ascending order of runs. A one-value run writes the bytes the hole line always wrote.
+- **(a) Derivable by one `rup` from the rows the per-value lines used.** Assume `x >= a`, `x <= b` and the facts. Element: every position `p` has the rows `idx = p -> c >= as[p]` and `idx = p -> c <= as[p]` (over the index's order literals); a position whose value is below `a` or above `b` is refuted through the ladder; a position whose value is inside `a..b` carries a value this entry removed, which no live position carries (that is why it was removed), so it is dead by the same facts the per-value line of that value used; the index's sweep then runs out of positions. Table (D-0268's runs): the values of a run are carried by NO tuple, every DEF row `s_t -> x = t_x` is refuted through the ladder, the selectors' at-least-one fails, with the empty reason. **When it is not derivable, and the split:** a run never crosses a value the entry did not remove. An older hole `h` between two removed values can be held by a LIVE position (another propagator removed `h` from the result, not element), and under `a <= x <= b` that position is not refuted, so `Domain.removed_runs` cuts the run at every value not removed by this entry. Measured, not only argued: every gap line written on the 301 test models, both diff lanes, the factor lane and the fuzz streams verifies (sections 4, 5).
+- **(b) Sufficient for every later line.** The ladder rows `x_ge_(v+1) -> x_ge_v` make each per-value clause a unit-propagation consequence of the gap clause (`x_ge_v` fixes `x_ge_a` downwards, `~x_ge_(v+1)` fixes `~x_ge_(b+1)` upwards, and the gap clause is then falsified), and in the other direction the gap clause propagates whatever a per-value clause propagated (`x_ge_v` gives `x_ge_a`, then `x_ge_(b+1)`, then `x_ge_(v+1)`). So any `rup` checked along the per-value lines checks along the gap line. What a `rup` cannot use this way is a `pol` that ADDS a per-value line by id; there is none (below).
+
+The consumers of a per-value line id (`grep -rn 'hole_line_of\|lines_at\|w_hole\|removal_explanation' lib`):
+
+| consumer | what it uses | served by |
+|---|---|---|
+| `Trace.settle_facts` (a bound settled over holes, I-X9) | the remover's REASON as facts, and `hole_line_of` for the I-S4 edge | the gap line: `hole_line_of e v` answers the line whose run contains `v`; the facts are the reason, unchanged |
+| `Search`'s M1-T55 bridge (a decision settled over holes) | `hole_line_of` for the I-S4 edge | the gap line, as above |
+| `Learn.supports` (the 1UIP clause's derivation rests on these lines, I-S4 at derivation) | `lines_at e` (every line of a supporting entry) and `hole_line_of` for each fold | the gap lines: an entry's lines are its runs' lines; `describe` names the gap |
+| the nogood and the learned clause (`rup`), the root's `rup >= 1` | unit propagation along the trace | the gap line, by (b) |
+| `Trace`'s bits arm (a fact over a bits variable) | one derivation per hole (`removal_explanation e v`), each `ia` the line | NOT the gap rule: on the bits arm a bulk entry keeps its per-value lines. Reachable only through a fact owner on bits (element's result and table's columns are held on order by scope, D-0130 §3.4); none of the test models or lanes reaches it |
+| `Justify` derivations: Element's `excl_hole`, `Store.reasons_under` (a `pol` over a bound settled across bulk holes) | the per-value DERIVATION (`removal_explanation`), a `pol` of its own | unchanged: a derivation is not a trace line and no `pol` cites a trace line by id; derived on demand and memoised as in D-0268 |
+| `Trace.derive_ahead` | a derivation ahead of an entry | unchanged: refused for a bulk entry (D-0268) |
+| `Trace.claims` (tests drive a propagator's lines in isolation) | the claims of an entry | unchanged: `lines` without `~gaps` gives per-value claims, which is what a test of one value's line wants |
+
+No consumer needs a per-value line derived on demand from the gap line, so none is written.
+
+### 2. The three encodings
+
+Order: the rule. Bits (`--bits-above`): the claimed variable of a bulk entry is never on bits (element's result and a table column are held on the order encoding by scope), but a fact owner can be, and then the entry goes on the bits arm and keeps one line per value, each against its own derivation (D-0268's arm, unchanged). Direct: the direct literals of element's index are channelled to the order literals (`red` definitions); the gap claim is over order literals and the full ladder is in the `.opb`, so nothing changes. The rule is therefore stated and built for the order arm only.
+
+### 3. Deletion
+
+The gap line is an ordinary trace line: filed at the entry's level, retired by the `Writer.wipe_level` that undoes the entry, and at level 0 handed to `permanent_ids` and deleted before `conclusion` (I-X2). No line is derived on demand from it (section 1), so I-X11's rule for derived lines has nothing new to cover. The I-S4 edges now point at the gap line; I-S4's level argument is the same (the run's line and the entry share a level).
+
+### 4. Naming contract, `--e2e`
+
+Untouched: no new variable, no `.opb` row (the `.opb` is byte-identical on every run compared), and the e2e prefix derives baguette's rows, not trace lines.
+
+### 5. What was built
+
+- `Domain.removed_runs ~old ~now`: the maximal runs of consecutive values a `Holes` change removed, from the hole log's slots in one allocation-free pass (the walk otherwise); BAGUETTE_DEBUG checks it against `classify`.
+- `Trace.lines ~gaps`: one line per run, `gap_clause` (`hole_clause` is its one-value case, so a one-value run writes the bytes it wrote). `emit_to_page` reads a bulk entry's reason first, decides the bits arm, and asks for gaps off it; every other entry keeps "claims first".
+- `Trace.written.w_hole` and `Learn.support.s_hole` are a variant `No_hole | Hole v | Gap (a, b)`; `hole_line_of e v` answers the line whose run contains `v`.
+- `Store.remove_interior`'s header states the gap obligation its callers meet (section 1 (a)).
+- PROOF-FORMAT §4 (the trace line) describes the gap line. Commits: `6c15c903` (the rule), `75a4d612` (models, lanes), `70d37ebc` and `8d7f2ce2` (cost, section 8).
+
+### 6. Evidence that the gap line is real, and what it is not
+
+**Mutation lanes** (`scripts/mutate_proof.sh` gains five; `test_mutation.ml` runs them on `gapline_element_sat` and `gapline_table_sat`, both SATISFIABLE, the gap line written over a database that is not contradictory):
+
+| lane | corruption of `~c_ge_3 \/ c_ge_9` | veripb |
+|---|---|---|
+| gap-flip | `c_ge_3 \/ c_ge_9` | refused AT the gap line (element line 45, table line 5), RUP wording at full strength |
+| gap-extend-lo | `~c_ge_2 \/ c_ge_9` (2 is a value of a solution) | refused at the gap line, RUP wording |
+| gap-extend-hi | `~c_ge_3 \/ c_ge_10` | refused at the gap line, RUP wording |
+| gap-shrink-lo | `~c_ge_4 \/ c_ge_9` | ACCEPTED: registered as known slack |
+| gap-shrink-hi | `~c_ge_3 \/ c_ge_8` | ACCEPTED: registered as known slack |
+
+So the checker judges the gap line's exact extent. What the lanes could NOT show is a later line refused when the gap shrinks, and the reason is measured, not assumed: **no later line of an element or table proof rests on a removed value's line.** Every consumer of the run pins the variable on BOTH sides (a settle line's negated claim bounds it, a second element's sweep over its index runs from both ends, a dead tuple's DEF row fixes it), and the maker's own rows refute any pin inside the run by unit propagation. Measured on main (`c526527b`): replacing every per-value line of the run by a tautology, label kept, leaves the proof `s VERIFIED` on `gapline_element_sat` (6 lines), `gapline_table_sat` (6), `gapline_element_opt` (6) and `element_gap_opt` (23). The per-value lines were not load-bearing either; D-0269 does not change that, and section 9 says what it suggests.
+
+**Every changed proof verifies.** Test models (295 + the 6 added: `gapline_{element,table}_{sat,unsat,opt}`), main `c526527b` against the branch, 4 configurations each (free and fixed search, default `--bits-above 0` and `none`), 1 204 runs: stdout and `.opb` identical on all; the `.pbp` differs on 40 (element_gap_opt, element_crossed_root_unsat, circuit_opt, table_opt and the 6 new models, 4 each), all fewer lines, all `s VERIFIED`. `run_model_tests.sh` and `free_model_tests.sh` 301 passed (every proof verified, expected outputs unchanged), `check_determinism.sh` 602 + 8 runs identical, `e2e_lane.sh` PASS (263 AGREE, 3 UNCHECKED, 0 DIFFER).
+
+**Lanes, the search did not move.** `diff_lane.sh --tier all` against the references of the time (before the D-0268 re-record): 45 of 393 differ, all on the three element instances; 6 are D-0268's work counters only (the no-proof configurations), 39 add the `.pbp` hash and `rup/lines` (13 also `i-s4-cross/lines`, fewer hole lines for a learned clause to rest on). Run beside main's binary with `--keep` on those three instances (48 runs): 39 differ, and the only items that differ are the `.pbp` hash, `rup/lines` (39) and `i-s4-cross/lines` (13); stdout, exit code, `.opb`, every other SEARCH counter (nodes, conflicts, learned, ...) and every WORK counter are identical; the 39 changed proofs all `s VERIFIED`. `observe.py` files the two line counters under SEARCH, which is why the lane prints "search 1". `--debug`: 29 of 377, the same 29 runs as D-0268 (chessboard4 13, evm 16; 25 with the proof items, 4 work counters only), no exit status changed, no invariant fired. Scaling ok. `factor_lane.sh` ok, every line -0.21 % to +0.40 % of its reference, 36 proofs verified. `fuzz_lane.sh -n 500 --streams globals,configs`: 0 disagreements, 0 timeouts (13 `mzn-error`, MiniZinc's flattening).
+
+**Against the references re-recorded after D-0268** (main `922ae683`, merged here), final binary `87b44fa4` (dev build of `8d7f2ce2`): `diff_lane.sh --tier all` 39 of 393 differ, every one only in the `.pbp` hash and `rup/lines` (13 also `i-s4-cross/lines`), no WORK counter (pigment15b 14, chessboard4 11, evm 14); `--debug` 25 of 377 (chessboard4 11, evm 14), the same items, no exit status changed. These are the runs the orchestrator re-records after the gate; `--update` was not run here.
+
+**Checks on the final commit** (`8d7f2ce2` merged with origin/main): `check_fmt.sh` clean, `check_test_widths.py` no wide domain, `dune runtest --root . --force` 5 712 ok, 0 FAIL (5 692 before; 20 new mutation checks), peak RSS 174 MB; `run_model_tests.sh` 301 passed, `free_model_tests.sh` 301 passed, `check_determinism.sh` 602 + 8 identical; the final binary is byte-identical to the one the fuzz, factor and model comparisons ran (1 204 runs: stdout, `.opb`, `.pbp`); scaling ok.
+
+### 7. The 21 instances of D-0265's gap kind, with proof
+
+D-0265's setting (`--max-heap-mb 8192`, 16 GiB address space, `MemoryMax=32G`, `--stats -f`, `--time-limit 300`, proof written and its size recorded, then deleted), release binaries main `65acb55f` (D-0268 merged, `99897e96`) and branch `96fae3d6` (`75a4d612`; the two later commits change the cost, not a byte of the proof), run side by side, 10 at a time on a node at load 55 to 72:
+
+| | main | branch |
+|---|---|---|
+| heap-budget refusals | 12 (6 with no incumbent: liner-sf fm3_5, tp7_10, tp7_12, tp7_2, proteindesign 1CM1, table-layout) | 11 (2 with no incumbent: proteindesign 1CM1 and table-layout, both at node 1) |
+| killed past the limit (TERM, writing the trace) | 5 (liner-sf fm3_11, tp7_8, fm3_3, wordpress7, proteindesign 1HZ5) | 0 |
+| reach the time limit | 4 (connect 3, proteindesign 1HZ5) | 10 (liner-sf fm3_11, fm3_5, tp7_10, fm3_3, tp7_12, tp7_2; connect 3; wordpress7) |
+| solutions | wordpress 1 each (4), proteindesign 4 incumbents | **liner-sf tp7_8 24 solutions** (objective 1 129 195) before its refusal; **wordpress7 57** (objective 89 273 -> 68 589), wordpress10/11/12/8 5, 7, 5, 8 (each objective below main's); proteindesign the same 4 incumbents |
+
+The element-gap instances (liner-sf 7, wordpress 5, connect 3, table-layout): main refuses or is killed on 12 of 16; the branch searches to the time limit on 10 and refuses 5 only after 5 to 24 solutions; table-layout is unchanged because its proof is not trace lines (0 `rup` lines on both: 9.4 M lines of the index's direct-encoding `red` definitions written at the start, and a 12.6 GB `.opb`). Main's liner-sf and wordpress proofs held 6 to 16 M lines (15.4 M on fm3_11, all but 70 k of them per-value `rup` lines); the branch's 44 to 261 k lines.
+
+**What is now the size of a liner-sf proof** is not trace lines: on fm3_11 after 90 s, 2.16 GB of the branch's 2.30 GB `.pbp` is 629 `rup` lines of up to 68 MB each, the bridge pairs D-0132 section 2.2 mints for an ORDER variable in a row with a bits term (`stats: bridges`), one line the width of the variable's ladder (0.75 M and 2.1 M rungs). The branch's liner-sf proofs at 300 s are 9 to 19 GB because it searches 80 to 531 nodes where main managed 5 to 56.
+
+**Same search, same node** (fixed node budget (`BAGUETTE_NODE_LIMIT`), proof kept, then veripb, `nodeN.sh`):
+
+| instance (nodes) | main: .pbp, lines, solver, veripb | branch: .pbp, lines, solver, veripb |
+|---|---|---|
+| connect 0018 (61) | 186 MB, 838 498, 296 s, no verdict in 3 600 s | 121 MB, 97 616, 3 s, **VERIFIED in 12 s** |
+| connect 0041_02 (201) | 418 MB, 2 315 799, 291 s, no verdict in 3 600 s | 264 MB, 598 271, 8 s, VERIFIED in 52 s |
+| connect 0083_02 (11) | 442 MB, 3 370 221, 36 s, no verdict in 3 600 s | 143 MB, 27 189, 6 s, VERIFIED in 35 s |
+| liner-sf tp7_8 (25) | killed at 1 800 s at node 22 still writing: 1.25 GB, 7 558 597 lines (7.17 M per-value lines) | 2.64 GB (2.63 GB of it 864 bridge pairs), 72 400 lines, 67 s, **VERIFIED in 453 s** (29 GB RSS) |
+| connect 0083_02 (146) | 639 MB, 3 472 956, 287 s, no verdict in 1 200 s | 339 MB, 129 924, 8 s, VERIFIED in 57 s |
+
+main's tp7_8 proof (cut at node 22) got no verdict in 3 600 s either. wordpress7 at 60 nodes was stopped unfinished (main's solver still writing after 13 min) and is not reported. At 10 nodes the liner-sf, wordpress and the two small connect instances had written no trace yet (byte-identical proofs on both binaries, veripb 2 to 42 s on each), which is why the budgets above are where the first conflicts are.
+
+### 8. Per-node cost
+
+`perf stat -e instructions:u`, (I(N) - I(1)) / (nodes(N) - 1), default search, release binaries main `65acb55f` and branch `3f859ac3` (`8d7f2ce2`); trees identical (node counts and stdout):
+
+| instance | budget | no proof | proof |
+|---|---|---|---|
+| elitserien handball12 | 3 000 | 13.679 -> 13.679 M (0.00 %) | 47.953 -> 47.930 M (-0.05 %) |
+| costas13 | 291 (solved) | 1.983 -> 1.983 M | 7.710 -> 7.707 M (-0.04 %) |
+| jr63 | 20 000 | 19.867 -> 19.867 M | 44.546 -> 44.432 M (-0.26 %) |
+| chessboard4 | 2 500 | 2.765 -> 2.765 M | 5.928 -> 5.935 M (+0.12 %) |
+| evm | 2 000 | 1.872 -> 1.872 M | 4.057 -> 4.057 M (+0.01 %) |
+
+Two earlier builds cost more and were fixed before this table: a run held as a pair in an option (`96fae3d6`, evm +0.39 % with proof) and then as an option plus an int field (`48b201aa`, +0.34 %) each added words to every trace line, and evm paid one more major collection (OCAMLRUNPARAM v=0x400: 200.43 M words allocated on main, 200.77 M then, 200.40 M now, 15 major collections on main and now). chessboard4's +0.12 % is the same mechanism the other way: the branch allocates 66 k words FEWER (380.04 M against 380.11 M) and the major GC's pacing gives it one more collection (22 against 21).
+
+### 9. What it costs in clarity, and what is left
+
+One more claim shape in trace.ml (the gap clause, whose one-value case is the hole clause), one more obligation on a caller of the bulk rule (stated at `Store.remove_interior`), a three-armed `hole` in place of an option. The bits arm keeps per-value lines, so a bulk entry has two line shapes depending on its facts.
+
+- **The bridge pairs of D-0132 §2.2** are now what fills a liner-sf proof (section 7): a line the width of an order variable per (variable, value) in a mixed row. That is the next mechanism for the liner-sf proofs (and veripb's 29 GB on tp7_8).
+- **wordpress and liner-sf tp7_8 still refuse at 8 GiB after 5 to 24 solutions**; what fills the heap then was not measured here.
+- **table-layout**: the direct encoding of element's index (9.4 M `red` lines at the start) and the 12.6 GB `.opb`; untouched by D-0265's steps.
+- **proteindesign**: unchanged (D-0268 section 8).
+- **The element/table hole lines are not load-bearing** (section 6): the maker's rows re-derive every pin a later line makes. Not writing them at all would be the next proof saving for these families, but it changes D-0021's "every pruning writes a line" and the I-S4 bookkeeping, so it is the user's decision and is not proposed as done.
+- A settle over a bulk gap still walks every settled value (`Trace.settle_facts`, `Store.reasons_under`), as before D-0269; with gap lines `hole_line_of` scans runs, not values.
+
+**Volume.** The 21-instance arms wrote 106.1 GB (main) and 208.5 GB (branch) of proof, the fixed-node, inspection and per-node runs 67.5 GB, the lanes' kept proofs 4.6 GB: every byte deleted after its size and line count were recorded. `/scratch` stayed above 10 TB free.
+
+**Results**: `/cluster/arthur/baguette-results/gapline/` (README, tables, logs, scripts).
+
+**Revert.** `git revert 8d7f2ce2 70d37ebc 75a4d612 6c15c903` (in that order); the six models and the mutation lanes go with `75a4d612`. Nothing else depends on the gap line; reverting restores D-0268's per-value lines byte for byte.
+
+## D-0267  [AUTONOME] The held-out comparison again under the free-search default (D-0261): `rec`, `classes` and `probe` against `off`, with a second `off` arm as the noise floor, and `fixed` against the default, in ONE interleaved campaign. No switch passes; the free default beats `--fixed-search` on the held-out set as on the series
+
+**Status**: DONE (agent-compare, branch `wave112-compare2`, measurement only, no `lib/` or `bin/` change). Measured
+2026-11-28 02:39 to 13:24 UTC on fataepyc-06. Scripts, tables and runs: `/cluster/arthur/baguette-results/compare2/`
+(README first). D-0259 section 4 asked for the question to be asked again under the new default; D-0252 had answered it
+under the fixed search.
+
+### 1. Set, flatten, binary
+
+- Set: D-0252's 400 held-out instances (`bench/tuning/heldout.lst`, D-0205's rule with the tuning set excluded).
+- Flatten: the 400 re-flattened on fataepyc-06 with the mznlib of origin/main `d3874fc8` (the same as `6ad63b1`'s), through
+  `scripts/compare_run.sh` as `bench/series/run_series.sh` flattens. None failed. Every file differs in raw bytes from
+  D-0252's (the header comments carry the library path and the command line); without comment lines **213 are identical
+  and 187 differ** (107 families; `flatten-diff.txt`), from the mznlib changes since 2026-11-26 (lex, nvalue, gcc routes
+  and guards).
+- Binary: `make release` of origin/main after gate 141 went green (check, diff 393/393, debug diff 377/377, scaling, DONE),
+  md5 `aedfd1c6` (`aedfd1c6bb935de370f0d1919e147aa3`), built from `wave112-compare2` whose `lib/`, `bin/`, `mznlib/` equal
+  origin/main's (`676ebd0`). Smoke (`smoke.txt`): at 20 000 nodes `off` and `off-b` give identical counters, each other arm
+  different ones, and `fixed`'s counters equal D-0252's `off` counters on the same instance (`--fixed-search` is the old
+  default, byte for byte in the counters); at 3 000 nodes with proof all six verify.
+
+### 2. Method
+
+Six arms, every switch set explicitly: `off` (the default: free search, the three switches off), `off-b` (identical to
+`off`), `rec` (`BAGUETTE_MINIMISE=rec`), `classes` (`BAGUETTE_PRIORITY=classes`), `probe` (`BAGUETTE_PROBE=root`),
+`fixed` (`--fixed-search`); each `--no-proof` and with proof: 4 800 runs. Each instance's twelve runs adjacent, the arm
+order rotated by one per instance and the mode order alternated, so load falls on all arms alike. D-0252's settings
+otherwise (300 s, `--stats --max-heap-mb 8192`, scope `MemoryMax=32G`, outer timeout 420 s, veripb 3.0.2 3600 s at 32G on
+every complete answer, a check timeout counted as unverified). At most 40 of these runs at once, launches held while user
+arthur's `main*` + `veripb` processes reached 88 (agent-refused's measurements and the gates ran beside it; the count
+stayed between 40 and 56). At launch: load 23, 11 TB free on /scratch.
+
+The rule, fixed by the orchestrator before the runs: D-0251 section 2 for each switch against `off` (verified complete
+answers: lost no more than gained, net at least +2, in both modes; pairwise share at least 0.47), and in each mode the net
+must also EXCEED |net(`off-b` against `off`)| of that mode. No rule for `fixed` (D-0259 decided the default).
+
+### 3. Results (`tables.md`)
+
+Without proof (400 instances, complete answers trusted):
+
+| arm | complete | incumbent only | share vs off | wins/losses | complete +/- vs off | net |
+|---|---|---|---|---|---|---|
+| off | 108 | 238 | 0.500 | | | |
+| off-b | 108 | 237 | 0.500 | 24+/24- | +1/-1 | 0 |
+| rec | 114 | 227 | 0.525 | 129+/109- | +11/-5 | +6 |
+| classes | 107 | 234 | 0.472 | 115+/137- | +7/-8 | -1 |
+| probe | 109 | 234 | 0.476 | 78+/97- | +5/-4 | +1 |
+| fixed | 85 | 223 | 0.365 | 101+/209- | +16/-39 | -23 |
+
+With proof (400 instances):
+
+| arm | complete | verified complete | incumbent only | share vs off | wins/losses | verified +/- vs off | net |
+|---|---|---|---|---|---|---|---|
+| off | 90 | 85 | 246 | 0.500 | | | |
+| off-b | 93 | 88 | 244 | 0.511 | 37+/28- | +3/-0 | +3 |
+| rec | 93 | 87 | 241 | 0.504 | 123+/120- | +9/-7 | +2 |
+| classes | 86 | 83 | 244 | 0.506 | 127+/122- | +6/-8 | -2 |
+| probe | 93 | 88 | 239 | 0.485 | 79+/91- | +6/-3 | +3 |
+| fixed | 73 | 69 | 231 | 0.364 | 96+/205- | +19/-35 | -16 |
+
+Unverified (veripb at 3 600 s, never rejected): off 5, off-b 5, rec 6, classes 3, probe 5, fixed 4 (rec's sixth is 2013 pentominoes-int 04, a complete answer only `rec` found, whose check ran out its hour last). **No proof was REJECTED.**
+
+### 4. The noise floor
+
+`off-b` against `off`, the same binary and settings run side by side: without proof 24+/24-, share 0.500, complete +1/-1
+(net 0); with proof 37+/28-, share 0.511, verified +3/-0 (net +3: java-auto-gen binpack_11, minimal-decision-sets
+breast-cancer_train4, nmseq_99). So inside one campaign two identical arms differ by 48 and 65 instance verdicts and by up
+to 3 verified complete answers; D-0205's 0.03 band holds for the share (0.011 at most here), and the rule's floor is 3 with
+proof and 0 without.
+
+### 5. The rule, applied as written
+
+| switch | with proof: +/-, net, share, net > 3? | without proof: +/-, net, share, net > 0? | verdict |
+|---|---|---|---|
+| `rec` | +9/-7, net +2, 0.504, no (2 is not above 3) | +11/-5, net +6, 0.525, yes | stays `off` |
+| `classes` | +6/-8, net -2 (fails D-0251), 0.506, no | +7/-8, net -1 (fails D-0251), 0.472, no | stays `off` |
+| `probe` | +6/-3, net +3, 0.485, no (3 is not above 3) | +5/-4, net +1 (fails D-0251's +2), 0.476, yes | stays `off` |
+
+Read plainly. `rec` is the closest: it gains without proof (net +6, share 0.525, best on MAX instances 33+/18-) and with
+proof gains +2 verified answers, which the floor of 3 does not let through. `probe` gains three verified answers with
+proof, exactly the floor, and one without, under the +2 of D-0251. `classes` loses in both modes. All three stay `off`;
+nothing changes in the code.
+
+### 6. Complete answers gained and lost against `off`
+
+- `rec`, no proof: +depot-placement ts225_6, +ghoulomb 4-9-10, +p1f 15, +mario medium_1, +steelmillslab bench_19_5,
+  +fox-geese-corn 54, +pentominoes-zayenz size_10_tiles_10_seed_17, +perfect_square 195, +evm-super-compilation
+  isolated_block_6_0_input, +kidney-exchange 3_20_0.30_4, +products-and-shelves ps-25-01; -costas-array 16, -pentominoes 07,
+  -pentominoes-int 07, -elitserien handball20, -sudoku_fixed p20. With proof: +solbat sb_13_13_5_3, +nonogram dom_10,
+  +java-auto-gen binpack_11, +maximum-dag 25_06, +steelmillslab bench_19_5, +minimal-decision-sets breast-cancer_train4,
+  +opt-cryptoanalysis r4, +evm-super-compilation isolated_block_6_0_input, +products-and-shelves ps-25-01;
+  -costas-array 16, -l2p l2p13, -steelmillslab bench_16_10, -rotating-workforce Example1242, -ATSP instance10_0p25,
+  -mondoku 12-12-8, -sdn-chain d26n600-5.
+- `classes`, no proof: +depot-placement ts225_6, +ghoulomb 4-9-10, +l2p l2p2, +p1f 15, +seat-moving sm-20-20-00,
+  +evm-super-compilation isolated_block_6_0_input, +atsp instance11_0p25; -costas-array 16, -filters ewf_1_1,
+  -pentominoes-int 04, -filters ewf_1_2, -maximum-dag 25_06, -ma-path-finding g16_p10_a20, -steelmillslab bench_13_0,
+  -sudoku_fixed p20. With proof: +depot-placement ts225_6, +pentominoes 2011_05, +nmseq 99, +seat-moving sm-20-20-00,
+  +minimal-decision-sets breast-cancer_train4, +pentominoes 2020_05; -costas-array 16, -filters ewf_1_1, -nonogram
+  non_awful_3, -l2p l2p13, -filters ewf_1_2, -steelmillslab bench_13_0, -rotating-workforce Example1242, -sdn-chain d26n600-5.
+- `probe`, no proof: +p1f 15, +mario medium_1, +seat-moving sm-20-20-00, +seat-moving sm-20-20-02, +atsp instance11_0p25;
+  -pentominoes-int 04, -elitserien handball20, -ma-path-finding g16_p10_a20, -sudoku_fixed p20. With proof: +nmseq 99,
+  +nonogram dom_10, +java-auto-gen binpack_11, +seat-moving sm-20-20-00, +minimal-decision-sets breast-cancer_train4,
+  +seat-moving sm-20-20-02; -costas-array 15, -costas-array 16, -stripboard w20_h15_l7_c6_n24.
+
+Full ids with family and kind in `tables.md`. All three of `off-b`'s gains with proof (java-auto-gen, minimal-decision-sets, nmseq) and its one gain without
+proof (ghoulomb) are also among the gains of `rec`, `classes` or `probe`: instances at the 300 s edge that any
+perturbation flips.
+
+### 7. The default against `--fixed-search` (no rule; D-0259 decided)
+
+`fixed` against `off`: without proof 85 complete against 108, share 0.365 (101+/209-); with proof 69 verified against 85,
+share 0.364 (96+/205-). Complete answers `fixed` gains: 16 without proof (MIN 12, MAX 2, SAT 2), 19 with (MIN 13, SAT 4,
+MAX 2), among them stochastic-vrp (2), kidney-exchange, cyclic-rcpsp, on-call-rostering 4s-23d, diameterc-mst c_v15,
+steiner-systems N10, perfect_square 57. It loses 39 without proof (MIN 20, SAT 18, MAX 1) and 35 with (MIN 20, SAT 14,
+MAX 1), the families with more than one: oocsp_racks 3, rectangle-packing 3, cargo 2, costas-array 2, roster 2,
+soccer-computational 2, solbat 2 / 1, fillomino 2 / 1, road-cons 1 / 2, steelmillslab 1 / 2. By kind the free search wins
+everywhere, most on SAT (`fixed`'s share 0.34 and 0.37) and MIN (0.37 and 0.38), MAX 0.37 and 0.31; by edition `fixed` reaches
+0.50 only in 2016 (and in 2013 with proof).
+
+**The held-out set agrees with the series.** D-0259 (series D-0227, 1 600 instances, with proof): the free search 454
+verified OPT+UNSAT+SAT against the fixed search's 390 (+16 %), the fixed search keeping 31 optima the free one loses. Here
+85 against 69 verified (+23 %), the fixed search keeping 19 verified complete answers the default loses; the same sign, a
+similar size, and the same kind of residue (instances the fixed search's order suits, which D-0259's portfolio follow-up
+names).
+
+### 8. Proof volume
+
+7.80 TB of `.opb` + `.pbp` written by the 2 400 proof runs, each deleted once checked (none kept: nothing was rejected).
+/scratch on fataepyc-06 never fell under 10.2 TB free.
+
+**Revert**: nothing to revert (no default changed, no code changed).

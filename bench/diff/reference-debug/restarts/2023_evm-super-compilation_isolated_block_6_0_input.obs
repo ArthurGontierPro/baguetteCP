@@ -27,7 +27,7 @@ search maxdepth/levels 72 levels
 work exhausted/bool 0 bool 1 if
 search skipped/nodes 40 nodes
 search learned/cls 97 cls
-work later/asks 362880 asks
+work later/asks 362827 asks
 work cites/memos 6735 memos
 search convertible/cls 0 cls
 search retention tiered(core<=2,mid<=6,first=2000,inc=300,mid_every=10000) tiered(core<=2,mid<=6,first=2000,inc=300,mid_every=10000): 97 added, 0 evicted, 97 swept, 0 live, 0 duplicate, 97 cited, 0 pinned, 0 reductions, 0 detached, 0 locked
@@ -87,13 +87,13 @@ work eff/runs 130659 runs
 work contra/runs 97 runs
 work passes/snaps 241549 snaps
 work deductions/chgs 7621 chgs
-work wakes/wakes 772574 wakes
-work masked/wakes 15641 wakes
+work wakes/wakes 772521 wakes
+work masked/wakes 15535 wakes
 work vetoed/wakes 1763 wakes
 work advised/wakes 3962 wakes
 work seeded/runs 71465 runs
 work skipped/slots 11145980 slots
-search rup/lines 63471 lines
+search rup/lines 63418 lines
 search pol/lines 78764 lines
 search pol-tokens/tokens 904961 tokens
 search pol-widest/tokens 331 tokens
@@ -104,4 +104,4 @@ search boundlines/pairs 74 pairs
 search bitsprune/lines 77020 lines
 search atoms/prune/atoms 0.016 atoms
 opb 959ea28ada0978cbc4002e5b4eb908cf85326ee143da085be66a3be94d68eda0
-pbp a974c107e0c089b71ecf6517fe00944821140d1efd500359d40e6e3b6d67fde6
+pbp 4358daaccff351e349f954fa4b407fd495d5b858ccc90f69079e833883d0419c

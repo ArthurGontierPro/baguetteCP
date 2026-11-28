@@ -1,0 +1,13 @@
+x = 10;
+y = 1;
+z = 5;
+s = array1d(1..4, [false, false, false, true]);
+u = array1d(1..7, [false, false, false, false, false, false, true]);
+----------
+x = 2;
+y = 2;
+z = 1;
+s = array1d(1..4, [false, true, false, false]);
+u = array1d(1..7, [false, true, false, false, false, false, false]);
+----------
+==========
