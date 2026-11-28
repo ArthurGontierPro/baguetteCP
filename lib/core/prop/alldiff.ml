@@ -855,7 +855,7 @@ let reuse t ~prev ~a ~u v build =
    two-literal `rup` pairs. A Hall set over most of a small scope (costas, tppv,
    elitserien) narrows whole; the commonest pruning of a wide scope, a variable fixed at
    v taking v from another (m = 2, K_v up to 900 on whirlpool), is ONE two-literal `rup`
-   instead of K_v - 2 axioms (D-0271 section 6 measures the routes).
+   instead of K_v - 2 axioms (D-0271 section 7 measures the routes).
 
    D-0061 kept [Explanation.Clause] out of this counting because, then, a root conflict
    resting on a clause was routed to the empty clause and the `pol`s around it went

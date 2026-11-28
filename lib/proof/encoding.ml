@@ -3194,7 +3194,7 @@ let add_all_different t (names : string list) : ((string * string * int) * cid) 
    WHAT IS CITED. The Hall derivation (lib/core/prop/alldiff.ml) wants the at-most-one
    over the DIRECT literals, sum_{x in S} ~x_eq_v >= |S| - 1 for S in P_v. [start_proof]
    derives it once per value, for S = P_v ([derive_value_amo]), and [value_amo_id]
-   hands its id out; alldiff narrows it to S by literal axioms. *)
+   hands its id out; alldiff narrows it to S, or rests rup pairs on it (alldiff.ml). *)
 type alldiff_rows = Pairs | Amo
 
 let alldiff_rows : alldiff_rows ref = ref Pairs
