@@ -3179,6 +3179,129 @@ solve :: seq_search([int_search([b, y], input_order, indomain_min, complete), in
         ("gapline-table", gapline_table_src, "+1 ~x_ge_3 +1 x_ge_9 >= 1 ;");
       ];
 
+    (* -- M18-coverage-T9: all_different's rows per VALUE (D-0271, the option) ---------
+       test/models/alldiff_pigeonhole_narrow_sat, solved with [Encoding.alldiff_rows] set
+       to [Amo]: the .opb states the all_different as one row per value, and the proof
+       derives each value's direct at-most-one from it at the top. A satisfiable model
+       whose search fails under decisions, so Hall derivations citing those lines are
+       written and a later trace line rests on them. Three corruptions, each refused at a
+       LATER line at the RUP wording, at full strength:
+         amo-row-degree   value 1's .opb row asks one fewer (at most TWO of the five
+                          variables equal 1): a weaker model, so only a line that needed
+                          the at-most-one can fail;
+         amo-row-flip     one literal of that row negated (x0_ge_2 -> ~x0_ge_2);
+         amo-line-div     value 2's derived line divides its rung sum by 3, not 2: the
+                          rounding that makes ~x_eq_v the whole of ne(x, v) is lost.
+       A corruption NOT here, measured: dropping one channelling half from value 1's line
+       verifies, because it leaves x0_ge_2 where ~x0_eq_1 stood, and x0_ge_2 implies
+       ~x0_eq_1: the corrupted line is a STRONGER line the model also implies. *)
+    let saved_rows = !Encoding.alldiff_rows in
+    Encoding.alldiff_rows := Encoding.Amo;
+    let b, outcome =
+      Fun.protect
+        ~finally:(fun () -> Encoding.alldiff_rows := saved_rows)
+        (fun () ->
+          solve_src ~name:"alldiff-amo"
+            (String.concat ""
+               [
+                 "var 1..5: x0 :: output_var;\nvar 1..4: x1 :: output_var;\n";
+                 "var 1..3: x2 :: output_var;\nvar 1..5: x3 :: output_var;\n";
+                 "var 1..2: x4 :: output_var;\n";
+                 "constraint all_different_int([x0,x1,x2,x3,x4]);\n";
+                 "constraint int_lin_le([1,1],[x0,x1],6);\n";
+                 "solve :: int_search([x4,x0,x2,x3,x1], first_fail, indomain_min, \
+                  complete) satisfy;\n";
+               ]))
+    in
+    check "alldiff-amo: the solver solves it (the instance is what we think it is)"
+      (match outcome with Search.Sat _ -> true | Search.Unsat -> false);
+    let row1 = "+1 x0_ge_2 +1 x1_ge_2 +1 x2_ge_2 +1 x3_ge_2 +1 x4_ge_2 >= 4 ;"
+    and row2 =
+      "+1 ~x0_ge_2 +1 x0_ge_3 +1 ~x1_ge_2 +1 x1_ge_3 +1 ~x2_ge_2 +1 x2_ge_3 +1 ~x3_ge_2 \
+       +1 x3_ge_3 +1 ~x4_ge_2 >= 4 ;"
+    in
+    let lines_of f = Array.of_list (String.split_on_char '\n' (read_file f)) in
+    let find_line lines needle =
+      let at = ref (-1) in
+      Array.iteri (fun i l -> if !at < 0 && contains l needle then at := i) lines;
+      !at
+    in
+    let opb_lines = lines_of b.opb and pbp_lines = lines_of b.pbp in
+    let at1 = find_line opb_lines row1 and at2 = find_line opb_lines row2 in
+    check "alldiff-amo: the .opb holds value 1's and value 2's per-value rows"
+      (at1 >= 0 && at2 >= 0);
+    let label l = match String.split_on_char ' ' l with w :: _ -> w | [] -> "" in
+    let div_at =
+      if at2 < 0 then -1 else find_line pbp_lines (" pol " ^ label opb_lines.(at2) ^ " ")
+    in
+    check "alldiff-amo: the proof derives value 2's at-most-one from its row, by `2 d`"
+      (div_at >= 0 && contains pbp_lines.(div_at) " 2 d ");
+    let write f lines =
+      let oc = open_out f in
+      output_string oc (String.concat "\n" (Array.to_list lines));
+      close_out oc
+    in
+    let refused_later c name ~opb ~pbp ~after =
+      let lane = Printf.sprintf "%s/%s" c.c_tag name in
+      ran c name;
+      let v, out = check_proof { b with opb; pbp } in
+      let later =
+        (* "Checking error at FILE:N": N past the corrupted line (1-based). *)
+        let key = Filename.basename pbp ^ ":" in
+        let kl = String.length key and ol = String.length out in
+        let rec scan i =
+          if i + kl > ol then false
+          else if String.sub out i kl = key then (
+            let j = ref (i + kl) in
+            while !j < ol && out.[!j] >= '0' && out.[!j] <= '9' do
+              incr j
+            done;
+            match int_of_string_opt (String.sub out (i + kl) (!j - i - kl)) with
+            | Some n -> n > after
+            | None -> false)
+          else scan (i + 1)
+        in
+        scan 0
+      in
+      check
+        (Printf.sprintf "%s: refused at a line after %d, at the RUP wording" lane after)
+        (v = Rejected_on_derivation && later && contains out rup_wording);
+      if not (v = Rejected_on_derivation && later) then show out
+    in
+    gated ~tag:"alldiff-amo"
+      ~control:(fun () -> control_holds ~tag:"alldiff-amo" ~proof:b.pbp)
+      ~declares:[ "amo-row-degree"; "amo-row-flip"; "amo-line-div" ]
+      (fun c ->
+        let opb_with f =
+          let ls = Array.copy opb_lines in
+          ls.(at1) <- f ls.(at1);
+          let p = b.opb ^ ".mut.opb" in
+          write p ls;
+          p
+        in
+        (* The first occurrence of [from] in [l] becomes [into]. *)
+        let replace ~from ~into l =
+          let fl = String.length from and ll = String.length l in
+          let rec go k =
+            if k + fl > ll then l
+            else if String.sub l k fl = from then
+              String.sub l 0 k ^ into ^ String.sub l (k + fl) (ll - k - fl)
+            else go (k + 1)
+          in
+          go 0
+        in
+        refused_later c "amo-row-degree"
+          ~opb:(opb_with (replace ~from:">= 4 ;" ~into:">= 3 ;"))
+          ~pbp:b.pbp ~after:0;
+        refused_later c "amo-row-flip"
+          ~opb:(opb_with (replace ~from:"+1 x0_ge_2 " ~into:"+1 ~x0_ge_2 "))
+          ~pbp:b.pbp ~after:0;
+        let ls = Array.copy pbp_lines in
+        ls.(div_at) <- replace ~from:" 2 d " ~into:" 3 d " ls.(div_at);
+        let p = b.pbp ^ ".div.pbp" in
+        write p ls;
+        refused_later c "amo-line-div" ~opb:b.opb ~pbp:p ~after:(div_at + 1));
+
     census ~dir;
 
     (* The corrupted proofs are the ones we expected to be bad, so they are thrown away

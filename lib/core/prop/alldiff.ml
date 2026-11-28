@@ -195,6 +195,21 @@
    model row gets, since a `pol` cites a derived line exactly as it cites a model row.
 
    ---------------------------------------------------------------------------
+   The OPTION: rows per VALUE (BAGUETTE_ALLDIFF_ROWS=amo, D-0271)
+   ---------------------------------------------------------------------------
+
+   The pairwise table is n (n - 1) / 2 rows per shared value (297 M on whirlpool d29), and
+   its ids were the heap of the refused alldiff instances (D-0265). Under the option the
+   .opb holds one row per value instead ([Encoding.add_all_different_amo]) and
+   [Encoding.start_proof] derives from each the direct at-most-one over EVERY variable
+   whose declared domain holds the value. THE ONE RULE that changes here, in [amo]: the
+   at-most-one over a set is that line plus one literal axiom per variable outside the
+   set ([amo_of_value]), never pairs; [rows] and [lemmas] are empty and the D-0216 memo is
+   not used. Everything else (the at-least-one lines, the cancellations, every [Combine]
+   around [amo]) is the same code, so the counting is the same and only the at-most-one
+   summands change. The default ([value_amo] = [None]) is every byte as before.
+
+   ---------------------------------------------------------------------------
    A conflict carries its facts under a decision
    ---------------------------------------------------------------------------
 
@@ -381,6 +396,10 @@ type t = {
      does not exist until [Encoding.start_proof] has written the lemma. Empty for every
      all_different the model posts. *)
   lemmas : (string * string * int, Encoding.lemma) Hashtbl.t;
+  (* D-0271, BAGUETTE_ALLDIFF_ROWS=amo: the scope's rows are one per VALUE
+     ([Encoding.add_all_different_amo]) and [amo] narrows the per-value line instead of
+     building on pairs; [rows] and [lemmas] are then empty. [None] by default. *)
+  value_amo : Encoding.amo_family option;
   (* D-0216: the at-most-one nodes [amo] built, kept to be handed back when building them
      again would return them ([reuse]). Buckets of entries, allocated at the first use
      with a proof; [amo_count] entries. *)
@@ -475,8 +494,8 @@ let make_gate terms =
    one: see the module header on I-X6. Reads each variable's domain, so it must be
    called before anything has narrowed it -- the same requirement, for the same D-0010
    reason, that [Linear.make] and [Ne.make] state. *)
-let make ?(cutoff = default_cutoff) ?(lemma_rows = []) ?(gate = true) ?(quiet = true)
-    store enc ~rows vars =
+let make ?(cutoff = default_cutoff) ?(lemma_rows = []) ?value_amo ?(gate = true)
+    ?(quiet = true) store enc ~rows vars =
   let tbl = Hashtbl.create (2 * List.length rows) in
   List.iter
     (fun ((x, z, v), cid) ->
@@ -518,6 +537,7 @@ let make ?(cutoff = default_cutoff) ?(lemma_rows = []) ?(gate = true) ?(quiet = 
     cutoff;
     rows = tbl;
     lemmas;
+    value_amo;
     amo_memo = [||];
     amo_count = 0;
     canon;
@@ -810,10 +830,39 @@ let reuse t ~prev ~a ~u v build =
         t.amo_count <- t.amo_count + 1;
         node)
 
+(* D-0271, under BAGUETTE_ALLDIFF_ROWS=amo: the same line, from the per-value one.
+
+   [Encoding.start_proof] has derived, for each value v two or more of the scope hold,
+   sum_{x in P_v} ~x_eq_v >= K_v - 1 over EVERY variable P_v whose declared domain holds
+   v. Adding the literal axiom x_eq_v >= 0 for each x of P_v outside [ss] turns that
+   x's term into the constant 1 and lowers the degree by one, so what is left is
+   sum_{x in ss} ~x_eq_v >= |ss| - 1: one cited line and K_v - |ss| axioms, against the
+   pairs route's |ss| (|ss| - 1) / 2 pairwise nodes of five ids. [ss] is a subset of P_v
+   by [core_summands]' filter, and its names are distinct (compile.ml posts the
+   DISTINCT variables). *)
+let amo_of_value t fam ss v =
+  let id =
+    cid_of "the per-value at-most-one (D-0271)" (Encoding.value_amo_id t.enc fam v)
+  in
+  let inside = Hashtbl.create 8 in
+  List.iter (fun s -> Hashtbl.replace inside s.s_name ()) ss;
+  let outside =
+    Array.fold_right
+      (fun tm acc ->
+        if tm.decl_lo <= v && v <= tm.decl_hi && not (Hashtbl.mem inside tm.name) then
+          (1, Lit.eq tm.name v) :: acc
+        else acc)
+      t.terms []
+  in
+  match outside with
+  | [] -> model_row id
+  | _ -> Explanation.combine [ cite id; Explanation.weaken outside ] 1
+
 let amo t ss v =
-  match ss with
-  | [] | [ _ ] -> invalid_arg "Alldiff.amo: at least two variables"
-  | first :: second :: rest ->
+  match (ss, t.value_amo) with
+  | ([] | [ _ ]), _ -> invalid_arg "Alldiff.amo: at least two variables"
+  | _, Some fam -> amo_of_value t fam ss v
+  | first :: second :: rest, None ->
       let id s = Var.to_int s.s_var in
       (* [rhave] is the variables covered so far, last first; [m] their number. *)
       let rec grow acc rhave m = function

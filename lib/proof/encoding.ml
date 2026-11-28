@@ -449,6 +449,11 @@ let row_sink : sink_policy ref = ref Retain_rows
    before. *)
 let e2e_request : string option ref = ref None
 
+(* One all_different scope posted with a row per VALUE (D-0271, [add_all_different_amo]):
+   its variables in the order given, and per value held by two or more of them, the value
+   and the id of its .opb row. *)
+type amo_family = { af_index : int; af_names : string list; af_rows : (int * cid) list }
+
 type t = {
   ints : ivar Names.t;
   taken : unit Names.t;
@@ -538,6 +543,13 @@ type t = {
   mutable n_lemmas : int;
   mutable n_cited : int;
   mutable lemma_ids : Writer.cid array;
+  (* D-0271, under BAGUETTE_ALLDIFF_ROWS=amo only: the all_different scopes posted with
+     one row per VALUE ([add_all_different_amo]), newest first, and the id of the
+     direct-literal at-most-one line [start_proof] derives from each value's row, keyed
+     by (family, value). Both stay empty under the default `pairs`. *)
+  mutable amo_fams_rev : amo_family list;
+  mutable n_amo_fams : int;
+  amo_ids : (int * int, Writer.cid) Hashtbl.t;
   (* Under `--e2e`, the prefix writer every declaration and every committed row is
      reported to ([E2e], see [e2e_request]). [None] otherwise, and then no line of this
      module behaves differently. *)
@@ -602,6 +614,9 @@ let create () =
     n_lemmas = 0;
     n_cited = 0;
     lemma_ids = [||];
+    amo_fams_rev = [];
+    n_amo_fams = 0;
+    amo_ids = Hashtbl.create 16;
     e2e = Option.map E2e.create !e2e_request;
   }
 
@@ -2632,6 +2647,62 @@ let e2e_guard t ~var ~x ~at ~pos =
 
 let e2e_stats t = Option.map E2e.stats t.e2e
 
+(* D-0271: the direct-literal at-most-one of one value of an [add_all_different_amo]
+   family, from its .opb row R_v and, per holder x, the line E(x, v) that bounds ne(x, v)
+   by ~x_eq_v:
+
+     lo < v < hi   E = (d_lo + d_hi + rung_v) / 2   i.e.  ~x_eq_v + x_ge_v + ~x_ge_(v+1) >= 2
+     v = lo < hi   E = d_hi                              ~x_eq_v + ~x_ge_(v+1) >= 1
+     lo < v = hi   E = d_lo                              ~x_eq_v + x_ge_v >= 1
+     lo = v = hi   the literal axiom ~x_eq_v >= 0
+
+   (rung_v is the ladder row x_ge_(v+1) -> x_ge_v, [consistency_id]). Adding E(x, v) to
+   R_v cancels each of x's order literals against its negation, and the constants it
+   leaves are exactly the degree E adds, so R_v + sum_x E(x, v) is
+
+     sum_{x in P_v} ~x_eq_v  >=  K_v - 1
+
+   with no division of the whole: the only rounding is inside E, where 3/2 rounds up to
+   the 2 that makes ~x_eq_v the whole of ne(x, v). (Without the rung, d_lo + d_hi alone
+   lose half a unit per variable and the sum divides to ceil((K_v - 1) / 2), the
+   pairwise case's degree only at K_v = 2.) One `pol` per value, level 0, swept with the
+   rest at the end of the run (I-X2). *)
+let derive_value_amo t w (fam : amo_family) =
+  List.iter
+    (fun (v, row) ->
+      let part x =
+        let iv = find t x in
+        let id what o =
+          match o with
+          | Some i -> Writer.Pol.id i
+          | None ->
+              invalid_arg
+                (Printf.sprintf "Encoding.derive_value_amo: no %s for %s at %d" what x v)
+        in
+        if iv.lo < v && v < iv.hi then
+          Some
+            (Writer.Pol.div
+               (Writer.Pol.sum
+                  [
+                    id "d_lo" (direct_lo_id t x v);
+                    id "d_hi" (direct_hi_id t x v);
+                    id "ladder rung" (consistency_id t x v);
+                  ])
+               2)
+        else if v = iv.lo && v < iv.hi then Some (id "d_hi" (direct_hi_id t x v))
+        else if iv.lo < v && v = iv.hi then Some (id "d_lo" (direct_lo_id t x v))
+        else if v = iv.lo && v = iv.hi then
+          Some (Writer.Pol.axiom (Lit.negate (Lit.eq x v)))
+        else None
+      in
+      let id =
+        Writer.pol w
+          ~origin:(Printf.sprintf "all_different at-most-one at %d (D-0271)" v)
+          (Writer.Pol.sum (Writer.Pol.id row :: List.filter_map part fam.af_names))
+      in
+      Hashtbl.replace t.amo_ids (fam.af_index, v) id)
+    fam.af_rows
+
 let start_proof t w =
   (match t.e2e with
   | None -> Writer.header w ~n_model_constraints:t.n
@@ -2644,6 +2715,12 @@ let start_proof t w =
       ignore (ensure_direct t w x);
       Hashtbl.replace t.alo x (derive_at_least_one t w x))
     (direct_requested t);
+  (match t.amo_fams_rev with
+  | [] -> ()
+  | rev ->
+      Writer.comment w "all_different at-most-one per value (D-0271): %d scopes"
+        t.n_amo_fams;
+      List.iter (derive_value_amo t w) (List.rev rev));
   emit_root_lemmas t w
 
 (* ---------------------------------------------------------------------------
@@ -3090,6 +3167,85 @@ let add_all_different t (names : string list) : ((string * string * int) * cid) 
           in
           ((x, z, v), add_constraint t (Opb.clause lits))))
     (pairs names)
+
+(* ---------------------------------------------------------------------------
+   The OPTION: all_different_int as one row per VALUE (M18-coverage-T9, D-0271)
+   ---------------------------------------------------------------------------
+
+   Behind BAGUETTE_ALLDIFF_ROWS=amo (bin/main.ml sets [alldiff_rows]); the default
+   [Pairs] is [add_all_different] above and every byte as before.
+
+   THE RULE. Per value v held by the declared domains of K_v >= 2 of the scope's
+   variables P_v, ONE .opb row
+
+       sum_{x in P_v} ne(x, v)  >=  K_v - 1        ne(x, v) = ~x_ge_v + x_ge_(v+1)
+
+   where ne(x, v) is [ne_clause_lits] read as a SUM: the constant halves drop at the
+   declared bounds as they do in the pairwise clause, and a variable declared fixed at v
+   contributes nothing (so two of them make the row false, as their pairwise clause was
+   the empty one). Under the order ladder (x_ge_(v+1) -> x_ge_v, in the .opb) ne(x, v)
+   is 0 or 1 and is 1 exactly when x <> v, so the row says "at most one of P_v equals
+   v": linear in the order literals although [x = v] is not one literal. Faithful in the
+   sense [ne_clause_lits] states: no new name, and a [conclusion SAT] assignment over the
+   model's own variables decides it. Count: one row per shared value instead of one per
+   pair and shared value, 2 sum_x |decl(x)| literals at most (whirlpool d29: 841 rows
+   for 297 M).
+
+   WHAT IS CITED. The Hall derivation (lib/core/prop/alldiff.ml) wants the at-most-one
+   over the DIRECT literals, sum_{x in S} ~x_eq_v >= |S| - 1 for S in P_v. [start_proof]
+   derives it once per value, for S = P_v ([derive_value_amo]), and [value_amo_id]
+   hands its id out; alldiff narrows it to S by literal axioms. *)
+type alldiff_rows = Pairs | Amo
+
+let alldiff_rows : alldiff_rows ref = ref Pairs
+
+(* The values held by two or more of [ivs]'s declared ranges, ascending, by a sweep
+   over the ranges' ends rather than a walk of their union (two wide disjoint ranges
+   share nothing and cost nothing). *)
+let shared_values (ivs : (int * int) list) =
+  let ev =
+    List.sort compare (List.concat_map (fun (lo, hi) -> [ (lo, 1); (hi + 1, -1) ]) ivs)
+  in
+  let rec go acc depth = function
+    | [] -> List.rev acc
+    | (p, d) :: rest ->
+        let depth = depth + d in
+        let acc =
+          match rest with
+          | (q, _) :: _ when depth >= 2 && q > p ->
+              let rec push acc v = if v >= q then acc else push (v :: acc) (v + 1) in
+              push acc p
+          | _ -> acc
+        in
+        go acc depth rest
+  in
+  go [] 0 ev
+
+let add_all_different_amo t (names : string list) : amo_family =
+  let vs = List.map (fun x -> (x, find t x)) names in
+  let rows =
+    List.map
+      (fun v ->
+        let holders = List.filter (fun (_, iv) -> iv.lo <= v && v <= iv.hi) vs in
+        let terms =
+          List.concat_map
+            (fun (x, iv) ->
+              List.map
+                (fun l -> (1, l))
+                (ne_clause_lits ~name:x ~decl_lo:iv.lo ~decl_hi:iv.hi v))
+            holders
+        in
+        (v, add_constraint t (Opb.ge terms (List.length holders - 1))))
+      (shared_values (List.map (fun (_, iv) -> (iv.lo, iv.hi)) vs))
+  in
+  let fam = { af_index = t.n_amo_fams; af_names = names; af_rows = rows } in
+  t.amo_fams_rev <- fam :: t.amo_fams_rev;
+  t.n_amo_fams <- t.n_amo_fams + 1;
+  fam
+
+(* The direct at-most-one line of [fam] at [v], once [start_proof] has derived it;
+   [None] before it, and for a value no two of the scope hold. *)
+let value_amo_id t (fam : amo_family) v = Hashtbl.find_opt t.amo_ids (fam.af_index, v)
 
 (* The least and greatest values [sum a_i x_i] can take over the declared domains.
    Zero coefficients contribute nothing, as everywhere else in this module. *)
