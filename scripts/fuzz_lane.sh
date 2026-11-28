@@ -23,19 +23,20 @@
 #
 # The streams (bench/fuzz/README.md has each one's model space and acceptance test):
 #   tools/fuzz/fuzz.py and fuzz2.py, the first six (2026-11-23):
-#     default       fuzz.py, the default flags
+#     default       fuzz.py, `--fixed-search` (the default flags before D-0261)
 #     free-order    fuzz.py, `-f --bits-above none`
-#     larger        fuzz.py, FUZZ_NMAX=10 FUZZ_CMAX=12
-#     search        fuzz2.py (3-SAT near the threshold, small integer optimisation), default
-#     search-free   fuzz2.py, `-f`
-#     search-order  fuzz2.py, `--bits-above none`
+#     larger        fuzz.py, FUZZ_NMAX=10 FUZZ_CMAX=12, `--fixed-search`
+#     search        fuzz2.py (3-SAT near the threshold, small integer optimisation), `--fixed-search`
+#     search-free   fuzz2.py, `-f` (the default since D-0261)
+#     search-order  fuzz2.py, `--fixed-search --bits-above none`
 #   tools/fuzz/streams.py, the six of D-0258, which flatten once and run baguette on the .fzn;
 #   besides the status, objective, proof and solution, they check that VeriPB's conclusion is
 #   the one the run printed (PROOF-CONCLUSION):
 #     globals   the global constraints in all their forms, covers that repeat a value, repeated
 #               variables, constants, empty and one-element arrays. Acceptance: with the mznlib
 #               of 99d0e39~1 it finds the wrong UNSAT of D-0255
-#     configs   one model under 18 search configurations (--cdcl, --chrono 5, -f,
+#     configs   one model under 20 search configurations (the default, --fixed-search, --cdcl,
+#               --cdcl --fixed-search, --chrono 5, -f,
 #               BAGUETTE_MINIMISE=rec, BAGUETTE_PRIORITY=classes, BAGUETTE_PROBE=root, and the
 #               retention policies keep_all, fifo:1, lbd:1 and tiered forced to evict at every
 #               learned constraint, each under dfs and --cdcl); all agree with Gecode and with
@@ -110,12 +111,14 @@ stream() { # name script env flags; seeds: SEED*1000 + stream*100 + chunk
     echo "$OUT/$name-$k $script $((SEED * 1000 + IDX * 100 + k)) $PER $env${*:+ $*}" >> "$plan"
   done
 }
-stream default fuzz.py -
+# M19-config-T1 (D-0261): the free search is the default since D-0261, so the streams that
+# stated no search name the fixed one, as they ran before it; the -f streams are the default.
+stream default fuzz.py - --fixed-search
 stream free-order fuzz.py - -f --bits-above none
-stream larger fuzz.py 'FUZZ_NMAX=10;FUZZ_CMAX=12'
-stream search fuzz2.py -
+stream larger fuzz.py 'FUZZ_NMAX=10;FUZZ_CMAX=12' --fixed-search
+stream search fuzz2.py - --fixed-search
 stream search-free fuzz2.py - -f
-stream search-order fuzz2.py - --bits-above none
+stream search-order fuzz2.py - --fixed-search --bits-above none
 # D-0258's six: the script field is streams.py:<stream>, whose own argument comes first. The env
 # field separates its assignments with `;` (a retention policy's own parameters contain commas).
 for s in globals configs incr limit e2e wide; do stream "$s" "streams.py:$s" -; done

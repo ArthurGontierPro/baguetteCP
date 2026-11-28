@@ -11,15 +11,19 @@
 #   proof   yes: --proof is passed and the .opb/.pbp hashes are compared
 #           no:  the flags must say how the run goes without one (--no-proof)
 #
+# M19-config-T1 (D-0261): every line older than D-0261 names --fixed-search, the search
+# its reference was recorded with, and those references did not move a byte. `default` is
+# the fixed search's default configuration: the name is older than D-0261.
+#
 # The node budget is per INSTANCE (corpus.tsv), never per configuration.
 # BAGUETTE_NODE_LIMIT is set by the runner; do not set it here.
 #
 # BAGUETTE_PROOF_AUDIT is PINNED: the runner unsets the caller's BAGUETTE_* variables, so
 # every line but audit0 runs the CLI default (audit on), and audit0 runs it off. The end
 # sweep's `del` lines exist only under the audit (D-0140 W8), so the .pbp depends on it.
-default	-	-	yes
-audit0	BAGUETTE_PROOF_AUDIT=0	-	yes
-noproof	-	--no-proof	no
+default	-	--fixed-search	yes
+audit0	BAGUETTE_PROOF_AUDIT=0	--fixed-search	yes
+noproof	-	--fixed-search --no-proof	no
 #
 # lbd and fifo consult the policy after every learned constraint, but on main every
 # learned constraint is CITED (it is a registered instance), so the soft cap pins all of
@@ -27,17 +31,23 @@ noproof	-	--no-proof	no
 # The two *-po lines turn propagation of learned constraints off (proof-only learning),
 # and there the cap BINDS: QR48 at 6000 nodes evicts 2 494 of 2 994 mid-search, so the
 # retire path, its `del` lines and the I-X2 audit run on every instance.
-lbd	BAGUETTE_RETENTION=lbd:500	-	yes
-fifo	BAGUETTE_RETENTION=fifo:500	-	yes
-lbd-po	BAGUETTE_PROPAGATE_LEARNED=off BAGUETTE_RETENTION=lbd:500	-	yes
-fifo-po	BAGUETTE_PROPAGATE_LEARNED=off BAGUETTE_RETENTION=fifo:500	-	yes
-nopb	BAGUETTE_PB_ANALYSIS=off	-	yes
-bits0	-	--bits-above 0	yes
+lbd	BAGUETTE_RETENTION=lbd:500	--fixed-search	yes
+fifo	BAGUETTE_RETENTION=fifo:500	--fixed-search	yes
+lbd-po	BAGUETTE_PROPAGATE_LEARNED=off BAGUETTE_RETENTION=lbd:500	--fixed-search	yes
+fifo-po	BAGUETTE_PROPAGATE_LEARNED=off BAGUETTE_RETENTION=fifo:500	--fixed-search	yes
+nopb	BAGUETTE_PB_ANALYSIS=off	--fixed-search	yes
+bits0	-	--fixed-search --bits-above 0	yes
 # --- the search-strategy flags (M10-search-strategy-T1..T3, D-0137 section 12), added 2026-11-19 ---
-restarts	-	--restarts luby:1 --phase-saving	yes
-activity	-	--search activity --restarts luby:1 --reuse-trail	yes
-alternate	-	--search alternate --restarts lbd:3:1.5 --phase-saving	yes
+restarts	-	--fixed-search --restarts luby:1 --phase-saving	yes
+activity	-	--fixed-search --search activity --restarts luby:1 --reuse-trail	yes
+alternate	-	--fixed-search --search alternate --restarts lbd:3:1.5 --phase-saving	yes
 # --- M11-complexity-T17 (D-0173): learned clauses REST while satisfied, a flag (off), added 2026-11-20 ---
-rest	BAGUETTE_REST_SATISFIED=on	-	yes
+rest	BAGUETTE_REST_SATISFIED=on	--fixed-search	yes
 # --- D-0201 (D-0199 applied): the ORDER encoding, the default before D-0201, added 2026-11-21 ---
-order	-	--bits-above none	yes
+order	-	--fixed-search --bits-above none	yes
+# --- M19-config-T1 (D-0261): THE DEFAULT SEARCH, the free search since D-0261 (no search flag), added 2026-11-27 ---
+# Its references were recorded on their own (--update --config free --config free-noproof),
+# after a check that two runs of the free search give the same bytes; the lines above were not
+# re-recorded.
+free	-	-	yes
+free-noproof	-	--no-proof	no

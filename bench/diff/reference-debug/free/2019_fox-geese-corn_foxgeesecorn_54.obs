@@ -1,0 +1,537 @@
+rc 0
+out trips = 0;
+out objective = 0;
+out fox = array1d(1..3, [0, 0, 0]);
+out geese = array1d(1..3, [0, 0, 0]);
+out corn = array1d(1..3, [0, 0, 0]);
+out ----------
+out trips = 1;
+out objective = 372;
+out fox = array1d(1..3, [0, 0, 0]);
+out geese = array1d(1..3, [0, 0, 0]);
+out corn = array1d(1..3, [124, 0, 0]);
+out ----------
+out trips = 1;
+out objective = 890;
+out fox = array1d(1..3, [0, 0, 0]);
+out geese = array1d(1..3, [178, 0, 0]);
+out corn = array1d(1..3, [0, 0, 0]);
+out ----------
+out trips = 1;
+out objective = 1126;
+out fox = array1d(1..3, [118, 0, 0]);
+out geese = array1d(1..3, [60, 0, 0]);
+out corn = array1d(1..3, [0, 0, 0]);
+out ----------
+out trips = 3;
+out objective = 1127;
+out fox = array1d(1..3, [58, 48, 48]);
+out geese = array1d(1..3, [89, 0, 64]);
+out corn = array1d(1..3, [2, 0, 0]);
+out ----------
+out trips = 3;
+out objective = 1128;
+out fox = array1d(1..3, [58, 48, 48]);
+out geese = array1d(1..3, [89, 0, 63]);
+out corn = array1d(1..3, [4, 0, 0]);
+out ----------
+out trips = 3;
+out objective = 1129;
+out fox = array1d(1..3, [58, 49, 49]);
+out geese = array1d(1..3, [89, 0, 64]);
+out corn = array1d(1..3, [1, 0, 0]);
+out ----------
+out trips = 3;
+out objective = 1130;
+out fox = array1d(1..3, [58, 49, 49]);
+out geese = array1d(1..3, [89, 0, 63]);
+out corn = array1d(1..3, [3, 0, 0]);
+out ----------
+out trips = 3;
+out objective = 1131;
+out fox = array1d(1..3, [58, 50, 50]);
+out geese = array1d(1..3, [89, 0, 64]);
+out corn = array1d(1..3, [0, 0, 0]);
+out ----------
+out trips = 3;
+out objective = 1132;
+out fox = array1d(1..3, [58, 50, 50]);
+out geese = array1d(1..3, [89, 0, 63]);
+out corn = array1d(1..3, [2, 0, 0]);
+out ----------
+out trips = 3;
+out objective = 1133;
+out fox = array1d(1..3, [58, 50, 50]);
+out geese = array1d(1..3, [89, 0, 62]);
+out corn = array1d(1..3, [4, 0, 0]);
+out ----------
+out trips = 3;
+out objective = 1134;
+out fox = array1d(1..3, [58, 50, 50]);
+out geese = array1d(1..3, [89, 0, 64]);
+out corn = array1d(1..3, [1, 0, 0]);
+out ----------
+out trips = 3;
+out objective = 1135;
+out fox = array1d(1..3, [58, 50, 50]);
+out geese = array1d(1..3, [89, 0, 63]);
+out corn = array1d(1..3, [3, 0, 0]);
+out ----------
+out trips = 3;
+out objective = 1136;
+out fox = array1d(1..3, [58, 51, 51]);
+out geese = array1d(1..3, [89, 0, 64]);
+out corn = array1d(1..3, [0, 0, 0]);
+out ----------
+out trips = 3;
+out objective = 1137;
+out fox = array1d(1..3, [58, 51, 51]);
+out geese = array1d(1..3, [89, 0, 63]);
+out corn = array1d(1..3, [2, 0, 0]);
+out ----------
+out trips = 3;
+out objective = 1138;
+out fox = array1d(1..3, [58, 51, 51]);
+out geese = array1d(1..3, [89, 0, 62]);
+out corn = array1d(1..3, [4, 0, 0]);
+out ----------
+out trips = 3;
+out objective = 1139;
+out fox = array1d(1..3, [58, 51, 51]);
+out geese = array1d(1..3, [89, 0, 64]);
+out corn = array1d(1..3, [1, 0, 0]);
+out ----------
+out trips = 3;
+out objective = 1140;
+out fox = array1d(1..3, [58, 51, 51]);
+out geese = array1d(1..3, [89, 0, 63]);
+out corn = array1d(1..3, [3, 0, 0]);
+out ----------
+out trips = 3;
+out objective = 1141;
+out fox = array1d(1..3, [58, 52, 52]);
+out geese = array1d(1..3, [89, 0, 64]);
+out corn = array1d(1..3, [0, 0, 0]);
+out ----------
+out trips = 3;
+out objective = 1142;
+out fox = array1d(1..3, [58, 52, 52]);
+out geese = array1d(1..3, [89, 0, 63]);
+out corn = array1d(1..3, [2, 0, 0]);
+out ----------
+out trips = 3;
+out objective = 1143;
+out fox = array1d(1..3, [58, 52, 52]);
+out geese = array1d(1..3, [89, 0, 62]);
+out corn = array1d(1..3, [4, 0, 0]);
+out ----------
+out trips = 3;
+out objective = 1144;
+out fox = array1d(1..3, [58, 52, 52]);
+out geese = array1d(1..3, [89, 0, 64]);
+out corn = array1d(1..3, [1, 0, 0]);
+out ----------
+out trips = 3;
+out objective = 1145;
+out fox = array1d(1..3, [58, 52, 52]);
+out geese = array1d(1..3, [89, 0, 63]);
+out corn = array1d(1..3, [3, 0, 0]);
+out ----------
+out trips = 3;
+out objective = 1146;
+out fox = array1d(1..3, [58, 53, 53]);
+out geese = array1d(1..3, [89, 0, 64]);
+out corn = array1d(1..3, [0, 0, 0]);
+out ----------
+out trips = 3;
+out objective = 1147;
+out fox = array1d(1..3, [58, 53, 53]);
+out geese = array1d(1..3, [89, 0, 63]);
+out corn = array1d(1..3, [2, 0, 0]);
+out ----------
+out trips = 3;
+out objective = 1148;
+out fox = array1d(1..3, [58, 53, 53]);
+out geese = array1d(1..3, [89, 0, 62]);
+out corn = array1d(1..3, [4, 0, 0]);
+out ----------
+out trips = 3;
+out objective = 1149;
+out fox = array1d(1..3, [58, 53, 53]);
+out geese = array1d(1..3, [89, 0, 64]);
+out corn = array1d(1..3, [1, 0, 0]);
+out ----------
+out trips = 3;
+out objective = 1150;
+out fox = array1d(1..3, [58, 53, 53]);
+out geese = array1d(1..3, [89, 0, 63]);
+out corn = array1d(1..3, [3, 0, 0]);
+out ----------
+out trips = 3;
+out objective = 1151;
+out fox = array1d(1..3, [58, 54, 54]);
+out geese = array1d(1..3, [89, 0, 64]);
+out corn = array1d(1..3, [0, 0, 0]);
+out ----------
+out trips = 3;
+out objective = 1152;
+out fox = array1d(1..3, [58, 54, 54]);
+out geese = array1d(1..3, [89, 0, 63]);
+out corn = array1d(1..3, [2, 0, 0]);
+out ----------
+out trips = 3;
+out objective = 1153;
+out fox = array1d(1..3, [58, 54, 54]);
+out geese = array1d(1..3, [89, 0, 62]);
+out corn = array1d(1..3, [4, 0, 0]);
+out ----------
+out trips = 3;
+out objective = 1154;
+out fox = array1d(1..3, [58, 54, 54]);
+out geese = array1d(1..3, [89, 0, 64]);
+out corn = array1d(1..3, [1, 0, 0]);
+out ----------
+out trips = 3;
+out objective = 1155;
+out fox = array1d(1..3, [58, 54, 54]);
+out geese = array1d(1..3, [89, 0, 63]);
+out corn = array1d(1..3, [3, 0, 0]);
+out ----------
+out trips = 3;
+out objective = 1156;
+out fox = array1d(1..3, [58, 55, 55]);
+out geese = array1d(1..3, [89, 0, 64]);
+out corn = array1d(1..3, [0, 0, 0]);
+out ----------
+out trips = 3;
+out objective = 1157;
+out fox = array1d(1..3, [58, 55, 55]);
+out geese = array1d(1..3, [89, 0, 63]);
+out corn = array1d(1..3, [2, 0, 0]);
+out ----------
+out trips = 3;
+out objective = 1158;
+out fox = array1d(1..3, [58, 55, 55]);
+out geese = array1d(1..3, [89, 0, 62]);
+out corn = array1d(1..3, [4, 0, 0]);
+out ----------
+out trips = 3;
+out objective = 1159;
+out fox = array1d(1..3, [58, 55, 55]);
+out geese = array1d(1..3, [89, 0, 64]);
+out corn = array1d(1..3, [1, 0, 0]);
+out ----------
+out trips = 3;
+out objective = 1160;
+out fox = array1d(1..3, [58, 55, 55]);
+out geese = array1d(1..3, [89, 0, 63]);
+out corn = array1d(1..3, [3, 0, 0]);
+out ----------
+out trips = 3;
+out objective = 1161;
+out fox = array1d(1..3, [58, 56, 56]);
+out geese = array1d(1..3, [89, 0, 64]);
+out corn = array1d(1..3, [0, 0, 0]);
+out ----------
+out trips = 3;
+out objective = 1162;
+out fox = array1d(1..3, [58, 56, 56]);
+out geese = array1d(1..3, [89, 0, 63]);
+out corn = array1d(1..3, [2, 0, 0]);
+out ----------
+out trips = 3;
+out objective = 1163;
+out fox = array1d(1..3, [58, 56, 56]);
+out geese = array1d(1..3, [89, 0, 62]);
+out corn = array1d(1..3, [4, 0, 0]);
+out ----------
+out trips = 3;
+out objective = 1164;
+out fox = array1d(1..3, [58, 56, 56]);
+out geese = array1d(1..3, [89, 0, 64]);
+out corn = array1d(1..3, [1, 0, 0]);
+out ----------
+out trips = 3;
+out objective = 1165;
+out fox = array1d(1..3, [58, 56, 56]);
+out geese = array1d(1..3, [89, 0, 63]);
+out corn = array1d(1..3, [3, 0, 0]);
+out ----------
+out trips = 3;
+out objective = 1166;
+out fox = array1d(1..3, [58, 57, 57]);
+out geese = array1d(1..3, [89, 0, 64]);
+out corn = array1d(1..3, [0, 0, 0]);
+out ----------
+out trips = 3;
+out objective = 1167;
+out fox = array1d(1..3, [58, 57, 57]);
+out geese = array1d(1..3, [89, 0, 63]);
+out corn = array1d(1..3, [2, 0, 0]);
+out ----------
+out trips = 3;
+out objective = 1168;
+out fox = array1d(1..3, [58, 57, 57]);
+out geese = array1d(1..3, [89, 0, 62]);
+out corn = array1d(1..3, [4, 0, 0]);
+out ----------
+out trips = 3;
+out objective = 1169;
+out fox = array1d(1..3, [58, 57, 57]);
+out geese = array1d(1..3, [89, 0, 64]);
+out corn = array1d(1..3, [1, 0, 0]);
+out ----------
+out trips = 3;
+out objective = 1170;
+out fox = array1d(1..3, [58, 57, 57]);
+out geese = array1d(1..3, [89, 0, 63]);
+out corn = array1d(1..3, [3, 0, 0]);
+out ----------
+out trips = 3;
+out objective = 1171;
+out fox = array1d(1..3, [58, 58, 58]);
+out geese = array1d(1..3, [89, 0, 64]);
+out corn = array1d(1..3, [0, 0, 0]);
+out ----------
+out trips = 3;
+out objective = 1172;
+out fox = array1d(1..3, [58, 58, 58]);
+out geese = array1d(1..3, [89, 0, 64]);
+out corn = array1d(1..3, [31, 28, 0]);
+out ----------
+out trips = 3;
+out objective = 1173;
+out fox = array1d(1..3, [58, 58, 58]);
+out geese = array1d(1..3, [89, 0, 3]);
+out corn = array1d(1..3, [31, 28, 102]);
+out ----------
+out trips = 3;
+out objective = 1174;
+out fox = array1d(1..3, [58, 58, 58]);
+out geese = array1d(1..3, [89, 0, 2]);
+out corn = array1d(1..3, [31, 28, 104]);
+out ----------
+out trips = 3;
+out objective = 1175;
+out fox = array1d(1..3, [58, 58, 58]);
+out geese = array1d(1..3, [89, 0, 4]);
+out corn = array1d(1..3, [31, 28, 101]);
+out ----------
+out trips = 3;
+out objective = 1176;
+out fox = array1d(1..3, [58, 58, 58]);
+out geese = array1d(1..3, [89, 0, 3]);
+out corn = array1d(1..3, [31, 28, 103]);
+out ----------
+out trips = 3;
+out objective = 1177;
+out fox = array1d(1..3, [58, 58, 58]);
+out geese = array1d(1..3, [89, 0, 2]);
+out corn = array1d(1..3, [31, 28, 105]);
+out ----------
+out trips = 3;
+out objective = 1178;
+out fox = array1d(1..3, [58, 58, 58]);
+out geese = array1d(1..3, [89, 0, 4]);
+out corn = array1d(1..3, [31, 28, 102]);
+out ----------
+out trips = 3;
+out objective = 1179;
+out fox = array1d(1..3, [58, 58, 58]);
+out geese = array1d(1..3, [89, 0, 3]);
+out corn = array1d(1..3, [31, 28, 104]);
+out ----------
+out trips = 3;
+out objective = 1180;
+out fox = array1d(1..3, [58, 58, 58]);
+out geese = array1d(1..3, [89, 0, 2]);
+out corn = array1d(1..3, [31, 28, 106]);
+out ----------
+out trips = 3;
+out objective = 1181;
+out fox = array1d(1..3, [58, 58, 58]);
+out geese = array1d(1..3, [89, 0, 4]);
+out corn = array1d(1..3, [31, 28, 103]);
+out ----------
+out trips = 3;
+out objective = 1182;
+out fox = array1d(1..3, [58, 58, 58]);
+out geese = array1d(1..3, [89, 0, 3]);
+out corn = array1d(1..3, [31, 28, 105]);
+out ----------
+out trips = 3;
+out objective = 1183;
+out fox = array1d(1..3, [58, 58, 58]);
+out geese = array1d(1..3, [89, 0, 2]);
+out corn = array1d(1..3, [31, 28, 107]);
+out ----------
+out trips = 3;
+out objective = 1184;
+out fox = array1d(1..3, [58, 58, 58]);
+out geese = array1d(1..3, [89, 0, 4]);
+out corn = array1d(1..3, [31, 28, 104]);
+out ----------
+out trips = 3;
+out objective = 1185;
+out fox = array1d(1..3, [58, 58, 58]);
+out geese = array1d(1..3, [89, 0, 3]);
+out corn = array1d(1..3, [31, 28, 106]);
+out ----------
+out trips = 3;
+out objective = 1186;
+out fox = array1d(1..3, [58, 58, 58]);
+out geese = array1d(1..3, [89, 0, 2]);
+out corn = array1d(1..3, [31, 28, 108]);
+out ----------
+out trips = 3;
+out objective = 1187;
+out fox = array1d(1..3, [58, 58, 58]);
+out geese = array1d(1..3, [89, 0, 4]);
+out corn = array1d(1..3, [31, 28, 105]);
+out ----------
+out trips = 3;
+out objective = 1188;
+out fox = array1d(1..3, [58, 58, 58]);
+out geese = array1d(1..3, [89, 0, 3]);
+out corn = array1d(1..3, [31, 28, 107]);
+out ----------
+out trips = 3;
+out objective = 1189;
+out fox = array1d(1..3, [58, 58, 58]);
+out geese = array1d(1..3, [89, 0, 2]);
+out corn = array1d(1..3, [31, 28, 109]);
+out ----------
+out trips = 3;
+out objective = 1190;
+out fox = array1d(1..3, [58, 58, 58]);
+out geese = array1d(1..3, [89, 0, 4]);
+out corn = array1d(1..3, [31, 28, 106]);
+out ----------
+out trips = 3;
+out objective = 1191;
+out fox = array1d(1..3, [58, 58, 58]);
+out geese = array1d(1..3, [89, 0, 3]);
+out corn = array1d(1..3, [31, 28, 108]);
+out ----------
+out trips = 3;
+out objective = 1192;
+out fox = array1d(1..3, [58, 58, 58]);
+out geese = array1d(1..3, [89, 0, 2]);
+out corn = array1d(1..3, [31, 28, 110]);
+out ----------
+out trips = 3;
+out objective = 1193;
+out fox = array1d(1..3, [58, 58, 58]);
+out geese = array1d(1..3, [89, 0, 4]);
+out corn = array1d(1..3, [31, 28, 107]);
+out ----------
+out trips = 3;
+out objective = 1194;
+out fox = array1d(1..3, [58, 58, 58]);
+out geese = array1d(1..3, [89, 0, 3]);
+out corn = array1d(1..3, [31, 28, 109]);
+out ----------
+search ladder/cls 24 cls
+search opb/lines 905 lines
+search direct/vals 0 vals
+search widest/wide 2263 wide
+search bits/vars 47 vars
+search bitsrows/lines 94 lines
+search choices/groups 0 groups
+search limit.nodes 1501
+search limit.decisions 1328
+search limit.conflicts 173
+search limit.learned 171
+search limit.pb-learned 1
+search limit.db 172
+search limit.maxdepth 88
+search limit.incumbent 1194
+work limit.props 155182
+work limit.eff 36863
+work limit.contra 101
+search limit.at node
+search limit.signal none
+search nodes/nodes 1501 nodes
+search decisions/decs 1328 decs
+search conflicts/nodes 173 nodes
+search maxdepth/levels 88 levels
+work exhausted/bool 0 bool 1 if
+search skipped/nodes 1138 nodes
+search learned/cls 171 cls
+work later/asks 126220 asks
+work cites/memos 3454 memos
+search convertible/cls 0 cls
+search retention tiered(core<=2,mid<=6,first=2000,inc=300,mid_every=10000) tiered(core<=2,mid<=6,first=2000,inc=300,mid_every=10000): 172 added, 0 evicted, 172 swept, 0 live, 0 duplicate, 100 cited, 0 pinned, 0 reductions, 0 detached, 0 locked
+search lbd 1:72,2:1,3:2,4:2,5:65,6:2,7:27
+search width 1:72,3:3,5:2,6:2,7:12,8:51,9:1,11:1,14:27
+search globals/units 72 units
+search glob-prune/prunes 14 prunes
+search glob-confl/confl 72 confl
+search cls-inst/inst 99 inst
+search cls-decl/cls 0 cls
+search cls-prune/prunes 100 prunes
+search pb-inst/inst 1 inst
+search pb-inst-no/rows 0 rows
+search pb-prune/prunes 0 prunes
+search pb-confl/confl 0 confl
+search minimised/lits 61 lits
+search i-s4-cross/lines 799 lines
+search pb-tried/confl 171 confl
+search pb-learned/rows 1 rows
+search pb-fallback/confl 170 confl
+search pb-why first fallback reason: no PB row for instance int_lin_le_reif
+work pb-whys/recd 64 recd 38 x
+search pb-steps/pivots 2 pivots
+search pb-convert/rows 0 rows
+search pb-stronger/rows 0 rows
+search pb-nondeg/rows 1 rows
+search pb-lifted/rows 0 rows
+search pb-rungs/rungs 0 rungs
+search lvl-cmp/confl 1 confl
+search lvl-same/confl 0 confl
+search lvl-narrow/confl 1 confl
+search lvl-wide/confl 0 confl
+search lvl-incomp/confl 0 confl
+search lvl-empty/confl 0 confl
+search lvl-assert/confl 0 confl
+search lvl-why first disagreement: closure {56,54,53,52,51,50,49,47,45} vs pb {56,52} (pb asserts at 52)
+search restarts/runs 1 runs
+search unexplored/nodes 5 nodes
+search kept/levels 0 levels
+search activity/bumps 996 bumps
+search phases/vals 22113 vals
+search phase-used/decs 1059 decs
+work int_lin_le_reif/inst 70 inst 43.5 runs/node 8.85 eff/node
+work int_eq_reif/inst 69 inst 21.6 runs/node 5.28 eff/node
+work array_bool_and/inst 140 inst 12.1 runs/node 4.05 eff/node
+work int_lin_le/inst 29 inst 9.5 runs/node 2.82 eff/node
+work bool_clause/inst 78 inst 8.6 runs/node 1.76 eff/node
+work learned_clause/inst 99 inst 3.1 runs/node 0.07 eff/node
+work int_ne_reif/inst 16 inst 2.3 runs/node 0.77 eff/node
+work int_le_reif/inst 6 inst 1.0 runs/node 0.29 eff/node
+work bool2int/inst 9 inst 0.9 runs/node 0.46 eff/node
+work array_int_element/inst 3 inst 0.6 runs/node 0.23 eff/node
+work learned_pb/inst 1 inst 0.1 runs/node 0.00 eff/node
+work props/runs 155182 runs
+work eff/runs 36863 runs
+work contra/runs 101 runs
+work passes/snaps 9987 snaps
+work deductions/chgs 461 chgs
+work wakes/wakes 208801 wakes
+work masked/wakes 110 wakes
+work vetoed/wakes 5644 wakes
+work advised/wakes 13199 wakes
+work seeded/runs 28824 runs
+work skipped/slots 720787 slots
+search rup/lines 13208 lines
+search pol/lines 34958 lines
+search pol-tokens/tokens 359080 tokens
+search pol-widest/tokens 22 tokens
+search atoms/atoms 3923 atoms
+search atomlinks/lines 7495 lines
+search bridges/pairs 155 pairs
+search boundlines/pairs 9 pairs
+search bitsprune/lines 27381 lines
+search atoms/prune/atoms 0.143 atoms
+opb 444cf16b4971fdb2acc5c858ed2fdb68a532565d38ee294c8e33096f163f339b
+pbp c77cc1c1d6bda9a40dc4269177a94b6ac65c72b40dc49c2a634ba71d4587c85a

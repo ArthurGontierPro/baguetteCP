@@ -207,7 +207,8 @@ nothing on stdout, until enumerating solutions has a proof shape (D-0150 section
 `-n 1`, `-t MS` (`--time-limit` in milliseconds), `-r SEED` (accepted and unused), `-p N`
 (accepted, one thread) and `-v` (a line on stderr) leave stdout as without them. `-f` is
 `--search alternate --restarts luby --phase-saving` for each of the three not given
-explicitly. `-s` is `--stats` and, alone among the flags, adds to stdout: one block of
+explicitly, which since D-0261 is the default (section 3.4), so `-f` alone changes nothing.
+`-s` is `--stats` and, alone among the flags, adds to stdout: one block of
 `%%%mzn-stat: name=value` lines ending `%%%mzn-stat-end`, after the run's last marker.
 `--stats` itself still leaves stdout byte-identical.
 
@@ -348,22 +349,31 @@ in this project is aimed at.
 
 ### 3.4 Search
 
-**Default.** A model with no search annotation is searched by first-fail variable selection
-with min-value branching, depth-first, restarts disabled.
+**Default order.** A model with no search annotation is searched by first-fail variable
+selection with min-value branching. That order, or the annotation, is the FIXED search: under
+`--fixed-search`, depth-first, restarts disabled, no phase saving.
 
-**Restarts, phase saving and activity search are opt-in** (M10-search-strategy, D-0137). With
-none of `--restarts`, `--phase-saving` and `--search` given, the search is the default above
-or the annotation, and its output and proof are byte-identical to a build without these
-flags. `--restarts luby[:U] | geom[:U[:F]] | lbd[:W[:K]] | stable` restarts the depth-first
+**The free search is the default, and the fixed search is the option** (M19-config-T1,
+D-0259, D-0261; from D-0137 to D-0261 it was the other way round). With no search option the
+search is `--search alternate --restarts luby --phase-saving`, which `-f` also names: the
+order above or the annotation, alternating with the activity order at each Luby restart (a
+unit of 100 conflicts), with phase saving. `--fixed-search` starts from the fixed search
+instead, and with none of `--restarts`, `--phase-saving` and `--search` given its output and
+proof are byte-identical to the default search of a build before D-0261. On either base an
+explicit `--restarts`, `--search` or `--phase-saving` replaces its own part; `-f` with
+`--fixed-search` MUST be refused as a usage error.
+`--restarts luby[:U] | geom[:U[:F]] | lbd[:W[:K]] | stable` restarts the depth-first
 search on a deterministic schedule of conflict counts, each with a cutoff unbounded over the
 run index, so the search stays complete. A restart is a backjump to level 0 that keeps every
 learned constraint, and every restart is reflected in the proof as the backtrack it is.
 `--phase-saving` replaces the value choice (an annotation's included) by the value the
 variable was last fixed at when that value is still in its domain. `--search activity` selects
 the unfixed variable with the highest conflict activity, and `--search alternate` alternates the
-annotation and the activity order at each restart. Each of these substitutes a strategy, and
-each is only ever the user's explicit request. Without the flag, the sentence under "Anything
-else MUST be refused" below stands as it is.
+annotation and the activity order at each restart. Each of these substitutes a strategy
+for the annotation's, and since D-0261 the default does so unless `--fixed-search` is given:
+that flag is how a user asks for the annotation alone, as the MiniZinc Challenge's fixed
+category requires. The sentence under "Anything else MUST be refused" below stands under both
+searches, because the free search alternates with the annotation's order and so reads it.
 
 **Annotations** *(normative; the honouring requirement predates M7-T2, which brought the
 implementation into compliance with it)*. `int_search` and `bool_search` with the variable

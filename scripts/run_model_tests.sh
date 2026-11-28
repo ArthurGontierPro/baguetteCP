@@ -23,6 +23,11 @@
 # unverified run per model and nothing it prints is a result (SPEC 1).
 set -uo pipefail
 
+# M19-config-T1 (D-0261): every run here passes --fixed-search, the search the expected
+# outputs were recorded with; the default (free) search has its own pass
+# (scripts/free_model_tests.sh). The restart lane below names --search, --restarts and
+# --phase-saving itself, so the base does not reach it.
+
 # MACHINE LIMIT (2026-09-16). 15 GB of RAM shared by every concurrent session, and three
 # test binaries had to be killed at the ceiling in one day. The cap is applied here as
 # well as in the Makefile so that running this script directly is still capped. Lower
@@ -131,7 +136,7 @@ for fzn in "${ROOT}"/test/models/*.fzn; do
     continue
   fi
 
-  "${SOLVER}" "${fzn}" --proof "${prefix}" > "${prefix}.out" 2> "${prefix}.err"
+  "${SOLVER}" "${fzn}" --fixed-search --proof "${prefix}" > "${prefix}.out" 2> "${prefix}.err"
   rc=$?
 
   if [ "${rc}" -ne 0 ]; then
@@ -171,7 +176,7 @@ for fzn in "${ROOT}"/test/models/*.fzn; do
   # reference; this run writes no .opb, no .pbp and no justification, and must print
   # the same bytes and exit the same way. See the header. A model listed in PENDING
   # never gets here (the proved run already reported it).
-  "${SOLVER}" "${fzn}" --no-proof > "${prefix}.noproof.out" 2> "${prefix}.noproof.err"
+  "${SOLVER}" "${fzn}" --fixed-search --no-proof > "${prefix}.noproof.out" 2> "${prefix}.noproof.err"
   rc2=$?
   if [ "${rc2}" -ne "${rc}" ]; then
     if report "${base}" fail "--no-proof exited ${rc2} where the proved run exited ${rc} (M9-no-proof-T2)"; then continue; fi
@@ -210,7 +215,7 @@ for fzn in "${ROOT}"/test/models/*.fzn; do
   is_pending "${base}" && continue
   [ -f "${OUT}/${base}.veripb" ] || continue
   prefix="${OUT}/${base}.order"
-  "${SOLVER}" "${fzn}" --bits-above none --proof "${prefix}" > "${prefix}.out" 2> "${prefix}.err"
+  "${SOLVER}" "${fzn}" --fixed-search --bits-above none --proof "${prefix}" > "${prefix}.out" 2> "${prefix}.err"
   rc=$?
   if [ "${rc}" -ne 0 ] || [ -s "${prefix}.err" ]; then
     echo "FAIL  ${base} (--bits-above none): the proved run exited ${rc} or wrote to stderr"
@@ -228,7 +233,7 @@ for fzn in "${ROOT}"/test/models/*.fzn; do
     echo "FAIL  ${base} (--bits-above none): verdict [${v_new}] is not the default run's [${v_ref}]"
     fail=$((fail+1)); continue
   fi
-  "${SOLVER}" "${fzn}" --bits-above none --no-proof > "${prefix}.noproof.out" 2> "${prefix}.noproof.err"
+  "${SOLVER}" "${fzn}" --fixed-search --bits-above none --no-proof > "${prefix}.noproof.out" 2> "${prefix}.noproof.err"
   rc2=$?
   if [ "${rc2}" -ne "${rc}" ] || [ -s "${prefix}.noproof.err" ]; then
     echo "FAIL  ${base} (--bits-above none): --no-proof exited ${rc2} where the proved run exited ${rc}, or wrote to stderr (M9-no-proof-T2)"

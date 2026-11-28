@@ -60,7 +60,7 @@ for scp in "${ROOT}"/test/scp/*.scp; do
   if [ ! -f "${expected}" ]; then
     echo "FAIL ${base}: no expected output in test/scp/expected/"; fail=$((fail+1)); continue
   fi
-  "${SOLVER}" "${scp}" --proof "${prefix}" > "${prefix}.out" 2> "${prefix}.err"
+  "${SOLVER}" "${scp}" --fixed-search --proof "${prefix}" > "${prefix}.out" 2> "${prefix}.err"
   rc=$?
   if [ "${rc}" -ne 0 ]; then
     echo "FAIL ${base}: solver exited ${rc}"; sed 's/^/       /' "${prefix}.err" | head -5
@@ -85,7 +85,7 @@ for scp in "${ROOT}"/test/scp/*.scp; do
     echo "FAIL ${base}: the answer is not the .scp's: ${v}"
     fail=$((fail+1)); continue
   fi
-  "${SOLVER}" "${scp}" --no-proof > "${prefix}.noproof.out" 2> "${prefix}.noproof.err"
+  "${SOLVER}" "${scp}" --fixed-search --no-proof > "${prefix}.noproof.out" 2> "${prefix}.noproof.err"
   rc2=$?
   if [ "${rc2}" -ne "${rc}" ] || [ -s "${prefix}.noproof.err" ] ||
      ! cmp -s "${prefix}.out" "${prefix}.noproof.out"; then

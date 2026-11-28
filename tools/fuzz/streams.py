@@ -64,7 +64,10 @@ T_SOLVE, T_CHECK, T_GECODE = 30, 120, 30
 # the ones D-0257's test uses for "an eviction at every learned constraint" (core 0, mid 0,
 # first 1, inc 0, mid_every 1). Every opt-in knob runs under the default search and under --cdcl.
 EVICT = "tiered:core=0,mid=0,first=1,inc=0,mid_every=1"
-CONFIGS = [("default", [], {}), ("cdcl", ["--cdcl"], {}),
+# Since D-0261 (M19-config-T1) the default is the free search; `fixed` and `cdcl-fixed` keep the
+# fixed search, the default before it, among the configurations compared.
+CONFIGS = [("default", [], {}), ("fixed", ["--fixed-search"], {}), ("cdcl", ["--cdcl"], {}),
+           ("cdcl-fixed", ["--cdcl", "--fixed-search"], {}),
            ("cdcl-chrono5", ["--cdcl", "--chrono", "5"], {}), ("free", ["-f"], {})]
 for _name, _env in [("minimise-rec", {"BAGUETTE_MINIMISE": "rec"}),
                     ("priority-classes", {"BAGUETTE_PRIORITY": "classes"}),
@@ -442,7 +445,8 @@ def any_model(r, force_opt=False):
 def write_msc(outdir):
     cfg = {"id": "org.baguette.fuzz", "name": "baguette-fuzz", "version": "0.1.0",
            "mznlib": MZNLIB, "executable": BIN, "supportsMzn": False, "supportsFzn": True,
-           "needsSolns2Out": True, "stdFlags": ["-i", "-f", "-n", "-p", "-r", "-s", "-t", "-v"]}
+           "needsSolns2Out": True, "stdFlags": ["-i", "-f", "-n", "-p", "-r", "-s", "-t", "-v"],
+           "extraFlags": [["--fixed-search", "the fixed search (D-0261)", "bool", "false"]]}
     path = os.path.join(outdir, "fuzz.msc")
     with open(path, "w") as f:
         json.dump(cfg, f, indent=2)

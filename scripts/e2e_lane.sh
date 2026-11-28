@@ -5,7 +5,7 @@
 # Three passes, each one line per item and a summary; the lane FAILS if any line does:
 #
 #   1. chain       every test/models/*.fzn through tools/e2e/chain.sh: fzn2scp.py ->
-#                  cake_pb_cp (encode) -> baguette --proof (order arm, default flags) ->
+#                  cake_pb_cp (encode) -> baguette --proof (order arm, --fixed-search: E2E_SEARCH, D-0261) ->
 #                  bridge.py -> veripb --elaborate -> cake_pb_cp (check). VERIFIED needs
 #                  cake_pb_cp's own `s VERIFIED SATISFIABLE|UNSATISFIABLE`, agreeing with
 #                  baguette's answer. A model outside the translator's subset is SKIPPED with
@@ -141,7 +141,7 @@ export E2E_TIMEOUT=${E2E_TIMEOUT:-300}
 for f in "$CAKE_PB_CP" "$BAGUETTE" "$MZN_BIN/fzn-gecode" "$MZN_BIN/fzn-cp-sat"; do
     [ -x "$f" ] || { echo "FAIL e2e_lane: $f is missing or not executable"; exit 1; }
 done
-echo "e2e_lane: baguette md5 $(md5sum < "$BAGUETTE" | cut -c1-8), cake_pb_cp sha256 $(sha256sum < "$CAKE_PB_CP" | cut -c1-8), out $OUT, flags ${E2E_FLAGS:-default}"
+echo "e2e_lane: baguette md5 $(md5sum < "$BAGUETTE" | cut -c1-8), cake_pb_cp sha256 $(sha256sum < "$CAKE_PB_CP" | cut -c1-8), out $OUT, flags ${E2E_FLAGS:-default}, search ${E2E_SEARCH---fixed-search} (E2E_SEARCH; the default search when empty, D-0261)"
 
 if command -v systemd-run > /dev/null 2>&1; then
     RUN=(systemd-run --user --scope -q -p MemoryMax=32G)

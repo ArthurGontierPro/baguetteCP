@@ -1,0 +1,145 @@
+rc 0
+out objective = 1843;
+out production_by_order = array1d(1..15, [1, 12, 5, 0, 0, 6, 8, 2, 3, 4, 10, 13, 11, 9, 7]);
+out inventory_periods = array1d(1..13, [5, 1, 2, 5, 7, 7, 0, 0, 0, 0, 1, 7, 3]);
+out ----------
+out objective = 1804;
+out production_by_order = array1d(1..15, [1, 12, 5, 13, 0, 6, 8, 2, 3, 4, 10, 11, 7, 9, 0]);
+out inventory_periods = array1d(1..13, [5, 1, 2, 5, 7, 7, 2, 0, 0, 0, 2, 7, 11]);
+out ----------
+out objective = 1794;
+out production_by_order = array1d(1..15, [1, 12, 5, 0, 13, 6, 8, 2, 3, 4, 10, 11, 7, 9, 0]);
+out inventory_periods = array1d(1..13, [5, 1, 2, 5, 7, 7, 2, 0, 0, 0, 2, 7, 10]);
+out ----------
+out objective = 1791;
+out production_by_order = array1d(1..15, [1, 12, 5, 0, 6, 13, 8, 2, 3, 7, 10, 11, 4, 9, 0]);
+out inventory_periods = array1d(1..13, [5, 1, 2, 2, 7, 8, 5, 0, 0, 0, 2, 7, 9]);
+out ----------
+out objective = 1597;
+out production_by_order = array1d(1..15, [1, 12, 0, 13, 5, 6, 8, 2, 3, 7, 10, 11, 4, 9, 0]);
+out inventory_periods = array1d(1..13, [5, 1, 2, 2, 5, 7, 5, 0, 0, 0, 2, 7, 11]);
+out ----------
+out objective = 1587;
+out production_by_order = array1d(1..15, [1, 0, 12, 13, 5, 6, 8, 2, 3, 7, 10, 11, 4, 9, 0]);
+out inventory_periods = array1d(1..13, [5, 1, 2, 2, 5, 7, 5, 0, 0, 0, 2, 6, 11]);
+out ----------
+out objective = 1577;
+out production_by_order = array1d(1..15, [0, 1, 12, 13, 5, 6, 8, 2, 3, 7, 10, 11, 4, 9, 0]);
+out inventory_periods = array1d(1..13, [4, 1, 2, 2, 5, 7, 5, 0, 0, 0, 2, 6, 11]);
+out ----------
+out objective = 1515;
+out production_by_order = array1d(1..15, [0, 12, 13, 1, 5, 6, 8, 2, 3, 7, 10, 11, 4, 9, 0]);
+out inventory_periods = array1d(1..13, [2, 1, 2, 2, 5, 7, 5, 0, 0, 0, 2, 7, 12]);
+out ----------
+out objective = 1464;
+out production_by_order = array1d(1..15, [8, 12, 13, 5, 6, 1, 0, 2, 3, 7, 10, 11, 4, 9, 0]);
+out inventory_periods = array1d(1..13, [0, 1, 2, 2, 6, 8, 5, 6, 0, 0, 2, 7, 12]);
+out ----------
+out objective = 1429;
+out production_by_order = array1d(1..15, [5, 6, 8, 12, 13, 1, 0, 2, 3, 7, 10, 11, 4, 9, 0]);
+out inventory_periods = array1d(1..13, [0, 1, 2, 2, 9, 11, 5, 4, 0, 0, 2, 5, 10]);
+out ----------
+search ladder/cls 5855 cls
+search opb/lines 14826 lines
+search direct/vals 0 vals
+search widest/wide 4118 wide
+search bits/vars 41 vars
+search bitsrows/lines 82 lines
+search choices/groups 0 groups
+search limit.nodes 2501
+search limit.decisions 1821
+search limit.conflicts 1340
+search limit.learned 1336
+search limit.pb-learned 92
+search limit.db 1428
+search limit.maxdepth 73
+search limit.incumbent 1429
+work limit.props 937053
+work limit.eff 168412
+work limit.contra 1330
+search limit.at node
+search limit.signal none
+search nodes/nodes 2501 nodes
+search decisions/decs 1821 decs
+search conflicts/nodes 1340 nodes
+search maxdepth/levels 73 levels
+work exhausted/bool 0 bool 1 if
+search skipped/nodes 3 nodes
+search learned/cls 1336 cls
+work later/asks 1512578 asks
+work cites/memos 37383 memos
+search convertible/cls 0 cls
+search retention tiered(core<=2,mid<=6,first=2000,inc=300,mid_every=10000) tiered(core<=2,mid<=6,first=2000,inc=300,mid_every=10000): 1428 added, 0 evicted, 1428 swept, 0 live, 33 duplicate, 1418 cited, 0 pinned, 0 reductions, 0 detached, 0 locked
+search lbd 1:10,2:39,3:46,4:45,5:52,6:44,7:45,8:24,9:20,10:18,11:24,12:49,13:88,14:85,15:90,16:657
+search width 1:10,2:22,3:7,4:3,5:18,6:24,7:50,8:7,9:27,10:22,11:66,12:40,13:10,14:11,15:26,16:993
+search globals/units 10 units
+search glob-prune/prunes 50 prunes
+search glob-confl/confl 10 confl
+search cls-inst/inst 1326 inst
+search cls-decl/cls 0 cls
+search cls-prune/prunes 2259 prunes
+search pb-inst/inst 92 inst
+search pb-inst-no/rows 0 rows
+search pb-prune/prunes 502 prunes
+search pb-confl/confl 7 confl
+search minimised/lits 3582 lits
+search i-s4-cross/lines 52284 lines
+search pb-tried/confl 1336 confl
+search pb-learned/rows 92 rows
+search pb-fallback/confl 1244 confl
+search pb-why first fallback reason: no PB row for instance all_different_int
+work pb-whys/recd 64 recd 36 x
+search pb-steps/pivots 93 pivots
+search pb-convert/rows 0 rows
+search pb-stronger/rows 0 rows
+search pb-nondeg/rows 92 rows
+search pb-lifted/rows 39 rows
+search pb-rungs/rungs 3301 rungs
+search lvl-cmp/confl 92 confl
+search lvl-same/confl 1 confl
+search lvl-narrow/confl 76 confl
+search lvl-wide/confl 0 confl
+search lvl-incomp/confl 15 confl
+search lvl-empty/confl 0 confl
+search lvl-assert/confl 35 confl
+search lvl-why first disagreement: closure {30,29,27,26,25,24,21,20,19,18,17,10,9,8,7,6,5,4,3,2,1} vs pb {30,29,27,26,21,19,7,4,1} (pb asserts at 26)
+search restarts/runs 8 runs
+search unexplored/nodes 129 nodes
+search kept/levels 0 levels
+search activity/bumps 32158 bumps
+search phases/vals 134739 vals
+search phase-used/decs 653 decs
+work int_eq_reif/inst 432 inst 118.2 runs/node 28.91 eff/node
+work learned_pb/inst 92 inst 71.1 runs/node 0.05 eff/node
+work int_ne_reif/inst 195 inst 56.0 runs/node 6.53 eff/node
+work int_lin_le/inst 90 inst 37.9 runs/node 11.12 eff/node
+work learned_clause/inst 1326 inst 37.4 runs/node 0.90 eff/node
+work bool_clause/inst 223 inst 22.1 runs/node 4.56 eff/node
+work bool2int/inst 195 inst 19.7 runs/node 10.48 eff/node
+work array_int_element/inst 14 inst 6.9 runs/node 3.51 eff/node
+work global_cardinality/inst 1 inst 2.1 runs/node 0.81 eff/node
+work all_different_int/inst 1 inst 1.7 runs/node 0.43 eff/node
+work int_lin_ne/inst 46 inst 1.7 runs/node 0.02 eff/node
+work props/runs 937053 runs
+work eff/runs 168412 runs
+work contra/runs 1330 runs
+work passes/snaps 42796 snaps
+work deductions/chgs 231993 chgs
+work wakes/wakes 2165508 wakes
+work masked/wakes 1722348 wakes
+work vetoed/wakes 34314 wakes
+work advised/wakes 286758 wakes
+work seeded/runs 225164 runs
+work skipped/slots 5132150 slots
+search rup/lines 352225 lines
+search pol/lines 167487 lines
+search pol-tokens/tokens 4672186 tokens
+search pol-widest/tokens 1947 tokens
+search atoms/atoms 1196 atoms
+search atomlinks/lines 2206 lines
+search bridges/pairs 3335 pairs
+search boundlines/pairs 208 pairs
+search bitsprune/lines 69485 lines
+search atoms/prune/atoms 0.017 atoms
+opb 926f703a84a5f1d1471d3302b80f05ea02e7ea89abd9f202ecae5f09c58c25bf
+pbp 4f325852a9471ab31ba597965481377350fc6eb071a59f6e04a3e43f86f1b7c5

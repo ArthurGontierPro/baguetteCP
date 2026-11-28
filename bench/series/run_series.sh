@@ -7,7 +7,10 @@
 #
 # An arm is `LABEL:proof:FLAGS` (a proof is logged and veripb checks it) or `LABEL:noproof:FLAGS`
 # (`--no-proof`; the answers are UNVERIFIED). FLAGS are baguette's, e.g. `-f`, may be empty.
-# Default arms: `A:proof:`  `B:proof:-f`  `C:noproof:`.  REV must be on --repo (default: the hub
+# Default arms: `A:proof:--fixed-search`  `B:proof:-f`  `C:noproof:--fixed-search`: the fixed and
+# the free search, as in every series before D-0261 (M19-config-T1), which made the free search
+# the default and the fixed one the flag. A REV older than D-0261 does not know --fixed-search
+# (exit 2 on every run): give it `--arm A:proof: --arm B:proof:-f --arm C:noproof:`. REV must be on --repo (default: the hub
 # /cluster/arthur/baguette.git), so push the branch first. The driver and its helpers are those of
 # the CLONE at REV, so a series measures one commit end to end, mznlib included.
 #
@@ -62,7 +65,7 @@ while [ $# -gt 0 ]; do
   esac
 done
 [ -n "$NAME" ] && [ -n "$COMMIT" ] && [ -n "$PAR" ] || { sed -n 2,6p "$0" >&2; exit 2; }
-[ ${#ARMS[@]} -gt 0 ] || ARMS=("A:proof:" "B:proof:-f" "C:noproof:")
+[ ${#ARMS[@]} -gt 0 ] || ARMS=("A:proof:--fixed-search" "B:proof:-f" "C:noproof:--fixed-search")
 DIR="${DIR:-/scratch/arthur/series-$NAME}"
 RESULTS="${RESULTS:-/cluster/arthur/baguette-results/series-$NAME}"
 SRC="$DIR/src"

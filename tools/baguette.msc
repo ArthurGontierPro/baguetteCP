@@ -12,6 +12,7 @@
   "stdFlags": ["-i", "-f", "-n", "-p", "-r", "-s", "-t", "-v"],
   "extraFlags": [
     ["--proof", "Write the VeriPB proof as PREFIX.opb and PREFIX.pbp (SPEC 4.1). Without it the proof is kept as ./baguette-proof.opb and .pbp", "string", ""],
-    ["--no-proof", "Solve without a proof (a measurement instrument: the answer is unverified)", "bool", "false"]
+    ["--no-proof", "Solve without a proof (a measurement instrument: the answer is unverified)", "bool", "false"],
+    ["--fixed-search", "The fixed search: the model's search annotation alone, no restarts (the free search is the default since D-0261)", "bool", "false"]
   ]
 }

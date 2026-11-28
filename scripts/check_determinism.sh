@@ -50,6 +50,11 @@
 # cumulative, alldiff and the bits arm (atoms minted on demand), about 10 s together. The
 # .opb, .pbp and stdout must agree, exactly as for the models.
 #
+# BOTH SEARCHES (M19-config-T1, D-0261). The models and the four instances are each run under
+# the fixed search (--fixed-search) and under the default, the free search since D-0261, whose
+# restarts, activity scores and saved phases must not depend on the clock, an address or the
+# collector either. Both arms together, models and instances, take about 32 s on fataepyc-06.
+#
 # THE CONTRACT, AND ITS ONE EXCEPTION. The proof is a function of the binary, the input and
 # the options for a run that ends on its own or at BAGUETTE_NODE_LIMIT. A run ended by an
 # ASYNCHRONOUS stop (--time-limit, a signal such as `timeout`'s SIGTERM, SIGINT or SIGXCPU,
@@ -96,14 +101,19 @@ is_pending() {
     | awk '{print $1}' | grep -qx "$1"
 }
 
+# The search both runs use (M19-config-T1, D-0261); run_check sets it per arm.
+SEARCH="--fixed-search"
+
 # One model, two runs, three artefacts compared. Echoes the differing kind on failure.
 # $1 model path, $2 scratch dir. Prints nothing when identical.
 compare_two_runs() {
   fzn="$1"; d="$2"
   base="$(basename "${fzn}" .fzn)"
   rc1=0; rc2=0
+  # The search (M19-config-T1, D-0261), SEARCH, comes AFTER the proof prefix: the
+  # self-test's flaky wrapper reads --proof PREFIX as arguments 2 and 3.
   for run in 1 2; do
-    timeout 300 "${SOLVER}" "${fzn}" --proof "${d}/${base}.${run}" \
+    timeout 300 "${SOLVER}" "${fzn}" --proof "${d}/${base}.${run}" ${SEARCH} \
       > "${d}/${base}.${run}.out" 2> "${d}/${base}.${run}.err" || eval "rc${run}=\$?"
   done
   # M6-T5. A model listed in test/models/PENDING is known not to work yet, and a
@@ -187,7 +197,7 @@ compare_real() {
     if ! (
       for v in $(env | sed -n 's/^\(BAGUETTE_[A-Za-z0-9_]*\)=.*/\1/p'); do unset "$v"; done
       BAGUETTE_NODE_LIMIT="${budget}" OCAMLRUNPARAM="${gc}" \
-        timeout 300 "${SOLVER}" "${d}/${name}.fzn" ${flags} --stats --proof "${d}/${name}.${run}" \
+        timeout 300 "${SOLVER}" "${d}/${name}.fzn" ${SEARCH} ${flags} --stats --proof "${d}/${name}.${run}" \
         > "${d}/${name}.${run}.out" 2> "${d}/${name}.${run}.err"
     ); then
       echo "     ${name} (OCAMLRUNPARAM=${gc}) did not exit 0:"
@@ -299,32 +309,45 @@ run_check() {
   d="$(mktemp -d)"
   trap 'rm -rf "$d"' EXIT INT TERM
   n=0; bad=0
-  for fzn in "${ROOT}"/test/models/*.fzn; do
-    n=$((n + 1))
-    compare_two_runs "${fzn}" "$d" || bad=$((bad + 1))
+  # Two arms (M19-config-T1, D-0261): the fixed search, and the free search (the default,
+  # so no flag), whose restarts, activity and phases must not depend on the clock or on
+  # addresses either.
+  # compare_two_runs assigns the global d (POSIX sh has no locals), hence top.
+  top="$d"
+  for arm in fixed free; do
+    case "$arm" in fixed) SEARCH="--fixed-search" ;; free) SEARCH="" ;; esac
+    mkdir -p "$top/$arm"
+    for fzn in "${ROOT}"/test/models/*.fzn; do
+      n=$((n + 1))
+      compare_two_runs "${fzn}" "$top/$arm" || { echo "     (the ${arm} search)"; bad=$((bad + 1)); }
+    done
   done
+  d="$top"
   if [ "$bad" -ne 0 ]; then
-    echo "FAIL determinism: ${bad} of ${n} models produced different artefacts on a"
+    echo "FAIL determinism: ${bad} of ${n} runs produced different artefacts on a"
     echo "     second run of the SAME binary. That is nondeterminism in the solver or"
     echo "     the writer -- hash iteration order, an address reaching output, an"
     echo "     uninitialised read. It is not an expected-output question and must not"
     echo "     be fixed by re-blessing anything."
     return 1
   fi
-  echo "determinism: ${n} models, .opb/.pbp/stdout identical across two runs"
+  echo "determinism: ${n} runs (every model, fixed and free search), .opb/.pbp/stdout identical across two runs"
   r=0; rbad=0
-  for spec in $(echo "${REAL_INSTANCES}" | tr ' ' ':'); do
-    name="${spec%%:*}"; rest="${spec#*:}"; budget="${rest%%:*}"; flags="${rest#*:}"
-    r=$((r + 1))
-    compare_real "${name}" "${budget}" "${flags}" "$d" || rbad=$((rbad + 1))
+  for arm in fixed free; do
+    case "$arm" in fixed) SEARCH="--fixed-search" ;; free) SEARCH="" ;; esac
+    for spec in $(echo "${REAL_INSTANCES}" | tr ' ' ':'); do
+      name="${spec%%:*}"; rest="${spec#*:}"; budget="${rest%%:*}"; flags="${rest#*:}"
+      r=$((r + 1))
+      compare_real "${name}" "${budget}" "${flags}" "$d" || { echo "     (the ${arm} search)"; rbad=$((rbad + 1)); }
+    done
   done
   if [ "$rbad" -ne 0 ]; then
-    echo "FAIL determinism: ${rbad} of ${r} real instances did not reproduce under two GC"
+    echo "FAIL determinism: ${rbad} of ${r} real-instance runs did not reproduce under two GC"
     echo "     settings at a node budget (D-0264). A proof that depends on the collector, an"
     echo "     address or a clock is a defect, and re-blessing is not an answer."
     return 1
   fi
-  echo "determinism: ${r} real instances, .opb/.pbp/stdout identical under two GC settings"
+  echo "determinism: ${r} real-instance runs (four instances, fixed and free search), .opb/.pbp/stdout identical under two GC settings"
   return 0
 }
 
