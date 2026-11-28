@@ -19,7 +19,6 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M18-coverage-T9 (first half: measurement and design, D-0265) | `docs/DECISIONS.md` (D-0265 only), `docs/ROADMAP.md` (the T9 row's note), `bench/refused/` (new, measurement scripts). No solver file | agent-refused, `wave110-refused` | 2026-11-28 |
 
 ## Cross-session requests
 
@@ -756,8 +755,20 @@ section 1. Shares are inclusive, of the whole run.
 | M22-review-bugs (gcc repeated cover, rejected proof on the default) | agent-gccdup (`wave105-gccdup`) | 2026-11-27 | **D-0260 [AUTONOME].** No answer was wrong (14 000 grid runs against a brute-force oracle and Gecode). Cause: gcc.ml's HIGH-row memo keyed on the cover VALUE, so rule (a) justified one count's pruning by another count's row (since `ecae5c7`, main `1e6363c` 2026-10-02). Fix `9b5ef85`: `Builder.merge_gcc_cover_repeats` keeps one occurrence per value and ties the later counts by `int_lin_eq` rows in the model; compile.ml refuses a repeated cover. Tests `628c91b`. Not merged. |
 | M22-review-bugs, the e2e defects of D-0258 section 4 (D-0262) | agent-e2efix (`wave107-e2efix`, not merged) | 2026-11-27 | **D-0262 [AUTONOME].** `--e2e` defines maxmin's and all_different's selectors by POSITION; bridge.py: wide gcc copies, choice groups by position; fzn2scp.py states a repeated gcc cover merged; fzn_solutions.py reads gcc by its sentence. Twelve e2e test models. e2e lane FAIL -> PASS |
 | M22-review-bugs, the proof not reproducible run to run (D-0264) | agent-nondet (`wave109-nondet`, not merged) | 2026-11-27 | **D-0264 [AUTONOME].** No defect in the solver: the two proofs that varied were cut by `timeout 900` (vrp) and by the 8 GB heap budget (connect) before the node limit, and a cut proof is valid but not reproducible by design. Every vrp variant verifies (10 cut, 1 at the node limit); the four connect checks take many hours and run on (48 h cap, `/scratch/arthur/nondet/r/*.veripb`). Under the node limit: same bytes under seven runtimes, 347 of 347 lane runs under two, 91 of 91 tuning instances that reach 2 000 nodes. `check_determinism.sh` gains four corpus instances under two GC settings and a guard that voids a comparison cut by a clock, a signal or the heap budget; `Writer.conclude_interrupted` states the rule. No proof byte changed. |
+| M18-coverage-T9, first half: the refused third measured, and the design record (D-0265) | agent-refused (`wave110-refused`, not merged) | 2026-11-28 | **D-0265 [AUTONOME].** Measurement only, no solver code. 70 instances; today's main (`4158b921`) refuses 56 with proof, 40 without; 39 of the 40 run without a budget at 18 to 65 GB. Census (D-0218's probe re-applied, `bench/refused/memprobe.patch`): gap pruning by element/table 21 instances (20 refusals in B), model objects 15, deferred reasons 8, alldiff pairwise table 5, int_times case split 4, proof 4 (B only). Order atoms touched: about 1 in 10^4 of those declared, and the ladder is not in the heap: lazy literals alone move no refusal. Recommended first step: element prunes its result's gap as one store change. Results `/cluster/arthur/baguette-results/refused/` |
 
 ## Handoff notes
+
+### 2026-11-28 (agent-refused, `wave110-refused`, D-0265): the refused third measured, the build not started, not merged
+
+Measurement and design only (M18-coverage-T9's first half). The order ladder is not in the heap and a run touches about one
+order atom in 10^4 of those it declares, so lazy order atoms alone would move none of the 56 refusals (arm B) or 40 (arm D).
+The width mechanism is `element.ml`'s interior rule (and table's), which walks `range (lo+1) (hi-1)` of a wide result and
+removes each unsupported value as its own trail entry: 15 M entries of 650 B at the root of liner-sf, 20 refusals in B. The
+next task, one agent, byte-identical by design: element removes those values in ONE store change; D-0265 section 6 names
+the instances and the numbers that confirm it. The other kinds (model objects 15, D-0223's deferred reasons 8, the alldiff
+pairwise id table 5, the int_times case split 4) are listed there with their owners. Probe binary and patch:
+`bench/refused/memprobe.patch` (never commit it). Main moved to D-0261 (free search default) during the runs; they used `-f`.
 
 ### 2026-11-27 (agent-nondet, `wave109-nondet`, D-0264): the proofs "not reproducible run to run", not merged
 
