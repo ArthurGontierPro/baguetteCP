@@ -19,7 +19,6 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M18-coverage-T9 (D-0268): element prunes its result's unsupported interior values in ONE store change | `lib/core/prop/element.ml`, `lib/core/prop/table.ml`, `lib/core/store.ml`, `lib/core/domain.ml`, `lib/core/view.ml`, `lib/core/trace.ml`/`justify.ml` only if the proof side must follow, their tests (`test/unit/test_core.ml`, `test/unit/test_prop.ml`), test models | agent-elembulk (branch wave113-elembulk) | 2026-11-28 |
 
 ## Cross-session requests
 
@@ -760,8 +759,15 @@ section 1. Shares are inclusive, of the whole run.
 | M22-review-bugs, the e2e defects of D-0258 section 4 (D-0262) | agent-e2efix (`wave107-e2efix`, not merged) | 2026-11-27 | **D-0262 [AUTONOME].** `--e2e` defines maxmin's and all_different's selectors by POSITION; bridge.py: wide gcc copies, choice groups by position; fzn2scp.py states a repeated gcc cover merged; fzn_solutions.py reads gcc by its sentence. Twelve e2e test models. e2e lane FAIL -> PASS |
 | M22-review-bugs, the proof not reproducible run to run (D-0264) | agent-nondet (`wave109-nondet`, not merged) | 2026-11-27 | **D-0264 [AUTONOME].** No defect in the solver: the two proofs that varied were cut by `timeout 900` (vrp) and by the 8 GB heap budget (connect) before the node limit, and a cut proof is valid but not reproducible by design. Every vrp variant verifies (10 cut, 1 at the node limit); the four connect checks take many hours and run on (48 h cap, `/scratch/arthur/nondet/r/*.veripb`). Under the node limit: same bytes under seven runtimes, 347 of 347 lane runs under two, 91 of 91 tuning instances that reach 2 000 nodes. `check_determinism.sh` gains four corpus instances under two GC settings and a guard that voids a comparison cut by a clock, a signal or the heap budget; `Writer.conclude_interrupted` states the rule. No proof byte changed. |
 | M19-config-T1 (the free search as default, D-0259) | agent-free (`wave106-free`) | 2026-11-28 | **D-0261 [AUTONOME].** `--fixed-search`; every recorded-output caller pinned to it (lanes byte-identical: diff 347/347 and 333/333, model tests, scaling, factor); `make models-free` gated (271/271, proofs verified, solutions re-checked); THE DEFAULT in its own commit `b86ad5e8`; SPEC 3.4 rewritten; diff configurations `free`/`free-noproof` recorded (deterministic). Sanity 60 tuning instances at 300 s: 13 vs 16 verified complete, same per-instance signs as D-0227. Not merged. |
+| M18-coverage-T9, D-0265's first step: the bulk rule (D-0268) | agent-elembulk (`wave113-elembulk`, not merged) | 2026-11-28 | **D-0268 [AUTONOME].** `Store.remove_interior`: several interior values in ONE trail entry, one reason, a derivation per value (`Store.removal_explanation`); element's result gap and table's runs of uncarried values use it. Proof byte-identical; diff lanes differ in WORK counters only (to re-record after the gate). Element-gap trails 6 to 22 M -> 45 to 3 203 entries; 16 of the 21 gap instances now run at 8 GiB without proof (main 3) |
 
 ## Handoff notes
+
+### 2026-11-28 (agent-elembulk, `wave113-elembulk`, D-0268): element and table prune a gap in one store change, NOT merged
+
+- Commits: `2c1fd087` the rule (`Store.remove_interior`, `Domain.remove_interior`, `View.remove_interior`, `Store.removal_explanation`) and element, `3a750d1c` table and two test models (`element_gap_opt`, `table_gap_sat`), `46de8de9` the trace's per-hole bits arm without a closure per entry. Revert in reverse order.
+- Same `.pbp` on 295 models x 2 searches. `scripts/diff_lane.sh --tier all`: 45/393 differ, `--debug` 29/377, ONLY in WORK counters (`later/asks`, `wakes`, `masked`: fewer entries). **The orchestrator re-records `bench/diff/reference*` after the gate**; nothing was `--update`d here.
+- Next for the refused third: D-0265 step 2 (one trace line per gap): with proof 15 of the 21 are still refused by the per-value trace lines. proteindesign stays refused (values dead tuples carry, a reason each, and a 2.7 to 5.8 GB model). Results: `/cluster/arthur/baguette-results/elembulk/`.
 
 ### 2026-11-28 (agent-free, `wave106-free`, D-0261): the free search is the default, NOT merged
 
