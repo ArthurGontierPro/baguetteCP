@@ -35945,3 +35945,360 @@ One more rule in the bits arm (D-0132's line for rows without a wide order term;
 **Results**: `/cluster/arthur/baguette-results/bridge/` (README, tables, logs, scripts).
 
 **Revert.** `git revert` the closing docs commit, then `26a78f49 f34cb03e 0beed509 f3254486 32e61f36 fe2b2e26 6acf2c1a 7a29bd14 980560aa e21e3ecb 13d5712c` in that order: D-0132's bridge pairs and bound lines come back byte for byte; the three `ladder_mixed` models and the eleven lanes go with `e21e3ecb`, `7a29bd14` and `0beed509`. Going back to the rejected (f) instead is `git revert 0beed509 f3254486` (the lanes then expect the `rup` pin again).
+## D-0267  [AUTONOME] The held-out comparison again under the free-search default (D-0261): `rec`, `classes` and `probe` against `off`, with a second `off` arm as the noise floor, and `fixed` against the default, in ONE interleaved campaign. No switch passes; the free default beats `--fixed-search` on the held-out set as on the series
+
+**Status**: DONE (agent-compare, branch `wave112-compare2`, measurement only, no `lib/` or `bin/` change). Measured
+2026-11-28 02:39 to 13:24 UTC on fataepyc-06. Scripts, tables and runs: `/cluster/arthur/baguette-results/compare2/`
+(README first). D-0259 section 4 asked for the question to be asked again under the new default; D-0252 had answered it
+under the fixed search.
+
+### 1. Set, flatten, binary
+
+- Set: D-0252's 400 held-out instances (`bench/tuning/heldout.lst`, D-0205's rule with the tuning set excluded).
+- Flatten: the 400 re-flattened on fataepyc-06 with the mznlib of origin/main `d3874fc8` (the same as `6ad63b1`'s), through
+  `scripts/compare_run.sh` as `bench/series/run_series.sh` flattens. None failed. Every file differs in raw bytes from
+  D-0252's (the header comments carry the library path and the command line); without comment lines **213 are identical
+  and 187 differ** (107 families; `flatten-diff.txt`), from the mznlib changes since 2026-11-26 (lex, nvalue, gcc routes
+  and guards).
+- Binary: `make release` of origin/main after gate 141 went green (check, diff 393/393, debug diff 377/377, scaling, DONE),
+  md5 `aedfd1c6` (`aedfd1c6bb935de370f0d1919e147aa3`), built from `wave112-compare2` whose `lib/`, `bin/`, `mznlib/` equal
+  origin/main's (`676ebd0`). Smoke (`smoke.txt`): at 20 000 nodes `off` and `off-b` give identical counters, each other arm
+  different ones, and `fixed`'s counters equal D-0252's `off` counters on the same instance (`--fixed-search` is the old
+  default, byte for byte in the counters); at 3 000 nodes with proof all six verify.
+
+### 2. Method
+
+Six arms, every switch set explicitly: `off` (the default: free search, the three switches off), `off-b` (identical to
+`off`), `rec` (`BAGUETTE_MINIMISE=rec`), `classes` (`BAGUETTE_PRIORITY=classes`), `probe` (`BAGUETTE_PROBE=root`),
+`fixed` (`--fixed-search`); each `--no-proof` and with proof: 4 800 runs. Each instance's twelve runs adjacent, the arm
+order rotated by one per instance and the mode order alternated, so load falls on all arms alike. D-0252's settings
+otherwise (300 s, `--stats --max-heap-mb 8192`, scope `MemoryMax=32G`, outer timeout 420 s, veripb 3.0.2 3600 s at 32G on
+every complete answer, a check timeout counted as unverified). At most 40 of these runs at once, launches held while user
+arthur's `main*` + `veripb` processes reached 88 (agent-refused's measurements and the gates ran beside it; the count
+stayed between 40 and 56). At launch: load 23, 11 TB free on /scratch.
+
+The rule, fixed by the orchestrator before the runs: D-0251 section 2 for each switch against `off` (verified complete
+answers: lost no more than gained, net at least +2, in both modes; pairwise share at least 0.47), and in each mode the net
+must also EXCEED |net(`off-b` against `off`)| of that mode. No rule for `fixed` (D-0259 decided the default).
+
+### 3. Results (`tables.md`)
+
+Without proof (400 instances, complete answers trusted):
+
+| arm | complete | incumbent only | share vs off | wins/losses | complete +/- vs off | net |
+|---|---|---|---|---|---|---|
+| off | 108 | 238 | 0.500 | | | |
+| off-b | 108 | 237 | 0.500 | 24+/24- | +1/-1 | 0 |
+| rec | 114 | 227 | 0.525 | 129+/109- | +11/-5 | +6 |
+| classes | 107 | 234 | 0.472 | 115+/137- | +7/-8 | -1 |
+| probe | 109 | 234 | 0.476 | 78+/97- | +5/-4 | +1 |
+| fixed | 85 | 223 | 0.365 | 101+/209- | +16/-39 | -23 |
+
+With proof (400 instances):
+
+| arm | complete | verified complete | incumbent only | share vs off | wins/losses | verified +/- vs off | net |
+|---|---|---|---|---|---|---|---|
+| off | 90 | 85 | 246 | 0.500 | | | |
+| off-b | 93 | 88 | 244 | 0.511 | 37+/28- | +3/-0 | +3 |
+| rec | 93 | 87 | 241 | 0.504 | 123+/120- | +9/-7 | +2 |
+| classes | 86 | 83 | 244 | 0.506 | 127+/122- | +6/-8 | -2 |
+| probe | 93 | 88 | 239 | 0.485 | 79+/91- | +6/-3 | +3 |
+| fixed | 73 | 69 | 231 | 0.364 | 96+/205- | +19/-35 | -16 |
+
+Unverified (veripb at 3 600 s, never rejected): off 5, off-b 5, rec 6, classes 3, probe 5, fixed 4 (rec's sixth is 2013 pentominoes-int 04, a complete answer only `rec` found, whose check ran out its hour last). **No proof was REJECTED.**
+
+### 4. The noise floor
+
+`off-b` against `off`, the same binary and settings run side by side: without proof 24+/24-, share 0.500, complete +1/-1
+(net 0); with proof 37+/28-, share 0.511, verified +3/-0 (net +3: java-auto-gen binpack_11, minimal-decision-sets
+breast-cancer_train4, nmseq_99). So inside one campaign two identical arms differ by 48 and 65 instance verdicts and by up
+to 3 verified complete answers; D-0205's 0.03 band holds for the share (0.011 at most here), and the rule's floor is 3 with
+proof and 0 without.
+
+### 5. The rule, applied as written
+
+| switch | with proof: +/-, net, share, net > 3? | without proof: +/-, net, share, net > 0? | verdict |
+|---|---|---|---|
+| `rec` | +9/-7, net +2, 0.504, no (2 is not above 3) | +11/-5, net +6, 0.525, yes | stays `off` |
+| `classes` | +6/-8, net -2 (fails D-0251), 0.506, no | +7/-8, net -1 (fails D-0251), 0.472, no | stays `off` |
+| `probe` | +6/-3, net +3, 0.485, no (3 is not above 3) | +5/-4, net +1 (fails D-0251's +2), 0.476, yes | stays `off` |
+
+Read plainly. `rec` is the closest: it gains without proof (net +6, share 0.525, best on MAX instances 33+/18-) and with
+proof gains +2 verified answers, which the floor of 3 does not let through. `probe` gains three verified answers with
+proof, exactly the floor, and one without, under the +2 of D-0251. `classes` loses in both modes. All three stay `off`;
+nothing changes in the code.
+
+### 6. Complete answers gained and lost against `off`
+
+- `rec`, no proof: +depot-placement ts225_6, +ghoulomb 4-9-10, +p1f 15, +mario medium_1, +steelmillslab bench_19_5,
+  +fox-geese-corn 54, +pentominoes-zayenz size_10_tiles_10_seed_17, +perfect_square 195, +evm-super-compilation
+  isolated_block_6_0_input, +kidney-exchange 3_20_0.30_4, +products-and-shelves ps-25-01; -costas-array 16, -pentominoes 07,
+  -pentominoes-int 07, -elitserien handball20, -sudoku_fixed p20. With proof: +solbat sb_13_13_5_3, +nonogram dom_10,
+  +java-auto-gen binpack_11, +maximum-dag 25_06, +steelmillslab bench_19_5, +minimal-decision-sets breast-cancer_train4,
+  +opt-cryptoanalysis r4, +evm-super-compilation isolated_block_6_0_input, +products-and-shelves ps-25-01;
+  -costas-array 16, -l2p l2p13, -steelmillslab bench_16_10, -rotating-workforce Example1242, -ATSP instance10_0p25,
+  -mondoku 12-12-8, -sdn-chain d26n600-5.
+- `classes`, no proof: +depot-placement ts225_6, +ghoulomb 4-9-10, +l2p l2p2, +p1f 15, +seat-moving sm-20-20-00,
+  +evm-super-compilation isolated_block_6_0_input, +atsp instance11_0p25; -costas-array 16, -filters ewf_1_1,
+  -pentominoes-int 04, -filters ewf_1_2, -maximum-dag 25_06, -ma-path-finding g16_p10_a20, -steelmillslab bench_13_0,
+  -sudoku_fixed p20. With proof: +depot-placement ts225_6, +pentominoes 2011_05, +nmseq 99, +seat-moving sm-20-20-00,
+  +minimal-decision-sets breast-cancer_train4, +pentominoes 2020_05; -costas-array 16, -filters ewf_1_1, -nonogram
+  non_awful_3, -l2p l2p13, -filters ewf_1_2, -steelmillslab bench_13_0, -rotating-workforce Example1242, -sdn-chain d26n600-5.
+- `probe`, no proof: +p1f 15, +mario medium_1, +seat-moving sm-20-20-00, +seat-moving sm-20-20-02, +atsp instance11_0p25;
+  -pentominoes-int 04, -elitserien handball20, -ma-path-finding g16_p10_a20, -sudoku_fixed p20. With proof: +nmseq 99,
+  +nonogram dom_10, +java-auto-gen binpack_11, +seat-moving sm-20-20-00, +minimal-decision-sets breast-cancer_train4,
+  +seat-moving sm-20-20-02; -costas-array 15, -costas-array 16, -stripboard w20_h15_l7_c6_n24.
+
+Full ids with family and kind in `tables.md`. All three of `off-b`'s gains with proof (java-auto-gen, minimal-decision-sets, nmseq) and its one gain without
+proof (ghoulomb) are also among the gains of `rec`, `classes` or `probe`: instances at the 300 s edge that any
+perturbation flips.
+
+### 7. The default against `--fixed-search` (no rule; D-0259 decided)
+
+`fixed` against `off`: without proof 85 complete against 108, share 0.365 (101+/209-); with proof 69 verified against 85,
+share 0.364 (96+/205-). Complete answers `fixed` gains: 16 without proof (MIN 12, MAX 2, SAT 2), 19 with (MIN 13, SAT 4,
+MAX 2), among them stochastic-vrp (2), kidney-exchange, cyclic-rcpsp, on-call-rostering 4s-23d, diameterc-mst c_v15,
+steiner-systems N10, perfect_square 57. It loses 39 without proof (MIN 20, SAT 18, MAX 1) and 35 with (MIN 20, SAT 14,
+MAX 1), the families with more than one: oocsp_racks 3, rectangle-packing 3, cargo 2, costas-array 2, roster 2,
+soccer-computational 2, solbat 2 / 1, fillomino 2 / 1, road-cons 1 / 2, steelmillslab 1 / 2. By kind the free search wins
+everywhere, most on SAT (`fixed`'s share 0.34 and 0.37) and MIN (0.37 and 0.38), MAX 0.37 and 0.31; by edition `fixed` reaches
+0.50 only in 2016 (and in 2013 with proof).
+
+**The held-out set agrees with the series.** D-0259 (series D-0227, 1 600 instances, with proof): the free search 454
+verified OPT+UNSAT+SAT against the fixed search's 390 (+16 %), the fixed search keeping 31 optima the free one loses. Here
+85 against 69 verified (+23 %), the fixed search keeping 19 verified complete answers the default loses; the same sign, a
+similar size, and the same kind of residue (instances the fixed search's order suits, which D-0259's portfolio follow-up
+names).
+
+### 8. Proof volume
+
+7.80 TB of `.opb` + `.pbp` written by the 2 400 proof runs, each deleted once checked (none kept: nothing was rejected).
+/scratch on fataepyc-06 never fell under 10.2 TB free.
+
+**Revert**: nothing to revert (no default changed, no code changed).
+
+## D-0271  [AUTONOME] M18-coverage-T9, the alldiff kind of D-0265: all_different's `.opb` rows as ONE at-most-one row per VALUE instead of one clause per pair and value, behind `BAGUETTE_ALLDIFF_ROWS=pairs|amo` (default `pairs`, every byte as before). Built, verified, measured; the default is left to the user
+
+**Status**: BUILT on `wave116-pairs` (agent-pairs, 2026-11-28), not merged. Base: origin/main `ba84d9b4`. The default did not move.
+
+[AUTONOME] because it adds an option to the normative encoding (PROOF-FORMAT section 3) and a proof shape; the default, which the user decides, is unchanged and section 8 gives the options.
+
+### 1. What the rows are today
+
+`Encoding.add_all_different` (M4-T1, D-0061) writes, for every unordered pair (x, z) of the DISTINCT variables of a posted `all_different_int` (compile.ml decomposes constants and repeats into `int_ne`) and every value v both declared domains hold, ONE `.opb` clause
+
+```
+x <> v \/ z <> v      =   ~x_ge_v \/ x_ge_(v+1) \/ ~z_ge_v \/ z_ge_(v+1)
+```
+
+over ORDER literals only (`ne_clause_lits`: the constant half drops at a declared bound, so 2 to 4 literals; two variables declared fixed at v give the empty clause). There is no direct literal in the `.opb`: `x_eq_v` exists only in the proof, minted by `red` at `start_proof` for every variable of an all_different scope (`request_direct`), with its three channelling clauses `d_lo`, `d_hi`, `d_fwd` and a derived at-least-one per variable. The variables are always on the ORDER encoding: all_different holds its scope back from bits (D-0130 section 3.4), so there is no bits form of these rows and no direct form in the `.opb`. Count: sum over pairs of |decl(x) and decl(z)|, n (n-1)/2 d for n variables over d common values: 297 058 020 rows (about 1.19 G literals) on whirlpool d29 (n = d = 841); 30 rows, 89 literals on test/models/alldiff_pigeonhole_narrow_sat (five variables over 1..5, 1..4, 1..3, 1..5, 1..2).
+
+Who cites a pairwise row by id (`grep -rn 'add_all_different\|row t\|pair_amo\|lemma_rows' lib`):
+
+| site | what it cites |
+|---|---|
+| alldiff.ml `pair_amo` (stage 1 Hall intervals, stage 2 Regin, both pigeonhole conflicts: all go through `core_summands` then `amo`) | the pair's row plus its four channelling halves, divided by 2, gives `~x_eq_v + ~z_eq_v >= 1`; `amo` builds the at-most-one over a SET by induction on pairs (degree m-1 from C(m,2) pairs, D-0061), memoised by D-0216 |
+| inverse (D-0151) | NOT these rows: an implied all_different has pairwise ROOT LEMMAS (`add_cited_lemma`, each `rup` from two channel rows), through the same `row` lookup |
+| circuit (D-0217) | nothing: mznlib's circuit posts `all_different(succ)`, which is an ordinary posted all_different; circuit's own subtour cut cites its MTZ rows |
+| learned clauses, trace lines | never by id; every all_different pruning is written ahead (I-X10, Needs_derivation), so its trace line is `rup` against its own derivation, not against the pairwise rows |
+| `--e2e` (D-0187, D-0262) | cake_pb_cp states all_different by pairs (`@c[N][<i>gt<j>]`, `@c[N][<i>lt<j>]`, flag `x[N][<i>_<j>]`); e2e.ml pins each baguette pairwise clause by `rup` over the substituted pair rows |
+
+### 2. The alternative and its literals
+
+Per value v held by K_v >= 2 declared domains (P_v their variables), ONE row: at most one of P_v equals v. It needs a value for [x = v] that is linear: there is no direct literal in the `.opb` (and minting one there, with its definition rows, is D-0263's 61 to 75 words per value and a second name for the same fact), but under the order ladder [x = v] = x_ge_v - x_ge_(v+1), so [x <> v] = ~x_ge_v + x_ge_(v+1), which is exactly the disequality clause read as a SUM. The row
+
+```
+sum_{x in P_v} (~x_ge_v + x_ge_(v+1))  >=  K_v - 1
+```
+
+is linear in the existing order literals; under the ladder (`x_ge_(v+1) -> x_ge_v`, model rows) each variable's pair is 0 or 1 and is 1 exactly when x <> v. Constant halves drop at the declared bounds exactly as in the clause; a variable declared fixed at v contributes nothing and still counts in K_v (two of them make the row false, as their clause was empty). No new name; a `conclusion SAT` assignment over the model's variables decides it. This is gcc's counting row for capacity 1 (gcc.ml states `sum_i (x_i_ge_v - x_i_ge_(v+1)) = c_v - const_v`, an equality with a count variable): all_different is gcc with every count in 0..1, and the `<=` half with c_v = 1 constant is this row; the `>=` half, a count variable and gcc's machinery are not needed, so the row is posted directly and alldiff keeps its own propagator.
+
+| | pairs (today) | amo (option) |
+|---|---|---|
+| rows | sum_pairs \|decl x and decl z\| | number of values held twice or more |
+| literals | <= 4 per row | <= 2 per holder per value: <= 2 sum_x \|decl x\| |
+| whirlpool d29 | 297 058 020 rows, ~1.19 G literals | 841 rows, 1 412 880 literals |
+| pigeonhole_narrow_sat | 30 rows, 89 literals | 5 rows, 28 literals |
+
+The row is not RUP-strong: with x fixed at v the remaining K_v - 1 pairs can still reach K_v - 1 without the ladder, so unit propagation over the row alone propagates nothing. No line needs it (section 1: every all_different pruning is derived ahead and its trace line rests on its derivation), and the 301 test models, both searches, both encodings, the fuzz streams and the Challenge sample verify (section 6).
+
+### 3. What each citing site cites under the option
+
+- **The direct at-most-one per value, derived once.** `Encoding.start_proof`, after the direct encodings and the at-least-one lines, writes ONE `pol` per value: the row plus, per holder x, `E(x, v) = (d_lo + d_hi + rung_v) / 2` (`~x_eq_v + x_ge_v + ~x_ge_(v+1) >= 2`; `d_hi` alone at v = lo, `d_lo` alone at v = hi, the literal axiom `~x_eq_v` for a variable fixed at v). Each E cancels x's two order literals against their negations and leaves `~x_eq_v` plus exactly the constant it added, so the sum is `sum_{x in P_v} ~x_eq_v >= K_v - 1`. Without the rung, d_lo + d_hi lose half a unit per variable and only K_v = 2 survives the rounding (the pairwise case). 1 + 3 K_v ids per value, n d at most in all, the size of the direct encoding that is already there. Level 0, swept at the end (I-X2).
+- **alldiff's Hall and Regin derivations** (`amo`, the ONE function that changes): the at-most-one over a set S of P_v comes from D_v (the line above) by one of two routes. NARROW: D_v plus one literal axiom `x_eq_v` per variable of P_v outside S (each turns `~x_eq_v` into the constant 1 and lowers the degree by one): one cited id and K_v - |S| axioms. PAIRS: today's induction on pairs, where a pair is the clause `~x_eq_v \/ ~z_eq_v`, one `rup` against D_v alone (with both literals assumed false, D_v's other K_v - 2 terms cannot reach K_v - 1): two literals where `pair_amo` cites five ids. NARROW alone is shorter when S covers most of P_v (Hall sets of a small scope: costas, tppv, elitserien) and far longer when S is small against a wide scope (whirlpool, K_v = 441 to 900: a fixed variable taking its value from another is K_v - 2 axioms against one pair); section 5 states the rule that picks the route and section 7 measures it.
+- **inverse**: unchanged under either setting (its pairwise lemmas are proof lines, not `.opb` rows, and a per-value lemma is not one `rup` from its channel rows).
+- **circuit**: follows the switch through its posted all_different; nothing of its own cites the rows.
+- **learned clauses, trace lines**: unchanged (never by id).
+- **`--e2e`**: refused under the option (exit 3, `E2e.Not_covered`, diagnostic `all_different under BAGUETTE_ALLDIFF_ROWS=amo (D-0271): the per-value rows have no derivation from cake_pb_cp's pairwise statement`). Deriving the per-value row from cake's pairs is the induction of `amo` again, over order literals and the ladder: possible, not built. The external bridge (`tools/e2e/bridge.py`) expects pairs too.
+
+### 4. The proof contract
+
+PROOF-FORMAT section 3 gains `all_different's rows, and the per-value OPTION` (the default described as it is, then the option as an OPTION, its derivation and its `--e2e` refusal); section 4's all_different row gains one sentence for the option. Nothing in the existing normative text changed. The naming contract is untouched (no new name).
+
+### 5. What was built
+
+Commits on `wave116-pairs`: `c6b1e00d` (claim), `588c4a1c` (the switch, the rows, the derivation, PROOF-FORMAT, the mutation lanes, a row-shape unit test), `3652fdb2` (the route rule of `amo`, below), `99ab4572` (mutation lane `amo-pair-flip`). Solver binary of the branch: md5 `d7e4b43a0e205414eafae8d12b644f5f` (main `ba84d9b4`: `87b44fa4eb98500594483308e750321b`). Every measurement and the gate ran on `d7e4b43a`; the docs commit that closes the task rewords two comments, which moves source offsets and so the bytes of the binary (`fdddf330`), and nothing else: against `d7e4b43a` its stdout, `.opb`, `.pbp` and exit code are identical on all 301 test models, fixed and free search, under `amo` (602 of 602), and against main's under the default (602 of 602).
+
+- `bin/main.ml`: `BAGUETTE_ALLDIFF_ROWS=pairs|amo` read once into `Encoding.alldiff_rows` before the compile (anything else: exit 2 with the two settings named); the usage text lists it.
+- `lib/proof/encoding.ml`: `add_all_different_amo` (the rows; `shared_values` finds the values held twice or more by a sweep over the ranges' ends, so two wide disjoint domains cost nothing), `derive_value_amo` (the one `pol` per value, written by `start_proof` after the direct encodings and before the root lemmas), `value_amo_id`. `add_all_different` and every other line untouched.
+- `lib/flatzinc/compile.ml`: `post_all_different` dispatches on the switch; under `amo` with `--e2e` it raises `E2e.Not_covered` (exit 3).
+- `lib/core/prop/alldiff.ml`: `make ?value_amo`; under the option `amo` (the one function every Hall, Regin and pigeonhole derivation gets its at-most-one from) takes D_v instead of pairs. Two routes, one rule, stated in the module header:
+  - NARROW: D_v plus a literal axiom `x_eq_v` per holder outside the set (one `pol`, K_v - m axioms);
+  - PAIRS: the existing induction (and D-0216's memo), where a pair is the CLAUSE `~x_eq_v \/ ~z_eq_v`, a `rup` against D_v alone (two literals where `pair_amo` cites five ids).
+  The rule: NARROW the whole set when K_v - m <= m - 1; else the induction whose base, the prefix of m - 1 (the Hall variables holding v), is NARROWED when K_v - (m - 1) <= (m - 1)(m - 2)/2 and built from pairs when not, the pruned variable joining by one step of m - 1 `rup` pairs. The prefix is the same node for every pruning of one Hall set, so it is hash-consed and written once.
+  The first build had NARROW only (binary `d9384690`): correct, but whirlpool d21 spent 43 % of its `pol` tokens on narrowed sets of 2 or 3 variables out of 441 (a fixed variable taking its value from another: K_v - 2 axioms where a pair is one line), and at 35 s wrote 1.36 GB of proof; with the rule (`d7e4b43a`) 390 MB at the same 23 nodes, top heap 638 M to 231 M words. The `rup` pair puts an `Explanation.Clause` into the counting under the option, which D-0061 had excluded for a reason D-0131 removed (alldiff.ml's header says so); the default has none.
+- PROOF-FORMAT section 3: new subsection `all_different's rows, and the per-value OPTION`; section 4's all_different row: one sentence. No normative sentence changed.
+- Tests: `test_proof` `test_d0271_amo_rows` (the rows as text, fixed variables, values held once, the sweep); `test_mutation` lanes `alldiff-amo` (section 6).
+
+### 6. Verification
+
+Default (`pairs`), binary `d7e4b43a`:
+
+| check | result |
+|---|---|
+| byte comparison against main's binary `87b44fa4`, every test model, fixed and free search, stdout + .opb + .pbp + exit code | 602 of 602 identical |
+| `scripts/check_fmt.sh`, `check_test_widths.py` | clean |
+| `dune runtest --root . --force` (ulimit 4 GB) | every suite passed, 0 FAIL (5 727 `ok` lines, test_mutation 185 checks) |
+| `run_model_tests.sh` / `free_model_tests.sh` | 301 / 301 passed |
+| `check_determinism.sh` | 602 + 8 runs identical |
+| diff lane, `--tier all` | 393 of 393 equal the reference |
+| diff lane, `--debug --tier all` | 377 of 377 equal the reference |
+| `scaling_lane.sh -j 4` | ok, every line within its threshold |
+| `factor_lane.sh` | ok, 90 runs, 36 proofs verified (release build `7a8295f3`) |
+| `e2e_lane.sh` | PASS (263 AGREE, 3 UNCHECKED, 0 DIFFER) |
+
+Option (`amo`), binary `d7e4b43a`, 0 rejected proofs anywhere:
+
+| check | result |
+|---|---|
+| `run_model_tests.sh` (fixed search, bits by default and `--bits-above none`, with and without proof) | 301 passed |
+| `free_model_tests.sh` (free search, proof verified, solution re-checked) | 301 passed |
+| the same two under `BAGUETTE_DEBUG=1` | 301 / 301 passed |
+| fuzz `globals` (seed 271) / `configs` (seed 271, 20 configurations each) | 498 ok + 2 MiniZinc errors / 9 880 runs ok + 6 MiniZinc errors; 0 disagreements |
+| fuzz `globals` restricted to alldiff, alldifferent_except_0, inverse, circuit (a scratch patch of streams.py's KINDS, not committed; seed 2710) | 500 ok, 0 disagreements |
+| Challenge sample at 500 nodes, proof verified (veripb 3.0.2, 900 s, 16 GiB) | 50 of 54 instances verified in both arms (BOUNDS, SATISFIABLE or NO CONCLUSION as printed), 0 rejected; the other four did not finish in 900 s / 16 GiB in EITHER arm (liner-sf and ma-path-finding: veripb out of memory; crosswords, yumi-dynamic: 900 s) |
+| `--e2e` on `e2e_alldiff_negconst_sat` | exit 3 with the diagnostic |
+
+Mutation evidence (`test_mutation`, 185 checks, all passed; the instance is test/models/alldiff_pigeonhole_narrow_sat, SATISFIABLE, solved under `amo`; each corruption refused at the RUP wording at full strength, "The constraint is not implied by reverse unit propagation (RUP) from core and derived database."):
+
+| lane | corruption | refused at |
+|---|---|---|
+| `amo-row-degree` | value 1's `.opb` row `>= 4` lowered to `>= 3` (at most TWO of five equal 1: a weaker model) | a later trace line (line 67 of the proof) |
+| `amo-row-flip` | `x0_ge_2` negated in that row | the same later line |
+| `amo-line-div` | value 2's derived line divides its rung sum by 3, not 2 | a later line (84) |
+| `amo-pair-flip` | the first `rup` pair `~x4_eq_1 \/ ~x0_eq_1` with `x4_eq_1` made positive | that line itself (65) |
+
+Measured and NOT a lane: dropping one channelling half from value 1's derived line verifies, because it leaves `x0_ge_2` where `~x0_eq_1` stood, and `x0_ge_2` implies `~x0_eq_1`: a stronger line the model also implies.
+
+### 7. Measurements (`pairs` against `amo`, binary `d7e4b43a` for both arms)
+
+**The five instances of D-0265** (`--max-heap-mb 8192`, 16 GiB address space, MemoryMax=32G, free search, 300 s; heap is OCaml's `top_heap_words` at exit, the live heap after the root is not separately measured):
+
+| instance | `.opb` lines, amo | pairs, no proof | amo, no proof | pairs, proof | amo, proof |
+|---|---|---|---|---|---|
+| 2013_ghoulomb_3-11-29 | 349523 | REFUSED (heap, compile) | 2437 nodes, no answer, compile 0.1 s, RSS 1.6 GB | REFUSED (heap, compile) | 168 nodes, no answer, compile 0.5 s, RSS 8.0 GB, .pbp 6139 MB |
+| 2020_whirlpool_d21 | 202884 | 887 nodes, no answer, compile 83.4 s, RSS 9.7 GB | 1411 nodes, no answer, compile 0.1 s, RSS 0.6 GB | REFUSED (heap, compile) | REFUSED (heap, search, node 47), compile 0.5 s |
+| 2020_whirlpool_d29 | 723748 | REFUSED (heap, compile) | 242 nodes, no answer, compile 0.3 s, RSS 1.6 GB | REFUSED (heap, compile) | REFUSED (heap, search, node 31), compile 1.8 s |
+| 2020_whirlpool_d30 | 827660 | REFUSED (heap, compile) | 227 nodes, no answer, compile 0.4 s, RSS 1.7 GB | REFUSED (heap, compile) | REFUSED (heap, search, node 32), compile 2.1 s |
+| 2023_multi-agent-graph-coverage n75 | 4904704 | REFUSED (heap, compile) | 1772 nodes, incumbent, compile 30.3 s, RSS 8.7 GB | REFUSED (heap, compile) | 1543 nodes, no answer, compile 117.2 s, RSS 6.6 GB, .pbp 196 MB |
+
+So without proof `amo` turns 4 refusals (and one 83 s compile at 9.7 GB) into five searches under 1.7 GB but multi-agent (8.7 GB RSS, an incumbent 40 474 that pairs never reaches). With proof `pairs` refuses all five in the compile; `amo` compiles every one in 0.1 to 2.1 s (multi-agent 117 s, its other constraints' 23.7 GB `.opb`), ghoulomb and multi-agent search to the time limit, and the three whirlpools reach the search and are stopped by the heap budget after 31 to 47 nodes. What fills that heap was not measured here: not the alldiff rows (D-0265's probe would name it); the first build's NARROW-only route hit it in 60 to 73 s, the final one at 270 to 305 s at the same node counts.
+
+**The alldiff sample, at 500 nodes** (the 46 alldiff instances of the tuning set, D-0205, plus elitserien handball9 and 12, tppv circ8bbal and circ14cnonbal and costas13 from D-0242's samples, plus the diff corpus's three alldiff instances; flat `.fzn` of the 2026-11-23 series; perf `instructions:u`; per node = (I(500 nodes) - I(1 node)) / (nodes - 1)):
+
+| instance | nodes | same search | instr/node P (M) | A/P with proof | A/P without | `.opb` P -> A | `.pbp` P -> A | `pol` tokens P -> A | veripb s P / A |
+|---|---|---|---|---|---|---|---|---|---|
+| 2014_elitserien_handball12 | 501 | yes | 46.4 | 0.844 | 0.967 | 27 MB -> 15 MB | 108 MB -> 90 MB | 7172624 -> 4423346 | 23.04 / 25.24 |
+| 2023_elitserien_handball9 | 501 | yes | 46.8 | 0.849 | 0.971 | 27 MB -> 15 MB | 109 MB -> 92 MB | 7213264 -> 4480189 | 22.35 / 23.96 |
+| 2022_traveling-tppv_circ14cnonbal | 501 | yes | 31.5 | 0.815 | 1.007 | 25 MB -> 21 MB | 71 MB -> 59 MB | 3920229 -> 1623838 | 27.69 / 26.67 |
+| 2014_traveling-tppv_circ8bbal | 501 | yes | 15.7 | 0.852 | 0.999 | 3 MB -> 2 MB | 29 MB -> 25 MB | 1545064 -> 690349 | 3.67 / 3.81 |
+| costas13 | 291 | yes | 8.5 | 0.856 | 0.993 | 2 MB -> 1 MB | 11 MB -> 9 MB | 1048240 -> 734630 | 0.87 / 0.85 |
+| 2015_costas-array_16 | 501 | yes | 14.4 | 0.881 | 0.991 | 3 MB -> 1 MB | 30 MB -> 27 MB | 3123184 -> 2305562 | 2.72 / 2.74 |
+| 2011_cyclic-rcpsp_easy_6 | 501 | yes | 7.5 | 0.903 | 0.999 | 2 MB -> 2 MB | 17 MB -> 16 MB | 2311628 -> 2052449 | 1.22 / 1.19 |
+| 2018_soccer-computational_xIGData_24_16_14_2 | 501 | yes | 4.2 | 0.999 | 0.998 | 3 MB -> 3 MB | 9 MB -> 9 MB | 254734 -> 255162 | 0.51 / 0.51 |
+| 2020_lot-sizing_pigment15b.psp | 501 | yes | 21.7 | 0.997 | 1.001 | 2 MB -> 2 MB | 27 MB -> 27 MB | 800555 -> 744668 | 3.93 / 3.31 |
+| 2013_ghoulomb_3-9-16 | 501 | yes | 122.9 | 0.962 | 1.017 | 248 MB -> 9 MB | 230 MB -> 222 MB | 37907185 -> 36103450 | 25.06 / 22.57 |
+| 2020_whirlpool_d8 | 501 | yes | 73.8 | 0.617 | 0.990 | 17 MB -> 2 MB | 85 MB -> 68 MB | 12708029 -> 7379252 | 16.53 / 17.64 |
+| 2023_multi-agent-graph-coverage_rnd_n10_p2000_c15_s1 | 501 | yes | 10.9 | 0.654 | 0.998 | 3 MB -> 3 MB | 23 MB -> 16 MB | 1905317 -> 643145 | 1.91 / 1.92 |
+| 2022_sudoku_opt_sudoku_p90 | 501 | yes | 131.6 | 0.550 | 0.993 | 38 MB -> 18 MB | 243 MB -> 122 MB | 30242665 -> 9779752 | 62.51 / 49.74 |
+| 2020_cable_tree_wiring_A031 | 501 | yes | 8.9 | 0.505 | 1.006 | 1 MB -> 1 MB | 16 MB -> 11 MB | 1904506 -> 599486 | 1.29 / 1.03 |
+| 2015_cvrp_A-n64-k9.vrp | 501 | yes | 97.2 | 1.031 | 0.953 | 3863 MB -> 2571 MB | 49 MB -> 53 MB | 236750 -> 1179482 | 34.63 / 17.55 |
+| 2024_graph-clear_planar_n20_seed2022_14 | 501 | yes | 2.7 | 1.042 | 0.945 | 6 MB -> 5 MB | 0 MB -> 0 MB | 780 -> 3760 | 0.08 / 0.09 |
+
+- The SEARCH does not move: same nodes, decisions, conflicts, status and stdout in all four arms on every instance that reached 500 nodes (50 of 54; the other four are proof arms that met the 300 s limit (crosswords, fbd1, yumi-dynamic: `amo` got 3 to 58 nodes further) or the heap budget at the same node 99 (liner-sf), with the same stdout as the other arm of their mode). It cannot: no propagator reads the `.opb`, and `Alldiff`'s pruning does not depend on which rows exist; only the explanations' at-most-one summands differ.
+- Without proof the per-node cost is the same (geomean A/P 1.001 over 54, 0.945 to 1.241); the outliers both ways are a major GC landing inside or outside the measured window (ma-path-finding: one more major collection in the `amo` run of a 400 M-word heap), not alldiff work.
+- With proof `amo` costs geomean 0.869 of `pairs` over 52 (0.505 to 1.042) per node: fewer and shorter at-most-one derivations (`pol` tokens geomean 0.693, 0.263 to 4.98: cvrp writes 5 times the tokens and graph-clear 3 760 against 780, both on tiny totals), most where the Hall sets cover most of a small scope (sudoku, cable-tree-wiring, yumi, tpp, multi-agent n10: 0.50 to 0.66).
+- The `.opb` shrinks (geomean 0.659, 0.037 on ghoulomb 3-9-16 (248 MB to 9 MB), 0.11 on whirlpool d8); the `.pbp` too (geomean 0.888, 0.496 on sudoku to 1.125); veripb time is unchanged within the noise of a loaded node (geomean 1.016 over 50, wall time on a node at load 30 to 40).
+
+**Complete answers at 300 s, both arms interleaved in one campaign** (the same sample, with proof, veripb on every complete answer):
+
+| | pairs | amo |
+|---|---|---|
+| instances | 54 | 54 |
+| complete (optimal or UNSAT) | 8 | 9 |
+| ...verified by veripb (900 s, 16 GiB) | 8 | 8 |
+| an incumbent, not proved optimal | 41 | 40 |
+| refused by the heap budget | 2 | 1 |
+| rejected proofs | 0 | |
+
+Status differs on: 2014_elitserien_handball12 (pairs ----------, amo ==========)
+
+Of the eight answers both arms complete, the time to the same answer is within a few percent on six and shorter under `amo` on two (cyclic-rcpsp easy_6 17.2 s against 21.4 s, elitserien handball9 197 s against 228 s, the same 12 799 nodes). elitserien handball12 completes under `amo` only (15 044 nodes, optimum proved at 289 s; `pairs` reaches 14 531 nodes and the incumbent 2 at 300 s): its 16 % per-node saving at 500 nodes (A/P 0.844) is what moves it, the tree is the same. cvrp A-n64-k9 keeps running under `amo` where `pairs` meets the heap budget after its incumbent. veripb on the complete answers: 8 of 9 verified under `amo`, 8 of 8 under `pairs`; handball12's 4.0 GB `amo` proof did not finish in 900 s (not a rejection; `pairs` has no complete answer there to compare).
+
+### 8. Recommendation, and what changing the default would take
+
+| option | consequence |
+|---|---|
+| keep `pairs` (today) | nothing moves; the five alldiff refusals stay, whirlpool d29's `.opb` stays 297 M rows |
+| make `amo` the default | the `.opb` of every alldiff model changes (rows per value), so every proof hash of an alldiff model moves; same search; with proof 13 % fewer instructions per node and 11 % smaller proofs on the sample (geomeans over 52 and 50 instances); the refused alldiff instances compile and search; `--e2e` refuses alldiff models (exit 3) until the prefix derives the per-value row |
+| `amo` by default, `pairs` under `--e2e` | the same, with `--e2e` unchanged; two encodings of one constraint to keep, each tested |
+
+Recommendation: make `amo` the default, with `--e2e` selecting `pairs` until e2e.ml derives the per-value row from cake's pairs (the induction of `amo`, over order literals and the ladder, in the prefix). It is the reversible option among the two that move: a one-line switch back, and the default code path is kept intact under `pairs`. What it takes: (1) the default flipped in `bin/main.ml` (and `--e2e` forcing `pairs`), in its own commit; (2) PROOF-FORMAT section 3's subsection made the normative text, the pairwise paragraph becoming the `--e2e` case, and section 4's row rewritten around D_v; (3) the diff lanes re-recorded (their three alldiff instances' proof hashes and line counters; search counters unchanged), the scaling and factor baselines re-measured; (4) test_endtoend's D-0216 lane (`pair_builds`, pairwise nodes) pinned to `pairs`, and a Challenge series (CLAUDE.md: a change that moves the encoding). Not done here, by the task's rule.
+
+Left: the whirlpools' heap with proof after the root (above); inverse's implied all_different keeps pairwise root lemmas under both settings (a per-value lemma is not one `rup` from its channel rows); `tools/e2e/bridge.py` expects pairs.
+
+Results, scripts and logs: `/cluster/arthur/baguette-results/pairs/` (README first). Revert: the option is inert unless `BAGUETTE_ALLDIFF_ROWS=amo`; dropping it is reverting `588c4a1c`, `3652fdb2`, `99ab4572`.
+
+## D-0272  [AUTONOME] `BAGUETTE_ALLDIFF_ROWS=amo` becomes the default: all_different's model rows are one per value, the pairwise rows stay for `--e2e` and behind the switch
+
+**Status**: DECIDED (orchestrator, 2026-11-28), implementation to follow gate 146 in its own commit. An ENCODING default,
+so a normative text changes (PROOF-FORMAT section 3): taken under the user's instruction of 2026-11-27 for decisions of this
+kind ("soit tu sais les trancher toi-même soit il faut faire des comparaisons … sur un set d'instances hétérogènes").
+
+### 1. The evidence (D-0271, agent-pairs, both arms interleaved in one campaign)
+
+| | `pairs` (today) | `amo` |
+|---|---|---|
+| rows for one all_different over n variables and d shared values | n(n−1)/2·d (297 M on whirlpool d29) | d (841 on d29) |
+| new variable or name in the .opb | | none: the row is linear in the existing order literals |
+| the search on 54 alldiff instances at 500 nodes | | IDENTICAL (same nodes, same answers) |
+| with proof, same 54: instructions per node / proof size / .opb size | | −13 % / −11 % / −34 % |
+| veripb time; cost without proof | | unchanged |
+| rejected proofs (301 models × 4 suites, fuzz globals and configs, 500 alldiff-only fuzz models, 50 Challenge proofs) | | 0 |
+| mutations of the new row and its derivation (4 kinds, satisfiable model) | | each refused with veripb's full wording |
+| D-0265's 5 refused instances, without proof | 4 refused | all 5 run to 300 s |
+| the same, with proof | all 5 refused at compile | all 5 compile (0.1 to 117 s), 2 search to the limit, 3 reach the search then hit the heap budget |
+| 300 s campaign on the alldiff sample, complete answers | 8 | 9 (handball12 proved optimal) |
+
+### 2. Options
+
+| Option | Consequence |
+|---|---|
+| keep `pairs` as default | five instances stay refused at compile; every alldiff proof carries a .opb a third larger; nothing to re-record |
+| `amo` as default (CHOSEN) | the search does not move, so answers can only change through time and memory, and every measured direction is neutral or better; lanes re-recorded for proof and .opb hashes; PROOF-FORMAT 3 gains a normative subsection; `--e2e` keeps `pairs` because the end-to-end prefix derives baguette's rows from cake's statement of all_different pair by pair |
+| wait for a held-out comparison | the comparisons of D-0252 and D-0267 exist to arbitrate changes of SEARCH, where gains and losses mix and noise is 3 answers; here the search is identical run for run, so a held-out set would measure only the speed-up already measured per node |
+
+### 3. Conditions on the implementation
+
+- its own commit, reverting which restores `pairs`; `BAGUETTE_ALLDIFF_ROWS=pairs` keeps today's rows;
+- under `--e2e` the solver selects `pairs` by itself (no refusal), and says so on stderr once; the e2e lane must PASS;
+- nothing weakened: model tests' expected OUTPUTS unchanged under both searches; the lanes' stdout and search counters
+  unchanged (only .opb and .pbp hashes and the row and line counters may move), re-recorded by the orchestrator after the gate;
+- the mutation lanes for `amo` become part of the default mutation run, and the `pairs` ones stay;
+- PROOF-FORMAT section 3: the per-value row is the default and normative, the pairwise rows the option; old and new text
+  quoted in the implementation's handoff note.
+
+### 4. Revert
+
+Revert the default commit. The next Challenge series carries this default (the one running on fataepyc-07, D-0266, was
+built before it and does not).

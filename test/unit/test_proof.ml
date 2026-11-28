@@ -3920,6 +3920,36 @@ let test_m7t27_ladder_ids_are_arithmetic () =
   check "M7-T27 (b): a hole is not a rung" (rung "h" 1 <> Encoding.hole_id e "h" 1);
   Encoding.encoding_budget := saved
 
+(* M18-coverage-T9 (D-0271): the per-value rows of the OPTION BAGUETTE_ALLDIFF_ROWS=amo,
+   read back as text. u, w over 1..3 and v over 2..5 and f fixed at 3: value 1 is held by u
+   and w only, 2 by u, v, w, 3 by all four (f contributes nothing and counts), 4 and 5 by v
+   alone (no row). Each holder's pair is [ne_clause_lits], constant halves dropped. *)
+let test_d0271_amo_rows () =
+  let saved = !Encoding.encoding_budget in
+  Encoding.encoding_budget := None;
+  let e = Encoding.create () in
+  Encoding.declare_int e "u" ~lo:1 ~hi:3;
+  Encoding.declare_int e "v" ~lo:2 ~hi:5;
+  Encoding.declare_int e "w" ~lo:1 ~hi:3;
+  Encoding.declare_int e "f" ~lo:3 ~hi:3;
+  let before = Encoding.n_constraints e in
+  let fam = Encoding.add_all_different_amo e [ "u"; "v"; "w"; "f" ] in
+  let rows = Array.of_list (List.map Opb.constr_to_string (Encoding.constraints e)) in
+  check "D-0271: one row per value held twice or more (1, 2, 3), not per pair"
+    (Encoding.n_constraints e - before = 3);
+  let at k = rows.(before + k) in
+  check_eq "D-0271: value 1, the lower bound of u and w"
+    ~expected:"+1 u_ge_2 +1 w_ge_2 >= 1 ;" ~got:(at 0);
+  check_eq "D-0271: value 2, v's lower bound and u's, w's interior"
+    ~expected:"+1 ~u_ge_2 +1 u_ge_3 +1 v_ge_3 +1 ~w_ge_2 +1 w_ge_3 >= 2 ;" ~got:(at 1);
+  check_eq "D-0271: value 3, f fixed at 3 counts and contributes nothing"
+    ~expected:"+1 ~u_ge_3 +1 ~v_ge_3 +1 v_ge_4 +1 ~w_ge_3 >= 3 ;" ~got:(at 2);
+  check "D-0271: no derived line before start_proof" (Encoding.value_amo_id e fam 2 = None);
+  check "D-0271: shared_values sweeps the ends, two disjoint ranges share nothing"
+    (Encoding.shared_values [ (0, 1_000_000); (2_000_000, 3_000_000) ] = []
+    && Encoding.shared_values [ (1, 3); (2, 5); (1, 3); (3, 3) ] = [ 1; 2; 3 ]);
+  Encoding.encoding_budget := saved
+
 (* M9-no-proof-T2 (D-0126's id rule, rule 1). The same encoding built under [Retain_rows]
    and under [Discard_rows] -- the sink `--no-proof` and every run without --proof use,
    and the one whose ladder loop is short-circuited to its count -- mints the same ids
@@ -5077,6 +5107,7 @@ let () =
   test_lit_rendering_is_the_reference ();
   test_m7t27_streamed_opb_is_byte_identical ();
   test_m7t27_ladder_ids_are_arithmetic ();
+  test_d0271_amo_rows ();
   test_m9_discard_rows_mint_the_same_ids ();
   test_bits_naming ();
   test_bits_declare ();
