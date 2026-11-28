@@ -4143,6 +4143,124 @@ let test_d0214_element_reason_on_demand () =
          | _ -> false)
        entries)
 
+(* D-0268 (M18-coverage-T9): element removes its result's unsupported interior values as
+   ONE trail entry, with one reason and a derivation per value. At the root the result
+   loses 3, 4, 7 and 8 (the array carries 2, 5, 6, 9). Under k = 2 and m = 3 the two
+   int_ne punch i <> 2 and i <> 3, so positions 2 and 3 (values 5 and 6) die and the next
+   pass removes 5 and 6 together. The derivation of 6 must read 5 as a hole already (the
+   frame of a per-value removal did, D-0268's [pending] record) and cite 5's own
+   derivation for dead position 2, where 5's must not cite 6's; and each value's
+   derivation is the same object every time it is asked. *)
+let test_d0268_element_one_entry () =
+  let t =
+    compile_src
+      "var 1..4: i;\n\
+       var 1..4: k;\n\
+       var 1..4: m;\n\
+       var 0..9: c;\n\
+       constraint array_int_element(i, [2, 5, 6, 9], c);\n\
+       constraint int_ne(i, k);\n\
+       constraint int_ne(i, m);\n\
+       solve satisfy;\n"
+  in
+  sink_proof t.Compile.encoding;
+  let st = t.Compile.store and eng = t.Compile.engine in
+  let v n = Option.get (Store.var_named st n) in
+  let dec lit = Reason.because ~concludes:None Reason.none (Explanation.decision lit) in
+  let fixpoint () =
+    match Engine.propagate eng st with
+    | Engine.Fixpoint -> ()
+    | Engine.Conflict _ -> failwith "D-0268: the scene has no conflict"
+  in
+  let holes_of_c from =
+    List.filter_map
+      (fun i ->
+        let e = Store.trail_entry st i in
+        if Baguette_core.Var.equal e.Store.var (v "c") then
+          match Domain.classify ~old:e.Store.old ~now:e.Store.now with
+          | Domain.Holes vs -> Some (e, vs)
+          | _ -> None
+        else None)
+      (List.init (Store.trail_length st - from) (fun i -> from + i))
+  in
+  fixpoint ();
+  check "D-0268: at the root, the result's four unsupported values go in ONE entry"
+    (match holes_of_c 0 with [ (_, [ 3; 4; 7; 8 ]) ] -> true | _ -> false);
+  Store.new_level st;
+  List.iter
+    (fun (n, x) ->
+      ignore (Store.set_hi st (v n) x (dec (Lit.le n x)));
+      ignore (Store.set_lo st (v n) x (dec (Lit.ge n x))))
+    [ ("k", 2); ("m", 3) ];
+  let from = Store.trail_length st in
+  fixpoint ();
+  match holes_of_c from with
+  | [ (e, [ 5; 6 ]) ] ->
+      let r w = render_deep (Store.removal_explanation st e w) in
+      check "D-0268: under the decisions, 5 and 6 go in ONE entry" true;
+      check "D-0268: each value's derivation is memoised"
+        (Store.removal_explanation st e 6 == Store.removal_explanation st e 6);
+      check "D-0268: the derivations differ per value" (r 5 <> r 6);
+      check "D-0268: 6's derivation cites 5's, as the per-value frame read it"
+        (string_contains (r 5) (r 6));
+      check "D-0268: 5's derivation does not cite 6's, 6 came after it"
+        (not (string_contains (r 6) (r 5)))
+  | l ->
+      check
+        (Printf.sprintf
+           "D-0268: under the decisions, 5 and 6 go in ONE entry (got %d entries)"
+           (List.length l))
+        false
+
+(* D-0268: table removes each run of values no tuple carries as ONE store change, on an
+   empty reason. test/models/table_gap_sat.fzn's scene: x over 0..20, the column
+   {0, 7, 12, 20}, y <> 1 killing the tuples of 0 and 12. Seventeen values are carried by
+   no tuple; they took seventeen entries and now take at most two (one run, or two if the
+   dead tuple's 12 comes between them), with 0 and 12 one entry each. *)
+let test_d0268_table_runs () =
+  let t =
+    compile_src
+      "var 0..20: x;\n\
+       var 1..3: y;\n\
+       var bool: s1;\n\
+       var bool: s2;\n\
+       var bool: s3;\n\
+       var bool: s4;\n\
+       constraint baguette_table([x, y], [0, 1, 7, 2, 12, 1, 20, 3], [s1, s2, s3, s4]);\n\
+       constraint int_ne(y, 1);\n\
+       solve satisfy;\n"
+  in
+  sink_proof t.Compile.encoding;
+  let st = t.Compile.store and eng = t.Compile.engine in
+  let x = Option.get (Store.var_named st "x") in
+  (match Engine.propagate eng st with
+  | Engine.Fixpoint -> ()
+  | Engine.Conflict _ -> failwith "D-0268: the table scene has no conflict");
+  let on_x =
+    List.filter
+      (fun e -> Baguette_core.Var.equal e.Store.var x)
+      (List.init (Store.trail_length st) (Store.trail_entry st))
+  in
+  let uncarried =
+    List.filter (fun v -> not (List.mem v [ 0; 7; 12; 20 ])) (List.init 19 succ)
+  in
+  let runs =
+    List.filter_map
+      (fun e ->
+        match Domain.classify ~old:e.Store.old ~now:e.Store.now with
+        | Domain.Holes vs when List.length vs > 1 -> Some vs
+        | _ -> None)
+      on_x
+  in
+  check "D-0268: x ends on {7, 20}" (Domain.to_list (Store.get st x) = [ 7; 20 ]);
+  check
+    (Printf.sprintf
+       "D-0268: the 17 uncarried values go in at most two entries (%d entries on x)"
+       (List.length on_x))
+    (List.length runs <= 2
+    && List.sort compare (List.concat runs) = uncarried
+    && List.length on_x <= 4)
+
 (* M11-complexity-T8 / D-0155: [Element.add_facts] replaced a quadratic [List.mem] /
    [@] fold with a hashed accumulator, and the list it returns is the order of a trace
    line's tail, which the proof diff compares byte for byte. So the new function is held to
@@ -11012,6 +11130,8 @@ let () =
   test_d0026_all_declared ();
   test_d0091_element_root_defining ();
   test_d0214_element_reason_on_demand ();
+  test_d0268_element_one_entry ();
+  test_d0268_table_runs ();
   test_d0155_element_add_facts_oracle ();
   test_ix6_justification_snapshot ();
   test_ix6_cross_conflict_snapshot ();

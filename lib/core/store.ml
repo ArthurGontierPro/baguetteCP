@@ -9,6 +9,14 @@
    change (stamped from the slot the engine sets around each run, so no mutator takes an
    id; see [with_running]). Every change therefore carries its explanation (I-P4).
 
+   One more mutator, the BULK RULE ([remove_interior], D-0268): several interior values
+   of one variable removed by ONE entry, with one reason shared by every value and a
+   derivation per value ([removal_explanation] reads it). It is the run of [remove]
+   entries a Single_row propagator would push with the same reason, merged; the comment
+   at [remove_interior] goes through every reader of an entry and how it is answered.
+   Element's result pruning uses it, where it pushed 15 million entries of 650 bytes for
+   one declared gap (D-0265).
+
    Backtracking. A level mark records where the trail and the explanation arena stood
    when the level opened; [backtrack] pops entries back to it, writing each entry's [old]
    domain back. Three trail invariants (docs/INVARIANTS.md) hold:
@@ -72,10 +80,10 @@ let no_support = -1
    without bound over a long search. *)
 type mark = { trail_mark : int; reason_mark : int }
 
-(* One recorded domain change. [apply] is its only constructor and builds a fresh record
-   for every push. Twelve fields: [var], [old] and [why] serve undo and conflict
-   analysis; the other nine exist for the proof and for conflict analysis, and [cites],
-   a memo, is the only mutable one. docs/ARCHITECTURE.md section 3 lists them too.
+(* One recorded domain change. [apply] and [remove_interior] (D-0268) are its only
+   constructors and build a fresh record for every push. Thirteen fields: [var], [old]
+   and [why] serve undo and conflict analysis; the other ten exist for the proof and for
+   conflict analysis, and [cites], a memo, is the only mutable one. docs/ARCHITECTURE.md section 3 lists them too.
 
    [old] is what the domain was, so backtracking is a single array write (I-T1).
 
@@ -162,11 +170,19 @@ type entry = {
   sup_lo : int;
   sup_hi : int;
   pos : int;
-      (* The trail position this entry was pushed at, [-1] for [dummy_entry]. [apply] is
-         the only constructor and pushes the record it builds at exactly this position,
+      (* The trail position this entry was pushed at, [-1] for [dummy_entry]. [apply] (and
+         [remove_interior]) is the only constructor and pushes the record it builds at
+         exactly this position,
          and no entry is ever re-pushed, so an entry occupies one trail position for its
          whole life. lib/core/trace.ml's [position_of] reads it to answer in O(1) what it
          used to answer by walking its list of written entries (M6-T15, D-0090). *)
+  per_value : (int -> Explanation.t) option;
+      (* [None] for every entry but one made by [remove_interior] (D-0268): an entry that
+         removed SEVERAL interior values with one reason, whose derivation is per value.
+         [removal_explanation] answers "the derivation that [v] is gone" from it; [why]
+         then holds the first removed value's, so that a reader of the entry as a whole
+         ([explanation], I-T3) still finds a derivation of something the entry did.
+         One word per entry. *)
   mutable cites : int array option;
       (* lib/core/analysis.ml's memo of what this entry's reason CITES, as the trail
          positions that established the facts it read (packed with their level and
@@ -326,6 +342,7 @@ let dummy_entry =
     sup_lo = no_support;
     sup_hi = no_support;
     pos = -1;
+    per_value = None;
     cites = None;
   }
 
@@ -1124,6 +1141,7 @@ let apply t v (r : Domain.result) (j : Reason.justified) =
           sup_lo = t.lo_sup.(i);
           sup_hi = t.hi_sup.(i);
           pos = at;
+          per_value = None;
           cites = None;
         };
       (* The support of a bound this entry moved is this entry. A bound it left alone
@@ -1145,6 +1163,102 @@ let set_lo t v bound j = apply t v (Domain.set_lo (get t v) bound) j
 let set_hi t v bound j = apply t v (Domain.set_hi (get t v) bound) j
 let remove t v value j = apply t v (Domain.remove (get t v) value) j
 let fix t v value j = apply t v (Domain.fix (get t v) value) j
+
+(* THE BULK RULE (D-0268, M18-coverage-T9): several interior values removed by ONE trail
+   entry, with ONE reason and a derivation PER VALUE.
+
+   [remove_interior t v vs reason ~justify] removes from [v] every value of [vs]
+   (ascending, each strictly inside [v]'s current bounds, [Domain.remove_interior]) that
+   [v] still holds, as one entry whose [reason] is shared by every value and whose
+   [per_value] is [justify]: [justify w] is the derivation that [w] is gone. It is the
+   entry the sequence [remove t v w_1 j_1], [remove t v w_2 j_2], ... would have pushed
+   one per value when every [j_k] carries the same reason and concludes nothing (an
+   interior hole concludes no bound fact), merged: same [prop], same level, the same
+   [old] as the first and the same [now] as the last. Element pruned a 15-million-value
+   gap of its result that way, one entry of 650 bytes per value (D-0265).
+
+   Why every reader of an entry still gets its answer:
+     - undo (I-T1): [old] is written back and [Domain.undo] truncates the log to [old]'s
+       version, popping every slot the entry appended; nothing between the merged
+       entries could have been undone alone, since they were pushed together.
+     - I-T2: one entry at the current level. I-T3: one arena slot ([why], the first
+       removed value's derivation), rewound with the trail like any other.
+     - I-P4: [reason] and [justify] are both mandatory; neither has a default.
+     - [remover t ~before ~var w] (and [remover_at]): the binary search over [var]'s
+       history finds this entry for every [w] it removed, because "[w] is gone from
+       [now]" still turns true at one entry of the history and stays true.
+     - "WHICH derivation removed [w]": [removal_explanation t e w], which every reader
+       that asks about one value now calls ([reasons_under] for the holes a bound
+       settled over, [removal_explanation_at] for an Element frame). On an ordinary
+       entry it is [explanation t e].
+     - the reason ([Reason.facts e.reason]): what conflict analysis ([Analysis]'s hole
+       folds), [Trace]'s settle facts and every remover-facts reader read. It is per
+       ENTRY, so the rule requires it to be the same for every value, which is why the
+       mutator takes one reason and not one per value.
+     - [Trace.lines]: [Domain.classify] of the entry is [Holes] of the removed values,
+       ascending, and [Trace] writes one line per hole with the entry's facts, in that
+       order, which is the line each merged entry wrote, in the order they were pushed
+       (D-0268 shows the .pbp byte-identical on the test models and the lanes).
+     - [derive_ahead] writes [why] ahead of an entry's lines, which is one derivation for
+       one entry; a bulk entry has several, so the rule is refused inside
+       [deriving_ahead]: only a [Single_row] family (a trace line RUP with nothing written
+       ahead) may use it.
+     - [Engine]: the entry is one [Holes] change of [v], which wakes and masks exactly what
+       the first merged entry did; the others woke nothing new.
+
+   [justify] must answer the same physical value for the same [w] (memoise it): a
+   derivation is emitted once and cited by its line afterwards ([Justify] records the line
+   on the thunk), so two answers for one value would be two lines. The store calls it for
+   the first removed value at the push (the arena slot), and under BAGUETTE_DEBUG for
+   every removed value, to run the agreement check of D-0026 on each pair of the shared
+   reason and one value's derivation, which is what each merged entry was checked by. *)
+let remove_interior t v (vs : int array) (reason : Reason.t)
+    ~(justify : int -> Explanation.t) =
+  if t.current_ahead then
+    invalid_arg
+      "Store.remove_interior: a bulk entry has a derivation per value, and \
+       [deriving_ahead] writes one derivation ahead of an entry (D-0268)";
+  let i = Var.to_int v in
+  let old = t.domains.(i) in
+  match Domain.remove_interior old vs with
+  | Domain.Unchanged -> Unchanged
+  | Domain.Failed -> assert false (* an interior removal never empties a domain *)
+  | Domain.Changed d ->
+      let removed =
+        match Domain.classify ~old ~now:d with Domain.Holes ws -> ws | _ -> assert false
+      in
+      let first = List.hd removed in
+      if Debug.enabled then (
+        Debug.check "D-0268: a bulk removal moves no bound" (fun () ->
+            Domain.lo d = Domain.lo old && Domain.hi d = Domain.hi old);
+        Debug.check "D-0268: [justify] is memoised" (fun () ->
+            justify first == justify first);
+        List.iter
+          (fun w ->
+            check_agreement t
+              { Reason.reason; justification = justify w; concludes = None })
+          removed);
+      let why = Explanation.Arena.add t.reasons (justify first) in
+      let at = t.trail_len in
+      push_hist t.all_hist t.all_hn i at;
+      push_entry t
+        {
+          var = v;
+          old;
+          now = d;
+          why;
+          reason;
+          concludes = None;
+          prop = t.current_prop;
+          ahead = false;
+          sup_lo = t.lo_sup.(i);
+          sup_hi = t.hi_sup.(i);
+          pos = at;
+          per_value = Some justify;
+          cites = None;
+        };
+      t.domains.(i) <- d;
+      Changed
 
 (* ------------------------------------------------------------- backtracking *)
 
@@ -1235,6 +1349,12 @@ let trail_entries t =
    are monotone; [check_invariants] asserts it. *)
 let level_marks t = List.init t.n_levels (fun i -> t.marks.(i).trail_mark)
 let explanation t e = Explanation.Arena.get t.reasons e.why
+
+(* The derivation that [w] is gone, for an entry that removed [w]: the entry's own
+   explanation, or, for a bulk entry ([remove_interior], D-0268), the one its [justify]
+   gives for [w]. *)
+let removal_explanation t e w =
+  match e.per_value with None -> explanation t e | Some f -> f w
 
 (* One trail entry by position, oldest first -- the order [Trace] walks, and the order
    the proof's trace lines have to be written in. [trail_entries] above is the other
@@ -1418,7 +1538,7 @@ let reasons_under t v ~support ~settled =
     :: List.filter_map
          (fun h ->
            Option.map
-             (fun (r : entry) -> Explanation.Arena.get t.reasons r.why)
+             (fun (r : entry) -> removal_explanation t r h)
              (remover t ~before:support ~var:v h))
          (settled e)
 
@@ -1553,6 +1673,7 @@ let hi_reasons_at h v =
    above it. *)
 let remover_at h ~var v = remover h.h_store ~before:h.h_upto ~var v
 let explanation_at h e = explanation h.h_store e
+let removal_explanation_at h e w = removal_explanation h.h_store e w
 let at_root_at h pos = at_root h.h_store pos
 
 (* The decision level the entry at trail position [i] belongs to: the number of open

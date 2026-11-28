@@ -220,6 +220,25 @@ let remove store v value j =
   | Const c -> if value <> c then Store.Unchanged else fail store j
   | Affine { base; map } -> Store.remove store base (Lit.unapply map value) j
 
+(* [Store.remove_interior] (D-0268) at the translated values: [vs] ascending in the VIEW,
+   each strictly inside the view's bounds, one shared [reason], [justify] keyed by the
+   view's value. The base's values are ascending too, reversed under a negation. A
+   [Const] has no interior, so there is nothing to remove. *)
+let remove_interior store v (vs : int array) reason ~(justify : int -> Explanation.t) =
+  match v with
+  | Const _ -> Store.Unchanged
+  | Affine { base; map } ->
+      if (not map.Lit.negated) && map.Lit.offset = 0 then
+        Store.remove_interior store base vs reason ~justify
+      else
+        let n = Array.length vs in
+        let bs =
+          if map.Lit.negated then Array.init n (fun j -> Lit.unapply map vs.(n - 1 - j))
+          else Array.map (Lit.unapply map) vs
+        in
+        Store.remove_interior store base bs reason ~justify:(fun b ->
+            justify (Lit.apply map b))
+
 let fix store v value j =
   match v with
   | Const c -> if value = c then Store.Unchanged else fail store j

@@ -1,0 +1,12 @@
+% M18-coverage-T9 (D-0268): element's result over a wide declared range with gaps between
+% the array's values. c over 0..30, the array [3, 10, 11, 25, 30]; c <= 26 kills position
+% 5 at the root. The result's unsupported interior values (4..9, 12..24) go in ONE store
+% change, and again, fewer, under each decision on k (int_ne(i, k) kills a position, whose
+% value is removed with the values of the same pass above it reading it as a hole).
+var 1..5: i :: output_var;
+var 0..30: c :: output_var;
+var 1..5: k :: output_var;
+constraint array_int_element(i, [3, 10, 11, 25, 30], c);
+constraint int_ne(i, k);
+constraint int_le(c, 26);
+solve :: int_search([k, i], input_order, indomain_max, complete) minimize c;

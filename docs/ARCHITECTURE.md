@@ -297,13 +297,14 @@ the entry that established each bound, maintained by `apply` and restored by `un
 which is what let `linear.ml`'s per-pruning backward trail scan be deleted.
 
 So "keep trail records small" above is a goal the entry only partly meets. It has
-**twelve fields** today (`lib/core/store.ml`, `type entry`): `var`, `old`, `now` and `why`
+**thirteen fields** today (`lib/core/store.ml`, `type entry`): `var`, `old`, `now` and `why`
 for undo and conflict analysis; `reason` and `concludes`, the facts a trace line negates
 and the fact it states (proof-side); `prop`, the instance that made the entry; `ahead`, set
 when the pruning's derivation must be written ahead of its trace line (I-X10, D-0082);
 `sup_lo` and `sup_hi`, the supports that replaced the backward scan; `pos`, the entry's
-own trail position (D-0090); and `cites`, conflict analysis's memo of what the reason cites
-(D-0124). The arena indirection for explanations matters more, not less. If the trail ever
+own trail position (D-0090); `per_value`, `None` except on an entry of the bulk rule
+(`Store.remove_interior`, D-0268: several interior values, one reason, a derivation per value);
+and `cites`, conflict analysis's memo of what the reason cites (D-0124). The arena indirection for explanations matters more, not less. If the trail ever
 moves to `Bigarray`/`Bytes` (M6-T2, D-0001), `now`, `reason`, `concludes` and `cites` are
 the awkward part of the move and should be planned for rather than discovered; the others
 are plain ints or Booleans.

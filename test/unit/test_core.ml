@@ -1988,6 +1988,159 @@ let test_d0222_hole_log_random () =
   report "D-0222: a store never forks a log, because undo truncates (random)"
     (d0222_walk ~photo_forks:false)
 
+(* D-0268 (M18-coverage-T9): several interior values removed by ONE trail entry with one
+   reason and a derivation per value. The domain half is checked against the sequence of
+   single removals it replaces, on fresh domains, on a domain whose log is the newest, on
+   an older version (a fork), and on a domain too wide for a hole set; the store half
+   against every reader of an entry: undo, the remover, the per-value derivation, the
+   settle reasons of a bound that walks over the holes, and the refusal under
+   [deriving_ahead]. *)
+let test_d0268_bulk_removal () =
+  let seq d vs =
+    Array.fold_left
+      (fun d v -> match Domain.remove d v with Domain.Changed d' -> d' | _ -> d)
+      d vs
+  in
+  let same a b =
+    Domain.lo a = Domain.lo b && Domain.hi a = Domain.hi b && Domain.equal a b
+  in
+  Random.init 268;
+  let ok = ref true and n_cases = ref 0 in
+  for _ = 1 to 400 do
+    let lo = Random.int 5 and w = 3 + Random.int 40 in
+    let hi = lo + w in
+    let base = Domain.make lo hi in
+    (* some holes first, so that the bulk extends an existing log half of the time *)
+    let pre = Array.init (Random.int 4) (fun _ -> lo + 1 + Random.int (w - 1)) in
+    let d = seq base pre in
+    let vs =
+      List.filter
+        (fun v -> v > Domain.lo d && v < Domain.hi d && Random.int 3 = 0)
+        (List.init (hi - lo + 1) (fun i -> lo + i))
+      |> Array.of_list
+    in
+    incr n_cases;
+    let expect = seq d vs in
+    match Domain.remove_interior d vs with
+    | Domain.Changed d' ->
+        if not (same d' expect) then ok := false;
+        (match Domain.classify ~old:d ~now:d' with
+        | Domain.Holes ws ->
+            if ws <> List.filter (fun v -> Domain.mem d v) (Array.to_list vs) then
+              ok := false
+        | _ -> ok := false);
+        (* the version [d] is still readable, and a second bulk from it forks *)
+        if
+          not
+            (List.for_all (fun v -> Domain.mem d v || Array.mem v pre) (Array.to_list vs))
+        then ok := false
+    | Domain.Unchanged -> if not (same d expect) then ok := false
+    | Domain.Failed -> ok := false
+  done;
+  check
+    (Printf.sprintf
+       "D-0268: remove_interior is the sequence of removals it replaces (%d cases)"
+       !n_cases)
+    !ok;
+  (* from an OLDER version: the result forks, the newest version is untouched *)
+  let d0 = Domain.make 0 20 in
+  let d1 = changed (Domain.remove d0 5) in
+  let d2 = changed (Domain.remove d1 6) in
+  let f = changed (Domain.remove_interior d1 [| 7; 8; 9 |]) in
+  check "D-0268: a bulk from an older version forks and leaves the newest alone"
+    (Domain.to_list f
+     = List.filter (fun v -> not (List.mem v [ 5; 7; 8; 9 ])) (Domain.to_list d0)
+    && (not (Domain.mem d2 6))
+    && Domain.mem d2 7);
+  check "D-0268: values already gone are skipped, all gone is Unchanged"
+    (match Domain.remove_interior d2 [| 5; 6 |] with
+    | Domain.Unchanged -> true
+    | _ -> false);
+  let wide = Domain.make 0 (Domain.max_hole_span + 10) in
+  check "D-0268: a domain too wide for a hole set declines, as each removal did"
+    (match Domain.remove_interior wide [| 3; 4 |] with
+    | Domain.Unchanged -> true
+    | _ -> false);
+  check_raises "D-0268: a value at a bound is refused" (fun () ->
+      Domain.remove_interior d0 [| 0; 3 |]);
+  check_raises "D-0268: a value list that is not ascending is refused" (fun () ->
+      Domain.remove_interior d0 [| 4; 3 |]);
+  (* the store *)
+  let s =
+    Store.create ~names:[| "x"; "y" |] ~domains:[| Domain.make 0 12; Domain.make 0 5 |]
+  in
+  let x = Var.of_int 0 in
+  let r = Reason.because ~concludes:None Reason.none (Explanation.model_row 1) in
+  ignore (Store.remove s x 2 r);
+  Store.new_level s;
+  let table = Hashtbl.create 8 in
+  let asked = ref 0 in
+  let justify v =
+    match Hashtbl.find_opt table v with
+    | Some e -> e
+    | None ->
+        incr asked;
+        let e = Explanation.model_row (100 + v) in
+        Hashtbl.replace table v e;
+        e
+  in
+  let len0 = Store.trail_length s in
+  let snap = Store.snapshot s in
+  check "D-0268: the store's bulk removal lands"
+    (match
+       Store.remove_interior s x [| 2; 4; 5; 9 |] (Reason.of_facts Reason.none) ~justify
+     with
+    | Store.Changed -> true
+    | _ -> false);
+  let e = Store.trail_entry s len0 in
+  check "D-0268: one trail entry for the three values x still held"
+    (Store.trail_length s = len0 + 1
+    && Domain.classify ~old:e.Store.old ~now:e.Store.now = Domain.Holes [ 4; 5; 9 ]);
+  check
+    "D-0268: the remover of each value is the bulk entry, and of the older hole is not"
+    (List.for_all
+       (fun v ->
+         match Store.remover s ~before:(Store.trail_length s) ~var:x v with
+         | Some e' -> e' == e
+         | None -> false)
+       [ 4; 5; 9 ]
+    &&
+    match Store.remover s ~before:(Store.trail_length s) ~var:x 2 with
+    | Some e' -> e' != e
+    | None -> false);
+  check "D-0268: each value's derivation is the one [justify] gave for it"
+    (List.for_all (fun v -> Store.removal_explanation s e v == justify v) [ 4; 5; 9 ]
+    && Store.explanation s e == justify 4);
+  check "I-T3 after a bulk removal" (Store.check_invariants s);
+  (* a bound that settles over the bulk's holes cites each hole's own derivation *)
+  ignore (Store.set_hi s x 10 r);
+  ignore
+    (Store.set_hi s x 9
+       (Reason.because ~concludes:None Reason.none (Explanation.model_row 2)));
+  let hs = Store.hi_reasons s x in
+  check "D-0268: a bound settled over a bulk hole cites that hole's derivation"
+    (Domain.hi (Store.get s x) = 8 && List.exists (fun e' -> e' == justify 9) hs);
+  Store.backtrack s;
+  check "I-T1: one level back undoes the bulk removal exactly" (Store.same_domains s snap);
+  check "D-0268: after the undo the values are back and the old hole stays"
+    (List.for_all (Domain.mem (Store.get s x)) [ 4; 5; 9 ]
+    && not (Domain.mem (Store.get s x) 2));
+  check "D-0268: re-removing after the undo lands again"
+    (match Store.remove_interior s x [| 4 |] (Reason.of_facts Reason.none) ~justify with
+    | Store.Changed -> true
+    | _ -> false);
+  check "D-0268: removing only values already gone pushes nothing"
+    (let n = Store.trail_length s in
+     (match
+        Store.remove_interior s x [| 2; 4 |] (Reason.of_facts Reason.none) ~justify
+      with
+     | Store.Unchanged -> true
+     | _ -> false)
+     && Store.trail_length s = n);
+  check_raises "D-0268: a bulk removal is refused inside deriving_ahead" (fun () ->
+      Store.deriving_ahead s (fun () ->
+          Store.remove_interior s x [| 6 |] (Reason.of_facts Reason.none) ~justify))
+
 let () =
   match Array.to_list Sys.argv with
   | _ :: "--agreeing-push" :: _ -> disagreeing_push ~agree:true ()
@@ -2000,6 +2153,7 @@ let () =
       test_domains ();
       test_store ();
       test_d0222_hole_log_random ();
+      test_d0268_bulk_removal ();
       test_explanations ();
       test_attribution ();
       test_reason ();
