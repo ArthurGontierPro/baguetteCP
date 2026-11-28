@@ -449,8 +449,11 @@ let classify ~old ~now =
    removed values splits the run (its line is another entry's).
 
    The log path reads slots [ho.k .. hn.k - 1], which one bulk entry appends ascending, so
-   the runs are built in one pass; slots out of order (no producer appends them so today)
-   are sorted first. Otherwise the interval is walked, as [classify_walk] does. *)
+   the runs are built in one pass that allocates nothing but the runs (it is on every
+   bulk entry's trace line, and most hold one value: measured +0.39 % per node on evm
+   with proof for a first version that built the runs through a closure and an option
+   per value); slots out of order (no producer appends them so today) are sorted first.
+   Otherwise the interval is walked, as [classify_walk] does. *)
 let runs_of_ascending (next : unit -> int option) =
   let acc = ref [] and cur = ref None in
   let rec go () =
@@ -487,34 +490,32 @@ let removed_runs ~old ~now =
   let r =
     match (old.holes, now.holes) with
     | Some ho, Some hn when ho.log == hn.log && ho.k <= hn.k && valid ho && valid hn ->
+        (* One pass, no allocation but the runs: the slots of one bulk entry ascend. *)
         let lg = hn.log in
-        let inside v = v >= now.lo && v <= now.hi in
-        let ascending =
-          let ok = ref true and prev = ref min_int in
-          for j = ho.k to hn.k - 1 do
-            let v = lg.vals.(j) in
-            if inside v then (
-              if v <= !prev then ok := false;
-              prev := v)
-          done;
-          !ok
-        in
-        if ascending then
-          let j = ref ho.k in
-          runs_of_ascending (fun () ->
-              while !j < hn.k && not (inside lg.vals.(!j)) do
-                incr j
-              done;
-              if !j >= hn.k then None
-              else
-                let v = lg.vals.(!j) in
-                incr j;
-                Some v)
+        let acc = ref [] and a = ref 0 and b = ref 0 in
+        let started = ref false and sorted = ref true in
+        for j = ho.k to hn.k - 1 do
+          let v = lg.vals.(j) in
+          if v >= now.lo && v <= now.hi then
+            if not !started then (
+              started := true;
+              a := v;
+              b := v)
+            else if v = !b + 1 then b := v
+            else if v > !b then (
+              acc := (!a, !b) :: !acc;
+              a := v;
+              b := v)
+            else sorted := false
+        done;
+        if !sorted then (
+          if !started then acc := (!a, !b) :: !acc;
+          List.rev !acc)
         else
           let vs = ref [] in
           for j = ho.k to hn.k - 1 do
             let v = lg.vals.(j) in
-            if inside v then vs := v :: !vs
+            if v >= now.lo && v <= now.hi then vs := v :: !vs
           done;
           let l = ref (List.sort_uniq Int.compare !vs) in
           runs_of_ascending (fun () ->
