@@ -35688,3 +35688,135 @@ One more claim shape in trace.ml (the gap clause, whose one-value case is the ho
 **Results**: `/cluster/arthur/baguette-results/gapline/` (README, tables, logs, scripts).
 
 **Revert.** `git revert 8d7f2ce2 70d37ebc 75a4d612 6c15c903` (in that order); the six models and the mutation lanes go with `75a4d612`. Nothing else depends on the gap line; reverting restores D-0268's per-value lines byte for byte.
+
+## D-0267  [AUTONOME] The held-out comparison again under the free-search default (D-0261): `rec`, `classes` and `probe` against `off`, with a second `off` arm as the noise floor, and `fixed` against the default, in ONE interleaved campaign. No switch passes; the free default beats `--fixed-search` on the held-out set as on the series
+
+**Status**: DONE (agent-compare, branch `wave112-compare2`, measurement only, no `lib/` or `bin/` change). Measured
+2026-11-28 02:39 to 13:24 UTC on fataepyc-06. Scripts, tables and runs: `/cluster/arthur/baguette-results/compare2/`
+(README first). D-0259 section 4 asked for the question to be asked again under the new default; D-0252 had answered it
+under the fixed search.
+
+### 1. Set, flatten, binary
+
+- Set: D-0252's 400 held-out instances (`bench/tuning/heldout.lst`, D-0205's rule with the tuning set excluded).
+- Flatten: the 400 re-flattened on fataepyc-06 with the mznlib of origin/main `d3874fc8` (the same as `6ad63b1`'s), through
+  `scripts/compare_run.sh` as `bench/series/run_series.sh` flattens. None failed. Every file differs in raw bytes from
+  D-0252's (the header comments carry the library path and the command line); without comment lines **213 are identical
+  and 187 differ** (107 families; `flatten-diff.txt`), from the mznlib changes since 2026-11-26 (lex, nvalue, gcc routes
+  and guards).
+- Binary: `make release` of origin/main after gate 141 went green (check, diff 393/393, debug diff 377/377, scaling, DONE),
+  md5 `aedfd1c6` (`aedfd1c6bb935de370f0d1919e147aa3`), built from `wave112-compare2` whose `lib/`, `bin/`, `mznlib/` equal
+  origin/main's (`676ebd0`). Smoke (`smoke.txt`): at 20 000 nodes `off` and `off-b` give identical counters, each other arm
+  different ones, and `fixed`'s counters equal D-0252's `off` counters on the same instance (`--fixed-search` is the old
+  default, byte for byte in the counters); at 3 000 nodes with proof all six verify.
+
+### 2. Method
+
+Six arms, every switch set explicitly: `off` (the default: free search, the three switches off), `off-b` (identical to
+`off`), `rec` (`BAGUETTE_MINIMISE=rec`), `classes` (`BAGUETTE_PRIORITY=classes`), `probe` (`BAGUETTE_PROBE=root`),
+`fixed` (`--fixed-search`); each `--no-proof` and with proof: 4 800 runs. Each instance's twelve runs adjacent, the arm
+order rotated by one per instance and the mode order alternated, so load falls on all arms alike. D-0252's settings
+otherwise (300 s, `--stats --max-heap-mb 8192`, scope `MemoryMax=32G`, outer timeout 420 s, veripb 3.0.2 3600 s at 32G on
+every complete answer, a check timeout counted as unverified). At most 40 of these runs at once, launches held while user
+arthur's `main*` + `veripb` processes reached 88 (agent-refused's measurements and the gates ran beside it; the count
+stayed between 40 and 56). At launch: load 23, 11 TB free on /scratch.
+
+The rule, fixed by the orchestrator before the runs: D-0251 section 2 for each switch against `off` (verified complete
+answers: lost no more than gained, net at least +2, in both modes; pairwise share at least 0.47), and in each mode the net
+must also EXCEED |net(`off-b` against `off`)| of that mode. No rule for `fixed` (D-0259 decided the default).
+
+### 3. Results (`tables.md`)
+
+Without proof (400 instances, complete answers trusted):
+
+| arm | complete | incumbent only | share vs off | wins/losses | complete +/- vs off | net |
+|---|---|---|---|---|---|---|
+| off | 108 | 238 | 0.500 | | | |
+| off-b | 108 | 237 | 0.500 | 24+/24- | +1/-1 | 0 |
+| rec | 114 | 227 | 0.525 | 129+/109- | +11/-5 | +6 |
+| classes | 107 | 234 | 0.472 | 115+/137- | +7/-8 | -1 |
+| probe | 109 | 234 | 0.476 | 78+/97- | +5/-4 | +1 |
+| fixed | 85 | 223 | 0.365 | 101+/209- | +16/-39 | -23 |
+
+With proof (400 instances):
+
+| arm | complete | verified complete | incumbent only | share vs off | wins/losses | verified +/- vs off | net |
+|---|---|---|---|---|---|---|---|
+| off | 90 | 85 | 246 | 0.500 | | | |
+| off-b | 93 | 88 | 244 | 0.511 | 37+/28- | +3/-0 | +3 |
+| rec | 93 | 87 | 241 | 0.504 | 123+/120- | +9/-7 | +2 |
+| classes | 86 | 83 | 244 | 0.506 | 127+/122- | +6/-8 | -2 |
+| probe | 93 | 88 | 239 | 0.485 | 79+/91- | +6/-3 | +3 |
+| fixed | 73 | 69 | 231 | 0.364 | 96+/205- | +19/-35 | -16 |
+
+Unverified (veripb at 3 600 s, never rejected): off 5, off-b 5, rec 6, classes 3, probe 5, fixed 4 (rec's sixth is 2013 pentominoes-int 04, a complete answer only `rec` found, whose check ran out its hour last). **No proof was REJECTED.**
+
+### 4. The noise floor
+
+`off-b` against `off`, the same binary and settings run side by side: without proof 24+/24-, share 0.500, complete +1/-1
+(net 0); with proof 37+/28-, share 0.511, verified +3/-0 (net +3: java-auto-gen binpack_11, minimal-decision-sets
+breast-cancer_train4, nmseq_99). So inside one campaign two identical arms differ by 48 and 65 instance verdicts and by up
+to 3 verified complete answers; D-0205's 0.03 band holds for the share (0.011 at most here), and the rule's floor is 3 with
+proof and 0 without.
+
+### 5. The rule, applied as written
+
+| switch | with proof: +/-, net, share, net > 3? | without proof: +/-, net, share, net > 0? | verdict |
+|---|---|---|---|
+| `rec` | +9/-7, net +2, 0.504, no (2 is not above 3) | +11/-5, net +6, 0.525, yes | stays `off` |
+| `classes` | +6/-8, net -2 (fails D-0251), 0.506, no | +7/-8, net -1 (fails D-0251), 0.472, no | stays `off` |
+| `probe` | +6/-3, net +3, 0.485, no (3 is not above 3) | +5/-4, net +1 (fails D-0251's +2), 0.476, yes | stays `off` |
+
+Read plainly. `rec` is the closest: it gains without proof (net +6, share 0.525, best on MAX instances 33+/18-) and with
+proof gains +2 verified answers, which the floor of 3 does not let through. `probe` gains three verified answers with
+proof, exactly the floor, and one without, under the +2 of D-0251. `classes` loses in both modes. All three stay `off`;
+nothing changes in the code.
+
+### 6. Complete answers gained and lost against `off`
+
+- `rec`, no proof: +depot-placement ts225_6, +ghoulomb 4-9-10, +p1f 15, +mario medium_1, +steelmillslab bench_19_5,
+  +fox-geese-corn 54, +pentominoes-zayenz size_10_tiles_10_seed_17, +perfect_square 195, +evm-super-compilation
+  isolated_block_6_0_input, +kidney-exchange 3_20_0.30_4, +products-and-shelves ps-25-01; -costas-array 16, -pentominoes 07,
+  -pentominoes-int 07, -elitserien handball20, -sudoku_fixed p20. With proof: +solbat sb_13_13_5_3, +nonogram dom_10,
+  +java-auto-gen binpack_11, +maximum-dag 25_06, +steelmillslab bench_19_5, +minimal-decision-sets breast-cancer_train4,
+  +opt-cryptoanalysis r4, +evm-super-compilation isolated_block_6_0_input, +products-and-shelves ps-25-01;
+  -costas-array 16, -l2p l2p13, -steelmillslab bench_16_10, -rotating-workforce Example1242, -ATSP instance10_0p25,
+  -mondoku 12-12-8, -sdn-chain d26n600-5.
+- `classes`, no proof: +depot-placement ts225_6, +ghoulomb 4-9-10, +l2p l2p2, +p1f 15, +seat-moving sm-20-20-00,
+  +evm-super-compilation isolated_block_6_0_input, +atsp instance11_0p25; -costas-array 16, -filters ewf_1_1,
+  -pentominoes-int 04, -filters ewf_1_2, -maximum-dag 25_06, -ma-path-finding g16_p10_a20, -steelmillslab bench_13_0,
+  -sudoku_fixed p20. With proof: +depot-placement ts225_6, +pentominoes 2011_05, +nmseq 99, +seat-moving sm-20-20-00,
+  +minimal-decision-sets breast-cancer_train4, +pentominoes 2020_05; -costas-array 16, -filters ewf_1_1, -nonogram
+  non_awful_3, -l2p l2p13, -filters ewf_1_2, -steelmillslab bench_13_0, -rotating-workforce Example1242, -sdn-chain d26n600-5.
+- `probe`, no proof: +p1f 15, +mario medium_1, +seat-moving sm-20-20-00, +seat-moving sm-20-20-02, +atsp instance11_0p25;
+  -pentominoes-int 04, -elitserien handball20, -ma-path-finding g16_p10_a20, -sudoku_fixed p20. With proof: +nmseq 99,
+  +nonogram dom_10, +java-auto-gen binpack_11, +seat-moving sm-20-20-00, +minimal-decision-sets breast-cancer_train4,
+  +seat-moving sm-20-20-02; -costas-array 15, -costas-array 16, -stripboard w20_h15_l7_c6_n24.
+
+Full ids with family and kind in `tables.md`. All three of `off-b`'s gains with proof (java-auto-gen, minimal-decision-sets, nmseq) and its one gain without
+proof (ghoulomb) are also among the gains of `rec`, `classes` or `probe`: instances at the 300 s edge that any
+perturbation flips.
+
+### 7. The default against `--fixed-search` (no rule; D-0259 decided)
+
+`fixed` against `off`: without proof 85 complete against 108, share 0.365 (101+/209-); with proof 69 verified against 85,
+share 0.364 (96+/205-). Complete answers `fixed` gains: 16 without proof (MIN 12, MAX 2, SAT 2), 19 with (MIN 13, SAT 4,
+MAX 2), among them stochastic-vrp (2), kidney-exchange, cyclic-rcpsp, on-call-rostering 4s-23d, diameterc-mst c_v15,
+steiner-systems N10, perfect_square 57. It loses 39 without proof (MIN 20, SAT 18, MAX 1) and 35 with (MIN 20, SAT 14,
+MAX 1), the families with more than one: oocsp_racks 3, rectangle-packing 3, cargo 2, costas-array 2, roster 2,
+soccer-computational 2, solbat 2 / 1, fillomino 2 / 1, road-cons 1 / 2, steelmillslab 1 / 2. By kind the free search wins
+everywhere, most on SAT (`fixed`'s share 0.34 and 0.37) and MIN (0.37 and 0.38), MAX 0.37 and 0.31; by edition `fixed` reaches
+0.50 only in 2016 (and in 2013 with proof).
+
+**The held-out set agrees with the series.** D-0259 (series D-0227, 1 600 instances, with proof): the free search 454
+verified OPT+UNSAT+SAT against the fixed search's 390 (+16 %), the fixed search keeping 31 optima the free one loses. Here
+85 against 69 verified (+23 %), the fixed search keeping 19 verified complete answers the default loses; the same sign, a
+similar size, and the same kind of residue (instances the fixed search's order suits, which D-0259's portfolio follow-up
+names).
+
+### 8. Proof volume
+
+7.80 TB of `.opb` + `.pbp` written by the 2 400 proof runs, each deleted once checked (none kept: nothing was rejected).
+/scratch on fataepyc-06 never fell under 10.2 TB free.
+
+**Revert**: nothing to revert (no default changed, no code changed).
