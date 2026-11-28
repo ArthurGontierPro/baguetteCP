@@ -2305,7 +2305,7 @@ let order_bridge t w x v ~b1 =
       Writer.with_level w 0 (fun () ->
           Writer.rup_ladder_half w
             ~origin:(Printf.sprintf "bridge %s>=%d" x v)
-            ~name:x ~lo:iv.lo ~hi:iv.hi ~v ~b1)
+            ~name:x ~bounds:(iv.lo, iv.hi) ~v ~b1)
     in
     t.n_bridges <- t.n_bridges + 1;
     iv.atoms <- IMap.add v (if b1 then (id, h2) else (h1, id)) iv.atoms;

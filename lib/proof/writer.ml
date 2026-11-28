@@ -1553,7 +1553,7 @@ let rup t ~origin c = rup_lazy t ~origin:(fun () -> origin) c
    rungs (a liner-sf objective), allocated at a citation late in the search, when the
    live heap is largest; this writes the same line with the buffer alone. Not a mutation
    knob's site: the lanes corrupt a half by its text (scripts/mutate_proof.sh). *)
-let rup_ladder_half t ~origin ~name ~lo ~hi ~v ~b1 =
+let rup_ladder_half t ~origin ~name ~bounds:(lo, hi) ~v ~b1 =
   if t.null then fresh_lazy t ~origin:(fun () -> origin)
   else (
     t.n_rup <- t.n_rup + 1;
