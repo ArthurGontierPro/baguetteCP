@@ -1,0 +1,10 @@
+% D-0262, from the D-0262 grid (`z = max([y, w, -1])`, MiniZinc fixes z = 1): array_int_maximum
+% whose RESULT is a constant, with a negative constant operand. The constant operand's selector
+% row names no variable but its selector; tools/e2e/bridge.py (D-0262's position rule) must
+% still map it to cake's flag. Unique solution: y = 1, w = -2.
+var -1..1: y :: output_var;
+var -2..0: w :: output_var;
+array [1..3] of var int: A :: var_is_introduced = [y,w,-1];
+constraint array_int_maximum(1,A);
+constraint int_le(w,-2);
+solve satisfy;

@@ -190,6 +190,13 @@ itself, and `<hi>` is the value of the last solution printed, or INF when none w
 is still exit 5; with one it is a stopped run. A stopped run
 exits 0, and says what it was doing on stderr (`limit:`), which is how a harness tells it
 from a run killed from outside.
+*(Amended 2026-11-27, M22-review-bugs, D-0263.)* `--time-limit` also stops a run BEFORE the
+search (the parse, the compile, the `.opb`, the proof's opening), at the limit plus one second,
+so that a short limit still reaches the search and its proof. Such a run prints the same
+(`=====UNKNOWN=====`, a `limit:` line naming the phase, exit 0). Its proof is ended as above
+when the `.opb` was complete; before that there is no model file to check a proof against,
+and stderr says the proof is INCOMPLETE or was not written. This is the one stop whose proof
+is not a checked artefact.
 
 **The MiniZinc standard flags** *(normative, M7-T32, D-0150, 2026-11-19)*.
 `tools/baguette.msc` declares `-i -f -n -p -r -s -t -v`, and the CLI accepts them and `-a`.
@@ -276,6 +283,14 @@ about legality, with no way for a reader to see which constant was in force.
 
 What D-0041 was really protecting is that a reader must never be unable to tell why a model
 was refused. That is preserved: the refusal names the limit and says it was asked for.
+
+*(Amended 2026-11-27, M22-review-bugs, D-0263.)* A model MAY be refused by default, with exit
+5, when a LOWER bound of the heap its encoding needs exceeds the memory the run has (its
+`--max-heap-mb`, its address space, the machine's memory and swap). This is a resource death
+reported before it happens, not a width limit: the bound is below what the run would hold, so
+a refused run is one that could not have finished in that memory, and two runs given the same
+memory agree. The diagnostic names the variable, its declared domain, the structure (a direct
+encoding, an arithmetic case split) and the estimate.
 
 **A declared width that is not representable as a native integer is refused
 unconditionally, and no option disables it.** This is an arithmetic refusal in the family of

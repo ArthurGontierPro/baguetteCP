@@ -298,6 +298,8 @@ let output_row oc i c =
       Text.string b ">= ";
       Text.int b c.rhs;
       Text.string b " ;\n";
+      (* D-0263: weighed by its bytes, before the row reaches the channel. *)
+      Deadline.tick (Text.length b);
       Text.output oc b;
       Text.shrink b ~keep:row_buf_keep
   | Eq ->

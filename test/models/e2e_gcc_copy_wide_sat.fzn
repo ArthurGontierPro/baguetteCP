@@ -1,0 +1,10 @@
+% D-0262, from bench/fuzz/found/e2e_bridge_gcc_repeat_var_sat.fzn (D-0258): a gcc over a
+% repeated variable of three values, so baguette's copy is tied by int_eq's two LINEAR rows
+% (not one binary clause per rung, as for two values). Before D-0262 tools/e2e/bridge.py did
+% not recognise the copy and cited its ladder rungs undefined. Unique solution: x0 = 2.
+predicate baguette_global_cardinality(array [int] of var int: x,array [int] of int: cover,array [int] of var int: counts);
+var 1..3: x0 :: output_var;
+array [1..2] of var int: A :: var_is_introduced = [x0,x0];
+constraint baguette_global_cardinality(A,[3],[0]);
+constraint int_le(2,x0);
+solve satisfy;

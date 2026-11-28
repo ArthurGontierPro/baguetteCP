@@ -1,0 +1,12 @@
+% D-0262, from the fuzz e2e stream (seed 8101 model 50, after D-0262's first fixes): a gcc whose
+% cover repeats a value with EQUAL constant counts, so D-0260's merge adds no tie and --e2e was
+% not refused. cake's rows were labelled by the original cover positions, baguette's by the
+% merged ones, and the count of 1 was pinned against cake's row for the second 3. The
+% translator now states the merged cover too. Unique solution: x = 1, y = 2.
+predicate baguette_global_cardinality(array [int] of var int: x,array [int] of int: cover,array [int] of var int: counts);
+var 1..3: x :: output_var;
+var 1..3: y :: output_var;
+array [1..2] of var int: A :: var_is_introduced = [x,y];
+constraint baguette_global_cardinality(A,[3,3,1],[0,0,1]);
+constraint int_le(x,1);
+solve satisfy;

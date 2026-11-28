@@ -1,0 +1,11 @@
+% D-0258, e2e stream seed 1 model 6, shrunk: SAT; the BRIDGED e2e path is refused by veripb (tools/e2e/bridge.py cites @L[X_INTRODUCED_gcc_copy_0_ge_3], a label it never assigned) on a gcc over a repeated variable; the --e2e solver path and plain veripb VERIFY: a bridge defect, not a solver one.
+
+predicate baguette_global_cardinality(array [int] of var int: x,array [int] of int: cover,array [int] of var int: counts);
+array [1..1] of int: X_INTRODUCED_16_ = [0];
+array [1..1] of int: X_INTRODUCED_17_ = [3];
+var 1..3: x0:: output_var;
+var 1..3: x1:: output_var;
+var bool: b0:: output_var;
+array [1..2] of var int: X_INTRODUCED_18_ ::var_is_introduced  = [x0,x0];
+constraint baguette_global_cardinality(X_INTRODUCED_18_,X_INTRODUCED_17_,X_INTRODUCED_16_);
+solve  satisfy;

@@ -38,7 +38,10 @@ def ensure_msc(outdir):
         "stdFlags": ["-i", "-f", "-n", "-p", "-r", "-s", "-t", "-v"],
         "extraFlags": [["--proof", "proof prefix", "string", ""],
                        ["--no-proof", "no proof", "bool", "false"],
-                       ["--bits-above", "bits threshold", "string", "0"]],
+                       ["--bits-above", "bits threshold", "string", "0"],
+                       # M19-config-T1 (D-0261): the fixed search, a flag since the free
+                       # search became the default; the streams without -f pass it
+                       ["--fixed-search", "the fixed search", "bool", "false"]],
     }
     os.makedirs(outdir, exist_ok=True)
     MSC = os.path.join(outdir, "fuzz.msc")

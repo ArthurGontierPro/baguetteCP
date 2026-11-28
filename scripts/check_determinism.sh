@@ -36,6 +36,36 @@
 # option) and test_random.ml fuzzes generated models rather than the fixed suite. That half
 # has to live in a test binary, and waits for lib/core to be free.
 #
+# THE REAL INSTANCES (D-0264). The test models are too small for the collector to run more
+# than a few cycles, so a proof that depended on the GC (a table dropped under pressure, an
+# address reaching a hash, a timer that forces a cycle) would pass the loop over them every
+# time. So four instances of the differential lane's corpus (bench/diff/corpus, read here and
+# never written) are solved twice more at a small node budget, each run under a DIFFERENT
+# runtime: OCAMLRUNPARAM=s=16k,o=40 (a 128 KB minor heap and an eager major GC) and
+# s=256k,o=400 (a 2 MB minor heap and a lazy one). bin/main.ml sizes the minor heap from the
+# address-space limit unless OCAMLRUNPARAM names one, so the gate under `ulimit -v` and a
+# campaign without it already run two runtimes. (Not larger: the runtime reserves the minor
+# heap for 128 domains, and s=8M asks 8 GB of address space, which the gate's 4 GB cap
+# refuses with "Not enough heap memory to reserve minor heaps".) The four cover the clause path with PB rows,
+# cumulative, alldiff and the bits arm (atoms minted on demand), about 10 s together. The
+# .opb, .pbp and stdout must agree, exactly as for the models.
+#
+# BOTH SEARCHES (M19-config-T1, D-0261). The models and the four instances are each run under
+# the fixed search (--fixed-search) and under the default, the free search since D-0261, whose
+# restarts, activity scores and saved phases must not depend on the clock, an address or the
+# collector either. Both arms together, models and instances, take about 32 s on fataepyc-06.
+#
+# THE CONTRACT, AND ITS ONE EXCEPTION. The proof is a function of the binary, the input and
+# the options for a run that ends on its own or at BAGUETTE_NODE_LIMIT. A run ended by an
+# ASYNCHRONOUS stop (--time-limit, a signal such as `timeout`'s SIGTERM, SIGINT or SIGXCPU,
+# or the heap budget --max-heap-mb) ends with a valid proof cut wherever the stop found it,
+# and that point moves from run to run by design (Writer.conclude_interrupted). D-0264 is the
+# record of a comparison that forgot this: two Challenge instances "not reproducible" were a
+# `timeout 900` and an 8 GB heap budget landing at different points of the same node. So
+# every real-instance run here must end by the node limit or on its own: its `limit:` line,
+# when it has one, must say `fired=none signal=none`; otherwise the comparison is VOID, and
+# that is a failure, never a pass.
+#
 # --self-test proves the check can fail, and runs FIRST on every gate. Same discipline as
 # scripts/check_test_widths.py and scripts/check_fmt.sh, for the same reason: a guard
 # nobody has watched fail is not yet a guard.
@@ -127,6 +157,75 @@ compare_two_runs() {
   return $rc
 }
 
+# D-0264. True when the run whose stderr is $1 ended on its own (no `limit:` line) or at the
+# node limit (`fired=none signal=none`); false for a clock, a signal or the heap budget.
+stopped_by_itself() {
+  l="$(grep '^limit:' "$1" | tail -1)"
+  [ -z "$l" ] && return 0
+  case "$l" in
+    *"fired=none signal=none"*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# The real instances (D-0264, see the header): name, node budget, extra flags ("-": none,
+# and a flag's value follows a comma: --bits-above,0 is `--bits-above 0`).
+REAL_INSTANCES="
+2012_parity-learning_48_24_6.2 1000 -
+2013_rcpsp_12 1000 -
+2018_soccer-computational_xIGData_24_16_14_2 800 -
+2011_cyclic-rcpsp_easy_6 300 --bits-above,0
+"
+
+# One real instance, two runs under two GC settings. $1 name, $2 budget, $3 flags, $4 dir.
+compare_real() {
+  name="$1"; budget="$2"; flags="$3"; d="$4"
+  [ "${flags}" = "-" ] && flags=""
+  flags="$(echo "${flags}" | tr ',' ' ')"
+  gz="${ROOT}/bench/diff/corpus/${name}.fzn.gz"
+  if [ ! -f "${gz}" ]; then
+    echo "     ${name}: ${gz#"${ROOT}"/} is missing, so the real-instance check cannot run"
+    return 1
+  fi
+  gunzip -c "${gz}" > "${d}/${name}.fzn"
+  run=0
+  for gc in "s=16k,o=40" "s=256k,o=400"; do
+    run=$((run + 1))
+    # The caller's BAGUETTE_* settings are not this check's (the diff lane's rule): a stray
+    # BAGUETTE_RETENTION in a terminal must not become the configuration compared.
+    # shellcheck disable=SC2086
+    if ! (
+      for v in $(env | sed -n 's/^\(BAGUETTE_[A-Za-z0-9_]*\)=.*/\1/p'); do unset "$v"; done
+      BAGUETTE_NODE_LIMIT="${budget}" OCAMLRUNPARAM="${gc}" \
+        timeout 300 "${SOLVER}" "${d}/${name}.fzn" ${SEARCH} ${flags} --stats --proof "${d}/${name}.${run}" \
+        > "${d}/${name}.${run}.out" 2> "${d}/${name}.${run}.err"
+    ); then
+      echo "     ${name} (OCAMLRUNPARAM=${gc}) did not exit 0:"
+      grep -v '^\(stats\|limit\|time\):' "${d}/${name}.${run}.err" | tail -3 | sed 's/^/       /'
+      return 1
+    fi
+    if ! stopped_by_itself "${d}/${name}.${run}.err"; then
+      echo "     ${name} (OCAMLRUNPARAM=${gc}): stopped by a clock, a signal or the heap budget,"
+      echo "       not by the node limit, so its proof is not expected to reproduce and the"
+      echo "       comparison is VOID (D-0264): $(grep '^limit:' "${d}/${name}.${run}.err" | cut -c1-160)"
+      return 1
+    fi
+  done
+  rc=0
+  for kind in opb pbp; do
+    if ! cmp -s "${d}/${name}.1.${kind}" "${d}/${name}.2.${kind}"; then
+      echo "     ${name}: .${kind} DIFFERS between OCAMLRUNPARAM=s=16k,o=40 and s=256k,o=400"
+      rc=1
+    fi
+  done
+  if ! cmp -s "${d}/${name}.1.out" "${d}/${name}.2.out"; then
+    echo "     ${name}: stdout DIFFERS between OCAMLRUNPARAM=s=16k,o=40 and s=256k,o=400"
+    rc=1
+  fi
+  rm -f "${d}/${name}".*
+  return $rc
+}
+
 self_test() {
   # A solver wrapper that is correct but NOT deterministic: it appends a changing comment
   # to the .opb after the real solver has written it. If the check cannot see that, it
@@ -175,7 +274,30 @@ EOF
     sed 's/^/       /' "$d/real.log" | head -10
     return 1
   fi
-  echo "determinism self-test: catches a nondeterministic solver, accepts the real one"
+  # (3) The stop guard of the real instances (D-0264) must refuse each asynchronous stop
+  # and accept a node-limit stop and a run with no `limit:` line (it ended on its own).
+  # The lines are bin/main.ml's, copied from runs on fataepyc-06 on 2026-11-27.
+  printf 'limit: reached time-limit=none cpu=1.0s wall=1.0s nodes=81 at=node fired=none signal=none\n' > "$d/ok.err"
+  printf 'stats: nodes 3\n' > "$d/own.err"
+  printf 'limit: reached time-limit=none cpu=900.09s wall=900.16s nodes=1628 at=trace fired=900.00s signal=TERM\n' > "$d/term.err"
+  printf 'limit: killed signal=heap-budget phase=search cpu=785.65s wall=785.70s nodes=91\n' > "$d/heap.err"
+  printf 'limit: reached time-limit=5 cpu=5.0s wall=5.0s nodes=40 at=node fired=5.00s signal=none\n' > "$d/clock.err"
+  for f in ok own; do
+    if ! stopped_by_itself "$d/$f.err"; then
+      echo "FAIL determinism self-test: the stop guard refused a deterministic run ($f)."
+      return 1
+    fi
+  done
+  for f in term heap clock; do
+    if stopped_by_itself "$d/$f.err"; then
+      echo "FAIL determinism self-test: the stop guard ACCEPTED an asynchronous stop ($f),"
+      echo "     so a real-instance comparison cut by a clock, a signal or the heap budget"
+      echo "     would be read as evidence of determinism (D-0264)."
+      return 1
+    fi
+  done
+  echo "determinism self-test: catches a nondeterministic solver, accepts the real one,"
+  echo "     and refuses a comparison cut by a clock, a signal or the heap budget"
   return 0
 }
 
@@ -210,6 +332,22 @@ run_check() {
     return 1
   fi
   echo "determinism: ${n} runs (every model, fixed and free search), .opb/.pbp/stdout identical across two runs"
+  r=0; rbad=0
+  for arm in fixed free; do
+    case "$arm" in fixed) SEARCH="--fixed-search" ;; free) SEARCH="" ;; esac
+    for spec in $(echo "${REAL_INSTANCES}" | tr ' ' ':'); do
+      name="${spec%%:*}"; rest="${spec#*:}"; budget="${rest%%:*}"; flags="${rest#*:}"
+      r=$((r + 1))
+      compare_real "${name}" "${budget}" "${flags}" "$d" || { echo "     (the ${arm} search)"; rbad=$((rbad + 1)); }
+    done
+  done
+  if [ "$rbad" -ne 0 ]; then
+    echo "FAIL determinism: ${rbad} of ${r} real-instance runs did not reproduce under two GC"
+    echo "     settings at a node budget (D-0264). A proof that depends on the collector, an"
+    echo "     address or a clock is a defect, and re-blessing is not an answer."
+    return 1
+  fi
+  echo "determinism: ${r} real-instance runs (four instances, fixed and free search), .opb/.pbp/stdout identical under two GC settings"
   return 0
 }
 

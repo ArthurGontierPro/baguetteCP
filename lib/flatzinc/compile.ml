@@ -583,7 +583,10 @@ let holes_of_domain (v : Model.var) =
   | Model.Dbool | Model.Drange _ | Model.Dset [] -> []
   | Model.Dset values ->
       let lo, hi = bounds_of_domain v in
-      let present = List.sort_uniq Stdlib.compare values in
+      (* D-0263: a set domain can list millions of values (a fuzz model's 16.7 M took
+         17 s here, past its --time-limit), so the clock is read before the sort. *)
+      Baguette_proof.Deadline.tick (List.length values);
+      let present = List.sort_uniq Int.compare values in
       let rec go v present acc =
         if v > hi then List.rev acc
         else
@@ -1317,7 +1320,9 @@ let compile (m : Model.t) : t =
       if List.length vars_in_scope < 2 then []
       else
         let names = List.map (name_of pos) vars_in_scope in
-        List.iter (Encoding.request_direct encoding) names;
+        List.iter
+          (Encoding.request_direct ~where:(fun () -> Pos.to_string pos) encoding)
+          names;
         let rows = Encoding.add_all_different encoding names in
         let p = Alldiff.make store encoding ~rows (List.map Var.of_int vars_in_scope) in
         [
@@ -1359,10 +1364,16 @@ let compile (m : Model.t) : t =
      domain STARTS at v contributes the constant 1 rather than a literal, which is
      [ones].
 
-     TWO REFUSALS, both of them here rather than in the propagator, because this is
+     THREE REFUSALS, all of them here rather than in the propagator, because this is
      where a source position is in hand:
 
        - a cover and a counts array of different lengths;
+       - the same value twice in the cover (D-0260). gcc.ml keys its capacity table and
+         its memo of HIGH rows on the value, and with two counts for one value the memo
+         justified the second count's pruning by the first count's row, which veripb
+         rejected. A GUARD as well: [Builder.merge_gcc_cover_repeats] keeps the first
+         occurrence of each value and ties the other counts to its count with a linear
+         equality in the model, so a parsed model never reaches it;
        - the same variable twice in [xs]. Its tally contribution would be 2 and every
          cancellation in gcc.ml assumes 1. all_different can let a repeat through
          because its pairwise decomposition refutes it; there is no such decomposition
@@ -1403,6 +1414,13 @@ let compile (m : Model.t) : t =
         "builtin `fzn_global_cardinality`: the same variable appears more than once in \
          the array. Its contribution to a tally would be more than one, which every \
          cancellation in lib/core/prop/gcc.ml assumes it is not";
+    if List.length (List.sort_uniq compare (Array.to_list cover)) <> Array.length cover
+    then
+      Error.failf pos
+        "builtin `fzn_global_cardinality`: the cover names the same value more than \
+         once. lib/core/prop/gcc.ml keys its capacity table and its memo of HIGH rows on \
+         the value, so a second count for it would be justified by the first one's row \
+         (D-0260)";
     let consts = List.filter_map fixed_value xs in
     let cover_rows =
       List.mapi
@@ -1749,7 +1767,9 @@ let compile (m : Model.t) : t =
       if List.length set < 2 || List.length set <> List.length is || posted then []
       else
         let names = List.map (name_of pos) is in
-        List.iter (Encoding.request_direct encoding) names;
+        List.iter
+          (Encoding.request_direct ~where:(fun () -> Pos.to_string pos) encoding)
+          names;
         let decl i =
           let d = Store.get store (Var.of_int i) in
           (Domain.lo d, Domain.hi d)
@@ -2312,7 +2332,7 @@ let compile (m : Model.t) : t =
           | Model.Const c -> View.const c
           | Model.Var j -> View.of_var (Var.of_int j)
         in
-        Encoding.request_direct encoding iname;
+        Encoding.request_direct ~where:(fun () -> Pos.to_string pos) encoding iname;
         let rows =
           Element.post_rows encoding ~index_name:iname
             ~imap:(Option.get (View.map_of index))

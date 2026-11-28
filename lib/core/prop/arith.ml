@@ -355,23 +355,28 @@ let emit ~bound ~guards e rhs acc =
 
 (* ------------------------------------------------------------------- the ladders *)
 
+(* [ge] arrives as the front end's association list, value -> Boolean, one pair per
+   value of y's ladder, and the loops below ask it once per value: [List.assoc_opt] made
+   each case split quadratic in y's width (D-0263: 22 % of the compile of a 2^14-wide
+   case variable in [compare_val] alone, and 2^21 never finished). [lookup] builds a
+   table once and answers what [List.assoc_opt] answered, the FIRST pair of a value, so
+   the rows and their order are unchanged. *)
+let lookup ge =
+  let h = Hashtbl.create (List.length ge) in
+  List.iter (fun (v, b) -> if not (Hashtbl.mem h v) then Hashtbl.add h v b) ge;
+  Hashtbl.find_opt h
+
 (* `y >= v` and `y <= v` as guards, given the declared bounds of y and the Booleans
    the front end created for it. [ge] maps a value v in [lo_y + 1, hi_y] to the index
    of the Boolean defined as `b_v <-> y >= v`; the two ends need no Boolean, since
    `y >= lo_y` and `y <= hi_y` are true of every assignment the declaration allows. *)
 let at_least ~ylo ~ge v =
   if v <= ylo then Always
-  else
-    match List.assoc_opt v ge with
-    | Some b -> Lit { g_var = b; g_pos = true }
-    | None -> Never
+  else match ge v with Some b -> Lit { g_var = b; g_pos = true } | None -> Never
 
 let at_most ~yhi ~ge v =
   if v >= yhi then Always
-  else
-    match List.assoc_opt (v + 1) ge with
-    | Some b -> Lit { g_var = b; g_pos = false }
-    | None -> Never
+  else match ge (v + 1) with Some b -> Lit { g_var = b; g_pos = false } | None -> Never
 
 (* The variable the case split runs over. A FlatZinc model may write `int_div(x, 3, q)`,
    and then there is exactly one case and no ladder: [Case_const] is that, spelled as
@@ -404,6 +409,7 @@ let is_neg = function
    because the case split IS its ladder. lib/flatzinc/compile.ml takes the linear path
    when y is a constant, where x * c = z is one equality and none of this is needed. *)
 let times_rows ~bound ~(x : aff) ~(y : case) ~(z : aff) ~(sign : sign) ~ge : row list =
+  let ge = lookup ge in
   let ylo, yhi = case_bounds ~bound y in
   let s = is_nonneg sign and ns = is_neg sign in
   let acc = ref [] in
@@ -476,6 +482,7 @@ let times_rows ~bound ~(x : aff) ~(y : case) ~(z : aff) ~(sign : sign) ~ge : row
    divisor keeps that split. There is no arm for v = 0: it is in the loop like any other
    value, and the window |v| - 1 = -1 is what makes it unsatisfiable. *)
 let div_rows ~bound ~(x : aff) ~(y : case) ~(q : aff) ~(sign : sign) ~ge : row list =
+  let ge = lookup ge in
   let ylo, yhi = case_bounds ~bound y in
   let s = is_nonneg sign and ns = is_neg sign in
   let acc = ref [] in
