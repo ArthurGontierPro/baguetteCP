@@ -19,6 +19,7 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
+| M18-coverage-T9 (first half: measurement and design, D-0265) | `docs/DECISIONS.md` (D-0265 only), `docs/ROADMAP.md` (the T9 row's note), `bench/refused/` (new, measurement scripts). No solver file | agent-refused, `wave110-refused` | 2026-11-28 |
 
 ## Cross-session requests
 
