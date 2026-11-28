@@ -19,6 +19,7 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
+| M18-coverage-T9 (D-0268): element prunes its result's unsupported interior values in ONE store change | `lib/core/prop/element.ml`, `lib/core/prop/table.ml`, `lib/core/store.ml`, `lib/core/domain.ml`, `lib/core/view.ml`, `lib/core/trace.ml`/`justify.ml` only if the proof side must follow, their tests (`test/unit/test_core.ml`, `test/unit/test_prop.ml`), test models | agent-elembulk (branch wave113-elembulk) | 2026-11-28 |
 
 ## Cross-session requests
 
