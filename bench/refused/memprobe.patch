@@ -1,0 +1,632 @@
+diff --git a/bin/main.ml b/bin/main.ml
+index 415ad5d9..7795c31d 100644
+--- a/bin/main.ml
++++ b/bin/main.ml
+@@ -130,6 +130,9 @@ module Writer = Baguette_proof.Writer
+ module Encoding = Baguette_proof.Encoding
+ module Deadline = Baguette_proof.Deadline
+ module Checked = Baguette_core.Checked
++module Propagator = Baguette_core.Propagator
++module Domain = Baguette_core.Domain
++module Explanation = Baguette_core.Explanation
+ 
+ type options = {
+   model : string;
+@@ -1944,6 +1947,129 @@ let report_mzn_stats (st : Search.stats) ~(engine : Engine.t) ~init_time ~solve_
+   print_string "%%%mzn-stat-end\n";
+   flush stdout
+ 
++
++(* M21-memory-T1 (D-0218), PATCH ONLY: the roots of each kind, in attribution order. *)
++module MP = Baguette_proof.Memprobe
++
++let memprobe_compiled (c : Compile.t) =
++  if MP.enabled then begin
++    let st = c.Compile.store and e = c.Compile.engine and enc = c.Compile.encoding in
++    let r = Obj.repr in
++    MP.register "store.domains" (fun () -> [ r st.Store.domains; r st.Store.initial ]);
++    MP.register "store.names" (fun () -> [ r st.Store.names; r st.Store.by_name ]);
++    MP.register "encoding.ints" (fun () -> [ r enc.Encoding.ints ]);
++    MP.register "store.bound_hist" (fun () ->
++        [ r st.Store.lo_sup; r st.Store.hi_sup; r st.Store.lo_hist; r st.Store.lo_hn;
++          r st.Store.hi_hist; r st.Store.hi_hn; r st.Store.all_hist; r st.Store.all_hn;
++          r st.Store.low_water; r st.Store.starts ]);
++    (* placeholders, so the hash-consing table and the search's own state are charged
++       before the propagators that may reach into them *)
++    MP.register "expl.hashcons" (fun () -> []);
++    MP.register "writer.live" (fun () -> []);
++    MP.register "writer.tags_lvl" (fun () -> []);
++    MP.register "writer.buf" (fun () -> []);
++    let fam = Hashtbl.create 16 in
++    let order = ref [] in
++    Array.iteri
++      (fun i (inst : Propagator.instance) ->
++        if i < e.Engine.count then begin
++          let k = inst.Propagator.inst_name in
++          if not (Hashtbl.mem fam k) then order := k :: !order;
++          Hashtbl.replace fam k (inst :: (try Hashtbl.find fam k with Not_found -> []))
++        end)
++      e.Engine.instances;
++    List.iter
++      (fun k ->
++        MP.register ("prop." ^ k) (fun () ->
++            List.map Obj.repr (try Hashtbl.find fam k with Not_found -> []));
++        MP.count ("prop.n." ^ k) (fun () ->
++            List.length (try Hashtbl.find fam k with Not_found -> []));
++        MP.count ("prop.scope." ^ k) (fun () ->
++            List.fold_left
++              (fun a (i : Propagator.instance) -> a + List.length i.Propagator.inst_vars)
++              0
++              (try Hashtbl.find fam k with Not_found -> [])))
++      (List.rev !order);
++    (* the subscriptions, then the trail, then the learned constraints, all AFTER the model's
++       instances: a trail entry's deferred reason and a learned instance's closures reach
++       into the engine and the model's propagators, and charged first they would swallow
++       every model instance *)
++    MP.register "engine.watch" (fun () ->
++        [ r e.Engine.watchers; r e.Engine.triggers; r e.Engine.scopes;
++          r e.Engine.wake_static; r e.Engine.dyn_ids; r e.Engine.dyn_len; r e.Engine.wv1;
++          r e.Engine.wv2; r e.Engine.wp1; r e.Engine.wp2; r e.Engine.rest_levels ]);
++    MP.register "store.trail" (fun () -> [ r st.Store.trail; r st.Store.marks ]);
++    MP.register "store.reasons" (fun () -> [ r st.Store.reasons ]);
++    MP.register "search.trace" (fun () -> []);
++    MP.register "search.retention" (fun () -> []);
++    MP.register "learned.engine" (fun () -> []);
++    MP.register "engine.rest" (fun () -> [ r e ]);
++    MP.register "store.rest" (fun () -> [ r st ]);
++    MP.register "encoding.rest" (fun () -> [ r enc ]);
++    MP.count "vars" (fun () -> Array.length st.Store.domains);
++    MP.count "domain_values" (fun () ->
++        Array.fold_left
++          (fun a (d : Domain.t) -> a + (d.Domain.hi - d.Domain.lo + 1))
++          0 st.Store.initial);
++    MP.count "vars_with_holes" (fun () ->
++        Array.fold_left
++          (fun a (d : Domain.t) -> if d.Domain.holes = None then a else a + 1)
++          0 st.Store.domains);
++    MP.count "hist_entries" (fun () ->
++        Array.fold_left (fun a x -> a + Array.length x) 0 st.Store.all_hist
++        + Array.fold_left (fun a x -> a + Array.length x) 0 st.Store.lo_hist
++        + Array.fold_left (fun a x -> a + Array.length x) 0 st.Store.hi_hist);
++    MP.count "trail_len" (fun () -> st.Store.trail_len);
++    MP.count "trail_cap" (fun () -> Array.length st.Store.trail);
++    MP.count "arena_len" (fun () -> st.Store.reasons.Explanation.Arena.len);
++    MP.count "arena_cap" (fun () -> Array.length st.Store.reasons.Explanation.Arena.items);
++    MP.count "props" (fun () -> e.Engine.count);
++    MP.count "watchers_bindings" (fun () -> Hashtbl.length e.Engine.watchers);
++    MP.count "watchers_entries" (fun () ->
++        Hashtbl.fold (fun _ l a -> a + List.length l) e.Engine.watchers 0);
++    MP.count "enc.ladder_clauses" (fun () -> enc.Encoding.ladder_clauses);
++    MP.count "enc.bits_vars" (fun () -> enc.Encoding.bits_vars);
++    MP.count "enc.n_atoms" (fun () -> enc.Encoding.n_atoms);
++    MP.count "enc.ints" (fun () -> Encoding.Names.length enc.Encoding.ints);
++    MP.count "enc.direct_values" (fun () -> enc.Encoding.direct_values);
++    (* D-0265: atoms touched against atoms declared, order and bits apart, and the wide
++       (declared width >= 1000) order variables apart *)
++    let bits_of i = try Encoding.is_bits enc st.Store.names.(i) with _ -> false in
++    let width i = let d = st.Store.initial.(i) in d.Domain.hi - d.Domain.lo in
++    let decl pred = let a = ref 0 in Array.iteri (fun i _ -> if pred i then a := !a + width i) st.Store.initial; !a in
++    let touch pred = Hashtbl.fold (fun i c a -> if pred i then a + c else a) MP.touched_per_var 0 in
++    let nvars pred = Hashtbl.fold (fun i _ a -> if pred i then a + 1 else a) MP.touched_per_var 0 in
++    let order i = (not (bits_of i)) && width i >= 2 and wide i = (not (bits_of i)) && width i >= 1000 in
++    MP.count "touch.atoms" (fun () -> Hashtbl.length MP.touched);
++    MP.count "touch.order_atoms" (fun () -> touch order);
++    MP.count "touch.order_vars" (fun () -> nvars order);
++    MP.count "touch.bits_atoms" (fun () -> touch bits_of);
++    MP.count "touch.wide_order_atoms" (fun () -> touch wide);
++    MP.count "touch.wide_order_vars" (fun () -> nvars wide);
++    MP.count "decl.order_atoms" (fun () -> decl order);
++    MP.count "decl.bits_atoms" (fun () -> decl bits_of);
++    MP.count "decl.wide_order_atoms" (fun () -> decl wide);
++    MP.count "decl.wide_order_vars" (fun () -> let a = ref 0 in Array.iteri (fun i _ -> if wide i then incr a) st.Store.initial; !a);
++    MP.probe "compile"
++  end
++
++let memprobe_ctx (ctx : Justify.ctx) =
++  if MP.enabled then begin
++    let r = Obj.repr in
++    let w = ctx.Justify.writer in
++    MP.register "expl.hashcons" (fun () ->
++        [ r Explanation.table; r !Explanation.hc_by_level ]);
++    MP.register "writer.live" (fun () -> [ r w.Writer.live; r w.Writer.model ]);
++    MP.register "writer.tags_lvl" (fun () -> [ r w.Writer.tags; r w.Writer.by_lvl ]);
++    MP.register "writer.buf" (fun () -> [ r w.Writer.buf ]);
++    MP.register "writer.rest" (fun () -> [ r w ]);
++    MP.register "justify.ctx" (fun () -> [ r ctx ]);
++    MP.count "writer.live" (fun () -> Writer.live_count w);
++    MP.count "writer.tags" (fun () -> Writer.Itbl.length w.Writer.tags);
++    MP.count "hashcons" (fun () -> Explanation.Hc.length Explanation.table);
++    MP.probe "proofopen"
++  end
++
+ (* -------------------------------------------------------------------- the run *)
+ 
+ (* The pipeline of the header, for one model: compile, write the .opb, open the proof,
+@@ -1974,6 +2100,7 @@ let solve opts (m : Model.t) =
+   let compiled = Timing.phase "compile" (fun () -> Compile.compile m) in
+   let store = compiled.Compile.store in
+   let encoding = compiled.Compile.encoding in
++  memprobe_compiled compiled;
+   if opts.stats then report_encoding_cost (Encoding.cost encoding);
+   (* The MiniZinc case of [default_proof_prefix] names a file the user never typed, so
+      say where it is. Printed after the model is read, so a refused model names no file
+@@ -2024,6 +2151,7 @@ let solve opts (m : Model.t) =
+         let ctx = Justify.create ~writer ~encoding in
+         (proof_oc, ctx))
+   in
++  memprobe_ctx ctx;
+   let check assignment =
+     Model.check_assignment m (assignment_values m store assignment)
+   in
+@@ -2032,6 +2160,8 @@ let solve opts (m : Model.t) =
+      only wired up under a flag is a counter no test exercises. --stats decides whether it
+      is PRINTED, not whether it is kept. *)
+   let stats = Search.stats_create () in
++  Baguette_proof.Memprobe.register "search.stats" (fun () -> [ Obj.repr stats ]);
++  Baguette_proof.Memprobe.register "compile.rest" (fun () -> [ Obj.repr compiled ]);
+   let writer = ctx.Justify.writer in
+   (* An incumbent the proof records, which is one a stopped run can return (D-0225). *)
+   let have_incumbent () = Writer.has_incumbent writer in
+@@ -2465,6 +2595,11 @@ let () =
+       prerr_endline (Fz_error.to_string e);
+       exit exit_usage
+   | Ok m -> (
++      Baguette_proof.Memprobe.register "frontend.model" (fun () -> [ Obj.repr m ]);
++      Baguette_proof.Memprobe.count "model.vars" (fun () -> Array.length m.Model.vars);
++      Baguette_proof.Memprobe.count "model.constraints" (fun () ->
++          List.length m.Model.constraints);
++      Baguette_proof.Memprobe.probe "parse";
+       refuse_enumeration opts m;
+       match Fz_error.catch (fun () -> solve opts m) with
+       | Ok () -> exit exit_ok
+diff --git a/lib/core/engine.ml b/lib/core/engine.ml
+index 93bc3be6..df110ea9 100644
+--- a/lib/core/engine.ml
++++ b/lib/core/engine.ml
+@@ -2380,6 +2380,7 @@ let propagate ?stop ?(poll_runs = default_poll_runs) (t : t) (store : Store.t) :
+             t.poll_left <- t.poll_left - 1;
+             if t.poll_left <= 0 then (
+               t.poll_left <- poll_runs;
++              Baguette_proof.Memprobe.tick ();
+               if stop () then (
+                 stopped := true;
+                 (* The slots and the queue this abandons, cleared. *)
+diff --git a/lib/core/search.ml b/lib/core/search.ml
+index 4bc08bae..f20a04bf 100644
+--- a/lib/core/search.ml
++++ b/lib/core/search.ml
+@@ -2735,6 +2735,7 @@ let pb_at_conflict engine store ctx stats cfg (c : Store.conflict) ~clause_conve
+   if not (cfg.learn && cfg.pb) then None
+   else (
+     stats.n_pb_attempts <- stats.n_pb_attempts + 1;
++    Baguette_proof.Memprobe.phase := "pb_analysis";
+     match
+       (* A row with a bits term is instantiated through its atoms' bridges (D-0153). *)
+       Pb_analysis.analyse ~stop:(inner_stop cfg) ~bits:(Pb_analysis.bits_of_ctx ctx) store
+@@ -3348,7 +3349,8 @@ let state_conflict ctx trace (c : Store.conflict) =
+ let rec learn_at_conflict ?(closure = true) engine store ctx trace stats cfg
+     (c : Store.conflict) : (Learn.t * int list) option =
+   if not cfg.learn then None
+-  else
++  else (
++    Baguette_proof.Memprobe.phase := "learn_clause";
+     match
+       Learn.at_conflict ~policy:cfg.policy ~closure store c
+         ~vars_of:(Engine.vars_of engine)
+@@ -3430,7 +3432,7 @@ let rec learn_at_conflict ?(closure = true) engine store ctx trace stats cfg
+             (* THE BREAK. See [config.backjump_on_pb]: the row's levels are not a
+                dependency set, so the nogood this filter produces claims the conflict
+                rests on fewer decisions than it does. *)
+-            Some (l, pb))
++            Some (l, pb)))
+ 
+ (* The default search: one node, then its children through [branch]. [decisions] is the
+    stack of literals actually forced true so far by branching, most-recent decision
+@@ -3460,6 +3462,7 @@ and dfs engine store ctx trace stats cfg (order : order) (decisions : Lit.t list
+       raise Limit_hit
+   | Engine.Conflict c -> (
+       stats.conflicts <- stats.conflicts + 1;
++      Baguette_proof.Memprobe.phase := "conflict";
+       (* [c] carries the reporting instance's id ([c.Store.c_prop], since M2-T7) as well
+          as its explanation and its bound facts. Clause learning's resolution (M2-L3)
+          starts from exactly this constraint. *)
+@@ -3653,6 +3656,7 @@ and branch_split engine store ctx trace stats cfg order decisions (dec : decisio
+   let lvl = Store.level store in
+   Writer.set_level ctx.Justify.writer lvl;
+   stats.nodes <- stats.nodes + 1;
++  Baguette_proof.Memprobe.node stats.nodes;
+   let r1 = first store engine ctx trace stats cfg order decisions v k lit in
+   undo_level stats store;
+   match r1 with
+@@ -3688,6 +3692,7 @@ and branch_split engine store ctx trace stats cfg order decisions (dec : decisio
+             lvl2 = lvl);
+       Writer.set_level ctx.Justify.writer lvl;
+       stats.nodes <- stats.nodes + 1;
++      Baguette_proof.Memprobe.node stats.nodes;
+       let r2 = second store engine ctx trace stats cfg order decisions v k lit in
+       undo_level stats store;
+       match r2 with
+@@ -3832,6 +3837,7 @@ and branch_assign engine store ctx trace stats cfg order decisions (a : assign)
+   (* One child dispatched, for two decisions taken. [stats_expected_nodes] carries the
+      correction; see [stats.assigns]. *)
+   stats.nodes <- stats.nodes + 1;
++  Baguette_proof.Memprobe.node stats.nodes;
+   push "upper"
+     (Store.set_hi store v m
+        (Reason.because ~concludes:None Reason.none (Explanation.decision dec_le)))
+@@ -4457,6 +4463,26 @@ let search_core ~(engine : Engine.t) ~(store : Store.t) ~(ctx : Justify.ctx) ?tr
+      and not in [stats_create] because the policy lives on [config] and a [stats] is
+      allowed to outlive a [solve]. *)
+   stats.db <- Retention.create ~policy:config.retention ();
++  Baguette_proof.Memprobe.register "search.retention" (fun () -> [ Obj.repr stats.db ]);
++  Baguette_proof.Memprobe.register "search.trace" (fun () -> [ Obj.repr trace ]);
++  Baguette_proof.Memprobe.count "learned.n_live" (fun () -> Retention.size stats.db);
++  Baguette_proof.Memprobe.count "trace.n_done" (fun () -> trace.Trace.n_done);
++  Baguette_proof.Memprobe.register "learned.engine" (fun () ->
++      let l = ref [] in
++      for i = engine.Engine.count - 1 downto max 0 stats.first_learned_id do
++        l := Obj.repr engine.Engine.instances.(i) :: !l
++      done;
++      !l);
++  Baguette_proof.Memprobe.count "learned.n_engine" (fun () ->
++      max 0 (engine.Engine.count - stats.first_learned_id));
++  Baguette_proof.Memprobe.count "learned.scope_vars" (fun () ->
++      let n = ref 0 in
++      for i = max 0 stats.first_learned_id to engine.Engine.count - 1 do
++        n := !n + List.length engine.Engine.instances.(i).Propagator.inst_vars
++      done;
++      !n);
++  Baguette_proof.Memprobe.count "search.conflicts" (fun () -> stats.conflicts);
++  Baguette_proof.Memprobe.count "search.nodes" (fun () -> stats.nodes);
+   (* And the learned units (the globals), for the same reason -- a [stats] may outlive a
+      [solve], and a global from a previous search cites a constraint this one's writer
+      knows nothing about.
+@@ -4485,6 +4511,7 @@ let search_core ~(engine : Engine.t) ~(store : Store.t) ~(ctx : Justify.ctx) ?tr
+   stats.learned_kinds <- Bytes.empty;
+   stats.lo_pruned <- Bytes.empty;
+   stats.nodes <- stats.nodes + 1;
++  Baguette_proof.Memprobe.node stats.nodes;
+   (* The opt-in strategies' state (D-0137), per solve, and the order
+      they wrap. With every one of them off this is [None] and [order] is the caller's,
+      physically, so the default search is the pre-M10 code path. *)
+diff --git a/lib/core/store.ml b/lib/core/store.ml
+index 5b5bebcd..995a1b21 100644
+--- a/lib/core/store.ml
++++ b/lib/core/store.ml
+@@ -1099,6 +1099,10 @@ let apply t v (r : Domain.result) (j : Reason.justified) =
+   | Domain.Changed d ->
+       let i = Var.to_int v in
+       let old = t.domains.(i) in
++      if Baguette_proof.Memprobe.enabled then begin
++        if Domain.lo d > Domain.lo old then Baguette_proof.Memprobe.touch i (Domain.lo d);
++        if Domain.hi d < Domain.hi old then Baguette_proof.Memprobe.touch i (Domain.hi d + 1)
++      end;
+       if Debug.enabled then (
+         Debug.check "I-D3: domains only shrink" (fun () ->
+             Domain.lo d >= Domain.lo old
+diff --git a/lib/proof/memprobe.ml b/lib/proof/memprobe.ml
+new file mode 100644
+index 00000000..134f26d5
+--- /dev/null
++++ b/lib/proof/memprobe.ml
+@@ -0,0 +1,320 @@
++(* M21-memory-T1 (D-0218). INSTRUMENTATION, KEPT AS A PATCH (memprobe.patch in
++   /cluster/arthur/baguette-results/memory/), never merged.
++
++   Under BAGUETTE_MEMPROBE=<file>, writes at a few points of a run the live heap split by
++   KIND. A kind is a list of roots registered by name; the split is cumulative in
++   registration order: kind k is charged with the words reachable from roots 1..k minus
++   those reachable from roots 1..k-1, so a block shared by two kinds goes to the first one
++   registered. [Gc.stat] gives the live words after a full major cycle, and what the roots
++   do not reach is reported as [unattributed].
++
++   Probe points: [probe] called by name (parse, compile, proofopen), the search's node
++   count crossing 1 and 1000, the heap ([Gc.quick_stat]'s heap_words at the end of a
++   major cycle, i.e. what --max-heap-mb reads) crossing 1, 2, 4, 8, 16 and 32 GiB, and the
++   exit. A threshold crossing only arms a flag; the probe runs at the next [tick] (every
++   [poll_runs] propagator runs, and every node), where the roots are consistent. *)
++
++let path = Sys.getenv_opt "BAGUETTE_MEMPROBE"
++let enabled = match path with None | Some "" -> false | Some _ -> true
++let oc = lazy (match path with Some p -> open_out p | None -> stderr)
++
++type root = { label : string; get : unit -> Obj.t list }
++
++let roots : root list ref = ref []
++
++(* Re-registering a label replaces its getter and keeps its position. *)
++let register label get =
++  if enabled then
++    if List.exists (fun r -> r.label = label) !roots then
++      roots := List.map (fun r -> if r.label = label then { label; get } else r) !roots
++    else roots := !roots @ [ { label; get } ]
++
++let counters : (string * (unit -> int)) list ref = ref []
++
++let count label get =
++  if enabled then
++    counters := List.filter (fun (l, _) -> l <> label) !counters @ [ (label, get) ]
++
++let nodes = ref 0
++
++(* What the search was doing at the last marker (set in Search: conflict, learn_clause,
++   pb_analysis; "propagate" at each node). Printed with every probe. *)
++let phase = ref "front"
++let t0 = Sys.time ()
++
++(* ONE pass over the roots, in order, with a visited set outside the OCaml heap (a
++   Bigarray, open addressing on the block's address), so that a block is charged to the
++   first kind that reaches it and the probe does not grow the heap it measures. Must run
++   right after [Gc.full_major]: the major heap of OCaml 5.1 does not move, and the
++   minor heap is then empty, so an address is stable for the length of the walk.
++
++   Per kind: words (headers included), blocks, string bytes, and a histogram of block
++   shapes (tag, size) -- the evidence T2 needs to say what is header, what is a list
++   cell, what is a boxed literal. *)
++module Walk = struct
++  type stats = {
++    mutable words : int;
++    mutable blocks : int;
++    mutable str_words : int;
++    mutable flat_words : int; (* no-scan blocks other than strings: floats, customs *)
++    shapes : (int, int ref) Hashtbl.t; (* tag * 4096 + min size 4095 -> count *)
++  }
++
++  let new_stats () =
++    { words = 0; blocks = 0; str_words = 0; flat_words = 0; shapes = Hashtbl.create 64 }
++
++  let addr (o : Obj.t) : int = (Obj.magic o : int) lor 1
++
++  type set = {
++    mutable tbl : (int, Bigarray.int_elt, Bigarray.c_layout) Bigarray.Array1.t;
++    mutable mask : int;
++    mutable n : int;
++  }
++
++  let create_set cap =
++    let rec pow2 k = if k >= cap then k else pow2 (2 * k) in
++    let c = pow2 1024 in
++    let tbl = Bigarray.Array1.create Bigarray.int Bigarray.c_layout c in
++    Bigarray.Array1.fill tbl 0;
++    { tbl; mask = c - 1; n = 0 }
++
++  let hash a = (a * 0x9E3779B97F4A7C1) lsr 7
++
++  let rec add s a =
++    if 2 * (s.n + 1) > s.mask then grow s;
++    let tbl = s.tbl and mask = s.mask in
++    let rec go i =
++      let v = Bigarray.Array1.unsafe_get tbl i in
++      if v = 0 then (
++        Bigarray.Array1.unsafe_set tbl i a;
++        s.n <- s.n + 1;
++        true)
++      else if v = a then false
++      else go ((i + 1) land mask)
++    in
++    go (hash a land mask)
++
++  and grow s =
++    let old = s.tbl in
++    let c = 2 * (s.mask + 1) in
++    let tbl = Bigarray.Array1.create Bigarray.int Bigarray.c_layout c in
++    Bigarray.Array1.fill tbl 0;
++    s.tbl <- tbl;
++    s.mask <- c - 1;
++    s.n <- 0;
++    for i = 0 to Bigarray.Array1.dim old - 1 do
++      let v = Bigarray.Array1.unsafe_get old i in
++      if v <> 0 then ignore (add s v)
++    done
++
++  (* the explicit stack, a growable array of values *)
++  let stack = ref (Array.make 4096 (Obj.repr 0))
++  let sp = ref 0
++
++  let push o =
++    if !sp >= Array.length !stack then begin
++      let a = Array.make (2 * !sp) (Obj.repr 0) in
++      Array.blit !stack 0 a 0 !sp;
++      stack := a
++    end;
++    Array.unsafe_set !stack !sp o;
++    incr sp
++
++  let closinfo_startenv o =
++    let info = Obj.raw_field o 1 in
++    Nativeint.to_int (Nativeint.shift_right_logical (Nativeint.shift_left info 8) 9)
++
++  let walk set st root =
++    let visit o =
++      if Obj.is_block o then begin
++        let o =
++          if Obj.tag o = Obj.infix_tag then
++            Obj.add_offset o (Int32.of_int (-(Obj.size o * (Sys.word_size / 8))))
++          else o
++        in
++        if add set (addr o) then push o
++      end
++    in
++    visit root;
++    while !sp > 0 do
++      decr sp;
++      let o = Array.unsafe_get !stack !sp in
++      Array.unsafe_set !stack !sp (Obj.repr 0);
++      let tag = Obj.tag o and size = Obj.size o in
++      st.words <- st.words + size + 1;
++      st.blocks <- st.blocks + 1;
++      let key = (tag * 4096) + min size 4095 in
++      (match Hashtbl.find_opt st.shapes key with
++      | Some r -> incr r
++      | None -> Hashtbl.add st.shapes key (ref 1));
++      if tag = Obj.closure_tag then
++        for i = closinfo_startenv o to size - 1 do
++          visit (Obj.field o i)
++        done
++      else if tag = Obj.string_tag then st.str_words <- st.str_words + size + 1
++      else if tag >= Obj.no_scan_tag then st.flat_words <- st.flat_words + size + 1
++      else if tag = Obj.cont_tag then ()
++      else
++        for i = 0 to size - 1 do
++          visit (Obj.field o i)
++        done
++    done
++end
++
++let shape_name key =
++  let tag = key / 4096 and size = key mod 4096 in
++  let t =
++    if tag = Obj.closure_tag then "closure"
++    else if tag = Obj.string_tag then "string"
++    else if tag = Obj.double_array_tag then "floatarray"
++    else if tag = Obj.custom_tag then "custom"
++    else if tag = Obj.lazy_tag then "lazy"
++    else if tag = Obj.forward_tag then "forward"
++    else string_of_int tag
++  in
++  Printf.sprintf "%s/%s" t (if size = 4095 then "big" else string_of_int size)
++
++let in_probe = ref false
++
++let probe tag =
++  if enabled && not !in_probe then begin
++    in_probe := true;
++    let oc = Lazy.force oc in
++    let t_start = Sys.time () in
++    let hdr = Printf.sprintf "%s\t%.1f\t%d" tag (t_start -. t0) !nodes in
++    Printf.fprintf oc "phase\t%s\t%s\n" hdr !phase;
++    let q = Gc.quick_stat () in
++    Printf.fprintf oc "gc\t%s\theap_words_quick\t%d\n" hdr q.Gc.heap_words;
++    Printf.fprintf oc "gc\t%s\ttop_heap_words_quick\t%d\n" hdr q.Gc.top_heap_words;
++    (try
++       let ic = open_in "/proc/self/status" in
++       (try
++          while true do
++            let l = input_line ic in
++            if String.starts_with ~prefix:"VmRSS" l || String.starts_with ~prefix:"VmHWM" l
++            then
++              Printf.fprintf oc "gc\t%s\t%s\n" hdr
++                (String.concat "" (String.split_on_char '\t' l))
++          done
++        with End_of_file -> ());
++       close_in ic
++     with Sys_error _ -> ());
++    Gc.full_major ();
++    let st = Gc.stat () in
++    Printf.fprintf oc "gc\t%s\tlive_words\t%d\n" hdr st.Gc.live_words;
++    Printf.fprintf oc "gc\t%s\theap_words\t%d\n" hdr st.Gc.heap_words;
++    Printf.fprintf oc "gc\t%s\tfree_words\t%d\n" hdr st.Gc.free_words;
++    Printf.fprintf oc "gc\t%s\tlive_blocks\t%d\n" hdr st.Gc.live_blocks;
++    Printf.fprintf oc "gc\t%s\tfragments\t%d\n" hdr st.Gc.fragments;
++    let set = Walk.create_set (2 * (st.Gc.live_blocks + 1024)) in
++    let total = ref 0 in
++    List.iter
++      (fun r ->
++        let objs = try r.get () with _ -> [] in
++        let s = Walk.new_stats () in
++        List.iter (fun o -> Walk.walk set s o) objs;
++        total := !total + s.Walk.words;
++        Printf.fprintf oc "kind\t%s\t%s\t%d\t%d\t%d\t%d\n" hdr r.label s.Walk.words
++          s.Walk.blocks s.Walk.str_words s.Walk.flat_words;
++        let l = Hashtbl.fold (fun k v a -> (k, !v) :: a) s.Walk.shapes [] in
++        let l = List.sort (fun (_, a) (_, b) -> compare b a) l in
++        List.iteri
++          (fun i (k, n) ->
++            if i < 12 then
++              Printf.fprintf oc "shape\t%s\t%s\t%s\t%d\n" hdr r.label (shape_name k) n)
++          l;
++        (* and the 8 heaviest shapes by words (count * (size + 1)), "big" counted at 4096 *)
++        let w (k, n) = n * ((k mod 4096) + 1) in
++        let l = List.sort (fun a b -> compare (w b) (w a)) l in
++        List.iteri
++          (fun i (k, n) ->
++            if i < 8 then
++              Printf.fprintf oc "wshape\t%s\t%s\t%s\t%d\n" hdr r.label (shape_name k) n)
++          l)
++      !roots;
++    Printf.fprintf oc "kind\t%s\tunattributed\t%d\n" hdr (st.Gc.live_words - !total);
++    List.iter
++      (fun (l, g) ->
++        let v = try g () with _ -> -1 in
++        Printf.fprintf oc "count\t%s\t%s\t%d\n" hdr l v)
++      !counters;
++    Printf.fprintf oc "probe_seconds\t%s\t%.1f\n%!" hdr (Sys.time () -. t_start);
++    in_probe := false
++  end
++
++let gib = 1024 * 1024 * 1024 / 8
++let thresholds = ref [ gib / 2; 1 * gib; 2 * gib; 4 * gib; 8 * gib; 16 * gib; 32 * gib ]
++
++(* BAGUETTE_MEMPROBE_STOP_GIB=g: after the probe at the g GiB crossing, exit (rc 0, no exit
++   probe). The refusal point is 16 GiB; walking a heap past it costs minutes per probe. *)
++let stop_gib =
++  match Sys.getenv_opt "BAGUETTE_MEMPROBE_STOP_GIB" with
++  | Some s -> ( try int_of_string s with _ -> max_int)
++  | None -> max_int
++
++let stopped = ref false
++let pending : string option ref = ref None
++
++let tick () =
++  if enabled then
++    match !pending with
++    | None -> ()
++    | Some tag ->
++        pending := None;
++        probe tag;
++        let g =
++          try Scanf.sscanf tag "heap%dG" (fun g -> g) with _ -> 0
++        in
++        if g >= stop_gib then begin
++          stopped := true;
++          Printf.fprintf (Lazy.force oc) "stop\t%s\n%!" tag;
++          exit 0
++        end
++
++let node n =
++  if enabled then begin
++    nodes := n;
++    phase := "node";
++    if n = 1 || n = 1000 || n = 10_000 || n = 100_000 || n = 1_000_000 || n = 10_000_000
++    then probe (Printf.sprintf "node%d" n);
++    tick ()
++  end
++
++let in_alarm = Sys.getenv_opt "BAGUETTE_MEMPROBE_IN_ALARM" = Some "1"
++
++let () =
++  if enabled then begin
++    ignore
++      (Gc.create_alarm (fun () ->
++           let h = (Gc.quick_stat ()).Gc.heap_words in
++           (match !thresholds with
++           | t :: rest when h >= t ->
++               let rec drop t = function t' :: r when h >= t' -> drop t' r | r -> (t, r) in
++               let t, r = drop t rest in
++               thresholds := r;
++               pending :=
++                 Some
++                   (if t < gib then Printf.sprintf "heap%dM" (t * 8 / 1024 / 1024)
++                    else Printf.sprintf "heap%dG" (t / gib))
++           | _ -> ());
++         (* BAGUETTE_MEMPROBE_IN_ALARM=1: probe here, at the end of the major cycle, rather
++            than at the next tick. A heap that crosses a threshold inside ONE step (a
++            conflict analysis) never reaches a tick before the budget refuses it. *)
++         if in_alarm && !pending <> None && not !in_probe then tick ()));
++    at_exit (fun () -> if not !stopped then probe "exit")
++  end
++
++
++(* D-0265 (M18-coverage-T9), PATCH ONLY: the order atoms a run TOUCHES. Every bound move
++   of variable i to lo = v touches [x_i >= v], every move to hi = v touches [x_i >= v+1].
++   Distinct (i, v) pairs; a lower bound of what a lazy encoding would have to mint (a
++   reason may cite a weakened bound that was never a bound, and a model row over an order
++   variable names all its literals, which is what a lazy encoding would replace). *)
++let touched : (int * int, unit) Hashtbl.t = Hashtbl.create (if enabled then 1 lsl 16 else 1)
++let touched_per_var : (int, int) Hashtbl.t = Hashtbl.create (if enabled then 1024 else 1)
++
++let touch i v =
++  if enabled && not (Hashtbl.mem touched (i, v)) then begin
++    Hashtbl.replace touched (i, v) ();
++    Hashtbl.replace touched_per_var i (1 + try Hashtbl.find touched_per_var i with Not_found -> 0)
++  end

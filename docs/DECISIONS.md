@@ -35182,3 +35182,260 @@ model runs and 8 real-instance runs identical; scp 26/26; `check_unlimited` ok; 
 `b5859af4` are unchanged by the merge (no re-record); scaling ok; `e2e_lane.sh -j 4` PASS (validation
 260 AGREE, 2 UNCHECKED, 0 DIFFER); `fuzz_lane.sh -j 4 -n 200`, all twelve streams, 0 disagreements, 0
 timeouts; `factor_lane.sh -j 8` exit 0, 90 runs, 36 proofs VERIFIED, every per-node cost within 0.23 % of its recorded reference.
+
+## D-0265  [AUTONOME] M18-coverage-T9, first half: what fills the heap of the refused third, and whether lazy literals would remove it. Measured on today's main: the order ladder is not in the heap, and order atoms are not what the refused runs spend. The largest single mechanism (21 of 70 instances, 20 refusals with proof) is a domain-consistent global pruning a wide declared gap VALUE BY VALUE at the root, one trail entry of 650 bytes per value. The rest is model objects, deferred reasons, the all_different pairwise table and the arithmetic case split. Recommended first step: element prunes its result's gap as one store change. Measurement and design only, no solver code changed
+
+**Status**: DONE (the measurement and this record) on `wave110-refused` (agent-refused, 2026-11-28). The build is NOT
+started. Base: origin/main `00c42b51`, release md5 `4158b921a737cafe9a3009d4f785f1fd`. Probe: the same source with
+`bench/refused/memprobe.patch` (D-0218's census re-applied, plus touched-atom counters), md5 `198db484`, never
+committed. Runs on fataepyc-06, `/scratch/arthur/refused-work/`. Tables, logs, probes and README:
+`/cluster/arthur/baguette-results/refused/`. Scripts: `bench/refused/`. ROADMAP: the T9 row is annotated, no row added.
+
+[AUTONOME] because the row asks for a recommendation on the PB encoding and the proof's naming contract, which the
+user decides. Nothing is decided here that changes the solver: the record proposes, and its first step is
+byte-identical by construction.
+
+### 1. The population, and where each run stops on today's main
+
+70 instances of the series of 2026-11-26 (D-0227). 56 were REFUSED (heap budget) in arm B or arm D of the series. 14
+more timed out with no solution in B or D after at most 1 000 nodes (only one after at most 100, so "never leaves the
+root" by time is rare; the stuck ones are the 14). Rerun with today's main in the series' setting (16 GiB address space,
+`--max-heap-mb 8192`, `MemoryMax=32G`, 1 200 s, `-f`, which D-0261 made the default since), arm B with proof and arm D
+without. "Moment" is read from stderr: compile (the encoding-cost statistics are not printed yet), proof open, root
+(node 1), early (at most 1 000 nodes), search.
+
+| | refused | compile (of which D-0263's estimate) | proof open | root | early | search | heap stop with an incumbent |
+|---|---|---|---|---|---|---|---|
+| B (proof) | **56** | 19 (2) | 2 | 13 | 21 | 1 | 0 |
+| D (`--no-proof`) | **40** | 18 (2) | 0 | 13 | 8 | 1 | 3 |
+
+The series read 54 and 40 on the same instances. D-0263's estimate turns two `arithmetic-target` instances into
+refusals at parse time (the int_times case split over a 68 720-wide variable), the third still dies in the compile
+by the heap. The other 14 rows are time-outs (11 in B, 17 in D, nmseq, community, black-hole, crosswords, connect,
+whirlpool d12, multiple-constant-multiplication), and one is a front-end refusal (`connect__0086`, a `var int` with no
+domain, not memory).
+
+Without any budget (arm Dnolim, no address-space cap, `MemoryMax=64G`, 600 s), **39 of the 40 refusals of arm D run**
+(one, whirlpool d30, is killed at 64 GB in the compile), at a peak RSS of **18 to 65 GB**, and 21 of them find a
+solution or prove UNSAT within the 600 s. So at today's main the
+refused third is not refusals of models that cannot be run. It is runs that need 3 to 8 times the 8 GiB budget.
+
+### 2. What fills the heap, by D-0218's census
+
+The probe walks the live heap from named roots at fixed points and at each crossing of 0.5, 1, 2, ... GiB (D-0218
+section 2). Arm PB: proof, a 64 GiB budget, the run stopped after the probe at 8 GiB of heap (48 GiB for the
+instances that die in the compile, so that the probe after the compile exists). The probe that stands for the
+refusal is the last one whose walk finished. Groups: model (front end, encoding records, propagator instances,
+subscriptions), trail (entries and the reasons they hold), learned, proof (writer, justify, hash-consed explanations,
+trace). Then the reading by hand that splits the trail by what its entries hold (`bench/refused/kinds.py`, the rules
+and every override with its reason in its header).
+
+| kind | instances | refused B / D | what holds the heap at the refusal | peak RSS without a budget | GCS (16 GiB, proof) |
+|---|---|---|---|---|---|
+| **gap**: a domain-consistent global prunes a wide declared gap value by value | 21 (liner-sf 7, wordpress 5, proteindesign 5, connect 3, table-layout 1) | **20 / 16** | trail 82 to 95 % (liner-sf, wordpress, connect: 15.4 to 18.5 M entries at node 1 on liner-sf, 15.3 M on wordpress 7, 1.7 to 6.1 M on connect), trail + proof 72 % (proteindesign), proof 64 % (table-layout, 5 GB of live proof ids at the root) | 29 to 65 GB | past the root on 15: incumbents on 14 (liner-sf 4 of 7, wordpress 5, proteindesign 5) at 31 MB to 2.5 GB; table-layout UNSAT at 10.9 GB; connect no solution |
+| **model**: propagator instances, subscriptions, encoding records, front end | 15 (code-generator 5, gt-sort 2, largescheduling 2, pentominoes 2, ihtc i06 and i14, rcpsp-wet-diverse, ma-path-finding) | 15 / 12 | model 46 to 96 % (`bool_clause` 5 to 14 GB on gt-sort, `int_times` and `int_lin_le` instances, `engine.watch` 1.1 to 3.5 GB, `encoding.ints` 0.9 to 2.6 GB, front end 0.5 to 3.5 GB) | 18 to 63 GB | out of memory on 7 (ERROR at 15.5 to 16.3 GB), no solution on the rest |
+| **reasons**: trail entries of 4.6 to 190 KB, deferred reasons holding explanation trees | 8 (warehouse 3, nside 2, tdtsp 2, ihtc i11) | 8 / 4 | trail 49 to 99 % (tdtsp 20_56: 22.6 GB for 119 k entries) | 20 to 34 GB | out of memory on 3, incumbents on tdtsp's 2, no solution on 3 |
+| **alldiff**: the pairwise row table of all_different | 5 (whirlpool d21, d29, d30, ghoulomb, multi-agent-graph-coverage) | 5 / 4 | `prop.all_different_int` 11 and 16.3 GB (74 and 84 % of live), the compile of d29 and d30 never finishes | 25 to 65 GB (d30 killed at 64) | no solution, 188 MB to 2.1 GB |
+| **arith**: the int_times / int_div case split | 4 (arithmetic-target 3, yumi-dynamic p9) | 4 / 4 | `prop.int_div` + `int_times` + `int_abs` 10 to 22 GB (91 to 97 %) | 37 to 52 GB | incumbents on the 3 arithmetic-target at 150 to 176 MB |
+| **proof**: hash-consed explanations, the trace, and the GC over them | 7 (nmseq 3, crosswords 2, black-hole, whirlpool d12) | 4 / 0 | proof 41 to 98 % (crosswords 19: 17.6 GB of hash-consed nodes), nmseq refused at 8 nodes with 1.6 to 2.5 GB live under an 8 GiB heap (the GC's free space, D-0218 fix 3) | not run (not refused in D) | |
+| learned | 2 (community-detection) | 0 / 0 | the retention 80 % of 0.4 to 0.5 GB, time-outs at 300 k to 1.2 M nodes | | |
+| search, front end | 8 | 0 / 0 | not memory | | |
+
+Sum 70; refusals 56 in B and 40 in D. The kinds that are the ENCODING's width are the first and the fourth and fifth
+in part (the gap, the alldiff table over a shared width, the case split per value). The order ladder is in none of
+them: D-0218 already found it streamed to the `.opb` and absent from the heap, and this census agrees
+(`encoding.ints` is 0.2 to 0.3 GB on liner-sf, whose ladder is 28 to 50 M rungs).
+
+**The gap mechanism, in detail.** 21 instances of the population declare wide (10 000 or more) order variables. In 20
+of them every such variable is the result of an `array_int_element` over a CONSTANT array or a column of a
+`baguette_table` (in crosswords 19 they are held by all_different and element). Table-layout's 400 k element results
+are narrow (about 250 values each) but bounded the same way. Those constraints allow few values
+(`bench/refused/wide_holders.py`, the intersection over every such constraint):
+
+| instances | wide order variables | declared values | values the arrays allow |
+|---|---|---|---|
+| liner-sf (7) | 18 to 55 | 11.8 to 49.6 M | 1 441 to 2 689 |
+| wordpress (5) | 45 to 78 | 15.3 to 26.5 M | 7 320 to 12 688 |
+| proteindesign (5) | 78 to 153 | 7.8 to 15.3 M | 6 116 to 25 239 |
+| connect (3) | 24 to 110 | 0.6 to 2.1 M | 62 to 298 |
+| table-layout (1) | 400 k results of width 250 or so | 101 M | 3.7 M |
+
+`lib/core/prop/element.ml`'s interior rule walks `range (lo + 1) (hi - 1)` and calls `View.remove` once per value that
+no live position carries, each with its own frame, `hole_expl` and trail entry. At the root of liner-sf fm3_11 that is
+15.4 M trail entries after 51 effective propagator runs, 657 bytes each (10.1 GB of `store.trail`), and the list of
+the range itself (28 M cells) as garbage. `trail_len` matches the declared gap on every probed run (wordpress 7: 15.27
+M entries for 15.28 M declared values). With the proof, each entry later becomes one trace line and one live id (131
+to 150 bytes, D-0218), which is table-layout's 5 GB of `writer.live` at the root.
+
+### 3. Would it fit if literals were introduced lazily?
+
+The probe counts the order atoms a run TOUCHES: every bound move to `lo = v` touches `x_ge_v`, every move to `hi = v`
+touches `x_ge_(v+1)` (a lower bound of what a lazy encoding would mint: a reason may weaken a bound to a value that
+never was one). Arm PD (no proof, 48 GiB, 600 s) on six instances of the gap kind:
+
+| instance | where the probe is | order atoms touched | declared | live | trail share |
+|---|---|---|---|---|---|
+| wordpress 7 | node 1 000 | 1 802 | 15.3 M | 12.7 GB | 82 % |
+| liner-sf tp7_2 | node 45 | 1 434 | 18.0 M | 9.7 GB | 95 % |
+| liner-sf fm3_11 | node 1 | 5 | 28.4 M | 11.4 GB | 95 % |
+| proteindesign 1HZ5 | node 34 | 3 718 | 7.8 M | 9.4 GB | 53 % |
+| connect 0018 | node 129 | 104 | 0.76 M | 1.3 GB | 88 % |
+| table-layout | node 1 | 0 | 104 M | 2.5 GB | 2 % (writer, model) |
+
+So a run touches about 10^-4 of the atoms it declares. But the declared atoms are not in the heap, and **lazy order
+atoms alone would move no refusal**: the heap is the gap's per-value trail entries, which are holes (values) and not
+bound atoms, and an element over a result on the bits encoding would still punch every value (with a `pol` per
+pruning, D-0127). What makes these runs fit is that the gap values never become prunings. Without them the live heap
+at the refusal falls to what is left: about 0.5 GB on liner-sf (11.4 GB x 5 %), 1.1 to 2.3 GB on wordpress, 4.4 GB on
+proteindesign without proof, 0.2 GB on connect; with proof, liner-sf 1.4 GB and wordpress 1.1 to 1.8 GB. By that
+estimate **19 to 20 of the 21 gap instances would fit under 8 GiB** (table-layout, which GCS solves at 10.9 GB, is the
+uncertain one).
+
+**What GCS does on the same instances** (D-0211's runs, fzn-glasgow `ebffdc08` with proof, 16 GiB, 1 200 s, read from
+`/cluster/arthur/baguette-results/node07-gcs/`, `gcs.tsv`). On the gap kind GCS passes the root on 15 of 21, at 31 to 489
+MB on liner-sf and wordpress, 1.2 to 2.5 GB on proteindesign, with an incumbent on 14. It writes 3.7 to 341 GB of proof
+per run, never checked (the series does not check a stopped run). On the arithmetic case split it holds 150 to 176 MB
+and finds incumbents on the three arithmetic-target. On the model and reasons kinds it fails as we do: out of memory at
+15.5 to 16.3 GB on 10 of the 23 (ihtc 3, nside 2, rcpsp, pentominoes 2, ma-path, code-generator mesa.eval), no solution
+on the others but tdtsp's two incumbents. On the
+alldiff kind it stays under 2.1 GB and finds nothing. So GCS's advantage on the refused third is the gap and the case
+split, the two places where it does not materialise per-value work, and not its order atoms.
+
+### 4. What `--bits-above` buys, and why it does not reach these
+
+The default is `--bits-above 0` (D-0201): every ELIGIBLE variable of width 2 or more is on bits. Every wide order
+variable of the population is held back by scope: element (15 instances), table (5), all_different (crosswords 19). The
+widest variables of the refused instances that are eligible are already on bits (largescheduling's 8 M, rcpsp's 1.18
+M objective, ihtc's 27.5 M objective, connect's 2 x 10^9, arithmetic-target's 1.69 x 10^9). Arm Dorder
+(`--bits-above none`, 300 s) refuses 37 of the same 40 and two more (liner-sf fm3_3 and rcpsp, which find an incumbent
+on bits). Of the other three, the two largescheduling no longer finish their compile in 360 s (an 8 M-rung ladder) and
+warehouse oly20 meets the shorter limit first. So bits already
+removes what it can reach. What still grows with a width under bits: the held families' ladders (above), the int_times
+/ int_div case split per value of the case variable (arith, D-0263), maximum/minimum's per-value rows over an order
+scope, and all_different's pairwise table, which is per shared VALUE as well as per pair (D-0263's 2^24-wide variable
+kept on the order encoding by all_different is the same family). And on the proof side D-0264's vrp: a trace step that
+walks a 460 588-wide BITS variable a few values at a time, which costs proof lines and time, not heap.
+
+### 5. The options
+
+For each, what it removes from the table of section 2 (refusals in B / D at 8 GiB, by the estimate of section 3), what
+it does to the proof, which modules change, the risks, a rough size.
+
+**(a) Lazy order atoms, defined on first use (GCS's scheme).** In this solver that IS the bits arm: a variable without
+a ladder in the `.opb`, its rows over `x_bit_i`, its atoms minted by a `red` pair at level 0 (PROOF-FORMAT section 3,
+"Bits encoding"). A lazy order atom over a variable whose rows NAME order literals is impossible (I-X5, and a `red`
+whose atom occurs in a model row has a goal the fresh-atom witness cannot discharge), and the D-0031 rotation that
+introduces a rung without bits is quadratic. So (a) means rewriting each held family's rows over bits and every
+pruning of those families as a `pol` (D-0127: no `rup` over a bits row). Removes the ladder from the `.opb` (liner-sf
+fm3_11's `.opb` is 5.9 GB, mostly the 28 M rungs and their names) and from the checker's load. **Removes 0 refusals by
+itself**: element would still punch the gap value by value. Proof: PROOF-FORMAT section 3's bits section extended to
+the families' rows, `--e2e` must re-derive each family's rows from cake's `.opb` over bits. Modules: compile.ml
+(`held_families`), encoding.ml, and per family element.ml, table.ml, alldiff.ml, gcc.ml, cumulative.ml, regular.ml,
+inverse.ml, member.ml, circuit.ml, plus justify.ml and trace.ml. Size: one M8-bits-encoding-T3-sized task (D-0134)
+per family, ten families.
+
+**(b) Widen the bits encoding's reach to the globals that still force the order encoding.** The same work as (a) seen
+from the scope rule, and the same result on this table. It is what D-0263 section 6 needs for its two remaining
+`wide` fuzz cases. Worth doing for element over a constant array and table first if (a)/(b) is ever started, because
+those hold every wide variable here.
+
+**(c) A per-variable choice by width.** Exists (`--bits-above W`). It only matters once (a)/(b) makes the held families
+eligible. Alone, 0.
+
+**(d) Sparse ladders over the values that occur.** For a result of element over a constant array or a table column,
+declare the variable over S (the values the arrays allow) from the start: a ladder of |S| - 1 rungs, atoms `x_ge_v`
+only for v in S, rows over it with the gaps as coefficients (`x = S_0 + sum (S_k - S_(k-1)) x_ge_(S_k)`), the store's
+domain created with S's complement as BASE holes (the D-0222 log has base holes, so no trail entry, no line). Removes
+the gap kind: **20 / 16 refusals**, and the ladder (28 to 50 M rungs to 1.4 to 2.7 k on liner-sf). Proof: the `.opb`
+then states x in S, which the model implies through the element or table but does not say; that is a translation
+rule SPEC 2.1 and PROOF-FORMAT section 3 must state ("the result of an element over constants is encoded over the
+array's values"), and the naming contract changes: `[x >= v]` for v not in S renders as `x_ge_(next_S(v))`, the way a
+view renders onto its base (D-0058). `--e2e` no longer lines up with cake's `.opb` (which declares x's full domain) until
+the prefix derives the sparse ladder; until then `--e2e` keeps the full encoding. Modules: compile.ml (S, the
+decision), encoding.ml (declaration, expansion, naming), lit.ml, domain.ml and store.ml (an initial domain with base
+holes), order_reason.ml and ladder.ml (rungs are no longer unit steps: D-0028's rule that `Order_reason.weaken_declared`
+and `Encoding.expand_int_lin_le` change in the same commit applies), trace.ml and justify.ml (claims over
+non-consecutive atoms). Risks: every place that assumes an atom at every value of (lo, hi]; the faithfulness argument
+moves into the translation. Size: three to five tasks, a SPEC change, a decision.
+
+**(d') The gap as one change, the contract unchanged.** Keep the full ladder and the `.opb` as they are. Element (then
+table) removes the unsupported interior values of its result in ONE store change per run, not one per value. Step 1 is
+store-side only: one trail entry, one frame, one reason for the whole set, the hole log appending the values (16 bytes
+each, D-0222: 450 MB for liner-sf fm3_11's 28 M), and the trace still writing one line per hole in the order it does
+today (`Trace.lines` already yields one line per hole of a `Holes` change), so the `.pbp` should be byte-identical.
+Step 2 writes one line per maximal GAP instead of per value: the claim `~x_ge_a \/ x_ge_(b+1)` is RUP from the
+element rows, the index's at-least-one line and the ladder (assume both literals false, the ladder fixes every rung
+across the gap, each row then falsifies its position's direct literal, the at-least-one line is violated). That is a
+new claim shape in trace.ml and a proof change (lanes re-recorded). Removes: step 1, the trail of the gap kind without
+proof (16 refusals of D by the estimate, the trail share being 82 to 95 %); step 2, the per-value proof lines and live
+ids as well (the 20 of B). Leaves the Θ(w) ladder on disk and in veripb's load. Modules: element.ml, then table.ml;
+domain.ml / store.ml for a multi-value removal if `Domain` has none; trace.ml in step 2. Size: step 1 one agent, step 2
+one agent.
+
+**(e) Refuse earlier, with a better diagnostic, and nothing else.** The heap guard's message names the widest declared
+variable and blames its ladder even when that variable is on bits (rcpsp: the 1.18 M objective on bits, 28 890 ladder
+clauses in all; gt-sort n7: 56 clauses and values when it dies, its heap is 5 M `bool_clause` instances). Replacing
+that sentence by the counters the run already has (trail entries, instances, `.opb` rows) makes every refusal of the
+table name its kind. Removes 0 refusals. Size: small.
+
+**Outside the encoding, what the other kinds need** (not T9's, said so the third is accounted for):
+
+- reasons (8 / 4): D-0223 measured releasing Element's wrapper tree (97 % of tdtsp's heap, +16 to +37 % time, a proof
+  change) and left it to the user. These numbers are the case for it: 8 refusals with proof.
+- model (15 / 12): D-0218 fix 5 (flat instances, one subscription index, no empty tables per integer variable, the
+  front end freed after the compile). GCS and Chuffed hold 4 to 16 GB on the same models, so a factor 2 to 4 is the
+  realistic gain; some stay over 8 GiB.
+- alldiff (5 / 4): `Encoding.add_all_different` writes one `.opb` row per pair AND shared value (whirlpool d29: 297 M
+  rows, 39 GB of `.opb` written in 16 minutes before the run was stopped) and returns their ids as an OCaml list of
+  `((string * string * int) * cid)`, about 100 bytes a row, which the propagator keeps. The ids are consecutive per
+  pair, so a base id per pair is the same table in 8 bytes a pair (byte-identical); the `.opb` itself needs one
+  at-most-one row per value instead of the pairwise clauses (a proof change).
+- arith (4 / 4): a bounds-reasoning int_times / int_div instead of the per-value case split (D-0060 chose the split
+  for its proof shape); GCS shows 150 MB is possible.
+- proof (4 / 0): the GC's free space (D-0218 fix 3) and the trace.
+
+### 6. Recommendation
+
+**The honest answer to the row is that the refused third is mostly NOT the order encoding's literals.** The order
+ladder costs no heap (D-0218, confirmed), a run touches about one atom in ten thousand of those it declares, and none
+of the 56 refusals would become an attempt if order atoms were lazy and nothing else changed. What the encoding's WIDTH
+does cost is one mechanism with a precise owner: element (16 instances) and table (5) prune a declared gap of 0.6 to
+101 M values one value at a time at the root, and that is 20 of the 56 refusals in B and 16 of the 40 in D. The other
+36 / 24 are model objects (15 / 12), deferred reasons (8 / 4), the alldiff pairwise table (5 / 4), the arithmetic case
+split (4 / 4) and proof memory (4 / 0).
+
+Recommended, in this order, each its own task:
+
+1. **(d') step 1, one agent: element prunes its result's unsupported interior values as ONE store change.** No
+   change to the `.opb`, the naming contract or `--e2e`; the `.pbp` is expected byte-identical (to be shown on the 281
+   test models, both diff lanes, the determinism check). The measurement that confirms it: on the 16 element-gap
+   instances (liner-sf 7, wordpress 5, connect 3, table-layout), `trail_len` at node 1 falls from 15.4 to 18.5 M to a
+   few thousand and the live heap at the root from 9 to 15 GB to under 2 GB (`bench/refused/run1.sh` arms D and PD,
+   `census.py`), and arm D at 8 GiB refuses none of the 13 that die at the root today (`population.sh`,
+   `parse_logs.py`, `join.py` rerun as here).
+2. (d') step 2: one trace line per gap, then the same two steps for table (proteindesign 5). That reaches the 20 of B.
+3. Then, and only with a measurement of veripb loading a 28 to 50 M-rung `.opb` (none was made here), decide between
+   keeping the ladder and (d), the sparse ladder, which changes the contract and needs the user. (a)/(b) stay what
+   D-0263 section 6 needs for the fuzz lane's two wide cases, not a remedy for the refused third.
+
+Separately and not T9's: D-0223's release decision (8 refusals), D-0218 fix 5 (15), the alldiff id table (5,
+byte-identical first half), and the diagnostic of (e).
+
+### 7. What this does not measure
+
+- veripb on the `.opb` of a gap instance (fm3_11's `.opb` alone is 5.9 GB): not run.
+- The probe's 8 GiB stop catches proteindesign 1CM1 before its trail fills (model 82 % at that point); the four other
+  proteindesign runs show the trail. The compile-phase deaths of whirlpool d29 and d30 never reached a completed probe
+  (the compile did not finish in 16 minutes at 48 GiB), so their kind is read from the row count and the d21 probe.
+- The estimate of section 3 subtracts the trail share; it does not run a solver without the gap pruning.
+- The series' arms A and C, and instances outside the population (a run that solves today but would be faster without
+  the gap) were not measured.
+- One run per arm: no repetition. GCS was not rerun: its numbers are D-0211's, on the same flattened instances
+  (each solver flattens with its own library, so GCS's model is not byte for byte ours).
+
+**Volume.** Arm B wrote 347 GB of proof, arm PB 623 GB, two stopped PB compiles 87 GB of `.opb` rows, a 75 s look at
+liner-sf's proof 5.9 GB: about 1.06 TB in all, every byte deleted after its size was recorded. `/scratch` never went
+under 11 TB free.
+
+**Revert.** Nothing to revert in the solver. The branch adds this record, the ROADMAP note, the WORKLOG rows and
+`bench/refused/`.
