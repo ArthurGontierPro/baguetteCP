@@ -34617,7 +34617,7 @@ wave as well.
 
 Branch `wave109-nondet`, dev binary `b81c5f51`: `check_fmt.sh` clean, `check_test_widths.py` clean,
 `dune runtest --root . --force` 5 641 ok, 0 FAIL; `run_model_tests.sh` 293 passed, 0 failed;
-`check_determinism.sh` self-test and check green (293 models, 4 real instances); `diff_lane.sh --tier all` 347 of 347; `--debug` DEBUGLANE;
+`check_determinism.sh` self-test and check green (293 models, 4 real instances); `diff_lane.sh --tier all` 347 of 347 (and 347 of 347 again under `OCAMLRUNPARAM=s=16k,o=40`); `--debug` 333 of 333;
 `scaling_lane.sh` ok, every line within its threshold.
 
 Left for others: agent-compare's `ident.sh` should require `fired=none signal=none` on each P run (WORKLOG
