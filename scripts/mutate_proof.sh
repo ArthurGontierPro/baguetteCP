@@ -95,23 +95,22 @@ gap-shrink-hi  line still verifies; only a LATER line resting on the end value c
                needs it, because the maker's own rows refute every pin a later line puts
                inside the gap (main's per-value lines were not load-bearing either).
                test_mutation.ml registers these two as known slack.
-ladder-pol-row on the NTH LADDER line (D-0270: a bits-arm `pol` whose order terms stay
-               in it, then the `rup` of its clause, then `del id` of the pol), drop the
-               pol's last operand, the row. The pol still parses and is still a valid
-               sum, so the checker must judge the `rup` AFTER it, and refuse it at the
-               RUP wording where the row is load-bearing.
+ladder-pol-row on the NTH LADDER line (D-0270: a bits-arm `pol` whose declared order
+               terms stay in it, then its pin -- an `ia` of its clause against it, or the
+               `rup` of a Resolve's clause -- then `del id` of the pol), drop the pol's last
+               operand, the row. The pol still parses and is still a valid sum, so the
+               checker must judge the pin AFTER it, and refuse it.
 ladder-pol-mult the same pol, the multiplier of the operand before the row (a bits atom
-               line) raised by one (`@a +` becomes `@a 2 * +`): a sound but different
-               sum, whose bits no longer cancel; the `rup` after it must be refused.
-ladder-flip    the same triple's `rup`, its first literal (the claim) flipped: a false
-               clause, refused at that line.
-ladder-rhs     the same `rup`, its right-hand side raised by one: refused at that line.
-bridge-flip    on the NTH order BRIDGE line (D-0270: a `rup` over one order variable's
+               line or a bridge half) raised by one (`@a +` becomes `@a 2 * +`): a sound
+               but different sum, whose terms no longer cancel; the pin must be refused.
+ladder-flip    the same triple's pin, its first literal (the claim) flipped: refused there.
+ladder-rhs     the same pin, its right-hand side raised by one: refused there.
+bridge-flip    on the NTH order BRIDGE half (D-0270: a `rup` over one order variable's
                whole ladder plus `+k ~V_ge_v` or `+K V_ge_v` with a coefficient above 1,
-               minted at its second citation), flip that atom's literal. Over a model
-               whose root decides the atom the flipped line can still be true, so the
-               line itself may be accepted: the lane holds when a LATER line that cites
-               it (an `ia` whose pol adds it) is refused.
+               minted at its first citation), flip that atom's literal. Over a model whose
+               root decides the atom the flipped line can still be true, so the line itself
+               may be accepted: the lane holds when a LATER line that cites it (the `ia`
+               whose pol adds it) is refused.
 bridge-rhs     that bridge's degree raised by one: a false claim, refused at the line.
 bridge-rhs-down that bridge's degree lowered by one: a weaker line, accepted itself; the
                later line that cites it must be refused.
@@ -512,8 +511,9 @@ case "${MUT}" in
     ;;
 
   ladder-pol-row|ladder-pol-mult|ladder-flip|ladder-rhs)
-    # The NTH ladder triple (D-0270): a `pol` line P, the `rup` line right after it, and
-    # a `del id` right after that whose ids include P's label. The pol is the last of the
+    # The NTH ladder triple (D-0270): a `pol` line P, its pin right after it (an `ia`
+    # hinted at P, or a Resolve's `rup`), and a `del id` right after that whose ids
+    # include P's label. The pol is the last of the
     # pols a [Resolve] writes, which is the one this lane can name. Rewritten in place,
     # labels kept, so every later citation still parses.
     awk -v nth="${NTH}" -v mut="${MUT}" -v desc="${DESC}" "${AWK_PRELUDE}"'
@@ -521,7 +521,8 @@ case "${MUT}" in
       END {
         for (i = 1; i + 2 <= NR && !hit; i++) {
           np = split(L[i], P, " "); nr = split(L[i+1], R, " "); nd = split(L[i+2], D, " ")
-          if (np < 4 || P[2] != "pol" || P[1] !~ /^@/ || nr < 4 || R[2] != "rup") continue
+          if (np < 4 || P[2] != "pol" || P[1] !~ /^@/ || nr < 4 || (R[2] != "rup" && R[2] != "ia")) continue
+          if (R[2] == "ia" && R[nr-1] != P[1]) continue
           if (D[1] != "del" || D[2] != "id") continue
           ok = 0; for (j = 3; j <= nd; j++) if (D[j] == P[1]) ok = 1
           if (!ok || ++seen < nth) continue
@@ -553,7 +554,7 @@ case "${MUT}" in
               for (j = 3; j < nr; j++) if (R[j] == ">=") { R[j+1] = R[j+1] + 1; break }
             }
             out = R[1]; for (j = 2; j <= nr; j++) out = out " " R[j]
-            printf "line %d: %s on the ladder rup\n  before: %s\n   after: %s\n", i, mut, line, out > desc
+            printf "line %d: %s on the ladder pin\n  before: %s\n   after: %s\n", i, mut, line, out > desc
             line = out
           }
           print line

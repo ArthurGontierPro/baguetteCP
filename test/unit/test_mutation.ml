@@ -2063,10 +2063,9 @@ let gapline_table_src =
 (* M18-coverage-T9 (D-0270): test/models/ladder_mixed_sat.fzn, verbatim but for the
    comments. k and m are on bits, x1..x3 on the order encoding (their all_different), and
    every row mixes them, so every bits-arm line is written on the LADDER RULE: a `pol` over
-   the bits terms' atom lines and the row (the order terms' rungs left in it), then the
-   clause (a `rup` where an order term carries a fact), the `pol` deleted. [ladder_line]
-   is the root line over the wide order fact x2 >= 3 whose `pol` is load-bearing
-   (without its row the clause is not RUP: two bits sums in one row do not propagate). *)
+   the bits terms' atom lines, each order fact's bridge half and the row (a declared order
+   term's rungs left in it), pinned by `ia`, the `pol` deleted. [ladder_line] is the root
+   line over the wide order fact x2 >= 3, the first citation of B1'(x2, 3). *)
 let ladder_mixed_src =
   String.concat ""
     [
@@ -2082,9 +2081,9 @@ let ladder_mixed_src =
        satisfy;\n";
     ]
 
-let ladder_line = "rup +1 ~k_ge_11 +1 ~m_ge_8 +1 ~x2_ge_3 >= 1 ;"
+let ladder_line = "+1 ~k_ge_11 +1 ~m_ge_8 +1 ~x2_ge_3 >= 1"
 
-(* The bridge half B1'(x2, 3) the same model mints at its SECOND citation (D-0270), and
+(* The bridge half B1'(x2, 3) the same model mints at its first citation (D-0270), and
    the wording of the `ia` that refuses a pin its hint does not imply. *)
 let ladder_bridge = "rup +1 x2_ge_2 +1 x2_ge_3 +1 x2_ge_4 +2 ~x2_ge_3 >= 2 ;"
 
@@ -3212,18 +3211,18 @@ solve :: seq_search([int_search([b, y], input_order, indomain_min, complete), in
 
     (* -- M18-coverage-T9: the LADDER RULE (D-0270) -----------------------------------
        [ladder_mixed_src] is test/models/ladder_mixed_sat: a satisfiable model whose
-       bits-arm lines all hold an order term, so none mints a bridge. The triple around
-       [ladder_line] (`pol` P, `rup` T, `del id P`) is corrupted four ways through
+       bits-arm lines hold wide order terms, so none writes a bridge pair or a bound line.
+       The triple around [ladder_line] (`pol` P over the bits atom lines, x2's bridge half
+       and the row; T, its `ia` pin; `del id P`) is corrupted four ways through
        scripts/mutate_proof.sh, aimed at it by --nth (its rank among the ladder triples):
          ladder-pol-row    P without its row: a valid sum that no longer carries the row,
-                           so T, a LATER line, must be refused at the RUP wording;
-         ladder-pol-mult   P with its atom line counted twice: a sound sum whose bits no
+                           so T, a LATER line, must be refused at the ia wording;
+         ladder-pol-mult   P with an operand counted twice: a sound sum whose terms no
                            longer cancel, so T must be refused;
-         ladder-flip       T's claim flipped: a false clause, refused at T;
+         ladder-flip       T's claim flipped: refused at T;
          ladder-rhs        T's degree raised: refused at T.
        The first two are also pinned here: the refusal is AT T's line (P's line + 1),
-       which says the `pol` is what the `rup` rests on, over a database that is not
-       contradictory. *)
+       which says the `pol` is what the pin rests on. *)
     let b, outcome =
       (* The bits encoding at its CLI default (`--bits-above 0`, D-0201); this harness
          runs with it off (the first lines of the file). *)
@@ -3241,7 +3240,7 @@ solve :: seq_search([int_search([b, y], input_order, indomain_min, complete), in
       i + 2 < Array.length lines
       &&
       match (words lines.(i), words lines.(i + 1), words lines.(i + 2)) with
-      | p :: "pol" :: _, _ :: "rup" :: _, "del" :: "id" :: ids -> List.mem p ids
+      | p :: "pol" :: _, _ :: ("rup" | "ia") :: _, "del" :: "id" :: ids -> List.mem p ids
       | _ -> false
     in
     let rank = ref 0 and at = ref (-1) in
@@ -3271,10 +3270,9 @@ solve :: seq_search([int_search([b, y], input_order, indomain_min, complete), in
         let here = Printf.sprintf "%s:%d\n" pbp (!at + 2) in
         check
           (Printf.sprintf
-             "%s: refused AT the rup after the corrupted pol (line %d), at the RUP \
-              wording"
+             "%s: refused AT the ia after the corrupted pol (line %d), at the ia wording"
              lane (!at + 2))
-          (v = Rejected_on_derivation && contains out here && contains out rup_wording);
+          (v = Rejected_on_derivation && contains out here && contains out ia_wording);
         if not (v = Rejected_on_derivation && contains out here) then show out
     in
     (* P is `@p pol <atom lines> <row> + ;`: drop the row (its two last tokens before
@@ -3291,8 +3289,8 @@ solve :: seq_search([int_search([b, y], input_order, indomain_min, complete), in
             (List.rev (";" :: "+" :: row :: "+" :: "*" :: "2" :: a :: rest))
       | _ -> l
     in
-    (* The BRIDGE half (D-0270): B1'(x2, 3), minted at its second citation, and the pol
-       that then cites it, pinned by `ia`. Its atom literal flipped, or its degree lowered
+    (* The BRIDGE half (D-0270): B1'(x2, 3), minted at its first citation, and the pol
+       that cites it, pinned by `ia`. Its atom literal flipped, or its degree lowered
        by one, leaves a line the checker takes on its own (x2 >= 3 holds at the root, and
        a weaker line is still RUP) -- what must refuse is the LATER `ia` whose pol adds it,
        at the `ia` wording: the half is load-bearing for the line that cites it. Its

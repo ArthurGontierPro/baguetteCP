@@ -1,7 +1,7 @@
 % M18-coverage-T9 (D-0270), an UNSAT companion of ladder_mixed_sat: every bits-arm line
 % holds an ORDER term, so each is written on the LADDER RULE (no bridge pair, no order
-% bound line; the pol cites the bits terms' atom lines and the row, the clause follows as
-% a `rup` over the ladder when an order term carries a fact, as an `ia` otherwise).
+% bound line; the pol cites the bits terms' atom lines, one bridge half per order fact
+% and the row, and the clause is pinned by `ia`).
 % k and m are on bits, x1..x3 on the order encoding (their all_different). The rows are
 % k >= 3*x1 + 1, k + m + x2 <= 17 and m >= 3*x3 + 5: every value of x1 fails through
 % them, so the refutation rests on ladder-rule lines under decisions and closes on the

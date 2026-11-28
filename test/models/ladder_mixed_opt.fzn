@@ -1,9 +1,7 @@
 % M18-coverage-T9 (D-0270), the optimisation twin of ladder_mixed_sat (maximise m).
-% A bits-arm line over a row with ORDER terms is written on the
-% LADDER RULE, with no bridge pair and no order bound line. Its pol cites only the bits
-% terms' atom lines and the row, so the order terms' rungs stay in it; the clause follows
-% as a `rup` that walks the ladder when an order term carries a FACT, as an `ia` when the
-% order terms are all at their declared bounds.
+% A bits-arm line over a row with ORDER terms is written on the LADDER RULE, with no
+% bridge pair and no order bound line: its pol cites the bits terms' atom lines, the one
+% bridge half each order fact needs and the row, pinned by `ia`.
 % k and m are on bits (default --bits-above 0); x1..x3 are held on the order encoding by
 % their all_different. Every row mixes them: k >= 3*x1 + 1 (an order FACT pushes a bits
 % claim), k + m + x2 <= 21 (bits facts and x2, at its root bound x2 >= 3, a wide order

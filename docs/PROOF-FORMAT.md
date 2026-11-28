@@ -436,35 +436,31 @@ rup +1 ~y_ge_(l+1) ... +1 ~y_ge_u +K y_ge_v >= K ;      at least k rungs -> y_ge
 and, at its declared bound, the degree-0 lines `rup Σ y_ge_w >= 0` / `rup Σ ~y_ge_w >= 0`,
 also once -- 93 % of a liner-sf proof, half of the halves never cited (D-0270 section 1).
 **Since D-0270** a derivation whose row holds an order variable wider than a Boolean
-cites no bound line for it and its rungs stay in the `pol`, which cites the bits terms
-(their atom lines, `@lb`/`@ub`), a bits claim's atom line MULTIPLIED by the divisor in
-place of a division, and the row(s) last; no division, no saturation. An order FACT (or a
-wide order claim) cites ONE bridge half, the line above that it needs (`B1'` for
-`y >= v`, `B2'` for `y <= v - 1`), and only from its SECOND citation on: the first
-citation of a half writes nothing for it, the second writes the half once, at level 0,
-memoised (`Encoding.order_bridge`). The clause is then pinned
-
-- by **`ia`** when every wide order literal cited its half: the terms at their declared
-  bounds are free under the negated clause and `ia`'s weakening reads them at their
-  maximum, as the bound line did (measured on 3.0.2: `ia` accepts a hint carrying
-  literals the clause does not hold);
-- by **`rup`** when one did not (a first citation): the negated clause sets that literal,
-  the ladder fixes the rungs it decides, the rungs left free reach at most what the
-  bridge replaced them by, so the `pol`'s constraint is violated.
+cites no bound line for it: a term at its declared bound keeps its rungs in the `pol`. An
+order FACT (or a wide order claim) cites ONE bridge half, the line above that it needs
+(`B1'` for `y >= v`, `B2'` for `y <= v - 1`), written at its first citation, at level 0,
+memoised (`Encoding.order_bridge`, `Writer.rup_ladder_half`); the other half is never
+written unless something cites it. The `pol` cites the bits terms (their atom lines,
+`@lb`/`@ub`), the order facts' halves, a claim's atom line or half MULTIPLIED by the
+divisor in place of a division, and the row(s) last; no division, no saturation. The
+clause is pinned by **`ia`**: the declared terms' rungs are free under the negated clause
+and `ia`'s weakening reads them at their maximum, as the bound line did (measured on 3.0.2:
+`ia` accepts a hint carrying literals the clause does not hold).
 
 test/models/ladder_mixed_sat.fzn (`k + m + x2 <= 21`, k and m on bits, x2 on the order
 encoding with `x2 >= 3` at the root), verbatim:
 
 ```
-@c89 pol @c74 @c83 + @c12 + ;                                 m's atom, k's atom, the row
-@c90 rup +1 ~k_ge_11 +1 ~m_ge_8 +1 ~x2_ge_3 >= 1 ;            x2 >= 3 cited the first time
-del id @c89 ;
-...
-@c97 rup +1 x2_ge_2 +1 x2_ge_3 +1 x2_ge_4 +2 ~x2_ge_3 >= 2 ;  B1'(x2, 3), its second citation
-@c98 pol @c60 @c97 + @c91 + @c12 + ;
-@c99 ia +1 ~m_ge_15 +1 ~k_ge_4 +1 ~x2_ge_3 >= 1 : @c98 ;
-del id @c98 ;
+@c90 rup +1 x2_ge_2 +1 x2_ge_3 +1 x2_ge_4 +2 ~x2_ge_3 >= 2 ;  B1'(x2, 3), its first citation
+@c91 pol @c74 @c90 + @c84 + @c12 + ;                          m's atom, the half, k's atom, the row
+@c92 ia +1 ~k_ge_11 +1 ~m_ge_8 +1 ~x2_ge_3 >= 1 : @c91 ;
+del id @c91 ;
 ```
+
+Minting a half only at its SECOND citation, and pinning the first by a `rup` over the
+`pol` and the ladder, was measured and rejected (D-0270 section 4): a quarter of the
+bytes, but veripb three times slower on liner-sf, because each such `rup` runs the
+checker's propagation through the model.
 
 Dropping the division is what makes this exact: one constraint violated after `ceil(·/d)`
 under an assignment is violated before it, whereas a division with free rungs still in

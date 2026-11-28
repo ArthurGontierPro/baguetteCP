@@ -1,19 +1,17 @@
 % M18-coverage-T9 (D-0270): a bits-arm line over a row with ORDER terms is written on the
-% LADDER RULE, with no bridge pair and no order bound line. Its pol cites only the bits
-% terms' atom lines and the row, so the order terms' rungs stay in it; the clause follows
-% as a `rup` that walks the ladder when an order term carries a FACT, as an `ia` when the
-% order terms are all at their declared bounds.
+% LADDER RULE, with no bridge pair and no order bound line. Its pol cites the bits terms'
+% atom lines, the ONE bridge half each order fact needs (written at its first citation)
+% and the row, so a declared order term's rungs stay in it; the clause is pinned by `ia`.
 % k and m are on bits (default --bits-above 0); x1..x3 are held on the order encoding by
 % their all_different. Every row mixes them: k >= 3*x1 + 1 (an order FACT pushes a bits
 % claim), k + m + x2 <= 21 (bits facts and x2, at its root bound x2 >= 3, a wide order
 % fact), m >= 3*x3 + 5 (a bits fact pushes an ORDER claim). Deciding x1 = 4 fails
 % through the rows, so the trace is written under a decision over a satisfiable model.
-% The root line `~k_ge_11 \/ ~m_ge_8 \/ ~x2_ge_3` is the first citation of x2 >= 3: not
-% RUP without its pol (two bits sums in one row do not propagate), and test_mutation.ml's
-% ladder lanes corrupt that pol (its row dropped, its atom line counted twice) and assert
-% veripb refuses the rup after it, and corrupt the rup itself. The second citation mints
-% the bridge half B1'(x2, 3); its bridge lanes flip its atom or shift its degree, and the
-% `ia` that cites it is refused.
+% The root line `~k_ge_11 \/ ~m_ge_8 \/ ~x2_ge_3` is the first citation of x2 >= 3, so
+% B1'(x2, 3) is written just before it. test_mutation.ml's ladder lanes corrupt that
+% line's pol (its row dropped, an operand counted twice) and its `ia` (claim flipped,
+% degree raised), and its bridge lanes flip the half's atom or shift its degree: each is
+% refused, the pol's and the half's corruptions at the `ia` that cites them.
 var 0..30: k :: output_var;
 var 0..30: m :: output_var;
 var 1..4: x1 :: output_var;
