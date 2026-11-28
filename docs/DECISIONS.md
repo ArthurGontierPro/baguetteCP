@@ -34916,3 +34916,60 @@ killed by the outer 420 s timeout while still encoding (`leftover-rows.txt`, del
 
 **Revert**: nothing to revert (no default changed). `bench/tuning/heldout.lst` and the `--exclude` option are
 measurement tools; delete them to undo.
+
+### 6. Addendum: `BAGUETTE_PROBE=root` (D-0250) on the same set. It stays `off`
+
+Requested by the orchestrator once D-0250 merged (`7970ddc`). Binary: `make release` of `7970ddc`, md5 `c79a6b06`
+(`c79a6b0683eb6ce2c2245335e4ddde2d`).
+
+**The new binary against the old one** (`ident.txt`, `ident2.txt`): on the first 20 instances of the run order, the
+`off` arm at 20 000 nodes without proof gives identical stdout and counters on all 20; at 2 000 nodes with proof,
+identical stdout and `.opb` on all 20 and identical `.pbp` on 18. The two others (2021 vrp-submission
+toy_D_2v_4l_w_reload, 2021 MZNC connect_0018) are not a difference of binary: each binary run twice writes four
+different `.pbp` there, with the same search and the same `.opb`; the proof-side counters move (deferred reasons
+materialised 95 993 / 92 801, `pol` lines 200 763 / 191 187, atoms minted over bits variables 59 037 / 55 845).
+**The proof of a run is not reproducible byte for byte on these two instances**, on either binary. Not
+investigated here (a measurement task); a GC-dependent cache on the bits path is the first suspect.
+
+**Design, fixed before any probe number** (README, "Probe addendum"): `prb` (probe root, the other switches off)
+interleaved with a fresh `off2` arm on the same new binary, 1 600 runs, same settings and the same node rules; the
+rule compares `prb` with `off2`, because the first campaign's `off` ran under a different load. `off2` against
+`off` is reported for what it measures, and `prb` against `off` for information. No combination arm: neither
+`rec` nor `classes` passed.
+
+| mode | arm | complete | verified | share vs off2 | wins/losses | complete +/- vs off2 |
+|---|---|---|---|---|---|---|
+| no proof | off2 | 84 | | | | |
+| no proof | prb | 84 | | 0.500 | 47+/47- | +2/-2 |
+| proof | off2 | 72 | 68 | | | |
+| proof | prb | 72 | 68 | 0.504 | 47+/44- | +1/-1 |
+
+Gained and lost by `prb` against `off2`: no proof +2016_maximum-dag_25_06, +2017_hrc_exp2-1-4795;
+-2017_ma-path-finding_ins_g24_p10_a05, -2022_gfd-schedule_n85f3d50m8k20_10124. With proof +2012_nonogram_non_awful_3;
+-2016_diameterc-mst_c_v15_a105_d7. By kind (no proof / proof): MIN 32+/33- and 34+/34-, MAX 9+/9- and 10+/7-,
+SAT 6+/5- and 3+/3-. Unverified: 4 per arm (the same veripb timeouts). No proof REJECTED.
+
+**The rule for `probe`: net 0 in both modes (it asks for at least +2), shares 0.500 and 0.504. It stays `off`.**
+
+### 7. What the second campaign says about the first: load moves answers as much as the switches
+
+`off2` is the default behaviour of `off` (identical instructions on the 47 `--no-proof` runs complete in both with the
+same node count, ratio 1.000, `offcmp.txt`), and yet against `off` it scores 0.573 without proof (68+/10-, +5
+complete) and 0.586 with proof (75+/6-, +3 verified). The one difference is the node: series2 finished between the
+campaigns, the load at launch fell from a median of 73 (interquartile 52 to 91) to 49, and the same work took 5.6 %
+less wall time at the median. The five complete answers `off2` gains without proof include four of the six `rec`
+gained in section 3 (solbat, road-cons, ma-path-finding, gfd-schedule, products-and-shelves are all 300 s edge
+instances). So:
+
+- the arm-to-arm figures of sections 3 and 6 stand, because each instance's arms ran side by side under the same
+  load; a comparison ACROSS campaigns, or against a series run under another load, does not;
+- a net of +2 complete answers on this set is the size of what a 6 % change of speed does to edge instances, and
+  D-0205's 0.03 share band is a within-campaign figure: across campaigns the gap reached 0.08;
+- a future switch measured here should run with a fresh `off` beside it, as section 6 did.
+
+### 8. Proof volume, both campaigns
+
+8.18 TB of `.opb` + `.pbp` (5.29 TB first campaign, 2.89 TB `off2` and `prb`), each proof deleted once checked, plus
+41.6 GB of `.opb.rows` spools left by the twelve proof runs of two 2022 arithmetic-target instances killed by the
+outer 420 s timeout while still encoding (the solver's `--time-limit` is not checked during encoding there), deleted
+after each campaign. /scratch on fataepyc-07 never fell under 9.5 TB free.
