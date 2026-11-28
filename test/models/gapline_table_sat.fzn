@@ -1,0 +1,19 @@
+% M18-coverage-T9 step 2 (D-0269): the gap line of a TABLE run. T1's column x carries
+% {1, 2, 9, 10}, so x's uncarried run 3..8 goes in one bulk entry on an empty reason, one
+% line `~x_ge_3 \/ x_ge_9` (a table column is held on the order encoding at every
+% --bits-above, so the same line is written under both encodings).
+% T2 reads x's holes: z = 3 is carried only by tuples whose x is in the gap. d = 1 then
+% confines z to 2..4 and fails, so the trace is written under a decision over a
+% satisfiable model.
+predicate baguette_table(array [int] of var int: x,array [int] of int: t,array [int] of var bool: s);
+var 1..10: x :: output_var;
+var 1..3: y :: output_var;
+var 1..5: z :: output_var;
+array [1..4] of var bool: s :: output_array([1..4]);
+array [1..7] of var bool: u :: output_array([1..7]);
+constraint baguette_table([x, y], [1, 1, 2, 2, 9, 3, 10, 1], s);
+constraint baguette_table([x, z], [1, 1, 2, 1, 3, 3, 5, 3, 8, 3, 9, 5, 10, 5], u);
+var 0..1: d :: output_var;
+constraint int_lin_le([1, 10], [z, d], 14);
+constraint int_lin_le([-1, 10], [z, d], 8);
+solve :: int_search([d, x], input_order, indomain_max, complete) satisfy;

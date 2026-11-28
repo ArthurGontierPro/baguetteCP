@@ -81,6 +81,20 @@ rup-drop-lit   drop one literal from a `rup` clause -- the last term, which in a
 rhs-const      raise by one the constant on the right-hand side of a claim (`rup`/`red`),
                which strengthens it. Picks its target the same way rup-drop-lit does, and
                falls back to a unit claim only with a note saying the lane proves little.
+gap-flip       on the first GAP line (D-0269: a `rup` whose claim is `~x_ge_a \/ x_ge_c`
+               with c > a + 1, one line for a removed run a..c-1), flip `~x_ge_a` to
+               `x_ge_a`. A false claim on a satisfiable model: the line itself must be
+               refused, at the RUP wording.
+gap-extend-lo  widen that gap by one value below (`~x_ge_(a-1)`), gap-extend-hi by one
+gap-extend-hi  above (`x_ge_(c+1)`): the extra value is not removed, so the gap line
+               itself must be refused. The lane that says the checker judges the gap's
+               EXTENT, not merely its shape.
+gap-shrink-lo  narrow that gap by one value at either end. A weaker claim, so the gap
+gap-shrink-hi  line still verifies; only a LATER line resting on the end value can fail.
+               MEASURED SLACK (D-0269): no later line of an element or table proof
+               needs it, because the maker's own rows refute every pin a later line puts
+               inside the gap (main's per-value lines were not load-bearing either).
+               test_mutation.ml registers these two as known slack.
 drop-line      delete one emitted derivation step entirely -- `pol`, `rup`, `red` or a
                solution rule, by default the last one. Never a level marker or a `del`:
                failing to delete is not an error (PROOF-FORMAT section 5), so a lane
@@ -444,6 +458,37 @@ case "${MUT}" in
     else
       cp "${PROOF}" "${MUTATED}"
     fi
+    ;;
+
+  gap-flip|gap-extend-lo|gap-extend-hi|gap-shrink-lo|gap-shrink-hi)
+    # The NTH gap line: a `rup` whose first two terms are `+1 ~V_ge_A +1 V_ge_C` over one
+    # variable V with C > A + 1 (D-0269). Rewritten in place, its label kept.
+    awk -v nth="${NTH}" -v mut="${MUT}" -v desc="${DESC}" "${AWK_PRELUDE}"'
+      function split_ge(lit, out,   k) {
+        k = index(lit, "_ge_"); if (k == 0) return 0
+        out["v"] = substr(lit, 1, k - 1); out["n"] = substr(lit, k + 4)
+        return out["n"] ~ /^-?[0-9]+$/
+      }
+      !done && rulename() == "rup" {
+        r = rulestart()
+        if ($(r+1) == "+1" && $(r+3) == "+1" && substr($(r+2), 1, 1) == "~") {
+          lo = substr($(r+2), 2); hi = $(r+4)
+          if (split_ge(lo, L) && split_ge(hi, H) && L["v"] == H["v"] && H["n"] + 0 > L["n"] + 1) {
+            if (++seen == nth) {
+              before = $0; a = L["n"] + 0; c = H["n"] + 0; v = L["v"]
+              if (mut == "gap-flip")           $(r+2) = v "_ge_" a
+              else if (mut == "gap-extend-lo") $(r+2) = "~" v "_ge_" (a - 1)
+              else if (mut == "gap-extend-hi") $(r+4) = v "_ge_" (c + 1)
+              else if (mut == "gap-shrink-lo") $(r+2) = "~" v "_ge_" (a + 1)
+              else                             $(r+4) = v "_ge_" (c - 1)
+              printf "line %d: %s on the gap line of %s outside %d..%d\n  before: %s\n   after: %s\n", \
+                     NR, mut, v, a, c - 1, before, $0 > desc
+              done = 1
+            }
+          }
+        }
+      }
+      { print }' "${PROOF}" > "${MUTATED}"
     ;;
 
   drop-line)
