@@ -27,7 +27,7 @@ search maxdepth/levels 26 levels
 work exhausted/bool 0 bool 1 if
 search skipped/nodes 0 nodes
 search learned/cls 1521 cls
-work later/asks 321182 asks
+work later/asks 297547 asks
 work cites/memos 28625 memos
 search convertible/cls 0 cls
 search retention lbd(cap=500) lbd(cap=500): 1521 added, 1021 evicted, 500 swept, 0 live, 83 duplicate, 1521 cited, 0 pinned
@@ -78,8 +78,8 @@ work eff/runs 202201 runs
 work contra/runs 1521 runs
 work passes/snaps 35214 snaps
 work deductions/chgs 43629 chgs
-work wakes/wakes 1132928 wakes
-work masked/wakes 56783 wakes
+work wakes/wakes 1109268 wakes
+work masked/wakes 9463 wakes
 work vetoed/wakes 26459 wakes
 work advised/wakes 112030 wakes
 work seeded/runs 266047 runs

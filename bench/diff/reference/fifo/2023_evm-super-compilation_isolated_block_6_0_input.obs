@@ -27,7 +27,7 @@ search maxdepth/levels 70 levels
 work exhausted/bool 0 bool 1 if
 search skipped/nodes 368 nodes
 search learned/cls 813 cls
-work later/asks 165049 asks
+work later/asks 164996 asks
 work cites/memos 21605 memos
 search convertible/cls 3 cls
 search retention fifo(cap=500) fifo(cap=500): 813 added, 309 evicted, 504 swept, 0 live, 34 duplicate, 813 cited, 2076 pinned
@@ -82,8 +82,8 @@ work eff/runs 232590 runs
 work contra/runs 813 runs
 work passes/snaps 20515 snaps
 work deductions/chgs 23486 chgs
-work wakes/wakes 1826358 wakes
-work masked/wakes 25689 wakes
+work wakes/wakes 1826305 wakes
+work masked/wakes 25583 wakes
 work vetoed/wakes 1067 wakes
 work advised/wakes 125079 wakes
 work seeded/runs 115799 runs

@@ -115,8 +115,8 @@ work eff/runs 213619 runs
 work contra/runs 693 runs
 work passes/snaps 280945 snaps
 work deductions/chgs 24253 chgs
-work wakes/wakes 1355936 wakes
-work masked/wakes 6394 wakes
+work wakes/wakes 1355586 wakes
+work masked/wakes 5068 wakes
 work vetoed/wakes 3537 wakes
 work advised/wakes 5282 wakes
 work seeded/runs 108667 runs

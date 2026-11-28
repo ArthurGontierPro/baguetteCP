@@ -71,7 +71,7 @@ search maxdepth/levels 29 levels
 work exhausted/bool 0 bool 1 if
 search skipped/nodes 15 nodes
 search learned/cls 1225 cls
-work later/asks 205174 asks
+work later/asks 205101 asks
 work cites/memos 30811 memos
 search convertible/cls 0 cls
 search retention tiered(core<=2,mid<=6,first=2000,inc=300,mid_every=10000) tiered(core<=2,mid<=6,first=2000,inc=300,mid_every=10000): 1225 added, 0 evicted, 1225 swept, 0 live, 0 duplicate, 1216 cited, 0 pinned, 0 reductions, 0 detached, 0 locked
@@ -124,8 +124,8 @@ work eff/runs 345233 runs
 work contra/runs 1229 runs
 work passes/snaps 79785 snaps
 work deductions/chgs 38700 chgs
-work wakes/wakes 2126265 wakes
-work masked/wakes 38006 wakes
+work wakes/wakes 2125754 wakes
+work masked/wakes 36511 wakes
 work vetoed/wakes 6987 wakes
 work advised/wakes 32386 wakes
 work seeded/runs 174601 runs
