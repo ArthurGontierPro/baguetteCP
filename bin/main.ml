@@ -1490,6 +1490,11 @@ let report_atoms (a : Encoding.atom_stats) =
     "boundlines" a.Encoding.a_bound_lines;
   Printf.eprintf "stats: %-10s %10d lines  bits-arm pol lines (prunings and conflicts)\n"
     "bitsprune" a.Encoding.a_bits_prunings;
+  Printf.eprintf
+    "stats: %-10s %10d lines  of those, order terms left in the pol, no bridge (D-0270)\n"
+    "bitsladder" a.Encoding.a_bits_ladder;
+  Printf.eprintf "stats: %-10s %10d lines  of those, pinned by rup over the ladder\n"
+    "bitsrup" a.Encoding.a_bits_rup;
   if a.Encoding.a_bits_prunings > 0 then
     Printf.eprintf "stats: %-10s %10.3f        atoms minted per bits-arm pruning line\n"
       "atoms/prune"

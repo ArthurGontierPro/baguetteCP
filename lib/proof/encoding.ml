@@ -518,6 +518,11 @@ type t = {
   mutable n_bridges : int;
   mutable n_bound_lines : int;
   mutable n_bits_prunings : int; (* bits-arm `pol` lines written (D-0130's atoms/prune) *)
+  mutable n_bits_ladder : int;
+      (* of those, the ones written on D-0270's ladder rule: an order term left in the
+         `pol`, no bridge or bound line minted *)
+  mutable n_bits_rup : int;
+  (* and of those, the ones pinned by `rup` (a wide order fact) *)
   (* Set by [close_atoms] once a root contradiction is on the page: the checker accepts
      a `red` over a contradictory database whatever its witness, so such a line proves
      nothing (D-0053), and [ensure_atom] raises instead (D-0130 section 5.4). *)
@@ -595,6 +600,8 @@ let create () =
     n_bridges = 0;
     n_bound_lines = 0;
     n_bits_prunings = 0;
+    n_bits_ladder = 0;
+    n_bits_rup = 0;
     atoms_closed = false;
     choices_rev = [];
     n_choices = 0;
@@ -950,6 +957,8 @@ type atom_stats = {
   a_bridges : int;
   a_bound_lines : int;
   a_bits_prunings : int;
+  a_bits_ladder : int;
+  a_bits_rup : int;
 }
 
 let atom_stats t =
@@ -959,9 +968,16 @@ let atom_stats t =
     a_bridges = t.n_bridges;
     a_bound_lines = t.n_bound_lines;
     a_bits_prunings = t.n_bits_prunings;
+    a_bits_ladder = t.n_bits_ladder;
+    a_bits_rup = t.n_bits_rup;
   }
 
 let note_bits_pruning t = t.n_bits_prunings <- t.n_bits_prunings + 1
+
+let note_bits_ladder t ~rup =
+  t.n_bits_ladder <- t.n_bits_ladder + 1;
+  if rup then t.n_bits_rup <- t.n_bits_rup + 1
+
 let widest_width = function None -> 0 | Some (_, lo, hi) -> hi - lo
 
 (* ---------------------------------------------------------------------------
@@ -2162,6 +2178,14 @@ let retire_all_direct t w = List.iter (fun x -> retire_direct t w x) (vars t)
    `rup Σ x_ge_w >= 0` / `rup Σ ~x_ge_w >= 0`, degree-0 lines the checker accepts (p1),
    minted once. So every term of a mixed row is ONE citation whatever its width, and the
    Θ(w) bytes an order variable costs are paid once per cited (x, v), not per pruning.
+
+   SINCE D-0270 NOTHING IN lib/ ASKS FOR AN ORDER BRIDGE OR AN ORDER BOUND LINE. A bits
+   derivation with an order term leaves that term's rungs in its `pol` and closes the
+   clause by `rup` over the ladder (lib/core/justify.ml, "THE LADDER RULE"), because the
+   pair above is as wide as the ladder and was 93 % of a liner-sf proof (D-0270 section
+   1). [ensure_atom] and [bound_lines] still answer for an order variable, so the shape
+   stays checkable by the unit tests that measured it; the `bridges` and `boundlines`
+   stats read 0 on every run of today's solver.
 
    LIFETIME. Everything minted here is a level-0 id that no [w] retires and that
    lib/core/search.ml's end-of-run sweep deletes with every other live id before the

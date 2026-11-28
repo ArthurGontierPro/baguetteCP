@@ -94,8 +94,10 @@
    cited and NO cited explanation is recursed into: that is what makes the derived
    clause the trace clause under a decision as at the root (D-0132 section 2.1 says why
    D-0130's "cite the unit" is wrong under a decision). An ORDER variable in such a row
-   is rendered through the same shape by the `rup` bridge pair and degree-0 bound lines
-   [Encoding] mints once per (x, v) (D-0132 section 2.2). The order arm's text at
+   was rendered through the same shape by the `rup` bridge pair and degree-0 bound lines
+   [Encoding] mints once per (x, v) (D-0132 section 2.2); since D-0270 such a row is
+   written on the LADDER RULE below instead, and nothing here mints a bridge. The order
+   arm's text at
    `--bits-above none` is untouched: [emit_summand] renders a [Linear_term] exactly as it
    rendered the [Weaken]/[Term] it replaced.
 
@@ -107,6 +109,26 @@
    the same `ia` pin, and no atom added for the claim: the claim variable's term assumes
    the claim's negation inside every part, so the derived clause is the trace clause with
    the claim among its literals (D-0134 section 2.3), and the `ia` checks that clause.
+
+   THE LADDER RULE (D-0270, M18-coverage-T9). A bits derivation that holds a non-fixed
+   ORDER term (a fact, a term at its declared bound, or the claim) is NOT written as
+   above: an order variable's term is its whole ladder in the row (`a * y` is `Σ a *
+   y_ge_w`), so the bridge that cancelled it was a line as wide as the ladder per (y, v),
+   and the bound line one per variable -- 93 % of a liner-sf proof, and veripb kept every
+   one of them (D-0270 section 1). Instead the `pol` cites only the bits terms (their
+   atom lines or `@lb`/`@ub`, as above), a bits claim's atom line MULTIPLIED by the
+   divisor, and the row(s) last; no division, no saturation; and the clause follows as a
+   `rup`, then the `pol` is deleted ([ladder_part], [ladder_close]). The `rup` closes by
+   unit propagation: the negated clause sets every fact's literal and the negated claim,
+   the ladder fixes the rungs those decide, and the rungs left free in the `pol` reach
+   at most what the bridge or bound line replaced them by, so the `pol`'s constraint is
+   the old line's before its division, which is violated. Dropping the division is
+   what makes that exact: one constraint violated after `ceil(./d)` is violated before
+   it, whereas a division with rungs still in would round each up (D-0270 section 3.1).
+   A [Resolve] is the same part by part (each [Combine] part its own `pol`, then one
+   `rup`). A derivation with no order term keeps the line above byte for byte. Nothing is
+   minted for an order variable any more; the bits atoms are minted as before, before
+   the `pol` that cites them.
 
    Atoms are minted where a name first reaches the writer (D-0130 section 3.3):
    [validate_lits] below, which every clause, `rup`, [Defining] and nogood already pass
@@ -1137,28 +1159,37 @@ let emit_combine ~emit ~claim ctx summands divisor =
    and in that case the term's negated literal is pushed on [neg_facts_rev], oldest
    first after reversal, which is the order the derived clause lists them in. [None]
    for a fixed variable, which has nothing to weaken. *)
-let bits_term_fragment ctx neg_facts_rev (r : Explanation.linear_term) =
+let bits_term_fragment ?(ladder = false) ctx neg_facts_rev (r : Explanation.linear_term) =
   let w = ctx.writer and enc = ctx.encoding in
   let c = Stdlib.abs r.Explanation.lt_coeff and x = r.Explanation.lt_name in
+  (* D-0270: under [ladder] an ORDER term contributes no citation. Its rungs stay in the
+     `pol` as the row spells them, and the `rup` that follows the `pol` reads them
+     through the ladder (the module header's "BITS arm", last paragraph). Its fact is
+     still one of the clause's literals. *)
+  let order = ladder && not (Encoding.is_bits enc x) in
   match Explanation.lt_lit r with
   | None ->
-      if Explanation.lt_width r <= 0 then None (* a fixed variable: nothing to weaken *)
+      if Explanation.lt_width r <= 0 || order then None
+        (* a fixed variable: nothing to weaken; an order term under [ladder]: its rungs
+           at their declared range are what the `rup` reads *)
       else
         let lb, ub = Encoding.bound_lines enc w x in
         Some (Pol.mul (Pol.id (if r.Explanation.lt_coeff > 0 then lb else ub)) c)
   | Some l ->
       validate_lits ctx [ l ];
-      (* [x >= v] cites B1 at v; [x <= v] is [~x_ge_(v+1)] and cites B2 at v+1:
-         [Lit.value] is the atom's value either way. *)
-      let b1, b2 = Encoding.ensure_atom enc w x (Lit.value l.Lit.v) in
       neg_facts_rev := Lit.negate l :: !neg_facts_rev;
-      Some (Pol.mul (Pol.id (if l.Lit.positive then b1 else b2)) c)
+      if order then None
+      else
+        (* [x >= v] cites B1 at v; [x <= v] is [~x_ge_(v+1)] and cites B2 at v+1:
+           [Lit.value] is the atom's value either way. *)
+        let b1, b2 = Encoding.ensure_atom enc w x (Lit.value l.Lit.v) in
+        Some (Pol.mul (Pol.id (if l.Lit.positive then b1 else b2)) c)
 
 (* The summands of one bits-arm [Combine], as `pol` fragments: the row(s) and the terms.
    Anything else in a bits derivation is a propagator's mistake and is named. *)
-let bits_summand_fragment ctx neg_facts_rev = function
+let bits_summand_fragment ?ladder ctx neg_facts_rev = function
   | Explanation.Term (c, Explanation.Model_row id) -> Some (Pol.mul (Pol.id id) c)
-  | Explanation.Linear_term r -> bits_term_fragment ctx neg_facts_rev r
+  | Explanation.Linear_term r -> bits_term_fragment ?ladder ctx neg_facts_rev r
   | s ->
       invalid_arg
         (Printf.sprintf
@@ -1170,6 +1201,53 @@ let bits_sum frags =
   | [] -> invalid_arg "Justify.emit_bits_pruning: empty derivation"
   | f :: rest -> List.fold_left Pol.add f rest
 
+(* D-0270: does a bits derivation's [Combine] hold an ORDER term wider than a Boolean?
+   Then it is written on the ladder rule (the header's "THE LADDER RULE"): no bridge, no
+   order bound line, its rungs left in the `pol`, closed by `rup`. A Boolean's bridge is
+   the one-line tautology and its bound line one literal, so a row whose only order terms
+   are Booleans (every big-M reifier) keeps the `ia`-pinned line, whose pin is checked
+   against the `pol` alone. *)
+let wide_order ctx x =
+  (not (Encoding.is_bits ctx.encoding x))
+  &&
+  let lo, hi = Encoding.domain ctx.encoding x in
+  hi - lo > 1
+
+let order_summand ctx = function
+  | Explanation.Linear_term r ->
+      Explanation.lt_width r > 1 && wide_order ctx r.Explanation.lt_name
+  | _ -> false
+
+(* ... and one that carries a FACT (a bound it read that is not the declared one). *)
+let wide_fact ctx = function
+  | Explanation.Linear_term r as s ->
+      order_summand ctx s && Option.is_some (Explanation.lt_lit r)
+  | _ -> false
+
+(* One [Combine]'s `pol` on the ladder rule: the terms' citations first, then [extra]
+   (a bits claim's atom line), then the row(s), so that the checker's accumulator stays
+   short until the one addition of a row of Θ(w) terms. No division, no saturation: the
+   `rup` that follows reads the constraint as it is (D-0270 section 3.1). *)
+let ladder_part ctx neg_facts_rev ~extra summands =
+  let rows, terms =
+    List.partition
+      (function Explanation.Term (_, Explanation.Model_row _) -> true | _ -> false)
+      summands
+  in
+  let frag = bits_summand_fragment ~ladder:true ctx neg_facts_rev in
+  let t = List.filter_map frag terms in
+  let r = List.filter_map frag rows in
+  bits_sum (t @ extra @ r)
+
+(* The ladder rule's lines after the `pol`(s): the `rup` of [clause], then the `pol`s
+   deleted. The `rup`'s id is the clause, as the `ia`'s was. *)
+let ladder_close ctx ~origin ~clause pols =
+  let w = ctx.writer in
+  let cid = Writer.rup w ~origin (Opb.clause clause) in
+  Writer.delete_many w pols;
+  Encoding.note_bits_ladder ctx.encoding ~rup:true;
+  cid
+
 (* A [Resolve] as one `pol` pinned by `ia` (D-0134 section 2.2): each part saturated to
    its clause (a [Combine]: its fragments summed, divided, saturated; a [Model_row]:
    cited as it is), the parts summed and saturated once more. The clause derived is
@@ -1179,45 +1257,88 @@ let bits_sum frags =
 let emit_bits_resolve ctx ~origin ~(concludes : Reason.fact option) parts =
   let w = ctx.writer and enc = ctx.encoding in
   let neg_facts_rev = ref [] in
-  let part (e : Explanation.t) =
-    match Explanation.force e with
-    | Explanation.Model_row id -> Pol.id id
-    | Explanation.Combine { summands; divisor; _ } ->
-        let frags = List.filter_map (bits_summand_fragment ctx neg_facts_rev) summands in
-        let expr = bits_sum frags in
-        Pol.saturate (if divisor <= 1 then expr else Pol.div expr divisor)
-    | other ->
-        invalid_arg
-          (Printf.sprintf
-             "Justify.emit_bits_pruning: a Resolve part that is neither a Combine nor a \
-              model row: %s"
-             (Explanation.to_string other))
+  let ladder =
+    List.exists
+      (fun p ->
+        match Explanation.force p with
+        | Explanation.Combine { summands; _ } -> List.exists (order_summand ctx) summands
+        | _ -> false)
+      parts
   in
-  let expr = Pol.saturate (bits_sum (List.map part parts)) in
-  let clause =
-    List.fold_left
-      (fun acc l -> if List.exists (Lit.equal l) acc then acc else acc @ [ l ])
-      [] (List.rev !neg_facts_rev)
-  in
-  (* The claim is normally one of those literals (D-0134 section 2.3), and then [Trace]
-     takes the `ia` as the line. Not always: a claim that SETTLED past a hole -- an
-     operand of maxmin, or a disequality's own variable, with an interior hole beside
-     the value -- is a stronger bound than the clause's literal, and [Trace] then writes
-     its ordinary `rup` after this line, RUP in sequence through the hole's own line
-     (D-0132 section 2.5's rule, which a [Resolve] obeys as a [Combine] does). So the
-     claim is validated, and nothing is refused for it. *)
-  Option.iter
-    (fun l -> validate_lits ctx [ l ])
-    (Option.bind concludes Reason.lit_of_fact);
-  (* The origin names the shape, so a mutation lane can aim at a choice derivation and
-     not at the first [Linear] bits line that happens to precede it. *)
-  let cid =
-    Writer.pol_concluding w ~origin:(origin ^ " [resolve]") ~claim:(Opb.clause clause)
-      expr
-  in
-  Encoding.note_bits_pruning enc;
-  state_clause ctx clause cid;
-  (cid, clause)
+  if ladder then (
+    (* D-0270 section 3.2: each [Combine] part its own `pol` (undivided, unsaturated),
+       the model-row parts already on the page, then ONE `rup` of the clause. *)
+    let origin = origin ^ " [resolve] [ladder]" in
+    let pols =
+      List.filter_map
+        (fun p ->
+          match Explanation.force p with
+          | Explanation.Model_row _ -> None
+          | Explanation.Combine { summands; _ } ->
+              Some
+                (Writer.pol w ~origin (ladder_part ctx neg_facts_rev ~extra:[] summands))
+          | other ->
+              invalid_arg
+                (Printf.sprintf
+                   "Justify.emit_bits_pruning: a Resolve part that is neither a Combine \
+                    nor a model row: %s"
+                   (Explanation.to_string other)))
+        parts
+    in
+    let clause =
+      List.fold_left
+        (fun acc l -> if List.exists (Lit.equal l) acc then acc else acc @ [ l ])
+        [] (List.rev !neg_facts_rev)
+    in
+    Option.iter
+      (fun l -> validate_lits ctx [ l ])
+      (Option.bind concludes Reason.lit_of_fact);
+    let cid = ladder_close ctx ~origin ~clause pols in
+    Encoding.note_bits_pruning enc;
+    state_clause ctx clause cid;
+    (cid, clause))
+  else
+    let part (e : Explanation.t) =
+      match Explanation.force e with
+      | Explanation.Model_row id -> Pol.id id
+      | Explanation.Combine { summands; divisor; _ } ->
+          let frags =
+            List.filter_map (bits_summand_fragment ctx neg_facts_rev) summands
+          in
+          let expr = bits_sum frags in
+          Pol.saturate (if divisor <= 1 then expr else Pol.div expr divisor)
+      | other ->
+          invalid_arg
+            (Printf.sprintf
+               "Justify.emit_bits_pruning: a Resolve part that is neither a Combine nor \
+                a model row: %s"
+               (Explanation.to_string other))
+    in
+    let expr = Pol.saturate (bits_sum (List.map part parts)) in
+    let clause =
+      List.fold_left
+        (fun acc l -> if List.exists (Lit.equal l) acc then acc else acc @ [ l ])
+        [] (List.rev !neg_facts_rev)
+    in
+    (* The claim is normally one of those literals (D-0134 section 2.3), and then [Trace]
+       takes the `ia` as the line. Not always: a claim that SETTLED past a hole -- an
+       operand of maxmin, or a disequality's own variable, with an interior hole beside
+       the value -- is a stronger bound than the clause's literal, and [Trace] then writes
+       its ordinary `rup` after this line, RUP in sequence through the hole's own line
+       (D-0132 section 2.5's rule, which a [Resolve] obeys as a [Combine] does). So the
+       claim is validated, and nothing is refused for it. *)
+    Option.iter
+      (fun l -> validate_lits ctx [ l ])
+      (Option.bind concludes Reason.lit_of_fact);
+    (* The origin names the shape, so a mutation lane can aim at a choice derivation and
+       not at the first [Linear] bits line that happens to precede it. *)
+    let cid =
+      Writer.pol_concluding w ~origin:(origin ^ " [resolve]") ~claim:(Opb.clause clause)
+        expr
+    in
+    Encoding.note_bits_pruning enc;
+    state_clause ctx clause cid;
+    (cid, clause)
 
 (* The clause a [Resolve] derives, computed without writing anything: every part's
    [Linear_term] literal negated, deduplicated, in part order -- what [emit_bits_resolve]
@@ -1398,31 +1519,82 @@ let emit_stating ctx ~(claim : Opb.constr) (e : Explanation.t) : Writer.cid =
 let emit_bits_combine ctx ~origin ~(concludes : Reason.fact option) summands divisor =
   let w = ctx.writer and enc = ctx.encoding in
   let neg_facts_rev = ref [] in
-  let frags = List.filter_map (bits_summand_fragment ctx neg_facts_rev) summands in
-  let expr = bits_sum frags in
-  let expr = if divisor <= 1 then expr else Pol.div expr divisor in
-  let claim =
-    match Option.bind concludes Reason.lit_of_fact with
-    | None ->
-        if concludes <> None then
-          invalid_arg
-            "Justify.emit_bits_pruning: a bits conclusion at its declared bound (nothing \
-             to claim)";
-        []
-    | Some l ->
-        validate_lits ctx [ l ];
-        let b1, b2 = Encoding.ensure_atom enc w (Lit.owner l.Lit.v) (Lit.value l.Lit.v) in
-        (* The pruned variable's own atom: an upper push [x <= u] is [~x_ge_(u+1)] and
-           cites B1 at u+1; a lower push [x >= l] cites B2 at l. *)
-        [ (l, if l.Lit.positive then b2 else b1) ]
+  let claim_lit = Option.bind concludes Reason.lit_of_fact in
+  let order_claim =
+    match claim_lit with
+    | Some l -> not (Encoding.is_bits enc (Lit.owner l.Lit.v))
+    | None -> false
   in
-  let expr = List.fold_left (fun acc (_, b) -> Pol.add acc (Pol.id b)) expr claim in
-  let clause = List.map fst claim @ List.rev !neg_facts_rev in
-  let expr = if clause = [] then expr else Pol.saturate expr in
-  let cid = Writer.pol_concluding w ~origin ~claim:(Opb.clause clause) expr in
-  Encoding.note_bits_pruning enc;
-  state_clause ctx clause cid;
-  (cid, clause)
+  let wide_claim =
+    match claim_lit with Some l -> wide_order ctx (Lit.owner l.Lit.v) | None -> false
+  in
+  if wide_claim || List.exists (order_summand ctx) summands then (
+    (* D-0270 section 3: the ladder rule. A bits claim's atom line is multiplied by the
+       divisor instead of added after a division; an order claim cites nothing. *)
+    if claim_lit = None && concludes <> None then
+      invalid_arg
+        "Justify.emit_bits_pruning: a bits conclusion at its declared bound (nothing to \
+         claim)";
+    let extra =
+      match claim_lit with
+      | None -> []
+      | Some l ->
+          validate_lits ctx [ l ];
+          if order_claim then []
+          else
+            let b1, b2 =
+              Encoding.ensure_atom enc w (Lit.owner l.Lit.v) (Lit.value l.Lit.v)
+            in
+            [ Pol.mul (Pol.id (if l.Lit.positive then b2 else b1)) (max 1 divisor) ]
+    in
+    let expr = ladder_part ctx neg_facts_rev ~extra summands in
+    let clause = Option.to_list claim_lit @ List.rev !neg_facts_rev in
+    let cid =
+      if wide_claim || List.exists (wide_fact ctx) summands then
+        (* a wide order FACT or CLAIM: its literal reaches the rungs only through the
+           ladder, so the pin is a `rup` *)
+        let origin = origin ^ " [ladder]" in
+        ladder_close ctx ~origin ~clause [ Writer.pol w ~origin expr ]
+      else (
+        (* the wide order terms are all at their declared bounds: their rungs are free
+           under the negated clause, and `ia`'s weakening reads them at their maximum,
+           as the bound line did (D-0270 section 3.6) *)
+        Encoding.note_bits_ladder enc ~rup:false;
+        Writer.pol_concluding w
+          ~origin:(origin ^ " [ladder, declared]")
+          ~claim:(Opb.clause clause) expr)
+    in
+    Encoding.note_bits_pruning enc;
+    state_clause ctx clause cid;
+    (cid, clause))
+  else
+    let frags = List.filter_map (bits_summand_fragment ctx neg_facts_rev) summands in
+    let expr = bits_sum frags in
+    let expr = if divisor <= 1 then expr else Pol.div expr divisor in
+    let claim =
+      match Option.bind concludes Reason.lit_of_fact with
+      | None ->
+          if concludes <> None then
+            invalid_arg
+              "Justify.emit_bits_pruning: a bits conclusion at its declared bound \
+               (nothing to claim)";
+          []
+      | Some l ->
+          validate_lits ctx [ l ];
+          let b1, b2 =
+            Encoding.ensure_atom enc w (Lit.owner l.Lit.v) (Lit.value l.Lit.v)
+          in
+          (* The pruned variable's own atom: an upper push [x <= u] is [~x_ge_(u+1)] and
+             cites B1 at u+1; a lower push [x >= l] cites B2 at l. *)
+          [ (l, if l.Lit.positive then b2 else b1) ]
+    in
+    let expr = List.fold_left (fun acc (_, b) -> Pol.add acc (Pol.id b)) expr claim in
+    let clause = List.map fst claim @ List.rev !neg_facts_rev in
+    let expr = if clause = [] then expr else Pol.saturate expr in
+    let cid = Writer.pol_concluding w ~origin ~claim:(Opb.clause clause) expr in
+    Encoding.note_bits_pruning enc;
+    state_clause ctx clause cid;
+    (cid, clause)
 
 (* Whether [emit_bits_pruning] can render [e] (forced): a [Combine] of [Linear]'s shape --
    every summand the row cited as [Term (_, Model_row _)] or a [Linear_term] -- or a
