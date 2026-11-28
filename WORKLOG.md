@@ -19,7 +19,7 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M18-coverage-T9 the bridge pairs of D-0132 (D-0270) | lib/proof/encoding.ml, lib/core/prop/linear.ml, lib/core/justify.ml, lib/core/ladder.ml, lib/core/trace.ml, docs/PROOF-FORMAT.md (bits section), test/unit/*, test/models/*, scripts/mutate_proof.sh | agent-bridge (wave115-bridge) | 2026-11-28 |
+| M18-coverage-T9 the bridge pairs of D-0132 (D-0270) | lib/proof/encoding.ml, lib/proof/writer.ml (one primitive), lib/core/prop/linear.ml, lib/core/justify.ml, lib/core/ladder.ml, lib/core/trace.ml, bin/main.ml (two stat lines), docs/PROOF-FORMAT.md (bits section), docs/INVARIANTS.md (I-X10's bits sentence), test/unit/*, test/models/*, scripts/mutate_proof.sh | agent-bridge (wave115-bridge) | 2026-11-28 |
 
 ## Cross-session requests
 
