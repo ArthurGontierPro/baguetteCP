@@ -35688,3 +35688,68 @@ One more claim shape in trace.ml (the gap clause, whose one-value case is the ho
 **Results**: `/cluster/arthur/baguette-results/gapline/` (README, tables, logs, scripts).
 
 **Revert.** `git revert 8d7f2ce2 70d37ebc 75a4d612 6c15c903` (in that order); the six models and the mutation lanes go with `75a4d612`. Nothing else depends on the gap line; reverting restores D-0268's per-value lines byte for byte.
+
+## D-0270  [AUTONOME] M18-coverage-T9, the bridge pairs of D-0132 section 2.2: a bits-arm derivation leaves its ORDER terms in the row and closes by `rup` over the ladder, so no bridge and no order bound line is written. A proof change with no new variable, no `.opb` row and no change to the naming contract or `--e2e`
+
+**Status**: IN PROGRESS on `wave115-bridge` (agent-bridge, 2026-11-28), not merged. Base: origin/main `6ac1344c` (D-0269 merged), release binary `3f859ac3`.
+
+[AUTONOME] because it changes the proof the solver writes (the bits arm's line for a row with an order term becomes `pol`, `rup`, `del` where it was `pol`, `ia`, `del`, and D-0132 section 2.2's bridge pair is no longer minted); nothing that changes the solver's answers or its search was decided.
+
+### 1. What a bridge line is, and why it is as wide as the ladder
+
+An ORDER variable `y` (declared `l..u`, held on the order encoding by its scope: an `all_different`, an `element`, a `gcc`, or `--bits-above`) that occurs in a linear row with a bits term is spelled in that row's `.opb` line as its whole ladder: `a·y` is `a·l + Σ_{w=l+1..u} a·y_ge_w` (`Encoding.linear_terms_int_lin_le`), because the order encoding has no other integer view of `y`. A bits-arm derivation (D-0132 section 2.1) is ONE `pol` that cancels every term of the row down to one literal per fact. For an order fact `y >= v` that cancellation is `|a|·B1'(y, v)` with
+
+```
+B1'  rup +1 y_ge_(l+1) ... +1 y_ge_u  +k ~y_ge_v >= k        k = v - l
+B2'  rup +1 ~y_ge_(l+1) ... +1 ~y_ge_u +K y_ge_v >= K        K = (u - l) - k + 1
+```
+
+(`Encoding.mint_order_bridge`), and for a term at its declared bound the degree-0 line `rup Σ y_ge_w >= 0` or `rup Σ ~y_ge_w >= 0` (`Encoding.bound_lines`). Each is a `rup`, checked by the ladder alone, written once at level 0 and memoised per `(y, v)`, and both halves are written whenever either is needed. Its width is not an artefact of a derivation choice: the line must carry every rung because the row it cancels carries every rung, and a `pol` can only remove a literal from a sum by adding a constraint that holds it.
+
+Measured on main (`3f859ac3`, default search, fixed node budget, `bcensus.py` over the `.pbp`):
+
+| instance (nodes) | `.pbp` | bridge lines | their bytes, share | never cited | pols citing a bridge or bound line |
+|---|---|---|---|---|---|
+| liner-sf tp7_8 (25) | 2.64 GB, 72 400 lines | 1 644 (822 pairs) | 2.45 GB, 93.0 % | 800 (1.22 GB) | 927 of 1 287 |
+| liner-sf tp7_2 (40) | 3.99 GB, 122 640 lines | 2 618 | 3.64 GB, 91.2 % | 1 280 (1.81 GB) | 1 985 of 2 551 |
+| connect 0083_02 (146) | 339 MB, 129 925 lines | 60 | 16.8 MB, 5.0 % | 30 | 3 935 of 29 598 |
+
+A bridge line averages 1.4 to 1.5 MB on liner-sf (31.5 bytes a term, up to 40 MB on tp7_8, 68 MB on fm3_11 at 2.1 M rungs); one half of each pair is never cited in about half the pairs. A cited line is cited once in most cases (tp7_8: 694 once, 97 twice, 54 more than twice). One line, shortened (connect 0083_02, a variable of 544 rungs):
+
+```
+@c3386123 rup +1 X_INTRODUCED_1039__ge_1 +1 X_INTRODUCED_1039__ge_2 +1 ... +1 X_INTRODUCED_1039__ge_544 +544 ~X_INTRODUCED_1039__ge_544 >= 544 ;
+```
+
+No line cites a bridge except a bits-arm `pol` (by label); a `rup` never needs one, because the ladder unit-propagates everything a bridge propagates.
+
+### 2. The options
+
+| option | what it removes on tp7_8 | contract | modules | risk |
+|---|---|---|---|---|
+| (a) a shorter derivation of the same bridge | nothing: `B1'(v)` is the sum of the ladder's rungs times `(w - l - 1)` plus a literal axiom per upper rung, a `pol` of Θ(w) citations, which D-0127 measured quadratic for the checker (28 MB and 381 s against 197 bytes and 0.7 s as a `rup` at w = 10^6). There is no binary expansion of an order variable to compare with a constant: PROOF-FORMAT section 3 gives a variable ONE encoding, and the only link between an order variable and anything else is the row itself | kept | encoding.ml | none, and no gain |
+| (b) one reusable line per variable, specialised per value | nothing: `B1'(v+1) - B1'(v)` is not a valid constraint (it would need `y_ge_(v+1)` counted twice), so no `B1'(v)` follows from another by O(1) citations. The partial sums `L_v` (lower rungs only) do chain (`L_(v+1) = L_v + k_v·rung_(v+1)`), but `B1'(v) = L_v + Σ_(w>v) y_ge_w` still costs Θ(w - v) literal axioms per value, and keeping the `L_v` live keeps Θ(w) per value in the checker | kept | encoding.ml | Θ(w) stored per value, as today |
+| (c) mint each half lazily, at its first citation | 800 of 1 644 bridge lines, 1.22 GB of 2.64 GB; veripb's memory in proportion | kept | encoding.ml, justify.ml | low: a half is still minted before the `pol` that cites it |
+| (d) keep such a variable on one encoding | putting `y` on bits is barred by its scope (D-0130 section 3.4); putting the bits variable on the order encoding writes its ladder into the `.opb` (2^n rungs) | `.opb` changes: STOP condition | compile.ml | the `.opb` of every mixed model |
+| **(e) leave the order terms in the row, close by `rup`** | **every bridge and every order bound line** (2.45 GB, and the stored Θ(w) lines veripb keeps) | **kept: no variable, no `.opb` row, no name** | justify.ml (the bits arm's rendering), encoding.ml (nothing minted any more for an order variable in a mixed row), PROOF-FORMAT section 3 | the `rup` must close: section 3 argues it, the suite and the lanes measure it |
+
+### 3. Option (e), the rule
+
+A bits-arm derivation whose row has a non-fixed ORDER term (a fact, a term at its declared bound, or the claim) is written as
+
+```
+@P  pol <bits terms: |a|·B1/B2 of their atoms, or |a|·@lb/@ub> <bits claim: d·B of its atom> <row(s) last> ;
+@T  rup <claim> <~facts> >= 1 ;
+    del id @P ;
+```
+
+with NO citation for an order term (its ladder stays in `@P` as the row spells it), no division and no saturation. `@T` is the trace clause, checked by unit propagation over `@P` and the ladder: the negated clause sets each fact's literal, the ladder fixes every rung a fact or the negated claim decides, and what is left free in `@P` is the rungs no fact decides, whose maximum is exactly what `|a|·B1'` (or the bound line) replaced them by in the old line. So `@P` under the negated clause is the old line's derived constraint before its division, which is violated (section 3.1). A row with no order term keeps D-0132's line byte for byte.
+
+3.1. **Why the division can go.** The old line divided by the pruned term's coefficient `d` and saturated, so the result was the clause. Over 0/1 literals a single constraint that is violated after `ceil(·/d)` under an assignment is violated before it: the divided constraint's maximum is at least the undivided one's divided by `d`, and it is an integer, so if the undivided were satisfiable the divided would be too. Keeping the division with an order term left in would round each free rung's coefficient up and lose up to one unit a rung, which is why it is dropped rather than kept; the claim's atom line is multiplied by `d` instead of added after the division, which cancels the claim's bits exactly. An ORDER claim needs nothing: under the negated claim the ladder fixes its rungs and their 0/1 count does the integer rounding.
+
+3.2. **A [Resolve]** (maxmin over bits, `int_ne` and the reified equalities over a bits scope, D-0134) is the same move part by part: each [Combine] part is its own `pol` (undivided, unsaturated), the model-row parts are already on the page, then ONE `rup` of the clause and the parts deleted. Under the negated clause each part propagates its selector by the same maximum argument, and the selector clause closes.
+
+3.3. **What is no longer written.** No bridge pair and no order bound line (the stats `bridges` and `boundlines` count what is still minted, 0 where every mixed row is rendered this way). The bits atoms of bits terms are minted as before, by the same calls, before the `pol` that cites them; so the D-0237 trap (a line citing an atom not yet minted) has no new door, and nothing new is minted after a root contradiction.
+
+3.4. **Cost moved to the checker.** The `rup` walks the ladder from each order literal of the clause (Θ(w) per line, as the bridge's own `rup` did once per `(y, v)`), and `@P` is Θ(w) while it lives, as the row it extends; it is deleted on the next line, so the checker no longer KEEPS a Θ(w) line per value. The rows are added last in the `pol`, so the accumulator is short until the one Θ(w) addition.
+
+3.5. **(c) is subsumed**: with (e) no bridge is minted for a Combine or Resolve derivation, which are the only citers.
