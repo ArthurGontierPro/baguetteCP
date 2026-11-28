@@ -78,7 +78,7 @@ search pb-inst-no/rows 0 rows
 search pb-prune/prunes 0 prunes
 search pb-confl/confl 0 confl
 search minimised/lits 1648 lits
-search i-s4-cross/lines 24590 lines
+search i-s4-cross/lines 24554 lines
 search pb-tried/confl 731 confl
 search pb-learned/rows 0 rows
 search pb-fallback/confl 731 confl
@@ -120,7 +120,7 @@ work vetoed/wakes 4047 wakes
 work advised/wakes 11140 wakes
 work seeded/runs 98105 runs
 work skipped/slots 7093005 slots
-search rup/lines 206815 lines
+search rup/lines 206762 lines
 search pol/lines 7532 lines
 search pol-tokens/tokens 918090 tokens
 search pol-widest/tokens 2357 tokens
@@ -131,4 +131,4 @@ search boundlines/pairs 49 pairs
 search bitsprune/lines 4201 lines
 search atoms/prune/atoms 0.007 atoms
 opb 8b89a20d08c2b177f0f119aaf4b41450cab180d782901252654b2495a0d2a9fa
-pbp f8e16348b97c9b8b684b719ce5bcca05f4ecda0fcd6c7391760743db2a11f459
+pbp 13f233d1981601d8253ffaf845b31212cc4fad012218753ab97e4043abd88858
