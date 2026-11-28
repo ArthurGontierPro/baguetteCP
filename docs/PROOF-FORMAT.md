@@ -420,22 +420,51 @@ neighbours `u < v < t`, two links `pol @B1_v @B2_u + s (v−u+1) d` and `pol @B1
 (t−v+1) d` (each pinned by `ia` to its clause `~x_ge_v ∨ x_ge_u`) keep the chain
 `x_ge_t → x_ge_v → x_ge_u` walkable by unit propagation; links are never deleted before the
 conclusion. Every atom, link, bridge and bound line is a level-0 id retired by the
-end-of-run sweep (I-X2).
+end-of-run sweep (I-X2); a ladder-rule `pol` is deleted on the line after its pin.
 
-**An order variable in a row that has a bits term** is cited through the same shape, by a
-`rup` bridge pair written once at level 0 (`k = v − l`, `K = (u − l) − k + 1`):
+**An order variable in a row that has a bits term** *(the LADDER RULE, D-0270, which
+replaced D-0132's bridge pairs)*. Such a variable is spelled in the row as its whole
+ladder (`a·y` is `Σ a·y_ge_w`), so the line that cancelled it in the derivation was as wide
+as the ladder: until D-0270 a `rup` bridge pair written once at level 0 per `(y, v)`
+(`k = v − l`, `K = (u − l) − k + 1`)
 
 ```
-rup +1 x_ge_(l+1) ... +1 x_ge_u  +k ~x_ge_v >= k ;      x_ge_v -> at least k rungs
-rup +1 ~x_ge_(l+1) ... +1 ~x_ge_u +K x_ge_v >= K ;      at least k rungs -> x_ge_v
+rup +1 y_ge_(l+1) ... +1 y_ge_u  +k ~y_ge_v >= k ;      y_ge_v -> at least k rungs
+rup +1 ~y_ge_(l+1) ... +1 ~y_ge_u +K y_ge_v >= K ;      at least k rungs -> y_ge_v
 ```
 
-and, at its declared bound, the degree-0 lines `rup Σ x_ge_w >= 0` / `rup Σ ~x_ge_w >= 0`,
-also once. A `var bool`'s bridge is the tautology `+1 b_ge_1 +1 ~b_ge_1 >= 1`, one line.
+and, at its declared bound, the degree-0 lines `rup Σ y_ge_w >= 0` / `rup Σ ~y_ge_w >= 0`,
+also once -- 93 % of a liner-sf proof (D-0270 section 1). **Since D-0270 no such line is
+written** for an order variable wider than a Boolean. A derivation whose row holds one
+cites nothing for it: its rungs stay in the `pol`, which cites only the bits terms (their
+atom lines, `@lb`/`@ub`), a bits claim's atom line MULTIPLIED by the divisor in place of a
+division, and the row(s) last; no division, no saturation. The clause is then pinned
+
+- by **`rup`** when a wide order term carries a FACT or is the claim: the negated clause
+  sets the fact's literal, the ladder fixes the rungs it decides, the rungs left free
+  reach at most what the bridge replaced them by, so the `pol`'s constraint is violated;
+- by **`ia`** when every wide order term is at its declared bound: its rungs are free under
+  the negated clause, and `ia`'s weakening reads them at their maximum, as the bound line
+  did (measured on 3.0.2: `ia` accepts a hint carrying literals the clause does not hold).
+
+```
+@P  pol @B_fact 2 * @B_claim 3 * + @row + ;        the bits terms only, the row last
+@T  rup +1 ~k_ge_11 +1 ~m_ge_8 +1 ~x2_ge_3 >= 1 ;  x2 an order fact: walked by the ladder
+    del id @P ;
+```
+
+Dropping the division is what makes this exact: one constraint violated after `ceil(·/d)`
+under an assignment is violated before it, whereas a division with free rungs still in
+would round each up. A `[Resolve]` is the same part by part (each part its own `pol`, then
+one `rup`, the parts deleted). A row whose order terms are all Booleans keeps the line
+above with its one-line bridges (a `var bool`'s bridge is the tautology `+1 b_ge_1 +1
+~b_ge_1 >= 1`), and a row with no order term is untouched.
 
 **A pruning or conflict of a row with a bits term is not RUP** (D-0127: a bound does not
 cross a bits row by unit propagation, at any width) and is written as one `pol` deriving
-exactly its trace clause, pinned by `ia` (§4, `Linear`); the trace line of a row with no
+exactly its trace clause, pinned by `ia` (§4, `Linear`), or on the ladder rule above when
+the row holds a wide order term (the pin a `rup` over the `pol` and the ladder, which is
+RUP because the `pol` has already cancelled every bits term); the trace line of a row with no
 bits term is the `rup` of §4 unchanged. The `sol`/`soli` assignment lists `x_bit_i` for a
 bits variable, from which the checker propagates the atoms through their pairs; an
 optimisation's bound literal over a bits objective is bridged from the `soli` constraint by

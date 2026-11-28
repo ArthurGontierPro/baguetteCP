@@ -95,6 +95,17 @@ gap-shrink-hi  line still verifies; only a LATER line resting on the end value c
                needs it, because the maker's own rows refute every pin a later line puts
                inside the gap (main's per-value lines were not load-bearing either).
                test_mutation.ml registers these two as known slack.
+ladder-pol-row on the NTH LADDER line (D-0270: a bits-arm `pol` whose order terms stay
+               in it, then the `rup` of its clause, then `del id` of the pol), drop the
+               pol's last operand, the row. The pol still parses and is still a valid
+               sum, so the checker must judge the `rup` AFTER it, and refuse it at the
+               RUP wording where the row is load-bearing.
+ladder-pol-mult the same pol, the multiplier of the operand before the row (a bits atom
+               line) raised by one (`@a +` becomes `@a 2 * +`): a sound but different
+               sum, whose bits no longer cancel; the `rup` after it must be refused.
+ladder-flip    the same triple's `rup`, its first literal (the claim) flipped: a false
+               clause, refused at that line.
+ladder-rhs     the same `rup`, its right-hand side raised by one: refused at that line.
 drop-line      delete one emitted derivation step entirely -- `pol`, `rup`, `red` or a
                solution rule, by default the last one. Never a level marker or a `del`:
                failing to delete is not an error (PROOF-FORMAT section 5), so a lane
@@ -489,6 +500,56 @@ case "${MUT}" in
         }
       }
       { print }' "${PROOF}" > "${MUTATED}"
+    ;;
+
+  ladder-pol-row|ladder-pol-mult|ladder-flip|ladder-rhs)
+    # The NTH ladder triple (D-0270): a `pol` line P, the `rup` line right after it, and
+    # a `del id` right after that whose ids include P's label. The pol is the last of the
+    # pols a [Resolve] writes, which is the one this lane can name. Rewritten in place,
+    # labels kept, so every later citation still parses.
+    awk -v nth="${NTH}" -v mut="${MUT}" -v desc="${DESC}" "${AWK_PRELUDE}"'
+      { L[NR] = $0 }
+      END {
+        for (i = 1; i + 2 <= NR && !hit; i++) {
+          np = split(L[i], P, " "); nr = split(L[i+1], R, " "); nd = split(L[i+2], D, " ")
+          if (np < 4 || P[2] != "pol" || P[1] !~ /^@/ || nr < 4 || R[2] != "rup") continue
+          if (D[1] != "del" || D[2] != "id") continue
+          ok = 0; for (j = 3; j <= nd; j++) if (D[j] == P[1]) ok = 1
+          if (!ok || ++seen < nth) continue
+          hit = i
+        }
+        for (i = 1; i <= NR; i++) {
+          line = L[i]
+          if (hit && i == hit && (mut == "ladder-pol-row" || mut == "ladder-pol-mult")) {
+            np = split(line, P, " ")
+            # P = @p pol ops... ; with the row last: "... @row +" or "... @row k * +"
+            last = (P[np-2] == "*") ? np - 4 : np - 2   # index of the row token
+            if (mut == "ladder-pol-row") {
+              out = P[1]; for (j = 2; j < last; j++) out = out " " P[j]; out = out " ;"
+            } else {
+              # the operand before the row: "@a +" or "@a k *" (+ follows)
+              b = last - 1                       # the "+" before the row
+              if (P[b] == "+" && P[b-1] == "*") { P[b-2] = P[b-2] + 1 }
+              else if (P[b] == "+") { P[b-1] = P[b-1] " 2 *" }
+              else if (last == 3) { P[3] = P[3] " 2 *" }   # the row is the first operand: none before it
+              out = P[1]; for (j = 2; j <= np; j++) out = out " " P[j]
+            }
+            printf "line %d: %s on the ladder pol\n  before: %s\n   after: %s\n", i, mut, line, out > desc
+            line = out
+          } else if (hit && i == hit + 1 && (mut == "ladder-flip" || mut == "ladder-rhs")) {
+            nr = split(line, R, " ")
+            if (mut == "ladder-flip") {
+              if (R[4] ~ /^~/) R[4] = substr(R[4], 2); else R[4] = "~" R[4]
+            } else {
+              for (j = 3; j < nr; j++) if (R[j] == ">=") { R[j+1] = R[j+1] + 1; break }
+            }
+            out = R[1]; for (j = 2; j <= nr; j++) out = out " " R[j]
+            printf "line %d: %s on the ladder rup\n  before: %s\n   after: %s\n", i, mut, line, out > desc
+            line = out
+          }
+          print line
+        }
+      }' "${PROOF}" > "${MUTATED}"
     ;;
 
   drop-line)
