@@ -279,16 +279,16 @@ type ivar = {
      (`-Σ 2^i x_bit_i >= -(hi - lo)`), consecutive by construction. *)
   repr : repr;
   (* v -> the ids (B1, B2) of the atom `x_ge_v` minted by [ensure_atom]: for a bits
-     variable the `red` pair, for an order variable the `rup` bridge pair (D-0132
-     section 2.2). An immutable map, so an atom-less variable costs nothing. *)
+     variable the `red` pair, for an order variable the `rup` bridge HALVES, each minted
+     at its first citation by [order_bridge] (D-0270), [no_half] for one not yet written.
+     An immutable map, so an atom-less variable costs nothing: D-0270 first kept the
+     halves in a field of their own, and that one word per declared variable was 42 MB of
+     live heap on 2018 proteindesign12 1CM1 (5.3 M variables). *)
   mutable atoms : (cid * cid) IMap.t;
   (* An ORDER variable's `rup Σ x_ge_w >= 0` / `rup Σ ~x_ge_w >= 0`, minted once by
      [bound_lines] when a mixed-row derivation first weakens it (D-0132 section 2.2). A
      bits variable's bound lines are its `.opb` rows. *)
   mutable bound_lines : (cid * cid) option;
-  (* D-0270: an ORDER variable's bridge HALVES, minted one at a time at their first ask
-     ([order_bridge]). Key [2v] is B1' at v, [2v + 1] is B2' at v. *)
-  mutable halves : cid IMap.t;
 }
 
 and repr = Order | Bits of { n : int; lb_row : cid; ub_row : cid }
@@ -1763,7 +1763,6 @@ let mint_order t x ~holes ~lo ~hi =
       repr = Order;
       atoms = IMap.empty;
       bound_lines = None;
-      halves = IMap.empty;
     }
   in
   Names.replace t.ints x v;
@@ -1906,7 +1905,6 @@ let mint_bits t x ~lo ~hi =
       repr = Bits { n; lb_row; ub_row };
       atoms = IMap.empty;
       bound_lines = None;
-      halves = IMap.empty;
     }
   in
   Names.replace t.ints x v;
@@ -2289,36 +2287,39 @@ let mint_order_bridge t w (iv : ivar) v =
    three times slower on liner-sf (D-0270 section 4: measured and rejected). A pair
    [ensure_atom] minted (unit tests only) answers from the pair. Precondition: [x] is an
    order variable of width >= 1; no root contradiction on the page when it mints. *)
+let no_half = -1
+
 let order_bridge t w x v ~b1 =
   let iv = check_atom_value t x v in
-  match IMap.find_opt v iv.atoms with
-  | Some (h1, h2) -> if b1 then h1 else h2
-  | None -> (
-      let key = (2 * v) + if b1 then 0 else 1 in
-      match IMap.find_opt key iv.halves with
-      | Some id -> id
-      | None ->
-          if t.atoms_closed then
-            invalid_arg
-              (Printf.sprintf
-                 "Encoding.order_bridge: `%s >= %d` asked for after the root \
-                  contradiction"
-                 x v);
-          let id =
-            Writer.with_level w 0 (fun () ->
-                Writer.rup_ladder_half w
-                  ~origin:(Printf.sprintf "bridge %s>=%d" x v)
-                  ~name:x ~lo:iv.lo ~hi:iv.hi ~v ~b1)
-          in
-          t.n_bridges <- t.n_bridges + 1;
-          iv.halves <- IMap.add key id iv.halves;
-          id)
+  let h1, h2 =
+    match IMap.find_opt v iv.atoms with Some pair -> pair | None -> (no_half, no_half)
+  in
+  let have = if b1 then h1 else h2 in
+  if have <> no_half then have
+  else (
+    if t.atoms_closed then
+      invalid_arg
+        (Printf.sprintf
+           "Encoding.order_bridge: `%s >= %d` asked for after the root contradiction" x v);
+    let id =
+      Writer.with_level w 0 (fun () ->
+          Writer.rup_ladder_half w
+            ~origin:(Printf.sprintf "bridge %s>=%d" x v)
+            ~name:x ~lo:iv.lo ~hi:iv.hi ~v ~b1)
+    in
+    t.n_bridges <- t.n_bridges + 1;
+    iv.atoms <- IMap.add v (if b1 then (id, h2) else (h1, id)) iv.atoms;
+    id)
 
 (* The ids (B1, B2) of the atom [x >= v] -- minted now if this is the first time it is
    named, memoised otherwise. Precondition: no root contradiction is on the page. *)
 let ensure_atom t w x v =
   let iv = check_atom_value t x v in
   match IMap.find_opt v iv.atoms with
+  | Some (h1, h2) when h1 = no_half || h2 = no_half ->
+      (* an order variable's pair [order_bridge] has written one half of *)
+      let h1 = order_bridge t w x v ~b1:true in
+      (h1, order_bridge t w x v ~b1:false)
   | Some pair -> pair
   | None ->
       if t.atoms_closed then
