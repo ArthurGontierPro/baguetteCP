@@ -439,6 +439,101 @@ let classify ~old ~now =
         r
     | _ -> classify_walk ~old ~now
 
+(* The interior values [now] lacks and [old] has, as maximal runs of CONSECUTIVE values
+   [(a, b)], ascending (D-0269): the set [classify]'s [Holes] lists, without the list. A
+   bulk entry ([Store.remove_interior], D-0268) on a gap instance removes up to tens of
+   millions of values, and [Trace] writes one line per run of them, so the run list is
+   what it needs and the value list is what it must not build. Precondition: same bounds
+   (the [Holes] case of [classify]); a bound move raises. Two values are in one run only
+   if every value between them is removed by this change, so an older hole between two
+   removed values splits the run (its line is another entry's).
+
+   The log path reads slots [ho.k .. hn.k - 1], which one bulk entry appends ascending, so
+   the runs are built in one pass; slots out of order (no producer appends them so today)
+   are sorted first. Otherwise the interval is walked, as [classify_walk] does. *)
+let runs_of_ascending (next : unit -> int option) =
+  let acc = ref [] and cur = ref None in
+  let rec go () =
+    match next () with
+    | None -> ()
+    | Some v ->
+        (match !cur with
+        | Some (a, b) when v = b + 1 -> cur := Some (a, v)
+        | Some r ->
+            acc := r :: !acc;
+            cur := Some (v, v)
+        | None -> cur := Some (v, v));
+        go ()
+  in
+  go ();
+  (match !cur with Some r -> acc := r :: !acc | None -> ());
+  List.rev !acc
+
+let removed_runs_walk ~old ~now =
+  let v = ref now.lo in
+  runs_of_ascending (fun () ->
+      while !v <= now.hi && not (is_hole now !v && not (is_hole old !v)) do
+        incr v
+      done;
+      if !v > now.hi then None
+      else
+        let r = !v in
+        incr v;
+        Some r)
+
+let removed_runs ~old ~now =
+  if old.lo <> now.lo || old.hi <> now.hi then
+    invalid_arg "Domain.removed_runs: the bounds moved (a Bound change, not Holes)";
+  let r =
+    match (old.holes, now.holes) with
+    | Some ho, Some hn when ho.log == hn.log && ho.k <= hn.k && valid ho && valid hn ->
+        let lg = hn.log in
+        let inside v = v >= now.lo && v <= now.hi in
+        let ascending =
+          let ok = ref true and prev = ref min_int in
+          for j = ho.k to hn.k - 1 do
+            let v = lg.vals.(j) in
+            if inside v then (
+              if v <= !prev then ok := false;
+              prev := v)
+          done;
+          !ok
+        in
+        if ascending then
+          let j = ref ho.k in
+          runs_of_ascending (fun () ->
+              while !j < hn.k && not (inside lg.vals.(!j)) do
+                incr j
+              done;
+              if !j >= hn.k then None
+              else
+                let v = lg.vals.(!j) in
+                incr j;
+                Some v)
+        else
+          let vs = ref [] in
+          for j = ho.k to hn.k - 1 do
+            let v = lg.vals.(j) in
+            if inside v then vs := v :: !vs
+          done;
+          let l = ref (List.sort_uniq Int.compare !vs) in
+          runs_of_ascending (fun () ->
+              match !l with
+              | [] -> None
+              | v :: rest ->
+                  l := rest;
+                  Some v)
+    | _ -> removed_runs_walk ~old ~now
+  in
+  if Debug.enabled then
+    Debug.check "D-0269: removed_runs agrees with classify" (fun () ->
+        let expand = List.concat_map (fun (a, b) -> List.init (b - a + 1) (( + ) a)) r in
+        match classify ~old ~now with
+        | NoChange -> r = []
+        | Holes vs -> vs = expand
+        | Bound _ -> false);
+  r
+
 let change_to_string = function
   | NoChange -> "no change"
   | Bound { lo; hi } ->
