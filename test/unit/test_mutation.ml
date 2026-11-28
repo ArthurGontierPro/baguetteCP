@@ -2026,6 +2026,40 @@ let member_chase_src =
        indomain_max, complete) satisfy;\n";
     ]
 
+(* M18-coverage-T9 step 2 (D-0269): test/models/gapline_element_sat.fzn and
+   gapline_table_sat.fzn, verbatim but for the comments. In each, a bulk entry removes the
+   run 3..8 of c (x) and writes ONE line for it; a second element (table) reads that run,
+   and a decision then fails, so the trace is written under a decision over a
+   satisfiable model. *)
+let gapline_element_src =
+  String.concat ""
+    [
+      "var 1..4: i :: output_var;\nvar 1..10: c :: output_var;\n";
+      "var 1..5: r :: output_var;\nvar 0..1: d :: output_var;\n";
+      "constraint array_int_element(i, [1, 2, 9, 10], c);\n";
+      "constraint array_int_element(c, [1, 1, 3, 3, 3, 3, 3, 3, 5, 5], r);\n";
+      "constraint int_lin_le([1, 10], [r, d], 14);\n";
+      "constraint int_lin_le([-1, 10], [r, d], 8);\n";
+      "solve :: int_search([d, i], input_order, indomain_max, complete) satisfy;\n";
+    ]
+
+let gapline_table_src =
+  String.concat ""
+    [
+      "predicate baguette_table(array [int] of var int: x,array [int] of int: t,array \
+       [int] of var bool: s);\n";
+      "var 1..10: x :: output_var;\nvar 1..3: y :: output_var;\n";
+      "var 1..5: z :: output_var;\n";
+      "array [1..4] of var bool: s :: output_array([1..4]);\n";
+      "array [1..7] of var bool: u :: output_array([1..7]);\n";
+      "constraint baguette_table([x, y], [1, 1, 2, 2, 9, 3, 10, 1], s);\n";
+      "constraint baguette_table([x, z], [1, 1, 2, 1, 3, 3, 5, 3, 8, 3, 9, 5, 10, 5], u);\n";
+      "var 0..1: d :: output_var;\n";
+      "constraint int_lin_le([1, 10], [z, d], 14);\n";
+      "constraint int_lin_le([-1, 10], [z, d], 8);\n";
+      "solve :: int_search([d, x], input_order, indomain_max, complete) satisfy;\n";
+    ]
+
 (* b1's death across the holes, and x2 <> 3 from y's hole under b2. Pinned verbatim. *)
 let member_chase_line = "rup +1 ~b1_ge_1 +1 ~y_ge_2 +1 ~w2_ge_3 +1 ~w3_ge_5 >= 1 ;"
 
@@ -3026,6 +3060,124 @@ solve :: seq_search([int_search([b, y], input_order, indomain_min, complete), in
           "chase-last";
         member_lemma_lane c ~proof:b.pbp ~opb:b.opb ~line:member_transfer_line ~nth:0
           "transfer");
+
+    (* -- M18-coverage-T9 step 2: the GAP line (D-0269) -------------------------------
+       [gapline_element_src] and [gapline_table_src] are test/models/gapline_element_sat
+       and gapline_table_sat: a bulk entry removes a run a..b of c (resp. x) and its line
+       is ONE clause `~c_ge_a \/ c_ge_(b+1)`. Five corruptions of that line, each through
+       scripts/mutate_proof.sh and the first three also here with the line pinned:
+         gap-flip, gap-extend-lo, gap-extend-hi   a FALSE claim on a satisfiable model
+                (c = a-1 and c = b+1 are values of solutions), so the gap line ITSELF must
+                be refused, at its own line and at the RUP wording: the checker judges
+                the gap's exact extent, over a database that is not contradictory;
+         gap-shrink-lo, gap-shrink-hi   a WEAKER claim, accepted: measured slack. No later
+                line needs the end value, because every later line pins c on both sides
+                and the maker's rows (element's, table's DEF rows) refute any pin inside
+                the run. main's per-value lines were not load-bearing either (D-0269:
+                blanking all six per-value lines of this model on main verifies). *)
+    let solve_src ~name src =
+      let m = F.Builder.of_string ~file:name src in
+      let c = Compile.compile m in
+      let opb = Filename.concat dir (name ^ ".opb")
+      and pbp = Filename.concat dir (name ^ ".pbp") in
+      let oc = open_out opb in
+      Encoding.write_opb ~comments:[ "test_mutation: " ^ name ] c.Compile.encoding oc;
+      close_out oc;
+      let oc = open_out pbp in
+      let writer = Writer.create ~audit:true oc in
+      Encoding.start_proof c.Compile.encoding writer;
+      let ctx = Justify.create ~writer ~encoding:c.Compile.encoding in
+      let outcome =
+        Search.solve ~engine:c.Compile.engine ~store:c.Compile.store ~ctx
+          ~check:(fun _ -> true)
+          ?order:c.Compile.order ()
+      in
+      close_out oc;
+      ({ pbp; opb; fired = false }, outcome)
+    in
+    let gap_slack =
+      "D-0269: a narrower gap is a weaker claim, and no later line of an element or \
+       table proof rests on the end value (the maker's rows refute every pin a later \
+       line puts inside the run; main's per-value lines were not load-bearing either)"
+    in
+    List.iter
+      (fun (tag, src, gap_line) ->
+        let b, outcome = solve_src ~name:tag src in
+        check
+          (Printf.sprintf "%s: the solver solves it (the instance is what we think it is)"
+             tag)
+          (match outcome with Search.Sat _ -> true | Search.Unsat -> false);
+        let lines = Array.of_list (String.split_on_char '\n' (read_file b.pbp)) in
+        let at = ref (-1) in
+        Array.iteri (fun i l -> if !at < 0 && contains l gap_line then at := i) lines;
+        check
+          (Printf.sprintf "%s: the proof holds the ONE gap line `%s`" tag gap_line)
+          (!at >= 0);
+        (* The same corruption as the script's, here with the refusal pinned to the gap
+           line's own line number (1-based) and the RUP wording at full strength. *)
+        let pinned c name rewrite =
+          let lane = Printf.sprintf "%s/%s-pinned" c.c_tag name in
+          ran c (name ^ "-pinned");
+          if !at < 0 then fail "%s: no gap line, nothing tested" lane
+          else
+            let lines' = Array.copy lines in
+            lines'.(!at) <- rewrite lines.(!at);
+            let pbp = b.pbp ^ "." ^ name ^ ".pbp" in
+            let oc = open_out pbp in
+            output_string oc (String.concat "\n" (Array.to_list lines'));
+            close_out oc;
+            let v, out = check_proof { b with pbp } in
+            let here = Printf.sprintf "%s:%d\n" pbp (!at + 1) in
+            check
+              (Printf.sprintf "%s: refused AT the gap line (%d), at the RUP wording" lane
+                 (!at + 1))
+              (v = Rejected_on_derivation && contains out here && contains out rup_wording);
+            if not (v = Rejected_on_derivation && contains out here) then show out
+        in
+        let swap ~from ~into l =
+          match String.split_on_char ' ' l with
+          | ws -> String.concat " " (List.map (fun w -> if w = from then into else w) ws)
+        in
+        let lo, hi =
+          match String.split_on_char ' ' gap_line with
+          | _ :: lo :: _ :: hi :: _ -> (lo, hi)
+          | _ -> ("?", "?")
+        in
+        let bump lit d =
+          match String.rindex_opt lit '_' with
+          | Some k ->
+              String.sub lit 0 (k + 1)
+              ^ string_of_int
+                  (int_of_string (String.sub lit (k + 1) (String.length lit - k - 1)) + d)
+          | None -> lit
+        in
+        gated ~tag
+          ~control:(fun () -> control_holds ~tag ~proof:b.pbp)
+          ~declares:
+            [
+              "gap-flip";
+              "gap-extend-lo";
+              "gap-extend-hi";
+              "gap-shrink-lo";
+              "gap-shrink-hi";
+              "gap-flip-pinned";
+              "gap-extend-lo-pinned";
+              "gap-extend-hi-pinned";
+            ]
+          (fun c ->
+            mutation_lane c ~proof:b.pbp ~expect:`Rejects "gap-flip";
+            mutation_lane c ~proof:b.pbp ~expect:`Rejects "gap-extend-lo";
+            mutation_lane c ~proof:b.pbp ~expect:`Rejects "gap-extend-hi";
+            mutation_lane c ~proof:b.pbp ~expect:(`Known_slack gap_slack) "gap-shrink-lo";
+            mutation_lane c ~proof:b.pbp ~expect:(`Known_slack gap_slack) "gap-shrink-hi";
+            pinned c "gap-flip"
+              (swap ~from:lo ~into:(String.sub lo 1 (String.length lo - 1)));
+            pinned c "gap-extend-lo" (swap ~from:lo ~into:(bump lo (-1)));
+            pinned c "gap-extend-hi" (swap ~from:hi ~into:(bump hi 1))))
+      [
+        ("gapline-element", gapline_element_src, "+1 ~c_ge_3 +1 c_ge_9 >= 1 ;");
+        ("gapline-table", gapline_table_src, "+1 ~x_ge_3 +1 x_ge_9 >= 1 ;");
+      ];
 
     census ~dir;
 

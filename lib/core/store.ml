@@ -15,7 +15,9 @@
    entries a Single_row propagator would push with the same reason, merged; the comment
    at [remove_interior] goes through every reader of an entry and how it is answered.
    Element's result pruning uses it, where it pushed 15 million entries of 650 bytes for
-   one declared gap (D-0265).
+   one declared gap (D-0265). Since D-0269 [Trace] writes ONE line per maximal run of
+   consecutive values such an entry removed, `~x_ge_a \/ x_ge_(b+1)`, instead of one per
+   value, which is a second obligation on a caller (stated at [remove_interior]).
 
    Backtracking. A level mark records where the trail and the explanation arena stood
    when the level opened; [backtrack] pops entries back to it, writing each entry's [old]
@@ -1195,10 +1197,14 @@ let fix t v value j = apply t v (Domain.fix (get t v) value) j
        folds), [Trace]'s settle facts and every remover-facts reader read. It is per
        ENTRY, so the rule requires it to be the same for every value, which is why the
        mutator takes one reason and not one per value.
-     - [Trace.lines]: [Domain.classify] of the entry is [Holes] of the removed values,
-       ascending, and [Trace] writes one line per hole with the entry's facts, in that
-       order, which is the line each merged entry wrote, in the order they were pushed
-       (D-0268 shows the .pbp byte-identical on the test models and the lanes).
+     - [Trace.lines]: since D-0269, ONE line per maximal run [a..b] of consecutive
+       values the entry removed ([Domain.removed_runs]), claiming `~x_ge_a \/ x_ge_(b+1)`
+       with the entry's facts, where D-0268 wrote one line per value (`~x_ge_v \/
+       x_ge_(v+1)`, the bytes each merged entry wrote). Off the bits arm only; on it (a
+       fact over a bits variable) the per-value lines stay, each against its own
+       derivation. Every per-value clause follows from the gap line by unit propagation
+       along the ladder, so a later [rup] that propagated along one propagates along the
+       gap line; nothing cites a trace line by id in a [pol] (D-0269 lists the readers).
      - [derive_ahead] writes [why] ahead of an entry's lines, which is one derivation for
        one entry; a bulk entry has several, so the rule is refused inside
        [deriving_ahead]: only a [Single_row] family (a trace line RUP with nothing written
@@ -1211,7 +1217,21 @@ let fix t v value j = apply t v (Domain.fix (get t v) value) j
    on the thunk), so two answers for one value would be two lines. The store calls it for
    the first removed value at the push (the arena slot), and under BAGUETTE_DEBUG for
    every removed value, to run the agreement check of D-0026 on each pair of the shared
-   reason and one value's derivation, which is what each merged entry was checked by. *)
+   reason and one value's derivation, which is what each merged entry was checked by.
+
+   THE GAP OBLIGATION (D-0269). A caller must also guarantee that, given the shared
+   reason, the rows that refute [x = w] for one removed value [w] refute [x] anywhere in
+   the maximal run of consecutive removed values containing [w], so that the gap line
+   `~x_ge_a \/ x_ge_(b+1) \/ ~facts` is RUP where the per-value lines were. Both callers
+   meet it by the shape of their rows: an element row [idx = p -> c = as[p]] and a table
+   DEF row [s_t -> x = t_x] pin the variable to ONE value, so under [a <= x <= b] every
+   position (tuple) whose value lies outside [a..b] is refuted by the ladder, and every
+   one whose value lies inside is dead by the reason (element: no live position carries a
+   removed value) or does not exist (table: a run carries values no tuple carries); the
+   index's (the selectors') at-least-one is then violated. The run never crosses a value
+   the entry did not remove: an older hole between two removed values may be held by a
+   live position whose value another propagator removed, so [Domain.removed_runs] splits
+   the run there. *)
 let remove_interior t v (vs : int array) (reason : Reason.t)
     ~(justify : int -> Explanation.t) =
   if t.current_ahead then
