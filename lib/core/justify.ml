@@ -110,25 +110,36 @@
    the claim's negation inside every part, so the derived clause is the trace clause with
    the claim among its literals (D-0134 section 2.3), and the `ia` checks that clause.
 
-   THE LADDER RULE (D-0270, M18-coverage-T9). A bits derivation that holds a non-fixed
-   ORDER term (a fact, a term at its declared bound, or the claim) is NOT written as
-   above: an order variable's term is its whole ladder in the row (`a * y` is `Σ a *
+   THE LADDER RULE (D-0270, M18-coverage-T9). A bits derivation that holds an ORDER term
+   wider than a Boolean (a fact, a term at its declared bound, or the claim) is NOT
+   written as above. Such a term is its whole ladder in the row (`a * y` is `Σ a *
    y_ge_w`), so the bridge that cancelled it was a line as wide as the ladder per (y, v),
-   and the bound line one per variable -- 93 % of a liner-sf proof, and veripb kept every
-   one of them (D-0270 section 1). Instead the `pol` cites only the bits terms (their
-   atom lines or `@lb`/`@ub`, as above), a bits claim's atom line MULTIPLIED by the
-   divisor, and the row(s) last; no division, no saturation; and the clause follows as a
-   `rup`, then the `pol` is deleted ([ladder_part], [ladder_close]). The `rup` closes by
-   unit propagation: the negated clause sets every fact's literal and the negated claim,
-   the ladder fixes the rungs those decide, and the rungs left free in the `pol` reach
-   at most what the bridge or bound line replaced them by, so the `pol`'s constraint is
-   the old line's before its division, which is violated. Dropping the division is
-   what makes that exact: one constraint violated after `ceil(./d)` is violated before
-   it, whereas a division with rungs still in would round each up (D-0270 section 3.1).
-   A [Resolve] is the same part by part (each [Combine] part its own `pol`, then one
-   `rup`). A derivation with no order term keeps the line above byte for byte. Nothing is
-   minted for an order variable any more; the bits atoms are minted as before, before
-   the `pol` that cites them.
+   both halves minted at the first citation, and the bound line one per variable: 93 %
+   of a liner-sf proof (D-0270 section 1). Instead:
+
+   - the `pol` cites the bits terms as above (atom lines, `@lb`/`@ub`), a bits claim's
+     atom line MULTIPLIED by the divisor, and the row(s) LAST; no division, no saturation
+     ([ladder_part]). An order term at its declared bound cites nothing. An order fact,
+     or a wide order claim, cites its bridge HALF only if that half was asked for before:
+     [Encoding.order_bridge] answers [None] at the first ask and mints the half at the
+     second, so a half cited once is never written and a half cited again is written
+     once, after which its citations are as cheap as before;
+   - the clause is pinned by `ia` when every wide order literal cited its half (the
+     declared terms' rungs are free under the negated clause and `ia`'s weakening reads
+     them at their maximum, as the bound line did), and by `rup` when one did not
+     ([ladder_close]): the negated clause sets that literal, the ladder fixes the rungs it
+     decides, and the rungs left free reach at most what the bridge replaced them by;
+     then the `pol` is deleted.
+
+   Either way the `pol`'s constraint under the negated clause is the old line's before
+   its division, which is violated. Dropping the division is what makes that exact: one
+   constraint violated after `ceil(./d)` is violated before it, whereas a division with
+   rungs still in would round each up (D-0270 section 3.1). A [Resolve] is the same part
+   by part (each [Combine] part its own `pol`, then one `rup`). A derivation whose order
+   terms are all Booleans, or that has none, keeps the line above byte for byte. The
+   first citation pays a `rup` that walks the ladder in the checker where the old line
+   paid a Θ(w) line; the second pays the line (D-0270 section 4 measured why not walk
+   every time).
 
    Atoms are minted where a name first reaches the writer (D-0130 section 3.3):
    [validate_lits] below, which every clause, `rup`, [Defining] and nogood already pass
@@ -1159,26 +1170,38 @@ let emit_combine ~emit ~claim ctx summands divisor =
    and in that case the term's negated literal is pushed on [neg_facts_rev], oldest
    first after reversal, which is the order the derived clause lists them in. [None]
    for a fixed variable, which has nothing to weaken. *)
-let bits_term_fragment ?(ladder = false) ctx neg_facts_rev (r : Explanation.linear_term) =
+let bits_term_fragment ?walk ctx neg_facts_rev (r : Explanation.linear_term) =
   let w = ctx.writer and enc = ctx.encoding in
   let c = Stdlib.abs r.Explanation.lt_coeff and x = r.Explanation.lt_name in
-  (* D-0270: under [ladder] an ORDER term contributes no citation. Its rungs stay in the
-     `pol` as the row spells them, and the `rup` that follows the `pol` reads them
-     through the ladder (the module header's "BITS arm", last paragraph). Its fact is
-     still one of the clause's literals. *)
-  let order = ladder && not (Encoding.is_bits enc x) in
+  (* D-0270: under the ladder rule ([walk] given) an ORDER term cites no bound line, and a
+     fact on it cites its bridge half only once that half has been asked for before
+     ([Encoding.order_bridge]); otherwise its rungs stay in the `pol` as the row spells
+     them and [walk] is set: the clause must then be a `rup` that reads them through the
+     ladder (the module header's "THE LADDER RULE"). A Boolean's one rung IS its fact's
+     literal, so it never needs the walk. Its fact is one of the clause's literals either
+     way. *)
+  let order = Option.is_some walk && not (Encoding.is_bits enc x) in
   match Explanation.lt_lit r with
   | None ->
       if Explanation.lt_width r <= 0 || order then None
-        (* a fixed variable: nothing to weaken; an order term under [ladder]: its rungs
-           at their declared range are what the `rup` reads *)
+        (* a fixed variable: nothing to weaken; an order term under the ladder rule: its
+           rungs at their declared range are read at their maximum, by the `ia`'s
+           weakening or by the `rup` *)
       else
         let lb, ub = Encoding.bound_lines enc w x in
         Some (Pol.mul (Pol.id (if r.Explanation.lt_coeff > 0 then lb else ub)) c)
   | Some l ->
       validate_lits ctx [ l ];
       neg_facts_rev := Lit.negate l :: !neg_facts_rev;
-      if order then None
+      if order then (
+        if Explanation.lt_width r <= 1 then None
+        else
+          (* [x >= v] cites B1' at v; [x <= v] is [~x_ge_(v+1)] and cites B2' at v+1 *)
+          match Encoding.order_bridge enc w x (Lit.value l.Lit.v) ~b1:l.Lit.positive with
+          | Some h -> Some (Pol.mul (Pol.id h) c)
+          | None ->
+              Option.iter (fun f -> f := true) walk;
+              None)
       else
         (* [x >= v] cites B1 at v; [x <= v] is [~x_ge_(v+1)] and cites B2 at v+1:
            [Lit.value] is the atom's value either way. *)
@@ -1187,9 +1210,9 @@ let bits_term_fragment ?(ladder = false) ctx neg_facts_rev (r : Explanation.line
 
 (* The summands of one bits-arm [Combine], as `pol` fragments: the row(s) and the terms.
    Anything else in a bits derivation is a propagator's mistake and is named. *)
-let bits_summand_fragment ?ladder ctx neg_facts_rev = function
+let bits_summand_fragment ?walk ctx neg_facts_rev = function
   | Explanation.Term (c, Explanation.Model_row id) -> Some (Pol.mul (Pol.id id) c)
-  | Explanation.Linear_term r -> bits_term_fragment ?ladder ctx neg_facts_rev r
+  | Explanation.Linear_term r -> bits_term_fragment ?walk ctx neg_facts_rev r
   | s ->
       invalid_arg
         (Printf.sprintf
@@ -1218,29 +1241,25 @@ let order_summand ctx = function
       Explanation.lt_width r > 1 && wide_order ctx r.Explanation.lt_name
   | _ -> false
 
-(* ... and one that carries a FACT (a bound it read that is not the declared one). *)
-let wide_fact ctx = function
-  | Explanation.Linear_term r as s ->
-      order_summand ctx s && Option.is_some (Explanation.lt_lit r)
-  | _ -> false
-
 (* One [Combine]'s `pol` on the ladder rule: the terms' citations first, then [extra]
-   (a bits claim's atom line), then the row(s), so that the checker's accumulator stays
-   short until the one addition of a row of Θ(w) terms. No division, no saturation: the
-   `rup` that follows reads the constraint as it is (D-0270 section 3.1). *)
-let ladder_part ctx neg_facts_rev ~extra summands =
+   (a bits claim's atom line, or a wide order claim's bridge half), then the row(s), so
+   that the checker's accumulator stays short until the one addition of a row of Θ(w)
+   terms. No division, no saturation: the pin reads the constraint as it is (D-0270
+   section 3.1). [walk] is set when a wide order fact had no bridge half to cite. *)
+let ladder_part ctx neg_facts_rev ~walk ~extra summands =
   let rows, terms =
     List.partition
       (function Explanation.Term (_, Explanation.Model_row _) -> true | _ -> false)
       summands
   in
-  let frag = bits_summand_fragment ~ladder:true ctx neg_facts_rev in
+  let frag = bits_summand_fragment ~walk ctx neg_facts_rev in
   let t = List.filter_map frag terms in
   let r = List.filter_map frag rows in
   bits_sum (t @ extra @ r)
 
-(* The ladder rule's lines after the `pol`(s): the `rup` of [clause], then the `pol`s
-   deleted. The `rup`'s id is the clause, as the `ia`'s was. *)
+(* The ladder rule's pin after the `pol`(s) when a wide order literal has no bridge half
+   on the page: the `rup` of [clause], then the `pol`s deleted. The `rup`'s id is the
+   clause, as the `ia`'s was. *)
 let ladder_close ctx ~origin ~clause pols =
   let w = ctx.writer in
   let cid = Writer.rup w ~origin (Opb.clause clause) in
@@ -1276,7 +1295,8 @@ let emit_bits_resolve ctx ~origin ~(concludes : Reason.fact option) parts =
           | Explanation.Model_row _ -> None
           | Explanation.Combine { summands; _ } ->
               Some
-                (Writer.pol w ~origin (ladder_part ctx neg_facts_rev ~extra:[] summands))
+                (Writer.pol w ~origin
+                   (ladder_part ctx neg_facts_rev ~walk:(ref true) ~extra:[] summands))
           | other ->
               invalid_arg
                 (Printf.sprintf
@@ -1530,38 +1550,51 @@ let emit_bits_combine ctx ~origin ~(concludes : Reason.fact option) summands div
   in
   if wide_claim || List.exists (order_summand ctx) summands then (
     (* D-0270 section 3: the ladder rule. A bits claim's atom line is multiplied by the
-       divisor instead of added after a division; an order claim cites nothing. *)
+       divisor instead of added after a division; a wide order claim cites its bridge half
+       the same way once that half exists, and otherwise needs the walk. *)
     if claim_lit = None && concludes <> None then
       invalid_arg
         "Justify.emit_bits_pruning: a bits conclusion at its declared bound (nothing to \
          claim)";
+    let walk = ref false in
+    let d = max 1 divisor in
     let extra =
       match claim_lit with
       | None -> []
       | Some l ->
           validate_lits ctx [ l ];
-          if order_claim then []
+          (* the pruned variable's own atom: B2 at l for a lower push [x >= l], B1 at u+1
+             for an upper push [x <= u] *)
+          if wide_claim then (
+            match
+              Encoding.order_bridge enc w (Lit.owner l.Lit.v) (Lit.value l.Lit.v)
+                ~b1:(not l.Lit.positive)
+            with
+            | Some h -> [ Pol.mul (Pol.id h) d ]
+            | None ->
+                walk := true;
+                [])
+          else if order_claim then []
           else
             let b1, b2 =
               Encoding.ensure_atom enc w (Lit.owner l.Lit.v) (Lit.value l.Lit.v)
             in
-            [ Pol.mul (Pol.id (if l.Lit.positive then b2 else b1)) (max 1 divisor) ]
+            [ Pol.mul (Pol.id (if l.Lit.positive then b2 else b1)) d ]
     in
-    let expr = ladder_part ctx neg_facts_rev ~extra summands in
+    let expr = ladder_part ctx neg_facts_rev ~walk ~extra summands in
     let clause = Option.to_list claim_lit @ List.rev !neg_facts_rev in
     let cid =
-      if wide_claim || List.exists (wide_fact ctx) summands then
-        (* a wide order FACT or CLAIM: its literal reaches the rungs only through the
-           ladder, so the pin is a `rup` *)
+      if !walk then
+        (* a wide order literal with no bridge half: it reaches the rungs only through
+           the ladder, so the pin is a `rup` *)
         let origin = origin ^ " [ladder]" in
         ladder_close ctx ~origin ~clause [ Writer.pol w ~origin expr ]
       else (
-        (* the wide order terms are all at their declared bounds: their rungs are free
-           under the negated clause, and `ia`'s weakening reads them at their maximum,
-           as the bound line did (D-0270 section 3.6) *)
+        (* every wide order literal cites its bridge half, and the terms at their declared
+           bounds are free under the negated clause: `ia`'s weakening reads them at their
+           maximum, as the bound line did (D-0270 section 3.6) *)
         Encoding.note_bits_ladder enc ~rup:false;
-        Writer.pol_concluding w
-          ~origin:(origin ^ " [ladder, declared]")
+        Writer.pol_concluding w ~origin:(origin ^ " [ladder, ia]")
           ~claim:(Opb.clause clause) expr)
     in
     Encoding.note_bits_pruning enc;

@@ -286,6 +286,11 @@ type ivar = {
      [bound_lines] when a mixed-row derivation first weakens it (D-0132 section 2.2). A
      bits variable's bound lines are its `.opb` rows. *)
   mutable bound_lines : (cid * cid) option;
+  (* D-0270: an ORDER variable's bridge HALVES, minted one at a time at their SECOND ask
+     ([order_bridge]). Key [2v] is B1' at v, [2v + 1] is B2' at v; [None] records the
+     first ask (the derivation then leaves the rungs in its `pol` and closes by `rup`),
+     [Some id] the minted half. *)
+  mutable halves : cid option IMap.t;
 }
 
 and repr = Order | Bits of { n : int; lb_row : cid; ub_row : cid }
@@ -1754,6 +1759,7 @@ let mint_order t x ~holes ~lo ~hi =
       repr = Order;
       atoms = IMap.empty;
       bound_lines = None;
+      halves = IMap.empty;
     }
   in
   Names.replace t.ints x v;
@@ -1896,6 +1902,7 @@ let mint_bits t x ~lo ~hi =
       repr = Bits { n; lb_row; ub_row };
       atoms = IMap.empty;
       bound_lines = None;
+      halves = IMap.empty;
     }
   in
   Names.replace t.ints x v;
@@ -2179,13 +2186,15 @@ let retire_all_direct t w = List.iter (fun x -> retire_direct t w x) (vars t)
    minted once. So every term of a mixed row is ONE citation whatever its width, and the
    Θ(w) bytes an order variable costs are paid once per cited (x, v), not per pruning.
 
-   SINCE D-0270 NOTHING IN lib/ ASKS FOR AN ORDER BRIDGE OR AN ORDER BOUND LINE. A bits
-   derivation with an order term leaves that term's rungs in its `pol` and closes the
-   clause by `rup` over the ladder (lib/core/justify.ml, "THE LADDER RULE"), because the
-   pair above is as wide as the ladder and was 93 % of a liner-sf proof (D-0270 section
-   1). [ensure_atom] and [bound_lines] still answer for an order variable, so the shape
-   stays checkable by the unit tests that measured it; the `bridges` and `boundlines`
-   stats read 0 on every run of today's solver.
+   SINCE D-0270 THE PAIR IS NOT MINTED BY lib/, AND NEITHER IS THE BOUND LINE. A bits
+   derivation with a wide order term leaves that term's rungs in its `pol` (lib/core/
+   justify.ml, "THE LADDER RULE"); an order FACT or claim asks [order_bridge] for ONE
+   half, which is minted at its second ask and memoised in [halves], the first ask being
+   answered by a `rup` over the ladder. The pair was as wide as the ladder and was 93 %
+   of a liner-sf proof, half of it never cited (D-0270 section 1). [ensure_atom] and
+   [bound_lines] still answer for an order variable, for the unit tests that measured
+   the shape; the `boundlines` stat reads 0 on every run of today's solver and `bridges`
+   counts the halves minted.
 
    LIFETIME. Everything minted here is a level-0 id that no [w] retires and that
    lib/core/search.ml's end-of-run sweep deletes with every other live id before the
@@ -2267,8 +2276,59 @@ let mint_order_bridge t w (iv : ivar) v =
       Writer.rup w ~origin
         (Opb.ge (List.map (fun l -> (1, Lit.negate l)) rungs @ [ (big_k, atom) ]) big_k)
   in
-  t.n_bridges <- t.n_bridges + 1;
+  t.n_bridges <- (t.n_bridges + if b2 = b1 then 1 else 2);
   (b1, b2)
+
+(* D-0270: ONE half of an order variable's bridge at [v] ([b1]: B1', else B2'), minted at
+   its SECOND ask and memoised; [None] at the first ask, which the caller (lib/core/
+   justify.ml, "THE LADDER RULE") answers by leaving the variable's rungs in its `pol` and
+   closing the clause by `rup` over the ladder. A half asked once is never written: on
+   liner-sf most cited halves are cited once (D-0270 section 1), and a never-cited half
+   was half of every pair before. A half asked again is worth its Θ(w) line, because every
+   later citation is then an `ia` instead of a `rup` that walks the ladder (D-0270
+   section 4 measured the walk). A pair [ensure_atom] minted (unit tests only) answers
+   from the pair. Precondition: [x] is an order variable of width >= 1; no root
+   contradiction on the page when it mints. *)
+let order_bridge t w x v ~b1 =
+  let iv = check_atom_value t x v in
+  match IMap.find_opt v iv.atoms with
+  | Some (h1, h2) -> Some (if b1 then h1 else h2)
+  | None -> (
+      let key = (2 * v) + if b1 then 0 else 1 in
+      match IMap.find_opt key iv.halves with
+      | Some (Some id) -> Some id
+      | None ->
+          iv.halves <- IMap.add key None iv.halves;
+          None
+      | Some None ->
+          if t.atoms_closed then
+            invalid_arg
+              (Printf.sprintf
+                 "Encoding.order_bridge: `%s >= %d` asked for after the root \
+                  contradiction"
+                 x v);
+          let id =
+            Writer.with_level w 0 (fun () ->
+                let k = v - iv.lo in
+                let rungs = order_rungs iv in
+                let origin = Printf.sprintf "bridge %s>=%d" x v in
+                if b1 then
+                  Writer.rup w ~origin
+                    (Opb.ge
+                       (List.map (fun l -> (1, l)) rungs
+                       @ [ (k, Lit.negate (Lit.ge x v)) ])
+                       k)
+                else
+                  let big_k = iv.hi - iv.lo - k + 1 in
+                  Writer.rup w ~origin
+                    (Opb.ge
+                       (List.map (fun l -> (1, Lit.negate l)) rungs
+                       @ [ (big_k, Lit.ge x v) ])
+                       big_k))
+          in
+          t.n_bridges <- t.n_bridges + 1;
+          iv.halves <- IMap.add key (Some id) iv.halves;
+          Some id)
 
 (* The ids (B1, B2) of the atom [x >= v] -- minted now if this is the first time it is
    named, memoised otherwise. Precondition: no root contradiction is on the page. *)

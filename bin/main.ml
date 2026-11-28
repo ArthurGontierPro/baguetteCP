@@ -1484,7 +1484,8 @@ let report_atoms (a : Encoding.atom_stats) =
   Printf.eprintf "stats: %-10s %10d lines  sparse-chain links between minted atoms\n"
     "atomlinks" a.Encoding.a_links;
   Printf.eprintf
-    "stats: %-10s %10d pairs  rup bridge pairs for order variables in mixed rows\n"
+    "stats: %-10s %10d lines  rup bridge lines (B1'/B2' halves) for order variables in \
+     mixed rows, each minted at its second citation (D-0270)\n"
     "bridges" a.Encoding.a_bridges;
   Printf.eprintf "stats: %-10s %10d pairs  degree-0 bound lines for order variables\n"
     "boundlines" a.Encoding.a_bound_lines;
