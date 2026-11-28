@@ -35561,3 +35561,130 @@ One more mutator with its rule in store.ml's header and at its definition, one m
 **Results**: `/cluster/arthur/baguette-results/elembulk/` (README, the tables, probes, logs, scripts).
 
 **Revert.** `git revert 46de8de9 3a750d1c 2c1fd087` (trace fix, table, the rule and element), in that order; the two test models go with `3a750d1c`. Nothing outside the branch depends on `Store.remove_interior`.
+
+## D-0269  [AUTONOME] M18-coverage-T9, D-0265's step 2: a bulk entry writes ONE trace line per maximal removed gap, `~x_ge_a \/ x_ge_(b+1)`, instead of one line per removed value. A proof change with no new variable, no `.opb` row and no change to the naming contract or `--e2e`
+
+**Status**: DONE on `wave114-gapline` (agent-gapline, 2026-11-28), not merged. Base: origin/main `99897e96` (D-0268 merged).
+
+[AUTONOME] because it changes the proof the solver writes (D-0021's "every pruning writes one line" now reads "every bulk pruning writes one line per run"); nothing that changes the solver's answers or its search was decided.
+
+### 1. What a removed run means in each encoding, and the gap rule
+
+- **Order encoding.** There is no literal `x = v`; a hole is the clause `~x_ge_v \/ x_ge_(v+1)` (PROOF-FORMAT §4, the trace line's hole claim). A maximal run `a..b` of consecutive values removed by ONE bulk entry is the clause `~x_ge_a \/ x_ge_(b+1)`, both literals existing because the run is strictly interior (`a > lo >= l`, `b + 1 <= hi <= u`). The rule: one line per run, `rup +1 ~x_ge_a +1 x_ge_(b+1) +1 ~f_1 ... >= 1` with the entry's facts (the one shared reason of D-0268), in ascending order of runs. A one-value run writes the bytes the hole line always wrote.
+- **(a) Derivable by one `rup` from the rows the per-value lines used.** Assume `x >= a`, `x <= b` and the facts. Element: every position `p` has the rows `idx = p -> c >= as[p]` and `idx = p -> c <= as[p]` (over the index's order literals); a position whose value is below `a` or above `b` is refuted through the ladder; a position whose value is inside `a..b` carries a value this entry removed, which no live position carries (that is why it was removed), so it is dead by the same facts the per-value line of that value used; the index's sweep then runs out of positions. Table (D-0268's runs): the values of a run are carried by NO tuple, every DEF row `s_t -> x = t_x` is refuted through the ladder, the selectors' at-least-one fails, with the empty reason. **When it is not derivable, and the split:** a run never crosses a value the entry did not remove. An older hole `h` between two removed values can be held by a LIVE position (another propagator removed `h` from the result, not element), and under `a <= x <= b` that position is not refuted, so `Domain.removed_runs` cuts the run at every value not removed by this entry. Measured, not only argued: every gap line written on the 301 test models, both diff lanes, the factor lane and the fuzz streams verifies (sections 4, 5).
+- **(b) Sufficient for every later line.** The ladder rows `x_ge_(v+1) -> x_ge_v` make each per-value clause a unit-propagation consequence of the gap clause (`x_ge_v` fixes `x_ge_a` downwards, `~x_ge_(v+1)` fixes `~x_ge_(b+1)` upwards, and the gap clause is then falsified), and in the other direction the gap clause propagates whatever a per-value clause propagated (`x_ge_v` gives `x_ge_a`, then `x_ge_(b+1)`, then `x_ge_(v+1)`). So any `rup` checked along the per-value lines checks along the gap line. What a `rup` cannot use this way is a `pol` that ADDS a per-value line by id; there is none (below).
+
+The consumers of a per-value line id (`grep -rn 'hole_line_of\|lines_at\|w_hole\|removal_explanation' lib`):
+
+| consumer | what it uses | served by |
+|---|---|---|
+| `Trace.settle_facts` (a bound settled over holes, I-X9) | the remover's REASON as facts, and `hole_line_of` for the I-S4 edge | the gap line: `hole_line_of e v` answers the line whose run contains `v`; the facts are the reason, unchanged |
+| `Search`'s M1-T55 bridge (a decision settled over holes) | `hole_line_of` for the I-S4 edge | the gap line, as above |
+| `Learn.supports` (the 1UIP clause's derivation rests on these lines, I-S4 at derivation) | `lines_at e` (every line of a supporting entry) and `hole_line_of` for each fold | the gap lines: an entry's lines are its runs' lines; `describe` names the gap |
+| the nogood and the learned clause (`rup`), the root's `rup >= 1` | unit propagation along the trace | the gap line, by (b) |
+| `Trace`'s bits arm (a fact over a bits variable) | one derivation per hole (`removal_explanation e v`), each `ia` the line | NOT the gap rule: on the bits arm a bulk entry keeps its per-value lines. Reachable only through a fact owner on bits (element's result and table's columns are held on order by scope, D-0130 §3.4); none of the test models or lanes reaches it |
+| `Justify` derivations: Element's `excl_hole`, `Store.reasons_under` (a `pol` over a bound settled across bulk holes) | the per-value DERIVATION (`removal_explanation`), a `pol` of its own | unchanged: a derivation is not a trace line and no `pol` cites a trace line by id; derived on demand and memoised as in D-0268 |
+| `Trace.derive_ahead` | a derivation ahead of an entry | unchanged: refused for a bulk entry (D-0268) |
+| `Trace.claims` (tests drive a propagator's lines in isolation) | the claims of an entry | unchanged: `lines` without `~gaps` gives per-value claims, which is what a test of one value's line wants |
+
+No consumer needs a per-value line derived on demand from the gap line, so none is written.
+
+### 2. The three encodings
+
+Order: the rule. Bits (`--bits-above`): the claimed variable of a bulk entry is never on bits (element's result and a table column are held on the order encoding by scope), but a fact owner can be, and then the entry goes on the bits arm and keeps one line per value, each against its own derivation (D-0268's arm, unchanged). Direct: the direct literals of element's index are channelled to the order literals (`red` definitions); the gap claim is over order literals and the full ladder is in the `.opb`, so nothing changes. The rule is therefore stated and built for the order arm only.
+
+### 3. Deletion
+
+The gap line is an ordinary trace line: filed at the entry's level, retired by the `Writer.wipe_level` that undoes the entry, and at level 0 handed to `permanent_ids` and deleted before `conclusion` (I-X2). No line is derived on demand from it (section 1), so I-X11's rule for derived lines has nothing new to cover. The I-S4 edges now point at the gap line; I-S4's level argument is the same (the run's line and the entry share a level).
+
+### 4. Naming contract, `--e2e`
+
+Untouched: no new variable, no `.opb` row (the `.opb` is byte-identical on every run compared), and the e2e prefix derives baguette's rows, not trace lines.
+
+### 5. What was built
+
+- `Domain.removed_runs ~old ~now`: the maximal runs of consecutive values a `Holes` change removed, from the hole log's slots in one allocation-free pass (the walk otherwise); BAGUETTE_DEBUG checks it against `classify`.
+- `Trace.lines ~gaps`: one line per run, `gap_clause` (`hole_clause` is its one-value case, so a one-value run writes the bytes it wrote). `emit_to_page` reads a bulk entry's reason first, decides the bits arm, and asks for gaps off it; every other entry keeps "claims first".
+- `Trace.written.w_hole` and `Learn.support.s_hole` are a variant `No_hole | Hole v | Gap (a, b)`; `hole_line_of e v` answers the line whose run contains `v`.
+- `Store.remove_interior`'s header states the gap obligation its callers meet (section 1 (a)).
+- PROOF-FORMAT §4 (the trace line) describes the gap line. Commits: `6c15c903` (the rule), `75a4d612` (models, lanes), `70d37ebc` and `8d7f2ce2` (cost, section 8).
+
+### 6. Evidence that the gap line is real, and what it is not
+
+**Mutation lanes** (`scripts/mutate_proof.sh` gains five; `test_mutation.ml` runs them on `gapline_element_sat` and `gapline_table_sat`, both SATISFIABLE, the gap line written over a database that is not contradictory):
+
+| lane | corruption of `~c_ge_3 \/ c_ge_9` | veripb |
+|---|---|---|
+| gap-flip | `c_ge_3 \/ c_ge_9` | refused AT the gap line (element line 45, table line 5), RUP wording at full strength |
+| gap-extend-lo | `~c_ge_2 \/ c_ge_9` (2 is a value of a solution) | refused at the gap line, RUP wording |
+| gap-extend-hi | `~c_ge_3 \/ c_ge_10` | refused at the gap line, RUP wording |
+| gap-shrink-lo | `~c_ge_4 \/ c_ge_9` | ACCEPTED: registered as known slack |
+| gap-shrink-hi | `~c_ge_3 \/ c_ge_8` | ACCEPTED: registered as known slack |
+
+So the checker judges the gap line's exact extent. What the lanes could NOT show is a later line refused when the gap shrinks, and the reason is measured, not assumed: **no later line of an element or table proof rests on a removed value's line.** Every consumer of the run pins the variable on BOTH sides (a settle line's negated claim bounds it, a second element's sweep over its index runs from both ends, a dead tuple's DEF row fixes it), and the maker's own rows refute any pin inside the run by unit propagation. Measured on main (`c526527b`): replacing every per-value line of the run by a tautology, label kept, leaves the proof `s VERIFIED` on `gapline_element_sat` (6 lines), `gapline_table_sat` (6), `gapline_element_opt` (6) and `element_gap_opt` (23). The per-value lines were not load-bearing either; D-0269 does not change that, and section 9 says what it suggests.
+
+**Every changed proof verifies.** Test models (295 + the 6 added: `gapline_{element,table}_{sat,unsat,opt}`), main `c526527b` against the branch, 4 configurations each (free and fixed search, default `--bits-above 0` and `none`), 1 204 runs: stdout and `.opb` identical on all; the `.pbp` differs on 40 (element_gap_opt, element_crossed_root_unsat, circuit_opt, table_opt and the 6 new models, 4 each), all fewer lines, all `s VERIFIED`. `run_model_tests.sh` and `free_model_tests.sh` 301 passed (every proof verified, expected outputs unchanged), `check_determinism.sh` 602 + 8 runs identical, `e2e_lane.sh` PASS (263 AGREE, 3 UNCHECKED, 0 DIFFER).
+
+**Lanes, the search did not move.** `diff_lane.sh --tier all` against the references of the time (before the D-0268 re-record): 45 of 393 differ, all on the three element instances; 6 are D-0268's work counters only (the no-proof configurations), 39 add the `.pbp` hash and `rup/lines` (13 also `i-s4-cross/lines`, fewer hole lines for a learned clause to rest on). Run beside main's binary with `--keep` on those three instances (48 runs): 39 differ, and the only items that differ are the `.pbp` hash, `rup/lines` (39) and `i-s4-cross/lines` (13); stdout, exit code, `.opb`, every other SEARCH counter (nodes, conflicts, learned, ...) and every WORK counter are identical; the 39 changed proofs all `s VERIFIED`. `observe.py` files the two line counters under SEARCH, which is why the lane prints "search 1". `--debug`: 29 of 377, the same 29 runs as D-0268 (chessboard4 13, evm 16; 25 with the proof items, 4 work counters only), no exit status changed, no invariant fired. Scaling ok. `factor_lane.sh` ok, every line -0.21 % to +0.40 % of its reference, 36 proofs verified. `fuzz_lane.sh -n 500 --streams globals,configs`: 0 disagreements, 0 timeouts (13 `mzn-error`, MiniZinc's flattening).
+
+**Against the references re-recorded after D-0268** (main `922ae683`, merged here), final binary `87b44fa4` (dev build of `8d7f2ce2`): `diff_lane.sh --tier all` 39 of 393 differ, every one only in the `.pbp` hash and `rup/lines` (13 also `i-s4-cross/lines`), no WORK counter (pigment15b 14, chessboard4 11, evm 14); `--debug` 25 of 377 (chessboard4 11, evm 14), the same items, no exit status changed. These are the runs the orchestrator re-records after the gate; `--update` was not run here.
+
+**Checks on the final commit** (`8d7f2ce2` merged with origin/main): `check_fmt.sh` clean, `check_test_widths.py` no wide domain, `dune runtest --root . --force` 5 712 ok, 0 FAIL (5 692 before; 20 new mutation checks), peak RSS 174 MB; `run_model_tests.sh` 301 passed, `free_model_tests.sh` 301 passed, `check_determinism.sh` 602 + 8 identical; the final binary is byte-identical to the one the fuzz, factor and model comparisons ran (1 204 runs: stdout, `.opb`, `.pbp`); scaling ok.
+
+### 7. The 21 instances of D-0265's gap kind, with proof
+
+D-0265's setting (`--max-heap-mb 8192`, 16 GiB address space, `MemoryMax=32G`, `--stats -f`, `--time-limit 300`, proof written and its size recorded, then deleted), release binaries main `65acb55f` (D-0268 merged, `99897e96`) and branch `96fae3d6` (`75a4d612`; the two later commits change the cost, not a byte of the proof), run side by side, 10 at a time on a node at load 55 to 72:
+
+| | main | branch |
+|---|---|---|
+| heap-budget refusals | 12 (6 with no incumbent: liner-sf fm3_5, tp7_10, tp7_12, tp7_2, proteindesign 1CM1, table-layout) | 11 (2 with no incumbent: proteindesign 1CM1 and table-layout, both at node 1) |
+| killed past the limit (TERM, writing the trace) | 5 (liner-sf fm3_11, tp7_8, fm3_3, wordpress7, proteindesign 1HZ5) | 0 |
+| reach the time limit | 4 (connect 3, proteindesign 1HZ5) | 10 (liner-sf fm3_11, fm3_5, tp7_10, fm3_3, tp7_12, tp7_2; connect 3; wordpress7) |
+| solutions | wordpress 1 each (4), proteindesign 4 incumbents | **liner-sf tp7_8 24 solutions** (objective 1 129 195) before its refusal; **wordpress7 57** (objective 89 273 -> 68 589), wordpress10/11/12/8 5, 7, 5, 8 (each objective below main's); proteindesign the same 4 incumbents |
+
+The element-gap instances (liner-sf 7, wordpress 5, connect 3, table-layout): main refuses or is killed on 12 of 16; the branch searches to the time limit on 10 and refuses 5 only after 5 to 24 solutions; table-layout is unchanged because its proof is not trace lines (0 `rup` lines on both: 9.4 M lines of the index's direct-encoding `red` definitions written at the start, and a 12.6 GB `.opb`). Main's liner-sf and wordpress proofs held 6 to 16 M lines (15.4 M on fm3_11, all but 70 k of them per-value `rup` lines); the branch's 44 to 261 k lines.
+
+**What is now the size of a liner-sf proof** is not trace lines: on fm3_11 after 90 s, 2.16 GB of the branch's 2.30 GB `.pbp` is 629 `rup` lines of up to 68 MB each, the bridge pairs D-0132 section 2.2 mints for an ORDER variable in a row with a bits term (`stats: bridges`), one line the width of the variable's ladder (0.75 M and 2.1 M rungs). The branch's liner-sf proofs at 300 s are 9 to 19 GB because it searches 80 to 531 nodes where main managed 5 to 56.
+
+**Same search, same node** (fixed node budget (`BAGUETTE_NODE_LIMIT`), proof kept, then veripb, `nodeN.sh`):
+
+| instance (nodes) | main: .pbp, lines, solver, veripb | branch: .pbp, lines, solver, veripb |
+|---|---|---|
+| connect 0018 (61) | 186 MB, 838 498, 296 s, no verdict in 3 600 s | 121 MB, 97 616, 3 s, **VERIFIED in 12 s** |
+| connect 0041_02 (201) | 418 MB, 2 315 799, 291 s, no verdict in 3 600 s | 264 MB, 598 271, 8 s, VERIFIED in 52 s |
+| connect 0083_02 (11) | 442 MB, 3 370 221, 36 s, no verdict in 3 600 s | 143 MB, 27 189, 6 s, VERIFIED in 35 s |
+| liner-sf tp7_8 (25) | killed at 1 800 s at node 22 still writing: 1.25 GB, 7 558 597 lines (7.17 M per-value lines) | 2.64 GB (2.63 GB of it 864 bridge pairs), 72 400 lines, 67 s, **VERIFIED in 453 s** (29 GB RSS) |
+| connect 0083_02 (146) | 639 MB, 3 472 956, 287 s, no verdict in 1 200 s | 339 MB, 129 924, 8 s, VERIFIED in 57 s |
+
+main's tp7_8 proof (cut at node 22) got no verdict in 3 600 s either. wordpress7 at 60 nodes was stopped unfinished (main's solver still writing after 13 min) and is not reported. At 10 nodes the liner-sf, wordpress and the two small connect instances had written no trace yet (byte-identical proofs on both binaries, veripb 2 to 42 s on each), which is why the budgets above are where the first conflicts are.
+
+### 8. Per-node cost
+
+`perf stat -e instructions:u`, (I(N) - I(1)) / (nodes(N) - 1), default search, release binaries main `65acb55f` and branch `3f859ac3` (`8d7f2ce2`); trees identical (node counts and stdout):
+
+| instance | budget | no proof | proof |
+|---|---|---|---|
+| elitserien handball12 | 3 000 | 13.679 -> 13.679 M (0.00 %) | 47.953 -> 47.930 M (-0.05 %) |
+| costas13 | 291 (solved) | 1.983 -> 1.983 M | 7.710 -> 7.707 M (-0.04 %) |
+| jr63 | 20 000 | 19.867 -> 19.867 M | 44.546 -> 44.432 M (-0.26 %) |
+| chessboard4 | 2 500 | 2.765 -> 2.765 M | 5.928 -> 5.935 M (+0.12 %) |
+| evm | 2 000 | 1.872 -> 1.872 M | 4.057 -> 4.057 M (+0.01 %) |
+
+Two earlier builds cost more and were fixed before this table: a run held as a pair in an option (`96fae3d6`, evm +0.39 % with proof) and then as an option plus an int field (`48b201aa`, +0.34 %) each added words to every trace line, and evm paid one more major collection (OCAMLRUNPARAM v=0x400: 200.43 M words allocated on main, 200.77 M then, 200.40 M now, 15 major collections on main and now). chessboard4's +0.12 % is the same mechanism the other way: the branch allocates 66 k words FEWER (380.04 M against 380.11 M) and the major GC's pacing gives it one more collection (22 against 21).
+
+### 9. What it costs in clarity, and what is left
+
+One more claim shape in trace.ml (the gap clause, whose one-value case is the hole clause), one more obligation on a caller of the bulk rule (stated at `Store.remove_interior`), a three-armed `hole` in place of an option. The bits arm keeps per-value lines, so a bulk entry has two line shapes depending on its facts.
+
+- **The bridge pairs of D-0132 §2.2** are now what fills a liner-sf proof (section 7): a line the width of an order variable per (variable, value) in a mixed row. That is the next mechanism for the liner-sf proofs (and veripb's 29 GB on tp7_8).
+- **wordpress and liner-sf tp7_8 still refuse at 8 GiB after 5 to 24 solutions**; what fills the heap then was not measured here.
+- **table-layout**: the direct encoding of element's index (9.4 M `red` lines at the start) and the 12.6 GB `.opb`; untouched by D-0265's steps.
+- **proteindesign**: unchanged (D-0268 section 8).
+- **The element/table hole lines are not load-bearing** (section 6): the maker's rows re-derive every pin a later line makes. Not writing them at all would be the next proof saving for these families, but it changes D-0021's "every pruning writes a line" and the I-S4 bookkeeping, so it is the user's decision and is not proposed as done.
+- A settle over a bulk gap still walks every settled value (`Trace.settle_facts`, `Store.reasons_under`), as before D-0269; with gap lines `hole_line_of` scans runs, not values.
+
+**Volume.** The 21-instance arms wrote 106.1 GB (main) and 208.5 GB (branch) of proof, the fixed-node, inspection and per-node runs 67.5 GB, the lanes' kept proofs 4.6 GB: every byte deleted after its size and line count were recorded. `/scratch` stayed above 10 TB free.
+
+**Results**: `/cluster/arthur/baguette-results/gapline/` (README, tables, logs, scripts).
+
+**Revert.** `git revert 8d7f2ce2 70d37ebc 75a4d612 6c15c903` (in that order); the six models and the mutation lanes go with `75a4d612`. Nothing else depends on the gap line; reverting restores D-0268's per-value lines byte for byte.

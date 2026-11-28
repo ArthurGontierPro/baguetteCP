@@ -722,6 +722,18 @@ rup 1 <claim> 1 ~<fact> 1 ~<fact> ... >= 1 ;
   literal states it — gives the two-literal clause `x <= v-1 ∨ x >= v+1`, i.e.
   `+1 ~x_ge_v +1 x_ge_(v+1) >= 1`. That is `Encoding.ne_clause_lits`, which §4 already
   names as `int_ne`'s justification: a claim never had to *be* a literal.
+- **the gap line** *(D-0269)* — a bulk entry (`Store.remove_interior`, D-0268: element's
+  result, table's uncarried runs) claims ONE clause per maximal run `a..b` of consecutive
+  values it removed, `+1 ~x_ge_a +1 x_ge_(b+1) >= 1` with the entry's facts, where it
+  claimed one hole clause per value; a one-value run is the hole clause, byte for byte.
+  It is RUP where the per-value lines were: assume `x >= a` and `x <= b` and the facts;
+  every element position (table tuple) pins `x` to one value, those outside `a..b` are
+  refuted through the ladder and those inside are dead by the facts (or do not exist),
+  and the index's (selectors') at-least-one fails. A run never crosses a value the entry
+  did not remove, and on the bits arm (a fact over a bits variable) the per-value lines
+  stay. Every per-value clause follows from the gap line by unit propagation along the
+  ladder rows, so any later `rup` that propagated along one propagates along it; no
+  `pol` cites a trace line by id. No new variable, no `.opb` row, no change to `--e2e`.
 - **facts** — the bound facts the propagator actually read, negated, **plus the facts of
   any holes a settle walked over** (M1-T57). `Domain.settle` can carry a bound past holes
   to re-establish I-D2, so the bound on the trail is stronger than the one the propagator

@@ -19,7 +19,6 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M18-coverage-T9 step 2, one trace line per gap (D-0269) | lib/core/trace.ml, lib/core/store.ml (bulk entry's proof side), lib/core/justify.ml, lib/core/prop/element.ml, lib/core/prop/table.ml, lib/core/analysis.ml/learn.ml (only if a cited line changes shape), docs/PROOF-FORMAT.md s4/s5, tests, models | agent-gapline (wave114-gapline) | 2026-11-28 |
 
 ## Cross-session requests
 
@@ -761,8 +760,15 @@ section 1. Shares are inclusive, of the whole run.
 | M22-review-bugs, the proof not reproducible run to run (D-0264) | agent-nondet (`wave109-nondet`, not merged) | 2026-11-27 | **D-0264 [AUTONOME].** No defect in the solver: the two proofs that varied were cut by `timeout 900` (vrp) and by the 8 GB heap budget (connect) before the node limit, and a cut proof is valid but not reproducible by design. Every vrp variant verifies (10 cut, 1 at the node limit); the four connect checks take many hours and run on (48 h cap, `/scratch/arthur/nondet/r/*.veripb`). Under the node limit: same bytes under seven runtimes, 347 of 347 lane runs under two, 91 of 91 tuning instances that reach 2 000 nodes. `check_determinism.sh` gains four corpus instances under two GC settings and a guard that voids a comparison cut by a clock, a signal or the heap budget; `Writer.conclude_interrupted` states the rule. No proof byte changed. |
 | M19-config-T1 (the free search as default, D-0259) | agent-free (`wave106-free`) | 2026-11-28 | **D-0261 [AUTONOME].** `--fixed-search`; every recorded-output caller pinned to it (lanes byte-identical: diff 347/347 and 333/333, model tests, scaling, factor); `make models-free` gated (271/271, proofs verified, solutions re-checked); THE DEFAULT in its own commit `b86ad5e8`; SPEC 3.4 rewritten; diff configurations `free`/`free-noproof` recorded (deterministic). Sanity 60 tuning instances at 300 s: 13 vs 16 verified complete, same per-instance signs as D-0227. Not merged. |
 | M18-coverage-T9, D-0265's first step: the bulk rule (D-0268) | agent-elembulk (`wave113-elembulk`, not merged) | 2026-11-28 | **D-0268 [AUTONOME].** `Store.remove_interior`: several interior values in ONE trail entry, one reason, a derivation per value (`Store.removal_explanation`); element's result gap and table's runs of uncarried values use it. Proof byte-identical; diff lanes differ in WORK counters only (to re-record after the gate). Element-gap trails 6 to 22 M -> 45 to 3 203 entries; 16 of the 21 gap instances now run at 8 GiB without proof (main 3) |
+| M18-coverage-T9 step 2: one trace line per maximal removed gap (D-0269) | agent-gapline (`wave114-gapline`, not merged) | 2026-11-28 | **D-0269 [AUTONOME]**: a bulk entry (D-0268) writes one `rup` per maximal run `~x_ge_a \/ x_ge_(b+1)`, off the bits arm; proof change, no .opb/naming/e2e change. Test models 40/1204 runs differ (all verified, stdout identical); diff lane 39/393 and debug 25/377 differ only in .pbp hash and proof-line counters. 21 instances with proof at 8 GiB: liner-sf 6 to the time limit, tp7_8 24 solutions, wordpress 5-57 solutions; refusals with no incumbent 6 -> 2 |
 
 ## Handoff notes
+
+### 2026-11-28 (agent-gapline, `wave114-gapline`, D-0269): one trace line per removed gap, NOT merged
+
+- Commits: `6c15c903` the rule (trace.ml, `Domain.removed_runs`, learn.ml), `75a4d612` six models `gapline_*` and the gap mutation lanes, `70d37ebc` and `8d7f2ce2` per-node cost (a trace line's hole is now `Hole v | Gap (a, b)`). Merged origin/main `c666d760` (lanes re-recorded after D-0268).
+- The orchestrator re-records after the gate: `diff_lane.sh --tier all` 39/393 and `--debug` 25/377 differ, only in the .pbp hash, `rup/lines` and `i-s4-cross/lines` (stdout, search, WORK, .opb identical, checked beside main's binary). This is a PROOF change; run a Challenge series after merge.
+- Finding: element/table hole lines (per value before, per gap now) are not load-bearing for any later line (the maker's rows re-derive every pin); the gap-shrink lanes are registered as known slack for that reason. On liner-sf the proof is now D-0132's bridge pairs (68 MB lines), the next mechanism.
 
 ### 2026-11-28 (agent-elembulk, `wave113-elembulk`, D-0268): element and table prune a gap in one store change, NOT merged
 
