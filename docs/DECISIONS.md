@@ -36002,3 +36002,47 @@ Recommendation: make `amo` the default, with `--e2e` selecting `pairs` until e2e
 Left: the whirlpools' heap with proof after the root (above); inverse's implied all_different keeps pairwise root lemmas under both settings (a per-value lemma is not one `rup` from its channel rows); `tools/e2e/bridge.py` expects pairs.
 
 Results, scripts and logs: `/cluster/arthur/baguette-results/pairs/` (README first). Revert: the option is inert unless `BAGUETTE_ALLDIFF_ROWS=amo`; dropping it is reverting `588c4a1c`, `3652fdb2`, `99ab4572`.
+
+## D-0272  [AUTONOME] `BAGUETTE_ALLDIFF_ROWS=amo` becomes the default: all_different's model rows are one per value, the pairwise rows stay for `--e2e` and behind the switch
+
+**Status**: DECIDED (orchestrator, 2026-11-28), implementation to follow gate 146 in its own commit. An ENCODING default,
+so a normative text changes (PROOF-FORMAT section 3): taken under the user's instruction of 2026-11-27 for decisions of this
+kind ("soit tu sais les trancher toi-même soit il faut faire des comparaisons … sur un set d'instances hétérogènes").
+
+### 1. The evidence (D-0271, agent-pairs, both arms interleaved in one campaign)
+
+| | `pairs` (today) | `amo` |
+|---|---|---|
+| rows for one all_different over n variables and d shared values | n(n−1)/2·d (297 M on whirlpool d29) | d (841 on d29) |
+| new variable or name in the .opb | | none: the row is linear in the existing order literals |
+| the search on 54 alldiff instances at 500 nodes | | IDENTICAL (same nodes, same answers) |
+| with proof, same 54: instructions per node / proof size / .opb size | | −13 % / −11 % / −34 % |
+| veripb time; cost without proof | | unchanged |
+| rejected proofs (301 models × 4 suites, fuzz globals and configs, 500 alldiff-only fuzz models, 50 Challenge proofs) | | 0 |
+| mutations of the new row and its derivation (4 kinds, satisfiable model) | | each refused with veripb's full wording |
+| D-0265's 5 refused instances, without proof | 4 refused | all 5 run to 300 s |
+| the same, with proof | all 5 refused at compile | all 5 compile (0.1 to 117 s), 2 search to the limit, 3 reach the search then hit the heap budget |
+| 300 s campaign on the alldiff sample, complete answers | 8 | 9 (handball12 proved optimal) |
+
+### 2. Options
+
+| Option | Consequence |
+|---|---|
+| keep `pairs` as default | five instances stay refused at compile; every alldiff proof carries a .opb a third larger; nothing to re-record |
+| `amo` as default (CHOSEN) | the search does not move, so answers can only change through time and memory, and every measured direction is neutral or better; lanes re-recorded for proof and .opb hashes; PROOF-FORMAT 3 gains a normative subsection; `--e2e` keeps `pairs` because the end-to-end prefix derives baguette's rows from cake's statement of all_different pair by pair |
+| wait for a held-out comparison | the comparisons of D-0252 and D-0267 exist to arbitrate changes of SEARCH, where gains and losses mix and noise is 3 answers; here the search is identical run for run, so a held-out set would measure only the speed-up already measured per node |
+
+### 3. Conditions on the implementation
+
+- its own commit, reverting which restores `pairs`; `BAGUETTE_ALLDIFF_ROWS=pairs` keeps today's rows;
+- under `--e2e` the solver selects `pairs` by itself (no refusal), and says so on stderr once; the e2e lane must PASS;
+- nothing weakened: model tests' expected OUTPUTS unchanged under both searches; the lanes' stdout and search counters
+  unchanged (only .opb and .pbp hashes and the row and line counters may move), re-recorded by the orchestrator after the gate;
+- the mutation lanes for `amo` become part of the default mutation run, and the `pairs` ones stay;
+- PROOF-FORMAT section 3: the per-value row is the default and normative, the pairwise rows the option; old and new text
+  quoted in the implementation's handoff note.
+
+### 4. Revert
+
+Revert the default commit. The next Challenge series carries this default (the one running on fataepyc-07, D-0266, was
+built before it and does not).
