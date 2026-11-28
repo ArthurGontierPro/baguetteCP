@@ -95,6 +95,25 @@ gap-shrink-hi  line still verifies; only a LATER line resting on the end value c
                needs it, because the maker's own rows refute every pin a later line puts
                inside the gap (main's per-value lines were not load-bearing either).
                test_mutation.ml registers these two as known slack.
+ladder-pol-row on the NTH LADDER line (D-0270: a bits-arm `pol` whose declared order
+               terms stay in it, then its pin -- an `ia` of its clause against it, or the
+               `rup` of a Resolve's clause -- then `del id` of the pol), drop the pol's last
+               operand, the row. The pol still parses and is still a valid sum, so the
+               checker must judge the pin AFTER it, and refuse it.
+ladder-pol-mult the same pol, the multiplier of the operand before the row (a bits atom
+               line or a bridge half) raised by one (`@a +` becomes `@a 2 * +`): a sound
+               but different sum, whose terms no longer cancel; the pin must be refused.
+ladder-flip    the same triple's pin, its first literal (the claim) flipped: refused there.
+ladder-rhs     the same pin, its right-hand side raised by one: refused there.
+bridge-flip    on the NTH order BRIDGE half (D-0270: a `rup` over one order variable's
+               whole ladder plus `+k ~V_ge_v` or `+K V_ge_v` with a coefficient above 1,
+               minted at its first citation), flip that atom's literal. Over a model whose
+               root decides the atom the flipped line can still be true, so the line itself
+               may be accepted: the lane holds when a LATER line that cites it (the `ia`
+               whose pol adds it) is refused.
+bridge-rhs     that bridge's degree raised by one: a false claim, refused at the line.
+bridge-rhs-down that bridge's degree lowered by one: a weaker line, accepted itself; the
+               later line that cites it must be refused.
 drop-line      delete one emitted derivation step entirely -- `pol`, `rup`, `red` or a
                solution rule, by default the last one. Never a level marker or a `del`:
                failing to delete is not an error (PROOF-FORMAT section 5), so a lane
@@ -486,6 +505,85 @@ case "${MUT}" in
               done = 1
             }
           }
+        }
+      }
+      { print }' "${PROOF}" > "${MUTATED}"
+    ;;
+
+  ladder-pol-row|ladder-pol-mult|ladder-flip|ladder-rhs)
+    # The NTH ladder triple (D-0270): a `pol` line P, its pin right after it (an `ia`
+    # hinted at P, or a Resolve's `rup`), and a `del id` right after that whose ids
+    # include P's label. The pol is the last of the
+    # pols a [Resolve] writes, which is the one this lane can name. Rewritten in place,
+    # labels kept, so every later citation still parses.
+    awk -v nth="${NTH}" -v mut="${MUT}" -v desc="${DESC}" "${AWK_PRELUDE}"'
+      { L[NR] = $0 }
+      END {
+        for (i = 1; i + 2 <= NR && !hit; i++) {
+          np = split(L[i], P, " "); nr = split(L[i+1], R, " "); nd = split(L[i+2], D, " ")
+          if (np < 4 || P[2] != "pol" || P[1] !~ /^@/ || nr < 4 || (R[2] != "rup" && R[2] != "ia")) continue
+          if (R[2] == "ia" && R[nr-1] != P[1]) continue
+          if (D[1] != "del" || D[2] != "id") continue
+          ok = 0; for (j = 3; j <= nd; j++) if (D[j] == P[1]) ok = 1
+          if (!ok || ++seen < nth) continue
+          hit = i
+        }
+        for (i = 1; i <= NR; i++) {
+          line = L[i]
+          if (hit && i == hit && (mut == "ladder-pol-row" || mut == "ladder-pol-mult")) {
+            np = split(line, P, " ")
+            # P = @p pol ops... ; with the row last: "... @row +" or "... @row k * +"
+            last = (P[np-2] == "*") ? np - 4 : np - 2   # index of the row token
+            if (mut == "ladder-pol-row") {
+              out = P[1]; for (j = 2; j < last; j++) out = out " " P[j]; out = out " ;"
+            } else {
+              # the operand before the row: "@a +" or "@a k *" (+ follows)
+              b = last - 1                       # the "+" before the row
+              if (P[b] == "+" && P[b-1] == "*") { P[b-2] = P[b-2] + 1 }
+              else if (P[b] == "+") { P[b-1] = P[b-1] " 2 *" }
+              else if (last == 3) { P[3] = P[3] " 2 *" }   # the row is the first operand: none before it
+              out = P[1]; for (j = 2; j <= np; j++) out = out " " P[j]
+            }
+            printf "line %d: %s on the ladder pol\n  before: %s\n   after: %s\n", i, mut, line, out > desc
+            line = out
+          } else if (hit && i == hit + 1 && (mut == "ladder-flip" || mut == "ladder-rhs")) {
+            nr = split(line, R, " ")
+            if (mut == "ladder-flip") {
+              if (R[4] ~ /^~/) R[4] = substr(R[4], 2); else R[4] = "~" R[4]
+            } else {
+              for (j = 3; j < nr; j++) if (R[j] == ">=") { R[j+1] = R[j+1] + 1; break }
+            }
+            out = R[1]; for (j = 2; j <= nr; j++) out = out " " R[j]
+            printf "line %d: %s on the ladder pin\n  before: %s\n   after: %s\n", i, mut, line, out > desc
+            line = out
+          }
+          print line
+        }
+      }' "${PROOF}" > "${MUTATED}"
+    ;;
+
+  bridge-flip|bridge-rhs|bridge-rhs-down)
+    # The NTH bridge line (D-0270): a labelled `rup` whose literals all name ONE variable
+    # V (`V_ge_N`), at least three terms, exactly one of them with a coefficient above 1
+    # (the atom). Rewritten in place, its label kept.
+    awk -v nth="${NTH}" -v mut="${MUT}" -v desc="${DESC}" "${AWK_PRELUDE}"'
+      function var_of(lit,   k) { sub(/^~/, "", lit); k = index(lit, "_ge_"); return k ? substr(lit, 1, k - 1) : "" }
+      !done && rulename() == "rup" && rulestart() == 2 {
+        n = 0; big = 0; v = ""; same = 1
+        for (i = 3; i < NF; i += 2) {
+          if ($i == ">=") { deg = i + 1; break }
+          n++
+          w = var_of($(i+1)); if (w == "") { same = 0; break }
+          if (v == "") v = w; else if (w != v) { same = 0; break }
+          if ($i + 0 > 1) { big++; at = i + 1 }
+        }
+        if (same && n >= 3 && big == 1 && ++seen == nth) {
+          before = $0
+          if (mut == "bridge-flip") { if ($at ~ /^~/) $at = substr($at, 2); else $at = "~" $at }
+          else if (mut == "bridge-rhs") $deg = $deg + 1
+          else $deg = $deg - 1
+          printf "line %d: %s on the bridge line of %s\n  before: %s\n   after: %s\n", NR, mut, v, before, $0 > desc
+          done = 1
         }
       }
       { print }' "${PROOF}" > "${MUTATED}"

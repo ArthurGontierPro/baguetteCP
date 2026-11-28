@@ -35689,6 +35689,262 @@ One more claim shape in trace.ml (the gap clause, whose one-value case is the ho
 
 **Revert.** `git revert 8d7f2ce2 70d37ebc 75a4d612 6c15c903` (in that order); the six models and the mutation lanes go with `75a4d612`. Nothing else depends on the gap line; reverting restores D-0268's per-value lines byte for byte.
 
+
+
+
+## D-0270  [AUTONOME] M18-coverage-T9, the bridge pairs of D-0132 section 2.2: an order fact cites only the ONE bridge half it needs, written at its first citation, an order term at its declared bound keeps its rungs in the bits-arm `pol` instead of a bound line, and the division goes. A proof change with no new variable, no `.opb` row and no change to the naming contract or `--e2e`
+
+**Status**: DONE on `wave115-bridge` (agent-bridge, 2026-11-28), not merged. The variant first built (a half written at its SECOND citation, the first pinned by a `rup` over the ladder) was rejected by the coordinator on the checker's time and is recorded in sections 2 and 4 as measured and rejected; the first-citation variant ships. Base: origin/main `6ac1344c` (D-0269 merged), release `3f859ac3`.
+
+[AUTONOME] because it changes the proof the solver writes: a bits-arm line over a row with an order term wider than a Boolean is no longer D-0132's `pol` + `ia` with a bridge pair and bound lines. Nothing that changes the solver's answers or its search was decided, and the `.opb` is byte-identical.
+
+### 1. What a bridge line is, why it is as wide as the ladder, and how common it is
+
+An ORDER variable `y` (declared `l..u`, held on the order encoding by its scope: `all_different`, `element`, `gcc`, ...) that occurs in a linear row with a bits term is spelled in that row's `.opb` line as its whole ladder: `a·y` is `a·l + Σ_{w=l+1..u} a·y_ge_w` (`Encoding.linear_terms_int_lin_le`), because the order encoding has no other integer view of `y`. A bits-arm derivation (D-0132 section 2.1) is ONE `pol` that cancels every term of the row down to one literal per fact. For an order fact `y >= v` that cancellation was `|a|·B1'(y, v)`, for `y <= v` `|a|·B2'(y, v+1)`, with
+
+```
+B1'  rup +1 y_ge_(l+1) ... +1 y_ge_u  +k ~y_ge_v >= k        k = v - l
+B2'  rup +1 ~y_ge_(l+1) ... +1 ~y_ge_u +K y_ge_v >= K        K = (u - l) - k + 1
+```
+
+(`Encoding.mint_order_bridge`), and for a term at its declared bound the degree-0 line `rup Σ y_ge_w >= 0` or `rup Σ ~y_ge_w >= 0` (`Encoding.bound_lines`). Each is a `rup` checked by the ladder alone, written at level 0 and memoised per `(y, v)`, both halves at the first citation of either. One line, shortened (connect 0083_02, a variable of 544 rungs):
+
+```
+@c3386123 rup +1 X_INTRODUCED_1039__ge_1 +1 X_INTRODUCED_1039__ge_2 +1 ... +1 X_INTRODUCED_1039__ge_544 +544 ~X_INTRODUCED_1039__ge_544 >= 544 ;
+```
+
+It enumerates every order atom of `y` once, coefficient 1, plus the atom with `k`. Its width is not an artefact of a derivation choice: the line must carry every rung because the row it cancels carries every rung, and a `pol` can only remove a literal from a sum by adding a constraint that holds it. Only a bits-arm `pol` cites a bridge (by label); no `rup` needs one, the ladder propagates everything a bridge propagates.
+
+Measured on main (`3f859ac3`, default search, fixed node budget `BAGUETTE_NODE_LIMIT`, `bcensus.py` over the `.pbp`):
+
+| instance (nodes) | `.pbp`, lines | bridge lines: count, bytes, share | never cited | bound lines: bytes, share | pols citing one |
+|---|---|---|---|---|---|
+| liner-sf tp7_8 (25) | 2.64 GB, 72 400 | 1 644, 2.45 GB, 93.0 % | 800 (1.22 GB) | 127 MB, 4.8 % | 927 of 1 287 |
+| liner-sf tp7_2 (40) | 3.99 GB, 122 640 | 2 618, 3.64 GB, 91.2 % | 1 280 (1.81 GB) | 262 MB, 6.6 % | 1 985 of 2 551 |
+| liner-sf fm3_11 (100) | 5.86 GB, 136 203 | 5 612, 4.86 GB, 83.0 % | 2 627 (2.41 GB) | 726 MB, 12.4 % | |
+| liner-sf fm3_3 (60) | 5.01 GB, 133 956 | 4 284, 3.86 GB, 77.1 % | 2 051 (1.89 GB) | 624 MB, 12.5 % | |
+| connect 0083_02 (146) | 339 MB, 129 925 | 60, 16.8 MB, 5.0 % | 30 | 83 MB, 24.5 % | 3 935 of 29 598 |
+
+31.5 bytes a term on liner-sf, 1.4 to 1.5 MB a line on average, up to 68 MB (fm3_11, 2.1 M rungs). Of the cited lines most are cited ONCE (tp7_8: 694 once, 97 twice, 53 more; fm3_11: 1 589 once, 1 396 more). In veripb, a line is kept for the rest of the run: tp7_8's check is 29.0 GB RSS for a 2.43 GB `.opb` and a 2.64 GB `.pbp`.
+
+**How common** (main at 2 000 nodes with proof, `common_tab.py`; the `bridges` stat also counts a Boolean's one-line tautology, so the share is read off the `.pbp`, lines of three terms or more). The diff-lane corpus: 23 of 25 proofs mint a bridge, 8 carry a WIDE bridge or bound line, and only pigment15b has them above 10 % of its `.pbp` (21.5 %). The first 100 instances of the tuning set: 85 of 97 proofs mint one, 49 carry a wide line, and on 13 those lines are at least 10 % of the `.pbp`: mario n_medium_4 85.9 %, liner-sf tp7_0 77.3 %, depot-placement ulysses16_5 57.8 %, table-layout en-1250 34.4 % and en-1000 13.4 %, fjsp med10 28.1 %, ship-schedule 8Ships 26.2 %, lot-sizing pigment15a 25.2 %, mapping ring_2 22.6 %, fast-food ff63 18.6 %, cvrp A-n64-k9 17.8 %, celar CELAR6-SUB4 13.3 %, kidney-exchange 11.4 %. So the mechanism is not liner-sf's alone: it is any order variable (an `all_different`, `element` or `gcc` scope) that also sits in a linear row with a bits variable.
+
+### 2. The options
+
+| option | what it removes on tp7_8 | contract | modules | risk |
+|---|---|---|---|---|
+| (a) a shorter derivation of the same bridge | nothing. `B1'(v)` as a `pol` is the ladder's rungs times `(w - l - 1)` plus one literal axiom per upper rung, Θ(w) citations, which D-0127 measured quadratic for the checker (28 MB and 381 s against 197 bytes and 0.7 s as a `rup` at w = 10^6). There is no binary expansion of an order variable to compare with a constant: PROOF-FORMAT section 3 gives a variable ONE encoding, the bits atoms' `red` pairs link bits to names, and nothing links an order variable to bits except the row itself | kept | encoding.ml | no gain |
+| (b) one reusable line per variable, specialised per value | nothing: `B1'(v+1) - B1'(v)` is not a valid constraint (it would count `y_ge_(v+1)` twice), so no `B1'(v)` follows from another by O(1) citations. The partial sums `L_v` (lower rungs only) do chain, `L_(v+1) = L_v + k_v·rung_(v+1)`, but `B1'(v) = L_v + Σ_(w>v) y_ge_w` still costs Θ(w - v) literal axioms per value, and live `L_v` keep Θ(w) per value in the checker | kept | encoding.ml | as today |
+| **(c) mint each half at its first citation, the one half cited, no bound line, no division** | **1.38 GB of 2.64 GB** (every half never cited, the bound lines) | **kept** | encoding.ml, justify.ml | low: a half is minted at level 0 before the `pol` that cites it, as before |
+| (d) keep such a variable on one encoding | putting `y` on bits is barred by its scope (D-0130 section 3.4); putting the bits variable on the order encoding writes its ladder (2^n rungs) into the `.opb` | `.opb` changes: STOP | compile.ml | every mixed model |
+| (e) leave the order terms in the `pol`, pin by `rup` at every citation | every bridge and bound line: tp7_8 2.64 GB -> 9.2 MB | kept | justify.ml | veripb 3 to 6 times slower (section 4): REJECTED |
+| (f) = (e) at the first citation of a half, the half minted at its second | 2.30 GB of 2.64 GB | kept | justify.ml, encoding.ml | veripb 3.1 times slower on tp7_8 (25 min against 8): built, measured, REJECTED |
+
+(e) and then (f) were built first and measured (section 4). (f) shipped in the first version of this record; the coordinator rejected it because the checker's time is what a certifying solver is short of, and (f) made veripb three times slower on the instances it was built for, while (c) is better than main on both size and time. **(c) ships.**
+
+### 3. The rule as built (lib/core/justify.ml "THE LADDER RULE", lib/proof/encoding.ml `order_bridge`)
+
+A bits-arm `Combine` (`Linear`'s shape) whose row holds an ORDER term wider than a Boolean is written as
+
+```
+@B' rup <the one half an order fact needs, if not yet written> ;           (level 0, memoised)
+@P  pol <bits terms: |a|·B1/B2 of their atoms, or |a|·@lb/@ub> <order facts: |a|·B'> <claim: d·B of its atom or half> <row(s) last> ;
+    ia <claim> <~facts> >= 1 : @P ;
+    del id @P ;
+```
+
+with no citation for a wide order term at its declared bound (no bound line), no division and no saturation.
+
+3.1. **Why the `ia` holds.** Under the negated clause every fact's literal holds and the claim's negation holds; each order fact's half has replaced its rungs by one literal (as in D-0132); the rungs of a term at its declared bound are free, and `ia`'s weakening (measured on 3.0.2: a hint carrying literals the clause does not hold is accepted) reads them at their maximum, exactly what the bound line replaced them by. So `@P` is D-0132's derived constraint before its division, and the clause is implied by it: over 0/1 literals a single constraint that implies a clause after `ceil(·/d)` implies it before (the divided constraint's maximum under the negated clause is at least the undivided one's divided by `d`, and it is an integer). Keeping the division with rungs left in would round each free rung up and lose up to one unit a rung, which is why it is dropped; the claim's atom line (or half) is multiplied by `d` instead of added after it, which cancels the claim's bits (rungs) exactly.
+
+3.2. **Why one half, at its first citation.** D-0132 wrote both halves when either was first cited; half of them were never cited (section 1). Writing a half only at its second citation and pinning the first citation by a `rup` over `@P` and the ladder ((f)) removed 87 % of the bytes but made each first citation a `rup` whose unit propagation runs through the model before reaching the conflict on `@P` (`perf`: 83 % of veripb in `PropagationSet::propagate`), about 0.8 s a line on liner-sf against 0.25 s for a half's own `rup`.
+
+3.3. **A `Resolve`** (maxmin, `int_ne`/`int_lin_ne` and the reified equalities over a bits scope, D-0134) is the same move part by part: each `Combine` part its own `pol` (undivided, unsaturated, halves cited), the model-row parts already on the page, ONE `rup` of the clause, the parts deleted (`ladder_close`). Its parts are not clauses without the division, so the selector cannot be resolved by an `ia`; under the negated clause each part propagates its selector by the same maximum argument, and the selector clause closes.
+
+3.4. **What is unchanged.** A derivation whose order terms are all Booleans, or that has none, keeps D-0132's line byte for byte (a Boolean's bridge is the one-line tautology and its bound line one literal, and the `bits_reif` lanes of test_mutation.ml went slack when rows whose only order term is a big-M reifier were moved). The bits atoms are minted by the same calls, before the `pol` that cites them. `ensure_atom` and `bound_lines` still answer for an order variable (the unit tests that measured D-0132's shape), but nothing in `lib/` asks them for one. A half is written by `Writer.rup_ladder_half` from its bounds, without the two term lists of up to 22.5 M terms `rup` would need (the same bytes; tp7_8's solver at 25 nodes 3.93 -> 3.65 GB peak RSS).
+
+3.5. **Traps.** D-0237's (a line citing what is not yet minted): a half is minted at level 0 inside the fragment that cites it, before `Writer.pol` writes the line, and `order_bridge` refuses to mint after a root contradiction as `ensure_atom` does. I-X2: a half is a level-0 id swept before the conclusion with every other; `@P` is deleted on the line after its pin. I-X10's bits-arm sentence says the same.
+
+3.6. **Stats.** `bridges` counts bridge LINES (halves) since this record (it counted pairs), `boundlines` reads 0 for wide variables, and two new lines: `bitsladder` (bits-arm lines written on this rule) and `bitsrup` (of those, pinned by `rup`: the `Resolve`s).
+
+### 4. Measured
+
+#### 4.1. The variant that ships, (c), against main
+
+Fixed node budget, default search, release main `3f859ac3` against (c)'s release `b4151011` (commit `f3254486`; `f34cb03e`, which moves the halves into the atoms map, writes the same bytes). stdout, node counts and the `.opb` are identical on every run. veripb 3.0.2 under `MemoryMax=64G`, at most 12 runs of mine at once on a node at load 55 to 73.
+
+| instance (nodes) | `.pbp` main -> (c) | lines | veripb main -> (c) | veripb RSS main -> (c) |
+|---|---|---|---|---|
+| liner-sf tp7_8 (25) | 2.64 GB -> **1.26 GB** | 72 400 -> 71 488 | 7 min 59 s -> **5 min 14 s** | 29.0 -> **26.4 GB** |
+| liner-sf tp7_2 (40) | 3.99 GB -> **1.87 GB** | 122 640 -> 121 182 | 19 min 13 s -> **11 min 08 s** | 44.7 -> **40.8 GB** |
+| liner-sf fm3_11 (100) | 5.86 GB -> **2.72 GB** | 136 203 -> 133 676 | no verdict in 30 min, nor in 2 h, for either | 64.2 -> 59.6 GB at the 2-h stop |
+| liner-sf fm3_3 (60) | 5.01 GB -> **2.49 GB** | 133 956 -> 131 941 | no verdict in 30 min, nor in 2 h, for either | 47.4 -> 44.2 GB at the 2-h stop |
+| connect 0083_02 (146) | 339 MB -> **90 MB** | 129 925 -> 128 449 | 66 s -> **47 s** | 8.06 -> **7.76 GB** |
+
+The solver writes less in the same nodes: tp7_8 68 -> 44 s and 4.7 -> 3.9 GB peak RSS, fm3_11 163 -> 114 s. What is left of a liner-sf `.pbp` is the cited halves (tp7_8: 844 of 1 644 lines, 1.24 GB; tp7_2: 1 338 lines, 1.83 GB).
+
+Beyond liner-sf, the four tuning-set instances where measurement 3 found the bridges largest (2 000 nodes, same stdout and nodes):
+
+| instance | `.pbp` main -> (c) | veripb main -> (c) | veripb RSS main -> (c) |
+|---|---|---|---|
+| mario n_medium_4 | 444 -> 248 MB | 105 -> 74 s | 1.78 -> 0.94 GB |
+| depot-placement ulysses16_5 | 847 -> 610 MB | 119 -> 79 s | 2.06 -> 1.18 GB |
+| table-layout en-1250 | 139 -> 115 MB | 15.2 -> 13.7 s | 409 -> 332 MB |
+| fjsp med10 | 1 943 -> 1 706 MB | 22 min 37 s -> 18 min 50 s | 6.59 -> 5.74 GB |
+
+And the bits-heavy diff-corpus instances at 2 000 nodes (D-0270's first table, 4.2): pigment15b 115.8 -> 104.5 MB, veripb 45 -> 40 s, 346 -> 301 MB.
+
+**Per-node cost** (`perf stat -e instructions:u`, (I(N) - I(1)) / (nodes(N) - 1), default search, release main `3f859ac3` against the final commit's release `2bc8b00b`, two repetitions each, spread 0; trees identical): handball12 with proof -0.12 % (no proof 0.00 %), costas13 0.00 % (0.00 %), pigment15b -0.41 % (0.00 %), cyclic-rcpsp easy_6 **+0.40 %** (0.00 %; `b4151011` before the atoms-map move: +0.34 %). easy_6's rise is the major GC's, not this code's: the live heap at 2 000 nodes is the same to 1 446 words (11 KB), `do_some_marking` goes from 2.14 to 2.63 % of the samples, and the figure moves with the GC's pacing, not with the work: under `OCAMLRUNPARAM=o=200` the same two binaries differ by +0.15 %, and a build that renders a half's rungs without allocating a literal per rung (same bytes, fewer words allocated) measured +0.69 %, so it was not kept. The earlier builds of this record measured +0.02 % to +0.79 % on the same instance, for the same reason.
+
+
+#### 4.2. The variants built first, (e) and (f), measured and rejected, with (c) beside them
+
+Fixed node budget, default search, release binaries: main `3f859ac3`, (e) `6095b4ef` (every citation a `rup`), (c) `42c15204` (a temporary build at the time: the half minted at its FIRST citation, no `rup`, no bound line; the shipped code writes the same bytes), (f) `dd391620` (built first; `b22f63ec` and `a12666ab`, its later builds, write the same bytes). stdout, node counts and the `.opb` are identical on every run. veripb 3.0.2 under `MemoryMax=64G`, at most 12 runs of mine on a node at load 55 to 73.
+
+| instance (nodes) | | `.pbp` | lines | solver s, GB | veripb | veripb RSS |
+|---|---|---|---|---|---|---|
+| liner-sf tp7_8 (25) | main | 2.64 GB | 72 400 | 68, 4.7 | 7 min 59 s | 29.0 GB |
+| | (e) | 9.2 MB | 68 878 | | 26 min 37 s | 22.2 GB |
+| | (c) | 1.26 GB | 71 488 | 55, 4.6 | **5 min 48 s** | 26.4 GB |
+| | **(f)** | **335 MB** | 69 376 | 44, 3.9 | 25 min 02 s | **24.5 GB** |
+| liner-sf tp7_2 (40) | main | 3.99 GB | 122 640 | 111, 7.7 | 19 min 13 s | 44.7 GB |
+| | (e) | 15.6 MB | 117 051 | | 27 min 35 s | 34.6 GB |
+| | **(f)** | **246 MB** | 118 242 | 74, 6.3 | 24 min 49 s | **36.6 GB** |
+| liner-sf fm3_11 (100) | main | 5.86 GB | 136 203 | 163, 11.1 | no verdict in 30 min | 61.7 GB at the stop |
+| | **(f)** | **759 MB** | 128 929 | 116, 9.0 | no verdict in 60 min | 57.0 GB at the stop |
+| liner-sf fm3_3 (60) | main | 5.01 GB | 133 956 | 124, 10.2 | no verdict in 30 min | 42.5 GB at the stop |
+| | **(f)** | **784 MB** | 130 198 | 82, 7.2 | no verdict in 60 min | 36.9 GB at the stop |
+| connect 0083_02 (146) | main | 339 MB | 129 925 | 8.0, 0.76 | 66 s | 8.06 GB |
+| | (e) | 17.6 MB | 127 105 | | 408 s | 7.25 GB |
+| | **(f)** | **26.2 MB** | 128 127 | 7.1, 0.67 | 72 s | **7.37 GB** |
+| pigment15b (2 000) | main | 115.8 MB | | | 45 s | 346 MB |
+| | (e) | 89.2 MB | | | 181 s | 253 MB |
+| | (c) | 104.5 MB | | | 40 s | 301 MB |
+| | **(f)** | **101.2 MB** | | | 53 s | **287 MB** |
+| cyclic-rcpsp easy_6 (2 000) | main | 69.3 MB | | | 6.8 s | 92 MB |
+| | **(f)** | 69.0 MB | | | 5.9 s | 91 MB |
+| elitserien handball12 (3 000) | main | | | | 258 s | 1.11 GB |
+| | **(f)** | | | | 300 s | 1.13 GB |
+
+(f) on the same four tuning-set instances as 4.1 (release main `3f859ac3` against (f)'s `a12666ab`, stdout and nodes identical):
+
+| instance | `.pbp` main -> branch | veripb main -> branch | veripb RSS main -> branch |
+|---|---|---|---|
+| mario n_medium_4 | 444 -> 102 MB | 105 -> 81 s | 1.78 -> 0.49 GB |
+| depot-placement ulysses16_5 | 847 -> 442 MB | 119 -> 147 s | 2.06 -> 0.57 GB |
+| table-layout en-1250 | 139 -> 110 MB | 15.2 -> 15.9 s | 409 -> 315 MB |
+| fjsp med10 | 1 943 -> 1 481 MB | 22 min 37 s -> 23 min 44 s | 6.59 -> 4.91 GB |
+
+What the numbers say. The bytes go as designed: (f) removes 87 to 94 % of a liner-sf `.pbp` and every bound line; what is left on tp7_8 and tp7_2 is the 150 and 373 halves cited twice or more (97 % and 94 % of what remains), on fm3_11 and fm3_3 also 258 and 508 MB of other `pol` lines that main writes too. veripb's RSS falls by 9 to 18 % on liner-sf, connect and pigment15b (1 % on easy_6, +2 % on handball12), not more, because most of it is the `.opb` (tp7_8: 22 GB with a 9 MB `.pbp`); on fm3_11 and fm3_3 neither binary gets a verdict (main stopped at 30 min, the branch at 60 min with 8 to 13 % less RSS than main had at half the time). The checker's TIME is the cost: a first citation is a `rup` whose unit propagation runs through the model before the conflict on `@P` (`perf`: 83 % of veripb in `PropagationSet::propagate` on (e)'s pigment15b proof; keeping `@P` live instead of deleting it makes it slower still), about 0.8 s a line on liner-sf against about 0.25 s for a bridge's own `rup`. So on liner-sf (f) checks 1.3 (tp7_2) to 3.1 (tp7_8) times slower than main; on the instances whose halves are cited many times (pigment15b, connect, easy_6, handball12) it is within -13 % to +17 % of main, where (e) was 4 to 6 times slower.
+
+This was the record's first verdict, and it chose (f) for its bytes. **The coordinator rejected it** on the checker's time: a certifying solver is short of checking time first, and (f) makes veripb three times slower on the very instances it was built for, while (c) is better than main on size AND time (section 4.1). The numbers of this subsection stay as the measurement of the rejected variants.
+
+**Per-node cost of (f)** (`perf stat -e instructions:u`, (I(N) - I(1)) / (nodes(N) - 1), default search, release main `3f859ac3` against (f)'s release `b22f63ec`, two repetitions each, spread 0; trees identical):
+
+| instance | budget | no proof | proof |
+|---|---|---|---|
+| elitserien handball12 | 3 000 | 13.679 -> 13.672 M (-0.05 %) | 47.930 -> 47.868 M (-0.13 %) |
+| costas13 | 291 (solved) | 1.983 -> 1.983 M | 7.707 -> 7.707 M (0.00 %) |
+| lot-sizing pigment15b (bits-heavy, 28 694 ladder-rule lines) | 2 000 | 28.117 -> 28.114 M | 35.330 -> 35.187 M (-0.40 %) |
+| cyclic-rcpsp easy_6 (bits-heavy, 18 502) | 2 000 | 1.266 -> 1.265 M | 7.408 -> 7.410 M (+0.02 %) |
+
+A first build (`dd391620`) cost easy_6 +0.79 % with proof: it allocated 1.58 M words more (a list partition and an origin string per line, a tuple per width lookup); `6acf2c1a` removes them (+0.21 % words, one major collection fewer than main) and the cost with it. The half written from its bounds (`fe2b2e26`) takes tp7_8's solver at 25 nodes from 3.93 to 3.65 GB peak RSS and 46.6 to 41.6 s, same bytes.
+
+#### 4.3. The heap budget on D-0265's 21 instances, and what it is not
+
+The first version of this record found the branch stopping at the 8 GiB heap budget earlier than main on some of D-0265's 21 instances (tp7_8 at node 69 against 131) and left the cause open. Settled here.
+
+**Nothing the branch keeps is larger.** A probe build of main and of the branch (`BAGUETTE_GCLIVE`: at exit, `Gc.full_major` then `Gc.stat`'s `live_words`; budget raised to 30 GB, proof written, same node budget):
+
+| instance, node | live words main | live words branch | heap at the last cycle end, main -> branch |
+|---|---|---|---|
+| tp7_8, 30 | 182 959 640 | 182 956 034 | 552 -> 558 M words |
+| tp7_8, 50 | 210 582 510 | 210 578 088 | 674 -> 564 M words |
+| tp7_8, 66 | 280 989 644 | 280 989 421 | 916 -> 932 M words |
+| wordpress12, 120 | 183 940 937 | 183 940 989 | 862 -> 864 M words |
+| 1CM1, 1 | 1 124 596 452 | 1 124 596 454 | 1 484 -> 1 484 M words |
+
+with one exception found by this probe and fixed: the first build kept a bridge half in a field of its own, one word per declared integer variable, 5.3 M words (42 MB) more live heap on 1CM1 (`f34cb03e` moves the halves into the `atoms` map; the 1CM1 and tp7_8 rows are after the fix). No citation table exists in the shipped variant (a half is written at its first ask), the pinned ids are the ones D-0132's line pinned, and a `pol` that keeps a declared term's rungs is the checker's object, not the solver's: the solver holds an RPN tree of a few citations.
+
+**What fills the budget is not live data.** tp7_8 lives in 2.1 GB at node 66; the heap at a major cycle's end is 7.0 to 7.1 GB: the floating garbage of one cycle, which `--max-heap-mb` counts on purpose (D-0200 section 3 tried confirming with `Gc.full_major` and rejected it). Where a run stops is where a cycle end first crosses 8 GiB, and that moves with the GC's pacing: the rejected (f) build allocated 40 % fewer major words than main (main's bridge lines are huge transient allocations), completed fewer cycles (148 against 174 at node 66) and ended them with more garbage (1 112 against 916 M words), the live heap being the same.
+
+**So the refusal point is noisy, and it is noisy on main too.** Repeated runs of the same binaries in the same setting (D-0265's: 8 GiB, 300 s, proof), the shipped variant against main:
+
+| instance | main: nodes reached (solutions) | branch: nodes reached (solutions) |
+|---|---|---|
+| liner-sf tp7_8 | 141 (26) x3, 131 (24) x2, 64 (4) x2 | 277 (42), 245 (42), 244 (42), 135 (25), 107 (18); option (c)'s first build 73 (8) |
+| liner-sf tp7_2 | 97, 95, 94 (time limit) | 146, 146, 144, 144 (time limit), 49 (heap) |
+| wordpress11 | 173 (7) x3, 149 (5) | 173 (7) x3, 149 (5) x2 |
+| wordpress12 | 404 (26) x2, 152 (5) x3, 140 (4) x2 | 140 (4) x2, 128 (3) x3 |
+
+One binary at one setting reaches 64 to 141 nodes on tp7_8. wordpress12 is the one instance whose branch runs sit lower than main's (128 to 140 against 140 to 404); its live heap at node 120 is the same to 52 words (above), so what differs is where a cycle end first crosses 8 GiB, not anything the branch holds.
+
+**All 21, side by side** (D-0265's setting, main `3f859ac3` and the final commit's release `2bc8b00b` launched together, 6 at a time, `OCAMLRUNPARAM=v=0x400` for the peak heap; peak = `top_heap_words`, stop = the heap the budget read when it refused):
+
+| instance | main: end, nodes, solutions, peak / stop GB, proof GB | branch: the same |
+|---|---|---|
+| proteindesign 1HZ5 (2013) | heap 15, 1, 9.5 / 8.1, 4.82 | heap 15, 1, 9.4 / 8.0, 3.24 |
+| liner-sf fm3_11 | killed 531, 0, 9.7, 14.07 | time limit **636**, 0, 10.8, 10.74 |
+| liner-sf fm3_5 | time limit 116, 0, 9.7, 16.44 | time limit **482**, 0, 10.3, 12.03 |
+| liner-sf tp7_10 | killed 80, 0, 11.4, 19.70 | killed **109**, 0, 13.1, 16.99 |
+| liner-sf tp7_8 | killed 141, 26, 9.4, 21.83 | heap 135, 25, 9.4 / 8.3, 16.21 (repeats above) |
+| proteindesign 1CM1 | heap 1, 0, 9.3 / 8.1, 3.31 | heap 1, 0, 9.4 / 8.1, 3.31 |
+| proteindesign 2DHC | heap 15, 1, 9.5 / 8.5, 2.64 | heap 15, 1, 9.5 / 9.0, 2.64 |
+| liner-sf fm3_3 | time limit 285, 0, 10.7, 15.99 | heap **482, 4** (obj 626 236), 11.2 / 8.5, 15.92 |
+| liner-sf tp7_12 | killed 81, 0, 10.5, 19.69 | heap **87**, 0, 12.5 / 8.1, 17.91 |
+| liner-sf tp7_2 | killed 97, 0, 10.8, 13.53 | heap 49, 0, 8.1 / 8.0, 7.45 (repeats above: 144 to 146) |
+| connect 0018, 0041_02, 0083_02 | 87, 414, 512 nodes | the same, proofs 0.50 -> 0.41, 1.06 -> 0.82, 1.98 -> 1.49 GB |
+| wordpress10, 8, 7 | heap 137 (5), heap 148 (8), time limit 507 (58) | the same |
+| wordpress11 | heap 173, 7, 9.8 / 8.1 | heap 149, 5, 9.9 / 8.0 (repeats above) |
+| wordpress12 | time limit 404, 26, 9.0 | heap 140, 4, 9.1 / 8.0 (repeats above) |
+| table-layout, 1HZ5 (2025), 1UBI | heap 1, 15, 14 | the same |
+
+On this launch: more nodes on 5 liner-sf instances (fm3_11, fm3_5 four times as many, tp7_10, fm3_3 with 4 solutions where main has none, tp7_12), the same on 12, fewer on 4 (tp7_8, tp7_2, wordpress11, wordpress12), each of which reaches main's figure or more in a repeated run except wordpress12 (above). The liner-sf proofs at 300 s are 7.5 to 17.9 GB with their `.opb` (main 13.5 to 21.8). The peak heap is higher where the branch searches further (fm3_11 +1.1 GB for 105 more nodes, tp7_10 +1.7 GB for 29, tp7_12 +2.0 GB for 6) and within 0.7 GB of main's elsewhere.
+
+
+### 5. Evidence that the new lines are real
+
+**Mutation lanes, redone on the variant that ships** (`scripts/mutate_proof.sh` gains seven, `test/unit/test_mutation.ml` runs them on `ladder_mixed_sat`, SATISFIABLE, so the `ia` and the half's `rup` are judged over a database that is not contradictory). The model's root line `~k_ge_11 \/ ~m_ge_8 \/ ~x2_ge_3` is the FIRST citation of `x2 >= 3`, so it is preceded by the half (test_mutation's harness, fixed search: lines 77 to 80):
+
+```
+@c90 rup +1 x2_ge_2 +1 x2_ge_3 +1 x2_ge_4 +2 ~x2_ge_3 >= 2 ;     line 77, B1'(x2, 3)
+@c91 pol @c74 @c90 + @c84 + @c12 + ;                             line 78
+@c92 ia +1 ~k_ge_11 +1 ~m_ge_8 +1 ~x2_ge_3 >= 1 : @c91 ;         line 79
+del id @c91 ;
+```
+
+| lane | corruption | veripb |
+|---|---|---|
+| ladder-pol-row | line 78 without its row (`@c91 pol @c74 @c90 + @c84 + ;`) | refused at the `ia` AFTER it, line 79, "Expected constraint is not syntactically implied by the constraint at the hint." |
+| ladder-pol-mult | line 78 with an operand counted twice | refused at line 79, the same wording |
+| ladder-flip | line 79's claim flipped | refused at line 79 |
+| ladder-rhs | line 79's degree raised | refused at line 79 |
+| bridge-flip | line 77 with its atom literal flipped | line 77 itself ACCEPTED (x2 >= 3 holds at the root, so the flipped line is true); refused LATER, at line 79, the `ia` whose `pol` adds the half, at the `ia` wording |
+| bridge-rhs-down | line 77 with its degree lowered by one (a weaker, true line) | accepted itself, refused at line 79, the same wording |
+| bridge-rhs | line 77 with its degree raised | refused at line 77, at the RUP wording |
+
+The ladder and bridge pinned checks of test_mutation.ml assert the refused LINE and the wording; through the script under the default search the same triple is the tenth and every lane is refused at its `ia` too (line 79). The lanes were first written against (f)'s shape (its pin a `rup`); the switch moved the pin to `ia`, and they were re-pinned to it (the triple's detection accepts an `ia` hinted at the `pol`, the pinned wording is the `ia`'s), not weakened. Under (f) and (e), dropping the row of each of the 1 263 ladder triples of the 73 affected test models was refused on 11 only, because at test-model widths a `rup` closes without its `pol`; under (c) the pin is an `ia`, judged against the `pol` alone, so a `pol` that loses a citation is refused wherever the clause needs it. `bits_reif`'s three emitter lanes (`[resolve]` site) went slack when rows whose only order term is a Boolean reifier were moved to the ladder rule; that is why such rows keep D-0132's line (section 3.4), and those lanes pass unchanged.
+
+**Every changed proof verifies.** Test models (301 + the 3 added: `ladder_mixed_{sat,unsat,opt}`), main `3f859ac3` against the shipped variant (dev `cef3c78e`), 4 configurations each (free and fixed search, `--bits-above 0` and `none`), 1 216 runs: stdout, exit code and `.opb` identical on all; the `.pbp` differs on 54 runs (27 models, both searches, default encoding only), all `s VERIFIED`, none larger (1.92 -> 1.86 MB together), 10 with a few more lines (2 to 31) and still fewer bytes. `run_model_tests.sh` 304 passed, `free_model_tests.sh` 304 passed, `check_determinism.sh` 608 + 8 identical, `e2e_lane.sh` PASS (chain 269 VERIFIED, 35 SKIPPED, 0 FAIL; solver 260 VERIFIED; controls 41/41 and 42/42; validation 266 AGREE, 3 UNCHECKED, 0 DIFFER: the e2e prefix derives baguette's rows, not trace lines, and no bridge appears in it).
+
+**Lanes, the search did not move**, on the final tree (`ef029b80`: `26a78f49` with origin/main `24029bcd` merged, D-0271's alldiff switch at its byte-identical default, the references re-recorded after D-0269 by `b7c473a3`; dev `0c7011c5`, release `c2c1ee57`): `diff_lane.sh --tier all` 84 of 393 differ, `--debug` 71 of 377 (pigment15b skipped by debug-skip.tsv as on main), every one with "search 2 to 4, hash 1" only, no exit status changed, no invariant fired, on the 8 instances that have a bits row with a wide order term (easy_6 5, mspsp 7, rcpsp_11 7, rcpsp_12 13, soccer 13, fox-geese-corn 13, pigment15b 13, evm 13). The 8 run again with `--keep` (102 runs) and compared item by item against the references (`obsdiff.py`): the items that differ are the `.pbp` hash (84) and the proof counters `rup/lines` (84), `pol-tokens` (84), `pol/lines` (24), `pol-widest` (12), `boundlines` (77), plus the keys renamed or added (`bridges/pairs` -> `bridges/lines`, `bitsladder`, `bitsrup`: notes, not failures); stdout, exit code, `.opb`, every other SEARCH counter (nodes, conflicts, learned, ...) and every WORK counter are identical. The 84 changed proofs all `s VERIFIED` (7.6 GB kept, then deleted). `scaling_lane.sh` ok (every line within its threshold). `factor_lane.sh` ok, 90 runs, every line -0.89 % to +0.32 % of its reference, 36 proofs VERIFIED. `e2e_lane.sh` PASS (chain 269 VERIFIED, 35 SKIPPED, 0 FAIL; solver 260 VERIFIED; controls 41/41 and 42/42; validation 266 AGREE, 3 UNCHECKED, 0 DIFFER). `fuzz_lane.sh -n 500 --streams globals,configs` (seed 1): 0 disagreements, 0 timeouts, 10 `mzn-error` (MiniZinc's flattening). **These are the runs the orchestrator re-records after the gate; `--update` was not run here.**
+
+**Checks on the final tree** (`ef029b80`): `check_fmt.sh` clean; `check_test_widths.py` no wide domain (it had flagged the labels `~lo:iv.lo ~hi:iv.hi` of the new half writer, renamed to `~bounds` in `26a78f49`, same bytes on all 1 216 test-model runs); `dune runtest --root . --force` 5 743 ok, 0 FAIL (5 728 on the branch alone, 15 from D-0271), peak RSS 172 MB; `run_model_tests.sh` 304 passed, `free_model_tests.sh` 304 passed, `check_determinism.sh` 608 + 8 identical. The same chain on `f34cb03e` before the merge gave the same lane counts. A first fuzz pass in the earlier round reported 48 CRASHes that were the binary being rebuilt under it ("Permission denied" on `main.exe`); every pass reported here ran with nothing building.
+
+### 6. What it costs in clarity, and what is left
+
+One more rule in the bits arm (D-0132's line for rows without a wide order term; the ladder rule, pinned by `ia` for a `Combine` and by one `rup` for a `Resolve`), halves in the `atoms` map with `no_half` for one not yet written, and one writer primitive that renders a half from its bounds.
+
+- **The `.opb`** is now most of veripb's memory on liner-sf (tp7_8: about 22 GB of 26.4): the rows spell each order variable as its 0.75 M to 2.1 M rungs, and the ladder is written eagerly. Changing that changes the naming contract or the `.opb`, the user's decision.
+- **The cited halves** are what is left of a liner-sf `.pbp` (tp7_8 844 lines, 1.24 GB). (f) removed most of them at the cost of the checker's time and was rejected; a `rup` hint, if a later veripb takes one, would make that trade free.
+- **fm3_11 and fm3_3's other `pol` lines** (258 and 508 MB at 100 and 60 nodes, written by main as well).
+- **The heap budget's reading** counts one cycle's floating garbage (D-0200), so where a run near its budget stops varies from run to run by a factor of two on tp7_8; comparing two binaries at that budget needs repeated runs, as section 4.3 did.
+
+**Volume.** All the runs of this record (fixed-node, tuning, D-0265's 21 four times over with repeats, measurement 3, per-node, live-heap probes, the kept diff-lane passes) wrote about 1.8 TB of proof (`.opb` and `.pbp`); every byte deleted after its size, census and verdict were recorded. `/scratch` stayed above 10 TB free.
+
+**Results**: `/cluster/arthur/baguette-results/bridge/` (README, tables, logs, scripts).
+
+**Revert.** `git revert` the closing docs commit, then `26a78f49 f34cb03e 0beed509 f3254486 32e61f36 fe2b2e26 6acf2c1a 7a29bd14 980560aa e21e3ecb 13d5712c` in that order: D-0132's bridge pairs and bound lines come back byte for byte; the three `ladder_mixed` models and the eleven lanes go with `e21e3ecb`, `7a29bd14` and `0beed509`. Going back to the rejected (f) instead is `git revert 0beed509 f3254486` (the lanes then expect the `rup` pin again).
 ## D-0267  [AUTONOME] The held-out comparison again under the free-search default (D-0261): `rec`, `classes` and `probe` against `off`, with a second `off` arm as the noise floor, and `fixed` against the default, in ONE interleaved campaign. No switch passes; the free default beats `--fixed-search` on the held-out set as on the series
 
 **Status**: DONE (agent-compare, branch `wave112-compare2`, measurement only, no `lib/` or `bin/` change). Measured

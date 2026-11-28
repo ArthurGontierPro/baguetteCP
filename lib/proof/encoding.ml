@@ -279,8 +279,11 @@ type ivar = {
      (`-Σ 2^i x_bit_i >= -(hi - lo)`), consecutive by construction. *)
   repr : repr;
   (* v -> the ids (B1, B2) of the atom `x_ge_v` minted by [ensure_atom]: for a bits
-     variable the `red` pair, for an order variable the `rup` bridge pair (D-0132
-     section 2.2). An immutable map, so an atom-less variable costs nothing. *)
+     variable the `red` pair, for an order variable the `rup` bridge HALVES, each minted
+     at its first citation by [order_bridge] (D-0270), [no_half] for one not yet written.
+     An immutable map, so an atom-less variable costs nothing: D-0270 first kept the
+     halves in a field of their own, and that one word per declared variable was 42 MB of
+     live heap on 2018 proteindesign12 1CM1 (5.3 M variables). *)
   mutable atoms : (cid * cid) IMap.t;
   (* An ORDER variable's `rup Σ x_ge_w >= 0` / `rup Σ ~x_ge_w >= 0`, minted once by
      [bound_lines] when a mixed-row derivation first weakens it (D-0132 section 2.2). A
@@ -523,6 +526,11 @@ type t = {
   mutable n_bridges : int;
   mutable n_bound_lines : int;
   mutable n_bits_prunings : int; (* bits-arm `pol` lines written (D-0130's atoms/prune) *)
+  mutable n_bits_ladder : int;
+      (* of those, the ones written on D-0270's ladder rule: an order term left in the
+         `pol`, no bridge or bound line minted *)
+  mutable n_bits_rup : int;
+  (* and of those, the ones pinned by `rup` (a wide order fact) *)
   (* Set by [close_atoms] once a root contradiction is on the page: the checker accepts
      a `red` over a contradictory database whatever its witness, so such a line proves
      nothing (D-0053), and [ensure_atom] raises instead (D-0130 section 5.4). *)
@@ -607,6 +615,8 @@ let create () =
     n_bridges = 0;
     n_bound_lines = 0;
     n_bits_prunings = 0;
+    n_bits_ladder = 0;
+    n_bits_rup = 0;
     atoms_closed = false;
     choices_rev = [];
     n_choices = 0;
@@ -648,6 +658,12 @@ let find t x =
       | None -> raise (Undeclared x))
 
 let is_declared t x = Names.mem t.ints x
+
+(* D-0270: an ORDER variable's declared width, 0 for a bits variable; one lookup, no
+   tuple (lib/core/justify.ml asks it once per bits-arm derivation). *)
+let order_width t x =
+  let v = find t x in
+  match v.repr with Bits _ -> 0 | Order -> v.hi - v.lo
 
 let domain t x =
   let v = find t x in
@@ -965,6 +981,8 @@ type atom_stats = {
   a_bridges : int;
   a_bound_lines : int;
   a_bits_prunings : int;
+  a_bits_ladder : int;
+  a_bits_rup : int;
 }
 
 let atom_stats t =
@@ -974,9 +992,16 @@ let atom_stats t =
     a_bridges = t.n_bridges;
     a_bound_lines = t.n_bound_lines;
     a_bits_prunings = t.n_bits_prunings;
+    a_bits_ladder = t.n_bits_ladder;
+    a_bits_rup = t.n_bits_rup;
   }
 
 let note_bits_pruning t = t.n_bits_prunings <- t.n_bits_prunings + 1
+
+let note_bits_ladder t ~rup =
+  t.n_bits_ladder <- t.n_bits_ladder + 1;
+  if rup then t.n_bits_rup <- t.n_bits_rup + 1
+
 let widest_width = function None -> 0 | Some (_, lo, hi) -> hi - lo
 
 (* ---------------------------------------------------------------------------
@@ -2178,6 +2203,14 @@ let retire_all_direct t w = List.iter (fun x -> retire_direct t w x) (vars t)
    minted once. So every term of a mixed row is ONE citation whatever its width, and the
    Θ(w) bytes an order variable costs are paid once per cited (x, v), not per pruning.
 
+   SINCE D-0270 THE PAIR IS NOT MINTED BY lib/, AND NEITHER IS THE BOUND LINE. A bits
+   derivation with a wide order term leaves a declared term's rungs in its `pol` (lib/core/
+   justify.ml, "THE LADDER RULE") and asks [order_bridge] for the ONE half an order fact
+   or claim needs, minted at its first citation and memoised in [halves]. Half of D-0132's
+   pairs were never cited (D-0270 section 1). [ensure_atom] and [bound_lines] still answer
+   for an order variable, for the unit tests that measured the shape; the `boundlines`
+   stat reads 0 for wide variables and `bridges` counts the halves minted.
+
    LIFETIME. Everything minted here is a level-0 id that no [w] retires and that
    lib/core/search.ml's end-of-run sweep deletes with every other live id before the
    conclusion (I-X2). There is no [retire_all_atoms]; the sweep is it. *)
@@ -2258,14 +2291,50 @@ let mint_order_bridge t w (iv : ivar) v =
       Writer.rup w ~origin
         (Opb.ge (List.map (fun l -> (1, Lit.negate l)) rungs @ [ (big_k, atom) ]) big_k)
   in
-  t.n_bridges <- t.n_bridges + 1;
+  t.n_bridges <- (t.n_bridges + if b2 = b1 then 1 else 2);
   (b1, b2)
+
+(* D-0270: ONE half of an order variable's bridge at [v] ([b1]: B1', else B2'), minted at
+   its FIRST ask, at level 0, and memoised. Only the half a derivation cites is written:
+   main wrote both at the first citation of either, and on liner-sf half of them were
+   never cited (D-0270 section 1). Minting at the second ask instead, and pinning the
+   first citation by a `rup` over the ladder, wrote a quarter of the bytes but made veripb
+   three times slower on liner-sf (D-0270 section 4: measured and rejected). A pair
+   [ensure_atom] minted (unit tests only) answers from the pair. Precondition: [x] is an
+   order variable of width >= 1; no root contradiction on the page when it mints. *)
+let no_half = -1
+
+let order_bridge t w x v ~b1 =
+  let iv = check_atom_value t x v in
+  let h1, h2 =
+    match IMap.find_opt v iv.atoms with Some pair -> pair | None -> (no_half, no_half)
+  in
+  let have = if b1 then h1 else h2 in
+  if have <> no_half then have
+  else (
+    if t.atoms_closed then
+      invalid_arg
+        (Printf.sprintf
+           "Encoding.order_bridge: `%s >= %d` asked for after the root contradiction" x v);
+    let id =
+      Writer.with_level w 0 (fun () ->
+          Writer.rup_ladder_half w
+            ~origin:(Printf.sprintf "bridge %s>=%d" x v)
+            ~name:x ~bounds:(iv.lo, iv.hi) ~v ~b1)
+    in
+    t.n_bridges <- t.n_bridges + 1;
+    iv.atoms <- IMap.add v (if b1 then (id, h2) else (h1, id)) iv.atoms;
+    id)
 
 (* The ids (B1, B2) of the atom [x >= v] -- minted now if this is the first time it is
    named, memoised otherwise. Precondition: no root contradiction is on the page. *)
 let ensure_atom t w x v =
   let iv = check_atom_value t x v in
   match IMap.find_opt v iv.atoms with
+  | Some (h1, h2) when h1 = no_half || h2 = no_half ->
+      (* an order variable's pair [order_bridge] has written one half of *)
+      let h1 = order_bridge t w x v ~b1:true in
+      (h1, order_bridge t w x v ~b1:false)
   | Some pair -> pair
   | None ->
       if t.atoms_closed then

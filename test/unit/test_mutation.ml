@@ -2060,6 +2060,36 @@ let gapline_table_src =
       "solve :: int_search([d, x], input_order, indomain_max, complete) satisfy;\n";
     ]
 
+(* M18-coverage-T9 (D-0270): test/models/ladder_mixed_sat.fzn, verbatim but for the
+   comments. k and m are on bits, x1..x3 on the order encoding (their all_different), and
+   every row mixes them, so every bits-arm line is written on the LADDER RULE: a `pol` over
+   the bits terms' atom lines, each order fact's bridge half and the row (a declared order
+   term's rungs left in it), pinned by `ia`, the `pol` deleted. [ladder_line] is the root
+   line over the wide order fact x2 >= 3, the first citation of B1'(x2, 3). *)
+let ladder_mixed_src =
+  String.concat ""
+    [
+      "var 0..30: k :: output_var;\nvar 0..30: m :: output_var;\n";
+      "var 1..4: x1 :: output_var;\nvar 1..4: x2 :: output_var;\n";
+      "var 1..4: x3 :: output_var;\n";
+      "constraint int_lin_le([-1, 3], [k, x1], -1);\n";
+      "constraint int_lin_le([1, 1, 1], [k, m, x2], 21);\n";
+      "constraint int_lin_le([-1, 3], [m, x3], -5);\n";
+      "constraint int_lin_le([-1], [x2], -3);\n";
+      "constraint all_different_int([x1, x2, x3]);\n";
+      "solve :: int_search([x1, x2, x3, k, m], input_order, indomain_max, complete) \
+       satisfy;\n";
+    ]
+
+let ladder_line = "+1 ~k_ge_11 +1 ~m_ge_8 +1 ~x2_ge_3 >= 1"
+
+(* The bridge half B1'(x2, 3) the same model mints at its first citation (D-0270), and
+   the wording of the `ia` that refuses a pin its hint does not imply. *)
+let ladder_bridge = "rup +1 x2_ge_2 +1 x2_ge_3 +1 x2_ge_4 +2 ~x2_ge_3 >= 2 ;"
+
+let ia_wording =
+  "Expected constraint is not syntactically implied by the constraint at the hint."
+
 (* b1's death across the holes, and x2 <> 3 from y's hole under b2. Pinned verbatim. *)
 let member_chase_line = "rup +1 ~b1_ge_1 +1 ~y_ge_2 +1 ~w2_ge_3 +1 ~w3_ge_5 >= 1 ;"
 
@@ -3179,6 +3209,166 @@ solve :: seq_search([int_search([b, y], input_order, indomain_min, complete), in
         ("gapline-table", gapline_table_src, "+1 ~x_ge_3 +1 x_ge_9 >= 1 ;");
       ];
 
+    (* -- M18-coverage-T9: the LADDER RULE (D-0270) -----------------------------------
+       [ladder_mixed_src] is test/models/ladder_mixed_sat: a satisfiable model whose
+       bits-arm lines hold wide order terms, so none writes a bridge pair or a bound line.
+       The triple around [ladder_line] (`pol` P over the bits atom lines, x2's bridge half
+       and the row; T, its `ia` pin; `del id P`) is corrupted four ways through
+       scripts/mutate_proof.sh, aimed at it by --nth (its rank among the ladder triples):
+         ladder-pol-row    P without its row: a valid sum that no longer carries the row,
+                           so T, a LATER line, must be refused at the ia wording;
+         ladder-pol-mult   P with an operand counted twice: a sound sum whose terms no
+                           longer cancel, so T must be refused;
+         ladder-flip       T's claim flipped: refused at T;
+         ladder-rhs        T's degree raised: refused at T.
+       The first two are also pinned here: the refusal is AT T's line (P's line + 1),
+       which says the `pol` is what the pin rests on. *)
+    let b, outcome =
+      (* The bits encoding at its CLI default (`--bits-above 0`, D-0201); this harness
+         runs with it off (the first lines of the file). *)
+      let saved = !Encoding.bits_above in
+      Encoding.bits_above := Some 0;
+      Fun.protect
+        ~finally:(fun () -> Encoding.bits_above := saved)
+        (fun () -> solve_src ~name:"ladder-mixed" ladder_mixed_src)
+    in
+    check "ladder-mixed: the solver solves it (the instance is what we think it is)"
+      (match outcome with Search.Sat _ -> true | Search.Unsat -> false);
+    let lines = Array.of_list (String.split_on_char '\n' (read_file b.pbp)) in
+    let words l = List.filter (fun w -> w <> "") (String.split_on_char ' ' l) in
+    let triple i =
+      i + 2 < Array.length lines
+      &&
+      match (words lines.(i), words lines.(i + 1), words lines.(i + 2)) with
+      | p :: "pol" :: _, _ :: ("rup" | "ia") :: _, "del" :: "id" :: ids -> List.mem p ids
+      | _ -> false
+    in
+    let rank = ref 0 and at = ref (-1) in
+    Array.iteri
+      (fun i _ ->
+        if !at < 0 && triple i then (
+          incr rank;
+          if contains lines.(i + 1) ladder_line then at := i))
+      lines;
+    check
+      (Printf.sprintf "ladder-mixed: the proof holds the ladder triple of `%s`"
+         ladder_line)
+      (!at >= 0);
+    let nth = !rank in
+    let pinned c name rewrite =
+      let lane = Printf.sprintf "%s/%s-pinned" c.c_tag name in
+      ran c (name ^ "-pinned");
+      if !at < 0 then fail "%s: no ladder triple, nothing tested" lane
+      else
+        let lines' = Array.copy lines in
+        lines'.(!at) <- rewrite lines.(!at);
+        let pbp = b.pbp ^ "." ^ name ^ ".pbp" in
+        let oc = open_out pbp in
+        output_string oc (String.concat "\n" (Array.to_list lines'));
+        close_out oc;
+        let v, out = check_proof { b with pbp } in
+        let here = Printf.sprintf "%s:%d\n" pbp (!at + 2) in
+        check
+          (Printf.sprintf
+             "%s: refused AT the ia after the corrupted pol (line %d), at the ia wording"
+             lane (!at + 2))
+          (v = Rejected_on_derivation && contains out here && contains out ia_wording);
+        if not (v = Rejected_on_derivation && contains out here) then show out
+    in
+    (* P is `@p pol <atom lines> <row> + ;`: drop the row (its two last tokens before
+       `;`), or count the operand before it twice. *)
+    let drop_row l =
+      match List.rev (words l) with
+      | ";" :: "+" :: _row :: rest -> String.concat " " (List.rev (";" :: rest))
+      | _ -> l
+    in
+    let twice_before_row l =
+      match List.rev (words l) with
+      | ";" :: "+" :: row :: "+" :: a :: rest ->
+          String.concat " "
+            (List.rev (";" :: "+" :: row :: "+" :: "*" :: "2" :: a :: rest))
+      | _ -> l
+    in
+    (* The BRIDGE half (D-0270): B1'(x2, 3), minted at its first citation, and the pol
+       that cites it, pinned by `ia`. Its atom literal flipped, or its degree lowered
+       by one, leaves a line the checker takes on its own (x2 >= 3 holds at the root, and
+       a weaker line is still RUP) -- what must refuse is the LATER `ia` whose pol adds it,
+       at the `ia` wording: the half is load-bearing for the line that cites it. Its
+       degree raised is refused at the half itself (bridge-rhs, the script's lane). *)
+    let bat = ref (-1) and pin_at = ref (-1) in
+    Array.iteri
+      (fun i l ->
+        if !bat < 0 && contains l ladder_bridge then bat := i
+        else if !bat >= 0 && !pin_at < 0 then
+          match (words lines.(!bat), words l) with
+          | lab :: _, _ :: "pol" :: ops when List.mem lab ops -> pin_at := i + 1
+          | _ -> ())
+      lines;
+    check
+      (Printf.sprintf
+         "ladder-mixed: the proof holds the bridge half `%s` and a pol citing it"
+         ladder_bridge)
+      (!bat >= 0 && !pin_at > 0);
+    let bridge_pinned c name rewrite =
+      let lane = Printf.sprintf "%s/%s-pinned" c.c_tag name in
+      ran c (name ^ "-pinned");
+      if !bat < 0 || !pin_at < 0 then fail "%s: no bridge half, nothing tested" lane
+      else
+        let lines' = Array.copy lines in
+        lines'.(!bat) <- rewrite lines.(!bat);
+        let pbp = b.pbp ^ "." ^ name ^ ".pbp" in
+        let oc = open_out pbp in
+        output_string oc (String.concat "\n" (Array.to_list lines'));
+        close_out oc;
+        let v, out = check_proof { b with pbp } in
+        let here = Printf.sprintf "%s:%d\n" pbp (!pin_at + 1) in
+        check
+          (Printf.sprintf
+             "%s: the half itself accepted, refused LATER at the ia that cites it (line \
+              %d), at the ia wording"
+             lane (!pin_at + 1))
+          (v = Rejected_on_derivation && contains out here && contains out ia_wording);
+        if not (v = Rejected_on_derivation && contains out here) then show out
+    in
+    let flip_atom l =
+      String.concat " "
+        (List.map (fun w -> if w = "~x2_ge_3" then "x2_ge_3" else w) (words l))
+    in
+    let rhs_down l =
+      match List.rev (words l) with
+      | ";" :: k :: rest ->
+          String.concat " "
+            (List.rev (";" :: string_of_int (int_of_string k - 1) :: rest))
+      | _ -> l
+    in
+    gated ~tag:"ladder-mixed"
+      ~control:(fun () -> control_holds ~tag:"ladder-mixed" ~proof:b.pbp)
+      ~declares:
+        [
+          "ladder-pol-row";
+          "ladder-pol-mult";
+          "ladder-flip";
+          "ladder-rhs";
+          "ladder-pol-row-pinned";
+          "ladder-pol-mult-pinned";
+          "bridge-flip";
+          "bridge-rhs";
+          "bridge-rhs-down";
+          "bridge-flip-pinned";
+          "bridge-rhs-down-pinned";
+        ]
+      (fun c ->
+        mutation_lane c ~nth ~proof:b.pbp ~expect:`Rejects "ladder-pol-row";
+        mutation_lane c ~nth ~proof:b.pbp ~expect:`Rejects "ladder-pol-mult";
+        mutation_lane c ~nth ~proof:b.pbp ~expect:`Rejects "ladder-flip";
+        mutation_lane c ~nth ~proof:b.pbp ~expect:`Rejects "ladder-rhs";
+        pinned c "ladder-pol-row" drop_row;
+        pinned c "ladder-pol-mult" twice_before_row;
+        mutation_lane c ~proof:b.pbp ~expect:`Rejects "bridge-flip";
+        mutation_lane c ~proof:b.pbp ~expect:`Rejects "bridge-rhs";
+        mutation_lane c ~proof:b.pbp ~expect:`Rejects "bridge-rhs-down";
+        bridge_pinned c "bridge-flip" flip_atom;
+        bridge_pinned c "bridge-rhs-down" rhs_down);
     (* -- M18-coverage-T9: all_different's rows per VALUE (D-0271, the option) ---------
        test/models/alldiff_pigeonhole_narrow_sat, solved with [Encoding.alldiff_rows] set
        to [Amo]: the .opb states the all_different as one row per value, and the proof

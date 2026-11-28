@@ -268,7 +268,11 @@ Assertions guarded by `BAGUETTE_DEBUG=1` should check as many of these as is aff
   ahead as one `pol` deriving exactly the trace clause, pinned by `ia`, and the `rup` of
   that clause is not written separately (the `ia` is the line) unless the claim settled
   past a hole. A row with no bits term is untouched. The rule is decided per entry from the
-  reason's scope (`Trace.bits_arm`), never by the propagator.
+  reason's scope (`Trace.bits_arm`), never by the propagator. **Since D-0270** a row that
+  also holds an order term wider than a Boolean keeps a declared order term's rungs in the
+  `pol` (no bound line) and cites one bridge half per order fact, written at its first
+  citation, never the pair; the pin is still the `ia`, except for a [Resolve], whose parts
+  are pinned together by the `rup` of the clause.
 
   *Status, in I-S4's register*: the enumeration and both Hall measurements are **measured**.
   That the enumeration stays complete as propagators are added is **argued**, and the
